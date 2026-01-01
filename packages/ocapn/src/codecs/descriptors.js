@@ -155,6 +155,7 @@ export const makeDescCodecs = referenceKit => {
       const position = referenceKit.provideLocalObjectPosition(value);
       NonNegativeIntegerCodec.write(position, syrupWriter);
     },
+    1, // 1 field: position
   );
 
   const DescImportPromiseCodec = makeOcapnRecordCodec(
@@ -170,6 +171,7 @@ export const makeDescCodecs = referenceKit => {
       const position = referenceKit.provideLocalPromisePosition(value);
       NonNegativeIntegerCodec.write(position, syrupWriter);
     },
+    1, // 1 field: position
   );
 
   const DescExportCodec = makeOcapnRecordCodec(
@@ -185,6 +187,7 @@ export const makeDescCodecs = referenceKit => {
       const position = referenceKit.provideRemoteExportPosition(value);
       NonNegativeIntegerCodec.write(position, syrupWriter);
     },
+    1, // 1 field: position
   );
 
   const DescAnswerCodec = makeOcapnRecordCodec(
@@ -200,6 +203,7 @@ export const makeDescCodecs = referenceKit => {
       const position = referenceKit.provideRemoteAnswerPosition(value);
       NonNegativeIntegerCodec.write(position, syrupWriter);
     },
+    1, // 1 field: position
   );
 
   // RemotePromiseCodec is used to constrain the target Reference to a promise
@@ -265,6 +269,7 @@ export const makeDescCodecs = referenceKit => {
         throw Error(`Unknown Handoff object ${value}`);
       }
     },
+    2, // 2 fields: object, signature
   );
 
   const DeliverTargetCodec = makeValueInfoRecordUnionCodec(
@@ -330,6 +335,7 @@ export const makeDescCodecs = referenceKit => {
       OcapnPeerCodec.write(location, syrupWriter);
       syrupWriter.writeBytestring(swissNum);
     },
+    2, // 2 fields: node, swissNum
   );
 
   // ReferenceCodec is handles any kind of Reference (Promise or Target),
