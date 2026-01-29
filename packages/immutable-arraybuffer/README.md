@@ -142,3 +142,7 @@ The drop-the-pseudo-prototype redesign removed the intermediate prototype that e
 Genuine ArrayBuffers continue to inherit `'ArrayBuffer'` from the prototype: `Object.prototype.toString.call(new ArrayBuffer(0))` reads as `'[object ArrayBuffer]'`.
 Only emulated immutable buffers carry the `'ImmutableArrayBuffer'` slot: `Object.prototype.toString.call(new ArrayBuffer(0).sliceToImmutable())` reads as `'[object ImmutableArrayBuffer]'`.
 Callers that need to distinguish emulated immutable buffers from genuine ones programmatically should prefer the `immutable` accessor on `ArrayBuffer.prototype` (installed by the shim), which is the canonical brand check.
+
+## License
+
+[Apache-2.0](./LICENSE)
