@@ -29,7 +29,7 @@
     "@endo/init": "workspace:^",
     "@endo/promise-kit": "workspace:^",
     "@endo/where": "workspace:^",
-    "ts-blank-space": "^0.6.1"
+    "ts-blank-space": "^0.7.0"
   },
   "devDependencies": {
     "@endo/lockdown": "workspace:^",
