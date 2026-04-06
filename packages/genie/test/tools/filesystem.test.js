@@ -1,5 +1,6 @@
 // @ts-check
-import '@endo/init/debug.js';
+
+import '@endo/harden';
 
 import test from 'ava';
 import { makeFileTools } from '../../src/tools/filesystem.js';

@@ -89,7 +89,10 @@ export const make = (guestPowers, _context) => {
     });
 
     const searchBackend = makeFTS5Backend({ dbDir: workspaceDir });
-    const memoryTools = makeMemoryTools({
+    const {
+      indexing: _memoryIndexing,
+      ...memoryTools
+    } = makeMemoryTools({
       root: workspaceDir,
       searchBackend,
     });
@@ -279,11 +282,16 @@ export const make = (guestPowers, _context) => {
    * to processMessage, using the agent guest's powers so that replies
    * originate from the agent's identity (not setup-genie).
    *
-   * @param {EndoGuest} agentPowers - The agent guest's EndoGuest powers
-   * @param {object} piAgent - The PiAgent instance
-   * @param {string} agentName - Display name for logging
+   * @param {object} opts
+   * @param {EndoGuest} opts.agentPowers - The agent guest's EndoGuest powers
+   * @param {object} opts.piAgent - The PiAgent instance
+   * @param {string} opts.agentName - Display name for logging
    */
-  const runAgentLoop = async (agentPowers, piAgent, agentName) => {
+  const runAgentLoop = async ({
+    agentPowers,
+    piAgent,
+    agentName,
+  }) => {
     const selfId = await E(agentPowers).locate('@self');
     const messageIterator = makeRefIterator(E(agentPowers).followMessages());
 
@@ -291,31 +299,31 @@ export const make = (guestPowers, _context) => {
       const { value: message, done } = await messageIterator.next();
       if (done) break;
 
-      const msg =
-        /** @type {{ from: string, number: bigint, type?: string, strings: string[], messageId?: string, replyTo?: string }} */ (
-          message
-        );
-
       // Skip our own outbound messages.
-      if (msg.from === selfId) continue;
+      if (message.from === selfId) continue;
 
-      console.log(
-        `[genie:${agentName}] New message #${msg.number} (type: ${msg.type || 'package'})`,
-      );
+      if (message.type === 'package') {
+        const { strings: [_head = ''] } = message;
 
-      try {
-        await processMessage(agentPowers, piAgent, msg);
-      } catch (err) {
-        const errorMessage = /** @type {Error} */ (err).message || String(err);
-        console.error(
-          `[genie:${agentName}] Failed to process message #${msg.number}:`,
-          errorMessage,
-        );
+        // ─── Normal user messages ────────────────────────────────────
+        console.log(`[genie:${agentName}] New message #${message.number} (type: ${message.type})`);
+
+        try {
+          await processMessage(agentPowers, piAgent, message);
+        } catch (err) {
+          const errorMessage = /** @type {Error} */ (err).message || String(err);
+          console.error(
+            `[genie:${agentName}] Failed to process message #${message.number}:`,
+            errorMessage,
+          );
+        }
+      } else {
+        console.warn(`[genie:${agentName}] Unhandled message #${message.number} (type: ${message.type})`);
       }
 
       // Dismiss the message after processing.
       try {
-        await E(agentPowers).dismiss(msg.number);
+        await E(agentPowers).dismiss(message.number);
       } catch {
         // Best-effort dismiss.
       }
@@ -404,6 +412,17 @@ export const make = (guestPowers, _context) => {
       execTool,
     });
 
+    // Start the message loop (fire-and-forget).
+    const agentLoopP = runAgentLoop({
+      agentPowers: agentGuest,
+      piAgent,
+      agentName,
+    });
+
+    agentLoopP.catch(err => {
+      console.error(`[genie:${agentName}] Agent loop error:`, err);
+    });
+
     // Announce readiness from the agent's own identity.
     await E(agentGuest).send(
       '@host',
@@ -417,11 +436,6 @@ export const make = (guestPowers, _context) => {
     console.log(
       `[genie:${agentName}] Agent ready (model: ${config.model}, workspace: ${workspaceDir})`,
     );
-
-    // Start the message loop (fire-and-forget).
-    runAgentLoop(agentGuest, piAgent, agentName).catch(err => {
-      console.error(`[genie:${agentName}] Agent loop error:`, err);
-    });
   };
 
   /**
