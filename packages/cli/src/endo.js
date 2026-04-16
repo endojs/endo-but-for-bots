@@ -461,6 +461,33 @@ export const main = async rawArgs => {
     });
 
   program
+    .command('read-text <name>')
+    .description(
+      'reads text content from a path ' +
+        '(e.g. endo read-text project/src/index.js)',
+    )
+    .option(...commonOptions.as)
+    .action(async (name, cmd) => {
+      const { as: agentNames } = cmd.opts();
+      const { readText } = await import('./commands/read-text.js');
+      return readText({ name, agentNames });
+    });
+
+  program
+    .command('write-text <name>')
+    .description(
+      'writes text content to a path from stdin or --text ' +
+        '(e.g. echo hello | endo write-text project/notes.txt)',
+    )
+    .option(...commonOptions.as)
+    .option('--text <text>', 'text content to write (alternative to stdin)')
+    .action(async (name, cmd) => {
+      const { as: agentNames, text } = cmd.opts();
+      const { writeText } = await import('./commands/write-text.js');
+      return writeText({ name, text, useStdin: text === undefined, agentNames });
+    });
+
+  program
     .command('store')
     .description('stores a blob or structured value')
     .option(...commonOptions.as)
@@ -895,6 +922,8 @@ export const main = async rawArgs => {
         'list',
         'show',
         'cat',
+        'read-text',
+        'write-text',
         'follow',
         'store',
         'checkin',
