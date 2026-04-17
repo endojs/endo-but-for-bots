@@ -45,6 +45,11 @@
  *   Register a handler for incoming connections.
  * @property {() => void} shutdown -
  *   Shut down the network, closing all connections.
+ * @property {((connection: Connection, captpVersion: string) => void)} [sendSessionHandshake] -
+ *   Optional custom handshake for outgoing connections.  If provided,
+ *   the network handles its own session negotiation (e.g., Noise
+ *   Protocol handshake) instead of the default op:start-session.
+ *   The network manages its own identity via its constructor closure.
  */
 
 /**
