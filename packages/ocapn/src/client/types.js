@@ -28,6 +28,32 @@
  */
 
 /**
+ * An OCapN Network is responsible for session establishment, authentication,
+ * and encryption.  Each network defines its own handshake protocol and may
+ * support multiple transports (WebSocket, TCP, etc.).
+ *
+ * This is the replacement for NetLayer as part of the network/transport
+ * separation (see designs/ocapn-network-transport-separation.md).
+ *
+ * @typedef {object} OcapnNetwork
+ * @property {string} networkId - Unique identifier for this network
+ *   (e.g., 'np' for OCapN-Noise, 'tcp-testing-only' for test).
+ * @property {(location: OcapnLocation) => Promise<Connection>} connect -
+ *   Establish a connection to a peer at the given location.
+ *   The network selects the transport based on connection hints.
+ * @property {(handler: IncomingConnectionHandler) => void} listen -
+ *   Register a handler for incoming connections.
+ * @property {() => void} shutdown -
+ *   Shut down the network, closing all connections.
+ */
+
+/**
+ * @typedef {object} IncomingConnectionHandler
+ * @property {(connection: Connection) => void} onConnection -
+ *   Called when a new incoming connection is established.
+ */
+
+/**
  * @typedef {object} PendingSession
  * @property {Connection | undefined} outgoingConnection
  * @property {Promise<InternalSession>} promise
