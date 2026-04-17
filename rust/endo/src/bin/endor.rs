@@ -82,8 +82,15 @@ fn main() -> ExitCode {
         "start" => result_to_exit("endor", cmd_start()),
         "stop" => result_to_exit("endor", cmd_stop()),
         "ping" => result_to_exit("endor", cmd_ping()),
-        "-h" | "--help" | "help" => {
+        "-h" | "--help" => {
             print_help();
+            ExitCode::SUCCESS
+        }
+        "help" => {
+            match rest.first().map(|s| s.as_str()) {
+                Some(sub) => print_subcommand_help(sub),
+                None => print_help(),
+            }
             ExitCode::SUCCESS
         }
         _ => {
@@ -105,6 +112,88 @@ fn print_help() {
     eprintln!("Child-facing commands (XS engine by default):");
     eprintln!("  worker  [-e xs]                Run a supervised worker child");
     eprintln!("  run     [-e xs] <archive.zip>  Run a compartment-map archive");
+}
+
+fn print_subcommand_help(sub: &str) {
+    match sub {
+        "daemon" => {
+            eprintln!("Usage: endor daemon");
+            eprintln!();
+            eprintln!("Run the Endo daemon in the foreground.");
+            eprintln!();
+            eprintln!("The daemon is the capability bus that routes envelopes among");
+            eprintln!("workers. It hosts the JS manager in-process on a dedicated");
+            eprintln!("thread (set ENDO_MANAGER_NODE=1 to use the legacy Node.js");
+            eprintln!("daemon child instead).");
+            eprintln!();
+            eprintln!("Environment:");
+            eprintln!("  ENDO_WORKER_THREADS   Tokio worker thread count (default: 4)");
+            eprintln!("  ENDO_MANAGER_NODE     If set, use Node.js manager child");
+            eprintln!("  ENDO_DAEMON_PATH      Path to Node.js daemon script (with ENDO_MANAGER_NODE)");
+            eprintln!("  ENDO_DEFAULT_PLATFORM Default worker platform: separate, shared, node");
+            eprintln!("  ENDO_TRACE            Enable trace logging");
+        }
+        "start" => {
+            eprintln!("Usage: endor start");
+            eprintln!();
+            eprintln!("Spawn the daemon in a detached session.");
+            eprintln!();
+            eprintln!("If a daemon is already running (PID file exists and process is");
+            eprintln!("alive), this is a no-op. Otherwise, forks a new daemon process");
+            eprintln!("with setsid and waits up to 10 seconds for the Unix socket to");
+            eprintln!("accept connections.");
+        }
+        "stop" => {
+            eprintln!("Usage: endor stop");
+            eprintln!();
+            eprintln!("Gracefully stop a running daemon.");
+            eprintln!();
+            eprintln!("Sends SIGINT to the daemon process and waits up to 5 seconds");
+            eprintln!("for it to exit.");
+        }
+        "ping" => {
+            eprintln!("Usage: endor ping");
+            eprintln!();
+            eprintln!("Verify daemon responsiveness.");
+            eprintln!();
+            eprintln!("Connects to the daemon's Unix socket and immediately");
+            eprintln!("disconnects. Prints \"pong\" on success; exits non-zero if");
+            eprintln!("the daemon is not running or the socket is unreachable.");
+        }
+        "worker" => {
+            eprintln!("Usage: endor worker [-e xs]");
+            eprintln!();
+            eprintln!("Run a supervised worker child.");
+            eprintln!();
+            eprintln!("This is not invoked directly — the daemon spawns worker");
+            eprintln!("processes as needed. The worker communicates with the daemon");
+            eprintln!("over fd 3 (read) and fd 4 (write) using CBOR-framed envelopes.");
+            eprintln!();
+            eprintln!("Options:");
+            eprintln!("  -e, --engine <engine>  Engine to use (default: xs)");
+        }
+        "run" => {
+            eprintln!("Usage: endor run [-e xs] <archive.zip>");
+            eprintln!();
+            eprintln!("Run a compartment-map archive standalone.");
+            eprintln!();
+            eprintln!("Executes the given .zip archive in an XS machine without a");
+            eprintln!("running daemon. Useful for testing and one-off execution.");
+            eprintln!();
+            eprintln!("Options:");
+            eprintln!("  -e, --engine <engine>  Engine to use (default: xs)");
+        }
+        "help" => {
+            eprintln!("Usage: endor help [command]");
+            eprintln!();
+            eprintln!("Show help for a command. Without arguments, prints general usage.");
+        }
+        _ => {
+            eprintln!("endor: unknown command '{sub}'");
+            eprintln!();
+            print_help();
+        }
+    }
 }
 
 fn result_to_exit(prog: &str, result: Result<(), EndoError>) -> ExitCode {
