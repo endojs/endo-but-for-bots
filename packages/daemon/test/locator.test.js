@@ -66,6 +66,7 @@ test('parseLocator', t => {
     number: validId,
     node: validNode,
     formulaType: validType,
+    hints: [],
   });
 });
 
@@ -89,6 +90,10 @@ test('parseLocator - tolerates at= connection hints', t => {
   t.is(parsed.number, validId);
   t.is(parsed.node, validNode);
   t.is(parsed.formulaType, validType);
+  t.deepEqual(parsed.hints, [
+    'libp2p+captp0://peer1',
+    'libp2p+captp0://peer2',
+  ]);
 });
 
 test('formatLocatorForSharing', t => {

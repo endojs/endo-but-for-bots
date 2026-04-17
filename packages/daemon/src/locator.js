@@ -42,7 +42,7 @@ const assertValidLocatorType = allegedType => {
 
 /**
  * @param {string} allegedLocator
- * @returns {{ formulaType: string, node: NodeNumber, number: FormulaNumber }}
+ * @returns {{ formulaType: string, node: NodeNumber, number: FormulaNumber, hints: string[] }}
  */
 export const parseLocator = allegedLocator => {
   const errorPrefix = `Invalid locator ${q(allegedLocator)}:`;
@@ -84,7 +84,8 @@ export const parseLocator = allegedLocator => {
 
   const nodeNumber = /** @type {NodeNumber} */ (node);
   const formulaNumber = /** @type {FormulaNumber} */ (number);
-  return { formulaType, node: nodeNumber, number: formulaNumber };
+  const hints = url.searchParams.getAll('at');
+  return { formulaType, node: nodeNumber, number: formulaNumber, hints };
 };
 
 /** @param {string} allegedLocator */
@@ -184,8 +185,7 @@ export const externalizeId = (
  * @returns {{ id: FormulaIdentifier, formulaType: string, addresses: string[] }}
  */
 export const internalizeLocator = locator => {
-  const { number, node, formulaType } = parseLocator(locator);
-  const addresses = addressesFromLocator(locator);
+  const { number, node, formulaType, hints } = parseLocator(locator);
   const id = formatId({ number, node });
-  return { id, formulaType, addresses };
+  return { id, formulaType, addresses: hints };
 };

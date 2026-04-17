@@ -26,6 +26,17 @@ export type NodeNumber = string & { [NodeNumberBrand]: true };
 /** A full formula identifier in the format {FormulaNumber}:{NodeNumber} */
 export type FormulaIdentifier = string & { [FormulaIdentifierBrand]: true };
 
+// Semantic aliases for the new terminology from daemon-locator-terminology.
+// These are type-level aliases — no runtime change.
+/** Ed25519 public key identifying a peer (alias for NodeNumber). */
+export type PeerKey = NodeNumber;
+/** Content address (SHA-256) or capability address (random 256-bit). */
+export type FormulaAddress = FormulaNumber;
+/** Full formula key: {formulaAddress}:{peerKey} (alias for FormulaIdentifier). */
+export type FormulaKey = FormulaIdentifier;
+/** A transport-prefixed address string (e.g., "ws:example.com:8920"). */
+export type ConnectionHint = string;
+
 /** Either a pet name or a special name */
 export type Name = PetName | SpecialName;
 
