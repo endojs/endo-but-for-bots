@@ -5,7 +5,36 @@
 | **Created** | 2026-04-17 |
 | **Updated** | 2026-04-17 |
 | **Author** | Kris Kowal (prompted) |
-| **Status** | Not Started |
+| **Status** | In Progress |
+
+## Status
+
+Phases 1-4 implemented:
+
+- **Phase 1**: `rust/endo/src/cas.rs` — `ContentStore` with
+  `store`/`fetch`/`has`/`retain`/`release`, SHA-256 hashing,
+  `.meta` sidecar files, atomic writes.
+- **Phase 2**: Retain/release with in-memory ref count cache
+  flushed to `.meta`.
+- **Phase 3**: Tree type — `TreeManifest`/`TreeEntry` with
+  serde serialization, `read_tree`/`list_tree`/`fetch_from_tree`
+  with nested path traversal and structural sharing.
+- **Phase 4**: Mark/sweep GC preserving retained entries and
+  transitive tree children. `cas-gc` control verb and `endor gc`
+  CLI subcommand.
+
+Control verbs wired in `rust/endo/src/endo.rs`: `cas-store`,
+`cas-fetch`, `cas-has`, `cas-retain`, `cas-release`,
+`cas-store-tree`, `cas-gc`.
+
+CBOR codec in `rust/endo/src/codec.rs`.
+
+JS manager `controlPowers` in
+`rust/endo/xsnap/src/daemon_bootstrap.js`: `casStore`, `casFetch`,
+`casHas`, `casRetain`, `casRelease`, `casStoreTree`.
+
+Remaining: Phase 5 (JS manager integration replacing
+`makeContentStore()` with Rust CAS verbs).
 
 ## What is the Problem Being Solved?
 
