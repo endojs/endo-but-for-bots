@@ -502,6 +502,7 @@ export const MountInterface = M.interface('EndoMount', {
   makeDirectory: M.call(PathArgShape).returns(M.promise()),
   // Attenuation
   readOnly: M.call().returns(M.remotable()),
+  subDir: M.call(M.string()).returns(M.promise()),
   // Snapshot
   snapshot: M.call().returns(M.promise()),
   // Discoverability

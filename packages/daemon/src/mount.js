@@ -312,6 +312,33 @@ const makeMountExo = ctx => {
       });
     },
 
+    async subDir(subpath) {
+      await null;
+      // Validate and resolve segments.
+      const segments = subpath.split('/').filter(s => s.length > 0);
+      for (const seg of segments) {
+        if (seg === '..' || seg === '.') {
+          throw new Error(`Invalid subDir segment: ${seg}`);
+        }
+      }
+      const target = resolve(segments);
+      await assertConfinedOrAncestor(target, confinementRoot, filePowers);
+      const isDir = await filePowers.isDirectory(target);
+      if (!isDir) {
+        throw new Error(`subDir target is not a directory: ${subpath}`);
+      }
+      return makeMountExo({
+        ...ctx,
+        currentDir: target,
+        // The confinement root stays the same — the sub-mount cannot
+        // escape above the original root.  But the sub-mount's own
+        // navigation is restricted to its new currentDir because
+        // resolveSegments clamps ".." to currentDir.
+        confinementRoot: target,
+        description: `${readOnly ? 'Read-only sub-mount' : 'Sub-mount'} at ${subpath} of ${description}`,
+      });
+    },
+
     async snapshot() {
       if (!snapshotFn) {
         throw new Error('snapshot() is not available on this mount');
