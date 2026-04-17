@@ -11,6 +11,7 @@ const formulaTypes = new Set([
   'guest',
   'handle',
   'host',
+  'http-client',
   'interval-scheduler',
   'invitation',
   'known-peers-store',
