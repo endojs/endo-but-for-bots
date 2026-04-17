@@ -1,6 +1,8 @@
 // @ts-check
 
 import http from 'node:http';
+import fs from 'node:fs';
+import path from 'node:path';
 import { WebSocketServer } from 'ws';
 
 import { E } from '@endo/far';
@@ -75,6 +77,8 @@ harden(makeRateLimiter);
  * @param {((addr: string) => boolean)} [opts.addressChecker] - Optional
  *   predicate that returns true if a remote address is allowed to connect.
  *   Defaults to allowing all connections.
+ * @param {string} [opts.staticDir] - Optional directory of static files
+ *   to serve for HTTP requests (e.g., the Chat UI bundle).
  * @returns {{ started: Promise<string>, stopped: Promise<void> }}
  */
 export const startWsGateway = ({
@@ -83,6 +87,7 @@ export const startWsGateway = ({
   port,
   cancelled,
   addressChecker = _addr => true,
+  staticDir = undefined,
 }) => {
   const fetchLimiter = makeRateLimiter(1000);
   const gatewayP = E(endoBootstrap).gateway();
@@ -98,9 +103,73 @@ export const startWsGateway = ({
     }
   })();
 
-  const server = http.createServer((_req, res) => {
-    res.writeHead(200, { 'Content-Type': 'text/plain' });
-    res.end('Endo Gateway');
+  /** @type {Record<string, string>} */
+  const mimeTypes = {
+    '.html': 'text/html',
+    '.js': 'application/javascript',
+    '.mjs': 'application/javascript',
+    '.css': 'text/css',
+    '.json': 'application/json',
+    '.png': 'image/png',
+    '.svg': 'image/svg+xml',
+    '.ico': 'image/x-icon',
+    '.woff': 'font/woff',
+    '.woff2': 'font/woff2',
+  };
+
+  const server = http.createServer((req, res) => {
+    if (!staticDir) {
+      res.writeHead(200, { 'Content-Type': 'text/plain' });
+      res.end('Endo Gateway');
+      return;
+    }
+
+    const url = new URL(req.url || '/', `http://${req.headers.host}`);
+    let filePath = path.join(staticDir, url.pathname);
+
+    // Default to index.html for directory requests.
+    if (filePath.endsWith('/') || filePath === staticDir) {
+      filePath = path.join(filePath, 'index.html');
+    }
+
+    // Prevent path traversal: resolved path must be inside staticDir.
+    const resolved = path.resolve(filePath);
+    const resolvedDir = path.resolve(staticDir);
+    if (!resolved.startsWith(`${resolvedDir}/`) && resolved !== resolvedDir) {
+      // Also allow resolvedDir/index.html
+      if (!resolved.startsWith(resolvedDir)) {
+        res.writeHead(403);
+        res.end('Forbidden');
+        return;
+      }
+    }
+
+    const ext = path.extname(resolved);
+    const contentType = mimeTypes[ext] || 'application/octet-stream';
+
+    fs.readFile(resolved, (err, data) => {
+      if (err) {
+        if (err.code === 'ENOENT') {
+          // SPA fallback: serve index.html for missing files.
+          const indexPath = path.join(staticDir, 'index.html');
+          fs.readFile(indexPath, (indexErr, indexData) => {
+            if (indexErr) {
+              res.writeHead(404);
+              res.end('Not Found');
+            } else {
+              res.writeHead(200, { 'Content-Type': 'text/html' });
+              res.end(indexData);
+            }
+          });
+        } else {
+          res.writeHead(500);
+          res.end('Internal Server Error');
+        }
+        return;
+      }
+      res.writeHead(200, { 'Content-Type': contentType });
+      res.end(data);
+    });
   });
 
   const wss = new WebSocketServer({ server });
