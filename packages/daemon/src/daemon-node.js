@@ -198,6 +198,7 @@ const main = async () => {
     port: gatewayPort,
     cancelled,
     addressChecker,
+    staticDir: process.env.ENDO_STATIC_DIR || undefined,
   });
 
   const services = [privatePathService, wsGateway];
