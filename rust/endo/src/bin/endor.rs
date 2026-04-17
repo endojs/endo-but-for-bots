@@ -69,14 +69,26 @@ fn main() -> ExitCode {
             other => unknown_engine(other),
         },
         "run" => {
+            let cas_hash = parse_flag_value(rest, "--cas");
+            let no_cas = rest.iter().any(|a| a == "--no-cas");
             let path = parse_positional_path(rest);
-            match (engine, path) {
-                ("xs", Some(p)) => xsnap_result_to_exit(xsnap::run_xs_archive(&p)),
-                ("xs", None) => {
-                    eprintln!("usage: endor run [-e xs] <archive.zip>");
-                    ExitCode::from(2)
+            match engine {
+                "xs" => {
+                    if let Some(hash) = cas_hash {
+                        // Run from CAS root hash.
+                        result_to_exit("endor", cmd_run_from_cas(&hash))
+                    } else if let Some(ref p) = path {
+                        if no_cas {
+                            xsnap_result_to_exit(xsnap::run_xs_archive(p))
+                        } else {
+                            result_to_exit("endor", cmd_run_with_cas(p))
+                        }
+                    } else {
+                        eprintln!("usage: endor run [-e xs] [--cas <hash>] [--no-cas] <archive.zip>");
+                        ExitCode::from(2)
+                    }
                 }
-                (other, _) => unknown_engine(other),
+                other => unknown_engine(other),
             }
         }
         "start" => result_to_exit("endor", cmd_start()),
@@ -263,12 +275,14 @@ fn parse_positional_path(args: &[String]) -> Option<PathBuf> {
     let mut i = 0;
     while i < args.len() {
         let a = &args[i];
-        if a == "-e" || a == "--engine" {
+        if a == "-e" || a == "--engine" || a == "--cas" || a == "--cas-dir" {
             // skip the flag value as well
             i += 2;
             continue;
         }
-        if a.starts_with("--engine=") || a.starts_with("-e=") {
+        if a.starts_with("--engine=") || a.starts_with("-e=")
+            || a.starts_with("--cas=") || a.starts_with("--cas-dir=")
+        {
             i += 1;
             continue;
         }
@@ -277,6 +291,25 @@ fn parse_positional_path(args: &[String]) -> Option<PathBuf> {
             continue;
         }
         return Some(PathBuf::from(a));
+    }
+    None
+}
+
+/// Parse a flag with a value (e.g., --cas <hash>).
+fn parse_flag_value<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
+    let mut i = 0;
+    while i < args.len() {
+        if args[i] == flag {
+            if i + 1 < args.len() {
+                return Some(&args[i + 1]);
+            }
+            return None;
+        }
+        let prefix = format!("{flag}=");
+        if let Some(rest) = args[i].strip_prefix(&prefix) {
+            return Some(rest);
+        }
+        i += 1;
     }
     None
 }
@@ -342,6 +375,40 @@ fn cmd_ping() -> Result<(), EndoError> {
     let conn = UnixStream::connect(&paths.sock_path)?;
     let _ = conn.shutdown(Shutdown::Both);
     eprintln!("pong");
+    Ok(())
+}
+
+fn cmd_run_with_cas(archive_path: &std::path::Path) -> Result<(), EndoError> {
+    // Create a temporary CAS for standalone runs.
+    let cas_dir = std::env::temp_dir().join("endor-cas");
+    let cas = endo::cas::ContentStore::open(&cas_dir)
+        .map_err(|e| EndoError::Config(format!("CAS open: {e}")))?;
+
+    let bytes = std::fs::read(archive_path)
+        .map_err(|e| EndoError::Config(format!("cannot open {}: {e}", archive_path.display())))?;
+    let cursor = std::io::Cursor::new(&bytes);
+
+    let ingested = endo::cas_archive::ingest_archive(&cas, cursor)
+        .map_err(|e| EndoError::Config(format!("CAS ingest: {e}")))?;
+
+    eprintln!("endor[run]: archive root {}", ingested.root_hash);
+
+    // Run the archive using the loaded archive (already in memory).
+    xsnap::run_xs_archive_loaded(&ingested.archive)
+        .map_err(|e| EndoError::Config(format!("run: {e}")))?;
+    Ok(())
+}
+
+fn cmd_run_from_cas(root_hash: &str) -> Result<(), EndoError> {
+    let cas_dir = std::env::temp_dir().join("endor-cas");
+    let cas = endo::cas::ContentStore::open(&cas_dir)
+        .map_err(|e| EndoError::Config(format!("CAS open: {e}")))?;
+
+    let archive = endo::cas_archive::load_archive_from_cas(&cas, root_hash)
+        .map_err(|e| EndoError::Config(format!("CAS load: {e}")))?;
+
+    xsnap::run_xs_archive_loaded(&archive)
+        .map_err(|e| EndoError::Config(format!("run: {e}")))?;
     Ok(())
 }
 

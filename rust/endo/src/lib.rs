@@ -1,4 +1,5 @@
 pub mod cas;
+pub mod cas_archive;
 pub mod codec;
 pub mod endo;
 pub mod engine;

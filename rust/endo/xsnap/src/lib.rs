@@ -1810,6 +1810,43 @@ pub fn run_xs_archive(archive_path: &std::path::Path) -> Result<(), XsnapError> 
     )
 }
 
+/// Run a pre-loaded archive (e.g., loaded from CAS).
+///
+/// Same as `run_xs_archive` but skips the ZIP parsing step.
+pub fn run_xs_archive_loaded(loaded: &archive::LoadedArchive) -> Result<(), XsnapError> {
+    eprintln!("endor[run]: from pre-loaded archive");
+    ensure_shared_cluster();
+
+    let machine = Machine::new(&WORKER_CREATION, "endor[run]")
+        .ok_or_else(|| XsnapError::MachineInit("failed to create XS machine".to_string()))?;
+
+    machine.register_worker_io();
+    register_host_powers(&machine);
+
+    // Provide archive endowments.
+    machine.eval(
+        "globalThis.__archiveEndowments = { \
+            print: trace, trace, \
+            readFileText, writeFileText, readDir, mkdir, \
+            remove, rename, exists, isDir, readLink, \
+            openReader, read, closeReader, \
+            openWriter, write, closeWriter, \
+            openDir, closeDir, symlink, link, \
+            sha256, sha256Init, sha256Update, sha256Finish, \
+            randomHex256, ed25519Keygen, ed25519Sign, \
+            getPid, getEnv, joinPath, realPath \
+        };",
+    );
+
+    if !archive::install_archive(&machine, loaded) {
+        return Err(XsnapError::Archive(
+            "archive installation failed".to_string(),
+        ));
+    }
+    machine.quiesce();
+    Ok(())
+}
+
 #[cfg(test)]
 mod debug_protocol_tests;
 
