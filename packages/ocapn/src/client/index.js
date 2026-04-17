@@ -338,6 +338,19 @@ export const makeClient = ({
         data,
       );
     } else {
+      // Check if the connection's network has a custom incoming handshake.
+      const network = connection.netlayer;
+      if (network && network.handleSessionHandshake) {
+        const selfIdentity = getSelfIdentityForConnection(connection);
+        const handled = network.handleSessionHandshake(
+          connection,
+          data,
+          selfIdentity,
+          captpVersion,
+        );
+        if (handled) return;
+      }
+      // Fall back to the default op:start-session handshake.
       handleHandshakeMessageData(
         logger,
         sessionManager,
