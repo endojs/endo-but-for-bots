@@ -111,40 +111,20 @@ export const assertValidLocator = allegedLocator => {
 };
 
 /**
+ * Format a locator in the path-based format.
+ *
+ * Format: `endo://{node}/{number}?type={type}`
+ *
  * @param {string} id - The full formula identifier.
  * @param {string} formulaType - The type of the formula with the given id.
  */
 export const formatLocator = (id, formulaType) => {
-  const { number, node } = parseId(id);
-  const url = new URL(`endo://${node}`);
-  url.pathname = '/';
-
-  // The id query param is just the number
-  url.searchParams.set('id', number);
-
-  assertValidLocatorType(formulaType);
-  url.searchParams.set('type', formulaType);
-
-  return url.toString();
-};
-
-/**
- * Format a locator using the new path-based format.
- * The formula number appears in the URL path instead of the query string.
- *
- * New format: endo://{node}/{number}?type={type}
- *
- * @param {string} id - The full formula identifier.
- * @param {string} formulaType - The type of the formula with the given id.
- */
-export const formatLocatorV2 = (id, formulaType) => {
   const { number, node } = parseId(id);
   assertValidLocatorType(formulaType);
   const url = new URL(`endo://${node}/${number}`);
   url.searchParams.set('type', formulaType);
   return url.toString();
 };
-harden(formatLocatorV2);
 
 /**
  * @param {string} locator
@@ -157,18 +137,16 @@ export const idFromLocator = locator => {
 /**
  * Format a locator with connection hints for sharing with remote peers.
  *
+ * Format: `endo://{node}/{number}?type={type}&at={hint1}&at={hint2}`
+ *
  * @param {string} id - The full formula identifier.
  * @param {string} formulaType - The type of the formula with the given id.
  * @param {string[]} addresses - Network addresses (connection hints).
  */
 export const formatLocatorForSharing = (id, formulaType, addresses) => {
   const { number, node } = parseId(id);
-  const url = new URL(`endo://${node}`);
-  url.pathname = '/';
-
-  url.searchParams.set('id', number);
-
   assertValidLocatorType(formulaType);
+  const url = new URL(`endo://${node}/${number}`);
   url.searchParams.set('type', formulaType);
 
   for (const address of addresses) {

@@ -37,6 +37,19 @@ export type FormulaKey = FormulaIdentifier;
 /** A transport-prefixed address string (e.g., "ws:example.com:8920"). */
 export type ConnectionHint = string;
 
+/** Peer key plus connection hints for reaching a peer. */
+export type PeerLocator = {
+  peerKey: PeerKey;
+  hints: ConnectionHint[];
+};
+
+/** Formula key plus connection hints and type for locating a formula. */
+export type FormulaLocator = {
+  formulaKey: FormulaKey;
+  formulaType: string;
+  hints: ConnectionHint[];
+};
+
 /** Either a pet name or a special name */
 export type Name = PetName | SpecialName;
 
