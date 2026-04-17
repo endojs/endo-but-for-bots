@@ -3,14 +3,59 @@
 | | |
 |---|---|
 | **Created** | 2026-02-14 |
-| **Updated** | 2026-02-26 |
+| **Updated** | 2026-04-17 |
 | **Author** | Kris Kowal (prompted) |
 | **Status** | In Progress |
 
 ## Status
 
-**Partially implemented.** The Familiar-side `localhttp://` protocol handler
-exists, but the daemon-side unified web server does not.
+**Partially implemented; design under revision.**
+
+Chat weblets have been removed from the current codebase in order to
+regroup on the approach.  The Familiar-side `localhttp://` protocol
+handler remains, but the daemon-side unified web server does not exist.
+
+### Key design revision (2026-04-17)
+
+The original design assumed a single unified HTTP server with
+Host-header-based virtual host routing for all weblets.  This
+assumption must be revised:
+
+- **Familiar weblets** can use the unified server approach (Host-header
+  routing on the gateway port, proxied via `localhttp://`).  The
+  Electron protocol handler provides origin isolation without needing
+  separate ports.
+- **Chat weblets** (standalone browser use without Electron) still need
+  a **separate HTTP port per isolated page**, with the user choosing
+  the port.  Browsers cannot intercept and reroute by scheme like
+  Electron can, so each weblet needs its own `http://` origin on a
+  distinct port.
+
+### Deeper problem: gateway multiplexing and confidentiality
+
+The gateway currently listens on a single port for HTTP and WebSocket
+CapTP.  It acts as a proxy for all users on the system and all personas
+within a single user's daemon.  This creates a problem of:
+
+1. **Hierarchical multiplexing** — the gateway must route connections to
+   the correct user, then to the correct persona/agent within that
+   user's daemon, then to the correct weblet within that agent's scope.
+2. **Session confidentiality** — each CapTP session must be confidential
+   even over plain local HTTP.  Today the gateway trusts that
+   `127.0.0.1` traffic is private, but multi-user scenarios or weblet
+   isolation require per-session encryption or authentication.
+
+These problems are unlikely to be cleanly solved without the OCapN
+Network/Transport separation and the Noise Protocol Network (netlayer).
+Noise would provide per-session confidentiality and mutual
+authentication, which the gateway currently lacks.
+
+### Dependencies added
+
+| Design | Relationship |
+|--------|-------------|
+| [ocapn-network-transport-separation](ocapn-network-transport-separation.md) | The gateway needs a network-level abstraction for session establishment and authentication, not bare WebSocket. |
+| [ocapn-noise-network](ocapn-noise-network.md) | Noise Protocol would provide per-session confidentiality over the shared gateway port, enabling secure multiplexing. |
 
 ### Implemented
 
@@ -25,14 +70,13 @@ exists, but the daemon-side unified web server does not.
 
 ### Not implemented
 
-- **Daemon-side unified web server:** The file `packages/daemon/src/web-server-node.js`
-  referenced in the previous status does **not exist** on this branch. The daemon
-  has `packages/daemon/src/ws-gateway.js` for WebSocket gateway connections, but
-  no weblet HTTP routing or `webletHandlers` map.
-- **`makeWeblet` function:** No weblet creation or registration mechanism exists
-  in the daemon.
+- **Daemon-side unified web server:** No weblet HTTP routing or
+  `webletHandlers` map exists in the daemon.
+- **`makeWeblet` function:** No weblet creation or registration mechanism.
 - **Virtual host routing:** The gateway does not demultiplex by `Host` header.
 - **Per-weblet CapTP sessions:** No weblet-specific WebSocket handler isolation.
+- **Per-port Chat weblets:** Not designed yet; requires user-configurable ports.
+- **Noise-based session confidentiality:** Depends on OCapN networking milestones.
 
 ### Previous status note
 
