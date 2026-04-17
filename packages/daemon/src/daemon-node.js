@@ -23,6 +23,7 @@ import {
   makeCryptoPowers,
 } from './daemon-node-powers.js';
 import { startWsGateway } from './ws-gateway.js';
+import { makeAddressChecker } from './cidr.js';
 
 const fsp = { access: fs.promises.access };
 
@@ -161,11 +162,16 @@ const main = async () => {
   );
   const gatewayHost = addrUrl.hostname;
   const gatewayPort = addrUrl.port !== '' ? Number(addrUrl.port) : 8920;
+  const addressChecker = makeAddressChecker({
+    allowRemote: process.env.ENDO_GATEWAY_REMOTE === '1',
+    allowedCIDRs: process.env.ENDO_ALLOWED_CIDRS || '',
+  });
   const wsGateway = startWsGateway({
     endoBootstrap,
     host: gatewayHost,
     port: gatewayPort,
     cancelled,
+    addressChecker,
   });
 
   const services = [privatePathService, wsGateway];

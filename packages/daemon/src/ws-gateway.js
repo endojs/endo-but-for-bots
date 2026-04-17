@@ -72,9 +72,18 @@ harden(makeRateLimiter);
  * @param {string} opts.host
  * @param {number} opts.port
  * @param {Promise<never>} opts.cancelled
+ * @param {((addr: string) => boolean)} [opts.addressChecker] - Optional
+ *   predicate that returns true if a remote address is allowed to connect.
+ *   Defaults to allowing all connections.
  * @returns {{ started: Promise<string>, stopped: Promise<void> }}
  */
-export const startWsGateway = ({ endoBootstrap, host, port, cancelled }) => {
+export const startWsGateway = ({
+  endoBootstrap,
+  host,
+  port,
+  cancelled,
+  addressChecker = _addr => true,
+}) => {
   const fetchLimiter = makeRateLimiter(1000);
   const gatewayP = E(endoBootstrap).gateway();
 
@@ -98,6 +107,14 @@ export const startWsGateway = ({ endoBootstrap, host, port, cancelled }) => {
 
   wss.on('connection', (socket, req) => {
     const remoteAddress = req.socket.remoteAddress || '';
+
+    if (!addressChecker(remoteAddress)) {
+      console.warn(
+        `[Gateway] Rejected connection from ${remoteAddress} (address not allowed)`,
+      );
+      socket.close(1008, 'Address not allowed');
+      return;
+    }
 
     const { promise: closed, resolve: close, reject: abort } = makePromiseKit();
 
