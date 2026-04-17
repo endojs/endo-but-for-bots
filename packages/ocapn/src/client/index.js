@@ -223,11 +223,11 @@ export const makeClient = ({
    * Establishes a new session by initiating a connection.
    */
   const establishSession = location => {
-    const netlayer = netlayers.get(location.transport);
+    // Support both the new `network` field and the legacy `transport` field.
+    const networkId = location.network ?? location.transport;
+    const netlayer = netlayers.get(networkId);
     if (!netlayer) {
-      throw Error(
-        `Netlayer not registered for transport: ${location.transport}`,
-      );
+      throw Error(`Netlayer not registered for network: ${networkId}`);
     }
     const destinationLocationId = locationToLocationId(location);
     if (destinationLocationId === netlayer.locationId) {
