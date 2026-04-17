@@ -793,6 +793,20 @@ const makeMountExo = ctx => {
       return makeReadableTreeView(readOnlyMount);
     },
 
+    async subDir(subpath) {
+      await null;
+      if (typeof subpath !== 'string') {
+        throw new Error(`subDir path must be a string, got ${q(typeof subpath)}`);
+      }
+      const segments = subpath.split('/').filter(s => s.length > 0);
+      for (const seg of segments) {
+        if (seg === '..' || seg === '.') {
+          throw new Error(`Invalid subDir segment: ${seg}`);
+        }
+      }
+      return this.self.subView(segments); // eslint-disable-line no-invalid-this
+    },
+
     async snapshot() {
       if (snapshotTree === undefined) {
         throw new Error('snapshot() is not available for this mount');

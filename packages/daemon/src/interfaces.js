@@ -594,6 +594,9 @@ export const MountInterface = M.interface('EndoMount', {
   // EndoMount.  Callers that need mount-specific extensions on a
   // read-only handle keep a reference to the un-attenuated mount.
   readOnly: M.call().returns(M.remotable('ReadableTree')),
+  // Mount-specific confined sub-root convenience. Unlike `subView`, this
+  // accepts slash-separated string paths and rejects "." / ".." segments.
+  subDir: M.call(M.string()).returns(M.promise()),
   // Snapshot
   snapshot: M.call().returns(M.promise()),
   // Discoverability

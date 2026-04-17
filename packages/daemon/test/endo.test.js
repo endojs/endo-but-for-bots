@@ -5495,6 +5495,41 @@ test('mount snapshots capture immutable tree and file views', async t => {
   t.is(await E(nestedSnapshotFile).text(), 'nested');
 });
 
+test('mount subDir creates confined sub-mount', async t => {
+  const { host, config } = await prepareHost(t);
+
+  const mountPath = path.join(config.statePath, '..', 'mount-test-subdir');
+  await createMountFixture(mountPath, {
+    'root.txt': 'at root',
+  });
+  await fs.promises.mkdir(path.join(mountPath, 'src'));
+  await fs.promises.writeFile(
+    path.join(mountPath, 'src', 'index.js'),
+    'export default 42;',
+  );
+
+  await E(host).provideMount(mountPath, 'project');
+  const mount = await E(host).lookup(['project']);
+
+  // subDir scopes to a subdirectory.
+  const srcMount = await E(mount).subDir('src');
+  const entries = await E(srcMount).list();
+  t.deepEqual(entries, ['index.js']);
+
+  // subDir cannot navigate above its new root.
+  t.true(await E(srcMount).has('index.js'));
+
+  // Read file through sub-mount.
+  const file = await E(srcMount).lookup('index.js');
+  const content = await E(file).text();
+  t.is(content, 'export default 42;');
+
+  // subDir rejects .. segments.
+  await t.throwsAsync(() => E(mount).subDir('..'), {
+    message: /Invalid subDir segment/,
+  });
+});
+
 // symlink confinement tests
 
 /**
