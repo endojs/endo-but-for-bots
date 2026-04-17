@@ -554,6 +554,65 @@ export const WorkerFacetForDaemonInterface = M.interface(
   },
 );
 
+// #region Interval Scheduler
+
+const IntervalEntryShape = M.splitRecord({
+  id: M.string(),
+  label: M.string(),
+  periodMs: M.number(),
+  firstDelayMs: M.number(),
+  tickTimeoutMs: M.number(),
+  nextTickAt: M.number(),
+  createdAt: M.number(),
+  tickCount: M.number(),
+  status: M.or('active', 'paused', 'cancelled'),
+});
+
+export const IntervalSchedulerInterface = M.interface(
+  'EndoIntervalScheduler',
+  {
+    makeInterval: M.callWhen(M.string(), M.number())
+      .optional(
+        M.splitRecord(
+          {},
+          {
+            firstDelayMs: M.number(),
+            tickTimeoutMs: M.number(),
+          },
+        ),
+      )
+      .returns(M.remotable('Interval')),
+    list: M.callWhen().returns(M.arrayOf(IntervalEntryShape)),
+    help: M.call().returns(M.string()),
+  },
+);
+
+export const IntervalInterface = M.interface('EndoInterval', {
+  label: M.call().returns(M.string()),
+  period: M.call().returns(M.number()),
+  setPeriod: M.callWhen(M.number()).returns(M.undefined()),
+  cancel: M.callWhen().returns(M.undefined()),
+  info: M.call().returns(IntervalEntryShape),
+  help: M.call().returns(M.string()),
+});
+
+export const IntervalControlInterface = M.interface('EndoIntervalControl', {
+  setMaxActive: M.call(M.number()).returns(M.undefined()),
+  setMinPeriodMs: M.call(M.number()).returns(M.undefined()),
+  pause: M.call().returns(M.undefined()),
+  resume: M.call().returns(M.undefined()),
+  revoke: M.call().returns(M.undefined()),
+  listAll: M.callWhen().returns(M.arrayOf(IntervalEntryShape)),
+  help: M.call().returns(M.string()),
+});
+
+export const TickResponseInterface = M.interface('EndoTickResponse', {
+  resolve: M.call().returns(M.undefined()),
+  reschedule: M.call().returns(M.undefined()),
+});
+
+// #endregion
+
 export const EndoInterface = M.interface('Endo', {
   help: M.call().optional(M.string()).returns(M.string()),
   ping: M.call().returns(M.promise()),
