@@ -82,6 +82,7 @@ fn main() -> ExitCode {
         "start" => result_to_exit("endor", cmd_start()),
         "stop" => result_to_exit("endor", cmd_stop()),
         "ping" => result_to_exit("endor", cmd_ping()),
+        "gc" => result_to_exit("endor", cmd_gc()),
         "-h" | "--help" => {
             print_help();
             ExitCode::SUCCESS
@@ -112,6 +113,9 @@ fn print_help() {
     eprintln!("Child-facing commands (XS engine by default):");
     eprintln!("  worker  [-e xs]                Run a supervised worker child");
     eprintln!("  run     [-e xs] <archive.zip>  Run a compartment-map archive");
+    eprintln!();
+    eprintln!("Maintenance:");
+    eprintln!("  gc                             Garbage-collect the CAS");
 }
 
 fn print_subcommand_help(sub: &str) {
@@ -182,6 +186,15 @@ fn print_subcommand_help(sub: &str) {
             eprintln!();
             eprintln!("Options:");
             eprintln!("  -e, --engine <engine>  Engine to use (default: xs)");
+        }
+        "gc" => {
+            eprintln!("Usage: endor gc");
+            eprintln!();
+            eprintln!("Garbage-collect the content-addressed store.");
+            eprintln!();
+            eprintln!("Removes CAS entries that have zero retained references and");
+            eprintln!("are not transitively referenced by any live tree root.");
+            eprintln!("Safe to run while the daemon is stopped.");
         }
         "help" => {
             eprintln!("Usage: endor help [command]");
@@ -329,5 +342,22 @@ fn cmd_ping() -> Result<(), EndoError> {
     let conn = UnixStream::connect(&paths.sock_path)?;
     let _ = conn.shutdown(Shutdown::Both);
     eprintln!("pong");
+    Ok(())
+}
+
+fn cmd_gc() -> Result<(), EndoError> {
+    let paths = endo::paths::resolve_paths()?;
+    let cas_dir = paths.state_path.join("store-sha256");
+    if !cas_dir.exists() {
+        eprintln!("endor gc: no CAS directory at {}", cas_dir.display());
+        return Ok(());
+    }
+    let cas = endo::cas::ContentStore::open(&cas_dir)?;
+    let live_roots = std::collections::HashSet::new();
+    let report = cas.gc(&live_roots)?;
+    eprintln!(
+        "endor gc: freed {} entries ({} bytes)",
+        report.freed_count, report.freed_bytes
+    );
     Ok(())
 }

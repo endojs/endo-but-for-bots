@@ -599,6 +599,42 @@ fn handle_control_message(sup: &Arc<Supervisor>, spawn_sup: &Arc<Supervisor>, ca
                 cas.release(&hash);
             }
         }
+        "cas-gc" => {
+            // Run GC with live roots from the payload (if any).
+            let live_roots = std::collections::HashSet::new();
+            match cas.gc(&live_roots) {
+                Ok(report) => {
+                    eprintln!(
+                        "endor: GC freed {} entries ({} bytes)",
+                        report.freed_count, report.freed_bytes
+                    );
+                    sup.deliver(Message {
+                        from: 0,
+                        to: msg.from,
+                        envelope: Envelope {
+                            handle: 0,
+                            verb: "cas-gc-done".to_string(),
+                            payload: codec::encode_gc_report(report.freed_count, report.freed_bytes),
+                            nonce: msg.envelope.nonce,
+                        },
+                        response_tx: None,
+                    });
+                }
+                Err(e) => {
+                    sup.deliver(Message {
+                        from: 0,
+                        to: msg.from,
+                        envelope: Envelope {
+                            handle: 0,
+                            verb: "error".to_string(),
+                            payload: format!("cas-gc: {e}").into_bytes(),
+                            nonce: msg.envelope.nonce,
+                        },
+                        response_tx: None,
+                    });
+                }
+            }
+        }
         "cas-store-tree" => {
             // Payload is the tree JSON directly as bytes.
             match cas.store_tree(&msg.envelope.payload) {

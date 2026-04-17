@@ -733,6 +733,17 @@ pub fn encode_cas_content(data: &[u8]) -> Vec<u8> {
     buf
 }
 
+/// Encode `cas-gc-done` response: CBOR map `{"freedCount": <u64>, "freedBytes": <u64>}`.
+pub fn encode_gc_report(freed_count: u64, freed_bytes: u64) -> Vec<u8> {
+    let mut buf = Vec::new();
+    cbor_append_head(&mut buf, CBOR_MAP, 2);
+    cbor_append_text(&mut buf, "freedCount");
+    cbor_append_head(&mut buf, CBOR_UINT, freed_count);
+    cbor_append_text(&mut buf, "freedBytes");
+    cbor_append_head(&mut buf, CBOR_UINT, freed_bytes);
+    buf
+}
+
 /// Encode `cas-exists` response: CBOR map `{"exists": <bool>}`.
 pub fn encode_cas_exists(exists: bool) -> Vec<u8> {
     let mut buf = Vec::new();

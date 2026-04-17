@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -193,6 +193,75 @@ impl ContentStore {
         &self.dir
     }
 
+    /// Run garbage collection. Deletes entries that:
+    /// - Have zero ref count in the in-memory cache.
+    /// - Are not in `live_roots`.
+    /// - Are not transitively referenced by a live tree.
+    ///
+    /// Returns a report of what was collected.
+    pub fn gc(&self, live_roots: &HashSet<String>) -> io::Result<GcReport> {
+        // Build the full live set by walking trees from live_roots.
+        let mut live = live_roots.clone();
+
+        // Also include anything with refs > 0.
+        {
+            let refs = self.refs.read().unwrap_or_else(|e| e.into_inner());
+            for (hash, count) in refs.iter() {
+                if *count > 0 {
+                    live.insert(hash.clone());
+                }
+            }
+        }
+
+        // Expand tree references: walk all live trees and mark children.
+        let mut to_walk: Vec<String> = live.iter().cloned().collect();
+        while let Some(hash) = to_walk.pop() {
+            if let Ok(tree) = self.read_tree(&hash) {
+                for entry in tree.entries.values() {
+                    if live.insert(entry.hash.clone()) {
+                        // Newly seen — walk if it might be a tree.
+                        if entry.entry_type == "tree" {
+                            to_walk.push(entry.hash.clone());
+                        }
+                    }
+                }
+            }
+            // If read_tree fails, it's a blob — no children to walk.
+        }
+
+        // Sweep: iterate store directory, delete unreferenced entries.
+        let mut freed_count = 0u64;
+        let mut freed_bytes = 0u64;
+
+        for entry in fs::read_dir(&self.dir)? {
+            let entry = entry?;
+            let name = entry.file_name();
+            let name_str = name.to_string_lossy();
+            // Skip .meta sidecars and .tmp files.
+            if name_str.ends_with(".meta") || name_str.ends_with(".tmp") {
+                continue;
+            }
+            if !live.contains(name_str.as_ref()) {
+                let meta = entry.metadata()?;
+                let size = meta.len();
+                // Delete the blob and its meta sidecar.
+                fs::remove_file(entry.path())?;
+                let meta_path = self.dir.join(format!("{name_str}.meta"));
+                let _ = fs::remove_file(&meta_path);
+                freed_count += 1;
+                freed_bytes += size;
+                // Remove from in-memory refs.
+                let mut refs = self.refs.write().unwrap_or_else(|e| e.into_inner());
+                refs.remove(name_str.as_ref());
+            }
+        }
+
+        Ok(GcReport {
+            freed_count,
+            freed_bytes,
+        })
+    }
+
     // -----------------------------------------------------------------------
     // Internal helpers
     // -----------------------------------------------------------------------
@@ -204,6 +273,13 @@ impl ContentStore {
         );
         fs::write(&meta_path, json.as_bytes())
     }
+}
+
+/// Report from a GC run.
+#[derive(Debug)]
+pub struct GcReport {
+    pub freed_count: u64,
+    pub freed_bytes: u64,
 }
 
 /// Compute hex-encoded SHA-256 of `data`.
@@ -423,6 +499,72 @@ mod tests {
 
         let result = cas.fetch_from_tree(&root_hash, "nonexistent.js");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn gc_removes_unreferenced() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cas = ContentStore::open(tmp.path()).unwrap();
+
+        let keep_hash = cas.store(b"keep me", "blob").unwrap();
+        let remove_hash = cas.store(b"remove me", "blob").unwrap();
+
+        cas.retain(&keep_hash);
+
+        let report = cas.gc(&HashSet::new()).unwrap();
+        assert_eq!(report.freed_count, 1);
+        assert!(cas.has(&keep_hash));
+        assert!(!cas.has(&remove_hash));
+    }
+
+    #[test]
+    fn gc_preserves_live_roots() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cas = ContentStore::open(tmp.path()).unwrap();
+
+        let h1 = cas.store(b"root 1", "blob").unwrap();
+        let h2 = cas.store(b"root 2", "blob").unwrap();
+
+        let mut live = HashSet::new();
+        live.insert(h1.clone());
+        live.insert(h2.clone());
+
+        let report = cas.gc(&live).unwrap();
+        assert_eq!(report.freed_count, 0);
+        assert!(cas.has(&h1));
+        assert!(cas.has(&h2));
+    }
+
+    #[test]
+    fn gc_preserves_tree_children() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cas = ContentStore::open(tmp.path()).unwrap();
+
+        let blob_hash = cas.store(b"tree child", "blob").unwrap();
+        let tree = TreeManifest {
+            entries: {
+                let mut m = HashMap::new();
+                m.insert("child.js".to_string(), TreeEntry {
+                    entry_type: "blob".to_string(),
+                    hash: blob_hash.clone(),
+                    size: Some(10),
+                });
+                m
+            },
+        };
+        let tree_json = serde_json::to_vec(&tree).unwrap();
+        let tree_hash = cas.store_tree(&tree_json).unwrap();
+        let orphan = cas.store(b"orphan", "blob").unwrap();
+
+        // Only the tree is a live root — its child should be preserved.
+        let mut live = HashSet::new();
+        live.insert(tree_hash.clone());
+
+        let report = cas.gc(&live).unwrap();
+        assert_eq!(report.freed_count, 1); // orphan removed
+        assert!(cas.has(&tree_hash));
+        assert!(cas.has(&blob_hash)); // child preserved
+        assert!(!cas.has(&orphan));
     }
 
     #[test]
