@@ -5,7 +5,25 @@
 | **Created** | 2026-04-17 |
 | **Updated** | 2026-04-17 |
 | **Author** | Kris Kowal (prompted) |
-| **Status** | Not Started |
+| **Status** | In Progress |
+
+## Status
+
+Phases 1 and 3 implemented:
+
+- **Phase 1**: `rust/endo/src/registry.rs` — SQLite-backed
+  `RegistryTable` with `lookup`, `insert`, `list_versions`,
+  `get_meta`/`set_meta`, `count`. Schema matches the design:
+  `packages(name, version, hash, integrity, fetched_at)` and
+  `package_meta(name, versions_json, fetched_at)`.
+- **Phase 3**: `rust/endo/src/semver.rs` — `Version` parsing
+  with ordering, `Range` parsing with `^`, `~`, `>=`, `<`, `<=`,
+  `*`, exact versions, and space-separated AND composites.
+  `select_versions` implements Go-like MVS: greatest available
+  version per major satisfying all ranges.
+
+Remaining: Phase 2 (HTTP client for package fetching), Phase 4
+(compartment mapper integration), Phase 5 (offline mode, .npmrc).
 
 ## What is the Problem Being Solved?
 
