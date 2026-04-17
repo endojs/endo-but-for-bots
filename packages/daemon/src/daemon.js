@@ -2654,6 +2654,7 @@ const makeDaemonCore = async (
     'interval-scheduler': async (
       { agent: agentId, handle: handleId, maxActive, minPeriodMs, paused },
       context,
+      id,
     ) => {
       context.thisDiesIfThatDies(agentId);
       context.thisDiesIfThatDies(handleId);
@@ -2661,9 +2662,34 @@ const makeDaemonCore = async (
       // Resolve the agent's handle for tick message delivery.
       const agentHandle = await provide(handleId, 'handle');
 
-      const { scheduler, control } = makeIntervalSchedulerKit({
+      // Set up persistence directory for interval entries.
+      const { number: formulaNumber } = parseId(id);
+      const schedulerDir = filePowers.joinPath(
+        persistencePowers.statePath,
+        'interval-scheduler',
+        formulaNumber.slice(0, 2),
+        formulaNumber.slice(2),
+        'intervals',
+      );
+      await filePowers.makePath(schedulerDir);
+
+      const { scheduler, control, loadEntry } = makeIntervalSchedulerKit({
         maxActive,
         minPeriodMs,
+        onEntryChange: entry => {
+          const entryPath = filePowers.joinPath(
+            schedulerDir,
+            `${entry.id}.json`,
+          );
+          filePowers
+            .writeFileText(entryPath, JSON.stringify(entry) + '\n')
+            .catch(err => {
+              console.error(
+                `[interval-scheduler] persist failed:`,
+                /** @type {Error} */ (err).message,
+              );
+            });
+        },
         onTick: (entry, tickNumber) => {
           const tickMessage = harden({
             type: /** @type {const} */ ('package'),
@@ -2693,6 +2719,26 @@ const makeDaemonCore = async (
 
       if (paused) {
         control.pause();
+      }
+
+      // Startup recovery: load persisted interval entries.
+      try {
+        const entryFiles = await filePowers.readDirectory(schedulerDir);
+        for (const fileName of entryFiles) {
+          if (!fileName.endsWith('.json')) continue;
+          try {
+            const entryPath = filePowers.joinPath(schedulerDir, fileName);
+            const text = await filePowers.readFileText(entryPath);
+            const entry = JSON.parse(text);
+            if (entry && entry.id && entry.status === 'active') {
+              loadEntry(entry);
+            }
+          } catch {
+            // Skip corrupt entry files.
+          }
+        }
+      } catch {
+        // No persisted entries — fresh scheduler.
       }
 
       context.onCancel(() => {
