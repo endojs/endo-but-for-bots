@@ -460,18 +460,8 @@ export const main = async rawArgs => {
       return cat({ name, agentNames });
     });
 
-  program
-    .command('read-text <name>')
-    .description(
-      'reads text content from a path ' +
-        '(e.g. endo read-text project/src/index.js)',
-    )
-    .option(...commonOptions.as)
-    .action(async (name, cmd) => {
-      const { as: agentNames } = cmd.opts();
-      const { readText } = await import('./commands/read-text.js');
-      return readText({ name, agentNames });
-    });
+  // endo read-text removed: redundant with endo cat, which also
+  // navigates multi-segment pet-name paths through mount delegation.
 
   program
     .command('write-text <name>')
@@ -597,16 +587,9 @@ export const main = async rawArgs => {
       return mktmp({ name, agentNames, readOnly });
     });
 
-  program
-    .command('subdir <mount-name> <subpath> <new-name>')
-    .description('creates a sub-mount rooted at a subdirectory of an existing mount')
-    .option(...commonOptions.as)
-    .option('--read-only', 'create a read-only sub-mount')
-    .action(async (mountName, subpath, newName, cmd) => {
-      const { as: agentNames, readOnly } = cmd.opts();
-      const { subdirCommand } = await import('./commands/subdir.js');
-      return subdirCommand({ mountName, subpath, newName, agentNames, readOnly });
-    });
+  // endo subdir removed: provideSubMount is a programmatic
+  // capability-confinement operation, not an interactive CLI concern.
+  // Use Mount.subDir() or E(host).provideSubMount() from agent code.
 
   program
     .command('eval <source> [names...]')
