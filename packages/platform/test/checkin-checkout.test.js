@@ -120,6 +120,73 @@ test('checkinTree produces a loadable snapshot tree', async t => {
   await fs.promises.rm(dir, { recursive: true });
 });
 
+test('snapshot tree has() method', async t => {
+  const dir = await makeTmpDir(t);
+  await scaffold(dir);
+
+  const contentStore = makeMemoryContentStore();
+  const store = makeSnapshotStore(contentStore);
+  const { sha256 } = await checkinTree(makeLocalTree(dir), store);
+  const snapshotTree = store.loadTree(sha256);
+
+  t.true(await snapshotTree.has());
+  t.true(await snapshotTree.has('a.txt'));
+  t.true(await snapshotTree.has('sub'));
+  t.false(await snapshotTree.has('nonexistent'));
+  // Deep path
+  t.true(await snapshotTree.has('sub', 'c.txt'));
+  t.false(await snapshotTree.has('sub', 'nope'));
+
+  await fs.promises.rm(dir, { recursive: true });
+});
+
+test('snapshot tree list() with subpath', async t => {
+  const dir = await makeTmpDir(t);
+  await scaffold(dir);
+
+  const contentStore = makeMemoryContentStore();
+  const store = makeSnapshotStore(contentStore);
+  const { sha256 } = await checkinTree(makeLocalTree(dir), store);
+  const snapshotTree = store.loadTree(sha256);
+
+  const subEntries = await snapshotTree.list('sub');
+  t.deepEqual(subEntries, ['c.txt']);
+
+  await fs.promises.rm(dir, { recursive: true });
+});
+
+test('snapshot tree lookup() with multi-segment path', async t => {
+  const dir = await makeTmpDir(t);
+  await scaffold(dir);
+
+  const contentStore = makeMemoryContentStore();
+  const store = makeSnapshotStore(contentStore);
+  const { sha256 } = await checkinTree(makeLocalTree(dir), store);
+  const snapshotTree = store.loadTree(sha256);
+
+  // Multi-segment lookup via array
+  const cBlob = await snapshotTree.lookup(['sub', 'c.txt']);
+  t.is(await cBlob.text(), 'charlie');
+
+  await fs.promises.rm(dir, { recursive: true });
+});
+
+test('snapshot tree lookup() throws for unknown name', async t => {
+  const dir = await makeTmpDir(t);
+  await scaffold(dir);
+
+  const contentStore = makeMemoryContentStore();
+  const store = makeSnapshotStore(contentStore);
+  const { sha256 } = await checkinTree(makeLocalTree(dir), store);
+  const snapshotTree = store.loadTree(sha256);
+
+  await t.throwsAsync(() => snapshotTree.lookup('nonexistent'), {
+    message: /Unknown name/,
+  });
+
+  await fs.promises.rm(dir, { recursive: true });
+});
+
 test('checkinTree with nested directory', async t => {
   const dir = await makeTmpDir(t);
   await scaffold(dir);
