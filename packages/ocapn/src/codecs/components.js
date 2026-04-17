@@ -30,7 +30,9 @@ const PeerHintsStructCodec = makeStructCodecForValues(
  * @typedef {object} OcapnLocation
  * @property {'ocapn-peer'} type
  * @property {string} designator
- * @property {string} transport
+ * @property {string} transport - Legacy field; prefer `network`.
+ * @property {string} [network] - Network identifier (replaces `transport`).
+ *   During migration, consumers should check `network ?? transport`.
  * @property {false | Record<string, any>} hints
  */
 
