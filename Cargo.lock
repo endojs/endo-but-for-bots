@@ -525,7 +525,10 @@ name = "endo"
 version = "0.1.0"
 dependencies = [
  "criterion",
+ "hex",
  "libc",
+ "sha2",
+ "tempfile",
  "tokio",
  "xsnap",
 ]
