@@ -9,19 +9,37 @@
 
 ## Status
 
-**Implemented.** The unified weblet server is in
-`packages/daemon/src/web-server-node.js`. Key implementation details:
+**Partially implemented.** The Familiar-side `localhttp://` protocol handler
+exists, but the daemon-side unified web server does not.
 
-- The `webletHandlers` map is keyed by the bare access token (first 32 chars
-  of the weblet ID), not by `<id>.localhost`. This simplifies the
-  `localhttp://` protocol handler, which sends the bare access token as the
-  `Host` header.
-- Both HTTP requests and WebSocket upgrades are routed by `Host` header.
-- `makeWeblet` supports two modes: unified server (hostname-based routing on
-  the gateway port) and dedicated port (per-weblet server, path-based
-  routing). The unified mode returns `localhttp://{accessToken}` URLs.
-- The `localhttp://` protocol handler in `packages/familiar` proxies to
-  `http://127.0.0.1:{gatewayPort}` with `Host: {accessToken}`.
+### Implemented
+
+- **`localhttp://` protocol handler:** `packages/familiar/src/protocol-handler.js`
+  — registers a privileged scheme, proxies `localhttp://<weblet-id>/` requests
+  to `http://127.0.0.1:{gatewayPort}` with `Host: {accessToken}`, injects CSP
+  headers on every response.
+- **Exfiltration defense:** `packages/familiar/src/exfiltration-defense.js` —
+  DNS poisoning protection, request interception, permission handler.
+- **Navigation guard:** `packages/familiar/src/navigation-guard.js` —
+  `will-navigate` and `setWindowOpenHandler` interception.
+
+### Not implemented
+
+- **Daemon-side unified web server:** The file `packages/daemon/src/web-server-node.js`
+  referenced in the previous status does **not exist** on this branch. The daemon
+  has `packages/daemon/src/ws-gateway.js` for WebSocket gateway connections, but
+  no weblet HTTP routing or `webletHandlers` map.
+- **`makeWeblet` function:** No weblet creation or registration mechanism exists
+  in the daemon.
+- **Virtual host routing:** The gateway does not demultiplex by `Host` header.
+- **Per-weblet CapTP sessions:** No weblet-specific WebSocket handler isolation.
+
+### Previous status note
+
+The previous status section claimed full implementation in
+`packages/daemon/src/web-server-node.js`. This appears to have been written
+prospectively or to describe work on a different branch. The file does not
+exist on `origin/llm` as of 2026-04-17.
 
 ## What is the Problem Being Solved?
 

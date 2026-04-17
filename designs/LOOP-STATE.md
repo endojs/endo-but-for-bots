@@ -2,10 +2,10 @@
 
 | | |
 |---|---|
-| **Last Run** | 2026-04-16 |
+| **Last Run** | 2026-04-17 |
 | **Task Type** | Design |
-| **Last Design** | chat-rename-dismiss-to-clear.md |
-| **Action Taken** | Audited Proposed design against codebase. Found all three changes already implemented: `/clear` in chat command registry and executor, `endo clear` in CLI, dismiss/dismiss-all prefix collision eliminated. Promoted status from Proposed to **Complete**. Added `## Status` section documenting implementation locations. Updated README totals (22 Complete). |
-| **Next Suggested** | @endo/cache-map (coverage task) |
+| **Last Design** | familiar-unified-weblet-server.md |
+| **Action Taken** | Found previous status section was inaccurate — claimed full implementation in a file that does not exist (`packages/daemon/src/web-server-node.js`). Corrected status to "Partially implemented": Familiar-side localhttp:// protocol handler, exfiltration defense, and navigation guard exist, but daemon-side unified web server, makeWeblet, virtual host routing, and per-weblet CapTP do not. Created QUESTIONS.md with question about the discrepancy. |
+| **Next Suggested** | @endo/exo (coverage task) |
 | **Blockers** | None. |
-| **Assumptions** | None. |
+| **Assumptions** | Previous status was prospective or from another branch. Corrected to reflect origin/llm state. |
