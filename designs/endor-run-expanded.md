@@ -5,7 +5,25 @@
 | **Created** | 2026-04-17 |
 | **Updated** | 2026-04-17 |
 | **Author** | Kris Kowal (prompted) |
-| **Status** | Not Started |
+| **Status** | In Progress |
+
+## Status
+
+Phases 1-2 implemented:
+
+- **Phase 1**: `ContentStore` is available standalone via
+  `endo::cas::ContentStore::open()` (implemented in
+  daemon-cas-management).
+- **Phase 2**: `rust/endo/src/cas_archive.rs` — `ingest_archive`
+  extracts ZIP contents into CAS as blobs with tree manifests.
+  `load_archive_from_cas` reconstructs `LoadedArchive` from a root
+  hash. `endor run` now ingests to CAS and prints root hash.
+  `endor run --cas <hash>` re-runs from CAS. `--no-cas` preserves
+  legacy behavior. `run_xs_archive_loaded` added to xsnap for
+  executing pre-loaded archives.
+
+Remaining: Phase 3 (directory input), Phase 4-5 (entry-point with
+compartment mapper).
 
 ## What is the Problem Being Solved?
 
