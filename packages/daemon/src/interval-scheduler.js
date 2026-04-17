@@ -37,7 +37,7 @@ const generateId = () => {
  * @param {object} options
  * @param {number} [options.maxActive] - Max concurrent active intervals.
  * @param {number} [options.minPeriodMs] - Minimum allowed period.
- * @param {(entry: IntervalEntry, tickNumber: number) => void} [options.onTick] - Callback when a tick fires.
+ * @param {(entry: IntervalEntry, tickNumber: number, tickResponse: object) => void} [options.onTick] - Callback when a tick fires. tickResponse is a one-shot exo with resolve() and reschedule().
  * @param {(entry: IntervalEntry) => void} [options.onEntryChange] - Called when an entry is created, updated, or cancelled. For persistence.
  * @param {(entryId: string) => void} [options.onEntryRemove] - Called when an entry is removed. For persistence.
  * @returns {{ scheduler: object, control: object, loadEntry: (entry: IntervalEntry) => void }}
@@ -106,20 +106,77 @@ export const makeIntervalSchedulerKit = (options = {}) => {
 
     activeTimeouts.delete(entryId);
     entry.tickCount += 1;
+    let rescheduleCount = 0;
+    let responded = false;
 
     if (onEntryChange) {
       onEntryChange(entry);
     }
 
+    // Create a one-shot TickResponse exo for this tick.
+    const tickResponse = makeExo(
+      `TickResponse ${entry.label}#${entry.tickCount}`,
+      TickResponseInterface,
+      {
+        resolve: () => {
+          if (responded) return;
+          responded = true;
+          // Clear the deadline timeout.
+          const dh = tickDeadlines.get(entryId);
+          if (dh !== undefined) {
+            clearTimeout(dh);
+            tickDeadlines.delete(entryId);
+          }
+          advanceToNextPeriod(entry);
+        },
+        reschedule: () => {
+          if (responded) return;
+          rescheduleCount += 1;
+          // Clear the deadline timeout.
+          const dh = tickDeadlines.get(entryId);
+          if (dh !== undefined) {
+            clearTimeout(dh);
+            tickDeadlines.delete(entryId);
+          }
+          // Exponential backoff, capped at tickTimeoutMs.
+          const baseBackoff = Math.min(1000, entry.periodMs / 10);
+          const backoffDelay = Math.min(
+            baseBackoff * 2 ** (rescheduleCount - 1),
+            entry.tickTimeoutMs,
+          );
+          const retryAt = Date.now() + backoffDelay;
+          const deadline = entry.nextTickAt + entry.tickTimeoutMs;
+          if (retryAt >= deadline) {
+            // Backoff would exceed deadline — auto-resolve instead.
+            responded = true;
+            advanceToNextPeriod(entry);
+            return;
+          }
+          const handle = setTimeout(
+            () => onIntervalTick(entry.id),
+            backoffDelay,
+          );
+          handle.unref();
+          activeTimeouts.set(entry.id, handle);
+        },
+      },
+    );
+
     if (onTick) {
-      onTick(entry, entry.tickCount);
+      onTick(entry, entry.tickCount, tickResponse);
     }
 
-    // Arm tick timeout
+    // Arm tick timeout — auto-resolve if agent doesn't respond.
     const deadlineHandle = setTimeout(() => {
-      // Auto-resolve on timeout
-      tickDeadlines.delete(entryId);
-      advanceToNextPeriod(entry);
+      if (!responded) {
+        responded = true;
+        tickDeadlines.delete(entryId);
+        console.log(
+          `Interval "${entry.label}" tick #${entry.tickCount} timed out ` +
+            `after ${entry.tickTimeoutMs}ms`,
+        );
+        advanceToNextPeriod(entry);
+      }
     }, entry.tickTimeoutMs);
     deadlineHandle.unref();
     tickDeadlines.set(entryId, deadlineHandle);
