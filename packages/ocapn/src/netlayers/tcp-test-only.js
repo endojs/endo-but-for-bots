@@ -5,9 +5,10 @@ import net from 'net';
 import harden from '@endo/harden';
 
 import { locationToLocationId } from '../client/util.js';
+import { sendHandshake } from '../client/handshake.js';
 
 /**
- * @import { Connection, NetLayer, NetlayerHandlers, SocketOperations } from '../client/types.js'
+ * @import { Connection, NetLayer, NetlayerHandlers, SelfIdentity, SocketOperations } from '../client/types.js'
  * @import { OcapnLocation } from '../codecs/components.js'
  */
 
@@ -204,8 +205,10 @@ export const makeTcpNetLayer = async ({
    * @returns {Connection}
    */
   const lookupOrConnect = location => {
-    if (location.transport !== localLocation.transport) {
-      throw Error(`Unsupported transport: ${location.transport}`);
+    const remoteNetworkId = location.network ?? location.transport;
+    const localNetworkId = localLocation.network ?? localLocation.transport;
+    if (remoteNetworkId !== localNetworkId) {
+      throw Error(`Unsupported network: ${remoteNetworkId}`);
     }
     const existingConnection = outgoingConnections.get(location.designator);
     // Only reuse connection if it's not destroyed
@@ -233,6 +236,12 @@ export const makeTcpNetLayer = async ({
     activeSockets.clear();
     outgoingConnections.clear();
   };
+
+  // TODO (ocapn-tcp-for-test-extraction): Add sendSessionHandshake method
+  // that calls sendHandshake with the connection's selfIdentity.
+  // This requires threading selfIdentity through from the client, or
+  // having the network manage its own identity.  When this is done,
+  // OCapN core's fallback sendHandshake call can be removed.
 
   /** @type {TcpTestOnlyNetLayer} */
   const netlayer = harden({
