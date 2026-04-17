@@ -3162,6 +3162,82 @@ const makeDaemonCore = async (
   };
 
   /**
+   * @param {FormulaIdentifier} agentId
+   * @param {FormulaIdentifier} handleId
+   * @param {object} options
+   * @param {number} [options.maxActive]
+   * @param {number} [options.minPeriodMs]
+   * @param {import('./deferred-tasks.js').DeferredTasks<any>} deferredTasks
+   */
+  const formulateIntervalScheduler = async (
+    agentId,
+    handleId,
+    { maxActive = 5, minPeriodMs = 30_000 } = {},
+    deferredTasks,
+  ) => {
+    return withFormulaGraphLock(async () => {
+      const schedulerNumber = /** @type {FormulaNumber} */ (
+        await randomHex256()
+      );
+      const schedulerId = formatId({
+        number: schedulerNumber,
+        node: localNodeNumber,
+      });
+
+      await deferredTasks.execute({ schedulerId });
+
+      /** @type {import('./types.js').IntervalSchedulerFormula} */
+      const formula = harden({
+        type: /** @type {const} */ ('interval-scheduler'),
+        agent: agentId,
+        handle: handleId,
+        maxActive,
+        minPeriodMs,
+        paused: false,
+      });
+
+      return formulate(schedulerNumber, formula);
+    });
+  };
+
+  /**
+   * @param {FormulaIdentifier} agentId
+   * @param {object} options
+   * @param {string[]} options.allowedOrigins
+   * @param {number} [options.maxRequestsPerMinute]
+   * @param {number} [options.maxResponseBytes]
+   * @param {import('./deferred-tasks.js').DeferredTasks<any>} deferredTasks
+   */
+  const formulateHttpClient = async (
+    agentId,
+    { allowedOrigins, maxRequestsPerMinute = 60, maxResponseBytes = 10485760 },
+    deferredTasks,
+  ) => {
+    return withFormulaGraphLock(async () => {
+      const clientNumber = /** @type {FormulaNumber} */ (
+        await randomHex256()
+      );
+      const clientId = formatId({
+        number: clientNumber,
+        node: localNodeNumber,
+      });
+
+      await deferredTasks.execute({ clientId });
+
+      /** @type {import('./types.js').HttpClientFormula} */
+      const formula = harden({
+        type: /** @type {const} */ ('http-client'),
+        agent: agentId,
+        allowedOrigins,
+        maxRequestsPerMinute,
+        maxResponseBytes,
+      });
+
+      return formulate(clientNumber, formula);
+    });
+  };
+
+  /**
    * Unlike other formulate functions, formulateNumberedHandle *only* writes a
    * formula to the formula graph and does not attempt to incarnate it.
    * This is to break an incarnation cycle between agents and their handles.
@@ -4722,6 +4798,8 @@ const makeDaemonCore = async (
     getFormulaForId,
     formulateChannel,
     formulateTimer,
+    formulateIntervalScheduler,
+    formulateHttpClient,
     makeMailbox,
     makeDirectoryNode,
     localNodeNumber,
