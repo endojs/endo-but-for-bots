@@ -447,6 +447,25 @@ export const makeClient = ({
       return netlayer;
     },
     /**
+     * Registers an OCapN network by calling the provided factory.
+     * The network manages its own session establishment, authentication,
+     * and transport selection.  This is the successor to registerNetlayer
+     * for the network/transport separation.
+     *
+     * @template {import('./types.js').OcapnNetwork} T
+     * @param {(handlers: NetlayerHandlers, logger: Logger) => T | Promise<T>} makeNetwork
+     * @returns {Promise<T>}
+     */
+    async registerNetwork(makeNetwork) {
+      const network = await makeNetwork(netlayerHandlers, logger);
+      const { networkId } = network;
+      if (networks.has(networkId)) {
+        throw Error(`Network already registered: ${networkId}`);
+      }
+      networks.set(networkId, network);
+      return network;
+    },
+    /**
      * @param {OcapnLocation} location
      * @returns {Promise<Session>}
      */

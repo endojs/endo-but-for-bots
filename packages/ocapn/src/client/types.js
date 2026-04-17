@@ -171,6 +171,9 @@
 /**
  * @typedef {object} Client
  * @property {<T extends NetLayer>(makeNetlayer: (handlers: NetlayerHandlers, logger: Logger) => T | Promise<T>) => Promise<T>} registerNetlayer
+ * @property {<T extends OcapnNetwork>(makeNetwork: (handlers: NetlayerHandlers, logger: Logger) => T | Promise<T>) => Promise<T>} registerNetwork
+ * Register an OCapN network. The network manages session establishment
+ * and authentication. Successor to registerNetlayer.
  * @property {(location: OcapnLocation) => Promise<Session>} provideSession
  * @property {(location: OcapnLocation, swissNum: SwissNum) => SturdyRef} makeSturdyRef
  * @property {(sturdyRef: SturdyRef) => Promise<any>} enlivenSturdyRef
