@@ -708,11 +708,22 @@ path: string | string[] — Name or path segments.
 ## readOnly() -> EndoMount
 
 Returns a read-only view of this mount.
+All navigation works; writes throw.
 
-## snapshot() -> Promise<SnapshotTree>
+## subDir(subpath) -> Promise\<EndoMount>
+
+Create a new mount re-rooted at the given subdirectory.
+The sub-mount cannot navigate above its new root.
+
+subpath: string — Slash-separated relative path (e.g., "src/lib").
+Rejects segments containing ".." or ".".
+
+Example: subDir("src/lib") returns a mount scoped to src/lib/.
+Chaining: readOnly() then subDir("src") gives a read-only scoped mount.
+
+## snapshot() -> Promise\<SnapshotTree>
 
 Capture current state as an immutable readable-tree.
-(Not yet implemented.)
 
 # EndoMountFile - A file within a mounted directory.
 
