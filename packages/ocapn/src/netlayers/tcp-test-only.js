@@ -237,18 +237,24 @@ export const makeTcpNetLayer = async ({
     outgoingConnections.clear();
   };
 
-  // TODO (ocapn-tcp-for-test-extraction): Add sendSessionHandshake method
-  // that calls sendHandshake with the connection's selfIdentity.
-  // This requires threading selfIdentity through from the client, or
-  // having the network manage its own identity.  When this is done,
-  // OCapN core's fallback sendHandshake call can be removed.
-
   /** @type {TcpTestOnlyNetLayer} */
   const netlayer = harden({
     location: localLocation,
     locationId: locationToLocationId(localLocation),
     connect: lookupOrConnect,
     shutdown,
+    /**
+     * The tcp-testing-only network uses the standard op:start-session
+     * handshake.  This method delegates to the core sendHandshake,
+     * making the handshake a network concern rather than OCapN core.
+     *
+     * @param {Connection} connection
+     * @param {string} captpVersion
+     * @param {SelfIdentity} selfIdentity
+     */
+    sendSessionHandshake: (connection, captpVersion, selfIdentity) => {
+      sendHandshake(connection, selfIdentity, captpVersion);
+    },
     // eslint-disable-next-line no-underscore-dangle
     _debug: {
       establishConnection: internalEstablishConnection,
