@@ -129,6 +129,24 @@ export const formatLocator = (id, formulaType) => {
 };
 
 /**
+ * Format a locator using the new path-based format.
+ * The formula number appears in the URL path instead of the query string.
+ *
+ * New format: endo://{node}/{number}?type={type}
+ *
+ * @param {string} id - The full formula identifier.
+ * @param {string} formulaType - The type of the formula with the given id.
+ */
+export const formatLocatorV2 = (id, formulaType) => {
+  const { number, node } = parseId(id);
+  assertValidLocatorType(formulaType);
+  const url = new URL(`endo://${node}/${number}`);
+  url.searchParams.set('type', formulaType);
+  return url.toString();
+};
+harden(formatLocatorV2);
+
+/**
  * @param {string} locator
  */
 export const idFromLocator = locator => {

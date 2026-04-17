@@ -5,6 +5,7 @@ import {
   assertValidLocator,
   formatLocator,
   formatLocatorForSharing,
+  formatLocatorV2,
   idFromLocator,
   parseLocator,
   externalizeId,
@@ -237,4 +238,36 @@ test('parseLocator - old and new formats produce identical results', t => {
   t.is(oldResult.node, newResult.node);
   t.is(oldResult.formulaType, newResult.formulaType);
   t.deepEqual(oldResult.hints, newResult.hints);
+});
+
+// --- formatLocatorV2 ---
+
+test('formatLocatorV2 produces path-based format', t => {
+  const fmtId = formatId({ number: validId, node: validNode });
+  const locator = formatLocatorV2(fmtId, validType);
+  // Should contain the formula number in the path, not in ?id=
+  t.true(locator.includes(`/${validId}`));
+  t.false(locator.includes('id='));
+  t.true(locator.includes(`type=${validType}`));
+});
+
+test('formatLocatorV2 round-trips through parseLocator', t => {
+  const fmtId = formatId({ number: validId, node: validNode });
+  const locator = formatLocatorV2(fmtId, validType);
+  const parsed = parseLocator(locator);
+  t.is(parsed.number, validId);
+  t.is(parsed.node, validNode);
+  t.is(parsed.formulaType, validType);
+  t.deepEqual(parsed.hints, []);
+});
+
+test('formatLocatorV2 and formatLocator parse equivalently', t => {
+  const fmtId = formatId({ number: validId, node: validNode });
+  const oldLocator = formatLocator(fmtId, validType);
+  const newLocator = formatLocatorV2(fmtId, validType);
+  const oldParsed = parseLocator(oldLocator);
+  const newParsed = parseLocator(newLocator);
+  t.is(oldParsed.number, newParsed.number);
+  t.is(oldParsed.node, newParsed.node);
+  t.is(oldParsed.formulaType, newParsed.formulaType);
 });
