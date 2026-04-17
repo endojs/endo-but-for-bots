@@ -37,7 +37,8 @@
     "lint-fix": "eslint --fix .",
     "lint:eslint": "eslint .",
     "lint:types": "tsc",
-    "test": "ava"
+    "test": "ava",
+    "test:c8": "c8 ${C8_OPTIONS:-} ava"
   },
   "dependencies": {
     "@endo/base64": "workspace:^",
@@ -53,6 +54,7 @@
   "devDependencies": {
     "@endo/ses-ava": "workspace:^",
     "ava": "catalog:dev",
+    "c8": "catalog:dev",
     "eslint": "catalog:dev",
     "typescript": "~5.9.2"
   },

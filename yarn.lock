@@ -2291,6 +2291,7 @@ __metadata:
     "@endo/stream": "workspace:^"
     "@endo/stream-node": "workspace:^"
     ava: "catalog:dev"
+    c8: "catalog:dev"
     eslint: "catalog:dev"
     typescript: "npm:~5.9.2"
   languageName: unknown
