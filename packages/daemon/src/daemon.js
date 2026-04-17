@@ -2690,7 +2690,7 @@ const makeDaemonCore = async (
               );
             });
         },
-        onTick: (entry, tickNumber) => {
+        onTick: (entry, tickNumber, _tickResponse) => {
           const tickMessage = harden({
             type: /** @type {const} */ ('package'),
             strings: [
