@@ -58,7 +58,7 @@ const makeSocketOperations = (socket, writeLatencyMs) => {
  * @typedef {object} TcpTestOnlyNetLayerDebug
  * @property {(location: OcapnLocation) => ConnectionSocketPair} establishConnection
  *
- * @typedef {NetLayer & { _debug: TcpTestOnlyNetLayerDebug }} TcpTestOnlyNetLayer
+ * @typedef {NetLayer & import('../client/types.js').OcapnNetwork & { _debug: TcpTestOnlyNetLayerDebug }} TcpTestOnlyNetLayer
  */
 
 /**
@@ -239,6 +239,9 @@ export const makeTcpNetLayer = async ({
 
   /** @type {TcpTestOnlyNetLayer} */
   const netlayer = harden({
+    // OcapnNetwork interface
+    networkId: 'tcp-testing-only',
+    // NetLayer interface (legacy, retained during migration)
     location: localLocation,
     locationId: locationToLocationId(localLocation),
     connect: lookupOrConnect,
