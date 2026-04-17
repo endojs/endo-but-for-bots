@@ -2658,9 +2658,37 @@ const makeDaemonCore = async (
       context.thisDiesIfThatDies(agentId);
       context.thisDiesIfThatDies(handleId);
 
+      // Resolve the agent's handle for tick message delivery.
+      const agentHandle = await provide(handleId, 'handle');
+
       const { scheduler, control } = makeIntervalSchedulerKit({
         maxActive,
         minPeriodMs,
+        onTick: (entry, tickNumber) => {
+          const tickMessage = harden({
+            type: /** @type {const} */ ('package'),
+            strings: [
+              `Interval "${entry.label}" tick #${tickNumber} ` +
+                `(period: ${entry.periodMs}ms)`,
+            ],
+            names: [],
+            ids: [],
+            messageId: /** @type {import('./types.js').FormulaNumber} */ (
+              `tick-${entry.id}-${tickNumber}`
+            ),
+            from: agentId,
+            to: agentId,
+          });
+          // Fire-and-forget delivery to the agent's inbox.
+          E(agentHandle)
+            .receive(tickMessage, agentId)
+            .catch(err => {
+              console.error(
+                `[interval-scheduler] tick delivery failed:`,
+                /** @type {Error} */ (err).message,
+              );
+            });
+        },
       });
 
       if (paused) {
