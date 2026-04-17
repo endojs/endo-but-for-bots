@@ -294,6 +294,10 @@ export const HostInterface = M.interface('EndoHost', {
   provideScratchMount: M.call(NameOrPathShape)
     .optional(M.splitRecord({}, { readOnly: M.boolean() }))
     .returns(M.promise()),
+  // Create a sub-mount rooted at a subdirectory of an existing mount
+  provideSubMount: M.call(NameOrPathShape, M.string(), NameOrPathShape)
+    .optional(M.splitRecord({}, { readOnly: M.boolean() }))
+    .returns(M.promise()),
   // Derive a local Git capability from an authorized mount.
   provideGit: M.callWhen(M.remotable(), NameOrPathShape).returns(
     M.remotable('Git'),

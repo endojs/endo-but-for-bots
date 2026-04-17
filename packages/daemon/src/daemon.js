@@ -6109,6 +6109,7 @@ const makeDaemonCore = async (
     getAllNetworkAddresses,
     getTypeForId,
     getFormulaForId,
+    filePowers,
     formulateChannel,
     formulateTimer,
     makeMailbox,

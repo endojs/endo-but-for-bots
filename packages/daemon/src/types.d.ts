@@ -1443,6 +1443,12 @@ export interface EndoHost extends EndoAgent {
     opts?: { readOnly?: boolean },
   ): Promise<EndoMount>;
   provideScratchMount(petName: string | string[]): Promise<EndoMount>;
+  provideSubMount(
+    mountName: string | string[],
+    subpath: string,
+    newName: string | string[],
+    opts?: { readOnly?: boolean },
+  ): Promise<EndoMount>;
   provideGit(mountCap: EndoMount, petName: string | string[]): Promise<EndoGit>;
   /**
    * Mint a `GitRemote` capability bound to `gitCap`, persist its

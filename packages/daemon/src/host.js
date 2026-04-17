@@ -3,7 +3,7 @@
 
 /** @import { ERef } from '@endo/eventual-send' */
 /** @import { PassableBytesReader } from '@endo/exo-stream' */
-/** @import { AgentDeferredTaskParams, ChannelDeferredTaskParams, Context, DaemonCore, DeferredTasks, EndoGit, EndoGuest, EndoHost, EnvRecord, EvalDeferredTaskParams, FormulaIdentifier, FormulaNumber, FormulaRecord, GitCredentialDeferredTaskParams, GitDeferredTaskParams, GitRemoteDeferredTaskParams, InvitationDeferredTaskParams, MakeCapletDeferredTaskParams, MakeCapletOptions, MakeDirectoryNode, MakeHostOrGuestOptions, MakeMailbox, MountDeferredTaskParams, Name, NameOrPath, NamePath, NodeNumber, PeerInfo, PetName, ReadableBlobDeferredTaskParams, ReadableTreeDeferredTaskParams, MarshalDeferredTaskParams, ScratchMountDeferredTaskParams, WorkerDeferredTaskParams } from './types.js' */
+/** @import { FilePowers, AgentDeferredTaskParams, ChannelDeferredTaskParams, Context, DaemonCore, DeferredTasks, EndoGit, EndoGuest, EndoHost, EnvRecord, EvalDeferredTaskParams, FormulaIdentifier, FormulaNumber, FormulaRecord, GitCredentialDeferredTaskParams, GitDeferredTaskParams, GitRemoteDeferredTaskParams, InvitationDeferredTaskParams, MakeCapletDeferredTaskParams, MakeCapletOptions, MakeDirectoryNode, MakeHostOrGuestOptions, MakeMailbox, MountDeferredTaskParams, Name, NameOrPath, NamePath, NodeNumber, PeerInfo, PetName, ReadableBlobDeferredTaskParams, ReadableTreeDeferredTaskParams, MarshalDeferredTaskParams, ScratchMountDeferredTaskParams, WorkerDeferredTaskParams } from './types.js' */
 
 import { E } from '@endo/far';
 import { makeExo } from '@endo/exo';
@@ -15,6 +15,7 @@ import {
 } from '@endo/exo-git';
 import { readerFromIterator } from '@endo/exo-stream/reader-from-iterator.js';
 import {
+  assertNamePath,
   assertPetName,
   assertPetNamePath,
   namePathFrom,
@@ -106,6 +107,7 @@ const normalizeHostOrGuestOptions = opts => {
  * @param {DaemonCore['getAllNetworkAddresses']} args.getAllNetworkAddresses
  * @param {DaemonCore['getTypeForId']} args.getTypeForId
  * @param {DaemonCore['getFormulaForId']} args.getFormulaForId
+ * @param {FilePowers} args.filePowers
  * @param {MakeMailbox} args.makeMailbox
  * @param {MakeDirectoryNode} args.makeDirectoryNode
  * @param {NodeNumber} args.localNodeNumber
@@ -144,6 +146,7 @@ export const makeHostMaker = ({
   getAllNetworkAddresses,
   getTypeForId,
   getFormulaForId,
+  filePowers,
   makeMailbox,
   makeDirectoryNode,
   localNodeNumber,
@@ -371,6 +374,88 @@ export const makeHostMaker = ({
       );
 
       const { value } = await formulateScratchMount(readOnly, tasks);
+      return value;
+    };
+
+    /**
+     * Create a sub-mount rooted at a realpath-confined subdirectory of
+     * an existing mount.
+     *
+     * @param {NameOrPath} mountName - Pet name of the parent mount.
+     * @param {string} subpath - Relative path within the parent mount.
+     * @param {NameOrPath} newName - Pet name for the new sub-mount.
+     * @param {object} [options]
+     * @param {boolean} [options.readOnly]
+     */
+    const provideSubMount = async (
+      mountName,
+      subpath,
+      newName,
+      options = {},
+    ) => {
+      const { readOnly = false } = options;
+      const mountNamePath = namePathFrom(mountName);
+      assertNamePath(mountNamePath);
+      const { namePath: newNamePath } = assertPetNamePath(
+        namePathFrom(newName),
+      );
+
+      const parentId = await E(directory).identify(...mountNamePath);
+      if (parentId === undefined) {
+        throw makeError(`No mount found for pet name ${q(mountName)}`);
+      }
+      const parentFormula = await getFormulaForId(
+        /** @type {FormulaIdentifier} */ (parentId),
+      );
+
+      let parentReadOnly;
+      switch (parentFormula.type) {
+        case 'mount':
+        case 'scratch-mount':
+          parentReadOnly = parentFormula.readOnly;
+          break;
+        default:
+          throw makeError(
+            `Pet name ${q(mountName)} is not a mount (type: ${q(parentFormula.type)})`,
+          );
+      }
+
+      const effectiveReadOnly = parentReadOnly || readOnly;
+      const segments = subpath.split('/').filter(s => s.length > 0);
+      if (segments.length === 0 || subpath.startsWith('/')) {
+        throw makeError(
+          `Invalid subDir segment: ${q(subpath.startsWith('/') ? '/' : '')}`,
+        );
+      }
+      for (const seg of segments) {
+        if (seg === '..' || seg === '.') {
+          throw makeError(`Invalid subDir segment: ${q(seg)}`);
+        }
+      }
+
+      const parentPath = getMountHostPath(
+        /** @type {FormulaIdentifier} */ (parentId),
+      );
+      const fullPath = filePowers.joinPath(parentPath, ...segments);
+      const parentReal = await filePowers.realPath(parentPath);
+      const childReal = await filePowers.realPath(fullPath);
+      if (childReal !== parentReal && !childReal.startsWith(`${parentReal}/`)) {
+        throw makeError(
+          `Sub-mount path escapes parent mount root: ${q(subpath)}`,
+        );
+      }
+
+      /** @type {DeferredTasks<MountDeferredTaskParams>} */
+      const tasks = makeDeferredTasks();
+      tasks.push(identifiers =>
+        E(directory).storeIdentifier(newNamePath, identifiers.mountId),
+      );
+
+      const { value } = await formulateMount(
+        childReal,
+        effectiveReadOnly,
+        tasks,
+      );
       return value;
     };
 
@@ -1773,6 +1858,7 @@ export const makeHostMaker = ({
       storeTree,
       provideMount,
       provideScratchMount,
+      provideSubMount,
       provideGit,
       provideGitRemote,
       provideBearerCredential,
