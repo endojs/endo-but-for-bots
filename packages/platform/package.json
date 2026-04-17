@@ -37,7 +37,7 @@
     "lint-fix": "eslint --fix .",
     "lint:eslint": "eslint .",
     "lint:types": "tsc",
-    "test": "exit 0"
+    "test": "ava"
   },
   "dependencies": {
     "@endo/base64": "workspace:^",
@@ -51,6 +51,7 @@
     "@endo/stream-node": "workspace:^"
   },
   "devDependencies": {
+    "@endo/ses-ava": "workspace:^",
     "ava": "catalog:dev",
     "eslint": "catalog:dev",
     "typescript": "~5.9.2"

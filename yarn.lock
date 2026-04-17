@@ -2287,6 +2287,7 @@ __metadata:
     "@endo/far": "workspace:^"
     "@endo/harden": "workspace:^"
     "@endo/patterns": "workspace:^"
+    "@endo/ses-ava": "workspace:^"
     "@endo/stream": "workspace:^"
     "@endo/stream-node": "workspace:^"
     ava: "catalog:dev"
