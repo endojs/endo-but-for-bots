@@ -38,13 +38,17 @@ const generateId = () => {
  * @param {number} [options.maxActive] - Max concurrent active intervals.
  * @param {number} [options.minPeriodMs] - Minimum allowed period.
  * @param {(entry: IntervalEntry, tickNumber: number) => void} [options.onTick] - Callback when a tick fires.
- * @returns {{ scheduler: object, control: object }}
+ * @param {(entry: IntervalEntry) => void} [options.onEntryChange] - Called when an entry is created, updated, or cancelled. For persistence.
+ * @param {(entryId: string) => void} [options.onEntryRemove] - Called when an entry is removed. For persistence.
+ * @returns {{ scheduler: object, control: object, loadEntry: (entry: IntervalEntry) => void }}
  */
 export const makeIntervalSchedulerKit = (options = {}) => {
   const {
     maxActive = 5,
     minPeriodMs = 30_000,
     onTick = undefined,
+    onEntryChange = undefined,
+    onEntryRemove = undefined,
   } = options;
 
   let currentMaxActive = maxActive;
@@ -102,7 +106,10 @@ export const makeIntervalSchedulerKit = (options = {}) => {
 
     activeTimeouts.delete(entryId);
     entry.tickCount += 1;
-    const now = Date.now();
+
+    if (onEntryChange) {
+      onEntryChange(entry);
+    }
 
     if (onTick) {
       onTick(entry, entry.tickCount);
@@ -128,6 +135,9 @@ export const makeIntervalSchedulerKit = (options = {}) => {
     while (entry.nextTickAt <= now) {
       entry.nextTickAt += entry.periodMs;
     }
+    if (onEntryChange) {
+      onEntryChange(entry);
+    }
     armInterval(entry);
   };
 
@@ -147,6 +157,9 @@ export const makeIntervalSchedulerKit = (options = {}) => {
       cancel: async () => {
         disarmInterval(entry.id);
         entry.status = 'cancelled';
+        if (onEntryChange) {
+          onEntryChange(entry);
+        }
       },
       info: () => harden({ ...entry }),
       help: () =>
@@ -185,6 +198,9 @@ export const makeIntervalSchedulerKit = (options = {}) => {
           status: 'active',
         };
         entries.set(entry.id, entry);
+        if (onEntryChange) {
+          onEntryChange(entry);
+        }
         armInterval(entry);
         return makeIntervalExo(entry);
       },
@@ -247,6 +263,19 @@ export const makeIntervalSchedulerKit = (options = {}) => {
     },
   );
 
-  return harden({ scheduler, control });
+  /**
+   * Load a previously persisted interval entry.
+   * Used during startup recovery to restore intervals from disk.
+   *
+   * @param {IntervalEntry} entry
+   */
+  const loadEntry = entry => {
+    entries.set(entry.id, entry);
+    if (entry.status === 'active' && !paused) {
+      armInterval(entry);
+    }
+  };
+
+  return harden({ scheduler, control, loadEntry });
 };
 harden(makeIntervalSchedulerKit);
