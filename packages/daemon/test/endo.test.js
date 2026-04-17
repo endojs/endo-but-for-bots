@@ -4106,6 +4106,64 @@ test('mount file writeText and json', async t => {
   t.is(actualContent, '{"version": 2}');
 });
 
+test('mount file readOnly rejects writes', async t => {
+  const { host, config } = await prepareHost(t);
+
+  const mountPath = path.join(config.statePath, '..', 'mount-test-file-ro');
+  await createMountFixture(mountPath, {
+    'data.txt': 'original content',
+  });
+
+  await E(host).provideMount(mountPath, 'test-mount-fro');
+  const mount = await E(host).lookup(['test-mount-fro']);
+  const file = await E(mount).lookup('data.txt');
+
+  // Get read-only view.
+  const roFile = await E(file).readOnly();
+
+  // Reading works.
+  const content = await E(roFile).text();
+  t.is(content, 'original content');
+
+  // Writing throws.
+  await t.throwsAsync(() => E(roFile).writeText('modified'), {
+    message: /read-only/i,
+  });
+
+  // Original file unchanged.
+  const actual = await fs.promises.readFile(
+    path.join(mountPath, 'data.txt'),
+    'utf-8',
+  );
+  t.is(actual, 'original content');
+});
+
+test('mount read-only mount rejects file writes', async t => {
+  const { host, config } = await prepareHost(t);
+
+  const mountPath = path.join(
+    config.statePath,
+    '..',
+    'mount-test-ro-mount-write',
+  );
+  await createMountFixture(mountPath, {
+    'data.txt': 'original',
+  });
+
+  await E(host).provideMount(mountPath, 'test-mount-ro-w', { readOnly: true });
+  const mount = await E(host).lookup(['test-mount-ro-w']);
+  const file = await E(mount).lookup('data.txt');
+
+  // Reading works on read-only mount's file.
+  const content = await E(file).text();
+  t.is(content, 'original');
+
+  // Writing through a file from a read-only mount throws.
+  await t.throwsAsync(() => E(file).writeText('modified'), {
+    message: /read-only/i,
+  });
+});
+
 test('mount subDir creates confined sub-mount', async t => {
   const { host, config } = await prepareHost(t);
 
