@@ -323,6 +323,10 @@ export const HostInterface = M.interface('EndoHost', {
   provideScratchMount: M.call(NameOrPathShape)
     .optional(M.splitRecord({}, { readOnly: M.boolean() }))
     .returns(M.promise()),
+  // Create a sub-mount rooted at a subdirectory of an existing mount
+  provideSubMount: M.call(NameOrPathShape, M.string(), NameOrPathShape)
+    .optional(M.splitRecord({}, { readOnly: M.boolean() }))
+    .returns(M.promise()),
   // Provide a guest
   provideGuest: M.call().optional(NameShape, M.record()).returns(M.promise()),
   // Provide a host
