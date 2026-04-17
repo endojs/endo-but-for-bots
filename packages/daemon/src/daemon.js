@@ -585,6 +585,11 @@ const makeDaemonCore = async (
           ['hostAgent', formula.hostAgent],
           ['hostHandle', formula.hostHandle],
         ];
+      case 'interval-scheduler':
+        return [
+          ['agent', formula.agent],
+          ['handle', formula.handle],
+        ];
       default:
         return [];
     }

@@ -390,6 +390,20 @@ export type TimerFormula = {
   label: string;
 };
 
+export type IntervalSchedulerFormula = {
+  type: 'interval-scheduler';
+  /** The agent this scheduler is bound to. */
+  agent: FormulaIdentifier;
+  /** The handle used by the scheduler to deliver tick messages. */
+  handle: FormulaIdentifier;
+  /** Maximum number of active intervals (default 5). */
+  maxActive: number;
+  /** Minimum allowed period in ms (default 30_000). */
+  minPeriodMs: number;
+  /** Whether all intervals are paused (default false). */
+  paused: boolean;
+};
+
 export type Formula =
   | ChannelFormula
   | EndoFormula
@@ -419,7 +433,8 @@ export type Formula =
   | DirectoryFormula
   | PeerFormula
   | InvitationFormula
-  | TimerFormula;
+  | TimerFormula
+  | IntervalSchedulerFormula;
 
 export type Builtins = {
   NONE: FormulaIdentifier;
