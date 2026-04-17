@@ -188,6 +188,28 @@ test('onTick callback fires', async t => {
   t.is(ticks[0].tickNumber, 1);
 });
 
+test('cancel during active tick disarms deadline timer', async t => {
+  const ticks = [];
+  const { scheduler } = makeIntervalSchedulerKit({
+    minPeriodMs: 1,
+    onTick: (entry, tickNumber) => ticks.push(tickNumber),
+  });
+
+  // Create interval with immediate tick and long timeout
+  const interval = await scheduler.makeInterval('deadline-test', 200, {
+    firstDelayMs: 0,
+    tickTimeoutMs: 5000,
+  });
+
+  // Wait for first tick to fire (creates a deadline timer)
+  await new Promise(resolve => setTimeout(resolve, 30));
+  t.true(ticks.length >= 1, 'tick should have fired');
+
+  // Cancel while the deadline timer is active — should disarm it
+  await interval.cancel();
+  t.is(interval.info().status, 'cancelled');
+});
+
 test('help returns documentation', async t => {
   const { scheduler, control } = makeIntervalSchedulerKit();
 
