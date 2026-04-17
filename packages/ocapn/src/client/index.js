@@ -254,7 +254,7 @@ export const makeClient = ({
     // If the network provides its own handshake, use it; otherwise
     // fall back to the default op:start-session handshake.
     if (netlayer.sendSessionHandshake) {
-      netlayer.sendSessionHandshake(connection, captpVersion);
+      netlayer.sendSessionHandshake(connection, captpVersion, selfIdentity);
     } else {
       sendHandshake(connection, selfIdentity, captpVersion, codec);
     }

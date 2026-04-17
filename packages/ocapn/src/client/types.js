@@ -45,11 +45,13 @@
  *   Register a handler for incoming connections.
  * @property {() => void} shutdown -
  *   Shut down the network, closing all connections.
- * @property {((connection: Connection, captpVersion: string) => void)} [sendSessionHandshake] -
+ * @property {((connection: Connection, captpVersion: string, selfIdentity: SelfIdentity) => void)} [sendSessionHandshake] -
  *   Optional custom handshake for outgoing connections.  If provided,
  *   the network handles its own session negotiation (e.g., Noise
  *   Protocol handshake) instead of the default op:start-session.
- *   The network manages its own identity via its constructor closure.
+ *   selfIdentity is provided by the client for networks that need it
+ *   (like tcp-testing-only); networks that manage their own identity
+ *   (like OCapN-Noise) can ignore it.
  */
 
 /**
