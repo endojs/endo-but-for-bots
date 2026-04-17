@@ -47,6 +47,46 @@ test('parseCIDR rejects invalid input', t => {
   t.is(parseCIDR('10.0.0.256/8'), undefined);
 });
 
+test('parseCIDR rejects multiple :: in IPv6', t => {
+  t.is(parseCIDR('1::2::3'), undefined);
+});
+
+test('parseCIDR rejects IPv6 with too many groups', t => {
+  t.is(parseCIDR('1:2:3:4:5:6:7:8:9'), undefined);
+  // Too many groups around :: (left + right > 8)
+  t.is(parseCIDR('1:2:3:4:5:6::7:8:9'), undefined);
+});
+
+test('parseCIDR rejects IPv6 prefix > 128', t => {
+  t.is(parseCIDR('::1/129'), undefined);
+});
+
+test('parseCIDR rejects negative prefix', t => {
+  t.is(parseCIDR('10.0.0.0/-1'), undefined);
+});
+
+test('parseCIDR rejects non-integer prefix', t => {
+  t.is(parseCIDR('10.0.0.0/abc'), undefined);
+});
+
+test('parseCIDR rejects IPv6 with invalid hex group', t => {
+  t.is(parseCIDR('zzzz:0:0:0:0:0:0:1'), undefined);
+});
+
+test('parseCIDR parses IPv6 without :: shorthand', t => {
+  const result = parseCIDR('2001:0db8:0000:0000:0000:0000:0000:0001');
+  t.not(result, undefined);
+  t.is(/** @type {NonNullable<typeof result>} */ (result).type, 'ipv6');
+  t.is(/** @type {NonNullable<typeof result>} */ (result).prefixLen, 128);
+});
+
+test('addressMatchesCIDR does not match IPv4 addr against IPv6 CIDR', t => {
+  const cidr = /** @type {NonNullable<ReturnType<typeof parseCIDR>>} */ (
+    parseCIDR('::1/128')
+  );
+  t.false(addressMatchesCIDR('127.0.0.1', cidr));
+});
+
 // --- addressMatchesCIDR ---
 
 test('addressMatchesCIDR matches IPv4 within /8', t => {
