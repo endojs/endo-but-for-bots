@@ -188,7 +188,7 @@ export const makeClient = ({
   debugMode = false,
 } = {}) => {
   /** @type {Map<string, NetLayer>} */
-  const netlayers = new Map();
+  const networks = new Map();
 
   /** @type {Logger} */
   const logger = harden({
@@ -225,7 +225,7 @@ export const makeClient = ({
   const establishSession = location => {
     // Support both the new `network` field and the legacy `transport` field.
     const networkId = location.network ?? location.transport;
-    const netlayer = netlayers.get(networkId);
+    const netlayer = networks.get(networkId);
     if (!netlayer) {
       throw Error(`Netlayer not registered for network: ${networkId}`);
     }
@@ -247,13 +247,13 @@ export const makeClient = ({
   const grantTracker = makeGrantTracker();
   const sturdyRefTracker = makeSturdyRefTracker(swissnumTable);
   /**
-   * Check if a location matches one of our own netlayers (self-location)
+   * Check if a location matches one of our own networks (self-location)
    * @param {OcapnLocation} location
    * @returns {boolean}
    */
   const isSelfLocation = location => {
     const locationId = locationToLocationId(location);
-    for (const netlayer of netlayers.values()) {
+    for (const netlayer of networks.values()) {
       if (netlayer.locationId === locationId) {
         return true;
       }
@@ -417,11 +417,13 @@ export const makeClient = ({
      */
     async registerNetlayer(makeNetlayer) {
       const netlayer = await makeNetlayer(netlayerHandlers, logger);
-      const { transport } = netlayer.location;
-      if (netlayers.has(transport)) {
-        throw Error(`Netlayer already registered for transport: ${transport}`);
+      // Register under `network` if provided, falling back to `transport`.
+      const networkId =
+        netlayer.location.network ?? netlayer.location.transport;
+      if (networks.has(networkId)) {
+        throw Error(`Network already registered: ${networkId}`);
       }
-      netlayers.set(transport, netlayer);
+      networks.set(networkId, netlayer);
       return netlayer;
     },
     /**
@@ -469,7 +471,7 @@ export const makeClient = ({
     },
     shutdown() {
       logger.info(`shutdown called`);
-      for (const netlayer of netlayers.values()) {
+      for (const netlayer of networks.values()) {
         netlayer.shutdown();
       }
     },
