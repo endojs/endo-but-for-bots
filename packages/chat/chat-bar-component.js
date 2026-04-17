@@ -13,6 +13,7 @@ import { createFormBuilder } from './form-builder.js';
 import { createBlobViewer } from './blob-viewer.js';
 import { createEndowModal } from './endow-modal.js';
 import { createInlineCommandForm } from './inline-command-form.js';
+import { createPendingCommands } from './pending-commands.js';
 import { createCommandExecutor } from './command-executor.js';
 import {
   getCommand,
@@ -105,6 +106,9 @@ export const chatBarComponent = (
   );
   const $inlineFormContainer = /** @type {HTMLElement} */ (
     $parent.querySelector('#inline-form-container')
+  );
+  const $pendingRegion = /** @type {HTMLElement} */ (
+    $parent.querySelector('#pending-commands-region')
   );
   const $commandLabel = /** @type {HTMLElement} */ (
     $parent.querySelector('#command-label')
@@ -522,6 +526,8 @@ export const chatBarComponent = (
    * @param {string} commandName
    * @param {Record<string, unknown>} data
    */
+  const pendingCommands = createPendingCommands($pendingRegion);
+
   const executeWithSpinner = async (commandName, data) => {
     messagePicker.disable();
     $commandError.textContent = '';
@@ -555,18 +561,22 @@ export const chatBarComponent = (
       commandName === 'view' ||
       commandName === 'edit' ||
       commandName === 'cat';
+
+    // Unlock the command bar immediately. The pending commands region
+    // shows progress instead of blocking the input.
     if (opensModal) {
       exitCommandMode({ skipFocus: true }); // eslint-disable-line no-use-before-define
     } else {
-      setCommandSubmitting(true);
+      exitCommandMode(); // eslint-disable-line no-use-before-define
     }
 
+    // Track the execution as a pending command card.
+    const resultPromise = executor.execute(commandName, data);
+    pendingCommands.track(commandName, data, resultPromise);
+
     try {
-      const result = await executor.execute(commandName, data);
+      const result = await resultPromise;
       if (result.success) {
-        if (!opensModal) {
-          exitCommandMode(); // eslint-disable-line no-use-before-define
-        }
         const resultName =
           'resultName' in data && data.resultName
             ? String(data.resultName)
@@ -582,10 +592,8 @@ export const chatBarComponent = (
           showValue(result.value, undefined, resultPath, undefined);
         }
       }
-    } finally {
-      if (!opensModal) {
-        setCommandSubmitting(false);
-      }
+    } catch {
+      // Error is handled by the pending command card.
     }
   };
 
