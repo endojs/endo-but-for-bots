@@ -44,7 +44,9 @@
    loop and calls fxRunPromiseJobs() explicitly after each eval. */
 #define mxUseDefaultQueuePromiseJobs 0
 #define mxUseDefaultSharedChunks 1
-#define mxUseDefaultAbort 1
+/* Custom fxAbort: uses fxExitToHost (longjmp) instead of exit()
+   so that metering aborts don't kill the daemon process. */
+#define mxUseDefaultAbort 0
 
 #ifdef mxDebug
 /* We provide our own fxConnect/fxDisconnect/fxReceive/fxSend/etc.

@@ -271,6 +271,93 @@ void fxRunLoop(txMachine* the)
 	fxCheckUnhandledRejections(the, 1);
 }
 
+/* ---- Metering helpers ---- */
+
+#ifdef mxMetering
+
+/*
+ * Get the current meter index (computrons = value >> 16).
+ */
+txU8 fxGetCurrentMeter(txMachine* the)
+{
+	return the->meterIndex;
+}
+
+/*
+ * Set the meter index directly.
+ */
+void fxSetCurrentMeter(txMachine* the, txU8 value)
+{
+	the->meterIndex = value;
+}
+
+/*
+ * Safe wrapper around fxRunPromiseJobs that catches aborts.
+ *
+ * Uses a raw setjmp/longjmp guard as the outermost jump frame.
+ * fxExitToHost walks `firstJump` to the outermost frame (where
+ * nextJump == NULL) and longjmps there.  We set up that outermost
+ * frame here so the abort lands safely in C, not across Rust.
+ *
+ * Returns 0 on success, or the XS exit status on abort.
+ */
+int fxRunPromiseJobsMetered(txMachine* the)
+{
+	txJump aJump;
+	aJump.nextJump = the->firstJump;
+	aJump.stack = the->stack;
+	aJump.scope = the->scope;
+	aJump.frame = the->frame;
+	aJump.code = the->code;
+	aJump.flag = 0;
+	the->firstJump = &aJump;
+	the->exitStatus = 0;
+	if (c_setjmp(aJump.buffer) == 0) {
+		fxRunPromiseJobs(the);
+		the->firstJump = aJump.nextJump;
+		return 0;
+	}
+	else {
+		/* fxExitToHost landed here — restore state. */
+		the->stack = aJump.stack;
+		the->scope = aJump.scope;
+		the->frame = aJump.frame;
+		the->code = aJump.code;
+		the->firstJump = aJump.nextJump;
+		return the->exitStatus;
+	}
+}
+
+#endif /* mxMetering */
+
+/* ---- Custom fxAbort ---- */
+
+/*
+ * Non-default fxAbort: use fxExitToHost (longjmp) for recoverable
+ * abort conditions so the process is not killed.  Only truly fatal
+ * conditions (debugger exit, fatal check) call exit().
+ */
+void fxAbort(txMachine* the, int status)
+{
+	the->exitStatus = status;
+	switch (status) {
+	case XS_TOO_MUCH_COMPUTATION_EXIT:
+	case XS_JAVASCRIPT_STACK_OVERFLOW_EXIT:
+	case XS_NOT_ENOUGH_MEMORY_EXIT:
+	case XS_NO_MORE_KEYS_EXIT:
+	case XS_UNHANDLED_EXCEPTION_EXIT:
+	case XS_UNHANDLED_REJECTION_EXIT:
+	case XS_NATIVE_STACK_OVERFLOW_EXIT:
+		/* Recoverable: longjmp to the nearest mxTry frame. */
+		fxExitToHost(the);
+		break;
+	default:
+		/* Fatal: debugger exit, dead strip, fatal check. */
+		c_exit(status);
+		break;
+	}
+}
+
 /* ---- Snapshot callback discovery ---- */
 
 /*

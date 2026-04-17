@@ -255,12 +255,18 @@ extern "C" {
     pub fn fxRunDebugger(the: *mut XsMachine);
 
     // Metering
+    // Note: txU8 = uint64_t in XS, and txBoolean = int.
     pub fn fxBeginMetering(
         the: *mut XsMachine,
-        callback: Option<unsafe extern "C" fn(*mut XsMachine, u32) -> i32>,
-        interval: u32,
+        callback: Option<unsafe extern "C" fn(*mut XsMachine, u64) -> i32>,
+        interval: u64,
     );
     pub fn fxEndMetering(the: *mut XsMachine);
+    pub fn fxGetCurrentMeter(the: *mut XsMachine) -> u64;
+    pub fn fxSetCurrentMeter(the: *mut XsMachine, value: u64);
+    /// Safe wrapper: runs fxRunPromiseJobs inside mxTry/mxCatch.
+    /// Returns 0 on success, or the XS abort status on abort.
+    pub fn fxRunPromiseJobsMetered(the: *mut XsMachine) -> c_int;
 
     // Lockdown host functions (registered during machine creation
     // when mxLockdown is defined).  Must be in the snapshot
@@ -306,6 +312,18 @@ pub struct XsSnapshot {
     pub slot_size: c_int,
     pub slots: *mut c_void,
 }
+
+// XS abort status codes (from xsCommon.h enum).
+pub const XS_DEBUGGER_EXIT: c_int = 0;
+pub const XS_NOT_ENOUGH_MEMORY_EXIT: c_int = 1;
+pub const XS_JAVASCRIPT_STACK_OVERFLOW_EXIT: c_int = 2;
+pub const XS_FATAL_CHECK_EXIT: c_int = 3;
+pub const XS_DEAD_STRIP_EXIT: c_int = 4;
+pub const XS_UNHANDLED_EXCEPTION_EXIT: c_int = 5;
+pub const XS_NO_MORE_KEYS_EXIT: c_int = 6;
+pub const XS_TOO_MUCH_COMPUTATION_EXIT: c_int = 7;
+pub const XS_UNHANDLED_REJECTION_EXIT: c_int = 8;
+pub const XS_NATIVE_STACK_OVERFLOW_EXIT: c_int = 9;
 
 /// Get the global object slot.
 /// Equivalent to the C macro: `xsGlobal` = `the->stackTop[-1]`

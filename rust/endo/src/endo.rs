@@ -226,6 +226,21 @@ impl Endo {
     }
 }
 
+/// Send a meter-config envelope to a worker.
+fn send_meter_config(sup: &Arc<Supervisor>, target: Handle, hard_limit: u64) {
+    sup.deliver(Message {
+        from: 0,
+        to: target,
+        envelope: Envelope {
+            handle: 0,
+            verb: "meter-config".to_string(),
+            payload: codec::encode_meter_config(hard_limit),
+            nonce: 0,
+        },
+        response_tx: None,
+    });
+}
+
 fn handle_control_message(sup: &Arc<Supervisor>, spawn_sup: &Arc<Supervisor>, cas_dir: &std::path::Path, msg: Message) {
     match msg.envelope.verb.as_str() {
         "ready" => {
@@ -401,6 +416,83 @@ fn handle_control_message(sup: &Arc<Supervisor>, spawn_sup: &Arc<Supervisor>, ca
             );
             sup.mark_suspended(worker_handle, sha256, cas_dir.to_path_buf());
         }
+        "meter-report" => {
+            // Worker reports steps consumed after a crank.
+            if let Ok((handle, steps, outcome)) =
+                codec::decode_meter_report(&msg.envelope.payload)
+            {
+                sup.process_meter_report(handle, steps, &outcome);
+            }
+        }
+        "meter-query" => {
+            if let Ok(target) = codec::decode_handle_request(&msg.envelope.payload) {
+                let state = sup.meter_state(target);
+                let payload = codec::encode_meter_query_response(target, state.as_ref());
+                sup.deliver(Message {
+                    from: 0,
+                    to: msg.from,
+                    envelope: Envelope {
+                        handle: 0,
+                        verb: "meter-state".to_string(),
+                        payload,
+                        nonce: msg.envelope.nonce,
+                    },
+                    response_tx: None,
+                });
+            }
+        }
+        "meter-reset" => {
+            if let Ok(target) = codec::decode_handle_request(&msg.envelope.payload) {
+                sup.meter_reset(target);
+                sup.deliver(Message {
+                    from: 0,
+                    to: msg.from,
+                    envelope: Envelope {
+                        handle: 0,
+                        verb: "meter-reset-ack".to_string(),
+                        payload: codec::encode_handle(target),
+                        nonce: msg.envelope.nonce,
+                    },
+                    response_tx: None,
+                });
+            }
+        }
+        "meter-set-quota" => {
+            if let Ok((target, hard_limit, budget)) =
+                codec::decode_meter_set_quota(&msg.envelope.payload)
+            {
+                sup.set_meter_quota(target, hard_limit, budget);
+                // Send meter-config to the worker so it knows the
+                // hard limit for its metering callback.
+                send_meter_config(sup, target, hard_limit);
+            }
+        }
+        "meter-set-rate" => {
+            if let Ok((target, hard_limit, rate, burst)) =
+                codec::decode_meter_set_rate(&msg.envelope.payload)
+            {
+                sup.set_meter_rate(target, hard_limit, rate, burst);
+                send_meter_config(sup, target, hard_limit);
+            }
+        }
+        "meter-refill" => {
+            if let Ok((target, amount)) =
+                codec::decode_meter_refill(&msg.envelope.payload)
+            {
+                let new_budget = sup.meter_refill(target, amount);
+                sup.deliver(Message {
+                    from: 0,
+                    to: msg.from,
+                    envelope: Envelope {
+                        handle: 0,
+                        verb: "meter-refill-ack".to_string(),
+                        payload: codec::encode_meter_refill_response(target, new_budget),
+                        nonce: msg.envelope.nonce,
+                    },
+                    response_tx: None,
+                });
+            }
+        }
         other => {
             if crate::supervisor::is_debug_public() {
                 eprintln!("endor: unhandled control verb: {other}");
@@ -423,6 +515,11 @@ fn handle_resume(
 ) {
     let cas_file_path = suspended.cas_dir.join(&suspended.sha256);
     let info = suspended.info;
+
+    // Restore meter state from before suspend.
+    if let Some(meter) = suspended.meter {
+        sup.restore_meter(handle, meter);
+    }
 
     match info.platform.as_str() {
         "shared" | "" => resume_shared(sup, handle, info, cas_file_path, pending_msg),

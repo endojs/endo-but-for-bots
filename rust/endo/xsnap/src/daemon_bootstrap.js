@@ -36192,7 +36192,149 @@ const makeWorker = async (
   return { workerTerminated, workerDaemonFacet };
 };
 
-const controlPowers = harden({ makeWorker });
+// ---------------------------------------------------------------------------
+// Metering control powers
+// ---------------------------------------------------------------------------
+
+/** @type {Map<number, { resolve: (env: import('./envelope.js').Envelope) => void }>} */
+const pendingControlRequests = new Map();
+
+/**
+ * Encode a CBOR map with a single "handle" key.
+ * @param {number} handle
+ * @returns {Uint8Array}
+ */
+const encodeMeterHandlePayload = handle => {
+  /** @type {number[]} */
+  const buf = [];
+  cborHead(buf, CBOR_MAP, 1);
+  const key = textEncoder.encode('handle');
+  cborHead(buf, CBOR_TEXT, key.length);
+  for (let i = 0; i < key.length; i += 1) buf.push(key[i]);
+  cborHead(buf, CBOR_UINT, handle);
+  return new Uint8Array(buf);
+};
+
+/**
+ * @param {number[]} buf
+ * @param {string} key
+ * @param {number} value
+ */
+const cborAppendKeyUint = (buf, key, value) => {
+  const k = textEncoder.encode(key);
+  cborHead(buf, CBOR_TEXT, k.length);
+  for (let i = 0; i < k.length; i += 1) buf.push(k[i]);
+  cborHead(buf, CBOR_UINT, value);
+};
+
+/**
+ * Send a control verb and await the response envelope.
+ * @param {string} verb
+ * @param {Uint8Array} payload
+ * @returns {Promise<import('./envelope.js').Envelope>}
+ */
+const sendControlRequest = (verb, payload) => {
+  const nonce = nextNonce;
+  nextNonce += 1;
+  const { promise, resolve } =
+    /** @type {import('@endo/promise-kit').PromiseKit<import('./envelope.js').Envelope>} */ (
+      makePromiseKit()
+    );
+  pendingControlRequests.set(nonce, { resolve });
+  sendEnvelope(0, verb, payload, nonce);
+  return promise;
+};
+
+/**
+ * Query meter state for a worker handle.
+ * @param {number} workerHandle
+ * @returns {Promise<Record<string, unknown>>}
+ */
+const meterQuery = async workerHandle => {
+  const response = await sendControlRequest(
+    'meter-query',
+    encodeMeterHandlePayload(workerHandle),
+  );
+  // Response payload is a CBOR map — pass through as raw bytes.
+  // The caller (daemon core) can interpret it via CapTP.
+  return { verb: response.verb, payload: response.payload };
+};
+
+/**
+ * Reset accumulated meter state for a worker.
+ * @param {number} workerHandle
+ * @returns {Promise<void>}
+ */
+const meterReset = async workerHandle => {
+  await sendControlRequest(
+    'meter-reset',
+    encodeMeterHandlePayload(workerHandle),
+  );
+};
+
+/**
+ * Set quota metering mode for a worker.
+ * @param {number} workerHandle
+ * @param {number} hardLimit
+ * @param {number} budget
+ * @returns {Promise<void>}
+ */
+const meterSetQuota = async (workerHandle, hardLimit, budget) => {
+  /** @type {number[]} */
+  const buf = [];
+  cborHead(buf, CBOR_MAP, 3);
+  cborAppendKeyUint(buf, 'handle', workerHandle);
+  cborAppendKeyUint(buf, 'hardLimit', hardLimit);
+  cborAppendKeyUint(buf, 'budget', budget);
+  await sendControlRequest('meter-set-quota', new Uint8Array(buf));
+};
+
+/**
+ * Set rate-limited metering mode for a worker.
+ * @param {number} workerHandle
+ * @param {number} hardLimit
+ * @param {number} rate
+ * @param {number} burst
+ * @returns {Promise<void>}
+ */
+const meterSetRate = async (workerHandle, hardLimit, rate, burst) => {
+  /** @type {number[]} */
+  const buf = [];
+  cborHead(buf, CBOR_MAP, 4);
+  cborAppendKeyUint(buf, 'handle', workerHandle);
+  cborAppendKeyUint(buf, 'hardLimit', hardLimit);
+  cborAppendKeyUint(buf, 'rate', rate);
+  cborAppendKeyUint(buf, 'burst', burst);
+  await sendControlRequest('meter-set-rate', new Uint8Array(buf));
+};
+
+/**
+ * Refill a worker's metering budget.
+ * @param {number} workerHandle
+ * @param {number} amount
+ * @returns {Promise<Record<string, unknown>>}
+ */
+const meterRefill = async (workerHandle, amount) => {
+  /** @type {number[]} */
+  const buf = [];
+  cborHead(buf, CBOR_MAP, 2);
+  cborAppendKeyUint(buf, 'handle', workerHandle);
+  cborAppendKeyUint(buf, 'amount', amount);
+  const response = await sendControlRequest(
+    'meter-refill',
+    new Uint8Array(buf),
+  );
+  return { verb: response.verb, payload: response.payload };
+};
+
+const controlPowers = harden({
+  makeWorker,
+  meterQuery,
+  meterReset,
+  meterSetQuota,
+  meterSetRate,
+  meterRefill,
+});
 
 // ---------------------------------------------------------------------------
 // Assemble DaemonicPowers
@@ -36365,6 +36507,34 @@ globalThis.handleCommand = harden(bytes => {
           nonce: env.nonce,
         }),
       );
+      return;
+    }
+    const pendingCtl = pendingControlRequests.get(env.nonce);
+    if (pendingCtl) {
+      pendingControlRequests.delete(env.nonce);
+      pendingCtl.resolve(
+        /** @type {import('./envelope.js').Envelope} */ ({
+          handle: env.handle,
+          verb: 'error',
+          payload: env.payload,
+          nonce: env.nonce,
+        }),
+      );
+    }
+    return;
+  }
+
+  // Metering control responses.
+  if (
+    (env.verb === 'meter-state' ||
+      env.verb === 'meter-reset-ack' ||
+      env.verb === 'meter-refill-ack') &&
+    env.nonce > 0
+  ) {
+    const pending = pendingControlRequests.get(env.nonce);
+    if (pending) {
+      pendingControlRequests.delete(env.nonce);
+      pending.resolve(env);
     }
     return;
   }

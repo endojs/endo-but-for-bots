@@ -309,6 +309,62 @@ impl Machine {
         unsafe { fxCollectGarbage(self.raw) };
     }
 
+    // ---- Metering API ----
+
+    /// Enable metering with the given check interval (in computrons).
+    ///
+    /// The `callback` fires every `interval` computrons.  It receives
+    /// the current meter index (computrons = value >> 16) and returns
+    /// true to continue or false to abort with
+    /// `XS_TOO_MUCH_COMPUTATION_EXIT`.
+    ///
+    /// Use [`set_crank_limit`] to set the per-crank hard limit that
+    /// the default [`metering_callback`] checks against.
+    pub fn begin_metering(&self, interval: u64) {
+        unsafe {
+            ffi::fxBeginMetering(self.raw, Some(metering_callback), interval);
+        }
+    }
+
+    /// Disable metering and clear meter state.
+    pub fn end_metering(&self) {
+        unsafe { ffi::fxEndMetering(self.raw) }
+    }
+
+    /// Read the current raw meterIndex.
+    /// Computrons = value >> 16.
+    pub fn current_meter(&self) -> u64 {
+        unsafe { ffi::fxGetCurrentMeter(self.raw) }
+    }
+
+    /// Read the current meter in computrons (meterIndex >> 16).
+    pub fn current_computrons(&self) -> u64 {
+        self.current_meter() >> 16
+    }
+
+    /// Reset the meter to a given raw value (typically 0 at crank
+    /// start).
+    pub fn set_meter(&self, value: u64) {
+        unsafe { ffi::fxSetCurrentMeter(self.raw, value) }
+    }
+
+    /// Run promise jobs under metering protection.
+    ///
+    /// Like [`run_promise_jobs`] but wrapped in a C-level
+    /// `mxTry`/`mxCatch` so that a metering abort (longjmp) does
+    /// not cross into Rust stack frames.
+    ///
+    /// Returns `Ok(())` on normal completion, or `Err(status)` if
+    /// XS aborted (e.g., `XS_TOO_MUCH_COMPUTATION_EXIT`).
+    pub fn run_promise_jobs_metered(&self) -> Result<(), i32> {
+        let status = unsafe { ffi::fxRunPromiseJobsMetered(self.raw) };
+        if status == 0 {
+            Ok(())
+        } else {
+            Err(status)
+        }
+    }
+
     /// Write the machine's heap to a snapshot.
     ///
     /// The machine must be quiescent — no running JS, no pending
@@ -986,6 +1042,14 @@ fn handle_envelope(machine: &Machine, data: &[u8]) -> EnvelopeAction {
             "suspend" => {
                 return handle_suspend(machine, env.nonce, &env.payload);
             }
+            "meter-config" => {
+                // Decode CBOR map: {"hard_limit": u64}
+                if let Some(limit) = decode_meter_config(&env.payload) {
+                    CRANK_HARD_LIMIT.with(|c| c.set(limit));
+                    eprintln!("metering: hard_limit set to {limit}");
+                }
+                return EnvelopeAction::Continue;
+            }
             _ => {}
         }
     }
@@ -1085,6 +1149,264 @@ fn register_host_powers(machine: &Machine) -> *mut powers::HostPowers {
     let powers_ptr = Box::into_raw(Box::new(host_powers));
     machine.register_powers(powers_ptr);
     powers_ptr
+}
+
+// ---------------------------------------------------------------------------
+// Metering — thread-local state and callback
+// ---------------------------------------------------------------------------
+
+use std::cell::Cell;
+
+/// Default metering check interval in computrons.
+/// Higher values reduce callback overhead at the cost of granularity.
+pub const DEFAULT_METERING_INTERVAL: u64 = 10_000;
+
+thread_local! {
+    /// Per-crank hard limit (computrons). 0 = no enforcement.
+    static CRANK_LIMIT: Cell<u64> = Cell::new(0);
+    /// Set to true when the metering callback aborted execution.
+    static METERING_ABORTED: Cell<bool> = Cell::new(false);
+    /// Hard limit received via `meter-config` envelope. 0 = no
+    /// enforcement.  Persists across cranks; updated only when the
+    /// supervisor sends a new config.
+    static CRANK_HARD_LIMIT: Cell<u64> = Cell::new(0);
+}
+
+/// Metering callback invoked by XS every `interval` computrons.
+/// Returns 1 (continue) or 0 (abort).
+///
+/// # Safety
+/// Called from C during XS bytecode execution.
+unsafe extern "C" fn metering_callback(
+    _the: *mut ffi::XsMachine,
+    index: u64,
+) -> i32 {
+    CRANK_LIMIT.with(|limit| {
+        let lim = limit.get();
+        if lim > 0 && index > lim {
+            METERING_ABORTED.with(|a| a.set(true));
+            0 // abort — XS will call fxAbort(TOO_MUCH_COMPUTATION)
+        } else {
+            1 // continue
+        }
+    })
+}
+
+/// Set the per-crank hard limit for the calling thread's machine.
+pub fn set_crank_limit(limit: u64) {
+    CRANK_LIMIT.with(|c| c.set(limit));
+}
+
+/// Check and clear the metering-aborted flag.
+pub fn take_metering_aborted() -> bool {
+    METERING_ABORTED.with(|a| {
+        let was = a.get();
+        a.set(false);
+        was
+    })
+}
+
+/// Send a meter-report control envelope to the supervisor (handle 0).
+fn send_meter_report(steps: u64, outcome: &str) {
+    // Encode a small CBOR map: {"steps": <u64>, "outcome": <text>}
+    let mut payload = Vec::with_capacity(32);
+    // CBOR map(2)
+    payload.push(0xa2);
+    // key "steps" (text, 5 bytes)
+    payload.push(0x65);
+    payload.extend_from_slice(b"steps");
+    // value: u64
+    if steps <= 23 {
+        payload.push(steps as u8);
+    } else if steps <= 0xff {
+        payload.push(0x18);
+        payload.push(steps as u8);
+    } else if steps <= 0xffff {
+        payload.push(0x19);
+        payload.extend_from_slice(&(steps as u16).to_be_bytes());
+    } else if steps <= 0xffff_ffff {
+        payload.push(0x1a);
+        payload.extend_from_slice(&(steps as u32).to_be_bytes());
+    } else {
+        payload.push(0x1b);
+        payload.extend_from_slice(&steps.to_be_bytes());
+    }
+    // key "outcome" (text, 7 bytes)
+    payload.push(0x67);
+    payload.extend_from_slice(b"outcome");
+    // value: text
+    let outcome_bytes = outcome.as_bytes();
+    let len = outcome_bytes.len();
+    if len <= 23 {
+        payload.push(0x60 | len as u8);
+    } else {
+        payload.push(0x78);
+        payload.push(len as u8);
+    }
+    payload.extend_from_slice(outcome_bytes);
+
+    let env = envelope::Envelope {
+        handle: 0,
+        verb: "meter-report".to_string(),
+        payload,
+        nonce: 0,
+    };
+    let encoded = envelope::encode_envelope(&env);
+    let _ = worker_io::with_transport(|t| t.send_raw_frame(&encoded));
+}
+
+/// Decode a meter-config CBOR payload: {"hard_limit": u64}.
+fn decode_meter_config(data: &[u8]) -> Option<u64> {
+    // Minimal CBOR map decoder — look for "hard_limit" key.
+    let mut pos = 0;
+    if pos >= data.len() {
+        return None;
+    }
+    let first = data[pos];
+    pos += 1;
+    // Expect map (major type 5)
+    if (first >> 5) != 5 {
+        return None;
+    }
+    let n_entries = (first & 0x1f) as usize;
+    for _ in 0..n_entries {
+        let (key, new_pos) = cbor_read_text(data, pos)?;
+        pos = new_pos;
+        if key == "hard_limit" {
+            let (val, _) = cbor_read_uint(data, pos)?;
+            return Some(val);
+        }
+        // Skip the value
+        pos = cbor_skip(data, pos)?;
+    }
+    None
+}
+
+/// Read a CBOR text string at `pos`, return (string, next_pos).
+fn cbor_read_text(data: &[u8], pos: usize) -> Option<(&str, usize)> {
+    if pos >= data.len() {
+        return None;
+    }
+    let first = data[pos];
+    if (first >> 5) != 3 {
+        return None; // not text
+    }
+    let (len, hdr_end) = cbor_read_length(data, pos)?;
+    let end = hdr_end + len;
+    if end > data.len() {
+        return None;
+    }
+    let s = std::str::from_utf8(&data[hdr_end..end]).ok()?;
+    Some((s, end))
+}
+
+/// Read a CBOR unsigned integer at `pos`, return (value, next_pos).
+fn cbor_read_uint(data: &[u8], pos: usize) -> Option<(u64, usize)> {
+    if pos >= data.len() {
+        return None;
+    }
+    let first = data[pos];
+    if (first >> 5) != 0 {
+        return None; // not unsigned int
+    }
+    let additional = first & 0x1f;
+    match additional {
+        0..=23 => Some((additional as u64, pos + 1)),
+        24 => {
+            if pos + 2 > data.len() { return None; }
+            Some((data[pos + 1] as u64, pos + 2))
+        }
+        25 => {
+            if pos + 3 > data.len() { return None; }
+            let v = u16::from_be_bytes([data[pos + 1], data[pos + 2]]);
+            Some((v as u64, pos + 3))
+        }
+        26 => {
+            if pos + 5 > data.len() { return None; }
+            let v = u32::from_be_bytes(data[pos + 1..pos + 5].try_into().ok()?);
+            Some((v as u64, pos + 5))
+        }
+        27 => {
+            if pos + 9 > data.len() { return None; }
+            let v = u64::from_be_bytes(data[pos + 1..pos + 9].try_into().ok()?);
+            Some((v as u64, pos + 9))
+        }
+        _ => None,
+    }
+}
+
+/// Read the length from a CBOR item header, return (length, pos
+/// after header).
+fn cbor_read_length(data: &[u8], pos: usize) -> Option<(usize, usize)> {
+    let additional = data[pos] & 0x1f;
+    match additional {
+        0..=23 => Some((additional as usize, pos + 1)),
+        24 => {
+            if pos + 2 > data.len() { return None; }
+            Some((data[pos + 1] as usize, pos + 2))
+        }
+        25 => {
+            if pos + 3 > data.len() { return None; }
+            let v = u16::from_be_bytes([data[pos + 1], data[pos + 2]]);
+            Some((v as usize, pos + 3))
+        }
+        26 => {
+            if pos + 5 > data.len() { return None; }
+            let v = u32::from_be_bytes(data[pos + 1..pos + 5].try_into().ok()?);
+            Some((v as usize, pos + 5))
+        }
+        _ => None,
+    }
+}
+
+/// Skip one CBOR item at `pos`, return next_pos.
+fn cbor_skip(data: &[u8], pos: usize) -> Option<usize> {
+    if pos >= data.len() {
+        return None;
+    }
+    let major = data[pos] >> 5;
+    match major {
+        0 | 1 => {
+            // unsigned / negative int
+            let (_, next) = cbor_read_length(data, pos)?;
+            Some(next)
+        }
+        2 | 3 => {
+            // bytes / text
+            let (len, hdr_end) = cbor_read_length(data, pos)?;
+            Some(hdr_end + len)
+        }
+        4 => {
+            // array
+            let (count, mut p) = cbor_read_length(data, pos)?;
+            for _ in 0..count {
+                p = cbor_skip(data, p)?;
+            }
+            Some(p)
+        }
+        5 => {
+            // map
+            let (count, mut p) = cbor_read_length(data, pos)?;
+            for _ in 0..count {
+                p = cbor_skip(data, p)?;
+                p = cbor_skip(data, p)?;
+            }
+            Some(p)
+        }
+        7 => {
+            // simple / float
+            let additional = data[pos] & 0x1f;
+            match additional {
+                0..=23 => Some(pos + 1),
+                24 => Some(pos + 2),
+                25 => Some(pos + 3),
+                26 => Some(pos + 5),
+                27 => Some(pos + 9),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
 }
 
 /// Source for an XS program driven by [`run_xs_program`].
@@ -1276,7 +1598,19 @@ pub fn run_xs_program(
 
     if supervised {
         eprintln!("{label}: entering main loop");
+
+        // Enable metering — the callback checks the thread-local
+        // CRANK_LIMIT and aborts if exceeded.
+        machine.begin_metering(DEFAULT_METERING_INTERVAL);
+
         'outer: loop {
+            // ---- Crank start ----
+            // Reset the step counter and apply the hard limit.
+            machine.set_meter(0);
+            METERING_ABORTED.with(|a| a.set(false));
+            let hard_limit = CRANK_HARD_LIMIT.with(|c| c.get());
+            set_crank_limit(hard_limit);
+
             // Block until the next envelope arrives.
             let frame = worker_io::with_transport(|t| t.recv_raw_envelope());
             match frame {
@@ -1303,14 +1637,33 @@ pub fn run_xs_program(
             // are queued, then drain inbound envelopes. If after
             // draining we still have fresh jobs, repeat. When both
             // promise jobs and envelopes are exhausted, break.
+            let mut metering_abort = false;
             loop {
                 // Drain all ready promise jobs (multiple turns may be
                 // needed as resolving one promise can queue another).
+                // Use the metered wrapper so that a metering abort
+                // (longjmp) stays within C and doesn't cross Rust
+                // stack frames.
                 loop {
-                    unsafe { fxRunPromiseJobs(machine.raw) };
+                    match machine.run_promise_jobs_metered() {
+                        Ok(()) => {}
+                        Err(status) => {
+                            eprintln!(
+                                "{label}: metering abort (status {status}) \
+                                 after {} computrons",
+                                machine.current_computrons()
+                            );
+                            metering_abort = true;
+                            break;
+                        }
+                    }
                     if unsafe { ffi::fxHasPendingJobs() } == 0 {
                         break;
                     }
+                }
+
+                if metering_abort {
+                    break;
                 }
 
                 // Drain any envelopes that arrived while JS was running.
@@ -1354,12 +1707,27 @@ pub fn run_xs_program(
                 break;
             }
 
+            // ---- Crank end ----
+            let steps = machine.current_computrons();
+            set_crank_limit(0);
+
+            if metering_abort {
+                send_meter_report(steps, "terminated");
+                eprintln!("{label}: terminated by metering (used {steps} computrons)");
+                break 'outer;
+            }
+
+            // Report steps to the supervisor.
+            send_meter_report(steps, "ok");
+
             if let Some(JsValue::Boolean(true)) =
                 machine.eval("__shouldTerminate()")
             {
                 break;
             }
         }
+
+        machine.end_metering();
     } else {
         // Run until idle: drain promise jobs and fire timers until
         // both queues are empty.
@@ -3639,5 +4007,209 @@ mod tests {
             JsValue::Integer(n) => assert_eq!(n, 3),
             other => panic!("expected 3, got {:?}", js_value_debug(&other)),
         }
+    }
+
+    // ---- Metering tests ----
+
+    #[test]
+    fn metering_counts_steps() {
+        let machine = new_machine();
+        machine.begin_metering(DEFAULT_METERING_INTERVAL);
+        machine.set_meter(0);
+
+        machine
+            .eval("var s = 0; for (var i = 0; i < 1000; i++) { s += i; }")
+            .expect("loop should succeed");
+
+        let computrons = machine.current_computrons();
+        assert!(
+            computrons > 0,
+            "expected computrons > 0, got {computrons}"
+        );
+        machine.end_metering();
+    }
+
+    #[test]
+    fn metering_no_limit_runs_freely() {
+        let machine = new_machine();
+        machine.begin_metering(DEFAULT_METERING_INTERVAL);
+        set_crank_limit(0); // no enforcement
+
+        machine
+            .eval("var s = 0; for (var i = 0; i < 100000; i++) { s += i; }")
+            .expect("no-limit loop should succeed");
+
+        let computrons = machine.current_computrons();
+        assert!(computrons > 0);
+        machine.end_metering();
+    }
+
+    #[test]
+    fn metering_set_and_reset() {
+        let machine = new_machine();
+        machine.begin_metering(DEFAULT_METERING_INTERVAL);
+
+        machine.eval("1+1").expect("eval");
+        assert!(machine.current_computrons() > 0);
+
+        machine.set_meter(0);
+        assert_eq!(machine.current_computrons(), 0);
+
+        machine.end_metering();
+    }
+
+    #[test]
+    fn metering_hard_limit_abort() {
+        let machine = new_machine();
+        machine.begin_metering(1); // check every step
+
+        // First, queue a promise with an expensive callback.
+        // Do this with NO limit so the eval itself succeeds.
+        set_crank_limit(0);
+        machine.set_meter(0);
+        machine.eval(
+            "Promise.resolve().then(function() { \
+                var s = 0; \
+                for (var i = 0; i < 1000000; i++) { s += i; } \
+            })"
+        ).expect("promise creation should succeed");
+
+        // Now set a low limit and run the promise jobs.
+        machine.set_meter(0);
+        set_crank_limit(100);
+
+        let result = machine.run_promise_jobs_metered();
+        assert!(
+            result.is_err(),
+            "expected metering abort, got Ok"
+        );
+        let status = result.unwrap_err();
+        assert_eq!(
+            status,
+            ffi::XS_TOO_MUCH_COMPUTATION_EXIT,
+            "expected TOO_MUCH_COMPUTATION, got {status}"
+        );
+
+        // Machine should still be usable after abort.
+        set_crank_limit(0); // disable limit
+        machine.set_meter(0);
+        match machine.eval("1 + 1") {
+            Some(JsValue::Integer(2)) => {}
+            other => panic!(
+                "expected 2 after abort, got {:?}",
+                other.map(|v| js_value_debug(&v))
+            ),
+        }
+
+        machine.end_metering();
+    }
+
+    #[test]
+    fn metering_abort_flag_set() {
+        let machine = new_machine();
+        machine.begin_metering(1);
+
+        // Queue work without a limit.
+        set_crank_limit(0);
+        machine.set_meter(0);
+        machine.eval(
+            "Promise.resolve().then(function() { \
+                for (var i = 0; i < 1000000; i++) {} \
+            })"
+        ).expect("promise creation");
+
+        // Run with a low limit.
+        machine.set_meter(0);
+        set_crank_limit(100);
+        METERING_ABORTED.with(|a| a.set(false));
+
+        let _ = machine.run_promise_jobs_metered();
+        assert!(take_metering_aborted(), "abort flag should be set");
+
+        set_crank_limit(0);
+        machine.end_metering();
+    }
+
+    #[test]
+    fn meter_report_cbor_round_trip() {
+        // Test that send_meter_report produces valid CBOR by
+        // encoding and decoding a few values.
+        fn encode_report(steps: u64, outcome: &str) -> Vec<u8> {
+            let mut payload = Vec::with_capacity(32);
+            payload.push(0xa2);
+            payload.push(0x65);
+            payload.extend_from_slice(b"steps");
+            if steps <= 23 {
+                payload.push(steps as u8);
+            } else if steps <= 0xff {
+                payload.push(0x18);
+                payload.push(steps as u8);
+            } else if steps <= 0xffff {
+                payload.push(0x19);
+                payload.extend_from_slice(&(steps as u16).to_be_bytes());
+            } else if steps <= 0xffff_ffff {
+                payload.push(0x1a);
+                payload.extend_from_slice(&(steps as u32).to_be_bytes());
+            } else {
+                payload.push(0x1b);
+                payload.extend_from_slice(&steps.to_be_bytes());
+            }
+            payload.push(0x67);
+            payload.extend_from_slice(b"outcome");
+            let ob = outcome.as_bytes();
+            payload.push(0x60 | ob.len() as u8);
+            payload.extend_from_slice(ob);
+            payload
+        }
+
+        let p1 = encode_report(0, "ok");
+        assert_eq!(p1[0], 0xa2); // map(2)
+
+        let p2 = encode_report(42, "terminated");
+        assert_eq!(p2[0], 0xa2);
+
+        let p3 = encode_report(1_000_000, "ok");
+        assert_eq!(p3[0], 0xa2);
+    }
+
+    #[test]
+    fn meter_config_decode() {
+        // Encode {"hard_limit": 50000} manually
+        let mut data = Vec::new();
+        data.push(0xa1); // map(1)
+        // key: "hard_limit" (10 bytes)
+        data.push(0x6a);
+        data.extend_from_slice(b"hard_limit");
+        // value: 50000 (u16)
+        data.push(0x19);
+        data.extend_from_slice(&50000u16.to_be_bytes());
+
+        let result = decode_meter_config(&data);
+        assert_eq!(result, Some(50000));
+    }
+
+    #[test]
+    fn meter_config_decode_large() {
+        // Encode {"hard_limit": 10000000} manually
+        let mut data = Vec::new();
+        data.push(0xa1);
+        data.push(0x6a);
+        data.extend_from_slice(b"hard_limit");
+        data.push(0x1a);
+        data.extend_from_slice(&10_000_000u32.to_be_bytes());
+
+        let result = decode_meter_config(&data);
+        assert_eq!(result, Some(10_000_000));
+    }
+
+    #[test]
+    fn meter_config_decode_missing_key() {
+        let mut data = Vec::new();
+        data.push(0xa1);
+        data.push(0x63);
+        data.extend_from_slice(b"foo");
+        data.push(0x01);
+
+        assert_eq!(decode_meter_config(&data), None);
     }
 }

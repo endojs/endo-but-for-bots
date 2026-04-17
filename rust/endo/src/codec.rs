@@ -2,7 +2,7 @@ use std::io::{self, Read, Write};
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-use crate::types::{Envelope, Handle, WorkerInfo};
+use crate::types::{Envelope, Handle, MeterMode, MeterState, WorkerInfo};
 
 const CBOR_UINT: u8 = 0;
 const CBOR_NEGINT: u8 = 1;
@@ -496,6 +496,186 @@ fn is_leap(y: u64) -> bool {
     (y % 4 == 0 && y % 100 != 0) || y % 400 == 0
 }
 
+// ---------------------------------------------------------------------------
+// Metering codec functions
+// ---------------------------------------------------------------------------
+
+/// Decode a meter-report payload.
+/// CBOR map: {"handle": <i64>, "steps": <u64>, "outcome": <text>}
+pub fn decode_meter_report(data: &[u8]) -> io::Result<(Handle, u64, String)> {
+    let mut c = Cursor::new(data);
+    let n = c.read_map_header()?;
+    let mut handle: Handle = 0;
+    let mut steps: u64 = 0;
+    let mut outcome = String::new();
+    for _ in 0..n {
+        let key = c.read_text()?;
+        match key.as_str() {
+            "handle" => handle = c.read_int()?,
+            "steps" => steps = c.read_int()? as u64,
+            "outcome" => outcome = c.read_text()?,
+            _ => c.skip()?,
+        }
+    }
+    Ok((handle, steps, outcome))
+}
+
+/// Decode a handle-bearing request payload.
+/// CBOR map: {"handle": <i64>}
+pub fn decode_handle_request(data: &[u8]) -> io::Result<Handle> {
+    let mut c = Cursor::new(data);
+    let n = c.read_map_header()?;
+    let mut handle: Handle = 0;
+    for _ in 0..n {
+        let key = c.read_text()?;
+        match key.as_str() {
+            "handle" => handle = c.read_int()?,
+            _ => c.skip()?,
+        }
+    }
+    if handle == 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "meter request: missing or zero handle",
+        ));
+    }
+    Ok(handle)
+}
+
+/// Encode a meter-query response.
+/// CBOR map with the target handle and current meter state fields.
+pub fn encode_meter_query_response(target: Handle, state: Option<&MeterState>) -> Vec<u8> {
+    let mut buf = Vec::new();
+    match state {
+        Some(s) => {
+            let mode_str = match s.mode {
+                MeterMode::Measurement => "measurement",
+                MeterMode::Quota => "quota",
+                MeterMode::RateLimited => "rate-limited",
+            };
+            cbor_append_head(&mut buf, CBOR_MAP, 5);
+            cbor_append_text(&mut buf, "handle");
+            cbor_append_int(&mut buf, target);
+            cbor_append_text(&mut buf, "mode");
+            cbor_append_text(&mut buf, mode_str);
+            cbor_append_text(&mut buf, "accumulated");
+            cbor_append_head(&mut buf, CBOR_UINT, s.accumulated);
+            cbor_append_text(&mut buf, "budget");
+            cbor_append_head(&mut buf, CBOR_UINT, s.budget);
+            cbor_append_text(&mut buf, "hardLimit");
+            cbor_append_head(&mut buf, CBOR_UINT, s.hard_limit);
+        }
+        None => {
+            cbor_append_head(&mut buf, CBOR_MAP, 2);
+            cbor_append_text(&mut buf, "handle");
+            cbor_append_int(&mut buf, target);
+            cbor_append_text(&mut buf, "mode");
+            cbor_append_text(&mut buf, "measurement");
+        }
+    }
+    buf
+}
+
+/// Decode a meter-set-quota payload.
+/// CBOR map: {"handle": <i64>, "hardLimit": <u64>, "budget": <u64>}
+pub fn decode_meter_set_quota(data: &[u8]) -> io::Result<(Handle, u64, u64)> {
+    let mut c = Cursor::new(data);
+    let n = c.read_map_header()?;
+    let mut handle: Handle = 0;
+    let mut hard_limit: u64 = 0;
+    let mut budget: u64 = 0;
+    for _ in 0..n {
+        let key = c.read_text()?;
+        match key.as_str() {
+            "handle" => handle = c.read_int()?,
+            "hardLimit" => hard_limit = c.read_int()? as u64,
+            "budget" => budget = c.read_int()? as u64,
+            _ => c.skip()?,
+        }
+    }
+    if handle == 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "meter-set-quota: missing or zero handle",
+        ));
+    }
+    Ok((handle, hard_limit, budget))
+}
+
+/// Decode a meter-set-rate payload.
+/// CBOR map: {"handle": <i64>, "hardLimit": <u64>, "rate": <u64>, "burst": <u64>}
+pub fn decode_meter_set_rate(data: &[u8]) -> io::Result<(Handle, u64, u64, u64)> {
+    let mut c = Cursor::new(data);
+    let n = c.read_map_header()?;
+    let mut handle: Handle = 0;
+    let mut hard_limit: u64 = 0;
+    let mut rate: u64 = 0;
+    let mut burst: u64 = 0;
+    for _ in 0..n {
+        let key = c.read_text()?;
+        match key.as_str() {
+            "handle" => handle = c.read_int()?,
+            "hardLimit" => hard_limit = c.read_int()? as u64,
+            "rate" => rate = c.read_int()? as u64,
+            "burst" => burst = c.read_int()? as u64,
+            _ => c.skip()?,
+        }
+    }
+    if handle == 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "meter-set-rate: missing or zero handle",
+        ));
+    }
+    Ok((handle, hard_limit, rate, burst))
+}
+
+/// Decode a meter-refill payload.
+/// CBOR map: {"handle": <i64>, "amount": <u64>}
+pub fn decode_meter_refill(data: &[u8]) -> io::Result<(Handle, u64)> {
+    let mut c = Cursor::new(data);
+    let n = c.read_map_header()?;
+    let mut handle: Handle = 0;
+    let mut amount: u64 = 0;
+    for _ in 0..n {
+        let key = c.read_text()?;
+        match key.as_str() {
+            "handle" => handle = c.read_int()?,
+            "amount" => amount = c.read_int()? as u64,
+            _ => c.skip()?,
+        }
+    }
+    if handle == 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "meter-refill: missing or zero handle",
+        ));
+    }
+    Ok((handle, amount))
+}
+
+/// Encode a meter-refill acknowledgement.
+/// CBOR map: {"handle": <i64>, "budget": <u64>}
+pub fn encode_meter_refill_response(target: Handle, new_budget: u64) -> Vec<u8> {
+    let mut buf = Vec::new();
+    cbor_append_head(&mut buf, CBOR_MAP, 2);
+    cbor_append_text(&mut buf, "handle");
+    cbor_append_int(&mut buf, target);
+    cbor_append_text(&mut buf, "budget");
+    cbor_append_head(&mut buf, CBOR_UINT, new_budget);
+    buf
+}
+
+/// Encode a meter-config envelope payload.
+/// CBOR map: {"hardLimit": <u64>}
+pub fn encode_meter_config(hard_limit: u64) -> Vec<u8> {
+    let mut buf = Vec::new();
+    cbor_append_head(&mut buf, CBOR_MAP, 1);
+    cbor_append_text(&mut buf, "hardLimit");
+    cbor_append_head(&mut buf, CBOR_UINT, hard_limit);
+    buf
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -564,5 +744,194 @@ mod tests {
             }
         }
         assert!(found_platform, "platform field not found in worker list");
+    }
+
+    // --- Metering codec tests ---
+
+    #[test]
+    fn meter_report_round_trip() {
+        // Encode a meter-report payload manually, then decode.
+        let mut buf = Vec::new();
+        cbor_append_head(&mut buf, CBOR_MAP, 3);
+        cbor_append_text(&mut buf, "handle");
+        cbor_append_int(&mut buf, 7);
+        cbor_append_text(&mut buf, "steps");
+        cbor_append_head(&mut buf, CBOR_UINT, 42000);
+        cbor_append_text(&mut buf, "outcome");
+        cbor_append_text(&mut buf, "ok");
+
+        let (handle, steps, outcome) = decode_meter_report(&buf).unwrap();
+        assert_eq!(handle, 7);
+        assert_eq!(steps, 42000);
+        assert_eq!(outcome, "ok");
+    }
+
+    #[test]
+    fn meter_report_terminated() {
+        let mut buf = Vec::new();
+        cbor_append_head(&mut buf, CBOR_MAP, 3);
+        cbor_append_text(&mut buf, "handle");
+        cbor_append_int(&mut buf, 3);
+        cbor_append_text(&mut buf, "steps");
+        cbor_append_head(&mut buf, CBOR_UINT, 100_000);
+        cbor_append_text(&mut buf, "outcome");
+        cbor_append_text(&mut buf, "terminated");
+
+        let (handle, steps, outcome) = decode_meter_report(&buf).unwrap();
+        assert_eq!(handle, 3);
+        assert_eq!(steps, 100_000);
+        assert_eq!(outcome, "terminated");
+    }
+
+    #[test]
+    fn handle_request_round_trip() {
+        let mut buf = Vec::new();
+        cbor_append_head(&mut buf, CBOR_MAP, 1);
+        cbor_append_text(&mut buf, "handle");
+        cbor_append_int(&mut buf, 99);
+
+        let h = decode_handle_request(&buf).unwrap();
+        assert_eq!(h, 99);
+    }
+
+    #[test]
+    fn handle_request_missing_handle() {
+        let mut buf = Vec::new();
+        cbor_append_head(&mut buf, CBOR_MAP, 0);
+
+        assert!(decode_handle_request(&buf).is_err());
+    }
+
+    #[test]
+    fn meter_query_response_with_state() {
+        let state = MeterState {
+            mode: MeterMode::Quota,
+            accumulated: 5000,
+            budget: 3000,
+            hard_limit: 1000,
+            rate_limit: None,
+        };
+        let encoded = encode_meter_query_response(42, Some(&state));
+        let mut c = Cursor::new(&encoded);
+        let n = c.read_map_header().unwrap();
+        assert_eq!(n, 5);
+        let mut mode = String::new();
+        let mut accumulated = 0u64;
+        let mut budget = 0u64;
+        let mut hard_limit = 0u64;
+        for _ in 0..n {
+            let key = c.read_text().unwrap();
+            match key.as_str() {
+                "mode" => mode = c.read_text().unwrap(),
+                "accumulated" => accumulated = c.read_int().unwrap() as u64,
+                "budget" => budget = c.read_int().unwrap() as u64,
+                "hardLimit" => hard_limit = c.read_int().unwrap() as u64,
+                _ => c.skip().unwrap(),
+            }
+        }
+        assert_eq!(mode, "quota");
+        assert_eq!(accumulated, 5000);
+        assert_eq!(budget, 3000);
+        assert_eq!(hard_limit, 1000);
+    }
+
+    #[test]
+    fn meter_query_response_no_state() {
+        let encoded = encode_meter_query_response(42, None);
+        let mut c = Cursor::new(&encoded);
+        let n = c.read_map_header().unwrap();
+        assert_eq!(n, 2);
+        let mut mode = String::new();
+        for _ in 0..n {
+            let key = c.read_text().unwrap();
+            match key.as_str() {
+                "mode" => mode = c.read_text().unwrap(),
+                _ => c.skip().unwrap(),
+            }
+        }
+        assert_eq!(mode, "measurement");
+    }
+
+    #[test]
+    fn meter_set_quota_round_trip() {
+        let mut buf = Vec::new();
+        cbor_append_head(&mut buf, CBOR_MAP, 3);
+        cbor_append_text(&mut buf, "handle");
+        cbor_append_int(&mut buf, 5);
+        cbor_append_text(&mut buf, "hardLimit");
+        cbor_append_head(&mut buf, CBOR_UINT, 10_000);
+        cbor_append_text(&mut buf, "budget");
+        cbor_append_head(&mut buf, CBOR_UINT, 50_000);
+
+        let (h, hl, b) = decode_meter_set_quota(&buf).unwrap();
+        assert_eq!(h, 5);
+        assert_eq!(hl, 10_000);
+        assert_eq!(b, 50_000);
+    }
+
+    #[test]
+    fn meter_set_rate_round_trip() {
+        let mut buf = Vec::new();
+        cbor_append_head(&mut buf, CBOR_MAP, 4);
+        cbor_append_text(&mut buf, "handle");
+        cbor_append_int(&mut buf, 8);
+        cbor_append_text(&mut buf, "hardLimit");
+        cbor_append_head(&mut buf, CBOR_UINT, 5_000);
+        cbor_append_text(&mut buf, "rate");
+        cbor_append_head(&mut buf, CBOR_UINT, 1_000);
+        cbor_append_text(&mut buf, "burst");
+        cbor_append_head(&mut buf, CBOR_UINT, 20_000);
+
+        let (h, hl, r, b) = decode_meter_set_rate(&buf).unwrap();
+        assert_eq!(h, 8);
+        assert_eq!(hl, 5_000);
+        assert_eq!(r, 1_000);
+        assert_eq!(b, 20_000);
+    }
+
+    #[test]
+    fn meter_refill_round_trip() {
+        let mut buf = Vec::new();
+        cbor_append_head(&mut buf, CBOR_MAP, 2);
+        cbor_append_text(&mut buf, "handle");
+        cbor_append_int(&mut buf, 12);
+        cbor_append_text(&mut buf, "amount");
+        cbor_append_head(&mut buf, CBOR_UINT, 25_000);
+
+        let (h, a) = decode_meter_refill(&buf).unwrap();
+        assert_eq!(h, 12);
+        assert_eq!(a, 25_000);
+    }
+
+    #[test]
+    fn meter_refill_response_round_trip() {
+        let encoded = encode_meter_refill_response(12, 75_000);
+        let mut c = Cursor::new(&encoded);
+        let n = c.read_map_header().unwrap();
+        assert_eq!(n, 2);
+        let mut handle: Handle = 0;
+        let mut budget = 0u64;
+        for _ in 0..n {
+            let key = c.read_text().unwrap();
+            match key.as_str() {
+                "handle" => handle = c.read_int().unwrap(),
+                "budget" => budget = c.read_int().unwrap() as u64,
+                _ => c.skip().unwrap(),
+            }
+        }
+        assert_eq!(handle, 12);
+        assert_eq!(budget, 75_000);
+    }
+
+    #[test]
+    fn meter_config_round_trip() {
+        let encoded = encode_meter_config(10_000);
+        let mut c = Cursor::new(&encoded);
+        let n = c.read_map_header().unwrap();
+        assert_eq!(n, 1);
+        let key = c.read_text().unwrap();
+        assert_eq!(key, "hardLimit");
+        let val = c.read_int().unwrap() as u64;
+        assert_eq!(val, 10_000);
     }
 }
