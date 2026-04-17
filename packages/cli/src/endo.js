@@ -525,6 +525,32 @@ export const main = async rawArgs => {
     });
 
   program
+    .command('interval-scheduler')
+    .description('creates an IntervalScheduler capability for timed heartbeats')
+    .option(...commonOptions.as)
+    .option(...commonOptions.requiredName)
+    .option('--max-active <n>', 'max concurrent active intervals (default 5)')
+    .option(
+      '--min-period <ms>',
+      'minimum interval period in ms (default 30000)',
+    )
+    .action(async cmd => {
+      const { name, as: agentNames, maxActive, minPeriod } = cmd.opts();
+      if (!name) {
+        throw new Error('--name is required for interval-scheduler');
+      }
+      const { intervalScheduler: intervalSchedulerCmd } = await import(
+        './commands/interval-scheduler.js'
+      );
+      return intervalSchedulerCmd({
+        name,
+        agentNames,
+        maxActive,
+        minPeriodMs: minPeriod,
+      });
+    });
+
+  program
     .command('http-client')
     .description('creates an HttpClient capability with an origin allowlist')
     .option(...commonOptions.as)
