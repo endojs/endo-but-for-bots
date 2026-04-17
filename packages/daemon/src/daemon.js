@@ -48,6 +48,7 @@ import { makeChangeTopic } from './pubsub.js';
 import { makeRetentionAccumulator } from './retention-accumulator.js';
 import { makeResidenceTracker } from './residence.js';
 import { toHex, fromHex } from './hex.js';
+import { makeIntervalSchedulerKit } from './interval-scheduler.js';
 import { makeSerialJobs } from './serial-jobs.js';
 import { makeLocalStoreController } from './store-controller.js';
 import { makeWeakMultimap } from './multimap.js';
@@ -2646,6 +2647,28 @@ const makeDaemonCore = async (
         help: () =>
           `Timer "${timerLabel || 'timer'}" firing every ${interval}ms. Ticks: ${tickCount}`,
       });
+    },
+    'interval-scheduler': async (
+      { agent: agentId, handle: handleId, maxActive, minPeriodMs, paused },
+      context,
+    ) => {
+      context.thisDiesIfThatDies(agentId);
+      context.thisDiesIfThatDies(handleId);
+
+      const { scheduler, control } = makeIntervalSchedulerKit({
+        maxActive,
+        minPeriodMs,
+      });
+
+      if (paused) {
+        control.pause();
+      }
+
+      context.onCancel(() => {
+        control.revoke();
+      });
+
+      return harden({ scheduler, control });
     },
     channel: async (formula, context, id) => {
       const {
