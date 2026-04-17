@@ -4171,7 +4171,7 @@ test('mount subDir creates confined sub-mount', async t => {
   await createMountFixture(mountPath, {
     'root.txt': 'at root',
   });
-  await fs.promises.mkdir(path.join(mountPath, 'src'));
+  await fs.promises.mkdir(path.join(mountPath, 'src'), { recursive: true });
   await fs.promises.writeFile(
     path.join(mountPath, 'src', 'index.js'),
     'export default 42;',
