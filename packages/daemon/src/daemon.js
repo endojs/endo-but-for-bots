@@ -50,6 +50,7 @@ import { makeRetentionAccumulator } from './retention-accumulator.js';
 import { makeResidenceTracker } from './residence.js';
 import { toHex, fromHex } from './hex.js';
 import { makeIntervalSchedulerKit } from './interval-scheduler.js';
+import { makeHttpClientKit } from './http-client.js';
 import { makeSerialJobs } from './serial-jobs.js';
 import { makeLocalStoreController } from './store-controller.js';
 import { makeWeakMultimap } from './multimap.js';
@@ -619,6 +620,8 @@ const makeDaemonCore = async (
           ['agent', formula.agent],
           ['handle', formula.handle],
         ];
+      case 'http-client':
+        return [['agent', formula.agent]];
       default:
         return [];
     }
@@ -2994,6 +2997,29 @@ const makeDaemonCore = async (
       });
 
       return harden({ scheduler, control });
+    },
+    'http-client': async (
+      {
+        agent: agentId,
+        allowedOrigins,
+        maxRequestsPerMinute,
+        maxResponseBytes,
+      },
+      context,
+    ) => {
+      context.thisDiesIfThatDies(agentId);
+
+      const { client, control } = makeHttpClientKit({
+        allowedOrigins,
+        maxRequestsPerMinute,
+        maxResponseBytes,
+      });
+
+      context.onCancel(() => {
+        control.revoke();
+      });
+
+      return harden({ client, control });
     },
     channel: async (formula, context, id) => {
       const {

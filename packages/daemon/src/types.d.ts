@@ -411,6 +411,18 @@ export type IntervalSchedulerFormula = {
   paused: boolean;
 };
 
+export type HttpClientFormula = {
+  type: 'http-client';
+  /** The agent this client is bound to. */
+  agent: FormulaIdentifier;
+  /** Allowed origin URLs for outbound requests. */
+  allowedOrigins: string[];
+  /** Maximum requests per minute (default 60). */
+  maxRequestsPerMinute: number;
+  /** Maximum response body size in bytes (default 10MB). */
+  maxResponseBytes: number;
+};
+
 export type Formula =
   | ChannelFormula
   | EndoFormula
@@ -442,7 +454,8 @@ export type Formula =
   | PeerFormula
   | InvitationFormula
   | TimerFormula
-  | IntervalSchedulerFormula;
+  | IntervalSchedulerFormula
+  | HttpClientFormula;
 
 export type Builtins = {
   NONE: FormulaIdentifier;
