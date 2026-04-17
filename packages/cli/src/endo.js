@@ -528,27 +528,40 @@ export const main = async rawArgs => {
   program
     .command('checkin <path>')
     .alias('ci')
-    .description('checks in a local directory as a readable tree')
+    .description('checks in a local directory (or zip with -z) as a readable tree')
     .option(...commonOptions.as)
     .option(...commonOptions.requiredName)
+    .option('-z, --zip', 'interpret input as a zip archive')
+    .option('--stdin', 'read zip archive from stdin (requires -z)')
     .action(async (sourcePath, cmd) => {
-      const { name, as: agentNames } = cmd.opts();
+      const { name, as: agentNames, zip, stdin } = cmd.opts();
       if (!name) {
         throw new Error('--name is required for checkin');
       }
+      if (stdin && !zip) {
+        throw new Error('--stdin requires --zip');
+      }
       const { checkin } = await import('./commands/checkin.js');
-      return checkin({ sourcePath, name, agentNames });
+      return checkin({ sourcePath, name, agentNames, zip, stdin });
     });
 
   program
-    .command('checkout <name> <path>')
+    .command('checkout <name> [path]')
     .alias('co')
-    .description('checks out a readable tree to a local directory')
+    .description('checks out a readable tree to a local directory (or zip with -z)')
     .option(...commonOptions.as)
+    .option('-z, --zip', 'produce a zip archive instead of a directory')
+    .option('--stdout', 'write zip archive to stdout (requires -z)')
     .action(async (treeName, destPath, cmd) => {
-      const { as: agentNames } = cmd.opts();
+      const { as: agentNames, zip, stdout: useStdout } = cmd.opts();
+      if (useStdout && !zip) {
+        throw new Error('--stdout requires --zip');
+      }
+      if (!zip && !destPath) {
+        throw new Error('path is required for directory checkout');
+      }
       const { checkout } = await import('./commands/checkout.js');
-      return checkout({ treeName, destPath, agentNames });
+      return checkout({ treeName, destPath, agentNames, zip, useStdout });
     });
 
   program

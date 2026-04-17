@@ -10,35 +10,95 @@ import { withEndoAgent } from '../context.js';
 import { parsePetNamePath } from '../pet-name.js';
 
 /**
- * Check in a local directory as a content-addressed readable-tree.
+ * Extract a zip archive to a temporary directory.
  *
- * The CLI builds a local Exo tree mirroring the filesystem and passes
- * it to the daemon's storeTree method. The daemon walks this tree over CapTP,
- * streaming each blob's content into its content store, and builds the
- * readable-tree formula content-addressed.
- *
- * @param {object} options
- * @param {string} options.sourcePath - Local directory to check in.
- * @param {string} options.name - Pet name for the root readable-tree.
- * @param {string} [options.agentNames] - Agent to act as.
+ * @param {Uint8Array} zipBytes
+ * @returns {Promise<string>} Path to the temporary directory.
  */
-export const checkin = async ({ sourcePath, name, agentNames }) => {
-  const parsedName = parsePetNamePath(name);
+const extractZipToTemp = async zipBytes => {
+  const { ZipReader } = await import('@endo/zip/reader.js');
+  const zipReader = new ZipReader(zipBytes);
+  const tmpDir = await fs.promises.mkdtemp(
+    path.join(os.tmpdir(), 'endo-checkin-'),
+  );
 
-  const resolvedPath = path.resolve(sourcePath);
-  const stat = await fs.promises.stat(resolvedPath);
-  if (!stat.isDirectory()) {
-    throw new Error(`${resolvedPath} is not a directory`);
+  for (const [name, file] of zipReader.files.entries()) {
+    // Skip directory entries (names ending with /).
+    if (name.endsWith('/')) {
+      continue;
+    }
+    const filePath = path.join(tmpDir, ...name.split('/'));
+    await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.promises.writeFile(filePath, file.content);
   }
 
-  await withEndoAgent(agentNames, { os, process }, async ({ agent }) => {
-    const progress = { files: 0 };
-    const localTree = makeLocalTree(resolvedPath, {
-      onFile: () => {
-        progress.files += 1;
-      },
+  return tmpDir;
+};
+
+/**
+ * Check in a local directory (or zip archive) as a content-addressed
+ * readable-tree.
+ *
+ * @param {object} options
+ * @param {string} options.sourcePath - Local directory or zip file path.
+ * @param {string} options.name - Pet name for the root readable-tree.
+ * @param {string} [options.agentNames] - Agent to act as.
+ * @param {boolean} [options.zip] - Interpret input as a zip archive.
+ * @param {boolean} [options.stdin] - Read zip from stdin (requires zip).
+ */
+export const checkin = async ({
+  sourcePath,
+  name,
+  agentNames,
+  zip = false,
+  stdin = false,
+}) => {
+  const parsedName = parsePetNamePath(name);
+
+  let resolvedPath;
+  let tmpDir;
+
+  if (zip) {
+    /** @type {Uint8Array} */
+    let zipBytes;
+    if (stdin) {
+      const chunks = [];
+      for await (const chunk of process.stdin) {
+        chunks.push(chunk);
+      }
+      zipBytes = Buffer.concat(chunks);
+    } else {
+      resolvedPath = path.resolve(sourcePath);
+      zipBytes = await fs.promises.readFile(resolvedPath);
+    }
+    tmpDir = await extractZipToTemp(zipBytes);
+    resolvedPath = tmpDir;
+  } else {
+    resolvedPath = path.resolve(sourcePath);
+    const fileStat = await fs.promises.stat(resolvedPath);
+    if (!fileStat.isDirectory()) {
+      throw new Error(`${resolvedPath} is not a directory`);
+    }
+  }
+
+  try {
+    await withEndoAgent(agentNames, { os, process }, async ({ agent }) => {
+      const progress = { files: 0 };
+      const localTree = makeLocalTree(
+        /** @type {string} */ (resolvedPath),
+        {
+          onFile: () => {
+            progress.files += 1;
+          },
+        },
+      );
+      await E(agent).storeTree(localTree, parsedName);
+      console.log(`  stored ${progress.files} files`);
     });
-    await E(agent).storeTree(localTree, parsedName);
-    console.log(`  stored ${progress.files} files`);
-  });
+  } finally {
+    // Clean up temp directory if we extracted a zip.
+    if (tmpDir) {
+      await fs.promises.rm(tmpDir, { recursive: true, force: true });
+    }
+  }
 };
