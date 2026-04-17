@@ -613,6 +613,41 @@ export const TickResponseInterface = M.interface('EndoTickResponse', {
 
 // #endregion
 
+// #region HttpClient
+
+const FetchOptionsShape = M.splitRecord(
+  {},
+  {
+    method: M.string(),
+    headers: M.recordOf(M.string(), M.string()),
+    body: M.string(),
+  },
+);
+
+const FetchResponseShape = M.splitRecord({
+  status: M.number(),
+  statusText: M.string(),
+  ok: M.boolean(),
+  headers: M.recordOf(M.string(), M.string()),
+  text: M.string(),
+});
+
+export const HttpClientInterface = M.interface('EndoHttpClient', {
+  fetch: M.callWhen(M.string()).optional(FetchOptionsShape).returns(FetchResponseShape),
+  allowedOrigins: M.call().returns(M.arrayOf(M.string())),
+  help: M.call().returns(M.string()),
+});
+
+export const HttpClientControlInterface = M.interface('EndoHttpClientControl', {
+  setAllowedOrigins: M.call(M.arrayOf(M.string())).returns(M.undefined()),
+  setMaxRequestsPerMinute: M.call(M.number()).returns(M.undefined()),
+  setMaxResponseBytes: M.call(M.number()).returns(M.undefined()),
+  revoke: M.call().returns(M.undefined()),
+  help: M.call().returns(M.string()),
+});
+
+// #endregion
+
 export const EndoInterface = M.interface('Endo', {
   help: M.call().optional(M.string()).returns(M.string()),
   ping: M.call().returns(M.promise()),
