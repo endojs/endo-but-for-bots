@@ -822,7 +822,10 @@ export const makeHostMaker = ({
       assertPetName(guestName);
       const url = new URL(invitationLocator);
       const daemonNode = url.hostname;
-      const invitationNumber = url.searchParams.get('id');
+      // Support both V2 (path-based) and old (?id=) formats.
+      const pathSegment = url.pathname.replace(/^\//, '');
+      const invitationNumber =
+        url.searchParams.get('id') || pathSegment || null;
       const remoteHandleNumber = url.searchParams.get('from');
       // The remote handle's node may differ from the daemon node when
       // agent keys are used as formula nodes.
@@ -833,8 +836,8 @@ export const makeHostMaker = ({
       if (!remoteHandleNumber) {
         throw makeError(`Invitation must have a "from" parameter`);
       }
-      if (invitationNumber === null) {
-        throw makeError(`Invitation must have an "id" parameter`);
+      if (!invitationNumber) {
+        throw makeError(`Invitation must include a formula number`);
       }
       assertNodeNumber(daemonNode);
       assertFormulaNumber(remoteHandleNumber);
@@ -861,9 +864,8 @@ export const makeHostMaker = ({
       const { number: handleNumber, node: handleNode } = parseId(handleId);
       // eslint-disable-next-line no-use-before-define
       const { addresses: hostAddresses } = await getPeerInfo();
-      const handleUrl = new URL('endo://');
-      handleUrl.hostname = localNodeNumber;
-      handleUrl.searchParams.set('id', handleNumber);
+      // V2 path-based format: formula number in URL path.
+      const handleUrl = new URL(`endo://${localNodeNumber}/${handleNumber}`);
       // Include the handle's node if it differs from the daemon node
       // (i.e. it uses an agent key).
       if (handleNode !== localNodeNumber) {

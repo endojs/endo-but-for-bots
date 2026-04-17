@@ -4419,9 +4419,8 @@ const makeDaemonCore = async (
       const { number: hostHandleNumber, node: hostHandleNode } =
         parseId(hostHandleId);
       const { number } = parseId(id);
-      const url = new URL('endo://');
-      url.hostname = node;
-      url.searchParams.set('id', number);
+      // V2 path-based format: formula number in URL path.
+      const url = new URL(`endo://${node}/${number}`);
       url.searchParams.set('type', 'invitation');
       url.searchParams.set('from', hostHandleNumber);
       // Include the handle's node if it differs from the daemon node
@@ -4442,7 +4441,10 @@ const makeDaemonCore = async (
      */
     const accept = async (guestHandleLocator, _hostNameFromGuest) => {
       const url = new URL(guestHandleLocator);
-      const guestHandleNumber = url.searchParams.get('id');
+      // Support both V2 (path-based) and old (?id=) formats.
+      const pathSegment = url.pathname.replace(/^\//, '');
+      const guestHandleNumber =
+        url.searchParams.get('id') || pathSegment || null;
       const addresses = url.searchParams.getAll('at');
       const guestDaemonNode = url.hostname;
       // The handle's node may differ from the daemon node when agent keys
@@ -4451,7 +4453,7 @@ const makeDaemonCore = async (
         url.searchParams.get('handleNode') || guestDaemonNode;
 
       if (!guestHandleNumber) {
-        throw makeError('Handle locator must have an "id" parameter');
+        throw makeError('Handle locator must include a formula number');
       }
       assertNodeNumber(guestDaemonNode);
       assertFormulaNumber(guestHandleNumber);
