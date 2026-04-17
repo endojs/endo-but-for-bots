@@ -235,8 +235,14 @@ export const makeClient = ({
     }
     const connection = netlayer.connect(location);
     const selfIdentity = getSelfIdentityForConnection(connection);
-    // Send handshake for outgoing connections
-    sendHandshake(connection, selfIdentity, captpVersion);
+    // Send handshake for outgoing connections.
+    // If the network provides its own handshake, use it; otherwise
+    // fall back to the default op:start-session handshake.
+    if (netlayer.sendSessionHandshake) {
+      netlayer.sendSessionHandshake(connection, captpVersion);
+    } else {
+      sendHandshake(connection, selfIdentity, captpVersion);
+    }
     const pendingSession = sessionManager.makePendingSession(
       destinationLocationId,
       connection,
