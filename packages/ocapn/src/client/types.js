@@ -59,6 +59,22 @@
  */
 
 /**
+ * The handoff interface between a network and OCapN core.
+ * After the network establishes and authenticates a session (via
+ * op:start-session, Noise Protocol, or other handshake), it delivers
+ * a NetworkSession to OCapN core, which runs CapTP over it.
+ *
+ * @typedef {object} NetworkSession
+ * @property {SessionId} sessionId - Unique session identifier.
+ * @property {PublicKeyId} localKeyId - Our key ID for this session.
+ * @property {PublicKeyId} remoteKeyId - Peer's key ID for this session.
+ * @property {OcapnLocation} remoteLocation - Peer's location.
+ * @property {(bytes: Uint8Array) => void} write - Send bytes to peer.
+ * @property {() => void} close - Terminate session.
+ * @property {boolean} isInitiator - Whether we initiated this session.
+ */
+
+/**
  * @typedef {object} IncomingConnectionHandler
  * @property {(connection: Connection) => void} onConnection -
  *   Called when a new incoming connection is established.
