@@ -676,6 +676,73 @@ pub fn encode_meter_config(hard_limit: u64) -> Vec<u8> {
     buf
 }
 
+// ---------------------------------------------------------------------------
+// CAS verb codec
+// ---------------------------------------------------------------------------
+
+/// Decode `cas-store` payload: CBOR map `{"data": <bytes>, "type": <text>}`.
+/// Returns `(data, content_type)`.
+pub fn decode_cas_store(data: &[u8]) -> io::Result<(Vec<u8>, String)> {
+    let mut c = Cursor::new(data);
+    let n = c.read_map_header()?;
+    let mut blob_data: Vec<u8> = Vec::new();
+    let mut content_type = "blob".to_string();
+    for _ in 0..n {
+        let key = c.read_text()?;
+        match key.as_str() {
+            "data" => blob_data = c.read_bytes()?,
+            "type" => content_type = c.read_text()?,
+            _ => c.skip()?,
+        }
+    }
+    Ok((blob_data, content_type))
+}
+
+/// Encode `cas-stored` response: CBOR map `{"hash": <text>}`.
+pub fn encode_cas_stored(hash: &str) -> Vec<u8> {
+    let mut buf = Vec::new();
+    cbor_append_head(&mut buf, CBOR_MAP, 1);
+    cbor_append_text(&mut buf, "hash");
+    cbor_append_text(&mut buf, hash);
+    buf
+}
+
+/// Decode `cas-fetch` / `cas-has` payload: CBOR map `{"hash": <text>}`.
+/// Returns the hash string.
+pub fn decode_cas_hash_request(data: &[u8]) -> io::Result<String> {
+    let mut c = Cursor::new(data);
+    let n = c.read_map_header()?;
+    let mut hash = String::new();
+    for _ in 0..n {
+        let key = c.read_text()?;
+        match key.as_str() {
+            "hash" => hash = c.read_text()?,
+            _ => c.skip()?,
+        }
+    }
+    Ok(hash)
+}
+
+/// Encode `cas-content` response: raw bytes as CBOR map `{"data": <bytes>}`.
+pub fn encode_cas_content(data: &[u8]) -> Vec<u8> {
+    let mut buf = Vec::new();
+    cbor_append_head(&mut buf, CBOR_MAP, 1);
+    cbor_append_text(&mut buf, "data");
+    cbor_append_head(&mut buf, CBOR_BYTES, data.len() as u64);
+    buf.extend_from_slice(data);
+    buf
+}
+
+/// Encode `cas-exists` response: CBOR map `{"exists": <bool>}`.
+pub fn encode_cas_exists(exists: bool) -> Vec<u8> {
+    let mut buf = Vec::new();
+    cbor_append_head(&mut buf, CBOR_MAP, 1);
+    cbor_append_text(&mut buf, "exists");
+    // CBOR true = 0xf5, false = 0xf4 (simple values 20/21).
+    buf.push(if exists { 0xf5 } else { 0xf4 });
+    buf
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -933,5 +1000,55 @@ mod tests {
         assert_eq!(key, "hardLimit");
         let val = c.read_int().unwrap() as u64;
         assert_eq!(val, 10_000);
+    }
+
+    // CAS codec tests
+
+    #[test]
+    fn cas_store_round_trip() {
+        // Build a cas-store payload manually.
+        let mut buf = Vec::new();
+        cbor_append_head(&mut buf, CBOR_MAP, 2);
+        cbor_append_text(&mut buf, "data");
+        let data = b"hello CAS";
+        cbor_append_head(&mut buf, CBOR_BYTES, data.len() as u64);
+        buf.extend_from_slice(data);
+        cbor_append_text(&mut buf, "type");
+        cbor_append_text(&mut buf, "snapshot");
+
+        let (decoded_data, content_type) = decode_cas_store(&buf).unwrap();
+        assert_eq!(decoded_data, data);
+        assert_eq!(content_type, "snapshot");
+    }
+
+    #[test]
+    fn cas_stored_decode() {
+        let encoded = encode_cas_stored("abc123def456");
+        let hash = decode_cas_hash_request(&encoded).unwrap();
+        assert_eq!(hash, "abc123def456");
+    }
+
+    #[test]
+    fn cas_content_round_trip() {
+        let data = b"module source";
+        let encoded = encode_cas_content(data);
+        // Decode manually: map with "data" key.
+        let mut c = Cursor::new(&encoded);
+        let n = c.read_map_header().unwrap();
+        assert_eq!(n, 1);
+        let key = c.read_text().unwrap();
+        assert_eq!(key, "data");
+        let decoded = c.read_bytes().unwrap();
+        assert_eq!(decoded, data);
+    }
+
+    #[test]
+    fn cas_exists_encode() {
+        let encoded_true = encode_cas_exists(true);
+        // Map with "exists" key and CBOR true (0xf5).
+        assert!(encoded_true.contains(&0xf5));
+
+        let encoded_false = encode_cas_exists(false);
+        assert!(encoded_false.contains(&0xf4));
     }
 }

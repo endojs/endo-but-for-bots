@@ -7,6 +7,7 @@ use std::time::SystemTime;
 use tokio::net::UnixStream;
 use tokio::sync::Notify;
 
+use crate::cas::ContentStore;
 use crate::codec;
 use crate::engine::{self, Engine};
 use crate::error::EndoError;
@@ -99,7 +100,11 @@ impl Endo {
         let spawn_sup = Arc::clone(&self.supervisor);
         let resume_sup = Arc::clone(&self.supervisor);
         let cas_dir = self.paths.state_path.join("store-sha256");
-        let cas_dir_for_control = cas_dir.clone();
+        let cas = Arc::new(
+            ContentStore::open(&cas_dir)
+                .map_err(|e| EndoError::Config(format!("CAS open: {e}")))?,
+        );
+        let cas_for_control = Arc::clone(&cas);
         let cas_dir_for_resume = cas_dir;
         let outbox_rx = self.outbox_rx.take().expect("serve() called twice");
         supervisor::start_routing(
@@ -107,7 +112,7 @@ impl Endo {
             outbox_rx,
             supervisor::RoutingCallbacks {
                 on_control: Box::new(move |msg| {
-                    handle_control_message(&sup_for_control, &spawn_sup, &cas_dir_for_control, msg);
+                    handle_control_message(&sup_for_control, &spawn_sup, &cas_for_control, msg);
                 }),
                 on_resume: Box::new(move |sup, handle, suspended, pending_msg| {
                     handle_resume(&resume_sup, sup, handle, suspended, &cas_dir_for_resume, pending_msg);
@@ -241,7 +246,8 @@ fn send_meter_config(sup: &Arc<Supervisor>, target: Handle, hard_limit: u64) {
     });
 }
 
-fn handle_control_message(sup: &Arc<Supervisor>, spawn_sup: &Arc<Supervisor>, cas_dir: &std::path::Path, msg: Message) {
+fn handle_control_message(sup: &Arc<Supervisor>, spawn_sup: &Arc<Supervisor>, cas: &Arc<ContentStore>, msg: Message) {
+    let cas_dir = cas.dir();
     match msg.envelope.verb.as_str() {
         "ready" => {
             eprintln!("endor: daemon reports ready");
@@ -491,6 +497,137 @@ fn handle_control_message(sup: &Arc<Supervisor>, spawn_sup: &Arc<Supervisor>, ca
                     },
                     response_tx: None,
                 });
+            }
+        }
+        "cas-store" => {
+            match codec::decode_cas_store(&msg.envelope.payload) {
+                Ok((data, content_type)) => {
+                    match cas.store(&data, &content_type) {
+                        Ok(hash) => {
+                            sup.deliver(Message {
+                                from: 0,
+                                to: msg.from,
+                                envelope: Envelope {
+                                    handle: 0,
+                                    verb: "cas-stored".to_string(),
+                                    payload: codec::encode_cas_stored(&hash),
+                                    nonce: msg.envelope.nonce,
+                                },
+                                response_tx: None,
+                            });
+                        }
+                        Err(e) => {
+                            sup.deliver(Message {
+                                from: 0,
+                                to: msg.from,
+                                envelope: Envelope {
+                                    handle: 0,
+                                    verb: "error".to_string(),
+                                    payload: format!("cas-store: {e}").into_bytes(),
+                                    nonce: msg.envelope.nonce,
+                                },
+                                response_tx: None,
+                            });
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("endor: cas-store decode error: {e}");
+                }
+            }
+        }
+        "cas-fetch" => {
+            match codec::decode_cas_hash_request(&msg.envelope.payload) {
+                Ok(hash) => {
+                    match cas.fetch(&hash) {
+                        Ok(data) => {
+                            sup.deliver(Message {
+                                from: 0,
+                                to: msg.from,
+                                envelope: Envelope {
+                                    handle: 0,
+                                    verb: "cas-content".to_string(),
+                                    payload: codec::encode_cas_content(&data),
+                                    nonce: msg.envelope.nonce,
+                                },
+                                response_tx: None,
+                            });
+                        }
+                        Err(e) => {
+                            sup.deliver(Message {
+                                from: 0,
+                                to: msg.from,
+                                envelope: Envelope {
+                                    handle: 0,
+                                    verb: "error".to_string(),
+                                    payload: format!("cas-fetch: {e}").into_bytes(),
+                                    nonce: msg.envelope.nonce,
+                                },
+                                response_tx: None,
+                            });
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("endor: cas-fetch decode error: {e}");
+                }
+            }
+        }
+        "cas-has" => {
+            if let Ok(hash) = codec::decode_cas_hash_request(&msg.envelope.payload) {
+                let exists = cas.has(&hash);
+                sup.deliver(Message {
+                    from: 0,
+                    to: msg.from,
+                    envelope: Envelope {
+                        handle: 0,
+                        verb: "cas-exists".to_string(),
+                        payload: codec::encode_cas_exists(exists),
+                        nonce: msg.envelope.nonce,
+                    },
+                    response_tx: None,
+                });
+            }
+        }
+        "cas-retain" => {
+            if let Ok(hash) = codec::decode_cas_hash_request(&msg.envelope.payload) {
+                cas.retain(&hash);
+            }
+        }
+        "cas-release" => {
+            if let Ok(hash) = codec::decode_cas_hash_request(&msg.envelope.payload) {
+                cas.release(&hash);
+            }
+        }
+        "cas-store-tree" => {
+            // Payload is the tree JSON directly as bytes.
+            match cas.store_tree(&msg.envelope.payload) {
+                Ok(hash) => {
+                    sup.deliver(Message {
+                        from: 0,
+                        to: msg.from,
+                        envelope: Envelope {
+                            handle: 0,
+                            verb: "cas-stored".to_string(),
+                            payload: codec::encode_cas_stored(&hash),
+                            nonce: msg.envelope.nonce,
+                        },
+                        response_tx: None,
+                    });
+                }
+                Err(e) => {
+                    sup.deliver(Message {
+                        from: 0,
+                        to: msg.from,
+                        envelope: Envelope {
+                            handle: 0,
+                            verb: "error".to_string(),
+                            payload: format!("cas-store-tree: {e}").into_bytes(),
+                            nonce: msg.envelope.nonce,
+                        },
+                        response_tx: None,
+                    });
+                }
             }
         }
         other => {

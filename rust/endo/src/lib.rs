@@ -1,3 +1,4 @@
+pub mod cas;
 pub mod codec;
 pub mod endo;
 pub mod engine;

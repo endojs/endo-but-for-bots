@@ -35966,6 +35966,7 @@ let nextNonce = 1;
 
 // Minimal CBOR helpers for spawn payloads (same as bus-daemon-node-powers.js)
 const CBOR_UINT = 0;
+const CBOR_BYTES = 2;
 const CBOR_TEXT = 3;
 const CBOR_ARRAY = 4;
 const CBOR_MAP = 5;
@@ -36327,6 +36328,266 @@ const meterRefill = async (workerHandle, amount) => {
   return { verb: response.verb, payload: response.payload };
 };
 
+// ---------------------------------------------------------------------------
+// CAS control powers
+// ---------------------------------------------------------------------------
+
+/**
+ * Store bytes in the CAS via the supervisor.
+ * @param {Uint8Array} data
+ * @param {string} [contentType]
+ * @returns {Promise<string>} hex SHA-256 hash
+ */
+const casStore = async (data, contentType = 'blob') => {
+  /** @type {number[]} */
+  const buf = [];
+  cborHead(buf, CBOR_MAP, 2);
+  cborHead(buf, CBOR_TEXT, 4);
+  buf.push(...textEncoder.encode('data'));
+  cborHead(buf, CBOR_BYTES, data.length);
+  for (let i = 0; i < data.length; i += 1) {
+    buf.push(data[i]);
+  }
+  cborHead(buf, CBOR_TEXT, 4);
+  buf.push(...textEncoder.encode('type'));
+  const typeBytes = textEncoder.encode(contentType);
+  cborHead(buf, CBOR_TEXT, typeBytes.length);
+  buf.push(...typeBytes);
+  const response = await sendControlRequest(
+    'cas-store',
+    new Uint8Array(buf),
+  );
+  // response payload is CBOR map {"hash": <text>}
+  return decodeCborText(response.payload, 'hash');
+};
+
+/**
+ * Fetch content by hash from the CAS.
+ * @param {string} hash
+ * @returns {Promise<Uint8Array>}
+ */
+const casFetch = async hash => {
+  const response = await sendControlRequest(
+    'cas-fetch',
+    encodeCborHashPayload(hash),
+  );
+  return decodeCborBytes(response.payload, 'data');
+};
+
+/**
+ * Check whether a hash exists in the CAS.
+ * @param {string} hash
+ * @returns {Promise<boolean>}
+ */
+const casHas = async hash => {
+  const response = await sendControlRequest(
+    'cas-has',
+    encodeCborHashPayload(hash),
+  );
+  return decodeCborBool(response.payload, 'exists');
+};
+
+/**
+ * Retain a CAS entry (increment ref count). Fire-and-forget.
+ * @param {string} hash
+ */
+const casRetain = hash => {
+  sendEnvelope(0, 'cas-retain', encodeCborHashPayload(hash), 0);
+};
+
+/**
+ * Release a CAS entry (decrement ref count). Fire-and-forget.
+ * @param {string} hash
+ */
+const casRelease = hash => {
+  sendEnvelope(0, 'cas-release', encodeCborHashPayload(hash), 0);
+};
+
+/**
+ * Store a tree (JSON bytes) in the CAS.
+ * @param {Uint8Array} treeJson
+ * @returns {Promise<string>} tree hash
+ */
+const casStoreTree = async treeJson => {
+  const response = await sendControlRequest(
+    'cas-store-tree',
+    treeJson,
+  );
+  return decodeCborText(response.payload, 'hash');
+};
+
+// CBOR mini-helpers for CAS payloads.
+
+/**
+ * Encode CBOR map {"hash": <text>}.
+ * @param {string} hash
+ * @returns {Uint8Array}
+ */
+const encodeCborHashPayload = hash => {
+  /** @type {number[]} */
+  const buf = [];
+  cborHead(buf, CBOR_MAP, 1);
+  cborHead(buf, CBOR_TEXT, 4);
+  buf.push(...textEncoder.encode('hash'));
+  const hashBytes = textEncoder.encode(hash);
+  cborHead(buf, CBOR_TEXT, hashBytes.length);
+  buf.push(...hashBytes);
+  return new Uint8Array(buf);
+};
+
+/**
+ * Decode a text value from a CBOR map by key.
+ * @param {Uint8Array} payload
+ * @param {string} key
+ * @returns {string}
+ */
+const decodeCborText = (payload, key) => {
+  // Minimal CBOR map decoder — find the key, read text value.
+  const view = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
+  let offset = 0;
+  // Read map header.
+  const mapLen = readCborHead(view, offset);
+  offset = mapLen.offset;
+  for (let i = 0; i < mapLen.value; i += 1) {
+    const k = readCborTextAt(payload, view, offset);
+    offset = k.offset;
+    if (k.text === key) {
+      const v = readCborTextAt(payload, view, offset);
+      return v.text;
+    }
+    // Skip value.
+    offset = skipCborValue(view, payload, offset);
+  }
+  throw Error(`key "${key}" not found in CBOR map`);
+};
+
+/**
+ * Decode a bytes value from a CBOR map by key.
+ * @param {Uint8Array} payload
+ * @param {string} key
+ * @returns {Uint8Array}
+ */
+const decodeCborBytes = (payload, key) => {
+  const view = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
+  let offset = 0;
+  const mapLen = readCborHead(view, offset);
+  offset = mapLen.offset;
+  for (let i = 0; i < mapLen.value; i += 1) {
+    const k = readCborTextAt(payload, view, offset);
+    offset = k.offset;
+    if (k.text === key) {
+      const head = readCborHead(view, offset);
+      return payload.slice(head.offset, head.offset + head.value);
+    }
+    offset = skipCborValue(view, payload, offset);
+  }
+  throw Error(`key "${key}" not found in CBOR map`);
+};
+
+/**
+ * Decode a boolean value from a CBOR map by key.
+ * @param {Uint8Array} payload
+ * @param {string} key
+ * @returns {boolean}
+ */
+const decodeCborBool = (payload, key) => {
+  const view = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
+  let offset = 0;
+  const mapLen = readCborHead(view, offset);
+  offset = mapLen.offset;
+  for (let i = 0; i < mapLen.value; i += 1) {
+    const k = readCborTextAt(payload, view, offset);
+    offset = k.offset;
+    if (k.text === key) {
+      // CBOR true = 0xf5, false = 0xf4.
+      return payload[offset] === 0xf5;
+    }
+    offset = skipCborValue(view, payload, offset);
+  }
+  throw Error(`key "${key}" not found in CBOR map`);
+};
+
+/**
+ * Read CBOR head at offset, return {value, offset after head}.
+ * @param {DataView} view
+ * @param {number} offset
+ * @returns {{value: number, offset: number}}
+ */
+const readCborHead = (view, offset) => {
+  const first = view.getUint8(offset);
+  const additional = first & 0x1f;
+  if (additional < 24) {
+    return { value: additional, offset: offset + 1 };
+  }
+  if (additional === 24) {
+    return { value: view.getUint8(offset + 1), offset: offset + 2 };
+  }
+  if (additional === 25) {
+    return { value: view.getUint16(offset + 1), offset: offset + 3 };
+  }
+  if (additional === 26) {
+    return { value: view.getUint32(offset + 1), offset: offset + 5 };
+  }
+  // additional === 27 — 8-byte uint, but we truncate to Number.
+  const hi = view.getUint32(offset + 1);
+  const lo = view.getUint32(offset + 5);
+  return { value: hi * 0x100000000 + lo, offset: offset + 9 };
+};
+
+/**
+ * Read a CBOR text string at offset.
+ * @param {Uint8Array} payload
+ * @param {DataView} view
+ * @param {number} offset
+ * @returns {{text: string, offset: number}}
+ */
+const readCborTextAt = (payload, view, offset) => {
+  const head = readCborHead(view, offset);
+  const text = textDecoder.decode(
+    payload.slice(head.offset, head.offset + head.value),
+  );
+  return { text, offset: head.offset + head.value };
+};
+
+/**
+ * Skip one CBOR value at offset.
+ * @param {DataView} view
+ * @param {Uint8Array} payload
+ * @param {number} offset
+ * @returns {number} offset after the value
+ */
+const skipCborValue = (view, payload, offset) => {
+  const first = view.getUint8(offset);
+  const major = first >> 5;
+  const head = readCborHead(view, offset);
+  if (major <= 1) {
+    // uint or negint — head is the entire value.
+    return head.offset;
+  }
+  if (major === 2 || major === 3) {
+    // bytes or text — head.value is the length.
+    return head.offset + head.value;
+  }
+  if (major === 4) {
+    // array.
+    let pos = head.offset;
+    for (let i = 0; i < head.value; i += 1) {
+      pos = skipCborValue(view, payload, pos);
+    }
+    return pos;
+  }
+  if (major === 5) {
+    // map.
+    let pos = head.offset;
+    for (let i = 0; i < head.value * 2; i += 1) {
+      pos = skipCborValue(view, payload, pos);
+    }
+    return pos;
+  }
+  // major 7 — simple value (bool, null, etc.) — already consumed by head.
+  return head.offset;
+};
+
 const controlPowers = harden({
   makeWorker,
   meterQuery,
@@ -36334,6 +36595,12 @@ const controlPowers = harden({
   meterSetQuota,
   meterSetRate,
   meterRefill,
+  casStore,
+  casFetch,
+  casHas,
+  casRetain,
+  casRelease,
+  casStoreTree,
 });
 
 // ---------------------------------------------------------------------------
@@ -36524,11 +36791,14 @@ globalThis.handleCommand = harden(bytes => {
     return;
   }
 
-  // Metering control responses.
+  // Metering and CAS control responses.
   if (
     (env.verb === 'meter-state' ||
       env.verb === 'meter-reset-ack' ||
-      env.verb === 'meter-refill-ack') &&
+      env.verb === 'meter-refill-ack' ||
+      env.verb === 'cas-stored' ||
+      env.verb === 'cas-content' ||
+      env.verb === 'cas-exists') &&
     env.nonce > 0
   ) {
     const pending = pendingControlRequests.get(env.nonce);
