@@ -598,6 +598,17 @@ export const main = async rawArgs => {
     });
 
   program
+    .command('subdir <mount-name> <subpath> <new-name>')
+    .description('creates a sub-mount rooted at a subdirectory of an existing mount')
+    .option(...commonOptions.as)
+    .option('--read-only', 'create a read-only sub-mount')
+    .action(async (mountName, subpath, newName, cmd) => {
+      const { as: agentNames, readOnly } = cmd.opts();
+      const { subdirCommand } = await import('./commands/subdir.js');
+      return subdirCommand({ mountName, subpath, newName, agentNames, readOnly });
+    });
+
+  program
     .command('eval <source> [names...]')
     .description('creates a value')
     .option(...commonOptions.as)
