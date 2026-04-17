@@ -18,12 +18,11 @@ VOLUME /data/endo
 # Gateway port
 EXPOSE 8920
 
-# Default environment:
-#   ENDO_ADDR — bind address for the gateway (0.0.0.0 for Docker)
-#   ENDO_STATE_PATH — state directory path
-#   ENDO_GC — enable formula garbage collection
+# Default environment for containerized operation.
+# ENDO_STATE is the root; the entrypoint derives *_PATH vars from it.
+# Users can override individual paths if needed.
+ENV ENDO_STATE=/data/endo
 ENV ENDO_ADDR=0.0.0.0:8920
-ENV ENDO_STATE_PATH=/data/endo
 ENV ENDO_GC=1
 
 COPY docker/docker-entrypoint.sh /usr/local/bin/
