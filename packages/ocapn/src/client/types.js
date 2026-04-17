@@ -52,6 +52,10 @@
  *   selfIdentity is provided by the client for networks that need it
  *   (like tcp-testing-only); networks that manage their own identity
  *   (like OCapN-Noise) can ignore it.
+ * @property {((connection: Connection, data: Uint8Array, selfIdentity: SelfIdentity, captpVersion: string) => boolean)} [handleSessionHandshake] -
+ *   Optional custom handler for incoming handshake data.  Returns true
+ *   if the data was consumed as a handshake message, false to let OCapN
+ *   core handle it with the default op:start-session handler.
  */
 
 /**
