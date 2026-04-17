@@ -6,6 +6,8 @@ edition = "2021"
 [dependencies]
 hex = "0.4"
 libc = "0.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 sha2 = "0.10"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "signal", "process", "io-util", "net", "time"] }
 xsnap = { path = "xsnap" }
