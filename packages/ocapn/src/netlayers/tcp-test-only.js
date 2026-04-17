@@ -108,7 +108,8 @@ export const makeTcpNetLayer = async ({
   /** @type {OcapnLocation} */
   const localLocation = {
     type: 'ocapn-peer',
-    transport: 'tcp-testing-only',
+    network: 'tcp-testing-only',
+    transport: 'tcp-testing-only', // Legacy; prefer `network`.
     designator: specifiedDesignator,
     hints: {
       host: address,
