@@ -51,7 +51,7 @@ test('assertValidLocator - invalid', t => {
     [{}, /Invalid URL.$/u],
     [makeLocator({ protocol: 'foobar://' }), /Invalid protocol.$/u],
     [makeLocator({ host: 'foobar' }), /Invalid node identifier.$/u],
-    [makeLocator({ param1: 'foo=bar' }), /Invalid search params.$/u],
+    [makeLocator({ param1: 'foo=bar' }), /Missing formula number/],
     [makeLocator({ param2: 'foo=bar' }), /Invalid search params.$/u],
     [`${makeLocator()}&foo=bar`, /Invalid search params.$/u],
     [makeLocator({ param1: 'id=foobar' }), /Invalid id.$/u],
@@ -193,4 +193,48 @@ test('internalizeLocator extracts connection hints', t => {
   const locator = formatLocatorForSharing(id, validType, addresses);
   const result = internalizeLocator(locator);
   t.deepEqual(result.addresses, addresses);
+});
+
+// --- New-style locator format (path-based formula number) ---
+
+test('parseLocator - new format with formula number in path', t => {
+  const newLocator = `endo://${validNode}/${validId}?type=${validType}`;
+  const parsed = parseLocator(newLocator);
+  t.is(parsed.number, validId);
+  t.is(parsed.node, validNode);
+  t.is(parsed.formulaType, validType);
+  t.deepEqual(parsed.hints, []);
+});
+
+test('parseLocator - new format with connection hints', t => {
+  const newLocator = `endo://${validNode}/${validId}?type=${validType}&at=ws%3A%2F%2Fexample.com`;
+  const parsed = parseLocator(newLocator);
+  t.is(parsed.number, validId);
+  t.is(parsed.formulaType, validType);
+  t.deepEqual(parsed.hints, ['ws://example.com']);
+});
+
+test('parseLocator - new format rejects invalid search params', t => {
+  const badLocator = `endo://${validNode}/${validId}?type=${validType}&bad=param`;
+  t.throws(() => parseLocator(badLocator), {
+    message: /Invalid search params/,
+  });
+});
+
+test('parseLocator - rejects locator with no formula number', t => {
+  const badLocator = `endo://${validNode}/?type=${validType}`;
+  t.throws(() => parseLocator(badLocator), {
+    message: /Missing formula number/,
+  });
+});
+
+test('parseLocator - old and new formats produce identical results', t => {
+  const oldLocator = `endo://${validNode}/?id=${validId}&type=${validType}`;
+  const newLocator = `endo://${validNode}/${validId}?type=${validType}`;
+  const oldResult = parseLocator(oldLocator);
+  const newResult = parseLocator(newLocator);
+  t.is(oldResult.number, newResult.number);
+  t.is(oldResult.node, newResult.node);
+  t.is(oldResult.formulaType, newResult.formulaType);
+  t.deepEqual(oldResult.hints, newResult.hints);
 });

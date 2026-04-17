@@ -61,18 +61,35 @@ export const parseLocator = allegedLocator => {
     throw makeError(`${errorPrefix} Invalid node identifier.`);
   }
 
-  if (!url.searchParams.has('id') || !url.searchParams.has('type')) {
-    throw makeError(`${errorPrefix} Invalid search params.`);
-  }
+  // Detect format: old format uses ?id= query param,
+  // new format puts the formula number in the URL path.
+  const hasIdParam = url.searchParams.has('id');
+  const pathSegment = url.pathname.replace(/^\//, '');
 
-  // Only 'id', 'type', and 'at' (connection hints) are allowed.
-  for (const key of url.searchParams.keys()) {
-    if (key !== 'id' && key !== 'type' && key !== 'at') {
-      throw makeError(`${errorPrefix} Invalid search params.`);
+  /** @type {string | null} */
+  let number;
+  if (hasIdParam) {
+    // Old format: endo://{node}/?id={number}&type={type}
+    number = url.searchParams.get('id');
+    // Only 'id', 'type', and 'at' (connection hints) are allowed.
+    for (const key of url.searchParams.keys()) {
+      if (key !== 'id' && key !== 'type' && key !== 'at') {
+        throw makeError(`${errorPrefix} Invalid search params.`);
+      }
     }
+  } else if (pathSegment && isValidNumber(pathSegment)) {
+    // New format: endo://{node}/{number}?type={type}
+    number = pathSegment;
+    // Only 'type' and 'at' are allowed in the new format.
+    for (const key of url.searchParams.keys()) {
+      if (key !== 'type' && key !== 'at') {
+        throw makeError(`${errorPrefix} Invalid search params.`);
+      }
+    }
+  } else {
+    throw makeError(`${errorPrefix} Missing formula number.`);
   }
 
-  const number = url.searchParams.get('id');
   if (number === null || !isValidNumber(number)) {
     throw makeError(`${errorPrefix} Invalid id.`);
   }
