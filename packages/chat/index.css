@@ -3751,6 +3751,43 @@ button.btn-spinner::after {
   display: block;
 }
 
+/* Cancel button */
+.cancel-button {
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 50%;
+  width: 18px;
+  height: 18px;
+  font-size: 12px;
+  line-height: 16px;
+  text-align: center;
+  padding: 0;
+  cursor: pointer;
+  opacity: 0.5;
+  transition: all 0.2s;
+  color: inherit;
+}
+.cancel-button:hover:not(:disabled) {
+  opacity: 1;
+  border-color: currentColor;
+}
+.cancel-button.confirming {
+  opacity: 1;
+  color: var(--error-color, #e74c3c);
+  border-color: var(--error-color, #e74c3c);
+  transform: scale(1.2);
+}
+.cancel-button.cancelled {
+  opacity: 0.4;
+  border-color: currentColor;
+  border-style: dashed;
+}
+.cancel-button:disabled {
+  cursor: default;
+  opacity: 0.2;
+}
+
+
 /* Inventory drag and drop */
 .pet-item-row.dragging {
   opacity: 0.4;

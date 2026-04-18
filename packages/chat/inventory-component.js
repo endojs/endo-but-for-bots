@@ -442,6 +442,56 @@ export const inventoryComponent = async (
     $info.title = 'Inspect';
     $buttons.appendChild($info);
 
+    // Cancel button (disabled for special names)
+    const $cancel = document.createElement('button');
+    $cancel.className = 'cancel-button';
+    $cancel.textContent = '⊘';
+    if (isSpecialName(name)) {
+      $cancel.disabled = true;
+      $cancel.title = 'Cannot cancel system name';
+    } else {
+      $cancel.title = 'Cancel incarnation';
+    }
+    $buttons.appendChild($cancel);
+
+    // Cancel confirmation state
+    let cancelConfirmTimer = 0;
+    if (!isSpecialName(name)) {
+      $cancel.addEventListener('click', e => {
+        e.stopPropagation();
+        if ($cancel.classList.contains('confirming')) {
+          // Second click — execute cancel.
+          clearTimeout(cancelConfirmTimer);
+          $cancel.classList.remove('confirming');
+          $cancel.title = 'Cancelling...';
+          $cancel.disabled = true;
+          E(powers)
+            .cancel(
+              .../** @type {[string, ...string[]]} */ (itemPath),
+            )
+            .then(() => {
+              $cancel.classList.add('cancelled');
+              $cancel.title = 'Cancelled';
+            })
+            .catch(err => {
+              console.error('[inventory] Cancel failed:', err);
+              $cancel.disabled = false;
+              $cancel.title = 'Cancel incarnation';
+            });
+        } else {
+          // First click — enter confirm state.
+          $cancel.classList.add('confirming');
+          $cancel.title = 'Click again to cancel';
+          cancelConfirmTimer = /** @type {any} */ (
+            setTimeout(() => {
+              $cancel.classList.remove('confirming');
+              $cancel.title = 'Cancel incarnation';
+            }, 3000)
+          );
+        }
+      });
+    }
+
     // Remove button (disabled for special names)
     const $remove = document.createElement('button');
     $remove.className = 'remove-button';
