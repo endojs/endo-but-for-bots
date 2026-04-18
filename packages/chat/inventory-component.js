@@ -607,6 +607,15 @@ export const inventoryComponent = async (
         const url = new URL(/** @type {string} */ (locator));
         const type = url.searchParams.get('type');
 
+        // Show type badge on the item row.
+        if (type) {
+          const $typeBadge = document.createElement('span');
+          $typeBadge.className = 'pet-type-badge';
+          $typeBadge.textContent = type;
+          $typeBadge.title = `Formula type: ${type}`;
+          $name.after($typeBadge);
+        }
+
         // Hide disclosure triangle for known non-expandable types
         if (type && NON_EXPANDABLE_TYPES.includes(type)) {
           $disclosure.classList.add('hidden');

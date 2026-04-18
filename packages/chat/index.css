@@ -3751,6 +3751,19 @@ button.btn-spinner::after {
   display: block;
 }
 
+/* Type badge on inventory items */
+.pet-type-badge {
+  font-size: 0.65em;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: rgba(128, 128, 128, 0.15);
+  color: var(--text-muted, #888);
+  margin-left: 6px;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+
 /* Cancel button */
 .cancel-button {
   background: none;
