@@ -413,6 +413,27 @@ export const makeMailboxMaker = ({
         }
         return;
       }
+      if (envelope.type === 'command') {
+        if (typeof envelope.commandName !== 'string') {
+          throw new Error('Invalid command commandName');
+        }
+        if (typeof envelope.args !== 'object' || envelope.args === null) {
+          throw new Error('Invalid command args');
+        }
+        return;
+      }
+      if (envelope.type === 'command-result') {
+        if (typeof envelope.replyTo !== 'string') {
+          throw new Error('Invalid command-result replyTo');
+        }
+        if (typeof envelope.success !== 'boolean') {
+          throw new Error('Invalid command-result success');
+        }
+        if (typeof envelope.summary !== 'string') {
+          throw new Error('Invalid command-result summary');
+        }
+        return;
+      }
       throw new Error('Unknown message type');
     };
 
@@ -760,7 +781,13 @@ export const makeMailboxMaker = ({
       outbox.set(envelope, message);
       await E(recipient).receive(envelope, selfId);
       // Send to own inbox.
-      if (message.from !== message.to) {
+      // Command messages are self-addressed and must be delivered
+      // to the sender's own inbox for transcript recording.
+      if (
+        message.from !== message.to ||
+        message.type === 'command' ||
+        message.type === 'command-result'
+      ) {
         await deliver(message);
       }
     };
