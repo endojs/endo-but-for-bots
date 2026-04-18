@@ -470,6 +470,16 @@ const makeMountExo = ctx => {
       }
     },
 
+    async readJson(pathArg) {
+      assertNotRevoked();
+      await null;
+      const segments = typeof pathArg === 'string' ? [pathArg] : pathArg;
+      const target = resolve(segments);
+      await assertConfined(target, confinementRoot, filePowers);
+      const text = await filePowers.readFileText(target);
+      return JSON.parse(text);
+    },
+
     async writeText(pathArg, content) {
       assertNotRevoked();
       await null;
@@ -480,6 +490,18 @@ const makeMountExo = ctx => {
       const parent = filePowers.joinPath(target, '..');
       await filePowers.makePath(parent);
       await filePowers.writeFileText(target, content);
+    },
+
+    async writeJson(pathArg, value) {
+      assertNotRevoked();
+      await null;
+      assertWritable();
+      const segments = typeof pathArg === 'string' ? [pathArg] : pathArg;
+      const target = resolve(segments);
+      await assertConfinedOrAncestor(target, confinementRoot, filePowers);
+      const parent = filePowers.joinPath(target, '..');
+      await filePowers.makePath(parent);
+      await filePowers.writeFileText(target, JSON.stringify(value, null, 2));
     },
 
     async remove(pathArg) {

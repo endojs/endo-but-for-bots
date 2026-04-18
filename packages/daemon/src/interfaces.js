@@ -501,7 +501,9 @@ export const MountInterface = M.interface('EndoMount', {
   // Raw data I/O
   readText: M.call(PathArgShape).returns(M.promise()),
   maybeReadText: M.call(PathArgShape).returns(M.promise()),
+  readJson: M.call(PathArgShape).returns(M.promise()),
   writeText: M.call(PathArgShape, M.string()).returns(M.promise()),
+  writeJson: M.call(PathArgShape, M.any()).returns(M.promise()),
   // Mutation
   remove: M.call(PathArgShape).returns(M.promise()),
   move: M.call(PathArgShape, PathArgShape).returns(M.promise()),

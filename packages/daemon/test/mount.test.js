@@ -118,6 +118,25 @@ test('stat returns file and directory info', async t => {
   t.is(dirStat.size, 0);
 });
 
+test('readJson and writeJson roundtrip', async t => {
+  const { tmpDir, filePowers } = await setup(t);
+  const { mount } = makeMount({
+    rootPath: tmpDir,
+    readOnly: false,
+    filePowers,
+  });
+
+  // Read existing JSON file.
+  const data = await mount.readJson(['sub', 'data.json']);
+  t.deepEqual(data, {});
+
+  // Write and read back.
+  const obj = { name: 'test', count: 42, nested: { ok: true } };
+  await mount.writeJson('config.json', obj);
+  const readBack = await mount.readJson('config.json');
+  t.deepEqual(readBack, obj);
+});
+
 test('mount reads files before revocation', async t => {
   const { tmpDir, filePowers } = await setup(t);
   const { mount } = makeMount({
