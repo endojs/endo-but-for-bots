@@ -396,6 +396,9 @@ export const HostInterface = M.interface('EndoHost', {
     MessageNumberShape, // messageNumber
     NameOrPathShape, // petNameOrPath
   ).returns(M.promise()),
+  // Type introspection
+  identifyType: M.call(NameOrPathShape).returns(M.promise()),
+  listWithTypes: M.call().returns(M.promise()),
   // Get formula dependency graph snapshot for this agent's pet store
   getFormulaGraph: M.call().returns(M.promise()),
 });

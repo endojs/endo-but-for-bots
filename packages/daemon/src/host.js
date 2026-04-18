@@ -1124,6 +1124,43 @@ export const makeHostMaker = ({
     };
 
     /**
+     * Return the formula type for the value stored under a pet name.
+     *
+     * @param {NameOrPath} petNameOrPath
+     * @returns {Promise<string | undefined>}
+     */
+    const identifyType = async petNameOrPath => {
+      const namePath = namePathFrom(petNameOrPath);
+      const id = await E(directory).identify(...namePath);
+      if (id === undefined) {
+        return undefined;
+      }
+      return getTypeForId(/** @type {FormulaIdentifier} */ (id));
+    };
+
+    /**
+     * Return a list of pet names with their formula types.
+     *
+     * @returns {Promise<Array<{ name: string, type: string }>>}
+     */
+    const listWithTypes = async () => {
+      const names = await list();
+      const entries = await Promise.all(
+        names.map(async name => {
+          const id = await identify(name);
+          if (id === undefined) {
+            return harden({ name, type: 'unknown' });
+          }
+          const type = await getTypeForId(
+            /** @type {FormulaIdentifier} */ (id),
+          );
+          return harden({ name, type: type || 'unknown' });
+        }),
+      );
+      return harden(entries);
+    };
+
+    /**
      * Returns a snapshot of the formula dependency graph for all formulas
      * reachable from this agent's pet store entries.
      */
@@ -1213,6 +1250,9 @@ export const makeHostMaker = ({
       endow,
       submit,
       sendValue,
+      // Type introspection
+      identifyType,
+      listWithTypes,
       // Graph
       getFormulaGraph,
     };
