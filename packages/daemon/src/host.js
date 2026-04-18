@@ -1161,6 +1161,41 @@ export const makeHostMaker = ({
     };
 
     /**
+     * List capabilities whose formulas reference a given worker.
+     *
+     * @param {NameOrPath} workerPetNameOrPath
+     * @returns {Promise<Array<{ name: string, type: string }>>}
+     */
+    const listWorkerTenants = async workerPetNameOrPath => {
+      const workerNamePath = namePathFrom(workerPetNameOrPath);
+      const workerId = await E(directory).identify(...workerNamePath);
+      if (workerId === undefined) {
+        return harden([]);
+      }
+
+      const names = await list();
+      /** @type {Array<{ name: string, type: string }>} */
+      const tenants = [];
+      await Promise.all(
+        names.map(async name => {
+          const id = await identify(name);
+          if (id === undefined) return;
+          const formulaId = /** @type {FormulaIdentifier} */ (id);
+          const formula = await getFormulaForId(formulaId);
+          if (
+            formula &&
+            'worker' in formula &&
+            formula.worker === workerId
+          ) {
+            const type = formula.type || 'unknown';
+            tenants.push(harden({ name, type }));
+          }
+        }),
+      );
+      return harden(tenants);
+    };
+
+    /**
      * Returns a snapshot of the formula dependency graph for all formulas
      * reachable from this agent's pet store entries.
      */
@@ -1272,6 +1307,8 @@ export const makeHostMaker = ({
       identifyType,
       listWithTypes,
       inspect,
+      // Worker observability
+      listWorkerTenants,
       // Graph
       getFormulaGraph,
     };

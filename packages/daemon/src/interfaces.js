@@ -401,6 +401,8 @@ export const HostInterface = M.interface('EndoHost', {
   listWithTypes: M.call().returns(M.promise()),
   // Formula inspection
   inspect: M.call(NameOrPathShape).returns(M.promise()),
+  // Worker observability
+  listWorkerTenants: M.call(NameOrPathShape).returns(M.promise()),
   // Get formula dependency graph snapshot for this agent's pet store
   getFormulaGraph: M.call().returns(M.promise()),
 });
