@@ -512,7 +512,7 @@ export const inventoryComponent = async (
     $children.className = 'pet-children';
     $wrapper.appendChild($children);
 
-    // Drop target for directories: accept drops to copy capabilities.
+    // Drop target: accept drops to copy (or move with Alt) capabilities.
     $row.addEventListener('dragover', e => {
       if (!e.dataTransfer) return;
       const hasEndoPetName = e.dataTransfer.types.includes(
@@ -520,14 +520,20 @@ export const inventoryComponent = async (
       );
       if (!hasEndoPetName) return;
       e.preventDefault();
-      e.dataTransfer.dropEffect = 'copy';
+      // Alt/Option key = move, otherwise copy.
+      e.dataTransfer.dropEffect = e.altKey ? 'move' : 'copy';
       $row.classList.add('drop-target');
+      if (e.altKey) {
+        $row.classList.add('drop-move');
+      } else {
+        $row.classList.remove('drop-move');
+      }
     });
     $row.addEventListener('dragleave', () => {
-      $row.classList.remove('drop-target');
+      $row.classList.remove('drop-target', 'drop-move');
     });
     $row.addEventListener('drop', e => {
-      $row.classList.remove('drop-target');
+      $row.classList.remove('drop-target', 'drop-move');
       if (!e.dataTransfer) return;
       const raw = e.dataTransfer.getData('application/x-endo-petname');
       if (!raw) return;
@@ -536,12 +542,25 @@ export const inventoryComponent = async (
         const sourcePath = JSON.parse(raw);
         const sourceName = sourcePath[sourcePath.length - 1];
         const targetPath = [...itemPath, sourceName];
+        const isMove = e.altKey;
         // Copy the capability into this directory.
-        E(powers)
-          .copy(sourcePath, targetPath)
-          .catch(err => {
+        const copyPromise = E(powers).copy(sourcePath, targetPath);
+        if (isMove) {
+          // Move = copy then remove source.
+          copyPromise
+            .then(() =>
+              E(powers).remove(
+                .../** @type {[string, ...string[]]} */ (sourcePath),
+              ),
+            )
+            .catch(err => {
+              console.error('[inventory] Drop move failed:', err);
+            });
+        } else {
+          copyPromise.catch(err => {
             console.error('[inventory] Drop copy failed:', err);
           });
+        }
       } catch {
         // Ignore malformed data.
       }

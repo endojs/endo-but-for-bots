@@ -3797,6 +3797,10 @@ button.btn-spinner::after {
   outline-offset: -2px;
   background: rgba(52, 152, 219, 0.1);
 }
+.pet-item-row.drop-move {
+  outline-color: var(--warning-color, #e67e22);
+  background: rgba(230, 126, 34, 0.1);
+}
 
 
 #chat-bar.has-content #chat-menu-button,
