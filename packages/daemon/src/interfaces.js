@@ -506,6 +506,12 @@ export const MountInterface = M.interface('EndoMount', {
   makeDirectory: M.call(PathArgShape).returns(M.promise()),
   // Search
   glob: M.call(M.string()).returns(M.promise()),
+  grep: M.call(M.string())
+    .optional(M.splitRecord({}, {
+      glob: M.string(),
+      maxResults: M.number(),
+    }))
+    .returns(M.promise()),
   // Attenuation
   readOnly: M.call().returns(M.remotable()),
   subDir: M.call(M.string()).returns(M.promise()),

@@ -517,6 +517,74 @@ const makeMountExo = ctx => {
       return harden(results);
     },
 
+    /**
+     * Search file contents for a pattern.
+     *
+     * @param {string} pattern - String or regex pattern to search for.
+     * @param {object} [opts]
+     * @param {string} [opts.glob] - Glob pattern to filter files
+     *   (default: all files recursively).
+     * @param {number} [opts.maxResults] - Max matches to return
+     *   (default: 1000).
+     * @returns {Promise<Array<{ file: string, line: number, text: string }>>}
+     */
+    async grep(pattern, opts = {}) {
+      assertNotRevoked();
+      await null;
+      const {
+        glob: globPattern = '**/*',
+        maxResults = 1000,
+      } = opts;
+
+      // First, find files matching the glob.
+      const globSegments = globPattern.split('/').filter(s => s.length > 0);
+      /** @type {string[]} */
+      const files = [];
+      await walkGlob(
+        currentDir,
+        globSegments,
+        '',
+        confinementRoot,
+        filePowers,
+        files,
+        GLOB_MAX_RESULTS,
+      );
+
+      const regex = new RegExp(pattern);
+      /** @type {Array<{ file: string, line: number, text: string }>} */
+      const matches = [];
+
+      for (const file of files) {
+        if (matches.length >= maxResults) break;
+        const filePath = filePowers.joinPath(currentDir, ...file.split('/'));
+        // Skip directories and binary files.
+        // eslint-disable-next-line no-await-in-loop
+        const isDir = await filePowers.isDirectory(filePath);
+        if (isDir) continue;
+        let content;
+        try {
+          // eslint-disable-next-line no-await-in-loop
+          content = await filePowers.readFileText(filePath);
+        } catch {
+          // Skip unreadable files (binary, permission errors).
+          continue;
+        }
+        const lines = content.split('\n');
+        for (let i = 0; i < lines.length; i += 1) {
+          if (matches.length >= maxResults) break;
+          if (regex.test(lines[i])) {
+            matches.push(harden({
+              file,
+              line: i + 1,
+              text: lines[i],
+            }));
+          }
+        }
+      }
+
+      return harden(matches);
+    },
+
     readOnly() {
       assertNotRevoked();
       if (readOnly) {

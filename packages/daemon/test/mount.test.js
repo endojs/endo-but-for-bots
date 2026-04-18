@@ -349,3 +349,95 @@ test('glob on revoked mount throws', async t => {
     message: /revoked/,
   });
 });
+
+// --- Grep tests ---
+
+test('grep finds matching lines in files', async t => {
+  const { tmpDir, filePowers } = await setup(t);
+  const { mount } = makeMount({
+    rootPath: tmpDir,
+    readOnly: false,
+    filePowers,
+  });
+
+  const results = await mount.grep('Hello');
+  t.is(results.length, 1);
+  t.is(results[0].file, 'hello.txt');
+  t.is(results[0].line, 1);
+  t.true(results[0].text.includes('Hello'));
+});
+
+test('grep searches recursively by default', async t => {
+  const { tmpDir, filePowers } = await setup(t);
+  const { mount } = makeMount({
+    rootPath: tmpDir,
+    readOnly: false,
+    filePowers,
+  });
+
+  // "Nested" is in sub/nested.txt, "deep" is in sub/deep/file.txt
+  const results = await mount.grep('Nested');
+  t.is(results.length, 1);
+  t.is(results[0].file, 'sub/nested.txt');
+});
+
+test('grep filters by glob pattern', async t => {
+  const { tmpDir, filePowers } = await setup(t);
+  const { mount } = makeMount({
+    rootPath: tmpDir,
+    readOnly: false,
+    filePowers,
+  });
+
+  // Search only .json files
+  const results = await mount.grep('\\{', { glob: '**/*.json' });
+  t.is(results.length, 1);
+  t.is(results[0].file, 'sub/data.json');
+});
+
+test('grep returns empty for no matches', async t => {
+  const { tmpDir, filePowers } = await setup(t);
+  const { mount } = makeMount({
+    rootPath: tmpDir,
+    readOnly: false,
+    filePowers,
+  });
+
+  const results = await mount.grep('nonexistent_string_xyz');
+  t.deepEqual(results, []);
+});
+
+test('grep respects maxResults', async t => {
+  const { tmpDir, filePowers } = await setup(t);
+
+  // Create a file with many lines.
+  const lines = Array.from({ length: 100 }, (_, i) => `match line ${i}`);
+  await fs.promises.writeFile(
+    path.join(tmpDir, 'many.txt'),
+    lines.join('\n'),
+    'utf-8',
+  );
+
+  const { mount } = makeMount({
+    rootPath: tmpDir,
+    readOnly: false,
+    filePowers,
+  });
+
+  const results = await mount.grep('match', { maxResults: 5 });
+  t.is(results.length, 5);
+});
+
+test('grep on revoked mount throws', async t => {
+  const { tmpDir, filePowers } = await setup(t);
+  const { mount, control } = makeMount({
+    rootPath: tmpDir,
+    readOnly: false,
+    filePowers,
+  });
+
+  control.revoke();
+  await t.throwsAsync(() => mount.grep('test'), {
+    message: /revoked/,
+  });
+});
