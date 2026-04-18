@@ -857,24 +857,47 @@ export const makeMailboxMaker = ({
       if (message === undefined) {
         throw new Error(`Invalid request, ${q(messageNumber)}`);
       }
-      const id = await E(directory).identify(...resolutionPath);
-      if (id === undefined) {
-        throw new TypeError(
-          `No formula exists for the pet name ${q(resolutionNameOrPath)}`,
+
+      const cmdMsgId = `cmd-resolve-${normalizedMessageNumber}-${Date.now()}`;
+      const cmdNumber = await recordCommand(
+        'resolve',
+        harden({
+          messageNumber: String(normalizedMessageNumber),
+          resolution: String(resolutionNameOrPath),
+        }),
+        cmdMsgId,
+      ).catch(() => undefined);
+
+      try {
+        const id = await E(directory).identify(...resolutionPath);
+        if (id === undefined) {
+          throw new TypeError(
+            `No formula exists for the pet name ${q(resolutionNameOrPath)}`,
+          );
+        }
+        // TODO validate shape of request
+        const req = /** @type {Request} */ (message);
+        const resolver = /** @type {ERef<Responder>} */ (
+          provide(req.resolverId, 'resolver')
         );
+        const externalizedId = await externalizeForMessage(
+          /** @type {FormulaIdentifier} */ (id),
+        );
+        await E(resolver).resolveWithId(externalizedId);
+        if (cmdNumber !== undefined) {
+          await recordCommandResult(cmdNumber, true, 'resolved', `${cmdMsgId}-result`)
+            .catch(() => {});
+        }
+      } catch (error) {
+        if (cmdNumber !== undefined) {
+          await recordCommandResult(
+            cmdNumber, false,
+            /** @type {Error} */ (error).message,
+            `${cmdMsgId}-result`,
+          ).catch(() => {});
+        }
+        throw error;
       }
-      // TODO validate shape of request
-      const req = /** @type {Request} */ (message);
-      const resolver = /** @type {ERef<Responder>} */ (
-        provide(req.resolverId, 'resolver')
-      );
-      // Externalize the ID so that a remote resolver (on a different
-      // daemon) can correctly internalize it.  For same-daemon
-      // resolvers the locator is internalized back to the local ID.
-      const externalizedId = await externalizeForMessage(
-        /** @type {FormulaIdentifier} */ (id),
-      );
-      await E(resolver).resolveWithId(externalizedId);
     };
 
     /** @type {Mail['reject']} */
@@ -889,6 +912,17 @@ export const makeMailboxMaker = ({
           `Cannot reject message ${q(messageNumber)} (type ${q(message.type)})`,
         );
       }
+
+      const cmdMsgId = `cmd-reject-${normalizedMessageNumber}-${Date.now()}`;
+      await recordCommand(
+        'reject',
+        harden({
+          messageNumber: String(normalizedMessageNumber),
+          reason,
+        }),
+        cmdMsgId,
+      ).catch(() => {});
+
       const rejection = harden(Promise.reject(harden(new Error(reason))));
       // request messages use a persisted resolver formula.
       const req = /** @type {Request} */ (message);
@@ -1093,6 +1127,19 @@ export const makeMailboxMaker = ({
       if (message === undefined) {
         throw new Error(`No such message with number ${q(messageNumber)}`);
       }
+
+      const cmdMsgId = `cmd-adopt-${normalizedMessageNumber}-${Date.now()}`;
+      const cmdNumber = await recordCommand(
+        'adopt',
+        harden({
+          messageNumber: String(normalizedMessageNumber),
+          edgeName,
+          petName: petNamePath.join('/'),
+        }),
+        cmdMsgId,
+      ).catch(() => undefined);
+
+      try {
       if (message.type === 'value') {
         if (edgeName !== 'value') {
           throw new Error(
@@ -1125,6 +1172,20 @@ export const makeMailboxMaker = ({
       }
       context.thisDiesIfThatDies(id);
       await E(directory).storeIdentifier(petNamePath, id);
+      if (cmdNumber !== undefined) {
+        await recordCommandResult(cmdNumber, true, `adopted as ${petNamePath.join('/')}`, `${cmdMsgId}-result`)
+          .catch(() => {});
+      }
+      } catch (error) {
+        if (cmdNumber !== undefined) {
+          await recordCommandResult(
+            cmdNumber, false,
+            /** @type {Error} */ (error).message,
+            `${cmdMsgId}-result`,
+          ).catch(() => {});
+        }
+        throw error;
+      }
     };
 
     /** @type {Mail['request']} */
