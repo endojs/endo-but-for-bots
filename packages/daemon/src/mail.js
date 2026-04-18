@@ -1111,6 +1111,16 @@ export const makeMailboxMaker = ({
       petNamesOrPaths,
       replyToMessageNumber,
     ) => {
+      const cmdMsgId = `cmd-send-${Date.now()}`;
+      await recordCommand(
+        'send',
+        harden({
+          to: String(toNameOrPath),
+          text: strings.join(' '),
+        }),
+        cmdMsgId,
+      ).catch(() => {});
+
       const toPath = namePathFrom(toNameOrPath);
       assertNames(edgeNames);
       assertUniqueEdgeNames(edgeNames);
@@ -1360,6 +1370,16 @@ export const makeMailboxMaker = ({
 
     /** @type {Mail['request']} */
     const request = async (toNameOrPath, description, responseName) => {
+      const cmdMsgId = `cmd-request-${Date.now()}`;
+      await recordCommand(
+        'request',
+        harden({
+          to: String(toNameOrPath),
+          description,
+        }),
+        cmdMsgId,
+      ).catch(() => {});
+
       const toPath = namePathFrom(toNameOrPath);
       // The response is stored under responseName, so it is a store
       // target (pet-name leaf); coerce+validate once and reuse.
