@@ -3751,6 +3751,31 @@ button.btn-spinner::after {
   display: block;
 }
 
+/* Command messages in transcript */
+.command-envelope {
+  opacity: 0.8;
+}
+.command-message {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: rgba(128, 128, 128, 0.1);
+  font-size: 0.85em;
+  font-family: monospace;
+}
+.command-message.success {
+  color: var(--success-color, #27ae60);
+}
+.command-message.error {
+  color: var(--error-color, #e74c3c);
+}
+.command-icon {
+  font-size: 1.1em;
+}
+
+
 #chat-bar.has-content #chat-menu-button,
 #chat-bar.command-mode #chat-menu-button {
   display: none;
