@@ -400,6 +400,26 @@ export const inventoryComponent = async (
     const $row = document.createElement('div');
     $row.className = 'pet-item-row';
 
+    // Make non-special items draggable.
+    if (!isSpecialName(name)) {
+      $row.draggable = true;
+      $row.addEventListener('dragstart', e => {
+        const petNamePath = itemPath.join('/');
+        if (e.dataTransfer) {
+          e.dataTransfer.setData('text/plain', petNamePath);
+          e.dataTransfer.setData(
+            'application/x-endo-petname',
+            JSON.stringify(itemPath),
+          );
+          e.dataTransfer.effectAllowed = 'copyMove';
+        }
+        $row.classList.add('dragging');
+      });
+      $row.addEventListener('dragend', () => {
+        $row.classList.remove('dragging');
+      });
+    }
+
     // Disclosure triangle
     const $disclosure = document.createElement('button');
     $disclosure.className = 'pet-disclosure';
@@ -441,6 +461,41 @@ export const inventoryComponent = async (
     const $children = document.createElement('div');
     $children.className = 'pet-children';
     $wrapper.appendChild($children);
+
+    // Drop target for directories: accept drops to copy capabilities.
+    $row.addEventListener('dragover', e => {
+      if (!e.dataTransfer) return;
+      const hasEndoPetName = e.dataTransfer.types.includes(
+        'application/x-endo-petname',
+      );
+      if (!hasEndoPetName) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'copy';
+      $row.classList.add('drop-target');
+    });
+    $row.addEventListener('dragleave', () => {
+      $row.classList.remove('drop-target');
+    });
+    $row.addEventListener('drop', e => {
+      $row.classList.remove('drop-target');
+      if (!e.dataTransfer) return;
+      const raw = e.dataTransfer.getData('application/x-endo-petname');
+      if (!raw) return;
+      e.preventDefault();
+      try {
+        const sourcePath = JSON.parse(raw);
+        const sourceName = sourcePath[sourcePath.length - 1];
+        const targetPath = [...itemPath, sourceName];
+        // Copy the capability into this directory.
+        E(powers)
+          .copy(sourcePath, targetPath)
+          .catch(err => {
+            console.error('[inventory] Drop copy failed:', err);
+          });
+      } catch {
+        // Ignore malformed data.
+      }
+    });
 
     if (channelMode) {
       // Newest channels at top (reordered after type detection)

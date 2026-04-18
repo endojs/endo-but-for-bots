@@ -3751,6 +3751,17 @@ button.btn-spinner::after {
   display: block;
 }
 
+/* Inventory drag and drop */
+.pet-item-row.dragging {
+  opacity: 0.4;
+}
+.pet-item-row.drop-target {
+  outline: 2px solid var(--accent-color, #3498db);
+  outline-offset: -2px;
+  background: rgba(52, 152, 219, 0.1);
+}
+
+
 #chat-bar.has-content #chat-menu-button,
 #chat-bar.command-mode #chat-menu-button {
   display: none;
