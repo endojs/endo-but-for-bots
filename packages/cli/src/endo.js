@@ -381,10 +381,11 @@ export const main = async rawArgs => {
     .option('-f,--follow', 'Follow updates')
     .option('-j,--json', 'JSON format output')
     .option('-v,--verbose', 'Provide more detailed output')
+    .option('-t,--types', 'Show formula types for each entry')
     .action(async (directory, cmd) => {
-      const { follow, json, verbose } = cmd.opts();
+      const { follow, json, verbose, types } = cmd.opts();
       const { list } = await import('./commands/list.js');
-      return list({ directory, follow, json, verbose });
+      return list({ directory, follow, json, verbose, types });
     });
 
   program

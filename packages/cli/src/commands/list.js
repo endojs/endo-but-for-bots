@@ -34,7 +34,7 @@ const pad = (fieldVal, width, minPad = 2) => {
   return ' '.repeat(spaces);
 };
 
-export const list = async ({ directory, follow, json, verbose }) =>
+export const list = async ({ directory, follow, json, verbose, types }) =>
   withEndoHost({ os, process }, async ({ host: agent }) => {
     await null;
     if (directory !== undefined) {
@@ -54,6 +54,29 @@ export const list = async ({ directory, follow, json, verbose }) =>
             console.log(`+${change.add}`);
           } else if (change.remove !== undefined) {
             console.log(`-${change.remove}`);
+          }
+        }
+      }
+    } else if (types) {
+      const entries = await E(agent).listWithTypes();
+      if (json) {
+        console.log(JSON.stringify(entries));
+      } else {
+        // Group by type.
+        /** @type {Map<string, string[]>} */
+        const groups = new Map();
+        for (const { name, type } of entries) {
+          let group = groups.get(type);
+          if (!group) {
+            group = [];
+            groups.set(type, group);
+          }
+          group.push(name);
+        }
+        for (const [type, names] of [...groups.entries()].sort()) {
+          console.log(`[${type}]`);
+          for (const name of names.sort()) {
+            console.log(`  ${name}`);
           }
         }
       }
