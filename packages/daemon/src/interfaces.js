@@ -648,6 +648,25 @@ export const HttpClientControlInterface = M.interface('EndoHttpClientControl', {
 
 // #endregion
 
+// #region Webhook
+
+export const WebhookEndpointInterface = M.interface('EndoWebhookEndpoint', {
+  url: M.call().returns(M.string()),
+  secret: M.call().returns(M.string()),
+  disable: M.call().returns(M.undefined()),
+  enable: M.call().returns(M.undefined()),
+  help: M.call().returns(M.string()),
+});
+
+export const WebhookControlInterface = M.interface('EndoWebhookControl', {
+  setMaxPayloadBytes: M.call(M.number()).returns(M.undefined()),
+  setRateLimit: M.call(M.number()).returns(M.undefined()),
+  revoke: M.call().returns(M.undefined()),
+  help: M.call().returns(M.string()),
+});
+
+// #endregion
+
 export const EndoInterface = M.interface('Endo', {
   help: M.call().optional(M.string()).returns(M.string()),
   ping: M.call().returns(M.promise()),
