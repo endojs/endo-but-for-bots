@@ -7,7 +7,11 @@ import { q } from '@endo/errors';
 import { makeExo } from '@endo/exo';
 
 import { mountHelp, mountFileHelp, makeHelp } from './help-text.js';
-import { MountInterface, MountFileInterface } from './interfaces.js';
+import {
+  MountInterface,
+  MountControlInterface,
+  MountFileInterface,
+} from './interfaces.js';
 import { makeIteratorRef } from './reader-ref.js';
 
 /**
@@ -156,6 +160,7 @@ harden(isConfinedPath);
  * @property {FilePowers} filePowers
  * @property {string} description
  * @property {((mount: object) => Promise<object>) | undefined} snapshotFn
+ * @property {{ revoked: boolean }} [revokedRef] - Shared revocation state.
  */
 
 /**
@@ -172,9 +177,17 @@ const makeMountExo = ctx => {
     filePowers,
     description,
     snapshotFn,
+    revokedRef,
   } = ctx;
 
+  const assertNotRevoked = () => {
+    if (revokedRef && revokedRef.revoked) {
+      throw new Error('Mount has been revoked');
+    }
+  };
+
   const assertWritable = () => {
+    assertNotRevoked();
     if (readOnly) {
       throw new Error('Mount is read-only');
     }
@@ -196,6 +209,7 @@ const makeMountExo = ctx => {
     help,
 
     async has(...pathSegments) {
+      assertNotRevoked();
       await null;
       if (pathSegments.length === 0) {
         return true;
@@ -209,6 +223,7 @@ const makeMountExo = ctx => {
     },
 
     async list(...pathSegments) {
+      assertNotRevoked();
       await null;
       const target = resolve(pathSegments);
       await assertConfined(target, confinementRoot, filePowers);
@@ -225,6 +240,7 @@ const makeMountExo = ctx => {
     },
 
     async lookup(pathArg) {
+      assertNotRevoked();
       await null;
       const segments = typeof pathArg === 'string' ? [pathArg] : pathArg;
       const target = resolve(segments);
@@ -243,6 +259,7 @@ const makeMountExo = ctx => {
     },
 
     async readText(pathArg) {
+      assertNotRevoked();
       await null;
       const segments = typeof pathArg === 'string' ? [pathArg] : pathArg;
       const target = resolve(segments);
@@ -251,6 +268,7 @@ const makeMountExo = ctx => {
     },
 
     async maybeReadText(pathArg) {
+      assertNotRevoked();
       await null;
       const segments = typeof pathArg === 'string' ? [pathArg] : pathArg;
       const target = resolve(segments);
@@ -263,6 +281,7 @@ const makeMountExo = ctx => {
     },
 
     async writeText(pathArg, content) {
+      assertNotRevoked();
       await null;
       assertWritable();
       const segments = typeof pathArg === 'string' ? [pathArg] : pathArg;
@@ -274,6 +293,7 @@ const makeMountExo = ctx => {
     },
 
     async remove(pathArg) {
+      assertNotRevoked();
       await null;
       assertWritable();
       const segments = typeof pathArg === 'string' ? [pathArg] : pathArg;
@@ -283,6 +303,7 @@ const makeMountExo = ctx => {
     },
 
     async move(fromArg, toArg) {
+      assertNotRevoked();
       await null;
       assertWritable();
       const from = resolve(typeof fromArg === 'string' ? [fromArg] : fromArg);
@@ -293,6 +314,7 @@ const makeMountExo = ctx => {
     },
 
     async makeDirectory(pathArg) {
+      assertNotRevoked();
       await null;
       assertWritable();
       const segments = typeof pathArg === 'string' ? [pathArg] : pathArg;
@@ -302,6 +324,7 @@ const makeMountExo = ctx => {
     },
 
     readOnly() {
+      assertNotRevoked();
       if (readOnly) {
         return this; // eslint-disable-line no-invalid-this
       }
@@ -313,6 +336,7 @@ const makeMountExo = ctx => {
     },
 
     async subDir(subpath) {
+      assertNotRevoked();
       await null;
       // Validate and resolve segments.
       const segments = subpath.split('/').filter(s => s.length > 0);
@@ -340,6 +364,7 @@ const makeMountExo = ctx => {
     },
 
     async snapshot() {
+      assertNotRevoked();
       if (!snapshotFn) {
         throw new Error('snapshot() is not available on this mount');
       }
@@ -430,8 +455,23 @@ harden(makeMountFileExo);
  * @param {((mount: object) => Promise<object>) | undefined} [opts.snapshotFn]
  * @returns {object}
  */
+/**
+ * Create a mount exo backed by a filesystem directory.
+ *
+ * Returns `{ mount, control }` where `mount` is the capability facet
+ * and `control` is the caretaker facet for revocation.
+ *
+ * @param {object} opts
+ * @param {string} opts.rootPath
+ * @param {boolean} opts.readOnly
+ * @param {FilePowers} opts.filePowers
+ * @param {((mount: object) => Promise<object>) | undefined} [opts.snapshotFn]
+ * @returns {{ mount: object, control: object }}
+ */
 export const makeMount = ({ rootPath, readOnly, filePowers, snapshotFn }) => {
   const prefix = readOnly ? 'Read-only mount' : 'Mount';
+  const revokedRef = { revoked: false };
+
   /** @type {MountContext} */
   const ctx = {
     currentDir: rootPath,
@@ -440,8 +480,23 @@ export const makeMount = ({ rootPath, readOnly, filePowers, snapshotFn }) => {
     filePowers,
     description: `${prefix} at ${rootPath}`,
     snapshotFn,
+    revokedRef,
   };
 
-  return makeMountExo(ctx);
+  const mount = makeMountExo(ctx);
+
+  const control = makeExo('EndoMountControl', MountControlInterface, {
+    revoke() {
+      revokedRef.revoked = true;
+    },
+    help() {
+      return (
+        `MountControl manages a mount at ${rootPath}. ` +
+        `Methods: revoke(), help().`
+      );
+    },
+  });
+
+  return harden({ mount, control });
 };
 harden(makeMount);

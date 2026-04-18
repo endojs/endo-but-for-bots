@@ -513,6 +513,11 @@ export const MountInterface = M.interface('EndoMount', {
   help: M.call().returns(M.string()),
 });
 
+export const MountControlInterface = M.interface('EndoMountControl', {
+  revoke: M.call().returns(),
+  help: M.call().returns(M.string()),
+});
+
 export const MountFileInterface = M.interface('EndoMountFile', {
   text: M.call().returns(M.promise()),
   streamBase64: M.call().returns(M.remotable()),

@@ -2199,14 +2199,18 @@ const makeDaemonCore = async (
         const { value } = await checkinTree(mount, deferredTasks);
         return value;
       };
-      return makeMount({
+      const { mount, control } = makeMount({
         rootPath: mountPath,
         readOnly,
         filePowers,
         snapshotFn,
       });
+      context.onCancel(() => {
+        control.revoke();
+      });
+      return mount;
     },
-    'scratch-mount': async ({ readOnly }, _context, _id, formulaNumber) => {
+    'scratch-mount': async ({ readOnly }, context, _id, formulaNumber) => {
       const rootPath = filePowers.joinPath(
         persistencePowers.statePath,
         'mounts',
@@ -2219,7 +2223,16 @@ const makeDaemonCore = async (
         const { value } = await checkinTree(mount, deferredTasks);
         return value;
       };
-      return makeMount({ rootPath, readOnly, filePowers, snapshotFn });
+      const { mount, control } = makeMount({
+        rootPath,
+        readOnly,
+        filePowers,
+        snapshotFn,
+      });
+      context.onCancel(() => {
+        control.revoke();
+      });
+      return mount;
     },
     lookup: ({ hub, path }, context) =>
       makeLookup(
