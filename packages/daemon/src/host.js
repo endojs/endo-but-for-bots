@@ -1181,6 +1181,24 @@ export const makeHostMaker = ({
       return getFormulaGraphSnapshot(seedIds);
     };
 
+    /**
+     * Inspect the formula for a pet-named value.
+     * Returns the formula type and all formula fields.
+     *
+     * @param {NameOrPath} petNameOrPath
+     * @returns {Promise<{ id: string, formula: object } | undefined>}
+     */
+    const inspect = async petNameOrPath => {
+      const namePath = namePathFrom(petNameOrPath);
+      const id = await E(directory).identify(...namePath);
+      if (id === undefined) {
+        return undefined;
+      }
+      const formulaId = /** @type {FormulaIdentifier} */ (id);
+      const formula = await getFormulaForId(formulaId);
+      return harden({ id: formulaId, formula });
+    };
+
     /** @type {EndoHost} */
     const host = {
       // Directory
@@ -1253,6 +1271,7 @@ export const makeHostMaker = ({
       // Type introspection
       identifyType,
       listWithTypes,
+      inspect,
       // Graph
       getFormulaGraph,
     };

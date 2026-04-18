@@ -389,6 +389,16 @@ export const main = async rawArgs => {
     });
 
   program
+    .command('inspect <name>')
+    .description('inspect the formula for a pet-named value')
+    .option('-j,--json', 'JSON format output')
+    .action(async (name, cmd) => {
+      const { json } = cmd.opts();
+      const { inspect: inspectCmd } = await import('./commands/inspect.js');
+      return inspectCmd({ name, json });
+    });
+
+  program
     .command('remove [names...]')
     .alias('rm')
     .description('forget a named value')
