@@ -388,6 +388,16 @@ export const main = async rawArgs => {
     });
 
   program
+    .command('workers')
+    .description('list workers and their tenanted capabilities')
+    .option('-j,--json', 'JSON format output')
+    .action(async cmd => {
+      const { json } = cmd.opts();
+      const { workers: workersCmd } = await import('./commands/workers.js');
+      return workersCmd({ json });
+    });
+
+  program
     .command('remove [names...]')
     .alias('rm')
     .description('forget a named value')
