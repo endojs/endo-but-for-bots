@@ -5,7 +5,7 @@
  * @import { OcapnPublicKey, Cryptography } from '../cryptography.js'
  * @import { OcapnCodec } from '../codec-interface.js'
  * @import { SturdyRef } from './sturdyrefs.js'
- * @import { Client, Connection, InternalSession, LocationId, Logger, NetLayer, NetlayerHandlers, PendingSession, SelfIdentity, Session, SessionManager, SocketOperations, SwissNum } from './types.js'
+ * @import { Client, Connection, InternalSession, LocationId, Logger, NetLayer, NetlayerHandlers, NetworkSession, PendingSession, SelfIdentity, Session, SessionManager, SocketOperations, SwissNum } from './types.js'
  */
 
 import harden from '@endo/harden';
@@ -15,7 +15,11 @@ import { makeCryptography } from '../cryptography.js';
 import { makeGrantTracker } from './grant-tracker.js';
 import { makeSturdyRefTracker, enlivenSturdyRef } from './sturdyrefs.js';
 import { locationToLocationId, toHex } from './util.js';
-import { handleHandshakeMessageData, sendHandshake } from './handshake.js';
+import {
+  handleHandshakeMessageData,
+  makeSession,
+  sendHandshake,
+} from './handshake.js';
 import { makeOcapn } from './ocapn.js';
 
 /**
@@ -237,6 +241,59 @@ export const makeClient = ({
    * @returns {Promise<InternalSession>}
    * Establishes a new session by initiating a connection.
    */
+  /**
+   * Create an InternalSession from a network-provided NetworkSession.
+   *
+   * This bridges the OcapnNetwork.provideSession() path to the
+   * existing session infrastructure.  The network has already
+   * authenticated the peer; we wrap its write/close into a
+   * synthetic Connection and set up CapTP over it.
+   *
+   * @param {NetworkSession} networkSession
+   * @param {NetLayer} netlayer
+   * @returns {InternalSession}
+   */
+  const makeInternalSessionFromNetwork = (networkSession, netlayer) => {
+    // Build a synthetic Connection backed by the NetworkSession.
+    /** @type {Connection} */
+    const connection = harden({
+      netlayer,
+      isOutgoing: networkSession.isInitiator,
+      write: bytes => networkSession.write(bytes),
+      end: () => networkSession.close(),
+      isDestroyed: false,
+    });
+
+    // Self identity: use the network session's local key ID to
+    // construct a minimal SelfIdentity.  The network has already
+    // proven our identity to the peer during its handshake.
+    const selfIdentity = makeSelfIdentity(netlayer.location);
+
+    const peerPublicKey = cryptography.makeOcapnPublicKey(
+      networkSession.remotePublicKeyBytes,
+    );
+    const peerLocation = networkSession.remoteLocation;
+    const peerLocationSig = /** @type {import('../codecs/components.js').OcapnSignature} */ (
+      new ArrayBuffer(0)
+    );
+
+    const ocapn = prepareOcapn(
+      connection,
+      networkSession.sessionId,
+      peerLocation,
+    );
+
+    return makeSession({
+      id: networkSession.sessionId,
+      selfIdentity,
+      peerLocation,
+      peerPublicKey,
+      peerLocationSig,
+      ocapn,
+      connection,
+    });
+  };
+
   const establishSession = async location => {
     // Support both the new `network` field and the legacy `transport` field.
     const networkId = location.network ?? location.transport;
@@ -248,6 +305,25 @@ export const makeClient = ({
     if (destinationLocationId === netlayer.locationId) {
       throw Error('Refusing to connect to self');
     }
+
+    // If the network provides its own session establishment, use it.
+    // This is the path for networks like OCapN-Noise that manage
+    // the full session lifecycle (connect + authenticate + encrypt).
+    if (netlayer.provideSession) {
+      const networkSession = await netlayer.provideSession(location);
+      const session = makeInternalSessionFromNetwork(
+        networkSession,
+        netlayer,
+      );
+      sessionManager.resolveSession(
+        destinationLocationId,
+        session.connection,
+        session,
+      );
+      return Promise.resolve(session);
+    }
+
+    // Legacy path: connect, then handshake.
     // OcapnNetwork.connect returns Promise<Connection>;
     // NetLayer.connect returns Connection synchronously.
     // Await handles both.

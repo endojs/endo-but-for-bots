@@ -56,6 +56,12 @@
  *   Optional custom handler for incoming handshake data.  Returns true
  *   if the data was consumed as a handshake message, false to let OCapN
  *   core handle it with the default op:start-session handler.
+ * @property {((location: OcapnLocation) => Promise<NetworkSession>)} [provideSession] -
+ *   Optional method that returns a fully authenticated session.
+ *   When present, `establishSession` skips the connect+handshake
+ *   flow and uses the network-provided session directly.
+ *   This is the target interface for networks like OCapN-Noise
+ *   that manage their own session lifecycle.
  */
 
 /**
@@ -68,6 +74,8 @@
  * @property {SessionId} sessionId - Unique session identifier.
  * @property {PublicKeyId} localKeyId - Our key ID for this session.
  * @property {PublicKeyId} remoteKeyId - Peer's key ID for this session.
+ * @property {ArrayBufferLike} remotePublicKeyBytes - Peer's raw public
+ *   key bytes (needed to construct OcapnPublicKey for session).
  * @property {OcapnLocation} remoteLocation - Peer's location.
  * @property {(bytes: Uint8Array) => void} write - Send bytes to peer.
  * @property {() => void} close - Terminate session.
