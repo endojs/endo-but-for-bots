@@ -748,6 +748,63 @@ export const makeMailboxMaker = ({
     };
 
     /**
+     * Record a command in the agent's own inbox.
+     * Returns the message number for linking the result.
+     *
+     * @param {string} commandName
+     * @param {Record<string, unknown>} args
+     * @param {string} messageId
+     * @returns {Promise<bigint>}
+     */
+    const recordCommand = async (commandName, args, messageId) => {
+      /** @type {import('./types.js').CommandMessage & { from: FormulaIdentifier, to: FormulaIdentifier }} */
+      const message = harden({
+        type: /** @type {const} */ ('command'),
+        messageId: /** @type {FormulaNumber} */ (messageId),
+        commandName,
+        args,
+        strings: [`${commandName}`],
+        names: [],
+        ids: [],
+        from: selfId,
+        to: selfId,
+      });
+      await deliver(message);
+      // Return the message number assigned by deliver (nextMessageNumber - 1).
+      return nextMessageNumber - 1n;
+    };
+
+    /**
+     * Record a command result in the agent's own inbox.
+     *
+     * @param {bigint} commandMessageNumber - The command's message number.
+     * @param {boolean} success
+     * @param {string} summary
+     * @param {string} resultMessageId
+     */
+    const recordCommandResult = async (
+      commandMessageNumber,
+      success,
+      summary,
+      resultMessageId,
+    ) => {
+      /** @type {import('./types.js').CommandResultMessage & { from: FormulaIdentifier, to: FormulaIdentifier }} */
+      const message = harden({
+        type: /** @type {const} */ ('command-result'),
+        messageId: /** @type {FormulaNumber} */ (resultMessageId),
+        replyTo: /** @type {FormulaNumber} */ (String(commandMessageNumber)),
+        success,
+        summary,
+        strings: [summary],
+        names: [],
+        ids: [],
+        from: selfId,
+        to: selfId,
+      });
+      await deliver(message);
+    };
+
+    /**
      * Resolve a formula identifier to its handle.
      * If the id points to an agent (host or guest formula), follows the
      * formula's handle field to provide the actual handle.
@@ -985,8 +1042,34 @@ export const makeMailboxMaker = ({
       if (message === undefined) {
         throw new Error(`Invalid request number ${messageNumber}`);
       }
+      // Record the command in the agent's inbox.
+      const cmdMsgId = `cmd-dismiss-${normalizedMessageNumber}-${Date.now()}`;
+      const cmdNumber = await recordCommand(
+        'dismiss',
+        harden({ messageNumber: String(normalizedMessageNumber) }),
+        cmdMsgId,
+      ).catch(() => undefined);
+
       const { dismisser } = E.get(message);
-      return E(dismisser).dismiss();
+      try {
+        await E(dismisser).dismiss();
+        if (cmdNumber !== undefined) {
+          const resultId = `${cmdMsgId}-result`;
+          await recordCommandResult(cmdNumber, true, 'dismissed', resultId)
+            .catch(() => {});
+        }
+      } catch (error) {
+        if (cmdNumber !== undefined) {
+          const resultId = `${cmdMsgId}-result`;
+          await recordCommandResult(
+            cmdNumber,
+            false,
+            /** @type {Error} */ (error).message,
+            resultId,
+          ).catch(() => {});
+        }
+        throw error;
+      }
     };
 
     /** @type {Mail['dismissAll']} */
