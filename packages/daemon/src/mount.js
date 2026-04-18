@@ -15,8 +15,53 @@ import {
 import { makeIteratorRef } from './reader-ref.js';
 
 /**
+ * Defense-in-depth: path segments that are always denied regardless of
+ * mount root.  Prevents accidental exposure of sensitive directories
+ * even when the mount root contains them.
+ *
+ * Checked against the lowercased segment for case-insensitive matching
+ * on case-insensitive filesystems.
+ */
+const DENIED_SEGMENTS = harden(
+  new Set([
+    // SSH keys and config
+    '.ssh',
+    // Cloud provider credentials
+    '.aws',
+    '.azure',
+    '.gcloud',
+    '.config', // contains gcloud, docker, npm tokens, etc.
+    // GPG/PGP keys
+    '.gnupg',
+    // Password managers
+    '.password-store',
+    // Docker credentials
+    '.docker',
+    // Node.js/npm auth tokens
+    '.npmrc',
+    // Environment files (common secrets location)
+    '.env',
+    '.env.local',
+    '.env.production',
+    // Kubernetes config
+    '.kube',
+    // Terraform state (may contain secrets)
+    '.terraform',
+  ]),
+);
+
+/**
+ * Check if a path segment is in the deny list.
+ *
+ * @param {string} segment
+ * @returns {boolean}
+ */
+const isDeniedSegment = segment => DENIED_SEGMENTS.has(segment.toLowerCase());
+harden(isDeniedSegment);
+
+/**
  * Validate a single path segment.
- * Rejects '/', '\', '\0', and empty strings.
+ * Rejects '/', '\', '\0', empty strings, and denied segments.
  *
  * @param {string} segment
  */
@@ -35,6 +80,9 @@ const assertValidSegment = segment => {
     throw new Error(
       `Path segment must not contain '/', '\\', or '\\0': ${q(segment)}`,
     );
+  }
+  if (isDeniedSegment(segment)) {
+    throw new Error(`Access denied: ${q(segment)} is a restricted path`);
   }
 };
 harden(assertValidSegment);
@@ -230,6 +278,10 @@ const makeMountExo = ctx => {
       const entries = await filePowers.readDirectory(target);
       const confined = [];
       for (const entry of entries.sort()) {
+        if (isDeniedSegment(entry)) {
+          // eslint-disable-next-line no-continue
+          continue;
+        }
         const entryPath = filePowers.joinPath(target, entry);
         // eslint-disable-next-line no-await-in-loop
         if (await isConfinedPath(entryPath, confinementRoot, filePowers)) {

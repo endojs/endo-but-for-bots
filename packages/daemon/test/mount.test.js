@@ -148,6 +148,89 @@ test('revocation propagates to subDir mounts', async t => {
   });
 });
 
+test('deny patterns block access to sensitive directories', async t => {
+  const { tmpDir, filePowers } = await setup(t);
+
+  // Create a .ssh directory in the mount root.
+  await fs.promises.mkdir(path.join(tmpDir, '.ssh'), { recursive: true });
+  await fs.promises.writeFile(
+    path.join(tmpDir, '.ssh', 'id_rsa'),
+    'PRIVATE KEY',
+    'utf-8',
+  );
+  // Create .env file.
+  await fs.promises.writeFile(
+    path.join(tmpDir, '.env'),
+    'SECRET=value',
+    'utf-8',
+  );
+
+  const { mount } = makeMount({
+    rootPath: tmpDir,
+    readOnly: false,
+    filePowers,
+  });
+
+  // Direct access to denied segments throws.
+  await t.throwsAsync(() => mount.readText(['.ssh', 'id_rsa']), {
+    message: /restricted/,
+  });
+  await t.throwsAsync(() => mount.readText('.env'), {
+    message: /restricted/,
+  });
+  await t.throwsAsync(() => mount.has('.ssh'), {
+    message: /restricted/,
+  });
+  await t.throwsAsync(() => mount.lookup('.aws'), {
+    message: /restricted/,
+  });
+
+  // list() filters out denied segments.
+  const entries = await mount.list();
+  t.false(entries.includes('.ssh'));
+  t.false(entries.includes('.env'));
+  t.true(entries.includes('hello.txt'));
+  t.true(entries.includes('sub'));
+});
+
+test('deny patterns are case-insensitive', async t => {
+  const { tmpDir, filePowers } = await setup(t);
+  const { mount } = makeMount({
+    rootPath: tmpDir,
+    readOnly: false,
+    filePowers,
+  });
+
+  // Mixed case should also be denied.
+  await t.throwsAsync(() => mount.readText(['.SSH', 'id_rsa']), {
+    message: /restricted/,
+  });
+  await t.throwsAsync(() => mount.readText('.Env'), {
+    message: /restricted/,
+  });
+});
+
+test('deny patterns do not block normal dotfiles', async t => {
+  const { tmpDir, filePowers } = await setup(t);
+
+  // Create a normal dotfile that's not in the deny list.
+  await fs.promises.writeFile(
+    path.join(tmpDir, '.gitignore'),
+    'node_modules/',
+    'utf-8',
+  );
+
+  const { mount } = makeMount({
+    rootPath: tmpDir,
+    readOnly: false,
+    filePowers,
+  });
+
+  // .gitignore is allowed.
+  const text = await mount.readText('.gitignore');
+  t.is(text, 'node_modules/');
+});
+
 test('control.help() returns documentation', async t => {
   const { tmpDir, filePowers } = await setup(t);
   const { control } = makeMount({
