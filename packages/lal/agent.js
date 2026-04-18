@@ -879,19 +879,41 @@ export const spawnWorkerLoop = async (powers, context, workerEnv) => {
    * @param {string} leafMessageId
    * @returns {Promise<ChatMessage[]>}
    */
+  /**
+   * Assemble the full LLM transcript by walking the chain from leaf to root.
+   *
+   * If a node in the chain is missing (data corruption, storage failure),
+   * logs a warning and returns the partial transcript from the break point
+   * onward.  Callers can check the returned `broken` flag.
+   *
+   * @param {string} leafMessageId
+   * @returns {Promise<{ messages: ChatMessage[], broken: boolean, brokenAt: string | null }>}
+   */
   const assembleTranscript = async leafMessageId => {
     /** @type {ChatMessage[][]} */
     const chain = [];
     /** @type {string | null} */
     let current = leafMessageId;
+    let broken = false;
+    /** @type {string | null} */
+    let brokenAt = null;
     while (current !== null) {
+      // eslint-disable-next-line no-await-in-loop
       const node = await getNode(current);
-      if (node === undefined) break;
+      if (node === undefined) {
+        console.warn(
+          `[transcript] Broken chain: missing node ${current} ` +
+            `(walking from ${leafMessageId})`,
+        );
+        broken = true;
+        brokenAt = current;
+        break;
+      }
       chain.push(node.messages);
       current = node.parentMessageId;
     }
     chain.reverse();
-    return chain.flat();
+    return harden({ messages: chain.flat(), broken, brokenAt });
   };
 
   /**
@@ -1151,7 +1173,7 @@ export const spawnWorkerLoop = async (powers, context, workerEnv) => {
         // Prepend transcript depth to the first string fragment
         let depthStrings = strings;
         if (activeLeafNode !== null) {
-          const transcript = await assembleTranscript(activeLeafNode.messageId);
+          const { messages: transcript } = await assembleTranscript(activeLeafNode.messageId);
           const depth = computeDepth(transcript);
           if (depthStrings.length !== 0) {
             depthStrings = [
@@ -1338,7 +1360,14 @@ export const spawnWorkerLoop = async (powers, context, workerEnv) => {
     let continueLoop = true;
     while (continueLoop) {
       // Assemble the full transcript from the chain
-      const transcript = await assembleTranscript(leafNode.messageId);
+      const { messages: transcript, broken } = await assembleTranscript(leafNode.messageId);
+
+      if (broken) {
+        console.warn(
+          `[lal] Broken transcript chain for ${leafNode.messageId}; ` +
+            `continuing with partial context`,
+        );
+      }
 
       console.log(
         `[lal] ${JSON.stringify(transcript[transcript.length - 1], null, 2)}`,
@@ -1595,8 +1624,8 @@ export const spawnWorkerLoop = async (powers, context, workerEnv) => {
           }
         }
 
-        const transcriptLength = (await assembleTranscript(turnNode.messageId))
-          .length;
+        const { messages: assembledMessages } = await assembleTranscript(turnNode.messageId);
+        const transcriptLength = assembledMessages.length;
         console.log(
           `[lal] Transcript chain has ${transcriptLength} messages after processing`,
         );
