@@ -222,7 +222,7 @@ export const makeClient = ({
    * @returns {Promise<InternalSession>}
    * Establishes a new session by initiating a connection.
    */
-  const establishSession = location => {
+  const establishSession = async location => {
     // Support both the new `network` field and the legacy `transport` field.
     const networkId = location.network ?? location.transport;
     const netlayer = networks.get(networkId);
@@ -233,7 +233,10 @@ export const makeClient = ({
     if (destinationLocationId === netlayer.locationId) {
       throw Error('Refusing to connect to self');
     }
-    const connection = netlayer.connect(location);
+    // OcapnNetwork.connect returns Promise<Connection>;
+    // NetLayer.connect returns Connection synchronously.
+    // Await handles both.
+    const connection = await netlayer.connect(location);
     const selfIdentity = getSelfIdentityForConnection(connection);
     // Send handshake for outgoing connections.
     // If the network provides its own handshake, use it; otherwise
