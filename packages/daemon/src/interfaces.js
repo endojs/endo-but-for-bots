@@ -492,6 +492,8 @@ const PathSegmentsShape = M.arrayOf(M.string());
 const PathArgShape = M.or(M.string(), PathSegmentsShape);
 
 export const MountInterface = M.interface('EndoMount', {
+  // Metadata
+  stat: M.call(PathArgShape).returns(M.promise()),
   // ReadableTree-compatible surface
   has: M.call().rest(PathSegmentsShape).returns(M.promise()),
   list: M.call().rest(PathSegmentsShape).returns(M.promise()),

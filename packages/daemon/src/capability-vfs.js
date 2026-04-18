@@ -26,23 +26,12 @@ export const makeCapabilityVFS = mount => {
       if (!exists) {
         throw new Error(`ENOENT: no such file or directory: ${filePath}`);
       }
-      // Try to list — if it succeeds, it's a directory.
-      try {
-        await E(mount).list(...segments);
-        return harden({
-          size: 0,
-          mtime: new Date().toISOString(),
-          type: /** @type {const} */ ('directory'),
-        });
-      } catch {
-        // Not a directory — assume file.
-        const text = await E(mount).readText(segments);
-        return harden({
-          size: text.length,
-          mtime: new Date().toISOString(),
-          type: /** @type {const} */ ('file'),
-        });
-      }
+      const mountStat = await E(mount).stat(segments);
+      return harden({
+        size: mountStat.size,
+        mtime: new Date().toISOString(),
+        type: /** @type {'file' | 'directory'} */ (mountStat.type),
+      });
     },
 
     async readFile(filePath) {
@@ -105,27 +94,15 @@ export const makeCapabilityVFS = mount => {
         async *[Symbol.asyncIterator]() {
           const entries = await E(mount).list(...segments);
           for (const name of entries) {
+            const subSegments = [...segments, name];
+            // eslint-disable-next-line no-await-in-loop
+            const entryStat = await E(mount).stat(subSegments);
             /** @type {VFSDirEntry} */
-            let entry;
-            try {
-              // eslint-disable-next-line no-await-in-loop
-              const subSegments = [...segments, name];
-              // eslint-disable-next-line no-await-in-loop
-              const subEntries = await E(mount).list(...subSegments);
-              // If list succeeds, it's a directory.
-              void subEntries;
-              entry = harden({
-                name,
-                type: /** @type {const} */ ('directory'),
-                size: 0,
-              });
-            } catch {
-              entry = harden({
-                name,
-                type: /** @type {const} */ ('file'),
-                size: 0,
-              });
-            }
+            const entry = harden({
+              name,
+              type: /** @type {'file' | 'directory'} */ (entryStat.type),
+              size: entryStat.size,
+            });
             yield entry;
 
             // Recurse if requested and entry is a directory.

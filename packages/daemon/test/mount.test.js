@@ -101,6 +101,23 @@ test('makeMount returns mount and control', async t => {
   t.is(typeof control.help, 'function');
 });
 
+test('stat returns file and directory info', async t => {
+  const { tmpDir, filePowers } = await setup(t);
+  const { mount } = makeMount({
+    rootPath: tmpDir,
+    readOnly: false,
+    filePowers,
+  });
+
+  const fileStat = await mount.stat('hello.txt');
+  t.is(fileStat.type, 'file');
+  t.true(fileStat.size > 0);
+
+  const dirStat = await mount.stat('sub');
+  t.is(dirStat.type, 'directory');
+  t.is(dirStat.size, 0);
+});
+
 test('mount reads files before revocation', async t => {
   const { tmpDir, filePowers } = await setup(t);
   const { mount } = makeMount({

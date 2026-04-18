@@ -380,6 +380,20 @@ const makeMountExo = ctx => {
   const mount = makeExo('EndoMount', MountInterface, {
     help,
 
+    async stat(pathArg) {
+      assertNotRevoked();
+      await null;
+      const segments = typeof pathArg === 'string' ? [pathArg] : pathArg;
+      const target = resolve(segments);
+      await assertConfined(target, confinementRoot, filePowers);
+      const isDir = await filePowers.isDirectory(target);
+      if (isDir) {
+        return harden({ type: 'directory', size: 0 });
+      }
+      const text = await filePowers.readFileText(target);
+      return harden({ type: 'file', size: text.length });
+    },
+
     async has(...pathSegments) {
       assertNotRevoked();
       await null;
