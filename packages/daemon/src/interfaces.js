@@ -504,6 +504,8 @@ export const MountInterface = M.interface('EndoMount', {
   remove: M.call(PathArgShape).returns(M.promise()),
   move: M.call(PathArgShape, PathArgShape).returns(M.promise()),
   makeDirectory: M.call(PathArgShape).returns(M.promise()),
+  // Search
+  glob: M.call(M.string()).returns(M.promise()),
   // Attenuation
   readOnly: M.call().returns(M.remotable()),
   subDir: M.call(M.string()).returns(M.promise()),

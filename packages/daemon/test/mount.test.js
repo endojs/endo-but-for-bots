@@ -22,10 +22,28 @@ const setup = async t => {
     'Hello, world!',
     'utf-8',
   );
+  await fs.promises.writeFile(
+    path.join(tmpDir, 'readme.md'),
+    '# Readme',
+    'utf-8',
+  );
   await fs.promises.mkdir(path.join(tmpDir, 'sub'), { recursive: true });
   await fs.promises.writeFile(
     path.join(tmpDir, 'sub', 'nested.txt'),
     'Nested',
+    'utf-8',
+  );
+  await fs.promises.writeFile(
+    path.join(tmpDir, 'sub', 'data.json'),
+    '{}',
+    'utf-8',
+  );
+  await fs.promises.mkdir(path.join(tmpDir, 'sub', 'deep'), {
+    recursive: true,
+  });
+  await fs.promises.writeFile(
+    path.join(tmpDir, 'sub', 'deep', 'file.txt'),
+    'deep',
     'utf-8',
   );
 
@@ -242,4 +260,92 @@ test('control.help() returns documentation', async t => {
   const helpText = control.help();
   t.true(helpText.includes('MountControl'));
   t.true(helpText.includes('revoke'));
+});
+
+// --- Glob tests ---
+
+test('glob matches wildcard in single directory', async t => {
+  const { tmpDir, filePowers } = await setup(t);
+  const { mount } = makeMount({
+    rootPath: tmpDir,
+    readOnly: false,
+    filePowers,
+  });
+
+  const txtFiles = await mount.glob('*.txt');
+  t.true(txtFiles.includes('hello.txt'));
+  t.false(txtFiles.includes('readme.md'));
+});
+
+test('glob matches files in subdirectory', async t => {
+  const { tmpDir, filePowers } = await setup(t);
+  const { mount } = makeMount({
+    rootPath: tmpDir,
+    readOnly: false,
+    filePowers,
+  });
+
+  const subFiles = await mount.glob('sub/*.txt');
+  t.deepEqual(subFiles, ['sub/nested.txt']);
+});
+
+test('glob ** matches recursively', async t => {
+  const { tmpDir, filePowers } = await setup(t);
+  const { mount } = makeMount({
+    rootPath: tmpDir,
+    readOnly: false,
+    filePowers,
+  });
+
+  const allTxt = await mount.glob('**/*.txt');
+  t.true(allTxt.includes('hello.txt'));
+  t.true(allTxt.includes('sub/nested.txt'));
+  t.true(allTxt.includes('sub/deep/file.txt'));
+});
+
+test('glob excludes denied segments', async t => {
+  const { tmpDir, filePowers } = await setup(t);
+
+  // Create a .ssh directory with files.
+  await fs.promises.mkdir(path.join(tmpDir, '.ssh'), { recursive: true });
+  await fs.promises.writeFile(
+    path.join(tmpDir, '.ssh', 'id_rsa'),
+    'PRIVATE',
+    'utf-8',
+  );
+
+  const { mount } = makeMount({
+    rootPath: tmpDir,
+    readOnly: false,
+    filePowers,
+  });
+
+  const all = await mount.glob('**/*');
+  t.false(all.some(p => p.includes('.ssh')));
+});
+
+test('glob returns empty array for no matches', async t => {
+  const { tmpDir, filePowers } = await setup(t);
+  const { mount } = makeMount({
+    rootPath: tmpDir,
+    readOnly: false,
+    filePowers,
+  });
+
+  const results = await mount.glob('*.xyz');
+  t.deepEqual(results, []);
+});
+
+test('glob on revoked mount throws', async t => {
+  const { tmpDir, filePowers } = await setup(t);
+  const { mount, control } = makeMount({
+    rootPath: tmpDir,
+    readOnly: false,
+    filePowers,
+  });
+
+  control.revoke();
+  await t.throwsAsync(() => mount.glob('*'), {
+    message: /revoked/,
+  });
 });

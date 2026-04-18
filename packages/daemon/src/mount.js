@@ -201,6 +201,130 @@ const isConfinedPath = async (candidatePath, confinementRoot, filePowers) => {
 harden(isConfinedPath);
 
 /**
+ * Test whether a filename matches a glob segment.
+ * Supports `*` (match anything except `/`).
+ *
+ * @param {string} name - Filename to test.
+ * @param {string} pattern - Glob segment (e.g., `*.js`, `README*`).
+ * @returns {boolean}
+ */
+const matchSegment = (name, pattern) => {
+  if (pattern === '*') return true;
+  // Convert glob pattern to regex: escape special chars, replace * with .*
+  const escaped = pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&');
+  const regexStr = `^${escaped.replace(/\*/g, '[^/]*')}$`;
+  const regex = new RegExp(regexStr);
+  return regex.test(name);
+};
+harden(matchSegment);
+
+/**
+ * Recursively walk a directory tree matching a glob pattern.
+ *
+ * Pattern segments:
+ * - `*` matches any single filename
+ * - `**` matches zero or more directory levels
+ * - Literal strings match exactly
+ * - Segments with `*` embedded (e.g., `*.js`) match via pattern
+ *
+ * @param {string} dir - Current directory (absolute path).
+ * @param {string[]} patternSegments - Remaining pattern segments.
+ * @param {string} prefix - Relative path prefix for results.
+ * @param {string} confinementRoot
+ * @param {FilePowers} filePowers
+ * @param {string[]} results - Accumulator for matched paths.
+ * @param {number} maxResults - Safety cap on results.
+ * @returns {Promise<void>}
+ */
+const walkGlob = async (
+  dir,
+  patternSegments,
+  prefix,
+  confinementRoot,
+  filePowers,
+  results,
+  maxResults,
+) => {
+  if (results.length >= maxResults) return;
+  if (patternSegments.length === 0) {
+    // End of pattern — include this path if it exists.
+    const exists = await filePowers.exists(dir);
+    if (exists) {
+      results.push(prefix);
+    }
+    return;
+  }
+
+  const [head, ...tail] = patternSegments;
+
+  if (head === '**') {
+    // ** matches zero or more levels.
+    // Zero levels: skip the ** and continue matching tail from here.
+    await walkGlob(
+      dir, tail, prefix, confinementRoot, filePowers, results, maxResults,
+    );
+    // One or more levels: recurse into each subdirectory with ** still active.
+    let entries;
+    try {
+      entries = await filePowers.readDirectory(dir);
+    } catch {
+      return;
+    }
+    for (const entry of entries.sort()) {
+      if (results.length >= maxResults) return;
+      if (isDeniedSegment(entry)) continue;
+      const childPath = filePowers.joinPath(dir, entry);
+      // eslint-disable-next-line no-await-in-loop
+      if (!(await isConfinedPath(childPath, confinementRoot, filePowers))) {
+        continue;
+      }
+      // eslint-disable-next-line no-await-in-loop
+      const isDir = await filePowers.isDirectory(childPath);
+      if (isDir) {
+        const childPrefix = prefix ? `${prefix}/${entry}` : entry;
+        // eslint-disable-next-line no-await-in-loop
+        await walkGlob(
+          childPath, patternSegments, childPrefix,
+          confinementRoot, filePowers, results, maxResults,
+        );
+      }
+    }
+    return;
+  }
+
+  // Normal segment or wildcard segment (e.g., `*.js`, `*`).
+  let entries;
+  try {
+    entries = await filePowers.readDirectory(dir);
+  } catch {
+    return;
+  }
+  for (const entry of entries.sort()) {
+    if (results.length >= maxResults) return;
+    if (isDeniedSegment(entry)) continue;
+    if (!matchSegment(entry, head)) continue;
+    const childPath = filePowers.joinPath(dir, entry);
+    // eslint-disable-next-line no-await-in-loop
+    if (!(await isConfinedPath(childPath, confinementRoot, filePowers))) {
+      continue;
+    }
+    const childPrefix = prefix ? `${prefix}/${entry}` : entry;
+    if (tail.length === 0) {
+      results.push(childPrefix);
+    } else {
+      // eslint-disable-next-line no-await-in-loop
+      await walkGlob(
+        childPath, tail, childPrefix,
+        confinementRoot, filePowers, results, maxResults,
+      );
+    }
+  }
+};
+harden(walkGlob);
+
+const GLOB_MAX_RESULTS = 10000;
+
+/**
  * @typedef {object} MountContext
  * @property {string} currentDir
  * @property {string} confinementRoot
@@ -373,6 +497,24 @@ const makeMountExo = ctx => {
       const target = resolve(segments);
       await assertConfinedOrAncestor(target, confinementRoot, filePowers);
       await filePowers.makePath(target);
+    },
+
+    async glob(pattern) {
+      assertNotRevoked();
+      await null;
+      const segments = pattern.split('/').filter(s => s.length > 0);
+      /** @type {string[]} */
+      const results = [];
+      await walkGlob(
+        currentDir,
+        segments,
+        '',
+        confinementRoot,
+        filePowers,
+        results,
+        GLOB_MAX_RESULTS,
+      );
+      return harden(results);
     },
 
     readOnly() {
