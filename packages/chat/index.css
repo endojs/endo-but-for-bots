@@ -3751,6 +3751,34 @@ button.btn-spinner::after {
   display: block;
 }
 
+/* Voice input button */
+#voice-input-button {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 1.2em;
+  padding: 4px 6px;
+  opacity: 0.6;
+  transition: opacity 0.2s;
+}
+#voice-input-button:hover {
+  opacity: 1;
+}
+#voice-input-button.listening {
+  opacity: 1;
+  color: var(--accent-color, #e74c3c);
+  animation: pulse-mic 1s ease-in-out infinite;
+}
+@keyframes pulse-mic {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+/* Hide mic when typing or in command mode */
+#chat-bar.has-content #voice-input-button,
+#chat-bar.command-mode #voice-input-button {
+  display: none;
+}
+
 #chat-bar.has-content #chat-menu-button,
 #chat-bar.command-mode #chat-menu-button {
   display: none;
