@@ -471,8 +471,7 @@ export const makeDaemonicPersistencePowers = (
           get privateKey() {
             return fromHex(privHex);
           },
-          sign: message =>
-            cryptoPowers.ed25519Sign(fromHex(privHex), message),
+          sign: message => cryptoPowers.ed25519Sign(fromHex(privHex), message),
         }),
         isNewlyCreated: false,
       };

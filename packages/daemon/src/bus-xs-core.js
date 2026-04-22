@@ -42,7 +42,13 @@ import {
   textEncoder,
 } from './bus-xs-common.js';
 
-export { installShouldTerminate, markShouldTerminate, silentReject, textDecoder, textEncoder };
+export {
+  installShouldTerminate,
+  markShouldTerminate,
+  silentReject,
+  textDecoder,
+  textEncoder,
+};
 
 // Console polyfill for XS bootstraps that share this module.
 //
@@ -63,14 +69,20 @@ if (typeof globalThis.console === 'undefined') {
     if (a && typeof a === 'object' && typeof a.message === 'string') {
       return `${a.name || 'Error'}: ${a.message}`;
     }
-    try { return JSON.stringify(a); } catch { return String(a); }
-  };
-  const makeLogFn = prefix => (...args) => {
     try {
-      // eslint-disable-next-line no-undef
-      trace(`${prefix}${args.map(formatArg).join(' ')}`);
-    } catch (_e) {}
+      return JSON.stringify(a);
+    } catch {
+      return String(a);
+    }
   };
+  const makeLogFn =
+    prefix =>
+    (...args) => {
+      try {
+        // eslint-disable-next-line no-undef
+        trace(`${prefix}${args.map(formatArg).join(' ')}`);
+      } catch (_e) {}
+    };
   globalThis.console = harden({
     log: makeLogFn(''),
     warn: makeLogFn('[warn] '),
@@ -166,7 +178,9 @@ export const makeXsNode = ({ onControl } = {}) => {
       return;
     }
     if (bytes.length > 10000) {
-      trace(`xs-core: decoded envelope handle=${env.handle} verb=${env.verb} payload_len=${env.payload.length}`);
+      trace(
+        `xs-core: decoded envelope handle=${env.handle} verb=${env.verb} payload_len=${env.payload.length}`,
+      );
     }
 
     if (env.verb === 'deliver') {

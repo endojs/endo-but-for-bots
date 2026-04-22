@@ -21,17 +21,17 @@ if (typeof globalThis.console === 'undefined') {
   const makeLogFn =
     /** @param {string} prefix */
     prefix =>
-    (/** @type {unknown[]} */ ...args) => {
-      const parts = args.map(a => {
-        if (typeof a === 'string') return a;
-        try {
-          return JSON.stringify(a);
-        } catch {
-          return String(a);
-        }
-      });
-      trace(`${prefix}${parts.join(' ')}`);
-    };
+      (/** @type {unknown[]} */ ...args) => {
+        const parts = args.map(a => {
+          if (typeof a === 'string') return a;
+          try {
+            return JSON.stringify(a);
+          } catch {
+            return String(a);
+          }
+        });
+        trace(`${prefix}${parts.join(' ')}`);
+      };
   globalThis.console = /** @type {any} */ ({
     log: makeLogFn(''),
     warn: makeLogFn('[warn] '),
@@ -95,7 +95,10 @@ if (typeof globalThis.URL === 'undefined') {
       this.host = rest;
       this.hostname = rest;
       this.pathname = '/';
-    } else if (queryStart !== -1 && (pathStart === -1 || queryStart < pathStart)) {
+    } else if (
+      queryStart !== -1 &&
+      (pathStart === -1 || queryStart < pathStart)
+    ) {
       this.host = rest.slice(0, queryStart);
       this.hostname = this.host;
       this.pathname = '/';
@@ -159,10 +162,7 @@ if (typeof globalThis.URL === 'undefined') {
       /** @returns {string} */
       toString() {
         return params
-          .map(
-            ([k, v]) =>
-              `${encodeURIComponent(k)}=${encodeURIComponent(v)}`,
-          )
+          .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
           .join('&');
       },
     };
@@ -183,7 +183,7 @@ if (typeof globalThis.URL === 'undefined') {
   URLPolyfill.canParse = (/** @type {string} */ input) => {
     try {
       // eslint-disable-next-line no-new
-      new (/** @type {any} */ (URLPolyfill))(input);
+      new /** @type {any} */ (URLPolyfill)(input);
       return true;
     } catch {
       return false;

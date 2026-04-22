@@ -129,10 +129,7 @@ test('getFrames returns stack frames over CapTP', async t => {
 
   // Simulate a break.
   feedXml(session, '<xsbug>');
-  feedXml(
-    session,
-    '<break path="/app.js" line="5">debugger statement</break>',
-  );
+  feedXml(session, '<break path="/app.js" line="5">debugger statement</break>');
 
   // Start the frames request, flush so CapTP dispatches it,
   // then feed the response XML.
@@ -232,10 +229,7 @@ test('step advances and returns break event over CapTP', async t => {
   await flush();
 
   // Simulate the worker stopping at the next line.
-  feedXml(
-    session,
-    '<break path="/app.js" line="2">step</break>',
-  );
+  feedXml(session, '<break path="/app.js" line="2">step</break>');
 
   const event = await stepP;
   t.is(event.path, '/app.js');
@@ -250,8 +244,8 @@ test('setExceptionBreakMode sends correct commands over CapTP', async t => {
   await E(remote).setExceptionBreakMode('all');
   t.true(outbound.some(s => s.includes('path="exceptions"')));
   t.true(
-    outbound.some(s =>
-      s.includes('set-breakpoint') && s.includes('exceptions'),
+    outbound.some(
+      s => s.includes('set-breakpoint') && s.includes('exceptions'),
     ),
   );
 });
@@ -278,10 +272,7 @@ test('getLastBreak returns most recent break event over CapTP', async t => {
   t.is(none, null);
 
   feedXml(session, '<xsbug>');
-  feedXml(
-    session,
-    '<break path="/app.js" line="7">breakpoint hit</break>',
-  );
+  feedXml(session, '<break path="/app.js" line="7">breakpoint hit</break>');
 
   const event = await E(remote).getLastBreak();
   t.is(event.path, '/app.js');
@@ -311,9 +302,7 @@ test('selectFrame sends select command over CapTP', async t => {
 
   feedXml(
     session,
-    '<local>' +
-      '<property name="y" value="99" flags=""/>' +
-      '</local>',
+    '<local>' + '<property name="y" value="99" flags=""/>' + '</local>',
   );
 
   const locals = await localsP;
@@ -367,10 +356,7 @@ test('full debug session lifecycle over CapTP', async t => {
 
   // 3. Simulate the worker hitting the breakpoint.
   feedXml(session, '<xsbug>');
-  feedXml(
-    session,
-    '<break path="/app.js" line="3">breakpoint</break>',
-  );
+  feedXml(session, '<break path="/app.js" line="3">breakpoint</break>');
 
   const broken = await E(remote).isBroken();
   t.true(broken);
@@ -393,9 +379,7 @@ test('full debug session lifecycle over CapTP', async t => {
   await flush();
   feedXml(
     session,
-    '<local>' +
-      '<property name="x" value="42" flags=""/>' +
-      '</local>',
+    '<local>' + '<property name="x" value="42" flags=""/>' + '</local>',
   );
   const locals = await localsP;
   t.is(locals[0].name, 'x');
@@ -411,10 +395,7 @@ test('full debug session lifecycle over CapTP', async t => {
   // 7. Step to next line.
   const stepP = E(remote).step();
   await flush();
-  feedXml(
-    session,
-    '<break path="/app.js" line="4">step</break>',
-  );
+  feedXml(session, '<break path="/app.js" line="4">step</break>');
   const stepEvent = await stepP;
   t.is(stepEvent.line, 4);
 

@@ -135,7 +135,9 @@ export const makeDaemonicBusControlPowers = (
             // The payload is the raw JSON-encoded CapTP message.
             void entry.writer.next(env.payload);
           } else {
-            console.error(`bus-daemon: deliver from unknown worker handle=${workerHandle}`);
+            console.error(
+              `bus-daemon: deliver from unknown worker handle=${workerHandle}`,
+            );
           }
           continue;
         }

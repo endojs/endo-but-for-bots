@@ -10,12 +10,7 @@ import path from 'path';
 import fs from 'fs';
 import { E } from '@endo/far';
 import { makePromiseKit } from '@endo/promise-kit';
-import {
-  start,
-  stop,
-  purge,
-  makeEndoClient,
-} from '../index.js';
+import { start, stop, purge, makeEndoClient } from '../index.js';
 
 const dirname = url.fileURLToPath(new URL('..', import.meta.url)).toString();
 
@@ -158,12 +153,7 @@ const runBenchmarks = async (variant, config, cancelled) => {
       await bench(
         'eval_string_result',
         async () => {
-          await E(host).evaluate(
-            strWorker,
-            '"x".repeat(1000)',
-            [],
-            [],
-          );
+          await E(host).evaluate(strWorker, '"x".repeat(1000)', [], []);
         },
         10,
       ),
@@ -269,7 +259,8 @@ const printResults = (variant, results) => {
 // ---------------------------------------------------------------------------
 
 const main = async () => {
-  const endorBin = process.env.ENDO_BIN || path.resolve(dirname, '../../target/release/endor');
+  const endorBin =
+    process.env.ENDO_BIN || path.resolve(dirname, '../../target/release/endor');
   const hasEndor = fs.existsSync(endorBin);
 
   // Determine which variants to run.
@@ -277,7 +268,9 @@ const main = async () => {
   const runRust = !process.argv.includes('--node-only') && hasEndor;
 
   if (!hasEndor && !process.argv.includes('--node-only')) {
-    console.log(`  [note] endor binary not found at ${endorBin}, skipping Rust+XS`);
+    console.log(
+      `  [note] endor binary not found at ${endorBin}, skipping Rust+XS`,
+    );
     console.log(`  [note] build with: cargo build -p endo --release`);
   }
 
@@ -356,8 +349,7 @@ const main = async () => {
   if (allResults.length >= 2) {
     const colWidth = 14;
     const opWidth = 25;
-    const totalWidth =
-      opWidth + allResults.length * (colWidth + 2) + 2;
+    const totalWidth = opWidth + allResults.length * (colWidth + 2) + 2;
     console.log(`\n${'='.repeat(totalWidth)}`);
     console.log('  Comparison (avg ms)');
     console.log('='.repeat(totalWidth));

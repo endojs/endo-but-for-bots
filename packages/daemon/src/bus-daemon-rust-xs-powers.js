@@ -139,7 +139,11 @@ export const makeXsFilePowers = () => {
 
   /** @type {FilePowers['renamePath']} */
   const renamePath = async (source, target) => {
-    const result = hostRename(DIR_TOKEN, toRelative(source), toRelative(target));
+    const result = hostRename(
+      DIR_TOKEN,
+      toRelative(source),
+      toRelative(target),
+    );
     if (typeof result === 'string' && result.startsWith('Error: ')) {
       throw new Error(result);
     }
@@ -165,12 +169,10 @@ export const makeXsFilePowers = () => {
   };
 
   /** @type {FilePowers['isDirectory']} */
-  const isDirectory = async path =>
-    hostIsDir(DIR_TOKEN, toRelative(path));
+  const isDirectory = async path => hostIsDir(DIR_TOKEN, toRelative(path));
 
   /** @type {FilePowers['exists']} */
-  const exists = async path =>
-    hostExists(DIR_TOKEN, toRelative(path));
+  const exists = async path => hostExists(DIR_TOKEN, toRelative(path));
 
   /**
    * In-memory file reader for content store.
@@ -380,11 +382,7 @@ const encodeValue = value => {
  * @returns {import('./types.js').SqliteValue}
  */
 const decodeValue = value => {
-  if (
-    typeof value === 'object' &&
-    value !== null &&
-    !Array.isArray(value)
-  ) {
+  if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
     const obj = /** @type {Record<string, unknown>} */ (value);
     if ('$bigint' in obj) {
       return BigInt(/** @type {string} */ (obj.$bigint));
@@ -466,9 +464,10 @@ export const makeXsSqlitePowers = () => {
           !(args[0] instanceof Uint8Array)
         ) {
           // Named parameters — encode each value.
-          const obj = /** @type {Record<string, import('./types.js').SqliteValue>} */ (
-            args[0]
-          );
+          const obj =
+            /** @type {Record<string, import('./types.js').SqliteValue>} */ (
+              args[0]
+            );
           /** @type {Record<string, unknown>} */
           const encoded = {};
           for (const key of Object.keys(obj)) {

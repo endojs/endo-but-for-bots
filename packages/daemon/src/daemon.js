@@ -1348,7 +1348,14 @@ const makeDaemonCore = async (
    * @param {Record<string, string> | undefined} env
    * @param {Context} context
    */
-  const makeBundle = async (workerId, powersId, bundleId, env, context, cancelWithWorker) => {
+  const makeBundle = async (
+    workerId,
+    powersId,
+    bundleId,
+    env,
+    context,
+    cancelWithWorker,
+  ) => {
     context.thisDiesIfThatDies(workerId);
     context.thisDiesIfThatDies(powersId);
     if (cancelWithWorker) {
@@ -2249,15 +2256,42 @@ const makeDaemonCore = async (
         context,
       ),
     worker: (formula, context, _id, formulaNumber) =>
-      makeIdentifiedWorker(formulaNumber, context, formula.kind, formula.trustedShims, formula.label),
+      makeIdentifiedWorker(
+        formulaNumber,
+        context,
+        formula.kind,
+        formula.trustedShims,
+        formula.label,
+      ),
     'make-unconfined': (
-      { worker: workerId, powers: powersId, specifier, env = {}, cancelWithWorker },
+      {
+        worker: workerId,
+        powers: powersId,
+        specifier,
+        env = {},
+        cancelWithWorker,
+      },
       context,
-    ) => makeUnconfined(workerId, powersId, specifier, env, context, cancelWithWorker),
+    ) =>
+      makeUnconfined(
+        workerId,
+        powersId,
+        specifier,
+        env,
+        context,
+        cancelWithWorker,
+      ),
     'make-bundle': (
-      { worker: workerId, powers: powersId, bundle: bundleId, env = {}, cancelWithWorker },
+      {
+        worker: workerId,
+        powers: powersId,
+        bundle: bundleId,
+        env = {},
+        cancelWithWorker,
+      },
       context,
-    ) => makeBundle(workerId, powersId, bundleId, env, context, cancelWithWorker),
+    ) =>
+      makeBundle(workerId, powersId, bundleId, env, context, cancelWithWorker),
     host: async (formula, context, id) => {
       const {
         hostHandle: hostHandleId,
@@ -3684,14 +3718,18 @@ const makeDaemonCore = async (
     kind = undefined,
   ) => {
     await null;
-    console.log(`provideWorkerId: kind=${kind} defaultWorkerKind=${defaultWorkerKind} specifiedWorkerId=${typeof specifiedWorkerId === 'string' ? specifiedWorkerId.slice(0, 12) : specifiedWorkerId}`);
+    console.log(
+      `provideWorkerId: kind=${kind} defaultWorkerKind=${defaultWorkerKind} specifiedWorkerId=${typeof specifiedWorkerId === 'string' ? specifiedWorkerId.slice(0, 12) : specifiedWorkerId}`,
+    );
     if (typeof specifiedWorkerId === 'string') {
       if (kind === 'node' && defaultWorkerKind !== 'node') {
         // Default workers are XS/locked (bus daemon under Rust
         // supervisor).  Create a separate Node.js worker.  The original
         // XS worker stays alive (it may have running evals).
         const existingFormula = formulaForId.get(specifiedWorkerId);
-        console.log(`provideWorkerId: existingFormula=${existingFormula ? JSON.stringify(existingFormula).slice(0, 80) : 'NOT FOUND'}`);
+        console.log(
+          `provideWorkerId: existingFormula=${existingFormula ? JSON.stringify(existingFormula).slice(0, 80) : 'NOT FOUND'}`,
+        );
         if (
           existingFormula &&
           existingFormula.type === 'worker' &&
@@ -4045,9 +4083,7 @@ const makeDaemonCore = async (
         powers: powersId,
         specifier,
         env,
-        ...(originalWorkerId
-          ? { cancelWithWorker: originalWorkerId }
-          : {}),
+        ...(originalWorkerId ? { cancelWithWorker: originalWorkerId } : {}),
       };
       return formulate(capletFormulaNumber, formula);
     });
@@ -4085,9 +4121,7 @@ const makeDaemonCore = async (
         powers: powersId,
         bundle: bundleId,
         env,
-        ...(originalWorkerId
-          ? { cancelWithWorker: originalWorkerId }
-          : {}),
+        ...(originalWorkerId ? { cancelWithWorker: originalWorkerId } : {}),
       };
       return formulate(capletFormulaNumber, formula);
     });
@@ -4941,7 +4975,14 @@ const makeDaemonCore = async (
  */
 const provideEndoBootstrap = async (
   powers,
-  { cancel, gracePeriodMs, gracePeriodElapsed, specials, gcEnabled, defaultWorkerKind },
+  {
+    cancel,
+    gracePeriodMs,
+    gracePeriodElapsed,
+    specials,
+    gcEnabled,
+    defaultWorkerKind,
+  },
 ) => {
   const { persistence: persistencePowers } = powers;
   const { rootNonce: endoFormulaNumber, isNewlyCreated } =

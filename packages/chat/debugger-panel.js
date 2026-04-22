@@ -227,26 +227,62 @@ export const createDebuggerPanel = ({ $container, $backdrop }) => {
 
     $container.innerHTML = panelHTML;
 
-    $title = /** @type {HTMLElement} */ ($container.querySelector('.debugger-title'));
-    $tag = /** @type {HTMLElement} */ ($container.querySelector('.debugger-tag'));
-    $status = /** @type {HTMLElement} */ ($container.querySelector('.debugger-status'));
-    $goBtn = /** @type {HTMLButtonElement} */ ($container.querySelector('.debugger-go'));
-    $stepBtn = /** @type {HTMLButtonElement} */ ($container.querySelector('.debugger-step'));
-    $stepInBtn = /** @type {HTMLButtonElement} */ ($container.querySelector('.debugger-step-in'));
-    $stepOutBtn = /** @type {HTMLButtonElement} */ ($container.querySelector('.debugger-step-out'));
-    $abortBtn = /** @type {HTMLButtonElement} */ ($container.querySelector('.debugger-abort'));
-    $exceptionMode = /** @type {HTMLSelectElement} */ ($container.querySelector('.debugger-exception-mode'));
-    $framesList = /** @type {HTMLElement} */ ($container.querySelector('.debugger-frames-list'));
-    $localsTree = /** @type {HTMLElement} */ ($container.querySelector('.debugger-locals-tree'));
-    $breakInfo = /** @type {HTMLElement} */ ($container.querySelector('.debugger-break-info'));
-    $bpList = /** @type {HTMLElement} */ ($container.querySelector('.debugger-breakpoints-list'));
-    $bpPath = /** @type {HTMLInputElement} */ ($container.querySelector('.debugger-bp-path'));
-    $bpLine = /** @type {HTMLInputElement} */ ($container.querySelector('.debugger-bp-line'));
-    $consoleOutput = /** @type {HTMLElement} */ ($container.querySelector('.debugger-console-output'));
-    $consoleInput = /** @type {HTMLInputElement} */ ($container.querySelector('.debugger-console-input'));
+    $title = /** @type {HTMLElement} */ (
+      $container.querySelector('.debugger-title')
+    );
+    $tag = /** @type {HTMLElement} */ (
+      $container.querySelector('.debugger-tag')
+    );
+    $status = /** @type {HTMLElement} */ (
+      $container.querySelector('.debugger-status')
+    );
+    $goBtn = /** @type {HTMLButtonElement} */ (
+      $container.querySelector('.debugger-go')
+    );
+    $stepBtn = /** @type {HTMLButtonElement} */ (
+      $container.querySelector('.debugger-step')
+    );
+    $stepInBtn = /** @type {HTMLButtonElement} */ (
+      $container.querySelector('.debugger-step-in')
+    );
+    $stepOutBtn = /** @type {HTMLButtonElement} */ (
+      $container.querySelector('.debugger-step-out')
+    );
+    $abortBtn = /** @type {HTMLButtonElement} */ (
+      $container.querySelector('.debugger-abort')
+    );
+    $exceptionMode = /** @type {HTMLSelectElement} */ (
+      $container.querySelector('.debugger-exception-mode')
+    );
+    $framesList = /** @type {HTMLElement} */ (
+      $container.querySelector('.debugger-frames-list')
+    );
+    $localsTree = /** @type {HTMLElement} */ (
+      $container.querySelector('.debugger-locals-tree')
+    );
+    $breakInfo = /** @type {HTMLElement} */ (
+      $container.querySelector('.debugger-break-info')
+    );
+    $bpList = /** @type {HTMLElement} */ (
+      $container.querySelector('.debugger-breakpoints-list')
+    );
+    $bpPath = /** @type {HTMLInputElement} */ (
+      $container.querySelector('.debugger-bp-path')
+    );
+    $bpLine = /** @type {HTMLInputElement} */ (
+      $container.querySelector('.debugger-bp-line')
+    );
+    $consoleOutput = /** @type {HTMLElement} */ (
+      $container.querySelector('.debugger-console-output')
+    );
+    $consoleInput = /** @type {HTMLInputElement} */ (
+      $container.querySelector('.debugger-console-input')
+    );
 
     // Close button
-    const $closeBtn = /** @type {HTMLButtonElement} */ ($container.querySelector('.debugger-close'));
+    const $closeBtn = /** @type {HTMLButtonElement} */ (
+      $container.querySelector('.debugger-close')
+    );
     $closeBtn.addEventListener('click', hide);
 
     // Toolbar buttons
@@ -259,7 +295,9 @@ export const createDebuggerPanel = ({ $container, $backdrop }) => {
     // Exception mode
     $exceptionMode.addEventListener('change', () => {
       if (!debuggerRef) return;
-      const mode = /** @type {'none'|'all'|'uncaught'} */ ($exceptionMode.value);
+      const mode = /** @type {'none'|'all'|'uncaught'} */ (
+        $exceptionMode.value
+      );
       E(debuggerRef).setExceptionBreakMode(mode);
     });
 
@@ -275,24 +313,27 @@ export const createDebuggerPanel = ({ $container, $backdrop }) => {
       $bpPath.value = '';
       $bpLine.value = '';
     };
-    /** @type {HTMLButtonElement} */ ($container.querySelector('.debugger-bp-add'))
-      .addEventListener('click', addBp);
+    /** @type {HTMLButtonElement} */ (
+      $container.querySelector('.debugger-bp-add')
+    ).addEventListener('click', addBp);
     $bpLine.addEventListener('keydown', e => {
       if (e.key === 'Enter') addBp();
     });
 
     // Clear all breakpoints
-    /** @type {HTMLButtonElement} */ ($container.querySelector('.debugger-clear-all-bp'))
-      .addEventListener('click', () => {
-        if (!debuggerRef) return;
-        E(debuggerRef).clearAllBreakpoints();
-        breakpoints = [];
-        renderBreakpoints();
-      });
+    /** @type {HTMLButtonElement} */ (
+      $container.querySelector('.debugger-clear-all-bp')
+    ).addEventListener('click', () => {
+      if (!debuggerRef) return;
+      E(debuggerRef).clearAllBreakpoints();
+      breakpoints = [];
+      renderBreakpoints();
+    });
 
     // Show globals
-    /** @type {HTMLButtonElement} */ ($container.querySelector('.debugger-show-globals'))
-      .addEventListener('click', refreshGlobals);
+    /** @type {HTMLButtonElement} */ (
+      $container.querySelector('.debugger-show-globals')
+    ).addEventListener('click', refreshGlobals);
 
     // Console eval
     const evalExpr = () => {
@@ -300,13 +341,16 @@ export const createDebuggerPanel = ({ $container, $backdrop }) => {
       if (!source || !debuggerRef) return;
       $consoleInput.value = '';
       appendConsole('> ' + source, 'debugger-console-input-line');
-      E(debuggerRef).evaluate(source).then(
-        result => appendConsole(result, 'debugger-console-result'),
-        err => appendConsole(String(err), 'debugger-console-error'),
-      );
+      E(debuggerRef)
+        .evaluate(source)
+        .then(
+          result => appendConsole(result, 'debugger-console-result'),
+          err => appendConsole(String(err), 'debugger-console-error'),
+        );
     };
-    /** @type {HTMLButtonElement} */ ($container.querySelector('.debugger-console-eval'))
-      .addEventListener('click', evalExpr);
+    /** @type {HTMLButtonElement} */ (
+      $container.querySelector('.debugger-console-eval')
+    ).addEventListener('click', evalExpr);
     $consoleInput.addEventListener('keydown', e => {
       if (e.key === 'Enter') evalExpr();
     });
@@ -317,10 +361,22 @@ export const createDebuggerPanel = ({ $container, $backdrop }) => {
         hide();
         return;
       }
-      if (e.key === 'F8') { e.preventDefault(); handleGo(); }
-      if (e.key === 'F10') { e.preventDefault(); handleStep('step'); }
-      if (e.key === 'F11' && !e.shiftKey) { e.preventDefault(); handleStep('stepIn'); }
-      if (e.key === 'F11' && e.shiftKey) { e.preventDefault(); handleStep('stepOut'); }
+      if (e.key === 'F8') {
+        e.preventDefault();
+        handleGo();
+      }
+      if (e.key === 'F10') {
+        e.preventDefault();
+        handleStep('step');
+      }
+      if (e.key === 'F11' && !e.shiftKey) {
+        e.preventDefault();
+        handleStep('stepIn');
+      }
+      if (e.key === 'F11' && e.shiftKey) {
+        e.preventDefault();
+        handleStep('stepOut');
+      }
     });
 
     // Backdrop click to close
@@ -380,7 +436,9 @@ export const createDebuggerPanel = ({ $container, $backdrop }) => {
   const refreshLocals = async () => {
     if (!debuggerRef) return;
     try {
-      const locals = /** @type {Property[]} */ (await E(debuggerRef).getLocals());
+      const locals = /** @type {Property[]} */ (
+        await E(debuggerRef).getLocals()
+      );
       $localsTree.innerHTML = '';
       renderPropertyTree($localsTree, locals, 0);
     } catch {
@@ -392,7 +450,9 @@ export const createDebuggerPanel = ({ $container, $backdrop }) => {
   const refreshGlobals = async () => {
     if (!debuggerRef) return;
     try {
-      const globals = /** @type {Property[]} */ (await E(debuggerRef).getGlobals());
+      const globals = /** @type {Property[]} */ (
+        await E(debuggerRef).getGlobals()
+      );
       $localsTree.innerHTML = '';
       renderPropertyTree($localsTree, globals, 0);
     } catch {
@@ -422,8 +482,7 @@ export const createDebuggerPanel = ({ $container, $backdrop }) => {
   const renderFrames = frames => {
     $framesList.innerHTML = '';
     if (frames.length === 0) {
-      $framesList.innerHTML =
-        '<div class="debugger-empty">No frames</div>';
+      $framesList.innerHTML = '<div class="debugger-empty">No frames</div>';
       return;
     }
     for (let i = 0; i < frames.length; i += 1) {
@@ -531,8 +590,7 @@ export const createDebuggerPanel = ({ $container, $backdrop }) => {
       $status.textContent = 'Running';
       $status.className = 'debugger-status debugger-status-running';
       $breakInfo.textContent = 'Not paused';
-      $framesList.innerHTML =
-        '<div class="debugger-empty">Running...</div>';
+      $framesList.innerHTML = '<div class="debugger-empty">Running...</div>';
       $localsTree.innerHTML = '';
     } catch (err) {
       appendConsole(`go error: ${err}`, 'debugger-console-error');
@@ -616,9 +674,7 @@ export const createDebuggerPanel = ({ $container, $backdrop }) => {
     renderBreakpoints();
 
     // Load initial state
-    refreshState().then(() =>
-      Promise.all([refreshFrames(), refreshLocals()]),
-    );
+    refreshState().then(() => Promise.all([refreshFrames(), refreshLocals()]));
   };
 
   return harden({

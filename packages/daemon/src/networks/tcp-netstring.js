@@ -203,7 +203,9 @@ export const make = async (powers, context) => {
         return new URL(addressOrProtocol).protocol === `${protocol}:`;
       } catch {
         // The caller may pass just the protocol string (e.g. "tcp+netstring+json+captp0:").
-        return addressOrProtocol === `${protocol}:` || addressOrProtocol === protocol;
+        return (
+          addressOrProtocol === `${protocol}:` || addressOrProtocol === protocol
+        );
       }
     },
     connect,

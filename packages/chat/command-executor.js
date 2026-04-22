@@ -823,7 +823,9 @@ export const createCommandExecutor = ({
           const workerPath = String(workerName).split('/');
           const debuggerRef = await E(
             /** @type {any} */ (powers),
-          ).attachDebugger(.../** @type {[string, ...string[]]} */ (workerPath));
+          ).attachDebugger(
+            .../** @type {[string, ...string[]]} */ (workerPath),
+          );
           if (openDebugger) {
             openDebugger(debuggerRef, String(workerName));
           }

@@ -306,13 +306,16 @@ export const makeDebugSession = sendToWorker => {
           resolvePending('breakpoints', lastBreakpoints);
           break;
         case 'bubble':
-          resolvePending('bubble', harden({
-            name: el.attrs.name || '',
-            value: el.attrs.value || '',
-            path: el.attrs.path || '',
-            line: Number(el.attrs.line || '0'),
-            message: el.data || '',
-          }));
+          resolvePending(
+            'bubble',
+            harden({
+              name: el.attrs.name || '',
+              value: el.attrs.value || '',
+              path: el.attrs.path || '',
+              line: Number(el.attrs.line || '0'),
+              message: el.data || '',
+            }),
+          );
           break;
         case 'eval':
           resolvePending('eval', el.data || '');
@@ -348,11 +351,14 @@ export const makeDebugSession = sendToWorker => {
           resolvePending('login', harden({ name: title, tag }));
           break;
         case 'log':
-          resolvePending('log', harden({
-            path: el.attrs.path || '',
-            line: Number(el.attrs.line || '0'),
-            message: el.data || '',
-          }));
+          resolvePending(
+            'log',
+            harden({
+              path: el.attrs.path || '',
+              line: Number(el.attrs.line || '0'),
+              message: el.data || '',
+            }),
+          );
           break;
         default:
           break;
@@ -473,8 +479,7 @@ export const makeDebugSession = sendToWorker => {
       return commandWithResponse(`<toggle id="${id}"/>`, 'local');
     },
     evaluate(source) {
-      const xml =
-        `<script path="(debug)" line="0"><![CDATA[${source}]]></script>`;
+      const xml = `<script path="(debug)" line="0"><![CDATA[${source}]]></script>`;
       return commandWithResponse(xml, 'eval');
     },
 

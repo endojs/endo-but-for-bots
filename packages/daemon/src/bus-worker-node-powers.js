@@ -71,7 +71,9 @@ export const makePowers = ({ fs, url }) => {
       if (initEnv.verb !== 'init') {
         throw new Error(`bus-worker: expected init, got ${initEnv.verb}`);
       }
-      console.error(`Endo worker (bus) received init, handle=${initEnv.handle}`);
+      console.error(
+        `Endo worker (bus) received init, handle=${initEnv.handle}`,
+      );
 
       for (;;) {
         const frameData = await readFrameFromStream(readStream);

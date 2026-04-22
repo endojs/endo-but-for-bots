@@ -1,7 +1,7 @@
 import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
 
-const makeFormatter = (version) => {
+const makeFormatter = version => {
   return makeExo(
     'Formatter',
     M.interface('Formatter', {
@@ -11,11 +11,11 @@ const makeFormatter = (version) => {
       format(text) {
         return `[${version}] ${text}`;
       },
-    }
+    },
   );
 };
 
-export const make = (powers) => {
+export const make = powers => {
   // Keep formatter and posts in closure variables
   let currentFormatterVersion = 'v1';
   let posts = [];
@@ -44,8 +44,9 @@ export const make = (powers) => {
       },
 
       async upgradeFormatter() {
-        currentFormatterVersion = currentFormatterVersion === 'v1' ? 'v2' : 'v3';
+        currentFormatterVersion =
+          currentFormatterVersion === 'v1' ? 'v2' : 'v3';
       },
-    }
+    },
   );
 };

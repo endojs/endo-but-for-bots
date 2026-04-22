@@ -141,9 +141,16 @@ const main = async () => {
   await daemonicPersistencePowers.initializePersistence();
 
   const { endoBootstrap, cancelGracePeriod, capTpConnectionRegistrar } =
-    await makeDaemon(powers, daemonLabel, cancel, cancelled, {}, {
-      defaultWorkerKind: 'locked',
-    });
+    await makeDaemon(
+      powers,
+      daemonLabel,
+      cancel,
+      cancelled,
+      {},
+      {
+        defaultWorkerKind: 'locked',
+      },
+    );
 
   /** @param {Error} error */
   const exitWithError = error => {

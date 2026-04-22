@@ -60,9 +60,9 @@ export const DebuggerInterface = M.interface('EndoDebugger', {
   selectFrame: M.call(M.string()).returns(M.promise()),
   toggleProperty: M.call(M.string()).returns(M.promise()),
   evaluate: M.call(M.string()).returns(M.promise()),
-  setExceptionBreakMode: M.call(
-    M.or(M.scalar(), M.string()),
-  ).returns(M.undefined()),
+  setExceptionBreakMode: M.call(M.or(M.scalar(), M.string())).returns(
+    M.undefined(),
+  ),
   isBroken: M.call().returns(M.boolean()),
   getTitle: M.call().returns(M.opt(M.string())),
   getTag: M.call().returns(M.opt(M.string())),

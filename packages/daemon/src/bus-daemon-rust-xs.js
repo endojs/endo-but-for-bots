@@ -29,20 +29,18 @@ import { makePromiseKit } from '@endo/promise-kit';
 import { mapWriter, mapReader, makePipe } from '@endo/stream';
 
 import { makeDaemon } from './daemon.js';
-import {
-  makeDaemonicPersistencePowers,
-} from './daemon-persistence-powers.js';
+import { makeDaemonicPersistencePowers } from './daemon-persistence-powers.js';
 import { makePetStoreMaker } from './pet-store.js';
 import {
   makeMessageCapTP,
   messageToBytes,
   bytesToMessage,
 } from './connection.js';
+import { encodeEnvelope, decodeEnvelope } from './envelope.js';
 import {
-  encodeEnvelope,
-  decodeEnvelope,
-} from './envelope.js';
-import { makeXsFilePowers, makeXsCryptoPowers } from './bus-daemon-rust-xs-powers.js';
+  makeXsFilePowers,
+  makeXsCryptoPowers,
+} from './bus-daemon-rust-xs-powers.js';
 import { makeDebugSession } from './debug-session.js';
 import { makeDebugger } from './debugger.js';
 
@@ -94,7 +92,10 @@ if (typeof globalThis.setTimeout === 'undefined') {
   /** @type {Set<number>} */
   const activeTimers = new Set();
 
-  globalThis.setTimeout = (/** @type {Function} */ fn, /** @type {number} */ _ms) => {
+  globalThis.setTimeout = (
+    /** @type {Function} */ fn,
+    /** @type {number} */ _ms,
+  ) => {
     const id = nextTimerId;
     nextTimerId += 1;
     activeTimers.add(id);
@@ -137,7 +138,10 @@ if (typeof globalThis.URL === 'undefined') {
       this.host = rest;
       this.hostname = rest;
       this.pathname = '/';
-    } else if (queryStart !== -1 && (pathStart === -1 || queryStart < pathStart)) {
+    } else if (
+      queryStart !== -1 &&
+      (pathStart === -1 || queryStart < pathStart)
+    ) {
       this.host = rest.slice(0, queryStart);
       this.hostname = this.host;
       this.pathname = '/';
@@ -202,10 +206,7 @@ if (typeof globalThis.URL === 'undefined') {
       /** @returns {string} */
       toString() {
         return params
-          .map(
-            ([k, v]) =>
-              `${encodeURIComponent(k)}=${encodeURIComponent(v)}`,
-          )
+          .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
           .join('&');
       },
     };
@@ -431,7 +432,9 @@ const makeWorker = async (
   // For kind === 'node', use ENDO_NODE_WORKER_BIN so that unconfined
   // and bundle caplets run in a Node.js process. Otherwise use
   // ENDO_WORKER_BIN (the XS worker binary).
-  hostTrace(`makeWorker: kind=${kind} nodeWorkerBin=${endoNodeWorkerBin} workerBin=${endoWorkerBin}`);
+  hostTrace(
+    `makeWorker: kind=${kind} nodeWorkerBin=${endoNodeWorkerBin} workerBin=${endoWorkerBin}`,
+  );
   let workerParts;
   if (kind === 'node' && endoNodeWorkerBin) {
     workerParts = endoNodeWorkerBin.split(/\s+/).filter(Boolean);
@@ -473,7 +476,9 @@ const makeWorker = async (
   /** @type {import('@endo/stream').Writer<Uint8Array>} */
   const envelopeBytesWriter = harden({
     async next(/** @type {Uint8Array} */ chunk) {
-      hostTrace(`daemon-xs: SEND to worker handle=${workerHandle} bytes=${chunk.length}`);
+      hostTrace(
+        `daemon-xs: SEND to worker handle=${workerHandle} bytes=${chunk.length}`,
+      );
       sendEnvelope(workerHandle, 'deliver', chunk);
       return harden({ done: false, value: undefined });
     },
@@ -544,7 +549,9 @@ const attachDebugger = workerHandle => {
     );
   pendingDebugAttach.set(nonce, { resolve, reject, workerHandle });
   sendEnvelope(workerHandle, 'debug-attach', undefined, nonce);
-  hostTrace(`daemon-xs: debug-attach sent handle=${workerHandle} nonce=${nonce}`);
+  hostTrace(
+    `daemon-xs: debug-attach sent handle=${workerHandle} nonce=${nonce}`,
+  );
   return promise;
 };
 harden(attachDebugger);
@@ -603,13 +610,19 @@ const main = async () => {
   await daemonicPersistencePowers.initializePersistence();
 
   const gcEnabled = hostGetEnv('ENDO_GC') === '1';
-  const result = await makeDaemon(powers, daemonLabel, cancel, cancelled, {}, {
-    defaultWorkerKind: 'locked',
-    gcEnabled,
-  });
+  const result = await makeDaemon(
+    powers,
+    daemonLabel,
+    cancel,
+    cancelled,
+    {},
+    {
+      defaultWorkerKind: 'locked',
+      gcEnabled,
+    },
+  );
   daemonResult = result;
-  const { endoBootstrap, cancelGracePeriod, capTpConnectionRegistrar } =
-    result;
+  const { endoBootstrap, cancelGracePeriod, capTpConnectionRegistrar } = result;
 
   // Persist root formula identifier.
   const host = await E(endoBootstrap).host();
@@ -658,7 +671,9 @@ const setupClientSession = connectionHandle => {
   const bootstrap = globalThis.__endoBootstrap;
   const registrar = globalThis.__capTpRegistrar;
   if (!bootstrap) {
-    hostTrace(`daemon-xs: client connect before daemon ready (handle=${connectionHandle})`);
+    hostTrace(
+      `daemon-xs: client connect before daemon ready (handle=${connectionHandle})`,
+    );
     return;
   }
 
@@ -668,7 +683,9 @@ const setupClientSession = connectionHandle => {
   const send = message => {
     const json = JSON.stringify(message);
     const bytes = textEncoder.encode(json);
-    hostTrace(`daemon-xs: client SEND handle=${connectionHandle} type=${message.type || '?'}`);
+    hostTrace(
+      `daemon-xs: client SEND handle=${connectionHandle} type=${message.type || '?'}`,
+    );
     sendEnvelope(connectionHandle, 'deliver', bytes);
   };
 
@@ -726,7 +743,9 @@ globalThis.handleCommand = harden(bytes => {
     // Check if this is from a worker.
     const workerEntry = workerWriters.get(handle);
     if (workerEntry) {
-      hostTrace(`daemon-xs: RECV from worker handle=${handle} bytes=${env.payload.length}`);
+      hostTrace(
+        `daemon-xs: RECV from worker handle=${handle} bytes=${env.payload.length}`,
+      );
       void workerEntry.writer.next(env.payload);
       return;
     }
@@ -738,11 +757,14 @@ globalThis.handleCommand = harden(bytes => {
       // extremely slow for buffers over ~100KB, causing the daemon to
       // hang on large CapTP round-trips (e.g. storeBlob with bundled
       // source code).
-      const json = env.payload.length > 8192
-        ? hostDecodeUtf8(env.payload)
-        : textDecoder.decode(env.payload);
+      const json =
+        env.payload.length > 8192
+          ? hostDecodeUtf8(env.payload)
+          : textDecoder.decode(env.payload);
       const message = JSON.parse(json);
-      hostTrace(`daemon-xs: client deliver handle=${handle} type=${message.type || '?'} method=${message.method || '?'}`);
+      hostTrace(
+        `daemon-xs: client deliver handle=${handle} type=${message.type || '?'} method=${message.method || '?'}`,
+      );
       try {
         clientEntry.dispatch(message);
       } catch (_e) {
@@ -830,7 +852,9 @@ globalThis.handleCommand = harden(bytes => {
     return;
   }
 
-  hostTrace(`daemon-xs: unhandled envelope verb=${env.verb} handle=${env.handle}`);
+  hostTrace(
+    `daemon-xs: unhandled envelope verb=${env.verb} handle=${env.handle}`,
+  );
 });
 
 /** Expose terminate flag for Rust to check. */
@@ -838,6 +862,8 @@ globalThis.__shouldTerminate = harden(() => shouldTerminate);
 
 // Kick off initialization.
 void main().catch(error => {
-  hostTrace(`daemon-xs: startup error: ${error.message}\n${error.stack || 'no stack'}`);
+  hostTrace(
+    `daemon-xs: startup error: ${error.message}\n${error.stack || 'no stack'}`,
+  );
   shouldTerminate = true;
 });
