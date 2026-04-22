@@ -1,4 +1,5 @@
 // @ts-check
+/// <reference path="./bus-xs-host-globals.d.ts" />
 /* global hostReadFile, hostWriteFile, hostReadDir, hostMkdir, hostRemove,
    hostRename, hostExists, hostIsDir, hostReadLink, hostSha256, hostSha256Init,
    hostSha256Update, hostSha256UpdateBytes, hostSha256Finish, hostRandomHex256,

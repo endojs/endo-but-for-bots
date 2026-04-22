@@ -123,6 +123,7 @@ type WorkerFormula = {
   type: 'worker';
   label?: string;
   trustedShims?: string[];
+  kind?: 'locked' | 'node';
 };
 
 export type WorkerDeferredTaskParams = {
@@ -251,6 +252,7 @@ type MakeUnconfinedFormula = {
   powers: FormulaIdentifier;
   specifier: string;
   env?: Record<string, string>;
+  cancelWithWorker?: FormulaIdentifier;
   // TODO formula slots
 };
 
@@ -260,6 +262,7 @@ type MakeBundleFormula = {
   powers: FormulaIdentifier;
   bundle: FormulaIdentifier;
   env?: Record<string, string>;
+  cancelWithWorker?: FormulaIdentifier;
   // TODO formula slots
 };
 
@@ -1331,6 +1334,7 @@ export type DaemonicControlPowers = {
     capTpConnectionRegistrar?: CapTpConnectionRegistrar,
     trustedShims?: string[],
     label?: string,
+    kind?: 'locked' | 'node',
   ) => Promise<{
     workerTerminated: Promise<void>;
     workerDaemonFacet: ERef<WorkerDaemonFacet>;

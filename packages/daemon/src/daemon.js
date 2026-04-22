@@ -277,6 +277,7 @@ const RESOLVED_VALUE_NAME = /** @type {PetName} */ ('value');
  * @param {NodeNumber} args.localNodeNumber - The local node number for this daemon.
  * @param {(bytes: Uint8Array) => Uint8Array} args.signBytes - Sign bytes with the daemon's root Ed25519 key.
  * @param {boolean} [args.gcEnabled] - Enable garbage collection of worker daemons.
+ * @param {'locked' | 'node'} [args.defaultWorkerKind] - Default kind for newly formulated workers (defaults to 'node').
  *
  * @example
  * ```js
@@ -530,23 +531,29 @@ const makeDaemonCore = async (
         ];
       case 'lookup':
         return [['hub', formula.hub]];
-      case 'make-unconfined':
-        return [
+      case 'make-unconfined': {
+        /** @type {Array<[string, FormulaIdentifier]>} */
+        const deps = [
           ['worker', formula.worker],
           ['powers', formula.powers],
-          ...(formula.cancelWithWorker
-            ? [['cancelWithWorker', formula.cancelWithWorker]]
-            : []),
         ];
-      case 'make-bundle':
-        return [
+        if (formula.cancelWithWorker) {
+          deps.push(['cancelWithWorker', formula.cancelWithWorker]);
+        }
+        return deps;
+      }
+      case 'make-bundle': {
+        /** @type {Array<[string, FormulaIdentifier]>} */
+        const deps = [
           ['worker', formula.worker],
           ['powers', formula.powers],
           ['bundle', formula.bundle],
-          ...(formula.cancelWithWorker
-            ? [['cancelWithWorker', formula.cancelWithWorker]]
-            : []),
         ];
+        if (formula.cancelWithWorker) {
+          deps.push(['cancelWithWorker', formula.cancelWithWorker]);
+        }
+        return deps;
+      }
       case 'peer':
         return [['networks', formula.networks]];
       case 'handle':
@@ -844,7 +851,7 @@ const makeDaemonCore = async (
       // terminate any cancelWithWorker (original XS worker) referenced
       // by make-unconfined/make-bundle formulas on this worker.
       const terminatedId = formatId({
-        number: workerId,
+        number: /** @type {FormulaNumber} */ (workerId),
         node: localNodeNumber,
       });
       for (const formula of formulaForId.values()) {
@@ -3332,8 +3339,11 @@ const makeDaemonCore = async (
    * The returned promise is resolved after the formula is persisted.
    *
    * @param {FormulaNumber} formulaNumber - The worker formula number.
-   * @param {string[]} [trustedShims] - Module specifiers imported before lockdown.
-   * @param {string} [label] - Human-readable label for status reporting.
+   * @param {object} [options]
+   * @param {string[]} [options.trustedShims] - Module specifiers imported before lockdown.
+   * @param {string} [options.label] - Human-readable label for status reporting.
+   * @param {'locked' | 'node'} [options.kind] - Worker kind (locked for XS, node for Node.js).
+   * @param {NodeNumber} [options.nodeNumber] - Node number (defaults to localNodeNumber).
    * @returns {ReturnType<DaemonCore['formulateWorker']>}
    */
   const formulateNumberedWorker = (
@@ -4959,6 +4969,7 @@ const makeDaemonCore = async (
  * @param {Promise<never>} args.gracePeriodElapsed - Promise that resolves on grace period end.
  * @param {Specials} args.specials - Special formula generators.
  * @param {boolean} [args.gcEnabled] - Enable garbage collection.
+ * @param {'locked' | 'node'} [args.defaultWorkerKind] - Default kind for newly formulated workers.
  * @returns {Promise<{ endoBootstrap: FarRef<EndoBootstrap>, capTpConnectionRegistrar: CapTpConnectionRegistrar }>}
  *         An object containing the endo bootstrap and CapTP connection registrar.
  *
@@ -5039,6 +5050,7 @@ const provideEndoBootstrap = async (
  * @param {Specials} [specials] - Special formula generators
  * @param {object} [options]
  * @param {boolean} [options.gcEnabled] - Enable garbage collection of worker daemons.
+ * @param {'locked' | 'node'} [options.defaultWorkerKind] - Default kind for newly formulated workers.
  *
  * @example
  * ```js

@@ -100,6 +100,7 @@ api-docs
 !packages/cli/test/_types.d.ts
 !packages/compartment-mapper/src/types-external.d.ts
 !packages/compartment-mapper/src/types.d.ts
+!packages/daemon/src/bus-xs-host-globals.d.ts
 !packages/daemon/src/types.d.ts
 !packages/daemon/types.d.ts
 !packages/eventual-send/src/exports.d.ts

@@ -1,4 +1,5 @@
 // @ts-check
+/// <reference path="./bus-xs-host-globals.d.ts" />
 /* global globalThis, trace */
 
 /**

@@ -1,4 +1,5 @@
 // @ts-check
+/// <reference path="./bus-xs-host-globals.d.ts" />
 /* global issueCommand, hostSendRawFrame, hostTrace, hostGetPid, hostGetEnv, harden, Compartment */
 
 /**
@@ -319,7 +320,7 @@ const clientSessions = new Map();
 const debugSessions = new Map();
 
 // Pending debug-attach promises, keyed by nonce.
-/** @type {Map<number, { resolve: (debugger: import('./types.js').Debugger) => void, reject: (reason: Error) => void, workerHandle: number }>} */
+/** @type {Map<number, { resolve: (debuggerRef: import('./types.js').Debugger) => void, reject: (reason: Error) => void, workerHandle: number }>} */
 const pendingDebugAttach = new Map();
 
 let nextNonce = 1;
@@ -597,7 +598,7 @@ const { promise: cancelled, reject: cancel } =
 
 let shouldTerminate = false;
 
-/** @type {import('./daemon.js').DaemonResult | null} */
+/** @type {Awaited<ReturnType<typeof import('./daemon.js').makeDaemon>> | null} */
 let daemonResult = null;
 
 const main = async () => {
