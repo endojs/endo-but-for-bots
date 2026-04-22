@@ -239,14 +239,14 @@ export const makeDebugSession = sendToWorker => {
           if (current && current.children) {
             current.children.push(el);
           }
-          el.parent = current || undefined;
+          if (current) el.parent = current;
           break;
         case 'node':
         case 'property':
           if (current && current.children) {
             current.children.push(el);
           }
-          el.parent = current || undefined;
+          if (current) el.parent = current;
           el.children = [];
           break;
         case 'break':
@@ -390,7 +390,7 @@ export const makeDebugSession = sendToWorker => {
         name: c.attrs.name || '',
         value: c.attrs.value || '',
         flags: c.attrs.flags || '',
-        children: c.children ? mapProperties(c.children) : undefined,
+        ...(c.children ? { children: mapProperties(c.children) } : {}),
       }),
     );
 
