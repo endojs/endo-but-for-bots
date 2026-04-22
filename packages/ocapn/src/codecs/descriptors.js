@@ -8,6 +8,7 @@
  * @import { SyrupWriter } from '../syrup/encode.js'
  * @import { OcapnLocation, OcapnPublicKeyDescriptor, OcapnSignature } from './components.js'
  * @import { SessionId, PublicKeyId } from '../client/types.js'
+ * @import { OcapnCodec } from '../codec-interface.js'
  */
 
 import harden from '@endo/harden';
@@ -23,7 +24,6 @@ import {
   OcapnPublicKeyCodec,
   OcapnSignatureCodec,
 } from './components.js';
-import { makeSyrupWriter } from '../syrup/encode.js';
 import { getSturdyRefDetails } from '../client/sturdyrefs.js';
 import { uint8ArrayToImmutableArrayBuffer } from '../buffer-utils.js';
 
@@ -414,12 +414,13 @@ export const makeHandoffGiveDescriptor = (
 
 /**
  * @param {HandoffGive} handoffGive
+ * @param {OcapnCodec} codec
  * @returns {ArrayBufferLike}
  */
-export const serializeHandoffGive = handoffGive => {
-  const syrupWriter = makeSyrupWriter();
-  DescHandoffGiveCodec.write(handoffGive, syrupWriter);
-  return uint8ArrayToImmutableArrayBuffer(syrupWriter.getBytes());
+export const serializeHandoffGive = (handoffGive, codec) => {
+  const writer = codec.makeWriter();
+  DescHandoffGiveCodec.write(handoffGive, writer);
+  return uint8ArrayToImmutableArrayBuffer(writer.getBytes());
 };
 
 /**
@@ -466,10 +467,11 @@ export const makeHandoffReceiveSigEnvelope = (handoffReceive, signature) => {
 
 /**
  * @param {HandoffReceive} handoffReceive
+ * @param {OcapnCodec} codec
  * @returns {ArrayBufferLike}
  */
-export const serializeHandoffReceive = handoffReceive => {
-  const syrupWriter = makeSyrupWriter();
-  DescHandoffReceiveCodec.write(handoffReceive, syrupWriter);
-  return uint8ArrayToImmutableArrayBuffer(syrupWriter.getBytes());
+export const serializeHandoffReceive = (handoffReceive, codec) => {
+  const writer = codec.makeWriter();
+  DescHandoffReceiveCodec.write(handoffReceive, writer);
+  return uint8ArrayToImmutableArrayBuffer(writer.getBytes());
 };

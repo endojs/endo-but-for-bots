@@ -2,7 +2,8 @@
 
 /**
  * @import { OcapnLocation, OcapnSignature } from '../codecs/components.js'
- * @import { OcapnPublicKey } from '../cryptography.js'
+ * @import { OcapnPublicKey, Cryptography } from '../cryptography.js'
+ * @import { OcapnCodec } from '../codec-interface.js'
  * @import { Ocapn } from './ocapn.js'
  * @import { Connection, Logger, SelfIdentity, SessionManager, SessionId } from './types.js'
  */
@@ -13,22 +14,22 @@ import {
   readOcapnHandshakeMessage,
   writeOcapnHandshakeMessage,
 } from '../codecs/operations.js';
-import {
-  makeOcapnPublicKey,
-  makeSessionId,
-  assertLocationSignatureValid,
-} from '../cryptography.js';
-import { compareImmutableArrayBuffers } from '../syrup/compare.js';
-import { makeSyrupReader } from '../syrup/decode.js';
-import { decodeSyrup } from '../syrup/js-representation.js';
+import { makeSessionId } from '../cryptography.js';
+import { compareImmutableArrayBuffers } from '../bytewise-compare.js';
 import { locationToLocationId } from './util.js';
 
 /**
  * @param {Connection} connection
  * @param {SelfIdentity} selfIdentity
  * @param {string} captpVersion
+ * @param {OcapnCodec} codec
  */
-export const sendHandshake = (connection, selfIdentity, captpVersion) => {
+export const sendHandshake = (
+  connection,
+  selfIdentity,
+  captpVersion,
+  codec,
+) => {
   const { keyPair, location, locationSignature } = selfIdentity;
   const opStartSession = {
     type: 'op:start-session',
@@ -37,7 +38,7 @@ export const sendHandshake = (connection, selfIdentity, captpVersion) => {
     location,
     locationSignature,
   };
-  const bytes = writeOcapnHandshakeMessage(opStartSession);
+  const bytes = writeOcapnHandshakeMessage(opStartSession, codec);
   connection.write(bytes);
 };
 
@@ -126,6 +127,8 @@ const makeSession = ({
  * @param {any} message
  * @param {string} captpVersion
  * @param {(connection: Connection, sessionId: SessionId, peerLocation: OcapnLocation) => Ocapn} prepareOcapn
+ * @param {OcapnCodec} codec
+ * @param {Cryptography} cryptography
  */
 const handleSessionHandshakeMessage = (
   logger,
@@ -136,6 +139,8 @@ const handleSessionHandshakeMessage = (
   message,
   captpVersion,
   prepareOcapn,
+  codec,
+  cryptography,
 ) => {
   logger.info(`handling handshake message of type ${message.type}`);
   switch (message.type) {
@@ -161,9 +166,9 @@ const handleSessionHandshakeMessage = (
       }
 
       // Check if the location signature is valid
-      const peerPublicKey = makeOcapnPublicKey(sessionPublicKey.q);
+      const peerPublicKey = cryptography.makeOcapnPublicKey(sessionPublicKey.q);
       try {
-        assertLocationSignatureValid(
+        cryptography.assertLocationSignatureValid(
           peerLocation,
           peerLocationSig,
           peerPublicKey,
@@ -208,7 +213,7 @@ const handleSessionHandshakeMessage = (
         // Send our op:start-session
         logger.info('Server sending op:start-session');
         const selfIdentity = getSelfIdentityForConnection(connection);
-        sendHandshake(connection, selfIdentity, captpVersion);
+        sendHandshake(connection, selfIdentity, captpVersion, codec);
       }
 
       // Create session
@@ -256,6 +261,8 @@ const handleSessionHandshakeMessage = (
  * @param {Uint8Array} data
  * @param {string} captpVersion
  * @param {(connection: Connection, sessionId: SessionId, peerLocation: OcapnLocation) => Ocapn} prepareOcapn
+ * @param {OcapnCodec} codec
+ * @param {Cryptography} cryptography
  */
 export const handleHandshakeMessageData = (
   logger,
@@ -266,22 +273,23 @@ export const handleHandshakeMessageData = (
   data,
   captpVersion,
   prepareOcapn,
+  codec,
+  cryptography,
 ) => {
   try {
-    const syrupReader = makeSyrupReader(data);
-    while (syrupReader.index < data.length) {
-      const start = syrupReader.index;
+    const reader = codec.makeReader(data);
+    while (reader.index < data.length) {
+      const start = reader.index;
       let message;
       try {
-        message = readOcapnHandshakeMessage(syrupReader);
+        message = readOcapnHandshakeMessage(reader);
       } catch (err) {
         const problematicBytes = data.slice(start);
-        const syrupMessage = decodeSyrup(problematicBytes);
         logger.error(
           `Message decode error:`,
           err,
           'while reading',
-          syrupMessage,
+          codec.diagnose(problematicBytes),
         );
         throw err;
       }
@@ -295,6 +303,8 @@ export const handleHandshakeMessageData = (
           message,
           captpVersion,
           prepareOcapn,
+          codec,
+          cryptography,
         );
       } else {
         logger.info(

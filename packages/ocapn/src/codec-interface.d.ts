@@ -121,3 +121,19 @@ export type MakeWriter = (options?: {
   name?: string;
   length?: number;
 }) => OcapnWriter;
+
+/**
+ * An OCapN codec binding, chosen by the holder of the OCapN session
+ * constructor. Two peers must share the same codec; the codec is a static
+ * per-network choice and is not negotiated on the wire.
+ */
+export interface OcapnCodec {
+  makeReader: MakeReader;
+  makeWriter: MakeWriter;
+  /**
+   * Render bytes as a human-readable diagnostic string for error logging.
+   * Not on the hot path; callers only invoke this when parsing has
+   * already failed.
+   */
+  diagnose(bytes: Uint8Array): string;
+}

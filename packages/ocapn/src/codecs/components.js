@@ -12,7 +12,8 @@ import {
   makeOcapnRecordCodecFromDefinition,
 } from './util.js';
 import { FalseCodec, makeStructCodecForValues } from './subtypes.js';
-import { makeSyrupWriter } from '../syrup/encode.js';
+
+/** @import { OcapnCodec } from '../codec-interface.js' */
 
 /*
  * OCapN Components are used in both OCapN Messages and Descriptors
@@ -156,20 +157,25 @@ export const OcapnPublicKeyCodec = makeOcapnListComponentCodec(
 
 /**
  * @param {OcapnMyLocation} myLocation
+ * @param {OcapnCodec} codec
  * @returns {Uint8Array}
  */
-export const serializeOcapnMyLocation = myLocation => {
-  const syrupWriter = makeSyrupWriter();
-  OcapnMyLocationCodec.write(myLocation, syrupWriter);
-  return syrupWriter.getBytes();
+export const serializeOcapnMyLocation = (myLocation, codec) => {
+  const writer = codec.makeWriter();
+  OcapnMyLocationCodec.write(myLocation, writer);
+  return writer.getBytes();
 };
 
 /**
  * @param {OcapnPublicKeyDescriptor} publicKeyDescriptor
+ * @param {OcapnCodec} codec
  * @returns {Uint8Array}
  */
-export const serializeOcapnPublicKeyDescriptor = publicKeyDescriptor => {
-  const syrupWriter = makeSyrupWriter();
-  OcapnPublicKeyCodec.write(publicKeyDescriptor, syrupWriter);
-  return syrupWriter.getBytes();
+export const serializeOcapnPublicKeyDescriptor = (
+  publicKeyDescriptor,
+  codec,
+) => {
+  const writer = codec.makeWriter();
+  OcapnPublicKeyCodec.write(publicKeyDescriptor, writer);
+  return writer.getBytes();
 };

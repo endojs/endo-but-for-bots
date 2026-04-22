@@ -31,11 +31,14 @@ import { makeCborReader } from '../../src/cbor/decode.js';
 import { makeCborWriter } from '../../src/cbor/encode.js';
 import { cborToDiagnostic } from '../../src/cbor/diagnostic/index.js';
 import { maybeDecode, notThrowsWithErrorUnwrapping } from '../_util.js';
-import {
+import { makeCryptography } from '../../src/cryptography.js';
+import { syrupCodec } from '../../src/syrup/index.js';
+
+const {
   makeOcapnKeyPairFromPrivateKey,
   makeSignedHandoffGive,
   makeSignedHandoffReceive,
-} from '../../src/cryptography.js';
+} = makeCryptography(syrupCodec);
 import { uint8ArrayToImmutableArrayBuffer } from '../../src/buffer-utils.js';
 import { makeOcapnTable } from '../../src/captp/ocapn-tables.js';
 import { makeSlot } from '../../src/captp/pairwise.js';
@@ -284,6 +287,7 @@ export const makeCodecTestKit = (
   const { OcapnMessageUnionCodec } = makeOcapnOperationsCodecs(
     descCodecs,
     passableCodecs,
+    syrupCodec,
   );
   const { PassableCodec } = passableCodecs;
 

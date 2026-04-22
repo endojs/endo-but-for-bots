@@ -21,8 +21,30 @@
  * See docs/syrup-specification.md for the specification.
  */
 
+import harden from '@endo/harden';
+import { makeSyrupWriter } from './encode.js';
+import { makeSyrupReader } from './decode.js';
+import { decodeSyrup } from './js-representation.js';
+
 export { SyrupWriter, makeSyrupWriter } from './encode.js';
 export { SyrupReader, makeSyrupReader, peekTypeHint } from './decode.js';
 export { BufferReader } from './buffer-reader.js';
 export { BufferWriter } from './buffer-writer.js';
-export { compareImmutableArrayBuffers } from './compare.js';
+
+const diagnoseSyrup = bytes =>
+  JSON.stringify(
+    decodeSyrup(bytes),
+    (_key, value) => (typeof value === 'bigint' ? `${value}n` : value),
+    2,
+  );
+
+/**
+ * Instance of the OCapN codec interface backed by Syrup.
+ *
+ * @type {import('../codec-interface.js').OcapnCodec}
+ */
+export const syrupCodec = harden({
+  makeReader: makeSyrupReader,
+  makeWriter: makeSyrupWriter,
+  diagnose: diagnoseSyrup,
+});

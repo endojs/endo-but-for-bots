@@ -15,9 +15,12 @@ import {
   getOcapnDebug,
 } from './_util.js';
 import { encodeSwissnum } from '../src/client/util.js';
-import { makeOcapnKeyPair, signLocation } from '../src/cryptography.js';
+import { makeCryptography } from '../src/cryptography.js';
+import { syrupCodec } from '../src/syrup/index.js';
 import { writeOcapnHandshakeMessage } from '../src/codecs/operations.js';
 import { makeSlot } from '../src/captp/pairwise.js';
+
+const { makeOcapnKeyPair, signLocation } = makeCryptography(syrupCodec);
 
 test('test slow send', async t => {
   const testObjectTable = new Map();
@@ -166,7 +169,7 @@ test('client aborts on start-session with wrong version', async t => {
   try {
     t.false(firstConnection.isDestroyed, 'Connection should not be destroyed');
 
-    const bytes = writeOcapnHandshakeMessage(badStartSession);
+    const bytes = writeOcapnHandshakeMessage(badStartSession, syrupCodec);
     firstConnection.write(bytes);
     await waitUntilTrue(() => firstConnection.isDestroyed);
 

@@ -7,6 +7,7 @@ import { Far } from '@endo/marshal';
 import { getSelectorName } from '../../src/selector.js';
 import { makeTcpNetLayer } from '../../src/netlayers/tcp-test-only.js';
 import { makeClient } from '../../src/client/index.js';
+import { syrupCodec } from '../../src/syrup/index.js';
 import { startGcScheduler } from '../_gc-util.js';
 
 /**
@@ -154,7 +155,7 @@ const start = async () => {
   // Run the GC scheduler in the background
   startGcScheduler();
 
-  const client = makeClient({ verbose: true });
+  const client = makeClient({ codec: syrupCodec, verbose: true });
   const testObjectTable = makeTestObjectTable(client);
   // Register the test objects with the client's swissnumTable
   for (const [swissStr, object] of testObjectTable.entries()) {

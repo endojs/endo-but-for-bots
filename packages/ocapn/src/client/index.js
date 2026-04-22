@@ -2,7 +2,8 @@
 
 /**
  * @import { OcapnLocation } from '../codecs/components.js'
- * @import { OcapnPublicKey } from '../cryptography.js'
+ * @import { OcapnPublicKey, Cryptography } from '../cryptography.js'
+ * @import { OcapnCodec } from '../codec-interface.js'
  * @import { SturdyRef } from './sturdyrefs.js'
  * @import { Client, Connection, InternalSession, LocationId, Logger, NetLayer, NetlayerHandlers, PendingSession, SelfIdentity, Session, SessionManager, SocketOperations, SwissNum } from './types.js'
  */
@@ -10,7 +11,7 @@
 import harden from '@endo/harden';
 import { makePromiseKit } from '@endo/promise-kit';
 import { writeOcapnHandshakeMessage } from '../codecs/operations.js';
-import { makeOcapnKeyPair, signLocation } from '../cryptography.js';
+import { makeCryptography } from '../cryptography.js';
 import { makeGrantTracker } from './grant-tracker.js';
 import { makeSturdyRefTracker, enlivenSturdyRef } from './sturdyrefs.js';
 import { locationToLocationId, toHex } from './util.js';
@@ -18,35 +19,12 @@ import { handleHandshakeMessageData, sendHandshake } from './handshake.js';
 import { makeOcapn } from './ocapn.js';
 
 /**
- * @param {OcapnLocation} myLocation
- * @returns {SelfIdentity}
- */
-export const makeSelfIdentity = myLocation => {
-  const keyPair = makeOcapnKeyPair();
-  const myLocationSig = signLocation(myLocation, keyPair);
-  return { keyPair, location: myLocation, locationSignature: myLocationSig };
-};
-
-/**
- * @param {Connection} connection
- * @param {string} [reason]
- */
-const sendAbortAndClose = (connection, reason = 'unknown reason') => {
-  const opAbort = {
-    type: 'op:abort',
-    reason,
-  };
-  const bytes = writeOcapnHandshakeMessage(opAbort);
-  connection.write(bytes);
-  connection.end();
-};
-
-/**
  * @param {Logger} logger
  * @param {SessionManager} sessionManager
  * @param {Connection} connection
  * @param {InternalSession} session
  * @param {Uint8Array} data
+ * @param {(connection: Connection, reason?: string) => void} sendAbortAndClose
  */
 const handleActiveSessionMessageData = (
   logger,
@@ -54,6 +32,7 @@ const handleActiveSessionMessageData = (
   connection,
   session,
   data,
+  sendAbortAndClose,
 ) => {
   try {
     session.ocapn.dispatchMessageData(data);
@@ -168,7 +147,11 @@ const makeSessionManager = () => {
 };
 
 /**
- * @param {object} [options]
+ * @param {object} options
+ * @param {OcapnCodec} options.codec - Wire codec (required). Import either
+ *   `syrupCodec` from `@endo/ocapn/syrup` or `cborCodec` from
+ *   `@endo/ocapn/cbor`. Both peers must share the same codec; there is no
+ *   on-the-wire negotiation.
  * @param {string} [options.debugLabel]
  * @param {boolean} [options.verbose]
  * @param {Map<string, any>} [options.swissnumTable]
@@ -179,6 +162,7 @@ const makeSessionManager = () => {
  * @returns {Client}
  */
 export const makeClient = ({
+  codec,
   debugLabel = 'ocapn',
   verbose = false,
   swissnumTable = new Map(),
@@ -186,7 +170,38 @@ export const makeClient = ({
   captpVersion = '1.0',
   enableImportCollection = true,
   debugMode = false,
-} = {}) => {
+}) => {
+  if (codec === undefined) {
+    throw Error(
+      'makeClient: "codec" option is required; import syrupCodec from "@endo/ocapn/syrup" or cborCodec from "@endo/ocapn/cbor"',
+    );
+  }
+  const cryptography = makeCryptography(codec);
+
+  /**
+   * @param {OcapnLocation} myLocation
+   * @returns {SelfIdentity}
+   */
+  const makeSelfIdentity = myLocation => {
+    const keyPair = cryptography.makeOcapnKeyPair();
+    const myLocationSig = cryptography.signLocation(myLocation, keyPair);
+    return {
+      keyPair,
+      location: myLocation,
+      locationSignature: myLocationSig,
+    };
+  };
+
+  /**
+   * @param {Connection} connection
+   * @param {string} [reason]
+   */
+  const sendAbortAndClose = (connection, reason = 'unknown reason') => {
+    const opAbort = { type: 'op:abort', reason };
+    const bytes = writeOcapnHandshakeMessage(opAbort, codec);
+    connection.write(bytes);
+    connection.end();
+  };
   /** @type {Map<string, NetLayer>} */
   const netlayers = new Map();
 
@@ -236,7 +251,7 @@ export const makeClient = ({
     const connection = netlayer.connect(location);
     const selfIdentity = getSelfIdentityForConnection(connection);
     // Send handshake for outgoing connections
-    sendHandshake(connection, selfIdentity, captpVersion);
+    sendHandshake(connection, selfIdentity, captpVersion, codec);
     const pendingSession = sessionManager.makePendingSession(
       destinationLocationId,
       connection,
@@ -309,6 +324,8 @@ export const makeClient = ({
       grantTracker,
       giftTable,
       sturdyRefTracker,
+      codec,
+      cryptography,
       debugLabel,
       enableImportCollection,
       debugMode,
@@ -330,6 +347,7 @@ export const makeClient = ({
         connection,
         session,
         data,
+        sendAbortAndClose,
       );
     } else {
       handleHandshakeMessageData(
@@ -341,6 +359,8 @@ export const makeClient = ({
         data,
         captpVersion,
         prepareOcapn,
+        codec,
+        cryptography,
       );
     }
   };

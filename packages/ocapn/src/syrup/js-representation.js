@@ -12,7 +12,7 @@ import {
   makeTypeHintUnionCodec,
   StringCodec,
 } from './codec.js';
-import { compareUint8Arrays } from './compare.js';
+import { compareUint8Arrays } from '../bytewise-compare.js';
 import { makeSyrupReader } from './decode.js';
 import { makeSyrupWriter } from './encode.js';
 

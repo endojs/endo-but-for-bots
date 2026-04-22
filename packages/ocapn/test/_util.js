@@ -16,6 +16,7 @@ import baseTest from '@endo/ses-ava/test.js';
 import { netListenAllowed } from './_net-permission.js';
 import { makeTcpNetLayer } from '../src/netlayers/tcp-test-only.js';
 import { makeClient } from '../src/client/index.js';
+import { syrupCodec } from '../src/syrup/index.js';
 import { locationToLocationId } from '../src/client/util.js';
 
 export const test = netListenAllowed ? baseTest : baseTest.skip;
@@ -183,6 +184,7 @@ export const makeTestClient = async ({
   writeLatencyMs,
 }) => {
   const client = makeClient({
+    codec: syrupCodec,
     debugLabel,
     swissnumTable: makeDefaultSwissnumTable && makeDefaultSwissnumTable(),
     verbose,

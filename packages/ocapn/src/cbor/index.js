@@ -10,6 +10,11 @@
  * See docs/cbor-encoding.md for the specification.
  */
 
+import harden from '@endo/harden';
+import { makeCborWriter } from './encode.js';
+import { makeCborReader } from './decode.js';
+import { cborToDiagnostic } from './diagnostic/index.js';
+
 export { CborWriter, makeCborWriter } from './encode.js';
 export { CborReader, makeCborReader } from './decode.js';
 
@@ -23,3 +28,14 @@ export {
   parseDiagnostic,
   diagnosticEquals,
 } from './diagnostic/index.js';
+
+/**
+ * Instance of the OCapN codec interface backed by CBOR.
+ *
+ * @type {import('../codec-interface.js').OcapnCodec}
+ */
+export const cborCodec = harden({
+  makeReader: makeCborReader,
+  makeWriter: makeCborWriter,
+  diagnose: cborToDiagnostic,
+});

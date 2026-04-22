@@ -20,6 +20,11 @@
   "module": "./index.js",
   "exports": {
     ".": "./index.js",
+    "./syrup": "./src/syrup/index.js",
+    "./cbor": "./src/cbor/index.js",
+    "./codec-interface": {
+      "types": "./src/codec-interface.d.ts"
+    },
     "./package.json": "./package.json"
   },
   "scripts": {
