@@ -90,14 +90,18 @@ if (typeof globalThis.console === 'undefined') {
         // trace host function doesn't break the caller.
       }
     };
-  globalThis.console = /** @type {Console} */ (/** @type {unknown} */ (harden({
-    log: makeLogFn(''),
-    warn: makeLogFn('[warn] '),
-    error: makeLogFn('[error] '),
-    info: makeLogFn('[info] '),
-    debug: makeLogFn('[debug] '),
-    trace: makeLogFn('[trace] '),
-  })));
+  globalThis.console = /** @type {Console} */ (
+    /** @type {unknown} */ (
+      harden({
+        log: makeLogFn(''),
+        warn: makeLogFn('[warn] '),
+        error: makeLogFn('[error] '),
+        info: makeLogFn('[info] '),
+        debug: makeLogFn('[debug] '),
+        trace: makeLogFn('[trace] '),
+      })
+    )
+  );
 }
 
 const EMPTY_PAYLOAD = new Uint8Array(0);
