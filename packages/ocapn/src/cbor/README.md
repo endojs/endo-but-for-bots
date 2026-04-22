@@ -1,9 +1,7 @@
-# OCapN CBOR Codec (Codec 1)
+# OCapN CBOR Codec
 
 This directory contains a CBOR (Concise Binary Object Representation) encoder
 and decoder for OCapN messages, as an alternative to the Syrup codec.
-
-**Codec ID**: `1` (for protocol negotiation)
 
 ## Directory Structure
 
@@ -29,8 +27,25 @@ cbor/
 
 ## Usage
 
-```javascript
-import { makeCborWriter, makeCborReader, cborToDiagnostic } from './index.js';
+```js
+// Preferred: the bundled OcapnCodec instance, for makeClient({ codec })
+import { cborCodec } from '@endo/ocapn/cbor';
+
+// Or the reader/writer primitives directly (tests, tools, custom drivers)
+import {
+  makeCborWriter,
+  makeCborReader,
+  cborToDiagnostic,
+} from '@endo/ocapn/cbor';
+```
+
+See [`docs/codec-usage.md`](../../docs/codec-usage.md) for the full injection
+pattern and the `OcapnCodec` interface.
+
+### Driving the reader / writer directly
+
+```js
+import { makeCborWriter, makeCborReader, cborToDiagnostic } from '@endo/ocapn/cbor';
 
 // Encoding
 const writer = makeCborWriter();

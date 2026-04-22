@@ -1,257 +1,174 @@
 # OCapN Codec Usage
 
-This document describes the expected usage patterns for OCapN codecs.
+This package ships two wire codecs — **Syrup** and **CBOR** — behind a common
+`OcapnCodec` interface. An application picks one at construction time and
+passes it to `makeClient`. The codec determines the wire format for every
+byte that crosses the session, including the canonical bytes covered by
+location and handoff signatures.
 
-## Design Principle: Dependency Injection
+> **No negotiation.** The OCapN standards group has not yet settled on a single
+> wire encoding. Both codecs ship so applications can experiment, but codec
+> choice is a static per-network decision; peers using different codecs cannot
+> interoperate and will not bridge. Do not expect a negotiation step — there
+> is none.
 
-Applications should import only the codec implementations they actually use.
-This ensures that unused implementations are not retained in the bundle,
-enabling tree-shaking and minimizing application size.
+## The `OcapnCodec` interface
 
-**Do not** use a central factory that knows about all codecs. Instead, import
-the specific codec components you need and inject them where required.
+An `OcapnCodec` bundles the reader factory, writer factory, and a diagnostic
+renderer used for error logging:
 
-## Available Codecs
-
-### Syrup (Codec 0)
-
-Syrup is a canonical, text-delimited binary serialization format. It is the
-original OCapN wire format.
-
-```js
-// Import only the writer
-import { makeSyrupWriter } from '@endo/ocapn/syrup/encode.js';
-
-// Import only the reader
-import { makeSyrupReader } from '@endo/ocapn/syrup/decode.js';
-
-// Or import both from the index
-import { makeSyrupWriter, makeSyrupReader } from '@endo/ocapn/syrup/index.js';
+```ts
+// '@endo/ocapn/codec-interface' (types only)
+interface OcapnCodec {
+  makeReader(bytes: Uint8Array, options?: { name?: string }): OcapnReader;
+  makeWriter(options?: { name?: string; length?: number }): OcapnWriter;
+  diagnose(bytes: Uint8Array): string;
+}
 ```
 
-#### Writing with Syrup
+Both `OcapnReader` and `OcapnWriter` share a codec-agnostic shape (enter/exit
+records, lists, dictionaries, sets; read/write booleans, integers, floats,
+strings, bytestrings, selectors). Code written against these interfaces runs
+against either codec without modification.
+
+## Tree-shakeable imports
+
+Import only the codec you intend to use. The other implementation will not
+enter your bundle graph.
 
 ```js
-import { makeSyrupWriter } from '@endo/ocapn/syrup/encode.js';
+// Syrup only
+import { syrupCodec } from '@endo/ocapn/syrup';
 
-const writer = makeSyrupWriter({ name: 'example message' });
+// or CBOR only
+import { cborCodec } from '@endo/ocapn/cbor';
+```
+
+Each module also exports its lower-level primitives (`makeSyrupReader` /
+`makeSyrupWriter`, `makeCborReader` / `makeCborWriter`, the diagnostic
+helpers) for callers that need to drive the reader/writer directly — for
+example, test harnesses or tools that inspect raw bytes.
+
+## Using the client
+
+Pass the codec to `makeClient`:
+
+```js
+import { makeClient } from '@endo/ocapn';
+import { syrupCodec } from '@endo/ocapn/syrup';
+
+const client = makeClient({ codec: syrupCodec });
+```
+
+The `codec` option is required — the constructor intentionally has no
+default, so the codec you are not using never enters your bundle graph.
+For CBOR networks:
+
+```js
+import { makeClient } from '@endo/ocapn';
+import { cborCodec } from '@endo/ocapn/cbor';
+
+const client = makeClient({ codec: cborCodec });
+```
+
+Everything downstream — handshake frames, session messages, and the canonical
+bytes that feed `ed25519` signatures — is produced and consumed through the
+codec you supplied. Two clients constructed with different codecs will reject
+each other's handshakes.
+
+## Using the codec outside of a client
+
+The same codec bundle is enough to drive the serialize/deserialize helpers
+directly, and to obtain codec-bound cryptographic helpers:
+
+```js
+import { writeOcapnHandshakeMessage } from '@endo/ocapn/codecs/operations.js';
+import { makeCryptography } from '@endo/ocapn/cryptography.js';
+import { syrupCodec } from '@endo/ocapn/syrup';
+
+const crypto = makeCryptography(syrupCodec);
+const keyPair = crypto.makeOcapnKeyPair();
+
+const bytes = writeOcapnHandshakeMessage(
+  {
+    type: 'op:start-session',
+    captpVersion: '1.0',
+    sessionPublicKey: keyPair.publicKey.descriptor,
+    location: myLocation,
+    locationSignature: crypto.signLocation(myLocation, keyPair),
+  },
+  syrupCodec,
+);
+```
+
+`makeCryptography(codec)` returns an object with signing, verification, and
+key-pair helpers bound to the given codec. The helpers depend on the codec
+because they compute signatures over bytes produced by the codec's writer.
+
+## Writing codec-agnostic code
+
+Code that wants to work with whichever codec its caller chose should accept
+an `OcapnCodec` (or the narrower `MakeReader` / `MakeWriter`) and call
+through it:
+
+```js
+/**
+ * @param {import('@endo/ocapn/codec-interface').OcapnCodec} codec
+ */
+function encodeGreeting(codec, name) {
+  const writer = codec.makeWriter({ name: 'greeting' });
+  writer.enterRecord();
+  writer.writeSelectorFromString('greet');
+  writer.writeString(name);
+  writer.exitRecord();
+  return writer.getBytes();
+}
+```
+
+## Writer / reader primitives
+
+When you need to drive a reader or writer directly (for tests, tools, or the
+occasional custom codec consumer), each codec module re-exports its factories:
+
+```js
+import { makeSyrupWriter, makeSyrupReader } from '@endo/ocapn/syrup';
+import { makeCborWriter, makeCborReader } from '@endo/ocapn/cbor';
+```
+
+### Writing
+
+```js
+const writer = codec.makeWriter({ name: 'example message' });
 writer.enterRecord();
 writer.writeSelectorFromString('deliver');
 writer.writeInteger(42n);
 writer.writeString('hello');
 writer.exitRecord();
-
 const bytes = writer.getBytes();
 ```
 
-#### Reading with Syrup
+### Reading
 
 ```js
-import { makeSyrupReader } from '@endo/ocapn/syrup/decode.js';
-
-const reader = makeSyrupReader(bytes, { name: 'example message' });
+const reader = codec.makeReader(bytes, { name: 'example message' });
 reader.enterRecord();
-const label = reader.readSelectorAsString(); // 'deliver'
-const num = reader.readInteger(); // 42n
-const str = reader.readString(); // 'hello'
+const { value: label } = reader.readRecordLabel();
+const num = reader.readInteger();
+const str = reader.readString();
 reader.exitRecord();
 ```
 
-### CBOR (Codec 1)
+Use `reader.peekTypeHint()` when the next value's shape is unknown.
+Available hints: `'number-prefix'`, `'float64'`, `'boolean'`, `'list'`,
+`'set'`, `'dictionary'`, `'record'`.
 
-CBOR (Concise Binary Object Representation) is an RFC 8949 compliant binary
-format. OCapN CBOR uses canonical encoding for deterministic serialization.
+## The `name` option
 
-```js
-// Import only the writer
-import { makeCborWriter } from '@endo/ocapn/cbor/encode.js';
-
-// Import only the reader
-import { makeCborReader } from '@endo/ocapn/cbor/decode.js';
-
-// Or import both from the index
-import { makeCborWriter, makeCborReader } from '@endo/ocapn/cbor/index.js';
-```
-
-#### Writing with CBOR
+Readers and writers accept an optional `name` used solely in error messages
+and logs; it does not affect encoding. Name the outer message or operation so
+failures are easy to locate:
 
 ```js
-import { makeCborWriter } from '@endo/ocapn/cbor/encode.js';
-
-const writer = makeCborWriter({ name: 'example message' });
-writer.enterRecord();
-writer.writeString('deliver');  // CBOR uses plain strings for record labels
-writer.writeInteger(42n);
-writer.writeString('hello');
-writer.exitRecord();
-
-const bytes = writer.getBytes();
+const writer = codec.makeWriter({ name: 'outbound op:deliver' });
 ```
-
-#### Reading with CBOR
-
-```js
-import { makeCborReader } from '@endo/ocapn/cbor/decode.js';
-
-const reader = makeCborReader(bytes, { name: 'example message' });
-reader.enterRecord();
-const { value: label } = reader.readRecordLabel(); // { value: 'deliver', type: 'string' }
-const num = reader.readInteger(); // 42n
-const str = reader.readString(); // 'hello'
-reader.exitRecord();
-```
-
-### CBOR Diagnostic Notation
-
-CBOR diagnostic notation is a text-based representation useful for testing
-and debugging. It is a codec in its own right:
-
-```js
-// Encode: CBOR bytes → diagnostic string
-import { encode } from '@endo/ocapn/cbor/diagnostic/encode.js';
-
-// Decode: diagnostic string → JavaScript values
-import { decode } from '@endo/ocapn/cbor/diagnostic/decode.js';
-
-// Or import from the index
-import { encode, decode } from '@endo/ocapn/cbor/diagnostic/index.js';
-```
-
-## Injection Pattern for OCapN Client
-
-When constructing an OCapN client or netlayer, inject the codec factories:
-
-```js
-import { makeCborWriter } from '@endo/ocapn/cbor/encode.js';
-import { makeCborReader } from '@endo/ocapn/cbor/decode.js';
-
-const netlayer = makeNetlayer({
-  makeWriter: makeCborWriter,
-  makeReader: makeCborReader,
-  // ... other options
-});
-```
-
-Or for Syrup:
-
-```js
-import { makeSyrupWriter } from '@endo/ocapn/syrup/encode.js';
-import { makeSyrupReader } from '@endo/ocapn/syrup/decode.js';
-
-const netlayer = makeNetlayer({
-  makeWriter: makeSyrupWriter,
-  makeReader: makeSyrupReader,
-  // ... other options
-});
-```
-
-## Interface Compatibility
-
-Both Syrup and CBOR codecs implement the same `OcapnReader` and `OcapnWriter`
-interfaces (defined in `src/codec-interface.js`), ensuring they can be used
-interchangeably wherever these interfaces are expected.
-
-```js
-/**
- * @param {import('./codec-interface.js').MakeWriter} makeWriter
- * @param {import('./codec-interface.js').MakeReader} makeReader
- */
-function createMessageHandler(makeWriter, makeReader) {
-  return {
-    encode(value) {
-      const writer = makeWriter({ name: 'encode' });
-      // ... write value
-      return writer.getBytes();
-    },
-    decode(bytes) {
-      const reader = makeReader(bytes, { name: 'decode' });
-      // ... read value
-      return result;
-    },
-  };
-}
-```
-
-## Options
-
-### The `name` Option
-
-Both readers and writers accept an optional `name` parameter:
-
-```js
-const writer = makeCborWriter({ name: 'outbound message' });
-const reader = makeCborReader(bytes, { name: 'inbound message' });
-```
-
-The `name` is used solely for **logging and error messages**. It helps identify
-which message or context caused an error during debugging. The name does not
-affect encoding or decoding behavior—it is not the record label or operation
-type, just a human-readable identifier for debugging purposes.
-
-**Example error message**:
-```
-Error in 'outbound message': Expected integer, got string at position 42
-```
-
-When `name` is omitted, error messages use a generic identifier.
-
-## Type Detection
-
-When reading data of unknown structure, use `peekTypeHint()` to determine
-the type of the next value without consuming it:
-
-```js
-const reader = makeCborReader(bytes, { name: 'unknown structure' });
-
-const hint = reader.peekTypeHint();
-switch (hint) {
-  case 'number-prefix':
-    // Could be integer or float - check further or read as appropriate
-    const num = reader.readInteger(); // or readFloat64()
-    break;
-  case 'boolean':
-    const bool = reader.readBoolean();
-    break;
-  case 'list':
-    reader.enterList();
-    // ... read elements
-    reader.exitList();
-    break;
-  case 'record':
-    reader.enterRecord();
-    const { value: label } = reader.readRecordLabel();
-    // ... read fields based on label
-    reader.exitRecord();
-    break;
-  case 'dictionary':
-    reader.enterStruct();
-    // ... read key-value pairs
-    reader.exitStruct();
-    break;
-  // ... handle other types
-}
-```
-
-**Available type hints**:
-- `'number-prefix'` - Integer or floating-point number
-- `'float64'` - Explicitly a 64-bit float (CBOR only)
-- `'boolean'` - Boolean value
-- `'list'` - Array/list
-- `'set'` - Set (if supported by codec)
-- `'dictionary'` - Map/struct with key-value pairs
-- `'record'` - Record (Tag 27 in CBOR, `<...>` in Syrup)
-
-Note that type hints are approximate. For example, `'number-prefix'` indicates
-a numeric value but doesn't distinguish between integers and floats until the
-value is actually read.
-
-## Codec Identification
-
-For protocol negotiation purposes:
-- **Syrup**: Codec ID `0`
-- **CBOR**: Codec ID `1`
-
-These identifiers may be used during handshake to negotiate which codec
-to use for a session. See the netlayer documentation for details on
-codec negotiation.
 

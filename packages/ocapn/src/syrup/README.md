@@ -1,20 +1,20 @@
-# OCapN Syrup Codec (Codec 0)
+# OCapN Syrup Codec
 
 [Syrup](https://gitlab.com/spritely/syrup) is a binary object marshalling
 codec. It is the first proposed OCapN wire format.
 
-**Codec ID**: `0` (for protocol negotiation)
-
 ## Usage
 
 ```js
-// Import only what you need (recommended for tree-shaking)
-import { makeSyrupWriter } from './encode.js';
-import { makeSyrupReader } from './decode.js';
+// Preferred: the bundled OcapnCodec instance, for makeClient({ codec })
+import { syrupCodec } from '@endo/ocapn/syrup';
 
-// Or import from the index
-import { makeSyrupWriter, makeSyrupReader } from './index.js';
+// Or the reader/writer primitives directly (tests, tools, custom drivers)
+import { makeSyrupWriter, makeSyrupReader } from '@endo/ocapn/syrup';
 ```
+
+See [`docs/codec-usage.md`](../../docs/codec-usage.md) for the full injection
+pattern and the `OcapnCodec` interface.
 
 ### Writing
 
