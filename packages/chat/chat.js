@@ -19,7 +19,6 @@ import { whylipComponent } from './whylip-component.js';
 import { peersComponent } from './peers-component.js';
 import { createShareModal } from './share-modal.js';
 import { microblogComponent } from './microblog-component.js';
-import { createDebuggerPanel } from './debugger-panel.js';
 
 const template = `
 <div id="spaces-gutter"></div>

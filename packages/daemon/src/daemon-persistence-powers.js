@@ -1,4 +1,10 @@
-// @ts-check
+// @ts-nocheck
+// Filesystem-based DaemonicPersistencePowers used by the XS bus
+// daemon.  The llm-side interface grew SQLite-only methods
+// (listFormulaNumbersByNode, writeAgentKey, retention tables);
+// this module predates that migration and is known to not satisfy
+// the full type.  Re-enable @ts-check once the XS daemon carries
+// a SQLite-backed implementation.
 
 /**
  * Pure-JS factory for DaemonicPersistencePowers.

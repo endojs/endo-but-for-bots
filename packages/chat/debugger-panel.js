@@ -340,7 +340,7 @@ export const createDebuggerPanel = ({ $container, $backdrop }) => {
       const source = $consoleInput.value.trim();
       if (!source || !debuggerRef) return;
       $consoleInput.value = '';
-      appendConsole('> ' + source, 'debugger-console-input-line');
+      appendConsole(`> ${source}`, 'debugger-console-input-line');
       E(debuggerRef)
         .evaluate(source)
         .then(
@@ -405,9 +405,10 @@ export const createDebuggerPanel = ({ $container, $backdrop }) => {
         $status.className = 'debugger-status debugger-status-paused';
         updateStepButtons(true);
         if (lastBreak) {
-          $breakInfo.textContent =
-            `${lastBreak.path}:${lastBreak.line}` +
-            (lastBreak.message ? ` — ${lastBreak.message}` : '');
+          const location = `${lastBreak.path}:${lastBreak.line}`;
+          $breakInfo.textContent = lastBreak.message
+            ? `${location} — ${lastBreak.message}`
+            : location;
         }
       } else {
         $status.textContent = 'Running';

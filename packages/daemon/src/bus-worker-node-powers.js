@@ -1,5 +1,6 @@
 // @ts-check
-/* global process */
+/* eslint-disable no-await-in-loop -- Envelope reader loop awaits
+   each frame from stdin serially; this is the intended shape. */
 
 /**
  * Worker powers for workers running on the bus (external supervisor).

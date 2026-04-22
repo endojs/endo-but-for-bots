@@ -1,4 +1,6 @@
 // @ts-check
+/* eslint-disable no-continue -- XML parser skips whitespace-only
+   children and unknown elements without nesting logic. */
 
 /// <reference types="ses" />
 
@@ -6,7 +8,6 @@
  * @import { DebugSession, BreakEvent, Frame, Property } from './types.js'
  */
 
-import { makeError, q, X } from '@endo/errors';
 import { makePromiseKit } from '@endo/promise-kit';
 
 /** @import { PromiseKit } from '@endo/promise-kit' */

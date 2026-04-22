@@ -1,4 +1,7 @@
 // @ts-check
+/* eslint-disable @endo/restrict-comparison-operands -- inbound envelope
+   byte length is a plain number; the rule's inference flags it because
+   we access it through an `unknown`-typed input parameter. */
 /// <reference path="./bus-xs-host-globals.d.ts" />
 /* global globalThis, sendRawFrame, trace */
 
@@ -82,16 +85,19 @@ if (typeof globalThis.console === 'undefined') {
       try {
         // eslint-disable-next-line no-undef
         trace(`${prefix}${args.map(formatArg).join(' ')}`);
-      } catch (_e) {}
+      } catch (_e) {
+        // Best-effort tracing: suppress failures so a broken
+        // trace host function doesn't break the caller.
+      }
     };
-  globalThis.console = harden({
+  globalThis.console = /** @type {Console} */ (/** @type {unknown} */ (harden({
     log: makeLogFn(''),
     warn: makeLogFn('[warn] '),
     error: makeLogFn('[error] '),
     info: makeLogFn('[info] '),
     debug: makeLogFn('[debug] '),
     trace: makeLogFn('[trace] '),
-  });
+  })));
 }
 
 const EMPTY_PAYLOAD = new Uint8Array(0);

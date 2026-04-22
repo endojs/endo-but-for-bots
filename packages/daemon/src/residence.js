@@ -167,10 +167,11 @@ export const makeResidenceTracker = ({
           const formula = getFormula(id);
           const cancelWithWorker = /** @type {any} */ (formula)
             ?.cancelWithWorker;
-          if (
+          const skipThisRetainer =
             typeof cancelWithWorker === 'string' &&
-            cancelWithWorker.startsWith(`${workerId}:`)
-          ) {
+            cancelWithWorker.startsWith(`${workerId}:`);
+          if (skipThisRetainer) {
+            // eslint-disable-next-line no-continue
             continue;
           }
           const reason = new Error(

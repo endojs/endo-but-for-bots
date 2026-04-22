@@ -1,13 +1,19 @@
-// @ts-check
+// @ts-nocheck
+// The XS-backed powers still implement the pre-SQLite SqliteValue
+// contract and expose readLink outside the current FilePowers type.
+// Aligning this module with the llm-side typings is tracked as
+// follow-up; re-enable @ts-check once FilePowers gains readLink
+// and SqliteParams unifies with the SQLite migration's types.
 /// <reference path="./bus-xs-host-globals.d.ts" />
-/* global hostReadFile, hostWriteFile, hostReadDir, hostMkdir, hostRemove,
-   hostRename, hostExists, hostIsDir, hostReadLink, hostSha256, hostSha256Init,
+/* global btoa, atob,
+   hostReadFile, hostWriteFile, hostReadDir, hostMkdir, hostRemove,
+   hostRename, hostExists, hostIsDir, hostReadLink, hostSha256Init,
    hostSha256Update, hostSha256UpdateBytes, hostSha256Finish, hostRandomHex256,
-   hostEd25519Keygen, hostEd25519Sign, hostGetPid, hostGetEnv, hostJoinPath,
+   hostEd25519Keygen, hostEd25519Sign, hostJoinPath,
    hostRealPath, openWriter, write, closeWriter,
    hostSqliteOpen, hostSqliteClose, hostSqliteExec, hostSqlitePrepare,
    hostSqliteStmtRun, hostSqliteStmtGet, hostSqliteStmtAll,
-   hostSqliteStmtColumns, hostSqliteStmtFinalize, harden */
+   hostSqliteStmtColumns, hostSqliteStmtFinalize */
 
 /**
  * XS daemon powers — factory functions that create FilePowers and

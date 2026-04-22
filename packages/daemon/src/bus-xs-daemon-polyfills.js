@@ -1,4 +1,7 @@
 // @ts-check
+/* eslint-disable no-continue, no-plusplus -- URL polyfill parses
+   query strings with a counted-down loop and skips empty tokens
+   without nesting. */
 /// <reference path="./bus-xs-host-globals.d.ts" />
 /* global globalThis, trace */
 

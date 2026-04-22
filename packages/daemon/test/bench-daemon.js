@@ -1,5 +1,5 @@
 // @ts-check
-/* global process, setTimeout, performance */
+/* global process, performance */
 
 // Establish a perimeter:
 // eslint-disable-next-line import/order
@@ -42,12 +42,12 @@ const bench = async (label, fn, iterations = 1) => {
   // Warm-up (1 call).
   await fn();
 
-  const start = performance.now();
+  const startMs = performance.now();
   for (let i = 0; i < iterations; i += 1) {
     // eslint-disable-next-line no-await-in-loop
     await fn();
   }
-  const elapsed = performance.now() - start;
+  const elapsed = performance.now() - startMs;
   return {
     label,
     totalMs: elapsed,
@@ -55,13 +55,6 @@ const bench = async (label, fn, iterations = 1) => {
     iterations,
   };
 };
-
-/**
- * @param {string} label
- * @param {() => Promise<void>} fn
- * @returns {Promise<{label: string, totalMs: number, avgMs: number, iterations: number}>}
- */
-const benchOnce = (label, fn) => bench(label, fn, 1);
 
 // ---------------------------------------------------------------------------
 // Benchmark scenarios
@@ -369,7 +362,7 @@ const main = async () => {
       for (const [, results] of allResults) {
         const r = results.find(x => x.label === baseRow.label);
         if (r) {
-          line += ` ${(r.avgMs.toFixed(1) + 'ms').padStart(colWidth)}`;
+          line += ` ${`${r.avgMs.toFixed(1)}ms`.padStart(colWidth)}`;
         } else {
           line += ` ${'—'.padStart(colWidth)}`;
         }

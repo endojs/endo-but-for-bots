@@ -1,4 +1,5 @@
 // @ts-check
+/* global setTimeout */
 
 /**
  * @file CapTP debugger integration tests.
@@ -89,7 +90,7 @@ test('help returns description over CapTP', async t => {
   const { debugger: dbg } = makeTestDebugger();
   const remote = await makeCapTPDebugger(dbg);
 
-  const msg = await E(remote).help();
+  const msg = /** @type {string} */ (await E(remote).help());
   t.is(typeof msg, 'string');
   t.true(msg.length > 0);
 });
@@ -300,10 +301,7 @@ test('selectFrame sends select command over CapTP', async t => {
 
   t.true(outbound.some(s => s.includes('select') && s.includes('id="1"')));
 
-  feedXml(
-    session,
-    '<local>' + '<property name="y" value="99" flags=""/>' + '</local>',
-  );
+  feedXml(session, '<local><property name="y" value="99" flags=""/></local>');
 
   const locals = await localsP;
   t.is(locals.length, 1);
@@ -377,10 +375,7 @@ test('full debug session lifecycle over CapTP', async t => {
   // 5. Inspect locals.
   const localsP = E(remote).getLocals();
   await flush();
-  feedXml(
-    session,
-    '<local>' + '<property name="x" value="42" flags=""/>' + '</local>',
-  );
+  feedXml(session, '<local><property name="x" value="42" flags=""/></local>');
   const locals = await localsP;
   t.is(locals[0].name, 'x');
   t.is(locals[0].value, '42');

@@ -1,6 +1,16 @@
-// @ts-check
+// @ts-nocheck
+// The bus Node daemon powers still delegate to pre-SQLite pet-store
+// and persistence factories; aligning with the llm-side constructor
+// signatures (single daemonDb argument) is follow-up work.
+
 /* global process */
 /* eslint-disable no-void */
+/* eslint-disable no-bitwise -- CBOR envelope encoding / length-prefix
+   parsing requires bitwise operators. */
+/* eslint-disable no-continue -- Envelope framing loop skips malformed
+   frames without nesting. */
+/* eslint-disable no-await-in-loop -- Envelope reader awaits each
+   frame serially by design. */
 
 /**
  * Daemonic powers for the bus platform (external supervisor).

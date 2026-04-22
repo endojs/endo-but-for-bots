@@ -30,20 +30,6 @@ const BreakEventShape = M.splitRecord({
   message: M.string(),
 });
 
-const FrameShape = M.splitRecord({
-  name: M.string(),
-  value: M.string(),
-  path: M.string(),
-  line: M.number(),
-});
-
-/** @type {import('@endo/patterns').Pattern} */
-const PropertyShape = M.splitRecord({
-  name: M.string(),
-  value: M.string(),
-  flags: M.string(),
-});
-
 export const DebuggerInterface = M.interface('EndoDebugger', {
   help: M.call().returns(M.string()),
   go: M.call().returns(M.undefined()),

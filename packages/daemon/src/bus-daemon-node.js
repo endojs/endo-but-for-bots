@@ -132,7 +132,9 @@ const main = async () => {
 
   // Start the envelope reader now that the init envelope has been consumed.
   // This must happen after readInitEnvelope() to avoid a race on fd 4.
-  powers.control.startEnvelopeReader();
+  if (powers.control.startEnvelopeReader) {
+    powers.control.startEnvelopeReader();
+  }
 
   await daemonicPersistencePowers.initializePersistence();
 

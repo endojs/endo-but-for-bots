@@ -1,4 +1,7 @@
 // @ts-check
+/* eslint-disable no-underscore-dangle -- __shouldTerminate is
+   deliberately scoped to globalThis with a dunder name to avoid
+   collision with app-level exports. */
 /* global globalThis */
 
 /**
