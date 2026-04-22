@@ -7,6 +7,9 @@
  */
 
 import { makeError, q, X } from '@endo/errors';
+import { makePromiseKit } from '@endo/promise-kit';
+
+/** @import { PromiseKit } from '@endo/promise-kit' */
 
 /**
  * @typedef {object} XmlElement
@@ -411,7 +414,7 @@ export const makeDebugSession = sendToWorker => {
    */
   const commandWithResponse = (xml, expectKey) => {
     const { promise, resolve, reject } = /** @type {PromiseKit<any>} */ (
-      Promise.withResolvers()
+      makePromiseKit()
     );
     pending.set(expectKey, { resolve, reject });
     sendCommand(xml);
