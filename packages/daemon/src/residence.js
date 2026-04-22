@@ -164,11 +164,12 @@ export const makeResidenceTracker = ({
           // worker should not be terminated merely for having held the
           // reference; only workers that actively endow or retain the
           // collected formula should be affected.
+          const formula = getFormula(id);
+          const cancelWithWorker = /** @type {any} */ (formula)
+            ?.cancelWithWorker;
           if (
-            /** @type {any} */ (formula).cancelWithWorker &&
-            /** @type {string} */ (
-              /** @type {any} */ (formula).cancelWithWorker
-            ).startsWith(`${workerId}:`)
+            typeof cancelWithWorker === 'string' &&
+            cancelWithWorker.startsWith(`${workerId}:`)
           ) {
             continue;
           }

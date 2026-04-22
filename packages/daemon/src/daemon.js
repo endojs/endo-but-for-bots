@@ -845,7 +845,7 @@ const makeDaemonCore = async (
       // by make-unconfined/make-bundle formulas on this worker.
       const terminatedId = formatId({
         number: workerId,
-        node: LOCAL_NODE,
+        node: localNodeNumber,
       });
       for (const formula of formulaForId.values()) {
         if (
