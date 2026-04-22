@@ -30,12 +30,12 @@ test('simulator: agent processes one message with real provider (env)', async t 
     return;
   }
 
-  const { make } = await import('../../agent.js');
+  const { spawnWorkerLoop } = await import('../../agent.js');
 
   const { powers, whenDismissed, sent } = makeMockPowers({
     initialMessage: {
       number: 1,
-      from: 'HOST',
+      from: '@host',
       to: 'lal-self-id',
       strings: [
         'Reply with exactly: OK then dismiss this message (dismiss message 1).',
@@ -45,8 +45,10 @@ test('simulator: agent processes one message with real provider (env)', async t 
     },
   });
 
-  const agent = make(powers, null, { env });
-  t.truthy(agent, 'agent created');
+  // Spawn the worker loop directly with env-based config.
+  spawnWorkerLoop(powers, null, /** @type {any} */ (env)).catch(error => {
+    t.log('Worker error:', error.message);
+  });
 
   const done = whenDismissed(1);
   const timeout = new Promise((_, reject) => {

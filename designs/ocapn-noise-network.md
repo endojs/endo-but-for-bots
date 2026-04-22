@@ -1,3 +1,11 @@
+# OCapN-Noise Network
+
+| | |
+|---|---|
+| **Created** | 2026-02-14 |
+| **Updated** | 2026-02-24 |
+| **Author** | Kris Kowal (prompted) |
+| **Status** | Not Started |
 
 ## What is the Problem Being Solved?
 

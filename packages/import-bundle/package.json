@@ -1,6 +1,6 @@
 {
   "name": "@endo/import-bundle",
-  "version": "1.5.2",
+  "version": "1.6.0",
   "description": "load modules created by @endo/bundle-source",
   "keywords": [],
   "author": "Endo contributors",
@@ -31,8 +31,8 @@
     "test:c8": "c8 ${C8_OPTIONS:-} ses-ava",
     "test:xs": "exit 0",
     "build": "exit 0",
-    "prepack": "tsc --build tsconfig.build.json",
-    "postpack": "git clean -fX \"*.d.ts*\" \"*.d.cts*\" \"*.d.mts*\" \"*.tsbuildinfo\"",
+    "prepack": "git clean -fX -e node_modules/ && tsc --build tsconfig.build.json",
+    "postpack": "git clean -fX -e node_modules/",
     "lint-fix": "eslint --fix '**/*.js'",
     "lint": "yarn lint:types && yarn lint:eslint",
     "lint:eslint": "eslint .",
@@ -42,11 +42,14 @@
     "@endo/base64": "workspace:^",
     "@endo/compartment-mapper": "workspace:^",
     "@endo/errors": "workspace:^",
+    "@endo/harden": "workspace:^",
     "@endo/where": "workspace:^",
     "ses": "workspace:^"
   },
   "devDependencies": {
     "@endo/bundle-source": "workspace:^",
+    "@endo/evasive-transform": "workspace:^",
+    "@endo/eventual-send": "workspace:^",
     "@endo/init": "workspace:^",
     "@endo/ses-ava": "workspace:^",
     "ava": "catalog:dev",
@@ -84,7 +87,8 @@
   },
   "sesAvaConfigs": {
     "lockdown": "../../ava-endo-lockdown.config.mjs",
-    "unsafe": "../../ava-endo-lockdown-unsafe.config.mjs"
+    "unsafe": "../../ava-endo-lockdown-unsafe.config.mjs",
+    "endo": "../../ava-endo-shims-only.config.mjs"
   },
   "typeCoverage": {
     "atLeast": 65.38

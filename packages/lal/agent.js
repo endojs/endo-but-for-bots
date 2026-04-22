@@ -1,16 +1,17 @@
 // @ts-nocheck - E() generics don't work well with JSDoc types for remote objects
 /* eslint-disable no-await-in-loop */
-/* eslint-disable no-continue */
 
 import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
 import { E } from '@endo/eventual-send';
 import { passableAsJustin, makeMarshal } from '@endo/marshal';
 import { makeRefIterator } from '@endo/daemon/ref-reader.js';
+import { makeLocalTree } from '@endo/platform/fs/node';
+
 import { createProvider } from './providers/index.js';
 
 /** @import { FarRef } from '@endo/eventual-send' */
-/** @import { GuestPowers, NameOrPath, ToolParameterProperty, ToolParameters, ToolFunction, Tool, ToolCall, ChatMessage, ToolResult, ToolCallArgs, InboxMessage, PendingProposal, ProposalNotification, LalContext, LalOptions } from './agent.types' */
+/** @import { GuestPowers, NameOrPath, ToolParameterProperty, ToolParameters, ToolFunction, Tool, ToolCall, ChatMessage, ToolResult, ToolCallArgs, InboxMessage, LalContext } from './agent.types' */
 
 // ============================================================================
 // Interface Definition
@@ -74,15 +75,21 @@ const tools = [
     function: {
       name: 'list',
       description:
-        'List all pet names in the directory or a subdirectory. Returns an array of names.',
+        'List contents of your directory or any capability you have a pet name for. ' +
+        'With no arguments, lists pet names in your root directory. ' +
+        'With a name, looks up that capability and calls list() on it ' +
+        '(works on ReadableTree, WritableTree, directories, etc.).',
       parameters: {
         type: 'object',
         properties: {
-          petNamePath: {
-            type: 'array',
-            items: { type: 'string' },
+          name: {
+            oneOf: [
+              { type: 'string' },
+              { type: 'array', items: { type: 'string' } },
+            ],
             description:
-              'Optional path to a subdirectory. Use [] for the root directory.',
+              'Optional pet name or path of a capability to list. ' +
+              'Omit to list your own root directory.',
           },
         },
         required: [],
@@ -329,7 +336,7 @@ const tools = [
               { type: 'array', items: { type: 'string' } },
             ],
             description:
-              'The pet name of the recipient, e.g., "HOST" for your host.',
+              'The pet name of the recipient, e.g., "@host" for your host.',
           },
           description: {
             type: 'string',
@@ -360,12 +367,12 @@ The message is constructed from alternating text strings and value references:
 - petNames: Array of pet names providing the values (same length as edgeNames)
 
 Example: To send "Here is [counter] for you" where counter is a value:
-  send("HOST", ["Here is ", " for you"], ["counter"], ["my-counter"])
+  send("@host", ["Here is ", " for you"], ["counter"], ["my-counter"])
 
 The recipient sees: "Here is @counter for you" and can adopt @counter.
 
 IMPORTANT for code: When sending code, use a single string without edge names:
-  send("HOST", ["Here is the code:\\n\`\`\`javascript\\nconst x = 1;\\n\`\`\`"], [], [])
+  send("@host", ["Here is the code:\\n\`\`\`javascript\\nconst x = 1;\\n\`\`\`"], [], [])
 
 For multi-line content, include literal newlines in the string.`,
       parameters: {
@@ -377,7 +384,7 @@ For multi-line content, include literal newlines in the string.`,
               { type: 'array', items: { type: 'string' } },
             ],
             description:
-              'The pet name of the recipient, e.g., "HOST" for your host.',
+              'The pet name of the recipient, e.g., "@host" for your host.',
           },
           strings: {
             type: 'array',
@@ -407,14 +414,70 @@ For multi-line content, include literal newlines in the string.`,
     },
   },
 
+  {
+    type: 'function',
+    function: {
+      name: 'reply',
+      description: `\
+Reply to a message in your inbox, threading the response to the original message.
+Use this instead of send() when responding to a received message.
+
+The reply is automatically sent to the other party in the original conversation
+and is threaded as a reply (the daemon sets replyTo on the outgoing message).
+
+The message is constructed the same way as send():
+- strings: Array of text fragments
+- edgeNames: Array of labels for the values being sent
+- petNames: Array of pet names providing the values
+
+IMPORTANT: Always use reply() instead of send() when responding to a message.
+Use send() only for initiating brand new conversations.`,
+      parameters: {
+        type: 'object',
+        properties: {
+          messageNumber: {
+            type: 'string',
+            description:
+              'The message number (BigInt) to reply to. Use SmallCaps format: "+5" for message 5.',
+          },
+          strings: {
+            type: 'array',
+            items: { type: 'string' },
+            description:
+              'Text fragments. Length should be edgeNames.length + 1.',
+          },
+          edgeNames: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Labels for the values being sent.',
+          },
+          petNames: {
+            type: 'array',
+            items: {
+              oneOf: [
+                { type: 'string' },
+                { type: 'array', items: { type: 'string' } },
+              ],
+            },
+            description:
+              'Pet names of values to include (same length as edgeNames).',
+          },
+        },
+        required: ['messageNumber', 'strings', 'edgeNames', 'petNames'],
+      },
+    },
+  },
+
   // --- Identity ---
   {
     type: 'function',
     function: {
-      name: 'identify',
+      name: 'locate',
       description:
-        'Get the formula ID for a pet name. Use identify("SELF") to get your own ID, ' +
-        'which you can compare against the "from" field of messages to determine if you sent them.',
+        'Get the locator URL for a pet name. Returns an "endo://..." URL string. ' +
+        'Use locate(["@self"]) to get your own locator, then compare it against ' +
+        'the "from" field of messages to determine if you sent them. ' +
+        'Only pass pet names you know exist (use list() first if unsure).',
       parameters: {
         type: 'object',
         properties: {
@@ -422,7 +485,7 @@ For multi-line content, include literal newlines in the string.`,
             type: 'array',
             items: { type: 'string' },
             description:
-              'The pet name path to identify, e.g., ["SELF"] or ["HOST"].',
+              'The pet name path to locate, e.g., ["@self"] or ["@host"].',
           },
         },
         required: ['petNamePath'],
@@ -430,11 +493,11 @@ For multi-line content, include literal newlines in the string.`,
     },
   },
 
-  // --- Capability inspection ---
+  // --- Capability operations ---
   {
     type: 'function',
     function: {
-      name: 'inspectCapability',
+      name: 'inspect',
       description:
         'Look up a capability by pet name and call its help() method to learn how to use it. ' +
         'Use this to discover what methods a capability provides.',
@@ -453,27 +516,74 @@ For multi-line content, include literal newlines in the string.`,
       },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: 'readText',
+      description:
+        'Read text content from a capability (ReadableTree, WritableTree, etc.). ' +
+        'Looks up the capability by pet name and calls readText(fileName) on it.',
+      parameters: {
+        type: 'object',
+        properties: {
+          petNameOrPath: {
+            oneOf: [
+              { type: 'string' },
+              { type: 'array', items: { type: 'string' } },
+            ],
+            description: 'The pet name or path of the capability to read from.',
+          },
+          fileName: {
+            type: 'string',
+            description: 'The file name to read within the capability.',
+          },
+        },
+        required: ['petNameOrPath', 'fileName'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'writeText',
+      description:
+        'Write text content to a capability (WritableTree, etc.). ' +
+        'Looks up the capability by pet name and calls writeText(fileName, content) on it.',
+      parameters: {
+        type: 'object',
+        properties: {
+          petNameOrPath: {
+            oneOf: [
+              { type: 'string' },
+              { type: 'array', items: { type: 'string' } },
+            ],
+            description: 'The pet name or path of the capability to write to.',
+          },
+          fileName: {
+            type: 'string',
+            description: 'The file name to write within the capability.',
+          },
+          content: {
+            type: 'string',
+            description: 'The text content to write.',
+          },
+        },
+        required: ['petNameOrPath', 'fileName', 'content'],
+      },
+    },
+  },
 
-  // --- Code evaluation proposal ---
+  // --- Code evaluation ---
   {
     type: 'function',
     function: {
       name: 'evaluate',
       description: `\
-Propose code for evaluation to your HOST for approval.
+Evaluate JavaScript code directly.
 
-IMPORTANT: This does NOT execute code directly. Instead, it sends an evaluation
-proposal to your HOST. The HOST can then:
-- Grant the proposal (execute the code)
-- Reject the proposal
-- Counter with a modified version
-
-Use this when you need to run code that requires capabilities from your HOST.
-
-You should ALWAYS specify resultName. The HOST stores the evaluation result under
-this pet name in your directory when the proposal is granted. You can then
-lookup(resultName) or send it to the requester. If you omit resultName, you only
-get the result in the notification and have no stable name to reference or send.
+The code executes immediately and returns the result. The result is stored under
+the pet name you specify as resultName. You can then lookup(resultName) or send
+it to the requester.
 
 The code can reference values from your directory using the codeNames/edgeNames mapping:
 - codeNames: Variable names that will be available in your source code
@@ -481,10 +591,7 @@ The code can reference values from your directory using the codeNames/edgeNames 
 
 Example: To run "E(counter).increment()" where counter is a value you have named "my-counter",
 and store the result as "increment-result":
-  evaluate(undefined, "E(counter).increment()", ["counter"], ["my-counter"], "increment-result")
-
-When the HOST grants the proposal, the result is stored at resultName and you will
-receive a notification. Use lookup(resultName) to get the value and send() to deliver it.`,
+  evaluate(undefined, "E(counter).increment()", ["counter"], ["my-counter"], "increment-result")`,
       parameters: {
         type: 'object',
         properties: {
@@ -515,10 +622,59 @@ receive a notification. Use lookup(resultName) to get the value and send() to de
               { type: 'array', items: { type: 'string' } },
             ],
             description:
-              'Pet name (or path) where the HOST will store the evaluation result. You should always specify this so you can lookup and send the result after the proposal is granted.',
+              'Pet name (or path) where the evaluation result will be stored. You can then lookup and send the result.',
           },
         },
         required: ['source', 'codeNames', 'edgeNames', 'resultName'],
+      },
+    },
+  },
+
+  // --- Define (code with slots for host to fill) ---
+  {
+    type: 'function',
+    function: {
+      name: 'define',
+      description: `\
+Propose a reusable program with named capability slots for the host to fill.
+Unlike evaluate(), you do NOT provide the capabilities yourself — the host
+chooses what to bind from their own inventory. This is the preferred way to
+request code execution when you don't have the required capabilities.
+
+The host sees the code and slot labels, fills each slot with a capability
+from their pet store, and the code is executed. The host can submit the
+program multiple times with different bindings. You do not receive any
+notification when the program is submitted — the result is private to the host.
+
+Example: To request incrementing a counter you don't have:
+  define("E(counter).increment()", {"counter": {"label": "A counter to increment"}})
+
+The host will choose which counter to provide.`,
+      parameters: {
+        type: 'object',
+        properties: {
+          source: {
+            type: 'string',
+            description: 'The JavaScript source code to evaluate.',
+          },
+          slots: {
+            type: 'object',
+            description:
+              'Named capability slots. Keys are variable names in source, values are objects with a "label" string describing what capability is needed.',
+            additionalProperties: {
+              type: 'object',
+              properties: {
+                label: {
+                  type: 'string',
+                  description:
+                    'Human-readable description of what this slot needs.',
+                },
+              },
+              required: ['label'],
+            },
+          },
+        },
+        required: ['source', 'slots'],
       },
     },
   },
@@ -530,266 +686,99 @@ receive a notification. Use lookup(resultName) to get the value and send() to de
 
 /** @type {string} */
 const systemPrompt = `\
-You are an Endo agent with Guest capabilities in the Endo capability system.
-You communicate entirely through tool calls - do not write prose responses.
+You are an Endo agent with Guest capabilities. You communicate entirely
+through tool calls — do not write prose responses.
 
-## Your Environment
+## Quick Reference
 
-You exist in an object-capability (ocap) security environment where:
-- You have a set of named references (pet names) to capabilities
-- You can receive messages from other agents in your inbox
-- You can send messages to other agents (especially HOST)
-- You can request capabilities from your HOST
-- Capabilities may implement a help() method for self-documentation
+1. \`listMessages()\` — Check your inbox
+2. \`locate(["@self"])\` — Get your identity (compare with message "from" to identify your own messages)
+3. For received messages: \`adopt()\` values -> process -> \`reply()\` -> \`dismiss()\`
 
-## Data Types (SmallCaps Encoding)
+## Names
 
-Tool arguments and results use SmallCaps encoding, which extends JSON with additional types.
-Use these special string formats in your tool call arguments:
+There are two kinds of name in your inventory:
 
-| Type       | SmallCaps Format    | Example                |
-|------------|---------------------|------------------------|
-| BigInt     | "+N" or "-N"        | "+123", "-456"         |
-| undefined  | "#undefined"        | "#undefined"           |
-| Infinity   | "#Infinity"         | "#Infinity"            |
-| -Infinity  | "#-Infinity"        | "#-Infinity"           |
-| NaN        | "#NaN"              | "#NaN"                 |
+- *Special names* start with \`@\` and are read-only and indelible
+  (you cannot remove, rename, or overwrite them):
+  - \`@self\` — Your own handle
+  - \`@host\` — Your host agent
+- *Pet names* are user-chosen labels like \`my-counter\` or
+  \`project-data\`. You can create, rename, copy, and remove them
+  freely. They are lowercase alphanumeric with hyphens
+  (\`a-z0-9-\`, 1-128 chars).
 
-Examples:
-- Message number (BigInt): \`{"messageNumber": "+5"}\`
-- Checking for undefined: value === "#undefined"
+## SmallCaps
 
-For regular strings that start with special characters (!, #, $, %, &, +, -), prefix with !:
-- String "!important" encodes as "!!important"
-- String "+positive" encodes as "!+positive"
+Message numbers are BigInt. Use \`"+N"\` format: \`dismiss("+5")\`, \`reply("+3", ...)\`
 
-Most tool arguments are regular JSON values and don't need special encoding.
+## Key Rules
 
-## Your Role
+1. Reply to every received message using \`reply()\`, then \`dismiss()\` it
+2. Adopt values first — if a message has values in its \`names\` array, adopt them before use
+3. Prefer direct tools — use \`list()\`, \`readText()\`, \`writeText()\`, \`lookup()\`, etc. instead of \`evaluate()\`
+4. No prose responses — communicate only through tool calls
+5. Check before acting — use \`list()\` and \`has()\` to verify pet names exist
 
-You respond to messages in your inbox using tool calls.
-When you receive notification of new mail, you should:
-1. Use listMessages() to see what messages you have
-2. Process each message appropriately using the available tools
-3. IMPORTANT: Always reply to the sender using send() - use the "from" field of the message as the recipient
-4. IMPORTANT: Always dismiss() each message after you have satisfactorily handled it
+## Helping the User
 
-You must reply to every message you receive. The sender is identified in the "from"
-field of each message - use this as the recipient when calling send() to reply.
+Your user may be interacting with Endo through either the *Endo CLI*
+(terminal commands like \`endo ls\`, \`endo send\`, \`endo adopt\`) or the
+*Endo Chat* web UI (slash commands like \`/ls\`, \`/send\`, \`/adopt\`),
+or both. When giving the user instructions or guidance:
 
-Messages remain in your inbox until dismissed. Dismissing a message signals that
-you have completed processing it. Failing to dismiss leaves stale messages that
-will appear in future listMessages() calls.
+- Frame instructions for *both* interfaces when practical.
+  For example: "You can list your inventory with \`endo ls\` in the
+  terminal or \`/ls\` in Chat."
+- Read \`readText("primer", "cli-reference.md")\` and
+  \`readText("primer", "chat-reference.md")\` for the full command
+  lists in each interface.
+- Read the scenario guides under \`readText("primer", "howto-*.md")\`
+  for step-by-step walkthroughs of common tasks.
+- Prefer the user's apparent interface when you can infer it; if
+  uncertain, show both.
 
-## Available Tools
+## Writing Programs
 
-### Self-documentation
-- help(methodName?) - Get documentation for your capabilities
+When the user asks you to write, create, propose, or build a program,
+**always use the \`define()\` tool**. Do not use \`evaluate()\` — the user
+expects to review the code and choose which capabilities to bind.
 
-### Directory Operations (managing named references)
-- list(petNamePath?) - List names in a directory
-- has(petNamePath) - Check if a name exists
-- lookup(petNameOrPath) - Get a value by name
-- remove(petNamePath) - Remove a name
-- move(fromPath, toPath) - Rename/move a reference
-- copy(fromPath, toPath) - Copy a reference
-- makeDirectory(petNamePath) - Create a subdirectory
+- Each endowment the code needs becomes a named slot in the \`slots\`
+  parameter with a descriptive label.
+- The code receives endowments as lexical bindings (variable names
+  matching the slot keys).
+- The *completion value* (last expression) is the result. Make sure
+  the final expression evaluates to whatever the program should produce.
+- Top-level \`await\` is not supported. For a single async call, the
+  promise itself is the completion value. For multiple async steps,
+  wrap in an async IIFE: \`(async () => { ... })()\`.
 
-### Mail Operations
-- listMessages() - List inbox messages (includes BOTH sent and received messages)
-- adopt(messageNumber, edgeName, petName) - Adopt a value from a message
-- dismiss(messageNumber) - Remove a message from inbox
-- request(recipientName, description, responseName?) - Request a capability
-- resolve(messageNumber, petNameOrPath) - Respond to a request
-- reject(messageNumber, reason?) - Decline a request
-- send(recipientName, strings, edgeNames, petNames) - Send a message
+Example — propose a program that reads a file from a directory:
+\`\`\`
+define("E(dir).readText('config.json')", {
+  "dir": {"label": "Directory containing config.json"}
+})
+\`\`\`
 
-### Identity
-- identify(petNamePath) - Get the formula ID for a pet name (e.g., identify(["SELF"]) returns your ID)
-- Compare message "from" field to your SELF ID to determine if you sent or received a message
+## Primer
 
-### Capability Inspection
-- inspectCapability(petNameOrPath) - Call help() on a capability to learn about it
+You have a \`primer\` directory in your inventory with detailed documentation.
+Use the \`readText\` and \`list\` tools to read it:
 
-### Code Evaluation (Proposal)
-- evaluate(workerName?, source, codeNames, edgeNames, resultName) - Propose code for HOST approval. resultName is required.
+\`\`\`
+list("primer")          // See available docs
+readText("primer", "README.md")   // Overview and table of contents
+\`\`\`
 
-## Code Evaluation Proposals
+The primer contains:
+- Agent tool reference, messaging, capabilities, encoding, formatting, errors
+- CLI and Chat command references
+- How-to guides for common scenarios
 
-When you need to run code that manipulates capabilities or performs computations,
-use the evaluate() tool to propose code to your HOST for approval.
-
-IMPORTANT: evaluate() does NOT run code directly. It sends a proposal to your HOST.
-The HOST must explicitly grant the proposal before the code executes.
-
-IMPORTANT: Always specify resultName. When the HOST grants the proposal, the result
-is stored under this pet name in your directory. You can then lookup(resultName) and
-send it to the requester. If you omit resultName, you only get the result in the
-notification and have no stable name to reference or send.
-
-Example: If you have a counter named "my-counter" and want to increment it, storing
-the result as "increment-result":
-  evaluate(undefined, "E(counter).increment()", ["counter"], ["my-counter"], "increment-result")
-
-The codeNames array lists variable names used in your source code.
-The edgeNames array lists the pet names from YOUR directory providing those values.
-When the HOST grants, the code runs and you receive the result in your notification.
-
-### Proposal Responses
-
-After you submit an eval-proposal, you will be notified when the HOST responds:
-
-**GRANTED**: The HOST executed your code.
-- The result is stored at the resultName you specified (e.g. lookup(resultName) to get it)
-- You will also receive the result value in the notification
-- You should: Use lookup(resultName) to get the value, then send() to deliver it back to the original requester
-
-**REJECTED**: The HOST declined your proposal.
-- You will receive the rejection reason
-- You should:
-  1. Send a follow-up message to the sender explaining the situation
-  2. Ask clarifying questions if the task is still relevant
-  3. Consider alternative approaches
-
-**COUNTER-PROPOSAL**: The HOST modified your code and sent it back.
-- You will receive the modified code as an eval-proposal message
-- Review the changes carefully
-- You can:
-  1. Accept by submitting a new evaluate() with the suggested code
-  2. Reject if the changes don't meet your needs
-  3. Send a message explaining why you disagree
-
-### Globals Available in Evaluated Code
-
-When your code executes (after HOST grants), these globals are available:
-
-- **E(target)** - Eventual-send for remote method calls on capabilities
-  Example: \`E(counter).increment()\` calls increment() on a remote counter
-  Example: \`E(store).get("key")\` retrieves a value from a remote store
-
-- **M** - Pattern matchers for interface guards
-  Example: \`M.string()\` matches strings
-  Example: \`M.interface('Foo', { bar: M.call().returns(M.number()) })\`
-
-- **makeExo(tag, interface, methods)** - Create new capability objects
-  Example:
-  \`\`\`javascript
-  makeExo('Counter', M.interface('Counter', {
-    increment: M.call().returns(M.number()),
-    getValue: M.call().returns(M.number()),
-  }), {
-    increment() { return ++this.state.count; },
-    getValue() { return this.state.count; },
-  })
-  \`\`\`
-
-Use these to:
-- Invoke methods on capabilities passed as endowments
-- Create new capabilities to send back to requesters
-- Define type-safe interfaces for your created objects
-
-### Responding to Proposal Status Changes
-
-CRITICAL: You MUST respond to every proposal status notification you receive.
-When you are notified that your proposal was granted, rejected, or counter-proposed,
-you should IMMEDIATELY take follow-up action:
-
-**On GRANTED**: Use send() to deliver results or report success to the original requester
-**On REJECTED**: Use send() to explain the situation and ask clarifying questions
-**On COUNTER-PROPOSAL**: Review and either accept, reject, or negotiate via send()
-
-Never ignore a proposal status notification. The sender is waiting for your response.
-
-### Workflow Example
-
-1. Receive request: "Please increment my counter"
-2. Propose: evaluate(undefined, "E(counter).increment()", ["counter"], ["user-counter"], "increment-result")
-3. Wait for notification...
-4. If GRANTED: The result is stored at "increment-result" - use lookup("increment-result") then send() to deliver it back to requester
-5. If REJECTED: send() an apology/question to the requester
-6. If COUNTER-PROPOSAL: review, then accept or negotiate
-
-## Message Format for send()
-
-The send() tool constructs messages from alternating text and value references.
-
-For plain text messages:
-  send("HOST", ["Hello, I received your message."], [], [])
-
-For messages with capability references:
-  send("HOST", ["Here is ", " as requested."], ["result"], ["my-result"])
-  // Recipient sees: "Here is @result as requested."
-  // They can adopt @result to get the value named "my-result"
-
-## Quasi-Markdown Formatting
-
-Messages support a markdown dialect for rich text formatting:
-
-### Block-level elements
-- Headings: \`# Heading 1\` through \`###### Heading 6\`
-- Code fences: \`\`\`language\\ncode\\n\`\`\`
-- Unordered lists: \`- item\` or \`* item\`
-- Ordered lists: \`1. item\` or \`1) item\`
-- Paragraphs: Separated by blank lines
-
-### Inline formatting (NOTE: differs from standard markdown!)
-- Bold: \`*text*\` (single asterisks, NOT double)
-- Italic: \`/text/\` (forward slashes, NOT asterisks)
-- Underline: \`_text_\` (underscores)
-- Strikethrough: \`~text~\` (tildes)
-- Inline code: \`\\\`code\\\`\` (backticks)
-
-### Examples
-- Bold: \`*important*\` renders as **important**
-- Italic: \`/emphasis/\` renders as _emphasis_
-- Code: \`\\\`const x = 1\\\`\` renders as inline code
-
-For multi-line code:
-  send("HOST", ["Here is the implementation:\\n\`\`\`javascript\\nfunction add(a, b) {\\n  return a + b;\\n}\\n\`\`\`"], [], [])
-
-## Special Pet Names
-
-- SELF: Your own handle
-- HOST: Your host agent (can grant you capabilities)
-- AGENT: Your formula identifier
-
-## Response Protocol
-
-IMPORTANT: You must ONLY respond with tool calls. Do not include any text content.
-When you need to communicate, use the send() tool to send messages.
-
-Workflow for processing messages:
-1. First, identify yourself: lookup("SELF") gives you a reference you can use with identify("SELF") to get your formula ID
-2. Call listMessages() to see all messages - this includes BOTH messages you sent AND messages you received
-3. For each message, check BOTH the "from" AND "to" fields:
-   - If "from" matches your SELF ID: this is a message YOU sent (you can skip or dismiss it)
-   - If "from" does NOT match your SELF ID: this is a message FROM someone else that you should process
-4. For received messages:
-   - Take appropriate action (adopt values, resolve/reject requests, etc.)
-   - ALWAYS send a reply to the sender using the "from" field as recipient
-   - Call dismiss(messageNumber) after handling
-5. Proceed to the next message
-
-IMPORTANT: The message list contains your own sent messages too! Always check if you are the
-sender before trying to "reply" to a message - you don't want to reply to yourself.
-
-You MUST reply to every message you RECEIVE (where "from" is not yourself).
-Always dismiss messages after handling them - this is essential for proper operation.
-
-## Error Handling
-
-Tool calls may fail and return error results. When you receive an error:
-1. Examine the error message to understand what went wrong
-2. If appropriate, inform the sender about the error using send()
-3. Decide whether to retry with different parameters or give up
-4. Still dismiss the message after handling (even if handling failed)
-
-Common errors include:
-- Unknown pet name: The name doesn't exist in your directory
-- Invalid arguments: Check parameter types and formats
-- Permission denied: You may not have access to that capability
-
-Always check tool results before proceeding - don't assume success.
+When you encounter an unfamiliar situation, read the relevant primer document
+before resorting to \`evaluate()\`. For unfamiliar capabilities, use
+\`inspect("name")\` to call their \`help()\` method.
 `;
 
 // ============================================================================
@@ -797,19 +786,15 @@ Always check tool results before proceeding - don't assume success.
 // ============================================================================
 
 /**
- * Creates a Lal agent that processes messages using an LLM.
+ * Spawn a worker loop that follows a guest's inbox and processes messages
+ * using the given LLM configuration.
  *
- * @param {FarRef<GuestPowers>} guestPowers - Guest powers from the Endo daemon
- * @param {Promise<LalContext> | LalContext | undefined} context - Context for cancellation support
- * @param {LalOptions} options - Configuration options
- * @param {import('./agent.types').LalEnv} options.env - Environment variables for LLM provider
- * @returns {object} The Lal exo object
+ * @param {any} powers - Guest powers (manager's own or a sub-guest's)
+ * @param {Promise<object> | object | null | undefined} context - Context for cancellation
+ * @param {{ LAL_HOST?: string, LAL_MODEL?: string, LAL_AUTH_TOKEN?: string }} workerEnv - LLM provider config
+ * @returns {Promise<void>}
  */
-export const make = (guestPowers, context, { env }) => {
-  console.log('[LAL]', env);
-  // Cast to any for E() calls since TypeScript can't properly infer FarRef types
-  /** @type {any} */
-  const powers = guestPowers;
+export const spawnWorkerLoop = async (powers, context, workerEnv) => {
   const getCancelled = async () => {
     if (!context) return null;
     const resolvedContext = await context;
@@ -823,8 +808,7 @@ export const make = (guestPowers, context, { env }) => {
     return null;
   };
 
-  // LAL_HOST, LAL_MODEL, LAL_AUTH_TOKEN; see providers/index.js.
-  const provider = createProvider(env);
+  const provider = createProvider(workerEnv);
 
   /**
    * Chat with the LLM.
@@ -833,29 +817,108 @@ export const make = (guestPowers, context, { env }) => {
    */
   const chat = messages => provider.chat(messages, tools);
 
-  /** @type {ChatMessage[]} */
-  const transcript = [
-    {
-      role: 'system',
-      content: systemPrompt,
-    },
-  ];
+  // ---- Transcript Node Store ----
+  // Each transcript is a linked chain of nodes. Each node stores only the
+  // messages appended at that step, plus a pointer to the parent node.
+  // The full transcript is assembled by walking the chain when calling the LLM.
 
-  // ---- Eval Proposal Tracking ----
+  /** @import { TranscriptNode } from './agent.types' */
 
-  /** @type {Map<number, PendingProposal>} */
-  const pendingProposals = new Map();
-  let nextProposalId = 1;
-
-  /** @type {ProposalNotification[]} */
-  const notificationQueue = [];
+  /** @type {Map<string, TranscriptNode>} */
+  const nodeCache = new Map();
 
   /**
-   * Inject a notification about a proposal response into the transcript.
-   * @param {ProposalNotification} notification
+   * Look up a transcript node, loading from durable storage if needed.
+   * @param {string} messageId
+   * @returns {Promise<TranscriptNode | undefined>}
    */
-  const injectProposalNotification = notification => {
-    notificationQueue.push(notification);
+  const getNode = async messageId => {
+    const cached = nodeCache.get(messageId);
+    if (cached !== undefined) return cached;
+
+    const petName = `transcript-${messageId}`;
+    try {
+      if (await E(powers).has(petName)) {
+        const stored = /** @type {TranscriptNode} */ (
+          await E(powers).lookup(petName)
+        );
+        // The stored node is hardened; make a mutable working copy.
+        const mutable = { ...stored, messages: [...stored.messages] };
+        nodeCache.set(messageId, mutable);
+        return mutable;
+      }
+    } catch {
+      // Storage lookup failed; treat as missing.
+    }
+    return undefined;
+  };
+
+  /**
+   * Store a transcript node both in cache and durable storage.
+   * @param {TranscriptNode} node
+   */
+  const putNode = async node => {
+    nodeCache.set(node.messageId, node);
+    const petName = `transcript-${node.messageId}`;
+    try {
+      // Harden a snapshot for storage; the working node stays mutable.
+      await E(powers).storeValue(
+        harden({ ...node, messages: [...node.messages] }),
+        petName,
+      );
+    } catch (error) {
+      console.error(
+        `[transcript] Failed to persist node ${node.messageId}:`,
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+  };
+
+  /**
+   * Assemble the full LLM transcript by walking the chain from leaf to root.
+   * @param {string} leafMessageId
+   * @returns {Promise<ChatMessage[]>}
+   */
+  const assembleTranscript = async leafMessageId => {
+    /** @type {ChatMessage[][]} */
+    const chain = [];
+    /** @type {string | null} */
+    let current = leafMessageId;
+    while (current !== null) {
+      const node = await getNode(current);
+      if (node === undefined) break;
+      chain.push(node.messages);
+      current = node.parentMessageId;
+    }
+    chain.reverse();
+    return chain.flat();
+  };
+
+  /**
+   * Compute the conversational depth of a transcript (user + assistant turns).
+   * @param {ChatMessage[]} messages
+   * @returns {number}
+   */
+  const computeDepth = messages => {
+    let count = 0;
+    for (const msg of messages) {
+      if (msg.role === 'user' || msg.role === 'assistant') {
+        count += 1;
+      }
+    }
+    return count;
+  };
+
+  let nextRootId = 0;
+  /**
+   * Generate a unique string for use as a root node messageId.
+   * These are only used as internal transcript-store keys, not as
+   * cryptographic identifiers.
+   * @returns {string}
+   */
+  const makeRootNodeId = () => {
+    nextRootId += 1;
+    return `root-${Date.now()}-${nextRootId}`;
   };
 
   // SmallCaps marshal for decoding LLM tool call arguments
@@ -924,6 +987,14 @@ export const make = (guestPowers, context, { env }) => {
   };
 
   /**
+   * The transcript node for the currently active agentic loop.
+   * Set by runAgenticLoop before processing tool calls so that
+   * the reply tool can compute and prepend transcript depth.
+   * @type {TranscriptNode | null}
+   */
+  let activeLeafNode = null;
+
+  /**
    * Execute a tool call and return the result.
    *
    * @param {string} name - Tool name
@@ -947,8 +1018,13 @@ export const make = (guestPowers, context, { env }) => {
         return E(powers).has(...petNamePath);
       }
       case 'list': {
-        const { petNamePath = [] } = args;
-        return E(powers).list(...petNamePath);
+        // eslint-disable-next-line no-shadow
+        const { name } = args;
+        if (name !== undefined) {
+          const capability = await E(powers).lookup(name);
+          return E(capability).list();
+        }
+        return E(powers).list();
       }
       case 'lookup': {
         const { petNameOrPath } = args;
@@ -988,7 +1064,24 @@ export const make = (guestPowers, context, { env }) => {
 
       // Mail operations
       case 'listMessages': {
-        return E(powers).listMessages();
+        const rawMessages = await E(powers).listMessages();
+        return harden(
+          rawMessages.map(
+            (
+              /** @type {InboxMessage & {messageId?: string, replyTo?: string}} */ msg,
+            ) => ({
+              number: msg.number,
+              date: msg.date,
+              from: msg.from,
+              to: msg.to,
+              type: msg.type,
+              strings: msg.strings,
+              names: msg.names,
+              messageId: msg.messageId,
+              replyTo: msg.replyTo,
+            }),
+          ),
+        );
       }
       case 'resolve': {
         const { messageNumber, petNameOrPath } = args;
@@ -1043,31 +1136,96 @@ export const make = (guestPowers, context, { env }) => {
         }
         return E(powers).send(recipientName, strings, edgeNames, petNames);
       }
+      case 'reply': {
+        const { messageNumber, strings, edgeNames, petNames } = args;
+        if (
+          messageNumber === undefined ||
+          !strings ||
+          !edgeNames ||
+          !petNames
+        ) {
+          throw new Error(
+            'messageNumber, strings, edgeNames, and petNames are required',
+          );
+        }
+        // Prepend transcript depth to the first string fragment
+        let depthStrings = strings;
+        if (activeLeafNode !== null) {
+          const transcript = await assembleTranscript(activeLeafNode.messageId);
+          const depth = computeDepth(transcript);
+          if (depthStrings.length !== 0) {
+            depthStrings = [
+              `[depth:${depth}] ${depthStrings[0]}`,
+              ...depthStrings.slice(1),
+            ];
+          } else {
+            depthStrings = [`[depth:${depth}]`];
+          }
+        }
+        return E(powers).reply(
+          messageNumber,
+          depthStrings,
+          edgeNames,
+          petNames,
+        );
+      }
 
       // Identity
-      case 'identify': {
+      case 'locate': {
         const { petNamePath } = args;
         if (!petNamePath) {
           throw new Error('petNamePath is required');
         }
-        return E(powers).identify(...petNamePath);
+        return E(powers).locate(...petNamePath);
       }
 
-      // Capability inspection
-      case 'inspectCapability': {
+      // Capability operations
+      case 'inspect': {
         const { petNameOrPath } = args;
         if (petNameOrPath === undefined) {
           throw new Error('petNameOrPath is required');
         }
         const capability = await E(powers).lookup(petNameOrPath);
+        const parts = [];
         try {
-          return await E(capability).help();
+          const helpText = await E(capability).help();
+          parts.push(helpText);
         } catch {
-          return `Capability at "${petNameOrPath}" does not implement help().`;
+          parts.push(
+            `Capability at "${petNameOrPath}" does not implement help().`,
+          );
         }
+        try {
+          // eslint-disable-next-line no-underscore-dangle
+          const methods = await E(capability).__getMethodNames__();
+          parts.push(`\nMethods: ${methods.join(', ')}`);
+        } catch {
+          // No __getMethodNames__ available.
+        }
+        return parts.join('\n');
+      }
+      case 'readText': {
+        const { petNameOrPath, fileName } = args;
+        if (petNameOrPath === undefined || fileName === undefined) {
+          throw new Error('petNameOrPath and fileName are required');
+        }
+        const capability = await E(powers).lookup(petNameOrPath);
+        return E(capability).readText(fileName);
+      }
+      case 'writeText': {
+        const { petNameOrPath, fileName, content } = args;
+        if (
+          petNameOrPath === undefined ||
+          fileName === undefined ||
+          content === undefined
+        ) {
+          throw new Error('petNameOrPath, fileName, and content are required');
+        }
+        const capability = await E(powers).lookup(petNameOrPath);
+        return E(capability).writeText(fileName, content);
       }
 
-      // Code evaluation proposal
+      // Code evaluation
       case 'evaluate': {
         const {
           workerName: rawWorkerName,
@@ -1088,64 +1246,26 @@ export const make = (guestPowers, context, { env }) => {
             ? undefined
             : rawWorkerName;
 
-        // Send an eval-proposal to the HOST for approval
-        const proposalPromise = E(powers).evaluate(
+        // Execute code directly
+        return E(powers).evaluate(
           workerName,
           source,
           harden(codeNames),
           harden(edgeNames),
           resultName,
         );
+      }
 
-        // Track this proposal
-        const proposalId = nextProposalId;
-        nextProposalId += 1;
-
-        pendingProposals.set(proposalId, {
-          proposalId,
-          source,
-          codeNames,
-          edgeNames,
-          workerName,
-          promise: proposalPromise,
-        });
-
-        // Watch for the proposal to settle
-        proposalPromise.then(
-          result => {
-            console.log(
-              `[proposal] #${proposalId} granted with result:`,
-              result,
-            );
-            pendingProposals.delete(proposalId);
-            injectProposalNotification({
-              status: 'granted',
-              proposalId,
-              source,
-              result,
-            });
-          },
-          error => {
-            const errorMessage =
-              error instanceof Error ? error.message : String(error);
-            console.log(`[proposal] #${proposalId} rejected:`, errorMessage);
-            pendingProposals.delete(proposalId);
-            injectProposalNotification({
-              status: 'rejected',
-              proposalId,
-              source,
-              error: errorMessage,
-            });
-          },
-        );
-
-        // Return immediately - the LLM will be notified when the proposal settles
-        return {
-          proposalId,
-          status: 'pending',
-          message: `Proposal #${proposalId} sent to HOST for approval. You will be notified when the HOST responds.`,
-          source,
-        };
+      // Define code with slots for host to fill
+      case 'define': {
+        const { source, slots } = args;
+        if (source === undefined) {
+          throw new Error('source is required');
+        }
+        if (slots === undefined) {
+          throw new Error('slots is required');
+        }
+        return E(powers).define(source, harden(slots));
       }
 
       default:
@@ -1166,15 +1286,22 @@ export const make = (guestPowers, context, { env }) => {
     for (const toolCall of toolCalls) {
       const { name, arguments: argsRaw } = toolCall.function;
 
-      // Decode SmallCaps arguments ("+7" -> 7n, "#undefined" -> undefined)
+      // Decode SmallCaps arguments ("+7" -> 7n, "#undefined" -> undefined).
+      // Falls back to plain JSON.parse if SmallCaps decoding fails, since
+      // some tool arguments (e.g. define's nested slots objects) are plain
+      // JSON that SmallCaps cannot decode.
       /** @type {ToolCallArgs} */
       let args;
+      const jsonString =
+        typeof argsRaw === 'string' ? argsRaw : JSON.stringify(argsRaw);
       try {
-        const jsonString =
-          typeof argsRaw === 'string' ? argsRaw : JSON.stringify(argsRaw);
         args = /** @type {ToolCallArgs} */ (decodeSmallcaps(jsonString));
       } catch {
-        args = {};
+        try {
+          args = /** @type {ToolCallArgs} */ (JSON.parse(jsonString));
+        } catch {
+          args = {};
+        }
       }
 
       console.log(`[tool] ${name}(${passableAsJustin(harden(args), false)})`);
@@ -1202,75 +1329,16 @@ export const make = (guestPowers, context, { env }) => {
   };
 
   /**
-   * Format a proposal notification as a user message for the LLM.
-   * @param {ProposalNotification} notification
-   * @returns {string}
-   */
-  const formatProposalNotification = notification => {
-    const { status, proposalId, source } = notification;
-    const sourceText = String(source);
-    const sourcePreview =
-      sourceText.length > 100 ? `${sourceText.slice(0, 100)}...` : sourceText;
-
-    if (status === 'granted') {
-      const resultStr =
-        notification.result !== undefined
-          ? `\nResult: ${passableAsJustin(notification.result, false)}`
-          : '\nResult: (no return value)';
-      return `Your eval-proposal #${proposalId} was GRANTED by the HOST.
-Source: ${sourcePreview}${resultStr}
-
-The code was executed successfully. If you specified a resultName, the result is now stored there.
-You should:
-1. If you have a capability to send back, use send() to deliver it to the original requester
-2. If you were performing a task, report the outcome to the sender
-3. Continue with any follow-up actions as needed`;
-    } else {
-      return `Your eval-proposal #${proposalId} was REJECTED by the HOST.
-Source: ${sourcePreview}
-Reason: ${notification.error || 'No reason given'}
-
-The HOST declined to execute your proposed code. You should:
-1. Send a follow-up message to the sender asking for clarification or explaining the situation
-2. Consider whether a different approach might work
-3. If appropriate, propose modified code that addresses the HOST's concerns`;
-    }
-  };
-
-  /**
-   * Process any pending notifications and add them to the transcript.
-   * @returns {boolean} True if notifications were processed
-   */
-  const processNotifications = () => {
-    if (notificationQueue.length === 0) {
-      return false;
-    }
-
-    while (notificationQueue.length > 0) {
-      const notification = notificationQueue.shift();
-      if (notification) {
-        const message = formatProposalNotification(notification);
-        console.log(
-          `[notification] Proposal #${notification.proposalId} ${notification.status}`,
-        );
-        transcript.push({
-          role: 'user',
-          content: message,
-        });
-      }
-    }
-    return true;
-  };
-
-  /**
-   * Run the agentic loop until no more tool calls.
+   * Run the agentic loop for a specific transcript node.
+   * @param {TranscriptNode} leafNode - The leaf node of the transcript chain
    * @returns {Promise<void>}
    */
-  const runAgenticLoop = async () => {
+  const runAgenticLoop = async leafNode => {
+    activeLeafNode = leafNode;
     let continueLoop = true;
     while (continueLoop) {
-      // Check for pending notifications before each LLM call
-      processNotifications();
+      // Assemble the full transcript from the chain
+      const transcript = await assembleTranscript(leafNode.messageId);
 
       console.log(
         `[lal] ${JSON.stringify(transcript[transcript.length - 1], null, 2)}`,
@@ -1294,10 +1362,10 @@ The HOST declined to execute your proposed code. You should:
         }
       }
 
-      // Add the assistant's response to the transcript
-      transcript.push(/** @type {ChatMessage} */ (responseMessage));
+      // Add the assistant's response to the leaf node
+      leafNode.messages.push(/** @type {ChatMessage} */ (responseMessage));
       console.log(
-        `[lal] sent: ${JSON.stringify(transcript[transcript.length - 1], null, 2)}`,
+        `[lal] sent: ${JSON.stringify(leafNode.messages[leafNode.messages.length - 1], null, 2)}`,
       );
 
       // Check if there are tool calls to process
@@ -1311,38 +1379,35 @@ The HOST declined to execute your proposed code. You should:
         console.log(
           `[lal] tool results: ${JSON.stringify(toolResults, null, 2)}`,
         );
-        transcript.push(...toolResults);
-
-        // After processing tools, check if we have new notifications
-        // This allows the loop to continue if proposals settled
-        if (notificationQueue.length > 0) {
-          continue;
-        }
-      } else {
-        // No more tool calls - but check if we have notifications to process
-        if (notificationQueue.length > 0) {
-          continue;
-        }
-
+        leafNode.messages.push(...toolResults);
+        await putNode(leafNode);
+        // After processing tools, loop again (notifications will be picked up
+        // at the top of the next iteration by processNotifications).
+        // eslint-disable-next-line no-undef, @endo/restrict-comparison-operands
+      } else if (notificationQueue.length > 0) {
+        // No tool calls, but there are notifications to process — loop again.
+        // eslint-disable-next-line no-undef, @endo/restrict-comparison-operands
+      } else if (pendingProposals.size > 0) {
         // Check if we have pending proposals - wait for them to settle
-        if (pendingProposals.size > 0) {
-          console.log(
-            `[lal] Waiting for ${pendingProposals.size} pending proposal(s) to settle...`,
-          );
-          // Wait for any pending proposal to settle
-          const pendingPromises = [...pendingProposals.values()].map(p =>
-            p.promise.then(
-              () => {},
-              () => {},
-            ),
-          );
-          await Promise.race(pendingPromises);
-          // Continue the loop to process the notification
-          continue;
-        }
-
+        console.log(
+          // eslint-disable-next-line no-undef
+          `[lal] Waiting for ${pendingProposals.size} pending proposal(s) to settle...`,
+        );
+        // Wait for any pending proposal to settle
+        // eslint-disable-next-line no-undef
+        const pendingPromises = [...pendingProposals.values()].map(p =>
+          p.promise.then(
+            () => {},
+            () => {},
+          ),
+        );
+        await Promise.race(pendingPromises);
+        // Loop again to process the notification.
+      } else {
         // Really done
         continueLoop = false;
+        await putNode(leafNode);
+        activeLeafNode = null;
 
         // If the LLM produced text content (which it shouldn't), log it
         if (responseMessage.content) {
@@ -1353,16 +1418,70 @@ The HOST declined to execute your proposed code. You should:
   };
 
   /**
+   * Build the user-role message content for an inbound message.
+   * @param {InboxMessage & {type?: string}} message
+   * @param _message
+   * @returns {string}
+   */
+  const formatInboundMessage = _message => {
+    return 'You have new mail. Check your messages and respond appropriately.';
+  };
+
+  /**
+   * Handle an own outbound message: create an alias so future replies
+   * to this outbound messageId find the correct transcript chain.
+   * @param {InboxMessage & {messageId?: string, replyTo?: string}} message
+   */
+  const handleOwnMessage = async message => {
+    const { messageId, replyTo } = message;
+    if (typeof messageId !== 'string' || typeof replyTo !== 'string') {
+      return;
+    }
+
+    // replyTo points to the inbound message that triggered this response.
+    // Create an alias: outboundMessageId → same node as replyTo.
+    const node = await getNode(replyTo);
+    if (node !== undefined) {
+      nodeCache.set(messageId, node);
+      const petName = `transcript-${messageId}`;
+      try {
+        await E(powers).storeValue(harden(node), petName);
+      } catch (error) {
+        console.error(
+          `[transcript] Failed to alias ${messageId}:`,
+          error instanceof Error ? error.message : String(error),
+        );
+      }
+    }
+  };
+
+  /**
    * Run the agent loop, processing incoming messages.
+   * Each reply chain is routed to an independent transcript.
    *
    * @returns {Promise<void>}
    */
   const runAgent = async () => {
-    // Announce ourselves
-    await E(powers).send('HOST', ['Lal agent ready.'], [], []);
+    // Announce ourselves with a call to action.
+    // The host sees this from whatever pet name they gave us.
+    await E(powers).send(
+      '@host',
+      [
+        "Hello! I'm ready to help.\n\n" +
+          'Send me a message to get started — in Chat, type ' +
+          '`@` followed by my name and your request.\n\n' +
+          'A few things to try:\n' +
+          '- Ask me what I can do\n' +
+          '- Ask me to list your inventory\n' +
+          '- Ask me to help write a program\n\n' +
+          'Type `/help` to see all available Chat commands.',
+      ],
+      [],
+      [],
+    );
 
     /** @type {string | undefined} */
-    const selfId = await E(powers).identify('SELF');
+    const selfLocator = await E(powers).locate('@self');
     const cancelled = await getCancelled();
     const cancelledSignal = cancelled
       ? cancelled.then(
@@ -1371,7 +1490,7 @@ The HOST declined to execute your proposed code. You should:
         )
       : null;
 
-    // Follow messages and notify the LLM
+    // Follow messages and route each to the correct transcript chain
     const messageIterator = makeRefIterator(E(powers).followMessages());
     while (true) {
       const nextMessage = messageIterator.next();
@@ -1393,112 +1512,291 @@ The HOST declined to execute your proposed code. You should:
       if (done) {
         break;
       }
+      const inboxMessage =
+        /** @type {InboxMessage & {type?: string, messageId?: string, replyTo?: string}} */ (
+          message
+        );
       const {
-        from: fromId,
+        from: fromLocator,
         number,
         type,
-      } = /** @type {InboxMessage & {type?: string}} */ (message);
+        messageId,
+        replyTo,
+      } = inboxMessage;
 
-      // Skip our own messages
-      if (fromId === selfId) {
-        continue;
-      }
-
-      console.log(`[mail] New message #${number} (type: ${type || 'package'})`);
-      console.log(
-        `[lal] Transcript has ${transcript.length} messages before processing`,
-      );
-
-      // Check if this is a counter-proposal (eval-proposal from someone else)
-      if (
-        type === 'eval-proposal-reviewer' ||
-        type === 'eval-proposal-proposer'
-      ) {
-        // This is a counter-proposal from the HOST
-        const { source, codeNames, edgeNames, workerName, resultName } =
-          /** @type {any} */ (message);
-        assert.typeof(source, 'string');
-        const sourcePreview =
-          source.length > 200 ? `${source.slice(0, 200)}...` : source;
-
-        const endowmentsDesc =
-          Array.isArray(codeNames) && codeNames.length > 0
-            ? `\nEndowments: ${codeNames.map((/** @type {string} */ cn, /** @type {number} */ i) => `${cn} <- ${edgeNames?.[i] || '?'}`).join(', ')}`
-            : '\nNo endowments';
-
-        transcript.push({
-          role: 'user',
-          content: `You received a COUNTER-PROPOSAL from your HOST (message #${number}).
-
-The HOST has modified your proposed code and is suggesting this alternative:
-
-\`\`\`javascript
-${sourcePreview}
-\`\`\`
-${endowmentsDesc}
-${workerName ? `Worker: ${workerName}` : ''}
-${resultName ? `Result will be stored as: ${resultName}` : ''}
-
-You should:
-1. Review the counter-proposal carefully
-2. If it meets your needs, you can submit a new eval-proposal with the suggested code
-3. If you disagree, you can reject this counter-proposal and explain why, or propose different code
-4. After deciding, dismiss message #${number}`,
-        });
+      // Own outbound messages: index them for future reply lookups
+      // eslint-disable-next-line @endo/restrict-comparison-operands
+      if (fromLocator === selfLocator) {
+        await handleOwnMessage(inboxMessage);
       } else {
-        // Regular message (package or request)
-        transcript.push({
-          role: 'user',
-          content:
-            'You have new mail. Check your messages and respond appropriately.',
-        });
-      }
+        console.log(
+          `[mail] New message #${number} (type: ${type || 'package'})`,
+        );
 
-      // Run the agentic loop
-      try {
-        await runAgenticLoop();
-      } catch (error) {
-        const errorMessage =
-          error instanceof Error ? error.message : String(error);
-        console.error('[agent] LLM error, notifying sender:', errorMessage);
-        // send() expects a pet name or path; inbox message "from" is a handle ID (e.g. hex).
-        // Only send back when the sender is known by a valid name (e.g. HOST).
-        const isValidName =
-          typeof fromId === 'string' &&
-          (/^[a-z][a-z0-9-]{0,127}$/.test(fromId) ||
-            /^[A-Z][A-Z0-9-]{0,127}$/.test(fromId));
-        if (isValidName) {
-          await E(powers).send(fromId, [errorMessage], [], []);
+        // Resolve or create the transcript chain for this message.
+        /** @type {TranscriptNode | undefined} */
+        let parentNode;
+        /** @type {string} */
+        let parentId;
+
+        if (typeof replyTo === 'string') {
+          parentNode = await getNode(replyTo);
         }
+
+        if (parentNode !== undefined) {
+          // Continue existing conversation.
+          parentId = /** @type {string} */ (replyTo);
+          console.log(
+            `[transcript] Continuing chain from ${parentId.slice(0, 12)}...`,
+          );
+        } else {
+          // New conversation — create a root node with the system prompt.
+          const rootId = makeRootNodeId();
+          /** @type {TranscriptNode} */
+          const rootNode = {
+            messageId: rootId,
+            parentMessageId: null,
+            messages: [{ role: 'system', content: systemPrompt }],
+          };
+          await putNode(rootNode);
+          parentId = rootId;
+          console.log('[transcript] Starting new conversation chain');
+        }
+
+        // Create a new node for this turn, chained to the parent.
+        const userContent = formatInboundMessage(inboxMessage);
+
+        /** @type {TranscriptNode} */
+        const turnNode = {
+          messageId:
+            typeof messageId === 'string' ? messageId : makeRootNodeId(),
+          parentMessageId: parentId,
+          messages: [{ role: 'user', content: userContent }],
+          lastInboxNumber: number,
+        };
+        await putNode(turnNode);
+
+        // Run the agentic loop for this transcript chain
+        try {
+          await runAgenticLoop(turnNode);
+        } catch (error) {
+          const errorMessage =
+            error instanceof Error ? error.message : String(error);
+          console.error('[agent] LLM error, notifying sender:', errorMessage);
+          try {
+            await E(powers).reply(
+              number,
+              [`LLM provider error: ${errorMessage}`],
+              [],
+              [],
+            );
+          } catch (replyError) {
+            console.error('[agent] Failed to notify sender:', replyError);
+          }
+        }
+
+        const transcriptLength = (await assembleTranscript(turnNode.messageId))
+          .length;
+        console.log(
+          `[lal] Transcript chain has ${transcriptLength} messages after processing`,
+        );
       }
-      console.log(
-        `[lal] Transcript has ${transcript.length} messages after processing`,
-      );
     }
   };
 
-  // Start the agent loop
-  runAgent().catch(error => {
-    console.error('[agent] Fatal error:', error);
+  // Start the worker loop
+  await runAgent();
+};
+harden(spawnWorkerLoop);
+
+// ============================================================================
+// Manager / Entry Point
+// ============================================================================
+
+/**
+ * Creates a Lal agent manager.
+ *
+ * Sends a configuration form to HOST on startup. Each form submission
+ * creates a new guest profile and spawns a worker loop for it.
+ *
+ * @param {FarRef<GuestPowers>} guestPowers - Guest powers from the Endo daemon
+ * @param {Promise<LalContext> | LalContext | undefined} _context - Context for cancellation support
+ * @returns {object} The Lal exo object
+ */
+export const make = (guestPowers, _context) => {
+  /** @type {any} */
+  const powers = guestPowers;
+
+  // Send the configuration form to HOST for adding agents.
+  const runManager = async () => {
+    await E(powers).form(
+      '@host',
+      'Add an agent',
+      harden([
+        { name: 'name', label: 'Agent name' },
+        {
+          name: 'host',
+          label: 'API host',
+          default: 'http://localhost:11434/v1',
+          example: 'https://api.anthropic.com for Anthropic',
+        },
+        {
+          name: 'model',
+          label: 'Model name',
+          default: 'qwen3',
+          example: 'claude-sonnet-4-6-20250514 for Anthropic',
+        },
+        {
+          name: 'authToken',
+          label: 'API auth token',
+          default: 'ollama',
+          example: 'sk-ant-... for Anthropic',
+          secret: true,
+        },
+      ]),
+    );
+
+    // Resolve the host agent reference for provideGuest calls.
+    const agent = await E(powers).lookup('host-agent');
+    const selfLocator = await E(powers).locate('@self');
+    const activeWorkers = new Map();
+
+    // Check in the primer directory as a content-addressed readable-tree.
+    // Stored once in the host namespace; each sub-guest gets a reference.
+    const primerDirPath = new URL('./primer', import.meta.url).pathname;
+    const localPrimerTree = makeLocalTree(primerDirPath);
+    await E(agent).storeTree(localPrimerTree, 'lal-primer');
+    const primerTreeId = await E(agent).identify('lal-primer');
+    console.log(`[lal] Primer tree checked in (${primerTreeId})`);
+
+    /**
+     * Ensure the sub-guest has a `primer` reference.
+     * @param {any} guest
+     */
+    const provisionPrimer = async guest => {
+      const hasPrimer = await E(guest).has('primer');
+      if (!hasPrimer) {
+        await E(guest).storeIdentifier('primer', primerTreeId);
+        console.log('[lal] Primer provisioned for guest');
+      }
+    };
+
+    // Pre-scan existing messages to find our latest form messageId so that
+    // old value messages (from prior sessions) that reply to an earlier form
+    // are not accidentally matched when the iterator replays history.
+    /** @type {string | undefined} */
+    let formMessageId;
+    const existingMessages = /** @type {any[]} */ (
+      await E(powers).listMessages()
+    );
+    for (const msg of existingMessages) {
+      // eslint-disable-next-line @endo/restrict-comparison-operands
+      if (msg.from === selfLocator && msg.type === 'form') {
+        formMessageId = msg.messageId;
+      }
+    }
+
+    const messageIterator = makeRefIterator(E(powers).followMessages());
+    while (true) {
+      const { value: message, done } = await messageIterator.next();
+      if (done) break;
+
+      const msg = /** @type {any} */ (message);
+
+      // Capture the form's messageId from our own outbound message.
+      // eslint-disable-next-line @endo/restrict-comparison-operands
+      if (msg.from === selfLocator && msg.type === 'form') {
+        formMessageId = msg.messageId;
+      } else if (
+        msg.type === 'value' &&
+        // eslint-disable-next-line @endo/restrict-comparison-operands
+        msg.replyTo === formMessageId
+      ) {
+        // Only process value messages that reply to our form.
+        try {
+          // Resolve the submitted values from the value message.
+          const config =
+            /** @type {{ name: string, host: string, model: string, authToken: string }} */ (
+              await E(powers).lookupById(msg.valueId)
+            );
+
+          const { name } = config;
+
+          if (activeWorkers.has(name)) {
+            // A worker is already running for this name.
+            await E(powers).reply(
+              msg.number,
+              [`Agent "${name}" already exists.`],
+              [],
+              [],
+            );
+          } else {
+            // Create the guest profile via the host agent.
+            // provideGuest returns the full EndoGuest (not the handle).
+            // Guard with has() — on restart the guest already exists and
+            // re-running provideGuest hits "Formula already exists".
+            let guest;
+            if (await E(agent).has(name)) {
+              guest = await E(agent).lookup(name);
+            } else {
+              guest = await E(agent).provideGuest(name, {
+                agentName: `profile-for-${name}`,
+              });
+            }
+
+            // Ensure the sub-guest has the primer directory.
+            await provisionPrimer(guest);
+
+            // Spawn a worker loop for this guest.
+            const workerP = spawnWorkerLoop(guest, null, {
+              LAL_HOST: config.host,
+              LAL_MODEL: config.model,
+              LAL_AUTH_TOKEN: config.authToken,
+            });
+            activeWorkers.set(name, workerP);
+            workerP.catch(error => {
+              console.error(`[lal] Worker "${name}" error:`, error);
+              activeWorkers.delete(name);
+            });
+
+            await E(powers).reply(
+              msg.number,
+              [`Agent "${name}" is now running.`],
+              [],
+              [],
+            );
+          }
+        } catch (error) {
+          const errorMessage =
+            error instanceof Error ? error.message : String(error);
+          console.error('[lal] Form submission error:', errorMessage);
+          try {
+            await E(powers).reply(
+              msg.number,
+              [`Error creating agent: ${errorMessage}`],
+              [],
+              [],
+            );
+          } catch {
+            // Best-effort reply.
+          }
+        }
+      }
+    }
+  };
+
+  runManager().catch(error => {
+    console.error('[lal] Manager error:', error);
   });
 
-  // Return the exo interface
   return makeExo('Lal', LalInterface, {
     /**
-     * Get help documentation for the Lal agent.
-     *
-     * @param {string} [methodName] - Optional method name for specific documentation
-     * @returns {string} Help text
+     * @param {string} [methodName]
+     * @returns {string}
      */
     help(methodName) {
       if (methodName === undefined) {
-        return `\
-Lal - An LLM agent with Endo Guest capabilities.
-
-This agent processes messages from its inbox using tool calls to an LLM.
-It can manage pet names, send/receive messages, and interact with capabilities.
-
-The agent runs autonomously, responding to incoming mail.`;
+        return 'Lal agent manager. Submit the configuration form to add agents.';
       }
       return `No documentation for method "${methodName}".`;
     },

@@ -1,6 +1,6 @@
 {
   "name": "@endo/marshal",
-  "version": "1.8.0",
+  "version": "1.9.0",
   "description": "marshal: encoding and deconding of Passable subgraphs",
   "type": "module",
   "main": "index.js",
@@ -17,8 +17,8 @@
   },
   "scripts": {
     "build": "exit 0",
-    "prepack": "tsc --build tsconfig.build.json",
-    "postpack": "git clean -fX \"*.d.ts*\" \"*.d.cts*\" \"*.d.mts*\" \"*.tsbuildinfo\"",
+    "prepack": "git clean -fX -e node_modules/ && tsc --build tsconfig.build.json",
+    "postpack": "git clean -fX -e node_modules/",
     "test": "ses-ava",
     "test:c8": "c8 ${C8_OPTIONS:-} ses-ava",
     "test:xs": "exit 0",
@@ -48,9 +48,9 @@
     "@endo/env-options": "workspace:^",
     "@endo/errors": "workspace:^",
     "@endo/eventual-send": "workspace:^",
+    "@endo/harden": "workspace:^",
     "@endo/nat": "workspace:^",
-    "@endo/pass-style": "workspace:^",
-    "@endo/promise-kit": "workspace:^"
+    "@endo/pass-style": "workspace:^"
   },
   "devDependencies": {
     "@endo/init": "workspace:^",
@@ -58,8 +58,15 @@
     "@endo/ses-ava": "workspace:^",
     "@fast-check/ava": "catalog:dev",
     "ava": "catalog:dev",
+    "babel-eslint": "^10.1.0",
     "c8": "catalog:dev",
     "eslint": "catalog:dev",
+    "eslint-config-airbnb-base": "^15.0.0",
+    "eslint-config-prettier": "^9.1.0",
+    "eslint-plugin-eslint-comments": "^3.2.0",
+    "eslint-plugin-import": "^2.31.0",
+    "ses": "workspace:^",
+    "tsd": "^0.31.2",
     "typescript": "~5.9.2"
   },
   "files": [
@@ -92,7 +99,8 @@
   },
   "sesAvaConfigs": {
     "lockdown": "../../ava-endo-lockdown.config.mjs",
-    "unsafe": "../../ava-endo-lockdown-unsafe.config.mjs"
+    "unsafe": "../../ava-endo-lockdown-unsafe.config.mjs",
+    "endo": "../../ava-endo-shims-only.config.mjs"
   },
   "typeCoverage": {
     "atLeast": 85.3

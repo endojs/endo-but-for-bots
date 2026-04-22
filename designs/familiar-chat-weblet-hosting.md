@@ -1,3 +1,31 @@
+# Familiar Chat Weblet Hosting
+
+| | |
+|---|---|
+| **Created** | 2026-02-14 |
+| **Updated** | 2026-02-26 |
+| **Author** | Kris Kowal (prompted) |
+| **Status** | Not Started |
+
+## Status
+
+**Not yet implemented.** The Familiar-side infrastructure is ready
+(see `familiar-localhttp-protocol`):
+
+- `localhttp://` protocol handler serves weblet content with CSP confinement.
+- Navigation guard and exfiltration defenses are in place.
+- `preload.js` exposes `onSecurityWarnings` for the security warning banner.
+
+**Remaining work (all in `packages/chat/`):**
+
+- Weblet hosting panel UI (iframe creation with `sandbox` and `allow`
+  attributes).
+- MessagePort bridge: create `MessageChannel`, transfer port to weblet
+  iframe, open WebSocket to gateway with `Host: <weblet-id>`, pump messages
+  bidirectionally.
+- Install flow UI (bundle selection, naming, power level configuration).
+- Security warning banner (listening on `window.familiar.onSecurityWarnings`).
+- Chat commands (`/install`, `/open`, `/close`).
 
 ## What is the Problem Being Solved?
 
@@ -78,8 +106,8 @@ Add an "Install Weblet" action (button or command). The flow:
 2. **Name the weblet**: User gives the weblet a pet name.
 3. **Configure powers**: A dialog shows available power levels:
    - `NONE` — no endowments (pure sandboxed UI).
-   - `ENDO` — access to the Endo network (can look up capabilities by name).
-   - `HOST` — full host powers (development/trusted apps only).
+   - `@endo` — access to the Endo network (can look up capabilities by name).
+   - `@host` — full host powers (development/trusted apps only).
    - Custom — select specific pet names to endow.
 4. **Create guest and install**: Chat calls the daemon API to create the guest
    and install the weblet in one operation.
@@ -120,8 +148,8 @@ Installed weblets appear in the inventory (under "Hubs" or a new "Weblets"
 group, per the `inventory-grouping-by-type` work item). Actions:
 
 - **Click**: Open the weblet in the right panel iframe.
-- **Live indicator** (from `live-reference-indicator` work item): Shows whether
-  the weblet's worker is alive.
+- **Live indicator** (from `inventory-cancel-and-liveness` work item): Shows
+  whether the weblet's worker is alive.
 - **Cancel**: Stop the weblet's worker, close the iframe.
 - **Remove**: Cancel + remove the pet name.
 

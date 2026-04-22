@@ -15,7 +15,7 @@ import {
 test('COMMANDS contains expected commands', t => {
   t.true('request' in COMMANDS);
   t.true('dismiss' in COMMANDS);
-  t.true('dismiss-all' in COMMANDS);
+  t.true('clear' in COMMANDS);
   t.true('js' in COMMANDS);
   t.true('list' in COMMANDS);
   t.true('show' in COMMANDS);
@@ -114,7 +114,7 @@ test('getCommandsByCategory returns commands in category', t => {
   const names = messaging.map(cmd => cmd.name);
   t.true(names.includes('request'));
   t.true(names.includes('dismiss'));
-  t.true(names.includes('dismiss-all'));
+  t.true(names.includes('clear'));
   t.true(names.includes('adopt'));
 });
 
@@ -151,11 +151,13 @@ test('command fields have required properties', t => {
         'petNamePath',
         'petNamePaths',
         'messageNumber',
+        'message',
         'text',
         'edgeName',
         'locator',
         'source',
         'endowments',
+        'select',
       ];
       t.true(
         validTypes.includes(field.type),
@@ -173,4 +175,212 @@ test('immediate commands have no fields', t => {
   for (const cmd of immediate) {
     t.is(cmd.fields.length, 0, `immediate command ${cmd.name} has no fields`);
   }
+});
+
+// ============ CONTEXT FILTERING TESTS ============
+
+test('inbox-only commands have context set to inbox', t => {
+  const inboxOnly = [
+    'request',
+    'dismiss',
+    'clear',
+    'resolve',
+    'reject',
+    'form',
+    'submit',
+    'define',
+    'endow',
+  ];
+  for (const name of inboxOnly) {
+    t.is(COMMANDS[name].context, 'inbox', `${name} should be inbox-only`);
+  }
+});
+
+test('commands without context are available in both modes', t => {
+  const bothModes = [
+    'adopt',
+    'reply',
+    'js',
+    'list',
+    'show',
+    'remove',
+    'move',
+    'copy',
+    'mkdir',
+    'checkin',
+    'checkout',
+    'mount',
+    'mktmp',
+    'invite',
+    'accept',
+    'spawn',
+    'cancel',
+    'help',
+  ];
+  for (const name of bothModes) {
+    const cmd = COMMANDS[name];
+    t.true(
+      cmd.context === undefined || cmd.context === 'both',
+      `${name} should be available in both modes (context=${cmd.context})`,
+    );
+  }
+});
+
+test('filterCommands with inbox context excludes channel-only commands', t => {
+  // Currently no channel-only commands, but ensure inbox context works
+  const results = filterCommands('', 'inbox');
+  for (const cmd of results) {
+    const cmdContext = cmd.context || 'both';
+    t.true(
+      cmdContext === 'both' || cmdContext === 'inbox',
+      `${cmd.name} should be available in inbox context`,
+    );
+  }
+});
+
+test('filterCommands with channel context excludes inbox-only commands', t => {
+  const results = filterCommands('', 'channel');
+  const names = results.map(cmd => cmd.name);
+
+  // Inbox-only commands should be excluded
+  t.false(names.includes('request'));
+  t.false(names.includes('dismiss'));
+  t.false(names.includes('clear'));
+  t.false(names.includes('resolve'));
+  t.false(names.includes('reject'));
+  t.false(names.includes('form'));
+  t.false(names.includes('submit'));
+  t.false(names.includes('define'));
+  t.false(names.includes('endow'));
+
+  // Both-mode commands should be included
+  t.true(names.includes('adopt'));
+  t.true(names.includes('reply'));
+  t.true(names.includes('list'));
+  t.true(names.includes('show'));
+  t.true(names.includes('js'));
+  t.true(names.includes('help'));
+});
+
+test('filterCommands without context returns all commands', t => {
+  const withContext = filterCommands('');
+  const list = getCommandList();
+  t.is(withContext.length, list.length);
+});
+
+test('filterCommands with channel context and prefix', t => {
+  const results = filterCommands('ad', 'channel');
+  const names = results.map(cmd => cmd.name);
+  t.true(names.includes('adopt'));
+  // adopt-locator should also match if present
+});
+
+test('filterCommands with inbox context and prefix includes inbox commands', t => {
+  const results = filterCommands('re', 'inbox');
+  const names = results.map(cmd => cmd.name);
+  t.true(names.includes('request'));
+  t.true(names.includes('resolve'));
+  t.true(names.includes('reject'));
+  t.true(names.includes('remove'));
+  t.true(names.includes('reply'));
+});
+
+// ============ CHECKIN / CHECKOUT TESTS ============
+
+test('COMMANDS contains checkin and checkout', t => {
+  t.true('checkin' in COMMANDS);
+  t.true('checkout' in COMMANDS);
+});
+
+test('checkin command has correct properties', t => {
+  const cmd = COMMANDS.checkin;
+  t.is(cmd.name, 'checkin');
+  t.is(cmd.category, 'storage');
+  t.is(cmd.mode, 'inline');
+  t.deepEqual(cmd.aliases, ['ci']);
+  t.is(cmd.fields.length, 1);
+  t.is(cmd.fields[0].name, 'petName');
+  t.is(cmd.fields[0].type, 'petNamePath');
+  t.true(cmd.fields[0].required);
+});
+
+test('checkout command has correct properties', t => {
+  const cmd = COMMANDS.checkout;
+  t.is(cmd.name, 'checkout');
+  t.is(cmd.category, 'storage');
+  t.is(cmd.mode, 'inline');
+  t.deepEqual(cmd.aliases, ['co']);
+  t.is(cmd.fields.length, 1);
+  t.is(cmd.fields[0].name, 'petName');
+  t.is(cmd.fields[0].type, 'petNamePath');
+  t.true(cmd.fields[0].required);
+});
+
+test('getCommand resolves ci alias to checkin', t => {
+  const cmd = getCommand('ci');
+  t.truthy(cmd);
+  t.is(cmd?.name, 'checkin');
+});
+
+test('getCommand resolves co alias to checkout', t => {
+  const cmd = getCommand('co');
+  t.truthy(cmd);
+  t.is(cmd?.name, 'checkout');
+});
+
+test('filterCommands matches checkin by prefix', t => {
+  const results = filterCommands('check');
+  const names = results.map(cmd => cmd.name);
+  t.true(names.includes('checkin'));
+  t.true(names.includes('checkout'));
+});
+
+test('checkin, checkout, and mount appear in storage category', t => {
+  const storage = getCommandsByCategory('storage');
+  const names = storage.map(cmd => cmd.name);
+  t.true(names.includes('checkin'));
+  t.true(names.includes('checkout'));
+  t.true(names.includes('mount'));
+});
+
+test('mktmp command exists', t => {
+  const cmd = getCommand('mktmp');
+  t.truthy(cmd);
+  t.is(cmd?.name, 'mktmp');
+});
+
+test('mount command has path and petName fields', t => {
+  const cmd = COMMANDS.mount;
+  t.is(cmd.name, 'mount');
+  t.is(cmd.category, 'storage');
+  t.is(cmd.mode, 'inline');
+  t.is(cmd.fields.length, 2);
+  t.is(cmd.fields[0].name, 'path');
+  t.is(cmd.fields[1].name, 'petName');
+  t.true(cmd.fields[0].required);
+  t.true(cmd.fields[1].required);
+});
+
+test('mktmp command has correct properties', t => {
+  const cmd = COMMANDS.mktmp;
+  t.is(cmd.name, 'mktmp');
+  t.is(cmd.category, 'storage');
+});
+
+test('getCommandsByCategory respects context filter', t => {
+  const messagingInbox = getCommandsByCategory('messaging', 'inbox');
+  const messagingChannel = getCommandsByCategory('messaging', 'channel');
+
+  // Inbox should include inbox-only commands like request, dismiss
+  const inboxNames = messagingInbox.map(cmd => cmd.name);
+  t.true(inboxNames.includes('request'));
+  t.true(inboxNames.includes('dismiss'));
+  t.true(inboxNames.includes('adopt'));
+
+  // Channel should exclude inbox-only commands
+  const channelNames = messagingChannel.map(cmd => cmd.name);
+  t.false(channelNames.includes('request'));
+  t.false(channelNames.includes('dismiss'));
+  t.true(channelNames.includes('adopt'));
+  t.true(channelNames.includes('reply'));
 });

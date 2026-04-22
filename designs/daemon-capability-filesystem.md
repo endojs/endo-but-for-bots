@@ -1,5 +1,12 @@
 # Filesystem Capability: Ideas and Directions
 
+| | |
+|---|---|
+| **Created** | 2026-02-15 |
+| **Updated** | 2026-02-24 |
+| **Author** | Kris Kowal (prompted) |
+| **Status** | Not Started |
+
 This document collects ideas for a filesystem capability that Endo could
 provide to AI agent guests.  It is not a finished design — it is a bag
 of ideas at varying levels of maturity, drawn from Endo's existing VFS

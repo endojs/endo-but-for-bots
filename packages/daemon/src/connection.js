@@ -1,4 +1,5 @@
 // @ts-check
+/* global process */
 
 import { makeCapTP } from '@endo/captp';
 import { makePromiseKit } from '@endo/promise-kit';
@@ -44,9 +45,24 @@ export const makeMessageCapTP = (
   capTpOptions = undefined,
   capTpConnectionRegistrar = undefined,
 ) => {
+  // eslint-disable-next-line no-undef
+  const traceCapTP =
+    typeof process !== 'undefined' && process.env.ENDO_CAPTP_TRACE;
+
   /** @param {any} message */
   const send = message => {
-    return writer.next(message);
+    if (traceCapTP) {
+      console.log(
+        `[captp:${name}] SEND`,
+        JSON.stringify(message).slice(0, 200),
+      );
+    }
+    try {
+      return writer.next(message);
+    } catch (sendError) {
+      console.error(`CapTP ${name} send error:`, sendError.message);
+      return Promise.reject(sendError);
+    }
   };
 
   const { promise: closedPromise, resolve: resolveClosed } = makePromiseKit();
@@ -64,7 +80,18 @@ export const makeMessageCapTP = (
     reason => close(reason),
     closedPromise,
   );
-  const mergedOptions = { ...registrarOptions, ...capTpOptions };
+  const defaultOnReject = err => {
+    console.error(
+      `CapTP ${name} exception:`,
+      err?.message || err,
+      err?.stack || '',
+    );
+  };
+  const mergedOptions = {
+    onReject: defaultOnReject,
+    ...registrarOptions,
+    ...capTpOptions,
+  };
   const { dispatch, getBootstrap, abort } = makeCapTP(
     name,
     send,
@@ -74,9 +101,20 @@ export const makeMessageCapTP = (
 
   const drained = (async () => {
     for await (const message of reader) {
+      if (traceCapTP) {
+        console.log(
+          `[captp:${name}] RECV`,
+          JSON.stringify(message).slice(0, 200),
+        );
+      }
       dispatch(message);
     }
   })();
+
+  drained.then(
+    () => close(new Error('Connection stream ended')),
+    error => close(error),
+  );
 
   let isClosed = false;
   close = reason => {
@@ -86,7 +124,18 @@ export const makeMessageCapTP = (
     isClosed = true;
     abort(reason);
     Promise.all([
-      writer.return(undefined).catch(() => {}),
+      writer
+        .return(undefined)
+        // .catch(e => {
+        //   // EPIPE errors occur when the peer has already closed the connection.
+        //   // This is expected during graceful shutdown and not an error condition.
+        //   const isPrematureClose =
+        //     e.code === 'EPIPE' || e.code === 'ERR_STREAM_PREMATURE_CLOSE';
+        //   if (!isPrematureClose) {
+        //     throw e;
+        //   }
+        // })
+        .catch(() => {}),
       drained.catch(() => {}),
     ]).then(() => {
       resolveClosed(undefined);
@@ -109,7 +158,6 @@ export const makeMessageCapTP = (
 /** @param {any} message */
 export const messageToBytes = message => {
   const text = JSON.stringify(message);
-  // console.log('->', text);
   const bytes = textEncoder.encode(text);
   return bytes;
 };

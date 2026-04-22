@@ -13,6 +13,7 @@
 - Every `.js` source file must start with `// @ts-check`.
 - Use `@param`, `@returns`, `@typedef`, and `@type` annotations throughout.
 - Import types with the `@import` JSDoc tag: `/** @import { FarEndoGuest } from '@endo/daemon/src/types.js' */`
+- Prefer `@import` over dynamic `import()` in type positions. Use `/** @import { Foo } from './bar.js' */` at the top of the file instead of inline `/** @type {import('./bar.js').Foo} */`.
 - Cast `catch` error variables: `/** @type {Error} */ (e).message`
 - Cast untyped inputs from external APIs with inline `/** @type {T} */` assertions.
 
@@ -32,14 +33,37 @@
 ### Modules and exports
 
 - Unconfined guest modules export `make(powers)` as their entry point.
-- Use `makeExo()` with an `M.interface()` guard definition for exo objects.
-- Use `Far()` for far-reference objects.
-- The `help()` method is conventional on capabilities and should return a descriptive string.
+- Prefer `makeExo()` with an `M.interface()` guard over `Far()` for
+  remotable objects.
+  `makeExo` automatically provides `__getMethodNames__()`, which CapTP
+  introspection relies on, and enforces method guards at the boundary.
+  `Far()` is still appropriate for lightweight one-off remotables that
+  do not need runtime type checking.
+- The `help()` method is conventional on capabilities and should return
+  a descriptive string.
 
 ### Eventual send
 
-- Always use `E(ref).method()` for remote/eventual calls, never direct invocation.
+- Always use `E(ref).method()` for remote/eventual calls, never direct
+  invocation.
 - `E()` calls return promises; chain with `await` or further `E()` sends.
+
+### CapTP introspection
+
+- Use `E(ref).__getMethodNames__()` to discover a remote object's
+  interface rather than duck-typing by calling individual methods.
+  Duck-typing generates noisy failed CapTP calls for each method that
+  does not exist on the target.
+- `makeExo` objects provide `__getMethodNames__()` automatically.
+
+```js
+const methods = await E(ref).__getMethodNames__();
+if (methods.includes('followNameChanges')) {
+  // NameHub — live registry
+} else if (methods.includes('list')) {
+  // ReadableTree — immutable snapshot
+}
+```
 
 ## ESLint
 
@@ -53,6 +77,31 @@
 - Daemon integration tests: `cd packages/daemon && npx ava test/endo.test.js --timeout=120s`
 - Syntax check without SES runtime: `node --check <file.js>`
 - Full module loading requires the Endo daemon (SES lockdown provides `harden` as a global).
+
+## Familiar (Electron shell)
+
+### Testing
+
+- **Unit tests**: `npx ava packages/daemon/test/gateway.test.js packages/daemon/test/formula-identifier.test.js --timeout=90s`
+- **Build**: `cd packages/familiar && yarn bundle && yarn package`
+- **Lint**: `cd packages/familiar && yarn lint`
+- Gateway tests fork a full daemon per test. They must be `test.serial` to avoid resource contention.
+- Tests set `ENDO_ADDR=127.0.0.1:0` so the gateway binds to an OS-assigned port, avoiding conflicts with a running daemon on the default port 8920.
+- Kill leftover daemon processes between test runs: `pkill -f "daemon-node.*packages/daemon/tmp"` and `rm -rf packages/daemon/tmp/`.
+- Worker logs are in `packages/daemon/tmp/<test>/state/worker/<id>/worker.log` — check these when the APPS formula hangs silently.
+
+### Architecture constraints
+
+- The Electron main process must **never** import `@endo/init` or `ses`. SES lockdown freezes Electron internals.
+- Unconfined plugins (e.g., `web-server-node.js`) run inside an already-locked-down worker and must **not** import `ses` or `@endo/init` themselves; doing so causes double-lockdown errors.
+- Electron Forge requires `electron` in `devDependencies` to detect the version. If it's only in `dependencies`, packaging fails with "Could not find any Electron packages in devDependencies".
+- Port 0 (OS-assigned) is falsy in JavaScript. Use `port !== '' ? Number(port) : default` instead of `Number(port) || default`.
+
+## Markdown Style
+
+- Wrap lines at 80 to 100 columns.
+- Start each sentence on a new line so that diffs are per-sentence.
+- See `CONTRIBUTING.md` § "Markdown Style Guide" for full details.
 
 ## Package Structure
 

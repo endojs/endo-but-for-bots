@@ -1,3 +1,4 @@
+import harden from '@endo/harden';
 import { Far } from './make-far.js';
 
 /**
@@ -20,7 +21,7 @@ export const mapIterable = (baseIterable, func) =>
         next: () => {
           const { value: baseValue, done } = baseIterator.next();
           const value = done ? baseValue : func(baseValue);
-          return harden({ value, done });
+          return harden({ value, done: !!done });
         },
       });
     },

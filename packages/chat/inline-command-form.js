@@ -1,5 +1,4 @@
 // @ts-check
-/* global document, setTimeout */
 /* eslint-disable no-use-before-define */
 
 /** @import { ERef } from '@endo/far' */
@@ -9,15 +8,18 @@ import { getCommand } from './command-registry.js';
 import { petNamePathAutocomplete } from './petname-path-autocomplete.js';
 import { petNamePathsAutocomplete } from './petname-paths-autocomplete.js';
 import { createInlineEval } from './inline-eval.js';
+import { createInlineDefine } from './inline-define.js';
+import { tokenAutocompleteComponent } from './token-autocomplete.js';
 
 /**
  * @typedef {object} InlineCommandFormAPI
- * @property {(commandName: string) => void} setCommand - Set the active command
+ * @property {(commandName: string, prefill?: Record<string, string>) => void} setCommand - Set the active command
  * @property {() => string | null} getCommand - Get current command name
  * @property {() => Record<string, unknown>} getData - Get form data
  * @property {() => boolean} isValid - Check if form is valid
+ * @property {(disabled: boolean) => void} setDisabled - Disable or enable all fields
  * @property {() => void} clear - Clear the form
- * @property {() => void} focus - Focus the first field
+ * @property {(skipFilled?: boolean) => void} focus - Focus the first field (or first empty field if skipFilled)
  * @property {() => void} dispose - Clean up
  */
 
@@ -33,7 +35,10 @@ import { createInlineEval } from './inline-eval.js';
  * @param {(isValid: boolean) => void} options.onValidityChange - Called when validity changes
  * @param {(messageNumber: number) => void} [options.onMessageNumberClick] - Called when message number clicked
  * @param {(data: import('./inline-eval.js').ParsedEval) => void} [options.onExpandEval] - Called to expand eval to modal
+ * @param {(data: import('./inline-define.js').ParsedDefine) => void} [options.onExpandDefine] - Called to expand define to modal
  * @param {(messageNumber: number) => Promise<string[]>} [options.getMessageEdgeNames] - Get edge names for a message
+ * @param {(ref: unknown) => AsyncIterable<unknown>} options.makeRefIterator - Ref iterator factory
+ * @param {() => 'inbox' | 'channel' | undefined} [options.getContext] - Returns current UI context
  * @returns {InlineCommandFormAPI}
  */
 export const createInlineCommandForm = ({
@@ -45,7 +50,10 @@ export const createInlineCommandForm = ({
   onValidityChange,
   onMessageNumberClick,
   onExpandEval,
+  onExpandDefine,
   getMessageEdgeNames,
+  makeRefIterator,
+  getContext,
 }) => {
   /** @type {string | null} */
   let currentCommand = null;
@@ -59,7 +67,8 @@ export const createInlineCommandForm = ({
   let fieldInputsByName = {};
   /** @type {import('./inline-eval.js').InlineEvalAPI | null} */
   let inlineEvalInstance = null;
-
+  /** @type {import('./inline-define.js').InlineDefineAPI | null} */
+  let inlineDefineInstance = null;
   /**
    * Render a single field based on its type.
    * @param {import('./command-registry.js').CommandField} field
@@ -207,6 +216,7 @@ export const createInlineCommandForm = ({
 
         $wrapper.appendChild($input);
         fieldElements.push($input);
+        fieldInputsByName[field.name] = $input;
         break;
       }
 
@@ -415,6 +425,74 @@ export const createInlineCommandForm = ({
         break;
       }
 
+      case 'message': {
+        const $inputWrapper = document.createElement('div');
+        $inputWrapper.className =
+          'inline-field-input-wrapper message-field-wrapper';
+
+        const $msgInput = document.createElement('div');
+        $msgInput.className = 'inline-field-input message-field-input';
+        $msgInput.contentEditable = 'true';
+        $msgInput.dataset.placeholder =
+          field.placeholder || 'Type a message...';
+        $msgInput.dataset.fieldName = field.name;
+
+        const $msgMenu = document.createElement('div');
+        $msgMenu.className = 'inline-token-menu';
+
+        $inputWrapper.appendChild($msgInput);
+        $inputWrapper.appendChild($msgMenu);
+        $wrapper.appendChild($inputWrapper);
+
+        // Initialize token autocomplete for the message field
+        const tokenComp = tokenAutocompleteComponent($msgInput, $msgMenu, {
+          E,
+          makeRefIterator,
+          powers,
+        });
+        $msgInput.addEventListener('input', () => {
+          const msg = tokenComp.getMessage();
+          formData[field.name] = msg;
+          updateValidity();
+        });
+
+        fieldElements.push(
+          /** @type {HTMLElement & HTMLInputElement} */ ($msgInput),
+        );
+        break;
+      }
+
+      case 'select': {
+        const $select = document.createElement('select');
+        $select.className = 'inline-field-input select-input';
+        $select.dataset.fieldName = field.name;
+        $select.dataset.formType = 'other';
+
+        if (field.options) {
+          for (const option of field.options) {
+            const $option = document.createElement('option');
+            $option.value = option;
+            $option.textContent = option;
+            if (option === field.defaultValue) {
+              $option.selected = true;
+            }
+            $select.appendChild($option);
+          }
+        }
+
+        $select.addEventListener('change', () => {
+          formData[field.name] = $select.value;
+          updateValidity();
+        });
+
+        formData[field.name] = field.defaultValue || '';
+        $wrapper.appendChild($select);
+        fieldElements.push(
+          /** @type {HTMLElement & HTMLInputElement} */ ($select),
+        );
+        break;
+      }
+
       case 'text':
       case 'locator': {
         const $input = document.createElement('input');
@@ -457,12 +535,25 @@ export const createInlineCommandForm = ({
     if (inlineEvalInstance) {
       return inlineEvalInstance.isValid();
     }
+    if (inlineDefineInstance) {
+      return inlineDefineInstance.isValid();
+    }
 
     const command = getCommand(currentCommand);
     if (!command) return false;
 
+    const validationContext = getContext ? getContext() : undefined;
+    /** @param {import('./command-registry.js').CommandField} field */
+    const isFieldVisible = field => {
+      if (!field.showWhen) return true;
+      const [condKey, condValue] = field.showWhen.split(':');
+      if (condKey === 'context') return validationContext === condValue;
+      return true;
+    };
     for (const field of command.fields) {
-      if (field.required) {
+      if (!isFieldVisible(field)) {
+        // Field is hidden — skip validation
+      } else if (field.required) {
         const value = formData[field.name];
         if (value === undefined || value === null || value === '') {
           return false;
@@ -470,6 +561,17 @@ export const createInlineCommandForm = ({
         // Check array fields (like petNamePaths)
         if (Array.isArray(value) && value.length === 0) {
           return false;
+        }
+        // Check message fields (ChatMessage objects)
+        if (field.type === 'message') {
+          const msg =
+            /** @type {{ strings: string[], petNames: string[], edgeNames: string[] }} */ (
+              value
+            );
+          const hasContent =
+            msg.strings.some(s => s.trim().length > 0) ||
+            msg.petNames.length > 0;
+          if (!hasContent) return false;
         }
       }
     }
@@ -483,8 +585,9 @@ export const createInlineCommandForm = ({
   /**
    * Set the active command and render its form.
    * @param {string} commandName
+   * @param {Record<string, string>} [prefill] - Optional field values to pre-fill
    */
-  const setCommand = commandName => {
+  const setCommand = (commandName, prefill) => {
     // Clean up previous
     dispose();
 
@@ -518,7 +621,7 @@ export const createInlineCommandForm = ({
           onSubmit('js', {
             source: data.source,
             endowments: data.endowments,
-            workerName: 'MAIN',
+            workerName: '@main',
           });
         },
         onExpand: data => {
@@ -540,10 +643,54 @@ export const createInlineCommandForm = ({
       return;
     }
 
-    // Only render inline fields (not source/endowments)
-    const inlineFields = command.fields.filter(
-      f => f.type !== 'source' && f.type !== 'endowments',
-    );
+    // Special handling for define command - use inline define component
+    if (command.name === 'define') {
+      $container.innerHTML = '';
+
+      const $defineContainer = document.createElement('div');
+      $defineContainer.className = 'inline-eval-container';
+      $container.appendChild($defineContainer);
+
+      inlineDefineInstance = createInlineDefine({
+        $container: $defineContainer,
+        onSubmit: data => {
+          onSubmit('define', {
+            source: data.source,
+            slots: data.slots,
+          });
+        },
+        onExpand: data => {
+          if (onExpandDefine) {
+            onExpandDefine(data);
+          }
+        },
+        onCancel,
+        onValidityChange,
+      });
+
+      // Focus after setup
+      setTimeout(() => {
+        if (inlineDefineInstance) {
+          inlineDefineInstance.focus();
+        }
+      }, 50);
+
+      return;
+    }
+
+    // Filter out fields that don't match showWhen conditions or are non-inline
+    const context = getContext ? getContext() : undefined;
+    const inlineFields = command.fields.filter(f => {
+      if (f.type === 'source' || f.type === 'endowments') return false;
+      if (f.showWhen) {
+        const [condKey, condValue] = f.showWhen.split(':');
+        if (condKey === 'context') {
+          return context === condValue;
+        }
+        // Field-value conditions are checked dynamically elsewhere
+      }
+      return true;
+    });
 
     if (inlineFields.length === 0) {
       $container.innerHTML = '';
@@ -562,6 +709,19 @@ export const createInlineCommandForm = ({
     }
 
     $container.appendChild($form);
+
+    // Apply prefill values if provided
+    if (prefill) {
+      for (const [fieldName, value] of Object.entries(prefill)) {
+        const $input = fieldInputsByName[fieldName];
+        if ($input) {
+          $input.value = value;
+          formData[fieldName] =
+            $input.type === 'number' ? Number(value) : value;
+          $input.dispatchEvent(new Event('input', { bubbles: true }));
+        }
+      }
+    }
 
     // Handle keyboard
     $form.addEventListener('keydown', e => {
@@ -609,16 +769,30 @@ export const createInlineCommandForm = ({
   };
 
   /**
-   * Focus the first field.
+   * Focus the first field, or the first empty field when `skipFilled` is true.
+   * @param {boolean} [skipFilled] - If true, skip fields that already have values
    */
-  const focus = () => {
+  const focus = (skipFilled = false) => {
     // Special handling for eval (handles aliases like 'eval' -> 'js')
     if (inlineEvalInstance) {
       inlineEvalInstance.focus();
       return;
     }
+    if (inlineDefineInstance) {
+      inlineDefineInstance.focus();
+      return;
+    }
 
     if (fieldElements.length > 0) {
+      if (skipFilled) {
+        for (const $el of fieldElements) {
+          const val = /** @type {HTMLInputElement} */ ($el).value;
+          if (!val) {
+            $el.focus();
+            return;
+          }
+        }
+      }
       fieldElements[0].focus();
       return;
     }
@@ -629,6 +803,22 @@ export const createInlineCommandForm = ({
         instance.focus();
         return;
       }
+    }
+  };
+
+  /**
+   * Disable or enable all form fields.
+   * @param {boolean} disabled
+   */
+  const setDisabled = disabled => {
+    for (const $el of fieldElements) {
+      /** @type {HTMLInputElement} */ ($el).disabled = disabled;
+    }
+    if (inlineEvalInstance && inlineEvalInstance.setDisabled) {
+      inlineEvalInstance.setDisabled(disabled);
+    }
+    if (inlineDefineInstance) {
+      inlineDefineInstance.setDisabled(disabled);
     }
   };
 
@@ -647,6 +837,10 @@ export const createInlineCommandForm = ({
       inlineEvalInstance.dispose();
       inlineEvalInstance = null;
     }
+    if (inlineDefineInstance) {
+      inlineDefineInstance.dispose();
+      inlineDefineInstance = null;
+    }
   };
 
   return {
@@ -654,6 +848,7 @@ export const createInlineCommandForm = ({
     getCommand: () => currentCommand,
     getData,
     isValid,
+    setDisabled,
     clear,
     focus,
     dispose,

@@ -35,40 +35,50 @@
     "lint-fix": "yarn lint:eslint --fix && yarn lint:types",
     "lint:eslint": "eslint '**/*.js'",
     "lint:types": "tsc",
-    "postpack": "git clean -fX \"*.d.ts*\" \"*.d.cts*\" \"*.d.mts*\" \"*.tsbuildinfo\"",
-    "prepack": "tsc --build tsconfig.build.json",
+    "prepack": "exit 0",
     "test": "ava",
     "test:c8": "c8 ${C8_OPTIONS:-} ses-ava",
     "test:e2e": "playwright test",
-    "test:xs": "exit 0"
+    "test:xs": "exit 0",
+    "setup-lal": "endo run --UNCONFINED setup-lal.js --powers @agent",
+    "setup-llm-provider": "endo run --UNCONFINED setup-llm-provider.js --powers @agent"
   },
   "dependencies": {
     "@endo/captp": "workspace:^",
+    "@endo/chat-network-view": "workspace:^",
+    "@endo/daemon": "workspace:^",
+    "@endo/eventual-send": "workspace:^",
     "@endo/exo": "workspace:^",
     "@endo/far": "workspace:^",
-    "@endo/init": "workspace:^",
+    "@endo/harden": "workspace:^",
+    "@endo/inventory-graph": "workspace:^",
+    "@endo/markmdown": "workspace:^",
     "@endo/pass-style": "workspace:^",
     "@endo/patterns": "workspace:^",
+    "@endo/platform": "workspace:^",
     "@endo/promise-kit": "workspace:^",
+    "@endo/where": "workspace:^",
+    "@endo/whylip": "workspace:^",
+    "marked": "^17.0.5",
     "monaco-editor": "^0.52.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
     "ses": "workspace:^"
   },
   "devDependencies": {
     "@endo/cli": "workspace:^",
-    "@endo/daemon": "workspace:^",
+    "@endo/init": "workspace:^",
     "@endo/lockdown": "workspace:^",
     "@endo/ses-ava": "workspace:^",
-    "@endo/stream": "workspace:^",
-    "@endo/where": "workspace:^",
     "@playwright/test": "^1.40.0",
+    "@vitejs/plugin-react": "^4.0.0",
     "ava": "catalog:dev",
     "c8": "catalog:dev",
     "eslint": "catalog:dev",
     "happy-dom": "^15.0.0",
     "tsd": "catalog:dev",
     "typescript": "~5.9.2",
-    "vite": "^6.0.0",
-    "ws": "^8.13.0"
+    "vite": "^6.0.0"
   },
   "files": [
     "./*.d.ts",
@@ -86,7 +96,10 @@
   "eslintConfig": {
     "extends": [
       "plugin:@endo/internal"
-    ]
+    ],
+    "env": {
+      "browser": true
+    }
   },
   "ava": {
     "files": [

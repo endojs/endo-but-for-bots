@@ -95,13 +95,12 @@ export type ProposalNotification = {
   error?: string;
 };
 
-/** Environment variables for configuring the LLM provider */
-export type LalEnv = {
-  LAL_HOST?: string;
-  LAL_MODEL?: string;
-  LAL_AUTH_TOKEN?: string;
-  LAL_MAX_TOKENS?: string;
-  LAL_MAX_MESSAGES?: string;
+/** Configuration for a worker spawned from a form submission */
+export type WorkerConfig = {
+  name: string;
+  host: string;
+  model: string;
+  authToken: string;
 };
 
 /** Context object for cancellation support */
@@ -110,7 +109,19 @@ export type LalContext = {
   cancelled?: Promise<void>;
 };
 
-/** Options passed to the make function */
-export type LalOptions = {
-  env: LalEnv;
+/**
+ * A single node in a linked-chain transcript.
+ * Each node stores only the messages appended at that step,
+ * plus a pointer to the parent node. The full transcript is
+ * assembled by walking the chain from root to leaf.
+ */
+export type TranscriptNode = {
+  /** The messageId this node corresponds to. */
+  messageId: string;
+  /** The messageId of the parent node, or null for root nodes. */
+  parentMessageId: string | null;
+  /** LLM messages appended at this step only (not the full chain). */
+  messages: ChatMessage[];
+  /** Inbox message number of the most recent inbound message at this node. */
+  lastInboxNumber?: bigint;
 };

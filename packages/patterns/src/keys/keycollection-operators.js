@@ -1,4 +1,5 @@
 // @ts-check
+import harden from '@endo/harden';
 import {
   assertRankSorted,
   compareAntiRank,
@@ -9,7 +10,7 @@ import { makeIterator } from '@endo/common/make-iterator.js';
 import { makeArrayIterator } from '@endo/common/make-array-iterator.js';
 
 /**
- * @import {FullCompare, RankCompare} from '@endo/marshal'
+ * @import {FullCompare, PartialCompare, RankCompare} from '@endo/marshal'
  * @import {Key, KeyCompare, KeyComparison, KeyCollection} from '../types.js'
  */
 
@@ -182,7 +183,7 @@ harden(generateCollectionPairEntries);
  * @template [V=unknown]
  * @param {(collection: C) => Array<[Key, V]>} getEntries
  * @param {V} absentValue
- * @param {KeyCompare} compareValues
+ * @param {PartialCompare<V>} compareValues
  * @returns {(left: C, right: C) => KeyComparison}
  */
 export const makeCompareCollection = (getEntries, absentValue, compareValues) =>

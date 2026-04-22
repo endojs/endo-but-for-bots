@@ -1,5 +1,7 @@
 // @ts-check
 
+import harden from '@endo/harden';
+
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder('utf-8', { fatal: true });
 
@@ -48,7 +50,7 @@ export const encodeStringToImmutableArrayBuffer = string => {
  */
 export const decodeImmutableArrayBufferToString = buffer => {
   // Immutable ArrayBuffers need to be sliced for TextDecoder to work
-  return textDecoder.decode(buffer.slice());
+  return textDecoder.decode(/** @type {ArrayBuffer} */ (buffer.slice()));
 };
 
 /**

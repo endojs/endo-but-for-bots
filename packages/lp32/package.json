@@ -1,6 +1,6 @@
 {
   "name": "@endo/lp32",
-  "version": "1.1.13",
+  "version": "1.2.0",
   "description": "32 bit unsigned host byte order length prefix message streams as async iterators",
   "keywords": [
     "stream",
@@ -40,8 +40,8 @@
   },
   "scripts": {
     "build": "exit 0",
-    "prepack": "tsc --build tsconfig.build.json",
-    "postpack": "git clean -fX \"*.d.ts*\" \"*.d.cts*\" \"*.d.mts*\" \"*.tsbuildinfo\"",
+    "prepack": "git clean -fX -e node_modules/ && tsc --build tsconfig.build.json",
+    "postpack": "git clean -fX -e node_modules/",
     "lint": "yarn lint:types && yarn lint:eslint",
     "lint-fix": "eslint --fix .",
     "lint:eslint": "eslint .",
@@ -51,11 +51,12 @@
   },
   "dependencies": {
     "@endo/errors": "workspace:^",
-    "@endo/init": "workspace:^",
-    "@endo/stream": "workspace:^",
-    "ses": "workspace:^"
+    "@endo/harden": "workspace:^",
+    "@endo/stream": "workspace:^"
   },
   "devDependencies": {
+    "@endo/eventual-send": "workspace:^",
+    "@endo/init": "workspace:^",
     "@endo/ses-ava": "workspace:^",
     "ava": "catalog:dev",
     "c8": "catalog:dev",
@@ -83,7 +84,8 @@
   },
   "sesAvaConfigs": {
     "lockdown": "../../ava-endo-lockdown.config.mjs",
-    "unsafe": "../../ava-endo-lockdown-unsafe.config.mjs"
+    "unsafe": "../../ava-endo-lockdown-unsafe.config.mjs",
+    "endo": "../../ava-endo-shims-only.config.mjs"
   },
   "typeCoverage": {
     "atLeast": 100

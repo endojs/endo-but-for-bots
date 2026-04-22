@@ -1,6 +1,6 @@
 {
   "name": "@endo/module-source",
-  "version": "1.3.3",
+  "version": "1.4.0",
   "description": "Ponyfill for the SES ModuleSource and module-to-program transformer",
   "keywords": [
     "ses",
@@ -31,8 +31,8 @@
   },
   "scripts": {
     "build": "exit 0",
-    "prepack": "tsc --build tsconfig.build.json",
-    "postpack": "git clean -fX \"*.d.ts*\" \"*.d.cts*\" \"*.d.mts*\" \"*.tsbuildinfo\"",
+    "prepack": "git clean -fX -e node_modules/ && tsc --build tsconfig.build.json",
+    "postpack": "git clean -fX -e node_modules/",
     "cover": "c8 ava --config test/_ava-ses.config.js",
     "lint": "yarn lint:types && yarn lint:eslint",
     "lint:types": "tsc",
@@ -50,6 +50,7 @@
     "ses": "workspace:^"
   },
   "devDependencies": {
+    "@endo/ses-ava": "workspace:^",
     "ava": "catalog:dev",
     "babel-eslint": "^10.1.0",
     "benchmark": "^2.1.4",
@@ -75,6 +76,16 @@
     "extends": [
       "plugin:@endo/internal"
     ],
+    "rules": {
+      "import/no-unresolved": [
+        "error",
+        {
+          "ignore": [
+            "^@endo/module-source(?:/.*)?$"
+          ]
+        }
+      ]
+    },
     "ignorePatterns": [
       "test/fixtures/"
     ]
@@ -82,7 +93,7 @@
   "sesAvaConfigs": {
     "lockdown": "../../ava-endo-lockdown.config.mjs",
     "unsafe": "../../ava-endo-lockdown-unsafe.config.mjs",
-    "ses-shim": "../../ava-ses-shims-only.config.mjs"
+    "ses": "../../ava-ses-shims-only.config.mjs"
   },
   "typeCoverage": {
     "atLeast": 40.33

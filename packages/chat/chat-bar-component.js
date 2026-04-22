@@ -1,5 +1,4 @@
 // @ts-check
-/* global window, document, setTimeout */
 
 /** @import { ERef } from '@endo/far' */
 /** @import { EndoHost } from '@endo/daemon' */
@@ -9,7 +8,11 @@ import { makeRefIterator } from './ref-iterator.js';
 import { sendFormComponent } from './send-form.js';
 import { commandSelectorComponent } from './command-selector.js';
 import { createEvalForm } from './eval-form.js';
-import { createCounterProposalForm } from './counter-proposal-form.js';
+import { createDefineForm } from './define-form.js';
+import { createFormBuilder } from './form-builder.js';
+import { createBlobViewer } from './blob-viewer.js';
+import { createDebuggerPanel } from './debugger-panel.js';
+import { createEndowModal } from './endow-modal.js';
 import { createInlineCommandForm } from './inline-command-form.js';
 import { createCommandExecutor } from './command-executor.js';
 import {
@@ -29,11 +32,26 @@ import { kbd, modKey } from './platform-keys.js';
  * @param {(hostName: string) => Promise<void>} options.enterProfile
  * @param {() => void} options.exitProfile
  * @param {boolean} options.canExitProfile
+ * @param {() => string | null} [options.getConversationPetName] - Returns active conversation pet name
+ * @param {() => void} [options.exitConversation] - Exit the current conversation view
+ * @param {(petName: string) => void} [options.navigateToConversation] - Navigate to a conversation
+ * @param {() => unknown | null} [options.getChannelRef] - Returns channel exo ref when in channel mode, null otherwise
+ * @param {(info: { petNames: string[], edgeNames: string[], messageStrings: string[], replyTo: string | undefined }) => void} [options.onMentionNotify] - Called after channel post with @-mentions
  */
 export const chatBarComponent = (
   $parent,
   powers,
-  { showValue, enterProfile, exitProfile, canExitProfile },
+  {
+    showValue,
+    enterProfile,
+    exitProfile,
+    canExitProfile,
+    getConversationPetName,
+    exitConversation,
+    navigateToConversation,
+    getChannelRef,
+    onMentionNotify,
+  },
 ) => {
   const $chatBar = /** @type {HTMLElement} */ (
     $parent.querySelector('#chat-bar')
@@ -62,11 +80,35 @@ export const chatBarComponent = (
   const $evalFormBackdrop = /** @type {HTMLElement} */ (
     $parent.querySelector('#eval-form-backdrop')
   );
-  const $counterProposalContainer = /** @type {HTMLElement} */ (
-    $parent.querySelector('#counter-proposal-container')
+  const $formBuilderContainer = /** @type {HTMLElement} */ (
+    $parent.querySelector('#form-builder-container')
   );
-  const $counterProposalBackdrop = /** @type {HTMLElement} */ (
-    $parent.querySelector('#counter-proposal-backdrop')
+  const $formBuilderBackdrop = /** @type {HTMLElement} */ (
+    $parent.querySelector('#form-builder-backdrop')
+  );
+  const $endowModalContainer = /** @type {HTMLElement} */ (
+    $parent.querySelector('#endow-modal-container')
+  );
+  const $endowModalBackdrop = /** @type {HTMLElement} */ (
+    $parent.querySelector('#endow-modal-backdrop')
+  );
+  const $defineFormContainer = /** @type {HTMLElement} */ (
+    $parent.querySelector('#define-form-container')
+  );
+  const $defineFormBackdrop = /** @type {HTMLElement} */ (
+    $parent.querySelector('#define-form-backdrop')
+  );
+  const $blobViewerContainer = /** @type {HTMLElement} */ (
+    $parent.querySelector('#blob-viewer-container')
+  );
+  const $blobViewerBackdrop = /** @type {HTMLElement} */ (
+    $parent.querySelector('#blob-viewer-backdrop')
+  );
+  const $debuggerContainer = /** @type {HTMLElement} */ (
+    $parent.querySelector('#debugger-panel-container')
+  );
+  const $debuggerBackdrop = /** @type {HTMLElement} */ (
+    $parent.querySelector('#debugger-panel-backdrop')
   );
   const $inlineFormContainer = /** @type {HTMLElement} */ (
     $parent.querySelector('#inline-form-container')
@@ -120,6 +162,13 @@ export const chatBarComponent = (
         <span class="modeline-hint">${kbd(modKey, 'Enter')} expand to editor</span>
         <span class="modeline-hint"><kbd>Esc</kbd> cancel</span>
       `;
+    } else if (command && command.name === 'define') {
+      hints = `
+        <span class="modeline-hint"><kbd>@</kbd> add slot</span>
+        <span class="modeline-hint"><kbd>Enter</kbd> define</span>
+        <span class="modeline-hint">${kbd(modKey, 'Enter')} expand to editor</span>
+        <span class="modeline-hint"><kbd>Esc</kbd> cancel</span>
+      `;
     } else {
       hints = `
         <span class="modeline-hint"><kbd>Enter</kbd> submit</span>
@@ -132,7 +181,7 @@ export const chatBarComponent = (
     $chatBar.classList.add('has-modeline');
   };
 
-  /** @type {'send' | 'selecting' | 'inline' | 'js'} */
+  /** @type {'send' | 'selecting' | 'inline' | 'js' | 'form' | 'focus'} */
   let mode = 'send';
   let commandPrefix = '';
   /** @type {string | null} */
@@ -141,8 +190,20 @@ export const chatBarComponent = (
   /** @type {import('./eval-form.js').EvalFormAPI | null} */
   let evalForm = null;
 
-  /** @type {import('./counter-proposal-form.js').CounterProposalFormAPI | null} */
-  let counterProposalForm = null;
+  /** @type {import('./define-form.js').DefineFormAPI | null} */
+  let defineForm = null;
+
+  /** @type {import('./form-builder.js').FormBuilderAPI | null} */
+  let formBuilder = null;
+
+  /** @type {import('./endow-modal.js').EndowModalAPI | null} */
+  let endowModal = null;
+
+  /** @type {import('./blob-viewer.js').BlobViewerAPI | null} */
+  let blobViewer = null;
+
+  /** @type {import('./debugger-panel.js').DebuggerPanelAPI | null} */
+  let debuggerPanel = null;
 
   // Initialize the send form component
   const sendForm = sendFormComponent({
@@ -150,6 +211,7 @@ export const chatBarComponent = (
     $menu: $tokenMenu,
     $error,
     $sendButton,
+    $chatBar,
     E,
     makeRefIterator,
     powers,
@@ -161,6 +223,10 @@ export const chatBarComponent = (
         updateSendModeline(state); // eslint-disable-line no-use-before-define
       }
     },
+    getConversationPetName,
+    navigateToConversation,
+    getChannelRef,
+    onMentionNotify,
   });
 
   // Initialize command executor
@@ -171,6 +237,29 @@ export const chatBarComponent = (
       // For now, just log messages - could add a toast system later
       console.log(message);
     },
+    getChannelRef,
+    openBlobViewer: async (petNamePath, readOnly) => {
+      if (!blobViewer) {
+        blobViewer = createBlobViewer({
+          $container: $blobViewerContainer,
+          $backdrop: $blobViewerBackdrop,
+          powers,
+          onClose: () => {
+            sendForm.focus();
+          },
+        });
+      }
+      await blobViewer.open(petNamePath, readOnly);
+    },
+    openDebugger: (debuggerRef, label) => {
+      if (!debuggerPanel) {
+        debuggerPanel = createDebuggerPanel({
+          $container: $debuggerContainer,
+          $backdrop: $debuggerBackdrop,
+        });
+      }
+      debuggerPanel.open(debuggerRef, label);
+    },
     showError: error => {
       const message = error?.message || String(error) || 'Unknown error';
       // Use command error element in command mode, chat error otherwise
@@ -179,7 +268,19 @@ export const chatBarComponent = (
       } else {
         $error.textContent = message;
       }
-      console.error('Command error:', error);
+      console.error(`[Chat] Command error:`, message);
+      const { errors } = /** @type {{ errors?: Error[] }} */ (error);
+      if (errors?.length) {
+        for (const sub of errors) {
+          console.error(`[Chat]   caused by:`, sub?.message || sub);
+        }
+      }
+      if (error?.cause) {
+        console.error(
+          `[Chat]   cause:`,
+          /** @type {Error} */ (error.cause)?.message || error.cause,
+        );
+      }
     },
   });
 
@@ -227,12 +328,40 @@ export const chatBarComponent = (
    */
   const updateSendModeline = state => {
     const { menuVisible, hasToken, hasText, isEmpty } = state;
+    const inConversation = getConversationPetName
+      ? getConversationPetName()
+      : null;
 
     // Update has-content class for send button visibility
     if (hasToken || hasText) {
       $chatBar.classList.add('has-content');
     } else {
       $chatBar.classList.remove('has-content');
+    }
+
+    if (inConversation) {
+      if (menuVisible) {
+        $modeline.innerHTML = `
+          <span class="modeline-hint">select reference</span>
+          <span class="modeline-hint"><kbd>Space</kbd> embed</span>
+          <span class="modeline-hint"><kbd>↑↓</kbd> navigate</span>
+          <span class="modeline-hint"><kbd>Esc</kbd> cancel</span>
+        `;
+      } else if (hasToken || hasText) {
+        $modeline.innerHTML = `
+          <span class="modeline-hint"><kbd>Enter</kbd> send</span>
+          <span class="modeline-hint"><kbd>@</kbd> embed reference</span>
+          <span class="modeline-hint"><kbd>/</kbd> commands</span>
+        `;
+      } else {
+        $modeline.innerHTML = `
+          <span class="modeline-hint"><kbd>@</kbd> embed reference</span>
+          <span class="modeline-hint"><kbd>/</kbd> commands</span>
+          <span class="modeline-hint"><kbd>Esc</kbd> back to inbox</span>
+        `;
+      }
+      $chatBar.classList.add('has-modeline');
+      return;
     }
 
     // Determine modeline content based on state
@@ -263,7 +392,7 @@ export const chatBarComponent = (
       const lastRecipient = sendForm.getLastRecipient();
       if (lastRecipient) {
         $modeline.innerHTML = `
-          <span class="modeline-hint"><kbd>Space</kbd> continue with @${lastRecipient}</span>
+          <span class="modeline-hint">sending to @${lastRecipient}</span>
           <span class="modeline-hint"><kbd>@</kbd> inspect or message</span>
           <span class="modeline-hint"><kbd>/</kbd> commands</span>
         `;
@@ -274,10 +403,18 @@ export const chatBarComponent = (
         `;
       }
     } else {
-      // Text only without token - need to add recipient
-      $modeline.innerHTML = `
-        <span class="modeline-hint"><kbd>@</kbd> add recipient to send</span>
-      `;
+      // Text only without token
+      const lastRecipient = sendForm.getLastRecipient();
+      if (lastRecipient) {
+        $modeline.innerHTML = `
+          <span class="modeline-hint"><kbd>Enter</kbd> send to @${lastRecipient}</span>
+          <span class="modeline-hint"><kbd>@</kbd> embed reference</span>
+        `;
+      } else {
+        $modeline.innerHTML = `
+          <span class="modeline-hint"><kbd>@</kbd> add recipient to send</span>
+        `;
+      }
     }
     $chatBar.classList.add('has-modeline');
   };
@@ -311,25 +448,28 @@ export const chatBarComponent = (
    */
   const renderCommandPopover = () => {
     const categories = getCategories();
+    const context = getCommandContext(); // eslint-disable-line no-use-before-define
     let html = '<div class="command-popover-header">Commands</div>';
 
     for (const category of categories) {
-      const commands = getCommandsByCategory(category);
-      const label = CATEGORY_LABELS[category] || category;
+      const commands = getCommandsByCategory(category, context);
+      if (commands.length !== 0) {
+        const label = CATEGORY_LABELS[category] || category;
 
-      html += '<div class="command-popover-section">';
-      html += `<div class="command-popover-category">${label}</div>`;
+        html += '<div class="command-popover-section">';
+        html += `<div class="command-popover-category">${label}</div>`;
 
-      for (const cmd of commands) {
-        html += `
-          <div class="command-popover-item" data-command="${cmd.name}">
-            <span class="command-popover-item-name">/${cmd.name}</span>
-            <span class="command-popover-item-desc">${cmd.description}</span>
-          </div>
-        `;
+        for (const cmd of commands) {
+          html += `
+            <div class="command-popover-item" data-command="${cmd.name}">
+              <span class="command-popover-item-name">/${cmd.name}</span>
+              <span class="command-popover-item-desc">${cmd.description}</span>
+            </div>
+          `;
+        }
+
+        html += '</div>';
       }
-
-      html += '</div>';
     }
 
     html +=
@@ -378,41 +518,79 @@ export const chatBarComponent = (
     }
   });
 
-  // Initialize inline command form
-  const inlineForm = createInlineCommandForm({
-    $container: $inlineFormContainer,
-    E,
-    powers,
-    onSubmit: async (commandName, data) => {
-      messagePicker.disable();
-      $commandError.textContent = '';
+  let commandSubmitting = false;
 
-      // Special handling for enter command - uses profile navigation
-      if (commandName === 'enter') {
-        const { hostName } = /** @type {{ hostName: string }} */ (data);
-        exitCommandMode(); // eslint-disable-line no-use-before-define
-        await enterProfile(hostName);
-        return;
-      }
+  const setCommandSubmitting = (/** @type {boolean} */ value) => {
+    commandSubmitting = value;
+    if (value) {
+      $chatBar.classList.add('submitting');
+      $commandSubmitButton.classList.add('btn-spinner');
+      $commandSubmitButton.disabled = true;
+      inlineForm.setDisabled(true); // eslint-disable-line no-use-before-define
+    } else {
+      $chatBar.classList.remove('submitting');
+      $commandSubmitButton.classList.remove('btn-spinner');
+      inlineForm.setDisabled(false); // eslint-disable-line no-use-before-define
+      $commandSubmitButton.disabled = !inlineForm.isValid(); // eslint-disable-line no-use-before-define
+    }
+  };
 
-      // For js/eval: reset command line immediately so guest proposals don't block the UI.
-      // (Guest evaluate() resolves only when the host grants; we show the result when it does.)
-      const isEval = commandName === 'js' || commandName === 'eval';
-      if (isEval) {
-        exitCommandMode(); // eslint-disable-line no-use-before-define
-      }
+  /**
+   * Run a command with spinner/disabled state management.
+   *
+   * @param {string} commandName
+   * @param {Record<string, unknown>} data
+   */
+  const executeWithSpinner = async (commandName, data) => {
+    messagePicker.disable();
+    $commandError.textContent = '';
 
+    if (commandName === 'enter') {
+      const { hostName } = /** @type {{ hostName: string }} */ (data);
+      exitCommandMode(); // eslint-disable-line no-use-before-define
+      await enterProfile(hostName);
+      return;
+    }
+
+    if (commandName === 'endow') {
+      const { messageNumber } = /** @type {{ messageNumber: number }} */ (data);
+      exitCommandMode({ skipFocus: true }); // eslint-disable-line no-use-before-define
+      showEndowModal(BigInt(messageNumber));
+      return;
+    }
+
+    if (commandName === 'help') {
+      const name = data.commandName ? String(data.commandName) : undefined;
+      exitCommandMode(); // eslint-disable-line no-use-before-define
+      helpModal.show(name);
+      return;
+    }
+
+    // For commands that open their own modal, reset command line
+    // immediately so the modal receives focus.
+    const isEval = commandName === 'js' || commandName === 'eval';
+    const opensModal =
+      isEval ||
+      commandName === 'view' ||
+      commandName === 'edit' ||
+      commandName === 'cat';
+    if (opensModal) {
+      exitCommandMode({ skipFocus: true }); // eslint-disable-line no-use-before-define
+    } else {
+      setCommandSubmitting(true);
+    }
+
+    try {
       const result = await executor.execute(commandName, data);
       if (result.success) {
-        if (!isEval) {
+        if (!opensModal) {
           exitCommandMode(); // eslint-disable-line no-use-before-define
         }
         const resultName =
           'resultName' in data && data.resultName
             ? String(data.resultName)
             : undefined;
-        const resultPath = resultName ? resultName.split('.') : undefined;
-        // Always show js results (even undefined), skip show/list which handle their own display
+        const resultPath = resultName ? resultName.split('/') : undefined;
         if (commandName === 'js') {
           showValue(result.value, undefined, resultPath, undefined);
         } else if (
@@ -423,14 +601,32 @@ export const chatBarComponent = (
           showValue(result.value, undefined, resultPath, undefined);
         }
       }
-      // Error case: showError callback already set $commandError or $error.textContent
+    } finally {
+      if (!opensModal) {
+        setCommandSubmitting(false);
+      }
+    }
+  };
+
+  // Initialize inline command form
+  const inlineForm = createInlineCommandForm({
+    $container: $inlineFormContainer,
+    E,
+    powers,
+    makeRefIterator,
+    getContext: () => getCommandContext(), // eslint-disable-line no-use-before-define
+    onSubmit: async (commandName, data) => {
+      if (commandSubmitting) return;
+      await executeWithSpinner(commandName, data);
     },
     onCancel: () => {
       messagePicker.disable();
       exitCommandMode(); // eslint-disable-line no-use-before-define
     },
     onValidityChange: isValid => {
-      $commandSubmitButton.disabled = !isValid;
+      if (!commandSubmitting) {
+        $commandSubmitButton.disabled = !isValid;
+      }
     },
     onMessageNumberClick: () => {
       // Enable picker and track the input
@@ -453,16 +649,34 @@ export const chatBarComponent = (
           source: data.source,
           endowments: data.endowments,
           resultName: '',
-          workerName: 'MAIN',
+          workerName: '@main',
+          cursorPosition: data.cursorPosition,
+        });
+      }
+    },
+    onExpandDefine: async data => {
+      // Expand inline define to full modal
+      exitCommandMode(); // eslint-disable-line no-use-before-define
+      await showDefineForm(); // eslint-disable-line no-use-before-define
+      if (defineForm) {
+        defineForm.setData({
+          source: data.source,
+          slots: data.slots,
           cursorPosition: data.cursorPosition,
         });
       }
     },
     getMessageEdgeNames: async messageNumber => {
       try {
-        const messages = await E(powers).listMessages();
+        // In channel mode, look up edge names from channel messages
+        const channelRef = getChannelRef ? getChannelRef() : null;
+        const messageList = channelRef
+          ? await E(channelRef).listMessages()
+          : await E(powers).listMessages();
         const targetNumber = BigInt(messageNumber);
-        const message = messages.find(m => m.number === targetNumber);
+        const message = messageList.find(
+          (/** @type {{ number: bigint }} */ m) => m.number === targetNumber,
+        );
         if (!message) return [];
         // Package messages have 'names', eval-proposal messages have 'edgeNames'
         if ('names' in message && Array.isArray(message.names)) {
@@ -481,8 +695,9 @@ export const chatBarComponent = (
   /**
    * Enter command mode for an inline command.
    * @param {string} commandName
+   * @param {Record<string, string>} [prefill] - Optional field values to pre-fill
    */
-  const enterCommandMode = commandName => {
+  const enterCommandMode = (commandName, prefill) => {
     const command = getCommand(commandName);
     if (!command) return;
 
@@ -494,7 +709,7 @@ export const chatBarComponent = (
     $commandSubmitButton.disabled = true;
     updateModeline(commandName);
 
-    inlineForm.setCommand(commandName);
+    inlineForm.setCommand(commandName, prefill);
 
     // Auto-enable message picker for commands that need message numbers
     const needsMessagePicker = command.fields.some(
@@ -515,16 +730,20 @@ export const chatBarComponent = (
       }, 50);
     }
 
-    // Focus the first field after a brief delay for DOM update
+    // Focus the first field after a brief delay for DOM update.
+    // When prefill is provided, skip past filled fields.
+    const skipFilled = prefill !== undefined;
     setTimeout(() => {
-      inlineForm.focus();
+      inlineForm.focus(skipFilled);
     }, 50);
   };
 
   /**
    * Exit command mode and return to send mode.
+   * @param root0
+   * @param root0.skipFocus
    */
-  const exitCommandMode = () => {
+  const exitCommandMode = ({ skipFocus = false } = {}) => {
     mode = 'send';
     currentCommand = null;
     $chatBar.classList.remove('command-mode');
@@ -533,11 +752,445 @@ export const chatBarComponent = (
     activeMessageNumberInput = null;
     inlineForm.clear();
     sendForm.clear();
-    sendForm.focus();
+    if (!skipFocus) {
+      sendForm.focus();
+    }
     $error.textContent = '';
     $commandError.textContent = '';
     updateHasContent();
   };
+
+  // --- Focus mode ---
+
+  /** Shortcut keys mapped to command names for focus mode. */
+  const FOCUS_SHORTCUTS = {
+    r: 'reply',
+    d: 'dismiss',
+    a: 'adopt',
+    g: 'grant',
+    s: 'submit',
+  };
+
+  /**
+   * Compute which messages should be indented based on the reply chain
+   * through the focused message.
+   *
+   * Walking backward from the focus: indent every message until reaching
+   * the message that the cursor replies to (its parent). The parent is
+   * not indented and becomes the new cursor. Repeat until history is
+   * exhausted.
+   *
+   * Walking forward from the focus: indent every message until reaching
+   * the last message that replies to the cursor. That reply becomes the
+   * new cursor. Repeat until messages are exhausted.
+   *
+   * @param {NodeListOf<HTMLElement>} $messages
+   * @param {number} focusIndex
+   */
+  const applyFocusIndent = ($messages, focusIndex) => {
+    // Build messageId → index lookup
+    /** @type {Map<string, number>} */
+    const idToIndex = new Map();
+    for (let i = 0; i < $messages.length; i += 1) {
+      const mid = $messages[i].dataset.messageId;
+      if (mid) {
+        idToIndex.set(mid, i);
+      }
+    }
+
+    // Start with all messages indented, then un-indent the chain
+    for (let i = 0; i < $messages.length; i += 1) {
+      $messages[i].classList.add('indented');
+    }
+
+    // Collect the ordered chain of non-indented indices
+    /** @type {number[]} */
+    const chain = [];
+
+    // The focused message is never indented
+    $messages[focusIndex].classList.remove('indented');
+
+    // Walk backward: find ancestor chain
+    /** @type {number[]} */
+    const ancestors = [];
+    let cursor = focusIndex;
+    for (let i = cursor - 1; i >= 0; i -= 1) {
+      const cursorReplyTo = $messages[cursor].dataset.replyTo;
+      if (cursorReplyTo) {
+        const parentIndex = idToIndex.get(cursorReplyTo);
+        if (parentIndex !== undefined && parentIndex <= i) {
+          $messages[parentIndex].classList.remove('indented');
+          ancestors.push(parentIndex);
+          cursor = parentIndex;
+          i = parentIndex;
+        }
+      }
+    }
+    // Ancestors were collected child-to-parent; reverse for top-down order
+    ancestors.reverse();
+    chain.push(...ancestors, focusIndex);
+
+    // Walk forward: find descendant chain
+    cursor = focusIndex;
+    let searchFrom = focusIndex + 1;
+    while (searchFrom < $messages.length) {
+      const cursorMid = $messages[cursor].dataset.messageId;
+      if (!cursorMid) break;
+
+      let lastReplyIndex = -1;
+      for (let i = searchFrom; i < $messages.length; i += 1) {
+        if ($messages[i].dataset.replyTo === cursorMid) {
+          lastReplyIndex = i;
+        }
+      }
+
+      if (lastReplyIndex === -1) break;
+
+      $messages[lastReplyIndex].classList.remove('indented');
+      chain.push(lastReplyIndex);
+      cursor = lastReplyIndex;
+      searchFrom = lastReplyIndex + 1;
+    }
+
+    applyChainLines($messages, chain); // eslint-disable-line no-use-before-define
+    // Secondary connections apply to all indented messages, not just
+    // those within chain segments.
+    applyIndentedConnections($messages, 0, $messages.length); // eslint-disable-line no-use-before-define
+  };
+
+  /** Line class names applied to envelopes for the chain line. */
+  const LINE_CLASSES = [
+    'chain-start',
+    'chain-through',
+    'chain-end',
+    'chain-tee',
+    'sub-start',
+    'sub-through',
+    'sub-end',
+    'sub-indicator',
+  ];
+
+  /**
+   * Within a range of indented envelopes, find reply groups and apply
+   * secondary chain classes. For each parent message that has replies
+   * in the range, the last reply gets a sub-line and earlier siblings
+   * get sub-tees.
+   *
+   * @param {NodeListOf<HTMLElement>} $envelopes
+   * @param {number} from - Start index (inclusive)
+   * @param {number} to - End index (exclusive)
+   */
+  const applyIndentedConnections = ($envelopes, from, to) => {
+    // For each indented message, determine its connection to neighbors.
+    // Case 1 (gutter-connected via chain-tee) is already handled.
+    // Case 2: adjacent indented predecessor is our replyTo parent.
+    // Case 3: has a replyTo but parent is not adjacent — reply indicator.
+    for (let i = from; i < to; i += 1) {
+      if ($envelopes[i].classList.contains('indented')) {
+        const rt = $envelopes[i].dataset.replyTo;
+        const mid = $envelopes[i].dataset.messageId;
+
+        // Connect upward: previous envelope is indented and is our parent
+        const prevIndented =
+          i > from && $envelopes[i - 1].classList.contains('indented');
+        const connectsUp =
+          prevIndented && rt && $envelopes[i - 1].dataset.messageId === rt;
+
+        // Connect downward: next envelope is indented and replies to us
+        const nextIndented =
+          i + 1 < to && $envelopes[i + 1].classList.contains('indented');
+        const connectsDown =
+          nextIndented && mid && $envelopes[i + 1].dataset.replyTo === mid;
+
+        if (connectsUp && connectsDown) {
+          $envelopes[i].classList.add('sub-through');
+        } else if (connectsUp) {
+          $envelopes[i].classList.add('sub-end');
+        } else if (connectsDown) {
+          $envelopes[i].classList.add('sub-start');
+        } else if (rt && !$envelopes[i].classList.contains('chain-tee')) {
+          // Has a replyTo but not adjacent to parent and not already
+          // gutter-connected — show a small reply indicator.
+          $envelopes[i].classList.add('sub-indicator');
+        }
+      }
+    }
+  };
+
+  /**
+   * Apply chain-line classes to envelopes between the first and last
+   * chain member so CSS background-image draws a connecting line
+   * through the indentation gutter.
+   *
+   * Indented messages whose `replyTo` matches the upper chain member
+   * of their segment get a tee junction (branch stub) instead of a
+   * plain through-line.
+   *
+   * Within each segment, indented messages get adjacency-based
+   * connections: adjacent parent-child pairs get sub-lines, and
+   * non-adjacent replies get a small indicator stub.
+   *
+   * @param {NodeListOf<HTMLElement>} $envelopes
+   * @param {number[]} chain - Ordered indices of non-indented envelopes
+   */
+  const applyChainLines = ($envelopes, chain) => {
+    // Clear previous line classes from all envelopes
+    for (let i = 0; i < $envelopes.length; i += 1) {
+      $envelopes[i].classList.remove(...LINE_CLASSES);
+    }
+
+    if (chain.length < 2) return;
+
+    const first = chain[0];
+    const last = chain[chain.length - 1];
+
+    // First chain member: line from bottom half
+    $envelopes[first].classList.add('chain-start');
+
+    // Last chain member: line from top half
+    $envelopes[last].classList.add('chain-end');
+
+    // Middle chain members connect both up and down
+    for (let c = 1; c < chain.length - 1; c += 1) {
+      $envelopes[chain[c]].classList.add('chain-through');
+    }
+
+    // Walk each segment between consecutive chain members
+    for (let seg = 0; seg < chain.length - 1; seg += 1) {
+      const upperIdx = chain[seg];
+      const lowerIdx = chain[seg + 1];
+      const upperMid = $envelopes[upperIdx].dataset.messageId;
+
+      for (let i = upperIdx + 1; i < lowerIdx; i += 1) {
+        if (
+          upperMid &&
+          $envelopes[i].dataset.replyTo === upperMid &&
+          $envelopes[i].classList.contains('indented')
+        ) {
+          $envelopes[i].classList.add('chain-tee');
+        } else {
+          $envelopes[i].classList.add('chain-through');
+        }
+      }
+    }
+  };
+
+  /**
+   * Set a specific message as focused by index, updating indent and highlight.
+   * Assumes focus-active is already on the container.
+   * @param {NodeListOf<HTMLElement>} $messages
+   * @param {number} index
+   */
+  const setFocusedMessage = ($messages, index) => {
+    const $prev = $messagesContainer.querySelector('.message-envelope.focused');
+    if ($prev) {
+      $prev.classList.remove('focused');
+    }
+    $messages[index].classList.add('focused');
+    applyFocusIndent($messages, index);
+  };
+
+  /**
+   * Apply passive focus to the last received message. This runs when
+   * the command line has focus (send mode) so the user always sees
+   * chain context around the most recent incoming message.
+   */
+  const updatePassiveFocus = () => {
+    const $envelopes = /** @type {NodeListOf<HTMLElement>} */ (
+      $messagesContainer.querySelectorAll('.message-envelope[data-number]')
+    );
+    if ($envelopes.length === 0) return;
+
+    // Find the last received (non-sent) message envelope.
+    let targetIndex = -1;
+    for (let i = $envelopes.length - 1; i >= 0; i -= 1) {
+      const $msg = $envelopes[i].querySelector('.message');
+      if ($msg && !$msg.classList.contains('sent')) {
+        targetIndex = i;
+        break;
+      }
+    }
+    if (targetIndex === -1) return;
+
+    $messagesContainer.classList.add('focus-active');
+    const $prev = $messagesContainer.querySelector('.message-envelope.focused');
+    if ($prev) {
+      $prev.classList.remove('focused');
+    }
+    $envelopes[targetIndex].classList.add('focused');
+    applyFocusIndent($envelopes, targetIndex);
+  };
+
+  /**
+   * Enter focus mode: highlight the last message and show the focus modeline.
+   */
+  const enterFocusMode = () => {
+    const $messages = /** @type {NodeListOf<HTMLElement>} */ (
+      $messagesContainer.querySelectorAll('.message-envelope[data-number]')
+    );
+    if ($messages.length === 0) return;
+
+    mode = 'focus';
+    $input.blur();
+    $messagesContainer.classList.add('focus-active');
+
+    const lastIndex = $messages.length - 1;
+    setFocusedMessage($messages, lastIndex);
+    $messages[lastIndex].scrollIntoView({ block: 'nearest' });
+
+    updateFocusModeline(); // eslint-disable-line no-use-before-define
+  };
+
+  /**
+   * Exit focus mode: remove highlights and return to send mode.
+   */
+  const exitFocusMode = () => {
+    mode = 'send';
+    updateModeline(null);
+    sendForm.focus();
+    updateHasContent();
+    // Revert to passive focus on the last received message.
+    updatePassiveFocus();
+  };
+
+  /**
+   * Move focus to the next or previous message.
+   * @param {'up' | 'down'} direction
+   * @param {boolean} [page] - If true, jump by half a viewport
+   */
+  const moveFocus = (direction, page = false) => {
+    const $messages = /** @type {NodeListOf<HTMLElement>} */ (
+      $messagesContainer.querySelectorAll('.message-envelope[data-number]')
+    );
+    if ($messages.length === 0) return;
+
+    const $current = $messagesContainer.querySelector(
+      '.message-envelope.focused',
+    );
+    let index = $messages.length - 1;
+    if ($current) {
+      for (let i = 0; i < $messages.length; i += 1) {
+        if ($messages[i] === $current) {
+          index = i;
+          break;
+        }
+      }
+      $current.classList.remove('focused');
+    }
+
+    const step = page ? pageFocusStep($messages, index, direction) : 1; // eslint-disable-line no-use-before-define
+    if (direction === 'up') {
+      index = Math.max(0, index - step);
+    } else {
+      index = Math.min($messages.length - 1, index + step);
+    }
+
+    $messages[index].classList.add('focused');
+    applyFocusIndent($messages, index);
+
+    // At the edges, scroll the container to its limit so the focused
+    // message aligns flush with the viewport edge. scrollIntoView with
+    // 'nearest' does not reliably do this inside the #messages container
+    // which uses large top padding.
+    if (index === $messages.length - 1 && direction === 'down') {
+      $messagesContainer.scrollTo(0, $messagesContainer.scrollHeight);
+    } else if (index === 0 && direction === 'up') {
+      $messagesContainer.scrollTo(0, 0);
+    } else {
+      $messages[index].scrollIntoView({ block: 'nearest' });
+    }
+  };
+
+  /**
+   * Count how many messages to skip to move roughly half a viewport,
+   * by accumulating actual rendered heights from the current position.
+   * @param {NodeListOf<HTMLElement>} $messages
+   * @param {number} fromIndex - Current focused index
+   * @param {'up' | 'down'} direction
+   * @returns {number} Step count (at least 1)
+   */
+  const pageFocusStep = ($messages, fromIndex, direction) => {
+    const budget = $messagesContainer.clientHeight / 2;
+    let accumulated = 0;
+    let count = 0;
+    const delta = direction === 'up' ? -1 : 1;
+    let i = fromIndex + delta;
+    while (i >= 0 && i < $messages.length) {
+      accumulated += $messages[i].offsetHeight + 8; // 8px margin-bottom
+      count += 1;
+      if (accumulated >= budget) break;
+      i += delta;
+    }
+    return Math.max(1, count);
+  };
+
+  /**
+   * Get the message number of the currently focused message.
+   * @returns {string | undefined}
+   */
+  const getFocusedMessageNumber = () => {
+    const $focused = /** @type {HTMLElement | null} */ (
+      $messagesContainer.querySelector('.message-envelope.focused')
+    );
+    return $focused?.dataset.number;
+  };
+
+  /**
+   * Update the modeline for focus mode.
+   */
+  const updateFocusModeline = () => {
+    $modeline.innerHTML = `
+      <span class="modeline-hint"><kbd>r</kbd> reply</span>
+      <span class="modeline-hint"><kbd>d</kbd> dismiss</span>
+      <span class="modeline-hint"><kbd>a</kbd> adopt</span>
+      <span class="modeline-hint"><kbd>g</kbd> grant</span>
+      <span class="modeline-hint"><kbd>s</kbd> submit</span>
+      <span class="modeline-hint"><kbd>Esc</kbd> back</span>
+    `;
+    $chatBar.classList.add('has-modeline');
+  };
+
+  // Click on a message enters focus mode (or changes focus if already in it)
+  $messagesContainer.addEventListener('click', event => {
+    const $target = /** @type {HTMLElement} */ (event.target);
+    // Don't intercept clicks on interactive elements
+    if (
+      $target.tagName === 'INPUT' ||
+      $target.tagName === 'TEXTAREA' ||
+      $target.tagName === 'BUTTON' ||
+      $target.tagName === 'A' ||
+      $target.tagName === 'SELECT' ||
+      $target.isContentEditable
+    ) {
+      return;
+    }
+
+    // Find the closest .message ancestor
+    const $msg = $target.closest('.message-envelope');
+    if (!$msg) return;
+
+    const $messages = /** @type {NodeListOf<HTMLElement>} */ (
+      $messagesContainer.querySelectorAll('.message-envelope[data-number]')
+    );
+
+    let clickIndex = -1;
+    for (let i = 0; i < $messages.length; i += 1) {
+      if ($messages[i] === $msg) {
+        clickIndex = i;
+        break;
+      }
+    }
+    if (clickIndex === -1) return;
+
+    if (mode !== 'focus') {
+      mode = 'focus';
+      $input.blur();
+      $messagesContainer.classList.add('focus-active');
+      updateFocusModeline();
+    }
+
+    setFocusedMessage($messages, clickIndex);
+  });
 
   /**
    * Show the eval form (lazily initialize if needed).
@@ -553,11 +1206,11 @@ export const chatBarComponent = (
           // Call E(powers).evaluate()
           // Split dot-notation pet names into paths for the evaluate API
           const codeNames = data.endowments.map(e => e.codeName);
-          const petNamePaths = data.endowments.map(e => e.petName.split('.'));
+          const petNamePaths = data.endowments.map(e => e.petName.split('/'));
           const resultNamePath = data.resultName
-            ? data.resultName.split('.')
+            ? data.resultName.split('/')
             : undefined;
-          const workerName = data.workerName || 'MAIN';
+          const workerName = data.workerName || '@main';
 
           await E(powers).evaluate(
             workerName,
@@ -598,83 +1251,137 @@ export const chatBarComponent = (
   });
 
   /**
-   * Show the counter-proposal form with proposal data.
-   * @param {object} proposalData
-   * @param {bigint} proposalData.messageNumber
-   * @param {string} proposalData.source
-   * @param {string[]} proposalData.codeNames
-   * @param {string[]} proposalData.edgeNames
-   * @param {string} proposalData.workerName
-   * @param {string} proposalData.resultName
+   * Show the form builder modal.
    */
-  const showCounterProposalForm = async proposalData => {
-    if (!counterProposalForm) {
-      // Lazily initialize the counter-proposal form
-      counterProposalForm = await createCounterProposalForm({
-        $container: $counterProposalContainer,
+  const showFormBuilder = () => {
+    if (!formBuilder) {
+      formBuilder = createFormBuilder({
+        $container: $formBuilderContainer,
         E,
         powers,
         onSubmit: async data => {
-          // Call E(powers).counterEvaluate()
-          const codeNames = data.endowments.map(e => e.codeName);
-          const petNamePaths = data.endowments.map(e => e.petName.split('.'));
-          const resultNamePath = data.resultName
-            ? data.resultName.split('.')
-            : undefined;
-          const workerName = data.workerName || 'MAIN';
-
-          await E(powers).counterEvaluate(
-            data.messageNumber,
-            data.source,
-            codeNames,
-            petNamePaths,
-            workerName,
-            resultNamePath,
-          );
+          await executor.execute('form', {
+            recipient: data.recipient,
+            description: data.description,
+            fields: data.fields,
+            resultName: data.resultName,
+          });
         },
         onClose: () => {
-          hideCounterProposalForm(); // eslint-disable-line no-use-before-define
+          hideFormBuilder(); // eslint-disable-line no-use-before-define
         },
       });
     }
 
-    // Convert arrays to endowments format
-    const endowments = proposalData.codeNames.map((codeName, i) => ({
-      codeName,
-      petName: proposalData.edgeNames[i] || '',
-    }));
-
-    counterProposalForm.setProposal({
-      messageNumber: proposalData.messageNumber,
-      source: proposalData.source,
-      endowments,
-      workerName: proposalData.workerName,
-      resultName: proposalData.resultName,
-    });
-
-    $counterProposalBackdrop.style.display = 'block';
-    $counterProposalContainer.style.display = 'block';
-    counterProposalForm.show();
+    mode = 'form';
+    $formBuilderBackdrop.style.display = 'block';
+    $formBuilderContainer.style.display = 'block';
+    formBuilder.show();
   };
 
-  const hideCounterProposalForm = () => {
-    $counterProposalBackdrop.style.display = 'none';
-    $counterProposalContainer.style.display = 'none';
-    if (counterProposalForm) {
-      counterProposalForm.hide();
+  const hideFormBuilder = () => {
+    mode = 'send';
+    $formBuilderBackdrop.style.display = 'none';
+    $formBuilderContainer.style.display = 'none';
+    if (formBuilder) {
+      formBuilder.hide();
     }
     sendForm.focus();
   };
 
-  // Click on backdrop closes counter-proposal form
-  $counterProposalBackdrop.addEventListener('click', () => {
-    hideCounterProposalForm();
+  // Click on backdrop closes form builder
+  $formBuilderBackdrop.addEventListener('click', () => {
+    hideFormBuilder();
   });
 
-  // Listen for counter-proposal events from message buttons
-  $parent.addEventListener('open-counter-proposal', event => {
-    const { detail } = /** @type {CustomEvent} */ (event);
-    showCounterProposalForm(detail);
+  /**
+   * Show the endow modal for a specific definition message.
+   *
+   * @param {bigint} messageNumber
+   */
+  const showEndowModal = messageNumber => {
+    if (!endowModal) {
+      endowModal = createEndowModal({
+        $container: $endowModalContainer,
+        E,
+        powers,
+        onSubmit: async data => {
+          await E(powers).endow(
+            data.messageNumber,
+            data.bindings,
+            data.workerName,
+            data.resultName,
+          );
+        },
+        onClose: () => {
+          hideEndowModal(); // eslint-disable-line no-use-before-define
+        },
+      });
+    }
+
+    mode = 'send';
+    $endowModalBackdrop.style.display = 'block';
+    $endowModalContainer.style.display = 'block';
+    endowModal.show(messageNumber);
+  };
+
+  const hideEndowModal = () => {
+    mode = 'send';
+    $endowModalBackdrop.style.display = 'none';
+    $endowModalContainer.style.display = 'none';
+    if (endowModal) {
+      endowModal.hide();
+    }
+    sendForm.focus();
+  };
+
+  // Click on backdrop closes endow modal
+  $endowModalBackdrop.addEventListener('click', () => {
+    hideEndowModal();
+  });
+
+  /**
+   * Show the define form (lazily initialize if needed).
+   */
+  const showDefineForm = async () => {
+    if (!defineForm) {
+      defineForm = await createDefineForm({
+        $container: $defineFormContainer,
+        onSubmit: async data => {
+          const slots = {};
+          for (const slot of data.slots) {
+            slots[slot.codeName] = { label: slot.label };
+          }
+          await E(powers).define(data.source, slots);
+        },
+        onClose: () => {
+          hideDefineForm(); // eslint-disable-line no-use-before-define
+        },
+      });
+    }
+
+    mode = 'js';
+    $defineFormBackdrop.style.display = 'block';
+    $defineFormContainer.style.display = 'block';
+    defineForm.show();
+  };
+
+  const hideDefineForm = () => {
+    mode = 'send';
+    $defineFormBackdrop.style.display = 'none';
+    $defineFormContainer.style.display = 'none';
+    if (defineForm) {
+      defineForm.hide();
+    }
+    sendForm.focus();
+  };
+
+  // Click on backdrop closes define form
+  $defineFormBackdrop.addEventListener('click', () => {
+    if (defineForm && defineForm.isDirty()) {
+      // Could add confirmation here
+    }
+    hideDefineForm();
   });
 
   // Command cancel button (header)
@@ -689,46 +1396,10 @@ export const chatBarComponent = (
 
   // Command submit button
   $commandSubmitButton.addEventListener('click', async () => {
+    if (commandSubmitting) return;
     if (currentCommand && inlineForm.isValid()) {
-      $commandError.textContent = '';
       const data = inlineForm.getData();
-
-      // Special handling for enter command - uses profile navigation
-      if (currentCommand === 'enter') {
-        const { hostName } = /** @type {{ hostName: string }} */ (data);
-        exitCommandMode();
-        await enterProfile(hostName);
-        return;
-      }
-
-      // For js/eval: reset command line immediately so guest proposals don't block the UI
-      const isEval = currentCommand === 'js' || currentCommand === 'eval';
-      if (isEval) {
-        exitCommandMode();
-      }
-
-      const result = await executor.execute(currentCommand, data);
-      if (result.success) {
-        if (!isEval) {
-          exitCommandMode();
-        }
-        const resultName =
-          'resultName' in data && data.resultName
-            ? String(data.resultName)
-            : undefined;
-        const resultPath = resultName ? resultName.split('.') : undefined;
-        // Always show js results (even undefined), skip show/list which handle their own display
-        if (currentCommand === 'js') {
-          showValue(result.value, undefined, resultPath, undefined);
-        } else if (
-          result.value !== undefined &&
-          currentCommand !== 'show' &&
-          currentCommand !== 'list'
-        ) {
-          showValue(result.value, undefined, resultPath, undefined);
-        }
-      }
-      // Error case: showError callback already set $commandError or $error.textContent
+      await executeWithSpinner(currentCommand, data);
     }
   });
 
@@ -751,20 +1422,16 @@ export const chatBarComponent = (
       case 'modal':
         // Reset mode since we're leaving selecting state
         mode = 'send';
-        // For now only js uses modal
         if (commandName === 'js') {
           showEvalForm();
+        } else if (commandName === 'form') {
+          showFormBuilder();
         }
         break;
 
       case 'immediate':
         // Reset mode since we're leaving selecting state
         mode = 'send';
-        // Special handling for help command
-        if (commandName === 'help') {
-          helpModal.show();
-          break;
-        }
         // Special handling for exit command
         if (commandName === 'exit') {
           if (canExitProfile) {
@@ -800,11 +1467,21 @@ export const chatBarComponent = (
     updateSendModeline(sendForm.getState());
   };
 
+  /**
+   * Get the current UI context for command filtering.
+   * @returns {'inbox' | 'channel' | undefined}
+   */
+  const getCommandContext = () => {
+    if (getChannelRef && getChannelRef()) return 'channel';
+    return 'inbox';
+  };
+
   // Initialize command selector
   const commandSelector = commandSelectorComponent({
     $menu: $commandMenu,
     onSelect: handleCommandSelect,
     onCancel: handleCommandCancel,
+    getContext: getCommandContext,
   });
 
   /**
@@ -843,8 +1520,21 @@ export const chatBarComponent = (
     }
   });
 
-  // Handle keydown for command selection navigation
+  // Handle keydown for command selection navigation and focus mode entry
   $input.addEventListener('keydown', event => {
+    // ⌘↑ / Ctrl+↑ to enter focus mode from empty send input
+    if (
+      mode === 'send' &&
+      event.key === 'ArrowUp' &&
+      (event.metaKey || event.ctrlKey) &&
+      sendForm.getState().isEmpty
+    ) {
+      event.preventDefault();
+      event.stopPropagation();
+      enterFocusMode();
+      return;
+    }
+
     if (mode === 'selecting' && commandSelector.isVisible()) {
       switch (event.key) {
         case 'ArrowDown':
@@ -892,22 +1582,82 @@ export const chatBarComponent = (
     }
   });
 
-  // Global escape key handler
+  // Global escape key handler and focus mode keyboard handler
   window.addEventListener('keydown', event => {
+    // Focus mode keyboard handling
+    if (mode === 'focus') {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        exitFocusMode();
+        return;
+      }
+      if (event.key === 'ArrowUp') {
+        event.preventDefault();
+        moveFocus('up');
+        return;
+      }
+      if (event.key === 'ArrowDown') {
+        event.preventDefault();
+        // If already on the last message, exit focus mode back to command line
+        const $msgs = $messagesContainer.querySelectorAll(
+          '.message-envelope[data-number]',
+        );
+        const $foc = $messagesContainer.querySelector(
+          '.message-envelope.focused',
+        );
+        if ($msgs.length > 0 && $foc === $msgs[$msgs.length - 1]) {
+          exitFocusMode();
+        } else {
+          moveFocus('down');
+        }
+        return;
+      }
+      if (event.key === 'PageUp') {
+        event.preventDefault();
+        moveFocus('up', true);
+        return;
+      }
+      if (event.key === 'PageDown') {
+        event.preventDefault();
+        moveFocus('down', true);
+        return;
+      }
+      // Single-letter shortcut keys
+      const commandName = FOCUS_SHORTCUTS[event.key];
+      if (commandName) {
+        event.preventDefault();
+        const messageNumber = getFocusedMessageNumber();
+        if (messageNumber) {
+          exitFocusMode();
+          enterCommandMode(commandName, { messageNumber });
+        }
+        return;
+      }
+      return;
+    }
+
     if (event.key === 'Escape') {
       if (helpModal.isVisible()) {
         event.preventDefault();
         helpModal.hide();
         sendForm.focus();
+      } else if (mode === 'form') {
+        event.preventDefault();
+        hideFormBuilder();
       } else if (mode === 'inline') {
         event.preventDefault();
         exitCommandMode();
       } else if (mode === 'send') {
-        // Clear send input and modeline
         event.preventDefault();
-        sendForm.clear();
-        $error.textContent = '';
-        updateHasContent();
+        const state = sendForm.getState();
+        if (state.isEmpty && exitConversation && getConversationPetName?.()) {
+          exitConversation();
+        } else {
+          sendForm.clear();
+          sendForm.clearReplyTo();
+          $error.textContent = '';
+          updateHasContent();
+        }
       }
     }
   });
@@ -918,7 +1668,7 @@ export const chatBarComponent = (
 
   // Focus command line on any keypress when nothing else is focused
   window.addEventListener('keydown', event => {
-    // Skip if in command mode or if already focused on an interactive element
+    // Skip if not in send mode (command mode, focus mode, etc.)
     if (mode !== 'send') return;
 
     const active = document.activeElement;
@@ -958,4 +1708,28 @@ export const chatBarComponent = (
       event.preventDefault();
     }
   });
+
+  // Watch for new messages and update passive focus unless the user
+  // is actively navigating in focus mode.
+  const messageObserver = new MutationObserver(() => {
+    if (mode !== 'focus') {
+      updatePassiveFocus();
+    }
+  });
+  messageObserver.observe($messagesContainer, { childList: true });
+
+  // Apply passive focus on initial load.
+  updatePassiveFocus();
+
+  return {
+    setReplyTo: sendForm.setReplyTo,
+    clearReplyTo: sendForm.clearReplyTo,
+    setDefaultReplyTo: sendForm.setDefaultReplyTo,
+    clearDefaultReplyTo: sendForm.clearDefaultReplyTo,
+    setReplyType: sendForm.setReplyType,
+    getReplyType: sendForm.getReplyType,
+    setText: sendForm.setText,
+    focus: sendForm.focus,
+    dispose: sendForm.dispose,
+  };
 };

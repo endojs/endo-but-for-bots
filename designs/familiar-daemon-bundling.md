@@ -1,3 +1,11 @@
+# Familiar Daemon Bundling
+
+| | |
+|---|---|
+| **Created** | 2026-02-14 |
+| **Updated** | 2026-03-05 |
+| **Author** | Kris Kowal (prompted) |
+| **Status** | **Complete** |
 
 ## What is the Problem Being Solved?
 

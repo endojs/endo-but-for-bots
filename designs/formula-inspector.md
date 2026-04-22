@@ -1,3 +1,12 @@
+# Formula Inspector
+
+| | |
+|---|---|
+| **Created** | 2026-02-14 |
+| **Updated** | 2026-02-24 |
+| **Author** | Kris Kowal (prompted) |
+| **Status** | Not Started |
+
 ## What is the Problem Being Solved?
 
 There is no way for a user to "pop the bonnet" and see the underlying formula

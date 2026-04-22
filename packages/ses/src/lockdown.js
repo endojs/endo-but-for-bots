@@ -25,6 +25,7 @@ import {
   is,
   ownKeys,
   stringSplit,
+  symbolFor,
   noEvalEvaluate,
   getOwnPropertyNames,
   getPrototypeOf,
@@ -35,6 +36,7 @@ import removeUnpermittedIntrinsics from './permits-intrinsics.js';
 import tameFunctionConstructors from './tame-function-constructors.js';
 import tameDateConstructor from './tame-date-constructor.js';
 import tameMathObject from './tame-math-object.js';
+import { tameNaNSideChannel } from './tame-nan-sidechannel.js';
 import tameRegExpConstructor from './tame-regexp-constructor.js';
 import enablePropertyOverrides from './enable-property-overrides.js';
 import tameLocaleMethods from './tame-locale-methods.js';
@@ -352,6 +354,7 @@ export const repairIntrinsics = (options = {}) => {
   addIntrinsics(tameDateConstructor());
   addIntrinsics(tameErrorConstructor(errorTaming, stackFiltering));
   addIntrinsics(tameMathObject());
+  tameNaNSideChannel();
   addIntrinsics(tameRegExpConstructor(regExpTaming));
   addIntrinsics(tameSymbolConstructor());
   addIntrinsics(shimArrayBufferTransfer());
@@ -362,6 +365,30 @@ export const repairIntrinsics = (options = {}) => {
   completePrototypes();
 
   const intrinsics = finalIntrinsics();
+
+  // Install Object[@harden] or abort.
+  const symbolForHarden = symbolFor('harden');
+  const priorHarden = intrinsics.Object[symbolForHarden];
+  if (priorHarden) {
+    // By convention, if a module like @endo/harden gets used before lockdown,
+    // it will install itself as a non-configurable, non-writable property over
+    // Object[@harden] so that versions of SES predating the introduction of
+    // Object[@harden] will fail to lockdown because they cannot remove an
+    // unknown intrinsic.
+    // All newer versions explicitly check for Object[@harden] (here).
+    // The @endo/harden implementation additionally captures a stack trace
+    // where harden was first used to assist developers in tracking down the
+    // hardened module that was initialized before lockdown.
+    if (priorHarden.lockdownError) {
+      throw priorHarden.lockdownError;
+    }
+    // And in the event a library installs Object[@harden] without leaving a
+    // hint, we fall back to a generic lockdown error.
+    throw new TypeError(
+      'Cannot lockdown (repairIntrinsics) if a prior harden implementation has been used and installed. Check for libraries using @endo/harden before lockdown.',
+    );
+  }
+  intrinsics.Object[symbolForHarden] = tamedHarden;
 
   const hostIntrinsics = { __proto__: null };
 

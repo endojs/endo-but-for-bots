@@ -1,19 +1,12 @@
 import type { GenericGraph } from '../generic-graph.js';
 import type {
-  ATTENUATORS_COMPARTMENT,
-  ENTRY_COMPARTMENT,
-} from '../policy-format.js';
-import type {
   CanonicalName,
-  CompartmentMapDescriptor,
   PackageCompartmentDescriptorName,
   PolicyOption,
-  SomePolicy,
 } from '../types.js';
 import type {
   Language,
   LanguageForExtension,
-  PackageCompartmentMapDescriptor,
 } from './compartment-map-schema.js';
 import type {
   FileUrlString,
@@ -21,6 +14,7 @@ import type {
   PackageDependenciesHook,
 } from './external.js';
 import type { LiteralUnion } from './typescript.js';
+import { ATTENUATORS_COMPARTMENT } from '../policy-format.js';
 
 export type CommonDependencyDescriptors = Record<
   string,
@@ -35,7 +29,7 @@ export type CommonDependencyDescriptorsOptions = {
   /**
    * Dependencies added to _all_ packages
    */
-  commonDependencyDescriptors?: CommonDependencyDescriptors;
+  commonDependencyDescriptors?: CommonDependencyDescriptors | undefined;
 };
 
 /**
@@ -64,11 +58,11 @@ export type GraphPackagesOptions = LogOptions &
  * Options for `gatherDependency()`
  */
 export type GatherDependencyOptions = {
-  childLogicalPath?: string[];
+  childLogicalPath?: string[] | undefined;
   /**
    * If `true` the dependency is optional
    */
-  optional?: boolean;
+  optional?: boolean | undefined;
 } & LogOptions &
   PackageDependenciesHookOption &
   PolicyOption &
@@ -164,7 +158,10 @@ export interface FinalNode extends Node {
  * Keys may either be a file URL string to a package or the special
  * `<ATTENUATORS>` string.
  */
-export type Graph = Record<LiteralUnion<'<ATTENUATORS>', FileUrlString>, Node>;
+export type Graph = Record<
+  LiteralUnion<typeof ATTENUATORS_COMPARTMENT, FileUrlString>,
+  Node
+>;
 
 /**
  * A graph, but contains {@link FinalNode}s instead of {@link Node}s.

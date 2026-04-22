@@ -1,4 +1,5 @@
 import { start, makeEndoClient } from '@endo/daemon';
+import { isTerminalError } from './doe-normaal.js';
 
 /**
  * Custom onReject handler that suppresses "normal termination" errors.
@@ -8,13 +9,12 @@ import { start, makeEndoClient } from '@endo/daemon';
  * @param {Error} err
  */
 const onReject = err => {
-  if (err && err.message === 'normal termination') {
-    return;
+  if (!isTerminalError(err)) {
+    console.error('CapTP cli exception:', err);
   }
-  console.error('CapTP cli exception:', err);
 };
 
-/** @type {import('@endo/captp').CapTPOptions} */
+/** @type {{ onReject?: (err: any) => void }} */
 const capTpOptions = harden({ onReject });
 
 /**

@@ -1,12 +1,12 @@
 // @ts-check
 /// <ref types="ses">
 
-/** @import { IdRecord, FormulaNumber, NodeNumber, FormulaIdentifier } from './types.js' */
+/** @import { IdRecord, ParseIdRecord, FormulaNumber, NodeNumber, FormulaIdentifier } from './types.js' */
 
 import { makeError, q } from '@endo/errors';
 
-const numberPattern = /^[0-9a-f]{128}$/;
-const idPattern = /^(?<number>[0-9a-f]{128}):(?<node>[0-9a-f]{128})$/;
+const numberPattern = /^[0-9a-f]{64}$/;
+const idPattern = /^(?<number>[0-9a-f]{64}):(?<node>[0-9a-f]{64})$/;
 
 /**
  * @param {string} allegedNumber - The formula number or node identifier to test.
@@ -79,7 +79,12 @@ export const parseId = id => {
   const { number, node } = groups;
   const formulaNumber = /** @type {FormulaNumber} */ (number);
   const nodeNumber = /** @type {NodeNumber} */ (node);
-  return { number: formulaNumber, node: nodeNumber };
+  const formulaId = /** @type {FormulaIdentifier} */ (id);
+  return {
+    number: formulaNumber,
+    node: nodeNumber,
+    id: formulaId,
+  };
 };
 
 /**

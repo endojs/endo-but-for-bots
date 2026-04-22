@@ -5,6 +5,7 @@
  * @import { InternalSession, SwissNum } from './types.js'
  */
 
+import harden from '@endo/harden';
 import { E } from '@endo/eventual-send';
 import { makeTagged } from '@endo/pass-style';
 import { decodeSwissnum } from './util.js';
@@ -75,7 +76,7 @@ export const enlivenSturdyRef = async (
 
   // Otherwise, fetch from remote location via session
   const { ocapn } = await provideSession(location);
-  return E(ocapn.getRemoteBootstrap()).fetch(swissNum);
+  return E(/** @type {any} */ (ocapn.getRemoteBootstrap())).fetch(swissNum);
 };
 
 /**

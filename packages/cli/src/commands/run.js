@@ -1,6 +1,7 @@
 /* global globalThis, process */
 import url from 'url';
 import os from 'os';
+import harden from '@endo/harden';
 import { E, Far } from '@endo/far';
 import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
@@ -53,11 +54,15 @@ export const run = async ({
       }
 
       let powersP;
-      if (powersName === 'NONE') {
+      if (powersName === '@none') {
         powersP = E(bootstrap).leastAuthority();
-      } else if (powersName === 'HOST') {
+      } else if (
+        powersName === '@host' ||
+        powersName === '@agent' ||
+        powersName === 'AGENT'
+      ) {
         powersP = agent;
-      } else if (powersName === 'ENDO') {
+      } else if (powersName === '@endo') {
         powersP = bootstrap;
       } else {
         powersP = E(agent).provideGuest(powersName);
@@ -97,7 +102,7 @@ export const run = async ({
           }
 
           const bundleNamePath = parsePetNamePath(bundleName);
-          const readableP = E(agent).lookup(...bundleNamePath);
+          const readableP = E(agent).lookup(bundleNamePath);
           const bundleText = await E(readableP).text();
           bundle = JSON.parse(bundleText);
         } else {

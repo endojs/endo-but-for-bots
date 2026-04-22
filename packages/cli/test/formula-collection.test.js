@@ -17,6 +17,10 @@ const endoEnv = {
   XDG_RUNTIME_DIR: path.join(testRoot, 'run'),
   XDG_CACHE_HOME: path.join(testRoot, 'cache'),
   ENDO_SOCK: path.join(os.tmpdir(), `endo-collection-${process.pid}.sock`),
+  // Enable GC so that removing the last pet name triggers collection.
+  ENDO_GC: '1',
+  // Bind to an OS-assigned port to avoid conflicts with a running daemon.
+  ENDO_ADDR: '127.0.0.1:0',
 };
 
 for (const [key, value] of Object.entries(endoEnv)) {
@@ -33,7 +37,7 @@ test.serial('terminates worker retaining collected value (cli)', async t => {
     // A daemon-side value is needed because worker-side values sent back
     // to the same worker are recognized as round-trips by CapTP and do
     // not trigger the export hook that registers retainees.
-    await execa`endo eval --worker worker ${`E(host).provideHost('retained-host').then(retained => { globalThis.retained = retained; return 'ok'; })`} host:AGENT`;
+    await execa`endo eval --worker worker ${`E(host).provideHost('retained-host').then(retained => { globalThis.retained = retained; return 'ok'; })`} host:@agent`;
     await execa`endo remove retained-host`;
     // The eval fails because the worker was terminated due to collection.
     // The CLI exits with non-zero code, so catch the error and check stderr.

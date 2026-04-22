@@ -1,5 +1,4 @@
 // @ts-check
-/* global window, document, setTimeout */
 /* eslint-disable no-use-before-define */
 
 /** @import { ERef } from '@endo/far' */
@@ -29,16 +28,17 @@
  * @param {typeof import('@endo/far').E} options.E - Eventual send function
  * @param {(ref: unknown) => AsyncIterable<unknown>} options.makeRefIterator - Ref iterator factory
  * @param {ERef<EndoHost>} options.powers - Powers object for following name changes
+ * @param {string[]} [options.externalPetNames] - Pre-managed pet names array (skips followNameChanges subscription)
  * @returns {TokenAutocompleteAPI}
  */
 export const tokenAutocompleteComponent = (
   $input,
   $menu,
-  { E, makeRefIterator, powers },
+  { E, makeRefIterator, powers, externalPetNames },
 ) => {
   /** @type {string[]} */
   // eslint-disable-next-line prefer-const
-  let petNames = [];
+  let petNames = externalPetNames || [];
   /** @type {string[]} */
   let filteredNames = [];
   let selectedIndex = 0;
@@ -51,26 +51,40 @@ export const tokenAutocompleteComponent = (
   let pendingToken = null;
   /** @type {(() => void) | undefined} */
   let doUpdateFilter;
+  // When true, mouseenter on menu items is suppressed to avoid resetting
+  // the keyboard-driven selectedIndex during DOM rebuilds.
+  let keyboardNav = false;
 
-  // Subscribe to inventory changes
-  (async () => {
-    for await (const change of makeRefIterator(E(powers).followNameChanges())) {
-      if ('add' in /** @type {object} */ (change)) {
-        petNames.push(/** @type {{ add: string }} */ (change).add);
-        petNames.sort();
-      } else if ('remove' in /** @type {object} */ (change)) {
-        const idx = petNames.indexOf(
-          /** @type {{ remove: string }} */ (change).remove,
-        );
-        if (idx !== -1) {
-          petNames.splice(idx, 1);
+  // Path drilling state: when the user presses / in the menu, we lock in
+  // the selected name as a path prefix and fetch sub-directory names.
+  /** @type {string[]} */
+  let pathPrefix = [];
+  /** @type {string[] | null} */
+  let directoryNames = null;
+
+  // Subscribe to inventory changes (skip if external names are provided)
+  if (!externalPetNames) {
+    (async () => {
+      for await (const change of makeRefIterator(
+        E(powers).followNameChanges(),
+      )) {
+        if ('add' in /** @type {object} */ (change)) {
+          petNames.push(/** @type {{ add: string }} */ (change).add);
+          petNames.sort();
+        } else if ('remove' in /** @type {object} */ (change)) {
+          const idx = petNames.indexOf(
+            /** @type {{ remove: string }} */ (change).remove,
+          );
+          if (idx !== -1) {
+            petNames.splice(idx, 1);
+          }
+        }
+        if (isMenuVisible && doUpdateFilter) {
+          doUpdateFilter();
         }
       }
-      if (isMenuVisible && doUpdateFilter) {
-        doUpdateFilter();
-      }
-    }
-  })().catch(window.reportError);
+    })().catch(window.reportError);
+  }
 
   const showMenu = () => {
     isMenuVisible = true;
@@ -85,6 +99,8 @@ export const tokenAutocompleteComponent = (
     selectedIndex = 0;
     enteringEdgeName = false;
     pendingToken = null;
+    pathPrefix = [];
+    directoryNames = null;
   };
 
   /**
@@ -102,12 +118,29 @@ export const tokenAutocompleteComponent = (
     return fullText.slice(triggerOffset + 1, range.startOffset).toLowerCase();
   };
 
-  const updateFilter = () => {
-    const filterText = getFilterText();
+  /**
+   * Get the partial text after the last `/` (or after `@` if no path).
+   * @returns {string}
+   */
+  const getPartialFilter = () => {
+    const full = getFilterText();
+    const slashIdx = full.lastIndexOf('/');
+    return slashIdx === -1 ? full : full.slice(slashIdx + 1);
+  };
 
-    filteredNames = petNames.filter(name =>
-      name.toLowerCase().startsWith(filterText),
-    );
+  const updateFilter = () => {
+    const filterText = getPartialFilter();
+    const names = directoryNames || petNames;
+
+    filteredNames = names.filter(name => {
+      const lower = name.toLowerCase();
+      if (lower.startsWith(filterText)) return true;
+      // Allow matching @-prefixed special names by the part after @
+      if (lower.startsWith('@') && lower.slice(1).startsWith(filterText)) {
+        return true;
+      }
+      return false;
+    });
 
     if (selectedIndex >= filteredNames.length) {
       selectedIndex = Math.max(0, filteredNames.length - 1);
@@ -134,13 +167,19 @@ export const tokenAutocompleteComponent = (
           $item.classList.add('selected');
         }
 
-        const $prefix = document.createElement('span');
-        $prefix.className = 'token-prefix';
-        $prefix.textContent = '@';
-        $item.appendChild($prefix);
-        $item.appendChild(document.createTextNode(name));
+        if (name.startsWith('@')) {
+          // Special names already include @ — display as-is
+          $item.appendChild(document.createTextNode(name));
+        } else {
+          const $prefix = document.createElement('span');
+          $prefix.className = 'token-prefix';
+          $prefix.textContent = '@';
+          $item.appendChild($prefix);
+          $item.appendChild(document.createTextNode(name));
+        }
 
         $item.addEventListener('mouseenter', () => {
+          if (keyboardNav) return;
           selectedIndex = index;
           renderMenu(filterText);
         });
@@ -157,9 +196,20 @@ export const tokenAutocompleteComponent = (
     const $hint = document.createElement('div');
     $hint.className = 'token-menu-hint';
     $hint.innerHTML =
-      '<kbd>↑↓</kbd> navigate · <kbd>Tab</kbd>/<kbd>Enter</kbd> select · <kbd>:</kbd> add label · <kbd>Esc</kbd> cancel';
+      '<kbd>↑↓</kbd> navigate · <kbd>Tab</kbd>/<kbd>Enter</kbd> select · <kbd>/</kbd> drill down · <kbd>:</kbd> add label · <kbd>Esc</kbd> cancel';
     $menu.appendChild($hint);
+
+    // Scroll the selected item into view
+    const $selected = $menu.querySelector('.token-menu-item.selected');
+    if ($selected) {
+      $selected.scrollIntoView({ block: 'nearest' });
+    }
   };
+
+  // Clear keyboard navigation flag on actual mouse movement
+  $menu.addEventListener('mousemove', () => {
+    keyboardNav = false;
+  });
 
   /**
    * Create a token element.
@@ -190,11 +240,67 @@ export const tokenAutocompleteComponent = (
   };
 
   /**
+   * Drill into a directory: accept the selected name, extend the path prefix,
+   * replace the trigger text with the path so far, and fetch sub-directory
+   * names for the next level of completion.
+   *
+   * @param {string} selectedName
+   */
+  const drillDown = async selectedName => {
+    pathPrefix = [...pathPrefix, selectedName];
+
+    // Replace the filter text with the confirmed path + trailing /
+    if (!triggerNode) return;
+    const sel = window.getSelection();
+    if (!sel || !sel.rangeCount) return;
+
+    const range = sel.getRangeAt(0);
+    const fullText = triggerNode.textContent || '';
+    const cursorOffset = range.startOffset;
+
+    const beforeTrigger = fullText.slice(0, triggerOffset + 1); // includes @
+    const afterCursor = fullText.slice(cursorOffset);
+    const confirmedPath = `${pathPrefix.join('/')}/`;
+    const newText = `${beforeTrigger}${confirmedPath}${afterCursor}`;
+
+    triggerNode.textContent = newText;
+
+    // Position cursor right after the trailing /
+    const newCursorPos = triggerOffset + 1 + confirmedPath.length;
+    const newRange = document.createRange();
+    newRange.setStart(triggerNode, newCursorPos);
+    newRange.collapse(true);
+    sel.removeAllRanges();
+    sel.addRange(newRange);
+
+    // Fetch sub-directory names
+    try {
+      const target = E(powers).lookup(...pathPrefix);
+      const names = await E(target).list();
+      /** @type {string[]} */
+      const result = [];
+      for await (const name of /** @type {AsyncIterable<string>} */ (names)) {
+        result.push(name);
+      }
+      directoryNames = result.sort();
+    } catch {
+      directoryNames = [];
+    }
+
+    selectedIndex = 0;
+    updateFilter();
+  };
+
+  /**
    * Insert a token at the current trigger position.
    * @param {string} petName
    * @param {string} edgeName
    */
   const insertToken = (petName, edgeName) => {
+    // Build the full path pet name when drilling into directories.
+    const fullPetName =
+      pathPrefix.length > 0 ? `${pathPrefix.join('/')}/${petName}` : petName;
+
     if (!triggerNode) {
       hideMenu();
       return;
@@ -216,7 +322,7 @@ export const tokenAutocompleteComponent = (
     const afterText = fullText.slice(cursorOffset);
 
     // Create token element
-    const $token = createTokenElement(petName, edgeName || petName);
+    const $token = createTokenElement(fullPetName, edgeName || fullPetName);
 
     // Split the text node and insert token
     // Add a space after the token for easy continuation
@@ -247,6 +353,10 @@ export const tokenAutocompleteComponent = (
    * @param {string} petName
    */
   const startEdgeNameEntry = petName => {
+    // Build the full path pet name when drilling into directories.
+    const fullPetName =
+      pathPrefix.length > 0 ? `${pathPrefix.join('/')}/${petName}` : petName;
+
     if (!triggerNode) return;
 
     const sel = window.getSelection();
@@ -256,24 +366,29 @@ export const tokenAutocompleteComponent = (
     const fullText = triggerNode.textContent || '';
     const cursorOffset = range.startOffset;
 
-    // Replace @filter with @petName: in the text
+    // Replace @filter with @fullPetName: in the text
     const beforeText = fullText.slice(0, triggerOffset);
     const afterText = fullText.slice(cursorOffset);
-    const newText = `${beforeText}@${petName}:${afterText}`;
+    const newText = `${beforeText}@${fullPetName}:${afterText}`;
 
     triggerNode.textContent = newText;
 
     // Position cursor after the colon
-    const newCursorPos = triggerOffset + petName.length + 2; // +2 for @ and :
+    const newCursorPos = triggerOffset + fullPetName.length + 2; // +2 for @ and :
     const newRange = document.createRange();
     newRange.setStart(triggerNode, newCursorPos);
     newRange.collapse(true);
     sel.removeAllRanges();
     sel.addRange(newRange);
 
+    // Save trigger state before hideMenu() clears it.
+    const savedTriggerNode = triggerNode;
+    const savedTriggerOffset = triggerOffset;
     hideMenu();
+    triggerNode = savedTriggerNode;
+    triggerOffset = savedTriggerOffset;
     enteringEdgeName = true;
-    pendingToken = { petName, edgeName: '' };
+    pendingToken = { petName: fullPetName, edgeName: '' };
   };
 
   /**
@@ -481,46 +596,50 @@ export const tokenAutocompleteComponent = (
 
     if (isMenuVisible) {
       // Check if trigger is still valid
-      if (node !== triggerNode || !triggerNode) {
+      if (
+        node !== triggerNode ||
+        !triggerNode ||
+        range.startOffset <= triggerOffset ||
+        (triggerNode.textContent || '')[triggerOffset] !== '@'
+      ) {
         hideMenu();
+        // Fall through to @ detection below — the user may have
+        // typed @ immediately after the old trigger became invalid.
+      } else {
+        updateFilter();
         return;
       }
+    }
 
-      const text = triggerNode.textContent || '';
-      const cursorPos = range.startOffset;
-
-      if (cursorPos <= triggerOffset || text[triggerOffset] !== '@') {
-        hideMenu();
-        return;
+    {
+      // Check if @ was typed. The cursor may be in a text node or
+      // at an element boundary (common after token insert/delete),
+      // so resolve to the actual text node first.
+      let textNode = node;
+      let cursorPos = range.startOffset;
+      if (textNode.nodeType !== Node.TEXT_NODE) {
+        // Cursor is at an element offset — find the adjacent text node
+        const child =
+          cursorPos > 0
+            ? textNode.childNodes[cursorPos - 1]
+            : textNode.childNodes[0];
+        if (child && child.nodeType === Node.TEXT_NODE) {
+          textNode = child;
+          cursorPos = (textNode.textContent || '').length;
+        }
       }
-
-      // Check for @@ escape
-      if (cursorPos > triggerOffset + 1 && text[triggerOffset + 1] === '@') {
-        // Remove one @
-        triggerNode.textContent =
-          text.slice(0, triggerOffset) + text.slice(triggerOffset + 1);
-        range.setStart(triggerNode, triggerOffset + 1);
-        range.collapse(true);
-        sel.removeAllRanges();
-        sel.addRange(range);
-        hideMenu();
-        return;
-      }
-
-      updateFilter();
-    } else if (node.nodeType === Node.TEXT_NODE) {
-      // Check if @ was typed
-      const text = node.textContent || '';
-      const cursorPos = range.startOffset;
-      if (cursorPos > 0 && text[cursorPos - 1] === '@') {
-        // Check it's not preceded by alphanumeric
-        if (cursorPos === 1 || !/[a-zA-Z0-9]/.test(text[cursorPos - 2])) {
-          triggerNode = /** @type {Text} */ (node);
-          triggerOffset = cursorPos - 1;
-          filteredNames = [...petNames];
-          selectedIndex = 0;
-          showMenu();
-          renderMenu('');
+      if (textNode.nodeType === Node.TEXT_NODE) {
+        const text = textNode.textContent || '';
+        if (cursorPos > 0 && text[cursorPos - 1] === '@') {
+          // Check it's not preceded by alphanumeric
+          if (cursorPos === 1 || !/[a-zA-Z0-9]/.test(text[cursorPos - 2])) {
+            triggerNode = /** @type {Text} */ (textNode);
+            triggerOffset = cursorPos - 1;
+            filteredNames = [...petNames];
+            selectedIndex = 0;
+            showMenu();
+            renderMenu('');
+          }
         }
       }
     }
@@ -580,6 +699,7 @@ export const tokenAutocompleteComponent = (
     switch (e.key) {
       case 'ArrowDown':
         e.preventDefault();
+        keyboardNav = true;
         if (filteredNames.length > 0) {
           selectedIndex = (selectedIndex + 1) % filteredNames.length;
           updateFilter();
@@ -588,6 +708,7 @@ export const tokenAutocompleteComponent = (
 
       case 'ArrowUp':
         e.preventDefault();
+        keyboardNav = true;
         if (filteredNames.length > 0) {
           selectedIndex =
             (selectedIndex - 1 + filteredNames.length) % filteredNames.length;
@@ -597,6 +718,7 @@ export const tokenAutocompleteComponent = (
 
       case 'Home':
         e.preventDefault();
+        keyboardNav = true;
         if (filteredNames.length > 0) {
           selectedIndex = 0;
           updateFilter();
@@ -605,6 +727,7 @@ export const tokenAutocompleteComponent = (
 
       case 'End':
         e.preventDefault();
+        keyboardNav = true;
         if (filteredNames.length > 0) {
           selectedIndex = filteredNames.length - 1;
           updateFilter();
@@ -613,6 +736,7 @@ export const tokenAutocompleteComponent = (
 
       case 'PageDown': {
         e.preventDefault();
+        keyboardNav = true;
         if (filteredNames.length > 0) {
           const first = /** @type {HTMLElement | null} */ (
             $menu.querySelector('.token-menu-item')
@@ -634,6 +758,7 @@ export const tokenAutocompleteComponent = (
 
       case 'PageUp': {
         e.preventDefault();
+        keyboardNav = true;
         if (filteredNames.length > 0) {
           const first = /** @type {HTMLElement | null} */ (
             $menu.querySelector('.token-menu-item')
@@ -662,6 +787,13 @@ export const tokenAutocompleteComponent = (
         if (filteredNames.length > 0) {
           e.preventDefault();
           insertToken(filteredNames[selectedIndex], '');
+        }
+        break;
+
+      case '/':
+        if (filteredNames.length > 0) {
+          e.preventDefault();
+          drillDown(filteredNames[selectedIndex]);
         }
         break;
 

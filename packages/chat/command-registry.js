@@ -2,7 +2,7 @@
 
 /**
  * Field types for command parameters.
- * @typedef {'petNamePath' | 'petNamePaths' | 'messageNumber' | 'text' | 'edgeName' | 'locator' | 'source' | 'endowments'} FieldType
+ * @typedef {'petNamePath' | 'petNamePaths' | 'messageNumber' | 'message' | 'text' | 'edgeName' | 'locator' | 'source' | 'endowments' | 'select'} FieldType
  */
 
 /**
@@ -13,6 +13,8 @@
  * @property {boolean} [required] - Whether field is required
  * @property {string} [placeholder] - Placeholder text
  * @property {string} [defaultValue] - Default value
+ * @property {string[]} [options] - Options for select fields
+ * @property {string} [showWhen] - Conditional visibility: 'context:channel', 'fieldName:value', etc.
  */
 
 /**
@@ -25,6 +27,7 @@
  * @property {CommandField[]} fields - Command parameters
  * @property {string} [submitLabel] - Custom submit button label
  * @property {string[]} [aliases] - Shorthand aliases for the command
+ * @property {'inbox' | 'channel' | 'both'} [context] - Where this command is available ('both' by default)
  */
 
 /**
@@ -39,6 +42,7 @@ export const COMMANDS = {
     description: 'Request something from a recipient',
     category: 'messaging',
     mode: 'inline',
+    context: 'inbox',
     fields: [
       {
         name: 'recipient',
@@ -70,6 +74,7 @@ export const COMMANDS = {
     description: 'Dismiss a message',
     category: 'messaging',
     mode: 'inline',
+    context: 'inbox',
     fields: [
       {
         name: 'messageNumber',
@@ -81,12 +86,13 @@ export const COMMANDS = {
     ],
     submitLabel: 'Dismiss',
   },
-  'dismiss-all': {
-    name: 'dismiss-all',
-    label: 'Dismiss All',
+  clear: {
+    name: 'clear',
+    label: 'Clear',
     description: 'Dismiss all messages',
     category: 'messaging',
     mode: 'immediate',
+    context: 'inbox',
     fields: [],
   },
   adopt: {
@@ -126,6 +132,7 @@ export const COMMANDS = {
     description: 'Resolve a request with a value',
     category: 'messaging',
     mode: 'inline',
+    context: 'inbox',
     fields: [
       {
         name: 'messageNumber',
@@ -150,6 +157,7 @@ export const COMMANDS = {
     description: 'Reject a request',
     category: 'messaging',
     mode: 'inline',
+    context: 'inbox',
     fields: [
       {
         name: 'messageNumber',
@@ -168,10 +176,10 @@ export const COMMANDS = {
     ],
     submitLabel: 'Reject',
   },
-  grant: {
-    name: 'grant',
-    label: 'Grant',
-    description: 'Grant an eval-proposal',
+  reply: {
+    name: 'reply',
+    label: 'Reply',
+    description: 'Reply to a message',
     category: 'messaging',
     mode: 'inline',
     fields: [
@@ -182,34 +190,88 @@ export const COMMANDS = {
         required: true,
         placeholder: '#',
       },
+      {
+        name: 'message',
+        label: 'Message',
+        type: 'message',
+        required: true,
+        placeholder: 'Type a reply...',
+      },
     ],
-    submitLabel: 'Grant',
-    aliases: ['allow'],
+    submitLabel: 'Reply',
+  },
+  form: {
+    name: 'form',
+    label: 'Send Form',
+    description: 'Send a structured form to a recipient',
+    category: 'messaging',
+    mode: 'modal',
+    context: 'inbox',
+    fields: [],
+    submitLabel: 'Send Form',
   },
 
-  'approve-eval': {
-    name: 'approve-eval',
-    label: 'Approve Eval',
-    description: 'Approve a sandboxed evaluation request',
+  submit: {
+    name: 'submit',
+    label: 'Submit',
+    description: 'Submit values for a form',
     category: 'messaging',
     mode: 'inline',
+    context: 'inbox',
     fields: [
       {
         name: 'messageNumber',
-        label: 'Message #',
+        label: 'Form #',
         type: 'messageNumber',
         required: true,
         placeholder: '#',
       },
+    ],
+    submitLabel: 'Submit',
+  },
+
+  define: {
+    name: 'define',
+    label: 'Define',
+    description:
+      'Propose code with named capability slots for the host to endow',
+    category: 'messaging',
+    mode: 'inline',
+    context: 'inbox',
+    fields: [
       {
-        name: 'workerName',
-        label: 'Worker',
-        type: 'petNamePath',
-        required: false,
-        placeholder: 'worker-name',
+        name: 'source',
+        label: 'Code',
+        type: 'source',
+        required: true,
+      },
+      {
+        name: 'slots',
+        label: 'Slots',
+        type: 'endowments',
+        required: true,
       },
     ],
-    submitLabel: 'Approve',
+    submitLabel: 'Define',
+  },
+
+  endow: {
+    name: 'endow',
+    label: 'Endow',
+    description: 'Bind capabilities to a definition and evaluate',
+    category: 'messaging',
+    mode: 'inline',
+    context: 'inbox',
+    fields: [
+      {
+        name: 'messageNumber',
+        label: 'Definition #',
+        type: 'messageNumber',
+        required: true,
+        placeholder: '#',
+      },
+    ],
+    submitLabel: 'Endow',
   },
 
   // ============ EXECUTION ============
@@ -280,7 +342,7 @@ export const COMMANDS = {
         label: 'Names',
         type: 'petNamePaths',
         required: true,
-        placeholder: 'name1 name2 path.to.name',
+        placeholder: 'name1 name2 path/to/name',
       },
     ],
     submitLabel: 'Remove',
@@ -353,6 +415,167 @@ export const COMMANDS = {
     ],
     submitLabel: 'Create',
   },
+  mount: {
+    name: 'mount',
+    label: 'Mount',
+    description: 'Mount a daemon filesystem directory',
+    category: 'storage',
+    mode: 'inline',
+    fields: [
+      {
+        name: 'path',
+        label: 'Path',
+        type: 'text',
+        required: true,
+        placeholder: '/path/on/daemon',
+      },
+      {
+        name: 'petName',
+        label: 'Save as',
+        type: 'petNamePath',
+        required: true,
+        placeholder: 'mount-name',
+      },
+    ],
+    submitLabel: 'Mount',
+  },
+  mktmp: {
+    name: 'mktmp',
+    label: 'Make Temporary',
+    description:
+      'Create a portable scratch space in the daemon state directory. ' +
+      'Unlike /mount, scratch spaces migrate with the state directory. ' +
+      'Unlike /mkdir, they materialize as files on disk.',
+    category: 'storage',
+    mode: 'inline',
+    fields: [
+      {
+        name: 'petName',
+        label: 'Name',
+        type: 'petNamePath',
+        required: true,
+        placeholder: 'scratch-name',
+      },
+    ],
+    submitLabel: 'Create',
+  },
+
+  view: {
+    name: 'view',
+    label: 'View',
+    description: 'View the contents of a blob',
+    category: 'storage',
+    mode: 'inline',
+    fields: [
+      {
+        name: 'petName',
+        label: 'Name',
+        type: 'petNamePath',
+        required: true,
+        placeholder: 'path/to/file',
+      },
+    ],
+    submitLabel: 'View',
+    aliases: ['cat'],
+  },
+  edit: {
+    name: 'edit',
+    label: 'Edit',
+    description: 'Edit the contents of a blob',
+    category: 'storage',
+    mode: 'inline',
+    fields: [
+      {
+        name: 'petName',
+        label: 'Name',
+        type: 'petNamePath',
+        required: true,
+        placeholder: 'path/to/file',
+      },
+    ],
+    submitLabel: 'Edit',
+  },
+
+  locate: {
+    name: 'locate',
+    label: 'Locate',
+    description: 'Get the locator for a named value',
+    category: 'storage',
+    mode: 'inline',
+    fields: [
+      {
+        name: 'petName',
+        label: 'Name',
+        type: 'petNamePath',
+        required: true,
+        placeholder: 'pet-name',
+      },
+    ],
+    submitLabel: 'Locate',
+  },
+
+  checkin: {
+    name: 'checkin',
+    label: 'Check In',
+    description: 'Check in a local directory as a readable tree',
+    category: 'storage',
+    mode: 'inline',
+    fields: [
+      {
+        name: 'petName',
+        label: 'Save as',
+        type: 'petNamePath',
+        required: true,
+        placeholder: 'tree-name',
+      },
+    ],
+    submitLabel: 'Check In',
+    aliases: ['ci'],
+  },
+  checkout: {
+    name: 'checkout',
+    label: 'Check Out',
+    description: 'Check out a readable tree to a local directory',
+    category: 'storage',
+    mode: 'inline',
+    fields: [
+      {
+        name: 'petName',
+        label: 'Tree name',
+        type: 'petNamePath',
+        required: true,
+        placeholder: 'tree-name',
+      },
+    ],
+    submitLabel: 'Check Out',
+    aliases: ['co'],
+  },
+
+  dm: {
+    name: 'dm',
+    label: 'DM',
+    description: 'Send a direct message to someone',
+    category: 'messaging',
+    mode: 'inline',
+    context: 'channel',
+    fields: [
+      {
+        name: 'recipient',
+        label: 'To',
+        type: 'petNamePath',
+        required: true,
+        placeholder: 'recipient-name',
+      },
+      {
+        name: 'message',
+        label: 'Message',
+        type: 'text',
+        required: true,
+        placeholder: 'your message...',
+      },
+    ],
+    submitLabel: 'Send DM',
+  },
 
   // ============ CONNECTIONS ============
   invite: {
@@ -368,6 +591,32 @@ export const COMMANDS = {
         type: 'petNamePath',
         required: true,
         placeholder: 'guest-name',
+      },
+      {
+        name: 'delivery',
+        label: 'Delivery',
+        type: 'select',
+        required: true,
+        options: ['link', 'inventory'],
+        defaultValue: 'link',
+      },
+      {
+        name: 'accessLevel',
+        label: 'Access',
+        type: 'select',
+        required: false,
+        options: ['read-and-write', 'read-only'],
+        defaultValue: 'read-and-write',
+        showWhen: 'context:channel',
+      },
+      {
+        name: 'rateLimit',
+        label: 'Rate limit',
+        type: 'select',
+        required: false,
+        options: ['none', 'relaxed', 'moderate', 'strict'],
+        defaultValue: 'none',
+        showWhen: 'context:channel',
       },
     ],
     submitLabel: 'Invite',
@@ -396,6 +645,137 @@ export const COMMANDS = {
     ],
     submitLabel: 'Accept',
   },
+  share: {
+    name: 'share',
+    label: 'Share',
+    description: 'Generate a shareable locator with connection hints',
+    category: 'connections',
+    mode: 'inline',
+    fields: [
+      {
+        name: 'petName',
+        label: 'Name',
+        type: 'petNamePath',
+        required: true,
+        placeholder: 'my-channel',
+      },
+    ],
+    submitLabel: 'Share',
+  },
+  'adopt-locator': {
+    name: 'adopt-locator',
+    label: 'Adopt from Locator',
+    description: 'Adopt a remote value from a shareable locator',
+    category: 'connections',
+    mode: 'inline',
+    fields: [
+      {
+        name: 'locator',
+        label: 'Locator',
+        type: 'locator',
+        required: true,
+        placeholder: 'endo://...?id=...&type=...&at=...',
+      },
+      {
+        name: 'petName',
+        label: 'Save as',
+        type: 'petNamePath',
+        required: true,
+        placeholder: 'remote-channel',
+      },
+    ],
+    submitLabel: 'Adopt',
+  },
+  network: {
+    name: 'network',
+    label: 'Enable Network',
+    description: 'Enable TCP network for peer connections',
+    category: 'connections',
+    mode: 'inline',
+    fields: [
+      {
+        name: 'modulePath',
+        label: 'Module',
+        type: 'text',
+        required: false,
+        placeholder: 'tcp-netstring.js path (auto-detected)',
+        // @ts-ignore Vite injects this at build time
+        defaultValue: import.meta.env?.TCP_NETSTRING_PATH || '',
+      },
+      {
+        name: 'host',
+        label: 'Host',
+        type: 'text',
+        required: false,
+        defaultValue: '127.0.0.1',
+        placeholder: '127.0.0.1',
+      },
+      {
+        name: 'port',
+        label: 'Port',
+        type: 'text',
+        required: false,
+        defaultValue: '8940',
+        placeholder: '8940',
+      },
+    ],
+    submitLabel: 'Enable',
+  },
+  'network-libp2p': {
+    name: 'network-libp2p',
+    label: 'Enable libp2p Network',
+    description: 'Enable libp2p peer-to-peer network (no open ports needed)',
+    category: 'connections',
+    mode: 'inline',
+    fields: [
+      {
+        name: 'modulePath',
+        label: 'Module',
+        type: 'text',
+        required: false,
+        placeholder: 'file:// URL to libp2p.js',
+        // @ts-ignore Vite injects this at build time
+        defaultValue: import.meta.env?.LIBP2P_PATH || '',
+      },
+    ],
+    submitLabel: 'Enable',
+  },
+
+  'network-ws-relay': {
+    name: 'network-ws-relay',
+    label: 'Enable Relay Network',
+    description: 'Connect to a WebSocket relay server for peer connections',
+    category: 'connections',
+    mode: 'inline',
+    fields: [
+      {
+        name: 'relayUrl',
+        label: 'Relay URL',
+        type: 'text',
+        required: true,
+        placeholder: 'wss://relay.example.com',
+        // Public relay instance maintained by @kumavis
+        defaultValue: 'wss://endo-relay.fly.dev',
+      },
+      {
+        name: 'relayDomain',
+        label: 'Relay Domain',
+        type: 'text',
+        required: false,
+        placeholder: 'derived from relay URL if empty',
+      },
+      {
+        name: 'modulePath',
+        label: 'Module',
+        type: 'text',
+        required: false,
+        placeholder: 'ws-relay.js path (auto-detected)',
+        // @ts-ignore Vite injects this at build time
+        defaultValue: import.meta.env?.WS_RELAY_PATH || '',
+      },
+    ],
+    submitLabel: 'Connect',
+  },
 
   // ============ WORKERS ============
   spawn: {
@@ -415,6 +795,23 @@ export const COMMANDS = {
     ],
     submitLabel: 'Spawn',
   },
+  debug: {
+    name: 'debug',
+    label: 'Debug Worker',
+    description: 'Open the debugger for a worker',
+    category: 'workers',
+    mode: 'inline',
+    fields: [
+      {
+        name: 'workerName',
+        label: 'Worker',
+        type: 'petNamePath',
+        required: true,
+        placeholder: 'worker-name',
+      },
+    ],
+    submitLabel: 'Debug',
+  },
 
   // ============ HOSTS/GUESTS ============
   mkhost: {
@@ -429,7 +826,7 @@ export const COMMANDS = {
         label: 'Handle',
         type: 'petNamePath',
         required: true,
-        placeholder: 'SELF',
+        placeholder: '@self',
       },
       {
         name: 'agentName',
@@ -454,7 +851,7 @@ export const COMMANDS = {
         label: 'Handle',
         type: 'petNamePath',
         required: true,
-        placeholder: 'HOST',
+        placeholder: '@host',
       },
       {
         name: 'agentName',
@@ -525,8 +922,17 @@ export const COMMANDS = {
     label: 'Help',
     description: 'Show command reference',
     category: 'system',
-    mode: 'immediate',
-    fields: [],
+    mode: 'inline',
+    fields: [
+      {
+        name: 'commandName',
+        label: 'Command',
+        type: 'text',
+        required: false,
+        placeholder: 'command name (optional)',
+      },
+    ],
+    submitLabel: 'Show',
   },
 };
 
@@ -540,11 +946,17 @@ export const getCommandList = () =>
 /**
  * Filter commands by prefix (matches name or aliases).
  * @param {string} prefix - Prefix to filter by
+ * @param {'inbox' | 'channel'} [context] - Filter by context ('inbox' or 'channel')
  * @returns {CommandDefinition[]}
  */
-export const filterCommands = prefix => {
+export const filterCommands = (prefix, context) => {
   const lower = prefix.toLowerCase();
   return getCommandList().filter(cmd => {
+    // Filter by context if specified
+    if (context) {
+      const cmdContext = cmd.context || 'both';
+      if (cmdContext !== 'both' && cmdContext !== context) return false;
+    }
     if (cmd.name.toLowerCase().startsWith(lower)) return true;
     if (cmd.aliases) {
       return cmd.aliases.some(alias => alias.toLowerCase().startsWith(lower));
@@ -573,10 +985,18 @@ export const getCommand = name => COMMANDS[name] || COMMANDS[ALIASES[name]];
 /**
  * Get commands by category.
  * @param {string} category - Category name
+ * @param {'inbox' | 'channel'} [context] - Filter by context
  * @returns {CommandDefinition[]}
  */
-export const getCommandsByCategory = category =>
-  getCommandList().filter(cmd => cmd.category === category);
+export const getCommandsByCategory = (category, context) =>
+  getCommandList().filter(cmd => {
+    if (cmd.category !== category) return false;
+    if (context) {
+      const cmdContext = cmd.context || 'both';
+      if (cmdContext !== 'both' && cmdContext !== context) return false;
+    }
+    return true;
+  });
 
 /**
  * Get all categories.

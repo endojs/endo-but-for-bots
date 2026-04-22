@@ -1,5 +1,12 @@
 # Delegates and Epithets: Ideas and Directions
 
+| | |
+|---|---|
+| **Created** | 2026-02-16 |
+| **Updated** | 2026-02-24 |
+| **Author** | Kris Kowal (prompted) |
+| **Status** | Not Started |
+
 This document explores how an agent in Endo can create subordinate
 agents — **delegates** — that carry obligatory, verifiable, deniable
 claims about their relationships.  We call these claims **epithets**.
@@ -427,7 +434,7 @@ standard operations:
 
 ```js
 // Read own epithet chain
-const myHandle = await E(powers).lookup('SELF');
+const myHandle = await E(powers).lookup('@self');
 const myEpithets = await E(myHandle).epithets();
 // [(AI assistant to aliceHandle)]
 
@@ -524,7 +531,7 @@ with a Handle and a pet-name directory.  Delegate creation extends
 this by accepting epithets and storing them in the Handle formula.
 The daemon enforces chain propagation.
 
-**LAL agent.**  The LAL agent would `lookup('SELF')` and call
+**LAL agent.**  The LAL agent would `lookup('@self')` and call
 `epithets()` on its own Handle to discover its identity and delegation
 chain.
 
