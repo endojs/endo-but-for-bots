@@ -24,7 +24,7 @@ const ALL_FORMULA_TYPES = [
   'loopback-network',
   'mail-hub',
   'mailbox-store',
-  'make-bundle',
+  'make-archive',
   'make-unconfined',
   'marshal',
   'message',
