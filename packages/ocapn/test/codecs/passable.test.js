@@ -22,7 +22,6 @@ import {
   immutableArrayBufferToUint8Array,
   uint8ArrayToImmutableArrayBuffer,
 } from '../../src/buffer-utils.js';
-import { encodeSwissnum } from '../../src/client/util.js';
 import { getSturdyRefDetails } from '../../src/client/sturdyrefs.js';
 
 const textEncoder = new TextEncoder();
@@ -147,30 +146,22 @@ const table = [
   },
   // SturdyRef
   {
-    name: 'sturdyref',
+    name: 'sturdyRef',
     makeValue: testKit =>
-      testKit.sturdyRefTracker.makeSturdyRef(
-        exporterLocation,
-        encodeSwissnum('123'),
-      ),
+      testKit.sturdyRefTracker.makeSturdyRef(exporterLocation, '123'),
     customAssert: (t, actual) => {
       const details = getSturdyRefDetails(actual);
       if (!details) {
         throw Error('SturdyRef has no details');
       }
       t.deepEqual(details.location, exporterLocation);
-      t.deepEqual(details.swissNum, encodeSwissnum('123'));
+      t.is(details.secret, '123');
     },
   },
   {
-    name: 'sturdyref in list',
+    name: 'sturdyRef in list',
     makeValue: testKit =>
-      harden([
-        testKit.sturdyRefTracker.makeSturdyRef(
-          exporterLocation,
-          encodeSwissnum('123'),
-        ),
-      ]),
+      harden([testKit.sturdyRefTracker.makeSturdyRef(exporterLocation, '123')]),
     customAssert: (t, actual) => {
       t.is(actual.length, 1);
       const details = getSturdyRefDetails(actual[0]);
@@ -178,7 +169,7 @@ const table = [
         throw Error('SturdyRef has no details');
       }
       t.deepEqual(details.location, exporterLocation);
-      t.deepEqual(details.swissNum, encodeSwissnum('123'));
+      t.is(details.secret, '123');
     },
   },
   // Tagged objects containing references
@@ -209,24 +200,21 @@ const table = [
       ),
   },
   {
-    name: 'tagged with sturdyref',
+    name: 'tagged with sturdyRef',
     makeValue: testKit =>
       makeTagged(
-        'sturdyTag',
-        testKit.sturdyRefTracker.makeSturdyRef(
-          exporterLocation,
-          encodeSwissnum('456'),
-        ),
+        'sturdyRefTag',
+        testKit.sturdyRefTracker.makeSturdyRef(exporterLocation, '456'),
       ),
     // SturdyRefs need customAssert because object identity differs after round-trip
     customAssert: (t, actual) => {
-      t.is(actual[Symbol.toStringTag], 'sturdyTag');
+      t.is(actual[Symbol.toStringTag], 'sturdyRefTag');
       const details = getSturdyRefDetails(actual.payload);
       if (!details) {
         throw Error('SturdyRef has no details');
       }
       t.deepEqual(details.location, exporterLocation);
-      t.deepEqual(details.swissNum, encodeSwissnum('456'));
+      t.is(details.secret, '456');
     },
   },
 ];

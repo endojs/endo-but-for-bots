@@ -664,7 +664,7 @@ testWithErrorUnwrapping(
       Far('sturdyRefReturner', {
         getSturdyRef: location =>
           // eslint-disable-next-line no-use-before-define
-          clientKitB.client.makeSturdyRef(location, encodeSwissnum('target')),
+          clientKitB.client.makeSturdyRef(location, 'target'),
       }),
     );
 

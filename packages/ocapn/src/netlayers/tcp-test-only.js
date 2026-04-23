@@ -254,9 +254,10 @@ export const makeTcpNetLayer = async ({
      * @param {Connection} connection
      * @param {string} captpVersion
      * @param {SelfIdentity} selfIdentity
+     * @param {import('../codec-interface.js').OcapnCodec} codec
      */
-    sendSessionHandshake: (connection, captpVersion, selfIdentity) => {
-      sendHandshake(connection, selfIdentity, captpVersion);
+    sendSessionHandshake: (connection, captpVersion, selfIdentity, codec) => {
+      sendHandshake(connection, selfIdentity, captpVersion, codec);
     },
     // eslint-disable-next-line no-underscore-dangle
     _debug: {

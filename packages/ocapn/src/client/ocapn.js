@@ -507,12 +507,12 @@ const makeBootstrapObject = (
      * @param {SwissNum} swissnum
      * @returns {Promise<any>}
      */
-    fetch: swissnum => {
-      const object = sturdyRefTracker.lookup(swissnum);
-      if (!object) {
-        const swissnumString = decodeSwissnum(swissnum);
+    fetch: async swissnum => {
+      const object = await sturdyRefTracker.lookup(swissnum);
+      if (object === undefined) {
+        const secretString = decodeSwissnum(swissnum);
         throw Error(
-          `${label}: Bootstrap fetch: Unknown swissnum for sturdyref: ${swissnumString}`,
+          `${label}: Bootstrap fetch: locator has no capability for ${JSON.stringify(secretString)}`,
         );
       }
       return object;

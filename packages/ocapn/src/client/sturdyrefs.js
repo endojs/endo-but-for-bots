@@ -2,125 +2,102 @@
 
 /**
  * @import { OcapnLocation } from '../codecs/components.js'
- * @import { InternalSession, SwissNum } from './types.js'
+ * @import { InternalSession } from './types.js'
  */
 
 import harden from '@endo/harden';
 import { E } from '@endo/eventual-send';
 import { makeTagged } from '@endo/pass-style';
-import { decodeSwissnum } from './util.js';
+import { encodeSwissnum } from './util.js';
 
 /**
  * @import { CopyTagged } from '@endo/pass-style'
  * @typedef {CopyTagged<'ocapn-sturdyref', undefined>} SturdyRef
- * A SturdyRef is tentatively reified as a tagged value with tag 'ocapn-sturdyref' and undefined payload.
- * This is a workaround for sturdyref lacking passStyleOf compatibility. A tag type was chosen
- * so it is clearly labeled as a sturdyref, but should never be sent over the wire as a tagged value.
+ * A `SturdyRef` addresses a capability by `(location, secret)`. It is
+ * reified in JavaScript as a tagged value purely so `passStyleOf` has
+ * something to return; it never crosses the wire in this form (on the
+ * wire OCapN uses the `'ocapn-sturdyref'` spec tag).
  *
  * @typedef {object} SturdyRefDetails
  * @property {OcapnLocation} location
- * @property {SwissNum} swissNum
+ * @property {string} secret - Plain-text locator key. The wire form
+ *   encodes this as `LocatorSecret` bytes.
  */
 
-// WeakMap to store SturdyRef details (internal to this module)
 /** @type {WeakMap<SturdyRef, SturdyRefDetails>} */
 const sturdyRefDetails = new WeakMap();
 
-/**
- * Check if a value is a SturdyRef by checking if it's in the WeakMap
- * @param {any} value
- * @returns {boolean}
- */
-export const isSturdyRef = value => {
-  return sturdyRefDetails.has(value);
-};
+/** @param {any} value */
+export const isSturdyRef = value => sturdyRefDetails.has(value);
+
+/** @param {SturdyRef} sturdyRef */
+export const getSturdyRefDetails = sturdyRef => sturdyRefDetails.get(sturdyRef);
 
 /**
- * Get SturdyRef details (for internal system use only)
- * @param {SturdyRef} sturdyRef
- * @returns {SturdyRefDetails | undefined}
- */
-export const getSturdyRefDetails = sturdyRef => {
-  return sturdyRefDetails.get(sturdyRef);
-};
-
-/**
- * Enliven a SturdyRef by fetching the actual object
+ * Resolve a `SturdyRef` to an actual reference: local values come from
+ * the injected `locator`; remote values are fetched from the peer's
+ * bootstrap over a session.
+ *
  * @param {SturdyRef} sturdyRef
  * @param {(location: OcapnLocation) => Promise<InternalSession>} provideSession
  * @param {(location: OcapnLocation) => boolean} isSelfLocation
- * @param {Map<string, any>} swissnumTable
- * @returns {Promise<any>}
+ * @param {{ get(secret: string): unknown | Promise<unknown> }} locator
  */
 export const enlivenSturdyRef = async (
   sturdyRef,
   provideSession,
   isSelfLocation,
-  swissnumTable,
+  locator,
 ) => {
   const details = sturdyRefDetails.get(sturdyRef);
   if (!details) {
     throw Error('SturdyRef details not found');
   }
-  const { location, swissNum } = details;
+  const { location, secret } = details;
 
-  // Special case: if this is a self-location, return the object directly
   if (isSelfLocation(location)) {
-    const swissStr = decodeSwissnum(swissNum);
-    const object = swissnumTable.get(swissStr);
-    if (!object) {
-      throw Error(`Local fetch: Unknown swissnum for sturdyref: ${swissStr}`);
+    const value = await locator.get(secret);
+    if (value === undefined) {
+      throw Error(`ocapn: locator has no capability for secret ${JSON.stringify(secret)}`);
     }
-    return object;
+    return value;
   }
 
-  // Otherwise, fetch from remote location via session
   const { ocapn } = await provideSession(location);
-  return E(/** @type {any} */ (ocapn.getRemoteBootstrap())).fetch(swissNum);
+  return E(/** @type {any} */ (ocapn.getRemoteBootstrap())).fetch(
+    encodeSwissnum(secret),
+  );
 };
 
 /**
  * @typedef {object} SturdyRefTracker
- * @property {(location: OcapnLocation, swissNum: SwissNum) => SturdyRef} makeSturdyRef
- * @property {(swissNum: SwissNum) => any | undefined} lookup - Look up an object by swissnum
- * @property {(swissStr: string, object: any) => void} register - Register an object with a swissnum string
+ * @property {(location: OcapnLocation, secret: string) => SturdyRef} makeSturdyRef
+ * @property {(secretBytes: ArrayBufferLike) => Promise<any | undefined>} lookup
+ *   Async look up a locally-held capability by the on-wire secret
+ *   bytes. Calls through to the injected locator.
  */
 
 /**
- * Create a SturdyRef tracker
- * @param {Map<string, any>} swissnumTable
+ * @param {{ get(secret: string): unknown | Promise<unknown> }} locator
  * @returns {SturdyRefTracker}
  */
-export const makeSturdyRefTracker = swissnumTable => {
+export const makeSturdyRefTracker = locator => {
+  const textDecoder = new TextDecoder('ascii', { fatal: true });
   return harden({
-    /**
-     * @param {OcapnLocation} location
-     * @param {SwissNum} swissNum
-     * @returns {SturdyRef}
-     */
-    makeSturdyRef: (location, swissNum) => {
-      // Create a tagged value with 'ocapn-sturdyref' tag and undefined payload
+    makeSturdyRef: (location, secret) => {
       const sturdyRef = makeTagged('ocapn-sturdyref', undefined);
-      // Store the details in the WeakMap
-      sturdyRefDetails.set(sturdyRef, { location, swissNum });
+      sturdyRefDetails.set(sturdyRef, { location, secret });
       return harden(sturdyRef);
     },
-    /**
-     * Look up an object by swissnum
-     * @param {SwissNum} swissNum
-     * @returns {any | undefined}
-     */
-    lookup: swissNum => {
-      const swissStr = decodeSwissnum(swissNum);
-      return swissnumTable.get(swissStr);
-    },
-    /**
-     * Register an object with a swissnum string
-     * @param {string} swissStr
-     * @param {any} object
-     */
-    register: (swissStr, object) => {
-      swissnumTable.set(swissStr, object);
+    lookup: async secretBytes => {
+      // The wire speaks bytes; the locator speaks strings. Decode once
+      // at the boundary.
+      const view =
+        secretBytes instanceof Uint8Array
+          ? secretBytes
+          : new Uint8Array(/** @type {ArrayBuffer} */ (secretBytes.slice()));
+      const secret = textDecoder.decode(view);
+      return locator.get(secret);
     },
   });
 };

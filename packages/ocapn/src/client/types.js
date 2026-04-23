@@ -36,32 +36,42 @@
  * separation (see designs/ocapn-network-transport-separation.md).
  *
  * @typedef {object} OcapnNetwork
- * @property {string} networkId - Unique identifier for this network
- *   (e.g., 'np' for OCapN-Noise, 'tcp-testing-only' for test).
- * @property {(location: OcapnLocation) => Promise<Connection>} connect -
- *   Establish a connection to a peer at the given location.
- *   The network selects the transport based on connection hints.
- * @property {(handler: IncomingConnectionHandler) => void} listen -
- *   Register a handler for incoming connections.
- * @property {() => void} shutdown -
- *   Shut down the network, closing all connections.
- * @property {((connection: Connection, captpVersion: string, selfIdentity: SelfIdentity) => void)} [sendSessionHandshake] -
- *   Optional custom handshake for outgoing connections.  If provided,
- *   the network handles its own session negotiation (e.g., Noise
- *   Protocol handshake) instead of the default op:start-session.
- *   selfIdentity is provided by the client for networks that need it
- *   (like tcp-testing-only); networks that manage their own identity
- *   (like OCapN-Noise) can ignore it.
- * @property {((connection: Connection, data: Uint8Array, selfIdentity: SelfIdentity, captpVersion: string) => boolean)} [handleSessionHandshake] -
- *   Optional custom handler for incoming handshake data.  Returns true
- *   if the data was consumed as a handshake message, false to let OCapN
- *   core handle it with the default op:start-session handler.
+ * @property {string} networkId - Unique identifier for this network.
+ * @property {import('../codec-interface.js').OcapnCodec} [codec] -
+ *   Wire codec this network uses. If present, the client adopts it at
+ *   registration time; this lets `makeClient()` be constructed without
+ *   an explicit codec. Two registered networks must agree on the codec
+ *   (and a codec passed to `makeClient({ codec })` must match).
+ * @property {() => void} shutdown - Shut the network down, closing
+ *   outgoing and inbound state.
+ * @property {((location: OcapnLocation) => Connection | Promise<Connection>)} [connect] -
+ *   Establish a raw connection to a peer. Required unless the network
+ *   implements `provideSession`. May be synchronous or asynchronous;
+ *   the client always awaits the result.
  * @property {((location: OcapnLocation) => Promise<NetworkSession>)} [provideSession] -
- *   Optional method that returns a fully authenticated session.
- *   When present, `establishSession` skips the connect+handshake
- *   flow and uses the network-provided session directly.
- *   This is the target interface for networks like OCapN-Noise
- *   that manage their own session lifecycle.
+ *   Return a fully authenticated session; the client bypasses its own
+ *   handshake machinery. Required unless the network implements `connect`.
+ * @property {OcapnLocation} [location] - A representative location of
+ *   this network, used for self-location checks. Networks that do not
+ *   have a single fixed location may omit this.
+ * @property {LocationId} [locationId] - Cached locationId for `location`.
+ * @property {((connection: Connection, captpVersion: string, selfIdentity: SelfIdentity, codec: import('../codec-interface.js').OcapnCodec) => void)} [sendSessionHandshake] -
+ *   Optional custom handshake for outgoing connections. If present, the
+ *   network owns the handshake bytes for this connection instead of the
+ *   default `op:start-session`. `selfIdentity` is supplied by the client
+ *   for networks that share its identity layer; networks with their own
+ *   identity (e.g. Noise) can ignore it.
+ * @property {((connection: Connection, data: Uint8Array, selfIdentity: SelfIdentity, captpVersion: string) => boolean)} [handleSessionHandshake] -
+ *   Optional custom handler for incoming handshake bytes. Returns true
+ *   if the data was consumed as a network-level handshake message, or
+ *   false to let the client fall back to the default handler.
+ * @property {AsyncIterable<NetworkSession>} [inboundSessions] -
+ *   Async iterable yielding fully-authenticated `NetworkSession`s that
+ *   the network accepted without a corresponding `provideSession` call
+ *   (e.g. a peer-initiated Noise handshake). The client consumes this
+ *   on `registerNetwork` and wires each session into its session
+ *   manager. Networks that have no concept of inbound sessions omit
+ *   this field.
  */
 
 /**
@@ -72,12 +82,23 @@
  *
  * @typedef {object} NetworkSession
  * @property {SessionId} sessionId - Unique session identifier.
- * @property {PublicKeyId} localKeyId - Our key ID for this session.
- * @property {PublicKeyId} remoteKeyId - Peer's key ID for this session.
+ * @property {SelfIdentity} selfIdentity - Our identity for this session,
+ *   supplied by the network (which authenticated to the peer using this
+ *   keypair during handshake).
  * @property {ArrayBufferLike} remotePublicKeyBytes - Peer's raw public
  *   key bytes (needed to construct OcapnPublicKey for session).
  * @property {OcapnLocation} remoteLocation - Peer's location.
- * @property {(bytes: Uint8Array) => void} write - Send bytes to peer.
+ * @property {import('../codecs/components.js').OcapnSignature} remoteLocationSignature -
+ *   Peer's location signature as verified during session establishment.
+ * @property {import('@endo/stream').Reader<Uint8Array>} reader - Stream
+ *   yielding plaintext OCapN frames as they arrive from the peer. The
+ *   network is responsible for framing, decryption, and anything else
+ *   between the wire and whole OCapN messages. The client pumps this
+ *   reader and dispatches each frame to CapTP.
+ * @property {import('@endo/stream').Writer<Uint8Array>} writer - Stream
+ *   accepting plaintext OCapN frames destined for the peer. One
+ *   `writer.next(bytes)` carries one OCapN message; the network frames,
+ *   encrypts, and delivers.
  * @property {() => void} close - Terminate session.
  * @property {boolean} isInitiator - Whether we initiated this session.
  */
@@ -204,17 +225,31 @@
  */
 
 /**
+ * The caller-owned table `makeOcapn` consults when a peer asks for a
+ * local capability (via `bootstrap.fetch(secret)`) or when resolving a
+ * self-local `SturdyRef`. Any object with a `get(secret)` that returns a
+ * capability, `undefined`, or a promise of either works; a plain `Map`
+ * is a valid locator.
+ *
+ * @typedef {object} Locator
+ * @property {(secret: string) => unknown | Promise<unknown>} get
+ */
+
+/**
+ * The session-manager instance returned by `makeOcapn`.
+ *
  * @typedef {object} Client
- * @property {<T extends NetLayer>(makeNetlayer: (handlers: NetlayerHandlers, logger: Logger) => T | Promise<T>) => Promise<T>} registerNetlayer
- * @property {<T extends OcapnNetwork>(makeNetwork: (handlers: NetlayerHandlers, logger: Logger) => T | Promise<T>) => Promise<T>} registerNetwork
- * Register an OCapN network. The network manages session establishment
- * and authentication. Successor to registerNetlayer.
  * @property {(location: OcapnLocation) => Promise<Session>} provideSession
- * @property {(location: OcapnLocation, swissNum: SwissNum) => SturdyRef} makeSturdyRef
+ *   Open (or reuse) a CapTP session to the peer at `location`.
+ * @property {(location: OcapnLocation, secret: string) => SturdyRef} makeSturdyRef
+ *   Mint a SturdyRef — an addressable, passable `(location, secret)`
+ *   pair. Peers resolve the secret against their own `Locator`.
  * @property {(sturdyRef: SturdyRef) => Promise<any>} enlivenSturdyRef
- * @property {(swissStr: string, object: any) => void} registerSturdyRef
- * Register an object with a swissnum string so it can be resolved via SturdyRef.
+ *   Resolve a SturdyRef to a live capability: local SturdyRefs go
+ *   through the injected locator; remote SturdyRefs fetch from the
+ *   peer's bootstrap.
  * @property {() => void} shutdown
  * @property {ClientDebug} [_debug]
- * Only present when client is created with `debugMode: true`. Exposes internal APIs for testing.
+ *   Only present when the client was constructed with `debugMode:
+ *   true`. Exposes internal APIs for testing.
  */

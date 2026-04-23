@@ -71,7 +71,7 @@ import { makeSlot, parseSlot } from '../captp/pairwise.js';
  * @property {(remotePromise: Promise<unknown>) => object} makeLocalResolverForRemotePromise
  * @property {(answerPosition: bigint, promise: Promise<unknown>) => Promise<unknown>} makeLocalAnswerPromiseAndFulfill
  * @property {(position: bigint) => Promise<unknown>} getLocalAnswerValue
- * @property {(location: OcapnLocation, swissNum: SwissNum) => SturdyRef} makeSturdyRef
+ * @property {(location: OcapnLocation, secret: string) => SturdyRef} makeSturdyRef
  * @property {(signedGive: HandoffGiveSigEnvelope) => Promise<unknown>} provideHandoff
  * @property {(signedGive: HandoffGiveDetails) => HandoffGiveSigEnvelope} sendHandoff
  * @property {(value: object) => ValInfo} getInfoForVal
@@ -439,8 +439,8 @@ export const makeReferenceKit = (
       return answerPromise;
     },
 
-    makeSturdyRef: (location, swissNum) => {
-      return sturdyRefTracker.makeSturdyRef(location, swissNum);
+    makeSturdyRef: (location, secret) => {
+      return sturdyRefTracker.makeSturdyRef(location, secret);
     },
 
     provideHandoff: signedGive => {

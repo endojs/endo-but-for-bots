@@ -102,7 +102,11 @@ export const writeOcapnHandshakeMessage = (message, codec) => {
  * @param {OcapnCodec} codec
  * @returns {OcapnOperationsCodecs}
  */
-export const makeOcapnOperationsCodecs = (descCodecs, passableCodecs, codec) => {
+export const makeOcapnOperationsCodecs = (
+  descCodecs,
+  passableCodecs,
+  codec,
+) => {
   const { DeliverTargetCodec, RemotePromiseCodec, ResolveMeDescCodec } =
     descCodecs;
   const { PassableCodec } = passableCodecs;

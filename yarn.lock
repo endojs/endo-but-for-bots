@@ -2186,17 +2186,26 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@endo/ocapn-noise@workspace:packages/ocapn-noise"
   dependencies:
+    "@endo/eventual-send": "workspace:^"
+    "@endo/harden": "workspace:^"
+    "@endo/init": "workspace:^"
     "@endo/lockdown": "workspace:^"
+    "@endo/marshal": "workspace:^"
+    "@endo/netstring": "workspace:^"
+    "@endo/ocapn": "workspace:^"
     "@endo/ses-ava": "workspace:^"
+    "@endo/stream": "workspace:^"
+    "@endo/stream-node": "workspace:^"
     ava: "catalog:dev"
     c8: "catalog:dev"
     eslint: "catalog:dev"
+    ses: "workspace:^"
     tsd: "catalog:dev"
     typescript: "npm:~5.9.2"
   languageName: unknown
   linkType: soft
 
-"@endo/ocapn@workspace:packages/ocapn":
+"@endo/ocapn@workspace:^, @endo/ocapn@workspace:packages/ocapn":
   version: 0.0.0-use.local
   resolution: "@endo/ocapn@workspace:packages/ocapn"
   dependencies:
@@ -2209,6 +2218,7 @@ __metadata:
     "@endo/pass-style": "workspace:^"
     "@endo/promise-kit": "workspace:^"
     "@endo/ses-ava": "workspace:^"
+    "@endo/stream": "workspace:^"
     "@noble/curves": "npm:^1.9.0"
     "@noble/hashes": "npm:^1.8.0"
     ava: "catalog:dev"

@@ -25,6 +25,7 @@ import {
   OcapnSignatureCodec,
 } from './components.js';
 import { getSturdyRefDetails } from '../client/sturdyrefs.js';
+import { encodeSwissnum } from '../client/util.js';
 import { uint8ArrayToImmutableArrayBuffer } from '../buffer-utils.js';
 
 /**
@@ -312,14 +313,21 @@ export const makeDescCodecs = referenceKit => {
     },
   });
 
+  // Wire label is the spec-defined 'ocapn-sturdyref' tag; we keep it
+  // intact for interop even though the JS-side identifier is `SturdyRef`.
   const OcapnSturdyRefCodec = makeOcapnRecordCodec(
     'OcapnSturdyRef',
     'ocapn-sturdyref',
     syrupReader => {
       const node = OcapnPeerCodec.read(syrupReader);
       const swissNum = syrupReader.readBytestring();
-      // @ts-expect-error - Branded type: SwissNum is ArrayBufferLike at runtime
-      const value = referenceKit.makeSturdyRef(node, swissNum);
+      const textDecoder = new TextDecoder('ascii', { fatal: true });
+      const secretBytes =
+        swissNum instanceof Uint8Array
+          ? swissNum
+          : new Uint8Array(/** @type {ArrayBuffer} */ (swissNum.slice()));
+      const secret = textDecoder.decode(secretBytes);
+      const value = referenceKit.makeSturdyRef(node, secret);
       return value;
     },
     /**
@@ -331,9 +339,11 @@ export const makeDescCodecs = referenceKit => {
       if (!details) {
         throw Error('Cannot serialize: not a valid SturdyRef object');
       }
-      const { location, swissNum } = details;
+      const { location, secret } = details;
       OcapnPeerCodec.write(location, syrupWriter);
-      syrupWriter.writeBytestring(swissNum);
+      syrupWriter.writeBytestring(
+        /** @type {ArrayBufferLike} */ (encodeSwissnum(secret)),
+      );
     },
     2, // 2 fields: node, swissNum
   );
