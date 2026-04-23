@@ -102,9 +102,7 @@ export const run = async ({
         // Stream the archive bytes from the daemon.
         const archiveNamePath = parsePetNamePath(archiveName);
         const readableP = E(agent).lookup(archiveNamePath);
-        const { makeRefReader } = await import(
-          '@endo/daemon/src/ref-reader.js'
-        );
+        const { makeRefReader } = await import('@endo/daemon');
         /** @type {Uint8Array[]} */
         const chunks = [];
         let total = 0;
