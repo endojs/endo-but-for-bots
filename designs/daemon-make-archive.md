@@ -5,7 +5,12 @@
 | **Created** | 2026-04-23 |
 | **Updated** | 2026-04-23 |
 | **Author** | Kris Kowal (prompted) |
-| **Status** | **Complete** |
+| **Status** | In Progress |
+
+> **Phases 1–5 are complete.**  The design has since grown a Phase 6
+> (the `@node` special name, described below) and a Phase 7
+> (`makeCaplet` from a readable tree).  Status is now **In Progress**
+> again.
 
 ## What is the Problem Being Solved?
 
@@ -75,6 +80,24 @@ We want to replace `makeBundle` with `makeArchive`, which:
   stream and have the Rust worker fetch the SHA-256 directly from
   `cas_archive::load_archive_from_cas`.  Tracked as a follow-up; not
   required for correctness.
+
+- [ ] **Phase 6 — `@node` special name, XS never runs
+  `makeUnconfined`.**  We explicitly decide *not* to implement
+  `makeUnconfined` on XS workers.  A host agent that needs to run a
+  Node-only plugin must address the `@node` special name, which
+  resolves to a pre-provisioned Node.js worker formula under that
+  agent.  Guests do **not** see `@node`; it is a host-only
+  capability.  See the "Phase 6" section below.
+
+- [ ] **Phase 7 — `makeCaplet` from a readable tree.**  Once
+  `@node` plus archive execution are the only two paths, we reopen
+  the `makeCaplet(readableTree, powers, options)` surface: the
+  caller hands a `ReadableTree` (a CAS snapshot or a live mount
+  point), a powers pet name, and optional env — and the daemon
+  runs the named entry module from that tree in whichever worker
+  the powers scope implies.  Source modules are loaded the same
+  way `makeArchive` loads them; the difference is that the map
+  lives in a tree shape rather than a ZIP.  See "Phase 7" below.
 
 ## Design
 
@@ -180,19 +203,150 @@ existing test fixtures with `compartment-mapper.makeArchive`.
 The internal `doMakeBundle` test helper in `packages/daemon/test/endo.test.js`
 is replaced with `doMakeArchive`.
 
+### Phase 6 — `@node`, and XS workers never run `makeUnconfined`
+
+`makeUnconfined(workerName, specifier, …)` executes a Node.js plugin
+module by pathname.  There is no portable way to satisfy that
+contract inside an XS worker: the plugin comes from the host's
+filesystem, may have arbitrary Node-only dependencies, and expects a
+`module` + `require` environment that XS does not and should not
+provide.  Rather than leave `makeUnconfined` as a worker-type split
+brain, we make the decision explicit:
+
+> **XS workers never implement `makeUnconfined`.  Every call to
+> `makeUnconfined` is routed to a Node.js worker via the `@node`
+> special name.**
+
+The `@node` special name joins the existing `@agent` / `@self` /
+`@host` / `@keypair` / `@mail` / `@nets` set on **host agents**.
+It resolves to a long-lived Node.js worker formula that the daemon
+provisions on first access, scoped to that host.  Semantically:
+
+- `E(host).lookup('@node')` → the Node worker capability.
+- `E(host).makeUnconfined('@node', '/absolute/path/to/plugin.js', …)`
+  is the canonical `makeUnconfined` invocation.  `workerName`
+  values other than `@node` either (a) already resolve to a Node
+  worker, which continues to work, or (b) resolve to an XS worker,
+  which **rejects the call** with a clean `"makeUnconfined requires
+  a Node.js worker; use @node"` error.
+- Guests **do not** see `@node`.  The pet-sitter that overlays
+  special names on the guest's pet store omits `@node`; an attempt
+  to `lookup('@node')` from guest scope returns `undefined`.  A
+  guest that wants a Node-confined caplet must go through the host
+  in the usual way.
+- The host may choose to cancel `@node` (which terminates the
+  pre-provisioned Node worker); the next `@node` lookup provisions
+  a fresh one.
+
+#### Implementation sketch
+
+- `packages/daemon/src/host.js` grows a `provideNodeWorker()`
+  helper that uses `provideWorker` with `kind: 'node'`.  The host's
+  `specialStore` gets `'@node': nodeWorkerHandleId`.
+- `packages/daemon/src/pet-name.js`'s `isSpecialName` regex already
+  accepts `@node`.  No change there.
+- `packages/daemon/src/guest.js`'s `makePetSitter` already filters
+  the special-name set passed in.  Pass an explicit allowlist that
+  excludes `@node`.
+- The XS worker's `makeUnconfined` stub (currently `throw new
+  Error('makeUnconfined not yet implemented in XS worker')`)
+  becomes the explicit error message cited above — so a stray call
+  to an XS worker produces the right hint.
+
+#### Migration note
+
+Tests that call `makeUnconfined` without naming a worker need to
+pass `'@node'` (or pre-provision a Node worker explicitly).  The
+one-line change is mechanical; the larger question is which CLI
+flag we offer.  `endo make --UNCONFINED` already implies a Node
+worker; the CLI can default `workerName` to `'@node'` when
+`--UNCONFINED` is set and no other worker is named.
+
+### Phase 7 — `makeCaplet` from a readable tree
+
+With `@node` delimiting Node-only terrain and `makeArchive` handling
+source-only ZIPs, the last gap in the surface is running a caplet
+from a *tree* rather than a ZIP — either a live mount point (the
+daemon already exposes these) or a `readable-tree` snapshot in the
+CAS (the same building block the archive story rests on).  The new
+method:
+
+```ts
+makeCaplet(
+  workerPetName: string | undefined,
+  treeName: string,     // pet name of a ReadableTree or Mount
+  options?: MakeCapletOptions & { entry?: string },
+): Promise<unknown>;
+```
+
+Where:
+
+- `treeName` resolves to either a `readable-tree` (CAS snapshot) or
+  a `mount` (live filesystem).
+- `options.entry` names the entry module path within the tree
+  (defaults to following `compartment-map.json` / `package.json`
+  `main`).
+- The worker — chosen the same way `makeArchive` chooses one —
+  reads the compartment map and module sources through the tree's
+  filesystem-like surface (`list`, `lookup`, `readText`).  XS
+  workers walk the tree through the Rust host's CAS bindings; Node
+  workers walk it through `compartment-mapper`'s `ReadFn`.
+- Source-only contract is preserved: `parserForLanguage` omits the
+  precompiled parsers, so a tree that somehow contains
+  `pre-mjs-json` files produces a clean "unknown language" error.
+
+Once this lands, `makeArchive` becomes a thin adapter: "parse the
+blob as a compartment-mapper ZIP, expose it as a tree, call
+`makeCaplet`".  The XS-side fast path still uses
+`hostImportArchive` for zero-copy archive loads; the semantic
+equivalence means clients can use whichever is convenient.
+
+### The legacy Node.js bridge
+
+`@node` and `makeCaplet` together mean that — once Phase 7 lands —
+every caplet source falls into one of three buckets:
+
+1. **Archive (ZIP)** or **readable tree** loaded in *any* worker
+   (Node or XS), via `makeArchive` / `makeCaplet`.  Source modules
+   only, no precompiled formats.  This is the preferred path.
+2. **Unconfined Node plugin** loaded in a Node worker via
+   `makeUnconfined('@node', …)`.  The bridge we keep open for code
+   that depends on Node's ambient authority (native modules, fs,
+   net, etc.).
+3. **Eval** inside an individual worker via `E(worker).evaluate(…)`.
+   The ad-hoc escape hatch; unchanged by this design.
+
+The stated long-term goal: grow the ecosystem (native capabilities,
+network capabilities, platform packages) so that bucket 2
+shrinks.  It is not our goal to remove `@node`; it is our goal to
+make it rarely necessary.
+
 ## Phased implementation
 
 1. **Phase 1 (additive)** — add `make-archive` alongside `make-bundle`:
    formula type, dispatcher case, host method, worker facet method, CLI
    `endo archive` command and `-z` option, archive-based test helper,
-   one passing end-to-end archive test.
+   one passing end-to-end archive test.  *Done.*
 2. **Phase 2 (migration)** — convert every existing `makeBundle` test
-   to `makeArchive`.  Confirm the full suite passes.
+   to `makeArchive`.  Confirm the full suite passes.  *Done.*
 3. **Phase 3 (removal)** — delete `makeBundle`, `MakeBundleFormula`,
    the dispatcher case, the host method, the worker facet method, the
    CLI `endo bundle` command, the `-b`/`--bundle` options, and the
    help-text entries.  Bump the daemon's interface version if any
-   external consumers exist.
+   external consumers exist.  *Done.*
+4. **Phase 4 (Rust / XS worker)** — XS worker `makeArchive` via
+   `hostImportArchive`; removal of the `makeBundle` worker stub.
+   *Done.*
+5. **Phase 5 (Node-side wiring closure)** — Node worker `makeArchive`
+   passes same env/context contract as `makeBundle` did.  *Done.*
+6. **Phase 6 (@node, high priority)** — host-only `@node` special
+   name that provisions a Node worker; XS workers explicitly reject
+   `makeUnconfined` with a message pointing at `@node`; guests do
+   not see `@node`.  CLI `endo make --UNCONFINED` defaults the
+   worker to `@node` when none is given.
+7. **Phase 7 (readable-tree caplets)** — `makeCaplet(treeName, …)`
+   running source modules out of either a CAS snapshot or a live
+   mount point.  `makeArchive` becomes a thin specialisation.
 
 This plan keeps every milestone individually shippable.
 
@@ -215,24 +369,58 @@ This plan keeps every milestone individually shippable.
    us to maintain the precompiled path on every worker including XS,
    for a feature that has a strict superset (`makeArchive`).  The user
    has authorised removal in this round.
+5. **XS workers do not implement `makeUnconfined`.**  `makeUnconfined`
+   is inherently Node-shaped — it loads a plugin by filesystem path
+   from the host's Node.js module graph.  Rather than paper over that
+   with host-delegation magic, we make the constraint explicit: XS
+   workers refuse `makeUnconfined`; hosts that need it address the
+   `@node` special name instead.
+6. **`@node` is a host-only special name.**  Guests inherit a
+   filtered view of special names that omits `@node`.  A guest that
+   needs a Node-confined caplet goes through the host in the
+   normal way — which is also the permission boundary where the
+   host can decide whether to grant access.
+7. **`makeCaplet` unifies the archive and tree paths.**  Once the
+   readable-tree variant lands, `makeArchive` is a specialisation
+   (it treats a ZIP blob as a tree).  We keep `makeArchive` as the
+   cheap common case because the XS side has a zero-copy archive
+   loader (`hostImportArchive`) that avoids tree-walk overhead.
+8. **The legacy Node.js bridge stays open indefinitely.**  We
+   neither deprecate nor remove `makeUnconfined`.  The goal is to
+   make it rarely necessary by growing the ecosystem of capability
+   providers that run in any worker — not to force code through
+   the archive path when it genuinely needs Node's ambient
+   authority.
 
 ## Dependencies
 
 | Design | Relationship |
 |--------|--------------|
-| daemon-cas-management | `makeArchive` reuses the CAS archive ingestion path on the Rust side. |
+| daemon-cas-management | `makeArchive` reuses the CAS archive ingestion path on the Rust side; `makeCaplet` (Phase 7) does the same for CAS tree snapshots. |
 | daemon-capability-bus | Worker facet method dispatch unchanged; uses the existing CapTP envelope. |
+| daemon-mount | `makeCaplet` (Phase 7) consumes live mounts as its readable-tree input. |
 
 ## Known Gaps and TODOs
 
-- [ ] Decide what `endo archive` should do when the project tree contains
-  a `package.json` without a `main` entry (today `endo bundle` errors
+- [ ] **Phase 6 — `@node` special name.**  Implement the host-only
+  special; filter it out of guest pet-sitters; update the XS worker's
+  `makeUnconfined` error message to point at `@node`; adjust CLI
+  `endo make --UNCONFINED` to default `workerName = '@node'`.
+- [ ] **Phase 7 — `makeCaplet(treeName, …)` from a readable tree.**
+  New host/guest method, new `MakeCapletFormula` (or reuse
+  `MakeArchiveFormula` with a tree-ref variant), dispatcher case,
+  tree-walk adapter on the Node worker side, CAS-tree adapter on the
+  XS worker side.
+- [ ] `endo archive` behaviour when the project tree contains a
+  `package.json` without a `main` entry (today `endo bundle` errors
   with a compartment-mapper message; we should mirror that).
-- [ ] Consider whether `makeArchive` should accept a CAS root-hash
-  reference *directly* (skipping the readable-blob wrapper) for Rust
-  workers, to avoid one round-trip through the daemon.  Current design
-  punts: the daemon hands a `readable-blob` ref and the Rust worker
-  resolves it locally.
+- [ ] Whether `makeArchive` should accept a CAS root-hash reference
+  *directly* (skipping the readable-blob wrapper) for Rust workers,
+  to avoid one round-trip through the daemon.  Subsumed by Phase 7
+  if `makeCaplet` takes a `readable-tree` by formula id.
+- [ ] XS-side SQLite port of `daemon-database.js`; needed for
+  durability of pet-store/agent-keys/retention on the Rust
+  supervisor path.  Currently shimmed with in-memory maps.
 
 ## Prompt
 
@@ -248,3 +436,26 @@ This plan keeps every milestone individually shippable.
 > it entirely, replacing all the CLI that take -b with -z for
 > non-pre-compiled ZIP archives. Please flesh out the design, implement,
 > and test.
+
+### Follow-on prompt (Phases 6 and 7)
+
+> Regarding makeUnconfined on XS, let's explicitly decide not to
+> implement makeUnconfined on XS and instead ensure that all usage of
+> makeUnconfined uses a Node.js worker explicitly.  This requires us
+> to expose a `@node` special name to host agents (and explicitly
+> exclude this capability in guest agents).  Revise the documented
+> design for this as a high priority next step.
+>
+> That will leave makeArchive as the preferred method for making a
+> capability from a ZIP file, eschewing, deprecating, then
+> eliminating the bundle system.
+>
+> We can then move on to a facility for creating capabilities from
+> modules in arbitrary readable trees, either mount points or
+> snapshots in the content address store, which should work without
+> reservation based on the same systems that support makeUnconfined.
+>
+> That would just leave a hole for making unconfined capabilities on
+> Node.js.  We would, in time, hope our ecosystem grows to have
+> feature parity without the legacy Node.js platform, but will need
+> to keep a bridge open.
