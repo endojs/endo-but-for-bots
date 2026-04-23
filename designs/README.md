@@ -50,7 +50,7 @@
 | [daemon-cas-management](daemon-cas-management.md) | 2026-04-17 | 2026-04-17 | In Progress |
 | [endor-run-expanded](endor-run-expanded.md) | 2026-04-17 | 2026-04-17 | In Progress |
 | [endor-npm-registry-proxy](endor-npm-registry-proxy.md) | 2026-04-17 | 2026-04-17 | In Progress |
-| [daemon-make-archive](daemon-make-archive.md) | 2026-04-23 | 2026-04-23 | In Progress |
+| [daemon-make-archive](daemon-make-archive.md) | 2026-04-23 | 2026-04-23 | **Complete** |
 | [daemon-form-request](daemon-form-request.md) | 2026-02-25 | 2026-03-02 | **Complete** |
 | [endoclaw](endoclaw.md) | 2026-03-03 | 2026-03-03 | Reference |
 | [endoclaw-browser](endoclaw-browser.md) | 2026-03-03 | 2026-03-03 | Not Started |
@@ -91,7 +91,7 @@
 | [weblet-next](weblet-next.md) | 2026-03-24 | 2026-03-24 | Reference |
 | [workers-panel](workers-panel.md) | 2026-02-14 | 2026-02-24 | Not Started |
 
-**Totals:** 21 Complete/Implemented, 6 In Progress, 38 Not Started, 2 Proposed, 3 Active, 1 Reference, 1 Deprecated
+**Totals:** 22 Complete/Implemented, 5 In Progress, 38 Not Started, 2 Proposed, 3 Active, 1 Reference, 1 Deprecated
 
 ## Roadmap
 

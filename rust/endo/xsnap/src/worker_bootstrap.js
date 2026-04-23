@@ -18897,9 +18897,6 @@ const workerFacet = makeExo(
       M.string(),
       M.promise(),
     ).returns(M.promise()),
-    makeBundle: M.call(M.any(), M.any(), M.any(), M.any()).returns(
-      M.promise(),
-    ),
     makeArchive: M.call(M.any(), M.any(), M.any(), M.any()).returns(
       M.promise(),
     ),
@@ -18947,17 +18944,6 @@ const workerFacet = makeExo(
         }
       }
       return compartment.evaluate(source);
-    },
-
-    /**
-     * @param {unknown} _readableP
-     * @param {unknown} _powersP
-     * @param {unknown} _contextP
-     * @param {Record<string, string>} _env
-     * @returns {Promise<unknown>}
-     */
-    makeBundle: async (_readableP, _powersP, _contextP, _env) => {
-      throw new Error('makeBundle not yet implemented in XS worker');
     },
 
     /**

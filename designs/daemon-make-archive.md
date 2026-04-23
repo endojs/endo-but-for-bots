@@ -3,8 +3,9 @@
 | | |
 |---|---|
 | **Created** | 2026-04-23 |
+| **Updated** | 2026-04-23 |
 | **Author** | Kris Kowal (prompted) |
-| **Status** | In Progress |
+| **Status** | **Complete** |
 
 ## What is the Problem Being Solved?
 
@@ -56,11 +57,24 @@ We want to replace `makeBundle` with `makeArchive`, which:
   `-b`/`--bundle` options on `run`/`make`, `commands/bundle.js`, and
   `@endo/bundle-source` + `@endo/import-bundle` dependencies), and
   from the daemon test suite (`doMakeBundle`, `bundleSource` import).
-- [ ] **Phase 4 — Worker (Rust)**: still pending.  The Node worker
-  satisfies `make-archive` via `parseArchive`; the Rust supervisor
-  needs a corresponding handler that resolves the readable blob to
-  a CAS root hash and calls `load_archive_from_cas` /
-  `run_xs_archive_loaded`.
+- [x] **Phase 4 — Worker (Rust / XS)**: the XS worker bootstrap
+  (`rust/endo/xsnap/src/worker_bootstrap.js`) already implements
+  `makeArchive` end-to-end: it streams the archive bytes via
+  `streamBase64`, decodes and assembles them, then calls the Rust
+  host function `hostImportArchive` (defined at
+  `rust/endo/xsnap/src/worker_io.rs:508`) which parses the ZIP via
+  `archive::load_archive` and installs the entry compartment via
+  `archive::install_archive`.  The worker then captures the entry
+  namespace and runs `make(powers, context, { env })`.
+
+  The dead `makeBundle` stub was removed from
+  `worker_bootstrap.js` alongside the Phase 5 daemon-side removal.
+
+  *Open optimisation:* the worker currently streams the archive
+  through CapTP; for archives already in the CAS we could skip the
+  stream and have the Rust worker fetch the SHA-256 directly from
+  `cas_archive::load_archive_from_cas`.  Tracked as a follow-up; not
+  required for correctness.
 
 ## Design
 
