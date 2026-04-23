@@ -198,6 +198,93 @@ const runBenchmarks = async (variant, config, cancelled) => {
     );
   }
 
+  // ---- inter-worker ping (CapTP round-trip, A -> daemon -> B -> daemon -> A) ----
+  //
+  // This measures the hot path that slot-machine targets: a capability
+  // reference held by worker A, invoking a method on an object owned
+  // by worker B, with a one-value return.  The eval in A runs a loop
+  // of N calls to amortize the cost of invoking E(host).evaluate
+  // across N worker-to-worker hops.
+  {
+    const iwA = 'bench-iw-a';
+    const iwB = 'bench-iw-b';
+    await E(host).provideWorker(iwA);
+    await E(host).provideWorker(iwB);
+
+    // Export a Remotable in worker B under the name "iw-target".
+    await E(host).evaluate(
+      iwB,
+      `Far('iwTarget', { ping: () => 1, echo: (x) => x })`,
+      [],
+      [],
+      'iw-target',
+    );
+
+    const innerIterations = 200;
+
+    // Loop runs inside worker-A and makes N calls into worker-B over
+    // CapTP.  We don't use Date.now() inside the loop because it's
+    // blocked in Node SES workers — instead we timestamp externally
+    // around the evaluate() invocation.  The per-call cost includes a
+    // small constant overhead (the outer evaluate hop) which washes
+    // out when comparing with/without slot-machine on the same path.
+    const tightLoop = `(async () => {
+      for (let i = 0; i < ${innerIterations}; i += 1) {
+        await E(target).ping();
+      }
+      return ${innerIterations};
+    })()`;
+
+    // Warm-up (primes CapTP slot tables on both ends).
+    await E(host).evaluate(iwA, tightLoop, ['target'], ['iw-target']);
+    const t0 = performance.now();
+    await E(host).evaluate(iwA, tightLoop, ['target'], ['iw-target']);
+    const totalMs = performance.now() - t0;
+    results.push({
+      label: 'worker_to_worker_ping',
+      totalMs,
+      avgMs: totalMs / innerIterations,
+      iterations: innerIterations,
+    });
+  }
+
+  // ---- inter-worker echo with a 1 KiB payload ----
+  {
+    const iwA = 'bench-iw-echo-a';
+    const iwB = 'bench-iw-echo-b';
+    await E(host).provideWorker(iwA);
+    await E(host).provideWorker(iwB);
+    await E(host).evaluate(
+      iwB,
+      `Far('iwEcho', { echo: (x) => x })`,
+      [],
+      [],
+      'iw-echo-target',
+    );
+
+    const payloadSize = 1024;
+    const innerIterations = 100;
+    const echoLoop = `(async () => {
+      const payload = 'x'.repeat(${payloadSize});
+      for (let i = 0; i < ${innerIterations}; i += 1) {
+        await E(target).echo(payload);
+      }
+      return ${innerIterations};
+    })()`;
+
+    // Warm-up.
+    await E(host).evaluate(iwA, echoLoop, ['target'], ['iw-echo-target']);
+    const t0 = performance.now();
+    await E(host).evaluate(iwA, echoLoop, ['target'], ['iw-echo-target']);
+    const totalMs = performance.now() - t0;
+    results.push({
+      label: 'worker_to_worker_echo_1kib',
+      totalMs,
+      avgMs: totalMs / innerIterations,
+      iterations: innerIterations,
+    });
+  }
+
   // ---- cancel + re-provision (Node.js equivalent of suspend/resume) ----
   {
     let recycleIdx = 0;

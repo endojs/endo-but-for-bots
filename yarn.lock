@@ -2374,6 +2374,26 @@ __metadata:
   languageName: unknown
   linkType: soft
 
+"@endo/slots@workspace:packages/slots":
+  version: 0.0.0-use.local
+  resolution: "@endo/slots@workspace:packages/slots"
+  dependencies:
+    "@endo/errors": "workspace:^"
+    "@endo/eventual-send": "workspace:^"
+    "@endo/harden": "workspace:^"
+    "@endo/init": "workspace:^"
+    "@endo/lockdown": "workspace:^"
+    "@endo/promise-kit": "workspace:^"
+    "@endo/ses-ava": "workspace:^"
+    "@noble/hashes": "npm:^1.8.0"
+    ava: "catalog:dev"
+    c8: "catalog:dev"
+    eslint: "catalog:dev"
+    ses: "workspace:^"
+    typescript: "npm:~5.9.2"
+  languageName: unknown
+  linkType: soft
+
 "@endo/stream-node@workspace:^, @endo/stream-node@workspace:packages/stream-node":
   version: 0.0.0-use.local
   resolution: "@endo/stream-node@workspace:packages/stream-node"
