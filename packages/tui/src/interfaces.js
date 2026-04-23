@@ -75,10 +75,7 @@ export const WindowInterface = M.interface('TuiWindow', {
     )
     .returns(M.promise()),
   configure: M.call(
-    M.splitRecord(
-      {},
-      { title: M.string(), layoutHint: LayoutHintShape },
-    ),
+    M.splitRecord({}, { title: M.string(), layoutHint: LayoutHintShape }),
   ).returns(M.promise()),
   close: M.call().returns(M.promise()),
   whenRevoked: M.call().returns(M.promise()),
@@ -96,9 +93,7 @@ export const RegionInterface = M.interface('TuiRegion', {
   appendLines: M.call(M.arrayOf(M.arrayOf(StyledRunShape))).returns(
     M.promise(),
   ),
-  editLine: M.call(M.number(), M.arrayOf(StyledRunShape)).returns(
-    M.promise(),
-  ),
+  editLine: M.call(M.number(), M.arrayOf(StyledRunShape)).returns(M.promise()),
   scrollTo: M.call(M.number(), M.string()).returns(M.promise()),
   // canvas role
   drawCells: M.call(
