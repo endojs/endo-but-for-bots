@@ -1,4 +1,3 @@
 [submodule "c/moddable"]
 	path = c/moddable
-	url = https://github.com/Moddable-OpenSource/moddable.git
-	branch = public
+	url = https://github.com/moddable-opensource/moddable

@@ -1,0 +1,16 @@
+[package]
+name = "slots"
+version = "0.1.0"
+edition = "2021"
+description = "Endo slot-machine: per-session c-list tables with a unified kref registry, durable via SQLite."
+
+[dependencies]
+ciborium = "0.2"
+ciborium-io = "0.2"
+hex = "0.4"
+rusqlite = { version = "0.31", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+sha2 = "0.10"
+
+[dev-dependencies]
+tempfile = "3"

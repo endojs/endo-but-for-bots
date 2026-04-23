@@ -4,8 +4,14 @@ use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
 use tokio::task::JoinHandle;
 
+use slots::{SessionId, SlotMachine};
+
 use crate::mailbox::{self, Mailbox, MailboxReceiver};
 use crate::types::{Handle, MeterMode, MeterState, Message, RateLimit, WorkerInfo};
+
+fn session_for_handle(handle: Handle) -> SessionId {
+    SessionId::from_label(&format!("worker-{handle}"))
+}
 
 /// State for a suspended worker.
 ///
@@ -36,6 +42,10 @@ pub struct Supervisor {
     outbox: Mutex<Option<Mailbox>>,
     next_handle: AtomicI64,
     done: Mutex<Option<JoinHandle<()>>>,
+    /// Optional slot-machine.  Present when the daemon has wired one
+    /// in at boot; absent for supervisors used in isolation (unit
+    /// tests, tools that don't care about capability translation).
+    slot_machine: OnceLock<Arc<SlotMachine>>,
 }
 
 impl Supervisor {
@@ -53,8 +63,20 @@ impl Supervisor {
             outbox: Mutex::new(Some(outbox_tx)),
             next_handle: AtomicI64::new(1),
             done: Mutex::new(None),
+            slot_machine: OnceLock::new(),
         });
         (sup, outbox_rx)
+    }
+
+    /// Install a slot machine.  Can only be called once per supervisor.
+    /// Subsequent `register` / `unregister` calls will open / close the
+    /// corresponding slot-machine session.
+    pub fn attach_slot_machine(&self, sm: Arc<SlotMachine>) {
+        let _ = self.slot_machine.set(sm);
+    }
+
+    pub fn slot_machine(&self) -> Option<&Arc<SlotMachine>> {
+        self.slot_machine.get()
     }
 
     pub fn alloc_handle(&self) -> Handle {
@@ -64,8 +86,20 @@ impl Supervisor {
     pub fn register(&self, h: Handle, info: Option<WorkerInfo>) -> MailboxReceiver {
         let (tx, rx) = mailbox::mailbox();
         self.inboxes.write().unwrap_or_else(|e| e.into_inner()).insert(h, tx);
-        if let Some(info) = info {
-            self.workers.write().unwrap_or_else(|e| e.into_inner()).insert(h, info);
+        if let Some(ref info) = info {
+            self.workers
+                .write()
+                .unwrap_or_else(|e| e.into_inner())
+                .insert(h, info.clone());
+        }
+        if let Some(sm) = self.slot_machine.get() {
+            let label = info
+                .as_ref()
+                .map(|i| i.cmd.clone())
+                .unwrap_or_else(|| format!("worker-{h}"));
+            // Slot-machine's open_session is idempotent, so re-registering
+            // a handle (e.g., after resume) keeps the c-list intact.
+            let _ = sm.open_session(session_for_handle(h), &label);
         }
         rx
     }
@@ -75,6 +109,9 @@ impl Supervisor {
         self.workers.write().unwrap_or_else(|e| e.into_inner()).remove(&h);
         self.parents.write().unwrap_or_else(|e| e.into_inner()).remove(&h);
         self.meters.write().unwrap_or_else(|e| e.into_inner()).remove(&h);
+        if let Some(sm) = self.slot_machine.get() {
+            let _ = sm.close_session(session_for_handle(h));
+        }
     }
 
     pub fn set_parent(&self, child: Handle, parent: Handle) {
@@ -305,7 +342,7 @@ pub fn start_routing(
     *sup.done.lock().unwrap_or_else(|e| e.into_inner()) = Some(handle);
 }
 
-fn route_message(sup: &Arc<Supervisor>, msg: Message, callbacks: &RoutingCallbacks) {
+fn route_message(sup: &Arc<Supervisor>, mut msg: Message, callbacks: &RoutingCallbacks) {
     if is_debug() {
         eprintln!(
             "endor: route from={} to={} verb={} nonce={}",
@@ -315,6 +352,44 @@ fn route_message(sup: &Arc<Supervisor>, msg: Message, callbacks: &RoutingCallbac
     if msg.to == 0 {
         (callbacks.on_control)(msg);
         return;
+    }
+
+    // Slot-machine splice: for capability-bearing verbs, translate
+    // descriptors in the payload through the kref registry before
+    // forwarding.  Failure modes (decode error, missing session) fall
+    // through to pass-the-bytes routing, so legacy CapTP-style
+    // payloads keep working while slot-machine is the path of choice.
+    if let Some(sm) = sup.slot_machine() {
+        if slots::wire::is_slot_verb(&msg.envelope.verb) && msg.from != 0 && msg.to != 0 {
+            let from = session_for_handle(msg.from);
+            let to = session_for_handle(msg.to);
+            match msg.envelope.verb.as_str() {
+                slots::wire::VERB_DELIVER => {
+                    if let Ok(out) =
+                        slots::wire::translate::translate_deliver(sm, from, to, &msg.envelope.payload)
+                    {
+                        msg.envelope.payload = out;
+                    }
+                }
+                slots::wire::VERB_RESOLVE => {
+                    if let Ok(out) =
+                        slots::wire::translate::translate_resolve(sm, from, to, &msg.envelope.payload)
+                    {
+                        msg.envelope.payload = out;
+                    }
+                }
+                slots::wire::VERB_DROP => {
+                    let _ = slots::wire::translate::absorb_drop(sm, from, &msg.envelope.payload);
+                    // drop never forwards — the supervisor's work is done.
+                    return;
+                }
+                slots::wire::VERB_ABORT => {
+                    let _ = sm.close_session(from);
+                    // Abort still forwards so the destination can notice.
+                }
+                _ => {}
+            }
+        }
     }
 
     // Check if the target is suspended — if so, trigger resume.
