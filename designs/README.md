@@ -75,10 +75,11 @@
 | [ocapn-noise-network](ocapn-noise-network.md) | 2026-02-14 | 2026-02-24 | Not Started |
 | [ocapn-tcp-for-test-extraction](ocapn-tcp-for-test-extraction.md) | 2026-02-14 | 2026-02-24 | Not Started |
 | [outliner-design-doc](outliner-design-doc.md) | 2026-03-17 | 2026-03-18 | In Progress |
+| [endor-bus-tui](endor-bus-tui.md) | 2026-04-23 | 2026-04-23 | Not Started |
 | [weblet-next](weblet-next.md) | 2026-03-24 | 2026-03-24 | Reference |
 | [workers-panel](workers-panel.md) | 2026-02-14 | 2026-02-24 | Not Started |
 
-**Totals:** 21 Complete/Implemented, 5 In Progress, 38 Not Started, 2 Proposed, 1 Active, 1 Reference, 1 Deprecated
+**Totals:** 21 Complete/Implemented, 5 In Progress, 39 Not Started, 2 Proposed, 1 Active, 1 Reference, 1 Deprecated
 
 ## Roadmap
 
@@ -362,6 +363,25 @@ Agents reachable from external messaging platforms via channel bridges.
 
 ---
 
+#### Milestone 6: Rust Daemon (`endor`)
+
+**Goal:** Begin the Rust re-implementation of the Endo daemon, targeting
+a terminal-first experience.
+
+| Design | Status | Notes |
+|--------|--------|-------|
+| endor-bus-tui | Not Started | Bus-protocol verbs for worker-owned TUI regions, XS handle API, Exo/CapTP wrapper |
+
+**Exit criterion:** An XS worker can reserve a window on the `endor`-owned
+terminal, render content into a region, and receive keyboard and resize
+events through three layers: bus verbs, a worker-local handle API, and
+an Exo-based CapTP wrapper for cross-agent delegation.
+
+**Estimated duration (1 dev):** 3-5 weeks (research-heavy; bus-verb
+spec, XS handle API, Exo/CapTP wrapper; cross-worker layout composition)
+
+---
+
 ### Size and Time Estimates
 
 #### Estimation Methodology
@@ -459,6 +479,7 @@ Recalibrated on 2026-03-02 using observed velocity from 15 active work days
 | endoclaw-browser | M-L | 1-1.5 weeks | 5 | Playwright-backed, origin-confined |
 | endoclaw-channel-bridges | M | 3-4 days | 5 | Vercel `chat` SDK adapters |
 | endoclaw-skill-registry | S-M | 2-3 days | 5 | Skills directory with capability declarations |
+| endor-bus-tui | XL | 3-5 weeks | 6 | Bus-verb spec, XS handle API, Exo/CapTP wrapper; cross-worker layout composition |
 
 #### Summary by Milestone
 

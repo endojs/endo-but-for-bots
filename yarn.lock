@@ -2443,6 +2443,29 @@ __metadata:
   languageName: unknown
   linkType: soft
 
+"@endo/tui-xs@workspace:^, @endo/tui-xs@workspace:packages/tui-xs":
+  version: 0.0.0-use.local
+  resolution: "@endo/tui-xs@workspace:packages/tui-xs"
+  dependencies:
+    "@endo/harden": "workspace:^"
+    eslint: "catalog:dev"
+    typescript: "npm:~5.9.2"
+  languageName: unknown
+  linkType: soft
+
+"@endo/tui@workspace:packages/tui":
+  version: 0.0.0-use.local
+  resolution: "@endo/tui@workspace:packages/tui"
+  dependencies:
+    "@endo/exo": "workspace:^"
+    "@endo/harden": "workspace:^"
+    "@endo/patterns": "workspace:^"
+    "@endo/tui-xs": "workspace:^"
+    eslint: "catalog:dev"
+    typescript: "npm:~5.9.2"
+  languageName: unknown
+  linkType: soft
+
 "@endo/where@workspace:^, @endo/where@workspace:packages/where":
   version: 0.0.0-use.local
   resolution: "@endo/where@workspace:packages/where"
