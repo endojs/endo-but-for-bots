@@ -27,6 +27,7 @@ export const run = async ({
   filePath,
   args,
   bundleName,
+  archiveName,
   importPath,
   powersName,
   agentNames,
@@ -35,9 +36,17 @@ export const run = async ({
   if (
     filePath === undefined &&
     importPath === undefined &&
-    bundleName === undefined
+    bundleName === undefined &&
+    archiveName === undefined
   ) {
-    console.error('Specify at least one of --file, --bundle, or --UNCONFINED');
+    console.error(
+      'Specify at least one of --file, --archive, --bundle, or --UNCONFINED',
+    );
+    process.exitCode = 1;
+    return;
+  }
+  if (bundleName !== undefined && archiveName !== undefined) {
+    console.error('Specify either --bundle or --archive, not both');
     process.exitCode = 1;
     return;
   }
@@ -69,9 +78,9 @@ export const run = async ({
       }
 
       if (importPath !== undefined) {
-        if (bundleName !== undefined) {
+        if (bundleName !== undefined || archiveName !== undefined) {
           console.error(
-            'Must specify either --bundle or --UNCONFINED, not both',
+            'Must specify either --archive/--bundle or --UNCONFINED, not both',
           );
           process.exitCode = 1;
           return;
@@ -83,6 +92,50 @@ export const run = async ({
         const importUrl = url.pathToFileURL(importPath).href;
         const namespace = await import(importUrl);
         const result = await namespace.main(powersP, ...args);
+        if (result !== undefined) {
+          console.log(result);
+        }
+      } else if (archiveName !== undefined) {
+        if (filePath !== undefined) {
+          args.unshift(filePath);
+        }
+        // Stream the archive bytes from the daemon.
+        const archiveNamePath = parsePetNamePath(archiveName);
+        const readableP = E(agent).lookup(archiveNamePath);
+        const { makeRefReader } = await import(
+          '@endo/daemon/src/ref-reader.js'
+        );
+        /** @type {Uint8Array[]} */
+        const chunks = [];
+        let total = 0;
+        for await (const chunk of makeRefReader(
+          await E(readableP).streamBase64(),
+        )) {
+          chunks.push(chunk);
+          total += chunk.byteLength;
+        }
+        const archiveBytes = new Uint8Array(total);
+        let offset = 0;
+        for (const chunk of chunks) {
+          archiveBytes.set(chunk, offset);
+          offset += chunk.byteLength;
+        }
+
+        const [{ parseArchive }, { defaultParserForLanguage }] =
+          await Promise.all([
+            import('@endo/compartment-mapper'),
+            import('@endo/compartment-mapper/import-archive-all-parsers.js'),
+          ]);
+        const application = await parseArchive(archiveBytes, '<archive>', {
+          parserForLanguage: defaultParserForLanguage,
+        });
+        const { namespace } = await application.import({
+          globals: endowments,
+        });
+        const result = await /** @type {{main: Function}} */ (namespace).main(
+          powersP,
+          ...args,
+        );
         if (result !== undefined) {
           console.log(result);
         }

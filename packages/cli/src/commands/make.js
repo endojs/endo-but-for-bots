@@ -18,6 +18,7 @@ export const makeCommand = async ({
   importPath,
   resultName,
   bundleName,
+  archiveName,
   workerName,
   agentNames,
   powersName,
@@ -29,13 +30,19 @@ export const makeCommand = async ({
     process.exitCode = 1;
     return;
   }
+  if (bundleName !== undefined && archiveName !== undefined) {
+    console.error('Specify only one of --bundle or --archive');
+    process.exitCode = 1;
+    return;
+  }
   if (
     filePath === undefined &&
     importPath === undefined &&
-    bundleName === undefined
+    bundleName === undefined &&
+    archiveName === undefined
   ) {
     console.error(
-      'Specify at least one of [file], --bundle <file>, or --UNCONFINED <file>',
+      'Specify at least one of [file], --archive <name>, --bundle <name>, or --UNCONFINED <file>',
     );
     process.exitCode = 1;
     return;
@@ -68,18 +75,26 @@ export const makeCommand = async ({
       await E(agent).storeBlob(bundleReaderRef, bundleName);
     }
 
-    const resultP =
-      importPath !== undefined
-        ? E(agent).makeUnconfined(
-            workerName,
-            url.pathToFileURL(path.resolve(importPath)).href,
-            { powersName, resultName: resultPath, env },
-          )
-        : E(agent).makeBundle(workerName, bundleName, {
-            powersName,
-            resultName: resultPath,
-            env,
-          });
+    let resultP;
+    if (importPath !== undefined) {
+      resultP = E(agent).makeUnconfined(
+        workerName,
+        url.pathToFileURL(path.resolve(importPath)).href,
+        { powersName, resultName: resultPath, env },
+      );
+    } else if (archiveName !== undefined) {
+      resultP = E(agent).makeArchive(workerName, archiveName, {
+        powersName,
+        resultName: resultPath,
+        env,
+      });
+    } else {
+      resultP = E(agent).makeBundle(workerName, bundleName, {
+        powersName,
+        resultName: resultPath,
+        env,
+      });
+    }
     let result;
     try {
       result = await resultP;
