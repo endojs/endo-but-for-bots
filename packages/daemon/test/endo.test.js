@@ -1111,13 +1111,9 @@ test('editMessage replaces payload and preserves history', async t => {
   t.is(editHost1.number, initialHost.number);
   t.is(editHost1.messageId, initialHost.messageId);
 
-  await E(guest).editMessage(
-    initialGuest.number,
-    ['Final answer.'],
-    [],
-    [],
-    { done: true },
-  );
+  await E(guest).editMessage(initialGuest.number, ['Final answer.'], [], [], {
+    done: true,
+  });
   const [{ value: editHost2 }, { value: editGuest2 }] = await Promise.all([
     E(hostMessages).next(),
     E(guestMessages).next(),
@@ -1180,13 +1176,9 @@ test('editMessage accepts edits after done and records them', async t => {
     E(hostMessages).next(),
   ]);
 
-  await E(guest).editMessage(
-    initialGuest.number,
-    ['corrected'],
-    [],
-    [],
-    { done: true },
-  );
+  await E(guest).editMessage(initialGuest.number, ['corrected'], [], [], {
+    done: true,
+  });
   const [{ value: editGuest }, { value: editHost }] = await Promise.all([
     E(guestMessages).next(),
     E(hostMessages).next(),

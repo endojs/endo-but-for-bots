@@ -728,8 +728,8 @@ export const makeMailboxMaker = ({
         const messageNumber = nextMessageNumber;
         const date = new Date().toISOString();
         const done =
-          /** @type {EnvelopedMessage & { done?: boolean }} */ (envelope).done ??
-          true;
+          /** @type {EnvelopedMessage & { done?: boolean }} */ (envelope)
+            .done ?? true;
         const formula = makeMessageFormula(envelope, date);
         await persistMessage(messageNumber, formula);
 
@@ -1498,9 +1498,7 @@ export const makeMailboxMaker = ({
         senderId,
       );
       if (messageNumber === undefined) {
-        throw new Error(
-          `No message with id ${q(edit.messageId)} from sender`,
-        );
+        throw new Error(`No message with id ${q(edit.messageId)} from sender`);
       }
       await applyEdit(messageNumber, edit);
     };
@@ -1589,10 +1587,7 @@ export const makeMailboxMaker = ({
         );
         const editParcel = makeEnvelope();
         editOutbox.set(editParcel, editEnvelope);
-        await E(/** @type {any} */ (recipient)).receiveEdit(
-          editParcel,
-          selfId,
-        );
+        await E(/** @type {any} */ (recipient)).receiveEdit(editParcel, selfId);
       }
     };
 
