@@ -843,11 +843,13 @@
       makeFormulaGraph: cell("makeFormulaGraph"),
     },
     {
+      makeRetentionAccumulator: cell("makeRetentionAccumulator"),
+    },
+    {
       makeResidenceTracker: cell("makeResidenceTracker"),
     },
     {
       makeLocalStoreController: cell("makeLocalStoreController"),
-      makeSyncedStoreController: cell("makeSyncedStoreController"),
     },
     {
       makeMultimap: cell("makeMultimap"),
@@ -865,12 +867,6 @@
     },
     {
       makeDaemonicPersistencePowers: cell("makeDaemonicPersistencePowers"),
-    },
-    {
-      SyncedPetStoreInterface: cell("SyncedPetStoreInterface"),
-      mergeEntry: cell("mergeEntry"),
-      mergeState: cell("mergeState"),
-      makeSyncedPetStore: cell("makeSyncedPetStore"),
     },
     {
       makePetStoreMaker: cell("makePetStoreMaker"),
@@ -906,6 +902,14 @@
     {
       makeXsFilePowers: cell("makeXsFilePowers"),
       makeXsCryptoPowers: cell("makeXsCryptoPowers"),
+      makeXsSqlitePowers: cell("makeXsSqlitePowers"),
+    },
+    {
+      makeDebugSession: cell("makeDebugSession"),
+    },
+    {
+      DebuggerInterface: cell("DebuggerInterface"),
+      makeDebugger: cell("makeDebugger"),
     },
     {
     },
@@ -2937,32 +2941,42 @@ function observeImports(map, importName, importIndex) {
   functors[119]({
     imports(entries) {
       const map = new Map(entries);
-      observeImports(map, "@endo/captp", 53);
-      observeImports(map, "@endo/errors", 9);
+      observeImports(map, "@endo/harden", 3);
+      observeImports(map, "./pubsub.js", 108);
     },
     liveVar: {
     },
     onceVar: {
-      makeResidenceTracker: cells[119].makeResidenceTracker.set,
+      makeRetentionAccumulator: cells[119].makeRetentionAccumulator.set,
     },
     importMeta: {},
   });
   functors[120]({
     imports(entries) {
       const map = new Map(entries);
-      observeImports(map, "@endo/harden", 3);
-      observeImports(map, "./formula-identifier.js", 100);
-      observeImports(map, "./locator.js", 102);
+      observeImports(map, "@endo/captp", 53);
+      observeImports(map, "@endo/errors", 9);
     },
     liveVar: {
     },
     onceVar: {
-      makeLocalStoreController: cells[120].makeLocalStoreController.set,
-      makeSyncedStoreController: cells[120].makeSyncedStoreController.set,
+      makeResidenceTracker: cells[120].makeResidenceTracker.set,
     },
     importMeta: {},
   });
   functors[121]({
+    imports(entries) {
+      const map = new Map(entries);
+      observeImports(map, "@endo/harden", 3);
+    },
+    liveVar: {
+    },
+    onceVar: {
+      makeLocalStoreController: cells[121].makeLocalStoreController.set,
+    },
+    importMeta: {},
+  });
+  functors[122]({
     imports(entries) {
       const map = new Map(entries);
       observeImports(map, "@endo/errors", 9);
@@ -2970,13 +2984,13 @@ function observeImports(map, importName, importIndex) {
     liveVar: {
     },
     onceVar: {
-      makeMultimap: cells[121].makeMultimap.set,
-      makeWeakMultimap: cells[121].makeWeakMultimap.set,
-      makeBidirectionalMultimap: cells[121].makeBidirectionalMultimap.set,
+      makeMultimap: cells[122].makeMultimap.set,
+      makeWeakMultimap: cells[122].makeWeakMultimap.set,
+      makeBidirectionalMultimap: cells[122].makeBidirectionalMultimap.set,
     },
     importMeta: {},
   });
-  functors[122]({
+  functors[123]({
     imports(entries) {
       const map = new Map(entries);
       observeImports(map, "@endo/far", 55);
@@ -2984,11 +2998,11 @@ function observeImports(map, importName, importIndex) {
     liveVar: {
     },
     onceVar: {
-      makeLoopbackNetwork: cells[122].makeLoopbackNetwork.set,
+      makeLoopbackNetwork: cells[123].makeLoopbackNetwork.set,
     },
     importMeta: {},
   });
-  functors[123]({
+  functors[124]({
     imports(entries) {
       const map = new Map(entries);
       observeImports(map, "@endo/errors", 9);
@@ -3000,11 +3014,11 @@ function observeImports(map, importName, importIndex) {
     liveVar: {
     },
     onceVar: {
-      makeMount: cells[123].makeMount.set,
+      makeMount: cells[124].makeMount.set,
     },
     importMeta: {},
   });
-  functors[124]({
+  functors[125]({
     imports(entries) {
       const map = new Map(entries);
       observeImports(map, "@endo/harden", 3);
@@ -3028,25 +3042,27 @@ function observeImports(map, importName, importIndex) {
       observeImports(map, "./context.js", 117);
       observeImports(map, "./formula-identifier.js", 100);
       observeImports(map, "./graph.js", 118);
-      observeImports(map, "./residence.js", 119);
+      observeImports(map, "./pubsub.js", 108);
+      observeImports(map, "./retention-accumulator.js", 119);
+      observeImports(map, "./residence.js", 120);
       observeImports(map, "./hex.js", 114);
       observeImports(map, "./serial-jobs.js", 109);
-      observeImports(map, "./store-controller.js", 120);
-      observeImports(map, "./multimap.js", 121);
-      observeImports(map, "./networks/loopback.js", 122);
+      observeImports(map, "./store-controller.js", 121);
+      observeImports(map, "./multimap.js", 122);
+      observeImports(map, "./networks/loopback.js", 123);
       observeImports(map, "./formula-type.js", 101);
       observeImports(map, "./help-text.js", 106);
-      observeImports(map, "./mount.js", 123);
+      observeImports(map, "./mount.js", 124);
       observeImports(map, "./interfaces.js", 98);
     },
     liveVar: {
     },
     onceVar: {
-      makeDaemon: cells[124].makeDaemon.set,
+      makeDaemon: cells[125].makeDaemon.set,
     },
     importMeta: {},
   });
-  functors[125]({
+  functors[126]({
     imports(entries) {
       const map = new Map(entries);
       observeImports(map, "@endo/harden", 3);
@@ -3058,29 +3074,7 @@ function observeImports(map, importName, importIndex) {
     liveVar: {
     },
     onceVar: {
-      makeDaemonicPersistencePowers: cells[125].makeDaemonicPersistencePowers.set,
-    },
-    importMeta: {},
-  });
-  functors[126]({
-    imports(entries) {
-      const map = new Map(entries);
-      observeImports(map, "@endo/harden", 3);
-      observeImports(map, "@endo/exo", 79);
-      observeImports(map, "@endo/patterns", 73);
-      observeImports(map, "@endo/errors", 9);
-      observeImports(map, "./pubsub.js", 108);
-      observeImports(map, "./pet-name.js", 103);
-      observeImports(map, "./serial-jobs.js", 109);
-      observeImports(map, "./reader-ref.js", 99);
-    },
-    liveVar: {
-    },
-    onceVar: {
-      SyncedPetStoreInterface: cells[126].SyncedPetStoreInterface.set,
-      mergeEntry: cells[126].mergeEntry.set,
-      mergeState: cells[126].mergeState.set,
-      makeSyncedPetStore: cells[126].makeSyncedPetStore.set,
+      makeDaemonicPersistencePowers: cells[126].makeDaemonicPersistencePowers.set,
     },
     importMeta: {},
   });
@@ -3088,11 +3082,9 @@ function observeImports(map, importName, importIndex) {
     imports(entries) {
       const map = new Map(entries);
       observeImports(map, "@endo/harden", 3);
-      observeImports(map, "@endo/errors", 9);
       observeImports(map, "./pubsub.js", 108);
       observeImports(map, "./formula-identifier.js", 100);
-      observeImports(map, "./multimap.js", 121);
-      observeImports(map, "./synced-pet-store.js", 126);
+      observeImports(map, "./multimap.js", 122);
     },
     liveVar: {
     },
@@ -3183,22 +3175,51 @@ function observeImports(map, importName, importIndex) {
     onceVar: {
       makeXsFilePowers: cells[133].makeXsFilePowers.set,
       makeXsCryptoPowers: cells[133].makeXsCryptoPowers.set,
+      makeXsSqlitePowers: cells[133].makeXsSqlitePowers.set,
     },
     importMeta: {},
   });
   functors[134]({
     imports(entries) {
       const map = new Map(entries);
+      observeImports(map, "@endo/promise-kit", 22);
+    },
+    liveVar: {
+    },
+    onceVar: {
+      makeDebugSession: cells[134].makeDebugSession.set,
+    },
+    importMeta: {},
+  });
+  functors[135]({
+    imports(entries) {
+      const map = new Map(entries);
+      observeImports(map, "@endo/exo", 79);
+      observeImports(map, "@endo/patterns", 73);
+    },
+    liveVar: {
+    },
+    onceVar: {
+      DebuggerInterface: cells[135].DebuggerInterface.set,
+      makeDebugger: cells[135].makeDebugger.set,
+    },
+    importMeta: {},
+  });
+  functors[136]({
+    imports(entries) {
+      const map = new Map(entries);
       observeImports(map, "@endo/captp", 53);
       observeImports(map, "@endo/far", 55);
       observeImports(map, "@endo/promise-kit", 22);
       observeImports(map, "@endo/stream", 56);
-      observeImports(map, "./daemon.js", 124);
-      observeImports(map, "./daemon-persistence-powers.js", 125);
+      observeImports(map, "./daemon.js", 125);
+      observeImports(map, "./daemon-persistence-powers.js", 126);
       observeImports(map, "./pet-store.js", 127);
       observeImports(map, "./connection.js", 131);
       observeImports(map, "./envelope.js", 132);
       observeImports(map, "./bus-daemon-rust-xs-powers.js", 133);
+      observeImports(map, "./debug-session.js", 134);
+      observeImports(map, "./debugger.js", 135);
     },
     liveVar: {
     },
@@ -19889,7 +19910,7 @@ const MessageNumberShape = M.bigint();
 // Environment variables as string-to-string record
 const EnvShape = M.recordOf(M.string(), M.string());
 
-// Options for makeUnconfined and makeBundle
+// Options for makeUnconfined and makeArchive
 const MakeCapletOptionsShape = M.splitRecord(
   {},
   {
@@ -20196,8 +20217,8 @@ $h͏_once.DismisserInterface(DismisserInterface);const HandleInterface=M.interfa
   makeUnconfined: M.call(M.or(NameShape, M.undefined()), M.string())
     .optional(MakeCapletOptionsShape)
     .returns(M.promise()),
-  // Make a bundle caplet
-  makeBundle: M.call(M.or(NameShape, M.undefined()), NameShape)
+  // Make a caplet from a source-only ZIP archive
+  makeArchive: M.call(M.or(NameShape, M.undefined()), NameShape)
     .optional(MakeCapletOptionsShape)
     .returns(M.promise()),
   // Create a channel
@@ -20230,10 +20251,6 @@ $h͏_once.DismisserInterface(DismisserInterface);const HandleInterface=M.interfa
   invite: M.call(NameShape).returns(M.promise()),
   // Accept an invitation
   accept: M.call(LocatorShape, NameShape).returns(M.promise()),
-  // Get the synced store for a peer
-  getSyncedStore: M.call(NameShape).returns(M.promise()),
-  // Register a synced store (called internally by daemon accept)
-  registerSyncedStore: M.call(NameShape, IdShape).returns(M.promise()),
   // Reply to a message
   reply: M.call(
     MessageNumberShape,
@@ -20407,9 +20424,10 @@ const PathArgShape = M.or(M.string(), PathSegmentsShape);
       IdShape,
       M.promise(),
     ).returns(M.promise()),
-    // These methods receive promises that get resolved inside the worker
-    // Args: (readableP, powersP, contextP, env)
-    makeBundle: M.call(M.any(), M.any(), M.any(), EnvShape).returns(
+    // Args: (readableP, powersP, contextP, env) — readable is a ZIP
+    // archive of a compartment-map plus source-form modules.  These
+    // methods receive promises that get resolved inside the worker.
+    makeArchive: M.call(M.any(), M.any(), M.any(), EnvShape).returns(
       M.promise(),
     ),
     // Args: (specifier, powersP, contextP, env)
@@ -20628,14 +20646,13 @@ const formulaTypes = new Set([
   'handle',
   'host',
   'invitation',
-  'keypair',
   'known-peers-store',
   'least-authority',
   'lookup',
   'loopback-network',
   'mail-hub',
   'mailbox-store',
-  'make-bundle',
+  'make-archive',
   'make-unconfined',
   'marshal',
   'message',
@@ -20648,7 +20665,6 @@ const formulaTypes = new Set([
   'readable-tree',
   'resolver',
   'scratch-mount',
-  'synced-pet-store',
   'timer',
   'worker',
 ]);
@@ -20821,13 +20837,13 @@ const assertValidLocatorType = allegedType => {
 };
 
 /**
- * Convert an internal formula identifier to a locator for agent consumption.
- * Replaces LOCAL_NODE with the agent's public key.
+ * Convert an internal formula identifier to a locator for agent
+ * consumption. Replaces the internal node with the agent's public key.
  *
  * @param {FormulaIdentifier} id - Internal formula identifier.
  * @param {string} formulaType - The type of the formula.
- * @param {NodeNumber} agentNodeNumber - The agent's public key to use as peer key.
- * @param {string[]} [addresses] - Optional network addresses (connection hints).
+ * @param {NodeNumber} agentNodeNumber - The agent's public key.
+ * @param {string[]} [addresses] - Optional network addresses.
  * @returns {string} A locator string.
  */$h͏_once.addressesFromLocator(addressesFromLocator);
        const externalizeId = (
@@ -20836,28 +20852,24 @@ const assertValidLocatorType = allegedType => {
   agentNodeNumber,
   addresses = [],
 ) => {
-  const { number, node } = parseId(id);
-  const peerKey = node === LOCAL_NODE ? agentNodeNumber : node;
-  const externalId = formatId({ number, node: peerKey });
   if (addresses.length > 0) {
-    return formatLocatorForSharing(externalId, formulaType, addresses);
+    return formatLocatorForSharing(id, formulaType, addresses);
   }
-  return formatLocator(externalId, formulaType);
+  return formatLocator(id, formulaType);
 };
 
 /**
- * Convert a locator from an agent back to an internal formula identifier.
- * The node is preserved as-is (internal IDs use the real node number).
+ * Convert a locator back to an internal formula identifier.
+ * The node is preserved as-is since formula identifiers carry
+ * actual node numbers (no sentinel normalization needed).
  *
- * @param {string} locator - A locator string from an agent.
- * @param {(node: NodeNumber) => boolean} isLocalKey - Predicate that returns true for any known local agent key.
+ * @param {string} locator - A locator string.
  * @returns {{ id: FormulaIdentifier, formulaType: string, addresses: string[] }}
  */$h͏_once.externalizeId(externalizeId);
-       const internalizeLocator = (locator, isLocalKey) => {
+       const internalizeLocator = locator => {
   const { number, node, formulaType } = parseLocator(locator);
   const addresses = addressesFromLocator(locator);
-  const normalizedNode = isLocalKey(node) ? LOCAL_NODE : node;
-  const id = formatId({ number, node: normalizedNode });
+  const id = formatId({ number, node });
   return { id, formulaType, addresses };
 };$h͏_once.internalizeLocator(internalizeLocator);
 })()
@@ -21049,142 +21061,251 @@ const validSpecialNamePattern = /^@[a-z][a-z0-9-]{0,127}$/;
 
 /** @type {Array<[string, Record<string, string>]>} */
        const helpTextEntries = harden([
-  ["EndoDirectory", {
-    "": "EndoDirectory - A naming hub for managing pet names and references.\n\nA directory maps pet names to formula identifiers (internal references).\nPet names are strings like \"my-worker\", \"counter\", or \"index.html\".\nSpecial names are @-prefixed like \"@self\", \"@host\", or \"@agent\".\n\nUse lookup() to get a value by name, list() to see available names,\nand storeIdentifier() or storeLocator() to store new references.",
-    "help": "help(methodName?) -> string\nGet documentation for this interface or a specific method.\n- help() returns an overview of the interface\n- help(\"lookup\") returns documentation for the lookup method",
-    "has": "has(...petNamePath) -> Promise<boolean>\nCheck if a pet name exists in this directory.\n- has(\"counter\") checks if \"counter\" exists\n- has(\"subdir\", \"value\") checks if \"value\" exists in subdirectory \"subdir\"",
-    "identify": "identify(...petNamePath) -> Promise<string | undefined>\nGet the formula identifier for a pet name path.\nReturns undefined if the name doesn't exist.\nFormula identifiers are internal references used by Endo.",
-    "locate": "locate(...petNamePath) -> Promise<string | undefined>\nGet a locator string for a pet name path.\nLocators include the formula type and can be used for reverse lookups.",
-    "reverseLocate": "reverseLocate(locator) -> Promise<string[]>\nFind all pet names that refer to a given locator.\nReturns an array of names (may be empty if no names exist).",
-    "followLocatorNameChanges": "followLocatorNameChanges(locator) -> AsyncIterator\nSubscribe to name changes for a specific locator.\nYields events when names are added or removed for the locator.\nUse with for-await-of to receive updates.",
-    "list": "list(...petNamePath?) -> Promise<string[]>\nList all pet names in this directory or a subdirectory.\n- list() returns names in this directory\n- list(\"subdir\") returns names in the subdirectory \"subdir\"",
-    "listIdentifiers": "listIdentifiers(...petNamePath?) -> Promise<string[]>\nList all unique formula identifiers in this directory.\nMultiple names may refer to the same identifier.",
-    "followNameChanges": "followNameChanges() -> AsyncIterator\nSubscribe to all name changes in this directory.\nFirst yields existing names, then yields diffs as names change.\nUse with for-await-of to receive updates.",
-    "lookup": "lookup(petNameOrPath) -> Promise<any>\nResolve a pet name or path to its value.\n- lookup(\"counter\") gets the value named \"counter\"\n- lookup([\"subdir\", \"value\"]) gets \"value\" from subdirectory \"subdir\"\nThrows if the name doesn't exist.",
-    "reverseLookup": "reverseLookup(value) -> Promise<string[]>\nFind all pet names that refer to a given value.\nUseful for discovering what names exist for an object you have.",
-    "storeIdentifier": "storeIdentifier(petNameOrPath, formulaId) -> Promise<void>\nStore a formula identifier with a pet name.\n- storeIdentifier(\"my-name\", id) stores id as \"my-name\"\n- storeIdentifier([\"subdir\", \"name\"], id) stores in a subdirectory\nOverwrites any existing value at that name.",
-    "storeLocator": "storeLocator(petNameOrPath, locator) -> Promise<void>\nStore an endo:// locator with a pet name.\n- storeLocator(\"my-name\", locator) stores locator as \"my-name\"\n- storeLocator([\"subdir\", \"name\"], locator) stores in a subdirectory\nThe locator must be an endo:// URL. Overwrites any existing value.",
-    "remove": "remove(...petNamePath) -> Promise<void>\nRemove a pet name from this directory.\nThe underlying value is not deleted, just the name mapping.",
-    "move": "move(fromPath, toPath) -> Promise<void>\nMove/rename a reference from one name to another.\n- move([\"old-name\"], [\"new-name\"]) renames within this directory\n- move([\"a\"], [\"subdir\", \"b\"]) moves to a subdirectory\nThe original name is removed after the move.",
-    "copy": "copy(fromPath, toPath) -> Promise<void>\nCopy a reference from one name to another.\nBoth names will refer to the same underlying value.",
-    "makeDirectory": "makeDirectory(petNamePath) -> Promise<EndoDirectory>\nCreate a new subdirectory at the given path.\nReturns the new directory object.",
-    "readText": "readText(petNameOrPath) -> Promise<string>\nRead text content by pet name or path.\nFor a single name, reads the blob's text content.\nFor a multi-segment path, reads through the mount.\nExample: readText([\"my-blob\"])\nExample: readText([\"my-mount\", \"config.json\"])",
-    "maybeReadText": "maybeReadText(petNameOrPath) -> Promise<string | undefined>\nRead text content, returning undefined if not found.\nSame as readText but returns undefined instead of throwing.",
-    "writeText": "writeText(petNameOrPath, content) -> Promise<void>\nWrite text content by pet name or path.\nFor a single name, creates a ReadableBlob and binds the name.\nFor a multi-segment path, writes through the mount.\nExample: writeText([\"my-blob\"], \"hello\")\nExample: writeText([\"my-mount\", \"output.txt\"], \"hello\")",
-  }],
-  ["Mail Operations", {
-    "": "Mail Operations - Send and receive messages between agents.\n\nMessages can be requests (asking for a capability) or packages (sending values).\nEach message has a number, sender, recipient, and content.\n\nUse followMessages() to receive messages, send() to send packages,\nand request() to ask for capabilities.",
-    "handle": "handle() -> Handle\nGet this agent's mailbox handle.\nThe handle is used internally for receiving messages.",
-    "listMessages": "listMessages() -> Promise<Message[]>\nList all messages in the inbox.\nEach message has: number, date, from, to, type, and content.",
-    "followMessages": "followMessages() -> AsyncIterator<Message>\nSubscribe to incoming messages.\nFirst yields existing messages, then yields new ones as they arrive.\nUse with for-await-of:\n  for await (const message of E(guest).followMessages()) { ... }",
-    "resolve": "resolve(messageNumber, petNameOrPath) -> Promise<void>\nRespond to a request message by providing a named value.\n- resolve(0, \"my-counter\") responds to message 0 with the value named \"my-counter\"\nThe requester receives the resolved value.",
-    "reject": "reject(messageNumber, reason?) -> Promise<void>\nDecline a request message.\n- reject(0) declines message 0\n- reject(0, \"Not available\") declines with a reason\nThe requester receives an error.",
-    "adopt": "adopt(messageNumber, edgeName, petName) -> Promise<void>\nAdopt a value from an incoming package message, giving it a pet name.\n- adopt(0, \"gift\", \"my-new-thing\") takes \"gift\" from message 0, names it \"my-new-thing\"\nEdge names are the labels the sender attached to values in the package.",
-    "dismiss": "dismiss(messageNumber) -> Promise<void>\nRemove a message from the inbox.\nUse after you've processed a message.",
-    "dismissAll": "dismissAll() -> Promise<void>\nRemove all messages from the inbox.",
-    "request": "request(recipientName, description, responseName?) -> Promise<any>\nSend a request to another agent asking for a capability.\n- request(\"@host\", \"a counter\") asks @host for \"a counter\"\n- request(\"@host\", \"a counter\", \"my-counter\") also stores the response as \"my-counter\"\nThe recipient sees your request and can resolve or reject it.",
-    "send": "send(recipientName, strings, edgeNames, petNames) -> Promise<void>\nSend a package message with values to another agent.\n- strings: Text fragments that form the message\n- edgeNames: Labels for the values being sent\n- petNames: Names of values to include\n\nExample: send(\"@host\", [\"Here is \", \" for you\"], [\"gift\"], [\"my-counter\"])\n  Sends: \"Here is @gift for you\" where @gift refers to \"my-counter\"",
-    "storeValue": "storeValue(value, petNameOrPath) -> Promise<void>\nStore a passable value in the agent's directory.\nValues must be passable (numbers, strings, arrays, records, etc.).",
-    "sendValue": "sendValue(messageNumber, petNameOrPath) -> Promise<void>\nReply to any message with a retained value from your pet store.\n\n- messageNumber: The inbox message number to reply to\n- petNameOrPath: Pet name (or path) of the value to send\n\nExample: sendValue(0, \"my-counter\")",
-    "deliver": "deliver(message) -> void\nInternal method to deliver a message to this mailbox.\nTypically not called directly by users.",
-  }],
-  ["EndoGuest", {
-    "": "EndoGuest - A confined agent with directory and mail capabilities.\n\nA guest can:\n- Manage pet names for values (directory operations)\n- Send and receive messages (mail operations)\n- Request capabilities from its host\n\nSpecial names available:\n- @self: This guest's own handle\n- @host: The host that created this guest\n- @agent: This guest's formula identifier\n\nUse help(\"methodName\") for details on specific methods.",
-    "help": "help(methodName?) -> string\nGet documentation for this interface or a specific method.\n- help() returns an overview of the guest capabilities\n- help(\"request\") returns documentation for the request method\n- help(\"send\") returns documentation for send method",
-    "reverseIdentify": "reverseIdentify(formulaId) -> string[]\nFind all pet names that refer to a given formula identifier.\nSynchronous version of reverse lookup by identifier.",
-    "define": "define(source, slots) -> Promise<any>\nPropose code with named capability slots for the host to endow.\nThe guest specifies code and named slots with descriptions.\nThe host sees the code and slot descriptions, then decides which capabilities\nto provide for each slot using the endow() command.\n\n- source: JavaScript code to evaluate\n- slots: Record of slot descriptions, e.g. { counter: { label: \"A counter to increment\" } }\n\nThe host reviews the code and slots, then calls endow() to bind capabilities\nand trigger evaluation. This separates code proposal from capability binding.\n\nExample: define(\"E(counter).incr()\", { counter: { label: \"A counter capability\" } })",
-    "form": "form(recipientName, description, fields) -> Promise<void>\nSend a structured form to another agent.\nThe form appears in the recipient's inbox. They can submit values using submit().\n\n- recipientName: Pet name of the recipient (e.g., \"@host\")\n- description: Human-readable description of the form\n- fields: Array of field definitions, e.g. [{ name: \"email\", label: \"Your email\" }]\n\nExample: form(\"@host\", \"Configure settings\", [{ name: \"name\", label: \"Your name\" }])",
-    "storeBlob": "storeBlob(readerRef, petName?) -> Promise<EndoReadable>\nStore binary data as a blob with a pet name.\n- readerRef: An async iterator yielding base64-encoded strings\n- petName: Name to store the blob under\nReturns a readable blob reference.",
-    "storeValue": "storeValue(value, petNameOrPath) -> Promise<void>\nStore a passable value (number, string, array, record, etc.) in your directory.\n- storeValue(42, \"answer\") stores the number 42 as \"answer\"\n- storeValue({x: 1, y: 2}, \"point\") stores a record as \"point\"\n- storeValue([\"a\", \"b\"], [\"subdir\", \"items\"]) stores in a subdirectory\nValues must be passable (no functions or non-transferable objects).",
-    "submit": "submit(messageNumber, values) -> Promise<void>\nSubmit values for a form message. Each call creates a new value message\nin reply to the form, allowing multiple submissions.\n\n- messageNumber: The inbox message number of the form\n- values: A record with keys matching the form's field definitions\n\nExample: submit(0, { name: \"Alice\", age: 30 })",
-    "sendValue": "sendValue(messageNumber, petNameOrPath) -> Promise<void>\nReply to any message with a retained value from your pet store.\n\n- messageNumber: The inbox message number to reply to\n- petNameOrPath: Pet name (or path) of the value to send\n\nExample: sendValue(0, \"my-counter\")",
-    "readText": "readText(petNameOrPath) -> Promise<string>\nRead text content by pet name or path.\nFor a single name, reads the blob's text content.\nFor a multi-segment path, reads through the mount.\nExample: readText([\"my-blob\"])\nExample: readText([\"my-mount\", \"config.json\"])",
-    "maybeReadText": "maybeReadText(petNameOrPath) -> Promise<string | undefined>\nRead text content, returning undefined if not found.\nSame as readText but returns undefined instead of throwing.",
-    "writeText": "writeText(petNameOrPath, content) -> Promise<void>\nWrite text content by pet name or path.\nFor a single name, creates a ReadableBlob and binds the name.\nFor a multi-segment path, writes through the mount.\nExample: writeText([\"my-blob\"], \"hello\")\nExample: writeText([\"my-mount\", \"output.txt\"], \"hello\")",
-  }],
-  ["EndoHost", {
-    "": "EndoHost - A privileged agent with full Endo capabilities.\n\nA host has all guest capabilities plus:\n- Create workers for running code\n- Evaluate JavaScript code\n- Create confined guests\n- Store blobs and values\n- Make unconfined or bundled caplets\n- Manage network peers\n\nUse help(\"methodName\") for details on specific methods.",
-    "help": "help(methodName?) -> string\nGet documentation for this interface or a specific method.\n- help() returns an overview of the host capabilities\n- help(\"evaluate\") returns documentation for code evaluation",
-    "storeBlob": "storeBlob(readerRef, petName) -> Promise<EndoReadable>\nStore binary data as a blob with a pet name.\n- readerRef: An async iterator yielding base64-encoded strings\n- petName: Name to store the blob under\nReturns a readable blob reference.",
-    "storeValue": "storeValue(value, petNameOrPath) -> Promise<void>\nStore a passable value (number, string, array, record, etc.) with a name.\n- storeValue(42, \"answer\") stores the number 42\n- storeValue({x: 1, y: 2}, \"point\") stores a record",
-    "provideGuest": "provideGuest(petName?, options?) -> Promise<EndoGuest>\nCreate or retrieve a confined guest agent.\n- provideGuest() creates an anonymous guest\n- provideGuest(\"my-guest\") creates/retrieves a named guest\nOptions: { introducedNames: { guestName: hostName } }",
-    "provideHost": "provideHost(petName?, options?) -> Promise<EndoHost>\nCreate or retrieve another host agent.\n- provideHost() creates an anonymous host\n- provideHost(\"my-host\") creates/retrieves a named host",
-    "provideWorker": "provideWorker(petNamePath) -> Promise<EndoWorker>\nCreate or retrieve a worker for running code.\nWorkers are isolated JavaScript environments.",
-    "evaluate": "evaluate(workerName, source, codeNames, petNames, resultName?) -> Promise<any>\nEvaluate JavaScript code in a worker with named endowments.\n- workerName: Worker to use (undefined for new worker)\n- source: JavaScript code string\n- codeNames: Names visible in the code\n- petNames: Pet names providing values for those names\n- resultName: Optional name to store the result\n\nExample: evaluate(undefined, \"x + y\", [\"x\", \"y\"], [\"a\", \"b\"], [\"result\"])\n  Runs \"x + y\" where x=lookup(\"a\"), y=lookup(\"b\"), stores result as \"result\"",
-    "makeUnconfined": "makeUnconfined(workerName, specifier, options?) -> Promise<any>\nLoad and instantiate an unconfined module (has access to Node.js APIs).\n- workerName: Worker to use (undefined for new worker)\n- specifier: Module path or URL\n- options: Optional object with:\n  - powersName: Pet name of the powers to grant (default: '@none')\n  - resultName: Pet name or path to store the result\n  - env: Environment variables as { KEY: \"value\" } record\n\nThe module's make(powers, context, { env }) function is called.",
-    "makeBundle": "makeBundle(workerName, bundleName, options?) -> Promise<any>\nInstantiate a pre-bundled module.\n- workerName: Worker to use (undefined for new worker)\n- bundleName: Pet name of the bundle\n- options: Optional object with:\n  - powersName: Pet name of the powers to grant (default: '@none')\n  - resultName: Pet name or path to store the result\n  - env: Environment variables as { KEY: \"value\" } record\n\nThe module's make(powers, context, { env }) function is called.",
-    "cancel": "cancel(petNameOrPath, reason?) -> Promise<void>\nCancel a value, triggering cleanup and releasing resources.\nCancellation propagates to dependent values.",
-    "greeter": "greeter() -> Promise<EndoGreeter>\nGet the greeter for accepting network connections.",
-    "gateway": "gateway() -> Promise<EndoGateway>\nGet the gateway for providing values to remote peers.",
-    "getPeerInfo": "getPeerInfo() -> Promise<{node: string, addresses: string[]}>\nGet this node's peer information for sharing with others.",
-    "addPeerInfo": "addPeerInfo(peerInfo) -> Promise<void>\nAdd information about a remote peer.\npeerInfo: { node: string, addresses: string[] }",
-    "locateForSharing": "locateForSharing(...petNamePath) -> Promise<string | undefined>\nLocate a formula and return a locator URL with connection hints.\nThe returned locator includes network addresses from all registered netlayers,\nallowing remote peers to connect and access the value.\nExample: locateForSharing(\"my-channel\") returns a shareable locator URL.",
-    "adoptFromLocator": "adoptFromLocator(locator, petNameOrPath) -> Promise<void>\nAdopt a value from a locator that includes connection hints.\nParses the locator to extract peer info, establishes a connection if needed,\nand writes the formula ID into the local pet store.\nExample: adoptFromLocator(\"endo://node...?id=...&type=channel&at=...\", \"remote-channel\")",
-    "invite": "invite(guestName) -> Promise<Invitation>\nCreate an invitation for a guest to connect.",
-    "accept": "accept(invitationId, guestHandleId, guestName) -> Promise<void>\nAccept an invitation, creating a connection.",
-    "endow": "endow(messageNumber, bindings, workerName?, resultName?) -> Promise<void>\nBind capabilities to a guest's code definition and evaluate it.\nThis is the host-side counterpart to the guest's define() method.\n\n- messageNumber: The definition message number\n- bindings: Record mapping slot names to pet names, e.g. { counter: \"my-counter\" }\n- workerName: Optional worker to use for evaluation\n- resultName: Optional pet name to store the result\n\nThe host decides which capabilities to provide for each slot.\nThe code proposed by the guest runs with these host-chosen bindings.\n\nExample: endow(0, { counter: \"my-counter\" })",
-    "form": "form(recipientName, description, fields) -> Promise<void>\nSend a structured form to another agent.\nThe form appears in the recipient's inbox. They can submit values using submit().\n\n- recipientName: Pet name or path of the recipient\n- description: Human-readable description of what the form is for\n- fields: Array of field definitions, e.g. [{ name: \"email\", label: \"Your email\" }]\n\nExample: form(\"@host\", \"Configure settings\", [{ name: \"name\", label: \"Name\" }, { name: \"email\", label: \"Email\" }])",
-    "submit": "submit(messageNumber, values) -> Promise<void>\nSubmit values for a form message. Each call creates a new value message\nin reply to the form, allowing multiple submissions.\n\n- messageNumber: The form message number\n- values: Record mapping field names to values, e.g. { name: \"Alice\" }\n\nEach value must match the pattern specified by the form field (if any).\nFields without explicit patterns default to M.string().\n\nExample: submit(0, { name: \"Alice\", age: 30 })",
-    "sendValue": "sendValue(messageNumber, petNameOrPath) -> Promise<void>\nReply to any message with a retained value from your pet store.\n\n- messageNumber: The inbox message number to reply to\n- petNameOrPath: Pet name (or path) of the value to send\n\nExample: sendValue(0, \"my-counter\")",
-    "getFormulaGraph": "getFormulaGraph() -> Promise<{ nodes, edges }>\nReturns a snapshot of the formula dependency graph reachable from\nthis agent's pet store.\n\n- nodes: Array of { id, type } for each formula\n- edges: Array of { sourceId, targetId, label } for each dependency\n\nUsed by the Chat inventory graph space to visualize formula relationships.",
-    "readText": "readText(petNameOrPath) -> Promise<string>\nRead text content by pet name or path.\nFor a single name, reads the blob's text content.\nFor a multi-segment path, reads through the mount.\nExample: readText([\"my-blob\"])\nExample: readText([\"my-mount\", \"config.json\"])",
-    "maybeReadText": "maybeReadText(petNameOrPath) -> Promise<string | undefined>\nRead text content, returning undefined if not found.\nSame as readText but returns undefined instead of throwing.",
-    "writeText": "writeText(petNameOrPath, content) -> Promise<void>\nWrite text content by pet name or path.\nFor a single name, creates a ReadableBlob and binds the name.\nFor a multi-segment path, writes through the mount.\nExample: writeText([\"my-blob\"], \"hello\")\nExample: writeText([\"my-mount\", \"output.txt\"], \"hello\")",
-  }],
-  ["EndoReadable", {
-    "": "EndoReadable - A readable blob of binary data.\n\nBlobs store binary content with a content-addressed hash.\nUse text() to read as a string, json() to parse as JSON,\nor streamBase64() for streaming access.",
-    "help": "help(methodName?) -> string\nGet documentation for this interface or a specific method.",
-    "sha256": "sha256() -> string\nGet the SHA-256 hash of the blob content.\nThis is the content address used for storage.",
-    "streamBase64": "streamBase64() -> AsyncIterator<string>\nStream the blob content as base64-encoded chunks.\nUse for large files to avoid loading everything into memory.",
-    "text": "text() -> Promise<string>\nRead the entire blob as a UTF-8 string.",
-    "json": "json() -> Promise<any>\nRead and parse the blob as JSON.",
-  }],
-  ["Endo Bootstrap", {
-    "": "Endo Bootstrap - The root interface for the Endo daemon.\n\nThis is the entry point for connecting to Endo.\nUse host() to get your host agent with full capabilities,\nor leastAuthority() for a minimal confined agent.",
-    "help": "help(methodName?) -> string\nGet documentation for this interface or a specific method.",
-    "ping": "ping() -> Promise<string>\nCheck if the daemon is responsive. Returns \"pong\".",
-    "terminate": "terminate() -> Promise<void>\nShut down the Endo daemon.",
-    "host": "host() -> Promise<EndoHost>\nGet the main host agent with full capabilities.",
-    "leastAuthority": "leastAuthority() -> Promise<EndoGuest>\nGet a minimal guest agent with no special capabilities.\nUse for maximum confinement.",
-    "greeter": "greeter() -> Promise<EndoGreeter>\nGet the network greeter for accepting connections.",
-    "gateway": "gateway() -> Promise<EndoGateway>\nGet the network gateway for providing values to peers.",
-    "nodeId": "nodeId() -> string\nGet this node's unique identifier.\nUsed for peer-to-peer communication.",
-    "reviveNetworks": "reviveNetworks() -> Promise<void>\nRestore network connections from persisted state.",
-    "revivePins": "revivePins() -> Promise<void>\nRestore pinned values from persisted state.",
-    "addPeerInfo": "addPeerInfo(peerInfo) -> Promise<void>\nAdd information about a remote peer.\npeerInfo: { node: string, addresses: string[] }",
-  }],
-  ["ReadableTree", {
-    "": "ReadableTree - A read-only tree of files and subdirectories.\n\nAn immutable directory: entries cannot be added, removed, or modified.\nlookup() returns EndoReadable values for files and nested ReadableTree\nvalues for subdirectories.",
-    "help": "help(methodName?) -> string\nGet documentation for this interface or a specific method.",
-    "has": "has(...names) -> Promise<boolean>\nCheck if an entry exists at the given path.\nnames: string[] - Path segments.\nExample: has(\"index.html\") → true\nExample: has(\"assets\", \"style.css\") → true",
-    "list": "list(...names) -> Promise<string[]>\nList entry names at the given path (or root).\nnames: string[] - Path segments (optional, defaults to root).\nExample: list() → [\"index.html\", \"app.js\", \"assets\"]\nExample: list(\"assets\") → [\"style.css\", \"logo.png\"]",
-    "lookup": "lookup(nameOrPath) -> Promise<EndoReadable | ReadableTree>\nGet the value at a name or path.\nnameOrPath: string | string[] - Name or path segments.\nReturns EndoReadable for files, ReadableTree for subdirectories.\nExample: lookup(\"index.html\") → EndoReadable\nExample: lookup([\"assets\", \"style.css\"]) → EndoReadable",
-  }],
-  ["EndoMount", {
-    "": "EndoMount - Live mutable access to a filesystem directory.\n\nAll paths are confined to the mount root. Symlinks that escape\nthe root are invisible. Use readOnly() for an attenuated view.",
-    "help": "help(methodName?) -> string\nGet documentation for this interface or a specific method.",
-    "has": "has(...pathSegments) -> Promise<boolean>\nCheck if a path exists within the mount.\nEach argument is one path segment: has(\"dir\", \"file.txt\").",
-    "list": "list(...pathSegments) -> Promise<string[]>\nList directory entries at the given path.\nEach argument is one path segment: list(\"subdir\").\nCall with no arguments to list the root.\nEntries with symlinks escaping the mount root are excluded.",
-    "lookup": "lookup(path) -> Promise<EndoMount | EndoMountFile>\nResolve a path within the mount.\npath: string | string[] — Name or path segments.\nReturns EndoMount for directories, EndoMountFile for files.",
-    "readText": "readText(path) -> Promise<string>\nRead a file as UTF-8 text.\npath: string | string[] — Name or path segments.\nThrows if the file does not exist.",
-    "maybeReadText": "maybeReadText(path) -> Promise<string | undefined>\nRead a file as UTF-8 text, returning undefined if missing.\npath: string | string[] — Name or path segments.",
-    "writeText": "writeText(path, content) -> Promise<void>\nWrite UTF-8 text to a file at the given path.\npath: string | string[] — Name or path segments.\ncontent: string — Text content to write.\nCreates parent directories as needed. Throws if read-only.",
-    "remove": "remove(path) -> Promise<void>\nRemove a file or empty directory.\npath: string | string[] — Name or path segments.",
-    "move": "move(from, to) -> Promise<void>\nRename an entry within the mount.\nfrom: string | string[] — Source name or path segments.\nto: string | string[] — Destination name or path segments.",
-    "makeDirectory": "makeDirectory(path) -> Promise<void>\nCreate a directory (and missing parents).\npath: string | string[] — Name or path segments.",
-    "readOnly": "readOnly() -> EndoMount\nReturns a read-only view of this mount.",
-    "snapshot": "snapshot() -> Promise<SnapshotTree>\nCapture current state as an immutable readable-tree.\n(Not yet implemented.)",
-  }],
-  ["EndoMountFile", {
-    "": "EndoMountFile - A file within a mounted directory.",
-    "help": "help(methodName?) -> string\nGet documentation for this interface or a specific method.",
-    "text": "text() -> Promise<string>\nRead the file content as a UTF-8 string.",
-    "streamBase64": "streamBase64() -> AsyncIterator<string>\nStream the file content as base64 chunks.",
-    "json": "json() -> Promise<any>\nRead and parse the file as JSON.",
-    "writeText": "writeText(content) -> Promise<void>\nWrite a string to the file. Throws if read-only.",
-    "writeBytes": "writeBytes(readableRef) -> Promise<void>\nWrite bytes from an async iterator. Throws if read-only.",
-    "readOnly": "readOnly() -> EndoMountFile\nReturns a read-only view of this file.",
-  }],
+  [
+    'EndoDirectory',
+    {
+      '': 'EndoDirectory - A naming hub for managing pet names and references.\n\nA directory maps pet names to formula identifiers (internal references).\nPet names are strings like "my-worker", "counter", or "index.html".\nSpecial names are @-prefixed like "@self", "@host", or "@agent".\n\nUse lookup() to get a value by name, list() to see available names,\nand storeIdentifier() or storeLocator() to store new references.',
+      help: 'help(methodName?) -> string\nGet documentation for this interface or a specific method.\n- help() returns an overview of the interface\n- help("lookup") returns documentation for the lookup method',
+      has: 'has(...petNamePath) -> Promise<boolean>\nCheck if a pet name exists in this directory.\n- has("counter") checks if "counter" exists\n- has("subdir", "value") checks if "value" exists in subdirectory "subdir"',
+      identify:
+        "identify(...petNamePath) -> Promise<string | undefined>\nGet the formula identifier for a pet name path.\nReturns undefined if the name doesn't exist.\nFormula identifiers are internal references used by Endo.",
+      locate:
+        'locate(...petNamePath) -> Promise<string | undefined>\nGet a locator string for a pet name path.\nLocators include the formula type and can be used for reverse lookups.',
+      reverseLocate:
+        'reverseLocate(locator) -> Promise<string[]>\nFind all pet names that refer to a given locator.\nReturns an array of names (may be empty if no names exist).',
+      followLocatorNameChanges:
+        'followLocatorNameChanges(locator) -> AsyncIterator\nSubscribe to name changes for a specific locator.\nYields events when names are added or removed for the locator.\nUse with for-await-of to receive updates.',
+      list: 'list(...petNamePath?) -> Promise<string[]>\nList all pet names in this directory or a subdirectory.\n- list() returns names in this directory\n- list("subdir") returns names in the subdirectory "subdir"',
+      listIdentifiers:
+        'listIdentifiers(...petNamePath?) -> Promise<string[]>\nList all unique formula identifiers in this directory.\nMultiple names may refer to the same identifier.',
+      followNameChanges:
+        'followNameChanges() -> AsyncIterator\nSubscribe to all name changes in this directory.\nFirst yields existing names, then yields diffs as names change.\nUse with for-await-of to receive updates.',
+      lookup:
+        'lookup(petNameOrPath) -> Promise<any>\nResolve a pet name or path to its value.\n- lookup("counter") gets the value named "counter"\n- lookup(["subdir", "value"]) gets "value" from subdirectory "subdir"\nThrows if the name doesn\'t exist.',
+      reverseLookup:
+        'reverseLookup(value) -> Promise<string[]>\nFind all pet names that refer to a given value.\nUseful for discovering what names exist for an object you have.',
+      storeIdentifier:
+        'storeIdentifier(petNameOrPath, formulaId) -> Promise<void>\nStore a formula identifier with a pet name.\n- storeIdentifier("my-name", id) stores id as "my-name"\n- storeIdentifier(["subdir", "name"], id) stores in a subdirectory\nOverwrites any existing value at that name.',
+      storeLocator:
+        'storeLocator(petNameOrPath, locator) -> Promise<void>\nStore an endo:// locator with a pet name.\n- storeLocator("my-name", locator) stores locator as "my-name"\n- storeLocator(["subdir", "name"], locator) stores in a subdirectory\nThe locator must be an endo:// URL. Overwrites any existing value.',
+      remove:
+        'remove(...petNamePath) -> Promise<void>\nRemove a pet name from this directory.\nThe underlying value is not deleted, just the name mapping.',
+      move: 'move(fromPath, toPath) -> Promise<void>\nMove/rename a reference from one name to another.\n- move(["old-name"], ["new-name"]) renames within this directory\n- move(["a"], ["subdir", "b"]) moves to a subdirectory\nThe original name is removed after the move.',
+      copy: 'copy(fromPath, toPath) -> Promise<void>\nCopy a reference from one name to another.\nBoth names will refer to the same underlying value.',
+      makeDirectory:
+        'makeDirectory(petNamePath) -> Promise<EndoDirectory>\nCreate a new subdirectory at the given path.\nReturns the new directory object.',
+      readText:
+        'readText(petNameOrPath) -> Promise<string>\nRead text content by pet name or path.\nFor a single name, reads the blob\'s text content.\nFor a multi-segment path, reads through the mount.\nExample: readText(["my-blob"])\nExample: readText(["my-mount", "config.json"])',
+      maybeReadText:
+        'maybeReadText(petNameOrPath) -> Promise<string | undefined>\nRead text content, returning undefined if not found.\nSame as readText but returns undefined instead of throwing.',
+      writeText:
+        'writeText(petNameOrPath, content) -> Promise<void>\nWrite text content by pet name or path.\nFor a single name, creates a ReadableBlob and binds the name.\nFor a multi-segment path, writes through the mount.\nExample: writeText(["my-blob"], "hello")\nExample: writeText(["my-mount", "output.txt"], "hello")',
+    },
+  ],
+  [
+    'Mail Operations',
+    {
+      '': 'Mail Operations - Send and receive messages between agents.\n\nMessages can be requests (asking for a capability) or packages (sending values).\nEach message has a number, sender, recipient, and content.\n\nUse followMessages() to receive messages, send() to send packages,\nand request() to ask for capabilities.',
+      handle:
+        "handle() -> Handle\nGet this agent's mailbox handle.\nThe handle is used internally for receiving messages.",
+      listMessages:
+        'listMessages() -> Promise<Message[]>\nList all messages in the inbox.\nEach message has: number, date, from, to, type, and content.',
+      followMessages:
+        'followMessages() -> AsyncIterator<Message>\nSubscribe to incoming messages.\nFirst yields existing messages, then yields new ones as they arrive.\nUse with for-await-of:\n  for await (const message of E(guest).followMessages()) { ... }',
+      resolve:
+        'resolve(messageNumber, petNameOrPath) -> Promise<void>\nRespond to a request message by providing a named value.\n- resolve(0, "my-counter") responds to message 0 with the value named "my-counter"\nThe requester receives the resolved value.',
+      reject:
+        'reject(messageNumber, reason?) -> Promise<void>\nDecline a request message.\n- reject(0) declines message 0\n- reject(0, "Not available") declines with a reason\nThe requester receives an error.',
+      adopt:
+        'adopt(messageNumber, edgeName, petName) -> Promise<void>\nAdopt a value from an incoming package message, giving it a pet name.\n- adopt(0, "gift", "my-new-thing") takes "gift" from message 0, names it "my-new-thing"\nEdge names are the labels the sender attached to values in the package.',
+      dismiss:
+        "dismiss(messageNumber) -> Promise<void>\nRemove a message from the inbox.\nUse after you've processed a message.",
+      dismissAll:
+        'dismissAll() -> Promise<void>\nRemove all messages from the inbox.',
+      request:
+        'request(recipientName, description, responseName?) -> Promise<any>\nSend a request to another agent asking for a capability.\n- request("@host", "a counter") asks @host for "a counter"\n- request("@host", "a counter", "my-counter") also stores the response as "my-counter"\nThe recipient sees your request and can resolve or reject it.',
+      send: 'send(recipientName, strings, edgeNames, petNames) -> Promise<void>\nSend a package message with values to another agent.\n- strings: Text fragments that form the message\n- edgeNames: Labels for the values being sent\n- petNames: Names of values to include\n\nExample: send("@host", ["Here is ", " for you"], ["gift"], ["my-counter"])\n  Sends: "Here is @gift for you" where @gift refers to "my-counter"',
+      storeValue:
+        "storeValue(value, petNameOrPath) -> Promise<void>\nStore a passable value in the agent's directory.\nValues must be passable (numbers, strings, arrays, records, etc.).",
+      sendValue:
+        'sendValue(messageNumber, petNameOrPath) -> Promise<void>\nReply to any message with a retained value from your pet store.\n\n- messageNumber: The inbox message number to reply to\n- petNameOrPath: Pet name (or path) of the value to send\n\nExample: sendValue(0, "my-counter")',
+      deliver:
+        'deliver(message) -> void\nInternal method to deliver a message to this mailbox.\nTypically not called directly by users.',
+    },
+  ],
+  [
+    'EndoGuest',
+    {
+      '': 'EndoGuest - A confined agent with directory and mail capabilities.\n\nA guest can:\n- Manage pet names for values (directory operations)\n- Send and receive messages (mail operations)\n- Request capabilities from its host\n\nSpecial names available:\n- @self: This guest\'s own handle\n- @host: The host that created this guest\n- @agent: This guest\'s formula identifier\n\nUse help("methodName") for details on specific methods.',
+      help: 'help(methodName?) -> string\nGet documentation for this interface or a specific method.\n- help() returns an overview of the guest capabilities\n- help("request") returns documentation for the request method\n- help("send") returns documentation for send method',
+      reverseIdentify:
+        'reverseIdentify(formulaId) -> string[]\nFind all pet names that refer to a given formula identifier.\nSynchronous version of reverse lookup by identifier.',
+      define:
+        'define(source, slots) -> Promise<any>\nPropose code with named capability slots for the host to endow.\nThe guest specifies code and named slots with descriptions.\nThe host sees the code and slot descriptions, then decides which capabilities\nto provide for each slot using the endow() command.\n\n- source: JavaScript code to evaluate\n- slots: Record of slot descriptions, e.g. { counter: { label: "A counter to increment" } }\n\nThe host reviews the code and slots, then calls endow() to bind capabilities\nand trigger evaluation. This separates code proposal from capability binding.\n\nExample: define("E(counter).incr()", { counter: { label: "A counter capability" } })',
+      form: 'form(recipientName, description, fields) -> Promise<void>\nSend a structured form to another agent.\nThe form appears in the recipient\'s inbox. They can submit values using submit().\n\n- recipientName: Pet name of the recipient (e.g., "@host")\n- description: Human-readable description of the form\n- fields: Array of field definitions, e.g. [{ name: "email", label: "Your email" }]\n\nExample: form("@host", "Configure settings", [{ name: "name", label: "Your name" }])',
+      storeBlob:
+        'storeBlob(readerRef, petName?) -> Promise<EndoReadable>\nStore binary data as a blob with a pet name.\n- readerRef: An async iterator yielding base64-encoded strings\n- petName: Name to store the blob under\nReturns a readable blob reference.',
+      storeValue:
+        'storeValue(value, petNameOrPath) -> Promise<void>\nStore a passable value (number, string, array, record, etc.) in your directory.\n- storeValue(42, "answer") stores the number 42 as "answer"\n- storeValue({x: 1, y: 2}, "point") stores a record as "point"\n- storeValue(["a", "b"], ["subdir", "items"]) stores in a subdirectory\nValues must be passable (no functions or non-transferable objects).',
+      submit:
+        'submit(messageNumber, values) -> Promise<void>\nSubmit values for a form message. Each call creates a new value message\nin reply to the form, allowing multiple submissions.\n\n- messageNumber: The inbox message number of the form\n- values: A record with keys matching the form\'s field definitions\n\nExample: submit(0, { name: "Alice", age: 30 })',
+      sendValue:
+        'sendValue(messageNumber, petNameOrPath) -> Promise<void>\nReply to any message with a retained value from your pet store.\n\n- messageNumber: The inbox message number to reply to\n- petNameOrPath: Pet name (or path) of the value to send\n\nExample: sendValue(0, "my-counter")',
+      readText:
+        'readText(petNameOrPath) -> Promise<string>\nRead text content by pet name or path.\nFor a single name, reads the blob\'s text content.\nFor a multi-segment path, reads through the mount.\nExample: readText(["my-blob"])\nExample: readText(["my-mount", "config.json"])',
+      maybeReadText:
+        'maybeReadText(petNameOrPath) -> Promise<string | undefined>\nRead text content, returning undefined if not found.\nSame as readText but returns undefined instead of throwing.',
+      writeText:
+        'writeText(petNameOrPath, content) -> Promise<void>\nWrite text content by pet name or path.\nFor a single name, creates a ReadableBlob and binds the name.\nFor a multi-segment path, writes through the mount.\nExample: writeText(["my-blob"], "hello")\nExample: writeText(["my-mount", "output.txt"], "hello")',
+    },
+  ],
+  [
+    'EndoHost',
+    {
+      '': 'EndoHost - A privileged agent with full Endo capabilities.\n\nA host has all guest capabilities plus:\n- Create workers for running code\n- Evaluate JavaScript code\n- Create confined guests\n- Store blobs and values\n- Make unconfined or bundled caplets\n- Manage network peers\n\nUse help("methodName") for details on specific methods.',
+      help: 'help(methodName?) -> string\nGet documentation for this interface or a specific method.\n- help() returns an overview of the host capabilities\n- help("evaluate") returns documentation for code evaluation',
+      storeBlob:
+        'storeBlob(readerRef, petName) -> Promise<EndoReadable>\nStore binary data as a blob with a pet name.\n- readerRef: An async iterator yielding base64-encoded strings\n- petName: Name to store the blob under\nReturns a readable blob reference.',
+      storeValue:
+        'storeValue(value, petNameOrPath) -> Promise<void>\nStore a passable value (number, string, array, record, etc.) with a name.\n- storeValue(42, "answer") stores the number 42\n- storeValue({x: 1, y: 2}, "point") stores a record',
+      provideGuest:
+        'provideGuest(petName?, options?) -> Promise<EndoGuest>\nCreate or retrieve a confined guest agent.\n- provideGuest() creates an anonymous guest\n- provideGuest("my-guest") creates/retrieves a named guest\nOptions: { introducedNames: { guestName: hostName } }',
+      provideHost:
+        'provideHost(petName?, options?) -> Promise<EndoHost>\nCreate or retrieve another host agent.\n- provideHost() creates an anonymous host\n- provideHost("my-host") creates/retrieves a named host',
+      provideWorker:
+        'provideWorker(petNamePath) -> Promise<EndoWorker>\nCreate or retrieve a worker for running code.\nWorkers are isolated JavaScript environments.',
+      evaluate:
+        'evaluate(workerName, source, codeNames, petNames, resultName?) -> Promise<any>\nEvaluate JavaScript code in a worker with named endowments.\n- workerName: Worker to use (undefined for new worker)\n- source: JavaScript code string\n- codeNames: Names visible in the code\n- petNames: Pet names providing values for those names\n- resultName: Optional name to store the result\n\nExample: evaluate(undefined, "x + y", ["x", "y"], ["a", "b"], ["result"])\n  Runs "x + y" where x=lookup("a"), y=lookup("b"), stores result as "result"',
+      makeUnconfined:
+        "makeUnconfined(workerName, specifier, options?) -> Promise<any>\nLoad and instantiate an unconfined module (has access to Node.js APIs).\n- workerName: Worker to use (undefined for new worker)\n- specifier: Module path or URL\n- options: Optional object with:\n  - powersName: Pet name of the powers to grant (default: '@none')\n  - resultName: Pet name or path to store the result\n  - env: Environment variables as { KEY: \"value\" } record\n\nThe module's make(powers, context, { env }) function is called.",
+      makeArchive:
+        "makeArchive(workerName, archiveName, options?) -> Promise<any>\nInstantiate a module from a source-only ZIP archive (a\n`compartment-map.json` plus modules in their original mjs/cjs\nsources, with no precompiled module formats).\n- workerName: Worker to use (undefined for new worker)\n- archiveName: Pet name of the readable blob holding the archive\n- options: Optional object with:\n  - powersName: Pet name of the powers to grant (default: '@none')\n  - resultName: Pet name or path to store the result\n  - env: Environment variables as { KEY: \"value\" } record\n\nThe module's make(powers, context, { env }) function is called.\nThe archive bytes are streamed to the worker and parsed via\n`@endo/compartment-mapper`'s `parseArchive`.  The Rust supervisor's\nworkers read the same archive content directly from the CAS.",
+      cancel:
+        'cancel(petNameOrPath, reason?) -> Promise<void>\nCancel a value, triggering cleanup and releasing resources.\nCancellation propagates to dependent values.',
+      greeter:
+        'greeter() -> Promise<EndoGreeter>\nGet the greeter for accepting network connections.',
+      gateway:
+        'gateway() -> Promise<EndoGateway>\nGet the gateway for providing values to remote peers.',
+      getPeerInfo:
+        "getPeerInfo() -> Promise<{node: string, addresses: string[]}>\nGet this node's peer information for sharing with others.",
+      addPeerInfo:
+        'addPeerInfo(peerInfo) -> Promise<void>\nAdd information about a remote peer.\npeerInfo: { node: string, addresses: string[] }',
+      locateForSharing:
+        'locateForSharing(...petNamePath) -> Promise<string | undefined>\nLocate a formula and return a locator URL with connection hints.\nThe returned locator includes network addresses from all registered netlayers,\nallowing remote peers to connect and access the value.\nExample: locateForSharing("my-channel") returns a shareable locator URL.',
+      adoptFromLocator:
+        'adoptFromLocator(locator, petNameOrPath) -> Promise<void>\nAdopt a value from a locator that includes connection hints.\nParses the locator to extract peer info, establishes a connection if needed,\nand writes the formula ID into the local pet store.\nExample: adoptFromLocator("endo://node...?id=...&type=channel&at=...", "remote-channel")',
+      invite:
+        'invite(guestName) -> Promise<Invitation>\nCreate an invitation for a guest to connect.',
+      accept:
+        'accept(invitationId, guestHandleId, guestName) -> Promise<void>\nAccept an invitation, creating a connection.',
+      endow:
+        'endow(messageNumber, bindings, workerName?, resultName?) -> Promise<void>\nBind capabilities to a guest\'s code definition and evaluate it.\nThis is the host-side counterpart to the guest\'s define() method.\n\n- messageNumber: The definition message number\n- bindings: Record mapping slot names to pet names, e.g. { counter: "my-counter" }\n- workerName: Optional worker to use for evaluation\n- resultName: Optional pet name to store the result\n\nThe host decides which capabilities to provide for each slot.\nThe code proposed by the guest runs with these host-chosen bindings.\n\nExample: endow(0, { counter: "my-counter" })',
+      form: 'form(recipientName, description, fields) -> Promise<void>\nSend a structured form to another agent.\nThe form appears in the recipient\'s inbox. They can submit values using submit().\n\n- recipientName: Pet name or path of the recipient\n- description: Human-readable description of what the form is for\n- fields: Array of field definitions, e.g. [{ name: "email", label: "Your email" }]\n\nExample: form("@host", "Configure settings", [{ name: "name", label: "Name" }, { name: "email", label: "Email" }])',
+      submit:
+        'submit(messageNumber, values) -> Promise<void>\nSubmit values for a form message. Each call creates a new value message\nin reply to the form, allowing multiple submissions.\n\n- messageNumber: The form message number\n- values: Record mapping field names to values, e.g. { name: "Alice" }\n\nEach value must match the pattern specified by the form field (if any).\nFields without explicit patterns default to M.string().\n\nExample: submit(0, { name: "Alice", age: 30 })',
+      sendValue:
+        'sendValue(messageNumber, petNameOrPath) -> Promise<void>\nReply to any message with a retained value from your pet store.\n\n- messageNumber: The inbox message number to reply to\n- petNameOrPath: Pet name (or path) of the value to send\n\nExample: sendValue(0, "my-counter")',
+      getFormulaGraph:
+        "getFormulaGraph() -> Promise<{ nodes, edges }>\nReturns a snapshot of the formula dependency graph reachable from\nthis agent's pet store.\n\n- nodes: Array of { id, type } for each formula\n- edges: Array of { sourceId, targetId, label } for each dependency\n\nUsed by the Chat inventory graph space to visualize formula relationships.",
+      readText:
+        'readText(petNameOrPath) -> Promise<string>\nRead text content by pet name or path.\nFor a single name, reads the blob\'s text content.\nFor a multi-segment path, reads through the mount.\nExample: readText(["my-blob"])\nExample: readText(["my-mount", "config.json"])',
+      maybeReadText:
+        'maybeReadText(petNameOrPath) -> Promise<string | undefined>\nRead text content, returning undefined if not found.\nSame as readText but returns undefined instead of throwing.',
+      writeText:
+        'writeText(petNameOrPath, content) -> Promise<void>\nWrite text content by pet name or path.\nFor a single name, creates a ReadableBlob and binds the name.\nFor a multi-segment path, writes through the mount.\nExample: writeText(["my-blob"], "hello")\nExample: writeText(["my-mount", "output.txt"], "hello")',
+    },
+  ],
+  [
+    'EndoReadable',
+    {
+      '': 'EndoReadable - A readable blob of binary data.\n\nBlobs store binary content with a content-addressed hash.\nUse text() to read as a string, json() to parse as JSON,\nor streamBase64() for streaming access.',
+      help: 'help(methodName?) -> string\nGet documentation for this interface or a specific method.',
+      sha256:
+        'sha256() -> string\nGet the SHA-256 hash of the blob content.\nThis is the content address used for storage.',
+      streamBase64:
+        'streamBase64() -> AsyncIterator<string>\nStream the blob content as base64-encoded chunks.\nUse for large files to avoid loading everything into memory.',
+      text: 'text() -> Promise<string>\nRead the entire blob as a UTF-8 string.',
+      json: 'json() -> Promise<any>\nRead and parse the blob as JSON.',
+    },
+  ],
+  [
+    'Endo Bootstrap',
+    {
+      '': 'Endo Bootstrap - The root interface for the Endo daemon.\n\nThis is the entry point for connecting to Endo.\nUse host() to get your host agent with full capabilities,\nor leastAuthority() for a minimal confined agent.',
+      help: 'help(methodName?) -> string\nGet documentation for this interface or a specific method.',
+      ping: 'ping() -> Promise<string>\nCheck if the daemon is responsive. Returns "pong".',
+      terminate: 'terminate() -> Promise<void>\nShut down the Endo daemon.',
+      host: 'host() -> Promise<EndoHost>\nGet the main host agent with full capabilities.',
+      leastAuthority:
+        'leastAuthority() -> Promise<EndoGuest>\nGet a minimal guest agent with no special capabilities.\nUse for maximum confinement.',
+      greeter:
+        'greeter() -> Promise<EndoGreeter>\nGet the network greeter for accepting connections.',
+      gateway:
+        'gateway() -> Promise<EndoGateway>\nGet the network gateway for providing values to peers.',
+      nodeId:
+        "nodeId() -> string\nGet this node's unique identifier.\nUsed for peer-to-peer communication.",
+      reviveNetworks:
+        'reviveNetworks() -> Promise<void>\nRestore network connections from persisted state.',
+      revivePins:
+        'revivePins() -> Promise<void>\nRestore pinned values from persisted state.',
+      addPeerInfo:
+        'addPeerInfo(peerInfo) -> Promise<void>\nAdd information about a remote peer.\npeerInfo: { node: string, addresses: string[] }',
+    },
+  ],
+  [
+    'ReadableTree',
+    {
+      '': 'ReadableTree - A read-only tree of files and subdirectories.\n\nAn immutable directory: entries cannot be added, removed, or modified.\nlookup() returns EndoReadable values for files and nested ReadableTree\nvalues for subdirectories.',
+      help: 'help(methodName?) -> string\nGet documentation for this interface or a specific method.',
+      has: 'has(...names) -> Promise<boolean>\nCheck if an entry exists at the given path.\nnames: string[] - Path segments.\nExample: has("index.html") → true\nExample: has("assets", "style.css") → true',
+      list: 'list(...names) -> Promise<string[]>\nList entry names at the given path (or root).\nnames: string[] - Path segments (optional, defaults to root).\nExample: list() → ["index.html", "app.js", "assets"]\nExample: list("assets") → ["style.css", "logo.png"]',
+      lookup:
+        'lookup(nameOrPath) -> Promise<EndoReadable | ReadableTree>\nGet the value at a name or path.\nnameOrPath: string | string[] - Name or path segments.\nReturns EndoReadable for files, ReadableTree for subdirectories.\nExample: lookup("index.html") → EndoReadable\nExample: lookup(["assets", "style.css"]) → EndoReadable',
+    },
+  ],
+  [
+    'EndoMount',
+    {
+      '': 'EndoMount - Live mutable access to a filesystem directory.\n\nAll paths are confined to the mount root. Symlinks that escape\nthe root are invisible. Use readOnly() for an attenuated view.',
+      help: 'help(methodName?) -> string\nGet documentation for this interface or a specific method.',
+      has: 'has(...pathSegments) -> Promise<boolean>\nCheck if a path exists within the mount.\nEach argument is one path segment: has("dir", "file.txt").',
+      list: 'list(...pathSegments) -> Promise<string[]>\nList directory entries at the given path.\nEach argument is one path segment: list("subdir").\nCall with no arguments to list the root.\nEntries with symlinks escaping the mount root are excluded.',
+      lookup:
+        'lookup(path) -> Promise<EndoMount | EndoMountFile>\nResolve a path within the mount.\npath: string | string[] — Name or path segments.\nReturns EndoMount for directories, EndoMountFile for files.',
+      readText:
+        'readText(path) -> Promise<string>\nRead a file as UTF-8 text.\npath: string | string[] — Name or path segments.\nThrows if the file does not exist.',
+      maybeReadText:
+        'maybeReadText(path) -> Promise<string | undefined>\nRead a file as UTF-8 text, returning undefined if missing.\npath: string | string[] — Name or path segments.',
+      writeText:
+        'writeText(path, content) -> Promise<void>\nWrite UTF-8 text to a file at the given path.\npath: string | string[] — Name or path segments.\ncontent: string — Text content to write.\nCreates parent directories as needed. Throws if read-only.',
+      remove:
+        'remove(path) -> Promise<void>\nRemove a file or empty directory.\npath: string | string[] — Name or path segments.',
+      move: 'move(from, to) -> Promise<void>\nRename an entry within the mount.\nfrom: string | string[] — Source name or path segments.\nto: string | string[] — Destination name or path segments.',
+      makeDirectory:
+        'makeDirectory(path) -> Promise<void>\nCreate a directory (and missing parents).\npath: string | string[] — Name or path segments.',
+      readOnly:
+        'readOnly() -> EndoMount\nReturns a read-only view of this mount.',
+      snapshot:
+        'snapshot() -> Promise<SnapshotTree>\nCapture current state as an immutable readable-tree.\n(Not yet implemented.)',
+    },
+  ],
+  [
+    'EndoMountFile',
+    {
+      '': 'EndoMountFile - A file within a mounted directory.',
+      help: 'help(methodName?) -> string\nGet documentation for this interface or a specific method.',
+      text: 'text() -> Promise<string>\nRead the file content as a UTF-8 string.',
+      streamBase64:
+        'streamBase64() -> AsyncIterator<string>\nStream the file content as base64 chunks.',
+      json: 'json() -> Promise<any>\nRead and parse the file as JSON.',
+      writeText:
+        'writeText(content) -> Promise<void>\nWrite a string to the file. Throws if read-only.',
+      writeBytes:
+        'writeBytes(readableRef) -> Promise<void>\nWrite bytes from an async iterator. Throws if read-only.',
+      readOnly:
+        'readOnly() -> EndoMountFile\nReturns a read-only view of this file.',
+    },
+  ],
 ]);$h͏_once.helpTextEntries(helpTextEntries);
 })()
 ,
@@ -21433,7 +21554,7 @@ harden(makeHelp);
 
     /** @type {EndoDirectory['reverseLocate']} */
     const reverseLocate = async locator => {
-      const { id } = internalizeLocator(locator, isLocalKey);
+      const { id } = internalizeLocator(locator);
       return controller.reverseIdentify(id);
     };
 
@@ -21441,7 +21562,7 @@ harden(makeHelp);
     const followLocatorNameChanges = async function* followLocatorNameChanges(
       locator,
     ) {
-      const { id } = internalizeLocator(locator, isLocalKey);
+      const { id } = internalizeLocator(locator);
       for await (const idNameChange of controller.followIdNameChanges(id)) {
         /** @type {any} */
         const locatorNameChange = {
@@ -21605,7 +21726,7 @@ harden(makeHelp);
           `storeLocator requires an endo:// locator, got ${q(locator)}`,
         );
       }
-      const { id } = internalizeLocator(locator, isLocalKey);
+      const { id } = internalizeLocator(locator);
       await storeIdentifier(petNamePath, id);
     };
 
@@ -21888,7 +22009,7 @@ harden(makeChangeTopic);
 })()
 ,
 // === 110. daemon ./src/mail.js ===
-({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden,E,makeExo,makePromiseKit,q,mustMatch,M,makeChangeTopic,assertFormulaNumber,assertValidId,parseId,formatId,assertName,assertNames,assertPetNamePath,namePathFrom,makeDeferredTasks,makeSerialJobs,externalizeId,LOCAL_NODE,EnvelopeInterface,DismisserInterface,HandleInterface;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]],["@endo/eventual-send", [["E",[$h͏_a => (E = $h͏_a)]]]],["@endo/exo", [["makeExo",[$h͏_a => (makeExo = $h͏_a)]]]],["@endo/promise-kit", [["makePromiseKit",[$h͏_a => (makePromiseKit = $h͏_a)]]]],["@endo/errors", [["q",[$h͏_a => (q = $h͏_a)]]]],["@endo/patterns", [["mustMatch",[$h͏_a => (mustMatch = $h͏_a)]],["M",[$h͏_a => (M = $h͏_a)]]]],["./pubsub.js", [["makeChangeTopic",[$h͏_a => (makeChangeTopic = $h͏_a)]]]],["./formula-identifier.js", [["assertFormulaNumber",[$h͏_a => (assertFormulaNumber = $h͏_a)]],["assertValidId",[$h͏_a => (assertValidId = $h͏_a)]],["parseId",[$h͏_a => (parseId = $h͏_a)]],["formatId",[$h͏_a => (formatId = $h͏_a)]]]],["./pet-name.js", [["assertName",[$h͏_a => (assertName = $h͏_a)]],["assertNames",[$h͏_a => (assertNames = $h͏_a)]],["assertPetNamePath",[$h͏_a => (assertPetNamePath = $h͏_a)]],["namePathFrom",[$h͏_a => (namePathFrom = $h͏_a)]]]],["./deferred-tasks.js", [["makeDeferredTasks",[$h͏_a => (makeDeferredTasks = $h͏_a)]]]],["./serial-jobs.js", [["makeSerialJobs",[$h͏_a => (makeSerialJobs = $h͏_a)]]]],["./locator.js", [["externalizeId",[$h͏_a => (externalizeId = $h͏_a)]],["LOCAL_NODE",[$h͏_a => (LOCAL_NODE = $h͏_a)]]]],["./interfaces.js", [["EnvelopeInterface",[$h͏_a => (EnvelopeInterface = $h͏_a)]],["DismisserInterface",[$h͏_a => (DismisserInterface = $h͏_a)]],["HandleInterface",[$h͏_a => (HandleInterface = $h͏_a)]]]]]);
+({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden,E,makeExo,makePromiseKit,q,mustMatch,M,makeChangeTopic,assertFormulaNumber,assertValidId,parseId,formatId,assertName,assertNames,assertPetNamePath,namePathFrom,makeDeferredTasks,makeSerialJobs,externalizeId,EnvelopeInterface,DismisserInterface,HandleInterface;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]],["@endo/eventual-send", [["E",[$h͏_a => (E = $h͏_a)]]]],["@endo/exo", [["makeExo",[$h͏_a => (makeExo = $h͏_a)]]]],["@endo/promise-kit", [["makePromiseKit",[$h͏_a => (makePromiseKit = $h͏_a)]]]],["@endo/errors", [["q",[$h͏_a => (q = $h͏_a)]]]],["@endo/patterns", [["mustMatch",[$h͏_a => (mustMatch = $h͏_a)]],["M",[$h͏_a => (M = $h͏_a)]]]],["./pubsub.js", [["makeChangeTopic",[$h͏_a => (makeChangeTopic = $h͏_a)]]]],["./formula-identifier.js", [["assertFormulaNumber",[$h͏_a => (assertFormulaNumber = $h͏_a)]],["assertValidId",[$h͏_a => (assertValidId = $h͏_a)]],["parseId",[$h͏_a => (parseId = $h͏_a)]],["formatId",[$h͏_a => (formatId = $h͏_a)]]]],["./pet-name.js", [["assertName",[$h͏_a => (assertName = $h͏_a)]],["assertNames",[$h͏_a => (assertNames = $h͏_a)]],["assertPetNamePath",[$h͏_a => (assertPetNamePath = $h͏_a)]],["namePathFrom",[$h͏_a => (namePathFrom = $h͏_a)]]]],["./deferred-tasks.js", [["makeDeferredTasks",[$h͏_a => (makeDeferredTasks = $h͏_a)]]]],["./serial-jobs.js", [["makeSerialJobs",[$h͏_a => (makeSerialJobs = $h͏_a)]]]],["./locator.js", [["externalizeId",[$h͏_a => (externalizeId = $h͏_a)]]]],["./interfaces.js", [["EnvelopeInterface",[$h͏_a => (EnvelopeInterface = $h͏_a)]],["DismisserInterface",[$h͏_a => (DismisserInterface = $h͏_a)]],["HandleInterface",[$h͏_a => (HandleInterface = $h͏_a)]]]]]);
 
 
 
@@ -22039,11 +22160,7 @@ const makeEnvelope = () => makeExo('Envelope', EnvelopeInterface, {});
     directory,
     context,
   }) => {
-    const { number: selfNumber } = parseId(localSelfId);
-    const selfId = formatId({
-      number: selfNumber,
-      node: /** @type {import('./types.js').NodeNumber} */ (agentNodeNumber),
-    });
+    const selfId = localSelfId;
 
     /** @param {import('./types.js').FormulaIdentifier} id */
     const externalizeForMessage = async id => {
@@ -22680,7 +22797,7 @@ const makeEnvelope = () => makeExo('Envelope', EnvelopeInterface, {});
       );
       // Externalize the ID so that a remote resolver (on a different
       // daemon) can correctly internalize it.  For same-daemon
-      // resolvers the locator is internalized back to LOCAL_NODE.
+      // resolvers the locator is internalized back to the local ID.
       const externalizedId = await externalizeForMessage(
         /** @type {FormulaIdentifier} */ (id),
       );
@@ -22989,19 +23106,15 @@ const makeEnvelope = () => makeExo('Envelope', EnvelopeInterface, {});
       if (senderId !== message.from) {
         throw new Error('Mail fraud: alleged sender does not recognize parcel');
       }
-      // For remote senders, translate LOCAL_NODE in sender-owned IDs
-      // to the sender's actual node number.  LOCAL_NODE is only
-      // meaningful within a single daemon; once a message crosses a
-      // boundary, it must be externalized.
-      // For local senders (same daemon) LOCAL_NODE correctly refers
-      // to local formulas and is left as-is.
+      // For remote senders, translate local node keys in sender-owned
+      // IDs to the sender's actual node number so the message can be
+      // correctly routed back.
       const { node: senderNode } = parseId(senderId);
-      const isRemoteSender =
-        senderNode !== LOCAL_NODE && !isLocalKey(senderNode);
+      const isRemoteSender = !isLocalKey(senderNode);
       if (isRemoteSender) {
         const externalize = id => {
           const { number, node } = parseId(id);
-          if (node === LOCAL_NODE) {
+          if (isLocalKey(node)) {
             return formatId({
               number,
               node: /** @type {import('./types.js').NodeNumber} */ (senderNode),
@@ -23460,7 +23573,6 @@ const makeEnvelope = () => makeExo('Envelope', EnvelopeInterface, {});
  * @param {MakeMailbox} args.makeMailbox
  * @param {MakeDirectoryNode} args.makeDirectoryNode
  * @param {(node: string) => boolean} args.isLocalKey
- * @param {() => Promise<void>} [args.collectIfDirty]
  * @param {DaemonCore['pinTransient']} [args.pinTransient]
  * @param {DaemonCore['unpinTransient']} [args.unpinTransient]
  */
@@ -23475,14 +23587,12 @@ const makeEnvelope = () => makeExo('Envelope', EnvelopeInterface, {});
   makeMailbox,
   makeDirectoryNode,
   isLocalKey,
-  collectIfDirty = async () => {},
   pinTransient = /** @param {any} _id */ _id => {},
   unpinTransient = /** @param {any} _id */ _id => {},
 }) => {
   /**
    * @param {FormulaIdentifier} guestId
    * @param {FormulaIdentifier} handleId
-   * @param {FormulaIdentifier} keypairId
    * @param {NodeNumber} agentNodeNumber
    * @param {FormulaIdentifier} hostAgentId
    * @param {FormulaIdentifier} hostHandleId
@@ -23496,7 +23606,6 @@ const makeEnvelope = () => makeExo('Envelope', EnvelopeInterface, {});
   const makeGuest = async (
     guestId,
     handleId,
-    keypairId,
     agentNodeNumber,
     hostAgentId,
     hostHandleId,
@@ -23523,7 +23632,6 @@ const makeEnvelope = () => makeExo('Envelope', EnvelopeInterface, {});
       '@agent': guestId,
       '@self': handleId,
       '@host': hostHandleId,
-      '@keypair': keypairId,
     };
     if (mailHubId !== undefined) {
       specialNames['@mail'] = mailHubId;
@@ -23696,7 +23804,7 @@ const makeEnvelope = () => makeExo('Envelope', EnvelopeInterface, {});
         try {
           return await value;
         } finally {
-          unpinTransient(id);
+          await unpinTransient(id);
         }
       }
       return value;
@@ -23744,7 +23852,7 @@ const makeEnvelope = () => makeExo('Envelope', EnvelopeInterface, {});
         E(directory).storeIdentifier(namePath, identifiers.marshalId),
       );
       const { id } = await formulateMarshalValue(value, tasks, pinTransient);
-      unpinTransient(id);
+      await unpinTransient(id);
     };
 
     /** @type {EndoGuest} */
@@ -23796,51 +23904,23 @@ const makeEnvelope = () => makeExo('Envelope', EnvelopeInterface, {});
       sendValue,
     };
 
-    /** @param {Function} fn */
-    const withCollection =
-      fn =>
-      async (...args) => {
-        await null;
-        try {
-          return await fn(...args);
-        } finally {
-          await collectIfDirty();
-        }
-      };
-
-    const unwrappedMethods = new Set([
-      'handle',
-      'reverseIdentify',
-      'submit',
-      'sendValue',
-    ]);
-    const wrappedGuest = Object.fromEntries(
-      Object.entries(guest).map(([name, fn]) => [
-        name,
-        unwrappedMethods.has(name) ? fn : withCollection(fn),
-      ]),
-    );
-
     return makeExo(
       'EndoGuest',
       GuestInterface,
       /** @type {any} */ ({
         help: makeHelp(guestHelp),
-        ...wrappedGuest,
+        ...guest,
         /** @param {string} locator */
         followLocatorNameChanges: async locator => {
           const iterator = guest.followLocatorNameChanges(locator);
-          await collectIfDirty();
           return makeIteratorRef(iterator);
         },
         followMessages: async () => {
           const iterator = guest.followMessages();
-          await collectIfDirty();
           return makeIteratorRef(iterator);
         },
         followNameChanges: async () => {
           const iterator = guest.followNameChanges();
-          await collectIfDirty();
           return makeIteratorRef(iterator);
         },
       }),
@@ -25158,13 +25238,12 @@ const normalizeHostOrGuestOptions = opts => {
  * @param {DaemonCore['formulateMarshalValue']} args.formulateMarshalValue
  * @param {DaemonCore['formulateEval']} args.formulateEval
  * @param {DaemonCore['formulateUnconfined']} args.formulateUnconfined
- * @param {DaemonCore['formulateBundle']} args.formulateBundle
+ * @param {DaemonCore['formulateArchive']} args.formulateArchive
  * @param {DaemonCore['formulateReadableBlob']} args.formulateReadableBlob
  * @param {DaemonCore['checkinTree']} args.checkinTree
  * @param {DaemonCore['formulateMount']} args.formulateMount
  * @param {DaemonCore['formulateScratchMount']} args.formulateScratchMount
  * @param {DaemonCore['formulateInvitation']} args.formulateInvitation
- * @param {DaemonCore['formulateSyncedPetStore']} args.formulateSyncedPetStore
  * @param {DaemonCore['formulateDirectoryForStore']} args.formulateDirectoryForStore
  * @param {DaemonCore['getPeerIdForNodeIdentifier']} args.getPeerIdForNodeIdentifier
  * @param {DaemonCore['formulateChannel']} args.formulateChannel
@@ -25177,7 +25256,7 @@ const normalizeHostOrGuestOptions = opts => {
  * @param {NodeNumber} args.localNodeNumber
  * @param {(node: string) => boolean} args.isLocalKey
  * @param {DaemonCore['getAgentIdForHandleId']} args.getAgentIdForHandleId
- * @param {() => Promise<void>} [args.collectIfDirty]
+ * @param {(publicKey: string, daemonNode: string) => void} [args.writeRemoteAgentKey]
  * @param {DaemonCore['pinTransient']} [args.pinTransient]
  * @param {DaemonCore['unpinTransient']} [args.unpinTransient]
  * @param {DaemonCore['getFormulaGraphSnapshot']} [args.getFormulaGraphSnapshot]
@@ -25192,13 +25271,12 @@ const normalizeHostOrGuestOptions = opts => {
   formulateMarshalValue,
   formulateEval,
   formulateUnconfined,
-  formulateBundle,
+  formulateArchive,
   formulateReadableBlob,
   checkinTree,
   formulateMount,
   formulateScratchMount,
   formulateInvitation,
-  formulateSyncedPetStore,
   formulateDirectoryForStore,
   getPeerIdForNodeIdentifier,
   formulateChannel,
@@ -25211,7 +25289,10 @@ const normalizeHostOrGuestOptions = opts => {
   localNodeNumber,
   isLocalKey,
   getAgentIdForHandleId,
-  collectIfDirty = async () => {},
+  writeRemoteAgentKey = /** @param {string} _pk @param {string} _dn */ (
+    _pk,
+    _dn,
+  ) => {},
   pinTransient = /** @param {any} _id */ _id => {},
   unpinTransient = /** @param {any} _id */ _id => {},
   getFormulaGraphSnapshot = /** @param {any[]} _ids */ async _ids =>
@@ -25221,7 +25302,6 @@ const normalizeHostOrGuestOptions = opts => {
    * @param {FormulaIdentifier} hostId
    * @param {FormulaIdentifier} handleId
    * @param {FormulaIdentifier | undefined} hostHandleId
-   * @param {FormulaIdentifier} keypairId
    * @param {NodeNumber} agentNodeNumber
    * @param {(message: Uint8Array) => Uint8Array} agentSignBytes
    * @param {FormulaIdentifier} storeId
@@ -25240,7 +25320,6 @@ const normalizeHostOrGuestOptions = opts => {
     hostId,
     handleId,
     hostHandleId,
-    keypairId,
     agentNodeNumber,
     agentSignBytes,
     storeId,
@@ -25271,7 +25350,6 @@ const normalizeHostOrGuestOptions = opts => {
       '@agent': hostId,
       '@self': handleId,
       '@host': hostHandleId ?? handleId,
-      '@keypair': keypairId,
       '@main': mainWorkerId,
       '@endo': endoId,
       '@nets': networksDirectoryId,
@@ -25393,7 +25471,7 @@ const normalizeHostOrGuestOptions = opts => {
       );
 
       const { id } = await formulateMarshalValue(value, tasks, pinTransient);
-      unpinTransient(id);
+      await unpinTransient(id);
     };
 
     /**
@@ -25520,18 +25598,19 @@ const normalizeHostOrGuestOptions = opts => {
       if (resultName === undefined) {
         // Ephemeral eval: the formula was pinned inside formulateEval
         // (inside the lock) so concurrent collection can't reclaim it.
-        // Unpin after the value resolves.
+        // Unpin after the value resolves and drain any resulting
+        // collection cleanup (worker termination, etc.).
         try {
           return await value;
         } finally {
-          unpinTransient(id);
+          await unpinTransient(id);
         }
       }
       return value;
     };
 
     /**
-     * Helper function for makeUnconfined and makeBundle.
+     * Helper function for makeUnconfined and makeArchive.
      * @param {Name | undefined} workerName
      * @param {MakeCapletOptions} [options]
      */
@@ -25620,11 +25699,13 @@ const normalizeHostOrGuestOptions = opts => {
       return value;
     };
 
-    /** @type {EndoHost['makeBundle']} */
-    const makeBundle = async (workerName, bundleName, options) => {
-      const bundleId = petStore.identifyLocal(/** @type {Name} */ (bundleName));
-      if (bundleId === undefined) {
-        throw new TypeError(`Unknown pet name for bundle: ${q(bundleName)}`);
+    /** @type {EndoHost['makeArchive']} */
+    const makeArchive = async (workerName, archiveName, options) => {
+      const archiveId = petStore.identifyLocal(
+        /** @type {Name} */ (archiveName),
+      );
+      if (archiveId === undefined) {
+        throw new TypeError(`Unknown pet name for archive: ${q(archiveName)}`);
       }
 
       const {
@@ -25642,14 +25723,12 @@ const normalizeHostOrGuestOptions = opts => {
         explicitLabel ??
         (options?.resultName !== undefined
           ? `${options.resultName}`
-          : `bundle:${bundleName}`);
+          : `archive:${archiveName}`);
 
-      // Behold, recursion:
-      // eslint-disable-next-line no-use-before-define
-      const { value } = await formulateBundle(
+      const { value } = await formulateArchive(
         hostId,
         handleId,
-        /** @type {FormulaIdentifier} */ (bundleId),
+        /** @type {FormulaIdentifier} */ (archiveId),
         tasks,
         workerId,
         powersId,
@@ -25916,127 +25995,102 @@ const normalizeHostOrGuestOptions = opts => {
     const accept = async (invitationLocator, guestName) => {
       assertPetName(guestName);
       const url = new URL(invitationLocator);
-      const nodeNumber = url.hostname;
+      const daemonNode = url.hostname;
       const invitationNumber = url.searchParams.get('id');
       const remoteHandleNumber = url.searchParams.get('from');
+      // The remote handle's node may differ from the daemon node when
+      // agent keys are used as formula nodes.
+      const remoteHandleNodeParam = url.searchParams.get('fromNode');
       const addresses = url.searchParams.getAll('at');
 
-      nodeNumber || assert.Fail`Invitation must have a hostname`;
+      daemonNode || assert.Fail`Invitation must have a hostname`;
       if (!remoteHandleNumber) {
         throw makeError(`Invitation must have a "from" parameter`);
       }
       if (invitationNumber === null) {
         throw makeError(`Invitation must have an "id" parameter`);
       }
-      assertNodeNumber(nodeNumber);
+      assertNodeNumber(daemonNode);
       assertFormulaNumber(remoteHandleNumber);
       assertFormulaNumber(invitationNumber);
 
       /** @type {PeerInfo} */
       const peerInfo = {
-        node: nodeNumber,
+        node: daemonNode,
         addresses,
       };
       // eslint-disable-next-line no-use-before-define
       await addPeerInfo(peerInfo);
 
+      // Register the remote agent key so we can route to its daemon.
+      if (remoteHandleNodeParam && remoteHandleNodeParam !== daemonNode) {
+        writeRemoteAgentKey(remoteHandleNodeParam, daemonNode);
+      }
+
       const invitationId = formatId({
         number: invitationNumber,
-        node: nodeNumber,
+        node: daemonNode,
       });
 
-      const { number: handleNumber } = parseId(handleId);
+      const { number: handleNumber, node: handleNode } = parseId(handleId);
       // eslint-disable-next-line no-use-before-define
       const { addresses: hostAddresses } = await getPeerInfo();
       const handleUrl = new URL('endo://');
-      handleUrl.hostname = agentNodeNumber;
+      handleUrl.hostname = localNodeNumber;
       handleUrl.searchParams.set('id', handleNumber);
+      // Include the handle's node if it differs from the daemon node
+      // (i.e. it uses an agent key).
+      if (handleNode !== localNodeNumber) {
+        handleUrl.searchParams.set('handleNode', handleNode);
+      }
       for (const address of hostAddresses) {
         handleUrl.searchParams.append('at', address);
       }
       const handleLocator = handleUrl.href;
 
       const invitation = await provide(invitationId, 'invitation');
-      const acceptResult = await E(invitation).accept(handleLocator, guestName);
+      await E(invitation).accept(handleLocator, guestName);
 
-      // The host's accept handler returns the synced store number.
-      const { syncedStoreNumber } =
-        /** @type {{ syncedStoreNumber: import('./types.js').FormulaNumber }} */ (
-          acceptResult
-        );
-
-      // Create a synced-pet-store (grantee role) paired with the host's store.
-      const peerId = await getPeerIdForNodeIdentifier(
-        /** @type {import('./types.js').NodeNumber} */ (nodeNumber),
-      );
-      const { id: syncedStoreId } = await formulateSyncedPetStore(
-        peerId,
-        'grantee',
-        /** @type {import('./types.js').FormulaNumber} */ (syncedStoreNumber),
-        peerId  // store dependency
-      );
-
-      // Create a local guest backed by the synced store.
+      // Create a local guest with a regular pet store.
+      // Pin the guest handle via deferred task to prevent premature
+      // collection, then store the durable name after the lock releases.
       /** @type {import('./types.js').DeferredTasks<import('./types.js').AgentDeferredTaskParams>} */
       const guestTasks = makeDeferredTasks();
+      guestTasks.push(async identifiers => pinTransient(identifiers.handleId));
       const { id: localGuestId } = await formulateGuest(
         hostId,
         handleId,
         guestTasks,
         `guest:${guestName}`,
-        syncedStoreId,
       );
 
       // Look up the local guest's handle from its formula so we can
       // name it.  Incarnating the handle transitively incarnates the
-      // guest and its synced pet store, starting synchronisation.
+      // guest.
       const localGuestFormula =
         /** @type {import('./types.js').GuestFormula} */ (
           await getFormulaForId(localGuestId)
         );
+
+      // Store the durable name and release the transient pin.
       await E(directory).storeIdentifier(
         ['@pins', `guest-${guestName}`],
         localGuestFormula.handle,
       );
+      await unpinTransient(localGuestFormula.handle);
 
       // Store the remote handle under guestName for mail delivery.
+      // Use the handle's actual node (which may be an agent key) if
+      // provided, falling back to the daemon node.
+      const remoteHandleNode = remoteHandleNodeParam || daemonNode;
       const remoteHandleId = formatId({
         number: /** @type {import('./types.js').FormulaNumber} */ (
           remoteHandleNumber
         ),
-        node: /** @type {import('./types.js').NodeNumber} */ (nodeNumber),
+        node: /** @type {import('./types.js').NodeNumber} */ (remoteHandleNode),
       });
       const remoteHandleLocator = formatLocator(remoteHandleId, 'handle');
       await E(directory).storeLocator([guestName], remoteHandleLocator);
-    };
-
-    /** @type {EndoHost['registerSyncedStore']} */
-    const registerSyncedStore = async (_petName, _syncedStoreId) => {
-      // No-op: the synced store is now discovered via the formula
-      // graph (guest handle → guest → petStore).  Retained for
-      // interface compatibility.
-    };
-
-    /** @type {EndoHost['getSyncedStore']} */
-    const getSyncedStore = async petName => {
-      // Traverse the formula graph:
-      // @pins/guest-<name> → local guest handle
-      //   → handle formula.agent → guest formula
-      //     → guest formula.petStore → synced store
-      const localHandleId = await E(directory).identify(
-        '@pins',
-        `guest-${petName}`,
-      );
-      if (localHandleId === undefined) {
-        throw new Error(`No synced store for ${q(petName)}`);
-      }
-      const handleFormula = /** @type {import('./types.js').HandleFormula} */ (
-        await getFormulaForId(/** @type {FormulaIdentifier} */ (localHandleId))
-      );
-      const guestFormula = /** @type {import('./types.js').GuestFormula} */ (
-        await getFormulaForId(handleFormula.agent)
-      );
-      return provide(guestFormula.petStore, 'synced-pet-store');
     };
 
     /** @type {EndoHost['cancel']} */
@@ -26088,7 +26142,7 @@ const normalizeHostOrGuestOptions = opts => {
     const getPeerInfo = async () => {
       const addresses = await getAllNetworkAddresses(networksDirectoryId);
       const peerInfo = {
-        node: agentNodeNumber,
+        node: localNodeNumber,
         addresses,
       };
       return peerInfo;
@@ -26314,7 +26368,7 @@ const normalizeHostOrGuestOptions = opts => {
       provideWorker,
       evaluate,
       makeUnconfined,
-      makeBundle,
+      makeArchive,
       cancel,
       gateway,
       greeter,
@@ -26330,8 +26384,6 @@ const normalizeHostOrGuestOptions = opts => {
       makeTimer: makeTimerCmd,
       invite,
       accept,
-      getSyncedStore,
-      registerSyncedStore,
       endow,
       submit,
       sendValue,
@@ -26339,62 +26391,27 @@ const normalizeHostOrGuestOptions = opts => {
       getFormulaGraph,
     };
 
-    /** @param {Function} fn */
-    const withCollection =
-      fn =>
-      async (...args) => {
-        await null;
-        try {
-          return await fn(...args);
-        } finally {
-          await collectIfDirty();
-        }
-      };
-
-    // Methods that create formulas and resolve them through promise chains
-    // (E.sendOnly(resolver).resolveWithId) must NOT trigger collection on
-    // return, because the resolver runs asynchronously and hasn't written
-    // the formula ID to the pet store yet. Collection at this point would
-    // find the just-created formula unreachable and delete it.
-    const unwrappedMethods = new Set([
-      'handle',
-      'reverseIdentify',
-      'endow',
-      'submit',
-      'sendValue',
-    ]);
-    const wrappedHost = Object.fromEntries(
-      Object.entries(host).map(([name, fn]) => [
-        name,
-        unwrappedMethods.has(name) ? fn : withCollection(fn),
-      ]),
-    );
-
     const hostExo = makeExo(
       'EndoHost',
       HostInterface,
       /** @type {any} */ ({
         help: makeHelp(hostHelp),
-        ...wrappedHost,
+        ...host,
         /** @param {string} locator */
         followLocatorNameChanges: async locator => {
           const iterator = host.followLocatorNameChanges(locator);
-          await collectIfDirty();
           return makeIteratorRef(iterator);
         },
         followMessages: async () => {
           const iterator = host.followMessages();
-          await collectIfDirty();
           return makeIteratorRef(iterator);
         },
         followNameChanges: async () => {
           const iterator = host.followNameChanges();
-          await collectIfDirty();
           return makeIteratorRef(iterator);
         },
         followPeerChanges: async () => {
           const iterator = await host.followPeerChanges();
-          await collectIfDirty();
           return makeIteratorRef(iterator);
         },
       }),
@@ -26909,72 +26926,126 @@ const short = id => id.slice(0, 8);
 /** @import { Formula, FormulaIdentifier } from './types.js' */
 
 /**
- * The formula graph tracks the dependency structure between formulas for
- * garbage collection (formula collection). It maintains two kinds of edges:
+ * @typedef {object} LabeledEdge
+ * @property {string} label
+ * @property {FormulaIdentifier} target
+ */
+
+/**
+ * @typedef {object} RetentionPathSegment
+ * @property {FormulaIdentifier[]} groupMembers
+ * @property {FormulaIdentifier} [referencedBy] - source group representative
+ * @property {string[]} [labels] - edge labels from source
+ * @property {'root'} [type] - present if this is a root group
+ */
+
+/** @typedef {RetentionPathSegment[]} RetentionPath */
+
+/**
+ * The formula graph tracks the dependency structure between formulas
+ * and performs immediate reference-counted collection when formulas
+ * become unreachable.
  *
- * 1. **Formula deps** — static edges derived from a formula's definition
- *    (e.g., a guest depends on its worker, pet store, mailbox store).
- * 2. **Pet store edges** — dynamic edges from pet stores to the formulas
- *    they name. These change as pet names are added and removed.
+ * It maintains two kinds of raw edges:
  *
- * Formulas that share identity (e.g., a host and its handle, or a
- * promise and its resolver) are merged into **groups** using a
- * union-find structure so they are collected atomically.
+ * 1. **Formula deps** — static edges derived from a formula's
+ *    definition (e.g., a guest depends on its worker, pet store).
+ * 2. **Pet store edges** — dynamic edges from pet stores to the
+ *    formulas they name.
+ * 3. **Retention edges** — edges from agent formulas to formulas
+ *    that remote peers depend on.
  *
- * The collector (collectIfDirty) builds a group-level dependency graph,
- * computes reference counts, and collects groups with zero incoming
- * references that are not in the root set. The `dirty` flag avoids
- * redundant collection passes when the graph hasn't changed.
+ * Formulas that share identity (host↔handle, channel↔handle,
+ * promise↔resolver) are merged into **groups** via union-find and
+ * collected atomically.
+ *
+ * Each group maintains a reference count: the number of distinct
+ * external groups referencing it, plus virtual root contributions.
+ * When a group's ref count drops to zero and it is not a root,
+ * it is collected immediately.
  *
  * @param {object} args
- * @param {(formula: Formula) => FormulaIdentifier[]} args.extractDeps
+ * @param {(formula: Formula) => Array<[string, FormulaIdentifier]>} args.extractLabeledDeps
  * @param {(id: FormulaIdentifier) => boolean} args.isLocalId
+ * @param {(collectedIds: FormulaIdentifier[]) => void} args.onCollect
  */
-       const makeFormulaGraph = ({ extractDeps, isLocalId }) => {
-  // Static dependencies: formula id -> set of formula ids it depends on.
+       const makeFormulaGraph = ({
+  extractLabeledDeps,
+  isLocalId,
+  onCollect,
+}) => {
+  // --- Raw edge storage ---
+
   /** @type {Map<FormulaIdentifier, Set<FormulaIdentifier>>} */
   const formulaDeps = new Map();
-  // Dynamic dependencies: pet store id -> set of formula ids named in it.
   /** @type {Map<FormulaIdentifier, Set<FormulaIdentifier>>} */
   const petStoreEdges = new Map();
-  // Formulas that are never collected (endo, main worker, known peers, etc.).
   /** @type {Set<FormulaIdentifier>} */
   const roots = new Set();
 
-  // Union-find: each id maps to its parent; a root maps to itself.
+  // Labeled edges for retention-path queries.
+  /** @type {Map<FormulaIdentifier, LabeledEdge[]>} */
+  const labeledEdges = new Map();
+
+  // In-memory retention edges: agentId → Set<formulaId>.
+  /** @type {Map<FormulaIdentifier, Set<FormulaIdentifier>>} */
+  const retentionEdges = new Map();
+
+  // Transient roots (protect formulas during command execution).
+  // Values are pin counts — a formula can be pinned multiple times
+  // and must be unpinned the same number of times.
+  /** @type {Map<FormulaIdentifier, number>} */
+  const transientRoots = new Map();
+
+  // --- Union-find ---
+
   /** @type {Map<FormulaIdentifier, FormulaIdentifier>} */
   const parent = new Map();
-  // Union-find: rank heuristic — size of each root's tree.
   /** @type {Map<FormulaIdentifier, number>} */
-  const size = new Map();
-  // Tracks promise/resolver pairs by their shared store so they can be
-  // unioned once both halves are known.
+  const ufSize = new Map();
   /** @type {Map<FormulaIdentifier, { promiseId?: FormulaIdentifier, resolverId?: FormulaIdentifier }>} */
   const promiseResolverByStore = new Map();
-  let dirty = true;
 
-  /**
-   * Initializes a formula as a singleton group in the union-find
-   * if it hasn't been seen before. Idempotent.
-   *
-   * @param {FormulaIdentifier} id
-   */
+  // --- Group-level ref counting ---
+
+  // group → Set<member formula ids>
+  /** @type {Map<FormulaIdentifier, Set<FormulaIdentifier>>} */
+  const groupMembers = new Map();
+  // group → Map<targetGroup, edgeMultiplicity>
+  /** @type {Map<FormulaIdentifier, Map<FormulaIdentifier, number>>} */
+  const groupOutEdges = new Map();
+  // group → Set<sourceGroup>
+  /** @type {Map<FormulaIdentifier, Set<FormulaIdentifier>>} */
+  const groupInEdges = new Map();
+  // group → number of distinct referrers + root contributions
+  /** @type {Map<FormulaIdentifier, number>} */
+  const groupRefCount = new Map();
+
+  // Whether collection is currently in progress (prevents re-entrant
+  // collection from maybeCollect calls during onCollect).
+  let collecting = false;
+
+  // Whether formula addition is in progress (prevents premature
+  // collection of formulas whose transient pins haven't been applied yet).
+  let addingFormula = false;
+
+  // --- Union-find operations ---
+
+  /** @param {FormulaIdentifier} id */
   const ensure = id => {
     if (!parent.has(id)) {
       parent.set(id, id);
-      size.set(id, 1);
+      ufSize.set(id, 1);
+      const members = new Set();
+      members.add(id);
+      groupMembers.set(id, members);
+      groupRefCount.set(id, 0);
     }
   };
 
-  /**
-   * Returns the representative (root) of the group containing `id`,
-   * applying path compression so future lookups are O(1).
-   *
-   * @param {FormulaIdentifier} id
-   */
+  /** @param {FormulaIdentifier} id */
   const findGroup = id => {
     ensure(id);
-    // Safe: ensure() guarantees parent.has(id).
     const next = /** @type {FormulaIdentifier} */ (parent.get(id));
     if (next !== id) {
       const root = findGroup(next);
@@ -26985,69 +27056,407 @@ const short = id => id.slice(0, 8);
   };
 
   /**
-   * Merges two formulas into the same group so they are collected
-   * together. Uses union-by-size to keep trees balanced.
+   * Check if a group is a root (any member in roots or transientRoots).
+   * @param {FormulaIdentifier} group
+   */
+  const isRootGroup = group => {
+    const members = groupMembers.get(group);
+    if (members === undefined) return false;
+    for (const m of members) {
+      if (roots.has(m) || (transientRoots.get(m) ?? 0) > 0) return true;
+    }
+    return false;
+  };
+
+  // --- Group-level edge primitives ---
+
+  /**
+   * Add a group-level edge from sourceId's group to targetId's group.
+   * Increments the target group's ref count if this is the first edge
+   * from the source group.
+   *
+   * @param {FormulaIdentifier} sourceId
+   * @param {FormulaIdentifier} targetId
+   */
+  const addGroupEdge = (sourceId, targetId) => {
+    const sg = findGroup(sourceId);
+    const tg = findGroup(targetId);
+    if (sg === tg) return;
+
+    const out = groupOutEdges.get(sg) ?? new Map();
+    const prev = out.get(tg) ?? 0;
+    out.set(tg, prev + 1);
+    groupOutEdges.set(sg, out);
+
+    if (prev === 0) {
+      groupRefCount.set(tg, (groupRefCount.get(tg) ?? 0) + 1);
+      const inSet = groupInEdges.get(tg) ?? new Set();
+      inSet.add(sg);
+      groupInEdges.set(tg, inSet);
+    }
+  };
+
+  /**
+   * Remove a group-level edge from sourceId's group to targetId's group.
+   * Decrements the target group's ref count if this was the last edge
+   * from the source group. May trigger collection.
+   *
+   * @param {FormulaIdentifier} sourceId
+   * @param {FormulaIdentifier} targetId
+   */
+  const removeGroupEdge = (sourceId, targetId) => {
+    const sg = findGroup(sourceId);
+    const tg = findGroup(targetId);
+    if (sg === tg) return;
+
+    const out = groupOutEdges.get(sg);
+    if (!out) return;
+    const prev = out.get(tg) ?? 0;
+    if (prev <= 0) return;
+
+    if (prev === 1) {
+      out.delete(tg);
+      if (out.size === 0) {
+        groupOutEdges.delete(sg);
+      }
+      const newCount = (groupRefCount.get(tg) ?? 0) - 1;
+      groupRefCount.set(tg, newCount);
+      groupInEdges.get(tg)?.delete(sg);
+      // eslint-disable-next-line no-use-before-define
+      maybeCollect(tg);
+    } else {
+      out.set(tg, prev - 1);
+    }
+  };
+
+  // --- Cascading collection ---
+
+  /**
+   * If `startGroup` has zero ref count and is not a root, collect it
+   * and cascade to any children whose ref counts drop to zero.
+   *
+   * @param {FormulaIdentifier} startGroup
+   */
+  const maybeCollect = startGroup => {
+    if (collecting || addingFormula) return;
+
+    const rc = groupRefCount.get(startGroup) ?? 0;
+    if (rc > 0) return;
+    if (isRootGroup(startGroup)) return;
+
+    collecting = true;
+    try {
+      const queue = [startGroup];
+      /** @type {FormulaIdentifier[]} */
+      const collectedGroups = [];
+
+      while (queue.length > 0) {
+        const g = /** @type {FormulaIdentifier} */ (queue.shift());
+        const eligible =
+          (groupRefCount.get(g) ?? 0) <= 0 &&
+          !isRootGroup(g) &&
+          !collectedGroups.includes(g);
+        if (eligible) {
+          collectedGroups.push(g);
+
+          // Decrement children's ref counts.
+          const out = groupOutEdges.get(g);
+          if (out !== undefined) {
+            for (const [child] of out) {
+              const newCount = (groupRefCount.get(child) ?? 0) - 1;
+              groupRefCount.set(child, newCount);
+              groupInEdges.get(child)?.delete(g);
+              if (newCount <= 0 && !isRootGroup(child)) {
+                queue.push(child);
+              }
+            }
+            groupOutEdges.delete(g);
+          }
+        }
+      }
+
+      if (collectedGroups.length === 0) return;
+
+      // Flatten to formula IDs.
+      /** @type {FormulaIdentifier[]} */
+      const collectedIds = [];
+      for (const g of collectedGroups) {
+        const members = groupMembers.get(g);
+        if (members !== undefined) {
+          for (const id of members) {
+            collectedIds.push(id);
+          }
+        }
+      }
+
+      // Clean up graph structures for collected formulas.
+      for (const id of collectedIds) {
+        formulaDeps.delete(id);
+        labeledEdges.delete(id);
+        petStoreEdges.delete(id);
+        retentionEdges.delete(id);
+        parent.delete(id);
+        ufSize.delete(id);
+        // Clean up promiseResolverByStore entries.
+        for (const [storeId, record] of promiseResolverByStore.entries()) {
+          if (record.promiseId === id) {
+            delete record.promiseId;
+          }
+          if (record.resolverId === id) {
+            delete record.resolverId;
+          }
+          if (!record.promiseId && !record.resolverId) {
+            promiseResolverByStore.delete(storeId);
+          }
+        }
+      }
+      for (const g of collectedGroups) {
+        groupMembers.delete(g);
+        groupRefCount.delete(g);
+        groupInEdges.delete(g);
+        // groupOutEdges already deleted above
+      }
+
+      onCollect(collectedIds);
+    } finally {
+      collecting = false;
+    }
+  };
+
+  // --- Union with ref-count reconciliation ---
+
+  /**
+   * Merges two formulas into the same group. Reconciles group-level
+   * ref counts so that cross-group edges becoming intra-group edges
+   * correctly decrement counts.
    *
    * @param {FormulaIdentifier} left
    * @param {FormulaIdentifier} right
    */
   const union = (left, right) => {
-    const leftRoot = findGroup(left);
-    const rightRoot = findGroup(right);
-    if (leftRoot === rightRoot) {
-      return;
+    let winner = findGroup(left);
+    let loser = findGroup(right);
+    if (winner === loser) return;
+
+    // Union-by-size: smaller tree merges into larger.
+    const winnerSize = ufSize.get(winner) || 1;
+    const loserSize = ufSize.get(loser) || 1;
+    if (winnerSize < loserSize) {
+      const tmp = winner;
+      winner = loser;
+      loser = tmp;
     }
-    const leftSize = size.get(leftRoot) || 1;
-    const rightSize = size.get(rightRoot) || 1;
-    if (leftSize < rightSize) {
-      parent.set(leftRoot, rightRoot);
-      size.set(rightRoot, leftSize + rightSize);
-    } else {
-      parent.set(rightRoot, leftRoot);
-      size.set(leftRoot, leftSize + rightSize);
+
+    // 1. Merge outgoing edges from loser into winner.
+    const loserOut = groupOutEdges.get(loser);
+    if (loserOut !== undefined) {
+      const winnerOut = groupOutEdges.get(winner) ?? new Map();
+      groupOutEdges.set(winner, winnerOut);
+
+      for (const [targetGroup, count] of loserOut) {
+        if (targetGroup === winner) {
+          // Edge from loser to winner becomes intra-group.
+          const rc = (groupRefCount.get(winner) ?? 0) - 1;
+          groupRefCount.set(winner, rc);
+          groupInEdges.get(winner)?.delete(loser);
+        } else {
+          const existing = winnerOut.get(targetGroup) ?? 0;
+          if (existing === 0) {
+            // Winner didn't previously reference this target.
+            // Ref count of target stays the same (was counting loser,
+            // now counts winner).
+            groupInEdges.get(targetGroup)?.delete(loser);
+            const inSet = groupInEdges.get(targetGroup) ?? new Set();
+            inSet.add(winner);
+            groupInEdges.set(targetGroup, inSet);
+          } else {
+            // Both groups already referenced this target.
+            // Target loses one distinct referrer.
+            const rc = (groupRefCount.get(targetGroup) ?? 0) - 1;
+            groupRefCount.set(targetGroup, rc);
+            groupInEdges.get(targetGroup)?.delete(loser);
+          }
+          winnerOut.set(targetGroup, existing + count);
+        }
+      }
+      groupOutEdges.delete(loser);
     }
-    dirty = true;
+
+    // 2. Merge incoming edges to loser into winner.
+    const loserIn = groupInEdges.get(loser);
+    if (loserIn !== undefined) {
+      for (const sourceGroup of loserIn) {
+        if (sourceGroup === winner) {
+          // Edge from winner to loser becomes intra-group.
+          // Winner's outgoing to loser was already handled in step 1
+          // if loser had outgoing to winner — but this is the reverse.
+          const winnerOut = groupOutEdges.get(winner);
+          if (winnerOut) {
+            winnerOut.delete(loser);
+            if (winnerOut.size === 0) {
+              groupOutEdges.delete(winner);
+            }
+          }
+          // Loser's ref count was counting this; it will be transferred below.
+        } else {
+          const srcOut = groupOutEdges.get(sourceGroup);
+          if (srcOut) {
+            const countToLoser = srcOut.get(loser) ?? 0;
+            srcOut.delete(loser);
+
+            const existingToWinner = srcOut.get(winner) ?? 0;
+            if (existingToWinner === 0) {
+              // Source didn't previously reference winner.
+              // Transfer the edge, ref count neutral.
+              const inSet = groupInEdges.get(winner) ?? new Set();
+              inSet.add(sourceGroup);
+              groupInEdges.set(winner, inSet);
+            } else {
+              // Source already referenced winner. Lose one distinct referrer.
+              const rc = (groupRefCount.get(winner) ?? 0) - 1;
+              groupRefCount.set(winner, rc);
+            }
+            srcOut.set(winner, existingToWinner + countToLoser);
+          }
+        }
+      }
+      groupInEdges.delete(loser);
+    }
+
+    // 3. Transfer root contributions from loser to winner.
+    const loserMembers = groupMembers.get(loser);
+    if (loserMembers !== undefined) {
+      let loserRootCount = 0;
+      for (const m of loserMembers) {
+        if (roots.has(m)) loserRootCount += 1;
+        if ((transientRoots.get(m) ?? 0) > 0) loserRootCount += 1;
+      }
+      if (loserRootCount > 0) {
+        const rc = (groupRefCount.get(winner) ?? 0) + loserRootCount;
+        groupRefCount.set(winner, rc);
+      }
+    }
+
+    // 4. Transfer members.
+    const winnerMembers = groupMembers.get(winner) ?? new Set();
+    groupMembers.set(winner, winnerMembers);
+    if (loserMembers !== undefined) {
+      for (const m of loserMembers) {
+        winnerMembers.add(m);
+      }
+    }
+
+    // 5. Clean up loser.
+    groupMembers.delete(loser);
+    groupRefCount.delete(loser);
+
+    // 6. Do the actual union-find parent update.
+    parent.set(loser, winner);
+    ufSize.set(winner, winnerSize + loserSize);
+
+    // 7. Merging can only decrease ref counts; check if winner
+    //    is now collectible.
+    maybeCollect(winner);
+  };
+
+  // --- Labeled edge helpers ---
+
+  /**
+   * @param {FormulaIdentifier} sourceId
+   * @param {string} label
+   * @param {FormulaIdentifier} target
+   */
+  const addLabeledEdge = (sourceId, label, target) => {
+    const edges = labeledEdges.get(sourceId) ?? [];
+    edges.push({ label, target });
+    labeledEdges.set(sourceId, edges);
   };
 
   /**
-   * Registers a new formula: records its static dependencies and
-   * unions it with related formulas that share identity
-   * (host<->handle, promise<->resolver).
+   * @param {FormulaIdentifier} sourceId
+   * @param {string} label
+   * @param {FormulaIdentifier} target
+   */
+  const removeLabeledEdge = (sourceId, label, target) => {
+    const edges = labeledEdges.get(sourceId);
+    if (edges === undefined) return;
+    const idx = edges.findIndex(e => e.label === label && e.target === target);
+    if (idx >= 0) {
+      edges.splice(idx, 1);
+      if (edges.length === 0) {
+        labeledEdges.delete(sourceId);
+      }
+    }
+  };
+
+  // --- Public hooks ---
+
+  /**
+   * Registers a new formula: records static dependencies, adds
+   * group-level edges, and unions related formulas.
    *
    * @param {FormulaIdentifier} id
    * @param {Formula} formula
    */
   const onFormulaAdded = (id, formula) => {
-    ensure(id);
-    const deps = extractDeps(formula).filter(isLocalId);
-    formulaDeps.set(id, new Set(deps));
-    if (formula.type === 'handle') {
-      union(id, formula.agent);
-    } else if (formula.type === 'host' || formula.type === 'guest') {
-      union(id, formula.handle);
-    } else if (formula.type === 'promise' || formula.type === 'resolver') {
-      const record = promiseResolverByStore.get(formula.store) || {};
-      if (formula.type === 'promise') {
-        record.promiseId = id;
-      } else {
-        record.resolverId = id;
+    // Suppress collection during formula addition. Unions performed
+    // here can temporarily drop a group's ref count to 0, but the
+    // caller (formulate/formulateLazy) will immediately pin or
+    // reference the formula afterward.
+    addingFormula = true;
+    try {
+      ensure(id);
+      const labeled = extractLabeledDeps(formula);
+      const localDeps = labeled.filter(([, dep]) => isLocalId(dep));
+
+      formulaDeps.set(id, new Set(localDeps.map(([, dep]) => dep)));
+
+      // Register labeled edges and add group-level edges.
+      for (const [label, dep] of localDeps) {
+        ensure(dep);
+        addLabeledEdge(id, label, dep);
+        addGroupEdge(id, dep);
       }
-      promiseResolverByStore.set(formula.store, record);
-      if (record.promiseId && record.resolverId) {
-        union(record.promiseId, record.resolverId);
+
+      // Union formulas that share identity.
+      if (formula.type === 'handle') {
+        union(id, formula.agent);
+      } else if (
+        formula.type === 'host' ||
+        formula.type === 'guest' ||
+        formula.type === 'channel'
+      ) {
+        union(id, formula.handle);
+      } else if (formula.type === 'promise' || formula.type === 'resolver') {
+        const record = promiseResolverByStore.get(formula.store) || {};
+        if (formula.type === 'promise') {
+          record.promiseId = id;
+        } else {
+          record.resolverId = id;
+        }
+        promiseResolverByStore.set(formula.store, record);
+        if (record.promiseId && record.resolverId) {
+          union(record.promiseId, record.resolverId);
+        }
       }
+    } finally {
+      addingFormula = false;
     }
-    dirty = true;
   };
 
   /**
-   * Removes a collected formula from the dependency graph and cleans
-   * up any promise/resolver pairing that referenced it.
+   * Removes a formula's static dependency edges from the graph.
+   * Called as part of collection cleanup.
+   *
+   * Note: This does NOT trigger further collection — it is called
+   * after the group has already been collected by maybeCollect.
+   * The group-level edge decrements happen inside maybeCollect itself.
    *
    * @param {FormulaIdentifier} id
    */
   const onFormulaRemoved = id => {
     formulaDeps.delete(id);
+    labeledEdges.delete(id);
     for (const [storeId, record] of promiseResolverByStore.entries()) {
       if (record.promiseId === id) {
         delete record.promiseId;
@@ -27059,20 +27468,23 @@ const short = id => id.slice(0, 8);
         promiseResolverByStore.delete(storeId);
       }
     }
-    dirty = true;
   };
 
   /**
-   * Records that a pet store now names a formula (a dynamic edge).
+   * Records that a pet store now names a formula.
    *
    * @param {FormulaIdentifier} petStoreId
    * @param {FormulaIdentifier} id
    */
   const onPetStoreWrite = (petStoreId, id) => {
     const set = petStoreEdges.get(petStoreId) || new Set();
+    const isNew = !set.has(id);
     set.add(id);
     petStoreEdges.set(petStoreId, set);
-    dirty = true;
+    if (isNew) {
+      addLabeledEdge(petStoreId, 'petName', id);
+      addGroupEdge(petStoreId, id);
+    }
   };
 
   /**
@@ -27083,35 +27495,241 @@ const short = id => id.slice(0, 8);
    */
   const onPetStoreRemove = (petStoreId, id) => {
     const set = petStoreEdges.get(petStoreId);
-    if (set !== undefined) {
+    if (set !== undefined && set.has(id)) {
       set.delete(id);
       if (set.size === 0) {
         petStoreEdges.delete(petStoreId);
       }
-      dirty = true;
+      removeLabeledEdge(petStoreId, 'petName', id);
+      removeGroupEdge(petStoreId, id);
     }
   };
 
   /**
-   * Removes all dynamic edges from a pet store (used when the store
-   * itself is collected).
+   * Removes all dynamic edges from a pet store.
    *
    * @param {FormulaIdentifier} petStoreId
    */
   const onPetStoreRemoveAll = petStoreId => {
-    if (petStoreEdges.delete(petStoreId)) {
-      dirty = true;
+    const set = petStoreEdges.get(petStoreId);
+    if (set !== undefined) {
+      for (const id of set) {
+        removeLabeledEdge(petStoreId, 'petName', id);
+        removeGroupEdge(petStoreId, id);
+      }
+      petStoreEdges.delete(petStoreId);
     }
   };
 
   /**
-   * Adds a formula to the permanent root set (never collected).
+   * Adds a formula to the permanent root set.
    *
    * @param {FormulaIdentifier} id
    */
   const addRoot = id => {
-    roots.add(id);
-    dirty = true;
+    ensure(id);
+    if (!roots.has(id)) {
+      roots.add(id);
+      const g = findGroup(id);
+      groupRefCount.set(g, (groupRefCount.get(g) ?? 0) + 1);
+    }
+  };
+
+  // --- Transient roots ---
+
+  /**
+   * Temporarily adds a formula to the root set, protecting it
+   * from collection until unpinned.
+   *
+   * @param {FormulaIdentifier} id
+   */
+  const pinTransient = id => {
+    ensure(id);
+    const prev = transientRoots.get(id) ?? 0;
+    transientRoots.set(id, prev + 1);
+    if (prev === 0) {
+      // First pin: increment group ref count.
+      const g = findGroup(id);
+      groupRefCount.set(g, (groupRefCount.get(g) ?? 0) + 1);
+    }
+  };
+
+  /**
+   * Removes a formula from the transient root set.
+   *
+   * @param {FormulaIdentifier} id
+   */
+  const unpinTransient = id => {
+    const prev = transientRoots.get(id) ?? 0;
+    if (prev <= 0) return;
+    if (prev === 1) {
+      transientRoots.delete(id);
+      const g = findGroup(id);
+      const rc = (groupRefCount.get(g) ?? 0) - 1;
+      groupRefCount.set(g, rc);
+      maybeCollect(g);
+    } else {
+      transientRoots.set(id, prev - 1);
+    }
+  };
+
+  // --- Retention edges ---
+
+  /**
+   * Add a retention edge from an agent to a formula that a remote
+   * peer depends on.
+   *
+   * @param {FormulaIdentifier} agentId
+   * @param {FormulaIdentifier} formulaId
+   */
+  const addRetention = (agentId, formulaId) => {
+    const set = retentionEdges.get(agentId) ?? new Set();
+    if (set.has(formulaId)) return;
+    set.add(formulaId);
+    retentionEdges.set(agentId, set);
+    addLabeledEdge(agentId, 'retention', formulaId);
+    addGroupEdge(agentId, formulaId);
+  };
+
+  /**
+   * Remove a retention edge.
+   *
+   * @param {FormulaIdentifier} agentId
+   * @param {FormulaIdentifier} formulaId
+   */
+  const removeRetention = (agentId, formulaId) => {
+    const set = retentionEdges.get(agentId);
+    if (set === undefined || !set.has(formulaId)) return;
+    set.delete(formulaId);
+    if (set.size === 0) {
+      retentionEdges.delete(agentId);
+    }
+    removeLabeledEdge(agentId, 'retention', formulaId);
+    removeGroupEdge(agentId, formulaId);
+  };
+
+  /**
+   * Replace the entire retention set for an agent.
+   * Diffs against the current set and applies add/remove operations.
+   *
+   * @param {FormulaIdentifier} agentId
+   * @param {FormulaIdentifier[]} newIds
+   */
+  const replaceRetention = (agentId, newIds) => {
+    const oldSet = retentionEdges.get(agentId) ?? new Set();
+    const newSet = new Set(newIds);
+    // Remove entries no longer in the new set.
+    for (const id of oldSet) {
+      if (!newSet.has(id)) {
+        removeRetention(agentId, id);
+      }
+    }
+    // Add entries not in the old set.
+    for (const id of newSet) {
+      if (!oldSet.has(id)) {
+        addRetention(agentId, id);
+      }
+    }
+  };
+
+  // --- Retention path listing ---
+
+  /**
+   * Find the edge labels from members of srcGroup to members of
+   * tgtGroup by scanning labeledEdges.
+   *
+   * @param {FormulaIdentifier} srcGroup
+   * @param {FormulaIdentifier} tgtGroup
+   * @returns {string[]}
+   */
+  const findEdgeLabels = (srcGroup, tgtGroup) => {
+    const srcMembers = groupMembers.get(srcGroup);
+    const tgtMembers = groupMembers.get(tgtGroup);
+    if (!srcMembers || !tgtMembers) return [];
+    /** @type {string[]} */
+    const labels = [];
+    for (const src of srcMembers) {
+      const edges = labeledEdges.get(src);
+      if (edges !== undefined) {
+        for (const { label, target } of edges) {
+          if (tgtMembers.has(target)) {
+            labels.push(label);
+          }
+        }
+      }
+    }
+    return labels;
+  };
+
+  /**
+   * Enumerate all retention paths from roots to a target formula.
+   * Each path is an array of segments from the target back to a root.
+   *
+   * @param {FormulaIdentifier} targetId
+   * @returns {RetentionPath[]}
+   */
+  const listRetentionPaths = targetId => {
+    if (!parent.has(targetId)) return [];
+    const targetGroup = findGroup(targetId);
+    /** @type {RetentionPath[]} */
+    const paths = [];
+    /** @type {Array<{group: FormulaIdentifier, path: RetentionPath}>} */
+    const queue = [{ group: targetGroup, path: [] }];
+    /** @type {Set<FormulaIdentifier>} */
+    const visited = new Set();
+
+    while (queue.length > 0) {
+      const { group, path } =
+        /** @type {{group: FormulaIdentifier, path: RetentionPath}} */ (
+          queue.shift()
+        );
+      if (!visited.has(group)) {
+        visited.add(group);
+
+        /** @type {RetentionPathSegment} */
+        const entry = {
+          groupMembers: [...(groupMembers.get(group) ?? [])],
+        };
+
+        if (isRootGroup(group)) {
+          paths.push([...path, { ...entry, type: 'root' }]);
+        } else {
+          const inSet = groupInEdges.get(group);
+          if (inSet !== undefined && inSet.size > 0) {
+            for (const src of inSet) {
+              const labels = findEdgeLabels(src, group);
+              queue.push({
+                group: src,
+                path: [...path, { ...entry, referencedBy: src, labels }],
+              });
+            }
+          }
+        }
+      }
+    }
+
+    return paths;
+  };
+
+  /**
+   * Run a one-time sweep for unreachable groups. Called after
+   * seeding the graph from persistence at startup.
+   */
+  const sweepUnreachable = () => {
+    // Collect all groups.
+    /** @type {Set<FormulaIdentifier>} */
+    const allGroups = new Set();
+    for (const [, group] of [...parent.entries()].map(([id]) => [
+      id,
+      findGroup(id),
+    ])) {
+      allGroups.add(group);
+    }
+    for (const g of allGroups) {
+      if ((groupRefCount.get(g) ?? 0) <= 0 && !isRootGroup(g)) {
+        maybeCollect(g);
+      }
+    }
   };
 
   return harden({
@@ -27121,19 +27739,141 @@ const short = id => id.slice(0, 8);
     onPetStoreWrite,
     onPetStoreRemove,
     onPetStoreRemoveAll,
+    addRetention,
+    removeRetention,
+    replaceRetention,
+    pinTransient,
+    unpinTransient,
     findGroup,
     roots,
-    isDirty: () => dirty,
-    clearDirty: () => {
-      dirty = false;
-    },
+    listRetentionPaths,
+    sweepUnreachable,
     formulaDeps,
     petStoreEdges,
+    groupMembers,
   });
 };$h͏_once.makeFormulaGraph(makeFormulaGraph);
+harden(makeFormulaGraph);
 })()
 ,
-// === 119. daemon ./src/residence.js ===
+// === 119. daemon ./src/retention-accumulator.js ===
+({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden,makeChangeTopic;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]],["./pubsub.js", [["makeChangeTopic",[$h͏_a => (makeChangeTopic = $h͏_a)]]]]]);
+
+
+
+
+/**
+ * @typedef {object} RetentionDelta
+ * @property {string[]} add
+ * @property {string[]} remove
+ */
+
+/**
+ * @typedef {object} RetentionAccumulator
+ * @property {(formulaNumber: string) => void} add
+ * @property {(formulaNumber: string) => void} remove
+ * @property {() => void} flush
+ * @property {() => AsyncGenerator<RetentionDelta>} subscribe
+ */
+
+/**
+ * Create a retention accumulator that batches formula add/remove
+ * events over a scheduling window and emits consolidated deltas.
+ *
+ * If a formula is added and then removed (or vice versa) within
+ * the same batch window, the effects cancel out and no entry for
+ * that formula appears in the emitted delta.
+ *
+ * @param {object} opts
+ * @param {string[]} opts.snapshot - The initial set of retained formulas.
+ * @param {(flush: () => void) => void} [opts.scheduleBatch] - Schedules a
+ *   flush. Defaults to `queueMicrotask`. Injected for testing.
+ * @returns {RetentionAccumulator}
+ */
+       const makeRetentionAccumulator = ({
+  snapshot,
+  scheduleBatch = fn => void Promise.resolve().then(fn),
+}) => {
+  /** @type {import('./types.js').Topic<RetentionDelta>} */
+  const topic = makeChangeTopic();
+
+  /** @type {Set<string>} */
+  const pendingAdd = new Set();
+  /** @type {Set<string>} */
+  const pendingRemove = new Set();
+  let scheduled = false;
+
+  const flush = () => {
+    scheduled = false;
+    if (pendingAdd.size === 0 && pendingRemove.size === 0) {
+      return;
+    }
+    /** @type {RetentionDelta} */
+    const delta = harden({
+      add: [...pendingAdd],
+      remove: [...pendingRemove],
+    });
+    pendingAdd.clear();
+    pendingRemove.clear();
+    topic.publisher.next(delta);
+  };
+
+  const scheduleIfNeeded = () => {
+    if (!scheduled) {
+      scheduled = true;
+      scheduleBatch(flush);
+    }
+  };
+
+  /** @param {string} formulaNumber */
+  const add = formulaNumber => {
+    if (pendingRemove.has(formulaNumber)) {
+      pendingRemove.delete(formulaNumber);
+    } else {
+      pendingAdd.add(formulaNumber);
+    }
+    scheduleIfNeeded();
+  };
+
+  /** @param {string} formulaNumber */
+  const remove = formulaNumber => {
+    if (pendingAdd.has(formulaNumber)) {
+      pendingAdd.delete(formulaNumber);
+    } else {
+      pendingRemove.add(formulaNumber);
+    }
+    scheduleIfNeeded();
+  };
+
+  /**
+   * Subscribe to the retention stream. Yields the snapshot as
+   * the first delta (all adds, no removes), then subsequent
+   * consolidated deltas.
+   *
+   * @returns {AsyncGenerator<RetentionDelta>}
+   */
+  const subscribe = () => {
+    // Subscribe eagerly so no deltas published between
+    // subscribe() and the first next() are lost.
+    const subscription = topic.subscribe();
+
+    return (async function* retentionDeltas() {
+      if (snapshot.length > 0) {
+        yield harden({ add: snapshot, remove: [] });
+      }
+
+      for await (const delta of subscription) {
+        yield delta;
+      }
+    })();
+  };
+
+  return harden({ add, remove, flush, subscribe });
+};$h͏_once.makeRetentionAccumulator(makeRetentionAccumulator);
+harden(makeRetentionAccumulator);
+})()
+,
+// === 120. daemon ./src/residence.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let makeDefaultCapTPImportExportTables,q;$h͏_imports([["@endo/captp", [["makeDefaultCapTPImportExportTables",[$h͏_a => (makeDefaultCapTPImportExportTables = $h͏_a)]]]],["@endo/errors", [["q",[$h͏_a => (q = $h͏_a)]]]]]);
 
 
@@ -27274,8 +28014,11 @@ const short = id => id.slice(0, 8);
    * references to any of the given collected formula ids.
    *
    * @param {Iterable<FormulaIdentifier>} ids
+   * @param {Map<FormulaIdentifier, string>} [formulaTypes] - Pre-collected
+   *   formula types. When formulas are already deleted from formulaForId
+   *   (as in ref-counted collection), the caller supplies this map.
    */
-  const disconnectRetainersHolding = ids => {
+  const disconnectRetainersHolding = (ids, formulaTypes) => {
     const collected = new Set(ids);
     for (const [retainerId, retainees] of retaineesByRetainer.entries()) {
       for (const id of retainees.keys()) {
@@ -27284,8 +28027,10 @@ const short = id => id.slice(0, 8);
           if (!workerId) {
             break;
           }
-          const formula = getFormula(id);
-          if (!formula || formula.type === 'invitation') {
+          // Look up formula type from the provided map or from the
+          // live cache (for callers that haven't deleted yet).
+          const formulaType = formulaTypes?.get(id) ?? getFormula(id)?.type;
+          if (!formulaType || formulaType === 'invitation') {
             break;
           }
           // In the bus daemon, a replacement node worker is created for
@@ -27295,16 +28040,18 @@ const short = id => id.slice(0, 8);
           // worker should not be terminated merely for having held the
           // reference; only workers that actively endow or retain the
           // collected formula should be affected.
-          if (
-            /** @type {any} */ (formula).cancelWithWorker &&
-            /** @type {string} */ (
-              /** @type {any} */ (formula).cancelWithWorker
-            ).startsWith(`${workerId}:`)
-          ) {
+          const formula = getFormula(id);
+          const cancelWithWorker = /** @type {any} */ (formula)
+            ?.cancelWithWorker;
+          const skipThisRetainer =
+            typeof cancelWithWorker === 'string' &&
+            cancelWithWorker.startsWith(`${workerId}:`);
+          if (skipThisRetainer) {
+            // eslint-disable-next-line no-continue
             continue;
           }
           const reason = new Error(
-            `Formula ${q(formula.type)} became unreachable by any pet name path and was collected`,
+            `Formula ${q(formulaType)} became unreachable by any pet name path and was collected`,
           );
           const close = retainerClose.get(retainerId);
           if (close) {
@@ -27325,15 +28072,12 @@ const short = id => id.slice(0, 8);
 };$h͏_once.makeResidenceTracker(makeResidenceTracker);
 })()
 ,
-// === 120. daemon ./src/store-controller.js ===
-({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden,formatId,parseId,LOCAL_NODE;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]],["./formula-identifier.js", [["formatId",[$h͏_a => (formatId = $h͏_a)]],["parseId",[$h͏_a => (parseId = $h͏_a)]]]],["./locator.js", [["LOCAL_NODE",[$h͏_a => (LOCAL_NODE = $h͏_a)]]]]]);
+// === 121. daemon ./src/store-controller.js ===
+({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]]]);
 
 
 
-
-
-
-/** @import { FormulaIdentifier, GcHooks, Name, PetName, PetStore, StoreController, StoreConverters, SyncedPetStore } from './types.js' */
+/** @import { FormulaIdentifier, GcHooks, Name, PetName, PetStore, StoreController } from './types.js' */
 
 /**
  * @param {FormulaIdentifier} storeId
@@ -27467,284 +28211,9 @@ const short = id => id.slice(0, 8);
   return controller;
 };$h͏_once.makeLocalStoreController(makeLocalStoreController);
 harden(makeLocalStoreController);
-
-/**
- * @param {FormulaIdentifier} storeId
- * @param {SyncedPetStore} syncedStore
- * @param {GcHooks} gcHooks
- * @param {StoreConverters} converters
- * @returns {StoreController}
- */
-       const makeSyncedStoreController = (
-  storeId,
-  syncedStore,
-  gcHooks,
-  converters,
-) => {
-  const { onPetStoreWrite, onPetStoreRemove, withFormulaGraphLock } = gcHooks;
-  const { idFromLocator, isLocalKey } = converters;
-
-  /**
-   * @param {string} locator
-   * @returns {FormulaIdentifier | undefined}
-   */
-  const safeIdFromLocator = locator => {
-    try {
-      return /** @type {FormulaIdentifier} */ (idFromLocator(locator));
-    } catch {
-      return undefined;
-    }
-  };
-
-  /** @type {StoreController['has']} */
-  const has = petName => syncedStore.has(petName);
-
-  /** @type {StoreController['identifyLocal']} */
-  const identifyLocal = petName => {
-    const locator = syncedStore.lookup(petName);
-    if (locator === undefined) {
-      return undefined;
-    }
-    const id = safeIdFromLocator(locator);
-    if (id === undefined) {
-      return undefined;
-    }
-    // Normalize local node keys to LOCAL_NODE via internalizeLocator.
-    const { id: normalizedId } = converters.internalizeLocator(
-      locator,
-      isLocalKey,
-    );
-    return normalizedId;
-  };
-
-  /** @type {StoreController['list']} */
-  const list = () => syncedStore.list();
-
-  /** @type {StoreController['reverseIdentify']} */
-  const reverseIdentify = id => {
-    /** @type {Name[]} */
-    const names = [];
-    const state = syncedStore.getState();
-    for (const [key, entry] of Object.entries(state)) {
-      if (entry.locator !== null) {
-        try {
-          const { id: entryId } = converters.internalizeLocator(
-            entry.locator,
-            isLocalKey,
-          );
-          if (entryId === id) {
-            names.push(/** @type {Name} */ (key));
-          }
-        } catch {
-          // Ignore unparseable locators.
-        }
-      }
-    }
-    return harden(names);
-  };
-
-  /** @type {StoreController['storeIdentifier']} */
-  const storeIdentifier = async (petName, id) => {
-    const previousId = identifyLocal(petName);
-    const formulaType = await converters.getTypeForId(
-      /** @type {FormulaIdentifier} */ (id),
-    );
-    // Externalize LOCAL_NODE to the real node number so that
-    // locators in the synced store are unambiguous across daemons.
-    const { number, node } = parseId(/** @type {FormulaIdentifier} */ (id));
-    const externalNode =
-      node === LOCAL_NODE ? converters.localNodeNumber : node;
-    const externalId = formatId({ number, node: externalNode });
-    const locator = converters.formatLocator(externalId, formulaType);
-    await syncedStore.storeLocator(petName, locator);
-    await withFormulaGraphLock(async () => {
-      onPetStoreWrite(storeId, /** @type {FormulaIdentifier} */ (id));
-    });
-    if (previousId && previousId !== id) {
-      const stillReferenced = reverseIdentify(previousId).length > 0;
-      if (!stillReferenced) {
-        await withFormulaGraphLock(async () => {
-          onPetStoreRemove(
-            storeId,
-            /** @type {FormulaIdentifier} */ (previousId),
-          );
-        });
-      }
-    }
-  };
-
-  /** @type {StoreController['storeLocator']} */
-  const storeLocator = async (petName, locator) => {
-    const previousId = identifyLocal(petName);
-    await syncedStore.storeLocator(petName, locator);
-    const newId = safeIdFromLocator(locator);
-    if (newId) {
-      await withFormulaGraphLock(async () => {
-        onPetStoreWrite(storeId, newId);
-      });
-    }
-    if (previousId && previousId !== (newId ?? '')) {
-      const stillReferenced = reverseIdentify(previousId).length > 0;
-      if (!stillReferenced) {
-        await withFormulaGraphLock(async () => {
-          onPetStoreRemove(
-            storeId,
-            /** @type {FormulaIdentifier} */ (previousId),
-          );
-        });
-      }
-    }
-  };
-
-  /** @type {StoreController['remove']} */
-  const remove = async petName => {
-    const previousLocator = syncedStore.lookup(petName);
-    await syncedStore.remove(petName);
-    if (previousLocator) {
-      const previousId = safeIdFromLocator(previousLocator);
-      if (previousId) {
-        const stillReferenced = reverseIdentify(previousId).length > 0;
-        if (!stillReferenced) {
-          await withFormulaGraphLock(async () => {
-            onPetStoreRemove(storeId, previousId);
-          });
-        }
-      }
-    }
-  };
-
-  /** @type {StoreController['rename']} */
-  const rename = async (fromPetName, toPetName) => {
-    const locator = syncedStore.lookup(fromPetName);
-    if (locator === undefined) {
-      throw new Error(
-        `Formula does not exist for pet name ${JSON.stringify(fromPetName)}`,
-      );
-    }
-    const overwrittenId = identifyLocal(toPetName);
-    await syncedStore.storeLocator(toPetName, locator);
-    await syncedStore.remove(fromPetName);
-    const fromId = safeIdFromLocator(locator);
-    if (fromId) {
-      await withFormulaGraphLock(async () => {
-        onPetStoreWrite(storeId, fromId);
-      });
-    }
-    if (overwrittenId && overwrittenId !== (fromId ?? '')) {
-      const stillReferenced = reverseIdentify(overwrittenId).length > 0;
-      if (!stillReferenced) {
-        await withFormulaGraphLock(async () => {
-          onPetStoreRemove(
-            storeId,
-            /** @type {FormulaIdentifier} */ (overwrittenId),
-          );
-        });
-      }
-    }
-  };
-
-  /** @type {StoreController['followNameChanges']} */
-  const followNameChanges = async function* syncedFollowNameChanges() {
-    for await (const { key, entry } of syncedStore.followChanges()) {
-      if (entry.locator !== null) {
-        const entryId = safeIdFromLocator(entry.locator);
-        if (entryId !== undefined) {
-          const { id: normalizedId } = converters.internalizeLocator(
-            entry.locator,
-            isLocalKey,
-          );
-          const idRecord = parseId(normalizedId);
-          yield /** @type {import('./types.js').PetStoreNameChange} */ ({
-            add: /** @type {Name} */ (key),
-            value: idRecord,
-          });
-        }
-      } else {
-        yield /** @type {import('./types.js').PetStoreNameChange} */ ({
-          remove: /** @type {Name} */ (key),
-        });
-      }
-    }
-  };
-
-  /** @type {StoreController['followIdNameChanges']} */
-  const followIdNameChanges = async function* syncedFollowIdNameChanges(id) {
-    const currentNames = reverseIdentify(id);
-    const idRecord = parseId(id);
-    yield /** @type {import('./types.js').PetStoreIdNameChange} */ ({
-      add: idRecord,
-      names: currentNames,
-    });
-    // Then deltas.
-    for await (const { key, entry } of syncedStore.followChanges()) {
-      const entryId =
-        entry.locator !== null ? safeIdFromLocator(entry.locator) : undefined;
-      let normalizedEntryId;
-      if (entryId !== undefined && entry.locator !== null) {
-        ({ id: normalizedEntryId } = converters.internalizeLocator(
-          entry.locator,
-          isLocalKey,
-        ));
-      }
-      if (normalizedEntryId === id) {
-        yield /** @type {import('./types.js').PetStoreIdNameChange} */ ({
-          add: idRecord,
-          names: [/** @type {Name} */ (key)],
-        });
-      } else if (entry.locator === null) {
-        // The entry was removed; check if it was for our target id.
-        yield /** @type {import('./types.js').PetStoreIdNameChange} */ ({
-          remove: idRecord,
-          names: [/** @type {Name} */ (key)],
-        });
-      }
-    }
-  };
-
-  /** @type {StoreController['seedGcEdges']} */
-  const seedGcEdges = async () => {
-    await null;
-    const names = syncedStore.list();
-    /** @type {FormulaIdentifier[]} */
-    const ids = [];
-    for (const name of names) {
-      const locator = syncedStore.lookup(name);
-      if (locator !== undefined) {
-        const id = safeIdFromLocator(locator);
-        if (id !== undefined) {
-          ids.push(id);
-        }
-      }
-    }
-    if (ids.length > 0) {
-      await withFormulaGraphLock(async () => {
-        for (const id of ids) {
-          onPetStoreWrite(storeId, id);
-        }
-      });
-    }
-  };
-
-  const controller = harden({
-    has,
-    identifyLocal,
-    list,
-    reverseIdentify,
-    storeIdentifier,
-    storeLocator,
-    remove,
-    rename,
-    followNameChanges,
-    followIdNameChanges,
-    seedGcEdges,
-  });
-
-  return controller;
-};$h͏_once.makeSyncedStoreController(makeSyncedStoreController);
-harden(makeSyncedStoreController);
 })()
 ,
-// === 121. daemon ./src/multimap.js ===
+// === 122. daemon ./src/multimap.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let q;$h͏_imports([["@endo/errors", [["q",[$h͏_a => (q = $h͏_a)]]]]]);
 
 
@@ -27858,7 +28327,7 @@ const internalMakeMultimap = mapConstructor => {
 };$h͏_once.makeBidirectionalMultimap(makeBidirectionalMultimap);
 })()
 ,
-// === 122. daemon ./src/networks/loopback.js ===
+// === 123. daemon ./src/networks/loopback.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let Far;$h͏_imports([["@endo/far", [["Far",[$h͏_a => (Far = $h͏_a)]]]]]);
 
 
@@ -27891,7 +28360,7 @@ const internalMakeMultimap = mapConstructor => {
 };$h͏_once.makeLoopbackNetwork(makeLoopbackNetwork);
 })()
 ,
-// === 123. daemon ./src/mount.js ===
+// === 124. daemon ./src/mount.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let q,makeExo,mountHelp,mountFileHelp,makeHelp,MountInterface,MountFileInterface,makeIteratorRef;$h͏_imports([["@endo/errors", [["q",[$h͏_a => (q = $h͏_a)]]]],["@endo/exo", [["makeExo",[$h͏_a => (makeExo = $h͏_a)]]]],["./help-text.js", [["mountHelp",[$h͏_a => (mountHelp = $h͏_a)]],["mountFileHelp",[$h͏_a => (mountFileHelp = $h͏_a)]],["makeHelp",[$h͏_a => (makeHelp = $h͏_a)]]]],["./interfaces.js", [["MountInterface",[$h͏_a => (MountInterface = $h͏_a)]],["MountFileInterface",[$h͏_a => (MountFileInterface = $h͏_a)]]]],["./reader-ref.js", [["makeIteratorRef",[$h͏_a => (makeIteratorRef = $h͏_a)]]]]]);
 
 
@@ -28296,10 +28765,8 @@ harden(makeMountFileExo);
 harden(makeMount);
 })()
 ,
-// === 124. daemon ./src/daemon.js ===
-({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden,makeExo,E,Far,makeMarshal,makePromiseKit,makeError,q,X,platformCheckinTree,snapshotTreeMethods,makeRefReader,makeIteratorRef,makeDirectoryMaker,makeDeferredTasks,assertMailboxStoreName,makeMailboxMaker,makeGuestMaker,makeChannelMaker,makeHostMaker,makeRemoteControlProvider,assertName,assertNamePath,assertNames,assertPetName,namePathFrom,formatLocator,idFromLocator,internalizeLocator,externalizeId,LOCAL_NODE,makeContextMaker,assertValidId,assertValidNumber,assertFormulaNumber,assertNodeNumber,parseId,formatId,makeFormulaGraph,makeResidenceTracker,toHex,fromHex,makeSerialJobs,makeLocalStoreController,makeSyncedStoreController,makeWeakMultimap,makeLoopbackNetwork,assertValidFormulaType,blobHelp,directoryHelp,endoHelp,guestHelp,makeHelp,readableTreeHelp,makeMount,DaemonFacetForWorkerInterface,GuestInterface,InspectorHubInterface,InspectorInterface,InvitationInterface,PeerGatewayInterface,ResponderInterface,WorkerInterface,DirectoryInterface,BlobInterface,ReadableTreeInterface,EndoInterface;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]],["@endo/exo", [["makeExo",[$h͏_a => (makeExo = $h͏_a)]]]],["@endo/far", [["E",[$h͏_a => (E = $h͏_a)]],["Far",[$h͏_a => (Far = $h͏_a)]]]],["@endo/marshal", [["makeMarshal",[$h͏_a => (makeMarshal = $h͏_a)]]]],["@endo/promise-kit", [["makePromiseKit",[$h͏_a => (makePromiseKit = $h͏_a)]]]],["@endo/errors", [["makeError",[$h͏_a => (makeError = $h͏_a)]],["q",[$h͏_a => (q = $h͏_a)]],["X",[$h͏_a => (X = $h͏_a)]]]],["@endo/platform/fs/lite", [["checkinTree",[$h͏_a => (platformCheckinTree = $h͏_a)]],["snapshotTreeMethods",[$h͏_a => (snapshotTreeMethods = $h͏_a)]]]],["./ref-reader.js", [["makeRefReader",[$h͏_a => (makeRefReader = $h͏_a)]]]],["./reader-ref.js", [["makeIteratorRef",[$h͏_a => (makeIteratorRef = $h͏_a)]]]],["./directory.js", [["makeDirectoryMaker",[$h͏_a => (makeDirectoryMaker = $h͏_a)]]]],["./deferred-tasks.js", [["makeDeferredTasks",[$h͏_a => (makeDeferredTasks = $h͏_a)]]]],["./mail.js", [["assertMailboxStoreName",[$h͏_a => (assertMailboxStoreName = $h͏_a)]],["makeMailboxMaker",[$h͏_a => (makeMailboxMaker = $h͏_a)]]]],["./guest.js", [["makeGuestMaker",[$h͏_a => (makeGuestMaker = $h͏_a)]]]],["./channel.js", [["makeChannelMaker",[$h͏_a => (makeChannelMaker = $h͏_a)]]]],["./host.js", [["makeHostMaker",[$h͏_a => (makeHostMaker = $h͏_a)]]]],["./remote-control.js", [["makeRemoteControlProvider",[$h͏_a => (makeRemoteControlProvider = $h͏_a)]]]],["./pet-name.js", [["assertName",[$h͏_a => (assertName = $h͏_a)]],["assertNamePath",[$h͏_a => (assertNamePath = $h͏_a)]],["assertNames",[$h͏_a => (assertNames = $h͏_a)]],["assertPetName",[$h͏_a => (assertPetName = $h͏_a)]],["namePathFrom",[$h͏_a => (namePathFrom = $h͏_a)]]]],["./locator.js", [["formatLocator",[$h͏_a => (formatLocator = $h͏_a)]],["idFromLocator",[$h͏_a => (idFromLocator = $h͏_a)]],["internalizeLocator",[$h͏_a => (internalizeLocator = $h͏_a)]],["externalizeId",[$h͏_a => (externalizeId = $h͏_a)]],["LOCAL_NODE",[$h͏_a => (LOCAL_NODE = $h͏_a)]]]],["./context.js", [["makeContextMaker",[$h͏_a => (makeContextMaker = $h͏_a)]]]],["./formula-identifier.js", [["assertValidId",[$h͏_a => (assertValidId = $h͏_a)]],["assertValidNumber",[$h͏_a => (assertValidNumber = $h͏_a)]],["assertFormulaNumber",[$h͏_a => (assertFormulaNumber = $h͏_a)]],["assertNodeNumber",[$h͏_a => (assertNodeNumber = $h͏_a)]],["parseId",[$h͏_a => (parseId = $h͏_a)]],["formatId",[$h͏_a => (formatId = $h͏_a)]]]],["./graph.js", [["makeFormulaGraph",[$h͏_a => (makeFormulaGraph = $h͏_a)]]]],["./residence.js", [["makeResidenceTracker",[$h͏_a => (makeResidenceTracker = $h͏_a)]]]],["./hex.js", [["toHex",[$h͏_a => (toHex = $h͏_a)]],["fromHex",[$h͏_a => (fromHex = $h͏_a)]]]],["./serial-jobs.js", [["makeSerialJobs",[$h͏_a => (makeSerialJobs = $h͏_a)]]]],["./store-controller.js", [["makeLocalStoreController",[$h͏_a => (makeLocalStoreController = $h͏_a)]],["makeSyncedStoreController",[$h͏_a => (makeSyncedStoreController = $h͏_a)]]]],["./multimap.js", [["makeWeakMultimap",[$h͏_a => (makeWeakMultimap = $h͏_a)]]]],["./networks/loopback.js", [["makeLoopbackNetwork",[$h͏_a => (makeLoopbackNetwork = $h͏_a)]]]],["./formula-type.js", [["assertValidFormulaType",[$h͏_a => (assertValidFormulaType = $h͏_a)]]]],["./help-text.js", [["blobHelp",[$h͏_a => (blobHelp = $h͏_a)]],["directoryHelp",[$h͏_a => (directoryHelp = $h͏_a)]],["endoHelp",[$h͏_a => (endoHelp = $h͏_a)]],["guestHelp",[$h͏_a => (guestHelp = $h͏_a)]],["makeHelp",[$h͏_a => (makeHelp = $h͏_a)]],["readableTreeHelp",[$h͏_a => (readableTreeHelp = $h͏_a)]]]],["./mount.js", [["makeMount",[$h͏_a => (makeMount = $h͏_a)]]]],["./interfaces.js", [["DaemonFacetForWorkerInterface",[$h͏_a => (DaemonFacetForWorkerInterface = $h͏_a)]],["GuestInterface",[$h͏_a => (GuestInterface = $h͏_a)]],["InspectorHubInterface",[$h͏_a => (InspectorHubInterface = $h͏_a)]],["InspectorInterface",[$h͏_a => (InspectorInterface = $h͏_a)]],["InvitationInterface",[$h͏_a => (InvitationInterface = $h͏_a)]],["PeerGatewayInterface",[$h͏_a => (PeerGatewayInterface = $h͏_a)]],["ResponderInterface",[$h͏_a => (ResponderInterface = $h͏_a)]],["WorkerInterface",[$h͏_a => (WorkerInterface = $h͏_a)]],["DirectoryInterface",[$h͏_a => (DirectoryInterface = $h͏_a)]],["BlobInterface",[$h͏_a => (BlobInterface = $h͏_a)]],["ReadableTreeInterface",[$h͏_a => (ReadableTreeInterface = $h͏_a)]],["EndoInterface",[$h͏_a => (EndoInterface = $h͏_a)]]]]]);
-
-
+// === 125. daemon ./src/daemon.js ===
+({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden,makeExo,E,Far,makeMarshal,makePromiseKit,makeError,q,X,platformCheckinTree,snapshotTreeMethods,makeRefReader,makeRefIterator,makeIteratorRef,makeDirectoryMaker,makeDeferredTasks,assertMailboxStoreName,makeMailboxMaker,makeGuestMaker,makeChannelMaker,makeHostMaker,makeRemoteControlProvider,assertName,assertNamePath,assertNames,assertPetName,namePathFrom,formatLocator,idFromLocator,internalizeLocator,externalizeId,makeContextMaker,assertValidId,assertValidNumber,assertFormulaNumber,assertNodeNumber,parseId,formatId,makeFormulaGraph,makeChangeTopic,makeRetentionAccumulator,makeResidenceTracker,toHex,fromHex,makeSerialJobs,makeLocalStoreController,makeWeakMultimap,makeLoopbackNetwork,assertValidFormulaType,blobHelp,directoryHelp,endoHelp,guestHelp,makeHelp,readableTreeHelp,makeMount,DaemonFacetForWorkerInterface,GuestInterface,InspectorHubInterface,InspectorInterface,InvitationInterface,PeerGatewayInterface,ResponderInterface,WorkerInterface,DirectoryInterface,BlobInterface,ReadableTreeInterface,EndoInterface;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]],["@endo/exo", [["makeExo",[$h͏_a => (makeExo = $h͏_a)]]]],["@endo/far", [["E",[$h͏_a => (E = $h͏_a)]],["Far",[$h͏_a => (Far = $h͏_a)]]]],["@endo/marshal", [["makeMarshal",[$h͏_a => (makeMarshal = $h͏_a)]]]],["@endo/promise-kit", [["makePromiseKit",[$h͏_a => (makePromiseKit = $h͏_a)]]]],["@endo/errors", [["makeError",[$h͏_a => (makeError = $h͏_a)]],["q",[$h͏_a => (q = $h͏_a)]],["X",[$h͏_a => (X = $h͏_a)]]]],["@endo/platform/fs/lite", [["checkinTree",[$h͏_a => (platformCheckinTree = $h͏_a)]],["snapshotTreeMethods",[$h͏_a => (snapshotTreeMethods = $h͏_a)]]]],["./ref-reader.js", [["makeRefReader",[$h͏_a => (makeRefReader = $h͏_a)]],["makeRefIterator",[$h͏_a => (makeRefIterator = $h͏_a)]]]],["./reader-ref.js", [["makeIteratorRef",[$h͏_a => (makeIteratorRef = $h͏_a)]]]],["./directory.js", [["makeDirectoryMaker",[$h͏_a => (makeDirectoryMaker = $h͏_a)]]]],["./deferred-tasks.js", [["makeDeferredTasks",[$h͏_a => (makeDeferredTasks = $h͏_a)]]]],["./mail.js", [["assertMailboxStoreName",[$h͏_a => (assertMailboxStoreName = $h͏_a)]],["makeMailboxMaker",[$h͏_a => (makeMailboxMaker = $h͏_a)]]]],["./guest.js", [["makeGuestMaker",[$h͏_a => (makeGuestMaker = $h͏_a)]]]],["./channel.js", [["makeChannelMaker",[$h͏_a => (makeChannelMaker = $h͏_a)]]]],["./host.js", [["makeHostMaker",[$h͏_a => (makeHostMaker = $h͏_a)]]]],["./remote-control.js", [["makeRemoteControlProvider",[$h͏_a => (makeRemoteControlProvider = $h͏_a)]]]],["./pet-name.js", [["assertName",[$h͏_a => (assertName = $h͏_a)]],["assertNamePath",[$h͏_a => (assertNamePath = $h͏_a)]],["assertNames",[$h͏_a => (assertNames = $h͏_a)]],["assertPetName",[$h͏_a => (assertPetName = $h͏_a)]],["namePathFrom",[$h͏_a => (namePathFrom = $h͏_a)]]]],["./locator.js", [["formatLocator",[$h͏_a => (formatLocator = $h͏_a)]],["idFromLocator",[$h͏_a => (idFromLocator = $h͏_a)]],["internalizeLocator",[$h͏_a => (internalizeLocator = $h͏_a)]],["externalizeId",[$h͏_a => (externalizeId = $h͏_a)]]]],["./context.js", [["makeContextMaker",[$h͏_a => (makeContextMaker = $h͏_a)]]]],["./formula-identifier.js", [["assertValidId",[$h͏_a => (assertValidId = $h͏_a)]],["assertValidNumber",[$h͏_a => (assertValidNumber = $h͏_a)]],["assertFormulaNumber",[$h͏_a => (assertFormulaNumber = $h͏_a)]],["assertNodeNumber",[$h͏_a => (assertNodeNumber = $h͏_a)]],["parseId",[$h͏_a => (parseId = $h͏_a)]],["formatId",[$h͏_a => (formatId = $h͏_a)]]]],["./graph.js", [["makeFormulaGraph",[$h͏_a => (makeFormulaGraph = $h͏_a)]]]],["./pubsub.js", [["makeChangeTopic",[$h͏_a => (makeChangeTopic = $h͏_a)]]]],["./retention-accumulator.js", [["makeRetentionAccumulator",[$h͏_a => (makeRetentionAccumulator = $h͏_a)]]]],["./residence.js", [["makeResidenceTracker",[$h͏_a => (makeResidenceTracker = $h͏_a)]]]],["./hex.js", [["toHex",[$h͏_a => (toHex = $h͏_a)]],["fromHex",[$h͏_a => (fromHex = $h͏_a)]]]],["./serial-jobs.js", [["makeSerialJobs",[$h͏_a => (makeSerialJobs = $h͏_a)]]]],["./store-controller.js", [["makeLocalStoreController",[$h͏_a => (makeLocalStoreController = $h͏_a)]]]],["./multimap.js", [["makeWeakMultimap",[$h͏_a => (makeWeakMultimap = $h͏_a)]]]],["./networks/loopback.js", [["makeLoopbackNetwork",[$h͏_a => (makeLoopbackNetwork = $h͏_a)]]]],["./formula-type.js", [["assertValidFormulaType",[$h͏_a => (assertValidFormulaType = $h͏_a)]]]],["./help-text.js", [["blobHelp",[$h͏_a => (blobHelp = $h͏_a)]],["directoryHelp",[$h͏_a => (directoryHelp = $h͏_a)]],["endoHelp",[$h͏_a => (endoHelp = $h͏_a)]],["guestHelp",[$h͏_a => (guestHelp = $h͏_a)]],["makeHelp",[$h͏_a => (makeHelp = $h͏_a)]],["readableTreeHelp",[$h͏_a => (readableTreeHelp = $h͏_a)]]]],["./mount.js", [["makeMount",[$h͏_a => (makeMount = $h͏_a)]]]],["./interfaces.js", [["DaemonFacetForWorkerInterface",[$h͏_a => (DaemonFacetForWorkerInterface = $h͏_a)]],["GuestInterface",[$h͏_a => (GuestInterface = $h͏_a)]],["InspectorHubInterface",[$h͏_a => (InspectorHubInterface = $h͏_a)]],["InspectorInterface",[$h͏_a => (InspectorInterface = $h͏_a)]],["InvitationInterface",[$h͏_a => (InvitationInterface = $h͏_a)]],["PeerGatewayInterface",[$h͏_a => (PeerGatewayInterface = $h͏_a)]],["ResponderInterface",[$h͏_a => (ResponderInterface = $h͏_a)]],["WorkerInterface",[$h͏_a => (WorkerInterface = $h͏_a)]],["DirectoryInterface",[$h͏_a => (DirectoryInterface = $h͏_a)]],["BlobInterface",[$h͏_a => (BlobInterface = $h͏_a)]],["ReadableTreeInterface",[$h͏_a => (ReadableTreeInterface = $h͏_a)]],["EndoInterface",[$h͏_a => (EndoInterface = $h͏_a)]]]]]);
 
 
 
@@ -28383,7 +28850,7 @@ harden(makeMount);
 /** @import { Passable } from '@endo/pass-style' */
 /** @import { ERef, FarRef } from '@endo/eventual-send' */
 /** @import { PromiseKit } from '@endo/promise-kit' */
-/** @import { AgentDeferredTaskParams, Builtins, CapTpConnectionRegistrar, Context, Controller, DaemonCore, DaemonCoreExternal, DaemonicPowers, DeferredTasks, DirectoryFormula, EndoBootstrap, EndoDirectory, EndoFormula, EndoGateway, EndoGreeter, EndoGuest, EndoHost, EndoInspector, EndoNetwork, EndoPeer, EndoReadable, EndoWorker, EvalFormula, FarContext, Formula, FormulaIdentifier, FormulaNumber, FormulaMakerTable, FormulateResult, GuestFormula, HandleFormula, HostFormula, Invitation, InvitationDeferredTaskParams, InvitationFormula, KnownEndoInspectors, KnownPeersStore, LookupFormula, LoopbackNetworkFormula, MailboxStoreFormula, MailHubFormula, MakeBundleFormula, MakeCapletDeferredTaskParams, MakeUnconfinedFormula, MarshalDeferredTaskParams, MessageFormula, Name, NameHub, NamePath, NameOrPath, NodeNumber, PetName, PeerFormula, PeerInfo, PetInspectorFormula, PetStore, PetStoreFormula, PromiseFormula, Provide, ReadableBlobFormula, ResolverFormula, Sha256, Specials, MarshalFormula, WeakMultimap, WorkerDaemonFacet, WorkerFormula, TimerFormula } from './types.js' */
+/** @import { AgentDeferredTaskParams, Builtins, CapTpConnectionRegistrar, Context, Controller, DaemonCore, DaemonCoreExternal, DaemonicPowers, DeferredTasks, DirectoryFormula, EndoBootstrap, EndoDirectory, EndoFormula, EndoGateway, EndoGreeter, EndoGuest, EndoHost, EndoInspector, EndoNetwork, EndoPeer, EndoReadable, EndoWorker, EvalFormula, FarContext, Formula, FormulaIdentifier, FormulaNumber, FormulaMakerTable, FormulateResult, GuestFormula, HandleFormula, HostFormula, Invitation, InvitationDeferredTaskParams, InvitationFormula, KnownEndoInspectors, KnownPeersStore, LookupFormula, LoopbackNetworkFormula, MailboxStoreFormula, MailHubFormula, MakeArchiveFormula, MakeCapletDeferredTaskParams, MakeUnconfinedFormula, MarshalDeferredTaskParams, MessageFormula, Name, NameHub, NamePath, NameOrPath, NodeNumber, PetName, PeerFormula, PeerInfo, PetInspectorFormula, PetStore, PetStoreFormula, PromiseFormula, Provide, ReadableBlobFormula, ResolverFormula, Sha256, Specials, MarshalFormula, WeakMultimap, WorkerDaemonFacet, WorkerFormula, TimerFormula } from './types.js' */
 
 /**
  * Creates a delayed promise that can be cancelled.
@@ -28578,6 +29045,7 @@ const RESOLVED_VALUE_NAME = /** @type {PetName} */ ('value');
  * @param {NodeNumber} args.localNodeNumber - The local node number for this daemon.
  * @param {(bytes: Uint8Array) => Uint8Array} args.signBytes - Sign bytes with the daemon's root Ed25519 key.
  * @param {boolean} [args.gcEnabled] - Enable garbage collection of worker daemons.
+ * @param {'locked' | 'node'} [args.defaultWorkerKind] - Default kind for newly formulated workers (defaults to 'node').
  *
  * @example
  * ```js
@@ -28601,7 +29069,7 @@ const makeDaemonCore = async (
     localNodeNumber,
     signBytes,
     gcEnabled = true,
-    defaultPlatform = 'separate',
+    defaultWorkerKind = 'node',
   },
 ) => {
   const {
@@ -28611,7 +29079,7 @@ const makeDaemonCore = async (
     control: controlPowers,
     filePowers,
   } = powers;
-  const { randomHex256, generateEd25519Keypair, ed25519Sign } = cryptoPowers;
+  const { randomHex256, generateEd25519Keypair } = cryptoPowers;
   const contentStore = persistencePowers.makeContentStore();
   /** @type {WeakMap<object, ERef<WorkerDaemonFacet>>} */
   const workerDaemonFacets = new WeakMap();
@@ -28628,6 +29096,13 @@ const makeDaemonCore = async (
   const formulaGraphJobs = makeSerialJobs();
   let formulaGraphLockDepth = 0;
   /**
+   * Async cleanup work scheduled by onCollect. Drained by
+   * withFormulaGraphLock after each graph mutation completes.
+   *
+   * @type {Array<() => Promise<void>>}
+   */
+  const pendingCollectionCleanup = [];
+  /**
    * @param {() => Promise<any>} [asyncFn]
    * @returns {Promise<any>}
    */
@@ -28638,16 +29113,25 @@ const makeDaemonCore = async (
       return asyncFn();
     }
     formulaGraphLockDepth += 1;
+    let result;
     try {
-      return await formulaGraphJobs.enqueue(asyncFn);
+      result = await formulaGraphJobs.enqueue(asyncFn);
     } finally {
       formulaGraphLockDepth -= 1;
     }
+    // Drain any async collection cleanup scheduled during this
+    // graph operation. This runs AFTER the serial job token is
+    // released so that cleanup operations that need the lock
+    // (e.g., CapTP messages triggering graph mutations on a
+    // remote callback) can acquire it without deadlock.
+    // eslint-disable-next-line no-use-before-define
+    await drainCollectionCleanup();
+    return result;
   };
   console.log('Node', localNodeNumber);
   const endoFormulaId = formatId({
     number: /** @type {FormulaNumber} */ (rootEntropy),
-    node: LOCAL_NODE,
+    node: localNodeNumber,
   });
 
   // We generate formulas for some entities that are presumed to exist
@@ -28663,9 +29147,13 @@ const makeDaemonCore = async (
     );
     const id = formatId({
       number: formulaNumber,
-      node: LOCAL_NODE,
+      node: localNodeNumber,
     });
-    await persistencePowers.writeFormula(formulaNumber, formula);
+    await persistencePowers.writeFormula(
+      formulaNumber,
+      localNodeNumber,
+      formula,
+    );
     return { id, formulaNumber };
   };
 
@@ -28717,6 +29205,15 @@ const makeDaemonCore = async (
    */
   const formulaForId = new Map();
 
+  /**
+   * Publishes `{ add: formulaNumber, node }` when a formula is
+   * added and `{ remove: formulaNumber, node }` when collected.
+   * Used by `followRetentionSet` to stream retention changes to
+   * connected peers.
+   * @type {import('./types.js').Topic<{ add?: string, remove?: string, node: string }>}
+   */
+  const formulaChangeTopic = makeChangeTopic();
+
   // eslint-disable-next-line no-undef
   const lifecycleLogEnabled =
     typeof process === 'undefined' || process.env.ENDO_LIFECYCLE_LOG !== '0';
@@ -28767,7 +29264,6 @@ const makeDaemonCore = async (
         return [
           ['handle', formula.handle],
           ['hostHandle', formula.hostHandle],
-          ['keypair', formula.keypair],
           ['worker', formula.worker],
           ['inspector', formula.inspector],
           ['petStore', formula.petStore],
@@ -28780,7 +29276,6 @@ const makeDaemonCore = async (
       case 'guest':
         return [
           ['handle', formula.handle],
-          ['keypair', formula.keypair],
           ['hostHandle', formula.hostHandle],
           ['hostAgent', formula.hostAgent],
           ['petStore', formula.petStore],
@@ -28804,23 +29299,29 @@ const makeDaemonCore = async (
         ];
       case 'lookup':
         return [['hub', formula.hub]];
-      case 'make-unconfined':
-        return [
+      case 'make-unconfined': {
+        /** @type {Array<[string, FormulaIdentifier]>} */
+        const deps = [
           ['worker', formula.worker],
           ['powers', formula.powers],
-          ...(formula.cancelWithWorker
-            ? [['cancelWithWorker', formula.cancelWithWorker]]
-            : []),
         ];
-      case 'make-bundle':
-        return [
+        if (formula.cancelWithWorker) {
+          deps.push(['cancelWithWorker', formula.cancelWithWorker]);
+        }
+        return deps;
+      }
+      case 'make-archive': {
+        /** @type {Array<[string, FormulaIdentifier]>} */
+        const deps = [
           ['worker', formula.worker],
           ['powers', formula.powers],
-          ['bundle', formula.bundle],
-          ...(formula.cancelWithWorker
-            ? [['cancelWithWorker', formula.cancelWithWorker]]
-            : []),
+          ['archive', formula.archive],
         ];
+        if (formula.cancelWithWorker) {
+          deps.push(['cancelWithWorker', formula.cancelWithWorker]);
+        }
+        return deps;
+      }
       case 'peer':
         return [['networks', formula.networks]];
       case 'handle':
@@ -28861,11 +29362,6 @@ const makeDaemonCore = async (
         return [['petStore', formula.petStore]];
       case 'directory':
         return [['petStore', formula.petStore]];
-      case 'synced-pet-store':
-        return [
-          ['peer', formula.peer],
-          ['store', formula.store],
-        ];
       case 'invitation':
         return [
           ['hostAgent', formula.hostAgent],
@@ -28876,49 +29372,136 @@ const makeDaemonCore = async (
     }
   };
 
-  /**
-   * @param {Formula} formula
-   * @returns {FormulaIdentifier[]}
-   */
-  const extractDeps = formula =>
-    extractLabeledDeps(formula).map(([_label, id]) => normalizeId(id));
-
   /** @type {Set<string>} */
-  const localKeys = new Set([localNodeNumber]);
-
   /** @param {NodeNumber} node */
-  const isLocalKey = node => localKeys.has(node);
+  const isLocalKey = node =>
+    node === localNodeNumber || persistencePowers.hasAgentKey(node);
 
   /** @param {string} id */
   const isLocalId = id => {
     const { node } = parseId(id);
-    return node === LOCAL_NODE || isLocalKey(node);
+    return isLocalKey(node);
   };
 
-  /**
-   * Register an agent's public key so that all agents recognize it as local.
-   * @param {NodeNumber} agentKey
-   */
-  const registerLocalKey = agentKey => {
-    localKeys.add(agentKey);
-  };
+  const enableFormulaCollection = gcEnabled;
+  if (!enableFormulaCollection) {
+    console.log('Formula collection disabled (ENDO_GC=0)');
+  }
 
   /**
-   * Normalize a formula identifier so that local keys become LOCAL_NODE.
-   * This allows the daemon to handle both old-format (localNodeNumber)
-   * and new-format (LOCAL_NODE) identifiers transparently.
-   * @param {FormulaIdentifier} id
-   * @returns {FormulaIdentifier}
+   * Collection callback invoked synchronously by the formula graph
+   * when a group's reference count drops to zero.
+   *
+   * Phase 1 (synchronous): delete from DB and in-memory caches to
+   * prevent resurrection. Phase 2 (async, queued): cancel
+   * controllers, disconnect retainers, revive pins.
+   *
+   * @param {FormulaIdentifier[]} collectedIds
    */
-  const normalizeId = id => {
-    const { number, node } = parseId(id);
-    if (isLocalKey(node)) {
-      return formatId({ number, node: LOCAL_NODE });
+  const onCollect = collectedIds => {
+    if (!enableFormulaCollection) return;
+
+    for (const id of collectedIds) {
+      // eslint-disable-next-line no-use-before-define
+      logLifecycle(id, 'COLLECTED');
     }
-    return id;
+
+    // Phase 1 (synchronous): remove from in-memory caches so that
+    // concurrent operations cannot see the collected formulas.
+    // Persistence deletion is deferred to the async phase so that
+    // implementations are free to use async I/O.
+    /** @type {Map<FormulaIdentifier, Formula>} */
+    const collectedFormulas = new Map();
+    for (const id of collectedIds) {
+      const formula = formulaForId.get(id);
+      if (formula !== undefined) {
+        collectedFormulas.set(id, formula);
+      }
+    }
+
+    for (const id of collectedIds) {
+      const formula = collectedFormulas.get(id);
+      if (formula !== undefined) {
+        const { number: collectedNumber, node: collectedNode } = parseId(id);
+        formulaForId.delete(id);
+        formulaChangeTopic.publisher.next(
+          harden({ remove: collectedNumber, node: collectedNode }),
+        );
+        if (
+          formula.type === 'pet-store' ||
+          formula.type === 'mailbox-store' ||
+          formula.type === 'known-peers-store'
+        ) {
+          formulaGraph.onPetStoreRemoveAll(id);
+        }
+      }
+    }
+
+    // Snapshot controllers before dropping live values, then drop
+    // synchronously so no stale controllers are accessible.
+    /** @type {Array<{id: FormulaIdentifier, controller: Controller}>} */
+    const controllersToCancel = [];
+    for (const id of collectedIds) {
+      const controller = controllerForId.get(id);
+      if (controller) {
+        controllersToCancel.push({ id, controller });
+      }
+      // eslint-disable-next-line no-use-before-define
+      dropLiveValue(id);
+    }
+
+    // Phase 2 (async): schedule persistence deletion, controller
+    // cancellation, and worker disconnection to run after the
+    // current graph lock holder completes.
+    const collectedFormulaTypes = new Map(
+      [...collectedFormulas.entries()].map(([id, f]) => [id, f.type]),
+    );
+    pendingCollectionCleanup.push(async () => {
+      // Delete from durable storage.
+      await Promise.allSettled(
+        collectedIds.map(id =>
+          persistencePowers.deleteFormula(parseId(id).number),
+        ),
+      );
+      await Promise.allSettled(
+        [...collectedFormulas.entries()].map(async ([id, formula]) => {
+          if (
+            formula.type === 'pet-store' ||
+            formula.type === 'mailbox-store' ||
+            formula.type === 'known-peers-store'
+          ) {
+            await petStorePowers.deletePetStore(
+              parseId(id).number,
+              formula.type,
+            );
+          }
+        }),
+      );
+
+      // Cancel controllers and disconnect workers.
+      const cancelReason = new Error(
+        'became unreachable by any pet name path and was collected',
+      );
+      await Promise.allSettled(
+        controllersToCancel.map(async ({ controller }) => {
+          await null;
+          await controller.context.cancel(cancelReason, '!');
+        }),
+      );
+
+      // eslint-disable-next-line no-use-before-define
+      residenceTracker.disconnectRetainersHolding(
+        collectedIds,
+        collectedFormulaTypes,
+      );
+    });
   };
 
-  const formulaGraph = makeFormulaGraph({ extractDeps, isLocalId });
+  const formulaGraph = makeFormulaGraph({
+    extractLabeledDeps,
+    isLocalId,
+    onCollect,
+  });
 
   formulaGraph.addRoot(knownPeersId);
   formulaGraph.addRoot(leastAuthorityId);
@@ -28928,35 +29511,38 @@ const makeDaemonCore = async (
     formulaGraph.addRoot(/** @type {FormulaIdentifier} */ (id));
   }
 
-  // Transient roots protect formulas from collection for the duration of
-  // a command. Without this, a formula created by a command could be
-  // collected before the command has a chance to assign it a pet name
-  // (which would give it a durable reference). Transient roots are
-  // pinned at the start of a command and unpinned in its finally block.
-  /** @type {Set<FormulaIdentifier>} */
-  const transientRoots = new Set();
-  let transientRootsDirty = false;
+  const pinTransient = /** @param {FormulaIdentifier} id */ id =>
+    formulaGraph.pinTransient(id);
 
   /**
-   * Temporarily adds a formula to the root set, protecting it from
-   * collection until unpinned.
-   *
-   * @param {FormulaIdentifier} id
+   * Drain pending collection cleanup. Callers that unpin outside
+   * `withFormulaGraphLock` must call this to ensure async cleanup
+   * (controller cancellation, worker termination) completes.
    */
-  const pinTransient = id => {
-    transientRoots.add(id);
-    transientRootsDirty = true;
+  const drainCollectionCleanup = async () => {
+    while (pendingCollectionCleanup.length > 0) {
+      const cleanup = /** @type {() => Promise<void>} */ (
+        pendingCollectionCleanup.shift()
+      );
+      await cleanup();
+    }
   };
 
   /**
-   * Removes a formula from the transient root set, allowing it to be
-   * collected if no other references remain.
+   * Unpin a transient formula and drain any resulting collection
+   * cleanup. Returns a promise that resolves when all async
+   * cleanup (controller cancellation, worker termination) is done.
+   *
+   * Inside `withFormulaGraphLock`, cleanup is deferred to the lock's
+   * finally block. Outside the lock, cleanup runs immediately.
    *
    * @param {FormulaIdentifier} id
+   * @returns {Promise<void>}
    */
-  const unpinTransient = id => {
-    if (transientRoots.delete(id)) {
-      transientRootsDirty = true;
+  const unpinTransient = async id => {
+    formulaGraph.unpinTransient(id);
+    if (formulaGraphLockDepth === 0) {
+      await drainCollectionCleanup();
     }
   };
 
@@ -28967,7 +29553,7 @@ const makeDaemonCore = async (
 
   /** @param {FormulaIdentifier} inputId */
   const getFormulaForId = async inputId => {
-    const id = normalizeId(inputId);
+    const id = inputId;
     // No synchronous preamble.
     await null;
 
@@ -28977,7 +29563,7 @@ const makeDaemonCore = async (
     }
 
     const { number: fNum } = parseId(id);
-    formula = await persistencePowers.readFormula(fNum);
+    ({ formula } = await persistencePowers.readFormula(fNum));
     await withFormulaGraphLock(async () => {
       formulaForId.set(id, formula);
       formulaGraph.onFormulaAdded(id, formula);
@@ -28987,11 +29573,10 @@ const makeDaemonCore = async (
 
   /** @param {FormulaIdentifier} inputId */
   const getTypeForId = async inputId => {
-    const id = normalizeId(inputId);
-    if (parseId(id).node !== LOCAL_NODE) {
+    if (!isLocalId(inputId)) {
       return 'remote';
     }
-    const { type } = await getFormulaForId(id);
+    const { type } = await getFormulaForId(inputId);
     return type;
   };
 
@@ -29032,15 +29617,15 @@ const makeDaemonCore = async (
       }
       // When a retainer's node worker is terminated by GC, also
       // terminate any cancelWithWorker (original XS worker) referenced
-      // by make-unconfined/make-bundle formulas on this worker.
+      // by make-unconfined/make-archive formulas on this worker.
       const terminatedId = formatId({
-        number: workerId,
-        node: LOCAL_NODE,
+        number: /** @type {FormulaNumber} */ (workerId),
+        node: localNodeNumber,
       });
       for (const formula of formulaForId.values()) {
         if (
           (formula.type === 'make-unconfined' ||
-            formula.type === 'make-bundle') &&
+            formula.type === 'make-archive') &&
           formula.worker === terminatedId &&
           formula.cancelWithWorker
         ) {
@@ -29064,11 +29649,6 @@ const makeDaemonCore = async (
       provideController(id).value
     );
 
-  const enableFormulaCollection = gcEnabled;
-  if (!enableFormulaCollection) {
-    console.log('Formula collection disabled (ENDO_GC=0)');
-  }
-
   /** @param {FormulaIdentifier} id */
   const dropLiveValue = id => {
     controllerForId.delete(id);
@@ -29080,13 +29660,14 @@ const makeDaemonCore = async (
   };
 
   const seedFormulaGraphFromPersistence = async () => {
-    const formulaNumbers = await persistencePowers.listFormulas();
+    const formulaRecords = await persistencePowers.listFormulas();
     const entries = await Promise.all(
-      formulaNumbers.map(async formulaNumber => {
-        const formula = await persistencePowers.readFormula(formulaNumber);
+      formulaRecords.map(async ({ number: formulaNumber, node }) => {
+        const fNum = /** @type {FormulaNumber} */ (formulaNumber);
+        const { formula } = await persistencePowers.readFormula(fNum);
         const id = formatId({
-          number: formulaNumber,
-          node: LOCAL_NODE,
+          number: fNum,
+          node: /** @type {NodeNumber} */ (node || localNodeNumber),
         });
         return { id, formula };
       }),
@@ -29119,248 +29700,40 @@ const makeDaemonCore = async (
             ),
             assertValidName,
           );
-          await petStore.repairIds(storedId => {
-            const { number: storedNumber, node: storedNode } =
-              parseId(storedId);
-            if (isLocalKey(storedNode)) {
-              return formatId({ number: storedNumber, node: LOCAL_NODE });
-            }
-            return storedId;
-          });
           const controller = makeLocalStoreController(
             /** @type {FormulaIdentifier} */ (id),
             petStore,
             gcHooks,
           );
           await controller.seedGcEdges();
-          return;
-        }
-        // Handle synced pet stores.
-        if (formula.type === 'synced-pet-store') {
-          const { number: formulaNumber } = parseId(id);
-          const syncedStore = await petStorePowers.makeIdentifiedSyncedPetStore(
-            formulaNumber,
-            localNodeNumber,
-            formula.role,
-          );
-          const controller = makeSyncedStoreController(
-            /** @type {FormulaIdentifier} */ (id),
-            syncedStore,
-            gcHooks,
-            storeConverters,
-          );
-          await controller.seedGcEdges();
         }
       }),
     );
-  };
 
-  const collectIfDirty = async () => {
-    if (!enableFormulaCollection) {
-      return;
-    }
-    // collectIfDirty is never called re-entrantly (only from
-    // withCollection finally blocks), so we bypass withFormulaGraphLock
-    // and use the raw mutex to avoid false re-entrancy bypasses from
-    // the global depth counter.
-    await null;
-    await formulaGraphJobs.enqueue(async () => {
-      if (!formulaGraph.isDirty() && !transientRootsDirty) {
-        return;
-      }
-
-      const localIds = new Set(formulaForId.keys());
-      /** @type {Map<FormulaIdentifier, Set<FormulaIdentifier>>} */
-      const groupMembers = new Map();
-      for (const id of localIds) {
-        const group = formulaGraph.findGroup(id);
-        const set = groupMembers.get(group) || new Set();
-        set.add(id);
-        groupMembers.set(group, set);
-      }
-
-      /** @type {Map<FormulaIdentifier, Set<FormulaIdentifier>>} */
-      const groupDeps = new Map();
-      /**
-       * @param {FormulaIdentifier} fromGroup
-       * @param {FormulaIdentifier} toGroup
-       */
-      const addGroupEdge = (fromGroup, toGroup) => {
-        if (fromGroup === toGroup) {
-          return;
-        }
-        const set = groupDeps.get(fromGroup) || new Set();
-        set.add(toGroup);
-        groupDeps.set(fromGroup, set);
-      };
-
-      for (const [id, deps] of formulaGraph.formulaDeps.entries()) {
-        if (localIds.has(id)) {
-          const fromGroup = formulaGraph.findGroup(id);
-          for (const dep of deps) {
-            if (localIds.has(dep)) {
-              addGroupEdge(fromGroup, formulaGraph.findGroup(dep));
-            }
+    // Load retention edges from SQLite into the graph.
+    const agentKeys = persistencePowers.listAgentKeys();
+    await withFormulaGraphLock(async () => {
+      for (const { publicKey, agentId } of agentKeys) {
+        const retentionEntries = persistencePowers.listRetention(publicKey);
+        const agentIdStr = /** @type {FormulaIdentifier} */ (agentId);
+        for (const { formulaNumber } of retentionEntries) {
+          const retainedId = formatId({
+            number: /** @type {FormulaNumber} */ (formulaNumber),
+            node: localNodeNumber,
+          });
+          if (formulaForId.has(retainedId)) {
+            formulaGraph.addRetention(agentIdStr, retainedId);
           }
         }
       }
-
-      for (const [storeId, ids] of formulaGraph.petStoreEdges.entries()) {
-        if (localIds.has(storeId)) {
-          const fromGroup = formulaGraph.findGroup(storeId);
-          for (const id of ids) {
-            if (localIds.has(id)) {
-              addGroupEdge(fromGroup, formulaGraph.findGroup(id));
-            }
-          }
-        }
-      }
-
-      /** @type {Map<FormulaIdentifier, number>} */
-      const refCount = new Map();
-      for (const group of groupMembers.keys()) {
-        refCount.set(group, 0);
-      }
-      for (const deps of groupDeps.values()) {
-        for (const dep of deps) {
-          refCount.set(dep, (refCount.get(dep) || 0) + 1);
-        }
-      }
-
-      /** @type {Set<FormulaIdentifier>} */
-      const rootGroups = new Set();
-      for (const rootId of formulaGraph.roots) {
-        if (localIds.has(rootId)) {
-          rootGroups.add(formulaGraph.findGroup(rootId));
-        }
-      }
-      for (const rootId of transientRoots) {
-        if (localIds.has(rootId)) {
-          rootGroups.add(formulaGraph.findGroup(rootId));
-        }
-      }
-
-      /** @type {FormulaIdentifier[]} */
-      const queue = [];
-      for (const [group, count] of refCount.entries()) {
-        if (count === 0 && !rootGroups.has(group)) {
-          queue.push(group);
-        }
-      }
-
-      /** @type {Set<FormulaIdentifier>} */
-      const collectedGroups = new Set();
-      while (queue.length > 0) {
-        const group = queue.shift();
-        if (group !== undefined && !collectedGroups.has(group)) {
-          collectedGroups.add(group);
-          for (const dep of groupDeps.get(group) || []) {
-            const nextCount = (refCount.get(dep) || 0) - 1;
-            refCount.set(dep, nextCount);
-            if (nextCount === 0 && !rootGroups.has(dep)) {
-              queue.push(dep);
-            }
-          }
-        }
-      }
-
-      if (collectedGroups.size === 0) {
-        formulaGraph.clearDirty();
-        transientRootsDirty = false;
-        return;
-      }
-
-      /** @type {FormulaIdentifier[]} */
-      const collectedIds = [];
-      for (const group of collectedGroups) {
-        const members = groupMembers.get(group);
-        if (members !== undefined) {
-          for (const id of members) {
-            collectedIds.push(id);
-          }
-        }
-      }
-
-      /** @type {Map<FormulaIdentifier, Formula>} */
-      const collectedFormulas = new Map();
-      for (const id of collectedIds) {
-        const formula = formulaForId.get(id);
-        if (formula !== undefined) {
-          collectedFormulas.set(id, formula);
-        }
-      }
-
-      const cancelReason = new Error('Collected formula');
-      for (const id of collectedIds) {
-        logLifecycle(id, 'COLLECTED');
-      }
-      await Promise.allSettled(
-        collectedIds.map(async id => {
-          await null;
-          const controller = controllerForId.get(id);
-          if (controller) {
-            await controller.context.cancel(cancelReason, '!');
-          }
-        }),
-      );
-
-      for (const id of collectedIds) {
-        dropLiveValue(id);
-      }
-
-      residenceTracker.disconnectRetainersHolding(collectedIds);
-
-      for (const id of collectedIds) {
-        const formula = collectedFormulas.get(id);
-        if (formula !== undefined) {
-          formulaForId.delete(id);
-          formulaGraph.onFormulaRemoved(id);
-          if (
-            formula.type === 'pet-store' ||
-            formula.type === 'mailbox-store' ||
-            formula.type === 'known-peers-store' ||
-            formula.type === 'synced-pet-store'
-          ) {
-            formulaGraph.onPetStoreRemoveAll(id);
-          }
-        }
-      }
-
-      await Promise.allSettled(
-        collectedIds.map(async id => {
-          await null;
-          await persistencePowers.deleteFormula(parseId(id).number);
-        }),
-      );
-
-      await Promise.allSettled(
-        Array.from(collectedFormulas.entries()).map(async ([id, formula]) => {
-          await null;
-          if (
-            formula.type === 'pet-store' ||
-            formula.type === 'mailbox-store' ||
-            formula.type === 'known-peers-store'
-          ) {
-            await petStorePowers.deletePetStore(
-              parseId(id).number,
-              formula.type,
-            );
-          } else if (formula.type === 'synced-pet-store') {
-            await petStorePowers.deleteSyncedPetStore(parseId(id).number);
-          }
-        }),
-      );
-
-      formulaGraph.clearDirty();
-      transientRootsDirty = false;
     });
 
-    try {
-      const endoBootstrap = await provide(endoFormulaId, 'endo');
-      await E(endoBootstrap).revivePins();
-    } catch {
-      // Ignore pin revival failures during collection.
-    }
+    // One-time sweep for formulas unreachable after loading all edges.
+    // Run inside the lock so that any resulting collection cleanup is
+    // drained before the function returns.
+    await withFormulaGraphLock(async () => {
+      formulaGraph.sweepUnreachable();
+    });
   };
 
   /** @type {import('./types.js').GcHooks} */
@@ -29372,23 +29745,12 @@ const makeDaemonCore = async (
     withFormulaGraphLock,
   });
 
-  /** @type {import('./types.js').StoreConverters} */
-  const storeConverters = harden({
-    idFromLocator,
-    formatLocator,
-    getTypeForId,
-    internalizeLocator,
-    isLocalKey,
-    localNodeNumber,
-  });
-
   /** @type {Map<FormulaIdentifier, import('./types.js').StoreController>} */
   const controllerCache = new Map();
 
   /**
-   * Wraps a raw pet store or synced pet store in the appropriate
-   * StoreController. Controllers are cached so the same store ID always
-   * yields the same controller instance.
+   * Wraps a raw pet store in a StoreController. Controllers are cached
+   * so the same store ID always yields the same controller instance.
    *
    * @param {FormulaIdentifier} storeId
    * @returns {Promise<import('./types.js').StoreController>}
@@ -29397,20 +29759,6 @@ const makeDaemonCore = async (
     const cached = controllerCache.get(storeId);
     if (cached !== undefined) {
       return cached;
-    }
-    const storeType = await getTypeForId(storeId);
-    if (storeType === 'synced-pet-store') {
-      const store =
-        /** @type {import('./types.js').SyncedPetStore} */
-        (await provide(storeId));
-      const controller = makeSyncedStoreController(
-        storeId,
-        store,
-        gcHooks,
-        storeConverters,
-      );
-      controllerCache.set(storeId, controller);
-      return controller;
     }
     const store =
       /** @type {import('./types.js').PetStore} */
@@ -29440,6 +29788,38 @@ const makeDaemonCore = async (
       }
       return provide(requestedId);
     },
+    /**
+     * Return the formula numbers from `peerNodeNumber` that this
+     * daemon currently holds, followed by incremental updates.
+     * Each yielded value has shape `{ add: string[], remove: string[] }`.
+     * The first delta is the snapshot (all adds, no removes).
+     * Subsequent deltas are batched over microtasks.
+     *
+     * @param {string} peerNodeNumber
+     * @returns {Promise<FarRef<AsyncIterableIterator<import('./retention-accumulator.js').RetentionDelta>>>}
+     */
+    followRetentionSet: async peerNodeNumber => {
+      const snapshot =
+        persistencePowers.listFormulaNumbersByNode(peerNodeNumber);
+      const accumulator = makeRetentionAccumulator({ snapshot });
+
+      // Feed formula change events into the accumulator, filtered
+      // by the peer's node number.
+      const subscription = formulaChangeTopic.subscribe();
+      (async () => {
+        for await (const change of subscription) {
+          if (change.node === peerNodeNumber) {
+            if (change.add !== undefined) {
+              accumulator.add(change.add);
+            } else if (change.remove !== undefined) {
+              accumulator.remove(change.remove);
+            }
+          }
+        }
+      })();
+
+      return makeIteratorRef(accumulator.subscribe());
+    },
   });
 
   /** @type {EndoGreeter} */
@@ -29464,6 +29844,74 @@ const makeDaemonCore = async (
       /** @param {Error} error */
       const wrappedCancel = error => E(cancelConnection)(error);
       remoteControl.accept(remoteGateway, wrappedCancel, connectionCancelled);
+
+      // Follow retention set changes in the background.
+      const consumeRetention = async () => {
+        const iter = await E(remoteGateway).followRetentionSet(localNodeNumber);
+        // Resolve the local agent formula ID for this peer so
+        // retention edges land in the right place in the graph.
+        const agentKeyRecord = persistencePowers.getAgentKey(remoteNodeId);
+        const agentIdStr = agentKeyRecord
+          ? /** @type {FormulaIdentifier} */ (agentKeyRecord.agentId)
+          : undefined;
+
+        let isFirst = true;
+        for await (const delta of makeRefIterator(/** @type {any} */ (iter))) {
+          if (isFirst) {
+            // First delta is the full snapshot.
+            persistencePowers.replaceRetention(remoteNodeId, delta.add);
+            if (agentIdStr !== undefined) {
+              await withFormulaGraphLock(async () => {
+                formulaGraph.replaceRetention(
+                  agentIdStr,
+                  delta.add.map(num =>
+                    formatId({
+                      number: /** @type {FormulaNumber} */ (num),
+                      node: localNodeNumber,
+                    }),
+                  ),
+                );
+              });
+            }
+            isFirst = false;
+          } else {
+            for (const num of delta.add) {
+              persistencePowers.writeRetention(remoteNodeId, num);
+            }
+            for (const num of delta.remove) {
+              persistencePowers.deleteRetention(remoteNodeId, num);
+            }
+            if (agentIdStr !== undefined) {
+              await withFormulaGraphLock(async () => {
+                for (const num of delta.add) {
+                  formulaGraph.addRetention(
+                    agentIdStr,
+                    formatId({
+                      number: /** @type {FormulaNumber} */ (num),
+                      node: localNodeNumber,
+                    }),
+                  );
+                }
+                for (const num of delta.remove) {
+                  formulaGraph.removeRetention(
+                    agentIdStr,
+                    formatId({
+                      number: /** @type {FormulaNumber} */ (num),
+                      node: localNodeNumber,
+                    }),
+                  );
+                }
+              });
+            }
+          }
+        }
+      };
+      consumeRetention().catch(err => {
+        console.log(
+          `Retention sync ended for inbound peer ${remoteNodeId.slice(0, 8)}: ${/** @type {Error} */ (err).message}`,
+        );
+      });
+
       return localGateway;
     },
   });
@@ -29482,14 +29930,14 @@ const makeDaemonCore = async (
   /**
    * @param {string} workerId512
    * @param {Context} context
-   * @param {string} [platform] - "separate" | "shared" | "node"
+   * @param {'locked' | 'node'} [kind]
    * @param {string[]} [trustedShims]
    * @param {string} [label]
    */
   const makeIdentifiedWorker = async (
     workerId512,
     context,
-    platform = undefined,
+    kind = undefined,
     trustedShims = undefined,
     label = undefined,
   ) => {
@@ -29510,7 +29958,7 @@ const makeDaemonCore = async (
         capTpConnectionRegistrar,
         trustedShims,
         label,
-        platform,
+        kind,
       );
 
     const terminateWorker = async (_reason = undefined) => {
@@ -29671,11 +30119,19 @@ const makeDaemonCore = async (
   /**
    * @param {string} workerId
    * @param {string} powersId
-   * @param {string} bundleId
+   * @param {string} archiveId
    * @param {Record<string, string> | undefined} env
    * @param {Context} context
+   * @param {string} [cancelWithWorker]
    */
-  const makeBundle = async (workerId, powersId, bundleId, env, context, cancelWithWorker) => {
+  const makeArchive = async (
+    workerId,
+    powersId,
+    archiveId,
+    env,
+    context,
+    cancelWithWorker,
+  ) => {
     context.thisDiesIfThatDies(workerId);
     context.thisDiesIfThatDies(powersId);
     if (cancelWithWorker) {
@@ -29688,13 +30144,13 @@ const makeDaemonCore = async (
     );
     const workerDaemonFacet = workerDaemonFacets.get(worker);
     assert(workerDaemonFacet, 'Cannot make caplet with non-worker');
-    const readableBundleP = provide(
-      /** @type {FormulaIdentifier} */ (bundleId),
+    const readableArchiveP = provide(
+      /** @type {FormulaIdentifier} */ (archiveId),
       'readable-blob',
     );
     const powersP = provide(/** @type {FormulaIdentifier} */ (powersId));
-    return E(/** @type {any} */ (workerDaemonFacet)).makeBundle(
-      readableBundleP,
+    return E(/** @type {any} */ (workerDaemonFacet)).makeArchive(
+      readableArchiveP,
       // TODO fix type
       /** @type {any} */ (powersP),
       /** @type {any} */ (makeFarContext(context)),
@@ -29862,7 +30318,7 @@ const makeDaemonCore = async (
       try {
         await petStore.storeIdentifier(PROMISE_STATUS_NAME, id);
       } finally {
-        unpinTransient(id);
+        await unpinTransient(id);
       }
     };
 
@@ -29882,9 +30338,9 @@ const makeDaemonCore = async (
             }
             // Accept either a raw formula ID or an endo:// locator.
             // A locator carries the sender's actual node number so we
-            // don't misinterpret LOCAL_NODE across daemon boundaries.
+            // don't misinterpret local node identifiers across daemon boundaries.
             if (id.startsWith('endo://')) {
-              const internalized = internalizeLocator(id, isLocalKey);
+              const internalized = internalizeLocator(id);
               id = internalized.id;
             }
             assertValidId(id);
@@ -30546,7 +31002,6 @@ const makeDaemonCore = async (
     },
     eval: ({ worker, source, names, values }, context) =>
       makeEval(worker, source, names, values, context),
-    keypair: ({ publicKey }) => harden({ publicKey }),
     'readable-blob': ({ content }) => makeReadableBlob(content),
     'readable-tree': ({ content }) => makeReadableTree(content),
     mount: async ({ path: mountPath, readOnly }) => {
@@ -30577,20 +31032,53 @@ const makeDaemonCore = async (
         context,
       ),
     worker: (formula, context, _id, formulaNumber) =>
-      makeIdentifiedWorker(formulaNumber, context, formula.platform, formula.trustedShims, formula.label),
+      makeIdentifiedWorker(
+        formulaNumber,
+        context,
+        formula.kind,
+        formula.trustedShims,
+        formula.label,
+      ),
     'make-unconfined': (
-      { worker: workerId, powers: powersId, specifier, env = {}, cancelWithWorker },
+      {
+        worker: workerId,
+        powers: powersId,
+        specifier,
+        env = {},
+        cancelWithWorker,
+      },
       context,
-    ) => makeUnconfined(workerId, powersId, specifier, env, context, cancelWithWorker),
-    'make-bundle': (
-      { worker: workerId, powers: powersId, bundle: bundleId, env = {}, cancelWithWorker },
+    ) =>
+      makeUnconfined(
+        workerId,
+        powersId,
+        specifier,
+        env,
+        context,
+        cancelWithWorker,
+      ),
+    'make-archive': (
+      {
+        worker: workerId,
+        powers: powersId,
+        archive: archiveId,
+        env = {},
+        cancelWithWorker,
+      },
       context,
-    ) => makeBundle(workerId, powersId, bundleId, env, context, cancelWithWorker),
+    ) =>
+      makeArchive(
+        workerId,
+        powersId,
+        archiveId,
+        env,
+        context,
+        cancelWithWorker,
+      ),
     host: async (formula, context, id) => {
       const {
         hostHandle: hostHandleId,
         handle: handleId,
-        keypair: keypairId,
         petStore: petStoreId,
         mailboxStore: mailboxStoreId,
         mailHub: mailHubId,
@@ -30604,28 +31092,29 @@ const makeDaemonCore = async (
       if (mailHubId === undefined) {
         throw new Error('Host formula missing mail hub');
       }
-      const keypairFormula =
-        /** @type {import('./types.js').KeypairFormula} */ (
-          await getFormulaForId(keypairId)
-        );
+      // Look up the agent key by scanning the agent_key table for
+      // an entry whose agentId has the same formula number.
+      const { number: hostNumber } = parseId(id);
+      const hostAgentKeys = persistencePowers.listAgentKeys();
+      const hostAgentKeyRecord = hostAgentKeys.find(entry => {
+        const { number: entryNumber } = parseId(entry.agentId);
+        return entryNumber === hostNumber;
+      });
+      if (hostAgentKeyRecord === undefined) {
+        throw new Error(`No agent key found for host formula ${q(hostNumber)}`);
+      }
       const agentNodeNumber = /** @type {NodeNumber} */ (
-        keypairFormula.publicKey
+        hostAgentKeyRecord.publicKey
       );
-      registerLocalKey(agentNodeNumber);
-      const agentPrivateKey = fromHex(
-        /** @type {string} */ (keypairFormula.privateKey),
-      );
-      /** @param {Uint8Array} message */
-      const agentSignBytes = message => ed25519Sign(agentPrivateKey, message);
+
       // Behold, forward reference:
       // eslint-disable-next-line no-use-before-define
       const agent = await makeHost(
         id,
         handleId,
         hostHandleId,
-        keypairId,
         agentNodeNumber,
-        agentSignBytes,
+        signBytes,
         petStoreId,
         mailboxStoreId,
         mailHubId,
@@ -30645,7 +31134,6 @@ const makeDaemonCore = async (
     guest: async (formula, context, id) => {
       const {
         handle: handleId,
-        keypair: keypairId,
         hostAgent: hostAgentId,
         hostHandle: hostHandleId,
         petStore: petStoreId,
@@ -30658,20 +31146,27 @@ const makeDaemonCore = async (
       if (mailHubId === undefined) {
         throw new Error('Guest formula missing mail hub');
       }
-      const keypairFormula =
-        /** @type {import('./types.js').KeypairFormula} */ (
-          await getFormulaForId(keypairId)
+      // Look up the agent key by formula number.
+      const { number: guestNumber } = parseId(id);
+      const guestAgentKeys = persistencePowers.listAgentKeys();
+      const guestAgentKeyRecord = guestAgentKeys.find(entry => {
+        const { number: entryNumber } = parseId(entry.agentId);
+        return entryNumber === guestNumber;
+      });
+      if (guestAgentKeyRecord === undefined) {
+        throw new Error(
+          `No agent key found for guest formula ${q(guestNumber)}`,
         );
+      }
       const agentNodeNumber = /** @type {NodeNumber} */ (
-        keypairFormula.publicKey
+        guestAgentKeyRecord.publicKey
       );
-      registerLocalKey(agentNodeNumber);
+
       // Behold, forward reference:
       // eslint-disable-next-line no-use-before-define
       const agent = await makeGuest(
         id,
         handleId,
-        keypairId,
         agentNodeNumber,
         hostAgentId,
         hostHandleId,
@@ -30901,106 +31396,6 @@ const makeDaemonCore = async (
     message: (formula, context) => makeMessageHub(formula, context),
     promise: ({ store: storeId }, context) => makePromise(storeId, context),
     resolver: ({ store: storeId }, context) => makeResolver(storeId, context),
-    'synced-pet-store': async (formula, context, _id, formulaNumber) => {
-      await null;
-      const store = await petStorePowers.makeIdentifiedSyncedPetStore(
-        formulaNumber,
-        localNodeNumber,
-        formula.role,
-      );
-
-      const placeholderNumber = '0'.repeat(64);
-      if (formula.remoteStoreNumber !== placeholderNumber) {
-        const peerFormula = /** @type {PeerFormula} */ (
-          await getFormulaForId(formula.peer)
-        );
-        const remoteStoreId = formatId({
-          number: /** @type {FormulaNumber} */ (formula.remoteStoreNumber),
-          node: /** @type {NodeNumber} */ (peerFormula.node),
-        });
-
-        /**
-         * Subscribe to a remote store's change stream and merge each
-         * delta into the local store.  Runs until the formula context
-         * is cancelled or the remote iterator ends.
-         */
-        const subscribeToRemote = async () => {
-          const remoteStore =
-            /** @type {import('./types.js').SyncedPetStore} */
-            (await provide(remoteStoreId));
-          const iter = await E(remoteStore).followChanges();
-          for (;;) {
-            const { value, done } = await E(iter).next();
-            if (done) break;
-            const { key, entry } = value;
-            await store.mergeRemoteState(
-              harden({ [key]: entry }),
-              entry.timestamp,
-            );
-          }
-        };
-
-        /**
-         * Subscribe to local changes and push each delta to the
-         * remote store.  Also handles clock acknowledgement and
-         * tombstone pruning after each push.
-         */
-        const pushToRemote = async () => {
-          const remoteStore =
-            /** @type {import('./types.js').SyncedPetStore} */
-            (await provide(remoteStoreId));
-          const iter = store.followChanges();
-          for (;;) {
-            const { value, done } = await E(iter).next();
-            if (done) break;
-            const { key, entry } = value;
-            await E(remoteStore).mergeRemoteState(
-              harden({ [key]: entry }),
-              entry.timestamp,
-            );
-            // Exchange clock acknowledgements after each push so
-            // both sides can prune tombstones incrementally.
-            const localClock = store.getLocalClock();
-            const remoteClock = await E(remoteStore).getLocalClock();
-            await store.acknowledgeRemoteClock(remoteClock);
-            await E(remoteStore).acknowledgeRemoteClock(localClock);
-          }
-        };
-
-        /**
-         * Run a sync task, restarting with backoff on transient
-         * failures until the formula context is cancelled.
-         *
-         * @param {() => Promise<void>} task
-         */
-        const resilient = async task => {
-          let interval = 1000;
-          const maxInterval = 60000;
-          // eslint-disable-next-line no-constant-condition
-          while (true) {
-            try {
-              await task();
-              // Stream ended cleanly; restart to pick up a new
-              // connection after the peer reconnects.
-              interval = 1000;
-            } catch {
-              interval = Math.min(interval * 2, maxInterval);
-            }
-            try {
-              await delay(interval, context.cancelled);
-            } catch {
-              break;
-            }
-          }
-        };
-
-        // Both directions run concurrently and independently.
-        resilient(subscribeToRemote);
-        resilient(pushToRemote);
-      }
-
-      return store;
-    },
     'known-peers-store': async (_formula, _context, _id, formulaNumber) => {
       await null;
       return petStorePowers.makeIdentifiedPetStore(
@@ -31149,7 +31544,7 @@ const makeDaemonCore = async (
    */
   const evaluateFormulaForId = async (id, context) => {
     const { number: formulaNumber, node: formulaNode } = parseId(id);
-    const isRemote = formulaNode !== LOCAL_NODE;
+    const isRemote = !isLocalKey(formulaNode);
     if (isRemote) {
       // eslint-disable-next-line no-use-before-define
       const peerId = await getPeerIdForNodeIdentifier(formulaNode);
@@ -31176,38 +31571,52 @@ const makeDaemonCore = async (
    * @param {Formula} formula
    * @returns {Promise<FormulaIdentifier>}
    */
-  const formulateLazy = async (formulaNumber, formula) => {
+  const formulateLazy = async (
+    formulaNumber,
+    formula,
+    nodeNumber = localNodeNumber,
+  ) => {
     const id = formatId({
       number: formulaNumber,
-      node: LOCAL_NODE,
+      node: nodeNumber,
     });
-    await persistencePowers.writeFormula(formulaNumber, formula);
+    await persistencePowers.writeFormula(formulaNumber, nodeNumber, formula);
     await withFormulaGraphLock(async () => {
       if (formulaForId.has(id)) return;
       formulaForId.set(id, formula);
       formulaGraph.onFormulaAdded(id, formula);
     });
+    formulaChangeTopic.publisher.next(
+      harden({ add: formulaNumber, node: nodeNumber }),
+    );
     logLifecycle(id, 'FORMULATE_LAZY');
     return id;
   };
 
   /** @type {DaemonCore['formulate']} */
-  const formulate = async (formulaNumber, formula) => {
+  const formulate = async (
+    formulaNumber,
+    formula,
+    nodeNumber = localNodeNumber,
+  ) => {
     const id = formatId({
       number: formulaNumber,
-      node: LOCAL_NODE,
+      node: nodeNumber,
     });
 
     // Persist to disk before the formula becomes visible in the graph.
     // This ensures that retries and reincarnation can always read the
     // formula JSON, even if evaluation fails immediately.
-    await persistencePowers.writeFormula(formulaNumber, formula);
+    await persistencePowers.writeFormula(formulaNumber, nodeNumber, formula);
 
     await withFormulaGraphLock(async () => {
       formulaForId.has(id) && assert.Fail`Formula already exists for id ${id}`;
       formulaForId.set(id, formula);
       formulaGraph.onFormulaAdded(id, formula);
     });
+    formulaChangeTopic.publisher.next(
+      harden({ add: formulaNumber, node: nodeNumber }),
+    );
 
     logLifecycle(id, 'FORMULATE');
     const { promise, resolve } = /** @type {PromiseKit<unknown>} */ (
@@ -31236,7 +31645,7 @@ const makeDaemonCore = async (
 
   /** @type {DaemonCore['provideController']} */
   const provideController = inputId => {
-    const id = normalizeId(inputId);
+    const id = inputId;
     const existingController = controllerForId.get(id);
     if (existingController !== undefined) {
       return existingController;
@@ -31275,7 +31684,19 @@ const makeDaemonCore = async (
     );
     // The knownPeers pet store uses node numbers as keys, not pet names.
     // This is a deliberate aberration of the pet store abstraction.
-    const peerId = knownPeers.identifyLocal(nodeNumber);
+    let peerId = knownPeers.identifyLocal(nodeNumber);
+
+    // If not found as a daemon node, check if it's a remote agent key
+    // and look up the owning daemon's node.
+    if (peerId === undefined) {
+      const daemonNode = persistencePowers.getRemoteAgentKey(nodeNumber);
+      if (daemonNode !== undefined) {
+        peerId = knownPeers.identifyLocal(
+          /** @type {NodeNumber} */ (daemonNode),
+        );
+      }
+    }
+
     if (peerId === undefined) {
       throw new Error(`No peer found for node identifier ${q(nodeNumber)}.`);
     }
@@ -31308,7 +31729,7 @@ const makeDaemonCore = async (
         await deferredTasks.execute({
           readableBlobId: formatId({
             number: formulaNumber,
-            node: LOCAL_NODE,
+            node: localNodeNumber,
           }),
         });
 
@@ -31335,7 +31756,7 @@ const makeDaemonCore = async (
         await deferredTasks.execute({
           mountId: formatId({
             number: formulaNumber,
-            node: LOCAL_NODE,
+            node: localNodeNumber,
           }),
         });
 
@@ -31363,7 +31784,7 @@ const makeDaemonCore = async (
         await deferredTasks.execute({
           scratchMountId: formatId({
             number: formulaNumber,
-            node: LOCAL_NODE,
+            node: localNodeNumber,
           }),
         });
 
@@ -31397,7 +31818,7 @@ const makeDaemonCore = async (
         await deferredTasks.execute({
           readableTreeId: formatId({
             number: formulaNumber,
-            node: LOCAL_NODE,
+            node: localNodeNumber,
           }),
         });
 
@@ -31431,7 +31852,7 @@ const makeDaemonCore = async (
         );
         const invitationId = formatId({
           number: invitationNumber,
-          node: LOCAL_NODE,
+          node: localNodeNumber,
         });
         await deferredTasks.execute({
           invitationId,
@@ -31480,15 +31901,15 @@ const makeDaemonCore = async (
 
         const messageStoreId = formatId({
           number: messageStoreNumber,
-          node: LOCAL_NODE,
+          node: localNodeNumber,
         });
         const memberStoreId = formatId({
           number: memberStoreNumber,
-          node: LOCAL_NODE,
+          node: localNodeNumber,
         });
         const channelId = formatId({
           number: channelNumber,
-          node: LOCAL_NODE,
+          node: localNodeNumber,
         });
 
         await deferredTasks.execute({
@@ -31520,7 +31941,7 @@ const makeDaemonCore = async (
       const timerNumber = /** @type {FormulaNumber} */ (await randomHex256());
       const timerId = formatId({
         number: timerNumber,
-        node: LOCAL_NODE,
+        node: localNodeNumber,
       });
 
       await deferredTasks.execute({ timerId });
@@ -31547,18 +31968,23 @@ const makeDaemonCore = async (
    *
    * @param {FormulaNumber} formulaNumber - The formula number of the handle to formulate.
    * @param {FormulaIdentifier} agentId - The formula identifier of the handle's agent.
+   * @param {NodeNumber} [nodeNumber] - The node number to use (defaults to localNodeNumber).
    * @returns {Promise<FormulaIdentifier>}
    */
-  const formulateNumberedHandle = async (formulaNumber, agentId) => {
+  const formulateNumberedHandle = async (
+    formulaNumber,
+    agentId,
+    nodeNumber = localNodeNumber,
+  ) => {
     /** @type {HandleFormula} */
     const formula = {
       type: 'handle',
       agent: agentId,
     };
-    await persistencePowers.writeFormula(formulaNumber, formula);
+    await persistencePowers.writeFormula(formulaNumber, nodeNumber, formula);
     const id = formatId({
       number: formulaNumber,
-      node: LOCAL_NODE,
+      node: nodeNumber,
     });
     await withFormulaGraphLock(async () => {
       formulaForId.set(id, formula);
@@ -31572,15 +31998,19 @@ const makeDaemonCore = async (
    * The returned promise is resolved after the formula is persisted.
    *
    * @param {FormulaNumber} formulaNumber - The formula number of the pet store to formulate.
+   * @param {NodeNumber} [nodeNumber] - The node number to use (defaults to localNodeNumber).
    * @returns {FormulateResult<PetStore>} The formulated pet store.
    */
-  const formulateNumberedPetStore = async formulaNumber => {
+  const formulateNumberedPetStore = async (
+    formulaNumber,
+    nodeNumber = localNodeNumber,
+  ) => {
     /** @type {PetStoreFormula} */
     const formula = {
       type: 'pet-store',
     };
     return /** @type {FormulateResult<PetStore>} */ (
-      formulate(formulaNumber, formula)
+      formulate(formulaNumber, formula, nodeNumber)
     );
   };
 
@@ -31590,15 +32020,19 @@ const makeDaemonCore = async (
    * The returned promise is resolved after the formula is persisted.
    *
    * @param {FormulaNumber} formulaNumber - The formula number of the mailbox store.
+   * @param {NodeNumber} [nodeNumber] - The node number to use (defaults to localNodeNumber).
    * @returns {FormulateResult<PetStore>} The formulated mailbox store.
    */
-  const formulateNumberedMailboxStore = async formulaNumber => {
+  const formulateNumberedMailboxStore = async (
+    formulaNumber,
+    nodeNumber = localNodeNumber,
+  ) => {
     /** @type {MailboxStoreFormula} */
     const formula = {
       type: 'mailbox-store',
     };
     return /** @type {FormulateResult<PetStore>} */ (
-      formulate(formulaNumber, formula)
+      formulate(formulaNumber, formula, nodeNumber)
     );
   };
 
@@ -31609,27 +32043,33 @@ const makeDaemonCore = async (
    *
    * @param {FormulaNumber} formulaNumber - The mail hub formula number.
    * @param {FormulaIdentifier} mailboxStoreId
+   * @param {NodeNumber} [nodeNumber] - The node number to use (defaults to localNodeNumber).
    * @returns {FormulateResult<NameHub>} The formulated mail hub.
    */
-  const formulateNumberedMailHub = async (formulaNumber, mailboxStoreId) => {
+  const formulateNumberedMailHub = async (
+    formulaNumber,
+    mailboxStoreId,
+    nodeNumber = localNodeNumber,
+  ) => {
     /** @type {MailHubFormula} */
     const formula = {
       type: 'mail-hub',
       store: mailboxStoreId,
     };
     return /** @type {FormulateResult<NameHub>} */ (
-      formulate(formulaNumber, formula)
+      formulate(formulaNumber, formula, nodeNumber)
     );
   };
 
   /**
    * @type {DaemonCore['formulateDirectory']}
    */
-  const formulateDirectory = async () => {
+  const formulateDirectory = async (nodeNumber = localNodeNumber) => {
     return /** @type {FormulateResult<EndoDirectory>} */ (
       withFormulaGraphLock(async () => {
         const { id: petStoreId } = await formulateNumberedPetStore(
           /** @type {FormulaNumber} */ (await randomHex256()),
+          nodeNumber,
         );
         const formulaNumber = /** @type {FormulaNumber} */ (
           await randomHex256()
@@ -31639,7 +32079,7 @@ const makeDaemonCore = async (
           type: 'directory',
           petStore: petStoreId,
         };
-        const result = await formulate(formulaNumber, formula);
+        const result = await formulate(formulaNumber, formula, nodeNumber);
         pinTransient(result.id);
         return result;
       })
@@ -31647,8 +32087,7 @@ const makeDaemonCore = async (
   };
 
   /**
-   * Formulates a `directory` formula backed by an existing pet-store or
-   * synced-pet-store.
+   * Formulates a `directory` formula backed by an existing pet-store.
    *
    * @param {FormulaIdentifier} storeId - The existing store formula ID.
    * @returns {FormulateResult<EndoDirectory>}
@@ -31672,44 +32111,26 @@ const makeDaemonCore = async (
   };
 
   /**
-   * Formulates a `synced-pet-store` formula.
-   *
-   * @param {FormulaIdentifier} peerId - The peer formula ID.
-   * @param {'grantor' | 'grantee'} role
-   * @param {import('./types.js').FormulaNumber} remoteStoreNumber
-   * @param {FormulaIdentifier} storeId - The underlying pet-store formula ID.
-   * @returns {FormulateResult<import('./types.js').SyncedPetStore>}
-   */
-  const formulateSyncedPetStore = async (
-    peerId,
-    role,
-    remoteStoreNumber,
-    storeId,
-  ) => {
-    const formulaNumber = /** @type {FormulaNumber} */ (await randomHex256());
-    /** @type {import('./types.js').SyncedPetStoreFormula} */
-    const formula = {
-      type: 'synced-pet-store',
-      peer: peerId,
-      role,
-      remoteStoreNumber,
-      store: storeId,
-    };
-    return /** @type {FormulateResult<import('./types.js').SyncedPetStore>} */ (
-      formulate(formulaNumber, formula)
-    );
-  };
-
-  /**
    * Formulates a `worker` formula and synchronously adds it to the formula graph.
    * The returned promise is resolved after the formula is persisted.
    *
    * @param {FormulaNumber} formulaNumber - The worker formula number.
-   * @param {string[]} [trustedShims] - Module specifiers imported before lockdown.
-   * @param {string} [label] - Human-readable label for status reporting.
+   * @param {object} [options]
+   * @param {string[]} [options.trustedShims] - Module specifiers imported before lockdown.
+   * @param {string} [options.label] - Human-readable label for status reporting.
+   * @param {'locked' | 'node'} [options.kind] - Worker kind (locked for XS, node for Node.js).
+   * @param {NodeNumber} [options.nodeNumber] - Node number (defaults to localNodeNumber).
    * @returns {ReturnType<DaemonCore['formulateWorker']>}
    */
-  const formulateNumberedWorker = (formulaNumber, { trustedShims, label = '<untitled>', platform } = {}) => {
+  const formulateNumberedWorker = (
+    formulaNumber,
+    {
+      trustedShims,
+      label = '<untitled>',
+      kind,
+      nodeNumber = localNodeNumber,
+    } = {},
+  ) => {
     /** @type {WorkerFormula} */
     const formula = {
       type: 'worker',
@@ -31717,11 +32138,11 @@ const makeDaemonCore = async (
       ...(trustedShims && trustedShims.length > 0
         ? { trustedShims }
         : undefined),
-      ...(platform ? { platform } : undefined),
+      ...(kind ? { kind } : undefined),
     };
 
     return /** @type {FormulateResult<EndoWorker>} */ (
-      formulate(formulaNumber, formula)
+      formulate(formulaNumber, formula, nodeNumber)
     );
   };
 
@@ -31739,7 +32160,7 @@ const makeDaemonCore = async (
       await deferredTasks.execute({
         workerId: formatId({
           number: formulaNumber,
-          node: LOCAL_NODE,
+          node: localNodeNumber,
         }),
       });
 
@@ -31751,24 +32172,7 @@ const makeDaemonCore = async (
    * Generates an Ed25519 keypair, hex-encodes the keys, and formulates
    * a keypair formula.
    *
-   * @returns {Promise<{ keypairId: FormulaIdentifier }>}
    */
-  const formulateKeypair = async () => {
-    const keypair = await generateEd25519Keypair();
-    const publicKeyHex = toHex(keypair.publicKey);
-    const privateKeyHex = toHex(keypair.privateKey);
-    const keypairFormulaNumber = /** @type {FormulaNumber} */ (
-      await randomHex256()
-    );
-    /** @type {import('./types.js').KeypairFormula} */
-    const formula = {
-      type: 'keypair',
-      publicKey: publicKeyHex,
-      privateKey: privateKeyHex,
-    };
-    const { id: keypairId } = await formulate(keypairFormulaNumber, formula);
-    return { keypairId };
-  };
 
   /**
    * @type {DaemonCore['formulateHostDependencies']}
@@ -31789,10 +32193,30 @@ const makeDaemonCore = async (
     };
 
     await null;
+
+    // Generate the agent keypair first so we know the agent's node number.
+    const hostFormulaNumber = /** @type {FormulaNumber} */ (
+      await randomHex256()
+    );
+    const keypair = await generateEd25519Keypair();
+    const agentNodeNumber = /** @type {NodeNumber} */ (
+      toHex(keypair.publicKey)
+    );
+    const hostId = formatId({
+      number: hostFormulaNumber,
+      node: agentNodeNumber,
+    });
+    persistencePowers.writeAgentKey(
+      toHex(keypair.publicKey),
+      toHex(keypair.privateKey),
+      hostId,
+    );
+
     const storeId = pin(
       (
         await formulateNumberedPetStore(
           /** @type {FormulaNumber} */ (await randomHex256()),
+          agentNodeNumber,
         )
       ).id,
     );
@@ -31800,6 +32224,7 @@ const makeDaemonCore = async (
       (
         await formulateNumberedMailboxStore(
           /** @type {FormulaNumber} */ (await randomHex256()),
+          agentNodeNumber,
         )
       ).id,
     );
@@ -31808,27 +32233,18 @@ const makeDaemonCore = async (
         await formulateNumberedMailHub(
           /** @type {FormulaNumber} */ (await randomHex256()),
           mailboxStoreId,
+          agentNodeNumber,
         )
       ).id,
     );
-
-    const hostFormulaNumber = /** @type {FormulaNumber} */ (
-      await randomHex256()
-    );
-    const hostId = formatId({
-      number: hostFormulaNumber,
-      node: LOCAL_NODE,
-    });
 
     const handleId = pin(
       await formulateNumberedHandle(
         /** @type {FormulaNumber} */ (await randomHex256()),
         hostId,
+        agentNodeNumber,
       ),
     );
-
-    const { keypairId } = await formulateKeypair();
-    pin(keypairId);
 
     /* eslint-disable no-use-before-define */
     const inspectorId = pin(
@@ -31836,6 +32252,7 @@ const makeDaemonCore = async (
         await formulateNumberedPetInspector(
           /** @type {FormulaNumber} */ (await randomHex256()),
           storeId,
+          agentNodeNumber,
         )
       ).id,
     );
@@ -31844,6 +32261,7 @@ const makeDaemonCore = async (
         specifiedWorkerId,
         undefined,
         workerLabel ?? 'host',
+        agentNodeNumber,
       ),
     );
     /* eslint-enable no-use-before-define */
@@ -31853,7 +32271,7 @@ const makeDaemonCore = async (
       hostFormulaNumber,
       hostId,
       handleId,
-      keypairId,
+      agentNodeNumber,
       hostHandleId: remainingSpecifiedIdentifiers.hostHandleId ?? handleId,
       storeId,
       mailboxStoreId,
@@ -31871,7 +32289,6 @@ const makeDaemonCore = async (
       type: 'host',
       hostHandle: identifiers.hostHandleId,
       handle: identifiers.handleId,
-      keypair: identifiers.keypairId,
       petStore: identifiers.storeId,
       mailboxStore: identifiers.mailboxStoreId,
       mailHub: identifiers.mailHubId,
@@ -31883,7 +32300,11 @@ const makeDaemonCore = async (
     };
 
     return /** @type {FormulateResult<EndoHost>} */ (
-      formulate(identifiers.hostFormulaNumber, formula)
+      formulate(
+        identifiers.hostFormulaNumber,
+        formula,
+        identifiers.agentNodeNumber,
+      )
     );
   };
 
@@ -31912,7 +32333,7 @@ const makeDaemonCore = async (
         handleId: identifiers.handleId,
       });
 
-      const result = formulateNumberedHost(identifiers);
+      const result = await formulateNumberedHost(identifiers);
       for (const id of identifiers.pinned) {
         unpinTransient(id);
       }
@@ -31925,7 +32346,6 @@ const makeDaemonCore = async (
     hostAgentId,
     hostHandleId,
     workerLabel,
-    existingStoreId,
   ) => {
     // Pin each dependency formula to protect it from collection until the
     // parent guest formula links them via formulaDeps.
@@ -31938,23 +32358,36 @@ const makeDaemonCore = async (
       return id;
     };
 
+    // Generate the agent keypair first so we know the agent's node number.
     const guestFormulaNumber = /** @type {FormulaNumber} */ (
       await randomHex256()
     );
+    const keypair = await generateEd25519Keypair();
+    const agentNodeNumber = /** @type {NodeNumber} */ (
+      toHex(keypair.publicKey)
+    );
     const guestId = formatId({
       number: guestFormulaNumber,
-      node: LOCAL_NODE,
+      node: agentNodeNumber,
     });
+    persistencePowers.writeAgentKey(
+      toHex(keypair.publicKey),
+      toHex(keypair.privateKey),
+      guestId,
+    );
+
     const handleId = pin(
       await formulateNumberedHandle(
         /** @type {FormulaNumber} */ (await randomHex256()),
         guestId,
+        agentNodeNumber,
       ),
     );
     const mailboxStoreId = pin(
       (
         await formulateNumberedMailboxStore(
           /** @type {FormulaNumber} */ (await randomHex256()),
+          agentNodeNumber,
         )
       ).id,
     );
@@ -31963,37 +32396,37 @@ const makeDaemonCore = async (
         await formulateNumberedMailHub(
           /** @type {FormulaNumber} */ (await randomHex256()),
           mailboxStoreId,
+          agentNodeNumber,
         )
       ).id,
     );
-    const { keypairId } = await formulateKeypair();
-    pin(keypairId);
-    // Use an existing store (e.g. a synced pet store) if provided,
-    // otherwise create a fresh local pet store.
+
     const storeId = pin(
-      existingStoreId ??
-        (
-          await formulateNumberedPetStore(
-            /** @type {FormulaNumber} */ (await randomHex256()),
-          )
-        ).id,
+      (
+        await formulateNumberedPetStore(
+          /** @type {FormulaNumber} */ (await randomHex256()),
+          agentNodeNumber,
+        )
+      ).id,
     );
     const workerId = pin(
       (
         await formulateNumberedWorker(
           /** @type {FormulaNumber} */ (await randomHex256()),
-          { label: workerLabel ?? 'guest' },
+          { label: workerLabel ?? 'guest', nodeNumber: agentNodeNumber },
         )
       ).id,
     );
     // Each guest gets its own (initially empty) networks directory that
     // controls which connection hints appear in locators it produces.
-    const networksDirectoryId = pin((await formulateDirectory()).id);
+    const networksDirectoryId = pin(
+      (await formulateDirectory(agentNodeNumber)).id,
+    );
     return harden({
       guestFormulaNumber,
       guestId,
       handleId,
-      keypairId,
+      agentNodeNumber,
       hostAgentId,
       hostHandleId,
       storeId,
@@ -32011,7 +32444,6 @@ const makeDaemonCore = async (
     const formula = {
       type: 'guest',
       handle: identifiers.handleId,
-      keypair: identifiers.keypairId,
       hostHandle: identifiers.hostHandleId,
       hostAgent: identifiers.hostAgentId,
       petStore: identifiers.storeId,
@@ -32022,7 +32454,11 @@ const makeDaemonCore = async (
     };
 
     return /** @type {FormulateResult<EndoGuest>} */ (
-      formulate(identifiers.guestFormulaNumber, formula)
+      formulate(
+        identifiers.guestFormulaNumber,
+        formula,
+        identifiers.agentNodeNumber,
+      )
     );
   };
 
@@ -32032,14 +32468,12 @@ const makeDaemonCore = async (
     hostHandleId,
     deferredTasks,
     workerLabel,
-    existingStoreId,
   ) => {
     return withFormulaGraphLock(async () => {
       const identifiers = await formulateGuestDependencies(
         hostAgentId,
         hostHandleId,
         workerLabel,
-        existingStoreId,
       );
 
       await deferredTasks.execute({
@@ -32047,7 +32481,7 @@ const makeDaemonCore = async (
         handleId: identifiers.handleId,
       });
 
-      const result = formulateNumberedGuest(identifiers);
+      const result = await formulateNumberedGuest(identifiers);
       for (const id of identifiers.pinned) {
         unpinTransient(id);
       }
@@ -32059,34 +32493,40 @@ const makeDaemonCore = async (
    * @param {FormulaIdentifier} [specifiedWorkerId]
    * @param {string[]} [trustedShims]
    * @param {string} [label]
-   * @param {string} [platform] - "separate" | "shared" | "node"
+   * @param {NodeNumber} [nodeNumber] - The node number to use (defaults to localNodeNumber).
+   * @param {'locked' | 'node'} [kind]
    */
   const provideWorkerId = async (
     specifiedWorkerId,
     trustedShims = undefined,
     label = undefined,
-    platform = undefined,
+    nodeNumber = localNodeNumber,
+    kind = undefined,
   ) => {
     await null;
-    console.log(`provideWorkerId: platform=${platform} defaultPlatform=${defaultPlatform} specifiedWorkerId=${typeof specifiedWorkerId === 'string' ? specifiedWorkerId.slice(0, 12) : specifiedWorkerId}`);
+    console.log(
+      `provideWorkerId: kind=${kind} defaultWorkerKind=${defaultWorkerKind} specifiedWorkerId=${typeof specifiedWorkerId === 'string' ? specifiedWorkerId.slice(0, 12) : specifiedWorkerId}`,
+    );
     if (typeof specifiedWorkerId === 'string') {
-      if (platform === 'node' && defaultPlatform !== 'node') {
-        // Default workers are XS (separate platform under Rust
+      if (kind === 'node' && defaultWorkerKind !== 'node') {
+        // Default workers are XS/locked (bus daemon under Rust
         // supervisor).  Create a separate Node.js worker.  The original
         // XS worker stays alive (it may have running evals).
         const existingFormula = formulaForId.get(specifiedWorkerId);
-        console.log(`provideWorkerId: existingFormula=${existingFormula ? JSON.stringify(existingFormula).slice(0, 80) : 'NOT FOUND'}`);
+        console.log(
+          `provideWorkerId: existingFormula=${existingFormula ? JSON.stringify(existingFormula).slice(0, 80) : 'NOT FOUND'}`,
+        );
         if (
           existingFormula &&
           existingFormula.type === 'worker' &&
-          !existingFormula.platform
+          !existingFormula.kind
         ) {
           const workerFormulaNumber = /** @type {FormulaNumber} */ (
             await randomHex256()
           );
           const workerFormulation = await formulateNumberedWorker(
             workerFormulaNumber,
-            { platform, trustedShims, label },
+            { kind, trustedShims, label },
           );
           return workerFormulation.id;
         }
@@ -32099,7 +32539,7 @@ const makeDaemonCore = async (
     );
     const workerFormulation = await formulateNumberedWorker(
       workerFormulaNumber,
-      { platform, trustedShims, label },
+      { kind, trustedShims, label, nodeNumber },
     );
     return workerFormulation.id;
   };
@@ -32113,7 +32553,7 @@ const makeDaemonCore = async (
         );
         const ownId = formatId({
           number: ownFormulaNumber,
-          node: LOCAL_NODE,
+          node: localNodeNumber,
         });
         // Pin before formulate so the formula is protected from
         // collection even if the lock is bypassed via re-entrancy.
@@ -32197,7 +32637,7 @@ const makeDaemonCore = async (
       if (pin) {
         const messageId = formatId({
           number: formulaNumber,
-          node: LOCAL_NODE,
+          node: localNodeNumber,
         });
         pin(messageId);
       }
@@ -32225,7 +32665,7 @@ const makeDaemonCore = async (
         );
         const ownId = formatId({
           number: ownFormulaNumber,
-          node: LOCAL_NODE,
+          node: localNodeNumber,
         });
         // Pin before formulate so the formula is protected from
         // collection even if the lock is bypassed via re-entrancy.
@@ -32304,6 +32744,12 @@ const makeDaemonCore = async (
    * @param {FormulaIdentifier} hostHandleId
    * @param {FormulaIdentifier} [specifiedPowersId]
    */
+  /**
+   * @param {FormulaIdentifier} hostAgentId
+   * @param {FormulaIdentifier} hostHandleId
+   * @param {FormulaIdentifier} [specifiedPowersId]
+   * @returns {Promise<{powersId: FormulaIdentifier, pinned: FormulaIdentifier[]}>}
+   */
   const providePowersId = async (
     hostAgentId,
     hostHandleId,
@@ -32311,7 +32757,7 @@ const makeDaemonCore = async (
   ) => {
     await null;
     if (typeof specifiedPowersId === 'string') {
-      return specifiedPowersId;
+      return { powersId: specifiedPowersId, pinned: [] };
     }
 
     const guestFormulationData = await formulateGuestDependencies(
@@ -32319,14 +32765,16 @@ const makeDaemonCore = async (
       hostHandleId,
     );
     const guestFormulation = await formulateNumberedGuest(guestFormulationData);
-    for (const id of guestFormulationData.pinned) {
-      unpinTransient(id);
-    }
-    return guestFormulation.id;
+    // Return pins to the caller for deferred unpinning — the guest
+    // must be named (via deferred tasks) before its pins are removed.
+    return {
+      powersId: guestFormulation.id,
+      pinned: guestFormulationData.pinned,
+    };
   };
 
   /**
-   * Helper for `formulateUnconfined` and `formulateBundle`.
+   * Helper for `formulateUnconfined` and `formulateArchive`.
    * @param {FormulaIdentifier} hostAgentId
    * @param {FormulaIdentifier} hostHandleId
    * @param {DeferredTasks<MakeCapletDeferredTaskParams>} deferredTasks
@@ -32334,7 +32782,7 @@ const makeDaemonCore = async (
    * @param {FormulaIdentifier} [specifiedPowersId]
    * @param {string[]} [trustedShims]
    * @param {string} [workerLabel]
-   * @param {string} [workerPlatform] - "separate" | "shared" | "node"
+   * @param {'locked' | 'node'} [workerKind]
    */
   const formulateCapletDependencies = async (
     hostAgentId,
@@ -32344,12 +32792,23 @@ const makeDaemonCore = async (
     specifiedPowersId,
     trustedShims = undefined,
     workerLabel = undefined,
-    workerPlatform = undefined,
+    workerKind = undefined,
   ) => {
     const ownFormulaNumber = /** @type {FormulaNumber} */ (
       await randomHex256()
     );
-    const workerId = await provideWorkerId(specifiedWorkerId, trustedShims, workerLabel, workerPlatform);
+    const { powersId, pinned: powersPinned } = await providePowersId(
+      hostAgentId,
+      hostHandleId,
+      specifiedPowersId,
+    );
+    const workerId = await provideWorkerId(
+      specifiedWorkerId,
+      trustedShims,
+      workerLabel,
+      undefined,
+      workerKind,
+    );
     // When a new node worker was created because the specified worker
     // was XS-only, record the original so that cancelling the original
     // worker cascades to the caplet.  This is a runtime dependency only,
@@ -32359,20 +32818,22 @@ const makeDaemonCore = async (
         ? specifiedWorkerId
         : undefined;
     const identifiers = harden({
-      powersId: await providePowersId(
-        hostAgentId,
-        hostHandleId,
-        specifiedPowersId,
-      ),
+      powersId,
       capletId: formatId({
         number: ownFormulaNumber,
-        node: LOCAL_NODE,
+        node: localNodeNumber,
       }),
       capletFormulaNumber: ownFormulaNumber,
       workerId,
       originalWorkerId,
     });
+    // Execute deferred tasks first (stores pet names, creating
+    // pet-store edges) so that the powers guest is reachable
+    // before we unpin its dependencies.
     await deferredTasks.execute(identifiers);
+    for (const id of powersPinned) {
+      unpinTransient(id);
+    }
     return identifiers;
   };
 
@@ -32408,19 +32869,17 @@ const makeDaemonCore = async (
         powers: powersId,
         specifier,
         env,
-        ...(originalWorkerId
-          ? { cancelWithWorker: originalWorkerId }
-          : {}),
+        ...(originalWorkerId ? { cancelWithWorker: originalWorkerId } : {}),
       };
       return formulate(capletFormulaNumber, formula);
     });
   };
 
-  /** @type {DaemonCore['formulateBundle']} */
-  const formulateBundle = async (
+  /** @type {DaemonCore['formulateArchive']} */
+  const formulateArchive = async (
     hostAgentId,
     hostHandleId,
-    bundleId,
+    archiveId,
     deferredTasks,
     specifiedWorkerId,
     specifiedPowersId,
@@ -32441,16 +32900,14 @@ const makeDaemonCore = async (
           'node',
         );
 
-      /** @type {MakeBundleFormula} */
+      /** @type {MakeArchiveFormula} */
       const formula = {
-        type: 'make-bundle',
+        type: 'make-archive',
         worker: workerId,
         powers: powersId,
-        bundle: bundleId,
+        archive: archiveId,
         env,
-        ...(originalWorkerId
-          ? { cancelWithWorker: originalWorkerId }
-          : {}),
+        ...(originalWorkerId ? { cancelWithWorker: originalWorkerId } : {}),
       };
       return formulate(capletFormulaNumber, formula);
     });
@@ -32459,15 +32916,20 @@ const makeDaemonCore = async (
   /**
    * @param {FormulaNumber} formulaNumber
    * @param {FormulaIdentifier} petStoreId
+   * @param {NodeNumber} [nodeNumber] - The node number to use (defaults to localNodeNumber).
    */
-  const formulateNumberedPetInspector = (formulaNumber, petStoreId) => {
+  const formulateNumberedPetInspector = (
+    formulaNumber,
+    petStoreId,
+    nodeNumber = localNodeNumber,
+  ) => {
     /** @type {PetInspectorFormula} */
     const formula = {
       type: 'pet-inspector',
       petStore: petStoreId,
     };
     return /** @type {FormulateResult<EndoInspector>} */ (
-      formulate(formulaNumber, formula)
+      formulate(formulaNumber, formula, nodeNumber)
     );
   };
 
@@ -32539,7 +33001,7 @@ const makeDaemonCore = async (
         );
         const endoId = formatId({
           number: formulaNumber,
-          node: LOCAL_NODE,
+          node: localNodeNumber,
         });
 
         const { id: defaultHostWorkerId } = await formulateNumberedWorker(
@@ -32747,6 +33209,73 @@ const makeDaemonCore = async (
     // `provide` calls will go through whatever connection the
     // remote-control currently holds.
     const currentGatewayP = resilientDial();
+
+    // Follow retention set changes in the background once connected.
+    (async () => {
+      try {
+        const gateway = await currentGatewayP;
+        const iter = await E(gateway).followRetentionSet(localNodeNumber);
+        const peerAgentKeyRecord = persistencePowers.getAgentKey(nodeId);
+        const peerAgentIdStr = peerAgentKeyRecord
+          ? /** @type {FormulaIdentifier} */ (peerAgentKeyRecord.agentId)
+          : undefined;
+
+        let isFirst = true;
+        for await (const delta of makeRefIterator(/** @type {any} */ (iter))) {
+          if (isFirst) {
+            persistencePowers.replaceRetention(nodeId, delta.add);
+            if (peerAgentIdStr !== undefined) {
+              await withFormulaGraphLock(async () => {
+                formulaGraph.replaceRetention(
+                  peerAgentIdStr,
+                  delta.add.map(num =>
+                    formatId({
+                      number: /** @type {FormulaNumber} */ (num),
+                      node: localNodeNumber,
+                    }),
+                  ),
+                );
+              });
+            }
+            isFirst = false;
+          } else {
+            for (const num of delta.add) {
+              persistencePowers.writeRetention(nodeId, num);
+            }
+            for (const num of delta.remove) {
+              persistencePowers.deleteRetention(nodeId, num);
+            }
+            if (peerAgentIdStr !== undefined) {
+              await withFormulaGraphLock(async () => {
+                for (const num of delta.add) {
+                  formulaGraph.addRetention(
+                    peerAgentIdStr,
+                    formatId({
+                      number: /** @type {FormulaNumber} */ (num),
+                      node: localNodeNumber,
+                    }),
+                  );
+                }
+                for (const num of delta.remove) {
+                  formulaGraph.removeRetention(
+                    peerAgentIdStr,
+                    formatId({
+                      number: /** @type {FormulaNumber} */ (num),
+                      node: localNodeNumber,
+                    }),
+                  );
+                }
+              });
+            }
+          }
+        }
+      } catch (err) {
+        console.log(
+          `Retention sync failed for peer ${nodeId.slice(0, 8)}: ${/** @type {Error} */ (err).message}`,
+        );
+      }
+    })();
+
     return makeExo(
       'ResilientPeerGateway',
       PeerGatewayInterface,
@@ -32785,13 +33314,19 @@ const makeDaemonCore = async (
 
     const locate = async () => {
       const { node, addresses } = await hostAgent.getPeerInfo();
-      const { number: hostHandleNumber } = parseId(hostHandleId);
+      const { number: hostHandleNumber, node: hostHandleNode } =
+        parseId(hostHandleId);
       const { number } = parseId(id);
       const url = new URL('endo://');
       url.hostname = node;
       url.searchParams.set('id', number);
       url.searchParams.set('type', 'invitation');
       url.searchParams.set('from', hostHandleNumber);
+      // Include the handle's node if it differs from the daemon node
+      // (i.e. it uses an agent key).
+      if (hostHandleNode !== node) {
+        url.searchParams.set('fromNode', hostHandleNode);
+      }
       for (const address of addresses) {
         url.searchParams.append('at', address);
       }
@@ -32800,30 +33335,38 @@ const makeDaemonCore = async (
 
     /**
      * @param {string} guestHandleLocator
-     * @param {string} [hostNameFromGuest] - The name the accepting side
-     *   chose for the host.  Stored in the synced pet store so the guest
-     *   can reach the host's handle after sync.
+     * @param {string} [_hostNameFromGuest] - Previously used by synced
+     *   pet stores; now unused but retained for protocol compatibility.
      */
-    const accept = async (guestHandleLocator, hostNameFromGuest) => {
+    const accept = async (guestHandleLocator, _hostNameFromGuest) => {
       const url = new URL(guestHandleLocator);
       const guestHandleNumber = url.searchParams.get('id');
       const addresses = url.searchParams.getAll('at');
-      const guestNodeNumber = url.hostname;
+      const guestDaemonNode = url.hostname;
+      // The handle's node may differ from the daemon node when agent keys
+      // are used as formula nodes.
+      const guestHandleNode =
+        url.searchParams.get('handleNode') || guestDaemonNode;
 
       if (!guestHandleNumber) {
         throw makeError('Handle locator must have an "id" parameter');
       }
-      assertNodeNumber(guestNodeNumber);
+      assertNodeNumber(guestDaemonNode);
       assertFormulaNumber(guestHandleNumber);
 
       const guestHandleId = formatId({
-        node: guestNodeNumber,
+        node: /** @type {NodeNumber} */ (guestHandleNode),
         number: guestHandleNumber,
       });
 
+      // Register the guest's agent key so we can route to its daemon.
+      if (guestHandleNode !== guestDaemonNode) {
+        persistencePowers.writeRemoteAgentKey(guestHandleNode, guestDaemonNode);
+      }
+
       /** @type {PeerInfo} */
       const peerInfo = {
-        node: guestNodeNumber,
+        node: guestDaemonNode,
         addresses,
       };
       await hostAgent.addPeerInfo(peerInfo);
@@ -32835,81 +33378,43 @@ const makeDaemonCore = async (
       const controller = provideController(id);
       await controller.context.cancel(new Error('Invitation accepted'));
 
-      // Create a synced-pet-store (grantor role) for this peer relationship.
-      const peerId = await getPeerIdForNodeIdentifier(
-        /** @type {NodeNumber} */ (guestNodeNumber),
-      );
-      const { id: syncedStoreId, value: syncedStoreValue } =
-        await formulateSyncedPetStore(
-          peerId,
-          'grantor',
-          // Placeholder: the guest will create its own store and we
-          // don't know the number yet. The guest sends back its store
-          // number on the next sync.
-          /** @type {FormulaNumber} */ ('0'.repeat(64)),
-          peerId  // store dependency (peer keeps alive)
-        );
-
-      // Write the guest handle locator into the synced store.
-      const guestHandleLocatorStr = formatLocator(guestHandleId, 'remote');
-      await E(syncedStoreValue).storeLocator(
-        /** @type {PetName} */ (guestName),
-        guestHandleLocatorStr,
-      );
-
-      // Store the host's own handle so the guest can reach the host
-      // after syncing.  The name comes from the guest's `accept` call
-      // (what the guest chose to call the host).
-      if (hostNameFromGuest) {
-        const { node: hostNodeNumber } = await hostAgent.getPeerInfo();
-        const { number: hostHandleNumber } = parseId(hostHandleId);
-        const hostHandleExternalId = formatId({
-          number: hostHandleNumber,
-          node: /** @type {NodeNumber} */ (hostNodeNumber),
-        });
-        const hostHandleLocatorStr = formatLocator(
-          hostHandleExternalId,
-          'handle',
-        );
-        await E(syncedStoreValue).storeLocator(
-          /** @type {PetName} */ (hostNameFromGuest),
-          hostHandleLocatorStr,
-        );
-      }
-
-      // Create a local guest backed by the synced store.
+      // Create a local guest with a regular pet store.
+      // Pin the guest handle to protect it from premature collection.
       /** @type {DeferredTasks<AgentDeferredTaskParams>} */
       const guestTasks = makeDeferredTasks();
+      guestTasks.push(async identifiers => pinTransient(identifiers.handleId));
       const { id: localGuestId } = await formulateGuest(
         hostAgentId,
         hostHandleId,
         guestTasks,
         `guest:${guestName}`,
-        syncedStoreId,
       );
 
-      // Name the local guest handle inside @pins so that incarnating
-      // it transitively incarnates the guest and its synced pet store.
+      // Look up the local guest's handle from its formula so we can
+      // name it.  Incarnating the handle transitively incarnates the
+      // guest.
       const localGuestFormula = /** @type {GuestFormula} */ (
         await getFormulaForId(localGuestId)
       );
+
+      // Name the guest handle inside @pins so it persists.
       await E(hostAgent).storeIdentifier(
         /** @type {NamePath} */ (['@pins', `guest-${guestName}`]),
         localGuestFormula.handle,
       );
+      await unpinTransient(localGuestFormula.handle);
 
       // Store the remote guest handle under guestName for mail delivery.
       // Use storeLocator so the directory properly internalizes the
       // remote formula identifier for peer resolution.
+      const guestHandleLocatorStr = formatLocator(guestHandleId, 'remote');
       await E(hostAgent).storeLocator(
         /** @type {NamePath} */ ([guestName]),
         guestHandleLocatorStr,
       );
 
-      // Return the synced store number so the guest can create its
-      // paired replica.
-      const { number: syncedStoreNumber } = parseId(syncedStoreId);
-      return harden({ syncedStoreNumber });
+      // Return the remote guest's public key for retention tracking.
+      return harden({ guestPublicKey: guestDaemonNode });
     };
 
     return makeExo('Invitation', InvitationInterface, { accept, locate });
@@ -32971,7 +33476,6 @@ const makeDaemonCore = async (
     makeMailbox,
     makeDirectoryNode,
     isLocalKey,
-    collectIfDirty,
     pinTransient,
     unpinTransient,
   });
@@ -33049,13 +33553,12 @@ const makeDaemonCore = async (
     formulateMarshalValue,
     formulateEval,
     formulateUnconfined,
-    formulateBundle,
+    formulateArchive,
     formulateReadableBlob,
     checkinTree,
     formulateMount,
     formulateScratchMount,
     formulateInvitation,
-    formulateSyncedPetStore,
     formulateDirectoryForStore,
     getPeerIdForNodeIdentifier,
     getAllNetworkAddresses,
@@ -33068,10 +33571,10 @@ const makeDaemonCore = async (
     localNodeNumber,
     isLocalKey,
     getAgentIdForHandleId,
-    collectIfDirty,
     pinTransient,
     unpinTransient,
     getFormulaGraphSnapshot,
+    writeRemoteAgentKey: persistencePowers.writeRemoteAgentKey,
   });
 
   /**
@@ -33114,9 +33617,13 @@ const makeDaemonCore = async (
       const { number: formulaNumber } = parseId(id);
       const formula = await getFormulaForId(id);
       if (
-        !['eval', 'lookup', 'make-unconfined', 'make-bundle', 'guest'].includes(
-          formula.type,
-        )
+        ![
+          'eval',
+          'lookup',
+          'make-unconfined',
+          'make-archive',
+          'guest',
+        ].includes(formula.type)
       ) {
         return makeInspector(formula.type, formulaNumber, harden({}));
       }
@@ -33152,12 +33659,12 @@ const makeDaemonCore = async (
             hostHandle: provide(formula.hostHandle, 'handle'),
           }),
         );
-      } else if (formula.type === 'make-bundle') {
+      } else if (formula.type === 'make-archive') {
         return makeInspector(
           formula.type,
           formulaNumber,
           harden({
-            bundle: provide(formula.bundle, 'readable-blob'),
+            archive: provide(formula.archive, 'readable-blob'),
             powers: provide(formula.powers),
             worker: provide(formula.worker, 'worker'),
           }),
@@ -33242,6 +33749,7 @@ const makeDaemonCore = async (
  * @param {Promise<never>} args.gracePeriodElapsed - Promise that resolves on grace period end.
  * @param {Specials} args.specials - Special formula generators.
  * @param {boolean} [args.gcEnabled] - Enable garbage collection.
+ * @param {'locked' | 'node'} [args.defaultWorkerKind] - Default kind for newly formulated workers.
  * @returns {Promise<{ endoBootstrap: FarRef<EndoBootstrap>, capTpConnectionRegistrar: CapTpConnectionRegistrar }>}
  *         An object containing the endo bootstrap and CapTP connection registrar.
  *
@@ -33258,7 +33766,14 @@ const makeDaemonCore = async (
  */
 const provideEndoBootstrap = async (
   powers,
-  { cancel, gracePeriodMs, gracePeriodElapsed, specials, gcEnabled, defaultPlatform },
+  {
+    cancel,
+    gracePeriodMs,
+    gracePeriodElapsed,
+    specials,
+    gcEnabled,
+    defaultWorkerKind,
+  },
 ) => {
   const { persistence: persistencePowers } = powers;
   const { rootNonce: endoFormulaNumber, isNewlyCreated } =
@@ -33275,7 +33790,7 @@ const provideEndoBootstrap = async (
     localNodeNumber,
     signBytes: rootKeypair.sign,
     gcEnabled,
-    defaultPlatform,
+    defaultWorkerKind,
   });
   const { capTpConnectionRegistrar } = daemonCore;
   const isInitialized = !isNewlyCreated;
@@ -33315,6 +33830,7 @@ const provideEndoBootstrap = async (
  * @param {Specials} [specials] - Special formula generators
  * @param {object} [options]
  * @param {boolean} [options.gcEnabled] - Enable garbage collection of worker daemons.
+ * @param {'locked' | 'node'} [options.defaultWorkerKind] - Default kind for newly formulated workers.
  *
  * @example
  * ```js
@@ -33335,7 +33851,7 @@ const provideEndoBootstrap = async (
   specials = {},
   options = {},
 ) => {
-  const { gcEnabled, defaultPlatform } = options;
+  const { gcEnabled, defaultWorkerKind } = options;
   const { promise: gracePeriodCancelled, reject: cancelGracePeriod } =
     /** @type {PromiseKit<never>} */ (makePromiseKit());
 
@@ -33358,7 +33874,7 @@ const provideEndoBootstrap = async (
       gracePeriodElapsed,
       specials,
       gcEnabled,
-      defaultPlatform,
+      defaultWorkerKind,
     });
 
   await Promise.allSettled([
@@ -33370,8 +33886,14 @@ const provideEndoBootstrap = async (
 };$h͏_once.makeDaemon(makeDaemon);
 })()
 ,
-// === 125. daemon ./src/daemon-persistence-powers.js ===
+// === 126. daemon ./src/daemon-persistence-powers.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden,q,makeSnapshotStore,makeReaderRef,toHex,fromHex;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]],["@endo/errors", [["q",[$h͏_a => (q = $h͏_a)]]]],["@endo/platform/fs/lite", [["makeSnapshotStore",[$h͏_a => (makeSnapshotStore = $h͏_a)]]]],["./reader-ref.js", [["makeReaderRef",[$h͏_a => (makeReaderRef = $h͏_a)]]]],["./hex.js", [["toHex",[$h͏_a => (toHex = $h͏_a)]],["fromHex",[$h͏_a => (fromHex = $h͏_a)]]]]]);
+
+
+
+
+
+
 
 
 
@@ -33453,8 +33975,7 @@ const provideEndoBootstrap = async (
           get privateKey() {
             return fromHex(privHex);
           },
-          sign: message =>
-            cryptoPowers.ed25519Sign(fromHex(privHex), message),
+          sign: message => cryptoPowers.ed25519Sign(fromHex(privHex), message),
         }),
         isNewlyCreated: false,
       };
@@ -33550,7 +34071,7 @@ const provideEndoBootstrap = async (
 
   /**
    * @param {string} formulaNumber
-   * @returns {Promise<Formula>}
+   * @returns {Promise<{ node: string, formula: Formula }>}
    */
   const readFormula = async formulaNumber => {
     const { file: formulaPath } = makeFormulaPath(formulaNumber);
@@ -33567,12 +34088,15 @@ const provideEndoBootstrap = async (
         );
       }
     })();
-    return formula;
+    // The filesystem layout does not store per-formula node information.
+    // Callers that need a node number fall back to the local node when
+    // this returns the empty string.
+    return { node: '', formula };
   };
 
-  // Persist instructions for revival (this can be collected)
+  // Persist instructions for revival (this can be collected).
   /** @type {DaemonicPersistencePowers['writeFormula']} */
-  const writeFormula = async (formulaNumber, formula) => {
+  const writeFormula = async (formulaNumber, _nodeNumber, formula) => {
     const { directory, file } = makeFormulaPath(formulaNumber);
     // TODO Take care to write atomically with a rename here.
     await filePowers.makePath(directory);
@@ -33594,8 +34118,8 @@ const provideEndoBootstrap = async (
       }
       throw error;
     });
-    /** @type {import('./types.js').FormulaNumber[]} */
-    const numbers = [];
+    /** @type {Array<{ number: string, node: string }>} */
+    const records = [];
     await Promise.all(
       heads.map(async head => {
         const headPath = filePowers.joinPath(formulasPath, head);
@@ -33611,16 +34135,65 @@ const provideEndoBootstrap = async (
         for (const file of files) {
           if (file.endsWith('.json')) {
             const tail = file.slice(0, -'.json'.length);
-            numbers.push(
-              /** @type {import('./types.js').FormulaNumber} */ (
-                `${head}${tail}`
-              ),
-            );
+            // Filesystem layout has no per-formula node directory; the
+            // caller fills in localNodeNumber when node is empty.
+            records.push({ number: `${head}${tail}`, node: '' });
           }
         }
       }),
     );
-    return numbers;
+    return records;
+  };
+
+  // Minimal in-memory shim of the SQLite-only tables (agent keys,
+  // retention, per-node formula listing) that the filesystem
+  // persistence does not persist.  State lives only in process
+  // memory; callers that need real durability should run with the
+  // SQLite daemon.
+  /** @type {Map<string, { publicKey: string, privateKey: string, agentId: string }>} */
+  const agentKeys = new Map();
+  /** @type {Map<string, string>} */
+  const remoteAgentKeys = new Map();
+  /** @type {Map<string, Set<string>>} */
+  const retention = new Map();
+
+  const listFormulaNumbersByNode = _nodeNumber => [];
+  const writeAgentKey = (publicKey, privateKey, agentId) => {
+    agentKeys.set(publicKey, { publicKey, privateKey, agentId });
+  };
+  const getAgentKey = publicKey => agentKeys.get(publicKey);
+  const hasAgentKey = publicKey => agentKeys.has(publicKey);
+  const listAgentKeys = () => Array.from(agentKeys.values());
+  const deleteAgentKey = publicKey => {
+    agentKeys.delete(publicKey);
+  };
+  const writeRemoteAgentKey = (publicKey, daemonNode) => {
+    remoteAgentKeys.set(publicKey, daemonNode);
+  };
+  const getRemoteAgentKey = publicKey => remoteAgentKeys.get(publicKey);
+  const retentionBucket = guestPublicKey => {
+    let s = retention.get(guestPublicKey);
+    if (s === undefined) {
+      s = new Set();
+      retention.set(guestPublicKey, s);
+    }
+    return s;
+  };
+  const writeRetention = (guestPublicKey, formulaNumber) => {
+    retentionBucket(guestPublicKey).add(formulaNumber);
+  };
+  const deleteRetention = (guestPublicKey, formulaNumber) => {
+    retentionBucket(guestPublicKey).delete(formulaNumber);
+  };
+  const listRetention = guestPublicKey =>
+    Array.from(retentionBucket(guestPublicKey), formulaNumber => ({
+      formulaNumber,
+    }));
+  const replaceRetention = (guestPublicKey, formulaNumbers) => {
+    retention.set(guestPublicKey, new Set(formulaNumbers));
+  };
+  const deleteAllRetention = guestPublicKey => {
+    retention.delete(guestPublicKey);
   };
 
   return harden({
@@ -33633,462 +34206,45 @@ const provideEndoBootstrap = async (
     writeFormula,
     deleteFormula,
     listFormulas,
+    listFormulaNumbersByNode,
+    writeAgentKey,
+    getAgentKey,
+    hasAgentKey,
+    listAgentKeys,
+    deleteAgentKey,
+    writeRemoteAgentKey,
+    getRemoteAgentKey,
+    writeRetention,
+    deleteRetention,
+    listRetention,
+    replaceRetention,
+    deleteAllRetention,
   });
 };$h͏_once.makeDaemonicPersistencePowers(makeDaemonicPersistencePowers);
 harden(makeDaemonicPersistencePowers);
 })()
 ,
-// === 126. daemon ./src/synced-pet-store.js ===
-({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden,makeExo,M,q,makeChangeTopic,assertPetName,makeSerialJobs,makeIteratorRef;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]],["@endo/exo", [["makeExo",[$h͏_a => (makeExo = $h͏_a)]]]],["@endo/patterns", [["M",[$h͏_a => (M = $h͏_a)]]]],["@endo/errors", [["q",[$h͏_a => (q = $h͏_a)]]]],["./pubsub.js", [["makeChangeTopic",[$h͏_a => (makeChangeTopic = $h͏_a)]]]],["./pet-name.js", [["assertPetName",[$h͏_a => (assertPetName = $h͏_a)]]]],["./serial-jobs.js", [["makeSerialJobs",[$h͏_a => (makeSerialJobs = $h͏_a)]]]],["./reader-ref.js", [["makeIteratorRef",[$h͏_a => (makeIteratorRef = $h͏_a)]]]]]);
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-       const SyncedPetStoreInterface = M.interface('SyncedPetStore', {
-  storeLocator: M.call(M.string(), M.string()).returns(M.promise()),
-  remove: M.call(M.string()).returns(M.promise()),
-  has: M.call(M.string()).returns(M.boolean()),
-  lookup: M.call(M.string()).returns(M.or(M.string(), M.undefined())),
-  list: M.call().returns(M.array()),
-  getState: M.call().returns(M.record()),
-  getLocalClock: M.call().returns(M.number()),
-  getRemoteAckedClock: M.call().returns(M.number()),
-  mergeRemoteState: M.call(M.record(), M.number()).returns(M.promise()), // resolves to string[]
-  acknowledgeRemoteClock: M.call(M.number()).returns(M.promise()),
-  pruneTombstones: M.call().returns(M.promise()),
-  followChanges: M.call().returns(M.remotable()),
-});$h͏_once.SyncedPetStoreInterface(SyncedPetStoreInterface);
-harden(SyncedPetStoreInterface);
-
-/**
- * Compare two synced entries using the CRDT merge rules:
- * 1. Higher timestamp wins.
- * 2. Tombstone bias on tie (null locator wins).
- * 3. Lexicographically greater writer wins on remaining ties.
- *
- * @param {SyncedEntry} a
- * @param {SyncedEntry} b
- * @returns {SyncedEntry} The winning entry.
- */
-       const mergeEntry = (a, b) => {
-  if (a.timestamp > b.timestamp) return a;
-  if (b.timestamp > a.timestamp) return b;
-  // Same timestamp: tombstone bias.
-  const aIsTomb = a.locator === null;
-  const bIsTomb = b.locator === null;
-  if (aIsTomb && !bIsTomb) return a;
-  if (bIsTomb && !aIsTomb) return b;
-  // Same timestamp, same null/non-null status: node-ID tiebreaker.
-  if (a.writer >= b.writer) return a;
-  return b;
-};$h͏_once.mergeEntry(mergeEntry);
-harden(mergeEntry);
-
-/**
- * Merge a remote state into a local state, returning the set of keys
- * whose effective value changed.
- *
- * @param {SyncedPetStoreState} local
- * @param {SyncedPetStoreState} remote
- * @returns {Set<string>} Keys whose value changed in the local state.
- */
-       const mergeState = (local, remote) => {
-  /** @type {Set<string>} */
-  const changed = new Set();
-  for (const [key, remoteEntry] of remote) {
-    const localEntry = local.get(key);
-    if (localEntry === undefined) {
-      local.set(key, remoteEntry);
-      changed.add(key);
-    } else {
-      const winner = mergeEntry(localEntry, remoteEntry);
-      if (winner !== localEntry) {
-        local.set(key, winner);
-        changed.add(key);
-      }
-    }
-  }
-  return changed;
-};$h͏_once.mergeState(mergeState);
-harden(mergeState);
-
-/**
- * Module-level counter used by `randomTmpSuffix` to guarantee
- * uniqueness across overlapping calls within a single process.
- */
-let tmpSuffixCounter = 0;
-
-/**
- * Generate a short suffix for temporary file names that need only be
- * unique within this process, not unpredictable.  Uses a process-wide
- * counter combined with the current high-resolution time so that the
- * module works on Node 18 (which lacks a global `crypto`).
- *
- * @returns {string}
- */
-const randomTmpSuffix = () => {
-  tmpSuffixCounter += 1;
-  return `${Date.now().toString(16)}-${tmpSuffixCounter.toString(16)}`;
-};
-
-/**
- * Write a JSON value atomically using write-then-rename.
- *
- * @param {FilePowers} filePowers
- * @param {string} targetDir
- * @param {string} fileName
- * @param {unknown} value
- */
-const atomicWriteJSON = async (filePowers, targetDir, fileName, value) => {
-  const temporaryPath = filePowers.joinPath(
-    targetDir,
-    `.tmp.${randomTmpSuffix()}`,
-  );
-  const finalPath = filePowers.joinPath(targetDir, fileName);
-  await filePowers.writeFileText(temporaryPath, `${JSON.stringify(value)}\n`);
-  await filePowers.renamePath(temporaryPath, finalPath);
-};
-
-/**
- * Clean up stale temporary files from a directory.
- *
- * @param {FilePowers} filePowers
- * @param {string} directory
- */
-const cleanTmpFiles = async (filePowers, directory) => {
-  const entries = await filePowers.readDirectory(directory).catch(error => {
-    if (/** @type {Error} */ (error).message.startsWith('ENOENT: ')) {
-      return [];
-    }
-    throw error;
-  });
-  await Promise.all(
-    entries
-      .filter(name => name.startsWith('.tmp.'))
-      .map(name => filePowers.removePath(filePowers.joinPath(directory, name))),
-  );
-};
-
-/**
- * @param {object} opts
- * @param {string} opts.storePath - Root directory for this synced store instance.
- * @param {FilePowers} opts.filePowers
- * @param {string} opts.localNodeId - The local node's identifier.
- * @param {'grantor' | 'grantee'} opts.role
- * @returns {Promise<SyncedPetStore>}
- */
-       const makeSyncedPetStore = async ({
-  storePath,
-  filePowers,
-  localNodeId,
-  role,
-}) => {
-  const namesDir = filePowers.joinPath(storePath, 'names');
-  await filePowers.makePath(namesDir);
-  await filePowers.makePath(storePath);
-
-  // Clean stale temp files from a prior crash.
-  await cleanTmpFiles(filePowers, namesDir);
-  await cleanTmpFiles(filePowers, storePath);
-
-  // Load metadata.
-  /** @type {SyncedPetStoreMetadata} */
-  let meta = { localClock: 0, remoteAckedClock: 0 };
-  const metaText = await filePowers.maybeReadFileText(
-    filePowers.joinPath(storePath, 'clock.json'),
-  );
-  if (metaText !== undefined) {
-    meta = JSON.parse(metaText);
-  }
-
-  // Load entries from disk.
-  /** @type {SyncedPetStoreState} */
-  const state = new Map();
-  const fileNames = await filePowers.readDirectory(namesDir).catch(error => {
-    if (/** @type {Error} */ (error).message.startsWith('ENOENT: ')) {
-      return [];
-    }
-    throw error;
-  });
-  await Promise.all(
-    fileNames
-      .filter(name => name.endsWith('.json') && !name.startsWith('.tmp.'))
-      .map(async fileName => {
-        const petName = fileName.slice(0, -'.json'.length);
-        const text = await filePowers.readFileText(
-          filePowers.joinPath(namesDir, fileName),
-        );
-        /** @type {SyncedEntry} */
-        const entry = JSON.parse(text);
-        state.set(petName, entry);
-      }),
-  );
-
-  const writeJobs = makeSerialJobs();
-
-  /** @type {import('./types.js').Topic<{ key: string, entry: SyncedEntry }>} */
-  const changeTopic = makeChangeTopic();
-
-  /**
-   * Persist an entry to disk.
-   *
-   * @param {string} key
-   * @param {SyncedEntry} entry
-   */
-  const persistEntry = async (key, entry) => {
-    await writeJobs.enqueue(async () => {
-      await atomicWriteJSON(filePowers, namesDir, `${key}.json`, entry);
-    });
-  };
-
-  /**
-   * Delete an entry file from disk (used for tombstone pruning).
-   *
-   * @param {string} key
-   */
-  const deleteEntryFile = async key => {
-    await writeJobs.enqueue(async () => {
-      await filePowers.removePath(filePowers.joinPath(namesDir, `${key}.json`));
-    });
-  };
-
-  const persistMeta = async () => {
-    await writeJobs.enqueue(async () => {
-      await atomicWriteJSON(filePowers, storePath, 'clock.json', meta);
-    });
-  };
-
-  /** @type {SyncedPetStore['storeLocator']} */
-  const storeLocator = async (petName, locator) => {
-    assertPetName(petName);
-    if (role === 'grantee') {
-      throw new Error('Grantee cannot write new entries');
-    }
-    meta.localClock += 1;
-    /** @type {SyncedEntry} */
-    const entry = harden({
-      locator,
-      timestamp: meta.localClock,
-      writer: localNodeId,
-    });
-    state.set(petName, entry);
-    await persistEntry(petName, entry);
-    await persistMeta();
-    changeTopic.publisher.next(harden({ key: petName, entry }));
-  };
-
-  /** @type {SyncedPetStore['remove']} */
-  const remove = async petName => {
-    assertPetName(petName);
-    if (!state.has(petName)) {
-      throw new Error(`No entry for pet name ${q(petName)}`);
-    }
-    const existing = state.get(petName);
-    if (existing !== undefined && existing.locator === null) {
-      // Already a tombstone.
-      return;
-    }
-    meta.localClock += 1;
-    /** @type {SyncedEntry} */
-    const entry = harden({
-      locator: null,
-      timestamp: meta.localClock,
-      writer: localNodeId,
-    });
-    state.set(petName, entry);
-    await persistEntry(petName, entry);
-    await persistMeta();
-    changeTopic.publisher.next(harden({ key: petName, entry }));
-  };
-
-  /** @type {SyncedPetStore['has']} */
-  const has = petName => {
-    const entry = state.get(petName);
-    return entry !== undefined && entry.locator !== null;
-  };
-
-  /** @type {SyncedPetStore['lookup']} */
-  const lookup = petName => {
-    const entry = state.get(petName);
-    if (entry === undefined || entry.locator === null) {
-      return undefined;
-    }
-    return entry.locator;
-  };
-
-  /** @type {SyncedPetStore['list']} */
-  const list = () => {
-    /** @type {PetName[]} */
-    const names = [];
-    for (const [key, entry] of state) {
-      if (entry.locator !== null) {
-        names.push(/** @type {PetName} */ (key));
-      }
-    }
-    names.sort();
-    return harden(names);
-  };
-
-  /** @type {SyncedPetStore['getState']} */
-  const getState = () => {
-    // Return a serializable snapshot.
-    /** @type {Record<string, SyncedEntry>} */
-    const snapshot = {};
-    for (const [key, entry] of state) {
-      snapshot[key] = entry;
-    }
-    return harden(snapshot);
-  };
-
-  /** @type {SyncedPetStore['getLocalClock']} */
-  const getLocalClock = () => meta.localClock;
-
-  /** @type {SyncedPetStore['getRemoteAckedClock']} */
-  const getRemoteAckedClock = () => meta.remoteAckedClock;
-
-  /** @type {SyncedPetStore['mergeRemoteState']} */
-  const mergeRemoteState = async (remoteState, remoteClock) => {
-    /** @type {SyncedPetStoreState} */
-    const incoming = new Map();
-    for (const [key, entry] of Object.entries(remoteState)) {
-      incoming.set(key, entry);
-    }
-    const changed = mergeState(state, incoming);
-    // Advance localClock to at least remoteClock and the max timestamp
-    // of any merged entry (Lamport rule).
-    let maxTs = remoteClock;
-    for (const entry of incoming.values()) {
-      if (entry.timestamp > maxTs) {
-        maxTs = entry.timestamp;
-      }
-    }
-    if (maxTs > meta.localClock) {
-      meta.localClock = maxTs;
-    }
-    // Persist changed entries.
-    await Promise.all(
-      [...changed].map(async key => {
-        const entry = /** @type {SyncedEntry} */ (state.get(key));
-        await persistEntry(key, entry);
-      }),
-    );
-    await persistMeta();
-    // Notify subscribers of changes.
-    for (const key of changed) {
-      const entry = /** @type {SyncedEntry} */ (state.get(key));
-      changeTopic.publisher.next(harden({ key, entry }));
-    }
-    return harden([...changed]);
-  };
-
-  /** @type {SyncedPetStore['acknowledgeRemoteClock']} */
-  const acknowledgeRemoteClock = async ackedClock => {
-    if (ackedClock > meta.remoteAckedClock) {
-      meta.remoteAckedClock = ackedClock;
-      await persistMeta();
-    }
-  };
-
-  /** @type {SyncedPetStore['pruneTombstones']} */
-  const pruneTombstones = async () => {
-    /** @type {string[]} */
-    const pruned = [];
-    for (const [key, entry] of state) {
-      if (entry.locator === null && entry.timestamp <= meta.remoteAckedClock) {
-        pruned.push(key);
-      }
-    }
-    for (const key of pruned) {
-      state.delete(key);
-      await deleteEntryFile(key);
-    }
-    return harden(pruned);
-  };
-
-  const followChanges = () => {
-    const iterator = (async function* syncedChanges() {
-      const subscription = changeTopic.subscribe();
-      // Yield current state first.
-      for (const [key, entry] of state) {
-        yield harden({ key, entry });
-      }
-      yield* subscription;
-    })();
-    return makeIteratorRef(iterator);
-  };
-
-  return /** @type {SyncedPetStore} */ (
-    /** @type {unknown} */ (
-      makeExo('SyncedPetStore', SyncedPetStoreInterface, {
-        storeLocator,
-        remove,
-        has,
-        lookup,
-        list,
-        getState,
-        getLocalClock,
-        getRemoteAckedClock,
-        mergeRemoteState,
-        acknowledgeRemoteClock,
-        pruneTombstones,
-        followChanges,
-      })
-    )
-  );
-};$h͏_once.makeSyncedPetStore(makeSyncedPetStore);
-harden(makeSyncedPetStore);
-})()
-,
 // === 127. daemon ./src/pet-store.js ===
-({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden,q,makeChangeTopic,parseId,assertValidId,isValidNumber,makeBidirectionalMultimap,makeSyncedPetStore;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]],["@endo/errors", [["q",[$h͏_a => (q = $h͏_a)]]]],["./pubsub.js", [["makeChangeTopic",[$h͏_a => (makeChangeTopic = $h͏_a)]]]],["./formula-identifier.js", [["parseId",[$h͏_a => (parseId = $h͏_a)]],["assertValidId",[$h͏_a => (assertValidId = $h͏_a)]],["isValidNumber",[$h͏_a => (isValidNumber = $h͏_a)]]]],["./multimap.js", [["makeBidirectionalMultimap",[$h͏_a => (makeBidirectionalMultimap = $h͏_a)]]]],["./synced-pet-store.js", [["makeSyncedPetStore",[$h͏_a => (makeSyncedPetStore = $h͏_a)]]]]]);
+({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden,makeChangeTopic,parseId,assertValidId,makeBidirectionalMultimap;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]],["./pubsub.js", [["makeChangeTopic",[$h͏_a => (makeChangeTopic = $h͏_a)]]]],["./formula-identifier.js", [["parseId",[$h͏_a => (parseId = $h͏_a)]],["assertValidId",[$h͏_a => (assertValidId = $h͏_a)]]]],["./multimap.js", [["makeBidirectionalMultimap",[$h͏_a => (makeBidirectionalMultimap = $h͏_a)]]]]]);
 
 
 
 
 
-
-
-
-/** @import { BidirectionalMultimap, Config, FilePowers, IdChangesTopic, Name, NameChangesTopic, PetName, PetStore, PetStoreIdNameChange, PetStoreNameChange, PetStorePowers, SyncedPetStore } from './types.js' */
+/** @import { BidirectionalMultimap, DaemonDatabase, IdChangesTopic, Name, NameChangesTopic, PetName, PetStore, PetStoreIdNameChange, PetStoreNameChange, PetStorePowers } from './types.js' */
 
 /**
- * @param {string} formulaNumber
- * @param {string} formulaType
- * @param {FilePowers} filePowers
- * @param {Config} config
+ * @param {DaemonDatabase} daemonDb
+ * @returns {PetStorePowers}
  */
-const makePetStorePath = (formulaNumber, formulaType, filePowers, config) => {
-  if (!isValidNumber(formulaNumber)) {
-    throw new Error(`Invalid formula number for pet store ${q(formulaNumber)}`);
-  }
-  const prefix = formulaNumber.slice(0, 2);
-  const suffix = formulaNumber.slice(2);
-  return filePowers.joinPath(config.statePath, formulaType, prefix, suffix);
-};
-
-/**
- * @param {FilePowers} filePowers
- * @param {Config} config
- */
-       const makePetStoreMaker = (filePowers, config) => {
+       const makePetStoreMaker = daemonDb => {
   /**
-   * @param {string} petNameDirectoryPath
+   * @param {string} storeNumber
+   * @param {string} storeType
    * @param {(name: string) => asserts name is Name} assertValidName
-   * @returns {Promise<PetStore>}
+   * @returns {PetStore}
    */
-  const makePetStoreAtPath = async (petNameDirectoryPath, assertValidName) => {
+  const makePetStoreFromDb = (storeNumber, storeType, assertValidName) => {
     /** @type {BidirectionalMultimap<string, Name>} */
     const idsToPetNames = makeBidirectionalMultimap();
     /** @type {NameChangesTopic} */
@@ -34144,25 +34300,13 @@ const makePetStorePath = (formulaNumber, formulaType, filePowers, config) => {
       }
     };
 
-    /** @param {string} petName */
-    const read = async petName => {
-      const petNamePath = filePowers.joinPath(petNameDirectoryPath, petName);
-      const petNameText = await filePowers.readFileText(petNamePath);
-      const formulaIdentifier = petNameText.trim();
-      assertValidId(formulaIdentifier, petName);
-      return formulaIdentifier;
-    };
-
-    await filePowers.makePath(petNameDirectoryPath);
-
-    const fileNames = await filePowers.readDirectory(petNameDirectoryPath);
-    await Promise.all(
-      fileNames.map(async petName => {
-        assertValidName(petName);
-        const formulaIdentifier = await read(petName);
-        idsToPetNames.add(formulaIdentifier, petName);
-      }),
-    );
+    // Load entries from database into in-memory map.
+    const entries = daemonDb.listPetStoreEntries(storeNumber, storeType);
+    for (const { name, formulaId } of entries) {
+      assertValidName(name);
+      assertValidId(formulaId, name);
+      idsToPetNames.add(formulaId, name);
+    }
 
     /** @type {PetStore['has']} */
     const has = petName => {
@@ -34195,10 +34339,12 @@ const makePetStorePath = (formulaNumber, formulaType, filePowers, config) => {
       }
 
       idsToPetNames.add(formulaIdentifier, petName);
-
-      const petNamePath = filePowers.joinPath(petNameDirectoryPath, petName);
-      const petNameText = `${formulaIdentifier}\n`;
-      await filePowers.writeFileText(petNamePath, petNameText);
+      daemonDb.writePetStoreEntry(
+        storeNumber,
+        storeType,
+        petName,
+        formulaIdentifier,
+      );
       publishNameAddition(formulaIdentifier, petName);
     };
 
@@ -34253,12 +34399,10 @@ const makePetStorePath = (formulaNumber, formulaType, filePowers, config) => {
       }
       assertValidId(formulaIdentifier, petName);
 
-      const petNamePath = filePowers.joinPath(petNameDirectoryPath, petName);
-      await filePowers.removePath(petNamePath);
+      daemonDb.deletePetStoreEntry(storeNumber, storeType, petName);
       idsToPetNames.delete(formulaIdentifier, petName);
       publishNameRemoval(formulaIdentifier, petName);
       // TODO consider retaining a backlog of deleted names for recovery
-      // TODO consider tracking historical pet names for formulas
     };
 
     /** @type {PetStore['rename']} */
@@ -34277,10 +34421,7 @@ const makePetStorePath = (formulaNumber, formulaType, filePowers, config) => {
       }
       assertValidId(formulaIdentifier, fromName);
 
-      // Updated persisted name mapping
-      const fromPath = filePowers.joinPath(petNameDirectoryPath, fromName);
-      const toPath = filePowers.joinPath(petNameDirectoryPath, toName);
-      await filePowers.renamePath(fromPath, toPath);
+      daemonDb.renamePetStoreEntry(storeNumber, storeType, fromName, toName);
 
       // Delete the back-reference for the overwritten pet name if it existed.
       if (overwrittenId !== undefined) {
@@ -34294,7 +34435,7 @@ const makePetStorePath = (formulaNumber, formulaType, filePowers, config) => {
 
       publishNameRemoval(formulaIdentifier, fromName);
       publishNameAddition(formulaIdentifier, toName);
-      // TODO consider retaining a backlog of overwritten names for recovery
+      // TODO consider tracking historical pet names for formulas
     };
 
     /** @type {PetStore['reverseIdentify']} */
@@ -34309,35 +34450,6 @@ const makePetStorePath = (formulaNumber, formulaType, filePowers, config) => {
       return harden(names);
     };
 
-    /**
-     * Normalize all stored formula identifiers using the given function.
-     * If the normalizer returns a different ID, the on-disk and in-memory
-     * mappings are rewritten.
-     * @param {(id: string) => string} normalizeId
-     */
-    const repairIds = async normalizeId => {
-      const allNames = idsToPetNames.getAll();
-      await Promise.all(
-        allNames.map(async petName => {
-          const oldId = idsToPetNames.getKey(petName);
-          if (oldId === undefined) {
-            return;
-          }
-          const newId = normalizeId(oldId);
-          if (newId !== oldId) {
-            idsToPetNames.delete(oldId, petName);
-            idsToPetNames.add(newId, petName);
-            const petNamePath = filePowers.joinPath(
-              petNameDirectoryPath,
-              petName,
-            );
-            const petNameText = `${newId}\n`;
-            await filePowers.writeFileText(petNamePath, petNameText);
-          }
-        }),
-      );
-    };
-
     const petStore = {
       has,
       identifyLocal,
@@ -34348,7 +34460,6 @@ const makePetStorePath = (formulaNumber, formulaType, filePowers, config) => {
       storeIdentifier,
       remove,
       rename,
-      repairIds,
     };
 
     return petStore;
@@ -34362,95 +34473,19 @@ const makePetStorePath = (formulaNumber, formulaType, filePowers, config) => {
     formulaType,
     assertValidName,
   ) => {
-    const petNameDirectoryPath = makePetStorePath(
-      formulaNumber,
-      formulaType,
-      filePowers,
-      config,
+    // Return synchronously-created pet store wrapped in a resolved promise
+    // to maintain the existing async interface.
+    return Promise.resolve(
+      makePetStoreFromDb(formulaNumber, formulaType, assertValidName),
     );
-    return makePetStoreAtPath(petNameDirectoryPath, assertValidName);
-  };
-
-  /** @type {PetStorePowers['deletePetStore']} */
-  const deletePetStore = async (formulaNumber, formulaType) => {
-    const directory = makePetStorePath(
-      formulaNumber,
-      formulaType,
-      filePowers,
-      config,
-    );
-    const entries = await filePowers.readDirectory(directory).catch(error => {
-      if (error.message.startsWith('ENOENT: ')) {
-        return [];
-      }
-      throw error;
-    });
-    await Promise.all(
-      entries.map(async entry => {
-        const entryPath = filePowers.joinPath(directory, entry);
-        await filePowers.removePath(entryPath).catch(() => {});
-      }),
-    );
-    await filePowers.removePath(directory).catch(() => {});
-  };
-
-  /**
-   * @param {string} formulaNumber
-   * @param {string} localNodeId
-   * @param {'grantor' | 'grantee'} role
-   * @returns {Promise<SyncedPetStore>}
-   */
-  const makeIdentifiedSyncedPetStore = (formulaNumber, localNodeId, role) => {
-    const storePath = makePetStorePath(
-      formulaNumber,
-      'synced-pet-store',
-      filePowers,
-      config,
-    );
-    return makeSyncedPetStore({
-      storePath,
-      filePowers,
-      localNodeId,
-      role,
-    });
-  };
-
-  /**
-   * @param {string} formulaNumber
-   */
-  const deleteSyncedPetStore = async formulaNumber => {
-    const directory = makePetStorePath(
-      formulaNumber,
-      'synced-pet-store',
-      filePowers,
-      config,
-    );
-    // Recursively remove the synced store directory (names/ subdir + clock.json).
-    const removeDir = async (/** @type {string} */ dir) => {
-      const entries = await filePowers.readDirectory(dir).catch(error => {
-        if (error.message.startsWith('ENOENT: ')) {
-          return [];
-        }
-        throw error;
-      });
-      await Promise.all(
-        entries.map(async entry => {
-          const entryPath = filePowers.joinPath(dir, entry);
-          // Try as directory first, fall back to file.
-          await removeDir(entryPath).catch(() => {});
-          await filePowers.removePath(entryPath).catch(() => {});
-        }),
-      );
-      await filePowers.removePath(dir).catch(() => {});
-    };
-    await removeDir(directory);
   };
 
   return {
     makeIdentifiedPetStore,
-    deletePetStore,
-    makeIdentifiedSyncedPetStore,
-    deleteSyncedPetStore,
+    deletePetStore: async (
+      /** @type {string} */ formulaNumber,
+      /** @type {string} */ formulaType,
+    ) => daemonDb.deletePetStore(formulaNumber, formulaType),
   };
 };$h͏_once.makePetStoreMaker(makePetStoreMaker);
 })()
@@ -34960,7 +34995,7 @@ const CBOR_NEGINT = 1;
 const CBOR_BYTES = 2;
 const CBOR_TEXT = 3;
 const CBOR_ARRAY = 4;
-const CBOR_MAP = 5;
+// const CBOR_MAP = 5;
 
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
@@ -35328,12 +35363,22 @@ harden(writeFrameToStream);
 })()
 ,
 // === 133. daemon ./src/bus-daemon-rust-xs-powers.js ===
-({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';$h͏_imports([]);// @ts-check
-/* global hostReadFile, hostWriteFile, hostReadDir, hostMkdir, hostRemove,
-   hostRename, hostExists, hostIsDir, hostReadLink, hostSha256, hostSha256Init,
+({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';$h͏_imports([]);// @ts-nocheck
+// The XS-backed powers still implement the pre-SQLite SqliteValue
+// contract and expose readLink outside the current FilePowers type.
+// Aligning this module with the llm-side typings is tracked as
+// follow-up; re-enable @ts-check once FilePowers gains readLink
+// and SqliteParams unifies with the SQLite migration's types.
+/// <reference path="./bus-xs-host-globals.d.ts" />
+/* global btoa, atob,
+   hostReadFile, hostWriteFile, hostReadDir, hostMkdir, hostRemove,
+   hostRename, hostExists, hostIsDir, hostReadLink, hostSha256Init,
    hostSha256Update, hostSha256UpdateBytes, hostSha256Finish, hostRandomHex256,
-   hostEd25519Keygen, hostEd25519Sign, hostGetPid, hostGetEnv, hostJoinPath,
-   hostRealPath, openWriter, write, closeWriter, harden */
+   hostEd25519Keygen, hostEd25519Sign, hostJoinPath,
+   hostRealPath, openWriter, write, closeWriter,
+   hostSqliteOpen, hostSqliteClose, hostSqliteExec, hostSqlitePrepare,
+   hostSqliteStmtRun, hostSqliteStmtGet, hostSqliteStmtAll,
+   hostSqliteStmtColumns, hostSqliteStmtFinalize */
 
 /**
  * XS daemon powers — factory functions that create FilePowers and
@@ -35466,7 +35511,11 @@ const fromHex = hex => {
 
   /** @type {FilePowers['renamePath']} */
   const renamePath = async (source, target) => {
-    const result = hostRename(DIR_TOKEN, toRelative(source), toRelative(target));
+    const result = hostRename(
+      DIR_TOKEN,
+      toRelative(source),
+      toRelative(target),
+    );
     if (typeof result === 'string' && result.startsWith('Error: ')) {
       throw new Error(result);
     }
@@ -35492,12 +35541,10 @@ const fromHex = hex => {
   };
 
   /** @type {FilePowers['isDirectory']} */
-  const isDirectory = async path =>
-    hostIsDir(DIR_TOKEN, toRelative(path));
+  const isDirectory = async path => hostIsDir(DIR_TOKEN, toRelative(path));
 
   /** @type {FilePowers['exists']} */
-  const exists = async path =>
-    hostExists(DIR_TOKEN, toRelative(path));
+  const exists = async path => hostExists(DIR_TOKEN, toRelative(path));
 
   /**
    * In-memory file reader for content store.
@@ -35646,10 +35693,947 @@ harden(makeXsFilePowers);
   });
 };$h͏_once.makeXsCryptoPowers(makeXsCryptoPowers);
 harden(makeXsCryptoPowers);
+
+// ---------------------------------------------------------------------------
+// SQLite
+// ---------------------------------------------------------------------------
+
+/** @import { SqlitePowers } from './types.js' */
+
+/**
+ * Base64 encode a Uint8Array for FFI transport.
+ *
+ * @param {Uint8Array} bytes
+ * @returns {string}
+ */
+const toBase64 = bytes => {
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += 1) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return btoa(binary);
+};
+
+/**
+ * Base64 decode a string to Uint8Array.
+ *
+ * @param {string} str
+ * @returns {Uint8Array}
+ */
+const fromBase64 = str => {
+  const binary = atob(str);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
+};
+
+/**
+ * Encode a single JS param value for FFI JSON transport.
+ * bigint → {$bigint: string}, Uint8Array → {$bytes: base64}.
+ *
+ * @param {import('./types.js').SqliteValue} value
+ * @returns {unknown}
+ */
+const encodeValue = value => {
+  if (typeof value === 'bigint') {
+    return { $bigint: String(value) };
+  }
+  if (value instanceof Uint8Array) {
+    return { $bytes: toBase64(value) };
+  }
+  return value;
+};
+
+/**
+ * Decode a single FFI JSON result value back to JS.
+ * {$bigint: string} → bigint, {$bytes: base64} → Uint8Array.
+ *
+ * @param {unknown} value
+ * @returns {import('./types.js').SqliteValue}
+ */
+const decodeValue = value => {
+  if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
+    const obj = /** @type {Record<string, unknown>} */ (value);
+    if ('$bigint' in obj) {
+      return BigInt(/** @type {string} */ (obj.$bigint));
+    }
+    if ('$bytes' in obj) {
+      return fromBase64(/** @type {string} */ (obj.$bytes));
+    }
+  }
+  return /** @type {import('./types.js').SqliteValue} */ (value);
+};
+
+/**
+ * Decode all values in a row object from FFI tags to native types.
+ *
+ * @param {Record<string, unknown>} row
+ * @returns {Record<string, import('./types.js').SqliteValue>}
+ */
+const decodeRow = row => {
+  /** @type {Record<string, import('./types.js').SqliteValue>} */
+  const result = {};
+  for (const key of Object.keys(row)) {
+    result[key] = decodeValue(row[key]);
+  }
+  return harden(result);
+};
+
+/**
+ * Assert that a host function result is not an error string.
+ *
+ * @param {unknown} result
+ */
+const assertSqliteOk = result => {
+  if (typeof result === 'string' && result.startsWith('Error: ')) {
+    throw new Error(result.slice(7));
+  }
+};
+
+/**
+ * Create SqlitePowers backed by XS host functions.
+ *
+ * @returns {SqlitePowers}
+ */
+       const makeXsSqlitePowers = () => {
+  /** @type {SqlitePowers['openDatabase']} */
+  const openDatabase = path => {
+    const dbHandle = hostSqliteOpen(path);
+    assertSqliteOk(dbHandle);
+
+    let isOpen = true;
+
+    const close = () => {
+      if (isOpen) {
+        hostSqliteClose(dbHandle);
+        isOpen = false;
+      }
+    };
+
+    /** @param {string} sql */
+    const exec = sql => {
+      const result = hostSqliteExec(dbHandle, sql);
+      assertSqliteOk(result);
+    };
+
+    /** @param {string} sql */
+    const prepare = sql => {
+      const stmtHandle = hostSqlitePrepare(dbHandle, sql);
+      assertSqliteOk(stmtHandle);
+
+      /**
+       * @param {import('./types.js').SqliteValue[]} args
+       * @returns {string}
+       */
+      const encodeParams = args => {
+        if (
+          args.length === 1 &&
+          typeof args[0] === 'object' &&
+          args[0] !== null &&
+          !Array.isArray(args[0]) &&
+          !(args[0] instanceof Uint8Array)
+        ) {
+          // Named parameters — encode each value.
+          const obj =
+            /** @type {Record<string, import('./types.js').SqliteValue>} */ (
+              args[0]
+            );
+          /** @type {Record<string, unknown>} */
+          const encoded = {};
+          for (const key of Object.keys(obj)) {
+            encoded[key] = encodeValue(
+              /** @type {import('./types.js').SqliteValue} */ (obj[key]),
+            );
+          }
+          return JSON.stringify(encoded);
+        }
+        return JSON.stringify(args.map(encodeValue));
+      };
+
+      /** @type {import('./types.js').StatementSync['run']} */
+      const run = (...params) => {
+        const result = hostSqliteStmtRun(stmtHandle, encodeParams(params));
+        assertSqliteOk(result);
+        const parsed = JSON.parse(/** @type {string} */ (result));
+        return harden({
+          changes: BigInt(parsed.changes),
+          lastInsertRowid: BigInt(parsed.lastInsertRowid),
+        });
+      };
+
+      /** @type {import('./types.js').StatementSync['get']} */
+      const get = (...params) => {
+        const result = hostSqliteStmtGet(stmtHandle, encodeParams(params));
+        assertSqliteOk(result);
+        const parsed = JSON.parse(/** @type {string} */ (result));
+        if (parsed === null) {
+          return undefined;
+        }
+        return decodeRow(parsed);
+      };
+
+      /** @type {import('./types.js').StatementSync['all']} */
+      const all = (...params) => {
+        const result = hostSqliteStmtAll(stmtHandle, encodeParams(params));
+        assertSqliteOk(result);
+        const parsed = JSON.parse(/** @type {string} */ (result));
+        return harden(parsed.map(decodeRow));
+      };
+
+      /** @type {import('./types.js').StatementSync['columns']} */
+      const columns = () => {
+        const result = hostSqliteStmtColumns(stmtHandle);
+        assertSqliteOk(result);
+        return harden(JSON.parse(/** @type {string} */ (result)));
+      };
+
+      const finalize = () => {
+        hostSqliteStmtFinalize(stmtHandle);
+      };
+
+      return harden({ run, get, all, columns, finalize });
+    };
+
+    return harden({
+      close,
+      exec,
+      prepare,
+      get open() {
+        return isOpen;
+      },
+    });
+  };
+
+  return harden({ openDatabase });
+};$h͏_once.makeXsSqlitePowers(makeXsSqlitePowers);
+harden(makeXsSqlitePowers);
 })()
 ,
-// === 134. daemon ./src/bus-daemon-rust-xs.js ===
-({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let makeCapTP,E,Far,makePromiseKit,mapWriter,mapReader,makePipe,makeDaemon,makeDaemonicPersistencePowers,makePetStoreMaker,makeMessageCapTP,messageToBytes,bytesToMessage,encodeEnvelope,decodeEnvelope,makeXsFilePowers,makeXsCryptoPowers;$h͏_imports([["@endo/captp", [["makeCapTP",[$h͏_a => (makeCapTP = $h͏_a)]]]],["@endo/far", [["E",[$h͏_a => (E = $h͏_a)]],["Far",[$h͏_a => (Far = $h͏_a)]]]],["@endo/promise-kit", [["makePromiseKit",[$h͏_a => (makePromiseKit = $h͏_a)]]]],["@endo/stream", [["mapWriter",[$h͏_a => (mapWriter = $h͏_a)]],["mapReader",[$h͏_a => (mapReader = $h͏_a)]],["makePipe",[$h͏_a => (makePipe = $h͏_a)]]]],["./daemon.js", [["makeDaemon",[$h͏_a => (makeDaemon = $h͏_a)]]]],["./daemon-persistence-powers.js", [["makeDaemonicPersistencePowers",[$h͏_a => (makeDaemonicPersistencePowers = $h͏_a)]]]],["./pet-store.js", [["makePetStoreMaker",[$h͏_a => (makePetStoreMaker = $h͏_a)]]]],["./connection.js", [["makeMessageCapTP",[$h͏_a => (makeMessageCapTP = $h͏_a)]],["messageToBytes",[$h͏_a => (messageToBytes = $h͏_a)]],["bytesToMessage",[$h͏_a => (bytesToMessage = $h͏_a)]]]],["./envelope.js", [["encodeEnvelope",[$h͏_a => (encodeEnvelope = $h͏_a)]],["decodeEnvelope",[$h͏_a => (decodeEnvelope = $h͏_a)]]]],["./bus-daemon-rust-xs-powers.js", [["makeXsFilePowers",[$h͏_a => (makeXsFilePowers = $h͏_a)]],["makeXsCryptoPowers",[$h͏_a => (makeXsCryptoPowers = $h͏_a)]]]]]);
+// === 134. daemon ./src/debug-session.js ===
+({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let makePromiseKit;$h͏_imports([["@endo/promise-kit", [["makePromiseKit",[$h͏_a => (makePromiseKit = $h͏_a)]]]]]);
+
+
+
+
+
+
+
+
+
+
+
+/** @import { PromiseKit } from '@endo/promise-kit' */
+
+/**
+ * @typedef {object} XmlElement
+ * @property {string} name
+ * @property {Record<string, string>} attrs
+ * @property {XmlElement[]} [children]
+ * @property {XmlElement} [parent]
+ * @property {string} [data]
+ */
+
+/**
+ * @typedef {object} PendingCommand
+ * @property {(value: any) => void} resolve
+ * @property {(reason: any) => void} reject
+ */
+
+// ---------------------------------------------------------------------------
+// Minimal SAX parser for xsbug XML
+// ---------------------------------------------------------------------------
+
+/**
+ * Decode XML entities in a string.
+ *
+ * @param {string} s
+ * @returns {string}
+ */
+const decodeEntities = s => {
+  let result = s;
+  // Use split/join instead of regex for Jessie compatibility.
+  result = result.split('&amp;').join('&');
+  result = result.split('&lt;').join('<');
+  result = result.split('&gt;').join('>');
+  result = result.split('&quot;').join('"');
+  result = result.split('&apos;').join("'");
+  return result;
+};
+harden(decodeEntities);
+
+/**
+ * Parse attributes from a tag body string like
+ * `path="/foo" line="42"`.
+ *
+ * @param {string} s
+ * @returns {Record<string, string>}
+ */
+const parseAttrs = s => {
+  /** @type {Record<string, string>} */
+  const attrs = {};
+  let i = 0;
+  while (i < s.length) {
+    // Skip whitespace.
+    while (i < s.length && s[i] === ' ') i += 1;
+    if (i >= s.length) break;
+    // Read attribute name.
+    const eqIdx = s.indexOf('=', i);
+    if (eqIdx < 0) break;
+    const name = s.slice(i, eqIdx);
+    i = eqIdx + 1;
+    // Read quoted value.
+    if (i >= s.length || s[i] !== '"') break;
+    i += 1;
+    const closeQuote = s.indexOf('"', i);
+    if (closeQuote < 0) break;
+    attrs[name] = decodeEntities(s.slice(i, closeQuote));
+    i = closeQuote + 1;
+  }
+  return attrs;
+};
+harden(parseAttrs);
+
+/**
+ * Minimal streaming XML parser for the xsbug protocol.
+ * Calls `onOpen(name, attrs, selfClosing)`, `onClose(name)`,
+ * and `onText(data)`.
+ *
+ * @param {object} handlers
+ * @param {(name: string, attrs: Record<string, string>, selfClosing: boolean) => void} handlers.onOpen
+ * @param {(name: string) => void} handlers.onClose
+ * @param {(data: string) => void} handlers.onText
+ * @returns {{ feed: (chunk: string) => void }}
+ */
+const makeSaxParser = ({ onOpen, onClose, onText }) => {
+  let buf = '';
+
+  const feed = chunk => {
+    buf += chunk;
+    for (;;) {
+      // Look for CDATA.
+      const cdataStart = buf.indexOf('<![CDATA[');
+      const tagStart = buf.indexOf('<');
+      if (tagStart < 0) {
+        // No tags — everything is text.
+        if (buf.length > 0) {
+          onText(buf);
+          buf = '';
+        }
+        return;
+      }
+      // Emit text before the tag.
+      if (tagStart > 0) {
+        onText(decodeEntities(buf.slice(0, tagStart)));
+        buf = buf.slice(tagStart);
+        continue;
+      }
+      // CDATA?
+      if (cdataStart === 0) {
+        const cdataEnd = buf.indexOf(']]>');
+        if (cdataEnd < 0) return; // incomplete
+        onText(buf.slice(9, cdataEnd));
+        buf = buf.slice(cdataEnd + 3);
+        continue;
+      }
+      // Closing tag?
+      if (buf.length > 1 && buf[1] === '/') {
+        const end = buf.indexOf('>');
+        if (end < 0) return; // incomplete
+        const name = buf.slice(2, end).trim();
+        onClose(name);
+        buf = buf.slice(end + 1);
+        continue;
+      }
+      // Opening / self-closing tag.
+      const end = buf.indexOf('>');
+      if (end < 0) return; // incomplete
+      const inner = buf.slice(1, end);
+      const selfClosing = inner.endsWith('/');
+      const body = selfClosing ? inner.slice(0, -1) : inner;
+      const spaceIdx = body.indexOf(' ');
+      let name;
+      let attrStr;
+      if (spaceIdx < 0) {
+        name = body.trim();
+        attrStr = '';
+      } else {
+        name = body.slice(0, spaceIdx);
+        attrStr = body.slice(spaceIdx + 1).trim();
+      }
+      if (name.length > 0) {
+        const attrs = attrStr.length > 0 ? parseAttrs(attrStr) : {};
+        onOpen(name, attrs, selfClosing);
+        if (selfClosing) {
+          onClose(name);
+        }
+      }
+      buf = buf.slice(end + 1);
+    }
+  };
+
+  return harden({ feed });
+};
+harden(makeSaxParser);
+
+// ---------------------------------------------------------------------------
+// DebugSession
+// ---------------------------------------------------------------------------
+
+/**
+ * Create a debug session that speaks the xsbug XML protocol.
+ *
+ * @param {(xmlBytes: Uint8Array) => void} sendToWorker
+ *   Callback to send raw XML bytes to the target worker via the
+ *   envelope bus.
+ * @returns {DebugSession}
+ */
+       const makeDebugSession = sendToWorker => {
+  const textEncoder = new TextEncoder();
+  const textDecoder = new TextDecoder();
+
+  // --- State ---
+  /** @type {XmlElement | null} */
+  let current = null;
+  /** @type {string | undefined} */
+  let title;
+  /** @type {string | undefined} */
+  let tag;
+  /** @type {boolean} */
+  let broken = false;
+  /** @type {BreakEvent | null} */
+  let lastBreak = null;
+  /** @type {Frame[]} */
+  let lastFrames = [];
+  /** @type {Property[]} */
+  let lastLocals = [];
+  /** @type {Property[]} */
+  let lastGlobals = [];
+  /** @type {Array<{path: string, line: string}>} */
+  let lastBreakpoints = [];
+  /** @type {Array<{name: string, path: string}>} */
+  let lastFiles = [];
+
+  // Break listeners (for followBreaks).
+  /** @type {Array<(event: BreakEvent) => void>} */
+  const breakListeners = [];
+
+  // Pending command promises, keyed by expected response element.
+  /** @type {Map<string, PendingCommand>} */
+  const pending = new Map();
+
+  /**
+   * Resolve a pending command if one exists for the given key.
+   *
+   * @param {string} key
+   * @param {any} value
+   */
+  const resolvePending = (key, value) => {
+    const p = pending.get(key);
+    if (p) {
+      pending.delete(key);
+      p.resolve(value);
+    }
+  };
+
+  // --- SAX event handlers ---
+
+  const parser = makeSaxParser({
+    onOpen(name, attrs, _selfClosing) {
+      /** @type {XmlElement} */
+      const el = { name, attrs };
+      switch (name) {
+        case 'xsbug':
+          break;
+        case 'breakpoint':
+        case 'instrument':
+        case 'file':
+        case 'frame':
+          if (current && current.children) {
+            current.children.push(el);
+          }
+          if (current) el.parent = current;
+          break;
+        case 'node':
+        case 'property':
+          if (current && current.children) {
+            current.children.push(el);
+          }
+          if (current) el.parent = current;
+          el.children = [];
+          break;
+        case 'break':
+        case 'bubble':
+        case 'eval':
+        case 'log':
+        case 'ps':
+        case 'samples':
+          el.data = '';
+          break;
+        case 'breakpoints':
+        case 'instruments':
+        case 'files':
+        case 'frames':
+        case 'global':
+        case 'local':
+          el.children = [];
+          break;
+        default:
+          break;
+      }
+      current = el;
+    },
+
+    onClose(name) {
+      const el = current;
+      if (!el) return;
+      current = el.parent || null;
+
+      switch (name) {
+        case 'breakpoint':
+        case 'instrument':
+        case 'file':
+        case 'frame':
+        case 'node':
+        case 'property':
+          delete el.parent;
+          break;
+        case 'break': {
+          const event = harden({
+            path: el.attrs.path || '',
+            line: Number(el.attrs.line || '0'),
+            message: el.data || '',
+          });
+          lastBreak = event;
+          broken = true;
+          resolvePending('break', event);
+          for (const listener of breakListeners) {
+            try {
+              listener(event);
+            } catch (_e) {
+              // ignore listener errors
+            }
+          }
+          break;
+        }
+        case 'breakpoints':
+          lastBreakpoints = (el.children || []).map(c =>
+            harden({ path: c.attrs.path || '', line: c.attrs.line || '0' }),
+          );
+          resolvePending('breakpoints', lastBreakpoints);
+          break;
+        case 'bubble':
+          resolvePending(
+            'bubble',
+            harden({
+              name: el.attrs.name || '',
+              value: el.attrs.value || '',
+              path: el.attrs.path || '',
+              line: Number(el.attrs.line || '0'),
+              message: el.data || '',
+            }),
+          );
+          break;
+        case 'eval':
+          resolvePending('eval', el.data || '');
+          break;
+        case 'files':
+          lastFiles = (el.children || []).map(c =>
+            harden({ name: c.attrs.name || '', path: c.attrs.path || '' }),
+          );
+          resolvePending('files', lastFiles);
+          break;
+        case 'frames':
+          lastFrames = (el.children || []).map(c =>
+            harden({
+              name: c.attrs.name || '',
+              value: c.attrs.value || '',
+              path: c.attrs.path || '',
+              line: Number(c.attrs.line || '0'),
+            }),
+          );
+          resolvePending('frames', lastFrames);
+          break;
+        case 'global':
+          lastGlobals = mapProperties(el.children || []);
+          resolvePending('global', lastGlobals);
+          break;
+        case 'local':
+          lastLocals = mapProperties(el.children || []);
+          resolvePending('local', lastLocals);
+          break;
+        case 'login':
+          title = el.attrs.name;
+          tag = el.attrs.value;
+          resolvePending('login', harden({ name: title, tag }));
+          break;
+        case 'log':
+          resolvePending(
+            'log',
+            harden({
+              path: el.attrs.path || '',
+              line: Number(el.attrs.line || '0'),
+              message: el.data || '',
+            }),
+          );
+          break;
+        default:
+          break;
+      }
+    },
+
+    onText(data) {
+      if (current && 'data' in current) {
+        current.data += data;
+      }
+    },
+  });
+
+  // --- Helpers ---
+
+  /**
+   * Map XML child elements to Property records.
+   *
+   * @param {XmlElement[]} children
+   * @returns {Property[]}
+   */
+  const mapProperties = children =>
+    children.map(c =>
+      harden({
+        name: c.attrs.name || '',
+        value: c.attrs.value || '',
+        flags: c.attrs.flags || '',
+        ...(c.children ? { children: mapProperties(c.children) } : {}),
+      }),
+    );
+
+  /**
+   * Send an XML command string to the worker.
+   *
+   * @param {string} xml
+   */
+  const sendCommand = xml => {
+    // xsbug protocol prefixes commands with BOM + \r\n.
+    const full = `\r\n${xml}\r\n`;
+    sendToWorker(textEncoder.encode(full));
+  };
+
+  /**
+   * Send a command and return a promise that resolves when the
+   * expected response element arrives.
+   *
+   * @param {string} xml
+   * @param {string} expectKey
+   * @returns {Promise<any>}
+   */
+  const commandWithResponse = (xml, expectKey) => {
+    const { promise, resolve, reject } = /** @type {PromiseKit<any>} */ (
+      makePromiseKit()
+    );
+    pending.set(expectKey, { resolve, reject });
+    sendCommand(xml);
+    return promise;
+  };
+
+  // --- Public API ---
+
+  /** @type {DebugSession} */
+  const session = {
+    feedXml(bytes) {
+      const text = textDecoder.decode(bytes);
+      parser.feed(text);
+    },
+
+    // Stepping commands
+    go() {
+      broken = false;
+      sendCommand('<go/>');
+    },
+    step() {
+      broken = false;
+      sendCommand('<step/>');
+      return commandWithResponse('', 'break');
+    },
+    stepIn() {
+      broken = false;
+      sendCommand('<step-inside/>');
+      return commandWithResponse('', 'break');
+    },
+    stepOut() {
+      broken = false;
+      sendCommand('<step-outside/>');
+      return commandWithResponse('', 'break');
+    },
+    abort() {
+      sendCommand('<abort/>');
+    },
+
+    // Breakpoints
+    setBreakpoint(path, line) {
+      sendCommand(`<set-breakpoint path="${path}" line="${line}"/>`);
+    },
+    clearBreakpoint(path, line) {
+      sendCommand(`<clear-breakpoint path="${path}" line="${line}"/>`);
+    },
+    clearAllBreakpoints() {
+      sendCommand('<clear-all-breakpoints/>');
+    },
+
+    // Inspection
+    getFrames() {
+      return commandWithResponse('<select id="0"/>', 'frames');
+    },
+    getLocals() {
+      return commandWithResponse('', 'local');
+    },
+    getGlobals() {
+      return commandWithResponse('', 'global');
+    },
+    selectFrame(id) {
+      return commandWithResponse(`<select id="${id}"/>`, 'local');
+    },
+    toggleProperty(id) {
+      return commandWithResponse(`<toggle id="${id}"/>`, 'local');
+    },
+    evaluate(source) {
+      const xml = `<script path="(debug)" line="0"><![CDATA[${source}]]></script>`;
+      return commandWithResponse(xml, 'eval');
+    },
+
+    // Profiling
+    startProfiling() {
+      sendCommand('<start-profiling/>');
+    },
+    stopProfiling() {
+      sendCommand('<stop-profiling/>');
+    },
+
+    // Exception mode
+    setExceptionBreakMode(mode) {
+      if (mode === 'all') {
+        sendCommand('<clear-breakpoint path="uncaughtExceptions" line="0"/>');
+        sendCommand('<set-breakpoint path="exceptions" line="0"/>');
+      } else if (mode === 'uncaught') {
+        sendCommand('<clear-breakpoint path="exceptions" line="0"/>');
+        sendCommand('<set-breakpoint path="uncaughtExceptions" line="0"/>');
+      } else {
+        sendCommand('<clear-breakpoint path="exceptions" line="0"/>');
+        sendCommand('<clear-breakpoint path="uncaughtExceptions" line="0"/>');
+      }
+    },
+
+    // Subscriptions
+    onBreak(listener) {
+      breakListeners.push(listener);
+      return harden(() => {
+        const idx = breakListeners.indexOf(listener);
+        if (idx >= 0) breakListeners.splice(idx, 1);
+      });
+    },
+
+    // Accessors
+    isBroken() {
+      return broken;
+    },
+    getTitle() {
+      return title;
+    },
+    getTag() {
+      return tag;
+    },
+    getLastBreak() {
+      return lastBreak;
+    },
+
+    help() {
+      return 'DebugSession: xsbug protocol client for XS worker debugging';
+    },
+  };
+
+  return harden(session);
+};$h͏_once.makeDebugSession(makeDebugSession);
+harden(makeDebugSession);
+})()
+,
+// === 135. daemon ./src/debugger.js ===
+({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let makeExo,M;$h͏_imports([["@endo/exo", [["makeExo",[$h͏_a => (makeExo = $h͏_a)]]]],["@endo/patterns", [["M",[$h͏_a => (M = $h͏_a)]]]]]);
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+// ---------------------------------------------------------------------------
+// Interface guard
+// ---------------------------------------------------------------------------
+
+const BreakEventShape = M.splitRecord({
+  path: M.string(),
+  line: M.number(),
+  message: M.string(),
+});
+
+       const DebuggerInterface = M.interface('EndoDebugger', {
+  help: M.call().returns(M.string()),
+  go: M.call().returns(M.undefined()),
+  step: M.call().returns(M.promise()),
+  stepIn: M.call().returns(M.promise()),
+  stepOut: M.call().returns(M.promise()),
+  abort: M.call().returns(M.undefined()),
+  setBreakpoint: M.call(M.string(), M.number()).returns(M.undefined()),
+  clearBreakpoint: M.call(M.string(), M.number()).returns(M.undefined()),
+  clearAllBreakpoints: M.call().returns(M.undefined()),
+  getFrames: M.call().returns(M.promise()),
+  getLocals: M.call().returns(M.promise()),
+  getGlobals: M.call().returns(M.promise()),
+  selectFrame: M.call(M.string()).returns(M.promise()),
+  toggleProperty: M.call(M.string()).returns(M.promise()),
+  evaluate: M.call(M.string()).returns(M.promise()),
+  setExceptionBreakMode: M.call(M.or(M.scalar(), M.string())).returns(
+    M.undefined(),
+  ),
+  isBroken: M.call().returns(M.boolean()),
+  getTitle: M.call().returns(M.opt(M.string())),
+  getTag: M.call().returns(M.opt(M.string())),
+  getLastBreak: M.call().returns(M.or(BreakEventShape, M.null())),
+});$h͏_once.DebuggerInterface(DebuggerInterface);
+harden(DebuggerInterface);
+
+// ---------------------------------------------------------------------------
+// Factory
+// ---------------------------------------------------------------------------
+
+/**
+ * Create a Debugger exo wrapping a DebugSession.
+ *
+ * @param {DebugSession} session
+ * @returns {import('@endo/exo').Guarded<{
+ *   help(): string,
+ *   go(): void,
+ *   step(): Promise<BreakEvent>,
+ *   stepIn(): Promise<BreakEvent>,
+ *   stepOut(): Promise<BreakEvent>,
+ *   abort(): void,
+ *   setBreakpoint(path: string, line: number): void,
+ *   clearBreakpoint(path: string, line: number): void,
+ *   clearAllBreakpoints(): void,
+ *   getFrames(): Promise<Frame[]>,
+ *   getLocals(): Promise<Property[]>,
+ *   getGlobals(): Promise<Property[]>,
+ *   selectFrame(id: string): Promise<Property[]>,
+ *   toggleProperty(id: string): Promise<Property[]>,
+ *   evaluate(source: string): Promise<string>,
+ *   setExceptionBreakMode(mode: 'none' | 'all' | 'uncaught'): void,
+ *   isBroken(): boolean,
+ *   getTitle(): string | undefined,
+ *   getTag(): string | undefined,
+ *   getLastBreak(): BreakEvent | null,
+ * }>}
+ */
+       const makeDebugger = session => {
+  return makeExo('EndoDebugger', DebuggerInterface, {
+    help() {
+      return session.help();
+    },
+    go() {
+      session.go();
+    },
+    step() {
+      return session.step();
+    },
+    stepIn() {
+      return session.stepIn();
+    },
+    stepOut() {
+      return session.stepOut();
+    },
+    abort() {
+      session.abort();
+    },
+    setBreakpoint(path, line) {
+      session.setBreakpoint(path, line);
+    },
+    clearBreakpoint(path, line) {
+      session.clearBreakpoint(path, line);
+    },
+    clearAllBreakpoints() {
+      session.clearAllBreakpoints();
+    },
+    getFrames() {
+      return session.getFrames();
+    },
+    getLocals() {
+      return session.getLocals();
+    },
+    getGlobals() {
+      return session.getGlobals();
+    },
+    selectFrame(id) {
+      return session.selectFrame(id);
+    },
+    toggleProperty(id) {
+      return session.toggleProperty(id);
+    },
+    evaluate(source) {
+      return session.evaluate(source);
+    },
+    setExceptionBreakMode(mode) {
+      session.setExceptionBreakMode(
+        /** @type {'none' | 'all' | 'uncaught'} */ (mode),
+      );
+    },
+    isBroken() {
+      return session.isBroken();
+    },
+    getTitle() {
+      return session.getTitle();
+    },
+    getTag() {
+      return session.getTag();
+    },
+    getLastBreak() {
+      return session.getLastBreak();
+    },
+  });
+};$h͏_once.makeDebugger(makeDebugger);
+harden(makeDebugger);
+})()
+,
+// === 136. daemon ./src/bus-daemon-rust-xs.js ===
+({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let makeCapTP,E,makePromiseKit,mapWriter,mapReader,makePipe,makeDaemon,makeDaemonicPersistencePowers,makePetStoreMaker,makeMessageCapTP,messageToBytes,bytesToMessage,encodeEnvelope,decodeEnvelope,makeXsFilePowers,makeXsCryptoPowers,makeDebugSession,makeDebugger;$h͏_imports([["@endo/captp", [["makeCapTP",[$h͏_a => (makeCapTP = $h͏_a)]]]],["@endo/far", [["E",[$h͏_a => (E = $h͏_a)]]]],["@endo/promise-kit", [["makePromiseKit",[$h͏_a => (makePromiseKit = $h͏_a)]]]],["@endo/stream", [["mapWriter",[$h͏_a => (mapWriter = $h͏_a)]],["mapReader",[$h͏_a => (mapReader = $h͏_a)]],["makePipe",[$h͏_a => (makePipe = $h͏_a)]]]],["./daemon.js", [["makeDaemon",[$h͏_a => (makeDaemon = $h͏_a)]]]],["./daemon-persistence-powers.js", [["makeDaemonicPersistencePowers",[$h͏_a => (makeDaemonicPersistencePowers = $h͏_a)]]]],["./pet-store.js", [["makePetStoreMaker",[$h͏_a => (makePetStoreMaker = $h͏_a)]]]],["./connection.js", [["makeMessageCapTP",[$h͏_a => (makeMessageCapTP = $h͏_a)]],["messageToBytes",[$h͏_a => (messageToBytes = $h͏_a)]],["bytesToMessage",[$h͏_a => (bytesToMessage = $h͏_a)]]]],["./envelope.js", [["encodeEnvelope",[$h͏_a => (encodeEnvelope = $h͏_a)]],["decodeEnvelope",[$h͏_a => (decodeEnvelope = $h͏_a)]]]],["./bus-daemon-rust-xs-powers.js", [["makeXsFilePowers",[$h͏_a => (makeXsFilePowers = $h͏_a)]],["makeXsCryptoPowers",[$h͏_a => (makeXsCryptoPowers = $h͏_a)]]]],["./debug-session.js", [["makeDebugSession",[$h͏_a => (makeDebugSession = $h͏_a)]]]],["./debugger.js", [["makeDebugger",[$h͏_a => (makeDebugger = $h͏_a)]]]]]);
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -35743,7 +36727,10 @@ if (typeof globalThis.setTimeout === 'undefined') {
   /** @type {Set<number>} */
   const activeTimers = new Set();
 
-  globalThis.setTimeout = (/** @type {Function} */ fn, /** @type {number} */ _ms) => {
+  globalThis.setTimeout = (
+    /** @type {Function} */ fn,
+    /** @type {number} */ _ms,
+  ) => {
     const id = nextTimerId;
     nextTimerId += 1;
     activeTimers.add(id);
@@ -35786,7 +36773,10 @@ if (typeof globalThis.URL === 'undefined') {
       this.host = rest;
       this.hostname = rest;
       this.pathname = '/';
-    } else if (queryStart !== -1 && (pathStart === -1 || queryStart < pathStart)) {
+    } else if (
+      queryStart !== -1 &&
+      (pathStart === -1 || queryStart < pathStart)
+    ) {
       this.host = rest.slice(0, queryStart);
       this.hostname = this.host;
       this.pathname = '/';
@@ -35851,10 +36841,7 @@ if (typeof globalThis.URL === 'undefined') {
       /** @returns {string} */
       toString() {
         return params
-          .map(
-            ([k, v]) =>
-              `${encodeURIComponent(k)}=${encodeURIComponent(v)}`,
-          )
+          .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
           .join('&');
       },
     };
@@ -35909,7 +36896,50 @@ const config = harden({
 const filePowers = makeXsFilePowers();
 const cryptoPowers = makeXsCryptoPowers();
 
-const petStorePowers = makePetStoreMaker(filePowers, config);
+// Minimal in-memory shim of the SQLite-backed DaemonDatabase API used
+// by pet-store.js.  The XS bus daemon does not yet have a SQLite
+// table layer; until it does, pet-store entries live only in process
+// memory.  See designs/daemon-make-archive.md for the follow-up.
+const makeInMemoryPetStoreDb = () => {
+  /** @type {Map<string, Map<string, string>>} */
+  const tables = new Map();
+  const key = (storeNumber, storeType) => `${storeType}:${storeNumber}`;
+  const tableFor = (storeNumber, storeType) => {
+    const k = key(storeNumber, storeType);
+    let t = tables.get(k);
+    if (t === undefined) {
+      t = new Map();
+      tables.set(k, t);
+    }
+    return t;
+  };
+  return {
+    writePetStoreEntry: (storeNumber, storeType, name, formulaId) => {
+      tableFor(storeNumber, storeType).set(name, formulaId);
+    },
+    deletePetStoreEntry: (storeNumber, storeType, name) => {
+      tableFor(storeNumber, storeType).delete(name);
+    },
+    renamePetStoreEntry: (storeNumber, storeType, fromName, toName) => {
+      const t = tableFor(storeNumber, storeType);
+      const id = t.get(fromName);
+      t.delete(fromName);
+      if (id !== undefined) t.set(toName, id);
+    },
+    listPetStoreEntries: (storeNumber, storeType) => {
+      const t = tableFor(storeNumber, storeType);
+      return Array.from(t.entries(), ([name, formulaId]) => ({
+        name,
+        formulaId,
+      }));
+    },
+    deletePetStore: (storeNumber, storeType) => {
+      tables.delete(key(storeNumber, storeType));
+    },
+  };
+};
+
+const petStorePowers = makePetStoreMaker(makeInMemoryPetStoreDb());
 const daemonicPersistencePowers = makeDaemonicPersistencePowers(
   filePowers,
   cryptoPowers,
@@ -35962,11 +36992,18 @@ const workerExitResolvers = new Map();
 /** @type {Map<number, { dispatch: (msg: Record<string, unknown>) => void, abort: () => void }>} */
 const clientSessions = new Map();
 
+// Debug sessions per worker handle.
+/** @type {Map<number, import('./types.js').DebugSession>} */
+const debugSessions = new Map();
+
+// Pending debug-attach promises, keyed by nonce.
+/** @type {Map<number, { resolve: (debuggerRef: import('./types.js').Debugger) => void, reject: (reason: Error) => void, workerHandle: number }>} */
+const pendingDebugAttach = new Map();
+
 let nextNonce = 1;
 
 // Minimal CBOR helpers for spawn payloads (same as bus-daemon-node-powers.js)
 const CBOR_UINT = 0;
-const CBOR_BYTES = 2;
 const CBOR_TEXT = 3;
 const CBOR_ARRAY = 4;
 const CBOR_MAP = 5;
@@ -35996,46 +37033,28 @@ const cborHead = (buf, major, n) => {
 };
 
 /**
- * @param {string} platform - "separate" | "shared" | "node"
  * @param {string} command
  * @param {string[]} args
  * @returns {Uint8Array}
  */
-const encodeSpawnPayload = (platform, command, args) => {
+const encodeSpawnPayload = (command, args) => {
   /** @type {number[]} */
   const buf = [];
-  if (platform === 'shared') {
-    // Shared workers run in-process; no command/args needed.
-    cborHead(buf, CBOR_MAP, 1);
-    const platformKey = textEncoder.encode('platform');
-    cborHead(buf, CBOR_TEXT, platformKey.length);
-    for (let i = 0; i < platformKey.length; i += 1) buf.push(platformKey[i]);
-    const platformVal = textEncoder.encode(platform);
-    cborHead(buf, CBOR_TEXT, platformVal.length);
-    for (let i = 0; i < platformVal.length; i += 1) buf.push(platformVal[i]);
-  } else {
-    cborHead(buf, CBOR_MAP, 3);
-    const platformKey = textEncoder.encode('platform');
-    cborHead(buf, CBOR_TEXT, platformKey.length);
-    for (let i = 0; i < platformKey.length; i += 1) buf.push(platformKey[i]);
-    const platformVal = textEncoder.encode(platform);
-    cborHead(buf, CBOR_TEXT, platformVal.length);
-    for (let i = 0; i < platformVal.length; i += 1) buf.push(platformVal[i]);
-    const commandKey = textEncoder.encode('command');
-    cborHead(buf, CBOR_TEXT, commandKey.length);
-    for (let i = 0; i < commandKey.length; i += 1) buf.push(commandKey[i]);
-    const commandVal = textEncoder.encode(command);
-    cborHead(buf, CBOR_TEXT, commandVal.length);
-    for (let i = 0; i < commandVal.length; i += 1) buf.push(commandVal[i]);
-    const argsKey = textEncoder.encode('args');
-    cborHead(buf, CBOR_TEXT, argsKey.length);
-    for (let i = 0; i < argsKey.length; i += 1) buf.push(argsKey[i]);
-    cborHead(buf, CBOR_ARRAY, args.length);
-    for (const arg of args) {
-      const argVal = textEncoder.encode(arg);
-      cborHead(buf, CBOR_TEXT, argVal.length);
-      for (let i = 0; i < argVal.length; i += 1) buf.push(argVal[i]);
-    }
+  cborHead(buf, CBOR_MAP, 2);
+  const commandKey = textEncoder.encode('command');
+  cborHead(buf, CBOR_TEXT, commandKey.length);
+  for (let i = 0; i < commandKey.length; i += 1) buf.push(commandKey[i]);
+  const commandVal = textEncoder.encode(command);
+  cborHead(buf, CBOR_TEXT, commandVal.length);
+  for (let i = 0; i < commandVal.length; i += 1) buf.push(commandVal[i]);
+  const argsKey = textEncoder.encode('args');
+  cborHead(buf, CBOR_TEXT, argsKey.length);
+  for (let i = 0; i < argsKey.length; i += 1) buf.push(argsKey[i]);
+  cborHead(buf, CBOR_ARRAY, args.length);
+  for (const arg of args) {
+    const argVal = textEncoder.encode(arg);
+    cborHead(buf, CBOR_TEXT, argVal.length);
+    for (let i = 0; i < argVal.length; i += 1) buf.push(argVal[i]);
   }
   return new Uint8Array(buf);
 };
@@ -36069,13 +37088,8 @@ const decodeCborInt = data => {
  * @param {CapTpConnectionRegistrar} [capTpConnectionRegistrar]
  * @param {string[]} [_trustedShims]
  * @param {string} [_label]
- * @param {string} [platform] - "separate" | "shared" | "node"
+ * @param {'locked' | 'node'} [kind]
  */
-// defaultPlatform is used by makeWorker but is defined inside
-// makeDaemonCore's closure.  For the XS daemon bootstrap it
-// defaults to "separate" but can be overridden via env var.
-const defaultPlatform = hostGetEnv('ENDO_DEFAULT_PLATFORM') || 'separate';
-
 const makeWorker = async (
   workerId,
   daemonWorkerFacet,
@@ -36084,7 +37098,7 @@ const makeWorker = async (
   capTpConnectionRegistrar = undefined,
   _trustedShims = undefined,
   _label = undefined,
-  platform = undefined,
+  kind = undefined,
 ) => {
   await Promise.all([
     filePowers.makePath(filePowers.joinPath(statePath, 'worker', workerId)),
@@ -36093,25 +37107,20 @@ const makeWorker = async (
     ),
   ]);
 
-  // Resolve the platform to a spawn payload.
-  // - "shared": in-process XS worker, no command/args needed.
-  // - "node": use ENDO_NODE_WORKER_BIN for Node.js caplets.
-  // - "separate" or absent: use ENDO_WORKER_BIN (XS worker binary).
-  const effectivePlatform = platform || defaultPlatform;
-  hostTrace(`makeWorker: platform=${effectivePlatform} nodeWorkerBin=${endoNodeWorkerBin} workerBin=${endoWorkerBin}`);
-  let command = '';
-  let args = [];
-  if (effectivePlatform === 'shared') {
-    // No command/args needed for in-process workers.
-  } else if (effectivePlatform === 'node' && endoNodeWorkerBin) {
-    const workerParts = endoNodeWorkerBin.split(/\s+/).filter(Boolean);
-    command = workerParts[0];
-    args = workerParts.slice(1);
+  // For kind === 'node', use ENDO_NODE_WORKER_BIN so that unconfined
+  // and bundle caplets run in a Node.js process. Otherwise use
+  // ENDO_WORKER_BIN (the XS worker binary).
+  hostTrace(
+    `makeWorker: kind=${kind} nodeWorkerBin=${endoNodeWorkerBin} workerBin=${endoWorkerBin}`,
+  );
+  let workerParts;
+  if (kind === 'node' && endoNodeWorkerBin) {
+    workerParts = endoNodeWorkerBin.split(/\s+/).filter(Boolean);
   } else {
-    const workerParts = (endoWorkerBin || 'node').split(/\s+/);
-    command = workerParts[0];
-    args = workerParts.slice(1);
+    workerParts = (endoWorkerBin || 'node').split(/\s+/);
   }
+  const command = workerParts[0];
+  const args = workerParts.slice(1);
 
   const nonce = nextNonce;
   nextNonce += 1;
@@ -36122,7 +37131,7 @@ const makeWorker = async (
     );
   pendingSpawns.set(nonce, { resolve: resolveSpawn });
 
-  const payloadBuf = encodeSpawnPayload(effectivePlatform, command, args);
+  const payloadBuf = encodeSpawnPayload(command, args);
   sendEnvelope(0, 'spawn', payloadBuf, nonce);
 
   hostTrace(`Endo worker spawn requested for ${workerId} (nonce=${nonce})`);
@@ -36145,7 +37154,9 @@ const makeWorker = async (
   /** @type {import('@endo/stream').Writer<Uint8Array>} */
   const envelopeBytesWriter = harden({
     async next(/** @type {Uint8Array} */ chunk) {
-      hostTrace(`daemon-xs: SEND to worker handle=${workerHandle} bytes=${chunk.length}`);
+      hostTrace(
+        `daemon-xs: SEND to worker handle=${workerHandle} bytes=${chunk.length}`,
+      );
       sendEnvelope(workerHandle, 'deliver', chunk);
       return harden({ done: false, value: undefined });
     },
@@ -36193,415 +37204,55 @@ const makeWorker = async (
   return { workerTerminated, workerDaemonFacet };
 };
 
-// ---------------------------------------------------------------------------
-// Metering control powers
-// ---------------------------------------------------------------------------
-
-/** @type {Map<number, { resolve: (env: import('./envelope.js').Envelope) => void }>} */
-const pendingControlRequests = new Map();
-
 /**
- * Encode a CBOR map with a single "handle" key.
- * @param {number} handle
- * @returns {Uint8Array}
+ * Attach a debugger to a running worker.
+ * Sends a `debug-attach` envelope and waits for the worker to
+ * acknowledge. Returns a Debugger exo remotable over CapTP.
+ *
+ * @param {number} workerHandle
+ * @returns {Promise<import('./types.js').Debugger>}
  */
-const encodeMeterHandlePayload = handle => {
-  /** @type {number[]} */
-  const buf = [];
-  cborHead(buf, CBOR_MAP, 1);
-  const key = textEncoder.encode('handle');
-  cborHead(buf, CBOR_TEXT, key.length);
-  for (let i = 0; i < key.length; i += 1) buf.push(key[i]);
-  cborHead(buf, CBOR_UINT, handle);
-  return new Uint8Array(buf);
-};
-
-/**
- * @param {number[]} buf
- * @param {string} key
- * @param {number} value
- */
-const cborAppendKeyUint = (buf, key, value) => {
-  const k = textEncoder.encode(key);
-  cborHead(buf, CBOR_TEXT, k.length);
-  for (let i = 0; i < k.length; i += 1) buf.push(k[i]);
-  cborHead(buf, CBOR_UINT, value);
-};
-
-/**
- * Send a control verb and await the response envelope.
- * @param {string} verb
- * @param {Uint8Array} payload
- * @returns {Promise<import('./envelope.js').Envelope>}
- */
-const sendControlRequest = (verb, payload) => {
+const attachDebugger = workerHandle => {
+  if (debugSessions.has(workerHandle)) {
+    const session = /** @type {import('./types.js').DebugSession} */ (
+      debugSessions.get(workerHandle)
+    );
+    return Promise.resolve(makeDebugger(session));
+  }
   const nonce = nextNonce;
   nextNonce += 1;
-  const { promise, resolve } =
-    /** @type {import('@endo/promise-kit').PromiseKit<import('./envelope.js').Envelope>} */ (
+  const { promise, resolve, reject } =
+    /** @type {import('@endo/promise-kit').PromiseKit<import('./types.js').Debugger>} */ (
       makePromiseKit()
     );
-  pendingControlRequests.set(nonce, { resolve });
-  sendEnvelope(0, verb, payload, nonce);
+  pendingDebugAttach.set(nonce, { resolve, reject, workerHandle });
+  sendEnvelope(workerHandle, 'debug-attach', undefined, nonce);
+  hostTrace(
+    `daemon-xs: debug-attach sent handle=${workerHandle} nonce=${nonce}`,
+  );
   return promise;
 };
+harden(attachDebugger);
 
 /**
- * Query meter state for a worker handle.
+ * Detach a debugger from a running worker.
+ *
  * @param {number} workerHandle
- * @returns {Promise<Record<string, unknown>>}
  */
-const meterQuery = async workerHandle => {
-  const response = await sendControlRequest(
-    'meter-query',
-    encodeMeterHandlePayload(workerHandle),
-  );
-  // Response payload is a CBOR map — pass through as raw bytes.
-  // The caller (daemon core) can interpret it via CapTP.
-  return { verb: response.verb, payload: response.payload };
-};
-
-/**
- * Reset accumulated meter state for a worker.
- * @param {number} workerHandle
- * @returns {Promise<void>}
- */
-const meterReset = async workerHandle => {
-  await sendControlRequest(
-    'meter-reset',
-    encodeMeterHandlePayload(workerHandle),
-  );
-};
-
-/**
- * Set quota metering mode for a worker.
- * @param {number} workerHandle
- * @param {number} hardLimit
- * @param {number} budget
- * @returns {Promise<void>}
- */
-const meterSetQuota = async (workerHandle, hardLimit, budget) => {
-  /** @type {number[]} */
-  const buf = [];
-  cborHead(buf, CBOR_MAP, 3);
-  cborAppendKeyUint(buf, 'handle', workerHandle);
-  cborAppendKeyUint(buf, 'hardLimit', hardLimit);
-  cborAppendKeyUint(buf, 'budget', budget);
-  await sendControlRequest('meter-set-quota', new Uint8Array(buf));
-};
-
-/**
- * Set rate-limited metering mode for a worker.
- * @param {number} workerHandle
- * @param {number} hardLimit
- * @param {number} rate
- * @param {number} burst
- * @returns {Promise<void>}
- */
-const meterSetRate = async (workerHandle, hardLimit, rate, burst) => {
-  /** @type {number[]} */
-  const buf = [];
-  cborHead(buf, CBOR_MAP, 4);
-  cborAppendKeyUint(buf, 'handle', workerHandle);
-  cborAppendKeyUint(buf, 'hardLimit', hardLimit);
-  cborAppendKeyUint(buf, 'rate', rate);
-  cborAppendKeyUint(buf, 'burst', burst);
-  await sendControlRequest('meter-set-rate', new Uint8Array(buf));
-};
-
-/**
- * Refill a worker's metering budget.
- * @param {number} workerHandle
- * @param {number} amount
- * @returns {Promise<Record<string, unknown>>}
- */
-const meterRefill = async (workerHandle, amount) => {
-  /** @type {number[]} */
-  const buf = [];
-  cborHead(buf, CBOR_MAP, 2);
-  cborAppendKeyUint(buf, 'handle', workerHandle);
-  cborAppendKeyUint(buf, 'amount', amount);
-  const response = await sendControlRequest(
-    'meter-refill',
-    new Uint8Array(buf),
-  );
-  return { verb: response.verb, payload: response.payload };
-};
-
-// ---------------------------------------------------------------------------
-// CAS control powers
-// ---------------------------------------------------------------------------
-
-/**
- * Store bytes in the CAS via the supervisor.
- * @param {Uint8Array} data
- * @param {string} [contentType]
- * @returns {Promise<string>} hex SHA-256 hash
- */
-const casStore = async (data, contentType = 'blob') => {
-  /** @type {number[]} */
-  const buf = [];
-  cborHead(buf, CBOR_MAP, 2);
-  cborHead(buf, CBOR_TEXT, 4);
-  buf.push(...textEncoder.encode('data'));
-  cborHead(buf, CBOR_BYTES, data.length);
-  for (let i = 0; i < data.length; i += 1) {
-    buf.push(data[i]);
+const detachDebugger = workerHandle => {
+  const session = debugSessions.get(workerHandle);
+  if (!session) {
+    return;
   }
-  cborHead(buf, CBOR_TEXT, 4);
-  buf.push(...textEncoder.encode('type'));
-  const typeBytes = textEncoder.encode(contentType);
-  cborHead(buf, CBOR_TEXT, typeBytes.length);
-  buf.push(...typeBytes);
-  const response = await sendControlRequest(
-    'cas-store',
-    new Uint8Array(buf),
-  );
-  // response payload is CBOR map {"hash": <text>}
-  return decodeCborText(response.payload, 'hash');
+  debugSessions.delete(workerHandle);
+  const nonce = nextNonce;
+  nextNonce += 1;
+  sendEnvelope(workerHandle, 'debug-detach', undefined, nonce);
+  hostTrace(`daemon-xs: debug-detach sent handle=${workerHandle}`);
 };
+harden(detachDebugger);
 
-/**
- * Fetch content by hash from the CAS.
- * @param {string} hash
- * @returns {Promise<Uint8Array>}
- */
-const casFetch = async hash => {
-  const response = await sendControlRequest(
-    'cas-fetch',
-    encodeCborHashPayload(hash),
-  );
-  return decodeCborBytes(response.payload, 'data');
-};
-
-/**
- * Check whether a hash exists in the CAS.
- * @param {string} hash
- * @returns {Promise<boolean>}
- */
-const casHas = async hash => {
-  const response = await sendControlRequest(
-    'cas-has',
-    encodeCborHashPayload(hash),
-  );
-  return decodeCborBool(response.payload, 'exists');
-};
-
-/**
- * Retain a CAS entry (increment ref count). Fire-and-forget.
- * @param {string} hash
- */
-const casRetain = hash => {
-  sendEnvelope(0, 'cas-retain', encodeCborHashPayload(hash), 0);
-};
-
-/**
- * Release a CAS entry (decrement ref count). Fire-and-forget.
- * @param {string} hash
- */
-const casRelease = hash => {
-  sendEnvelope(0, 'cas-release', encodeCborHashPayload(hash), 0);
-};
-
-/**
- * Store a tree (JSON bytes) in the CAS.
- * @param {Uint8Array} treeJson
- * @returns {Promise<string>} tree hash
- */
-const casStoreTree = async treeJson => {
-  const response = await sendControlRequest(
-    'cas-store-tree',
-    treeJson,
-  );
-  return decodeCborText(response.payload, 'hash');
-};
-
-// CBOR mini-helpers for CAS payloads.
-
-/**
- * Encode CBOR map {"hash": <text>}.
- * @param {string} hash
- * @returns {Uint8Array}
- */
-const encodeCborHashPayload = hash => {
-  /** @type {number[]} */
-  const buf = [];
-  cborHead(buf, CBOR_MAP, 1);
-  cborHead(buf, CBOR_TEXT, 4);
-  buf.push(...textEncoder.encode('hash'));
-  const hashBytes = textEncoder.encode(hash);
-  cborHead(buf, CBOR_TEXT, hashBytes.length);
-  buf.push(...hashBytes);
-  return new Uint8Array(buf);
-};
-
-/**
- * Decode a text value from a CBOR map by key.
- * @param {Uint8Array} payload
- * @param {string} key
- * @returns {string}
- */
-const decodeCborText = (payload, key) => {
-  // Minimal CBOR map decoder — find the key, read text value.
-  const view = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
-  let offset = 0;
-  // Read map header.
-  const mapLen = readCborHead(view, offset);
-  offset = mapLen.offset;
-  for (let i = 0; i < mapLen.value; i += 1) {
-    const k = readCborTextAt(payload, view, offset);
-    offset = k.offset;
-    if (k.text === key) {
-      const v = readCborTextAt(payload, view, offset);
-      return v.text;
-    }
-    // Skip value.
-    offset = skipCborValue(view, payload, offset);
-  }
-  throw Error(`key "${key}" not found in CBOR map`);
-};
-
-/**
- * Decode a bytes value from a CBOR map by key.
- * @param {Uint8Array} payload
- * @param {string} key
- * @returns {Uint8Array}
- */
-const decodeCborBytes = (payload, key) => {
-  const view = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
-  let offset = 0;
-  const mapLen = readCborHead(view, offset);
-  offset = mapLen.offset;
-  for (let i = 0; i < mapLen.value; i += 1) {
-    const k = readCborTextAt(payload, view, offset);
-    offset = k.offset;
-    if (k.text === key) {
-      const head = readCborHead(view, offset);
-      return payload.slice(head.offset, head.offset + head.value);
-    }
-    offset = skipCborValue(view, payload, offset);
-  }
-  throw Error(`key "${key}" not found in CBOR map`);
-};
-
-/**
- * Decode a boolean value from a CBOR map by key.
- * @param {Uint8Array} payload
- * @param {string} key
- * @returns {boolean}
- */
-const decodeCborBool = (payload, key) => {
-  const view = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
-  let offset = 0;
-  const mapLen = readCborHead(view, offset);
-  offset = mapLen.offset;
-  for (let i = 0; i < mapLen.value; i += 1) {
-    const k = readCborTextAt(payload, view, offset);
-    offset = k.offset;
-    if (k.text === key) {
-      // CBOR true = 0xf5, false = 0xf4.
-      return payload[offset] === 0xf5;
-    }
-    offset = skipCborValue(view, payload, offset);
-  }
-  throw Error(`key "${key}" not found in CBOR map`);
-};
-
-/**
- * Read CBOR head at offset, return {value, offset after head}.
- * @param {DataView} view
- * @param {number} offset
- * @returns {{value: number, offset: number}}
- */
-const readCborHead = (view, offset) => {
-  const first = view.getUint8(offset);
-  const additional = first & 0x1f;
-  if (additional < 24) {
-    return { value: additional, offset: offset + 1 };
-  }
-  if (additional === 24) {
-    return { value: view.getUint8(offset + 1), offset: offset + 2 };
-  }
-  if (additional === 25) {
-    return { value: view.getUint16(offset + 1), offset: offset + 3 };
-  }
-  if (additional === 26) {
-    return { value: view.getUint32(offset + 1), offset: offset + 5 };
-  }
-  // additional === 27 — 8-byte uint, but we truncate to Number.
-  const hi = view.getUint32(offset + 1);
-  const lo = view.getUint32(offset + 5);
-  return { value: hi * 0x100000000 + lo, offset: offset + 9 };
-};
-
-/**
- * Read a CBOR text string at offset.
- * @param {Uint8Array} payload
- * @param {DataView} view
- * @param {number} offset
- * @returns {{text: string, offset: number}}
- */
-const readCborTextAt = (payload, view, offset) => {
-  const head = readCborHead(view, offset);
-  const text = textDecoder.decode(
-    payload.slice(head.offset, head.offset + head.value),
-  );
-  return { text, offset: head.offset + head.value };
-};
-
-/**
- * Skip one CBOR value at offset.
- * @param {DataView} view
- * @param {Uint8Array} payload
- * @param {number} offset
- * @returns {number} offset after the value
- */
-const skipCborValue = (view, payload, offset) => {
-  const first = view.getUint8(offset);
-  const major = first >> 5;
-  const head = readCborHead(view, offset);
-  if (major <= 1) {
-    // uint or negint — head is the entire value.
-    return head.offset;
-  }
-  if (major === 2 || major === 3) {
-    // bytes or text — head.value is the length.
-    return head.offset + head.value;
-  }
-  if (major === 4) {
-    // array.
-    let pos = head.offset;
-    for (let i = 0; i < head.value; i += 1) {
-      pos = skipCborValue(view, payload, pos);
-    }
-    return pos;
-  }
-  if (major === 5) {
-    // map.
-    let pos = head.offset;
-    for (let i = 0; i < head.value * 2; i += 1) {
-      pos = skipCborValue(view, payload, pos);
-    }
-    return pos;
-  }
-  // major 7 — simple value (bool, null, etc.) — already consumed by head.
-  return head.offset;
-};
-
-const controlPowers = harden({
-  makeWorker,
-  meterQuery,
-  meterReset,
-  meterSetQuota,
-  meterSetRate,
-  meterRefill,
-  casStore,
-  casFetch,
-  casHas,
-  casRetain,
-  casRelease,
-  casStoreTree,
-});
+const controlPowers = harden({ makeWorker, attachDebugger, detachDebugger });
 
 // ---------------------------------------------------------------------------
 // Assemble DaemonicPowers
@@ -36624,8 +37275,8 @@ const { promise: cancelled, reject: cancel } =
 
 let shouldTerminate = false;
 
-/** @type {import('./daemon.js').DaemonResult | null} */
-let daemonResult = null;
+/** @type {Awaited<ReturnType<typeof import('./daemon.js').makeDaemon>> | null} */
+let _daemonResult = null;
 
 const main = async () => {
   const daemonLabel = `daemon[xs] on PID ${pid}`;
@@ -36637,13 +37288,19 @@ const main = async () => {
   await daemonicPersistencePowers.initializePersistence();
 
   const gcEnabled = hostGetEnv('ENDO_GC') === '1';
-  const result = await makeDaemon(powers, daemonLabel, cancel, cancelled, {}, {
-    defaultPlatform,
-    gcEnabled,
-  });
-  daemonResult = result;
-  const { endoBootstrap, cancelGracePeriod, capTpConnectionRegistrar } =
-    result;
+  const result = await makeDaemon(
+    powers,
+    daemonLabel,
+    cancel,
+    cancelled,
+    {},
+    {
+      defaultWorkerKind: 'locked',
+      gcEnabled,
+    },
+  );
+  _daemonResult = result;
+  const { endoBootstrap, cancelGracePeriod, capTpConnectionRegistrar } = result;
 
   // Persist root formula identifier.
   const host = await E(endoBootstrap).host();
@@ -36656,34 +37313,19 @@ const main = async () => {
   globalThis.__endoBootstrap = endoBootstrap;
   globalThis.__cancelGracePeriod = cancelGracePeriod;
 
-  // Request supervisor to listen on Unix socket (CBOR map).
-  // Build the listen payload using inline CBOR encoding.
-  // (The cborAppendHead/cborAppendText helpers are in the same
-  // scope but XS may not retain them across async continuations
-  // inside eval; use sendEnvelope which is on globalThis.)
-  const listenPayload = (() => {
-    const CBOR_MAP_MAJOR = 5;
-    const CBOR_TEXT_MAJOR = 3;
-    const buf = [];
-    // CBOR map with 1 entry
-    buf.push((CBOR_MAP_MAJOR << 5) | 1);
-    // key: "path"
-    const keyBytes = new TextEncoder().encode('path');
-    buf.push((CBOR_TEXT_MAJOR << 5) | keyBytes.length);
-    for (let i = 0; i < keyBytes.length; i += 1) buf.push(keyBytes[i]);
-    // value: sockPath
-    const valBytes = new TextEncoder().encode(sockPath);
-    if (valBytes.length < 24) {
-      buf.push((CBOR_TEXT_MAJOR << 5) | valBytes.length);
-    } else if (valBytes.length <= 0xff) {
-      buf.push((CBOR_TEXT_MAJOR << 5) | 24, valBytes.length);
-    } else {
-      buf.push((CBOR_TEXT_MAJOR << 5) | 25, (valBytes.length >> 8) & 0xff, valBytes.length & 0xff);
-    }
-    for (let i = 0; i < valBytes.length; i += 1) buf.push(valBytes[i]);
-    return new Uint8Array(buf);
-  })();
-  sendEnvelope(0, 'listen-path', listenPayload, 0);
+  // Request the supervisor to listen on a Unix socket.  The verb is
+  // `listen-path` and the payload is a CBOR map with a single
+  // `path` entry pointing to the socket location.
+  /** @type {number[]} */
+  const listenBuf = [];
+  cborHead(listenBuf, CBOR_MAP, 1);
+  const pathKey = textEncoder.encode('path');
+  cborHead(listenBuf, CBOR_TEXT, pathKey.length);
+  for (let i = 0; i < pathKey.length; i += 1) listenBuf.push(pathKey[i]);
+  const pathVal = textEncoder.encode(sockPath);
+  cborHead(listenBuf, CBOR_TEXT, pathVal.length);
+  for (let i = 0; i < pathVal.length; i += 1) listenBuf.push(pathVal[i]);
+  sendEnvelope(0, 'listen-path', new Uint8Array(listenBuf), 0);
 
   // Update endo.pid with our PID.
   const pidPath = filePowers.joinPath(ephemeralStatePath, 'endo.pid');
@@ -36715,9 +37357,10 @@ const silentReject = _err => {};
  */
 const setupClientSession = connectionHandle => {
   const bootstrap = globalThis.__endoBootstrap;
-  const registrar = globalThis.__capTpRegistrar;
   if (!bootstrap) {
-    hostTrace(`daemon-xs: client connect before daemon ready (handle=${connectionHandle})`);
+    hostTrace(
+      `daemon-xs: client connect before daemon ready (handle=${connectionHandle})`,
+    );
     return;
   }
 
@@ -36727,7 +37370,9 @@ const setupClientSession = connectionHandle => {
   const send = message => {
     const json = JSON.stringify(message);
     const bytes = textEncoder.encode(json);
-    hostTrace(`daemon-xs: client SEND handle=${connectionHandle} type=${message.type || '?'}`);
+    hostTrace(
+      `daemon-xs: client SEND handle=${connectionHandle} type=${message.type || '?'}`,
+    );
     sendEnvelope(connectionHandle, 'deliver', bytes);
   };
 
@@ -36774,37 +37419,6 @@ globalThis.handleCommand = harden(bytes => {
           nonce: env.nonce,
         }),
       );
-      return;
-    }
-    const pendingCtl = pendingControlRequests.get(env.nonce);
-    if (pendingCtl) {
-      pendingControlRequests.delete(env.nonce);
-      pendingCtl.resolve(
-        /** @type {import('./envelope.js').Envelope} */ ({
-          handle: env.handle,
-          verb: 'error',
-          payload: env.payload,
-          nonce: env.nonce,
-        }),
-      );
-    }
-    return;
-  }
-
-  // Metering and CAS control responses.
-  if (
-    (env.verb === 'meter-state' ||
-      env.verb === 'meter-reset-ack' ||
-      env.verb === 'meter-refill-ack' ||
-      env.verb === 'cas-stored' ||
-      env.verb === 'cas-content' ||
-      env.verb === 'cas-exists') &&
-    env.nonce > 0
-  ) {
-    const pending = pendingControlRequests.get(env.nonce);
-    if (pending) {
-      pendingControlRequests.delete(env.nonce);
-      pending.resolve(env);
     }
     return;
   }
@@ -36816,7 +37430,9 @@ globalThis.handleCommand = harden(bytes => {
     // Check if this is from a worker.
     const workerEntry = workerWriters.get(handle);
     if (workerEntry) {
-      hostTrace(`daemon-xs: RECV from worker handle=${handle} bytes=${env.payload.length}`);
+      hostTrace(
+        `daemon-xs: RECV from worker handle=${handle} bytes=${env.payload.length}`,
+      );
       void workerEntry.writer.next(env.payload);
       return;
     }
@@ -36828,11 +37444,14 @@ globalThis.handleCommand = harden(bytes => {
       // extremely slow for buffers over ~100KB, causing the daemon to
       // hang on large CapTP round-trips (e.g. storeBlob with bundled
       // source code).
-      const json = env.payload.length > 8192
-        ? hostDecodeUtf8(env.payload)
-        : textDecoder.decode(env.payload);
+      const json =
+        env.payload.length > 8192
+          ? hostDecodeUtf8(env.payload)
+          : textDecoder.decode(env.payload);
       const message = JSON.parse(json);
-      hostTrace(`daemon-xs: client deliver handle=${handle} type=${message.type || '?'} method=${message.method || '?'}`);
+      hostTrace(
+        `daemon-xs: client deliver handle=${handle} type=${message.type || '?'} method=${message.method || '?'}`,
+      );
       try {
         clientEntry.dispatch(message);
       } catch (_e) {
@@ -36845,9 +37464,47 @@ globalThis.handleCommand = harden(bytes => {
     return;
   }
 
+  // Debug traffic from a worker.
+  if (env.verb === 'debug') {
+    const session = debugSessions.get(env.handle);
+    if (session) {
+      session.feedXml(env.payload);
+    } else {
+      hostTrace(`daemon-xs: debug from unknown handle=${env.handle}`);
+    }
+    return;
+  }
+
+  // Debug attach acknowledgement.
+  if (env.verb === 'debug-attached' && env.nonce > 0) {
+    const pending = pendingDebugAttach.get(env.nonce);
+    if (pending) {
+      pendingDebugAttach.delete(env.nonce);
+      const { workerHandle } = pending;
+
+      /** @param {Uint8Array} xmlBytes */
+      const sendToWorker = xmlBytes => {
+        sendEnvelope(workerHandle, 'debug', xmlBytes);
+      };
+      const session = makeDebugSession(sendToWorker);
+      debugSessions.set(workerHandle, session);
+      const dbg = makeDebugger(session);
+      hostTrace(`daemon-xs: debug-attached handle=${workerHandle}`);
+      pending.resolve(dbg);
+    }
+    return;
+  }
+
+  // Debug detach acknowledgement.
+  if (env.verb === 'debug-detached') {
+    hostTrace(`daemon-xs: debug-detached handle=${env.handle}`);
+    return;
+  }
+
   // Worker exit notification.
   if (env.verb === 'exited') {
     const handle = env.handle;
+    debugSessions.delete(handle);
     const resolve = workerExitResolvers.get(handle);
     if (resolve) {
       workerExitResolvers.delete(handle);
@@ -36877,12 +37534,14 @@ globalThis.handleCommand = harden(bytes => {
   }
 
   // Socket listener acknowledgement.
-  if (env.verb === 'listening-path') {
+  if (env.verb === 'listening') {
     hostTrace('daemon-xs: supervisor reports socket listening');
     return;
   }
 
-  hostTrace(`daemon-xs: unhandled envelope verb=${env.verb} handle=${env.handle}`);
+  hostTrace(
+    `daemon-xs: unhandled envelope verb=${env.verb} handle=${env.handle}`,
+  );
 });
 
 /** Expose terminate flag for Rust to check. */
@@ -36890,7 +37549,9 @@ globalThis.__shouldTerminate = harden(() => shouldTerminate);
 
 // Kick off initialization.
 void main().catch(error => {
-  hostTrace(`daemon-xs: startup error: ${error.message}\n${error.stack || 'no stack'}`);
+  hostTrace(
+    `daemon-xs: startup error: ${error.message}\n${error.stack || 'no stack'}`,
+  );
   shouldTerminate = true;
 });
 })()
