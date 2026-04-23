@@ -280,24 +280,55 @@ const config = harden({
 const filePowers = makeXsFilePowers();
 const cryptoPowers = makeXsCryptoPowers();
 
-// SQLite parity with the Node-supervised daemon.  The shared
-// daemonDb (opened via the XS-side better-sqlite3 shim that
-// routes prepared-statement calls through Rust's rusqlite host
-// functions) backs both the pet-store's DaemonDatabase contract
-// and the persistence powers' formula/agent-key/retention
-// queries, so a single state directory can be opened by either
-// supervisor with no migration step.
-//
-// The actual database open requires statePath to exist, so we
-// defer construction until inside main() where
-// initializePersistence has run.
+// Minimal in-memory shim of the SQLite-backed DaemonDatabase API used
+// by pet-store.js.  The XS bus daemon does not yet have a SQLite
+// table layer; until it does, pet-store entries live only in process
+// memory.  See designs/daemon-make-archive.md for the follow-up.
+const makeInMemoryPetStoreDb = () => {
+  /** @type {Map<string, Map<string, string>>} */
+  const tables = new Map();
+  const key = (storeNumber, storeType) => `${storeType}:${storeNumber}`;
+  const tableFor = (storeNumber, storeType) => {
+    const k = key(storeNumber, storeType);
+    let t = tables.get(k);
+    if (t === undefined) {
+      t = new Map();
+      tables.set(k, t);
+    }
+    return t;
+  };
+  return {
+    writePetStoreEntry: (storeNumber, storeType, name, formulaId) => {
+      tableFor(storeNumber, storeType).set(name, formulaId);
+    },
+    deletePetStoreEntry: (storeNumber, storeType, name) => {
+      tableFor(storeNumber, storeType).delete(name);
+    },
+    renamePetStoreEntry: (storeNumber, storeType, fromName, toName) => {
+      const t = tableFor(storeNumber, storeType);
+      const id = t.get(fromName);
+      t.delete(fromName);
+      if (id !== undefined) t.set(toName, id);
+    },
+    listPetStoreEntries: (storeNumber, storeType) => {
+      const t = tableFor(storeNumber, storeType);
+      return Array.from(t.entries(), ([name, formulaId]) => ({
+        name,
+        formulaId,
+      }));
+    },
+    deletePetStore: (storeNumber, storeType) => {
+      tables.delete(key(storeNumber, storeType));
+    },
+  };
+};
 
-/** @type {ReturnType<typeof makeDaemonDatabase> | null} */
-let daemonDb = null;
-/** @type {ReturnType<typeof makePetStoreMaker> | null} */
-let petStorePowers = null;
-/** @type {ReturnType<typeof makeDaemonicPersistencePowers> | null} */
-let daemonicPersistencePowers = null;
+const petStorePowers = makePetStoreMaker(makeInMemoryPetStoreDb());
+const daemonicPersistencePowers = makeDaemonicPersistencePowers(
+  filePowers,
+  cryptoPowers,
+  config,
+);
 
 // ---------------------------------------------------------------------------
 // Envelope I/O via issueCommand

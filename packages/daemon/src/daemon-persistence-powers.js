@@ -186,19 +186,158 @@ export const makeDaemonicPersistencePowers = (
     return makeSnapshotStore(rawStore);
   };
 
-  // Wrap synchronous database operations as async so that
-  // implementations using async I/O are not constrained.
+  /**
+   * @param {string} formulaNumber
+   */
+  const makeFormulaPath = formulaNumber => {
+    const { statePath } = config;
+    if (formulaNumber.length < 3) {
+      throw new TypeError(`Invalid formula number ${q(formulaNumber)}`);
+    }
+    const head = formulaNumber.slice(0, 2);
+    const tail = formulaNumber.slice(2);
+    const directory = filePowers.joinPath(statePath, 'formulas', head);
+    const file = filePowers.joinPath(directory, `${tail}.json`);
+    return harden({ directory, file });
+  };
+
+  /**
+   * @param {string} formulaNumber
+   * @returns {Promise<{ node: string, formula: Formula }>}
+   */
+  const readFormula = async formulaNumber => {
+    const { file: formulaPath } = makeFormulaPath(formulaNumber);
+    const formulaText = await filePowers.maybeReadFileText(formulaPath);
+    if (formulaText === undefined) {
+      throw new ReferenceError(`No reference exists at path ${formulaPath}`);
+    }
+    const formula = (() => {
+      try {
+        return JSON.parse(formulaText);
+      } catch (error) {
+        throw new TypeError(
+          `Corrupt description for reference in file ${formulaPath}: ${/** @type {Error} */ (error).message}`,
+        );
+      }
+    })();
+    // The filesystem layout does not store per-formula node information.
+    // Callers that need a node number fall back to the local node when
+    // this returns the empty string.
+    return { node: '', formula };
+  };
+
+  // Persist instructions for revival (this can be collected).
+  /** @type {DaemonicPersistencePowers['writeFormula']} */
+  const writeFormula = async (formulaNumber, _nodeNumber, formula) => {
+    const { directory, file } = makeFormulaPath(formulaNumber);
+    // TODO Take care to write atomically with a rename here.
+    await filePowers.makePath(directory);
+    await filePowers.writeFileText(file, `${q(formula)}\n`);
+  };
+
+  /** @type {DaemonicPersistencePowers['deleteFormula']} */
+  const deleteFormula = async formulaNumber => {
+    const { file } = makeFormulaPath(formulaNumber);
+    await filePowers.removePath(file);
+  };
+
+  /** @type {DaemonicPersistencePowers['listFormulas']} */
+  const listFormulas = async () => {
+    const formulasPath = filePowers.joinPath(config.statePath, 'formulas');
+    const heads = await filePowers.readDirectory(formulasPath).catch(error => {
+      if (error.message.startsWith('ENOENT: ')) {
+        return [];
+      }
+      throw error;
+    });
+    /** @type {Array<{ number: string, node: string }>} */
+    const records = [];
+    await Promise.all(
+      heads.map(async head => {
+        const headPath = filePowers.joinPath(formulasPath, head);
+        const files = await filePowers.readDirectory(headPath).catch(error => {
+          if (
+            error.message.startsWith('ENOTDIR: ') ||
+            error.message.startsWith('ENOENT: ')
+          ) {
+            return [];
+          }
+          throw error;
+        });
+        for (const file of files) {
+          if (file.endsWith('.json')) {
+            const tail = file.slice(0, -'.json'.length);
+            // Filesystem layout has no per-formula node directory; the
+            // caller fills in localNodeNumber when node is empty.
+            records.push({ number: `${head}${tail}`, node: '' });
+          }
+        }
+      }),
+    );
+    return records;
+  };
+
+  // Minimal in-memory shim of the SQLite-only tables (agent keys,
+  // retention, per-node formula listing) that the filesystem
+  // persistence does not persist.  State lives only in process
+  // memory; callers that need real durability should run with the
+  // SQLite daemon.
+  /** @type {Map<string, { publicKey: string, privateKey: string, agentId: string }>} */
+  const agentKeys = new Map();
+  /** @type {Map<string, string>} */
+  const remoteAgentKeys = new Map();
+  /** @type {Map<string, Set<string>>} */
+  const retention = new Map();
+
+  const listFormulaNumbersByNode = _nodeNumber => [];
+  const writeAgentKey = (publicKey, privateKey, agentId) => {
+    agentKeys.set(publicKey, { publicKey, privateKey, agentId });
+  };
+  const getAgentKey = publicKey => agentKeys.get(publicKey);
+  const hasAgentKey = publicKey => agentKeys.has(publicKey);
+  const listAgentKeys = () => Array.from(agentKeys.values());
+  const deleteAgentKey = publicKey => {
+    agentKeys.delete(publicKey);
+  };
+  const writeRemoteAgentKey = (publicKey, daemonNode) => {
+    remoteAgentKeys.set(publicKey, daemonNode);
+  };
+  const getRemoteAgentKey = publicKey => remoteAgentKeys.get(publicKey);
+  const retentionBucket = guestPublicKey => {
+    let s = retention.get(guestPublicKey);
+    if (s === undefined) {
+      s = new Set();
+      retention.set(guestPublicKey, s);
+    }
+    return s;
+  };
+  const writeRetention = (guestPublicKey, formulaNumber) => {
+    retentionBucket(guestPublicKey).add(formulaNumber);
+  };
+  const deleteRetention = (guestPublicKey, formulaNumber) => {
+    retentionBucket(guestPublicKey).delete(formulaNumber);
+  };
+  const listRetention = guestPublicKey =>
+    Array.from(retentionBucket(guestPublicKey), formulaNumber => ({
+      formulaNumber,
+    }));
+  const replaceRetention = (guestPublicKey, formulaNumbers) => {
+    retention.set(guestPublicKey, new Set(formulaNumbers));
+  };
+  const deleteAllRetention = guestPublicKey => {
+    retention.delete(guestPublicKey);
+  };
+
   return harden({
     statePath: config.statePath,
     initializePersistence,
     provideRootNonce,
     provideRootKeypair,
     makeContentStore,
-    readFormula: async formulaNumber => readFormula(formulaNumber),
-    writeFormula: async (formulaNumber, nodeNumber, formula) =>
-      writeFormula(formulaNumber, nodeNumber, formula),
-    deleteFormula: async formulaNumber => deleteFormula(formulaNumber),
-    listFormulas: async () => listFormulas(),
+    readFormula,
+    writeFormula,
+    deleteFormula,
+    listFormulas,
     listFormulaNumbersByNode,
     writeAgentKey,
     getAgentKey,
