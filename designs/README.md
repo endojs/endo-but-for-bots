@@ -75,10 +75,11 @@
 | [ocapn-noise-network](ocapn-noise-network.md) | 2026-02-14 | 2026-02-24 | Not Started |
 | [ocapn-tcp-for-test-extraction](ocapn-tcp-for-test-extraction.md) | 2026-02-14 | 2026-02-24 | Not Started |
 | [outliner-design-doc](outliner-design-doc.md) | 2026-03-17 | 2026-03-18 | In Progress |
+| [endor-tui](endor-tui.md) | 2026-04-23 | 2026-04-23 | Not Started |
 | [weblet-next](weblet-next.md) | 2026-03-24 | 2026-03-24 | Reference |
 | [workers-panel](workers-panel.md) | 2026-02-14 | 2026-02-24 | Not Started |
 
-**Totals:** 21 Complete/Implemented, 5 In Progress, 38 Not Started, 2 Proposed, 1 Active, 1 Reference, 1 Deprecated
+**Totals:** 21 Complete/Implemented, 5 In Progress, 39 Not Started, 2 Proposed, 1 Active, 1 Reference, 1 Deprecated
 
 ## Roadmap
 
@@ -362,6 +363,26 @@ Agents reachable from external messaging platforms via channel bridges.
 
 ---
 
+#### Milestone 6: Rust Daemon (`endor`)
+
+**Goal:** Begin the Rust re-implementation of the Endo daemon, targeting
+a terminal-first experience.
+Workers are still XS-based, but the host daemon, its bus, and its primary
+user interface move to Rust.
+
+| Design | Status | Notes |
+|--------|--------|-------|
+| endor-tui | Not Started | TUI entry point for `endor`: Chat UI in terminal idiom, and an integrated stepping debugger for XS workers (XS `mxDebug` protocol) |
+
+**Exit criterion:** `endor` runs as a second-seat daemon against the same
+state directory as the Node daemon, exposes a fully functional Chat TUI
+over its bus, and can attach to an XS worker's debugger.
+
+**Estimated duration (1 dev):** 10-14 weeks (research-heavy; Rust port
+includes codec, mailbox, supervisor, and terminal rendering substrates)
+
+---
+
 ### Size and Time Estimates
 
 #### Estimation Methodology
@@ -459,6 +480,7 @@ Recalibrated on 2026-03-02 using observed velocity from 15 active work days
 | endoclaw-browser | M-L | 1-1.5 weeks | 5 | Playwright-backed, origin-confined |
 | endoclaw-channel-bridges | M | 3-4 days | 5 | Vercel `chat` SDK adapters |
 | endoclaw-skill-registry | S-M | 2-3 days | 5 | Skills directory with capability declarations |
+| endor-tui | XL | 4-6 weeks | 6 | Rust TUI: ratatui/crossterm, concept-map of every Chat component, XS `mxDebug` debugger integration |
 
 #### Summary by Milestone
 
