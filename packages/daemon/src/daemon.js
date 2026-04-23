@@ -82,7 +82,7 @@ import {
 /** @import { Passable } from '@endo/pass-style' */
 /** @import { ERef, FarRef } from '@endo/eventual-send' */
 /** @import { PromiseKit } from '@endo/promise-kit' */
-/** @import { AgentDeferredTaskParams, Builtins, CapTpConnectionRegistrar, Context, Controller, DaemonCore, DaemonCoreExternal, DaemonicPowers, DeferredTasks, DirectoryFormula, EndoBootstrap, EndoDirectory, EndoFormula, EndoGateway, EndoGreeter, EndoGuest, EndoHost, EndoInspector, EndoNetwork, EndoPeer, EndoReadable, EndoWorker, EvalFormula, FarContext, Formula, FormulaIdentifier, FormulaNumber, FormulaMakerTable, FormulateResult, GuestFormula, HandleFormula, HostFormula, Invitation, InvitationDeferredTaskParams, InvitationFormula, KnownEndoInspectors, KnownPeersStore, LookupFormula, LoopbackNetworkFormula, MailboxStoreFormula, MailHubFormula, MakeArchiveFormula, MakeBundleFormula, MakeCapletDeferredTaskParams, MakeUnconfinedFormula, MarshalDeferredTaskParams, MessageFormula, Name, NameHub, NamePath, NameOrPath, NodeNumber, PetName, PeerFormula, PeerInfo, PetInspectorFormula, PetStore, PetStoreFormula, PromiseFormula, Provide, ReadableBlobFormula, ResolverFormula, Sha256, Specials, MarshalFormula, WeakMultimap, WorkerDaemonFacet, WorkerFormula, TimerFormula } from './types.js' */
+/** @import { AgentDeferredTaskParams, Builtins, CapTpConnectionRegistrar, Context, Controller, DaemonCore, DaemonCoreExternal, DaemonicPowers, DeferredTasks, DirectoryFormula, EndoBootstrap, EndoDirectory, EndoFormula, EndoGateway, EndoGreeter, EndoGuest, EndoHost, EndoInspector, EndoNetwork, EndoPeer, EndoReadable, EndoWorker, EvalFormula, FarContext, Formula, FormulaIdentifier, FormulaNumber, FormulaMakerTable, FormulateResult, GuestFormula, HandleFormula, HostFormula, Invitation, InvitationDeferredTaskParams, InvitationFormula, KnownEndoInspectors, KnownPeersStore, LookupFormula, LoopbackNetworkFormula, MailboxStoreFormula, MailHubFormula, MakeArchiveFormula, MakeCapletDeferredTaskParams, MakeUnconfinedFormula, MarshalDeferredTaskParams, MessageFormula, Name, NameHub, NamePath, NameOrPath, NodeNumber, PetName, PeerFormula, PeerInfo, PetInspectorFormula, PetStore, PetStoreFormula, PromiseFormula, Provide, ReadableBlobFormula, ResolverFormula, Sha256, Specials, MarshalFormula, WeakMultimap, WorkerDaemonFacet, WorkerFormula, TimerFormula } from './types.js' */
 
 /**
  * Creates a delayed promise that can be cancelled.
@@ -542,18 +542,6 @@ const makeDaemonCore = async (
         }
         return deps;
       }
-      case 'make-bundle': {
-        /** @type {Array<[string, FormulaIdentifier]>} */
-        const deps = [
-          ['worker', formula.worker],
-          ['powers', formula.powers],
-          ['bundle', formula.bundle],
-        ];
-        if (formula.cancelWithWorker) {
-          deps.push(['cancelWithWorker', formula.cancelWithWorker]);
-        }
-        return deps;
-      }
       case 'make-archive': {
         /** @type {Array<[string, FormulaIdentifier]>} */
         const deps = [
@@ -861,7 +849,7 @@ const makeDaemonCore = async (
       }
       // When a retainer's node worker is terminated by GC, also
       // terminate any cancelWithWorker (original XS worker) referenced
-      // by make-unconfined/make-bundle formulas on this worker.
+      // by make-unconfined/make-archive formulas on this worker.
       const terminatedId = formatId({
         number: /** @type {FormulaNumber} */ (workerId),
         node: localNodeNumber,
@@ -869,7 +857,7 @@ const makeDaemonCore = async (
       for (const formula of formulaForId.values()) {
         if (
           (formula.type === 'make-unconfined' ||
-            formula.type === 'make-bundle') &&
+            formula.type === 'make-archive') &&
           formula.worker === terminatedId &&
           formula.cancelWithWorker
         ) {
@@ -1353,47 +1341,6 @@ const makeDaemonCore = async (
     const powersP = provide(powersId);
     return E(/** @type {any} */ (workerDaemonFacet)).makeUnconfined(
       specifier,
-      // TODO fix type
-      /** @type {any} */ (powersP),
-      /** @type {any} */ (makeFarContext(context)),
-      env,
-    );
-  };
-
-  /**
-   * @param {string} workerId
-   * @param {string} powersId
-   * @param {string} bundleId
-   * @param {Record<string, string> | undefined} env
-   * @param {Context} context
-   */
-  const makeBundle = async (
-    workerId,
-    powersId,
-    bundleId,
-    env,
-    context,
-    cancelWithWorker,
-  ) => {
-    context.thisDiesIfThatDies(workerId);
-    context.thisDiesIfThatDies(powersId);
-    if (cancelWithWorker) {
-      context.thisDiesIfThatDies(cancelWithWorker);
-    }
-
-    const worker = await provide(
-      /** @type {FormulaIdentifier} */ (workerId),
-      'worker',
-    );
-    const workerDaemonFacet = workerDaemonFacets.get(worker);
-    assert(workerDaemonFacet, 'Cannot make caplet with non-worker');
-    const readableBundleP = provide(
-      /** @type {FormulaIdentifier} */ (bundleId),
-      'readable-blob',
-    );
-    const powersP = provide(/** @type {FormulaIdentifier} */ (powersId));
-    return E(/** @type {any} */ (workerDaemonFacet)).makeBundle(
-      readableBundleP,
       // TODO fix type
       /** @type {any} */ (powersP),
       /** @type {any} */ (makeFarContext(context)),
@@ -2342,17 +2289,6 @@ const makeDaemonCore = async (
         context,
         cancelWithWorker,
       ),
-    'make-bundle': (
-      {
-        worker: workerId,
-        powers: powersId,
-        bundle: bundleId,
-        env = {},
-        cancelWithWorker,
-      },
-      context,
-    ) =>
-      makeBundle(workerId, powersId, bundleId, env, context, cancelWithWorker),
     'make-archive': (
       {
         worker: workerId,
@@ -4070,7 +4006,7 @@ const makeDaemonCore = async (
   };
 
   /**
-   * Helper for `formulateUnconfined` and `formulateBundle`.
+   * Helper for `formulateUnconfined` and `formulateArchive`.
    * @param {FormulaIdentifier} hostAgentId
    * @param {FormulaIdentifier} hostHandleId
    * @param {DeferredTasks<MakeCapletDeferredTaskParams>} deferredTasks
@@ -4164,44 +4100,6 @@ const makeDaemonCore = async (
         worker: workerId,
         powers: powersId,
         specifier,
-        env,
-        ...(originalWorkerId ? { cancelWithWorker: originalWorkerId } : {}),
-      };
-      return formulate(capletFormulaNumber, formula);
-    });
-  };
-
-  /** @type {DaemonCore['formulateBundle']} */
-  const formulateBundle = async (
-    hostAgentId,
-    hostHandleId,
-    bundleId,
-    deferredTasks,
-    specifiedWorkerId,
-    specifiedPowersId,
-    env = {},
-    trustedShims = undefined,
-    workerLabel = undefined,
-  ) => {
-    return withFormulaGraphLock(async () => {
-      const { powersId, capletFormulaNumber, workerId, originalWorkerId } =
-        await formulateCapletDependencies(
-          hostAgentId,
-          hostHandleId,
-          deferredTasks,
-          specifiedWorkerId,
-          specifiedPowersId,
-          trustedShims,
-          workerLabel,
-          'node',
-        );
-
-      /** @type {MakeBundleFormula} */
-      const formula = {
-        type: 'make-bundle',
-        worker: workerId,
-        powers: powersId,
-        bundle: bundleId,
         env,
         ...(originalWorkerId ? { cancelWithWorker: originalWorkerId } : {}),
       };
@@ -4887,7 +4785,6 @@ const makeDaemonCore = async (
     formulateMarshalValue,
     formulateEval,
     formulateUnconfined,
-    formulateBundle,
     formulateArchive,
     formulateReadableBlob,
     checkinTree,
@@ -4952,9 +4849,13 @@ const makeDaemonCore = async (
       const { number: formulaNumber } = parseId(id);
       const formula = await getFormulaForId(id);
       if (
-        !['eval', 'lookup', 'make-unconfined', 'make-bundle', 'guest'].includes(
-          formula.type,
-        )
+        ![
+          'eval',
+          'lookup',
+          'make-unconfined',
+          'make-archive',
+          'guest',
+        ].includes(formula.type)
       ) {
         return makeInspector(formula.type, formulaNumber, harden({}));
       }
@@ -4990,12 +4891,12 @@ const makeDaemonCore = async (
             hostHandle: provide(formula.hostHandle, 'handle'),
           }),
         );
-      } else if (formula.type === 'make-bundle') {
+      } else if (formula.type === 'make-archive') {
         return makeInspector(
           formula.type,
           formulaNumber,
           harden({
-            bundle: provide(formula.bundle, 'readable-blob'),
+            archive: provide(formula.archive, 'readable-blob'),
             powers: provide(formula.powers),
             worker: provide(formula.worker, 'worker'),
           }),

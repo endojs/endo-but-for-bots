@@ -93,25 +93,6 @@ export const makeWorkerFacet = ({ cancel }) => {
     },
 
     /**
-     * @param {ERef<EndoReadable>} readableP
-     * @param {Promise<unknown>} powersP
-     * @param {Promise<unknown>} contextP
-     * @param {Record<string, string>} env
-     */
-    makeBundle: async (readableP, powersP, contextP, env) => {
-      const bundleText = await E(readableP).text();
-      const bundle = JSON.parse(bundleText);
-
-      // We defer importing the import-bundle machinery to this in order to
-      // avoid an up-front cost for workers that never use importBundle.
-      const { importBundle } = await import('@endo/import-bundle');
-      const namespace = await importBundle(bundle, {
-        endowments,
-      });
-      return namespace.make(powersP, contextP, { env });
-    },
-
-    /**
      * @param {ERef<EndoReadable>} readableP - Readable blob of a ZIP
      *   archive containing a `compartment-map.json` and module sources
      *   (no precompiled module formats).

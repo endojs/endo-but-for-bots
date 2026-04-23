@@ -14,7 +14,6 @@ import { E, Far } from '@endo/far';
 import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
 import { makePromiseKit } from '@endo/promise-kit';
-import bundleSource from '@endo/bundle-source';
 import { makeArchive as makeCompartmentArchive } from '@endo/compartment-mapper';
 import { makeReadPowers } from '@endo/compartment-mapper/node-powers.js';
 import { defaultParserForLanguage as sourceParserForLanguage } from '@endo/compartment-mapper/import-parsers.js';
@@ -269,35 +268,8 @@ const prepareHostWithTestNetwork = async t => {
   return host;
 };
 
-// The id of the next bundle to make.
-let bundleId = 0;
-const textEncoder = new TextEncoder();
-
-// TODO: We should be able to use {import('../src/types').EndoHost} for `host`,
-// but when laundered through `E()` it becomes `never`.
-/**
- * Performs the necessary rituals to go from an endo `host` and a module `filePath`
- * to calling `makeBundle` without leaving temporary pet names behind.
- *
- * @param {any} host - The host to use.
- * @param {string} filePath - The path to the file to bundle.
- * @param {(bundleName: string) => Promise<unknown>} callback - A function that calls `makeBundle`
- * on the `host`.
- * @returns {Promise<unknown>} The result of the `callback`.
- */
-const doMakeBundle = async (host, filePath, callback) => {
-  const bundleName = `tmp-bundle-${bundleId}`;
-  bundleId += 1;
-  const bundle = await bundleSource(filePath);
-  const bundleText = JSON.stringify(bundle);
-  const bundleBytes = textEncoder.encode(bundleText);
-  const bundleReaderRef = makeReaderRef([bundleBytes]);
-
-  await E(host).storeBlob(bundleReaderRef, bundleName);
-  const result = await callback(bundleName);
-  await E(host).remove(bundleName);
-  return result;
-};
+// The id of the next archive to make.
+let archiveId = 0;
 
 const archiveReadPowers = makeReadPowers({ fs, url, crypto, path });
 
@@ -317,8 +289,8 @@ const archiveReadPowers = makeReadPowers({ fs, url, crypto, path });
  * @returns {Promise<unknown>} The result of the `callback`.
  */
 const doMakeArchive = async (host, packageDir, callback) => {
-  const archiveName = `tmp-archive-${bundleId}`;
-  bundleId += 1;
+  const archiveName = `tmp-archive-${archiveId}`;
+  archiveId += 1;
   const moduleLocation = url.pathToFileURL(packageDir).href;
   const archiveBytes = await makeCompartmentArchive(
     archiveReadPowers,
@@ -996,9 +968,14 @@ test('persist confined services and their requests', async t => {
     await E(host).provideWorker(['w1']);
     await E(host).provideGuest('h1', { agentName: 'a1' });
 
-    const servicePath = path.join(dirname, 'test', 'service.js');
-    await doMakeBundle(host, servicePath, bundleName =>
-      E(host).makeBundle('w1', bundleName, {
+    const servicePath = path.join(
+      dirname,
+      'test',
+      'fixtures',
+      'archive-service',
+    );
+    await doMakeArchive(host, servicePath, archiveName =>
+      E(host).makeArchive('w1', archiveName, {
         powersName: 'a1',
         resultName: 's1',
       }),
@@ -2209,9 +2186,14 @@ test('confined service can respond to cancellation', async t => {
 
   await E(host).provideWorker(['worker']);
 
-  const capletPath = path.join(dirname, 'test', 'context-consumer.js');
-  await doMakeBundle(host, capletPath, bundleName =>
-    E(host).makeBundle('worker', bundleName, {
+  const capletPath = path.join(
+    dirname,
+    'test',
+    'fixtures',
+    'archive-context-consumer',
+  );
+  await doMakeArchive(host, capletPath, archiveName =>
+    E(host).makeArchive('worker', archiveName, {
       powersName: '@none',
       resultName: 'context-consumer',
     }),
@@ -3118,69 +3100,6 @@ test('makeUnconfined without env option defaults to empty env', async t => {
     powersName: '@none',
     resultName: 'env-echo',
   });
-
-  const allEnv = await E(envEcho).getEnv();
-  t.deepEqual(allEnv, {});
-});
-
-test('makeBundle passes env to caplet make function', async t => {
-  const { host } = await prepareHost(t);
-
-  await E(host).provideWorker(['worker']);
-
-  const envEchoPath = path.join(dirname, 'test', 'env-echo.js');
-  const envEcho = await doMakeBundle(host, envEchoPath, bundleName =>
-    E(host).makeBundle('worker', bundleName, {
-      powersName: '@none',
-      resultName: 'env-echo',
-      env: {
-        CONFIG_PATH: '/etc/app/config.json',
-        LOG_LEVEL: 'verbose',
-      },
-    }),
-  );
-
-  // Verify the caplet received the environment variables
-  const allEnv = await E(envEcho).getEnv();
-  t.deepEqual(allEnv, {
-    CONFIG_PATH: '/etc/app/config.json',
-    LOG_LEVEL: 'verbose',
-  });
-
-  t.is(await E(envEcho).getEnvVar('CONFIG_PATH'), '/etc/app/config.json');
-  t.is(await E(envEcho).getEnvVar('LOG_LEVEL'), 'verbose');
-});
-
-test('makeBundle with empty env object', async t => {
-  const { host } = await prepareHost(t);
-
-  await E(host).provideWorker(['worker']);
-
-  const envEchoPath = path.join(dirname, 'test', 'env-echo.js');
-  const envEcho = await doMakeBundle(host, envEchoPath, bundleName =>
-    E(host).makeBundle('worker', bundleName, {
-      powersName: '@none',
-      resultName: 'env-echo',
-      env: {},
-    }),
-  );
-
-  const allEnv = await E(envEcho).getEnv();
-  t.deepEqual(allEnv, {});
-});
-
-test('makeBundle without env option defaults to empty env', async t => {
-  const { host } = await prepareHost(t);
-
-  await E(host).provideWorker(['worker']);
-
-  const envEchoPath = path.join(dirname, 'test', 'env-echo.js');
-  const envEcho = await doMakeBundle(host, envEchoPath, bundleName =>
-    E(host).makeBundle('worker', bundleName, {
-      powersName: '@none',
-      resultName: 'env-echo',
-    }),
-  );
 
   const allEnv = await E(envEcho).getEnv();
   t.deepEqual(allEnv, {});

@@ -256,16 +256,6 @@ type MakeUnconfinedFormula = {
   // TODO formula slots
 };
 
-type MakeBundleFormula = {
-  type: 'make-bundle';
-  worker: FormulaIdentifier;
-  powers: FormulaIdentifier;
-  bundle: FormulaIdentifier;
-  env?: Record<string, string>;
-  cancelWithWorker?: FormulaIdentifier;
-  // TODO formula slots
-};
-
 type MakeArchiveFormula = {
   type: 'make-archive';
   worker: FormulaIdentifier;
@@ -419,7 +409,6 @@ export type Formula =
   | ScratchMountFormula
   | LookupFormula
   | MakeUnconfinedFormula
-  | MakeBundleFormula
   | MakeArchiveFormula
   | HandleFormula
   | PetInspectorFormula
@@ -986,11 +975,6 @@ export interface EndoHost extends EndoAgent {
     specifier: string,
     options?: MakeCapletOptions,
   ): Promise<unknown>;
-  makeBundle(
-    workerPetName: string | undefined,
-    bundleName: string,
-    options?: MakeCapletOptions,
-  ): Promise<unknown>;
   makeArchive(
     workerPetName: string | undefined,
     archiveName: string,
@@ -1169,7 +1153,7 @@ export type EndoInspector<Record = string> = {
 export type KnownEndoInspectors = {
   eval: EndoInspector<'endowments' | 'source' | 'worker'>;
   'make-unconfined': EndoInspector<'host'>;
-  'make-bundle': EndoInspector<'bundle' | 'powers' | 'worker'>;
+  'make-archive': EndoInspector<'archive' | 'powers' | 'worker'>;
   guest: EndoInspector<'bundle' | 'powers'>;
   // This is an "empty" inspector, in that there is nothing to `lookup()` or `list()`.
   [formulaType: string]: EndoInspector<any>;
@@ -1330,11 +1314,6 @@ export interface WorkerDaemonFacet {
     id: FormulaIdentifier,
     cancelled: Promise<never>,
   ): Promise<unknown>;
-  makeBundle(
-    bundle: ERef<EndoReadable>,
-    powers: ERef<unknown>,
-    context: ERef<FarContext>,
-  ): Promise<unknown>;
   makeArchive(
     archive: ERef<EndoReadable>,
     powers: ERef<unknown>,
@@ -1486,18 +1465,6 @@ export interface DaemonCore {
     id: FormulaIdentifier;
     value: unknown;
   }>;
-
-  formulateBundle: (
-    hostAgentId: FormulaIdentifier,
-    hostHandleId: FormulaIdentifier,
-    bundleId: FormulaIdentifier,
-    deferredTasks: DeferredTasks<MakeCapletDeferredTaskParams>,
-    specifiedWorkerId?: FormulaIdentifier,
-    specifiedPowersId?: FormulaIdentifier,
-    env?: Record<string, string>,
-    trustedShims?: string[],
-    workerLabel?: string,
-  ) => FormulateResult<unknown>;
 
   formulateArchive: (
     hostAgentId: FormulaIdentifier,

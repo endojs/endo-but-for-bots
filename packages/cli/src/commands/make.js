@@ -1,23 +1,24 @@
 /* global process */
 
+import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import url from 'url';
+import crypto from 'crypto';
 
-import bundleSource from '@endo/bundle-source';
+import { makeArchive as makeCompartmentArchive } from '@endo/compartment-mapper';
+import { makeReadPowers } from '@endo/compartment-mapper/node-powers.js';
+import { defaultParserForLanguage as sourceParserForLanguage } from '@endo/compartment-mapper/import-parsers.js';
 import { makeReaderRef } from '@endo/daemon';
 import { E } from '@endo/far';
 import { withEndoAgent } from '../context.js';
 import { parseOptionalPetNamePath } from '../pet-name.js';
 import { randomHex16 } from '../random.js';
 
-const textEncoder = new TextEncoder();
-
 export const makeCommand = async ({
   filePath,
   importPath,
   resultName,
-  bundleName,
   archiveName,
   workerName,
   agentNames,
@@ -30,19 +31,13 @@ export const makeCommand = async ({
     process.exitCode = 1;
     return;
   }
-  if (bundleName !== undefined && archiveName !== undefined) {
-    console.error('Specify only one of --bundle or --archive');
-    process.exitCode = 1;
-    return;
-  }
   if (
     filePath === undefined &&
     importPath === undefined &&
-    bundleName === undefined &&
     archiveName === undefined
   ) {
     console.error(
-      'Specify at least one of [file], --archive <name>, --bundle <name>, or --UNCONFINED <file>',
+      'Specify at least one of [file], --archive <name>, or --UNCONFINED <file>',
     );
     process.exitCode = 1;
     return;
@@ -51,28 +46,32 @@ export const makeCommand = async ({
   const resultPath = parseOptionalPetNamePath(resultName);
 
   /** @type {import('@endo/eventual-send').FarRef<import('@endo/stream').Reader<string>> | undefined} */
-  let bundleReaderRef;
+  let archiveReaderRef;
   /** @type {string | undefined} */
-  let temporaryBundleName;
+  let temporaryArchiveName;
   if (filePath !== undefined) {
-    if (bundleName === undefined) {
+    if (archiveName === undefined) {
       // TODO alternately, make a temporary session-scoped GC pet store
       // overshadowing the permanent one, which gets implicitly dropped
       // when this CLI CapTP session ends.
-      temporaryBundleName = `tmp-bundle-${await randomHex16()}`;
-      bundleName = temporaryBundleName;
+      temporaryArchiveName = `tmp-archive-${await randomHex16()}`;
+      archiveName = temporaryArchiveName;
     }
-    const bundle = await bundleSource(filePath);
-    const bundleText = JSON.stringify(bundle);
-    const bundleBytes = textEncoder.encode(bundleText);
-    bundleReaderRef = makeReaderRef([bundleBytes]);
+    const readPowers = makeReadPowers({ fs, url, crypto, path });
+    const moduleLocation = url.pathToFileURL(path.resolve(filePath)).href;
+    const archiveBytes = await makeCompartmentArchive(
+      readPowers,
+      moduleLocation,
+      { parserForLanguage: sourceParserForLanguage },
+    );
+    archiveReaderRef = makeReaderRef([archiveBytes]);
   }
 
   await withEndoAgent(agentNames, { os, process }, async ({ agent }) => {
     await null;
-    // Prepare a bundle, with the given name.
-    if (bundleReaderRef !== undefined) {
-      await E(agent).storeBlob(bundleReaderRef, bundleName);
+    // Prepare an archive, with the given name.
+    if (archiveReaderRef !== undefined) {
+      await E(agent).storeBlob(archiveReaderRef, archiveName);
     }
 
     let resultP;
@@ -82,14 +81,8 @@ export const makeCommand = async ({
         url.pathToFileURL(path.resolve(importPath)).href,
         { powersName, resultName: resultPath, env },
       );
-    } else if (archiveName !== undefined) {
-      resultP = E(agent).makeArchive(workerName, archiveName, {
-        powersName,
-        resultName: resultPath,
-        env,
-      });
     } else {
-      resultP = E(agent).makeBundle(workerName, bundleName, {
+      resultP = E(agent).makeArchive(workerName, archiveName, {
         powersName,
         resultName: resultPath,
         env,
@@ -100,8 +93,8 @@ export const makeCommand = async ({
       result = await resultP;
       console.log(result);
     } finally {
-      if (temporaryBundleName) {
-        await E(agent).remove(temporaryBundleName);
+      if (temporaryArchiveName) {
+        await E(agent).remove(temporaryArchiveName);
       }
     }
     return result;

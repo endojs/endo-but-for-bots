@@ -64,7 +64,6 @@ const normalizeHostOrGuestOptions = opts => {
  * @param {DaemonCore['formulateMarshalValue']} args.formulateMarshalValue
  * @param {DaemonCore['formulateEval']} args.formulateEval
  * @param {DaemonCore['formulateUnconfined']} args.formulateUnconfined
- * @param {DaemonCore['formulateBundle']} args.formulateBundle
  * @param {DaemonCore['formulateArchive']} args.formulateArchive
  * @param {DaemonCore['formulateReadableBlob']} args.formulateReadableBlob
  * @param {DaemonCore['checkinTree']} args.checkinTree
@@ -98,7 +97,6 @@ export const makeHostMaker = ({
   formulateMarshalValue,
   formulateEval,
   formulateUnconfined,
-  formulateBundle,
   formulateArchive,
   formulateReadableBlob,
   checkinTree,
@@ -438,7 +436,7 @@ export const makeHostMaker = ({
     };
 
     /**
-     * Helper function for makeUnconfined and makeBundle.
+     * Helper function for makeUnconfined and makeArchive.
      * @param {Name | undefined} workerName
      * @param {MakeCapletOptions} [options]
      */
@@ -517,46 +515,6 @@ export const makeHostMaker = ({
         hostId,
         handleId,
         specifier,
-        tasks,
-        workerId,
-        powersId,
-        env,
-        workerTrustedShims,
-        workerLabel,
-      );
-      return value;
-    };
-
-    /** @type {EndoHost['makeBundle']} */
-    const makeBundle = async (workerName, bundleName, options) => {
-      const bundleId = petStore.identifyLocal(/** @type {Name} */ (bundleName));
-      if (bundleId === undefined) {
-        throw new TypeError(`Unknown pet name for bundle: ${q(bundleName)}`);
-      }
-
-      const {
-        tasks,
-        workerId,
-        workerLabel: explicitLabel,
-        powersId,
-        env,
-        workerTrustedShims,
-      } = prepareMakeCaplet(
-        /** @type {Name | undefined} */ (workerName),
-        options,
-      );
-      const workerLabel =
-        explicitLabel ??
-        (options?.resultName !== undefined
-          ? `${options.resultName}`
-          : `bundle:${bundleName}`);
-
-      // Behold, recursion:
-      // eslint-disable-next-line no-use-before-define
-      const { value } = await formulateBundle(
-        hostId,
-        handleId,
-        /** @type {FormulaIdentifier} */ (bundleId),
         tasks,
         workerId,
         powersId,
@@ -1236,7 +1194,6 @@ export const makeHostMaker = ({
       provideWorker,
       evaluate,
       makeUnconfined,
-      makeBundle,
       makeArchive,
       cancel,
       gateway,

@@ -28,7 +28,7 @@ const MessageNumberShape = M.bigint();
 // Environment variables as string-to-string record
 const EnvShape = M.recordOf(M.string(), M.string());
 
-// Options for makeUnconfined and makeBundle
+// Options for makeUnconfined and makeArchive
 const MakeCapletOptionsShape = M.splitRecord(
   {},
   {
@@ -335,10 +335,6 @@ export const HostInterface = M.interface('EndoHost', {
   makeUnconfined: M.call(M.or(NameShape, M.undefined()), M.string())
     .optional(MakeCapletOptionsShape)
     .returns(M.promise()),
-  // Make a bundle caplet
-  makeBundle: M.call(M.or(NameShape, M.undefined()), NameShape)
-    .optional(MakeCapletOptionsShape)
-    .returns(M.promise()),
   // Make a caplet from a source-only ZIP archive
   makeArchive: M.call(M.or(NameShape, M.undefined()), NameShape)
     .optional(MakeCapletOptionsShape)
@@ -546,13 +542,9 @@ export const WorkerFacetForDaemonInterface = M.interface(
       IdShape,
       M.promise(),
     ).returns(M.promise()),
-    // These methods receive promises that get resolved inside the worker
-    // Args: (readableP, powersP, contextP, env)
-    makeBundle: M.call(M.any(), M.any(), M.any(), EnvShape).returns(
-      M.promise(),
-    ),
     // Args: (readableP, powersP, contextP, env) — readable is a ZIP
-    // archive of a compartment-map plus source-form modules.
+    // archive of a compartment-map plus source-form modules.  These
+    // methods receive promises that get resolved inside the worker.
     makeArchive: M.call(M.any(), M.any(), M.any(), EnvShape).returns(
       M.promise(),
     ),

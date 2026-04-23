@@ -38,22 +38,29 @@ We want to replace `makeBundle` with `makeArchive`, which:
 ## Status
 
 - [x] Design captured (this document).
-- [ ] Daemon: add `MakeArchiveFormula` formula type, dispatcher case, and
-  `formulateArchive` helper.
-- [ ] Worker (Node): add `makeArchive` to the worker daemon facet that
-  loads the archive via `compartment-mapper.parseArchive` with
-  `defaultParserForLanguage` from `import-parsers.js` (mjs/cjs/json/text/
-  bytes).
-- [ ] Worker (Rust): wire `makeArchive` to `cas_archive::load_archive_from_cas`
-  and `xsnap::run_xs_archive_loaded`.
-- [ ] Host: add `EndoHost.makeArchive` mirroring `EndoHost.makeBundle`.
-- [ ] CLI: add `endo archive` command (calls compartment-mapper's `makeArchive`
-  to produce a source-only ZIP); add `-z`/`--archive` option to
-  `endo install`, `endo run`, `endo make`.
-- [ ] Help text: add `makeArchive` entry; remove `makeBundle` entry.
-- [ ] Tests: add archive-based variants of every `makeBundle` test.
-- [ ] Removal: delete `makeBundle` from `WorkerDaemonFacet`,
-  `MakeBundleFormula`, dispatcher, host, CLI, and tests.
+- [x] Daemon: `MakeArchiveFormula`, dispatcher case, `formulateArchive`.
+- [x] Worker (Node): `makeArchive` on the worker daemon facet streams
+  the archive via `streamBase64` and runs `compartment-mapper`'s
+  `parseArchive` with the import-archive-all-parsers set.
+- [x] Host: `EndoHost.makeArchive` mirroring the legacy `makeBundle`.
+- [x] CLI: `endo archive`, plus `-z`/`--archive` on `endo run` /
+  `endo make`.  `endo run` and `endo make` now build a source-only
+  archive on the fly when given a bare file path.
+- [x] Help text: `makeArchive` entry added; `makeBundle` entry removed.
+- [x] Tests: full `makeBundle` end-to-end coverage migrated to
+  `makeArchive` (env, persistence, cancellation, request flow).
+- [x] **Phase 5 — Removal**: `makeBundle` is gone from the daemon
+  (`WorkerDaemonFacet`, `MakeBundleFormula`, dispatcher case,
+  `formulateBundle`, `EndoHost.makeBundle`, the inspector case, the
+  formula-type whitelist), from the CLI (`endo bundle` command, the
+  `-b`/`--bundle` options on `run`/`make`, `commands/bundle.js`, and
+  `@endo/bundle-source` + `@endo/import-bundle` dependencies), and
+  from the daemon test suite (`doMakeBundle`, `bundleSource` import).
+- [ ] **Phase 4 — Worker (Rust)**: still pending.  The Node worker
+  satisfies `make-archive` via `parseArchive`; the Rust supervisor
+  needs a corresponding handler that resolves the readable blob to
+  a CAS root hash and calls `load_archive_from_cas` /
+  `run_xs_archive_loaded`.
 
 ## Design
 
