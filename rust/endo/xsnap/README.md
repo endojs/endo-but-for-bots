@@ -10,9 +10,20 @@ Rust wrapper around Moddable's XS engine, providing:
 
 ## Building
 
+`xsnap` links against the XS engine compiled from the Moddable SDK
+(pinned via the `c/moddable` git submodule).  Initialise it before
+the first build:
+
 ```sh
+git submodule update --init c/moddable
 cargo build -p xsnap
 ```
+
+The submodule is a shallow checkout (~180 MB).  The `build.rs`
+script will compile the XS C sources from `c/moddable/xs/sources/`.
+If you need to build without the submodule, drop a prebuilt
+static library at `rust/endo/xsnap/prebuilt/libxs.a` instead — the
+build script falls back to copying it.
 
 `xsnap` is a pure library crate. The XS engine host modes (worker,
 manager child, standalone archive runner) are exposed as library

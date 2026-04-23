@@ -33,8 +33,10 @@ fn main() {
         } else {
             panic!(
                 "Moddable XS sources not found at {} and no prebuilt \
-                 libxs.a at {}. Either install the Moddable SDK or \
-                 place a prebuilt library in xsnap/prebuilt/.",
+                 libxs.a at {}. Run `git submodule update --init \
+                 c/moddable` from the workspace root to populate the \
+                 Moddable SDK (pinned via the c/moddable submodule), \
+                 or place a prebuilt library in xsnap/prebuilt/libxs.a.",
                 xs_sources.display(),
                 prebuilt.display()
             );
