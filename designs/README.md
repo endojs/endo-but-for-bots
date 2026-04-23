@@ -75,10 +75,11 @@
 | [ocapn-noise-network](ocapn-noise-network.md) | 2026-02-14 | 2026-02-24 | Not Started |
 | [ocapn-tcp-for-test-extraction](ocapn-tcp-for-test-extraction.md) | 2026-02-14 | 2026-02-24 | Not Started |
 | [outliner-design-doc](outliner-design-doc.md) | 2026-03-17 | 2026-03-18 | In Progress |
+| [ci-no-npm-lifecycle](ci-no-npm-lifecycle.md) | 2026-04-23 | 2026-04-23 | Not Started |
 | [weblet-next](weblet-next.md) | 2026-03-24 | 2026-03-24 | Reference |
 | [workers-panel](workers-panel.md) | 2026-02-14 | 2026-02-24 | Not Started |
 
-**Totals:** 21 Complete/Implemented, 5 In Progress, 38 Not Started, 2 Proposed, 1 Active, 1 Reference, 1 Deprecated
+**Totals:** 21 Complete/Implemented, 5 In Progress, 39 Not Started, 2 Proposed, 1 Active, 1 Reference, 1 Deprecated
 
 ## Roadmap
 
@@ -251,6 +252,7 @@ capabilities available to agents.
 | endoclaw-network-fetch | Not Started | **Strategic:** `HttpClient` with origin allowlist. Self-hosted agents need outbound HTTP; foundation for OAuth and all external integrations. |
 | daemon-cross-peer-gc | Not Started | **Urgent:** Synced pet store CRDT for cross-peer GC, revocation propagation, offline progress |
 | daemon-guest-eval-simplification | Not Started | Remove eval-proposal handshake; guest eval delegates directly to `formulateEval` |
+| ci-no-npm-lifecycle | Not Started | Pin `enableScripts: false` posture into CI; enforcement check for workflows |
 
 **Exit criterion:** Someone can self-host a daemon with our Docker image
 and remote control it, by whatever means, using a local Familiar or a
@@ -429,6 +431,7 @@ Recalibrated on 2026-03-02 using observed velocity from 15 active work days
 | endoclaw-timer | S-M | 2-3 days | 1 | IntervalScheduler with tick delivery, durable formulas, host-controlled limits |
 | daemon-guest-eval-simplification | S | 1 day | 1 | Remove eval-proposal flow, guest eval delegates to `formulateEval` |
 | endoclaw-network-fetch | S-M | 2-3 days | 1 | HttpClient with origin allowlist, rate/size limits |
+| ci-no-npm-lifecycle | S | 1 day | 1 | Workflow audit, env var pinning, enforcement check |
 | ocapn-network-transport-separation | M-L | 1-1.5 weeks | 2 | Architectural refactor |
 | ocapn-tcp-for-test-extraction | S-M | 2-3 days | 2 | Code relocation |
 | ocapn-noise-cryptographic-review | S | 1 day | 2 | External review coordination |
