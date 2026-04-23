@@ -3,47 +3,22 @@ use std::path::PathBuf;
 
 fn main() {
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
-    let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
     let moddable_dir = manifest_dir.join("../../../c/moddable");
     let xs_sources = moddable_dir.join("xs/sources");
 
-    // If the Moddable XS C sources are present, compile them.
-    // Otherwise fall back to a pre-built libxs.a if one exists in
-    // the prebuilt/ directory (checked in for environments that lack
-    // the full SDK).
-    if xs_sources.join("xsAll.c").exists() {
-        compile_xs(&manifest_dir, &moddable_dir);
-    } else {
-        let prebuilt = manifest_dir.join("prebuilt/libxs.a");
-        if prebuilt.exists() {
-            let dest = out_dir.join("libxs.a");
-            std::fs::copy(&prebuilt, &dest).expect("copy prebuilt libxs.a");
-            println!(
-                "cargo:rustc-link-search=native={}",
-                out_dir.display()
-            );
-            println!("cargo:rustc-link-lib=static=xs");
-            eprintln!(
-                "cargo:warning=Using prebuilt libxs.a (Moddable XS sources not found)"
-            );
-            // The prebuilt may not include symbols we added to
-            // xsnap-platform.c after it was built.  Compile a
-            // minimal supplement that provides any missing symbols.
-            compile_platform_supplement(&out_dir);
-        } else {
-            panic!(
-                "Moddable XS sources not found at {} and no prebuilt \
-                 libxs.a at {}. Either install the Moddable SDK or \
-                 place a prebuilt library in xsnap/prebuilt/.",
-                xs_sources.display(),
-                prebuilt.display()
-            );
-        }
+    if !xs_sources.join("xsAll.c").exists() {
+        panic!(
+            "Moddable XS sources not found at {}.\n\
+             Initialize the submodule with:\n    \
+             git submodule update --init --recursive c/moddable",
+            xs_sources.display(),
+        );
     }
+    compile_xs(&manifest_dir, &moddable_dir);
 
     println!("cargo:rerun-if-changed=xsnap-platform.h");
+    println!("cargo:rerun-if-changed=xsnap-platform.c");
     println!("cargo:rerun-if-changed=build.rs");
-    println!("cargo:rerun-if-changed=prebuilt/libxs.a");
     // Link math and pthread
     println!("cargo:rustc-link-lib=m");
     println!("cargo:rustc-link-lib=pthread");
@@ -171,34 +146,4 @@ fn compile_xs(manifest_dir: &PathBuf, moddable_dir: &PathBuf) {
     build.file(manifest_dir.join("xsnap-platform.c"));
 
     build.compile("xs");
-}
-
-/// Compile a minimal C file that provides symbols missing from the
-/// prebuilt libxs.a (e.g. fxRunDebugger, which the prebuilt may
-/// not include).  This file does NOT #include xsAll.h — it only
-/// uses opaque pointer types.
-fn compile_platform_supplement(out_dir: &PathBuf) {
-    let src = out_dir.join("xsnap-platform-supplement.c");
-    std::fs::write(
-        &src,
-        r#"
-/* Supplement for prebuilt libxs.a — provides symbols that the
-   prebuilt may lack.  Uses weak symbols so that if the prebuilt
-   already provides them, its definitions win. */
-
-typedef struct sxMachine txMachine;
-
-/* fxRunDebugger: no-op without mxDebug.  The prebuilt libxs.a
-   was compiled without mxDebug so fxDebugCommand is absent. */
-void __attribute__((weak)) fxRunDebugger(txMachine* the) {
-    (void)the;
-}
-"#,
-    )
-    .expect("write platform supplement");
-
-    cc::Build::new()
-        .file(&src)
-        .opt_level(2)
-        .compile("xs_supplement");
 }
