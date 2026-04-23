@@ -95,9 +95,9 @@ const xsEncodeBase64 =
  *
  * @type {typeof jsEncodeBase64}
  */
-export const encodeBase64 =
-  nativeToBase64 !== undefined
-    ? nativeEncodeBase64
-    : xsEncodeBase64 !== undefined
-      ? xsEncodeBase64
-      : jsEncodeBase64;
+const selectEncodeBase64 = () => {
+  if (nativeToBase64 !== undefined) return nativeEncodeBase64;
+  if (xsEncodeBase64 !== undefined) return xsEncodeBase64;
+  return jsEncodeBase64;
+};
+export const encodeBase64 = selectEncodeBase64();
