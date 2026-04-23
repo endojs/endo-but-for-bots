@@ -13,6 +13,15 @@ permissions:
   contents: read
   actions: write
 
+# Defense in depth against npm lifecycle scripts running implicitly at install.
+# .yarnrc.yml sets `enableScripts: false` at rest; these env vars ensure the
+# posture survives a branch that drops the repo-level config, an invocation of
+# npm where yarn was intended, or a workflow that unsets the yarn config.
+# See designs/ci-no-npm-lifecycle.md.
+env:
+  YARN_ENABLE_SCRIPTS: 'false'
+  npm_config_ignore_scripts: 'true'
+
 # Cancel in-progress runs for the same branch when a new run is started
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -284,6 +293,39 @@ jobs:
       - name: Verify action pins
         if: ${{ github.event_name != 'pull_request' || steps.paths.outputs.workflows == 'true' }}
         run: node scripts/update-action-pins.mjs --check-pins
+
+  check-no-ci-lifecycle:
+    name: check-no-ci-lifecycle
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      # without this, setup-node errors on mismatched yarn versions
+      - run: corepack enable
+
+      - name: Use Node.js 22.x
+        uses: actions/setup-node@6044e13b5dc448c55e2357c09f80417699197238 # v6
+        with:
+          node-version: 22.x
+
+      - name: Detect workflow and config changes
+        id: paths
+        uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36 # v3
+        with:
+          filters: |
+            workflows:
+              - '.github/workflows/**'
+              - '.yarnrc.yml'
+              - '.yarnrc'
+              - 'package.json'
+              - 'scripts/check-no-ci-lifecycle.mjs'
+
+      - name: Verify no CI lifecycle scripts
+        if: ${{ github.event_name != 'pull_request' || steps.paths.outputs.workflows == 'true' }}
+        run: node scripts/check-no-ci-lifecycle.mjs
 
   viable-release:
     name: viable-release
