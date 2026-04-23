@@ -12,6 +12,7 @@ import test from 'ava';
 import { jsEncodeBase64, encodeBase64 } from '../src/encode.js';
 import { jsDecodeBase64, decodeBase64 } from '../src/decode.js';
 
+/** @param {string} asciiString */
 const asciiStringToUint8Array = asciiString => {
   const data = new Uint8Array(asciiString.length);
   for (let i = 0; i < asciiString.length; i += 1) {
@@ -20,6 +21,7 @@ const asciiStringToUint8Array = asciiString => {
   return data;
 };
 
+/** @param {Uint8Array} data */
 const uint8ArrayToAsciiString = data => String.fromCharCode(...data);
 
 test('jsEncodeBase64 round-trips through jsDecodeBase64', t => {
