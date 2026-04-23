@@ -16,6 +16,7 @@
 | [chat-markdown-render](chat-markdown-render.md) | 2026-03-03 | 2026-03-27 | Proposed |
 | [chat-pending-commands](chat-pending-commands.md) | 2026-03-11 | 2026-03-11 | Not Started |
 | [chat-rename-dismiss-to-clear](chat-rename-dismiss-to-clear.md) | 2026-03-03 | 2026-03-03 | Proposed |
+| [chat-slot-slash-commands](chat-slot-slash-commands.md) | 2026-04-23 | 2026-04-23 | Not Started |
 | [chat-view-edit-commands](chat-view-edit-commands.md) | 2026-03-21 | 2026-03-21 | Not Started |
 | [chat-reply-chain-visualization](chat-reply-chain-visualization.md) | 2026-02-23 | 2026-02-28 | Deprecated |
 | [chat-spaces-home](chat-spaces-home.md) | 2026-03-02 | 2026-03-02 | **Complete** |
@@ -78,7 +79,7 @@
 | [weblet-next](weblet-next.md) | 2026-03-24 | 2026-03-24 | Reference |
 | [workers-panel](workers-panel.md) | 2026-02-14 | 2026-02-24 | Not Started |
 
-**Totals:** 21 Complete/Implemented, 5 In Progress, 38 Not Started, 2 Proposed, 1 Active, 1 Reference, 1 Deprecated
+**Totals:** 21 Complete/Implemented, 5 In Progress, 39 Not Started, 2 Proposed, 1 Active, 1 Reference, 1 Deprecated
 
 ## Roadmap
 
@@ -320,6 +321,7 @@ webhook events.
 |--------|--------|-------|
 | ~~chat-reply-chain-visualization~~ | Deprecated | Superseded by chat-focus-message |
 | chat-pending-commands | Not Started | Pending commands region, unlocked command bar |
+| chat-slot-slash-commands | Not Started | Slash commands (e.g. `/js`) inside slot inputs; daemon-side transient pinning until retained by the outer formula |
 | daemon-commands-as-messages | Not Started | Commands as self-addressed messages with reply results; subsumes pending region |
 | inventory-cancel-and-liveness | Not Started | Cancel button with liveness indicator, coalesced watcher protocol |
 | inventory-grouping-by-type | Not Started | UI grouping, collapsible sections |
@@ -445,6 +447,7 @@ Recalibrated on 2026-03-02 using observed velocity from 15 active work days
 | endoclaw-voice | S | 1-2 days | 3 | Web Speech API in Chat UI |
 | ~~chat-reply-chain-visualization~~ | — | — | 4 | Deprecated (superseded by chat-focus-message) |
 | chat-pending-commands | S-M | 2-3 days | 4 | Pending region, unlocked command bar (UI only) |
+| chat-slot-slash-commands | M | 3-4 days | 4 | Slot-level verb registry, transient-pin extension of `formulateEval`, shared slot-input component |
 | daemon-commands-as-messages | M-L | 1-1.5 weeks | 4 | New message type, self-delivery, result replies, Chat rendering |
 | inventory-cancel-and-liveness | M | 3-4 days | 4 | Cancel button, indicator states, coalesced watcher exo + daemon hooks |
 | inventory-grouping-by-type | S | 1-2 days | 4 | UI grouping |
