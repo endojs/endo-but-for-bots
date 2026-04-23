@@ -458,16 +458,20 @@ export const makeDaemonicPersistencePowers = (
       setState('private_key', privateHex);
       return { keypair, isNewlyCreated: true };
     } else {
-      const existingPrivateHex = /** @type {string} */ (
-        getState('private_key')
-      );
-      const publicKey = fromHex(existingPublicHex);
-      const privateKey = fromHex(existingPrivateHex);
+      const pubHex = existingPublicHex;
+      const privHex = /** @type {string} */ (getState('private_key'));
+      // Use getters to avoid storing Uint8Array directly on the
+      // hardened object — in XS, Uint8Array indexed elements are
+      // non-configurable so harden/freeze fails.
       return {
         keypair: harden({
-          publicKey,
-          privateKey,
-          sign: message => cryptoPowers.ed25519Sign(privateKey, message),
+          get publicKey() {
+            return fromHex(pubHex);
+          },
+          get privateKey() {
+            return fromHex(privHex);
+          },
+          sign: message => cryptoPowers.ed25519Sign(fromHex(privHex), message),
         }),
         isNewlyCreated: false,
       };

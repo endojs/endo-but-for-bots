@@ -123,6 +123,7 @@ type WorkerFormula = {
   type: 'worker';
   label?: string;
   trustedShims?: string[];
+  kind?: 'locked' | 'node';
 };
 
 export type WorkerDeferredTaskParams = {
@@ -251,6 +252,7 @@ type MakeUnconfinedFormula = {
   powers: FormulaIdentifier;
   specifier: string;
   env?: Record<string, string>;
+  cancelWithWorker?: FormulaIdentifier;
   // TODO formula slots
 };
 
@@ -260,6 +262,7 @@ type MakeBundleFormula = {
   powers: FormulaIdentifier;
   bundle: FormulaIdentifier;
   env?: Record<string, string>;
+  cancelWithWorker?: FormulaIdentifier;
   // TODO formula slots
 };
 
@@ -1331,6 +1334,7 @@ export type DaemonicControlPowers = {
     capTpConnectionRegistrar?: CapTpConnectionRegistrar,
     trustedShims?: string[],
     label?: string,
+    kind?: 'locked' | 'node',
   ) => Promise<{
     workerTerminated: Promise<void>;
     workerDaemonFacet: ERef<WorkerDaemonFacet>;
@@ -1341,6 +1345,16 @@ export type DaemonicControlPowers = {
    * been consumed.
    */
   startEnvelopeReader?: () => void;
+  /**
+   * Attach a debugger to a running worker (Rust supervisor only).
+   * Returns a Debugger exo that wraps the xsbug debug session
+   * and is remotable over CapTP.
+   */
+  attachDebugger?: (workerHandle: number) => Promise<Debugger>;
+  /**
+   * Detach a debugger from a running worker (Rust supervisor only).
+   */
+  detachDebugger?: (workerHandle: number) => void;
 };
 
 export type DaemonicPowers = {
@@ -1794,6 +1808,112 @@ export interface RemoteControl {
     dispose?: () => void,
   ): Promise<EndoGateway>;
   getStateName(): string;
+}
+
+// ---------------------------------------------------------------------------
+// SQLite
+// ---------------------------------------------------------------------------
+
+export type SqliteValue = null | bigint | number | string | Uint8Array;
+
+export type SqliteParams = SqliteValue[] | [Record<string, SqliteValue>];
+
+export interface StatementSync {
+  run(...params: SqliteParams): { changes: bigint; lastInsertRowid: bigint };
+  get(...params: SqliteParams): Record<string, SqliteValue> | undefined;
+  all(...params: SqliteParams): Array<Record<string, SqliteValue>>;
+  columns(): Array<{ name: string; type: string | null }>;
+  finalize(): void;
+}
+
+export interface DatabaseSync {
+  close(): void;
+  exec(sql: string): void;
+  prepare(sql: string): StatementSync;
+  readonly open: boolean;
+}
+
+export interface SqlitePowers {
+  openDatabase(path: string): DatabaseSync;
+}
+
+// ---------------------------------------------------------------------------
+// Debugger
+// ---------------------------------------------------------------------------
+
+export interface BreakEvent {
+  readonly path: string;
+  readonly line: number;
+  readonly message: string;
+}
+
+export interface Frame {
+  readonly name: string;
+  readonly value: string;
+  readonly path: string;
+  readonly line: number;
+}
+
+export interface Property {
+  readonly name: string;
+  readonly value: string;
+  readonly flags: string;
+  readonly children?: Property[];
+}
+
+export interface DebugSession {
+  feedXml(bytes: Uint8Array): void;
+  go(): void;
+  step(): Promise<BreakEvent>;
+  stepIn(): Promise<BreakEvent>;
+  stepOut(): Promise<BreakEvent>;
+  abort(): void;
+  setBreakpoint(path: string, line: number): void;
+  clearBreakpoint(path: string, line: number): void;
+  clearAllBreakpoints(): void;
+  getFrames(): Promise<Frame[]>;
+  getLocals(): Promise<Property[]>;
+  getGlobals(): Promise<Property[]>;
+  selectFrame(id: string): Promise<Property[]>;
+  toggleProperty(id: string): Promise<Property[]>;
+  evaluate(source: string): Promise<string>;
+  startProfiling(): void;
+  stopProfiling(): void;
+  setExceptionBreakMode(mode: 'none' | 'all' | 'uncaught'): void;
+  onBreak(listener: (event: BreakEvent) => void): () => void;
+  isBroken(): boolean;
+  getTitle(): string | undefined;
+  getTag(): string | undefined;
+  getLastBreak(): BreakEvent | null;
+  help(): string;
+}
+
+/**
+ * Remotable debugger exo — a CapTP-safe wrapper around DebugSession.
+ * Methods match DebugSession but omit `feedXml` and `onBreak`
+ * (which are not serialisable over CapTP).
+ */
+export interface Debugger {
+  help(): string;
+  go(): void;
+  step(): Promise<BreakEvent>;
+  stepIn(): Promise<BreakEvent>;
+  stepOut(): Promise<BreakEvent>;
+  abort(): void;
+  setBreakpoint(path: string, line: number): void;
+  clearBreakpoint(path: string, line: number): void;
+  clearAllBreakpoints(): void;
+  getFrames(): Promise<Frame[]>;
+  getLocals(): Promise<Property[]>;
+  getGlobals(): Promise<Property[]>;
+  selectFrame(id: string): Promise<Property[]>;
+  toggleProperty(id: string): Promise<Property[]>;
+  evaluate(source: string): Promise<string>;
+  setExceptionBreakMode(mode: 'none' | 'all' | 'uncaught'): void;
+  isBroken(): boolean;
+  getTitle(): string | undefined;
+  getTag(): string | undefined;
+  getLastBreak(): BreakEvent | null;
 }
 
 export interface RemoteControlState {

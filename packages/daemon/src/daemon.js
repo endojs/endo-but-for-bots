@@ -277,6 +277,7 @@ const RESOLVED_VALUE_NAME = /** @type {PetName} */ ('value');
  * @param {NodeNumber} args.localNodeNumber - The local node number for this daemon.
  * @param {(bytes: Uint8Array) => Uint8Array} args.signBytes - Sign bytes with the daemon's root Ed25519 key.
  * @param {boolean} [args.gcEnabled] - Enable garbage collection of worker daemons.
+ * @param {'locked' | 'node'} [args.defaultWorkerKind] - Default kind for newly formulated workers (defaults to 'node').
  *
  * @example
  * ```js
@@ -300,6 +301,7 @@ const makeDaemonCore = async (
     localNodeNumber,
     signBytes,
     gcEnabled = true,
+    defaultWorkerKind = 'node',
   },
 ) => {
   const {
@@ -529,17 +531,29 @@ const makeDaemonCore = async (
         ];
       case 'lookup':
         return [['hub', formula.hub]];
-      case 'make-unconfined':
-        return [
+      case 'make-unconfined': {
+        /** @type {Array<[string, FormulaIdentifier]>} */
+        const deps = [
           ['worker', formula.worker],
           ['powers', formula.powers],
         ];
-      case 'make-bundle':
-        return [
+        if (formula.cancelWithWorker) {
+          deps.push(['cancelWithWorker', formula.cancelWithWorker]);
+        }
+        return deps;
+      }
+      case 'make-bundle': {
+        /** @type {Array<[string, FormulaIdentifier]>} */
+        const deps = [
           ['worker', formula.worker],
           ['powers', formula.powers],
           ['bundle', formula.bundle],
         ];
+        if (formula.cancelWithWorker) {
+          deps.push(['cancelWithWorker', formula.cancelWithWorker]);
+        }
+        return deps;
+      }
       case 'peer':
         return [['networks', formula.networks]];
       case 'handle':
@@ -832,6 +846,27 @@ const makeDaemonCore = async (
       const terminate = workerTerminationByNumber.get(workerId);
       if (terminate) {
         terminate(reason).catch(() => {});
+      }
+      // When a retainer's node worker is terminated by GC, also
+      // terminate any cancelWithWorker (original XS worker) referenced
+      // by make-unconfined/make-bundle formulas on this worker.
+      const terminatedId = formatId({
+        number: /** @type {FormulaNumber} */ (workerId),
+        node: localNodeNumber,
+      });
+      for (const formula of formulaForId.values()) {
+        if (
+          (formula.type === 'make-unconfined' ||
+            formula.type === 'make-bundle') &&
+          formula.worker === terminatedId &&
+          formula.cancelWithWorker
+        ) {
+          const { number: cwNumber } = parseId(formula.cancelWithWorker);
+          const cwTerminate = workerTerminationByNumber.get(cwNumber);
+          if (cwTerminate) {
+            cwTerminate(reason).catch(() => {});
+          }
+        }
       }
     },
   });
@@ -1127,12 +1162,14 @@ const makeDaemonCore = async (
   /**
    * @param {string} workerId512
    * @param {Context} context
+   * @param {'locked' | 'node'} [kind]
    * @param {string[]} [trustedShims]
    * @param {string} [label]
    */
   const makeIdentifiedWorker = async (
     workerId512,
     context,
+    kind = undefined,
     trustedShims = undefined,
     label = undefined,
   ) => {
@@ -1153,6 +1190,7 @@ const makeDaemonCore = async (
         capTpConnectionRegistrar,
         trustedShims,
         label,
+        kind,
       );
 
     const terminateWorker = async (_reason = undefined) => {
@@ -1289,9 +1327,13 @@ const makeDaemonCore = async (
     specifier,
     env,
     context,
+    cancelWithWorker,
   ) => {
     context.thisDiesIfThatDies(workerId);
     context.thisDiesIfThatDies(powersId);
+    if (cancelWithWorker) {
+      context.thisDiesIfThatDies(cancelWithWorker);
+    }
 
     const worker = await provide(workerId, 'worker');
     const workerDaemonFacet = workerDaemonFacets.get(worker);
@@ -1313,9 +1355,19 @@ const makeDaemonCore = async (
    * @param {Record<string, string> | undefined} env
    * @param {Context} context
    */
-  const makeBundle = async (workerId, powersId, bundleId, env, context) => {
+  const makeBundle = async (
+    workerId,
+    powersId,
+    bundleId,
+    env,
+    context,
+    cancelWithWorker,
+  ) => {
     context.thisDiesIfThatDies(workerId);
     context.thisDiesIfThatDies(powersId);
+    if (cancelWithWorker) {
+      context.thisDiesIfThatDies(cancelWithWorker);
+    }
 
     const worker = await provide(
       /** @type {FormulaIdentifier} */ (workerId),
@@ -2214,17 +2266,39 @@ const makeDaemonCore = async (
       makeIdentifiedWorker(
         formulaNumber,
         context,
+        formula.kind,
         formula.trustedShims,
         formula.label,
       ),
     'make-unconfined': (
-      { worker: workerId, powers: powersId, specifier, env = {} },
+      {
+        worker: workerId,
+        powers: powersId,
+        specifier,
+        env = {},
+        cancelWithWorker,
+      },
       context,
-    ) => makeUnconfined(workerId, powersId, specifier, env, context),
+    ) =>
+      makeUnconfined(
+        workerId,
+        powersId,
+        specifier,
+        env,
+        context,
+        cancelWithWorker,
+      ),
     'make-bundle': (
-      { worker: workerId, powers: powersId, bundle: bundleId, env = {} },
+      {
+        worker: workerId,
+        powers: powersId,
+        bundle: bundleId,
+        env = {},
+        cancelWithWorker,
+      },
       context,
-    ) => makeBundle(workerId, powersId, bundleId, env, context),
+    ) =>
+      makeBundle(workerId, powersId, bundleId, env, context, cancelWithWorker),
     host: async (formula, context, id) => {
       const {
         hostHandle: hostHandleId,
@@ -3265,15 +3339,21 @@ const makeDaemonCore = async (
    * The returned promise is resolved after the formula is persisted.
    *
    * @param {FormulaNumber} formulaNumber - The worker formula number.
-   * @param {string[]} [trustedShims] - Module specifiers imported before lockdown.
-   * @param {string} [label] - Human-readable label for status reporting.
+   * @param {object} [options]
+   * @param {string[]} [options.trustedShims] - Module specifiers imported before lockdown.
+   * @param {string} [options.label] - Human-readable label for status reporting.
+   * @param {'locked' | 'node'} [options.kind] - Worker kind (locked for XS, node for Node.js).
+   * @param {NodeNumber} [options.nodeNumber] - Node number (defaults to localNodeNumber).
    * @returns {ReturnType<DaemonCore['formulateWorker']>}
    */
   const formulateNumberedWorker = (
     formulaNumber,
-    trustedShims = undefined,
-    label = '<untitled>',
-    nodeNumber = localNodeNumber,
+    {
+      trustedShims,
+      label = '<untitled>',
+      kind,
+      nodeNumber = localNodeNumber,
+    } = {},
   ) => {
     /** @type {WorkerFormula} */
     const formula = {
@@ -3282,6 +3362,7 @@ const makeDaemonCore = async (
       ...(trustedShims && trustedShims.length > 0
         ? { trustedShims }
         : undefined),
+      ...(kind ? { kind } : undefined),
     };
 
     return /** @type {FormulateResult<EndoWorker>} */ (
@@ -3307,7 +3388,7 @@ const makeDaemonCore = async (
         }),
       });
 
-      return formulateNumberedWorker(formulaNumber, trustedShims, label);
+      return formulateNumberedWorker(formulaNumber, { trustedShims, label });
     });
   };
 
@@ -3556,9 +3637,7 @@ const makeDaemonCore = async (
       (
         await formulateNumberedWorker(
           /** @type {FormulaNumber} */ (await randomHex256()),
-          undefined,
-          workerLabel ?? 'guest',
-          agentNodeNumber,
+          { label: workerLabel ?? 'guest', nodeNumber: agentNodeNumber },
         )
       ).id,
     );
@@ -3639,15 +3718,43 @@ const makeDaemonCore = async (
    * @param {string[]} [trustedShims]
    * @param {string} [label]
    * @param {NodeNumber} [nodeNumber] - The node number to use (defaults to localNodeNumber).
+   * @param {'locked' | 'node'} [kind]
    */
   const provideWorkerId = async (
     specifiedWorkerId,
     trustedShims = undefined,
     label = undefined,
     nodeNumber = localNodeNumber,
+    kind = undefined,
   ) => {
     await null;
+    console.log(
+      `provideWorkerId: kind=${kind} defaultWorkerKind=${defaultWorkerKind} specifiedWorkerId=${typeof specifiedWorkerId === 'string' ? specifiedWorkerId.slice(0, 12) : specifiedWorkerId}`,
+    );
     if (typeof specifiedWorkerId === 'string') {
+      if (kind === 'node' && defaultWorkerKind !== 'node') {
+        // Default workers are XS/locked (bus daemon under Rust
+        // supervisor).  Create a separate Node.js worker.  The original
+        // XS worker stays alive (it may have running evals).
+        const existingFormula = formulaForId.get(specifiedWorkerId);
+        console.log(
+          `provideWorkerId: existingFormula=${existingFormula ? JSON.stringify(existingFormula).slice(0, 80) : 'NOT FOUND'}`,
+        );
+        if (
+          existingFormula &&
+          existingFormula.type === 'worker' &&
+          !existingFormula.kind
+        ) {
+          const workerFormulaNumber = /** @type {FormulaNumber} */ (
+            await randomHex256()
+          );
+          const workerFormulation = await formulateNumberedWorker(
+            workerFormulaNumber,
+            { kind, trustedShims, label },
+          );
+          return workerFormulation.id;
+        }
+      }
       return specifiedWorkerId;
     }
 
@@ -3656,9 +3763,7 @@ const makeDaemonCore = async (
     );
     const workerFormulation = await formulateNumberedWorker(
       workerFormulaNumber,
-      trustedShims,
-      label,
-      nodeNumber,
+      { kind, trustedShims, label, nodeNumber },
     );
     return workerFormulation.id;
   };
@@ -3901,6 +4006,7 @@ const makeDaemonCore = async (
    * @param {FormulaIdentifier} [specifiedPowersId]
    * @param {string[]} [trustedShims]
    * @param {string} [workerLabel]
+   * @param {'locked' | 'node'} [workerKind]
    */
   const formulateCapletDependencies = async (
     hostAgentId,
@@ -3910,6 +4016,7 @@ const makeDaemonCore = async (
     specifiedPowersId,
     trustedShims = undefined,
     workerLabel = undefined,
+    workerKind = undefined,
   ) => {
     const ownFormulaNumber = /** @type {FormulaNumber} */ (
       await randomHex256()
@@ -3919,6 +4026,21 @@ const makeDaemonCore = async (
       hostHandleId,
       specifiedPowersId,
     );
+    const workerId = await provideWorkerId(
+      specifiedWorkerId,
+      trustedShims,
+      workerLabel,
+      undefined,
+      workerKind,
+    );
+    // When a new node worker was created because the specified worker
+    // was XS-only, record the original so that cancelling the original
+    // worker cascades to the caplet.  This is a runtime dependency only,
+    // not persisted in the formula JSON.
+    const originalWorkerId =
+      specifiedWorkerId && workerId !== specifiedWorkerId
+        ? specifiedWorkerId
+        : undefined;
     const identifiers = harden({
       powersId,
       capletId: formatId({
@@ -3926,11 +4048,8 @@ const makeDaemonCore = async (
         node: localNodeNumber,
       }),
       capletFormulaNumber: ownFormulaNumber,
-      workerId: await provideWorkerId(
-        specifiedWorkerId,
-        trustedShims,
-        workerLabel,
-      ),
+      workerId,
+      originalWorkerId,
     });
     // Execute deferred tasks first (stores pet names, creating
     // pet-store edges) so that the powers guest is reachable
@@ -3955,7 +4074,7 @@ const makeDaemonCore = async (
     workerLabel = undefined,
   ) => {
     return withFormulaGraphLock(async () => {
-      const { powersId, capletFormulaNumber, workerId } =
+      const { powersId, capletFormulaNumber, workerId, originalWorkerId } =
         await formulateCapletDependencies(
           hostAgentId,
           hostHandleId,
@@ -3964,6 +4083,7 @@ const makeDaemonCore = async (
           specifiedPowersId,
           trustedShims,
           workerLabel,
+          'node',
         );
 
       /** @type {MakeUnconfinedFormula} */
@@ -3973,6 +4093,7 @@ const makeDaemonCore = async (
         powers: powersId,
         specifier,
         env,
+        ...(originalWorkerId ? { cancelWithWorker: originalWorkerId } : {}),
       };
       return formulate(capletFormulaNumber, formula);
     });
@@ -3991,7 +4112,7 @@ const makeDaemonCore = async (
     workerLabel = undefined,
   ) => {
     return withFormulaGraphLock(async () => {
-      const { powersId, capletFormulaNumber, workerId } =
+      const { powersId, capletFormulaNumber, workerId, originalWorkerId } =
         await formulateCapletDependencies(
           hostAgentId,
           hostHandleId,
@@ -4000,6 +4121,7 @@ const makeDaemonCore = async (
           specifiedPowersId,
           trustedShims,
           workerLabel,
+          'node',
         );
 
       /** @type {MakeBundleFormula} */
@@ -4009,6 +4131,7 @@ const makeDaemonCore = async (
         powers: powersId,
         bundle: bundleId,
         env,
+        ...(originalWorkerId ? { cancelWithWorker: originalWorkerId } : {}),
       };
       return formulate(capletFormulaNumber, formula);
     });
@@ -4107,8 +4230,7 @@ const makeDaemonCore = async (
 
         const { id: defaultHostWorkerId } = await formulateNumberedWorker(
           /** @type {FormulaNumber} */ (await randomHex256()),
-          undefined,
-          'host',
+          { label: 'host' },
         );
         const { id: networksDirectoryId } = await formulateNetworksDirectory();
         const { id: pinsDirectoryId } = await formulateDirectory();
@@ -4847,6 +4969,7 @@ const makeDaemonCore = async (
  * @param {Promise<never>} args.gracePeriodElapsed - Promise that resolves on grace period end.
  * @param {Specials} args.specials - Special formula generators.
  * @param {boolean} [args.gcEnabled] - Enable garbage collection.
+ * @param {'locked' | 'node'} [args.defaultWorkerKind] - Default kind for newly formulated workers.
  * @returns {Promise<{ endoBootstrap: FarRef<EndoBootstrap>, capTpConnectionRegistrar: CapTpConnectionRegistrar }>}
  *         An object containing the endo bootstrap and CapTP connection registrar.
  *
@@ -4863,7 +4986,14 @@ const makeDaemonCore = async (
  */
 const provideEndoBootstrap = async (
   powers,
-  { cancel, gracePeriodMs, gracePeriodElapsed, specials, gcEnabled },
+  {
+    cancel,
+    gracePeriodMs,
+    gracePeriodElapsed,
+    specials,
+    gcEnabled,
+    defaultWorkerKind,
+  },
 ) => {
   const { persistence: persistencePowers } = powers;
   const { rootNonce: endoFormulaNumber, isNewlyCreated } =
@@ -4880,6 +5010,7 @@ const provideEndoBootstrap = async (
     localNodeNumber,
     signBytes: rootKeypair.sign,
     gcEnabled,
+    defaultWorkerKind,
   });
   const { capTpConnectionRegistrar } = daemonCore;
   const isInitialized = !isNewlyCreated;
@@ -4919,6 +5050,7 @@ const provideEndoBootstrap = async (
  * @param {Specials} [specials] - Special formula generators
  * @param {object} [options]
  * @param {boolean} [options.gcEnabled] - Enable garbage collection of worker daemons.
+ * @param {'locked' | 'node'} [options.defaultWorkerKind] - Default kind for newly formulated workers.
  *
  * @example
  * ```js
@@ -4939,7 +5071,7 @@ export const makeDaemon = async (
   specials = {},
   options = {},
 ) => {
-  const { gcEnabled } = options;
+  const { gcEnabled, defaultWorkerKind } = options;
   const { promise: gracePeriodCancelled, reject: cancelGracePeriod } =
     /** @type {PromiseKit<never>} */ (makePromiseKit());
 
@@ -4962,6 +5094,7 @@ export const makeDaemon = async (
       gracePeriodElapsed,
       specials,
       gcEnabled,
+      defaultWorkerKind,
     });
 
   await Promise.allSettled([
