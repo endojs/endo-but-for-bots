@@ -66,7 +66,7 @@ export const makeOcapnRecordCodec = (
 /**
  * @typedef {SyrupCodec & {
  *   label: string;
- *   elementCount?: number;
+ *   elementCount: number | undefined;
  *   readBody: (reader: OcapnReader) => any;
  *   writeBody: (value: any, writer: OcapnWriter) => void;
  * }} OcapnListComponentCodec

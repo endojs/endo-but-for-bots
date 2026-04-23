@@ -350,7 +350,8 @@ test('readTypeAndMaybeValue for bytestring', t => {
   const reader = decode('44deadbeef');
   const result = reader.readTypeAndMaybeValue();
   t.is(result.type, 'bytestring');
-  t.is(result.value.byteLength, 4);
+  const value = /** @type {ArrayBufferLike} */ (result.value);
+  t.is(value.byteLength, 4);
 });
 
 test('readTypeAndMaybeValue for selector', t => {
