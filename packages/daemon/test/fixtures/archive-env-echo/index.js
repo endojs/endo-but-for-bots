@@ -1,8 +1,9 @@
+/* global Far */
 export const make = (_powers, _context, options = {}) => {
   const env = options.env || {};
   return Far('EnvEchoFromArchive', {
     getEnv() {
-      return Object.assign({}, env);
+      return { ...env };
     },
     getEnvVar(key) {
       return env[key];

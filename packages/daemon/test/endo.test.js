@@ -3218,6 +3218,55 @@ test('makeArchive runs a source-only ZIP and passes env to caplet', async t => {
   t.false(await E(envEcho).hasEnvVar('NOT_SET'));
 });
 
+test('makeArchive with empty env object', async t => {
+  const { host } = await prepareHost(t);
+  await E(host).provideWorker(['worker']);
+  const archivePath = path.join(
+    dirname,
+    'test',
+    'fixtures',
+    'archive-env-echo',
+  );
+  const envEcho = await doMakeArchive(host, archivePath, archiveName =>
+    E(host).makeArchive('worker', archiveName, {
+      powersName: '@none',
+      resultName: 'env-echo-empty',
+      env: {},
+    }),
+  );
+  t.deepEqual(await E(envEcho).getEnv(), {});
+});
+
+test('makeArchive without env option defaults to empty env', async t => {
+  const { host } = await prepareHost(t);
+  await E(host).provideWorker(['worker']);
+  const archivePath = path.join(
+    dirname,
+    'test',
+    'fixtures',
+    'archive-env-echo',
+  );
+  const envEcho = await doMakeArchive(host, archivePath, archiveName =>
+    E(host).makeArchive('worker', archiveName, {
+      powersName: '@none',
+      resultName: 'env-echo-default',
+    }),
+  );
+  t.deepEqual(await E(envEcho).getEnv(), {});
+});
+
+test('makeArchive rejects an unknown archive pet name', async t => {
+  const { host } = await prepareHost(t);
+  await E(host).provideWorker(['worker']);
+  await t.throwsAsync(
+    E(host).makeArchive('worker', 'no-such-archive', {
+      powersName: '@none',
+      resultName: 'oops',
+    }),
+    { message: /Unknown pet name for archive/ },
+  );
+});
+
 // Guest direct eval tests
 
 test('guest evaluate executes code directly', async t => {

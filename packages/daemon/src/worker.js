@@ -128,7 +128,7 @@ export const makeWorkerFacet = ({ cancel }) => {
       const chunks = [];
       let total = 0;
       for await (const chunk of makeRefReader(
-        await E(readableP).streamBase64(),
+        /** @type {any} */ (await E(readableP).streamBase64()),
       )) {
         chunks.push(chunk);
         total += chunk.byteLength;
@@ -148,9 +148,7 @@ export const makeWorkerFacet = ({ cancel }) => {
       const [{ parseArchive }, { defaultParserForLanguage }] =
         await Promise.all([
           import('@endo/compartment-mapper'),
-          import(
-            '@endo/compartment-mapper/import-archive-all-parsers.js'
-          ),
+          import('@endo/compartment-mapper/import-archive-all-parsers.js'),
         ]);
       const application = await parseArchive(archiveBytes, '<archive>', {
         parserForLanguage: defaultParserForLanguage,
