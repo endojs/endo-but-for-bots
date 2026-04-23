@@ -2419,6 +2419,23 @@ __metadata:
   languageName: unknown
   linkType: soft
 
+"@endo/syrup-frame@workspace:packages/syrup-frame":
+  version: 0.0.0-use.local
+  resolution: "@endo/syrup-frame@workspace:packages/syrup-frame"
+  dependencies:
+    "@endo/eventual-send": "workspace:^"
+    "@endo/harden": "workspace:^"
+    "@endo/init": "workspace:^"
+    "@endo/promise-kit": "workspace:^"
+    "@endo/ses-ava": "workspace:^"
+    "@endo/stream": "workspace:^"
+    ava: "catalog:dev"
+    c8: "catalog:dev"
+    eslint: "catalog:dev"
+    typescript: "npm:~5.9.2"
+  languageName: unknown
+  linkType: soft
+
 "@endo/test262-runner@workspace:^, @endo/test262-runner@workspace:packages/test262-runner":
   version: 0.0.0-use.local
   resolution: "@endo/test262-runner@workspace:packages/test262-runner"
