@@ -285,4 +285,23 @@ mod tests {
         let b = SessionId::from_peers(b"bob", b"alice");
         assert_eq!(a, b);
     }
+
+    #[test]
+    fn session_id_fixture_empty_label() {
+        // Pinned to the same fixture used in packages/slots/test/session.test.js.
+        // If this changes either side, both must change together so the JS
+        // client and Rust supervisor continue to agree on session identity.
+        assert_eq!(
+            SessionId::from_label("").to_hex(),
+            "5f8c31bdfa9a8acbc31b7b7dfffeb85df4605dfd4ceb74db6e9f35df8c4ce268",
+        );
+    }
+
+    #[test]
+    fn session_id_fixture_worker_1() {
+        assert_eq!(
+            SessionId::from_label("worker-1").to_hex(),
+            "f33f8f1cfda07c7c414fef3ab00811aa13b7fa1459690cfc4cccd43b0c5ce547",
+        );
+    }
 }
