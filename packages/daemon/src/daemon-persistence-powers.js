@@ -182,7 +182,7 @@ export const makeDaemonicPersistencePowers = (
 
   /**
    * @param {string} formulaNumber
-   * @returns {Promise<Formula>}
+   * @returns {Promise<{ node: string, formula: Formula }>}
    */
   const readFormula = async formulaNumber => {
     const { file: formulaPath } = makeFormulaPath(formulaNumber);
@@ -199,12 +199,15 @@ export const makeDaemonicPersistencePowers = (
         );
       }
     })();
-    return formula;
+    // The filesystem layout does not store per-formula node information.
+    // Callers that need a node number fall back to the local node when
+    // this returns the empty string.
+    return { node: '', formula };
   };
 
-  // Persist instructions for revival (this can be collected)
+  // Persist instructions for revival (this can be collected).
   /** @type {DaemonicPersistencePowers['writeFormula']} */
-  const writeFormula = async (formulaNumber, formula) => {
+  const writeFormula = async (formulaNumber, _nodeNumber, formula) => {
     const { directory, file } = makeFormulaPath(formulaNumber);
     // TODO Take care to write atomically with a rename here.
     await filePowers.makePath(directory);
@@ -226,8 +229,8 @@ export const makeDaemonicPersistencePowers = (
       }
       throw error;
     });
-    /** @type {import('./types.js').FormulaNumber[]} */
-    const numbers = [];
+    /** @type {Array<{ number: string, node: string }>} */
+    const records = [];
     await Promise.all(
       heads.map(async head => {
         const headPath = filePowers.joinPath(formulasPath, head);
@@ -243,16 +246,65 @@ export const makeDaemonicPersistencePowers = (
         for (const file of files) {
           if (file.endsWith('.json')) {
             const tail = file.slice(0, -'.json'.length);
-            numbers.push(
-              /** @type {import('./types.js').FormulaNumber} */ (
-                `${head}${tail}`
-              ),
-            );
+            // Filesystem layout has no per-formula node directory; the
+            // caller fills in localNodeNumber when node is empty.
+            records.push({ number: `${head}${tail}`, node: '' });
           }
         }
       }),
     );
-    return numbers;
+    return records;
+  };
+
+  // Minimal in-memory shim of the SQLite-only tables (agent keys,
+  // retention, per-node formula listing) that the filesystem
+  // persistence does not persist.  State lives only in process
+  // memory; callers that need real durability should run with the
+  // SQLite daemon.
+  /** @type {Map<string, { publicKey: string, privateKey: string, agentId: string }>} */
+  const agentKeys = new Map();
+  /** @type {Map<string, string>} */
+  const remoteAgentKeys = new Map();
+  /** @type {Map<string, Set<string>>} */
+  const retention = new Map();
+
+  const listFormulaNumbersByNode = _nodeNumber => [];
+  const writeAgentKey = (publicKey, privateKey, agentId) => {
+    agentKeys.set(publicKey, { publicKey, privateKey, agentId });
+  };
+  const getAgentKey = publicKey => agentKeys.get(publicKey);
+  const hasAgentKey = publicKey => agentKeys.has(publicKey);
+  const listAgentKeys = () => Array.from(agentKeys.values());
+  const deleteAgentKey = publicKey => {
+    agentKeys.delete(publicKey);
+  };
+  const writeRemoteAgentKey = (publicKey, daemonNode) => {
+    remoteAgentKeys.set(publicKey, daemonNode);
+  };
+  const getRemoteAgentKey = publicKey => remoteAgentKeys.get(publicKey);
+  const retentionBucket = guestPublicKey => {
+    let s = retention.get(guestPublicKey);
+    if (s === undefined) {
+      s = new Set();
+      retention.set(guestPublicKey, s);
+    }
+    return s;
+  };
+  const writeRetention = (guestPublicKey, formulaNumber) => {
+    retentionBucket(guestPublicKey).add(formulaNumber);
+  };
+  const deleteRetention = (guestPublicKey, formulaNumber) => {
+    retentionBucket(guestPublicKey).delete(formulaNumber);
+  };
+  const listRetention = guestPublicKey =>
+    Array.from(retentionBucket(guestPublicKey), formulaNumber => ({
+      formulaNumber,
+    }));
+  const replaceRetention = (guestPublicKey, formulaNumbers) => {
+    retention.set(guestPublicKey, new Set(formulaNumbers));
+  };
+  const deleteAllRetention = guestPublicKey => {
+    retention.delete(guestPublicKey);
   };
 
   return harden({
@@ -265,6 +317,19 @@ export const makeDaemonicPersistencePowers = (
     writeFormula,
     deleteFormula,
     listFormulas,
+    listFormulaNumbersByNode,
+    writeAgentKey,
+    getAgentKey,
+    hasAgentKey,
+    listAgentKeys,
+    deleteAgentKey,
+    writeRemoteAgentKey,
+    getRemoteAgentKey,
+    writeRetention,
+    deleteRetention,
+    listRetention,
+    replaceRetention,
+    deleteAllRetention,
   });
 };
 harden(makeDaemonicPersistencePowers);

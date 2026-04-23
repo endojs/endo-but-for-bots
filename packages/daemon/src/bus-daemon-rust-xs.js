@@ -278,7 +278,50 @@ const config = harden({
 const filePowers = makeXsFilePowers();
 const cryptoPowers = makeXsCryptoPowers();
 
-const petStorePowers = makePetStoreMaker(filePowers, config);
+// Minimal in-memory shim of the SQLite-backed DaemonDatabase API used
+// by pet-store.js.  The XS bus daemon does not yet have a SQLite
+// table layer; until it does, pet-store entries live only in process
+// memory.  See designs/daemon-make-archive.md for the follow-up.
+const makeInMemoryPetStoreDb = () => {
+  /** @type {Map<string, Map<string, string>>} */
+  const tables = new Map();
+  const key = (storeNumber, storeType) => `${storeType}:${storeNumber}`;
+  const tableFor = (storeNumber, storeType) => {
+    const k = key(storeNumber, storeType);
+    let t = tables.get(k);
+    if (t === undefined) {
+      t = new Map();
+      tables.set(k, t);
+    }
+    return t;
+  };
+  return {
+    writePetStoreEntry: (storeNumber, storeType, name, formulaId) => {
+      tableFor(storeNumber, storeType).set(name, formulaId);
+    },
+    deletePetStoreEntry: (storeNumber, storeType, name) => {
+      tableFor(storeNumber, storeType).delete(name);
+    },
+    renamePetStoreEntry: (storeNumber, storeType, fromName, toName) => {
+      const t = tableFor(storeNumber, storeType);
+      const id = t.get(fromName);
+      t.delete(fromName);
+      if (id !== undefined) t.set(toName, id);
+    },
+    listPetStoreEntries: (storeNumber, storeType) => {
+      const t = tableFor(storeNumber, storeType);
+      return Array.from(t.entries(), ([name, formulaId]) => ({
+        name,
+        formulaId,
+      }));
+    },
+    deletePetStore: (storeNumber, storeType) => {
+      tables.delete(key(storeNumber, storeType));
+    },
+  };
+};
+
+const petStorePowers = makePetStoreMaker(makeInMemoryPetStoreDb());
 const daemonicPersistencePowers = makeDaemonicPersistencePowers(
   filePowers,
   cryptoPowers,
@@ -652,9 +695,19 @@ const main = async () => {
   globalThis.__endoBootstrap = endoBootstrap;
   globalThis.__cancelGracePeriod = cancelGracePeriod;
 
-  // Request supervisor to listen on Unix socket.
-  const listenPayload = textEncoder.encode(JSON.stringify({ path: sockPath }));
-  sendEnvelope(0, 'listen', listenPayload, 0);
+  // Request the supervisor to listen on a Unix socket.  The verb is
+  // `listen-path` and the payload is a CBOR map with a single
+  // `path` entry pointing to the socket location.
+  /** @type {number[]} */
+  const listenBuf = [];
+  cborHead(listenBuf, CBOR_MAP, 1);
+  const pathKey = textEncoder.encode('path');
+  cborHead(listenBuf, CBOR_TEXT, pathKey.length);
+  for (let i = 0; i < pathKey.length; i += 1) listenBuf.push(pathKey[i]);
+  const pathVal = textEncoder.encode(sockPath);
+  cborHead(listenBuf, CBOR_TEXT, pathVal.length);
+  for (let i = 0; i < pathVal.length; i += 1) listenBuf.push(pathVal[i]);
+  sendEnvelope(0, 'listen-path', new Uint8Array(listenBuf), 0);
 
   // Update endo.pid with our PID.
   const pidPath = filePowers.joinPath(ephemeralStatePath, 'endo.pid');

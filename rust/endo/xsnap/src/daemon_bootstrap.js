@@ -34071,7 +34071,7 @@ const provideEndoBootstrap = async (
 
   /**
    * @param {string} formulaNumber
-   * @returns {Promise<Formula>}
+   * @returns {Promise<{ node: string, formula: Formula }>}
    */
   const readFormula = async formulaNumber => {
     const { file: formulaPath } = makeFormulaPath(formulaNumber);
@@ -34088,12 +34088,15 @@ const provideEndoBootstrap = async (
         );
       }
     })();
-    return formula;
+    // The filesystem layout does not store per-formula node information.
+    // Callers that need a node number fall back to the local node when
+    // this returns the empty string.
+    return { node: '', formula };
   };
 
-  // Persist instructions for revival (this can be collected)
+  // Persist instructions for revival (this can be collected).
   /** @type {DaemonicPersistencePowers['writeFormula']} */
-  const writeFormula = async (formulaNumber, formula) => {
+  const writeFormula = async (formulaNumber, _nodeNumber, formula) => {
     const { directory, file } = makeFormulaPath(formulaNumber);
     // TODO Take care to write atomically with a rename here.
     await filePowers.makePath(directory);
@@ -34115,8 +34118,8 @@ const provideEndoBootstrap = async (
       }
       throw error;
     });
-    /** @type {import('./types.js').FormulaNumber[]} */
-    const numbers = [];
+    /** @type {Array<{ number: string, node: string }>} */
+    const records = [];
     await Promise.all(
       heads.map(async head => {
         const headPath = filePowers.joinPath(formulasPath, head);
@@ -34132,16 +34135,65 @@ const provideEndoBootstrap = async (
         for (const file of files) {
           if (file.endsWith('.json')) {
             const tail = file.slice(0, -'.json'.length);
-            numbers.push(
-              /** @type {import('./types.js').FormulaNumber} */ (
-                `${head}${tail}`
-              ),
-            );
+            // Filesystem layout has no per-formula node directory; the
+            // caller fills in localNodeNumber when node is empty.
+            records.push({ number: `${head}${tail}`, node: '' });
           }
         }
       }),
     );
-    return numbers;
+    return records;
+  };
+
+  // Minimal in-memory shim of the SQLite-only tables (agent keys,
+  // retention, per-node formula listing) that the filesystem
+  // persistence does not persist.  State lives only in process
+  // memory; callers that need real durability should run with the
+  // SQLite daemon.
+  /** @type {Map<string, { publicKey: string, privateKey: string, agentId: string }>} */
+  const agentKeys = new Map();
+  /** @type {Map<string, string>} */
+  const remoteAgentKeys = new Map();
+  /** @type {Map<string, Set<string>>} */
+  const retention = new Map();
+
+  const listFormulaNumbersByNode = _nodeNumber => [];
+  const writeAgentKey = (publicKey, privateKey, agentId) => {
+    agentKeys.set(publicKey, { publicKey, privateKey, agentId });
+  };
+  const getAgentKey = publicKey => agentKeys.get(publicKey);
+  const hasAgentKey = publicKey => agentKeys.has(publicKey);
+  const listAgentKeys = () => Array.from(agentKeys.values());
+  const deleteAgentKey = publicKey => {
+    agentKeys.delete(publicKey);
+  };
+  const writeRemoteAgentKey = (publicKey, daemonNode) => {
+    remoteAgentKeys.set(publicKey, daemonNode);
+  };
+  const getRemoteAgentKey = publicKey => remoteAgentKeys.get(publicKey);
+  const retentionBucket = guestPublicKey => {
+    let s = retention.get(guestPublicKey);
+    if (s === undefined) {
+      s = new Set();
+      retention.set(guestPublicKey, s);
+    }
+    return s;
+  };
+  const writeRetention = (guestPublicKey, formulaNumber) => {
+    retentionBucket(guestPublicKey).add(formulaNumber);
+  };
+  const deleteRetention = (guestPublicKey, formulaNumber) => {
+    retentionBucket(guestPublicKey).delete(formulaNumber);
+  };
+  const listRetention = guestPublicKey =>
+    Array.from(retentionBucket(guestPublicKey), formulaNumber => ({
+      formulaNumber,
+    }));
+  const replaceRetention = (guestPublicKey, formulaNumbers) => {
+    retention.set(guestPublicKey, new Set(formulaNumbers));
+  };
+  const deleteAllRetention = guestPublicKey => {
+    retention.delete(guestPublicKey);
   };
 
   return harden({
@@ -34154,6 +34206,19 @@ const provideEndoBootstrap = async (
     writeFormula,
     deleteFormula,
     listFormulas,
+    listFormulaNumbersByNode,
+    writeAgentKey,
+    getAgentKey,
+    hasAgentKey,
+    listAgentKeys,
+    deleteAgentKey,
+    writeRemoteAgentKey,
+    getRemoteAgentKey,
+    writeRetention,
+    deleteRetention,
+    listRetention,
+    replaceRetention,
+    deleteAllRetention,
   });
 };$h͏_once.makeDaemonicPersistencePowers(makeDaemonicPersistencePowers);
 harden(makeDaemonicPersistencePowers);
@@ -36831,7 +36896,50 @@ const config = harden({
 const filePowers = makeXsFilePowers();
 const cryptoPowers = makeXsCryptoPowers();
 
-const petStorePowers = makePetStoreMaker(filePowers, config);
+// Minimal in-memory shim of the SQLite-backed DaemonDatabase API used
+// by pet-store.js.  The XS bus daemon does not yet have a SQLite
+// table layer; until it does, pet-store entries live only in process
+// memory.  See designs/daemon-make-archive.md for the follow-up.
+const makeInMemoryPetStoreDb = () => {
+  /** @type {Map<string, Map<string, string>>} */
+  const tables = new Map();
+  const key = (storeNumber, storeType) => `${storeType}:${storeNumber}`;
+  const tableFor = (storeNumber, storeType) => {
+    const k = key(storeNumber, storeType);
+    let t = tables.get(k);
+    if (t === undefined) {
+      t = new Map();
+      tables.set(k, t);
+    }
+    return t;
+  };
+  return {
+    writePetStoreEntry: (storeNumber, storeType, name, formulaId) => {
+      tableFor(storeNumber, storeType).set(name, formulaId);
+    },
+    deletePetStoreEntry: (storeNumber, storeType, name) => {
+      tableFor(storeNumber, storeType).delete(name);
+    },
+    renamePetStoreEntry: (storeNumber, storeType, fromName, toName) => {
+      const t = tableFor(storeNumber, storeType);
+      const id = t.get(fromName);
+      t.delete(fromName);
+      if (id !== undefined) t.set(toName, id);
+    },
+    listPetStoreEntries: (storeNumber, storeType) => {
+      const t = tableFor(storeNumber, storeType);
+      return Array.from(t.entries(), ([name, formulaId]) => ({
+        name,
+        formulaId,
+      }));
+    },
+    deletePetStore: (storeNumber, storeType) => {
+      tables.delete(key(storeNumber, storeType));
+    },
+  };
+};
+
+const petStorePowers = makePetStoreMaker(makeInMemoryPetStoreDb());
 const daemonicPersistencePowers = makeDaemonicPersistencePowers(
   filePowers,
   cryptoPowers,
@@ -37205,9 +37313,19 @@ const main = async () => {
   globalThis.__endoBootstrap = endoBootstrap;
   globalThis.__cancelGracePeriod = cancelGracePeriod;
 
-  // Request supervisor to listen on Unix socket.
-  const listenPayload = textEncoder.encode(JSON.stringify({ path: sockPath }));
-  sendEnvelope(0, 'listen', listenPayload, 0);
+  // Request the supervisor to listen on a Unix socket.  The verb is
+  // `listen-path` and the payload is a CBOR map with a single
+  // `path` entry pointing to the socket location.
+  /** @type {number[]} */
+  const listenBuf = [];
+  cborHead(listenBuf, CBOR_MAP, 1);
+  const pathKey = textEncoder.encode('path');
+  cborHead(listenBuf, CBOR_TEXT, pathKey.length);
+  for (let i = 0; i < pathKey.length; i += 1) listenBuf.push(pathKey[i]);
+  const pathVal = textEncoder.encode(sockPath);
+  cborHead(listenBuf, CBOR_TEXT, pathVal.length);
+  for (let i = 0; i < pathVal.length; i += 1) listenBuf.push(pathVal[i]);
+  sendEnvelope(0, 'listen-path', new Uint8Array(listenBuf), 0);
 
   // Update endo.pid with our PID.
   const pidPath = filePowers.joinPath(ephemeralStatePath, 'endo.pid');
