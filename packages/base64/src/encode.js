@@ -5,10 +5,10 @@
 import { alphabet64, padding } from './common.js';
 
 /**
- * XSnap is a JavaScript engine based on Moddable/XS.
- * The algorithm below is orders of magnitude too slow on this VM, but it
- * arranges a native binding on the global object.
- * We use that if it is available instead.
+ * Pure-JavaScript base64 encoder, exported for benchmarking and for
+ * environments where the native TC39 `Uint8Array.prototype.toBase64`
+ * intrinsic (proposal-arraybuffer-base64) is unavailable or has been
+ * removed.  See `encodeBase64` below for the dispatched default.
  *
  * This function is exported from this *file* for use in benchmarking,
  * but is not part of the *module*'s public API.
@@ -62,11 +62,42 @@ export const jsEncodeBase64 = data => {
   return string;
 };
 
+// Capture the native TC39 `Uint8Array.prototype.toBase64` intrinsic at
+// module load, before any caller can reach `encodeBase64` and before SES
+// lockdown freezes the prototype.  Post-lockdown mutation cannot redirect
+// the dispatched binding.  See designs/base64-native-fallthrough.md.
+const nativeToBase64 =
+  typeof (/** @type {any} */ (Uint8Array.prototype).toBase64) === 'function'
+    ? /** @type {(options?: object) => string} */ (
+        /** @type {any} */ (Uint8Array.prototype).toBase64
+      )
+    : undefined;
+
+/** @type {typeof jsEncodeBase64} */
+const nativeEncodeBase64 = data =>
+  /** @type {any} */ (nativeToBase64).call(data);
+
+// Legacy XSnap path: the older Moddable/XS build shipped a native
+// `globalThis.Base64.encode` before the TC39 intrinsic existed.  The
+// TC39 path takes precedence; this is a second-chance fallback.
+/** @type {typeof jsEncodeBase64 | undefined} */
+const xsEncodeBase64 =
+  globalThis.Base64 !== undefined ? globalThis.Base64.encode : undefined;
+
 /**
  * Encodes bytes into a Base64 string, as specified in
- * https://tools.ietf.org/html/rfc4648#section-4
+ * https://tools.ietf.org/html/rfc4648#section-4.
+ *
+ * Dispatches to the native `Uint8Array.prototype.toBase64` intrinsic
+ * when available (stage-4 TC39 proposal-arraybuffer-base64).  Otherwise
+ * falls through to the legacy `globalThis.Base64.encode` XS binding,
+ * and finally to the pure-JavaScript `jsEncodeBase64`.
  *
  * @type {typeof jsEncodeBase64}
  */
 export const encodeBase64 =
-  globalThis.Base64 !== undefined ? globalThis.Base64.encode : jsEncodeBase64;
+  nativeToBase64 !== undefined
+    ? nativeEncodeBase64
+    : xsEncodeBase64 !== undefined
+      ? xsEncodeBase64
+      : jsEncodeBase64;
