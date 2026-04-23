@@ -65,6 +65,7 @@ const normalizeHostOrGuestOptions = opts => {
  * @param {DaemonCore['formulateEval']} args.formulateEval
  * @param {DaemonCore['formulateUnconfined']} args.formulateUnconfined
  * @param {DaemonCore['formulateBundle']} args.formulateBundle
+ * @param {DaemonCore['formulateArchive']} args.formulateArchive
  * @param {DaemonCore['formulateReadableBlob']} args.formulateReadableBlob
  * @param {DaemonCore['checkinTree']} args.checkinTree
  * @param {DaemonCore['formulateMount']} args.formulateMount
@@ -98,6 +99,7 @@ export const makeHostMaker = ({
   formulateEval,
   formulateUnconfined,
   formulateBundle,
+  formulateArchive,
   formulateReadableBlob,
   checkinTree,
   formulateMount,
@@ -555,6 +557,46 @@ export const makeHostMaker = ({
         hostId,
         handleId,
         /** @type {FormulaIdentifier} */ (bundleId),
+        tasks,
+        workerId,
+        powersId,
+        env,
+        workerTrustedShims,
+        workerLabel,
+      );
+      return value;
+    };
+
+    /** @type {EndoHost['makeArchive']} */
+    const makeArchive = async (workerName, archiveName, options) => {
+      const archiveId = petStore.identifyLocal(
+        /** @type {Name} */ (archiveName),
+      );
+      if (archiveId === undefined) {
+        throw new TypeError(`Unknown pet name for archive: ${q(archiveName)}`);
+      }
+
+      const {
+        tasks,
+        workerId,
+        workerLabel: explicitLabel,
+        powersId,
+        env,
+        workerTrustedShims,
+      } = prepareMakeCaplet(
+        /** @type {Name | undefined} */ (workerName),
+        options,
+      );
+      const workerLabel =
+        explicitLabel ??
+        (options?.resultName !== undefined
+          ? `${options.resultName}`
+          : `archive:${archiveName}`);
+
+      const { value } = await formulateArchive(
+        hostId,
+        handleId,
+        /** @type {FormulaIdentifier} */ (archiveId),
         tasks,
         workerId,
         powersId,
@@ -1195,6 +1237,7 @@ export const makeHostMaker = ({
       evaluate,
       makeUnconfined,
       makeBundle,
+      makeArchive,
       cancel,
       gateway,
       greeter,

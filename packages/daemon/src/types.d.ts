@@ -266,6 +266,16 @@ type MakeBundleFormula = {
   // TODO formula slots
 };
 
+type MakeArchiveFormula = {
+  type: 'make-archive';
+  worker: FormulaIdentifier;
+  powers: FormulaIdentifier;
+  archive: FormulaIdentifier;
+  env?: Record<string, string>;
+  cancelWithWorker?: FormulaIdentifier;
+  // TODO formula slots
+};
+
 export type MakeCapletDeferredTaskParams = {
   capletId: FormulaIdentifier;
   powersId: FormulaIdentifier;
@@ -410,6 +420,7 @@ export type Formula =
   | LookupFormula
   | MakeUnconfinedFormula
   | MakeBundleFormula
+  | MakeArchiveFormula
   | HandleFormula
   | PetInspectorFormula
   | KnownPeersStoreFormula
@@ -980,6 +991,11 @@ export interface EndoHost extends EndoAgent {
     bundleName: string,
     options?: MakeCapletOptions,
   ): Promise<unknown>;
+  makeArchive(
+    workerPetName: string | undefined,
+    archiveName: string,
+    options?: MakeCapletOptions,
+  ): Promise<unknown>;
   cancel(petNameOrPath: string | string[], reason?: Error): Promise<void>;
   greeter(): Promise<EndoGreeter>;
   gateway(): Promise<EndoGateway>;
@@ -1188,6 +1204,7 @@ export type FilePowers = {
   makeFileWriter: (path: string) => Writer<Uint8Array>;
   writeFileText: (path: string, text: string) => Promise<void>;
   readFileText: (path: string) => Promise<string>;
+  readFileBytes: (path: string) => Promise<Uint8Array>;
   maybeReadFileText: (path: string) => Promise<string | undefined>;
   readDirectory: (path: string) => Promise<Array<string>>;
   makePath: (path: string) => Promise<void>;
@@ -1315,6 +1332,11 @@ export interface WorkerDaemonFacet {
   ): Promise<unknown>;
   makeBundle(
     bundle: ERef<EndoReadable>,
+    powers: ERef<unknown>,
+    context: ERef<FarContext>,
+  ): Promise<unknown>;
+  makeArchive(
+    archive: ERef<EndoReadable>,
     powers: ERef<unknown>,
     context: ERef<FarContext>,
   ): Promise<unknown>;
@@ -1469,6 +1491,18 @@ export interface DaemonCore {
     hostAgentId: FormulaIdentifier,
     hostHandleId: FormulaIdentifier,
     bundleId: FormulaIdentifier,
+    deferredTasks: DeferredTasks<MakeCapletDeferredTaskParams>,
+    specifiedWorkerId?: FormulaIdentifier,
+    specifiedPowersId?: FormulaIdentifier,
+    env?: Record<string, string>,
+    trustedShims?: string[],
+    workerLabel?: string,
+  ) => FormulateResult<unknown>;
+
+  formulateArchive: (
+    hostAgentId: FormulaIdentifier,
+    hostHandleId: FormulaIdentifier,
+    archiveId: FormulaIdentifier,
     deferredTasks: DeferredTasks<MakeCapletDeferredTaskParams>,
     specifiedWorkerId?: FormulaIdentifier,
     specifiedPowersId?: FormulaIdentifier,

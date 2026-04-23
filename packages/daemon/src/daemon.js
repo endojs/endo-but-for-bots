@@ -554,6 +554,18 @@ const makeDaemonCore = async (
         }
         return deps;
       }
+      case 'make-archive': {
+        /** @type {Array<[string, FormulaIdentifier]>} */
+        const deps = [
+          ['worker', formula.worker],
+          ['powers', formula.powers],
+          ['archive', formula.archive],
+        ];
+        if (formula.cancelWithWorker) {
+          deps.push(['cancelWithWorker', formula.cancelWithWorker]);
+        }
+        return deps;
+      }
       case 'peer':
         return [['networks', formula.networks]];
       case 'handle':
@@ -1382,6 +1394,48 @@ const makeDaemonCore = async (
     const powersP = provide(/** @type {FormulaIdentifier} */ (powersId));
     return E(/** @type {any} */ (workerDaemonFacet)).makeBundle(
       readableBundleP,
+      // TODO fix type
+      /** @type {any} */ (powersP),
+      /** @type {any} */ (makeFarContext(context)),
+      env,
+    );
+  };
+
+  /**
+   * @param {string} workerId
+   * @param {string} powersId
+   * @param {string} archiveId
+   * @param {Record<string, string> | undefined} env
+   * @param {Context} context
+   * @param {string} [cancelWithWorker]
+   */
+  const makeArchive = async (
+    workerId,
+    powersId,
+    archiveId,
+    env,
+    context,
+    cancelWithWorker,
+  ) => {
+    context.thisDiesIfThatDies(workerId);
+    context.thisDiesIfThatDies(powersId);
+    if (cancelWithWorker) {
+      context.thisDiesIfThatDies(cancelWithWorker);
+    }
+
+    const worker = await provide(
+      /** @type {FormulaIdentifier} */ (workerId),
+      'worker',
+    );
+    const workerDaemonFacet = workerDaemonFacets.get(worker);
+    assert(workerDaemonFacet, 'Cannot make caplet with non-worker');
+    const readableArchiveP = provide(
+      /** @type {FormulaIdentifier} */ (archiveId),
+      'readable-blob',
+    );
+    const powersP = provide(/** @type {FormulaIdentifier} */ (powersId));
+    return E(/** @type {any} */ (workerDaemonFacet)).makeArchive(
+      readableArchiveP,
       // TODO fix type
       /** @type {any} */ (powersP),
       /** @type {any} */ (makeFarContext(context)),
@@ -2299,6 +2353,24 @@ const makeDaemonCore = async (
       context,
     ) =>
       makeBundle(workerId, powersId, bundleId, env, context, cancelWithWorker),
+    'make-archive': (
+      {
+        worker: workerId,
+        powers: powersId,
+        archive: archiveId,
+        env = {},
+        cancelWithWorker,
+      },
+      context,
+    ) =>
+      makeArchive(
+        workerId,
+        powersId,
+        archiveId,
+        env,
+        context,
+        cancelWithWorker,
+      ),
     host: async (formula, context, id) => {
       const {
         hostHandle: hostHandleId,
@@ -4137,6 +4209,44 @@ const makeDaemonCore = async (
     });
   };
 
+  /** @type {DaemonCore['formulateArchive']} */
+  const formulateArchive = async (
+    hostAgentId,
+    hostHandleId,
+    archiveId,
+    deferredTasks,
+    specifiedWorkerId,
+    specifiedPowersId,
+    env = {},
+    trustedShims = undefined,
+    workerLabel = undefined,
+  ) => {
+    return withFormulaGraphLock(async () => {
+      const { powersId, capletFormulaNumber, workerId, originalWorkerId } =
+        await formulateCapletDependencies(
+          hostAgentId,
+          hostHandleId,
+          deferredTasks,
+          specifiedWorkerId,
+          specifiedPowersId,
+          trustedShims,
+          workerLabel,
+          'node',
+        );
+
+      /** @type {MakeArchiveFormula} */
+      const formula = {
+        type: 'make-archive',
+        worker: workerId,
+        powers: powersId,
+        archive: archiveId,
+        env,
+        ...(originalWorkerId ? { cancelWithWorker: originalWorkerId } : {}),
+      };
+      return formulate(capletFormulaNumber, formula);
+    });
+  };
+
   /**
    * @param {FormulaNumber} formulaNumber
    * @param {FormulaIdentifier} petStoreId
@@ -4778,6 +4888,7 @@ const makeDaemonCore = async (
     formulateEval,
     formulateUnconfined,
     formulateBundle,
+    formulateArchive,
     formulateReadableBlob,
     checkinTree,
     formulateMount,

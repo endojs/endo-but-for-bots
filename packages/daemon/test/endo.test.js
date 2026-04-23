@@ -15,6 +15,9 @@ import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
 import { makePromiseKit } from '@endo/promise-kit';
 import bundleSource from '@endo/bundle-source';
+import { makeArchive as makeCompartmentArchive } from '@endo/compartment-mapper';
+import { makeReadPowers } from '@endo/compartment-mapper/node-powers.js';
+import { defaultParserForLanguage as sourceParserForLanguage } from '@endo/compartment-mapper/import-parsers.js';
 import {
   start,
   stop,
@@ -293,6 +296,44 @@ const doMakeBundle = async (host, filePath, callback) => {
   await E(host).storeBlob(bundleReaderRef, bundleName);
   const result = await callback(bundleName);
   await E(host).remove(bundleName);
+  return result;
+};
+
+const archiveReadPowers = makeReadPowers({ fs, url, crypto, path });
+
+/**
+ * Performs the rituals to go from an endo `host` and a packaged
+ * fixture directory to calling `makeArchive` without leaving
+ * temporary pet names behind.
+ *
+ * @param {any} host - The host to use.
+ * @param {string} packageDir - Absolute path to a directory containing
+ *   a `package.json` and an entry module (the package will be packaged
+ *   as a source-only ZIP archive via `@endo/compartment-mapper`'s
+ *   `makeArchive`, with `parserForLanguage` set to the source parsers
+ *   from `@endo/compartment-mapper/import-parsers.js`).
+ * @param {(archiveName: string) => Promise<unknown>} callback - A
+ *   function that calls `makeArchive` on the `host`.
+ * @returns {Promise<unknown>} The result of the `callback`.
+ */
+const doMakeArchive = async (host, packageDir, callback) => {
+  const archiveName = `tmp-archive-${bundleId}`;
+  bundleId += 1;
+  const moduleLocation = url.pathToFileURL(packageDir).href;
+  const archiveBytes = await makeCompartmentArchive(
+    archiveReadPowers,
+    moduleLocation,
+    {
+      // Source parsers preserve module sources rather than precompiling
+      // them, which is the contract makeArchive enforces on the worker.
+      parserForLanguage: sourceParserForLanguage,
+    },
+  );
+  const archiveReaderRef = makeReaderRef([archiveBytes]);
+
+  await E(host).storeBlob(archiveReaderRef, archiveName);
+  const result = await callback(archiveName);
+  await E(host).remove(archiveName);
   return result;
 };
 
@@ -3143,6 +3184,38 @@ test('makeBundle without env option defaults to empty env', async t => {
 
   const allEnv = await E(envEcho).getEnv();
   t.deepEqual(allEnv, {});
+});
+
+test('makeArchive runs a source-only ZIP and passes env to caplet', async t => {
+  const { host } = await prepareHost(t);
+
+  await E(host).provideWorker(['worker']);
+
+  const archivePath = path.join(
+    dirname,
+    'test',
+    'fixtures',
+    'archive-env-echo',
+  );
+  const envEcho = await doMakeArchive(host, archivePath, archiveName =>
+    E(host).makeArchive('worker', archiveName, {
+      powersName: '@none',
+      resultName: 'env-echo-from-archive',
+      env: {
+        CONFIG_PATH: '/etc/app/config.json',
+        LOG_LEVEL: 'verbose',
+      },
+    }),
+  );
+
+  const allEnv = await E(envEcho).getEnv();
+  t.deepEqual(allEnv, {
+    CONFIG_PATH: '/etc/app/config.json',
+    LOG_LEVEL: 'verbose',
+  });
+  t.is(await E(envEcho).getEnvVar('CONFIG_PATH'), '/etc/app/config.json');
+  t.true(await E(envEcho).hasEnvVar('LOG_LEVEL'));
+  t.false(await E(envEcho).hasEnvVar('NOT_SET'));
 });
 
 // Guest direct eval tests

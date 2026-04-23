@@ -6,6 +6,7 @@ import { E, Far } from '@endo/far';
 import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
 import { makeNetstringCapTP } from './connection.js';
+import { makeRefReader } from './ref-reader.js';
 
 import { WorkerFacetForDaemonInterface } from './interfaces.js';
 
@@ -108,6 +109,60 @@ export const makeWorkerFacet = ({ cancel }) => {
         endowments,
       });
       return namespace.make(powersP, contextP, { env });
+    },
+
+    /**
+     * @param {ERef<EndoReadable>} readableP - Readable blob of a ZIP
+     *   archive containing a `compartment-map.json` and module sources
+     *   (no precompiled module formats).
+     * @param {Promise<unknown>} powersP
+     * @param {Promise<unknown>} contextP
+     * @param {Record<string, string>} env
+     */
+    makeArchive: async (readableP, powersP, contextP, env) => {
+      // Stream the archive via the existing base64-encoded reader so
+      // we never hand a mutable Uint8Array across CapTP (which would
+      // be rejected by @endo/marshal).  Concatenate the chunks into
+      // a single Uint8Array for compartment-mapper.parseArchive.
+      /** @type {Uint8Array[]} */
+      const chunks = [];
+      let total = 0;
+      for await (const chunk of makeRefReader(
+        await E(readableP).streamBase64(),
+      )) {
+        chunks.push(chunk);
+        total += chunk.byteLength;
+      }
+      const archiveBytes = new Uint8Array(total);
+      let offset = 0;
+      for (const chunk of chunks) {
+        archiveBytes.set(chunk, offset);
+        offset += chunk.byteLength;
+      }
+
+      // Defer the compartment-mapper imports so workers that never
+      // call makeArchive don't pay the babel/parser load cost.
+      // Use the "all parsers" set so we accept source-form modules
+      // (mjs/cjs) but degrade gracefully if a precompiled module
+      // format slips through.
+      const [{ parseArchive }, { defaultParserForLanguage }] =
+        await Promise.all([
+          import('@endo/compartment-mapper'),
+          import(
+            '@endo/compartment-mapper/import-archive-all-parsers.js'
+          ),
+        ]);
+      const application = await parseArchive(archiveBytes, '<archive>', {
+        parserForLanguage: defaultParserForLanguage,
+      });
+      const { namespace } = await application.import({
+        globals: endowments,
+      });
+      return /** @type {{make: Function}} */ (namespace).make(
+        powersP,
+        contextP,
+        { env },
+      );
     },
   });
 };

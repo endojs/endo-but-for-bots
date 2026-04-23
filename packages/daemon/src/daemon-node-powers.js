@@ -212,6 +212,17 @@ export const makeFilePowers = ({ fs, path: fspath }) => {
 
   /**
    * @param {string} path
+   * @returns {Promise<Uint8Array>}
+   */
+  const readFileBytes = async path => {
+    const buf = await fs.promises.readFile(path);
+    // Return as a plain Uint8Array (Buffer is a subclass) so the
+    // shape is portable across XS / Node and easy to harden.
+    return new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
+  };
+
+  /**
+   * @param {string} path
    */
   const maybeReadFileText = async path =>
     readFileText(path).catch(error => {
@@ -284,6 +295,7 @@ export const makeFilePowers = ({ fs, path: fspath }) => {
     makeFileWriter,
     writeFileText,
     readFileText,
+    readFileBytes,
     maybeReadFileText,
     readDirectory,
     makePath,

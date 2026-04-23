@@ -339,6 +339,10 @@ export const HostInterface = M.interface('EndoHost', {
   makeBundle: M.call(M.or(NameShape, M.undefined()), NameShape)
     .optional(MakeCapletOptionsShape)
     .returns(M.promise()),
+  // Make a caplet from a source-only ZIP archive
+  makeArchive: M.call(M.or(NameShape, M.undefined()), NameShape)
+    .optional(MakeCapletOptionsShape)
+    .returns(M.promise()),
   // Create a channel
   makeChannel: M.call(NameShape, M.string()).returns(M.promise()),
   // Create a timer
@@ -545,6 +549,11 @@ export const WorkerFacetForDaemonInterface = M.interface(
     // These methods receive promises that get resolved inside the worker
     // Args: (readableP, powersP, contextP, env)
     makeBundle: M.call(M.any(), M.any(), M.any(), EnvShape).returns(
+      M.promise(),
+    ),
+    // Args: (readableP, powersP, contextP, env) — readable is a ZIP
+    // archive of a compartment-map plus source-form modules.
+    makeArchive: M.call(M.any(), M.any(), M.any(), EnvShape).returns(
       M.promise(),
     ),
     // Args: (specifier, powersP, contextP, env)
