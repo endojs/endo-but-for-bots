@@ -4,17 +4,25 @@
  * @import { OcapnLocation } from '../codecs/components.js'
  * @import { OcapnPublicKey } from '../cryptography.js'
  * @import { SturdyRef } from './sturdyrefs.js'
- * @import { Client, Connection, InternalSession, LocationId, Logger, NetLayer, NetlayerHandlers, PendingSession, SelfIdentity, Session, SessionManager, SocketOperations, SwissNum } from './types.js'
+ * @import { Client, Connection, InternalSession, LocationId, Logger, NetLayer, NetlayerHandlers, NetworkSession, OcapnNetwork, PendingSession, SelfIdentity, Session, SessionManager, SocketOperations, SwissNum } from './types.js'
  */
 
 import harden from '@endo/harden';
 import { makePromiseKit } from '@endo/promise-kit';
 import { writeOcapnHandshakeMessage } from '../codecs/operations.js';
-import { makeOcapnKeyPair, signLocation } from '../cryptography.js';
+import {
+  makeOcapnKeyPair,
+  makeOcapnPublicKey,
+  signLocation,
+} from '../cryptography.js';
 import { makeGrantTracker } from './grant-tracker.js';
 import { makeSturdyRefTracker, enlivenSturdyRef } from './sturdyrefs.js';
 import { locationToLocationId, toHex } from './util.js';
-import { handleHandshakeMessageData, sendHandshake } from './handshake.js';
+import {
+  handleHandshakeMessageData,
+  makeSession,
+  sendHandshake,
+} from './handshake.js';
 import { makeOcapn } from './ocapn.js';
 
 /**
@@ -187,8 +195,14 @@ export const makeClient = ({
   enableImportCollection = true,
   debugMode = false,
 } = {}) => {
-  /** @type {Map<string, NetLayer>} */
-  const netlayers = new Map();
+  /**
+   * The map carries either bare NetLayers or OcapnNetwork instances.  The
+   * two shapes have incompatible `connect` signatures (sync vs async), so we
+   * store them as unknown and cast at each use site.
+   *
+   * @type {Map<string, unknown>}
+   */
+  const networks = new Map();
 
   /** @type {Logger} */
   const logger = harden({
@@ -222,21 +236,103 @@ export const makeClient = ({
    * @returns {Promise<InternalSession>}
    * Establishes a new session by initiating a connection.
    */
-  const establishSession = location => {
-    const netlayer = netlayers.get(location.transport);
-    if (!netlayer) {
-      throw Error(
-        `Netlayer not registered for transport: ${location.transport}`,
+  /**
+   * Create an InternalSession from a network-provided NetworkSession.
+   *
+   * This bridges the OcapnNetwork.provideSession() path to the
+   * existing session infrastructure.  The network has already
+   * authenticated the peer; we wrap its write/close into a
+   * synthetic Connection and set up CapTP over it.
+   *
+   * @param {NetworkSession} networkSession
+   * @param {NetLayer} netlayer
+   * @returns {InternalSession}
+   */
+  const makeInternalSessionFromNetwork = (networkSession, netlayer) => {
+    // Build a synthetic Connection backed by the NetworkSession.
+    /** @type {Connection} */
+    const connection = harden({
+      netlayer,
+      isOutgoing: networkSession.isInitiator,
+      write: bytes => networkSession.write(bytes),
+      end: () => networkSession.close(),
+      isDestroyed: false,
+    });
+
+    // Self identity: use the network session's local key ID to
+    // construct a minimal SelfIdentity.  The network has already
+    // proven our identity to the peer during its handshake.
+    const selfIdentity = makeSelfIdentity(netlayer.location);
+
+    const peerPublicKey = makeOcapnPublicKey(
+      networkSession.remotePublicKeyBytes,
+    );
+    const peerLocation = networkSession.remoteLocation;
+    const peerLocationSig =
+      /** @type {import('../codecs/components.js').OcapnSignature} */ (
+        /** @type {unknown} */ (new ArrayBuffer(0))
       );
+
+    const ocapn = prepareOcapn(
+      connection,
+      networkSession.sessionId,
+      peerLocation,
+    );
+
+    return makeSession({
+      id: networkSession.sessionId,
+      selfIdentity,
+      peerLocation,
+      peerPublicKey,
+      peerLocationSig,
+      ocapn,
+      connection,
+    });
+  };
+
+  const establishSession = async location => {
+    // Support both the new `network` field and the legacy `transport` field.
+    const networkId = location.network ?? location.transport;
+    const netlayer =
+      /** @type {(NetLayer & Partial<OcapnNetwork>) | undefined} */ (
+        networks.get(networkId)
+      );
+    if (!netlayer) {
+      throw Error(`Netlayer not registered for network: ${networkId}`);
     }
     const destinationLocationId = locationToLocationId(location);
     if (destinationLocationId === netlayer.locationId) {
       throw Error('Refusing to connect to self');
     }
-    const connection = netlayer.connect(location);
+
+    // If the network provides its own session establishment, use it.
+    // This is the path for networks like OCapN-Noise that manage
+    // the full session lifecycle (connect + authenticate + encrypt).
+    if (netlayer.provideSession) {
+      const networkSession = await netlayer.provideSession(location);
+      const session = makeInternalSessionFromNetwork(networkSession, netlayer);
+      sessionManager.resolveSession(
+        destinationLocationId,
+        session.connection,
+        session,
+      );
+      return Promise.resolve(session);
+    }
+
+    // Legacy path: connect, then handshake.
+    // OcapnNetwork.connect returns Promise<Connection>;
+    // NetLayer.connect returns Connection synchronously.
+    // Await handles both.
+    const connection = await netlayer.connect(location);
     const selfIdentity = getSelfIdentityForConnection(connection);
-    // Send handshake for outgoing connections
-    sendHandshake(connection, selfIdentity, captpVersion);
+    // Send handshake for outgoing connections.
+    // If the network provides its own handshake, use it; otherwise
+    // fall back to the default op:start-session handshake.
+    if (netlayer.sendSessionHandshake) {
+      netlayer.sendSessionHandshake(connection, captpVersion, selfIdentity);
+    } else {
+      sendHandshake(connection, selfIdentity, captpVersion);
+    }
     const pendingSession = sessionManager.makePendingSession(
       destinationLocationId,
       connection,
@@ -247,14 +343,15 @@ export const makeClient = ({
   const grantTracker = makeGrantTracker();
   const sturdyRefTracker = makeSturdyRefTracker(swissnumTable);
   /**
-   * Check if a location matches one of our own netlayers (self-location)
+   * Check if a location matches one of our own networks (self-location)
    * @param {OcapnLocation} location
    * @returns {boolean}
    */
   const isSelfLocation = location => {
     const locationId = locationToLocationId(location);
-    for (const netlayer of netlayers.values()) {
-      if (netlayer.locationId === locationId) {
+    for (const entry of networks.values()) {
+      const netlayer = /** @type {NetLayer | OcapnNetwork} */ (entry);
+      if (/** @type {NetLayer} */ (netlayer).locationId === locationId) {
         return true;
       }
     }
@@ -332,6 +429,22 @@ export const makeClient = ({
         data,
       );
     } else {
+      // Check if the connection's network has a custom incoming handshake.
+      const network =
+        /** @type {(NetLayer & Partial<OcapnNetwork>) | undefined} */ (
+          connection.netlayer
+        );
+      if (network && network.handleSessionHandshake) {
+        const selfIdentity = getSelfIdentityForConnection(connection);
+        const handled = network.handleSessionHandshake(
+          connection,
+          data,
+          selfIdentity,
+          captpVersion,
+        );
+        if (handled) return;
+      }
+      // Fall back to the default op:start-session handshake.
       handleHandshakeMessageData(
         logger,
         sessionManager,
@@ -417,12 +530,33 @@ export const makeClient = ({
      */
     async registerNetlayer(makeNetlayer) {
       const netlayer = await makeNetlayer(netlayerHandlers, logger);
-      const { transport } = netlayer.location;
-      if (netlayers.has(transport)) {
-        throw Error(`Netlayer already registered for transport: ${transport}`);
+      // Register under `network` if provided, falling back to `transport`.
+      const networkId =
+        netlayer.location.network ?? netlayer.location.transport;
+      if (networks.has(networkId)) {
+        throw Error(`Network already registered: ${networkId}`);
       }
-      netlayers.set(transport, netlayer);
+      networks.set(networkId, netlayer);
       return netlayer;
+    },
+    /**
+     * Registers an OCapN network by calling the provided factory.
+     * The network manages its own session establishment, authentication,
+     * and transport selection.  This is the successor to registerNetlayer
+     * for the network/transport separation.
+     *
+     * @template {import('./types.js').OcapnNetwork} T
+     * @param {(handlers: NetlayerHandlers, logger: Logger) => T | Promise<T>} makeNetwork
+     * @returns {Promise<T>}
+     */
+    async registerNetwork(makeNetwork) {
+      const network = await makeNetwork(netlayerHandlers, logger);
+      const { networkId } = network;
+      if (networks.has(networkId)) {
+        throw Error(`Network already registered: ${networkId}`);
+      }
+      networks.set(networkId, network);
+      return network;
     },
     /**
      * @param {OcapnLocation} location
@@ -469,8 +603,8 @@ export const makeClient = ({
     },
     shutdown() {
       logger.info(`shutdown called`);
-      for (const netlayer of netlayers.values()) {
-        netlayer.shutdown();
+      for (const entry of networks.values()) {
+        /** @type {NetLayer | OcapnNetwork} */ (entry).shutdown();
       }
     },
   };

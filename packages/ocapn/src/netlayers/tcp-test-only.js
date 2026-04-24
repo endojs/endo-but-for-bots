@@ -5,9 +5,10 @@ import net from 'net';
 import harden from '@endo/harden';
 
 import { locationToLocationId } from '../client/util.js';
+import { sendHandshake } from '../client/handshake.js';
 
 /**
- * @import { Connection, NetLayer, NetlayerHandlers, SocketOperations } from '../client/types.js'
+ * @import { Connection, NetLayer, NetlayerHandlers, SelfIdentity, SocketOperations } from '../client/types.js'
  * @import { OcapnLocation } from '../codecs/components.js'
  */
 
@@ -57,7 +58,7 @@ const makeSocketOperations = (socket, writeLatencyMs) => {
  * @typedef {object} TcpTestOnlyNetLayerDebug
  * @property {(location: OcapnLocation) => ConnectionSocketPair} establishConnection
  *
- * @typedef {NetLayer & { _debug: TcpTestOnlyNetLayerDebug }} TcpTestOnlyNetLayer
+ * @typedef {NetLayer & Partial<Omit<import('../client/types.js').OcapnNetwork, 'connect'>> & { _debug: TcpTestOnlyNetLayerDebug }} TcpTestOnlyNetLayer
  */
 
 /**
@@ -108,7 +109,8 @@ export const makeTcpNetLayer = async ({
   /** @type {OcapnLocation} */
   const localLocation = {
     type: 'ocapn-peer',
-    transport: 'tcp-testing-only',
+    network: 'tcp-testing-only',
+    transport: 'tcp-testing-only', // Legacy; prefer `network`.
     designator: specifiedDesignator,
     hints: {
       host: address,
@@ -203,8 +205,10 @@ export const makeTcpNetLayer = async ({
    * @returns {Connection}
    */
   const lookupOrConnect = location => {
-    if (location.transport !== localLocation.transport) {
-      throw Error(`Unsupported transport: ${location.transport}`);
+    const remoteNetworkId = location.network ?? location.transport;
+    const localNetworkId = localLocation.network ?? localLocation.transport;
+    if (remoteNetworkId !== localNetworkId) {
+      throw Error(`Unsupported network: ${remoteNetworkId}`);
     }
     const existingConnection = outgoingConnections.get(location.designator);
     // Only reuse connection if it's not destroyed
@@ -235,10 +239,25 @@ export const makeTcpNetLayer = async ({
 
   /** @type {TcpTestOnlyNetLayer} */
   const netlayer = harden({
+    // OcapnNetwork interface
+    networkId: 'tcp-testing-only',
+    // NetLayer interface (legacy, retained during migration)
     location: localLocation,
     locationId: locationToLocationId(localLocation),
     connect: lookupOrConnect,
     shutdown,
+    /**
+     * The tcp-testing-only network uses the standard op:start-session
+     * handshake.  This method delegates to the core sendHandshake,
+     * making the handshake a network concern rather than OCapN core.
+     *
+     * @param {Connection} connection
+     * @param {string} captpVersion
+     * @param {SelfIdentity} selfIdentity
+     */
+    sendSessionHandshake: (connection, captpVersion, selfIdentity) => {
+      sendHandshake(connection, selfIdentity, captpVersion);
+    },
     // eslint-disable-next-line no-underscore-dangle
     _debug: {
       establishConnection: internalEstablishConnection,

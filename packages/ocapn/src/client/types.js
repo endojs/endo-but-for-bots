@@ -28,6 +28,67 @@
  */
 
 /**
+ * An OCapN Network is responsible for session establishment, authentication,
+ * and encryption.  Each network defines its own handshake protocol and may
+ * support multiple transports (WebSocket, TCP, etc.).
+ *
+ * This is the replacement for NetLayer as part of the network/transport
+ * separation (see designs/ocapn-network-transport-separation.md).
+ *
+ * @typedef {object} OcapnNetwork
+ * @property {string} networkId - Unique identifier for this network
+ *   (e.g., 'np' for OCapN-Noise, 'tcp-testing-only' for test).
+ * @property {(location: OcapnLocation) => Promise<Connection>} connect -
+ *   Establish a connection to a peer at the given location.
+ *   The network selects the transport based on connection hints.
+ * @property {(handler: IncomingConnectionHandler) => void} listen -
+ *   Register a handler for incoming connections.
+ * @property {() => void} shutdown -
+ *   Shut down the network, closing all connections.
+ * @property {((connection: Connection, captpVersion: string, selfIdentity: SelfIdentity) => void)} [sendSessionHandshake] -
+ *   Optional custom handshake for outgoing connections.  If provided,
+ *   the network handles its own session negotiation (e.g., Noise
+ *   Protocol handshake) instead of the default op:start-session.
+ *   selfIdentity is provided by the client for networks that need it
+ *   (like tcp-testing-only); networks that manage their own identity
+ *   (like OCapN-Noise) can ignore it.
+ * @property {((connection: Connection, data: Uint8Array, selfIdentity: SelfIdentity, captpVersion: string) => boolean)} [handleSessionHandshake] -
+ *   Optional custom handler for incoming handshake data.  Returns true
+ *   if the data was consumed as a handshake message, false to let OCapN
+ *   core handle it with the default op:start-session handler.
+ * @property {((location: OcapnLocation) => Promise<NetworkSession>)} [provideSession] -
+ *   Optional method that returns a fully authenticated session.
+ *   When present, `establishSession` skips the connect+handshake
+ *   flow and uses the network-provided session directly.
+ *   This is the target interface for networks like OCapN-Noise
+ *   that manage their own session lifecycle.
+ */
+
+/**
+ * The handoff interface between a network and OCapN core.
+ * After the network establishes and authenticates a session (via
+ * op:start-session, Noise Protocol, or other handshake), it delivers
+ * a NetworkSession to OCapN core, which runs CapTP over it.
+ *
+ * @typedef {object} NetworkSession
+ * @property {SessionId} sessionId - Unique session identifier.
+ * @property {PublicKeyId} localKeyId - Our key ID for this session.
+ * @property {PublicKeyId} remoteKeyId - Peer's key ID for this session.
+ * @property {ArrayBufferLike} remotePublicKeyBytes - Peer's raw public
+ *   key bytes (needed to construct OcapnPublicKey for session).
+ * @property {OcapnLocation} remoteLocation - Peer's location.
+ * @property {(bytes: Uint8Array) => void} write - Send bytes to peer.
+ * @property {() => void} close - Terminate session.
+ * @property {boolean} isInitiator - Whether we initiated this session.
+ */
+
+/**
+ * @typedef {object} IncomingConnectionHandler
+ * @property {(connection: Connection) => void} onConnection -
+ *   Called when a new incoming connection is established.
+ */
+
+/**
  * @typedef {object} PendingSession
  * @property {Connection | undefined} outgoingConnection
  * @property {Promise<InternalSession>} promise
@@ -145,6 +206,9 @@
 /**
  * @typedef {object} Client
  * @property {<T extends NetLayer>(makeNetlayer: (handlers: NetlayerHandlers, logger: Logger) => T | Promise<T>) => Promise<T>} registerNetlayer
+ * @property {<T extends OcapnNetwork>(makeNetwork: (handlers: NetlayerHandlers, logger: Logger) => T | Promise<T>) => Promise<T>} registerNetwork
+ * Register an OCapN network. The network manages session establishment
+ * and authentication. Successor to registerNetlayer.
  * @property {(location: OcapnLocation) => Promise<Session>} provideSession
  * @property {(location: OcapnLocation, swissNum: SwissNum) => SturdyRef} makeSturdyRef
  * @property {(sturdyRef: SturdyRef) => Promise<any>} enlivenSturdyRef

@@ -81,7 +81,7 @@ const compareSessionKeysForCrossedHellos = (
  * @param {Connection} options.connection
  * @returns {InternalSession}
  */
-const makeSession = ({
+export const makeSession = ({
   id,
   selfIdentity,
   peerLocation,
