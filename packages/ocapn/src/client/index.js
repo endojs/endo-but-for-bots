@@ -350,8 +350,7 @@ export const makeClient = ({
   const isSelfLocation = location => {
     const locationId = locationToLocationId(location);
     for (const entry of networks.values()) {
-      const netlayer =
-        /** @type {NetLayer | OcapnNetwork} */ (entry);
+      const netlayer = /** @type {NetLayer | OcapnNetwork} */ (entry);
       if (/** @type {NetLayer} */ (netlayer).locationId === locationId) {
         return true;
       }
