@@ -878,13 +878,18 @@ export const makeMailboxMaker = ({
         );
         await E(resolver).resolveWithId(externalizedId);
         if (cmdNumber !== undefined) {
-          await recordCommandResult(cmdNumber, true, 'resolved', `${cmdMsgId}-result`)
-            .catch(() => {});
+          await recordCommandResult(
+            cmdNumber,
+            true,
+            'resolved',
+            `${cmdMsgId}-result`,
+          ).catch(() => {});
         }
       } catch (error) {
         if (cmdNumber !== undefined) {
           await recordCommandResult(
-            cmdNumber, false,
+            cmdNumber,
+            false,
             /** @type {Error} */ (error).message,
             `${cmdMsgId}-result`,
           ).catch(() => {});
@@ -1092,8 +1097,12 @@ export const makeMailboxMaker = ({
         await E(dismisser).dismiss();
         if (cmdNumber !== undefined) {
           const resultId = `${cmdMsgId}-result`;
-          await recordCommandResult(cmdNumber, true, 'dismissed', resultId)
-            .catch(() => {});
+          await recordCommandResult(
+            cmdNumber,
+            true,
+            'dismissed',
+            resultId,
+          ).catch(() => {});
         }
       } catch (error) {
         if (cmdNumber !== undefined) {
@@ -1143,46 +1152,51 @@ export const makeMailboxMaker = ({
       ).catch(() => undefined);
 
       try {
-      if (message.type === 'value') {
-        if (edgeName !== 'value') {
+        if (message.type === 'value') {
+          if (edgeName !== 'value') {
+            throw new Error(
+              `Value messages only have a "value" edge, not ${q(edgeName)}`,
+            );
+          }
+          const id = /** @type {FormulaIdentifier} */ (message.valueId);
+          context.thisDiesIfThatDies(id);
+          await E(directory).storeIdentifier(petNamePath, id);
+          return;
+        }
+        if (message.type !== 'package') {
           throw new Error(
-            `Value messages only have a "value" edge, not ${q(edgeName)}`,
+            `Message must be a package or value ${q(messageNumber)}`,
           );
         }
-        const id = /** @type {FormulaIdentifier} */ (message.valueId);
+        const index = message.names.lastIndexOf(edgeName);
+        if (index === -1) {
+          throw new Error(
+            `No reference named ${q(edgeName)} in message ${q(messageNumber)}`,
+          );
+        }
+        const id = message.ids[index];
+        if (id === undefined) {
+          throw new Error(
+            `panic: message must contain a formula for every name, including the name ${q(
+              edgeName,
+            )} at ${q(index)}`,
+          );
+        }
         context.thisDiesIfThatDies(id);
         await E(directory).storeIdentifier(petNamePath, id);
-        return;
-      }
-      if (message.type !== 'package') {
-        throw new Error(
-          `Message must be a package or value ${q(messageNumber)}`,
-        );
-      }
-      const index = message.names.lastIndexOf(edgeName);
-      if (index === -1) {
-        throw new Error(
-          `No reference named ${q(edgeName)} in message ${q(messageNumber)}`,
-        );
-      }
-      const id = message.ids[index];
-      if (id === undefined) {
-        throw new Error(
-          `panic: message must contain a formula for every name, including the name ${q(
-            edgeName,
-          )} at ${q(index)}`,
-        );
-      }
-      context.thisDiesIfThatDies(id);
-      await E(directory).storeIdentifier(petNamePath, id);
-      if (cmdNumber !== undefined) {
-        await recordCommandResult(cmdNumber, true, `adopted as ${petNamePath.join('/')}`, `${cmdMsgId}-result`)
-          .catch(() => {});
-      }
+        if (cmdNumber !== undefined) {
+          await recordCommandResult(
+            cmdNumber,
+            true,
+            `adopted as ${petNamePath.join('/')}`,
+            `${cmdMsgId}-result`,
+          ).catch(() => {});
+        }
       } catch (error) {
         if (cmdNumber !== undefined) {
           await recordCommandResult(
-            cmdNumber, false,
+            cmdNumber,
+            false,
             /** @type {Error} */ (error).message,
             `${cmdMsgId}-result`,
           ).catch(() => {});
