@@ -306,7 +306,9 @@ type MessageFormula = {
     | 'eval-request'
     | 'definition'
     | 'form'
-    | 'value';
+    | 'value'
+    | 'command'
+    | 'command-result';
   messageId: FormulaNumber;
   replyTo?: FormulaNumber;
   from: FormulaIdentifier;
@@ -486,7 +488,38 @@ export type ValueMessage = MessageBase & {
   valueId: FormulaIdentifier;
 };
 
-export type Message = Request | Package | DefineRequest | Form | ValueMessage;
+export type CommandMessage = MessageBase & {
+  type: 'command';
+  /** The operation being performed. */
+  commandName: string;
+  /** Structured arguments for the command. */
+  args: Record<string, unknown>;
+  /** Formula identifier for the result promise (if applicable). */
+  promiseId?: FormulaIdentifier;
+  /** Formula identifier for the result resolver (if applicable). */
+  resolverId?: FormulaIdentifier;
+};
+
+export type CommandResultMessage = MessageBase & {
+  type: 'command-result';
+  /** References the command message this is a result for. */
+  replyTo: FormulaNumber;
+  /** Whether the command succeeded. */
+  success: boolean;
+  /** Human-readable result summary. */
+  summary: string;
+  /** Formula identifier of the result value (if any). */
+  valueId?: FormulaIdentifier;
+};
+
+export type Message =
+  | Request
+  | Package
+  | DefineRequest
+  | Form
+  | ValueMessage
+  | CommandMessage
+  | CommandResultMessage;
 
 export type EnvelopedMessage = Message & {
   to: FormulaIdentifier;

@@ -803,6 +803,45 @@ export const inboxComponent = async (
       $valueMsg.appendChild($actions);
 
       $body.appendChild($valueMsg);
+    } else if (message.type === 'command') {
+      // Command message — compact card showing the operation.
+      const $cmdCard = document.createElement('div');
+      $cmdCard.className = 'command-message';
+
+      const $icon = document.createElement('span');
+      $icon.className = 'command-icon';
+      $icon.textContent = '\u25D0'; // ◐ pending
+      $cmdCard.appendChild($icon);
+
+      const $cmdText = document.createElement('span');
+      $cmdText.className = 'command-text';
+      const argsStr = message.args
+        ? Object.entries(message.args)
+            .map(([k, v]) => `${v}`)
+            .join(' ')
+        : '';
+      $cmdText.textContent = `${message.commandName} ${argsStr}`.trim();
+      $cmdCard.appendChild($cmdText);
+
+      $body.appendChild($cmdCard);
+      $envelope.classList.add('command-envelope');
+    } else if (message.type === 'command-result') {
+      // Command result — compact settled card.
+      const $resultCard = document.createElement('div');
+      $resultCard.className = `command-message ${message.success ? 'success' : 'error'}`;
+
+      const $icon = document.createElement('span');
+      $icon.className = 'command-icon';
+      $icon.textContent = message.success ? '\u2713' : '\u2717'; // ✓ or ✗
+      $resultCard.appendChild($icon);
+
+      const $resultText = document.createElement('span');
+      $resultText.className = 'command-text';
+      $resultText.textContent = message.summary || '';
+      $resultCard.appendChild($resultText);
+
+      $body.appendChild($resultCard);
+      $envelope.classList.add('command-envelope');
     }
 
     $envelope.appendChild($message);
