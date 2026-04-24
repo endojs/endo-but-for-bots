@@ -109,9 +109,7 @@ export const checkout = async ({
       } else {
         const resolvedPath = path.resolve(/** @type {string} */ (destPath));
         await fs.promises.writeFile(resolvedPath, zipBytes);
-        console.log(
-          `  checked out ${progress.files} files to ${resolvedPath}`,
-        );
+        console.log(`  checked out ${progress.files} files to ${resolvedPath}`);
       }
     });
   }

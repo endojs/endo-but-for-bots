@@ -484,7 +484,12 @@ export const main = async rawArgs => {
     .action(async (name, cmd) => {
       const { as: agentNames, text } = cmd.opts();
       const { writeText } = await import('./commands/write-text.js');
-      return writeText({ name, text, useStdin: text === undefined, agentNames });
+      return writeText({
+        name,
+        text,
+        useStdin: text === undefined,
+        agentNames,
+      });
     });
 
   program
@@ -528,7 +533,9 @@ export const main = async rawArgs => {
   program
     .command('checkin <path>')
     .alias('ci')
-    .description('checks in a local directory (or zip with -z) as a readable tree')
+    .description(
+      'checks in a local directory (or zip with -z) as a readable tree',
+    )
     .option(...commonOptions.as)
     .option(...commonOptions.requiredName)
     .option('-z, --zip', 'interpret input as a zip archive')
@@ -548,7 +555,9 @@ export const main = async rawArgs => {
   program
     .command('checkout <name> [path]')
     .alias('co')
-    .description('checks out a readable tree to a local directory (or zip with -z)')
+    .description(
+      'checks out a readable tree to a local directory (or zip with -z)',
+    )
     .option(...commonOptions.as)
     .option('-z, --zip', 'produce a zip archive instead of a directory')
     .option('--stdout', 'write zip archive to stdout (requires -z)')

@@ -84,14 +84,11 @@ export const checkin = async ({
   try {
     await withEndoAgent(agentNames, { os, process }, async ({ agent }) => {
       const progress = { files: 0 };
-      const localTree = makeLocalTree(
-        /** @type {string} */ (resolvedPath),
-        {
-          onFile: () => {
-            progress.files += 1;
-          },
+      const localTree = makeLocalTree(/** @type {string} */ (resolvedPath), {
+        onFile: () => {
+          progress.files += 1;
         },
-      );
+      });
       await E(agent).storeTree(localTree, parsedName);
       console.log(`  stored ${progress.files} files`);
     });
