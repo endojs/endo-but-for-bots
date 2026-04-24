@@ -384,8 +384,7 @@ export const inboxComponent = async (
               $firstChild.classList.contains('md-code-fence-wrapper')) ||
               ($firstChild instanceof Element &&
                 $firstChild.tagName === 'UL') ||
-              ($firstChild instanceof Element &&
-                $firstChild.tagName === 'OL'));
+              ($firstChild instanceof Element && $firstChild.tagName === 'OL'));
 
           if ($firstPara && !isCodeFenceOrList) {
             // Insert into existing paragraph or heading
@@ -427,60 +426,60 @@ export const inboxComponent = async (
           const edgeName = names[index];
           const $slot = insertionPoints[index];
 
-        const $token = document.createElement('span');
-        $token.className = 'token';
-        $token.tabIndex = 0;
-        $token.setAttribute('role', 'button');
-        $token.title = 'Open value';
+          const $token = document.createElement('span');
+          $token.className = 'token';
+          $token.tabIndex = 0;
+          $token.setAttribute('role', 'button');
+          $token.title = 'Open value';
 
-        const $name = document.createElement('b');
-        $name.innerText = `@${edgeName}`;
-        $token.appendChild($name);
+          const $name = document.createElement('b');
+          $name.innerText = `@${edgeName}`;
+          $token.appendChild($name);
 
-        const updateHoverTitle = async () => {
-          const id = message.ids?.[index];
-          if (!id) return;
-          try {
-            const petNames = await E(powers).reverseLocate(id);
-            if (Array.isArray(petNames) && petNames.length > 0) {
-              $token.title = petNames.join(', ');
+          const updateHoverTitle = async () => {
+            const id = message.ids?.[index];
+            if (!id) return;
+            try {
+              const petNames = await E(powers).reverseLocate(id);
+              if (Array.isArray(petNames) && petNames.length > 0) {
+                $token.title = petNames.join(', ');
+              }
+            } catch {
+              // Keep default title on failure.
             }
-          } catch {
-            // Keep default title on failure.
-          }
-        };
+          };
 
-        const openValue = async () => {
-          const valueId = message.ids?.[index];
-          if (!valueId) {
-            $error.innerText = ' Value not available';
-            return;
-          }
-          try {
-            const value = await E(powers).lookupById(valueId);
-            // Pass message context for title display
-            showValue(value, valueId, undefined, { number, edgeName });
-          } catch (error) {
-            $error.innerText = ` ${/** @type {Error} */ (error).message}`;
-          }
-        };
+          const openValue = async () => {
+            const valueId = message.ids?.[index];
+            if (!valueId) {
+              $error.innerText = ' Value not available';
+              return;
+            }
+            try {
+              const value = await E(powers).lookupById(valueId);
+              // Pass message context for title display
+              showValue(value, valueId, undefined, { number, edgeName });
+            } catch (error) {
+              $error.innerText = ` ${/** @type {Error} */ (error).message}`;
+            }
+          };
 
-        $token.addEventListener('click', () => {
-          openValue();
-        });
-
-        $token.addEventListener('keydown', event => {
-          if (event.repeat || event.metaKey) return;
-          if (event.key === 'Enter' || event.key === ' ') {
-            event.preventDefault();
+          $token.addEventListener('click', () => {
             openValue();
-          }
-        });
+          });
 
-        updateHoverTitle();
+          $token.addEventListener('keydown', event => {
+            if (event.repeat || event.metaKey) return;
+            if (event.key === 'Enter' || event.key === ' ') {
+              event.preventDefault();
+              openValue();
+            }
+          });
 
-        // Replace the placeholder slot with the token
-        $slot.replaceWith($token);
+          updateHoverTitle();
+
+          // Replace the placeholder slot with the token
+          $slot.replaceWith($token);
         }
       };
 

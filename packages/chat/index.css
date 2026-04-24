@@ -2605,7 +2605,9 @@ body.resizing * {
   cursor: pointer;
   font-size: 11px;
   padding: 2px 6px;
-  transition: background 0.15s, color 0.15s;
+  transition:
+    background 0.15s,
+    color 0.15s;
 }
 
 .render-mode-btn:hover {
