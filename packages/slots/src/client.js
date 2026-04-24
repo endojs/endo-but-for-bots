@@ -1,4 +1,5 @@
 // @ts-check
+/* global globalThis */
 
 import harden from '@endo/harden';
 import { makeError, X } from '@endo/errors';
@@ -71,8 +72,20 @@ import {
  *   },
  * }} opts.codec
  * @param {SendEnvelope} opts.sendEnvelope
+ * @param {typeof globalThis.FinalizationRegistry} [opts.FinalizationRegistry]
+ *   Optional finalisation registry constructor.  When supplied,
+ *   `makePresence` registers each presence so that its
+ *   garbage-collection queues an outbound `drop` envelope with
+ *   `ram: 1`.  Defaults to `globalThis.FinalizationRegistry` if
+ *   available; if the host has no such class, auto-drop is a
+ *   no-op and callers must invoke `drop([...])` explicitly.
  */
-export const makeSlotClient = ({ clist, codec, sendEnvelope }) => {
+export const makeSlotClient = ({
+  clist,
+  codec,
+  sendEnvelope,
+  FinalizationRegistry: FRCtor = globalThis.FinalizationRegistry,
+}) => {
   /**
    * Pending replies, keyed by the descriptor of the local reply
    * promise.  Entries are cleared by `onResolve`.
@@ -80,6 +93,32 @@ export const makeSlotClient = ({ clist, codec, sendEnvelope }) => {
    * @type {Map<string, { resolve: (v: unknown) => void, reject: (e: unknown) => void }>}
    */
   const settlers = new Map();
+
+  /**
+   * Finalisation callback: when a presence becomes unreachable,
+   * send a `drop` envelope with `ram: 1` against its descriptor.
+   * Best-effort — the transport may be closed by the time the GC
+   * fires, in which case we swallow the error silently.
+   *
+   * @type {InstanceType<typeof globalThis.FinalizationRegistry<Descriptor>> | null}
+   */
+  const finalizer = FRCtor
+    ? new FRCtor(
+        /**
+         * @param {Descriptor} desc
+         */
+        desc => {
+          try {
+            const bytes = encodeDropPayload([
+              { target: desc, ram: 1, clist: 0, export: 0 },
+            ]);
+            sendEnvelope(VERB_DROP, bytes);
+          } catch (_err) {
+            // Transport closed; drop is best-effort.
+          }
+        },
+      )
+    : null;
 
   /**
    * Send a method call to a presence or to a local value registered
@@ -154,7 +193,13 @@ export const makeSlotClient = ({ clist, codec, sendEnvelope }) => {
     // resolve envelopes, if ever.  A presence representing a live
     // remote object never settles.
     const presence = new HandledPromise(() => {}, harden(handler));
-    clist.importRemote(desc, () => presence);
+    const registered = clist.importRemote(desc, () => presence);
+    if (finalizer && registered === presence) {
+      // Only register newly-created presences — if the c-list
+      // already held an entry we reuse it and its existing
+      // finalisation hook.
+      finalizer.register(presence, harden({ ...desc }));
+    }
     return presence;
   };
   harden(makePresence);
