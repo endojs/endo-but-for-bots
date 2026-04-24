@@ -41,15 +41,11 @@ import {
   buildGenieTools,
   DEFAULT_MODEL_STRING,
   HeartbeatStatus,
-  makeObserver,
-  makePiAgent,
-  makeReflector,
+  makeGenieAgents,
   runAgentRound,
   runHeartbeat,
 } from './src/index.js';
 
-/** @import { Observer } from './src/observer/index.js' */
-/** @import { Reflector } from './src/reflector/index.js' */
 /** @import { AgentError, ChatEvent } from './src/agent/index.js' */
 /** @import { Tool } from './src/tools/common.js' */
 /** @import { HeartbeatEvent } from './src/heartbeat/index.js' */
@@ -829,50 +825,13 @@ async function* runMain(args) {
     ? memoryTools.indexing
     : Promise.resolve();
 
-  const currentTime = new Date().toISOString();
-
-  const { listTools, execTool } = genieTools
-
-  // main chat agent
-  const piAgent = await makePiAgent({
+  // Assemble the shared agent pack.
+  const { piAgent, heartbeatAgent, observer, reflector } = await makeGenieAgents({
     hostname: 'dev-repl',
-    currentTime,
     workspaceDir,
-    model: modelArg,
-    listTools,
-    execTool,
+    tools: genieTools,
+    config: { model: modelArg },
   });
-
-  const heartbeatAgent = await makePiAgent({
-    hostname: 'dev-repl',
-    currentTime,
-    workspaceDir,
-    model: modelArg,
-    listTools,
-    execTool,
-  });
-
-  // ── Observer / Reflector (memory sub-agents) ──────────────────────
-  // Created only when memory tools are available (i.e. --no-tools is not set).
-  /** @type {Observer | undefined} */
-  let observer;
-  /** @type {Reflector | undefined} */
-  let reflector;
-  if (!noTools) {
-    observer = makeObserver({
-      memoryGet: memoryTools.memoryGet,
-      memorySet: memoryTools.memorySet,
-      searchBackend,
-      workspaceDir: workspaceArg,
-    });
-    reflector = makeReflector({
-      memoryGet: memoryTools.memoryGet,
-      memorySet: memoryTools.memorySet,
-      memorySearch: memoryTools.memorySearch,
-      searchBackend,
-      workspaceDir: workspaceArg,
-    });
-  }
 
   function* describe() {
     const modelName = modelArg || `default (${DEFAULT_MODEL_STRING})`;

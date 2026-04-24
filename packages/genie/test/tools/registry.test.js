@@ -51,6 +51,7 @@ const makeWorkspace = async t => {
  * @param {ReturnType<typeof buildGenieTools>} registry
  */
 const settle = async registry => {
+  await Promise.resolve();
   if (registry.memoryTools) {
     await registry.memoryTools.indexing;
   }
