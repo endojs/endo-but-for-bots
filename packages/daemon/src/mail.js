@@ -757,8 +757,8 @@ export const makeMailboxMaker = ({
      * @returns {Promise<bigint>}
      */
     const recordCommand = async (commandName, args, messageId) => {
-      /** @type {import('./types.js').CommandMessage & { from: FormulaIdentifier, to: FormulaIdentifier }} */
       const typedMessageId = /** @type {FormulaNumber} */ (messageId);
+      /** @type {import('./types.js').CommandMessage & { from: FormulaIdentifier, to: FormulaIdentifier }} */
       const message = harden({
         type: /** @type {const} */ ('command'),
         messageId: typedMessageId,
