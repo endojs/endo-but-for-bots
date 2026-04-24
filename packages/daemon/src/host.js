@@ -1124,6 +1124,74 @@ export const makeHostMaker = ({
     };
 
     /**
+     * Return the formula type for the value stored under a pet name.
+     *
+     * @param {NameOrPath} petNameOrPath
+     * @returns {Promise<string | undefined>}
+     */
+    const identifyType = async petNameOrPath => {
+      const namePath = namePathFrom(petNameOrPath);
+      const id = await E(directory).identify(...namePath);
+      if (id === undefined) {
+        return undefined;
+      }
+      return getTypeForId(/** @type {FormulaIdentifier} */ (id));
+    };
+
+    /**
+     * Return a list of pet names with their formula types.
+     *
+     * @returns {Promise<Array<{ name: string, type: string }>>}
+     */
+    const listWithTypes = async () => {
+      const names = await list();
+      const entries = await Promise.all(
+        names.map(async name => {
+          const id = await identify(name);
+          if (id === undefined) {
+            return harden({ name, type: 'unknown' });
+          }
+          const type = await getTypeForId(
+            /** @type {FormulaIdentifier} */ (id),
+          );
+          return harden({ name, type: type || 'unknown' });
+        }),
+      );
+      return harden(entries);
+    };
+
+    /**
+     * List capabilities whose formulas reference a given worker.
+     *
+     * @param {NameOrPath} workerPetNameOrPath
+     * @returns {Promise<Array<{ name: string, type: string }>>}
+     */
+    const listWorkerTenants = async workerPetNameOrPath => {
+      const workerNamePath = namePathFrom(workerPetNameOrPath);
+      const workerId = await E(directory).identify(...workerNamePath);
+      if (workerId === undefined) {
+        return harden([]);
+      }
+
+      const names = await list();
+      /** @type {Array<{ name: string, type: string }>} */
+      const tenants = [];
+      await Promise.all(
+        names.map(async name => {
+          const id = await identify(name);
+          if (id === undefined) return;
+          const formulaId = /** @type {FormulaIdentifier} */ (id);
+          const formula = await getFormulaForId(formulaId);
+          if (formula && 'worker' in formula && formula.worker === workerId) {
+            const type = formula.type || 'unknown';
+            tenants.push(harden({ name, type }));
+          }
+        }),
+      );
+      return harden(tenants);
+    };
+
+    /**
      * Returns a snapshot of the formula dependency graph for all formulas
      * reachable from this agent's pet store entries.
      */
@@ -1142,6 +1210,24 @@ export const makeHostMaker = ({
         }),
       );
       return getFormulaGraphSnapshot(seedIds);
+    };
+
+    /**
+     * Inspect the formula for a pet-named value.
+     * Returns the formula type and all formula fields.
+     *
+     * @param {NameOrPath} petNameOrPath
+     * @returns {Promise<{ id: string, formula: object } | undefined>}
+     */
+    const inspect = async petNameOrPath => {
+      const namePath = namePathFrom(petNameOrPath);
+      const id = await E(directory).identify(...namePath);
+      if (id === undefined) {
+        return undefined;
+      }
+      const formulaId = /** @type {FormulaIdentifier} */ (id);
+      const formula = await getFormulaForId(formulaId);
+      return harden({ id: formulaId, formula });
     };
 
     /** @type {EndoHost} */
@@ -1213,6 +1299,12 @@ export const makeHostMaker = ({
       endow,
       submit,
       sendValue,
+      // Type introspection
+      identifyType,
+      listWithTypes,
+      inspect,
+      // Worker observability
+      listWorkerTenants,
       // Graph
       getFormulaGraph,
     };
