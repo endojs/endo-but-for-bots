@@ -7,3 +7,5 @@ export * from '../fs/index.js';
 export { makeLocalTree } from './local-tree.js';
 export { makeLocalBlob } from './local-blob.js';
 export { makeTreeWriter } from './tree-writer.js';
+export { makeFile } from './file.js';
+export { makeDirectory } from './directory.js';
