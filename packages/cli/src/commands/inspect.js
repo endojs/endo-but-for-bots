@@ -28,16 +28,12 @@ export const inspect = async ({ name, json }) =>
     } else {
       console.log(`ID: ${id}`);
       console.log(`Type: ${formula.type}`);
-      const entries = Object.entries(formula).filter(
-        ([key]) => key !== 'type',
-      );
+      const entries = Object.entries(formula).filter(([key]) => key !== 'type');
       if (entries.length > 0) {
         console.log('Fields:');
         for (const [key, value] of entries) {
           const display =
-            typeof value === 'string'
-              ? value
-              : JSON.stringify(value);
+            typeof value === 'string' ? value : JSON.stringify(value);
           console.log(`  ${key}: ${display}`);
         }
       }

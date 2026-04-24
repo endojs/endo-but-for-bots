@@ -1182,11 +1182,7 @@ export const makeHostMaker = ({
           if (id === undefined) return;
           const formulaId = /** @type {FormulaIdentifier} */ (id);
           const formula = await getFormulaForId(formulaId);
-          if (
-            formula &&
-            'worker' in formula &&
-            formula.worker === workerId
-          ) {
+          if (formula && 'worker' in formula && formula.worker === workerId) {
             const type = formula.type || 'unknown';
             tenants.push(harden({ name, type }));
           }
