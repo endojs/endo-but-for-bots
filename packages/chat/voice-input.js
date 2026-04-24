@@ -30,8 +30,10 @@
 export const makeVoiceInput = ({ $container, $input, lang = 'en-US' }) => {
   // Feature detection for Web Speech API.
   const SpeechRecognition =
-    /** @type {any} */ (globalThis).SpeechRecognition ||
-    /** @type {any} */ (globalThis).webkitSpeechRecognition;
+    // eslint-disable-next-line no-undef
+    /** @type {any} */ (window).SpeechRecognition ||
+    // eslint-disable-next-line no-undef
+    /** @type {any} */ (window).webkitSpeechRecognition;
 
   if (!SpeechRecognition) {
     // Browser doesn't support speech recognition.
@@ -92,12 +94,13 @@ export const makeVoiceInput = ({ $container, $input, lang = 'en-US' }) => {
   $micButton.addEventListener('click', handleClick);
 
   recognition.addEventListener('result', (/** @type {any} */ event) => {
+    /** @type {any} */
     const results = event.results;
     if (!results || results.length === 0) return;
 
     // Collect all results into a single transcript.
     let transcript = '';
-    for (let i = 0; i < results.length; i += 1) {
+    for (let i = 0; i < /** @type {number} */ (results.length); i += 1) {
       transcript += results[i][0].transcript;
     }
 

@@ -139,11 +139,13 @@ export const chatBarComponent = (
   const $buttonWrapper = /** @type {HTMLElement} */ (
     $parent.querySelector('#chat-button-wrapper')
   );
+  // voiceInput returns null if SpeechRecognition is not supported; we
+  // attach handlers via side effect so the return value is not consumed.
+  // eslint-disable-next-line no-unused-vars
   const voiceInput = makeVoiceInput({
     $container: $buttonWrapper,
     $input,
   });
-  // voiceInput is null if SpeechRecognition is not supported.
 
   /**
    * Update the modeline content based on the current mode.
