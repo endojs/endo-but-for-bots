@@ -4106,6 +4106,124 @@ test('mount file writeText and json', async t => {
   t.is(actualContent, '{"version": 2}');
 });
 
+test('mount file readOnly rejects writes', async t => {
+  const { host, config } = await prepareHost(t);
+
+  const mountPath = path.join(config.statePath, '..', 'mount-test-file-ro');
+  await createMountFixture(mountPath, {
+    'data.txt': 'original content',
+  });
+
+  await E(host).provideMount(mountPath, 'test-mount-fro');
+  const mount = await E(host).lookup(['test-mount-fro']);
+  const file = await E(mount).lookup('data.txt');
+
+  // Get read-only view.
+  const roFile = await E(file).readOnly();
+
+  // Reading works.
+  const content = await E(roFile).text();
+  t.is(content, 'original content');
+
+  // Writing throws.
+  await t.throwsAsync(() => E(roFile).writeText('modified'), {
+    message: /read-only/i,
+  });
+
+  // Original file unchanged.
+  const actual = await fs.promises.readFile(
+    path.join(mountPath, 'data.txt'),
+    'utf-8',
+  );
+  t.is(actual, 'original content');
+});
+
+test('mount read-only mount rejects file writes', async t => {
+  const { host, config } = await prepareHost(t);
+
+  const mountPath = path.join(
+    config.statePath,
+    '..',
+    'mount-test-ro-mount-write',
+  );
+  await createMountFixture(mountPath, {
+    'data.txt': 'original',
+  });
+
+  await E(host).provideMount(mountPath, 'test-mount-ro-w', { readOnly: true });
+  const mount = await E(host).lookup(['test-mount-ro-w']);
+  const file = await E(mount).lookup('data.txt');
+
+  // Reading works on read-only mount's file.
+  const content = await E(file).text();
+  t.is(content, 'original');
+
+  // Writing through a file from a read-only mount throws.
+  await t.throwsAsync(() => E(file).writeText('modified'), {
+    message: /read-only/i,
+  });
+});
+
+test('mount subDir creates confined sub-mount', async t => {
+  const { host, config } = await prepareHost(t);
+
+  const mountPath = path.join(config.statePath, '..', 'mount-test-subdir');
+  await createMountFixture(mountPath, {
+    'root.txt': 'at root',
+  });
+  await fs.promises.mkdir(path.join(mountPath, 'src'), { recursive: true });
+  await fs.promises.writeFile(
+    path.join(mountPath, 'src', 'index.js'),
+    'export default 42;',
+  );
+
+  await E(host).provideMount(mountPath, 'project');
+  const mount = await E(host).lookup(['project']);
+
+  // subDir scopes to a subdirectory.
+  const srcMount = await E(mount).subDir('src');
+  const entries = await E(srcMount).list();
+  t.deepEqual(entries, ['index.js']);
+
+  // subDir cannot navigate above its new root.
+  t.true(await E(srcMount).has('index.js'));
+
+  // Read file through sub-mount.
+  const file = await E(srcMount).lookup('index.js');
+  const content = await E(file).text();
+  t.is(content, 'export default 42;');
+
+  // subDir rejects .. segments.
+  await t.throwsAsync(() => E(mount).subDir('..'), {
+    message: /Invalid subDir segment/,
+  });
+});
+
+test('mount subDir readOnly chains with subDir', async t => {
+  const { host, config } = await prepareHost(t);
+
+  const mountPath = path.join(config.statePath, '..', 'mount-test-subdir-ro');
+  await fs.promises.mkdir(path.join(mountPath, 'lib'), { recursive: true });
+  await fs.promises.writeFile(
+    path.join(mountPath, 'lib', 'util.js'),
+    'export const x = 1;',
+  );
+
+  await E(host).provideMount(mountPath, 'ro-project');
+  const mount = await E(host).lookup(['ro-project']);
+
+  // Chain: readOnly then subDir.
+  const roMount = E(mount).readOnly();
+  const roLib = await E(roMount).subDir('lib');
+  const entries = await E(roLib).list();
+  t.deepEqual(entries, ['util.js']);
+
+  // Writing through the read-only sub-mount should throw.
+  await t.throwsAsync(() => E(roLib).writeText('new.txt', 'nope'), {
+    message: /read-only/i,
+  });
+});
+
 // symlink confinement tests
 
 /**

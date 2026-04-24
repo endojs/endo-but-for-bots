@@ -2183,7 +2183,7 @@ const makeDaemonCore = async (
       makeEval(worker, source, names, values, context),
     'readable-blob': ({ content }) => makeReadableBlob(content),
     'readable-tree': ({ content }) => makeReadableTree(content),
-    mount: async ({ path: mountPath, readOnly }) => {
+    mount: async ({ path: mountPath, readOnly }, context) => {
       // Verify the mount path exists.
       const pathExists = await filePowers.exists(mountPath);
       if (!pathExists) {
@@ -2193,16 +2193,48 @@ const makeDaemonCore = async (
       if (!isDir) {
         throw new Error(`Mount path is not a directory: ${q(mountPath)}`);
       }
-      return makeMount({ rootPath: mountPath, readOnly, filePowers });
+      /** @param {object} mount */
+      const snapshotFn = async mount => {
+        /** @type {import('./types.js').DeferredTasks<import('./types.js').ReadableTreeDeferredTaskParams>} */
+        const deferredTasks = makeDeferredTasks();
+        const { value } = await checkinTree(mount, deferredTasks);
+        return value;
+      };
+      const { mount, control } = makeMount({
+        rootPath: mountPath,
+        readOnly,
+        filePowers,
+        snapshotFn,
+      });
+      context.onCancel(() => {
+        control.revoke();
+      });
+      return mount;
     },
-    'scratch-mount': async ({ readOnly }, _context, _id, formulaNumber) => {
+    'scratch-mount': async ({ readOnly }, context, _id, formulaNumber) => {
       const rootPath = filePowers.joinPath(
         persistencePowers.statePath,
         'mounts',
         /** @type {string} */ (formulaNumber),
       );
       await filePowers.makePath(rootPath);
-      return makeMount({ rootPath, readOnly, filePowers });
+      /** @param {object} mount */
+      const snapshotFn = async mount => {
+        /** @type {import('./types.js').DeferredTasks<import('./types.js').ReadableTreeDeferredTaskParams>} */
+        const deferredTasks = makeDeferredTasks();
+        const { value } = await checkinTree(mount, deferredTasks);
+        return value;
+      };
+      const { mount, control } = makeMount({
+        rootPath,
+        readOnly,
+        filePowers,
+        snapshotFn,
+      });
+      context.onCancel(() => {
+        control.revoke();
+      });
+      return mount;
     },
     lookup: ({ hub, path }, context) =>
       makeLookup(
@@ -4666,6 +4698,7 @@ const makeDaemonCore = async (
     getAllNetworkAddresses,
     getTypeForId,
     getFormulaForId,
+    statePath: persistencePowers.statePath,
     formulateChannel,
     formulateTimer,
     makeMailbox,

@@ -323,6 +323,10 @@ export const HostInterface = M.interface('EndoHost', {
   provideScratchMount: M.call(NameOrPathShape)
     .optional(M.splitRecord({}, { readOnly: M.boolean() }))
     .returns(M.promise()),
+  // Create a sub-mount rooted at a subdirectory of an existing mount
+  provideSubMount: M.call(NameOrPathShape, M.string(), NameOrPathShape)
+    .optional(M.splitRecord({}, { readOnly: M.boolean() }))
+    .returns(M.promise()),
   // Provide a guest
   provideGuest: M.call().optional(NameShape, M.record()).returns(M.promise()),
   // Provide a host
@@ -488,23 +492,41 @@ const PathSegmentsShape = M.arrayOf(M.string());
 const PathArgShape = M.or(M.string(), PathSegmentsShape);
 
 export const MountInterface = M.interface('EndoMount', {
+  // Metadata
+  stat: M.call(PathArgShape).returns(M.promise()),
   // ReadableTree-compatible surface
-  has: M.call().rest(PathSegmentsShape).returns(M.promise()),
-  list: M.call().rest(PathSegmentsShape).returns(M.promise()),
+  has: M.call().rest(M.string()).returns(M.promise()),
+  list: M.call().rest(M.string()).returns(M.promise()),
   lookup: M.call(PathArgShape).returns(M.promise()),
   // Raw data I/O
   readText: M.call(PathArgShape).returns(M.promise()),
   maybeReadText: M.call(PathArgShape).returns(M.promise()),
+  readJson: M.call(PathArgShape).returns(M.promise()),
   writeText: M.call(PathArgShape, M.string()).returns(M.promise()),
+  writeJson: M.call(PathArgShape, M.any()).returns(M.promise()),
   // Mutation
   remove: M.call(PathArgShape).returns(M.promise()),
   move: M.call(PathArgShape, PathArgShape).returns(M.promise()),
   makeDirectory: M.call(PathArgShape).returns(M.promise()),
+  // Search
+  glob: M.call(M.string()).returns(M.promise()),
+  grep: M.call(M.string())
+    .optional(M.splitRecord({}, {
+      glob: M.string(),
+      maxResults: M.number(),
+    }))
+    .returns(M.promise()),
   // Attenuation
   readOnly: M.call().returns(M.remotable()),
+  subDir: M.call(M.string()).returns(M.promise()),
   // Snapshot
   snapshot: M.call().returns(M.promise()),
   // Discoverability
+  help: M.call().returns(M.string()),
+});
+
+export const MountControlInterface = M.interface('EndoMountControl', {
+  revoke: M.call().returns(),
   help: M.call().returns(M.string()),
 });
 
