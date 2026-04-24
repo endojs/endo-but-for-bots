@@ -81,7 +81,7 @@ export const makeIntervalSchedulerKit = (options = {}) => {
     const deadlineHandle = tickDeadlines.get(entryId);
     if (deadlineHandle !== undefined) {
       clearTimeout(deadlineHandle);
-      tickDeadlines.delete(deadlineHandle);
+      tickDeadlines.delete(entryId);
     }
   };
 

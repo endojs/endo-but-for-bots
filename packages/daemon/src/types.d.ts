@@ -1019,6 +1019,14 @@ export interface EndoHost extends EndoAgent {
     intervalMs: number,
     label?: string,
   ): Promise<unknown>;
+  makeHttpClient(
+    petName: string,
+    options?: { allowedOrigins?: string[]; maxResponseBytes?: number },
+  ): Promise<unknown>;
+  makeIntervalScheduler(
+    petName: string,
+    options?: { maxActive?: number; minPeriodMs?: number },
+  ): Promise<unknown>;
   /** Locate a formula with connection hints for sharing with remote peers. */
   locateForSharing(...petNamePath: string[]): Promise<string | undefined>;
   /** Adopt a value from a locator that includes connection hints. */
@@ -1570,6 +1578,20 @@ export interface DaemonCore {
     intervalMs: number,
     label: string,
     deferredTasks: DeferredTasks<{ timerId: FormulaIdentifier }>,
+  ) => FormulateResult<unknown>;
+
+  formulateHttpClient: (
+    agentId: FormulaIdentifier,
+    handleId: FormulaIdentifier,
+    options: { allowedOrigins?: string[]; maxResponseBytes?: number },
+    deferredTasks: DeferredTasks<Record<string, string | string[]>>,
+  ) => FormulateResult<unknown>;
+
+  formulateIntervalScheduler: (
+    agentId: FormulaIdentifier,
+    handleId: FormulaIdentifier,
+    options: { maxActive?: number; minPeriodMs?: number },
+    deferredTasks: DeferredTasks<Record<string, string | string[]>>,
   ) => FormulateResult<unknown>;
 
   formulateHost: (
