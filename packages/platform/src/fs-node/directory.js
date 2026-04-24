@@ -173,8 +173,7 @@ export const makeDirectory = (dirPath, options = {}) => {
               .sort();
           },
           lookup: async pathArg => {
-            const segments =
-              typeof pathArg === 'string' ? [pathArg] : pathArg;
+            const segments = typeof pathArg === 'string' ? [pathArg] : pathArg;
             const [head, ...tail] = segments;
             const fullPath = path.join(readOnlyPath, head);
             const stat = await fs.promises.stat(fullPath);
@@ -234,9 +233,7 @@ export const makeDirectory = (dirPath, options = {}) => {
             const readerRef = E(
               /** @type {import('../fs/types.js').ReadableBlob} */ (value),
             ).streamBase64();
-            const reader = makeRefReader(
-              /** @type {any} */ (readerRef),
-            );
+            const reader = makeRefReader(/** @type {any} */ (readerRef));
             /** @type {Uint8Array[]} */
             const chunks = [];
             for await (const chunk of reader) {

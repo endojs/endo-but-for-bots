@@ -34,9 +34,7 @@ const makeMemoryContentStore = () => {
       for await (const chunk of readable) {
         chunks.push(chunk);
       }
-      const total = new Uint8Array(
-        chunks.reduce((n, c) => n + c.length, 0),
-      );
+      const total = new Uint8Array(chunks.reduce((n, c) => n + c.length, 0));
       let offset = 0;
       for (const chunk of chunks) {
         total.set(chunk, offset);
