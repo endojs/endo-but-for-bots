@@ -306,7 +306,9 @@ type MessageFormula = {
     | 'eval-request'
     | 'definition'
     | 'form'
-    | 'value';
+    | 'value'
+    | 'command'
+    | 'command-result';
   messageId: FormulaNumber;
   replyTo?: FormulaNumber;
   from: FormulaIdentifier;
