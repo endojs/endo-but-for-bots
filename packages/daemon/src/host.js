@@ -305,7 +305,9 @@ export const makeHostMaker = ({
       const { readOnly = false } = options;
       const mountNamePath = namePathFrom(mountName);
       assertNamePath(mountNamePath);
-      const { namePath: newNamePath } = assertPetNamePath(namePathFrom(newName));
+      const { namePath: newNamePath } = assertPetNamePath(
+        namePathFrom(newName),
+      );
 
       // Resolve parent mount's formula to get its root path.
       const parentId = specialStore.identifyLocal(mountNamePath[0]);
