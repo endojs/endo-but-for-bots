@@ -4,7 +4,7 @@
  * @import { OcapnLocation } from '../codecs/components.js'
  * @import { OcapnPublicKey } from '../cryptography.js'
  * @import { SturdyRef } from './sturdyrefs.js'
- * @import { Client, Connection, InternalSession, LocationId, Logger, NetLayer, NetlayerHandlers, NetworkSession, PendingSession, SelfIdentity, Session, SessionManager, SocketOperations, SwissNum } from './types.js'
+ * @import { Client, Connection, InternalSession, LocationId, Logger, NetLayer, NetlayerHandlers, NetworkSession, OcapnNetwork, PendingSession, SelfIdentity, Session, SessionManager, SocketOperations, SwissNum } from './types.js'
  */
 
 import harden from '@endo/harden';
@@ -195,7 +195,7 @@ export const makeClient = ({
   enableImportCollection = true,
   debugMode = false,
 } = {}) => {
-  /** @type {Map<string, NetLayer>} */
+  /** @type {Map<string, NetLayer & Partial<OcapnNetwork>>} */
   const networks = new Map();
 
   /** @type {Logger} */
