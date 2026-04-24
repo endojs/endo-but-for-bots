@@ -14,6 +14,8 @@ import {
   decodeDeliverPayload,
   encodeResolvePayload,
   decodeResolvePayload,
+  encodeDropPayload,
+  decodeDropPayload,
 } from '../src/payload.js';
 
 /**
@@ -206,4 +208,80 @@ test('send-only calls do not track a reply', async t => {
   t.is(envelopes.length, 1);
   t.is(envelopes[0].verb, VERB_DELIVER);
   t.is(client.pendingCount(), 0);
+});
+
+test('drop sends a DropPayload envelope with the named pillars', t => {
+  const envelopes = [];
+  const clist = makeCList({ label: 'caller' });
+  const makePresence = () => ({});
+  const codec = makeSlotCodec({ clist, makePresence, marshalName: 'caller' });
+  const sendEnvelope = (verb, payload) => envelopes.push({ verb, payload });
+  const client = makeSlotClient({ clist, codec, sendEnvelope });
+
+  const desc = { dir: Direction.Remote, kind: Kind.Object, position: 5 };
+  const presence = client.makePresence(desc);
+
+  client.drop([{ presence, ram: 1 }]);
+  t.is(envelopes.length, 1);
+  t.is(envelopes[0].verb, 'drop');
+
+  const deltas = decodeDropPayload(envelopes[0].payload);
+  t.is(deltas.length, 1);
+  t.is(deltas[0].target.position, 5);
+  t.is(deltas[0].ram, 1);
+  t.is(deltas[0].clist, 0);
+  t.is(deltas[0].export, 0);
+});
+
+test('drop with an unknown presence throws', t => {
+  const clist = makeCList({ label: 'caller' });
+  const makePresence = () => ({});
+  const codec = makeSlotCodec({ clist, makePresence, marshalName: 'caller' });
+  const client = makeSlotClient({
+    clist,
+    codec,
+    sendEnvelope: () => {},
+  });
+  t.throws(() => client.drop([{ presence: { unknown: true } }]), {
+    message: /not found in c-list/,
+  });
+});
+
+test('onDrop decodes deltas for diagnostics', t => {
+  const clist = makeCList({ label: 'receiver' });
+  const makePresence = () => ({});
+  const codec = makeSlotCodec({ clist, makePresence, marshalName: 'receiver' });
+  const client = makeSlotClient({
+    clist,
+    codec,
+    sendEnvelope: () => {},
+  });
+
+  const bytes = encodeDropPayload([
+    {
+      target: { dir: Direction.Local, kind: Kind.Object, position: 3 },
+      ram: 2,
+      clist: 0,
+      export: 1,
+    },
+  ]);
+  const deltas = client.onDrop(bytes);
+  t.is(deltas.length, 1);
+  t.is(deltas[0].ram, 2);
+  t.is(deltas[0].export, 1);
+});
+
+test('onEnvelope routes drop to onDrop silently (return value dropped)', t => {
+  const clist = makeCList({ label: 'receiver' });
+  const makePresence = () => ({});
+  const codec = makeSlotCodec({ clist, makePresence, marshalName: 'receiver' });
+  const client = makeSlotClient({
+    clist,
+    codec,
+    sendEnvelope: () => {},
+  });
+
+  const bytes = encodeDropPayload([]);
+  t.notThrows(() => client.onEnvelope('drop', bytes));
+  t.notThrows(() => client.onEnvelope('abort', new Uint8Array(0)));
 });
