@@ -349,8 +349,10 @@ export const makeClient = ({
    */
   const isSelfLocation = location => {
     const locationId = locationToLocationId(location);
-    for (const netlayer of networks.values()) {
-      if (netlayer.locationId === locationId) {
+    for (const entry of networks.values()) {
+      const netlayer =
+        /** @type {NetLayer | OcapnNetwork} */ (entry);
+      if (/** @type {NetLayer} */ (netlayer).locationId === locationId) {
         return true;
       }
     }
@@ -602,8 +604,8 @@ export const makeClient = ({
     },
     shutdown() {
       logger.info(`shutdown called`);
-      for (const netlayer of networks.values()) {
-        netlayer.shutdown();
+      for (const entry of networks.values()) {
+        /** @type {NetLayer | OcapnNetwork} */ (entry).shutdown();
       }
     },
   };
