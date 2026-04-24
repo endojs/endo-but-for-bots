@@ -195,7 +195,12 @@ export const makeClient = ({
   enableImportCollection = true,
   debugMode = false,
 } = {}) => {
-  /** @type {Map<string, NetLayer & Partial<OcapnNetwork>>} */
+  /**
+   * The map carries either bare NetLayers or networks that also implement
+   * OcapnNetwork.  Callers that need OcapnNetwork methods cast locally.
+   *
+   * @type {Map<string, NetLayer>}
+   */
   const networks = new Map();
 
   /** @type {Logger} */
@@ -264,7 +269,7 @@ export const makeClient = ({
     const peerLocation = networkSession.remoteLocation;
     const peerLocationSig =
       /** @type {import('../codecs/components.js').OcapnSignature} */ (
-        new ArrayBuffer(0)
+        /** @type {unknown} */ (new ArrayBuffer(0))
       );
 
     const ocapn = prepareOcapn(
@@ -287,7 +292,10 @@ export const makeClient = ({
   const establishSession = async location => {
     // Support both the new `network` field and the legacy `transport` field.
     const networkId = location.network ?? location.transport;
-    const netlayer = networks.get(networkId);
+    const netlayer =
+      /** @type {(NetLayer & Partial<OcapnNetwork>) | undefined} */ (
+        networks.get(networkId)
+      );
     if (!netlayer) {
       throw Error(`Netlayer not registered for network: ${networkId}`);
     }
@@ -420,7 +428,10 @@ export const makeClient = ({
       );
     } else {
       // Check if the connection's network has a custom incoming handshake.
-      const network = connection.netlayer;
+      const network =
+        /** @type {(NetLayer & Partial<OcapnNetwork>) | undefined} */ (
+          connection.netlayer
+        );
       if (network && network.handleSessionHandshake) {
         const selfIdentity = getSelfIdentityForConnection(connection);
         const handled = network.handleSessionHandshake(
