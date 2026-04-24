@@ -16,6 +16,7 @@ import { makeFTS5Backend } from '../../src/tools/fts5-backend.js';
 const setup = async (t, root = '/workspace') => {
   const searchBackend = makeFTS5Backend();
   t.teardown(async () => {
+    await Promise.resolve();
     if (searchBackend.sync) {
       await searchBackend.sync();
     }

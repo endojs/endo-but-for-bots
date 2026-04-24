@@ -117,6 +117,7 @@ const safePath = (root, userPath) => {
  * @yields {string} Absolute file paths.
  */
 async function* expandPaths(roots, vfs) {
+  await Promise.resolve();
   for (const searchPath of roots) {
     try {
       const info = await vfs.stat(searchPath);
@@ -186,6 +187,7 @@ const makeMemoryTools = (options = {}) => {
    * @returns {Promise<void>}
    */
   const drainQueue = async priorPaths => {
+    await Promise.resolve();
     while (indexQueue.length > 0) {
       const filePath = /** @type {string} */ (indexQueue.shift());
       try {
@@ -304,6 +306,7 @@ const makeMemoryTools = (options = {}) => {
      * @returns {Promise<{success: boolean, path: string, content: string, from?: number, lines?: number}>}
      */
     async execute({ path, from = 1, lines }) {
+      await Promise.resolve();
       const fullPath = safePath(resolvedRoot, path);
       const collected = [];
 
@@ -383,6 +386,7 @@ const makeMemoryTools = (options = {}) => {
      * @returns {Promise<{success: boolean, path: string, bytesWritten: number}>}
      */
     async execute({ path, content, append = false }) {
+      await Promise.resolve();
       const fullPath = safePath(resolvedRoot, path);
       const dir = dirname(fullPath);
 
@@ -456,6 +460,7 @@ const makeMemoryTools = (options = {}) => {
      * @returns {Promise<{success: boolean, query: string, limit: number, results: Array<{file: string, line: number, content: string}>}>}
      */
     async execute({ query, limit = 5, waitForIndex = true }) {
+      await Promise.resolve();
       if (waitForIndex) {
         // Wait for the initial seed pass to finish, then for any
         // in-flight index worker cycle.
@@ -503,6 +508,7 @@ const makeSubstringBackend = (vfs, root) => {
    * @yields {SearchResult}
    */
   async function* searchInFile(relPath, absPath, queryLower) {
+    await Promise.resolve();
     try {
       const stream = vfs.createReadStream(absPath);
       let lineNum = 0;
@@ -532,6 +538,7 @@ const makeSubstringBackend = (vfs, root) => {
      * @returns {Promise<Array<SearchResult>>}
      */
     async search(query, opts = {}) {
+      await Promise.resolve();
       const { limit = Infinity } = opts;
       const queryLower = query.toLowerCase();
       /** @type {Array<SearchResult>} */

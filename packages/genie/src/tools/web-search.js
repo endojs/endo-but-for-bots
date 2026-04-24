@@ -51,6 +51,8 @@ export const webSearch = makeTool('webSearch', {
    * @returns {Promise<{success: boolean, query: string, count: number, results: Array<{title: string, url: string, snippet: string}>}>}
    */
   async execute({ query, count = 5 }) {
+    await Promise.resolve();
+
     // Security: Prevent code injection
     for (const pattern of forbiddenPatterns) {
       if (query.includes(pattern)) {

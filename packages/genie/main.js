@@ -155,6 +155,8 @@ export const make = (guestPowers, _context) => {
    * @param {string} inboxMessage.from - Sender formula ID
    */
   const processMessage = async (agentPowers, piAgent, inboxMessage) => {
+    await Promise.resolve();
+
     const { number, strings } = inboxMessage;
 
     // Reconstruct the user prompt from the message text fragments.
@@ -336,6 +338,8 @@ export const make = (guestPowers, _context) => {
    * @param {EndoGuest} [parentPowers] - Optional parent guest powers for scoped child tracking
    */
   const spawnAgent = async (hostAgent, agentName, config, parentPowers) => {
+    await Promise.resolve();
+
     const profileName = `profile-for-${agentName}`;
 
     // Build introducedNames: only grant capabilities the child needs.
@@ -452,6 +456,8 @@ export const make = (guestPowers, _context) => {
    * @returns {Promise<string[]>} Pet names of child agents
    */
   const listChildAgents = async (parentPowers, config) => {
+    await Promise.resolve();
+
     const agentDirName = config.agentDirectory || DEFAULT_AGENT_DIRECTORY;
     if (!(await E(parentPowers).has(agentDirName))) {
       return [];

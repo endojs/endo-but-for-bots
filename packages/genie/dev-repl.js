@@ -335,6 +335,7 @@ async function* runAgent({ piAgent, tools, verbose, prompts, messages = [] }) {
 // ---------------------------------------------------------------------------
 
 async function* readPrompts() {
+  await Promise.resolve();
   const rl = createInterface({
     input: process.stdin,
     output: process.stdout,
@@ -540,10 +541,10 @@ async function main(args) {
   return 0;
 }
 
-process.exit(
-  await main(process.argv.slice(2)).catch(err => {
+main(process.argv.slice(2))
+  .catch(err => {
     process.stdout.write(`${RED}Main Error: ${err.message}${RESET}`);
     console.error(err);
     return 1;
-  }),
-);
+  })
+  .then(code => process.exit(code));

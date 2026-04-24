@@ -314,6 +314,8 @@ function toAgentTool(spec, execTool) {
  * @returns {Promise<PiAgent>}
  */
 export async function makePiAgent(options = {}) {
+  await Promise.resolve();
+
   const {
     hostname = 'unknown',
     currentTime = 'unknown',
@@ -393,6 +395,8 @@ harden(makePiAgent);
  * @returns {AsyncGenerator<ChatEvent>}
  */
 export async function* runAgentRound(piAgent, prompt) {
+  await Promise.resolve();
+
   // Collect events via subscription for progressive yielding
   let agentDone = false;
   /** @type {Array<AgentEvent|{type: 'error', error: any}>} */

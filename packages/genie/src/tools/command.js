@@ -227,6 +227,7 @@ const makeCommandTool = ({
    * @param {string} prog
    */
   const whichProgram = async prog => {
+    await Promise.resolve();
     const isWin = process.platform === 'win32';
     const pathDirs = searchPath.split(isWin ? ';' : ':');
     for (const dir of pathDirs) {

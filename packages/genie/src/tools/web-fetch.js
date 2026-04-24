@@ -43,6 +43,8 @@ export const webFetch = makeTool('webFetch', {
    * @returns {Promise<{success: boolean, url: string, status: number, content: string, contentType: string}>}
    */
   async execute({ url, timeout = 30_000 }) {
+    await Promise.resolve();
+
     try {
       const response = await fetch(url, {
         method: 'GET',
