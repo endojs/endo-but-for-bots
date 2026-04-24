@@ -111,9 +111,8 @@ const xsDecodeBase64 =
  *
  * @type {typeof jsDecodeBase64}
  */
-const selectDecodeBase64 = () => {
+export const decodeBase64 = (() => {
   if (nativeFromBase64 !== undefined) return nativeDecodeBase64;
   if (xsDecodeBase64 !== undefined) return xsDecodeBase64;
   return jsDecodeBase64;
-};
-export const decodeBase64 = selectDecodeBase64();
+})();
