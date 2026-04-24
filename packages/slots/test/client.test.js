@@ -271,6 +271,68 @@ test('onDrop decodes deltas for diagnostics', t => {
   t.is(deltas[0].export, 1);
 });
 
+test('FinalizationRegistry hook auto-sends drop on GC', t => {
+  // Fake FinalizationRegistry: collects registrations so the test
+  // can fire them deterministically.
+  const registrations = [];
+  class FakeFR {
+    constructor(cb) {
+      this.cb = cb;
+    }
+
+    register(_target, held) {
+      registrations.push({ held, cb: this.cb });
+    }
+  }
+
+  const envelopes = [];
+  const clist = makeCList({ label: 'caller' });
+  const makePresence = () => ({});
+  const codec = makeSlotCodec({ clist, makePresence, marshalName: 'caller' });
+  const sendEnvelope = (verb, payload) => envelopes.push({ verb, payload });
+  const FR = /** @type {any} */ (FakeFR);
+  const client = makeSlotClient({
+    clist,
+    codec,
+    sendEnvelope,
+    FinalizationRegistry: FR,
+  });
+
+  const desc = { dir: Direction.Remote, kind: Kind.Object, position: 9 };
+  client.makePresence(desc);
+
+  // Synthesise GC.
+  t.is(envelopes.length, 0);
+  for (const entry of registrations) entry.cb(entry.held);
+  registrations.length = 0;
+
+  t.is(envelopes.length, 1);
+  t.is(envelopes[0].verb, 'drop');
+  const deltas = decodeDropPayload(envelopes[0].payload);
+  t.is(deltas.length, 1);
+  t.is(deltas[0].target.position, 9);
+  t.is(deltas[0].ram, 1);
+});
+
+test('FinalizationRegistry auto-drop absent when constructor omitted', t => {
+  const envelopes = [];
+  const clist = makeCList({ label: 'caller' });
+  const makePresence = () => ({});
+  const codec = makeSlotCodec({ clist, makePresence, marshalName: 'caller' });
+  const sendEnvelope = (verb, payload) => envelopes.push({ verb, payload });
+  const client = makeSlotClient({
+    clist,
+    codec,
+    sendEnvelope,
+    // Explicitly disable auto-drop.
+    FinalizationRegistry: undefined,
+  });
+  const desc = { dir: Direction.Remote, kind: Kind.Object, position: 9 };
+  client.makePresence(desc);
+  // No auto-drop fires — callers must drop explicitly.
+  t.is(envelopes.length, 0);
+});
+
 test('onEnvelope routes drop to onDrop silently (return value dropped)', t => {
   const clist = makeCList({ label: 'receiver' });
   const makePresence = () => ({});
