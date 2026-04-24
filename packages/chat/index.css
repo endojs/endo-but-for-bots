@@ -3770,8 +3770,13 @@ button.btn-spinner::after {
   animation: pulse-mic 1s ease-in-out infinite;
 }
 @keyframes pulse-mic {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.5; }
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
 }
 /* Hide mic when typing or in command mode */
 #chat-bar.has-content #voice-input-button,
