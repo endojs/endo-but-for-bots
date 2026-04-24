@@ -74,6 +74,8 @@ const normalizeHostOrGuestOptions = opts => {
  * @param {DaemonCore['getPeerIdForNodeIdentifier']} args.getPeerIdForNodeIdentifier
  * @param {DaemonCore['formulateChannel']} args.formulateChannel
  * @param {DaemonCore['formulateTimer']} args.formulateTimer
+ * @param {DaemonCore['formulateHttpClient']} args.formulateHttpClient
+ * @param {DaemonCore['formulateIntervalScheduler']} args.formulateIntervalScheduler
  * @param {DaemonCore['getAllNetworkAddresses']} args.getAllNetworkAddresses
  * @param {DaemonCore['getTypeForId']} args.getTypeForId
  * @param {DaemonCore['getFormulaForId']} args.getFormulaForId
@@ -107,6 +109,8 @@ export const makeHostMaker = ({
   getPeerIdForNodeIdentifier,
   formulateChannel,
   formulateTimer,
+  formulateHttpClient,
+  formulateIntervalScheduler,
   getAllNetworkAddresses,
   getTypeForId,
   getFormulaForId,
@@ -767,6 +771,54 @@ export const makeHostMaker = ({
     };
 
     /**
+     * Create an HttpClient capability with an origin allowlist.
+     *
+     * @param {PetName} petName - Pet name to store the client under.
+     * @param {string[]} allowedOrigins - Allowed origin URLs.
+     * @param {object} [opts]
+     * @param {number} [opts.maxRequestsPerMinute]
+     * @param {number} [opts.maxResponseBytes]
+     */
+    const makeHttpClientCmd = async (petName, allowedOrigins, opts = {}) => {
+      assertPetName(petName);
+      /** @type {DeferredTasks<{ clientId: import('./types.js').FormulaIdentifier }>} */
+      const tasks = makeDeferredTasks();
+      tasks.push(identifiers =>
+        petStore.storeIdentifier(petName, identifiers.clientId),
+      );
+      const { value } = await formulateHttpClient(
+        hostId,
+        { allowedOrigins, ...opts },
+        tasks,
+      );
+      return value;
+    };
+
+    /**
+     * Create an IntervalScheduler capability for an agent.
+     *
+     * @param {PetName} petName - Pet name to store the scheduler under.
+     * @param {object} [opts]
+     * @param {number} [opts.maxActive] - Max concurrent intervals.
+     * @param {number} [opts.minPeriodMs] - Min interval period.
+     */
+    const makeIntervalSchedulerCmd = async (petName, opts = {}) => {
+      assertPetName(petName);
+      /** @type {DeferredTasks<{ schedulerId: import('./types.js').FormulaIdentifier }>} */
+      const tasks = makeDeferredTasks();
+      tasks.push(identifiers =>
+        petStore.storeIdentifier(petName, identifiers.schedulerId),
+      );
+      const { value } = await formulateIntervalScheduler(
+        hostId,
+        handleId,
+        opts,
+        tasks,
+      );
+      return value;
+    };
+
+    /**
      * Create a new channel and store it under the given pet name.
      * @param {PetName} petName - Pet name to store the channel under.
      * @param {string} channelProposedName - Display name for the channel creator.
@@ -1208,6 +1260,8 @@ export const makeHostMaker = ({
       deliver,
       makeChannel: makeChannelCmd,
       makeTimer: makeTimerCmd,
+      makeHttpClient: makeHttpClientCmd,
+      makeIntervalScheduler: makeIntervalSchedulerCmd,
       invite,
       accept,
       endow,

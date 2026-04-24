@@ -48,6 +48,8 @@ import { makeChangeTopic } from './pubsub.js';
 import { makeRetentionAccumulator } from './retention-accumulator.js';
 import { makeResidenceTracker } from './residence.js';
 import { toHex, fromHex } from './hex.js';
+import { makeIntervalSchedulerKit } from './interval-scheduler.js';
+import { makeHttpClientKit } from './http-client.js';
 import { makeSerialJobs } from './serial-jobs.js';
 import { makeLocalStoreController } from './store-controller.js';
 import { makeWeakMultimap } from './multimap.js';
@@ -585,6 +587,13 @@ const makeDaemonCore = async (
           ['hostAgent', formula.hostAgent],
           ['hostHandle', formula.hostHandle],
         ];
+      case 'interval-scheduler':
+        return [
+          ['agent', formula.agent],
+          ['handle', formula.handle],
+        ];
+      case 'http-client':
+        return [['agent', formula.agent]];
       default:
         return [];
     }
@@ -2642,6 +2651,125 @@ const makeDaemonCore = async (
           `Timer "${timerLabel || 'timer'}" firing every ${interval}ms. Ticks: ${tickCount}`,
       });
     },
+    'interval-scheduler': async (
+      { agent: agentId, handle: handleId, maxActive, minPeriodMs, paused },
+      context,
+      id,
+    ) => {
+      context.thisDiesIfThatDies(agentId);
+      context.thisDiesIfThatDies(handleId);
+
+      // Resolve the agent's handle for tick message delivery.
+      const agentHandle = await provide(handleId, 'handle');
+
+      // Set up persistence directory for interval entries.
+      const { number: formulaNumber } = parseId(id);
+      const schedulerDir = filePowers.joinPath(
+        persistencePowers.statePath,
+        'interval-scheduler',
+        formulaNumber.slice(0, 2),
+        formulaNumber.slice(2),
+        'intervals',
+      );
+      await filePowers.makePath(schedulerDir);
+
+      const { scheduler, control, loadEntry } = makeIntervalSchedulerKit({
+        maxActive,
+        minPeriodMs,
+        onEntryChange: entry => {
+          const entryPath = filePowers.joinPath(
+            schedulerDir,
+            `${entry.id}.json`,
+          );
+          filePowers
+            .writeFileText(entryPath, JSON.stringify(entry) + '\n')
+            .catch(err => {
+              console.error(
+                `[interval-scheduler] persist failed:`,
+                /** @type {Error} */ (err).message,
+              );
+            });
+        },
+        onTick: (entry, tickNumber, _tickResponse) => {
+          const tickMessage = harden({
+            type: /** @type {const} */ ('package'),
+            strings: [
+              `Interval "${entry.label}" tick #${tickNumber} ` +
+                `(period: ${entry.periodMs}ms)`,
+            ],
+            names: [],
+            ids: [],
+            messageId: /** @type {import('./types.js').FormulaNumber} */ (
+              `tick-${entry.id}-${tickNumber}`
+            ),
+            from: agentId,
+            to: agentId,
+          });
+          // Fire-and-forget delivery to the agent's inbox.
+          E(agentHandle)
+            .receive(tickMessage, agentId)
+            .catch(err => {
+              console.error(
+                `[interval-scheduler] tick delivery failed:`,
+                /** @type {Error} */ (err).message,
+              );
+            });
+        },
+      });
+
+      if (paused) {
+        control.pause();
+      }
+
+      // Startup recovery: load persisted interval entries.
+      try {
+        const entryFiles = await filePowers.readDirectory(schedulerDir);
+        for (const fileName of entryFiles) {
+          if (!fileName.endsWith('.json')) continue;
+          try {
+            const entryPath = filePowers.joinPath(schedulerDir, fileName);
+            const text = await filePowers.readFileText(entryPath);
+            const entry = JSON.parse(text);
+            if (entry && entry.id && entry.status === 'active') {
+              loadEntry(entry);
+            }
+          } catch {
+            // Skip corrupt entry files.
+          }
+        }
+      } catch {
+        // No persisted entries — fresh scheduler.
+      }
+
+      context.onCancel(() => {
+        control.revoke();
+      });
+
+      return harden({ scheduler, control });
+    },
+    'http-client': async (
+      {
+        agent: agentId,
+        allowedOrigins,
+        maxRequestsPerMinute,
+        maxResponseBytes,
+      },
+      context,
+    ) => {
+      context.thisDiesIfThatDies(agentId);
+
+      const { client, control } = makeHttpClientKit({
+        allowedOrigins,
+        maxRequestsPerMinute,
+        maxResponseBytes,
+      });
+
+      context.onCancel(() => {
+        control.revoke();
+      });
+
+      return harden({ client, control });
+    },
     channel: async (formula, context, id) => {
       const {
         handle: handleId,
@@ -3104,6 +3232,80 @@ const makeDaemonCore = async (
       });
 
       return formulate(timerNumber, formula);
+    });
+  };
+
+  /**
+   * @param {FormulaIdentifier} agentId
+   * @param {FormulaIdentifier} handleId
+   * @param {object} options
+   * @param {number} [options.maxActive]
+   * @param {number} [options.minPeriodMs]
+   * @param {import('./types.js').DeferredTasks<any>} deferredTasks
+   */
+  const formulateIntervalScheduler = async (
+    agentId,
+    handleId,
+    { maxActive = 5, minPeriodMs = 30_000 } = {},
+    deferredTasks,
+  ) => {
+    return withFormulaGraphLock(async () => {
+      const schedulerNumber = /** @type {FormulaNumber} */ (
+        await randomHex256()
+      );
+      const schedulerId = formatId({
+        number: schedulerNumber,
+        node: localNodeNumber,
+      });
+
+      await deferredTasks.execute({ schedulerId });
+
+      /** @type {import('./types.js').IntervalSchedulerFormula} */
+      const formula = harden({
+        type: /** @type {const} */ ('interval-scheduler'),
+        agent: agentId,
+        handle: handleId,
+        maxActive,
+        minPeriodMs,
+        paused: false,
+      });
+
+      return formulate(schedulerNumber, formula);
+    });
+  };
+
+  /**
+   * @param {FormulaIdentifier} agentId
+   * @param {object} options
+   * @param {string[]} options.allowedOrigins
+   * @param {number} [options.maxRequestsPerMinute]
+   * @param {number} [options.maxResponseBytes]
+   * @param {import('./types.js').DeferredTasks<any>} deferredTasks
+   */
+  const formulateHttpClient = async (
+    agentId,
+    { allowedOrigins, maxRequestsPerMinute = 60, maxResponseBytes = 10485760 },
+    deferredTasks,
+  ) => {
+    return withFormulaGraphLock(async () => {
+      const clientNumber = /** @type {FormulaNumber} */ (await randomHex256());
+      const clientId = formatId({
+        number: clientNumber,
+        node: localNodeNumber,
+      });
+
+      await deferredTasks.execute({ clientId });
+
+      /** @type {import('./types.js').HttpClientFormula} */
+      const formula = harden({
+        type: /** @type {const} */ ('http-client'),
+        agent: agentId,
+        allowedOrigins,
+        maxRequestsPerMinute,
+        maxResponseBytes,
+      });
+
+      return formulate(clientNumber, formula);
     });
   };
 
@@ -4668,6 +4870,8 @@ const makeDaemonCore = async (
     getFormulaForId,
     formulateChannel,
     formulateTimer,
+    formulateIntervalScheduler,
+    formulateHttpClient,
     makeMailbox,
     makeDirectoryNode,
     localNodeNumber,

@@ -525,6 +525,63 @@ export const main = async rawArgs => {
     });
 
   program
+    .command('interval-scheduler')
+    .description('creates an IntervalScheduler capability for timed heartbeats')
+    .option(...commonOptions.as)
+    .option(...commonOptions.requiredName)
+    .option('--max-active <n>', 'max concurrent active intervals (default 5)')
+    .option(
+      '--min-period <ms>',
+      'minimum interval period in ms (default 30000)',
+    )
+    .action(async cmd => {
+      const { name, as: agentNames, maxActive, minPeriod } = cmd.opts();
+      if (!name) {
+        throw new Error('--name is required for interval-scheduler');
+      }
+      const { intervalScheduler: intervalSchedulerCmd } = await import(
+        './commands/interval-scheduler.js'
+      );
+      return intervalSchedulerCmd({
+        name,
+        agentNames,
+        maxActive,
+        minPeriodMs: minPeriod,
+      });
+    });
+
+  program
+    .command('http-client')
+    .description('creates an HttpClient capability with an origin allowlist')
+    .option(...commonOptions.as)
+    .option(...commonOptions.requiredName)
+    .option(
+      '--origins <origins...>',
+      'allowed origin URLs (e.g. https://api.github.com)',
+    )
+    .option('--max-rpm <n>', 'max requests per minute')
+    .option('--max-bytes <n>', 'max response size in bytes')
+    .action(async cmd => {
+      const { name, as: agentNames, origins, maxRpm, maxBytes } = cmd.opts();
+      if (!name) {
+        throw new Error('--name is required for http-client');
+      }
+      if (!origins || origins.length === 0) {
+        throw new Error('--origins is required for http-client');
+      }
+      const { httpClient: httpClientCmd } = await import(
+        './commands/http-client.js'
+      );
+      return httpClientCmd({
+        name,
+        origins,
+        agentNames,
+        maxRequestsPerMinute: maxRpm,
+        maxResponseBytes: maxBytes,
+      });
+    });
+
+  program
     .command('mount <path>')
     .description('mounts an external filesystem directory')
     .option(...commonOptions.as)

@@ -554,6 +554,118 @@ export const WorkerFacetForDaemonInterface = M.interface(
   },
 );
 
+// #region Interval Scheduler
+
+const IntervalEntryShape = M.splitRecord({
+  id: M.string(),
+  label: M.string(),
+  periodMs: M.number(),
+  firstDelayMs: M.number(),
+  tickTimeoutMs: M.number(),
+  nextTickAt: M.number(),
+  createdAt: M.number(),
+  tickCount: M.number(),
+  status: M.or('active', 'paused', 'cancelled'),
+});
+
+export const IntervalSchedulerInterface = M.interface('EndoIntervalScheduler', {
+  makeInterval: M.callWhen(M.string(), M.number())
+    .optional(
+      M.splitRecord(
+        {},
+        {
+          firstDelayMs: M.number(),
+          tickTimeoutMs: M.number(),
+        },
+      ),
+    )
+    .returns(M.remotable('Interval')),
+  list: M.callWhen().returns(M.arrayOf(IntervalEntryShape)),
+  help: M.call().returns(M.string()),
+});
+
+export const IntervalInterface = M.interface('EndoInterval', {
+  label: M.call().returns(M.string()),
+  period: M.call().returns(M.number()),
+  setPeriod: M.callWhen(M.number()).returns(M.undefined()),
+  cancel: M.callWhen().returns(M.undefined()),
+  info: M.call().returns(IntervalEntryShape),
+  help: M.call().returns(M.string()),
+});
+
+export const IntervalControlInterface = M.interface('EndoIntervalControl', {
+  setMaxActive: M.call(M.number()).returns(M.undefined()),
+  setMinPeriodMs: M.call(M.number()).returns(M.undefined()),
+  pause: M.call().returns(M.undefined()),
+  resume: M.call().returns(M.undefined()),
+  revoke: M.call().returns(M.undefined()),
+  listAll: M.callWhen().returns(M.arrayOf(IntervalEntryShape)),
+  help: M.call().returns(M.string()),
+});
+
+export const TickResponseInterface = M.interface('EndoTickResponse', {
+  resolve: M.call().returns(M.undefined()),
+  reschedule: M.call().returns(M.undefined()),
+});
+
+// #endregion
+
+// #region HttpClient
+
+const FetchOptionsShape = M.splitRecord(
+  {},
+  {
+    method: M.string(),
+    headers: M.recordOf(M.string(), M.string()),
+    body: M.string(),
+  },
+);
+
+const FetchResponseShape = M.splitRecord({
+  status: M.number(),
+  statusText: M.string(),
+  ok: M.boolean(),
+  headers: M.recordOf(M.string(), M.string()),
+  text: M.string(),
+});
+
+export const HttpClientInterface = M.interface('EndoHttpClient', {
+  fetch: M.callWhen(M.string())
+    .optional(FetchOptionsShape)
+    .returns(FetchResponseShape),
+  allowedOrigins: M.call().returns(M.arrayOf(M.string())),
+  help: M.call().returns(M.string()),
+});
+
+export const HttpClientControlInterface = M.interface('EndoHttpClientControl', {
+  setAllowedOrigins: M.call(M.arrayOf(M.string())).returns(M.undefined()),
+  setMaxRequestsPerMinute: M.call(M.number()).returns(M.undefined()),
+  setMaxResponseBytes: M.call(M.number()).returns(M.undefined()),
+  revoke: M.call().returns(M.undefined()),
+  help: M.call().returns(M.string()),
+});
+
+// #endregion
+
+// #region Webhook
+
+export const WebhookEndpointInterface = M.interface('EndoWebhookEndpoint', {
+  url: M.call().returns(M.string()),
+  secret: M.call().returns(M.string()),
+  disable: M.call().returns(M.undefined()),
+  enable: M.call().returns(M.undefined()),
+  help: M.call().returns(M.string()),
+});
+
+export const WebhookControlInterface = M.interface('EndoWebhookControl', {
+  setMaxPayloadBytes: M.call(M.number()).returns(M.undefined()),
+  setRateLimit: M.call(M.number()).returns(M.undefined()),
+  revoke: M.call().returns(M.undefined()),
+  help: M.call().returns(M.string()),
+});
+
+// #endregion
+
 export const EndoInterface = M.interface('Endo', {
   help: M.call().optional(M.string()).returns(M.string()),
   ping: M.call().returns(M.promise()),
