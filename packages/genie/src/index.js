@@ -1,5 +1,5 @@
 /**
- * @endo/genie - Main Entry Point
+ * endo/genie - Main Entry Point
  */
 
 export {

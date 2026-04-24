@@ -59,7 +59,6 @@ import { M, mustMatch, getMethodGuardPayload } from '@endo/patterns';
  * @property {() => Iterable<string>} help
  * @property {() => string} [desc]
  * @property {MethodGuard} schema
- * @property
  */
 
 /**
@@ -68,7 +67,6 @@ import { M, mustMatch, getMethodGuardPayload } from '@endo/patterns';
  * @property {() => string} [desc]
  * @property {InterfaceGuard} schema
  * @property {(args: any) => Promise<any>} execute
- * @property
  */
 
 /**

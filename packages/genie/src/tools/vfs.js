@@ -84,8 +84,7 @@
  *   Return an async iterable of byte chunks for the given byte range.
  * @property {(path: string, content: string) => Promise<void>} writeFile
  *   Write `content` (UTF-8) to `path`, creating or overwriting.
- * @property {(path: string, opts?: VFSMkdirOptions) => Promise<boolean>}
- *   mkdir
+ * @property {(path: string, opts?: VFSMkdirOptions) => Promise<boolean>} mkdir
  *   Create a directory.  Returns `true` if a new directory was
  *   created, `false` if it already existed (when `recursive` is true).
  * @property {(path: string) => Promise<void>} unlink

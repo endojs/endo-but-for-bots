@@ -238,7 +238,6 @@ harden(makeError);
  * @typedef {object} ToolSpec
  * @property {string} name
  * @property {string} summary
- * @property
  */
 
 /**

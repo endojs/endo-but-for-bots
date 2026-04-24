@@ -141,7 +141,6 @@ export const make = (guestPowers, _context) => {
    * @property {string} workspace
    * @property {string} [name]
    * @property {string} [agentDirectory]
-   * @property
    */
 
   /**
