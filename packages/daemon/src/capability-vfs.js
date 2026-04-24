@@ -130,9 +130,7 @@ export const makeCapabilityVFS = mount => {
 
             // Recurse if requested and entry is a directory.
             if (opts.recursive && entry.type === 'directory') {
-              const subPath = segments.length > 0
-                ? `${dirPath}/${name}`
-                : name;
+              const subPath = segments.length > 0 ? `${dirPath}/${name}` : name;
               const subIter = vfs.readdir(subPath, opts);
               for await (const subEntry of subIter) {
                 yield harden({
