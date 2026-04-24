@@ -2388,6 +2388,7 @@ __metadata:
     "@endo/pass-style": "workspace:^"
     "@endo/promise-kit": "workspace:^"
     "@endo/ses-ava": "workspace:^"
+    "@endo/stream": "workspace:^"
     "@noble/hashes": "npm:^1.8.0"
     ava: "catalog:dev"
     c8: "catalog:dev"
