@@ -223,7 +223,9 @@ export const makeDirectory = (dirPath, options = {}) => {
 
           // Detect whether value is a tree or blob.
           // eslint-disable-next-line no-underscore-dangle
-          const methods = await E(/** @type {any} */ (value)).__getMethodNames__();
+          const methods = await E(
+            /** @type {any} */ (value),
+          ).__getMethodNames__();
           if (methods.includes('list')) {
             // Tree — checkout recursively.
             await fs.promises.mkdir(target, { recursive: true });
