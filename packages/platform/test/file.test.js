@@ -94,7 +94,8 @@ test('makeFile streamBase64 produces base64 chunks', async t => {
 
   // Decode base64 and verify content
   const joined = chunks.join('');
-  const binary = globalThis.atob(joined);
+  // eslint-disable-next-line no-undef
+  const binary = atob(joined);
   t.is(binary, 'hello');
 
   await fs.promises.rm(dir, { recursive: true });

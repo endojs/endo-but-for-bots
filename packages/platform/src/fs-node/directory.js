@@ -112,7 +112,8 @@ export const makeDirectory = (dirPath, options = {}) => {
      * @param {string | string[]} pathArg
      * @returns {Promise<object>}
      */
-    const _lookupReadOnly = async pathArg => {
+    // eslint-disable-next-line no-unused-vars
+    const lookupReadOnly = async pathArg => {
       const segments = typeof pathArg === 'string' ? [pathArg] : pathArg;
       const [head, ...tail] = segments;
       const fullPath = path.join(currentPath, head);
@@ -222,7 +223,7 @@ export const makeDirectory = (dirPath, options = {}) => {
 
           // Detect whether value is a tree or blob.
           // eslint-disable-next-line no-underscore-dangle
-          const methods = await E(value).__getMethodNames__();
+          const methods = await E(/** @type {any} */ (value)).__getMethodNames__();
           if (methods.includes('list')) {
             // Tree — checkout recursively.
             await fs.promises.mkdir(target, { recursive: true });

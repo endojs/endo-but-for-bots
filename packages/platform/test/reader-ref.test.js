@@ -95,6 +95,7 @@ test('makeReaderRef encodes bytes as base64', async t => {
   // Value should be base64-encoded "Hello"
   t.is(typeof value, 'string');
   // Decode and verify
-  const decoded = globalThis.atob(value);
+  // eslint-disable-next-line no-undef
+  const decoded = atob(value);
   t.is(decoded, 'Hello');
 });
