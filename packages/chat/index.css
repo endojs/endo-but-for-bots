@@ -2608,7 +2608,9 @@ body.resizing * {
   padding: 4px 8px;
   border-radius: var(--radius-sm);
   font-size: 12px;
-  transition: opacity 0.3s, background 0.2s;
+  transition:
+    opacity 0.3s,
+    background 0.2s;
 }
 
 .pending-command-card.pending {
@@ -2654,7 +2656,9 @@ body.resizing * {
 }
 
 @keyframes pending-spin {
-  to { transform: rotate(360deg); }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .pending-command-status {
@@ -2664,7 +2668,6 @@ body.resizing * {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-
 
 .dismiss-button {
   padding: 4px 8px;
