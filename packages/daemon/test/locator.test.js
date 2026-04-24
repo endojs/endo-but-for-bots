@@ -18,7 +18,22 @@ const validId =
   '5cf3d8b4d6e03fb51d71fbbb6fa6982edbff673cd193707c902b70a26b7b4680';
 const validType = 'eval';
 
+/**
+ * Build a path-based locator string for testing.
+ * Also supports constructing old-format locators for backward compat tests.
+ */
 const makeLocator = (components = {}) => {
+  const {
+    protocol = 'endo://',
+    host = validNode,
+    number = validId,
+    type = validType,
+  } = components;
+  return `${protocol}${host}/${number}?type=${type}`;
+};
+
+/** Build an old-format locator with ?id= query param for compat tests. */
+const makeOldLocator = (components = {}) => {
   const {
     protocol = 'endo://',
     host = validNode,
@@ -31,10 +46,13 @@ const makeLocator = (components = {}) => {
 test('assertValidLocator - valid', t => {
   t.notThrows(() => assertValidLocator(makeLocator()));
 
-  // Reverse search param order
+  // Old format also valid (backward compat)
+  t.notThrows(() => assertValidLocator(makeOldLocator()));
+
+  // Reverse search param order in old format
   t.notThrows(() =>
     assertValidLocator(
-      makeLocator({
+      makeOldLocator({
         param1: `type=${validType}`,
         param2: `id=${validId}`,
       }),
@@ -51,11 +69,11 @@ test('assertValidLocator - invalid', t => {
     [{}, /Invalid URL.$/u],
     [makeLocator({ protocol: 'foobar://' }), /Invalid protocol.$/u],
     [makeLocator({ host: 'foobar' }), /Invalid node identifier.$/u],
-    [makeLocator({ param1: 'foo=bar' }), /Invalid search params.$/u],
-    [makeLocator({ param2: 'foo=bar' }), /Invalid search params.$/u],
+    [makeOldLocator({ param1: 'foo=bar' }), /Missing formula number/],
+    [makeOldLocator({ param2: 'foo=bar' }), /Invalid search params.$/u],
     [`${makeLocator()}&foo=bar`, /Invalid search params.$/u],
-    [makeLocator({ param1: 'id=foobar' }), /Invalid id.$/u],
-    [makeLocator({ param2: 'type=foobar' }), /Invalid type.$/u],
+    [makeOldLocator({ param1: 'id=foobar' }), /Invalid id.$/u],
+    [makeLocator({ type: 'foobar' }), /Invalid type.$/u],
   ].forEach(([locator, reason]) => {
     t.throws(() => assertValidLocator(locator), { message: reason });
   });
@@ -66,6 +84,7 @@ test('parseLocator', t => {
     number: validId,
     node: validNode,
     formulaType: validType,
+    hints: [],
   });
 });
 
@@ -83,12 +102,20 @@ test('idFromLocator', t => {
   );
 });
 
-test('parseLocator - tolerates at= connection hints', t => {
+test('parseLocator - connection hints in new format', t => {
   const locator = `${makeLocator()}&at=libp2p%2Bcaptp0%3A%2F%2Fpeer1&at=libp2p%2Bcaptp0%3A%2F%2Fpeer2`;
   const parsed = parseLocator(locator);
   t.is(parsed.number, validId);
   t.is(parsed.node, validNode);
   t.is(parsed.formulaType, validType);
+  t.deepEqual(parsed.hints, ['libp2p+captp0://peer1', 'libp2p+captp0://peer2']);
+});
+
+test('parseLocator - connection hints in old format', t => {
+  const locator = `${makeOldLocator()}&at=libp2p%2Bcaptp0%3A%2F%2Fpeer1`;
+  const parsed = parseLocator(locator);
+  t.is(parsed.number, validId);
+  t.deepEqual(parsed.hints, ['libp2p+captp0://peer1']);
 });
 
 test('formatLocatorForSharing', t => {
@@ -113,6 +140,8 @@ test('formatLocatorForSharing - no addresses', t => {
 
 test('addressesFromLocator - plain locator returns empty', t => {
   t.deepEqual(addressesFromLocator(makeLocator()), []);
+  // Old format too
+  t.deepEqual(addressesFromLocator(makeOldLocator()), []);
 });
 
 // --- externalizeId, internalizeLocator ---
@@ -188,4 +217,61 @@ test('internalizeLocator extracts connection hints', t => {
   const locator = formatLocatorForSharing(id, validType, addresses);
   const result = internalizeLocator(locator);
   t.deepEqual(result.addresses, addresses);
+});
+
+// --- Format verification ---
+
+test('formatLocator produces path-based format', t => {
+  const fmtId = formatId({ number: validId, node: validNode });
+  const locator = formatLocator(fmtId, validType);
+  // Formula number in path, not in ?id=
+  t.true(locator.includes(`/${validId}`));
+  t.false(locator.includes('id='));
+  t.true(locator.includes(`type=${validType}`));
+});
+
+test('formatLocator round-trips through parseLocator', t => {
+  const fmtId = formatId({ number: validId, node: validNode });
+  const locator = formatLocator(fmtId, validType);
+  const parsed = parseLocator(locator);
+  t.is(parsed.number, validId);
+  t.is(parsed.node, validNode);
+  t.is(parsed.formulaType, validType);
+  t.deepEqual(parsed.hints, []);
+});
+
+test('parseLocator - rejects locator with no formula number', t => {
+  const badLocator = `endo://${validNode}/?type=${validType}`;
+  t.throws(() => parseLocator(badLocator), {
+    message: /Missing formula number/,
+  });
+});
+
+test('parseLocator - rejects invalid search params in new format', t => {
+  const badLocator = `endo://${validNode}/${validId}?type=${validType}&bad=param`;
+  t.throws(() => parseLocator(badLocator), {
+    message: /Invalid search params/,
+  });
+});
+
+// --- Backward compatibility: old ?id= format ---
+
+test('parseLocator - old format with ?id= query param still works', t => {
+  const oldLocator = makeOldLocator();
+  const parsed = parseLocator(oldLocator);
+  t.is(parsed.number, validId);
+  t.is(parsed.node, validNode);
+  t.is(parsed.formulaType, validType);
+  t.deepEqual(parsed.hints, []);
+});
+
+test('parseLocator - old and new formats produce identical results', t => {
+  const oldLocator = makeOldLocator();
+  const newLocator = makeLocator();
+  const oldResult = parseLocator(oldLocator);
+  const newResult = parseLocator(newLocator);
+  t.is(oldResult.number, newResult.number);
+  t.is(oldResult.node, newResult.node);
+  t.is(oldResult.formulaType, newResult.formulaType);
+  t.deepEqual(oldResult.hints, newResult.hints);
 });
