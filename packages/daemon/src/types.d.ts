@@ -580,7 +580,14 @@ export type StoredFormFields = {
 
 export type MessageFormula = {
   type: 'message';
-  messageType: 'request' | 'package' | 'definition' | 'form' | 'value';
+  messageType:
+    | 'request'
+    | 'package'
+    | 'definition'
+    | 'form'
+    | 'value'
+    | 'command'
+    | 'command-result';
   messageId: FormulaNumber;
   replyTo?: FormulaNumber;
   from: FormulaIdentifier;
