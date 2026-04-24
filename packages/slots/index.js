@@ -26,3 +26,4 @@ export {
 export { sessionIdFromLabel, sessionIdHex } from './src/session.js';
 export { makeCList } from './src/clist.js';
 export { makeSlotCodec } from './src/codec.js';
+export { makeSlotClient } from './src/client.js';
