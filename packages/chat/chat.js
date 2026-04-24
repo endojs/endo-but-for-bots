@@ -73,6 +73,7 @@ const template = `
     </div>
   </div>
   <div id="chat-modeline"></div>
+  <div id="pending-commands-region" class="pending-commands-region"></div>
 </div>
 
 <div id="eval-form-backdrop"></div>

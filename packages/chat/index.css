@@ -2589,6 +2589,86 @@ body.resizing * {
   opacity: 1;
 }
 
+/* Pending commands region */
+.pending-commands-region {
+  display: none;
+  flex-direction: column;
+  gap: 4px;
+  padding: 4px 12px;
+}
+
+.pending-commands-region.has-pending {
+  display: flex;
+}
+
+.pending-command-card {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  transition:
+    opacity 0.3s,
+    background 0.2s;
+}
+
+.pending-command-card.pending {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-muted);
+}
+
+.pending-command-card.success {
+  background: rgba(0, 200, 100, 0.1);
+  color: var(--success, #4caf50);
+}
+
+.pending-command-card.error {
+  background: rgba(255, 60, 60, 0.1);
+  color: var(--danger);
+  cursor: pointer;
+}
+
+.pending-command-card.fade-out {
+  opacity: 0;
+}
+
+.pending-command-label {
+  font-family: var(--font-mono);
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pending-command-spinner {
+  width: 12px;
+  height: 12px;
+  border: 2px solid transparent;
+  border-top-color: var(--text-muted);
+  border-radius: 50%;
+  animation: pending-spin 0.8s linear infinite;
+}
+
+.pending-command-card.success .pending-command-spinner,
+.pending-command-card.error .pending-command-spinner {
+  display: none;
+}
+
+@keyframes pending-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.pending-command-status {
+  font-size: 11px;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .dismiss-button {
   padding: 4px 8px;
   font-size: 14px;
