@@ -54,7 +54,7 @@ harden(entryType);
  *   stays under this root and throws on traversal escape.
  * @returns {VFS}
  */
-const makeNodeVFS = (rootDir) => {
+const makeNodeVFS = rootDir => {
   /** @type {string | undefined} */
   const resolvedRoot = rootDir ? nodeResolve(rootDir) : undefined;
 

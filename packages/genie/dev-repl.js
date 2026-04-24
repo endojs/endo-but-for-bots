@@ -58,10 +58,9 @@ import { initWorkspace, isWorkspace } from './src/workspace/init.js';
 
 // `createRequire` avoids the experimental-flag / assertion-style JSON import
 // syntax and works uniformly under @endo/init's SES shim.
-const { version: GENIE_VERSION } =
-  /** @type {{ version: string }} */ (
-    createRequire(import.meta.url)('./package.json')
-  );
+const { version: GENIE_VERSION } = /** @type {{ version: string }} */ (
+  createRequire(import.meta.url)('./package.json')
+);
 
 /**
  * @param {never} nope
@@ -277,7 +276,9 @@ const makeBackgroundPrinter = ({ rl, quiet = false } = {}) => {
 
   const flush = () => {
     while (queue.length) {
-      const item = /** @type {{ label: string, event: ChatEvent }} */ (queue.shift());
+      const item = /** @type {{ label: string, event: ChatEvent }} */ (
+        queue.shift()
+      );
       if (muted.has(item.label)) {
         // eslint-disable-next-line no-continue
         continue;
@@ -319,9 +320,10 @@ const makeBackgroundPrinter = ({ rl, quiet = false } = {}) => {
     unmute: label => {
       muted.delete(label);
     },
-    subscribe: (subagent, label) => subagent.subscribe(
-      /** @param {ChatEvent} event */ event => enqueue(label, event),
-    ),
+    subscribe: (subagent, label) =>
+      subagent.subscribe(
+        /** @param {ChatEvent} event */ event => enqueue(label, event),
+      ),
   });
 };
 harden(makeBackgroundPrinter);
@@ -612,15 +614,15 @@ async function* runPrompt(
  * @param {RunPromptsOptions} [options]
  * @returns {AsyncGenerator<string>}
  */
-async function* readPrompts({
-  rl: providedRl,
-} = {}) {
+async function* readPrompts({ rl: providedRl } = {}) {
   await Promise.resolve();
-  const rl = providedRl || createInterface({
-    input: process.stdin,
-    output: process.stdout,
-    prompt: `${BOLD}${GREEN}you>${RESET} `,
-  });
+  const rl =
+    providedRl ||
+    createInterface({
+      input: process.stdin,
+      output: process.stdout,
+      prompt: `${BOLD}${GREEN}you>${RESET} `,
+    });
 
   let closed = false;
   rl.once('close', () => {
@@ -658,7 +660,7 @@ async function* readPrompts({
       rl.once('close', onClose);
     });
 
-  for (; ;) {
+  for (;;) {
     const prompt = await nextPrompt();
     if (prompt === null) {
       break;
@@ -713,7 +715,7 @@ async function* runMain(args) {
   let workspaceArg = getFlag(args, '--workspace', '-w');
   if (!workspaceArg) {
     workspaceArg = process.cwd();
-    if (! await isWorkspace(workspaceArg)) {
+    if (!(await isWorkspace(workspaceArg))) {
       yield `! Implicit workspace from cwd:${workspaceArg} is not a genie workspace`;
       yield `! Pass \`--workspace "${workspaceArg}"\` if this was intentional`;
       return;
@@ -744,29 +746,22 @@ async function* runMain(args) {
   const genieTools = buildGenieTools({
     workspaceDir,
     searchBackend,
-    include: noTools ? [] : [
-      'bash',
-      'exec',
-      'git',
-      'files',
-      'memory',
-      'webFetch',
-      'webSearch',
-    ],
+    include: noTools
+      ? []
+      : ['bash', 'exec', 'git', 'files', 'memory', 'webFetch', 'webSearch'],
   });
 
   const { tools, memoryTools } = genieTools;
-  const memoryIndexing = memoryTools
-    ? memoryTools.indexing
-    : Promise.resolve();
+  const memoryIndexing = memoryTools ? memoryTools.indexing : Promise.resolve();
 
   // Assemble the shared agent pack.
-  const { piAgent, heartbeatAgent, observer, reflector } = await makeGenieAgents({
-    hostname: 'dev-repl',
-    workspaceDir,
-    tools: genieTools,
-    config: { model: modelArg },
-  });
+  const { piAgent, heartbeatAgent, observer, reflector } =
+    await makeGenieAgents({
+      hostname: 'dev-repl',
+      workspaceDir,
+      tools: genieTools,
+      config: { model: modelArg },
+    });
 
   function* describe() {
     const modelName = modelArg || `default (${DEFAULT_MODEL_STRING})`;
@@ -853,7 +848,11 @@ async function* runMain(args) {
       error: msg => `${RED}${msg}${RESET}\n`,
       success: msg => `${GREEN}${msg}${RESET}\n`,
       renderEvents: (events, { label = 'genie' } = {}) =>
-        runAgentEvents(events, { verbose, label, echoUser: label === 'heartbeat' }),
+        runAgentEvents(events, {
+          verbose,
+          label,
+          echoUser: label === 'heartbeat',
+        }),
       muteBackground: label => backgroundPrinter.mute(label),
       unmuteBackground: label => backgroundPrinter.unmute(label),
       clearHistory: () => {
@@ -863,24 +862,28 @@ async function* runMain(args) {
         exitRequested = true;
       },
       listToolNames: () => Object.keys(tools),
-      listHelpLines: () => formatHelpLines({
-        prefix: '.',
-        // Order matches the pre-refactor listing; filtered implicitly
-        // against `BUILTIN_HELP_DESCRIPTIONS` so unknown names are
-        // skipped rather than rendered blank.
-        commands: [
-          'exit',
-          'clear',
-          'tools',
-          'help',
-          'heartbeat',
-          'observe',
-          'reflect',
-        ].filter(name => name in BUILTIN_HELP_DESCRIPTIONS),
-        extras: [
-          ['.background on|off|status', 'toggle automatic sub-agent event printing'],
-        ],
-      }),
+      listHelpLines: () =>
+        formatHelpLines({
+          prefix: '.',
+          // Order matches the pre-refactor listing; filtered implicitly
+          // against `BUILTIN_HELP_DESCRIPTIONS` so unknown names are
+          // skipped rather than rendered blank.
+          commands: [
+            'exit',
+            'clear',
+            'tools',
+            'help',
+            'heartbeat',
+            'observe',
+            'reflect',
+          ].filter(name => name in BUILTIN_HELP_DESCRIPTIONS),
+          extras: [
+            [
+              '.background on|off|status',
+              'toggle automatic sub-agent event printing',
+            ],
+          ],
+        }),
     });
 
     const builtins = makeBuiltinSpecials({

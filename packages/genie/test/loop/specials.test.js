@@ -73,10 +73,9 @@ test('makeSpecialsDispatcher — returns the documented shape', t => {
 });
 
 test('makeSpecialsDispatcher — rejects empty prefix', t => {
-  t.throws(
-    () => makeSpecialsDispatcher({ prefix: '', handlers: {} }),
-    { message: /non-empty string/ },
-  );
+  t.throws(() => makeSpecialsDispatcher({ prefix: '', handlers: {} }), {
+    message: /non-empty string/,
+  });
 });
 
 test('makeSpecialsDispatcher — listCommands reflects registered handler names', t => {

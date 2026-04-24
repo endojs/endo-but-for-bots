@@ -101,7 +101,9 @@ export const makeBuiltinSpecials = ({ agents, io, workspaceDir }) => {
     try {
       yield* io.renderEvents(
         collectIt(
-          he => { heartbeatEvent = he },
+          he => {
+            heartbeatEvent = he;
+          },
           runHeartbeat({ workspaceDir, piAgent: heartbeatAgent }),
         ),
         { label: 'heartbeat' },
@@ -118,9 +120,7 @@ export const makeBuiltinSpecials = ({ agents, io, workspaceDir }) => {
         }
       }
     } catch (err) {
-      yield io.error(
-        `Heartbeat failed: ${/** @type {Error} */ (err).message}`,
-      );
+      yield io.error(`Heartbeat failed: ${/** @type {Error} */ (err).message}`);
     }
   };
 
@@ -267,7 +267,11 @@ export const BUILTIN_HELP_DESCRIPTIONS = harden({
  *   - Extra `[invocation, description]` pairs appended after the built-ins.
  * @returns {Iterable<string>}
  */
-export const formatHelpLines = function* formatHelpLines({ prefix, commands, extras = [] }) {
+export const formatHelpLines = function* formatHelpLines({
+  prefix,
+  commands,
+  extras = [],
+}) {
   yield 'Commands:';
 
   // 26 columns preserves the pre-refactor column width.

@@ -136,7 +136,15 @@ test('makeBuiltinSpecials — returns every documented handler', t => {
     workspaceDir: '/w',
     io,
   });
-  for (const name of ['heartbeat', 'observe', 'reflect', 'help', 'tools', 'clear', 'exit']) {
+  for (const name of [
+    'heartbeat',
+    'observe',
+    'reflect',
+    'help',
+    'tools',
+    'clear',
+    'exit',
+  ]) {
     t.is(typeof handlers[name], 'function', `handler ${name}`);
   }
 });
@@ -193,9 +201,10 @@ test('observe — streams events through renderEvents and brackets with mute/unm
   /** @type {any} */
   const observer = {
     isRunning: () => false,
-    observe: async () => (async function* runObserve() {
-      for (const e of events) yield e;
-    })(),
+    observe: async () =>
+      (async function* runObserve() {
+        for (const e of events) yield e;
+      })(),
   };
   const { io, log, renderedBatches } = makeIo();
   const handlers = makeBuiltinSpecials({
@@ -220,11 +229,12 @@ test('observe — unmutes even when renderEvents throws', async t => {
   /** @type {any} */
   const observer = {
     isRunning: () => false,
-    observe: async () => (async function* runObserve() {
-      throw new Error('boom');
-      // eslint-disable-next-line no-unreachable
-      yield undefined;
-    })(),
+    observe: async () =>
+      (async function* runObserve() {
+        throw new Error('boom');
+        // eslint-disable-next-line no-unreachable
+        yield undefined;
+      })(),
   };
   const { io, log } = makeIo();
   const handlers = makeBuiltinSpecials({
@@ -277,9 +287,10 @@ test('reflect — streams events with mute/unmute bracketing + success', async t
   /** @type {any} */
   const reflector = {
     isRunning: () => false,
-    reflect: async () => (async function* runRefleect() {
-      for (const e of events) yield e;
-    })(),
+    reflect: async () =>
+      (async function* runRefleect() {
+        for (const e of events) yield e;
+      })(),
   };
   const { io, log, renderedBatches } = makeIo();
   const handlers = makeBuiltinSpecials({

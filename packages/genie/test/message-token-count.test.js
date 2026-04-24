@@ -25,9 +25,7 @@ test('returns 0 for an empty message history', t => {
 });
 
 test('counts a plain-string user message', t => {
-  const agent = stubAgent([
-    { role: 'user', content: 'Hello world!' },
-  ]);
+  const agent = stubAgent([{ role: 'user', content: 'Hello world!' }]);
   const count = getMessageTokenCount(/** @type {any} */ (agent));
   // "user\nHello world!" = 17 chars → ceil(17/4) = 5
   t.is(count, 5);
@@ -37,9 +35,7 @@ test('counts an assistant message with text content blocks', t => {
   const agent = stubAgent([
     {
       role: 'assistant',
-      content: [
-        { type: 'text', text: 'Here is the answer.' },
-      ],
+      content: [{ type: 'text', text: 'Here is the answer.' }],
     },
   ]);
   const count = getMessageTokenCount(/** @type {any} */ (agent));
@@ -107,17 +103,11 @@ test('accumulates across multiple messages', t => {
   // Sum of all individual message token estimates
   t.true(count > 0);
   // Verify it grows with more messages
-  const smallAgent = stubAgent([
-    { role: 'user', content: 'Hello' },
-  ]);
-  t.true(
-    count > getMessageTokenCount(/** @type {any} */ (smallAgent)),
-  );
+  const smallAgent = stubAgent([{ role: 'user', content: 'Hello' }]);
+  t.true(count > getMessageTokenCount(/** @type {any} */ (smallAgent)));
 });
 
 test('returns a number', t => {
-  const agent = stubAgent([
-    { role: 'user', content: 'test' },
-  ]);
+  const agent = stubAgent([{ role: 'user', content: 'test' }]);
   t.is(typeof getMessageTokenCount(/** @type {any} */ (agent)), 'number');
 });

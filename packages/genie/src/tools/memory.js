@@ -499,7 +499,7 @@ harden(makeMemoryTools);
  *   to map relative index entries back to absolute paths.
  * @returns {SearchBackend}
  */
-const makeSubstringBackend = (vfs) => {
+const makeSubstringBackend = vfs => {
   /**
    * Search a single file for lines matching `query`
    * (case-insensitive).  Reads the file as a stream to avoid

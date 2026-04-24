@@ -136,7 +136,7 @@ function* buildReflectPrompt(attempt, pending) {
   } else {
     yield 'Try again, you forgot to actually:';
     for (const [toolName, instruct] of pending) {
-      yield `- use the ${toolName} tool with ${instruct}`
+      yield `- use the ${toolName} tool with ${instruct}`;
     }
   }
 }
@@ -218,7 +218,7 @@ const estimateFileTokens = async (memoryGet, path) => {
  * @param {ReflectorOptions} options
  * @returns {Reflector}
  */
-const makeReflector = (options) => {
+const makeReflector = options => {
   const {
     model,
     reflectionThreshold = DEFAULT_REFLECTION_THRESHOLD,
@@ -242,7 +242,7 @@ const makeReflector = (options) => {
   const subscribers = new Set();
 
   /** @param {ChatEvent} event */
-  const publish = (event) => {
+  const publish = event => {
     for (const handler of subscribers) {
       try {
         handler(event);
@@ -253,7 +253,7 @@ const makeReflector = (options) => {
   };
 
   /** @param {(event: ChatEvent) => void} handler */
-  const subscribe = (handler) => {
+  const subscribe = handler => {
     subscribers.add(handler);
     return () => {
       subscribers.delete(handler);
@@ -309,11 +309,13 @@ const makeReflector = (options) => {
     });
 
     // eslint-disable-next-line no-plusplus
-    for (let attempt = 0, limit = 3; !gate.done() && attempt++ < limit;) {
+    for (let attempt = 0, limit = 3; !gate.done() && attempt++ < limit; ) {
       // Clear any in-flight "doing" state left over from a retry round.
       gate.reset();
       try {
-        const prompt = Array.from(buildReflectPrompt(attempt, gate.pending())).join('\n');
+        const prompt = Array.from(
+          buildReflectPrompt(attempt, gate.pending()),
+        ).join('\n');
         // eslint-disable-next-line no-await-in-loop
         for await (const event of runAgent(reflectorAgent, prompt)) {
           gate.update(event);
@@ -326,7 +328,6 @@ const makeReflector = (options) => {
           await searchBackend.sync();
         }
       }
-
     }
   };
 
@@ -350,7 +351,7 @@ const makeReflector = (options) => {
 
     running = true;
     /** @type {() => void} */
-    let resolveInflight = () => { };
+    let resolveInflight = () => {};
     inflight = new Promise(resolve => {
       resolveInflight = resolve;
     });
@@ -437,10 +438,7 @@ const makeReflector = (options) => {
       return false;
     }
 
-    const tokenCount = await estimateFileTokens(
-      memoryGet,
-      OBSERVATION_PATH,
-    );
+    const tokenCount = await estimateFileTokens(memoryGet, OBSERVATION_PATH);
 
     if (tokenCount >= reflectionThreshold) {
       await run();

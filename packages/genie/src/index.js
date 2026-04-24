@@ -59,7 +59,4 @@ export { runGenieLoop } from './loop/run.js';
 
 export { makeSpecialsDispatcher } from './loop/specials.js';
 
-export {
-  buildGenieTools,
-  PLUGIN_DEFAULT_INCLUDE,
-} from './tools/registry.js';
+export { buildGenieTools, PLUGIN_DEFAULT_INCLUDE } from './tools/registry.js';

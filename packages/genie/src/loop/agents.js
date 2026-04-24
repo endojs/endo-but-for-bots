@@ -17,7 +17,7 @@ import { makeReflector } from '../reflector/index.js';
  * @property {string} [observerModel]
  *   - Override model for the observer sub-agent.
  * @property {string} [reflectorModel]
- *   - Override model for the reflector sub-agent. 
+ *   - Override model for the reflector sub-agent.
  * @property {string} [heartbeatModel]
  *   - Override model for the heartbeat sub-agent.
  * @property {boolean} [dedicatedHeartbeatAgent]
@@ -102,12 +102,7 @@ export const makeGenieAgents = async ({
     dedicatedHeartbeatAgent = true,
   } = config;
 
-  const {
-    listTools,
-    execTool,
-    memoryTools,
-    searchBackend,
-  } = tools;
+  const { listTools, execTool, memoryTools, searchBackend } = tools;
 
   const currentTime = new Date().toISOString();
 
@@ -120,14 +115,16 @@ export const makeGenieAgents = async ({
     execTool,
   });
 
-  const heartbeatAgent = dedicatedHeartbeatAgent ? await makeAgent({
-    hostname,
-    currentTime,
-    workspaceDir,
-    model: heartbeatModel,
-    listTools,
-    execTool,
-  }) : piAgent;
+  const heartbeatAgent = dedicatedHeartbeatAgent
+    ? await makeAgent({
+        hostname,
+        currentTime,
+        workspaceDir,
+        model: heartbeatModel,
+        listTools,
+        execTool,
+      })
+    : piAgent;
 
   /** @type {Observer | undefined} */
   let observer;

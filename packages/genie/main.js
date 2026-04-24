@@ -294,9 +294,13 @@ export const make = (guestPowers, _context) => {
 
     /** @param {Package} m */
     const getHeartbeatTick = m => {
-      const { strings: [first = ''] } = m;
+      const {
+        strings: [first = ''],
+      } = m;
       const head = first.trim().toLowerCase();
-      const id = head.startsWith('/heartbeat') ? (head.split(/\s+/)[1] ?? '') : '';
+      const id = head.startsWith('/heartbeat')
+        ? (head.split(/\s+/)[1] ?? '')
+        : '';
       const tick = id ? pendingHeartbeatTicks.get(id) : undefined;
       return { id, tick };
     };
@@ -323,12 +327,15 @@ export const make = (guestPowers, _context) => {
 
     try {
       for await (const event of collectIt(
-        he => { heartbeatEvent = he },
+        he => {
+          heartbeatEvent = he;
+        },
         runHeartbeat({
           workspaceDir,
           piAgent,
           // NOTE now = Date.now,
-        }))) {
+        }),
+      )) {
         // TODO this event handling should be shared with normal runAgentRound
         switch (event.type) {
           case 'Message': {
@@ -372,11 +379,14 @@ export const make = (guestPowers, _context) => {
 
     if (heartbeatEvent) {
       // TODO why need the cast
-      const status = /** @type {HeartbeatEvent} */(heartbeatEvent).status;
+      const status = /** @type {HeartbeatEvent} */ (heartbeatEvent).status;
       if (status === HeartbeatStatus.Ok) {
         console.log(`[genie:${agentName}] Heartbeat done`);
       } else {
-        console.error(`[genie:${agentName}] Heartbeat done, not ok:`, heartbeatEvent);
+        console.error(
+          `[genie:${agentName}] Heartbeat done, not ok:`,
+          heartbeatEvent,
+        );
       }
     }
 
@@ -472,38 +482,41 @@ export const make = (guestPowers, _context) => {
      */
     const onTick = tick => {
       switch (tick.label) {
-        case 'heartbeat': {
-          const { tickNumber, scheduledAt, actualAt, missedTicks } = tick;
+        case 'heartbeat':
+          {
+            const { tickNumber, scheduledAt, actualAt, missedTicks } = tick;
 
-          // Generate a correlation ID and store the tick in the
-          // side-channel map so runAgentLoop can retrieve it.
-          const tickID = `hb-${makeTickId()}`;
-          pendingHeartbeatTicks.set(tickID, tick);
+            // Generate a correlation ID and store the tick in the
+            // side-channel map so runAgentLoop can retrieve it.
+            const tickID = `hb-${makeTickId()}`;
+            pendingHeartbeatTicks.set(tickID, tick);
 
-          console.info(`[genie:${agentName}] Sending HEARTBEAT message (${tickID}):`, {
-            tickNumber,
-            scheduleLag: actualAt - scheduledAt,
-            missedTicks,
-          });
+            console.info(
+              `[genie:${agentName}] Sending HEARTBEAT message (${tickID}):`,
+              {
+                tickNumber,
+                scheduleLag: actualAt - scheduledAt,
+                missedTicks,
+              },
+            );
 
-          // Fire-and-forget: deliver the heartbeat as a daemon mail
-          // message to ourselves.  The message loop detects and handles
-          // `/heartbeat` strings with an optional tick correlation id.
-          E(agentGuest)
-            .send(
-              `@self`,
-              [`/heartbeat ${tickID}`],
-              [],
-              [],
-            )
-            .catch(err => {
-              console.error(`[genie:${agentName}] Failed to send heartbeat message:`, err.message);
-              // Clean up the map entry and resolve the tick to
-              // prevent the scheduler from stalling.
-              pendingHeartbeatTicks.delete(tickID);
-              tick.tickResponse.resolve();
-            });
-        }; break;
+            // Fire-and-forget: deliver the heartbeat as a daemon mail
+            // message to ourselves.  The message loop detects and handles
+            // `/heartbeat` strings with an optional tick correlation id.
+            E(agentGuest)
+              .send(`@self`, [`/heartbeat ${tickID}`], [], [])
+              .catch(err => {
+                console.error(
+                  `[genie:${agentName}] Failed to send heartbeat message:`,
+                  err.message,
+                );
+                // Clean up the map entry and resolve the tick to
+                // prevent the scheduler from stalling.
+                pendingHeartbeatTicks.delete(tickID);
+                tick.tickResponse.resolve();
+              });
+          }
+          break;
 
         default: {
           console.warn(`[genie:${agentName}] Unknown scheduler tick:`, tick);
@@ -512,31 +525,25 @@ export const make = (guestPowers, _context) => {
     };
 
     try {
-      const {
-        scheduler,
-        schedulerControl: heartbeatControl,
-      } = await makeIntervalScheduler({
-        persistDir: intervalsDir,
-        onTick,
-      });
+      const { scheduler, schedulerControl: heartbeatControl } =
+        await makeIntervalScheduler({
+          persistDir: intervalsDir,
+          onTick,
+        });
 
       // Tear down the scheduler when the agent is cancelled.
       cancelledP.then(() => heartbeatControl.revoke());
 
-      await scheduler.makeInterval(
-        'heartbeat',
-        heartbeatPeriodMs,
-        {
-          tickTimeoutMs: heartbeatTimeoutMs,
-        },
-      );
+      await scheduler.makeInterval('heartbeat', heartbeatPeriodMs, {
+        tickTimeoutMs: heartbeatTimeoutMs,
+      });
       console.log(
         `[genie:${agentName}] Heartbeat scheduled: period=${heartbeatPeriodMs}ms, timeout=${heartbeatTimeoutMs}ms`,
       );
     } catch (err) {
       console.error(
         `[genie:${agentName}] Failed to create heartbeat scheduler:`,
-        /** @type {Error} */(err).message,
+        /** @type {Error} */ (err).message,
       );
     }
   };
@@ -608,12 +615,13 @@ export const make = (guestPowers, _context) => {
         }
       },
       listToolNames: () => toolNames.slice(),
-      listHelpLines: () => formatHelpLines({
-        prefix: '/',
-        // Only the handlers actually mounted below; `/heartbeat`
-        // remains a system self-send, so it is intentionally absent.
-        commands: ['help', 'tools', 'observe', 'reflect'],
-      }),
+      listHelpLines: () =>
+        formatHelpLines({
+          prefix: '/',
+          // Only the handlers actually mounted below; `/heartbeat`
+          // remains a system self-send, so it is intentionally absent.
+          commands: ['help', 'tools', 'observe', 'reflect'],
+        }),
     });
 
     const allBuiltins = makeBuiltinSpecials({
@@ -654,7 +662,9 @@ export const make = (guestPowers, _context) => {
         if (m.type !== 'package') {
           continue;
         }
-        const { strings: [first = ''] } = m;
+        const {
+          strings: [first = ''],
+        } = m;
         const head = first.trim().toLowerCase();
         if (head.startsWith('/heartbeat')) {
           extra.push(m);
@@ -673,13 +683,13 @@ export const make = (guestPowers, _context) => {
     // iterator against the cancel sentinel matches the pre-migration shutdown
     // semantics.
     /** @type {Promise<{cancelled: any}>} */
-    const cancelSentinel = cancelledP.then((cancelled) => ({ cancelled }));
+    const cancelSentinel = cancelledP.then(cancelled => ({ cancelled }));
 
     /** @returns {AsyncGenerator<InboundPrompt>} */
     async function* daemonPrompts() {
       await Promise.resolve();
 
-      for (; ;) {
+      for (;;) {
         const result = await Promise.race([
           messageIterator.next(),
           cancelSentinel,
@@ -698,7 +708,9 @@ export const make = (guestPowers, _context) => {
         // Skip our own outbound messages.
         if (message.from === selfId) continue;
         if (message.type !== 'package') {
-          console.warn(`[genie:${agentName}] Unhandled message #${message.number} (type: ${message.type})`);
+          console.warn(
+            `[genie:${agentName}] Unhandled message #${message.number} (type: ${message.type})`,
+          );
           continue;
         }
 
@@ -772,7 +784,9 @@ export const make = (guestPowers, _context) => {
           await Promise.resolve();
 
           const message = /** @type {Package & StampedMessage} */ (prompt.raw);
-          console.log(`[genie:${agentName}] New message #${prompt.id} (type: ${message.type})`);
+          console.log(
+            `[genie:${agentName}] New message #${prompt.id} (type: ${message.type})`,
+          );
 
           // Reset the observer idle timer on each inbound message so
           // opportunistic observation only fires after a quiet period.
@@ -783,7 +797,8 @@ export const make = (guestPowers, _context) => {
           try {
             await processMessage(agentPowers, piAgent, message);
           } catch (err) {
-            const errorMessage = /** @type {Error} */ (err).message || String(err);
+            const errorMessage =
+              /** @type {Error} */ (err).message || String(err);
             console.error(
               `[genie:${agentName}] Failed to process message #${prompt.id}:`,
               errorMessage,
@@ -835,11 +850,10 @@ export const make = (guestPowers, _context) => {
             } catch (err) {
               console.error(
                 `[genie:${agentName}] Reflector error:`,
-                /** @type {Error} */(err).message || String(err),
+                /** @type {Error} */ (err).message || String(err),
               );
             }
           }
-
         },
 
         /**
@@ -852,14 +866,18 @@ export const make = (guestPowers, _context) => {
          */
         onError: async (prompt, err) => {
           await Promise.resolve();
-          const errorMessage = /** @type {Error} */(err).message || String(err);
-          console.error(`[genie:${agentName}] Dispatch error for #${prompt.id}:`, errorMessage);
+          const errorMessage =
+            /** @type {Error} */ (err).message || String(err);
+          console.error(
+            `[genie:${agentName}] Dispatch error for #${prompt.id}:`,
+            errorMessage,
+          );
           try {
             // See `io.reply` above — the daemon adapter's prompt ids
             // are always bigints even though `InboundPromptId` allows
             // string / number for other deployments.
             await E(agentPowers).reply(
-              /** @type {bigint} */(prompt.id),
+              /** @type {bigint} */ (prompt.id),
               [`Dispatch error: ${errorMessage}`],
               [],
               [],
@@ -971,23 +989,26 @@ export const make = (guestPowers, _context) => {
     const makeTickId = (() => {
       let value = 0;
       return () => {
-        return `${value += 1}`;
+        return `${(value += 1)}`;
       };
     })();
 
-    const { piAgent, heartbeatAgent, observer, reflector } = await makeGenieAgents({
-      hostname: 'endo-daemon',
-      workspaceDir,
-      tools: genieTools,
-      config: {
-        model: config.model || undefined,
-        observerModel: config.observerModel || undefined,
-        reflectorModel: config.reflectorModel || undefined,
-      },
-    });
+    const { piAgent, heartbeatAgent, observer, reflector } =
+      await makeGenieAgents({
+        hostname: 'endo-daemon',
+        workspaceDir,
+        tools: genieTools,
+        config: {
+          model: config.model || undefined,
+          observerModel: config.observerModel || undefined,
+          reflectorModel: config.reflectorModel || undefined,
+        },
+      });
 
-    const observerModelLog = config.observerModel || config.model || '(default)';
-    const reflectorModelLog = config.reflectorModel || config.model || '(default)';
+    const observerModelLog =
+      config.observerModel || config.model || '(default)';
+    const reflectorModelLog =
+      config.reflectorModel || config.model || '(default)';
     console.log(
       `[genie:${agentName}] Memory sub-agents: observer=${observerModelLog}, reflector=${reflectorModelLog}`,
     );
@@ -1033,16 +1054,9 @@ export const make = (guestPowers, _context) => {
 
     // Announce readiness from the agent's own identity.
     const heartbeatInfo =
-      heartbeatPeriodMs > 0
-        ? `, heartbeat: ${heartbeatPeriodMs / 1000}s`
-        : '';
+      heartbeatPeriodMs > 0 ? `, heartbeat: ${heartbeatPeriodMs / 1000}s` : '';
     const readyMess = `agent ready (model: ${config.model}, workspace: ${workspaceDir}${heartbeatInfo})`;
-    await E(agentGuest).send(
-      '@host',
-      [`Genie ${readyMess}.`],
-      [],
-      [],
-    );
+    await E(agentGuest).send('@host', [`Genie ${readyMess}.`], [], []);
     console.log(`[genie:${agentName}] ${readyMess}`);
   };
 

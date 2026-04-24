@@ -44,8 +44,7 @@
  * @param {string} body
  * @returns {string[]}
  */
-const splitTokens = body =>
-  body.split(/\s+/).filter(token => token.length > 0);
+const splitTokens = body => body.split(/\s+/).filter(token => token.length > 0);
 
 /**
  * Specials dispatcher — prefix-parameterised command registry shared by
@@ -68,7 +67,9 @@ const splitTokens = body =>
  */
 export const makeSpecialsDispatcher = ({ prefix, handlers, onUnknown }) => {
   if (typeof prefix !== 'string' || prefix.length === 0) {
-    throw new Error('makeSpecialsDispatcher: prefix must be a non-empty string');
+    throw new Error(
+      'makeSpecialsDispatcher: prefix must be a non-empty string',
+    );
   }
 
   /** @param {string} input */

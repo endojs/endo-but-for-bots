@@ -280,7 +280,7 @@ test('null bytes in path are rejected', async t => {
 // Startup indexing — pre-existing files
 // ---------------------------------------------------------------------------
 
-test('pre-existing MEMORY.md is indexed on startup', async (t) => {
+test('pre-existing MEMORY.md is indexed on startup', async t => {
   const root = '/workspace';
   const vfs = makeMemoryVFS(root);
   await vfs.mkdir(root, { recursive: true });
@@ -298,7 +298,7 @@ test('pre-existing MEMORY.md is indexed on startup', async (t) => {
   t.is(result.results[0].content, 'startup note about cats');
 });
 
-test('pre-existing files in memory/ dir are indexed on startup', async (t) => {
+test('pre-existing files in memory/ dir are indexed on startup', async t => {
   const root = '/workspace';
   const vfs = makeMemoryVFS(root);
   await vfs.mkdir(`${root}/memory`, { recursive: true });
@@ -317,7 +317,7 @@ test('pre-existing files in memory/ dir are indexed on startup', async (t) => {
   t.is(result.results[0].file, 'notes.md');
 });
 
-test('indexing promise resolves even with no pre-existing files', async (t) => {
+test('indexing promise resolves even with no pre-existing files', async t => {
   const root = '/workspace';
   const vfs = makeMemoryVFS(root);
   await vfs.mkdir(root, { recursive: true });

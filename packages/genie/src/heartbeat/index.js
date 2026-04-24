@@ -71,7 +71,7 @@ async function* runHeartbeat({
   } catch (err) {
     console.error(
       `[genie] Failed to record heartbeat heartbeatEvent:`,
-      /** @type {Error} */(err).message,
+      /** @type {Error} */ (err).message,
     );
   }
 

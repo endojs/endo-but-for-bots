@@ -337,16 +337,20 @@ export async function makePiAgent(options = {}) {
 
   // Use the caller-supplied prompt when provided; otherwise build one from
   // the prompt-configuration options.
-  const systemPrompt = systemPromptOpt ?? Array.from(buildSystemPrompt({
-    hostname,
-    currentTime,
-    workspaceDir,
-    buildToolList: listTools,
-    disableSuffix,
-    disablePolicy,
-    strictPolicy,
-    securityNotes,
-  })).join('\n');
+  const systemPrompt =
+    systemPromptOpt ??
+    Array.from(
+      buildSystemPrompt({
+        hostname,
+        currentTime,
+        workspaceDir,
+        buildToolList: listTools,
+        disableSuffix,
+        disablePolicy,
+        strictPolicy,
+        securityNotes,
+      }),
+    ).join('\n');
 
   // Resolve the pi-ai Model object — either from a pre-constructed object
   // or by looking up the model string in the pi-ai registry.
@@ -517,7 +521,7 @@ export async function* runAgentRound(piAgent, prompt) {
     .prompt(prompt)
     .then(
       () => giveQueue({ type: 'agent_start' }),
-      (err) => giveQueue({ type: 'error', error: err }, true),
+      err => giveQueue({ type: 'error', error: err }, true),
     )
     .catch(err => giveQueue({ type: 'error', error: err }, true));
 
@@ -525,7 +529,7 @@ export async function* runAgentRound(piAgent, prompt) {
     .waitForIdle()
     .then(
       () => giveQueue({ type: 'agent_end', messages: [] }, true),
-      (err) => giveQueue({ type: 'error', error: err }, true),
+      err => giveQueue({ type: 'error', error: err }, true),
     )
     .catch(err => giveQueue({ type: 'error', error: err }, true));
 

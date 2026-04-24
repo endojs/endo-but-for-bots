@@ -48,7 +48,11 @@ const OBSERVATION_PATH = 'memory/observations.md';
  * concatenate with test-specific events as needed.
  */
 const gateSatisfyingEvents = () => [
-  { type: 'ToolCallStart', toolName: 'memorySet', args: { path: OBSERVATION_PATH } },
+  {
+    type: 'ToolCallStart',
+    toolName: 'memorySet',
+    args: { path: OBSERVATION_PATH },
+  },
   { type: 'ToolCallEnd', toolName: 'memorySet', result: { success: true } },
 ];
 
@@ -142,9 +146,7 @@ test('serializeMessages — handles toolCall blocks', t => {
   const messages = [
     {
       role: 'assistant',
-      content: [
-        { type: 'toolCall', name: 'bash', input: { command: 'ls' } },
-      ],
+      content: [{ type: 'toolCall', name: 'bash', input: { command: 'ls' } }],
     },
   ];
   const result = serializeMessages(messages, 0);
@@ -156,9 +158,7 @@ test('serializeMessages — handles toolResult blocks', t => {
   const messages = [
     {
       role: 'toolResult',
-      content: [
-        { type: 'toolResult', result: 'file1.txt' },
-      ],
+      content: [{ type: 'toolResult', result: 'file1.txt' }],
     },
   ];
   const result = serializeMessages(messages, 0);
@@ -250,7 +250,7 @@ test('makeObserver — check does not trigger below threshold', t => {
 
   // 10 chars = ~3 tokens, well below 100
   const agent = stubAgent([{ role: 'user', content: 'hello' }]);
-  observer.check(/** @type {any} */(agent));
+  observer.check(/** @type {any} */ (agent));
 
   // Should not have started (no model to call, would throw if it did)
   t.false(observer.isRunning());
@@ -311,7 +311,10 @@ const stubMakeAgent = () => {
 const stubRunAgent = events => {
   /** @type {string[]} */
   const runs = [];
-  const runAgent = (/** @type {any} */ _agent, /** @type {string} */ prompt) => {
+  const runAgent = (
+    /** @type {any} */ _agent,
+    /** @type {string} */ prompt,
+  ) => {
     runs.push(prompt);
     async function* iterate() {
       for (const event of events) {
@@ -335,7 +338,7 @@ test('observe — returns undefined when there are no unobserved messages', asyn
   });
 
   const agent = stubAgent([]);
-  const result = await observer.observe(/** @type {any} */(agent));
+  const result = await observer.observe(/** @type {any} */ (agent));
   t.is(result, undefined);
   t.false(observer.isRunning());
   t.is(calls.length, 0, 'makeAgent should not be called');
@@ -362,7 +365,7 @@ test('observe — returns undefined when hwm >= messages.length', async t => {
   ]);
 
   // First observation: drain to completion so hwm advances.
-  const first = await observer.observe(/** @type {any} */(agent));
+  const first = await observer.observe(/** @type {any} */ (agent));
   t.truthy(first);
   // eslint-disable-next-line no-unused-vars
   for await (const _ of /** @type {AsyncIterable<any>} */ (first)) {
@@ -372,7 +375,7 @@ test('observe — returns undefined when hwm >= messages.length', async t => {
 
   // Second observation against the same agent: no new messages, should
   // return undefined.
-  const second = await observer.observe(/** @type {any} */(agent));
+  const second = await observer.observe(/** @type {any} */ (agent));
   t.is(second, undefined);
 });
 
@@ -392,11 +395,9 @@ test('observe — yields events when invoked with unobserved messages', async t 
     runAgent,
   });
 
-  const agent = stubAgent([
-    { role: 'user', content: 'remember this' },
-  ]);
+  const agent = stubAgent([{ role: 'user', content: 'remember this' }]);
 
-  const stream = await observer.observe(/** @type {any} */(agent));
+  const stream = await observer.observe(/** @type {any} */ (agent));
   t.truthy(stream);
   t.true(observer.isRunning(), 'running flag set as soon as observe() returns');
 
@@ -433,7 +434,7 @@ test('observe — advances hwm and clears running after full drain', async t => 
 
   t.is(observer.highWaterMark(), 0);
 
-  const stream = await observer.observe(/** @type {any} */(agent));
+  const stream = await observer.observe(/** @type {any} */ (agent));
   t.truthy(stream);
 
   // eslint-disable-next-line no-unused-vars
@@ -452,7 +453,7 @@ test('observe — returns undefined while another cycle is running', async t => 
   // A runAgent that never yields until we release it — lets us observe the
   // "running" state between start and drain.
   /** @type {(_: any) => void} */
-  let release = () => { };
+  let release = () => {};
   const gate = new Promise(resolve => {
     release = resolve;
   });
@@ -479,12 +480,12 @@ test('observe — returns undefined while another cycle is running', async t => 
 
   const agent = stubAgent([{ role: 'user', content: 'hi' }]);
 
-  const first = await observer.observe(/** @type {any} */(agent));
+  const first = await observer.observe(/** @type {any} */ (agent));
   t.truthy(first);
   t.true(observer.isRunning());
 
   // Second call must return undefined while the first is in flight.
-  const second = await observer.observe(/** @type {any} */(agent));
+  const second = await observer.observe(/** @type {any} */ (agent));
   t.is(second, undefined);
 
   release(null);
@@ -516,7 +517,7 @@ test('observe — clears running when consumer aborts early', async t => {
     { role: 'user', content: 'b' },
   ]);
 
-  const stream = await observer.observe(/** @type {any} */(agent));
+  const stream = await observer.observe(/** @type {any} */ (agent));
   t.truthy(stream);
   t.true(observer.isRunning());
 
@@ -541,7 +542,7 @@ test('observe — clears running when consumer aborts early', async t => {
 
   // A follow-up observe() should now be allowed to run again rather
   // than being blocked by a stuck `running` flag.
-  const followUp = await observer.observe(/** @type {any} */(agent));
+  const followUp = await observer.observe(/** @type {any} */ (agent));
   t.truthy(followUp, 'follow-up observe() is not blocked by the aborted cycle');
   // eslint-disable-next-line no-unreachable-loop
   for await (const _ of /** @type {AsyncIterable<any>} */ (followUp)) {
@@ -575,7 +576,7 @@ test('observe — searchBackend.sync() is flushed after a run', async t => {
   });
 
   const agent = stubAgent([{ role: 'user', content: 'hi' }]);
-  const stream = await observer.observe(/** @type {any} */(agent));
+  const stream = await observer.observe(/** @type {any} */ (agent));
   t.truthy(stream);
 
   // eslint-disable-next-line no-unused-vars
@@ -611,7 +612,7 @@ test('subscribe — receives every event from an explicit observe() cycle', asyn
   t.is(typeof unsubscribe, 'function');
 
   const agent = stubAgent([{ role: 'user', content: 'hi' }]);
-  const stream = await observer.observe(/** @type {any} */(agent));
+  const stream = await observer.observe(/** @type {any} */ (agent));
   t.truthy(stream);
 
   // eslint-disable-next-line no-unused-vars
@@ -642,7 +643,7 @@ test('subscribe — unsubscribe stops further event delivery', async t => {
   unsubscribe();
 
   const agent = stubAgent([{ role: 'user', content: 'hi' }]);
-  const stream = await observer.observe(/** @type {any} */(agent));
+  const stream = await observer.observe(/** @type {any} */ (agent));
   // eslint-disable-next-line no-unused-vars
   for await (const _ of /** @type {AsyncIterable<any>} */ (stream)) {
     // drain
@@ -668,7 +669,7 @@ test('subscribe — multiple subscribers each receive every event', async t => {
   observer.subscribe(event => b.push(event));
 
   const agent = stubAgent([{ role: 'user', content: 'hi' }]);
-  const stream = await observer.observe(/** @type {any} */(agent));
+  const stream = await observer.observe(/** @type {any} */ (agent));
   // eslint-disable-next-line no-unused-vars
   for await (const _ of /** @type {AsyncIterable<any>} */ (stream)) {
     // drain
@@ -680,52 +681,68 @@ test('subscribe — multiple subscribers each receive every event', async t => {
 // NOTE: `.serial` because this test shadows the global `console.error`;
 // running it concurrently with other shadow-error tests races
 // restoration and can lose our captured error.
-test.serial('subscribe — throwing subscriber is isolated from other subscribers', async t => {
-  await Promise.resolve();
+test.serial(
+  'subscribe — throwing subscriber is isolated from other subscribers',
+  async t => {
+    await Promise.resolve();
 
-  const { memoryGet, memorySet } = stubTools();
-  const { makeAgent } = stubMakeAgent();
-  const scripted = [
-    ...gateSatisfyingEvents(),
-    { type: 'Message', role: 'assistant', content: 'done' },
-  ];
-  const { runAgent } = stubRunAgent(scripted);
-  const observer = makeObserver({ memoryGet, memorySet, makeAgent, runAgent });
-
-  // Silence console.error during the test so CI doesn't get noise.
-  const origErr = console.error;
-  /** @type {Array<any[]>} */
-  const errorCalls = [];
-  /** @param {any[]} args */
-  console.error = (...args) => {
-    errorCalls.push(args);
-  };
-
-  try {
-    observer.subscribe(() => {
-      throw new Error('kaboom');
+    const { memoryGet, memorySet } = stubTools();
+    const { makeAgent } = stubMakeAgent();
+    const scripted = [
+      ...gateSatisfyingEvents(),
+      { type: 'Message', role: 'assistant', content: 'done' },
+    ];
+    const { runAgent } = stubRunAgent(scripted);
+    const observer = makeObserver({
+      memoryGet,
+      memorySet,
+      makeAgent,
+      runAgent,
     });
 
-    /** @type {Array<any>} */
-    const sane = [];
-    observer.subscribe(event => sane.push(event));
+    // Silence console.error during the test so CI doesn't get noise.
+    const origErr = console.error;
+    /** @type {Array<any[]>} */
+    const errorCalls = [];
+    /** @param {any[]} args */
+    console.error = (...args) => {
+      errorCalls.push(args);
+    };
 
-    const agent = stubAgent([{ role: 'user', content: 'hi' }]);
-    const stream = await observer.observe(/** @type {any} */(agent));
+    try {
+      observer.subscribe(() => {
+        throw new Error('kaboom');
+      });
 
-    /** @type {Array<any>} */
-    const drained = [];
-    for await (const event of /** @type {AsyncIterable<any>} */ (stream)) {
-      drained.push(event);
+      /** @type {Array<any>} */
+      const sane = [];
+      observer.subscribe(event => sane.push(event));
+
+      const agent = stubAgent([{ role: 'user', content: 'hi' }]);
+      const stream = await observer.observe(/** @type {any} */ (agent));
+
+      /** @type {Array<any>} */
+      const drained = [];
+      for await (const event of /** @type {AsyncIterable<any>} */ (stream)) {
+        drained.push(event);
+      }
+
+      t.deepEqual(
+        drained,
+        scripted,
+        'stream is not interrupted by a throwing subscriber',
+      );
+      t.deepEqual(
+        sane,
+        scripted,
+        'other subscribers continue to receive events',
+      );
+      t.true(errorCalls.length >= 1, 'throwing subscriber is logged');
+    } finally {
+      console.error = origErr;
     }
-
-    t.deepEqual(drained, scripted, 'stream is not interrupted by a throwing subscriber');
-    t.deepEqual(sane, scripted, 'other subscribers continue to receive events');
-    t.true(errorCalls.length >= 1, 'throwing subscriber is logged');
-  } finally {
-    console.error = origErr;
-  }
-});
+  },
+);
 
 test('subscribe — automatic trigger (triggerObservation via check) publishes events', async t => {
   const { memoryGet, memorySet } = stubTools();
@@ -752,12 +769,16 @@ test('subscribe — automatic trigger (triggerObservation via check) publishes e
     { role: 'user', content: 'this has enough tokens to trigger' },
   ]);
 
-  observer.check(/** @type {any} */(agent));
+  observer.check(/** @type {any} */ (agent));
   // check() fires triggerObservation which drains asynchronously; wait for
   // stop() to signal the in-flight cycle has completed.
   await observer.stop();
 
-  t.deepEqual(seen, scripted, 'auto-trigger publishes each event to subscribers');
+  t.deepEqual(
+    seen,
+    scripted,
+    'auto-trigger publishes each event to subscribers',
+  );
 });
 
 // ---------------------------------------------------------------------------
@@ -790,7 +811,7 @@ test('observe — searchBackend.sync() fires even when consumer aborts early', a
   });
 
   const agent = stubAgent([{ role: 'user', content: 'hi' }]);
-  const stream = await observer.observe(/** @type {any} */(agent));
+  const stream = await observer.observe(/** @type {any} */ (agent));
   t.truthy(stream);
 
   // eslint-disable-next-line no-unreachable-loop
@@ -823,7 +844,7 @@ test('observe — empty-excerpt short-circuit advances hwm without constructing 
   ]);
 
   t.is(observer.highWaterMark(), 0);
-  const result = await observer.observe(/** @type {any} */(agent));
+  const result = await observer.observe(/** @type {any} */ (agent));
   t.is(result, undefined, 'empty excerpt short-circuits to undefined');
   t.is(
     observer.highWaterMark(),
@@ -836,7 +857,7 @@ test('observe — empty-excerpt short-circuit advances hwm without constructing 
 
   // A follow-up observe() against the same agent must return undefined
   // because hwm has caught up — this is the bug the advance prevents.
-  const second = await observer.observe(/** @type {any} */(agent));
+  const second = await observer.observe(/** @type {any} */ (agent));
   t.is(second, undefined);
 });
 
@@ -847,16 +868,14 @@ test('observe — rejects and clears running when makeAgent throws', async t => 
   /** @type {number} */
   let makeAgentCalls = 0;
   /** @param {any} _opts */
-  const makeAgent = async (_opts) => {
+  const makeAgent = async _opts => {
     makeAgentCalls += 1;
     if (throwNext) {
       throw boom;
     }
     return { __stub: true };
   };
-  const scripted = [
-    { type: 'Message', role: 'assistant', content: 'done' },
-  ];
+  const scripted = [{ type: 'Message', role: 'assistant', content: 'done' }];
   const { runAgent, runs } = stubRunAgent(scripted);
   const observer = makeObserver({
     memoryGet,
@@ -869,9 +888,7 @@ test('observe — rejects and clears running when makeAgent throws', async t => 
 
   // The failure from makeAgent must surface as a synchronous-looking
   // rejection from observe() rather than a lazy error on first iteration.
-  const err = await t.throwsAsync(
-    observer.observe(/** @type {any} */(agent)),
-  );
+  const err = await t.throwsAsync(observer.observe(/** @type {any} */ (agent)));
   t.is(err, boom, 'observe() surfaces the makeAgent error directly');
   t.is(makeAgentCalls, 1);
   t.false(observer.isRunning(), 'running cleared after makeAgent failure');
@@ -890,7 +907,7 @@ test('observe — rejects and clears running when makeAgent throws', async t => 
   // on the sub-agent successfully writing observations.md, which is not
   // the point of this test.)
   throwNext = false;
-  const stream = await observer.observe(/** @type {any} */(agent));
+  const stream = await observer.observe(/** @type {any} */ (agent));
   t.truthy(stream, 'observer recovers after a transient makeAgent failure');
   // eslint-disable-next-line no-unused-vars
   for await (const _ of /** @type {AsyncIterable<any>} */ (stream)) {
@@ -906,7 +923,7 @@ test('stop — awaits an in-flight observe() stream', async t => {
   // A runAgent that parks on a gate — lets us suspend the cycle between
   // `observe()` returning and the first event arriving.
   /** @type {(_: any) => void} */
-  let release = () => { };
+  let release = () => {};
   const gate = new Promise(resolve => {
     release = resolve;
   });
@@ -931,7 +948,7 @@ test('stop — awaits an in-flight observe() stream', async t => {
   });
   const agent = stubAgent([{ role: 'user', content: 'hi' }]);
 
-  const stream = await observer.observe(/** @type {any} */(agent));
+  const stream = await observer.observe(/** @type {any} */ (agent));
   t.truthy(stream);
   t.true(observer.isRunning());
 

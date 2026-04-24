@@ -129,7 +129,7 @@ const segments = p => {
  * @param {string} p - An absolute path (must start with `/`).
  * @returns {string} The normalized absolute path.
  */
-const normalizePosix = (p) => {
+const normalizePosix = p => {
   const parts = p.split('/');
   /** @type {string[]} */
   const resolved = [];

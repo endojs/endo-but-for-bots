@@ -279,8 +279,7 @@ const makeIntervalScheduler = async (config = {}) => {
     const now = Date.now();
     const retryAt = now + backoffDelay;
     // The deadline is measured from the original scheduled time.
-    const deadline =
-      entry.nextTickAt - entry.periodMs + entry.tickTimeoutMs;
+    const deadline = entry.nextTickAt - entry.periodMs + entry.tickTimeoutMs;
 
     if (retryAt >= deadline) {
       // Backoff would exceed deadline; auto-resolve instead.
@@ -436,10 +435,7 @@ const makeIntervalScheduler = async (config = {}) => {
         throw TypeError('makeInterval: label must be a non-empty string');
       }
 
-      const {
-        firstDelayMs = 0,
-        tickTimeoutMs = periodMs / 2,
-      } = opts;
+      const { firstDelayMs = 0, tickTimeoutMs = periodMs / 2 } = opts;
 
       const now = Date.now();
       const id = randomHex();

@@ -60,7 +60,9 @@ test('single-path — ToolCallStart + ToolCallEnd marks the expected value done'
     memorySet: { argKey: 'path', expected: ['memory/observations.md'] },
   });
 
-  gate.update(makeToolCallStart('memorySet', { path: 'memory/observations.md' }));
+  gate.update(
+    makeToolCallStart('memorySet', { path: 'memory/observations.md' }),
+  );
   t.false(gate.done(), 'not done until ToolCallEnd');
 
   gate.update(makeToolCallEnd('memorySet', { success: true }));
@@ -76,7 +78,9 @@ test('single-path — ToolCallStart with an unknown path is ignored', t => {
   gate.update(makeToolCallStart('memorySet', { path: 'memory/other.md' }));
   gate.update(makeToolCallEnd('memorySet', { success: true }));
   t.false(gate.done(), 'foreign path must not satisfy the gate');
-  t.deepEqual(Array.from(gate.pending()), [['memorySet', 'memory/observations.md']]);
+  t.deepEqual(Array.from(gate.pending()), [
+    ['memorySet', 'memory/observations.md'],
+  ]);
 });
 
 // ---------------------------------------------------------------------------
@@ -133,7 +137,9 @@ test('bug-1 regression — successful call is actually recorded', t => {
     memorySet: { argKey: 'path', expected: ['memory/observations.md'] },
   });
 
-  gate.update(makeToolCallStart('memorySet', { path: 'memory/observations.md' }));
+  gate.update(
+    makeToolCallStart('memorySet', { path: 'memory/observations.md' }),
+  );
   gate.update(makeToolCallEnd('memorySet', { success: true }));
   t.true(gate.done(), 'gate recognises the successful call');
 });
@@ -167,7 +173,9 @@ test('bug-3 regression — intervening Message does not clear in-flight doing-st
     memorySet: { argKey: 'path', expected: ['memory/observations.md'] },
   });
 
-  gate.update(makeToolCallStart('memorySet', { path: 'memory/observations.md' }));
+  gate.update(
+    makeToolCallStart('memorySet', { path: 'memory/observations.md' }),
+  );
   // Simulate a chat event arriving between Start and End — the
   // previous implementation would clear `doing` here.
   gate.update(makeMessage('assistant', 'thinking about writing…'));
@@ -189,7 +197,10 @@ test('update — parses string-encoded JSON args', t => {
   });
 
   gate.update(
-    makeToolCallStart('memorySet', JSON.stringify({ path: 'memory/observations.md' })),
+    makeToolCallStart(
+      'memorySet',
+      JSON.stringify({ path: 'memory/observations.md' }),
+    ),
   );
   gate.update(makeToolCallEnd('memorySet', { success: true }));
   t.true(gate.done(), 'JSON-string args are parsed transparently');
@@ -217,7 +228,9 @@ test('update — events for tools outside the spec are ignored', t => {
     memorySet: { argKey: 'path', expected: ['memory/observations.md'] },
   });
 
-  gate.update(makeToolCallStart('memoryGet', { path: 'memory/observations.md' }));
+  gate.update(
+    makeToolCallStart('memoryGet', { path: 'memory/observations.md' }),
+  );
   gate.update(makeToolCallEnd('memoryGet', { success: true }));
   t.false(gate.done(), 'only spec-listed tools advance the gate');
 });

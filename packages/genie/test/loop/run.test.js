@@ -289,9 +289,7 @@ test('runGenieLoop — routes kind="heartbeat" to handlers.runHeartbeat and not 
     handlers: { heartbeat: heartbeatSpecial },
   });
   /** @type {InboundPrompt[]} */
-  const prompts = [
-    { id: 1, text: '/heartbeat hb-0', kind: 'heartbeat' },
-  ];
+  const prompts = [{ id: 1, text: '/heartbeat hb-0', kind: 'heartbeat' }];
   const { io, writes } = makeFakeIo({ prompts });
 
   await runGenieLoop({

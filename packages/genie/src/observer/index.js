@@ -147,14 +147,16 @@ const serializeMessages = (messages, fromIndex) => {
       text = content
         .map(block => {
           if (block.type === 'text' && block.text) return block.text;
-          if (block.type === 'thinking' && block.thinking) return block.thinking;
+          if (block.type === 'thinking' && block.thinking)
+            return block.thinking;
           if (block.type === 'toolCall') {
             return `[tool: ${block.name}(${typeof block.input === 'string' ? block.input : JSON.stringify(block.input)})]`;
           }
           if (block.type === 'toolResult') {
-            const result = typeof block.result === 'string'
-              ? block.result
-              : JSON.stringify(block.result);
+            const result =
+              typeof block.result === 'string'
+                ? block.result
+                : JSON.stringify(block.result);
             return `[result: ${result}]`;
           }
           return '';
@@ -275,7 +277,7 @@ harden(estimateUnobservedTokens);
  * @param {ObserverOptions} options
  * @returns {Observer}
  */
-const makeObserver = (options) => {
+const makeObserver = options => {
   const {
     model,
     tokenThreshold = DEFAULT_TOKEN_THRESHOLD,
@@ -306,7 +308,7 @@ const makeObserver = (options) => {
   const subscribers = new Set();
 
   /** @param {ChatEvent} event */
-  const publish = (event) => {
+  const publish = event => {
     for (const handler of subscribers) {
       try {
         handler(event);
@@ -317,7 +319,7 @@ const makeObserver = (options) => {
   };
 
   /** @param {(event: ChatEvent) => void} handler */
-  const subscribe = (handler) => {
+  const subscribe = handler => {
     subscribers.add(handler);
     return () => {
       subscribers.delete(handler);
@@ -373,7 +375,11 @@ const makeObserver = (options) => {
    *   `beginObservation()` and never reaches this helper.
    * @returns {AsyncIterable<ChatEvent>}
    */
-  const runObservation = async function* runObservation(observerAgent, messages, excerpt) {
+  const runObservation = async function* runObservation(
+    observerAgent,
+    messages,
+    excerpt,
+  ) {
     await Promise.resolve();
 
     const gate = makeToolGate({
@@ -384,11 +390,13 @@ const makeObserver = (options) => {
     });
 
     // eslint-disable-next-line no-plusplus
-    for (let attempt = 0, limit = 3; !gate.done() && attempt++ < limit;) {
+    for (let attempt = 0, limit = 3; !gate.done() && attempt++ < limit; ) {
       // Clear any in-flight "doing" state left over from a retry round.
       gate.reset();
       try {
-        const prompt = Array.from(buildObservePrompt(attempt, excerpt)).join('\n');
+        const prompt = Array.from(buildObservePrompt(attempt, excerpt)).join(
+          '\n',
+        );
         // eslint-disable-next-line no-await-in-loop
         for await (const event of runAgent(observerAgent, prompt)) {
           gate.update(event);
@@ -438,7 +446,7 @@ const makeObserver = (options) => {
    * @param {PiAgent} mainAgent - The main PiAgent instance.
    * @returns {Promise<AsyncIterable<ChatEvent> | undefined>}
    */
-  const beginObservation = async (mainAgent) => {
+  const beginObservation = async mainAgent => {
     await Promise.resolve();
 
     if (running) {
@@ -464,7 +472,7 @@ const makeObserver = (options) => {
 
     running = true;
     /** @type {(() => void)} */
-    let resolveInflight = () => { };
+    let resolveInflight = () => {};
     inflight = new Promise(resolve => {
       resolveInflight = resolve;
     });
@@ -516,7 +524,7 @@ const makeObserver = (options) => {
    * @param {any} mainAgent - The main PiAgent instance.
    * @returns {Promise<AsyncIterable<ChatEvent> | undefined>}
    */
-  const observe = (mainAgent) => beginObservation(mainAgent);
+  const observe = mainAgent => beginObservation(mainAgent);
 
   /**
    * Fire-and-forget wrapper used by the auto-trigger paths
@@ -531,7 +539,7 @@ const makeObserver = (options) => {
    *
    * @param {any} mainAgent - The main PiAgent instance.
    */
-  const triggerObservation = (mainAgent) => {
+  const triggerObservation = mainAgent => {
     (async () => {
       await Promise.resolve();
       /** @type {AsyncIterable<ChatEvent> | undefined} */
@@ -564,7 +572,7 @@ const makeObserver = (options) => {
    *
    * @param {any} mainAgent - The main PiAgent instance.
    */
-  const check = (mainAgent) => {
+  const check = mainAgent => {
     if (running) {
       return;
     }
@@ -581,7 +589,7 @@ const makeObserver = (options) => {
    *
    * @param {PiAgent} mainAgent - The main PiAgent instance.
    */
-  const onIdle = (mainAgent) => {
+  const onIdle = mainAgent => {
     if (running) {
       return;
     }
@@ -604,7 +612,7 @@ const makeObserver = (options) => {
    *
    * @param {PiAgent} mainAgent - The main PiAgent instance.
    */
-  const scheduleIdle = (mainAgent) => {
+  const scheduleIdle = mainAgent => {
     resetIdleTimer();
     idleTimer = setTimeout(() => {
       idleTimer = null;

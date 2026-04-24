@@ -213,10 +213,7 @@ test('listTools — returns name + summary for every included tool', async t => 
     include: ['bash', 'exec'],
   });
   const specs = registry.listTools();
-  t.deepEqual(
-    specs.map(s => s.name).sort(),
-    ['bash', 'exec'],
-  );
+  t.deepEqual(specs.map(s => s.name).sort(), ['bash', 'exec']);
   for (const spec of specs) {
     t.is(typeof spec.summary, 'string');
     t.true(spec.summary.length > 0);
@@ -244,10 +241,9 @@ test('execTool — unknown name throws', async t => {
     workspaceDir,
     include: ['bash'],
   });
-  await t.throwsAsync(
-    () => registry.execTool('nosuch', {}),
-    { message: /Unknown tool: nosuch/ },
-  );
+  await t.throwsAsync(() => registry.execTool('nosuch', {}), {
+    message: /Unknown tool: nosuch/,
+  });
 });
 
 // ---------------------------------------------------------------------------

@@ -57,7 +57,10 @@ const stubMakeAgent = () => {
 const stubRunAgent = events => {
   /** @type {string[]} */
   const runs = [];
-  const runAgent = (/** @type {any} */ _agent, /** @type {string} */ prompt) => {
+  const runAgent = (
+    /** @type {any} */ _agent,
+    /** @type {string} */ prompt,
+  ) => {
     runs.push(prompt);
     async function* iterate() {
       for (const event of events) {
@@ -84,9 +87,17 @@ const REFLECTION_PATH = 'memory/reflections.md';
  * @returns {ChatEvent[]}
  */
 const gateSatisfyingEvents = () => [
-  { type: 'ToolCallStart', toolName: 'memorySet', args: { path: OBSERVATION_PATH } },
+  {
+    type: 'ToolCallStart',
+    toolName: 'memorySet',
+    args: { path: OBSERVATION_PATH },
+  },
   { type: 'ToolCallEnd', toolName: 'memorySet', result: { success: true } },
-  { type: 'ToolCallStart', toolName: 'memorySet', args: { path: REFLECTION_PATH } },
+  {
+    type: 'ToolCallStart',
+    toolName: 'memorySet',
+    args: { path: REFLECTION_PATH },
+  },
   { type: 'ToolCallEnd', toolName: 'memorySet', result: { success: true } },
 ];
 
@@ -198,7 +209,12 @@ test('estimateFileTokens — returns 0 for empty file', async t => {
 
 test('makeReflector — returns an object with the expected methods', t => {
   const { memoryGet, memorySet, memorySearch } = stubTools();
-  const reflector = makeReflector({ memoryGet, memorySet, memorySearch, workspaceDir: '/dev/null' });
+  const reflector = makeReflector({
+    memoryGet,
+    memorySet,
+    memorySearch,
+    workspaceDir: '/dev/null',
+  });
 
   t.is(typeof reflector.run, 'function');
   t.is(typeof reflector.checkAndRun, 'function');
@@ -209,14 +225,24 @@ test('makeReflector — returns an object with the expected methods', t => {
 
 test('makeReflector — initial state is not running', t => {
   const { memoryGet, memorySet, memorySearch } = stubTools();
-  const reflector = makeReflector({ memoryGet, memorySet, memorySearch, workspaceDir: '/dev/null' });
+  const reflector = makeReflector({
+    memoryGet,
+    memorySet,
+    memorySearch,
+    workspaceDir: '/dev/null',
+  });
 
   t.false(reflector.isRunning());
 });
 
 test('makeReflector — stop resolves when nothing is running', async t => {
   const { memoryGet, memorySet, memorySearch } = stubTools();
-  const reflector = makeReflector({ memoryGet, memorySet, memorySearch, workspaceDir: '/dev/null' });
+  const reflector = makeReflector({
+    memoryGet,
+    memorySet,
+    memorySearch,
+    workspaceDir: '/dev/null',
+  });
 
   await reflector.stop();
   t.pass();
@@ -228,7 +254,12 @@ test('makeReflector — checkAndRun returns false below threshold', async t => {
   // 100 chars / 4 = 25 tokens, well below 40k default
   store.set('memory/observations.md', 'a'.repeat(100));
 
-  const reflector = makeReflector({ memoryGet, memorySet, memorySearch, workspaceDir: '/dev/null' });
+  const reflector = makeReflector({
+    memoryGet,
+    memorySet,
+    memorySearch,
+    workspaceDir: '/dev/null',
+  });
   const triggered = await reflector.checkAndRun();
   t.false(triggered);
 });
@@ -236,7 +267,12 @@ test('makeReflector — checkAndRun returns false below threshold', async t => {
 test('makeReflector — checkAndRun returns false when file missing', async t => {
   const { memoryGet, memorySet, memorySearch } = stubTools();
 
-  const reflector = makeReflector({ memoryGet, memorySet, memorySearch, workspaceDir: '/dev/null' });
+  const reflector = makeReflector({
+    memoryGet,
+    memorySet,
+    memorySearch,
+    workspaceDir: '/dev/null',
+  });
   const triggered = await reflector.checkAndRun();
   t.false(triggered);
 });
@@ -293,7 +329,10 @@ test('reflect — yields events from the reflector sub-agent', async t => {
 
   const stream = await reflector.reflect();
   t.truthy(stream);
-  t.true(reflector.isRunning(), 'running flag set as soon as reflect() returns');
+  t.true(
+    reflector.isRunning(),
+    'running flag set as soon as reflect() returns',
+  );
 
   /** @type {Array<any>} */
   const collected = [];
@@ -346,7 +385,7 @@ test('reflect — returns undefined while another cycle is running', async t => 
   // A runAgent that never yields until we release it — lets us observe the
   // "running" state between start and drain.
   /** @type {(_: any) => void} */
-  let release = () => { };
+  let release = () => {};
   const gate = new Promise(resolve => {
     release = resolve;
   });
@@ -541,7 +580,7 @@ test('run — skips work when a reflection is already running', async t => {
   const { makeAgent, calls } = stubMakeAgent();
 
   /** @type {(_: any) => void} */
-  let release = () => { };
+  let release = () => {};
   const gate = new Promise(resolve => {
     release = resolve;
   });
@@ -651,9 +690,7 @@ test('reflect — rejects and clears running when makeAgent throws', async t => 
     }
     return { __stub: true };
   };
-  const scripted = [
-    { type: 'Message', role: 'assistant', content: 'done' },
-  ];
+  const scripted = [{ type: 'Message', role: 'assistant', content: 'done' }];
   const { runAgent, runs } = stubRunAgent(scripted);
   const reflector = makeReflector({
     memoryGet,
@@ -690,55 +727,58 @@ test('reflect — rejects and clears running when makeAgent throws', async t => 
 // NOTE: `.serial` because this test shadows the global `console.error`;
 // running it concurrently with other tests that do the same races
 // restoration and can lose our captured error.
-test.serial('run — swallows and logs errors from a rejecting reflect()', async t => {
-  await Promise.resolve();
+test.serial(
+  'run — swallows and logs errors from a rejecting reflect()',
+  async t => {
+    await Promise.resolve();
 
-  const { memoryGet, memorySet, memorySearch } = stubTools();
-  const boom = new Error('makeAgent kaboom');
-  /** @type {number} */
-  let makeAgentCalls = 0;
-  const makeAgent = async (/** @type {any} */ _opts) => {
-    makeAgentCalls += 1;
-    throw boom;
-  };
-  const { runAgent, runs } = stubRunAgent([
-    { type: 'Message', role: 'assistant', content: 'done' },
-  ]);
-  const reflector = makeReflector({
-    memoryGet,
-    memorySet,
-    memorySearch,
-    makeAgent,
-    runAgent,
-    workspaceDir: '/dev/null',
-  });
+    const { memoryGet, memorySet, memorySearch } = stubTools();
+    const boom = new Error('makeAgent kaboom');
+    /** @type {number} */
+    let makeAgentCalls = 0;
+    const makeAgent = async (/** @type {any} */ _opts) => {
+      makeAgentCalls += 1;
+      throw boom;
+    };
+    const { runAgent, runs } = stubRunAgent([
+      { type: 'Message', role: 'assistant', content: 'done' },
+    ]);
+    const reflector = makeReflector({
+      memoryGet,
+      memorySet,
+      memorySearch,
+      makeAgent,
+      runAgent,
+      workspaceDir: '/dev/null',
+    });
 
-  // Silence console.error during the test so CI doesn't get noise.
-  const origErr = console.error;
-  /** @type {Array<any[]>} */
-  const errorCalls = [];
-  /** @param {any[]} args */
-  console.error = (...args) => {
-    errorCalls.push(args);
-  };
+    // Silence console.error during the test so CI doesn't get noise.
+    const origErr = console.error;
+    /** @type {Array<any[]>} */
+    const errorCalls = [];
+    /** @param {any[]} args */
+    console.error = (...args) => {
+      errorCalls.push(args);
+    };
 
-  try {
-    // run() must swallow the reflect() rejection — a thrown heartbeat
-    // cycle cannot be allowed to crash the surrounding loop.
-    await t.notThrowsAsync(reflector.run());
-  } finally {
-    console.error = origErr;
-  }
+    try {
+      // run() must swallow the reflect() rejection — a thrown heartbeat
+      // cycle cannot be allowed to crash the surrounding loop.
+      await t.notThrowsAsync(reflector.run());
+    } finally {
+      console.error = origErr;
+    }
 
-  t.is(makeAgentCalls, 1);
-  t.is(runs.length, 0, 'runAgent never invoked when reflect() rejects');
-  t.false(reflector.isRunning(), 'running cleared after the rejection');
-  t.true(errorCalls.length >= 1, 'run() logged the swallowed error');
-  t.true(
-    errorCalls.some(args => args.includes(boom)),
-    'logged error payload includes the original cause',
-  );
-});
+    t.is(makeAgentCalls, 1);
+    t.is(runs.length, 0, 'runAgent never invoked when reflect() rejects');
+    t.false(reflector.isRunning(), 'running cleared after the rejection');
+    t.true(errorCalls.length >= 1, 'run() logged the swallowed error');
+    t.true(
+      errorCalls.some(args => args.includes(boom)),
+      'logged error payload includes the original cause',
+    );
+  },
+);
 
 // ---------------------------------------------------------------------------
 // makeReflector — subscribe() broadcast hook
@@ -850,58 +890,69 @@ test('subscribe — multiple subscribers each receive every event', async t => {
 
 // NOTE: `.serial` because this test shadows the global `console.error`;
 // see the note on 'run — swallows and logs errors'.
-test.serial('subscribe — throwing subscriber is isolated from other subscribers', async t => {
-  await Promise.resolve();
+test.serial(
+  'subscribe — throwing subscriber is isolated from other subscribers',
+  async t => {
+    await Promise.resolve();
 
-  const { memoryGet, memorySet, memorySearch } = stubTools();
-  const { makeAgent } = stubMakeAgent();
-  const scripted = [
-    ...gateSatisfyingEvents(),
-    { type: 'Message', role: 'assistant', content: 'done' },
-  ];
-  const { runAgent } = stubRunAgent(scripted);
-  const reflector = makeReflector({
-    memoryGet,
-    memorySet,
-    memorySearch,
-    makeAgent,
-    runAgent,
-    workspaceDir: '/dev/null',
-  });
-
-  // Silence console.error during the test so CI doesn't get noise.
-  const origErr = console.error;
-  /** @type {Array<any[]>} */
-  const errorCalls = [];
-  /** @param {any[]} args */
-  console.error = (...args) => {
-    errorCalls.push(args);
-  };
-
-  try {
-    reflector.subscribe(() => {
-      throw new Error('kaboom');
+    const { memoryGet, memorySet, memorySearch } = stubTools();
+    const { makeAgent } = stubMakeAgent();
+    const scripted = [
+      ...gateSatisfyingEvents(),
+      { type: 'Message', role: 'assistant', content: 'done' },
+    ];
+    const { runAgent } = stubRunAgent(scripted);
+    const reflector = makeReflector({
+      memoryGet,
+      memorySet,
+      memorySearch,
+      makeAgent,
+      runAgent,
+      workspaceDir: '/dev/null',
     });
 
-    /** @type {Array<any>} */
-    const sane = [];
-    reflector.subscribe(event => sane.push(event));
+    // Silence console.error during the test so CI doesn't get noise.
+    const origErr = console.error;
+    /** @type {Array<any[]>} */
+    const errorCalls = [];
+    /** @param {any[]} args */
+    console.error = (...args) => {
+      errorCalls.push(args);
+    };
 
-    const stream = await reflector.reflect();
+    try {
+      reflector.subscribe(() => {
+        throw new Error('kaboom');
+      });
 
-    /** @type {Array<any>} */
-    const drained = [];
-    for await (const event of /** @type {AsyncIterable<any>} */ (stream)) {
-      drained.push(event);
+      /** @type {Array<any>} */
+      const sane = [];
+      reflector.subscribe(event => sane.push(event));
+
+      const stream = await reflector.reflect();
+
+      /** @type {Array<any>} */
+      const drained = [];
+      for await (const event of /** @type {AsyncIterable<any>} */ (stream)) {
+        drained.push(event);
+      }
+
+      t.deepEqual(
+        drained,
+        scripted,
+        'stream is not interrupted by a throwing subscriber',
+      );
+      t.deepEqual(
+        sane,
+        scripted,
+        'other subscribers continue to receive events',
+      );
+      t.true(errorCalls.length >= 1, 'throwing subscriber is logged');
+    } finally {
+      console.error = origErr;
     }
-
-    t.deepEqual(drained, scripted, 'stream is not interrupted by a throwing subscriber');
-    t.deepEqual(sane, scripted, 'other subscribers continue to receive events');
-    t.true(errorCalls.length >= 1, 'throwing subscriber is logged');
-  } finally {
-    console.error = origErr;
-  }
-});
+  },
+);
 
 test('subscribe — automatic run() publishes events to subscribers', async t => {
   const { memoryGet, memorySet, memorySearch } = stubTools();
@@ -926,5 +977,9 @@ test('subscribe — automatic run() publishes events to subscribers', async t =>
 
   await reflector.run();
 
-  t.deepEqual(seen, scripted, 'auto-trigger publishes each event to subscribers');
+  t.deepEqual(
+    seen,
+    scripted,
+    'auto-trigger publishes each event to subscribers',
+  );
 });
