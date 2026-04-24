@@ -1,4 +1,5 @@
 /* global process */
+import { Buffer } from 'node:buffer';
 import os from 'os';
 
 import { E } from '@endo/far';

@@ -1,4 +1,5 @@
 /* global process */
+import { Buffer } from 'node:buffer';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
@@ -24,12 +25,13 @@ const extractZipToTemp = async zipBytes => {
 
   for (const [name, file] of zipReader.files.entries()) {
     // Skip directory entries (names ending with /).
-    if (name.endsWith('/')) {
-      continue;
+    if (!name.endsWith('/')) {
+      const filePath = path.join(tmpDir, ...name.split('/'));
+      // eslint-disable-next-line no-await-in-loop
+      await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
+      // eslint-disable-next-line no-await-in-loop
+      await fs.promises.writeFile(filePath, file.content);
     }
-    const filePath = path.join(tmpDir, ...name.split('/'));
-    await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
-    await fs.promises.writeFile(filePath, file.content);
   }
 
   return tmpDir;

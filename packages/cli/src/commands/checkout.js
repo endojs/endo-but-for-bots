@@ -1,4 +1,5 @@
 /* global process */
+import { Buffer } from 'node:buffer';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
@@ -22,9 +23,10 @@ const addTreeToZip = async (zipWriter, tree, prefix, progress) => {
   const { makeRefReader } = await import('@endo/platform/fs/lite');
   const names = await E(tree).list();
   for (const name of names) {
+    // eslint-disable-next-line no-await-in-loop
     const child = await E(tree).lookup(name);
     const entryPath = prefix ? `${prefix}/${name}` : name;
-    // eslint-disable-next-line no-underscore-dangle
+    // eslint-disable-next-line no-underscore-dangle, no-await-in-loop
     const methods = await E(child).__getMethodNames__();
     const isTree = methods.includes('list');
     if (isTree) {
