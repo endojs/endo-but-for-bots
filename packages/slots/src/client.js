@@ -11,6 +11,8 @@ import {
   VERB_RESOLVE,
   VERB_DROP,
   VERB_ABORT,
+  encodeDropPayload,
+  decodeDropPayload,
 } from './payload.js';
 
 /** @import { Descriptor } from './descriptor.js' */
@@ -228,9 +230,60 @@ export const makeSlotClient = ({ clist, codec, sendEnvelope }) => {
   harden(onResolve);
 
   /**
-   * Dispatch an inbound envelope by verb.  Unknown verbs are
-   * ignored (they may belong to the transport layer above us —
-   * `drop` and `abort` for example).
+   * Send a `drop` envelope decrementing pillar counts on one or
+   * more presences.  Defaults to `ram: 1` (the common case: a
+   * presence has become unreachable on this side and we release
+   * the RAM pillar).  Pillars omitted default to 0.
+   *
+   * @param {Array<{
+   *   presence: unknown,
+   *   ram?: number,
+   *   clist?: number,
+   *   export?: number,
+   * }>} entries
+   */
+  const drop = entries => {
+    const deltas = entries.map(entry => {
+      const desc = clist.lookupByValue(entry.presence);
+      if (!desc) {
+        throw makeError(X`drop: presence not found in c-list`);
+      }
+      return {
+        target: desc,
+        ram: entry.ram ?? 1,
+        clist: entry.clist ?? 0,
+        export: entry.export ?? 0,
+      };
+    });
+    if (deltas.length === 0) return;
+    const bytes = encodeDropPayload(deltas);
+    sendEnvelope(VERB_DROP, bytes);
+  };
+  harden(drop);
+
+  /**
+   * Handle an inbound `drop`.  The JS client does not track RAM /
+   * CList / Export pillars itself — the Rust supervisor is
+   * authoritative for cross-session refcount state — so this is a
+   * notify-only path.  A `handler` callback (if supplied via
+   * `onDropDeltas`) receives the decoded deltas; otherwise the
+   * envelope is silently consumed.  Returning the deltas lets a
+   * caller drive a local refcount ledger if they want one.
+   *
+   * @param {Uint8Array} bytes
+   * @returns {Array<{
+   *   target: Descriptor,
+   *   ram: number,
+   *   clist: number,
+   *   export: number,
+   * }>}
+   */
+  const onDrop = bytes => decodeDropPayload(bytes);
+  harden(onDrop);
+
+  /**
+   * Dispatch an inbound envelope by verb.  `abort` is ignored at
+   * this layer — the transport owns the session-teardown logic.
    *
    * @param {string} verb
    * @param {Uint8Array} payload
@@ -238,7 +291,11 @@ export const makeSlotClient = ({ clist, codec, sendEnvelope }) => {
   const onEnvelope = (verb, payload) => {
     if (verb === VERB_DELIVER) return onDeliver(payload);
     if (verb === VERB_RESOLVE) return onResolve(payload);
-    if (verb === VERB_DROP || verb === VERB_ABORT) return undefined;
+    if (verb === VERB_DROP) {
+      onDrop(payload);
+      return undefined;
+    }
+    if (verb === VERB_ABORT) return undefined;
     return undefined;
   };
   harden(onEnvelope);
@@ -251,8 +308,10 @@ export const makeSlotClient = ({ clist, codec, sendEnvelope }) => {
     makePresence,
     deliver,
     deliverSendOnly,
+    drop,
     onDeliver,
     onResolve,
+    onDrop,
     onEnvelope,
     pendingCount,
   });
