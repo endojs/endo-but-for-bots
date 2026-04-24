@@ -287,7 +287,7 @@ export const make = (guestPowers, _context) => {
     const selfId = await E(agentPowers).locate('@self');
     const messageIterator = makeRefIterator(E(agentPowers).followMessages());
 
-    while (true) {
+    for (;;) {
       const { value: message, done } = await messageIterator.next();
       if (done) break;
 

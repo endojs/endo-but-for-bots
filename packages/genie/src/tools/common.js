@@ -115,7 +115,7 @@ export const makeTool = (name, { execute, ...spec }) => {
     }),
     async execute(args) {
       let didUnJSON = false;
-      do {
+      for (;;) {
         try {
           mustMatch(harden([args]), paramsPattern, `${name} args`);
           break;
@@ -152,7 +152,7 @@ export const makeTool = (name, { execute, ...spec }) => {
           // fallthrough: no fixup, final throw to caller
           throw err;
         }
-      } while (true);
+      }
 
       return execute(args);
     },
