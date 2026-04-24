@@ -132,6 +132,7 @@ export const makeCapabilityVFS = mount => {
             if (opts.recursive && entry.type === 'directory') {
               const subPath = segments.length > 0 ? `${dirPath}/${name}` : name;
               const subIter = vfs.readdir(subPath, opts);
+              // eslint-disable-next-line no-await-in-loop
               for await (const subEntry of subIter) {
                 yield harden({
                   ...subEntry,
