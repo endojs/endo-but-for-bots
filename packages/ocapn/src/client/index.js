@@ -196,10 +196,11 @@ export const makeClient = ({
   debugMode = false,
 } = {}) => {
   /**
-   * The map carries either bare NetLayers or networks that also implement
-   * OcapnNetwork.  Callers that need OcapnNetwork methods cast locally.
+   * The map carries either bare NetLayers or OcapnNetwork instances.  The
+   * two shapes have incompatible `connect` signatures (sync vs async), so we
+   * store them as unknown and cast at each use site.
    *
-   * @type {Map<string, NetLayer>}
+   * @type {Map<string, unknown>}
    */
   const networks = new Map();
 

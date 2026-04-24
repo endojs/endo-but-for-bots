@@ -58,7 +58,7 @@ const makeSocketOperations = (socket, writeLatencyMs) => {
  * @typedef {object} TcpTestOnlyNetLayerDebug
  * @property {(location: OcapnLocation) => ConnectionSocketPair} establishConnection
  *
- * @typedef {NetLayer & Partial<import('../client/types.js').OcapnNetwork> & { _debug: TcpTestOnlyNetLayerDebug }} TcpTestOnlyNetLayer
+ * @typedef {NetLayer & Partial<Omit<import('../client/types.js').OcapnNetwork, 'connect'>> & { _debug: TcpTestOnlyNetLayerDebug }} TcpTestOnlyNetLayer
  */
 
 /**
