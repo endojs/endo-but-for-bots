@@ -55,6 +55,12 @@ export const inboxComponent = async (
 ) => {
   $parent.scrollTo(0, $parent.scrollHeight);
 
+  /**
+   * Per-message render mode. Ephemeral — not persisted.
+   * @type {WeakMap<Element, 'markdown' | 'literal' | 'preformatted'>}
+   */
+  const renderModes = new WeakMap();
+
   /** Map from form messageId to its description, for value message rendering. */
   /** @type {Map<string, string>} */
   const formDescriptions = new Map();
@@ -216,6 +222,38 @@ export const inboxComponent = async (
     }
     $tooltip.appendChild($times);
 
+    // Render mode toggle (Markdown / Literal / Preformatted)
+    const $renderModes = document.createElement('span');
+    $renderModes.className = 'render-mode-toggle';
+    /** @type {Array<['markdown' | 'literal' | 'preformatted', string]>} */
+    const modes = [
+      ['markdown', 'Md'],
+      ['literal', 'Raw'],
+      ['preformatted', 'Pre'],
+    ];
+    for (const [mode, label] of modes) {
+      const $btn = document.createElement('button');
+      $btn.className = 'render-mode-btn';
+      $btn.textContent = label;
+      $btn.title = `${mode.charAt(0).toUpperCase()}${mode.slice(1)} view`;
+      if (mode === 'markdown') {
+        $btn.classList.add('active');
+      }
+      $btn.onclick = () => {
+        // @ts-expect-error expando property
+        if (typeof $message.setRenderMode === 'function') {
+          // @ts-expect-error expando property
+          $message.setRenderMode(mode);
+          for (const $b of $renderModes.querySelectorAll('.render-mode-btn')) {
+            $b.classList.remove('active');
+          }
+          $btn.classList.add('active');
+        }
+      };
+      $renderModes.appendChild($btn);
+    }
+    $tooltip.appendChild($renderModes);
+
     $timestamp.appendChild($tooltip);
     $message.appendChild($timestamp);
 
@@ -293,115 +331,169 @@ export const inboxComponent = async (
       assert(Array.isArray(strings));
       assert(Array.isArray(names));
 
-      // Prepare text with placeholders for markdown rendering
-      const textWithPlaceholders = prepareTextWithPlaceholders(strings);
-      const { fragment, insertionPoints, highlight } = renderMarkdown(
-        textWithPlaceholders,
-        { colorize },
-      );
+      /**
+       * Render the message body in the given mode.
+       * @param {'markdown' | 'literal' | 'preformatted'} mode
+       */
+      const renderBody = mode => {
+        $body.textContent = '';
 
-      // Inject sender chip into the first paragraph or heading
-      // But NOT into code fence wrappers or lists - prepend a new paragraph instead
-      if ($senderChip) {
-        // Find first element that's a plain paragraph (not code fence wrapper) or heading
-        const $firstPara = fragment.querySelector(
-          'p:not(.md-code-fence-wrapper), h1, h2, h3, h4, h5, h6',
-        );
-        const $firstChild = fragment.firstChild;
-        const isCodeFenceOrList =
-          $firstChild &&
-          (($firstChild instanceof Element &&
-            $firstChild.classList.contains('md-code-fence-wrapper')) ||
-            ($firstChild instanceof Element && $firstChild.tagName === 'UL') ||
-            ($firstChild instanceof Element && $firstChild.tagName === 'OL'));
-
-        if ($firstPara && !isCodeFenceOrList) {
-          // Insert into existing paragraph or heading
-          $firstPara.insertBefore(
-            document.createTextNode(' '),
-            $firstPara.firstChild,
+        if (mode === 'literal') {
+          // Raw text, no formatting. Join strings with edge names inline.
+          const rawText = strings.reduce(
+            (acc, str, i) =>
+              acc + str + (i < names.length ? `@${names[i]}` : ''),
+            '',
           );
-          $firstPara.insertBefore($senderChip, $firstPara.firstChild);
-        } else {
-          // Prepend a new paragraph for the chip
-          const $chipPara = document.createElement('p');
-          $chipPara.className = 'md-paragraph';
-          $chipPara.appendChild($senderChip);
-          fragment.insertBefore($chipPara, fragment.firstChild);
+          $body.appendChild(document.createTextNode(rawText));
+          return;
         }
-      }
 
-      // Append the rendered markdown
-      $body.appendChild(fragment);
+        if (mode === 'preformatted') {
+          // Entire message in <pre> / monospace.
+          const rawText = strings.reduce(
+            (acc, str, i) =>
+              acc + str + (i < names.length ? `@${names[i]}` : ''),
+            '',
+          );
+          const $pre = document.createElement('pre');
+          $pre.className = 'md-preformatted';
+          $pre.textContent = rawText;
+          $body.appendChild($pre);
+          return;
+        }
 
-      // Asynchronously apply Monaco syntax highlighting to code fences
-      highlight();
+        // Default: markdown mode
+        const textWithPlaceholders = prepareTextWithPlaceholders(strings);
+        const { fragment, insertionPoints, highlight } = renderMarkdown(
+          textWithPlaceholders,
+          { colorize },
+        );
 
-      // Create token chips for each insertion point
-      for (
-        let index = 0;
-        index < Math.min(insertionPoints.length, names.length);
-        index += 1
-      ) {
-        assert.typeof(names[index], 'string');
-        const edgeName = names[index];
-        const $slot = insertionPoints[index];
+        // Inject sender chip into the first paragraph or heading
+        // But NOT into code fence wrappers or lists - prepend a new paragraph instead
+        if ($senderChip && $senderChip.parentNode === null) {
+          // Find first element that's a plain paragraph (not code fence wrapper) or heading
+          const $firstPara = fragment.querySelector(
+            'p:not(.md-code-fence-wrapper), h1, h2, h3, h4, h5, h6',
+          );
+          const $firstChild = fragment.firstChild;
+          const isCodeFenceOrList =
+            $firstChild &&
+            (($firstChild instanceof Element &&
+              $firstChild.classList.contains('md-code-fence-wrapper')) ||
+              ($firstChild instanceof Element &&
+                $firstChild.tagName === 'UL') ||
+              ($firstChild instanceof Element && $firstChild.tagName === 'OL'));
 
-        const $token = document.createElement('span');
-        $token.className = 'token';
-        $token.tabIndex = 0;
-        $token.setAttribute('role', 'button');
-        $token.title = 'Open value';
+          if ($firstPara && !isCodeFenceOrList) {
+            // Insert into existing paragraph or heading
+            $firstPara.insertBefore(
+              document.createTextNode(' '),
+              $firstPara.firstChild,
+            );
+            $firstPara.insertBefore($senderChip, $firstPara.firstChild);
+          } else {
+            // Prepend a new paragraph for the chip
+            const $chipPara = document.createElement('p');
+            $chipPara.className = 'md-paragraph';
+            $chipPara.appendChild($senderChip);
+            fragment.insertBefore($chipPara, fragment.firstChild);
+          }
+        }
 
-        const $name = document.createElement('b');
-        $name.innerText = `@${edgeName}`;
-        $token.appendChild($name);
+        // Append the rendered markdown
+        $body.appendChild(fragment);
 
-        const updateHoverTitle = async () => {
-          const id = message.ids?.[index];
-          if (!id) return;
-          try {
-            const petNames = await E(powers).reverseLocate(id);
-            if (Array.isArray(petNames) && petNames.length > 0) {
-              $token.title = petNames.join(', ');
+        // Asynchronously apply Monaco syntax highlighting to code fences
+        highlight();
+
+        // Create token chips for each insertion point
+        createChips(insertionPoints);
+      };
+
+      /**
+       * Create interactive token chips for placeholder insertion points.
+       * @param {HTMLElement[]} insertionPoints
+       */
+      const createChips = insertionPoints => {
+        for (
+          let index = 0;
+          index < Math.min(insertionPoints.length, names.length);
+          index += 1
+        ) {
+          assert.typeof(names[index], 'string');
+          const edgeName = names[index];
+          const $slot = insertionPoints[index];
+
+          const $token = document.createElement('span');
+          $token.className = 'token';
+          $token.tabIndex = 0;
+          $token.setAttribute('role', 'button');
+          $token.title = 'Open value';
+
+          const $name = document.createElement('b');
+          $name.innerText = `@${edgeName}`;
+          $token.appendChild($name);
+
+          const updateHoverTitle = async () => {
+            const id = message.ids?.[index];
+            if (!id) return;
+            try {
+              const petNames = await E(powers).reverseLocate(id);
+              if (Array.isArray(petNames) && petNames.length > 0) {
+                $token.title = petNames.join(', ');
+              }
+            } catch {
+              // Keep default title on failure.
             }
-          } catch {
-            // Keep default title on failure.
-          }
-        };
+          };
 
-        const openValue = async () => {
-          const valueId = message.ids?.[index];
-          if (!valueId) {
-            $error.innerText = ' Value not available';
-            return;
-          }
-          try {
-            const value = await E(powers).lookupById(valueId);
-            // Pass message context for title display
-            showValue(value, valueId, undefined, { number, edgeName });
-          } catch (error) {
-            $error.innerText = ` ${/** @type {Error} */ (error).message}`;
-          }
-        };
+          const openValue = async () => {
+            const valueId = message.ids?.[index];
+            if (!valueId) {
+              $error.innerText = ' Value not available';
+              return;
+            }
+            try {
+              const value = await E(powers).lookupById(valueId);
+              // Pass message context for title display
+              showValue(value, valueId, undefined, { number, edgeName });
+            } catch (error) {
+              $error.innerText = ` ${/** @type {Error} */ (error).message}`;
+            }
+          };
 
-        $token.addEventListener('click', () => {
-          openValue();
-        });
-
-        $token.addEventListener('keydown', event => {
-          if (event.repeat || event.metaKey) return;
-          if (event.key === 'Enter' || event.key === ' ') {
-            event.preventDefault();
+          $token.addEventListener('click', () => {
             openValue();
-          }
-        });
+          });
 
-        updateHoverTitle();
+          $token.addEventListener('keydown', event => {
+            if (event.repeat || event.metaKey) return;
+            if (event.key === 'Enter' || event.key === ' ') {
+              event.preventDefault();
+              openValue();
+            }
+          });
 
-        // Replace the placeholder slot with the token
-        $slot.replaceWith($token);
-      }
+          updateHoverTitle();
+
+          // Replace the placeholder slot with the token
+          $slot.replaceWith($token);
+        }
+      };
+
+      const initialMode = renderModes.get($message) || 'markdown';
+      renderBody(initialMode);
+
+      // Store the re-render function for the render mode toggle.
+      /** @type {(mode: 'markdown' | 'literal' | 'preformatted') => void} */
+      const setRenderMode = mode => {
+        renderModes.set($message, mode);
+        renderBody(mode);
+      };
+      // @ts-expect-error expando property for render mode toggle
+      $message.setRenderMode = setRenderMode;
     } else if (message.type === 'definition') {
       const { source, slots } = message;
       assert(typeof source === 'string');

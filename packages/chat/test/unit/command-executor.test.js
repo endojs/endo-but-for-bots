@@ -1017,3 +1017,78 @@ test('execute handles slash-path splitting', async t => {
 
   t.deepEqual(ctx.calls[0].args, [['a', 'b', 'c', 'd']]);
 });
+
+test('execute view command opens blob viewer read-only', async t => {
+  const ctx = createMockContext();
+  /** @type {Array<{petName: string, readOnly: boolean}>} */
+  const blobViewerCalls = [];
+  const executor = createCommandExecutor({
+    powers: ctx.powers,
+    showValue: v => ctx.showValueCalls.push(v),
+    showMessage: m => ctx.showMessageCalls.push(m),
+    showError: e => ctx.showErrorCalls.push(e),
+    openBlobViewer: async (petName, readOnly) => {
+      blobViewerCalls.push({ petName, readOnly });
+    },
+  });
+
+  const result = await executor.execute('view', { petName: 'my-blob' });
+  t.true(result.success);
+  t.is(blobViewerCalls.length, 1);
+  t.is(blobViewerCalls[0].petName, 'my-blob');
+  t.is(blobViewerCalls[0].readOnly, true);
+});
+
+test('execute cat command is alias for view', async t => {
+  const ctx = createMockContext();
+  /** @type {Array<{petName: string, readOnly: boolean}>} */
+  const blobViewerCalls = [];
+  const executor = createCommandExecutor({
+    powers: ctx.powers,
+    showValue: v => ctx.showValueCalls.push(v),
+    showMessage: m => ctx.showMessageCalls.push(m),
+    showError: e => ctx.showErrorCalls.push(e),
+    openBlobViewer: async (petName, readOnly) => {
+      blobViewerCalls.push({ petName, readOnly });
+    },
+  });
+
+  const result = await executor.execute('cat', { petName: 'my-file' });
+  t.true(result.success);
+  t.is(blobViewerCalls[0].readOnly, true);
+});
+
+test('execute edit command opens blob viewer writable', async t => {
+  const ctx = createMockContext();
+  /** @type {Array<{petName: string, readOnly: boolean}>} */
+  const blobViewerCalls = [];
+  const executor = createCommandExecutor({
+    powers: ctx.powers,
+    showValue: v => ctx.showValueCalls.push(v),
+    showMessage: m => ctx.showMessageCalls.push(m),
+    showError: e => ctx.showErrorCalls.push(e),
+    openBlobViewer: async (petName, readOnly) => {
+      blobViewerCalls.push({ petName, readOnly });
+    },
+  });
+
+  const result = await executor.execute('edit', { petName: 'my-doc' });
+  t.true(result.success);
+  t.is(blobViewerCalls.length, 1);
+  t.is(blobViewerCalls[0].petName, 'my-doc');
+  t.is(blobViewerCalls[0].readOnly, false);
+});
+
+test('execute view without openBlobViewer succeeds silently', async t => {
+  const ctx = createMockContext();
+  const executor = createCommandExecutor({
+    powers: ctx.powers,
+    showValue: v => ctx.showValueCalls.push(v),
+    showMessage: m => ctx.showMessageCalls.push(m),
+    showError: e => ctx.showErrorCalls.push(e),
+    // No openBlobViewer provided
+  });
+
+  const result = await executor.execute('view', { petName: 'my-blob' });
+  t.true(result.success);
+});
