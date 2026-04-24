@@ -23,20 +23,46 @@ import {
   makeCryptoPowers,
 } from './daemon-node-powers.js';
 import { startWsGateway } from './ws-gateway.js';
+import { makeAddressChecker } from './cidr.js';
 
 /** @import { PromiseKit } from '@endo/promise-kit' */
 /** @import { Config } from './types.js' */
 
 const args = process.argv.slice(2);
-if (args.length < 4) {
+
+/** @type {string} */
+let sockPath;
+/** @type {string} */
+let statePath;
+/** @type {string} */
+let ephemeralStatePath;
+/** @type {string} */
+let cachePath;
+
+if (args.length >= 4) {
+  // Spawned by CLI: paths passed as positional arguments.
+  [sockPath, statePath, ephemeralStatePath, cachePath] = args;
+} else if (
+  process.env.ENDO_SOCK_PATH &&
+  process.env.ENDO_STATE_PATH &&
+  process.env.ENDO_EPHEMERAL_STATE_PATH &&
+  process.env.ENDO_CACHE_PATH
+) {
+  // Foreground / Docker mode: paths from environment variables.
+  // These match the variables set by configToEnv() in the daemon package.
+  sockPath = process.env.ENDO_SOCK_PATH;
+  statePath = process.env.ENDO_STATE_PATH;
+  ephemeralStatePath = process.env.ENDO_EPHEMERAL_STATE_PATH;
+  cachePath = process.env.ENDO_CACHE_PATH;
+} else {
   throw new Error(
-    `daemon.js requires arguments [sockPath] [statePath] [ephemeralStatePath] [cachePath], got ${process.argv.join(
-      ', ',
-    )}`,
+    `daemon-node.js requires either 4 positional arguments ` +
+      `[sockPath] [statePath] [ephemeralStatePath] [cachePath], ` +
+      `or environment variables ENDO_SOCK_PATH, ENDO_STATE_PATH, ` +
+      `ENDO_EPHEMERAL_STATE_PATH, ENDO_CACHE_PATH. ` +
+      `Got args: ${process.argv.join(', ')}`,
   );
 }
-
-const [sockPath, statePath, ephemeralStatePath, cachePath] = args;
 
 const gcEnabled = process.env.ENDO_GC === '1';
 
@@ -126,9 +152,12 @@ const killStaleWorkers = async () => {
   );
 };
 
+const foreground = !process.send;
+
 const main = async () => {
   const daemonLabel = `daemon on PID ${pid}`;
-  console.log(`Endo daemon starting on PID ${pid}`);
+  const modeLabel = foreground ? ' (foreground)' : '';
+  console.log(`Endo daemon starting on PID ${pid}${modeLabel}`);
   cancelled.catch(err => {
     console.log(`Endo daemon stopping on PID ${pid} (caught: ${err})`);
   });
@@ -159,11 +188,17 @@ const main = async () => {
   );
   const gatewayHost = addrUrl.hostname;
   const gatewayPort = addrUrl.port !== '' ? Number(addrUrl.port) : 8920;
+  const addressChecker = makeAddressChecker({
+    allowRemote: process.env.ENDO_GATEWAY_REMOTE === '1',
+    allowedCIDRs: process.env.ENDO_ALLOWED_CIDRS || '',
+  });
   const wsGateway = startWsGateway({
     endoBootstrap,
     host: gatewayHost,
     port: gatewayPort,
     cancelled,
+    addressChecker,
+    staticDir: process.env.ENDO_STATIC_DIR || undefined,
   });
 
   const services = [privatePathService, wsGateway];

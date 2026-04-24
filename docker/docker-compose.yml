@@ -1,0 +1,16 @@
+services:
+  endo:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    ports:
+      - "8920:8920"
+    volumes:
+      - endo-state:/data/endo
+    environment:
+      - ENDO_ADDR=0.0.0.0:8920
+      - ENDO_GC=1
+    restart: unless-stopped
+
+volumes:
+  endo-state:
