@@ -1008,6 +1008,18 @@ export interface EndoHost extends EndoAgent {
   ): Promise<void>;
   submit(messageNumber: bigint, values: Record<string, unknown>): Promise<void>;
   sendValue: Mail['sendValue'];
+  /** Resolve a pet name to a formula type string. */
+  identifyType(petNameOrPath: string | string[]): Promise<string | undefined>;
+  /** List pet names alongside their formula types. */
+  listWithTypes(): Promise<Array<{ name: string; type: string }>>;
+  /** List capabilities whose formulas reference a given worker. */
+  listWorkerTenants(
+    workerPetNameOrPath: string | string[],
+  ): Promise<Array<{ name: string; type: string }>>;
+  /** Inspect the formula for a pet-named value. */
+  inspect(
+    petNameOrPath: string | string[],
+  ): Promise<{ id: string; formula: object } | undefined>;
   /** Returns a snapshot of the formula dependency graph reachable from this agent's pet store. */
   getFormulaGraph(): Promise<{
     nodes: Array<{ id: FormulaIdentifier; type: string }>;
