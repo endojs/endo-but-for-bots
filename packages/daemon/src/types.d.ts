@@ -950,6 +950,12 @@ export interface EndoHost extends EndoAgent {
     opts?: { readOnly?: boolean },
   ): Promise<unknown>;
   provideScratchMount(petName: string | string[]): Promise<unknown>;
+  provideSubMount(
+    mountName: string | string[],
+    subpath: string,
+    newName: string | string[],
+    opts?: { readOnly?: boolean },
+  ): Promise<unknown>;
   provideGuest(
     petName?: string,
     opts?: MakeHostOrGuestOptions,

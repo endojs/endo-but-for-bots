@@ -77,6 +77,7 @@ const normalizeHostOrGuestOptions = opts => {
  * @param {DaemonCore['getAllNetworkAddresses']} args.getAllNetworkAddresses
  * @param {DaemonCore['getTypeForId']} args.getTypeForId
  * @param {DaemonCore['getFormulaForId']} args.getFormulaForId
+ * @param {string} args.statePath
  * @param {MakeMailbox} args.makeMailbox
  * @param {MakeDirectoryNode} args.makeDirectoryNode
  * @param {NodeNumber} args.localNodeNumber
@@ -110,6 +111,7 @@ export const makeHostMaker = ({
   getAllNetworkAddresses,
   getTypeForId,
   getFormulaForId,
+  statePath,
   makeMailbox,
   makeDirectoryNode,
   localNodeNumber,
@@ -282,6 +284,78 @@ export const makeHostMaker = ({
       );
 
       const { value } = await formulateScratchMount(readOnly, tasks);
+      return value;
+    };
+
+    /**
+     * Create a sub-mount rooted at a subdirectory of an existing mount.
+     *
+     * @param {NameOrPath} mountName - Pet name of the parent mount.
+     * @param {string} subpath - Relative path within the parent mount.
+     * @param {NameOrPath} newName - Pet name for the new sub-mount.
+     * @param {object} [options]
+     * @param {boolean} [options.readOnly]
+     */
+    const provideSubMount = async (
+      mountName,
+      subpath,
+      newName,
+      options = {},
+    ) => {
+      const { readOnly = false } = options;
+      const mountNamePath = namePathFrom(mountName);
+      assertNamePath(mountNamePath);
+      const { namePath: newNamePath } = assertPetNamePath(
+        namePathFrom(newName),
+      );
+
+      // Resolve parent mount's formula to get its root path.
+      const parentId = specialStore.identifyLocal(mountNamePath[0]);
+      if (parentId === undefined) {
+        throw makeError(`No mount found for pet name ${q(mountName)}`);
+      }
+      const parentFormula = await getFormulaForId(
+        /** @type {FormulaIdentifier} */ (parentId),
+      );
+      if (
+        parentFormula.type !== 'mount' &&
+        parentFormula.type !== 'scratch-mount'
+      ) {
+        throw makeError(
+          `Pet name ${q(mountName)} is not a mount (type: ${q(parentFormula.type)})`,
+        );
+      }
+
+      // Derive the full path.
+      let parentPath;
+      if (parentFormula.type === 'mount') {
+        parentPath = /** @type {string} */ (
+          /** @type {import('./types.js').MountFormula} */ (parentFormula).path
+        );
+      } else {
+        // scratch-mount: path is statePath/mounts/{formulaNumber}
+        const { number: formulaNumber } = parseId(
+          /** @type {FormulaIdentifier} */ (parentId),
+        );
+        parentPath = `${statePath}/mounts/${formulaNumber}`;
+      }
+
+      // Validate subpath segments — no ".." or absolute paths.
+      const segments = subpath.split('/').filter(s => s.length > 0);
+      for (const seg of segments) {
+        if (seg === '..' || seg === '.') {
+          throw makeError(`Invalid subpath segment: ${q(seg)}`);
+        }
+      }
+      const fullPath = [parentPath, ...segments].join('/');
+
+      /** @type {DeferredTasks<MountDeferredTaskParams>} */
+      const tasks = makeDeferredTasks();
+      tasks.push(identifiers =>
+        E(directory).storeIdentifier(newNamePath, identifiers.mountId),
+      );
+
+      const { value } = await formulateMount(fullPath, readOnly, tasks);
       return value;
     };
 
@@ -1189,6 +1263,7 @@ export const makeHostMaker = ({
       storeTree,
       provideMount,
       provideScratchMount,
+      provideSubMount,
       provideGuest,
       provideHost,
       provideWorker,

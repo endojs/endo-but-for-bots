@@ -155,6 +155,7 @@ harden(isConfinedPath);
  * @property {boolean} readOnly
  * @property {FilePowers} filePowers
  * @property {string} description
+ * @property {((mount: object) => Promise<object>) | undefined} snapshotFn
  */
 
 /**
@@ -164,8 +165,14 @@ harden(isConfinedPath);
  * @returns {object}
  */
 const makeMountExo = ctx => {
-  const { currentDir, confinementRoot, readOnly, filePowers, description } =
-    ctx;
+  const {
+    currentDir,
+    confinementRoot,
+    readOnly,
+    filePowers,
+    description,
+    snapshotFn,
+  } = ctx;
 
   const assertWritable = () => {
     if (readOnly) {
@@ -182,7 +189,10 @@ const makeMountExo = ctx => {
 
   const help = makeHelp(mountHelp);
 
-  return makeExo('EndoMount', MountInterface, {
+  /** @type {object} */
+  let selfRef;
+
+  const mount = makeExo('EndoMount', MountInterface, {
     help,
 
     async has(...pathSegments) {
@@ -302,10 +312,43 @@ const makeMountExo = ctx => {
       });
     },
 
+    async subDir(subpath) {
+      await null;
+      // Validate and resolve segments.
+      const segments = subpath.split('/').filter(s => s.length > 0);
+      for (const seg of segments) {
+        if (seg === '..' || seg === '.') {
+          throw new Error(`Invalid subDir segment: ${seg}`);
+        }
+      }
+      const target = resolve(segments);
+      await assertConfinedOrAncestor(target, confinementRoot, filePowers);
+      const isDir = await filePowers.isDirectory(target);
+      if (!isDir) {
+        throw new Error(`subDir target is not a directory: ${subpath}`);
+      }
+      return makeMountExo({
+        ...ctx,
+        currentDir: target,
+        // The confinement root stays the same — the sub-mount cannot
+        // escape above the original root.  But the sub-mount's own
+        // navigation is restricted to its new currentDir because
+        // resolveSegments clamps ".." to currentDir.
+        confinementRoot: target,
+        description: `${readOnly ? 'Read-only sub-mount' : 'Sub-mount'} at ${subpath} of ${description}`,
+      });
+    },
+
     async snapshot() {
-      throw new Error('snapshot() is not yet implemented');
+      if (!snapshotFn) {
+        throw new Error('snapshot() is not available on this mount');
+      }
+      return snapshotFn(selfRef);
     },
   });
+
+  selfRef = mount;
+  return mount;
 };
 harden(makeMountExo);
 
@@ -384,9 +427,10 @@ harden(makeMountFileExo);
  * @param {string} opts.rootPath
  * @param {boolean} opts.readOnly
  * @param {FilePowers} opts.filePowers
+ * @param {((mount: object) => Promise<object>) | undefined} [opts.snapshotFn]
  * @returns {object}
  */
-export const makeMount = ({ rootPath, readOnly, filePowers }) => {
+export const makeMount = ({ rootPath, readOnly, filePowers, snapshotFn }) => {
   const prefix = readOnly ? 'Read-only mount' : 'Mount';
   /** @type {MountContext} */
   const ctx = {
@@ -395,6 +439,7 @@ export const makeMount = ({ rootPath, readOnly, filePowers }) => {
     readOnly,
     filePowers,
     description: `${prefix} at ${rootPath}`,
+    snapshotFn,
   };
 
   return makeMountExo(ctx);

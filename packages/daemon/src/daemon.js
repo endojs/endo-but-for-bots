@@ -2193,7 +2193,19 @@ const makeDaemonCore = async (
       if (!isDir) {
         throw new Error(`Mount path is not a directory: ${q(mountPath)}`);
       }
-      return makeMount({ rootPath: mountPath, readOnly, filePowers });
+      /** @param {object} mount */
+      const snapshotFn = async mount => {
+        /** @type {import('./types.js').DeferredTasks<import('./types.js').ReadableTreeDeferredTaskParams>} */
+        const deferredTasks = makeDeferredTasks();
+        const { value } = await checkinTree(mount, deferredTasks);
+        return value;
+      };
+      return makeMount({
+        rootPath: mountPath,
+        readOnly,
+        filePowers,
+        snapshotFn,
+      });
     },
     'scratch-mount': async ({ readOnly }, _context, _id, formulaNumber) => {
       const rootPath = filePowers.joinPath(
@@ -2202,7 +2214,14 @@ const makeDaemonCore = async (
         /** @type {string} */ (formulaNumber),
       );
       await filePowers.makePath(rootPath);
-      return makeMount({ rootPath, readOnly, filePowers });
+      /** @param {object} mount */
+      const snapshotFn = async mount => {
+        /** @type {import('./types.js').DeferredTasks<import('./types.js').ReadableTreeDeferredTaskParams>} */
+        const deferredTasks = makeDeferredTasks();
+        const { value } = await checkinTree(mount, deferredTasks);
+        return value;
+      };
+      return makeMount({ rootPath, readOnly, filePowers, snapshotFn });
     },
     lookup: ({ hub, path }, context) =>
       makeLookup(
@@ -4666,6 +4685,7 @@ const makeDaemonCore = async (
     getAllNetworkAddresses,
     getTypeForId,
     getFormulaForId,
+    statePath: persistencePowers.statePath,
     formulateChannel,
     formulateTimer,
     makeMailbox,
