@@ -218,7 +218,7 @@ if (env.verb === Verbs.DROP) {
 The daemon today creates a `@endo/marshal`-powered marshaller
 (around line 1385) that emits `{ body, slots }` with FormulaIdentifier
 strings.  For worker-bound traffic under slot-machine, replace this
-with a slot-machine-aware marshaller:
+with a slot-machine-aware codec:
 
 ```js
 const slotsMarshaller = makeMarshal(

@@ -4,14 +4,14 @@ import test from '@endo/ses-ava/prepare-endo.js';
 
 import { Direction, Kind } from '../src/descriptor.js';
 import {
-  encodeDeliver,
-  decodeDeliver,
-  encodeResolve,
-  decodeResolve,
-  encodeDrop,
-  decodeDrop,
-  encodeAbort,
-  decodeAbort,
+  encodeDeliverPayload,
+  decodeDeliverPayload,
+  encodeResolvePayload,
+  decodeResolvePayload,
+  encodeDropPayload,
+  decodeDropPayload,
+  encodeAbortPayload,
+  decodeAbortPayload,
   VERB_DELIVER,
   VERB_RESOLVE,
   VERB_DROP,
@@ -29,8 +29,8 @@ test('deliver — roundtrip with reply', t => {
     promises: [],
     reply: D(Direction.Local, Kind.Promise, 2),
   };
-  const bytes = encodeDeliver(p);
-  const p2 = decodeDeliver(bytes);
+  const bytes = encodeDeliverPayload(p);
+  const p2 = decodeDeliverPayload(bytes);
   t.deepEqual(p2.target, p.target);
   t.deepEqual([...p2.body], [...p.body]);
   t.deepEqual(p2.targets, p.targets);
@@ -46,8 +46,8 @@ test('deliver — fire-and-forget (null reply)', t => {
     promises: [],
     reply: null,
   };
-  const bytes = encodeDeliver(p);
-  const p2 = decodeDeliver(bytes);
+  const bytes = encodeDeliverPayload(p);
+  const p2 = decodeDeliverPayload(bytes);
   t.is(p2.reply, null);
 });
 
@@ -59,7 +59,7 @@ test('deliver — 5-element array header in wire bytes', t => {
     promises: [],
     reply: null,
   };
-  const bytes = encodeDeliver(p);
+  const bytes = encodeDeliverPayload(p);
   // First byte is array(5) = 0x85.
   t.is(bytes[0], 0x85);
 });
@@ -72,8 +72,8 @@ test('resolve — roundtrip reject', t => {
     targets: [],
     promises: [D(Direction.Remote, Kind.Promise, 5)],
   };
-  const bytes = encodeResolve(p);
-  const p2 = decodeResolve(bytes);
+  const bytes = encodeResolvePayload(p);
+  const p2 = decodeResolvePayload(bytes);
   t.deepEqual(p2.target, p.target);
   t.is(p2.isReject, true);
   t.deepEqual([...p2.body], [...p.body]);
@@ -90,17 +90,17 @@ test('resolve — decode rejects is_reject > 1', t => {
     targets: [],
     promises: [],
   };
-  const bytes = encodeResolve(p);
+  const bytes = encodeResolvePayload(p);
   // Layout: [0x85, descriptor(3), is_reject(1), body_hdr(1), targets_hdr(1), promises_hdr(1)]
   // descriptor(Local, Promise, 0) = [0x82, 0x02, 0x00] (3 bytes)
   // byte 4 is is_reject.
   const mutated = new Uint8Array(bytes);
   mutated[4] = 0x02;
-  t.throws(() => decodeResolve(mutated), { message: /0 or 1/ });
+  t.throws(() => decodeResolvePayload(mutated), { message: /0 or 1/ });
 });
 
 test('drop — empty and multi-entry roundtrips', t => {
-  t.deepEqual(decodeDrop(encodeDrop([])), []);
+  t.deepEqual(decodeDropPayload(encodeDropPayload([])), []);
 
   const deltas = [
     { target: D(Direction.Local, Kind.Object, 1), ram: 1, clist: 0, export: 0 },
@@ -111,20 +111,20 @@ test('drop — empty and multi-entry roundtrips', t => {
       export: 1,
     },
   ];
-  const bytes = encodeDrop(deltas);
-  const decoded = decodeDrop(bytes);
+  const bytes = encodeDropPayload(deltas);
+  const decoded = decodeDropPayload(bytes);
   t.deepEqual(decoded, deltas);
 });
 
 test('abort — utf-8 reason roundtrip', t => {
   const msg = 'worker exited';
-  const bytes = encodeAbort(msg);
-  t.is(decodeAbort(bytes), msg);
+  const bytes = encodeAbortPayload(msg);
+  t.is(decodeAbortPayload(bytes), msg);
 });
 
 test('abort — non-ASCII utf-8 passes through', t => {
   const msg = 'σ-algebra 💥';
-  t.is(decodeAbort(encodeAbort(msg)), msg);
+  t.is(decodeAbortPayload(encodeAbortPayload(msg)), msg);
 });
 
 test('verb constants and isSlotVerb', t => {
@@ -148,8 +148,8 @@ test('deliver — trailing bytes rejected', t => {
     promises: [],
     reply: null,
   };
-  const bytes = encodeDeliver(p);
+  const bytes = encodeDeliverPayload(p);
   const padded = new Uint8Array(bytes.length + 1);
   padded.set(bytes);
-  t.throws(() => decodeDeliver(padded), { message: /trailing byte/ });
+  t.throws(() => decodeDeliverPayload(padded), { message: /trailing byte/ });
 });
