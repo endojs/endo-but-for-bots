@@ -400,6 +400,26 @@ export const inventoryComponent = async (
     const $row = document.createElement('div');
     $row.className = 'pet-item-row';
 
+    // Make non-special items draggable.
+    if (!isSpecialName(name)) {
+      $row.draggable = true;
+      $row.addEventListener('dragstart', e => {
+        const petNamePath = itemPath.join('/');
+        if (e.dataTransfer) {
+          e.dataTransfer.setData('text/plain', petNamePath);
+          e.dataTransfer.setData(
+            'application/x-endo-petname',
+            JSON.stringify(itemPath),
+          );
+          e.dataTransfer.effectAllowed = 'copyMove';
+        }
+        $row.classList.add('dragging');
+      });
+      $row.addEventListener('dragend', () => {
+        $row.classList.remove('dragging');
+      });
+    }
+
     // Disclosure triangle
     const $disclosure = document.createElement('button');
     $disclosure.className = 'pet-disclosure';
@@ -422,6 +442,54 @@ export const inventoryComponent = async (
     $info.title = 'Inspect';
     $buttons.appendChild($info);
 
+    // Cancel button (disabled for special names)
+    const $cancel = document.createElement('button');
+    $cancel.className = 'cancel-button';
+    $cancel.textContent = '⊘';
+    if (isSpecialName(name)) {
+      $cancel.disabled = true;
+      $cancel.title = 'Cannot cancel system name';
+    } else {
+      $cancel.title = 'Cancel incarnation';
+    }
+    $buttons.appendChild($cancel);
+
+    // Cancel confirmation state
+    let cancelConfirmTimer = 0;
+    if (!isSpecialName(name)) {
+      $cancel.addEventListener('click', e => {
+        e.stopPropagation();
+        if ($cancel.classList.contains('confirming')) {
+          // Second click — execute cancel.
+          clearTimeout(cancelConfirmTimer);
+          $cancel.classList.remove('confirming');
+          $cancel.title = 'Cancelling...';
+          $cancel.disabled = true;
+          E(powers)
+            .cancel(.../** @type {[string, ...string[]]} */ (itemPath))
+            .then(() => {
+              $cancel.classList.add('cancelled');
+              $cancel.title = 'Cancelled';
+            })
+            .catch(err => {
+              console.error('[inventory] Cancel failed:', err);
+              $cancel.disabled = false;
+              $cancel.title = 'Cancel incarnation';
+            });
+        } else {
+          // First click — enter confirm state.
+          $cancel.classList.add('confirming');
+          $cancel.title = 'Click again to cancel';
+          cancelConfirmTimer = /** @type {any} */ (
+            setTimeout(() => {
+              $cancel.classList.remove('confirming');
+              $cancel.title = 'Cancel incarnation';
+            }, 3000)
+          );
+        }
+      });
+    }
+
     // Remove button (disabled for special names)
     const $remove = document.createElement('button');
     $remove.className = 'remove-button';
@@ -441,6 +509,60 @@ export const inventoryComponent = async (
     const $children = document.createElement('div');
     $children.className = 'pet-children';
     $wrapper.appendChild($children);
+
+    // Drop target: accept drops to copy (or move with Alt) capabilities.
+    $row.addEventListener('dragover', e => {
+      if (!e.dataTransfer) return;
+      const hasEndoPetName = e.dataTransfer.types.includes(
+        'application/x-endo-petname',
+      );
+      if (!hasEndoPetName) return;
+      e.preventDefault();
+      // Alt/Option key = move, otherwise copy.
+      e.dataTransfer.dropEffect = e.altKey ? 'move' : 'copy';
+      $row.classList.add('drop-target');
+      if (e.altKey) {
+        $row.classList.add('drop-move');
+      } else {
+        $row.classList.remove('drop-move');
+      }
+    });
+    $row.addEventListener('dragleave', () => {
+      $row.classList.remove('drop-target', 'drop-move');
+    });
+    $row.addEventListener('drop', e => {
+      $row.classList.remove('drop-target', 'drop-move');
+      if (!e.dataTransfer) return;
+      const raw = e.dataTransfer.getData('application/x-endo-petname');
+      if (!raw) return;
+      e.preventDefault();
+      try {
+        const sourcePath = JSON.parse(raw);
+        const sourceName = sourcePath[sourcePath.length - 1];
+        const targetPath = [...itemPath, sourceName];
+        const isMove = e.altKey;
+        // Copy the capability into this directory.
+        const copyPromise = E(powers).copy(sourcePath, targetPath);
+        if (isMove) {
+          // Move = copy then remove source.
+          copyPromise
+            .then(() =>
+              E(powers).remove(
+                .../** @type {[string, ...string[]]} */ (sourcePath),
+              ),
+            )
+            .catch(err => {
+              console.error('[inventory] Drop move failed:', err);
+            });
+        } else {
+          copyPromise.catch(err => {
+            console.error('[inventory] Drop copy failed:', err);
+          });
+        }
+      } catch {
+        // Ignore malformed data.
+      }
+    });
 
     if (channelMode) {
       // Newest channels at top (reordered after type detection)
@@ -482,6 +604,15 @@ export const inventoryComponent = async (
         }
         const url = new URL(/** @type {string} */ (locator));
         const type = url.searchParams.get('type');
+
+        // Show type badge on the item row.
+        if (type) {
+          const $typeBadge = document.createElement('span');
+          $typeBadge.className = 'pet-type-badge';
+          $typeBadge.textContent = type;
+          $typeBadge.title = `Formula type: ${type}`;
+          $name.after($typeBadge);
+        }
 
         // Hide disclosure triangle for known non-expandable types
         if (type && NON_EXPANDABLE_TYPES.includes(type)) {
