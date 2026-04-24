@@ -25,3 +25,4 @@ export {
 } from './src/payload.js';
 export { sessionIdFromLabel, sessionIdHex } from './src/session.js';
 export { makeCList } from './src/clist.js';
+export { makeSlotMarshaller } from './src/marshaller.js';

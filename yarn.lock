@@ -2380,9 +2380,12 @@ __metadata:
   dependencies:
     "@endo/errors": "workspace:^"
     "@endo/eventual-send": "workspace:^"
+    "@endo/far": "workspace:^"
     "@endo/harden": "workspace:^"
     "@endo/init": "workspace:^"
     "@endo/lockdown": "workspace:^"
+    "@endo/marshal": "workspace:^"
+    "@endo/pass-style": "workspace:^"
     "@endo/promise-kit": "workspace:^"
     "@endo/ses-ava": "workspace:^"
     "@noble/hashes": "npm:^1.8.0"
