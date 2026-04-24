@@ -267,6 +267,17 @@ type MakeArchiveFormula = {
   // TODO formula slots
 };
 
+type MakeFromTreeFormula = {
+  type: 'make-from-tree';
+  worker: FormulaIdentifier;
+  powers: FormulaIdentifier;
+  /** ReadableTree or Mount formula identifier providing module sources. */
+  tree: FormulaIdentifier;
+  env?: Record<string, string>;
+  cancelWithWorker?: FormulaIdentifier;
+  // TODO formula slots
+};
+
 export type MakeCapletDeferredTaskParams = {
   capletId: FormulaIdentifier;
   powersId: FormulaIdentifier;
@@ -411,6 +422,7 @@ export type Formula =
   | LookupFormula
   | MakeUnconfinedFormula
   | MakeArchiveFormula
+  | MakeFromTreeFormula
   | HandleFormula
   | PetInspectorFormula
   | KnownPeersStoreFormula
@@ -981,6 +993,32 @@ export interface EndoHost extends EndoAgent {
     archiveName: string,
     options?: MakeCapletOptions,
   ): Promise<unknown>;
+  makeFromTree(
+    workerPetName: string | undefined,
+    treeName: string | string[],
+    options?: MakeCapletOptions,
+  ): Promise<unknown>;
+  /**
+   * Materialise a ReadableTree or Mount into a new scratch mount
+   * under `scratchPetName` and return that scratch mount.  The
+   * scratch lives as long as its pet name; cancelling the pet name
+   * removes it.
+   */
+  stageTree(
+    treeName: string | string[],
+    scratchPetName: string,
+  ): Promise<unknown>;
+  /**
+   * Stage a readable tree (ReadableTree or Mount) into an internal
+   * scratch directory under the Endo state tree and invoke the Node
+   * unconfined loader against `options.entry` (default `index.js`).
+   * Supports native Node modules (unlike {@link makeFromTree}).
+   */
+  makeUnconfinedFromTree(
+    workerPetName: string | undefined,
+    treeName: string | string[],
+    options?: MakeCapletOptions & { entry?: string },
+  ): Promise<unknown>;
   cancel(petNameOrPath: string | string[], reason?: Error): Promise<void>;
   greeter(): Promise<EndoGreeter>;
   gateway(): Promise<EndoGateway>;
@@ -1155,6 +1193,7 @@ export type KnownEndoInspectors = {
   eval: EndoInspector<'endowments' | 'source' | 'worker'>;
   'make-unconfined': EndoInspector<'host'>;
   'make-archive': EndoInspector<'archive' | 'powers' | 'worker'>;
+  'make-from-tree': EndoInspector<'tree' | 'powers' | 'worker'>;
   guest: EndoInspector<'bundle' | 'powers'>;
   // This is an "empty" inspector, in that there is nothing to `lookup()` or `list()`.
   [formulaType: string]: EndoInspector<any>;
@@ -1472,6 +1511,18 @@ export interface DaemonCore {
     hostAgentId: FormulaIdentifier,
     hostHandleId: FormulaIdentifier,
     archiveId: FormulaIdentifier,
+    deferredTasks: DeferredTasks<MakeCapletDeferredTaskParams>,
+    specifiedWorkerId?: FormulaIdentifier,
+    specifiedPowersId?: FormulaIdentifier,
+    env?: Record<string, string>,
+    trustedShims?: string[],
+    workerLabel?: string,
+  ) => FormulateResult<unknown>;
+
+  formulateFromTree: (
+    hostAgentId: FormulaIdentifier,
+    hostHandleId: FormulaIdentifier,
+    treeId: FormulaIdentifier,
     deferredTasks: DeferredTasks<MakeCapletDeferredTaskParams>,
     specifiedWorkerId?: FormulaIdentifier,
     specifiedPowersId?: FormulaIdentifier,

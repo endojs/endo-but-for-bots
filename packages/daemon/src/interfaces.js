@@ -339,6 +339,22 @@ export const HostInterface = M.interface('EndoHost', {
   makeArchive: M.call(M.or(NameShape, M.undefined()), NameShape)
     .optional(MakeCapletOptionsShape)
     .returns(M.promise()),
+  // Make a caplet from a ReadableTree or Mount laid out as a
+  // compartment-mapper archive (compartment-map.json at root plus
+  // modules at their referenced paths).
+  makeFromTree: M.call(M.or(NameShape, M.undefined()), NameOrPathShape)
+    .optional(MakeCapletOptionsShape)
+    .returns(M.promise()),
+  // Materialise a readable tree into a new scratch mount.
+  stageTree: M.call(NameOrPathShape, NameShape).returns(M.promise()),
+  // Stage a readable tree and run its entry module as an unconfined
+  // Node caplet.
+  makeUnconfinedFromTree: M.call(
+    M.or(NameShape, M.undefined()),
+    NameOrPathShape,
+  )
+    .optional(MakeCapletOptionsShape)
+    .returns(M.promise()),
   // Create a channel
   makeChannel: M.call(NameShape, M.string()).returns(M.promise()),
   // Create a timer
@@ -546,6 +562,13 @@ export const WorkerFacetForDaemonInterface = M.interface(
     // archive of a compartment-map plus source-form modules.  These
     // methods receive promises that get resolved inside the worker.
     makeArchive: M.call(M.any(), M.any(), M.any(), EnvShape).returns(
+      M.promise(),
+    ),
+    // Args: (treeP, powersP, contextP, env) — tree is a ReadableTree
+    // or Mount whose layout mirrors a compartment-mapper archive
+    // (compartment-map.json at root plus modules at their referenced
+    // paths).
+    makeFromTree: M.call(M.any(), M.any(), M.any(), EnvShape).returns(
       M.promise(),
     ),
     // Args: (specifier, powersP, contextP, env)

@@ -5,6 +5,7 @@ import harden from '@endo/harden';
 import { E, Far } from '@endo/far';
 import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
+import { ZipWriter } from '@endo/zip/writer.js';
 import { makeNetstringCapTP } from './connection.js';
 import { makeRefReader } from './ref-reader.js';
 
@@ -90,6 +91,77 @@ export const makeWorkerFacet = ({ cancel }) => {
       const specifierUrl = normalizeFilePath(specifier);
       const namespace = await import(specifierUrl);
       return namespace.make(powersP, contextP, { env });
+    },
+
+    /**
+     * @param {ERef<unknown>} treeP - Readable tree (or Mount) whose
+     *   contents are laid out as a compartment-mapper archive:
+     *   `compartment-map.json` at the root, with module source files
+     *   at their referenced paths (`<compartmentName>/<moduleLocation>`).
+     * @param {Promise<unknown>} powersP
+     * @param {Promise<unknown>} contextP
+     * @param {Record<string, string>} env
+     */
+    makeFromTree: async (treeP, powersP, contextP, env) => {
+      // Read the compartment map from the tree root.  Tree 'lookup'
+      // returns a blob Exo (ReadableTree) or MountFile Exo (Mount);
+      // both expose `.text()`.
+      const mapBlob = await E(/** @type {any} */ (treeP)).lookup(
+        'compartment-map.json',
+      );
+      const mapText = await E(/** @type {any} */ (mapBlob)).text();
+      /** @type {{ compartments: Record<string, any> }} */
+      const compartmentMap = JSON.parse(mapText);
+
+      // Pack the tree into an in-memory ZIP using the same layout
+      // compartment-mapper.makeArchive produces, then hand it to the
+      // existing parseArchive pipeline.  Keeps tree loading on the
+      // worker side without duplicating the archive loader.
+      const textEncoder = new TextEncoder();
+      const [{ parseArchive }, { defaultParserForLanguage }] =
+        await Promise.all([
+          import('@endo/compartment-mapper'),
+          import('@endo/compartment-mapper/import-archive-all-parsers.js'),
+        ]);
+      const zip = new ZipWriter();
+      zip.write('compartment-map.json', textEncoder.encode(mapText));
+
+      for (const [compartmentName, descriptor] of Object.entries(
+        compartmentMap.compartments,
+      )) {
+        const modules = descriptor.modules || {};
+        for (const moduleInfo of Object.values(modules)) {
+          if (
+            typeof moduleInfo === 'object' &&
+            moduleInfo !== null &&
+            'location' in moduleInfo &&
+            typeof moduleInfo.location === 'string'
+          ) {
+            const archivePath = `${compartmentName}/${moduleInfo.location}`;
+            const pathSegments = archivePath.split('/').filter(Boolean);
+            // eslint-disable-next-line no-await-in-loop
+            const blob = await E(/** @type {any} */ (treeP)).lookup(
+              pathSegments,
+            );
+            // eslint-disable-next-line no-await-in-loop
+            const src = await E(/** @type {any} */ (blob)).text();
+            zip.write(archivePath, textEncoder.encode(src));
+          }
+        }
+      }
+
+      const archiveBytes = zip.snapshot();
+      const application = await parseArchive(archiveBytes, '<tree>', {
+        parserForLanguage: defaultParserForLanguage,
+      });
+      const { namespace } = await application.import({
+        globals: endowments,
+      });
+      return /** @type {{make: Function}} */ (namespace).make(
+        powersP,
+        contextP,
+        { env },
+      );
     },
 
     /**

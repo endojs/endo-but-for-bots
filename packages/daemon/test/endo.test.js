@@ -17,6 +17,7 @@ import { makePromiseKit } from '@endo/promise-kit';
 import { makeArchive as makeCompartmentArchive } from '@endo/compartment-mapper';
 import { makeReadPowers } from '@endo/compartment-mapper/node-powers.js';
 import { defaultParserForLanguage as sourceParserForLanguage } from '@endo/compartment-mapper/import-parsers.js';
+import { ZipReader } from '@endo/zip/reader.js';
 import {
   start,
   stop,
@@ -306,6 +307,55 @@ const doMakeArchive = async (host, packageDir, callback) => {
   await E(host).storeBlob(archiveReaderRef, archiveName);
   const result = await callback(archiveName);
   await E(host).remove(archiveName);
+  return result;
+};
+
+// Independent counter so Phase 7 tree fixtures don't collide with
+// archive fixtures.
+let treeFixtureId = 0;
+
+/**
+ * Pack `packageDir` into a source-only compartment-mapper archive,
+ * unzip that archive into a throwaway directory, mount that
+ * directory under a pet name, and invoke `callback(treeName)`.
+ * Cleans up the pet name afterwards.  Mirrors {@link doMakeArchive}
+ * but produces a tree input for `makeFromTree` rather than a blob
+ * input for `makeArchive`.
+ *
+ * @param {any} host
+ * @param {{ statePath: string }} config
+ * @param {string} packageDir
+ * @param {(treePetName: string) => Promise<unknown>} callback
+ */
+const doMakeFromTreeViaMount = async (host, config, packageDir, callback) => {
+  const moduleLocation = url.pathToFileURL(packageDir).href;
+  const archiveBytes = await makeCompartmentArchive(
+    archiveReadPowers,
+    moduleLocation,
+    { parserForLanguage: sourceParserForLanguage },
+  );
+
+  // Unzip the archive into a fresh directory.
+  const reader = new ZipReader(archiveBytes);
+  const treeDir = path.join(
+    config.statePath,
+    '..',
+    `tree-fixture-${treeFixtureId}`,
+  );
+  treeFixtureId += 1;
+  fs.mkdirSync(treeDir, { recursive: true });
+  for (const [archivePath, file] of reader.files) {
+    const fullPath = path.join(treeDir, archivePath);
+    fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+    fs.writeFileSync(fullPath, file.content);
+  }
+
+  const treePetName = `tmp-tree-${treeFixtureId}`;
+  treeFixtureId += 1;
+  await E(host).provideMount(treeDir, treePetName, { readOnly: true });
+
+  const result = await callback(treePetName);
+  await E(host).remove(treePetName);
   return result;
 };
 
@@ -4375,6 +4425,117 @@ test('mount symlink - escaping relative file symlink hidden and rejected', async
   await t.throwsAsync(E(mount).lookup('escape-file-rel'), {
     message: /escapes mount root/,
   });
+});
+
+test('Phase 7: makeFromTree runs a caplet from a mounted source tree', async t => {
+  const { host, config } = await prepareHost(t);
+
+  const packageDir = path.join(dirname, 'test', 'fixtures', 'archive-env-echo');
+  const result = await doMakeFromTreeViaMount(
+    host,
+    config,
+    packageDir,
+    async treeName =>
+      E(host).makeFromTree(undefined, treeName, {
+        powersName: '@none',
+        env: { HELLO: 'from-tree' },
+      }),
+  );
+  // @ts-expect-error narrowed at runtime
+  t.is(await E(result).getEnvVar('HELLO'), 'from-tree');
+});
+
+test('Phase 7: makeFromTree persists and reincarnates the caplet', async t => {
+  const { cancelled, config } = await prepareConfig(t);
+
+  {
+    const { host } = await makeHost(config, cancelled);
+    const packageDir = path.join(
+      dirname,
+      'test',
+      'fixtures',
+      'archive-env-echo',
+    );
+    await doMakeFromTreeViaMount(host, config, packageDir, async treeName =>
+      E(host).makeFromTree(undefined, treeName, {
+        powersName: '@none',
+        resultName: 'tree-caplet',
+        env: { HELLO: 'persist' },
+      }),
+    );
+  }
+
+  await restart(config);
+
+  {
+    const { host } = await makeHost(config, cancelled);
+    const caplet = await E(host).lookup('tree-caplet');
+    // @ts-expect-error narrowed at runtime
+    t.is(await E(caplet).getEnvVar('HELLO'), 'persist');
+  }
+});
+
+test('Phase 8: stageTree materialises a ReadableTree into a scratch mount', async t => {
+  const { host, config } = await prepareHost(t);
+
+  const packageDir = path.join(dirname, 'test', 'fixtures', 'archive-env-echo');
+  const moduleLocation = url.pathToFileURL(packageDir).href;
+  const archiveBytes = await makeCompartmentArchive(
+    archiveReadPowers,
+    moduleLocation,
+    { parserForLanguage: sourceParserForLanguage },
+  );
+
+  // Unpack archive into a plain directory, then provide as a mount.
+  const reader = new ZipReader(archiveBytes);
+  const srcDir = path.join(config.statePath, '..', 'stage-tree-src');
+  fs.mkdirSync(srcDir, { recursive: true });
+  for (const [archivePath, file] of reader.files) {
+    const fullPath = path.join(srcDir, archivePath);
+    fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+    fs.writeFileSync(fullPath, file.content);
+  }
+  await E(host).provideMount(srcDir, 'src-mount', { readOnly: true });
+
+  // Stage it.
+  const scratch = await E(host).stageTree('src-mount', 'staged');
+
+  // The staged mount has the same compartment-map.json content.
+  const text = await E(scratch).readText('compartment-map.json');
+  t.regex(text, /"entry"/);
+});
+
+test('Phase 8: makeUnconfinedFromTree runs a Node-loaded caplet from a tree', async t => {
+  const { host, config } = await prepareHost(t);
+
+  // Ship a plain Node ESM module with a single index.js at the tree
+  // root — no compartment-map wrapper needed for the unconfined path.
+  const srcDir = path.join(config.statePath, '..', 'unconfined-tree-src');
+  fs.mkdirSync(srcDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(srcDir, 'index.js'),
+    `import { Far } from '@endo/far';
+    export const make = (_powers, _context, options = {}) => {
+      const env = options.env || {};
+      return Far('UnconfinedFromTreeEnv', {
+        getEnvVar(key) { return env[key]; },
+      });
+    };
+    `,
+  );
+
+  await E(host).provideMount(srcDir, 'unconf-tree', { readOnly: true });
+
+  const caplet = await E(host).makeUnconfinedFromTree(
+    undefined,
+    'unconf-tree',
+    {
+      powersName: '@none',
+      env: { HELLO: 'stage' },
+    },
+  );
+  // @ts-expect-error narrowed at runtime
+  t.is(await E(caplet).getEnvVar('HELLO'), 'stage');
 });
 
 test('Phase 6: host.lookup("@node") resolves to a worker', async t => {

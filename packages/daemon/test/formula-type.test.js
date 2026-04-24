@@ -25,6 +25,7 @@ const ALL_FORMULA_TYPES = [
   'mail-hub',
   'mailbox-store',
   'make-archive',
+  'make-from-tree',
   'make-unconfined',
   'marshal',
   'message',

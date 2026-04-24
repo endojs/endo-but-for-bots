@@ -18900,6 +18900,9 @@ const workerFacet = makeExo(
     makeArchive: M.call(M.any(), M.any(), M.any(), M.any()).returns(
       M.promise(),
     ),
+    makeFromTree: M.call(M.any(), M.any(), M.any(), M.any()).returns(
+      M.promise(),
+    ),
     makeUnconfined: M.call(M.string(), M.any(), M.any(), M.any()).returns(
       M.promise(),
     ),
@@ -18985,6 +18988,17 @@ const workerFacet = makeExo(
      * @param {Record<string, string>} _env
      * @returns {Promise<unknown>}
      */
+    /**
+     * @param {unknown} _treeP
+     * @param {unknown} _powersP
+     * @param {unknown} _contextP
+     * @param {Record<string, string>} _env
+     * @returns {Promise<unknown>}
+     */
+    makeFromTree: async (_treeP, _powersP, _contextP, _env) => {
+      throw new Error('makeFromTree not yet implemented in XS worker');
+    },
+
     makeUnconfined: async (_specifier, _powersP, _contextP, _env) => {
       throw new Error('makeUnconfined requires a Node.js worker; use @node');
     },

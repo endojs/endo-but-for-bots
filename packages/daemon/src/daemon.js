@@ -82,7 +82,7 @@ import {
 /** @import { Passable } from '@endo/pass-style' */
 /** @import { ERef, FarRef } from '@endo/eventual-send' */
 /** @import { PromiseKit } from '@endo/promise-kit' */
-/** @import { AgentDeferredTaskParams, Builtins, CapTpConnectionRegistrar, Context, Controller, DaemonCore, DaemonCoreExternal, DaemonicPowers, DeferredTasks, DirectoryFormula, EndoBootstrap, EndoDirectory, EndoFormula, EndoGateway, EndoGreeter, EndoGuest, EndoHost, EndoInspector, EndoNetwork, EndoPeer, EndoReadable, EndoWorker, EvalFormula, FarContext, Formula, FormulaIdentifier, FormulaNumber, FormulaMakerTable, FormulateResult, GuestFormula, HandleFormula, HostFormula, Invitation, InvitationDeferredTaskParams, InvitationFormula, KnownEndoInspectors, KnownPeersStore, LookupFormula, LoopbackNetworkFormula, MailboxStoreFormula, MailHubFormula, MakeArchiveFormula, MakeCapletDeferredTaskParams, MakeUnconfinedFormula, MarshalDeferredTaskParams, MessageFormula, Name, NameHub, NamePath, NameOrPath, NodeNumber, PetName, PeerFormula, PeerInfo, PetInspectorFormula, PetStore, PetStoreFormula, PromiseFormula, Provide, ReadableBlobFormula, ResolverFormula, Sha256, Specials, MarshalFormula, WeakMultimap, WorkerDaemonFacet, WorkerFormula, TimerFormula } from './types.js' */
+/** @import { AgentDeferredTaskParams, Builtins, CapTpConnectionRegistrar, Context, Controller, DaemonCore, DaemonCoreExternal, DaemonicPowers, DeferredTasks, DirectoryFormula, EndoBootstrap, EndoDirectory, EndoFormula, EndoGateway, EndoGreeter, EndoGuest, EndoHost, EndoInspector, EndoNetwork, EndoPeer, EndoReadable, EndoWorker, EvalFormula, FarContext, Formula, FormulaIdentifier, FormulaNumber, FormulaMakerTable, FormulateResult, GuestFormula, HandleFormula, HostFormula, Invitation, InvitationDeferredTaskParams, InvitationFormula, KnownEndoInspectors, KnownPeersStore, LookupFormula, LoopbackNetworkFormula, MailboxStoreFormula, MailHubFormula, MakeArchiveFormula, MakeCapletDeferredTaskParams, MakeFromTreeFormula, MakeUnconfinedFormula, MarshalDeferredTaskParams, MessageFormula, Name, NameHub, NamePath, NameOrPath, NodeNumber, PetName, PeerFormula, PeerInfo, PetInspectorFormula, PetStore, PetStoreFormula, PromiseFormula, Provide, ReadableBlobFormula, ResolverFormula, Sha256, Specials, MarshalFormula, WeakMultimap, WorkerDaemonFacet, WorkerFormula, TimerFormula } from './types.js' */
 
 /**
  * Creates a delayed promise that can be cancelled.
@@ -555,6 +555,18 @@ const makeDaemonCore = async (
         }
         return deps;
       }
+      case 'make-from-tree': {
+        /** @type {Array<[string, FormulaIdentifier]>} */
+        const deps = [
+          ['worker', formula.worker],
+          ['powers', formula.powers],
+          ['tree', formula.tree],
+        ];
+        if (formula.cancelWithWorker) {
+          deps.push(['cancelWithWorker', formula.cancelWithWorker]);
+        }
+        return deps;
+      }
       case 'peer':
         return [['networks', formula.networks]];
       case 'handle':
@@ -858,7 +870,8 @@ const makeDaemonCore = async (
       for (const formula of formulaForId.values()) {
         if (
           (formula.type === 'make-unconfined' ||
-            formula.type === 'make-archive') &&
+            formula.type === 'make-archive' ||
+            formula.type === 'make-from-tree') &&
           formula.worker === terminatedId &&
           formula.cancelWithWorker
         ) {
@@ -1385,6 +1398,50 @@ const makeDaemonCore = async (
     return E(/** @type {any} */ (workerDaemonFacet)).makeArchive(
       readableArchiveP,
       // TODO fix type
+      /** @type {any} */ (powersP),
+      /** @type {any} */ (makeFarContext(context)),
+      env,
+    );
+  };
+
+  /**
+   * Load a source-only tree (ReadableTree or Mount) into a worker and
+   * invoke its entry `make(powers, context, { env })`.  Mirrors
+   * {@link makeArchive} but the source comes from a tree capability
+   * rather than a ZIP blob.
+   *
+   * @param {string} workerId
+   * @param {string} powersId
+   * @param {string} treeId
+   * @param {Record<string, string> | undefined} env
+   * @param {Context} context
+   * @param {string} [cancelWithWorker]
+   */
+  const makeFromTree = async (
+    workerId,
+    powersId,
+    treeId,
+    env,
+    context,
+    cancelWithWorker,
+  ) => {
+    context.thisDiesIfThatDies(workerId);
+    context.thisDiesIfThatDies(powersId);
+    context.thisDiesIfThatDies(treeId);
+    if (cancelWithWorker) {
+      context.thisDiesIfThatDies(cancelWithWorker);
+    }
+
+    const worker = await provide(
+      /** @type {FormulaIdentifier} */ (workerId),
+      'worker',
+    );
+    const workerDaemonFacet = workerDaemonFacets.get(worker);
+    assert(workerDaemonFacet, 'Cannot make caplet with non-worker');
+    const treeP = provide(/** @type {FormulaIdentifier} */ (treeId));
+    const powersP = provide(/** @type {FormulaIdentifier} */ (powersId));
+    return E(/** @type {any} */ (workerDaemonFacet)).makeFromTree(
+      /** @type {any} */ (treeP),
       /** @type {any} */ (powersP),
       /** @type {any} */ (makeFarContext(context)),
       env,
@@ -2308,6 +2365,18 @@ const makeDaemonCore = async (
         context,
         cancelWithWorker,
       ),
+    'make-from-tree': (
+      {
+        worker: workerId,
+        powers: powersId,
+        tree: treeId,
+        env = {},
+        cancelWithWorker,
+      },
+      context,
+    ) =>
+      // eslint-disable-next-line no-use-before-define
+      makeFromTree(workerId, powersId, treeId, env, context, cancelWithWorker),
     host: async (formula, context, id) => {
       const {
         hostHandle: hostHandleId,
@@ -4165,6 +4234,44 @@ const makeDaemonCore = async (
     });
   };
 
+  /** @type {DaemonCore['formulateFromTree']} */
+  const formulateFromTree = async (
+    hostAgentId,
+    hostHandleId,
+    treeId,
+    deferredTasks,
+    specifiedWorkerId,
+    specifiedPowersId,
+    env = {},
+    trustedShims = undefined,
+    workerLabel = undefined,
+  ) => {
+    return withFormulaGraphLock(async () => {
+      const { powersId, capletFormulaNumber, workerId, originalWorkerId } =
+        await formulateCapletDependencies(
+          hostAgentId,
+          hostHandleId,
+          deferredTasks,
+          specifiedWorkerId,
+          specifiedPowersId,
+          trustedShims,
+          workerLabel,
+          'node',
+        );
+
+      /** @type {MakeFromTreeFormula} */
+      const formula = {
+        type: 'make-from-tree',
+        worker: workerId,
+        powers: powersId,
+        tree: treeId,
+        env,
+        ...(originalWorkerId ? { cancelWithWorker: originalWorkerId } : {}),
+      };
+      return formulate(capletFormulaNumber, formula);
+    });
+  };
+
   /**
    * @param {FormulaNumber} formulaNumber
    * @param {FormulaIdentifier} petStoreId
@@ -4795,6 +4902,33 @@ const makeDaemonCore = async (
     return harden({ nodes: snapshotNodes, edges: graphEdges });
   };
 
+  /**
+   * Return the on-disk filesystem path for a scratch-mount formula.
+   * Host-side callers use this to hand a native filesystem path to
+   * Node's module loader (via `makeUnconfined`) without having
+   * Mount expose the path on its public surface.
+   *
+   * @param {FormulaIdentifier} scratchMountId
+   * @returns {string}
+   */
+  const getScratchMountPath = scratchMountId => {
+    const formula = formulaForId.get(scratchMountId);
+    if (formula === undefined) {
+      throw new TypeError(`Unknown formula ${q(scratchMountId)}`);
+    }
+    if (formula.type !== 'scratch-mount') {
+      throw new TypeError(
+        `getScratchMountPath requires a scratch-mount formula, got ${q(formula.type)}`,
+      );
+    }
+    const { number: formulaNumber } = parseId(scratchMountId);
+    return filePowers.joinPath(
+      persistencePowers.statePath,
+      'mounts',
+      formulaNumber,
+    );
+  };
+
   const makeHost = makeHostMaker({
     provide,
     provideStoreController,
@@ -4806,6 +4940,7 @@ const makeDaemonCore = async (
     formulateEval,
     formulateUnconfined,
     formulateArchive,
+    formulateFromTree,
     formulateReadableBlob,
     checkinTree,
     formulateMount,
@@ -4826,6 +4961,7 @@ const makeDaemonCore = async (
     pinTransient,
     unpinTransient,
     getFormulaGraphSnapshot,
+    getScratchMountPath,
     writeRemoteAgentKey: persistencePowers.writeRemoteAgentKey,
   });
 
@@ -4917,6 +5053,16 @@ const makeDaemonCore = async (
           formulaNumber,
           harden({
             archive: provide(formula.archive, 'readable-blob'),
+            powers: provide(formula.powers),
+            worker: provide(formula.worker, 'worker'),
+          }),
+        );
+      } else if (formula.type === 'make-from-tree') {
+        return makeInspector(
+          formula.type,
+          formulaNumber,
+          harden({
+            tree: provide(formula.tree),
             powers: provide(formula.powers),
             worker: provide(formula.worker, 'worker'),
           }),
