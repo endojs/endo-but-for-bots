@@ -3566,7 +3566,7 @@ const makeDaemonCore = async (
    * @param {object} options
    * @param {number} [options.maxActive]
    * @param {number} [options.minPeriodMs]
-   * @param {import('./deferred-tasks.js').DeferredTasks<any>} deferredTasks
+   * @param {import('./types.js').DeferredTasks<any>} deferredTasks
    */
   const formulateIntervalScheduler = async (
     agentId,
@@ -3605,7 +3605,7 @@ const makeDaemonCore = async (
    * @param {string[]} options.allowedOrigins
    * @param {number} [options.maxRequestsPerMinute]
    * @param {number} [options.maxResponseBytes]
-   * @param {import('./deferred-tasks.js').DeferredTasks<any>} deferredTasks
+   * @param {import('./types.js').DeferredTasks<any>} deferredTasks
    */
   const formulateHttpClient = async (
     agentId,
