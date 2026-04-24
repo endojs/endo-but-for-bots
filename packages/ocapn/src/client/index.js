@@ -296,9 +296,10 @@ export const makeOcapn = async ({
    */
   const makeInternalSessionFromNetwork = (networkSession, netlayer) => {
     let isDestroyed = false;
+    const netlayerForConnection = /** @type {NetLayer} */ (netlayer);
     /** @type {Connection} */
     const connection = harden({
-      netlayer: /** @type {NetLayer} */ (netlayer),
+      netlayer: netlayerForConnection,
       isOutgoing: networkSession.isInitiator,
       get isDestroyed() {
         return isDestroyed;

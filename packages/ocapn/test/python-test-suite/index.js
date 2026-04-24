@@ -158,7 +158,7 @@ const start = async () => {
   // Build the locator first so we can populate it with test objects;
   // the `makeOcapn` call then hands it to CapTP as-is.
   const locator = new Map();
-  await makeOcapn({
+  const ocapn = await makeOcapn({
     codec: syrupCodec,
     verbose: true,
     locator,
@@ -169,7 +169,7 @@ const start = async () => {
         specifiedPort: 22046,
       }),
   });
-  const testObjectTable = makeTestObjectTable(/** @type {any} */ ({ locator }));
+  const testObjectTable = makeTestObjectTable(ocapn);
   for (const [swissStr, object] of testObjectTable.entries()) {
     locator.set(swissStr, object);
   }

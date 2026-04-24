@@ -33,15 +33,15 @@ import { cborToDiagnostic } from '../../src/cbor/diagnostic/index.js';
 import { maybeDecode, notThrowsWithErrorUnwrapping } from '../_util.js';
 import { makeCryptography } from '../../src/cryptography.js';
 import { syrupCodec } from '../../src/syrup/index.js';
+import { uint8ArrayToImmutableArrayBuffer } from '../../src/buffer-utils.js';
+import { makeOcapnTable } from '../../src/captp/ocapn-tables.js';
+import { makeSlot } from '../../src/captp/pairwise.js';
 
 const {
   makeOcapnKeyPairFromPrivateKey,
   makeSignedHandoffGive,
   makeSignedHandoffReceive,
 } = makeCryptography(syrupCodec);
-import { uint8ArrayToImmutableArrayBuffer } from '../../src/buffer-utils.js';
-import { makeOcapnTable } from '../../src/captp/ocapn-tables.js';
-import { makeSlot } from '../../src/captp/pairwise.js';
 
 /**
  * A codec configuration providing reader and writer factories.

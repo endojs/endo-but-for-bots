@@ -24,42 +24,47 @@ const makeUnackedPipe = () => {
   const queue = makeQueue();
   let closed = false;
 
-  /** @type {import('@endo/stream').Writer<T>} */
-  const writer = harden({
-    async next(value) {
-      if (closed) return harden({ done: true, value: undefined });
-      queue.put(harden({ done: false, value }));
-      return harden({ done: false, value: undefined });
-    },
-    async return() {
-      closed = true;
-      queue.put(harden({ done: true, value: undefined }));
-      return harden({ done: true, value: undefined });
-    },
-    async throw(err) {
-      closed = true;
-      queue.put(harden(Promise.reject(err)));
-      throw err;
-    },
-    [Symbol.asyncIterator]() {
-      return writer;
-    },
-  });
-  /** @type {import('@endo/stream').Reader<T>} */
-  const reader = harden({
-    next: () => queue.get(),
-    return: async () => {
-      closed = true;
-      return harden({ done: true, value: undefined });
-    },
-    throw: async err => {
-      closed = true;
-      throw err;
-    },
-    [Symbol.asyncIterator]() {
-      return reader;
-    },
-  });
+  const writer = /** @type {import('@endo/stream').Writer<T>} */ (
+    harden({
+      /** @param {T} value */
+      async next(value) {
+        if (closed) return harden({ done: true, value: undefined });
+        queue.put(harden({ done: false, value }));
+        return harden({ done: false, value: undefined });
+      },
+      async return() {
+        closed = true;
+        queue.put(harden({ done: true, value: undefined }));
+        return harden({ done: true, value: undefined });
+      },
+      /** @param {Error} err */
+      async throw(err) {
+        closed = true;
+        queue.put(harden(Promise.reject(err)));
+        throw err;
+      },
+      [Symbol.asyncIterator]() {
+        return writer;
+      },
+    })
+  );
+  const reader = /** @type {import('@endo/stream').Reader<T>} */ (
+    harden({
+      next: () => queue.get(),
+      return: async () => {
+        closed = true;
+        return harden({ done: true, value: undefined });
+      },
+      /** @param {Error} err */
+      throw: async err => {
+        closed = true;
+        throw err;
+      },
+      [Symbol.asyncIterator]() {
+        return reader;
+      },
+    })
+  );
   return [writer, reader];
 };
 

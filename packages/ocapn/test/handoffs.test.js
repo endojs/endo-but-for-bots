@@ -7,14 +7,14 @@ import { testWithErrorUnwrapping, makeTestClient } from './_util.js';
 import { encodeSwissnum, locationToLocationId } from '../src/client/util.js';
 import { makeCryptography, randomGiftId } from '../src/cryptography.js';
 import { syrupCodec } from '../src/syrup/index.js';
-
-const { signHandoffGive, signHandoffReceive } = makeCryptography(syrupCodec);
 import {
   makeHandoffGiveDescriptor,
   makeHandoffGiveSigEnvelope,
   makeHandoffReceiveDescriptor,
   makeHandoffReceiveSigEnvelope,
 } from '../src/codecs/descriptors.js';
+
+const { signHandoffGive, signHandoffReceive } = makeCryptography(syrupCodec);
 
 const makeTestClientTrio = async ({
   makeDefaultSwissnumTable,

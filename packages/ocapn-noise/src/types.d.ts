@@ -61,9 +61,7 @@ export interface OcapnNoiseTransport {
    * Start listening for inbound streams. Optional — a transport that
    * supports only outgoing connections omits `listen`.
    */
-  listen?(
-    handler: (stream: ByteStream) => void,
-  ): Promise<TransportListener>;
+  listen?(handler: (stream: ByteStream) => void): Promise<TransportListener>;
   /**
    * Release any resources held for outgoing connections. Inbound
    * listeners are torn down via their own `TransportListener.close`.
@@ -153,9 +151,7 @@ export interface OcapnNoiseNetwork {
    * to that peer, returns it immediately. Otherwise blocks until the
    * next peer-initiated session lands.
    */
-  waitForInboundSession(
-    peerKeyId: KeyIdHex,
-  ): Promise<OcapnNoiseSession>;
+  waitForInboundSession(peerKeyId: KeyIdHex): Promise<OcapnNoiseSession>;
   shutdown(): void;
 }
 
@@ -180,10 +176,7 @@ export declare function makeTcpTransport(options?: {
 
 export declare function makeWebSocketTransport(options?: {
   WebSocket?: typeof globalThis.WebSocket;
-  WebSocketServer?: new (options: {
-    host?: string;
-    port?: number;
-  }) => any;
+  WebSocketServer?: new (options: { host?: string; port?: number }) => any;
   host?: string;
   port?: number;
 }): OcapnNoiseTransport;
