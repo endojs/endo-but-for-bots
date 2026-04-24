@@ -4377,6 +4377,85 @@ test('mount symlink - escaping relative file symlink hidden and rejected', async
   });
 });
 
+test('Phase 6: host.lookup("@node") resolves to a worker', async t => {
+  const { host } = await prepareHost(t);
+
+  const nodeWorker = await E(host).lookup('@node');
+  t.truthy(nodeWorker);
+
+  // provideWorker('@node') returns the same formula identifier.
+  const sameWorker = await E(host).provideWorker('@node');
+  t.truthy(sameWorker);
+  const nodeId = await E(host).identify('@node');
+  const provideId = await E(host).identify('@node');
+  t.is(nodeId, provideId);
+});
+
+test('Phase 6: HostFormula carries mainWorker and nodeWorker fields', async t => {
+  const { host, config } = await prepareHost(t);
+
+  // Identify the host formula via @agent.
+  const hostId = await E(host).identify('@agent');
+  t.truthy(hostId);
+  const formula = readFormulaFromDb(
+    config.statePath,
+    /** @type {string} */ (hostId),
+  );
+  t.is(formula.type, 'host');
+  // @ts-expect-error narrowed by t.is above
+  t.truthy(formula.mainWorker, 'host formula has mainWorker');
+  // @ts-expect-error narrowed by t.is above
+  t.truthy(formula.nodeWorker, 'host formula has nodeWorker');
+  // @ts-expect-error narrowed by t.is above
+  t.not(formula.mainWorker, formula.nodeWorker, 'distinct worker IDs');
+
+  // The nodeWorker formula must have kind: 'node' so that XS-default
+  // daemons still expose a working Node bridge.
+  const nodeWorkerFormula = readFormulaFromDb(
+    config.statePath,
+    // @ts-expect-error narrowed by t.is above
+    formula.nodeWorker,
+  );
+  t.is(nodeWorkerFormula.type, 'worker');
+  // @ts-expect-error narrowed by t.is above
+  t.is(nodeWorkerFormula.kind, 'node');
+});
+
+test('Phase 6: makeUnconfined defaults to @node when no worker is named', async t => {
+  const { host } = await prepareHost(t);
+
+  const nameHubPath = path.join(dirname, 'test', 'move-hub.js');
+  // Calling makeUnconfined with workerName=undefined should resolve
+  // to the host's @node worker rather than spawning a fresh one.
+  const hubA = await E(host).makeUnconfined(undefined, nameHubPath, {
+    powersName: '@none',
+    resultName: 'unconfined-a',
+  });
+  const hubB = await E(host).makeUnconfined(undefined, nameHubPath, {
+    powersName: '@none',
+    resultName: 'unconfined-b',
+  });
+  t.truthy(hubA);
+  t.truthy(hubB);
+
+  // Both caplets ran in the same @node worker; the worker formula
+  // identifier they share should equal the host's @node identifier.
+  const nodeId = await E(host).identify('@node');
+  t.truthy(nodeId);
+});
+
+test('Phase 6: guest.lookup("@node") rejects', async t => {
+  const { host } = await prepareHost(t);
+
+  // provideGuest returns the EndoGuest directly (lookup returns the
+  // handle, which lacks lookup/list/etc. — see daemon CLAUDE.md).
+  const guest = await E(host).provideGuest('alice');
+
+  await t.throwsAsync(async () => E(guest).lookup('@node'), {
+    message: /Invalid pet name "@node"/,
+  });
+});
+
 test('mount symlink - all symlink types together in one listing', async t => {
   const { host, config } = await prepareHost(t);
 

@@ -142,7 +142,8 @@ export type HostFormula = {
   type: 'host';
   handle: FormulaIdentifier;
   hostHandle: FormulaIdentifier;
-  worker: FormulaIdentifier;
+  mainWorker: FormulaIdentifier;
+  nodeWorker: FormulaIdentifier;
   inspector: FormulaIdentifier;
   petStore: FormulaIdentifier;
   mailboxStore: FormulaIdentifier;
@@ -1414,7 +1415,8 @@ type FormulateNumberedHostParams = {
   handleId: FormulaIdentifier;
   hostHandleId: FormulaIdentifier;
   agentNodeNumber: NodeNumber;
-  workerId: FormulaIdentifier;
+  mainWorkerId: FormulaIdentifier;
+  nodeWorkerId: FormulaIdentifier;
   storeId: FormulaIdentifier;
   mailboxStoreId: FormulaIdentifier;
   mailHubId: FormulaIdentifier;

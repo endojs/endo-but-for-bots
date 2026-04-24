@@ -135,6 +135,7 @@ export const makeHostMaker = ({
    * @param {FormulaIdentifier | undefined} mailHubId
    * @param {FormulaIdentifier} inspectorId
    * @param {FormulaIdentifier} mainWorkerId
+   * @param {FormulaIdentifier} nodeWorkerId
    * @param {FormulaIdentifier} endoId
    * @param {FormulaIdentifier} networksDirectoryId
    * @param {FormulaIdentifier} pinsDirectoryId
@@ -153,6 +154,7 @@ export const makeHostMaker = ({
     mailHubId,
     inspectorId,
     mainWorkerId,
+    nodeWorkerId,
     endoId,
     networksDirectoryId,
     pinsDirectoryId,
@@ -162,6 +164,7 @@ export const makeHostMaker = ({
   ) => {
     context.thisDiesIfThatDies(storeId);
     context.thisDiesIfThatDies(mainWorkerId);
+    context.thisDiesIfThatDies(nodeWorkerId);
     context.thisDiesIfThatDies(mailboxStoreId);
     if (mailHubId !== undefined) {
       context.thisDiesIfThatDies(mailHubId);
@@ -177,6 +180,7 @@ export const makeHostMaker = ({
       '@self': handleId,
       '@host': hostHandleId ?? handleId,
       '@main': mainWorkerId,
+      '@node': nodeWorkerId,
       '@endo': endoId,
       '@nets': networksDirectoryId,
       '@pins': pinsDirectoryId,
@@ -492,6 +496,17 @@ export const makeHostMaker = ({
 
     /** @type {EndoHost['makeUnconfined']} */
     const makeUnconfined = async (workerName, specifier, options) => {
+      // makeUnconfined is unconditionally Node-shaped (loads a plugin
+      // by filesystem path through Node's module loader).  When no
+      // worker is named *and* the caller has not requested trusted
+      // shims (which require a fresh worker pre-lockdown), default
+      // to the host's shared @node worker rather than spawning a
+      // fresh single-use Node worker per call.
+      const wantsFreshWorker =
+        options?.workerTrustedShims !== undefined &&
+        options.workerTrustedShims.length > 0;
+      const effectiveWorkerName =
+        workerName ?? (wantsFreshWorker ? undefined : '@node');
       const {
         tasks,
         workerId,
@@ -500,7 +515,7 @@ export const makeHostMaker = ({
         env,
         workerTrustedShims,
       } = prepareMakeCaplet(
-        /** @type {Name | undefined} */ (workerName),
+        /** @type {Name | undefined} */ (effectiveWorkerName),
         options,
       );
       const workerLabel =
@@ -1244,6 +1259,7 @@ export const makeHostMaker = ({
     );
 
     await provide(mainWorkerId, 'worker');
+    await provide(nodeWorkerId, 'worker');
 
     return hostExo;
   };

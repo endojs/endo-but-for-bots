@@ -18986,7 +18986,7 @@ const workerFacet = makeExo(
      * @returns {Promise<unknown>}
      */
     makeUnconfined: async (_specifier, _powersP, _contextP, _env) => {
-      throw new Error('makeUnconfined not yet implemented in XS worker');
+      throw new Error('makeUnconfined requires a Node.js worker; use @node');
     },
   },
 );

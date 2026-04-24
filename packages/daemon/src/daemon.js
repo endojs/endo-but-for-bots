@@ -496,7 +496,8 @@ const makeDaemonCore = async (
         return [
           ['handle', formula.handle],
           ['hostHandle', formula.hostHandle],
-          ['worker', formula.worker],
+          ['mainWorker', formula.mainWorker],
+          ['nodeWorker', formula.nodeWorker],
           ['inspector', formula.inspector],
           ['petStore', formula.petStore],
           ['mailbox', formula.mailboxStore],
@@ -2315,7 +2316,8 @@ const makeDaemonCore = async (
         mailboxStore: mailboxStoreId,
         mailHub: mailHubId,
         inspector: inspectorId,
-        worker: workerId,
+        mainWorker: hostMainWorkerId,
+        nodeWorker: nodeWorkerId,
         endo: endoId,
         networks: networksId,
         pins: pinsId,
@@ -2323,6 +2325,9 @@ const makeDaemonCore = async (
 
       if (mailHubId === undefined) {
         throw new Error('Host formula missing mail hub');
+      }
+      if (nodeWorkerId === undefined) {
+        throw new Error('Host formula missing nodeWorker (Phase 6 required)');
       }
       // Look up the agent key by scanning the agent_key table for
       // an entry whose agentId has the same formula number.
@@ -2351,7 +2356,8 @@ const makeDaemonCore = async (
         mailboxStoreId,
         mailHubId,
         inspectorId,
-        workerId,
+        hostMainWorkerId,
+        nodeWorkerId,
         endoId,
         networksId,
         pinsId,
@@ -3488,12 +3494,24 @@ const makeDaemonCore = async (
         )
       ).id,
     );
-    const workerId = pin(
+    const hostMainWorkerId = pin(
       await provideWorkerId(
         specifiedWorkerId,
         undefined,
         workerLabel ?? 'host',
         agentNodeNumber,
+      ),
+    );
+    // The @node special name is backed by a host-scoped Node.js
+    // worker.  Required regardless of the daemon's defaultWorkerKind
+    // so XS-default daemons still expose a Node bridge.
+    const nodeWorkerId = pin(
+      await provideWorkerId(
+        undefined,
+        undefined,
+        'host-node',
+        agentNodeNumber,
+        'node',
       ),
     );
     /* eslint-enable no-use-before-define */
@@ -3509,7 +3527,8 @@ const makeDaemonCore = async (
       mailboxStoreId,
       mailHubId,
       inspectorId,
-      workerId,
+      mainWorkerId: hostMainWorkerId,
+      nodeWorkerId,
       pinned,
     });
   };
@@ -3525,7 +3544,8 @@ const makeDaemonCore = async (
       mailboxStore: identifiers.mailboxStoreId,
       mailHub: identifiers.mailHubId,
       inspector: identifiers.inspectorId,
-      worker: identifiers.workerId,
+      mainWorker: identifiers.mainWorkerId,
+      nodeWorker: identifiers.nodeWorkerId,
       endo: identifiers.endoId,
       networks: identifiers.networksDirectoryId,
       pins: identifiers.pinsDirectoryId,
