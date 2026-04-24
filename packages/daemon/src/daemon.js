@@ -2183,7 +2183,7 @@ const makeDaemonCore = async (
       makeEval(worker, source, names, values, context),
     'readable-blob': ({ content }) => makeReadableBlob(content),
     'readable-tree': ({ content }) => makeReadableTree(content),
-    mount: async ({ path: mountPath, readOnly }) => {
+    mount: async ({ path: mountPath, readOnly }, context) => {
       // Verify the mount path exists.
       const pathExists = await filePowers.exists(mountPath);
       if (!pathExists) {
@@ -2195,6 +2195,7 @@ const makeDaemonCore = async (
       }
       /** @param {object} mount */
       const snapshotFn = async mount => {
+        /** @type {import('./types.js').DeferredTasks<import('./types.js').ReadableTreeDeferredTaskParams>} */
         const deferredTasks = makeDeferredTasks();
         const { value } = await checkinTree(mount, deferredTasks);
         return value;
@@ -2219,6 +2220,7 @@ const makeDaemonCore = async (
       await filePowers.makePath(rootPath);
       /** @param {object} mount */
       const snapshotFn = async mount => {
+        /** @type {import('./types.js').DeferredTasks<import('./types.js').ReadableTreeDeferredTaskParams>} */
         const deferredTasks = makeDeferredTasks();
         const { value } = await checkinTree(mount, deferredTasks);
         return value;
