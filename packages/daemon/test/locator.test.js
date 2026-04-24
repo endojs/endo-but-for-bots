@@ -108,10 +108,7 @@ test('parseLocator - connection hints in new format', t => {
   t.is(parsed.number, validId);
   t.is(parsed.node, validNode);
   t.is(parsed.formulaType, validType);
-  t.deepEqual(parsed.hints, [
-    'libp2p+captp0://peer1',
-    'libp2p+captp0://peer2',
-  ]);
+  t.deepEqual(parsed.hints, ['libp2p+captp0://peer1', 'libp2p+captp0://peer2']);
 });
 
 test('parseLocator - connection hints in old format', t => {
