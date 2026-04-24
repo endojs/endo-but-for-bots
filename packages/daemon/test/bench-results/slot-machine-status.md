@@ -13,7 +13,7 @@
   - Per-session c-list (`makeCList`) with monotonic counters matching
     the Rust `Session`.
   - `SessionId` derived as SHA-256 of `"slots/session/" + label`.
-  - `makeSlotMarshaller` on top of `@endo/marshal`, packing method
+  - `makeSlotCodec` on top of `@endo/marshal`, encoding method
     calls and resolutions into wire payloads with c-list-backed slot
     translation.  All capabilities share a flat `targets` array on
     the wire (kind byte disambiguates); `promises` stays empty since
@@ -25,8 +25,8 @@
   `rust/endo/slots/src/session.rs`.  Any divergence will fail either
   `yarn test` in `packages/slots` or `cargo test -p slots`.
 - **CapTP baseline** captured in `captp-baseline.md`; 52 JS unit
-  tests (descriptor / cbor / payload / session / clist / marshaller)
-  plus 39 Rust unit tests (previously 37) are green.
+  tests (descriptor / cbor / payload / session / clist / codec) plus
+  39 Rust unit tests (previously 37) are green.
 
 ## What's explicitly not in this PR
 
@@ -35,11 +35,11 @@
 Integrating `@endo/slots` into `bus-daemon-rust-xs.js` and
 `bus-worker-node-raw.js` so worker-to-worker traffic uses
 `deliver`/`resolve`/`drop`/`abort` envelopes instead of CapTP is
-substantially more work than the client itself.  Stage 1
-(marshaller) ships here.  Stage 2 requires:
+substantially more work than the client itself.  Stage 1 (codec)
+ships here.  Stage 2 requires:
 
-1. ~~A slot-machine-aware marshaller on each worker~~ — **done**
-   via `makeSlotMarshaller`.
+1. ~~A slot-machine-aware codec on each worker~~ — **done**
+   via `makeSlotCodec`.
 2. Presence-factory wiring so `E(presence).method()` queues a
    `deliver` against the descriptor of `presence` without awaiting
    resolution (for pipelining).  Uses `HandledPromise` and a

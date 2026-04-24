@@ -14,15 +14,15 @@ export {
   VERB_DROP,
   VERB_ABORT,
   isSlotVerb,
-  encodeDeliver,
-  decodeDeliver,
-  encodeResolve,
-  decodeResolve,
-  encodeDrop,
-  decodeDrop,
-  encodeAbort,
-  decodeAbort,
+  encodeDeliverPayload,
+  decodeDeliverPayload,
+  encodeResolvePayload,
+  decodeResolvePayload,
+  encodeDropPayload,
+  decodeDropPayload,
+  encodeAbortPayload,
+  decodeAbortPayload,
 } from './src/payload.js';
 export { sessionIdFromLabel, sessionIdHex } from './src/session.js';
 export { makeCList } from './src/clist.js';
-export { makeSlotMarshaller } from './src/marshaller.js';
+export { makeSlotCodec } from './src/codec.js';

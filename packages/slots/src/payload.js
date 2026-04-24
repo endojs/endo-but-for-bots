@@ -80,7 +80,7 @@ const readDescriptorArray = r => {
  * @param {DeliverPayload} p
  * @returns {Uint8Array}
  */
-export const encodeDeliver = p => {
+export const encodeDeliverPayload = p => {
   const w = makeWriter();
   writeArrayHeader(w, 5);
   writeDescriptor(w, p.target);
@@ -91,13 +91,13 @@ export const encodeDeliver = p => {
   else writeNull(w);
   return writerToBytes(w);
 };
-harden(encodeDeliver);
+harden(encodeDeliverPayload);
 
 /**
  * @param {Uint8Array} bytes
  * @returns {DeliverPayload}
  */
-export const decodeDeliver = bytes => {
+export const decodeDeliverPayload = bytes => {
   const r = makeReader(bytes);
   const n = readArrayHeader(r);
   if (n !== 5) {
@@ -111,7 +111,7 @@ export const decodeDeliver = bytes => {
   assertConsumed(r);
   return { target, body, targets, promises, reply };
 };
-harden(decodeDeliver);
+harden(decodeDeliverPayload);
 
 // ---- resolve ----
 
@@ -128,7 +128,7 @@ harden(decodeDeliver);
  * @param {ResolvePayload} p
  * @returns {Uint8Array}
  */
-export const encodeResolve = p => {
+export const encodeResolvePayload = p => {
   const w = makeWriter();
   writeArrayHeader(w, 5);
   writeDescriptor(w, p.target);
@@ -138,13 +138,13 @@ export const encodeResolve = p => {
   writeDescriptorArray(w, p.promises);
   return writerToBytes(w);
 };
-harden(encodeResolve);
+harden(encodeResolvePayload);
 
 /**
  * @param {Uint8Array} bytes
  * @returns {ResolvePayload}
  */
-export const decodeResolve = bytes => {
+export const decodeResolvePayload = bytes => {
   const r = makeReader(bytes);
   const n = readArrayHeader(r);
   if (n !== 5) {
@@ -161,7 +161,7 @@ export const decodeResolve = bytes => {
   assertConsumed(r);
   return { target, isReject: flag === 1, body, targets, promises };
 };
-harden(decodeResolve);
+harden(decodeResolvePayload);
 
 // ---- drop ----
 
@@ -177,7 +177,7 @@ harden(decodeResolve);
  * @param {DropDelta[]} deltas
  * @returns {Uint8Array}
  */
-export const encodeDrop = deltas => {
+export const encodeDropPayload = deltas => {
   const w = makeWriter();
   writeArrayHeader(w, deltas.length);
   for (const d of deltas) {
@@ -189,13 +189,13 @@ export const encodeDrop = deltas => {
   }
   return writerToBytes(w);
 };
-harden(encodeDrop);
+harden(encodeDropPayload);
 
 /**
  * @param {Uint8Array} bytes
  * @returns {DropDelta[]}
  */
-export const decodeDrop = bytes => {
+export const decodeDropPayload = bytes => {
   const r = makeReader(bytes);
   const n = readArrayHeader(r);
   const out = [];
@@ -215,7 +215,7 @@ export const decodeDrop = bytes => {
   assertConsumed(r);
   return out;
 };
-harden(decodeDrop);
+harden(decodeDropPayload);
 
 // ---- abort ----
 
@@ -226,18 +226,18 @@ const textDecoder = new TextDecoder('utf-8', { fatal: true });
  * @param {string} reason
  * @returns {Uint8Array}
  */
-export const encodeAbort = reason => {
+export const encodeAbortPayload = reason => {
   const w = makeWriter();
   writeByteString(w, textEncoder.encode(reason));
   return writerToBytes(w);
 };
-harden(encodeAbort);
+harden(encodeAbortPayload);
 
 /**
  * @param {Uint8Array} bytes
  * @returns {string}
  */
-export const decodeAbort = bytes => {
+export const decodeAbortPayload = bytes => {
   const r = makeReader(bytes);
   const raw = readByteString(r);
   assertConsumed(r);
@@ -247,4 +247,4 @@ export const decodeAbort = bytes => {
     throw makeError(X`abort reason not valid utf-8: ${q(String(e))}`);
   }
 };
-harden(decodeAbort);
+harden(decodeAbortPayload);

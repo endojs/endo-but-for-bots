@@ -7,10 +7,10 @@ import { isPromise } from '@endo/promise-kit';
 
 import { Kind, descriptorKey } from './descriptor.js';
 import {
-  encodeDeliver,
-  decodeDeliver,
-  encodeResolve,
-  decodeResolve,
+  encodeDeliverPayload,
+  decodeDeliverPayload,
+  encodeResolvePayload,
+  decodeResolvePayload,
 } from './payload.js';
 
 /** @import { Descriptor } from './descriptor.js' */
@@ -26,7 +26,7 @@ const textDecoder = new TextDecoder('utf-8', { fatal: true });
  * the wire; the descriptor's own kind byte distinguishes them.  The
  * [`DeliverPayload.promises`] field stays empty — the Rust supervisor
  * translates both arrays identically via `translate_slice`, so
- * collapsing them simplifies the marshaller without changing wire
+ * collapsing them simplifies the codec without changing wire
  * semantics.
  */
 const SLOT_TAG = 's';
@@ -43,7 +43,10 @@ const parseSlot = slot => {
 };
 
 /**
- * Create a slot-machine-aware marshaller bound to a c-list.
+ * Create a slot-machine codec bound to a c-list: translates between
+ * high-level call / resolution shapes and the wire-level payload
+ * bytes, threading capabilities through the c-list's export/import
+ * tables.
  *
  * @param {object} opts
  * @param {{
@@ -55,15 +58,15 @@ const parseSlot = slot => {
  *   c-list entry.  The returned value represents the remote cap.
  * @param {string} [opts.marshalName]
  */
-export const makeSlotMarshaller = ({
+export const makeSlotCodec = ({
   clist,
   makePresence,
   marshalName = 'slots',
 }) => {
   /** @type {Descriptor[]} */
-  let packingSlots = [];
+  let encodingSlots = [];
   /** @type {Descriptor[]} */
-  let unpackingSlots = [];
+  let decodingSlots = [];
 
   /**
    * @param {unknown} val
@@ -73,13 +76,13 @@ export const makeSlotMarshaller = ({
     const kind = isPromise(val) ? Kind.Promise : Kind.Object;
     const desc = clist.exportLocal(val, kind);
     const key = descriptorKey(desc);
-    for (let i = 0; i < packingSlots.length; i += 1) {
-      if (descriptorKey(packingSlots[i]) === key) {
+    for (let i = 0; i < encodingSlots.length; i += 1) {
+      if (descriptorKey(encodingSlots[i]) === key) {
         return `${SLOT_TAG}${i}`;
       }
     }
-    const idx = packingSlots.length;
-    packingSlots.push(desc);
+    const idx = encodingSlots.length;
+    encodingSlots.push(desc);
     return `${SLOT_TAG}${idx}`;
   };
 
@@ -89,12 +92,12 @@ export const makeSlotMarshaller = ({
    */
   const convertSlotToVal = slot => {
     const idx = parseSlot(slot);
-    if (idx >= unpackingSlots.length) {
+    if (idx >= decodingSlots.length) {
       throw makeError(
-        X`slot ${q(slot)} out of range (have ${q(unpackingSlots.length)} entries)`,
+        X`slot ${q(slot)} out of range (have ${q(decodingSlots.length)} entries)`,
       );
     }
-    const desc = unpackingSlots[idx];
+    const desc = decodingSlots[idx];
     return clist.importRemote(desc, () => makePresence(desc));
   };
 
@@ -119,7 +122,7 @@ export const makeSlotMarshaller = ({
   };
 
   /**
-   * Pack a method-call into a wire-level [`DeliverPayload`].
+   * Encode a method-call into wire-level `deliver` payload bytes.
    *
    * @param {object} args
    * @param {unknown} args.target
@@ -129,8 +132,8 @@ export const makeSlotMarshaller = ({
    *   will receive the call's return value (fire-and-forget if absent)
    * @returns {Uint8Array}
    */
-  const packDeliver = ({ target, method, args, reply }) => {
-    packingSlots = [];
+  const encodeDeliver = ({ target, method, args, reply }) => {
+    encodingSlots = [];
     const targetDesc = describe(target);
     const replyDesc =
       reply !== undefined
@@ -145,16 +148,16 @@ export const makeSlotMarshaller = ({
     const payload = {
       target: targetDesc,
       body: textEncoder.encode(body),
-      targets: packingSlots,
+      targets: encodingSlots,
       promises: [],
       reply: replyDesc,
     };
-    return encodeDeliver(payload);
+    return encodeDeliverPayload(payload);
   };
-  harden(packDeliver);
+  harden(encodeDeliver);
 
   /**
-   * Unpack a [`DeliverPayload`] into the JS-level view.
+   * Decode `deliver` payload bytes back into the JS-level call shape.
    *
    * @param {Uint8Array} bytes
    * @returns {{
@@ -164,11 +167,11 @@ export const makeSlotMarshaller = ({
    *   reply: unknown | null,
    * }}
    */
-  const unpackDeliver = bytes => {
-    const p = decodeDeliver(bytes);
-    unpackingSlots = p.targets;
+  const decodeDeliver = bytes => {
+    const p = decodeDeliverPayload(bytes);
+    decodingSlots = p.targets;
     const bodyStr = textDecoder.decode(p.body);
-    const slotStrings = unpackingSlots.map((_, i) => `${SLOT_TAG}${i}`);
+    const slotStrings = decodingSlots.map((_, i) => `${SLOT_TAG}${i}`);
     const decoded = fromCapData(harden({ body: bodyStr, slots: slotStrings }));
     if (!Array.isArray(decoded) || decoded.length !== 2) {
       throw makeError(
@@ -190,10 +193,10 @@ export const makeSlotMarshaller = ({
         : clist.importRemote(replyDesc, () => makePresence(replyDesc));
     return { target, method, args: [...args], reply };
   };
-  harden(unpackDeliver);
+  harden(decodeDeliver);
 
   /**
-   * Pack a resolve into wire bytes.
+   * Encode a resolution into wire-level `resolve` payload bytes.
    *
    * @param {object} args
    * @param {unknown} args.target — the promise being resolved
@@ -201,8 +204,8 @@ export const makeSlotMarshaller = ({
    * @param {unknown} args.value
    * @returns {Uint8Array}
    */
-  const packResolve = ({ target, isReject, value }) => {
-    packingSlots = [];
+  const encodeResolve = ({ target, isReject, value }) => {
+    encodingSlots = [];
     const targetDesc = clist.exportLocal(target, Kind.Promise);
     const { body } = toCapData(
       /** @type {import('@endo/pass-style').Passable} */ (harden(value)),
@@ -212,33 +215,35 @@ export const makeSlotMarshaller = ({
       target: targetDesc,
       isReject,
       body: textEncoder.encode(body),
-      targets: packingSlots,
+      targets: encodingSlots,
       promises: [],
     };
-    return encodeResolve(payload);
+    return encodeResolvePayload(payload);
   };
-  harden(packResolve);
+  harden(encodeResolve);
 
   /**
+   * Decode `resolve` payload bytes.
+   *
    * @param {Uint8Array} bytes
    */
-  const unpackResolve = bytes => {
-    const p = decodeResolve(bytes);
-    unpackingSlots = p.targets;
+  const decodeResolve = bytes => {
+    const p = decodeResolvePayload(bytes);
+    decodingSlots = p.targets;
     const bodyStr = textDecoder.decode(p.body);
-    const slotStrings = unpackingSlots.map((_, i) => `${SLOT_TAG}${i}`);
+    const slotStrings = decodingSlots.map((_, i) => `${SLOT_TAG}${i}`);
     const value = fromCapData(harden({ body: bodyStr, slots: slotStrings }));
     const target = clist.importRemote(p.target, () => makePresence(p.target));
     return { target, isReject: p.isReject, value };
   };
-  harden(unpackResolve);
+  harden(decodeResolve);
 
   return harden({
-    packDeliver,
-    unpackDeliver,
-    packResolve,
-    unpackResolve,
+    encodeDeliver,
+    decodeDeliver,
+    encodeResolve,
+    decodeResolve,
     describe,
   });
 };
-harden(makeSlotMarshaller);
+harden(makeSlotCodec);
