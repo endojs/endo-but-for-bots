@@ -1,5 +1,4 @@
 /* global process */
-import { Buffer } from 'node:buffer';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
@@ -107,7 +106,8 @@ export const checkout = async ({
       const zipBytes = zipWriter.snapshot();
 
       if (useStdout) {
-        process.stdout.write(Buffer.from(zipBytes));
+        // process.stdout.write accepts Uint8Array directly
+        process.stdout.write(zipBytes);
       } else {
         const resolvedPath = path.resolve(/** @type {string} */ (destPath));
         await fs.promises.writeFile(resolvedPath, zipBytes);

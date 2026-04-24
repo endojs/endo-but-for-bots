@@ -1,5 +1,4 @@
 /* global process */
-import { Buffer } from 'node:buffer';
 import os from 'os';
 
 import { E } from '@endo/far';
@@ -23,11 +22,20 @@ import { parsePetNamePath } from '../pet-name.js';
 export const writeText = async ({ name, text, useStdin, agentNames }) => {
   let content = text;
   if (useStdin || content === undefined) {
+    /** @type {Uint8Array[]} */
     const chunks = [];
+    let total = 0;
     for await (const chunk of process.stdin) {
       chunks.push(chunk);
+      total += chunk.length;
     }
-    content = Buffer.concat(chunks).toString('utf-8');
+    const bytes = new Uint8Array(total);
+    let offset = 0;
+    for (const chunk of chunks) {
+      bytes.set(chunk, offset);
+      offset += chunk.length;
+    }
+    content = new TextDecoder('utf-8').decode(bytes);
   }
 
   await withEndoAgent(agentNames, { os, process }, async ({ agent }) => {

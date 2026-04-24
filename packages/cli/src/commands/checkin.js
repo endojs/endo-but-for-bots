@@ -1,5 +1,4 @@
 /* global process */
-import { Buffer } from 'node:buffer';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
@@ -64,11 +63,19 @@ export const checkin = async ({
     /** @type {Uint8Array} */
     let zipBytes;
     if (stdin) {
+      /** @type {Uint8Array[]} */
       const chunks = [];
+      let total = 0;
       for await (const chunk of process.stdin) {
         chunks.push(chunk);
+        total += chunk.length;
       }
-      zipBytes = Buffer.concat(chunks);
+      zipBytes = new Uint8Array(total);
+      let offset = 0;
+      for (const chunk of chunks) {
+        zipBytes.set(chunk, offset);
+        offset += chunk.length;
+      }
     } else {
       resolvedPath = path.resolve(sourcePath);
       zipBytes = await fs.promises.readFile(resolvedPath);
