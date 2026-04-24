@@ -261,7 +261,13 @@ const walkGlob = async (
     // ** matches zero or more levels.
     // Zero levels: skip the ** and continue matching tail from here.
     await walkGlob(
-      dir, tail, prefix, confinementRoot, filePowers, results, maxResults,
+      dir,
+      tail,
+      prefix,
+      confinementRoot,
+      filePowers,
+      results,
+      maxResults,
     );
     // One or more levels: recurse into each subdirectory with ** still active.
     let entries;
@@ -284,8 +290,13 @@ const walkGlob = async (
         const childPrefix = prefix ? `${prefix}/${entry}` : entry;
         // eslint-disable-next-line no-await-in-loop
         await walkGlob(
-          childPath, patternSegments, childPrefix,
-          confinementRoot, filePowers, results, maxResults,
+          childPath,
+          patternSegments,
+          childPrefix,
+          confinementRoot,
+          filePowers,
+          results,
+          maxResults,
         );
       }
     }
@@ -314,8 +325,13 @@ const walkGlob = async (
     } else {
       // eslint-disable-next-line no-await-in-loop
       await walkGlob(
-        childPath, tail, childPrefix,
-        confinementRoot, filePowers, results, maxResults,
+        childPath,
+        tail,
+        childPrefix,
+        confinementRoot,
+        filePowers,
+        results,
+        maxResults,
       );
     }
   }
@@ -567,10 +583,7 @@ const makeMountExo = ctx => {
     async grep(pattern, opts = {}) {
       assertNotRevoked();
       await null;
-      const {
-        glob: globPattern = '**/*',
-        maxResults = 1000,
-      } = opts;
+      const { glob: globPattern = '**/*', maxResults = 1000 } = opts;
 
       // First, find files matching the glob.
       const globSegments = globPattern.split('/').filter(s => s.length > 0);
@@ -609,11 +622,13 @@ const makeMountExo = ctx => {
         for (let i = 0; i < lines.length; i += 1) {
           if (matches.length >= maxResults) break;
           if (regex.test(lines[i])) {
-            matches.push(harden({
-              file,
-              line: i + 1,
-              text: lines[i],
-            }));
+            matches.push(
+              harden({
+                file,
+                line: i + 1,
+                text: lines[i],
+              }),
+            );
           }
         }
       }
