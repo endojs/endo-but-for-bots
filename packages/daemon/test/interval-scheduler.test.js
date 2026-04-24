@@ -110,7 +110,8 @@ test('control pause and resume', async t => {
   const ticks = [];
   const { scheduler, control } = makeIntervalSchedulerKit({
     minPeriodMs: 1,
-    onTick: (entry, tickNumber) => ticks.push({ label: entry.label, tickNumber }),
+    onTick: (entry, tickNumber) =>
+      ticks.push({ label: entry.label, tickNumber }),
   });
 
   // Create interval with immediate first tick (firstDelayMs=0)

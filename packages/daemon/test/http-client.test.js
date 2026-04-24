@@ -58,10 +58,9 @@ test('fetch to disallowed origin throws', async t => {
     fetchFn: mockFetch,
   });
 
-  await t.throwsAsync(
-    () => client.fetch('https://evil.example.com/steal'),
-    { message: /not in the allowlist/ },
-  );
+  await t.throwsAsync(() => client.fetch('https://evil.example.com/steal'), {
+    message: /not in the allowlist/,
+  });
 });
 
 test('fetch with options passes method, headers, body', async t => {
@@ -197,10 +196,9 @@ test('fetch rejects non-HTTP protocols', async t => {
     fetchFn: mockFetch,
   });
 
-  await t.throwsAsync(
-    () => client.fetch('ftp://files.example.com/data.csv'),
-    { message: /Only HTTP and HTTPS/ },
-  );
+  await t.throwsAsync(() => client.fetch('ftp://files.example.com/data.csv'), {
+    message: /Only HTTP and HTTPS/,
+  });
 });
 
 test('help returns documentation', t => {

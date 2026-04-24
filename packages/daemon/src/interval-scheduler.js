@@ -224,101 +224,93 @@ export const makeIntervalSchedulerKit = (options = {}) => {
         `Methods: label(), period(), setPeriod(ms), cancel(), info(), help()`,
     });
 
-  const scheduler = makeExo(
-    'IntervalScheduler',
-    IntervalSchedulerInterface,
-    {
-      makeInterval: async (label, periodMs, opts = undefined) => {
-        assertNotRevoked();
-        const { firstDelayMs = 0, tickTimeoutMs = periodMs / 2 } = opts || {};
+  const scheduler = makeExo('IntervalScheduler', IntervalSchedulerInterface, {
+    makeInterval: async (label, periodMs, opts = undefined) => {
+      assertNotRevoked();
+      const { firstDelayMs = 0, tickTimeoutMs = periodMs / 2 } = opts || {};
 
-        periodMs >= currentMinPeriodMs ||
-          Fail`Period ${q(periodMs)}ms is below minimum ${q(currentMinPeriodMs)}ms`;
+      periodMs >= currentMinPeriodMs ||
+        Fail`Period ${q(periodMs)}ms is below minimum ${q(currentMinPeriodMs)}ms`;
 
-        const activeCount = [...entries.values()].filter(
-          e => e.status === 'active',
-        ).length;
-        activeCount < currentMaxActive ||
-          Fail`Maximum active intervals (${q(currentMaxActive)}) reached`;
+      const activeCount = [...entries.values()].filter(
+        e => e.status === 'active',
+      ).length;
+      activeCount < currentMaxActive ||
+        Fail`Maximum active intervals (${q(currentMaxActive)}) reached`;
 
-        const now = Date.now();
-        /** @type {IntervalEntry} */
-        const entry = {
-          id: generateId(),
-          label,
-          periodMs,
-          firstDelayMs,
-          tickTimeoutMs,
-          nextTickAt: now + firstDelayMs,
-          createdAt: now,
-          tickCount: 0,
-          status: 'active',
-        };
-        entries.set(entry.id, entry);
-        if (onEntryChange) {
-          onEntryChange(entry);
-        }
-        armInterval(entry);
-        return makeIntervalExo(entry);
-      },
-      list: async () =>
-        harden(
-          [...entries.values()]
-            .filter(e => e.status === 'active')
-            .map(e => harden({ ...e })),
-        ),
-      help: () =>
-        `IntervalScheduler creates timed intervals for agent heartbeats. ` +
-        `Methods: makeInterval(label, periodMs, opts?), list(), help(). ` +
-        `Limits: maxActive=${currentMaxActive}, minPeriodMs=${currentMinPeriodMs}`,
+      const now = Date.now();
+      /** @type {IntervalEntry} */
+      const entry = {
+        id: generateId(),
+        label,
+        periodMs,
+        firstDelayMs,
+        tickTimeoutMs,
+        nextTickAt: now + firstDelayMs,
+        createdAt: now,
+        tickCount: 0,
+        status: 'active',
+      };
+      entries.set(entry.id, entry);
+      if (onEntryChange) {
+        onEntryChange(entry);
+      }
+      armInterval(entry);
+      return makeIntervalExo(entry);
     },
-  );
+    list: async () =>
+      harden(
+        [...entries.values()]
+          .filter(e => e.status === 'active')
+          .map(e => harden({ ...e })),
+      ),
+    help: () =>
+      `IntervalScheduler creates timed intervals for agent heartbeats. ` +
+      `Methods: makeInterval(label, periodMs, opts?), list(), help(). ` +
+      `Limits: maxActive=${currentMaxActive}, minPeriodMs=${currentMinPeriodMs}`,
+  });
 
-  const control = makeExo(
-    'IntervalControl',
-    IntervalControlInterface,
-    {
-      setMaxActive: n => {
-        n >= 1 || Fail`maxActive must be >= 1`;
-        currentMaxActive = n;
-      },
-      setMinPeriodMs: ms => {
-        ms >= 1000 || Fail`minPeriodMs must be >= 1000`;
-        currentMinPeriodMs = ms;
-      },
-      pause: () => {
-        paused = true;
-        for (const [id] of activeTimeouts) {
-          disarmInterval(id);
-        }
-      },
-      resume: () => {
-        paused = false;
-        for (const entry of entries.values()) {
-          if (entry.status === 'active') {
-            // Recompute next tick relative to now
-            const now = Date.now();
-            if (entry.nextTickAt <= now) {
-              entry.nextTickAt = now;
-            }
-            armInterval(entry);
+  const control = makeExo('IntervalControl', IntervalControlInterface, {
+    setMaxActive: n => {
+      n >= 1 || Fail`maxActive must be >= 1`;
+      currentMaxActive = n;
+    },
+    setMinPeriodMs: ms => {
+      ms >= 1000 || Fail`minPeriodMs must be >= 1000`;
+      currentMinPeriodMs = ms;
+    },
+    pause: () => {
+      paused = true;
+      for (const [id] of activeTimeouts) {
+        disarmInterval(id);
+      }
+    },
+    resume: () => {
+      paused = false;
+      for (const entry of entries.values()) {
+        if (entry.status === 'active') {
+          // Recompute next tick relative to now
+          const now = Date.now();
+          if (entry.nextTickAt <= now) {
+            entry.nextTickAt = now;
           }
+          armInterval(entry);
         }
-      },
-      revoke: () => {
-        revoked = true;
-        for (const entry of entries.values()) {
-          disarmInterval(entry.id);
-          entry.status = 'cancelled';
-        }
-      },
-      listAll: async () =>
-        harden([...entries.values()].map(e => harden({ ...e }))),
-      help: () =>
-        `IntervalControl manages the interval scheduler. ` +
-        `Methods: setMaxActive(n), setMinPeriodMs(ms), pause(), resume(), revoke(), listAll(), help()`,
+      }
     },
-  );
+    revoke: () => {
+      revoked = true;
+      for (const entry of entries.values()) {
+        disarmInterval(entry.id);
+        entry.status = 'cancelled';
+      }
+    },
+    listAll: async () =>
+      harden([...entries.values()].map(e => harden({ ...e }))),
+    help: () =>
+      `IntervalControl manages the interval scheduler. ` +
+      `Methods: setMaxActive(n), setMinPeriodMs(ms), pause(), resume(), revoke(), listAll(), help()`,
+  });
 
   /**
    * Load a previously persisted interval entry.

@@ -3613,9 +3613,7 @@ const makeDaemonCore = async (
     deferredTasks,
   ) => {
     return withFormulaGraphLock(async () => {
-      const clientNumber = /** @type {FormulaNumber} */ (
-        await randomHex256()
-      );
+      const clientNumber = /** @type {FormulaNumber} */ (await randomHex256());
       const clientId = formatId({
         number: clientNumber,
         node: localNodeNumber,
