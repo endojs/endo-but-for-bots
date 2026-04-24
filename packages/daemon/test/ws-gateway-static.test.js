@@ -136,11 +136,7 @@ test.serial('returns 404 when no index.html and file missing', async t => {
   const tmpDir = await fs.promises.mkdtemp(
     path.join(os.tmpdir(), 'endo-gw-noindex-'),
   );
-  await fs.promises.writeFile(
-    path.join(tmpDir, 'exists.txt'),
-    'data',
-    'utf-8',
-  );
+  await fs.promises.writeFile(path.join(tmpDir, 'exists.txt'), 'data', 'utf-8');
 
   const { promise: cancelled, reject: cancel } =
     /** @type {import('@endo/promise-kit').PromiseKit<never>} */ (
