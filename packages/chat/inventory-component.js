@@ -466,9 +466,7 @@ export const inventoryComponent = async (
           $cancel.title = 'Cancelling...';
           $cancel.disabled = true;
           E(powers)
-            .cancel(
-              .../** @type {[string, ...string[]]} */ (itemPath),
-            )
+            .cancel(.../** @type {[string, ...string[]]} */ (itemPath))
             .then(() => {
               $cancel.classList.add('cancelled');
               $cancel.title = 'Cancelled';

@@ -3763,7 +3763,6 @@ button.btn-spinner::after {
   white-space: nowrap;
 }
 
-
 /* Cancel button */
 .cancel-button {
   background: none;
@@ -3800,7 +3799,6 @@ button.btn-spinner::after {
   opacity: 0.2;
 }
 
-
 /* Inventory drag and drop */
 .pet-item-row.dragging {
   opacity: 0.4;
@@ -3814,7 +3812,6 @@ button.btn-spinner::after {
   outline-color: var(--warning-color, #e67e22);
   background: rgba(230, 126, 34, 0.1);
 }
-
 
 #chat-bar.has-content #chat-menu-button,
 #chat-bar.command-mode #chat-menu-button {
