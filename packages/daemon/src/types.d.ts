@@ -1021,7 +1021,8 @@ export interface EndoHost extends EndoAgent {
   ): Promise<unknown>;
   makeHttpClient(
     petName: string,
-    options?: { allowedOrigins?: string[]; maxResponseBytes?: number },
+    allowedOrigins: string[],
+    opts?: { maxRequestsPerMinute?: number; maxResponseBytes?: number },
   ): Promise<unknown>;
   makeIntervalScheduler(
     petName: string,
@@ -1582,8 +1583,11 @@ export interface DaemonCore {
 
   formulateHttpClient: (
     agentId: FormulaIdentifier,
-    handleId: FormulaIdentifier,
-    options: { allowedOrigins?: string[]; maxResponseBytes?: number },
+    options: {
+      allowedOrigins: string[];
+      maxRequestsPerMinute?: number;
+      maxResponseBytes?: number;
+    },
     deferredTasks: DeferredTasks<Record<string, string | string[]>>,
   ) => FormulateResult<unknown>;
 
