@@ -503,22 +503,10 @@ export const chatBarComponent = (
     }
   });
 
-  let commandSubmitting = false;
-
-  const setCommandSubmitting = (/** @type {boolean} */ value) => {
-    commandSubmitting = value;
-    if (value) {
-      $chatBar.classList.add('submitting');
-      $commandSubmitButton.classList.add('btn-spinner');
-      $commandSubmitButton.disabled = true;
-      inlineForm.setDisabled(true); // eslint-disable-line no-use-before-define
-    } else {
-      $chatBar.classList.remove('submitting');
-      $commandSubmitButton.classList.remove('btn-spinner');
-      inlineForm.setDisabled(false); // eslint-disable-line no-use-before-define
-      $commandSubmitButton.disabled = !inlineForm.isValid(); // eslint-disable-line no-use-before-define
-    }
-  };
+  // Pending commands no longer block the chat bar; `commandSubmitting`
+  // remains as a guard hook for any code path that might re-introduce a
+  // blocking state, but nothing flips it to true today.
+  const commandSubmitting = false;
 
   /**
    * Run a command with spinner/disabled state management.
