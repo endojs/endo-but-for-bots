@@ -388,6 +388,16 @@ export const main = async rawArgs => {
     });
 
   program
+    .command('workers')
+    .description('list workers and their tenanted capabilities')
+    .option('-j,--json', 'JSON format output')
+    .action(async cmd => {
+      const { json } = cmd.opts();
+      const { workers: workersCmd } = await import('./commands/workers.js');
+      return workersCmd({ json });
+    });
+
+  program
     .command('remove [names...]')
     .alias('rm')
     .description('forget a named value')
@@ -460,6 +470,28 @@ export const main = async rawArgs => {
       return cat({ name, agentNames });
     });
 
+  // endo read-text removed: redundant with endo cat, which also
+  // navigates multi-segment pet-name paths through mount delegation.
+
+  program
+    .command('write-text <name>')
+    .description(
+      'writes text content to a path from stdin or --text ' +
+        '(e.g. echo hello | endo write-text project/notes.txt)',
+    )
+    .option(...commonOptions.as)
+    .option('--text <text>', 'text content to write (alternative to stdin)')
+    .action(async (name, cmd) => {
+      const { as: agentNames, text } = cmd.opts();
+      const { writeText } = await import('./commands/write-text.js');
+      return writeText({
+        name,
+        text,
+        useStdin: text === undefined,
+        agentNames,
+      });
+    });
+
   program
     .command('store')
     .description('stores a blob or structured value')
@@ -501,27 +533,44 @@ export const main = async rawArgs => {
   program
     .command('checkin <path>')
     .alias('ci')
-    .description('checks in a local directory as a readable tree')
+    .description(
+      'checks in a local directory (or zip with -z) as a readable tree',
+    )
     .option(...commonOptions.as)
     .option(...commonOptions.requiredName)
+    .option('-z, --zip', 'interpret input as a zip archive')
+    .option('--stdin', 'read zip archive from stdin (requires -z)')
     .action(async (sourcePath, cmd) => {
-      const { name, as: agentNames } = cmd.opts();
+      const { name, as: agentNames, zip, stdin } = cmd.opts();
       if (!name) {
         throw new Error('--name is required for checkin');
       }
+      if (stdin && !zip) {
+        throw new Error('--stdin requires --zip');
+      }
       const { checkin } = await import('./commands/checkin.js');
-      return checkin({ sourcePath, name, agentNames });
+      return checkin({ sourcePath, name, agentNames, zip, stdin });
     });
 
   program
-    .command('checkout <name> <path>')
+    .command('checkout <name> [path]')
     .alias('co')
-    .description('checks out a readable tree to a local directory')
+    .description(
+      'checks out a readable tree to a local directory (or zip with -z)',
+    )
     .option(...commonOptions.as)
+    .option('-z, --zip', 'produce a zip archive instead of a directory')
+    .option('--stdout', 'write zip archive to stdout (requires -z)')
     .action(async (treeName, destPath, cmd) => {
-      const { as: agentNames } = cmd.opts();
+      const { as: agentNames, zip, stdout: useStdout } = cmd.opts();
+      if (useStdout && !zip) {
+        throw new Error('--stdout requires --zip');
+      }
+      if (!zip && !destPath) {
+        throw new Error('path is required for directory checkout');
+      }
       const { checkout } = await import('./commands/checkout.js');
-      return checkout({ treeName, destPath, agentNames });
+      return checkout({ treeName, destPath, agentNames, zip, useStdout });
     });
 
   program
@@ -556,6 +605,10 @@ export const main = async rawArgs => {
       const { mktmp } = await import('./commands/mktmp.js');
       return mktmp({ name, agentNames, readOnly });
     });
+
+  // endo subdir removed: provideSubMount is a programmatic
+  // capability-confinement operation, not an interactive CLI concern.
+  // Use Mount.subDir() or E(host).provideSubMount() from agent code.
 
   program
     .command('eval <source> [names...]')
@@ -895,6 +948,8 @@ export const main = async rawArgs => {
         'list',
         'show',
         'cat',
+        'read-text',
+        'write-text',
         'follow',
         'store',
         'checkin',
