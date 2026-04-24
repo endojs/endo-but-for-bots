@@ -112,7 +112,7 @@ export const makeDirectory = (dirPath, options = {}) => {
      * @param {string | string[]} pathArg
      * @returns {Promise<object>}
      */
-    const lookupReadOnly = async pathArg => {
+    const _lookupReadOnly = async pathArg => {
       const segments = typeof pathArg === 'string' ? [pathArg] : pathArg;
       const [head, ...tail] = segments;
       const fullPath = path.join(currentPath, head);

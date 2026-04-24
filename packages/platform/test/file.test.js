@@ -84,15 +84,18 @@ test('makeFile streamBase64 produces base64 chunks', async t => {
 
   // Consume the stream
   const chunks = [];
-  for (;;) {
-    const { done, value } = await readerRef.next();
-    if (done) break;
-    chunks.push(value);
+  await null;
+  let result = await readerRef.next();
+  while (!result.done) {
+    chunks.push(result.value);
+    // eslint-disable-next-line no-await-in-loop
+    result = await readerRef.next();
   }
 
   // Decode base64 and verify content
-  const decoded = Buffer.from(chunks.join(''), 'base64').toString('utf-8');
-  t.is(decoded, 'hello');
+  const joined = chunks.join('');
+  const binary = globalThis.atob(joined);
+  t.is(binary, 'hello');
 
   await fs.promises.rm(dir, { recursive: true });
 });

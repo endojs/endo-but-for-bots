@@ -5,9 +5,7 @@ import path from 'node:path';
 import os from 'node:os';
 
 import { checkinTree } from '../src/fs/checkin.js';
-import { checkoutTree } from '../src/fs/checkout.js';
 import { makeLocalTree } from '../src/fs-node/local-tree.js';
-import { makeTreeWriter } from '../src/fs-node/tree-writer.js';
 import { makeSnapshotStore } from '../src/fs/snapshot-store.js';
 
 /**
@@ -22,7 +20,8 @@ const makeMemoryContentStore = () => {
     // Simple hash for testing (not cryptographic).
     let hash = 0;
     for (const b of bytes) {
-      hash = ((hash << 5) - hash + b) | 0;
+      // Use arithmetic instead of bitwise to satisfy no-bitwise.
+      hash = Math.trunc((hash * 31 + b) % 2147483647);
     }
     counter += 1;
     return `memhash-${Math.abs(hash).toString(16)}-${counter}`;
