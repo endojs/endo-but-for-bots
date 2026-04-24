@@ -36,6 +36,7 @@
   },
   "dependencies": {
     "@endo/errors": "workspace:^",
+    "@endo/eventual-send": "workspace:^",
     "@endo/harden": "workspace:^",
     "@endo/init": "workspace:^",
     "@endo/marshal": "workspace:^",
@@ -43,7 +44,6 @@
     "@noble/hashes": "^1.8.0"
   },
   "devDependencies": {
-    "@endo/eventual-send": "workspace:^",
     "@endo/far": "workspace:^",
     "@endo/lockdown": "workspace:^",
     "@endo/pass-style": "workspace:^",
