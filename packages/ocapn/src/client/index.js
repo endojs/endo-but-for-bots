@@ -258,11 +258,14 @@ export const makeClient = ({
     // proven our identity to the peer during its handshake.
     const selfIdentity = makeSelfIdentity(netlayer.location);
 
-    const peerPublicKey = makeOcapnPublicKey(networkSession.remotePublicKeyBytes);
-    const peerLocation = networkSession.remoteLocation;
-    const peerLocationSig = /** @type {import('../codecs/components.js').OcapnSignature} */ (
-      new ArrayBuffer(0)
+    const peerPublicKey = makeOcapnPublicKey(
+      networkSession.remotePublicKeyBytes,
     );
+    const peerLocation = networkSession.remoteLocation;
+    const peerLocationSig =
+      /** @type {import('../codecs/components.js').OcapnSignature} */ (
+        new ArrayBuffer(0)
+      );
 
     const ocapn = prepareOcapn(
       connection,
@@ -298,10 +301,7 @@ export const makeClient = ({
     // the full session lifecycle (connect + authenticate + encrypt).
     if (netlayer.provideSession) {
       const networkSession = await netlayer.provideSession(location);
-      const session = makeInternalSessionFromNetwork(
-        networkSession,
-        netlayer,
-      );
+      const session = makeInternalSessionFromNetwork(networkSession, netlayer);
       sessionManager.resolveSession(
         destinationLocationId,
         session.connection,
