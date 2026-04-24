@@ -495,8 +495,8 @@ export const MountInterface = M.interface('EndoMount', {
   // Metadata
   stat: M.call(PathArgShape).returns(M.promise()),
   // ReadableTree-compatible surface
-  has: M.call().rest(PathSegmentsShape).returns(M.promise()),
-  list: M.call().rest(PathSegmentsShape).returns(M.promise()),
+  has: M.call().rest(M.string()).returns(M.promise()),
+  list: M.call().rest(M.string()).returns(M.promise()),
   lookup: M.call(PathArgShape).returns(M.promise()),
   // Raw data I/O
   readText: M.call(PathArgShape).returns(M.promise()),
