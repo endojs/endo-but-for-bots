@@ -94,13 +94,10 @@ export const makeMockMeshFabric = () => {
       scheme: 'mesh',
       connect: async hints => {
         const target = hints.to;
-        if (!target)
-          throw Error(`mesh transport: missing 'to' hint`);
+        if (!target) throw Error(`mesh transport: missing 'to' hint`);
         const accept = listeners.get(target);
         if (!accept)
-          throw Error(
-            `mesh transport: no listener registered for ${target}`,
-          );
+          throw Error(`mesh transport: no listener registered for ${target}`);
         const [outgoing, incoming] = makeBidirectional();
         accept(incoming);
         return outgoing;

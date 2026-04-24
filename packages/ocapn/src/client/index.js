@@ -307,9 +307,7 @@ export const makeOcapn = async ({
         // Fire-and-forget: the network's writer returns a promise but
         // the Connection.write contract is synchronous. Errors are
         // handled by the reader pump below (end-of-stream → endSession).
-        void Promise.resolve(networkSession.writer.next(bytes)).catch(
-          () => {},
-        );
+        void Promise.resolve(networkSession.writer.next(bytes)).catch(() => {});
       },
       end() {
         if (isDestroyed) return;
@@ -614,7 +612,10 @@ export const makeOcapn = async ({
   // (e.g. `tcp-testing-only`) rely on the factory form.
   network =
     typeof networkArg === 'function'
-      ? await /** @type {NetworkFactory} */ (networkArg)(netlayerHandlers, logger)
+      ? await /** @type {NetworkFactory} */ (networkArg)(
+          netlayerHandlers,
+          logger,
+        )
       : /** @type {AnyNetwork} */ (networkArg);
 
   // Belt-and-suspenders: if the network declares its codec, ensure

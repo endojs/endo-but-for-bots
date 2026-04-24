@@ -132,6 +132,29 @@ export const makeWebSocketTransport = ({
   /** @type {any} */
   let server;
 
+  /** @type {OcapnNoiseTransport['listen']} */
+  const listen = WebSocketServer
+    ? async handler => {
+        server = new WebSocketServer({ port, host });
+        await new Promise(resolve => {
+          server.on('listening', () => resolve(undefined));
+        });
+        server.on(
+          'connection',
+          /** @param {any} ws */ ws => {
+            handler(adaptWebSocket(ws));
+          },
+        );
+        const addr = server.address();
+        /** @type {TransportListener} */
+        const listener = harden({
+          hints: { url: `ws://${addr.address}:${addr.port}` },
+          close: () => server.close(),
+        });
+        return listener;
+      }
+    : undefined;
+
   /** @type {OcapnNoiseTransport} */
   const transport = harden({
     scheme: 'ws',
@@ -145,24 +168,7 @@ export const makeWebSocketTransport = ({
       });
       return adaptWebSocket(ws);
     },
-    listen: WebSocketServer
-      ? async handler => {
-          server = new WebSocketServer({ port, host });
-          await new Promise(resolve => {
-            server.on('listening', () => resolve(undefined));
-          });
-          server.on('connection', /** @param {any} ws */ ws => {
-            handler(adaptWebSocket(ws));
-          });
-          const addr = server.address();
-          /** @type {TransportListener} */
-          const listener = harden({
-            hints: { url: `ws://${addr.address}:${addr.port}` },
-            close: () => server.close(),
-          });
-          return listener;
-        }
-      : undefined,
+    ...(listen && { listen }),
     shutdown: () => {
       if (server) server.close();
     },

@@ -10,10 +10,7 @@ import net from 'node:net';
 import harden from '@endo/harden';
 import { makeNodeReader } from '@endo/stream-node/reader.js';
 import { makeNodeWriter } from '@endo/stream-node/writer.js';
-import {
-  makeNetstringReader,
-  makeNetstringWriter,
-} from '@endo/netstring';
+import { makeNetstringReader, makeNetstringWriter } from '@endo/netstring';
 
 const { isNaN } = Number;
 

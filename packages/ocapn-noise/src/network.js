@@ -385,9 +385,7 @@ export const makeOcapnNoiseNetwork = ({
   const selectOutgoingTransport = location => {
     const { hints } = location;
     if (!hints || typeof hints !== 'object') {
-      throw Error(
-        `ocapn-noise: location ${location.designator} has no hints`,
-      );
+      throw Error(`ocapn-noise: location ${location.designator} has no hints`);
     }
     for (const transport of registeredTransports) {
       const prefix = `${transport.scheme}:`;
@@ -492,8 +490,9 @@ export const makeOcapnNoiseNetwork = ({
     }
     return {
       peerLocation: advertised,
-      peerLocationSignature:
-        /** @type {OcapnSignature} */ (message.locationSignature),
+      peerLocationSignature: /** @type {OcapnSignature} */ (
+        message.locationSignature
+      ),
       peerPublicKey,
       location,
       locationSignature,
@@ -633,8 +632,7 @@ export const makeOcapnNoiseNetwork = ({
    *
    * @param {Uint8Array} prefixedSyn
    */
-  const tiebreakerFromPrefixedSyn = prefixedSyn =>
-    prefixedSyn.slice(32, 64);
+  const tiebreakerFromPrefixedSyn = prefixedSyn => prefixedSyn.slice(32, 64);
 
   /**
    * Drive the initiator side of a single handshake. Does not wait for
@@ -836,7 +834,10 @@ export const makeOcapnNoiseNetwork = ({
     const keyId = toHex(publicKey);
     if (registeredKeys.has(keyId)) return keyId;
     const keyPair = cryptography.makeOcapnKeyPairFromPrivateKey(privateKey);
-    registeredKeys.set(keyId, harden({ keyId, privateKey, publicKey, keyPair }));
+    registeredKeys.set(
+      keyId,
+      harden({ keyId, privateKey, publicKey, keyPair }),
+    );
     return keyId;
   };
 
@@ -853,9 +854,7 @@ export const makeOcapnNoiseNetwork = ({
       // Call `listen` first so a failure can't leave a half-registered
       // transport behind; only add to the set once the listener is
       // live.
-      const listener = await transport.listen(stream =>
-        handleIncoming(stream),
-      );
+      const listener = await transport.listen(stream => handleIncoming(stream));
       registeredTransports.add(transport);
       listenersByTransport.set(transport, listener);
     } else {
@@ -884,7 +883,11 @@ export const makeOcapnNoiseNetwork = ({
     return buildLocationFor(rk);
   };
 
-  /** @type {OcapnNoiseNetwork['provideSession']} */
+  /**
+   * @type {OcapnNoiseNetwork['provideSession']}
+   * @param {OcapnLocation} remote
+   * @param {{ localKeyId?: KeyIdHex }} [options]
+   */
   const provideSession = async (remote, { localKeyId } = {}) => {
     if (registeredKeys.size === 0) {
       throw Error(

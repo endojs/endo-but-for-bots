@@ -58,7 +58,9 @@ export const enlivenSturdyRef = async (
   if (isSelfLocation(location)) {
     const value = await locator.get(secret);
     if (value === undefined) {
-      throw Error(`ocapn: locator has no capability for secret ${JSON.stringify(secret)}`);
+      throw Error(
+        `ocapn: locator has no capability for secret ${JSON.stringify(secret)}`,
+      );
     }
     return value;
   }

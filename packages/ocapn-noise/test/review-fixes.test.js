@@ -147,43 +147,46 @@ test('provideSession rejects after handshake timeout', async t => {
 // Phase 3 — configurable TCP framing (`framing: 'none'`)
 // ──────────────────────────────────────────────────────────────────────
 
-tcpTest('tcp transport with framing:none delivers raw socket bytes', async t => {
-  const transport = makeTcpTransport({ framing: 'none' });
-  /** @type {(s: import('../src/types.js').ByteStream) => void} */
-  let resolveStream = () => {};
-  /** @type {Promise<import('../src/types.js').ByteStream>} */
-  const serverStreamPromise = new Promise(resolve => {
-    resolveStream = resolve;
-  });
-  /* eslint-disable-next-line no-use-before-define -- we capture the listen handler into a promise */
-  const listen = transport.listen;
-  if (!listen) throw Error('tcp transport must expose listen');
-  const listener = await listen(stream => {
-    resolveStream(stream);
-  });
+tcpTest(
+  'tcp transport with framing:none delivers raw socket bytes',
+  async t => {
+    const transport = makeTcpTransport({ framing: 'none' });
+    /** @type {(s: import('../src/types.js').ByteStream) => void} */
+    let resolveStream = () => {};
+    /** @type {Promise<import('../src/types.js').ByteStream>} */
+    const serverStreamPromise = new Promise(resolve => {
+      resolveStream = resolve;
+    });
+    /* eslint-disable-next-line no-use-before-define -- we capture the listen handler into a promise */
+    const listen = transport.listen;
+    if (!listen) throw Error('tcp transport must expose listen');
+    const listener = await listen(stream => {
+      resolveStream(stream);
+    });
 
-  // Connect a raw Node socket (not through the transport) so we
-  // control bytes on the wire exactly.
-  const sock = rawNet.createConnection({
-    host: listener.hints.host,
-    port: Number.parseInt(listener.hints.port, 10),
-  });
-  await new Promise((resolve, reject) => {
-    sock.once('connect', resolve);
-    sock.once('error', reject);
-  });
-  sock.write(Uint8Array.of(0x48, 0x49)); // raw 'HI' — not a netstring
+    // Connect a raw Node socket (not through the transport) so we
+    // control bytes on the wire exactly.
+    const sock = rawNet.createConnection({
+      host: listener.hints.host,
+      port: Number.parseInt(listener.hints.port, 10),
+    });
+    await new Promise((resolve, reject) => {
+      sock.once('connect', resolve);
+      sock.once('error', reject);
+    });
+    sock.write(Uint8Array.of(0x48, 0x49)); // raw 'HI' — not a netstring
 
-  const serverStream = await serverStreamPromise;
-  const first = await serverStream.reader.next(undefined);
-  t.false(first.done);
-  if (!first.done) {
-    t.deepEqual(Array.from(first.value), [0x48, 0x49]);
-  }
+    const serverStream = await serverStreamPromise;
+    const first = await serverStream.reader.next(undefined);
+    t.false(first.done);
+    if (!first.done) {
+      t.deepEqual(Array.from(first.value), [0x48, 0x49]);
+    }
 
-  sock.destroy();
-  transport.shutdown();
-});
+    sock.destroy();
+    transport.shutdown();
+  },
+);
 
 test('tcp transport rejects an invalid framing option', t => {
   t.throws(
@@ -255,8 +258,7 @@ test('addTransport rolls back when listen fails', async t => {
     shutdown: () => {},
   });
   await t.throwsAsync(
-    async () =>
-      net.addTransport(/** @type {any} */ (broken)),
+    async () => net.addTransport(/** @type {any} */ (broken)),
     { message: /synthetic listen failure/ },
   );
   t.deepEqual(net.listTransports(), []);

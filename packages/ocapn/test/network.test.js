@@ -30,9 +30,11 @@ const makeAuthenticatedPair = () => {
 test('makeOcapn requires codec', async t => {
   await t.throwsAsync(
     async () =>
-      makeOcapn(/** @type {any} */ ({
-        network: harden({ networkId: 'x', shutdown: () => {} }),
-      })),
+      makeOcapn(
+        /** @type {any} */ ({
+          network: harden({ networkId: 'x', shutdown: () => {} }),
+        }),
+      ),
     { message: /`codec` is required/ },
   );
 });
@@ -55,10 +57,9 @@ test('makeOcapn rejects codec mismatch against network.codec', async t => {
       throw Error('not called');
     },
   });
-  await t.throwsAsync(
-    async () => makeOcapn({ codec: syrupCodec, network }),
-    { message: /`network.codec` does not match `codec`/ },
-  );
+  await t.throwsAsync(async () => makeOcapn({ codec: syrupCodec, network }), {
+    message: /`network.codec` does not match `codec`/,
+  });
 });
 
 test('makeOcapn rejects a network that implements neither connect nor provideSession', async t => {

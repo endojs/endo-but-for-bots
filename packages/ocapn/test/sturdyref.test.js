@@ -21,7 +21,11 @@ testWithErrorUnwrapping('SturdyRef is a tagged type', async t => {
     'sturdyref',
     'ocapnPassStyleOf returns sturdyref',
   );
-  t.is(sturdyRef[Symbol.toStringTag], 'ocapn-sturdyref', 'has correct tag name');
+  t.is(
+    sturdyRef[Symbol.toStringTag],
+    'ocapn-sturdyref',
+    'has correct tag name',
+  );
   t.is(sturdyRef.payload, undefined, 'payload is undefined');
 
   clientA.shutdown();
@@ -41,29 +45,36 @@ testWithErrorUnwrapping("SturdyRef doesn't expose secret/location", async t => {
   t.false('swissNum' in sturdyRef, 'no swissNum property');
 
   const stringified = String(sturdyRef);
-  t.is(stringified, '[object ocapn-sturdyref]', 'stringification shows tag name');
+  t.is(
+    stringified,
+    '[object ocapn-sturdyref]',
+    'stringification shows tag name',
+  );
 
   clientA.shutdown();
   clientB.shutdown();
 });
 
-testWithErrorUnwrapping('isSturdyRef correctly identifies SturdyRefs', async t => {
-  const { client: clientA, location: locationB } = await makeTestClient({
-    debugLabel: 'A',
-  });
-  const { client: clientB } = await makeTestClient({ debugLabel: 'B' });
+testWithErrorUnwrapping(
+  'isSturdyRef correctly identifies SturdyRefs',
+  async t => {
+    const { client: clientA, location: locationB } = await makeTestClient({
+      debugLabel: 'A',
+    });
+    const { client: clientB } = await makeTestClient({ debugLabel: 'B' });
 
-  const sturdyRef = clientA.makeSturdyRef(locationB, 'test');
+    const sturdyRef = clientA.makeSturdyRef(locationB, 'test');
 
-  t.true(isSturdyRef(sturdyRef), 'isSturdyRef returns true for SturdyRef');
-  t.false(isSturdyRef({}), 'isSturdyRef returns false for plain object');
-  t.false(isSturdyRef(null), 'isSturdyRef returns false for null');
-  t.false(isSturdyRef(undefined), 'isSturdyRef returns false for undefined');
-  t.false(isSturdyRef('string'), 'isSturdyRef returns false for string');
+    t.true(isSturdyRef(sturdyRef), 'isSturdyRef returns true for SturdyRef');
+    t.false(isSturdyRef({}), 'isSturdyRef returns false for plain object');
+    t.false(isSturdyRef(null), 'isSturdyRef returns false for null');
+    t.false(isSturdyRef(undefined), 'isSturdyRef returns false for undefined');
+    t.false(isSturdyRef('string'), 'isSturdyRef returns false for string');
 
-  clientA.shutdown();
-  clientB.shutdown();
-});
+    clientA.shutdown();
+    clientB.shutdown();
+  },
+);
 
 testWithErrorUnwrapping(
   'getSturdyRefDetails returns correct details',

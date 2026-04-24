@@ -2,10 +2,7 @@
 
 import test from '@endo/ses-ava/test.js';
 import { makeQueue } from '@endo/stream';
-import {
-  makeNetstringReader,
-  makeNetstringWriter,
-} from '@endo/netstring';
+import { makeNetstringReader, makeNetstringWriter } from '@endo/netstring';
 
 /**
  * A minimal ack-less byte pipe for test-driving `@endo/netstring` over
@@ -142,7 +139,9 @@ test('netstring writer round-trip reassembles a large message split by the netwo
   const framedWriter = makeNetstringWriter(collect);
   const payload = new Uint8Array(16 * 1024);
   for (let i = 0; i < payload.length; i += 1) payload[i] = i % 256;
-  const writeDone = framedWriter.next(payload).then(() => collect.return(undefined));
+  const writeDone = framedWriter
+    .next(payload)
+    .then(() => collect.return(undefined));
 
   // Drain everything the writer emitted, concatenate, then splinter.
   const chunks = [];
