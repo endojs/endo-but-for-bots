@@ -20,7 +20,9 @@ test('handleRequest delivers payload', t => {
     onPayload: (body, headers) => payloads.push({ body, headers }),
   });
 
-  const result = handleRequest('{"event":"push"}', { 'content-type': 'application/json' });
+  const result = handleRequest('{"event":"push"}', {
+    'content-type': 'application/json',
+  });
   t.is(result.status, 200);
   t.is(payloads.length, 1);
   t.is(payloads[0].body, '{"event":"push"}');

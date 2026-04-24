@@ -779,11 +779,7 @@ export const makeHostMaker = ({
      * @param {number} [opts.maxRequestsPerMinute]
      * @param {number} [opts.maxResponseBytes]
      */
-    const makeHttpClientCmd = async (
-      petName,
-      allowedOrigins,
-      opts = {},
-    ) => {
+    const makeHttpClientCmd = async (petName, allowedOrigins, opts = {}) => {
       assertPetName(petName);
       /** @type {DeferredTasks<{ clientId: import('./types.js').FormulaIdentifier }>} */
       const tasks = makeDeferredTasks();

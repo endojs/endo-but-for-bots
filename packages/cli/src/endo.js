@@ -562,13 +562,7 @@ export const main = async rawArgs => {
     .option('--max-rpm <n>', 'max requests per minute')
     .option('--max-bytes <n>', 'max response size in bytes')
     .action(async cmd => {
-      const {
-        name,
-        as: agentNames,
-        origins,
-        maxRpm,
-        maxBytes,
-      } = cmd.opts();
+      const { name, as: agentNames, origins, maxRpm, maxBytes } = cmd.opts();
       if (!name) {
         throw new Error('--name is required for http-client');
       }

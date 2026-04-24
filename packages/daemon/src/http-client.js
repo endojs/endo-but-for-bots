@@ -135,33 +135,29 @@ export const makeHttpClientKit = options => {
       `Limits: ${currentMaxRequestsPerMinute} req/min, ${currentMaxResponseBytes} max bytes.`,
   });
 
-  const control = makeExo(
-    'HttpClientControl',
-    HttpClientControlInterface,
-    {
-      /** @param {string[]} origins */
-      setAllowedOrigins: origins => {
-        allowedOrigins = new Set(origins);
-      },
-      /** @param {number} n */
-      setMaxRequestsPerMinute: n => {
-        n >= 1 || Fail`maxRequestsPerMinute must be >= 1`;
-        currentMaxRequestsPerMinute = n;
-      },
-      /** @param {number} n */
-      setMaxResponseBytes: n => {
-        n >= 1 || Fail`maxResponseBytes must be >= 1`;
-        currentMaxResponseBytes = n;
-      },
-      revoke: () => {
-        revoked = true;
-      },
-      help: () =>
-        `HttpClientControl manages an HttpClient. ` +
-        `Methods: setAllowedOrigins(origins), setMaxRequestsPerMinute(n), ` +
-        `setMaxResponseBytes(n), revoke(), help().`,
+  const control = makeExo('HttpClientControl', HttpClientControlInterface, {
+    /** @param {string[]} origins */
+    setAllowedOrigins: origins => {
+      allowedOrigins = new Set(origins);
     },
-  );
+    /** @param {number} n */
+    setMaxRequestsPerMinute: n => {
+      n >= 1 || Fail`maxRequestsPerMinute must be >= 1`;
+      currentMaxRequestsPerMinute = n;
+    },
+    /** @param {number} n */
+    setMaxResponseBytes: n => {
+      n >= 1 || Fail`maxResponseBytes must be >= 1`;
+      currentMaxResponseBytes = n;
+    },
+    revoke: () => {
+      revoked = true;
+    },
+    help: () =>
+      `HttpClientControl manages an HttpClient. ` +
+      `Methods: setAllowedOrigins(origins), setMaxRequestsPerMinute(n), ` +
+      `setMaxResponseBytes(n), revoke(), help().`,
+  });
 
   return harden({ client, control });
 };

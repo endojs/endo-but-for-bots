@@ -568,24 +568,21 @@ const IntervalEntryShape = M.splitRecord({
   status: M.or('active', 'paused', 'cancelled'),
 });
 
-export const IntervalSchedulerInterface = M.interface(
-  'EndoIntervalScheduler',
-  {
-    makeInterval: M.callWhen(M.string(), M.number())
-      .optional(
-        M.splitRecord(
-          {},
-          {
-            firstDelayMs: M.number(),
-            tickTimeoutMs: M.number(),
-          },
-        ),
-      )
-      .returns(M.remotable('Interval')),
-    list: M.callWhen().returns(M.arrayOf(IntervalEntryShape)),
-    help: M.call().returns(M.string()),
-  },
-);
+export const IntervalSchedulerInterface = M.interface('EndoIntervalScheduler', {
+  makeInterval: M.callWhen(M.string(), M.number())
+    .optional(
+      M.splitRecord(
+        {},
+        {
+          firstDelayMs: M.number(),
+          tickTimeoutMs: M.number(),
+        },
+      ),
+    )
+    .returns(M.remotable('Interval')),
+  list: M.callWhen().returns(M.arrayOf(IntervalEntryShape)),
+  help: M.call().returns(M.string()),
+});
 
 export const IntervalInterface = M.interface('EndoInterval', {
   label: M.call().returns(M.string()),
@@ -633,7 +630,9 @@ const FetchResponseShape = M.splitRecord({
 });
 
 export const HttpClientInterface = M.interface('EndoHttpClient', {
-  fetch: M.callWhen(M.string()).optional(FetchOptionsShape).returns(FetchResponseShape),
+  fetch: M.callWhen(M.string())
+    .optional(FetchOptionsShape)
+    .returns(FetchResponseShape),
   allowedOrigins: M.call().returns(M.arrayOf(M.string())),
   help: M.call().returns(M.string()),
 });

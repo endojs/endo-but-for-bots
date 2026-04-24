@@ -81,10 +81,7 @@ export const makeWebhookKit = options => {
     // Rate limit check
     const now = Date.now();
     const windowStart = now - 60_000;
-    while (
-      requestTimestamps.length > 0 &&
-      requestTimestamps[0] < windowStart
-    ) {
+    while (requestTimestamps.length > 0 && requestTimestamps[0] < windowStart) {
       requestTimestamps.shift();
     }
     if (requestTimestamps.length >= currentRateLimit) {
@@ -104,53 +101,45 @@ export const makeWebhookKit = options => {
     return { status: 200, body: 'OK' };
   };
 
-  const endpoint = makeExo(
-    'WebhookEndpoint',
-    WebhookEndpointInterface,
-    {
-      url: () => {
-        assertNotRevoked();
-        return webhookUrl;
-      },
-      secret: () => {
-        assertNotRevoked();
-        return webhookSecret;
-      },
-      disable: () => {
-        assertNotRevoked();
-        enabled = false;
-      },
-      enable: () => {
-        assertNotRevoked();
-        enabled = true;
-      },
-      help: () =>
-        `WebhookEndpoint receives HTTP POSTs at ${webhookUrl}. ` +
-        `Methods: url(), secret(), disable(), enable(), help(). ` +
-        `Status: ${enabled ? 'enabled' : 'disabled'}.`,
+  const endpoint = makeExo('WebhookEndpoint', WebhookEndpointInterface, {
+    url: () => {
+      assertNotRevoked();
+      return webhookUrl;
     },
-  );
+    secret: () => {
+      assertNotRevoked();
+      return webhookSecret;
+    },
+    disable: () => {
+      assertNotRevoked();
+      enabled = false;
+    },
+    enable: () => {
+      assertNotRevoked();
+      enabled = true;
+    },
+    help: () =>
+      `WebhookEndpoint receives HTTP POSTs at ${webhookUrl}. ` +
+      `Methods: url(), secret(), disable(), enable(), help(). ` +
+      `Status: ${enabled ? 'enabled' : 'disabled'}.`,
+  });
 
-  const control = makeExo(
-    'WebhookControl',
-    WebhookControlInterface,
-    {
-      setMaxPayloadBytes: n => {
-        n >= 1 || Fail`maxPayloadBytes must be >= 1`;
-        currentMaxPayloadBytes = n;
-      },
-      setRateLimit: n => {
-        n >= 1 || Fail`rateLimit must be >= 1`;
-        currentRateLimit = n;
-      },
-      revoke: () => {
-        revoked = true;
-      },
-      help: () =>
-        `WebhookControl manages a webhook endpoint. ` +
-        `Methods: setMaxPayloadBytes(n), setRateLimit(n), revoke(), help().`,
+  const control = makeExo('WebhookControl', WebhookControlInterface, {
+    setMaxPayloadBytes: n => {
+      n >= 1 || Fail`maxPayloadBytes must be >= 1`;
+      currentMaxPayloadBytes = n;
     },
-  );
+    setRateLimit: n => {
+      n >= 1 || Fail`rateLimit must be >= 1`;
+      currentRateLimit = n;
+    },
+    revoke: () => {
+      revoked = true;
+    },
+    help: () =>
+      `WebhookControl manages a webhook endpoint. ` +
+      `Methods: setMaxPayloadBytes(n), setRateLimit(n), revoke(), help().`,
+  });
 
   return harden({ endpoint, control, handleRequest });
 };
