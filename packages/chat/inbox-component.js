@@ -241,9 +241,9 @@ export const inboxComponent = async (
       }
       $btn.onclick = () => {
         // @ts-expect-error expando property
-        if (typeof $message._setRenderMode === 'function') {
+        if (typeof $message.setRenderMode === 'function') {
           // @ts-expect-error expando property
-          $message._setRenderMode(mode);
+          $message.setRenderMode(mode);
           for (const $b of $renderModes.querySelectorAll('.render-mode-btn')) {
             $b.classList.remove('active');
           }
@@ -493,7 +493,7 @@ export const inboxComponent = async (
         renderBody(mode);
       };
       // @ts-expect-error expando property for render mode toggle
-      $message._setRenderMode = setRenderMode;
+      $message.setRenderMode = setRenderMode;
     } else if (message.type === 'definition') {
       const { source, slots } = message;
       assert(typeof source === 'string');
