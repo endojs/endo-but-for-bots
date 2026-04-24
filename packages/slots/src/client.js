@@ -200,7 +200,10 @@ export const makeSlotClient = ({
       // finalisation hook.
       finalizer.register(presence, harden({ ...desc }));
     }
-    return presence;
+    // Return whichever presence the c-list canonicalised on, so
+    // repeat calls to makePresence with the same descriptor yield
+    // the same object.
+    return registered;
   };
   harden(makePresence);
 
