@@ -13,6 +13,7 @@ import { createFormBuilder } from './form-builder.js';
 import { createBlobViewer } from './blob-viewer.js';
 import { createEndowModal } from './endow-modal.js';
 import { createInlineCommandForm } from './inline-command-form.js';
+import { makeVoiceInput } from './voice-input.js';
 import { createCommandExecutor } from './command-executor.js';
 import {
   getCommand,
@@ -133,6 +134,18 @@ export const chatBarComponent = (
   const $modeline = /** @type {HTMLElement} */ (
     $parent.querySelector('#chat-modeline')
   );
+
+  // Initialize voice input (Web Speech API).
+  const $buttonWrapper = /** @type {HTMLElement} */ (
+    $parent.querySelector('#chat-button-wrapper')
+  );
+  // voiceInput returns null if SpeechRecognition is not supported; we
+  // attach handlers via side effect so the return value is not consumed.
+  // eslint-disable-next-line no-unused-vars
+  const voiceInput = makeVoiceInput({
+    $container: $buttonWrapper,
+    $input,
+  });
 
   /**
    * Update the modeline content based on the current mode.
