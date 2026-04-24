@@ -25,14 +25,21 @@
     `HandledPromise.applyMethod` on the local target, and resolves
     pending reply promises when matching `resolve` envelopes arrive.
     Rejections rehydrate as `Error` instances.
+  - `makeMessageSlots` — drop-in analogue for
+    `makeMessageCapTP` from `packages/daemon/src/connection.js`.
+    Same `(name, writer, reader, cancelled, bootstrap)` signature;
+    returns `{ getBootstrap, closed, close }`.  Streams carry
+    `{ verb, payload }` envelope objects; callers wrap a byte pipe
+    with `encodeEnvelope` / `decodeEnvelope` to cross a pipe boundary.
 - **Pinned wire fixtures on both sides** — an empty-label SessionId
   and `worker-1` SessionId hex digests appear in both
   `packages/slots/test/session.test.js` and
   `rust/endo/slots/src/session.rs`.  Any divergence will fail either
   `yarn test` in `packages/slots` or `cargo test -p slots`.
-- **CapTP baseline** captured in `captp-baseline.md`; 57 JS unit
+- **CapTP baseline** captured in `captp-baseline.md`; 70 JS unit
   tests (descriptor / cbor / payload / session / clist / codec /
-  client) plus 39 Rust unit tests (previously 37) are green.
+  client / bootstrap / message / end-to-end) plus 39 Rust unit tests
+  (previously 37) are green.
 
 ## What's explicitly not in this PR
 
@@ -52,12 +59,23 @@ now in place; remaining work is the bus integration:
    presences + reply-promise table keyed by descriptor).
 3. ~~Error marshalling (`resolve` with `is_reject=1`)~~ — **done**;
    `makeSlotClient`'s `onResolve` rehydrates rejections as `Error`.
-4. **Still open**: splicing the client into `bus-worker-node-raw.js`
-   and `bus-daemon-rust-xs.js` behind an opt-in env flag.  This
-   needs a bootstrap handshake that lets both ends agree on the
-   initial root descriptor, plus drop-refcount management at the
-   JS boundary (the JS client doesn't yet track pillar decrements
-   for finalized presences — a `WeakRef`-backed finaliser will do).
+4. ~~Presence GC drop automation~~ — **done** via
+   `FinalizationRegistry` opt-in in `makeSlotClient`.
+5. ~~Bootstrap convention~~ — **done** via position-1 root in
+   `packages/slots/src/bootstrap.js`.
+6. ~~Drop-in analogue for `makeMessageCapTP`~~ — **done** via
+   `makeMessageSlots`.  Same signature, same return shape; the
+   actual bus integration is a one-line swap at the call site
+   plus wrapping the pipe with `encodeEnvelope` / `decodeEnvelope`.
+7. **Still open**: wiring `makeMessageSlots` into
+   `bus-worker-node-raw.js` and `bus-daemon-rust-xs.js` behind an
+   opt-in `ENDO_USE_SLOT_MACHINE=1`.  This requires
+   `bus-worker-node-powers.js` to stop hardcoding `verb: 'deliver'`
+   on its pipe writer (it currently wraps every CapTP payload as a
+   'deliver' envelope; slot-machine needs all four verbs to pass
+   through) and the XS daemon to run a parallel slot-machine path.
+   A working splice also needs the daemon integration tests
+   (`packages/daemon/test/endo.test.js`) to pass under the flag.
 
 The Rust supervisor already attempts `translate_deliver` /
 `translate_resolve` on every `deliver`/`resolve` envelope it routes
