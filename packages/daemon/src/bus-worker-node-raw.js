@@ -60,6 +60,9 @@ if (useSlotMachine) {
 
   let daemonHandle = 1;
 
+  /* eslint-disable no-await-in-loop -- The frame reader awaits each
+     envelope from fd 4 serially; concurrent reads would interleave
+     bytes. */
   const inboundFrames = (async function* envelopeFrames() {
     // Consume the init envelope first; the supervisor sends it
     // before any slot traffic.
@@ -79,6 +82,7 @@ if (useSlotMachine) {
       yield { verb: env.verb, payload: env.payload };
     }
   })();
+  /* eslint-enable no-await-in-loop */
 
   const envelopeWriter = harden({
     /** @param {{verb: string, payload: Uint8Array}} env */
