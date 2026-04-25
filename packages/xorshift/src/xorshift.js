@@ -1,9 +1,26 @@
+// @ts-check
 /* eslint no-bitwise: ["off"] */
 
-import harden from '@endo/harden';
-
-// Forked from CommonJS version at
+// Forked from the CommonJS xorshift package by Andreas Madsen,
+// originally released under the MIT License:
 // https://github.com/AndreasMadsen/xorshift/blob/d60ca9ca341957a9824908f733f30ce4592c9af4/xorshift.js
+//
+// Copyright (c) 2014 Andreas Madsen
+//
+// Permission is hereby granted, free of charge, to any person
+// obtaining a copy of this software and associated documentation
+// files (the "Software"), to deal in the Software without
+// restriction, including without limitation the rights to use, copy,
+// modify, merge, publish, distribute, sublicense, and/or sell copies
+// of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be
+// included in all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND.
+
+import harden from '@endo/harden';
 
 /**
  * @typedef {readonly [number, number, number, number]} XorShiftSeed
@@ -30,6 +47,20 @@ import harden from '@endo/harden';
 export const makeXorShift = seed => {
   if (!Array.isArray(seed) || seed.length !== 4) {
     throw TypeError('seed must be an array with 4 numbers');
+  }
+  for (const value of seed) {
+    if (!Number.isInteger(value)) {
+      throw TypeError(
+        'seed values must be integers (xorshift128+ degenerates to a fixed all-zero state when any seed coerces to 0)',
+      );
+    }
+  }
+  // xorshift128+ has an absorbing fixed point at the all-zero state:
+  // every output is `[0, 0]` and the state never recovers.  Reject it
+  // up front to surface the misuse rather than letting it silently
+  // produce a constant stream.
+  if (seed[0] === 0 && seed[1] === 0 && seed[2] === 0 && seed[3] === 0) {
+    throw TypeError('seed must not be all-zero (xorshift128+ fixed point)');
   }
 
   // uint64_t s = [seed ...]

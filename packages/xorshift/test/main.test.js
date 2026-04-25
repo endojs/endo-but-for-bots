@@ -91,4 +91,36 @@ test('throws TypeError on bad seed', t => {
   t.throws(() => makeXorShift(/** @type {any} */ ('not an array')), {
     instanceOf: TypeError,
   });
+  // Non-integer / non-finite seed values silently coerce to 0 via
+  // `| 0`, which can produce the all-zero fixed point or surprising
+  // sequences.  Reject up front.
+  t.throws(() => makeXorShift([NaN, NaN, NaN, NaN]), {
+    instanceOf: TypeError,
+  });
+  t.throws(() => makeXorShift([1.5, 0, 0, 0]), { instanceOf: TypeError });
+  t.throws(
+    () => makeXorShift(/** @type {any} */ ([1, 2, 3, 'four'])),
+    { instanceOf: TypeError },
+  );
+  // The all-zero state is the absorbing fixed point of xorshift128+.
+  t.throws(() => makeXorShift([0, 0, 0, 0]), { instanceOf: TypeError });
+});
+
+test('golden vector: first outputs match a pinned reference', t => {
+  // Pinned reference output for `seedA` from the upstream xorshift128+
+  // reference (AndreasMadsen/xorshift @ d60ca9c).  If a future
+  // "optimization" silently changes the stream, this will fail.
+  const prng = makeXorShift([...seedA]);
+  // First 4 randomint() outputs as `[hi, lo]`.
+  const expected = [
+    [0x616b81ff, 0xddf595bc],
+    [0x2b28a1b2, 0x2e0c4106],
+    [0x3156daaf, 0xbf870d61],
+    [0x471d80dd, 0x9dda9ea5],
+  ];
+  for (let i = 0; i < expected.length; i += 1) {
+    const [hi, lo] = prng.randomint();
+    t.is(hi, expected[i][0], `hi[${i}] mismatch`);
+    t.is(lo, expected[i][1], `lo[${i}] mismatch`);
+  }
 });
