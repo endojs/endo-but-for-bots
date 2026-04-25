@@ -40,6 +40,9 @@ export const makeDaemonicPersistencePowers = (
     const ephemeralStatePathP = filePowers.makePath(ephemeralStatePath);
     const cachePathP = filePowers.makePath(cachePath);
     await Promise.all([statePathP, cachePathP, ephemeralStatePathP]);
+    // Load durable replacements for the SQLite-only tables.
+    // eslint-disable-next-line no-use-before-define
+    await loadDurableState();
   };
 
   /** @type {DaemonicPersistencePowers['provideRootNonce']} */
@@ -207,17 +210,36 @@ export const makeDaemonicPersistencePowers = (
 
   // Persist instructions for revival (this can be collected).
   /** @type {DaemonicPersistencePowers['writeFormula']} */
-  const writeFormula = async (formulaNumber, _nodeNumber, formula) => {
+  const writeFormula = async (formulaNumber, nodeNumber, formula) => {
     const { directory, file } = makeFormulaPath(formulaNumber);
     // TODO Take care to write atomically with a rename here.
     await filePowers.makePath(directory);
     await filePowers.writeFileText(file, `${q(formula)}\n`);
+    if (nodeNumber) {
+      let bucket = formulasByNode.get(nodeNumber);
+      if (bucket === undefined) {
+        bucket = new Set();
+        formulasByNode.set(nodeNumber, bucket);
+      }
+      bucket.add(formulaNumber);
+      // eslint-disable-next-line no-use-before-define
+      persistFormulasByNode(nodeNumber);
+    }
   };
 
   /** @type {DaemonicPersistencePowers['deleteFormula']} */
   const deleteFormula = async formulaNumber => {
     const { file } = makeFormulaPath(formulaNumber);
     await filePowers.removePath(file);
+    // Drop from any per-node bucket that contains it.  (We don't
+    // know which without scanning; the indexes are small so a linear
+    // scan over node-number keys is fine.)
+    for (const [nodeNumber, bucket] of formulasByNode) {
+      if (bucket.delete(formulaNumber)) {
+        // eslint-disable-next-line no-use-before-define
+        persistFormulasByNode(nodeNumber);
+      }
+    }
   };
 
   /** @type {DaemonicPersistencePowers['listFormulas']} */
@@ -256,30 +278,203 @@ export const makeDaemonicPersistencePowers = (
     return records;
   };
 
-  // Minimal in-memory shim of the SQLite-only tables (agent keys,
-  // retention, per-node formula listing) that the filesystem
-  // persistence does not persist.  State lives only in process
-  // memory; callers that need real durability should run with the
-  // SQLite daemon.
+  // Filesystem-backed replacements for the SQLite-only tables.
+  // Caches in memory for synchronous access; writes are serialised
+  // per-file through a promise chain.  Callers' mutators stay
+  // synchronous (matching the SQLite contract); the disk write is
+  // scheduled and chained.  Failures land on the promise chain
+  // (logged to stderr) but the cache stays consistent.
+  const { statePath } = config;
+  const agentKeysPath = filePowers.joinPath(statePath, 'agent-keys.json');
+  const remoteAgentKeysPath = filePowers.joinPath(
+    statePath,
+    'remote-agent-keys.json',
+  );
+  const retentionDir = filePowers.joinPath(statePath, 'retention');
+  const formulasByNodeDir = filePowers.joinPath(statePath, 'formulas-by-node');
+
   /** @type {Map<string, { publicKey: string, privateKey: string, agentId: string }>} */
   const agentKeys = new Map();
   /** @type {Map<string, string>} */
   const remoteAgentKeys = new Map();
   /** @type {Map<string, Set<string>>} */
   const retention = new Map();
+  /** @type {Map<string, Set<string>>} */
+  const formulasByNode = new Map();
 
-  const listFormulaNumbersByNode = _nodeNumber => [];
+  /**
+   * Per-file write chain.  Each enqueued task runs after the prior
+   * one settles.  Failures propagate to a single sink that logs but
+   * does not stall the chain.
+   *
+   * @returns {(task: () => Promise<void>) => void}
+   */
+  const makeWriteChain = () => {
+    /** @type {Promise<void>} */
+    let last = Promise.resolve();
+    const enqueue = task => {
+      last = last
+        .then(() => task())
+        .catch(err => {
+          console.error('Persistence write failed:', err);
+        });
+    };
+    return enqueue;
+  };
+  const writeAgentKeysChain = makeWriteChain();
+  const writeRemoteAgentKeysChain = makeWriteChain();
+  /** @type {Map<string, (task: () => Promise<void>) => void>} */
+  const retentionChains = new Map();
+  /** @type {Map<string, (task: () => Promise<void>) => void>} */
+  const byNodeChains = new Map();
+
+  /** @param {string} path @param {string} text */
+  const atomicWriteText = async (path, text) => {
+    const tmp = `${path}.tmp`;
+    await filePowers.writeFileText(tmp, text);
+    await filePowers.renamePath(tmp, path);
+  };
+
+  const persistAgentKeys = () => {
+    writeAgentKeysChain(async () => {
+      const arr = Array.from(agentKeys.values());
+      await atomicWriteText(agentKeysPath, JSON.stringify(arr));
+    });
+  };
+  const persistRemoteAgentKeys = () => {
+    writeRemoteAgentKeysChain(async () => {
+      const obj = Object.fromEntries(remoteAgentKeys);
+      await atomicWriteText(remoteAgentKeysPath, JSON.stringify(obj));
+    });
+  };
+  /** @param {string} guestPublicKey */
+  const persistRetention = guestPublicKey => {
+    let chain = retentionChains.get(guestPublicKey);
+    if (chain === undefined) {
+      chain = makeWriteChain();
+      retentionChains.set(guestPublicKey, chain);
+    }
+    const file = filePowers.joinPath(retentionDir, `${guestPublicKey}.json`);
+    chain(async () => {
+      const set = retention.get(guestPublicKey);
+      await filePowers.makePath(retentionDir);
+      if (set === undefined || set.size === 0) {
+        await filePowers.removePath(file).catch(err => {
+          const msg = String(err.message || err);
+          if (
+            !msg.startsWith('ENOENT: ') &&
+            !msg.includes('No such file or directory')
+          )
+            throw err;
+        });
+        return;
+      }
+      await atomicWriteText(file, JSON.stringify(Array.from(set)));
+    });
+  };
+  /** @param {string} nodeNumber */
+  const persistFormulasByNode = nodeNumber => {
+    let chain = byNodeChains.get(nodeNumber);
+    if (chain === undefined) {
+      chain = makeWriteChain();
+      byNodeChains.set(nodeNumber, chain);
+    }
+    const file = filePowers.joinPath(formulasByNodeDir, `${nodeNumber}.json`);
+    chain(async () => {
+      const set = formulasByNode.get(nodeNumber);
+      await filePowers.makePath(formulasByNodeDir);
+      if (set === undefined || set.size === 0) {
+        await filePowers.removePath(file).catch(err => {
+          const msg = String(err.message || err);
+          if (
+            !msg.startsWith('ENOENT: ') &&
+            !msg.includes('No such file or directory')
+          )
+            throw err;
+        });
+        return;
+      }
+      await atomicWriteText(file, JSON.stringify(Array.from(set)));
+    });
+  };
+
+  const loadDurableState = async () => {
+    const agentKeysText = await filePowers.maybeReadFileText(agentKeysPath);
+    if (agentKeysText !== undefined) {
+      const arr = JSON.parse(agentKeysText);
+      for (const record of arr) {
+        agentKeys.set(record.publicKey, record);
+      }
+    }
+    const remoteText = await filePowers.maybeReadFileText(remoteAgentKeysPath);
+    if (remoteText !== undefined) {
+      const obj = JSON.parse(remoteText);
+      for (const [pk, node] of Object.entries(obj)) {
+        remoteAgentKeys.set(pk, /** @type {string} */ (node));
+      }
+    }
+    // Eagerly load retention buckets and per-node indexes — they're
+    // small and the queries are synchronous.
+    /** @param {Error} err */
+    const isNotFoundError = err => {
+      const msg = String(err.message || err);
+      return (
+        msg.startsWith('ENOENT: ') || msg.includes('No such file or directory')
+      );
+    };
+    const retentionFiles = await filePowers
+      .readDirectory(retentionDir)
+      .catch(err => {
+        if (isNotFoundError(err)) return [];
+        throw err;
+      });
+    await Promise.all(
+      retentionFiles.map(async fileName => {
+        if (!fileName.endsWith('.json')) return;
+        const guestPublicKey = fileName.slice(0, -'.json'.length);
+        const text = await filePowers.readFileText(
+          filePowers.joinPath(retentionDir, fileName),
+        );
+        retention.set(guestPublicKey, new Set(JSON.parse(text)));
+      }),
+    );
+    const byNodeFiles = await filePowers
+      .readDirectory(formulasByNodeDir)
+      .catch(err => {
+        if (isNotFoundError(err)) return [];
+        throw err;
+      });
+    await Promise.all(
+      byNodeFiles.map(async fileName => {
+        if (!fileName.endsWith('.json')) return;
+        const nodeNumber = fileName.slice(0, -'.json'.length);
+        const text = await filePowers.readFileText(
+          filePowers.joinPath(formulasByNodeDir, fileName),
+        );
+        formulasByNode.set(nodeNumber, new Set(JSON.parse(text)));
+      }),
+    );
+  };
+
+  /** @param {string} nodeNumber */
+  const listFormulaNumbersByNode = nodeNumber => {
+    const set = formulasByNode.get(nodeNumber);
+    return set ? Array.from(set) : [];
+  };
   const writeAgentKey = (publicKey, privateKey, agentId) => {
     agentKeys.set(publicKey, { publicKey, privateKey, agentId });
+    persistAgentKeys();
   };
   const getAgentKey = publicKey => agentKeys.get(publicKey);
   const hasAgentKey = publicKey => agentKeys.has(publicKey);
   const listAgentKeys = () => Array.from(agentKeys.values());
   const deleteAgentKey = publicKey => {
     agentKeys.delete(publicKey);
+    persistAgentKeys();
   };
   const writeRemoteAgentKey = (publicKey, daemonNode) => {
     remoteAgentKeys.set(publicKey, daemonNode);
+    persistRemoteAgentKeys();
   };
   const getRemoteAgentKey = publicKey => remoteAgentKeys.get(publicKey);
   const retentionBucket = guestPublicKey => {
@@ -292,9 +487,11 @@ export const makeDaemonicPersistencePowers = (
   };
   const writeRetention = (guestPublicKey, formulaNumber) => {
     retentionBucket(guestPublicKey).add(formulaNumber);
+    persistRetention(guestPublicKey);
   };
   const deleteRetention = (guestPublicKey, formulaNumber) => {
     retentionBucket(guestPublicKey).delete(formulaNumber);
+    persistRetention(guestPublicKey);
   };
   const listRetention = guestPublicKey =>
     Array.from(retentionBucket(guestPublicKey), formulaNumber => ({
@@ -302,9 +499,11 @@ export const makeDaemonicPersistencePowers = (
     }));
   const replaceRetention = (guestPublicKey, formulaNumbers) => {
     retention.set(guestPublicKey, new Set(formulaNumbers));
+    persistRetention(guestPublicKey);
   };
   const deleteAllRetention = guestPublicKey => {
     retention.delete(guestPublicKey);
+    persistRetention(guestPublicKey);
   };
 
   return harden({

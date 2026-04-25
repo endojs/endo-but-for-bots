@@ -620,6 +620,34 @@
       GET_INTERFACE_GUARD: cell("GET_INTERFACE_GUARD"),
     },
     {
+      BufferWriter: cell("BufferWriter"),
+    },
+    {
+      crc32: cell("crc32"),
+    },
+    {
+      LOCAL_FILE_HEADER: cell("LOCAL_FILE_HEADER"),
+      CENTRAL_FILE_HEADER: cell("CENTRAL_FILE_HEADER"),
+      CENTRAL_DIRECTORY_END: cell("CENTRAL_DIRECTORY_END"),
+      ZIP64_CENTRAL_DIRECTORY_LOCATOR: cell("ZIP64_CENTRAL_DIRECTORY_LOCATOR"),
+      ZIP64_CENTRAL_DIRECTORY_END: cell("ZIP64_CENTRAL_DIRECTORY_END"),
+      DATA_DESCRIPTOR: cell("DATA_DESCRIPTOR"),
+    },
+    {
+      STORE: cell("STORE"),
+    },
+    {
+      writeZipRecords: cell("writeZipRecords"),
+      writeZip: cell("writeZip"),
+    },
+    {
+      ZipWriter: cell("ZipWriter"),
+      writeZip: cell("writeZip"),
+    },
+    {
+      ZipWriter: cell("ZipWriter"),
+    },
+    {
       AsyncIteratorInterface: cell("AsyncIteratorInterface"),
       ReadableBlobInterface: cell("ReadableBlobInterface"),
       SnapshotBlobInterface: cell("SnapshotBlobInterface"),
@@ -949,15 +977,17 @@
 
   defineProperties(cells[79], {"initEmpty": { value: cells[76]["initEmpty"] },"GET_INTERFACE_GUARD": { value: cells[74]["GET_INTERFACE_GUARD"] } });
 
-  defineProperties(cells[87], {"encodeBase64": { value: cells[85]["encodeBase64"] } });
+  defineProperties(cells[86], {"ZipWriter": { value: cells[85]["ZipWriter"] } });
 
-  defineProperties(cells[89], {"decodeBase64": { value: cells[86]["decodeBase64"] } });
+  defineProperties(cells[94], {"encodeBase64": { value: cells[92]["encodeBase64"] } });
 
-  defineProperties(cells[91], {"encodeBase64": { value: cells[85]["encodeBase64"] },"decodeBase64": { value: cells[86]["decodeBase64"] },"btoa": { value: cells[88]["btoa"] },"atob": { value: cells[90]["atob"] } });
+  defineProperties(cells[96], {"decodeBase64": { value: cells[93]["decodeBase64"] } });
 
-  defineProperties(cells[96], {"AsyncIteratorInterface": { value: cells[80]["AsyncIteratorInterface"] },"ReadableBlobInterface": { value: cells[80]["ReadableBlobInterface"] },"SnapshotBlobInterface": { value: cells[80]["SnapshotBlobInterface"] },"ReadableTreeInterface": { value: cells[80]["ReadableTreeInterface"] },"SnapshotTreeInterface": { value: cells[80]["SnapshotTreeInterface"] },"ContentStoreInterface": { value: cells[80]["ContentStoreInterface"] },"SnapshotStoreInterface": { value: cells[80]["SnapshotStoreInterface"] },"TreeWriterInterface": { value: cells[80]["TreeWriterInterface"] },"FileInterface": { value: cells[80]["FileInterface"] },"DirectoryInterface": { value: cells[80]["DirectoryInterface"] },"snapshotBlobMethods": { value: cells[81]["snapshotBlobMethods"] },"snapshotTreeMethods": { value: cells[82]["snapshotTreeMethods"] },"makeSnapshotStore": { value: cells[83]["makeSnapshotStore"] },"checkinTree": { value: cells[93]["checkinTree"] },"checkoutTree": { value: cells[94]["checkoutTree"] },"makeRefReader": { value: cells[92]["makeRefReader"] },"makeRefIterator": { value: cells[92]["makeRefIterator"] },"makeReaderRef": { value: cells[95]["makeReaderRef"] },"makeIteratorRef": { value: cells[95]["makeIteratorRef"] },"asyncIterate": { value: cells[95]["asyncIterate"] } });
+  defineProperties(cells[98], {"encodeBase64": { value: cells[92]["encodeBase64"] },"decodeBase64": { value: cells[93]["decodeBase64"] },"btoa": { value: cells[95]["btoa"] },"atob": { value: cells[97]["atob"] } });
 
-  defineProperties(cells[130], {"makeNetstringReader": { value: cells[128]["makeNetstringReader"] },"netstringReader": { value: cells[128]["netstringReader"] },"makeNetstringWriter": { value: cells[129]["makeNetstringWriter"] },"netstringWriter": { value: cells[129]["netstringWriter"] } });
+  defineProperties(cells[103], {"AsyncIteratorInterface": { value: cells[87]["AsyncIteratorInterface"] },"ReadableBlobInterface": { value: cells[87]["ReadableBlobInterface"] },"SnapshotBlobInterface": { value: cells[87]["SnapshotBlobInterface"] },"ReadableTreeInterface": { value: cells[87]["ReadableTreeInterface"] },"SnapshotTreeInterface": { value: cells[87]["SnapshotTreeInterface"] },"ContentStoreInterface": { value: cells[87]["ContentStoreInterface"] },"SnapshotStoreInterface": { value: cells[87]["SnapshotStoreInterface"] },"TreeWriterInterface": { value: cells[87]["TreeWriterInterface"] },"FileInterface": { value: cells[87]["FileInterface"] },"DirectoryInterface": { value: cells[87]["DirectoryInterface"] },"snapshotBlobMethods": { value: cells[88]["snapshotBlobMethods"] },"snapshotTreeMethods": { value: cells[89]["snapshotTreeMethods"] },"makeSnapshotStore": { value: cells[90]["makeSnapshotStore"] },"checkinTree": { value: cells[100]["checkinTree"] },"checkoutTree": { value: cells[101]["checkoutTree"] },"makeRefReader": { value: cells[99]["makeRefReader"] },"makeRefIterator": { value: cells[99]["makeRefIterator"] },"makeReaderRef": { value: cells[102]["makeReaderRef"] },"makeIteratorRef": { value: cells[102]["makeIteratorRef"] },"asyncIterate": { value: cells[102]["asyncIterate"] } });
+
+  defineProperties(cells[137], {"makeNetstringReader": { value: cells[135]["makeNetstringReader"] },"netstringReader": { value: cells[135]["netstringReader"] },"makeNetstringWriter": { value: cells[136]["makeNetstringWriter"] },"netstringWriter": { value: cells[136]["netstringWriter"] } });
 
   const namespaces = cells.map(cells => freeze(create(null, {
     ...cells,
@@ -2311,237 +2341,220 @@ function observeImports(map, importName, importIndex) {
   functors[80]({
     imports(entries) {
       const map = new Map(entries);
-      observeImports(map, "@endo/patterns", 73);
     },
     liveVar: {
     },
     onceVar: {
-      AsyncIteratorInterface: cells[80].AsyncIteratorInterface.set,
-      ReadableBlobInterface: cells[80].ReadableBlobInterface.set,
-      SnapshotBlobInterface: cells[80].SnapshotBlobInterface.set,
-      ReadableTreeInterface: cells[80].ReadableTreeInterface.set,
-      SnapshotTreeInterface: cells[80].SnapshotTreeInterface.set,
-      ContentStoreInterface: cells[80].ContentStoreInterface.set,
-      SnapshotStoreInterface: cells[80].SnapshotStoreInterface.set,
-      TreeWriterInterface: cells[80].TreeWriterInterface.set,
-      FileInterface: cells[80].FileInterface.set,
-      DirectoryInterface: cells[80].DirectoryInterface.set,
+      BufferWriter: cells[80].BufferWriter.set,
     },
     importMeta: {},
   });
   functors[81]({
     imports(entries) {
       const map = new Map(entries);
-      observeImports(map, "@endo/harden", 3);
     },
     liveVar: {
     },
     onceVar: {
-      snapshotBlobMethods: cells[81].snapshotBlobMethods.set,
+      crc32: cells[81].crc32.set,
     },
     importMeta: {},
   });
   functors[82]({
     imports(entries) {
       const map = new Map(entries);
-      observeImports(map, "@endo/harden", 3);
-      observeImports(map, "@endo/far", 55);
     },
     liveVar: {
     },
     onceVar: {
-      snapshotTreeMethods: cells[82].snapshotTreeMethods.set,
+      LOCAL_FILE_HEADER: cells[82].LOCAL_FILE_HEADER.set,
+      CENTRAL_FILE_HEADER: cells[82].CENTRAL_FILE_HEADER.set,
+      CENTRAL_DIRECTORY_END: cells[82].CENTRAL_DIRECTORY_END.set,
+      ZIP64_CENTRAL_DIRECTORY_LOCATOR: cells[82].ZIP64_CENTRAL_DIRECTORY_LOCATOR.set,
+      ZIP64_CENTRAL_DIRECTORY_END: cells[82].ZIP64_CENTRAL_DIRECTORY_END.set,
+      DATA_DESCRIPTOR: cells[82].DATA_DESCRIPTOR.set,
     },
     importMeta: {},
   });
   functors[83]({
     imports(entries) {
       const map = new Map(entries);
-      observeImports(map, "@endo/harden", 3);
-      observeImports(map, "@endo/exo", 79);
-      observeImports(map, "./interfaces.js", 80);
-      observeImports(map, "./snapshot-blob.js", 81);
-      observeImports(map, "./snapshot-tree.js", 82);
     },
     liveVar: {
     },
     onceVar: {
-      makeSnapshotStore: cells[83].makeSnapshotStore.set,
+      STORE: cells[83].STORE.set,
     },
     importMeta: {},
   });
   functors[84]({
     imports(entries) {
       const map = new Map(entries);
+      observeImports(map, "./crc32.js", 81);
+      observeImports(map, "./signature.js", 82);
+      observeImports(map, "./compression.js", 83);
     },
     liveVar: {
     },
     onceVar: {
-      padding: cells[84].padding.set,
-      alphabet64: cells[84].alphabet64.set,
-      monodu64: cells[84].monodu64.set,
+      writeZipRecords: cells[84].writeZipRecords.set,
+      writeZip: cells[84].writeZip.set,
     },
     importMeta: {},
   });
   functors[85]({
     imports(entries) {
       const map = new Map(entries);
-      observeImports(map, "./common.js", 84);
+      observeImports(map, "./buffer-writer.js", 80);
+      observeImports(map, "./format-writer.js", 84);
     },
     liveVar: {
     },
     onceVar: {
-      jsEncodeBase64: cells[85].jsEncodeBase64.set,
-      encodeBase64: cells[85].encodeBase64.set,
+      ZipWriter: cells[85].ZipWriter.set,
+      writeZip: cells[85].writeZip.set,
     },
     importMeta: {},
   });
   functors[86]({
     imports(entries) {
       const map = new Map(entries);
-      observeImports(map, "./common.js", 84);
+      observeImports(map, "./src/writer.js", 85);
     },
     liveVar: {
     },
     onceVar: {
-      jsDecodeBase64: cells[86].jsDecodeBase64.set,
-      decodeBase64: cells[86].decodeBase64.set,
     },
     importMeta: {},
   });
   functors[87]({
     imports(entries) {
       const map = new Map(entries);
-      observeImports(map, "./src/encode.js", 85);
+      observeImports(map, "@endo/patterns", 73);
     },
     liveVar: {
     },
     onceVar: {
+      AsyncIteratorInterface: cells[87].AsyncIteratorInterface.set,
+      ReadableBlobInterface: cells[87].ReadableBlobInterface.set,
+      SnapshotBlobInterface: cells[87].SnapshotBlobInterface.set,
+      ReadableTreeInterface: cells[87].ReadableTreeInterface.set,
+      SnapshotTreeInterface: cells[87].SnapshotTreeInterface.set,
+      ContentStoreInterface: cells[87].ContentStoreInterface.set,
+      SnapshotStoreInterface: cells[87].SnapshotStoreInterface.set,
+      TreeWriterInterface: cells[87].TreeWriterInterface.set,
+      FileInterface: cells[87].FileInterface.set,
+      DirectoryInterface: cells[87].DirectoryInterface.set,
     },
     importMeta: {},
   });
   functors[88]({
     imports(entries) {
       const map = new Map(entries);
-      observeImports(map, "./encode.js", 87);
+      observeImports(map, "@endo/harden", 3);
     },
     liveVar: {
     },
     onceVar: {
-      btoa: cells[88].btoa.set,
+      snapshotBlobMethods: cells[88].snapshotBlobMethods.set,
     },
     importMeta: {},
   });
   functors[89]({
     imports(entries) {
       const map = new Map(entries);
-      observeImports(map, "./src/decode.js", 86);
+      observeImports(map, "@endo/harden", 3);
+      observeImports(map, "@endo/far", 55);
     },
     liveVar: {
     },
     onceVar: {
+      snapshotTreeMethods: cells[89].snapshotTreeMethods.set,
     },
     importMeta: {},
   });
   functors[90]({
     imports(entries) {
       const map = new Map(entries);
-      observeImports(map, "./decode.js", 89);
+      observeImports(map, "@endo/harden", 3);
+      observeImports(map, "@endo/exo", 79);
+      observeImports(map, "./interfaces.js", 87);
+      observeImports(map, "./snapshot-blob.js", 88);
+      observeImports(map, "./snapshot-tree.js", 89);
     },
     liveVar: {
     },
     onceVar: {
-      atob: cells[90].atob.set,
+      makeSnapshotStore: cells[90].makeSnapshotStore.set,
     },
     importMeta: {},
   });
   functors[91]({
     imports(entries) {
       const map = new Map(entries);
-      observeImports(map, "./src/encode.js", 85);
-      observeImports(map, "./src/decode.js", 86);
-      observeImports(map, "./btoa.js", 88);
-      observeImports(map, "./atob.js", 90);
     },
     liveVar: {
     },
     onceVar: {
+      padding: cells[91].padding.set,
+      alphabet64: cells[91].alphabet64.set,
+      monodu64: cells[91].monodu64.set,
     },
     importMeta: {},
   });
   functors[92]({
     imports(entries) {
       const map = new Map(entries);
-      observeImports(map, "@endo/harden", 3);
-      observeImports(map, "@endo/base64", 91);
-      observeImports(map, "@endo/stream", 56);
-      observeImports(map, "@endo/far", 55);
+      observeImports(map, "./common.js", 91);
     },
     liveVar: {
     },
     onceVar: {
-      makeRefIterator: cells[92].makeRefIterator.set,
-      makeRefReader: cells[92].makeRefReader.set,
+      jsEncodeBase64: cells[92].jsEncodeBase64.set,
+      encodeBase64: cells[92].encodeBase64.set,
     },
     importMeta: {},
   });
   functors[93]({
     imports(entries) {
       const map = new Map(entries);
-      observeImports(map, "@endo/harden", 3);
-      observeImports(map, "@endo/far", 55);
-      observeImports(map, "./ref-reader.js", 92);
+      observeImports(map, "./common.js", 91);
     },
     liveVar: {
     },
     onceVar: {
-      checkinTree: cells[93].checkinTree.set,
+      jsDecodeBase64: cells[93].jsDecodeBase64.set,
+      decodeBase64: cells[93].decodeBase64.set,
     },
     importMeta: {},
   });
   functors[94]({
     imports(entries) {
       const map = new Map(entries);
-      observeImports(map, "@endo/harden", 3);
-      observeImports(map, "@endo/far", 55);
-      observeImports(map, "./ref-reader.js", 92);
+      observeImports(map, "./src/encode.js", 92);
     },
     liveVar: {
     },
     onceVar: {
-      checkoutTree: cells[94].checkoutTree.set,
     },
     importMeta: {},
   });
   functors[95]({
     imports(entries) {
       const map = new Map(entries);
-      observeImports(map, "@endo/harden", 3);
-      observeImports(map, "@endo/base64", 91);
-      observeImports(map, "@endo/stream", 56);
-      observeImports(map, "@endo/exo", 79);
-      observeImports(map, "./interfaces.js", 80);
+      observeImports(map, "./encode.js", 94);
     },
     liveVar: {
     },
     onceVar: {
-      asyncIterate: cells[95].asyncIterate.set,
-      makeIteratorRef: cells[95].makeIteratorRef.set,
-      makeReaderRef: cells[95].makeReaderRef.set,
+      btoa: cells[95].btoa.set,
     },
     importMeta: {},
   });
   functors[96]({
     imports(entries) {
       const map = new Map(entries);
-      observeImports(map, "./interfaces.js", 80);
-      observeImports(map, "./snapshot-blob.js", 81);
-      observeImports(map, "./snapshot-tree.js", 82);
-      observeImports(map, "./snapshot-store.js", 83);
-      observeImports(map, "./checkin.js", 93);
-      observeImports(map, "./checkout.js", 94);
-      observeImports(map, "./ref-reader.js", 92);
-      observeImports(map, "./reader-ref.js", 95);
+      observeImports(map, "./src/decode.js", 93);
     },
     liveVar: {
     },
@@ -2552,52 +2565,26 @@ function observeImports(map, importName, importIndex) {
   functors[97]({
     imports(entries) {
       const map = new Map(entries);
-      observeImports(map, "@endo/harden", 3);
-      observeImports(map, "@endo/base64", 91);
-      observeImports(map, "@endo/stream", 56);
-      observeImports(map, "@endo/far", 55);
+      observeImports(map, "./decode.js", 96);
     },
     liveVar: {
     },
     onceVar: {
-      makeRefIterator: cells[97].makeRefIterator.set,
-      makeRefReader: cells[97].makeRefReader.set,
+      atob: cells[97].atob.set,
     },
     importMeta: {},
   });
   functors[98]({
     imports(entries) {
       const map = new Map(entries);
-      observeImports(map, "@endo/patterns", 73);
+      observeImports(map, "./src/encode.js", 92);
+      observeImports(map, "./src/decode.js", 93);
+      observeImports(map, "./btoa.js", 95);
+      observeImports(map, "./atob.js", 97);
     },
     liveVar: {
     },
     onceVar: {
-      WorkerInterface: cells[98].WorkerInterface.set,
-      PeerGatewayInterface: cells[98].PeerGatewayInterface.set,
-      ResponderInterface: cells[98].ResponderInterface.set,
-      NameHubInterface: cells[98].NameHubInterface.set,
-      EnvelopeInterface: cells[98].EnvelopeInterface.set,
-      DismisserInterface: cells[98].DismisserInterface.set,
-      HandleInterface: cells[98].HandleInterface.set,
-      AsyncIteratorInterface: cells[98].AsyncIteratorInterface.set,
-      DirectoryInterface: cells[98].DirectoryInterface.set,
-      GuestInterface: cells[98].GuestInterface.set,
-      HostInterface: cells[98].HostInterface.set,
-      ChannelInterface: cells[98].ChannelInterface.set,
-      ChannelMemberInterface: cells[98].ChannelMemberInterface.set,
-      ChannelInvitationInterface: cells[98].ChannelInvitationInterface.set,
-      AttenuatorInterface: cells[98].AttenuatorInterface.set,
-      InvitationInterface: cells[98].InvitationInterface.set,
-      InspectorHubInterface: cells[98].InspectorHubInterface.set,
-      InspectorInterface: cells[98].InspectorInterface.set,
-      BlobInterface: cells[98].BlobInterface.set,
-      MountInterface: cells[98].MountInterface.set,
-      MountFileInterface: cells[98].MountFileInterface.set,
-      ReadableTreeInterface: cells[98].ReadableTreeInterface.set,
-      DaemonFacetForWorkerInterface: cells[98].DaemonFacetForWorkerInterface.set,
-      WorkerFacetForDaemonInterface: cells[98].WorkerFacetForDaemonInterface.set,
-      EndoInterface: cells[98].EndoInterface.set,
     },
     importMeta: {},
   });
@@ -2605,164 +2592,296 @@ function observeImports(map, importName, importIndex) {
     imports(entries) {
       const map = new Map(entries);
       observeImports(map, "@endo/harden", 3);
-      observeImports(map, "@endo/base64", 91);
+      observeImports(map, "@endo/base64", 98);
       observeImports(map, "@endo/stream", 56);
-      observeImports(map, "@endo/exo", 79);
-      observeImports(map, "./interfaces.js", 98);
+      observeImports(map, "@endo/far", 55);
     },
     liveVar: {
     },
     onceVar: {
-      asyncIterate: cells[99].asyncIterate.set,
-      makeIteratorRef: cells[99].makeIteratorRef.set,
-      makeReaderRef: cells[99].makeReaderRef.set,
+      makeRefIterator: cells[99].makeRefIterator.set,
+      makeRefReader: cells[99].makeRefReader.set,
     },
     importMeta: {},
   });
   functors[100]({
     imports(entries) {
       const map = new Map(entries);
-      observeImports(map, "@endo/errors", 9);
+      observeImports(map, "@endo/harden", 3);
+      observeImports(map, "@endo/far", 55);
+      observeImports(map, "./ref-reader.js", 99);
     },
     liveVar: {
     },
     onceVar: {
-      isValidNumber: cells[100].isValidNumber.set,
-      assertValidNumber: cells[100].assertValidNumber.set,
-      assertFormulaNumber: cells[100].assertFormulaNumber.set,
-      assertNodeNumber: cells[100].assertNodeNumber.set,
-      assertValidId: cells[100].assertValidId.set,
-      parseId: cells[100].parseId.set,
-      formatId: cells[100].formatId.set,
+      checkinTree: cells[100].checkinTree.set,
     },
     importMeta: {},
   });
   functors[101]({
     imports(entries) {
       const map = new Map(entries);
-      observeImports(map, "@endo/errors", 9);
+      observeImports(map, "@endo/harden", 3);
+      observeImports(map, "@endo/far", 55);
+      observeImports(map, "./ref-reader.js", 99);
     },
     liveVar: {
     },
     onceVar: {
-      isValidFormulaType: cells[101].isValidFormulaType.set,
-      assertValidFormulaType: cells[101].assertValidFormulaType.set,
+      checkoutTree: cells[101].checkoutTree.set,
     },
     importMeta: {},
   });
   functors[102]({
     imports(entries) {
       const map = new Map(entries);
-      observeImports(map, "@endo/errors", 9);
-      observeImports(map, "./formula-identifier.js", 100);
-      observeImports(map, "./formula-type.js", 101);
+      observeImports(map, "@endo/harden", 3);
+      observeImports(map, "@endo/base64", 98);
+      observeImports(map, "@endo/stream", 56);
+      observeImports(map, "@endo/exo", 79);
+      observeImports(map, "./interfaces.js", 87);
     },
     liveVar: {
     },
     onceVar: {
-      LOCAL_NODE: cells[102].LOCAL_NODE.set,
-      parseLocator: cells[102].parseLocator.set,
-      assertValidLocator: cells[102].assertValidLocator.set,
-      formatLocator: cells[102].formatLocator.set,
-      idFromLocator: cells[102].idFromLocator.set,
-      formatLocatorForSharing: cells[102].formatLocatorForSharing.set,
-      addressesFromLocator: cells[102].addressesFromLocator.set,
-      externalizeId: cells[102].externalizeId.set,
-      internalizeLocator: cells[102].internalizeLocator.set,
+      asyncIterate: cells[102].asyncIterate.set,
+      makeIteratorRef: cells[102].makeIteratorRef.set,
+      makeReaderRef: cells[102].makeReaderRef.set,
     },
     importMeta: {},
   });
   functors[103]({
     imports(entries) {
       const map = new Map(entries);
-      observeImports(map, "@endo/errors", 9);
+      observeImports(map, "./interfaces.js", 87);
+      observeImports(map, "./snapshot-blob.js", 88);
+      observeImports(map, "./snapshot-tree.js", 89);
+      observeImports(map, "./snapshot-store.js", 90);
+      observeImports(map, "./checkin.js", 100);
+      observeImports(map, "./checkout.js", 101);
+      observeImports(map, "./ref-reader.js", 99);
+      observeImports(map, "./reader-ref.js", 102);
     },
     liveVar: {
     },
     onceVar: {
-      isValidName: cells[103].isValidName.set,
-      isPetName: cells[103].isPetName.set,
-      isSpecialName: cells[103].isSpecialName.set,
-      isName: cells[103].isName.set,
-      assertPetName: cells[103].assertPetName.set,
-      assertSpecialName: cells[103].assertSpecialName.set,
-      assertName: cells[103].assertName.set,
-      assertEdgeName: cells[103].assertEdgeName.set,
-      assertNames: cells[103].assertNames.set,
-      assertPetNames: cells[103].assertPetNames.set,
-      assertNamePath: cells[103].assertNamePath.set,
-      assertPetNamePath: cells[103].assertPetNamePath.set,
-      namePathFrom: cells[103].namePathFrom.set,
     },
     importMeta: {},
   });
   functors[104]({
     imports(entries) {
       const map = new Map(entries);
+      observeImports(map, "@endo/harden", 3);
+      observeImports(map, "@endo/base64", 98);
+      observeImports(map, "@endo/stream", 56);
+      observeImports(map, "@endo/far", 55);
     },
     liveVar: {
     },
     onceVar: {
-      makeDeferredTasks: cells[104].makeDeferredTasks.set,
+      makeRefIterator: cells[104].makeRefIterator.set,
+      makeRefReader: cells[104].makeRefReader.set,
     },
     importMeta: {},
   });
   functors[105]({
     imports(entries) {
       const map = new Map(entries);
-      observeImports(map, "@endo/harden", 3);
+      observeImports(map, "@endo/patterns", 73);
     },
     liveVar: {
     },
     onceVar: {
-      helpTextEntries: cells[105].helpTextEntries.set,
+      WorkerInterface: cells[105].WorkerInterface.set,
+      PeerGatewayInterface: cells[105].PeerGatewayInterface.set,
+      ResponderInterface: cells[105].ResponderInterface.set,
+      NameHubInterface: cells[105].NameHubInterface.set,
+      EnvelopeInterface: cells[105].EnvelopeInterface.set,
+      DismisserInterface: cells[105].DismisserInterface.set,
+      HandleInterface: cells[105].HandleInterface.set,
+      AsyncIteratorInterface: cells[105].AsyncIteratorInterface.set,
+      DirectoryInterface: cells[105].DirectoryInterface.set,
+      GuestInterface: cells[105].GuestInterface.set,
+      HostInterface: cells[105].HostInterface.set,
+      ChannelInterface: cells[105].ChannelInterface.set,
+      ChannelMemberInterface: cells[105].ChannelMemberInterface.set,
+      ChannelInvitationInterface: cells[105].ChannelInvitationInterface.set,
+      AttenuatorInterface: cells[105].AttenuatorInterface.set,
+      InvitationInterface: cells[105].InvitationInterface.set,
+      InspectorHubInterface: cells[105].InspectorHubInterface.set,
+      InspectorInterface: cells[105].InspectorInterface.set,
+      BlobInterface: cells[105].BlobInterface.set,
+      MountInterface: cells[105].MountInterface.set,
+      MountFileInterface: cells[105].MountFileInterface.set,
+      ReadableTreeInterface: cells[105].ReadableTreeInterface.set,
+      DaemonFacetForWorkerInterface: cells[105].DaemonFacetForWorkerInterface.set,
+      WorkerFacetForDaemonInterface: cells[105].WorkerFacetForDaemonInterface.set,
+      EndoInterface: cells[105].EndoInterface.set,
     },
     importMeta: {},
   });
   functors[106]({
     imports(entries) {
       const map = new Map(entries);
-      observeImports(map, "./help-text-data.js", 105);
+      observeImports(map, "@endo/harden", 3);
+      observeImports(map, "@endo/base64", 98);
+      observeImports(map, "@endo/stream", 56);
+      observeImports(map, "@endo/exo", 79);
+      observeImports(map, "./interfaces.js", 105);
     },
     liveVar: {
     },
     onceVar: {
-      directoryHelp: cells[106].directoryHelp.set,
-      mailHelp: cells[106].mailHelp.set,
-      guestHelp: cells[106].guestHelp.set,
-      hostHelp: cells[106].hostHelp.set,
-      blobHelp: cells[106].blobHelp.set,
-      endoHelp: cells[106].endoHelp.set,
-      readableTreeHelp: cells[106].readableTreeHelp.set,
-      mountHelp: cells[106].mountHelp.set,
-      mountFileHelp: cells[106].mountFileHelp.set,
-      makeHelp: cells[106].makeHelp.set,
+      asyncIterate: cells[106].asyncIterate.set,
+      makeIteratorRef: cells[106].makeIteratorRef.set,
+      makeReaderRef: cells[106].makeReaderRef.set,
     },
     importMeta: {},
   });
   functors[107]({
     imports(entries) {
       const map = new Map(entries);
-      observeImports(map, "@endo/harden", 3);
-      observeImports(map, "@endo/base64", 91);
-      observeImports(map, "@endo/far", 55);
-      observeImports(map, "@endo/exo", 79);
       observeImports(map, "@endo/errors", 9);
-      observeImports(map, "./reader-ref.js", 99);
-      observeImports(map, "./locator.js", 102);
-      observeImports(map, "./pet-name.js", 103);
-      observeImports(map, "./deferred-tasks.js", 104);
-      observeImports(map, "./help-text.js", 106);
-      observeImports(map, "./interfaces.js", 98);
     },
     liveVar: {
     },
     onceVar: {
-      makeDirectoryMaker: cells[107].makeDirectoryMaker.set,
+      isValidNumber: cells[107].isValidNumber.set,
+      assertValidNumber: cells[107].assertValidNumber.set,
+      assertFormulaNumber: cells[107].assertFormulaNumber.set,
+      assertNodeNumber: cells[107].assertNodeNumber.set,
+      assertValidId: cells[107].assertValidId.set,
+      parseId: cells[107].parseId.set,
+      formatId: cells[107].formatId.set,
     },
     importMeta: {},
   });
   functors[108]({
+    imports(entries) {
+      const map = new Map(entries);
+      observeImports(map, "@endo/errors", 9);
+    },
+    liveVar: {
+    },
+    onceVar: {
+      isValidFormulaType: cells[108].isValidFormulaType.set,
+      assertValidFormulaType: cells[108].assertValidFormulaType.set,
+    },
+    importMeta: {},
+  });
+  functors[109]({
+    imports(entries) {
+      const map = new Map(entries);
+      observeImports(map, "@endo/errors", 9);
+      observeImports(map, "./formula-identifier.js", 107);
+      observeImports(map, "./formula-type.js", 108);
+    },
+    liveVar: {
+    },
+    onceVar: {
+      LOCAL_NODE: cells[109].LOCAL_NODE.set,
+      parseLocator: cells[109].parseLocator.set,
+      assertValidLocator: cells[109].assertValidLocator.set,
+      formatLocator: cells[109].formatLocator.set,
+      idFromLocator: cells[109].idFromLocator.set,
+      formatLocatorForSharing: cells[109].formatLocatorForSharing.set,
+      addressesFromLocator: cells[109].addressesFromLocator.set,
+      externalizeId: cells[109].externalizeId.set,
+      internalizeLocator: cells[109].internalizeLocator.set,
+    },
+    importMeta: {},
+  });
+  functors[110]({
+    imports(entries) {
+      const map = new Map(entries);
+      observeImports(map, "@endo/errors", 9);
+    },
+    liveVar: {
+    },
+    onceVar: {
+      isValidName: cells[110].isValidName.set,
+      isPetName: cells[110].isPetName.set,
+      isSpecialName: cells[110].isSpecialName.set,
+      isName: cells[110].isName.set,
+      assertPetName: cells[110].assertPetName.set,
+      assertSpecialName: cells[110].assertSpecialName.set,
+      assertName: cells[110].assertName.set,
+      assertEdgeName: cells[110].assertEdgeName.set,
+      assertNames: cells[110].assertNames.set,
+      assertPetNames: cells[110].assertPetNames.set,
+      assertNamePath: cells[110].assertNamePath.set,
+      assertPetNamePath: cells[110].assertPetNamePath.set,
+      namePathFrom: cells[110].namePathFrom.set,
+    },
+    importMeta: {},
+  });
+  functors[111]({
+    imports(entries) {
+      const map = new Map(entries);
+    },
+    liveVar: {
+    },
+    onceVar: {
+      makeDeferredTasks: cells[111].makeDeferredTasks.set,
+    },
+    importMeta: {},
+  });
+  functors[112]({
+    imports(entries) {
+      const map = new Map(entries);
+      observeImports(map, "@endo/harden", 3);
+    },
+    liveVar: {
+    },
+    onceVar: {
+      helpTextEntries: cells[112].helpTextEntries.set,
+    },
+    importMeta: {},
+  });
+  functors[113]({
+    imports(entries) {
+      const map = new Map(entries);
+      observeImports(map, "./help-text-data.js", 112);
+    },
+    liveVar: {
+    },
+    onceVar: {
+      directoryHelp: cells[113].directoryHelp.set,
+      mailHelp: cells[113].mailHelp.set,
+      guestHelp: cells[113].guestHelp.set,
+      hostHelp: cells[113].hostHelp.set,
+      blobHelp: cells[113].blobHelp.set,
+      endoHelp: cells[113].endoHelp.set,
+      readableTreeHelp: cells[113].readableTreeHelp.set,
+      mountHelp: cells[113].mountHelp.set,
+      mountFileHelp: cells[113].mountFileHelp.set,
+      makeHelp: cells[113].makeHelp.set,
+    },
+    importMeta: {},
+  });
+  functors[114]({
+    imports(entries) {
+      const map = new Map(entries);
+      observeImports(map, "@endo/harden", 3);
+      observeImports(map, "@endo/base64", 98);
+      observeImports(map, "@endo/far", 55);
+      observeImports(map, "@endo/exo", 79);
+      observeImports(map, "@endo/errors", 9);
+      observeImports(map, "./reader-ref.js", 106);
+      observeImports(map, "./locator.js", 109);
+      observeImports(map, "./pet-name.js", 110);
+      observeImports(map, "./deferred-tasks.js", 111);
+      observeImports(map, "./help-text.js", 113);
+      observeImports(map, "./interfaces.js", 105);
+    },
+    liveVar: {
+    },
+    onceVar: {
+      makeDirectoryMaker: cells[114].makeDirectoryMaker.set,
+    },
+    importMeta: {},
+  });
+  functors[115]({
     imports(entries) {
       const map = new Map(entries);
       observeImports(map, "@endo/harden", 3);
@@ -2772,14 +2891,14 @@ function observeImports(map, importName, importIndex) {
     liveVar: {
     },
     onceVar: {
-      makeNullQueue: cells[108].makeNullQueue.set,
-      nullIteratorQueue: cells[108].nullIteratorQueue.set,
-      makeChangePubSub: cells[108].makeChangePubSub.set,
-      makeChangeTopic: cells[108].makeChangeTopic.set,
+      makeNullQueue: cells[115].makeNullQueue.set,
+      nullIteratorQueue: cells[115].nullIteratorQueue.set,
+      makeChangePubSub: cells[115].makeChangePubSub.set,
+      makeChangeTopic: cells[115].makeChangeTopic.set,
     },
     importMeta: {},
   });
-  functors[109]({
+  functors[116]({
     imports(entries) {
       const map = new Map(entries);
       observeImports(map, "@endo/stream", 56);
@@ -2787,11 +2906,11 @@ function observeImports(map, importName, importIndex) {
     liveVar: {
     },
     onceVar: {
-      makeSerialJobs: cells[109].makeSerialJobs.set,
+      makeSerialJobs: cells[116].makeSerialJobs.set,
     },
     importMeta: {},
   });
-  functors[110]({
+  functors[117]({
     imports(entries) {
       const map = new Map(entries);
       observeImports(map, "@endo/harden", 3);
@@ -2800,121 +2919,121 @@ function observeImports(map, importName, importIndex) {
       observeImports(map, "@endo/promise-kit", 22);
       observeImports(map, "@endo/errors", 9);
       observeImports(map, "@endo/patterns", 73);
-      observeImports(map, "./pubsub.js", 108);
-      observeImports(map, "./formula-identifier.js", 100);
-      observeImports(map, "./pet-name.js", 103);
-      observeImports(map, "./deferred-tasks.js", 104);
-      observeImports(map, "./serial-jobs.js", 109);
-      observeImports(map, "./locator.js", 102);
-      observeImports(map, "./interfaces.js", 98);
+      observeImports(map, "./pubsub.js", 115);
+      observeImports(map, "./formula-identifier.js", 107);
+      observeImports(map, "./pet-name.js", 110);
+      observeImports(map, "./deferred-tasks.js", 111);
+      observeImports(map, "./serial-jobs.js", 116);
+      observeImports(map, "./locator.js", 109);
+      observeImports(map, "./interfaces.js", 105);
     },
     liveVar: {
     },
     onceVar: {
-      assertMailboxStoreName: cells[110].assertMailboxStoreName.set,
-      makeMailboxMaker: cells[110].makeMailboxMaker.set,
+      assertMailboxStoreName: cells[117].assertMailboxStoreName.set,
+      makeMailboxMaker: cells[117].makeMailboxMaker.set,
     },
     importMeta: {},
   });
-  functors[111]({
+  functors[118]({
     imports(entries) {
       const map = new Map(entries);
       observeImports(map, "@endo/harden", 3);
       observeImports(map, "@endo/errors", 9);
-      observeImports(map, "./pet-name.js", 103);
-      observeImports(map, "./formula-identifier.js", 100);
+      observeImports(map, "./pet-name.js", 110);
+      observeImports(map, "./formula-identifier.js", 107);
     },
     liveVar: {
     },
     onceVar: {
-      makePetSitter: cells[111].makePetSitter.set,
+      makePetSitter: cells[118].makePetSitter.set,
     },
     importMeta: {},
   });
-  functors[112]({
+  functors[119]({
     imports(entries) {
       const map = new Map(entries);
       observeImports(map, "@endo/far", 55);
       observeImports(map, "@endo/exo", 79);
       observeImports(map, "@endo/errors", 9);
-      observeImports(map, "./reader-ref.js", 99);
-      observeImports(map, "./pet-sitter.js", 111);
-      observeImports(map, "./pet-name.js", 103);
-      observeImports(map, "./deferred-tasks.js", 104);
-      observeImports(map, "./interfaces.js", 98);
-      observeImports(map, "./help-text.js", 106);
+      observeImports(map, "./reader-ref.js", 106);
+      observeImports(map, "./pet-sitter.js", 118);
+      observeImports(map, "./pet-name.js", 110);
+      observeImports(map, "./deferred-tasks.js", 111);
+      observeImports(map, "./interfaces.js", 105);
+      observeImports(map, "./help-text.js", 113);
     },
     liveVar: {
     },
     onceVar: {
-      makeGuestMaker: cells[112].makeGuestMaker.set,
+      makeGuestMaker: cells[119].makeGuestMaker.set,
     },
     importMeta: {},
   });
-  functors[113]({
+  functors[120]({
     imports(entries) {
       const map = new Map(entries);
       observeImports(map, "@endo/exo", 79);
       observeImports(map, "@endo/errors", 9);
-      observeImports(map, "./reader-ref.js", 99);
-      observeImports(map, "./pubsub.js", 108);
-      observeImports(map, "./interfaces.js", 98);
-      observeImports(map, "./help-text.js", 106);
+      observeImports(map, "./reader-ref.js", 106);
+      observeImports(map, "./pubsub.js", 115);
+      observeImports(map, "./interfaces.js", 105);
+      observeImports(map, "./help-text.js", 113);
     },
     liveVar: {
     },
     onceVar: {
-      makeChannelMaker: cells[113].makeChannelMaker.set,
+      makeChannelMaker: cells[120].makeChannelMaker.set,
     },
     importMeta: {},
   });
-  functors[114]({
+  functors[121]({
     imports(entries) {
       const map = new Map(entries);
     },
     liveVar: {
     },
     onceVar: {
-      toHex: cells[114].toHex.set,
-      fromHex: cells[114].fromHex.set,
+      toHex: cells[121].toHex.set,
+      fromHex: cells[121].fromHex.set,
     },
     importMeta: {},
   });
-  functors[115]({
+  functors[122]({
     imports(entries) {
       const map = new Map(entries);
       observeImports(map, "@endo/far", 55);
       observeImports(map, "@endo/exo", 79);
       observeImports(map, "@endo/errors", 9);
-      observeImports(map, "./reader-ref.js", 99);
-      observeImports(map, "./pet-name.js", 103);
-      observeImports(map, "./formula-identifier.js", 100);
-      observeImports(map, "./locator.js", 102);
-      observeImports(map, "./hex.js", 114);
-      observeImports(map, "./pet-sitter.js", 111);
-      observeImports(map, "./deferred-tasks.js", 104);
-      observeImports(map, "./interfaces.js", 98);
-      observeImports(map, "./help-text.js", 106);
+      observeImports(map, "./reader-ref.js", 106);
+      observeImports(map, "./pet-name.js", 110);
+      observeImports(map, "./formula-identifier.js", 107);
+      observeImports(map, "./locator.js", 109);
+      observeImports(map, "./hex.js", 121);
+      observeImports(map, "./pet-sitter.js", 118);
+      observeImports(map, "./deferred-tasks.js", 111);
+      observeImports(map, "./interfaces.js", 105);
+      observeImports(map, "./help-text.js", 113);
     },
     liveVar: {
     },
     onceVar: {
-      makeHostMaker: cells[115].makeHostMaker.set,
+      makeHostMaker: cells[122].makeHostMaker.set,
     },
     importMeta: {},
   });
-  functors[116]({
+  functors[123]({
     imports(entries) {
       const map = new Map(entries);
     },
     liveVar: {
     },
     onceVar: {
-      makeRemoteControlProvider: cells[116].makeRemoteControlProvider.set,
+      makeRemoteControlProvider: cells[123].makeRemoteControlProvider.set,
     },
     importMeta: {},
   });
-  functors[117]({
+  functors[124]({
     imports(entries) {
       const map = new Map(entries);
       observeImports(map, "@endo/harden", 3);
@@ -2923,35 +3042,35 @@ function observeImports(map, importName, importIndex) {
     liveVar: {
     },
     onceVar: {
-      makeContextMaker: cells[117].makeContextMaker.set,
+      makeContextMaker: cells[124].makeContextMaker.set,
     },
     importMeta: {},
   });
-  functors[118]({
+  functors[125]({
     imports(entries) {
       const map = new Map(entries);
     },
     liveVar: {
     },
     onceVar: {
-      makeFormulaGraph: cells[118].makeFormulaGraph.set,
+      makeFormulaGraph: cells[125].makeFormulaGraph.set,
     },
     importMeta: {},
   });
-  functors[119]({
+  functors[126]({
     imports(entries) {
       const map = new Map(entries);
       observeImports(map, "@endo/harden", 3);
-      observeImports(map, "./pubsub.js", 108);
+      observeImports(map, "./pubsub.js", 115);
     },
     liveVar: {
     },
     onceVar: {
-      makeRetentionAccumulator: cells[119].makeRetentionAccumulator.set,
+      makeRetentionAccumulator: cells[126].makeRetentionAccumulator.set,
     },
     importMeta: {},
   });
-  functors[120]({
+  functors[127]({
     imports(entries) {
       const map = new Map(entries);
       observeImports(map, "@endo/captp", 53);
@@ -2960,136 +3079,7 @@ function observeImports(map, importName, importIndex) {
     liveVar: {
     },
     onceVar: {
-      makeResidenceTracker: cells[120].makeResidenceTracker.set,
-    },
-    importMeta: {},
-  });
-  functors[121]({
-    imports(entries) {
-      const map = new Map(entries);
-      observeImports(map, "@endo/harden", 3);
-    },
-    liveVar: {
-    },
-    onceVar: {
-      makeLocalStoreController: cells[121].makeLocalStoreController.set,
-    },
-    importMeta: {},
-  });
-  functors[122]({
-    imports(entries) {
-      const map = new Map(entries);
-      observeImports(map, "@endo/errors", 9);
-    },
-    liveVar: {
-    },
-    onceVar: {
-      makeMultimap: cells[122].makeMultimap.set,
-      makeWeakMultimap: cells[122].makeWeakMultimap.set,
-      makeBidirectionalMultimap: cells[122].makeBidirectionalMultimap.set,
-    },
-    importMeta: {},
-  });
-  functors[123]({
-    imports(entries) {
-      const map = new Map(entries);
-      observeImports(map, "@endo/far", 55);
-    },
-    liveVar: {
-    },
-    onceVar: {
-      makeLoopbackNetwork: cells[123].makeLoopbackNetwork.set,
-    },
-    importMeta: {},
-  });
-  functors[124]({
-    imports(entries) {
-      const map = new Map(entries);
-      observeImports(map, "@endo/errors", 9);
-      observeImports(map, "@endo/exo", 79);
-      observeImports(map, "./help-text.js", 106);
-      observeImports(map, "./interfaces.js", 98);
-      observeImports(map, "./reader-ref.js", 99);
-    },
-    liveVar: {
-    },
-    onceVar: {
-      makeMount: cells[124].makeMount.set,
-    },
-    importMeta: {},
-  });
-  functors[125]({
-    imports(entries) {
-      const map = new Map(entries);
-      observeImports(map, "@endo/harden", 3);
-      observeImports(map, "@endo/exo", 79);
-      observeImports(map, "@endo/far", 55);
-      observeImports(map, "@endo/marshal", 47);
-      observeImports(map, "@endo/promise-kit", 22);
-      observeImports(map, "@endo/errors", 9);
-      observeImports(map, "@endo/platform/fs/lite", 96);
-      observeImports(map, "./ref-reader.js", 97);
-      observeImports(map, "./reader-ref.js", 99);
-      observeImports(map, "./directory.js", 107);
-      observeImports(map, "./deferred-tasks.js", 104);
-      observeImports(map, "./mail.js", 110);
-      observeImports(map, "./guest.js", 112);
-      observeImports(map, "./channel.js", 113);
-      observeImports(map, "./host.js", 115);
-      observeImports(map, "./remote-control.js", 116);
-      observeImports(map, "./pet-name.js", 103);
-      observeImports(map, "./locator.js", 102);
-      observeImports(map, "./context.js", 117);
-      observeImports(map, "./formula-identifier.js", 100);
-      observeImports(map, "./graph.js", 118);
-      observeImports(map, "./pubsub.js", 108);
-      observeImports(map, "./retention-accumulator.js", 119);
-      observeImports(map, "./residence.js", 120);
-      observeImports(map, "./hex.js", 114);
-      observeImports(map, "./serial-jobs.js", 109);
-      observeImports(map, "./store-controller.js", 121);
-      observeImports(map, "./multimap.js", 122);
-      observeImports(map, "./networks/loopback.js", 123);
-      observeImports(map, "./formula-type.js", 101);
-      observeImports(map, "./help-text.js", 106);
-      observeImports(map, "./mount.js", 124);
-      observeImports(map, "./interfaces.js", 98);
-    },
-    liveVar: {
-    },
-    onceVar: {
-      makeDaemon: cells[125].makeDaemon.set,
-    },
-    importMeta: {},
-  });
-  functors[126]({
-    imports(entries) {
-      const map = new Map(entries);
-      observeImports(map, "@endo/harden", 3);
-      observeImports(map, "@endo/errors", 9);
-      observeImports(map, "@endo/platform/fs/lite", 96);
-      observeImports(map, "./reader-ref.js", 99);
-      observeImports(map, "./hex.js", 114);
-    },
-    liveVar: {
-    },
-    onceVar: {
-      makeDaemonicPersistencePowers: cells[126].makeDaemonicPersistencePowers.set,
-    },
-    importMeta: {},
-  });
-  functors[127]({
-    imports(entries) {
-      const map = new Map(entries);
-      observeImports(map, "@endo/harden", 3);
-      observeImports(map, "./pubsub.js", 108);
-      observeImports(map, "./formula-identifier.js", 100);
-      observeImports(map, "./multimap.js", 122);
-    },
-    liveVar: {
-    },
-    onceVar: {
-      makePetStoreMaker: cells[127].makePetStoreMaker.set,
+      makeResidenceTracker: cells[127].makeResidenceTracker.set,
     },
     importMeta: {},
   });
@@ -3101,12 +3091,142 @@ function observeImports(map, importName, importIndex) {
     liveVar: {
     },
     onceVar: {
-      makeNetstringReader: cells[128].makeNetstringReader.set,
-      netstringReader: cells[128].netstringReader.set,
+      makeLocalStoreController: cells[128].makeLocalStoreController.set,
     },
     importMeta: {},
   });
   functors[129]({
+    imports(entries) {
+      const map = new Map(entries);
+      observeImports(map, "@endo/errors", 9);
+    },
+    liveVar: {
+    },
+    onceVar: {
+      makeMultimap: cells[129].makeMultimap.set,
+      makeWeakMultimap: cells[129].makeWeakMultimap.set,
+      makeBidirectionalMultimap: cells[129].makeBidirectionalMultimap.set,
+    },
+    importMeta: {},
+  });
+  functors[130]({
+    imports(entries) {
+      const map = new Map(entries);
+      observeImports(map, "@endo/far", 55);
+    },
+    liveVar: {
+    },
+    onceVar: {
+      makeLoopbackNetwork: cells[130].makeLoopbackNetwork.set,
+    },
+    importMeta: {},
+  });
+  functors[131]({
+    imports(entries) {
+      const map = new Map(entries);
+      observeImports(map, "@endo/errors", 9);
+      observeImports(map, "@endo/exo", 79);
+      observeImports(map, "./help-text.js", 113);
+      observeImports(map, "./interfaces.js", 105);
+      observeImports(map, "./reader-ref.js", 106);
+    },
+    liveVar: {
+    },
+    onceVar: {
+      makeMount: cells[131].makeMount.set,
+    },
+    importMeta: {},
+  });
+  functors[132]({
+    imports(entries) {
+      const map = new Map(entries);
+      observeImports(map, "@endo/harden", 3);
+      observeImports(map, "@endo/exo", 79);
+      observeImports(map, "@endo/far", 55);
+      observeImports(map, "@endo/marshal", 47);
+      observeImports(map, "@endo/promise-kit", 22);
+      observeImports(map, "@endo/errors", 9);
+      observeImports(map, "@endo/zip/writer.js", 86);
+      observeImports(map, "@endo/platform/fs/lite", 103);
+      observeImports(map, "./ref-reader.js", 104);
+      observeImports(map, "./reader-ref.js", 106);
+      observeImports(map, "./directory.js", 114);
+      observeImports(map, "./deferred-tasks.js", 111);
+      observeImports(map, "./mail.js", 117);
+      observeImports(map, "./guest.js", 119);
+      observeImports(map, "./channel.js", 120);
+      observeImports(map, "./host.js", 122);
+      observeImports(map, "./remote-control.js", 123);
+      observeImports(map, "./pet-name.js", 110);
+      observeImports(map, "./locator.js", 109);
+      observeImports(map, "./context.js", 124);
+      observeImports(map, "./formula-identifier.js", 107);
+      observeImports(map, "./graph.js", 125);
+      observeImports(map, "./pubsub.js", 115);
+      observeImports(map, "./retention-accumulator.js", 126);
+      observeImports(map, "./residence.js", 127);
+      observeImports(map, "./hex.js", 121);
+      observeImports(map, "./serial-jobs.js", 116);
+      observeImports(map, "./store-controller.js", 128);
+      observeImports(map, "./multimap.js", 129);
+      observeImports(map, "./networks/loopback.js", 130);
+      observeImports(map, "./formula-type.js", 108);
+      observeImports(map, "./help-text.js", 113);
+      observeImports(map, "./mount.js", 131);
+      observeImports(map, "./interfaces.js", 105);
+    },
+    liveVar: {
+    },
+    onceVar: {
+      makeDaemon: cells[132].makeDaemon.set,
+    },
+    importMeta: {},
+  });
+  functors[133]({
+    imports(entries) {
+      const map = new Map(entries);
+      observeImports(map, "@endo/harden", 3);
+      observeImports(map, "@endo/errors", 9);
+      observeImports(map, "@endo/platform/fs/lite", 103);
+      observeImports(map, "./reader-ref.js", 106);
+      observeImports(map, "./hex.js", 121);
+    },
+    liveVar: {
+    },
+    onceVar: {
+      makeDaemonicPersistencePowers: cells[133].makeDaemonicPersistencePowers.set,
+    },
+    importMeta: {},
+  });
+  functors[134]({
+    imports(entries) {
+      const map = new Map(entries);
+      observeImports(map, "@endo/harden", 3);
+      observeImports(map, "./pubsub.js", 115);
+      observeImports(map, "./formula-identifier.js", 107);
+      observeImports(map, "./multimap.js", 129);
+    },
+    liveVar: {
+    },
+    onceVar: {
+      makePetStoreMaker: cells[134].makePetStoreMaker.set,
+    },
+    importMeta: {},
+  });
+  functors[135]({
+    imports(entries) {
+      const map = new Map(entries);
+      observeImports(map, "@endo/harden", 3);
+    },
+    liveVar: {
+    },
+    onceVar: {
+      makeNetstringReader: cells[135].makeNetstringReader.set,
+      netstringReader: cells[135].netstringReader.set,
+    },
+    importMeta: {},
+  });
+  functors[136]({
     imports(entries) {
       const map = new Map(entries);
       observeImports(map, "@endo/harden", 3);
@@ -3115,16 +3235,16 @@ function observeImports(map, importName, importIndex) {
     liveVar: {
     },
     onceVar: {
-      makeNetstringWriter: cells[129].makeNetstringWriter.set,
-      netstringWriter: cells[129].netstringWriter.set,
+      makeNetstringWriter: cells[136].makeNetstringWriter.set,
+      netstringWriter: cells[136].netstringWriter.set,
     },
     importMeta: {},
   });
-  functors[130]({
+  functors[137]({
     imports(entries) {
       const map = new Map(entries);
-      observeImports(map, "./reader.js", 128);
-      observeImports(map, "./writer.js", 129);
+      observeImports(map, "./reader.js", 135);
+      observeImports(map, "./writer.js", 136);
     },
     liveVar: {
     },
@@ -3132,54 +3252,54 @@ function observeImports(map, importName, importIndex) {
     },
     importMeta: {},
   });
-  functors[131]({
+  functors[138]({
     imports(entries) {
       const map = new Map(entries);
       observeImports(map, "@endo/captp", 53);
       observeImports(map, "@endo/promise-kit", 22);
       observeImports(map, "@endo/stream", 56);
-      observeImports(map, "@endo/netstring", 130);
+      observeImports(map, "@endo/netstring", 137);
     },
     liveVar: {
     },
     onceVar: {
-      makeMessageCapTP: cells[131].makeMessageCapTP.set,
-      messageToBytes: cells[131].messageToBytes.set,
-      bytesToMessage: cells[131].bytesToMessage.set,
-      makeNetstringCapTP: cells[131].makeNetstringCapTP.set,
+      makeMessageCapTP: cells[138].makeMessageCapTP.set,
+      messageToBytes: cells[138].messageToBytes.set,
+      bytesToMessage: cells[138].bytesToMessage.set,
+      makeNetstringCapTP: cells[138].makeNetstringCapTP.set,
     },
     importMeta: {},
   });
-  functors[132]({
+  functors[139]({
     imports(entries) {
       const map = new Map(entries);
     },
     liveVar: {
     },
     onceVar: {
-      encodeEnvelope: cells[132].encodeEnvelope.set,
-      encodeFrame: cells[132].encodeFrame.set,
-      decodeFrame: cells[132].decodeFrame.set,
-      decodeEnvelope: cells[132].decodeEnvelope.set,
-      readFrameFromStream: cells[132].readFrameFromStream.set,
-      writeFrameToStream: cells[132].writeFrameToStream.set,
+      encodeEnvelope: cells[139].encodeEnvelope.set,
+      encodeFrame: cells[139].encodeFrame.set,
+      decodeFrame: cells[139].decodeFrame.set,
+      decodeEnvelope: cells[139].decodeEnvelope.set,
+      readFrameFromStream: cells[139].readFrameFromStream.set,
+      writeFrameToStream: cells[139].writeFrameToStream.set,
     },
     importMeta: {},
   });
-  functors[133]({
+  functors[140]({
     imports(entries) {
       const map = new Map(entries);
     },
     liveVar: {
     },
     onceVar: {
-      makeXsFilePowers: cells[133].makeXsFilePowers.set,
-      makeXsCryptoPowers: cells[133].makeXsCryptoPowers.set,
-      makeXsSqlitePowers: cells[133].makeXsSqlitePowers.set,
+      makeXsFilePowers: cells[140].makeXsFilePowers.set,
+      makeXsCryptoPowers: cells[140].makeXsCryptoPowers.set,
+      makeXsSqlitePowers: cells[140].makeXsSqlitePowers.set,
     },
     importMeta: {},
   });
-  functors[134]({
+  functors[141]({
     imports(entries) {
       const map = new Map(entries);
       observeImports(map, "@endo/promise-kit", 22);
@@ -3187,11 +3307,11 @@ function observeImports(map, importName, importIndex) {
     liveVar: {
     },
     onceVar: {
-      makeDebugSession: cells[134].makeDebugSession.set,
+      makeDebugSession: cells[141].makeDebugSession.set,
     },
     importMeta: {},
   });
-  functors[135]({
+  functors[142]({
     imports(entries) {
       const map = new Map(entries);
       observeImports(map, "@endo/exo", 79);
@@ -3200,26 +3320,26 @@ function observeImports(map, importName, importIndex) {
     liveVar: {
     },
     onceVar: {
-      DebuggerInterface: cells[135].DebuggerInterface.set,
-      makeDebugger: cells[135].makeDebugger.set,
+      DebuggerInterface: cells[142].DebuggerInterface.set,
+      makeDebugger: cells[142].makeDebugger.set,
     },
     importMeta: {},
   });
-  functors[136]({
+  functors[143]({
     imports(entries) {
       const map = new Map(entries);
       observeImports(map, "@endo/captp", 53);
       observeImports(map, "@endo/far", 55);
       observeImports(map, "@endo/promise-kit", 22);
       observeImports(map, "@endo/stream", 56);
-      observeImports(map, "./daemon.js", 125);
-      observeImports(map, "./daemon-persistence-powers.js", 126);
-      observeImports(map, "./pet-store.js", 127);
-      observeImports(map, "./connection.js", 131);
-      observeImports(map, "./envelope.js", 132);
-      observeImports(map, "./bus-daemon-rust-xs-powers.js", 133);
-      observeImports(map, "./debug-session.js", 134);
-      observeImports(map, "./debugger.js", 135);
+      observeImports(map, "./daemon.js", 132);
+      observeImports(map, "./daemon-persistence-powers.js", 133);
+      observeImports(map, "./pet-store.js", 134);
+      observeImports(map, "./connection.js", 138);
+      observeImports(map, "./envelope.js", 139);
+      observeImports(map, "./bus-daemon-rust-xs-powers.js", 140);
+      observeImports(map, "./debug-session.js", 141);
+      observeImports(map, "./debugger.js", 142);
     },
     liveVar: {
     },
@@ -19075,7 +19195,618 @@ harden(makeExo);
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';$h͏_imports([["./src/exo-makers.js", []],["./types-index.js", []],["./src/types.js", []],["./src/get-interface.js", []]]);
 })()
 ,
-// === 80. platform ./src/fs/interfaces.js ===
+// === 80. zip ./src/buffer-writer.js ===
+({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';$h͏_imports([]);// @ts-check
+/* eslint no-bitwise: ["off"] */
+
+/**
+ * @type {WeakMap<BufferWriter, {
+ *   length: number,
+ *   index: number,
+ *   bytes: Uint8Array,
+ *   data: DataView,
+ *   capacity: number,
+ * }>}
+ */
+const privateFields = new WeakMap();
+
+/**
+ * @param {BufferWriter} self
+ */
+const getPrivateFields = self => {
+  const fields = privateFields.get(self);
+  if (!fields) {
+    throw Error('BufferWriter fields are not initialized');
+  }
+  return fields;
+};
+
+const assertNatNumber = n => {
+  if (Number.isSafeInteger(n) && /** @type {number} */ (n) >= 0) {
+    return;
+  }
+  throw TypeError(`must be a non-negative integer, got ${n}`);
+};
+
+       class BufferWriter {
+  /**
+   * @returns {number}
+   */
+  get length() {
+    return getPrivateFields(this).length;
+  }
+
+  /**
+   * @returns {number}
+   */
+  get index() {
+    return getPrivateFields(this).index;
+  }
+
+  /**
+   * @param {number} index
+   */
+  set index(index) {
+    this.seek(index);
+  }
+
+  /**
+   * @param {number=} capacity
+   */
+  constructor(capacity = 16) {
+    const bytes = new Uint8Array(capacity);
+    const data = new DataView(bytes.buffer);
+    privateFields.set(this, {
+      bytes,
+      data,
+      index: 0,
+      length: 0,
+      capacity,
+    });
+  }
+
+  /**
+   * @param {number} required
+   */
+  ensureCanSeek(required) {
+    assertNatNumber(required);
+    const fields = getPrivateFields(this);
+    let capacity = fields.capacity;
+    while (capacity < required) {
+      capacity *= 2;
+    }
+    const bytes = new Uint8Array(capacity);
+    const data = new DataView(bytes.buffer);
+    bytes.set(fields.bytes.subarray(0, fields.length));
+    fields.bytes = bytes;
+    fields.data = data;
+    fields.capacity = capacity;
+  }
+
+  /**
+   * @param {number} index
+   */
+  seek(index) {
+    const fields = getPrivateFields(this);
+    this.ensureCanSeek(index);
+    fields.index = index;
+    fields.length = Math.max(fields.index, fields.length);
+  }
+
+  /**
+   * @param {number} size
+   */
+  ensureCanWrite(size) {
+    assertNatNumber(size);
+    const fields = getPrivateFields(this);
+    this.ensureCanSeek(fields.index + size);
+  }
+
+  /**
+   * @param {Uint8Array} bytes
+   */
+  write(bytes) {
+    const fields = getPrivateFields(this);
+    this.ensureCanWrite(bytes.byteLength);
+    fields.bytes.set(bytes, fields.index);
+    fields.index += bytes.byteLength;
+    fields.length = Math.max(fields.index, fields.length);
+  }
+
+  /**
+   * @param {number} start
+   * @param {number} end
+   */
+  writeCopy(start, end) {
+    assertNatNumber(start);
+    assertNatNumber(end);
+    const fields = getPrivateFields(this);
+    const size = end - start;
+    this.ensureCanWrite(size);
+    fields.bytes.copyWithin(fields.index, start, end);
+    fields.index += size;
+    fields.length = Math.max(fields.index, fields.length);
+  }
+
+  /**
+   * @param {number} value
+   */
+  writeUint8(value) {
+    const fields = getPrivateFields(this);
+    this.ensureCanWrite(1);
+    fields.data.setUint8(fields.index, value);
+    fields.index += 1;
+    fields.length = Math.max(fields.index, fields.length);
+  }
+
+  /**
+   * @param {number} value
+   * @param {boolean=} littleEndian
+   */
+  writeUint16(value, littleEndian) {
+    const fields = getPrivateFields(this);
+    this.ensureCanWrite(2);
+    const index = fields.index;
+    fields.data.setUint16(index, value, littleEndian);
+    fields.index += 2;
+    fields.length = Math.max(fields.index, fields.length);
+  }
+
+  /**
+   * @param {number} value
+   * @param {boolean=} littleEndian
+   */
+  writeUint32(value, littleEndian) {
+    const fields = getPrivateFields(this);
+    this.ensureCanWrite(4);
+    const index = fields.index;
+    fields.data.setUint32(index, value, littleEndian);
+    fields.index += 4;
+    fields.length = Math.max(fields.index, fields.length);
+  }
+
+  /**
+   * @param {number=} begin
+   * @param {number=} end
+   * @returns {Uint8Array}
+   */
+  subarray(begin, end) {
+    const fields = getPrivateFields(this);
+    return fields.bytes.subarray(0, fields.length).subarray(begin, end);
+  }
+
+  /**
+   * @param {number=} begin
+   * @param {number=} end
+   * @returns {Uint8Array}
+   */
+  slice(begin, end) {
+    return this.subarray(begin, end).slice();
+  }
+}$h͏_once.   BufferWriter(BufferWriter);
+})()
+,
+// === 81. zip ./src/crc32.js ===
+({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';$h͏_imports([]);Object.defineProperty(crc32,'name',{value:"crc32"});$h͏_once.crc32(crc32);// @ts-check
+/* eslint no-bitwise: ["off"] */
+
+/**
+ * The following functions `makeTable` and `crc32` come from `pako`, from
+ * pako/lib/zlib/crc32.js released under the MIT license, see pako
+ * https://github.com/nodeca/pako/
+ */
+
+// Use ordinary array, since untyped makes no boost here
+/**
+ * @returns {Array<number>}
+ */
+function makeTable() {
+  let c;
+  const table = [];
+
+  for (let n = 0; n < 256; n += 1) {
+    c = n;
+    for (let k = 0; k < 8; k += 1) {
+      c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    }
+    table[n] = c;
+  }
+
+  return table;
+}
+
+// Initialize a table of 256 signed 32 bit integers.
+const table = makeTable();
+
+/**
+ * @param {Uint8Array} bytes
+ * @param {number} length
+ * @param {number} index
+ * @param {number} crc
+ */
+       function crc32(bytes, length = bytes.length, index = 0, crc = 0) {
+  const end = index + length;
+
+  crc ^= -1;
+
+  for (let i = index; i < end; i += 1) {
+    crc = (crc >>> 8) ^ table[(crc ^ bytes[i]) & 0xff];
+  }
+
+  return (crc ^ -1) >>> 0;
+}
+})()
+,
+// === 82. zip ./src/signature.js ===
+({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';$h͏_imports([]);// @ts-check
+/* eslint no-bitwise: ["off"] */
+
+/**
+ * @param {string} string
+ * @returns {Uint8Array}
+ */
+function u(string) {
+  const array = new Uint8Array(string.length);
+  for (let i = 0; i < string.length; i += 1) {
+    array[i] = string.charCodeAt(i) & 0xff;
+  }
+  return array;
+}
+
+       const LOCAL_FILE_HEADER = u('PK\x03\x04');$h͏_once.LOCAL_FILE_HEADER(LOCAL_FILE_HEADER);
+       const CENTRAL_FILE_HEADER = u('PK\x01\x02');$h͏_once.CENTRAL_FILE_HEADER(CENTRAL_FILE_HEADER);
+       const CENTRAL_DIRECTORY_END = u('PK\x05\x06');$h͏_once.CENTRAL_DIRECTORY_END(CENTRAL_DIRECTORY_END);
+       const ZIP64_CENTRAL_DIRECTORY_LOCATOR = u('PK\x06\x07');$h͏_once.ZIP64_CENTRAL_DIRECTORY_LOCATOR(ZIP64_CENTRAL_DIRECTORY_LOCATOR);
+       const ZIP64_CENTRAL_DIRECTORY_END = u('PK\x06\x06');$h͏_once.ZIP64_CENTRAL_DIRECTORY_END(ZIP64_CENTRAL_DIRECTORY_END);
+       const DATA_DESCRIPTOR = u('PK\x07\x08');$h͏_once.DATA_DESCRIPTOR(DATA_DESCRIPTOR);
+})()
+,
+// === 83. zip ./src/compression.js ===
+({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';$h͏_imports([]);// @ts-check
+
+// STORE is the magic number for "not compressed".
+       const STORE = 0;$h͏_once.STORE(STORE);
+})()
+,
+// === 84. zip ./src/format-writer.js ===
+({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let crc32,signature,compression;$h͏_imports([["./crc32.js", [["crc32",[$h͏_a => (crc32 = $h͏_a)]]]],["./signature.js", [["*",[$h͏_a => (signature = $h͏_a)]]]],["./compression.js", [["*",[$h͏_a => (compression = $h͏_a)]]]]]);Object.defineProperty(writeZipRecords,'name',{value:"writeZipRecords"});$h͏_once.writeZipRecords(writeZipRecords);Object.defineProperty(writeZip,'name',{value:"writeZip"});$h͏_once.writeZip(writeZip);
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+const UNIX = 3;
+const UNIX_VERSION = 30;
+
+const textEncoder = new TextEncoder();
+
+/**
+ * @param {BufferWriter} writer
+ * @param {Date?} date
+ * @see http://www.delorie.com/djgpp/doc/rbinter/it/65/16.html
+ * @see http://www.delorie.com/djgpp/doc/rbinter/it/66/16.html
+ */
+function writeDosDateTime(writer, date) {
+  const dosTime =
+    date !== undefined && date !== null
+      ? (((date.getUTCFullYear() - 1980) & 0x7f) << 25) | // year
+        ((date.getUTCMonth() + 1) << 21) | // month
+        (date.getUTCDate() << 16) | // day
+        (date.getUTCHours() << 11) | // hour
+        (date.getUTCMinutes() << 5) | // minute
+        (date.getUTCSeconds() >> 1) // second
+      : 0; // Epoch origin by default.
+  writer.writeUint32(dosTime, true);
+}
+
+/**
+ * @param {BufferWriter} writer
+ * @param {FileRecord} file
+ * @returns {LocalFileLocator}
+ */
+function writeFile(writer, file) {
+  // Header
+  const fileStart = writer.index;
+  writer.write(signature.LOCAL_FILE_HEADER);
+  const headerStart = writer.index;
+  // Version needed to extract
+  writer.writeUint16(10, true);
+  writer.writeUint16(file.bitFlag, true);
+  writer.writeUint16(file.compressionMethod, true);
+  writeDosDateTime(writer, file.date);
+  writer.writeUint32(file.crc32, true);
+  writer.writeUint32(file.compressedLength, true);
+  writer.writeUint32(file.uncompressedLength, true);
+  writer.writeUint16(file.name.length, true);
+  const headerEnd = writer.length;
+
+  // TODO count of extra fields length
+  writer.writeUint16(0, true);
+  writer.write(file.name);
+  // TODO write extra fields
+  writer.write(file.content);
+
+  return {
+    fileStart,
+    headerStart,
+    headerEnd,
+  };
+}
+
+/**
+ * @param {BufferWriter} writer
+ * @param {FileRecord} file
+ * @param {LocalFileLocator} locator
+ */
+function writeCentralFileHeader(writer, file, locator) {
+  writer.write(signature.CENTRAL_FILE_HEADER);
+  writer.writeUint8(file.version);
+  writer.writeUint8(file.madeBy);
+  writer.writeCopy(locator.headerStart, locator.headerEnd);
+  // TODO extra fields length
+  writer.writeUint16(0, true);
+  writer.writeUint16(file.comment.length, true);
+  writer.writeUint16(file.diskNumberStart, true);
+  writer.writeUint16(file.internalFileAttributes, true);
+  writer.writeUint32(file.externalFileAttributes, true);
+  writer.writeUint32(locator.fileStart, true);
+  writer.write(file.centralName);
+  // TODO extra fields
+  writer.write(file.comment);
+}
+
+/**
+ * @param {BufferWriter} writer
+ * @param {number} entriesCount
+ * @param {number} centralDirectoryStart
+ * @param {number} centralDirectoryLength
+ * @param {Uint8Array} commentBytes
+ */
+function writeEndOfCentralDirectoryRecord(
+  writer,
+  entriesCount,
+  centralDirectoryStart,
+  centralDirectoryLength,
+  commentBytes,
+) {
+  writer.write(signature.CENTRAL_DIRECTORY_END);
+  writer.writeUint16(0, true);
+  writer.writeUint16(0, true);
+  writer.writeUint16(entriesCount, true);
+  writer.writeUint16(entriesCount, true);
+  writer.writeUint32(centralDirectoryLength, true);
+  writer.writeUint32(centralDirectoryStart, true);
+  writer.writeUint16(commentBytes.length, true);
+  writer.write(commentBytes);
+}
+
+/**
+ * @param {BufferWriter} writer
+ * @param {Array<FileRecord>} records
+ * @param {string} comment
+ */
+       function writeZipRecords(writer, records, comment = '') {
+  // Write records with local headers.
+  const locators = [];
+  for (let i = 0; i < records.length; i += 1) {
+    locators.push(writeFile(writer, records[i]));
+  }
+
+  // writeCentralDirectory
+  const centralDirectoryStart = writer.index;
+  for (let i = 0; i < locators.length; i += 1) {
+    writeCentralFileHeader(writer, records[i], locators[i]);
+  }
+  const centralDirectoryLength = writer.index - centralDirectoryStart;
+
+  const commentBytes = textEncoder.encode(comment);
+
+  // Write central directory end.
+  writeEndOfCentralDirectoryRecord(
+    writer,
+    records.length,
+    centralDirectoryStart,
+    centralDirectoryLength,
+    commentBytes,
+  );
+}
+
+/**
+ * @param {import('./types.js').ArchivedFile} file
+ * @returns {import('./types.js').UncompressedFile}
+ */
+function encodeFile(file) {
+  const name = textEncoder.encode(file.name.replace(/\\/g, '/'));
+  const comment = textEncoder.encode(file.comment);
+  return {
+    name,
+    mode: file.mode,
+    date: file.date,
+    content: file.content,
+    comment,
+  };
+}
+
+/**
+ * @param {import('./types.js').UncompressedFile} file
+ * @returns {import('./types.js').CompressedFile}
+ */
+function compressFileWithStore(file) {
+  return {
+    name: file.name,
+    mode: file.mode,
+    date: file.date,
+    crc32: crc32(file.content),
+    compressionMethod: compression.STORE,
+    compressedLength: file.content.length,
+    uncompressedLength: file.content.length,
+    content: file.content,
+    comment: file.comment,
+  };
+}
+
+/**
+ * Computes Zip external file attributes field from a UNIX mode for a file.
+ *
+ * @param {number} mode
+ * @returns {number}
+ */
+function externalFileAttributes(mode) {
+  return ((mode & 0o777) | 0o100000) << 16;
+}
+
+// TODO Add support for directory records.
+// /**
+//  * @param {number} mode
+//  * @return {number}
+//  */
+// function externalDirectoryAttributes(mode) {
+//   // The 0x10 is the DOS directory attribute, which is set regardless of platform.
+//   return ((mode & 0o777) | 0o40000) << 16 | 0x10;
+// }
+
+/**
+ * @param {import('./types.js').CompressedFile} file
+ * @returns {FileRecord}
+ */
+function makeFileRecord(file) {
+  return {
+    name: file.name,
+    centralName: file.name,
+    madeBy: UNIX,
+    version: UNIX_VERSION,
+    versionNeeded: 0, // TODO this is probably too lax.
+    bitFlag: 0,
+    compressionMethod: compression.STORE,
+    date: file.date,
+    crc32: file.crc32,
+    compressedLength: file.compressedLength,
+    uncompressedLength: file.uncompressedLength,
+    diskNumberStart: 0,
+    internalFileAttributes: 0,
+    externalFileAttributes: externalFileAttributes(file.mode),
+    comment: file.comment,
+    content: file.content,
+  };
+}
+
+/**
+ * @param {BufferWriter} writer
+ * @param {Array<import('./types.js').ArchivedFile>} files
+ * @param {string} comment
+ */
+       function writeZip(writer, files, comment = '') {
+  const encodedFiles = files.map(encodeFile);
+  const compressedFiles = encodedFiles.map(compressFileWithStore);
+  // TODO collate directoryRecords from file bases.
+  const fileRecords = compressedFiles.map(makeFileRecord);
+  writeZipRecords(writer, fileRecords, comment);
+}
+})()
+,
+// === 85. zip ./src/writer.js ===
+({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let BufferWriter,writeZipFormat;$h͏_imports([["./buffer-writer.js", [["BufferWriter",[$h͏_a => (BufferWriter = $h͏_a)]]]],["./format-writer.js", [["writeZip",[$h͏_a => (writeZipFormat = $h͏_a)]]]]]);
+
+
+
+
+       class ZipWriter {
+  /**
+   * @param {{
+   *   date: Date,
+   * }} options
+   */
+  constructor(options = { date: new Date() }) {
+    const { date } = options;
+    /** type {Map<string, ZFile>} */
+    this.files = new Map();
+    this.date = date;
+  }
+
+  /**
+   * @param {string} name
+   * @param {Uint8Array} content
+   * @param {{
+   *   mode?: number,
+   *   date?: Date,
+   *   comment?: string,
+   * }} [options]
+   */
+  write(name, content, options = {}) {
+    const { mode = 0o644, date = undefined, comment = '' } = options;
+    if (!content) {
+      throw Error(`ZipWriter write requires content for ${name}`);
+    }
+    this.files.set(name, {
+      name,
+      mode,
+      date,
+      content,
+      comment,
+    });
+  }
+
+  /**
+   * @returns {Uint8Array}
+   */
+  snapshot() {
+    const writer = new BufferWriter();
+    writeZipFormat(writer, Array.from(this.files.values()));
+    return writer.subarray();
+  }
+}
+
+/**
+ * @returns {import('./types.js').ArchiveWriter}
+ */$h͏_once. ZipWriter(ZipWriter);
+       const writeZip = () => {
+  const writer = new ZipWriter();
+  /** @type {import('./types.js').WriteFn} */
+  const write = async (path, data) => {
+    writer.write(path, data);
+  };
+  /** @type {import('./types.js').SnapshotFn} */
+  const snapshot = async () => writer.snapshot();
+  return { write, snapshot };
+};$h͏_once.writeZip(writeZip);
+})()
+,
+// === 86. zip ./writer.js ===
+({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';$h͏_imports([["./src/writer.js", []]]);
+})()
+,
+// === 87. platform ./src/fs/interfaces.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let M;$h͏_imports([["@endo/patterns", [["M",[$h͏_a => (M = $h͏_a)]]]]]);
 
 
@@ -19170,7 +19901,7 @@ harden(FileInterface);
 harden(DirectoryInterface);
 })()
 ,
-// === 81. platform ./src/fs/snapshot-blob.js ===
+// === 88. platform ./src/fs/snapshot-blob.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]]]);
 
 
@@ -19195,7 +19926,7 @@ harden(DirectoryInterface);
 harden(snapshotBlobMethods);
 })()
 ,
-// === 82. platform ./src/fs/snapshot-tree.js ===
+// === 89. platform ./src/fs/snapshot-tree.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden,E;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]],["@endo/far", [["E",[$h͏_a => (E = $h͏_a)]]]]]);
 
 
@@ -19302,7 +20033,7 @@ harden(snapshotBlobMethods);
 harden(snapshotTreeMethods);
 })()
 ,
-// === 83. platform ./src/fs/snapshot-store.js ===
+// === 90. platform ./src/fs/snapshot-store.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden,makeExo,SnapshotBlobInterface,SnapshotTreeInterface,snapshotBlobMethods,snapshotTreeMethods;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]],["@endo/exo", [["makeExo",[$h͏_a => (makeExo = $h͏_a)]]]],["./interfaces.js", [["SnapshotBlobInterface",[$h͏_a => (SnapshotBlobInterface = $h͏_a)]],["SnapshotTreeInterface",[$h͏_a => (SnapshotTreeInterface = $h͏_a)]]]],["./snapshot-blob.js", [["snapshotBlobMethods",[$h͏_a => (snapshotBlobMethods = $h͏_a)]]]],["./snapshot-tree.js", [["snapshotTreeMethods",[$h͏_a => (snapshotTreeMethods = $h͏_a)]]]]]);
 
 
@@ -19347,7 +20078,7 @@ harden(snapshotTreeMethods);
 harden(makeSnapshotStore);
 })()
 ,
-// === 84. base64 ./src/common.js ===
+// === 91. base64 ./src/common.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';$h͏_imports([]);// @ts-check
 
 const { freeze } = Object;
@@ -19372,7 +20103,7 @@ for (let i = 0; i < alphabet64.length; i += 1) {
 freeze(monodu64);
 })()
 ,
-// === 85. base64 ./src/encode.js ===
+// === 92. base64 ./src/encode.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let alphabet64,padding;$h͏_imports([["./common.js", [["alphabet64",[$h͏_a => (alphabet64 = $h͏_a)]],["padding",[$h͏_a => (padding = $h͏_a)]]]]]);
 
 
@@ -19447,7 +20178,7 @@ freeze(monodu64);
   globalThis.Base64 !== undefined ? globalThis.Base64.encode : jsEncodeBase64;$h͏_once.encodeBase64(encodeBase64);
 })()
 ,
-// === 86. base64 ./src/decode.js ===
+// === 93. base64 ./src/decode.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let monodu64,padding;$h͏_imports([["./common.js", [["monodu64",[$h͏_a => (monodu64 = $h͏_a)]],["padding",[$h͏_a => (padding = $h͏_a)]]]]]);
 
 
@@ -19534,11 +20265,11 @@ $h͏_once.jsDecodeBase64(jsDecodeBase64);const adaptDecoder=
     : jsDecodeBase64;$h͏_once.decodeBase64(decodeBase64);
 })()
 ,
-// === 87. base64 ./encode.js ===
+// === 94. base64 ./encode.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';$h͏_imports([["./src/encode.js", []]]);
 })()
 ,
-// === 88. base64 ./btoa.js ===
+// === 95. base64 ./btoa.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let encodeBase64;$h͏_imports([["./encode.js", [["encodeBase64",[$h͏_a => (encodeBase64 = $h͏_a)]]]]]);
 
 /**
@@ -19558,11 +20289,11 @@ $h͏_once.jsDecodeBase64(jsDecodeBase64);const adaptDecoder=
 };$h͏_once.btoa(btoa);
 })()
 ,
-// === 89. base64 ./decode.js ===
+// === 96. base64 ./decode.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';$h͏_imports([["./src/decode.js", []]]);
 })()
 ,
-// === 90. base64 ./atob.js ===
+// === 97. base64 ./atob.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let decodeBase64;$h͏_imports([["./decode.js", [["decodeBase64",[$h͏_a => (decodeBase64 = $h͏_a)]]]]]);
 
 /**
@@ -19575,11 +20306,11 @@ $h͏_once.jsDecodeBase64(jsDecodeBase64);const adaptDecoder=
 };$h͏_once.atob(atob);
 })()
 ,
-// === 91. base64 ./index.js ===
+// === 98. base64 ./index.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';$h͏_imports([["./src/encode.js", []],["./src/decode.js", []],["./btoa.js", []],["./atob.js", []]]);
 })()
 ,
-// === 92. platform ./src/fs/ref-reader.js ===
+// === 99. platform ./src/fs/ref-reader.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden,decodeBase64,mapReader,E;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]],["@endo/base64", [["decodeBase64",[$h͏_a => (decodeBase64 = $h͏_a)]]]],["@endo/stream", [["mapReader",[$h͏_a => (mapReader = $h͏_a)]]]],["@endo/far", [["E",[$h͏_a => (E = $h͏_a)]]]]]);
 
 
@@ -19616,7 +20347,7 @@ harden(makeRefIterator);
 harden(makeRefReader);
 })()
 ,
-// === 93. platform ./src/fs/checkin.js ===
+// === 100. platform ./src/fs/checkin.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden,E,makeRefReader;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]],["@endo/far", [["E",[$h͏_a => (E = $h͏_a)]]]],["./ref-reader.js", [["makeRefReader",[$h͏_a => (makeRefReader = $h͏_a)]]]]]);
 
 
@@ -19703,7 +20434,7 @@ const MAX_CHECKIN_DEPTH = 64;
 harden(checkinTree);
 })()
 ,
-// === 94. platform ./src/fs/checkout.js ===
+// === 101. platform ./src/fs/checkout.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden,E,makeRefReader;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]],["@endo/far", [["E",[$h͏_a => (E = $h͏_a)]]]],["./ref-reader.js", [["makeRefReader",[$h͏_a => (makeRefReader = $h͏_a)]]]]]);
 
 
@@ -19758,7 +20489,7 @@ harden(checkinTree);
 harden(checkoutTree);
 })()
 ,
-// === 95. platform ./src/fs/reader-ref.js ===
+// === 102. platform ./src/fs/reader-ref.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden,encodeBase64,mapReader,makeExo,AsyncIteratorInterface;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]],["@endo/base64", [["encodeBase64",[$h͏_a => (encodeBase64 = $h͏_a)]]]],["@endo/stream", [["mapReader",[$h͏_a => (mapReader = $h͏_a)]]]],["@endo/exo", [["makeExo",[$h͏_a => (makeExo = $h͏_a)]]]],["./interfaces.js", [["AsyncIteratorInterface",[$h͏_a => (AsyncIteratorInterface = $h͏_a)]]]]]);
 
 
@@ -19839,11 +20570,11 @@ harden(makeIteratorRef);
 harden(makeReaderRef);
 })()
 ,
-// === 96. platform ./src/fs/index.js ===
+// === 103. platform ./src/fs/index.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';$h͏_imports([["./interfaces.js", []],["./snapshot-blob.js", []],["./snapshot-tree.js", []],["./snapshot-store.js", []],["./checkin.js", []],["./checkout.js", []],["./ref-reader.js", []],["./reader-ref.js", []]]);
 })()
 ,
-// === 97. daemon ./src/ref-reader.js ===
+// === 104. daemon ./src/ref-reader.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden,decodeBase64,mapReader,E;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]],["@endo/base64", [["decodeBase64",[$h͏_a => (decodeBase64 = $h͏_a)]]]],["@endo/stream", [["mapReader",[$h͏_a => (mapReader = $h͏_a)]]]],["@endo/far", [["E",[$h͏_a => (E = $h͏_a)]]]]]);
 
 
@@ -19879,7 +20610,7 @@ harden(makeRefIterator);
   mapReader(makeRefIterator(readerRef), decodeBase64);$h͏_once.makeRefReader(makeRefReader);
 })()
 ,
-// === 98. daemon ./src/interfaces.js ===
+// === 105. daemon ./src/interfaces.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let M;$h͏_imports([["@endo/patterns", [["M",[$h͏_a => (M = $h͏_a)]]]]]);
 
 
@@ -20221,6 +20952,22 @@ $h͏_once.DismisserInterface(DismisserInterface);const HandleInterface=M.interfa
   makeArchive: M.call(M.or(NameShape, M.undefined()), NameShape)
     .optional(MakeCapletOptionsShape)
     .returns(M.promise()),
+  // Make a caplet from a ReadableTree or Mount laid out as a
+  // compartment-mapper archive (compartment-map.json at root plus
+  // modules at their referenced paths).
+  makeFromTree: M.call(M.or(NameShape, M.undefined()), NameOrPathShape)
+    .optional(MakeCapletOptionsShape)
+    .returns(M.promise()),
+  // Materialise a readable tree into a new scratch mount.
+  stageTree: M.call(NameOrPathShape, NameShape).returns(M.promise()),
+  // Stage a readable tree and run its entry module as an unconfined
+  // Node caplet.
+  makeUnconfinedFromTree: M.call(
+    M.or(NameShape, M.undefined()),
+    NameOrPathShape,
+  )
+    .optional(MakeCapletOptionsShape)
+    .returns(M.promise()),
   // Create a channel
   makeChannel: M.call(NameShape, M.string()).returns(M.promise()),
   // Create a timer
@@ -20430,6 +21177,13 @@ const PathArgShape = M.or(M.string(), PathSegmentsShape);
     makeArchive: M.call(M.any(), M.any(), M.any(), EnvShape).returns(
       M.promise(),
     ),
+    // Args: (treeP, powersP, contextP, env) — tree is a ReadableTree
+    // or Mount whose layout mirrors a compartment-mapper archive
+    // (compartment-map.json at root plus modules at their referenced
+    // paths).
+    makeFromTree: M.call(M.any(), M.any(), M.any(), EnvShape).returns(
+      M.promise(),
+    ),
     // Args: (specifier, powersP, contextP, env)
     makeUnconfined: M.call(M.string(), M.any(), M.any(), EnvShape).returns(
       M.promise(),
@@ -20455,7 +21209,7 @@ const PathArgShape = M.or(M.string(), PathSegmentsShape);
 });$h͏_once.EndoInterface(EndoInterface);
 })()
 ,
-// === 99. daemon ./src/reader-ref.js ===
+// === 106. daemon ./src/reader-ref.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden,encodeBase64,mapReader,makeExo,AsyncIteratorInterface;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]],["@endo/base64", [["encodeBase64",[$h͏_a => (encodeBase64 = $h͏_a)]]]],["@endo/stream", [["mapReader",[$h͏_a => (mapReader = $h͏_a)]]]],["@endo/exo", [["makeExo",[$h͏_a => (makeExo = $h͏_a)]]]],["./interfaces.js", [["AsyncIteratorInterface",[$h͏_a => (AsyncIteratorInterface = $h͏_a)]]]]]);
 
 
@@ -20530,7 +21284,7 @@ const PathArgShape = M.or(M.string(), PathSegmentsShape);
   makeIteratorRef(mapReader(asyncIterate(readable), encodeBase64));$h͏_once.makeReaderRef(makeReaderRef);
 })()
 ,
-// === 100. daemon ./src/formula-identifier.js ===
+// === 107. daemon ./src/formula-identifier.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let makeError,q;$h͏_imports([["@endo/errors", [["makeError",[$h͏_a => (makeError = $h͏_a)]],["q",[$h͏_a => (q = $h͏_a)]]]]]);
 
 
@@ -20631,7 +21385,7 @@ const idPattern = /^(?<number>[0-9a-f]{64}):(?<node>[0-9a-f]{64})$/;
 };$h͏_once.formatId(formatId);
 })()
 ,
-// === 101. daemon ./src/formula-type.js ===
+// === 108. daemon ./src/formula-type.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let q;$h͏_imports([["@endo/errors", [["q",[$h͏_a => (q = $h͏_a)]]]]]);
 
 
@@ -20653,6 +21407,7 @@ const formulaTypes = new Set([
   'mail-hub',
   'mailbox-store',
   'make-archive',
+  'make-from-tree',
   'make-unconfined',
   'marshal',
   'message',
@@ -20680,7 +21435,7 @@ const formulaTypes = new Set([
 };$h͏_once.assertValidFormulaType(assertValidFormulaType);
 })()
 ,
-// === 102. daemon ./src/locator.js ===
+// === 109. daemon ./src/locator.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let makeError,q,formatId,isValidNumber,parseId,isValidFormulaType;$h͏_imports([["@endo/errors", [["makeError",[$h͏_a => (makeError = $h͏_a)]],["q",[$h͏_a => (q = $h͏_a)]]]],["./formula-identifier.js", [["formatId",[$h͏_a => (formatId = $h͏_a)]],["isValidNumber",[$h͏_a => (isValidNumber = $h͏_a)]],["parseId",[$h͏_a => (parseId = $h͏_a)]]]],["./formula-type.js", [["isValidFormulaType",[$h͏_a => (isValidFormulaType = $h͏_a)]]]]]);
 
 
@@ -20874,7 +21629,7 @@ const assertValidLocatorType = allegedType => {
 };$h͏_once.internalizeLocator(internalizeLocator);
 })()
 ,
-// === 103. daemon ./src/pet-name.js ===
+// === 110. daemon ./src/pet-name.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let q;$h͏_imports([["@endo/errors", [["q",[$h͏_a => (q = $h͏_a)]]]]]);
 
 
@@ -21029,7 +21784,7 @@ const validSpecialNamePattern = /^@[a-z][a-z0-9-]{0,127}$/;
 };$h͏_once.namePathFrom(namePathFrom);
 })()
 ,
-// === 104. daemon ./src/deferred-tasks.js ===
+// === 111. daemon ./src/deferred-tasks.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';$h͏_imports([]);// @ts-check
 
 /** @import { DeferredTasks, DeferredTask } from './types.js' */
@@ -21053,7 +21808,7 @@ const validSpecialNamePattern = /^@[a-z][a-z0-9-]{0,127}$/;
 };$h͏_once.makeDeferredTasks(makeDeferredTasks);
 })()
 ,
-// === 105. daemon ./src/help-text-data.js ===
+// === 112. daemon ./src/help-text-data.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]]]);
 
 
@@ -21309,7 +22064,7 @@ const validSpecialNamePattern = /^@[a-z][a-z0-9-]{0,127}$/;
 ]);$h͏_once.helpTextEntries(helpTextEntries);
 })()
 ,
-// === 106. daemon ./src/help-text.js ===
+// === 113. daemon ./src/help-text.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let helpTextEntries;$h͏_imports([["./help-text-data.js", [["helpTextEntries",[$h͏_a => (helpTextEntries = $h͏_a)]]]]]);
 
 
@@ -21397,7 +22152,7 @@ harden(endoHelp);
 harden(makeHelp);
 })()
 ,
-// === 107. daemon ./src/directory.js ===
+// === 114. daemon ./src/directory.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden,encodeBase64,E,makeExo,q,makeIteratorRef,externalizeId,internalizeLocator,assertNamePath,assertNames,assertPetNamePath,namePathFrom,makeDeferredTasks,directoryHelp,makeHelp,DirectoryInterface;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]],["@endo/base64", [["encodeBase64",[$h͏_a => (encodeBase64 = $h͏_a)]]]],["@endo/far", [["E",[$h͏_a => (E = $h͏_a)]]]],["@endo/exo", [["makeExo",[$h͏_a => (makeExo = $h͏_a)]]]],["@endo/errors", [["q",[$h͏_a => (q = $h͏_a)]]]],["./reader-ref.js", [["makeIteratorRef",[$h͏_a => (makeIteratorRef = $h͏_a)]]]],["./locator.js", [["externalizeId",[$h͏_a => (externalizeId = $h͏_a)]],["internalizeLocator",[$h͏_a => (internalizeLocator = $h͏_a)]]]],["./pet-name.js", [["assertNamePath",[$h͏_a => (assertNamePath = $h͏_a)]],["assertNames",[$h͏_a => (assertNames = $h͏_a)]],["assertPetNamePath",[$h͏_a => (assertPetNamePath = $h͏_a)]],["namePathFrom",[$h͏_a => (namePathFrom = $h͏_a)]]]],["./deferred-tasks.js", [["makeDeferredTasks",[$h͏_a => (makeDeferredTasks = $h͏_a)]]]],["./help-text.js", [["directoryHelp",[$h͏_a => (directoryHelp = $h͏_a)]],["makeHelp",[$h͏_a => (makeHelp = $h͏_a)]]]],["./interfaces.js", [["DirectoryInterface",[$h͏_a => (DirectoryInterface = $h͏_a)]]]]]);
 
 
@@ -21894,7 +22649,7 @@ harden(makeHelp);
 };$h͏_once.makeDirectoryMaker(makeDirectoryMaker);
 })()
 ,
-// === 108. daemon ./src/pubsub.js ===
+// === 115. daemon ./src/pubsub.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden,makePromiseKit,makeStream;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]],["@endo/promise-kit", [["makePromiseKit",[$h͏_a => (makePromiseKit = $h͏_a)]]]],["@endo/stream", [["makeStream",[$h͏_a => (makeStream = $h͏_a)]]]]]);
 
 
@@ -21975,7 +22730,7 @@ harden(makeChangePubSub);
 harden(makeChangeTopic);
 })()
 ,
-// === 109. daemon ./src/serial-jobs.js ===
+// === 116. daemon ./src/serial-jobs.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let makeQueue;$h͏_imports([["@endo/stream", [["makeQueue",[$h͏_a => (makeQueue = $h͏_a)]]]]]);
 
 /** @import { AsyncQueue } from '@endo/stream' */
@@ -22008,7 +22763,7 @@ harden(makeChangeTopic);
 };$h͏_once.makeSerialJobs(makeSerialJobs);
 })()
 ,
-// === 110. daemon ./src/mail.js ===
+// === 117. daemon ./src/mail.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden,E,makeExo,makePromiseKit,q,mustMatch,M,makeChangeTopic,assertFormulaNumber,assertValidId,parseId,formatId,assertName,assertNames,assertPetNamePath,namePathFrom,makeDeferredTasks,makeSerialJobs,externalizeId,EnvelopeInterface,DismisserInterface,HandleInterface;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]],["@endo/eventual-send", [["E",[$h͏_a => (E = $h͏_a)]]]],["@endo/exo", [["makeExo",[$h͏_a => (makeExo = $h͏_a)]]]],["@endo/promise-kit", [["makePromiseKit",[$h͏_a => (makePromiseKit = $h͏_a)]]]],["@endo/errors", [["q",[$h͏_a => (q = $h͏_a)]]]],["@endo/patterns", [["mustMatch",[$h͏_a => (mustMatch = $h͏_a)]],["M",[$h͏_a => (M = $h͏_a)]]]],["./pubsub.js", [["makeChangeTopic",[$h͏_a => (makeChangeTopic = $h͏_a)]]]],["./formula-identifier.js", [["assertFormulaNumber",[$h͏_a => (assertFormulaNumber = $h͏_a)]],["assertValidId",[$h͏_a => (assertValidId = $h͏_a)]],["parseId",[$h͏_a => (parseId = $h͏_a)]],["formatId",[$h͏_a => (formatId = $h͏_a)]]]],["./pet-name.js", [["assertName",[$h͏_a => (assertName = $h͏_a)]],["assertNames",[$h͏_a => (assertNames = $h͏_a)]],["assertPetNamePath",[$h͏_a => (assertPetNamePath = $h͏_a)]],["namePathFrom",[$h͏_a => (namePathFrom = $h͏_a)]]]],["./deferred-tasks.js", [["makeDeferredTasks",[$h͏_a => (makeDeferredTasks = $h͏_a)]]]],["./serial-jobs.js", [["makeSerialJobs",[$h͏_a => (makeSerialJobs = $h͏_a)]]]],["./locator.js", [["externalizeId",[$h͏_a => (externalizeId = $h͏_a)]]]],["./interfaces.js", [["EnvelopeInterface",[$h͏_a => (EnvelopeInterface = $h͏_a)]],["DismisserInterface",[$h͏_a => (DismisserInterface = $h͏_a)]],["HandleInterface",[$h͏_a => (HandleInterface = $h͏_a)]]]]]);
 
 
@@ -23409,7 +24164,7 @@ const makeEnvelope = () => makeExo('Envelope', EnvelopeInterface, {});
 };$h͏_once.makeMailboxMaker(makeMailboxMaker);
 })()
 ,
-// === 111. daemon ./src/pet-sitter.js ===
+// === 118. daemon ./src/pet-sitter.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden,q,isPetName,assertName,parseId;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]],["@endo/errors", [["q",[$h͏_a => (q = $h͏_a)]]]],["./pet-name.js", [["isPetName",[$h͏_a => (isPetName = $h͏_a)]],["assertName",[$h͏_a => (assertName = $h͏_a)]]]],["./formula-identifier.js", [["parseId",[$h͏_a => (parseId = $h͏_a)]]]]]);
 
 
@@ -23540,7 +24295,7 @@ const makeEnvelope = () => makeExo('Envelope', EnvelopeInterface, {});
 };$h͏_once.makePetSitter(makePetSitter);
 })()
 ,
-// === 112. daemon ./src/guest.js ===
+// === 119. daemon ./src/guest.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let E,makeExo,q,makeIteratorRef,makePetSitter,assertName,assertNamePath,assertPetName,assertPetNamePath,namePathFrom,makeDeferredTasks,GuestInterface,guestHelp,makeHelp;$h͏_imports([["@endo/far", [["E",[$h͏_a => (E = $h͏_a)]]]],["@endo/exo", [["makeExo",[$h͏_a => (makeExo = $h͏_a)]]]],["@endo/errors", [["q",[$h͏_a => (q = $h͏_a)]]]],["./reader-ref.js", [["makeIteratorRef",[$h͏_a => (makeIteratorRef = $h͏_a)]]]],["./pet-sitter.js", [["makePetSitter",[$h͏_a => (makePetSitter = $h͏_a)]]]],["./pet-name.js", [["assertName",[$h͏_a => (assertName = $h͏_a)]],["assertNamePath",[$h͏_a => (assertNamePath = $h͏_a)]],["assertPetName",[$h͏_a => (assertPetName = $h͏_a)]],["assertPetNamePath",[$h͏_a => (assertPetNamePath = $h͏_a)]],["namePathFrom",[$h͏_a => (namePathFrom = $h͏_a)]]]],["./deferred-tasks.js", [["makeDeferredTasks",[$h͏_a => (makeDeferredTasks = $h͏_a)]]]],["./interfaces.js", [["GuestInterface",[$h͏_a => (GuestInterface = $h͏_a)]]]],["./help-text.js", [["guestHelp",[$h͏_a => (guestHelp = $h͏_a)]],["makeHelp",[$h͏_a => (makeHelp = $h͏_a)]]]]]);
 
 
@@ -23931,7 +24686,7 @@ const makeEnvelope = () => makeExo('Envelope', EnvelopeInterface, {});
 };$h͏_once.makeGuestMaker(makeGuestMaker);
 })()
 ,
-// === 113. daemon ./src/channel.js ===
+// === 120. daemon ./src/channel.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let makeExo,q,makeIteratorRef,makeChangeTopic,AsyncIteratorInterface,AttenuatorInterface,ChannelInterface,ChannelInvitationInterface,ChannelMemberInterface,makeHelp;$h͏_imports([["@endo/exo", [["makeExo",[$h͏_a => (makeExo = $h͏_a)]]]],["@endo/errors", [["q",[$h͏_a => (q = $h͏_a)]]]],["./reader-ref.js", [["makeIteratorRef",[$h͏_a => (makeIteratorRef = $h͏_a)]]]],["./pubsub.js", [["makeChangeTopic",[$h͏_a => (makeChangeTopic = $h͏_a)]]]],["./interfaces.js", [["AsyncIteratorInterface",[$h͏_a => (AsyncIteratorInterface = $h͏_a)]],["AttenuatorInterface",[$h͏_a => (AttenuatorInterface = $h͏_a)]],["ChannelInterface",[$h͏_a => (ChannelInterface = $h͏_a)]],["ChannelInvitationInterface",[$h͏_a => (ChannelInvitationInterface = $h͏_a)]],["ChannelMemberInterface",[$h͏_a => (ChannelMemberInterface = $h͏_a)]]]],["./help-text.js", [["makeHelp",[$h͏_a => (makeHelp = $h͏_a)]]]]]);
 
 
@@ -25129,7 +25884,7 @@ harden(channelInvitationHelp);
 harden(makeChannelMaker);
 })()
 ,
-// === 114. daemon ./src/hex.js ===
+// === 121. daemon ./src/hex.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';$h͏_imports([]);// @ts-check
 
 // Ponyfill for Uint8Array.prototype.toHex / Uint8Array.fromHex
@@ -25171,7 +25926,7 @@ harden(toHex);
 harden(fromHex);
 })()
 ,
-// === 115. daemon ./src/host.js ===
+// === 122. daemon ./src/host.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let E,makeExo,makeError,q,makeIteratorRef,assertPetName,assertPetNamePath,assertName,assertNamePath,namePathFrom,assertFormulaNumber,assertNodeNumber,parseId,formatId,addressesFromLocator,formatLocator,toHex,fromHex,makePetSitter,makeDeferredTasks,HostInterface,hostHelp,makeHelp;$h͏_imports([["@endo/far", [["E",[$h͏_a => (E = $h͏_a)]]]],["@endo/exo", [["makeExo",[$h͏_a => (makeExo = $h͏_a)]]]],["@endo/errors", [["makeError",[$h͏_a => (makeError = $h͏_a)]],["q",[$h͏_a => (q = $h͏_a)]]]],["./reader-ref.js", [["makeIteratorRef",[$h͏_a => (makeIteratorRef = $h͏_a)]]]],["./pet-name.js", [["assertPetName",[$h͏_a => (assertPetName = $h͏_a)]],["assertPetNamePath",[$h͏_a => (assertPetNamePath = $h͏_a)]],["assertName",[$h͏_a => (assertName = $h͏_a)]],["assertNamePath",[$h͏_a => (assertNamePath = $h͏_a)]],["namePathFrom",[$h͏_a => (namePathFrom = $h͏_a)]]]],["./formula-identifier.js", [["assertFormulaNumber",[$h͏_a => (assertFormulaNumber = $h͏_a)]],["assertNodeNumber",[$h͏_a => (assertNodeNumber = $h͏_a)]],["parseId",[$h͏_a => (parseId = $h͏_a)]],["formatId",[$h͏_a => (formatId = $h͏_a)]]]],["./locator.js", [["addressesFromLocator",[$h͏_a => (addressesFromLocator = $h͏_a)]],["formatLocator",[$h͏_a => (formatLocator = $h͏_a)]]]],["./hex.js", [["toHex",[$h͏_a => (toHex = $h͏_a)]],["fromHex",[$h͏_a => (fromHex = $h͏_a)]]]],["./pet-sitter.js", [["makePetSitter",[$h͏_a => (makePetSitter = $h͏_a)]]]],["./deferred-tasks.js", [["makeDeferredTasks",[$h͏_a => (makeDeferredTasks = $h͏_a)]]]],["./interfaces.js", [["HostInterface",[$h͏_a => (HostInterface = $h͏_a)]]]],["./help-text.js", [["hostHelp",[$h͏_a => (hostHelp = $h͏_a)]],["makeHelp",[$h͏_a => (makeHelp = $h͏_a)]]]]]);
 
 
@@ -25239,6 +25994,8 @@ const normalizeHostOrGuestOptions = opts => {
  * @param {DaemonCore['formulateEval']} args.formulateEval
  * @param {DaemonCore['formulateUnconfined']} args.formulateUnconfined
  * @param {DaemonCore['formulateArchive']} args.formulateArchive
+ * @param {DaemonCore['formulateFromTree']} args.formulateFromTree
+ * @param {(id: FormulaIdentifier) => string} args.getScratchMountPath
  * @param {DaemonCore['formulateReadableBlob']} args.formulateReadableBlob
  * @param {DaemonCore['checkinTree']} args.checkinTree
  * @param {DaemonCore['formulateMount']} args.formulateMount
@@ -25272,6 +26029,8 @@ const normalizeHostOrGuestOptions = opts => {
   formulateEval,
   formulateUnconfined,
   formulateArchive,
+  formulateFromTree,
+  getScratchMountPath,
   formulateReadableBlob,
   checkinTree,
   formulateMount,
@@ -25309,6 +26068,7 @@ const normalizeHostOrGuestOptions = opts => {
    * @param {FormulaIdentifier | undefined} mailHubId
    * @param {FormulaIdentifier} inspectorId
    * @param {FormulaIdentifier} mainWorkerId
+   * @param {FormulaIdentifier} nodeWorkerId
    * @param {FormulaIdentifier} endoId
    * @param {FormulaIdentifier} networksDirectoryId
    * @param {FormulaIdentifier} pinsDirectoryId
@@ -25327,6 +26087,7 @@ const normalizeHostOrGuestOptions = opts => {
     mailHubId,
     inspectorId,
     mainWorkerId,
+    nodeWorkerId,
     endoId,
     networksDirectoryId,
     pinsDirectoryId,
@@ -25336,6 +26097,7 @@ const normalizeHostOrGuestOptions = opts => {
   ) => {
     context.thisDiesIfThatDies(storeId);
     context.thisDiesIfThatDies(mainWorkerId);
+    context.thisDiesIfThatDies(nodeWorkerId);
     context.thisDiesIfThatDies(mailboxStoreId);
     if (mailHubId !== undefined) {
       context.thisDiesIfThatDies(mailHubId);
@@ -25351,6 +26113,7 @@ const normalizeHostOrGuestOptions = opts => {
       '@self': handleId,
       '@host': hostHandleId ?? handleId,
       '@main': mainWorkerId,
+      '@node': nodeWorkerId,
       '@endo': endoId,
       '@nets': networksDirectoryId,
       '@pins': pinsDirectoryId,
@@ -25666,6 +26429,17 @@ const normalizeHostOrGuestOptions = opts => {
 
     /** @type {EndoHost['makeUnconfined']} */
     const makeUnconfined = async (workerName, specifier, options) => {
+      // makeUnconfined is unconditionally Node-shaped (loads a plugin
+      // by filesystem path through Node's module loader).  When no
+      // worker is named *and* the caller has not requested trusted
+      // shims (which require a fresh worker pre-lockdown), default
+      // to the host's shared @node worker rather than spawning a
+      // fresh single-use Node worker per call.
+      const wantsFreshWorker =
+        options?.workerTrustedShims !== undefined &&
+        options.workerTrustedShims.length > 0;
+      const effectiveWorkerName =
+        workerName ?? (wantsFreshWorker ? undefined : '@node');
       const {
         tasks,
         workerId,
@@ -25674,7 +26448,7 @@ const normalizeHostOrGuestOptions = opts => {
         env,
         workerTrustedShims,
       } = prepareMakeCaplet(
-        /** @type {Name | undefined} */ (workerName),
+        /** @type {Name | undefined} */ (effectiveWorkerName),
         options,
       );
       const workerLabel =
@@ -25729,6 +26503,159 @@ const normalizeHostOrGuestOptions = opts => {
         hostId,
         handleId,
         /** @type {FormulaIdentifier} */ (archiveId),
+        tasks,
+        workerId,
+        powersId,
+        env,
+        workerTrustedShims,
+        workerLabel,
+      );
+      return value;
+    };
+
+    /**
+     * Walk a ReadableTree or Mount and materialise every file into the
+     * destination Mount via `writeText`.  Children are identified by
+     * their advertised method names: anything with `text` is a
+     * blob/file; anything with `list` is a subtree.  Both Mount and
+     * ReadableTree surfaces participate.
+     *
+     * @param {any} src - source readable-tree or mount
+     * @param {any} dst - destination scratch mount (must be writable)
+     * @param {string[]} [pathSegments]
+     */
+    const materializeTree = async (src, dst, pathSegments = []) => {
+      const names = await E(src).list(...pathSegments);
+      for (const name of names) {
+        const subPath = [...pathSegments, name];
+        // eslint-disable-next-line no-await-in-loop
+        const child = await E(src).lookup(subPath);
+        const methodNames =
+          // eslint-disable-next-line no-await-in-loop, no-underscore-dangle
+          await E(child).__getMethodNames__();
+        if (methodNames.includes('text')) {
+          // eslint-disable-next-line no-await-in-loop
+          const content = await E(child).text();
+          // eslint-disable-next-line no-await-in-loop
+          await E(dst).writeText(subPath, content);
+        } else if (methodNames.includes('list')) {
+          // Subdirectory — create it then recurse.
+          // eslint-disable-next-line no-await-in-loop
+          await E(dst).makeDirectory(subPath);
+          // eslint-disable-next-line no-await-in-loop
+          await materializeTree(src, dst, subPath);
+        }
+      }
+    };
+
+    /**
+     * Like stageTree, but returns both the ScratchMount capability and
+     * its on-disk formula identifier — callers that need the
+     * underlying filesystem path (e.g. `makeUnconfinedFromTree`) use
+     * the id with `getScratchMountPath`.  The public `stageTree`
+     * surface exposes only the mount capability.
+     *
+     * @param {string | string[]} treeName
+     * @param {string} scratchPetName
+     */
+    const stageTreeInternal = async (treeName, scratchPetName) => {
+      assertPetName(scratchPetName);
+      const treeNamePath = namePathFrom(/** @type {NameOrPath} */ (treeName));
+      assertNamePath(treeNamePath);
+      // Use identify + provide instead of a lookup chain to keep the
+      // source invariant (so Mount sub-node wrapping doesn't confuse
+      // the materialise walk).
+      const treeId = await E(directory).identify(...treeNamePath);
+      if (treeId === undefined) {
+        throw new TypeError(`Unknown pet name for tree: ${q(treeName)}`);
+      }
+      const tree = await provide(/** @type {FormulaIdentifier} */ (treeId));
+      const scratchMount = await provideScratchMount(scratchPetName);
+      await materializeTree(tree, scratchMount, []);
+      // Resolve the scratch mount's identifier after it's been stored
+      // by the deferred pet-store task inside provideScratchMount.
+      const scratchId = await E(directory).identify(scratchPetName);
+      if (scratchId === undefined) {
+        throw new TypeError(
+          `Internal error: scratch mount ${q(scratchPetName)} was not stored`,
+        );
+      }
+      const typedScratchId = /** @type {FormulaIdentifier} */ (scratchId);
+      return { scratchMount, scratchId: typedScratchId };
+    };
+
+    /** @type {EndoHost['stageTree']} */
+    const stageTree = async (treeName, scratchPetName) => {
+      const { scratchMount } = await stageTreeInternal(
+        treeName,
+        scratchPetName,
+      );
+      return scratchMount;
+    };
+
+    /** @type {EndoHost['makeUnconfinedFromTree']} */
+    const makeUnconfinedFromTree = async (workerName, treeName, options) => {
+      const entry = options?.entry ?? 'index.js';
+      const resultLabel =
+        options?.resultName !== undefined
+          ? `${options.resultName}`
+          : `tree-unconfined-${await (async () => {
+              // eslint-disable-next-line no-bitwise
+              const r = Math.floor(Math.random() * 0xffffff);
+              return r.toString(16);
+            })()}`;
+      // Scratch mount carries a derived pet name so the caller can
+      // observe / cancel it explicitly if desired.
+      const scratchPetName = `scratch-${resultLabel}`;
+      const { scratchId } = await stageTreeInternal(treeName, scratchPetName);
+      const scratchPath = getScratchMountPath(scratchId);
+      const entryPath = `${scratchPath}/${entry}`;
+      // Reuse the existing makeUnconfined flow (which already defaults
+      // to @node when no worker is named and handles env/powers).
+      // Encode path components so that characters like '#' (used in
+      // test directory suffixes) don't get interpreted as URL fragments.
+      const encodedPath = entryPath
+        .split('/')
+        .map(segment => encodeURIComponent(segment))
+        .join('/');
+      const fileUrl = `file://${encodedPath}`;
+      return makeUnconfined(
+        workerName,
+        fileUrl,
+        /** @type {MakeCapletOptions} */ (options ?? {}),
+      );
+    };
+
+    /** @type {EndoHost['makeFromTree']} */
+    const makeFromTree = async (workerName, treeName, options) => {
+      const namePath = namePathFrom(treeName);
+      assertNamePath(namePath);
+      const treeId = await E(directory).identify(...namePath);
+      if (treeId === undefined) {
+        throw new TypeError(`Unknown pet name for tree: ${q(treeName)}`);
+      }
+
+      const {
+        tasks,
+        workerId,
+        workerLabel: explicitLabel,
+        powersId,
+        env,
+        workerTrustedShims,
+      } = prepareMakeCaplet(
+        /** @type {Name | undefined} */ (workerName),
+        options,
+      );
+      const workerLabel =
+        explicitLabel ??
+        (options?.resultName !== undefined
+          ? `${options.resultName}`
+          : `tree:${Array.isArray(treeName) ? treeName.join('/') : treeName}`);
+
+      const { value } = await formulateFromTree(
+        hostId,
+        handleId,
+        /** @type {FormulaIdentifier} */ (treeId),
         tasks,
         workerId,
         powersId,
@@ -26369,6 +27296,9 @@ const normalizeHostOrGuestOptions = opts => {
       evaluate,
       makeUnconfined,
       makeArchive,
+      makeFromTree,
+      stageTree,
+      makeUnconfinedFromTree,
       cancel,
       gateway,
       greeter,
@@ -26418,6 +27348,7 @@ const normalizeHostOrGuestOptions = opts => {
     );
 
     await provide(mainWorkerId, 'worker');
+    await provide(nodeWorkerId, 'worker');
 
     return hostExo;
   };
@@ -26426,7 +27357,7 @@ const normalizeHostOrGuestOptions = opts => {
 };$h͏_once.makeHostMaker(makeHostMaker);
 })()
 ,
-// === 116. daemon ./src/remote-control.js ===
+// === 123. daemon ./src/remote-control.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';$h͏_imports([]);// @ts-check
 
 /** @import { RemoteControl, RemoteControlState, EndoGateway } from './types.js' */
@@ -26794,7 +27725,7 @@ const short = id => id.slice(0, 8);
 };$h͏_once.makeRemoteControlProvider(makeRemoteControlProvider);
 })()
 ,
-// === 117. daemon ./src/context.js ===
+// === 124. daemon ./src/context.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden,makePromiseKit;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]],["@endo/promise-kit", [["makePromiseKit",[$h͏_a => (makePromiseKit = $h͏_a)]]]]]);
 
 
@@ -26920,7 +27851,7 @@ const short = id => id.slice(0, 8);
 };$h͏_once.makeContextMaker(makeContextMaker);
 })()
 ,
-// === 118. daemon ./src/graph.js ===
+// === 125. daemon ./src/graph.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';$h͏_imports([]);// @ts-check
 
 /** @import { Formula, FormulaIdentifier } from './types.js' */
@@ -27756,7 +28687,7 @@ const short = id => id.slice(0, 8);
 harden(makeFormulaGraph);
 })()
 ,
-// === 119. daemon ./src/retention-accumulator.js ===
+// === 126. daemon ./src/retention-accumulator.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden,makeChangeTopic;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]],["./pubsub.js", [["makeChangeTopic",[$h͏_a => (makeChangeTopic = $h͏_a)]]]]]);
 
 
@@ -27873,7 +28804,7 @@ harden(makeFormulaGraph);
 harden(makeRetentionAccumulator);
 })()
 ,
-// === 120. daemon ./src/residence.js ===
+// === 127. daemon ./src/residence.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let makeDefaultCapTPImportExportTables,q;$h͏_imports([["@endo/captp", [["makeDefaultCapTPImportExportTables",[$h͏_a => (makeDefaultCapTPImportExportTables = $h͏_a)]]]],["@endo/errors", [["q",[$h͏_a => (q = $h͏_a)]]]]]);
 
 
@@ -28072,7 +29003,7 @@ harden(makeRetentionAccumulator);
 };$h͏_once.makeResidenceTracker(makeResidenceTracker);
 })()
 ,
-// === 121. daemon ./src/store-controller.js ===
+// === 128. daemon ./src/store-controller.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]]]);
 
 
@@ -28213,7 +29144,7 @@ harden(makeRetentionAccumulator);
 harden(makeLocalStoreController);
 })()
 ,
-// === 122. daemon ./src/multimap.js ===
+// === 129. daemon ./src/multimap.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let q;$h͏_imports([["@endo/errors", [["q",[$h͏_a => (q = $h͏_a)]]]]]);
 
 
@@ -28327,7 +29258,7 @@ const internalMakeMultimap = mapConstructor => {
 };$h͏_once.makeBidirectionalMultimap(makeBidirectionalMultimap);
 })()
 ,
-// === 123. daemon ./src/networks/loopback.js ===
+// === 130. daemon ./src/networks/loopback.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let Far;$h͏_imports([["@endo/far", [["Far",[$h͏_a => (Far = $h͏_a)]]]]]);
 
 
@@ -28360,7 +29291,7 @@ const internalMakeMultimap = mapConstructor => {
 };$h͏_once.makeLoopbackNetwork(makeLoopbackNetwork);
 })()
 ,
-// === 124. daemon ./src/mount.js ===
+// === 131. daemon ./src/mount.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let q,makeExo,mountHelp,mountFileHelp,makeHelp,MountInterface,MountFileInterface,makeIteratorRef;$h͏_imports([["@endo/errors", [["q",[$h͏_a => (q = $h͏_a)]]]],["@endo/exo", [["makeExo",[$h͏_a => (makeExo = $h͏_a)]]]],["./help-text.js", [["mountHelp",[$h͏_a => (mountHelp = $h͏_a)]],["mountFileHelp",[$h͏_a => (mountFileHelp = $h͏_a)]],["makeHelp",[$h͏_a => (makeHelp = $h͏_a)]]]],["./interfaces.js", [["MountInterface",[$h͏_a => (MountInterface = $h͏_a)]],["MountFileInterface",[$h͏_a => (MountFileInterface = $h͏_a)]]]],["./reader-ref.js", [["makeIteratorRef",[$h͏_a => (makeIteratorRef = $h͏_a)]]]]]);
 
 
@@ -28765,8 +29696,9 @@ harden(makeMountFileExo);
 harden(makeMount);
 })()
 ,
-// === 125. daemon ./src/daemon.js ===
-({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden,makeExo,E,Far,makeMarshal,makePromiseKit,makeError,q,X,platformCheckinTree,snapshotTreeMethods,makeRefReader,makeRefIterator,makeIteratorRef,makeDirectoryMaker,makeDeferredTasks,assertMailboxStoreName,makeMailboxMaker,makeGuestMaker,makeChannelMaker,makeHostMaker,makeRemoteControlProvider,assertName,assertNamePath,assertNames,assertPetName,namePathFrom,formatLocator,idFromLocator,internalizeLocator,externalizeId,makeContextMaker,assertValidId,assertValidNumber,assertFormulaNumber,assertNodeNumber,parseId,formatId,makeFormulaGraph,makeChangeTopic,makeRetentionAccumulator,makeResidenceTracker,toHex,fromHex,makeSerialJobs,makeLocalStoreController,makeWeakMultimap,makeLoopbackNetwork,assertValidFormulaType,blobHelp,directoryHelp,endoHelp,guestHelp,makeHelp,readableTreeHelp,makeMount,DaemonFacetForWorkerInterface,GuestInterface,InspectorHubInterface,InspectorInterface,InvitationInterface,PeerGatewayInterface,ResponderInterface,WorkerInterface,DirectoryInterface,BlobInterface,ReadableTreeInterface,EndoInterface;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]],["@endo/exo", [["makeExo",[$h͏_a => (makeExo = $h͏_a)]]]],["@endo/far", [["E",[$h͏_a => (E = $h͏_a)]],["Far",[$h͏_a => (Far = $h͏_a)]]]],["@endo/marshal", [["makeMarshal",[$h͏_a => (makeMarshal = $h͏_a)]]]],["@endo/promise-kit", [["makePromiseKit",[$h͏_a => (makePromiseKit = $h͏_a)]]]],["@endo/errors", [["makeError",[$h͏_a => (makeError = $h͏_a)]],["q",[$h͏_a => (q = $h͏_a)]],["X",[$h͏_a => (X = $h͏_a)]]]],["@endo/platform/fs/lite", [["checkinTree",[$h͏_a => (platformCheckinTree = $h͏_a)]],["snapshotTreeMethods",[$h͏_a => (snapshotTreeMethods = $h͏_a)]]]],["./ref-reader.js", [["makeRefReader",[$h͏_a => (makeRefReader = $h͏_a)]],["makeRefIterator",[$h͏_a => (makeRefIterator = $h͏_a)]]]],["./reader-ref.js", [["makeIteratorRef",[$h͏_a => (makeIteratorRef = $h͏_a)]]]],["./directory.js", [["makeDirectoryMaker",[$h͏_a => (makeDirectoryMaker = $h͏_a)]]]],["./deferred-tasks.js", [["makeDeferredTasks",[$h͏_a => (makeDeferredTasks = $h͏_a)]]]],["./mail.js", [["assertMailboxStoreName",[$h͏_a => (assertMailboxStoreName = $h͏_a)]],["makeMailboxMaker",[$h͏_a => (makeMailboxMaker = $h͏_a)]]]],["./guest.js", [["makeGuestMaker",[$h͏_a => (makeGuestMaker = $h͏_a)]]]],["./channel.js", [["makeChannelMaker",[$h͏_a => (makeChannelMaker = $h͏_a)]]]],["./host.js", [["makeHostMaker",[$h͏_a => (makeHostMaker = $h͏_a)]]]],["./remote-control.js", [["makeRemoteControlProvider",[$h͏_a => (makeRemoteControlProvider = $h͏_a)]]]],["./pet-name.js", [["assertName",[$h͏_a => (assertName = $h͏_a)]],["assertNamePath",[$h͏_a => (assertNamePath = $h͏_a)]],["assertNames",[$h͏_a => (assertNames = $h͏_a)]],["assertPetName",[$h͏_a => (assertPetName = $h͏_a)]],["namePathFrom",[$h͏_a => (namePathFrom = $h͏_a)]]]],["./locator.js", [["formatLocator",[$h͏_a => (formatLocator = $h͏_a)]],["idFromLocator",[$h͏_a => (idFromLocator = $h͏_a)]],["internalizeLocator",[$h͏_a => (internalizeLocator = $h͏_a)]],["externalizeId",[$h͏_a => (externalizeId = $h͏_a)]]]],["./context.js", [["makeContextMaker",[$h͏_a => (makeContextMaker = $h͏_a)]]]],["./formula-identifier.js", [["assertValidId",[$h͏_a => (assertValidId = $h͏_a)]],["assertValidNumber",[$h͏_a => (assertValidNumber = $h͏_a)]],["assertFormulaNumber",[$h͏_a => (assertFormulaNumber = $h͏_a)]],["assertNodeNumber",[$h͏_a => (assertNodeNumber = $h͏_a)]],["parseId",[$h͏_a => (parseId = $h͏_a)]],["formatId",[$h͏_a => (formatId = $h͏_a)]]]],["./graph.js", [["makeFormulaGraph",[$h͏_a => (makeFormulaGraph = $h͏_a)]]]],["./pubsub.js", [["makeChangeTopic",[$h͏_a => (makeChangeTopic = $h͏_a)]]]],["./retention-accumulator.js", [["makeRetentionAccumulator",[$h͏_a => (makeRetentionAccumulator = $h͏_a)]]]],["./residence.js", [["makeResidenceTracker",[$h͏_a => (makeResidenceTracker = $h͏_a)]]]],["./hex.js", [["toHex",[$h͏_a => (toHex = $h͏_a)]],["fromHex",[$h͏_a => (fromHex = $h͏_a)]]]],["./serial-jobs.js", [["makeSerialJobs",[$h͏_a => (makeSerialJobs = $h͏_a)]]]],["./store-controller.js", [["makeLocalStoreController",[$h͏_a => (makeLocalStoreController = $h͏_a)]]]],["./multimap.js", [["makeWeakMultimap",[$h͏_a => (makeWeakMultimap = $h͏_a)]]]],["./networks/loopback.js", [["makeLoopbackNetwork",[$h͏_a => (makeLoopbackNetwork = $h͏_a)]]]],["./formula-type.js", [["assertValidFormulaType",[$h͏_a => (assertValidFormulaType = $h͏_a)]]]],["./help-text.js", [["blobHelp",[$h͏_a => (blobHelp = $h͏_a)]],["directoryHelp",[$h͏_a => (directoryHelp = $h͏_a)]],["endoHelp",[$h͏_a => (endoHelp = $h͏_a)]],["guestHelp",[$h͏_a => (guestHelp = $h͏_a)]],["makeHelp",[$h͏_a => (makeHelp = $h͏_a)]],["readableTreeHelp",[$h͏_a => (readableTreeHelp = $h͏_a)]]]],["./mount.js", [["makeMount",[$h͏_a => (makeMount = $h͏_a)]]]],["./interfaces.js", [["DaemonFacetForWorkerInterface",[$h͏_a => (DaemonFacetForWorkerInterface = $h͏_a)]],["GuestInterface",[$h͏_a => (GuestInterface = $h͏_a)]],["InspectorHubInterface",[$h͏_a => (InspectorHubInterface = $h͏_a)]],["InspectorInterface",[$h͏_a => (InspectorInterface = $h͏_a)]],["InvitationInterface",[$h͏_a => (InvitationInterface = $h͏_a)]],["PeerGatewayInterface",[$h͏_a => (PeerGatewayInterface = $h͏_a)]],["ResponderInterface",[$h͏_a => (ResponderInterface = $h͏_a)]],["WorkerInterface",[$h͏_a => (WorkerInterface = $h͏_a)]],["DirectoryInterface",[$h͏_a => (DirectoryInterface = $h͏_a)]],["BlobInterface",[$h͏_a => (BlobInterface = $h͏_a)]],["ReadableTreeInterface",[$h͏_a => (ReadableTreeInterface = $h͏_a)]],["EndoInterface",[$h͏_a => (EndoInterface = $h͏_a)]]]]]);
+// === 132. daemon ./src/daemon.js ===
+({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden,makeExo,E,Far,makeMarshal,makePromiseKit,makeError,q,X,ZipWriter,platformCheckinTree,snapshotTreeMethods,makeRefReader,makeRefIterator,makeIteratorRef,makeReaderRef,makeDirectoryMaker,makeDeferredTasks,assertMailboxStoreName,makeMailboxMaker,makeGuestMaker,makeChannelMaker,makeHostMaker,makeRemoteControlProvider,assertName,assertNamePath,assertNames,assertPetName,namePathFrom,formatLocator,idFromLocator,internalizeLocator,externalizeId,makeContextMaker,assertValidId,assertValidNumber,assertFormulaNumber,assertNodeNumber,parseId,formatId,makeFormulaGraph,makeChangeTopic,makeRetentionAccumulator,makeResidenceTracker,toHex,fromHex,makeSerialJobs,makeLocalStoreController,makeWeakMultimap,makeLoopbackNetwork,assertValidFormulaType,blobHelp,directoryHelp,endoHelp,guestHelp,makeHelp,readableTreeHelp,makeMount,DaemonFacetForWorkerInterface,GuestInterface,InspectorHubInterface,InspectorInterface,InvitationInterface,PeerGatewayInterface,ResponderInterface,WorkerInterface,DirectoryInterface,BlobInterface,ReadableTreeInterface,EndoInterface;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]],["@endo/exo", [["makeExo",[$h͏_a => (makeExo = $h͏_a)]]]],["@endo/far", [["E",[$h͏_a => (E = $h͏_a)]],["Far",[$h͏_a => (Far = $h͏_a)]]]],["@endo/marshal", [["makeMarshal",[$h͏_a => (makeMarshal = $h͏_a)]]]],["@endo/promise-kit", [["makePromiseKit",[$h͏_a => (makePromiseKit = $h͏_a)]]]],["@endo/errors", [["makeError",[$h͏_a => (makeError = $h͏_a)]],["q",[$h͏_a => (q = $h͏_a)]],["X",[$h͏_a => (X = $h͏_a)]]]],["@endo/zip/writer.js", [["ZipWriter",[$h͏_a => (ZipWriter = $h͏_a)]]]],["@endo/platform/fs/lite", [["checkinTree",[$h͏_a => (platformCheckinTree = $h͏_a)]],["snapshotTreeMethods",[$h͏_a => (snapshotTreeMethods = $h͏_a)]]]],["./ref-reader.js", [["makeRefReader",[$h͏_a => (makeRefReader = $h͏_a)]],["makeRefIterator",[$h͏_a => (makeRefIterator = $h͏_a)]]]],["./reader-ref.js", [["makeIteratorRef",[$h͏_a => (makeIteratorRef = $h͏_a)]],["makeReaderRef",[$h͏_a => (makeReaderRef = $h͏_a)]]]],["./directory.js", [["makeDirectoryMaker",[$h͏_a => (makeDirectoryMaker = $h͏_a)]]]],["./deferred-tasks.js", [["makeDeferredTasks",[$h͏_a => (makeDeferredTasks = $h͏_a)]]]],["./mail.js", [["assertMailboxStoreName",[$h͏_a => (assertMailboxStoreName = $h͏_a)]],["makeMailboxMaker",[$h͏_a => (makeMailboxMaker = $h͏_a)]]]],["./guest.js", [["makeGuestMaker",[$h͏_a => (makeGuestMaker = $h͏_a)]]]],["./channel.js", [["makeChannelMaker",[$h͏_a => (makeChannelMaker = $h͏_a)]]]],["./host.js", [["makeHostMaker",[$h͏_a => (makeHostMaker = $h͏_a)]]]],["./remote-control.js", [["makeRemoteControlProvider",[$h͏_a => (makeRemoteControlProvider = $h͏_a)]]]],["./pet-name.js", [["assertName",[$h͏_a => (assertName = $h͏_a)]],["assertNamePath",[$h͏_a => (assertNamePath = $h͏_a)]],["assertNames",[$h͏_a => (assertNames = $h͏_a)]],["assertPetName",[$h͏_a => (assertPetName = $h͏_a)]],["namePathFrom",[$h͏_a => (namePathFrom = $h͏_a)]]]],["./locator.js", [["formatLocator",[$h͏_a => (formatLocator = $h͏_a)]],["idFromLocator",[$h͏_a => (idFromLocator = $h͏_a)]],["internalizeLocator",[$h͏_a => (internalizeLocator = $h͏_a)]],["externalizeId",[$h͏_a => (externalizeId = $h͏_a)]]]],["./context.js", [["makeContextMaker",[$h͏_a => (makeContextMaker = $h͏_a)]]]],["./formula-identifier.js", [["assertValidId",[$h͏_a => (assertValidId = $h͏_a)]],["assertValidNumber",[$h͏_a => (assertValidNumber = $h͏_a)]],["assertFormulaNumber",[$h͏_a => (assertFormulaNumber = $h͏_a)]],["assertNodeNumber",[$h͏_a => (assertNodeNumber = $h͏_a)]],["parseId",[$h͏_a => (parseId = $h͏_a)]],["formatId",[$h͏_a => (formatId = $h͏_a)]]]],["./graph.js", [["makeFormulaGraph",[$h͏_a => (makeFormulaGraph = $h͏_a)]]]],["./pubsub.js", [["makeChangeTopic",[$h͏_a => (makeChangeTopic = $h͏_a)]]]],["./retention-accumulator.js", [["makeRetentionAccumulator",[$h͏_a => (makeRetentionAccumulator = $h͏_a)]]]],["./residence.js", [["makeResidenceTracker",[$h͏_a => (makeResidenceTracker = $h͏_a)]]]],["./hex.js", [["toHex",[$h͏_a => (toHex = $h͏_a)]],["fromHex",[$h͏_a => (fromHex = $h͏_a)]]]],["./serial-jobs.js", [["makeSerialJobs",[$h͏_a => (makeSerialJobs = $h͏_a)]]]],["./store-controller.js", [["makeLocalStoreController",[$h͏_a => (makeLocalStoreController = $h͏_a)]]]],["./multimap.js", [["makeWeakMultimap",[$h͏_a => (makeWeakMultimap = $h͏_a)]]]],["./networks/loopback.js", [["makeLoopbackNetwork",[$h͏_a => (makeLoopbackNetwork = $h͏_a)]]]],["./formula-type.js", [["assertValidFormulaType",[$h͏_a => (assertValidFormulaType = $h͏_a)]]]],["./help-text.js", [["blobHelp",[$h͏_a => (blobHelp = $h͏_a)]],["directoryHelp",[$h͏_a => (directoryHelp = $h͏_a)]],["endoHelp",[$h͏_a => (endoHelp = $h͏_a)]],["guestHelp",[$h͏_a => (guestHelp = $h͏_a)]],["makeHelp",[$h͏_a => (makeHelp = $h͏_a)]],["readableTreeHelp",[$h͏_a => (readableTreeHelp = $h͏_a)]]]],["./mount.js", [["makeMount",[$h͏_a => (makeMount = $h͏_a)]]]],["./interfaces.js", [["DaemonFacetForWorkerInterface",[$h͏_a => (DaemonFacetForWorkerInterface = $h͏_a)]],["GuestInterface",[$h͏_a => (GuestInterface = $h͏_a)]],["InspectorHubInterface",[$h͏_a => (InspectorHubInterface = $h͏_a)]],["InspectorInterface",[$h͏_a => (InspectorInterface = $h͏_a)]],["InvitationInterface",[$h͏_a => (InvitationInterface = $h͏_a)]],["PeerGatewayInterface",[$h͏_a => (PeerGatewayInterface = $h͏_a)]],["ResponderInterface",[$h͏_a => (ResponderInterface = $h͏_a)]],["WorkerInterface",[$h͏_a => (WorkerInterface = $h͏_a)]],["DirectoryInterface",[$h͏_a => (DirectoryInterface = $h͏_a)]],["BlobInterface",[$h͏_a => (BlobInterface = $h͏_a)]],["ReadableTreeInterface",[$h͏_a => (ReadableTreeInterface = $h͏_a)]],["EndoInterface",[$h͏_a => (EndoInterface = $h͏_a)]]]]]);
+
 
 
 
@@ -28850,7 +29782,7 @@ harden(makeMount);
 /** @import { Passable } from '@endo/pass-style' */
 /** @import { ERef, FarRef } from '@endo/eventual-send' */
 /** @import { PromiseKit } from '@endo/promise-kit' */
-/** @import { AgentDeferredTaskParams, Builtins, CapTpConnectionRegistrar, Context, Controller, DaemonCore, DaemonCoreExternal, DaemonicPowers, DeferredTasks, DirectoryFormula, EndoBootstrap, EndoDirectory, EndoFormula, EndoGateway, EndoGreeter, EndoGuest, EndoHost, EndoInspector, EndoNetwork, EndoPeer, EndoReadable, EndoWorker, EvalFormula, FarContext, Formula, FormulaIdentifier, FormulaNumber, FormulaMakerTable, FormulateResult, GuestFormula, HandleFormula, HostFormula, Invitation, InvitationDeferredTaskParams, InvitationFormula, KnownEndoInspectors, KnownPeersStore, LookupFormula, LoopbackNetworkFormula, MailboxStoreFormula, MailHubFormula, MakeArchiveFormula, MakeCapletDeferredTaskParams, MakeUnconfinedFormula, MarshalDeferredTaskParams, MessageFormula, Name, NameHub, NamePath, NameOrPath, NodeNumber, PetName, PeerFormula, PeerInfo, PetInspectorFormula, PetStore, PetStoreFormula, PromiseFormula, Provide, ReadableBlobFormula, ResolverFormula, Sha256, Specials, MarshalFormula, WeakMultimap, WorkerDaemonFacet, WorkerFormula, TimerFormula } from './types.js' */
+/** @import { AgentDeferredTaskParams, Builtins, CapTpConnectionRegistrar, Context, Controller, DaemonCore, DaemonCoreExternal, DaemonicPowers, DeferredTasks, DirectoryFormula, EndoBootstrap, EndoDirectory, EndoFormula, EndoGateway, EndoGreeter, EndoGuest, EndoHost, EndoInspector, EndoNetwork, EndoPeer, EndoReadable, EndoWorker, EvalFormula, FarContext, Formula, FormulaIdentifier, FormulaNumber, FormulaMakerTable, FormulateResult, GuestFormula, HandleFormula, HostFormula, Invitation, InvitationDeferredTaskParams, InvitationFormula, KnownEndoInspectors, KnownPeersStore, LookupFormula, LoopbackNetworkFormula, MailboxStoreFormula, MailHubFormula, MakeArchiveFormula, MakeCapletDeferredTaskParams, MakeFromTreeFormula, MakeUnconfinedFormula, MarshalDeferredTaskParams, MessageFormula, Name, NameHub, NamePath, NameOrPath, NodeNumber, PetName, PeerFormula, PeerInfo, PetInspectorFormula, PetStore, PetStoreFormula, PromiseFormula, Provide, ReadableBlobFormula, ResolverFormula, Sha256, Specials, MarshalFormula, WeakMultimap, WorkerDaemonFacet, WorkerFormula, TimerFormula } from './types.js' */
 
 /**
  * Creates a delayed promise that can be cancelled.
@@ -29264,7 +30196,8 @@ const makeDaemonCore = async (
         return [
           ['handle', formula.handle],
           ['hostHandle', formula.hostHandle],
-          ['worker', formula.worker],
+          ['mainWorker', formula.mainWorker],
+          ['nodeWorker', formula.nodeWorker],
           ['inspector', formula.inspector],
           ['petStore', formula.petStore],
           ['mailbox', formula.mailboxStore],
@@ -29316,6 +30249,18 @@ const makeDaemonCore = async (
           ['worker', formula.worker],
           ['powers', formula.powers],
           ['archive', formula.archive],
+        ];
+        if (formula.cancelWithWorker) {
+          deps.push(['cancelWithWorker', formula.cancelWithWorker]);
+        }
+        return deps;
+      }
+      case 'make-from-tree': {
+        /** @type {Array<[string, FormulaIdentifier]>} */
+        const deps = [
+          ['worker', formula.worker],
+          ['powers', formula.powers],
+          ['tree', formula.tree],
         ];
         if (formula.cancelWithWorker) {
           deps.push(['cancelWithWorker', formula.cancelWithWorker]);
@@ -29625,7 +30570,8 @@ const makeDaemonCore = async (
       for (const formula of formulaForId.values()) {
         if (
           (formula.type === 'make-unconfined' ||
-            formula.type === 'make-archive') &&
+            formula.type === 'make-archive' ||
+            formula.type === 'make-from-tree') &&
           formula.worker === terminatedId &&
           formula.cancelWithWorker
         ) {
@@ -30155,6 +31101,157 @@ const makeDaemonCore = async (
       /** @type {any} */ (powersP),
       /** @type {any} */ (makeFarContext(context)),
       env,
+    );
+  };
+
+  /**
+   * Load a source-only tree (ReadableTree or Mount) into a worker and
+   * invoke its entry `make(powers, context, { env })`.  Mirrors
+   * {@link makeArchive} but the source comes from a tree capability
+   * rather than a ZIP blob.
+   *
+   * @param {string} workerId
+   * @param {string} powersId
+   * @param {string} treeId
+   * @param {Record<string, string> | undefined} env
+   * @param {Context} context
+   * @param {string} [cancelWithWorker]
+   */
+  const makeFromTree = async (
+    workerId,
+    powersId,
+    treeId,
+    env,
+    context,
+    cancelWithWorker,
+  ) => {
+    context.thisDiesIfThatDies(workerId);
+    context.thisDiesIfThatDies(powersId);
+    context.thisDiesIfThatDies(treeId);
+    if (cancelWithWorker) {
+      context.thisDiesIfThatDies(cancelWithWorker);
+    }
+
+    const worker = await provide(
+      /** @type {FormulaIdentifier} */ (workerId),
+      'worker',
+    );
+    const workerDaemonFacet = workerDaemonFacets.get(worker);
+    assert(workerDaemonFacet, 'Cannot make caplet with non-worker');
+    const treeP = provide(/** @type {FormulaIdentifier} */ (treeId));
+    const powersP = provide(/** @type {FormulaIdentifier} */ (powersId));
+
+    // XS (locked) workers cannot run @endo/compartment-mapper's
+    // parseArchive themselves yet, so the daemon walks the tree
+    // here, packs it into a synthesized archive, and routes through
+    // the existing makeArchive worker method which is implemented
+    // for both Node and XS via hostImportArchive.  A worker is
+    // "locked" if its formula explicitly says so, OR if the
+    // formula has no `kind` and the daemon's defaultWorkerKind is
+    // 'locked' (i.e. the Rust supervisor path).
+    const workerFormula = formulaForId.get(
+      /** @type {FormulaIdentifier} */ (workerId),
+    );
+    const workerKind =
+      workerFormula?.type === 'worker'
+        ? workerFormula.kind ?? defaultWorkerKind
+        : undefined;
+    const isLockedWorker = workerKind === 'locked';
+    if (isLockedWorker) {
+      // eslint-disable-next-line no-use-before-define
+      const archiveBytes = await packTreeIntoArchiveBytes(treeP);
+      // eslint-disable-next-line no-use-before-define
+      const transientBlob = makeBytesBlob(archiveBytes);
+      return E(/** @type {any} */ (workerDaemonFacet)).makeArchive(
+        /** @type {any} */ (transientBlob),
+        /** @type {any} */ (powersP),
+        /** @type {any} */ (makeFarContext(context)),
+        env,
+      );
+    }
+
+    return E(/** @type {any} */ (workerDaemonFacet)).makeFromTree(
+      /** @type {any} */ (treeP),
+      /** @type {any} */ (powersP),
+      /** @type {any} */ (makeFarContext(context)),
+      env,
+    );
+  };
+
+  /**
+   * Walk a ReadableTree or Mount whose layout matches a
+   * compartment-mapper archive (`compartment-map.json` at root plus
+   * modules at their referenced `<compartmentName>/<moduleLocation>`
+   * paths) and pack it into ZIP bytes that {@link makeArchive} can
+   * load via `parseArchive` / `hostImportArchive`.
+   *
+   * @param {Promise<unknown> | unknown} treeP
+   * @returns {Promise<Uint8Array>}
+   */
+  const packTreeIntoArchiveBytes = async treeP => {
+    const textEncoder = new TextEncoder();
+    const mapBlob = await E(/** @type {any} */ (treeP)).lookup(
+      'compartment-map.json',
+    );
+    const mapText = await E(/** @type {any} */ (mapBlob)).text();
+    /** @type {{ compartments: Record<string, any> }} */
+    const compartmentMap = JSON.parse(mapText);
+
+    const zip = new ZipWriter();
+    zip.write('compartment-map.json', textEncoder.encode(mapText));
+
+    for (const [compartmentName, descriptor] of Object.entries(
+      compartmentMap.compartments,
+    )) {
+      const modules = descriptor.modules || {};
+      for (const moduleInfo of Object.values(modules)) {
+        if (
+          typeof moduleInfo === 'object' &&
+          moduleInfo !== null &&
+          'location' in moduleInfo &&
+          typeof moduleInfo.location === 'string'
+        ) {
+          const archivePath = `${compartmentName}/${moduleInfo.location}`;
+          const pathSegments = archivePath.split('/').filter(Boolean);
+          // eslint-disable-next-line no-await-in-loop
+          const blob = await E(/** @type {any} */ (treeP)).lookup(
+            pathSegments,
+          );
+          // eslint-disable-next-line no-await-in-loop
+          const src = await E(/** @type {any} */ (blob)).text();
+          zip.write(archivePath, textEncoder.encode(src));
+        }
+      }
+    }
+
+    return zip.snapshot();
+  };
+
+  /**
+   * Wrap an in-memory Uint8Array as a transient blob exo that
+   * implements the `EndoBlob` surface (sha256 / streamBase64 / text
+   * / json) just well enough for the worker's `makeArchive` method
+   * to consume it.  The blob is not persisted in CAS — its lifetime
+   * is the duration of the eventual-send.
+   *
+   * @param {Uint8Array} bytes
+   */
+  const makeBytesBlob = bytes => {
+    const sha256Hex = (() => {
+      const digester = cryptoPowers.makeSha256();
+      digester.update(bytes);
+      return digester.digestHex();
+    })();
+    return makeExo(
+      'TransientBlob',
+      BlobInterface,
+      /** @type {any} */ ({
+        help: () => 'Transient in-memory blob',
+        sha256: () => sha256Hex,
+        streamBase64: () => makeReaderRef([bytes]),
+        text: async () => new TextDecoder().decode(bytes),
+        json: async () => JSON.parse(new TextDecoder().decode(bytes)),
+      }),
     );
   };
 
@@ -31075,6 +32172,18 @@ const makeDaemonCore = async (
         context,
         cancelWithWorker,
       ),
+    'make-from-tree': (
+      {
+        worker: workerId,
+        powers: powersId,
+        tree: treeId,
+        env = {},
+        cancelWithWorker,
+      },
+      context,
+    ) =>
+      // eslint-disable-next-line no-use-before-define
+      makeFromTree(workerId, powersId, treeId, env, context, cancelWithWorker),
     host: async (formula, context, id) => {
       const {
         hostHandle: hostHandleId,
@@ -31083,7 +32192,8 @@ const makeDaemonCore = async (
         mailboxStore: mailboxStoreId,
         mailHub: mailHubId,
         inspector: inspectorId,
-        worker: workerId,
+        mainWorker: hostMainWorkerId,
+        nodeWorker: nodeWorkerId,
         endo: endoId,
         networks: networksId,
         pins: pinsId,
@@ -31091,6 +32201,9 @@ const makeDaemonCore = async (
 
       if (mailHubId === undefined) {
         throw new Error('Host formula missing mail hub');
+      }
+      if (nodeWorkerId === undefined) {
+        throw new Error('Host formula missing nodeWorker (Phase 6 required)');
       }
       // Look up the agent key by scanning the agent_key table for
       // an entry whose agentId has the same formula number.
@@ -31119,7 +32232,8 @@ const makeDaemonCore = async (
         mailboxStoreId,
         mailHubId,
         inspectorId,
-        workerId,
+        hostMainWorkerId,
+        nodeWorkerId,
         endoId,
         networksId,
         pinsId,
@@ -32256,12 +33370,24 @@ const makeDaemonCore = async (
         )
       ).id,
     );
-    const workerId = pin(
+    const hostMainWorkerId = pin(
       await provideWorkerId(
         specifiedWorkerId,
         undefined,
         workerLabel ?? 'host',
         agentNodeNumber,
+      ),
+    );
+    // The @node special name is backed by a host-scoped Node.js
+    // worker.  Required regardless of the daemon's defaultWorkerKind
+    // so XS-default daemons still expose a Node bridge.
+    const nodeWorkerId = pin(
+      await provideWorkerId(
+        undefined,
+        undefined,
+        'host-node',
+        agentNodeNumber,
+        'node',
       ),
     );
     /* eslint-enable no-use-before-define */
@@ -32277,7 +33403,8 @@ const makeDaemonCore = async (
       mailboxStoreId,
       mailHubId,
       inspectorId,
-      workerId,
+      mainWorkerId: hostMainWorkerId,
+      nodeWorkerId,
       pinned,
     });
   };
@@ -32293,7 +33420,8 @@ const makeDaemonCore = async (
       mailboxStore: identifiers.mailboxStoreId,
       mailHub: identifiers.mailHubId,
       inspector: identifiers.inspectorId,
-      worker: identifiers.workerId,
+      mainWorker: identifiers.mainWorkerId,
+      nodeWorker: identifiers.nodeWorkerId,
       endo: identifiers.endoId,
       networks: identifiers.networksDirectoryId,
       pins: identifiers.pinsDirectoryId,
@@ -32906,6 +34034,48 @@ const makeDaemonCore = async (
         worker: workerId,
         powers: powersId,
         archive: archiveId,
+        env,
+        ...(originalWorkerId ? { cancelWithWorker: originalWorkerId } : {}),
+      };
+      return formulate(capletFormulaNumber, formula);
+    });
+  };
+
+  /** @type {DaemonCore['formulateFromTree']} */
+  const formulateFromTree = async (
+    hostAgentId,
+    hostHandleId,
+    treeId,
+    deferredTasks,
+    specifiedWorkerId,
+    specifiedPowersId,
+    env = {},
+    trustedShims = undefined,
+    workerLabel = undefined,
+  ) => {
+    return withFormulaGraphLock(async () => {
+      // Pass workerKind=undefined so the worker inherits the daemon's
+      // defaultWorkerKind (Node by default, locked under the Rust
+      // supervisor).  Unlike makeUnconfined, makeFromTree can run on
+      // either kind: XS workers get the tree pre-packed into an
+      // archive on the daemon side, then loaded via hostImportArchive.
+      const { powersId, capletFormulaNumber, workerId, originalWorkerId } =
+        await formulateCapletDependencies(
+          hostAgentId,
+          hostHandleId,
+          deferredTasks,
+          specifiedWorkerId,
+          specifiedPowersId,
+          trustedShims,
+          workerLabel,
+        );
+
+      /** @type {MakeFromTreeFormula} */
+      const formula = {
+        type: 'make-from-tree',
+        worker: workerId,
+        powers: powersId,
+        tree: treeId,
         env,
         ...(originalWorkerId ? { cancelWithWorker: originalWorkerId } : {}),
       };
@@ -33543,6 +34713,33 @@ const makeDaemonCore = async (
     return harden({ nodes: snapshotNodes, edges: graphEdges });
   };
 
+  /**
+   * Return the on-disk filesystem path for a scratch-mount formula.
+   * Host-side callers use this to hand a native filesystem path to
+   * Node's module loader (via `makeUnconfined`) without having
+   * Mount expose the path on its public surface.
+   *
+   * @param {FormulaIdentifier} scratchMountId
+   * @returns {string}
+   */
+  const getScratchMountPath = scratchMountId => {
+    const formula = formulaForId.get(scratchMountId);
+    if (formula === undefined) {
+      throw new TypeError(`Unknown formula ${q(scratchMountId)}`);
+    }
+    if (formula.type !== 'scratch-mount') {
+      throw new TypeError(
+        `getScratchMountPath requires a scratch-mount formula, got ${q(formula.type)}`,
+      );
+    }
+    const { number: formulaNumber } = parseId(scratchMountId);
+    return filePowers.joinPath(
+      persistencePowers.statePath,
+      'mounts',
+      formulaNumber,
+    );
+  };
+
   const makeHost = makeHostMaker({
     provide,
     provideStoreController,
@@ -33554,6 +34751,7 @@ const makeDaemonCore = async (
     formulateEval,
     formulateUnconfined,
     formulateArchive,
+    formulateFromTree,
     formulateReadableBlob,
     checkinTree,
     formulateMount,
@@ -33574,6 +34772,7 @@ const makeDaemonCore = async (
     pinTransient,
     unpinTransient,
     getFormulaGraphSnapshot,
+    getScratchMountPath,
     writeRemoteAgentKey: persistencePowers.writeRemoteAgentKey,
   });
 
@@ -33665,6 +34864,16 @@ const makeDaemonCore = async (
           formulaNumber,
           harden({
             archive: provide(formula.archive, 'readable-blob'),
+            powers: provide(formula.powers),
+            worker: provide(formula.worker, 'worker'),
+          }),
+        );
+      } else if (formula.type === 'make-from-tree') {
+        return makeInspector(
+          formula.type,
+          formulaNumber,
+          harden({
+            tree: provide(formula.tree),
             powers: provide(formula.powers),
             worker: provide(formula.worker, 'worker'),
           }),
@@ -33886,7 +35095,7 @@ const provideEndoBootstrap = async (
 };$h͏_once.makeDaemon(makeDaemon);
 })()
 ,
-// === 126. daemon ./src/daemon-persistence-powers.js ===
+// === 133. daemon ./src/daemon-persistence-powers.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden,q,makeSnapshotStore,makeReaderRef,toHex,fromHex;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]],["@endo/errors", [["q",[$h͏_a => (q = $h͏_a)]]]],["@endo/platform/fs/lite", [["makeSnapshotStore",[$h͏_a => (makeSnapshotStore = $h͏_a)]]]],["./reader-ref.js", [["makeReaderRef",[$h͏_a => (makeReaderRef = $h͏_a)]]]],["./hex.js", [["toHex",[$h͏_a => (toHex = $h͏_a)]],["fromHex",[$h͏_a => (fromHex = $h͏_a)]]]]]);
 
 
@@ -33929,6 +35138,9 @@ const provideEndoBootstrap = async (
     const ephemeralStatePathP = filePowers.makePath(ephemeralStatePath);
     const cachePathP = filePowers.makePath(cachePath);
     await Promise.all([statePathP, cachePathP, ephemeralStatePathP]);
+    // Load durable replacements for the SQLite-only tables.
+    // eslint-disable-next-line no-use-before-define
+    await loadDurableState();
   };
 
   /** @type {DaemonicPersistencePowers['provideRootNonce']} */
@@ -34096,17 +35308,36 @@ const provideEndoBootstrap = async (
 
   // Persist instructions for revival (this can be collected).
   /** @type {DaemonicPersistencePowers['writeFormula']} */
-  const writeFormula = async (formulaNumber, _nodeNumber, formula) => {
+  const writeFormula = async (formulaNumber, nodeNumber, formula) => {
     const { directory, file } = makeFormulaPath(formulaNumber);
     // TODO Take care to write atomically with a rename here.
     await filePowers.makePath(directory);
     await filePowers.writeFileText(file, `${q(formula)}\n`);
+    if (nodeNumber) {
+      let bucket = formulasByNode.get(nodeNumber);
+      if (bucket === undefined) {
+        bucket = new Set();
+        formulasByNode.set(nodeNumber, bucket);
+      }
+      bucket.add(formulaNumber);
+      // eslint-disable-next-line no-use-before-define
+      persistFormulasByNode(nodeNumber);
+    }
   };
 
   /** @type {DaemonicPersistencePowers['deleteFormula']} */
   const deleteFormula = async formulaNumber => {
     const { file } = makeFormulaPath(formulaNumber);
     await filePowers.removePath(file);
+    // Drop from any per-node bucket that contains it.  (We don't
+    // know which without scanning; the indexes are small so a linear
+    // scan over node-number keys is fine.)
+    for (const [nodeNumber, bucket] of formulasByNode) {
+      if (bucket.delete(formulaNumber)) {
+        // eslint-disable-next-line no-use-before-define
+        persistFormulasByNode(nodeNumber);
+      }
+    }
   };
 
   /** @type {DaemonicPersistencePowers['listFormulas']} */
@@ -34145,30 +35376,204 @@ const provideEndoBootstrap = async (
     return records;
   };
 
-  // Minimal in-memory shim of the SQLite-only tables (agent keys,
-  // retention, per-node formula listing) that the filesystem
-  // persistence does not persist.  State lives only in process
-  // memory; callers that need real durability should run with the
-  // SQLite daemon.
+  // Filesystem-backed replacements for the SQLite-only tables.
+  // Caches in memory for synchronous access; writes are serialised
+  // per-file through a promise chain.  Callers' mutators stay
+  // synchronous (matching the SQLite contract); the disk write is
+  // scheduled and chained.  Failures land on the promise chain
+  // (logged to stderr) but the cache stays consistent.
+  const { statePath } = config;
+  const agentKeysPath = filePowers.joinPath(statePath, 'agent-keys.json');
+  const remoteAgentKeysPath = filePowers.joinPath(
+    statePath,
+    'remote-agent-keys.json',
+  );
+  const retentionDir = filePowers.joinPath(statePath, 'retention');
+  const formulasByNodeDir = filePowers.joinPath(statePath, 'formulas-by-node');
+
   /** @type {Map<string, { publicKey: string, privateKey: string, agentId: string }>} */
   const agentKeys = new Map();
   /** @type {Map<string, string>} */
   const remoteAgentKeys = new Map();
   /** @type {Map<string, Set<string>>} */
   const retention = new Map();
+  /** @type {Map<string, Set<string>>} */
+  const formulasByNode = new Map();
 
-  const listFormulaNumbersByNode = _nodeNumber => [];
+  /**
+   * Per-file write chain.  Each enqueued task runs after the prior
+   * one settles.  Failures propagate to a single sink that logs but
+   * does not stall the chain.
+   *
+   * @returns {(task: () => Promise<void>) => void}
+   */
+  const makeWriteChain = () => {
+    /** @type {Promise<void>} */
+    let last = Promise.resolve();
+    const enqueue = task => {
+      last = last
+        .then(() => task())
+        .catch(err => {
+          console.error('Persistence write failed:', err);
+        });
+    };
+    return enqueue;
+  };
+  const writeAgentKeysChain = makeWriteChain();
+  const writeRemoteAgentKeysChain = makeWriteChain();
+  /** @type {Map<string, (task: () => Promise<void>) => void>} */
+  const retentionChains = new Map();
+  /** @type {Map<string, (task: () => Promise<void>) => void>} */
+  const byNodeChains = new Map();
+
+  /** @param {string} path @param {string} text */
+  const atomicWriteText = async (path, text) => {
+    const tmp = `${path}.tmp`;
+    await filePowers.writeFileText(tmp, text);
+    await filePowers.renamePath(tmp, path);
+  };
+
+  const persistAgentKeys = () => {
+    writeAgentKeysChain(async () => {
+      const arr = Array.from(agentKeys.values());
+      await atomicWriteText(agentKeysPath, JSON.stringify(arr));
+    });
+  };
+  const persistRemoteAgentKeys = () => {
+    writeRemoteAgentKeysChain(async () => {
+      const obj = Object.fromEntries(remoteAgentKeys);
+      await atomicWriteText(remoteAgentKeysPath, JSON.stringify(obj));
+    });
+  };
+  /** @param {string} guestPublicKey */
+  const persistRetention = guestPublicKey => {
+    let chain = retentionChains.get(guestPublicKey);
+    if (chain === undefined) {
+      chain = makeWriteChain();
+      retentionChains.set(guestPublicKey, chain);
+    }
+    const file = filePowers.joinPath(retentionDir, `${guestPublicKey}.json`);
+    chain(async () => {
+      const set = retention.get(guestPublicKey);
+      await filePowers.makePath(retentionDir);
+      if (set === undefined || set.size === 0) {
+        await filePowers.removePath(file).catch(err => {
+          const msg = String(err.message || err);
+          if (
+            !msg.startsWith('ENOENT: ') &&
+            !msg.includes('No such file or directory')
+          )
+            throw err;
+        });
+        return;
+      }
+      await atomicWriteText(file, JSON.stringify(Array.from(set)));
+    });
+  };
+  /** @param {string} nodeNumber */
+  const persistFormulasByNode = nodeNumber => {
+    let chain = byNodeChains.get(nodeNumber);
+    if (chain === undefined) {
+      chain = makeWriteChain();
+      byNodeChains.set(nodeNumber, chain);
+    }
+    const file = filePowers.joinPath(formulasByNodeDir, `${nodeNumber}.json`);
+    chain(async () => {
+      const set = formulasByNode.get(nodeNumber);
+      await filePowers.makePath(formulasByNodeDir);
+      if (set === undefined || set.size === 0) {
+        await filePowers.removePath(file).catch(err => {
+          const msg = String(err.message || err);
+          if (
+            !msg.startsWith('ENOENT: ') &&
+            !msg.includes('No such file or directory')
+          )
+            throw err;
+        });
+        return;
+      }
+      await atomicWriteText(file, JSON.stringify(Array.from(set)));
+    });
+  };
+
+  const loadDurableState = async () => {
+    const agentKeysText = await filePowers.maybeReadFileText(agentKeysPath);
+    if (agentKeysText !== undefined) {
+      const arr = JSON.parse(agentKeysText);
+      for (const record of arr) {
+        agentKeys.set(record.publicKey, record);
+      }
+    }
+    const remoteText = await filePowers.maybeReadFileText(remoteAgentKeysPath);
+    if (remoteText !== undefined) {
+      const obj = JSON.parse(remoteText);
+      for (const [pk, node] of Object.entries(obj)) {
+        remoteAgentKeys.set(pk, /** @type {string} */ (node));
+      }
+    }
+    // Eagerly load retention buckets and per-node indexes — they're
+    // small and the queries are synchronous.
+    /** @param {Error} err */
+    const isNotFoundError = err => {
+      const msg = String(err.message || err);
+      return (
+        msg.startsWith('ENOENT: ') ||
+        msg.includes('No such file or directory')
+      );
+    };
+    const retentionFiles = await filePowers
+      .readDirectory(retentionDir)
+      .catch(err => {
+        if (isNotFoundError(err)) return [];
+        throw err;
+      });
+    await Promise.all(
+      retentionFiles.map(async fileName => {
+        if (!fileName.endsWith('.json')) return;
+        const guestPublicKey = fileName.slice(0, -'.json'.length);
+        const text = await filePowers.readFileText(
+          filePowers.joinPath(retentionDir, fileName),
+        );
+        retention.set(guestPublicKey, new Set(JSON.parse(text)));
+      }),
+    );
+    const byNodeFiles = await filePowers
+      .readDirectory(formulasByNodeDir)
+      .catch(err => {
+        if (isNotFoundError(err)) return [];
+        throw err;
+      });
+    await Promise.all(
+      byNodeFiles.map(async fileName => {
+        if (!fileName.endsWith('.json')) return;
+        const nodeNumber = fileName.slice(0, -'.json'.length);
+        const text = await filePowers.readFileText(
+          filePowers.joinPath(formulasByNodeDir, fileName),
+        );
+        formulasByNode.set(nodeNumber, new Set(JSON.parse(text)));
+      }),
+    );
+  };
+
+  /** @param {string} nodeNumber */
+  const listFormulaNumbersByNode = nodeNumber => {
+    const set = formulasByNode.get(nodeNumber);
+    return set ? Array.from(set) : [];
+  };
   const writeAgentKey = (publicKey, privateKey, agentId) => {
     agentKeys.set(publicKey, { publicKey, privateKey, agentId });
+    persistAgentKeys();
   };
   const getAgentKey = publicKey => agentKeys.get(publicKey);
   const hasAgentKey = publicKey => agentKeys.has(publicKey);
   const listAgentKeys = () => Array.from(agentKeys.values());
   const deleteAgentKey = publicKey => {
     agentKeys.delete(publicKey);
+    persistAgentKeys();
   };
   const writeRemoteAgentKey = (publicKey, daemonNode) => {
     remoteAgentKeys.set(publicKey, daemonNode);
+    persistRemoteAgentKeys();
   };
   const getRemoteAgentKey = publicKey => remoteAgentKeys.get(publicKey);
   const retentionBucket = guestPublicKey => {
@@ -34181,9 +35586,11 @@ const provideEndoBootstrap = async (
   };
   const writeRetention = (guestPublicKey, formulaNumber) => {
     retentionBucket(guestPublicKey).add(formulaNumber);
+    persistRetention(guestPublicKey);
   };
   const deleteRetention = (guestPublicKey, formulaNumber) => {
     retentionBucket(guestPublicKey).delete(formulaNumber);
+    persistRetention(guestPublicKey);
   };
   const listRetention = guestPublicKey =>
     Array.from(retentionBucket(guestPublicKey), formulaNumber => ({
@@ -34191,9 +35598,11 @@ const provideEndoBootstrap = async (
     }));
   const replaceRetention = (guestPublicKey, formulaNumbers) => {
     retention.set(guestPublicKey, new Set(formulaNumbers));
+    persistRetention(guestPublicKey);
   };
   const deleteAllRetention = guestPublicKey => {
     retention.delete(guestPublicKey);
+    persistRetention(guestPublicKey);
   };
 
   return harden({
@@ -34224,7 +35633,7 @@ const provideEndoBootstrap = async (
 harden(makeDaemonicPersistencePowers);
 })()
 ,
-// === 127. daemon ./src/pet-store.js ===
+// === 134. daemon ./src/pet-store.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden,makeChangeTopic,parseId,assertValidId,makeBidirectionalMultimap;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]],["./pubsub.js", [["makeChangeTopic",[$h͏_a => (makeChangeTopic = $h͏_a)]]]],["./formula-identifier.js", [["parseId",[$h͏_a => (parseId = $h͏_a)]],["assertValidId",[$h͏_a => (assertValidId = $h͏_a)]]]],["./multimap.js", [["makeBidirectionalMultimap",[$h͏_a => (makeBidirectionalMultimap = $h͏_a)]]]]]);
 
 
@@ -34490,7 +35899,7 @@ harden(makeDaemonicPersistencePowers);
 };$h͏_once.makePetStoreMaker(makePetStoreMaker);
 })()
 ,
-// === 128. netstring ./reader.js ===
+// === 135. netstring ./reader.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]]]);
 
 
@@ -34656,7 +36065,7 @@ harden(makeNetstringReader);
 };$h͏_once.netstringReader(netstringReader);
 })()
 ,
-// === 129. netstring ./writer.js ===
+// === 136. netstring ./writer.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden,makePromiseKit;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]],["@endo/promise-kit", [["makePromiseKit",[$h͏_a => (makePromiseKit = $h͏_a)]]]]]);
 
 
@@ -34756,11 +36165,11 @@ harden(makeNetstringWriter);
        const netstringWriter = makeNetstringWriter;$h͏_once.netstringWriter(netstringWriter);
 })()
 ,
-// === 130. netstring ./index.js ===
+// === 137. netstring ./index.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';$h͏_imports([["./reader.js", []],["./writer.js", []]]);
 })()
 ,
-// === 131. daemon ./src/connection.js ===
+// === 138. daemon ./src/connection.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let makeCapTP,makePromiseKit,mapWriter,mapReader,makeNetstringReader,makeNetstringWriter;$h͏_imports([["@endo/captp", [["makeCapTP",[$h͏_a => (makeCapTP = $h͏_a)]]]],["@endo/promise-kit", [["makePromiseKit",[$h͏_a => (makePromiseKit = $h͏_a)]]]],["@endo/stream", [["mapWriter",[$h͏_a => (mapWriter = $h͏_a)]],["mapReader",[$h͏_a => (mapReader = $h͏_a)]]]],["@endo/netstring", [["makeNetstringReader",[$h͏_a => (makeNetstringReader = $h͏_a)]],["makeNetstringWriter",[$h͏_a => (makeNetstringWriter = $h͏_a)]]]]]);
 
 
@@ -34972,7 +36381,7 @@ const registerCapTpConnection = (registrar, name, close, closed) => {
 };$h͏_once.makeNetstringCapTP(makeNetstringCapTP);
 })()
 ,
-// === 132. daemon ./src/envelope.js ===
+// === 139. daemon ./src/envelope.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';$h͏_imports([]);// @ts-check
 /* eslint-disable no-bitwise */
 /* global Buffer */
@@ -35362,7 +36771,7 @@ harden(readFrameFromStream);
 harden(writeFrameToStream);
 })()
 ,
-// === 133. daemon ./src/bus-daemon-rust-xs-powers.js ===
+// === 140. daemon ./src/bus-daemon-rust-xs-powers.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';$h͏_imports([]);// @ts-nocheck
 // The XS-backed powers still implement the pre-SQLite SqliteValue
 // contract and expose readLink outside the current FilePowers type.
@@ -35911,7 +37320,7 @@ const assertSqliteOk = result => {
 harden(makeXsSqlitePowers);
 })()
 ,
-// === 134. daemon ./src/debug-session.js ===
+// === 141. daemon ./src/debug-session.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let makePromiseKit;$h͏_imports([["@endo/promise-kit", [["makePromiseKit",[$h͏_a => (makePromiseKit = $h͏_a)]]]]]);
 
 
@@ -36456,7 +37865,7 @@ harden(makeSaxParser);
 harden(makeDebugSession);
 })()
 ,
-// === 135. daemon ./src/debugger.js ===
+// === 142. daemon ./src/debugger.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let makeExo,M;$h͏_imports([["@endo/exo", [["makeExo",[$h͏_a => (makeExo = $h͏_a)]]]],["@endo/patterns", [["M",[$h͏_a => (M = $h͏_a)]]]]]);
 
 
@@ -36615,7 +38024,7 @@ harden(DebuggerInterface);
 harden(makeDebugger);
 })()
 ,
-// === 136. daemon ./src/bus-daemon-rust-xs.js ===
+// === 143. daemon ./src/bus-daemon-rust-xs.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let makeCapTP,E,makePromiseKit,mapWriter,mapReader,makePipe,makeDaemon,makeDaemonicPersistencePowers,makePetStoreMaker,makeMessageCapTP,messageToBytes,bytesToMessage,encodeEnvelope,decodeEnvelope,makeXsFilePowers,makeXsCryptoPowers,makeDebugSession,makeDebugger;$h͏_imports([["@endo/captp", [["makeCapTP",[$h͏_a => (makeCapTP = $h͏_a)]]]],["@endo/far", [["E",[$h͏_a => (E = $h͏_a)]]]],["@endo/promise-kit", [["makePromiseKit",[$h͏_a => (makePromiseKit = $h͏_a)]]]],["@endo/stream", [["mapWriter",[$h͏_a => (mapWriter = $h͏_a)]],["mapReader",[$h͏_a => (mapReader = $h͏_a)]],["makePipe",[$h͏_a => (makePipe = $h͏_a)]]]],["./daemon.js", [["makeDaemon",[$h͏_a => (makeDaemon = $h͏_a)]]]],["./daemon-persistence-powers.js", [["makeDaemonicPersistencePowers",[$h͏_a => (makeDaemonicPersistencePowers = $h͏_a)]]]],["./pet-store.js", [["makePetStoreMaker",[$h͏_a => (makePetStoreMaker = $h͏_a)]]]],["./connection.js", [["makeMessageCapTP",[$h͏_a => (makeMessageCapTP = $h͏_a)]],["messageToBytes",[$h͏_a => (messageToBytes = $h͏_a)]],["bytesToMessage",[$h͏_a => (bytesToMessage = $h͏_a)]]]],["./envelope.js", [["encodeEnvelope",[$h͏_a => (encodeEnvelope = $h͏_a)]],["decodeEnvelope",[$h͏_a => (decodeEnvelope = $h͏_a)]]]],["./bus-daemon-rust-xs-powers.js", [["makeXsFilePowers",[$h͏_a => (makeXsFilePowers = $h͏_a)]],["makeXsCryptoPowers",[$h͏_a => (makeXsCryptoPowers = $h͏_a)]]]],["./debug-session.js", [["makeDebugSession",[$h͏_a => (makeDebugSession = $h͏_a)]]]],["./debugger.js", [["makeDebugger",[$h͏_a => (makeDebugger = $h͏_a)]]]]]);
 
 

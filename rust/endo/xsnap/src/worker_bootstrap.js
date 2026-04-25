@@ -18971,9 +18971,18 @@ const workerFacet = makeExo(
         offset += c.length;
       }
 
-      // Load archive natively via Rust host function (Uint8Array)
-      const ok = hostImportArchive(archiveBytes);
-      if (!ok) throw new Error('Failed to import archive');
+      // Set the archive endowments so the loaded compartments
+      // can reference standard globals (E, Far, makeExo, ...).
+      // The Rust archive::install_archive reads
+      // globalThis.__archiveEndowments inside its compartment
+      // factory.
+      globalThis.__archiveEndowments = standardEndowments;
+      try {
+        const ok = hostImportArchive(archiveBytes);
+        if (!ok) throw new Error('Failed to import archive');
+      } finally {
+        delete globalThis.__archiveEndowments;
+      }
 
       // Entry namespace set by install_archive — capture and release.
       const namespace = globalThis.__entryNs;
@@ -18996,7 +19005,13 @@ const workerFacet = makeExo(
      * @returns {Promise<unknown>}
      */
     makeFromTree: async (_treeP, _powersP, _contextP, _env) => {
-      throw new Error('makeFromTree not yet implemented in XS worker');
+      // The daemon side intercepts make-from-tree for XS workers,
+      // packs the tree into an archive, and routes through
+      // makeArchive instead.  Reaching this stub indicates a routing
+      // bug in the daemon dispatcher.
+      throw new Error(
+        'XS workers receive make-from-tree as makeArchive; this stub should not run',
+      );
     },
 
     makeUnconfined: async (_specifier, _powersP, _contextP, _env) => {

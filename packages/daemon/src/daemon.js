@@ -8,12 +8,13 @@ import { E, Far } from '@endo/far';
 import { makeMarshal } from '@endo/marshal';
 import { makePromiseKit } from '@endo/promise-kit';
 import { makeError, q, X } from '@endo/errors';
+import { ZipWriter } from '@endo/zip/writer.js';
 import {
   checkinTree as platformCheckinTree,
   snapshotTreeMethods,
 } from '@endo/platform/fs/lite';
 import { makeRefReader, makeRefIterator } from './ref-reader.js';
-import { makeIteratorRef } from './reader-ref.js';
+import { makeIteratorRef, makeReaderRef } from './reader-ref.js';
 import { makeDirectoryMaker } from './directory.js';
 import { makeDeferredTasks } from './deferred-tasks.js';
 import { assertMailboxStoreName, makeMailboxMaker } from './mail.js';
@@ -1440,11 +1441,116 @@ const makeDaemonCore = async (
     assert(workerDaemonFacet, 'Cannot make caplet with non-worker');
     const treeP = provide(/** @type {FormulaIdentifier} */ (treeId));
     const powersP = provide(/** @type {FormulaIdentifier} */ (powersId));
+
+    // XS (locked) workers cannot run @endo/compartment-mapper's
+    // parseArchive themselves yet, so the daemon walks the tree
+    // here, packs it into a synthesized archive, and routes through
+    // the existing makeArchive worker method which is implemented
+    // for both Node and XS via hostImportArchive.  A worker is
+    // "locked" if its formula explicitly says so, OR if the
+    // formula has no `kind` and the daemon's defaultWorkerKind is
+    // 'locked' (i.e. the Rust supervisor path).
+    const workerFormula = formulaForId.get(
+      /** @type {FormulaIdentifier} */ (workerId),
+    );
+    const workerKind =
+      workerFormula?.type === 'worker'
+        ? (workerFormula.kind ?? defaultWorkerKind)
+        : undefined;
+    const isLockedWorker = workerKind === 'locked';
+    if (isLockedWorker) {
+      // eslint-disable-next-line no-use-before-define
+      const archiveBytes = await packTreeIntoArchiveBytes(treeP);
+      // eslint-disable-next-line no-use-before-define
+      const transientBlob = makeBytesBlob(archiveBytes);
+      return E(/** @type {any} */ (workerDaemonFacet)).makeArchive(
+        /** @type {any} */ (transientBlob),
+        /** @type {any} */ (powersP),
+        /** @type {any} */ (makeFarContext(context)),
+        env,
+      );
+    }
+
     return E(/** @type {any} */ (workerDaemonFacet)).makeFromTree(
       /** @type {any} */ (treeP),
       /** @type {any} */ (powersP),
       /** @type {any} */ (makeFarContext(context)),
       env,
+    );
+  };
+
+  /**
+   * Walk a ReadableTree or Mount whose layout matches a
+   * compartment-mapper archive (`compartment-map.json` at root plus
+   * modules at their referenced `<compartmentName>/<moduleLocation>`
+   * paths) and pack it into ZIP bytes that {@link makeArchive} can
+   * load via `parseArchive` / `hostImportArchive`.
+   *
+   * @param {Promise<unknown> | unknown} treeP
+   * @returns {Promise<Uint8Array>}
+   */
+  const packTreeIntoArchiveBytes = async treeP => {
+    const textEncoder = new TextEncoder();
+    const mapBlob = await E(/** @type {any} */ (treeP)).lookup(
+      'compartment-map.json',
+    );
+    const mapText = await E(/** @type {any} */ (mapBlob)).text();
+    /** @type {{ compartments: Record<string, any> }} */
+    const compartmentMap = JSON.parse(mapText);
+
+    const zip = new ZipWriter();
+    zip.write('compartment-map.json', textEncoder.encode(mapText));
+
+    for (const [compartmentName, descriptor] of Object.entries(
+      compartmentMap.compartments,
+    )) {
+      const modules = descriptor.modules || {};
+      for (const moduleInfo of Object.values(modules)) {
+        if (
+          typeof moduleInfo === 'object' &&
+          moduleInfo !== null &&
+          'location' in moduleInfo &&
+          typeof moduleInfo.location === 'string'
+        ) {
+          const archivePath = `${compartmentName}/${moduleInfo.location}`;
+          const pathSegments = archivePath.split('/').filter(Boolean);
+          // eslint-disable-next-line no-await-in-loop
+          const blob = await E(/** @type {any} */ (treeP)).lookup(pathSegments);
+          // eslint-disable-next-line no-await-in-loop
+          const src = await E(/** @type {any} */ (blob)).text();
+          zip.write(archivePath, textEncoder.encode(src));
+        }
+      }
+    }
+
+    return zip.snapshot();
+  };
+
+  /**
+   * Wrap an in-memory Uint8Array as a transient blob exo that
+   * implements the `EndoBlob` surface (sha256 / streamBase64 / text
+   * / json) just well enough for the worker's `makeArchive` method
+   * to consume it.  The blob is not persisted in CAS — its lifetime
+   * is the duration of the eventual-send.
+   *
+   * @param {Uint8Array} bytes
+   */
+  const makeBytesBlob = bytes => {
+    const sha256Hex = (() => {
+      const digester = cryptoPowers.makeSha256();
+      digester.update(bytes);
+      return digester.digestHex();
+    })();
+    return makeExo(
+      'TransientBlob',
+      BlobInterface,
+      /** @type {any} */ ({
+        help: () => 'Transient in-memory blob',
+        sha256: () => sha256Hex,
+        streamBase64: () => makeReaderRef([bytes]),
+        text: async () => new TextDecoder().decode(bytes),
+        json: async () => JSON.parse(new TextDecoder().decode(bytes)),
+      }),
     );
   };
 
@@ -4247,6 +4353,11 @@ const makeDaemonCore = async (
     workerLabel = undefined,
   ) => {
     return withFormulaGraphLock(async () => {
+      // Pass workerKind=undefined so the worker inherits the daemon's
+      // defaultWorkerKind (Node by default, locked under the Rust
+      // supervisor).  Unlike makeUnconfined, makeFromTree can run on
+      // either kind: XS workers get the tree pre-packed into an
+      // archive on the daemon side, then loaded via hostImportArchive.
       const { powersId, capletFormulaNumber, workerId, originalWorkerId } =
         await formulateCapletDependencies(
           hostAgentId,
@@ -4256,7 +4367,6 @@ const makeDaemonCore = async (
           specifiedPowersId,
           trustedShims,
           workerLabel,
-          'node',
         );
 
       /** @type {MakeFromTreeFormula} */
