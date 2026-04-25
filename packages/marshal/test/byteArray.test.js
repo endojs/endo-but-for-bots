@@ -8,7 +8,10 @@ import {
   uint8ArrayToByteArray,
 } from '@endo/pass-style';
 import { makeMarshal } from '../src/marshal.js';
-import { makeEncodePassable, makeDecodePassable } from '../src/encodePassable.js';
+import {
+  makeEncodePassable,
+  makeDecodePassable,
+} from '../src/encodePassable.js';
 import { compareRank } from '../src/rankOrder.js';
 
 const mkByteArray = bytes => uint8ArrayToByteArray(new Uint8Array(bytes));
@@ -60,11 +63,7 @@ test('capdata round-trips byteArray', t => {
     const { body } = serialize(ba);
     const decoded = unserialize({ body, slots: [] });
     t.is(passStyleOf(decoded), 'byteArray', name);
-    t.deepEqual(
-      [...byteArrayToUint8Array(decoded)],
-      bytes,
-      `capdata ${name}`,
-    );
+    t.deepEqual([...byteArrayToUint8Array(decoded)], bytes, `capdata ${name}`);
   }
 });
 
@@ -105,11 +104,7 @@ test('encodePassable round-trips byteArray (legacyOrdered)', t => {
     const enc = encode(ba);
     t.is(enc.charAt(0), 'a', `legacy ${name} starts with 'a'`);
     const back = decode(enc);
-    t.deepEqual(
-      [...byteArrayToUint8Array(back)],
-      bytes,
-      `legacy ${name}`,
-    );
+    t.deepEqual([...byteArrayToUint8Array(back)], bytes, `legacy ${name}`);
   }
 });
 
@@ -120,11 +115,7 @@ test('encodePassable round-trips byteArray (compactOrdered)', t => {
     const ba = mkByteArray(bytes);
     const enc = encode(ba);
     const back = decode(enc);
-    t.deepEqual(
-      [...byteArrayToUint8Array(back)],
-      bytes,
-      `compact ${name}`,
-    );
+    t.deepEqual([...byteArrayToUint8Array(back)], bytes, `compact ${name}`);
   }
 });
 
