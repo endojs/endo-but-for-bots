@@ -160,6 +160,7 @@ export const makeNetworkPowers = ({ net, fsp }) => {
    * @param {Promise<never>} cancelled
    * @param {(error: Error) => void} exitWithError
    * @param {CapTpConnectionRegistrar} [capTpConnectionRegistrar]
+   * @param {(err: Error, errorId?: string) => void} [marshalSaveError]
    * @returns {{ started: Promise<void>, stopped: Promise<void> }}
    */
   const makePrivatePathService = (
@@ -168,6 +169,7 @@ export const makeNetworkPowers = ({ net, fsp }) => {
     cancelled,
     exitWithError,
     capTpConnectionRegistrar = undefined,
+    marshalSaveError = undefined,
   ) => {
     const privatePathService = servePrivatePath(sockPath, endoBootstrap, {
       servePath,
@@ -175,6 +177,7 @@ export const makeNetworkPowers = ({ net, fsp }) => {
       cancelled,
       exitWithError,
       capTpConnectionRegistrar,
+      marshalSaveError,
     });
     return privatePathService;
   };
@@ -487,6 +490,14 @@ export const makeDaemonicControlPowers = (
    * @param {CapTpConnectionRegistrar} [capTpConnectionRegistrar]
    * @param {string[]} [trustedShims]
    * @param {string} [label]
+   * @param {'locked' | 'node'} [kind] Accepted for parity with the bus and
+   *   go variants; the node-powers worker only spawns the locked Node
+   *   subprocess regardless.
+   * @param {(err: Error, errorId?: string) => void} [marshalLoadError]
+   *   Forwarded to the worker connection's CapTP. Called for every error
+   *   the daemon decodes from this worker, with the wire-level errorId
+   *   so the daemon's trace aggregator can correlate inbound errors with
+   *   the worker's prior trace push.
    */
   const makeWorker = async (
     workerId,
@@ -496,6 +507,9 @@ export const makeDaemonicControlPowers = (
     capTpConnectionRegistrar = undefined,
     trustedShims = undefined,
     label = '<untitled>',
+    // eslint-disable-next-line no-unused-vars
+    kind = undefined,
+    marshalLoadError = undefined,
   ) => {
     const { statePath, ephemeralStatePath } = config;
 
@@ -574,7 +588,7 @@ export const makeDaemonicControlPowers = (
       reader,
       cancelled,
       daemonWorkerFacet,
-      undefined,
+      marshalLoadError !== undefined ? { marshalLoadError } : undefined,
       capTpConnectionRegistrar,
     );
 

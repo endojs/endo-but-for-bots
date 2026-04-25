@@ -158,6 +158,11 @@ export const makeDaemonicGoControlPowers = (
    * @param {Promise<never>} _forceCancelled
    * @param {CapTpConnectionRegistrar} [capTpConnectionRegistrar]
    * @param {string[]} [_trustedShims]
+   * @param {string} [_label]
+   * @param {'locked' | 'node'} [_kind] Accepted for signature parity with
+   *   the bus and node variants; the go-powers worker spawn is dispatched
+   *   by engo and does not branch on kind.
+   * @param {(err: Error, errorId?: string) => void} [marshalLoadError]
    */
   const makeWorker = async (
     workerId,
@@ -166,6 +171,9 @@ export const makeDaemonicGoControlPowers = (
     _forceCancelled,
     capTpConnectionRegistrar = undefined,
     _trustedShims = undefined, // eslint-disable-line no-underscore-dangle
+    _label = undefined, // eslint-disable-line no-underscore-dangle
+    _kind = undefined, // eslint-disable-line no-underscore-dangle
+    marshalLoadError = undefined,
   ) => {
     const { statePath, ephemeralStatePath } = config;
 
@@ -263,7 +271,7 @@ export const makeDaemonicGoControlPowers = (
       captpReadFrom,
       cancelled,
       daemonWorkerFacet,
-      undefined,
+      marshalLoadError !== undefined ? { marshalLoadError } : undefined,
       capTpConnectionRegistrar,
     );
 
