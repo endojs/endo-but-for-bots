@@ -783,7 +783,7 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@endo/hex@workspace:packages/hex":
+"@endo/hex@workspace:^, @endo/hex@workspace:packages/hex":
   version: 0.0.0-use.local
   resolution: "@endo/hex@workspace:packages/hex"
   dependencies:
@@ -990,6 +990,7 @@ __metadata:
   dependencies:
     "@endo/eventual-send": "workspace:^"
     "@endo/harden": "workspace:^"
+    "@endo/hex": "workspace:^"
     "@endo/init": "workspace:^"
     "@endo/lockdown": "workspace:^"
     "@endo/marshal": "workspace:^"
