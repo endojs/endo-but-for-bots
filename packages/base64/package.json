@@ -46,7 +46,6 @@
   },
   "devDependencies": {
     "@endo/eventual-send": "workspace:^",
-    "@endo/init": "workspace:^",
     "@endo/ses-ava": "workspace:^",
     "ava": "catalog:dev",
     "babel-eslint": "^10.1.0",
