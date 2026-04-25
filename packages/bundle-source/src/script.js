@@ -10,12 +10,18 @@ import os from 'os';
 import harden from '@endo/harden';
 import { makeFunctor } from '@endo/compartment-mapper/functor.js';
 import { makeReadPowers } from '@endo/compartment-mapper/node-powers.js';
+import { makeComputeSha512 } from '@endo/compartment-mapper/sha512-hex.js';
 
 import { makeBundlingKit } from './endo.js';
 
 /** @import {BundleScriptModuleFormat, BundleScriptOptions, BundlingKitIO, SharedPowers} from './types.js' */
 
-const readPowers = makeReadPowers({ fs, url, crypto });
+const readPowers = makeReadPowers({
+  fs,
+  url,
+  crypto,
+  computeSha512: makeComputeSha512(crypto),
+});
 
 /**
  * @param {string} startFilename
