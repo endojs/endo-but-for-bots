@@ -1495,17 +1495,52 @@ const makeDaemonCore = async (
       'compartment-map.json',
     );
     const mapText = await E(/** @type {any} */ (mapBlob)).text();
-    /** @type {{ compartments: Record<string, any> }} */
-    const compartmentMap = JSON.parse(mapText);
+    let compartmentMap;
+    try {
+      compartmentMap = JSON.parse(mapText);
+    } catch (err) {
+      throw makeError(
+        X`Tree's compartment-map.json is not valid JSON: ${q(err)}`,
+      );
+    }
+    if (
+      !compartmentMap ||
+      typeof compartmentMap !== 'object' ||
+      typeof compartmentMap.compartments !== 'object' ||
+      compartmentMap.compartments === null
+    ) {
+      throw makeError(
+        X`Tree's compartment-map.json is missing the compartments map`,
+      );
+    }
 
     const zip = new ZipWriter();
     zip.write('compartment-map.json', textEncoder.encode(mapText));
 
-    for (const [compartmentName, descriptor] of Object.entries(
-      compartmentMap.compartments,
-    )) {
+    // Pipeline the per-module reads via Promise.all to avoid the
+    // round-trip-per-file stall that a naive sequential walk would
+    // suffer when daemon and worker live in different processes.
+    // Sort entries so the resulting ZIP is deterministic (helpful
+    // for tests and for content-addressable storage).
+    const sortedCompartments = Object.entries(
+      /** @type {Record<string, any>} */ (compartmentMap.compartments),
+    ).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+    /** @type {Array<{ archivePath: string, srcP: Promise<string> }>} */
+    const moduleReads = [];
+    for (const [compartmentName, descriptor] of sortedCompartments) {
       const modules = descriptor.modules || {};
-      for (const moduleInfo of Object.values(modules)) {
+      const sortedModules = Object.values(modules).sort((a, b) => {
+        const al =
+          a && typeof a === 'object' && 'location' in a
+            ? String(/** @type {any} */ (a).location)
+            : '';
+        const bl =
+          b && typeof b === 'object' && 'location' in b
+            ? String(/** @type {any} */ (b).location)
+            : '';
+        return al < bl ? -1 : al > bl ? 1 : 0;
+      });
+      for (const moduleInfo of sortedModules) {
         if (
           typeof moduleInfo === 'object' &&
           moduleInfo !== null &&
@@ -1514,14 +1549,17 @@ const makeDaemonCore = async (
         ) {
           const archivePath = `${compartmentName}/${moduleInfo.location}`;
           const pathSegments = archivePath.split('/').filter(Boolean);
-          // eslint-disable-next-line no-await-in-loop
-          const blob = await E(/** @type {any} */ (treeP)).lookup(pathSegments);
-          // eslint-disable-next-line no-await-in-loop
-          const src = await E(/** @type {any} */ (blob)).text();
-          zip.write(archivePath, textEncoder.encode(src));
+          const srcP = E(/** @type {any} */ (treeP))
+            .lookup(pathSegments)
+            .then(blob => E(/** @type {any} */ (blob)).text());
+          moduleReads.push({ archivePath, srcP });
         }
       }
     }
+    const sources = await Promise.all(moduleReads.map(r => r.srcP));
+    moduleReads.forEach(({ archivePath }, i) => {
+      zip.write(archivePath, textEncoder.encode(sources[i]));
+    });
 
     return zip.snapshot();
   };
@@ -3931,18 +3969,12 @@ const makeDaemonCore = async (
     kind = undefined,
   ) => {
     await null;
-    console.log(
-      `provideWorkerId: kind=${kind} defaultWorkerKind=${defaultWorkerKind} specifiedWorkerId=${typeof specifiedWorkerId === 'string' ? specifiedWorkerId.slice(0, 12) : specifiedWorkerId}`,
-    );
     if (typeof specifiedWorkerId === 'string') {
       if (kind === 'node' && defaultWorkerKind !== 'node') {
         // Default workers are XS/locked (bus daemon under Rust
         // supervisor).  Create a separate Node.js worker.  The original
         // XS worker stays alive (it may have running evals).
         const existingFormula = formulaForId.get(specifiedWorkerId);
-        console.log(
-          `provideWorkerId: existingFormula=${existingFormula ? JSON.stringify(existingFormula).slice(0, 80) : 'NOT FOUND'}`,
-        );
         if (
           existingFormula &&
           existingFormula.type === 'worker' &&
@@ -5022,13 +5054,20 @@ const makeDaemonCore = async (
    * @returns {string}
    */
   const getScratchMountPath = scratchMountId => {
+    // formulaForId.get returns undefined if the formula has been
+    // collected since the caller resolved its identifier.  Surfacing
+    // a clear error here lets the host-side caller decide whether
+    // to re-stage rather than handing back a stale path that points
+    // at a directory the daemon may have removed.
     const formula = formulaForId.get(scratchMountId);
     if (formula === undefined) {
-      throw new TypeError(`Unknown formula ${q(scratchMountId)}`);
+      throw makeError(
+        X`Unknown or collected scratch-mount formula ${q(scratchMountId)}`,
+      );
     }
     if (formula.type !== 'scratch-mount') {
-      throw new TypeError(
-        `getScratchMountPath requires a scratch-mount formula, got ${q(formula.type)}`,
+      throw makeError(
+        X`getScratchMountPath requires a scratch-mount formula, got ${q(formula.type)}`,
       );
     }
     const { number: formulaNumber } = parseId(scratchMountId);

@@ -212,9 +212,12 @@ export const makeDaemonicPersistencePowers = (
   /** @type {DaemonicPersistencePowers['writeFormula']} */
   const writeFormula = async (formulaNumber, nodeNumber, formula) => {
     const { directory, file } = makeFormulaPath(formulaNumber);
-    // TODO Take care to write atomically with a rename here.
+    // Atomic write so that a partial write cannot leave a half-
+    // formed JSON file that wedges later reads.
     await filePowers.makePath(directory);
-    await filePowers.writeFileText(file, `${q(formula)}\n`);
+    const tmp = `${file}.tmp`;
+    await filePowers.writeFileText(tmp, `${q(formula)}\n`);
+    await filePowers.renamePath(tmp, file);
     if (nodeNumber) {
       let bucket = formulasByNode.get(nodeNumber);
       if (bucket === undefined) {
@@ -360,12 +363,8 @@ export const makeDaemonicPersistencePowers = (
       await filePowers.makePath(retentionDir);
       if (set === undefined || set.size === 0) {
         await filePowers.removePath(file).catch(err => {
-          const msg = String(err.message || err);
-          if (
-            !msg.startsWith('ENOENT: ') &&
-            !msg.includes('No such file or directory')
-          )
-            throw err;
+          // eslint-disable-next-line no-use-before-define
+          if (!isNotFoundError(err)) throw err;
         });
         return;
       }
@@ -385,12 +384,8 @@ export const makeDaemonicPersistencePowers = (
       await filePowers.makePath(formulasByNodeDir);
       if (set === undefined || set.size === 0) {
         await filePowers.removePath(file).catch(err => {
-          const msg = String(err.message || err);
-          if (
-            !msg.startsWith('ENOENT: ') &&
-            !msg.includes('No such file or directory')
-          )
-            throw err;
+          // eslint-disable-next-line no-use-before-define
+          if (!isNotFoundError(err)) throw err;
         });
         return;
       }
@@ -398,30 +393,75 @@ export const makeDaemonicPersistencePowers = (
     });
   };
 
+  /**
+   * Recognize "file does not exist" across both Node's filePowers
+   * (which throws Error with code 'ENOENT' and a message starting
+   * "ENOENT: ...") and the Rust supervisor's filePowers (which
+   * throws plain Error with "No such file or directory (os error 2)").
+   *
+   * @param {any} err
+   */
+  const isNotFoundError = err => {
+    if (err && err.code === 'ENOENT') return true;
+    const msg = String((err && err.message) || err || '');
+    return (
+      msg.startsWith('ENOENT: ') || msg.includes('No such file or directory')
+    );
+  };
+
+  /**
+   * Try to JSON.parse a state file's contents, swallowing parse
+   * errors with a console warning.  A corrupt durability file
+   * should never wedge daemon startup; the safer behavior is to
+   * boot with empty state and let the next mutation rewrite the
+   * file atomically.
+   *
+   * @template T
+   * @param {string} label
+   * @param {string} text
+   * @param {T} fallback
+   * @returns {T}
+   */
+  const safeParseJson = (label, text, fallback) => {
+    try {
+      return JSON.parse(text);
+    } catch (err) {
+      console.error(
+        `Persistence: ignoring corrupt ${label}; starting empty:`,
+        err,
+      );
+      return fallback;
+    }
+  };
+
   const loadDurableState = async () => {
     const agentKeysText = await filePowers.maybeReadFileText(agentKeysPath);
     if (agentKeysText !== undefined) {
-      const arr = JSON.parse(agentKeysText);
+      const arr = safeParseJson(
+        'agent-keys.json',
+        agentKeysText,
+        /** @type {Array<{publicKey: string, privateKey: string, agentId: string}>} */ ([]),
+      );
       for (const record of arr) {
-        agentKeys.set(record.publicKey, record);
+        if (record && typeof record.publicKey === 'string') {
+          agentKeys.set(record.publicKey, record);
+        }
       }
     }
     const remoteText = await filePowers.maybeReadFileText(remoteAgentKeysPath);
     if (remoteText !== undefined) {
-      const obj = JSON.parse(remoteText);
+      const obj = safeParseJson(
+        'remote-agent-keys.json',
+        remoteText,
+        /** @type {Record<string, string>} */ ({}),
+      );
       for (const [pk, node] of Object.entries(obj)) {
         remoteAgentKeys.set(pk, /** @type {string} */ (node));
       }
     }
     // Eagerly load retention buckets and per-node indexes — they're
-    // small and the queries are synchronous.
-    /** @param {Error} err */
-    const isNotFoundError = err => {
-      const msg = String(err.message || err);
-      return (
-        msg.startsWith('ENOENT: ') || msg.includes('No such file or directory')
-      );
-    };
+    // small and the queries are synchronous.  Per-file failures are
+    // tolerated: a corrupt one logs and is dropped, the rest load.
     const retentionFiles = await filePowers
       .readDirectory(retentionDir)
       .catch(err => {
@@ -432,10 +472,22 @@ export const makeDaemonicPersistencePowers = (
       retentionFiles.map(async fileName => {
         if (!fileName.endsWith('.json')) return;
         const guestPublicKey = fileName.slice(0, -'.json'.length);
-        const text = await filePowers.readFileText(
-          filePowers.joinPath(retentionDir, fileName),
-        );
-        retention.set(guestPublicKey, new Set(JSON.parse(text)));
+        try {
+          const text = await filePowers.readFileText(
+            filePowers.joinPath(retentionDir, fileName),
+          );
+          const arr = safeParseJson(
+            `retention/${fileName}`,
+            text,
+            /** @type {string[]} */ ([]),
+          );
+          retention.set(guestPublicKey, new Set(arr));
+        } catch (err) {
+          console.error(
+            `Persistence: failed to load retention/${fileName}:`,
+            err,
+          );
+        }
       }),
     );
     const byNodeFiles = await filePowers
@@ -448,10 +500,22 @@ export const makeDaemonicPersistencePowers = (
       byNodeFiles.map(async fileName => {
         if (!fileName.endsWith('.json')) return;
         const nodeNumber = fileName.slice(0, -'.json'.length);
-        const text = await filePowers.readFileText(
-          filePowers.joinPath(formulasByNodeDir, fileName),
-        );
-        formulasByNode.set(nodeNumber, new Set(JSON.parse(text)));
+        try {
+          const text = await filePowers.readFileText(
+            filePowers.joinPath(formulasByNodeDir, fileName),
+          );
+          const arr = safeParseJson(
+            `formulas-by-node/${fileName}`,
+            text,
+            /** @type {string[]} */ ([]),
+          );
+          formulasByNode.set(nodeNumber, new Set(arr));
+        } catch (err) {
+          console.error(
+            `Persistence: failed to load formulas-by-node/${fileName}:`,
+            err,
+          );
+        }
       }),
     );
   };

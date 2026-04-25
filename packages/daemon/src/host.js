@@ -6,7 +6,7 @@
 
 import { E } from '@endo/far';
 import { makeExo } from '@endo/exo';
-import { makeError, q } from '@endo/errors';
+import { makeError, q, X } from '@endo/errors';
 import { makeIteratorRef } from './reader-ref.js';
 import {
   assertPetName,
@@ -598,23 +598,42 @@ export const makeHostMaker = ({
     const materializeTree = async (src, dst, pathSegments = []) => {
       const names = await E(src).list(...pathSegments);
       for (const name of names) {
+        // Defense against an adversarial source tree that advertises
+        // path-traversal segments.  Mount.writeText would clamp
+        // these at the confinement root, but they would still cause
+        // the discovery walk to revisit parent directories.
+        if (name === '.' || name === '..' || name.includes('/')) {
+          throw makeError(
+            X`Invalid tree entry name ${q(name)} at ${q(pathSegments)}`,
+          );
+        }
         const subPath = [...pathSegments, name];
         // eslint-disable-next-line no-await-in-loop
         const child = await E(src).lookup(subPath);
         const methodNames =
           // eslint-disable-next-line no-await-in-loop, no-underscore-dangle
           await E(child).__getMethodNames__();
-        if (methodNames.includes('text')) {
+        const looksLikeBlob = methodNames.includes('text');
+        const looksLikeTree = methodNames.includes('list');
+        if (looksLikeBlob && looksLikeTree) {
+          throw makeError(
+            X`Tree entry ${q(subPath)} has both text and list — ambiguous shape`,
+          );
+        } else if (looksLikeBlob) {
           // eslint-disable-next-line no-await-in-loop
           const content = await E(child).text();
           // eslint-disable-next-line no-await-in-loop
           await E(dst).writeText(subPath, content);
-        } else if (methodNames.includes('list')) {
+        } else if (looksLikeTree) {
           // Subdirectory — create it then recurse.
           // eslint-disable-next-line no-await-in-loop
           await E(dst).makeDirectory(subPath);
           // eslint-disable-next-line no-await-in-loop
           await materializeTree(src, dst, subPath);
+        } else {
+          throw makeError(
+            X`Tree entry ${q(subPath)} is neither a blob nor a subtree (methods: ${q(methodNames)})`,
+          );
         }
       }
     };
@@ -641,8 +660,27 @@ export const makeHostMaker = ({
         throw new TypeError(`Unknown pet name for tree: ${q(treeName)}`);
       }
       const tree = await provide(/** @type {FormulaIdentifier} */ (treeId));
+      // For live mounts, prefer to snapshot the source first so
+      // concurrent writes to the mount cannot perturb the running
+      // caplet.  ReadableTrees are already immutable.  Mount's
+      // `snapshot()` is not implemented at the time of writing
+      // (mount.js:305 throws); we therefore swallow that "not yet
+      // implemented" rejection and fall back to walking the live
+      // mount.  When mount.snapshot lands, this code path becomes
+      // automatically isolated.
+      let sourceForWalk = tree;
+      try {
+        // eslint-disable-next-line no-underscore-dangle
+        const methods = await E(/** @type {any} */ (tree)).__getMethodNames__();
+        if (methods.includes('snapshot')) {
+          sourceForWalk = await E(/** @type {any} */ (tree)).snapshot();
+        }
+      } catch (err) {
+        const msg = String((err && /** @type {any} */ (err).message) || err);
+        if (!msg.includes('not yet implemented')) throw err;
+      }
       const scratchMount = await provideScratchMount(scratchPetName);
-      await materializeTree(tree, scratchMount, []);
+      await materializeTree(sourceForWalk, scratchMount, []);
       // Resolve the scratch mount's identifier after it's been stored
       // by the deferred pet-store task inside provideScratchMount.
       const scratchId = await E(directory).identify(scratchPetName);

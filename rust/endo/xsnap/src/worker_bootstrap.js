@@ -18975,18 +18975,33 @@ const workerFacet = makeExo(
       // can reference standard globals (E, Far, makeExo, ...).
       // The Rust archive::install_archive reads
       // globalThis.__archiveEndowments inside its compartment
-      // factory.
-      globalThis.__archiveEndowments = standardEndowments;
+      // factory.  Serialise the full set/import/clear sequence
+      // through __archiveImportLock so that two concurrent
+      // makeArchive calls on the same XS worker (whether from
+      // pipelined CapTP or split tree-then-archive paths) cannot
+      // observe each other's endowments mid-load.
+      const prev = globalThis.__archiveImportLock || Promise.resolve();
+      let release;
+      const next = new Promise(resolve => {
+        release = resolve;
+      });
+      globalThis.__archiveImportLock = next;
+      await prev;
+      let namespace;
       try {
-        const ok = hostImportArchive(archiveBytes);
-        if (!ok) throw new Error('Failed to import archive');
+        globalThis.__archiveEndowments = standardEndowments;
+        try {
+          const ok = hostImportArchive(archiveBytes);
+          if (!ok) throw new Error('Failed to import archive');
+        } finally {
+          delete globalThis.__archiveEndowments;
+        }
+        // Entry namespace set by install_archive — capture and release.
+        namespace = globalThis.__entryNs;
+        delete globalThis.__entryNs;
       } finally {
-        delete globalThis.__archiveEndowments;
+        release();
       }
-
-      // Entry namespace set by install_archive — capture and release.
-      const namespace = globalThis.__entryNs;
-      delete globalThis.__entryNs;
       return namespace.make(powersP, contextP, { env });
     },
 

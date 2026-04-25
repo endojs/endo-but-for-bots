@@ -25927,7 +25927,7 @@ harden(fromHex);
 })()
 ,
 // === 122. daemon ./src/host.js ===
-({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let E,makeExo,makeError,q,makeIteratorRef,assertPetName,assertPetNamePath,assertName,assertNamePath,namePathFrom,assertFormulaNumber,assertNodeNumber,parseId,formatId,addressesFromLocator,formatLocator,toHex,fromHex,makePetSitter,makeDeferredTasks,HostInterface,hostHelp,makeHelp;$h͏_imports([["@endo/far", [["E",[$h͏_a => (E = $h͏_a)]]]],["@endo/exo", [["makeExo",[$h͏_a => (makeExo = $h͏_a)]]]],["@endo/errors", [["makeError",[$h͏_a => (makeError = $h͏_a)]],["q",[$h͏_a => (q = $h͏_a)]]]],["./reader-ref.js", [["makeIteratorRef",[$h͏_a => (makeIteratorRef = $h͏_a)]]]],["./pet-name.js", [["assertPetName",[$h͏_a => (assertPetName = $h͏_a)]],["assertPetNamePath",[$h͏_a => (assertPetNamePath = $h͏_a)]],["assertName",[$h͏_a => (assertName = $h͏_a)]],["assertNamePath",[$h͏_a => (assertNamePath = $h͏_a)]],["namePathFrom",[$h͏_a => (namePathFrom = $h͏_a)]]]],["./formula-identifier.js", [["assertFormulaNumber",[$h͏_a => (assertFormulaNumber = $h͏_a)]],["assertNodeNumber",[$h͏_a => (assertNodeNumber = $h͏_a)]],["parseId",[$h͏_a => (parseId = $h͏_a)]],["formatId",[$h͏_a => (formatId = $h͏_a)]]]],["./locator.js", [["addressesFromLocator",[$h͏_a => (addressesFromLocator = $h͏_a)]],["formatLocator",[$h͏_a => (formatLocator = $h͏_a)]]]],["./hex.js", [["toHex",[$h͏_a => (toHex = $h͏_a)]],["fromHex",[$h͏_a => (fromHex = $h͏_a)]]]],["./pet-sitter.js", [["makePetSitter",[$h͏_a => (makePetSitter = $h͏_a)]]]],["./deferred-tasks.js", [["makeDeferredTasks",[$h͏_a => (makeDeferredTasks = $h͏_a)]]]],["./interfaces.js", [["HostInterface",[$h͏_a => (HostInterface = $h͏_a)]]]],["./help-text.js", [["hostHelp",[$h͏_a => (hostHelp = $h͏_a)]],["makeHelp",[$h͏_a => (makeHelp = $h͏_a)]]]]]);
+({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let E,makeExo,makeError,q,X,makeIteratorRef,assertPetName,assertPetNamePath,assertName,assertNamePath,namePathFrom,assertFormulaNumber,assertNodeNumber,parseId,formatId,addressesFromLocator,formatLocator,toHex,fromHex,makePetSitter,makeDeferredTasks,HostInterface,hostHelp,makeHelp;$h͏_imports([["@endo/far", [["E",[$h͏_a => (E = $h͏_a)]]]],["@endo/exo", [["makeExo",[$h͏_a => (makeExo = $h͏_a)]]]],["@endo/errors", [["makeError",[$h͏_a => (makeError = $h͏_a)]],["q",[$h͏_a => (q = $h͏_a)]],["X",[$h͏_a => (X = $h͏_a)]]]],["./reader-ref.js", [["makeIteratorRef",[$h͏_a => (makeIteratorRef = $h͏_a)]]]],["./pet-name.js", [["assertPetName",[$h͏_a => (assertPetName = $h͏_a)]],["assertPetNamePath",[$h͏_a => (assertPetNamePath = $h͏_a)]],["assertName",[$h͏_a => (assertName = $h͏_a)]],["assertNamePath",[$h͏_a => (assertNamePath = $h͏_a)]],["namePathFrom",[$h͏_a => (namePathFrom = $h͏_a)]]]],["./formula-identifier.js", [["assertFormulaNumber",[$h͏_a => (assertFormulaNumber = $h͏_a)]],["assertNodeNumber",[$h͏_a => (assertNodeNumber = $h͏_a)]],["parseId",[$h͏_a => (parseId = $h͏_a)]],["formatId",[$h͏_a => (formatId = $h͏_a)]]]],["./locator.js", [["addressesFromLocator",[$h͏_a => (addressesFromLocator = $h͏_a)]],["formatLocator",[$h͏_a => (formatLocator = $h͏_a)]]]],["./hex.js", [["toHex",[$h͏_a => (toHex = $h͏_a)]],["fromHex",[$h͏_a => (fromHex = $h͏_a)]]]],["./pet-sitter.js", [["makePetSitter",[$h͏_a => (makePetSitter = $h͏_a)]]]],["./deferred-tasks.js", [["makeDeferredTasks",[$h͏_a => (makeDeferredTasks = $h͏_a)]]]],["./interfaces.js", [["HostInterface",[$h͏_a => (HostInterface = $h͏_a)]]]],["./help-text.js", [["hostHelp",[$h͏_a => (hostHelp = $h͏_a)]],["makeHelp",[$h͏_a => (makeHelp = $h͏_a)]]]]]);
 
 
 
@@ -26527,23 +26527,42 @@ const normalizeHostOrGuestOptions = opts => {
     const materializeTree = async (src, dst, pathSegments = []) => {
       const names = await E(src).list(...pathSegments);
       for (const name of names) {
+        // Defense against an adversarial source tree that advertises
+        // path-traversal segments.  Mount.writeText would clamp
+        // these at the confinement root, but they would still cause
+        // the discovery walk to revisit parent directories.
+        if (name === '.' || name === '..' || name.includes('/')) {
+          throw makeError(
+            X`Invalid tree entry name ${q(name)} at ${q(pathSegments)}`,
+          );
+        }
         const subPath = [...pathSegments, name];
         // eslint-disable-next-line no-await-in-loop
         const child = await E(src).lookup(subPath);
         const methodNames =
           // eslint-disable-next-line no-await-in-loop, no-underscore-dangle
           await E(child).__getMethodNames__();
-        if (methodNames.includes('text')) {
+        const looksLikeBlob = methodNames.includes('text');
+        const looksLikeTree = methodNames.includes('list');
+        if (looksLikeBlob && looksLikeTree) {
+          throw makeError(
+            X`Tree entry ${q(subPath)} has both text and list — ambiguous shape`,
+          );
+        } else if (looksLikeBlob) {
           // eslint-disable-next-line no-await-in-loop
           const content = await E(child).text();
           // eslint-disable-next-line no-await-in-loop
           await E(dst).writeText(subPath, content);
-        } else if (methodNames.includes('list')) {
+        } else if (looksLikeTree) {
           // Subdirectory — create it then recurse.
           // eslint-disable-next-line no-await-in-loop
           await E(dst).makeDirectory(subPath);
           // eslint-disable-next-line no-await-in-loop
           await materializeTree(src, dst, subPath);
+        } else {
+          throw makeError(
+            X`Tree entry ${q(subPath)} is neither a blob nor a subtree (methods: ${q(methodNames)})`,
+          );
         }
       }
     };
@@ -26570,8 +26589,27 @@ const normalizeHostOrGuestOptions = opts => {
         throw new TypeError(`Unknown pet name for tree: ${q(treeName)}`);
       }
       const tree = await provide(/** @type {FormulaIdentifier} */ (treeId));
+      // For live mounts, prefer to snapshot the source first so
+      // concurrent writes to the mount cannot perturb the running
+      // caplet.  ReadableTrees are already immutable.  Mount's
+      // `snapshot()` is not implemented at the time of writing
+      // (mount.js:305 throws); we therefore swallow that "not yet
+      // implemented" rejection and fall back to walking the live
+      // mount.  When mount.snapshot lands, this code path becomes
+      // automatically isolated.
+      let sourceForWalk = tree;
+      try {
+        // eslint-disable-next-line no-underscore-dangle
+        const methods = await E(/** @type {any} */ (tree)).__getMethodNames__();
+        if (methods.includes('snapshot')) {
+          sourceForWalk = await E(/** @type {any} */ (tree)).snapshot();
+        }
+      } catch (err) {
+        const msg = String((err && /** @type {any} */ (err).message) || err);
+        if (!msg.includes('not yet implemented')) throw err;
+      }
       const scratchMount = await provideScratchMount(scratchPetName);
-      await materializeTree(tree, scratchMount, []);
+      await materializeTree(sourceForWalk, scratchMount, []);
       // Resolve the scratch mount's identifier after it's been stored
       // by the deferred pet-store task inside provideScratchMount.
       const scratchId = await E(directory).identify(scratchPetName);
@@ -31154,7 +31192,7 @@ const makeDaemonCore = async (
     );
     const workerKind =
       workerFormula?.type === 'worker'
-        ? workerFormula.kind ?? defaultWorkerKind
+        ? (workerFormula.kind ?? defaultWorkerKind)
         : undefined;
     const isLockedWorker = workerKind === 'locked';
     if (isLockedWorker) {
@@ -31194,17 +31232,52 @@ const makeDaemonCore = async (
       'compartment-map.json',
     );
     const mapText = await E(/** @type {any} */ (mapBlob)).text();
-    /** @type {{ compartments: Record<string, any> }} */
-    const compartmentMap = JSON.parse(mapText);
+    let compartmentMap;
+    try {
+      compartmentMap = JSON.parse(mapText);
+    } catch (err) {
+      throw makeError(
+        X`Tree's compartment-map.json is not valid JSON: ${q(err)}`,
+      );
+    }
+    if (
+      !compartmentMap ||
+      typeof compartmentMap !== 'object' ||
+      typeof compartmentMap.compartments !== 'object' ||
+      compartmentMap.compartments === null
+    ) {
+      throw makeError(
+        X`Tree's compartment-map.json is missing the compartments map`,
+      );
+    }
 
     const zip = new ZipWriter();
     zip.write('compartment-map.json', textEncoder.encode(mapText));
 
-    for (const [compartmentName, descriptor] of Object.entries(
-      compartmentMap.compartments,
-    )) {
+    // Pipeline the per-module reads via Promise.all to avoid the
+    // round-trip-per-file stall that a naive sequential walk would
+    // suffer when daemon and worker live in different processes.
+    // Sort entries so the resulting ZIP is deterministic (helpful
+    // for tests and for content-addressable storage).
+    const sortedCompartments = Object.entries(
+      /** @type {Record<string, any>} */ (compartmentMap.compartments),
+    ).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+    /** @type {Array<{ archivePath: string, srcP: Promise<string> }>} */
+    const moduleReads = [];
+    for (const [compartmentName, descriptor] of sortedCompartments) {
       const modules = descriptor.modules || {};
-      for (const moduleInfo of Object.values(modules)) {
+      const sortedModules = Object.values(modules).sort((a, b) => {
+        const al =
+          a && typeof a === 'object' && 'location' in a
+            ? String(/** @type {any} */ (a).location)
+            : '';
+        const bl =
+          b && typeof b === 'object' && 'location' in b
+            ? String(/** @type {any} */ (b).location)
+            : '';
+        return al < bl ? -1 : al > bl ? 1 : 0;
+      });
+      for (const moduleInfo of sortedModules) {
         if (
           typeof moduleInfo === 'object' &&
           moduleInfo !== null &&
@@ -31213,16 +31286,17 @@ const makeDaemonCore = async (
         ) {
           const archivePath = `${compartmentName}/${moduleInfo.location}`;
           const pathSegments = archivePath.split('/').filter(Boolean);
-          // eslint-disable-next-line no-await-in-loop
-          const blob = await E(/** @type {any} */ (treeP)).lookup(
-            pathSegments,
-          );
-          // eslint-disable-next-line no-await-in-loop
-          const src = await E(/** @type {any} */ (blob)).text();
-          zip.write(archivePath, textEncoder.encode(src));
+          const srcP = E(/** @type {any} */ (treeP))
+            .lookup(pathSegments)
+            .then(blob => E(/** @type {any} */ (blob)).text());
+          moduleReads.push({ archivePath, srcP });
         }
       }
     }
+    const sources = await Promise.all(moduleReads.map(r => r.srcP));
+    moduleReads.forEach(({ archivePath }, i) => {
+      zip.write(archivePath, textEncoder.encode(sources[i]));
+    });
 
     return zip.snapshot();
   };
@@ -33632,18 +33706,12 @@ const makeDaemonCore = async (
     kind = undefined,
   ) => {
     await null;
-    console.log(
-      `provideWorkerId: kind=${kind} defaultWorkerKind=${defaultWorkerKind} specifiedWorkerId=${typeof specifiedWorkerId === 'string' ? specifiedWorkerId.slice(0, 12) : specifiedWorkerId}`,
-    );
     if (typeof specifiedWorkerId === 'string') {
       if (kind === 'node' && defaultWorkerKind !== 'node') {
         // Default workers are XS/locked (bus daemon under Rust
         // supervisor).  Create a separate Node.js worker.  The original
         // XS worker stays alive (it may have running evals).
         const existingFormula = formulaForId.get(specifiedWorkerId);
-        console.log(
-          `provideWorkerId: existingFormula=${existingFormula ? JSON.stringify(existingFormula).slice(0, 80) : 'NOT FOUND'}`,
-        );
         if (
           existingFormula &&
           existingFormula.type === 'worker' &&
@@ -34723,13 +34791,20 @@ const makeDaemonCore = async (
    * @returns {string}
    */
   const getScratchMountPath = scratchMountId => {
+    // formulaForId.get returns undefined if the formula has been
+    // collected since the caller resolved its identifier.  Surfacing
+    // a clear error here lets the host-side caller decide whether
+    // to re-stage rather than handing back a stale path that points
+    // at a directory the daemon may have removed.
     const formula = formulaForId.get(scratchMountId);
     if (formula === undefined) {
-      throw new TypeError(`Unknown formula ${q(scratchMountId)}`);
+      throw makeError(
+        X`Unknown or collected scratch-mount formula ${q(scratchMountId)}`,
+      );
     }
     if (formula.type !== 'scratch-mount') {
-      throw new TypeError(
-        `getScratchMountPath requires a scratch-mount formula, got ${q(formula.type)}`,
+      throw makeError(
+        X`getScratchMountPath requires a scratch-mount formula, got ${q(formula.type)}`,
       );
     }
     const { number: formulaNumber } = parseId(scratchMountId);
@@ -35310,9 +35385,12 @@ const provideEndoBootstrap = async (
   /** @type {DaemonicPersistencePowers['writeFormula']} */
   const writeFormula = async (formulaNumber, nodeNumber, formula) => {
     const { directory, file } = makeFormulaPath(formulaNumber);
-    // TODO Take care to write atomically with a rename here.
+    // Atomic write so that a partial write cannot leave a half-
+    // formed JSON file that wedges later reads.
     await filePowers.makePath(directory);
-    await filePowers.writeFileText(file, `${q(formula)}\n`);
+    const tmp = `${file}.tmp`;
+    await filePowers.writeFileText(tmp, `${q(formula)}\n`);
+    await filePowers.renamePath(tmp, file);
     if (nodeNumber) {
       let bucket = formulasByNode.get(nodeNumber);
       if (bucket === undefined) {
@@ -35458,12 +35536,8 @@ const provideEndoBootstrap = async (
       await filePowers.makePath(retentionDir);
       if (set === undefined || set.size === 0) {
         await filePowers.removePath(file).catch(err => {
-          const msg = String(err.message || err);
-          if (
-            !msg.startsWith('ENOENT: ') &&
-            !msg.includes('No such file or directory')
-          )
-            throw err;
+          // eslint-disable-next-line no-use-before-define
+          if (!isNotFoundError(err)) throw err;
         });
         return;
       }
@@ -35483,12 +35557,8 @@ const provideEndoBootstrap = async (
       await filePowers.makePath(formulasByNodeDir);
       if (set === undefined || set.size === 0) {
         await filePowers.removePath(file).catch(err => {
-          const msg = String(err.message || err);
-          if (
-            !msg.startsWith('ENOENT: ') &&
-            !msg.includes('No such file or directory')
-          )
-            throw err;
+          // eslint-disable-next-line no-use-before-define
+          if (!isNotFoundError(err)) throw err;
         });
         return;
       }
@@ -35496,31 +35566,75 @@ const provideEndoBootstrap = async (
     });
   };
 
+  /**
+   * Recognize "file does not exist" across both Node's filePowers
+   * (which throws Error with code 'ENOENT' and a message starting
+   * "ENOENT: ...") and the Rust supervisor's filePowers (which
+   * throws plain Error with "No such file or directory (os error 2)").
+   *
+   * @param {any} err
+   */
+  const isNotFoundError = err => {
+    if (err && err.code === 'ENOENT') return true;
+    const msg = String((err && err.message) || err || '');
+    return (
+      msg.startsWith('ENOENT: ') || msg.includes('No such file or directory')
+    );
+  };
+
+  /**
+   * Try to JSON.parse a state file's contents, swallowing parse
+   * errors with a console warning.  A corrupt durability file
+   * should never wedge daemon startup; the safer behavior is to
+   * boot with empty state and let the next mutation rewrite the
+   * file atomically.
+   *
+   * @template T
+   * @param {string} label
+   * @param {string} text
+   * @param {T} fallback
+   * @returns {T}
+   */
+  const safeParseJson = (label, text, fallback) => {
+    try {
+      return JSON.parse(text);
+    } catch (err) {
+      console.error(
+        `Persistence: ignoring corrupt ${label}; starting empty:`,
+        err,
+      );
+      return fallback;
+    }
+  };
+
   const loadDurableState = async () => {
     const agentKeysText = await filePowers.maybeReadFileText(agentKeysPath);
     if (agentKeysText !== undefined) {
-      const arr = JSON.parse(agentKeysText);
+      const arr = safeParseJson(
+        'agent-keys.json',
+        agentKeysText,
+        /** @type {Array<{publicKey: string, privateKey: string, agentId: string}>} */ ([]),
+      );
       for (const record of arr) {
-        agentKeys.set(record.publicKey, record);
+        if (record && typeof record.publicKey === 'string') {
+          agentKeys.set(record.publicKey, record);
+        }
       }
     }
     const remoteText = await filePowers.maybeReadFileText(remoteAgentKeysPath);
     if (remoteText !== undefined) {
-      const obj = JSON.parse(remoteText);
+      const obj = safeParseJson(
+        'remote-agent-keys.json',
+        remoteText,
+        /** @type {Record<string, string>} */ ({}),
+      );
       for (const [pk, node] of Object.entries(obj)) {
         remoteAgentKeys.set(pk, /** @type {string} */ (node));
       }
     }
     // Eagerly load retention buckets and per-node indexes — they're
-    // small and the queries are synchronous.
-    /** @param {Error} err */
-    const isNotFoundError = err => {
-      const msg = String(err.message || err);
-      return (
-        msg.startsWith('ENOENT: ') ||
-        msg.includes('No such file or directory')
-      );
-    };
+    // small and the queries are synchronous.  Per-file failures are
+    // tolerated: a corrupt one logs and is dropped, the rest load.
     const retentionFiles = await filePowers
       .readDirectory(retentionDir)
       .catch(err => {
@@ -35531,10 +35645,22 @@ const provideEndoBootstrap = async (
       retentionFiles.map(async fileName => {
         if (!fileName.endsWith('.json')) return;
         const guestPublicKey = fileName.slice(0, -'.json'.length);
-        const text = await filePowers.readFileText(
-          filePowers.joinPath(retentionDir, fileName),
-        );
-        retention.set(guestPublicKey, new Set(JSON.parse(text)));
+        try {
+          const text = await filePowers.readFileText(
+            filePowers.joinPath(retentionDir, fileName),
+          );
+          const arr = safeParseJson(
+            `retention/${fileName}`,
+            text,
+            /** @type {string[]} */ ([]),
+          );
+          retention.set(guestPublicKey, new Set(arr));
+        } catch (err) {
+          console.error(
+            `Persistence: failed to load retention/${fileName}:`,
+            err,
+          );
+        }
       }),
     );
     const byNodeFiles = await filePowers
@@ -35547,10 +35673,22 @@ const provideEndoBootstrap = async (
       byNodeFiles.map(async fileName => {
         if (!fileName.endsWith('.json')) return;
         const nodeNumber = fileName.slice(0, -'.json'.length);
-        const text = await filePowers.readFileText(
-          filePowers.joinPath(formulasByNodeDir, fileName),
-        );
-        formulasByNode.set(nodeNumber, new Set(JSON.parse(text)));
+        try {
+          const text = await filePowers.readFileText(
+            filePowers.joinPath(formulasByNodeDir, fileName),
+          );
+          const arr = safeParseJson(
+            `formulas-by-node/${fileName}`,
+            text,
+            /** @type {string[]} */ ([]),
+          );
+          formulasByNode.set(nodeNumber, new Set(arr));
+        } catch (err) {
+          console.error(
+            `Persistence: failed to load formulas-by-node/${fileName}:`,
+            err,
+          );
+        }
       }),
     );
   };

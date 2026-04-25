@@ -4538,6 +4538,43 @@ test('Phase 8: makeUnconfinedFromTree runs a Node-loaded caplet from a tree', as
   t.is(await E(caplet).getEnvVar('HELLO'), 'stage');
 });
 
+test('Phase 7: makeFromTree errors clearly when compartment-map.json is missing', async t => {
+  const { host, config } = await prepareHost(t);
+
+  // Mount a directory that lacks a compartment-map.json file.
+  const srcDir = path.join(config.statePath, '..', 'tree-without-map');
+  fs.mkdirSync(srcDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(srcDir, 'index.js'),
+    'export const make = () => 1;',
+  );
+  await E(host).provideMount(srcDir, 'no-map-tree', { readOnly: true });
+
+  await t.throwsAsync(
+    async () =>
+      E(host).makeFromTree(undefined, 'no-map-tree', { powersName: '@none' }),
+    { message: /compartment-map\.json|Unknown name/ },
+  );
+});
+
+test('Phase 7: makeFromTree errors clearly when compartment-map.json is malformed', async t => {
+  const { host, config } = await prepareHost(t);
+
+  const srcDir = path.join(config.statePath, '..', 'tree-bad-map');
+  fs.mkdirSync(srcDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(srcDir, 'compartment-map.json'),
+    'this is not json',
+  );
+  await E(host).provideMount(srcDir, 'bad-map-tree', { readOnly: true });
+
+  await t.throwsAsync(
+    async () =>
+      E(host).makeFromTree(undefined, 'bad-map-tree', { powersName: '@none' }),
+    { message: /compartment-map\.json|JSON|Unexpected/ },
+  );
+});
+
 test('Phase 6: host.lookup("@node") resolves to a worker', async t => {
   const { host } = await prepareHost(t);
 
