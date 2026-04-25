@@ -8,7 +8,7 @@
 //
 // See designs/base64-native-fallthrough.md for the dispatch strategy.
 
-import test from '@endo/ses-ava/test.js';
+import test from 'ava';
 import { jsEncodeBase64, encodeBase64 } from '../src/encode.js';
 import { jsDecodeBase64, decodeBase64 } from '../src/decode.js';
 
