@@ -979,6 +979,7 @@ __metadata:
     "@endo/pass-style": "workspace:^"
     "@endo/promise-kit": "workspace:^"
     "@endo/ses-ava": "workspace:^"
+    "@endo/xorshift": "workspace:^"
     "@noble/curves": "npm:^1.9.0"
     "@noble/hashes": "npm:^1.8.0"
     ava: "catalog:dev"
@@ -1190,6 +1191,20 @@ __metadata:
     ava: "catalog:dev"
     c8: "catalog:dev"
     eslint: "catalog:dev"
+    typescript: "catalog:dev"
+  languageName: unknown
+  linkType: soft
+
+"@endo/xorshift@workspace:^, @endo/xorshift@workspace:packages/xorshift":
+  version: 0.0.0-use.local
+  resolution: "@endo/xorshift@workspace:packages/xorshift"
+  dependencies:
+    "@endo/harden": "workspace:^"
+    ava: "catalog:dev"
+    babel-eslint: "npm:^10.1.0"
+    c8: "catalog:dev"
+    eslint: "catalog:dev"
+    prettier: "npm:^3.5.3"
     typescript: "catalog:dev"
   languageName: unknown
   linkType: soft
