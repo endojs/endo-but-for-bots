@@ -724,61 +724,51 @@ test('reflect — rejects and clears running when makeAgent throws', async t => 
   t.false(reflector.isRunning());
 });
 
-// NOTE: `.serial` because this test shadows the global `console.error`;
-// running it concurrently with other tests that do the same races
-// restoration and can lose our captured error.
-test.serial(
-  'run — swallows and logs errors from a rejecting reflect()',
-  async t => {
-    await Promise.resolve();
+test('run — swallows and logs errors from a rejecting reflect()', async t => {
+  await Promise.resolve();
 
-    const { memoryGet, memorySet, memorySearch } = stubTools();
-    const boom = new Error('makeAgent kaboom');
-    /** @type {number} */
-    let makeAgentCalls = 0;
-    const makeAgent = async (/** @type {any} */ _opts) => {
-      makeAgentCalls += 1;
-      throw boom;
-    };
-    const { runAgent, runs } = stubRunAgent([
-      { type: 'Message', role: 'assistant', content: 'done' },
-    ]);
-    const reflector = makeReflector({
-      memoryGet,
-      memorySet,
-      memorySearch,
-      makeAgent,
-      runAgent,
-      workspaceDir: '/dev/null',
-    });
+  const { memoryGet, memorySet, memorySearch } = stubTools();
+  const boom = new Error('makeAgent kaboom');
+  /** @type {number} */
+  let makeAgentCalls = 0;
+  const makeAgent = async (/** @type {any} */ _opts) => {
+    makeAgentCalls += 1;
+    throw boom;
+  };
+  const { runAgent, runs } = stubRunAgent([
+    { type: 'Message', role: 'assistant', content: 'done' },
+  ]);
+  // Capture error logs via the injectable `logError` hook so we don't
+  // need to mutate the (frozen-under-SES) global console object.
+  /** @type {Array<any[]>} */
+  const errorCalls = [];
+  /** @param {any[]} args */
+  const logError = (...args) => {
+    errorCalls.push(args);
+  };
+  const reflector = makeReflector({
+    memoryGet,
+    memorySet,
+    memorySearch,
+    makeAgent,
+    runAgent,
+    workspaceDir: '/dev/null',
+    logError,
+  });
 
-    // Silence console.error during the test so CI doesn't get noise.
-    const origErr = console.error;
-    /** @type {Array<any[]>} */
-    const errorCalls = [];
-    /** @param {any[]} args */
-    console.error = (...args) => {
-      errorCalls.push(args);
-    };
+  // run() must swallow the reflect() rejection — a thrown heartbeat
+  // cycle cannot be allowed to crash the surrounding loop.
+  await t.notThrowsAsync(reflector.run());
 
-    try {
-      // run() must swallow the reflect() rejection — a thrown heartbeat
-      // cycle cannot be allowed to crash the surrounding loop.
-      await t.notThrowsAsync(reflector.run());
-    } finally {
-      console.error = origErr;
-    }
-
-    t.is(makeAgentCalls, 1);
-    t.is(runs.length, 0, 'runAgent never invoked when reflect() rejects');
-    t.false(reflector.isRunning(), 'running cleared after the rejection');
-    t.true(errorCalls.length >= 1, 'run() logged the swallowed error');
-    t.true(
-      errorCalls.some(args => args.includes(boom)),
-      'logged error payload includes the original cause',
-    );
-  },
-);
+  t.is(makeAgentCalls, 1);
+  t.is(runs.length, 0, 'runAgent never invoked when reflect() rejects');
+  t.false(reflector.isRunning(), 'running cleared after the rejection');
+  t.true(errorCalls.length >= 1, 'run() logged the swallowed error');
+  t.true(
+    errorCalls.some(args => args.includes(boom)),
+    'logged error payload includes the original cause',
+  );
+});
 
 // ---------------------------------------------------------------------------
 // makeReflector — subscribe() broadcast hook
@@ -888,71 +878,58 @@ test('subscribe — multiple subscribers each receive every event', async t => {
   t.deepEqual(b, scripted);
 });
 
-// NOTE: `.serial` because this test shadows the global `console.error`;
-// see the note on 'run — swallows and logs errors'.
-test.serial(
-  'subscribe — throwing subscriber is isolated from other subscribers',
-  async t => {
-    await Promise.resolve();
+test('subscribe — throwing subscriber is isolated from other subscribers', async t => {
+  await Promise.resolve();
 
-    const { memoryGet, memorySet, memorySearch } = stubTools();
-    const { makeAgent } = stubMakeAgent();
-    const scripted = [
-      ...gateSatisfyingEvents(),
-      { type: 'Message', role: 'assistant', content: 'done' },
-    ];
-    const { runAgent } = stubRunAgent(scripted);
-    const reflector = makeReflector({
-      memoryGet,
-      memorySet,
-      memorySearch,
-      makeAgent,
-      runAgent,
-      workspaceDir: '/dev/null',
-    });
+  const { memoryGet, memorySet, memorySearch } = stubTools();
+  const { makeAgent } = stubMakeAgent();
+  const scripted = [
+    ...gateSatisfyingEvents(),
+    { type: 'Message', role: 'assistant', content: 'done' },
+  ];
+  const { runAgent } = stubRunAgent(scripted);
+  // Capture error logs via the injectable `logError` hook so we don't
+  // need to mutate the (frozen-under-SES) global console object.
+  /** @type {Array<any[]>} */
+  const errorCalls = [];
+  /** @param {any[]} args */
+  const logError = (...args) => {
+    errorCalls.push(args);
+  };
+  const reflector = makeReflector({
+    memoryGet,
+    memorySet,
+    memorySearch,
+    makeAgent,
+    runAgent,
+    workspaceDir: '/dev/null',
+    logError,
+  });
 
-    // Silence console.error during the test so CI doesn't get noise.
-    const origErr = console.error;
-    /** @type {Array<any[]>} */
-    const errorCalls = [];
-    /** @param {any[]} args */
-    console.error = (...args) => {
-      errorCalls.push(args);
-    };
+  reflector.subscribe(() => {
+    throw new Error('kaboom');
+  });
 
-    try {
-      reflector.subscribe(() => {
-        throw new Error('kaboom');
-      });
+  /** @type {Array<any>} */
+  const sane = [];
+  reflector.subscribe(event => sane.push(event));
 
-      /** @type {Array<any>} */
-      const sane = [];
-      reflector.subscribe(event => sane.push(event));
+  const stream = await reflector.reflect();
 
-      const stream = await reflector.reflect();
+  /** @type {Array<any>} */
+  const drained = [];
+  for await (const event of /** @type {AsyncIterable<any>} */ (stream)) {
+    drained.push(event);
+  }
 
-      /** @type {Array<any>} */
-      const drained = [];
-      for await (const event of /** @type {AsyncIterable<any>} */ (stream)) {
-        drained.push(event);
-      }
-
-      t.deepEqual(
-        drained,
-        scripted,
-        'stream is not interrupted by a throwing subscriber',
-      );
-      t.deepEqual(
-        sane,
-        scripted,
-        'other subscribers continue to receive events',
-      );
-      t.true(errorCalls.length >= 1, 'throwing subscriber is logged');
-    } finally {
-      console.error = origErr;
-    }
-  },
-);
+  t.deepEqual(
+    drained,
+    scripted,
+    'stream is not interrupted by a throwing subscriber',
+  );
+  t.deepEqual(sane, scripted, 'other subscribers continue to receive events');
+  t.true(errorCalls.length >= 1, 'throwing subscriber is logged');
+});
 
 test('subscribe — automatic run() publishes events to subscribers', async t => {
   const { memoryGet, memorySet, memorySearch } = stubTools();

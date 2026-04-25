@@ -183,6 +183,10 @@ const estimateFileTokens = async (memoryGet, path) => {
  *   - Optional per-round event runner.  Defaults to `runAgentRound`.
  *   Exposed so tests can inject a stub event stream without a live
  *   LLM.
+ * @property {(...args: any[]) => void} [logError] - Optional structured
+ *   error logger.  Defaults to `console.error`.  Exposed so tests can
+ *   capture reflection-failure and subscriber-isolation log lines
+ *   without trying to reassign the (frozen-under-SES) global console.
  */
 
 /**
@@ -229,6 +233,7 @@ const makeReflector = options => {
     workspaceDir,
     makeAgent = makePiAgent,
     runAgent = runAgentRound,
+    logError = (...args) => console.error(...args),
   } = options;
 
   /** Whether a reflection cycle is currently running. */
@@ -247,7 +252,7 @@ const makeReflector = options => {
       try {
         handler(event);
       } catch (err) {
-        console.error('[reflector] subscriber failed:', err);
+        logError('[reflector] subscriber failed:', err);
       }
     }
   };
@@ -410,7 +415,7 @@ const makeReflector = options => {
     try {
       stream = await reflect();
     } catch (err) {
-      console.error('[reflector] reflection failed:', err);
+      logError('[reflector] reflection failed:', err);
       return;
     }
     if (!stream) {
@@ -423,7 +428,7 @@ const makeReflector = options => {
         // auto-trigger paths.
       }
     } catch (err) {
-      console.error('[reflector] reflection failed:', err);
+      logError('[reflector] reflection failed:', err);
     }
   };
 
