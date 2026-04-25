@@ -98,10 +98,9 @@ test('throws TypeError on bad seed', t => {
     instanceOf: TypeError,
   });
   t.throws(() => makeXorShift([1.5, 0, 0, 0]), { instanceOf: TypeError });
-  t.throws(
-    () => makeXorShift(/** @type {any} */ ([1, 2, 3, 'four'])),
-    { instanceOf: TypeError },
-  );
+  t.throws(() => makeXorShift(/** @type {any} */ ([1, 2, 3, 'four'])), {
+    instanceOf: TypeError,
+  });
   // The all-zero state is the absorbing fixed point of xorshift128+.
   t.throws(() => makeXorShift([0, 0, 0, 0]), { instanceOf: TypeError });
 });
