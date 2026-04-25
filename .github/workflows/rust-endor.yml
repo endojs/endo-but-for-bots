@@ -7,9 +7,9 @@ name: rust-endor
 
 on:
   push:
-    branches: [slot-machine, endor]
+    branches: [slot-machine, slot-machine-pr, endor]
   pull_request:
-    branches: [slot-machine, endor]
+    branches: [slot-machine, slot-machine-pr, endor, master]
 
 permissions:
   contents: read

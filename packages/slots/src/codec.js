@@ -31,13 +31,18 @@ const textDecoder = new TextDecoder('utf-8', { fatal: true });
  */
 const SLOT_TAG = 's';
 
+// Canonical slot strings: `s` followed by either `0` or a non-zero
+// digit run.  Reject leading zeros, signs, exponents, whitespace —
+// the wire form must be deterministic so that both ends agree.
+const SLOT_PATTERN = /^s(0|[1-9][0-9]*)$/;
+
 const parseSlot = slot => {
-  if (slot[0] !== SLOT_TAG) {
+  if (typeof slot !== 'string' || !SLOT_PATTERN.test(slot)) {
     throw makeError(X`invalid slot string ${q(slot)}`);
   }
   const idx = Number(slot.slice(1));
-  if (!Number.isInteger(idx) || idx < 0) {
-    throw makeError(X`invalid slot index in ${q(slot)}`);
+  if (!Number.isSafeInteger(idx)) {
+    throw makeError(X`slot index ${q(slot)} exceeds safe-integer range`);
   }
   return idx;
 };

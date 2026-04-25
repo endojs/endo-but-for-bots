@@ -295,4 +295,56 @@ mod tests {
         bogus.extend([0x00, 0x00, 0x00]);
         assert!(DeliverPayload::decode(&bogus).is_err());
     }
+
+    // Pinned hex fixtures: each appears in both
+    // packages/slots/test/payload.test.js and
+    // rust/endo/slots/src/wire/payload.rs so any wire-shape drift
+    // between the JS and Rust sides fails one suite or the other.
+
+    fn hex(bytes: &[u8]) -> String {
+        bytes.iter().map(|b| format!("{b:02x}")).collect()
+    }
+
+    #[test]
+    fn deliver_pinned_hex_fixture() {
+        let p = DeliverPayload {
+            target: Descriptor::new(Direction::Local, Kind::Object, 1),
+            body: vec![],
+            targets: vec![],
+            promises: vec![],
+            reply: None,
+        };
+        assert_eq!(hex(&p.encode()), "85820001408080f6");
+    }
+
+    #[test]
+    fn resolve_pinned_hex_fixture() {
+        let p = ResolvePayload {
+            target: Descriptor::new(Direction::Local, Kind::Promise, 1),
+            is_reject: false,
+            body: vec![],
+            targets: vec![],
+            promises: vec![],
+        };
+        assert_eq!(hex(&p.encode()), "8582020100408080");
+    }
+
+    #[test]
+    fn drop_pinned_hex_fixture() {
+        let p = DropPayload {
+            deltas: vec![DropDelta {
+                target: Descriptor::new(Direction::Local, Kind::Object, 1),
+                ram: 1,
+                clist: 0,
+                export: 0,
+            }],
+        };
+        assert_eq!(hex(&p.encode()), "8184820001010000");
+    }
+
+    #[test]
+    fn abort_pinned_hex_fixture() {
+        let p = AbortPayload { reason: "bye".into() };
+        assert_eq!(hex(&p.encode()), "43627965");
+    }
 }

@@ -15,7 +15,7 @@
 use crate::error::Result;
 use crate::session::SessionId;
 use crate::table::SlotMachine;
-use crate::wire::descriptor::{Descriptor, Direction};
+use crate::wire::descriptor::Descriptor;
 use crate::wire::payload::{DeliverPayload, DropDelta, DropPayload, ResolvePayload};
 
 fn translate_one(
