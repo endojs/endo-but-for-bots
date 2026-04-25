@@ -96,6 +96,7 @@ impl RefTable {
         self.counts.remove(&k);
     }
 
+    #[allow(dead_code)]
     pub(crate) fn iter(&self) -> impl Iterator<Item = (Kref, &RefCounts)> {
         self.counts.iter().map(|(k, v)| (*k, v))
     }

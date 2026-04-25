@@ -19,6 +19,36 @@ import {
 /** @import { Descriptor } from './descriptor.js' */
 
 /**
+ * Map a wire-encoded rejection value back into an `Error`.  The
+ * sender's `onDeliver` packs `{ name, message }`; older senders
+ * may have packed a bare string.  Either way we yield a
+ * throwable Error so consumers can `await` and `try/catch`.
+ *
+ * @param {unknown} value
+ * @returns {Error}
+ */
+const rehydrateError = value => {
+  if (typeof value === 'string') return Error(value);
+  if (
+    value &&
+    typeof value === 'object' &&
+    typeof (/** @type {{ message?: unknown }} */ (value).message) === 'string'
+  ) {
+    const v = /** @type {{ name?: unknown, message: string }} */ (value);
+    const e = Error(v.message);
+    if (typeof v.name === 'string') {
+      Object.defineProperty(e, 'name', {
+        value: v.name,
+        configurable: true,
+        writable: true,
+      });
+    }
+    return e;
+  }
+  return Error(String(value));
+};
+
+/**
  * @typedef {(verb: string, payload: Uint8Array) => void} SendEnvelope
  */
 
@@ -138,6 +168,9 @@ export const makeSlotClient = ({
       // should be unreachable.
       throw makeError(X`reply promise did not receive a descriptor`);
     }
+    // Register the settler before send so a synchronous transport
+    // that pumps an inbound resolve re-entrantly inside sendEnvelope
+    // can still find the matching entry.
     settlers.set(descriptorKey(replyDesc), { resolve, reject });
     sendEnvelope(VERB_DELIVER, bytes);
     return reply;
@@ -188,6 +221,39 @@ export const makeSlotClient = ({
         }
         deliverSendOnly(p, method, args);
       },
+      /**
+       * Treat a presence-as-function call as a `__call__` method
+       * dispatch.  Slot-machine has no separate function-target
+       * convention, so we surface this as a string-keyed method to
+       * keep the wire shape uniform.
+       *
+       * @param {unknown} p
+       * @param {unknown[]} args
+       */
+      applyFunction(p, args) {
+        return deliver(p, '__call__', args);
+      },
+      /**
+       * @param {unknown} p
+       * @param {unknown[]} args
+       */
+      applyFunctionSendOnly(p, args) {
+        deliverSendOnly(p, '__call__', args);
+      },
+      /**
+       * Property access via `E(p).prop` resolves to a deliver of
+       * the conventional `__get__` method with the property name as
+       * its only argument.  Mirrors CapTP's get-as-call shape.
+       *
+       * @param {unknown} p
+       * @param {string | symbol} prop
+       */
+      get(p, prop) {
+        if (typeof prop !== 'string') {
+          throw makeError(X`slot-machine property names must be strings`);
+        }
+        return deliver(p, '__get__', [prop]);
+      },
     };
     // Executor is a no-op; the presence is settled only via inbound
     // resolve envelopes, if ever.  A presence representing a live
@@ -233,13 +299,23 @@ export const makeSlotClient = ({
           sendEnvelope(VERB_RESOLVE, out);
         },
         err => {
-          const reason =
-            /** @type {{ message?: unknown, name?: unknown }} */ (err)
-              ?.message ?? String(err);
+          // Carry both name and message so the receiving side can
+          // rehydrate an Error of the right class.  Stack and cause
+          // are deliberately omitted — they may contain sensitive
+          // information from the rejecting peer's frame.
+          const errLike = /** @type {{ name?: unknown, message?: unknown }} */ (
+            err
+          );
+          const name =
+            typeof errLike?.name === 'string' ? errLike.name : 'Error';
+          const message =
+            typeof errLike?.message === 'string'
+              ? errLike.message
+              : String(err);
           const out = codec.encodeResolve({
             target: reply,
             isReject: true,
-            value: reason,
+            value: harden({ name, message }),
           });
           sendEnvelope(VERB_RESOLVE, out);
         },
@@ -265,12 +341,7 @@ export const makeSlotClient = ({
     if (!entry) return;
     settlers.delete(key);
     if (isReject) {
-      // Rehydrate into an Error so consumers get a throwable value
-      // from their awaited promises.  For now the wire body is just
-      // a message string; richer error shapes are a later addition.
-      const err =
-        typeof value === 'string' ? Error(value) : Error(String(value));
-      entry.reject(err);
+      entry.reject(rehydrateError(value));
     } else {
       entry.resolve(value);
     }
@@ -330,8 +401,32 @@ export const makeSlotClient = ({
   harden(onDrop);
 
   /**
-   * Dispatch an inbound envelope by verb.  `abort` is ignored at
-   * this layer — the transport owns the session-teardown logic.
+   * Reject every outstanding reply promise with the supplied
+   * reason.  Called when the session ends abruptly so callers
+   * awaiting on `deliver` results don't hang forever.
+   *
+   * @param {Error} reason
+   */
+  const abortPending = reason => {
+    for (const entry of settlers.values()) {
+      try {
+        entry.reject(reason);
+      } catch (_e) {
+        // The settler's reject may itself reject downstream; we
+        // don't want one bad listener to prevent the others from
+        // being cleared.
+      }
+    }
+    settlers.clear();
+  };
+  harden(abortPending);
+
+  /**
+   * Dispatch an inbound envelope by verb.  `abort` rejects every
+   * pending reply with the abort reason; `drop` decodes and
+   * returns the deltas (the result is ignored here but the
+   * underlying `onDrop` is callable directly for consumers that
+   * want the bookkeeping).
    *
    * @param {string} verb
    * @param {Uint8Array} payload
@@ -343,7 +438,14 @@ export const makeSlotClient = ({
       onDrop(payload);
       return undefined;
     }
-    if (verb === VERB_ABORT) return undefined;
+    if (verb === VERB_ABORT) {
+      // The abort payload is a UTF-8 reason byte string, but we
+      // don't import the abort decoder here to keep the dependency
+      // surface narrow.  Whoever drives onEnvelope can decode it
+      // themselves and pass the reason via abortPending.
+      abortPending(Error('session aborted by peer'));
+      return undefined;
+    }
     return undefined;
   };
   harden(onEnvelope);
@@ -361,6 +463,7 @@ export const makeSlotClient = ({
     onResolve,
     onDrop,
     onEnvelope,
+    abortPending,
     pendingCount,
   });
 };

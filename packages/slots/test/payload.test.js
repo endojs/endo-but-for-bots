@@ -140,6 +140,63 @@ test('verb constants and isSlotVerb', t => {
   t.false(isSlotVerb(''));
 });
 
+// Pinned hex fixtures: each appears in both
+// packages/slots/test/payload.test.js and
+// rust/endo/slots/src/wire/payload.rs::tests so any wire-shape drift
+// between the JS and Rust sides fails one suite or the other.
+test('deliver — pinned hex fixture (Local/Object/1, empty body)', t => {
+  const p = {
+    target: D(Direction.Local, Kind.Object, 1),
+    body: new Uint8Array(0),
+    targets: [],
+    promises: [],
+    reply: null,
+  };
+  const bytes = encodeDeliverPayload(p);
+  t.is(
+    [...bytes].map(b => b.toString(16).padStart(2, '0')).join(''),
+    '85820001408080f6',
+  );
+});
+
+test('resolve — pinned hex fixture (Local/Promise/1, fulfil, empty body)', t => {
+  const p = {
+    target: D(Direction.Local, Kind.Promise, 1),
+    isReject: false,
+    body: new Uint8Array(0),
+    targets: [],
+    promises: [],
+  };
+  const bytes = encodeResolvePayload(p);
+  t.is(
+    [...bytes].map(b => b.toString(16).padStart(2, '0')).join(''),
+    '8582020100408080',
+  );
+});
+
+test('drop — pinned hex fixture (single Local/Object/1, ram=1)', t => {
+  const bytes = encodeDropPayload([
+    {
+      target: D(Direction.Local, Kind.Object, 1),
+      ram: 1,
+      clist: 0,
+      export: 0,
+    },
+  ]);
+  t.is(
+    [...bytes].map(b => b.toString(16).padStart(2, '0')).join(''),
+    '8184820001010000',
+  );
+});
+
+test('abort — pinned hex fixture ("bye")', t => {
+  const bytes = encodeAbortPayload('bye');
+  t.is(
+    [...bytes].map(b => b.toString(16).padStart(2, '0')).join(''),
+    '43627965',
+  );
+});
+
 test('deliver — trailing bytes rejected', t => {
   const p = {
     target: D(Direction.Local, Kind.Object, 0),

@@ -127,10 +127,10 @@ export const makeMessageSlots = (
 
   const closedRace = Promise.race([closedPromise, drained]).then(() => {});
 
-  return {
+  return harden({
     getBootstrap: () => remoteRoot,
     closed: closedRace,
     close,
-  };
+  });
 };
 harden(makeMessageSlots);
