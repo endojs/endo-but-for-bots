@@ -27,7 +27,7 @@ import { makePetSitter } from './pet-sitter.js';
 
 import { makeDeferredTasks } from './deferred-tasks.js';
 
-import { HostInterface } from './interfaces.js';
+import { HostInterface, TracesInterface } from './interfaces.js';
 import { hostHelp, makeHelp } from './help-text.js';
 
 /**
@@ -90,6 +90,11 @@ const normalizeHostOrGuestOptions = opts => {
  * @param {DaemonCore['pinTransient']} [args.pinTransient]
  * @param {DaemonCore['unpinTransient']} [args.unpinTransient]
  * @param {DaemonCore['getFormulaGraphSnapshot']} [args.getFormulaGraphSnapshot]
+ * @param {import('./trace-aggregator.js').makeTraceAggregator extends
+ *          (...args: any[]) => infer R ? R : never} [args.traceAggregator]
+ *   Optional. When provided, `host.traces()` returns an Exo whose
+ *   methods proxy to this aggregator. Without it, `host.traces()`
+ *   throws.
  */
 export const makeHostMaker = ({
   provide,
@@ -133,6 +138,7 @@ export const makeHostMaker = ({
   unpinTransient = /** @param {any} _id */ _id => {},
   getFormulaGraphSnapshot = /** @param {any[]} _ids */ async _ids =>
     harden({ nodes: [], edges: [] }),
+  traceAggregator = undefined,
 }) => {
   /**
    * @param {FormulaIdentifier} hostId
@@ -1378,6 +1384,33 @@ export const makeHostMaker = ({
     };
 
     /**
+     * Returns the privileged trace facet for this daemon. The facet is
+     * a fresh Exo each call so that pet-store revocation tracks per
+     * call site, but the underlying aggregator is shared across all
+     * facets the daemon hands out.
+     */
+    const traces = async () => {
+      if (traceAggregator === undefined) {
+        throw makeError(
+          X`The error-trace aggregator is unavailable in this daemon`,
+        );
+      }
+      return makeExo('EndoTraces', TracesInterface, {
+        help: () =>
+          'Privileged error-trace lookup. Use lookup(errorId) to fetch a trace report, recent({workerId, limit}) for a recent list, clear() to drop everything, stats() for accounting.',
+        /** @param {string} errorId */
+        lookup: async errorId => traceAggregator.lookup(errorId),
+        /**
+         * @param {{ workerId?: string, limit?: number }} [opts]
+         */
+        recent: async opts => traceAggregator.recent(opts),
+        /** @param {string} [workerId] */
+        clear: async workerId => traceAggregator.clear(workerId),
+        stats: async () => traceAggregator.stats(),
+      });
+    };
+
+    /**
      * Returns a snapshot of the formula dependency graph for all formulas
      * reachable from this agent's pet store entries.
      */
@@ -1473,6 +1506,8 @@ export const makeHostMaker = ({
       sendValue,
       // Graph
       getFormulaGraph,
+      // Traces
+      traces,
     };
 
     const hostExo = makeExo(
