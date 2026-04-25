@@ -415,7 +415,9 @@ const makeDaemonCore = async (
     // eslint-disable-next-line no-undef
     maxRecordsPerWorker: parseTraceEnvNumber(
       // eslint-disable-next-line no-undef
-      typeof process !== 'undefined' ? process.env.ENDO_TRACE_RECORDS : undefined,
+      typeof process !== 'undefined'
+        ? process.env.ENDO_TRACE_RECORDS
+        : undefined,
       1024,
     ),
     maxBytes: parseTraceEnvNumber(
@@ -425,7 +427,9 @@ const makeDaemonCore = async (
     ),
     maxWorkers: parseTraceEnvNumber(
       // eslint-disable-next-line no-undef
-      typeof process !== 'undefined' ? process.env.ENDO_TRACE_WORKERS : undefined,
+      typeof process !== 'undefined'
+        ? process.env.ENDO_TRACE_WORKERS
+        : undefined,
       64,
     ),
   });

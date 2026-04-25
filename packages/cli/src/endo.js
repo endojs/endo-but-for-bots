@@ -447,8 +447,10 @@ export const main = async rawArgs => {
     )
     .option('--recent', 'list recent error traces instead of looking up one')
     .option('--worker <id>', 'restrict --recent to a single worker id')
-    .option('--limit <n>', 'cap on the number of recent records returned', val =>
-      Number(val),
+    .option(
+      '--limit <n>',
+      'cap on the number of recent records returned',
+      val => Number(val),
     )
     .option('--stats', 'print aggregator stats only')
     .option('--json', 'emit JSON instead of formatted text')

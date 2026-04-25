@@ -145,8 +145,7 @@ const makeWorkerPushTrace = (getDaemonFacet, site) => {
       // a fresh trace at marshal time so the operator at least sees
       // where the error left the worker.
       const captureSite = Error('trace capture');
-      stack =
-        typeof captureSite.stack === 'string' ? captureSite.stack : '';
+      stack = typeof captureSite.stack === 'string' ? captureSite.stack : '';
     }
     /** @type {TraceRecord} */
     const record = harden({

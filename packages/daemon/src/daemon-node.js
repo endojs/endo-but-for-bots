@@ -141,7 +141,14 @@ const main = async () => {
     cancelGracePeriod,
     capTpConnectionRegistrar,
     marshalSaveError,
-  } = await makeDaemon(powers, daemonLabel, cancel, cancelled, {}, { gcEnabled });
+  } = await makeDaemon(
+    powers,
+    daemonLabel,
+    cancel,
+    cancelled,
+    {},
+    { gcEnabled },
+  );
 
   /** @param {Error} error */
   const exitWithError = error => {

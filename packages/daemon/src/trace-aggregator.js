@@ -50,8 +50,7 @@ import { makeError, q, X } from '@endo/errors';
 const textEncoder = new TextEncoder();
 
 /** @param {TraceRecord} rec */
-const recordByteLength = rec =>
-  textEncoder.encode(JSON.stringify(rec)).length;
+const recordByteLength = rec => textEncoder.encode(JSON.stringify(rec)).length;
 
 /**
  * @param {TraceRecord} rec
