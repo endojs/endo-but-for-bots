@@ -1059,7 +1059,10 @@ export interface EndoHost extends EndoAgent {
 export interface EndoTraces {
   help(): string;
   lookup(errorId: string): Promise<EndoTraceReport | undefined>;
-  recent(opts?: { workerId?: string; limit?: number }): Promise<EndoTraceReport[]>;
+  recent(opts?: {
+    workerId?: string;
+    limit?: number;
+  }): Promise<EndoTraceReport[]>;
   clear(workerId?: string): Promise<void>;
   stats(): Promise<{
     workers: number;
