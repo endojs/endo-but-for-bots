@@ -40,8 +40,7 @@
     "@endo/harden": "workspace:^",
     "@endo/init": "workspace:^",
     "@endo/marshal": "workspace:^",
-    "@endo/promise-kit": "workspace:^",
-    "@noble/hashes": "^1.8.0"
+    "@endo/promise-kit": "workspace:^"
   },
   "devDependencies": {
     "@endo/far": "workspace:^",
