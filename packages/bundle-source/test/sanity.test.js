@@ -6,4 +6,4 @@ import { makeSanityTests } from './_sanity.js';
 // of this and the paired test-sanity-unfiltered.js tests depends
 // on the settings, we set it explicitly.
 
-makeSanityTests('concise');
+await makeSanityTests('concise');
