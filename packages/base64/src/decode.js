@@ -73,9 +73,36 @@ const nativeFromBase64 =
       )
     : undefined;
 
+// Pin native options to the strictest semantics that match
+// `jsDecodeBase64`:
+//   - `lastChunkHandling: 'strict'` rejects unpadded / short final
+//     chunks (the proposal default `'loose'` would silently accept
+//     them).
+//   - `alphabet: 'base64'` rejects URL-safe characters (`-_`) and
+//     pins forward compatibility against any future spec drift.
+// `Object.freeze` rather than `@endo/harden` because this module is on
+// the pre-lockdown shim path; importing `@endo/harden` here would
+// install a fallback `harden` before SES `lockdown()` and break it.
+const nativeFromBase64Options = Object.freeze({
+  lastChunkHandling: 'strict',
+  alphabet: 'base64',
+});
+
 /** @type {typeof jsDecodeBase64} */
-const nativeDecodeBase64 = (string, _name) =>
-  /** @type {any} */ (nativeFromBase64)(string);
+const nativeDecodeBase64 = (string, name) => {
+  try {
+    return /** @type {any} */ (nativeFromBase64)(string, nativeFromBase64Options);
+  } catch (_err) {
+    // Native error messages are implementation-defined and do not
+    // embed `name` or report the failing offset.  Re-run the polyfill
+    // to surface its precise diagnostic.  The polyfill must reject
+    // anything the native call rejected; if it does not (i.e. the
+    // dispatched options diverge silently), throw a generic error
+    // rather than masking the divergence.
+    jsDecodeBase64(string, name);
+    throw Error(`Invalid base64 in string ${name}`);
+  }
+};
 
 // The legacy XS `Base64.decode` function is faster than the pure JS
 // polyfill, but might return ArrayBuffer (not Uint8Array); adapt it.
