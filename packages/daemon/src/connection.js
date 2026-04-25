@@ -35,6 +35,10 @@ const registerCapTpConnection = (registrar, name, close, closed) => {
  * @param {TBootstrap} bootstrap
  * @param {import('@endo/captp').CapTPOptions} [capTpOptions]
  * @param {CapTpConnectionRegistrar} [capTpConnectionRegistrar]
+ * @param {(err: Error) => void} [onCapTpError] hook invoked, in addition to
+ * the default `console.error`, whenever CapTP emits a rejection at the
+ * connection boundary. Used by the trace aggregator to capture
+ * framing/dispatch errors that never reach the marshal layer.
  */
 export const makeMessageCapTP = (
   name,
@@ -44,6 +48,7 @@ export const makeMessageCapTP = (
   bootstrap,
   capTpOptions = undefined,
   capTpConnectionRegistrar = undefined,
+  onCapTpError = undefined,
 ) => {
   // eslint-disable-next-line no-undef
   const traceCapTP =
@@ -80,6 +85,16 @@ export const makeMessageCapTP = (
     closedPromise,
   );
   const defaultOnReject = err => {
+    if (onCapTpError !== undefined) {
+      try {
+        onCapTpError(err);
+      } catch (hookError) {
+        console.error(
+          `CapTP ${name} onCapTpError hook threw:`,
+          /** @type {Error} */ (hookError).message || hookError,
+        );
+      }
+    }
     console.error(
       `CapTP ${name} exception:`,
       err?.message || err,
@@ -179,6 +194,7 @@ export const bytesToMessage = bytes => {
  * @param {TBootstrap} bootstrap
  * @param {import('@endo/captp').CapTPOptions} [capTpOptions]
  * @param {CapTpConnectionRegistrar} [capTpConnectionRegistrar]
+ * @param {(err: Error) => void} [onCapTpError]
  */
 export const makeNetstringCapTP = (
   name,
@@ -188,6 +204,7 @@ export const makeNetstringCapTP = (
   bootstrap,
   capTpOptions = undefined,
   capTpConnectionRegistrar = undefined,
+  onCapTpError = undefined,
 ) => {
   const messageWriter = mapWriter(
     makeNetstringWriter(bytesWriter, { chunked: true }),
@@ -205,5 +222,6 @@ export const makeNetstringCapTP = (
     bootstrap,
     capTpOptions,
     capTpConnectionRegistrar,
+    onCapTpError,
   );
 };
