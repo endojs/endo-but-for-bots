@@ -1,8 +1,8 @@
 // @ts-check
 
 import test from '@endo/ses-ava/test.js';
+import { makeXorShift } from '@endo/xorshift';
 import { decodeSyrup, encodeSyrup } from '../../src/syrup/js-representation.js';
-import { XorShift } from '../_xorshift.js';
 
 /**
  * @param {number} budget
@@ -94,11 +94,15 @@ function fuzzySyrupable(budget, random) {
   }
 }
 
-// Chris Hibbert really wanted the default i to be Bob's Coffee Façade,
-// which is conveniently exactly 64 bits long.
-const defaultSeed = [0xb0b5c0ff, 0xeefacade, 0xb0b5c0ff, 0xeefacade];
+// Chris Hibbert really wanted the default seed to be Bob's Coffee
+// Façade, which is conveniently exactly 64 bits long, repeated to
+// fill the 128-bit state.
+const defaultSeed = Uint8Array.of(
+  0xb0, 0xb5, 0xc0, 0xff, 0xee, 0xfa, 0xca, 0xde,
+  0xb0, 0xb5, 0xc0, 0xff, 0xee, 0xfa, 0xca, 0xde,
+);
 
-const prng = new XorShift(defaultSeed);
+const prng = makeXorShift(defaultSeed);
 const random = () => prng.random();
 
 test('fuzz', t => {

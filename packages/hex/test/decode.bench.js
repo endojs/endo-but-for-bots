@@ -12,11 +12,8 @@
 //   xst test/decode.bench.js                  (XS direct, ESM)
 //   ./test/run-benches.sh                      (rolls up + eshost)
 
+import { makeXorShift } from '@endo/xorshift';
 import { jsDecodeHex as shippedDecode } from '../src/decode.js';
-// `_xorshift.js` is a copy of `packages/ocapn/test/_xorshift.js`; if
-// either is updated, the other should be kept in sync, and ideally we
-// should factor the PRNG out into a shared test helper.
-import { XorShift } from './_xorshift.js';
 
 const hexAlphabet = '0123456789abcdef';
 
@@ -187,11 +184,14 @@ const pairMapTableDecode = (string, name = '<unknown>') => {
 // input, worst-case throw path).
 const tableDecode = arrayTableDecode;
 
-// Deterministic PRNG, same seed shape as other Endo fuzz tests.
-const defaultSeed = [0xb0b5c0ff, 0xeefacade, 0xb0b5c0ff, 0xeefacade];
+// Deterministic PRNG, same seed bytes as other Endo fuzz tests.
+const defaultSeed = Uint8Array.of(
+  0xb0, 0xb5, 0xc0, 0xff, 0xee, 0xfa, 0xca, 0xde,
+  0xb0, 0xb5, 0xc0, 0xff, 0xee, 0xfa, 0xca, 0xde,
+);
 const makeBytes = size => {
   const bytes = new Uint8Array(size);
-  const prng = new XorShift(defaultSeed);
+  const prng = makeXorShift(defaultSeed);
   for (let i = 0; i < size; i += 1) {
     bytes[i] = Math.floor(prng.random() * 256);
   }

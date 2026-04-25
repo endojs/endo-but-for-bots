@@ -50,6 +50,7 @@
   "devDependencies": {
     "@endo/lockdown": "workspace:^",
     "@endo/ses-ava": "workspace:^",
+    "@endo/xorshift": "workspace:^",
     "ava": "catalog:dev",
     "c8": "catalog:dev",
     "eslint": "catalog:dev",

@@ -5,7 +5,7 @@ import test from '@endo/ses-ava/test.js';
 import harden from '@endo/harden';
 import { encodeHex } from '@endo/hex';
 import { makeTagged } from '@endo/pass-style';
-import { XorShift } from '../_xorshift.js';
+import { makeXorShift } from '@endo/xorshift';
 import { makeSyrupWriter } from '../../src/syrup/encode.js';
 import { makeSyrupReader } from '../../src/syrup/decode.js';
 import { makeSelector } from '../../src/selector.js';
@@ -120,11 +120,15 @@ function fuzzyPassable(budget, random) {
   }
 }
 
-// Chris Hibbert really wanted the default i to be Bob's Coffee Façade,
-// which is conveniently exactly 64 bits long.
-const defaultSeed = [0xb0b5c0ff, 0xeefacade, 0xb0b5c0ff, 0xeefacade];
+// Chris Hibbert really wanted the default seed to be Bob's Coffee
+// Façade, which is conveniently exactly 64 bits long, repeated to
+// fill the 128-bit state.
+const defaultSeed = Uint8Array.of(
+  0xb0, 0xb5, 0xc0, 0xff, 0xee, 0xfa, 0xca, 0xde,
+  0xb0, 0xb5, 0xc0, 0xff, 0xee, 0xfa, 0xca, 0xde,
+);
 
-const prng = new XorShift(defaultSeed);
+const prng = makeXorShift(defaultSeed);
 const random = () => prng.random();
 
 /**
