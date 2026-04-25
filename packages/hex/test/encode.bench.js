@@ -14,11 +14,8 @@
 // the flag is unnecessary.  When the intrinsic is absent the
 // native-based variants are skipped.)
 
+import { makeXorShift } from '@endo/xorshift';
 import { jsEncodeHex } from '../src/encode.js';
-// `_xorshift.js` is a copy of `packages/ocapn/test/_xorshift.js`; if
-// either is updated, the other should be kept in sync, and ideally we
-// should factor the PRNG out into a shared test helper.
-import { XorShift } from './_xorshift.js';
 
 const toHex = /** @type {any} */ (Uint8Array.prototype).toHex;
 const nativeToHex =
@@ -28,7 +25,7 @@ const nativeToHex =
 const defaultSeed = [0xb0b5c0ff, 0xeefacade, 0xb0b5c0ff, 0xeefacade];
 const makeBytes = size => {
   const bytes = new Uint8Array(size);
-  const prng = new XorShift(defaultSeed);
+  const prng = makeXorShift(defaultSeed);
   for (let i = 0; i < size; i += 1) {
     bytes[i] = Math.floor(prng.random() * 256);
   }

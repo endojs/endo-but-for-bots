@@ -1,4 +1,3 @@
-// @ts-check
 /* eslint no-bitwise: ["off"] */
 
 import harden from '@endo/harden';

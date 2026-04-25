@@ -11,11 +11,8 @@
 // Generates a deterministic input and times each decoder across
 // several iterations.
 
+import { makeXorShift } from '@endo/xorshift';
 import { jsDecodeHex as shippedDecode } from '../src/decode.js';
-// `_xorshift.js` is a copy of `packages/ocapn/test/_xorshift.js`; if
-// either is updated, the other should be kept in sync, and ideally we
-// should factor the PRNG out into a shared test helper.
-import { XorShift } from './_xorshift.js';
 
 const hexAlphabet = '0123456789abcdef';
 
@@ -61,7 +58,7 @@ const tableDecode = (string, name = '<unknown>') => {
 const defaultSeed = [0xb0b5c0ff, 0xeefacade, 0xb0b5c0ff, 0xeefacade];
 const makeBytes = size => {
   const bytes = new Uint8Array(size);
-  const prng = new XorShift(defaultSeed);
+  const prng = makeXorShift(defaultSeed);
   for (let i = 0; i < size; i += 1) {
     bytes[i] = Math.floor(prng.random() * 256);
   }

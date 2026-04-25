@@ -44,6 +44,7 @@
     "@endo/eventual-send": "workspace:^",
     "@endo/init": "workspace:^",
     "@endo/ses-ava": "workspace:^",
+    "@endo/xorshift": "workspace:^",
     "ava": "catalog:dev",
     "babel-eslint": "^10.1.0",
     "c8": "catalog:dev",
