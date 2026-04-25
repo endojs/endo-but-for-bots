@@ -62,6 +62,7 @@
   },
   "dependencies": {
     "@endo/cjs-module-analyzer": "workspace:^",
+    "@endo/harden": "workspace:^",
     "@endo/hex": "workspace:^",
     "@endo/module-source": "workspace:^",
     "@endo/path-compare": "workspace:^",

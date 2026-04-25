@@ -1,3 +1,4 @@
+// @ts-check
 /**
  * SHA-512 hex hash factory using `@endo/hex` to format the digest.
  *
@@ -16,6 +17,7 @@
  * @module
  */
 
+import harden from '@endo/harden';
 import { encodeHex } from '@endo/hex';
 
 /**
@@ -24,15 +26,26 @@ import { encodeHex } from '@endo/hex';
  */
 
 /**
- * Creates a {@link HashFn} that computes SHA-512 of the input bytes
- * and returns the digest as a lowercase hex string.
+ * Creates a {@link HashFn} suitable for the optional `computeSha512`
+ * parameter of {@link import('./node-powers.js').makeReadPowers}.
+ * Delegates digest formatting to `@endo/hex`'s `encodeHex`, which
+ * dispatches to the native `Uint8Array.prototype.toHex` intrinsic
+ * when available.
+ *
+ * If both `computeSha512` and `crypto` are passed to `makeReadPowers`,
+ * `computeSha512` wins and `crypto` is unused for hashing.
  *
  * @param {CryptoInterface} crypto - the Node `node:crypto` module or a
  *   compatible adapter.
  * @returns {HashFn}
  */
-export const makeComputeSha512 = crypto => bytes => {
-  const hash = crypto.createHash('sha512');
-  hash.update(bytes);
-  return encodeHex(hash.digest());
+export const makeComputeSha512 = crypto => {
+  /** @type {HashFn} */
+  const computeSha512 = bytes => {
+    const hash = crypto.createHash('sha512');
+    hash.update(bytes);
+    return encodeHex(hash.digest());
+  };
+  return harden(computeSha512);
 };
+harden(makeComputeSha512);
