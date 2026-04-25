@@ -66,8 +66,7 @@ const sha256 = bytes => {
       w[j] = dv.getUint32(i + j * 4, false);
     }
     for (let j = 16; j < 64; j += 1) {
-      const s0 =
-        rotr(w[j - 15], 7) ^ rotr(w[j - 15], 18) ^ (w[j - 15] >>> 3);
+      const s0 = rotr(w[j - 15], 7) ^ rotr(w[j - 15], 18) ^ (w[j - 15] >>> 3);
       const s1 = rotr(w[j - 2], 17) ^ rotr(w[j - 2], 19) ^ (w[j - 2] >>> 10);
       w[j] = (w[j - 16] + s0 + w[j - 7] + s1) >>> 0;
     }
