@@ -109,6 +109,57 @@ Targets (from the design speculation): ping 1.4 → 0.6–0.9 ms
 (1.5–2× win), echo 2.6 → 1.0–1.5 ms (~2× win, dominated by the
 skipped JSON encode/decode of the body).
 
+## Bundle drift blocker (discovered 2026-04-25)
+
+The XS daemon runs a pre-bundled `rust/endo/xsnap/src/daemon_bootstrap.js`
+embedded in the `endor` binary.  The committed bundle (1,260,776 bytes)
+boots correctly — `bench-daemon.js` reproduces the captp baseline
+numbers exactly.  Regenerating the bundle from the current source
+tree (via `node packages/daemon/scripts/bundle-bus-daemon-rust-xs.mjs`)
+yields a different binary (1,266,813 bytes without `@endo/slots`,
+1,340,688 bytes with) that **fails to start**:
+
+```
+endor: [trace] daemon-xs: startup error: cannot coerce undefined to object
+TypeError: cannot coerce undefined to object
+ at makeFormulaPath ()
+ at readFormula ()
+ at seedFormulaGraphFromPersistence ()
+```
+
+The diff between committed and regenerated bundles shows source
+drift unrelated to slot-machine: `makeRetentionAccumulator`,
+`makeXsSqlitePowers`, `makeDebugSession`, `DebuggerInterface`, and
+`makeDebugger` are present in the regenerated bundle but absent
+from the committed one; conversely `makeSyncedStoreController`,
+`SyncedPetStoreInterface`, and `makeSyncedPetStore` are in the
+committed bundle but no longer compiled by current sources.  The
+daemon source has evolved since `daemon_bootstrap.js` was last
+checked in, and the persistence-seeding path now expects a record
+shape that the older committed-bundle code didn't.
+
+**This blocks the daemon-side splice.**  The slot-machine work
+itself doesn't introduce the regression — adding `@endo/slots` to
+the bundle without using it produces the same boot error — but
+landing the splice requires a working regenerated bundle.
+
+Concrete unblock steps for the next pass:
+
+1. Identify the persistence record whose decode raises the
+   `cannot coerce undefined to object` in
+   `seedFormulaGraphFromPersistence`.  Likely candidates: the
+   `synced-pet-store` formula type was removed but its on-disk
+   records weren't migrated; or `makeRetentionAccumulator`
+   replaced an inline behavior whose call-site still expects the
+   inline value.
+2. Either restore the missing modules to the source tree, add a
+   migration step at boot, or check in a known-good
+   `daemon_bootstrap.js` regenerated against a source tree that
+   matches it.
+3. Once the bundle regenerates cleanly, the splice in this
+   document applies as written — `makeMessageSlots` plugs in at
+   the `makeWorker` call site without further refactoring.
+
 ## Risks
 
 - **`@endo/slots` in XS.**  The package uses `@noble/hashes`,
