@@ -91,7 +91,10 @@ const nativeFromBase64Options = Object.freeze({
 /** @type {typeof jsDecodeBase64} */
 const nativeDecodeBase64 = (string, name) => {
   try {
-    return /** @type {any} */ (nativeFromBase64)(string, nativeFromBase64Options);
+    return /** @type {any} */ (nativeFromBase64)(
+      string,
+      nativeFromBase64Options,
+    );
   } catch (_err) {
     // Native error messages are implementation-defined and do not
     // embed `name` or report the failing offset.  Re-run the polyfill
