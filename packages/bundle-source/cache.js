@@ -2,6 +2,7 @@
 import harden from '@endo/harden';
 import { makePromiseKit } from '@endo/promise-kit';
 import { makeReadPowers } from '@endo/compartment-mapper/node-powers.js';
+import { makeComputeSha512 } from '@endo/compartment-mapper/sha512-hex.js';
 
 import bundleSource, { DEFAULT_MODULE_FORMAT } from './src/bundle-source.js';
 import { makeFileReader, makeAtomicFileWriter } from './src/fs.js';
@@ -452,7 +453,12 @@ export const makeNodeBundleCache = async (
   }
 
   const readPowers = {
-    ...makeReadPowers({ fs, url, crypto }),
+    ...makeReadPowers({
+      fs,
+      url,
+      crypto,
+      computeSha512: makeComputeSha512(crypto),
+    }),
     delay: ms => new Promise(resolve => timers.setTimeout(resolve, ms)),
     basename: path.basename,
   };

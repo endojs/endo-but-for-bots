@@ -47,8 +47,10 @@ export type CryptoInterface = {
  */
 type Hash = {
   update: (data: Uint8Array | string) => Hash;
-  digest: () => {
-    // This is the exact subset of Node.js Buffer that we need.
+  // Node.js's Buffer extends Uint8Array; we accept either.  The
+  // returned object additionally exposes `toString('hex')` for the
+  // legacy in-tree hash builder in `node-powers.js`.
+  digest: () => Uint8Array & {
     toString: (radix: 'hex') => string;
   };
 };
