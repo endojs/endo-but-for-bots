@@ -232,6 +232,10 @@ harden(estimateUnobservedTokens);
  *   - Optional per-round event runner.  Defaults to `runAgentRound`.
  *   Exposed so tests can inject a stub event stream without a live
  *   LLM.
+ * @property {(...args: any[]) => void} [logError] - Optional structured
+ *   error logger.  Defaults to `console.error`.  Exposed so tests can
+ *   capture observation-failure and subscriber-isolation log lines
+ *   without trying to reassign the (frozen-under-SES) global console.
  */
 
 /**
@@ -288,6 +292,7 @@ const makeObserver = options => {
     workspaceDir,
     makeAgent = makePiAgent,
     runAgent = runAgentRound,
+    logError = (...args) => console.error(...args),
   } = options;
 
   /** High-water mark: index of the first unobserved message. */
@@ -299,6 +304,15 @@ const makeObserver = options => {
   /** Promise for the current in-flight observation. */
   /** @type {Promise<void> | null} */
   let inflight = null;
+
+  /**
+   * Promise for the most recent auto-trigger IIFE.  Captured
+   * synchronously so `stop()` can wait for an auto-triggered cycle
+   * that hasn't yet had a chance to set `inflight`.
+   *
+   * @type {Promise<void> | null}
+   */
+  let pendingTrigger = null;
 
   /** Idle timer handle. */
   /** @type {ReturnType<typeof setTimeout> | null} */
@@ -313,7 +327,7 @@ const makeObserver = options => {
       try {
         handler(event);
       } catch (err) {
-        console.error('[observer] subscriber failed:', err);
+        logError('[observer] subscriber failed:', err);
       }
     }
   };
@@ -540,7 +554,10 @@ const makeObserver = options => {
    * @param {any} mainAgent - The main PiAgent instance.
    */
   const triggerObservation = mainAgent => {
-    (async () => {
+    // Capture the IIFE promise synchronously so `stop()` can wait for
+    // an auto-triggered cycle even when it is called before
+    // `beginObservation()` has had a chance to set `inflight`.
+    pendingTrigger = (async () => {
       await Promise.resolve();
       /** @type {AsyncIterable<ChatEvent> | undefined} */
       let stream;
@@ -548,7 +565,7 @@ const makeObserver = options => {
         stream = await beginObservation(mainAgent);
       } catch (err) {
         // `makeAgent` failures are non-fatal — log and continue.
-        console.error('[observer] observation failed:', err);
+        logError('[observer] observation failed:', err);
         return;
       }
       if (!stream) {
@@ -561,9 +578,12 @@ const makeObserver = options => {
         }
       } catch (err) {
         // Observation failures are non-fatal — log and continue.
-        console.error('[observer] observation failed:', err);
+        logError('[observer] observation failed:', err);
       }
-    })();
+    })().finally(() => {
+      // Clear the slot so the next stop() does not await stale work.
+      pendingTrigger = null;
+    });
   };
 
   /**
@@ -624,6 +644,12 @@ const makeObserver = options => {
   const stop = async () => {
     await Promise.resolve();
     resetIdleTimer();
+    // Wait first for any auto-trigger IIFE to finish — its async tail
+    // is what ultimately sets and clears `inflight` — then drain
+    // whatever explicit observation is still in flight.
+    if (pendingTrigger) {
+      await pendingTrigger;
+    }
     if (inflight) {
       await inflight;
     }

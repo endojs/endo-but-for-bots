@@ -678,71 +678,57 @@ test('subscribe — multiple subscribers each receive every event', async t => {
   t.deepEqual(b, scripted);
 });
 
-// NOTE: `.serial` because this test shadows the global `console.error`;
-// running it concurrently with other shadow-error tests races
-// restoration and can lose our captured error.
-test.serial(
-  'subscribe — throwing subscriber is isolated from other subscribers',
-  async t => {
-    await Promise.resolve();
+test('subscribe — throwing subscriber is isolated from other subscribers', async t => {
+  await Promise.resolve();
 
-    const { memoryGet, memorySet } = stubTools();
-    const { makeAgent } = stubMakeAgent();
-    const scripted = [
-      ...gateSatisfyingEvents(),
-      { type: 'Message', role: 'assistant', content: 'done' },
-    ];
-    const { runAgent } = stubRunAgent(scripted);
-    const observer = makeObserver({
-      memoryGet,
-      memorySet,
-      makeAgent,
-      runAgent,
-    });
+  const { memoryGet, memorySet } = stubTools();
+  const { makeAgent } = stubMakeAgent();
+  const scripted = [
+    ...gateSatisfyingEvents(),
+    { type: 'Message', role: 'assistant', content: 'done' },
+  ];
+  const { runAgent } = stubRunAgent(scripted);
+  // Capture error logs via the injectable `logError` hook so we don't
+  // need to mutate the (frozen-under-SES) global console object.
+  /** @type {Array<any[]>} */
+  const errorCalls = [];
+  /** @param {any[]} args */
+  const logError = (...args) => {
+    errorCalls.push(args);
+  };
+  const observer = makeObserver({
+    memoryGet,
+    memorySet,
+    makeAgent,
+    runAgent,
+    logError,
+  });
 
-    // Silence console.error during the test so CI doesn't get noise.
-    const origErr = console.error;
-    /** @type {Array<any[]>} */
-    const errorCalls = [];
-    /** @param {any[]} args */
-    console.error = (...args) => {
-      errorCalls.push(args);
-    };
+  observer.subscribe(() => {
+    throw new Error('kaboom');
+  });
 
-    try {
-      observer.subscribe(() => {
-        throw new Error('kaboom');
-      });
+  /** @type {Array<any>} */
+  const sane = [];
+  observer.subscribe(event => sane.push(event));
 
-      /** @type {Array<any>} */
-      const sane = [];
-      observer.subscribe(event => sane.push(event));
+  const agent = stubAgent([{ role: 'user', content: 'hi' }]);
+  const stream = await observer.observe(/** @type {any} */ (agent));
 
-      const agent = stubAgent([{ role: 'user', content: 'hi' }]);
-      const stream = await observer.observe(/** @type {any} */ (agent));
+  /** @type {Array<any>} */
+  const drained = [];
+  for await (const event of /** @type {AsyncIterable<any>} */ (stream)) {
+    drained.push(event);
+  }
 
-      /** @type {Array<any>} */
-      const drained = [];
-      for await (const event of /** @type {AsyncIterable<any>} */ (stream)) {
-        drained.push(event);
-      }
-
-      t.deepEqual(
-        drained,
-        scripted,
-        'stream is not interrupted by a throwing subscriber',
-      );
-      t.deepEqual(
-        sane,
-        scripted,
-        'other subscribers continue to receive events',
-      );
-      t.true(errorCalls.length >= 1, 'throwing subscriber is logged');
-    } finally {
-      console.error = origErr;
-    }
-  },
-);
+  t.deepEqual(
+    drained,
+    scripted,
+    'stream is not interrupted by a throwing subscriber',
+  );
+  t.deepEqual(sane, scripted, 'other subscribers continue to receive events');
+  t.true(errorCalls.length >= 1, 'throwing subscriber is logged');
+});
 
 test('subscribe — automatic trigger (triggerObservation via check) publishes events', async t => {
   const { memoryGet, memorySet } = stubTools();
