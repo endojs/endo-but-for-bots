@@ -2,19 +2,27 @@
 import { lockdown } from '@endo/lockdown';
 
 import url from 'url';
-import { decodeBase64 } from '@endo/base64';
-import { parseArchive } from '@endo/compartment-mapper/import-archive.js';
 import test from 'ava';
-import bundleSource from '../src/index.js';
 
 function evaluate(src, endowments) {
   const c = new Compartment(endowments, {}, {});
   return c.evaluate(src);
 }
 
-export function makeSanityTests(stackFiltering) {
+export async function makeSanityTests(stackFiltering) {
+  // Lock down before importing modules that call `harden` at module
+  // top level (notably `@endo/base64`, which is hardened so its
+  // exports cannot be tampered with).  Loading those statically would
+  // install `@endo/harden`'s fallback before this lockdown call and
+  // break it.
   lockdown({ errorTaming: 'unsafe', stackFiltering });
   Error.stackTraceLimit = Infinity;
+
+  const { decodeBase64 } = await import('@endo/base64');
+  const { parseArchive } = await import(
+    '@endo/compartment-mapper/import-archive.js'
+  );
+  const { default: bundleSource } = await import('../src/index.js');
 
   const prefix = stackFiltering === 'concise' ? '' : '/bundled-source/.../';
 

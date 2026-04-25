@@ -404,6 +404,7 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@endo/base64@workspace:packages/base64"
   dependencies:
+    "@endo/harden": "workspace:^"
     ava: "catalog:dev"
     babel-eslint: "npm:^10.1.0"
     c8: "catalog:dev"
