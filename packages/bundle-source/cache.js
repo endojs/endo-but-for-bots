@@ -2,13 +2,14 @@
 import harden from '@endo/harden';
 import { makePromiseKit } from '@endo/promise-kit';
 import { makeReadPowers } from '@endo/compartment-mapper/node-powers.js';
+import { makeComputeSha512 } from '@endo/compartment-mapper/sha512-hex.js';
 
 import bundleSource, { DEFAULT_MODULE_FORMAT } from './src/bundle-source.js';
 import { makeFileReader, makeAtomicFileWriter } from './src/fs.js';
 
 const { Fail, quote: q } = assert;
 
-/** @import {BundleCache, BundleCacheOperationOptions, BundleCacheOptions, BundleMeta, CacheOpts, Logger, ModuleFormat} from './src/types.js' */
+/** @import {BundleCache, BundleCacheOperationOptions, BundleCacheOptions, BundleMeta, BundleOptions, CacheOpts, CanonicalFn, Logger, ModuleFormat, ReadFn} from './src/types.js' */
 
 export const jsOpts = {
   encodeBundle: bundle => `export default ${JSON.stringify(bundle)};\n`,
@@ -105,17 +106,20 @@ export const makeBundleCache = (wr, cwd, readPowers, opts) => {
 
     const bundle = await bundleSource(
       rootPath,
-      {
+      /** @type {BundleOptions<ModuleFormat>} */ ({
         ...bundleOptions,
         noTransforms,
         elideComments,
         format,
         conditions: sortedConditions,
-      },
-      {
+      }),
+      // readPowers.canonical is CanonicalFn<FileUrlString>, but bundleSource's
+      // declared CanonicalFn accepts any string. The runtime is the same; this
+      // cast widens the input type to bridge the two packages' URL typings.
+      /** @type {{ read: ReadFn, canonical: CanonicalFn }} */ ({
         ...readPowers,
         read: loggedRead,
-      },
+      }),
     );
 
     const code = encodeBundle(bundle);
@@ -449,7 +453,12 @@ export const makeNodeBundleCache = async (
   }
 
   const readPowers = {
-    ...makeReadPowers({ fs, url, crypto }),
+    ...makeReadPowers({
+      fs,
+      url,
+      crypto,
+      computeSha512: makeComputeSha512(crypto),
+    }),
     delay: ms => new Promise(resolve => timers.setTimeout(resolve, ms)),
     basename: path.basename,
   };

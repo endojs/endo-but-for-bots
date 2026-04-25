@@ -12,12 +12,18 @@ import { mapNodeModules } from '@endo/compartment-mapper/node-modules.js';
 import { makeAndHashArchiveFromMap } from '@endo/compartment-mapper/archive-lite.js';
 import { encodeBase64 } from '@endo/base64';
 import { makeReadPowers } from '@endo/compartment-mapper/node-powers.js';
+import { makeComputeSha512 } from '@endo/compartment-mapper/sha512-hex.js';
 
 import { makeBundlingKit } from './endo.js';
 
 /** @import {BundleZipBase64Options, BundlingKitIO, SharedPowers} from './types.js' */
 
-const readPowers = makeReadPowers({ fs, url, crypto });
+const readPowers = makeReadPowers({
+  fs,
+  url,
+  crypto,
+  computeSha512: makeComputeSha512(crypto),
+});
 
 /**
  * @param {string} startFilename
