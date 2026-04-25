@@ -35,17 +35,32 @@ For more information about the protocol, see [ocapn.org][OCapN].
 ## Quick start
 
 ```js
-import { makeClient } from '@endo/ocapn';
+import { makeOcapn } from '@endo/ocapn';
 import { syrupCodec } from '@endo/ocapn/syrup';
 // or: import { cborCodec } from '@endo/ocapn/cbor';
+import { makeOcapnNoiseNetwork } from '@endo/ocapn-noise';
 
-const client = makeClient({ codec: syrupCodec });
+// `locator` is the caller-owned table of locally-held capabilities.
+// A plain `Map` works; anything implementing
+// `get(secret) → value | Promise<value> | undefined` does too.
+const locator = new Map();
+
+const network = makeOcapnNoiseNetwork({ codec: syrupCodec });
+// Add at least one signing key + transport before calling
+// `provideSession` or accepting peer connections.
+
+const ocapn = await makeOcapn({
+  codec: syrupCodec,
+  network,
+  locator,
+});
 ```
 
-The `codec` option is required: the client constructor deliberately has no
-default, so the codec you don't use never enters your bundle graph. Import
-`syrupCodec` from `@endo/ocapn/syrup` or `cborCodec` from `@endo/ocapn/cbor`
-and pass it explicitly.
+Both `codec` and `network` are required: the codec choice is not negotiated
+on the wire (both peers must agree out-of-band), and the network is the
+single concrete pluggable that `makeOcapn` runs against. Import
+`syrupCodec` from `@endo/ocapn/syrup` or `cborCodec` from `@endo/ocapn/cbor`,
+and pair it with a network whose `codec` matches.
 
 ## Status
 

@@ -124,23 +124,44 @@ const expectFrameLength = (bytes, expected, label) => {
 const DEFAULT_HANDSHAKE_TIMEOUT_MS = 30_000;
 
 /**
+ * Cap on how many simultaneous handshakes can be in flight for a given
+ * peer. Combined with the handshake timeout, this bounds the work a
+ * single misbehaving peer can pin in a responder.
+ */
+const MAX_IN_PROGRESS_PER_PEER = 8;
+
+/** Maximum number of unconsumed peer-initiated sessions to buffer. */
+const MAX_PENDING_INBOUND_SESSIONS = 256;
+
+/**
  * Race a promise against a `setTimeout` firing after `ms`. Returns the
  * promise's value if it settles first; otherwise rejects with a
- * `label`-tagged `Error`. Closes the timer on either outcome.
+ * `label`-tagged `Error` and closes the supplied stream so the inner
+ * `reader.next()` doesn't keep pulling bytes into a now-dead handshake.
  *
  * @template T
  * @param {Promise<T>} promise
  * @param {number} ms
  * @param {string} label - Used in the timeout error message; pick a
  *   noun phrase like `'SYN'` or `'post-handshake greeting'`.
+ * @param {ByteStream} [stream] - If provided, its reader and writer are
+ *   closed when the timer fires so the abandoned read no longer holds
+ *   the byteStream alive.
  * @returns {Promise<T>}
  */
-const withTimeout = (promise, ms, label) => {
+const withTimeout = (promise, ms, label, stream) => {
   /** @type {ReturnType<typeof setTimeout> | undefined} */
   let timer;
   const timeoutPromise = /** @type {Promise<T>} */ (
     new Promise((_resolve, reject) => {
       timer = setTimeout(() => {
+        if (stream) {
+          // Close both halves so the abandoned `reader.next()` settles.
+          // Errors are intentionally swallowed: at this point the
+          // transport may already be torn down by the peer.
+          void Promise.resolve(stream.writer.return(undefined)).catch(() => {});
+          void Promise.resolve(stream.reader.return(undefined)).catch(() => {});
+        }
         reject(Error(`ocapn-noise: ${label} timed out after ${ms}ms`));
       }, ms);
     })
@@ -210,9 +231,16 @@ export const makeOcapnNoiseNetwork = ({
   const candidates = new Map();
   /** @type {Map<KeyIdHex, number>} */
   const inProgress = new Map();
+  /**
+   * Membership-test wrapper: returns true iff a fresh handshake to
+   * `peerId` would push us past `MAX_IN_PROGRESS_PER_PEER`.
+   * @param {KeyIdHex} peerId
+   */
+  const inProgressFull = peerId =>
+    (inProgress.get(peerId) ?? 0) >= MAX_IN_PROGRESS_PER_PEER;
   /** @type {Map<KeyIdHex, { resolve: (s: OcapnNoiseSession) => void, reject: (e: Error) => void }[]>} */
   const waiters = new Map();
-  /** @type {Map<KeyIdHex, Error[]>} */
+  /** @type {Map<KeyIdHex, string[]>} */
   const recentErrors = new Map();
 
   /**
@@ -260,12 +288,17 @@ export const makeOcapnNoiseNetwork = ({
   const MAX_RECENT_ERRORS_PER_PEER = 4;
 
   /**
+   * Record an error against `peerId`. Stores `err.message` strings, not
+   * `Error` instances, so a failure path that later surfaces to a
+   * waiter does not propagate stack traces (which may include WASM
+   * memory views) across security domains.
+   *
    * @param {KeyIdHex} peerId
    * @param {Error} err
    */
   const recordError = (peerId, err) => {
     const list = recentErrors.get(peerId) ?? [];
-    list.push(err);
+    list.push(err && err.message ? err.message : String(err));
     while (list.length > MAX_RECENT_ERRORS_PER_PEER) list.shift();
     recentErrors.set(peerId, list);
   };
@@ -287,22 +320,35 @@ export const makeOcapnNoiseNetwork = ({
     // handshakes. Once a session is already `active`, we do NOT
     // re-evaluate the tiebreaker: any new candidates that arrive later
     // are dropped so the live session is never silently closed out
-    // from under the CapTP layer.
+    // from under the CapTP layer. Waiters that queued while `active`
+    // was already set must still be resolved with the live session.
     if (existing) {
       for (const c of fresh) c.close();
       recentErrors.delete(peerId);
-      waiters.delete(peerId); // no waiters should be queued past active
+      const queue = waiters.get(peerId) ?? [];
+      waiters.delete(peerId);
+      for (const { resolve } of queue) resolve(existing.session);
       return;
     }
 
     if (fresh.length === 0) {
-      // Every handshake failed. Reject callers with the first error.
+      // Every handshake failed. Reject callers with the most recent
+      // error message; collapse any earlier ones into AggregateError
+      // when there is more than one so callers see them all.
       const errs = recentErrors.get(peerId) ?? [];
       recentErrors.delete(peerId);
       const queue = waiters.get(peerId) ?? [];
       waiters.delete(peerId);
-      const reason =
-        errs[0] ?? Error(`ocapn-noise: handshake failed for ${peerId}`);
+      let reason;
+      if (errs.length === 0) {
+        reason = Error(`ocapn-noise: handshake failed for ${peerId}`);
+      } else if (errs.length === 1) {
+        reason = Error(`ocapn-noise: ${errs[0]}`);
+      } else {
+        reason = Error(
+          `ocapn-noise: handshake failed for ${peerId}: ${errs[errs.length - 1]} (after ${errs.length - 1} earlier failure${errs.length > 2 ? 's' : ''})`,
+        );
+      }
       for (const { reject } of queue) reject(reason);
       return;
     }
@@ -326,10 +372,46 @@ export const makeOcapnNoiseNetwork = ({
     } else if (!inboundClosed) {
       // Nobody is waiting on provideSession for this peer — this is a
       // peer-initiated session. Hand it off to the inboundSessions
-      // iterable for the embedding client to wire up.
+      // iterable for the embedding client to wire up. If the queue
+      // would exceed `MAX_PENDING_INBOUND_SESSIONS`, drop the oldest
+      // entry to bound memory under attack.
+      if (pendingInbound.length >= MAX_PENDING_INBOUND_SESSIONS) {
+        const dropped = pendingInbound.shift();
+        if (dropped) dropped.close();
+      }
+      pendingInbound.push(winner.session);
       inboundQueue.put(harden({ done: false, value: winner.session }));
     }
   };
+
+  /**
+   * Forget the active entry for `peerId` if (and only if) it still
+   * matches the supplied candidate. Wired into `buildSession.close` so
+   * a closed session does not linger as a "live" cache entry that
+   * future `provideSession` calls would resurrect.
+   *
+   * @param {KeyIdHex} peerId
+   * @param {Candidate} candidate
+   */
+  const forgetActive = (peerId, candidate) => {
+    if (active.get(peerId) === candidate) {
+      active.delete(peerId);
+    }
+    // Drop any stale recent-error trail; if the peer reconnects, a
+    // fresh failure history is more useful than the previous one.
+    recentErrors.delete(peerId);
+  };
+
+  /**
+   * Tracks peer-initiated sessions that are queued for the
+   * `inboundSessions` iterable but have not yet been consumed. Bounded
+   * by `MAX_PENDING_INBOUND_SESSIONS`; if the embedder never iterates,
+   * we close the oldest sessions rather than pinning their transport
+   * sockets and WASM cipher state in memory.
+   *
+   * @type {OcapnNoiseSession[]}
+   */
+  const pendingInbound = [];
 
   /** @param {KeyIdHex} peerId */
   const awaitActiveSession = peerId =>
@@ -517,6 +599,10 @@ export const makeOcapnNoiseNetwork = ({
    * @param {ByteStream} params.stream
    * @param {(bytes: Uint8Array) => Uint8Array} params.encrypt
    * @param {(bytes: Uint8Array) => Uint8Array} params.decrypt
+   * @param {() => void} params.onClose - Called when the session closes
+   *   (peer disconnect, local `close()`, or stream end). Used by the
+   *   network to forget the entry from `active` so a future
+   *   `provideSession` does not resurrect a dead session.
    * @returns {OcapnNoiseSession}
    */
   const buildSession = ({
@@ -530,8 +616,16 @@ export const makeOcapnNoiseNetwork = ({
     stream,
     encrypt,
     decrypt,
+    onClose,
   }) => {
     let closed = false;
+    const fireOnClose = () => {
+      try {
+        onClose();
+      } catch (_e) {
+        // never throw out of teardown
+      }
+    };
 
     /** @type {Reader<Uint8Array>} */
     const reader = harden({
@@ -539,6 +633,10 @@ export const makeOcapnNoiseNetwork = ({
         await null;
         const result = await stream.reader.next(undefined);
         if (result.done) {
+          if (!closed) {
+            closed = true;
+            fireOnClose();
+          }
           return harden({ done: true, value: undefined });
         }
         return harden({ done: false, value: decrypt(result.value) });
@@ -548,6 +646,7 @@ export const makeOcapnNoiseNetwork = ({
         if (!closed) {
           closed = true;
           await stream.writer.return(undefined);
+          fireOnClose();
         }
         return harden({ done: true, value: undefined });
       },
@@ -556,6 +655,7 @@ export const makeOcapnNoiseNetwork = ({
         if (!closed) {
           closed = true;
           await stream.writer.throw(err);
+          fireOnClose();
         }
         throw err;
       },
@@ -577,6 +677,7 @@ export const makeOcapnNoiseNetwork = ({
         if (!closed) {
           closed = true;
           await stream.writer.return(undefined);
+          fireOnClose();
         }
         return harden({ done: true, value: undefined });
       },
@@ -585,6 +686,7 @@ export const makeOcapnNoiseNetwork = ({
         if (!closed) {
           closed = true;
           await stream.writer.throw(err);
+          fireOnClose();
         }
         throw err;
       },
@@ -620,6 +722,7 @@ export const makeOcapnNoiseNetwork = ({
         // because a transport's write half may have already closed.
         void Promise.resolve(stream.writer.return(undefined)).catch(() => {});
         void Promise.resolve(stream.reader.return(undefined)).catch(() => {});
+        fireOnClose();
       },
     });
   };
@@ -647,71 +750,97 @@ export const makeOcapnNoiseNetwork = ({
   const runInitiator = async (localKey, location, peerEd25519) => {
     const { transport, hints } = selectOutgoingTransport(location);
     const stream = await transport.connect(hints);
+    const peerId = toHex(peerEd25519);
 
-    const noise = makeOcapnSessionCryptography({
-      wasmModule,
-      getRandomValues,
-      signingKeys: {
-        privateKey: localKey.privateKey,
-        publicKey: localKey.publicKey,
-      },
-    });
-    const asInit = noise.asInitiator();
-    const prefixedSyn = new Uint8Array(PREFIXED_SYN_LENGTH);
-    const { initiatorReadSynackWriteAck } = asInit.initiatorWriteSyn(
-      peerEd25519,
-      prefixedSyn,
-    );
-    const tiebreaker = tiebreakerFromPrefixedSyn(prefixedSyn);
-    await stream.writer.next(prefixedSyn);
+    try {
+      const noise = makeOcapnSessionCryptography({
+        wasmModule,
+        getRandomValues,
+        signingKeys: {
+          privateKey: localKey.privateKey,
+          publicKey: localKey.publicKey,
+        },
+      });
+      const asInit = noise.asInitiator();
+      const prefixedSyn = new Uint8Array(PREFIXED_SYN_LENGTH);
+      const { initiatorReadSynackWriteAck } = asInit.initiatorWriteSyn(
+        peerEd25519,
+        prefixedSyn,
+      );
+      const tiebreaker = tiebreakerFromPrefixedSyn(prefixedSyn);
+      await stream.writer.next(prefixedSyn);
 
-    const synack = await withTimeout(
-      readFrame(stream.reader),
-      handshakeTimeoutMs,
-      'SYNACK read',
-    );
-    expectFrameLength(synack, SYNACK_LENGTH, 'SYNACK');
-    const ack = new Uint8Array(ACK_LENGTH);
-    const { encrypt, decrypt } = initiatorReadSynackWriteAck(synack, ack);
-    await stream.writer.next(ack);
+      const synack = await withTimeout(
+        readFrame(stream.reader),
+        handshakeTimeoutMs,
+        'SYNACK read',
+        stream,
+      );
+      expectFrameLength(synack, SYNACK_LENGTH, 'SYNACK');
+      const ack = new Uint8Array(ACK_LENGTH);
+      const { encrypt, decrypt } = initiatorReadSynackWriteAck(synack, ack);
+      await stream.writer.next(ack);
 
-    const {
-      peerLocation,
-      peerLocationSignature,
-      location: myLocation,
-      locationSignature,
-    } = await withTimeout(
-      exchangeIdentity(
+      const {
+        peerLocation,
+        peerLocationSignature,
+        location: myLocation,
+        locationSignature,
+      } = await withTimeout(
+        exchangeIdentity(
+          localKey,
+          stream.reader,
+          stream.writer,
+          encrypt,
+          decrypt,
+          peerEd25519,
+        ),
+        handshakeTimeoutMs,
+        'post-handshake identity exchange',
+        stream,
+      );
+
+      /** @type {Candidate | undefined} */
+      let candidate;
+      const session = buildSession({
         localKey,
-        stream.reader,
-        stream.writer,
+        location: myLocation,
+        locationSignature,
+        peerLocation,
+        peerLocationSignature,
+        peerEd25519,
+        isInitiator: true,
+        stream,
         encrypt,
         decrypt,
-        peerEd25519,
-      ),
-      handshakeTimeoutMs,
-      'post-handshake identity exchange',
-    );
-
-    const session = buildSession({
-      localKey,
-      location: myLocation,
-      locationSignature,
-      peerLocation,
-      peerLocationSignature,
-      peerEd25519,
-      isInitiator: true,
-      stream,
-      encrypt,
-      decrypt,
-    });
-    return {
-      session,
-      tiebreaker,
-      close: () => {
-        session.close();
-      },
-    };
+        onClose: () => {
+          if (candidate) forgetActive(peerId, candidate);
+        },
+      });
+      candidate = {
+        session,
+        tiebreaker,
+        close: () => {
+          session.close();
+        },
+      };
+      return candidate;
+    } catch (err) {
+      // The handshake didn't graduate; close both halves of the
+      // transport so the kernel doesn't sit on a half-open socket
+      // until OS keepalive fires.
+      try {
+        await stream.writer.return(undefined);
+      } catch (_e) {
+        // ignore
+      }
+      try {
+        await stream.reader.return(undefined);
+      } catch (_e) {
+        // ignore
+      }
+      throw err;
+    }
   };
 
   /**
@@ -726,6 +855,7 @@ export const makeOcapnNoiseNetwork = ({
         readFrame(stream.reader),
         handshakeTimeoutMs,
         'SYN read',
+        stream,
       );
       expectFrameLength(prefixedSyn, PREFIXED_SYN_LENGTH, 'SYN');
       const intendedKeyId = toHex(prefixedSyn.subarray(0, 32));
@@ -748,6 +878,13 @@ export const makeOcapnNoiseNetwork = ({
       const { initiatorVerifyingKey, responderReadAck } =
         asResp.responderReadSynWriteSynack(prefixedSyn, synack);
       const initiatorKeyHex = toHex(initiatorVerifyingKey);
+      // Reject early if a single peer is already saturating the
+      // in-flight cap; otherwise a misbehaving initiator could open
+      // many parallel sockets and pin handshakeTimeoutMs of work each.
+      if (inProgressFull(initiatorKeyHex)) {
+        await stream.writer.return(undefined);
+        return;
+      }
       registeredPeerId = initiatorKeyHex;
       bumpInProgress(initiatorKeyHex);
       const tiebreaker = tiebreakerFromPrefixedSyn(prefixedSyn);
@@ -757,6 +894,7 @@ export const makeOcapnNoiseNetwork = ({
         readFrame(stream.reader),
         handshakeTimeoutMs,
         'ACK read',
+        stream,
       );
       expectFrameLength(ack, ACK_LENGTH, 'ACK');
       const { encrypt, decrypt } = responderReadAck(ack);
@@ -777,8 +915,11 @@ export const makeOcapnNoiseNetwork = ({
         ),
         handshakeTimeoutMs,
         'post-handshake identity exchange',
+        stream,
       );
 
+      /** @type {Candidate | undefined} */
+      let candidate;
       const session = buildSession({
         localKey,
         location,
@@ -790,13 +931,17 @@ export const makeOcapnNoiseNetwork = ({
         stream,
         encrypt,
         decrypt,
+        onClose: () => {
+          if (candidate) forgetActive(initiatorKeyHex, candidate);
+        },
       });
-
-      recordCandidate(initiatorKeyHex, {
+      candidate = {
         session,
         tiebreaker,
         close: () => session.close(),
-      });
+      };
+
+      recordCandidate(initiatorKeyHex, candidate);
       decrementAndSettle(initiatorKeyHex);
     } catch (err) {
       if (registeredPeerId) {
@@ -805,6 +950,11 @@ export const makeOcapnNoiseNetwork = ({
       }
       try {
         await stream.writer.return(undefined);
+      } catch (_e) {
+        // ignore
+      }
+      try {
+        await stream.reader.return(undefined);
       } catch (_e) {
         // ignore
       }
@@ -828,15 +978,39 @@ export const makeOcapnNoiseNetwork = ({
 
   /** @type {OcapnNoiseNetwork['addSigningKeys']} */
   const addSigningKeys = ({ privateKey, publicKey }) => {
-    if (privateKey.length !== 32 || publicKey.length !== 32) {
-      throw Error('ocapn-noise: signing keys must be 32 bytes each');
+    if (privateKey.length !== 32) {
+      throw Error('ocapn-noise: privateKey must be 32 bytes');
     }
-    const keyId = toHex(publicKey);
-    if (registeredKeys.has(keyId)) return keyId;
+    if (publicKey && publicKey.length !== 32) {
+      throw Error('ocapn-noise: publicKey must be 32 bytes when supplied');
+    }
+    // Always derive the verifying key from the private key so the
+    // `keyId` and the bytes handed to the Noise WASM agree. If the
+    // caller supplied a public key, assert it matches what we derive
+    // — silent disagreement here would let a peer be addressable
+    // under one keyId but unable to complete a handshake as that
+    // identity, which is a debugging cliff to fall off.
     const keyPair = cryptography.makeOcapnKeyPairFromPrivateKey(privateKey);
+    const derivedPublicKey = new Uint8Array(
+      /** @type {ArrayBuffer} */ (keyPair.publicKey.bytes.slice()),
+    );
+    if (publicKey) {
+      if (compareBytes(publicKey, derivedPublicKey) !== 0) {
+        throw Error(
+          'ocapn-noise: supplied publicKey does not match privateKey',
+        );
+      }
+    }
+    const keyId = toHex(derivedPublicKey);
+    if (registeredKeys.has(keyId)) return keyId;
     registeredKeys.set(
       keyId,
-      harden({ keyId, privateKey, publicKey, keyPair }),
+      harden({
+        keyId,
+        privateKey,
+        publicKey: derivedPublicKey,
+        keyPair,
+      }),
     );
     return keyId;
   };
@@ -850,6 +1024,18 @@ export const makeOcapnNoiseNetwork = ({
   const addTransport = async transport => {
     await null;
     if (registeredTransports.has(transport)) return;
+    // Refuse a second transport with the same scheme: outgoing
+    // dial selection iterates `registeredTransports` and returns the
+    // first hint match, so a second `tcp` transport would be
+    // silently shadowed; aggregated hints would also silently
+    // overwrite each other.
+    for (const t of registeredTransports) {
+      if (t.scheme === transport.scheme) {
+        throw Error(
+          `ocapn-noise: a transport with scheme ${JSON.stringify(transport.scheme)} is already registered`,
+        );
+      }
+    }
     if (transport.listen) {
       // Call `listen` first so a failure can't leave a half-registered
       // transport behind; only add to the set once the listener is
@@ -913,8 +1099,14 @@ export const makeOcapnNoiseNetwork = ({
     const peerId = remote.designator;
     const peerEd25519 = hexToBytes(peerId);
 
+    // If we already have an active session for this peer, reuse it
+    // even if a stray inbound handshake is currently in flight: the
+    // settlement code routes that handshake to the loser path and
+    // resolves any waiters with the live session. Spawning another
+    // outbound dial would just produce a second candidate that the
+    // same code path will close.
     const existing = active.get(peerId);
-    if (existing && !inProgress.has(peerId)) return existing.session;
+    if (existing) return existing.session;
 
     // Register our handshake, kick it off in the background, and
     // wait for settlement — either our own handshake graduates, or a
@@ -935,8 +1127,7 @@ export const makeOcapnNoiseNetwork = ({
   /** @type {OcapnNoiseNetwork['waitForInboundSession']} */
   const waitForInboundSession = peerKeyId => {
     const existing = active.get(peerKeyId);
-    if (existing && !inProgress.has(peerKeyId))
-      return Promise.resolve(existing.session);
+    if (existing) return Promise.resolve(existing.session);
     return awaitActiveSession(peerKeyId);
   };
 
@@ -953,6 +1144,13 @@ export const makeOcapnNoiseNetwork = ({
     recentErrors.clear();
     for (const [, c] of active) c.close();
     active.clear();
+    // Close any sessions queued for `inboundSessions` that nobody
+    // ever consumed. Without this they hold their underlying socket
+    // and WASM cipher state until the process exits.
+    while (pendingInbound.length > 0) {
+      const s = pendingInbound.shift();
+      if (s) s.close();
+    }
     for (const [, listener] of listenersByTransport) listener.close();
     listenersByTransport.clear();
     for (const transport of registeredTransports) transport.shutdown();
@@ -966,11 +1164,36 @@ export const makeOcapnNoiseNetwork = ({
   const inboundSessions = harden({
     [Symbol.asyncIterator]() {
       return harden({
-        next: () => inboundQueue.get(),
+        next: async () => {
+          const result = await inboundQueue.get();
+          if (!result.done) {
+            // The session has been handed off to the consumer; drop
+            // our tracking entry so it can no longer be evicted by
+            // the drop-oldest cap.
+            const idx = pendingInbound.indexOf(result.value);
+            if (idx !== -1) pendingInbound.splice(idx, 1);
+          }
+          return result;
+        },
         async return() {
+          // Stop accepting further inbound sessions and close any
+          // queued ones the consumer never pulled. This is the only
+          // signal we have that the embedder no longer wants the
+          // stream — without it, sessions accumulated in
+          // `pendingInbound` would pin sockets indefinitely.
+          inboundClosed = true;
+          while (pendingInbound.length > 0) {
+            const s = pendingInbound.shift();
+            if (s) s.close();
+          }
           return harden({ done: true, value: undefined });
         },
         async throw(err) {
+          inboundClosed = true;
+          while (pendingInbound.length > 0) {
+            const s = pendingInbound.shift();
+            if (s) s.close();
+          }
           throw err;
         },
       });

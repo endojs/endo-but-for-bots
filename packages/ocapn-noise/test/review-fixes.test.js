@@ -347,3 +347,99 @@ test('addSigningKeys rejects wrong-length keys', t => {
   );
   net.shutdown();
 });
+
+// ──────────────────────────────────────────────────────────────────────
+// Phase 8 — security/correctness regressions from the 10-agent review
+// ──────────────────────────────────────────────────────────────────────
+
+test('addSigningKeys rejects mismatched (privateKey, publicKey) pair', t => {
+  const net = makeOcapnNoiseNetwork({ codec: cborCodec });
+  const { privateKey, publicKey } = net.generateSigningKeys();
+  // Replace the first byte with a different value so the tampered
+  // key no longer matches the one derived from privateKey.
+  const tamperedPublicKey = new Uint8Array(publicKey);
+  tamperedPublicKey[0] = tamperedPublicKey[0] === 0 ? 1 : 0;
+  t.throws(
+    () => net.addSigningKeys({ privateKey, publicKey: tamperedPublicKey }),
+    { message: /publicKey does not match privateKey/ },
+  );
+  // Sanity: omitting publicKey is fine — it's derived from privateKey.
+  const keyId = net.addSigningKeys({
+    privateKey,
+    publicKey: /** @type {any} */ (undefined),
+  });
+  t.is(keyId.length, 64);
+  net.shutdown();
+});
+
+test('addTransport rejects a second transport with the same scheme', async t => {
+  const net = makeOcapnNoiseNetwork({ codec: cborCodec });
+  const fabric = makeMockMeshFabric();
+  await net.addTransport(fabric.transportFor('A'));
+  await t.throwsAsync(async () => net.addTransport(fabric.transportFor('B')), {
+    message: /scheme.*already registered/,
+  });
+  net.shutdown();
+  fabric.shutdown();
+});
+
+test('inboundSessions.return closes queued sessions that nobody consumed', async t => {
+  const fabric = makeMockMeshFabric();
+  const netA = makeOcapnNoiseNetwork({ codec: cborCodec });
+  const netB = makeOcapnNoiseNetwork({ codec: cborCodec });
+  const keyA = addFreshKey(netA).keyId;
+  addFreshKey(netB);
+  await netA.addTransport(fabric.transportFor('A'));
+  await netB.addTransport(fabric.transportFor('B'));
+  const locA = { ...netA.locationFor(keyA), hints: { 'mesh:to': 'A' } };
+
+  // B initiates; A should buffer the session in its inboundSessions
+  // queue because A hasn't started consuming.
+  const sessionB = await netB.provideSession(locA);
+  // Close A's iterator without ever pulling. The implementation
+  // should close any buffered inbound session, which means our
+  // outbound `sessionB` reader returns {done:true}.
+  const it = netA.inboundSessions[Symbol.asyncIterator]();
+  await it.return?.();
+
+  const result = await sessionB.reader.next(undefined);
+  t.true(result.done, 'inbound session was closed by iterator return');
+
+  sessionB.close();
+  netA.shutdown();
+  netB.shutdown();
+  fabric.shutdown();
+});
+
+test('active session is forgotten after close so a fresh dial starts new', async t => {
+  const fabric = makeMockMeshFabric();
+  const netA = makeOcapnNoiseNetwork({ codec: cborCodec });
+  const netB = makeOcapnNoiseNetwork({ codec: cborCodec });
+  addFreshKey(netA);
+  const keyB = addFreshKey(netB).keyId;
+  await netA.addTransport(fabric.transportFor('A'));
+  await netB.addTransport(fabric.transportFor('B'));
+  const locB = { ...netB.locationFor(keyB), hints: { 'mesh:to': 'B' } };
+
+  const first = await netA.provideSession(locB);
+  // A second call before close returns the same session (cache hit).
+  const cached = await netA.provideSession(locB);
+  t.is(cached, first, 'cache hits return the same session');
+
+  // Close — the network should forget the entry; otherwise a third
+  // call would resurrect a dead session and the read below would
+  // observe {done:true} immediately.
+  first.close();
+  // Microtask boundary so close() finalization completes before we
+  // ask for a new session.
+  await Promise.resolve();
+  await Promise.resolve();
+
+  const refreshed = await netA.provideSession(locB);
+  t.not(refreshed, first, 'fresh dial after close is a new session');
+
+  refreshed.close();
+  netA.shutdown();
+  netB.shutdown();
+  fabric.shutdown();
+});

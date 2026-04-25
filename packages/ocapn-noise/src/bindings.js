@@ -79,7 +79,7 @@ export const PREFIXED_SYN_LENGTH = INTENDED_RESPONDER_KEY_LENGTH + SYN_LENGTH;
 // const SYNACK_PAYLOAD_OFFSET = 416;
 const SYNACK_PAYLOAD_LENGTH = 97;
 const SYNACK_OFFSET = 544;
-export const SYNACK_LENGTH = 96 + SYNACK_PAYLOAD_LENGTH; // 129
+export const SYNACK_LENGTH = 96 + SYNACK_PAYLOAD_LENGTH; // 193
 const RESPONDER_VERIFYING_KEY_OFFSET = 416;
 // const RESPONDER_SIGNATURE_OFFSET = 448;
 const ACCEPTED_ENCODING_OFFSET = 512;
@@ -89,8 +89,11 @@ export const ACK_LENGTH = 64;
 /**
  * Encodes supported encoding versions into a buffer for transmission.
  *
- * @param {Uint8Array} bytes - The view to write to (must be at least 2 bytes)
- * @param {number[]} supportedEncodings - Array of supported encoding versions (1-9 versions, each 0-65536)
+ * @param {Uint8Array} bytes - The view to write to (must be at least 4 bytes:
+ *   2 bytes for the first encoding + 2 bytes for the mask of additional encodings)
+ * @param {number[]} supportedEncodings - Array of supported encoding versions
+ *   (1-17 distinct versions, each 0-65535, with the highest no more than 16
+ *   versions above the lowest)
  * @throws {Error} If no encodings provided, too many encodings, or invalid encoding values
  */
 // exported for testing

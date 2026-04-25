@@ -15,6 +15,15 @@ import { makeNetstringReader, makeNetstringWriter } from '@endo/netstring';
 const { isNaN } = Number;
 
 /**
+ * Hard cap on netstring frame length. Sized to the largest plausible
+ * single Noise/OCapN message (Noise's 65535-byte ciphertext + auth tag
+ * + a small framing header). Keeps a hostile peer who sends
+ * `999999999:` from causing a ~1 GiB allocation in the netstring
+ * reader.
+ */
+const MAX_FRAME_LENGTH = 65_551;
+
+/**
  * TCP byte-stream transport.
  *
  * `framing` controls how messages are delimited on the wire:
@@ -30,7 +39,12 @@ const { isNaN } = Number;
  *   possibly multiple messages concatenated). This mode exists to let
  *   us interoperate with peers that do their own framing (e.g. the
  *   OCapN Python reference suite while it settles). Consumers of this
- *   mode are responsible for their own message boundaries.
+ *   mode are responsible for their own message boundaries. The
+ *   OCapN-Noise network is **not** such a consumer: its handshake and
+ *   per-session messages assume one `reader.next()` yields exactly one
+ *   message. Do not register a `framing: 'none'` transport with
+ *   `makeOcapnNoiseNetwork`; use it only when wiring the transport
+ *   into something that frames messages itself.
  *
  * @param {object} [options]
  * @param {number} [options.port] - Listen port. `0` = OS-assigned.
@@ -61,6 +75,11 @@ export const makeTcpTransport = ({
   const wrap = socket => {
     openSockets.add(socket);
     socket.on('close', () => openSockets.delete(socket));
+    // Without an `error` listener, an `error` event before any reader
+    // is iterating will crash the process via Node's "uncaught" path.
+    // The Node reader installs its own listener once iteration starts,
+    // but until then we need a no-op so the event doesn't become fatal.
+    socket.on('error', () => {});
     const rawReader = makeNodeReader(socket);
     const rawWriter = makeNodeWriter(socket);
     if (framing === 'none') {
@@ -69,7 +88,9 @@ export const makeTcpTransport = ({
         writer: /** @type {any} */ (rawWriter),
       });
     }
-    const reader = /** @type {any} */ (makeNetstringReader(rawReader));
+    const reader = /** @type {any} */ (
+      makeNetstringReader(rawReader, { maxMessageLength: MAX_FRAME_LENGTH })
+    );
     const writer = /** @type {any} */ (makeNetstringWriter(rawWriter));
     return harden({ reader, writer });
   };

@@ -35,6 +35,7 @@ const adaptWebSocket = ws => {
   let closed = false;
 
   ws.onmessage = /** @param {{ data: any }} ev */ ev => {
+    if (closed) return;
     /** @type {Uint8Array} */
     let bytes;
     if (ev.data instanceof ArrayBuffer) {
@@ -48,6 +49,20 @@ const adaptWebSocket = ws => {
         ev.data.byteLength,
       );
     } else {
+      // Reject any non-binary frame: the OCapN-Noise wire is exclusively
+      // ciphertext blobs. Silently dropping a text frame would leave a
+      // pending `reader.next()` call hanging until the socket eventually
+      // closes; surfacing it as a protocol error fails fast.
+      closed = true;
+      const err = Error(
+        'ocapn-noise ws transport: received non-binary message',
+      );
+      incoming.put(harden(Promise.reject(err)));
+      try {
+        ws.close();
+      } catch (_e) {
+        // ignore
+      }
       return;
     }
     incoming.put(harden({ done: false, value: bytes }));
@@ -132,9 +147,26 @@ export const makeWebSocketTransport = ({
   /** @type {any} */
   let server;
 
+  /**
+   * Substitute a routable address when the listener was bound to a
+   * wildcard host. The hint is what we advertise to peers; `0.0.0.0` /
+   * `::` / unspecified addresses are not connect targets.
+   *
+   * @param {string} addr
+   */
+  const advertisedHost = addr => {
+    if (addr === '0.0.0.0' || addr === '::' || addr === '::ffff:0.0.0.0') {
+      return '127.0.0.1';
+    }
+    return addr;
+  };
+
   /** @type {OcapnNoiseTransport['listen']} */
   const listen = WebSocketServer
     ? async handler => {
+        if (server) {
+          throw Error('ocapn-noise ws transport: listen called more than once');
+        }
         server = new WebSocketServer({ port, host });
         await new Promise(resolve => {
           server.on('listening', () => resolve(undefined));
@@ -148,8 +180,14 @@ export const makeWebSocketTransport = ({
         const addr = server.address();
         /** @type {TransportListener} */
         const listener = harden({
-          hints: { url: `ws://${addr.address}:${addr.port}` },
-          close: () => server.close(),
+          hints: { url: `ws://${advertisedHost(addr.address)}:${addr.port}` },
+          close: () => {
+            try {
+              server.close();
+            } finally {
+              server = undefined;
+            }
+          },
         });
         return listener;
       }
@@ -162,15 +200,27 @@ export const makeWebSocketTransport = ({
       const url = hints.url;
       if (!url) throw Error(`ws transport: missing 'url' hint`);
       const ws = new WebSocket(url);
-      await new Promise((resolve, reject) => {
-        ws.onopen = () => resolve(undefined);
-        ws.onerror = /** @param {any} ev */ ev => reject(ev);
-      });
+      try {
+        await new Promise((resolve, reject) => {
+          ws.onopen = () => resolve(undefined);
+          ws.onerror = /** @param {any} ev */ ev => reject(ev);
+        });
+      } catch (err) {
+        // Drop the half-open WebSocket so its underlying socket and
+        // event-loop refs become collectible immediately.
+        try {
+          ws.close();
+        } catch (_e) {
+          // ignore
+        }
+        throw err;
+      }
       return adaptWebSocket(ws);
     },
     ...(listen && { listen }),
     shutdown: () => {
       if (server) server.close();
+      server = undefined;
     },
   });
   return transport;

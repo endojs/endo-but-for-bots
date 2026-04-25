@@ -58,9 +58,11 @@ export const enlivenSturdyRef = async (
   if (isSelfLocation(location)) {
     const value = await locator.get(secret);
     if (value === undefined) {
-      throw Error(
-        `ocapn: locator has no capability for secret ${JSON.stringify(secret)}`,
-      );
+      // Intentionally do NOT include `secret` in the message: this
+      // error rides up into rejection chains that may be serialized
+      // into peer-visible op:abort or logs, and `secret` is the
+      // long-lived authority granting access to the capability.
+      throw Error('ocapn: locator has no capability for sturdyref secret');
     }
     return value;
   }

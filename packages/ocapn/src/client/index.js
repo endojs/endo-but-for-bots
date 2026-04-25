@@ -357,6 +357,14 @@ export const makeOcapn = async ({
             ocapn.dispatchMessageData(result.value);
           } catch (err) {
             logger.error(`CapTP dispatch failed`, err);
+            // Mirror handleActiveSessionMessageData: notify the peer
+            // with op:abort before tearing the session down, instead
+            // of letting them stare at a quiet half-closed socket.
+            try {
+              sendAbortAndClose(connection, 'internal error');
+            } catch (_e) {
+              // ignore secondary failures during teardown
+            }
             break;
           }
         }
@@ -639,25 +647,39 @@ export const makeOcapn = async ({
       await null;
       try {
         for await (const networkSession of inboundSessions) {
-          const internalSession = makeInternalSessionFromNetwork(
-            networkSession,
-            network,
-          );
           const locationId = locationToLocationId(
             networkSession.remoteLocation,
           );
-          try {
-            sessionManager.resolveSession(
-              locationId,
-              internalSession.connection,
-              internalSession,
+          // Race avoidance: a `provideSession` call concurrent with
+          // an inbound handshake may already have promoted (or seen)
+          // the noise network's active session for this peer. The
+          // network may then ALSO publish the same session here.
+          // Discard the duplicate idempotently rather than building
+          // an InternalSession we'd immediately have to abort —
+          // aborting would tear down the underlying networkSession
+          // that the active path now owns.
+          if (!sessionManager.getActiveSession(locationId)) {
+            const internalSession = makeInternalSessionFromNetwork(
+              networkSession,
+              network,
             );
-          } catch (err) {
-            logger.info(
-              `inbound session for ${locationId} collided with existing; aborting new`,
-              err,
-            );
-            internalSession.ocapn.abort(/** @type {Error} */ (err));
+            try {
+              sessionManager.resolveSession(
+                locationId,
+                internalSession.connection,
+                internalSession,
+              );
+            } catch (err) {
+              logger.info(
+                `inbound session for ${locationId} collided with existing; discarding new`,
+                err,
+              );
+              // Tear down only the InternalSession bookkeeping;
+              // calling `ocapn.abort` here would close the shared
+              // underlying networkSession out from under the
+              // already-resolved peer.
+              sessionManager.endSession(internalSession);
+            }
           }
         }
       } catch (err) {

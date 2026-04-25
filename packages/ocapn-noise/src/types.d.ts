@@ -163,20 +163,13 @@ export declare function makeOcapnNoiseNetwork(
   options: MakeOcapnNoiseNetworkOptions,
 ): OcapnNoiseNetwork;
 
-/** @returns a mutually-connected in-process transport pair for tests. */
-export declare function makeMockTransportPair(): {
-  transportA: OcapnNoiseTransport;
-  transportB: OcapnNoiseTransport;
-};
-
-export declare function makeTcpTransport(options?: {
-  host?: string;
-  port?: number;
-}): OcapnNoiseTransport;
-
-export declare function makeWebSocketTransport(options?: {
-  WebSocket?: typeof globalThis.WebSocket;
-  WebSocketServer?: new (options: { host?: string; port?: number }) => any;
-  host?: string;
-  port?: number;
-}): OcapnNoiseTransport;
+// Transports live behind subpath exports so a browser bundle does
+// not pull in `node:net` and a Node bundle does not require the
+// browser `WebSocket` shim. Import them as:
+//
+//   import { makeMockTransportPair } from '@endo/ocapn-noise/mock-transport';
+//   import { makeTcpTransport } from '@endo/ocapn-noise/tcp-transport';      // node only
+//   import { makeWebSocketTransport } from '@endo/ocapn-noise/ws-transport'; // both
+//
+// Each module exports a single factory function returning an
+// `OcapnNoiseTransport`.

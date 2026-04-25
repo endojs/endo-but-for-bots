@@ -28,7 +28,7 @@ import {
 import { makePassableCodecs } from '../codecs/passable.js';
 import { makeOcapnOperationsCodecs } from '../codecs/operations.js';
 import { getSelectorName, makeSelector } from '../selector.js';
-import { decodeSwissnum, locationToLocationId, toHex } from './util.js';
+import { locationToLocationId, toHex } from './util.js';
 import { randomGiftId } from '../cryptography.js';
 import { compareImmutableArrayBuffers } from '../bytewise-compare.js';
 import { ocapnPassStyleOf } from '../codecs/ocapn-pass-style.js';
@@ -510,10 +510,12 @@ const makeBootstrapObject = (
     fetch: async swissnum => {
       const object = await sturdyRefTracker.lookup(swissnum);
       if (object === undefined) {
-        const secretString = decodeSwissnum(swissnum);
-        throw Error(
-          `${label}: Bootstrap fetch: locator has no capability for ${JSON.stringify(secretString)}`,
-        );
+        // Do not echo the swissnum/secret bytes in the error: the
+        // rejection rides back to the peer over CapTP, and is also
+        // typically logged on this side. The peer already knows what
+        // they asked for; treating the secret as a long-lived
+        // capability means it should not be smeared across logs.
+        throw Error(`${label}: Bootstrap fetch: secret not found`);
       }
       return object;
     },
