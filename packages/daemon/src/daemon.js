@@ -78,11 +78,90 @@ import {
   ReadableTreeInterface,
   EndoInterface,
 } from './interfaces.js';
+import { makeTraceAggregator } from './trace-aggregator.js';
 
 /** @import { Passable } from '@endo/pass-style' */
 /** @import { ERef, FarRef } from '@endo/eventual-send' */
 /** @import { PromiseKit } from '@endo/promise-kit' */
 /** @import { AgentDeferredTaskParams, Builtins, CapTpConnectionRegistrar, Context, Controller, DaemonCore, DaemonCoreExternal, DaemonicPowers, DeferredTasks, DirectoryFormula, EndoBootstrap, EndoDirectory, EndoFormula, EndoGateway, EndoGreeter, EndoGuest, EndoHost, EndoInspector, EndoNetwork, EndoPeer, EndoReadable, EndoWorker, EvalFormula, FarContext, Formula, FormulaIdentifier, FormulaNumber, FormulaMakerTable, FormulateResult, GuestFormula, HandleFormula, HostFormula, Invitation, InvitationDeferredTaskParams, InvitationFormula, KnownEndoInspectors, KnownPeersStore, LookupFormula, LoopbackNetworkFormula, MailboxStoreFormula, MailHubFormula, MakeBundleFormula, MakeCapletDeferredTaskParams, MakeUnconfinedFormula, MarshalDeferredTaskParams, MessageFormula, Name, NameHub, NamePath, NameOrPath, NodeNumber, PetName, PeerFormula, PeerInfo, PetInspectorFormula, PetStore, PetStoreFormula, PromiseFormula, Provide, ReadableBlobFormula, ResolverFormula, Sha256, Specials, MarshalFormula, WeakMultimap, WorkerDaemonFacet, WorkerFormula, TimerFormula } from './types.js' */
+
+/**
+ * @param {string | undefined} raw
+ * @param {number} fallback
+ */
+const parseTraceEnvNumber = (raw, fallback) => {
+  if (raw === undefined || raw === '') return fallback;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 0) return fallback;
+  return n;
+};
+
+/**
+ * Extract the wire-level errorId stamped onto a decoded error by
+ * `@endo/marshal`'s `decodeErrorCommon`. Falls back to scraping the
+ * SES error tag (the parenthesized form of `err.name`) for
+ * environments where the marshal patch is unavailable.
+ *
+ * @param {Error & { errorId?: string }} err
+ * @returns {string | undefined}
+ */
+const extractInboundErrorId = err => {
+  if (!err) return undefined;
+  if (typeof err.errorId === 'string') return err.errorId;
+  if (typeof err.name !== 'string') return undefined;
+  const m = /\(error:[^)]+\)/.exec(err.name);
+  if (m === null) return undefined;
+  return m[0].slice(1, -1);
+};
+
+/**
+ * Construct a `marshalSaveError` hook that the daemon installs on its
+ * outbound CapTP connections. On every outbound error the daemon
+ * forwards, the hook checks the WeakMap of worker-decoded errors and,
+ * if the error came from a worker, registers an alias from the
+ * outbound errorId to the worker-side `(workerId, errorId)` record.
+ * If the error came from the daemon itself, records a stub trace.
+ *
+ * @param {ReturnType<typeof makeTraceAggregator>} aggregator
+ * @param {WeakMap<Error, { workerId: string, errorId: string }>} inboundOrigin
+ */
+const makeOutboundMarshalSaveError =
+  (aggregator, inboundOrigin) =>
+  /**
+   * @param {Error} err
+   * @param {string} [outboundErrorId]
+   */
+  (err, outboundErrorId) => {
+    if (outboundErrorId === undefined) return;
+    const origin = inboundOrigin.get(err);
+    if (origin !== undefined) {
+      aggregator.alias({
+        workerId: origin.workerId,
+        errorId: origin.errorId,
+        aliasErrorId: outboundErrorId,
+      });
+      return;
+    }
+    const inboundErrorId = extractInboundErrorId(err);
+    if (inboundErrorId !== undefined) {
+      aggregator.aliasByErrorId(inboundErrorId, outboundErrorId);
+      return;
+    }
+    // Daemon-internal error with no preceding worker push. Record a
+    // stub so `lookup(outboundErrorId)` at least returns something
+    // with the daemon-side context.
+    aggregator.record('@daemon', {
+      errorId: outboundErrorId,
+      workerId: '@daemon',
+      name: typeof err.name === 'string' ? err.name : 'Error',
+      message: typeof err.message === 'string' ? err.message : `${err}`,
+      stack: typeof err.stack === 'string' ? err.stack : '',
+      annotations: [],
+      causes: [],
+      t: Date.now(),
+      site: 'daemon',
+    });
+  };
 
 /**
  * Creates a delayed promise that can be cancelled.
@@ -315,6 +394,41 @@ const makeDaemonCore = async (
   const workerDaemonFacets = new WeakMap();
   /** @type {Map<string, (reason?: Error) => Promise<void>>} */
   const workerTerminationByNumber = new Map();
+  /**
+   * Side WeakMap that the daemon's per-worker CapTP populates via its
+   * `marshalLoadError` hook: each decoded error from a worker is
+   * stamped with `{ workerId, errorId }` so the daemon's outbound
+   * CLI-facing `marshalSaveError` can register an alias entry from
+   * the new daemon-minted errorId to the worker's already-aggregated
+   * record.
+   *
+   * @type {WeakMap<Error, { workerId: string, errorId: string }>}
+   */
+  const inboundErrorOrigin = new WeakMap();
+
+  /**
+   * In-process aggregator for error traces pushed by workers and
+   * minted by the daemon's outbound CapTP. Configurable via
+   * ENDO_TRACE_RECORDS, ENDO_TRACE_BYTES, ENDO_TRACE_WORKERS.
+   */
+  const traceAggregator = makeTraceAggregator({
+    // eslint-disable-next-line no-undef
+    maxRecordsPerWorker: parseTraceEnvNumber(
+      // eslint-disable-next-line no-undef
+      typeof process !== 'undefined' ? process.env.ENDO_TRACE_RECORDS : undefined,
+      1024,
+    ),
+    maxBytes: parseTraceEnvNumber(
+      // eslint-disable-next-line no-undef
+      typeof process !== 'undefined' ? process.env.ENDO_TRACE_BYTES : undefined,
+      8 * 1024 * 1024,
+    ),
+    maxWorkers: parseTraceEnvNumber(
+      // eslint-disable-next-line no-undef
+      typeof process !== 'undefined' ? process.env.ENDO_TRACE_WORKERS : undefined,
+      64,
+    ),
+  });
   /**
    * Mutations of the formula graph must be serialized through this queue.
    * "Mutations" include:
@@ -1116,11 +1230,31 @@ const makeDaemonCore = async (
   /**
    * @param {string} workerId512
    */
-  const makeDaemonFacetForWorker = async workerId512 => {
+  const makeDaemonFacetForWorker = workerId512 => {
     return makeExo(
       `Endo facet for worker ${workerId512}`,
       DaemonFacetForWorkerInterface,
-      {},
+      {
+        /**
+         * Push a trace record from the worker. The daemon stamps the
+         * authoritative workerId from the connection identity so a
+         * worker cannot forge entries under another worker's id.
+         *
+         * @param {import('./trace-aggregator.js').TraceRecord} record
+         */
+        reportTrace: async record => {
+          try {
+            traceAggregator.record(workerId512, record);
+          } catch (err) {
+            // Never let a malformed worker push interfere with the
+            // worker's progress. Log and drop.
+            console.error(
+              `Endo trace push from worker ${workerId512} rejected:`,
+              /** @type {Error} */ (err).message,
+            );
+          }
+        },
+      },
     );
   };
 
@@ -1144,6 +1278,18 @@ const makeDaemonCore = async (
     const { promise: workerCancelled, reject: cancelWorker } =
       /** @type {PromiseKit<never>} */ (makePromiseKit());
 
+    /**
+     * Stamp every error we decode from this worker with its origin so
+     * the daemon's outbound CapTP hook can alias forwarded errorIds.
+     *
+     * @param {Error} err
+     * @param {string} [errorId]
+     */
+    const recordInboundOrigin = (err, errorId) => {
+      if (errorId === undefined) return;
+      inboundErrorOrigin.set(err, { workerId: workerId512, errorId });
+    };
+
     const { workerTerminated, workerDaemonFacet } =
       await controlPowers.makeWorker(
         workerId512,
@@ -1153,6 +1299,7 @@ const makeDaemonCore = async (
         capTpConnectionRegistrar,
         trustedShims,
         label,
+        recordInboundOrigin,
       );
 
     const terminateWorker = async (_reason = undefined) => {
@@ -4677,6 +4824,7 @@ const makeDaemonCore = async (
     unpinTransient,
     getFormulaGraphSnapshot,
     writeRemoteAgentKey: persistencePowers.writeRemoteAgentKey,
+    traceAggregator,
   });
 
   /**
@@ -4824,6 +4972,8 @@ const makeDaemonCore = async (
     provide,
     nodeNumber: localNodeNumber,
     capTpConnectionRegistrar,
+    traceAggregator,
+    inboundErrorOrigin,
   };
 };
 
@@ -4847,8 +4997,15 @@ const makeDaemonCore = async (
  * @param {Promise<never>} args.gracePeriodElapsed - Promise that resolves on grace period end.
  * @param {Specials} args.specials - Special formula generators.
  * @param {boolean} [args.gcEnabled] - Enable garbage collection.
- * @returns {Promise<{ endoBootstrap: FarRef<EndoBootstrap>, capTpConnectionRegistrar: CapTpConnectionRegistrar }>}
- *         An object containing the endo bootstrap and CapTP connection registrar.
+ * @returns {Promise<{
+ *   endoBootstrap: FarRef<EndoBootstrap>,
+ *   capTpConnectionRegistrar: CapTpConnectionRegistrar,
+ *   traceAggregator: ReturnType<typeof makeTraceAggregator>,
+ *   marshalSaveError: (err: Error, errorId?: string) => void,
+ * }>}
+ *   An object containing the endo bootstrap, CapTP connection
+ *   registrar, the in-process trace aggregator, and a
+ *   marshalSaveError ready to install on outbound CapTP connections.
  *
  * @example
  * ```js
@@ -4881,7 +5038,12 @@ const provideEndoBootstrap = async (
     signBytes: rootKeypair.sign,
     gcEnabled,
   });
-  const { capTpConnectionRegistrar } = daemonCore;
+  const { capTpConnectionRegistrar, traceAggregator, inboundErrorOrigin } =
+    daemonCore;
+  const marshalSaveError = makeOutboundMarshalSaveError(
+    traceAggregator,
+    inboundErrorOrigin,
+  );
   const isInitialized = !isNewlyCreated;
   if (isInitialized) {
     const endoId = formatId({
@@ -4891,11 +5053,21 @@ const provideEndoBootstrap = async (
     const endoBootstrap = /** @type {FarRef<EndoBootstrap>} */ (
       await daemonCore.provide(endoId)
     );
-    return { endoBootstrap, capTpConnectionRegistrar };
+    return {
+      endoBootstrap,
+      capTpConnectionRegistrar,
+      traceAggregator,
+      marshalSaveError,
+    };
   } else {
     const { value: endoBootstrap } =
       await daemonCore.formulateEndo(endoFormulaNumber);
-    return { endoBootstrap, capTpConnectionRegistrar };
+    return {
+      endoBootstrap,
+      capTpConnectionRegistrar,
+      traceAggregator,
+      marshalSaveError,
+    };
   }
 };
 
@@ -4955,19 +5127,29 @@ export const makeDaemon = async (
     throw error;
   });
 
-  const { endoBootstrap, capTpConnectionRegistrar } =
-    await provideEndoBootstrap(powers, {
-      cancel,
-      gracePeriodMs,
-      gracePeriodElapsed,
-      specials,
-      gcEnabled,
-    });
+  const {
+    endoBootstrap,
+    capTpConnectionRegistrar,
+    traceAggregator,
+    marshalSaveError,
+  } = await provideEndoBootstrap(powers, {
+    cancel,
+    gracePeriodMs,
+    gracePeriodElapsed,
+    specials,
+    gcEnabled,
+  });
 
   await Promise.allSettled([
     E(endoBootstrap).reviveNetworks(),
     E(endoBootstrap).revivePins(),
   ]);
 
-  return { endoBootstrap, cancelGracePeriod, capTpConnectionRegistrar };
+  return {
+    endoBootstrap,
+    cancelGracePeriod,
+    capTpConnectionRegistrar,
+    traceAggregator,
+    marshalSaveError,
+  };
 };

@@ -398,6 +398,8 @@ export const HostInterface = M.interface('EndoHost', {
   ).returns(M.promise()),
   // Get formula dependency graph snapshot for this agent's pet store
   getFormulaGraph: M.call().returns(M.promise()),
+  // Access the privileged error-trace aggregator.
+  traces: M.call().returns(M.promise()),
 });
 
 export const ChannelInterface = M.interface('EndoChannel', {
@@ -528,8 +530,37 @@ export const ReadableTreeInterface = M.interface('EndoReadableTree', {
 
 export const DaemonFacetForWorkerInterface = M.interface(
   'EndoDaemonFacetForWorker',
-  {},
+  {
+    // Push a single trace record to the daemon's aggregate.
+    // The record's workerId field is overwritten by the daemon
+    // with the connection's authoritative workerId.
+    reportTrace: M.call(M.record()).returns(M.promise()),
+  },
 );
+
+export const TracesInterface = M.interface('EndoTraces', {
+  help: M.call().optional(M.string()).returns(M.string()),
+  // Look up a single trace report by errorId (raw worker id or daemon
+  // alias). Returns undefined when not found.
+  lookup: M.call(M.string()).returns(M.promise()),
+  // Return up to `limit` recent reports, optionally restricted to one
+  // worker.
+  recent: M.call()
+    .optional(
+      M.splitRecord(
+        {},
+        {
+          workerId: IdShape,
+          limit: M.number(),
+        },
+      ),
+    )
+    .returns(M.promise()),
+  // Drop all aggregated traces, optionally restricted to one worker.
+  clear: M.call().optional(IdShape).returns(M.promise()),
+  // Return aggregator stats (record count, byte usage, alias count).
+  stats: M.call().returns(M.promise()),
+});
 
 export const WorkerFacetForDaemonInterface = M.interface(
   'EndoWorkerFacetForDaemon',
