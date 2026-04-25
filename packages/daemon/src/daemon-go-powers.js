@@ -156,6 +156,8 @@ export const makeDaemonicGoControlPowers = (
    * @param {Promise<never>} _forceCancelled
    * @param {CapTpConnectionRegistrar} [capTpConnectionRegistrar]
    * @param {string[]} [_trustedShims]
+   * @param {string} [_label]
+   * @param {(err: Error, errorId?: string) => void} [marshalLoadError]
    */
   const makeWorker = async (
     workerId,
@@ -164,6 +166,8 @@ export const makeDaemonicGoControlPowers = (
     _forceCancelled,
     capTpConnectionRegistrar = undefined,
     _trustedShims = undefined, // eslint-disable-line no-underscore-dangle
+    _label = undefined, // eslint-disable-line no-underscore-dangle
+    marshalLoadError = undefined,
   ) => {
     const { statePath, ephemeralStatePath } = config;
 
@@ -261,7 +265,7 @@ export const makeDaemonicGoControlPowers = (
       captpReadFrom,
       cancelled,
       daemonWorkerFacet,
-      undefined,
+      marshalLoadError !== undefined ? { marshalLoadError } : undefined,
       capTpConnectionRegistrar,
     );
 

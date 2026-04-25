@@ -1017,6 +1017,42 @@ export interface EndoHost extends EndoAgent {
       label: string;
     }>;
   }>;
+  /** Returns a privileged Exo for inspecting the daemon's error-trace aggregate. */
+  traces(): Promise<EndoTraces>;
+}
+
+export interface EndoTraces {
+  help(): string;
+  lookup(errorId: string): Promise<EndoTraceReport | undefined>;
+  recent(opts?: { workerId?: string; limit?: number }): Promise<EndoTraceReport[]>;
+  clear(workerId?: string): Promise<void>;
+  stats(): Promise<{
+    workers: number;
+    totalRecords: number;
+    bytes: number;
+    aliases: number;
+  }>;
+}
+
+export interface EndoTraceCauseRef {
+  errorId: string;
+  name: string;
+  message: string;
+}
+
+export interface EndoTraceReport {
+  errorId: string;
+  workerId: string;
+  name: string;
+  message: string;
+  stack: string;
+  annotations: string[];
+  causes: EndoTraceReport[];
+  related: EndoTraceReport[];
+  t: number;
+  site: string;
+  compartmentId?: string;
+  partial: boolean;
 }
 
 export interface EndoHostController extends Controller<FarRef<EndoHost>> {}
@@ -1245,6 +1281,7 @@ export type NetworkPowers = SocketPowers & {
     cancelled: Promise<never>,
     exitWithError: (error: Error) => void,
     capTpConnectionRegistrar?: CapTpConnectionRegistrar,
+    marshalSaveError?: (err: Error, errorId?: string) => void,
   ) => { started: Promise<void>; stopped: Promise<void> };
 };
 
@@ -1331,6 +1368,7 @@ export type DaemonicControlPowers = {
     capTpConnectionRegistrar?: CapTpConnectionRegistrar,
     trustedShims?: string[],
     label?: string,
+    marshalLoadError?: (err: Error, errorId?: string) => void,
   ) => Promise<{
     workerTerminated: Promise<void>;
     workerDaemonFacet: ERef<WorkerDaemonFacet>;
