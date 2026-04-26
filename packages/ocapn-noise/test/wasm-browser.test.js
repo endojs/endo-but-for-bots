@@ -84,5 +84,10 @@ test('fetch is callable in the runtime; a stubbed fetch returns a Response', asy
   t.is(typeof fetch, 'function', 'fetch is a global');
   const response = new Response(wasmBytes);
   t.is(typeof response.arrayBuffer, 'function');
-  t.is(typeof globalThis.crypto.getRandomValues, 'function');
+  // Node 18 hides webcrypto behind a flag; rather than gate the test
+  // on the host's flag set, import the canonical entry point that
+  // works across versions.  Browsers expose `globalThis.crypto`
+  // unconditionally, which is what `wasm/browser.js` actually uses.
+  const { webcrypto } = await import('node:crypto');
+  t.is(typeof webcrypto.getRandomValues, 'function');
 });
