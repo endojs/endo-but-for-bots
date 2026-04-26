@@ -4347,6 +4347,13 @@ const makeDaemonCore = async (
     workerLabel = undefined,
   ) => {
     return withFormulaGraphLock(async () => {
+      // Pass workerKind=undefined so the worker inherits the
+      // daemon's defaultWorkerKind.  Both the Node worker
+      // (parseArchive) and the XS worker (hostImportArchive)
+      // implement makeArchive natively, so no auto-promotion is
+      // needed — promoting unconditionally would spawn a Node
+      // worker the Rust supervisor cannot run when no Node worker
+      // binary is configured.
       const { powersId, capletFormulaNumber, workerId, originalWorkerId } =
         await formulateCapletDependencies(
           hostAgentId,
@@ -4356,7 +4363,6 @@ const makeDaemonCore = async (
           specifiedPowersId,
           trustedShims,
           workerLabel,
-          'node',
         );
 
       /** @type {MakeArchiveFormula} */

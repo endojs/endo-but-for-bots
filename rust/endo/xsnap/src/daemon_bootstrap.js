@@ -34084,6 +34084,13 @@ const makeDaemonCore = async (
     workerLabel = undefined,
   ) => {
     return withFormulaGraphLock(async () => {
+      // Pass workerKind=undefined so the worker inherits the
+      // daemon's defaultWorkerKind.  Both the Node worker
+      // (parseArchive) and the XS worker (hostImportArchive)
+      // implement makeArchive natively, so no auto-promotion is
+      // needed — promoting unconditionally would spawn a Node
+      // worker the Rust supervisor cannot run when no Node worker
+      // binary is configured.
       const { powersId, capletFormulaNumber, workerId, originalWorkerId } =
         await formulateCapletDependencies(
           hostAgentId,
@@ -34093,7 +34100,6 @@ const makeDaemonCore = async (
           specifiedPowersId,
           trustedShims,
           workerLabel,
-          'node',
         );
 
       /** @type {MakeArchiveFormula} */
@@ -36255,13 +36261,18 @@ const getLengthPrefixCharCodes = length =>
           output.next(COMMA_BUFFER),
         ];
 
-        // Resolve early if the output writer closes early.
+        // Resolve early if the output writer closes early.  Each
+        // per-chunk promise also gets a swallowing catch so that a
+        // rejection from one chunk (e.g. socket FIN'd mid-stream)
+        // does not surface as an unhandled rejection — the aggregate
+        // is already observed by the Promise.all chain below, which
+        // routes failures into ack.reject.
         for (const promise of partsWritten) {
           promise.then(partWritten => {
             if (partWritten.done) {
               ack.resolve(partWritten);
             }
-          });
+          }, () => {});
         }
 
         Promise.all(partsWritten).then(results => {
@@ -36368,7 +36379,25 @@ const registerCapTpConnection = (registrar, name, close, closed) => {
       );
     }
     try {
-      return writer.next(message);
+      const writeP = Promise.resolve(writer.next(message));
+      // Swallow rejections from writes that race with peer disconnect
+      // (e.g. CTP_DISCONNECT after the other side has already FIN'd).
+      // Without this, CapTP teardown produces "This socket has been
+      // ended by the other party" rejections that fail otherwise-clean
+      // test runs under AVA's strict unhandled-rejection policy.
+      writeP.catch(err => {
+        const msg = String((err && err.message) || err || '');
+        const isPostDisconnect =
+          msg.includes('socket has been ended') ||
+          msg.includes('write after end') ||
+          msg.includes('EPIPE') ||
+          msg.includes('ECONNRESET');
+        if (!isPostDisconnect) {
+          // Still log non-disconnect errors for visibility.
+          console.error(`CapTP ${name} send error:`, msg);
+        }
+      });
+      return writeP;
     } catch (sendError) {
       console.error(`CapTP ${name} send error:`, sendError.message);
       return Promise.reject(sendError);
@@ -38443,16 +38472,36 @@ const config = harden({
 const filePowers = makeXsFilePowers();
 const cryptoPowers = makeXsCryptoPowers();
 
-// Minimal in-memory shim of the SQLite-backed DaemonDatabase API used
-// by pet-store.js.  The XS bus daemon does not yet have a SQLite
-// table layer; until it does, pet-store entries live only in process
-// memory.  See designs/daemon-make-archive.md for the follow-up.
-const makeInMemoryPetStoreDb = () => {
+// Filesystem-backed implementation of the SQLite-backed
+// DaemonDatabase API used by pet-store.js.  Each (storeType,
+// storeNumber) pair lives in its own JSON file at
+// <statePath>/pet-stores/<storeType>/<storeNumber>.json so writes
+// are atomic and per-store.  The mutators stay synchronous (matching
+// the SQLite contract); disk writes are scheduled through a per-file
+// promise chain.  Eager load at boot populates the in-memory cache
+// so all queries are synchronous after `initialize()` returns.
+const makePersistentPetStoreDb = async () => {
+  const baseDir = filePowers.joinPath(config.statePath, 'pet-stores');
   /** @type {Map<string, Map<string, string>>} */
   const tables = new Map();
-  const key = (storeNumber, storeType) => `${storeType}:${storeNumber}`;
+  /** @type {Map<string, (task: () => Promise<void>) => void>} */
+  const writeChains = new Map();
+
+  const tableKey = (storeNumber, storeType) => `${storeType}:${storeNumber}`;
+  const fileFor = (storeNumber, storeType) =>
+    filePowers.joinPath(baseDir, storeType, `${storeNumber}.json`);
+  const dirFor = storeType => filePowers.joinPath(baseDir, storeType);
+
+  const isNotFoundError = err => {
+    if (err && err.code === 'ENOENT') return true;
+    const msg = String((err && err.message) || err || '');
+    return (
+      msg.startsWith('ENOENT: ') || msg.includes('No such file or directory')
+    );
+  };
+
   const tableFor = (storeNumber, storeType) => {
-    const k = key(storeNumber, storeType);
+    const k = tableKey(storeNumber, storeType);
     let t = tables.get(k);
     if (t === undefined) {
       t = new Map();
@@ -38460,18 +38509,97 @@ const makeInMemoryPetStoreDb = () => {
     }
     return t;
   };
+
+  const makeWriteChain = () => {
+    let last = Promise.resolve();
+    return task => {
+      last = last
+        .then(() => task())
+        .catch(err => {
+          console.error('Pet-store write failed:', err);
+        });
+    };
+  };
+  const chainFor = (storeNumber, storeType) => {
+    const k = tableKey(storeNumber, storeType);
+    let c = writeChains.get(k);
+    if (c === undefined) {
+      c = makeWriteChain();
+      writeChains.set(k, c);
+    }
+    return c;
+  };
+
+  const persist = (storeNumber, storeType) => {
+    const file = fileFor(storeNumber, storeType);
+    const dir = dirFor(storeType);
+    chainFor(storeNumber, storeType)(async () => {
+      const t = tables.get(tableKey(storeNumber, storeType));
+      if (t === undefined || t.size === 0) {
+        await filePowers.removePath(file).catch(err => {
+          if (!isNotFoundError(err)) throw err;
+        });
+        return;
+      }
+      await filePowers.makePath(dir);
+      const obj = Object.fromEntries(t);
+      const tmp = `${file}.tmp`;
+      await filePowers.writeFileText(tmp, JSON.stringify(obj));
+      await filePowers.renamePath(tmp, file);
+    });
+  };
+
+  // Eager load: scan every <baseDir>/<storeType>/*.json into memory.
+  const storeTypes = await filePowers.readDirectory(baseDir).catch(err => {
+    if (isNotFoundError(err)) return [];
+    throw err;
+  });
+  for (const storeType of storeTypes) {
+    const typeDir = dirFor(storeType);
+    // eslint-disable-next-line no-await-in-loop
+    const files = await filePowers.readDirectory(typeDir).catch(err => {
+      if (isNotFoundError(err)) return [];
+      throw err;
+    });
+    // eslint-disable-next-line no-await-in-loop
+    await Promise.all(
+      files.map(async fileName => {
+        if (!fileName.endsWith('.json')) return;
+        const storeNumber = fileName.slice(0, -'.json'.length);
+        try {
+          const text = await filePowers.readFileText(
+            filePowers.joinPath(typeDir, fileName),
+          );
+          const obj = JSON.parse(text);
+          const t = tableFor(storeNumber, storeType);
+          for (const [name, formulaId] of Object.entries(obj)) {
+            t.set(name, /** @type {string} */ (formulaId));
+          }
+        } catch (err) {
+          console.error(
+            `Persistence: failed to load pet-stores/${storeType}/${fileName}:`,
+            err,
+          );
+        }
+      }),
+    );
+  }
+
   return {
     writePetStoreEntry: (storeNumber, storeType, name, formulaId) => {
       tableFor(storeNumber, storeType).set(name, formulaId);
+      persist(storeNumber, storeType);
     },
     deletePetStoreEntry: (storeNumber, storeType, name) => {
       tableFor(storeNumber, storeType).delete(name);
+      persist(storeNumber, storeType);
     },
     renamePetStoreEntry: (storeNumber, storeType, fromName, toName) => {
       const t = tableFor(storeNumber, storeType);
       const id = t.get(fromName);
       t.delete(fromName);
       if (id !== undefined) t.set(toName, id);
+      persist(storeNumber, storeType);
     },
     listPetStoreEntries: (storeNumber, storeType) => {
       const t = tableFor(storeNumber, storeType);
@@ -38481,12 +38609,14 @@ const makeInMemoryPetStoreDb = () => {
       }));
     },
     deletePetStore: (storeNumber, storeType) => {
-      tables.delete(key(storeNumber, storeType));
+      tables.delete(tableKey(storeNumber, storeType));
+      persist(storeNumber, storeType);
     },
   };
 };
 
-const petStorePowers = makePetStoreMaker(makeInMemoryPetStoreDb());
+/** @type {ReturnType<typeof makePetStoreMaker> | null} */
+let petStorePowers = null;
 const daemonicPersistencePowers = makeDaemonicPersistencePowers(
   filePowers,
   cryptoPowers,
@@ -38803,15 +38933,12 @@ const controlPowers = harden({ makeWorker, attachDebugger, detachDebugger });
 
 // ---------------------------------------------------------------------------
 // Assemble DaemonicPowers
+//
+// `powers` references `petStorePowers`, which is assigned inside
+// `main()` after the asynchronous pet-store load completes (see
+// makePersistentPetStoreDb above).  We therefore defer the harden()
+// of `powers` until that assignment is done.
 // ---------------------------------------------------------------------------
-
-const powers = harden({
-  crypto: cryptoPowers,
-  petStore: petStorePowers,
-  persistence: daemonicPersistencePowers,
-  control: controlPowers,
-  filePowers,
-});
 
 // ---------------------------------------------------------------------------
 // Daemon lifecycle
@@ -38833,6 +38960,17 @@ const main = async () => {
   });
 
   await daemonicPersistencePowers.initializePersistence();
+
+  // Build the persistent pet-store DB after persistence dirs exist
+  // and assemble powers now that petStorePowers is ready.
+  petStorePowers = makePetStoreMaker(await makePersistentPetStoreDb());
+  const powers = harden({
+    crypto: cryptoPowers,
+    petStore: petStorePowers,
+    persistence: daemonicPersistencePowers,
+    control: controlPowers,
+    filePowers,
+  });
 
   const gcEnabled = hostGetEnv('ENDO_GC') === '1';
   const result = await makeDaemon(
