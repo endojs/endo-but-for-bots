@@ -2196,12 +2196,14 @@ __metadata:
     "@endo/ses-ava": "workspace:^"
     "@endo/stream": "workspace:^"
     "@endo/stream-node": "workspace:^"
+    "@types/ws": "npm:^8.18.1"
     ava: "catalog:dev"
     c8: "catalog:dev"
     eslint: "catalog:dev"
     ses: "workspace:^"
     tsd: "catalog:dev"
     typescript: "npm:~5.9.2"
+    ws: "npm:^8.13.0"
   languageName: unknown
   linkType: soft
 
