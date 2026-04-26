@@ -168,10 +168,16 @@ const handleSessionHandshakeMessage = (
       // Check if the location signature is valid
       const peerPublicKey = cryptography.makeOcapnPublicKey(sessionPublicKey.q);
       try {
+        // tcp-testing-only does not have a Noise transcript hash to
+        // bind against; pass an empty buffer so the signature payload
+        // omits a session-bound binding.  The np netlayer threads the
+        // Noise handshake hash through `exchangeIdentity` and binds to
+        // it instead.
         cryptography.assertLocationSignatureValid(
           peerLocation,
           peerLocationSig,
           peerPublicKey,
+          new ArrayBuffer(0),
         );
       } catch {
         logger.info('>> Server received NOT VALID location signature');

@@ -45,7 +45,6 @@ import {
   makeOcapnSessionCryptography,
   PREFIXED_SYN_LENGTH,
   SYNACK_LENGTH,
-  ACK_LENGTH,
 } from './bindings.js';
 
 const { freeze } = Object;
@@ -499,6 +498,9 @@ export const makeOcapnNoiseNetwork = ({
    * @param {(bytes: Uint8Array) => Uint8Array} encrypt
    * @param {(bytes: Uint8Array) => Uint8Array} decrypt
    * @param {Uint8Array} peerEd25519
+   * @param {Uint8Array} handshakeHash - 32-byte Noise transcript hash
+   *   used as the channel-binding value for the location signature so
+   *   it cannot be replayed across sessions.
    */
   const exchangeIdentity = async (
     localKey,
@@ -507,12 +509,14 @@ export const makeOcapnNoiseNetwork = ({
     encrypt,
     decrypt,
     peerEd25519,
+    handshakeHash,
   ) => {
     await null;
     const location = buildLocationFor(localKey);
     const locationSignature = cryptography.signLocation(
       location,
       localKey.keyPair,
+      handshakeHash.buffer,
     );
     const greeting = writeOcapnHandshakeMessage(
       {
@@ -558,11 +562,13 @@ export const makeOcapnNoiseNetwork = ({
       }
     }
     // Bind the peer's advertised location signature to our verified
-    // knowledge of their key.
+    // knowledge of their key AND to the Noise handshake transcript so
+    // a captured signature cannot be replayed into another session.
     cryptography.assertLocationSignatureValid(
       message.location,
       message.locationSignature,
       peerPublicKey,
+      handshakeHash.buffer,
     );
     const advertised = /** @type {OcapnLocation} */ (message.location);
     if (advertised.designator !== toHex(peerEd25519)) {
@@ -763,7 +769,7 @@ export const makeOcapnNoiseNetwork = ({
       });
       const asInit = noise.asInitiator();
       const prefixedSyn = new Uint8Array(PREFIXED_SYN_LENGTH);
-      const { initiatorReadSynackWriteAck } = asInit.initiatorWriteSyn(
+      const { initiatorReadSynack } = asInit.initiatorWriteSyn(
         peerEd25519,
         prefixedSyn,
       );
@@ -777,9 +783,9 @@ export const makeOcapnNoiseNetwork = ({
         stream,
       );
       expectFrameLength(synack, SYNACK_LENGTH, 'SYNACK');
-      const ack = new Uint8Array(ACK_LENGTH);
-      const { encrypt, decrypt } = initiatorReadSynackWriteAck(synack, ack);
-      await stream.writer.next(ack);
+      // IK has no message 3 (ACK); reading the SYNACK finalizes the
+      // handshake and exposes the transcript hash for channel binding.
+      const { encrypt, decrypt, handshakeHash } = initiatorReadSynack(synack);
 
       const {
         peerLocation,
@@ -794,6 +800,7 @@ export const makeOcapnNoiseNetwork = ({
           encrypt,
           decrypt,
           peerEd25519,
+          handshakeHash,
         ),
         handshakeTimeoutMs,
         'post-handshake identity exchange',
@@ -875,7 +882,9 @@ export const makeOcapnNoiseNetwork = ({
       });
       const asResp = noise.asResponder();
       const synack = new Uint8Array(SYNACK_LENGTH);
-      const { initiatorVerifyingKey, responderReadAck } =
+      // IK msg 1 (read) + msg 2 (write) finalize the handshake in
+      // one bindings call.  No further wire message is required.
+      const { initiatorVerifyingKey, encrypt, decrypt, handshakeHash } =
         asResp.responderReadSynWriteSynack(prefixedSyn, synack);
       const initiatorKeyHex = toHex(initiatorVerifyingKey);
       // Reject early if a single peer is already saturating the
@@ -890,15 +899,6 @@ export const makeOcapnNoiseNetwork = ({
       const tiebreaker = tiebreakerFromPrefixedSyn(prefixedSyn);
       await stream.writer.next(synack);
 
-      const ack = await withTimeout(
-        readFrame(stream.reader),
-        handshakeTimeoutMs,
-        'ACK read',
-        stream,
-      );
-      expectFrameLength(ack, ACK_LENGTH, 'ACK');
-      const { encrypt, decrypt } = responderReadAck(ack);
-
       const {
         peerLocation,
         peerLocationSignature,
@@ -912,6 +912,7 @@ export const makeOcapnNoiseNetwork = ({
           encrypt,
           decrypt,
           initiatorVerifyingKey,
+          handshakeHash,
         ),
         handshakeTimeoutMs,
         'post-handshake identity exchange',

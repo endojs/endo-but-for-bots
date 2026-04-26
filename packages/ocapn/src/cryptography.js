@@ -109,8 +109,8 @@ export const randomGiftId = () => {
  * @property {(publicKeyDescriptor: OcapnPublicKeyDescriptor) => OcapnPublicKey} publicKeyDescriptorToPublicKey
  * @property {(privateKeyBytes: Uint8Array) => OcapnKeyPair} makeOcapnKeyPairFromPrivateKey
  * @property {() => OcapnKeyPair} makeOcapnKeyPair
- * @property {(location: OcapnLocation, keyPair: OcapnKeyPair) => OcapnSignature} signLocation
- * @property {(location: OcapnLocation, signature: OcapnSignature, publicKey: OcapnPublicKey) => void} assertLocationSignatureValid
+ * @property {(location: OcapnLocation, keyPair: OcapnKeyPair, binding: ArrayBufferLike) => OcapnSignature} signLocation
+ * @property {(location: OcapnLocation, signature: OcapnSignature, publicKey: OcapnPublicKey, binding: ArrayBufferLike) => void} assertLocationSignatureValid
  * @property {(handoffGive: HandoffGive, keyPair: OcapnKeyPair) => OcapnSignature} signHandoffGive
  * @property {(receiverPublicKeyForGifter: OcapnPublicKey, exporterLocation: OcapnLocation, gifterExporterSessionId: SessionId, gifterSideId: PublicKeyId, giftId: ArrayBufferLike, gifterKeyForExporter: OcapnKeyPair) => HandoffGiveSigEnvelope} makeSignedHandoffGive
  * @property {(handoffGive: HandoffGive, signature: OcapnSignature, publicKey: OcapnPublicKey) => void} assertHandoffGiveSignatureValid
@@ -218,23 +218,70 @@ export const makeCryptography = codec => {
     return makeOcapnPublicKey(publicKeyDescriptor.q);
   };
 
+  // Domain-separation prefix for the location-signature payload.
+  // Includes a length-prefixed channel-binding value (the Noise
+  // handshake hash on the np netlayer; an empty buffer where no
+  // session-bound binding is available, e.g. tcp-testing-only).
+  const LOCATION_SIG_DOMAIN = (() => {
+    const text = 'ocapn-location-v1\0';
+    const bytes = new Uint8Array(text.length);
+    for (let i = 0; i < text.length; i += 1) bytes[i] = text.charCodeAt(i);
+    return bytes;
+  })();
+
   /**
    * @param {OcapnLocation} location
+   * @param {ArrayBufferLike} binding - Channel-binding value, e.g. the
+   *   Noise handshake hash for the np netlayer. Pass `new ArrayBuffer(0)`
+   *   when no session-bound binding is available.
    */
-  const getLocationBytesForSignature = location => {
+  const getLocationBytesForSignature = (location, binding) => {
     const myLocationBytes = serializeOcapnMyLocation(
       { type: 'my-location', location },
       codec,
     );
-    return uint8ArrayToImmutableArrayBuffer(myLocationBytes);
+    /** @type {Uint8Array} */
+    let bindingBytes;
+    if (binding instanceof Uint8Array) {
+      const u = /** @type {Uint8Array} */ (binding);
+      bindingBytes = new Uint8Array(
+        u.buffer.slice(u.byteOffset, u.byteOffset + u.byteLength),
+      );
+    } else {
+      bindingBytes = new Uint8Array(
+        /** @type {ArrayBufferLike} */ (binding).slice(0),
+      );
+    }
+    const out = new Uint8Array(
+      LOCATION_SIG_DOMAIN.length +
+        4 +
+        bindingBytes.length +
+        myLocationBytes.length,
+    );
+    let offset = 0;
+    out.set(LOCATION_SIG_DOMAIN, offset);
+    offset += LOCATION_SIG_DOMAIN.length;
+    new DataView(out.buffer, out.byteOffset).setUint32(
+      offset,
+      bindingBytes.length,
+      false,
+    );
+    offset += 4;
+    out.set(bindingBytes, offset);
+    offset += bindingBytes.length;
+    out.set(myLocationBytes, offset);
+    return uint8ArrayToImmutableArrayBuffer(out);
   };
 
   /**
    * @param {OcapnLocation} location
    * @param {OcapnKeyPair} keyPair
+   * @param {ArrayBufferLike} binding - Channel-binding value (32-byte
+   *   Noise handshake hash on the np netlayer; `new ArrayBuffer(0)` for
+   *   tcp-testing-only).
    */
-  const signLocation = (location, keyPair) => {
-    const locationBytes = getLocationBytesForSignature(location);
+  const signLocation = (location, keyPair, binding) => {
+    const locationBytes = getLocationBytesForSignature(location, binding);
     return keyPair.sign(locationBytes);
   };
 
@@ -242,9 +289,16 @@ export const makeCryptography = codec => {
    * @param {OcapnLocation} location
    * @param {OcapnSignature} signature
    * @param {OcapnPublicKey} publicKey
+   * @param {ArrayBufferLike} binding - Same channel-binding value the
+   *   signer used.
    */
-  const assertLocationSignatureValid = (location, signature, publicKey) => {
-    const locationBytes = getLocationBytesForSignature(location);
+  const assertLocationSignatureValid = (
+    location,
+    signature,
+    publicKey,
+    binding,
+  ) => {
+    const locationBytes = getLocationBytesForSignature(location, binding);
     publicKey.assertSignatureValid(locationBytes, signature);
   };
 

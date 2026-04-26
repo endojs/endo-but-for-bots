@@ -106,11 +106,16 @@ test('provideSession routes through OcapnNetwork.provideSession and adopts its i
   const localSelfIdentity = {
     keyPair: localKeyPair,
     location: localLocation,
-    locationSignature: crypto.signLocation(localLocation, localKeyPair),
+    locationSignature: crypto.signLocation(
+      localLocation,
+      localKeyPair,
+      new ArrayBuffer(0),
+    ),
   };
   const remoteLocationSignature = crypto.signLocation(
     remoteLocation,
     remoteKeyPair,
+    new ArrayBuffer(0),
   );
 
   let provideSessionCalls = 0;

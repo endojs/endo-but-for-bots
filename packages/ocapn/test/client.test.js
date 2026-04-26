@@ -153,7 +153,11 @@ test('client aborts on start-session with wrong version', async t => {
 
   // Create a start-session message with wrong version
   const keyPair = makeOcapnKeyPair();
-  const locationSignature = signLocation(clientKitA.location, keyPair);
+  const locationSignature = signLocation(
+    clientKitA.location,
+    keyPair,
+    new ArrayBuffer(0),
+  );
   const badStartSession = {
     type: 'op:start-session',
     captpVersion: 'BAD', // Wrong version!

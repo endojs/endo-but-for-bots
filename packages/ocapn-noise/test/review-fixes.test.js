@@ -443,3 +443,65 @@ test('active session is forgotten after close so a fresh dial starts new', async
   netB.shutdown();
   fabric.shutdown();
 });
+
+// ──────────────────────────────────────────────────────────────────────
+// Phase 9 — IK rebuild regressions
+// ──────────────────────────────────────────────────────────────────────
+
+test('location signature is bound to the Noise handshake hash', async t => {
+  const { makeCryptography } = await import('@endo/ocapn/cryptography');
+  const { syrupCodec } = await import('@endo/ocapn/syrup');
+  const crypto = makeCryptography(syrupCodec);
+  const keyPair = crypto.makeOcapnKeyPair();
+  /** @type {import('@endo/ocapn/components').OcapnLocation} */
+  const location = harden({
+    type: 'ocapn-peer',
+    network: 'np',
+    transport: 'np',
+    designator: keyPair.publicKey.id ? '00'.repeat(32) : '00'.repeat(32),
+    hints: false,
+  });
+  const bindingA = new Uint8Array(32);
+  bindingA.fill(0xaa);
+  const bindingB = new Uint8Array(32);
+  bindingB.fill(0xbb);
+
+  const sig = crypto.signLocation(location, keyPair, bindingA.buffer);
+
+  // Same binding → verifies.
+  t.notThrows(() =>
+    crypto.assertLocationSignatureValid(
+      location,
+      sig,
+      keyPair.publicKey,
+      bindingA.buffer,
+    ),
+  );
+
+  // Different binding → fails. Captures the deferred replay-resistance
+  // property: a signature minted under one Noise handshake hash cannot
+  // be replayed into a different session.
+  t.throws(
+    () =>
+      crypto.assertLocationSignatureValid(
+        location,
+        sig,
+        keyPair.publicKey,
+        bindingB.buffer,
+      ),
+    { instanceOf: Error },
+  );
+
+  // Empty binding (the tcp-testing-only convention) is also a distinct
+  // domain.
+  t.throws(
+    () =>
+      crypto.assertLocationSignatureValid(
+        location,
+        sig,
+        keyPair.publicKey,
+        new ArrayBuffer(0),
+      ),
+    { instanceOf: Error },
+  );
+});

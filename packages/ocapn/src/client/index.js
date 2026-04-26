@@ -222,7 +222,15 @@ export const makeOcapn = async ({
    */
   const makeSelfIdentity = myLocation => {
     const keyPair = cryptography.makeOcapnKeyPair();
-    const myLocationSig = cryptography.signLocation(myLocation, keyPair);
+    // tcp-testing-only does not have a Noise transcript hash to bind
+    // against; sign with an empty channel-binding value.  The np
+    // netlayer mints its own per-session SelfIdentity that binds to
+    // the Noise handshake hash instead.
+    const myLocationSig = cryptography.signLocation(
+      myLocation,
+      keyPair,
+      new ArrayBuffer(0),
+    );
     return {
       keyPair,
       location: myLocation,
