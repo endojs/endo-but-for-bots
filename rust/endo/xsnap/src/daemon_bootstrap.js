@@ -393,6 +393,96 @@
       mapWriter: cell("mapWriter"),
     },
     {
+      makeWriter: cell("makeWriter"),
+      writerToBytes: cell("writerToBytes"),
+      writeUint: cell("writeUint"),
+      writeByteString: cell("writeByteString"),
+      writeArrayHeader: cell("writeArrayHeader"),
+      writeNull: cell("writeNull"),
+      makeReader: cell("makeReader"),
+      readUint: cell("readUint"),
+      readByteString: cell("readByteString"),
+      readArrayHeader: cell("readArrayHeader"),
+      readNullOrPeek: cell("readNullOrPeek"),
+      assertConsumed: cell("assertConsumed"),
+    },
+    {
+      Direction: cell("Direction"),
+      Kind: cell("Kind"),
+      flipDirection: cell("flipDirection"),
+      writeDescriptor: cell("writeDescriptor"),
+      encodeDescriptor: cell("encodeDescriptor"),
+      readDescriptor: cell("readDescriptor"),
+      decodeDescriptor: cell("decodeDescriptor"),
+      descriptorKey: cell("descriptorKey"),
+    },
+    {
+      VERB_DELIVER: cell("VERB_DELIVER"),
+      VERB_RESOLVE: cell("VERB_RESOLVE"),
+      VERB_DROP: cell("VERB_DROP"),
+      VERB_ABORT: cell("VERB_ABORT"),
+      isSlotVerb: cell("isSlotVerb"),
+      encodeDeliverPayload: cell("encodeDeliverPayload"),
+      decodeDeliverPayload: cell("decodeDeliverPayload"),
+      encodeResolvePayload: cell("encodeResolvePayload"),
+      decodeResolvePayload: cell("decodeResolvePayload"),
+      encodeDropPayload: cell("encodeDropPayload"),
+      decodeDropPayload: cell("decodeDropPayload"),
+      encodeAbortPayload: cell("encodeAbortPayload"),
+      decodeAbortPayload: cell("decodeAbortPayload"),
+    },
+    {
+      sessionIdFromLabel: cell("sessionIdFromLabel"),
+      sessionIdHex: cell("sessionIdHex"),
+    },
+    {
+      makeCList: cell("makeCList"),
+    },
+    {
+      makeSlotCodec: cell("makeSlotCodec"),
+    },
+    {
+      makeSlotClient: cell("makeSlotClient"),
+    },
+    {
+      LOCAL_ROOT: cell("LOCAL_ROOT"),
+      REMOTE_ROOT: cell("REMOTE_ROOT"),
+      bootstrap: cell("bootstrap"),
+    },
+    {
+      makeMessageSlots: cell("makeMessageSlots"),
+    },
+    {
+      Direction: cell("Direction"),
+      Kind: cell("Kind"),
+      encodeDescriptor: cell("encodeDescriptor"),
+      decodeDescriptor: cell("decodeDescriptor"),
+      descriptorKey: cell("descriptorKey"),
+      flipDirection: cell("flipDirection"),
+      VERB_DELIVER: cell("VERB_DELIVER"),
+      VERB_RESOLVE: cell("VERB_RESOLVE"),
+      VERB_DROP: cell("VERB_DROP"),
+      VERB_ABORT: cell("VERB_ABORT"),
+      isSlotVerb: cell("isSlotVerb"),
+      encodeDeliverPayload: cell("encodeDeliverPayload"),
+      decodeDeliverPayload: cell("decodeDeliverPayload"),
+      encodeResolvePayload: cell("encodeResolvePayload"),
+      decodeResolvePayload: cell("decodeResolvePayload"),
+      encodeDropPayload: cell("encodeDropPayload"),
+      decodeDropPayload: cell("decodeDropPayload"),
+      encodeAbortPayload: cell("encodeAbortPayload"),
+      decodeAbortPayload: cell("decodeAbortPayload"),
+      sessionIdFromLabel: cell("sessionIdFromLabel"),
+      sessionIdHex: cell("sessionIdHex"),
+      makeCList: cell("makeCList"),
+      makeSlotCodec: cell("makeSlotCodec"),
+      makeSlotClient: cell("makeSlotClient"),
+      LOCAL_ROOT: cell("LOCAL_ROOT"),
+      REMOTE_ROOT: cell("REMOTE_ROOT"),
+      bootstrap: cell("bootstrap"),
+      makeMessageSlots: cell("makeMessageSlots"),
+    },
+    {
       assertNoDuplicates: cell("assertNoDuplicates"),
       confirmElements: cell("confirmElements"),
       assertElements: cell("assertElements"),
@@ -938,26 +1028,28 @@
 
   defineProperties(cells[55], {"E": { value: cells[34]["E"] },"Far": { value: cells[37]["Far"] },"getInterfaceOf": { value: cells[37]["getInterfaceOf"] },"passStyleOf": { value: cells[37]["passStyleOf"] } });
 
-  defineProperties(cells[72], {"matches": { value: cells[70]["matches"] },"mustMatch": { value: cells[70]["mustMatch"] },"M": { value: cells[70]["M"] } });
-  defineProperties(cells[73], getOwnPropertyDescriptors(cells[72]));
+  defineProperties(cells[66], {"Direction": { value: cells[58]["Direction"] },"Kind": { value: cells[58]["Kind"] },"encodeDescriptor": { value: cells[58]["encodeDescriptor"] },"decodeDescriptor": { value: cells[58]["decodeDescriptor"] },"descriptorKey": { value: cells[58]["descriptorKey"] },"flipDirection": { value: cells[58]["flipDirection"] },"VERB_DELIVER": { value: cells[59]["VERB_DELIVER"] },"VERB_RESOLVE": { value: cells[59]["VERB_RESOLVE"] },"VERB_DROP": { value: cells[59]["VERB_DROP"] },"VERB_ABORT": { value: cells[59]["VERB_ABORT"] },"isSlotVerb": { value: cells[59]["isSlotVerb"] },"encodeDeliverPayload": { value: cells[59]["encodeDeliverPayload"] },"decodeDeliverPayload": { value: cells[59]["decodeDeliverPayload"] },"encodeResolvePayload": { value: cells[59]["encodeResolvePayload"] },"decodeResolvePayload": { value: cells[59]["decodeResolvePayload"] },"encodeDropPayload": { value: cells[59]["encodeDropPayload"] },"decodeDropPayload": { value: cells[59]["decodeDropPayload"] },"encodeAbortPayload": { value: cells[59]["encodeAbortPayload"] },"decodeAbortPayload": { value: cells[59]["decodeAbortPayload"] },"sessionIdFromLabel": { value: cells[60]["sessionIdFromLabel"] },"sessionIdHex": { value: cells[60]["sessionIdHex"] },"makeCList": { value: cells[61]["makeCList"] },"makeSlotCodec": { value: cells[62]["makeSlotCodec"] },"makeSlotClient": { value: cells[63]["makeSlotClient"] },"LOCAL_ROOT": { value: cells[64]["LOCAL_ROOT"] },"REMOTE_ROOT": { value: cells[64]["REMOTE_ROOT"] },"bootstrap": { value: cells[64]["bootstrap"] },"makeMessageSlots": { value: cells[65]["makeMessageSlots"] } });
 
-  defineProperties(cells[73], {"isKey": { value: cells[59]["isKey"] },"assertKey": { value: cells[59]["assertKey"] },"assertScalarKey": { value: cells[59]["assertScalarKey"] },"isCopySet": { value: cells[59]["isCopySet"] },"assertCopySet": { value: cells[59]["assertCopySet"] },"makeCopySet": { value: cells[59]["makeCopySet"] },"getCopySetKeys": { value: cells[59]["getCopySetKeys"] },"isCopyBag": { value: cells[59]["isCopyBag"] },"assertCopyBag": { value: cells[59]["assertCopyBag"] },"makeCopyBag": { value: cells[59]["makeCopyBag"] },"makeCopyBagFromElements": { value: cells[59]["makeCopyBagFromElements"] },"getCopyBagEntries": { value: cells[59]["getCopyBagEntries"] },"isCopyMap": { value: cells[59]["isCopyMap"] },"assertCopyMap": { value: cells[59]["assertCopyMap"] },"makeCopyMap": { value: cells[59]["makeCopyMap"] },"getCopyMapEntries": { value: cells[59]["getCopyMapEntries"] },"coerceToElements": { value: cells[57]["coerceToElements"] },"coerceToBagEntries": { value: cells[58]["coerceToBagEntries"] },"bagCompare": { value: cells[63]["bagCompare"] },"setCompare": { value: cells[63]["setCompare"] },"compareKeys": { value: cells[63]["compareKeys"] },"keyLT": { value: cells[63]["keyLT"] },"keyLTE": { value: cells[63]["keyLTE"] },"keyEQ": { value: cells[63]["keyEQ"] },"keyGTE": { value: cells[63]["keyGTE"] },"keyGT": { value: cells[63]["keyGT"] },"elementsIsSuperset": { value: cells[64]["elementsIsSuperset"] },"elementsIsDisjoint": { value: cells[64]["elementsIsDisjoint"] },"elementsCompare": { value: cells[64]["elementsCompare"] },"elementsUnion": { value: cells[64]["elementsUnion"] },"elementsDisjointUnion": { value: cells[64]["elementsDisjointUnion"] },"elementsIntersection": { value: cells[64]["elementsIntersection"] },"elementsDisjointSubtract": { value: cells[64]["elementsDisjointSubtract"] },"setIsSuperset": { value: cells[64]["setIsSuperset"] },"setIsDisjoint": { value: cells[64]["setIsDisjoint"] },"setUnion": { value: cells[64]["setUnion"] },"setDisjointUnion": { value: cells[64]["setDisjointUnion"] },"setIntersection": { value: cells[64]["setIntersection"] },"setDisjointSubtract": { value: cells[64]["setDisjointSubtract"] },"bagIsSuperbag": { value: cells[65]["bagIsSuperbag"] },"bagUnion": { value: cells[65]["bagUnion"] },"bagIntersection": { value: cells[65]["bagIntersection"] },"bagDisjointSubtract": { value: cells[65]["bagDisjointSubtract"] },"getRankCover": { value: cells[70]["getRankCover"] },"isPattern": { value: cells[70]["isPattern"] },"assertPattern": { value: cells[70]["assertPattern"] },"isAwaitArgGuard": { value: cells[70]["isAwaitArgGuard"] },"assertAwaitArgGuard": { value: cells[70]["assertAwaitArgGuard"] },"isRawGuard": { value: cells[70]["isRawGuard"] },"assertRawGuard": { value: cells[70]["assertRawGuard"] },"assertMethodGuard": { value: cells[70]["assertMethodGuard"] },"assertInterfaceGuard": { value: cells[70]["assertInterfaceGuard"] },"kindOf": { value: cells[70]["kindOf"] },"containerHasSplit": { value: cells[70]["containerHasSplit"] },"getAwaitArgGuardPayload": { value: cells[71]["getAwaitArgGuardPayload"] },"getMethodGuardPayload": { value: cells[71]["getMethodGuardPayload"] },"getInterfaceGuardPayload": { value: cells[71]["getInterfaceGuardPayload"] },"getInterfaceMethodKeys": { value: cells[71]["getInterfaceMethodKeys"] },"getNamedMethodGuards": { value: cells[71]["getNamedMethodGuards"] },"listDifference": { value: cells[69]["listDifference"] },"objectMap": { value: cells[39]["objectMap"] } });
+  defineProperties(cells[82], {"matches": { value: cells[80]["matches"] },"mustMatch": { value: cells[80]["mustMatch"] },"M": { value: cells[80]["M"] } });
+  defineProperties(cells[83], getOwnPropertyDescriptors(cells[82]));
 
-  defineProperties(cells[77], {"makeExo": { value: cells[76]["makeExo"] },"defineExoClass": { value: cells[76]["defineExoClass"] },"defineExoClassKit": { value: cells[76]["defineExoClassKit"] } });
-  defineProperties(cells[79], getOwnPropertyDescriptors(cells[78]));
-  defineProperties(cells[79], getOwnPropertyDescriptors(cells[77]));
+  defineProperties(cells[83], {"isKey": { value: cells[69]["isKey"] },"assertKey": { value: cells[69]["assertKey"] },"assertScalarKey": { value: cells[69]["assertScalarKey"] },"isCopySet": { value: cells[69]["isCopySet"] },"assertCopySet": { value: cells[69]["assertCopySet"] },"makeCopySet": { value: cells[69]["makeCopySet"] },"getCopySetKeys": { value: cells[69]["getCopySetKeys"] },"isCopyBag": { value: cells[69]["isCopyBag"] },"assertCopyBag": { value: cells[69]["assertCopyBag"] },"makeCopyBag": { value: cells[69]["makeCopyBag"] },"makeCopyBagFromElements": { value: cells[69]["makeCopyBagFromElements"] },"getCopyBagEntries": { value: cells[69]["getCopyBagEntries"] },"isCopyMap": { value: cells[69]["isCopyMap"] },"assertCopyMap": { value: cells[69]["assertCopyMap"] },"makeCopyMap": { value: cells[69]["makeCopyMap"] },"getCopyMapEntries": { value: cells[69]["getCopyMapEntries"] },"coerceToElements": { value: cells[67]["coerceToElements"] },"coerceToBagEntries": { value: cells[68]["coerceToBagEntries"] },"bagCompare": { value: cells[73]["bagCompare"] },"setCompare": { value: cells[73]["setCompare"] },"compareKeys": { value: cells[73]["compareKeys"] },"keyLT": { value: cells[73]["keyLT"] },"keyLTE": { value: cells[73]["keyLTE"] },"keyEQ": { value: cells[73]["keyEQ"] },"keyGTE": { value: cells[73]["keyGTE"] },"keyGT": { value: cells[73]["keyGT"] },"elementsIsSuperset": { value: cells[74]["elementsIsSuperset"] },"elementsIsDisjoint": { value: cells[74]["elementsIsDisjoint"] },"elementsCompare": { value: cells[74]["elementsCompare"] },"elementsUnion": { value: cells[74]["elementsUnion"] },"elementsDisjointUnion": { value: cells[74]["elementsDisjointUnion"] },"elementsIntersection": { value: cells[74]["elementsIntersection"] },"elementsDisjointSubtract": { value: cells[74]["elementsDisjointSubtract"] },"setIsSuperset": { value: cells[74]["setIsSuperset"] },"setIsDisjoint": { value: cells[74]["setIsDisjoint"] },"setUnion": { value: cells[74]["setUnion"] },"setDisjointUnion": { value: cells[74]["setDisjointUnion"] },"setIntersection": { value: cells[74]["setIntersection"] },"setDisjointSubtract": { value: cells[74]["setDisjointSubtract"] },"bagIsSuperbag": { value: cells[75]["bagIsSuperbag"] },"bagUnion": { value: cells[75]["bagUnion"] },"bagIntersection": { value: cells[75]["bagIntersection"] },"bagDisjointSubtract": { value: cells[75]["bagDisjointSubtract"] },"getRankCover": { value: cells[80]["getRankCover"] },"isPattern": { value: cells[80]["isPattern"] },"assertPattern": { value: cells[80]["assertPattern"] },"isAwaitArgGuard": { value: cells[80]["isAwaitArgGuard"] },"assertAwaitArgGuard": { value: cells[80]["assertAwaitArgGuard"] },"isRawGuard": { value: cells[80]["isRawGuard"] },"assertRawGuard": { value: cells[80]["assertRawGuard"] },"assertMethodGuard": { value: cells[80]["assertMethodGuard"] },"assertInterfaceGuard": { value: cells[80]["assertInterfaceGuard"] },"kindOf": { value: cells[80]["kindOf"] },"containerHasSplit": { value: cells[80]["containerHasSplit"] },"getAwaitArgGuardPayload": { value: cells[81]["getAwaitArgGuardPayload"] },"getMethodGuardPayload": { value: cells[81]["getMethodGuardPayload"] },"getInterfaceGuardPayload": { value: cells[81]["getInterfaceGuardPayload"] },"getInterfaceMethodKeys": { value: cells[81]["getInterfaceMethodKeys"] },"getNamedMethodGuards": { value: cells[81]["getNamedMethodGuards"] },"listDifference": { value: cells[79]["listDifference"] },"objectMap": { value: cells[39]["objectMap"] } });
 
-  defineProperties(cells[79], {"initEmpty": { value: cells[76]["initEmpty"] },"GET_INTERFACE_GUARD": { value: cells[74]["GET_INTERFACE_GUARD"] } });
+  defineProperties(cells[87], {"makeExo": { value: cells[86]["makeExo"] },"defineExoClass": { value: cells[86]["defineExoClass"] },"defineExoClassKit": { value: cells[86]["defineExoClassKit"] } });
+  defineProperties(cells[89], getOwnPropertyDescriptors(cells[88]));
+  defineProperties(cells[89], getOwnPropertyDescriptors(cells[87]));
 
-  defineProperties(cells[87], {"encodeBase64": { value: cells[85]["encodeBase64"] } });
+  defineProperties(cells[89], {"initEmpty": { value: cells[86]["initEmpty"] },"GET_INTERFACE_GUARD": { value: cells[84]["GET_INTERFACE_GUARD"] } });
 
-  defineProperties(cells[89], {"decodeBase64": { value: cells[86]["decodeBase64"] } });
+  defineProperties(cells[97], {"encodeBase64": { value: cells[95]["encodeBase64"] } });
 
-  defineProperties(cells[91], {"encodeBase64": { value: cells[85]["encodeBase64"] },"decodeBase64": { value: cells[86]["decodeBase64"] },"btoa": { value: cells[88]["btoa"] },"atob": { value: cells[90]["atob"] } });
+  defineProperties(cells[99], {"decodeBase64": { value: cells[96]["decodeBase64"] } });
 
-  defineProperties(cells[96], {"AsyncIteratorInterface": { value: cells[80]["AsyncIteratorInterface"] },"ReadableBlobInterface": { value: cells[80]["ReadableBlobInterface"] },"SnapshotBlobInterface": { value: cells[80]["SnapshotBlobInterface"] },"ReadableTreeInterface": { value: cells[80]["ReadableTreeInterface"] },"SnapshotTreeInterface": { value: cells[80]["SnapshotTreeInterface"] },"ContentStoreInterface": { value: cells[80]["ContentStoreInterface"] },"SnapshotStoreInterface": { value: cells[80]["SnapshotStoreInterface"] },"TreeWriterInterface": { value: cells[80]["TreeWriterInterface"] },"FileInterface": { value: cells[80]["FileInterface"] },"DirectoryInterface": { value: cells[80]["DirectoryInterface"] },"snapshotBlobMethods": { value: cells[81]["snapshotBlobMethods"] },"snapshotTreeMethods": { value: cells[82]["snapshotTreeMethods"] },"makeSnapshotStore": { value: cells[83]["makeSnapshotStore"] },"checkinTree": { value: cells[93]["checkinTree"] },"checkoutTree": { value: cells[94]["checkoutTree"] },"makeRefReader": { value: cells[92]["makeRefReader"] },"makeRefIterator": { value: cells[92]["makeRefIterator"] },"makeReaderRef": { value: cells[95]["makeReaderRef"] },"makeIteratorRef": { value: cells[95]["makeIteratorRef"] },"asyncIterate": { value: cells[95]["asyncIterate"] } });
+  defineProperties(cells[101], {"encodeBase64": { value: cells[95]["encodeBase64"] },"decodeBase64": { value: cells[96]["decodeBase64"] },"btoa": { value: cells[98]["btoa"] },"atob": { value: cells[100]["atob"] } });
 
-  defineProperties(cells[130], {"makeNetstringReader": { value: cells[128]["makeNetstringReader"] },"netstringReader": { value: cells[128]["netstringReader"] },"makeNetstringWriter": { value: cells[129]["makeNetstringWriter"] },"netstringWriter": { value: cells[129]["netstringWriter"] } });
+  defineProperties(cells[106], {"AsyncIteratorInterface": { value: cells[90]["AsyncIteratorInterface"] },"ReadableBlobInterface": { value: cells[90]["ReadableBlobInterface"] },"SnapshotBlobInterface": { value: cells[90]["SnapshotBlobInterface"] },"ReadableTreeInterface": { value: cells[90]["ReadableTreeInterface"] },"SnapshotTreeInterface": { value: cells[90]["SnapshotTreeInterface"] },"ContentStoreInterface": { value: cells[90]["ContentStoreInterface"] },"SnapshotStoreInterface": { value: cells[90]["SnapshotStoreInterface"] },"TreeWriterInterface": { value: cells[90]["TreeWriterInterface"] },"FileInterface": { value: cells[90]["FileInterface"] },"DirectoryInterface": { value: cells[90]["DirectoryInterface"] },"snapshotBlobMethods": { value: cells[91]["snapshotBlobMethods"] },"snapshotTreeMethods": { value: cells[92]["snapshotTreeMethods"] },"makeSnapshotStore": { value: cells[93]["makeSnapshotStore"] },"checkinTree": { value: cells[103]["checkinTree"] },"checkoutTree": { value: cells[104]["checkoutTree"] },"makeRefReader": { value: cells[102]["makeRefReader"] },"makeRefIterator": { value: cells[102]["makeRefIterator"] },"makeReaderRef": { value: cells[105]["makeReaderRef"] },"makeIteratorRef": { value: cells[105]["makeIteratorRef"] },"asyncIterate": { value: cells[105]["asyncIterate"] } });
+
+  defineProperties(cells[140], {"makeNetstringReader": { value: cells[138]["makeNetstringReader"] },"netstringReader": { value: cells[138]["netstringReader"] },"makeNetstringWriter": { value: cells[139]["makeNetstringWriter"] },"netstringWriter": { value: cells[139]["netstringWriter"] } });
 
   const namespaces = cells.map(cells => freeze(create(null, {
     ...cells,
@@ -1886,16 +1978,22 @@ function observeImports(map, importName, importIndex) {
       const map = new Map(entries);
       observeImports(map, "@endo/harden", 3);
       observeImports(map, "@endo/errors", 9);
-      observeImports(map, "@endo/marshal", 47);
     },
     liveVar: {
     },
     onceVar: {
-      assertNoDuplicates: cells[57].assertNoDuplicates.set,
-      confirmElements: cells[57].confirmElements.set,
-      assertElements: cells[57].assertElements.set,
-      coerceToElements: cells[57].coerceToElements.set,
-      makeSetOfElements: cells[57].makeSetOfElements.set,
+      makeWriter: cells[57].makeWriter.set,
+      writerToBytes: cells[57].writerToBytes.set,
+      writeUint: cells[57].writeUint.set,
+      writeByteString: cells[57].writeByteString.set,
+      writeArrayHeader: cells[57].writeArrayHeader.set,
+      writeNull: cells[57].writeNull.set,
+      makeReader: cells[57].makeReader.set,
+      readUint: cells[57].readUint.set,
+      readByteString: cells[57].readByteString.set,
+      readArrayHeader: cells[57].readArrayHeader.set,
+      readNullOrPeek: cells[57].readNullOrPeek.set,
+      assertConsumed: cells[57].assertConsumed.set,
     },
     importMeta: {},
   });
@@ -1904,16 +2002,19 @@ function observeImports(map, importName, importIndex) {
       const map = new Map(entries);
       observeImports(map, "@endo/harden", 3);
       observeImports(map, "@endo/errors", 9);
-      observeImports(map, "@endo/marshal", 47);
+      observeImports(map, "./cbor.js", 57);
     },
     liveVar: {
     },
     onceVar: {
-      assertNoDuplicateKeys: cells[58].assertNoDuplicateKeys.set,
-      confirmBagEntries: cells[58].confirmBagEntries.set,
-      assertBagEntries: cells[58].assertBagEntries.set,
-      coerceToBagEntries: cells[58].coerceToBagEntries.set,
-      makeBagOfEntries: cells[58].makeBagOfEntries.set,
+      Direction: cells[58].Direction.set,
+      Kind: cells[58].Kind.set,
+      flipDirection: cells[58].flipDirection.set,
+      writeDescriptor: cells[58].writeDescriptor.set,
+      encodeDescriptor: cells[58].encodeDescriptor.set,
+      readDescriptor: cells[58].readDescriptor.set,
+      decodeDescriptor: cells[58].decodeDescriptor.set,
+      descriptorKey: cells[58].descriptorKey.set,
     },
     importMeta: {},
   });
@@ -1922,44 +2023,25 @@ function observeImports(map, importName, importIndex) {
       const map = new Map(entries);
       observeImports(map, "@endo/harden", 3);
       observeImports(map, "@endo/errors", 9);
-      observeImports(map, "@endo/pass-style", 37);
-      observeImports(map, "@endo/marshal", 47);
-      observeImports(map, "./copySet.js", 57);
-      observeImports(map, "./copyBag.js", 58);
+      observeImports(map, "./cbor.js", 57);
+      observeImports(map, "./descriptor.js", 58);
     },
     liveVar: {
     },
     onceVar: {
-      confirmScalarKey: cells[59].confirmScalarKey.set,
-      isScalarKey: cells[59].isScalarKey.set,
-      assertScalarKey: cells[59].assertScalarKey.set,
-      confirmKey: cells[59].confirmKey.set,
-      isKey: cells[59].isKey.set,
-      assertKey: cells[59].assertKey.set,
-      confirmCopySet: cells[59].confirmCopySet.set,
-      isCopySet: cells[59].isCopySet.set,
-      assertCopySet: cells[59].assertCopySet.set,
-      getCopySetKeys: cells[59].getCopySetKeys.set,
-      everyCopySetKey: cells[59].everyCopySetKey.set,
-      makeCopySet: cells[59].makeCopySet.set,
-      confirmCopyBag: cells[59].confirmCopyBag.set,
-      isCopyBag: cells[59].isCopyBag.set,
-      assertCopyBag: cells[59].assertCopyBag.set,
-      getCopyBagEntries: cells[59].getCopyBagEntries.set,
-      everyCopyBagEntry: cells[59].everyCopyBagEntry.set,
-      makeCopyBag: cells[59].makeCopyBag.set,
-      makeCopyBagFromElements: cells[59].makeCopyBagFromElements.set,
-      confirmCopyMap: cells[59].confirmCopyMap.set,
-      isCopyMap: cells[59].isCopyMap.set,
-      assertCopyMap: cells[59].assertCopyMap.set,
-      getCopyMapKeys: cells[59].getCopyMapKeys.set,
-      getCopyMapValues: cells[59].getCopyMapValues.set,
-      getCopyMapEntryArray: cells[59].getCopyMapEntryArray.set,
-      getCopyMapEntries: cells[59].getCopyMapEntries.set,
-      everyCopyMapKey: cells[59].everyCopyMapKey.set,
-      everyCopyMapValue: cells[59].everyCopyMapValue.set,
-      copyMapKeySet: cells[59].copyMapKeySet.set,
-      makeCopyMap: cells[59].makeCopyMap.set,
+      VERB_DELIVER: cells[59].VERB_DELIVER.set,
+      VERB_RESOLVE: cells[59].VERB_RESOLVE.set,
+      VERB_DROP: cells[59].VERB_DROP.set,
+      VERB_ABORT: cells[59].VERB_ABORT.set,
+      isSlotVerb: cells[59].isSlotVerb.set,
+      encodeDeliverPayload: cells[59].encodeDeliverPayload.set,
+      decodeDeliverPayload: cells[59].decodeDeliverPayload.set,
+      encodeResolvePayload: cells[59].encodeResolvePayload.set,
+      decodeResolvePayload: cells[59].decodeResolvePayload.set,
+      encodeDropPayload: cells[59].encodeDropPayload.set,
+      decodeDropPayload: cells[59].decodeDropPayload.set,
+      encodeAbortPayload: cells[59].encodeAbortPayload.set,
+      decodeAbortPayload: cells[59].decodeAbortPayload.set,
     },
     importMeta: {},
   });
@@ -1971,7 +2053,8 @@ function observeImports(map, importName, importIndex) {
     liveVar: {
     },
     onceVar: {
-      makeIterator: cells[60].makeIterator.set,
+      sessionIdFromLabel: cells[60].sessionIdFromLabel.set,
+      sessionIdHex: cells[60].sessionIdHex.set,
     },
     importMeta: {},
   });
@@ -1979,12 +2062,14 @@ function observeImports(map, importName, importIndex) {
     imports(entries) {
       const map = new Map(entries);
       observeImports(map, "@endo/harden", 3);
-      observeImports(map, "./make-iterator.js", 60);
+      observeImports(map, "@endo/errors", 9);
+      observeImports(map, "./descriptor.js", 58);
+      observeImports(map, "./session.js", 60);
     },
     liveVar: {
     },
     onceVar: {
-      makeArrayIterator: cells[61].makeArrayIterator.set,
+      makeCList: cells[61].makeCList.set,
     },
     importMeta: {},
   });
@@ -1992,16 +2077,16 @@ function observeImports(map, importName, importIndex) {
     imports(entries) {
       const map = new Map(entries);
       observeImports(map, "@endo/harden", 3);
-      observeImports(map, "@endo/marshal", 47);
-      observeImports(map, "@endo/common/make-iterator.js", 60);
-      observeImports(map, "@endo/common/make-array-iterator.js", 61);
       observeImports(map, "@endo/errors", 9);
+      observeImports(map, "@endo/marshal", 47);
+      observeImports(map, "@endo/promise-kit", 22);
+      observeImports(map, "./descriptor.js", 58);
+      observeImports(map, "./payload.js", 59);
     },
     liveVar: {
     },
     onceVar: {
-      generateCollectionPairEntries: cells[62].generateCollectionPairEntries.set,
-      makeCompareCollection: cells[62].makeCompareCollection.set,
+      makeSlotCodec: cells[62].makeSlotCodec.set,
     },
     importMeta: {},
   });
@@ -2009,22 +2094,16 @@ function observeImports(map, importName, importIndex) {
     imports(entries) {
       const map = new Map(entries);
       observeImports(map, "@endo/harden", 3);
-      observeImports(map, "@endo/marshal", 47);
       observeImports(map, "@endo/errors", 9);
-      observeImports(map, "./checkKey.js", 59);
-      observeImports(map, "./keycollection-operators.js", 62);
+      observeImports(map, "@endo/eventual-send", 34);
+      observeImports(map, "@endo/promise-kit", 22);
+      observeImports(map, "./descriptor.js", 58);
+      observeImports(map, "./payload.js", 59);
     },
     liveVar: {
     },
     onceVar: {
-      setCompare: cells[63].setCompare.set,
-      bagCompare: cells[63].bagCompare.set,
-      compareKeys: cells[63].compareKeys.set,
-      keyLT: cells[63].keyLT.set,
-      keyLTE: cells[63].keyLTE.set,
-      keyEQ: cells[63].keyEQ.set,
-      keyGTE: cells[63].keyGTE.set,
-      keyGT: cells[63].keyGT.set,
+      makeSlotClient: cells[63].makeSlotClient.set,
     },
     importMeta: {},
   });
@@ -2032,26 +2111,14 @@ function observeImports(map, importName, importIndex) {
     imports(entries) {
       const map = new Map(entries);
       observeImports(map, "@endo/harden", 3);
-      observeImports(map, "@endo/marshal", 47);
-      observeImports(map, "@endo/errors", 9);
-      observeImports(map, "./copySet.js", 57);
+      observeImports(map, "./descriptor.js", 58);
     },
     liveVar: {
     },
     onceVar: {
-      elementsIsSuperset: cells[64].elementsIsSuperset.set,
-      elementsIsDisjoint: cells[64].elementsIsDisjoint.set,
-      elementsCompare: cells[64].elementsCompare.set,
-      elementsUnion: cells[64].elementsUnion.set,
-      elementsDisjointUnion: cells[64].elementsDisjointUnion.set,
-      elementsIntersection: cells[64].elementsIntersection.set,
-      elementsDisjointSubtract: cells[64].elementsDisjointSubtract.set,
-      setIsSuperset: cells[64].setIsSuperset.set,
-      setIsDisjoint: cells[64].setIsDisjoint.set,
-      setUnion: cells[64].setUnion.set,
-      setDisjointUnion: cells[64].setDisjointUnion.set,
-      setIntersection: cells[64].setIntersection.set,
-      setDisjointSubtract: cells[64].setDisjointSubtract.set,
+      LOCAL_ROOT: cells[64].LOCAL_ROOT.set,
+      REMOTE_ROOT: cells[64].REMOTE_ROOT.set,
+      bootstrap: cells[64].bootstrap.set,
     },
     importMeta: {},
   });
@@ -2059,45 +2126,52 @@ function observeImports(map, importName, importIndex) {
     imports(entries) {
       const map = new Map(entries);
       observeImports(map, "@endo/harden", 3);
-      observeImports(map, "@endo/marshal", 47);
-      observeImports(map, "@endo/errors", 9);
-      observeImports(map, "./copyBag.js", 58);
+      observeImports(map, "@endo/promise-kit", 22);
+      observeImports(map, "./clist.js", 61);
+      observeImports(map, "./codec.js", 62);
+      observeImports(map, "./client.js", 63);
+      observeImports(map, "./bootstrap.js", 64);
     },
     liveVar: {
     },
     onceVar: {
-      bagIsSuperbag: cells[65].bagIsSuperbag.set,
-      bagIsDisjoint: cells[65].bagIsDisjoint.set,
-      bagUnion: cells[65].bagUnion.set,
-      bagIntersection: cells[65].bagIntersection.set,
-      bagDisjointSubtract: cells[65].bagDisjointSubtract.set,
+      makeMessageSlots: cells[65].makeMessageSlots.set,
     },
     importMeta: {},
   });
   functors[66]({
     imports(entries) {
       const map = new Map(entries);
-      observeImports(map, "@endo/errors", 9);
+      observeImports(map, "./src/descriptor.js", 58);
+      observeImports(map, "./src/payload.js", 59);
+      observeImports(map, "./src/session.js", 60);
+      observeImports(map, "./src/clist.js", 61);
+      observeImports(map, "./src/codec.js", 62);
+      observeImports(map, "./src/client.js", 63);
+      observeImports(map, "./src/bootstrap.js", 64);
+      observeImports(map, "./src/message.js", 65);
     },
     liveVar: {
     },
     onceVar: {
-      throwLabeled: cells[66].throwLabeled.set,
     },
     importMeta: {},
   });
   functors[67]({
     imports(entries) {
       const map = new Map(entries);
+      observeImports(map, "@endo/harden", 3);
       observeImports(map, "@endo/errors", 9);
-      observeImports(map, "@endo/eventual-send", 34);
-      observeImports(map, "@endo/promise-kit", 22);
-      observeImports(map, "./throw-labeled.js", 66);
+      observeImports(map, "@endo/marshal", 47);
     },
     liveVar: {
     },
     onceVar: {
-      applyLabelingError: cells[67].applyLabelingError.set,
+      assertNoDuplicates: cells[67].assertNoDuplicates.set,
+      confirmElements: cells[67].confirmElements.set,
+      assertElements: cells[67].assertElements.set,
+      coerceToElements: cells[67].coerceToElements.set,
+      makeSetOfElements: cells[67].makeSetOfElements.set,
     },
     importMeta: {},
   });
@@ -2106,11 +2180,16 @@ function observeImports(map, importName, importIndex) {
       const map = new Map(entries);
       observeImports(map, "@endo/harden", 3);
       observeImports(map, "@endo/errors", 9);
+      observeImports(map, "@endo/marshal", 47);
     },
     liveVar: {
     },
     onceVar: {
-      fromUniqueEntries: cells[68].fromUniqueEntries.set,
+      assertNoDuplicateKeys: cells[68].assertNoDuplicateKeys.set,
+      confirmBagEntries: cells[68].confirmBagEntries.set,
+      assertBagEntries: cells[68].assertBagEntries.set,
+      coerceToBagEntries: cells[68].coerceToBagEntries.set,
+      makeBagOfEntries: cells[68].makeBagOfEntries.set,
     },
     importMeta: {},
   });
@@ -2118,11 +2197,45 @@ function observeImports(map, importName, importIndex) {
     imports(entries) {
       const map = new Map(entries);
       observeImports(map, "@endo/harden", 3);
+      observeImports(map, "@endo/errors", 9);
+      observeImports(map, "@endo/pass-style", 37);
+      observeImports(map, "@endo/marshal", 47);
+      observeImports(map, "./copySet.js", 67);
+      observeImports(map, "./copyBag.js", 68);
     },
     liveVar: {
     },
     onceVar: {
-      listDifference: cells[69].listDifference.set,
+      confirmScalarKey: cells[69].confirmScalarKey.set,
+      isScalarKey: cells[69].isScalarKey.set,
+      assertScalarKey: cells[69].assertScalarKey.set,
+      confirmKey: cells[69].confirmKey.set,
+      isKey: cells[69].isKey.set,
+      assertKey: cells[69].assertKey.set,
+      confirmCopySet: cells[69].confirmCopySet.set,
+      isCopySet: cells[69].isCopySet.set,
+      assertCopySet: cells[69].assertCopySet.set,
+      getCopySetKeys: cells[69].getCopySetKeys.set,
+      everyCopySetKey: cells[69].everyCopySetKey.set,
+      makeCopySet: cells[69].makeCopySet.set,
+      confirmCopyBag: cells[69].confirmCopyBag.set,
+      isCopyBag: cells[69].isCopyBag.set,
+      assertCopyBag: cells[69].assertCopyBag.set,
+      getCopyBagEntries: cells[69].getCopyBagEntries.set,
+      everyCopyBagEntry: cells[69].everyCopyBagEntry.set,
+      makeCopyBag: cells[69].makeCopyBag.set,
+      makeCopyBagFromElements: cells[69].makeCopyBagFromElements.set,
+      confirmCopyMap: cells[69].confirmCopyMap.set,
+      isCopyMap: cells[69].isCopyMap.set,
+      assertCopyMap: cells[69].assertCopyMap.set,
+      getCopyMapKeys: cells[69].getCopyMapKeys.set,
+      getCopyMapValues: cells[69].getCopyMapValues.set,
+      getCopyMapEntryArray: cells[69].getCopyMapEntryArray.set,
+      getCopyMapEntries: cells[69].getCopyMapEntries.set,
+      everyCopyMapKey: cells[69].everyCopyMapKey.set,
+      everyCopyMapValue: cells[69].everyCopyMapValue.set,
+      copyMapKeySet: cells[69].copyMapKeySet.set,
+      makeCopyMap: cells[69].makeCopyMap.set,
     },
     importMeta: {},
   });
@@ -2130,45 +2243,11 @@ function observeImports(map, importName, importIndex) {
     imports(entries) {
       const map = new Map(entries);
       observeImports(map, "@endo/harden", 3);
-      observeImports(map, "@endo/errors", 9);
-      observeImports(map, "@endo/common/apply-labeling-error.js", 67);
-      observeImports(map, "@endo/common/from-unique-entries.js", 68);
-      observeImports(map, "@endo/common/list-difference.js", 69);
-      observeImports(map, "@endo/pass-style", 37);
-      observeImports(map, "@endo/marshal", 47);
-      observeImports(map, "../keys/compareKeys.js", 63);
-      observeImports(map, "../keys/checkKey.js", 59);
-      observeImports(map, "../keys/keycollection-operators.js", 62);
     },
     liveVar: {
     },
     onceVar: {
-      defaultLimits: cells[70].defaultLimits.set,
-      confirmMatches: cells[70].confirmMatches.set,
-      confirmLabeledMatches: cells[70].confirmLabeledMatches.set,
-      matches: cells[70].matches.set,
-      mustMatch: cells[70].mustMatch.set,
-      assertPattern: cells[70].assertPattern.set,
-      isPattern: cells[70].isPattern.set,
-      getRankCover: cells[70].getRankCover.set,
-      M: cells[70].M.set,
-      kindOf: cells[70].kindOf.set,
-      containerHasSplit: cells[70].containerHasSplit.set,
-      AwaitArgGuardShape: cells[70].AwaitArgGuardShape.set,
-      isAwaitArgGuard: cells[70].isAwaitArgGuard.set,
-      assertAwaitArgGuard: cells[70].assertAwaitArgGuard.set,
-      RawGuardShape: cells[70].RawGuardShape.set,
-      isRawGuard: cells[70].isRawGuard.set,
-      assertRawGuard: cells[70].assertRawGuard.set,
-      SyncValueGuardShape: cells[70].SyncValueGuardShape.set,
-      SyncValueGuardListShape: cells[70].SyncValueGuardListShape.set,
-      ArgGuardListShape: cells[70].ArgGuardListShape.set,
-      MethodGuardPayloadShape: cells[70].MethodGuardPayloadShape.set,
-      MethodGuardShape: cells[70].MethodGuardShape.set,
-      assertMethodGuard: cells[70].assertMethodGuard.set,
-      InterfaceGuardPayloadShape: cells[70].InterfaceGuardPayloadShape.set,
-      InterfaceGuardShape: cells[70].InterfaceGuardShape.set,
-      assertInterfaceGuard: cells[70].assertInterfaceGuard.set,
+      makeIterator: cells[70].makeIterator.set,
     },
     importMeta: {},
   });
@@ -2176,61 +2255,79 @@ function observeImports(map, importName, importIndex) {
     imports(entries) {
       const map = new Map(entries);
       observeImports(map, "@endo/harden", 3);
-      observeImports(map, "@endo/common/object-map.js", 39);
-      observeImports(map, "./patternMatchers.js", 70);
-      observeImports(map, "../keys/checkKey.js", 59);
+      observeImports(map, "./make-iterator.js", 70);
     },
     liveVar: {
     },
     onceVar: {
-      getAwaitArgGuardPayload: cells[71].getAwaitArgGuardPayload.set,
-      getMethodGuardPayload: cells[71].getMethodGuardPayload.set,
-      getInterfaceGuardPayload: cells[71].getInterfaceGuardPayload.set,
-      getInterfaceMethodKeys: cells[71].getInterfaceMethodKeys.set,
-      getNamedMethodGuards: cells[71].getNamedMethodGuards.set,
+      makeArrayIterator: cells[71].makeArrayIterator.set,
     },
     importMeta: {},
   });
   functors[72]({
     imports(entries) {
       const map = new Map(entries);
-      observeImports(map, "./src/patterns/patternMatchers.js", 70);
+      observeImports(map, "@endo/harden", 3);
+      observeImports(map, "@endo/marshal", 47);
+      observeImports(map, "@endo/common/make-iterator.js", 70);
+      observeImports(map, "@endo/common/make-array-iterator.js", 71);
+      observeImports(map, "@endo/errors", 9);
     },
     liveVar: {
     },
     onceVar: {
+      generateCollectionPairEntries: cells[72].generateCollectionPairEntries.set,
+      makeCompareCollection: cells[72].makeCompareCollection.set,
     },
     importMeta: {},
   });
   functors[73]({
     imports(entries) {
       const map = new Map(entries);
-      observeImports(map, "./src/keys/checkKey.js", 59);
-      observeImports(map, "./src/keys/copySet.js", 57);
-      observeImports(map, "./src/keys/copyBag.js", 58);
-      observeImports(map, "./src/keys/compareKeys.js", 63);
-      observeImports(map, "./src/keys/merge-set-operators.js", 64);
-      observeImports(map, "./src/keys/merge-bag-operators.js", 65);
-      observeImports(map, "./src/patterns/patternMatchers.js", 70);
-      observeImports(map, "./src/patterns/getGuardPayloads.js", 71);
-      observeImports(map, "./types-index.js", 72);
-      observeImports(map, "@endo/common/list-difference.js", 69);
-      observeImports(map, "@endo/common/object-map.js", 39);
+      observeImports(map, "@endo/harden", 3);
+      observeImports(map, "@endo/marshal", 47);
+      observeImports(map, "@endo/errors", 9);
+      observeImports(map, "./checkKey.js", 69);
+      observeImports(map, "./keycollection-operators.js", 72);
     },
     liveVar: {
     },
     onceVar: {
+      setCompare: cells[73].setCompare.set,
+      bagCompare: cells[73].bagCompare.set,
+      compareKeys: cells[73].compareKeys.set,
+      keyLT: cells[73].keyLT.set,
+      keyLTE: cells[73].keyLTE.set,
+      keyEQ: cells[73].keyEQ.set,
+      keyGTE: cells[73].keyGTE.set,
+      keyGT: cells[73].keyGT.set,
     },
     importMeta: {},
   });
   functors[74]({
     imports(entries) {
       const map = new Map(entries);
+      observeImports(map, "@endo/harden", 3);
+      observeImports(map, "@endo/marshal", 47);
+      observeImports(map, "@endo/errors", 9);
+      observeImports(map, "./copySet.js", 67);
     },
     liveVar: {
     },
     onceVar: {
-      GET_INTERFACE_GUARD: cells[74].GET_INTERFACE_GUARD.set,
+      elementsIsSuperset: cells[74].elementsIsSuperset.set,
+      elementsIsDisjoint: cells[74].elementsIsDisjoint.set,
+      elementsCompare: cells[74].elementsCompare.set,
+      elementsUnion: cells[74].elementsUnion.set,
+      elementsDisjointUnion: cells[74].elementsDisjointUnion.set,
+      elementsIntersection: cells[74].elementsIntersection.set,
+      elementsDisjointSubtract: cells[74].elementsDisjointSubtract.set,
+      setIsSuperset: cells[74].setIsSuperset.set,
+      setIsDisjoint: cells[74].setIsDisjoint.set,
+      setUnion: cells[74].setUnion.set,
+      setDisjointUnion: cells[74].setDisjointUnion.set,
+      setIntersection: cells[74].setIntersection.set,
+      setDisjointSubtract: cells[74].setDisjointSubtract.set,
     },
     importMeta: {},
   });
@@ -2238,94 +2335,116 @@ function observeImports(map, importName, importIndex) {
     imports(entries) {
       const map = new Map(entries);
       observeImports(map, "@endo/harden", 3);
-      observeImports(map, "@endo/eventual-send", 34);
-      observeImports(map, "@endo/pass-style", 37);
-      observeImports(map, "@endo/patterns", 73);
-      observeImports(map, "@endo/common/list-difference.js", 69);
-      observeImports(map, "@endo/common/object-map.js", 39);
+      observeImports(map, "@endo/marshal", 47);
       observeImports(map, "@endo/errors", 9);
-      observeImports(map, "./get-interface.js", 74);
+      observeImports(map, "./copyBag.js", 68);
     },
     liveVar: {
     },
     onceVar: {
-      defendPrototype: cells[75].defendPrototype.set,
-      defendPrototypeKit: cells[75].defendPrototypeKit.set,
+      bagIsSuperbag: cells[75].bagIsSuperbag.set,
+      bagIsDisjoint: cells[75].bagIsDisjoint.set,
+      bagUnion: cells[75].bagUnion.set,
+      bagIntersection: cells[75].bagIntersection.set,
+      bagDisjointSubtract: cells[75].bagDisjointSubtract.set,
     },
     importMeta: {},
   });
   functors[76]({
     imports(entries) {
       const map = new Map(entries);
-      observeImports(map, "@endo/harden", 3);
-      observeImports(map, "@endo/common/object-map.js", 39);
-      observeImports(map, "@endo/env-options", 5);
       observeImports(map, "@endo/errors", 9);
-      observeImports(map, "./exo-tools.js", 75);
     },
     liveVar: {
     },
     onceVar: {
-      initEmpty: cells[76].initEmpty.set,
-      defineExoClass: cells[76].defineExoClass.set,
-      defineExoClassKit: cells[76].defineExoClassKit.set,
-      makeExo: cells[76].makeExo.set,
+      throwLabeled: cells[76].throwLabeled.set,
     },
     importMeta: {},
   });
   functors[77]({
     imports(entries) {
       const map = new Map(entries);
-      observeImports(map, "./src/exo-makers.js", 76);
+      observeImports(map, "@endo/errors", 9);
+      observeImports(map, "@endo/eventual-send", 34);
+      observeImports(map, "@endo/promise-kit", 22);
+      observeImports(map, "./throw-labeled.js", 76);
     },
     liveVar: {
     },
     onceVar: {
+      applyLabelingError: cells[77].applyLabelingError.set,
     },
     importMeta: {},
   });
   functors[78]({
     imports(entries) {
       const map = new Map(entries);
+      observeImports(map, "@endo/harden", 3);
+      observeImports(map, "@endo/errors", 9);
     },
     liveVar: {
     },
     onceVar: {
+      fromUniqueEntries: cells[78].fromUniqueEntries.set,
     },
     importMeta: {},
   });
   functors[79]({
     imports(entries) {
       const map = new Map(entries);
-      observeImports(map, "./src/exo-makers.js", 76);
-      observeImports(map, "./types-index.js", 77);
-      observeImports(map, "./src/types.js", 78);
-      observeImports(map, "./src/get-interface.js", 74);
+      observeImports(map, "@endo/harden", 3);
     },
     liveVar: {
     },
     onceVar: {
+      listDifference: cells[79].listDifference.set,
     },
     importMeta: {},
   });
   functors[80]({
     imports(entries) {
       const map = new Map(entries);
-      observeImports(map, "@endo/patterns", 73);
+      observeImports(map, "@endo/harden", 3);
+      observeImports(map, "@endo/errors", 9);
+      observeImports(map, "@endo/common/apply-labeling-error.js", 77);
+      observeImports(map, "@endo/common/from-unique-entries.js", 78);
+      observeImports(map, "@endo/common/list-difference.js", 79);
+      observeImports(map, "@endo/pass-style", 37);
+      observeImports(map, "@endo/marshal", 47);
+      observeImports(map, "../keys/compareKeys.js", 73);
+      observeImports(map, "../keys/checkKey.js", 69);
+      observeImports(map, "../keys/keycollection-operators.js", 72);
     },
     liveVar: {
     },
     onceVar: {
-      AsyncIteratorInterface: cells[80].AsyncIteratorInterface.set,
-      ReadableBlobInterface: cells[80].ReadableBlobInterface.set,
-      SnapshotBlobInterface: cells[80].SnapshotBlobInterface.set,
-      ReadableTreeInterface: cells[80].ReadableTreeInterface.set,
-      SnapshotTreeInterface: cells[80].SnapshotTreeInterface.set,
-      ContentStoreInterface: cells[80].ContentStoreInterface.set,
-      SnapshotStoreInterface: cells[80].SnapshotStoreInterface.set,
-      TreeWriterInterface: cells[80].TreeWriterInterface.set,
-      FileInterface: cells[80].FileInterface.set,
-      DirectoryInterface: cells[80].DirectoryInterface.set,
+      defaultLimits: cells[80].defaultLimits.set,
+      confirmMatches: cells[80].confirmMatches.set,
+      confirmLabeledMatches: cells[80].confirmLabeledMatches.set,
+      matches: cells[80].matches.set,
+      mustMatch: cells[80].mustMatch.set,
+      assertPattern: cells[80].assertPattern.set,
+      isPattern: cells[80].isPattern.set,
+      getRankCover: cells[80].getRankCover.set,
+      M: cells[80].M.set,
+      kindOf: cells[80].kindOf.set,
+      containerHasSplit: cells[80].containerHasSplit.set,
+      AwaitArgGuardShape: cells[80].AwaitArgGuardShape.set,
+      isAwaitArgGuard: cells[80].isAwaitArgGuard.set,
+      assertAwaitArgGuard: cells[80].assertAwaitArgGuard.set,
+      RawGuardShape: cells[80].RawGuardShape.set,
+      isRawGuard: cells[80].isRawGuard.set,
+      assertRawGuard: cells[80].assertRawGuard.set,
+      SyncValueGuardShape: cells[80].SyncValueGuardShape.set,
+      SyncValueGuardListShape: cells[80].SyncValueGuardListShape.set,
+      ArgGuardListShape: cells[80].ArgGuardListShape.set,
+      MethodGuardPayloadShape: cells[80].MethodGuardPayloadShape.set,
+      MethodGuardShape: cells[80].MethodGuardShape.set,
+      assertMethodGuard: cells[80].assertMethodGuard.set,
+      InterfaceGuardPayloadShape: cells[80].InterfaceGuardPayloadShape.set,
+      InterfaceGuardShape: cells[80].InterfaceGuardShape.set,
+      assertInterfaceGuard: cells[80].assertInterfaceGuard.set,
     },
     importMeta: {},
   });
@@ -2333,40 +2452,50 @@ function observeImports(map, importName, importIndex) {
     imports(entries) {
       const map = new Map(entries);
       observeImports(map, "@endo/harden", 3);
+      observeImports(map, "@endo/common/object-map.js", 39);
+      observeImports(map, "./patternMatchers.js", 80);
+      observeImports(map, "../keys/checkKey.js", 69);
     },
     liveVar: {
     },
     onceVar: {
-      snapshotBlobMethods: cells[81].snapshotBlobMethods.set,
+      getAwaitArgGuardPayload: cells[81].getAwaitArgGuardPayload.set,
+      getMethodGuardPayload: cells[81].getMethodGuardPayload.set,
+      getInterfaceGuardPayload: cells[81].getInterfaceGuardPayload.set,
+      getInterfaceMethodKeys: cells[81].getInterfaceMethodKeys.set,
+      getNamedMethodGuards: cells[81].getNamedMethodGuards.set,
     },
     importMeta: {},
   });
   functors[82]({
     imports(entries) {
       const map = new Map(entries);
-      observeImports(map, "@endo/harden", 3);
-      observeImports(map, "@endo/far", 55);
+      observeImports(map, "./src/patterns/patternMatchers.js", 80);
     },
     liveVar: {
     },
     onceVar: {
-      snapshotTreeMethods: cells[82].snapshotTreeMethods.set,
     },
     importMeta: {},
   });
   functors[83]({
     imports(entries) {
       const map = new Map(entries);
-      observeImports(map, "@endo/harden", 3);
-      observeImports(map, "@endo/exo", 79);
-      observeImports(map, "./interfaces.js", 80);
-      observeImports(map, "./snapshot-blob.js", 81);
-      observeImports(map, "./snapshot-tree.js", 82);
+      observeImports(map, "./src/keys/checkKey.js", 69);
+      observeImports(map, "./src/keys/copySet.js", 67);
+      observeImports(map, "./src/keys/copyBag.js", 68);
+      observeImports(map, "./src/keys/compareKeys.js", 73);
+      observeImports(map, "./src/keys/merge-set-operators.js", 74);
+      observeImports(map, "./src/keys/merge-bag-operators.js", 75);
+      observeImports(map, "./src/patterns/patternMatchers.js", 80);
+      observeImports(map, "./src/patterns/getGuardPayloads.js", 81);
+      observeImports(map, "./types-index.js", 82);
+      observeImports(map, "@endo/common/list-difference.js", 79);
+      observeImports(map, "@endo/common/object-map.js", 39);
     },
     liveVar: {
     },
     onceVar: {
-      makeSnapshotStore: cells[83].makeSnapshotStore.set,
     },
     importMeta: {},
   });
@@ -2377,42 +2506,53 @@ function observeImports(map, importName, importIndex) {
     liveVar: {
     },
     onceVar: {
-      padding: cells[84].padding.set,
-      alphabet64: cells[84].alphabet64.set,
-      monodu64: cells[84].monodu64.set,
+      GET_INTERFACE_GUARD: cells[84].GET_INTERFACE_GUARD.set,
     },
     importMeta: {},
   });
   functors[85]({
     imports(entries) {
       const map = new Map(entries);
-      observeImports(map, "./common.js", 84);
+      observeImports(map, "@endo/harden", 3);
+      observeImports(map, "@endo/eventual-send", 34);
+      observeImports(map, "@endo/pass-style", 37);
+      observeImports(map, "@endo/patterns", 83);
+      observeImports(map, "@endo/common/list-difference.js", 79);
+      observeImports(map, "@endo/common/object-map.js", 39);
+      observeImports(map, "@endo/errors", 9);
+      observeImports(map, "./get-interface.js", 84);
     },
     liveVar: {
     },
     onceVar: {
-      jsEncodeBase64: cells[85].jsEncodeBase64.set,
-      encodeBase64: cells[85].encodeBase64.set,
+      defendPrototype: cells[85].defendPrototype.set,
+      defendPrototypeKit: cells[85].defendPrototypeKit.set,
     },
     importMeta: {},
   });
   functors[86]({
     imports(entries) {
       const map = new Map(entries);
-      observeImports(map, "./common.js", 84);
+      observeImports(map, "@endo/harden", 3);
+      observeImports(map, "@endo/common/object-map.js", 39);
+      observeImports(map, "@endo/env-options", 5);
+      observeImports(map, "@endo/errors", 9);
+      observeImports(map, "./exo-tools.js", 85);
     },
     liveVar: {
     },
     onceVar: {
-      jsDecodeBase64: cells[86].jsDecodeBase64.set,
-      decodeBase64: cells[86].decodeBase64.set,
+      initEmpty: cells[86].initEmpty.set,
+      defineExoClass: cells[86].defineExoClass.set,
+      defineExoClassKit: cells[86].defineExoClassKit.set,
+      makeExo: cells[86].makeExo.set,
     },
     importMeta: {},
   });
   functors[87]({
     imports(entries) {
       const map = new Map(entries);
-      observeImports(map, "./src/encode.js", 85);
+      observeImports(map, "./src/exo-makers.js", 86);
     },
     liveVar: {
     },
@@ -2423,19 +2563,20 @@ function observeImports(map, importName, importIndex) {
   functors[88]({
     imports(entries) {
       const map = new Map(entries);
-      observeImports(map, "./encode.js", 87);
     },
     liveVar: {
     },
     onceVar: {
-      btoa: cells[88].btoa.set,
     },
     importMeta: {},
   });
   functors[89]({
     imports(entries) {
       const map = new Map(entries);
-      observeImports(map, "./src/decode.js", 86);
+      observeImports(map, "./src/exo-makers.js", 86);
+      observeImports(map, "./types-index.js", 87);
+      observeImports(map, "./src/types.js", 88);
+      observeImports(map, "./src/get-interface.js", 84);
     },
     liveVar: {
     },
@@ -2446,26 +2587,33 @@ function observeImports(map, importName, importIndex) {
   functors[90]({
     imports(entries) {
       const map = new Map(entries);
-      observeImports(map, "./decode.js", 89);
+      observeImports(map, "@endo/patterns", 83);
     },
     liveVar: {
     },
     onceVar: {
-      atob: cells[90].atob.set,
+      AsyncIteratorInterface: cells[90].AsyncIteratorInterface.set,
+      ReadableBlobInterface: cells[90].ReadableBlobInterface.set,
+      SnapshotBlobInterface: cells[90].SnapshotBlobInterface.set,
+      ReadableTreeInterface: cells[90].ReadableTreeInterface.set,
+      SnapshotTreeInterface: cells[90].SnapshotTreeInterface.set,
+      ContentStoreInterface: cells[90].ContentStoreInterface.set,
+      SnapshotStoreInterface: cells[90].SnapshotStoreInterface.set,
+      TreeWriterInterface: cells[90].TreeWriterInterface.set,
+      FileInterface: cells[90].FileInterface.set,
+      DirectoryInterface: cells[90].DirectoryInterface.set,
     },
     importMeta: {},
   });
   functors[91]({
     imports(entries) {
       const map = new Map(entries);
-      observeImports(map, "./src/encode.js", 85);
-      observeImports(map, "./src/decode.js", 86);
-      observeImports(map, "./btoa.js", 88);
-      observeImports(map, "./atob.js", 90);
+      observeImports(map, "@endo/harden", 3);
     },
     liveVar: {
     },
     onceVar: {
+      snapshotBlobMethods: cells[91].snapshotBlobMethods.set,
     },
     importMeta: {},
   });
@@ -2473,15 +2621,12 @@ function observeImports(map, importName, importIndex) {
     imports(entries) {
       const map = new Map(entries);
       observeImports(map, "@endo/harden", 3);
-      observeImports(map, "@endo/base64", 91);
-      observeImports(map, "@endo/stream", 56);
       observeImports(map, "@endo/far", 55);
     },
     liveVar: {
     },
     onceVar: {
-      makeRefIterator: cells[92].makeRefIterator.set,
-      makeRefReader: cells[92].makeRefReader.set,
+      snapshotTreeMethods: cells[92].snapshotTreeMethods.set,
     },
     importMeta: {},
   });
@@ -2489,221 +2634,158 @@ function observeImports(map, importName, importIndex) {
     imports(entries) {
       const map = new Map(entries);
       observeImports(map, "@endo/harden", 3);
-      observeImports(map, "@endo/far", 55);
-      observeImports(map, "./ref-reader.js", 92);
+      observeImports(map, "@endo/exo", 89);
+      observeImports(map, "./interfaces.js", 90);
+      observeImports(map, "./snapshot-blob.js", 91);
+      observeImports(map, "./snapshot-tree.js", 92);
     },
     liveVar: {
     },
     onceVar: {
-      checkinTree: cells[93].checkinTree.set,
+      makeSnapshotStore: cells[93].makeSnapshotStore.set,
     },
     importMeta: {},
   });
   functors[94]({
     imports(entries) {
       const map = new Map(entries);
-      observeImports(map, "@endo/harden", 3);
-      observeImports(map, "@endo/far", 55);
-      observeImports(map, "./ref-reader.js", 92);
     },
     liveVar: {
     },
     onceVar: {
-      checkoutTree: cells[94].checkoutTree.set,
+      padding: cells[94].padding.set,
+      alphabet64: cells[94].alphabet64.set,
+      monodu64: cells[94].monodu64.set,
     },
     importMeta: {},
   });
   functors[95]({
     imports(entries) {
       const map = new Map(entries);
-      observeImports(map, "@endo/harden", 3);
-      observeImports(map, "@endo/base64", 91);
-      observeImports(map, "@endo/stream", 56);
-      observeImports(map, "@endo/exo", 79);
-      observeImports(map, "./interfaces.js", 80);
+      observeImports(map, "./common.js", 94);
     },
     liveVar: {
     },
     onceVar: {
-      asyncIterate: cells[95].asyncIterate.set,
-      makeIteratorRef: cells[95].makeIteratorRef.set,
-      makeReaderRef: cells[95].makeReaderRef.set,
+      jsEncodeBase64: cells[95].jsEncodeBase64.set,
+      encodeBase64: cells[95].encodeBase64.set,
     },
     importMeta: {},
   });
   functors[96]({
     imports(entries) {
       const map = new Map(entries);
-      observeImports(map, "./interfaces.js", 80);
-      observeImports(map, "./snapshot-blob.js", 81);
-      observeImports(map, "./snapshot-tree.js", 82);
-      observeImports(map, "./snapshot-store.js", 83);
-      observeImports(map, "./checkin.js", 93);
-      observeImports(map, "./checkout.js", 94);
-      observeImports(map, "./ref-reader.js", 92);
-      observeImports(map, "./reader-ref.js", 95);
+      observeImports(map, "./common.js", 94);
     },
     liveVar: {
     },
     onceVar: {
+      jsDecodeBase64: cells[96].jsDecodeBase64.set,
+      decodeBase64: cells[96].decodeBase64.set,
     },
     importMeta: {},
   });
   functors[97]({
     imports(entries) {
       const map = new Map(entries);
-      observeImports(map, "@endo/harden", 3);
-      observeImports(map, "@endo/base64", 91);
-      observeImports(map, "@endo/stream", 56);
-      observeImports(map, "@endo/far", 55);
+      observeImports(map, "./src/encode.js", 95);
     },
     liveVar: {
     },
     onceVar: {
-      makeRefIterator: cells[97].makeRefIterator.set,
-      makeRefReader: cells[97].makeRefReader.set,
     },
     importMeta: {},
   });
   functors[98]({
     imports(entries) {
       const map = new Map(entries);
-      observeImports(map, "@endo/patterns", 73);
+      observeImports(map, "./encode.js", 97);
     },
     liveVar: {
     },
     onceVar: {
-      WorkerInterface: cells[98].WorkerInterface.set,
-      PeerGatewayInterface: cells[98].PeerGatewayInterface.set,
-      ResponderInterface: cells[98].ResponderInterface.set,
-      NameHubInterface: cells[98].NameHubInterface.set,
-      EnvelopeInterface: cells[98].EnvelopeInterface.set,
-      DismisserInterface: cells[98].DismisserInterface.set,
-      HandleInterface: cells[98].HandleInterface.set,
-      AsyncIteratorInterface: cells[98].AsyncIteratorInterface.set,
-      DirectoryInterface: cells[98].DirectoryInterface.set,
-      GuestInterface: cells[98].GuestInterface.set,
-      HostInterface: cells[98].HostInterface.set,
-      ChannelInterface: cells[98].ChannelInterface.set,
-      ChannelMemberInterface: cells[98].ChannelMemberInterface.set,
-      ChannelInvitationInterface: cells[98].ChannelInvitationInterface.set,
-      AttenuatorInterface: cells[98].AttenuatorInterface.set,
-      InvitationInterface: cells[98].InvitationInterface.set,
-      InspectorHubInterface: cells[98].InspectorHubInterface.set,
-      InspectorInterface: cells[98].InspectorInterface.set,
-      BlobInterface: cells[98].BlobInterface.set,
-      MountInterface: cells[98].MountInterface.set,
-      MountFileInterface: cells[98].MountFileInterface.set,
-      ReadableTreeInterface: cells[98].ReadableTreeInterface.set,
-      DaemonFacetForWorkerInterface: cells[98].DaemonFacetForWorkerInterface.set,
-      WorkerFacetForDaemonInterface: cells[98].WorkerFacetForDaemonInterface.set,
-      EndoInterface: cells[98].EndoInterface.set,
+      btoa: cells[98].btoa.set,
     },
     importMeta: {},
   });
   functors[99]({
     imports(entries) {
       const map = new Map(entries);
-      observeImports(map, "@endo/harden", 3);
-      observeImports(map, "@endo/base64", 91);
-      observeImports(map, "@endo/stream", 56);
-      observeImports(map, "@endo/exo", 79);
-      observeImports(map, "./interfaces.js", 98);
+      observeImports(map, "./src/decode.js", 96);
     },
     liveVar: {
     },
     onceVar: {
-      asyncIterate: cells[99].asyncIterate.set,
-      makeIteratorRef: cells[99].makeIteratorRef.set,
-      makeReaderRef: cells[99].makeReaderRef.set,
     },
     importMeta: {},
   });
   functors[100]({
     imports(entries) {
       const map = new Map(entries);
-      observeImports(map, "@endo/errors", 9);
+      observeImports(map, "./decode.js", 99);
     },
     liveVar: {
     },
     onceVar: {
-      isValidNumber: cells[100].isValidNumber.set,
-      assertValidNumber: cells[100].assertValidNumber.set,
-      assertFormulaNumber: cells[100].assertFormulaNumber.set,
-      assertNodeNumber: cells[100].assertNodeNumber.set,
-      assertValidId: cells[100].assertValidId.set,
-      parseId: cells[100].parseId.set,
-      formatId: cells[100].formatId.set,
+      atob: cells[100].atob.set,
     },
     importMeta: {},
   });
   functors[101]({
     imports(entries) {
       const map = new Map(entries);
-      observeImports(map, "@endo/errors", 9);
+      observeImports(map, "./src/encode.js", 95);
+      observeImports(map, "./src/decode.js", 96);
+      observeImports(map, "./btoa.js", 98);
+      observeImports(map, "./atob.js", 100);
     },
     liveVar: {
     },
     onceVar: {
-      isValidFormulaType: cells[101].isValidFormulaType.set,
-      assertValidFormulaType: cells[101].assertValidFormulaType.set,
     },
     importMeta: {},
   });
   functors[102]({
     imports(entries) {
       const map = new Map(entries);
-      observeImports(map, "@endo/errors", 9);
-      observeImports(map, "./formula-identifier.js", 100);
-      observeImports(map, "./formula-type.js", 101);
+      observeImports(map, "@endo/harden", 3);
+      observeImports(map, "@endo/base64", 101);
+      observeImports(map, "@endo/stream", 56);
+      observeImports(map, "@endo/far", 55);
     },
     liveVar: {
     },
     onceVar: {
-      LOCAL_NODE: cells[102].LOCAL_NODE.set,
-      parseLocator: cells[102].parseLocator.set,
-      assertValidLocator: cells[102].assertValidLocator.set,
-      formatLocator: cells[102].formatLocator.set,
-      idFromLocator: cells[102].idFromLocator.set,
-      formatLocatorForSharing: cells[102].formatLocatorForSharing.set,
-      addressesFromLocator: cells[102].addressesFromLocator.set,
-      externalizeId: cells[102].externalizeId.set,
-      internalizeLocator: cells[102].internalizeLocator.set,
+      makeRefIterator: cells[102].makeRefIterator.set,
+      makeRefReader: cells[102].makeRefReader.set,
     },
     importMeta: {},
   });
   functors[103]({
     imports(entries) {
       const map = new Map(entries);
-      observeImports(map, "@endo/errors", 9);
+      observeImports(map, "@endo/harden", 3);
+      observeImports(map, "@endo/far", 55);
+      observeImports(map, "./ref-reader.js", 102);
     },
     liveVar: {
     },
     onceVar: {
-      isValidName: cells[103].isValidName.set,
-      isPetName: cells[103].isPetName.set,
-      isSpecialName: cells[103].isSpecialName.set,
-      isName: cells[103].isName.set,
-      assertPetName: cells[103].assertPetName.set,
-      assertSpecialName: cells[103].assertSpecialName.set,
-      assertName: cells[103].assertName.set,
-      assertEdgeName: cells[103].assertEdgeName.set,
-      assertNames: cells[103].assertNames.set,
-      assertPetNames: cells[103].assertPetNames.set,
-      assertNamePath: cells[103].assertNamePath.set,
-      assertPetNamePath: cells[103].assertPetNamePath.set,
-      namePathFrom: cells[103].namePathFrom.set,
+      checkinTree: cells[103].checkinTree.set,
     },
     importMeta: {},
   });
   functors[104]({
     imports(entries) {
       const map = new Map(entries);
+      observeImports(map, "@endo/harden", 3);
+      observeImports(map, "@endo/far", 55);
+      observeImports(map, "./ref-reader.js", 102);
     },
     liveVar: {
     },
     onceVar: {
-      makeDeferredTasks: cells[104].makeDeferredTasks.set,
+      checkoutTree: cells[104].checkoutTree.set,
     },
     importMeta: {},
   });
@@ -2711,32 +2793,35 @@ function observeImports(map, importName, importIndex) {
     imports(entries) {
       const map = new Map(entries);
       observeImports(map, "@endo/harden", 3);
+      observeImports(map, "@endo/base64", 101);
+      observeImports(map, "@endo/stream", 56);
+      observeImports(map, "@endo/exo", 89);
+      observeImports(map, "./interfaces.js", 90);
     },
     liveVar: {
     },
     onceVar: {
-      helpTextEntries: cells[105].helpTextEntries.set,
+      asyncIterate: cells[105].asyncIterate.set,
+      makeIteratorRef: cells[105].makeIteratorRef.set,
+      makeReaderRef: cells[105].makeReaderRef.set,
     },
     importMeta: {},
   });
   functors[106]({
     imports(entries) {
       const map = new Map(entries);
-      observeImports(map, "./help-text-data.js", 105);
+      observeImports(map, "./interfaces.js", 90);
+      observeImports(map, "./snapshot-blob.js", 91);
+      observeImports(map, "./snapshot-tree.js", 92);
+      observeImports(map, "./snapshot-store.js", 93);
+      observeImports(map, "./checkin.js", 103);
+      observeImports(map, "./checkout.js", 104);
+      observeImports(map, "./ref-reader.js", 102);
+      observeImports(map, "./reader-ref.js", 105);
     },
     liveVar: {
     },
     onceVar: {
-      directoryHelp: cells[106].directoryHelp.set,
-      mailHelp: cells[106].mailHelp.set,
-      guestHelp: cells[106].guestHelp.set,
-      hostHelp: cells[106].hostHelp.set,
-      blobHelp: cells[106].blobHelp.set,
-      endoHelp: cells[106].endoHelp.set,
-      readableTreeHelp: cells[106].readableTreeHelp.set,
-      mountHelp: cells[106].mountHelp.set,
-      mountFileHelp: cells[106].mountFileHelp.set,
-      makeHelp: cells[106].makeHelp.set,
     },
     importMeta: {},
   });
@@ -2744,127 +2829,146 @@ function observeImports(map, importName, importIndex) {
     imports(entries) {
       const map = new Map(entries);
       observeImports(map, "@endo/harden", 3);
-      observeImports(map, "@endo/base64", 91);
+      observeImports(map, "@endo/base64", 101);
+      observeImports(map, "@endo/stream", 56);
       observeImports(map, "@endo/far", 55);
-      observeImports(map, "@endo/exo", 79);
-      observeImports(map, "@endo/errors", 9);
-      observeImports(map, "./reader-ref.js", 99);
-      observeImports(map, "./locator.js", 102);
-      observeImports(map, "./pet-name.js", 103);
-      observeImports(map, "./deferred-tasks.js", 104);
-      observeImports(map, "./help-text.js", 106);
-      observeImports(map, "./interfaces.js", 98);
     },
     liveVar: {
     },
     onceVar: {
-      makeDirectoryMaker: cells[107].makeDirectoryMaker.set,
+      makeRefIterator: cells[107].makeRefIterator.set,
+      makeRefReader: cells[107].makeRefReader.set,
     },
     importMeta: {},
   });
   functors[108]({
     imports(entries) {
       const map = new Map(entries);
-      observeImports(map, "@endo/harden", 3);
-      observeImports(map, "@endo/promise-kit", 22);
-      observeImports(map, "@endo/stream", 56);
+      observeImports(map, "@endo/patterns", 83);
     },
     liveVar: {
     },
     onceVar: {
-      makeNullQueue: cells[108].makeNullQueue.set,
-      nullIteratorQueue: cells[108].nullIteratorQueue.set,
-      makeChangePubSub: cells[108].makeChangePubSub.set,
-      makeChangeTopic: cells[108].makeChangeTopic.set,
+      WorkerInterface: cells[108].WorkerInterface.set,
+      PeerGatewayInterface: cells[108].PeerGatewayInterface.set,
+      ResponderInterface: cells[108].ResponderInterface.set,
+      NameHubInterface: cells[108].NameHubInterface.set,
+      EnvelopeInterface: cells[108].EnvelopeInterface.set,
+      DismisserInterface: cells[108].DismisserInterface.set,
+      HandleInterface: cells[108].HandleInterface.set,
+      AsyncIteratorInterface: cells[108].AsyncIteratorInterface.set,
+      DirectoryInterface: cells[108].DirectoryInterface.set,
+      GuestInterface: cells[108].GuestInterface.set,
+      HostInterface: cells[108].HostInterface.set,
+      ChannelInterface: cells[108].ChannelInterface.set,
+      ChannelMemberInterface: cells[108].ChannelMemberInterface.set,
+      ChannelInvitationInterface: cells[108].ChannelInvitationInterface.set,
+      AttenuatorInterface: cells[108].AttenuatorInterface.set,
+      InvitationInterface: cells[108].InvitationInterface.set,
+      InspectorHubInterface: cells[108].InspectorHubInterface.set,
+      InspectorInterface: cells[108].InspectorInterface.set,
+      BlobInterface: cells[108].BlobInterface.set,
+      MountInterface: cells[108].MountInterface.set,
+      MountFileInterface: cells[108].MountFileInterface.set,
+      ReadableTreeInterface: cells[108].ReadableTreeInterface.set,
+      DaemonFacetForWorkerInterface: cells[108].DaemonFacetForWorkerInterface.set,
+      WorkerFacetForDaemonInterface: cells[108].WorkerFacetForDaemonInterface.set,
+      EndoInterface: cells[108].EndoInterface.set,
     },
     importMeta: {},
   });
   functors[109]({
     imports(entries) {
       const map = new Map(entries);
+      observeImports(map, "@endo/harden", 3);
+      observeImports(map, "@endo/base64", 101);
       observeImports(map, "@endo/stream", 56);
+      observeImports(map, "@endo/exo", 89);
+      observeImports(map, "./interfaces.js", 108);
     },
     liveVar: {
     },
     onceVar: {
-      makeSerialJobs: cells[109].makeSerialJobs.set,
+      asyncIterate: cells[109].asyncIterate.set,
+      makeIteratorRef: cells[109].makeIteratorRef.set,
+      makeReaderRef: cells[109].makeReaderRef.set,
     },
     importMeta: {},
   });
   functors[110]({
     imports(entries) {
       const map = new Map(entries);
-      observeImports(map, "@endo/harden", 3);
-      observeImports(map, "@endo/eventual-send", 34);
-      observeImports(map, "@endo/exo", 79);
-      observeImports(map, "@endo/promise-kit", 22);
       observeImports(map, "@endo/errors", 9);
-      observeImports(map, "@endo/patterns", 73);
-      observeImports(map, "./pubsub.js", 108);
-      observeImports(map, "./formula-identifier.js", 100);
-      observeImports(map, "./pet-name.js", 103);
-      observeImports(map, "./deferred-tasks.js", 104);
-      observeImports(map, "./serial-jobs.js", 109);
-      observeImports(map, "./locator.js", 102);
-      observeImports(map, "./interfaces.js", 98);
     },
     liveVar: {
     },
     onceVar: {
-      assertMailboxStoreName: cells[110].assertMailboxStoreName.set,
-      makeMailboxMaker: cells[110].makeMailboxMaker.set,
+      isValidNumber: cells[110].isValidNumber.set,
+      assertValidNumber: cells[110].assertValidNumber.set,
+      assertFormulaNumber: cells[110].assertFormulaNumber.set,
+      assertNodeNumber: cells[110].assertNodeNumber.set,
+      assertValidId: cells[110].assertValidId.set,
+      parseId: cells[110].parseId.set,
+      formatId: cells[110].formatId.set,
     },
     importMeta: {},
   });
   functors[111]({
     imports(entries) {
       const map = new Map(entries);
-      observeImports(map, "@endo/harden", 3);
       observeImports(map, "@endo/errors", 9);
-      observeImports(map, "./pet-name.js", 103);
-      observeImports(map, "./formula-identifier.js", 100);
     },
     liveVar: {
     },
     onceVar: {
-      makePetSitter: cells[111].makePetSitter.set,
+      isValidFormulaType: cells[111].isValidFormulaType.set,
+      assertValidFormulaType: cells[111].assertValidFormulaType.set,
     },
     importMeta: {},
   });
   functors[112]({
     imports(entries) {
       const map = new Map(entries);
-      observeImports(map, "@endo/far", 55);
-      observeImports(map, "@endo/exo", 79);
       observeImports(map, "@endo/errors", 9);
-      observeImports(map, "./reader-ref.js", 99);
-      observeImports(map, "./pet-sitter.js", 111);
-      observeImports(map, "./pet-name.js", 103);
-      observeImports(map, "./deferred-tasks.js", 104);
-      observeImports(map, "./interfaces.js", 98);
-      observeImports(map, "./help-text.js", 106);
+      observeImports(map, "./formula-identifier.js", 110);
+      observeImports(map, "./formula-type.js", 111);
     },
     liveVar: {
     },
     onceVar: {
-      makeGuestMaker: cells[112].makeGuestMaker.set,
+      LOCAL_NODE: cells[112].LOCAL_NODE.set,
+      parseLocator: cells[112].parseLocator.set,
+      assertValidLocator: cells[112].assertValidLocator.set,
+      formatLocator: cells[112].formatLocator.set,
+      idFromLocator: cells[112].idFromLocator.set,
+      formatLocatorForSharing: cells[112].formatLocatorForSharing.set,
+      addressesFromLocator: cells[112].addressesFromLocator.set,
+      externalizeId: cells[112].externalizeId.set,
+      internalizeLocator: cells[112].internalizeLocator.set,
     },
     importMeta: {},
   });
   functors[113]({
     imports(entries) {
       const map = new Map(entries);
-      observeImports(map, "@endo/exo", 79);
       observeImports(map, "@endo/errors", 9);
-      observeImports(map, "./reader-ref.js", 99);
-      observeImports(map, "./pubsub.js", 108);
-      observeImports(map, "./interfaces.js", 98);
-      observeImports(map, "./help-text.js", 106);
     },
     liveVar: {
     },
     onceVar: {
-      makeChannelMaker: cells[113].makeChannelMaker.set,
+      isValidName: cells[113].isValidName.set,
+      isPetName: cells[113].isPetName.set,
+      isSpecialName: cells[113].isSpecialName.set,
+      isName: cells[113].isName.set,
+      assertPetName: cells[113].assertPetName.set,
+      assertSpecialName: cells[113].assertSpecialName.set,
+      assertName: cells[113].assertName.set,
+      assertEdgeName: cells[113].assertEdgeName.set,
+      assertNames: cells[113].assertNames.set,
+      assertPetNames: cells[113].assertPetNames.set,
+      assertNamePath: cells[113].assertNamePath.set,
+      assertPetNamePath: cells[113].assertPetNamePath.set,
+      namePathFrom: cells[113].namePathFrom.set,
     },
     importMeta: {},
   });
@@ -2875,42 +2979,40 @@ function observeImports(map, importName, importIndex) {
     liveVar: {
     },
     onceVar: {
-      toHex: cells[114].toHex.set,
-      fromHex: cells[114].fromHex.set,
+      makeDeferredTasks: cells[114].makeDeferredTasks.set,
     },
     importMeta: {},
   });
   functors[115]({
     imports(entries) {
       const map = new Map(entries);
-      observeImports(map, "@endo/far", 55);
-      observeImports(map, "@endo/exo", 79);
-      observeImports(map, "@endo/errors", 9);
-      observeImports(map, "./reader-ref.js", 99);
-      observeImports(map, "./pet-name.js", 103);
-      observeImports(map, "./formula-identifier.js", 100);
-      observeImports(map, "./locator.js", 102);
-      observeImports(map, "./hex.js", 114);
-      observeImports(map, "./pet-sitter.js", 111);
-      observeImports(map, "./deferred-tasks.js", 104);
-      observeImports(map, "./interfaces.js", 98);
-      observeImports(map, "./help-text.js", 106);
+      observeImports(map, "@endo/harden", 3);
     },
     liveVar: {
     },
     onceVar: {
-      makeHostMaker: cells[115].makeHostMaker.set,
+      helpTextEntries: cells[115].helpTextEntries.set,
     },
     importMeta: {},
   });
   functors[116]({
     imports(entries) {
       const map = new Map(entries);
+      observeImports(map, "./help-text-data.js", 115);
     },
     liveVar: {
     },
     onceVar: {
-      makeRemoteControlProvider: cells[116].makeRemoteControlProvider.set,
+      directoryHelp: cells[116].directoryHelp.set,
+      mailHelp: cells[116].mailHelp.set,
+      guestHelp: cells[116].guestHelp.set,
+      hostHelp: cells[116].hostHelp.set,
+      blobHelp: cells[116].blobHelp.set,
+      endoHelp: cells[116].endoHelp.set,
+      readableTreeHelp: cells[116].readableTreeHelp.set,
+      mountHelp: cells[116].mountHelp.set,
+      mountFileHelp: cells[116].mountFileHelp.set,
+      makeHelp: cells[116].makeHelp.set,
     },
     importMeta: {},
   });
@@ -2918,49 +3020,75 @@ function observeImports(map, importName, importIndex) {
     imports(entries) {
       const map = new Map(entries);
       observeImports(map, "@endo/harden", 3);
-      observeImports(map, "@endo/promise-kit", 22);
+      observeImports(map, "@endo/base64", 101);
+      observeImports(map, "@endo/far", 55);
+      observeImports(map, "@endo/exo", 89);
+      observeImports(map, "@endo/errors", 9);
+      observeImports(map, "./reader-ref.js", 109);
+      observeImports(map, "./locator.js", 112);
+      observeImports(map, "./pet-name.js", 113);
+      observeImports(map, "./deferred-tasks.js", 114);
+      observeImports(map, "./help-text.js", 116);
+      observeImports(map, "./interfaces.js", 108);
     },
     liveVar: {
     },
     onceVar: {
-      makeContextMaker: cells[117].makeContextMaker.set,
+      makeDirectoryMaker: cells[117].makeDirectoryMaker.set,
     },
     importMeta: {},
   });
   functors[118]({
     imports(entries) {
       const map = new Map(entries);
+      observeImports(map, "@endo/harden", 3);
+      observeImports(map, "@endo/promise-kit", 22);
+      observeImports(map, "@endo/stream", 56);
     },
     liveVar: {
     },
     onceVar: {
-      makeFormulaGraph: cells[118].makeFormulaGraph.set,
+      makeNullQueue: cells[118].makeNullQueue.set,
+      nullIteratorQueue: cells[118].nullIteratorQueue.set,
+      makeChangePubSub: cells[118].makeChangePubSub.set,
+      makeChangeTopic: cells[118].makeChangeTopic.set,
     },
     importMeta: {},
   });
   functors[119]({
     imports(entries) {
       const map = new Map(entries);
-      observeImports(map, "@endo/harden", 3);
-      observeImports(map, "./pubsub.js", 108);
+      observeImports(map, "@endo/stream", 56);
     },
     liveVar: {
     },
     onceVar: {
-      makeRetentionAccumulator: cells[119].makeRetentionAccumulator.set,
+      makeSerialJobs: cells[119].makeSerialJobs.set,
     },
     importMeta: {},
   });
   functors[120]({
     imports(entries) {
       const map = new Map(entries);
-      observeImports(map, "@endo/captp", 53);
+      observeImports(map, "@endo/harden", 3);
+      observeImports(map, "@endo/eventual-send", 34);
+      observeImports(map, "@endo/exo", 89);
+      observeImports(map, "@endo/promise-kit", 22);
       observeImports(map, "@endo/errors", 9);
+      observeImports(map, "@endo/patterns", 83);
+      observeImports(map, "./pubsub.js", 118);
+      observeImports(map, "./formula-identifier.js", 110);
+      observeImports(map, "./pet-name.js", 113);
+      observeImports(map, "./deferred-tasks.js", 114);
+      observeImports(map, "./serial-jobs.js", 119);
+      observeImports(map, "./locator.js", 112);
+      observeImports(map, "./interfaces.js", 108);
     },
     liveVar: {
     },
     onceVar: {
-      makeResidenceTracker: cells[120].makeResidenceTracker.set,
+      assertMailboxStoreName: cells[120].assertMailboxStoreName.set,
+      makeMailboxMaker: cells[120].makeMailboxMaker.set,
     },
     importMeta: {},
   });
@@ -2968,113 +3096,97 @@ function observeImports(map, importName, importIndex) {
     imports(entries) {
       const map = new Map(entries);
       observeImports(map, "@endo/harden", 3);
+      observeImports(map, "@endo/errors", 9);
+      observeImports(map, "./pet-name.js", 113);
+      observeImports(map, "./formula-identifier.js", 110);
     },
     liveVar: {
     },
     onceVar: {
-      makeLocalStoreController: cells[121].makeLocalStoreController.set,
+      makePetSitter: cells[121].makePetSitter.set,
     },
     importMeta: {},
   });
   functors[122]({
     imports(entries) {
       const map = new Map(entries);
+      observeImports(map, "@endo/far", 55);
+      observeImports(map, "@endo/exo", 89);
       observeImports(map, "@endo/errors", 9);
+      observeImports(map, "./reader-ref.js", 109);
+      observeImports(map, "./pet-sitter.js", 121);
+      observeImports(map, "./pet-name.js", 113);
+      observeImports(map, "./deferred-tasks.js", 114);
+      observeImports(map, "./interfaces.js", 108);
+      observeImports(map, "./help-text.js", 116);
     },
     liveVar: {
     },
     onceVar: {
-      makeMultimap: cells[122].makeMultimap.set,
-      makeWeakMultimap: cells[122].makeWeakMultimap.set,
-      makeBidirectionalMultimap: cells[122].makeBidirectionalMultimap.set,
+      makeGuestMaker: cells[122].makeGuestMaker.set,
     },
     importMeta: {},
   });
   functors[123]({
     imports(entries) {
       const map = new Map(entries);
-      observeImports(map, "@endo/far", 55);
+      observeImports(map, "@endo/exo", 89);
+      observeImports(map, "@endo/errors", 9);
+      observeImports(map, "./reader-ref.js", 109);
+      observeImports(map, "./pubsub.js", 118);
+      observeImports(map, "./interfaces.js", 108);
+      observeImports(map, "./help-text.js", 116);
     },
     liveVar: {
     },
     onceVar: {
-      makeLoopbackNetwork: cells[123].makeLoopbackNetwork.set,
+      makeChannelMaker: cells[123].makeChannelMaker.set,
     },
     importMeta: {},
   });
   functors[124]({
     imports(entries) {
       const map = new Map(entries);
-      observeImports(map, "@endo/errors", 9);
-      observeImports(map, "@endo/exo", 79);
-      observeImports(map, "./help-text.js", 106);
-      observeImports(map, "./interfaces.js", 98);
-      observeImports(map, "./reader-ref.js", 99);
     },
     liveVar: {
     },
     onceVar: {
-      makeMount: cells[124].makeMount.set,
+      toHex: cells[124].toHex.set,
+      fromHex: cells[124].fromHex.set,
     },
     importMeta: {},
   });
   functors[125]({
     imports(entries) {
       const map = new Map(entries);
-      observeImports(map, "@endo/harden", 3);
-      observeImports(map, "@endo/exo", 79);
       observeImports(map, "@endo/far", 55);
-      observeImports(map, "@endo/marshal", 47);
-      observeImports(map, "@endo/promise-kit", 22);
+      observeImports(map, "@endo/exo", 89);
       observeImports(map, "@endo/errors", 9);
-      observeImports(map, "@endo/platform/fs/lite", 96);
-      observeImports(map, "./ref-reader.js", 97);
-      observeImports(map, "./reader-ref.js", 99);
-      observeImports(map, "./directory.js", 107);
-      observeImports(map, "./deferred-tasks.js", 104);
-      observeImports(map, "./mail.js", 110);
-      observeImports(map, "./guest.js", 112);
-      observeImports(map, "./channel.js", 113);
-      observeImports(map, "./host.js", 115);
-      observeImports(map, "./remote-control.js", 116);
-      observeImports(map, "./pet-name.js", 103);
-      observeImports(map, "./locator.js", 102);
-      observeImports(map, "./context.js", 117);
-      observeImports(map, "./formula-identifier.js", 100);
-      observeImports(map, "./graph.js", 118);
-      observeImports(map, "./pubsub.js", 108);
-      observeImports(map, "./retention-accumulator.js", 119);
-      observeImports(map, "./residence.js", 120);
-      observeImports(map, "./hex.js", 114);
-      observeImports(map, "./serial-jobs.js", 109);
-      observeImports(map, "./store-controller.js", 121);
-      observeImports(map, "./multimap.js", 122);
-      observeImports(map, "./networks/loopback.js", 123);
-      observeImports(map, "./formula-type.js", 101);
-      observeImports(map, "./help-text.js", 106);
-      observeImports(map, "./mount.js", 124);
-      observeImports(map, "./interfaces.js", 98);
+      observeImports(map, "./reader-ref.js", 109);
+      observeImports(map, "./pet-name.js", 113);
+      observeImports(map, "./formula-identifier.js", 110);
+      observeImports(map, "./locator.js", 112);
+      observeImports(map, "./hex.js", 124);
+      observeImports(map, "./pet-sitter.js", 121);
+      observeImports(map, "./deferred-tasks.js", 114);
+      observeImports(map, "./interfaces.js", 108);
+      observeImports(map, "./help-text.js", 116);
     },
     liveVar: {
     },
     onceVar: {
-      makeDaemon: cells[125].makeDaemon.set,
+      makeHostMaker: cells[125].makeHostMaker.set,
     },
     importMeta: {},
   });
   functors[126]({
     imports(entries) {
       const map = new Map(entries);
-      observeImports(map, "@endo/harden", 3);
-      observeImports(map, "@endo/errors", 9);
-      observeImports(map, "@endo/platform/fs/lite", 96);
-      observeImports(map, "./reader-ref.js", 99);
-      observeImports(map, "./hex.js", 114);
     },
     liveVar: {
     },
     onceVar: {
-      makeDaemonicPersistencePowers: cells[126].makeDaemonicPersistencePowers.set,
+      makeRemoteControlProvider: cells[126].makeRemoteControlProvider.set,
     },
     importMeta: {},
   });
@@ -3082,27 +3194,23 @@ function observeImports(map, importName, importIndex) {
     imports(entries) {
       const map = new Map(entries);
       observeImports(map, "@endo/harden", 3);
-      observeImports(map, "./pubsub.js", 108);
-      observeImports(map, "./formula-identifier.js", 100);
-      observeImports(map, "./multimap.js", 122);
+      observeImports(map, "@endo/promise-kit", 22);
     },
     liveVar: {
     },
     onceVar: {
-      makePetStoreMaker: cells[127].makePetStoreMaker.set,
+      makeContextMaker: cells[127].makeContextMaker.set,
     },
     importMeta: {},
   });
   functors[128]({
     imports(entries) {
       const map = new Map(entries);
-      observeImports(map, "@endo/harden", 3);
     },
     liveVar: {
     },
     onceVar: {
-      makeNetstringReader: cells[128].makeNetstringReader.set,
-      netstringReader: cells[128].netstringReader.set,
+      makeFormulaGraph: cells[128].makeFormulaGraph.set,
     },
     importMeta: {},
   });
@@ -3110,116 +3218,285 @@ function observeImports(map, importName, importIndex) {
     imports(entries) {
       const map = new Map(entries);
       observeImports(map, "@endo/harden", 3);
-      observeImports(map, "@endo/promise-kit", 22);
+      observeImports(map, "./pubsub.js", 118);
     },
     liveVar: {
     },
     onceVar: {
-      makeNetstringWriter: cells[129].makeNetstringWriter.set,
-      netstringWriter: cells[129].netstringWriter.set,
+      makeRetentionAccumulator: cells[129].makeRetentionAccumulator.set,
     },
     importMeta: {},
   });
   functors[130]({
     imports(entries) {
       const map = new Map(entries);
-      observeImports(map, "./reader.js", 128);
-      observeImports(map, "./writer.js", 129);
+      observeImports(map, "@endo/captp", 53);
+      observeImports(map, "@endo/errors", 9);
     },
     liveVar: {
     },
     onceVar: {
+      makeResidenceTracker: cells[130].makeResidenceTracker.set,
     },
     importMeta: {},
   });
   functors[131]({
     imports(entries) {
       const map = new Map(entries);
-      observeImports(map, "@endo/captp", 53);
-      observeImports(map, "@endo/promise-kit", 22);
-      observeImports(map, "@endo/stream", 56);
-      observeImports(map, "@endo/netstring", 130);
+      observeImports(map, "@endo/harden", 3);
     },
     liveVar: {
     },
     onceVar: {
-      makeMessageCapTP: cells[131].makeMessageCapTP.set,
-      messageToBytes: cells[131].messageToBytes.set,
-      bytesToMessage: cells[131].bytesToMessage.set,
-      makeNetstringCapTP: cells[131].makeNetstringCapTP.set,
+      makeLocalStoreController: cells[131].makeLocalStoreController.set,
     },
     importMeta: {},
   });
   functors[132]({
     imports(entries) {
       const map = new Map(entries);
+      observeImports(map, "@endo/errors", 9);
     },
     liveVar: {
     },
     onceVar: {
-      encodeEnvelope: cells[132].encodeEnvelope.set,
-      encodeFrame: cells[132].encodeFrame.set,
-      decodeFrame: cells[132].decodeFrame.set,
-      decodeEnvelope: cells[132].decodeEnvelope.set,
-      readFrameFromStream: cells[132].readFrameFromStream.set,
-      writeFrameToStream: cells[132].writeFrameToStream.set,
+      makeMultimap: cells[132].makeMultimap.set,
+      makeWeakMultimap: cells[132].makeWeakMultimap.set,
+      makeBidirectionalMultimap: cells[132].makeBidirectionalMultimap.set,
     },
     importMeta: {},
   });
   functors[133]({
     imports(entries) {
       const map = new Map(entries);
+      observeImports(map, "@endo/far", 55);
     },
     liveVar: {
     },
     onceVar: {
-      makeXsFilePowers: cells[133].makeXsFilePowers.set,
-      makeXsCryptoPowers: cells[133].makeXsCryptoPowers.set,
-      makeXsSqlitePowers: cells[133].makeXsSqlitePowers.set,
+      makeLoopbackNetwork: cells[133].makeLoopbackNetwork.set,
     },
     importMeta: {},
   });
   functors[134]({
     imports(entries) {
       const map = new Map(entries);
-      observeImports(map, "@endo/promise-kit", 22);
+      observeImports(map, "@endo/errors", 9);
+      observeImports(map, "@endo/exo", 89);
+      observeImports(map, "./help-text.js", 116);
+      observeImports(map, "./interfaces.js", 108);
+      observeImports(map, "./reader-ref.js", 109);
     },
     liveVar: {
     },
     onceVar: {
-      makeDebugSession: cells[134].makeDebugSession.set,
+      makeMount: cells[134].makeMount.set,
     },
     importMeta: {},
   });
   functors[135]({
     imports(entries) {
       const map = new Map(entries);
-      observeImports(map, "@endo/exo", 79);
-      observeImports(map, "@endo/patterns", 73);
+      observeImports(map, "@endo/harden", 3);
+      observeImports(map, "@endo/exo", 89);
+      observeImports(map, "@endo/far", 55);
+      observeImports(map, "@endo/marshal", 47);
+      observeImports(map, "@endo/promise-kit", 22);
+      observeImports(map, "@endo/errors", 9);
+      observeImports(map, "@endo/platform/fs/lite", 106);
+      observeImports(map, "./ref-reader.js", 107);
+      observeImports(map, "./reader-ref.js", 109);
+      observeImports(map, "./directory.js", 117);
+      observeImports(map, "./deferred-tasks.js", 114);
+      observeImports(map, "./mail.js", 120);
+      observeImports(map, "./guest.js", 122);
+      observeImports(map, "./channel.js", 123);
+      observeImports(map, "./host.js", 125);
+      observeImports(map, "./remote-control.js", 126);
+      observeImports(map, "./pet-name.js", 113);
+      observeImports(map, "./locator.js", 112);
+      observeImports(map, "./context.js", 127);
+      observeImports(map, "./formula-identifier.js", 110);
+      observeImports(map, "./graph.js", 128);
+      observeImports(map, "./pubsub.js", 118);
+      observeImports(map, "./retention-accumulator.js", 129);
+      observeImports(map, "./residence.js", 130);
+      observeImports(map, "./hex.js", 124);
+      observeImports(map, "./serial-jobs.js", 119);
+      observeImports(map, "./store-controller.js", 131);
+      observeImports(map, "./multimap.js", 132);
+      observeImports(map, "./networks/loopback.js", 133);
+      observeImports(map, "./formula-type.js", 111);
+      observeImports(map, "./help-text.js", 116);
+      observeImports(map, "./mount.js", 134);
+      observeImports(map, "./interfaces.js", 108);
     },
     liveVar: {
     },
     onceVar: {
-      DebuggerInterface: cells[135].DebuggerInterface.set,
-      makeDebugger: cells[135].makeDebugger.set,
+      makeDaemon: cells[135].makeDaemon.set,
     },
     importMeta: {},
   });
   functors[136]({
     imports(entries) {
       const map = new Map(entries);
+      observeImports(map, "@endo/harden", 3);
+      observeImports(map, "@endo/errors", 9);
+      observeImports(map, "@endo/platform/fs/lite", 106);
+      observeImports(map, "./reader-ref.js", 109);
+      observeImports(map, "./hex.js", 124);
+    },
+    liveVar: {
+    },
+    onceVar: {
+      makeDaemonicPersistencePowers: cells[136].makeDaemonicPersistencePowers.set,
+    },
+    importMeta: {},
+  });
+  functors[137]({
+    imports(entries) {
+      const map = new Map(entries);
+      observeImports(map, "@endo/harden", 3);
+      observeImports(map, "./pubsub.js", 118);
+      observeImports(map, "./formula-identifier.js", 110);
+      observeImports(map, "./multimap.js", 132);
+    },
+    liveVar: {
+    },
+    onceVar: {
+      makePetStoreMaker: cells[137].makePetStoreMaker.set,
+    },
+    importMeta: {},
+  });
+  functors[138]({
+    imports(entries) {
+      const map = new Map(entries);
+      observeImports(map, "@endo/harden", 3);
+    },
+    liveVar: {
+    },
+    onceVar: {
+      makeNetstringReader: cells[138].makeNetstringReader.set,
+      netstringReader: cells[138].netstringReader.set,
+    },
+    importMeta: {},
+  });
+  functors[139]({
+    imports(entries) {
+      const map = new Map(entries);
+      observeImports(map, "@endo/harden", 3);
+      observeImports(map, "@endo/promise-kit", 22);
+    },
+    liveVar: {
+    },
+    onceVar: {
+      makeNetstringWriter: cells[139].makeNetstringWriter.set,
+      netstringWriter: cells[139].netstringWriter.set,
+    },
+    importMeta: {},
+  });
+  functors[140]({
+    imports(entries) {
+      const map = new Map(entries);
+      observeImports(map, "./reader.js", 138);
+      observeImports(map, "./writer.js", 139);
+    },
+    liveVar: {
+    },
+    onceVar: {
+    },
+    importMeta: {},
+  });
+  functors[141]({
+    imports(entries) {
+      const map = new Map(entries);
+      observeImports(map, "@endo/captp", 53);
+      observeImports(map, "@endo/promise-kit", 22);
+      observeImports(map, "@endo/stream", 56);
+      observeImports(map, "@endo/netstring", 140);
+    },
+    liveVar: {
+    },
+    onceVar: {
+      makeMessageCapTP: cells[141].makeMessageCapTP.set,
+      messageToBytes: cells[141].messageToBytes.set,
+      bytesToMessage: cells[141].bytesToMessage.set,
+      makeNetstringCapTP: cells[141].makeNetstringCapTP.set,
+    },
+    importMeta: {},
+  });
+  functors[142]({
+    imports(entries) {
+      const map = new Map(entries);
+    },
+    liveVar: {
+    },
+    onceVar: {
+      encodeEnvelope: cells[142].encodeEnvelope.set,
+      encodeFrame: cells[142].encodeFrame.set,
+      decodeFrame: cells[142].decodeFrame.set,
+      decodeEnvelope: cells[142].decodeEnvelope.set,
+      readFrameFromStream: cells[142].readFrameFromStream.set,
+      writeFrameToStream: cells[142].writeFrameToStream.set,
+    },
+    importMeta: {},
+  });
+  functors[143]({
+    imports(entries) {
+      const map = new Map(entries);
+    },
+    liveVar: {
+    },
+    onceVar: {
+      makeXsFilePowers: cells[143].makeXsFilePowers.set,
+      makeXsCryptoPowers: cells[143].makeXsCryptoPowers.set,
+      makeXsSqlitePowers: cells[143].makeXsSqlitePowers.set,
+    },
+    importMeta: {},
+  });
+  functors[144]({
+    imports(entries) {
+      const map = new Map(entries);
+      observeImports(map, "@endo/promise-kit", 22);
+    },
+    liveVar: {
+    },
+    onceVar: {
+      makeDebugSession: cells[144].makeDebugSession.set,
+    },
+    importMeta: {},
+  });
+  functors[145]({
+    imports(entries) {
+      const map = new Map(entries);
+      observeImports(map, "@endo/exo", 89);
+      observeImports(map, "@endo/patterns", 83);
+    },
+    liveVar: {
+    },
+    onceVar: {
+      DebuggerInterface: cells[145].DebuggerInterface.set,
+      makeDebugger: cells[145].makeDebugger.set,
+    },
+    importMeta: {},
+  });
+  functors[146]({
+    imports(entries) {
+      const map = new Map(entries);
       observeImports(map, "@endo/captp", 53);
       observeImports(map, "@endo/far", 55);
       observeImports(map, "@endo/promise-kit", 22);
       observeImports(map, "@endo/stream", 56);
-      observeImports(map, "./daemon.js", 125);
-      observeImports(map, "./daemon-persistence-powers.js", 126);
-      observeImports(map, "./pet-store.js", 127);
-      observeImports(map, "./connection.js", 131);
-      observeImports(map, "./envelope.js", 132);
-      observeImports(map, "./bus-daemon-rust-xs-powers.js", 133);
-      observeImports(map, "./debug-session.js", 134);
-      observeImports(map, "./debugger.js", 135);
+      observeImports(map, "@endo/slots", 66);
+      observeImports(map, "./daemon.js", 135);
+      observeImports(map, "./daemon-persistence-powers.js", 136);
+      observeImports(map, "./pet-store.js", 137);
+      observeImports(map, "./connection.js", 141);
+      observeImports(map, "./envelope.js", 142);
+      observeImports(map, "./bus-daemon-rust-xs-powers.js", 143);
+      observeImports(map, "./debug-session.js", 144);
+      observeImports(map, "./debugger.js", 145);
     },
     liveVar: {
     },
@@ -13403,7 +13680,1892 @@ harden(mapReader);
 harden(mapWriter);
 })()
 ,
-// === 57. patterns ./src/keys/copySet.js ===
+// === 57. slots ./src/cbor.js ===
+({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden,makeError,q,X;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]],["@endo/errors", [["makeError",[$h͏_a => (makeError = $h͏_a)]],["q",[$h͏_a => (q = $h͏_a)]],["X",[$h͏_a => (X = $h͏_a)]]]]]);
+
+
+
+
+
+/**
+ * Canonical CBOR writer/reader tuned to the slot-machine wire format.
+ *
+ * We write bytes directly per RFC 8949 §4.2 so that every output is
+ * byte-identical to the Rust `rust/endo/slots` crate.  Only the
+ * subset of CBOR used by the four slot verbs is supported:
+ *   - unsigned integers (minimal-head)
+ *   - byte strings
+ *   - arrays (definite length)
+ *   - null (for the optional reply field)
+ *
+ * Definite-length only; no maps, no floats, no tags, no indefinite
+ * containers.
+ */
+
+const MAJOR_UINT = 0;
+const MAJOR_BYTES = 2;
+const MAJOR_ARRAY = 4;
+
+const CBOR_NULL = 0xf6;
+
+const MAX_SAFE_U32 = 0xffffffff;
+
+/**
+ * Internal writer state: a growing byte list.
+ *
+ * @typedef {{ bytes: number[] }} Writer
+ */
+
+/** @returns {Writer} */
+       const makeWriter = () => ({ bytes: [] });$h͏_once.makeWriter(makeWriter);
+harden(makeWriter);
+
+/** @param {Writer} w */
+       const writerToBytes = w => new Uint8Array(w.bytes);$h͏_once.writerToBytes(writerToBytes);
+harden(writerToBytes);
+
+/**
+ * @param {Writer} w
+ * @param {number} major 0..=7
+ * @param {number} value non-negative
+ */
+const writeHead = (w, major, value) => {
+  const m = (major & 0b111) << 5;
+  if (value <= 23) {
+    w.bytes.push(m | value);
+  } else if (value <= 0xff) {
+    w.bytes.push(m | 24, value);
+  } else if (value <= 0xffff) {
+    w.bytes.push(m | 25, (value >> 8) & 0xff, value & 0xff);
+  } else if (value <= MAX_SAFE_U32) {
+    w.bytes.push(
+      m | 26,
+      (value >>> 24) & 0xff,
+      (value >>> 16) & 0xff,
+      (value >>> 8) & 0xff,
+      value & 0xff,
+    );
+  } else if (Number.isSafeInteger(value)) {
+    // 53-bit ceiling.  For 32..53-bit values use the 8-byte head.
+    w.bytes.push(m | 27);
+    // split into high/low 32-bit halves
+    const high = Math.floor(value / 0x100000000);
+    const low = value >>> 0;
+    w.bytes.push(
+      (high >>> 24) & 0xff,
+      (high >>> 16) & 0xff,
+      (high >>> 8) & 0xff,
+      high & 0xff,
+      (low >>> 24) & 0xff,
+      (low >>> 16) & 0xff,
+      (low >>> 8) & 0xff,
+      low & 0xff,
+    );
+  } else {
+    throw makeError(X`CBOR value out of safe-integer range: ${q(value)}`);
+  }
+};
+
+/**
+ * @param {Writer} w
+ * @param {number} v
+ */
+       const writeUint = (w, v) => {
+  if (v < 0 || !Number.isFinite(v)) {
+    throw makeError(X`writeUint requires non-negative number: ${q(v)}`);
+  }
+  writeHead(w, MAJOR_UINT, v);
+};$h͏_once.writeUint(writeUint);
+harden(writeUint);
+
+/**
+ * @param {Writer} w
+ * @param {Uint8Array} bytes
+ */
+       const writeByteString = (w, bytes) => {
+  writeHead(w, MAJOR_BYTES, bytes.length);
+  for (let i = 0; i < bytes.length; i += 1) {
+    w.bytes.push(bytes[i]);
+  }
+};$h͏_once.writeByteString(writeByteString);
+harden(writeByteString);
+
+/**
+ * @param {Writer} w
+ * @param {number} len
+ */
+       const writeArrayHeader = (w, len) => {
+  writeHead(w, MAJOR_ARRAY, len);
+};$h͏_once.writeArrayHeader(writeArrayHeader);
+harden(writeArrayHeader);
+
+/** @param {Writer} w */
+       const writeNull = w => {
+  w.bytes.push(CBOR_NULL);
+};$h͏_once.writeNull(writeNull);
+harden(writeNull);
+
+// ---- reader ----
+
+/**
+ * @typedef {{ data: Uint8Array, pos: number }} Reader
+ */
+
+/** @param {Uint8Array} data */
+       const makeReader = data => ({ data, pos: 0 });$h͏_once.makeReader(makeReader);
+harden(makeReader);
+
+/**
+ * @param {Reader} r
+ * @param {number} n
+ * @returns {number} single byte value, or throws on EOF
+ */
+const readByte = (r, n = 1) => {
+  if (r.pos + n > r.data.length) {
+    throw makeError(X`CBOR: unexpected EOF at offset ${q(r.pos)}`);
+  }
+  const b = r.data[r.pos];
+  r.pos += 1;
+  return b;
+};
+
+/**
+ * @param {Reader} r
+ * @returns {{ major: number, value: number }}
+ */
+const readHead = r => {
+  const initial = readByte(r);
+  const major = initial >> 5;
+  const info = initial & 0x1f;
+  if (info < 24) return { major, value: info };
+  let size;
+  if (info === 24) size = 1;
+  else if (info === 25) size = 2;
+  else if (info === 26) size = 4;
+  else if (info === 27) size = 8;
+  else throw makeError(X`CBOR: unsupported additional info ${q(info)}`);
+  if (r.pos + size > r.data.length) {
+    throw makeError(X`CBOR: unexpected EOF reading head`);
+  }
+  let value = 0;
+  for (let i = 0; i < size; i += 1) {
+    const b = r.data[r.pos + i];
+    value = value * 256 + Number(b);
+  }
+  r.pos += size;
+  if (!Number.isSafeInteger(value)) {
+    throw makeError(
+      X`CBOR: integer ${q(value)} exceeds JavaScript safe-integer range`,
+    );
+  }
+  return { major, value };
+};
+
+/** @param {Reader} r */
+       const readUint = r => {
+  const { major, value } = readHead(r);
+  if (major !== MAJOR_UINT) {
+    throw makeError(X`CBOR: expected uint, got major ${q(major)}`);
+  }
+  return value;
+};$h͏_once.readUint(readUint);
+harden(readUint);
+
+/** @param {Reader} r */
+       const readByteString = r => {
+  const { major, value } = readHead(r);
+  if (major !== MAJOR_BYTES) {
+    throw makeError(X`CBOR: expected byte string, got major ${q(major)}`);
+  }
+  if (r.pos + value > r.data.length) {
+    throw makeError(X`CBOR: byte string body truncated`);
+  }
+  const out = r.data.subarray(r.pos, r.pos + value);
+  r.pos += value;
+  return new Uint8Array(out);
+};$h͏_once.readByteString(readByteString);
+harden(readByteString);
+
+/** @param {Reader} r @returns {number} */
+       const readArrayHeader = r => {
+  const { major, value } = readHead(r);
+  if (major !== MAJOR_ARRAY) {
+    throw makeError(X`CBOR: expected array, got major ${q(major)}`);
+  }
+  return value;
+};$h͏_once.readArrayHeader(readArrayHeader);
+harden(readArrayHeader);
+
+/**
+ * Peek: is the next item CBOR null?  Consumes the byte if so.
+ *
+ * @param {Reader} r
+ */
+       const readNullOrPeek = r => {
+  if (r.pos >= r.data.length) {
+    throw makeError(X`CBOR: unexpected EOF`);
+  }
+  if (r.data[r.pos] === CBOR_NULL) {
+    r.pos += 1;
+    return true;
+  }
+  return false;
+};$h͏_once.readNullOrPeek(readNullOrPeek);
+harden(readNullOrPeek);
+
+/**
+ * Assert the reader has consumed all bytes.
+ *
+ * @param {Reader} r
+ */
+       const assertConsumed = r => {
+  if (r.pos !== r.data.length) {
+    throw makeError(
+      X`CBOR: ${q(r.data.length - r.pos)} trailing byte(s) after payload`,
+    );
+  }
+};$h͏_once.assertConsumed(assertConsumed);
+harden(assertConsumed);
+})()
+,
+// === 58. slots ./src/descriptor.js ===
+({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden,makeError,q,X,makeWriter,writerToBytes,writeArrayHeader,writeUint,readArrayHeader,readUint;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]],["@endo/errors", [["makeError",[$h͏_a => (makeError = $h͏_a)]],["q",[$h͏_a => (q = $h͏_a)]],["X",[$h͏_a => (X = $h͏_a)]]]],["./cbor.js", [["makeWriter",[$h͏_a => (makeWriter = $h͏_a)]],["writerToBytes",[$h͏_a => (writerToBytes = $h͏_a)]],["writeArrayHeader",[$h͏_a => (writeArrayHeader = $h͏_a)]],["writeUint",[$h͏_a => (writeUint = $h͏_a)]],["readArrayHeader",[$h͏_a => (readArrayHeader = $h͏_a)]],["readUint",[$h͏_a => (readUint = $h͏_a)]]]]]);
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+/** @import { Reader } from './cbor.js' */
+
+/**
+ * Direction of a capability reference, from the *sender's* frame.
+ * Local means the sending session allocated the position; Remote
+ * means it was allocated by the other side.
+ *
+ * @type {Readonly<{ Local: 0, Remote: 1 }>}
+ */
+       const Direction = harden({ Local: 0, Remote: 1 });
+
+/**
+ * The kind of vref a descriptor points at.  Matches
+ * `rust/endo/slots/src/wire/descriptor.rs::Kind` exactly.
+ *
+ * @type {Readonly<{ Object: 0, Promise: 1, Answer: 2, Device: 3 }>}
+ */$h͏_once.Direction(Direction);
+       const Kind = harden({ Object: 0, Promise: 1, Answer: 2, Device: 3 });
+
+/**
+ * @typedef {object} Descriptor
+ * @property {0 | 1} dir
+ * @property {0 | 1 | 2 | 3} kind
+ * @property {number} position non-negative integer
+ */$h͏_once.Kind(Kind);
+
+const KIND_RESERVED_MASK = 0b1111_1000;
+
+/**
+ * Flip a direction: what the sender called Local, the receiver
+ * reads as Remote.
+ *
+ * @param {0 | 1} dir
+ * @returns {0 | 1}
+ */
+       const flipDirection = dir => (dir === Direction.Local ? 1 : 0);$h͏_once.flipDirection(flipDirection);
+harden(flipDirection);
+
+/**
+ * Encode a descriptor into the shared canonical form:
+ * a 2-element CBOR array `[kindByte, position]`.
+ *
+ * @param {import('./cbor.js').Writer} w
+ * @param {Descriptor} d
+ */
+       const writeDescriptor = (w, d) => {
+  const kindByte = (d.kind << 1) | d.dir;
+  writeArrayHeader(w, 2);
+  writeUint(w, kindByte);
+  writeUint(w, d.position);
+};$h͏_once.writeDescriptor(writeDescriptor);
+harden(writeDescriptor);
+
+/**
+ * Standalone encode: returns a new Uint8Array containing exactly
+ * the bytes of this descriptor.
+ *
+ * @param {Descriptor} d
+ * @returns {Uint8Array}
+ */
+       const encodeDescriptor = d => {
+  const w = makeWriter();
+  writeDescriptor(w, d);
+  return writerToBytes(w);
+};$h͏_once.encodeDescriptor(encodeDescriptor);
+harden(encodeDescriptor);
+
+/**
+ * @param {Reader} r
+ * @returns {Descriptor}
+ */
+       const readDescriptor = r => {
+  const n = readArrayHeader(r);
+  if (n !== 2) {
+    throw makeError(X`descriptor must be 2-element array, got ${q(n)}`);
+  }
+  const kindByte = readUint(r);
+  const position = readUint(r);
+  if ((kindByte & KIND_RESERVED_MASK) !== 0) {
+    throw makeError(
+      X`descriptor kind byte ${q(kindByte)} has reserved bits set`,
+    );
+  }
+  const dir = /** @type {0 | 1} */ (kindByte & 0b1);
+  const kind = /** @type {0 | 1 | 2 | 3} */ ((kindByte >> 1) & 0b11);
+  return { dir, kind, position };
+};$h͏_once.readDescriptor(readDescriptor);
+harden(readDescriptor);
+
+/**
+ * Standalone decode from a stand-alone descriptor byte sequence.
+ *
+ * @param {Uint8Array} bytes
+ * @returns {Descriptor}
+ */
+       const decodeDescriptor = bytes => {
+  const r = { data: bytes, pos: 0 };
+  return readDescriptor(r);
+};$h͏_once.decodeDescriptor(decodeDescriptor);
+harden(decodeDescriptor);
+
+/**
+ * Canonical map key for a descriptor.  Must be stable for any
+ * two equal descriptors and distinct for any two non-equal ones.
+ *
+ * @param {Descriptor} d
+ * @returns {string}
+ */
+       const descriptorKey = d => `${(d.kind << 1) | d.dir}:${d.position}`;$h͏_once.descriptorKey(descriptorKey);
+harden(descriptorKey);
+})()
+,
+// === 59. slots ./src/payload.js ===
+({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden,makeError,q,X,makeWriter,writerToBytes,makeReader,writeArrayHeader,writeUint,writeByteString,writeNull,readArrayHeader,readUint,readByteString,readNullOrPeek,assertConsumed,writeDescriptor,readDescriptor;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]],["@endo/errors", [["makeError",[$h͏_a => (makeError = $h͏_a)]],["q",[$h͏_a => (q = $h͏_a)]],["X",[$h͏_a => (X = $h͏_a)]]]],["./cbor.js", [["makeWriter",[$h͏_a => (makeWriter = $h͏_a)]],["writerToBytes",[$h͏_a => (writerToBytes = $h͏_a)]],["makeReader",[$h͏_a => (makeReader = $h͏_a)]],["writeArrayHeader",[$h͏_a => (writeArrayHeader = $h͏_a)]],["writeUint",[$h͏_a => (writeUint = $h͏_a)]],["writeByteString",[$h͏_a => (writeByteString = $h͏_a)]],["writeNull",[$h͏_a => (writeNull = $h͏_a)]],["readArrayHeader",[$h͏_a => (readArrayHeader = $h͏_a)]],["readUint",[$h͏_a => (readUint = $h͏_a)]],["readByteString",[$h͏_a => (readByteString = $h͏_a)]],["readNullOrPeek",[$h͏_a => (readNullOrPeek = $h͏_a)]],["assertConsumed",[$h͏_a => (assertConsumed = $h͏_a)]]]],["./descriptor.js", [["writeDescriptor",[$h͏_a => (writeDescriptor = $h͏_a)]],["readDescriptor",[$h͏_a => (readDescriptor = $h͏_a)]]]]]);
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+/** @import { Descriptor } from './descriptor.js' */
+
+// ---- verb constants ----
+
+       const VERB_DELIVER = 'deliver';$h͏_once.VERB_DELIVER(VERB_DELIVER);
+harden(VERB_DELIVER);
+       const VERB_RESOLVE = 'resolve';$h͏_once.VERB_RESOLVE(VERB_RESOLVE);
+harden(VERB_RESOLVE);
+       const VERB_DROP = 'drop';$h͏_once.VERB_DROP(VERB_DROP);
+harden(VERB_DROP);
+       const VERB_ABORT = 'abort';$h͏_once.VERB_ABORT(VERB_ABORT);
+harden(VERB_ABORT);
+
+/**
+ * @param {string} verb
+ * @returns {boolean}
+ */
+       const isSlotVerb = verb =>
+  verb === VERB_DELIVER ||
+  verb === VERB_RESOLVE ||
+  verb === VERB_DROP ||
+  verb === VERB_ABORT;$h͏_once.isSlotVerb(isSlotVerb);
+harden(isSlotVerb);
+
+// ---- helpers ----
+
+/**
+ * @param {import('./cbor.js').Writer} w
+ * @param {Descriptor[]} ds
+ */
+const writeDescriptorArray = (w, ds) => {
+  writeArrayHeader(w, ds.length);
+  for (const d of ds) writeDescriptor(w, d);
+};
+
+/**
+ * @param {import('./cbor.js').Reader} r
+ * @returns {Descriptor[]}
+ */
+const readDescriptorArray = r => {
+  const n = readArrayHeader(r);
+  const out = [];
+  for (let i = 0; i < n; i += 1) out.push(readDescriptor(r));
+  return out;
+};
+
+// ---- deliver ----
+
+/**
+ * @typedef {object} DeliverPayload
+ * @property {Descriptor} target
+ * @property {Uint8Array} body
+ * @property {Descriptor[]} targets
+ * @property {Descriptor[]} promises
+ * @property {Descriptor | null} reply
+ */
+
+/**
+ * @param {DeliverPayload} p
+ * @returns {Uint8Array}
+ */
+       const encodeDeliverPayload = p => {
+  const w = makeWriter();
+  writeArrayHeader(w, 5);
+  writeDescriptor(w, p.target);
+  writeByteString(w, p.body);
+  writeDescriptorArray(w, p.targets);
+  writeDescriptorArray(w, p.promises);
+  if (p.reply) writeDescriptor(w, p.reply);
+  else writeNull(w);
+  return writerToBytes(w);
+};$h͏_once.encodeDeliverPayload(encodeDeliverPayload);
+harden(encodeDeliverPayload);
+
+/**
+ * @param {Uint8Array} bytes
+ * @returns {DeliverPayload}
+ */
+       const decodeDeliverPayload = bytes => {
+  const r = makeReader(bytes);
+  const n = readArrayHeader(r);
+  if (n !== 5) {
+    throw makeError(X`deliver payload must be 5-element array, got ${q(n)}`);
+  }
+  const target = readDescriptor(r);
+  const body = readByteString(r);
+  const targets = readDescriptorArray(r);
+  const promises = readDescriptorArray(r);
+  const reply = readNullOrPeek(r) ? null : readDescriptor(r);
+  assertConsumed(r);
+  return { target, body, targets, promises, reply };
+};$h͏_once.decodeDeliverPayload(decodeDeliverPayload);
+harden(decodeDeliverPayload);
+
+// ---- resolve ----
+
+/**
+ * @typedef {object} ResolvePayload
+ * @property {Descriptor} target
+ * @property {boolean} isReject
+ * @property {Uint8Array} body
+ * @property {Descriptor[]} targets
+ * @property {Descriptor[]} promises
+ */
+
+/**
+ * @param {ResolvePayload} p
+ * @returns {Uint8Array}
+ */
+       const encodeResolvePayload = p => {
+  const w = makeWriter();
+  writeArrayHeader(w, 5);
+  writeDescriptor(w, p.target);
+  writeUint(w, p.isReject ? 1 : 0);
+  writeByteString(w, p.body);
+  writeDescriptorArray(w, p.targets);
+  writeDescriptorArray(w, p.promises);
+  return writerToBytes(w);
+};$h͏_once.encodeResolvePayload(encodeResolvePayload);
+harden(encodeResolvePayload);
+
+/**
+ * @param {Uint8Array} bytes
+ * @returns {ResolvePayload}
+ */
+       const decodeResolvePayload = bytes => {
+  const r = makeReader(bytes);
+  const n = readArrayHeader(r);
+  if (n !== 5) {
+    throw makeError(X`resolve payload must be 5-element array, got ${q(n)}`);
+  }
+  const target = readDescriptor(r);
+  const flag = readUint(r);
+  if (flag > 1) {
+    throw makeError(X`resolve is_reject must be 0 or 1, got ${q(flag)}`);
+  }
+  const body = readByteString(r);
+  const targets = readDescriptorArray(r);
+  const promises = readDescriptorArray(r);
+  assertConsumed(r);
+  return { target, isReject: flag === 1, body, targets, promises };
+};$h͏_once.decodeResolvePayload(decodeResolvePayload);
+harden(decodeResolvePayload);
+
+// ---- drop ----
+
+/**
+ * @typedef {object} DropDelta
+ * @property {Descriptor} target
+ * @property {number} ram
+ * @property {number} clist
+ * @property {number} export
+ */
+
+/**
+ * @param {DropDelta[]} deltas
+ * @returns {Uint8Array}
+ */
+       const encodeDropPayload = deltas => {
+  const w = makeWriter();
+  writeArrayHeader(w, deltas.length);
+  for (const d of deltas) {
+    writeArrayHeader(w, 4);
+    writeDescriptor(w, d.target);
+    writeUint(w, d.ram);
+    writeUint(w, d.clist);
+    writeUint(w, d.export);
+  }
+  return writerToBytes(w);
+};$h͏_once.encodeDropPayload(encodeDropPayload);
+harden(encodeDropPayload);
+
+/**
+ * @param {Uint8Array} bytes
+ * @returns {DropDelta[]}
+ */
+       const decodeDropPayload = bytes => {
+  const r = makeReader(bytes);
+  const n = readArrayHeader(r);
+  const out = [];
+  for (let i = 0; i < n; i += 1) {
+    const fieldsLen = readArrayHeader(r);
+    if (fieldsLen !== 4) {
+      throw makeError(
+        X`drop entry must be 4-element array, got ${q(fieldsLen)}`,
+      );
+    }
+    const target = readDescriptor(r);
+    const ram = readUint(r);
+    const clist = readUint(r);
+    const exportPillar = readUint(r);
+    out.push({ target, ram, clist, export: exportPillar });
+  }
+  assertConsumed(r);
+  return out;
+};$h͏_once.decodeDropPayload(decodeDropPayload);
+harden(decodeDropPayload);
+
+// ---- abort ----
+
+const textEncoder = new TextEncoder();
+const textDecoder = new TextDecoder('utf-8', { fatal: true });
+
+/**
+ * @param {string} reason
+ * @returns {Uint8Array}
+ */
+       const encodeAbortPayload = reason => {
+  const w = makeWriter();
+  writeByteString(w, textEncoder.encode(reason));
+  return writerToBytes(w);
+};$h͏_once.encodeAbortPayload(encodeAbortPayload);
+harden(encodeAbortPayload);
+
+/**
+ * @param {Uint8Array} bytes
+ * @returns {string}
+ */
+       const decodeAbortPayload = bytes => {
+  const r = makeReader(bytes);
+  const raw = readByteString(r);
+  assertConsumed(r);
+  try {
+    return textDecoder.decode(raw);
+  } catch (e) {
+    throw makeError(X`abort reason not valid utf-8: ${q(String(e))}`);
+  }
+};$h͏_once.decodeAbortPayload(decodeAbortPayload);
+harden(decodeAbortPayload);
+})()
+,
+// === 60. slots ./src/session.js ===
+({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]]]);
+
+
+
+
+const textEncoder = new TextEncoder();
+
+const LABEL_PREFIX = 'slots/session/';
+
+// SHA-256 constants — first 32 bits of the fractional parts of the
+// cube roots of the first 64 primes (RFC 6234 §5.1).
+const K = harden([
+  0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1,
+  0x923f82a4, 0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3,
+  0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786,
+  0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+  0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147,
+  0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13,
+  0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b,
+  0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+  0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a,
+  0x5b9cca4f, 0x682e6ff3, 0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208,
+  0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+]);
+
+const rotr = (/** @type {number} */ x, /** @type {number} */ n) =>
+  (x >>> n) | (x << (32 - n));
+
+/**
+ * Pure-JS SHA-256 of a Uint8Array.  No external dependency so the
+ * package loads cleanly in any SES-flavoured host (Node, XS,
+ * browsers).  Verified against the fixture digests pinned in
+ * `test/session.test.js` and `rust/endo/slots/src/session.rs`.
+ *
+ * @param {Uint8Array} bytes
+ * @returns {Uint8Array} 32 bytes
+ */
+const sha256 = bytes => {
+  const ml = bytes.length;
+  // Padded length: pad with 0x80, then zeros, then 8-byte big-endian
+  // bit-length.  Round up to a multiple of 64.
+  const withPad = (((ml + 9 + 63) >>> 6) << 6) >>> 0;
+  const padded = new Uint8Array(withPad);
+  padded.set(bytes);
+  padded[ml] = 0x80;
+  const bitLen = ml * 8;
+  const bitHi = Math.floor(bitLen / 0x100000000) >>> 0;
+  const bitLo = bitLen >>> 0;
+  const dv = new DataView(padded.buffer);
+  dv.setUint32(withPad - 8, bitHi, false);
+  dv.setUint32(withPad - 4, bitLo, false);
+
+  // Initial hash values (RFC 6234 §5.3.3).
+  let h0 = 0x6a09e667;
+  let h1 = 0xbb67ae85;
+  let h2 = 0x3c6ef372;
+  let h3 = 0xa54ff53a;
+  let h4 = 0x510e527f;
+  let h5 = 0x9b05688c;
+  let h6 = 0x1f83d9ab;
+  let h7 = 0x5be0cd19;
+
+  const w = new Uint32Array(64);
+  for (let i = 0; i < withPad; i += 64) {
+    for (let j = 0; j < 16; j += 1) {
+      w[j] = dv.getUint32(i + j * 4, false);
+    }
+    for (let j = 16; j < 64; j += 1) {
+      const s0 = rotr(w[j - 15], 7) ^ rotr(w[j - 15], 18) ^ (w[j - 15] >>> 3);
+      const s1 = rotr(w[j - 2], 17) ^ rotr(w[j - 2], 19) ^ (w[j - 2] >>> 10);
+      w[j] = (w[j - 16] + s0 + w[j - 7] + s1) >>> 0;
+    }
+    let a = h0;
+    let b = h1;
+    let c = h2;
+    let d = h3;
+    let e = h4;
+    let f = h5;
+    let g = h6;
+    let h = h7;
+    for (let j = 0; j < 64; j += 1) {
+      const s1 = rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25);
+      const ch = (e & f) ^ (~e & g);
+      const t1 = (h + s1 + ch + K[j] + w[j]) >>> 0;
+      const s0 = rotr(a, 2) ^ rotr(a, 13) ^ rotr(a, 22);
+      const mj = (a & b) ^ (a & c) ^ (b & c);
+      const t2 = (s0 + mj) >>> 0;
+      h = g;
+      g = f;
+      f = e;
+      e = (d + t1) >>> 0;
+      d = c;
+      c = b;
+      b = a;
+      a = (t1 + t2) >>> 0;
+    }
+    h0 = (h0 + a) >>> 0;
+    h1 = (h1 + b) >>> 0;
+    h2 = (h2 + c) >>> 0;
+    h3 = (h3 + d) >>> 0;
+    h4 = (h4 + e) >>> 0;
+    h5 = (h5 + f) >>> 0;
+    h6 = (h6 + g) >>> 0;
+    h7 = (h7 + h) >>> 0;
+  }
+
+  const out = new Uint8Array(32);
+  const ov = new DataView(out.buffer);
+  ov.setUint32(0, h0, false);
+  ov.setUint32(4, h1, false);
+  ov.setUint32(8, h2, false);
+  ov.setUint32(12, h3, false);
+  ov.setUint32(16, h4, false);
+  ov.setUint32(20, h5, false);
+  ov.setUint32(24, h6, false);
+  ov.setUint32(28, h7, false);
+  return out;
+};
+
+/**
+ * Deterministic session identifier.  Must match
+ * `slots::session::SessionId::from_label(label)` in the Rust crate:
+ *
+ *   SHA-256("slots/session/" || label.utf8()) → 32 bytes
+ *
+ * @param {string} label
+ * @returns {Uint8Array} 32 bytes
+ */
+       const sessionIdFromLabel = label => {
+  const bytes = textEncoder.encode(`${LABEL_PREFIX}${label}`);
+  return sha256(bytes);
+};$h͏_once.sessionIdFromLabel(sessionIdFromLabel);
+harden(sessionIdFromLabel);
+
+/**
+ * Hex encoding of a session id — useful for logs and diagnostics.
+ *
+ * @param {Uint8Array} id
+ * @returns {string}
+ */
+       const sessionIdHex = id => {
+  let out = '';
+  for (let i = 0; i < id.length; i += 1) {
+    const byte = id[i];
+    out += (byte < 16 ? '0' : '') + byte.toString(16);
+  }
+  return out;
+};$h͏_once.sessionIdHex(sessionIdHex);
+harden(sessionIdHex);
+})()
+,
+// === 61. slots ./src/clist.js ===
+({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden,makeError,q,X,Direction,Kind,descriptorKey,sessionIdFromLabel;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]],["@endo/errors", [["makeError",[$h͏_a => (makeError = $h͏_a)]],["q",[$h͏_a => (q = $h͏_a)]],["X",[$h͏_a => (X = $h͏_a)]]]],["./descriptor.js", [["Direction",[$h͏_a => (Direction = $h͏_a)]],["Kind",[$h͏_a => (Kind = $h͏_a)]],["descriptorKey",[$h͏_a => (descriptorKey = $h͏_a)]]]],["./session.js", [["sessionIdFromLabel",[$h͏_a => (sessionIdFromLabel = $h͏_a)]]]]]);
+
+
+
+
+
+
+
+/** @import { Descriptor } from './descriptor.js' */
+
+const kindFieldName = harden({
+  [Kind.Object]: 'object',
+  [Kind.Promise]: 'promise',
+  [Kind.Answer]: 'answer',
+  [Kind.Device]: 'device',
+});
+
+/**
+ * Create a per-session c-list: a bidirectional map between local
+ * values (objects/promises) and their wire descriptors, plus the
+ * monotonic counters for allocating local positions.
+ *
+ * This mirrors `rust/endo/slots/src/session.rs::Session` in shape,
+ * but holds plain JS values instead of daemon-side krefs — a peer
+ * that wants to associate a descriptor with a kref stores it
+ * externally and references the descriptor by [`descriptorKey`].
+ *
+ * @param {object} opts
+ * @param {string} opts.label
+ */
+       const makeCList = ({ label }) => {
+  // Compute the session id eagerly but expose it via a getter — XS
+  // marks Uint8Array indexed elements non-configurable, so deep-
+  // freezing the outer hardened object would fail if `id` were a
+  // direct property holding a typed array.  Same workaround the
+  // daemon uses for keypair material.
+  const idBytes = sessionIdFromLabel(label);
+
+  /** @type {Map<unknown, Descriptor>} */
+  const valToDesc = new Map();
+  /** @type {Map<string, unknown>} */
+  const keyToVal = new Map();
+
+  // Monotonic counters.  Object/Promise/Device start at 1;
+  // Answer starts at 0, matching the Rust crate.
+  const next = {
+    object: 1,
+    promise: 1,
+    answer: 0,
+    device: 1,
+  };
+
+  /**
+   * @param {0 | 1 | 2 | 3} kind
+   * @returns {number}
+   */
+  const allocLocal = kind => {
+    const field = kindFieldName[kind];
+    if (!field) {
+      throw makeError(X`invalid kind ${q(kind)}`);
+    }
+    const id2 = next[field];
+    next[field] += 1;
+    return id2;
+  };
+
+  /**
+   * Ensure that `val` has a local descriptor in this c-list.
+   * Returns the (possibly newly-allocated) descriptor.
+   *
+   * @param {unknown} val
+   * @param {0 | 1 | 2 | 3} [kind]
+   * @returns {Descriptor}
+   */
+  const exportLocal = (val, kind = Kind.Object) => {
+    const existing = valToDesc.get(val);
+    if (existing) return existing;
+    const position = allocLocal(kind);
+    /** @type {Descriptor} */
+    const desc = harden({ dir: Direction.Local, kind, position });
+    valToDesc.set(val, desc);
+    keyToVal.set(descriptorKey(desc), val);
+    return desc;
+  };
+
+  /**
+   * Import a remote descriptor, returning an existing local
+   * placeholder if one is already registered, or installing the
+   * newly-created `makePlaceholder()` return value otherwise.
+   *
+   * @param {Descriptor} desc
+   * @param {() => unknown} makePlaceholder
+   * @returns {unknown}
+   */
+  const importRemote = (desc, makePlaceholder) => {
+    const key = descriptorKey(desc);
+    const existing = keyToVal.get(key);
+    if (existing !== undefined) return existing;
+    const placeholder = makePlaceholder();
+    keyToVal.set(key, placeholder);
+    valToDesc.set(placeholder, harden({ ...desc }));
+    return placeholder;
+  };
+
+  /**
+   * Look up a value by descriptor.
+   *
+   * @param {Descriptor} desc
+   */
+  const lookupByDescriptor = desc => keyToVal.get(descriptorKey(desc));
+
+  /**
+   * Look up a descriptor by value.
+   *
+   * @param {unknown} val
+   */
+  const lookupByValue = val => valToDesc.get(val);
+
+  /**
+   * Drop the mapping for a descriptor.  The caller owns refcount
+   * bookkeeping; this just removes the entry from the local tables.
+   *
+   * @param {Descriptor} desc
+   */
+  const drop = desc => {
+    const key = descriptorKey(desc);
+    const val = keyToVal.get(key);
+    if (val === undefined) return false;
+    keyToVal.delete(key);
+    valToDesc.delete(val);
+    return true;
+  };
+
+  return harden({
+    get id() {
+      return idBytes;
+    },
+    label,
+    exportLocal,
+    importRemote,
+    lookupByDescriptor,
+    lookupByValue,
+    drop,
+    size: () => keyToVal.size,
+  });
+};$h͏_once.makeCList(makeCList);
+harden(makeCList);
+})()
+,
+// === 62. slots ./src/codec.js ===
+({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden,makeError,q,X,makeMarshal,isPromise,Kind,descriptorKey,encodeDeliverPayload,decodeDeliverPayload,encodeResolvePayload,decodeResolvePayload;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]],["@endo/errors", [["makeError",[$h͏_a => (makeError = $h͏_a)]],["q",[$h͏_a => (q = $h͏_a)]],["X",[$h͏_a => (X = $h͏_a)]]]],["@endo/marshal", [["makeMarshal",[$h͏_a => (makeMarshal = $h͏_a)]]]],["@endo/promise-kit", [["isPromise",[$h͏_a => (isPromise = $h͏_a)]]]],["./descriptor.js", [["Kind",[$h͏_a => (Kind = $h͏_a)]],["descriptorKey",[$h͏_a => (descriptorKey = $h͏_a)]]]],["./payload.js", [["encodeDeliverPayload",[$h͏_a => (encodeDeliverPayload = $h͏_a)]],["decodeDeliverPayload",[$h͏_a => (decodeDeliverPayload = $h͏_a)]],["encodeResolvePayload",[$h͏_a => (encodeResolvePayload = $h͏_a)]],["decodeResolvePayload",[$h͏_a => (decodeResolvePayload = $h͏_a)]]]]]);
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+/** @import { Descriptor } from './descriptor.js' */
+/** @import { DeliverPayload, ResolvePayload } from './payload.js' */
+
+const textEncoder = new TextEncoder();
+const textDecoder = new TextDecoder('utf-8', { fatal: true });
+
+/**
+ * Wire slot strings are `"s<N>"` where N is the index into
+ * [`DeliverPayload.targets`] / [`ResolvePayload.targets`].  All
+ * capabilities (objects and promises) share a single flat array on
+ * the wire; the descriptor's own kind byte distinguishes them.  The
+ * [`DeliverPayload.promises`] field stays empty — the Rust supervisor
+ * translates both arrays identically via `translate_slice`, so
+ * collapsing them simplifies the codec without changing wire
+ * semantics.
+ */
+const SLOT_TAG = 's';
+
+// Canonical slot strings: `s` followed by either `0` or a non-zero
+// digit run.  Reject leading zeros, signs, exponents, whitespace —
+// the wire form must be deterministic so that both ends agree.
+const SLOT_PATTERN = /^s(0|[1-9][0-9]*)$/;
+
+const parseSlot = slot => {
+  if (typeof slot !== 'string' || !SLOT_PATTERN.test(slot)) {
+    throw makeError(X`invalid slot string ${q(slot)}`);
+  }
+  const idx = Number(slot.slice(1));
+  if (!Number.isSafeInteger(idx)) {
+    throw makeError(X`slot index ${q(slot)} exceeds safe-integer range`);
+  }
+  return idx;
+};
+
+/**
+ * Create a slot-machine codec bound to a c-list: translates between
+ * high-level call / resolution shapes and the wire-level payload
+ * bytes, threading capabilities through the c-list's export/import
+ * tables.
+ *
+ * @param {object} opts
+ * @param {{
+ *   exportLocal: (val: unknown, kind?: 0 | 1 | 2 | 3) => Descriptor,
+ *   importRemote: (desc: Descriptor, make: () => unknown) => unknown,
+ * }} opts.clist
+ * @param {(desc: Descriptor) => unknown} opts.makePresence
+ *   Called when decoding a remote descriptor that has no existing
+ *   c-list entry.  The returned value represents the remote cap.
+ * @param {string} [opts.marshalName]
+ */
+       const makeSlotCodec = ({
+  clist,
+  makePresence,
+  marshalName = 'slots',
+}) => {
+  /** @type {Descriptor[]} */
+  let encodingSlots = [];
+  /** @type {Descriptor[]} */
+  let decodingSlots = [];
+
+  /**
+   * @param {unknown} val
+   * @returns {string}
+   */
+  const convertValToSlot = val => {
+    const kind = isPromise(val) ? Kind.Promise : Kind.Object;
+    const desc = clist.exportLocal(val, kind);
+    const key = descriptorKey(desc);
+    for (let i = 0; i < encodingSlots.length; i += 1) {
+      if (descriptorKey(encodingSlots[i]) === key) {
+        return `${SLOT_TAG}${i}`;
+      }
+    }
+    const idx = encodingSlots.length;
+    encodingSlots.push(desc);
+    return `${SLOT_TAG}${idx}`;
+  };
+
+  /**
+   * @param {string} slot
+   * @returns {unknown}
+   */
+  const convertSlotToVal = slot => {
+    const idx = parseSlot(slot);
+    if (idx >= decodingSlots.length) {
+      throw makeError(
+        X`slot ${q(slot)} out of range (have ${q(decodingSlots.length)} entries)`,
+      );
+    }
+    const desc = decodingSlots[idx];
+    return clist.importRemote(desc, () => makePresence(desc));
+  };
+
+  const { toCapData, fromCapData } = makeMarshal(
+    convertValToSlot,
+    convertSlotToVal,
+    {
+      marshalName,
+      serializeBodyFormat: 'smallcaps',
+    },
+  );
+
+  /**
+   * Export `target` into the c-list as its natural kind.
+   *
+   * @param {unknown} target
+   * @returns {Descriptor}
+   */
+  const describe = target => {
+    const kind = isPromise(target) ? Kind.Promise : Kind.Object;
+    return clist.exportLocal(target, kind);
+  };
+
+  /**
+   * Encode a method-call into wire-level `deliver` payload bytes.
+   *
+   * @param {object} args
+   * @param {unknown} args.target
+   * @param {string} args.method
+   * @param {unknown[]} args.args
+   * @param {unknown} [args.reply] optional promise whose resolution
+   *   will receive the call's return value (fire-and-forget if absent)
+   * @returns {Uint8Array}
+   */
+  const encodeDeliver = ({ target, method, args, reply }) => {
+    encodingSlots = [];
+    const targetDesc = describe(target);
+    const replyDesc =
+      reply !== undefined
+        ? clist.exportLocal(reply, Kind.Promise)
+        : /** @type {Descriptor | null} */ (null);
+    const { body } = toCapData(
+      /** @type {import('@endo/pass-style').Passable} */ (
+        harden([method, args])
+      ),
+    );
+    /** @type {DeliverPayload} */
+    const payload = {
+      target: targetDesc,
+      body: textEncoder.encode(body),
+      targets: encodingSlots,
+      promises: [],
+      reply: replyDesc,
+    };
+    return encodeDeliverPayload(payload);
+  };
+  harden(encodeDeliver);
+
+  /**
+   * Decode `deliver` payload bytes back into the JS-level call shape.
+   *
+   * @param {Uint8Array} bytes
+   * @returns {{
+   *   target: unknown,
+   *   method: string,
+   *   args: unknown[],
+   *   reply: unknown | null,
+   * }}
+   */
+  const decodeDeliver = bytes => {
+    const p = decodeDeliverPayload(bytes);
+    decodingSlots = p.targets;
+    const bodyStr = textDecoder.decode(p.body);
+    const slotStrings = decodingSlots.map((_, i) => `${SLOT_TAG}${i}`);
+    const decoded = fromCapData(harden({ body: bodyStr, slots: slotStrings }));
+    if (!Array.isArray(decoded) || decoded.length !== 2) {
+      throw makeError(
+        X`deliver body must decode to [method, args], got ${q(decoded)}`,
+      );
+    }
+    const [method, args] = decoded;
+    if (typeof method !== 'string') {
+      throw makeError(X`deliver method must be string, got ${q(method)}`);
+    }
+    if (!Array.isArray(args)) {
+      throw makeError(X`deliver args must be array, got ${q(args)}`);
+    }
+    const target = clist.importRemote(p.target, () => makePresence(p.target));
+    const replyDesc = p.reply;
+    const reply =
+      replyDesc === null
+        ? null
+        : clist.importRemote(replyDesc, () => makePresence(replyDesc));
+    return { target, method, args: [...args], reply };
+  };
+  harden(decodeDeliver);
+
+  /**
+   * Encode a resolution into wire-level `resolve` payload bytes.
+   *
+   * @param {object} args
+   * @param {unknown} args.target — the promise being resolved
+   * @param {boolean} args.isReject
+   * @param {unknown} args.value
+   * @returns {Uint8Array}
+   */
+  const encodeResolve = ({ target, isReject, value }) => {
+    encodingSlots = [];
+    const targetDesc = clist.exportLocal(target, Kind.Promise);
+    const { body } = toCapData(
+      /** @type {import('@endo/pass-style').Passable} */ (harden(value)),
+    );
+    /** @type {ResolvePayload} */
+    const payload = {
+      target: targetDesc,
+      isReject,
+      body: textEncoder.encode(body),
+      targets: encodingSlots,
+      promises: [],
+    };
+    return encodeResolvePayload(payload);
+  };
+  harden(encodeResolve);
+
+  /**
+   * Decode `resolve` payload bytes.
+   *
+   * @param {Uint8Array} bytes
+   */
+  const decodeResolve = bytes => {
+    const p = decodeResolvePayload(bytes);
+    decodingSlots = p.targets;
+    const bodyStr = textDecoder.decode(p.body);
+    const slotStrings = decodingSlots.map((_, i) => `${SLOT_TAG}${i}`);
+    const value = fromCapData(harden({ body: bodyStr, slots: slotStrings }));
+    const target = clist.importRemote(p.target, () => makePresence(p.target));
+    return { target, isReject: p.isReject, value };
+  };
+  harden(decodeResolve);
+
+  return harden({
+    encodeDeliver,
+    decodeDeliver,
+    encodeResolve,
+    decodeResolve,
+    describe,
+  });
+};$h͏_once.makeSlotCodec(makeSlotCodec);
+harden(makeSlotCodec);
+})()
+,
+// === 63. slots ./src/client.js ===
+({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden,makeError,X,HandledPromise,makePromiseKit,descriptorKey,VERB_DELIVER,VERB_RESOLVE,VERB_DROP,VERB_ABORT,encodeDropPayload,decodeDropPayload;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]],["@endo/errors", [["makeError",[$h͏_a => (makeError = $h͏_a)]],["X",[$h͏_a => (X = $h͏_a)]]]],["@endo/eventual-send", [["HandledPromise",[$h͏_a => (HandledPromise = $h͏_a)]]]],["@endo/promise-kit", [["makePromiseKit",[$h͏_a => (makePromiseKit = $h͏_a)]]]],["./descriptor.js", [["descriptorKey",[$h͏_a => (descriptorKey = $h͏_a)]]]],["./payload.js", [["VERB_DELIVER",[$h͏_a => (VERB_DELIVER = $h͏_a)]],["VERB_RESOLVE",[$h͏_a => (VERB_RESOLVE = $h͏_a)]],["VERB_DROP",[$h͏_a => (VERB_DROP = $h͏_a)]],["VERB_ABORT",[$h͏_a => (VERB_ABORT = $h͏_a)]],["encodeDropPayload",[$h͏_a => (encodeDropPayload = $h͏_a)]],["decodeDropPayload",[$h͏_a => (decodeDropPayload = $h͏_a)]]]]]);
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+/** @import { Descriptor } from './descriptor.js' */
+
+/**
+ * Map a wire-encoded rejection value back into an `Error`.  The
+ * sender's `onDeliver` packs `{ name, message }`; older senders
+ * may have packed a bare string.  Either way we yield a
+ * throwable Error so consumers can `await` and `try/catch`.
+ *
+ * @param {unknown} value
+ * @returns {Error}
+ */
+const rehydrateError = value => {
+  if (typeof value === 'string') return Error(value);
+  if (
+    value &&
+    typeof value === 'object' &&
+    typeof (/** @type {{ message?: unknown }} */ (value).message) === 'string'
+  ) {
+    const v = /** @type {{ name?: unknown, message: string }} */ (value);
+    const e = Error(v.message);
+    if (typeof v.name === 'string') {
+      Object.defineProperty(e, 'name', {
+        value: v.name,
+        configurable: true,
+        writable: true,
+      });
+    }
+    return e;
+  }
+  return Error(String(value));
+};
+
+/**
+ * @typedef {(verb: string, payload: Uint8Array) => void} SendEnvelope
+ */
+
+/**
+ * Create a slot-machine client: the user-facing interface that
+ * turns [`makeSlotCodec`] plus a transport callback into an
+ * eventual-send surface.
+ *
+ * Responsibilities:
+ *
+ * * `makePresence(desc)` — produce a [`HandledPromise`] whose `E()`
+ *   calls encode `deliver` envelopes and queue them on the transport.
+ * * Reply tracking — every outbound `deliver` with a reply allocates
+ *   a local promise descriptor; when the peer's `resolve` arrives for
+ *   that descriptor, the matching pending promise settles.
+ * * `onDeliver` — dispatch an inbound `deliver` to its target via
+ *   [`HandledPromise.applyMethod`], and (if the call carries a reply
+ *   descriptor) send a matching `resolve` once the result settles.
+ * * `onResolve` — route an inbound `resolve` to its pending promise.
+ *
+ * Drop / abort routing is left to the transport layer above.
+ *
+ * @param {object} opts
+ * @param {{
+ *   exportLocal: (val: unknown, kind?: 0 | 1 | 2 | 3) => Descriptor,
+ *   importRemote: (desc: Descriptor, make: () => unknown) => unknown,
+ *   lookupByValue: (val: unknown) => Descriptor | undefined,
+ * }} opts.clist
+ * @param {{
+ *   encodeDeliver: (call: {
+ *     target: unknown,
+ *     method: string,
+ *     args: unknown[],
+ *     reply?: unknown,
+ *   }) => Uint8Array,
+ *   decodeDeliver: (bytes: Uint8Array) => {
+ *     target: unknown,
+ *     method: string,
+ *     args: unknown[],
+ *     reply: unknown | null,
+ *   },
+ *   encodeResolve: (resolution: {
+ *     target: unknown,
+ *     isReject: boolean,
+ *     value: unknown,
+ *   }) => Uint8Array,
+ *   decodeResolve: (bytes: Uint8Array) => {
+ *     target: unknown,
+ *     isReject: boolean,
+ *     value: unknown,
+ *   },
+ * }} opts.codec
+ * @param {SendEnvelope} opts.sendEnvelope
+ * @param {typeof globalThis.FinalizationRegistry} [opts.FinalizationRegistry]
+ *   Optional finalisation registry constructor.  When supplied,
+ *   `makePresence` registers each presence so that its
+ *   garbage-collection queues an outbound `drop` envelope with
+ *   `ram: 1`.  Defaults to `globalThis.FinalizationRegistry` if
+ *   available; if the host has no such class, auto-drop is a
+ *   no-op and callers must invoke `drop([...])` explicitly.
+ */
+       const makeSlotClient = ({
+  clist,
+  codec,
+  sendEnvelope,
+  FinalizationRegistry: FRCtor = globalThis.FinalizationRegistry,
+}) => {
+  /**
+   * Pending replies, keyed by the descriptor of the local reply
+   * promise.  Entries are cleared by `onResolve`.
+   *
+   * @type {Map<string, { resolve: (v: unknown) => void, reject: (e: unknown) => void }>}
+   */
+  const settlers = new Map();
+
+  /**
+   * Finalisation callback: when a presence becomes unreachable,
+   * send a `drop` envelope with `ram: 1` against its descriptor.
+   * Best-effort — the transport may be closed by the time the GC
+   * fires, in which case we swallow the error silently.
+   *
+   * @type {InstanceType<typeof globalThis.FinalizationRegistry<Descriptor>> | null}
+   */
+  const finalizer = FRCtor
+    ? new FRCtor(
+        /**
+         * @param {Descriptor} desc
+         */
+        desc => {
+          try {
+            const bytes = encodeDropPayload([
+              { target: desc, ram: 1, clist: 0, export: 0 },
+            ]);
+            sendEnvelope(VERB_DROP, bytes);
+          } catch (_err) {
+            // Transport closed; drop is best-effort.
+          }
+        },
+      )
+    : null;
+
+  /**
+   * Send a method call to a presence or to a local value registered
+   * in the c-list.  Returns a promise for the reply.
+   *
+   * @param {unknown} target
+   * @param {string} method
+   * @param {unknown[]} args
+   * @returns {Promise<unknown>}
+   */
+  const deliver = (target, method, args) => {
+    const { promise: reply, resolve, reject } = makePromiseKit();
+    const bytes = codec.encodeDeliver({ target, method, args, reply });
+    const replyDesc = clist.lookupByValue(reply);
+    if (!replyDesc) {
+      // codec.encodeDeliver just ran exportLocal on `reply`, so this
+      // should be unreachable.
+      throw makeError(X`reply promise did not receive a descriptor`);
+    }
+    // Register the settler before send so a synchronous transport
+    // that pumps an inbound resolve re-entrantly inside sendEnvelope
+    // can still find the matching entry.
+    settlers.set(descriptorKey(replyDesc), { resolve, reject });
+    sendEnvelope(VERB_DELIVER, bytes);
+    return reply;
+  };
+  harden(deliver);
+
+  /**
+   * Send a method call without tracking a reply.
+   *
+   * @param {unknown} target
+   * @param {string} method
+   * @param {unknown[]} args
+   */
+  const deliverSendOnly = (target, method, args) => {
+    const bytes = codec.encodeDeliver({ target, method, args });
+    sendEnvelope(VERB_DELIVER, bytes);
+  };
+  harden(deliverSendOnly);
+
+  /**
+   * Create a [`HandledPromise`] representing a remote capability.
+   * The presence is registered in the c-list keyed by `desc`.
+   *
+   * @param {Descriptor} desc
+   * @returns {unknown}
+   */
+  const makePresence = desc => {
+    const handler = {
+      /**
+       * @param {unknown} p
+       * @param {string | symbol} method
+       * @param {unknown[]} args
+       */
+      applyMethod(p, method, args) {
+        if (typeof method !== 'string') {
+          throw makeError(X`slot-machine calls require string methods`);
+        }
+        return deliver(p, method, args);
+      },
+      /**
+       * @param {unknown} p
+       * @param {string | symbol} method
+       * @param {unknown[]} args
+       */
+      applyMethodSendOnly(p, method, args) {
+        if (typeof method !== 'string') {
+          throw makeError(X`slot-machine calls require string methods`);
+        }
+        deliverSendOnly(p, method, args);
+      },
+      /**
+       * Treat a presence-as-function call as a `__call__` method
+       * dispatch.  Slot-machine has no separate function-target
+       * convention, so we surface this as a string-keyed method to
+       * keep the wire shape uniform.
+       *
+       * @param {unknown} p
+       * @param {unknown[]} args
+       */
+      applyFunction(p, args) {
+        return deliver(p, '__call__', args);
+      },
+      /**
+       * @param {unknown} p
+       * @param {unknown[]} args
+       */
+      applyFunctionSendOnly(p, args) {
+        deliverSendOnly(p, '__call__', args);
+      },
+      /**
+       * Property access via `E(p).prop` resolves to a deliver of
+       * the conventional `__get__` method with the property name as
+       * its only argument.  Mirrors CapTP's get-as-call shape.
+       *
+       * @param {unknown} p
+       * @param {string | symbol} prop
+       */
+      get(p, prop) {
+        if (typeof prop !== 'string') {
+          throw makeError(X`slot-machine property names must be strings`);
+        }
+        return deliver(p, '__get__', [prop]);
+      },
+    };
+    // Executor is a no-op; the presence is settled only via inbound
+    // resolve envelopes, if ever.  A presence representing a live
+    // remote object never settles.
+    const presence = new HandledPromise(() => {}, harden(handler));
+    const registered = clist.importRemote(desc, () => presence);
+    if (finalizer && registered === presence) {
+      // Only register newly-created presences — if the c-list
+      // already held an entry we reuse it and its existing
+      // finalisation hook.
+      finalizer.register(presence, harden({ ...desc }));
+    }
+    // Return whichever presence the c-list canonicalised on, so
+    // repeat calls to makePresence with the same descriptor yield
+    // the same object.
+    return registered;
+  };
+  harden(makePresence);
+
+  /**
+   * Handle an inbound `deliver`: dispatch to the target and, if the
+   * call carries a reply descriptor, send a matching `resolve`
+   * envelope when the result settles.
+   *
+   * @param {Uint8Array} bytes
+   */
+  const onDeliver = bytes => {
+    const { target, method, args, reply } = codec.decodeDeliver(bytes);
+    let resultP;
+    try {
+      resultP = HandledPromise.applyMethod(target, method, args);
+    } catch (err) {
+      resultP = Promise.reject(err);
+    }
+    if (reply !== null) {
+      Promise.resolve(resultP).then(
+        value => {
+          const out = codec.encodeResolve({
+            target: reply,
+            isReject: false,
+            value,
+          });
+          sendEnvelope(VERB_RESOLVE, out);
+        },
+        err => {
+          // Carry both name and message so the receiving side can
+          // rehydrate an Error of the right class.  Stack and cause
+          // are deliberately omitted — they may contain sensitive
+          // information from the rejecting peer's frame.
+          const errLike = /** @type {{ name?: unknown, message?: unknown }} */ (
+            err
+          );
+          const name =
+            typeof errLike?.name === 'string' ? errLike.name : 'Error';
+          const message =
+            typeof errLike?.message === 'string'
+              ? errLike.message
+              : String(err);
+          const out = codec.encodeResolve({
+            target: reply,
+            isReject: true,
+            value: harden({ name, message }),
+          });
+          sendEnvelope(VERB_RESOLVE, out);
+        },
+      );
+    }
+  };
+  harden(onDeliver);
+
+  /**
+   * Handle an inbound `resolve`: route to the matching local reply
+   * promise and clear the bookkeeping entry.  Unknown resolves are
+   * silently dropped — a repeat resolve or one for a dropped reply
+   * promise is a correctness issue at the sending peer, not here.
+   *
+   * @param {Uint8Array} bytes
+   */
+  const onResolve = bytes => {
+    const { target, isReject, value } = codec.decodeResolve(bytes);
+    const desc = clist.lookupByValue(target);
+    if (!desc) return;
+    const key = descriptorKey(desc);
+    const entry = settlers.get(key);
+    if (!entry) return;
+    settlers.delete(key);
+    if (isReject) {
+      entry.reject(rehydrateError(value));
+    } else {
+      entry.resolve(value);
+    }
+  };
+  harden(onResolve);
+
+  /**
+   * Send a `drop` envelope decrementing pillar counts on one or
+   * more presences.  Defaults to `ram: 1` (the common case: a
+   * presence has become unreachable on this side and we release
+   * the RAM pillar).  Pillars omitted default to 0.
+   *
+   * @param {Array<{
+   *   presence: unknown,
+   *   ram?: number,
+   *   clist?: number,
+   *   export?: number,
+   * }>} entries
+   */
+  const drop = entries => {
+    const deltas = entries.map(entry => {
+      const desc = clist.lookupByValue(entry.presence);
+      if (!desc) {
+        throw makeError(X`drop: presence not found in c-list`);
+      }
+      return {
+        target: desc,
+        ram: entry.ram ?? 1,
+        clist: entry.clist ?? 0,
+        export: entry.export ?? 0,
+      };
+    });
+    if (deltas.length === 0) return;
+    const bytes = encodeDropPayload(deltas);
+    sendEnvelope(VERB_DROP, bytes);
+  };
+  harden(drop);
+
+  /**
+   * Handle an inbound `drop`.  The JS client does not track RAM /
+   * CList / Export pillars itself — the Rust supervisor is
+   * authoritative for cross-session refcount state — so this is a
+   * notify-only path.  A `handler` callback (if supplied via
+   * `onDropDeltas`) receives the decoded deltas; otherwise the
+   * envelope is silently consumed.  Returning the deltas lets a
+   * caller drive a local refcount ledger if they want one.
+   *
+   * @param {Uint8Array} bytes
+   * @returns {Array<{
+   *   target: Descriptor,
+   *   ram: number,
+   *   clist: number,
+   *   export: number,
+   * }>}
+   */
+  const onDrop = bytes => decodeDropPayload(bytes);
+  harden(onDrop);
+
+  /**
+   * Reject every outstanding reply promise with the supplied
+   * reason.  Called when the session ends abruptly so callers
+   * awaiting on `deliver` results don't hang forever.
+   *
+   * @param {Error} reason
+   */
+  const abortPending = reason => {
+    for (const entry of settlers.values()) {
+      try {
+        entry.reject(reason);
+      } catch (_e) {
+        // The settler's reject may itself reject downstream; we
+        // don't want one bad listener to prevent the others from
+        // being cleared.
+      }
+    }
+    settlers.clear();
+  };
+  harden(abortPending);
+
+  /**
+   * Dispatch an inbound envelope by verb.  `abort` rejects every
+   * pending reply with the abort reason; `drop` decodes and
+   * returns the deltas (the result is ignored here but the
+   * underlying `onDrop` is callable directly for consumers that
+   * want the bookkeeping).
+   *
+   * @param {string} verb
+   * @param {Uint8Array} payload
+   */
+  const onEnvelope = (verb, payload) => {
+    if (verb === VERB_DELIVER) return onDeliver(payload);
+    if (verb === VERB_RESOLVE) return onResolve(payload);
+    if (verb === VERB_DROP) {
+      onDrop(payload);
+      return undefined;
+    }
+    if (verb === VERB_ABORT) {
+      // The abort payload is a UTF-8 reason byte string, but we
+      // don't import the abort decoder here to keep the dependency
+      // surface narrow.  Whoever drives onEnvelope can decode it
+      // themselves and pass the reason via abortPending.
+      abortPending(Error('session aborted by peer'));
+      return undefined;
+    }
+    return undefined;
+  };
+  harden(onEnvelope);
+
+  /** Number of outstanding outbound deliveries awaiting a reply. */
+  const pendingCount = () => settlers.size;
+  harden(pendingCount);
+
+  return harden({
+    makePresence,
+    deliver,
+    deliverSendOnly,
+    drop,
+    onDeliver,
+    onResolve,
+    onDrop,
+    onEnvelope,
+    abortPending,
+    pendingCount,
+  });
+};$h͏_once.makeSlotClient(makeSlotClient);
+harden(makeSlotClient);
+})()
+,
+// === 64. slots ./src/bootstrap.js ===
+({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden,Direction,Kind;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]],["./descriptor.js", [["Direction",[$h͏_a => (Direction = $h͏_a)]],["Kind",[$h͏_a => (Kind = $h͏_a)]]]]]);
+
+
+
+
+
+/** @import { Descriptor } from './descriptor.js' */
+
+/**
+ * Position conventions for the c-list:
+ *
+ * * Object / Promise / Device: monotonic counter starting at 1.
+ * * Answer: monotonic counter starting at 0.
+ *
+ * Position 1 of the Object space on each side is reserved for the
+ * session's **root** — the entry point the local peer exposes to the
+ * remote peer.  Neither side explicitly exchanges a root descriptor;
+ * both sides simply:
+ *
+ * 1. Call `clist.exportLocal(root, Kind.Object)` during bootstrap.
+ *    The counter starts at 1, so the allocated descriptor is
+ *    `{ dir: Local, kind: Object, position: 1 }`.
+ * 2. Call `client.makePresence(REMOTE_ROOT)` where
+ *    [`REMOTE_ROOT`] = `{ dir: Remote, kind: Object, position: 1 }`
+ *    to obtain a HandledPromise for the peer's root.
+ *
+ * The Rust supervisor's `receive` / `send` machinery will unify the
+ * two position-1 descriptors through a shared kref so that calls
+ * addressed to one peer's "position 1 Remote" reach the other peer's
+ * "position 1 Local" export.
+ *
+ * If a session requires additional pre-allocated positions (e.g.
+ * "position 2 = log sink"), callers should agree on the convention
+ * out of band and export them in the same order on both sides.
+ */
+
+/** Descriptor for the locally-exported root object. */
+       const LOCAL_ROOT = harden(
+  /** @type {Descriptor} */ ({
+    dir: Direction.Local,
+    kind: Kind.Object,
+    position: 1,
+  }),
+);
+
+/** Descriptor for the remote peer's root object. */$h͏_once.LOCAL_ROOT(LOCAL_ROOT);
+       const REMOTE_ROOT = harden(
+  /** @type {Descriptor} */ ({
+    dir: Direction.Remote,
+    kind: Kind.Object,
+    position: 1,
+  }),
+);
+
+/**
+ * Convenience: export `root` into `clist` and create a presence for
+ * the remote root via `client.makePresence(REMOTE_ROOT)`.  Returns
+ * the pair `{ localDesc, remoteRoot }`.  Exposed for callers that
+ * want to share a single bootstrap point — they can of course
+ * compose `clist.exportLocal` and `client.makePresence` themselves
+ * if they prefer more control.
+ *
+ * @param {object} opts
+ * @param {{
+ *   exportLocal: (val: unknown, kind?: 0 | 1 | 2 | 3) => Descriptor,
+ * }} opts.clist
+ * @param {{
+ *   makePresence: (desc: Descriptor) => unknown,
+ * }} opts.client
+ * @param {unknown} opts.root
+ * @returns {{ localDesc: Descriptor, remoteRoot: unknown }}
+ */$h͏_once.REMOTE_ROOT(REMOTE_ROOT);
+       const bootstrap = ({ clist, client, root }) => {
+  const localDesc = clist.exportLocal(root, Kind.Object);
+  const remoteRoot = client.makePresence(REMOTE_ROOT);
+  return { localDesc, remoteRoot };
+};$h͏_once.bootstrap(bootstrap);
+harden(bootstrap);
+})()
+,
+// === 65. slots ./src/message.js ===
+({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden,makePromiseKit,makeCList,makeSlotCodec,makeSlotClient,sessionBootstrap;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]],["@endo/promise-kit", [["makePromiseKit",[$h͏_a => (makePromiseKit = $h͏_a)]]]],["./clist.js", [["makeCList",[$h͏_a => (makeCList = $h͏_a)]]]],["./codec.js", [["makeSlotCodec",[$h͏_a => (makeSlotCodec = $h͏_a)]]]],["./client.js", [["makeSlotClient",[$h͏_a => (makeSlotClient = $h͏_a)]]]],["./bootstrap.js", [["bootstrap",[$h͏_a => (sessionBootstrap = $h͏_a)]]]]]);
+
+
+
+
+
+
+
+
+
+/** @import { Descriptor } from './descriptor.js' */
+
+/**
+ * @typedef {object} SlotEnvelope
+ * @property {string} verb
+ * @property {Uint8Array} payload
+ */
+
+/**
+ * @template TBootstrap
+ * @typedef {object} MessageSlotsResult
+ * @property {() => unknown} getBootstrap
+ *   Returns the remote peer's root presence.
+ * @property {Promise<void>} closed
+ * @property {(reason?: Error) => Promise<void>} close
+ */
+
+/**
+ * Drop-in analogue of [`makeMessageCapTP`] from
+ * `packages/daemon/src/connection.js`, but speaks slot-machine on
+ * the wire.  Constructs a c-list + codec + client over the supplied
+ * message streams, exchanges bootstrap roots via the position-1
+ * convention, and returns `{ getBootstrap, closed, close }`.
+ *
+ * The `writer` and `reader` streams carry [`SlotEnvelope`] objects
+ * — wrap a byte-level pipe with `mapWriter` /  `mapReader` +
+ * `encodeEnvelope` / `decodeEnvelope` (from
+ * `packages/daemon/src/envelope.js`) if you need to cross a pipe
+ * boundary.
+ *
+ * @template TBootstrap
+ * @param {string} name
+ * @param {{ next: (env: SlotEnvelope) => unknown, return?: (v?: unknown) => unknown }} writer
+ * @param {AsyncIterable<SlotEnvelope>} reader
+ * @param {Promise<void>} cancelled
+ * @param {TBootstrap} bootstrap
+ * @returns {MessageSlotsResult<TBootstrap>}
+ */
+       const makeMessageSlots = (
+  name,
+  writer,
+  reader,
+  cancelled,
+  bootstrap,
+) => {
+  const clist = makeCList({ label: name });
+
+  /** @type {import('./client.js').makeSlotClient | null} */
+  let clientRef = null;
+  /**
+   * @param {Descriptor} desc
+   * @returns {unknown}
+   */
+  const makePresence = desc => {
+    // Forward to the client so secondary slot references decode
+    // into real HandledPromise presences rather than inert stubs.
+    if (clientRef) {
+      return /** @type {any} */ (clientRef).makePresence(desc);
+    }
+    // Before the client exists we cannot wire a presence; this
+    // branch is unreachable because decoding only happens under
+    // the inbound reader loop which starts after client is built.
+    throw new Error(`makePresence called before client initialised: ${name}`);
+  };
+  const codec = makeSlotCodec({
+    clist,
+    makePresence,
+    marshalName: name,
+  });
+
+  /**
+   * @param {string} verb
+   * @param {Uint8Array} payload
+   */
+  const sendEnvelope = (verb, payload) => {
+    try {
+      void writer.next(harden({ verb, payload }));
+    } catch (err) {
+      // Writer closed; drop is best-effort.  Real errors surface
+      // through the reader's end-of-stream path which triggers
+      // `close` below.
+    }
+  };
+
+  const client = makeSlotClient({ clist, codec, sendEnvelope });
+  clientRef = /** @type {any} */ (client);
+
+  const { remoteRoot } = sessionBootstrap({ clist, client, root: bootstrap });
+
+  const { promise: closedPromise, resolve: resolveClosed } = makePromiseKit();
+  let isClosed = false;
+
+  /** @type {(reason?: Error) => Promise<void>} */
+  const close = async reason => {
+    if (isClosed) return closedPromise;
+    isClosed = true;
+    try {
+      if (writer.return) await writer.return(undefined);
+    } catch (_err) {
+      // writer may already be closed
+    }
+    resolveClosed(undefined);
+    return closedPromise;
+  };
+
+  const drained = (async () => {
+    try {
+      for await (const env of reader) {
+        client.onEnvelope(env.verb, env.payload);
+      }
+    } finally {
+      close();
+    }
+  })();
+
+  cancelled.catch(err => close(err));
+
+  const closedRace = Promise.race([closedPromise, drained]).then(() => {});
+
+  return harden({
+    getBootstrap: () => remoteRoot,
+    closed: closedRace,
+    close,
+  });
+};$h͏_once.makeMessageSlots(makeMessageSlots);
+harden(makeMessageSlots);
+})()
+,
+// === 66. slots ./index.js ===
+({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';$h͏_imports([["./src/descriptor.js", []],["./src/payload.js", []],["./src/session.js", []],["./src/clist.js", []],["./src/codec.js", []],["./src/client.js", []],["./src/bootstrap.js", []],["./src/message.js", []]]);
+})()
+,
+// === 67. patterns ./src/keys/copySet.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden,Fail,hideAndHardenFunction,makeTagged,passStyleOf,compareAntiRank,isRankSorted,makeFullOrderComparatorKit,sortByRank;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]],["@endo/errors", [["Fail",[$h͏_a => (Fail = $h͏_a)]],["hideAndHardenFunction",[$h͏_a => (hideAndHardenFunction = $h͏_a)]]]],["@endo/marshal", [["makeTagged",[$h͏_a => (makeTagged = $h͏_a)]],["passStyleOf",[$h͏_a => (passStyleOf = $h͏_a)]],["compareAntiRank",[$h͏_a => (compareAntiRank = $h͏_a)]],["isRankSorted",[$h͏_a => (isRankSorted = $h͏_a)]],["makeFullOrderComparatorKit",[$h͏_a => (makeFullOrderComparatorKit = $h͏_a)]],["sortByRank",[$h͏_a => (sortByRank = $h͏_a)]]]]]);
 
 
@@ -13515,7 +15677,7 @@ harden(coerceToElements);
 harden(makeSetOfElements);
 })()
 ,
-// === 58. patterns ./src/keys/copyBag.js ===
+// === 68. patterns ./src/keys/copyBag.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden,Fail,hideAndHardenFunction,makeTagged,passStyleOf,compareAntiRank,isRankSorted,makeFullOrderComparatorKit,sortByRank;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]],["@endo/errors", [["Fail",[$h͏_a => (Fail = $h͏_a)]],["hideAndHardenFunction",[$h͏_a => (hideAndHardenFunction = $h͏_a)]]]],["@endo/marshal", [["makeTagged",[$h͏_a => (makeTagged = $h͏_a)]],["passStyleOf",[$h͏_a => (passStyleOf = $h͏_a)]],["compareAntiRank",[$h͏_a => (compareAntiRank = $h͏_a)]],["isRankSorted",[$h͏_a => (isRankSorted = $h͏_a)]],["makeFullOrderComparatorKit",[$h͏_a => (makeFullOrderComparatorKit = $h͏_a)]],["sortByRank",[$h͏_a => (sortByRank = $h͏_a)]]]]]);
 
 
@@ -13654,7 +15816,7 @@ harden(coerceToBagEntries);
 harden(makeBagOfEntries);
 })()
 ,
-// === 59. patterns ./src/keys/checkKey.js ===
+// === 69. patterns ./src/keys/checkKey.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden,Fail,q,hideAndHardenFunction,Far,getTag,makeTagged,passStyleOf,isAtom,compareAntiRank,makeFullOrderComparatorKit,sortByRank,confirmElements,makeSetOfElements,confirmBagEntries,makeBagOfEntries;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]],["@endo/errors", [["Fail",[$h͏_a => (Fail = $h͏_a)]],["q",[$h͏_a => (q = $h͏_a)]],["hideAndHardenFunction",[$h͏_a => (hideAndHardenFunction = $h͏_a)]]]],["@endo/pass-style", [["Far",[$h͏_a => (Far = $h͏_a)]],["getTag",[$h͏_a => (getTag = $h͏_a)]],["makeTagged",[$h͏_a => (makeTagged = $h͏_a)]],["passStyleOf",[$h͏_a => (passStyleOf = $h͏_a)]],["isAtom",[$h͏_a => (isAtom = $h͏_a)]]]],["@endo/marshal", [["compareAntiRank",[$h͏_a => (compareAntiRank = $h͏_a)]],["makeFullOrderComparatorKit",[$h͏_a => (makeFullOrderComparatorKit = $h͏_a)]],["sortByRank",[$h͏_a => (sortByRank = $h͏_a)]]]],["./copySet.js", [["confirmElements",[$h͏_a => (confirmElements = $h͏_a)]],["makeSetOfElements",[$h͏_a => (makeSetOfElements = $h͏_a)]]]],["./copyBag.js", [["confirmBagEntries",[$h͏_a => (confirmBagEntries = $h͏_a)]],["makeBagOfEntries",[$h͏_a => (makeBagOfEntries = $h͏_a)]]]]]);
 
 
@@ -14203,7 +16365,7 @@ const confirmKeyInternal = (val, reject) => {
 };
 })()
 ,
-// === 60. common ./make-iterator.js ===
+// === 70. common ./make-iterator.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]]]);
 
 /**
@@ -14223,7 +16385,7 @@ const confirmKeyInternal = (val, reject) => {
 harden(makeIterator);
 })()
 ,
-// === 61. common ./make-array-iterator.js ===
+// === 71. common ./make-array-iterator.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden,makeIterator;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]],["./make-iterator.js", [["makeIterator",[$h͏_a => (makeIterator = $h͏_a)]]]]]);
 
 
@@ -14252,7 +16414,7 @@ harden(makeIterator);
 harden(makeArrayIterator);
 })()
 ,
-// === 62. patterns ./src/keys/keycollection-operators.js ===
+// === 72. patterns ./src/keys/keycollection-operators.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden,assertRankSorted,compareAntiRank,makeFullOrderComparatorKit,sortByRank,makeIterator,makeArrayIterator,q,Fail;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]],["@endo/marshal", [["assertRankSorted",[$h͏_a => (assertRankSorted = $h͏_a)]],["compareAntiRank",[$h͏_a => (compareAntiRank = $h͏_a)]],["makeFullOrderComparatorKit",[$h͏_a => (makeFullOrderComparatorKit = $h͏_a)]],["sortByRank",[$h͏_a => (sortByRank = $h͏_a)]]]],["@endo/common/make-iterator.js", [["makeIterator",[$h͏_a => (makeIterator = $h͏_a)]]]],["@endo/common/make-array-iterator.js", [["makeArrayIterator",[$h͏_a => (makeArrayIterator = $h͏_a)]]]],["@endo/errors", [["q",[$h͏_a => (q = $h͏_a)]],["Fail",[$h͏_a => (Fail = $h͏_a)]]]]]);
 
 
@@ -14478,7 +16640,7 @@ harden(generateCollectionPairEntries);
 harden(makeCompareCollection);
 })()
 ,
-// === 63. patterns ./src/keys/compareKeys.js ===
+// === 73. patterns ./src/keys/compareKeys.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden,passStyleOf,getTag,compareNumerics,compareRank,recordNames,recordValues,q,Fail,assertKey,getCopyBagEntries,getCopyMapEntryArray,getCopySetKeys,makeCompareCollection;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]],["@endo/marshal", [["passStyleOf",[$h͏_a => (passStyleOf = $h͏_a)]],["getTag",[$h͏_a => (getTag = $h͏_a)]],["compareNumerics",[$h͏_a => (compareNumerics = $h͏_a)]],["compareRank",[$h͏_a => (compareRank = $h͏_a)]],["recordNames",[$h͏_a => (recordNames = $h͏_a)]],["recordValues",[$h͏_a => (recordValues = $h͏_a)]]]],["@endo/errors", [["q",[$h͏_a => (q = $h͏_a)]],["Fail",[$h͏_a => (Fail = $h͏_a)]]]],["./checkKey.js", [["assertKey",[$h͏_a => (assertKey = $h͏_a)]],["getCopyBagEntries",[$h͏_a => (getCopyBagEntries = $h͏_a)]],["getCopyMapEntryArray",[$h͏_a => (getCopyMapEntryArray = $h͏_a)]],["getCopySetKeys",[$h͏_a => (getCopySetKeys = $h͏_a)]]]],["./keycollection-operators.js", [["makeCompareCollection",[$h͏_a => (makeCompareCollection = $h͏_a)]]]]]);
 
 
@@ -14745,7 +16907,7 @@ harden(keyGTE);
 harden(keyGT);
 })()
 ,
-// === 64. patterns ./src/keys/merge-set-operators.js ===
+// === 74. patterns ./src/keys/merge-set-operators.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden,assertRankSorted,compareAntiRank,makeFullOrderComparatorKit,sortByRank,q,Fail,assertNoDuplicates,makeSetOfElements;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]],["@endo/marshal", [["assertRankSorted",[$h͏_a => (assertRankSorted = $h͏_a)]],["compareAntiRank",[$h͏_a => (compareAntiRank = $h͏_a)]],["makeFullOrderComparatorKit",[$h͏_a => (makeFullOrderComparatorKit = $h͏_a)]],["sortByRank",[$h͏_a => (sortByRank = $h͏_a)]]]],["@endo/errors", [["q",[$h͏_a => (q = $h͏_a)]],["Fail",[$h͏_a => (Fail = $h͏_a)]]]],["./copySet.js", [["assertNoDuplicates",[$h͏_a => (assertNoDuplicates = $h͏_a)]],["makeSetOfElements",[$h͏_a => (makeSetOfElements = $h͏_a)]]]]]);
 
 
@@ -15075,7 +17237,7 @@ const setify = elementsOp => (xset, yset) =>
        const setDisjointSubtract = setify(elementsDisjointSubtract);$h͏_once.setDisjointSubtract(setDisjointSubtract);
 })()
 ,
-// === 65. patterns ./src/keys/merge-bag-operators.js ===
+// === 75. patterns ./src/keys/merge-bag-operators.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden,assertRankSorted,compareAntiRank,makeFullOrderComparatorKit,sortByRank,q,Fail,assertNoDuplicateKeys,makeBagOfEntries;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]],["@endo/marshal", [["assertRankSorted",[$h͏_a => (assertRankSorted = $h͏_a)]],["compareAntiRank",[$h͏_a => (compareAntiRank = $h͏_a)]],["makeFullOrderComparatorKit",[$h͏_a => (makeFullOrderComparatorKit = $h͏_a)]],["sortByRank",[$h͏_a => (sortByRank = $h͏_a)]]]],["@endo/errors", [["q",[$h͏_a => (q = $h͏_a)]],["Fail",[$h͏_a => (Fail = $h͏_a)]]]],["./copyBag.js", [["assertNoDuplicateKeys",[$h͏_a => (assertNoDuplicateKeys = $h͏_a)]],["makeBagOfEntries",[$h͏_a => (makeBagOfEntries = $h͏_a)]]]]]);
 
 
@@ -15369,7 +17531,7 @@ const bagify = bagEntriesOp => (xbag, ybag) =>
        const bagDisjointSubtract = bagify(bagEntriesDisjointSubtract);$h͏_once.bagDisjointSubtract(bagDisjointSubtract);
 })()
 ,
-// === 66. common ./throw-labeled.js ===
+// === 76. common ./throw-labeled.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let X,makeError,annotateError,hideAndHardenFunction;$h͏_imports([["@endo/errors", [["X",[$h͏_a => (X = $h͏_a)]],["makeError",[$h͏_a => (makeError = $h͏_a)]],["annotateError",[$h͏_a => (annotateError = $h͏_a)]],["hideAndHardenFunction",[$h͏_a => (hideAndHardenFunction = $h͏_a)]]]]]);
 
 
@@ -15408,7 +17570,7 @@ const bagify = bagEntriesOp => (xbag, ybag) =>
 hideAndHardenFunction(throwLabeled);
 })()
 ,
-// === 67. common ./apply-labeling-error.js ===
+// === 77. common ./apply-labeling-error.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let hideAndHardenFunction,E,isPromise,throwLabeled;$h͏_imports([["@endo/errors", [["hideAndHardenFunction",[$h͏_a => (hideAndHardenFunction = $h͏_a)]]]],["@endo/eventual-send", [["E",[$h͏_a => (E = $h͏_a)]]]],["@endo/promise-kit", [["isPromise",[$h͏_a => (isPromise = $h͏_a)]]]],["./throw-labeled.js", [["throwLabeled",[$h͏_a => (throwLabeled = $h͏_a)]]]]]);
 
 
@@ -15472,7 +17634,7 @@ hideAndHardenFunction(throwLabeled);
 hideAndHardenFunction(applyLabelingError);
 })()
 ,
-// === 68. common ./from-unique-entries.js ===
+// === 78. common ./from-unique-entries.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden,q,Fail;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]],["@endo/errors", [["q",[$h͏_a => (q = $h͏_a)]],["Fail",[$h͏_a => (Fail = $h͏_a)]]]]]);
 
 
@@ -15506,7 +17668,7 @@ const { ownKeys } = Reflect;
 harden(fromUniqueEntries);
 })()
 ,
-// === 69. common ./list-difference.js ===
+// === 79. common ./list-difference.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]]]);
 
 /**
@@ -15530,7 +17692,7 @@ harden(fromUniqueEntries);
 harden(listDifference);
 })()
 ,
-// === 70. patterns ./src/patterns/patternMatchers.js ===
+// === 80. patterns ./src/patterns/patternMatchers.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden,q,b,X,Fail,makeError,annotateError,hideAndHardenFunction,applyLabelingError,fromUniqueEntries,listDifference,Far,getTag,makeTagged,passStyleOf,nameForPassableSymbol,compareRank,getPassStyleCover,intersectRankCovers,unionRankCovers,recordNames,recordValues,qp,keyEQ,keyGT,keyGTE,keyLT,keyLTE,assertKey,confirmKey,isKey,confirmScalarKey,confirmCopySet,confirmCopyMap,copyMapKeySet,confirmCopyBag,getCopyMapEntryArray,makeCopyMap,makeCopySet,makeCopyBag,generateCollectionPairEntries;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]],["@endo/errors", [["q",[$h͏_a => (q = $h͏_a)]],["b",[$h͏_a => (b = $h͏_a)]],["X",[$h͏_a => (X = $h͏_a)]],["Fail",[$h͏_a => (Fail = $h͏_a)]],["makeError",[$h͏_a => (makeError = $h͏_a)]],["annotateError",[$h͏_a => (annotateError = $h͏_a)]],["hideAndHardenFunction",[$h͏_a => (hideAndHardenFunction = $h͏_a)]]]],["@endo/common/apply-labeling-error.js", [["applyLabelingError",[$h͏_a => (applyLabelingError = $h͏_a)]]]],["@endo/common/from-unique-entries.js", [["fromUniqueEntries",[$h͏_a => (fromUniqueEntries = $h͏_a)]]]],["@endo/common/list-difference.js", [["listDifference",[$h͏_a => (listDifference = $h͏_a)]]]],["@endo/pass-style", [["Far",[$h͏_a => (Far = $h͏_a)]],["getTag",[$h͏_a => (getTag = $h͏_a)]],["makeTagged",[$h͏_a => (makeTagged = $h͏_a)]],["passStyleOf",[$h͏_a => (passStyleOf = $h͏_a)]],["nameForPassableSymbol",[$h͏_a => (nameForPassableSymbol = $h͏_a)]]]],["@endo/marshal", [["compareRank",[$h͏_a => (compareRank = $h͏_a)]],["getPassStyleCover",[$h͏_a => (getPassStyleCover = $h͏_a)]],["intersectRankCovers",[$h͏_a => (intersectRankCovers = $h͏_a)]],["unionRankCovers",[$h͏_a => (unionRankCovers = $h͏_a)]],["recordNames",[$h͏_a => (recordNames = $h͏_a)]],["recordValues",[$h͏_a => (recordValues = $h͏_a)]],["qp",[$h͏_a => (qp = $h͏_a)]]]],["../keys/compareKeys.js", [["keyEQ",[$h͏_a => (keyEQ = $h͏_a)]],["keyGT",[$h͏_a => (keyGT = $h͏_a)]],["keyGTE",[$h͏_a => (keyGTE = $h͏_a)]],["keyLT",[$h͏_a => (keyLT = $h͏_a)]],["keyLTE",[$h͏_a => (keyLTE = $h͏_a)]]]],["../keys/checkKey.js", [["assertKey",[$h͏_a => (assertKey = $h͏_a)]],["confirmKey",[$h͏_a => (confirmKey = $h͏_a)]],["isKey",[$h͏_a => (isKey = $h͏_a)]],["confirmScalarKey",[$h͏_a => (confirmScalarKey = $h͏_a)]],["confirmCopySet",[$h͏_a => (confirmCopySet = $h͏_a)]],["confirmCopyMap",[$h͏_a => (confirmCopyMap = $h͏_a)]],["copyMapKeySet",[$h͏_a => (copyMapKeySet = $h͏_a)]],["confirmCopyBag",[$h͏_a => (confirmCopyBag = $h͏_a)]],["getCopyMapEntryArray",[$h͏_a => (getCopyMapEntryArray = $h͏_a)]],["makeCopyMap",[$h͏_a => (makeCopyMap = $h͏_a)]],["makeCopySet",[$h͏_a => (makeCopySet = $h͏_a)]],["makeCopyBag",[$h͏_a => (makeCopyBag = $h͏_a)]]]],["../keys/keycollection-operators.js", [["generateCollectionPairEntries",[$h͏_a => (generateCollectionPairEntries = $h͏_a)]]]]]);
 
 
@@ -17939,7 +20101,7 @@ const GuardPayloadShapes = harden({
 });
 })()
 ,
-// === 71. patterns ./src/patterns/getGuardPayloads.js ===
+// === 81. patterns ./src/patterns/getGuardPayloads.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden,objectMap,ArgGuardListShape,AwaitArgGuardShape,InterfaceGuardPayloadShape,InterfaceGuardShape,M,MethodGuardPayloadShape,MethodGuardShape,RawGuardShape,SyncValueGuardListShape,SyncValueGuardShape,assertAwaitArgGuard,matches,mustMatch,getCopyMapKeys,makeCopyMap;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]],["@endo/common/object-map.js", [["objectMap",[$h͏_a => (objectMap = $h͏_a)]]]],["./patternMatchers.js", [["ArgGuardListShape",[$h͏_a => (ArgGuardListShape = $h͏_a)]],["AwaitArgGuardShape",[$h͏_a => (AwaitArgGuardShape = $h͏_a)]],["InterfaceGuardPayloadShape",[$h͏_a => (InterfaceGuardPayloadShape = $h͏_a)]],["InterfaceGuardShape",[$h͏_a => (InterfaceGuardShape = $h͏_a)]],["M",[$h͏_a => (M = $h͏_a)]],["MethodGuardPayloadShape",[$h͏_a => (MethodGuardPayloadShape = $h͏_a)]],["MethodGuardShape",[$h͏_a => (MethodGuardShape = $h͏_a)]],["RawGuardShape",[$h͏_a => (RawGuardShape = $h͏_a)]],["SyncValueGuardListShape",[$h͏_a => (SyncValueGuardListShape = $h͏_a)]],["SyncValueGuardShape",[$h͏_a => (SyncValueGuardShape = $h͏_a)]],["assertAwaitArgGuard",[$h͏_a => (assertAwaitArgGuard = $h͏_a)]],["matches",[$h͏_a => (matches = $h͏_a)]],["mustMatch",[$h͏_a => (mustMatch = $h͏_a)]]]],["../keys/checkKey.js", [["getCopyMapKeys",[$h͏_a => (getCopyMapKeys = $h͏_a)]],["makeCopyMap",[$h͏_a => (makeCopyMap = $h͏_a)]]]]]);
 
 
@@ -18242,7 +20404,7 @@ harden(getInterfaceMethodKeys);
 harden(getNamedMethodGuards);
 })()
 ,
-// === 72. patterns ./types-index.js ===
+// === 82. patterns ./types-index.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let _m,_mm;$h͏_imports([["./src/patterns/patternMatchers.js", [["matches",[$h͏_a => (_m = $h͏_a)]],["mustMatch",[$h͏_a => (_mm = $h͏_a)]]]]]);
 
 
@@ -18267,11 +20429,11 @@ const _mustMatchCompat = _mm;
 (void _matchesCompat, _mustMatchCompat);
 })()
 ,
-// === 73. patterns ./index.js ===
+// === 83. patterns ./index.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';$h͏_imports([["./src/keys/checkKey.js", []],["./src/keys/copySet.js", []],["./src/keys/copyBag.js", []],["./src/keys/compareKeys.js", []],["./src/keys/merge-set-operators.js", []],["./src/keys/merge-bag-operators.js", []],["./src/patterns/patternMatchers.js", []],["./src/patterns/getGuardPayloads.js", []],["./types-index.js", []],["@endo/common/list-difference.js", []],["@endo/common/object-map.js", []]]);
 })()
 ,
-// === 74. exo ./src/get-interface.js ===
+// === 84. exo ./src/get-interface.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';$h͏_imports([]);// @ts-check
 
 /**
@@ -18302,7 +20464,7 @@ const _mustMatchCompat = _mm;
  */$h͏_once.GET_INTERFACE_GUARD(GET_INTERFACE_GUARD);
 })()
 ,
-// === 75. exo ./src/exo-tools.js ===
+// === 85. exo ./src/exo-tools.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden,E,getRemotableMethodNames,toThrowable,Far,mustMatch,M,isAwaitArgGuard,isRawGuard,getAwaitArgGuardPayload,getMethodGuardPayload,getInterfaceGuardPayload,getCopyMapEntries,listDifference,objectMap,q,Fail,GET_INTERFACE_GUARD;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]],["@endo/eventual-send", [["E",[$h͏_a => (E = $h͏_a)]]]],["@endo/pass-style", [["getRemotableMethodNames",[$h͏_a => (getRemotableMethodNames = $h͏_a)]],["toThrowable",[$h͏_a => (toThrowable = $h͏_a)]],["Far",[$h͏_a => (Far = $h͏_a)]]]],["@endo/patterns", [["mustMatch",[$h͏_a => (mustMatch = $h͏_a)]],["M",[$h͏_a => (M = $h͏_a)]],["isAwaitArgGuard",[$h͏_a => (isAwaitArgGuard = $h͏_a)]],["isRawGuard",[$h͏_a => (isRawGuard = $h͏_a)]],["getAwaitArgGuardPayload",[$h͏_a => (getAwaitArgGuardPayload = $h͏_a)]],["getMethodGuardPayload",[$h͏_a => (getMethodGuardPayload = $h͏_a)]],["getInterfaceGuardPayload",[$h͏_a => (getInterfaceGuardPayload = $h͏_a)]],["getCopyMapEntries",[$h͏_a => (getCopyMapEntries = $h͏_a)]]]],["@endo/common/list-difference.js", [["listDifference",[$h͏_a => (listDifference = $h͏_a)]]]],["@endo/common/object-map.js", [["objectMap",[$h͏_a => (objectMap = $h͏_a)]]]],["@endo/errors", [["q",[$h͏_a => (q = $h͏_a)]],["Fail",[$h͏_a => (Fail = $h͏_a)]]]],["./get-interface.js", [["GET_INTERFACE_GUARD",[$h͏_a => (GET_INTERFACE_GUARD = $h͏_a)]]]]]);
 
 
@@ -18818,7 +20980,7 @@ harden(defendPrototype);
 };$h͏_once.defendPrototypeKit(defendPrototypeKit);
 })()
 ,
-// === 76. exo ./src/exo-makers.js ===
+// === 86. exo ./src/exo-makers.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden,objectMap,environmentOptionsListHas,Fail,q,defendPrototype,defendPrototypeKit;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]],["@endo/common/object-map.js", [["objectMap",[$h͏_a => (objectMap = $h͏_a)]]]],["@endo/env-options", [["environmentOptionsListHas",[$h͏_a => (environmentOptionsListHas = $h͏_a)]]]],["@endo/errors", [["Fail",[$h͏_a => (Fail = $h͏_a)]],["q",[$h͏_a => (q = $h͏_a)]]]],["./exo-tools.js", [["defendPrototype",[$h͏_a => (defendPrototype = $h͏_a)]],["defendPrototypeKit",[$h͏_a => (defendPrototypeKit = $h͏_a)]]]]]);
 
 
@@ -19063,19 +21225,19 @@ harden(defineExoClassKit);
 harden(makeExo);
 })()
 ,
-// === 77. exo ./types-index.js ===
+// === 87. exo ./types-index.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';$h͏_imports([["./src/exo-makers.js", []]]);
 })()
 ,
-// === 78. exo ./src/types.js ===
+// === 88. exo ./src/types.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';$h͏_imports([]);
 })()
 ,
-// === 79. exo ./index.js ===
+// === 89. exo ./index.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';$h͏_imports([["./src/exo-makers.js", []],["./types-index.js", []],["./src/types.js", []],["./src/get-interface.js", []]]);
 })()
 ,
-// === 80. platform ./src/fs/interfaces.js ===
+// === 90. platform ./src/fs/interfaces.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let M;$h͏_imports([["@endo/patterns", [["M",[$h͏_a => (M = $h͏_a)]]]]]);
 
 
@@ -19170,7 +21332,7 @@ harden(FileInterface);
 harden(DirectoryInterface);
 })()
 ,
-// === 81. platform ./src/fs/snapshot-blob.js ===
+// === 91. platform ./src/fs/snapshot-blob.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]]]);
 
 
@@ -19195,7 +21357,7 @@ harden(DirectoryInterface);
 harden(snapshotBlobMethods);
 })()
 ,
-// === 82. platform ./src/fs/snapshot-tree.js ===
+// === 92. platform ./src/fs/snapshot-tree.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden,E;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]],["@endo/far", [["E",[$h͏_a => (E = $h͏_a)]]]]]);
 
 
@@ -19302,7 +21464,7 @@ harden(snapshotBlobMethods);
 harden(snapshotTreeMethods);
 })()
 ,
-// === 83. platform ./src/fs/snapshot-store.js ===
+// === 93. platform ./src/fs/snapshot-store.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden,makeExo,SnapshotBlobInterface,SnapshotTreeInterface,snapshotBlobMethods,snapshotTreeMethods;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]],["@endo/exo", [["makeExo",[$h͏_a => (makeExo = $h͏_a)]]]],["./interfaces.js", [["SnapshotBlobInterface",[$h͏_a => (SnapshotBlobInterface = $h͏_a)]],["SnapshotTreeInterface",[$h͏_a => (SnapshotTreeInterface = $h͏_a)]]]],["./snapshot-blob.js", [["snapshotBlobMethods",[$h͏_a => (snapshotBlobMethods = $h͏_a)]]]],["./snapshot-tree.js", [["snapshotTreeMethods",[$h͏_a => (snapshotTreeMethods = $h͏_a)]]]]]);
 
 
@@ -19347,7 +21509,7 @@ harden(snapshotTreeMethods);
 harden(makeSnapshotStore);
 })()
 ,
-// === 84. base64 ./src/common.js ===
+// === 94. base64 ./src/common.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';$h͏_imports([]);// @ts-check
 
 const { freeze } = Object;
@@ -19372,7 +21534,7 @@ for (let i = 0; i < alphabet64.length; i += 1) {
 freeze(monodu64);
 })()
 ,
-// === 85. base64 ./src/encode.js ===
+// === 95. base64 ./src/encode.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let alphabet64,padding;$h͏_imports([["./common.js", [["alphabet64",[$h͏_a => (alphabet64 = $h͏_a)]],["padding",[$h͏_a => (padding = $h͏_a)]]]]]);
 
 
@@ -19447,7 +21609,7 @@ freeze(monodu64);
   globalThis.Base64 !== undefined ? globalThis.Base64.encode : jsEncodeBase64;$h͏_once.encodeBase64(encodeBase64);
 })()
 ,
-// === 86. base64 ./src/decode.js ===
+// === 96. base64 ./src/decode.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let monodu64,padding;$h͏_imports([["./common.js", [["monodu64",[$h͏_a => (monodu64 = $h͏_a)]],["padding",[$h͏_a => (padding = $h͏_a)]]]]]);
 
 
@@ -19534,11 +21696,11 @@ $h͏_once.jsDecodeBase64(jsDecodeBase64);const adaptDecoder=
     : jsDecodeBase64;$h͏_once.decodeBase64(decodeBase64);
 })()
 ,
-// === 87. base64 ./encode.js ===
+// === 97. base64 ./encode.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';$h͏_imports([["./src/encode.js", []]]);
 })()
 ,
-// === 88. base64 ./btoa.js ===
+// === 98. base64 ./btoa.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let encodeBase64;$h͏_imports([["./encode.js", [["encodeBase64",[$h͏_a => (encodeBase64 = $h͏_a)]]]]]);
 
 /**
@@ -19558,11 +21720,11 @@ $h͏_once.jsDecodeBase64(jsDecodeBase64);const adaptDecoder=
 };$h͏_once.btoa(btoa);
 })()
 ,
-// === 89. base64 ./decode.js ===
+// === 99. base64 ./decode.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';$h͏_imports([["./src/decode.js", []]]);
 })()
 ,
-// === 90. base64 ./atob.js ===
+// === 100. base64 ./atob.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let decodeBase64;$h͏_imports([["./decode.js", [["decodeBase64",[$h͏_a => (decodeBase64 = $h͏_a)]]]]]);
 
 /**
@@ -19575,11 +21737,11 @@ $h͏_once.jsDecodeBase64(jsDecodeBase64);const adaptDecoder=
 };$h͏_once.atob(atob);
 })()
 ,
-// === 91. base64 ./index.js ===
+// === 101. base64 ./index.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';$h͏_imports([["./src/encode.js", []],["./src/decode.js", []],["./btoa.js", []],["./atob.js", []]]);
 })()
 ,
-// === 92. platform ./src/fs/ref-reader.js ===
+// === 102. platform ./src/fs/ref-reader.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden,decodeBase64,mapReader,E;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]],["@endo/base64", [["decodeBase64",[$h͏_a => (decodeBase64 = $h͏_a)]]]],["@endo/stream", [["mapReader",[$h͏_a => (mapReader = $h͏_a)]]]],["@endo/far", [["E",[$h͏_a => (E = $h͏_a)]]]]]);
 
 
@@ -19616,7 +21778,7 @@ harden(makeRefIterator);
 harden(makeRefReader);
 })()
 ,
-// === 93. platform ./src/fs/checkin.js ===
+// === 103. platform ./src/fs/checkin.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden,E,makeRefReader;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]],["@endo/far", [["E",[$h͏_a => (E = $h͏_a)]]]],["./ref-reader.js", [["makeRefReader",[$h͏_a => (makeRefReader = $h͏_a)]]]]]);
 
 
@@ -19703,7 +21865,7 @@ const MAX_CHECKIN_DEPTH = 64;
 harden(checkinTree);
 })()
 ,
-// === 94. platform ./src/fs/checkout.js ===
+// === 104. platform ./src/fs/checkout.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden,E,makeRefReader;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]],["@endo/far", [["E",[$h͏_a => (E = $h͏_a)]]]],["./ref-reader.js", [["makeRefReader",[$h͏_a => (makeRefReader = $h͏_a)]]]]]);
 
 
@@ -19758,7 +21920,7 @@ harden(checkinTree);
 harden(checkoutTree);
 })()
 ,
-// === 95. platform ./src/fs/reader-ref.js ===
+// === 105. platform ./src/fs/reader-ref.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden,encodeBase64,mapReader,makeExo,AsyncIteratorInterface;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]],["@endo/base64", [["encodeBase64",[$h͏_a => (encodeBase64 = $h͏_a)]]]],["@endo/stream", [["mapReader",[$h͏_a => (mapReader = $h͏_a)]]]],["@endo/exo", [["makeExo",[$h͏_a => (makeExo = $h͏_a)]]]],["./interfaces.js", [["AsyncIteratorInterface",[$h͏_a => (AsyncIteratorInterface = $h͏_a)]]]]]);
 
 
@@ -19839,11 +22001,11 @@ harden(makeIteratorRef);
 harden(makeReaderRef);
 })()
 ,
-// === 96. platform ./src/fs/index.js ===
+// === 106. platform ./src/fs/index.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';$h͏_imports([["./interfaces.js", []],["./snapshot-blob.js", []],["./snapshot-tree.js", []],["./snapshot-store.js", []],["./checkin.js", []],["./checkout.js", []],["./ref-reader.js", []],["./reader-ref.js", []]]);
 })()
 ,
-// === 97. daemon ./src/ref-reader.js ===
+// === 107. daemon ./src/ref-reader.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden,decodeBase64,mapReader,E;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]],["@endo/base64", [["decodeBase64",[$h͏_a => (decodeBase64 = $h͏_a)]]]],["@endo/stream", [["mapReader",[$h͏_a => (mapReader = $h͏_a)]]]],["@endo/far", [["E",[$h͏_a => (E = $h͏_a)]]]]]);
 
 
@@ -19879,7 +22041,7 @@ harden(makeRefIterator);
   mapReader(makeRefIterator(readerRef), decodeBase64);$h͏_once.makeRefReader(makeRefReader);
 })()
 ,
-// === 98. daemon ./src/interfaces.js ===
+// === 108. daemon ./src/interfaces.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let M;$h͏_imports([["@endo/patterns", [["M",[$h͏_a => (M = $h͏_a)]]]]]);
 
 
@@ -19910,7 +22072,7 @@ const MessageNumberShape = M.bigint();
 // Environment variables as string-to-string record
 const EnvShape = M.recordOf(M.string(), M.string());
 
-// Options for makeUnconfined and makeArchive
+// Options for makeUnconfined and makeBundle
 const MakeCapletOptionsShape = M.splitRecord(
   {},
   {
@@ -20217,8 +22379,8 @@ $h͏_once.DismisserInterface(DismisserInterface);const HandleInterface=M.interfa
   makeUnconfined: M.call(M.or(NameShape, M.undefined()), M.string())
     .optional(MakeCapletOptionsShape)
     .returns(M.promise()),
-  // Make a caplet from a source-only ZIP archive
-  makeArchive: M.call(M.or(NameShape, M.undefined()), NameShape)
+  // Make a bundle caplet
+  makeBundle: M.call(M.or(NameShape, M.undefined()), NameShape)
     .optional(MakeCapletOptionsShape)
     .returns(M.promise()),
   // Create a channel
@@ -20424,10 +22586,9 @@ const PathArgShape = M.or(M.string(), PathSegmentsShape);
       IdShape,
       M.promise(),
     ).returns(M.promise()),
-    // Args: (readableP, powersP, contextP, env) — readable is a ZIP
-    // archive of a compartment-map plus source-form modules.  These
-    // methods receive promises that get resolved inside the worker.
-    makeArchive: M.call(M.any(), M.any(), M.any(), EnvShape).returns(
+    // These methods receive promises that get resolved inside the worker
+    // Args: (readableP, powersP, contextP, env)
+    makeBundle: M.call(M.any(), M.any(), M.any(), EnvShape).returns(
       M.promise(),
     ),
     // Args: (specifier, powersP, contextP, env)
@@ -20455,7 +22616,7 @@ const PathArgShape = M.or(M.string(), PathSegmentsShape);
 });$h͏_once.EndoInterface(EndoInterface);
 })()
 ,
-// === 99. daemon ./src/reader-ref.js ===
+// === 109. daemon ./src/reader-ref.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden,encodeBase64,mapReader,makeExo,AsyncIteratorInterface;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]],["@endo/base64", [["encodeBase64",[$h͏_a => (encodeBase64 = $h͏_a)]]]],["@endo/stream", [["mapReader",[$h͏_a => (mapReader = $h͏_a)]]]],["@endo/exo", [["makeExo",[$h͏_a => (makeExo = $h͏_a)]]]],["./interfaces.js", [["AsyncIteratorInterface",[$h͏_a => (AsyncIteratorInterface = $h͏_a)]]]]]);
 
 
@@ -20530,7 +22691,7 @@ const PathArgShape = M.or(M.string(), PathSegmentsShape);
   makeIteratorRef(mapReader(asyncIterate(readable), encodeBase64));$h͏_once.makeReaderRef(makeReaderRef);
 })()
 ,
-// === 100. daemon ./src/formula-identifier.js ===
+// === 110. daemon ./src/formula-identifier.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let makeError,q;$h͏_imports([["@endo/errors", [["makeError",[$h͏_a => (makeError = $h͏_a)]],["q",[$h͏_a => (q = $h͏_a)]]]]]);
 
 
@@ -20631,7 +22792,7 @@ const idPattern = /^(?<number>[0-9a-f]{64}):(?<node>[0-9a-f]{64})$/;
 };$h͏_once.formatId(formatId);
 })()
 ,
-// === 101. daemon ./src/formula-type.js ===
+// === 111. daemon ./src/formula-type.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let q;$h͏_imports([["@endo/errors", [["q",[$h͏_a => (q = $h͏_a)]]]]]);
 
 
@@ -20652,7 +22813,7 @@ const formulaTypes = new Set([
   'loopback-network',
   'mail-hub',
   'mailbox-store',
-  'make-archive',
+  'make-bundle',
   'make-unconfined',
   'marshal',
   'message',
@@ -20680,7 +22841,7 @@ const formulaTypes = new Set([
 };$h͏_once.assertValidFormulaType(assertValidFormulaType);
 })()
 ,
-// === 102. daemon ./src/locator.js ===
+// === 112. daemon ./src/locator.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let makeError,q,formatId,isValidNumber,parseId,isValidFormulaType;$h͏_imports([["@endo/errors", [["makeError",[$h͏_a => (makeError = $h͏_a)]],["q",[$h͏_a => (q = $h͏_a)]]]],["./formula-identifier.js", [["formatId",[$h͏_a => (formatId = $h͏_a)]],["isValidNumber",[$h͏_a => (isValidNumber = $h͏_a)]],["parseId",[$h͏_a => (parseId = $h͏_a)]]]],["./formula-type.js", [["isValidFormulaType",[$h͏_a => (isValidFormulaType = $h͏_a)]]]]]);
 
 
@@ -20874,7 +23035,7 @@ const assertValidLocatorType = allegedType => {
 };$h͏_once.internalizeLocator(internalizeLocator);
 })()
 ,
-// === 103. daemon ./src/pet-name.js ===
+// === 113. daemon ./src/pet-name.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let q;$h͏_imports([["@endo/errors", [["q",[$h͏_a => (q = $h͏_a)]]]]]);
 
 
@@ -21029,7 +23190,7 @@ const validSpecialNamePattern = /^@[a-z][a-z0-9-]{0,127}$/;
 };$h͏_once.namePathFrom(namePathFrom);
 })()
 ,
-// === 104. daemon ./src/deferred-tasks.js ===
+// === 114. daemon ./src/deferred-tasks.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';$h͏_imports([]);// @ts-check
 
 /** @import { DeferredTasks, DeferredTask } from './types.js' */
@@ -21053,7 +23214,7 @@ const validSpecialNamePattern = /^@[a-z][a-z0-9-]{0,127}$/;
 };$h͏_once.makeDeferredTasks(makeDeferredTasks);
 })()
 ,
-// === 105. daemon ./src/help-text-data.js ===
+// === 115. daemon ./src/help-text-data.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]]]);
 
 
@@ -21178,8 +23339,8 @@ const validSpecialNamePattern = /^@[a-z][a-z0-9-]{0,127}$/;
         'evaluate(workerName, source, codeNames, petNames, resultName?) -> Promise<any>\nEvaluate JavaScript code in a worker with named endowments.\n- workerName: Worker to use (undefined for new worker)\n- source: JavaScript code string\n- codeNames: Names visible in the code\n- petNames: Pet names providing values for those names\n- resultName: Optional name to store the result\n\nExample: evaluate(undefined, "x + y", ["x", "y"], ["a", "b"], ["result"])\n  Runs "x + y" where x=lookup("a"), y=lookup("b"), stores result as "result"',
       makeUnconfined:
         "makeUnconfined(workerName, specifier, options?) -> Promise<any>\nLoad and instantiate an unconfined module (has access to Node.js APIs).\n- workerName: Worker to use (undefined for new worker)\n- specifier: Module path or URL\n- options: Optional object with:\n  - powersName: Pet name of the powers to grant (default: '@none')\n  - resultName: Pet name or path to store the result\n  - env: Environment variables as { KEY: \"value\" } record\n\nThe module's make(powers, context, { env }) function is called.",
-      makeArchive:
-        "makeArchive(workerName, archiveName, options?) -> Promise<any>\nInstantiate a module from a source-only ZIP archive (a\n`compartment-map.json` plus modules in their original mjs/cjs\nsources, with no precompiled module formats).\n- workerName: Worker to use (undefined for new worker)\n- archiveName: Pet name of the readable blob holding the archive\n- options: Optional object with:\n  - powersName: Pet name of the powers to grant (default: '@none')\n  - resultName: Pet name or path to store the result\n  - env: Environment variables as { KEY: \"value\" } record\n\nThe module's make(powers, context, { env }) function is called.\nThe archive bytes are streamed to the worker and parsed via\n`@endo/compartment-mapper`'s `parseArchive`.  The Rust supervisor's\nworkers read the same archive content directly from the CAS.",
+      makeBundle:
+        "makeBundle(workerName, bundleName, options?) -> Promise<any>\nInstantiate a pre-bundled module.\n- workerName: Worker to use (undefined for new worker)\n- bundleName: Pet name of the bundle\n- options: Optional object with:\n  - powersName: Pet name of the powers to grant (default: '@none')\n  - resultName: Pet name or path to store the result\n  - env: Environment variables as { KEY: \"value\" } record\n\nThe module's make(powers, context, { env }) function is called.",
       cancel:
         'cancel(petNameOrPath, reason?) -> Promise<void>\nCancel a value, triggering cleanup and releasing resources.\nCancellation propagates to dependent values.',
       greeter:
@@ -21309,7 +23470,7 @@ const validSpecialNamePattern = /^@[a-z][a-z0-9-]{0,127}$/;
 ]);$h͏_once.helpTextEntries(helpTextEntries);
 })()
 ,
-// === 106. daemon ./src/help-text.js ===
+// === 116. daemon ./src/help-text.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let helpTextEntries;$h͏_imports([["./help-text-data.js", [["helpTextEntries",[$h͏_a => (helpTextEntries = $h͏_a)]]]]]);
 
 
@@ -21397,7 +23558,7 @@ harden(endoHelp);
 harden(makeHelp);
 })()
 ,
-// === 107. daemon ./src/directory.js ===
+// === 117. daemon ./src/directory.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden,encodeBase64,E,makeExo,q,makeIteratorRef,externalizeId,internalizeLocator,assertNamePath,assertNames,assertPetNamePath,namePathFrom,makeDeferredTasks,directoryHelp,makeHelp,DirectoryInterface;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]],["@endo/base64", [["encodeBase64",[$h͏_a => (encodeBase64 = $h͏_a)]]]],["@endo/far", [["E",[$h͏_a => (E = $h͏_a)]]]],["@endo/exo", [["makeExo",[$h͏_a => (makeExo = $h͏_a)]]]],["@endo/errors", [["q",[$h͏_a => (q = $h͏_a)]]]],["./reader-ref.js", [["makeIteratorRef",[$h͏_a => (makeIteratorRef = $h͏_a)]]]],["./locator.js", [["externalizeId",[$h͏_a => (externalizeId = $h͏_a)]],["internalizeLocator",[$h͏_a => (internalizeLocator = $h͏_a)]]]],["./pet-name.js", [["assertNamePath",[$h͏_a => (assertNamePath = $h͏_a)]],["assertNames",[$h͏_a => (assertNames = $h͏_a)]],["assertPetNamePath",[$h͏_a => (assertPetNamePath = $h͏_a)]],["namePathFrom",[$h͏_a => (namePathFrom = $h͏_a)]]]],["./deferred-tasks.js", [["makeDeferredTasks",[$h͏_a => (makeDeferredTasks = $h͏_a)]]]],["./help-text.js", [["directoryHelp",[$h͏_a => (directoryHelp = $h͏_a)]],["makeHelp",[$h͏_a => (makeHelp = $h͏_a)]]]],["./interfaces.js", [["DirectoryInterface",[$h͏_a => (DirectoryInterface = $h͏_a)]]]]]);
 
 
@@ -21894,7 +24055,7 @@ harden(makeHelp);
 };$h͏_once.makeDirectoryMaker(makeDirectoryMaker);
 })()
 ,
-// === 108. daemon ./src/pubsub.js ===
+// === 118. daemon ./src/pubsub.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden,makePromiseKit,makeStream;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]],["@endo/promise-kit", [["makePromiseKit",[$h͏_a => (makePromiseKit = $h͏_a)]]]],["@endo/stream", [["makeStream",[$h͏_a => (makeStream = $h͏_a)]]]]]);
 
 
@@ -21975,7 +24136,7 @@ harden(makeChangePubSub);
 harden(makeChangeTopic);
 })()
 ,
-// === 109. daemon ./src/serial-jobs.js ===
+// === 119. daemon ./src/serial-jobs.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let makeQueue;$h͏_imports([["@endo/stream", [["makeQueue",[$h͏_a => (makeQueue = $h͏_a)]]]]]);
 
 /** @import { AsyncQueue } from '@endo/stream' */
@@ -22008,7 +24169,7 @@ harden(makeChangeTopic);
 };$h͏_once.makeSerialJobs(makeSerialJobs);
 })()
 ,
-// === 110. daemon ./src/mail.js ===
+// === 120. daemon ./src/mail.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden,E,makeExo,makePromiseKit,q,mustMatch,M,makeChangeTopic,assertFormulaNumber,assertValidId,parseId,formatId,assertName,assertNames,assertPetNamePath,namePathFrom,makeDeferredTasks,makeSerialJobs,externalizeId,EnvelopeInterface,DismisserInterface,HandleInterface;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]],["@endo/eventual-send", [["E",[$h͏_a => (E = $h͏_a)]]]],["@endo/exo", [["makeExo",[$h͏_a => (makeExo = $h͏_a)]]]],["@endo/promise-kit", [["makePromiseKit",[$h͏_a => (makePromiseKit = $h͏_a)]]]],["@endo/errors", [["q",[$h͏_a => (q = $h͏_a)]]]],["@endo/patterns", [["mustMatch",[$h͏_a => (mustMatch = $h͏_a)]],["M",[$h͏_a => (M = $h͏_a)]]]],["./pubsub.js", [["makeChangeTopic",[$h͏_a => (makeChangeTopic = $h͏_a)]]]],["./formula-identifier.js", [["assertFormulaNumber",[$h͏_a => (assertFormulaNumber = $h͏_a)]],["assertValidId",[$h͏_a => (assertValidId = $h͏_a)]],["parseId",[$h͏_a => (parseId = $h͏_a)]],["formatId",[$h͏_a => (formatId = $h͏_a)]]]],["./pet-name.js", [["assertName",[$h͏_a => (assertName = $h͏_a)]],["assertNames",[$h͏_a => (assertNames = $h͏_a)]],["assertPetNamePath",[$h͏_a => (assertPetNamePath = $h͏_a)]],["namePathFrom",[$h͏_a => (namePathFrom = $h͏_a)]]]],["./deferred-tasks.js", [["makeDeferredTasks",[$h͏_a => (makeDeferredTasks = $h͏_a)]]]],["./serial-jobs.js", [["makeSerialJobs",[$h͏_a => (makeSerialJobs = $h͏_a)]]]],["./locator.js", [["externalizeId",[$h͏_a => (externalizeId = $h͏_a)]]]],["./interfaces.js", [["EnvelopeInterface",[$h͏_a => (EnvelopeInterface = $h͏_a)]],["DismisserInterface",[$h͏_a => (DismisserInterface = $h͏_a)]],["HandleInterface",[$h͏_a => (HandleInterface = $h͏_a)]]]]]);
 
 
@@ -23409,7 +25570,7 @@ const makeEnvelope = () => makeExo('Envelope', EnvelopeInterface, {});
 };$h͏_once.makeMailboxMaker(makeMailboxMaker);
 })()
 ,
-// === 111. daemon ./src/pet-sitter.js ===
+// === 121. daemon ./src/pet-sitter.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden,q,isPetName,assertName,parseId;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]],["@endo/errors", [["q",[$h͏_a => (q = $h͏_a)]]]],["./pet-name.js", [["isPetName",[$h͏_a => (isPetName = $h͏_a)]],["assertName",[$h͏_a => (assertName = $h͏_a)]]]],["./formula-identifier.js", [["parseId",[$h͏_a => (parseId = $h͏_a)]]]]]);
 
 
@@ -23540,7 +25701,7 @@ const makeEnvelope = () => makeExo('Envelope', EnvelopeInterface, {});
 };$h͏_once.makePetSitter(makePetSitter);
 })()
 ,
-// === 112. daemon ./src/guest.js ===
+// === 122. daemon ./src/guest.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let E,makeExo,q,makeIteratorRef,makePetSitter,assertName,assertNamePath,assertPetName,assertPetNamePath,namePathFrom,makeDeferredTasks,GuestInterface,guestHelp,makeHelp;$h͏_imports([["@endo/far", [["E",[$h͏_a => (E = $h͏_a)]]]],["@endo/exo", [["makeExo",[$h͏_a => (makeExo = $h͏_a)]]]],["@endo/errors", [["q",[$h͏_a => (q = $h͏_a)]]]],["./reader-ref.js", [["makeIteratorRef",[$h͏_a => (makeIteratorRef = $h͏_a)]]]],["./pet-sitter.js", [["makePetSitter",[$h͏_a => (makePetSitter = $h͏_a)]]]],["./pet-name.js", [["assertName",[$h͏_a => (assertName = $h͏_a)]],["assertNamePath",[$h͏_a => (assertNamePath = $h͏_a)]],["assertPetName",[$h͏_a => (assertPetName = $h͏_a)]],["assertPetNamePath",[$h͏_a => (assertPetNamePath = $h͏_a)]],["namePathFrom",[$h͏_a => (namePathFrom = $h͏_a)]]]],["./deferred-tasks.js", [["makeDeferredTasks",[$h͏_a => (makeDeferredTasks = $h͏_a)]]]],["./interfaces.js", [["GuestInterface",[$h͏_a => (GuestInterface = $h͏_a)]]]],["./help-text.js", [["guestHelp",[$h͏_a => (guestHelp = $h͏_a)]],["makeHelp",[$h͏_a => (makeHelp = $h͏_a)]]]]]);
 
 
@@ -23931,7 +26092,7 @@ const makeEnvelope = () => makeExo('Envelope', EnvelopeInterface, {});
 };$h͏_once.makeGuestMaker(makeGuestMaker);
 })()
 ,
-// === 113. daemon ./src/channel.js ===
+// === 123. daemon ./src/channel.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let makeExo,q,makeIteratorRef,makeChangeTopic,AsyncIteratorInterface,AttenuatorInterface,ChannelInterface,ChannelInvitationInterface,ChannelMemberInterface,makeHelp;$h͏_imports([["@endo/exo", [["makeExo",[$h͏_a => (makeExo = $h͏_a)]]]],["@endo/errors", [["q",[$h͏_a => (q = $h͏_a)]]]],["./reader-ref.js", [["makeIteratorRef",[$h͏_a => (makeIteratorRef = $h͏_a)]]]],["./pubsub.js", [["makeChangeTopic",[$h͏_a => (makeChangeTopic = $h͏_a)]]]],["./interfaces.js", [["AsyncIteratorInterface",[$h͏_a => (AsyncIteratorInterface = $h͏_a)]],["AttenuatorInterface",[$h͏_a => (AttenuatorInterface = $h͏_a)]],["ChannelInterface",[$h͏_a => (ChannelInterface = $h͏_a)]],["ChannelInvitationInterface",[$h͏_a => (ChannelInvitationInterface = $h͏_a)]],["ChannelMemberInterface",[$h͏_a => (ChannelMemberInterface = $h͏_a)]]]],["./help-text.js", [["makeHelp",[$h͏_a => (makeHelp = $h͏_a)]]]]]);
 
 
@@ -25129,7 +27290,7 @@ harden(channelInvitationHelp);
 harden(makeChannelMaker);
 })()
 ,
-// === 114. daemon ./src/hex.js ===
+// === 124. daemon ./src/hex.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';$h͏_imports([]);// @ts-check
 
 // Ponyfill for Uint8Array.prototype.toHex / Uint8Array.fromHex
@@ -25171,7 +27332,7 @@ harden(toHex);
 harden(fromHex);
 })()
 ,
-// === 115. daemon ./src/host.js ===
+// === 125. daemon ./src/host.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let E,makeExo,makeError,q,makeIteratorRef,assertPetName,assertPetNamePath,assertName,assertNamePath,namePathFrom,assertFormulaNumber,assertNodeNumber,parseId,formatId,addressesFromLocator,formatLocator,toHex,fromHex,makePetSitter,makeDeferredTasks,HostInterface,hostHelp,makeHelp;$h͏_imports([["@endo/far", [["E",[$h͏_a => (E = $h͏_a)]]]],["@endo/exo", [["makeExo",[$h͏_a => (makeExo = $h͏_a)]]]],["@endo/errors", [["makeError",[$h͏_a => (makeError = $h͏_a)]],["q",[$h͏_a => (q = $h͏_a)]]]],["./reader-ref.js", [["makeIteratorRef",[$h͏_a => (makeIteratorRef = $h͏_a)]]]],["./pet-name.js", [["assertPetName",[$h͏_a => (assertPetName = $h͏_a)]],["assertPetNamePath",[$h͏_a => (assertPetNamePath = $h͏_a)]],["assertName",[$h͏_a => (assertName = $h͏_a)]],["assertNamePath",[$h͏_a => (assertNamePath = $h͏_a)]],["namePathFrom",[$h͏_a => (namePathFrom = $h͏_a)]]]],["./formula-identifier.js", [["assertFormulaNumber",[$h͏_a => (assertFormulaNumber = $h͏_a)]],["assertNodeNumber",[$h͏_a => (assertNodeNumber = $h͏_a)]],["parseId",[$h͏_a => (parseId = $h͏_a)]],["formatId",[$h͏_a => (formatId = $h͏_a)]]]],["./locator.js", [["addressesFromLocator",[$h͏_a => (addressesFromLocator = $h͏_a)]],["formatLocator",[$h͏_a => (formatLocator = $h͏_a)]]]],["./hex.js", [["toHex",[$h͏_a => (toHex = $h͏_a)]],["fromHex",[$h͏_a => (fromHex = $h͏_a)]]]],["./pet-sitter.js", [["makePetSitter",[$h͏_a => (makePetSitter = $h͏_a)]]]],["./deferred-tasks.js", [["makeDeferredTasks",[$h͏_a => (makeDeferredTasks = $h͏_a)]]]],["./interfaces.js", [["HostInterface",[$h͏_a => (HostInterface = $h͏_a)]]]],["./help-text.js", [["hostHelp",[$h͏_a => (hostHelp = $h͏_a)]],["makeHelp",[$h͏_a => (makeHelp = $h͏_a)]]]]]);
 
 
@@ -25238,7 +27399,7 @@ const normalizeHostOrGuestOptions = opts => {
  * @param {DaemonCore['formulateMarshalValue']} args.formulateMarshalValue
  * @param {DaemonCore['formulateEval']} args.formulateEval
  * @param {DaemonCore['formulateUnconfined']} args.formulateUnconfined
- * @param {DaemonCore['formulateArchive']} args.formulateArchive
+ * @param {DaemonCore['formulateBundle']} args.formulateBundle
  * @param {DaemonCore['formulateReadableBlob']} args.formulateReadableBlob
  * @param {DaemonCore['checkinTree']} args.checkinTree
  * @param {DaemonCore['formulateMount']} args.formulateMount
@@ -25271,7 +27432,7 @@ const normalizeHostOrGuestOptions = opts => {
   formulateMarshalValue,
   formulateEval,
   formulateUnconfined,
-  formulateArchive,
+  formulateBundle,
   formulateReadableBlob,
   checkinTree,
   formulateMount,
@@ -25610,7 +27771,7 @@ const normalizeHostOrGuestOptions = opts => {
     };
 
     /**
-     * Helper function for makeUnconfined and makeArchive.
+     * Helper function for makeUnconfined and makeBundle.
      * @param {Name | undefined} workerName
      * @param {MakeCapletOptions} [options]
      */
@@ -25699,13 +27860,11 @@ const normalizeHostOrGuestOptions = opts => {
       return value;
     };
 
-    /** @type {EndoHost['makeArchive']} */
-    const makeArchive = async (workerName, archiveName, options) => {
-      const archiveId = petStore.identifyLocal(
-        /** @type {Name} */ (archiveName),
-      );
-      if (archiveId === undefined) {
-        throw new TypeError(`Unknown pet name for archive: ${q(archiveName)}`);
+    /** @type {EndoHost['makeBundle']} */
+    const makeBundle = async (workerName, bundleName, options) => {
+      const bundleId = petStore.identifyLocal(/** @type {Name} */ (bundleName));
+      if (bundleId === undefined) {
+        throw new TypeError(`Unknown pet name for bundle: ${q(bundleName)}`);
       }
 
       const {
@@ -25723,12 +27882,14 @@ const normalizeHostOrGuestOptions = opts => {
         explicitLabel ??
         (options?.resultName !== undefined
           ? `${options.resultName}`
-          : `archive:${archiveName}`);
+          : `bundle:${bundleName}`);
 
-      const { value } = await formulateArchive(
+      // Behold, recursion:
+      // eslint-disable-next-line no-use-before-define
+      const { value } = await formulateBundle(
         hostId,
         handleId,
-        /** @type {FormulaIdentifier} */ (archiveId),
+        /** @type {FormulaIdentifier} */ (bundleId),
         tasks,
         workerId,
         powersId,
@@ -26368,7 +28529,7 @@ const normalizeHostOrGuestOptions = opts => {
       provideWorker,
       evaluate,
       makeUnconfined,
-      makeArchive,
+      makeBundle,
       cancel,
       gateway,
       greeter,
@@ -26426,7 +28587,7 @@ const normalizeHostOrGuestOptions = opts => {
 };$h͏_once.makeHostMaker(makeHostMaker);
 })()
 ,
-// === 116. daemon ./src/remote-control.js ===
+// === 126. daemon ./src/remote-control.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';$h͏_imports([]);// @ts-check
 
 /** @import { RemoteControl, RemoteControlState, EndoGateway } from './types.js' */
@@ -26794,7 +28955,7 @@ const short = id => id.slice(0, 8);
 };$h͏_once.makeRemoteControlProvider(makeRemoteControlProvider);
 })()
 ,
-// === 117. daemon ./src/context.js ===
+// === 127. daemon ./src/context.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden,makePromiseKit;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]],["@endo/promise-kit", [["makePromiseKit",[$h͏_a => (makePromiseKit = $h͏_a)]]]]]);
 
 
@@ -26920,7 +29081,7 @@ const short = id => id.slice(0, 8);
 };$h͏_once.makeContextMaker(makeContextMaker);
 })()
 ,
-// === 118. daemon ./src/graph.js ===
+// === 128. daemon ./src/graph.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';$h͏_imports([]);// @ts-check
 
 /** @import { Formula, FormulaIdentifier } from './types.js' */
@@ -27756,7 +29917,7 @@ const short = id => id.slice(0, 8);
 harden(makeFormulaGraph);
 })()
 ,
-// === 119. daemon ./src/retention-accumulator.js ===
+// === 129. daemon ./src/retention-accumulator.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden,makeChangeTopic;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]],["./pubsub.js", [["makeChangeTopic",[$h͏_a => (makeChangeTopic = $h͏_a)]]]]]);
 
 
@@ -27873,7 +30034,7 @@ harden(makeFormulaGraph);
 harden(makeRetentionAccumulator);
 })()
 ,
-// === 120. daemon ./src/residence.js ===
+// === 130. daemon ./src/residence.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let makeDefaultCapTPImportExportTables,q;$h͏_imports([["@endo/captp", [["makeDefaultCapTPImportExportTables",[$h͏_a => (makeDefaultCapTPImportExportTables = $h͏_a)]]]],["@endo/errors", [["q",[$h͏_a => (q = $h͏_a)]]]]]);
 
 
@@ -28072,7 +30233,7 @@ harden(makeRetentionAccumulator);
 };$h͏_once.makeResidenceTracker(makeResidenceTracker);
 })()
 ,
-// === 121. daemon ./src/store-controller.js ===
+// === 131. daemon ./src/store-controller.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]]]);
 
 
@@ -28213,7 +30374,7 @@ harden(makeRetentionAccumulator);
 harden(makeLocalStoreController);
 })()
 ,
-// === 122. daemon ./src/multimap.js ===
+// === 132. daemon ./src/multimap.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let q;$h͏_imports([["@endo/errors", [["q",[$h͏_a => (q = $h͏_a)]]]]]);
 
 
@@ -28327,7 +30488,7 @@ const internalMakeMultimap = mapConstructor => {
 };$h͏_once.makeBidirectionalMultimap(makeBidirectionalMultimap);
 })()
 ,
-// === 123. daemon ./src/networks/loopback.js ===
+// === 133. daemon ./src/networks/loopback.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let Far;$h͏_imports([["@endo/far", [["Far",[$h͏_a => (Far = $h͏_a)]]]]]);
 
 
@@ -28360,7 +30521,7 @@ const internalMakeMultimap = mapConstructor => {
 };$h͏_once.makeLoopbackNetwork(makeLoopbackNetwork);
 })()
 ,
-// === 124. daemon ./src/mount.js ===
+// === 134. daemon ./src/mount.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let q,makeExo,mountHelp,mountFileHelp,makeHelp,MountInterface,MountFileInterface,makeIteratorRef;$h͏_imports([["@endo/errors", [["q",[$h͏_a => (q = $h͏_a)]]]],["@endo/exo", [["makeExo",[$h͏_a => (makeExo = $h͏_a)]]]],["./help-text.js", [["mountHelp",[$h͏_a => (mountHelp = $h͏_a)]],["mountFileHelp",[$h͏_a => (mountFileHelp = $h͏_a)]],["makeHelp",[$h͏_a => (makeHelp = $h͏_a)]]]],["./interfaces.js", [["MountInterface",[$h͏_a => (MountInterface = $h͏_a)]],["MountFileInterface",[$h͏_a => (MountFileInterface = $h͏_a)]]]],["./reader-ref.js", [["makeIteratorRef",[$h͏_a => (makeIteratorRef = $h͏_a)]]]]]);
 
 
@@ -28765,7 +30926,7 @@ harden(makeMountFileExo);
 harden(makeMount);
 })()
 ,
-// === 125. daemon ./src/daemon.js ===
+// === 135. daemon ./src/daemon.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden,makeExo,E,Far,makeMarshal,makePromiseKit,makeError,q,X,platformCheckinTree,snapshotTreeMethods,makeRefReader,makeRefIterator,makeIteratorRef,makeDirectoryMaker,makeDeferredTasks,assertMailboxStoreName,makeMailboxMaker,makeGuestMaker,makeChannelMaker,makeHostMaker,makeRemoteControlProvider,assertName,assertNamePath,assertNames,assertPetName,namePathFrom,formatLocator,idFromLocator,internalizeLocator,externalizeId,makeContextMaker,assertValidId,assertValidNumber,assertFormulaNumber,assertNodeNumber,parseId,formatId,makeFormulaGraph,makeChangeTopic,makeRetentionAccumulator,makeResidenceTracker,toHex,fromHex,makeSerialJobs,makeLocalStoreController,makeWeakMultimap,makeLoopbackNetwork,assertValidFormulaType,blobHelp,directoryHelp,endoHelp,guestHelp,makeHelp,readableTreeHelp,makeMount,DaemonFacetForWorkerInterface,GuestInterface,InspectorHubInterface,InspectorInterface,InvitationInterface,PeerGatewayInterface,ResponderInterface,WorkerInterface,DirectoryInterface,BlobInterface,ReadableTreeInterface,EndoInterface;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]],["@endo/exo", [["makeExo",[$h͏_a => (makeExo = $h͏_a)]]]],["@endo/far", [["E",[$h͏_a => (E = $h͏_a)]],["Far",[$h͏_a => (Far = $h͏_a)]]]],["@endo/marshal", [["makeMarshal",[$h͏_a => (makeMarshal = $h͏_a)]]]],["@endo/promise-kit", [["makePromiseKit",[$h͏_a => (makePromiseKit = $h͏_a)]]]],["@endo/errors", [["makeError",[$h͏_a => (makeError = $h͏_a)]],["q",[$h͏_a => (q = $h͏_a)]],["X",[$h͏_a => (X = $h͏_a)]]]],["@endo/platform/fs/lite", [["checkinTree",[$h͏_a => (platformCheckinTree = $h͏_a)]],["snapshotTreeMethods",[$h͏_a => (snapshotTreeMethods = $h͏_a)]]]],["./ref-reader.js", [["makeRefReader",[$h͏_a => (makeRefReader = $h͏_a)]],["makeRefIterator",[$h͏_a => (makeRefIterator = $h͏_a)]]]],["./reader-ref.js", [["makeIteratorRef",[$h͏_a => (makeIteratorRef = $h͏_a)]]]],["./directory.js", [["makeDirectoryMaker",[$h͏_a => (makeDirectoryMaker = $h͏_a)]]]],["./deferred-tasks.js", [["makeDeferredTasks",[$h͏_a => (makeDeferredTasks = $h͏_a)]]]],["./mail.js", [["assertMailboxStoreName",[$h͏_a => (assertMailboxStoreName = $h͏_a)]],["makeMailboxMaker",[$h͏_a => (makeMailboxMaker = $h͏_a)]]]],["./guest.js", [["makeGuestMaker",[$h͏_a => (makeGuestMaker = $h͏_a)]]]],["./channel.js", [["makeChannelMaker",[$h͏_a => (makeChannelMaker = $h͏_a)]]]],["./host.js", [["makeHostMaker",[$h͏_a => (makeHostMaker = $h͏_a)]]]],["./remote-control.js", [["makeRemoteControlProvider",[$h͏_a => (makeRemoteControlProvider = $h͏_a)]]]],["./pet-name.js", [["assertName",[$h͏_a => (assertName = $h͏_a)]],["assertNamePath",[$h͏_a => (assertNamePath = $h͏_a)]],["assertNames",[$h͏_a => (assertNames = $h͏_a)]],["assertPetName",[$h͏_a => (assertPetName = $h͏_a)]],["namePathFrom",[$h͏_a => (namePathFrom = $h͏_a)]]]],["./locator.js", [["formatLocator",[$h͏_a => (formatLocator = $h͏_a)]],["idFromLocator",[$h͏_a => (idFromLocator = $h͏_a)]],["internalizeLocator",[$h͏_a => (internalizeLocator = $h͏_a)]],["externalizeId",[$h͏_a => (externalizeId = $h͏_a)]]]],["./context.js", [["makeContextMaker",[$h͏_a => (makeContextMaker = $h͏_a)]]]],["./formula-identifier.js", [["assertValidId",[$h͏_a => (assertValidId = $h͏_a)]],["assertValidNumber",[$h͏_a => (assertValidNumber = $h͏_a)]],["assertFormulaNumber",[$h͏_a => (assertFormulaNumber = $h͏_a)]],["assertNodeNumber",[$h͏_a => (assertNodeNumber = $h͏_a)]],["parseId",[$h͏_a => (parseId = $h͏_a)]],["formatId",[$h͏_a => (formatId = $h͏_a)]]]],["./graph.js", [["makeFormulaGraph",[$h͏_a => (makeFormulaGraph = $h͏_a)]]]],["./pubsub.js", [["makeChangeTopic",[$h͏_a => (makeChangeTopic = $h͏_a)]]]],["./retention-accumulator.js", [["makeRetentionAccumulator",[$h͏_a => (makeRetentionAccumulator = $h͏_a)]]]],["./residence.js", [["makeResidenceTracker",[$h͏_a => (makeResidenceTracker = $h͏_a)]]]],["./hex.js", [["toHex",[$h͏_a => (toHex = $h͏_a)]],["fromHex",[$h͏_a => (fromHex = $h͏_a)]]]],["./serial-jobs.js", [["makeSerialJobs",[$h͏_a => (makeSerialJobs = $h͏_a)]]]],["./store-controller.js", [["makeLocalStoreController",[$h͏_a => (makeLocalStoreController = $h͏_a)]]]],["./multimap.js", [["makeWeakMultimap",[$h͏_a => (makeWeakMultimap = $h͏_a)]]]],["./networks/loopback.js", [["makeLoopbackNetwork",[$h͏_a => (makeLoopbackNetwork = $h͏_a)]]]],["./formula-type.js", [["assertValidFormulaType",[$h͏_a => (assertValidFormulaType = $h͏_a)]]]],["./help-text.js", [["blobHelp",[$h͏_a => (blobHelp = $h͏_a)]],["directoryHelp",[$h͏_a => (directoryHelp = $h͏_a)]],["endoHelp",[$h͏_a => (endoHelp = $h͏_a)]],["guestHelp",[$h͏_a => (guestHelp = $h͏_a)]],["makeHelp",[$h͏_a => (makeHelp = $h͏_a)]],["readableTreeHelp",[$h͏_a => (readableTreeHelp = $h͏_a)]]]],["./mount.js", [["makeMount",[$h͏_a => (makeMount = $h͏_a)]]]],["./interfaces.js", [["DaemonFacetForWorkerInterface",[$h͏_a => (DaemonFacetForWorkerInterface = $h͏_a)]],["GuestInterface",[$h͏_a => (GuestInterface = $h͏_a)]],["InspectorHubInterface",[$h͏_a => (InspectorHubInterface = $h͏_a)]],["InspectorInterface",[$h͏_a => (InspectorInterface = $h͏_a)]],["InvitationInterface",[$h͏_a => (InvitationInterface = $h͏_a)]],["PeerGatewayInterface",[$h͏_a => (PeerGatewayInterface = $h͏_a)]],["ResponderInterface",[$h͏_a => (ResponderInterface = $h͏_a)]],["WorkerInterface",[$h͏_a => (WorkerInterface = $h͏_a)]],["DirectoryInterface",[$h͏_a => (DirectoryInterface = $h͏_a)]],["BlobInterface",[$h͏_a => (BlobInterface = $h͏_a)]],["ReadableTreeInterface",[$h͏_a => (ReadableTreeInterface = $h͏_a)]],["EndoInterface",[$h͏_a => (EndoInterface = $h͏_a)]]]]]);
 
 
@@ -28850,7 +31011,7 @@ harden(makeMount);
 /** @import { Passable } from '@endo/pass-style' */
 /** @import { ERef, FarRef } from '@endo/eventual-send' */
 /** @import { PromiseKit } from '@endo/promise-kit' */
-/** @import { AgentDeferredTaskParams, Builtins, CapTpConnectionRegistrar, Context, Controller, DaemonCore, DaemonCoreExternal, DaemonicPowers, DeferredTasks, DirectoryFormula, EndoBootstrap, EndoDirectory, EndoFormula, EndoGateway, EndoGreeter, EndoGuest, EndoHost, EndoInspector, EndoNetwork, EndoPeer, EndoReadable, EndoWorker, EvalFormula, FarContext, Formula, FormulaIdentifier, FormulaNumber, FormulaMakerTable, FormulateResult, GuestFormula, HandleFormula, HostFormula, Invitation, InvitationDeferredTaskParams, InvitationFormula, KnownEndoInspectors, KnownPeersStore, LookupFormula, LoopbackNetworkFormula, MailboxStoreFormula, MailHubFormula, MakeArchiveFormula, MakeCapletDeferredTaskParams, MakeUnconfinedFormula, MarshalDeferredTaskParams, MessageFormula, Name, NameHub, NamePath, NameOrPath, NodeNumber, PetName, PeerFormula, PeerInfo, PetInspectorFormula, PetStore, PetStoreFormula, PromiseFormula, Provide, ReadableBlobFormula, ResolverFormula, Sha256, Specials, MarshalFormula, WeakMultimap, WorkerDaemonFacet, WorkerFormula, TimerFormula } from './types.js' */
+/** @import { AgentDeferredTaskParams, Builtins, CapTpConnectionRegistrar, Context, Controller, DaemonCore, DaemonCoreExternal, DaemonicPowers, DeferredTasks, DirectoryFormula, EndoBootstrap, EndoDirectory, EndoFormula, EndoGateway, EndoGreeter, EndoGuest, EndoHost, EndoInspector, EndoNetwork, EndoPeer, EndoReadable, EndoWorker, EvalFormula, FarContext, Formula, FormulaIdentifier, FormulaNumber, FormulaMakerTable, FormulateResult, GuestFormula, HandleFormula, HostFormula, Invitation, InvitationDeferredTaskParams, InvitationFormula, KnownEndoInspectors, KnownPeersStore, LookupFormula, LoopbackNetworkFormula, MailboxStoreFormula, MailHubFormula, MakeBundleFormula, MakeCapletDeferredTaskParams, MakeUnconfinedFormula, MarshalDeferredTaskParams, MessageFormula, Name, NameHub, NamePath, NameOrPath, NodeNumber, PetName, PeerFormula, PeerInfo, PetInspectorFormula, PetStore, PetStoreFormula, PromiseFormula, Provide, ReadableBlobFormula, ResolverFormula, Sha256, Specials, MarshalFormula, WeakMultimap, WorkerDaemonFacet, WorkerFormula, TimerFormula } from './types.js' */
 
 /**
  * Creates a delayed promise that can be cancelled.
@@ -29310,12 +31471,12 @@ const makeDaemonCore = async (
         }
         return deps;
       }
-      case 'make-archive': {
+      case 'make-bundle': {
         /** @type {Array<[string, FormulaIdentifier]>} */
         const deps = [
           ['worker', formula.worker],
           ['powers', formula.powers],
-          ['archive', formula.archive],
+          ['bundle', formula.bundle],
         ];
         if (formula.cancelWithWorker) {
           deps.push(['cancelWithWorker', formula.cancelWithWorker]);
@@ -29617,7 +31778,7 @@ const makeDaemonCore = async (
       }
       // When a retainer's node worker is terminated by GC, also
       // terminate any cancelWithWorker (original XS worker) referenced
-      // by make-unconfined/make-archive formulas on this worker.
+      // by make-unconfined/make-bundle formulas on this worker.
       const terminatedId = formatId({
         number: /** @type {FormulaNumber} */ (workerId),
         node: localNodeNumber,
@@ -29625,7 +31786,7 @@ const makeDaemonCore = async (
       for (const formula of formulaForId.values()) {
         if (
           (formula.type === 'make-unconfined' ||
-            formula.type === 'make-archive') &&
+            formula.type === 'make-bundle') &&
           formula.worker === terminatedId &&
           formula.cancelWithWorker
         ) {
@@ -30119,15 +32280,14 @@ const makeDaemonCore = async (
   /**
    * @param {string} workerId
    * @param {string} powersId
-   * @param {string} archiveId
+   * @param {string} bundleId
    * @param {Record<string, string> | undefined} env
    * @param {Context} context
-   * @param {string} [cancelWithWorker]
    */
-  const makeArchive = async (
+  const makeBundle = async (
     workerId,
     powersId,
-    archiveId,
+    bundleId,
     env,
     context,
     cancelWithWorker,
@@ -30144,13 +32304,13 @@ const makeDaemonCore = async (
     );
     const workerDaemonFacet = workerDaemonFacets.get(worker);
     assert(workerDaemonFacet, 'Cannot make caplet with non-worker');
-    const readableArchiveP = provide(
-      /** @type {FormulaIdentifier} */ (archiveId),
+    const readableBundleP = provide(
+      /** @type {FormulaIdentifier} */ (bundleId),
       'readable-blob',
     );
     const powersP = provide(/** @type {FormulaIdentifier} */ (powersId));
-    return E(/** @type {any} */ (workerDaemonFacet)).makeArchive(
-      readableArchiveP,
+    return E(/** @type {any} */ (workerDaemonFacet)).makeBundle(
+      readableBundleP,
       // TODO fix type
       /** @type {any} */ (powersP),
       /** @type {any} */ (makeFarContext(context)),
@@ -31057,24 +33217,17 @@ const makeDaemonCore = async (
         context,
         cancelWithWorker,
       ),
-    'make-archive': (
+    'make-bundle': (
       {
         worker: workerId,
         powers: powersId,
-        archive: archiveId,
+        bundle: bundleId,
         env = {},
         cancelWithWorker,
       },
       context,
     ) =>
-      makeArchive(
-        workerId,
-        powersId,
-        archiveId,
-        env,
-        context,
-        cancelWithWorker,
-      ),
+      makeBundle(workerId, powersId, bundleId, env, context, cancelWithWorker),
     host: async (formula, context, id) => {
       const {
         hostHandle: hostHandleId,
@@ -32774,7 +34927,7 @@ const makeDaemonCore = async (
   };
 
   /**
-   * Helper for `formulateUnconfined` and `formulateArchive`.
+   * Helper for `formulateUnconfined` and `formulateBundle`.
    * @param {FormulaIdentifier} hostAgentId
    * @param {FormulaIdentifier} hostHandleId
    * @param {DeferredTasks<MakeCapletDeferredTaskParams>} deferredTasks
@@ -32875,11 +35028,11 @@ const makeDaemonCore = async (
     });
   };
 
-  /** @type {DaemonCore['formulateArchive']} */
-  const formulateArchive = async (
+  /** @type {DaemonCore['formulateBundle']} */
+  const formulateBundle = async (
     hostAgentId,
     hostHandleId,
-    archiveId,
+    bundleId,
     deferredTasks,
     specifiedWorkerId,
     specifiedPowersId,
@@ -32900,12 +35053,12 @@ const makeDaemonCore = async (
           'node',
         );
 
-      /** @type {MakeArchiveFormula} */
+      /** @type {MakeBundleFormula} */
       const formula = {
-        type: 'make-archive',
+        type: 'make-bundle',
         worker: workerId,
         powers: powersId,
-        archive: archiveId,
+        bundle: bundleId,
         env,
         ...(originalWorkerId ? { cancelWithWorker: originalWorkerId } : {}),
       };
@@ -33553,7 +35706,7 @@ const makeDaemonCore = async (
     formulateMarshalValue,
     formulateEval,
     formulateUnconfined,
-    formulateArchive,
+    formulateBundle,
     formulateReadableBlob,
     checkinTree,
     formulateMount,
@@ -33617,13 +35770,9 @@ const makeDaemonCore = async (
       const { number: formulaNumber } = parseId(id);
       const formula = await getFormulaForId(id);
       if (
-        ![
-          'eval',
-          'lookup',
-          'make-unconfined',
-          'make-archive',
-          'guest',
-        ].includes(formula.type)
+        !['eval', 'lookup', 'make-unconfined', 'make-bundle', 'guest'].includes(
+          formula.type,
+        )
       ) {
         return makeInspector(formula.type, formulaNumber, harden({}));
       }
@@ -33659,12 +35808,12 @@ const makeDaemonCore = async (
             hostHandle: provide(formula.hostHandle, 'handle'),
           }),
         );
-      } else if (formula.type === 'make-archive') {
+      } else if (formula.type === 'make-bundle') {
         return makeInspector(
           formula.type,
           formulaNumber,
           harden({
-            archive: provide(formula.archive, 'readable-blob'),
+            bundle: provide(formula.bundle, 'readable-blob'),
             powers: provide(formula.powers),
             worker: provide(formula.worker, 'worker'),
           }),
@@ -33886,7 +36035,7 @@ const provideEndoBootstrap = async (
 };$h͏_once.makeDaemon(makeDaemon);
 })()
 ,
-// === 126. daemon ./src/daemon-persistence-powers.js ===
+// === 136. daemon ./src/daemon-persistence-powers.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden,q,makeSnapshotStore,makeReaderRef,toHex,fromHex;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]],["@endo/errors", [["q",[$h͏_a => (q = $h͏_a)]]]],["@endo/platform/fs/lite", [["makeSnapshotStore",[$h͏_a => (makeSnapshotStore = $h͏_a)]]]],["./reader-ref.js", [["makeReaderRef",[$h͏_a => (makeReaderRef = $h͏_a)]]]],["./hex.js", [["toHex",[$h͏_a => (toHex = $h͏_a)]],["fromHex",[$h͏_a => (fromHex = $h͏_a)]]]]]);
 
 
@@ -34224,7 +36373,7 @@ const provideEndoBootstrap = async (
 harden(makeDaemonicPersistencePowers);
 })()
 ,
-// === 127. daemon ./src/pet-store.js ===
+// === 137. daemon ./src/pet-store.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden,makeChangeTopic,parseId,assertValidId,makeBidirectionalMultimap;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]],["./pubsub.js", [["makeChangeTopic",[$h͏_a => (makeChangeTopic = $h͏_a)]]]],["./formula-identifier.js", [["parseId",[$h͏_a => (parseId = $h͏_a)]],["assertValidId",[$h͏_a => (assertValidId = $h͏_a)]]]],["./multimap.js", [["makeBidirectionalMultimap",[$h͏_a => (makeBidirectionalMultimap = $h͏_a)]]]]]);
 
 
@@ -34490,7 +36639,7 @@ harden(makeDaemonicPersistencePowers);
 };$h͏_once.makePetStoreMaker(makePetStoreMaker);
 })()
 ,
-// === 128. netstring ./reader.js ===
+// === 138. netstring ./reader.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]]]);
 
 
@@ -34656,7 +36805,7 @@ harden(makeNetstringReader);
 };$h͏_once.netstringReader(netstringReader);
 })()
 ,
-// === 129. netstring ./writer.js ===
+// === 139. netstring ./writer.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden,makePromiseKit;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]],["@endo/promise-kit", [["makePromiseKit",[$h͏_a => (makePromiseKit = $h͏_a)]]]]]);
 
 
@@ -34756,11 +36905,11 @@ harden(makeNetstringWriter);
        const netstringWriter = makeNetstringWriter;$h͏_once.netstringWriter(netstringWriter);
 })()
 ,
-// === 130. netstring ./index.js ===
+// === 140. netstring ./index.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';$h͏_imports([["./reader.js", []],["./writer.js", []]]);
 })()
 ,
-// === 131. daemon ./src/connection.js ===
+// === 141. daemon ./src/connection.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let makeCapTP,makePromiseKit,mapWriter,mapReader,makeNetstringReader,makeNetstringWriter;$h͏_imports([["@endo/captp", [["makeCapTP",[$h͏_a => (makeCapTP = $h͏_a)]]]],["@endo/promise-kit", [["makePromiseKit",[$h͏_a => (makePromiseKit = $h͏_a)]]]],["@endo/stream", [["mapWriter",[$h͏_a => (mapWriter = $h͏_a)]],["mapReader",[$h͏_a => (mapReader = $h͏_a)]]]],["@endo/netstring", [["makeNetstringReader",[$h͏_a => (makeNetstringReader = $h͏_a)]],["makeNetstringWriter",[$h͏_a => (makeNetstringWriter = $h͏_a)]]]]]);
 
 
@@ -34972,7 +37121,7 @@ const registerCapTpConnection = (registrar, name, close, closed) => {
 };$h͏_once.makeNetstringCapTP(makeNetstringCapTP);
 })()
 ,
-// === 132. daemon ./src/envelope.js ===
+// === 142. daemon ./src/envelope.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';$h͏_imports([]);// @ts-check
 /* eslint-disable no-bitwise */
 /* global Buffer */
@@ -35362,7 +37511,7 @@ harden(readFrameFromStream);
 harden(writeFrameToStream);
 })()
 ,
-// === 133. daemon ./src/bus-daemon-rust-xs-powers.js ===
+// === 143. daemon ./src/bus-daemon-rust-xs-powers.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';$h͏_imports([]);// @ts-nocheck
 // The XS-backed powers still implement the pre-SQLite SqliteValue
 // contract and expose readLink outside the current FilePowers type.
@@ -35911,7 +38060,7 @@ const assertSqliteOk = result => {
 harden(makeXsSqlitePowers);
 })()
 ,
-// === 134. daemon ./src/debug-session.js ===
+// === 144. daemon ./src/debug-session.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let makePromiseKit;$h͏_imports([["@endo/promise-kit", [["makePromiseKit",[$h͏_a => (makePromiseKit = $h͏_a)]]]]]);
 
 
@@ -36456,7 +38605,7 @@ harden(makeSaxParser);
 harden(makeDebugSession);
 })()
 ,
-// === 135. daemon ./src/debugger.js ===
+// === 145. daemon ./src/debugger.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let makeExo,M;$h͏_imports([["@endo/exo", [["makeExo",[$h͏_a => (makeExo = $h͏_a)]]]],["@endo/patterns", [["M",[$h͏_a => (M = $h͏_a)]]]]]);
 
 
@@ -36615,8 +38764,9 @@ harden(DebuggerInterface);
 harden(makeDebugger);
 })()
 ,
-// === 136. daemon ./src/bus-daemon-rust-xs.js ===
-({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let makeCapTP,E,makePromiseKit,mapWriter,mapReader,makePipe,makeDaemon,makeDaemonicPersistencePowers,makePetStoreMaker,makeMessageCapTP,messageToBytes,bytesToMessage,encodeEnvelope,decodeEnvelope,makeXsFilePowers,makeXsCryptoPowers,makeDebugSession,makeDebugger;$h͏_imports([["@endo/captp", [["makeCapTP",[$h͏_a => (makeCapTP = $h͏_a)]]]],["@endo/far", [["E",[$h͏_a => (E = $h͏_a)]]]],["@endo/promise-kit", [["makePromiseKit",[$h͏_a => (makePromiseKit = $h͏_a)]]]],["@endo/stream", [["mapWriter",[$h͏_a => (mapWriter = $h͏_a)]],["mapReader",[$h͏_a => (mapReader = $h͏_a)]],["makePipe",[$h͏_a => (makePipe = $h͏_a)]]]],["./daemon.js", [["makeDaemon",[$h͏_a => (makeDaemon = $h͏_a)]]]],["./daemon-persistence-powers.js", [["makeDaemonicPersistencePowers",[$h͏_a => (makeDaemonicPersistencePowers = $h͏_a)]]]],["./pet-store.js", [["makePetStoreMaker",[$h͏_a => (makePetStoreMaker = $h͏_a)]]]],["./connection.js", [["makeMessageCapTP",[$h͏_a => (makeMessageCapTP = $h͏_a)]],["messageToBytes",[$h͏_a => (messageToBytes = $h͏_a)]],["bytesToMessage",[$h͏_a => (bytesToMessage = $h͏_a)]]]],["./envelope.js", [["encodeEnvelope",[$h͏_a => (encodeEnvelope = $h͏_a)]],["decodeEnvelope",[$h͏_a => (decodeEnvelope = $h͏_a)]]]],["./bus-daemon-rust-xs-powers.js", [["makeXsFilePowers",[$h͏_a => (makeXsFilePowers = $h͏_a)]],["makeXsCryptoPowers",[$h͏_a => (makeXsCryptoPowers = $h͏_a)]]]],["./debug-session.js", [["makeDebugSession",[$h͏_a => (makeDebugSession = $h͏_a)]]]],["./debugger.js", [["makeDebugger",[$h͏_a => (makeDebugger = $h͏_a)]]]]]);
+// === 146. daemon ./src/bus-daemon-rust-xs.js ===
+({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let makeCapTP,E,makePromiseKit,mapWriter,mapReader,makePipe,makeMessageSlots,isSlotVerb,makeDaemon,makeDaemonicPersistencePowers,makePetStoreMaker,makeMessageCapTP,messageToBytes,bytesToMessage,encodeEnvelope,decodeEnvelope,makeXsFilePowers,makeXsCryptoPowers,makeDebugSession,makeDebugger;$h͏_imports([["@endo/captp", [["makeCapTP",[$h͏_a => (makeCapTP = $h͏_a)]]]],["@endo/far", [["E",[$h͏_a => (E = $h͏_a)]]]],["@endo/promise-kit", [["makePromiseKit",[$h͏_a => (makePromiseKit = $h͏_a)]]]],["@endo/stream", [["mapWriter",[$h͏_a => (mapWriter = $h͏_a)]],["mapReader",[$h͏_a => (mapReader = $h͏_a)]],["makePipe",[$h͏_a => (makePipe = $h͏_a)]]]],["@endo/slots", [["makeMessageSlots",[$h͏_a => (makeMessageSlots = $h͏_a)]],["isSlotVerb",[$h͏_a => (isSlotVerb = $h͏_a)]]]],["./daemon.js", [["makeDaemon",[$h͏_a => (makeDaemon = $h͏_a)]]]],["./daemon-persistence-powers.js", [["makeDaemonicPersistencePowers",[$h͏_a => (makeDaemonicPersistencePowers = $h͏_a)]]]],["./pet-store.js", [["makePetStoreMaker",[$h͏_a => (makePetStoreMaker = $h͏_a)]]]],["./connection.js", [["makeMessageCapTP",[$h͏_a => (makeMessageCapTP = $h͏_a)]],["messageToBytes",[$h͏_a => (messageToBytes = $h͏_a)]],["bytesToMessage",[$h͏_a => (bytesToMessage = $h͏_a)]]]],["./envelope.js", [["encodeEnvelope",[$h͏_a => (encodeEnvelope = $h͏_a)]],["decodeEnvelope",[$h͏_a => (decodeEnvelope = $h͏_a)]]]],["./bus-daemon-rust-xs-powers.js", [["makeXsFilePowers",[$h͏_a => (makeXsFilePowers = $h͏_a)]],["makeXsCryptoPowers",[$h͏_a => (makeXsCryptoPowers = $h͏_a)]]]],["./debug-session.js", [["makeDebugSession",[$h͏_a => (makeDebugSession = $h͏_a)]]]],["./debugger.js", [["makeDebugger",[$h͏_a => (makeDebugger = $h͏_a)]]]]]);
+
 
 
 
@@ -36985,6 +39135,13 @@ const pendingSpawns = new Map();
 /** @type {Map<number, { writer: import('@endo/stream').Writer<Uint8Array> }>} */
 const workerWriters = new Map();
 
+// When ENDO_USE_SLOT_MACHINE=1 is in effect, the daemon-side worker
+// session is built with `makeMessageSlots` instead of CapTP and the
+// envelope inbox lives here, keyed by worker handle.  Inbound slot
+// verbs (deliver/resolve/drop/abort) from the worker route here.
+/** @type {Map<number, (env: { verb: string, payload: Uint8Array }) => void>} */
+const workerSlotInboxes = new Map();
+
 /** @type {Map<number, (value: undefined) => void>} */
 const workerExitResolvers = new Map();
 
@@ -37146,7 +39303,111 @@ const makeWorker = async (
   const workerHandle = decodeCborInt(response.payload);
   hostTrace(`Endo worker spawned for ${workerId} handle=${workerHandle}`);
 
-  // Set up CapTP session over envelope protocol.
+  const useSlotMachine = hostGetEnv('ENDO_USE_SLOT_MACHINE') === '1';
+
+  const workerClosed = new Promise(resolve => {
+    workerExitResolvers.set(workerHandle, resolve);
+    cancelled.catch(() => resolve(undefined));
+  });
+
+  if (useSlotMachine) {
+    // Slot-machine path: speak the four slot verbs end-to-end with
+    // the worker.  Inbound envelopes from `handleCommand` route into
+    // a per-worker async-generator inbox; outbound envelopes go via
+    // `sendEnvelope` with the verb intact.
+    /** @type {Array<{ verb: string, payload: Uint8Array }>} */
+    const inboxQueue = [];
+    /** @type {((value: IteratorResult<{verb: string, payload: Uint8Array}>) => void) | null} */
+    let inboxWaiter = null;
+    let inboxClosed = false;
+
+    workerSlotInboxes.set(workerHandle, env => {
+      if (inboxWaiter) {
+        const w = inboxWaiter;
+        inboxWaiter = null;
+        w(harden({ done: false, value: env }));
+      } else {
+        inboxQueue.push(env);
+      }
+    });
+
+    const inboundReader = harden({
+      next() {
+        if (inboxQueue.length > 0) {
+          const value = /** @type {{verb: string, payload: Uint8Array}} */ (
+            inboxQueue.shift()
+          );
+          return Promise.resolve(harden({ done: false, value }));
+        }
+        if (inboxClosed) {
+          return Promise.resolve(harden({ done: true, value: undefined }));
+        }
+        return new Promise(resolve => {
+          inboxWaiter = resolve;
+        });
+      },
+      return() {
+        inboxClosed = true;
+        if (inboxWaiter) {
+          const w = inboxWaiter;
+          inboxWaiter = null;
+          w(harden({ done: true, value: undefined }));
+        }
+        return Promise.resolve(harden({ done: true, value: undefined }));
+      },
+      throw() {
+        inboxClosed = true;
+        return Promise.resolve(harden({ done: true, value: undefined }));
+      },
+      [Symbol.asyncIterator]() {
+        return this;
+      },
+    });
+
+    const envelopeWriter = harden({
+      /** @param {{ verb: string, payload: Uint8Array }} env */
+      async next(env) {
+        hostTrace(
+          `daemon-xs(slots): SEND ${env.verb} handle=${workerHandle} bytes=${env.payload.length}`,
+        );
+        sendEnvelope(workerHandle, env.verb, env.payload);
+        return harden({ done: false, value: undefined });
+      },
+      async return() {
+        return harden({ done: true, value: undefined });
+      },
+      async throw() {
+        return harden({ done: true, value: undefined });
+      },
+      [Symbol.asyncIterator]() {
+        return this;
+      },
+    });
+
+    const { getBootstrap, closed: slotsClosed } = makeMessageSlots(
+      `Worker ${workerId}`,
+      envelopeWriter,
+      inboundReader,
+      cancelled,
+      daemonWorkerFacet,
+    );
+
+    slotsClosed.finally(() => {
+      workerSlotInboxes.delete(workerHandle);
+      hostTrace(
+        `Endo worker connection closed (slots) handle=${workerHandle} id=${workerId}`,
+      );
+    });
+
+    const workerTerminated = Promise.race([workerClosed, slotsClosed]);
+
+    /** @type {ERef<WorkerDaemonFacet>} */
+    const workerDaemonFacet = /** @type {any} */ (getBootstrap());
+
+    return { workerTerminated, workerDaemonFacet };
+  }
+
+  // CapTP path (default).
   const [captpReadFrom, captpWriteTo] = makePipe();
 
   workerWriters.set(workerHandle, { writer: captpWriteTo });
@@ -37173,11 +39434,6 @@ const makeWorker = async (
 
   const messageWriter = mapWriter(envelopeBytesWriter, messageToBytes);
   const messageReader = mapReader(captpReadFrom, bytesToMessage);
-
-  const workerClosed = new Promise(resolve => {
-    workerExitResolvers.set(workerHandle, resolve);
-    cancelled.catch(() => resolve(undefined));
-  });
 
   const { getBootstrap, closed: capTpClosed } = makeMessageCapTP(
     `Worker ${workerId}`,
@@ -37421,6 +39677,21 @@ globalThis.handleCommand = harden(bytes => {
       );
     }
     return;
+  }
+
+  // Slot-machine traffic from a worker (deliver/resolve/drop/abort).
+  // The slot-machine session for this worker, if any, gets the
+  // envelope intact — verb and all.  Falls through to CapTP routing
+  // when no slot inbox is registered.
+  if (isSlotVerb(env.verb)) {
+    const slotInbox = workerSlotInboxes.get(env.handle);
+    if (slotInbox) {
+      hostTrace(
+        `daemon-xs(slots): RECV ${env.verb} handle=${env.handle} bytes=${env.payload.length}`,
+      );
+      slotInbox({ verb: env.verb, payload: env.payload });
+      return;
+    }
   }
 
   // Worker CapTP messages.

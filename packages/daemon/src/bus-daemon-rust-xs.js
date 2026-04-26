@@ -44,6 +44,7 @@ import { makeCapTP } from '@endo/captp';
 import { E } from '@endo/far';
 import { makePromiseKit } from '@endo/promise-kit';
 import { mapWriter, mapReader, makePipe } from '@endo/stream';
+import { makeMessageSlots, isSlotVerb } from '@endo/slots';
 
 import { makeDaemon } from './daemon.js';
 import { makeDaemonicPersistencePowers } from './daemon-persistence-powers.js';
@@ -367,6 +368,13 @@ const pendingSpawns = new Map();
 /** @type {Map<number, { writer: import('@endo/stream').Writer<Uint8Array> }>} */
 const workerWriters = new Map();
 
+// When ENDO_USE_SLOT_MACHINE=1 is in effect, the daemon-side worker
+// session is built with `makeMessageSlots` instead of CapTP and the
+// envelope inbox lives here, keyed by worker handle.  Inbound slot
+// verbs (deliver/resolve/drop/abort) from the worker route here.
+/** @type {Map<number, (env: { verb: string, payload: Uint8Array }) => void>} */
+const workerSlotInboxes = new Map();
+
 /** @type {Map<number, (value: undefined) => void>} */
 const workerExitResolvers = new Map();
 
@@ -528,7 +536,111 @@ const makeWorker = async (
   const workerHandle = decodeCborInt(response.payload);
   hostTrace(`Endo worker spawned for ${workerId} handle=${workerHandle}`);
 
-  // Set up CapTP session over envelope protocol.
+  const useSlotMachine = hostGetEnv('ENDO_USE_SLOT_MACHINE') === '1';
+
+  const workerClosed = new Promise(resolve => {
+    workerExitResolvers.set(workerHandle, resolve);
+    cancelled.catch(() => resolve(undefined));
+  });
+
+  if (useSlotMachine) {
+    // Slot-machine path: speak the four slot verbs end-to-end with
+    // the worker.  Inbound envelopes from `handleCommand` route into
+    // a per-worker async-generator inbox; outbound envelopes go via
+    // `sendEnvelope` with the verb intact.
+    /** @type {Array<{ verb: string, payload: Uint8Array }>} */
+    const inboxQueue = [];
+    /** @type {((value: IteratorResult<{verb: string, payload: Uint8Array}>) => void) | null} */
+    let inboxWaiter = null;
+    let inboxClosed = false;
+
+    workerSlotInboxes.set(workerHandle, env => {
+      if (inboxWaiter) {
+        const w = inboxWaiter;
+        inboxWaiter = null;
+        w(harden({ done: false, value: env }));
+      } else {
+        inboxQueue.push(env);
+      }
+    });
+
+    const inboundReader = harden({
+      next() {
+        if (inboxQueue.length > 0) {
+          const value = /** @type {{verb: string, payload: Uint8Array}} */ (
+            inboxQueue.shift()
+          );
+          return Promise.resolve(harden({ done: false, value }));
+        }
+        if (inboxClosed) {
+          return Promise.resolve(harden({ done: true, value: undefined }));
+        }
+        return new Promise(resolve => {
+          inboxWaiter = resolve;
+        });
+      },
+      return() {
+        inboxClosed = true;
+        if (inboxWaiter) {
+          const w = inboxWaiter;
+          inboxWaiter = null;
+          w(harden({ done: true, value: undefined }));
+        }
+        return Promise.resolve(harden({ done: true, value: undefined }));
+      },
+      throw() {
+        inboxClosed = true;
+        return Promise.resolve(harden({ done: true, value: undefined }));
+      },
+      [Symbol.asyncIterator]() {
+        return this;
+      },
+    });
+
+    const envelopeWriter = harden({
+      /** @param {{ verb: string, payload: Uint8Array }} env */
+      async next(env) {
+        hostTrace(
+          `daemon-xs(slots): SEND ${env.verb} handle=${workerHandle} bytes=${env.payload.length}`,
+        );
+        sendEnvelope(workerHandle, env.verb, env.payload);
+        return harden({ done: false, value: undefined });
+      },
+      async return() {
+        return harden({ done: true, value: undefined });
+      },
+      async throw() {
+        return harden({ done: true, value: undefined });
+      },
+      [Symbol.asyncIterator]() {
+        return this;
+      },
+    });
+
+    const { getBootstrap, closed: slotsClosed } = makeMessageSlots(
+      `Worker ${workerId}`,
+      envelopeWriter,
+      inboundReader,
+      cancelled,
+      daemonWorkerFacet,
+    );
+
+    slotsClosed.finally(() => {
+      workerSlotInboxes.delete(workerHandle);
+      hostTrace(
+        `Endo worker connection closed (slots) handle=${workerHandle} id=${workerId}`,
+      );
+    });
+
+    const workerTerminated = Promise.race([workerClosed, slotsClosed]);
+
+    /** @type {ERef<WorkerDaemonFacet>} */
+    const workerDaemonFacet = /** @type {any} */ (getBootstrap());
+
+    return { workerTerminated, workerDaemonFacet };
+  }
+
+  // CapTP path (default).
   const [captpReadFrom, captpWriteTo] = makePipe();
 
   workerWriters.set(workerHandle, { writer: captpWriteTo });
@@ -555,11 +667,6 @@ const makeWorker = async (
 
   const messageWriter = mapWriter(envelopeBytesWriter, messageToBytes);
   const messageReader = mapReader(captpReadFrom, bytesToMessage);
-
-  const workerClosed = new Promise(resolve => {
-    workerExitResolvers.set(workerHandle, resolve);
-    cancelled.catch(() => resolve(undefined));
-  });
 
   const { getBootstrap, closed: capTpClosed } = makeMessageCapTP(
     `Worker ${workerId}`,
@@ -803,6 +910,21 @@ globalThis.handleCommand = harden(bytes => {
       );
     }
     return;
+  }
+
+  // Slot-machine traffic from a worker (deliver/resolve/drop/abort).
+  // The slot-machine session for this worker, if any, gets the
+  // envelope intact — verb and all.  Falls through to CapTP routing
+  // when no slot inbox is registered.
+  if (isSlotVerb(env.verb)) {
+    const slotInbox = workerSlotInboxes.get(env.handle);
+    if (slotInbox) {
+      hostTrace(
+        `daemon-xs(slots): RECV ${env.verb} handle=${env.handle} bytes=${env.payload.length}`,
+      );
+      slotInbox({ verb: env.verb, payload: env.payload });
+      return;
+    }
   }
 
   // Worker CapTP messages.

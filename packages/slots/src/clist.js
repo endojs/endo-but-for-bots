@@ -29,7 +29,12 @@ const kindFieldName = harden({
  * @param {string} opts.label
  */
 export const makeCList = ({ label }) => {
-  const id = sessionIdFromLabel(label);
+  // Compute the session id eagerly but expose it via a getter — XS
+  // marks Uint8Array indexed elements non-configurable, so deep-
+  // freezing the outer hardened object would fail if `id` were a
+  // direct property holding a typed array.  Same workaround the
+  // daemon uses for keypair material.
+  const idBytes = sessionIdFromLabel(label);
 
   /** @type {Map<unknown, Descriptor>} */
   const valToDesc = new Map();
@@ -127,7 +132,9 @@ export const makeCList = ({ label }) => {
   };
 
   return harden({
-    id,
+    get id() {
+      return idBytes;
+    },
     label,
     exportLocal,
     importRemote,
