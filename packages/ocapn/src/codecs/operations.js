@@ -6,6 +6,7 @@
  * @import { SyrupWriter } from '../syrup/encode.js'
  * @import { DescCodecs } from './descriptors.js'
  * @import { PassableCodecs } from './passable.js'
+ * @import { OcapnCodec } from '../codec-interface.js'
  */
 
 import {
@@ -24,7 +25,6 @@ import {
   OcapnPublicKeyCodec,
   OcapnSignatureCodec,
 } from './components.js';
-import { makeSyrupWriter } from '../syrup/encode.js';
 
 /*
  * These are OCapN Operations, they are messages that are sent between OCapN Nodes
@@ -71,21 +71,22 @@ export const OcapnPreSessionOperationsCodecs = makeRecordUnionCodec(
 );
 
 /**
- * @param {SyrupReader} syrupReader
+ * @param {import('../codec-interface.js').OcapnReader} reader
  * @returns {any}
  */
-export const readOcapnHandshakeMessage = syrupReader => {
-  return OcapnPreSessionOperationsCodecs.read(syrupReader);
+export const readOcapnHandshakeMessage = reader => {
+  return OcapnPreSessionOperationsCodecs.read(reader);
 };
 
 /**
  * @param {any} message
+ * @param {OcapnCodec} codec
  * @returns {Uint8Array}
  */
-export const writeOcapnHandshakeMessage = message => {
-  const syrupWriter = makeSyrupWriter();
-  OcapnPreSessionOperationsCodecs.write(message, syrupWriter);
-  return syrupWriter.getBytes();
+export const writeOcapnHandshakeMessage = (message, codec) => {
+  const writer = codec.makeWriter();
+  OcapnPreSessionOperationsCodecs.write(message, writer);
+  return writer.getBytes();
 };
 
 /**
@@ -98,9 +99,14 @@ export const writeOcapnHandshakeMessage = message => {
 /**
  * @param {DescCodecs} descCodecs
  * @param {PassableCodecs} passableCodecs
+ * @param {OcapnCodec} codec
  * @returns {OcapnOperationsCodecs}
  */
-export const makeOcapnOperationsCodecs = (descCodecs, passableCodecs) => {
+export const makeOcapnOperationsCodecs = (
+  descCodecs,
+  passableCodecs,
+  codec,
+) => {
   const { DeliverTargetCodec, RemotePromiseCodec, ResolveMeDescCodec } =
     descCodecs;
   const { PassableCodec } = passableCodecs;
@@ -139,7 +145,7 @@ export const makeOcapnOperationsCodecs = (descCodecs, passableCodecs) => {
      * @param {SyrupWriter} syrupWriter
      */
     write: (args, syrupWriter) => {
-      syrupWriter.enterList();
+      syrupWriter.enterList(args.length);
       for (const arg of args) {
         PassableCodec.write(arg, syrupWriter);
       }
@@ -220,11 +226,11 @@ export const makeOcapnOperationsCodecs = (descCodecs, passableCodecs) => {
   });
 
   /**
-   * @param {SyrupReader} syrupReader
+   * @param {import('../codec-interface.js').OcapnReader} reader
    * @returns {any}
    */
-  const readOcapnMessage = syrupReader => {
-    return OcapnMessageUnionCodec.read(syrupReader);
+  const readOcapnMessage = reader => {
+    return OcapnMessageUnionCodec.read(reader);
   };
 
   /**
@@ -232,9 +238,9 @@ export const makeOcapnOperationsCodecs = (descCodecs, passableCodecs) => {
    * @returns {Uint8Array}
    */
   const writeOcapnMessage = message => {
-    const syrupWriter = makeSyrupWriter();
-    OcapnMessageUnionCodec.write(message, syrupWriter);
-    return syrupWriter.getBytes();
+    const writer = codec.makeWriter();
+    OcapnMessageUnionCodec.write(message, writer);
+    return writer.getBytes();
   };
 
   return {

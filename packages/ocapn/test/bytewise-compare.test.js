@@ -4,11 +4,11 @@ import test from '@endo/ses-ava/test.js';
 import {
   compareImmutableArrayBuffers,
   compareUint8Arrays,
-} from '../../src/syrup/compare.js';
+} from '../src/bytewise-compare.js';
 import {
   uint8ArrayToImmutableArrayBuffer,
   encodeStringToImmutableArrayBuffer,
-} from '../../src/buffer-utils.js';
+} from '../src/buffer-utils.js';
 
 test('equal', t => {
   const left = new Uint8Array([1, 2, 3]);

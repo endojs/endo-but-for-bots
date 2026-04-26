@@ -56,3 +56,55 @@ Having a single cryptography over multiple transport protocols allows this
 OCapN netlayer to preserve the identities of message targets regardless of what
 transport capabilities are available on various platforms, such that client,
 server, cloud, edge, and any other kind of peer can join the network.
+
+# Using the `np` network
+
+`makeOcapnNoiseNetwork` starts empty: add signing keys and transports at
+any point during the network's lifetime. One network can carry many
+Ed25519 identities concurrently and route inbound sessions to whichever
+local key the initiator's SYN is addressed to.
+
+Everything below the API uses `@endo/stream` `Reader<Uint8Array>` and
+`Writer<Uint8Array>` — transports, session bytes, and the internal
+Noise handshake machinery. The Noise WASM module is loaded through a
+platform-conditional export (`./platform`), so callers don't pass it in.
+
+The `np` locator's `designator` is the hex-encoded raw Ed25519 public
+key (64 chars). An initiator learns the peer's identity up front from
+the locator itself — no extra hint, no out-of-band step.
+
+Transport plugins:
+
+- `@endo/ocapn-noise/mock-transport` — in-process pair for tests.
+- `@endo/ocapn-noise/tcp-transport` — Node `net` via `@endo/stream-node`.
+- `@endo/ocapn-noise/ws-transport` — browser or Node `WebSocket`.
+
+```js
+import { cborCodec } from '@endo/ocapn/cbor';
+import { makeOcapnNoiseNetwork } from '@endo/ocapn-noise';
+import { makeTcpTransport } from '@endo/ocapn-noise/tcp-transport';
+
+const network = makeOcapnNoiseNetwork({ codec: cborCodec });
+
+// Mint and register an identity.
+const keys = network.generateSigningKeys();
+const keyId = network.addSigningKeys(keys);
+
+// Register one or more transports. Adding a transport that supports
+// `listen` immediately starts accepting inbound sessions.
+await network.addTransport(makeTcpTransport());
+
+// Hand peers our location; they reach us at
+// `ocapn://<keyId>.np?tcp:host=…&tcp:port=…`.
+const myLocation = network.locationFor(keyId);
+
+// Initiate on behalf of a specific identity.
+const session = await network.provideSession(peerLocation, {
+  localKeyId: keyId,
+});
+await session.writer.next(new TextEncoder().encode('hello'));
+```
+
+Both peers must share the same OCapN wire codec; the Noise handshake
+provides mutual Ed25519 authentication but leaves codec selection to
+the embedding application.

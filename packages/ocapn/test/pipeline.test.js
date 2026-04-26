@@ -499,10 +499,10 @@ test('pipeline: three-party handoff shows B forwarding to C on behalf of A', asy
     'Broker',
     Far('broker', {
       getCounter: () => {
-        // B enlivens the sturdyref to C's Counter
+        // B resolves the SturdyRef to C's Counter
         const sturdyRef = clientKitB.client.makeSturdyRef(
           clientKitC.location,
-          encodeSwissnum('Counter'),
+          'Counter',
         );
         return clientKitB.client.enlivenSturdyRef(sturdyRef);
       },

@@ -12,7 +12,8 @@ import {
   makeOcapnRecordCodecFromDefinition,
 } from './util.js';
 import { FalseCodec, makeStructCodecForValues } from './subtypes.js';
-import { makeSyrupWriter } from '../syrup/encode.js';
+
+/** @import { OcapnCodec } from '../codec-interface.js' */
 
 /*
  * OCapN Components are used in both OCapN Messages and Descriptors
@@ -29,7 +30,9 @@ const PeerHintsStructCodec = makeStructCodecForValues(
  * @typedef {object} OcapnLocation
  * @property {'ocapn-peer'} type
  * @property {string} designator
- * @property {string} transport
+ * @property {string} transport - Legacy field; prefer `network`.
+ * @property {string} [network] - Network identifier (replaces `transport`).
+ *   During migration, consumers should check `network ?? transport`.
  * @property {false | Record<string, any>} hints
  */
 
@@ -103,6 +106,7 @@ export const OcapnSignatureCodec = makeOcapnListComponentCodec(
       syrupWriter,
     );
   },
+  1, // 1 field: eddsa array
 );
 
 /**
@@ -150,24 +154,30 @@ export const OcapnPublicKeyCodec = makeOcapnListComponentCodec(
       syrupWriter,
     );
   },
+  1, // 1 field: ecc array
 );
 
 /**
  * @param {OcapnMyLocation} myLocation
+ * @param {OcapnCodec} codec
  * @returns {Uint8Array}
  */
-export const serializeOcapnMyLocation = myLocation => {
-  const syrupWriter = makeSyrupWriter();
-  OcapnMyLocationCodec.write(myLocation, syrupWriter);
-  return syrupWriter.getBytes();
+export const serializeOcapnMyLocation = (myLocation, codec) => {
+  const writer = codec.makeWriter();
+  OcapnMyLocationCodec.write(myLocation, writer);
+  return writer.getBytes();
 };
 
 /**
  * @param {OcapnPublicKeyDescriptor} publicKeyDescriptor
+ * @param {OcapnCodec} codec
  * @returns {Uint8Array}
  */
-export const serializeOcapnPublicKeyDescriptor = publicKeyDescriptor => {
-  const syrupWriter = makeSyrupWriter();
-  OcapnPublicKeyCodec.write(publicKeyDescriptor, syrupWriter);
-  return syrupWriter.getBytes();
+export const serializeOcapnPublicKeyDescriptor = (
+  publicKeyDescriptor,
+  codec,
+) => {
+  const writer = codec.makeWriter();
+  OcapnPublicKeyCodec.write(publicKeyDescriptor, writer);
+  return writer.getBytes();
 };

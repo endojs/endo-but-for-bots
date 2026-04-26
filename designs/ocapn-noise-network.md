@@ -3,9 +3,59 @@
 | | |
 |---|---|
 | **Created** | 2026-02-14 |
-| **Updated** | 2026-02-24 |
+| **Updated** | 2026-04-22 |
 | **Author** | Kris Kowal (prompted) |
-| **Status** | Not Started |
+| **Status** | In Progress |
+
+## Status
+
+Implemented inside `packages/ocapn-noise/`:
+
+- `makeOcapnNoiseNetwork` plugs into `@endo/ocapn` via `provideSession`
+  (see `src/network.js`).
+- Transport plugins live under `src/transports/`: `mock.js` for
+  in-process tests, `tcp.js` using length-prefixed encrypted frames over
+  TCP, and `ws.js` a browser/Node `WebSocket` adapter.
+- Post-handshake the peers exchange an encrypted `op:start-session`
+  record over the Noise tunnel so the peer's OCapN location signature
+  (required for three-party handoffs) is carried into the session.
+- Tested: unit coverage for identity shape, handshake completion, and
+  transport selection over the mock transport (`test/network.test.js`);
+  integration coverage for two peers exchanging encrypted messages over
+  TCP (`test/network-tcp.test.js`); cross-network rejection where a
+  noise peer refuses a `tcp-testing-only` location.
+
+Deviations from the original sketch:
+
+- The network and its transports ship alongside the Noise bindings in
+  `@endo/ocapn-noise` rather than in a separate
+  `@endo/ocapn-noise-network` package — the two were not expected to be
+  used independently.
+- The `np` locator's `designator` **is** the hex-encoded raw Ed25519
+  public key, not a double-SHA256 hash. The initiator learns the peer's
+  Noise identity from the locator alone, no `np:ed25519` hint required.
+- Signing keys and transports are mutable at runtime: `addSigningKeys`,
+  `removeSigningKeys`, `addTransport`, `removeTransport`. One network
+  can carry many identities concurrently; inbound sessions route to the
+  local key named in the initiator's SYN prefix.
+- The Noise WASM module is loaded internally by the package via a
+  platform-conditional export (`./platform` → `./src/wasm/node.js` in
+  Node; a browser `fetch`-based variant can be added without touching
+  the network code).
+- All byte-stream plumbing uses `@endo/stream` `Reader<Uint8Array>` /
+  `Writer<Uint8Array>`. TCP wraps `net.Socket` via `@endo/stream-node`;
+  the mock transport uses a simple ack-less pipe in place of
+  `@endo/stream`'s ack-based `makePipe` (which would deadlock any
+  protocol that writes before reading, like the Noise handshake).
+- WebSocket listener support requires a `WebSocketServer` constructor
+  (e.g. `ws`) passed at construction time; the transport does not
+  bundle one.
+- `captpVersion` is hard-coded — there is currently only one version.
+- Runtime inbound-session routing is exposed through
+  `waitForInboundSession(keyId)` for tests. Production wiring into
+  `@endo/ocapn`'s `NetworkSession` is pending an API change in
+  `@endo/ocapn` that extends `provideSession` with a local-identity
+  selector.
 
 ## What is the Problem Being Solved?
 

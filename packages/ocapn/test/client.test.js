@@ -15,9 +15,12 @@ import {
   getOcapnDebug,
 } from './_util.js';
 import { encodeSwissnum } from '../src/client/util.js';
-import { makeOcapnKeyPair, signLocation } from '../src/cryptography.js';
+import { makeCryptography } from '../src/cryptography.js';
+import { syrupCodec } from '../src/syrup/index.js';
 import { writeOcapnHandshakeMessage } from '../src/codecs/operations.js';
 import { makeSlot } from '../src/captp/pairwise.js';
+
+const { makeOcapnKeyPair, signLocation } = makeCryptography(syrupCodec);
 
 test('test slow send', async t => {
   const testObjectTable = new Map();
@@ -150,7 +153,11 @@ test('client aborts on start-session with wrong version', async t => {
 
   // Create a start-session message with wrong version
   const keyPair = makeOcapnKeyPair();
-  const locationSignature = signLocation(clientKitA.location, keyPair);
+  const locationSignature = signLocation(
+    clientKitA.location,
+    keyPair,
+    new ArrayBuffer(0),
+  );
   const badStartSession = {
     type: 'op:start-session',
     captpVersion: 'BAD', // Wrong version!
@@ -166,7 +173,7 @@ test('client aborts on start-session with wrong version', async t => {
   try {
     t.false(firstConnection.isDestroyed, 'Connection should not be destroyed');
 
-    const bytes = writeOcapnHandshakeMessage(badStartSession);
+    const bytes = writeOcapnHandshakeMessage(badStartSession, syrupCodec);
     firstConnection.write(bytes);
     await waitUntilTrue(() => firstConnection.isDestroyed);
 
@@ -661,7 +668,7 @@ testWithErrorUnwrapping(
       Far('sturdyRefReturner', {
         getSturdyRef: location =>
           // eslint-disable-next-line no-use-before-define
-          clientKitB.client.makeSturdyRef(location, encodeSwissnum('target')),
+          clientKitB.client.makeSturdyRef(location, 'target'),
       }),
     );
 

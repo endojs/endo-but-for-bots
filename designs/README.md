@@ -72,7 +72,7 @@
 | [lal-transcript-memory-management](lal-transcript-memory-management.md) | 2026-03-05 | 2026-03-05 | Not Started |
 | [ocapn-network-transport-separation](ocapn-network-transport-separation.md) | 2026-02-14 | 2026-02-24 | In Progress |
 | [ocapn-noise-cryptographic-review](ocapn-noise-cryptographic-review.md) | 2026-02-14 | 2026-02-24 | Not Started |
-| [ocapn-noise-network](ocapn-noise-network.md) | 2026-02-14 | 2026-02-24 | Not Started |
+| [ocapn-noise-network](ocapn-noise-network.md) | 2026-02-14 | 2026-04-22 | In Progress |
 | [ocapn-tcp-for-test-extraction](ocapn-tcp-for-test-extraction.md) | 2026-02-14 | 2026-02-24 | Not Started |
 | [outliner-design-doc](outliner-design-doc.md) | 2026-03-17 | 2026-03-18 | In Progress |
 | [weblet-next](weblet-next.md) | 2026-03-24 | 2026-03-24 | Reference |
@@ -275,7 +275,7 @@ finalized.
 | ocapn-tcp-for-test-extraction | Not Started | Clean separation before Noise |
 | ocapn-noise-cryptographic-review | Not Started | External review coordination |
 | daemon-agent-network-identity | Not Started | Per-agent keypairs for network identity |
-| ocapn-noise-network | Not Started | Full Noise protocol network layer |
+| ocapn-noise-network | In Progress | Full Noise protocol network layer |
 
 **Exit criterion:** Two Endo daemons can connect securely over
 OCapN-Noise. Locator format supports node identification via agent

@@ -5,17 +5,16 @@ import { E } from '@endo/eventual-send';
 import { Far } from '@endo/marshal';
 import { testWithErrorUnwrapping, makeTestClient } from './_util.js';
 import { encodeSwissnum, locationToLocationId } from '../src/client/util.js';
-import {
-  randomGiftId,
-  signHandoffGive,
-  signHandoffReceive,
-} from '../src/cryptography.js';
+import { makeCryptography, randomGiftId } from '../src/cryptography.js';
+import { syrupCodec } from '../src/syrup/index.js';
 import {
   makeHandoffGiveDescriptor,
   makeHandoffGiveSigEnvelope,
   makeHandoffReceiveDescriptor,
   makeHandoffReceiveSigEnvelope,
 } from '../src/codecs/descriptors.js';
+
+const { signHandoffGive, signHandoffReceive } = makeCryptography(syrupCodec);
 
 const makeTestClientTrio = async ({
   makeDefaultSwissnumTable,

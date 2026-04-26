@@ -1,6 +1,6 @@
 // @ts-check
 
-import { immutableArrayBufferToUint8Array } from '../buffer-utils.js';
+import { immutableArrayBufferToUint8Array } from './buffer-utils.js';
 
 /**
  * @param {Uint8Array} left
