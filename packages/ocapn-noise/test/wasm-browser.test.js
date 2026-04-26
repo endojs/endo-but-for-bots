@@ -1,5 +1,5 @@
 // @ts-check
-/* global Response, WebAssembly, fetch, globalThis */
+/* global Response, WebAssembly, fetch */
 
 /**
  * Node-side smoke test for the browser WASM loader at
