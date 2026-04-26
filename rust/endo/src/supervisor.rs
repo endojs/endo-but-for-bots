@@ -100,6 +100,29 @@ impl Supervisor {
             // Slot-machine's open_session is idempotent, so re-registering
             // a handle (e.g., after resume) keeps the c-list intact.
             let _ = sm.open_session(session_for_handle(h), &label);
+
+            // Bootstrap-handshake pre-registration: when registering
+            // a worker (handle ≥ 2), pair its session with the
+            // daemon's session (handle 1) under the position-1 root
+            // convention from `packages/slots/src/bootstrap.js`.
+            // Both peers will export their root as `Local Object 1`
+            // and refer to the other peer's root as `Remote Object 1`;
+            // the kref registry needs both sides bound before any
+            // wire traffic.  The daemon's own kref is allocated on
+            // first registration and reused thereafter.
+            if h >= 2 {
+                let daemon_session = session_for_handle(1);
+                let worker_session = session_for_handle(h);
+                let _ = sm.open_session(daemon_session, "daemon");
+                let local = slots::vref::Vref::object_local(1);
+                let remote = slots::vref::Vref::object_remote(1);
+                if let Ok(k_daemon) = sm.intern_local(daemon_session, &local) {
+                    if let Ok(k_worker) = sm.intern_local(worker_session, &local) {
+                        let _ = sm.bind_session_kref(daemon_session, &remote, k_worker);
+                        let _ = sm.bind_session_kref(worker_session, &remote, k_daemon);
+                    }
+                }
+            }
         }
         rx
     }
