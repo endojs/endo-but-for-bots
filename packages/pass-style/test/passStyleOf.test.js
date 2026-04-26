@@ -13,6 +13,7 @@ import { passStyleOf } from '../src/passStyleOf.js';
 import { Far, ToFarFunction } from '../src/make-far.js';
 import { makeTagged } from '../src/makeTagged.js';
 import { PASS_STYLE } from '../src/passStyle-helpers.js';
+import { uint8ArrayToByteArray } from '../src/byteArray.js';
 
 const { getPrototypeOf, defineProperty, freeze } = Object;
 
@@ -64,6 +65,12 @@ test('passStyleOf basic success cases', t => {
   t.is(passStyleOf(harden({})), 'copyRecord', 'empty plain object');
   t.is(passStyleOf(makeTagged('unknown', undefined)), 'tagged');
   t.is(passStyleOf(harden(Error('ok'))), 'error');
+  t.is(
+    /** @type {string} */ (
+      passStyleOf(uint8ArrayToByteArray(new Uint8Array([0xde, 0xad])))
+    ),
+    'byteArray',
+  );
 });
 
 test('ToFarFunction', t => {
