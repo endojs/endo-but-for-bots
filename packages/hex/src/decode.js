@@ -67,11 +67,10 @@ export const decodeHex =
         try {
           return /** @type {any} */ (nativeFromHex)(string);
         } catch (e) {
-          throw Error(
-            `Invalid hex in string ${name}: ${
-              /** @type {Error} */ (e).message
-            }`,
-          );
+          const cause = /** @type {Error} */ (e);
+          throw Error(`Invalid hex in string ${name}: ${cause.message}`, {
+            cause,
+          });
         }
       }
     : jsDecodeHex;

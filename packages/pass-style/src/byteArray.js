@@ -97,14 +97,17 @@ harden(byteArrayToUint8Array);
 
 /**
  * Converts a `Uint8Array` to a `ByteArray`, i.e., a hardened Immutable
- * ArrayBuffer whose `passStyleOf` is `'byteArray'`.
+ * ArrayBuffer whose `passStyleOf` is `'byteArray'`. Honors the view's
+ * `byteOffset` and `byteLength` so subarray views are sliced correctly.
  *
  * @param {Uint8Array} uint8Array
  * @returns {ArrayBuffer}
  */
-export const uint8ArrayToByteArray = uint8Array =>
+export const uint8ArrayToByteArray = uint8Array => {
+  const { buffer, byteOffset, byteLength } = uint8Array;
   // @ts-expect-error shim-augmented ArrayBuffer type
-  harden(uint8Array.buffer.sliceToImmutable(0, uint8Array.length));
+  return harden(buffer.sliceToImmutable(byteOffset, byteOffset + byteLength));
+};
 harden(uint8ArrayToByteArray);
 
 /**

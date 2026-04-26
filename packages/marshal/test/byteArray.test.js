@@ -4,6 +4,7 @@ import test from '@endo/ses-ava/test.js';
 import harden from '@endo/harden';
 import {
   byteArrayToUint8Array,
+  makeTagged,
   passStyleOf,
   uint8ArrayToByteArray,
 } from '@endo/pass-style';
@@ -12,7 +13,7 @@ import {
   makeEncodePassable,
   makeDecodePassable,
 } from '../src/encodePassable.js';
-import { compareRank } from '../src/rankOrder.js';
+import { compareRank, getPassStyleCover } from '../src/rankOrder.js';
 
 const mkByteArray = bytes => uint8ArrayToByteArray(new Uint8Array(bytes));
 
@@ -49,8 +50,8 @@ test('smallcaps byteArray uses "*" prefix with hex body', t => {
     errorTagging: 'off',
   });
   const { body } = serialize(mkByteArray([0xde, 0xad, 0xbe, 0xef]));
-  // smallcaps body has a leading `#` sentinel before the JSON text.
-  t.true(body.includes('"*deadbeef"'), `got ${body}`);
+  // smallcaps body is a leading `#` sentinel followed by JSON-encoded text.
+  t.is(body, '#"*deadbeef"');
 });
 
 test('capdata round-trips byteArray', t => {
@@ -73,27 +74,58 @@ test('capdata byteArray uses @qclass "byteArray" with hex data', t => {
     errorTagging: 'off',
   });
   const { body } = serialize(mkByteArray([0xde, 0xad, 0xbe, 0xef]));
-  t.true(
-    body.includes('"@qclass":"byteArray"') && body.includes('"deadbeef"'),
-    `got ${body}`,
-  );
+  t.is(body, '{"@qclass":"byteArray","data":"deadbeef"}');
 });
 
-test('byteArray nested in copyArray, copyRecord, tagged', t => {
+const checkNested = (t, format) => {
   const { serialize, unserialize } = makeMarshal(undefined, undefined, {
-    serializeBodyFormat: 'smallcaps',
+    serializeBodyFormat: format,
     errorTagging: 'off',
   });
   const ba = mkByteArray([1, 2, 3]);
   const structure = harden({
     arr: [ba, ba],
     rec: { k: ba },
+    tagged: makeTagged('myTag', ba),
   });
   const { body } = serialize(structure);
   const decoded = unserialize({ body, slots: [] });
-  t.is(passStyleOf(decoded.arr[0]), 'byteArray');
-  t.is(passStyleOf(decoded.rec.k), 'byteArray');
+  t.is(passStyleOf(decoded.arr[0]), 'byteArray', `${format} arr`);
+  t.is(passStyleOf(decoded.rec.k), 'byteArray', `${format} rec`);
+  t.is(passStyleOf(decoded.tagged), 'tagged', `${format} tagged`);
   t.deepEqual([...byteArrayToUint8Array(decoded.arr[1])], [1, 2, 3]);
+  t.deepEqual([...byteArrayToUint8Array(decoded.rec.k)], [1, 2, 3]);
+  t.deepEqual([...byteArrayToUint8Array(decoded.tagged.payload)], [1, 2, 3]);
+};
+
+test('byteArray nested in copyArray, copyRecord, tagged (smallcaps)', t => {
+  checkNested(t, 'smallcaps');
+});
+
+test('byteArray nested in copyArray, copyRecord, tagged (capdata)', t => {
+  checkNested(t, 'capdata');
+});
+
+test('cross-codec interop: smallcaps and capdata agree on round-trip bytes', t => {
+  const original = mkByteArray([
+    0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77,
+  ]);
+  const sc = makeMarshal(undefined, undefined, {
+    serializeBodyFormat: 'smallcaps',
+    errorTagging: 'off',
+  });
+  const cd = makeMarshal(undefined, undefined, {
+    serializeBodyFormat: 'capdata',
+    errorTagging: 'off',
+  });
+  // smallcaps -> bytes -> capdata -> bytes
+  const fromSmallcaps = sc.unserialize(sc.serialize(original));
+  const reEncoded = cd.serialize(fromSmallcaps);
+  const round = cd.unserialize(reEncoded);
+  t.deepEqual(
+    [...byteArrayToUint8Array(round)],
+    [...byteArrayToUint8Array(original)],
+  );
 });
 
 test('encodePassable round-trips byteArray (legacyOrdered)', t => {
@@ -121,7 +153,9 @@ test('encodePassable round-trips byteArray (compactOrdered)', t => {
 
 test('encodePassable byteArray preserves shortlex order', t => {
   const encode = makeEncodePassable({ format: 'legacyOrdered' });
-  // Listed in the expected shortlex order.
+  // Listed in the expected shortlex order, including pairs that straddle
+  // Elias-delta length-encoding boundaries (1↔2 digit length count and
+  // 2↔3 digit length count) to nail down the cross-class invariant.
   const orderedBytes = [
     [],
     [0x00],
@@ -133,6 +167,11 @@ test('encodePassable byteArray preserves shortlex order', t => {
     [0xff, 0xfe],
     [0xff, 0xff],
     [0x00, 0x00, 0x00],
+    Array.from({ length: 9 }, () => 0),
+    Array.from({ length: 9 }, () => 0xff),
+    Array.from({ length: 10 }, () => 0),
+    Array.from({ length: 99 }, () => 0xff),
+    Array.from({ length: 100 }, () => 0),
   ];
   const encodings = orderedBytes.map(bs => encode(mkByteArray(bs)));
   const sorted = [...encodings].sort();
@@ -176,4 +215,10 @@ test('encodePassable byteArray cover sits between promise and boolean', t => {
   const byteEnc = encode(mkByteArray([0xff]));
   t.true(promiseEnc < byteEnc, `${promiseEnc} < ${byteEnc}`);
   t.true(byteEnc < boolTrue, `${byteEnc} < ${boolTrue}`);
+});
+
+test('getPassStyleCover("byteArray") yields the ["a", "b") interval', t => {
+  const [low, high] = getPassStyleCover('byteArray');
+  t.is(low, 'a');
+  t.is(high, 'b');
 });

@@ -282,6 +282,10 @@ export const jsonJustinPairs = harden([
     '{"@qclass":{"@qclass":8,foo:"foo1"},bar:{"@qclass":undefined}}',
   ],
 
+  // byteArray
+  ['{"@qclass":"byteArray","data":""}', 'hexToByteArray("")'],
+  ['{"@qclass":"byteArray","data":"deadbeef"}', 'hexToByteArray("deadbeef")'],
+
   // tagged
   ['{"@qclass":"tagged","tag":"x","payload":8}', 'makeTagged("x",8)'],
   [

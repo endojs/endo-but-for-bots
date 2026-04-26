@@ -47,3 +47,15 @@ test('empty byteArray round-trip', t => {
 test('hexToByteArray rejects odd-length input', t => {
   t.throws(() => hexToByteArray('a'), { message: /hex/i });
 });
+
+test('uint8ArrayToByteArray honors non-zero byteOffset and byteLength', t => {
+  const source = new Uint8Array([0x00, 0x11, 0x22, 0x33, 0x44, 0x55]);
+  // View into the middle of the buffer: bytes [0x22, 0x33, 0x44].
+  const slice = new Uint8Array(source.buffer, 2, 3);
+  const byteArray = uint8ArrayToByteArray(slice);
+  t.is(byteArrayToHex(byteArray), '223344');
+  // subarray() (preserves the underlying buffer with a new offset) should
+  // also slice to the visible window only.
+  const sub = source.subarray(1, 4);
+  t.is(byteArrayToHex(uint8ArrayToByteArray(sub)), '112233');
+});
