@@ -23,9 +23,10 @@ import harden from '@endo/harden';
 /**
  * Creates an xorshift128+ pseudorandom number generator.
  *
- * @param {XorShiftSeed | number[]} seed
+ * @param {XorShiftSeed} seed
  *   A 128-bit integer, expressed as four 32-bit integers in big-endian
- *   order.
+ *   order. The all-zero seed is rejected because it is a fixed point of
+ *   the xorshift128+ generator.
  * @returns {XorShift}
  */
 export const makeXorShift = seed => {
@@ -38,6 +39,10 @@ export const makeXorShift = seed => {
   let state0L = seed[1] | 0;
   let state1U = seed[2] | 0;
   let state1L = seed[3] | 0;
+
+  if ((state0U | state0L | state1U | state1L) === 0) {
+    throw TypeError('seed must not be all zeros');
+  }
 
   /**
    * Returns a 64-bit random number as a 2x32-bit array.
@@ -78,7 +83,7 @@ export const makeXorShift = seed => {
     s1U ^= t1U;
     s1L ^= t1L;
 
-    // t1 = ( s1 ^ s0 ^ ( s1 >> 17 ) ^ ( s0 >> 26 ) )
+    // t1 = ( s1 ^ s0 ^ ( s1 >> 18 ) ^ ( s0 >> 5 ) )
     // :: t1 = s1 ^ s0
     t1U = s1U ^ s0U;
     t1L = s1L ^ s0L;
