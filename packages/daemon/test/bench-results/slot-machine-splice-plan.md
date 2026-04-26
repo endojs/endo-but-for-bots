@@ -109,7 +109,40 @@ Targets (from the design speculation): ping 1.4 → 0.6–0.9 ms
 (1.5–2× win), echo 2.6 → 1.0–1.5 ms (~2× win, dominated by the
 skipped JSON encode/decode of the body).
 
-## Bundle drift blocker (discovered 2026-04-25)
+## Status as of 2026-04-26
+
+Stage 1–4 (XS daemon SQLite-era unblock) — **landed** via cherry-
+picked `b56051c3c6` from `feat/make-archive`.  The XS daemon now
+boots, listens on its socket, accepts CapTP clients, and the bench
+reproduces the captp baseline within ~5%.
+
+Stage 5 (daemon-side splice) — **landed** in `bus-daemon-rust-xs.js`.
+Default behaviour (CapTP) is preserved.  Under
+`ENDO_USE_SLOT_MACHINE=1` the trace
+`daemon-xs: makeWorker handle=N mode=slot-machine` confirms the
+splice activates on every worker spawn.
+
+Stage 6 (kref bootstrap) — **landed** via two new SlotMachine APIs
+(`intern_local`, `bind_session_kref`) and pre-registration in
+`Supervisor::register` for handles ≥ 2.  Each worker session now
+has its position-1 root paired with the daemon's, so
+`translate_deliver` can resolve the bootstrap descriptor on the
+first wire exchange.
+
+Stage 7 (bench delta) — **still blocked**.  Under the flag the
+daemon's `E(workerDaemonFacet).evaluate(...)` does not appear to
+emit the expected slot `deliver`: zero `daemon-xs(slots): SEND`
+traces during a flagged bench run.  The daemon's CapTP layer
+keeps responding to client `CTP_CALL`s, but each one stalls,
+eventually exceeding the bench's 10-second per-step timeout.
+Diagnostic next step: trace the slot client's
+`makeSlotClient.deliver` entry from the daemon side to confirm
+whether the HandledPromise handler's `applyMethod` is actually
+firing, and if not, why `E(workerDaemonFacet)` isn't dispatching
+to it (e.g. workerDaemonFacet might be a non-handled value when
+captured in a WeakMap).
+
+## Bundle drift blocker (resolved 2026-04-25, retained for history)
 
 The XS daemon runs a pre-bundled `rust/endo/xsnap/src/daemon_bootstrap.js`
 embedded in the `endor` binary.  The committed bundle (1,260,776 bytes)
