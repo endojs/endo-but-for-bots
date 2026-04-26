@@ -101,6 +101,68 @@ impl SlotMachine {
         Ok(())
     }
 
+    /// Pre-bind a `(session, vref)` pair to an existing kref without
+    /// allocating a fresh one and without bumping pillars.  Used by
+    /// the supervisor's bootstrap-handshake pre-registration to
+    /// establish the position-1 root convention before any wire
+    /// traffic.  Returns `Conflict` if the pair is already bound to
+    /// a different kref.
+    pub fn bind_session_kref(
+        &self,
+        session: SessionId,
+        vref: &Vref,
+        kref: Kref,
+    ) -> Result<()> {
+        let mut inner = self.lock();
+        let s = inner
+            .sessions
+            .get_mut(&session)
+            .ok_or_else(|| SlotError::NotFound(format!("session {}", hex::encode(session.0))))?;
+        s.bind(vref, kref)?;
+        let residents = inner.residents.entry(kref).or_default();
+        if !residents.contains(&session) {
+            residents.push(session);
+        }
+        Ok(())
+    }
+
+    /// Allocate a fresh kref and bind it as `session`'s `Local`
+    /// export of the given vref, recording the session as the owner.
+    /// Equivalent to `receive(session, &local_vref)` for a vref the
+    /// session has not yet exported, but exposed as a public API for
+    /// the supervisor's bootstrap pre-registration.  Idempotent: if
+    /// the vref is already bound, returns the existing kref.
+    pub fn intern_local(
+        &self,
+        session: SessionId,
+        vref: &Vref,
+    ) -> Result<Kref> {
+        let mut inner = self.lock();
+        let s = inner
+            .sessions
+            .get_mut(&session)
+            .ok_or_else(|| SlotError::NotFound(format!("session {}", hex::encode(session.0))))?;
+        if let Some(k) = s.kref_for_vref(vref) {
+            return Ok(k);
+        }
+        let kref = self.allocator.alloc();
+        let kind = KrefKind::from_type(vref.ty);
+        s.bind(vref, kref)?;
+        inner.krefs.insert(
+            kref,
+            KrefEntry {
+                kref,
+                kind,
+                formula_id: None,
+                owner: Some(session),
+            },
+        );
+        inner.residents.entry(kref).or_default().push(session);
+        let counts = inner.refs.entry_mut(kref);
+        counts.inc(Pillar::CList, 1);
+        Ok(kref)
+    }
+
     /// Drop an entire session: every c-list row goes away and each
     /// kref loses one CList pillar.  Returns the list of krefs that
     /// became retirable as a result.
