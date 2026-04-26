@@ -252,6 +252,19 @@ export const makeCryptography = codec => {
         /** @type {ArrayBufferLike} */ (binding).slice(0),
       );
     }
+    // Backwards-compat path for the tcp-testing-only netlayer (and
+    // any peer that hasn't yet adopted the binding-prefixed payload):
+    // when the caller has no binding to assert, sign the bare
+    // serialised `my-location` form.  This matches the canonical
+    // wire bytes the OCapN python reference suite produces and
+    // verifies, so tcp-testing-only interop is bit-for-bit unchanged.
+    if (bindingBytes.length === 0) {
+      return uint8ArrayToImmutableArrayBuffer(myLocationBytes);
+    }
+    // With a non-empty binding (e.g. the Noise handshake hash on the
+    // np netlayer), prepend a domain-separator and length-prefix the
+    // binding so the signature payload cannot be confused for the
+    // unbound form OR for any other length/prefix collision.
     const out = new Uint8Array(
       LOCATION_SIG_DOMAIN.length +
         4 +
