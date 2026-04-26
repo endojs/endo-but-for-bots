@@ -39304,6 +39304,9 @@ const makeWorker = async (
   hostTrace(`Endo worker spawned for ${workerId} handle=${workerHandle}`);
 
   const useSlotMachine = hostGetEnv('ENDO_USE_SLOT_MACHINE') === '1';
+  hostTrace(
+    `daemon-xs: makeWorker handle=${workerHandle} mode=${useSlotMachine ? 'slot-machine' : 'captp'}`,
+  );
 
   const workerClosed = new Promise(resolve => {
     workerExitResolvers.set(workerHandle, resolve);
