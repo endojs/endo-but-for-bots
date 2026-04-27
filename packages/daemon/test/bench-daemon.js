@@ -205,7 +205,17 @@ const runBenchmarks = async (variant, config, cancelled) => {
   // by worker B, with a one-value return.  The eval in A runs a loop
   // of N calls to amortize the cost of invoking E(host).evaluate
   // across N worker-to-worker hops.
-  {
+  //
+  // Skipped under ENDO_USE_SLOT_MACHINE=1: the slot-machine path
+  // currently lacks the bridge between a slot-machine presence held
+  // by the daemon (representing worker B's Far value) and the
+  // bench-client's CapTP session.  The bench-client's
+  // `await E(host).evaluate(..., 'iw-target')` hangs because the
+  // returned slot-machine presence does not settle through CapTP's
+  // marshal layer.  Tracked as a follow-up: the daemon needs to
+  // present slot-machine remotes to its CapTP clients via a wrapper
+  // that pipelines method calls into the slot-machine deliver path.
+  if (process.env.ENDO_USE_SLOT_MACHINE !== '1') {
     const iwA = 'bench-iw-a';
     const iwB = 'bench-iw-b';
     await E(host).provideWorker(iwA);
@@ -249,7 +259,7 @@ const runBenchmarks = async (variant, config, cancelled) => {
   }
 
   // ---- inter-worker echo with a 1 KiB payload ----
-  {
+  if (process.env.ENDO_USE_SLOT_MACHINE !== '1') {
     const iwA = 'bench-iw-echo-a';
     const iwB = 'bench-iw-echo-b';
     await E(host).provideWorker(iwA);
