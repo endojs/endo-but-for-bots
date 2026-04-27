@@ -897,6 +897,12 @@
       makeDaemonicPersistencePowers: cell("makeDaemonicPersistencePowers"),
     },
     {
+      makeDaemonDatabase: cell("makeDaemonDatabase"),
+    },
+    {
+      default: cell("default"),
+    },
+    {
       makePetStoreMaker: cell("makePetStoreMaker"),
     },
     {
@@ -987,7 +993,7 @@
 
   defineProperties(cells[103], {"AsyncIteratorInterface": { value: cells[87]["AsyncIteratorInterface"] },"ReadableBlobInterface": { value: cells[87]["ReadableBlobInterface"] },"SnapshotBlobInterface": { value: cells[87]["SnapshotBlobInterface"] },"ReadableTreeInterface": { value: cells[87]["ReadableTreeInterface"] },"SnapshotTreeInterface": { value: cells[87]["SnapshotTreeInterface"] },"ContentStoreInterface": { value: cells[87]["ContentStoreInterface"] },"SnapshotStoreInterface": { value: cells[87]["SnapshotStoreInterface"] },"TreeWriterInterface": { value: cells[87]["TreeWriterInterface"] },"FileInterface": { value: cells[87]["FileInterface"] },"DirectoryInterface": { value: cells[87]["DirectoryInterface"] },"snapshotBlobMethods": { value: cells[88]["snapshotBlobMethods"] },"snapshotTreeMethods": { value: cells[89]["snapshotTreeMethods"] },"makeSnapshotStore": { value: cells[90]["makeSnapshotStore"] },"checkinTree": { value: cells[100]["checkinTree"] },"checkoutTree": { value: cells[101]["checkoutTree"] },"makeRefReader": { value: cells[99]["makeRefReader"] },"makeRefIterator": { value: cells[99]["makeRefIterator"] },"makeReaderRef": { value: cells[102]["makeReaderRef"] },"makeIteratorRef": { value: cells[102]["makeIteratorRef"] },"asyncIterate": { value: cells[102]["asyncIterate"] } });
 
-  defineProperties(cells[137], {"makeNetstringReader": { value: cells[135]["makeNetstringReader"] },"netstringReader": { value: cells[135]["netstringReader"] },"makeNetstringWriter": { value: cells[136]["makeNetstringWriter"] },"netstringWriter": { value: cells[136]["netstringWriter"] } });
+  defineProperties(cells[139], {"makeNetstringReader": { value: cells[137]["makeNetstringReader"] },"netstringReader": { value: cells[137]["netstringReader"] },"makeNetstringWriter": { value: cells[138]["makeNetstringWriter"] },"netstringWriter": { value: cells[138]["netstringWriter"] } });
 
   const namespaces = cells.map(cells => freeze(create(null, {
     ...cells,
@@ -3186,7 +3192,6 @@ function observeImports(map, importName, importIndex) {
     imports(entries) {
       const map = new Map(entries);
       observeImports(map, "@endo/harden", 3);
-      observeImports(map, "@endo/errors", 9);
       observeImports(map, "@endo/platform/fs/lite", 103);
       observeImports(map, "./reader-ref.js", 106);
       observeImports(map, "./hex.js", 121);
@@ -3202,27 +3207,23 @@ function observeImports(map, importName, importIndex) {
     imports(entries) {
       const map = new Map(entries);
       observeImports(map, "@endo/harden", 3);
-      observeImports(map, "./pubsub.js", 115);
-      observeImports(map, "./formula-identifier.js", 107);
-      observeImports(map, "./multimap.js", 129);
+      observeImports(map, "@endo/errors", 9);
     },
     liveVar: {
     },
     onceVar: {
-      makePetStoreMaker: cells[134].makePetStoreMaker.set,
+      makeDaemonDatabase: cells[134].makeDaemonDatabase.set,
     },
     importMeta: {},
   });
   functors[135]({
     imports(entries) {
       const map = new Map(entries);
-      observeImports(map, "@endo/harden", 3);
     },
     liveVar: {
     },
     onceVar: {
-      makeNetstringReader: cells[135].makeNetstringReader.set,
-      netstringReader: cells[135].netstringReader.set,
+      default: cells[135].default.set,
     },
     importMeta: {},
   });
@@ -3230,76 +3231,104 @@ function observeImports(map, importName, importIndex) {
     imports(entries) {
       const map = new Map(entries);
       observeImports(map, "@endo/harden", 3);
-      observeImports(map, "@endo/promise-kit", 22);
+      observeImports(map, "./pubsub.js", 115);
+      observeImports(map, "./formula-identifier.js", 107);
+      observeImports(map, "./multimap.js", 129);
     },
     liveVar: {
     },
     onceVar: {
-      makeNetstringWriter: cells[136].makeNetstringWriter.set,
-      netstringWriter: cells[136].netstringWriter.set,
+      makePetStoreMaker: cells[136].makePetStoreMaker.set,
     },
     importMeta: {},
   });
   functors[137]({
     imports(entries) {
       const map = new Map(entries);
-      observeImports(map, "./reader.js", 135);
-      observeImports(map, "./writer.js", 136);
+      observeImports(map, "@endo/harden", 3);
     },
     liveVar: {
     },
     onceVar: {
+      makeNetstringReader: cells[137].makeNetstringReader.set,
+      netstringReader: cells[137].netstringReader.set,
     },
     importMeta: {},
   });
   functors[138]({
     imports(entries) {
       const map = new Map(entries);
-      observeImports(map, "@endo/captp", 53);
+      observeImports(map, "@endo/harden", 3);
       observeImports(map, "@endo/promise-kit", 22);
-      observeImports(map, "@endo/stream", 56);
-      observeImports(map, "@endo/netstring", 137);
     },
     liveVar: {
     },
     onceVar: {
-      makeMessageCapTP: cells[138].makeMessageCapTP.set,
-      messageToBytes: cells[138].messageToBytes.set,
-      bytesToMessage: cells[138].bytesToMessage.set,
-      makeNetstringCapTP: cells[138].makeNetstringCapTP.set,
+      makeNetstringWriter: cells[138].makeNetstringWriter.set,
+      netstringWriter: cells[138].netstringWriter.set,
     },
     importMeta: {},
   });
   functors[139]({
     imports(entries) {
       const map = new Map(entries);
+      observeImports(map, "./reader.js", 137);
+      observeImports(map, "./writer.js", 138);
     },
     liveVar: {
     },
     onceVar: {
-      encodeEnvelope: cells[139].encodeEnvelope.set,
-      encodeFrame: cells[139].encodeFrame.set,
-      decodeFrame: cells[139].decodeFrame.set,
-      decodeEnvelope: cells[139].decodeEnvelope.set,
-      readFrameFromStream: cells[139].readFrameFromStream.set,
-      writeFrameToStream: cells[139].writeFrameToStream.set,
     },
     importMeta: {},
   });
   functors[140]({
     imports(entries) {
       const map = new Map(entries);
+      observeImports(map, "@endo/captp", 53);
+      observeImports(map, "@endo/promise-kit", 22);
+      observeImports(map, "@endo/stream", 56);
+      observeImports(map, "@endo/netstring", 139);
     },
     liveVar: {
     },
     onceVar: {
-      makeXsFilePowers: cells[140].makeXsFilePowers.set,
-      makeXsCryptoPowers: cells[140].makeXsCryptoPowers.set,
-      makeXsSqlitePowers: cells[140].makeXsSqlitePowers.set,
+      makeMessageCapTP: cells[140].makeMessageCapTP.set,
+      messageToBytes: cells[140].messageToBytes.set,
+      bytesToMessage: cells[140].bytesToMessage.set,
+      makeNetstringCapTP: cells[140].makeNetstringCapTP.set,
     },
     importMeta: {},
   });
   functors[141]({
+    imports(entries) {
+      const map = new Map(entries);
+    },
+    liveVar: {
+    },
+    onceVar: {
+      encodeEnvelope: cells[141].encodeEnvelope.set,
+      encodeFrame: cells[141].encodeFrame.set,
+      decodeFrame: cells[141].decodeFrame.set,
+      decodeEnvelope: cells[141].decodeEnvelope.set,
+      readFrameFromStream: cells[141].readFrameFromStream.set,
+      writeFrameToStream: cells[141].writeFrameToStream.set,
+    },
+    importMeta: {},
+  });
+  functors[142]({
+    imports(entries) {
+      const map = new Map(entries);
+    },
+    liveVar: {
+    },
+    onceVar: {
+      makeXsFilePowers: cells[142].makeXsFilePowers.set,
+      makeXsCryptoPowers: cells[142].makeXsCryptoPowers.set,
+      makeXsSqlitePowers: cells[142].makeXsSqlitePowers.set,
+    },
+    importMeta: {},
+  });
+  functors[143]({
     imports(entries) {
       const map = new Map(entries);
       observeImports(map, "@endo/promise-kit", 22);
@@ -3307,11 +3336,11 @@ function observeImports(map, importName, importIndex) {
     liveVar: {
     },
     onceVar: {
-      makeDebugSession: cells[141].makeDebugSession.set,
+      makeDebugSession: cells[143].makeDebugSession.set,
     },
     importMeta: {},
   });
-  functors[142]({
+  functors[144]({
     imports(entries) {
       const map = new Map(entries);
       observeImports(map, "@endo/exo", 79);
@@ -3320,12 +3349,12 @@ function observeImports(map, importName, importIndex) {
     liveVar: {
     },
     onceVar: {
-      DebuggerInterface: cells[142].DebuggerInterface.set,
-      makeDebugger: cells[142].makeDebugger.set,
+      DebuggerInterface: cells[144].DebuggerInterface.set,
+      makeDebugger: cells[144].makeDebugger.set,
     },
     importMeta: {},
   });
-  functors[143]({
+  functors[145]({
     imports(entries) {
       const map = new Map(entries);
       observeImports(map, "@endo/captp", 53);
@@ -3334,12 +3363,14 @@ function observeImports(map, importName, importIndex) {
       observeImports(map, "@endo/stream", 56);
       observeImports(map, "./daemon.js", 132);
       observeImports(map, "./daemon-persistence-powers.js", 133);
-      observeImports(map, "./pet-store.js", 134);
-      observeImports(map, "./connection.js", 138);
-      observeImports(map, "./envelope.js", 139);
-      observeImports(map, "./bus-daemon-rust-xs-powers.js", 140);
-      observeImports(map, "./debug-session.js", 141);
-      observeImports(map, "./debugger.js", 142);
+      observeImports(map, "./daemon-database.js", 134);
+      observeImports(map, "./better-sqlite3-xs.js", 135);
+      observeImports(map, "./pet-store.js", 136);
+      observeImports(map, "./connection.js", 140);
+      observeImports(map, "./envelope.js", 141);
+      observeImports(map, "./bus-daemon-rust-xs-powers.js", 142);
+      observeImports(map, "./debug-session.js", 143);
+      observeImports(map, "./debugger.js", 144);
     },
     liveVar: {
     },
@@ -35177,7 +35208,11 @@ const provideEndoBootstrap = async (
 })()
 ,
 // === 133. daemon ./src/daemon-persistence-powers.js ===
-({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden,q,makeSnapshotStore,makeReaderRef,toHex,fromHex;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]],["@endo/errors", [["q",[$h͏_a => (q = $h͏_a)]]]],["@endo/platform/fs/lite", [["makeSnapshotStore",[$h͏_a => (makeSnapshotStore = $h͏_a)]]]],["./reader-ref.js", [["makeReaderRef",[$h͏_a => (makeReaderRef = $h͏_a)]]]],["./hex.js", [["toHex",[$h͏_a => (toHex = $h͏_a)]],["fromHex",[$h͏_a => (fromHex = $h͏_a)]]]]]);
+({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden,makeSnapshotStore,makeReaderRef,toHex,fromHex;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]],["@endo/platform/fs/lite", [["makeSnapshotStore",[$h͏_a => (makeSnapshotStore = $h͏_a)]]]],["./reader-ref.js", [["makeReaderRef",[$h͏_a => (makeReaderRef = $h͏_a)]]]],["./hex.js", [["toHex",[$h͏_a => (toHex = $h͏_a)]],["fromHex",[$h͏_a => (fromHex = $h͏_a)]]]]]);
+
+
+
+
 
 
 
@@ -35201,80 +35236,99 @@ const provideEndoBootstrap = async (
 
 
 /** @import { Config, CryptoPowers, DaemonicPersistencePowers, FilePowers, Formula, FormulaNumber } from './types.js' */
+/** @import { DaemonDatabase } from './daemon-database.js' */
 
 /**
+ * @param {DaemonDatabase} daemonDb
  * @param {FilePowers} filePowers
  * @param {CryptoPowers} cryptoPowers
  * @param {Config} config
  * @returns {DaemonicPersistencePowers}
  */
        const makeDaemonicPersistencePowers = (
+  daemonDb,
   filePowers,
   cryptoPowers,
   config,
 ) => {
+  const {
+    readFormula,
+    writeFormula,
+    deleteFormula,
+    listFormulas,
+    listFormulaNumbersByNode,
+    getState,
+    setState,
+    writeAgentKey,
+    getAgentKey,
+    hasAgentKey,
+    listAgentKeys,
+    deleteAgentKey,
+    writeRemoteAgentKey,
+    getRemoteAgentKey,
+    writeRetention,
+    deleteRetention,
+    listRetention,
+    replaceRetention,
+    deleteAllRetention,
+  } = daemonDb;
+
   const initializePersistence = async () => {
     const { statePath, ephemeralStatePath, cachePath } = config;
     const statePathP = filePowers.makePath(statePath);
     const ephemeralStatePathP = filePowers.makePath(ephemeralStatePath);
     const cachePathP = filePowers.makePath(cachePath);
     await Promise.all([statePathP, cachePathP, ephemeralStatePathP]);
-    // Load durable replacements for the SQLite-only tables.
-    // eslint-disable-next-line no-use-before-define
-    await loadDurableState();
   };
 
   /** @type {DaemonicPersistencePowers['provideRootNonce']} */
   const provideRootNonce = async () => {
-    const noncePath = filePowers.joinPath(config.statePath, 'nonce');
-    const existingNonce = await filePowers.maybeReadFileText(noncePath);
+    const existingNonce = getState('root_nonce');
     if (existingNonce === undefined) {
       const rootNonce = /** @type {FormulaNumber} */ (
         await cryptoPowers.randomHex256()
       );
-      await filePowers.writeFileText(noncePath, `${rootNonce}\n`);
+      setState('root_nonce', rootNonce);
       return { rootNonce, isNewlyCreated: true };
-    } else {
-      const rootNonce = /** @type {FormulaNumber} */ (existingNonce.trim());
-      return { rootNonce, isNewlyCreated: false };
     }
+    return {
+      rootNonce: /** @type {FormulaNumber} */ (existingNonce),
+      isNewlyCreated: false,
+    };
   };
 
   /** @type {DaemonicPersistencePowers['provideRootKeypair']} */
   const provideRootKeypair = async () => {
-    const keypairPath = filePowers.joinPath(config.statePath, 'keypair');
-    const existingKeypair = await filePowers.maybeReadFileText(keypairPath);
-    if (existingKeypair === undefined) {
+    const existingPublicHex = getState('public_key');
+    if (existingPublicHex === undefined) {
       const keypair = await cryptoPowers.generateEd25519Keypair();
       const publicHex = toHex(keypair.publicKey);
       const privateHex = toHex(keypair.privateKey);
-      await filePowers.writeFileText(
-        keypairPath,
-        `${publicHex}\n${privateHex}\n`,
-      );
+      setState('public_key', publicHex);
+      setState('private_key', privateHex);
       return { keypair, isNewlyCreated: true };
-    } else {
-      const lines = existingKeypair.trim().split('\n');
-      const pubHex = lines[0];
-      const privHex = lines[1];
-      // Use getters to avoid storing Uint8Array directly on the
-      // hardened object — in XS, Uint8Array indexed elements are
-      // non-configurable so harden/freeze fails.
-      return {
-        keypair: harden({
-          get publicKey() {
-            return fromHex(pubHex);
-          },
-          get privateKey() {
-            return fromHex(privHex);
-          },
-          sign: message => cryptoPowers.ed25519Sign(fromHex(privHex), message),
-        }),
-        isNewlyCreated: false,
-      };
     }
+    const pubHex = existingPublicHex;
+    const privHex = /** @type {string} */ (getState('private_key'));
+    // Use getters to avoid storing Uint8Array directly on the
+    // hardened object — in XS, Uint8Array indexed elements are
+    // non-configurable so harden/freeze fails.
+    return {
+      keypair: harden({
+        get publicKey() {
+          return fromHex(pubHex);
+        },
+        get privateKey() {
+          return fromHex(privHex);
+        },
+        sign: message => cryptoPowers.ed25519Sign(fromHex(privHex), message),
+      }),
+      isNewlyCreated: false,
+    };
   };
 
+  // Content store uses the filesystem for streaming binary data.
+  // Large blobs do not belong in SQLite.
   const makeContentStore = () => {
     const { statePath } = config;
     const storageDirectoryPath = filePowers.joinPath(statePath, 'store-sha256');
@@ -35304,29 +35358,21 @@ const provideEndoBootstrap = async (
         }
         await fileWriter.return(undefined);
 
-        // Calculate hash.
+        // Calculate hash, finish with an atomic rename.
         const sha256 = digester.digestHex();
-        // Finish with an atomic rename.
         const storagePath = filePowers.joinPath(storageDirectoryPath, sha256);
         await filePowers.renamePath(temporaryStoragePath, storagePath);
         return sha256;
       },
-      /**
-       * @param {string} sha256
-       */
+      /** @param {string} sha256 */
       fetch(sha256) {
         const storagePath = filePowers.joinPath(storageDirectoryPath, sha256);
         const streamBase64 = () => {
           const reader = filePowers.makeFileReader(storagePath);
           return makeReaderRef(reader);
         };
-        const text = async () => {
-          return filePowers.readFileText(storagePath);
-        };
-        const json = async () => {
-          const jsonSrc = await text();
-          return JSON.parse(jsonSrc);
-        };
+        const text = async () => filePowers.readFileText(storagePath);
+        const json = async () => JSON.parse(await text());
         return harden({ streamBase64, text, json });
       },
       /**
@@ -35347,418 +35393,19 @@ const provideEndoBootstrap = async (
     return makeSnapshotStore(rawStore);
   };
 
-  /**
-   * @param {string} formulaNumber
-   */
-  const makeFormulaPath = formulaNumber => {
-    const { statePath } = config;
-    if (formulaNumber.length < 3) {
-      throw new TypeError(`Invalid formula number ${q(formulaNumber)}`);
-    }
-    const head = formulaNumber.slice(0, 2);
-    const tail = formulaNumber.slice(2);
-    const directory = filePowers.joinPath(statePath, 'formulas', head);
-    const file = filePowers.joinPath(directory, `${tail}.json`);
-    return harden({ directory, file });
-  };
-
-  /**
-   * @param {string} formulaNumber
-   * @returns {Promise<{ node: string, formula: Formula }>}
-   */
-  const readFormula = async formulaNumber => {
-    const { file: formulaPath } = makeFormulaPath(formulaNumber);
-    const formulaText = await filePowers.maybeReadFileText(formulaPath);
-    if (formulaText === undefined) {
-      throw new ReferenceError(`No reference exists at path ${formulaPath}`);
-    }
-    const formula = (() => {
-      try {
-        return JSON.parse(formulaText);
-      } catch (error) {
-        throw new TypeError(
-          `Corrupt description for reference in file ${formulaPath}: ${/** @type {Error} */ (error).message}`,
-        );
-      }
-    })();
-    // The filesystem layout does not store per-formula node information.
-    // Callers that need a node number fall back to the local node when
-    // this returns the empty string.
-    return { node: '', formula };
-  };
-
-  // Persist instructions for revival (this can be collected).
-  /** @type {DaemonicPersistencePowers['writeFormula']} */
-  const writeFormula = async (formulaNumber, nodeNumber, formula) => {
-    const { directory, file } = makeFormulaPath(formulaNumber);
-    // Atomic write so that a partial write cannot leave a half-
-    // formed JSON file that wedges later reads.
-    await filePowers.makePath(directory);
-    const tmp = `${file}.tmp`;
-    await filePowers.writeFileText(tmp, `${q(formula)}\n`);
-    await filePowers.renamePath(tmp, file);
-    if (nodeNumber) {
-      let bucket = formulasByNode.get(nodeNumber);
-      if (bucket === undefined) {
-        bucket = new Set();
-        formulasByNode.set(nodeNumber, bucket);
-      }
-      bucket.add(formulaNumber);
-      // eslint-disable-next-line no-use-before-define
-      persistFormulasByNode(nodeNumber);
-    }
-  };
-
-  /** @type {DaemonicPersistencePowers['deleteFormula']} */
-  const deleteFormula = async formulaNumber => {
-    const { file } = makeFormulaPath(formulaNumber);
-    await filePowers.removePath(file);
-    // Drop from any per-node bucket that contains it.  (We don't
-    // know which without scanning; the indexes are small so a linear
-    // scan over node-number keys is fine.)
-    for (const [nodeNumber, bucket] of formulasByNode) {
-      if (bucket.delete(formulaNumber)) {
-        // eslint-disable-next-line no-use-before-define
-        persistFormulasByNode(nodeNumber);
-      }
-    }
-  };
-
-  /** @type {DaemonicPersistencePowers['listFormulas']} */
-  const listFormulas = async () => {
-    const formulasPath = filePowers.joinPath(config.statePath, 'formulas');
-    const heads = await filePowers.readDirectory(formulasPath).catch(error => {
-      if (error.message.startsWith('ENOENT: ')) {
-        return [];
-      }
-      throw error;
-    });
-    /** @type {Array<{ number: string, node: string }>} */
-    const records = [];
-    await Promise.all(
-      heads.map(async head => {
-        const headPath = filePowers.joinPath(formulasPath, head);
-        const files = await filePowers.readDirectory(headPath).catch(error => {
-          if (
-            error.message.startsWith('ENOTDIR: ') ||
-            error.message.startsWith('ENOENT: ')
-          ) {
-            return [];
-          }
-          throw error;
-        });
-        for (const file of files) {
-          if (file.endsWith('.json')) {
-            const tail = file.slice(0, -'.json'.length);
-            // Filesystem layout has no per-formula node directory; the
-            // caller fills in localNodeNumber when node is empty.
-            records.push({ number: `${head}${tail}`, node: '' });
-          }
-        }
-      }),
-    );
-    return records;
-  };
-
-  // Filesystem-backed replacements for the SQLite-only tables.
-  // Caches in memory for synchronous access; writes are serialised
-  // per-file through a promise chain.  Callers' mutators stay
-  // synchronous (matching the SQLite contract); the disk write is
-  // scheduled and chained.  Failures land on the promise chain
-  // (logged to stderr) but the cache stays consistent.
-  const { statePath } = config;
-  const agentKeysPath = filePowers.joinPath(statePath, 'agent-keys.json');
-  const remoteAgentKeysPath = filePowers.joinPath(
-    statePath,
-    'remote-agent-keys.json',
-  );
-  const retentionDir = filePowers.joinPath(statePath, 'retention');
-  const formulasByNodeDir = filePowers.joinPath(statePath, 'formulas-by-node');
-
-  /** @type {Map<string, { publicKey: string, privateKey: string, agentId: string }>} */
-  const agentKeys = new Map();
-  /** @type {Map<string, string>} */
-  const remoteAgentKeys = new Map();
-  /** @type {Map<string, Set<string>>} */
-  const retention = new Map();
-  /** @type {Map<string, Set<string>>} */
-  const formulasByNode = new Map();
-
-  /**
-   * Per-file write chain.  Each enqueued task runs after the prior
-   * one settles.  Failures propagate to a single sink that logs but
-   * does not stall the chain.
-   *
-   * @returns {(task: () => Promise<void>) => void}
-   */
-  const makeWriteChain = () => {
-    /** @type {Promise<void>} */
-    let last = Promise.resolve();
-    const enqueue = task => {
-      last = last
-        .then(() => task())
-        .catch(err => {
-          console.error('Persistence write failed:', err);
-        });
-    };
-    return enqueue;
-  };
-  const writeAgentKeysChain = makeWriteChain();
-  const writeRemoteAgentKeysChain = makeWriteChain();
-  /** @type {Map<string, (task: () => Promise<void>) => void>} */
-  const retentionChains = new Map();
-  /** @type {Map<string, (task: () => Promise<void>) => void>} */
-  const byNodeChains = new Map();
-
-  /** @param {string} path @param {string} text */
-  const atomicWriteText = async (path, text) => {
-    const tmp = `${path}.tmp`;
-    await filePowers.writeFileText(tmp, text);
-    await filePowers.renamePath(tmp, path);
-  };
-
-  const persistAgentKeys = () => {
-    writeAgentKeysChain(async () => {
-      const arr = Array.from(agentKeys.values());
-      await atomicWriteText(agentKeysPath, JSON.stringify(arr));
-    });
-  };
-  const persistRemoteAgentKeys = () => {
-    writeRemoteAgentKeysChain(async () => {
-      const obj = Object.fromEntries(remoteAgentKeys);
-      await atomicWriteText(remoteAgentKeysPath, JSON.stringify(obj));
-    });
-  };
-  /** @param {string} guestPublicKey */
-  const persistRetention = guestPublicKey => {
-    let chain = retentionChains.get(guestPublicKey);
-    if (chain === undefined) {
-      chain = makeWriteChain();
-      retentionChains.set(guestPublicKey, chain);
-    }
-    const file = filePowers.joinPath(retentionDir, `${guestPublicKey}.json`);
-    chain(async () => {
-      const set = retention.get(guestPublicKey);
-      await filePowers.makePath(retentionDir);
-      if (set === undefined || set.size === 0) {
-        await filePowers.removePath(file).catch(err => {
-          // eslint-disable-next-line no-use-before-define
-          if (!isNotFoundError(err)) throw err;
-        });
-        return;
-      }
-      await atomicWriteText(file, JSON.stringify(Array.from(set)));
-    });
-  };
-  /** @param {string} nodeNumber */
-  const persistFormulasByNode = nodeNumber => {
-    let chain = byNodeChains.get(nodeNumber);
-    if (chain === undefined) {
-      chain = makeWriteChain();
-      byNodeChains.set(nodeNumber, chain);
-    }
-    const file = filePowers.joinPath(formulasByNodeDir, `${nodeNumber}.json`);
-    chain(async () => {
-      const set = formulasByNode.get(nodeNumber);
-      await filePowers.makePath(formulasByNodeDir);
-      if (set === undefined || set.size === 0) {
-        await filePowers.removePath(file).catch(err => {
-          // eslint-disable-next-line no-use-before-define
-          if (!isNotFoundError(err)) throw err;
-        });
-        return;
-      }
-      await atomicWriteText(file, JSON.stringify(Array.from(set)));
-    });
-  };
-
-  /**
-   * Recognize "file does not exist" across both Node's filePowers
-   * (which throws Error with code 'ENOENT' and a message starting
-   * "ENOENT: ...") and the Rust supervisor's filePowers (which
-   * throws plain Error with "No such file or directory (os error 2)").
-   *
-   * @param {any} err
-   */
-  const isNotFoundError = err => {
-    if (err && err.code === 'ENOENT') return true;
-    const msg = String((err && err.message) || err || '');
-    return (
-      msg.startsWith('ENOENT: ') || msg.includes('No such file or directory')
-    );
-  };
-
-  /**
-   * Try to JSON.parse a state file's contents, swallowing parse
-   * errors with a console warning.  A corrupt durability file
-   * should never wedge daemon startup; the safer behavior is to
-   * boot with empty state and let the next mutation rewrite the
-   * file atomically.
-   *
-   * @template T
-   * @param {string} label
-   * @param {string} text
-   * @param {T} fallback
-   * @returns {T}
-   */
-  const safeParseJson = (label, text, fallback) => {
-    try {
-      return JSON.parse(text);
-    } catch (err) {
-      console.error(
-        `Persistence: ignoring corrupt ${label}; starting empty:`,
-        err,
-      );
-      return fallback;
-    }
-  };
-
-  const loadDurableState = async () => {
-    const agentKeysText = await filePowers.maybeReadFileText(agentKeysPath);
-    if (agentKeysText !== undefined) {
-      const arr = safeParseJson(
-        'agent-keys.json',
-        agentKeysText,
-        /** @type {Array<{publicKey: string, privateKey: string, agentId: string}>} */ ([]),
-      );
-      for (const record of arr) {
-        if (record && typeof record.publicKey === 'string') {
-          agentKeys.set(record.publicKey, record);
-        }
-      }
-    }
-    const remoteText = await filePowers.maybeReadFileText(remoteAgentKeysPath);
-    if (remoteText !== undefined) {
-      const obj = safeParseJson(
-        'remote-agent-keys.json',
-        remoteText,
-        /** @type {Record<string, string>} */ ({}),
-      );
-      for (const [pk, node] of Object.entries(obj)) {
-        remoteAgentKeys.set(pk, /** @type {string} */ (node));
-      }
-    }
-    // Eagerly load retention buckets and per-node indexes — they're
-    // small and the queries are synchronous.  Per-file failures are
-    // tolerated: a corrupt one logs and is dropped, the rest load.
-    const retentionFiles = await filePowers
-      .readDirectory(retentionDir)
-      .catch(err => {
-        if (isNotFoundError(err)) return [];
-        throw err;
-      });
-    await Promise.all(
-      retentionFiles.map(async fileName => {
-        if (!fileName.endsWith('.json')) return;
-        const guestPublicKey = fileName.slice(0, -'.json'.length);
-        try {
-          const text = await filePowers.readFileText(
-            filePowers.joinPath(retentionDir, fileName),
-          );
-          const arr = safeParseJson(
-            `retention/${fileName}`,
-            text,
-            /** @type {string[]} */ ([]),
-          );
-          retention.set(guestPublicKey, new Set(arr));
-        } catch (err) {
-          console.error(
-            `Persistence: failed to load retention/${fileName}:`,
-            err,
-          );
-        }
-      }),
-    );
-    const byNodeFiles = await filePowers
-      .readDirectory(formulasByNodeDir)
-      .catch(err => {
-        if (isNotFoundError(err)) return [];
-        throw err;
-      });
-    await Promise.all(
-      byNodeFiles.map(async fileName => {
-        if (!fileName.endsWith('.json')) return;
-        const nodeNumber = fileName.slice(0, -'.json'.length);
-        try {
-          const text = await filePowers.readFileText(
-            filePowers.joinPath(formulasByNodeDir, fileName),
-          );
-          const arr = safeParseJson(
-            `formulas-by-node/${fileName}`,
-            text,
-            /** @type {string[]} */ ([]),
-          );
-          formulasByNode.set(nodeNumber, new Set(arr));
-        } catch (err) {
-          console.error(
-            `Persistence: failed to load formulas-by-node/${fileName}:`,
-            err,
-          );
-        }
-      }),
-    );
-  };
-
-  /** @param {string} nodeNumber */
-  const listFormulaNumbersByNode = nodeNumber => {
-    const set = formulasByNode.get(nodeNumber);
-    return set ? Array.from(set) : [];
-  };
-  const writeAgentKey = (publicKey, privateKey, agentId) => {
-    agentKeys.set(publicKey, { publicKey, privateKey, agentId });
-    persistAgentKeys();
-  };
-  const getAgentKey = publicKey => agentKeys.get(publicKey);
-  const hasAgentKey = publicKey => agentKeys.has(publicKey);
-  const listAgentKeys = () => Array.from(agentKeys.values());
-  const deleteAgentKey = publicKey => {
-    agentKeys.delete(publicKey);
-    persistAgentKeys();
-  };
-  const writeRemoteAgentKey = (publicKey, daemonNode) => {
-    remoteAgentKeys.set(publicKey, daemonNode);
-    persistRemoteAgentKeys();
-  };
-  const getRemoteAgentKey = publicKey => remoteAgentKeys.get(publicKey);
-  const retentionBucket = guestPublicKey => {
-    let s = retention.get(guestPublicKey);
-    if (s === undefined) {
-      s = new Set();
-      retention.set(guestPublicKey, s);
-    }
-    return s;
-  };
-  const writeRetention = (guestPublicKey, formulaNumber) => {
-    retentionBucket(guestPublicKey).add(formulaNumber);
-    persistRetention(guestPublicKey);
-  };
-  const deleteRetention = (guestPublicKey, formulaNumber) => {
-    retentionBucket(guestPublicKey).delete(formulaNumber);
-    persistRetention(guestPublicKey);
-  };
-  const listRetention = guestPublicKey =>
-    Array.from(retentionBucket(guestPublicKey), formulaNumber => ({
-      formulaNumber,
-    }));
-  const replaceRetention = (guestPublicKey, formulaNumbers) => {
-    retention.set(guestPublicKey, new Set(formulaNumbers));
-    persistRetention(guestPublicKey);
-  };
-  const deleteAllRetention = guestPublicKey => {
-    retention.delete(guestPublicKey);
-    persistRetention(guestPublicKey);
-  };
-
+  // Wrap synchronous database operations as async so that
+  // implementations using async I/O are not constrained.
   return harden({
     statePath: config.statePath,
     initializePersistence,
     provideRootNonce,
     provideRootKeypair,
     makeContentStore,
-    readFormula,
-    writeFormula,
-    deleteFormula,
-    listFormulas,
+    readFormula: async formulaNumber => readFormula(formulaNumber),
+    writeFormula: async (formulaNumber, nodeNumber, formula) =>
+      writeFormula(formulaNumber, nodeNumber, formula),
+    deleteFormula: async formulaNumber => deleteFormula(formulaNumber),
+    listFormulas: async () => listFormulas(),
     listFormulaNumbersByNode,
     writeAgentKey,
     getAgentKey,
@@ -35777,7 +35424,802 @@ const provideEndoBootstrap = async (
 harden(makeDaemonicPersistencePowers);
 })()
 ,
-// === 134. daemon ./src/pet-store.js ===
+// === 134. daemon ./src/daemon-database.js ===
+({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden,q;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]],["@endo/errors", [["q",[$h͏_a => (q = $h͏_a)]]]]]);
+
+
+
+
+/** @import { Config, Formula, FormulaNumber } from './types.js' */
+
+/**
+ * @typedef {object} DaemonDatabase
+ * @property {import('better-sqlite3').Database} db - The underlying SQLite database handle.
+ * @property {() => void} close
+ * @property {(formulaNumber: string, nodeNumber: string, formula: Formula) => void} writeFormula
+ * @property {(formulaNumber: string) => boolean} hasFormula
+ * @property {(formulaNumber: string) => {node: string, formula: Formula}} readFormula
+ * @property {(formulaNumber: string) => void} deleteFormula
+ * @property {() => Array<{number: string, node: string}>} listFormulas
+ * @property {(nodeNumber: string) => string[]} listFormulaNumbersByNode
+ * @property {(key: string) => string | undefined} getState
+ * @property {(key: string, value: string) => void} setState
+ * @property {(publicKey: string, privateKey: string, agentId: string) => void} writeAgentKey
+ * @property {(publicKey: string) => {publicKey: string, privateKey: string, agentId: string} | undefined} getAgentKey
+ * @property {(publicKey: string) => boolean} hasAgentKey
+ * @property {() => Array<{publicKey: string, privateKey: string, agentId: string}>} listAgentKeys
+ * @property {(publicKey: string) => void} deleteAgentKey
+ * @property {(publicKey: string, daemonNode: string) => void} writeRemoteAgentKey
+ * @property {(publicKey: string) => string | undefined} getRemoteAgentKey
+ * @property {(storeNumber: string, storeType: string, name: string, formulaId: string) => void} writePetStoreEntry
+ * @property {(storeNumber: string, storeType: string, name: string) => void} deletePetStoreEntry
+ * @property {(storeNumber: string, storeType: string, fromName: string, toName: string) => void} renamePetStoreEntry
+ * @property {(storeNumber: string, storeType: string) => Array<{name: string, formulaId: string}>} listPetStoreEntries
+ * @property {(storeNumber: string, storeType: string) => void} deletePetStore
+ * @property {(guestPublicKey: string, formulaNumber: string) => void} writeRetention
+ * @property {(guestPublicKey: string, formulaNumber: string) => void} deleteRetention
+ * @property {(guestPublicKey: string) => Array<{formulaNumber: string}>} listRetention
+ * @property {(guestPublicKey: string, formulaNumbers: string[]) => void} replaceRetention
+ * @property {(guestPublicKey: string) => void} deleteAllRetention
+ * @property {(storeNumber: string, name: string, locator: string | null, timestamp: number, writer: string) => void} writeSyncedEntry
+ * @property {(storeNumber: string, name: string) => void} deleteSyncedEntry
+ * @property {(storeNumber: string) => Array<{name: string, locator: string | null, timestamp: number, writer: string}>} listSyncedEntries
+ * @property {(storeNumber: string) => void} deleteAllSyncedEntries
+ * @property {(storeNumber: string) => {localClock: number, remoteAckedClock: number}} getSyncedMeta
+ * @property {(storeNumber: string, localClock: number, remoteAckedClock: number) => void} setSyncedMeta
+ * @property {(storeNumber: string) => void} deleteSyncedMeta
+ */
+
+const SCHEMA_VERSION = 2;
+
+const SCHEMA_SQL = `
+  CREATE TABLE IF NOT EXISTS schema_version (
+    version INTEGER NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS daemon_state (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS formula (
+    number TEXT PRIMARY KEY,
+    node TEXT NOT NULL DEFAULT '',
+    type TEXT NOT NULL,
+    body TEXT NOT NULL
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_formula_node ON formula(node);
+
+  CREATE TABLE IF NOT EXISTS agent_key (
+    public_key TEXT PRIMARY KEY,
+    private_key TEXT NOT NULL,
+    agent_id TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS remote_agent_key (
+    public_key TEXT PRIMARY KEY,
+    daemon_node TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS pet_store_entry (
+    store_number TEXT NOT NULL,
+    store_type TEXT NOT NULL,
+    name TEXT NOT NULL,
+    formula_id TEXT NOT NULL,
+    PRIMARY KEY (store_number, store_type, name)
+  );
+
+  CREATE TABLE IF NOT EXISTS retention (
+    guest_public_key TEXT NOT NULL,
+    retained_formula_number TEXT NOT NULL,
+    PRIMARY KEY (guest_public_key, retained_formula_number)
+  );
+
+  CREATE TABLE IF NOT EXISTS synced_store_entry (
+    store_number TEXT NOT NULL,
+    name TEXT NOT NULL,
+    locator TEXT,
+    timestamp INTEGER NOT NULL,
+    writer TEXT NOT NULL,
+    PRIMARY KEY (store_number, name)
+  );
+
+  CREATE TABLE IF NOT EXISTS synced_store_meta (
+    store_number TEXT PRIMARY KEY,
+    local_clock INTEGER NOT NULL DEFAULT 0,
+    remote_acked_clock INTEGER NOT NULL DEFAULT 0
+  );
+`;
+
+/**
+ * Open or create the daemon SQLite database.
+ *
+ * The Database constructor is injectable so the same schema and
+ * statement layer can target either Node's `better-sqlite3` (the
+ * default, supplied by `daemon-database-node.js`) or the XS
+ * Rust-supervisor shim (`./better-sqlite3-xs.js`), both of which
+ * present the same synchronous prepared-statement surface.
+ *
+ * @param {Config} config
+ * @param {object} options
+ * @param {new (path: string) => any} options.Database
+ * @returns {DaemonDatabase}
+ */
+       const makeDaemonDatabase = (config, options) => {
+  const { Database } = options;
+  if (typeof Database !== 'function') {
+    throw new TypeError(
+      'makeDaemonDatabase requires options.Database (a better-sqlite3-compatible constructor)',
+    );
+  }
+  const dbPath = `${config.statePath}/endo.sqlite`;
+  const db = new Database(dbPath);
+
+  // Enable WAL mode for better concurrent read performance.
+  db.pragma('journal_mode = WAL');
+  db.pragma('foreign_keys = ON');
+
+  // Create schema if needed.
+  db.exec(SCHEMA_SQL);
+
+  // Check/set schema version.
+  const versionRow = db
+    .prepare('SELECT version FROM schema_version LIMIT 1')
+    .get();
+  if (versionRow === undefined) {
+    db.prepare('INSERT INTO schema_version (version) VALUES (?)').run(
+      SCHEMA_VERSION,
+    );
+  }
+
+  // -- Prepared statements --
+
+  const stmtWriteFormula = db.prepare(
+    'INSERT OR REPLACE INTO formula (number, node, type, body) VALUES (?, ?, ?, ?)',
+  );
+  const stmtReadFormula = db.prepare(
+    'SELECT node, body FROM formula WHERE number = ?',
+  );
+  const stmtHasFormula = db.prepare('SELECT 1 FROM formula WHERE number = ?');
+  const stmtDeleteFormula = db.prepare('DELETE FROM formula WHERE number = ?');
+  const stmtListFormulas = db.prepare('SELECT number, node FROM formula');
+  const stmtListFormulaNumbersByNode = db.prepare(
+    'SELECT number FROM formula WHERE node = ?',
+  );
+
+  const stmtGetState = db.prepare(
+    'SELECT value FROM daemon_state WHERE key = ?',
+  );
+  const stmtSetState = db.prepare(
+    'INSERT OR REPLACE INTO daemon_state (key, value) VALUES (?, ?)',
+  );
+
+  const stmtWriteAgentKey = db.prepare(
+    'INSERT OR REPLACE INTO agent_key (public_key, private_key, agent_id) VALUES (?, ?, ?)',
+  );
+  const stmtGetAgentKey = db.prepare(
+    'SELECT public_key AS publicKey, private_key AS privateKey, agent_id AS agentId FROM agent_key WHERE public_key = ?',
+  );
+  const stmtHasAgentKey = db.prepare(
+    'SELECT 1 FROM agent_key WHERE public_key = ?',
+  );
+  const stmtListAgentKeys = db.prepare(
+    'SELECT public_key AS publicKey, private_key AS privateKey, agent_id AS agentId FROM agent_key',
+  );
+  const stmtDeleteAgentKey = db.prepare(
+    'DELETE FROM agent_key WHERE public_key = ?',
+  );
+
+  const stmtWriteRemoteAgentKey = db.prepare(
+    'INSERT OR REPLACE INTO remote_agent_key (public_key, daemon_node) VALUES (?, ?)',
+  );
+  const stmtGetRemoteAgentKey = db.prepare(
+    'SELECT daemon_node AS daemonNode FROM remote_agent_key WHERE public_key = ?',
+  );
+
+  const stmtWritePetEntry = db.prepare(
+    'INSERT OR REPLACE INTO pet_store_entry (store_number, store_type, name, formula_id) VALUES (?, ?, ?, ?)',
+  );
+  const stmtDeletePetEntry = db.prepare(
+    'DELETE FROM pet_store_entry WHERE store_number = ? AND store_type = ? AND name = ?',
+  );
+  const stmtRenamePetEntry = db.prepare(
+    'UPDATE pet_store_entry SET name = ? WHERE store_number = ? AND store_type = ? AND name = ?',
+  );
+  const stmtListPetEntries = db.prepare(
+    'SELECT name, formula_id AS formulaId FROM pet_store_entry WHERE store_number = ? AND store_type = ?',
+  );
+  const stmtDeleteAllPetEntries = db.prepare(
+    'DELETE FROM pet_store_entry WHERE store_number = ? AND store_type = ?',
+  );
+
+  const stmtWriteRetention = db.prepare(
+    'INSERT OR IGNORE INTO retention (guest_public_key, retained_formula_number) VALUES (?, ?)',
+  );
+  const stmtDeleteRetention = db.prepare(
+    'DELETE FROM retention WHERE guest_public_key = ? AND retained_formula_number = ?',
+  );
+  const stmtListRetention = db.prepare(
+    'SELECT retained_formula_number AS formulaNumber FROM retention WHERE guest_public_key = ?',
+  );
+  const stmtDeleteAllRetention = db.prepare(
+    'DELETE FROM retention WHERE guest_public_key = ?',
+  );
+
+  const stmtWriteSyncedEntry = db.prepare(
+    'INSERT OR REPLACE INTO synced_store_entry (store_number, name, locator, timestamp, writer) VALUES (?, ?, ?, ?, ?)',
+  );
+  const stmtDeleteSyncedEntry = db.prepare(
+    'DELETE FROM synced_store_entry WHERE store_number = ? AND name = ?',
+  );
+  const stmtListSyncedEntries = db.prepare(
+    'SELECT name, locator, timestamp, writer FROM synced_store_entry WHERE store_number = ?',
+  );
+  const stmtDeleteAllSyncedEntries = db.prepare(
+    'DELETE FROM synced_store_entry WHERE store_number = ?',
+  );
+
+  const stmtGetSyncedMeta = db.prepare(
+    'SELECT local_clock AS localClock, remote_acked_clock AS remoteAckedClock FROM synced_store_meta WHERE store_number = ?',
+  );
+  const stmtSetSyncedMeta = db.prepare(
+    'INSERT OR REPLACE INTO synced_store_meta (store_number, local_clock, remote_acked_clock) VALUES (?, ?, ?)',
+  );
+  const stmtDeleteSyncedMeta = db.prepare(
+    'DELETE FROM synced_store_meta WHERE store_number = ?',
+  );
+
+  // -- Formula operations --
+
+  /** @param {string} formulaNumber */
+  const hasFormula = formulaNumber => {
+    return stmtHasFormula.get(formulaNumber) !== undefined;
+  };
+
+  /** @param {string} formulaNumber */
+  const readFormula = formulaNumber => {
+    const row = /** @type {{node: string, body: string} | undefined} */ (
+      stmtReadFormula.get(formulaNumber)
+    );
+    if (row === undefined) {
+      throw new ReferenceError(
+        `No formula exists for number ${q(formulaNumber)}`,
+      );
+    }
+    try {
+      return { node: row.node, formula: JSON.parse(row.body) };
+    } catch (error) {
+      throw new TypeError(
+        `Corrupt formula for number ${q(formulaNumber)}: ${/** @type {Error} */ (error).message}`,
+      );
+    }
+  };
+
+  /**
+   * @param {string} formulaNumber
+   * @param {string} nodeNumber
+   * @param {Formula} formula
+   */
+  const writeFormula = (formulaNumber, nodeNumber, formula) => {
+    stmtWriteFormula.run(
+      formulaNumber,
+      nodeNumber,
+      formula.type,
+      JSON.stringify(formula),
+    );
+  };
+
+  /** @param {string} formulaNumber */
+  const deleteFormula = formulaNumber => {
+    stmtDeleteFormula.run(formulaNumber);
+  };
+
+  const listFormulas = () => {
+    return /** @type {Array<{number: string, node: string}>} */ (
+      stmtListFormulas.all()
+    );
+  };
+
+  /**
+   * Return all formula numbers whose node matches the given value.
+   * Used to compute the retention set: "what formulas from peer X
+   * do we hold locally?"
+   *
+   * @param {string} nodeNumber
+   * @returns {string[]}
+   */
+  const listFormulaNumbersByNode = nodeNumber => {
+    const rows = /** @type {Array<{number: string}>} */ (
+      stmtListFormulaNumbersByNode.all(nodeNumber)
+    );
+    return rows.map(r => r.number);
+  };
+
+  // -- Daemon state --
+
+  /** @param {string} key */
+  const getState = key => {
+    const row = /** @type {{value: string} | undefined} */ (
+      stmtGetState.get(key)
+    );
+    return row?.value;
+  };
+
+  /**
+   * @param {string} key
+   * @param {string} value
+   */
+  const setState = (key, value) => {
+    stmtSetState.run(key, value);
+  };
+
+  // -- Agent key operations --
+
+  /**
+   * @param {string} publicKey
+   * @param {string} privateKey
+   * @param {string} agentId
+   */
+  const writeAgentKey = (publicKey, privateKey, agentId) => {
+    stmtWriteAgentKey.run(publicKey, privateKey, agentId);
+  };
+
+  /** @param {string} publicKey */
+  const getAgentKey = publicKey => {
+    return /** @type {{publicKey: string, privateKey: string, agentId: string} | undefined} */ (
+      stmtGetAgentKey.get(publicKey)
+    );
+  };
+
+  /** @param {string} publicKey */
+  const hasAgentKey = publicKey => {
+    return stmtHasAgentKey.get(publicKey) !== undefined;
+  };
+
+  const listAgentKeys = () => {
+    return /** @type {Array<{publicKey: string, privateKey: string, agentId: string}>} */ (
+      stmtListAgentKeys.all()
+    );
+  };
+
+  /** @param {string} publicKey */
+  const deleteAgentKey = publicKey => {
+    stmtDeleteAgentKey.run(publicKey);
+  };
+
+  // -- Remote agent key operations --
+
+  /**
+   * Record that a remote agent key belongs to a specific daemon.
+   *
+   * @param {string} publicKey - The remote agent's public key.
+   * @param {string} daemonNode - The daemon's localNodeNumber.
+   */
+  const writeRemoteAgentKey = (publicKey, daemonNode) => {
+    stmtWriteRemoteAgentKey.run(publicKey, daemonNode);
+  };
+
+  /**
+   * Look up which daemon owns a remote agent key.
+   *
+   * @param {string} publicKey
+   * @returns {string | undefined} The daemon's node number, or undefined.
+   */
+  const getRemoteAgentKey = publicKey => {
+    const row = /** @type {{daemonNode: string} | undefined} */ (
+      stmtGetRemoteAgentKey.get(publicKey)
+    );
+    return row?.daemonNode;
+  };
+
+  // -- Pet store operations --
+
+  /**
+   * @param {string} storeNumber
+   * @param {string} storeType
+   * @param {string} name
+   * @param {string} formulaId
+   */
+  const writePetStoreEntry = (storeNumber, storeType, name, formulaId) => {
+    stmtWritePetEntry.run(storeNumber, storeType, name, formulaId);
+  };
+
+  /**
+   * @param {string} storeNumber
+   * @param {string} storeType
+   * @param {string} name
+   */
+  const deletePetStoreEntry = (storeNumber, storeType, name) => {
+    stmtDeletePetEntry.run(storeNumber, storeType, name);
+  };
+
+  /**
+   * @param {string} storeNumber
+   * @param {string} storeType
+   * @param {string} fromName
+   * @param {string} toName
+   */
+  const renamePetStoreEntry = (storeNumber, storeType, fromName, toName) => {
+    // Delete any existing entry at the target name first to avoid
+    // unique constraint violations, then rename.
+    stmtDeletePetEntry.run(storeNumber, storeType, toName);
+    stmtRenamePetEntry.run(toName, storeNumber, storeType, fromName);
+  };
+
+  /**
+   * @param {string} storeNumber
+   * @param {string} storeType
+   * @returns {Array<{name: string, formulaId: string}>}
+   */
+  const listPetStoreEntries = (storeNumber, storeType) => {
+    return /** @type {Array<{name: string, formulaId: string}>} */ (
+      stmtListPetEntries.all(storeNumber, storeType)
+    );
+  };
+
+  /**
+   * @param {string} storeNumber
+   * @param {string} storeType
+   */
+  const deletePetStore = (storeNumber, storeType) => {
+    stmtDeleteAllPetEntries.run(storeNumber, storeType);
+  };
+
+  // -- Retention operations --
+
+  /**
+   * @param {string} guestPublicKey
+   * @param {string} formulaNumber
+   */
+  const writeRetention = (guestPublicKey, formulaNumber) => {
+    stmtWriteRetention.run(guestPublicKey, formulaNumber);
+  };
+
+  /**
+   * @param {string} guestPublicKey
+   * @param {string} formulaNumber
+   */
+  const deleteRetention = (guestPublicKey, formulaNumber) => {
+    stmtDeleteRetention.run(guestPublicKey, formulaNumber);
+  };
+
+  /**
+   * @param {string} guestPublicKey
+   * @returns {Array<{formulaNumber: string}>}
+   */
+  const listRetention = guestPublicKey => {
+    return /** @type {Array<{formulaNumber: string}>} */ (
+      stmtListRetention.all(guestPublicKey)
+    );
+  };
+
+  /**
+   * Replace the entire retention set for a guest with a new set.
+   *
+   * @param {string} guestPublicKey
+   * @param {string[]} formulaNumbers
+   */
+  const replaceRetention = (guestPublicKey, formulaNumbers) => {
+    stmtDeleteAllRetention.run(guestPublicKey);
+    for (const num of formulaNumbers) {
+      stmtWriteRetention.run(guestPublicKey, num);
+    }
+  };
+
+  /** @param {string} guestPublicKey */
+  const deleteAllRetention = guestPublicKey => {
+    stmtDeleteAllRetention.run(guestPublicKey);
+  };
+
+  // -- Synced store operations --
+
+  /**
+   * @param {string} storeNumber
+   * @param {string} name
+   * @param {string | null} locator
+   * @param {number} timestamp
+   * @param {string} writer
+   */
+  const writeSyncedEntry = (storeNumber, name, locator, timestamp, writer) => {
+    stmtWriteSyncedEntry.run(storeNumber, name, locator, timestamp, writer);
+  };
+
+  /**
+   * @param {string} storeNumber
+   * @param {string} name
+   */
+  const deleteSyncedEntry = (storeNumber, name) => {
+    stmtDeleteSyncedEntry.run(storeNumber, name);
+  };
+
+  /**
+   * @param {string} storeNumber
+   * @returns {Array<{name: string, locator: string | null, timestamp: number, writer: string}>}
+   */
+  const listSyncedEntries = storeNumber => {
+    return /** @type {Array<{name: string, locator: string | null, timestamp: number, writer: string}>} */ (
+      stmtListSyncedEntries.all(storeNumber)
+    );
+  };
+
+  /** @param {string} storeNumber */
+  const deleteAllSyncedEntries = storeNumber => {
+    stmtDeleteAllSyncedEntries.run(storeNumber);
+  };
+
+  /**
+   * @param {string} storeNumber
+   * @returns {{localClock: number, remoteAckedClock: number}}
+   */
+  const getSyncedMeta = storeNumber => {
+    const row =
+      /** @type {{localClock: number, remoteAckedClock: number} | undefined} */ (
+        stmtGetSyncedMeta.get(storeNumber)
+      );
+    if (row === undefined) {
+      return { localClock: 0, remoteAckedClock: 0 };
+    }
+    return row;
+  };
+
+  /**
+   * @param {string} storeNumber
+   * @param {number} localClock
+   * @param {number} remoteAckedClock
+   */
+  const setSyncedMeta = (storeNumber, localClock, remoteAckedClock) => {
+    stmtSetSyncedMeta.run(storeNumber, localClock, remoteAckedClock);
+  };
+
+  /** @param {string} storeNumber */
+  const deleteSyncedMeta = storeNumber => {
+    stmtDeleteSyncedMeta.run(storeNumber);
+  };
+
+  const close = () => {
+    db.close();
+  };
+
+  return harden({
+    db,
+    close,
+    hasFormula,
+    writeFormula,
+    readFormula,
+    deleteFormula,
+    listFormulas,
+    listFormulaNumbersByNode,
+    getState,
+    setState,
+    writeAgentKey,
+    getAgentKey,
+    hasAgentKey,
+    listAgentKeys,
+    deleteAgentKey,
+    writeRemoteAgentKey,
+    getRemoteAgentKey,
+    writePetStoreEntry,
+    deletePetStoreEntry,
+    renamePetStoreEntry,
+    listPetStoreEntries,
+    deletePetStore,
+    writeRetention,
+    deleteRetention,
+    listRetention,
+    replaceRetention,
+    deleteAllRetention,
+    writeSyncedEntry,
+    deleteSyncedEntry,
+    listSyncedEntries,
+    deleteAllSyncedEntries,
+    getSyncedMeta,
+    setSyncedMeta,
+    deleteSyncedMeta,
+  });
+};$h͏_once.makeDaemonDatabase(makeDaemonDatabase);
+harden(makeDaemonDatabase);
+})()
+,
+// === 135. daemon ./src/better-sqlite3-xs.js ===
+({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';$h͏_imports([]);// @ts-nocheck
+// XS-side adapter that presents a `better-sqlite3`-compatible
+// surface backed by the Rust supervisor's SQLite host functions
+// (powers/sqlite.rs registered in xsnap, aliased to host* in
+// host_aliases.js).
+//
+// The surface this module emulates is a strict subset of
+// better-sqlite3, exactly the methods daemon-database.js uses:
+//
+//   const db = new Database(path);
+//   db.pragma(stmt);
+//   db.exec(sql);
+//   const stmt = db.prepare(sql);
+//   stmt.run(...args);   // -> { changes, lastInsertRowid }
+//   stmt.get(...args);   // -> object | undefined
+//   stmt.all(...args);   // -> object[]
+//   db.close();
+//
+// Rusqlite returns INTEGER columns as i64; the JSON wire format
+// tags them as `{"$bigint": "<digits>"}` so they round-trip
+// without loss.  We project them back to plain numbers when they
+// fit in a safe integer (matching better-sqlite3's default
+// behaviour) and to BigInt otherwise.
+
+/* global hostSqliteOpen, hostSqliteClose, hostSqliteExec,
+   hostSqlitePrepare, hostSqliteStmtRun, hostSqliteStmtGet,
+   hostSqliteStmtAll, hostSqliteStmtFinalize */
+
+const isError = result =>
+  typeof result === 'string' && result.startsWith('Error: ');
+
+const throwIfError = result => {
+  if (isError(result)) throw new Error(result.slice('Error: '.length));
+  return result;
+};
+
+/**
+ * Decode the FFI tag for an integer cell.  Rusqlite serialises
+ * INTEGERs as `{"$bigint": "<digits>"}`; we materialise as a
+ * Number when safe, BigInt otherwise.  Better-sqlite3 returns
+ * Number by default, so the safe-integer projection keeps tests
+ * comparing apples to apples.
+ */
+const decodeBigintTag = obj => {
+  const s = obj.$bigint;
+  // BigInt parses negative and positive decimal strings.
+  const big = BigInt(s);
+  // Number.MAX_SAFE_INTEGER / MIN_SAFE_INTEGER guard.
+  if (
+    big <= BigInt(Number.MAX_SAFE_INTEGER) &&
+    big >= BigInt(Number.MIN_SAFE_INTEGER)
+  ) {
+    return Number(big);
+  }
+  return big;
+};
+
+const decodeBytesTag = obj => {
+  // The Rust side base64-encodes BLOB columns.  daemon-database.js
+  // never reads BLOB columns today; if this changes we'll wire in
+  // base64 decoding here.
+  return obj.$bytes;
+};
+
+const decodeCell = v => {
+  if (v === null) return null;
+  if (typeof v === 'object') {
+    if ('$bigint' in v) return decodeBigintTag(v);
+    if ('$bytes' in v) return decodeBytesTag(v);
+  }
+  return v;
+};
+
+const decodeRow = row => {
+  if (row === null || row === undefined) return undefined;
+  const out = {};
+  for (const [k, v] of Object.entries(row)) {
+    out[k] = decodeCell(v);
+  }
+  return out;
+};
+
+/**
+ * Encode a JS value as a JSON-serialisable parameter recognised by
+ * the Rust side (numbers, strings, bigint, Uint8Array).
+ */
+const encodeParam = v => {
+  if (v === null || v === undefined) return null;
+  if (typeof v === 'string') return v;
+  if (typeof v === 'number') return v;
+  if (typeof v === 'boolean') return v;
+  if (typeof v === 'bigint') return { $bigint: v.toString() };
+  if (v instanceof Uint8Array) {
+    // Base64 encode for transit.  Use globalThis.btoa if present
+    // (XS provides it via @endo/base64 polyfill in ses_boot.js);
+    // fall back to a minimal encoder otherwise.
+    const bin = Array.from(v, b => String.fromCharCode(b)).join('');
+    const b64 =
+      typeof globalThis.btoa === 'function'
+        ? globalThis.btoa(bin)
+        : (() => {
+            throw new Error('No base64 encoder available for Uint8Array');
+          })();
+    return { $bytes: b64 };
+  }
+  throw new TypeError(
+    `Unsupported SQL parameter type: ${typeof v} (${String(v)})`,
+  );
+};
+
+const encodeParams = args => args.map(encodeParam);
+
+class XsStatement {
+  constructor(stmtHandle) {
+    this._handle = stmtHandle;
+    this._finalized = false;
+  }
+
+  _params(args) {
+    return JSON.stringify(encodeParams(args));
+  }
+
+  run(...args) {
+    if (this._finalized) throw new Error('Statement is finalized');
+    const result = throwIfError(
+      hostSqliteStmtRun(this._handle, this._params(args)),
+    );
+    const parsed = JSON.parse(result);
+    return {
+      changes: decodeCell(parsed.changes),
+      lastInsertRowid: decodeCell(parsed.lastInsertRowid),
+    };
+  }
+
+  get(...args) {
+    if (this._finalized) throw new Error('Statement is finalized');
+    const result = throwIfError(
+      hostSqliteStmtGet(this._handle, this._params(args)),
+    );
+    if (result === 'null') return undefined;
+    return decodeRow(JSON.parse(result));
+  }
+
+  all(...args) {
+    if (this._finalized) throw new Error('Statement is finalized');
+    const result = throwIfError(
+      hostSqliteStmtAll(this._handle, this._params(args)),
+    );
+    return JSON.parse(result).map(decodeRow);
+  }
+
+  finalize() {
+    if (this._finalized) return;
+    this._finalized = true;
+    hostSqliteStmtFinalize(this._handle);
+  }
+}
+
+class XsDatabase {
+  constructor(path) {
+    this._handle = throwIfError(hostSqliteOpen(path));
+    this._closed = false;
+  }
+
+  prepare(sql) {
+    if (this._closed) throw new Error('Database is closed');
+    const stmtHandle = throwIfError(hostSqlitePrepare(this._handle, sql));
+    return new XsStatement(stmtHandle);
+  }
+
+  exec(sql) {
+    if (this._closed) throw new Error('Database is closed');
+    const result = hostSqliteExec(this._handle, sql);
+    if (isError(result)) throw new Error(result.slice('Error: '.length));
+  }
+
+  /**
+   * better-sqlite3 supports `db.pragma('journal_mode = WAL')`
+   * (returns rows) and `db.pragma('foreign_keys = ON')`
+   * (no rows expected).  daemon-database.js uses both as
+   * fire-and-forget — we model them as exec() calls with the
+   * `PRAGMA ` prefix prepended.
+   */
+  pragma(stmt) {
+    this.exec(`PRAGMA ${stmt};`);
+  }
+
+  close() {
+    if (this._closed) return;
+    this._closed = true;
+    hostSqliteClose(this._handle);
+  }
+}
+
+const{default:$c͏_default}={default:XsDatabase};$h͏_once.default($c͏_default);
+})()
+,
+// === 136. daemon ./src/pet-store.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden,makeChangeTopic,parseId,assertValidId,makeBidirectionalMultimap;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]],["./pubsub.js", [["makeChangeTopic",[$h͏_a => (makeChangeTopic = $h͏_a)]]]],["./formula-identifier.js", [["parseId",[$h͏_a => (parseId = $h͏_a)]],["assertValidId",[$h͏_a => (assertValidId = $h͏_a)]]]],["./multimap.js", [["makeBidirectionalMultimap",[$h͏_a => (makeBidirectionalMultimap = $h͏_a)]]]]]);
 
 
@@ -36043,7 +36485,7 @@ harden(makeDaemonicPersistencePowers);
 };$h͏_once.makePetStoreMaker(makePetStoreMaker);
 })()
 ,
-// === 135. netstring ./reader.js ===
+// === 137. netstring ./reader.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]]]);
 
 
@@ -36209,7 +36651,7 @@ harden(makeNetstringReader);
 };$h͏_once.netstringReader(netstringReader);
 })()
 ,
-// === 136. netstring ./writer.js ===
+// === 138. netstring ./writer.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden,makePromiseKit;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]],["@endo/promise-kit", [["makePromiseKit",[$h͏_a => (makePromiseKit = $h͏_a)]]]]]);
 
 
@@ -36268,11 +36710,14 @@ const getLengthPrefixCharCodes = length =>
         // is already observed by the Promise.all chain below, which
         // routes failures into ack.reject.
         for (const promise of partsWritten) {
-          promise.then(partWritten => {
-            if (partWritten.done) {
-              ack.resolve(partWritten);
-            }
-          }, () => {});
+          promise.then(
+            partWritten => {
+              if (partWritten.done) {
+                ack.resolve(partWritten);
+              }
+            },
+            () => {},
+          );
         }
 
         Promise.all(partsWritten).then(results => {
@@ -36314,11 +36759,11 @@ harden(makeNetstringWriter);
        const netstringWriter = makeNetstringWriter;$h͏_once.netstringWriter(netstringWriter);
 })()
 ,
-// === 137. netstring ./index.js ===
+// === 139. netstring ./index.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';$h͏_imports([["./reader.js", []],["./writer.js", []]]);
 })()
 ,
-// === 138. daemon ./src/connection.js ===
+// === 140. daemon ./src/connection.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let makeCapTP,makePromiseKit,mapWriter,mapReader,makeNetstringReader,makeNetstringWriter;$h͏_imports([["@endo/captp", [["makeCapTP",[$h͏_a => (makeCapTP = $h͏_a)]]]],["@endo/promise-kit", [["makePromiseKit",[$h͏_a => (makePromiseKit = $h͏_a)]]]],["@endo/stream", [["mapWriter",[$h͏_a => (mapWriter = $h͏_a)]],["mapReader",[$h͏_a => (mapReader = $h͏_a)]]]],["@endo/netstring", [["makeNetstringReader",[$h͏_a => (makeNetstringReader = $h͏_a)]],["makeNetstringWriter",[$h͏_a => (makeNetstringWriter = $h͏_a)]]]]]);
 
 
@@ -36548,7 +36993,7 @@ const registerCapTpConnection = (registrar, name, close, closed) => {
 };$h͏_once.makeNetstringCapTP(makeNetstringCapTP);
 })()
 ,
-// === 139. daemon ./src/envelope.js ===
+// === 141. daemon ./src/envelope.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';$h͏_imports([]);// @ts-check
 /* eslint-disable no-bitwise */
 /* global Buffer */
@@ -36938,7 +37383,7 @@ harden(readFrameFromStream);
 harden(writeFrameToStream);
 })()
 ,
-// === 140. daemon ./src/bus-daemon-rust-xs-powers.js ===
+// === 142. daemon ./src/bus-daemon-rust-xs-powers.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';$h͏_imports([]);// @ts-nocheck
 // The XS-backed powers still implement the pre-SQLite SqliteValue
 // contract and expose readLink outside the current FilePowers type.
@@ -37487,7 +37932,7 @@ const assertSqliteOk = result => {
 harden(makeXsSqlitePowers);
 })()
 ,
-// === 141. daemon ./src/debug-session.js ===
+// === 143. daemon ./src/debug-session.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let makePromiseKit;$h͏_imports([["@endo/promise-kit", [["makePromiseKit",[$h͏_a => (makePromiseKit = $h͏_a)]]]]]);
 
 
@@ -38032,7 +38477,7 @@ harden(makeSaxParser);
 harden(makeDebugSession);
 })()
 ,
-// === 142. daemon ./src/debugger.js ===
+// === 144. daemon ./src/debugger.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let makeExo,M;$h͏_imports([["@endo/exo", [["makeExo",[$h͏_a => (makeExo = $h͏_a)]]]],["@endo/patterns", [["M",[$h͏_a => (M = $h͏_a)]]]]]);
 
 
@@ -38191,8 +38636,10 @@ harden(DebuggerInterface);
 harden(makeDebugger);
 })()
 ,
-// === 143. daemon ./src/bus-daemon-rust-xs.js ===
-({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let makeCapTP,E,makePromiseKit,mapWriter,mapReader,makePipe,makeDaemon,makeDaemonicPersistencePowers,makePetStoreMaker,makeMessageCapTP,messageToBytes,bytesToMessage,encodeEnvelope,decodeEnvelope,makeXsFilePowers,makeXsCryptoPowers,makeDebugSession,makeDebugger;$h͏_imports([["@endo/captp", [["makeCapTP",[$h͏_a => (makeCapTP = $h͏_a)]]]],["@endo/far", [["E",[$h͏_a => (E = $h͏_a)]]]],["@endo/promise-kit", [["makePromiseKit",[$h͏_a => (makePromiseKit = $h͏_a)]]]],["@endo/stream", [["mapWriter",[$h͏_a => (mapWriter = $h͏_a)]],["mapReader",[$h͏_a => (mapReader = $h͏_a)]],["makePipe",[$h͏_a => (makePipe = $h͏_a)]]]],["./daemon.js", [["makeDaemon",[$h͏_a => (makeDaemon = $h͏_a)]]]],["./daemon-persistence-powers.js", [["makeDaemonicPersistencePowers",[$h͏_a => (makeDaemonicPersistencePowers = $h͏_a)]]]],["./pet-store.js", [["makePetStoreMaker",[$h͏_a => (makePetStoreMaker = $h͏_a)]]]],["./connection.js", [["makeMessageCapTP",[$h͏_a => (makeMessageCapTP = $h͏_a)]],["messageToBytes",[$h͏_a => (messageToBytes = $h͏_a)]],["bytesToMessage",[$h͏_a => (bytesToMessage = $h͏_a)]]]],["./envelope.js", [["encodeEnvelope",[$h͏_a => (encodeEnvelope = $h͏_a)]],["decodeEnvelope",[$h͏_a => (decodeEnvelope = $h͏_a)]]]],["./bus-daemon-rust-xs-powers.js", [["makeXsFilePowers",[$h͏_a => (makeXsFilePowers = $h͏_a)]],["makeXsCryptoPowers",[$h͏_a => (makeXsCryptoPowers = $h͏_a)]]]],["./debug-session.js", [["makeDebugSession",[$h͏_a => (makeDebugSession = $h͏_a)]]]],["./debugger.js", [["makeDebugger",[$h͏_a => (makeDebugger = $h͏_a)]]]]]);
+// === 145. daemon ./src/bus-daemon-rust-xs.js ===
+({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let makeCapTP,E,makePromiseKit,mapWriter,mapReader,makePipe,makeDaemon,makeDaemonicPersistencePowers,makeDaemonDatabase,XsDatabase,makePetStoreMaker,makeMessageCapTP,messageToBytes,bytesToMessage,encodeEnvelope,decodeEnvelope,makeXsFilePowers,makeXsCryptoPowers,makeDebugSession,makeDebugger;$h͏_imports([["@endo/captp", [["makeCapTP",[$h͏_a => (makeCapTP = $h͏_a)]]]],["@endo/far", [["E",[$h͏_a => (E = $h͏_a)]]]],["@endo/promise-kit", [["makePromiseKit",[$h͏_a => (makePromiseKit = $h͏_a)]]]],["@endo/stream", [["mapWriter",[$h͏_a => (mapWriter = $h͏_a)]],["mapReader",[$h͏_a => (mapReader = $h͏_a)]],["makePipe",[$h͏_a => (makePipe = $h͏_a)]]]],["./daemon.js", [["makeDaemon",[$h͏_a => (makeDaemon = $h͏_a)]]]],["./daemon-persistence-powers.js", [["makeDaemonicPersistencePowers",[$h͏_a => (makeDaemonicPersistencePowers = $h͏_a)]]]],["./daemon-database.js", [["makeDaemonDatabase",[$h͏_a => (makeDaemonDatabase = $h͏_a)]]]],["./better-sqlite3-xs.js", [["default",[$h͏_a => (XsDatabase = $h͏_a)]]]],["./pet-store.js", [["makePetStoreMaker",[$h͏_a => (makePetStoreMaker = $h͏_a)]]]],["./connection.js", [["makeMessageCapTP",[$h͏_a => (makeMessageCapTP = $h͏_a)]],["messageToBytes",[$h͏_a => (messageToBytes = $h͏_a)]],["bytesToMessage",[$h͏_a => (bytesToMessage = $h͏_a)]]]],["./envelope.js", [["encodeEnvelope",[$h͏_a => (encodeEnvelope = $h͏_a)]],["decodeEnvelope",[$h͏_a => (decodeEnvelope = $h͏_a)]]]],["./bus-daemon-rust-xs-powers.js", [["makeXsFilePowers",[$h͏_a => (makeXsFilePowers = $h͏_a)]],["makeXsCryptoPowers",[$h͏_a => (makeXsCryptoPowers = $h͏_a)]]]],["./debug-session.js", [["makeDebugSession",[$h͏_a => (makeDebugSession = $h͏_a)]]]],["./debugger.js", [["makeDebugger",[$h͏_a => (makeDebugger = $h͏_a)]]]]]);
+
+
 
 
 
@@ -38472,156 +38919,24 @@ const config = harden({
 const filePowers = makeXsFilePowers();
 const cryptoPowers = makeXsCryptoPowers();
 
-// Filesystem-backed implementation of the SQLite-backed
-// DaemonDatabase API used by pet-store.js.  Each (storeType,
-// storeNumber) pair lives in its own JSON file at
-// <statePath>/pet-stores/<storeType>/<storeNumber>.json so writes
-// are atomic and per-store.  The mutators stay synchronous (matching
-// the SQLite contract); disk writes are scheduled through a per-file
-// promise chain.  Eager load at boot populates the in-memory cache
-// so all queries are synchronous after `initialize()` returns.
-const makePersistentPetStoreDb = async () => {
-  const baseDir = filePowers.joinPath(config.statePath, 'pet-stores');
-  /** @type {Map<string, Map<string, string>>} */
-  const tables = new Map();
-  /** @type {Map<string, (task: () => Promise<void>) => void>} */
-  const writeChains = new Map();
+// SQLite parity with the Node-supervised daemon.  The shared
+// daemonDb (opened via the XS-side better-sqlite3 shim that
+// routes prepared-statement calls through Rust's rusqlite host
+// functions) backs both the pet-store's DaemonDatabase contract
+// and the persistence powers' formula/agent-key/retention
+// queries, so a single state directory can be opened by either
+// supervisor with no migration step.
+//
+// The actual database open requires statePath to exist, so we
+// defer construction until inside main() where
+// initializePersistence has run.
 
-  const tableKey = (storeNumber, storeType) => `${storeType}:${storeNumber}`;
-  const fileFor = (storeNumber, storeType) =>
-    filePowers.joinPath(baseDir, storeType, `${storeNumber}.json`);
-  const dirFor = storeType => filePowers.joinPath(baseDir, storeType);
-
-  const isNotFoundError = err => {
-    if (err && err.code === 'ENOENT') return true;
-    const msg = String((err && err.message) || err || '');
-    return (
-      msg.startsWith('ENOENT: ') || msg.includes('No such file or directory')
-    );
-  };
-
-  const tableFor = (storeNumber, storeType) => {
-    const k = tableKey(storeNumber, storeType);
-    let t = tables.get(k);
-    if (t === undefined) {
-      t = new Map();
-      tables.set(k, t);
-    }
-    return t;
-  };
-
-  const makeWriteChain = () => {
-    let last = Promise.resolve();
-    return task => {
-      last = last
-        .then(() => task())
-        .catch(err => {
-          console.error('Pet-store write failed:', err);
-        });
-    };
-  };
-  const chainFor = (storeNumber, storeType) => {
-    const k = tableKey(storeNumber, storeType);
-    let c = writeChains.get(k);
-    if (c === undefined) {
-      c = makeWriteChain();
-      writeChains.set(k, c);
-    }
-    return c;
-  };
-
-  const persist = (storeNumber, storeType) => {
-    const file = fileFor(storeNumber, storeType);
-    const dir = dirFor(storeType);
-    chainFor(storeNumber, storeType)(async () => {
-      const t = tables.get(tableKey(storeNumber, storeType));
-      if (t === undefined || t.size === 0) {
-        await filePowers.removePath(file).catch(err => {
-          if (!isNotFoundError(err)) throw err;
-        });
-        return;
-      }
-      await filePowers.makePath(dir);
-      const obj = Object.fromEntries(t);
-      const tmp = `${file}.tmp`;
-      await filePowers.writeFileText(tmp, JSON.stringify(obj));
-      await filePowers.renamePath(tmp, file);
-    });
-  };
-
-  // Eager load: scan every <baseDir>/<storeType>/*.json into memory.
-  const storeTypes = await filePowers.readDirectory(baseDir).catch(err => {
-    if (isNotFoundError(err)) return [];
-    throw err;
-  });
-  for (const storeType of storeTypes) {
-    const typeDir = dirFor(storeType);
-    // eslint-disable-next-line no-await-in-loop
-    const files = await filePowers.readDirectory(typeDir).catch(err => {
-      if (isNotFoundError(err)) return [];
-      throw err;
-    });
-    // eslint-disable-next-line no-await-in-loop
-    await Promise.all(
-      files.map(async fileName => {
-        if (!fileName.endsWith('.json')) return;
-        const storeNumber = fileName.slice(0, -'.json'.length);
-        try {
-          const text = await filePowers.readFileText(
-            filePowers.joinPath(typeDir, fileName),
-          );
-          const obj = JSON.parse(text);
-          const t = tableFor(storeNumber, storeType);
-          for (const [name, formulaId] of Object.entries(obj)) {
-            t.set(name, /** @type {string} */ (formulaId));
-          }
-        } catch (err) {
-          console.error(
-            `Persistence: failed to load pet-stores/${storeType}/${fileName}:`,
-            err,
-          );
-        }
-      }),
-    );
-  }
-
-  return {
-    writePetStoreEntry: (storeNumber, storeType, name, formulaId) => {
-      tableFor(storeNumber, storeType).set(name, formulaId);
-      persist(storeNumber, storeType);
-    },
-    deletePetStoreEntry: (storeNumber, storeType, name) => {
-      tableFor(storeNumber, storeType).delete(name);
-      persist(storeNumber, storeType);
-    },
-    renamePetStoreEntry: (storeNumber, storeType, fromName, toName) => {
-      const t = tableFor(storeNumber, storeType);
-      const id = t.get(fromName);
-      t.delete(fromName);
-      if (id !== undefined) t.set(toName, id);
-      persist(storeNumber, storeType);
-    },
-    listPetStoreEntries: (storeNumber, storeType) => {
-      const t = tableFor(storeNumber, storeType);
-      return Array.from(t.entries(), ([name, formulaId]) => ({
-        name,
-        formulaId,
-      }));
-    },
-    deletePetStore: (storeNumber, storeType) => {
-      tables.delete(tableKey(storeNumber, storeType));
-      persist(storeNumber, storeType);
-    },
-  };
-};
-
+/** @type {ReturnType<typeof makeDaemonDatabase> | null} */
+let daemonDb = null;
 /** @type {ReturnType<typeof makePetStoreMaker> | null} */
 let petStorePowers = null;
-const daemonicPersistencePowers = makeDaemonicPersistencePowers(
-  filePowers,
-  cryptoPowers,
-  config,
-);
+/** @type {ReturnType<typeof makeDaemonicPersistencePowers> | null} */
+let daemonicPersistencePowers = null;
 
 // ---------------------------------------------------------------------------
 // Envelope I/O via issueCommand
@@ -38959,11 +39274,20 @@ const main = async () => {
     hostTrace(`Endo daemon (xs) stopping on PID ${pid}`);
   });
 
+  // Ensure the state path exists before we open the SQLite
+  // database file inside it.
+  await filePowers.makePath(config.statePath);
+  daemonDb = makeDaemonDatabase(config, { Database: XsDatabase });
+  petStorePowers = makePetStoreMaker(daemonDb);
+  daemonicPersistencePowers = makeDaemonicPersistencePowers(
+    daemonDb,
+    filePowers,
+    cryptoPowers,
+    config,
+  );
+
   await daemonicPersistencePowers.initializePersistence();
 
-  // Build the persistent pet-store DB after persistence dirs exist
-  // and assemble powers now that petStorePowers is ready.
-  petStorePowers = makePetStoreMaker(await makePersistentPetStoreDb());
   const powers = harden({
     crypto: cryptoPowers,
     petStore: petStorePowers,

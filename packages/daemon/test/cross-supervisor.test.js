@@ -55,16 +55,32 @@ const setEndoBin = bin => {
 
 let cfgId = 0;
 
+// Unix domain socket paths are limited to ~104 chars on Linux
+// and ~90 on macOS.  Mirror the truncation in endo.test.js so
+// test directory names don't blow that budget.
+const MAX_UNIX_SOCKET_PATH = 90;
+const SOCKET_PATH_OVERHEAD =
+  path.join(dirname, 'tmp').length + 1 + 'endo.sock'.length + 8;
+const MAX_CONFIG_DIR_LENGTH = Math.max(
+  8,
+  MAX_UNIX_SOCKET_PATH - SOCKET_PATH_OVERHEAD,
+);
+
 /**
  * Build a fresh config under a unique tmp subdir so multiple
  * invocations within one test don't collide.  Mirrors the
- * helper in endo.test.js without re-exporting it from there.
+ * helper in endo.test.js (including socket-path truncation)
+ * without re-exporting it from there.
  *
  * @param {string} title
  */
 const makeFreshConfig = title => {
   const safeTitle = title.replace(/\s/giu, '-').replace(/[^\w-]/giu, '');
-  const dir = `${safeTitle}#${String(cfgId).padStart(4, '0')}`;
+  const truncated =
+    safeTitle.length <= MAX_CONFIG_DIR_LENGTH
+      ? safeTitle
+      : safeTitle.slice(0, MAX_CONFIG_DIR_LENGTH);
+  const dir = `${truncated}#${String(cfgId).padStart(4, '0')}`;
   cfgId += 1;
   const root = ['tmp', dir];
   return {
@@ -115,7 +131,7 @@ const runWith = async (config, bin, body) => {
   }
 };
 
-const isFresh = skipNoRustBinary ? test.serial.skip : test.serial.failing;
+const isFresh = skipNoRustBinary ? test.serial.skip : test.serial;
 
 isFresh('cross-supervisor: Node→Rust pet name round-trip', async t => {
   const config = makeFreshConfig(t.title);

@@ -47,6 +47,8 @@ import { mapWriter, mapReader, makePipe } from '@endo/stream';
 
 import { makeDaemon } from './daemon.js';
 import { makeDaemonicPersistencePowers } from './daemon-persistence-powers.js';
+import { makeDaemonDatabase } from './daemon-database.js';
+import XsDatabase from './better-sqlite3-xs.js';
 import { makePetStoreMaker } from './pet-store.js';
 import {
   makeMessageCapTP,
@@ -278,159 +280,24 @@ const config = harden({
 const filePowers = makeXsFilePowers();
 const cryptoPowers = makeXsCryptoPowers();
 
-// Filesystem-backed implementation of the SQLite-backed
-// DaemonDatabase API used by pet-store.js.  Each (storeType,
-// storeNumber) pair lives in its own JSON file at
-// <statePath>/pet-stores/<storeType>/<storeNumber>.json so writes
-// are atomic and per-store.  The mutators stay synchronous (matching
-// the SQLite contract); disk writes are scheduled through a per-file
-// promise chain.  Eager load at boot populates the in-memory cache
-// so all queries are synchronous after `initialize()` returns.
-const makePersistentPetStoreDb = async () => {
-  const baseDir = filePowers.joinPath(config.statePath, 'pet-stores');
-  /** @type {Map<string, Map<string, string>>} */
-  const tables = new Map();
-  /** @type {Map<string, (task: () => Promise<void>) => void>} */
-  const writeChains = new Map();
+// SQLite parity with the Node-supervised daemon.  The shared
+// daemonDb (opened via the XS-side better-sqlite3 shim that
+// routes prepared-statement calls through Rust's rusqlite host
+// functions) backs both the pet-store's DaemonDatabase contract
+// and the persistence powers' formula/agent-key/retention
+// queries, so a single state directory can be opened by either
+// supervisor with no migration step.
+//
+// The actual database open requires statePath to exist, so we
+// defer construction until inside main() where
+// initializePersistence has run.
 
-  const tableKey = (storeNumber, storeType) => `${storeType}:${storeNumber}`;
-  const fileFor = (storeNumber, storeType) =>
-    filePowers.joinPath(baseDir, storeType, `${storeNumber}.json`);
-  const dirFor = storeType => filePowers.joinPath(baseDir, storeType);
-
-  const isNotFoundError = err => {
-    if (err && err.code === 'ENOENT') return true;
-    const msg = String((err && err.message) || err || '');
-    return (
-      msg.startsWith('ENOENT: ') || msg.includes('No such file or directory')
-    );
-  };
-
-  const tableFor = (storeNumber, storeType) => {
-    const k = tableKey(storeNumber, storeType);
-    let t = tables.get(k);
-    if (t === undefined) {
-      t = new Map();
-      tables.set(k, t);
-    }
-    return t;
-  };
-
-  const makeWriteChain = () => {
-    let last = Promise.resolve();
-    return task => {
-      last = last
-        .then(() => task())
-        .catch(err => {
-          console.error('Pet-store write failed:', err);
-        });
-    };
-  };
-  const chainFor = (storeNumber, storeType) => {
-    const k = tableKey(storeNumber, storeType);
-    let c = writeChains.get(k);
-    if (c === undefined) {
-      c = makeWriteChain();
-      writeChains.set(k, c);
-    }
-    return c;
-  };
-
-  const persist = (storeNumber, storeType) => {
-    const file = fileFor(storeNumber, storeType);
-    const dir = dirFor(storeType);
-    chainFor(
-      storeNumber,
-      storeType,
-    )(async () => {
-      const t = tables.get(tableKey(storeNumber, storeType));
-      if (t === undefined || t.size === 0) {
-        await filePowers.removePath(file).catch(err => {
-          if (!isNotFoundError(err)) throw err;
-        });
-        return;
-      }
-      await filePowers.makePath(dir);
-      const obj = Object.fromEntries(t);
-      const tmp = `${file}.tmp`;
-      await filePowers.writeFileText(tmp, JSON.stringify(obj));
-      await filePowers.renamePath(tmp, file);
-    });
-  };
-
-  // Eager load: scan every <baseDir>/<storeType>/*.json into memory.
-  const storeTypes = await filePowers.readDirectory(baseDir).catch(err => {
-    if (isNotFoundError(err)) return [];
-    throw err;
-  });
-  for (const storeType of storeTypes) {
-    const typeDir = dirFor(storeType);
-    // eslint-disable-next-line no-await-in-loop
-    const files = await filePowers.readDirectory(typeDir).catch(err => {
-      if (isNotFoundError(err)) return [];
-      throw err;
-    });
-    // eslint-disable-next-line no-await-in-loop
-    await Promise.all(
-      files.map(async fileName => {
-        if (!fileName.endsWith('.json')) return;
-        const storeNumber = fileName.slice(0, -'.json'.length);
-        try {
-          const text = await filePowers.readFileText(
-            filePowers.joinPath(typeDir, fileName),
-          );
-          const obj = JSON.parse(text);
-          const t = tableFor(storeNumber, storeType);
-          for (const [name, formulaId] of Object.entries(obj)) {
-            t.set(name, /** @type {string} */ (formulaId));
-          }
-        } catch (err) {
-          console.error(
-            `Persistence: failed to load pet-stores/${storeType}/${fileName}:`,
-            err,
-          );
-        }
-      }),
-    );
-  }
-
-  return {
-    writePetStoreEntry: (storeNumber, storeType, name, formulaId) => {
-      tableFor(storeNumber, storeType).set(name, formulaId);
-      persist(storeNumber, storeType);
-    },
-    deletePetStoreEntry: (storeNumber, storeType, name) => {
-      tableFor(storeNumber, storeType).delete(name);
-      persist(storeNumber, storeType);
-    },
-    renamePetStoreEntry: (storeNumber, storeType, fromName, toName) => {
-      const t = tableFor(storeNumber, storeType);
-      const id = t.get(fromName);
-      t.delete(fromName);
-      if (id !== undefined) t.set(toName, id);
-      persist(storeNumber, storeType);
-    },
-    listPetStoreEntries: (storeNumber, storeType) => {
-      const t = tableFor(storeNumber, storeType);
-      return Array.from(t.entries(), ([name, formulaId]) => ({
-        name,
-        formulaId,
-      }));
-    },
-    deletePetStore: (storeNumber, storeType) => {
-      tables.delete(tableKey(storeNumber, storeType));
-      persist(storeNumber, storeType);
-    },
-  };
-};
-
+/** @type {ReturnType<typeof makeDaemonDatabase> | null} */
+let daemonDb = null;
 /** @type {ReturnType<typeof makePetStoreMaker> | null} */
 let petStorePowers = null;
-const daemonicPersistencePowers = makeDaemonicPersistencePowers(
-  filePowers,
-  cryptoPowers,
-  config,
-);
+/** @type {ReturnType<typeof makeDaemonicPersistencePowers> | null} */
+let daemonicPersistencePowers = null;
 
 // ---------------------------------------------------------------------------
 // Envelope I/O via issueCommand
@@ -768,11 +635,20 @@ const main = async () => {
     hostTrace(`Endo daemon (xs) stopping on PID ${pid}`);
   });
 
+  // Ensure the state path exists before we open the SQLite
+  // database file inside it.
+  await filePowers.makePath(config.statePath);
+  daemonDb = makeDaemonDatabase(config, { Database: XsDatabase });
+  petStorePowers = makePetStoreMaker(daemonDb);
+  daemonicPersistencePowers = makeDaemonicPersistencePowers(
+    daemonDb,
+    filePowers,
+    cryptoPowers,
+    config,
+  );
+
   await daemonicPersistencePowers.initializePersistence();
 
-  // Build the persistent pet-store DB after persistence dirs exist
-  // and assemble powers now that petStorePowers is ready.
-  petStorePowers = makePetStoreMaker(await makePersistentPetStoreDb());
   const powers = harden({
     crypto: cryptoPowers,
     petStore: petStorePowers,
