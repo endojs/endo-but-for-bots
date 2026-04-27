@@ -15043,6 +15043,9 @@ const rehydrateError = value => {
     // that pumps an inbound resolve re-entrantly inside sendEnvelope
     // can still find the matching entry.
     settlers.set(descriptorKey(replyDesc), { resolve, reject });
+    if (typeof globalThis.hostTrace === 'function') {
+      globalThis.hostTrace(`slot-client.deliver method=${method}`);
+    }
     sendEnvelope(VERB_DELIVER, bytes);
     return reply;
   };
@@ -15508,9 +15511,15 @@ harden(bootstrap);
    * @param {Uint8Array} payload
    */
   const sendEnvelope = (verb, payload) => {
+    // Don't `harden` the envelope object — XS marks `Uint8Array`
+    // indexed elements non-configurable, so `harden({ verb, payload })`
+    // throws "cannot configure property" when it tries to deep-
+    // freeze the payload.  Freezing the wrapper alone is enough;
+    // the writer doesn't need the payload immutable.
+    const env = Object.freeze({ verb, payload });
     try {
-      void writer.next(harden({ verb, payload }));
-    } catch (err) {
+      void writer.next(env);
+    } catch (_err) {
       // Writer closed; drop is best-effort.  Real errors surface
       // through the reader's end-of-stream path which triggers
       // `close` below.
@@ -39554,7 +39563,8 @@ const main = async () => {
     cancelled,
     {},
     {
-      defaultWorkerKind: 'locked',
+      defaultWorkerKind:
+        hostGetEnv('ENDO_DEFAULT_PLATFORM') === 'node' ? 'node' : 'locked',
       gcEnabled,
     },
   );
