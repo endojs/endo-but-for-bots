@@ -33,8 +33,9 @@
 
 import { randomBytes } from 'node:crypto';
 
-import { makeClient } from '@endo/ocapn';
+import { makeOcapn } from '@endo/ocapn';
 import { makeWebSocketNetLayer } from '@endo/ocapn/netlayer/ws';
+import { syrupCodec } from '@endo/ocapn/syrup';
 
 import { makeChatroom } from './backend.js';
 import { encodeBase64Url } from './base64url.js';
@@ -264,22 +265,38 @@ export const hostRoom = async ({
   const swissStr = makeFreshSwissString();
   const chatroom = makeChatroom(roomName);
 
-  const client = makeClient({
+  // Locator is mutated below to register the chatroom under its swissnum
+  // *after* makeOcapn returns; the new client API takes the locator at
+  // construction time but holds a live reference, so subsequent
+  // `locator.set` calls are visible to incoming bootstrap.fetch lookups.
+  const locator = new Map();
+  /** @type {{ netlayer?: Awaited<ReturnType<typeof makeWebSocketNetLayer>> }} */
+  const netlayerRef = {};
+
+  const client = await makeOcapn({
+    codec: syrupCodec,
+    locator,
     verbose: true,
     ...(captpVersion ? { captpVersion } : {}),
     logger: makeForwardingLogger('host-client', logSink),
+    network: handlers =>
+      makeWebSocketNetLayer({
+        handlers,
+        logger: makeForwardingLogger('host-netlayer', logSink),
+        specifiedHostname: bindHostname,
+        specifiedPort: bindPort,
+        ...(publicUrl ? { specifiedUrl: publicUrl } : {}),
+      }).then(netlayer => {
+        netlayerRef.netlayer = netlayer;
+        return netlayer;
+      }),
   });
-  client.registerSturdyRef(swissStr, chatroom);
+  locator.set(swissStr, chatroom);
 
-  const netlayer = await client.registerNetlayer(handlers =>
-    makeWebSocketNetLayer({
-      handlers,
-      logger: makeForwardingLogger('host-netlayer', logSink),
-      specifiedHostname: bindHostname,
-      specifiedPort: bindPort,
-      ...(publicUrl ? { specifiedUrl: publicUrl } : {}),
-    }),
-  );
+  if (!netlayerRef.netlayer) {
+    throw Error('makeWebSocketNetLayer did not resolve a netlayer');
+  }
+  const netlayer = netlayerRef.netlayer;
 
   const uri = formatLocator(netlayer.location, swissStr);
 
