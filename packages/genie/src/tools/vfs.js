@@ -84,8 +84,7 @@
  *   Return an async iterable of byte chunks for the given byte range.
  * @property {(path: string, content: string) => Promise<void>} writeFile
  *   Write `content` (UTF-8) to `path`, creating or overwriting.
- * @property {(path: string, opts?: VFSMkdirOptions) => Promise<boolean>}
- *   mkdir
+ * @property {(path: string, opts?: VFSMkdirOptions) => Promise<boolean>} mkdir
  *   Create a directory.  Returns `true` if a new directory was
  *   created, `false` if it already existed (when `recursive` is true).
  * @property {(path: string) => Promise<void>} unlink
@@ -99,6 +98,17 @@
  *   opts?: VFSReaddirOptions,
  * ) => AsyncIterable<VFSDirEntry>} readdir
  *   Yield directory entries as an async iterable stream.
+ * @property {string} sep
+ *   Path separator character (`'/'` for POSIX, platform-dependent
+ *   for Node).
+ * @property {(...parts: string[]) => string} join
+ *   Join path segments using the VFS separator.
+ * @property {(from: string, to: string) => string} relative
+ *   Compute the relative path from `from` to `to`.
+ * @property {(...paths: string[]) => string} resolve
+ *   Resolve a sequence of paths into an absolute path.  When the
+ *   VFS was created with a limiting root, the result is guaranteed
+ *   to stay under that root (throws otherwise).
  */
 
 // TODO VFS.readdir() should return an async stream of entries, not a promise-of-array

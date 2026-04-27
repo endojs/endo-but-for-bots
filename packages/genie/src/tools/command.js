@@ -34,6 +34,7 @@ import { spawn } from 'child_process';
 import * as fs from 'fs';
 import { join, resolve, relative } from 'path';
 
+import harden from '@endo/harden';
 import { M } from '@endo/patterns';
 import { makeTool } from './common.js';
 
@@ -227,6 +228,7 @@ const makeCommandTool = ({
    * @param {string} prog
    */
   const whichProgram = async prog => {
+    await Promise.resolve();
     const isWin = process.platform === 'win32';
     const pathDirs = searchPath.split(isWin ? ';' : ':');
     for (const dir of pathDirs) {

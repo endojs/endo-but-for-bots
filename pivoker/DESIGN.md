@@ -141,6 +141,19 @@ AGENT_NAME='claude'
 NEXT_TASK_DELAY=2m
 ```
 
+## Configuration Precedence
+
+Resolution order (highest wins), per `STANDARDS/operations.md`:
+
+1. Environment variables (`PIVOKER_*`, applied after `config.sh` is sourced)
+2. Per-project config file (`evoke/config.sh`)
+3. Hardcoded defaults in `common.sh`
+
+Every documented config variable has a matching `PIVOKER_<NAME>` env var
+(e.g. `PIVOKER_TASKS_IN`, `PIVOKER_AGENT_NAME`, `PIVOKER_NEXT_TASK_DELAY`).
+`PIVOKER_AGENT_ARGS` is split on whitespace into the `AGENT_ARGS` array.
+This mirrors devoker's `DEVOKER_*` env var layer.
+
 ## Safety: Killswitch
 
 Create `evoke/NOPE` to pause all evocations. All scripts check this file before proceeding. Delete it to resume.
@@ -163,11 +176,11 @@ Create `evoke/NOPE` to pause all evocations. All scripts check this file before 
 │   ├── hook.sh
 │   ├── notify.sh
 │   ├── ctl.sh
-│   └── common.sh
-├── STANDARDS.md          # Coding standards
+│   ├── common.sh
+│   └── STANDARDS.md      # Coding standards
 └── TODOs.md              # Alternative single-file task source
 ```
 
 ## Companion: notify-server
 
-An optional Go HTTP service (`notify_server/`) that acts as a notification proxy. It receives POSTs from `notify.sh`, persists them to a durable queue, and dispatches to configured backends (HTTP endpoints, shell commands, files) with retry logic. See [`notify_server/DESIGN.md`](notify_server/DESIGN.md) for details.
+An optional Go HTTP service (`notify_server/`) that acts as a notification proxy. It receives POSTs from `notify.sh`, persists them to a durable queue, and dispatches to configured backends (HTTP endpoints, shell commands, files) with retry logic. See [`notify_server/DESIGN.md`](../notify_server/DESIGN.md) for details.

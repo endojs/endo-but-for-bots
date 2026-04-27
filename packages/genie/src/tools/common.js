@@ -50,6 +50,7 @@
  * no explicit `desc` is provided.
  */
 
+import harden from '@endo/harden';
 import { M, mustMatch, getMethodGuardPayload } from '@endo/patterns';
 
 /** @import { InterfaceGuard, MethodGuard } from '@endo/patterns' */
@@ -59,7 +60,6 @@ import { M, mustMatch, getMethodGuardPayload } from '@endo/patterns';
  * @property {() => Iterable<string>} help
  * @property {() => string} [desc]
  * @property {MethodGuard} schema
- * @property
  */
 
 /**
@@ -68,7 +68,6 @@ import { M, mustMatch, getMethodGuardPayload } from '@endo/patterns';
  * @property {() => string} [desc]
  * @property {InterfaceGuard} schema
  * @property {(args: any) => Promise<any>} execute
- * @property
  */
 
 /**
@@ -117,7 +116,7 @@ export const makeTool = (name, { execute, ...spec }) => {
     }),
     async execute(args) {
       let didUnJSON = false;
-      do {
+      for (;;) {
         try {
           mustMatch(harden([args]), paramsPattern, `${name} args`);
           break;
@@ -154,7 +153,7 @@ export const makeTool = (name, { execute, ...spec }) => {
           // fallthrough: no fixup, final throw to caller
           throw err;
         }
-      } while (true);
+      }
 
       return execute(args);
     },

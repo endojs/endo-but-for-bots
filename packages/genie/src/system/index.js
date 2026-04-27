@@ -1,3 +1,5 @@
+// @ts-check
+
 /**
  * Claw-like system prompt builder
  */
@@ -7,6 +9,8 @@
 //       system prompt parts and system prompt accessories along the way.
 //
 // [1]: https://github.com/localgpt-app/localgpt
+
+import harden from '@endo/harden';
 
 /**
  * Build the full system prompt for the agent
@@ -24,7 +28,7 @@
  * @param {string} [options.securityNotes] - Custom security notes
  * @returns {Generator<string>} - Generates sections or lines of system prompt, caller should newline join to build a final string
  */
-export default function* buildSystemPrompt(options = {}) {
+function* buildSystemPrompt(options = {}) {
   const {
     hostname = 'unknown',
     currentTime = 'unknown',
@@ -261,6 +265,9 @@ function* heartbeat() {
   ]);
 }
 
+harden(buildSystemPrompt);
+export default buildSystemPrompt;
+
 /**
  * Memory recall guidance section
  *
@@ -279,17 +286,17 @@ function* memory(toolList) {
       'Sessions are auto-saved to memory/ when starting a new session.',
   ]);
 
-  if (toolList.some(({ name }) => name === 'memory_search')) {
+  if (toolList.some(({ name }) => name === 'memorySearch')) {
     yield '';
     yield* demarcatedSection(2, 'Memory Recall', [
       'Before answering questions about prior work, decisions, dates, people, preferences, ' +
-        'or todos: run memory_search on MEMORY.md + memory/*.md first.',
+        'or todos: run memorySearch on MEMORY.md + memory/*.md first.',
       'If low confidence after search, say you checked but found no relevant notes.',
     ]);
 
-    if (toolList.some(({ name }) => name === 'memory_get')) {
+    if (toolList.some(({ name }) => name === 'memoryGet')) {
       yield '';
-      yield 'Then use memory_get to pull only the needed lines and keep context small.';
+      yield 'Then use memoryGet to pull only the needed lines and keep context small.';
     }
   }
 }

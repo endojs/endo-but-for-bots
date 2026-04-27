@@ -10,6 +10,8 @@
  * @module
  */
 
+import harden from '@endo/harden';
+
 import { tokenize } from './tokenizer.js';
 import { parseSelector, matchesCompound } from './selector.js';
 

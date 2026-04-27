@@ -16,6 +16,7 @@
  */
 
 import { resolve, dirname, relative, basename } from 'path';
+import harden from '@endo/harden';
 import { M } from '@endo/patterns';
 
 import { makeTool } from './common.js';
@@ -122,6 +123,8 @@ const makeFileTools = (options = {}) => {
      * @returns {Promise<{success: boolean, path: string, content: string, bytesRead: number, offset?: number, limit?: number}>}
      */
     async execute({ path, offset = 0, limit = maxReadBytes }) {
+      await Promise.resolve();
+
       if (limit > maxReadBytes) {
         throw new Error(
           `Limit exceeds platform max read limit of ${maxReadBytes} bytes`,
@@ -219,6 +222,8 @@ const makeFileTools = (options = {}) => {
      * @returns {Promise<{success: boolean, path: string, bytesWritten: number}>}
      */
     async execute({ path, content }) {
+      await Promise.resolve();
+
       const fullPath = safePath(path, resolvedRoot);
 
       try {
@@ -282,6 +287,8 @@ const makeFileTools = (options = {}) => {
      * @returns {Promise<{success: boolean, path: string, replaced: boolean, count: number}>}
      */
     async execute({ path, old_string, new_string, replace_all = false }) {
+      await Promise.resolve();
+
       const fullPath = safePath(path, resolvedRoot);
 
       try {
@@ -348,6 +355,8 @@ const makeFileTools = (options = {}) => {
      * @returns {Promise<{success: boolean, path: string}>}
      */
     async execute({ path }) {
+      await Promise.resolve();
+
       const fullPath = safePath(path, resolvedRoot);
 
       try {
@@ -399,6 +408,8 @@ const makeFileTools = (options = {}) => {
      * @returns {Promise<{success: boolean, path: string, type: string, size: number, modified: string}>}
      */
     async execute({ path }) {
+      await Promise.resolve();
+
       const fullPath = safePath(path, resolvedRoot);
 
       try {
@@ -468,6 +479,8 @@ const makeFileTools = (options = {}) => {
      * @returns {Promise<{success: boolean, path: string, entries: Array<{name: string, type: string, size: number}>}>}
      */
     async execute({ path, recursive = false, glob: globPattern }) {
+      await Promise.resolve();
+
       const fullPath = safePath(path, resolvedRoot);
 
       try {
@@ -545,6 +558,8 @@ const makeFileTools = (options = {}) => {
      * @returns {Promise<{success: boolean, path: string, created: boolean}>}
      */
     async execute({ path, recursive: rec = false }) {
+      await Promise.resolve();
+
       const fullPath = safePath(path, resolvedRoot);
 
       try {
@@ -591,6 +606,8 @@ const makeFileTools = (options = {}) => {
      * @returns {Promise<{success: boolean, path: string}>}
      */
     async execute({ path, recursive: rec = false }) {
+      await Promise.resolve();
+
       const fullPath = safePath(path, resolvedRoot);
 
       // Refuse to remove the root itself.

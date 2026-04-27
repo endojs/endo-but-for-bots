@@ -10,6 +10,8 @@
  * @module
  */
 
+import harden from '@endo/harden';
+
 /**
  * @typedef {{
  *   tag?: string,

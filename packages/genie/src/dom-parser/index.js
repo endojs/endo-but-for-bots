@@ -12,6 +12,8 @@
  * @module
  */
 
+import harden from '@endo/harden';
+
 import { buildDocument, DomDocument, DomElement } from './document.js';
 
 export { DomDocument, DomElement };

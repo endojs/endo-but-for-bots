@@ -1,10 +1,16 @@
 #!/usr/bin/env bash
 
-set -e
+set -euo pipefail
 
-PIVOKER_DIR="$(cd "$(dirname ${BASH_SOURCE[0]}"")" && pwd)"
+# shellcheck source=common.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
+
+if $DEBUG_CTL; then
+  set -x
+fi
 
 parse_git_ssh_url() {
+  local hostname path username
   case "$1" in
     *://*)
       # ssh://user@host/path/repo.git
@@ -29,25 +35,25 @@ parse_git_ssh_url() {
 }
 
 vokers() {
-  git config list \
-  | grep '^remote\..*\.pivoker' \
-  | sed \
-    -e 's/^remote\.//' \
-    -e 's/\.pivoker=.*$//'
+  git config list |
+    grep '^remote\..*\.pivoker' |
+    sed \
+      -e 's/^remote\.//' \
+      -e 's/\.pivoker=.*$//'
 }
 
 list_vokers() {
   declare -a names
-  names=( "$@" )
-  if [ "${#names[@]}" -eq 0 ]; then
-    names=$(vokers)
+  names=("$@")
+  if [[ "${#names[@]}" -eq 0 ]]; then
+    mapfile -t names < <(vokers)
   fi
 
   echo "name user host path"
 
   for name in "${names[@]}"; do
     git_url=$(git config "remote.${name}.url")
-    url_parts=( $(parse_git_ssh_url "$git_url") )
+    mapfile -t url_parts < <(parse_git_ssh_url "$git_url" | tr ' ' '\n')
     rem_user="${url_parts[0]}"
     rem_host="${url_parts[1]}"
     rem_path="${url_parts[2]}"
@@ -57,17 +63,17 @@ list_vokers() {
 
 within_every() {
   declare -a names
-  while [ $# -gt 0 ]; do
-    if [ $1 == "--" ]; then
+  while [[ $# -gt 0 ]]; do
+    if [[ "$1" == "--" ]]; then
       shift
       break
     fi
-    names+=($1)
+    names+=("$1")
     shift
   done
-  cmd="$@"
-  if [ "${#names[@]}" -eq 0 ]; then
-    names=$(vokers)
+  local cmd="$*"
+  if [[ "${#names[@]}" -eq 0 ]]; then
+    mapfile -t names < <(vokers)
   fi
   for name in "${names[@]}"; do
     within "$name" "$cmd"
@@ -75,36 +81,36 @@ within_every() {
 }
 
 within() {
-  name=$1
+  local name=$1
   shift
-  cmd="$@"
+  local cmd="$*"
 
   git_url=$(git config "remote.${name}.url")
-  url_parts=( $(parse_git_ssh_url "$git_url") )
+  mapfile -t url_parts < <(parse_git_ssh_url "$git_url" | tr ' ' '\n')
   rem_user="${url_parts[0]}"
   rem_host="${url_parts[1]}"
   rem_path="${url_parts[2]}"
 
-  if [ -z "$rem_host" ]; then
+  if [[ -z "$rem_host" ]]; then
     echo "WARN: unsure how to enter remote.${name}"
-    continue
+    return
   fi
 
   rem_cmd="$cmd"
-  if [ -n $rem_path ]; then
-    rem_cmd="bash -c 'cd "$rem_path" && $rem_cmd'"
+  if [[ -n "$rem_path" ]]; then
+    rem_cmd="bash -c 'cd \"$rem_path\" && $rem_cmd'"
   fi
 
   declare -a ssh_cmd
   ssh_cmd+=('ssh' "$rem_host")
-  if [ -n "$rem_user" ]; then
+  if [[ -n "$rem_user" ]]; then
     ssh_cmd+=('-l' "$rem_user")
   fi
-  "${ssh_cmd[@]}" -- $rem_cmd
+  "${ssh_cmd[@]}" -- "$rem_cmd"
 }
 
 usage() {
-  prog="pivoker_ctl.sh"
+  prog="pivoker/ctl.sh"
   echo "Usage: $prog vokers"
   echo "       $prog within [ <names> ] -- <cmd>"
   echo "       $prog status [<name>]"
@@ -112,7 +118,7 @@ usage() {
   echo "       $prog run [<name>]"
 }
 
-if [ $# -eq 0 ]; then
+if [[ "$#" -eq 0 ]]; then
   usage
   exit 0
 fi
@@ -130,31 +136,31 @@ case "$cmd" in
     ;;
 
   status)
-    if [ $# -gt 0 ]; then
+    if [[ "$#" -gt 0 ]]; then
       name="$1"
     else
-      read name < <(vokers)
+      read -r name < <(vokers)
     fi
     within "$name" systemctl --user status pivoker
     ;;
 
   log)
-    if [ $# -gt 0 ]; then
+    if [[ "$#" -gt 0 ]]; then
       name="$1"
     else
-      read name < <(vokers)
+      read -r name < <(vokers)
     fi
     within "$name" journalctl --user -u pivoker "$@"
     ;;
 
   run)
-    rem_pivker_rel=${PIVOKER_DIR#$(git rev-parse --show-toplevel)/}
-    if [ $# -gt 0 ]; then
+    rem_pivker_rel=${PIVOKER_DIR#"$(git rev-parse --show-toplevel)"/}
+    if [[ "$#" -gt 0 ]]; then
       name="$1"
     else
-      read name < <(vokers)
+      read -r name < <(vokers)
     fi
-    within "$name" ./$rem_pivker_rel/run.sh
+    within "$name" "./$rem_pivker_rel/run.sh"
     ;;
 
   *)

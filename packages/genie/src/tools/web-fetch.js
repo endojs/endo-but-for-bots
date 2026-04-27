@@ -8,6 +8,7 @@
  * Security: Rate limiting and content validation.
  */
 
+import harden from '@endo/harden';
 import { M } from '@endo/patterns';
 
 import { makeTool } from './common.js';
@@ -43,6 +44,8 @@ export const webFetch = makeTool('webFetch', {
    * @returns {Promise<{success: boolean, url: string, status: number, content: string, contentType: string}>}
    */
   async execute({ url, timeout = 30_000 }) {
+    await Promise.resolve();
+
     try {
       const response = await fetch(url, {
         method: 'GET',

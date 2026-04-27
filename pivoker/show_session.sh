@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 
-set -e
+set -euo pipefail
+
+DEBUG_SHOW_SESSION=${DEBUG_SHOW_SESSION:-false}
+if $DEBUG_SHOW_SESSION; then
+  set -x
+fi
 
 jq -r 'select(.type == "message")
 

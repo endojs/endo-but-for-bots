@@ -14,14 +14,14 @@
  * implementation.
  */
 
-import { basename, dirname, join, relative, resolve } from 'path';
-
 import { E } from '@endo/far';
+import harden from '@endo/harden';
 import { M } from '@endo/patterns';
 
 import { makeTool } from './common.js';
 import { makeNodeVFS } from './vfs-node.js';
 
+/** @import { Tool } from './common.js' */
 /** @import { VFS } from './vfs.js' */
 
 /**
@@ -89,23 +89,21 @@ async function* streamLines(chunks) {
 }
 
 /**
- * Resolve `userPath` against `root` and assert the result stays under `root`.
+ * Resolve `userPath` against the VFS root and assert the result stays
+ * under it.  Null bytes are rejected before delegation to the VFS.
  *
- * @param {string} root - The path supplied by the caller.
+ * @param {VFS} vfs - The virtual filesystem (whose `resolve` enforces
+ *   the root constraint).
  * @param {string} userPath - The path supplied by the caller.
  * @returns {string} The resolved absolute path.
  */
-const safePath = (root, userPath) => {
+const safePath = (vfs, userPath) => {
   if (userPath.includes('\0')) {
     throw new Error('Invalid path: null bytes not allowed');
   }
-  const resolved = resolve(root, userPath);
-  const rel = relative(root, resolved);
-  // If the relative path starts with ".." or is absolute, it escapes the root.
-  if (rel.startsWith('..') || resolve(rel) === rel) {
-    throw new Error(`Invalid path: must resolve under root (${root})`);
-  }
-  return resolved;
+  // VFS.resolve() resolves against its root and throws on traversal
+  // escape, so no additional check is needed here.
+  return vfs.resolve(userPath);
 };
 
 /**
@@ -117,6 +115,7 @@ const safePath = (root, userPath) => {
  * @yields {string} Absolute file paths.
  */
 async function* expandPaths(roots, vfs) {
+  await Promise.resolve();
   for (const searchPath of roots) {
     try {
       const info = await vfs.stat(searchPath);
@@ -125,7 +124,7 @@ async function* expandPaths(roots, vfs) {
       } else if (info.type === 'directory') {
         for await (const entry of vfs.readdir(searchPath)) {
           if (entry.name.endsWith('.md')) {
-            yield join(searchPath, entry.name);
+            yield vfs.join(searchPath, entry.name);
           }
         }
       }
@@ -149,16 +148,20 @@ async function* expandPaths(roots, vfs) {
  *   in sync.  When omitted, the built-in substring search is used.
  * @param {VFS} [options.vfs] - Virtual filesystem backend.  Defaults to
  *   a Node.js `fs`-backed implementation.
+ * @returns {{
+ *   memoryGet: Tool,
+ *   memorySet: Tool,
+ *   memorySearch: Tool,
+ *   indexing: Promise<void>
+ * }} Tools and a promise that resolves when the initial index seed pass completes.
  */
 const makeMemoryTools = (options = {}) => {
   const {
     root = process.cwd(),
+    vfs = makeNodeVFS(root),
+    searchBackend = makeSubstringBackend(vfs),
     watchPaths = ['MEMORY.md', 'memory'],
-    vfs = makeNodeVFS(),
-    searchBackend = makeSubstringBackend(vfs, resolve(root)),
   } = options;
-
-  const resolvedRoot = resolve(root);
 
   // -- Index queue and worker --------------------------------------------------
   // The index queue holds absolute file paths awaiting (re-)indexing.
@@ -186,12 +189,13 @@ const makeMemoryTools = (options = {}) => {
    * @returns {Promise<void>}
    */
   const drainQueue = async priorPaths => {
+    await Promise.resolve();
     while (indexQueue.length > 0) {
       const filePath = /** @type {string} */ (indexQueue.shift());
       try {
         const content = await vfs.readFile(filePath);
         // Derive the relative path for backend storage.
-        const relPath = relative(resolvedRoot, filePath);
+        const relPath = vfs.relative(vfs.resolve('.'), filePath);
         await E(searchBackend).index(relPath, content);
         priorPaths.delete(relPath);
       } catch {
@@ -236,7 +240,7 @@ const makeMemoryTools = (options = {}) => {
   };
 
   // -- Initialization: seed the index from watchPaths -------------------------
-  const initPaths = watchPaths.map(p => safePath(resolvedRoot, p));
+  const initPaths = watchPaths.map(p => safePath(vfs, p));
 
   /**
    * Collect all prior indexed paths from the backend and discover all
@@ -304,7 +308,9 @@ const makeMemoryTools = (options = {}) => {
      * @returns {Promise<{success: boolean, path: string, content: string, from?: number, lines?: number}>}
      */
     async execute({ path, from = 1, lines }) {
-      const fullPath = safePath(resolvedRoot, path);
+      await Promise.resolve();
+
+      const fullPath = safePath(vfs, path);
       const collected = [];
 
       try {
@@ -383,8 +389,11 @@ const makeMemoryTools = (options = {}) => {
      * @returns {Promise<{success: boolean, path: string, bytesWritten: number}>}
      */
     async execute({ path, content, append = false }) {
-      const fullPath = safePath(resolvedRoot, path);
-      const dir = dirname(fullPath);
+      await Promise.resolve();
+
+      const fullPath = safePath(vfs, path);
+      const lastSep = fullPath.lastIndexOf(vfs.sep);
+      const dir = lastSep > 0 ? fullPath.slice(0, lastSep) : vfs.sep;
 
       try {
         await vfs.mkdir(dir, { recursive: true });
@@ -456,6 +465,7 @@ const makeMemoryTools = (options = {}) => {
      * @returns {Promise<{success: boolean, query: string, limit: number, results: Array<{file: string, line: number, content: string}>}>}
      */
     async execute({ query, limit = 5, waitForIndex = true }) {
+      await Promise.resolve();
       if (waitForIndex) {
         // Wait for the initial seed pass to finish, then for any
         // in-flight index worker cycle.
@@ -469,7 +479,7 @@ const makeMemoryTools = (options = {}) => {
     },
   });
 
-  return harden({ memoryGet, memorySet, memorySearch });
+  return harden({ memoryGet, memorySet, memorySearch, indexing: seeding });
 };
 harden(makeMemoryTools);
 
@@ -486,12 +496,11 @@ harden(makeMemoryTools);
  * during search.
  *
  * @param {VFS} vfs - Virtual filesystem used to read files during
- *   search.
- * @param {string} root - Absolute path used to resolve relative
- *   filenames when reading during search.
+ *   search.  The VFS path utilities (`resolve`, `sep`) are used
+ *   to map relative index entries back to absolute paths.
  * @returns {SearchBackend}
  */
-const makeSubstringBackend = (vfs, root) => {
+const makeSubstringBackend = vfs => {
   /**
    * Search a single file for lines matching `query`
    * (case-insensitive).  Reads the file as a stream to avoid
@@ -503,6 +512,7 @@ const makeSubstringBackend = (vfs, root) => {
    * @yields {SearchResult}
    */
   async function* searchInFile(relPath, absPath, queryLower) {
+    await Promise.resolve();
     try {
       const stream = vfs.createReadStream(absPath);
       let lineNum = 0;
@@ -510,7 +520,7 @@ const makeSubstringBackend = (vfs, root) => {
         lineNum += 1;
         if (line.toLowerCase().includes(queryLower)) {
           yield {
-            file: basename(relPath),
+            file: relPath.slice(relPath.lastIndexOf(vfs.sep) + 1),
             line: lineNum,
             content: line.trim(),
           };
@@ -532,12 +542,13 @@ const makeSubstringBackend = (vfs, root) => {
      * @returns {Promise<Array<SearchResult>>}
      */
     async search(query, opts = {}) {
+      await Promise.resolve();
       const { limit = Infinity } = opts;
       const queryLower = query.toLowerCase();
       /** @type {Array<SearchResult>} */
       const results = [];
       for (const relPath of paths) {
-        const absPath = resolve(root, relPath);
+        const absPath = vfs.resolve(relPath);
         for await (const result of searchInFile(relPath, absPath, queryLower)) {
           results.push(result);
           if (results.length >= limit) {
