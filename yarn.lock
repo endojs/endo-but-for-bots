@@ -1677,6 +1677,7 @@ __metadata:
     "@endo/promise-kit": "workspace:^"
     "@endo/relay-server": "workspace:^"
     "@endo/ses-ava": "workspace:^"
+    "@endo/slots": "workspace:^"
     "@endo/stream": "workspace:^"
     "@endo/stream-node": "workspace:^"
     "@endo/where": "workspace:^"
@@ -2370,6 +2371,29 @@ __metadata:
     c8: "catalog:dev"
     eslint: "catalog:dev"
     tsd: "catalog:dev"
+    typescript: "npm:~5.9.2"
+  languageName: unknown
+  linkType: soft
+
+"@endo/slots@workspace:^, @endo/slots@workspace:packages/slots":
+  version: 0.0.0-use.local
+  resolution: "@endo/slots@workspace:packages/slots"
+  dependencies:
+    "@endo/errors": "workspace:^"
+    "@endo/eventual-send": "workspace:^"
+    "@endo/far": "workspace:^"
+    "@endo/harden": "workspace:^"
+    "@endo/init": "workspace:^"
+    "@endo/lockdown": "workspace:^"
+    "@endo/marshal": "workspace:^"
+    "@endo/pass-style": "workspace:^"
+    "@endo/promise-kit": "workspace:^"
+    "@endo/ses-ava": "workspace:^"
+    "@endo/stream": "workspace:^"
+    ava: "catalog:dev"
+    c8: "catalog:dev"
+    eslint: "catalog:dev"
+    ses: "workspace:^"
     typescript: "npm:~5.9.2"
   languageName: unknown
   linkType: soft

@@ -4,8 +4,23 @@ use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
 use tokio::task::JoinHandle;
 
+use slots::{SessionId, SlotMachine};
+
 use crate::mailbox::{self, Mailbox, MailboxReceiver};
 use crate::types::{Handle, MeterMode, MeterState, Message, RateLimit, WorkerInfo};
+
+fn session_for_handle(handle: Handle) -> SessionId {
+    SessionId::from_label(&format!("worker-{handle}"))
+}
+
+/// Per-edge session id: each ordered (self, peer) pair gets its own
+/// session in the slot machine.  This lets the bootstrap pre-binding
+/// (see `Supervisor::register`) allocate fresh krefs per daemon↔worker
+/// edge instead of trying to share a single "daemon" session whose
+/// `Remote pos 1` would conflict on every additional worker.
+fn session_for_edge(self_handle: Handle, peer_handle: Handle) -> SessionId {
+    SessionId::from_label(&format!("edge-{self_handle}-with-{peer_handle}"))
+}
 
 /// State for a suspended worker.
 ///
@@ -36,6 +51,10 @@ pub struct Supervisor {
     outbox: Mutex<Option<Mailbox>>,
     next_handle: AtomicI64,
     done: Mutex<Option<JoinHandle<()>>>,
+    /// Optional slot-machine.  Present when the daemon has wired one
+    /// in at boot; absent for supervisors used in isolation (unit
+    /// tests, tools that don't care about capability translation).
+    slot_machine: OnceLock<Arc<SlotMachine>>,
 }
 
 impl Supervisor {
@@ -53,8 +72,20 @@ impl Supervisor {
             outbox: Mutex::new(Some(outbox_tx)),
             next_handle: AtomicI64::new(1),
             done: Mutex::new(None),
+            slot_machine: OnceLock::new(),
         });
         (sup, outbox_rx)
+    }
+
+    /// Install a slot machine.  Can only be called once per supervisor.
+    /// Subsequent `register` / `unregister` calls will open / close the
+    /// corresponding slot-machine session.
+    pub fn attach_slot_machine(&self, sm: Arc<SlotMachine>) {
+        let _ = self.slot_machine.set(sm);
+    }
+
+    pub fn slot_machine(&self) -> Option<&Arc<SlotMachine>> {
+        self.slot_machine.get()
     }
 
     pub fn alloc_handle(&self) -> Handle {
@@ -64,8 +95,51 @@ impl Supervisor {
     pub fn register(&self, h: Handle, info: Option<WorkerInfo>) -> MailboxReceiver {
         let (tx, rx) = mailbox::mailbox();
         self.inboxes.write().unwrap_or_else(|e| e.into_inner()).insert(h, tx);
-        if let Some(info) = info {
-            self.workers.write().unwrap_or_else(|e| e.into_inner()).insert(h, info);
+        if let Some(ref info) = info {
+            self.workers
+                .write()
+                .unwrap_or_else(|e| e.into_inner())
+                .insert(h, info.clone());
+        }
+        if let Some(sm) = self.slot_machine.get() {
+            let label = info
+                .as_ref()
+                .map(|i| i.cmd.clone())
+                .unwrap_or_else(|| format!("worker-{h}"));
+            // Slot-machine's open_session is idempotent, so re-registering
+            // a handle (e.g., after resume) keeps the c-list intact.
+            let _ = sm.open_session(session_for_handle(h), &label);
+
+            // Bootstrap-handshake pre-registration: when registering a
+            // worker (handle ≥ 2), pair its session with the daemon's
+            // session (handle 1) under the position-1 root convention
+            // from `packages/slots/src/bootstrap.js`.  Each peer
+            // exports its root as `Local Object 1` and addresses the
+            // other peer's root as `Remote Object 1`; the kref
+            // registry needs both sides bound before any wire traffic.
+            //
+            // We allocate a *fresh per-edge* session pair so each
+            // daemon↔worker edge has its own kref bindings.  Sharing a
+            // single "daemon" session across workers would cause the
+            // daemon's `Remote pos 1 → kref` binding from the *first*
+            // worker to silently win over every subsequent worker
+            // (`bind_session_kref` returns `Conflict`, ignored), so
+            // sends to later workers translated to the wrong target
+            // and looped.
+            if h >= 2 {
+                let daemon_edge = session_for_edge(1, h);
+                let worker_edge = session_for_edge(h, 1);
+                let _ = sm.open_session(daemon_edge, "daemon");
+                let _ = sm.open_session(worker_edge, &label);
+                let local = slots::vref::Vref::object_local(1);
+                let remote = slots::vref::Vref::object_remote(1);
+                if let Ok(k_daemon) = sm.intern_local(daemon_edge, &local) {
+                    if let Ok(k_worker) = sm.intern_local(worker_edge, &local) {
+                        let _ = sm.bind_session_kref(daemon_edge, &remote, k_worker);
+                        let _ = sm.bind_session_kref(worker_edge, &remote, k_daemon);
+                    }
+                }
+            }
         }
         rx
     }
@@ -75,6 +149,14 @@ impl Supervisor {
         self.workers.write().unwrap_or_else(|e| e.into_inner()).remove(&h);
         self.parents.write().unwrap_or_else(|e| e.into_inner()).remove(&h);
         self.meters.write().unwrap_or_else(|e| e.into_inner()).remove(&h);
+        if let Some(sm) = self.slot_machine.get() {
+            let _ = sm.close_session(session_for_handle(h));
+            // Tear down the per-edge sessions paired with the daemon.
+            if h >= 2 {
+                let _ = sm.close_session(session_for_edge(1, h));
+                let _ = sm.close_session(session_for_edge(h, 1));
+            }
+        }
     }
 
     pub fn set_parent(&self, child: Handle, parent: Handle) {
@@ -305,7 +387,7 @@ pub fn start_routing(
     *sup.done.lock().unwrap_or_else(|e| e.into_inner()) = Some(handle);
 }
 
-fn route_message(sup: &Arc<Supervisor>, msg: Message, callbacks: &RoutingCallbacks) {
+fn route_message(sup: &Arc<Supervisor>, mut msg: Message, callbacks: &RoutingCallbacks) {
     if is_debug() {
         eprintln!(
             "endor: route from={} to={} verb={} nonce={}",
@@ -315,6 +397,48 @@ fn route_message(sup: &Arc<Supervisor>, msg: Message, callbacks: &RoutingCallbac
     if msg.to == 0 {
         (callbacks.on_control)(msg);
         return;
+    }
+
+    // Slot-machine splice: for capability-bearing verbs, translate
+    // descriptors in the payload through the kref registry before
+    // forwarding.  Failure modes (decode error, missing session) fall
+    // through to pass-the-bytes routing, so legacy CapTP-style
+    // payloads keep working while slot-machine is the path of choice.
+    if let Some(sm) = sup.slot_machine() {
+        if slots::wire::is_slot_verb(&msg.envelope.verb) && msg.from != 0 && msg.to != 0 {
+            // Each ordered (sender, recipient) pair has its own
+            // per-edge session in the slot machine, so the bootstrap
+            // pre-binding for the daemon↔worker edge does not collide
+            // with any other worker's binding.
+            let from = session_for_edge(msg.from, msg.to);
+            let to = session_for_edge(msg.to, msg.from);
+            match msg.envelope.verb.as_str() {
+                slots::wire::VERB_DELIVER => {
+                    if let Ok(out) =
+                        slots::wire::translate::translate_deliver(sm, from, to, &msg.envelope.payload)
+                    {
+                        msg.envelope.payload = out;
+                    }
+                }
+                slots::wire::VERB_RESOLVE => {
+                    if let Ok(out) =
+                        slots::wire::translate::translate_resolve(sm, from, to, &msg.envelope.payload)
+                    {
+                        msg.envelope.payload = out;
+                    }
+                }
+                slots::wire::VERB_DROP => {
+                    let _ = slots::wire::translate::absorb_drop(sm, from, &msg.envelope.payload);
+                    // drop never forwards — the supervisor's work is done.
+                    return;
+                }
+                slots::wire::VERB_ABORT => {
+                    let _ = sm.close_session(from);
+                    // Abort still forwards so the destination can notice.
+                }
+                _ => {}
+            }
+        }
     }
 
     // Check if the target is suspended — if so, trigger resume.

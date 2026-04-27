@@ -71,6 +71,7 @@
     "@endo/platform": "workspace:^",
     "@endo/promise-kit": "workspace:^",
     "@endo/relay-server": "workspace:^",
+    "@endo/slots": "workspace:^",
     "@endo/stream": "workspace:^",
     "@endo/stream-node": "workspace:^",
     "@endo/where": "workspace:^",

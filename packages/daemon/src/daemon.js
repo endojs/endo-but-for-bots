@@ -2266,7 +2266,7 @@ const makeDaemonCore = async (
       makeIdentifiedWorker(
         formulaNumber,
         context,
-        formula.kind,
+        formula.kind ?? defaultWorkerKind,
         formula.trustedShims,
         formula.label,
       ),
@@ -3351,7 +3351,7 @@ const makeDaemonCore = async (
     {
       trustedShims,
       label = '<untitled>',
-      kind,
+      kind = defaultWorkerKind,
       nodeNumber = localNodeNumber,
     } = {},
   ) => {

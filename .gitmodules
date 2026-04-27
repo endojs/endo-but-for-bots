@@ -1,0 +1,3 @@
+[submodule "c/moddable"]
+	path = c/moddable
+	url = https://github.com/moddable-opensource/moddable
