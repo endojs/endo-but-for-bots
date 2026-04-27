@@ -1,5 +1,5 @@
 import { ZERO_N } from '@endo/nat';
-import { makeCodec, makeListCodecFromEntryCodec } from '../syrup/codec.js';
+import { makeCodec } from '../syrup/codec.js';
 
 /** @import { SyrupCodec } from '../syrup/codec.js' */
 
@@ -46,18 +46,6 @@ export const NonNegativeIntegerCodec = makeCodec('NonNegativeInteger', {
 });
 
 /** @type {SyrupCodec} */
-export const NonNegativeIntegerListCodec = makeListCodecFromEntryCodec(
-  'NonNegativeIntegerList',
-  NonNegativeIntegerCodec,
-);
-
-/** @type {SyrupCodec} */
-export const PositiveIntegerListCodec = makeListCodecFromEntryCodec(
-  'PositiveIntegerList',
-  PositiveIntegerCodec,
-);
-
-/** @type {SyrupCodec} */
 export const FalseCodec = makeCodec('False', {
   write: (value, syrupWriter) => {
     if (value) {
@@ -73,36 +61,6 @@ export const FalseCodec = makeCodec('False', {
     return value;
   },
 });
-
-/**
- * Syrup encoding of either `false` or the shape produced by `childCodec`.
- * On read, if `peekTypeHint() === 'boolean'`, decodes with {@link FalseCodec};
- * otherwise decodes with `childCodec`. On write, `value === false` uses
- * {@link FalseCodec}; otherwise `childCodec.write`.
- *
- * @param {string} codecName
- * @param {SyrupCodec} childCodec
- * @returns {SyrupCodec}
- */
-export const makeOcapnFalseForOptionalCodec = (codecName, childCodec) => {
-  /** @type {SyrupCodec} */
-  return makeCodec(codecName, {
-    read: syrupReader => {
-      const hint = syrupReader.peekTypeHint();
-      if (hint === 'boolean') {
-        return FalseCodec.read(syrupReader);
-      }
-      return childCodec.read(syrupReader);
-    },
-    write: (value, syrupWriter) => {
-      if (value === false) {
-        FalseCodec.write(false, syrupWriter);
-      } else {
-        childCodec.write(value, syrupWriter);
-      }
-    },
-  });
-};
 
 /**
  * @param {string} codecName
@@ -121,6 +79,7 @@ export const makeStructCodecForValues = (codecName, getValuesCodec) => {
       while (!syrupReader.peekDictionaryEnd()) {
         // OCapN Structs are always string keys.
         const start = syrupReader.index;
+        /** @type {string} */
         const key = syrupReader.readString();
         if (lastKey !== undefined) {
           if (key === lastKey) {
@@ -144,9 +103,9 @@ export const makeStructCodecForValues = (codecName, getValuesCodec) => {
     },
     write(value, syrupWriter) {
       const ValuesCodec = getValuesCodec();
-      syrupWriter.enterDictionary();
       const keys = Object.keys(value);
       keys.sort();
+      syrupWriter.enterDictionary(keys.length);
       for (const key of keys) {
         syrupWriter.writeString(key);
         // Value can be any Passable.
