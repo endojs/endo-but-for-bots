@@ -8,12 +8,13 @@ import { E, Far } from '@endo/far';
 import { makeMarshal } from '@endo/marshal';
 import { makePromiseKit } from '@endo/promise-kit';
 import { makeError, q, X } from '@endo/errors';
+import { ZipWriter } from '@endo/zip/writer.js';
 import {
   checkinTree as platformCheckinTree,
   snapshotTreeMethods,
 } from '@endo/platform/fs/lite';
 import { makeRefReader, makeRefIterator } from './ref-reader.js';
-import { makeIteratorRef } from './reader-ref.js';
+import { makeIteratorRef, makeReaderRef } from './reader-ref.js';
 import { makeDirectoryMaker } from './directory.js';
 import { makeDeferredTasks } from './deferred-tasks.js';
 import { assertMailboxStoreName, makeMailboxMaker } from './mail.js';
@@ -82,7 +83,7 @@ import {
 /** @import { Passable } from '@endo/pass-style' */
 /** @import { ERef, FarRef } from '@endo/eventual-send' */
 /** @import { PromiseKit } from '@endo/promise-kit' */
-/** @import { AgentDeferredTaskParams, Builtins, CapTpConnectionRegistrar, Context, Controller, DaemonCore, DaemonCoreExternal, DaemonicPowers, DeferredTasks, DirectoryFormula, EndoBootstrap, EndoDirectory, EndoFormula, EndoGateway, EndoGreeter, EndoGuest, EndoHost, EndoInspector, EndoNetwork, EndoPeer, EndoReadable, EndoWorker, EvalFormula, FarContext, Formula, FormulaIdentifier, FormulaNumber, FormulaMakerTable, FormulateResult, GuestFormula, HandleFormula, HostFormula, Invitation, InvitationDeferredTaskParams, InvitationFormula, KnownEndoInspectors, KnownPeersStore, LookupFormula, LoopbackNetworkFormula, MailboxStoreFormula, MailHubFormula, MakeBundleFormula, MakeCapletDeferredTaskParams, MakeUnconfinedFormula, MarshalDeferredTaskParams, MessageFormula, Name, NameHub, NamePath, NameOrPath, NodeNumber, PetName, PeerFormula, PeerInfo, PetInspectorFormula, PetStore, PetStoreFormula, PromiseFormula, Provide, ReadableBlobFormula, ResolverFormula, Sha256, Specials, MarshalFormula, WeakMultimap, WorkerDaemonFacet, WorkerFormula, TimerFormula } from './types.js' */
+/** @import { AgentDeferredTaskParams, Builtins, CapTpConnectionRegistrar, Context, Controller, DaemonCore, DaemonCoreExternal, DaemonicPowers, DeferredTasks, DirectoryFormula, EndoBootstrap, EndoDirectory, EndoFormula, EndoGateway, EndoGreeter, EndoGuest, EndoHost, EndoInspector, EndoNetwork, EndoPeer, EndoReadable, EndoWorker, EvalFormula, FarContext, Formula, FormulaIdentifier, FormulaNumber, FormulaMakerTable, FormulateResult, GuestFormula, HandleFormula, HostFormula, Invitation, InvitationDeferredTaskParams, InvitationFormula, KnownEndoInspectors, KnownPeersStore, LookupFormula, LoopbackNetworkFormula, MailboxStoreFormula, MailHubFormula, MakeArchiveFormula, MakeCapletDeferredTaskParams, MakeFromTreeFormula, MakeUnconfinedFormula, MarshalDeferredTaskParams, MessageFormula, Name, NameHub, NamePath, NameOrPath, NodeNumber, PetName, PeerFormula, PeerInfo, PetInspectorFormula, PetStore, PetStoreFormula, PromiseFormula, Provide, ReadableBlobFormula, ResolverFormula, Sha256, Specials, MarshalFormula, WeakMultimap, WorkerDaemonFacet, WorkerFormula, TimerFormula } from './types.js' */
 
 /**
  * Creates a delayed promise that can be cancelled.
@@ -496,7 +497,8 @@ const makeDaemonCore = async (
         return [
           ['handle', formula.handle],
           ['hostHandle', formula.hostHandle],
-          ['worker', formula.worker],
+          ['mainWorker', formula.mainWorker],
+          ['nodeWorker', formula.nodeWorker],
           ['inspector', formula.inspector],
           ['petStore', formula.petStore],
           ['mailbox', formula.mailboxStore],
@@ -542,12 +544,24 @@ const makeDaemonCore = async (
         }
         return deps;
       }
-      case 'make-bundle': {
+      case 'make-archive': {
         /** @type {Array<[string, FormulaIdentifier]>} */
         const deps = [
           ['worker', formula.worker],
           ['powers', formula.powers],
-          ['bundle', formula.bundle],
+          ['archive', formula.archive],
+        ];
+        if (formula.cancelWithWorker) {
+          deps.push(['cancelWithWorker', formula.cancelWithWorker]);
+        }
+        return deps;
+      }
+      case 'make-from-tree': {
+        /** @type {Array<[string, FormulaIdentifier]>} */
+        const deps = [
+          ['worker', formula.worker],
+          ['powers', formula.powers],
+          ['tree', formula.tree],
         ];
         if (formula.cancelWithWorker) {
           deps.push(['cancelWithWorker', formula.cancelWithWorker]);
@@ -849,7 +863,7 @@ const makeDaemonCore = async (
       }
       // When a retainer's node worker is terminated by GC, also
       // terminate any cancelWithWorker (original XS worker) referenced
-      // by make-unconfined/make-bundle formulas on this worker.
+      // by make-unconfined/make-archive formulas on this worker.
       const terminatedId = formatId({
         number: /** @type {FormulaNumber} */ (workerId),
         node: localNodeNumber,
@@ -857,7 +871,8 @@ const makeDaemonCore = async (
       for (const formula of formulaForId.values()) {
         if (
           (formula.type === 'make-unconfined' ||
-            formula.type === 'make-bundle') &&
+            formula.type === 'make-archive' ||
+            formula.type === 'make-from-tree') &&
           formula.worker === terminatedId &&
           formula.cancelWithWorker
         ) {
@@ -1351,14 +1366,15 @@ const makeDaemonCore = async (
   /**
    * @param {string} workerId
    * @param {string} powersId
-   * @param {string} bundleId
+   * @param {string} archiveId
    * @param {Record<string, string> | undefined} env
    * @param {Context} context
+   * @param {string} [cancelWithWorker]
    */
-  const makeBundle = async (
+  const makeArchive = async (
     workerId,
     powersId,
-    bundleId,
+    archiveId,
     env,
     context,
     cancelWithWorker,
@@ -1375,17 +1391,204 @@ const makeDaemonCore = async (
     );
     const workerDaemonFacet = workerDaemonFacets.get(worker);
     assert(workerDaemonFacet, 'Cannot make caplet with non-worker');
-    const readableBundleP = provide(
-      /** @type {FormulaIdentifier} */ (bundleId),
+    const readableArchiveP = provide(
+      /** @type {FormulaIdentifier} */ (archiveId),
       'readable-blob',
     );
     const powersP = provide(/** @type {FormulaIdentifier} */ (powersId));
-    return E(/** @type {any} */ (workerDaemonFacet)).makeBundle(
-      readableBundleP,
+    return E(/** @type {any} */ (workerDaemonFacet)).makeArchive(
+      readableArchiveP,
       // TODO fix type
       /** @type {any} */ (powersP),
       /** @type {any} */ (makeFarContext(context)),
       env,
+    );
+  };
+
+  /**
+   * Load a source-only tree (ReadableTree or Mount) into a worker and
+   * invoke its entry `make(powers, context, { env })`.  Mirrors
+   * {@link makeArchive} but the source comes from a tree capability
+   * rather than a ZIP blob.
+   *
+   * @param {string} workerId
+   * @param {string} powersId
+   * @param {string} treeId
+   * @param {Record<string, string> | undefined} env
+   * @param {Context} context
+   * @param {string} [cancelWithWorker]
+   */
+  const makeFromTree = async (
+    workerId,
+    powersId,
+    treeId,
+    env,
+    context,
+    cancelWithWorker,
+  ) => {
+    context.thisDiesIfThatDies(workerId);
+    context.thisDiesIfThatDies(powersId);
+    context.thisDiesIfThatDies(treeId);
+    if (cancelWithWorker) {
+      context.thisDiesIfThatDies(cancelWithWorker);
+    }
+
+    const worker = await provide(
+      /** @type {FormulaIdentifier} */ (workerId),
+      'worker',
+    );
+    const workerDaemonFacet = workerDaemonFacets.get(worker);
+    assert(workerDaemonFacet, 'Cannot make caplet with non-worker');
+    const treeP = provide(/** @type {FormulaIdentifier} */ (treeId));
+    const powersP = provide(/** @type {FormulaIdentifier} */ (powersId));
+
+    // XS (locked) workers cannot run @endo/compartment-mapper's
+    // parseArchive themselves yet, so the daemon walks the tree
+    // here, packs it into a synthesized archive, and routes through
+    // the existing makeArchive worker method which is implemented
+    // for both Node and XS via hostImportArchive.  A worker is
+    // "locked" if its formula explicitly says so, OR if the
+    // formula has no `kind` and the daemon's defaultWorkerKind is
+    // 'locked' (i.e. the Rust supervisor path).
+    const workerFormula = formulaForId.get(
+      /** @type {FormulaIdentifier} */ (workerId),
+    );
+    const workerKind =
+      workerFormula?.type === 'worker'
+        ? (workerFormula.kind ?? defaultWorkerKind)
+        : undefined;
+    const isLockedWorker = workerKind === 'locked';
+    if (isLockedWorker) {
+      // eslint-disable-next-line no-use-before-define
+      const archiveBytes = await packTreeIntoArchiveBytes(treeP);
+      // eslint-disable-next-line no-use-before-define
+      const transientBlob = makeBytesBlob(archiveBytes);
+      return E(/** @type {any} */ (workerDaemonFacet)).makeArchive(
+        /** @type {any} */ (transientBlob),
+        /** @type {any} */ (powersP),
+        /** @type {any} */ (makeFarContext(context)),
+        env,
+      );
+    }
+
+    return E(/** @type {any} */ (workerDaemonFacet)).makeFromTree(
+      /** @type {any} */ (treeP),
+      /** @type {any} */ (powersP),
+      /** @type {any} */ (makeFarContext(context)),
+      env,
+    );
+  };
+
+  /**
+   * Walk a ReadableTree or Mount whose layout matches a
+   * compartment-mapper archive (`compartment-map.json` at root plus
+   * modules at their referenced `<compartmentName>/<moduleLocation>`
+   * paths) and pack it into ZIP bytes that {@link makeArchive} can
+   * load via `parseArchive` / `hostImportArchive`.
+   *
+   * @param {Promise<unknown> | unknown} treeP
+   * @returns {Promise<Uint8Array>}
+   */
+  const packTreeIntoArchiveBytes = async treeP => {
+    const textEncoder = new TextEncoder();
+    const mapBlob = await E(/** @type {any} */ (treeP)).lookup(
+      'compartment-map.json',
+    );
+    const mapText = await E(/** @type {any} */ (mapBlob)).text();
+    let compartmentMap;
+    try {
+      compartmentMap = JSON.parse(mapText);
+    } catch (err) {
+      throw makeError(
+        X`Tree's compartment-map.json is not valid JSON: ${q(err)}`,
+      );
+    }
+    if (
+      !compartmentMap ||
+      typeof compartmentMap !== 'object' ||
+      typeof compartmentMap.compartments !== 'object' ||
+      compartmentMap.compartments === null
+    ) {
+      throw makeError(
+        X`Tree's compartment-map.json is missing the compartments map`,
+      );
+    }
+
+    const zip = new ZipWriter();
+    zip.write('compartment-map.json', textEncoder.encode(mapText));
+
+    // Pipeline the per-module reads via Promise.all to avoid the
+    // round-trip-per-file stall that a naive sequential walk would
+    // suffer when daemon and worker live in different processes.
+    // Sort entries so the resulting ZIP is deterministic (helpful
+    // for tests and for content-addressable storage).
+    const sortedCompartments = Object.entries(
+      /** @type {Record<string, any>} */ (compartmentMap.compartments),
+    ).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+    /** @type {Array<{ archivePath: string, srcP: Promise<string> }>} */
+    const moduleReads = [];
+    for (const [compartmentName, descriptor] of sortedCompartments) {
+      const modules = descriptor.modules || {};
+      const sortedModules = Object.values(modules).sort((a, b) => {
+        const al =
+          a && typeof a === 'object' && 'location' in a
+            ? String(/** @type {any} */ (a).location)
+            : '';
+        const bl =
+          b && typeof b === 'object' && 'location' in b
+            ? String(/** @type {any} */ (b).location)
+            : '';
+        return al < bl ? -1 : al > bl ? 1 : 0;
+      });
+      for (const moduleInfo of sortedModules) {
+        if (
+          typeof moduleInfo === 'object' &&
+          moduleInfo !== null &&
+          'location' in moduleInfo &&
+          typeof moduleInfo.location === 'string'
+        ) {
+          const archivePath = `${compartmentName}/${moduleInfo.location}`;
+          const pathSegments = archivePath.split('/').filter(Boolean);
+          const srcP = E(/** @type {any} */ (treeP))
+            .lookup(pathSegments)
+            .then(blob => E(/** @type {any} */ (blob)).text());
+          moduleReads.push({ archivePath, srcP });
+        }
+      }
+    }
+    const sources = await Promise.all(moduleReads.map(r => r.srcP));
+    moduleReads.forEach(({ archivePath }, i) => {
+      zip.write(archivePath, textEncoder.encode(sources[i]));
+    });
+
+    return zip.snapshot();
+  };
+
+  /**
+   * Wrap an in-memory Uint8Array as a transient blob exo that
+   * implements the `EndoBlob` surface (sha256 / streamBase64 / text
+   * / json) just well enough for the worker's `makeArchive` method
+   * to consume it.  The blob is not persisted in CAS — its lifetime
+   * is the duration of the eventual-send.
+   *
+   * @param {Uint8Array} bytes
+   */
+  const makeBytesBlob = bytes => {
+    const sha256Hex = (() => {
+      const digester = cryptoPowers.makeSha256();
+      digester.update(bytes);
+      return digester.digestHex();
+    })();
+    return makeExo(
+      'TransientBlob',
+      BlobInterface,
+      /** @type {any} */ ({
+        help: () => 'Transient in-memory blob',
+        sha256: () => sha256Hex,
+        streamBase64: () => makeReaderRef([bytes]),
+        text: async () => new TextDecoder().decode(bytes),
+        json: async () => JSON.parse(new TextDecoder().decode(bytes)),
+      }),
     );
   };
 
@@ -2288,17 +2491,36 @@ const makeDaemonCore = async (
         context,
         cancelWithWorker,
       ),
-    'make-bundle': (
+    'make-archive': (
       {
         worker: workerId,
         powers: powersId,
-        bundle: bundleId,
+        archive: archiveId,
         env = {},
         cancelWithWorker,
       },
       context,
     ) =>
-      makeBundle(workerId, powersId, bundleId, env, context, cancelWithWorker),
+      makeArchive(
+        workerId,
+        powersId,
+        archiveId,
+        env,
+        context,
+        cancelWithWorker,
+      ),
+    'make-from-tree': (
+      {
+        worker: workerId,
+        powers: powersId,
+        tree: treeId,
+        env = {},
+        cancelWithWorker,
+      },
+      context,
+    ) =>
+      // eslint-disable-next-line no-use-before-define
+      makeFromTree(workerId, powersId, treeId, env, context, cancelWithWorker),
     host: async (formula, context, id) => {
       const {
         hostHandle: hostHandleId,
@@ -2307,7 +2529,8 @@ const makeDaemonCore = async (
         mailboxStore: mailboxStoreId,
         mailHub: mailHubId,
         inspector: inspectorId,
-        worker: workerId,
+        mainWorker: hostMainWorkerId,
+        nodeWorker: nodeWorkerId,
         endo: endoId,
         networks: networksId,
         pins: pinsId,
@@ -2315,6 +2538,9 @@ const makeDaemonCore = async (
 
       if (mailHubId === undefined) {
         throw new Error('Host formula missing mail hub');
+      }
+      if (nodeWorkerId === undefined) {
+        throw new Error('Host formula missing nodeWorker (Phase 6 required)');
       }
       // Look up the agent key by scanning the agent_key table for
       // an entry whose agentId has the same formula number.
@@ -2343,7 +2569,8 @@ const makeDaemonCore = async (
         mailboxStoreId,
         mailHubId,
         inspectorId,
-        workerId,
+        hostMainWorkerId,
+        nodeWorkerId,
         endoId,
         networksId,
         pinsId,
@@ -3480,12 +3707,24 @@ const makeDaemonCore = async (
         )
       ).id,
     );
-    const workerId = pin(
+    const hostMainWorkerId = pin(
       await provideWorkerId(
         specifiedWorkerId,
         undefined,
         workerLabel ?? 'host',
         agentNodeNumber,
+      ),
+    );
+    // The @node special name is backed by a host-scoped Node.js
+    // worker.  Required regardless of the daemon's defaultWorkerKind
+    // so XS-default daemons still expose a Node bridge.
+    const nodeWorkerId = pin(
+      await provideWorkerId(
+        undefined,
+        undefined,
+        'host-node',
+        agentNodeNumber,
+        'node',
       ),
     );
     /* eslint-enable no-use-before-define */
@@ -3501,7 +3740,8 @@ const makeDaemonCore = async (
       mailboxStoreId,
       mailHubId,
       inspectorId,
-      workerId,
+      mainWorkerId: hostMainWorkerId,
+      nodeWorkerId,
       pinned,
     });
   };
@@ -3517,7 +3757,8 @@ const makeDaemonCore = async (
       mailboxStore: identifiers.mailboxStoreId,
       mailHub: identifiers.mailHubId,
       inspector: identifiers.inspectorId,
-      worker: identifiers.workerId,
+      mainWorker: identifiers.mainWorkerId,
+      nodeWorker: identifiers.nodeWorkerId,
       endo: identifiers.endoId,
       networks: identifiers.networksDirectoryId,
       pins: identifiers.pinsDirectoryId,
@@ -3728,18 +3969,12 @@ const makeDaemonCore = async (
     kind = undefined,
   ) => {
     await null;
-    console.log(
-      `provideWorkerId: kind=${kind} defaultWorkerKind=${defaultWorkerKind} specifiedWorkerId=${typeof specifiedWorkerId === 'string' ? specifiedWorkerId.slice(0, 12) : specifiedWorkerId}`,
-    );
     if (typeof specifiedWorkerId === 'string') {
       if (kind === 'node' && defaultWorkerKind !== 'node') {
         // Default workers are XS/locked (bus daemon under Rust
         // supervisor).  Create a separate Node.js worker.  The original
         // XS worker stays alive (it may have running evals).
         const existingFormula = formulaForId.get(specifiedWorkerId);
-        console.log(
-          `provideWorkerId: existingFormula=${existingFormula ? JSON.stringify(existingFormula).slice(0, 80) : 'NOT FOUND'}`,
-        );
         if (
           existingFormula &&
           existingFormula.type === 'worker' &&
@@ -3998,7 +4233,7 @@ const makeDaemonCore = async (
   };
 
   /**
-   * Helper for `formulateUnconfined` and `formulateBundle`.
+   * Helper for `formulateUnconfined` and `formulateArchive`.
    * @param {FormulaIdentifier} hostAgentId
    * @param {FormulaIdentifier} hostHandleId
    * @param {DeferredTasks<MakeCapletDeferredTaskParams>} deferredTasks
@@ -4099,11 +4334,11 @@ const makeDaemonCore = async (
     });
   };
 
-  /** @type {DaemonCore['formulateBundle']} */
-  const formulateBundle = async (
+  /** @type {DaemonCore['formulateArchive']} */
+  const formulateArchive = async (
     hostAgentId,
     hostHandleId,
-    bundleId,
+    archiveId,
     deferredTasks,
     specifiedWorkerId,
     specifiedPowersId,
@@ -4112,6 +4347,13 @@ const makeDaemonCore = async (
     workerLabel = undefined,
   ) => {
     return withFormulaGraphLock(async () => {
+      // Pass workerKind=undefined so the worker inherits the
+      // daemon's defaultWorkerKind.  Both the Node worker
+      // (parseArchive) and the XS worker (hostImportArchive)
+      // implement makeArchive natively, so no auto-promotion is
+      // needed — promoting unconditionally would spawn a Node
+      // worker the Rust supervisor cannot run when no Node worker
+      // binary is configured.
       const { powersId, capletFormulaNumber, workerId, originalWorkerId } =
         await formulateCapletDependencies(
           hostAgentId,
@@ -4121,15 +4363,56 @@ const makeDaemonCore = async (
           specifiedPowersId,
           trustedShims,
           workerLabel,
-          'node',
         );
 
-      /** @type {MakeBundleFormula} */
+      /** @type {MakeArchiveFormula} */
       const formula = {
-        type: 'make-bundle',
+        type: 'make-archive',
         worker: workerId,
         powers: powersId,
-        bundle: bundleId,
+        archive: archiveId,
+        env,
+        ...(originalWorkerId ? { cancelWithWorker: originalWorkerId } : {}),
+      };
+      return formulate(capletFormulaNumber, formula);
+    });
+  };
+
+  /** @type {DaemonCore['formulateFromTree']} */
+  const formulateFromTree = async (
+    hostAgentId,
+    hostHandleId,
+    treeId,
+    deferredTasks,
+    specifiedWorkerId,
+    specifiedPowersId,
+    env = {},
+    trustedShims = undefined,
+    workerLabel = undefined,
+  ) => {
+    return withFormulaGraphLock(async () => {
+      // Pass workerKind=undefined so the worker inherits the daemon's
+      // defaultWorkerKind (Node by default, locked under the Rust
+      // supervisor).  Unlike makeUnconfined, makeFromTree can run on
+      // either kind: XS workers get the tree pre-packed into an
+      // archive on the daemon side, then loaded via hostImportArchive.
+      const { powersId, capletFormulaNumber, workerId, originalWorkerId } =
+        await formulateCapletDependencies(
+          hostAgentId,
+          hostHandleId,
+          deferredTasks,
+          specifiedWorkerId,
+          specifiedPowersId,
+          trustedShims,
+          workerLabel,
+        );
+
+      /** @type {MakeFromTreeFormula} */
+      const formula = {
+        type: 'make-from-tree',
+        worker: workerId,
+        powers: powersId,
+        tree: treeId,
         env,
         ...(originalWorkerId ? { cancelWithWorker: originalWorkerId } : {}),
       };
@@ -4767,6 +5050,40 @@ const makeDaemonCore = async (
     return harden({ nodes: snapshotNodes, edges: graphEdges });
   };
 
+  /**
+   * Return the on-disk filesystem path for a scratch-mount formula.
+   * Host-side callers use this to hand a native filesystem path to
+   * Node's module loader (via `makeUnconfined`) without having
+   * Mount expose the path on its public surface.
+   *
+   * @param {FormulaIdentifier} scratchMountId
+   * @returns {string}
+   */
+  const getScratchMountPath = scratchMountId => {
+    // formulaForId.get returns undefined if the formula has been
+    // collected since the caller resolved its identifier.  Surfacing
+    // a clear error here lets the host-side caller decide whether
+    // to re-stage rather than handing back a stale path that points
+    // at a directory the daemon may have removed.
+    const formula = formulaForId.get(scratchMountId);
+    if (formula === undefined) {
+      throw makeError(
+        X`Unknown or collected scratch-mount formula ${q(scratchMountId)}`,
+      );
+    }
+    if (formula.type !== 'scratch-mount') {
+      throw makeError(
+        X`getScratchMountPath requires a scratch-mount formula, got ${q(formula.type)}`,
+      );
+    }
+    const { number: formulaNumber } = parseId(scratchMountId);
+    return filePowers.joinPath(
+      persistencePowers.statePath,
+      'mounts',
+      formulaNumber,
+    );
+  };
+
   const makeHost = makeHostMaker({
     provide,
     provideStoreController,
@@ -4777,7 +5094,8 @@ const makeDaemonCore = async (
     formulateMarshalValue,
     formulateEval,
     formulateUnconfined,
-    formulateBundle,
+    formulateArchive,
+    formulateFromTree,
     formulateReadableBlob,
     checkinTree,
     formulateMount,
@@ -4798,6 +5116,7 @@ const makeDaemonCore = async (
     pinTransient,
     unpinTransient,
     getFormulaGraphSnapshot,
+    getScratchMountPath,
     writeRemoteAgentKey: persistencePowers.writeRemoteAgentKey,
   });
 
@@ -4841,9 +5160,13 @@ const makeDaemonCore = async (
       const { number: formulaNumber } = parseId(id);
       const formula = await getFormulaForId(id);
       if (
-        !['eval', 'lookup', 'make-unconfined', 'make-bundle', 'guest'].includes(
-          formula.type,
-        )
+        ![
+          'eval',
+          'lookup',
+          'make-unconfined',
+          'make-archive',
+          'guest',
+        ].includes(formula.type)
       ) {
         return makeInspector(formula.type, formulaNumber, harden({}));
       }
@@ -4879,12 +5202,22 @@ const makeDaemonCore = async (
             hostHandle: provide(formula.hostHandle, 'handle'),
           }),
         );
-      } else if (formula.type === 'make-bundle') {
+      } else if (formula.type === 'make-archive') {
         return makeInspector(
           formula.type,
           formulaNumber,
           harden({
-            bundle: provide(formula.bundle, 'readable-blob'),
+            archive: provide(formula.archive, 'readable-blob'),
+            powers: provide(formula.powers),
+            worker: provide(formula.worker, 'worker'),
+          }),
+        );
+      } else if (formula.type === 'make-from-tree') {
+        return makeInspector(
+          formula.type,
+          formulaNumber,
+          harden({
+            tree: provide(formula.tree),
             powers: provide(formula.powers),
             worker: provide(formula.worker, 'worker'),
           }),

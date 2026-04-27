@@ -36,6 +36,12 @@ const EXCLUDED_PACKAGES = new Set([
   '@endo/platform/exo-fs',
   '@endo/relay-server',
   '@endo/where',
+  // better-sqlite3 ships native bindings that won't load under
+  // XS.  bus-daemon-rust-xs.js passes its own Database constructor
+  // (./better-sqlite3-xs.js) to makeDaemonDatabase, so the import
+  // never executes at runtime — it only needs to be elided from
+  // the bundle's compartment graph.
+  'better-sqlite3',
   '@chainsafe/libp2p-noise',
   '@chainsafe/libp2p-yamux',
   '@libp2p/autonat',

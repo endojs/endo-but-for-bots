@@ -18897,10 +18897,10 @@ const workerFacet = makeExo(
       M.string(),
       M.promise(),
     ).returns(M.promise()),
-    makeBundle: M.call(M.any(), M.any(), M.any(), M.any()).returns(
+    makeArchive: M.call(M.any(), M.any(), M.any(), M.any()).returns(
       M.promise(),
     ),
-    makeArchive: M.call(M.any(), M.any(), M.any(), M.any()).returns(
+    makeFromTree: M.call(M.any(), M.any(), M.any(), M.any()).returns(
       M.promise(),
     ),
     makeUnconfined: M.call(M.string(), M.any(), M.any(), M.any()).returns(
@@ -18950,17 +18950,6 @@ const workerFacet = makeExo(
     },
 
     /**
-     * @param {unknown} _readableP
-     * @param {unknown} _powersP
-     * @param {unknown} _contextP
-     * @param {Record<string, string>} _env
-     * @returns {Promise<unknown>}
-     */
-    makeBundle: async (_readableP, _powersP, _contextP, _env) => {
-      throw new Error('makeBundle not yet implemented in XS worker');
-    },
-
-    /**
      * @param {unknown} readableP
      * @param {unknown} powersP
      * @param {unknown} contextP
@@ -18968,7 +18957,7 @@ const workerFacet = makeExo(
      * @returns {Promise<unknown>}
      */
     makeArchive: async (readableP, powersP, contextP, env) => {
-      // Stream base64 chunks from the readable blob via CapTP
+      // Stream base64 chunks from the readable blob via CapTP.
       const streamRef = await E(readableP).streamBase64();
       const chunks = [];
       for await (const chunk of makeRefIterator(streamRef)) {
@@ -18982,14 +18971,26 @@ const workerFacet = makeExo(
         offset += c.length;
       }
 
-      // Load archive natively via Rust host function (Uint8Array)
-      const ok = hostImportArchive(archiveBytes);
-      if (!ok) throw new Error('Failed to import archive');
-
+      // Set the archive endowments so the loaded compartments can
+      // reference standard globals (E, Far, makeExo, ...).  CapTP
+      // delivers method calls sequentially per session, so two
+      // concurrent makeArchive calls cannot interleave at this
+      // point — no explicit lock required.
+      globalThis.__archiveEndowments = standardEndowments;
+      try {
+        const ok = hostImportArchive(archiveBytes);
+        if (!ok) throw new Error('Failed to import archive');
+      } finally {
+        delete globalThis.__archiveEndowments;
+      }
       // Entry namespace set by install_archive — capture and release.
       const namespace = globalThis.__entryNs;
       delete globalThis.__entryNs;
-      return namespace.make(powersP, contextP, { env });
+      // Freeze the options object before handing it to the loaded
+      // module so the strict XS marshaller does not later trip on
+      // an extensible literal observed via the returned Far ref's
+      // closure scope.
+      return namespace.make(powersP, contextP, Object.freeze({ env }));
     },
 
     /**
@@ -18999,8 +19000,25 @@ const workerFacet = makeExo(
      * @param {Record<string, string>} _env
      * @returns {Promise<unknown>}
      */
+    /**
+     * @param {unknown} _treeP
+     * @param {unknown} _powersP
+     * @param {unknown} _contextP
+     * @param {Record<string, string>} _env
+     * @returns {Promise<unknown>}
+     */
+    makeFromTree: async (_treeP, _powersP, _contextP, _env) => {
+      // The daemon side intercepts make-from-tree for XS workers,
+      // packs the tree into an archive, and routes through
+      // makeArchive instead.  Reaching this stub indicates a routing
+      // bug in the daemon dispatcher.
+      throw new Error(
+        'XS workers receive make-from-tree as makeArchive; this stub should not run',
+      );
+    },
+
     makeUnconfined: async (_specifier, _powersP, _contextP, _env) => {
-      throw new Error('makeUnconfined not yet implemented in XS worker');
+      throw new Error('makeUnconfined requires a Node.js worker; use @node');
     },
   },
 );

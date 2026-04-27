@@ -142,7 +142,8 @@ export type HostFormula = {
   type: 'host';
   handle: FormulaIdentifier;
   hostHandle: FormulaIdentifier;
-  worker: FormulaIdentifier;
+  mainWorker: FormulaIdentifier;
+  nodeWorker: FormulaIdentifier;
   inspector: FormulaIdentifier;
   petStore: FormulaIdentifier;
   mailboxStore: FormulaIdentifier;
@@ -256,11 +257,22 @@ type MakeUnconfinedFormula = {
   // TODO formula slots
 };
 
-type MakeBundleFormula = {
-  type: 'make-bundle';
+type MakeArchiveFormula = {
+  type: 'make-archive';
   worker: FormulaIdentifier;
   powers: FormulaIdentifier;
-  bundle: FormulaIdentifier;
+  archive: FormulaIdentifier;
+  env?: Record<string, string>;
+  cancelWithWorker?: FormulaIdentifier;
+  // TODO formula slots
+};
+
+type MakeFromTreeFormula = {
+  type: 'make-from-tree';
+  worker: FormulaIdentifier;
+  powers: FormulaIdentifier;
+  /** ReadableTree or Mount formula identifier providing module sources. */
+  tree: FormulaIdentifier;
   env?: Record<string, string>;
   cancelWithWorker?: FormulaIdentifier;
   // TODO formula slots
@@ -409,7 +421,8 @@ export type Formula =
   | ScratchMountFormula
   | LookupFormula
   | MakeUnconfinedFormula
-  | MakeBundleFormula
+  | MakeArchiveFormula
+  | MakeFromTreeFormula
   | HandleFormula
   | PetInspectorFormula
   | KnownPeersStoreFormula
@@ -975,10 +988,36 @@ export interface EndoHost extends EndoAgent {
     specifier: string,
     options?: MakeCapletOptions,
   ): Promise<unknown>;
-  makeBundle(
+  makeArchive(
     workerPetName: string | undefined,
-    bundleName: string,
+    archiveName: string,
     options?: MakeCapletOptions,
+  ): Promise<unknown>;
+  makeFromTree(
+    workerPetName: string | undefined,
+    treeName: string | string[],
+    options?: MakeCapletOptions,
+  ): Promise<unknown>;
+  /**
+   * Materialise a ReadableTree or Mount into a new scratch mount
+   * under `scratchPetName` and return that scratch mount.  The
+   * scratch lives as long as its pet name; cancelling the pet name
+   * removes it.
+   */
+  stageTree(
+    treeName: string | string[],
+    scratchPetName: string,
+  ): Promise<unknown>;
+  /**
+   * Stage a readable tree (ReadableTree or Mount) into an internal
+   * scratch directory under the Endo state tree and invoke the Node
+   * unconfined loader against `options.entry` (default `index.js`).
+   * Supports native Node modules (unlike {@link makeFromTree}).
+   */
+  makeUnconfinedFromTree(
+    workerPetName: string | undefined,
+    treeName: string | string[],
+    options?: MakeCapletOptions & { entry?: string },
   ): Promise<unknown>;
   cancel(petNameOrPath: string | string[], reason?: Error): Promise<void>;
   greeter(): Promise<EndoGreeter>;
@@ -1153,7 +1192,8 @@ export type EndoInspector<Record = string> = {
 export type KnownEndoInspectors = {
   eval: EndoInspector<'endowments' | 'source' | 'worker'>;
   'make-unconfined': EndoInspector<'host'>;
-  'make-bundle': EndoInspector<'bundle' | 'powers' | 'worker'>;
+  'make-archive': EndoInspector<'archive' | 'powers' | 'worker'>;
+  'make-from-tree': EndoInspector<'tree' | 'powers' | 'worker'>;
   guest: EndoInspector<'bundle' | 'powers'>;
   // This is an "empty" inspector, in that there is nothing to `lookup()` or `list()`.
   [formulaType: string]: EndoInspector<any>;
@@ -1188,6 +1228,7 @@ export type FilePowers = {
   makeFileWriter: (path: string) => Writer<Uint8Array>;
   writeFileText: (path: string, text: string) => Promise<void>;
   readFileText: (path: string) => Promise<string>;
+  readFileBytes: (path: string) => Promise<Uint8Array>;
   maybeReadFileText: (path: string) => Promise<string | undefined>;
   readDirectory: (path: string) => Promise<Array<string>>;
   makePath: (path: string) => Promise<void>;
@@ -1313,8 +1354,8 @@ export interface WorkerDaemonFacet {
     id: FormulaIdentifier,
     cancelled: Promise<never>,
   ): Promise<unknown>;
-  makeBundle(
-    bundle: ERef<EndoReadable>,
+  makeArchive(
+    archive: ERef<EndoReadable>,
     powers: ERef<unknown>,
     context: ERef<FarContext>,
   ): Promise<unknown>;
@@ -1413,7 +1454,8 @@ type FormulateNumberedHostParams = {
   handleId: FormulaIdentifier;
   hostHandleId: FormulaIdentifier;
   agentNodeNumber: NodeNumber;
-  workerId: FormulaIdentifier;
+  mainWorkerId: FormulaIdentifier;
+  nodeWorkerId: FormulaIdentifier;
   storeId: FormulaIdentifier;
   mailboxStoreId: FormulaIdentifier;
   mailHubId: FormulaIdentifier;
@@ -1465,10 +1507,22 @@ export interface DaemonCore {
     value: unknown;
   }>;
 
-  formulateBundle: (
+  formulateArchive: (
     hostAgentId: FormulaIdentifier,
     hostHandleId: FormulaIdentifier,
-    bundleId: FormulaIdentifier,
+    archiveId: FormulaIdentifier,
+    deferredTasks: DeferredTasks<MakeCapletDeferredTaskParams>,
+    specifiedWorkerId?: FormulaIdentifier,
+    specifiedPowersId?: FormulaIdentifier,
+    env?: Record<string, string>,
+    trustedShims?: string[],
+    workerLabel?: string,
+  ) => FormulateResult<unknown>;
+
+  formulateFromTree: (
+    hostAgentId: FormulaIdentifier,
+    hostHandleId: FormulaIdentifier,
+    treeId: FormulaIdentifier,
     deferredTasks: DeferredTasks<MakeCapletDeferredTaskParams>,
     specifiedWorkerId?: FormulaIdentifier,
     specifiedPowersId?: FormulaIdentifier,

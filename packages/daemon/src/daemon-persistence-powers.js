@@ -1,39 +1,68 @@
-// @ts-nocheck
-// Filesystem-based DaemonicPersistencePowers used by the XS bus
-// daemon.  The llm-side interface grew SQLite-only methods
-// (listFormulaNumbersByNode, writeAgentKey, retention tables);
-// this module predates that migration and is known to not satisfy
-// the full type.  Re-enable @ts-check once the XS daemon carries
-// a SQLite-backed implementation.
+// @ts-check
+/// <reference types="ses"/>
 
 /**
- * Pure-JS factory for DaemonicPersistencePowers.
+ * SQLite-backed DaemonicPersistencePowers shared by every Endo
+ * daemon flavour.  Formula records, agent keys, retention
+ * tables and the per-node formula index all live in the
+ * SQLite-backed `daemon-database.js` schema.  The content store
+ * (large binary blobs addressed by SHA-256) still lives on the
+ * filesystem, since SQLite isn't a great place for many-MB
+ * payloads.
  *
- * Extracted from daemon-node-powers.js so that the XS daemon bundle
- * can import it without pulling in Node.js-specific dependencies
- * (@endo/stream-node, node:fs, child_process).
+ * The Node daemon path passes `better-sqlite3` as the Database
+ * constructor; the XS-on-Rust-supervisor path passes
+ * `./better-sqlite3-xs.js`, which forwards prepared-statement
+ * calls through host functions to rusqlite.  Both backends agree
+ * on the on-disk schema (`<statePath>/endo.sqlite`), so a single
+ * state directory can be opened by either supervisor without a
+ * migration step.
  */
 
 import harden from '@endo/harden';
-import { q } from '@endo/errors';
 import { makeSnapshotStore } from '@endo/platform/fs/lite';
 
 import { makeReaderRef } from './reader-ref.js';
 import { toHex, fromHex } from './hex.js';
 
 /** @import { Config, CryptoPowers, DaemonicPersistencePowers, FilePowers, Formula, FormulaNumber } from './types.js' */
+/** @import { DaemonDatabase } from './daemon-database.js' */
 
 /**
+ * @param {DaemonDatabase} daemonDb
  * @param {FilePowers} filePowers
  * @param {CryptoPowers} cryptoPowers
  * @param {Config} config
  * @returns {DaemonicPersistencePowers}
  */
 export const makeDaemonicPersistencePowers = (
+  daemonDb,
   filePowers,
   cryptoPowers,
   config,
 ) => {
+  const {
+    readFormula,
+    writeFormula,
+    deleteFormula,
+    listFormulas,
+    listFormulaNumbersByNode,
+    getState,
+    setState,
+    writeAgentKey,
+    getAgentKey,
+    hasAgentKey,
+    listAgentKeys,
+    deleteAgentKey,
+    writeRemoteAgentKey,
+    getRemoteAgentKey,
+    writeRetention,
+    deleteRetention,
+    listRetention,
+    replaceRetention,
+    deleteAllRetention,
+  } = daemonDb;
+
   const initializePersistence = async () => {
     const { statePath, ephemeralStatePath, cachePath } = config;
     const statePathP = filePowers.makePath(statePath);
@@ -44,55 +73,52 @@ export const makeDaemonicPersistencePowers = (
 
   /** @type {DaemonicPersistencePowers['provideRootNonce']} */
   const provideRootNonce = async () => {
-    const noncePath = filePowers.joinPath(config.statePath, 'nonce');
-    const existingNonce = await filePowers.maybeReadFileText(noncePath);
+    const existingNonce = getState('root_nonce');
     if (existingNonce === undefined) {
       const rootNonce = /** @type {FormulaNumber} */ (
         await cryptoPowers.randomHex256()
       );
-      await filePowers.writeFileText(noncePath, `${rootNonce}\n`);
+      setState('root_nonce', rootNonce);
       return { rootNonce, isNewlyCreated: true };
-    } else {
-      const rootNonce = /** @type {FormulaNumber} */ (existingNonce.trim());
-      return { rootNonce, isNewlyCreated: false };
     }
+    return {
+      rootNonce: /** @type {FormulaNumber} */ (existingNonce),
+      isNewlyCreated: false,
+    };
   };
 
   /** @type {DaemonicPersistencePowers['provideRootKeypair']} */
   const provideRootKeypair = async () => {
-    const keypairPath = filePowers.joinPath(config.statePath, 'keypair');
-    const existingKeypair = await filePowers.maybeReadFileText(keypairPath);
-    if (existingKeypair === undefined) {
+    const existingPublicHex = getState('public_key');
+    if (existingPublicHex === undefined) {
       const keypair = await cryptoPowers.generateEd25519Keypair();
       const publicHex = toHex(keypair.publicKey);
       const privateHex = toHex(keypair.privateKey);
-      await filePowers.writeFileText(
-        keypairPath,
-        `${publicHex}\n${privateHex}\n`,
-      );
+      setState('public_key', publicHex);
+      setState('private_key', privateHex);
       return { keypair, isNewlyCreated: true };
-    } else {
-      const lines = existingKeypair.trim().split('\n');
-      const pubHex = lines[0];
-      const privHex = lines[1];
-      // Use getters to avoid storing Uint8Array directly on the
-      // hardened object — in XS, Uint8Array indexed elements are
-      // non-configurable so harden/freeze fails.
-      return {
-        keypair: harden({
-          get publicKey() {
-            return fromHex(pubHex);
-          },
-          get privateKey() {
-            return fromHex(privHex);
-          },
-          sign: message => cryptoPowers.ed25519Sign(fromHex(privHex), message),
-        }),
-        isNewlyCreated: false,
-      };
     }
+    const pubHex = existingPublicHex;
+    const privHex = /** @type {string} */ (getState('private_key'));
+    // Use getters to avoid storing Uint8Array directly on the
+    // hardened object — in XS, Uint8Array indexed elements are
+    // non-configurable so harden/freeze fails.
+    return {
+      keypair: harden({
+        get publicKey() {
+          return fromHex(pubHex);
+        },
+        get privateKey() {
+          return fromHex(privHex);
+        },
+        sign: message => cryptoPowers.ed25519Sign(fromHex(privHex), message),
+      }),
+      isNewlyCreated: false,
+    };
   };
 
+  // Content store uses the filesystem for streaming binary data.
+  // Large blobs do not belong in SQLite.
   const makeContentStore = () => {
     const { statePath } = config;
     const storageDirectoryPath = filePowers.joinPath(statePath, 'store-sha256');
@@ -122,29 +148,21 @@ export const makeDaemonicPersistencePowers = (
         }
         await fileWriter.return(undefined);
 
-        // Calculate hash.
+        // Calculate hash, finish with an atomic rename.
         const sha256 = digester.digestHex();
-        // Finish with an atomic rename.
         const storagePath = filePowers.joinPath(storageDirectoryPath, sha256);
         await filePowers.renamePath(temporaryStoragePath, storagePath);
         return sha256;
       },
-      /**
-       * @param {string} sha256
-       */
+      /** @param {string} sha256 */
       fetch(sha256) {
         const storagePath = filePowers.joinPath(storageDirectoryPath, sha256);
         const streamBase64 = () => {
           const reader = filePowers.makeFileReader(storagePath);
           return makeReaderRef(reader);
         };
-        const text = async () => {
-          return filePowers.readFileText(storagePath);
-        };
-        const json = async () => {
-          const jsonSrc = await text();
-          return JSON.parse(jsonSrc);
-        };
+        const text = async () => filePowers.readFileText(storagePath);
+        const json = async () => JSON.parse(await text());
         return harden({ streamBase64, text, json });
       },
       /**
@@ -165,106 +183,32 @@ export const makeDaemonicPersistencePowers = (
     return makeSnapshotStore(rawStore);
   };
 
-  /**
-   * @param {string} formulaNumber
-   */
-  const makeFormulaPath = formulaNumber => {
-    const { statePath } = config;
-    if (formulaNumber.length < 3) {
-      throw new TypeError(`Invalid formula number ${q(formulaNumber)}`);
-    }
-    const head = formulaNumber.slice(0, 2);
-    const tail = formulaNumber.slice(2);
-    const directory = filePowers.joinPath(statePath, 'formulas', head);
-    const file = filePowers.joinPath(directory, `${tail}.json`);
-    return harden({ directory, file });
-  };
-
-  /**
-   * @param {string} formulaNumber
-   * @returns {Promise<Formula>}
-   */
-  const readFormula = async formulaNumber => {
-    const { file: formulaPath } = makeFormulaPath(formulaNumber);
-    const formulaText = await filePowers.maybeReadFileText(formulaPath);
-    if (formulaText === undefined) {
-      throw new ReferenceError(`No reference exists at path ${formulaPath}`);
-    }
-    const formula = (() => {
-      try {
-        return JSON.parse(formulaText);
-      } catch (error) {
-        throw new TypeError(
-          `Corrupt description for reference in file ${formulaPath}: ${/** @type {Error} */ (error).message}`,
-        );
-      }
-    })();
-    return formula;
-  };
-
-  // Persist instructions for revival (this can be collected)
-  /** @type {DaemonicPersistencePowers['writeFormula']} */
-  const writeFormula = async (formulaNumber, formula) => {
-    const { directory, file } = makeFormulaPath(formulaNumber);
-    // TODO Take care to write atomically with a rename here.
-    await filePowers.makePath(directory);
-    await filePowers.writeFileText(file, `${q(formula)}\n`);
-  };
-
-  /** @type {DaemonicPersistencePowers['deleteFormula']} */
-  const deleteFormula = async formulaNumber => {
-    const { file } = makeFormulaPath(formulaNumber);
-    await filePowers.removePath(file);
-  };
-
-  /** @type {DaemonicPersistencePowers['listFormulas']} */
-  const listFormulas = async () => {
-    const formulasPath = filePowers.joinPath(config.statePath, 'formulas');
-    const heads = await filePowers.readDirectory(formulasPath).catch(error => {
-      if (error.message.startsWith('ENOENT: ')) {
-        return [];
-      }
-      throw error;
-    });
-    /** @type {import('./types.js').FormulaNumber[]} */
-    const numbers = [];
-    await Promise.all(
-      heads.map(async head => {
-        const headPath = filePowers.joinPath(formulasPath, head);
-        const files = await filePowers.readDirectory(headPath).catch(error => {
-          if (
-            error.message.startsWith('ENOTDIR: ') ||
-            error.message.startsWith('ENOENT: ')
-          ) {
-            return [];
-          }
-          throw error;
-        });
-        for (const file of files) {
-          if (file.endsWith('.json')) {
-            const tail = file.slice(0, -'.json'.length);
-            numbers.push(
-              /** @type {import('./types.js').FormulaNumber} */ (
-                `${head}${tail}`
-              ),
-            );
-          }
-        }
-      }),
-    );
-    return numbers;
-  };
-
+  // Wrap synchronous database operations as async so that
+  // implementations using async I/O are not constrained.
   return harden({
     statePath: config.statePath,
     initializePersistence,
     provideRootNonce,
     provideRootKeypair,
     makeContentStore,
-    readFormula,
-    writeFormula,
-    deleteFormula,
-    listFormulas,
+    readFormula: async formulaNumber => readFormula(formulaNumber),
+    writeFormula: async (formulaNumber, nodeNumber, formula) =>
+      writeFormula(formulaNumber, nodeNumber, formula),
+    deleteFormula: async formulaNumber => deleteFormula(formulaNumber),
+    listFormulas: async () => listFormulas(),
+    listFormulaNumbersByNode,
+    writeAgentKey,
+    getAgentKey,
+    hasAgentKey,
+    listAgentKeys,
+    deleteAgentKey,
+    writeRemoteAgentKey,
+    getRemoteAgentKey,
+    writeRetention,
+    deleteRetention,
+    listRetention,
+    replaceRetention,
+    deleteAllRetention,
   });
 };
 harden(makeDaemonicPersistencePowers);

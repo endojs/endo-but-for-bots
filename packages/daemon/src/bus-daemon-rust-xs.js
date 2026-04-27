@@ -47,6 +47,8 @@ import { mapWriter, mapReader, makePipe } from '@endo/stream';
 
 import { makeDaemon } from './daemon.js';
 import { makeDaemonicPersistencePowers } from './daemon-persistence-powers.js';
+import { makeDaemonDatabase } from './daemon-database.js';
+import XsDatabase from './better-sqlite3-xs.js';
 import { makePetStoreMaker } from './pet-store.js';
 import {
   makeMessageCapTP,
@@ -278,12 +280,24 @@ const config = harden({
 const filePowers = makeXsFilePowers();
 const cryptoPowers = makeXsCryptoPowers();
 
-const petStorePowers = makePetStoreMaker(filePowers, config);
-const daemonicPersistencePowers = makeDaemonicPersistencePowers(
-  filePowers,
-  cryptoPowers,
-  config,
-);
+// SQLite parity with the Node-supervised daemon.  The shared
+// daemonDb (opened via the XS-side better-sqlite3 shim that
+// routes prepared-statement calls through Rust's rusqlite host
+// functions) backs both the pet-store's DaemonDatabase contract
+// and the persistence powers' formula/agent-key/retention
+// queries, so a single state directory can be opened by either
+// supervisor with no migration step.
+//
+// The actual database open requires statePath to exist, so we
+// defer construction until inside main() where
+// initializePersistence has run.
+
+/** @type {ReturnType<typeof makeDaemonDatabase> | null} */
+let daemonDb = null;
+/** @type {ReturnType<typeof makePetStoreMaker> | null} */
+let petStorePowers = null;
+/** @type {ReturnType<typeof makeDaemonicPersistencePowers> | null} */
+let daemonicPersistencePowers = null;
 
 // ---------------------------------------------------------------------------
 // Envelope I/O via issueCommand
@@ -595,15 +609,12 @@ const controlPowers = harden({ makeWorker, attachDebugger, detachDebugger });
 
 // ---------------------------------------------------------------------------
 // Assemble DaemonicPowers
+//
+// `powers` references `petStorePowers`, which is assigned inside
+// `main()` after the asynchronous pet-store load completes (see
+// makePersistentPetStoreDb above).  We therefore defer the harden()
+// of `powers` until that assignment is done.
 // ---------------------------------------------------------------------------
-
-const powers = harden({
-  crypto: cryptoPowers,
-  petStore: petStorePowers,
-  persistence: daemonicPersistencePowers,
-  control: controlPowers,
-  filePowers,
-});
 
 // ---------------------------------------------------------------------------
 // Daemon lifecycle
@@ -624,7 +635,27 @@ const main = async () => {
     hostTrace(`Endo daemon (xs) stopping on PID ${pid}`);
   });
 
+  // Ensure the state path exists before we open the SQLite
+  // database file inside it.
+  await filePowers.makePath(config.statePath);
+  daemonDb = makeDaemonDatabase(config, { Database: XsDatabase });
+  petStorePowers = makePetStoreMaker(daemonDb);
+  daemonicPersistencePowers = makeDaemonicPersistencePowers(
+    daemonDb,
+    filePowers,
+    cryptoPowers,
+    config,
+  );
+
   await daemonicPersistencePowers.initializePersistence();
+
+  const powers = harden({
+    crypto: cryptoPowers,
+    petStore: petStorePowers,
+    persistence: daemonicPersistencePowers,
+    control: controlPowers,
+    filePowers,
+  });
 
   const gcEnabled = hostGetEnv('ENDO_GC') === '1';
   const result = await makeDaemon(
@@ -652,9 +683,19 @@ const main = async () => {
   globalThis.__endoBootstrap = endoBootstrap;
   globalThis.__cancelGracePeriod = cancelGracePeriod;
 
-  // Request supervisor to listen on Unix socket.
-  const listenPayload = textEncoder.encode(JSON.stringify({ path: sockPath }));
-  sendEnvelope(0, 'listen', listenPayload, 0);
+  // Request the supervisor to listen on a Unix socket.  The verb is
+  // `listen-path` and the payload is a CBOR map with a single
+  // `path` entry pointing to the socket location.
+  /** @type {number[]} */
+  const listenBuf = [];
+  cborHead(listenBuf, CBOR_MAP, 1);
+  const pathKey = textEncoder.encode('path');
+  cborHead(listenBuf, CBOR_TEXT, pathKey.length);
+  for (let i = 0; i < pathKey.length; i += 1) listenBuf.push(pathKey[i]);
+  const pathVal = textEncoder.encode(sockPath);
+  cborHead(listenBuf, CBOR_TEXT, pathVal.length);
+  for (let i = 0; i < pathVal.length; i += 1) listenBuf.push(pathVal[i]);
+  sendEnvelope(0, 'listen-path', new Uint8Array(listenBuf), 0);
 
   // Update endo.pid with our PID.
   const pidPath = filePowers.joinPath(ephemeralStatePath, 'endo.pid');
