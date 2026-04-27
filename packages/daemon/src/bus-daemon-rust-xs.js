@@ -563,7 +563,10 @@ const makeWorker = async (
       if (inboxWaiter) {
         const w = inboxWaiter;
         inboxWaiter = null;
-        w(harden({ done: false, value: env }));
+        // Use Object.freeze (not harden) — the env's Uint8Array payload
+        // has non-configurable indexed elements under XS, so deep-
+        // freezing the wrapper throws "cannot configure property".
+        w(Object.freeze({ done: false, value: env }));
       } else {
         inboxQueue.push(env);
       }
@@ -575,7 +578,7 @@ const makeWorker = async (
           const value = /** @type {{verb: string, payload: Uint8Array}} */ (
             inboxQueue.shift()
           );
-          return Promise.resolve(harden({ done: false, value }));
+          return Promise.resolve(Object.freeze({ done: false, value }));
         }
         if (inboxClosed) {
           return Promise.resolve(harden({ done: true, value: undefined }));
