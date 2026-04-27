@@ -19,8 +19,6 @@ coverage
 
 # LLM tools
 .claude/*.local.*
-# UNTIL https://github.com/anthropics/claude-code/issues/27282
-.claude/worktrees/
 
 # Platform metadata
 .DS_Store
@@ -40,6 +38,7 @@ build/Release
 # Dependency directories
 node_modules
 jspm_packages/
+.yarn-global/
 
 # TypeScript v1 declaration files
 typings/
@@ -104,6 +103,7 @@ api-docs
 !packages/eventual-send/src/types.d.ts
 !packages/exo/src/types.d.ts
 !packages/exo/types-index.d.ts
+!packages/exo-stream/types.d.ts
 !packages/far/src/exports.d.ts
 !packages/lp32/types.d.ts
 !packages/pass-style/src/types.d.ts
@@ -113,3 +113,5 @@ api-docs
 !packages/stream/types.d.ts
 !packages/trampoline/types.d.ts
 !packages/where/types.d.ts
+!packages/ocapn/src/codec-interface.d.ts
+!packages/ocapn-noise/src/types.d.ts

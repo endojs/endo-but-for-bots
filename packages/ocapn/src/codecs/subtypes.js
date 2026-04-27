@@ -57,6 +57,23 @@ export const PositiveIntegerListCodec = makeListCodecFromEntryCodec(
   PositiveIntegerCodec,
 );
 
+/** @type {SyrupCodec} */
+export const FalseCodec = makeCodec('False', {
+  write: (value, syrupWriter) => {
+    if (value) {
+      throw Error('FalseCodec: value must be false');
+    }
+    syrupWriter.writeBoolean(value);
+  },
+  read: syrupReader => {
+    const value = syrupReader.readBoolean();
+    if (value) {
+      throw Error('FalseCodec: value must be false');
+    }
+    return value;
+  },
+});
+
 /**
  * Wrap a child codec so the field accepts `false` as a sentinel for
  * "absent / no value." OCapN uses this pattern for optional message
@@ -87,23 +104,6 @@ export const makeOcapnFalseForOptionalCodec = (codecName, childCodec) => {
     },
   });
 };
-
-/** @type {SyrupCodec} */
-export const FalseCodec = makeCodec('False', {
-  write: (value, syrupWriter) => {
-    if (value) {
-      throw Error('FalseCodec: value must be false');
-    }
-    syrupWriter.writeBoolean(value);
-  },
-  read: syrupReader => {
-    const value = syrupReader.readBoolean();
-    if (value) {
-      throw Error('FalseCodec: value must be false');
-    }
-    return value;
-  },
-});
 
 /**
  * @param {string} codecName

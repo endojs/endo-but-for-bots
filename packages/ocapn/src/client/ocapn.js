@@ -937,9 +937,16 @@ export const makeOcapn = (
     'op:gc-exports': message => {
       const { exportPositions, wireDeltas } = message;
       logger.info(`gc-exports`, { exportPositions, wireDeltas });
-      if (exportPositions.length !== wireDeltas.length) {
+      if (!Array.isArray(exportPositions) || !Array.isArray(wireDeltas)) {
         throw Error(
-          `OCapN: op:gc-exports exportPositions and wireDeltas length mismatch: ${exportPositions.length} vs ${wireDeltas.length}`,
+          `OCapN: op:gc-exports requires exportPositions and wireDeltas arrays`,
+        );
+      }
+      const exportLen = exportPositions.length;
+      const wireLen = wireDeltas.length;
+      if (exportLen !== wireLen) {
+        throw Error(
+          `OCapN: op:gc-exports exportPositions and wireDeltas length mismatch: ${exportLen} vs ${wireLen}`,
         );
       }
       for (let i = 0; i < exportPositions.length; i += 1) {
