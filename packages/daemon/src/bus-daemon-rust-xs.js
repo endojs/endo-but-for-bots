@@ -806,7 +806,8 @@ const main = async () => {
     cancelled,
     {},
     {
-      defaultWorkerKind: 'locked',
+      defaultWorkerKind:
+        hostGetEnv('ENDO_DEFAULT_PLATFORM') === 'node' ? 'node' : 'locked',
       gcEnabled,
     },
   );

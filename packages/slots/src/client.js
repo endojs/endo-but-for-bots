@@ -172,6 +172,9 @@ export const makeSlotClient = ({
     // that pumps an inbound resolve re-entrantly inside sendEnvelope
     // can still find the matching entry.
     settlers.set(descriptorKey(replyDesc), { resolve, reject });
+    if (typeof globalThis.hostTrace === 'function') {
+      globalThis.hostTrace(`slot-client.deliver method=${method}`);
+    }
     sendEnvelope(VERB_DELIVER, bytes);
     return reply;
   };
