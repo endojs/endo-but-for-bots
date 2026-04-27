@@ -386,17 +386,7 @@ const main = async () => {
   }
 
   // ---- Rust supervisor + XS workers ----
-  // Skipped under ENDO_USE_SLOT_MACHINE=1: the XS worker source was
-  // pre-bundled into rust/endo/xsnap/src/worker_bootstrap.js without
-  // a checked-in source-of-truth, so the worker side cannot yet
-  // import @endo/slots.  The Rust+Node variant below exercises both
-  // the daemon-side splice and the worker-side splice in
-  // bus-worker-node-raw.js — it is the bench-delta target.
-  if (
-    runRust &&
-    !process.argv.includes('--rust-node-only') &&
-    process.env.ENDO_USE_SLOT_MACHINE !== '1'
-  ) {
+  if (runRust && !process.argv.includes('--rust-node-only')) {
     console.log('\n--- Starting Rust+XS daemon ---');
     const config = makeConfig('tmp', 'bench-rust');
     const { reject: cancel, promise: cancelled } = makePromiseKit();

@@ -642,6 +642,96 @@
       atob: cell("atob"),
     },
     {
+      makeWriter: cell("makeWriter"),
+      writerToBytes: cell("writerToBytes"),
+      writeUint: cell("writeUint"),
+      writeByteString: cell("writeByteString"),
+      writeArrayHeader: cell("writeArrayHeader"),
+      writeNull: cell("writeNull"),
+      makeReader: cell("makeReader"),
+      readUint: cell("readUint"),
+      readByteString: cell("readByteString"),
+      readArrayHeader: cell("readArrayHeader"),
+      readNullOrPeek: cell("readNullOrPeek"),
+      assertConsumed: cell("assertConsumed"),
+    },
+    {
+      Direction: cell("Direction"),
+      Kind: cell("Kind"),
+      flipDirection: cell("flipDirection"),
+      writeDescriptor: cell("writeDescriptor"),
+      encodeDescriptor: cell("encodeDescriptor"),
+      readDescriptor: cell("readDescriptor"),
+      decodeDescriptor: cell("decodeDescriptor"),
+      descriptorKey: cell("descriptorKey"),
+    },
+    {
+      VERB_DELIVER: cell("VERB_DELIVER"),
+      VERB_RESOLVE: cell("VERB_RESOLVE"),
+      VERB_DROP: cell("VERB_DROP"),
+      VERB_ABORT: cell("VERB_ABORT"),
+      isSlotVerb: cell("isSlotVerb"),
+      encodeDeliverPayload: cell("encodeDeliverPayload"),
+      decodeDeliverPayload: cell("decodeDeliverPayload"),
+      encodeResolvePayload: cell("encodeResolvePayload"),
+      decodeResolvePayload: cell("decodeResolvePayload"),
+      encodeDropPayload: cell("encodeDropPayload"),
+      decodeDropPayload: cell("decodeDropPayload"),
+      encodeAbortPayload: cell("encodeAbortPayload"),
+      decodeAbortPayload: cell("decodeAbortPayload"),
+    },
+    {
+      sessionIdFromLabel: cell("sessionIdFromLabel"),
+      sessionIdHex: cell("sessionIdHex"),
+    },
+    {
+      makeCList: cell("makeCList"),
+    },
+    {
+      makeSlotCodec: cell("makeSlotCodec"),
+    },
+    {
+      makeSlotClient: cell("makeSlotClient"),
+    },
+    {
+      LOCAL_ROOT: cell("LOCAL_ROOT"),
+      REMOTE_ROOT: cell("REMOTE_ROOT"),
+      bootstrap: cell("bootstrap"),
+    },
+    {
+      makeMessageSlots: cell("makeMessageSlots"),
+    },
+    {
+      Direction: cell("Direction"),
+      Kind: cell("Kind"),
+      encodeDescriptor: cell("encodeDescriptor"),
+      decodeDescriptor: cell("decodeDescriptor"),
+      descriptorKey: cell("descriptorKey"),
+      flipDirection: cell("flipDirection"),
+      VERB_DELIVER: cell("VERB_DELIVER"),
+      VERB_RESOLVE: cell("VERB_RESOLVE"),
+      VERB_DROP: cell("VERB_DROP"),
+      VERB_ABORT: cell("VERB_ABORT"),
+      isSlotVerb: cell("isSlotVerb"),
+      encodeDeliverPayload: cell("encodeDeliverPayload"),
+      decodeDeliverPayload: cell("decodeDeliverPayload"),
+      encodeResolvePayload: cell("encodeResolvePayload"),
+      decodeResolvePayload: cell("decodeResolvePayload"),
+      encodeDropPayload: cell("encodeDropPayload"),
+      decodeDropPayload: cell("decodeDropPayload"),
+      encodeAbortPayload: cell("encodeAbortPayload"),
+      decodeAbortPayload: cell("decodeAbortPayload"),
+      sessionIdFromLabel: cell("sessionIdFromLabel"),
+      sessionIdHex: cell("sessionIdHex"),
+      makeCList: cell("makeCList"),
+      makeSlotCodec: cell("makeSlotCodec"),
+      makeSlotClient: cell("makeSlotClient"),
+      LOCAL_ROOT: cell("LOCAL_ROOT"),
+      REMOTE_ROOT: cell("REMOTE_ROOT"),
+      bootstrap: cell("bootstrap"),
+      makeMessageSlots: cell("makeMessageSlots"),
+    },
+    {
       encodeEnvelope: cell("encodeEnvelope"),
       encodeFrame: cell("encodeFrame"),
       decodeFrame: cell("decodeFrame"),
@@ -720,6 +810,8 @@
   defineProperties(cells[84], {"decodeBase64": { value: cells[81]["decodeBase64"] } });
 
   defineProperties(cells[86], {"encodeBase64": { value: cells[80]["encodeBase64"] },"decodeBase64": { value: cells[81]["decodeBase64"] },"btoa": { value: cells[83]["btoa"] },"atob": { value: cells[85]["atob"] } });
+
+  defineProperties(cells[96], {"Direction": { value: cells[88]["Direction"] },"Kind": { value: cells[88]["Kind"] },"encodeDescriptor": { value: cells[88]["encodeDescriptor"] },"decodeDescriptor": { value: cells[88]["decodeDescriptor"] },"descriptorKey": { value: cells[88]["descriptorKey"] },"flipDirection": { value: cells[88]["flipDirection"] },"VERB_DELIVER": { value: cells[89]["VERB_DELIVER"] },"VERB_RESOLVE": { value: cells[89]["VERB_RESOLVE"] },"VERB_DROP": { value: cells[89]["VERB_DROP"] },"VERB_ABORT": { value: cells[89]["VERB_ABORT"] },"isSlotVerb": { value: cells[89]["isSlotVerb"] },"encodeDeliverPayload": { value: cells[89]["encodeDeliverPayload"] },"decodeDeliverPayload": { value: cells[89]["decodeDeliverPayload"] },"encodeResolvePayload": { value: cells[89]["encodeResolvePayload"] },"decodeResolvePayload": { value: cells[89]["decodeResolvePayload"] },"encodeDropPayload": { value: cells[89]["encodeDropPayload"] },"decodeDropPayload": { value: cells[89]["decodeDropPayload"] },"encodeAbortPayload": { value: cells[89]["encodeAbortPayload"] },"decodeAbortPayload": { value: cells[89]["decodeAbortPayload"] },"sessionIdFromLabel": { value: cells[90]["sessionIdFromLabel"] },"sessionIdHex": { value: cells[90]["sessionIdHex"] },"makeCList": { value: cells[91]["makeCList"] },"makeSlotCodec": { value: cells[92]["makeSlotCodec"] },"makeSlotClient": { value: cells[93]["makeSlotClient"] },"LOCAL_ROOT": { value: cells[94]["LOCAL_ROOT"] },"REMOTE_ROOT": { value: cells[94]["REMOTE_ROOT"] },"bootstrap": { value: cells[94]["bootstrap"] },"makeMessageSlots": { value: cells[95]["makeMessageSlots"] } });
 
   const namespaces = cells.map(cells => freeze(create(null, {
     ...cells,
@@ -2152,53 +2244,237 @@ function observeImports(map, importName, importIndex) {
   functors[87]({
     imports(entries) {
       const map = new Map(entries);
+      observeImports(map, "@endo/harden", 3);
+      observeImports(map, "@endo/errors", 9);
     },
     liveVar: {
     },
     onceVar: {
-      encodeEnvelope: cells[87].encodeEnvelope.set,
-      encodeFrame: cells[87].encodeFrame.set,
-      decodeFrame: cells[87].decodeFrame.set,
-      decodeEnvelope: cells[87].decodeEnvelope.set,
-      readFrameFromStream: cells[87].readFrameFromStream.set,
-      writeFrameToStream: cells[87].writeFrameToStream.set,
+      makeWriter: cells[87].makeWriter.set,
+      writerToBytes: cells[87].writerToBytes.set,
+      writeUint: cells[87].writeUint.set,
+      writeByteString: cells[87].writeByteString.set,
+      writeArrayHeader: cells[87].writeArrayHeader.set,
+      writeNull: cells[87].writeNull.set,
+      makeReader: cells[87].makeReader.set,
+      readUint: cells[87].readUint.set,
+      readByteString: cells[87].readByteString.set,
+      readArrayHeader: cells[87].readArrayHeader.set,
+      readNullOrPeek: cells[87].readNullOrPeek.set,
+      assertConsumed: cells[87].assertConsumed.set,
     },
     importMeta: {},
   });
   functors[88]({
     imports(entries) {
       const map = new Map(entries);
+      observeImports(map, "@endo/harden", 3);
+      observeImports(map, "@endo/errors", 9);
+      observeImports(map, "./cbor.js", 87);
     },
     liveVar: {
     },
     onceVar: {
-      textEncoder: cells[88].textEncoder.set,
-      textDecoder: cells[88].textDecoder.set,
-      silentReject: cells[88].silentReject.set,
-      markShouldTerminate: cells[88].markShouldTerminate.set,
-      installShouldTerminate: cells[88].installShouldTerminate.set,
+      Direction: cells[88].Direction.set,
+      Kind: cells[88].Kind.set,
+      flipDirection: cells[88].flipDirection.set,
+      writeDescriptor: cells[88].writeDescriptor.set,
+      encodeDescriptor: cells[88].encodeDescriptor.set,
+      readDescriptor: cells[88].readDescriptor.set,
+      decodeDescriptor: cells[88].decodeDescriptor.set,
+      descriptorKey: cells[88].descriptorKey.set,
     },
     importMeta: {},
   });
   functors[89]({
     imports(entries) {
       const map = new Map(entries);
-      observeImports(map, "./envelope.js", 87);
-      observeImports(map, "./bus-xs-common.js", 88);
+      observeImports(map, "@endo/harden", 3);
+      observeImports(map, "@endo/errors", 9);
+      observeImports(map, "./cbor.js", 87);
+      observeImports(map, "./descriptor.js", 88);
     },
     liveVar: {
-        installShouldTerminate: cells[89].installShouldTerminate.set,
-      markShouldTerminate: cells[89].markShouldTerminate.set,
-      silentReject: cells[89].silentReject.set,
-      textDecoder: cells[89].textDecoder.set,
-      textEncoder: cells[89].textEncoder.set,
-  },
+    },
     onceVar: {
-      makeXsNode: cells[89].makeXsNode.set,
+      VERB_DELIVER: cells[89].VERB_DELIVER.set,
+      VERB_RESOLVE: cells[89].VERB_RESOLVE.set,
+      VERB_DROP: cells[89].VERB_DROP.set,
+      VERB_ABORT: cells[89].VERB_ABORT.set,
+      isSlotVerb: cells[89].isSlotVerb.set,
+      encodeDeliverPayload: cells[89].encodeDeliverPayload.set,
+      decodeDeliverPayload: cells[89].decodeDeliverPayload.set,
+      encodeResolvePayload: cells[89].encodeResolvePayload.set,
+      decodeResolvePayload: cells[89].decodeResolvePayload.set,
+      encodeDropPayload: cells[89].encodeDropPayload.set,
+      decodeDropPayload: cells[89].decodeDropPayload.set,
+      encodeAbortPayload: cells[89].encodeAbortPayload.set,
+      decodeAbortPayload: cells[89].decodeAbortPayload.set,
     },
     importMeta: {},
   });
   functors[90]({
+    imports(entries) {
+      const map = new Map(entries);
+      observeImports(map, "@endo/harden", 3);
+    },
+    liveVar: {
+    },
+    onceVar: {
+      sessionIdFromLabel: cells[90].sessionIdFromLabel.set,
+      sessionIdHex: cells[90].sessionIdHex.set,
+    },
+    importMeta: {},
+  });
+  functors[91]({
+    imports(entries) {
+      const map = new Map(entries);
+      observeImports(map, "@endo/harden", 3);
+      observeImports(map, "@endo/errors", 9);
+      observeImports(map, "./descriptor.js", 88);
+      observeImports(map, "./session.js", 90);
+    },
+    liveVar: {
+    },
+    onceVar: {
+      makeCList: cells[91].makeCList.set,
+    },
+    importMeta: {},
+  });
+  functors[92]({
+    imports(entries) {
+      const map = new Map(entries);
+      observeImports(map, "@endo/harden", 3);
+      observeImports(map, "@endo/errors", 9);
+      observeImports(map, "@endo/marshal", 47);
+      observeImports(map, "@endo/promise-kit", 22);
+      observeImports(map, "./descriptor.js", 88);
+      observeImports(map, "./payload.js", 89);
+    },
+    liveVar: {
+    },
+    onceVar: {
+      makeSlotCodec: cells[92].makeSlotCodec.set,
+    },
+    importMeta: {},
+  });
+  functors[93]({
+    imports(entries) {
+      const map = new Map(entries);
+      observeImports(map, "@endo/harden", 3);
+      observeImports(map, "@endo/errors", 9);
+      observeImports(map, "@endo/eventual-send", 34);
+      observeImports(map, "@endo/promise-kit", 22);
+      observeImports(map, "./descriptor.js", 88);
+      observeImports(map, "./payload.js", 89);
+    },
+    liveVar: {
+    },
+    onceVar: {
+      makeSlotClient: cells[93].makeSlotClient.set,
+    },
+    importMeta: {},
+  });
+  functors[94]({
+    imports(entries) {
+      const map = new Map(entries);
+      observeImports(map, "@endo/harden", 3);
+      observeImports(map, "./descriptor.js", 88);
+    },
+    liveVar: {
+    },
+    onceVar: {
+      LOCAL_ROOT: cells[94].LOCAL_ROOT.set,
+      REMOTE_ROOT: cells[94].REMOTE_ROOT.set,
+      bootstrap: cells[94].bootstrap.set,
+    },
+    importMeta: {},
+  });
+  functors[95]({
+    imports(entries) {
+      const map = new Map(entries);
+      observeImports(map, "@endo/harden", 3);
+      observeImports(map, "@endo/promise-kit", 22);
+      observeImports(map, "./clist.js", 91);
+      observeImports(map, "./codec.js", 92);
+      observeImports(map, "./client.js", 93);
+      observeImports(map, "./bootstrap.js", 94);
+    },
+    liveVar: {
+    },
+    onceVar: {
+      makeMessageSlots: cells[95].makeMessageSlots.set,
+    },
+    importMeta: {},
+  });
+  functors[96]({
+    imports(entries) {
+      const map = new Map(entries);
+      observeImports(map, "./src/descriptor.js", 88);
+      observeImports(map, "./src/payload.js", 89);
+      observeImports(map, "./src/session.js", 90);
+      observeImports(map, "./src/clist.js", 91);
+      observeImports(map, "./src/codec.js", 92);
+      observeImports(map, "./src/client.js", 93);
+      observeImports(map, "./src/bootstrap.js", 94);
+      observeImports(map, "./src/message.js", 95);
+    },
+    liveVar: {
+    },
+    onceVar: {
+    },
+    importMeta: {},
+  });
+  functors[97]({
+    imports(entries) {
+      const map = new Map(entries);
+    },
+    liveVar: {
+    },
+    onceVar: {
+      encodeEnvelope: cells[97].encodeEnvelope.set,
+      encodeFrame: cells[97].encodeFrame.set,
+      decodeFrame: cells[97].decodeFrame.set,
+      decodeEnvelope: cells[97].decodeEnvelope.set,
+      readFrameFromStream: cells[97].readFrameFromStream.set,
+      writeFrameToStream: cells[97].writeFrameToStream.set,
+    },
+    importMeta: {},
+  });
+  functors[98]({
+    imports(entries) {
+      const map = new Map(entries);
+    },
+    liveVar: {
+    },
+    onceVar: {
+      textEncoder: cells[98].textEncoder.set,
+      textDecoder: cells[98].textDecoder.set,
+      silentReject: cells[98].silentReject.set,
+      markShouldTerminate: cells[98].markShouldTerminate.set,
+      installShouldTerminate: cells[98].installShouldTerminate.set,
+    },
+    importMeta: {},
+  });
+  functors[99]({
+    imports(entries) {
+      const map = new Map(entries);
+      observeImports(map, "./envelope.js", 97);
+      observeImports(map, "./bus-xs-common.js", 98);
+    },
+    liveVar: {
+        installShouldTerminate: cells[99].installShouldTerminate.set,
+      markShouldTerminate: cells[99].markShouldTerminate.set,
+      silentReject: cells[99].silentReject.set,
+      textDecoder: cells[99].textDecoder.set,
+      textEncoder: cells[99].textEncoder.set,
+  },
+    onceVar: {
+      makeXsNode: cells[99].makeXsNode.set,
+    },
+    importMeta: {},
+  });
+  functors[100]({
     imports(entries) {
       const map = new Map(entries);
       observeImports(map, "@endo/harden", 3);
@@ -2208,33 +2484,33 @@ function observeImports(map, importName, importIndex) {
     liveVar: {
     },
     onceVar: {
-      makeQueue: cells[90].makeQueue.set,
-      makeStream: cells[90].makeStream.set,
-      makePipe: cells[90].makePipe.set,
-      pump: cells[90].pump.set,
-      prime: cells[90].prime.set,
-      mapReader: cells[90].mapReader.set,
-      mapWriter: cells[90].mapWriter.set,
+      makeQueue: cells[100].makeQueue.set,
+      makeStream: cells[100].makeStream.set,
+      makePipe: cells[100].makePipe.set,
+      pump: cells[100].pump.set,
+      prime: cells[100].prime.set,
+      mapReader: cells[100].mapReader.set,
+      mapWriter: cells[100].mapWriter.set,
     },
     importMeta: {},
   });
-  functors[91]({
+  functors[101]({
     imports(entries) {
       const map = new Map(entries);
       observeImports(map, "@endo/harden", 3);
       observeImports(map, "@endo/base64", 86);
-      observeImports(map, "@endo/stream", 90);
+      observeImports(map, "@endo/stream", 100);
       observeImports(map, "@endo/far", 55);
     },
     liveVar: {
     },
     onceVar: {
-      makeRefIterator: cells[91].makeRefIterator.set,
-      makeRefReader: cells[91].makeRefReader.set,
+      makeRefIterator: cells[101].makeRefIterator.set,
+      makeRefReader: cells[101].makeRefReader.set,
     },
     importMeta: {},
   });
-  functors[92]({
+  functors[102]({
     imports(entries) {
       const map = new Map(entries);
       observeImports(map, "@endo/captp", 53);
@@ -2242,8 +2518,9 @@ function observeImports(map, importName, importIndex) {
       observeImports(map, "@endo/exo", 78);
       observeImports(map, "@endo/patterns", 72);
       observeImports(map, "@endo/base64", 86);
-      observeImports(map, "./bus-xs-core.js", 89);
-      observeImports(map, "./ref-reader.js", 91);
+      observeImports(map, "@endo/slots", 96);
+      observeImports(map, "./bus-xs-core.js", 99);
+      observeImports(map, "./ref-reader.js", 101);
     },
     liveVar: {
     },
@@ -18081,7 +18358,1901 @@ $h͏_once.jsDecodeBase64(jsDecodeBase64);const adaptDecoder=
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';$h͏_imports([["./src/encode.js", []],["./src/decode.js", []],["./btoa.js", []],["./atob.js", []]]);
 })()
 ,
-// === 87. daemon ./src/envelope.js ===
+// === 87. slots ./src/cbor.js ===
+({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden,makeError,q,X;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]],["@endo/errors", [["makeError",[$h͏_a => (makeError = $h͏_a)]],["q",[$h͏_a => (q = $h͏_a)]],["X",[$h͏_a => (X = $h͏_a)]]]]]);
+
+
+
+
+
+/**
+ * Canonical CBOR writer/reader tuned to the slot-machine wire format.
+ *
+ * We write bytes directly per RFC 8949 §4.2 so that every output is
+ * byte-identical to the Rust `rust/endo/slots` crate.  Only the
+ * subset of CBOR used by the four slot verbs is supported:
+ *   - unsigned integers (minimal-head)
+ *   - byte strings
+ *   - arrays (definite length)
+ *   - null (for the optional reply field)
+ *
+ * Definite-length only; no maps, no floats, no tags, no indefinite
+ * containers.
+ */
+
+const MAJOR_UINT = 0;
+const MAJOR_BYTES = 2;
+const MAJOR_ARRAY = 4;
+
+const CBOR_NULL = 0xf6;
+
+const MAX_SAFE_U32 = 0xffffffff;
+
+/**
+ * Internal writer state: a growing byte list.
+ *
+ * @typedef {{ bytes: number[] }} Writer
+ */
+
+/** @returns {Writer} */
+       const makeWriter = () => ({ bytes: [] });$h͏_once.makeWriter(makeWriter);
+harden(makeWriter);
+
+/** @param {Writer} w */
+       const writerToBytes = w => new Uint8Array(w.bytes);$h͏_once.writerToBytes(writerToBytes);
+harden(writerToBytes);
+
+/**
+ * @param {Writer} w
+ * @param {number} major 0..=7
+ * @param {number} value non-negative
+ */
+const writeHead = (w, major, value) => {
+  const m = (major & 0b111) << 5;
+  if (value <= 23) {
+    w.bytes.push(m | value);
+  } else if (value <= 0xff) {
+    w.bytes.push(m | 24, value);
+  } else if (value <= 0xffff) {
+    w.bytes.push(m | 25, (value >> 8) & 0xff, value & 0xff);
+  } else if (value <= MAX_SAFE_U32) {
+    w.bytes.push(
+      m | 26,
+      (value >>> 24) & 0xff,
+      (value >>> 16) & 0xff,
+      (value >>> 8) & 0xff,
+      value & 0xff,
+    );
+  } else if (Number.isSafeInteger(value)) {
+    // 53-bit ceiling.  For 32..53-bit values use the 8-byte head.
+    w.bytes.push(m | 27);
+    // split into high/low 32-bit halves
+    const high = Math.floor(value / 0x100000000);
+    const low = value >>> 0;
+    w.bytes.push(
+      (high >>> 24) & 0xff,
+      (high >>> 16) & 0xff,
+      (high >>> 8) & 0xff,
+      high & 0xff,
+      (low >>> 24) & 0xff,
+      (low >>> 16) & 0xff,
+      (low >>> 8) & 0xff,
+      low & 0xff,
+    );
+  } else {
+    throw makeError(X`CBOR value out of safe-integer range: ${q(value)}`);
+  }
+};
+
+/**
+ * @param {Writer} w
+ * @param {number} v
+ */
+       const writeUint = (w, v) => {
+  if (v < 0 || !Number.isFinite(v)) {
+    throw makeError(X`writeUint requires non-negative number: ${q(v)}`);
+  }
+  writeHead(w, MAJOR_UINT, v);
+};$h͏_once.writeUint(writeUint);
+harden(writeUint);
+
+/**
+ * @param {Writer} w
+ * @param {Uint8Array} bytes
+ */
+       const writeByteString = (w, bytes) => {
+  writeHead(w, MAJOR_BYTES, bytes.length);
+  for (let i = 0; i < bytes.length; i += 1) {
+    w.bytes.push(bytes[i]);
+  }
+};$h͏_once.writeByteString(writeByteString);
+harden(writeByteString);
+
+/**
+ * @param {Writer} w
+ * @param {number} len
+ */
+       const writeArrayHeader = (w, len) => {
+  writeHead(w, MAJOR_ARRAY, len);
+};$h͏_once.writeArrayHeader(writeArrayHeader);
+harden(writeArrayHeader);
+
+/** @param {Writer} w */
+       const writeNull = w => {
+  w.bytes.push(CBOR_NULL);
+};$h͏_once.writeNull(writeNull);
+harden(writeNull);
+
+// ---- reader ----
+
+/**
+ * @typedef {{ data: Uint8Array, pos: number }} Reader
+ */
+
+/** @param {Uint8Array} data */
+       const makeReader = data => ({ data, pos: 0 });$h͏_once.makeReader(makeReader);
+harden(makeReader);
+
+/**
+ * @param {Reader} r
+ * @param {number} n
+ * @returns {number} single byte value, or throws on EOF
+ */
+const readByte = (r, n = 1) => {
+  if (r.pos + n > r.data.length) {
+    throw makeError(X`CBOR: unexpected EOF at offset ${q(r.pos)}`);
+  }
+  const b = r.data[r.pos];
+  r.pos += 1;
+  return b;
+};
+
+/**
+ * @param {Reader} r
+ * @returns {{ major: number, value: number }}
+ */
+const readHead = r => {
+  const initial = readByte(r);
+  const major = initial >> 5;
+  const info = initial & 0x1f;
+  if (info < 24) return { major, value: info };
+  let size;
+  if (info === 24) size = 1;
+  else if (info === 25) size = 2;
+  else if (info === 26) size = 4;
+  else if (info === 27) size = 8;
+  else throw makeError(X`CBOR: unsupported additional info ${q(info)}`);
+  if (r.pos + size > r.data.length) {
+    throw makeError(X`CBOR: unexpected EOF reading head`);
+  }
+  let value = 0;
+  for (let i = 0; i < size; i += 1) {
+    const b = r.data[r.pos + i];
+    value = value * 256 + Number(b);
+  }
+  r.pos += size;
+  if (!Number.isSafeInteger(value)) {
+    throw makeError(
+      X`CBOR: integer ${q(value)} exceeds JavaScript safe-integer range`,
+    );
+  }
+  return { major, value };
+};
+
+/** @param {Reader} r */
+       const readUint = r => {
+  const { major, value } = readHead(r);
+  if (major !== MAJOR_UINT) {
+    throw makeError(X`CBOR: expected uint, got major ${q(major)}`);
+  }
+  return value;
+};$h͏_once.readUint(readUint);
+harden(readUint);
+
+/** @param {Reader} r */
+       const readByteString = r => {
+  const { major, value } = readHead(r);
+  if (major !== MAJOR_BYTES) {
+    throw makeError(X`CBOR: expected byte string, got major ${q(major)}`);
+  }
+  if (r.pos + value > r.data.length) {
+    throw makeError(X`CBOR: byte string body truncated`);
+  }
+  const out = r.data.subarray(r.pos, r.pos + value);
+  r.pos += value;
+  return new Uint8Array(out);
+};$h͏_once.readByteString(readByteString);
+harden(readByteString);
+
+/** @param {Reader} r @returns {number} */
+       const readArrayHeader = r => {
+  const { major, value } = readHead(r);
+  if (major !== MAJOR_ARRAY) {
+    throw makeError(X`CBOR: expected array, got major ${q(major)}`);
+  }
+  return value;
+};$h͏_once.readArrayHeader(readArrayHeader);
+harden(readArrayHeader);
+
+/**
+ * Peek: is the next item CBOR null?  Consumes the byte if so.
+ *
+ * @param {Reader} r
+ */
+       const readNullOrPeek = r => {
+  if (r.pos >= r.data.length) {
+    throw makeError(X`CBOR: unexpected EOF`);
+  }
+  if (r.data[r.pos] === CBOR_NULL) {
+    r.pos += 1;
+    return true;
+  }
+  return false;
+};$h͏_once.readNullOrPeek(readNullOrPeek);
+harden(readNullOrPeek);
+
+/**
+ * Assert the reader has consumed all bytes.
+ *
+ * @param {Reader} r
+ */
+       const assertConsumed = r => {
+  if (r.pos !== r.data.length) {
+    throw makeError(
+      X`CBOR: ${q(r.data.length - r.pos)} trailing byte(s) after payload`,
+    );
+  }
+};$h͏_once.assertConsumed(assertConsumed);
+harden(assertConsumed);
+})()
+,
+// === 88. slots ./src/descriptor.js ===
+({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden,makeError,q,X,makeWriter,writerToBytes,writeArrayHeader,writeUint,readArrayHeader,readUint;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]],["@endo/errors", [["makeError",[$h͏_a => (makeError = $h͏_a)]],["q",[$h͏_a => (q = $h͏_a)]],["X",[$h͏_a => (X = $h͏_a)]]]],["./cbor.js", [["makeWriter",[$h͏_a => (makeWriter = $h͏_a)]],["writerToBytes",[$h͏_a => (writerToBytes = $h͏_a)]],["writeArrayHeader",[$h͏_a => (writeArrayHeader = $h͏_a)]],["writeUint",[$h͏_a => (writeUint = $h͏_a)]],["readArrayHeader",[$h͏_a => (readArrayHeader = $h͏_a)]],["readUint",[$h͏_a => (readUint = $h͏_a)]]]]]);
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+/** @import { Reader } from './cbor.js' */
+
+/**
+ * Direction of a capability reference, from the *sender's* frame.
+ * Local means the sending session allocated the position; Remote
+ * means it was allocated by the other side.
+ *
+ * @type {Readonly<{ Local: 0, Remote: 1 }>}
+ */
+       const Direction = harden({ Local: 0, Remote: 1 });
+
+/**
+ * The kind of vref a descriptor points at.  Matches
+ * `rust/endo/slots/src/wire/descriptor.rs::Kind` exactly.
+ *
+ * @type {Readonly<{ Object: 0, Promise: 1, Answer: 2, Device: 3 }>}
+ */$h͏_once.Direction(Direction);
+       const Kind = harden({ Object: 0, Promise: 1, Answer: 2, Device: 3 });
+
+/**
+ * @typedef {object} Descriptor
+ * @property {0 | 1} dir
+ * @property {0 | 1 | 2 | 3} kind
+ * @property {number} position non-negative integer
+ */$h͏_once.Kind(Kind);
+
+const KIND_RESERVED_MASK = 0b1111_1000;
+
+/**
+ * Flip a direction: what the sender called Local, the receiver
+ * reads as Remote.
+ *
+ * @param {0 | 1} dir
+ * @returns {0 | 1}
+ */
+       const flipDirection = dir => (dir === Direction.Local ? 1 : 0);$h͏_once.flipDirection(flipDirection);
+harden(flipDirection);
+
+/**
+ * Encode a descriptor into the shared canonical form:
+ * a 2-element CBOR array `[kindByte, position]`.
+ *
+ * @param {import('./cbor.js').Writer} w
+ * @param {Descriptor} d
+ */
+       const writeDescriptor = (w, d) => {
+  const kindByte = (d.kind << 1) | d.dir;
+  writeArrayHeader(w, 2);
+  writeUint(w, kindByte);
+  writeUint(w, d.position);
+};$h͏_once.writeDescriptor(writeDescriptor);
+harden(writeDescriptor);
+
+/**
+ * Standalone encode: returns a new Uint8Array containing exactly
+ * the bytes of this descriptor.
+ *
+ * @param {Descriptor} d
+ * @returns {Uint8Array}
+ */
+       const encodeDescriptor = d => {
+  const w = makeWriter();
+  writeDescriptor(w, d);
+  return writerToBytes(w);
+};$h͏_once.encodeDescriptor(encodeDescriptor);
+harden(encodeDescriptor);
+
+/**
+ * @param {Reader} r
+ * @returns {Descriptor}
+ */
+       const readDescriptor = r => {
+  const n = readArrayHeader(r);
+  if (n !== 2) {
+    throw makeError(X`descriptor must be 2-element array, got ${q(n)}`);
+  }
+  const kindByte = readUint(r);
+  const position = readUint(r);
+  if ((kindByte & KIND_RESERVED_MASK) !== 0) {
+    throw makeError(
+      X`descriptor kind byte ${q(kindByte)} has reserved bits set`,
+    );
+  }
+  const dir = /** @type {0 | 1} */ (kindByte & 0b1);
+  const kind = /** @type {0 | 1 | 2 | 3} */ ((kindByte >> 1) & 0b11);
+  return { dir, kind, position };
+};$h͏_once.readDescriptor(readDescriptor);
+harden(readDescriptor);
+
+/**
+ * Standalone decode from a stand-alone descriptor byte sequence.
+ *
+ * @param {Uint8Array} bytes
+ * @returns {Descriptor}
+ */
+       const decodeDescriptor = bytes => {
+  const r = { data: bytes, pos: 0 };
+  return readDescriptor(r);
+};$h͏_once.decodeDescriptor(decodeDescriptor);
+harden(decodeDescriptor);
+
+/**
+ * Canonical map key for a descriptor.  Must be stable for any
+ * two equal descriptors and distinct for any two non-equal ones.
+ *
+ * @param {Descriptor} d
+ * @returns {string}
+ */
+       const descriptorKey = d => `${(d.kind << 1) | d.dir}:${d.position}`;$h͏_once.descriptorKey(descriptorKey);
+harden(descriptorKey);
+})()
+,
+// === 89. slots ./src/payload.js ===
+({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden,makeError,q,X,makeWriter,writerToBytes,makeReader,writeArrayHeader,writeUint,writeByteString,writeNull,readArrayHeader,readUint,readByteString,readNullOrPeek,assertConsumed,writeDescriptor,readDescriptor;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]],["@endo/errors", [["makeError",[$h͏_a => (makeError = $h͏_a)]],["q",[$h͏_a => (q = $h͏_a)]],["X",[$h͏_a => (X = $h͏_a)]]]],["./cbor.js", [["makeWriter",[$h͏_a => (makeWriter = $h͏_a)]],["writerToBytes",[$h͏_a => (writerToBytes = $h͏_a)]],["makeReader",[$h͏_a => (makeReader = $h͏_a)]],["writeArrayHeader",[$h͏_a => (writeArrayHeader = $h͏_a)]],["writeUint",[$h͏_a => (writeUint = $h͏_a)]],["writeByteString",[$h͏_a => (writeByteString = $h͏_a)]],["writeNull",[$h͏_a => (writeNull = $h͏_a)]],["readArrayHeader",[$h͏_a => (readArrayHeader = $h͏_a)]],["readUint",[$h͏_a => (readUint = $h͏_a)]],["readByteString",[$h͏_a => (readByteString = $h͏_a)]],["readNullOrPeek",[$h͏_a => (readNullOrPeek = $h͏_a)]],["assertConsumed",[$h͏_a => (assertConsumed = $h͏_a)]]]],["./descriptor.js", [["writeDescriptor",[$h͏_a => (writeDescriptor = $h͏_a)]],["readDescriptor",[$h͏_a => (readDescriptor = $h͏_a)]]]]]);
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+/** @import { Descriptor } from './descriptor.js' */
+
+// ---- verb constants ----
+
+       const VERB_DELIVER = 'deliver';$h͏_once.VERB_DELIVER(VERB_DELIVER);
+harden(VERB_DELIVER);
+       const VERB_RESOLVE = 'resolve';$h͏_once.VERB_RESOLVE(VERB_RESOLVE);
+harden(VERB_RESOLVE);
+       const VERB_DROP = 'drop';$h͏_once.VERB_DROP(VERB_DROP);
+harden(VERB_DROP);
+       const VERB_ABORT = 'abort';$h͏_once.VERB_ABORT(VERB_ABORT);
+harden(VERB_ABORT);
+
+/**
+ * @param {string} verb
+ * @returns {boolean}
+ */
+       const isSlotVerb = verb =>
+  verb === VERB_DELIVER ||
+  verb === VERB_RESOLVE ||
+  verb === VERB_DROP ||
+  verb === VERB_ABORT;$h͏_once.isSlotVerb(isSlotVerb);
+harden(isSlotVerb);
+
+// ---- helpers ----
+
+/**
+ * @param {import('./cbor.js').Writer} w
+ * @param {Descriptor[]} ds
+ */
+const writeDescriptorArray = (w, ds) => {
+  writeArrayHeader(w, ds.length);
+  for (const d of ds) writeDescriptor(w, d);
+};
+
+/**
+ * @param {import('./cbor.js').Reader} r
+ * @returns {Descriptor[]}
+ */
+const readDescriptorArray = r => {
+  const n = readArrayHeader(r);
+  const out = [];
+  for (let i = 0; i < n; i += 1) out.push(readDescriptor(r));
+  return out;
+};
+
+// ---- deliver ----
+
+/**
+ * @typedef {object} DeliverPayload
+ * @property {Descriptor} target
+ * @property {Uint8Array} body
+ * @property {Descriptor[]} targets
+ * @property {Descriptor[]} promises
+ * @property {Descriptor | null} reply
+ */
+
+/**
+ * @param {DeliverPayload} p
+ * @returns {Uint8Array}
+ */
+       const encodeDeliverPayload = p => {
+  const w = makeWriter();
+  writeArrayHeader(w, 5);
+  writeDescriptor(w, p.target);
+  writeByteString(w, p.body);
+  writeDescriptorArray(w, p.targets);
+  writeDescriptorArray(w, p.promises);
+  if (p.reply) writeDescriptor(w, p.reply);
+  else writeNull(w);
+  return writerToBytes(w);
+};$h͏_once.encodeDeliverPayload(encodeDeliverPayload);
+harden(encodeDeliverPayload);
+
+/**
+ * @param {Uint8Array} bytes
+ * @returns {DeliverPayload}
+ */
+       const decodeDeliverPayload = bytes => {
+  const r = makeReader(bytes);
+  const n = readArrayHeader(r);
+  if (n !== 5) {
+    throw makeError(X`deliver payload must be 5-element array, got ${q(n)}`);
+  }
+  const target = readDescriptor(r);
+  const body = readByteString(r);
+  const targets = readDescriptorArray(r);
+  const promises = readDescriptorArray(r);
+  const reply = readNullOrPeek(r) ? null : readDescriptor(r);
+  assertConsumed(r);
+  return { target, body, targets, promises, reply };
+};$h͏_once.decodeDeliverPayload(decodeDeliverPayload);
+harden(decodeDeliverPayload);
+
+// ---- resolve ----
+
+/**
+ * @typedef {object} ResolvePayload
+ * @property {Descriptor} target
+ * @property {boolean} isReject
+ * @property {Uint8Array} body
+ * @property {Descriptor[]} targets
+ * @property {Descriptor[]} promises
+ */
+
+/**
+ * @param {ResolvePayload} p
+ * @returns {Uint8Array}
+ */
+       const encodeResolvePayload = p => {
+  const w = makeWriter();
+  writeArrayHeader(w, 5);
+  writeDescriptor(w, p.target);
+  writeUint(w, p.isReject ? 1 : 0);
+  writeByteString(w, p.body);
+  writeDescriptorArray(w, p.targets);
+  writeDescriptorArray(w, p.promises);
+  return writerToBytes(w);
+};$h͏_once.encodeResolvePayload(encodeResolvePayload);
+harden(encodeResolvePayload);
+
+/**
+ * @param {Uint8Array} bytes
+ * @returns {ResolvePayload}
+ */
+       const decodeResolvePayload = bytes => {
+  const r = makeReader(bytes);
+  const n = readArrayHeader(r);
+  if (n !== 5) {
+    throw makeError(X`resolve payload must be 5-element array, got ${q(n)}`);
+  }
+  const target = readDescriptor(r);
+  const flag = readUint(r);
+  if (flag > 1) {
+    throw makeError(X`resolve is_reject must be 0 or 1, got ${q(flag)}`);
+  }
+  const body = readByteString(r);
+  const targets = readDescriptorArray(r);
+  const promises = readDescriptorArray(r);
+  assertConsumed(r);
+  return { target, isReject: flag === 1, body, targets, promises };
+};$h͏_once.decodeResolvePayload(decodeResolvePayload);
+harden(decodeResolvePayload);
+
+// ---- drop ----
+
+/**
+ * @typedef {object} DropDelta
+ * @property {Descriptor} target
+ * @property {number} ram
+ * @property {number} clist
+ * @property {number} export
+ */
+
+/**
+ * @param {DropDelta[]} deltas
+ * @returns {Uint8Array}
+ */
+       const encodeDropPayload = deltas => {
+  const w = makeWriter();
+  writeArrayHeader(w, deltas.length);
+  for (const d of deltas) {
+    writeArrayHeader(w, 4);
+    writeDescriptor(w, d.target);
+    writeUint(w, d.ram);
+    writeUint(w, d.clist);
+    writeUint(w, d.export);
+  }
+  return writerToBytes(w);
+};$h͏_once.encodeDropPayload(encodeDropPayload);
+harden(encodeDropPayload);
+
+/**
+ * @param {Uint8Array} bytes
+ * @returns {DropDelta[]}
+ */
+       const decodeDropPayload = bytes => {
+  const r = makeReader(bytes);
+  const n = readArrayHeader(r);
+  const out = [];
+  for (let i = 0; i < n; i += 1) {
+    const fieldsLen = readArrayHeader(r);
+    if (fieldsLen !== 4) {
+      throw makeError(
+        X`drop entry must be 4-element array, got ${q(fieldsLen)}`,
+      );
+    }
+    const target = readDescriptor(r);
+    const ram = readUint(r);
+    const clist = readUint(r);
+    const exportPillar = readUint(r);
+    out.push({ target, ram, clist, export: exportPillar });
+  }
+  assertConsumed(r);
+  return out;
+};$h͏_once.decodeDropPayload(decodeDropPayload);
+harden(decodeDropPayload);
+
+// ---- abort ----
+
+const textEncoder = new TextEncoder();
+const textDecoder = new TextDecoder('utf-8', { fatal: true });
+
+/**
+ * @param {string} reason
+ * @returns {Uint8Array}
+ */
+       const encodeAbortPayload = reason => {
+  const w = makeWriter();
+  writeByteString(w, textEncoder.encode(reason));
+  return writerToBytes(w);
+};$h͏_once.encodeAbortPayload(encodeAbortPayload);
+harden(encodeAbortPayload);
+
+/**
+ * @param {Uint8Array} bytes
+ * @returns {string}
+ */
+       const decodeAbortPayload = bytes => {
+  const r = makeReader(bytes);
+  const raw = readByteString(r);
+  assertConsumed(r);
+  try {
+    return textDecoder.decode(raw);
+  } catch (e) {
+    throw makeError(X`abort reason not valid utf-8: ${q(String(e))}`);
+  }
+};$h͏_once.decodeAbortPayload(decodeAbortPayload);
+harden(decodeAbortPayload);
+})()
+,
+// === 90. slots ./src/session.js ===
+({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]]]);
+
+
+
+
+const textEncoder = new TextEncoder();
+
+const LABEL_PREFIX = 'slots/session/';
+
+// SHA-256 constants — first 32 bits of the fractional parts of the
+// cube roots of the first 64 primes (RFC 6234 §5.1).
+const K = harden([
+  0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1,
+  0x923f82a4, 0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3,
+  0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786,
+  0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+  0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147,
+  0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13,
+  0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b,
+  0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+  0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a,
+  0x5b9cca4f, 0x682e6ff3, 0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208,
+  0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+]);
+
+const rotr = (/** @type {number} */ x, /** @type {number} */ n) =>
+  (x >>> n) | (x << (32 - n));
+
+/**
+ * Pure-JS SHA-256 of a Uint8Array.  No external dependency so the
+ * package loads cleanly in any SES-flavoured host (Node, XS,
+ * browsers).  Verified against the fixture digests pinned in
+ * `test/session.test.js` and `rust/endo/slots/src/session.rs`.
+ *
+ * @param {Uint8Array} bytes
+ * @returns {Uint8Array} 32 bytes
+ */
+const sha256 = bytes => {
+  const ml = bytes.length;
+  // Padded length: pad with 0x80, then zeros, then 8-byte big-endian
+  // bit-length.  Round up to a multiple of 64.
+  const withPad = (((ml + 9 + 63) >>> 6) << 6) >>> 0;
+  const padded = new Uint8Array(withPad);
+  padded.set(bytes);
+  padded[ml] = 0x80;
+  const bitLen = ml * 8;
+  const bitHi = Math.floor(bitLen / 0x100000000) >>> 0;
+  const bitLo = bitLen >>> 0;
+  const dv = new DataView(padded.buffer);
+  dv.setUint32(withPad - 8, bitHi, false);
+  dv.setUint32(withPad - 4, bitLo, false);
+
+  // Initial hash values (RFC 6234 §5.3.3).
+  let h0 = 0x6a09e667;
+  let h1 = 0xbb67ae85;
+  let h2 = 0x3c6ef372;
+  let h3 = 0xa54ff53a;
+  let h4 = 0x510e527f;
+  let h5 = 0x9b05688c;
+  let h6 = 0x1f83d9ab;
+  let h7 = 0x5be0cd19;
+
+  const w = new Uint32Array(64);
+  for (let i = 0; i < withPad; i += 64) {
+    for (let j = 0; j < 16; j += 1) {
+      w[j] = dv.getUint32(i + j * 4, false);
+    }
+    for (let j = 16; j < 64; j += 1) {
+      const s0 = rotr(w[j - 15], 7) ^ rotr(w[j - 15], 18) ^ (w[j - 15] >>> 3);
+      const s1 = rotr(w[j - 2], 17) ^ rotr(w[j - 2], 19) ^ (w[j - 2] >>> 10);
+      w[j] = (w[j - 16] + s0 + w[j - 7] + s1) >>> 0;
+    }
+    let a = h0;
+    let b = h1;
+    let c = h2;
+    let d = h3;
+    let e = h4;
+    let f = h5;
+    let g = h6;
+    let h = h7;
+    for (let j = 0; j < 64; j += 1) {
+      const s1 = rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25);
+      const ch = (e & f) ^ (~e & g);
+      const t1 = (h + s1 + ch + K[j] + w[j]) >>> 0;
+      const s0 = rotr(a, 2) ^ rotr(a, 13) ^ rotr(a, 22);
+      const mj = (a & b) ^ (a & c) ^ (b & c);
+      const t2 = (s0 + mj) >>> 0;
+      h = g;
+      g = f;
+      f = e;
+      e = (d + t1) >>> 0;
+      d = c;
+      c = b;
+      b = a;
+      a = (t1 + t2) >>> 0;
+    }
+    h0 = (h0 + a) >>> 0;
+    h1 = (h1 + b) >>> 0;
+    h2 = (h2 + c) >>> 0;
+    h3 = (h3 + d) >>> 0;
+    h4 = (h4 + e) >>> 0;
+    h5 = (h5 + f) >>> 0;
+    h6 = (h6 + g) >>> 0;
+    h7 = (h7 + h) >>> 0;
+  }
+
+  const out = new Uint8Array(32);
+  const ov = new DataView(out.buffer);
+  ov.setUint32(0, h0, false);
+  ov.setUint32(4, h1, false);
+  ov.setUint32(8, h2, false);
+  ov.setUint32(12, h3, false);
+  ov.setUint32(16, h4, false);
+  ov.setUint32(20, h5, false);
+  ov.setUint32(24, h6, false);
+  ov.setUint32(28, h7, false);
+  return out;
+};
+
+/**
+ * Deterministic session identifier.  Must match
+ * `slots::session::SessionId::from_label(label)` in the Rust crate:
+ *
+ *   SHA-256("slots/session/" || label.utf8()) → 32 bytes
+ *
+ * @param {string} label
+ * @returns {Uint8Array} 32 bytes
+ */
+       const sessionIdFromLabel = label => {
+  const bytes = textEncoder.encode(`${LABEL_PREFIX}${label}`);
+  return sha256(bytes);
+};$h͏_once.sessionIdFromLabel(sessionIdFromLabel);
+harden(sessionIdFromLabel);
+
+/**
+ * Hex encoding of a session id — useful for logs and diagnostics.
+ *
+ * @param {Uint8Array} id
+ * @returns {string}
+ */
+       const sessionIdHex = id => {
+  let out = '';
+  for (let i = 0; i < id.length; i += 1) {
+    const byte = id[i];
+    out += (byte < 16 ? '0' : '') + byte.toString(16);
+  }
+  return out;
+};$h͏_once.sessionIdHex(sessionIdHex);
+harden(sessionIdHex);
+})()
+,
+// === 91. slots ./src/clist.js ===
+({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden,makeError,q,X,Direction,Kind,descriptorKey,sessionIdFromLabel;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]],["@endo/errors", [["makeError",[$h͏_a => (makeError = $h͏_a)]],["q",[$h͏_a => (q = $h͏_a)]],["X",[$h͏_a => (X = $h͏_a)]]]],["./descriptor.js", [["Direction",[$h͏_a => (Direction = $h͏_a)]],["Kind",[$h͏_a => (Kind = $h͏_a)]],["descriptorKey",[$h͏_a => (descriptorKey = $h͏_a)]]]],["./session.js", [["sessionIdFromLabel",[$h͏_a => (sessionIdFromLabel = $h͏_a)]]]]]);
+
+
+
+
+
+
+
+/** @import { Descriptor } from './descriptor.js' */
+
+const kindFieldName = harden({
+  [Kind.Object]: 'object',
+  [Kind.Promise]: 'promise',
+  [Kind.Answer]: 'answer',
+  [Kind.Device]: 'device',
+});
+
+/**
+ * Create a per-session c-list: a bidirectional map between local
+ * values (objects/promises) and their wire descriptors, plus the
+ * monotonic counters for allocating local positions.
+ *
+ * This mirrors `rust/endo/slots/src/session.rs::Session` in shape,
+ * but holds plain JS values instead of daemon-side krefs — a peer
+ * that wants to associate a descriptor with a kref stores it
+ * externally and references the descriptor by [`descriptorKey`].
+ *
+ * @param {object} opts
+ * @param {string} opts.label
+ */
+       const makeCList = ({ label }) => {
+  // Compute the session id eagerly but expose it via a getter — XS
+  // marks Uint8Array indexed elements non-configurable, so deep-
+  // freezing the outer hardened object would fail if `id` were a
+  // direct property holding a typed array.  Same workaround the
+  // daemon uses for keypair material.
+  const idBytes = sessionIdFromLabel(label);
+
+  /** @type {Map<unknown, Descriptor>} */
+  const valToDesc = new Map();
+  /** @type {Map<string, unknown>} */
+  const keyToVal = new Map();
+
+  // Monotonic counters.  Object/Promise/Device start at 1;
+  // Answer starts at 0, matching the Rust crate.
+  const next = {
+    object: 1,
+    promise: 1,
+    answer: 0,
+    device: 1,
+  };
+
+  /**
+   * @param {0 | 1 | 2 | 3} kind
+   * @returns {number}
+   */
+  const allocLocal = kind => {
+    const field = kindFieldName[kind];
+    if (!field) {
+      throw makeError(X`invalid kind ${q(kind)}`);
+    }
+    const id2 = next[field];
+    next[field] += 1;
+    return id2;
+  };
+
+  /**
+   * Ensure that `val` has a local descriptor in this c-list.
+   * Returns the (possibly newly-allocated) descriptor.
+   *
+   * @param {unknown} val
+   * @param {0 | 1 | 2 | 3} [kind]
+   * @returns {Descriptor}
+   */
+  const exportLocal = (val, kind = Kind.Object) => {
+    const existing = valToDesc.get(val);
+    if (existing) return existing;
+    const position = allocLocal(kind);
+    /** @type {Descriptor} */
+    const desc = harden({ dir: Direction.Local, kind, position });
+    valToDesc.set(val, desc);
+    keyToVal.set(descriptorKey(desc), val);
+    return desc;
+  };
+
+  /**
+   * Import a remote descriptor, returning an existing local
+   * placeholder if one is already registered, or installing the
+   * newly-created `makePlaceholder()` return value otherwise.
+   *
+   * @param {Descriptor} desc
+   * @param {() => unknown} makePlaceholder
+   * @returns {unknown}
+   */
+  const importRemote = (desc, makePlaceholder) => {
+    const key = descriptorKey(desc);
+    const existing = keyToVal.get(key);
+    if (existing !== undefined) return existing;
+    const placeholder = makePlaceholder();
+    keyToVal.set(key, placeholder);
+    valToDesc.set(placeholder, harden({ ...desc }));
+    return placeholder;
+  };
+
+  /**
+   * Look up a value by descriptor.
+   *
+   * @param {Descriptor} desc
+   */
+  const lookupByDescriptor = desc => keyToVal.get(descriptorKey(desc));
+
+  /**
+   * Look up a descriptor by value.
+   *
+   * @param {unknown} val
+   */
+  const lookupByValue = val => valToDesc.get(val);
+
+  /**
+   * Drop the mapping for a descriptor.  The caller owns refcount
+   * bookkeeping; this just removes the entry from the local tables.
+   *
+   * @param {Descriptor} desc
+   */
+  const drop = desc => {
+    const key = descriptorKey(desc);
+    const val = keyToVal.get(key);
+    if (val === undefined) return false;
+    keyToVal.delete(key);
+    valToDesc.delete(val);
+    return true;
+  };
+
+  return harden({
+    get id() {
+      return idBytes;
+    },
+    label,
+    exportLocal,
+    importRemote,
+    lookupByDescriptor,
+    lookupByValue,
+    drop,
+    size: () => keyToVal.size,
+  });
+};$h͏_once.makeCList(makeCList);
+harden(makeCList);
+})()
+,
+// === 92. slots ./src/codec.js ===
+({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden,makeError,q,X,makeMarshal,isPromise,Kind,descriptorKey,encodeDeliverPayload,decodeDeliverPayload,encodeResolvePayload,decodeResolvePayload;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]],["@endo/errors", [["makeError",[$h͏_a => (makeError = $h͏_a)]],["q",[$h͏_a => (q = $h͏_a)]],["X",[$h͏_a => (X = $h͏_a)]]]],["@endo/marshal", [["makeMarshal",[$h͏_a => (makeMarshal = $h͏_a)]]]],["@endo/promise-kit", [["isPromise",[$h͏_a => (isPromise = $h͏_a)]]]],["./descriptor.js", [["Kind",[$h͏_a => (Kind = $h͏_a)]],["descriptorKey",[$h͏_a => (descriptorKey = $h͏_a)]]]],["./payload.js", [["encodeDeliverPayload",[$h͏_a => (encodeDeliverPayload = $h͏_a)]],["decodeDeliverPayload",[$h͏_a => (decodeDeliverPayload = $h͏_a)]],["encodeResolvePayload",[$h͏_a => (encodeResolvePayload = $h͏_a)]],["decodeResolvePayload",[$h͏_a => (decodeResolvePayload = $h͏_a)]]]]]);
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+/** @import { Descriptor } from './descriptor.js' */
+/** @import { DeliverPayload, ResolvePayload } from './payload.js' */
+
+const textEncoder = new TextEncoder();
+const textDecoder = new TextDecoder('utf-8', { fatal: true });
+
+/**
+ * Wire slot strings are `"s<N>"` where N is the index into
+ * [`DeliverPayload.targets`] / [`ResolvePayload.targets`].  All
+ * capabilities (objects and promises) share a single flat array on
+ * the wire; the descriptor's own kind byte distinguishes them.  The
+ * [`DeliverPayload.promises`] field stays empty — the Rust supervisor
+ * translates both arrays identically via `translate_slice`, so
+ * collapsing them simplifies the codec without changing wire
+ * semantics.
+ */
+const SLOT_TAG = 's';
+
+// Canonical slot strings: `s` followed by either `0` or a non-zero
+// digit run.  Reject leading zeros, signs, exponents, whitespace —
+// the wire form must be deterministic so that both ends agree.
+const SLOT_PATTERN = /^s(0|[1-9][0-9]*)$/;
+
+const parseSlot = slot => {
+  if (typeof slot !== 'string' || !SLOT_PATTERN.test(slot)) {
+    throw makeError(X`invalid slot string ${q(slot)}`);
+  }
+  const idx = Number(slot.slice(1));
+  if (!Number.isSafeInteger(idx)) {
+    throw makeError(X`slot index ${q(slot)} exceeds safe-integer range`);
+  }
+  return idx;
+};
+
+/**
+ * Create a slot-machine codec bound to a c-list: translates between
+ * high-level call / resolution shapes and the wire-level payload
+ * bytes, threading capabilities through the c-list's export/import
+ * tables.
+ *
+ * @param {object} opts
+ * @param {{
+ *   exportLocal: (val: unknown, kind?: 0 | 1 | 2 | 3) => Descriptor,
+ *   importRemote: (desc: Descriptor, make: () => unknown) => unknown,
+ * }} opts.clist
+ * @param {(desc: Descriptor) => unknown} opts.makePresence
+ *   Called when decoding a remote descriptor that has no existing
+ *   c-list entry.  The returned value represents the remote cap.
+ * @param {string} [opts.marshalName]
+ */
+       const makeSlotCodec = ({
+  clist,
+  makePresence,
+  marshalName = 'slots',
+}) => {
+  /** @type {Descriptor[]} */
+  let encodingSlots = [];
+  /** @type {Descriptor[]} */
+  let decodingSlots = [];
+
+  /**
+   * @param {unknown} val
+   * @returns {string}
+   */
+  const convertValToSlot = val => {
+    const kind = isPromise(val) ? Kind.Promise : Kind.Object;
+    const desc = clist.exportLocal(val, kind);
+    const key = descriptorKey(desc);
+    for (let i = 0; i < encodingSlots.length; i += 1) {
+      if (descriptorKey(encodingSlots[i]) === key) {
+        return `${SLOT_TAG}${i}`;
+      }
+    }
+    const idx = encodingSlots.length;
+    encodingSlots.push(desc);
+    return `${SLOT_TAG}${idx}`;
+  };
+
+  /**
+   * @param {string} slot
+   * @returns {unknown}
+   */
+  const convertSlotToVal = slot => {
+    const idx = parseSlot(slot);
+    if (idx >= decodingSlots.length) {
+      throw makeError(
+        X`slot ${q(slot)} out of range (have ${q(decodingSlots.length)} entries)`,
+      );
+    }
+    const desc = decodingSlots[idx];
+    return clist.importRemote(desc, () => makePresence(desc));
+  };
+
+  const { toCapData, fromCapData } = makeMarshal(
+    convertValToSlot,
+    convertSlotToVal,
+    {
+      marshalName,
+      serializeBodyFormat: 'smallcaps',
+    },
+  );
+
+  /**
+   * Export `target` into the c-list as its natural kind.
+   *
+   * @param {unknown} target
+   * @returns {Descriptor}
+   */
+  const describe = target => {
+    const kind = isPromise(target) ? Kind.Promise : Kind.Object;
+    return clist.exportLocal(target, kind);
+  };
+
+  /**
+   * Encode a method-call into wire-level `deliver` payload bytes.
+   *
+   * @param {object} args
+   * @param {unknown} args.target
+   * @param {string} args.method
+   * @param {unknown[]} args.args
+   * @param {unknown} [args.reply] optional promise whose resolution
+   *   will receive the call's return value (fire-and-forget if absent)
+   * @returns {Uint8Array}
+   */
+  const encodeDeliver = ({ target, method, args, reply }) => {
+    encodingSlots = [];
+    const targetDesc = describe(target);
+    const replyDesc =
+      reply !== undefined
+        ? clist.exportLocal(reply, Kind.Promise)
+        : /** @type {Descriptor | null} */ (null);
+    const { body } = toCapData(
+      /** @type {import('@endo/pass-style').Passable} */ (
+        harden([method, args])
+      ),
+    );
+    /** @type {DeliverPayload} */
+    const payload = {
+      target: targetDesc,
+      body: textEncoder.encode(body),
+      targets: encodingSlots,
+      promises: [],
+      reply: replyDesc,
+    };
+    return encodeDeliverPayload(payload);
+  };
+  harden(encodeDeliver);
+
+  /**
+   * Decode `deliver` payload bytes back into the JS-level call shape.
+   *
+   * @param {Uint8Array} bytes
+   * @returns {{
+   *   target: unknown,
+   *   method: string,
+   *   args: unknown[],
+   *   reply: unknown | null,
+   * }}
+   */
+  const decodeDeliver = bytes => {
+    const p = decodeDeliverPayload(bytes);
+    decodingSlots = p.targets;
+    const bodyStr = textDecoder.decode(p.body);
+    const slotStrings = decodingSlots.map((_, i) => `${SLOT_TAG}${i}`);
+    const decoded = fromCapData(harden({ body: bodyStr, slots: slotStrings }));
+    if (!Array.isArray(decoded) || decoded.length !== 2) {
+      throw makeError(
+        X`deliver body must decode to [method, args], got ${q(decoded)}`,
+      );
+    }
+    const [method, args] = decoded;
+    if (typeof method !== 'string') {
+      throw makeError(X`deliver method must be string, got ${q(method)}`);
+    }
+    if (!Array.isArray(args)) {
+      throw makeError(X`deliver args must be array, got ${q(args)}`);
+    }
+    const target = clist.importRemote(p.target, () => makePresence(p.target));
+    const replyDesc = p.reply;
+    const reply =
+      replyDesc === null
+        ? null
+        : clist.importRemote(replyDesc, () => makePresence(replyDesc));
+    return { target, method, args: [...args], reply };
+  };
+  harden(decodeDeliver);
+
+  /**
+   * Encode a resolution into wire-level `resolve` payload bytes.
+   *
+   * @param {object} args
+   * @param {unknown} args.target — the promise being resolved
+   * @param {boolean} args.isReject
+   * @param {unknown} args.value
+   * @returns {Uint8Array}
+   */
+  const encodeResolve = ({ target, isReject, value }) => {
+    encodingSlots = [];
+    const targetDesc = clist.exportLocal(target, Kind.Promise);
+    const { body } = toCapData(
+      /** @type {import('@endo/pass-style').Passable} */ (harden(value)),
+    );
+    /** @type {ResolvePayload} */
+    const payload = {
+      target: targetDesc,
+      isReject,
+      body: textEncoder.encode(body),
+      targets: encodingSlots,
+      promises: [],
+    };
+    return encodeResolvePayload(payload);
+  };
+  harden(encodeResolve);
+
+  /**
+   * Decode `resolve` payload bytes.
+   *
+   * @param {Uint8Array} bytes
+   */
+  const decodeResolve = bytes => {
+    const p = decodeResolvePayload(bytes);
+    decodingSlots = p.targets;
+    const bodyStr = textDecoder.decode(p.body);
+    const slotStrings = decodingSlots.map((_, i) => `${SLOT_TAG}${i}`);
+    const value = fromCapData(harden({ body: bodyStr, slots: slotStrings }));
+    const target = clist.importRemote(p.target, () => makePresence(p.target));
+    return { target, isReject: p.isReject, value };
+  };
+  harden(decodeResolve);
+
+  return harden({
+    encodeDeliver,
+    decodeDeliver,
+    encodeResolve,
+    decodeResolve,
+    describe,
+  });
+};$h͏_once.makeSlotCodec(makeSlotCodec);
+harden(makeSlotCodec);
+})()
+,
+// === 93. slots ./src/client.js ===
+({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden,makeError,X,HandledPromise,makePromiseKit,descriptorKey,VERB_DELIVER,VERB_RESOLVE,VERB_DROP,VERB_ABORT,encodeDropPayload,decodeDropPayload;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]],["@endo/errors", [["makeError",[$h͏_a => (makeError = $h͏_a)]],["X",[$h͏_a => (X = $h͏_a)]]]],["@endo/eventual-send", [["HandledPromise",[$h͏_a => (HandledPromise = $h͏_a)]]]],["@endo/promise-kit", [["makePromiseKit",[$h͏_a => (makePromiseKit = $h͏_a)]]]],["./descriptor.js", [["descriptorKey",[$h͏_a => (descriptorKey = $h͏_a)]]]],["./payload.js", [["VERB_DELIVER",[$h͏_a => (VERB_DELIVER = $h͏_a)]],["VERB_RESOLVE",[$h͏_a => (VERB_RESOLVE = $h͏_a)]],["VERB_DROP",[$h͏_a => (VERB_DROP = $h͏_a)]],["VERB_ABORT",[$h͏_a => (VERB_ABORT = $h͏_a)]],["encodeDropPayload",[$h͏_a => (encodeDropPayload = $h͏_a)]],["decodeDropPayload",[$h͏_a => (decodeDropPayload = $h͏_a)]]]]]);
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+/** @import { Descriptor } from './descriptor.js' */
+
+/**
+ * Map a wire-encoded rejection value back into an `Error`.  The
+ * sender's `onDeliver` packs `{ name, message }`; older senders
+ * may have packed a bare string.  Either way we yield a
+ * throwable Error so consumers can `await` and `try/catch`.
+ *
+ * @param {unknown} value
+ * @returns {Error}
+ */
+const rehydrateError = value => {
+  if (typeof value === 'string') return Error(value);
+  if (
+    value &&
+    typeof value === 'object' &&
+    typeof (/** @type {{ message?: unknown }} */ (value).message) === 'string'
+  ) {
+    const v = /** @type {{ name?: unknown, message: string }} */ (value);
+    const e = Error(v.message);
+    if (typeof v.name === 'string') {
+      Object.defineProperty(e, 'name', {
+        value: v.name,
+        configurable: true,
+        writable: true,
+      });
+    }
+    return e;
+  }
+  return Error(String(value));
+};
+
+/**
+ * @typedef {(verb: string, payload: Uint8Array) => void} SendEnvelope
+ */
+
+/**
+ * Create a slot-machine client: the user-facing interface that
+ * turns [`makeSlotCodec`] plus a transport callback into an
+ * eventual-send surface.
+ *
+ * Responsibilities:
+ *
+ * * `makePresence(desc)` — produce a [`HandledPromise`] whose `E()`
+ *   calls encode `deliver` envelopes and queue them on the transport.
+ * * Reply tracking — every outbound `deliver` with a reply allocates
+ *   a local promise descriptor; when the peer's `resolve` arrives for
+ *   that descriptor, the matching pending promise settles.
+ * * `onDeliver` — dispatch an inbound `deliver` to its target via
+ *   [`HandledPromise.applyMethod`], and (if the call carries a reply
+ *   descriptor) send a matching `resolve` once the result settles.
+ * * `onResolve` — route an inbound `resolve` to its pending promise.
+ *
+ * Drop / abort routing is left to the transport layer above.
+ *
+ * @param {object} opts
+ * @param {{
+ *   exportLocal: (val: unknown, kind?: 0 | 1 | 2 | 3) => Descriptor,
+ *   importRemote: (desc: Descriptor, make: () => unknown) => unknown,
+ *   lookupByValue: (val: unknown) => Descriptor | undefined,
+ * }} opts.clist
+ * @param {{
+ *   encodeDeliver: (call: {
+ *     target: unknown,
+ *     method: string,
+ *     args: unknown[],
+ *     reply?: unknown,
+ *   }) => Uint8Array,
+ *   decodeDeliver: (bytes: Uint8Array) => {
+ *     target: unknown,
+ *     method: string,
+ *     args: unknown[],
+ *     reply: unknown | null,
+ *   },
+ *   encodeResolve: (resolution: {
+ *     target: unknown,
+ *     isReject: boolean,
+ *     value: unknown,
+ *   }) => Uint8Array,
+ *   decodeResolve: (bytes: Uint8Array) => {
+ *     target: unknown,
+ *     isReject: boolean,
+ *     value: unknown,
+ *   },
+ * }} opts.codec
+ * @param {SendEnvelope} opts.sendEnvelope
+ * @param {typeof globalThis.FinalizationRegistry} [opts.FinalizationRegistry]
+ *   Optional finalisation registry constructor.  When supplied,
+ *   `makePresence` registers each presence so that its
+ *   garbage-collection queues an outbound `drop` envelope with
+ *   `ram: 1`.  Defaults to `globalThis.FinalizationRegistry` if
+ *   available; if the host has no such class, auto-drop is a
+ *   no-op and callers must invoke `drop([...])` explicitly.
+ */
+       const makeSlotClient = ({
+  clist,
+  codec,
+  sendEnvelope,
+  FinalizationRegistry: FRCtor = globalThis.FinalizationRegistry,
+}) => {
+  /**
+   * Pending replies, keyed by the descriptor of the local reply
+   * promise.  Entries are cleared by `onResolve`.
+   *
+   * @type {Map<string, { resolve: (v: unknown) => void, reject: (e: unknown) => void }>}
+   */
+  const settlers = new Map();
+
+  /**
+   * Finalisation callback: when a presence becomes unreachable,
+   * send a `drop` envelope with `ram: 1` against its descriptor.
+   * Best-effort — the transport may be closed by the time the GC
+   * fires, in which case we swallow the error silently.
+   *
+   * @type {InstanceType<typeof globalThis.FinalizationRegistry<Descriptor>> | null}
+   */
+  const finalizer = FRCtor
+    ? new FRCtor(
+        /**
+         * @param {Descriptor} desc
+         */
+        desc => {
+          try {
+            const bytes = encodeDropPayload([
+              { target: desc, ram: 1, clist: 0, export: 0 },
+            ]);
+            sendEnvelope(VERB_DROP, bytes);
+          } catch (_err) {
+            // Transport closed; drop is best-effort.
+          }
+        },
+      )
+    : null;
+
+  /**
+   * Send a method call to a presence or to a local value registered
+   * in the c-list.  Returns a promise for the reply.
+   *
+   * @param {unknown} target
+   * @param {string} method
+   * @param {unknown[]} args
+   * @returns {Promise<unknown>}
+   */
+  const deliver = (target, method, args) => {
+    const { promise: reply, resolve, reject } = makePromiseKit();
+    const bytes = codec.encodeDeliver({ target, method, args, reply });
+    const replyDesc = clist.lookupByValue(reply);
+    if (!replyDesc) {
+      // codec.encodeDeliver just ran exportLocal on `reply`, so this
+      // should be unreachable.
+      throw makeError(X`reply promise did not receive a descriptor`);
+    }
+    // Register the settler before send so a synchronous transport
+    // that pumps an inbound resolve re-entrantly inside sendEnvelope
+    // can still find the matching entry.
+    settlers.set(descriptorKey(replyDesc), { resolve, reject });
+    if (typeof globalThis.hostTrace === 'function') {
+      globalThis.hostTrace(`slot-client.deliver method=${method}`);
+    }
+    sendEnvelope(VERB_DELIVER, bytes);
+    return reply;
+  };
+  harden(deliver);
+
+  /**
+   * Send a method call without tracking a reply.
+   *
+   * @param {unknown} target
+   * @param {string} method
+   * @param {unknown[]} args
+   */
+  const deliverSendOnly = (target, method, args) => {
+    const bytes = codec.encodeDeliver({ target, method, args });
+    sendEnvelope(VERB_DELIVER, bytes);
+  };
+  harden(deliverSendOnly);
+
+  /**
+   * Create a [`HandledPromise`] representing a remote capability.
+   * The presence is registered in the c-list keyed by `desc`.
+   *
+   * @param {Descriptor} desc
+   * @returns {unknown}
+   */
+  const makePresence = desc => {
+    const handler = {
+      /**
+       * @param {unknown} p
+       * @param {string | symbol} method
+       * @param {unknown[]} args
+       */
+      applyMethod(p, method, args) {
+        if (typeof method !== 'string') {
+          throw makeError(X`slot-machine calls require string methods`);
+        }
+        return deliver(p, method, args);
+      },
+      /**
+       * @param {unknown} p
+       * @param {string | symbol} method
+       * @param {unknown[]} args
+       */
+      applyMethodSendOnly(p, method, args) {
+        if (typeof method !== 'string') {
+          throw makeError(X`slot-machine calls require string methods`);
+        }
+        deliverSendOnly(p, method, args);
+      },
+      /**
+       * Treat a presence-as-function call as a `__call__` method
+       * dispatch.  Slot-machine has no separate function-target
+       * convention, so we surface this as a string-keyed method to
+       * keep the wire shape uniform.
+       *
+       * @param {unknown} p
+       * @param {unknown[]} args
+       */
+      applyFunction(p, args) {
+        return deliver(p, '__call__', args);
+      },
+      /**
+       * @param {unknown} p
+       * @param {unknown[]} args
+       */
+      applyFunctionSendOnly(p, args) {
+        deliverSendOnly(p, '__call__', args);
+      },
+      /**
+       * Property access via `E(p).prop` resolves to a deliver of
+       * the conventional `__get__` method with the property name as
+       * its only argument.  Mirrors CapTP's get-as-call shape.
+       *
+       * @param {unknown} p
+       * @param {string | symbol} prop
+       */
+      get(p, prop) {
+        if (typeof prop !== 'string') {
+          throw makeError(X`slot-machine property names must be strings`);
+        }
+        return deliver(p, '__get__', [prop]);
+      },
+    };
+    // Executor is a no-op; the presence is settled only via inbound
+    // resolve envelopes, if ever.  A presence representing a live
+    // remote object never settles.
+    const presence = new HandledPromise(() => {}, harden(handler));
+    const registered = clist.importRemote(desc, () => presence);
+    if (finalizer && registered === presence) {
+      // Only register newly-created presences — if the c-list
+      // already held an entry we reuse it and its existing
+      // finalisation hook.
+      finalizer.register(presence, harden({ ...desc }));
+    }
+    // Return whichever presence the c-list canonicalised on, so
+    // repeat calls to makePresence with the same descriptor yield
+    // the same object.
+    return registered;
+  };
+  harden(makePresence);
+
+  /**
+   * Handle an inbound `deliver`: dispatch to the target and, if the
+   * call carries a reply descriptor, send a matching `resolve`
+   * envelope when the result settles.
+   *
+   * @param {Uint8Array} bytes
+   */
+  const onDeliver = bytes => {
+    const { target, method, args, reply } = codec.decodeDeliver(bytes);
+    let resultP;
+    try {
+      resultP = HandledPromise.applyMethod(target, method, args);
+    } catch (err) {
+      resultP = Promise.reject(err);
+    }
+    if (reply !== null) {
+      Promise.resolve(resultP).then(
+        value => {
+          const out = codec.encodeResolve({
+            target: reply,
+            isReject: false,
+            value,
+          });
+          sendEnvelope(VERB_RESOLVE, out);
+        },
+        err => {
+          // Carry both name and message so the receiving side can
+          // rehydrate an Error of the right class.  Stack and cause
+          // are deliberately omitted — they may contain sensitive
+          // information from the rejecting peer's frame.
+          const errLike = /** @type {{ name?: unknown, message?: unknown }} */ (
+            err
+          );
+          const name =
+            typeof errLike?.name === 'string' ? errLike.name : 'Error';
+          const message =
+            typeof errLike?.message === 'string'
+              ? errLike.message
+              : String(err);
+          const out = codec.encodeResolve({
+            target: reply,
+            isReject: true,
+            value: harden({ name, message }),
+          });
+          sendEnvelope(VERB_RESOLVE, out);
+        },
+      );
+    }
+  };
+  harden(onDeliver);
+
+  /**
+   * Handle an inbound `resolve`: route to the matching local reply
+   * promise and clear the bookkeeping entry.  Unknown resolves are
+   * silently dropped — a repeat resolve or one for a dropped reply
+   * promise is a correctness issue at the sending peer, not here.
+   *
+   * @param {Uint8Array} bytes
+   */
+  const onResolve = bytes => {
+    const { target, isReject, value } = codec.decodeResolve(bytes);
+    const desc = clist.lookupByValue(target);
+    if (!desc) return;
+    const key = descriptorKey(desc);
+    const entry = settlers.get(key);
+    if (!entry) return;
+    settlers.delete(key);
+    if (isReject) {
+      entry.reject(rehydrateError(value));
+    } else {
+      entry.resolve(value);
+    }
+  };
+  harden(onResolve);
+
+  /**
+   * Send a `drop` envelope decrementing pillar counts on one or
+   * more presences.  Defaults to `ram: 1` (the common case: a
+   * presence has become unreachable on this side and we release
+   * the RAM pillar).  Pillars omitted default to 0.
+   *
+   * @param {Array<{
+   *   presence: unknown,
+   *   ram?: number,
+   *   clist?: number,
+   *   export?: number,
+   * }>} entries
+   */
+  const drop = entries => {
+    const deltas = entries.map(entry => {
+      const desc = clist.lookupByValue(entry.presence);
+      if (!desc) {
+        throw makeError(X`drop: presence not found in c-list`);
+      }
+      return {
+        target: desc,
+        ram: entry.ram ?? 1,
+        clist: entry.clist ?? 0,
+        export: entry.export ?? 0,
+      };
+    });
+    if (deltas.length === 0) return;
+    const bytes = encodeDropPayload(deltas);
+    sendEnvelope(VERB_DROP, bytes);
+  };
+  harden(drop);
+
+  /**
+   * Handle an inbound `drop`.  The JS client does not track RAM /
+   * CList / Export pillars itself — the Rust supervisor is
+   * authoritative for cross-session refcount state — so this is a
+   * notify-only path.  A `handler` callback (if supplied via
+   * `onDropDeltas`) receives the decoded deltas; otherwise the
+   * envelope is silently consumed.  Returning the deltas lets a
+   * caller drive a local refcount ledger if they want one.
+   *
+   * @param {Uint8Array} bytes
+   * @returns {Array<{
+   *   target: Descriptor,
+   *   ram: number,
+   *   clist: number,
+   *   export: number,
+   * }>}
+   */
+  const onDrop = bytes => decodeDropPayload(bytes);
+  harden(onDrop);
+
+  /**
+   * Reject every outstanding reply promise with the supplied
+   * reason.  Called when the session ends abruptly so callers
+   * awaiting on `deliver` results don't hang forever.
+   *
+   * @param {Error} reason
+   */
+  const abortPending = reason => {
+    for (const entry of settlers.values()) {
+      try {
+        entry.reject(reason);
+      } catch (_e) {
+        // The settler's reject may itself reject downstream; we
+        // don't want one bad listener to prevent the others from
+        // being cleared.
+      }
+    }
+    settlers.clear();
+  };
+  harden(abortPending);
+
+  /**
+   * Dispatch an inbound envelope by verb.  `abort` rejects every
+   * pending reply with the abort reason; `drop` decodes and
+   * returns the deltas (the result is ignored here but the
+   * underlying `onDrop` is callable directly for consumers that
+   * want the bookkeeping).
+   *
+   * @param {string} verb
+   * @param {Uint8Array} payload
+   */
+  const onEnvelope = (verb, payload) => {
+    if (verb === VERB_DELIVER) return onDeliver(payload);
+    if (verb === VERB_RESOLVE) return onResolve(payload);
+    if (verb === VERB_DROP) {
+      onDrop(payload);
+      return undefined;
+    }
+    if (verb === VERB_ABORT) {
+      // The abort payload is a UTF-8 reason byte string, but we
+      // don't import the abort decoder here to keep the dependency
+      // surface narrow.  Whoever drives onEnvelope can decode it
+      // themselves and pass the reason via abortPending.
+      abortPending(Error('session aborted by peer'));
+      return undefined;
+    }
+    return undefined;
+  };
+  harden(onEnvelope);
+
+  /** Number of outstanding outbound deliveries awaiting a reply. */
+  const pendingCount = () => settlers.size;
+  harden(pendingCount);
+
+  return harden({
+    makePresence,
+    deliver,
+    deliverSendOnly,
+    drop,
+    onDeliver,
+    onResolve,
+    onDrop,
+    onEnvelope,
+    abortPending,
+    pendingCount,
+  });
+};$h͏_once.makeSlotClient(makeSlotClient);
+harden(makeSlotClient);
+})()
+,
+// === 94. slots ./src/bootstrap.js ===
+({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden,Direction,Kind;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]],["./descriptor.js", [["Direction",[$h͏_a => (Direction = $h͏_a)]],["Kind",[$h͏_a => (Kind = $h͏_a)]]]]]);
+
+
+
+
+
+/** @import { Descriptor } from './descriptor.js' */
+
+/**
+ * Position conventions for the c-list:
+ *
+ * * Object / Promise / Device: monotonic counter starting at 1.
+ * * Answer: monotonic counter starting at 0.
+ *
+ * Position 1 of the Object space on each side is reserved for the
+ * session's **root** — the entry point the local peer exposes to the
+ * remote peer.  Neither side explicitly exchanges a root descriptor;
+ * both sides simply:
+ *
+ * 1. Call `clist.exportLocal(root, Kind.Object)` during bootstrap.
+ *    The counter starts at 1, so the allocated descriptor is
+ *    `{ dir: Local, kind: Object, position: 1 }`.
+ * 2. Call `client.makePresence(REMOTE_ROOT)` where
+ *    [`REMOTE_ROOT`] = `{ dir: Remote, kind: Object, position: 1 }`
+ *    to obtain a HandledPromise for the peer's root.
+ *
+ * The Rust supervisor's `receive` / `send` machinery will unify the
+ * two position-1 descriptors through a shared kref so that calls
+ * addressed to one peer's "position 1 Remote" reach the other peer's
+ * "position 1 Local" export.
+ *
+ * If a session requires additional pre-allocated positions (e.g.
+ * "position 2 = log sink"), callers should agree on the convention
+ * out of band and export them in the same order on both sides.
+ */
+
+/** Descriptor for the locally-exported root object. */
+       const LOCAL_ROOT = harden(
+  /** @type {Descriptor} */ ({
+    dir: Direction.Local,
+    kind: Kind.Object,
+    position: 1,
+  }),
+);
+
+/** Descriptor for the remote peer's root object. */$h͏_once.LOCAL_ROOT(LOCAL_ROOT);
+       const REMOTE_ROOT = harden(
+  /** @type {Descriptor} */ ({
+    dir: Direction.Remote,
+    kind: Kind.Object,
+    position: 1,
+  }),
+);
+
+/**
+ * Convenience: export `root` into `clist` and create a presence for
+ * the remote root via `client.makePresence(REMOTE_ROOT)`.  Returns
+ * the pair `{ localDesc, remoteRoot }`.  Exposed for callers that
+ * want to share a single bootstrap point — they can of course
+ * compose `clist.exportLocal` and `client.makePresence` themselves
+ * if they prefer more control.
+ *
+ * @param {object} opts
+ * @param {{
+ *   exportLocal: (val: unknown, kind?: 0 | 1 | 2 | 3) => Descriptor,
+ * }} opts.clist
+ * @param {{
+ *   makePresence: (desc: Descriptor) => unknown,
+ * }} opts.client
+ * @param {unknown} opts.root
+ * @returns {{ localDesc: Descriptor, remoteRoot: unknown }}
+ */$h͏_once.REMOTE_ROOT(REMOTE_ROOT);
+       const bootstrap = ({ clist, client, root }) => {
+  const localDesc = clist.exportLocal(root, Kind.Object);
+  const remoteRoot = client.makePresence(REMOTE_ROOT);
+  return { localDesc, remoteRoot };
+};$h͏_once.bootstrap(bootstrap);
+harden(bootstrap);
+})()
+,
+// === 95. slots ./src/message.js ===
+({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden,makePromiseKit,makeCList,makeSlotCodec,makeSlotClient,sessionBootstrap;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]],["@endo/promise-kit", [["makePromiseKit",[$h͏_a => (makePromiseKit = $h͏_a)]]]],["./clist.js", [["makeCList",[$h͏_a => (makeCList = $h͏_a)]]]],["./codec.js", [["makeSlotCodec",[$h͏_a => (makeSlotCodec = $h͏_a)]]]],["./client.js", [["makeSlotClient",[$h͏_a => (makeSlotClient = $h͏_a)]]]],["./bootstrap.js", [["bootstrap",[$h͏_a => (sessionBootstrap = $h͏_a)]]]]]);
+
+
+
+
+
+
+
+
+
+/** @import { Descriptor } from './descriptor.js' */
+
+/**
+ * @typedef {object} SlotEnvelope
+ * @property {string} verb
+ * @property {Uint8Array} payload
+ */
+
+/**
+ * @template TBootstrap
+ * @typedef {object} MessageSlotsResult
+ * @property {() => unknown} getBootstrap
+ *   Returns the remote peer's root presence.
+ * @property {Promise<void>} closed
+ * @property {(reason?: Error) => Promise<void>} close
+ */
+
+/**
+ * Drop-in analogue of [`makeMessageCapTP`] from
+ * `packages/daemon/src/connection.js`, but speaks slot-machine on
+ * the wire.  Constructs a c-list + codec + client over the supplied
+ * message streams, exchanges bootstrap roots via the position-1
+ * convention, and returns `{ getBootstrap, closed, close }`.
+ *
+ * The `writer` and `reader` streams carry [`SlotEnvelope`] objects
+ * — wrap a byte-level pipe with `mapWriter` /  `mapReader` +
+ * `encodeEnvelope` / `decodeEnvelope` (from
+ * `packages/daemon/src/envelope.js`) if you need to cross a pipe
+ * boundary.
+ *
+ * @template TBootstrap
+ * @param {string} name
+ * @param {{ next: (env: SlotEnvelope) => unknown, return?: (v?: unknown) => unknown }} writer
+ * @param {AsyncIterable<SlotEnvelope>} reader
+ * @param {Promise<void>} cancelled
+ * @param {TBootstrap} bootstrap
+ * @returns {MessageSlotsResult<TBootstrap>}
+ */
+       const makeMessageSlots = (
+  name,
+  writer,
+  reader,
+  cancelled,
+  bootstrap,
+) => {
+  const clist = makeCList({ label: name });
+
+  /** @type {import('./client.js').makeSlotClient | null} */
+  let clientRef = null;
+  /**
+   * @param {Descriptor} desc
+   * @returns {unknown}
+   */
+  const makePresence = desc => {
+    // Forward to the client so secondary slot references decode
+    // into real HandledPromise presences rather than inert stubs.
+    if (clientRef) {
+      return /** @type {any} */ (clientRef).makePresence(desc);
+    }
+    // Before the client exists we cannot wire a presence; this
+    // branch is unreachable because decoding only happens under
+    // the inbound reader loop which starts after client is built.
+    throw new Error(`makePresence called before client initialised: ${name}`);
+  };
+  const codec = makeSlotCodec({
+    clist,
+    makePresence,
+    marshalName: name,
+  });
+
+  /**
+   * @param {string} verb
+   * @param {Uint8Array} payload
+   */
+  const sendEnvelope = (verb, payload) => {
+    // Don't `harden` the envelope object — XS marks `Uint8Array`
+    // indexed elements non-configurable, so `harden({ verb, payload })`
+    // throws "cannot configure property" when it tries to deep-
+    // freeze the payload.  Freezing the wrapper alone is enough;
+    // the writer doesn't need the payload immutable.
+    const env = Object.freeze({ verb, payload });
+    try {
+      void writer.next(env);
+    } catch (_err) {
+      // Writer closed; drop is best-effort.  Real errors surface
+      // through the reader's end-of-stream path which triggers
+      // `close` below.
+    }
+  };
+
+  const client = makeSlotClient({ clist, codec, sendEnvelope });
+  clientRef = /** @type {any} */ (client);
+
+  const { remoteRoot } = sessionBootstrap({ clist, client, root: bootstrap });
+
+  const { promise: closedPromise, resolve: resolveClosed } = makePromiseKit();
+  let isClosed = false;
+
+  /** @type {(reason?: Error) => Promise<void>} */
+  const close = async reason => {
+    if (isClosed) return closedPromise;
+    isClosed = true;
+    try {
+      if (writer.return) await writer.return(undefined);
+    } catch (_err) {
+      // writer may already be closed
+    }
+    resolveClosed(undefined);
+    return closedPromise;
+  };
+
+  const drained = (async () => {
+    try {
+      for await (const env of reader) {
+        client.onEnvelope(env.verb, env.payload);
+      }
+    } finally {
+      close();
+    }
+  })();
+
+  cancelled.catch(err => close(err));
+
+  const closedRace = Promise.race([closedPromise, drained]).then(() => {});
+
+  return harden({
+    getBootstrap: () => remoteRoot,
+    closed: closedRace,
+    close,
+  });
+};$h͏_once.makeMessageSlots(makeMessageSlots);
+harden(makeMessageSlots);
+})()
+,
+// === 96. slots ./index.js ===
+({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';$h͏_imports([["./src/descriptor.js", []],["./src/payload.js", []],["./src/session.js", []],["./src/clist.js", []],["./src/codec.js", []],["./src/client.js", []],["./src/bootstrap.js", []],["./src/message.js", []]]);
+})()
+,
+// === 97. daemon ./src/envelope.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';$h͏_imports([]);// @ts-check
 /* eslint-disable no-bitwise */
 /* global Buffer */
@@ -18471,7 +20642,7 @@ harden(readFrameFromStream);
 harden(writeFrameToStream);
 })()
 ,
-// === 88. daemon ./src/bus-xs-common.js ===
+// === 98. daemon ./src/bus-xs-common.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';$h͏_imports([]);// @ts-check
 /* eslint-disable no-underscore-dangle -- __shouldTerminate is
    deliberately scoped to globalThis with a dunder name to avoid
@@ -18528,7 +20699,7 @@ harden(markShouldTerminate);
 harden(installShouldTerminate);
 })()
 ,
-// === 89. daemon ./src/bus-xs-core.js ===
+// === 99. daemon ./src/bus-xs-core.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let encodeEnvelope,decodeEnvelope,installShouldTerminate,markShouldTerminate,silentReject,textDecoder,textEncoder;$h͏_imports([["./envelope.js", [["encodeEnvelope",[$h͏_a => (encodeEnvelope = $h͏_a)]],["decodeEnvelope",[$h͏_a => (decodeEnvelope = $h͏_a)]]]],["./bus-xs-common.js", [["installShouldTerminate",[$h͏_a => (installShouldTerminate = $h͏_a),$h͏_live["installShouldTerminate"]]],["markShouldTerminate",[$h͏_a => (markShouldTerminate = $h͏_a),$h͏_live["markShouldTerminate"]]],["silentReject",[$h͏_a => (silentReject = $h͏_a),$h͏_live["silentReject"]]],["textDecoder",[$h͏_a => (textDecoder = $h͏_a),$h͏_live["textDecoder"]]],["textEncoder",[$h͏_a => (textEncoder = $h͏_a),$h͏_live["textEncoder"]]]]]]);
 
 
@@ -18773,7 +20944,7 @@ const EMPTY_PAYLOAD = new Uint8Array(0);
 harden(makeXsNode);
 })()
 ,
-// === 90. stream ./index.js ===
+// === 100. stream ./index.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden,E,makePromiseKit;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]],["@endo/eventual-send", [["E",[$h͏_a => (E = $h͏_a)]]]],["@endo/promise-kit", [["makePromiseKit",[$h͏_a => (makePromiseKit = $h͏_a)]]]]]);
 
 
@@ -19023,7 +21194,7 @@ harden(mapReader);
 harden(mapWriter);
 })()
 ,
-// === 91. daemon ./src/ref-reader.js ===
+// === 101. daemon ./src/ref-reader.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden,decodeBase64,mapReader,E;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]],["@endo/base64", [["decodeBase64",[$h͏_a => (decodeBase64 = $h͏_a)]]]],["@endo/stream", [["mapReader",[$h͏_a => (mapReader = $h͏_a)]]]],["@endo/far", [["E",[$h͏_a => (E = $h͏_a)]]]]]);
 
 
@@ -19059,8 +21230,19 @@ harden(makeRefIterator);
   mapReader(makeRefIterator(readerRef), decodeBase64);$h͏_once.makeRefReader(makeRefReader);
 })()
 ,
-// === 92. daemon ./src/bus-worker-xs.js ===
-({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let makeCapTP,E,Far,makeExo,M,decodeBase64,makeXsNode,markShouldTerminate,silentReject,textDecoder,textEncoder,makeRefIterator;$h͏_imports([["@endo/captp", [["makeCapTP",[$h͏_a => (makeCapTP = $h͏_a)]]]],["@endo/far", [["E",[$h͏_a => (E = $h͏_a)]],["Far",[$h͏_a => (Far = $h͏_a)]]]],["@endo/exo", [["makeExo",[$h͏_a => (makeExo = $h͏_a)]]]],["@endo/patterns", [["M",[$h͏_a => (M = $h͏_a)]]]],["@endo/base64", [["decodeBase64",[$h͏_a => (decodeBase64 = $h͏_a)]]]],["./bus-xs-core.js", [["makeXsNode",[$h͏_a => (makeXsNode = $h͏_a)]],["markShouldTerminate",[$h͏_a => (markShouldTerminate = $h͏_a)]],["silentReject",[$h͏_a => (silentReject = $h͏_a)]],["textDecoder",[$h͏_a => (textDecoder = $h͏_a)]],["textEncoder",[$h͏_a => (textEncoder = $h͏_a)]]]],["./ref-reader.js", [["makeRefIterator",[$h͏_a => (makeRefIterator = $h͏_a)]]]]]);
+// === 102. daemon ./src/bus-worker-xs.js ===
+({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let makeCapTP,E,Far,makeExo,M,decodeBase64,makeMessageSlots,isSlotVerb,makeXsNode,markShouldTerminate,silentReject,textDecoder,textEncoder,makeRefIterator;$h͏_imports([["@endo/captp", [["makeCapTP",[$h͏_a => (makeCapTP = $h͏_a)]]]],["@endo/far", [["E",[$h͏_a => (E = $h͏_a)]],["Far",[$h͏_a => (Far = $h͏_a)]]]],["@endo/exo", [["makeExo",[$h͏_a => (makeExo = $h͏_a)]]]],["@endo/patterns", [["M",[$h͏_a => (M = $h͏_a)]]]],["@endo/base64", [["decodeBase64",[$h͏_a => (decodeBase64 = $h͏_a)]]]],["@endo/slots", [["makeMessageSlots",[$h͏_a => (makeMessageSlots = $h͏_a)]],["isSlotVerb",[$h͏_a => (isSlotVerb = $h͏_a)]]]],["./bus-xs-core.js", [["makeXsNode",[$h͏_a => (makeXsNode = $h͏_a)]],["markShouldTerminate",[$h͏_a => (markShouldTerminate = $h͏_a)]],["silentReject",[$h͏_a => (silentReject = $h͏_a)]],["textDecoder",[$h͏_a => (textDecoder = $h͏_a)]],["textEncoder",[$h͏_a => (textEncoder = $h͏_a)]]]],["./ref-reader.js", [["makeRefIterator",[$h͏_a => (makeRefIterator = $h͏_a)]]]]]);
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -19099,9 +21281,54 @@ harden(makeRefIterator);
 void Far;
 void hostTrace;
 
-const node = makeXsNode();
+const useSlotMachine =
+  typeof globalThis.hostGetEnv === 'function' &&
+  hostGetEnv('ENDO_USE_SLOT_MACHINE') === '1';
+
+// ---------------------------------------------------------------------------
+// Inbound dispatch — slot mode captures every envelope for the
+// daemon's handle (deliver + resolve + drop + abort), CapTP mode
+// uses the standard registerSession path which routes only `deliver`.
+// ---------------------------------------------------------------------------
+
+/** @type {Array<{verb: string, payload: Uint8Array}>} */
+const inboxQueue = [];
+/** @type {((value: IteratorResult<{verb: string, payload: Uint8Array}>) => void) | null} */
+let inboxWaiter = null;
+let inboxClosed = false;
+
+const pushInbound = env => {
+  if (inboxWaiter) {
+    const w = inboxWaiter;
+    inboxWaiter = null;
+    // Object.freeze (not harden) — XS marks Uint8Array indexed
+    // elements non-configurable, so deep-freezing the wrapper
+    // throws "cannot configure property".
+    w(Object.freeze({ done: false, value: env }));
+  } else {
+    inboxQueue.push(env);
+  }
+};
+
+const node = useSlotMachine
+  ? makeXsNode({
+      onControl: env => {
+        // In slot-machine mode we capture every envelope addressed
+        // to the daemon's handle.  Non-slot verbs (e.g. `init`,
+        // `meter-config`) are silently discarded — the worker has
+        // no use for them once the daemon handle is known.
+        if (isSlotVerb(env.verb)) {
+          pushInbound({ verb: env.verb, payload: env.payload });
+        }
+      },
+    })
+  : makeXsNode();
 
 const daemonHandle = hostGetDaemonHandle();
+
+// ---------------------------------------------------------------------------
+// Worker facet — exposed to the daemon over the chosen transport.
+// ---------------------------------------------------------------------------
 
 /** Standard endowments provided to evaluated code in Compartments. */
 const standardEndowments = harden(
@@ -19233,35 +21460,95 @@ const workerFacet = makeExo(
   },
 );
 
-/**
- * Outbound CapTP send: JSON-encode the message and wrap it in a
- * `deliver` envelope addressed to the daemon handle.
- *
- * @param {Record<string, unknown>} message
- */
-const send = message => {
-  const json = JSON.stringify(message);
-  node.sendEnvelope(daemonHandle, 'deliver', textEncoder.encode(json));
-};
+if (useSlotMachine) {
+  // Slot-machine path: speak the four slot verbs end-to-end with
+  // the daemon.  Inbound envelopes from `onControl` are pushed
+  // into `inboxQueue` / consumed via `inboundReader`; outbound
+  // envelopes go via `node.sendEnvelope` with the verb intact.
+  const inboundReader = harden({
+    next() {
+      if (inboxQueue.length > 0) {
+        const value = /** @type {{verb: string, payload: Uint8Array}} */ (
+          inboxQueue.shift()
+        );
+        return Promise.resolve(Object.freeze({ done: false, value }));
+      }
+      if (inboxClosed) {
+        return Promise.resolve(harden({ done: true, value: undefined }));
+      }
+      return new Promise(resolve => {
+        inboxWaiter = resolve;
+      });
+    },
+    return() {
+      inboxClosed = true;
+      if (inboxWaiter) {
+        const w = inboxWaiter;
+        inboxWaiter = null;
+        w(harden({ done: true, value: undefined }));
+      }
+      return Promise.resolve(harden({ done: true, value: undefined }));
+    },
+    throw() {
+      inboxClosed = true;
+      return Promise.resolve(harden({ done: true, value: undefined }));
+    },
+    [Symbol.asyncIterator]() {
+      return this;
+    },
+  });
 
-const { dispatch } = makeCapTP('Endo', send, workerFacet, {
-  onReject: silentReject,
-});
+  const envelopeWriter = harden({
+    /** @param {{verb: string, payload: Uint8Array}} env */
+    async next(env) {
+      node.sendEnvelope(daemonHandle, env.verb, env.payload);
+      return harden({ done: false, value: undefined });
+    },
+    async return() {
+      return harden({ done: true, value: undefined });
+    },
+    async throw() {
+      return harden({ done: true, value: undefined });
+    },
+    [Symbol.asyncIterator]() {
+      return this;
+    },
+  });
 
-node.registerSession(daemonHandle, payload => {
-  const json = textDecoder.decode(payload);
-  let message;
-  try {
-    message = JSON.parse(json);
-  } catch {
-    return;
-  }
-  try {
-    dispatch(message);
-  } catch {
-    // Swallow — handled by onReject.
-  }
-});
+  // Cancellation: the worker process exits when the supervisor
+  // closes the pipes; there is no separate cancellation signal
+  // wired up here.
+  /** @type {Promise<never>} */
+  const cancelled = new Promise(() => {});
+
+  makeMessageSlots('Endo', envelopeWriter, inboundReader, cancelled, workerFacet);
+} else {
+  // CapTP path (default).
+  /** @param {Record<string, unknown>} message */
+  const send = message => {
+    const json = JSON.stringify(message);
+    node.sendEnvelope(daemonHandle, 'deliver', textEncoder.encode(json));
+  };
+
+  const { dispatch } = makeCapTP('Endo', send, workerFacet, {
+    onReject: silentReject,
+  });
+
+  node.registerSession(daemonHandle, payload => {
+    const json = textDecoder.decode(payload);
+    let message;
+    try {
+      message = JSON.parse(json);
+    } catch {
+      return;
+    }
+    try {
+      dispatch(message);
+    } catch {
+      // Swallow — handled by onReject.
+    }
+  });
+}
 })()
 ,
 ])()

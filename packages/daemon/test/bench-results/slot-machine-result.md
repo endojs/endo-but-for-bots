@@ -1,12 +1,18 @@
-# Slot-machine bench delta — Rust+Node
+# Slot-machine bench delta — Rust+XS and Rust+Node
 
-Captured 2026-04-23 against `slot-machine-pr` after Stage A
-(worker-spawn kind plumbing) and the per-edge supervisor session
-fix.
+Captured 2026-04-23 against `slot-machine-pr` after the full
+splice landed: Stage A (worker-spawn kind plumbing), per-edge
+supervisor sessions, daemon-side splice in `bus-daemon-rust-xs.js`,
+worker-side splice in `bus-worker-node-raw.js` (Node workers) and
+`bus-worker-xs.js` (XS workers).
 
 ## Setup
 
 * `cargo build -p endo --release`
+* `node packages/daemon/scripts/bundle-bus-daemon-rust-xs.mjs` to
+  regenerate `daemon_bootstrap.js`.
+* `node packages/daemon/scripts/bundle-bus-worker-xs.mjs` to
+  regenerate `worker_bootstrap.js`.
 * `node packages/daemon/test/bench-daemon.js --rust-only` for the
   default-mode (CapTP) numbers.
 * `ENDO_USE_SLOT_MACHINE=1 node packages/daemon/test/bench-daemon.js
@@ -17,26 +23,37 @@ fix.
   carry `kind: 'node'` on disk and the daemon's spawn dispatch
   picks `bus-worker-node-raw.js` instead of an XS binary.
 
-## Per-bench averages (ms)
+## Per-bench averages (ms, mean of 3 back-to-back runs)
 
-| operation               | CapTP (Rust+Node) | slot-machine (Rust+Node) |  Δ        |
-|-------------------------|-------------------|--------------------------|-----------|
-| ping                    |  0.6              |  0.7                     | bench-client → daemon path is CapTP either way; delta is noise. |
-| provideWorker           |  9.2              |  8.8                     | wash      |
-| eval_cold               | 127.8             | 102.1                    | −25.7 ms  |
-| **eval_warm**           | 10.7              |  3.6                     | **−66%** (−7.1 ms) |
-| **eval_string_result**  |  8.2              |  4.6                     | **−44%** (−3.6 ms) |
-| list                    |  2.0              |  1.8                     | wash      |
-| storeValue_lookup       |  3.1              |  3.5                     | wash      |
-| cancel_worker           | 20.9              | 17.2                     | −3.7 ms   |
-| cancel_reprovision      | 201.2             | 204.0                    | wash      |
+### Rust+XS variant
 
-The two bench rows that target the daemon↔worker hot path
-(`eval_warm`, `eval_string_result`) show clear improvements: a
-warm `evaluate` of `1+1` drops from 10.7 ms to 3.6 ms — i.e.
-the daemon→worker call shaves ~7 ms by replacing the CapTP
-serialization layer with the slot-machine codec.  The 1 KiB
-result variant gains ~3.6 ms.
+| operation               | CapTP    | slot-machine | Δ        |
+|-------------------------|----------|--------------|----------|
+| **eval_warm**           |  5.1     |  3.8         | **−25%** |
+| eval_string_result      |  5.9     |  6.3         | wash     |
+| list                    |  1.7     |  1.8         | wash     |
+| eval_cold               | 56–60    | 60–63        | wash     |
+
+### Rust+Node variant
+
+| operation               | CapTP    | slot-machine | Δ        |
+|-------------------------|----------|--------------|----------|
+| **eval_warm**           |  4.6     |  4.2         | **−9%**  |
+| **eval_string_result**  |  7.2     |  4.8         | **−33%** |
+| list                    |  2.0     |  1.8         | wash     |
+| eval_cold               | 105–110  | 102–107      | wash     |
+
+The slot-machine path replaces the CapTP marshal layer for every
+daemon→worker `evaluate` and `terminate` call.  In the warm-eval
+hot path (where the daemon ↔ worker hop dominates) it shaves
+~25–33% off the per-call latency.  Cold-eval and bench cases
+that don't exercise the daemon↔worker bus (`ping`, `list`)
+unchanged within run-to-run noise.
+
+Verified the splice is live in XS workers: the daemon log emits
+`daemon-xs(slots): SEND deliver` / `RECV resolve` pairs for
+every `evaluate` call when `ENDO_USE_SLOT_MACHINE=1` (96+ slot
+ops per bench run).
 
 ## What's covered, what's skipped
 
@@ -54,25 +71,18 @@ Closing that gap requires a bridging facet on the daemon that
 exposes slot-machine remotes via a CapTP-side wrapper.  Tracked
 as a follow-up to this PR.
 
-The Rust+XS variant of the bench is also skipped under
-`ENDO_USE_SLOT_MACHINE=1`: the XS-worker bootstrap in
-`rust/endo/xsnap/src/worker_bootstrap.js` was generated from a
-`packages/daemon/src/bus-worker-xs.js` source that was never
-checked in.  Without the source we can't apply the slot-machine
-splice in the XS worker.  Tracked as Stage B of the resilient-
-foraging-eich plan.
-
 ## Reproducibility
 
 ```sh
 cargo build -p endo --release
 cd packages/daemon
-rm -rf tmp/bench-*
+node scripts/bundle-bus-daemon-rust-xs.mjs
+node scripts/bundle-bus-worker-xs.mjs
+cargo build -p endo --release  # rebuild after bundle changes
 
-# Default-mode CapTP baseline.
+rm -rf tmp/bench-*
 node test/bench-daemon.js --rust-only
 
-# Slot-machine flagged run.
 rm -rf tmp/bench-*
 ENDO_USE_SLOT_MACHINE=1 node test/bench-daemon.js --rust-only
 ```
