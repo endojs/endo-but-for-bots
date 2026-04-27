@@ -22,7 +22,7 @@
   "scripts": {
     "build": "exit 0",
     "setup": "endo run --UNCONFINED setup.js --powers @agent GENIE_HOME=$GENIE_HOME",
-    "test": "ava",
+    "test": "ses-ava",
     "test:integration": "bash test/integration.sh -E GENIE_MODEL=ollama/llama3.2 -E GENIE_TEST=test/scenarios/workspace-tool.sh",
     "repl": "node dev-repl.js --workspace workspace_dev",
     "lint": "yarn lint:eslint",
@@ -47,18 +47,18 @@
   "devDependencies": {
     "@endo/cli": "workspace:^",
     "@endo/ses-ava": "workspace:^",
+    "@fast-check/ava": "catalog:dev",
     "ava": "catalog:dev",
     "eslint": "catalog:dev"
-  },
-  "ava": {
-    "files": [
-      "test/**/*.test.*"
-    ],
-    "timeout": "2m"
   },
   "eslintConfig": {
     "extends": [
       "plugin:@endo/internal"
     ]
+  },
+  "sesAvaConfigs": {
+    "lockdown": "../../ava-endo-lockdown.config.mjs",
+    "unsafe": "../../ava-endo-lockdown-unsafe.config.mjs",
+    "endo": "../../ava-endo-shims-only.config.mjs"
   }
 }

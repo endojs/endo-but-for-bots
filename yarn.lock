@@ -1925,6 +1925,7 @@ __metadata:
     "@endo/patterns": "workspace:^"
     "@endo/promise-kit": "workspace:^"
     "@endo/ses-ava": "workspace:^"
+    "@fast-check/ava": "catalog:dev"
     "@mariozechner/pi-agent-core": "npm:^0.60.0"
     "@mariozechner/pi-ai": "npm:^0.60.0"
     ava: "catalog:dev"
