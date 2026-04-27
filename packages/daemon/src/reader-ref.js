@@ -32,11 +32,6 @@ export const asyncIterate = iterable => {
 };
 
 /**
- * @template T
- * @param {SomehowAsyncIterable<T>} iterable The iterable object.
- * @returns {FarRef<Reader<T>>}
- */
-/**
  * Defensively freeze an iterator result so the strict XS marshaller
  * does not reject the `{value, done}` record on the wire as
  * "extensible object".  We use Object.freeze (one level deep) rather
@@ -46,7 +41,8 @@ export const asyncIterate = iterable => {
  * cannot be reconfigured.
  *
  * @template T
- * @param {{ value: T, done: boolean }} result
+ * @param {IteratorResult<T> | Promise<IteratorResult<T>> | any} result
+ * @returns {any}
  */
 const freezeResult = result => {
   if (result && typeof result === 'object' && !Object.isFrozen(result)) {
@@ -55,6 +51,11 @@ const freezeResult = result => {
   return result;
 };
 
+/**
+ * @template T
+ * @param {SomehowAsyncIterable<T>} iterable The iterable object.
+ * @returns {FarRef<Reader<T>>}
+ */
 export const makeIteratorRef = iterable => {
   const iterator = asyncIterate(iterable);
   // @ts-ignore while switching from Far
