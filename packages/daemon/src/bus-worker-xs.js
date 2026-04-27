@@ -1,6 +1,6 @@
 // @ts-check
 /// <reference path="./bus-xs-host-globals.d.ts" />
-/* global globalThis, hostGetDaemonHandle, hostGetEnv, hostImportArchive, hostTrace */
+/* global globalThis, hostGetDaemonHandle, hostGetEnv */
 
 /**
  * XS worker bootstrap.
@@ -33,7 +33,6 @@ import { makeCapTP } from '@endo/captp';
 import { E, Far } from '@endo/far';
 import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
-import { decodeBase64 } from '@endo/base64';
 import { makeMessageSlots, isSlotVerb } from '@endo/slots';
 
 import {
@@ -43,10 +42,10 @@ import {
   textDecoder,
   textEncoder,
 } from './bus-xs-core.js';
-import { makeRefIterator } from './ref-reader.js';
+import { WorkerFacetForDaemonInterface } from './interfaces.js';
 
+void E;
 void Far;
-void hostTrace;
 
 const useSlotMachine =
   typeof globalThis.hostGetEnv === 'function' &&
@@ -115,28 +114,9 @@ const standardEndowments = harden(
 );
 
 const workerFacet = makeExo(
-  'EndoXsWorkerFacet',
-  M.interface('EndoXsWorkerFacet', {
-    terminate: M.call().returns(M.promise()),
-    evaluate: M.call(
-      M.string(),
-      M.arrayOf(M.string()),
-      M.arrayOf(M.any()),
-      M.string(),
-      M.promise(),
-    ).returns(M.promise()),
-    makeBundle: M.call(M.any(), M.any(), M.any(), M.any()).returns(
-      M.promise(),
-    ),
-    makeArchive: M.call(M.any(), M.any(), M.any(), M.any()).returns(
-      M.promise(),
-    ),
-    makeUnconfined: M.call(M.string(), M.any(), M.any(), M.any()).returns(
-      M.promise(),
-    ),
-  }),
+  'EndoWorkerFacetForDaemon',
+  WorkerFacetForDaemonInterface,
   {
-    /** @returns {Promise<void>} */
     terminate: async () => {
       markShouldTerminate();
     },
@@ -147,7 +127,6 @@ const workerFacet = makeExo(
      * @param {unknown[]} endowmentValues
      * @param {string} id
      * @param {Promise<never>} cancelled
-     * @returns {Promise<unknown>}
      */
     evaluate: async (source, codeNames, endowmentValues, id, cancelled) => {
       const endowments = harden(
@@ -179,39 +158,9 @@ const workerFacet = makeExo(
      * @param {unknown} _powersP
      * @param {unknown} _contextP
      * @param {Record<string, string>} _env
-     * @returns {Promise<unknown>}
      */
     makeBundle: async (_readableP, _powersP, _contextP, _env) => {
       throw new Error('makeBundle not yet implemented in XS worker');
-    },
-
-    /**
-     * @param {unknown} readableP
-     * @param {unknown} powersP
-     * @param {unknown} contextP
-     * @param {Record<string, string>} env
-     * @returns {Promise<unknown>}
-     */
-    makeArchive: async (readableP, powersP, contextP, env) => {
-      const streamRef = await E(readableP).streamBase64();
-      const chunks = [];
-      for await (const chunk of makeRefIterator(streamRef)) {
-        chunks.push(decodeBase64(chunk));
-      }
-      const totalLen = chunks.reduce((n, c) => n + c.length, 0);
-      const archiveBytes = new Uint8Array(totalLen);
-      let offset = 0;
-      for (const c of chunks) {
-        archiveBytes.set(c, offset);
-        offset += c.length;
-      }
-
-      const ok = hostImportArchive(archiveBytes);
-      if (!ok) throw new Error('Failed to import archive');
-
-      const namespace = /** @type {any} */ (globalThis).__entryNs;
-      delete (/** @type {any} */ (globalThis)).__entryNs;
-      return namespace.make(powersP, contextP, { env });
     },
 
     /**
@@ -219,7 +168,6 @@ const workerFacet = makeExo(
      * @param {unknown} _powersP
      * @param {unknown} _contextP
      * @param {Record<string, string>} _env
-     * @returns {Promise<unknown>}
      */
     makeUnconfined: async (_specifier, _powersP, _contextP, _env) => {
       throw new Error('makeUnconfined not yet implemented in XS worker');
@@ -288,7 +236,13 @@ if (useSlotMachine) {
   /** @type {Promise<never>} */
   const cancelled = new Promise(() => {});
 
-  makeMessageSlots('Endo', envelopeWriter, inboundReader, cancelled, workerFacet);
+  makeMessageSlots(
+    'Endo',
+    /** @type {any} */ (envelopeWriter),
+    /** @type {any} */ (inboundReader),
+    cancelled,
+    workerFacet,
+  );
 } else {
   // CapTP path (default).
   /** @param {Record<string, unknown>} message */

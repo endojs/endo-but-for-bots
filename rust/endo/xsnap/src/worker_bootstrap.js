@@ -611,37 +611,6 @@
       GET_INTERFACE_GUARD: cell("GET_INTERFACE_GUARD"),
     },
     {
-      padding: cell("padding"),
-      alphabet64: cell("alphabet64"),
-      monodu64: cell("monodu64"),
-    },
-    {
-      jsEncodeBase64: cell("jsEncodeBase64"),
-      encodeBase64: cell("encodeBase64"),
-    },
-    {
-      jsDecodeBase64: cell("jsDecodeBase64"),
-      decodeBase64: cell("decodeBase64"),
-    },
-    {
-      encodeBase64: cell("encodeBase64"),
-    },
-    {
-      btoa: cell("btoa"),
-    },
-    {
-      decodeBase64: cell("decodeBase64"),
-    },
-    {
-      atob: cell("atob"),
-    },
-    {
-      encodeBase64: cell("encodeBase64"),
-      decodeBase64: cell("decodeBase64"),
-      btoa: cell("btoa"),
-      atob: cell("atob"),
-    },
-    {
       makeWriter: cell("makeWriter"),
       writerToBytes: cell("writerToBytes"),
       writeUint: cell("writeUint"),
@@ -755,17 +724,31 @@
       textEncoder: cell("textEncoder"),
     },
     {
-      makeQueue: cell("makeQueue"),
-      makeStream: cell("makeStream"),
-      makePipe: cell("makePipe"),
-      pump: cell("pump"),
-      prime: cell("prime"),
-      mapReader: cell("mapReader"),
-      mapWriter: cell("mapWriter"),
-    },
-    {
-      makeRefIterator: cell("makeRefIterator"),
-      makeRefReader: cell("makeRefReader"),
+      WorkerInterface: cell("WorkerInterface"),
+      PeerGatewayInterface: cell("PeerGatewayInterface"),
+      ResponderInterface: cell("ResponderInterface"),
+      NameHubInterface: cell("NameHubInterface"),
+      EnvelopeInterface: cell("EnvelopeInterface"),
+      DismisserInterface: cell("DismisserInterface"),
+      HandleInterface: cell("HandleInterface"),
+      AsyncIteratorInterface: cell("AsyncIteratorInterface"),
+      DirectoryInterface: cell("DirectoryInterface"),
+      GuestInterface: cell("GuestInterface"),
+      HostInterface: cell("HostInterface"),
+      ChannelInterface: cell("ChannelInterface"),
+      ChannelMemberInterface: cell("ChannelMemberInterface"),
+      ChannelInvitationInterface: cell("ChannelInvitationInterface"),
+      AttenuatorInterface: cell("AttenuatorInterface"),
+      InvitationInterface: cell("InvitationInterface"),
+      InspectorHubInterface: cell("InspectorHubInterface"),
+      InspectorInterface: cell("InspectorInterface"),
+      BlobInterface: cell("BlobInterface"),
+      MountInterface: cell("MountInterface"),
+      MountFileInterface: cell("MountFileInterface"),
+      ReadableTreeInterface: cell("ReadableTreeInterface"),
+      DaemonFacetForWorkerInterface: cell("DaemonFacetForWorkerInterface"),
+      WorkerFacetForDaemonInterface: cell("WorkerFacetForDaemonInterface"),
+      EndoInterface: cell("EndoInterface"),
     },
     {
     },
@@ -805,13 +788,7 @@
 
   defineProperties(cells[78], {"initEmpty": { value: cells[75]["initEmpty"] },"GET_INTERFACE_GUARD": { value: cells[73]["GET_INTERFACE_GUARD"] } });
 
-  defineProperties(cells[82], {"encodeBase64": { value: cells[80]["encodeBase64"] } });
-
-  defineProperties(cells[84], {"decodeBase64": { value: cells[81]["decodeBase64"] } });
-
-  defineProperties(cells[86], {"encodeBase64": { value: cells[80]["encodeBase64"] },"decodeBase64": { value: cells[81]["decodeBase64"] },"btoa": { value: cells[83]["btoa"] },"atob": { value: cells[85]["atob"] } });
-
-  defineProperties(cells[96], {"Direction": { value: cells[88]["Direction"] },"Kind": { value: cells[88]["Kind"] },"encodeDescriptor": { value: cells[88]["encodeDescriptor"] },"decodeDescriptor": { value: cells[88]["decodeDescriptor"] },"descriptorKey": { value: cells[88]["descriptorKey"] },"flipDirection": { value: cells[88]["flipDirection"] },"VERB_DELIVER": { value: cells[89]["VERB_DELIVER"] },"VERB_RESOLVE": { value: cells[89]["VERB_RESOLVE"] },"VERB_DROP": { value: cells[89]["VERB_DROP"] },"VERB_ABORT": { value: cells[89]["VERB_ABORT"] },"isSlotVerb": { value: cells[89]["isSlotVerb"] },"encodeDeliverPayload": { value: cells[89]["encodeDeliverPayload"] },"decodeDeliverPayload": { value: cells[89]["decodeDeliverPayload"] },"encodeResolvePayload": { value: cells[89]["encodeResolvePayload"] },"decodeResolvePayload": { value: cells[89]["decodeResolvePayload"] },"encodeDropPayload": { value: cells[89]["encodeDropPayload"] },"decodeDropPayload": { value: cells[89]["decodeDropPayload"] },"encodeAbortPayload": { value: cells[89]["encodeAbortPayload"] },"decodeAbortPayload": { value: cells[89]["decodeAbortPayload"] },"sessionIdFromLabel": { value: cells[90]["sessionIdFromLabel"] },"sessionIdHex": { value: cells[90]["sessionIdHex"] },"makeCList": { value: cells[91]["makeCList"] },"makeSlotCodec": { value: cells[92]["makeSlotCodec"] },"makeSlotClient": { value: cells[93]["makeSlotClient"] },"LOCAL_ROOT": { value: cells[94]["LOCAL_ROOT"] },"REMOTE_ROOT": { value: cells[94]["REMOTE_ROOT"] },"bootstrap": { value: cells[94]["bootstrap"] },"makeMessageSlots": { value: cells[95]["makeMessageSlots"] } });
+  defineProperties(cells[88], {"Direction": { value: cells[80]["Direction"] },"Kind": { value: cells[80]["Kind"] },"encodeDescriptor": { value: cells[80]["encodeDescriptor"] },"decodeDescriptor": { value: cells[80]["decodeDescriptor"] },"descriptorKey": { value: cells[80]["descriptorKey"] },"flipDirection": { value: cells[80]["flipDirection"] },"VERB_DELIVER": { value: cells[81]["VERB_DELIVER"] },"VERB_RESOLVE": { value: cells[81]["VERB_RESOLVE"] },"VERB_DROP": { value: cells[81]["VERB_DROP"] },"VERB_ABORT": { value: cells[81]["VERB_ABORT"] },"isSlotVerb": { value: cells[81]["isSlotVerb"] },"encodeDeliverPayload": { value: cells[81]["encodeDeliverPayload"] },"decodeDeliverPayload": { value: cells[81]["decodeDeliverPayload"] },"encodeResolvePayload": { value: cells[81]["encodeResolvePayload"] },"decodeResolvePayload": { value: cells[81]["decodeResolvePayload"] },"encodeDropPayload": { value: cells[81]["encodeDropPayload"] },"decodeDropPayload": { value: cells[81]["decodeDropPayload"] },"encodeAbortPayload": { value: cells[81]["encodeAbortPayload"] },"decodeAbortPayload": { value: cells[81]["decodeAbortPayload"] },"sessionIdFromLabel": { value: cells[82]["sessionIdFromLabel"] },"sessionIdHex": { value: cells[82]["sessionIdHex"] },"makeCList": { value: cells[83]["makeCList"] },"makeSlotCodec": { value: cells[84]["makeSlotCodec"] },"makeSlotClient": { value: cells[85]["makeSlotClient"] },"LOCAL_ROOT": { value: cells[86]["LOCAL_ROOT"] },"REMOTE_ROOT": { value: cells[86]["REMOTE_ROOT"] },"bootstrap": { value: cells[86]["bootstrap"] },"makeMessageSlots": { value: cells[87]["makeMessageSlots"] } });
 
   const namespaces = cells.map(cells => freeze(create(null, {
     ...cells,
@@ -2145,99 +2122,149 @@ function observeImports(map, importName, importIndex) {
   functors[79]({
     imports(entries) {
       const map = new Map(entries);
+      observeImports(map, "@endo/harden", 3);
+      observeImports(map, "@endo/errors", 9);
     },
     liveVar: {
     },
     onceVar: {
-      padding: cells[79].padding.set,
-      alphabet64: cells[79].alphabet64.set,
-      monodu64: cells[79].monodu64.set,
+      makeWriter: cells[79].makeWriter.set,
+      writerToBytes: cells[79].writerToBytes.set,
+      writeUint: cells[79].writeUint.set,
+      writeByteString: cells[79].writeByteString.set,
+      writeArrayHeader: cells[79].writeArrayHeader.set,
+      writeNull: cells[79].writeNull.set,
+      makeReader: cells[79].makeReader.set,
+      readUint: cells[79].readUint.set,
+      readByteString: cells[79].readByteString.set,
+      readArrayHeader: cells[79].readArrayHeader.set,
+      readNullOrPeek: cells[79].readNullOrPeek.set,
+      assertConsumed: cells[79].assertConsumed.set,
     },
     importMeta: {},
   });
   functors[80]({
     imports(entries) {
       const map = new Map(entries);
-      observeImports(map, "./common.js", 79);
+      observeImports(map, "@endo/harden", 3);
+      observeImports(map, "@endo/errors", 9);
+      observeImports(map, "./cbor.js", 79);
     },
     liveVar: {
     },
     onceVar: {
-      jsEncodeBase64: cells[80].jsEncodeBase64.set,
-      encodeBase64: cells[80].encodeBase64.set,
+      Direction: cells[80].Direction.set,
+      Kind: cells[80].Kind.set,
+      flipDirection: cells[80].flipDirection.set,
+      writeDescriptor: cells[80].writeDescriptor.set,
+      encodeDescriptor: cells[80].encodeDescriptor.set,
+      readDescriptor: cells[80].readDescriptor.set,
+      decodeDescriptor: cells[80].decodeDescriptor.set,
+      descriptorKey: cells[80].descriptorKey.set,
     },
     importMeta: {},
   });
   functors[81]({
     imports(entries) {
       const map = new Map(entries);
-      observeImports(map, "./common.js", 79);
+      observeImports(map, "@endo/harden", 3);
+      observeImports(map, "@endo/errors", 9);
+      observeImports(map, "./cbor.js", 79);
+      observeImports(map, "./descriptor.js", 80);
     },
     liveVar: {
     },
     onceVar: {
-      jsDecodeBase64: cells[81].jsDecodeBase64.set,
-      decodeBase64: cells[81].decodeBase64.set,
+      VERB_DELIVER: cells[81].VERB_DELIVER.set,
+      VERB_RESOLVE: cells[81].VERB_RESOLVE.set,
+      VERB_DROP: cells[81].VERB_DROP.set,
+      VERB_ABORT: cells[81].VERB_ABORT.set,
+      isSlotVerb: cells[81].isSlotVerb.set,
+      encodeDeliverPayload: cells[81].encodeDeliverPayload.set,
+      decodeDeliverPayload: cells[81].decodeDeliverPayload.set,
+      encodeResolvePayload: cells[81].encodeResolvePayload.set,
+      decodeResolvePayload: cells[81].decodeResolvePayload.set,
+      encodeDropPayload: cells[81].encodeDropPayload.set,
+      decodeDropPayload: cells[81].decodeDropPayload.set,
+      encodeAbortPayload: cells[81].encodeAbortPayload.set,
+      decodeAbortPayload: cells[81].decodeAbortPayload.set,
     },
     importMeta: {},
   });
   functors[82]({
     imports(entries) {
       const map = new Map(entries);
-      observeImports(map, "./src/encode.js", 80);
+      observeImports(map, "@endo/harden", 3);
     },
     liveVar: {
     },
     onceVar: {
+      sessionIdFromLabel: cells[82].sessionIdFromLabel.set,
+      sessionIdHex: cells[82].sessionIdHex.set,
     },
     importMeta: {},
   });
   functors[83]({
     imports(entries) {
       const map = new Map(entries);
-      observeImports(map, "./encode.js", 82);
+      observeImports(map, "@endo/harden", 3);
+      observeImports(map, "@endo/errors", 9);
+      observeImports(map, "./descriptor.js", 80);
+      observeImports(map, "./session.js", 82);
     },
     liveVar: {
     },
     onceVar: {
-      btoa: cells[83].btoa.set,
+      makeCList: cells[83].makeCList.set,
     },
     importMeta: {},
   });
   functors[84]({
     imports(entries) {
       const map = new Map(entries);
-      observeImports(map, "./src/decode.js", 81);
+      observeImports(map, "@endo/harden", 3);
+      observeImports(map, "@endo/errors", 9);
+      observeImports(map, "@endo/marshal", 47);
+      observeImports(map, "@endo/promise-kit", 22);
+      observeImports(map, "./descriptor.js", 80);
+      observeImports(map, "./payload.js", 81);
     },
     liveVar: {
     },
     onceVar: {
+      makeSlotCodec: cells[84].makeSlotCodec.set,
     },
     importMeta: {},
   });
   functors[85]({
     imports(entries) {
       const map = new Map(entries);
-      observeImports(map, "./decode.js", 84);
+      observeImports(map, "@endo/harden", 3);
+      observeImports(map, "@endo/errors", 9);
+      observeImports(map, "@endo/eventual-send", 34);
+      observeImports(map, "@endo/promise-kit", 22);
+      observeImports(map, "./descriptor.js", 80);
+      observeImports(map, "./payload.js", 81);
     },
     liveVar: {
     },
     onceVar: {
-      atob: cells[85].atob.set,
+      makeSlotClient: cells[85].makeSlotClient.set,
     },
     importMeta: {},
   });
   functors[86]({
     imports(entries) {
       const map = new Map(entries);
-      observeImports(map, "./src/encode.js", 80);
-      observeImports(map, "./src/decode.js", 81);
-      observeImports(map, "./btoa.js", 83);
-      observeImports(map, "./atob.js", 85);
+      observeImports(map, "@endo/harden", 3);
+      observeImports(map, "./descriptor.js", 80);
     },
     liveVar: {
     },
     onceVar: {
+      LOCAL_ROOT: cells[86].LOCAL_ROOT.set,
+      REMOTE_ROOT: cells[86].REMOTE_ROOT.set,
+      bootstrap: cells[86].bootstrap.set,
     },
     importMeta: {},
   });
@@ -2245,282 +2272,132 @@ function observeImports(map, importName, importIndex) {
     imports(entries) {
       const map = new Map(entries);
       observeImports(map, "@endo/harden", 3);
-      observeImports(map, "@endo/errors", 9);
+      observeImports(map, "@endo/promise-kit", 22);
+      observeImports(map, "./clist.js", 83);
+      observeImports(map, "./codec.js", 84);
+      observeImports(map, "./client.js", 85);
+      observeImports(map, "./bootstrap.js", 86);
     },
     liveVar: {
     },
     onceVar: {
-      makeWriter: cells[87].makeWriter.set,
-      writerToBytes: cells[87].writerToBytes.set,
-      writeUint: cells[87].writeUint.set,
-      writeByteString: cells[87].writeByteString.set,
-      writeArrayHeader: cells[87].writeArrayHeader.set,
-      writeNull: cells[87].writeNull.set,
-      makeReader: cells[87].makeReader.set,
-      readUint: cells[87].readUint.set,
-      readByteString: cells[87].readByteString.set,
-      readArrayHeader: cells[87].readArrayHeader.set,
-      readNullOrPeek: cells[87].readNullOrPeek.set,
-      assertConsumed: cells[87].assertConsumed.set,
+      makeMessageSlots: cells[87].makeMessageSlots.set,
     },
     importMeta: {},
   });
   functors[88]({
     imports(entries) {
       const map = new Map(entries);
-      observeImports(map, "@endo/harden", 3);
-      observeImports(map, "@endo/errors", 9);
-      observeImports(map, "./cbor.js", 87);
+      observeImports(map, "./src/descriptor.js", 80);
+      observeImports(map, "./src/payload.js", 81);
+      observeImports(map, "./src/session.js", 82);
+      observeImports(map, "./src/clist.js", 83);
+      observeImports(map, "./src/codec.js", 84);
+      observeImports(map, "./src/client.js", 85);
+      observeImports(map, "./src/bootstrap.js", 86);
+      observeImports(map, "./src/message.js", 87);
     },
     liveVar: {
     },
     onceVar: {
-      Direction: cells[88].Direction.set,
-      Kind: cells[88].Kind.set,
-      flipDirection: cells[88].flipDirection.set,
-      writeDescriptor: cells[88].writeDescriptor.set,
-      encodeDescriptor: cells[88].encodeDescriptor.set,
-      readDescriptor: cells[88].readDescriptor.set,
-      decodeDescriptor: cells[88].decodeDescriptor.set,
-      descriptorKey: cells[88].descriptorKey.set,
     },
     importMeta: {},
   });
   functors[89]({
     imports(entries) {
       const map = new Map(entries);
-      observeImports(map, "@endo/harden", 3);
-      observeImports(map, "@endo/errors", 9);
-      observeImports(map, "./cbor.js", 87);
-      observeImports(map, "./descriptor.js", 88);
     },
     liveVar: {
     },
     onceVar: {
-      VERB_DELIVER: cells[89].VERB_DELIVER.set,
-      VERB_RESOLVE: cells[89].VERB_RESOLVE.set,
-      VERB_DROP: cells[89].VERB_DROP.set,
-      VERB_ABORT: cells[89].VERB_ABORT.set,
-      isSlotVerb: cells[89].isSlotVerb.set,
-      encodeDeliverPayload: cells[89].encodeDeliverPayload.set,
-      decodeDeliverPayload: cells[89].decodeDeliverPayload.set,
-      encodeResolvePayload: cells[89].encodeResolvePayload.set,
-      decodeResolvePayload: cells[89].decodeResolvePayload.set,
-      encodeDropPayload: cells[89].encodeDropPayload.set,
-      decodeDropPayload: cells[89].decodeDropPayload.set,
-      encodeAbortPayload: cells[89].encodeAbortPayload.set,
-      decodeAbortPayload: cells[89].decodeAbortPayload.set,
+      encodeEnvelope: cells[89].encodeEnvelope.set,
+      encodeFrame: cells[89].encodeFrame.set,
+      decodeFrame: cells[89].decodeFrame.set,
+      decodeEnvelope: cells[89].decodeEnvelope.set,
+      readFrameFromStream: cells[89].readFrameFromStream.set,
+      writeFrameToStream: cells[89].writeFrameToStream.set,
     },
     importMeta: {},
   });
   functors[90]({
     imports(entries) {
       const map = new Map(entries);
-      observeImports(map, "@endo/harden", 3);
     },
     liveVar: {
     },
     onceVar: {
-      sessionIdFromLabel: cells[90].sessionIdFromLabel.set,
-      sessionIdHex: cells[90].sessionIdHex.set,
+      textEncoder: cells[90].textEncoder.set,
+      textDecoder: cells[90].textDecoder.set,
+      silentReject: cells[90].silentReject.set,
+      markShouldTerminate: cells[90].markShouldTerminate.set,
+      installShouldTerminate: cells[90].installShouldTerminate.set,
     },
     importMeta: {},
   });
   functors[91]({
     imports(entries) {
       const map = new Map(entries);
-      observeImports(map, "@endo/harden", 3);
-      observeImports(map, "@endo/errors", 9);
-      observeImports(map, "./descriptor.js", 88);
-      observeImports(map, "./session.js", 90);
+      observeImports(map, "./envelope.js", 89);
+      observeImports(map, "./bus-xs-common.js", 90);
     },
     liveVar: {
-    },
+        installShouldTerminate: cells[91].installShouldTerminate.set,
+      markShouldTerminate: cells[91].markShouldTerminate.set,
+      silentReject: cells[91].silentReject.set,
+      textDecoder: cells[91].textDecoder.set,
+      textEncoder: cells[91].textEncoder.set,
+  },
     onceVar: {
-      makeCList: cells[91].makeCList.set,
+      makeXsNode: cells[91].makeXsNode.set,
     },
     importMeta: {},
   });
   functors[92]({
     imports(entries) {
       const map = new Map(entries);
-      observeImports(map, "@endo/harden", 3);
-      observeImports(map, "@endo/errors", 9);
-      observeImports(map, "@endo/marshal", 47);
-      observeImports(map, "@endo/promise-kit", 22);
-      observeImports(map, "./descriptor.js", 88);
-      observeImports(map, "./payload.js", 89);
+      observeImports(map, "@endo/patterns", 72);
     },
     liveVar: {
     },
     onceVar: {
-      makeSlotCodec: cells[92].makeSlotCodec.set,
+      WorkerInterface: cells[92].WorkerInterface.set,
+      PeerGatewayInterface: cells[92].PeerGatewayInterface.set,
+      ResponderInterface: cells[92].ResponderInterface.set,
+      NameHubInterface: cells[92].NameHubInterface.set,
+      EnvelopeInterface: cells[92].EnvelopeInterface.set,
+      DismisserInterface: cells[92].DismisserInterface.set,
+      HandleInterface: cells[92].HandleInterface.set,
+      AsyncIteratorInterface: cells[92].AsyncIteratorInterface.set,
+      DirectoryInterface: cells[92].DirectoryInterface.set,
+      GuestInterface: cells[92].GuestInterface.set,
+      HostInterface: cells[92].HostInterface.set,
+      ChannelInterface: cells[92].ChannelInterface.set,
+      ChannelMemberInterface: cells[92].ChannelMemberInterface.set,
+      ChannelInvitationInterface: cells[92].ChannelInvitationInterface.set,
+      AttenuatorInterface: cells[92].AttenuatorInterface.set,
+      InvitationInterface: cells[92].InvitationInterface.set,
+      InspectorHubInterface: cells[92].InspectorHubInterface.set,
+      InspectorInterface: cells[92].InspectorInterface.set,
+      BlobInterface: cells[92].BlobInterface.set,
+      MountInterface: cells[92].MountInterface.set,
+      MountFileInterface: cells[92].MountFileInterface.set,
+      ReadableTreeInterface: cells[92].ReadableTreeInterface.set,
+      DaemonFacetForWorkerInterface: cells[92].DaemonFacetForWorkerInterface.set,
+      WorkerFacetForDaemonInterface: cells[92].WorkerFacetForDaemonInterface.set,
+      EndoInterface: cells[92].EndoInterface.set,
     },
     importMeta: {},
   });
   functors[93]({
     imports(entries) {
       const map = new Map(entries);
-      observeImports(map, "@endo/harden", 3);
-      observeImports(map, "@endo/errors", 9);
-      observeImports(map, "@endo/eventual-send", 34);
-      observeImports(map, "@endo/promise-kit", 22);
-      observeImports(map, "./descriptor.js", 88);
-      observeImports(map, "./payload.js", 89);
-    },
-    liveVar: {
-    },
-    onceVar: {
-      makeSlotClient: cells[93].makeSlotClient.set,
-    },
-    importMeta: {},
-  });
-  functors[94]({
-    imports(entries) {
-      const map = new Map(entries);
-      observeImports(map, "@endo/harden", 3);
-      observeImports(map, "./descriptor.js", 88);
-    },
-    liveVar: {
-    },
-    onceVar: {
-      LOCAL_ROOT: cells[94].LOCAL_ROOT.set,
-      REMOTE_ROOT: cells[94].REMOTE_ROOT.set,
-      bootstrap: cells[94].bootstrap.set,
-    },
-    importMeta: {},
-  });
-  functors[95]({
-    imports(entries) {
-      const map = new Map(entries);
-      observeImports(map, "@endo/harden", 3);
-      observeImports(map, "@endo/promise-kit", 22);
-      observeImports(map, "./clist.js", 91);
-      observeImports(map, "./codec.js", 92);
-      observeImports(map, "./client.js", 93);
-      observeImports(map, "./bootstrap.js", 94);
-    },
-    liveVar: {
-    },
-    onceVar: {
-      makeMessageSlots: cells[95].makeMessageSlots.set,
-    },
-    importMeta: {},
-  });
-  functors[96]({
-    imports(entries) {
-      const map = new Map(entries);
-      observeImports(map, "./src/descriptor.js", 88);
-      observeImports(map, "./src/payload.js", 89);
-      observeImports(map, "./src/session.js", 90);
-      observeImports(map, "./src/clist.js", 91);
-      observeImports(map, "./src/codec.js", 92);
-      observeImports(map, "./src/client.js", 93);
-      observeImports(map, "./src/bootstrap.js", 94);
-      observeImports(map, "./src/message.js", 95);
-    },
-    liveVar: {
-    },
-    onceVar: {
-    },
-    importMeta: {},
-  });
-  functors[97]({
-    imports(entries) {
-      const map = new Map(entries);
-    },
-    liveVar: {
-    },
-    onceVar: {
-      encodeEnvelope: cells[97].encodeEnvelope.set,
-      encodeFrame: cells[97].encodeFrame.set,
-      decodeFrame: cells[97].decodeFrame.set,
-      decodeEnvelope: cells[97].decodeEnvelope.set,
-      readFrameFromStream: cells[97].readFrameFromStream.set,
-      writeFrameToStream: cells[97].writeFrameToStream.set,
-    },
-    importMeta: {},
-  });
-  functors[98]({
-    imports(entries) {
-      const map = new Map(entries);
-    },
-    liveVar: {
-    },
-    onceVar: {
-      textEncoder: cells[98].textEncoder.set,
-      textDecoder: cells[98].textDecoder.set,
-      silentReject: cells[98].silentReject.set,
-      markShouldTerminate: cells[98].markShouldTerminate.set,
-      installShouldTerminate: cells[98].installShouldTerminate.set,
-    },
-    importMeta: {},
-  });
-  functors[99]({
-    imports(entries) {
-      const map = new Map(entries);
-      observeImports(map, "./envelope.js", 97);
-      observeImports(map, "./bus-xs-common.js", 98);
-    },
-    liveVar: {
-        installShouldTerminate: cells[99].installShouldTerminate.set,
-      markShouldTerminate: cells[99].markShouldTerminate.set,
-      silentReject: cells[99].silentReject.set,
-      textDecoder: cells[99].textDecoder.set,
-      textEncoder: cells[99].textEncoder.set,
-  },
-    onceVar: {
-      makeXsNode: cells[99].makeXsNode.set,
-    },
-    importMeta: {},
-  });
-  functors[100]({
-    imports(entries) {
-      const map = new Map(entries);
-      observeImports(map, "@endo/harden", 3);
-      observeImports(map, "@endo/eventual-send", 34);
-      observeImports(map, "@endo/promise-kit", 22);
-    },
-    liveVar: {
-    },
-    onceVar: {
-      makeQueue: cells[100].makeQueue.set,
-      makeStream: cells[100].makeStream.set,
-      makePipe: cells[100].makePipe.set,
-      pump: cells[100].pump.set,
-      prime: cells[100].prime.set,
-      mapReader: cells[100].mapReader.set,
-      mapWriter: cells[100].mapWriter.set,
-    },
-    importMeta: {},
-  });
-  functors[101]({
-    imports(entries) {
-      const map = new Map(entries);
-      observeImports(map, "@endo/harden", 3);
-      observeImports(map, "@endo/base64", 86);
-      observeImports(map, "@endo/stream", 100);
-      observeImports(map, "@endo/far", 55);
-    },
-    liveVar: {
-    },
-    onceVar: {
-      makeRefIterator: cells[101].makeRefIterator.set,
-      makeRefReader: cells[101].makeRefReader.set,
-    },
-    importMeta: {},
-  });
-  functors[102]({
-    imports(entries) {
-      const map = new Map(entries);
       observeImports(map, "@endo/captp", 53);
       observeImports(map, "@endo/far", 55);
       observeImports(map, "@endo/exo", 78);
       observeImports(map, "@endo/patterns", 72);
-      observeImports(map, "@endo/base64", 86);
-      observeImports(map, "@endo/slots", 96);
-      observeImports(map, "./bus-xs-core.js", 99);
-      observeImports(map, "./ref-reader.js", 101);
+      observeImports(map, "@endo/slots", 88);
+      observeImports(map, "./bus-xs-core.js", 91);
+      observeImports(map, "./interfaces.js", 92);
     },
     liveVar: {
     },
@@ -18126,239 +18003,7 @@ harden(makeExo);
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';$h͏_imports([["./src/exo-makers.js", []],["./types-index.js", []],["./src/types.js", []],["./src/get-interface.js", []]]);
 })()
 ,
-// === 79. base64 ./src/common.js ===
-({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';$h͏_imports([]);// @ts-check
-
-const { freeze } = Object;
-
-       const padding = '=';$h͏_once.padding(padding);
-
-       const alphabet64 =
-  'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
-
-/**
- * The numeric value corresponding to each letter of the alphabet.
- * If an alphabet is named for the Greek letters alpha and beta, then clearly a
- * monodu is named for the corresponding Greek numbers mono and duo.
- *
- * @type {Record<string, number>}
- */$h͏_once.alphabet64(alphabet64);
-       const monodu64 = {};$h͏_once.monodu64(monodu64);
-for (let i = 0; i < alphabet64.length; i += 1) {
-  const c = alphabet64[i];
-  monodu64[c] = i;
-}
-freeze(monodu64);
-})()
-,
-// === 80. base64 ./src/encode.js ===
-({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let alphabet64,padding;$h͏_imports([["./common.js", [["alphabet64",[$h͏_a => (alphabet64 = $h͏_a)]],["padding",[$h͏_a => (padding = $h͏_a)]]]]]);
-
-
-
-
-
-/**
- * XSnap is a JavaScript engine based on Moddable/XS.
- * The algorithm below is orders of magnitude too slow on this VM, but it
- * arranges a native binding on the global object.
- * We use that if it is available instead.
- *
- * This function is exported from this *file* for use in benchmarking,
- * but is not part of the *module*'s public API.
- *
- * @param {Uint8Array} data
- * @returns {string} base64 encoding
- */
-       const jsEncodeBase64 = data => {
-  // A cursory benchmark shows that string concatenation is about 25% faster
-  // than building an array and joining it in v8, in 2020, for strings of about
-  // 100 long.
-  let string = '';
-  let register = 0;
-  let quantum = 0;
-
-  for (let i = 0; i < data.length; i += 1) {
-    const b = data[i];
-    register = (register << 8) | b;
-    quantum += 8;
-    if (quantum === 24) {
-      string +=
-        alphabet64[(register >>> 18) & 0x3f] +
-        alphabet64[(register >>> 12) & 0x3f] +
-        alphabet64[(register >>> 6) & 0x3f] +
-        alphabet64[(register >>> 0) & 0x3f];
-      register = 0;
-      quantum = 0;
-    }
-  }
-
-  switch (quantum) {
-    case 0:
-      break;
-    case 8:
-      string +=
-        alphabet64[(register >>> 2) & 0x3f] +
-        alphabet64[(register << 4) & 0x3f] +
-        padding +
-        padding;
-      break;
-    case 16:
-      string +=
-        alphabet64[(register >>> 10) & 0x3f] +
-        alphabet64[(register >>> 4) & 0x3f] +
-        alphabet64[(register << 2) & 0x3f] +
-        padding;
-      break;
-    default:
-      throw Error(`internal: bad quantum ${quantum}`);
-  }
-  return string;
-};
-
-/**
- * Encodes bytes into a Base64 string, as specified in
- * https://tools.ietf.org/html/rfc4648#section-4
- *
- * @type {typeof jsEncodeBase64}
- */$h͏_once.jsEncodeBase64(jsEncodeBase64);
-       const encodeBase64 =
-  globalThis.Base64 !== undefined ? globalThis.Base64.encode : jsEncodeBase64;$h͏_once.encodeBase64(encodeBase64);
-})()
-,
-// === 81. base64 ./src/decode.js ===
-({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let monodu64,padding;$h͏_imports([["./common.js", [["monodu64",[$h͏_a => (monodu64 = $h͏_a)]],["padding",[$h͏_a => (padding = $h͏_a)]]]]]);
-
-
-
-
-
-/**
- * Decodes a Base64 string into bytes, as specified in
- * https://tools.ietf.org/html/rfc4648#section-4
- *
- * XSnap is a JavaScript engine based on Moddable/XS.
- * The algorithm below is orders of magnitude too slow on this VM, but it
- * arranges a native binding on the global object.
- * We use that if it is available instead.
- *
- * This function is exported from this *file* for use in benchmarking,
- * but is not part of the *module*'s public API.
- *
- * @param {string} string Base64-encoded string
- * @param {string} [name] The name of the string as it will appear in error
- * messages.
- * @returns {Uint8Array} decoded bytes
- */
-       const jsDecodeBase64 = (string, name = '<unknown>') => {
-  const data = new Uint8Array(Math.ceil((string.length * 4) / 3));
-  let register = 0;
-  let quantum = 0;
-  let i = 0; // index in string
-  let j = 0; // index in data
-
-  while (i < string.length && string[i] !== padding) {
-    const number = monodu64[string[i]];
-    if (number === undefined) {
-      throw Error(`Invalid base64 character ${string[i]} in string ${name}`);
-    }
-    register = (register << 6) | number;
-    quantum += 6;
-    if (quantum >= 8) {
-      quantum -= 8;
-      data[j] = register >>> quantum;
-      j += 1;
-      register &= (1 << quantum) - 1;
-    }
-    i += 1;
-  }
-
-  while (quantum > 0) {
-    if (i === string.length || string[i] !== padding) {
-      throw Error(`Missing padding at offset ${i} of string ${name}`);
-    }
-    // We MAY reject non-zero padding bits, but choose not to.
-    // https://datatracker.ietf.org/doc/html/rfc4648#section-3.5
-    i += 1;
-    quantum -= 2;
-  }
-
-  if (i < string.length) {
-    throw Error(
-      `Base64 string has trailing garbage ${string.substr(
-        i,
-      )} in string ${name}`,
-    );
-  }
-
-  return data.subarray(0, j);
-};
-
-// The XS Base64.decode function is faster, but might return ArrayBuffer (not
-// Uint8Array).  Adapt it to our needs.
-$h͏_once.jsDecodeBase64(jsDecodeBase64);const adaptDecoder=
-  nativeDecodeBase64 =>
-  (...args) => {
-    const decoded = nativeDecodeBase64(...args);
-    if (decoded instanceof Uint8Array) {
-      return decoded;
-    }
-    return new Uint8Array(decoded);
-  };
-
-/** @type {typeof jsDecodeBase64} */
-       const decodeBase64 =
-  globalThis.Base64 !== undefined
-    ? adaptDecoder(globalThis.Base64.decode)
-    : jsDecodeBase64;$h͏_once.decodeBase64(decodeBase64);
-})()
-,
-// === 82. base64 ./encode.js ===
-({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';$h͏_imports([["./src/encode.js", []]]);
-})()
-,
-// === 83. base64 ./btoa.js ===
-({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let encodeBase64;$h͏_imports([["./encode.js", [["encodeBase64",[$h͏_a => (encodeBase64 = $h͏_a)]]]]]);
-
-/**
- * @param {string} stringToEncode the binary string to encode
- * @returns {string} an ASCII string containing the base64 representation of `stringToEncode`
- */
-       const btoa = stringToEncode => {
-  const bytes = stringToEncode.split('').map(char => {
-    const b = char.charCodeAt(0);
-    if (b > 0xff) {
-      throw Error(`btoa: character out of range: ${char}`);
-    }
-    return b;
-  });
-  const buf = new Uint8Array(bytes);
-  return encodeBase64(buf);
-};$h͏_once.btoa(btoa);
-})()
-,
-// === 84. base64 ./decode.js ===
-({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';$h͏_imports([["./src/decode.js", []]]);
-})()
-,
-// === 85. base64 ./atob.js ===
-({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let decodeBase64;$h͏_imports([["./decode.js", [["decodeBase64",[$h͏_a => (decodeBase64 = $h͏_a)]]]]]);
-
-/**
- * @param {string} encodedData a binary string containing base64-encoded data
- * @returns {string} an ASCII string containing decoded data from `encodedData`
- */
-       const atob = encodedData => {
-  const buf = decodeBase64(encodedData);
-  return String.fromCharCode(...buf);
-};$h͏_once.atob(atob);
-})()
-,
-// === 86. base64 ./index.js ===
-({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';$h͏_imports([["./src/encode.js", []],["./src/decode.js", []],["./btoa.js", []],["./atob.js", []]]);
-})()
-,
-// === 87. slots ./src/cbor.js ===
+// === 79. slots ./src/cbor.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden,makeError,q,X;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]],["@endo/errors", [["makeError",[$h͏_a => (makeError = $h͏_a)]],["q",[$h͏_a => (q = $h͏_a)]],["X",[$h͏_a => (X = $h͏_a)]]]]]);
 
 
@@ -18606,7 +18251,7 @@ harden(readNullOrPeek);
 harden(assertConsumed);
 })()
 ,
-// === 88. slots ./src/descriptor.js ===
+// === 80. slots ./src/descriptor.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden,makeError,q,X,makeWriter,writerToBytes,writeArrayHeader,writeUint,readArrayHeader,readUint;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]],["@endo/errors", [["makeError",[$h͏_a => (makeError = $h͏_a)]],["q",[$h͏_a => (q = $h͏_a)]],["X",[$h͏_a => (X = $h͏_a)]]]],["./cbor.js", [["makeWriter",[$h͏_a => (makeWriter = $h͏_a)]],["writerToBytes",[$h͏_a => (writerToBytes = $h͏_a)]],["writeArrayHeader",[$h͏_a => (writeArrayHeader = $h͏_a)]],["writeUint",[$h͏_a => (writeUint = $h͏_a)]],["readArrayHeader",[$h͏_a => (readArrayHeader = $h͏_a)]],["readUint",[$h͏_a => (readUint = $h͏_a)]]]]]);
 
 
@@ -18734,7 +18379,7 @@ harden(decodeDescriptor);
 harden(descriptorKey);
 })()
 ,
-// === 89. slots ./src/payload.js ===
+// === 81. slots ./src/payload.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden,makeError,q,X,makeWriter,writerToBytes,makeReader,writeArrayHeader,writeUint,writeByteString,writeNull,readArrayHeader,readUint,readByteString,readNullOrPeek,assertConsumed,writeDescriptor,readDescriptor;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]],["@endo/errors", [["makeError",[$h͏_a => (makeError = $h͏_a)]],["q",[$h͏_a => (q = $h͏_a)]],["X",[$h͏_a => (X = $h͏_a)]]]],["./cbor.js", [["makeWriter",[$h͏_a => (makeWriter = $h͏_a)]],["writerToBytes",[$h͏_a => (writerToBytes = $h͏_a)]],["makeReader",[$h͏_a => (makeReader = $h͏_a)]],["writeArrayHeader",[$h͏_a => (writeArrayHeader = $h͏_a)]],["writeUint",[$h͏_a => (writeUint = $h͏_a)]],["writeByteString",[$h͏_a => (writeByteString = $h͏_a)]],["writeNull",[$h͏_a => (writeNull = $h͏_a)]],["readArrayHeader",[$h͏_a => (readArrayHeader = $h͏_a)]],["readUint",[$h͏_a => (readUint = $h͏_a)]],["readByteString",[$h͏_a => (readByteString = $h͏_a)]],["readNullOrPeek",[$h͏_a => (readNullOrPeek = $h͏_a)]],["assertConsumed",[$h͏_a => (assertConsumed = $h͏_a)]]]],["./descriptor.js", [["writeDescriptor",[$h͏_a => (writeDescriptor = $h͏_a)]],["readDescriptor",[$h͏_a => (readDescriptor = $h͏_a)]]]]]);
 
 
@@ -18987,7 +18632,7 @@ harden(encodeAbortPayload);
 harden(decodeAbortPayload);
 })()
 ,
-// === 90. slots ./src/session.js ===
+// === 82. slots ./src/session.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]]]);
 
 
@@ -19139,7 +18784,7 @@ harden(sessionIdFromLabel);
 harden(sessionIdHex);
 })()
 ,
-// === 91. slots ./src/clist.js ===
+// === 83. slots ./src/clist.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden,makeError,q,X,Direction,Kind,descriptorKey,sessionIdFromLabel;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]],["@endo/errors", [["makeError",[$h͏_a => (makeError = $h͏_a)]],["q",[$h͏_a => (q = $h͏_a)]],["X",[$h͏_a => (X = $h͏_a)]]]],["./descriptor.js", [["Direction",[$h͏_a => (Direction = $h͏_a)]],["Kind",[$h͏_a => (Kind = $h͏_a)]],["descriptorKey",[$h͏_a => (descriptorKey = $h͏_a)]]]],["./session.js", [["sessionIdFromLabel",[$h͏_a => (sessionIdFromLabel = $h͏_a)]]]]]);
 
 
@@ -19289,7 +18934,7 @@ const kindFieldName = harden({
 harden(makeCList);
 })()
 ,
-// === 92. slots ./src/codec.js ===
+// === 84. slots ./src/codec.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden,makeError,q,X,makeMarshal,isPromise,Kind,descriptorKey,encodeDeliverPayload,decodeDeliverPayload,encodeResolvePayload,decodeResolvePayload;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]],["@endo/errors", [["makeError",[$h͏_a => (makeError = $h͏_a)]],["q",[$h͏_a => (q = $h͏_a)]],["X",[$h͏_a => (X = $h͏_a)]]]],["@endo/marshal", [["makeMarshal",[$h͏_a => (makeMarshal = $h͏_a)]]]],["@endo/promise-kit", [["isPromise",[$h͏_a => (isPromise = $h͏_a)]]]],["./descriptor.js", [["Kind",[$h͏_a => (Kind = $h͏_a)]],["descriptorKey",[$h͏_a => (descriptorKey = $h͏_a)]]]],["./payload.js", [["encodeDeliverPayload",[$h͏_a => (encodeDeliverPayload = $h͏_a)]],["decodeDeliverPayload",[$h͏_a => (decodeDeliverPayload = $h͏_a)]],["encodeResolvePayload",[$h͏_a => (encodeResolvePayload = $h͏_a)]],["decodeResolvePayload",[$h͏_a => (decodeResolvePayload = $h͏_a)]]]]]);
 
 
@@ -19546,7 +19191,7 @@ const parseSlot = slot => {
 harden(makeSlotCodec);
 })()
 ,
-// === 93. slots ./src/client.js ===
+// === 85. slots ./src/client.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden,makeError,X,HandledPromise,makePromiseKit,descriptorKey,VERB_DELIVER,VERB_RESOLVE,VERB_DROP,VERB_ABORT,encodeDropPayload,decodeDropPayload;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]],["@endo/errors", [["makeError",[$h͏_a => (makeError = $h͏_a)]],["X",[$h͏_a => (X = $h͏_a)]]]],["@endo/eventual-send", [["HandledPromise",[$h͏_a => (HandledPromise = $h͏_a)]]]],["@endo/promise-kit", [["makePromiseKit",[$h͏_a => (makePromiseKit = $h͏_a)]]]],["./descriptor.js", [["descriptorKey",[$h͏_a => (descriptorKey = $h͏_a)]]]],["./payload.js", [["VERB_DELIVER",[$h͏_a => (VERB_DELIVER = $h͏_a)]],["VERB_RESOLVE",[$h͏_a => (VERB_RESOLVE = $h͏_a)]],["VERB_DROP",[$h͏_a => (VERB_DROP = $h͏_a)]],["VERB_ABORT",[$h͏_a => (VERB_ABORT = $h͏_a)]],["encodeDropPayload",[$h͏_a => (encodeDropPayload = $h͏_a)]],["decodeDropPayload",[$h͏_a => (decodeDropPayload = $h͏_a)]]]]]);
 
 
@@ -20022,7 +19667,7 @@ const rehydrateError = value => {
 harden(makeSlotClient);
 })()
 ,
-// === 94. slots ./src/bootstrap.js ===
+// === 86. slots ./src/bootstrap.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden,Direction,Kind;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]],["./descriptor.js", [["Direction",[$h͏_a => (Direction = $h͏_a)]],["Kind",[$h͏_a => (Kind = $h͏_a)]]]]]);
 
 
@@ -20103,7 +19748,7 @@ harden(makeSlotClient);
 harden(bootstrap);
 })()
 ,
-// === 95. slots ./src/message.js ===
+// === 87. slots ./src/message.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden,makePromiseKit,makeCList,makeSlotCodec,makeSlotClient,sessionBootstrap;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]],["@endo/promise-kit", [["makePromiseKit",[$h͏_a => (makePromiseKit = $h͏_a)]]]],["./clist.js", [["makeCList",[$h͏_a => (makeCList = $h͏_a)]]]],["./codec.js", [["makeSlotCodec",[$h͏_a => (makeSlotCodec = $h͏_a)]]]],["./client.js", [["makeSlotClient",[$h͏_a => (makeSlotClient = $h͏_a)]]]],["./bootstrap.js", [["bootstrap",[$h͏_a => (sessionBootstrap = $h͏_a)]]]]]);
 
 
@@ -20248,11 +19893,11 @@ harden(bootstrap);
 harden(makeMessageSlots);
 })()
 ,
-// === 96. slots ./index.js ===
+// === 88. slots ./index.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';$h͏_imports([["./src/descriptor.js", []],["./src/payload.js", []],["./src/session.js", []],["./src/clist.js", []],["./src/codec.js", []],["./src/client.js", []],["./src/bootstrap.js", []],["./src/message.js", []]]);
 })()
 ,
-// === 97. daemon ./src/envelope.js ===
+// === 89. daemon ./src/envelope.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';$h͏_imports([]);// @ts-check
 /* eslint-disable no-bitwise */
 /* global Buffer */
@@ -20642,7 +20287,7 @@ harden(readFrameFromStream);
 harden(writeFrameToStream);
 })()
 ,
-// === 98. daemon ./src/bus-xs-common.js ===
+// === 90. daemon ./src/bus-xs-common.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';$h͏_imports([]);// @ts-check
 /* eslint-disable no-underscore-dangle -- __shouldTerminate is
    deliberately scoped to globalThis with a dunder name to avoid
@@ -20699,7 +20344,7 @@ harden(markShouldTerminate);
 harden(installShouldTerminate);
 })()
 ,
-// === 99. daemon ./src/bus-xs-core.js ===
+// === 91. daemon ./src/bus-xs-core.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let encodeEnvelope,decodeEnvelope,installShouldTerminate,markShouldTerminate,silentReject,textDecoder,textEncoder;$h͏_imports([["./envelope.js", [["encodeEnvelope",[$h͏_a => (encodeEnvelope = $h͏_a)]],["decodeEnvelope",[$h͏_a => (decodeEnvelope = $h͏_a)]]]],["./bus-xs-common.js", [["installShouldTerminate",[$h͏_a => (installShouldTerminate = $h͏_a),$h͏_live["installShouldTerminate"]]],["markShouldTerminate",[$h͏_a => (markShouldTerminate = $h͏_a),$h͏_live["markShouldTerminate"]]],["silentReject",[$h͏_a => (silentReject = $h͏_a),$h͏_live["silentReject"]]],["textDecoder",[$h͏_a => (textDecoder = $h͏_a),$h͏_live["textDecoder"]]],["textEncoder",[$h͏_a => (textEncoder = $h͏_a),$h͏_live["textEncoder"]]]]]]);
 
 
@@ -20944,294 +20589,583 @@ const EMPTY_PAYLOAD = new Uint8Array(0);
 harden(makeXsNode);
 })()
 ,
-// === 100. stream ./index.js ===
-({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden,E,makePromiseKit;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]],["@endo/eventual-send", [["E",[$h͏_a => (E = $h͏_a)]]]],["@endo/promise-kit", [["makePromiseKit",[$h͏_a => (makePromiseKit = $h͏_a)]]]]]);
+// === 92. daemon ./src/interfaces.js ===
+({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let M;$h͏_imports([["@endo/patterns", [["M",[$h͏_a => (M = $h͏_a)]]]]]);
 
 
 
+// #region Patterns
 
+// Names: pet names are lowercase (a-z start, then a-z0-9-), special names are uppercase
+// Pattern matching is done at runtime by the implementation, but we can at least
+// ensure strings are passed.
+const NameShape = M.string();
+const NamePathShape = M.arrayOf(NameShape);
+const NameOrPathShape = M.or(NameShape, NamePathShape);
+const NamesOrPathsShape = M.arrayOf(NameOrPathShape);
 
+// Edge names for message edges (same pattern as Name)
+const EdgeNameShape = M.string();
+const EdgeNamesShape = M.arrayOf(EdgeNameShape);
 
+// Formula identifiers are strings
+const IdShape = M.string();
 
+// Locators are formatted formula identifiers
+const LocatorShape = M.string();
 
+// Message numbers are non-negative BigInts
+const MessageNumberShape = M.bigint();
 
+// Environment variables as string-to-string record
+const EnvShape = M.recordOf(M.string(), M.string());
 
+// Options for makeUnconfined and makeBundle
+const MakeCapletOptionsShape = M.splitRecord(
+  {},
+  {
+    powersName: NameShape,
+    resultName: NameOrPathShape,
+    env: EnvShape,
+    workerTrustedShims: M.arrayOf(M.string()),
+  },
+);
 
+// Shared method guard for evaluate (used by both Host and Guest)
+// Both execute directly in a worker, differing only in namespace
+const EvaluateMethodGuard = M.call(
+  M.or(NameShape, M.undefined()),
+  M.string(),
+  M.arrayOf(M.string()),
+  NamesOrPathsShape,
+)
+  .optional(NameOrPathShape)
+  .returns(M.promise());
 
+// #region Interfaces
 
+       const WorkerInterface = M.interface('EndoWorker', {});$h͏_once.WorkerInterface(WorkerInterface);
 
+       const PeerGatewayInterface = M.interface('ResilientPeerGateway', {
+  provide: M.callWhen(M.string()).returns(M.any()),
+});$h͏_once.PeerGatewayInterface(PeerGatewayInterface);
 
+       const ResponderInterface = M.interface('EndoResponder', {
+  resolveWithId: M.callWhen(M.or(IdShape, M.promise())).returns(),
+});$h͏_once.ResponderInterface(ResponderInterface);
 
-// TypeScript ReadOnly semantics are not sufficiently expressive to distinguish
-// a value one promises not to alter from a value one must not alter,
-// making it useless.
-const freeze = /** @type {<T>(v: T | Readonly<T>) => T} */ (Object.freeze);
+       const NameHubInterface = M.interface('EndoNameHub', {
+  has: M.call().rest(NamePathShape).returns(M.promise()),
+  identify: M.call().rest(NamePathShape).returns(M.promise()),
+  locate: M.call().rest(NamePathShape).returns(M.promise()),
+  reverseLocate: M.call(LocatorShape).returns(M.promise()),
+  followLocatorNameChanges: M.call(LocatorShape).returns(M.remotable()),
+  list: M.call().rest(NamePathShape).returns(M.promise()),
+  listIdentifiers: M.call().rest(NamePathShape).returns(M.promise()),
+  listLocators: M.call().rest(NamePathShape).returns(M.promise()),
+  followNameChanges: M.call().returns(M.remotable()),
+  lookup: M.call(NameOrPathShape).returns(M.promise()),
+  maybeLookup: M.call(NameOrPathShape).returns(M.any()),
+  reverseLookup: M.call(M.any()).returns(M.promise()),
+  storeIdentifier: M.call(NameOrPathShape, IdShape).returns(M.promise()),
+  storeLocator: M.call(NameOrPathShape, IdShape).returns(M.promise()),
+  remove: M.call().rest(NamePathShape).returns(M.promise()),
+  move: M.call(NamePathShape, NamePathShape).returns(M.promise()),
+  copy: M.call(NamePathShape, NamePathShape).returns(M.promise()),
+});$h͏_once.NameHubInterface(NameHubInterface);
 
-/**
- * @template T
- * @returns {import('./types.js').AsyncQueue<T>}
- */
-       const makeQueue = () => {
-  let { promise: tailPromise, resolve: tailResolve } = makePromiseKit();
-  return {
-    put(value) {
-      const { resolve, promise } = makePromiseKit();
-      tailResolve(freeze({ value, promise }));
-      tailResolve = resolve;
-    },
-    get() {
-      const promise = tailPromise.then(next => next.value);
-      tailPromise = tailPromise.then(next => next.promise);
-      return harden(promise);
-    },
-  };
-};$h͏_once.makeQueue(makeQueue);
-harden(makeQueue);
+       const EnvelopeInterface = M.interface('EndoEnvelope', {});$h͏_once.EnvelopeInterface(EnvelopeInterface);
 
-/**
- * @template TRead
- * @template TWrite
- * @template TReadReturn
- * @template TWriteReturn
- * @param {import('./types.js').AsyncSpring<IteratorResult<TRead, TReadReturn>>} acks
- * @param {import('./types.js').AsyncSink<IteratorResult<TWrite, TWriteReturn>>} data
- */
-       const makeStream = (acks, data) => {
-  const stream = harden({
-    /**
-     * @param {TWrite} value
-     */
-    next(value) {
-      // Note the shallow freeze since value is not guaranteed to be freezable
-      // (typed arrays are not).
-      data.put(freeze({ value, done: false }));
-      return acks.get();
-    },
-    /**
-     * @param {TWriteReturn} value
-     */
-    return(value) {
-      data.put(freeze({ value, done: true }));
-      return acks.get();
-    },
-    /**
-     * @param {Error} error
-     */
-    throw(error) {
-      data.put(harden(Promise.reject(error)));
-      return acks.get();
-    },
-    [Symbol.asyncIterator]() {
-      return stream;
-    },
-  });
-  return stream;
-};$h͏_once.makeStream(makeStream);
-harden(makeStream);
+       const DismisserInterface = M.interface('EndoDismisser', {
+  dismiss: M.call().returns(M.promise()),
+});
 
-// JSDoc TypeScript seems unable to express this particular function's
-// entanglement of queues, but the definition in types.d.ts works for the end
-// user.
-       const makePipe = () => {
-  const data = makeQueue();
-  const acks = makeQueue();
-  const reader = makeStream(acks, data);
-  const writer = makeStream(data, acks);
-  return harden([writer, reader]);
-};$h͏_once.makePipe(makePipe);
-harden(makePipe);
+// CRITICAL: HandleInterface must use defaultGuards: 'passable' to preserve
+// envelope object identity when passed through E() calls. Explicit guards
+// like M.remotable('Envelope') cause envelope identity loss and "mail fraud"
+// errors.
+$h͏_once.DismisserInterface(DismisserInterface);const HandleInterface=M.interface(
+  'EndoHandle',
+  {},
+  { defaultGuards: 'passable' },
+);$h͏_once.HandleInterface(HandleInterface);
 
-/**
- * @template TRead
- * @template TWrite
- * @template TReadReturn
- * @template TWriteReturn
- * @param {import('./types.js').Stream<TWrite, TRead, TWriteReturn, TReadReturn>} writer
- * @param {import('./types.js').Stream<TRead, TWrite, TReadReturn, TWriteReturn>} reader
- * @param {TWrite} primer
- */
-       const pump = async (writer, reader, primer) => {
-  /** @param {Promise<IteratorResult<TRead, TReadReturn>>} promise */
-  const tick = promise =>
-    E.when(
-      promise,
-      result => {
-        if (result.done) {
-          return writer.return(result.value);
-        } else {
-          // Behold: mutual recursion.
-          // eslint-disable-next-line no-use-before-define
-          return tock(writer.next(result.value));
-        }
-      },
-      (/** @type {Error} */ error) => {
-        return writer.throw(error);
-      },
-    );
-  /** @param {Promise<IteratorResult<TWrite, TWriteReturn>>} promise */
-  const tock = promise =>
-    E.when(
-      promise,
-      result => {
-        if (result.done) {
-          return reader.return(result.value);
-        } else {
-          return tick(reader.next(result.value));
-        }
-      },
-      (/** @type {Error} */ error) => {
-        return reader.throw(error);
-      },
-    );
-  await tick(reader.next(primer));
-  return undefined;
-};$h͏_once.pump(pump);
-harden(pump);
+       const AsyncIteratorInterface = M.interface('AsyncIterator', {
+  next: M.call().returns(M.promise()),
+  return: M.call().optional(M.any()).returns(M.promise()),
+  throw: M.call().optional(M.any()).returns(M.promise()),
+});$h͏_once.AsyncIteratorInterface(AsyncIteratorInterface);
 
-/**
- * @template TRead
- * @template TWrite
- * @template TReturn
- * @param {AsyncGenerator<TRead, TReturn, TWrite>} generator
- * @param {TWrite} primer
- */
-       const prime = (generator, primer) => {
-  // We capture the first returned promise.
-  const first = generator.next(primer);
-  /** @type {IteratorResult<TRead, TReturn>=} */
-  let result;
-  const primed = harden({
-    /** @param {TWrite} value */
-    async next(value) {
-      if (result === undefined) {
-        // eslint-disable-next-line @jessie.js/safe-await-separator
-        result = await first;
-        if (result.done) {
-          return result;
-        }
-      }
-      return generator.next(value);
-    },
-    /** @param {TReturn} value */
-    async return(value) {
-      if (result === undefined) {
-        // eslint-disable-next-line @jessie.js/safe-await-separator
-        result = await first;
-        if (result.done) {
-          return result;
-        }
-      }
-      return generator.return(value);
-    },
-    /** @param {Error} error */
-    async throw(error) {
-      if (result === undefined) {
-        // eslint-disable-next-line @jessie.js/safe-await-separator
-        result = await first;
-        if (result.done) {
-          throw error;
-        }
-      }
-      return generator.throw(error);
-    },
-  });
-  return primed;
-};$h͏_once.prime(prime);
-harden(prime);
+       const DirectoryInterface = M.interface('EndoDirectory', {
+  // Self-documentation
+  help: M.call().optional(M.string()).returns(M.string()),
+  // Check if a name exists
+  has: M.call().rest(NamePathShape).returns(M.promise()),
+  // Get formula identifier for a name path
+  identify: M.call().rest(NamePathShape).returns(M.promise()),
+  // Get locator string for a name path
+  locate: M.call().rest(NamePathShape).returns(M.promise()),
+  // Find names for a locator
+  reverseLocate: M.call(LocatorShape).returns(M.promise()),
+  // Subscribe to name changes for a locator (returns iterator ref)
+  followLocatorNameChanges: M.call(LocatorShape).returns(M.remotable()),
+  // List names in a directory
+  list: M.call().rest(NamePathShape).returns(M.promise()),
+  // List unique formula identifiers
+  listIdentifiers: M.call().rest(NamePathShape).returns(M.promise()),
+  // List locators for names
+  listLocators: M.call().rest(NamePathShape).returns(M.promise()),
+  // Subscribe to name changes (returns iterator ref)
+  followNameChanges: M.call().returns(M.remotable()),
+  // Resolve a name path to a value
+  lookup: M.call(NameOrPathShape).returns(M.promise()),
+  // Resolve a name path, returning undefined if the head name is absent
+  maybeLookup: M.call(NameOrPathShape).returns(M.any()),
+  // Get names for a value
+  reverseLookup: M.call(M.any()).returns(M.promise()),
+  // Store a formula identifier with a name
+  storeIdentifier: M.call(NameOrPathShape, IdShape).returns(M.promise()),
+  // Store an endo:// locator with a name
+  storeLocator: M.call(NameOrPathShape, IdShape).returns(M.promise()),
+  // Remove a name
+  remove: M.call().rest(NamePathShape).returns(M.promise()),
+  // Move/rename a reference
+  move: M.call(NamePathShape, NamePathShape).returns(M.promise()),
+  // Copy a reference
+  copy: M.call(NamePathShape, NamePathShape).returns(M.promise()),
+  // Create a new directory
+  makeDirectory: M.call(NameOrPathShape).returns(M.promise()),
+  // Text I/O (delegated to mount)
+  readText: M.call(NameOrPathShape).returns(M.promise()),
+  maybeReadText: M.call(NameOrPathShape).returns(M.promise()),
+  writeText: M.call(NameOrPathShape, M.string()).returns(M.promise()),
+});$h͏_once.DirectoryInterface(DirectoryInterface);
 
-/**
- * @template TIn
- * @template TOut
- * @param {import('./types.js').Reader<TIn>} reader
- * @param {(value: TIn) => TOut} transform
- * @returns {import('./types.js').Reader<TOut>}
- */
-       const mapReader = (reader, transform) => {
-  async function* transformGenerator() {
-    for await (const value of reader) {
-      yield transform(value);
-    }
-    return undefined;
-  }
-  harden(transformGenerator);
-  return harden(transformGenerator());
-};$h͏_once.mapReader(mapReader);
-harden(mapReader);
+       const GuestInterface = M.interface('EndoGuest', {
+  // Self-documentation
+  help: M.call().optional(M.string()).returns(M.string()),
+  // Directory
+  has: M.call().rest(NamePathShape).returns(M.promise()),
+  identify: M.call().rest(NamePathShape).returns(M.promise()),
+  reverseIdentify: M.call(IdShape).returns(M.array()),
+  locate: M.call().rest(NamePathShape).returns(M.promise()),
+  reverseLocate: M.call(LocatorShape).returns(M.promise()),
+  followLocatorNameChanges: M.call(LocatorShape).returns(M.promise()),
+  list: M.call().rest(NamePathShape).returns(M.promise()),
+  listIdentifiers: M.call().rest(NamePathShape).returns(M.promise()),
+  listLocators: M.call().rest(NamePathShape).returns(M.promise()),
+  followNameChanges: M.call().returns(M.promise()),
+  lookup: M.call(NameOrPathShape).returns(M.promise()),
+  maybeLookup: M.call(NameOrPathShape).returns(M.any()),
+  lookupById: M.call(IdShape).returns(M.promise()),
+  reverseLookup: M.call(M.any()).returns(M.promise()),
+  storeIdentifier: M.call(NameOrPathShape, IdShape).returns(M.promise()),
+  storeLocator: M.call(NameOrPathShape, IdShape).returns(M.promise()),
+  remove: M.call().rest(NamePathShape).returns(M.promise()),
+  move: M.call(NamePathShape, NamePathShape).returns(M.promise()),
+  copy: M.call(NamePathShape, NamePathShape).returns(M.promise()),
+  makeDirectory: M.call(NameOrPathShape).returns(M.promise()),
+  // Text I/O (delegated to mount)
+  readText: M.call(NameOrPathShape).returns(M.promise()),
+  maybeReadText: M.call(NameOrPathShape).returns(M.promise()),
+  writeText: M.call(NameOrPathShape, M.string()).returns(M.promise()),
+  // Mail
+  // Get the guest's mailbox handle
+  handle: M.call().returns(M.remotable()),
+  // List all messages
+  listMessages: M.call().returns(M.promise()),
+  // Subscribe to messages (returns iterator ref)
+  followMessages: M.call().returns(M.promise()),
+  // Respond to a request with a formula identifier
+  resolve: M.call(MessageNumberShape, NameOrPathShape).returns(M.promise()),
+  // Decline a request
+  reject: M.call(MessageNumberShape).optional(M.string()).returns(M.promise()),
+  // Adopt a reference from an incoming message
+  adopt: M.call(MessageNumberShape, NameOrPathShape, NameOrPathShape).returns(
+    M.promise(),
+  ),
+  // Remove a message from inbox
+  dismiss: M.call(MessageNumberShape).returns(M.promise()),
+  // Remove all messages from inbox
+  dismissAll: M.call().returns(M.promise()),
+  // Send a request and wait for response
+  request: M.call(NameOrPathShape, M.string())
+    .optional(NameOrPathShape)
+    .returns(M.promise()),
+  // Send a package message
+  send: M.call(
+    NameOrPathShape,
+    M.arrayOf(M.string()),
+    EdgeNamesShape,
+    NamesOrPathsShape,
+  )
+    .optional(MessageNumberShape)
+    .returns(M.promise()),
+  // Reply to a message
+  reply: M.call(
+    MessageNumberShape,
+    M.arrayOf(M.string()),
+    EdgeNamesShape,
+    NamesOrPathsShape,
+  ).returns(M.promise()),
+  // Define code with named slots
+  define: M.call(
+    M.string(), // source
+    M.record()  // slots
+  ).returns(M.promise()),
+  // Send a form to a recipient
+  form: M.call(
+    NameOrPathShape, // recipientName
+    M.string(), // description
+    M.arrayOf(M.record())  // fields
+  ).returns(M.promise()),
+  // Store a blob
+  storeBlob: M.call(M.remotable())
+    .optional(NameOrPathShape)
+    .returns(M.promise()),
+  // Store a passable value
+  storeValue: M.call(M.any(), NameOrPathShape).returns(M.promise()),
+  // Submit values for a form
+  submit: M.call(
+    MessageNumberShape, // messageNumber
+    M.record()  // values
+  ).returns(M.promise()),
+  // Send a retained value as a reply
+  sendValue: M.call(
+    MessageNumberShape, // messageNumber
+    NameOrPathShape  // petNameOrPath
+  ).returns(M.promise()),
+  // Internal: deliver a message
+  deliver: M.call(M.record()).returns(),
+  // Evaluate code directly in a worker
+  evaluate: EvaluateMethodGuard,
+});$h͏_once.GuestInterface(GuestInterface);
 
-/**
- * @template TIn
- * @template TOut
- * @param {import('./types.js').Writer<TOut>} writer
- * @param {(value: TIn) => TOut} transform
- * @returns {import('./types.js').Writer<TIn>}
- */
-       const mapWriter = (writer, transform) => {
-  const transformedWriter = harden({
-    /**
-     * @param {TIn} value
-     */
-    async next(value) {
-      return writer.next(transform(value));
-    },
-    /**
-     * @param {Error} error
-     */
-    async throw(error) {
-      return writer.throw(error);
-    },
-    /**
-     * @param {undefined} value
-     */
-    async return(value) {
-      return writer.return(value);
-    },
-    [Symbol.asyncIterator]() {
-      return transformedWriter;
-    },
-  });
-  return transformedWriter;
-};$h͏_once.mapWriter(mapWriter);
-harden(mapWriter);
+       const HostInterface = M.interface('EndoHost', {
+  // Self-documentation
+  help: M.call().optional(M.string()).returns(M.string()),
+  // Directory
+  has: M.call().rest(NamePathShape).returns(M.promise()),
+  identify: M.call().rest(NamePathShape).returns(M.promise()),
+  reverseIdentify: M.call(IdShape).returns(M.array()),
+  locate: M.call().rest(NamePathShape).returns(M.promise()),
+  reverseLocate: M.call(LocatorShape).returns(M.promise()),
+  followLocatorNameChanges: M.call(LocatorShape).returns(M.promise()),
+  list: M.call().rest(NamePathShape).returns(M.promise()),
+  listIdentifiers: M.call().rest(NamePathShape).returns(M.promise()),
+  listLocators: M.call().rest(NamePathShape).returns(M.promise()),
+  followNameChanges: M.call().returns(M.promise()),
+  lookup: M.call(NameOrPathShape).returns(M.promise()),
+  maybeLookup: M.call(NameOrPathShape).returns(M.any()),
+  lookupById: M.call(IdShape).returns(M.promise()),
+  reverseLookup: M.call(M.any()).returns(M.promise()),
+  storeIdentifier: M.call(NameOrPathShape, IdShape).returns(M.promise()),
+  storeLocator: M.call(NameOrPathShape, IdShape).returns(M.promise()),
+  remove: M.call().rest(NamePathShape).returns(M.promise()),
+  move: M.call(NamePathShape, NamePathShape).returns(M.promise()),
+  copy: M.call(NamePathShape, NamePathShape).returns(M.promise()),
+  makeDirectory: M.call(NameOrPathShape).returns(M.promise()),
+  // Text I/O (delegated to mount)
+  readText: M.call(NameOrPathShape).returns(M.promise()),
+  maybeReadText: M.call(NameOrPathShape).returns(M.promise()),
+  writeText: M.call(NameOrPathShape, M.string()).returns(M.promise()),
+  // Mail
+  handle: M.call().returns(M.remotable()),
+  listMessages: M.call().returns(M.promise()),
+  followMessages: M.call().returns(M.promise()),
+  resolve: M.call(MessageNumberShape, NameOrPathShape).returns(M.promise()),
+  reject: M.call(MessageNumberShape).optional(M.string()).returns(M.promise()),
+  adopt: M.call(MessageNumberShape, NameOrPathShape, NameOrPathShape).returns(
+    M.promise(),
+  ),
+  dismiss: M.call(MessageNumberShape).returns(M.promise()),
+  dismissAll: M.call().returns(M.promise()),
+  request: M.call(NameOrPathShape, M.string())
+    .optional(NameOrPathShape)
+    .returns(M.promise()),
+  send: M.call(
+    NameOrPathShape,
+    M.arrayOf(M.string()),
+    EdgeNamesShape,
+    NamesOrPathsShape,
+  )
+    .optional(MessageNumberShape)
+    .returns(M.promise()),
+  deliver: M.call(M.record()).returns(),
+  // Send a form to a recipient
+  form: M.call(
+    NameOrPathShape, // recipientName
+    M.string(), // description
+    M.arrayOf(M.record())  // fields
+  ).returns(M.promise()),
+  // Host
+  // Store a blob
+  storeBlob: M.call(M.remotable())
+    .optional(NameOrPathShape)
+    .returns(M.promise()),
+  // Store a passable value
+  storeValue: M.call(M.any(), NameOrPathShape).returns(M.promise()),
+  // Check in a remote readable-tree Exo, storing content-addressed
+  storeTree: M.call(M.remotable(), NameOrPathShape).returns(M.promise()),
+  // Mount an external directory
+  provideMount: M.call(M.string(), NameOrPathShape)
+    .optional(M.splitRecord({}, { readOnly: M.boolean() }))
+    .returns(M.promise()),
+  // Create a daemon-managed scratch mount
+  provideScratchMount: M.call(NameOrPathShape)
+    .optional(M.splitRecord({}, { readOnly: M.boolean() }))
+    .returns(M.promise()),
+  // Provide a guest
+  provideGuest: M.call().optional(NameShape, M.record()).returns(M.promise()),
+  // Provide a host
+  provideHost: M.call().optional(NameShape, M.record()).returns(M.promise()),
+  // Provide a worker
+  provideWorker: M.call(NameOrPathShape).returns(M.promise()),
+  // Evaluate code directly in a worker
+  evaluate: EvaluateMethodGuard,
+  // Make an unconfined caplet
+  makeUnconfined: M.call(M.or(NameShape, M.undefined()), M.string())
+    .optional(MakeCapletOptionsShape)
+    .returns(M.promise()),
+  // Make a bundle caplet
+  makeBundle: M.call(M.or(NameShape, M.undefined()), NameShape)
+    .optional(MakeCapletOptionsShape)
+    .returns(M.promise()),
+  // Create a channel
+  makeChannel: M.call(NameShape, M.string()).returns(M.promise()),
+  // Create a timer
+  makeTimer: M.call(NameShape, M.number())
+    .optional(M.string())
+    .returns(M.promise()),
+  // Cancel a value
+  cancel: M.call(NameOrPathShape).optional(M.error()).returns(M.promise()),
+  // Get the greeter
+  greeter: M.call().returns(M.promise()),
+  // Get the gateway
+  gateway: M.call().returns(M.promise()),
+  // Sign hex-encoded bytes with the daemon's root Ed25519 key, returns hex signature
+  sign: M.call(M.string()).returns(M.promise()),
+  // Get peer info
+  getPeerInfo: M.call().returns(M.promise()),
+  // Add peer info
+  addPeerInfo: M.call(M.record()).returns(M.promise()),
+  // List all known remote peers
+  listKnownPeers: M.call().returns(M.promise()),
+  // Follow changes to the known peers store
+  followPeerChanges: M.call().returns(M.promise()),
+  // Locate a formula with connection hints for sharing with remote peers
+  locateForSharing: M.call().rest(NamePathShape).returns(M.promise()),
+  // Adopt a value from a locator with connection hints
+  adoptFromLocator: M.call(LocatorShape, NameOrPathShape).returns(M.promise()),
+  // Create an invitation
+  invite: M.call(NameShape).returns(M.promise()),
+  // Accept an invitation
+  accept: M.call(LocatorShape, NameShape).returns(M.promise()),
+  // Reply to a message
+  reply: M.call(
+    MessageNumberShape,
+    M.arrayOf(M.string()),
+    EdgeNamesShape,
+    NamesOrPathsShape,
+  ).returns(M.promise()),
+  // Endow a definition request with bindings
+  endow: M.call(
+    MessageNumberShape, // messageNumber
+    M.record()  // bindings
+  )
+    .optional(
+      M.or(NameShape, M.undefined()), // workerName
+      NameOrPathShape  // resultName
+    )
+    .returns(M.promise()),
+  // Submit values for a form
+  submit: M.call(
+    MessageNumberShape, // messageNumber
+    M.record()  // values
+  ).returns(M.promise()),
+  // Send a retained value as a reply
+  sendValue: M.call(
+    MessageNumberShape, // messageNumber
+    NameOrPathShape  // petNameOrPath
+  ).returns(M.promise()),
+  // Get formula dependency graph snapshot for this agent's pet store
+  getFormulaGraph: M.call().returns(M.promise()),
+});$h͏_once.HostInterface(HostInterface);
+
+       const ChannelInterface = M.interface('EndoChannel', {
+  help: M.call().optional(M.string()).returns(M.string()),
+  post: M.call(M.arrayOf(M.string()), EdgeNamesShape, NamesOrPathsShape)
+    .optional(
+      M.or(M.string(), M.undefined()),
+      M.arrayOf(IdShape),
+      M.or(M.string(), M.undefined()),
+    )
+    .returns(M.promise()),
+  followMessages: M.call().returns(M.promise()),
+  listMessages: M.call().returns(M.promise()),
+  createInvitation: M.call(M.string()).returns(M.promise()),
+  join: M.call(M.string()).returns(M.promise()),
+
+  getMembers: M.call().returns(M.promise()),
+  getProposedName: M.call().returns(M.string()),
+  getMemberId: M.call().returns(M.string()),
+  getMember: M.call(M.string()).returns(M.promise()),
+  getAttenuator: M.call(M.string()).returns(M.promise()),
+  getHeatConfig: M.call().returns(M.promise()),
+  getHopInfo: M.call().returns(M.promise()),
+  followHeatEvents: M.call().returns(M.promise()),
+});$h͏_once.ChannelInterface(ChannelInterface);
+
+       const ChannelMemberInterface = M.interface('EndoChannelMember', {
+  help: M.call().optional(M.string()).returns(M.string()),
+  post: M.call(M.arrayOf(M.string()), EdgeNamesShape, NamesOrPathsShape)
+    .optional(
+      M.or(M.string(), M.undefined()),
+      M.arrayOf(IdShape),
+      M.or(M.string(), M.undefined()),
+    )
+    .returns(M.promise()),
+  setProposedName: M.call(M.string()).returns(M.promise()),
+  followMessages: M.call().returns(M.promise()),
+  listMessages: M.call().returns(M.promise()),
+  createInvitation: M.call(M.string()).returns(M.promise()),
+  getMembers: M.call().returns(M.promise()),
+  getProposedName: M.call().returns(M.string()),
+  getMemberId: M.call().returns(M.string()),
+  getMember: M.call(M.string()).returns(M.promise()),
+  getAttenuator: M.call(M.string()).returns(M.promise()),
+  getHeatConfig: M.call().returns(M.promise()),
+  getHopInfo: M.call().returns(M.promise()),
+  followHeatEvents: M.call().returns(M.promise()),
+});$h͏_once.ChannelMemberInterface(ChannelMemberInterface);
+
+       const ChannelInvitationInterface = M.interface('EndoChannelInvitation', {
+  help: M.call().optional(M.string()).returns(M.string()),
+  join: M.call(M.string()).returns(M.promise()),
+});$h͏_once.ChannelInvitationInterface(ChannelInvitationInterface);
+harden(ChannelInvitationInterface);
+
+       const AttenuatorInterface = M.interface('EndoChannelAttenuator', {
+  setInvitationValidity: M.call(M.boolean()).returns(M.promise()),
+  setHeatConfig: M.call(M.record()).returns(M.promise()),
+  getHeatConfig: M.call().returns(M.promise()),
+  temporaryBan: M.call(M.number()).returns(M.promise()),
+});$h͏_once.AttenuatorInterface(AttenuatorInterface);
+harden(AttenuatorInterface);
+
+       const InvitationInterface = M.interface('EndoInvitation', {
+  accept: M.call(IdShape).optional(M.string()).returns(M.promise()),
+  locate: M.call().returns(M.promise()),
+});$h͏_once.InvitationInterface(InvitationInterface);
+
+       const InspectorHubInterface = M.interface('EndoInspectorHub', {
+  lookup: M.call(NameOrPathShape).returns(M.promise()),
+  list: M.call().returns(M.array()),
+});$h͏_once.InspectorHubInterface(InspectorHubInterface);
+
+       const InspectorInterface = M.interface('EndoInspector', {
+  lookup: M.call(NameOrPathShape).returns(M.promise()),
+  list: M.call().returns(M.array()),
+});$h͏_once.InspectorInterface(InspectorInterface);
+
+       const BlobInterface = M.interface('EndoBlob', {
+  help: M.call().optional(M.string()).returns(M.string()),
+  sha256: M.call().returns(M.string()),
+  streamBase64: M.call().returns(M.remotable()),
+  text: M.call().returns(M.promise()),
+  json: M.call().returns(M.promise()),
+});$h͏_once.BlobInterface(BlobInterface);
+
+const PathSegmentsShape = M.arrayOf(M.string());
+const PathArgShape = M.or(M.string(), PathSegmentsShape);
+
+       const MountInterface = M.interface('EndoMount', {
+  // ReadableTree-compatible surface
+  has: M.call().rest(PathSegmentsShape).returns(M.promise()),
+  list: M.call().rest(PathSegmentsShape).returns(M.promise()),
+  lookup: M.call(PathArgShape).returns(M.promise()),
+  // Raw data I/O
+  readText: M.call(PathArgShape).returns(M.promise()),
+  maybeReadText: M.call(PathArgShape).returns(M.promise()),
+  writeText: M.call(PathArgShape, M.string()).returns(M.promise()),
+  // Mutation
+  remove: M.call(PathArgShape).returns(M.promise()),
+  move: M.call(PathArgShape, PathArgShape).returns(M.promise()),
+  makeDirectory: M.call(PathArgShape).returns(M.promise()),
+  // Attenuation
+  readOnly: M.call().returns(M.remotable()),
+  // Snapshot
+  snapshot: M.call().returns(M.promise()),
+  // Discoverability
+  help: M.call().returns(M.string()),
+});$h͏_once.MountInterface(MountInterface);
+
+       const MountFileInterface = M.interface('EndoMountFile', {
+  text: M.call().returns(M.promise()),
+  streamBase64: M.call().returns(M.remotable()),
+  json: M.call().returns(M.promise()),
+  writeText: M.call(M.string()).returns(M.promise()),
+  writeBytes: M.call(M.remotable()).returns(M.promise()),
+  readOnly: M.call().returns(M.remotable()),
+  help: M.call().returns(M.string()),
+});$h͏_once.MountFileInterface(MountFileInterface);
+
+       const ReadableTreeInterface = M.interface('EndoReadableTree', {
+  help: M.call().optional(M.string()).returns(M.string()),
+  sha256: M.call().returns(M.string()),
+  has: M.call().rest(M.arrayOf(M.string())).returns(M.promise()),
+  list: M.call().rest(M.arrayOf(M.string())).returns(M.promise()),
+  lookup: M.call(M.or(M.string(), M.arrayOf(M.string()))).returns(M.promise()),
+});$h͏_once.ReadableTreeInterface(ReadableTreeInterface);
+
+       const DaemonFacetForWorkerInterface = M.interface(
+  'EndoDaemonFacetForWorker',
+  {},
+);$h͏_once.DaemonFacetForWorkerInterface(DaemonFacetForWorkerInterface);
+
+       const WorkerFacetForDaemonInterface = M.interface(
+  'EndoWorkerFacetForDaemon',
+  {
+    terminate: M.call().returns(M.promise()),
+    evaluate: M.call(
+      M.string(),
+      M.arrayOf(M.string()),
+      M.arrayOf(M.any()),
+      IdShape,
+      M.promise(),
+    ).returns(M.promise()),
+    // These methods receive promises that get resolved inside the worker
+    // Args: (readableP, powersP, contextP, env)
+    makeBundle: M.call(M.any(), M.any(), M.any(), EnvShape).returns(
+      M.promise(),
+    ),
+    // Args: (specifier, powersP, contextP, env)
+    makeUnconfined: M.call(M.string(), M.any(), M.any(), EnvShape).returns(
+      M.promise(),
+    ),
+  },
+);$h͏_once.WorkerFacetForDaemonInterface(WorkerFacetForDaemonInterface);
+
+       const EndoInterface = M.interface('Endo', {
+  help: M.call().optional(M.string()).returns(M.string()),
+  ping: M.call().returns(M.promise()),
+  terminate: M.call().returns(M.promise()),
+  host: M.call().returns(M.promise()),
+  leastAuthority: M.call().returns(M.promise()),
+  greeter: M.call().returns(M.promise()),
+  gateway: M.call().returns(M.promise()),
+  nodeId: M.call().returns(M.string()),
+  sign: M.call(M.string()).returns(M.promise()),
+  reviveNetworks: M.call().returns(M.promise()),
+  revivePins: M.call().returns(M.promise()),
+  addPeerInfo: M.call(M.record()).returns(M.promise()),
+  listKnownPeers: M.call().returns(M.promise()),
+  followPeerChanges: M.call().returns(M.promise()),
+});$h͏_once.EndoInterface(EndoInterface);
 })()
 ,
-// === 101. daemon ./src/ref-reader.js ===
-({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden,decodeBase64,mapReader,E;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]],["@endo/base64", [["decodeBase64",[$h͏_a => (decodeBase64 = $h͏_a)]]]],["@endo/stream", [["mapReader",[$h͏_a => (mapReader = $h͏_a)]]]],["@endo/far", [["E",[$h͏_a => (E = $h͏_a)]]]]]);
-
-
-
-
-
-
-/**
- * @template TValue
- * @template TReturn
- * @template TNext
- * @param {import('@endo/far').ERef<AsyncIterator<TValue, TReturn, TNext>>} iteratorRef
- */
-       const makeRefIterator = iteratorRef => {
-  const iterator = harden({
-    /** @param {[] | [TNext]} args */
-    next: async (...args) => E(iteratorRef).next(...args),
-    /** @param {[] | [TReturn]} args */
-    return: async (...args) => E(iteratorRef).return(...args),
-    /** @param {any} error */
-    throw: async error => E(iteratorRef).throw(error),
-    [Symbol.asyncIterator]: () => iterator,
-  });
-  return iterator;
-};$h͏_once.makeRefIterator(makeRefIterator);
-harden(makeRefIterator);
-
-/**
- * @param {import('@endo/far').ERef<AsyncIterator<string>>} readerRef
- * @returns {AsyncIterableIterator<Uint8Array>}
- */
-       const makeRefReader = readerRef =>
-  mapReader(makeRefIterator(readerRef), decodeBase64);$h͏_once.makeRefReader(makeRefReader);
-})()
-,
-// === 102. daemon ./src/bus-worker-xs.js ===
-({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let makeCapTP,E,Far,makeExo,M,decodeBase64,makeMessageSlots,isSlotVerb,makeXsNode,markShouldTerminate,silentReject,textDecoder,textEncoder,makeRefIterator;$h͏_imports([["@endo/captp", [["makeCapTP",[$h͏_a => (makeCapTP = $h͏_a)]]]],["@endo/far", [["E",[$h͏_a => (E = $h͏_a)]],["Far",[$h͏_a => (Far = $h͏_a)]]]],["@endo/exo", [["makeExo",[$h͏_a => (makeExo = $h͏_a)]]]],["@endo/patterns", [["M",[$h͏_a => (M = $h͏_a)]]]],["@endo/base64", [["decodeBase64",[$h͏_a => (decodeBase64 = $h͏_a)]]]],["@endo/slots", [["makeMessageSlots",[$h͏_a => (makeMessageSlots = $h͏_a)]],["isSlotVerb",[$h͏_a => (isSlotVerb = $h͏_a)]]]],["./bus-xs-core.js", [["makeXsNode",[$h͏_a => (makeXsNode = $h͏_a)]],["markShouldTerminate",[$h͏_a => (markShouldTerminate = $h͏_a)]],["silentReject",[$h͏_a => (silentReject = $h͏_a)]],["textDecoder",[$h͏_a => (textDecoder = $h͏_a)]],["textEncoder",[$h͏_a => (textEncoder = $h͏_a)]]]],["./ref-reader.js", [["makeRefIterator",[$h͏_a => (makeRefIterator = $h͏_a)]]]]]);
+// === 93. daemon ./src/bus-worker-xs.js ===
+({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let makeCapTP,E,Far,makeExo,M,makeMessageSlots,isSlotVerb,makeXsNode,markShouldTerminate,silentReject,textDecoder,textEncoder,WorkerFacetForDaemonInterface;$h͏_imports([["@endo/captp", [["makeCapTP",[$h͏_a => (makeCapTP = $h͏_a)]]]],["@endo/far", [["E",[$h͏_a => (E = $h͏_a)]],["Far",[$h͏_a => (Far = $h͏_a)]]]],["@endo/exo", [["makeExo",[$h͏_a => (makeExo = $h͏_a)]]]],["@endo/patterns", [["M",[$h͏_a => (M = $h͏_a)]]]],["@endo/slots", [["makeMessageSlots",[$h͏_a => (makeMessageSlots = $h͏_a)]],["isSlotVerb",[$h͏_a => (isSlotVerb = $h͏_a)]]]],["./bus-xs-core.js", [["makeXsNode",[$h͏_a => (makeXsNode = $h͏_a)]],["markShouldTerminate",[$h͏_a => (markShouldTerminate = $h͏_a)]],["silentReject",[$h͏_a => (silentReject = $h͏_a)]],["textDecoder",[$h͏_a => (textDecoder = $h͏_a)]],["textEncoder",[$h͏_a => (textEncoder = $h͏_a)]]]],["./interfaces.js", [["WorkerFacetForDaemonInterface",[$h͏_a => (WorkerFacetForDaemonInterface = $h͏_a)]]]]]);
 
 
 
@@ -21277,9 +21211,8 @@ harden(makeRefIterator);
 
 
 
-
+void E;
 void Far;
-void hostTrace;
 
 const useSlotMachine =
   typeof globalThis.hostGetEnv === 'function' &&
@@ -21348,28 +21281,9 @@ const standardEndowments = harden(
 );
 
 const workerFacet = makeExo(
-  'EndoXsWorkerFacet',
-  M.interface('EndoXsWorkerFacet', {
-    terminate: M.call().returns(M.promise()),
-    evaluate: M.call(
-      M.string(),
-      M.arrayOf(M.string()),
-      M.arrayOf(M.any()),
-      M.string(),
-      M.promise(),
-    ).returns(M.promise()),
-    makeBundle: M.call(M.any(), M.any(), M.any(), M.any()).returns(
-      M.promise(),
-    ),
-    makeArchive: M.call(M.any(), M.any(), M.any(), M.any()).returns(
-      M.promise(),
-    ),
-    makeUnconfined: M.call(M.string(), M.any(), M.any(), M.any()).returns(
-      M.promise(),
-    ),
-  }),
+  'EndoWorkerFacetForDaemon',
+  WorkerFacetForDaemonInterface,
   {
-    /** @returns {Promise<void>} */
     terminate: async () => {
       markShouldTerminate();
     },
@@ -21380,7 +21294,6 @@ const workerFacet = makeExo(
      * @param {unknown[]} endowmentValues
      * @param {string} id
      * @param {Promise<never>} cancelled
-     * @returns {Promise<unknown>}
      */
     evaluate: async (source, codeNames, endowmentValues, id, cancelled) => {
       const endowments = harden(
@@ -21412,39 +21325,9 @@ const workerFacet = makeExo(
      * @param {unknown} _powersP
      * @param {unknown} _contextP
      * @param {Record<string, string>} _env
-     * @returns {Promise<unknown>}
      */
     makeBundle: async (_readableP, _powersP, _contextP, _env) => {
       throw new Error('makeBundle not yet implemented in XS worker');
-    },
-
-    /**
-     * @param {unknown} readableP
-     * @param {unknown} powersP
-     * @param {unknown} contextP
-     * @param {Record<string, string>} env
-     * @returns {Promise<unknown>}
-     */
-    makeArchive: async (readableP, powersP, contextP, env) => {
-      const streamRef = await E(readableP).streamBase64();
-      const chunks = [];
-      for await (const chunk of makeRefIterator(streamRef)) {
-        chunks.push(decodeBase64(chunk));
-      }
-      const totalLen = chunks.reduce((n, c) => n + c.length, 0);
-      const archiveBytes = new Uint8Array(totalLen);
-      let offset = 0;
-      for (const c of chunks) {
-        archiveBytes.set(c, offset);
-        offset += c.length;
-      }
-
-      const ok = hostImportArchive(archiveBytes);
-      if (!ok) throw new Error('Failed to import archive');
-
-      const namespace = /** @type {any} */ (globalThis).__entryNs;
-      delete (/** @type {any} */ (globalThis)).__entryNs;
-      return namespace.make(powersP, contextP, { env });
     },
 
     /**
@@ -21452,7 +21335,6 @@ const workerFacet = makeExo(
      * @param {unknown} _powersP
      * @param {unknown} _contextP
      * @param {Record<string, string>} _env
-     * @returns {Promise<unknown>}
      */
     makeUnconfined: async (_specifier, _powersP, _contextP, _env) => {
       throw new Error('makeUnconfined not yet implemented in XS worker');
@@ -21521,7 +21403,13 @@ if (useSlotMachine) {
   /** @type {Promise<never>} */
   const cancelled = new Promise(() => {});
 
-  makeMessageSlots('Endo', envelopeWriter, inboundReader, cancelled, workerFacet);
+  makeMessageSlots(
+    'Endo',
+    /** @type {any} */ (envelopeWriter),
+    /** @type {any} */ (inboundReader),
+    cancelled,
+    workerFacet,
+  );
 } else {
   // CapTP path (default).
   /** @param {Record<string, unknown>} message */

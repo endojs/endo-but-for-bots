@@ -41,6 +41,9 @@ declare var hostSqliteStmtAll: (...args: any[]) => any;
 declare var hostSqliteStmtColumns: (...args: any[]) => any;
 declare var hostSqliteStmtFinalize: (...args: any[]) => any;
 
+// Worker-side host functions injected by bus-worker-xs.
+declare var hostGetDaemonHandle: () => number;
+
 // Convenience wrappers installed by bus-xs-core / polyfills.
 declare var trace: (...args: any[]) => any;
 declare var sendRawFrame: (...args: any[]) => any;
