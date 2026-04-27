@@ -17,6 +17,8 @@
 /** @import { AgentTool, AgentToolResult, AgentEvent } from '@mariozechner/pi-agent-core' */
 /** @import { KnownProvider, Model, Provider } from '@mariozechner/pi-ai' */
 
+import harden from '@endo/harden';
+
 import { Agent as PiAgent } from '@mariozechner/pi-agent-core';
 import { getModel, getProviders } from '@mariozechner/pi-ai';
 

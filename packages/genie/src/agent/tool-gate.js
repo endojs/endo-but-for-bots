@@ -58,6 +58,8 @@
  * context.
  */
 
+import harden from '@endo/harden';
+
 /** @import { ChatEvent } from './index.js' */
 
 /**

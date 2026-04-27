@@ -34,6 +34,7 @@ import { spawn } from 'child_process';
 import * as fs from 'fs';
 import { join, resolve, relative } from 'path';
 
+import harden from '@endo/harden';
 import { M } from '@endo/patterns';
 import { makeTool } from './common.js';
 

@@ -5,6 +5,8 @@
 /** @import { Reflector } from '../reflector/index.js' */
 /** @import { GenieTools } from '../tools/registry.js' */
 
+import harden from '@endo/harden';
+
 import { makePiAgent } from '../agent/index.js';
 import { makeObserver } from '../observer/index.js';
 import { makeReflector } from '../reflector/index.js';

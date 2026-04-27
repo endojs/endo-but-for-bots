@@ -16,6 +16,8 @@
  * The `git` policy closure below is deliberately hard-coded.
  */
 
+import harden from '@endo/harden';
+
 import { bash, exec, makeCommandTool } from './command.js';
 import { makeFileTools } from './filesystem.js';
 import { makeMemoryTools } from './memory.js';

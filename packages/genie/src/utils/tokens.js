@@ -10,6 +10,8 @@
  * interface.
  */
 
+import harden from '@endo/harden';
+
 /**
  * Estimate the number of tokens in the given text.
  *

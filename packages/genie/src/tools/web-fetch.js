@@ -8,6 +8,7 @@
  * Security: Rate limiting and content validation.
  */
 
+import harden from '@endo/harden';
 import { M } from '@endo/patterns';
 
 import { makeTool } from './common.js';

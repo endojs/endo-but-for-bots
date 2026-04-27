@@ -14,6 +14,8 @@
 
 /** @import { IntervalEntry, IntervalHandle, TickResponseHandle, IntervalTickMessage, IntervalSchedulerFacet, IntervalControlFacet, IntervalSchedulerConfig } from './types.js' */
 
+import harden from '@endo/harden';
+
 import { clearTimeout, setTimeout } from 'node:timers';
 
 import {

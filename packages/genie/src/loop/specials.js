@@ -1,5 +1,7 @@
 // @ts-check
 
+import harden from '@endo/harden';
+
 /**
  * @template Chunk
  * @typedef {(tail: string[]) => AsyncGenerator<Chunk>} SpecialHandler

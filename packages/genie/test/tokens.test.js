@@ -4,7 +4,7 @@
  * Tests for the token estimation utility.
  */
 
-import '@endo/harden';
+import '@endo/init/debug.js';
 
 import test from 'ava';
 import { estimateTokens } from '../src/utils/tokens.js';

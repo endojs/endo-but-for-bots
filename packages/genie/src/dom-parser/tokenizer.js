@@ -11,6 +11,8 @@
  * @module
  */
 
+import harden from '@endo/harden';
+
 /** @typedef {{ type: 'open', tag: string, attrs: Record<string, string>, selfClosing: boolean }} OpenToken */
 /** @typedef {{ type: 'close', tag: string }} CloseToken */
 /** @typedef {{ type: 'text', data: string }} TextToken */

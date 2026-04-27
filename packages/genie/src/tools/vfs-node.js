@@ -24,6 +24,8 @@ import {
   sep as nodeSep,
 } from 'path';
 
+import harden from '@endo/harden';
+
 /**
  * @import {
  *   VFS,

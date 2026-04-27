@@ -15,6 +15,7 @@
  */
 
 import { E } from '@endo/far';
+import harden from '@endo/harden';
 import { M } from '@endo/patterns';
 
 import { makeTool } from './common.js';

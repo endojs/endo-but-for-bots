@@ -8,6 +8,7 @@
  * Security: Rate limiting and query validation.
  */
 
+import harden from '@endo/harden';
 import { M } from '@endo/patterns';
 
 import { DOMParser } from '../dom-parser/index.js';

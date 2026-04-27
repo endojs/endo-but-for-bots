@@ -14,6 +14,8 @@
  * @module
  */
 
+import harden from '@endo/harden';
+
 /**
  * @import {
  *   VFS,

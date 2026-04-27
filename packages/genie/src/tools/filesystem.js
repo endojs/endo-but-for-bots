@@ -16,6 +16,7 @@
  */
 
 import { resolve, dirname, relative, basename } from 'path';
+import harden from '@endo/harden';
 import { M } from '@endo/patterns';
 
 import { makeTool } from './common.js';

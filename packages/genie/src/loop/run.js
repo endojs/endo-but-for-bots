@@ -1,5 +1,7 @@
 // @ts-check
 
+import harden from '@endo/harden';
+
 /** @import { GenieAgents } from './agents.js' */
 /** @import { SpecialsDispatcher } from './specials.js' */
 /** @import { GenieIO, InboundPrompt } from './io.js' */

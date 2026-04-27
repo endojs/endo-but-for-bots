@@ -10,6 +10,8 @@
 //
 // [1]: https://github.com/localgpt-app/localgpt
 
+import harden from '@endo/harden';
+
 /**
  * Build the full system prompt for the agent
  *

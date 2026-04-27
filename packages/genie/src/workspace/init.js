@@ -15,6 +15,8 @@ import { constants, promises as fs } from 'fs';
 import { join, dirname, resolve } from 'path';
 import { fileURLToPath } from 'url';
 
+import harden from '@endo/harden';
+
 /** @import { Dirent } from 'fs' */
 
 const moduleDirname = dirname(fileURLToPath(import.meta.url));

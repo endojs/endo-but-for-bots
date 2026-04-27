@@ -5,6 +5,8 @@
 /** @import { HeartbeatEvent } from '../heartbeat/index.js' */
 /** @import { SpecialHandler } from './specials.js' */
 
+import harden from '@endo/harden';
+
 import { runHeartbeat, HeartbeatStatus } from '../heartbeat/index.js';
 
 /**

@@ -50,6 +50,7 @@
  * no explicit `desc` is provided.
  */
 
+import harden from '@endo/harden';
 import { M, mustMatch, getMethodGuardPayload } from '@endo/patterns';
 
 /** @import { InterfaceGuard, MethodGuard } from '@endo/patterns' */

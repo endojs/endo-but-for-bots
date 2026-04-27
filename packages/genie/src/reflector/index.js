@@ -29,6 +29,8 @@
  * a throwing subscriber cannot stall the stream or affect other subscribers.
  */
 
+import harden from '@endo/harden';
+
 /** @import { Tool } from '../tools/common.js' */
 /** @import { SearchBackend } from '../tools/memory.js' */
 /** @import { ChatEvent } from '../agent/index.js' */

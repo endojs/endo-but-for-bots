@@ -2,6 +2,8 @@
 import { access, writeFile } from 'fs/promises';
 import { join } from 'path';
 
+import harden from '@endo/harden';
+
 import { runAgentRound } from '../agent/index.js';
 /** @import { Agent as PiAgent } from '@mariozechner/pi-agent-core' */
 

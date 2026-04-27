@@ -27,6 +27,8 @@
  * a throwing subscriber cannot stall the stream or affect other subscribers.
  */
 
+import harden from '@endo/harden';
+
 import { clearTimeout, setTimeout } from 'node:timers';
 
 /** @import { Tool } from '../tools/common.js' */
