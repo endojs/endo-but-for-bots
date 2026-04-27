@@ -13,6 +13,15 @@ fn session_for_handle(handle: Handle) -> SessionId {
     SessionId::from_label(&format!("worker-{handle}"))
 }
 
+/// Per-edge session id: each ordered (self, peer) pair gets its own
+/// session in the slot machine.  This lets the bootstrap pre-binding
+/// (see `Supervisor::register`) allocate fresh krefs per daemon↔worker
+/// edge instead of trying to share a single "daemon" session whose
+/// `Remote pos 1` would conflict on every additional worker.
+fn session_for_edge(self_handle: Handle, peer_handle: Handle) -> SessionId {
+    SessionId::from_label(&format!("edge-{self_handle}-with-{peer_handle}"))
+}
+
 /// State for a suspended worker.
 ///
 /// The worker's XS machine has been dropped but its handle stays
@@ -101,25 +110,33 @@ impl Supervisor {
             // a handle (e.g., after resume) keeps the c-list intact.
             let _ = sm.open_session(session_for_handle(h), &label);
 
-            // Bootstrap-handshake pre-registration: when registering
-            // a worker (handle ≥ 2), pair its session with the
-            // daemon's session (handle 1) under the position-1 root
-            // convention from `packages/slots/src/bootstrap.js`.
-            // Both peers will export their root as `Local Object 1`
-            // and refer to the other peer's root as `Remote Object 1`;
-            // the kref registry needs both sides bound before any
-            // wire traffic.  The daemon's own kref is allocated on
-            // first registration and reused thereafter.
+            // Bootstrap-handshake pre-registration: when registering a
+            // worker (handle ≥ 2), pair its session with the daemon's
+            // session (handle 1) under the position-1 root convention
+            // from `packages/slots/src/bootstrap.js`.  Each peer
+            // exports its root as `Local Object 1` and addresses the
+            // other peer's root as `Remote Object 1`; the kref
+            // registry needs both sides bound before any wire traffic.
+            //
+            // We allocate a *fresh per-edge* session pair so each
+            // daemon↔worker edge has its own kref bindings.  Sharing a
+            // single "daemon" session across workers would cause the
+            // daemon's `Remote pos 1 → kref` binding from the *first*
+            // worker to silently win over every subsequent worker
+            // (`bind_session_kref` returns `Conflict`, ignored), so
+            // sends to later workers translated to the wrong target
+            // and looped.
             if h >= 2 {
-                let daemon_session = session_for_handle(1);
-                let worker_session = session_for_handle(h);
-                let _ = sm.open_session(daemon_session, "daemon");
+                let daemon_edge = session_for_edge(1, h);
+                let worker_edge = session_for_edge(h, 1);
+                let _ = sm.open_session(daemon_edge, "daemon");
+                let _ = sm.open_session(worker_edge, &label);
                 let local = slots::vref::Vref::object_local(1);
                 let remote = slots::vref::Vref::object_remote(1);
-                if let Ok(k_daemon) = sm.intern_local(daemon_session, &local) {
-                    if let Ok(k_worker) = sm.intern_local(worker_session, &local) {
-                        let _ = sm.bind_session_kref(daemon_session, &remote, k_worker);
-                        let _ = sm.bind_session_kref(worker_session, &remote, k_daemon);
+                if let Ok(k_daemon) = sm.intern_local(daemon_edge, &local) {
+                    if let Ok(k_worker) = sm.intern_local(worker_edge, &local) {
+                        let _ = sm.bind_session_kref(daemon_edge, &remote, k_worker);
+                        let _ = sm.bind_session_kref(worker_edge, &remote, k_daemon);
                     }
                 }
             }
@@ -134,6 +151,11 @@ impl Supervisor {
         self.meters.write().unwrap_or_else(|e| e.into_inner()).remove(&h);
         if let Some(sm) = self.slot_machine.get() {
             let _ = sm.close_session(session_for_handle(h));
+            // Tear down the per-edge sessions paired with the daemon.
+            if h >= 2 {
+                let _ = sm.close_session(session_for_edge(1, h));
+                let _ = sm.close_session(session_for_edge(h, 1));
+            }
         }
     }
 
@@ -384,8 +406,12 @@ fn route_message(sup: &Arc<Supervisor>, mut msg: Message, callbacks: &RoutingCal
     // payloads keep working while slot-machine is the path of choice.
     if let Some(sm) = sup.slot_machine() {
         if slots::wire::is_slot_verb(&msg.envelope.verb) && msg.from != 0 && msg.to != 0 {
-            let from = session_for_handle(msg.from);
-            let to = session_for_handle(msg.to);
+            // Each ordered (sender, recipient) pair has its own
+            // per-edge session in the slot machine, so the bootstrap
+            // pre-binding for the daemon↔worker edge does not collide
+            // with any other worker's binding.
+            let from = session_for_edge(msg.from, msg.to);
+            let to = session_for_edge(msg.to, msg.from);
             match msg.envelope.verb.as_str() {
                 slots::wire::VERB_DELIVER => {
                     if let Ok(out) =
