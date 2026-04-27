@@ -197,10 +197,15 @@ export const makeXsFilePowers = () => {
         }
         consumed = true;
         const text = await readFileText(path);
-        return harden({
-          done: false,
-          value: textEncoder.encode(text),
-        });
+        // Cannot harden a record containing a Uint8Array on XS
+        // (TypedArray indexed elements are non-configurable, so
+        // harden/freeze rejects the enclosing record with
+        // "extensible object").  Freeze only the top-level record,
+        // leaving the typed array as-is — the caller's mapReader
+        // immediately consumes and transforms the value.
+        const result = { done: false, value: textEncoder.encode(text) };
+        Object.freeze(result);
+        return result;
       },
       async return(_value) {
         consumed = true;

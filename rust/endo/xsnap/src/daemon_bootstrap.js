@@ -21278,20 +21278,46 @@ const PathArgShape = M.or(M.string(), PathSegmentsShape);
  * @template T
  * @param {SomehowAsyncIterable<T>} iterable The iterable object.
  * @returns {FarRef<Reader<T>>}
+ */
+/**
+ * Defensively freeze an iterator result so the strict XS marshaller
+ * does not reject the `{value, done}` record on the wire as
+ * "extensible object".  We use Object.freeze (one level deep) rather
+ * than harden because the wrapped value (e.g. a base64 string) is
+ * already a primitive — and harden would refuse a `{value:
+ * Uint8Array}` record on XS where TypedArray indexed properties
+ * cannot be reconfigured.
+ *
+ * @template T
+ * @param {{ value: T, done: boolean }} result
  */$h͏_once.asyncIterate(asyncIterate);
+const freezeResult = result => {
+  // eslint-disable-next-line no-undef
+  console.log(
+    '[trace] freezeResult: typeof',
+    typeof result,
+    'frozen?',
+    result && typeof result === 'object' && Object.isFrozen(result),
+  );
+  if (result && typeof result === 'object' && !Object.isFrozen(result)) {
+    Object.freeze(result);
+  }
+  return result;
+};
+
        const makeIteratorRef = iterable => {
   const iterator = asyncIterate(iterable);
   // @ts-ignore while switching from Far
   return makeExo('AsyncIterator', AsyncIteratorInterface, {
     async next() {
-      return iterator.next(undefined);
+      return freezeResult(await iterator.next(undefined));
     },
     /**
      * @param {any} value
      */
     async return(value) {
       if (iterator.return !== undefined) {
-        return iterator.return(value);
+        return freezeResult(await iterator.return(value));
       }
       return harden({ done: true, value: undefined });
     },
@@ -21300,7 +21326,7 @@ const PathArgShape = M.or(M.string(), PathSegmentsShape);
      */
     async throw(error) {
       if (iterator.throw !== undefined) {
-        return iterator.throw(error);
+        return freezeResult(await iterator.throw(error));
       }
       return harden({ done: true, value: undefined });
     },
@@ -36023,6 +36049,11 @@ harden(makeDaemonDatabase);
 ,
 // === 135. daemon ./src/better-sqlite3-xs.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';$h͏_imports([]);// @ts-nocheck
+/* eslint-disable no-underscore-dangle, max-classes-per-file,
+   class-methods-use-this, no-undef -- this module is bundled
+   into the XS daemon (no Node-style globalThis / class-style
+   linting); the underscore-dunder convention is consistent with
+   the rest of bus-daemon-rust-xs.js. */
 // XS-side adapter that presents a `better-sqlite3`-compatible
 // surface backed by the Rust supervisor's SQLite host functions
 // (powers/sqlite.rs registered in xsnap, aliased to host* in
@@ -37583,10 +37614,15 @@ const fromHex = hex => {
         }
         consumed = true;
         const text = await readFileText(path);
-        return harden({
-          done: false,
-          value: textEncoder.encode(text),
-        });
+        // Cannot harden a record containing a Uint8Array on XS
+        // (TypedArray indexed elements are non-configurable, so
+        // harden/freeze rejects the enclosing record with
+        // "extensible object").  Freeze only the top-level record,
+        // leaving the typed array as-is — the caller's mapReader
+        // immediately consumes and transforms the value.
+        const result = { done: false, value: textEncoder.encode(text) };
+        Object.freeze(result);
+        return result;
       },
       async return(_value) {
         consumed = true;

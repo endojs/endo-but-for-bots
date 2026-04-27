@@ -90,7 +90,7 @@ export const makeWorkerFacet = ({ cancel }) => {
       // file protocol.
       const specifierUrl = normalizeFilePath(specifier);
       const namespace = await import(specifierUrl);
-      return namespace.make(powersP, contextP, { env });
+      return namespace.make(powersP, contextP, Object.freeze({ env }));
     },
 
     /**
@@ -160,7 +160,7 @@ export const makeWorkerFacet = ({ cancel }) => {
       return /** @type {{make: Function}} */ (namespace).make(
         powersP,
         contextP,
-        { env },
+        Object.freeze({ env }),
       );
     },
 
@@ -212,7 +212,7 @@ export const makeWorkerFacet = ({ cancel }) => {
       return /** @type {{make: Function}} */ (namespace).make(
         powersP,
         contextP,
-        { env },
+        Object.freeze({ env }),
       );
     },
   });

@@ -18957,7 +18957,7 @@ const workerFacet = makeExo(
      * @returns {Promise<unknown>}
      */
     makeArchive: async (readableP, powersP, contextP, env) => {
-      // Stream base64 chunks from the readable blob via CapTP
+      // Stream base64 chunks from the readable blob via CapTP.
       const streamRef = await E(readableP).streamBase64();
       const chunks = [];
       for await (const chunk of makeRefIterator(streamRef)) {
@@ -18971,13 +18971,11 @@ const workerFacet = makeExo(
         offset += c.length;
       }
 
-      // Set the archive endowments so the loaded compartments
-      // can reference standard globals (E, Far, makeExo, ...).
-      // The Rust archive::install_archive reads
-      // globalThis.__archiveEndowments inside its compartment
-      // factory.  CapTP delivers method calls sequentially per
-      // session, so two concurrent makeArchive calls cannot
-      // interleave at this point — no explicit lock required.
+      // Set the archive endowments so the loaded compartments can
+      // reference standard globals (E, Far, makeExo, ...).  CapTP
+      // delivers method calls sequentially per session, so two
+      // concurrent makeArchive calls cannot interleave at this
+      // point — no explicit lock required.
       globalThis.__archiveEndowments = standardEndowments;
       try {
         const ok = hostImportArchive(archiveBytes);
@@ -18988,7 +18986,11 @@ const workerFacet = makeExo(
       // Entry namespace set by install_archive — capture and release.
       const namespace = globalThis.__entryNs;
       delete globalThis.__entryNs;
-      return namespace.make(powersP, contextP, { env });
+      // Freeze the options object before handing it to the loaded
+      // module so the strict XS marshaller does not later trip on
+      // an extensible literal observed via the returned Far ref's
+      // closure scope.
+      return namespace.make(powersP, contextP, Object.freeze({ env }));
     },
 
     /**
