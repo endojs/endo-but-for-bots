@@ -519,6 +519,9 @@
       getNamedMethodGuards: cell("getNamedMethodGuards"),
     },
     {
+      matches: cell("matches"),
+      mustMatch: cell("mustMatch"),
+      M: cell("M"),
     },
     {
       isKey: cell("isKey"),
@@ -564,12 +567,9 @@
       bagUnion: cell("bagUnion"),
       bagIntersection: cell("bagIntersection"),
       bagDisjointSubtract: cell("bagDisjointSubtract"),
-      M: cell("M"),
       getRankCover: cell("getRankCover"),
       isPattern: cell("isPattern"),
       assertPattern: cell("assertPattern"),
-      matches: cell("matches"),
-      mustMatch: cell("mustMatch"),
       isAwaitArgGuard: cell("isAwaitArgGuard"),
       assertAwaitArgGuard: cell("assertAwaitArgGuard"),
       isRawGuard: cell("isRawGuard"),
@@ -600,8 +600,14 @@
       makeExo: cell("makeExo"),
     },
     {
+      makeExo: cell("makeExo"),
+      defineExoClass: cell("defineExoClass"),
+      defineExoClassKit: cell("defineExoClassKit"),
     },
     {
+    },
+    {
+      initEmpty: cell("initEmpty"),
       GET_INTERFACE_GUARD: cell("GET_INTERFACE_GUARD"),
     },
     {
@@ -697,19 +703,23 @@
   defineProperties(cells[55], getOwnPropertyDescriptors(cells[54]));
 
   defineProperties(cells[55], {"E": { value: cells[34]["E"] },"Far": { value: cells[37]["Far"] },"getInterfaceOf": { value: cells[37]["getInterfaceOf"] },"passStyleOf": { value: cells[37]["passStyleOf"] } });
+
+  defineProperties(cells[71], {"matches": { value: cells[69]["matches"] },"mustMatch": { value: cells[69]["mustMatch"] },"M": { value: cells[69]["M"] } });
   defineProperties(cells[72], getOwnPropertyDescriptors(cells[71]));
 
-  defineProperties(cells[72], {"isKey": { value: cells[58]["isKey"] },"assertKey": { value: cells[58]["assertKey"] },"assertScalarKey": { value: cells[58]["assertScalarKey"] },"isCopySet": { value: cells[58]["isCopySet"] },"assertCopySet": { value: cells[58]["assertCopySet"] },"makeCopySet": { value: cells[58]["makeCopySet"] },"getCopySetKeys": { value: cells[58]["getCopySetKeys"] },"isCopyBag": { value: cells[58]["isCopyBag"] },"assertCopyBag": { value: cells[58]["assertCopyBag"] },"makeCopyBag": { value: cells[58]["makeCopyBag"] },"makeCopyBagFromElements": { value: cells[58]["makeCopyBagFromElements"] },"getCopyBagEntries": { value: cells[58]["getCopyBagEntries"] },"isCopyMap": { value: cells[58]["isCopyMap"] },"assertCopyMap": { value: cells[58]["assertCopyMap"] },"makeCopyMap": { value: cells[58]["makeCopyMap"] },"getCopyMapEntries": { value: cells[58]["getCopyMapEntries"] },"coerceToElements": { value: cells[56]["coerceToElements"] },"coerceToBagEntries": { value: cells[57]["coerceToBagEntries"] },"bagCompare": { value: cells[62]["bagCompare"] },"setCompare": { value: cells[62]["setCompare"] },"compareKeys": { value: cells[62]["compareKeys"] },"keyLT": { value: cells[62]["keyLT"] },"keyLTE": { value: cells[62]["keyLTE"] },"keyEQ": { value: cells[62]["keyEQ"] },"keyGTE": { value: cells[62]["keyGTE"] },"keyGT": { value: cells[62]["keyGT"] },"elementsIsSuperset": { value: cells[63]["elementsIsSuperset"] },"elementsIsDisjoint": { value: cells[63]["elementsIsDisjoint"] },"elementsCompare": { value: cells[63]["elementsCompare"] },"elementsUnion": { value: cells[63]["elementsUnion"] },"elementsDisjointUnion": { value: cells[63]["elementsDisjointUnion"] },"elementsIntersection": { value: cells[63]["elementsIntersection"] },"elementsDisjointSubtract": { value: cells[63]["elementsDisjointSubtract"] },"setIsSuperset": { value: cells[63]["setIsSuperset"] },"setIsDisjoint": { value: cells[63]["setIsDisjoint"] },"setUnion": { value: cells[63]["setUnion"] },"setDisjointUnion": { value: cells[63]["setDisjointUnion"] },"setIntersection": { value: cells[63]["setIntersection"] },"setDisjointSubtract": { value: cells[63]["setDisjointSubtract"] },"bagIsSuperbag": { value: cells[64]["bagIsSuperbag"] },"bagUnion": { value: cells[64]["bagUnion"] },"bagIntersection": { value: cells[64]["bagIntersection"] },"bagDisjointSubtract": { value: cells[64]["bagDisjointSubtract"] },"M": { value: cells[69]["M"] },"getRankCover": { value: cells[69]["getRankCover"] },"isPattern": { value: cells[69]["isPattern"] },"assertPattern": { value: cells[69]["assertPattern"] },"matches": { value: cells[69]["matches"] },"mustMatch": { value: cells[69]["mustMatch"] },"isAwaitArgGuard": { value: cells[69]["isAwaitArgGuard"] },"assertAwaitArgGuard": { value: cells[69]["assertAwaitArgGuard"] },"isRawGuard": { value: cells[69]["isRawGuard"] },"assertRawGuard": { value: cells[69]["assertRawGuard"] },"assertMethodGuard": { value: cells[69]["assertMethodGuard"] },"assertInterfaceGuard": { value: cells[69]["assertInterfaceGuard"] },"kindOf": { value: cells[69]["kindOf"] },"containerHasSplit": { value: cells[69]["containerHasSplit"] },"getAwaitArgGuardPayload": { value: cells[70]["getAwaitArgGuardPayload"] },"getMethodGuardPayload": { value: cells[70]["getMethodGuardPayload"] },"getInterfaceGuardPayload": { value: cells[70]["getInterfaceGuardPayload"] },"getInterfaceMethodKeys": { value: cells[70]["getInterfaceMethodKeys"] },"getNamedMethodGuards": { value: cells[70]["getNamedMethodGuards"] },"listDifference": { value: cells[68]["listDifference"] },"objectMap": { value: cells[39]["objectMap"] } });
-  defineProperties(cells[77], getOwnPropertyDescriptors(cells[75]));
-  defineProperties(cells[77], getOwnPropertyDescriptors(cells[76]));
+  defineProperties(cells[72], {"isKey": { value: cells[58]["isKey"] },"assertKey": { value: cells[58]["assertKey"] },"assertScalarKey": { value: cells[58]["assertScalarKey"] },"isCopySet": { value: cells[58]["isCopySet"] },"assertCopySet": { value: cells[58]["assertCopySet"] },"makeCopySet": { value: cells[58]["makeCopySet"] },"getCopySetKeys": { value: cells[58]["getCopySetKeys"] },"isCopyBag": { value: cells[58]["isCopyBag"] },"assertCopyBag": { value: cells[58]["assertCopyBag"] },"makeCopyBag": { value: cells[58]["makeCopyBag"] },"makeCopyBagFromElements": { value: cells[58]["makeCopyBagFromElements"] },"getCopyBagEntries": { value: cells[58]["getCopyBagEntries"] },"isCopyMap": { value: cells[58]["isCopyMap"] },"assertCopyMap": { value: cells[58]["assertCopyMap"] },"makeCopyMap": { value: cells[58]["makeCopyMap"] },"getCopyMapEntries": { value: cells[58]["getCopyMapEntries"] },"coerceToElements": { value: cells[56]["coerceToElements"] },"coerceToBagEntries": { value: cells[57]["coerceToBagEntries"] },"bagCompare": { value: cells[62]["bagCompare"] },"setCompare": { value: cells[62]["setCompare"] },"compareKeys": { value: cells[62]["compareKeys"] },"keyLT": { value: cells[62]["keyLT"] },"keyLTE": { value: cells[62]["keyLTE"] },"keyEQ": { value: cells[62]["keyEQ"] },"keyGTE": { value: cells[62]["keyGTE"] },"keyGT": { value: cells[62]["keyGT"] },"elementsIsSuperset": { value: cells[63]["elementsIsSuperset"] },"elementsIsDisjoint": { value: cells[63]["elementsIsDisjoint"] },"elementsCompare": { value: cells[63]["elementsCompare"] },"elementsUnion": { value: cells[63]["elementsUnion"] },"elementsDisjointUnion": { value: cells[63]["elementsDisjointUnion"] },"elementsIntersection": { value: cells[63]["elementsIntersection"] },"elementsDisjointSubtract": { value: cells[63]["elementsDisjointSubtract"] },"setIsSuperset": { value: cells[63]["setIsSuperset"] },"setIsDisjoint": { value: cells[63]["setIsDisjoint"] },"setUnion": { value: cells[63]["setUnion"] },"setDisjointUnion": { value: cells[63]["setDisjointUnion"] },"setIntersection": { value: cells[63]["setIntersection"] },"setDisjointSubtract": { value: cells[63]["setDisjointSubtract"] },"bagIsSuperbag": { value: cells[64]["bagIsSuperbag"] },"bagUnion": { value: cells[64]["bagUnion"] },"bagIntersection": { value: cells[64]["bagIntersection"] },"bagDisjointSubtract": { value: cells[64]["bagDisjointSubtract"] },"getRankCover": { value: cells[69]["getRankCover"] },"isPattern": { value: cells[69]["isPattern"] },"assertPattern": { value: cells[69]["assertPattern"] },"isAwaitArgGuard": { value: cells[69]["isAwaitArgGuard"] },"assertAwaitArgGuard": { value: cells[69]["assertAwaitArgGuard"] },"isRawGuard": { value: cells[69]["isRawGuard"] },"assertRawGuard": { value: cells[69]["assertRawGuard"] },"assertMethodGuard": { value: cells[69]["assertMethodGuard"] },"assertInterfaceGuard": { value: cells[69]["assertInterfaceGuard"] },"kindOf": { value: cells[69]["kindOf"] },"containerHasSplit": { value: cells[69]["containerHasSplit"] },"getAwaitArgGuardPayload": { value: cells[70]["getAwaitArgGuardPayload"] },"getMethodGuardPayload": { value: cells[70]["getMethodGuardPayload"] },"getInterfaceGuardPayload": { value: cells[70]["getInterfaceGuardPayload"] },"getInterfaceMethodKeys": { value: cells[70]["getInterfaceMethodKeys"] },"getNamedMethodGuards": { value: cells[70]["getNamedMethodGuards"] },"listDifference": { value: cells[68]["listDifference"] },"objectMap": { value: cells[39]["objectMap"] } });
 
-  defineProperties(cells[77], {"GET_INTERFACE_GUARD": { value: cells[73]["GET_INTERFACE_GUARD"] } });
+  defineProperties(cells[76], {"makeExo": { value: cells[75]["makeExo"] },"defineExoClass": { value: cells[75]["defineExoClass"] },"defineExoClassKit": { value: cells[75]["defineExoClassKit"] } });
+  defineProperties(cells[78], getOwnPropertyDescriptors(cells[77]));
+  defineProperties(cells[78], getOwnPropertyDescriptors(cells[76]));
 
-  defineProperties(cells[81], {"encodeBase64": { value: cells[79]["encodeBase64"] } });
+  defineProperties(cells[78], {"initEmpty": { value: cells[75]["initEmpty"] },"GET_INTERFACE_GUARD": { value: cells[73]["GET_INTERFACE_GUARD"] } });
 
-  defineProperties(cells[83], {"decodeBase64": { value: cells[80]["decodeBase64"] } });
+  defineProperties(cells[82], {"encodeBase64": { value: cells[80]["encodeBase64"] } });
 
-  defineProperties(cells[85], {"encodeBase64": { value: cells[79]["encodeBase64"] },"decodeBase64": { value: cells[80]["decodeBase64"] },"btoa": { value: cells[82]["btoa"] },"atob": { value: cells[84]["atob"] } });
+  defineProperties(cells[84], {"decodeBase64": { value: cells[81]["decodeBase64"] } });
+
+  defineProperties(cells[86], {"encodeBase64": { value: cells[80]["encodeBase64"] },"decodeBase64": { value: cells[81]["decodeBase64"] },"btoa": { value: cells[83]["btoa"] },"atob": { value: cells[85]["atob"] } });
 
   const namespaces = cells.map(cells => freeze(create(null, {
     ...cells,
@@ -1926,6 +1936,7 @@ function observeImports(map, importName, importIndex) {
   functors[71]({
     imports(entries) {
       const map = new Map(entries);
+      observeImports(map, "./src/patterns/patternMatchers.js", 69);
     },
     liveVar: {
     },
@@ -2007,6 +2018,7 @@ function observeImports(map, importName, importIndex) {
   functors[76]({
     imports(entries) {
       const map = new Map(entries);
+      observeImports(map, "./src/exo-makers.js", 75);
     },
     liveVar: {
     },
@@ -2017,9 +2029,6 @@ function observeImports(map, importName, importIndex) {
   functors[77]({
     imports(entries) {
       const map = new Map(entries);
-      observeImports(map, "./src/exo-makers.js", 75);
-      observeImports(map, "./src/types.js", 76);
-      observeImports(map, "./src/get-interface.js", 73);
     },
     liveVar: {
     },
@@ -2030,115 +2039,113 @@ function observeImports(map, importName, importIndex) {
   functors[78]({
     imports(entries) {
       const map = new Map(entries);
+      observeImports(map, "./src/exo-makers.js", 75);
+      observeImports(map, "./types-index.js", 76);
+      observeImports(map, "./src/types.js", 77);
+      observeImports(map, "./src/get-interface.js", 73);
     },
     liveVar: {
     },
     onceVar: {
-      padding: cells[78].padding.set,
-      alphabet64: cells[78].alphabet64.set,
-      monodu64: cells[78].monodu64.set,
     },
     importMeta: {},
   });
   functors[79]({
     imports(entries) {
       const map = new Map(entries);
-      observeImports(map, "./common.js", 78);
     },
     liveVar: {
     },
     onceVar: {
-      jsEncodeBase64: cells[79].jsEncodeBase64.set,
-      encodeBase64: cells[79].encodeBase64.set,
+      padding: cells[79].padding.set,
+      alphabet64: cells[79].alphabet64.set,
+      monodu64: cells[79].monodu64.set,
     },
     importMeta: {},
   });
   functors[80]({
     imports(entries) {
       const map = new Map(entries);
-      observeImports(map, "./common.js", 78);
+      observeImports(map, "./common.js", 79);
     },
     liveVar: {
     },
     onceVar: {
-      jsDecodeBase64: cells[80].jsDecodeBase64.set,
-      decodeBase64: cells[80].decodeBase64.set,
+      jsEncodeBase64: cells[80].jsEncodeBase64.set,
+      encodeBase64: cells[80].encodeBase64.set,
     },
     importMeta: {},
   });
   functors[81]({
     imports(entries) {
       const map = new Map(entries);
-      observeImports(map, "./src/encode.js", 79);
+      observeImports(map, "./common.js", 79);
     },
     liveVar: {
     },
     onceVar: {
+      jsDecodeBase64: cells[81].jsDecodeBase64.set,
+      decodeBase64: cells[81].decodeBase64.set,
     },
     importMeta: {},
   });
   functors[82]({
     imports(entries) {
       const map = new Map(entries);
-      observeImports(map, "./encode.js", 81);
+      observeImports(map, "./src/encode.js", 80);
     },
     liveVar: {
     },
     onceVar: {
-      btoa: cells[82].btoa.set,
     },
     importMeta: {},
   });
   functors[83]({
     imports(entries) {
       const map = new Map(entries);
-      observeImports(map, "./src/decode.js", 80);
+      observeImports(map, "./encode.js", 82);
     },
     liveVar: {
     },
     onceVar: {
+      btoa: cells[83].btoa.set,
     },
     importMeta: {},
   });
   functors[84]({
     imports(entries) {
       const map = new Map(entries);
-      observeImports(map, "./decode.js", 83);
+      observeImports(map, "./src/decode.js", 81);
     },
     liveVar: {
     },
     onceVar: {
-      atob: cells[84].atob.set,
     },
     importMeta: {},
   });
   functors[85]({
     imports(entries) {
       const map = new Map(entries);
-      observeImports(map, "./src/encode.js", 79);
-      observeImports(map, "./src/decode.js", 80);
-      observeImports(map, "./btoa.js", 82);
-      observeImports(map, "./atob.js", 84);
+      observeImports(map, "./decode.js", 84);
     },
     liveVar: {
     },
     onceVar: {
+      atob: cells[85].atob.set,
     },
     importMeta: {},
   });
   functors[86]({
     imports(entries) {
       const map = new Map(entries);
+      observeImports(map, "./src/encode.js", 80);
+      observeImports(map, "./src/decode.js", 81);
+      observeImports(map, "./btoa.js", 83);
+      observeImports(map, "./atob.js", 85);
     },
     liveVar: {
     },
     onceVar: {
-      encodeEnvelope: cells[86].encodeEnvelope.set,
-      encodeFrame: cells[86].encodeFrame.set,
-      decodeFrame: cells[86].decodeFrame.set,
-      decodeEnvelope: cells[86].decodeEnvelope.set,
-      readFrameFromStream: cells[86].readFrameFromStream.set,
-      writeFrameToStream: cells[86].writeFrameToStream.set,
     },
     importMeta: {},
   });
@@ -2149,33 +2156,49 @@ function observeImports(map, importName, importIndex) {
     liveVar: {
     },
     onceVar: {
-      textEncoder: cells[87].textEncoder.set,
-      textDecoder: cells[87].textDecoder.set,
-      silentReject: cells[87].silentReject.set,
-      markShouldTerminate: cells[87].markShouldTerminate.set,
-      installShouldTerminate: cells[87].installShouldTerminate.set,
+      encodeEnvelope: cells[87].encodeEnvelope.set,
+      encodeFrame: cells[87].encodeFrame.set,
+      decodeFrame: cells[87].decodeFrame.set,
+      decodeEnvelope: cells[87].decodeEnvelope.set,
+      readFrameFromStream: cells[87].readFrameFromStream.set,
+      writeFrameToStream: cells[87].writeFrameToStream.set,
     },
     importMeta: {},
   });
   functors[88]({
     imports(entries) {
       const map = new Map(entries);
-      observeImports(map, "./envelope.js", 86);
-      observeImports(map, "./bus-xs-common.js", 87);
     },
     liveVar: {
-        installShouldTerminate: cells[88].installShouldTerminate.set,
-      markShouldTerminate: cells[88].markShouldTerminate.set,
-      silentReject: cells[88].silentReject.set,
-      textDecoder: cells[88].textDecoder.set,
-      textEncoder: cells[88].textEncoder.set,
-  },
+    },
     onceVar: {
-      makeXsNode: cells[88].makeXsNode.set,
+      textEncoder: cells[88].textEncoder.set,
+      textDecoder: cells[88].textDecoder.set,
+      silentReject: cells[88].silentReject.set,
+      markShouldTerminate: cells[88].markShouldTerminate.set,
+      installShouldTerminate: cells[88].installShouldTerminate.set,
     },
     importMeta: {},
   });
   functors[89]({
+    imports(entries) {
+      const map = new Map(entries);
+      observeImports(map, "./envelope.js", 87);
+      observeImports(map, "./bus-xs-common.js", 88);
+    },
+    liveVar: {
+        installShouldTerminate: cells[89].installShouldTerminate.set,
+      markShouldTerminate: cells[89].markShouldTerminate.set,
+      silentReject: cells[89].silentReject.set,
+      textDecoder: cells[89].textDecoder.set,
+      textEncoder: cells[89].textEncoder.set,
+  },
+    onceVar: {
+      makeXsNode: cells[89].makeXsNode.set,
+    },
+    importMeta: {},
+  });
+  functors[90]({
     imports(entries) {
       const map = new Map(entries);
       observeImports(map, "@endo/harden", 3);
@@ -2185,42 +2208,42 @@ function observeImports(map, importName, importIndex) {
     liveVar: {
     },
     onceVar: {
-      makeQueue: cells[89].makeQueue.set,
-      makeStream: cells[89].makeStream.set,
-      makePipe: cells[89].makePipe.set,
-      pump: cells[89].pump.set,
-      prime: cells[89].prime.set,
-      mapReader: cells[89].mapReader.set,
-      mapWriter: cells[89].mapWriter.set,
-    },
-    importMeta: {},
-  });
-  functors[90]({
-    imports(entries) {
-      const map = new Map(entries);
-      observeImports(map, "@endo/harden", 3);
-      observeImports(map, "@endo/base64", 85);
-      observeImports(map, "@endo/stream", 89);
-      observeImports(map, "@endo/far", 55);
-    },
-    liveVar: {
-    },
-    onceVar: {
-      makeRefIterator: cells[90].makeRefIterator.set,
-      makeRefReader: cells[90].makeRefReader.set,
+      makeQueue: cells[90].makeQueue.set,
+      makeStream: cells[90].makeStream.set,
+      makePipe: cells[90].makePipe.set,
+      pump: cells[90].pump.set,
+      prime: cells[90].prime.set,
+      mapReader: cells[90].mapReader.set,
+      mapWriter: cells[90].mapWriter.set,
     },
     importMeta: {},
   });
   functors[91]({
     imports(entries) {
       const map = new Map(entries);
+      observeImports(map, "@endo/harden", 3);
+      observeImports(map, "@endo/base64", 86);
+      observeImports(map, "@endo/stream", 90);
+      observeImports(map, "@endo/far", 55);
+    },
+    liveVar: {
+    },
+    onceVar: {
+      makeRefIterator: cells[91].makeRefIterator.set,
+      makeRefReader: cells[91].makeRefReader.set,
+    },
+    importMeta: {},
+  });
+  functors[92]({
+    imports(entries) {
+      const map = new Map(entries);
       observeImports(map, "@endo/captp", 53);
       observeImports(map, "@endo/far", 55);
-      observeImports(map, "@endo/exo", 77);
+      observeImports(map, "@endo/exo", 78);
       observeImports(map, "@endo/patterns", 72);
-      observeImports(map, "@endo/base64", 85);
-      observeImports(map, "./bus-xs-core.js", 88);
-      observeImports(map, "./ref-reader.js", 90);
+      observeImports(map, "@endo/base64", 86);
+      observeImports(map, "./bus-xs-core.js", 89);
+      observeImports(map, "./ref-reader.js", 91);
     },
     liveVar: {
     },
@@ -4293,7 +4316,7 @@ harden(ToFarFunction);
         next: () => {
           const { value: baseValue, done } = baseIterator.next();
           const value = done ? baseValue : func(baseValue);
-          return harden({ value, done });
+          return harden({ value, done: !!done });
         },
       });
     },
@@ -5229,7 +5252,9 @@ harden(makePromiseKit);
  * @returns {Promise<Awaited<T[number]>>} A new Promise.
  */
        function racePromises(values) {
-  return harden(memoRace.call(BestPipelinablePromise, values));
+  return /** @type {Promise<Awaited<T[number]>>} */ (
+    harden(memoRace.call(BestPipelinablePromise, values))
+  );
 }
 harden(racePromises);
 })()
@@ -8401,7 +8426,10 @@ const defaultSlotToValFn = (x, _) => x;
         const index = Number(stringEncoding.slice(1, i < 0 ? undefined : i));
         // i < 0 means there was no iface included.
         const iface = i < 0 ? undefined : stringEncoding.slice(i + 1);
-        return decodeSlotCommon({ iface, index });
+        return decodeSlotCommon({
+          ...(iface !== undefined && { iface }),
+          index,
+        });
       };
     };
     const decodeRemotableFromSmallcaps = makeDecodeSlotFromSmallcaps('$');
@@ -9142,8 +9170,8 @@ harden(zeroPad);
 // because we put the value in one side and then immediately take it out the
 // other; there is no actual state retained in the classic sense and thus no
 // re-entrancy issue.
-const asNumber = new Float64Array(1);
-const asBits = new BigUint64Array(asNumber.buffer);
+const { buffer: hiddenBuffer } = new BigUint64Array(1);
+const bufferView = new DataView(hiddenBuffer);
 
 // JavaScript numbers are encoded by outputting the base-16
 // representation of the binary value of the underlying IEEE floating point
@@ -9155,23 +9183,32 @@ const asBits = new BigUint64Array(asNumber.buffer);
 // encoding whose lexicographic sort order is the same as the numeric sort order
 // of the corresponding numbers.
 
-// TODO Choose the same canonical NaN encoding that cosmWasm and ewasm chose.
-const CanonicalNaNBits = 'fff8000000000000';
+// Because @endo/marshal does not depend on `ses`, it certainly cannot depend
+// on `lockdown()` being called. But the DataView methods are only tamed
+// to canonicalize NaNs by lockdown. Therefore we need to do our own
+// NaN canonicalization here.
+
+// See https://webidl.spec.whatwg.org/#js-unrestricted-double which implies
+// that this is the canonical NaN for web standards.
+// Casual googling stongly suggests that this is also the cosmWasm
+// canonical NaN. But I have not yet found an authoritative page stating this.
+const canonicalNaN = 0x7ff8000000000000n;
 
 /**
- * @param {number} n
+ * @param {number} f
  * @returns {string}
  */
-const encodeBinary64 = n => {
+const encodeBinary64 = f => {
   // Normalize -0 to 0 and NaN to a canonical encoding
-  if (is(n, -0)) {
-    n = 0;
-  } else if (is(n, NaN)) {
-    return `f${CanonicalNaNBits}`;
+  if (is(f, -0)) {
+    f = 0;
   }
-  asNumber[0] = n;
-  let bits = asBits[0];
-  if (n < 0) {
+  bufferView.setFloat64(0, f);
+  let bits = bufferView.getBigUint64(0);
+  if (is(f, NaN)) {
+    bits = canonicalNaN;
+  }
+  if (f < 0) {
     bits ^= 0xffffffffffffffffn;
   } else {
     bits ^= 0x8000000000000000n;
@@ -9192,8 +9229,8 @@ const decodeBinary64 = (encoded, skip = 0) => {
   } else {
     bits ^= 0x8000000000000000n;
   }
-  asBits[0] = bits;
-  const result = asNumber[0];
+  bufferView.setBigUint64(0, bits);
+  const result = bufferView.getFloat64(0);
   !is(result, -0) ||
     Fail`Unexpected negative zero: ${getSuffix(encoded, skip)}`;
   return result;
@@ -9376,14 +9413,14 @@ const decodeLegacyStringSuffix = encoded => encoded;
  * format, each terminated by a space (which is part of the escaped range in
  * "compactOrdered" encoded strings).
  *
- * @param {Passable[]} array
+ * @param {unknown[]} array
  * @param {(p: Passable) => string} encodePassable
  * @returns {string}
  */
 const encodeCompactArray = (array, encodePassable) => {
   const chars = ['^'];
   for (const element of array) {
-    const enc = encodePassable(element);
+    const enc = encodePassable(/** @type {Passable} */ (element));
     chars.push(enc, ' ');
   }
   return chars.join('');
@@ -9451,14 +9488,14 @@ const decodeCompactArray = (encoded, decodePassable, skip = 0) => {
  * This necessitated an undesirable amount of iteration and expansion; see
  * https://github.com/endojs/endo/pull/1260#discussion_r960369826
  *
- * @param {Passable[]} array
+ * @param {unknown[]} array
  * @param {(p: Passable) => string} encodePassable
  * @returns {string}
  */
 const encodeLegacyArray = (array, encodePassable) => {
   const chars = ['['];
   for (const element of array) {
-    const enc = encodePassable(element);
+    const enc = encodePassable(/** @type {Passable} */ (element));
     for (const c of enc) {
       if (c === '\u0000' || c === '\u0001') {
         chars.push('\u0001');
@@ -9619,7 +9656,7 @@ const makeEncodeError = (unsafeEncodeError, verifyEncoding) => {
 
 /**
  * @param {(str: string) => string} encodeStringSuffix
- * @param {(arr: unknown[], encodeRecur: (p: Passable) => string) => string} encodeArray
+ * @param {(arr: Passable[], encodeRecur: (p: Passable) => string) => string} encodeArray
  * @param {Required<EncodeOptions> & {verifyEncoding?: (encoded: string, label: string) => void}} options
  * @returns {(p: Passable) => string}
  */
@@ -13175,7 +13212,7 @@ harden(generateCollectionPairEntries);
  * @template [V=unknown]
  * @param {(collection: C) => Array<[Key, V]>} getEntries
  * @param {V} absentValue
- * @param {KeyCompare} compareValues
+ * @param {PartialCompare<V>} compareValues
  * @returns {(left: C, right: C) => KeyComparison}
  */
        const makeCompareCollection = (getEntries, absentValue, compareValues) =>
@@ -13234,7 +13271,8 @@ harden(makeCompareCollection);
 
 
 
-/** @import {CopySet, Key, KeyCompare} from '../types.js' */
+/** @import {CopyBag, CopyMap, CopySet, Key, KeyCollection, KeyCompare} from '../types.js' */
+/** @import {Passable} from '@endo/pass-style' */
 
 /**
  * CopySet X is smaller than CopySet Y iff all of these conditions hold:
@@ -13244,11 +13282,17 @@ harden(makeCompareCollection);
  * X is equivalent to Y iff the condition 1 holds but condition 2 does not.
  */
        const setCompare = makeCompareCollection(
-  /** @type {<K extends Key>(s: CopySet<K>) => Array<[K, 1]>} */ (
-    s => harden(getCopySetKeys(s).map(key => [key, 1]))
+  /** @type {(collection: KeyCollection) => Array<[Key, 1]>} */ (
+    collection =>
+      harden(
+        getCopySetKeys(/** @type {CopySet} */ (collection)).map(key => [
+          key,
+          1,
+        ]),
+      )
   ),
   0,
-  compareNumerics,
+  /** @type {KeyCompare} */ (compareNumerics),
 );$h͏_once.setCompare(setCompare);
 harden(setCompare);
 
@@ -13261,9 +13305,11 @@ harden(setCompare);
  * X is equivalent to Y iff the condition 1 holds but condition 2 does not.
  */
        const bagCompare = makeCompareCollection(
-  getCopyBagEntries,
+  /** @type {(collection: KeyCollection) => Array<[Key, bigint]>} */ (
+    collection => getCopyBagEntries(/** @type {CopyBag} */ (collection))
+  ),
   0n,
-  compareNumerics,
+  /** @type {KeyCompare} */ (compareNumerics),
 );$h͏_once.bagCompare(bagCompare);
 harden(bagCompare);
 
@@ -13289,7 +13335,10 @@ const ABSENT = Symbol('absent');
  */
 // eslint-disable-next-line no-underscore-dangle
 const _mapCompare = makeCompareCollection(
-  getCopyMapEntryArray,
+  /** @type {(collection: KeyCollection) => Array<[Key, Passable]>} */ (
+    collection =>
+      getCopyMapEntryArray(/** @type {CopyMap<Key, Passable>} */ (collection))
+  ),
   ABSENT,
   (leftValue, rightValue) => {
     if (leftValue === ABSENT && rightValue === ABSENT) {
@@ -13300,7 +13349,10 @@ const _mapCompare = makeCompareCollection(
       return 1;
     } else {
       // eslint-disable-next-line no-use-before-define
-      return compareKeys(leftValue, rightValue);
+      return compareKeys(
+        /** @type {Key} */ (leftValue),
+        /** @type {Key} */ (rightValue),
+      );
     }
   },
 );
@@ -14302,7 +14354,6 @@ harden(listDifference);
 
 
 
-
 /**
  * @import {Rejector} from '@endo/errors/rejector.js';
  * @import {CopyArray, CopyRecord, CopyTagged, Passable} from '@endo/pass-style';
@@ -14313,7 +14364,7 @@ harden(listDifference);
 const { entries, values, hasOwn } = Object;
 const { ownKeys } = Reflect;
 
-/** @type {WeakSet<Pattern>} */
+/** @type {WeakSet<Pattern & object>} */
 const patternMemo = new WeakSet();
 
 // /////////////////////// Match Helpers Helpers /////////////////////////////
@@ -14421,10 +14472,10 @@ const confirmDecimalDigitsLimit = (specimen, decimalDigitsLimit, reject) => {
 const makePatternKit = () => {
   /**
    * If this is a recognized match tag, return the MatchHelper.
-   * Otherwise result undefined.
+   * Otherwise return undefined.
    *
    * @param {string} tag
-   * @returns {MatchHelper | undefined}
+   * @returns {MatchHelper<any> | undefined}
    */
   const maybeMatchHelper = tag =>
     // eslint-disable-next-line no-use-before-define
@@ -14459,7 +14510,7 @@ const makePatternKit = () => {
    * Checks only recognized tags, and only if the tagged
    * passes the invariants associated with that recognition.
    *
-   * @param {Passable} tagged
+   * @param {CopyTagged<any, any>} tagged
    * @param {Kind} tag
    * @param {Rejector} reject
    * @returns {boolean}
@@ -14513,9 +14564,9 @@ const makePatternKit = () => {
     // as a tagged record, which is defined at the marshal level of abstraction,
     // since `passStyleOf` checks those invariants.
     if (tagMemo.has(specimen)) {
-      return tagMemo.get(specimen);
+      return /** @type {Kind} */ (tagMemo.get(specimen));
     }
-    const tag = getTag(specimen);
+    const tag = /** @type {Kind} */ (getTag(specimen));
     if (confirmTagged(specimen, tag, reject)) {
       tagMemo.set(specimen, tag);
       return tag;
@@ -14545,7 +14596,11 @@ const makePatternKit = () => {
     // check null and undefined as Keys
     if (singletonKinds.has(kind)) {
       // eslint-disable-next-line no-use-before-define
-      return confirmAsKeyPatt(specimen, singletonKinds.get(kind), reject);
+      return confirmAsKeyPatt(
+        specimen,
+        /** @type {Key} */ (singletonKinds.get(kind)),
+        reject,
+      );
     }
 
     const realKind = confirmKindOf(specimen, reject);
@@ -14554,7 +14609,10 @@ const makePatternKit = () => {
     }
     // `kind` and `realKind` can be embedded without quotes
     // because they are drawn from the enumerated collection of known Kinds.
-    return reject && reject`${b(realKind)} ${specimen} - Must be a ${b(kind)}`;
+    return (
+      reject &&
+      reject`${b(realKind ?? 'unknown')} ${specimen} - Must be a ${b(kind)}`
+    );
   };
 
   /**
@@ -14605,13 +14663,13 @@ const makePatternKit = () => {
       // is only concerned with non-key patterns.
       return true;
     }
-    if (patternMemo.has(patt)) {
+    if (patternMemo.has(/** @type {any} */ (patt))) {
       return true;
     }
     // eslint-disable-next-line no-use-before-define
     const result = confirmPatternInternal(patt, reject);
     if (result) {
-      patternMemo.add(patt);
+      patternMemo.add(/** @type {any} */ (patt));
     }
     return result;
   };
@@ -14636,18 +14694,24 @@ const makePatternKit = () => {
       case 'copyRecord': {
         // A copyRecord is a pattern iff all its children are
         // patterns
-        return values(patt).every(checkIt);
+        return values(/** @type {CopyRecord<Passable>} */ (patt)).every(
+          checkIt,
+        );
       }
       case 'copyArray': {
         // A copyArray is a pattern iff all its children are
         // patterns
-        return patt.every(checkIt);
+        return /** @type {CopyArray<Passable>} */ (patt).every(checkIt);
       }
       case 'copyMap': {
         // A copyMap's keys are keys and therefore already known to be
         // patterns.
         // A copyMap is a pattern if its values are patterns.
-        return confirmPattern(patt.values, reject);
+        return confirmPattern(
+          /** @type {CopyTagged<string, {keys: any[], values: any[]}>} */ (patt)
+            .payload.values,
+          reject,
+        );
       }
       case 'error':
       case 'promise': {
@@ -14725,13 +14789,13 @@ const makePatternKit = () => {
       case 'copyBag':
       case 'remotable': {
         // These kinds are necessarily keys
-        return confirmAsKeyPatt(specimen, patt, reject);
+        return confirmAsKeyPatt(specimen, /** @type {Key} */ (patt), reject);
       }
       case 'copyArray': {
         if (isKey(patt)) {
           // Takes care of patterns which are keys, so the rest of this
           // logic can assume patterns that are not keys.
-          return confirmAsKeyPatt(specimen, patt, reject);
+          return confirmAsKeyPatt(specimen, /** @type {Key} */ (patt), reject);
         }
         if (specimenKind !== 'copyArray') {
           return (
@@ -14741,7 +14805,8 @@ const makePatternKit = () => {
             )}`
           );
         }
-        const { length } = patt;
+        const pattArray = /** @type {CopyArray<Pattern>} */ (patt);
+        const { length } = pattArray;
         if (specimen.length !== length) {
           return (
             reject &&
@@ -14750,7 +14815,7 @@ const makePatternKit = () => {
             )}`
           );
         }
-        return patt.every((p, i) =>
+        return pattArray.every((p, i) =>
           // eslint-disable-next-line no-use-before-define
           confirmNestedMatches(specimen[i], p, i, reject),
         );
@@ -14769,13 +14834,14 @@ const makePatternKit = () => {
             )}`
           );
         }
+        const pattRecord = /** @type {CopyRecord<Pattern>} */ (patt);
         // TODO Detect and accumulate difference in one pass.
         // Rather than using two calls to `listDifference` to detect and
         // report if and how these lists differ, since they are already
         // in sorted order, we should instead use an algorithm like
         // `iterDisjointUnion` from merge-sort-operators.js
         const specimenNames = recordNames(specimen);
-        const pattNames = recordNames(patt);
+        const pattNames = recordNames(pattRecord);
         const missing = listDifference(pattNames, specimenNames);
         if (missing.length >= 1) {
           return (
@@ -14793,7 +14859,7 @@ const makePatternKit = () => {
           );
         }
         const specimenValues = recordValues(specimen, specimenNames);
-        const pattValues = recordValues(patt, pattNames);
+        const pattValues = recordValues(pattRecord, pattNames);
         return pattNames.every((label, i) =>
           // eslint-disable-next-line no-use-before-define
           confirmNestedMatches(specimenValues[i], pattValues[i], label, reject),
@@ -14813,8 +14879,10 @@ const makePatternKit = () => {
             )}`
           );
         }
+        const pattMap =
+          /** @type {import('../types.js').CopyMap<Key, Pattern>} */ (patt);
         // Compare keys as copySets
-        const pattKeySet = copyMapKeySet(patt);
+        const pattKeySet = copyMapKeySet(pattMap);
         const specimenKeySet = copyMapKeySet(specimen);
         if (!confirmMatches(specimenKeySet, pattKeySet, reject)) {
           return false;
@@ -14825,7 +14893,7 @@ const makePatternKit = () => {
         const pattValues = [];
         const specimenValues = [];
         const entryPairs = generateCollectionPairEntries(
-          patt,
+          pattMap,
           specimen,
           getCopyMapEntryArray,
           undefined,
@@ -14843,7 +14911,11 @@ const makePatternKit = () => {
       default: {
         const matchHelper = maybeMatchHelper(patternKind);
         if (matchHelper) {
-          return matchHelper.confirmMatches(specimen, patt.payload, reject);
+          return matchHelper.confirmMatches(
+            specimen,
+            /** @type {CopyTagged<string, Passable>} */ (patt).payload,
+            reject,
+          );
         }
         throw Fail`internal: should have recognized ${q(patternKind)} `;
       }
@@ -14853,7 +14925,7 @@ const makePatternKit = () => {
   /**
    * @param {any} specimen
    * @param {Pattern} pattern
-   * @param {string} prefix
+   * @param {string|number|undefined} prefix
    * @param {Rejector} reject
    * @returns {boolean}
    */
@@ -14885,7 +14957,12 @@ const makePatternKit = () => {
       innerError = er;
     }
     // should only throw
-    confirmNestedMatches(specimen, patt, label, Fail);
+    confirmNestedMatches(
+      specimen,
+      patt,
+      /** @type {string | number | undefined} */ (label),
+      Fail,
+    );
     const outerError = makeError(
       X`internal: ${label}: inconsistent pattern match: ${qp(patt)}`,
     );
@@ -14935,12 +15012,15 @@ const makePatternKit = () => {
         break;
       }
       case 'tagged': {
-        const tag = getTag(patt);
+        const tag = getTag(/** @type {CopyTagged<string, Passable>} */ (patt));
         const matchHelper = maybeMatchHelper(tag);
         if (matchHelper) {
           // Buried here is the important case, where we process
           // the various patternNodes
-          return matchHelper.getRankCover(patt.payload, encodePassable);
+          return matchHelper.getRankCover(
+            /** @type {CopyTagged<string, Passable>} */ (patt).payload,
+            encodePassable,
+          );
         }
         switch (tag) {
           case 'copySet': {
@@ -15026,7 +15106,7 @@ const makePatternKit = () => {
 
   // /////////////////////// Match Helpers /////////////////////////////////////
 
-  /** @type {MatchHelper} */
+  /** @type {MatchHelper<undefined>} */
   const matchAnyHelper = Far('match:any helper', {
     confirmMatches: (_specimen, _matcherPayload, _reject) => true,
 
@@ -15038,7 +15118,7 @@ const makePatternKit = () => {
     getRankCover: (_matchPayload, _encodePassable) => ['', '{'],
   });
 
-  /** @type {MatchHelper} */
+  /** @type {MatchHelper<CopyArray<Pattern>>} */
   const matchAndHelper = Far('match:and helper', {
     confirmMatches: (specimen, patts, reject) => {
       return patts.every(patt => confirmMatches(specimen, patt, reject));
@@ -15050,18 +15130,20 @@ const makePatternKit = () => {
         (passStyleOf(allegedPatts) === 'copyArray' ||
           (reject &&
             reject`Needs array of sub-patterns: ${qp(allegedPatts)}`)) &&
-        allegedPatts.every(checkIt)
+        /** @type {CopyArray<Passable>} */ (allegedPatts).every(checkIt)
       );
     },
 
     getRankCover: (patts, encodePassable) =>
       intersectRankCovers(
         compareRank,
-        patts.map(p => getRankCover(p, encodePassable)),
+        /** @type {CopyArray<Passable>} */ (patts).map(p =>
+          getRankCover(p, encodePassable),
+        ),
       ),
   });
 
-  /** @type {MatchHelper} */
+  /** @type {MatchHelper<CopyArray<Pattern>>} */
   const matchOrHelper = Far('match:or helper', {
     confirmMatches: (specimen, patts, reject) => {
       const { length } = patts;
@@ -15094,11 +15176,13 @@ const makePatternKit = () => {
     getRankCover: (patts, encodePassable) =>
       unionRankCovers(
         compareRank,
-        patts.map(p => getRankCover(p, encodePassable)),
+        /** @type {CopyArray<Passable>} */ (patts).map(p =>
+          getRankCover(p, encodePassable),
+        ),
       ),
   });
 
-  /** @type {MatchHelper} */
+  /** @type {MatchHelper<Pattern>} */
   const matchNotHelper = Far('match:not helper', {
     confirmMatches: (specimen, patt, reject) => {
       if (matches(specimen, patt)) {
@@ -15115,7 +15199,7 @@ const makePatternKit = () => {
     getRankCover: (_patt, _encodePassable) => ['', '{'],
   });
 
-  /** @type {MatchHelper} */
+  /** @type {MatchHelper<undefined>} */
   const matchScalarHelper = Far('match:scalar helper', {
     confirmMatches: (specimen, _matcherPayload, reject) =>
       confirmScalarKey(specimen, reject),
@@ -15125,7 +15209,7 @@ const makePatternKit = () => {
     getRankCover: (_matchPayload, _encodePassable) => ['a', 'z~'],
   });
 
-  /** @type {MatchHelper} */
+  /** @type {MatchHelper<undefined>} */
   const matchKeyHelper = Far('match:key helper', {
     confirmMatches: (specimen, _matcherPayload, reject) =>
       confirmKey(specimen, reject),
@@ -15135,7 +15219,7 @@ const makePatternKit = () => {
     getRankCover: (_matchPayload, _encodePassable) => ['a', 'z~'],
   });
 
-  /** @type {MatchHelper} */
+  /** @type {MatchHelper<undefined>} */
   const matchPatternHelper = Far('match:pattern helper', {
     confirmMatches: (specimen, _matcherPayload, reject) =>
       confirmPattern(specimen, reject),
@@ -15145,9 +15229,10 @@ const makePatternKit = () => {
     getRankCover: (_matchPayload, _encodePassable) => ['a', 'z~'],
   });
 
-  /** @type {MatchHelper} */
+  /** @type {MatchHelper<string>} */
   const matchKindHelper = Far('match:kind helper', {
-    confirmMatches: confirmKind,
+    confirmMatches: (specimen, kind, reject) =>
+      confirmKind(specimen, /** @type {Kind} */ (kind), reject),
 
     confirmIsWellFormed: (allegedKeyKind, reject) =>
       typeof allegedKeyKind === 'string' ||
@@ -15155,6 +15240,7 @@ const makePatternKit = () => {
         reject`match:kind: payload: ${allegedKeyKind} - A kind name must be a string`),
 
     getRankCover: (kind, _encodePassable) => {
+      /** @type {import('@endo/pass-style').PassStyle} */
       let style;
       switch (kind) {
         case 'copySet':
@@ -15163,7 +15249,7 @@ const makePatternKit = () => {
           break;
         }
         default: {
-          style = kind;
+          style = /** @type {import('@endo/pass-style').PassStyle} */ (kind);
           break;
         }
       }
@@ -15171,7 +15257,7 @@ const makePatternKit = () => {
     },
   });
 
-  /** @type {MatchHelper} */
+  /** @type {MatchHelper<[Pattern, Pattern]>} */
   const matchTaggedHelper = Far('match:tagged helper', {
     confirmMatches: (specimen, [tagPatt, payloadPatt], reject) => {
       if (passStyleOf(specimen) !== 'tagged') {
@@ -15183,8 +15269,18 @@ const makePatternKit = () => {
         );
       }
       return (
-        confirmNestedMatches(getTag(specimen), tagPatt, 'tag', reject) &&
-        confirmNestedMatches(specimen.payload, payloadPatt, 'payload', reject)
+        confirmNestedMatches(
+          getTag(/** @type {CopyTagged<string, Passable>} */ (specimen)),
+          tagPatt,
+          'tag',
+          reject,
+        ) &&
+        confirmNestedMatches(
+          /** @type {CopyTagged<string, Passable>} */ (specimen).payload,
+          payloadPatt,
+          'payload',
+          reject,
+        )
       );
     },
 
@@ -15199,7 +15295,7 @@ const makePatternKit = () => {
     getRankCover: (_kind, _encodePassable) => getPassStyleCover('tagged'),
   });
 
-  /** @type {MatchHelper} */
+  /** @type {MatchHelper<[Limits?]>} */
   const matchBigintHelper = Far('match:bigint helper', {
     confirmMatches: (specimen, [limits = undefined], reject) => {
       const { decimalDigitsLimit } = limit(limits);
@@ -15221,7 +15317,7 @@ const makePatternKit = () => {
       getPassStyleCover('bigint'),
   });
 
-  /** @type {MatchHelper} */
+  /** @type {MatchHelper<[Limits?]>} */
   const matchNatHelper = Far('match:nat helper', {
     confirmMatches: (specimen, [limits = undefined], reject) => {
       const { decimalDigitsLimit } = limit(limits);
@@ -15247,7 +15343,7 @@ const makePatternKit = () => {
       getPassStyleCover('bigint'),
   });
 
-  /** @type {MatchHelper} */
+  /** @type {MatchHelper<[Limits?]>} */
   const matchStringHelper = Far('match:string helper', {
     confirmMatches: (specimen, [limits = undefined], reject) => {
       const { stringLengthLimit } = limit(limits);
@@ -15272,14 +15368,16 @@ const makePatternKit = () => {
       getPassStyleCover('string'),
   });
 
-  /** @type {MatchHelper} */
+  /** @type {MatchHelper<[Limits?]>} */
   const matchSymbolHelper = Far('match:symbol helper', {
     confirmMatches: (specimen, [limits = undefined], reject) => {
       const { symbolNameLengthLimit } = limit(limits);
       if (!confirmKind(specimen, 'symbol', reject)) {
         return false;
       }
-      const symbolName = nameForPassableSymbol(specimen);
+      const symbolName = nameForPassableSymbol(
+        /** @type {symbol} */ (specimen),
+      );
 
       if (typeof symbolName !== 'string') {
         throw Fail`internal: Passable symbol ${specimen} must have a passable name`;
@@ -15305,7 +15403,7 @@ const makePatternKit = () => {
       getPassStyleCover('symbol'),
   });
 
-  /** @type {MatchHelper} */
+  /** @type {MatchHelper<{label: string}>} */
   const matchRemotableHelper = Far('match:remotable helper', {
     confirmMatches: (specimen, remotableDesc, reject) => {
       if (isKind(specimen, 'remotable')) {
@@ -15322,7 +15420,7 @@ const makePatternKit = () => {
             b(passStyle)
           : // Tag must be quoted because it is potentially attacker-controlled
             // (unlike `kindOf`, this does not reject unrecognized tags).
-            q(getTag(specimen));
+            q(getTag(/** @type {CopyTagged<string, Passable>} */ (specimen)));
       return (
         reject &&
         reject`${specimen} - Must be a remotable ${b(label)}, not ${kindDetails}`
@@ -15341,7 +15439,40 @@ const makePatternKit = () => {
       getPassStyleCover('remotable'),
   });
 
-  /** @type {MatchHelper} */
+  /** @type {MatchHelper<{label: string}>} */
+  const matchPromiseHelper = Far('match:promise helper', {
+    confirmMatches: (specimen, promiseDesc, reject) => {
+      if (isKind(specimen, 'promise')) {
+        return true;
+      }
+      if (!reject) {
+        return false;
+      }
+      const { label } = promiseDesc;
+      const passStyle = passStyleOf(specimen);
+      const kindDetails =
+        passStyle !== 'tagged'
+          ? b(passStyle)
+          : q(getTag(/** @type {CopyTagged<string, Passable>} */ (specimen)));
+      return (
+        reject &&
+        reject`${specimen} - Must be a promise ${b(label)}, not ${kindDetails}`
+      );
+    },
+
+    confirmIsWellFormed: (allegedPromiseDesc, reject) =>
+      confirmNestedMatches(
+        allegedPromiseDesc,
+        harden({ label: MM.string() }),
+        'match:promise payload',
+        reject,
+      ),
+
+    getRankCover: (_promiseDesc, _encodePassable) =>
+      getPassStyleCover('promise'),
+  });
+
+  /** @type {MatchHelper<Key>} */
   const matchLTEHelper = Far('match:lte helper', {
     confirmMatches: (specimen, rightOperand, reject) =>
       keyLTE(specimen, rightOperand) ||
@@ -15355,7 +15486,7 @@ const makePatternKit = () => {
       // to be `let`
       // eslint-disable-next-line prefer-const
       let [leftBound, rightBound] = getPassStyleCover(passStyle);
-      const newRightBound = `${encodePassable(rightOperand)}~`;
+      const newRightBound = `${encodePassable(/** @type {Key} */ (rightOperand))}~`;
       if (newRightBound !== undefined) {
         rightBound = newRightBound;
       }
@@ -15363,7 +15494,7 @@ const makePatternKit = () => {
     },
   });
 
-  /** @type {MatchHelper} */
+  /** @type {MatchHelper<Key>} */
   const matchLTHelper = Far('match:lt helper', {
     confirmMatches: (specimen, rightOperand, reject) =>
       keyLT(specimen, rightOperand) ||
@@ -15374,7 +15505,7 @@ const makePatternKit = () => {
     getRankCover: matchLTEHelper.getRankCover,
   });
 
-  /** @type {MatchHelper} */
+  /** @type {MatchHelper<Key>} */
   const matchGTEHelper = Far('match:gte helper', {
     confirmMatches: (specimen, rightOperand, reject) =>
       keyGTE(specimen, rightOperand) ||
@@ -15388,7 +15519,7 @@ const makePatternKit = () => {
       // to be `let`
       // eslint-disable-next-line prefer-const
       let [leftBound, rightBound] = getPassStyleCover(passStyle);
-      const newLeftBound = encodePassable(rightOperand);
+      const newLeftBound = encodePassable(/** @type {Key} */ (rightOperand));
       if (newLeftBound !== undefined) {
         leftBound = newLeftBound;
       }
@@ -15396,7 +15527,7 @@ const makePatternKit = () => {
     },
   });
 
-  /** @type {MatchHelper} */
+  /** @type {MatchHelper<Key>} */
   const matchGTHelper = Far('match:gt helper', {
     confirmMatches: (specimen, rightOperand, reject) =>
       keyGT(specimen, rightOperand) ||
@@ -15407,7 +15538,7 @@ const makePatternKit = () => {
     getRankCover: matchGTEHelper.getRankCover,
   });
 
-  /** @type {MatchHelper} */
+  /** @type {MatchHelper<[Pattern, Pattern, Limits?]>} */
   const matchRecordOfHelper = Far('match:recordOf helper', {
     confirmMatches: (
       specimen,
@@ -15417,12 +15548,13 @@ const makePatternKit = () => {
       const { numPropertiesLimit, propertyNameLengthLimit } = limit(limits);
       return (
         confirmKind(specimen, 'copyRecord', reject) &&
-        (ownKeys(specimen).length <= numPropertiesLimit ||
+        (ownKeys(/** @type {object} */ (specimen)).length <=
+          numPropertiesLimit ||
           (reject &&
             reject`Must not have more than ${q(
               numPropertiesLimit,
             )} properties: ${specimen}`)) &&
-        entries(specimen).every(
+        entries(/** @type {object} */ (specimen)).every(
           ([key, value]) =>
             (key.length <= propertyNameLengthLimit ||
               (reject &&
@@ -15455,7 +15587,7 @@ const makePatternKit = () => {
     getRankCover: _entryPatt => getPassStyleCover('copyRecord'),
   });
 
-  /** @type {MatchHelper} */
+  /** @type {MatchHelper<[Pattern, Limits?]>} */
   const matchArrayOfHelper = Far('match:arrayOf helper', {
     confirmMatches: (specimen, [subPatt, limits = undefined], reject) => {
       const { arrayLengthLimit } = limit(limits);
@@ -15463,8 +15595,8 @@ const makePatternKit = () => {
       return (
         confirmKind(specimen, 'copyArray', reject) &&
         (/** @type {Array} */ (specimen).length <= arrayLengthLimit ||
-          reject && reject`Array length ${specimen.length} must be <= limit ${arrayLengthLimit}`) &&
-        confirmArrayEveryMatchPattern(specimen, subPatt, '', reject)
+          reject && reject`Array length ${/** @type {any} */ (specimen).length} must be <= limit ${arrayLengthLimit}`) &&
+        confirmArrayEveryMatchPattern(/** @type {any} */ (specimen), subPatt, '', reject)
       );
     },
 
@@ -15479,7 +15611,7 @@ const makePatternKit = () => {
     getRankCover: () => getPassStyleCover('copyArray'),
   });
 
-  /** @type {MatchHelper} */
+  /** @type {MatchHelper<[Limits?]>} */
   const matchByteArrayHelper = Far('match:byteArray helper', {
     confirmMatches: (specimen, [limits = undefined], reject) => {
       const { byteLengthLimit } = limit(limits);
@@ -15503,20 +15635,22 @@ const makePatternKit = () => {
       getPassStyleCover('byteArray'),
   });
 
-  /** @type {MatchHelper} */
+  /** @type {MatchHelper<[Pattern, Limits?]>} */
   const matchSetOfHelper = Far('match:setOf helper', {
     confirmMatches: (specimen, [keyPatt, limits = undefined], reject) => {
       const { numSetElementsLimit } = limit(limits);
+      const specimenSet = /** @type {import('../types.js').CopySet} */ (
+        specimen
+      );
       return (
         ((confirmKind(specimen, 'copySet', reject) &&
-          /** @type {Array} */ (specimen.payload).length <
-            numSetElementsLimit) ||
+          specimenSet.payload.length < numSetElementsLimit) ||
           (reject &&
             reject`Set must not have more than ${q(numSetElementsLimit)} elements: ${
-              specimen.payload.length
+              specimenSet.payload.length
             }`)) &&
         confirmArrayEveryMatchPattern(
-          specimen.payload,
+          specimenSet.payload,
           keyPatt,
           'set elements',
           reject,
@@ -15535,7 +15669,7 @@ const makePatternKit = () => {
     getRankCover: () => getPassStyleCover('tagged'),
   });
 
-  /** @type {MatchHelper} */
+  /** @type {MatchHelper<[Pattern, Pattern, Limits?]>} */
   const matchBagOfHelper = Far('match:bagOf helper', {
     confirmMatches: (
       specimen,
@@ -15543,15 +15677,17 @@ const makePatternKit = () => {
       reject,
     ) => {
       const { numUniqueBagElementsLimit, decimalDigitsLimit } = limit(limits);
+      const specimenBag = /** @type {import('../types.js').CopyBag} */ (
+        specimen
+      );
       return (
         ((confirmKind(specimen, 'copyBag', reject) &&
-          /** @type {Array} */ (specimen.payload).length <=
-            numUniqueBagElementsLimit) ||
+          specimenBag.payload.length <= numUniqueBagElementsLimit) ||
           (reject &&
             reject`Bag must not have more than ${q(
               numUniqueBagElementsLimit,
             )} unique elements: ${specimen}`)) &&
-        specimen.payload.every(
+        specimenBag.payload.every(
           ([key, count], i) =>
             confirmNestedMatches(key, keyPatt, `bag keys[${i}]`, reject) &&
             applyLabelingError(
@@ -15677,7 +15813,7 @@ const makePatternKit = () => {
    * throwing an error).
    *
    * @typedef {CopyArray | CopySet | CopyBag} Container
-   * @param {Container} specimen
+   * @param {Passable} specimen
    * @param {Pattern} elementPatt
    * @param {bigint} bound Must be >= 1n
    * @param {Rejector} reject
@@ -15702,7 +15838,7 @@ const makePatternKit = () => {
       case 'copyArray': {
         return (
           confirmElementsHasSplit(
-            specimen,
+            /** @type {CopyArray<Passable>} */ (specimen),
             elementPatt,
             bound,
             reject,
@@ -15715,7 +15851,7 @@ const makePatternKit = () => {
       case 'copySet': {
         return (
           confirmElementsHasSplit(
-            specimen.payload,
+            /** @type {import('../types.js').CopySet} */ (specimen).payload,
             elementPatt,
             bound,
             reject,
@@ -15732,7 +15868,7 @@ const makePatternKit = () => {
       case 'copyBag': {
         return (
           pairsHasSplit(
-            specimen.payload,
+            /** @type {import('../types.js').CopyBag} */ (specimen).payload,
             elementPatt,
             bound,
             reject,
@@ -15751,30 +15887,24 @@ const makePatternKit = () => {
     }
   };
 
-  /** @type {MatchHelper} */
+  /** @type {MatchHelper<[Pattern, bigint, Limits?]>} */
   const matchContainerHasHelper = Far('M.containerHas helper', {
-    /**
-     * @param {CopyArray | CopySet | CopyBag} specimen
-     * @param {[Pattern, bigint, Limits?]} payload
-     * @param {Rejector} reject
-     */
     confirmMatches: (
       specimen,
       [elementPatt, bound, limits = undefined],
       reject,
     ) => {
-      const kind = confirmKindOf(specimen, reject);
+      confirmKindOf(specimen, reject);
       const { decimalDigitsLimit } = limit(limits);
-      if (
-        !applyLabelingError(
-          confirmDecimalDigitsLimit,
-          [bound, decimalDigitsLimit, reject],
-          `${kind} matches`,
-        )
-      ) {
+      if (!confirmDecimalDigitsLimit(bound, decimalDigitsLimit, reject)) {
         return false;
       }
-      return !!containerHasSplit(specimen, elementPatt, bound, reject);
+      return !!containerHasSplit(
+        /** @type {Container} */ (specimen),
+        elementPatt,
+        bound,
+        reject,
+      );
     },
 
     confirmIsWellFormed: (payload, reject) =>
@@ -15788,7 +15918,7 @@ const makePatternKit = () => {
     getRankCover: () => getPassStyleCover('tagged'),
   });
 
-  /** @type {MatchHelper} */
+  /** @type {MatchHelper<[Pattern, Pattern, Limits?]>} */
   const matchMapOfHelper = Far('match:mapOf helper', {
     confirmMatches: (
       specimen,
@@ -15796,22 +15926,25 @@ const makePatternKit = () => {
       reject,
     ) => {
       const { numMapEntriesLimit } = limit(limits);
+      const specimenMap = /** @type {import('../types.js').CopyMap} */ (
+        specimen
+      );
       return (
         confirmKind(specimen, 'copyMap', reject) &&
         // eslint-disable-next-line @endo/restrict-comparison-operands
-        (specimen.payload.keys.length <= numMapEntriesLimit ||
+        (specimenMap.payload.keys.length <= numMapEntriesLimit ||
           (reject &&
             reject`CopyMap must have no more than ${q(
               numMapEntriesLimit,
             )} entries: ${specimen}`)) &&
         confirmArrayEveryMatchPattern(
-          specimen.payload.keys,
+          specimenMap.payload.keys,
           keyPatt,
           'map keys',
           reject,
         ) &&
         confirmArrayEveryMatchPattern(
-          specimen.payload.values,
+          specimenMap.payload.values,
           valuePatt,
           'map values',
           reject,
@@ -15864,7 +15997,7 @@ const makePatternKit = () => {
   const adaptArrayPattern = (optionalPatt, length) =>
     harden(optionalPatt.slice(0, length).map(patt => MM.opt(patt)));
 
-  /** @type {MatchHelper} */
+  /** @type {MatchHelper<[Pattern[], (Pattern[] | undefined)?, (Pattern | undefined)?]>} */
   const matchSplitArrayHelper = Far('match:splitArray helper', {
     confirmMatches: (
       specimen,
@@ -15875,7 +16008,11 @@ const makePatternKit = () => {
         return false;
       }
       const { requiredSpecimen, optionalSpecimen, restSpecimen } =
-        splitArrayParts(specimen, requiredPatt, optionalPatt);
+        splitArrayParts(
+          /** @type {Passable[]} */ (specimen),
+          requiredPatt,
+          optionalPatt,
+        );
       const partialPatt = adaptArrayPattern(
         optionalPatt,
         optionalSpecimen.length,
@@ -15910,16 +16047,22 @@ const makePatternKit = () => {
     },
 
     /**
-     * @param {Array} splitArray
+     * @param {Passable} splitArray
      * @param {Rejector} reject
      */
     confirmIsWellFormed: (splitArray, reject) => {
-      if (
-        passStyleOf(splitArray) === 'copyArray' &&
-        (splitArray.length >= 1 || splitArray.length <= 3)
-      ) {
+      if (passStyleOf(splitArray) === 'copyArray') {
+        const typedSplitArray = /** @type {CopyArray<Passable>} */ (splitArray);
+        if (!(typedSplitArray.length >= 1 && typedSplitArray.length <= 3)) {
+          return (
+            reject &&
+            reject`Must be an array of a requiredPatt array, an optional optionalPatt array, and an optional restPatt: ${q(
+              splitArray,
+            )}`
+          );
+        }
         const [requiredPatt, optionalPatt = undefined, restPatt = undefined] =
-          splitArray;
+          typedSplitArray;
         if (
           isPattern(requiredPatt) &&
           passStyleOf(requiredPatt) === 'copyArray' &&
@@ -15992,7 +16135,7 @@ const makePatternKit = () => {
   const adaptRecordPattern = (optionalPatt, names) =>
     fromUniqueEntries(names.map(name => [name, MM.opt(optionalPatt[name])]));
 
-  /** @type {MatchHelper} */
+  /** @type {MatchHelper<[CopyRecord<Pattern>, (CopyRecord<Pattern> | undefined)?, (Pattern | undefined)?]>} */
   const matchSplitRecordHelper = Far('match:splitRecord helper', {
     confirmMatches: (
       specimen,
@@ -16003,7 +16146,11 @@ const makePatternKit = () => {
         return false;
       }
       const { requiredSpecimen, optionalSpecimen, restSpecimen } =
-        splitRecordParts(specimen, requiredPatt, optionalPatt);
+        splitRecordParts(
+          /** @type {CopyRecord<Passable>} */ (specimen),
+          requiredPatt,
+          optionalPatt,
+        );
 
       const partialNames = /** @type {string[]} */ (ownKeys(optionalSpecimen));
       const partialPatt = adaptRecordPattern(optionalPatt, partialNames);
@@ -16022,16 +16169,22 @@ const makePatternKit = () => {
     },
 
     /**
-     * @param {Array} splitArray
+     * @param {Passable} splitArray
      * @param {Rejector} reject
      */
     confirmIsWellFormed: (splitArray, reject) => {
-      if (
-        passStyleOf(splitArray) === 'copyArray' &&
-        (splitArray.length >= 1 || splitArray.length <= 3)
-      ) {
+      if (passStyleOf(splitArray) === 'copyArray') {
+        const typedSplitArray = /** @type {CopyArray<Passable>} */ (splitArray);
+        if (!(typedSplitArray.length >= 1 && typedSplitArray.length <= 3)) {
+          return (
+            reject &&
+            reject`Must be an array of a requiredPatt record, an optional optionalPatt record, and an optional restPatt: ${q(
+              splitArray,
+            )}`
+          );
+        }
         const [requiredPatt, optionalPatt = undefined, restPatt = undefined] =
-          splitArray;
+          typedSplitArray;
         if (
           isPattern(requiredPatt) &&
           passStyleOf(requiredPatt) === 'copyRecord' &&
@@ -16058,7 +16211,7 @@ const makePatternKit = () => {
     ]) => getPassStyleCover(passStyleOf(requiredPatt)),
   });
 
-  /** @type {Record<string, MatchHelper>} */
+  /** @type {Record<string, MatchHelper<any>>} */
   const HelpersByMatchTag = harden({
     'match:any': matchAnyHelper,
     'match:and': matchAndHelper,
@@ -16075,6 +16228,7 @@ const makePatternKit = () => {
     'match:string': matchStringHelper,
     'match:symbol': matchSymbolHelper,
     'match:remotable': matchRemotableHelper,
+    'match:promise': matchPromiseHelper,
 
     'match:lt': matchLTHelper,
     'match:lte': matchLTEHelper,
@@ -16141,6 +16295,11 @@ const makePatternKit = () => {
       ? RemotableShape
       : makeMatcher('match:remotable', harden({ label }));
 
+  const makePromiseMatcher = (label = undefined) =>
+    label === undefined
+      ? PromiseShape
+      : makeMatcher('match:promise', harden({ label }));
+
   /**
    * @template T
    * @param {T} empty
@@ -16167,136 +16326,145 @@ const makePatternKit = () => {
   // //////////////////
 
   /** @type {MatcherNamespace} */
-  const M = harden({
-    any: () => AnyShape,
-    and: (...patts) => makeMatcher('match:and', patts),
-    or: (...patts) => makeMatcher('match:or', patts),
-    not: subPatt => makeMatcher('match:not', subPatt),
+  const M = /** @type {any} */ (
+    harden({
+      any: () => AnyShape,
+      and: (...patts) => makeMatcher('match:and', patts),
+      or: (...patts) => makeMatcher('match:or', patts),
+      not: subPatt => makeMatcher('match:not', subPatt),
 
-    scalar: () => ScalarShape,
-    key: () => KeyShape,
-    pattern: () => PatternShape,
-    kind: makeKindMatcher,
-    tagged: (tagPatt = M.string(), payloadPatt = M.any()) =>
-      makeMatcher('match:tagged', harden([tagPatt, payloadPatt])),
-    boolean: () => BooleanShape,
-    number: () => NumberShape,
-    bigint: (limits = undefined) =>
-      limits ? makeLimitsMatcher('match:bigint', [limits]) : BigIntShape,
-    nat: (limits = undefined) =>
-      limits ? makeLimitsMatcher('match:nat', [limits]) : NatShape,
-    string: (limits = undefined) =>
-      limits ? makeLimitsMatcher('match:string', [limits]) : StringShape,
-    symbol: (limits = undefined) =>
-      limits ? makeLimitsMatcher('match:symbol', [limits]) : SymbolShape,
-    record: (limits = undefined) =>
-      limits ? M.recordOf(M.any(), M.any(), limits) : RecordShape,
-    // struct: A pattern that matches CopyRecords with a fixed quantity of
-    // entries where the values match patterns for corresponding keys is merely
-    // a hardened object with patterns in the places of values for
-    // corresponding keys.
-    // For example, a pattern that matches CopyRecords that have a string value
-    // for the key 'x' and a number for the key 'y' is:
-    // harden({ x: M.string(), y: M.number() }).
-    array: (limits = undefined) =>
-      limits ? M.arrayOf(M.any(), limits) : ArrayShape,
-    // tuple: A pattern that matches CopyArrays with a fixed quantity of values
-    // that match a heterogeneous array of patterns is merely a hardened array
-    // of the respective patterns.
-    // For example, a pattern that matches CopyArrays of length 2 that have a
-    // string at index 0 and a number at index 1 is:
-    // harden([ M.string(), M.number() ]).
-    byteArray: (limits = undefined) =>
-      limits ? makeLimitsMatcher('match:byteArray', [limits]) : ByteArrayShape,
-    set: (limits = undefined) => (limits ? M.setOf(M.any(), limits) : SetShape),
-    bag: (limits = undefined) =>
-      limits ? M.bagOf(M.any(), M.any(), limits) : BagShape,
-    map: (limits = undefined) =>
-      limits ? M.mapOf(M.any(), M.any(), limits) : MapShape,
-    // heterogeneous map: A pattern that matches CopyMaps with a fixed quantity
-    // of entries where the value for each key matches a corresponding pattern
-    // is merely a (hardened) CopyMap with patterns instead of values for the
-    // corresponding keys.
-    // For example, a pattern that matches CopyMaps where the value for the key
-    // 'x' is a number and the value for the key 'y' is a string is:
-    // makeCopyMap([['x', M.number()], ['y', M.string()]]).
-    remotable: makeRemotableMatcher,
-    error: () => ErrorShape,
-    promise: () => PromiseShape,
-    undefined: () => UndefinedShape,
-    null: () => null,
+      scalar: () => ScalarShape,
+      key: () => KeyShape,
+      pattern: () => PatternShape,
+      kind: makeKindMatcher,
+      tagged: (tagPatt = M.string(), payloadPatt = M.any()) =>
+        makeMatcher('match:tagged', harden([tagPatt, payloadPatt])),
+      boolean: () => BooleanShape,
+      number: () => NumberShape,
+      bigint: (limits = undefined) =>
+        limits ? makeLimitsMatcher('match:bigint', [limits]) : BigIntShape,
+      nat: (limits = undefined) =>
+        limits ? makeLimitsMatcher('match:nat', [limits]) : NatShape,
+      string: (limits = undefined) =>
+        limits ? makeLimitsMatcher('match:string', [limits]) : StringShape,
+      symbol: (limits = undefined) =>
+        limits ? makeLimitsMatcher('match:symbol', [limits]) : SymbolShape,
+      record: (limits = undefined) =>
+        limits ? M.recordOf(M.any(), M.any(), limits) : RecordShape,
+      // struct: A pattern that matches CopyRecords with a fixed quantity of
+      // entries where the values match patterns for corresponding keys is merely
+      // a hardened object with patterns in the places of values for
+      // corresponding keys.
+      // For example, a pattern that matches CopyRecords that have a string value
+      // for the key 'x' and a number for the key 'y' is:
+      // harden({ x: M.string(), y: M.number() }).
+      array: (limits = undefined) =>
+        limits ? M.arrayOf(M.any(), limits) : ArrayShape,
+      // tuple: A pattern that matches CopyArrays with a fixed quantity of values
+      // that match a heterogeneous array of patterns is merely a hardened array
+      // of the respective patterns.
+      // For example, a pattern that matches CopyArrays of length 2 that have a
+      // string at index 0 and a number at index 1 is:
+      // harden([ M.string(), M.number() ]).
+      byteArray: (limits = undefined) =>
+        limits
+          ? makeLimitsMatcher('match:byteArray', [limits])
+          : ByteArrayShape,
+      set: (limits = undefined) =>
+        limits ? M.setOf(M.any(), limits) : SetShape,
+      bag: (limits = undefined) =>
+        limits ? M.bagOf(M.any(), M.any(), limits) : BagShape,
+      map: (limits = undefined) =>
+        limits ? M.mapOf(M.any(), M.any(), limits) : MapShape,
+      // heterogeneous map: A pattern that matches CopyMaps with a fixed quantity
+      // of entries where the value for each key matches a corresponding pattern
+      // is merely a (hardened) CopyMap with patterns instead of values for the
+      // corresponding keys.
+      // For example, a pattern that matches CopyMaps where the value for the key
+      // 'x' is a number and the value for the key 'y' is a string is:
+      // makeCopyMap([['x', M.number()], ['y', M.string()]]).
+      remotable: makeRemotableMatcher,
+      error: () => ErrorShape,
+      promise: makePromiseMatcher,
+      undefined: () => UndefinedShape,
+      null: () => null,
 
-    lt: rightOperand => makeMatcher('match:lt', rightOperand),
-    lte: rightOperand => makeMatcher('match:lte', rightOperand),
-    eq: key => {
-      assertKey(key);
-      return key === undefined ? M.undefined() : key;
-    },
-    neq: key => M.not(M.eq(key)),
-    gte: rightOperand => makeMatcher('match:gte', rightOperand),
-    gt: rightOperand => makeMatcher('match:gt', rightOperand),
+      lt: rightOperand => makeMatcher('match:lt', rightOperand),
+      lte: rightOperand => makeMatcher('match:lte', rightOperand),
+      eq: key => {
+        assertKey(key);
+        return key === undefined ? M.undefined() : key;
+      },
+      neq: key => M.not(M.eq(key)),
+      gte: rightOperand => makeMatcher('match:gte', rightOperand),
+      gt: rightOperand => makeMatcher('match:gt', rightOperand),
 
-    recordOf: (keyPatt = M.any(), valuePatt = M.any(), limits = undefined) =>
-      makeLimitsMatcher('match:recordOf', [keyPatt, valuePatt, limits]),
-    arrayOf: (subPatt = M.any(), limits = undefined) =>
-      makeLimitsMatcher('match:arrayOf', [subPatt, limits]),
-    setOf: (keyPatt = M.any(), limits = undefined) =>
-      makeLimitsMatcher('match:setOf', [keyPatt, limits]),
-    bagOf: (keyPatt = M.any(), countPatt = M.any(), limits = undefined) =>
-      makeLimitsMatcher('match:bagOf', [keyPatt, countPatt, limits]),
-    containerHas: (elementPatt = M.any(), countPatt = 1n, limits = undefined) =>
-      makeLimitsMatcher('match:containerHas', [elementPatt, countPatt, limits]),
-    mapOf: (keyPatt = M.any(), valuePatt = M.any(), limits = undefined) =>
-      makeLimitsMatcher('match:mapOf', [keyPatt, valuePatt, limits]),
-    splitArray: (base, optional = undefined, rest = undefined) =>
-      makeMatcher(
-        'match:splitArray',
-        makeSplitPayload([], base, optional, rest),
-      ),
-    splitRecord: (base, optional = undefined, rest = undefined) =>
-      makeMatcher(
-        'match:splitRecord',
-        makeSplitPayload({}, base, optional, rest),
-      ),
-    split: (base, rest = undefined) => {
-      if (passStyleOf(harden(base)) === 'copyArray') {
-        // TODO at-ts-expect-error works locally but not from @endo/exo
-        // @ts-expect-error We know it should be an array
-        return M.splitArray(base, rest && [], rest);
-      } else {
-        return M.splitRecord(base, rest && {}, rest);
-      }
-    },
-    partial: (base, rest = undefined) => {
-      if (passStyleOf(harden(base)) === 'copyArray') {
-        // TODO at-ts-expect-error works locally but not from @endo/exo
-        // @ts-expect-error We know it should be an array
-        return M.splitArray([], base, rest);
-      } else {
-        return M.splitRecord({}, base, rest);
-      }
-    },
+      recordOf: (keyPatt = M.any(), valuePatt = M.any(), limits = undefined) =>
+        makeLimitsMatcher('match:recordOf', [keyPatt, valuePatt, limits]),
+      arrayOf: (subPatt = M.any(), limits = undefined) =>
+        makeLimitsMatcher('match:arrayOf', [subPatt, limits]),
+      setOf: (keyPatt = M.any(), limits = undefined) =>
+        makeLimitsMatcher('match:setOf', [keyPatt, limits]),
+      bagOf: (keyPatt = M.any(), countPatt = M.any(), limits = undefined) =>
+        makeLimitsMatcher('match:bagOf', [keyPatt, countPatt, limits]),
+      containerHas: (
+        elementPatt = M.any(),
+        countPatt = 1n,
+        limits = undefined,
+      ) =>
+        makeLimitsMatcher('match:containerHas', [
+          elementPatt,
+          countPatt,
+          limits,
+        ]),
+      mapOf: (keyPatt = M.any(), valuePatt = M.any(), limits = undefined) =>
+        makeLimitsMatcher('match:mapOf', [keyPatt, valuePatt, limits]),
+      splitArray: (base, optional = undefined, rest = undefined) =>
+        makeMatcher(
+          'match:splitArray',
+          makeSplitPayload([], base, optional, rest),
+        ),
+      splitRecord: (base, optional = undefined, rest = undefined) =>
+        makeMatcher(
+          'match:splitRecord',
+          makeSplitPayload({}, base, optional, rest),
+        ),
+      split: (base, rest = undefined) => {
+        if (passStyleOf(harden(base)) === 'copyArray') {
+          return M.splitArray(/** @type {any} */ (base), rest && [], rest);
+        } else {
+          return M.splitRecord(base, rest && {}, rest);
+        }
+      },
+      partial: (base, rest = undefined) => {
+        if (passStyleOf(harden(base)) === 'copyArray') {
+          return M.splitArray([], /** @type {any} */ (base), rest);
+        } else {
+          return M.splitRecord({}, base, rest);
+        }
+      },
 
-    eref: t => M.or(t, M.promise()),
-    opt: t => M.or(M.undefined(), t),
+      eref: t => M.or(t, M.promise()),
+      opt: t => M.or(M.undefined(), t),
 
-    interface: (interfaceName, methodGuards, options) =>
-      // eslint-disable-next-line no-use-before-define
-      makeInterfaceGuard(interfaceName, methodGuards, options),
-    call: (...argPatterns) =>
-      // eslint-disable-next-line no-use-before-define
-      makeMethodGuardMaker('sync', argPatterns),
-    callWhen: (...argGuards) =>
-      // eslint-disable-next-line no-use-before-define
-      makeMethodGuardMaker('async', argGuards),
+      interface: (interfaceName, methodGuards, options) =>
+        // eslint-disable-next-line no-use-before-define
+        makeInterfaceGuard(interfaceName, methodGuards, options),
+      call: (...argPatterns) =>
+        // eslint-disable-next-line no-use-before-define
+        makeMethodGuardMaker('sync', argPatterns),
+      callWhen: (...argGuards) =>
+        // eslint-disable-next-line no-use-before-define
+        makeMethodGuardMaker('async', argGuards),
 
-    await: argPattern =>
-      // eslint-disable-next-line no-use-before-define
-      makeAwaitArgGuard(argPattern),
-    raw: () =>
-      // eslint-disable-next-line no-use-before-define
-      makeRawGuard(),
-  });
+      await: argPattern =>
+        // eslint-disable-next-line no-use-before-define
+        makeAwaitArgGuard(argPattern),
+      raw: () =>
+        // eslint-disable-next-line no-use-before-define
+        makeRawGuard(),
+    })
+  );
 
   return harden({
     confirmMatches,
@@ -16443,36 +16611,38 @@ const makeMethodGuardMaker = (
   optionalArgGuards = undefined,
   restArgGuard = undefined,
 ) =>
-  harden({
-    optional: (...optArgGuards) => {
-      optionalArgGuards === undefined ||
-        Fail`Can only have one set of optional guards`;
-      restArgGuard === undefined ||
-        Fail`optional arg guards must come before rest arg`;
-      return makeMethodGuardMaker(callKind, argGuards, optArgGuards);
-    },
-    rest: rArgGuard => {
-      restArgGuard === undefined || Fail`Can only have one rest arg`;
-      return makeMethodGuardMaker(
-        callKind,
-        argGuards,
-        optionalArgGuards,
-        rArgGuard,
-      );
-    },
-    returns: (returnGuard = M.undefined()) => {
-      /** @type {MethodGuard} */
-      const result = makeTagged('guard:methodGuard', {
-        callKind,
-        argGuards,
-        optionalArgGuards,
-        restArgGuard,
-        returnGuard,
-      });
-      assertMethodGuard(result);
-      return result;
-    },
-  });
+  /** @type {MethodGuardMaker} */ (
+    harden({
+      optional: (...optArgGuards) => {
+        optionalArgGuards === undefined ||
+          Fail`Can only have one set of optional guards`;
+        restArgGuard === undefined ||
+          Fail`optional arg guards must come before rest arg`;
+        return makeMethodGuardMaker(callKind, argGuards, optArgGuards);
+      },
+      rest: rArgGuard => {
+        restArgGuard === undefined || Fail`Can only have one rest arg`;
+        return makeMethodGuardMaker(
+          callKind,
+          argGuards,
+          optionalArgGuards,
+          rArgGuard,
+        );
+      },
+      returns: (returnGuard = /** @type {any} */ (M.undefined())) => {
+        /** @type {MethodGuard} */
+        const result = makeTagged('guard:methodGuard', {
+          callKind,
+          argGuards,
+          optionalArgGuards,
+          restArgGuard,
+          returnGuard,
+        });
+        assertMethodGuard(result);
+        return result;
+      },
+    })
+  );
 
        const InterfaceGuardPayloadShape = M.splitRecord(
   {
@@ -16615,10 +16785,9 @@ const LegacyAwaitArgGuardShape = harden({
  */
        const getAwaitArgGuardPayload = awaitArgGuard => {
   if (matches(awaitArgGuard, LegacyAwaitArgGuardShape)) {
-    // @ts-expect-error Legacy adaptor can be ill typed
-    const { klass: _, ...payload } = awaitArgGuard;
-    // @ts-expect-error Legacy adaptor can be ill typed
-    return payload;
+    const legacy = /** @type {any} */ (awaitArgGuard);
+    const { klass: _, ...payload } = legacy;
+    return /** @type {AwaitArgGuardPayload} */ (payload);
   }
   assertAwaitArgGuard(awaitArgGuard);
   return awaitArgGuard.payload;
@@ -16681,7 +16850,7 @@ const LegacyMethodGuardShape = M.or(
 
 const adaptLegacyArgGuard = argGuard =>
   matches(argGuard, LegacyAwaitArgGuardShape)
-    ? M.await(getAwaitArgGuardPayload(argGuard).argGuard)
+    ? M.await(getAwaitArgGuardPayload(/** @type {any} */ (argGuard)).argGuard)
     : argGuard;
 
 /**
@@ -16702,22 +16871,9 @@ const adaptLegacyArgGuard = argGuard =>
     return methodGuard.payload;
   }
   mustMatch(methodGuard, LegacyMethodGuardShape, 'legacyMethodGuard');
-  const {
-    // @ts-expect-error Legacy adaptor can be ill typed
-    klass: _,
-    // @ts-expect-error Legacy adaptor can be ill typed
-    callKind,
-    // @ts-expect-error Legacy adaptor can be ill typed
-    returnGuard,
-    // @ts-expect-error Legacy adaptor can be ill typed
-    restArgGuard,
-  } = methodGuard;
-  let {
-    // @ts-expect-error Legacy adaptor can be ill typed
-    argGuards,
-    // @ts-expect-error Legacy adaptor can be ill typed
-    optionalArgGuards,
-  } = methodGuard;
+  const legacy = /** @type {any} */ (methodGuard);
+  const { klass: _, callKind, returnGuard, restArgGuard } = legacy;
+  let { argGuards, optionalArgGuards } = legacy;
   if (callKind === 'async') {
     argGuards = argGuards.map(adaptLegacyArgGuard);
     optionalArgGuards =
@@ -16766,9 +16922,11 @@ const adaptMethodGuard = methodGuard => {
       optionalArgGuards = [],
       restArgGuard = M.any(),
       returnGuard,
-    } = getMethodGuardPayload(methodGuard);
-    const mCall = callKind === 'sync' ? M.call : M.callWhen;
-    return mCall(...argGuards)
+    } = getMethodGuardPayload(/** @type {any} */ (methodGuard));
+    const makeGuard = /** @type {(...args: any[]) => any} */ (
+      callKind === 'sync' ? M.call : M.callWhen
+    );
+    return makeGuard(...argGuards)
       .optional(...optionalArgGuards)
       .rest(restArgGuard)
       .returns(returnGuard);
@@ -16795,9 +16953,9 @@ const adaptMethodGuard = methodGuard => {
     return interfaceGuard.payload;
   }
   mustMatch(interfaceGuard, LegacyInterfaceGuardShape, 'legacyInterfaceGuard');
-  // @ts-expect-error Legacy adaptor can be ill typed
+  const legacy = /** @type {any} */ (interfaceGuard);
   // eslint-disable-next-line prefer-const
-  let { klass: _, interfaceName, methodGuards, ...rest } = interfaceGuard;
+  let { klass: _, interfaceName, methodGuards, ...rest } = legacy;
   methodGuards = objectMap(methodGuards, adaptMethodGuard);
   const payload = harden({
     interfaceName,
@@ -16859,7 +17017,28 @@ harden(getNamedMethodGuards);
 })()
 ,
 // === 71. patterns ./types-index.js ===
-({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';$h͏_imports([]);
+({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let _m,_mm;$h͏_imports([["./src/patterns/patternMatchers.js", [["matches",[$h͏_a => (_m = $h͏_a)]],["mustMatch",[$h͏_a => (_mm = $h͏_a)]]]]]);
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+/** @type {(specimen: unknown, patt: import('./src/types.js').Pattern) => boolean} */
+const _matchesCompat = _m;
+/** @type {(specimen: unknown, patt: import('./src/types.js').Pattern, label?: string | number) => void} */
+const _mustMatchCompat = _mm;
+// eslint-disable-next-line no-void
+(void _matchesCompat, _mustMatchCompat);
 })()
 ,
 // === 72. patterns ./index.js ===
@@ -17658,15 +17837,19 @@ harden(defineExoClassKit);
 harden(makeExo);
 })()
 ,
-// === 76. exo ./src/types.js ===
+// === 76. exo ./types-index.js ===
+({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';$h͏_imports([["./src/exo-makers.js", []]]);
+})()
+,
+// === 77. exo ./src/types.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';$h͏_imports([]);
 })()
 ,
-// === 77. exo ./index.js ===
-({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';$h͏_imports([["./src/exo-makers.js", []],["./src/types.js", []],["./src/get-interface.js", []]]);
+// === 78. exo ./index.js ===
+({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';$h͏_imports([["./src/exo-makers.js", []],["./types-index.js", []],["./src/types.js", []],["./src/get-interface.js", []]]);
 })()
 ,
-// === 78. base64 ./src/common.js ===
+// === 79. base64 ./src/common.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';$h͏_imports([]);// @ts-check
 
 const { freeze } = Object;
@@ -17691,7 +17874,7 @@ for (let i = 0; i < alphabet64.length; i += 1) {
 freeze(monodu64);
 })()
 ,
-// === 79. base64 ./src/encode.js ===
+// === 80. base64 ./src/encode.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let alphabet64,padding;$h͏_imports([["./common.js", [["alphabet64",[$h͏_a => (alphabet64 = $h͏_a)]],["padding",[$h͏_a => (padding = $h͏_a)]]]]]);
 
 
@@ -17766,7 +17949,7 @@ freeze(monodu64);
   globalThis.Base64 !== undefined ? globalThis.Base64.encode : jsEncodeBase64;$h͏_once.encodeBase64(encodeBase64);
 })()
 ,
-// === 80. base64 ./src/decode.js ===
+// === 81. base64 ./src/decode.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let monodu64,padding;$h͏_imports([["./common.js", [["monodu64",[$h͏_a => (monodu64 = $h͏_a)]],["padding",[$h͏_a => (padding = $h͏_a)]]]]]);
 
 
@@ -17853,11 +18036,11 @@ $h͏_once.jsDecodeBase64(jsDecodeBase64);const adaptDecoder=
     : jsDecodeBase64;$h͏_once.decodeBase64(decodeBase64);
 })()
 ,
-// === 81. base64 ./encode.js ===
+// === 82. base64 ./encode.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';$h͏_imports([["./src/encode.js", []]]);
 })()
 ,
-// === 82. base64 ./btoa.js ===
+// === 83. base64 ./btoa.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let encodeBase64;$h͏_imports([["./encode.js", [["encodeBase64",[$h͏_a => (encodeBase64 = $h͏_a)]]]]]);
 
 /**
@@ -17877,11 +18060,11 @@ $h͏_once.jsDecodeBase64(jsDecodeBase64);const adaptDecoder=
 };$h͏_once.btoa(btoa);
 })()
 ,
-// === 83. base64 ./decode.js ===
+// === 84. base64 ./decode.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';$h͏_imports([["./src/decode.js", []]]);
 })()
 ,
-// === 84. base64 ./atob.js ===
+// === 85. base64 ./atob.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let decodeBase64;$h͏_imports([["./decode.js", [["decodeBase64",[$h͏_a => (decodeBase64 = $h͏_a)]]]]]);
 
 /**
@@ -17894,11 +18077,11 @@ $h͏_once.jsDecodeBase64(jsDecodeBase64);const adaptDecoder=
 };$h͏_once.atob(atob);
 })()
 ,
-// === 85. base64 ./index.js ===
+// === 86. base64 ./index.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';$h͏_imports([["./src/encode.js", []],["./src/decode.js", []],["./btoa.js", []],["./atob.js", []]]);
 })()
 ,
-// === 86. daemon ./src/envelope.js ===
+// === 87. daemon ./src/envelope.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';$h͏_imports([]);// @ts-check
 /* eslint-disable no-bitwise */
 /* global Buffer */
@@ -18158,9 +18341,9 @@ harden(decodeFrame);
   const verb = cborReadText(cursor);
   const payload = cborReadBytes(cursor);
   const nonce = n === 4 ? cborReadInt(cursor) : 0;
-  // Note: not hardened because payload is a Uint8Array, and
-  // typed arrays cannot be frozen in XS (non-configurable indexed
-  // properties). The envelope is a transient parsing result.
+  // Do not harden the envelope: the payload field is a Uint8Array
+  // whose indexed elements are non-configurable in XS, so
+  // Object.freeze (harden) fails.
   return { handle, verb, payload, nonce };
 };$h͏_once.decodeEnvelope(decodeEnvelope);
 harden(decodeEnvelope);
@@ -18288,8 +18471,11 @@ harden(readFrameFromStream);
 harden(writeFrameToStream);
 })()
 ,
-// === 87. daemon ./src/bus-xs-common.js ===
+// === 88. daemon ./src/bus-xs-common.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';$h͏_imports([]);// @ts-check
+/* eslint-disable no-underscore-dangle -- __shouldTerminate is
+   deliberately scoped to globalThis with a dunder name to avoid
+   collision with app-level exports. */
 /* global globalThis */
 
 /**
@@ -18342,7 +18528,7 @@ harden(markShouldTerminate);
 harden(installShouldTerminate);
 })()
 ,
-// === 88. daemon ./src/bus-xs-core.js ===
+// === 89. daemon ./src/bus-xs-core.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let encodeEnvelope,decodeEnvelope,installShouldTerminate,markShouldTerminate,silentReject,textDecoder,textEncoder;$h͏_imports([["./envelope.js", [["encodeEnvelope",[$h͏_a => (encodeEnvelope = $h͏_a)]],["decodeEnvelope",[$h͏_a => (decodeEnvelope = $h͏_a)]]]],["./bus-xs-common.js", [["installShouldTerminate",[$h͏_a => (installShouldTerminate = $h͏_a),$h͏_live["installShouldTerminate"]]],["markShouldTerminate",[$h͏_a => (markShouldTerminate = $h͏_a),$h͏_live["markShouldTerminate"]]],["silentReject",[$h͏_a => (silentReject = $h͏_a),$h͏_live["silentReject"]]],["textDecoder",[$h͏_a => (textDecoder = $h͏_a),$h͏_live["textDecoder"]]],["textEncoder",[$h͏_a => (textEncoder = $h͏_a),$h͏_live["textEncoder"]]]]]]);
 
 
@@ -18388,6 +18574,66 @@ harden(installShouldTerminate);
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+// Console polyfill for XS bootstraps that share this module.
+//
+// `@endo/marshal`'s default `marshalSaveError` calls
+// `console.log('Temporary logging of sent error', err)` while
+// serializing rejected errors. In an XS realm where `globalThis.console`
+// is undefined, that lookup throws "get console: undefined variable"
+// inside `captp`'s `processResult`, the rejection is silently swallowed,
+// and the eval question never receives a `CTP_RETURN`. The result is a
+// hang any time a cross-CapTP-session call rejects.
+//
+// `bus-daemon-rust-xs.js` already installs its own polyfill; this one
+// covers the worker bootstrap (and any other future consumer of
+// `bus-xs-core`).
+if (typeof globalThis.console === 'undefined') {
+  const formatArg = a => {
+    if (typeof a === 'string') return a;
+    if (a && typeof a === 'object' && typeof a.message === 'string') {
+      return `${a.name || 'Error'}: ${a.message}`;
+    }
+    try {
+      return JSON.stringify(a);
+    } catch {
+      return String(a);
+    }
+  };
+  const makeLogFn =
+    prefix =>
+    (...args) => {
+      try {
+        // eslint-disable-next-line no-undef
+        trace(`${prefix}${args.map(formatArg).join(' ')}`);
+      } catch (_e) {
+        // Best-effort tracing: suppress failures so a broken
+        // trace host function doesn't break the caller.
+      }
+    };
+  globalThis.console = /** @type {Console} */ (
+    /** @type {unknown} */ (
+      harden({
+        log: makeLogFn(''),
+        warn: makeLogFn('[warn] '),
+        error: makeLogFn('[error] '),
+        info: makeLogFn('[info] '),
+        debug: makeLogFn('[debug] '),
+        trace: makeLogFn('[trace] '),
+      })
+    )
+  );
+}
 
 const EMPTY_PAYLOAD = new Uint8Array(0);
 
@@ -18436,7 +18682,7 @@ const EMPTY_PAYLOAD = new Uint8Array(0);
       payload: payload || EMPTY_PAYLOAD,
       nonce: nonce || 0,
     });
-    hostSendRawFrame(data);
+    sendRawFrame(data);
   };
 
   /**
@@ -18461,23 +18707,37 @@ const EMPTY_PAYLOAD = new Uint8Array(0);
    * @param {Uint8Array} bytes - raw CBOR envelope bytes
    */
   globalThis.handleCommand = harden(bytes => {
+    if (bytes.length > 10000) {
+      trace(`xs-core: handleCommand large envelope len=${bytes.length}`);
+    }
     let env;
     try {
       env = decodeEnvelope(bytes);
     } catch (e) {
-      hostTrace(
+      trace(
         `xs-core: failed to decode envelope: ${/** @type {Error} */ (e).message}`,
       );
       return;
+    }
+    if (bytes.length > 10000) {
+      trace(
+        `xs-core: decoded envelope handle=${env.handle} verb=${env.verb} payload_len=${env.payload.length}`,
+      );
     }
 
     if (env.verb === 'deliver') {
       const onPayload = sessions.get(env.handle);
       if (onPayload) {
         try {
+          if (bytes.length > 10000) {
+            trace(`xs-core: dispatching to session ${env.handle}`);
+          }
           onPayload(env.payload);
+          if (bytes.length > 10000) {
+            trace(`xs-core: session dispatch returned`);
+          }
         } catch (e) {
-          hostTrace(
+          trace(
             `xs-core: session ${env.handle} dispatch error: ${/** @type {Error} */ (e).message}`,
           );
         }
@@ -18489,7 +18749,7 @@ const EMPTY_PAYLOAD = new Uint8Array(0);
       try {
         onControl(env);
       } catch (e) {
-        hostTrace(
+        trace(
           `xs-core: onControl error for verb ${env.verb}: ${/** @type {Error} */ (e).message}`,
         );
       }
@@ -18497,9 +18757,9 @@ const EMPTY_PAYLOAD = new Uint8Array(0);
     }
 
     if (env.verb !== 'deliver') {
-      hostTrace(`xs-core: unhandled verb=${env.verb} handle=${env.handle}`);
+      trace(`xs-core: unhandled verb=${env.verb} handle=${env.handle}`);
     } else {
-      hostTrace(`xs-core: deliver for unknown handle=${env.handle}`);
+      trace(`xs-core: deliver for unknown handle=${env.handle}`);
     }
   });
 
@@ -18513,7 +18773,7 @@ const EMPTY_PAYLOAD = new Uint8Array(0);
 harden(makeXsNode);
 })()
 ,
-// === 89. stream ./index.js ===
+// === 90. stream ./index.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden,E,makePromiseKit;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]],["@endo/eventual-send", [["E",[$h͏_a => (E = $h͏_a)]]]],["@endo/promise-kit", [["makePromiseKit",[$h͏_a => (makePromiseKit = $h͏_a)]]]]]);
 
 
@@ -18763,7 +19023,7 @@ harden(mapReader);
 harden(mapWriter);
 })()
 ,
-// === 90. daemon ./src/ref-reader.js ===
+// === 91. daemon ./src/ref-reader.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let harden,decodeBase64,mapReader,E;$h͏_imports([["@endo/harden", [["default",[$h͏_a => (harden = $h͏_a)]]]],["@endo/base64", [["decodeBase64",[$h͏_a => (decodeBase64 = $h͏_a)]]]],["@endo/stream", [["mapReader",[$h͏_a => (mapReader = $h͏_a)]]]],["@endo/far", [["E",[$h͏_a => (E = $h͏_a)]]]]]);
 
 
@@ -18799,7 +19059,7 @@ harden(makeRefIterator);
   mapReader(makeRefIterator(readerRef), decodeBase64);$h͏_once.makeRefReader(makeRefReader);
 })()
 ,
-// === 91. daemon ./src/bus-worker-xs.js ===
+// === 92. daemon ./src/bus-worker-xs.js ===
 ({imports:$h͏_imports,liveVar:$h͏_live,onceVar:$h͏_once,import:$h͏_import,importMeta:$h͏____meta})=>(function(){'use strict';let makeCapTP,E,Far,makeExo,M,decodeBase64,makeXsNode,markShouldTerminate,silentReject,textDecoder,textEncoder,makeRefIterator;$h͏_imports([["@endo/captp", [["makeCapTP",[$h͏_a => (makeCapTP = $h͏_a)]]]],["@endo/far", [["E",[$h͏_a => (E = $h͏_a)]],["Far",[$h͏_a => (Far = $h͏_a)]]]],["@endo/exo", [["makeExo",[$h͏_a => (makeExo = $h͏_a)]]]],["@endo/patterns", [["M",[$h͏_a => (M = $h͏_a)]]]],["@endo/base64", [["decodeBase64",[$h͏_a => (decodeBase64 = $h͏_a)]]]],["./bus-xs-core.js", [["makeXsNode",[$h͏_a => (makeXsNode = $h͏_a)]],["markShouldTerminate",[$h͏_a => (markShouldTerminate = $h͏_a)]],["silentReject",[$h͏_a => (silentReject = $h͏_a)]],["textDecoder",[$h͏_a => (textDecoder = $h͏_a)]],["textEncoder",[$h͏_a => (textEncoder = $h͏_a)]]]],["./ref-reader.js", [["makeRefIterator",[$h͏_a => (makeRefIterator = $h͏_a)]]]]]);
 
 
@@ -18836,33 +19096,8 @@ harden(makeRefIterator);
 
 
 
-
-
-// Console polyfill: marshal.js's default marshalSaveError calls
-// `console.log('Temporary logging of sent error', err)` while
-// serializing rejected errors. Without a global `console`, the call
-// throws "get console: undefined variable" inside captp's processResult,
-// which silently swallows the rejection and hangs the eval round-trip.
-if (typeof globalThis.console === 'undefined') {
-  const makeLogFn = prefix => (...args) => {
-    const parts = args.map(a => {
-      if (typeof a === 'string') return a;
-      if (a && typeof a === 'object' && typeof a.message === 'string') {
-        return `${a.name || 'Error'}: ${a.message}`;
-      }
-      try { return JSON.stringify(a); } catch { return String(a); }
-    });
-    try { hostTrace(`${prefix}${parts.join(' ')}`); } catch (_e) {}
-  };
-  globalThis.console = {
-    log: makeLogFn(''),
-    warn: makeLogFn('[warn] '),
-    error: makeLogFn('[error] '),
-    info: makeLogFn('[info] '),
-    debug: makeLogFn('[debug] '),
-    trace: makeLogFn('[trace] '),
-  };
-}
+void Far;
+void hostTrace;
 
 const node = makeXsNode();
 
@@ -18885,7 +19120,6 @@ const standardEndowments = harden(
   ),
 );
 
-// XS worker facet — implements the worker side of CapTP
 const workerFacet = makeExo(
   'EndoXsWorkerFacet',
   M.interface('EndoXsWorkerFacet', {
@@ -18914,8 +19148,6 @@ const workerFacet = makeExo(
     },
 
     /**
-     * Evaluate JavaScript source code with the given endowments.
-     *
      * @param {string} source
      * @param {string[]} codeNames
      * @param {unknown[]} endowmentValues
@@ -18935,12 +19167,11 @@ const workerFacet = makeExo(
         $id: id,
         $cancelled: cancelled,
       });
-      // XS native Compartment uses globalThis assignment;
-      // SES shimmed Compartment takes endowments as first arg.
-      // Try SES-style first, fall back to XS-style.
+      // SES Compartment takes endowments via constructor argument;
+      // XS native Compartment ignores the argument and looks up
+      // globals on `compartment.globalThis`.  Try both shapes so the
+      // same code works against either runtime.
       const compartment = new Compartment(globals);
-      // If endowments didn't stick via constructor, set them on
-      // globalThis directly (XS native Compartment path).
       for (const [name, value] of Object.entries(globals)) {
         if (!(name in compartment.globalThis)) {
           compartment.globalThis[name] = value;
@@ -18968,7 +19199,6 @@ const workerFacet = makeExo(
      * @returns {Promise<unknown>}
      */
     makeArchive: async (readableP, powersP, contextP, env) => {
-      // Stream base64 chunks from the readable blob via CapTP
       const streamRef = await E(readableP).streamBase64();
       const chunks = [];
       for await (const chunk of makeRefIterator(streamRef)) {
@@ -18982,13 +19212,11 @@ const workerFacet = makeExo(
         offset += c.length;
       }
 
-      // Load archive natively via Rust host function (Uint8Array)
       const ok = hostImportArchive(archiveBytes);
       if (!ok) throw new Error('Failed to import archive');
 
-      // Entry namespace set by install_archive — capture and release.
-      const namespace = globalThis.__entryNs;
-      delete globalThis.__entryNs;
+      const namespace = /** @type {any} */ (globalThis).__entryNs;
+      delete (/** @type {any} */ (globalThis)).__entryNs;
       return namespace.make(powersP, contextP, { env });
     },
 
@@ -19004,10 +19232,6 @@ const workerFacet = makeExo(
     },
   },
 );
-
-// ---------------------------------------------------------------------------
-// Single CapTP session on the daemon handle
-// ---------------------------------------------------------------------------
 
 /**
  * Outbound CapTP send: JSON-encode the message and wrap it in a
