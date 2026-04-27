@@ -5,6 +5,7 @@
 
 set -euo pipefail
 
+# shellcheck source=common.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
 
 # --- parse --key value parameters from $@
@@ -26,9 +27,9 @@ while [[ $# -gt 0 ]]; do
 done
 
 message="$*"
-[ -n "$message" ] || exit 0
+[[ -n "$message" ]] || exit 0
 
-if [ -z "$NOTIFY" ]; then
+if [[ -z "$NOTIFY" ]]; then
   echo "NOTIFY: $message"
   exit 0
 fi
@@ -40,14 +41,14 @@ if $DEBUG_NOTIFY; then
 fi
 
 # If NOTIFY points to a file in the repo, delegate to it
-if [ -x "$REPO_DIR/$NOTIFY" ]; then
+if [[ -x "$REPO_DIR/$NOTIFY" ]]; then
   param_args=()
   for i in "${!param_keys[@]}"; do
     param_args+=("--${param_keys[$i]}" "${param_vals[$i]}")
   done
   exec "$REPO_DIR/$NOTIFY" "${param_args[@]}" "$message"
-elif [ -e "$REPO_DIR/$NOTIFY" ]; then
-  NOTIFY=file://$REPO_DIR/$NOTIFY
+elif [[ -e "$REPO_DIR/$NOTIFY" ]]; then
+  NOTIFY="file://$REPO_DIR/$NOTIFY"
 fi
 
 # --- build JSON body using jq
@@ -64,7 +65,7 @@ json=$(jq -nc "${jq_args[@]}" '$ARGS.named')
 case "$NOTIFY" in
 
   # HTTP(S): POST JSON
-  http://*|https://*)
+  http://* | https://*)
     "${curl[@]}" -X POST -H 'Content-Type: application/json' -d "$json" "$NOTIFY"
     exit $?
     ;;
@@ -73,14 +74,14 @@ case "$NOTIFY" in
   file:///*)
 
     path=$(chase_file "${NOTIFY#file://}")
-    if [ -d "$path" ]; then
+    if [[ -d "$path" ]]; then
       stamp=$(date -Iseconds | tr -d ':-' | sed 's/+.*//; s/_/T/')
-      printf '%s' "$json" > "$path/${stamp}.json"
-    elif [ -p "$path" ] || [ -S "$path" ]; then
-      printf '%s' "$json" > "$path"
+      printf '%s' "$json" >"$path/${stamp}.json"
+    elif [[ -p "$path" ]] || [[ -S "$path" ]]; then
+      printf '%s' "$json" >"$path"
     else
       # Regular file (or doesn't exist yet): append
-      printf '%s' "$json" >> "$path"
+      printf '%s' "$json" >>"$path"
     fi
     ;;
 

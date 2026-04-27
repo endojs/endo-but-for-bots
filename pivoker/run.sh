@@ -15,8 +15,9 @@
 #   $ systemctl --user status evoke@<repo_name>
 #   $ journalctl --user -u evoke@<repo_name>
 
-set -e
+set -euo pipefail
 
+# shellcheck source=common.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
 
 AFTER=
@@ -35,7 +36,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 evoke_script="$PIVOKER_DIR/evoke.sh"
-[ -x "$evoke_script" ] || die "Main script not found or not executable: $evoke_script"
+[[ -x "$evoke_script" ]] || die "Main script not found or not executable: $evoke_script"
 
 if $DEBUG_RUN; then
   set -x
@@ -43,13 +44,30 @@ fi
 
 check_killswitch
 
-# --- Ensure template unit exists ---
+# --- Helpers: template rendering and content-aware writes ---
 
-user_conf_dir=${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user
-template="$user_conf_dir/evoke@.service"
+# write_if_changed PATH CONTENT — writes only when content differs.
+# Prints "created", "updated", or "skipped" to stdout.
+write_if_changed() {
+  local path="$1" content="$2"
+  if ! [[ -f "$path" ]]; then
+    printf '%s' "$content" >"$path"
+    echo "created"
+    return
+  fi
+  local existing
+  existing=$(<"$path")
+  if [[ "$existing" == "$content" ]]; then
+    echo "skipped"
+    return
+  fi
+  printf '%s' "$content" >"$path"
+  echo "updated"
+}
 
-if ! [ -f "$template" ]; then
-  cat <<EOF >"$template"
+render_unit() {
+  local exec_start="$1"
+  printf '%s' "\
 [Unit]
 Description=AI Evoker Within %i Project
 CollectMode=inactive-or-failed
@@ -59,14 +77,41 @@ Type=exec
 Slice=background.slice
 SendSIGHUP=yes
 WorkingDirectory=%h/%i
-ExecStart=$evoke_script
-EOF
-  systemctl --user daemon-reload
+ExecStart=$exec_start
+"
+}
+
+render_worktree_dropin() {
+  local workdir="$1"
+  printf '%s' "\
+[Service]
+WorkingDirectory=$workdir
+"
+}
+
+render_exec_dropin() {
+  local exec_start="$1"
+  printf '%s' "\
+[Service]
+ExecStart=
+ExecStart=$exec_start
+"
+}
+
+# --- Ensure template unit exists and is up to date ---
+
+user_conf_dir=${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user
+template="$user_conf_dir/evoke@.service"
+
+needs_reload=false
+
+result=$(write_if_changed "$template" "$(render_unit "$evoke_script")")
+if [[ "$result" != "skipped" ]]; then
+  needs_reload=true
 fi
 
 # --- Apply per-repo drop-in overrides if needed ---
 
-needs_reload=false
 dropins="$user_conf_dir/${UNIT_NAME}.service.d"
 
 unit_prop() {
@@ -79,12 +124,11 @@ unit_prop() {
 #   instance name encoding.
 unit_workdir=$(unit_prop WorkingDirectory)
 if [[ "$unit_workdir" != "$REPO_DIR" ]]; then
-  [ -d "$dropins" ] || mkdir -p "$dropins"
-  cat <<EOF >"$dropins/worktree.conf"
-[Service]
-WorkingDirectory=$REPO_DIR
-EOF
-  needs_reload=true
+  [[ -d "$dropins" ]] || mkdir -p "$dropins"
+  result=$(write_if_changed "$dropins/worktree.conf" "$(render_worktree_dropin "$REPO_DIR")")
+  if [[ "$result" != "skipped" ]]; then
+    needs_reload=true
+  fi
 fi
 
 # ExecStart:
@@ -93,13 +137,11 @@ fi
 unit_exec=$(unit_prop ExecStart | grep -o 'path=[^ ]*')
 unit_exec=${unit_exec#path=}
 if [[ "$unit_exec" != "$evoke_script" ]]; then
-  [ -d "$dropins" ] || mkdir -p "$dropins"
-  cat <<EOF >"$dropins/repo_script.conf"
-[Service]
-ExecStart=
-ExecStart=$evoke_script
-EOF
-  needs_reload=true
+  [[ -d "$dropins" ]] || mkdir -p "$dropins"
+  result=$(write_if_changed "$dropins/repo_script.conf" "$(render_exec_dropin "$evoke_script")")
+  if [[ "$result" != "skipped" ]]; then
+    needs_reload=true
+  fi
 fi
 
 if [[ $needs_reload == true ]]; then
@@ -108,18 +150,18 @@ if [[ $needs_reload == true ]]; then
   # Verify overrides took effect
 
   unit_workdir=$(unit_prop WorkingDirectory)
-  [[ "$unit_workdir" == "$REPO_DIR" ]] \
-    || die "Failed to set $UNIT_NAME WorkingDirectory to $REPO_DIR"
+  [[ "$unit_workdir" == "$REPO_DIR" ]] ||
+    die "Failed to set $UNIT_NAME WorkingDirectory to $REPO_DIR"
 
   unit_exec=$(unit_prop ExecStart | grep -o 'path=[^ ]*')
   unit_exec=${unit_exec#path=}
-  [[ "$unit_exec" == "$evoke_script" ]] \
-    || die "Failed to set $UNIT_NAME ExecStart to $evoke_script"
+  [[ "$unit_exec" == "$evoke_script" ]] ||
+    die "Failed to set $UNIT_NAME ExecStart to $evoke_script"
 fi
 
 # --- Start now or later ---
 
-if [ -n "$AFTER" ]; then
+if [[ -n "$AFTER" ]]; then
   if ! systemd-run --user --on-active="$AFTER" --unit="$UNIT_NAME" --collect --no-block; then
     # XXX
     did=false
@@ -130,9 +172,9 @@ if [ -n "$AFTER" ]; then
       systemctl --user list-timers
       die "FAILED to arm run timer"
     elif $did; then
-      notify 'warn' "Had to stop sticky transient timer"
+      notify 'error' "Had to stop sticky transient timer"
     else
-      notify 'warn' "Unable to stop sticky transient timer"
+      notify 'error' "Unable to stop sticky transient timer"
     fi
   fi
 else
