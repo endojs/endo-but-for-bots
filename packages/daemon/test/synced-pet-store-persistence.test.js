@@ -209,10 +209,7 @@ test('deleteStaleTemporaries removes pre-existing .tmp.* file', async t => {
 
     await persistence.deleteStaleTemporaries();
 
-    t.false(
-      fs.existsSync(stalePath),
-      'stale temporary should be removed',
-    );
+    t.false(fs.existsSync(stalePath), 'stale temporary should be removed');
     // The committed entry must be untouched.
     const state = await persistence.readState();
     t.is(state.size, 1);

@@ -72,12 +72,7 @@ const computeStoreRoot = (filePowers, statePath, formulaNumber) => {
   }
   const prefix = formulaNumber.slice(0, 2);
   const suffix = formulaNumber.slice(2);
-  return filePowers.joinPath(
-    statePath,
-    SYNCED_PET_STORE_DIR,
-    prefix,
-    suffix,
-  );
+  return filePowers.joinPath(statePath, SYNCED_PET_STORE_DIR, prefix, suffix);
 };
 
 /**
@@ -118,10 +113,7 @@ export const atomicWriteJSON = async (
     `${TEMPORARY_PREFIX}${suffix}`,
   );
   const finalPath = filePowers.joinPath(targetDir, fileName);
-  await filePowers.writeFileText(
-    temporaryPath,
-    `${JSON.stringify(value)}\n`,
-  );
+  await filePowers.writeFileText(temporaryPath, `${JSON.stringify(value)}\n`);
   await filePowers.renamePath(temporaryPath, finalPath);
 };
 harden(atomicWriteJSON);
@@ -138,7 +130,9 @@ harden(atomicWriteJSON);
  */
 const assertSyncedEntry = (parsed, sourceLabel) => {
   if (parsed === null || typeof parsed !== 'object') {
-    throw makeError(X`Invalid synced entry at ${q(sourceLabel)}: not an object`);
+    throw makeError(
+      X`Invalid synced entry at ${q(sourceLabel)}: not an object`,
+    );
   }
   const obj = /** @type {Record<string, unknown>} */ (parsed);
   const { locator, timestamp, writer } = obj;
@@ -157,9 +151,7 @@ const assertSyncedEntry = (parsed, sourceLabel) => {
       X`Invalid synced entry at ${q(sourceLabel)}: writer must be non-empty string`,
     );
   }
-  return /** @type {SyncedEntry} */ (
-    harden({ locator, timestamp, writer })
-  );
+  return /** @type {SyncedEntry} */ (harden({ locator, timestamp, writer }));
 };
 
 /**
@@ -339,13 +331,7 @@ export const makeSyncedPetStorePersistence = (
   const writeEntry = async (petName, entry) => {
     await ensureDirectories();
     const fileName = `${petName}${ENTRY_SUFFIX}`;
-    await atomicWriteJSON(
-      filePowers,
-      randomHex,
-      namesDir,
-      fileName,
-      entry,
-    );
+    await atomicWriteJSON(filePowers, randomHex, namesDir, fileName, entry);
   };
 
   /**
@@ -357,10 +343,7 @@ export const makeSyncedPetStorePersistence = (
    * @param {PetName} petName
    */
   const deleteEntry = async petName => {
-    const filePath = filePowers.joinPath(
-      namesDir,
-      `${petName}${ENTRY_SUFFIX}`,
-    );
+    const filePath = filePowers.joinPath(namesDir, `${petName}${ENTRY_SUFFIX}`);
     await filePowers.removePath(filePath);
   };
 
