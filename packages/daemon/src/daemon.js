@@ -2588,6 +2588,18 @@ const makeDaemonCore = async (
         hostHandleId,
         /** @type {import('./types.js').PetName} */ (guestName),
       ),
+    // TODO(designs/daemon-cross-peer-gc.md): wire the synced-pet-store
+    // formula maker once the CRDT primitives in
+    // `synced-pet-store-crdt.js` and the persistence skeleton in
+    // `synced-pet-store-persistence.js` are composed with a sync
+    // protocol over CapTP.  Phase 1 only adds the type and primitives;
+    // the maker is stubbed so the discriminated union remains
+    // exhaustive.
+    'synced-pet-store': () => {
+      throw new Error(
+        'synced-pet-store formula maker not implemented (see designs/daemon-cross-peer-gc.md)',
+      );
+    },
     timer: async ({ intervalMs, label: timerLabel }, context) => {
       const interval = Number(intervalMs) || 60000;
       let tickCount = 0;

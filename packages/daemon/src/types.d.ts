@@ -390,6 +390,83 @@ export type TimerFormula = {
   label: string;
 };
 
+/**
+ * The role of a `synced-pet-store` replica in an entangled pair.
+ *
+ * - `grantor`: the host who introduces capabilities into the shared
+ *   namespace.  May write new names, delete (revoke) any name, and rename.
+ * - `grantee`: the guest who receives capabilities.  May only delete
+ *   (disclaim) names.  Cannot introduce new names.
+ *
+ * See `designs/daemon-cross-peer-gc.md` § "Roles and Write Permissions".
+ */
+export type SyncedPetStoreRole = 'grantor' | 'grantee';
+
+/**
+ * One entry in a synchronized pet store CRDT.
+ *
+ * The synced pet store is a map from pet name to `SyncedEntry`, where each
+ * entry is either a live binding (`locator` is a string) or a tombstone
+ * (`locator` is `null`).  Each entry carries a Lamport timestamp and the
+ * node number of the writer for conflict resolution under concurrent
+ * writes.
+ *
+ * See `designs/daemon-cross-peer-gc.md` § "CRDT Data Model".
+ */
+export type SyncedEntry = {
+  /** The formula locator string, or `null` if deleted/revoked. */
+  locator: string | null;
+  /** Lamport timestamp; incremented on every local write. */
+  timestamp: number;
+  /** Node number of the peer that wrote this entry. */
+  writer: NodeNumber;
+};
+
+/**
+ * The in-memory state of a synced pet store replica: a map from pet name
+ * to a `SyncedEntry`.  Tombstones are retained until the sync watermark
+ * proves the remote peer has observed them; see § "Tombstone Garbage
+ * Collection" in the design.
+ */
+export type SyncedPetStoreState = Map<PetName, SyncedEntry>;
+
+/**
+ * Persistent metadata for a synced pet store replica: the local Lamport
+ * clock and the highest local clock value the remote peer has
+ * acknowledged.  Stored in `clock.json` alongside the entries directory.
+ *
+ * See `designs/daemon-cross-peer-gc.md` § "Stable Sync Watermark".
+ */
+export type SyncedPetStoreMetadata = {
+  /** This replica's Lamport clock (monotonically increasing). */
+  localClock: number;
+  /** The highest `localClock` value the remote peer has acknowledged. */
+  remoteAckedClock: number;
+};
+
+/**
+ * A `synced-pet-store` is one half of an entangled pair of pet stores
+ * shared between two peers via a CRDT.  Each peer holds a local replica
+ * that synchronizes when a CapTP session is active and may diverge while
+ * disconnected.
+ *
+ * See `designs/daemon-cross-peer-gc.md` § "Formula Type".
+ */
+export type SyncedPetStoreFormula = {
+  type: 'synced-pet-store';
+  /** Local peer formula ID identifying the peer this store is shared with. */
+  peer: FormulaIdentifier;
+  /** Whether this replica is the grantor or grantee in the relationship. */
+  role: SyncedPetStoreRole;
+  /** Formula number of the paired store on the remote peer. */
+  remoteStoreNumber: FormulaNumber;
+  /**
+   * Local pet-store formula identifier providing the underlying durable
+   * storage for this replica.
+   */
+  store: FormulaIdentifier;
+};
+
 export type Formula =
   | ChannelFormula
   | EndoFormula
@@ -419,6 +496,7 @@ export type Formula =
   | DirectoryFormula
   | PeerFormula
   | InvitationFormula
+  | SyncedPetStoreFormula
   | TimerFormula;
 
 export type Builtins = {
