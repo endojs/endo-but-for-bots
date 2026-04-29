@@ -25,10 +25,7 @@
   "main": "./index.js",
   "module": "./index.js",
   "exports": {
-    ".": {
-      "node": "./index-node.js",
-      "default": "./index.js"
-    },
+    ".": "./index.js",
     "./package.json": "./package.json"
   },
   "scripts": {

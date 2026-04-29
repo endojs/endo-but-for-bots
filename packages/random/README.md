@@ -44,23 +44,6 @@ The seed must be a 32-byte `Uint8Array`.  The factory throws
 `TypeError` for any other shape.  All returned objects pass through
 `harden` from `@endo/harden`.
 
-## Node fast path
-
-The package ships two implementations:
-
-- A portable pure-JavaScript ChaCha20 (default export, used in
-  browsers, XS, and SES vats).
-- A `node:crypto`-backed implementation that uses
-  `crypto.createCipheriv('chacha20', key, iv)` to produce keystream
-  blocks.
-
-The `"node"` export condition in `package.json` selects the Node
-implementation automatically, so `import { makeRandom } from
-'@endo/random'` Just Works on Node and falls back to the pure-JS path
-elsewhere.  The two implementations are bit-identical: for any seed,
-they return the same bytes from `bytes()`, the same floats from
-`random()`, and the same integers from `int()`.
-
 ## Determinism
 
 - `random()` reads 8 keystream bytes, masks the top 11 bits, and
@@ -71,7 +54,7 @@ they return the same bytes from `bytes()`, the same floats from
 
 ## Counter limit
 
-The PRNG follows the OpenSSL / Node-crypto convention of a 32-bit
-ChaCha20 block counter.  After `2 ** 32` blocks (256 GiB of
-keystream) the counter would wrap; the factory throws `RangeError`
-instead.  In practice no test suite consumes anywhere close to this.
+The PRNG uses a 32-bit ChaCha20 block counter (the OpenSSL
+convention).  After `2 ** 32` blocks (256 GiB of keystream) the
+counter would wrap; the factory throws `RangeError` instead.  In
+practice no test suite consumes anywhere close to this.

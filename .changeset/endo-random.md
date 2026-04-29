@@ -14,11 +14,11 @@ shape:
 - `prng.bytes(n)` — fresh `Uint8Array` of `n` random bytes
 - `prng.fillBytes(buf, start?, end?)` — fill an existing `Uint8Array`
 
-The package ships two implementations selected via export conditions:
-a pure-JavaScript ChaCha20 for browsers / XS / SES vats, and a
-`node:crypto`-backed implementation that uses
-`createCipheriv('chacha20', key, iv)` for the Node fast path.  The
-two implementations are bit-identical for the same seed.
+The implementation is pure JavaScript so the same code runs in
+browsers, XS, SES vats, and Node.  At ChaCha20's 64-byte block
+granularity the JS↔native FFI cost of `node:crypto` actually exceeds
+the inlined keystream loop, so a Node-specific fast path was
+considered and dropped.
 
 ChaCha20 here is **not** a guarantee of fitness for cryptographic
 key derivation; it is used as a deterministic, high-quality

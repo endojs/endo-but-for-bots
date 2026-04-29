@@ -1,7 +1,7 @@
 /* eslint-disable no-bitwise, @endo/restrict-comparison-operands */
 /* global globalThis */
 
-// Benchmark: comparison of three seedable PRNGs across three workloads:
+// Benchmark: comparison of two seedable PRNGs across three workloads:
 //
 //   1. Pulling 1 MiB of random bytes (`bytes(1024 * 1024)`).
 //   2. 1 000 000 `random()` calls.
@@ -13,12 +13,12 @@
 //      PRNG as `packages/ocapn/test/_xorshift.js` and `packages/hex/`
 //      benches.  `bytes(n)` is synthesized as `Math.floor(random()
 //      * 256)` per byte.
-//   B. `@endo/random` pure-JS — imported directly from
-//      `../src/random-pure.js` so we measure the in-tree ChaCha20
-//      keystream generator regardless of which export condition the
-//      consumer's resolver picks.
-//   C. `@endo/random` Node-crypto — imported from
-//      `../src/random-node.js`, using `crypto.createCipheriv`.
+//   B. `@endo/random` — pure-JavaScript ChaCha20 keystream.
+//
+// A `node:crypto`-backed third implementation was prototyped but
+// dropped: at ChaCha20's 64-byte block size the per-call JS↔native
+// FFI cost of `cipher.update()` exceeds the inlined pure-JS quarter
+// rounds, so the Node path is slower, not faster.
 //
 // Run from `packages/random/`:
 //   node test/random.bench.js
@@ -27,8 +27,7 @@
 // ses-ava test runner ignores it, matching the convention in
 // `packages/hex/`.
 
-import { makeRandom as makeRandomPure } from '../src/random-pure.js';
-import { makeRandom as makeRandomNode } from '../src/random-node.js';
+import { makeRandom } from '../index.js';
 import { XorShift } from './_xorshift.js';
 
 // Engine-portable nanosecond timer.
@@ -108,16 +107,9 @@ const runBench = () => {
     );
   }
   {
-    const r = makeRandomPure(Uint8Array.from(seedBytes));
+    const r = makeRandom(Uint8Array.from(seedBytes));
     printRow(
-      time('@endo/random pure-JS', ITERS_BYTES, () => r.bytes(N)),
-      `${((ITERS_BYTES * N) / 1024 / 1024).toFixed(0)} MiB total`,
-    );
-  }
-  {
-    const r = makeRandomNode(Uint8Array.from(seedBytes));
-    printRow(
-      time('@endo/random Node-crypto', ITERS_BYTES, () => r.bytes(N)),
+      time('@endo/random', ITERS_BYTES, () => r.bytes(N)),
       `${((ITERS_BYTES * N) / 1024 / 1024).toFixed(0)} MiB total`,
     );
   }
@@ -135,17 +127,9 @@ const runBench = () => {
     );
   }
   {
-    const r = makeRandomPure(Uint8Array.from(seedBytes));
+    const r = makeRandom(Uint8Array.from(seedBytes));
     printRow(
-      time('@endo/random pure-JS', 1, () => {
-        for (let i = 0; i < ITERS_RANDOM; i += 1) r.random();
-      }),
-    );
-  }
-  {
-    const r = makeRandomNode(Uint8Array.from(seedBytes));
-    printRow(
-      time('@endo/random Node-crypto', 1, () => {
+      time('@endo/random', 1, () => {
         for (let i = 0; i < ITERS_RANDOM; i += 1) r.random();
       }),
     );
@@ -164,17 +148,9 @@ const runBench = () => {
     );
   }
   {
-    const r = makeRandomPure(Uint8Array.from(seedBytes));
+    const r = makeRandom(Uint8Array.from(seedBytes));
     printRow(
-      time('@endo/random pure-JS', 1, () => {
-        for (let i = 0; i < ITERS_INT; i += 1) r.int(0, 99);
-      }),
-    );
-  }
-  {
-    const r = makeRandomNode(Uint8Array.from(seedBytes));
-    printRow(
-      time('@endo/random Node-crypto', 1, () => {
+      time('@endo/random', 1, () => {
         for (let i = 0; i < ITERS_INT; i += 1) r.int(0, 99);
       }),
     );
