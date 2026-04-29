@@ -64,6 +64,19 @@ const SeccompPolicyShape = M.or(
 );
 harden(SeccompPolicyShape);
 
+const ResourceLimitsShape = M.splitRecord(
+  {},
+  {
+    as: M.number(),
+    cpu: M.number(),
+    nproc: M.number(),
+    nofile: M.number(),
+    fsize: M.number(),
+    core: M.number(),
+  },
+);
+harden(ResourceLimitsShape);
+
 const SandboxMakeOptsShape = M.splitRecord(
   {
     rootfs: RootfsSpecShape,
@@ -75,6 +88,7 @@ const SandboxMakeOptsShape = M.splitRecord(
     seccomp: SeccompPolicyShape,
     env: EnvShape,
     cwd: M.string(),
+    limits: ResourceLimitsShape,
   },
 );
 harden(SandboxMakeOptsShape);
@@ -91,6 +105,21 @@ const SpawnOptsShape = M.splitRecord(
 );
 harden(SpawnOptsShape);
 
+const BackendProbeDetailsShape = M.splitRecord(
+  {},
+  {
+    landlock: M.splitRecord(
+      { available: M.boolean() },
+      { reason: M.string() },
+    ),
+    cgroup2: M.splitRecord(
+      { available: M.boolean(), controllers: M.arrayOf(M.string()) },
+      { reason: M.string() },
+    ),
+  },
+);
+harden(BackendProbeDetailsShape);
+
 const BackendProbeShape = M.splitRecord(
   {
     name: BackendNameShape,
@@ -99,6 +128,7 @@ const BackendProbeShape = M.splitRecord(
   {
     reason: M.string(),
     version: M.string(),
+    details: BackendProbeDetailsShape,
   },
 );
 harden(BackendProbeShape);
@@ -175,6 +205,7 @@ harden(MountHandleInterface);
 
 export {
   BackendNameShape,
+  BackendProbeDetailsShape,
   BackendProbeShape,
   BackendSelectorShape,
   EnvShape,
@@ -182,6 +213,7 @@ export {
   MountModeShape,
   MountSpecShape,
   NetworkProfileShape,
+  ResourceLimitsShape,
   RootfsSpecShape,
   SandboxMakeOptsShape,
   SeccompPolicyShape,

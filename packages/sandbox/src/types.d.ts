@@ -49,6 +49,25 @@ export type BackendName = 'bwrap' | 'podman' | 'lima' | 'containerization' | 'ws
 export type BackendSelector = 'auto' | BackendName;
 
 /**
+ * Optional kernel-feature detail attached to a backend probe.  Phase
+ * 1.5 surfaces Landlock and cgroup v2 status so callers can reason
+ * about which hardening layers are actually in effect.
+ */
+export type BackendProbeDetails = {
+  /** Landlock LSM availability (kernel ≥ 5.13). */
+  landlock?: {
+    available: boolean;
+    reason?: string;
+  };
+  /** cgroup v2 availability + delegated controllers. */
+  cgroup2?: {
+    available: boolean;
+    controllers: string[];
+    reason?: string;
+  };
+};
+
+/**
  * Result of probing a backend driver for availability. Probing is
  * best-effort and fast (binary present? `--version` works? kernel
  * feature reachable?).
@@ -62,6 +81,8 @@ export type BackendProbe = {
   reason?: string;
   /** Optional version string reported by the backend's CLI. */
   version?: string;
+  /** Optional kernel-feature detail, populated by Phase 1.5+ drivers. */
+  details?: BackendProbeDetails;
 };
 
 // ---------------------------------------------------------------------------
@@ -137,6 +158,31 @@ export type SandboxMakeOpts = {
   seccomp?: SeccompPolicy;
   env?: Record<string, string>;
   cwd?: string;
+  /**
+   * Resource caps applied via `prlimit` (Phase 1.5+).  Unset values
+   * fall back to the driver-default table; see
+   * `src/limits.js#DEFAULT_LIMITS`.
+   */
+  limits?: ResourceLimits;
+};
+
+/**
+ * Resource caps applied to the slice's first process (and inherited
+ * by every descendant).  Each key matches a `prlimit` long flag.
+ */
+export type ResourceLimits = {
+  /** RLIMIT_AS — virtual memory bytes. */
+  as?: number;
+  /** RLIMIT_CPU — wallclock seconds. */
+  cpu?: number;
+  /** RLIMIT_NPROC — max processes per uid. */
+  nproc?: number;
+  /** RLIMIT_NOFILE — open file descriptors. */
+  nofile?: number;
+  /** RLIMIT_FSIZE — bytes any single file the slice writes can grow to. */
+  fsize?: number;
+  /** RLIMIT_CORE — core dump size cap (defaults to 0). */
+  core?: number;
 };
 
 /**
@@ -170,6 +216,11 @@ export type SliceSpec = {
   env: Record<string, string>;
   /** Initial cwd inside the slice. */
   cwd?: string;
+  /**
+   * Resolved resource caps (defaults merged in by the factory).
+   * Drivers translate this into `prlimit` argv before bwrap exec.
+   */
+  limits?: ResourceLimits;
 };
 
 // ---------------------------------------------------------------------------
