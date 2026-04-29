@@ -11,6 +11,73 @@
  */
 
 /**
+ * Recursively collect the names introduced by a destructuring or identifier
+ * binding pattern.
+ *
+ * Handles all binding pattern shapes that may appear on the left-hand side of
+ * an `export const … = …` declaration:
+ *
+ * - `Identifier` — `export const a = …`
+ * - `ObjectPattern` properties — `export const { a } = …` and
+ *   `export const { propName: aliasName } = …`. We recurse into `prop.value`
+ *   (the binding target) rather than `prop.key` (the source property name);
+ *   in shorthand they are the same node, but with an alias they differ.
+ * - `ObjectPattern` rest — `export const { …rest } = …`
+ * - `ArrayPattern` elements — `export const [ a, b ] = …`. Skips null elements
+ *   that represent sparse holes (`[ , a ]`).
+ * - `AssignmentPattern` — defaults like `export const [ a = 1 ] = …` or
+ *   `export const { a: b = 1 } = …`. The bound name lives in `node.left`.
+ * - `RestElement` — `export const [ a, …rest ] = …` and object rest above.
+ * @param {ESTree.Pattern | null} pattern
+ * @param {string[]} names
+ * @returns {void}
+ */
+const pushDeclaredNames = (pattern, names) => {
+  if (pattern === null) {
+    // Sparse array hole, e.g., `const [ , a ] = …`.
+    return;
+  }
+  switch (pattern.type) {
+    case 'Identifier': {
+      names.push(pattern.name);
+      break;
+    }
+    case 'ObjectPattern': {
+      for (const prop of pattern.properties) {
+        if (prop.type === 'RestElement') {
+          pushDeclaredNames(prop.argument, names);
+        } else {
+          // For `{ propName: aliasName }`, prop.value is the binding target
+          // (`aliasName`); for shorthand `{ name }`, prop.value === prop.key.
+          pushDeclaredNames(/** @type {ESTree.Pattern} */ (prop.value), names);
+        }
+      }
+      break;
+    }
+    case 'ArrayPattern': {
+      for (const element of pattern.elements) {
+        pushDeclaredNames(element, names);
+      }
+      break;
+    }
+    case 'AssignmentPattern': {
+      // The default value lives in `node.right`; the binding is in `node.left`.
+      pushDeclaredNames(pattern.left, names);
+      break;
+    }
+    case 'RestElement': {
+      pushDeclaredNames(pattern.argument, names);
+      break;
+    }
+    default: {
+      // Unknown pattern shape; nothing to declare. This branch keeps the
+      // helper resilient to future ECMAScript binding patterns.
+      break;
+    }
+  }
+};
+
+/**
  * ESLint rule module for ensuring each named export is followed by a call to `harden` function.
  * @type {Rule.RuleModule}
  */
@@ -47,17 +114,9 @@ module.exports = {
           /** @type {string[]} */
           const exportNames = [];
           if (exportNode.declaration) {
-            // @ts-expect-error xxx typedef
-            if (exportNode.declaration.declarations) {
-              // @ts-expect-error xxx typedef
+            if (exportNode.declaration.type === 'VariableDeclaration') {
               for (const declaration of exportNode.declaration.declarations) {
-                if (declaration.id.type === 'ObjectPattern') {
-                  for (const prop of declaration.id.properties) {
-                    exportNames.push(prop.key.name);
-                  }
-                } else {
-                  exportNames.push(declaration.id.name);
-                }
+                pushDeclaredNames(declaration.id, exportNames);
               }
             } else if (exportNode.declaration.type === 'FunctionDeclaration') {
               context.report({
@@ -68,7 +127,9 @@ module.exports = {
             }
           } else if (exportNode.specifiers) {
             for (const spec of exportNode.specifiers) {
-              exportNames.push(spec.exported.name);
+              exportNames.push(
+                /** @type {ESTree.Identifier} */ (spec.exported).name,
+              );
             }
           }
 

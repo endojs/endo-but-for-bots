@@ -30,6 +30,79 @@ harden(getEnvironmentOptionsList);
 harden(environmentOptionsListHas);
         `,
   },
+  // Aliased destructuring: { propName: exportName } binds exportName.
+  {
+    code: `
+export const { propName: exportName } = obj;
+harden(exportName);
+        `,
+  },
+  // Object rest binding.
+  {
+    code: `
+export const { name, ...rest } = obj;
+harden(name);
+harden(rest);
+        `,
+  },
+  // Nested object destructuring.
+  {
+    code: `
+export const { name, parent: { subName } } = obj;
+harden(name);
+harden(subName);
+        `,
+  },
+  // Array destructuring.
+  {
+    code: `
+export const [ first, second ] = array;
+harden(first);
+harden(second);
+        `,
+  },
+  // Array rest binding.
+  {
+    code: `
+export const [ head, ...tail ] = array;
+harden(head);
+harden(tail);
+        `,
+  },
+  // Sparse array hole; the hole introduces no binding.
+  {
+    code: `
+export const [ , second ] = array;
+harden(second);
+        `,
+  },
+  // Default-value assignment patterns in array and object destructuring.
+  {
+    code: `
+export const [ first = 1 ] = array;
+harden(first);
+        `,
+  },
+  {
+    code: `
+export const { name = 'default' } = obj;
+harden(name);
+        `,
+  },
+  {
+    code: `
+export const { propName: aliasName = 1 } = obj;
+harden(aliasName);
+        `,
+  },
+  // Deeply nested destructuring with array, object, alias and default.
+  {
+    code: `
+export const [ { propName: aliasName = 1 }, [ inner ] ] = data;
+harden(aliasName);
+harden(inner);
+        `,
+  },
 ];
 
 const invalid = [
@@ -180,10 +253,174 @@ harden(getEnvironmentOptionsList);
 harden(environmentOptionsListHas);
     `,
   },
+  // Aliased destructuring: only the alias is the binding name; the rule
+  // must not chase the source property name.
+  {
+    code: `
+export const { propName: exportName } = obj;
+    `,
+    errors: [
+      {
+        message:
+          "Named export 'exportName' should be followed by a call to 'harden'.",
+      },
+    ],
+    output: `
+export const { propName: exportName } = obj;
+harden(exportName);
+    `,
+  },
+  // Object rest.
+  {
+    code: `
+export const { name, ...rest } = obj;
+    `,
+    errors: [
+      {
+        message:
+          "Named exports 'name, rest' should be followed by a call to 'harden'.",
+      },
+    ],
+    output: `
+export const { name, ...rest } = obj;
+harden(name);
+harden(rest);
+    `,
+  },
+  // Nested object pattern.
+  {
+    code: `
+export const { name, parent: { subName } } = obj;
+    `,
+    errors: [
+      {
+        message:
+          "Named exports 'name, subName' should be followed by a call to 'harden'.",
+      },
+    ],
+    output: `
+export const { name, parent: { subName } } = obj;
+harden(name);
+harden(subName);
+    `,
+  },
+  // Array pattern.
+  {
+    code: `
+export const [ first, second ] = array;
+    `,
+    errors: [
+      {
+        message:
+          "Named exports 'first, second' should be followed by a call to 'harden'.",
+      },
+    ],
+    output: `
+export const [ first, second ] = array;
+harden(first);
+harden(second);
+    `,
+  },
+  // Array rest.
+  {
+    code: `
+export const [ head, ...tail ] = array;
+    `,
+    errors: [
+      {
+        message:
+          "Named exports 'head, tail' should be followed by a call to 'harden'.",
+      },
+    ],
+    output: `
+export const [ head, ...tail ] = array;
+harden(head);
+harden(tail);
+    `,
+  },
+  // Sparse array hole introduces no binding for the hole.
+  {
+    code: `
+export const [ , second ] = array;
+    `,
+    errors: [
+      {
+        message:
+          "Named export 'second' should be followed by a call to 'harden'.",
+      },
+    ],
+    output: `
+export const [ , second ] = array;
+harden(second);
+    `,
+  },
+  // Default-value (AssignmentPattern) bindings.
+  {
+    code: `
+export const [ first = 1 ] = array;
+    `,
+    errors: [
+      {
+        message:
+          "Named export 'first' should be followed by a call to 'harden'.",
+      },
+    ],
+    output: `
+export const [ first = 1 ] = array;
+harden(first);
+    `,
+  },
+  {
+    code: `
+export const { name = 'default' } = obj;
+    `,
+    errors: [
+      {
+        message:
+          "Named export 'name' should be followed by a call to 'harden'.",
+      },
+    ],
+    output: `
+export const { name = 'default' } = obj;
+harden(name);
+    `,
+  },
+  {
+    code: `
+export const { propName: aliasName = 1 } = obj;
+    `,
+    errors: [
+      {
+        message:
+          "Named export 'aliasName' should be followed by a call to 'harden'.",
+      },
+    ],
+    output: `
+export const { propName: aliasName = 1 } = obj;
+harden(aliasName);
+    `,
+  },
+  // Deeply nested destructuring combining array, object, alias and default.
+  {
+    code: `
+export const [ { propName: aliasName = 1 }, [ inner ] ] = data;
+    `,
+    errors: [
+      {
+        message:
+          "Named exports 'aliasName, inner' should be followed by a call to 'harden'.",
+      },
+    ],
+    output: `
+export const [ { propName: aliasName = 1 }, [ inner ] ] = data;
+harden(aliasName);
+harden(inner);
+    `,
+  },
 ];
 
 const jsTester = new RuleTester({
-  parserOptions: { ecmaVersion: 2015, sourceType: 'module' },
+  parserOptions: { ecmaVersion: 2018, sourceType: 'module' },
 });
 jsTester.run('harden JS exports', rule, {
   valid: jsValid,
@@ -192,7 +429,7 @@ jsTester.run('harden JS exports', rule, {
 
 const tsTester = new RuleTester({
   parser: require.resolve('@typescript-eslint/parser'),
-  parserOptions: { ecmaVersion: 2015, sourceType: 'module' },
+  parserOptions: { ecmaVersion: 2018, sourceType: 'module' },
 });
 tsTester.run('harden TS exports', rule, {
   valid: [
