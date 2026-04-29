@@ -45,7 +45,6 @@
     "./script-lite.js": "./script-lite.js",
     "./node-powers.js": "./node-powers.js",
     "./node-modules.js": "./node-modules.js",
-    "./sha512-hex.js": "./sha512-hex.js",
     "./package.json": "./package.json"
   },
   "scripts": {

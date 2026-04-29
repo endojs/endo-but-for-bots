@@ -35,6 +35,7 @@
  */
 
 import { createRequire } from 'module';
+import { encodeHex } from '@endo/hex';
 
 /**
  * @type {FileURLToPathFn}
@@ -69,11 +70,6 @@ const fakeIsAbsolute = () => false;
  * @param {UrlInterface} [args.url]
  * @param {CryptoInterface} [args.crypto]
  * @param {PathInterface} [args.path]
- * @param {HashFn} [args.computeSha512] - optional override for the
- *   SHA-512 digest hex formatter.  Provide this (e.g. via
- *   `makeComputeSha512` from `@endo/compartment-mapper/sha512-hex.js`)
- *   to use the shared `@endo/hex` formatter; otherwise falls back to
- *   `Buffer.toString('hex')` when `crypto` is given.
  * @returns {MaybeReadPowers<FileUrlString>}
  */
 const makeReadPowersSloppy = ({
@@ -81,7 +77,6 @@ const makeReadPowersSloppy = ({
   url = undefined,
   crypto = undefined,
   path = undefined,
-  computeSha512 = undefined,
 }) => {
   const fileURLToPath =
     url === undefined ? fakeFileURLToPath : url.fileURLToPath;
@@ -165,15 +160,13 @@ const makeReadPowersSloppy = ({
   };
 
   /** @type {HashFn | undefined} */
-  const computeSha512Power =
-    computeSha512 ||
-    (crypto
-      ? bytes => {
-          const hash = crypto.createHash('sha512');
-          hash.update(bytes);
-          return hash.digest().toString('hex');
-        }
-      : undefined);
+  const computeSha512 = crypto
+    ? bytes => {
+        const hash = crypto.createHash('sha512');
+        hash.update(bytes);
+        return encodeHex(hash.digest());
+      }
+    : undefined;
 
   return {
     read,
@@ -181,7 +174,7 @@ const makeReadPowersSloppy = ({
     fileURLToPath,
     pathToFileURL,
     canonical,
-    computeSha512: computeSha512Power,
+    computeSha512,
     requireResolve,
     isAbsolute,
   };
@@ -195,7 +188,6 @@ const makeReadPowersSloppy = ({
  * @param {UrlInterface} [args.url]
  * @param {CryptoInterface} [args.crypto]
  * @param {PathInterface} [args.path]
- * @param {HashFn} [args.computeSha512] - see {@link makeReadPowers}.
  * @returns {ReadNowPowers<FileUrlString>}
  */
 export const makeReadNowPowers = ({
@@ -203,15 +195,8 @@ export const makeReadNowPowers = ({
   url = undefined,
   crypto = undefined,
   path = undefined,
-  computeSha512 = undefined,
 }) => {
-  const powers = makeReadPowersSloppy({
-    fs,
-    url,
-    crypto,
-    path,
-    computeSha512,
-  });
+  const powers = makeReadPowersSloppy({ fs, url, crypto, path });
   const fileURLToPath = powers.fileURLToPath || fakeFileURLToPath;
   const isAbsolute = powers.isAbsolute || fakeIsAbsolute;
 
