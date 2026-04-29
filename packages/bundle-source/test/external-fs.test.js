@@ -37,7 +37,9 @@ const testFsImportHookEndoZipBase64 = (name, file) => {
 
     const testFile = url.fileURLToPath(new URL(file, import.meta.url));
 
-    // @ts-expect-error BundleOptions needs updating
+    // @ts-expect-error test importHook returns `true` instead of a
+    // VirtualModuleSource; bundleSource never invokes the hook with a
+    // resolvable specifier in this test, so the wrong return type is harmless.
     await bundleSource(testFile, {
       format: 'endoZipBase64',
       importHook: async specifier => {
