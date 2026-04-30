@@ -139,7 +139,9 @@ const adaptDecoder =
 /** @type {typeof jsDecodeBase64 | undefined} */
 const xsDecodeBase64 =
   globalThis.Base64 !== undefined
-    ? adaptDecoder(globalThis.Base64.decode)
+    ? Object.defineProperty(adaptDecoder(globalThis.Base64.decode), 'name', {
+        value: 'xsDecodeBase64',
+      })
     : undefined;
 
 /**
