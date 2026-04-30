@@ -1,0 +1,5 @@
+Document the cacheSourceMaps option in the BundleOptions JSDoc, expose
+importHook on BundleOptions<'endoZipBase64'>, surface commonDependencies,
+and widen the optional powers parameter to accept the SharedPowers shape
+that bundleSource already honors at runtime (pathResolve, userInfo, env,
+platform, computeSha512).
