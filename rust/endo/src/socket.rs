@@ -23,8 +23,13 @@ use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{UnixListener, UnixStream};
 
+use crate::codec;
 use crate::supervisor::Supervisor;
 use crate::types::{Envelope, Handle, Message};
+
+fn slot_machine_mode() -> bool {
+    std::env::var("ENDO_USE_SLOT_MACHINE").as_deref() == Ok("1")
+}
 
 /// Start a Unix socket listener that bridges client connections to
 /// the daemon process identified by `daemon_handle`.
@@ -101,22 +106,47 @@ fn wire_client_tasks(
     let sup_read = Arc::clone(&sup);
 
     // Read task: client → daemon
-    // Reads netstring-framed CapTP messages from the client and
-    // wraps them in deliver envelopes to the daemon.
+    //
+    // CapTP mode: read netstring-framed CapTP messages from the
+    // client and wrap them in `deliver` envelopes to the daemon.
+    //
+    // Slot-machine mode (ENDO_USE_SLOT_MACHINE=1): the netstring
+    // payload is itself a CBOR-encoded envelope.  Decode it and
+    // forward with the inner verb preserved, so slot verbs other
+    // than `deliver` (resolve / drop / abort) reach the daemon.
     tokio::spawn(async move {
+        let slot_mode = slot_machine_mode();
         let mut reader = tokio::io::BufReader::new(read_half);
         loop {
             match read_netstring(&mut reader).await {
                 Ok(Some(data)) => {
-                    sup_read.deliver(Message {
-                        from: conn_handle,
-                        to: daemon_handle,
-                        envelope: Envelope {
+                    let envelope = if slot_mode {
+                        match codec::decode_envelope(&data) {
+                            Ok(e) => Envelope {
+                                handle: conn_handle,
+                                verb: e.verb,
+                                payload: e.payload,
+                                nonce: e.nonce,
+                            },
+                            Err(err) => {
+                                eprintln!(
+                                    "endor: client {conn_handle} envelope decode error: {err}"
+                                );
+                                continue;
+                            }
+                        }
+                    } else {
+                        Envelope {
                             handle: conn_handle,
                             verb: "deliver".to_string(),
                             payload: data,
                             nonce: 0,
-                        },
+                        }
+                    };
+                    sup_read.deliver(Message {
+                        from: conn_handle,
+                        to: daemon_handle,
+                        envelope,
                         response_tx: None,
                     });
                 }
@@ -157,26 +187,38 @@ fn wire_client_tasks(
     });
 
     // Write task: daemon → client
-    // Receives deliver envelopes from the daemon and writes
-    // netstring-framed CapTP messages to the client.
+    //
+    // CapTP mode: only `deliver` envelopes are forwarded; the
+    // netstring frame contains the raw CapTP payload bytes.
+    //
+    // Slot-machine mode: every slot verb (deliver / resolve /
+    // drop / abort) is forwarded as a re-encoded CBOR envelope
+    // wrapped in a netstring frame.  The client's makeNetstringSlots
+    // decodes the inner envelope and routes by verb.
     tokio::spawn(async move {
+        let slot_mode = slot_machine_mode();
+        let write_one = async |writer: &mut tokio::net::unix::OwnedWriteHalf, msg: Message| -> io::Result<()> {
+            if slot_mode {
+                let bytes = codec::encode_envelope(&msg.envelope);
+                write_netstring(writer, &bytes).await
+            } else if msg.envelope.verb == "deliver" {
+                write_netstring(writer, &msg.envelope.payload).await
+            } else {
+                Ok(())
+            }
+        };
         let mut writer = write_half;
         loop {
             match inbox.recv().await {
                 Some(msg) => {
-                    if msg.envelope.verb == "deliver" {
-                        if let Err(e) = write_netstring(&mut writer, &msg.envelope.payload).await {
+                    if let Err(e) = write_one(&mut writer, msg).await {
+                        eprintln!("endor: client {conn_handle} write error: {e}");
+                        return;
+                    }
+                    for msg in inbox.drain() {
+                        if let Err(e) = write_one(&mut writer, msg).await {
                             eprintln!("endor: client {conn_handle} write error: {e}");
                             return;
-                        }
-                    }
-                    // Drain any queued messages.
-                    for msg in inbox.drain() {
-                        if msg.envelope.verb == "deliver" {
-                            if let Err(e) = write_netstring(&mut writer, &msg.envelope.payload).await {
-                                eprintln!("endor: client {conn_handle} write error: {e}");
-                                return;
-                            }
                         }
                     }
                 }

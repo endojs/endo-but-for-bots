@@ -4,9 +4,10 @@
 import harden from '@endo/harden';
 import { makeError, X } from '@endo/errors';
 import { HandledPromise } from '@endo/eventual-send';
+import { Remotable } from '@endo/pass-style';
 import { makePromiseKit } from '@endo/promise-kit';
 
-import { descriptorKey } from './descriptor.js';
+import { Kind, descriptorKey } from './descriptor.js';
 import {
   VERB_DELIVER,
   VERB_RESOLVE,
@@ -258,10 +259,57 @@ export const makeSlotClient = ({
         return deliver(p, '__get__', [prop]);
       },
     };
-    // Executor is a no-op; the presence is settled only via inbound
-    // resolve envelopes, if ever.  A presence representing a live
-    // remote object never settles.
-    const presence = new HandledPromise(() => {}, harden(handler));
+    // Use the executor's third argument, `resolveWithPresence`, to
+    // mint a plain-object *presence* with `handler` attached.  This
+    // is the same path CapTP and Agoric's swingset use to expose
+    // remote objects: the presence is `passStyleOf === 'remotable'`
+    // (so it survives `@endo/marshal`'s remotable-slot decode in
+    // smallcaps), and `E(presence).method(...)` routes through
+    // `handler.applyMethod` because the eventual-send registry
+    // maps the presence to its handler.
+    // Branch on the slot's kind:
+    //   - Object: build a *remotable presence* so the value is
+    //     `passStyleOf === 'remotable'` (survives `@endo/marshal`'s
+    //     remotable-slot decode in smallcaps bodies) AND has its
+    //     handler registered with eventual-send so `E(p).method(…)`
+    //     routes through `handler.applyMethod` and ships a slot-
+    //     machine deliver.  `resolveWithPresence` with a Remotable-
+    //     tagged proxy target is the recipe.
+    //   - Promise: build a plain *HandledPromise* (no proxy) so the
+    //     value is `passStyleOf === 'promise'` for marshal's
+    //     promise-slot decode (e.g. the `$cancelled` argument that
+    //     daemon→worker `evaluate` carries).  E() routing also
+    //     works on a HandledPromise via its pendingHandler.
+    let presence;
+    if (desc.kind === Kind.Promise) {
+      presence = new HandledPromise(() => {}, harden(handler));
+    } else {
+      const remotableTarget = Remotable(
+        `Alleged: SlotPresence@${desc.position}`,
+      );
+      new HandledPromise((_resolve, _reject, resolveWithPresence) => {
+        presence = resolveWithPresence(harden(handler), {
+          proxy: {
+            target: remotableTarget,
+            handler: {
+              // Forward property access through the underlying target
+              // so pass-style invariants (frozen, PASS_STYLE marker,
+              // the auto-installed `__getMethodNames__`) are
+              // preserved.  Property access via `E(p).prop` does NOT
+              // come through here — `E` consults `presenceToHandler`.
+              get: (t, prop, recv) => Reflect.get(t, prop, recv),
+              getPrototypeOf: t => Reflect.getPrototypeOf(t),
+              getOwnPropertyDescriptor: (t, prop) =>
+                Reflect.getOwnPropertyDescriptor(t, prop),
+              ownKeys: t => Reflect.ownKeys(t),
+              has: (t, prop) => Reflect.has(t, prop),
+              isExtensible: t => Reflect.isExtensible(t),
+              preventExtensions: t => Reflect.preventExtensions(t),
+            },
+          },
+        });
+      });
+    }
     const registered = clist.importRemote(desc, () => presence);
     if (finalizer && registered === presence) {
       // Only register newly-created presences — if the c-list

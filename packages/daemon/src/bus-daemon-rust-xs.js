@@ -44,7 +44,7 @@ import { makeCapTP } from '@endo/captp';
 import { E } from '@endo/far';
 import { makePromiseKit } from '@endo/promise-kit';
 import { mapWriter, mapReader, makePipe } from '@endo/stream';
-import { makeMessageSlots, isSlotVerb } from '@endo/slots';
+import { makeMessageSlots, isSlotVerb, flipEnvelopePayload } from '@endo/slots';
 
 import { makeDaemon } from './daemon.js';
 import { makeDaemonicPersistencePowers } from './daemon-persistence-powers.js';
@@ -383,6 +383,15 @@ const workerExitResolvers = new Map();
 // Client CapTP sessions (connections bridged by supervisor).
 /** @type {Map<number, { dispatch: (msg: Record<string, unknown>) => void, abort: () => void }>} */
 const clientSessions = new Map();
+
+// Slot-machine client sessions, keyed by client connection handle.
+// Populated when an external connection is set up under
+// ENDO_USE_SLOT_MACHINE=1; inbound slot verbs from the client route
+// here.
+/** @type {Map<number, (env: { verb: string, payload: Uint8Array }) => void>} */
+const clientSlotInboxes = new Map();
+
+const useSlotMachineClient = hostGetEnv('ENDO_USE_SLOT_MACHINE') === '1';
 
 // Debug sessions per worker handle.
 /** @type {Map<number, import('./types.js').DebugSession>} */
@@ -866,7 +875,19 @@ const main = async () => {
 const silentReject = _err => {};
 
 /**
- * Set up a CapTP session for a new client connection.
+ * Set up a session for a new external client connection.
+ *
+ * Default mode: CapTP with JSON-encoded messages wrapped in
+ * `deliver` envelopes addressed to the client handle.
+ *
+ * Slot-machine mode (`ENDO_USE_SLOT_MACHINE=1`): mirror the
+ * worker-session path — every slot verb (deliver/resolve/drop/
+ * abort) flows through a per-client async-iterator inbox, with
+ * outbound envelopes shipped via `sendEnvelope` and a single
+ * direction-flip on send (no Rust supervisor translation in the
+ * client edge — the kref pre-binding does fire for h ≥ 2, but
+ * the client-side client doesn't know to use the kref's view, so
+ * we treat it as a peer-to-peer bootstrap and flip locally).
  *
  * @param {number} connectionHandle
  */
@@ -875,6 +896,98 @@ const setupClientSession = connectionHandle => {
   if (!bootstrap) {
     hostTrace(
       `daemon-xs: client connect before daemon ready (handle=${connectionHandle})`,
+    );
+    return;
+  }
+
+  if (useSlotMachineClient) {
+    /** @type {Array<{ verb: string, payload: Uint8Array }>} */
+    const inboxQueue = [];
+    /** @type {((value: IteratorResult<{verb: string, payload: Uint8Array}>) => void) | null} */
+    let inboxWaiter = null;
+    let inboxClosed = false;
+
+    clientSlotInboxes.set(connectionHandle, env => {
+      if (inboxWaiter) {
+        const w = inboxWaiter;
+        inboxWaiter = null;
+        w(Object.freeze({ done: false, value: env }));
+      } else {
+        inboxQueue.push(env);
+      }
+    });
+
+    const inboundReader = harden({
+      next() {
+        if (inboxQueue.length > 0) {
+          const value = /** @type {{verb: string, payload: Uint8Array}} */ (
+            inboxQueue.shift()
+          );
+          return Promise.resolve(Object.freeze({ done: false, value }));
+        }
+        if (inboxClosed) {
+          return Promise.resolve(harden({ done: true, value: undefined }));
+        }
+        return new Promise(resolve => {
+          inboxWaiter = resolve;
+        });
+      },
+      return() {
+        inboxClosed = true;
+        if (inboxWaiter) {
+          const w = inboxWaiter;
+          inboxWaiter = null;
+          w(harden({ done: true, value: undefined }));
+        }
+        return Promise.resolve(harden({ done: true, value: undefined }));
+      },
+      throw() {
+        inboxClosed = true;
+        return Promise.resolve(harden({ done: true, value: undefined }));
+      },
+      [Symbol.asyncIterator]() {
+        return this;
+      },
+    });
+
+    const envelopeWriter = harden({
+      /** @param {{ verb: string, payload: Uint8Array }} env */
+      async next(env) {
+        // Flip direction on send to match the bench-client's side
+        // (which also flips on send via makeNetstringSlots) — this
+        // gives one flip per hop end-to-end on the client edge,
+        // standing in for kref translation through the supervisor.
+        const flipped = flipEnvelopePayload(env.verb, env.payload);
+        hostTrace(
+          `daemon-xs(slots): client SEND ${env.verb} handle=${connectionHandle} bytes=${flipped.length}`,
+        );
+        sendEnvelope(connectionHandle, env.verb, flipped);
+        return harden({ done: false, value: undefined });
+      },
+      async return() {
+        return harden({ done: true, value: undefined });
+      },
+      async throw() {
+        return harden({ done: true, value: undefined });
+      },
+      [Symbol.asyncIterator]() {
+        return this;
+      },
+    });
+
+    /** @type {Promise<never>} */
+    const sessionCancelled = new Promise(() => {});
+
+    makeMessageSlots(
+      `Client ${connectionHandle}`,
+      envelopeWriter,
+      inboundReader,
+      sessionCancelled,
+      bootstrap,
+    );
+
+    hostTrace(
+      `daemon-xs(slots): client session created handle=${connectionHandle}`,
     );
     return;
   }
@@ -938,17 +1051,25 @@ globalThis.handleCommand = harden(bytes => {
     return;
   }
 
-  // Slot-machine traffic from a worker (deliver/resolve/drop/abort).
-  // The slot-machine session for this worker, if any, gets the
-  // envelope intact — verb and all.  Falls through to CapTP routing
-  // when no slot inbox is registered.
+  // Slot-machine traffic from a worker or external client
+  // (deliver / resolve / drop / abort).  Routes to the per-handle
+  // slot inbox set up at session creation; falls through to the
+  // CapTP path when neither inbox is registered.
   if (isSlotVerb(env.verb)) {
-    const slotInbox = workerSlotInboxes.get(env.handle);
-    if (slotInbox) {
+    const workerInbox = workerSlotInboxes.get(env.handle);
+    if (workerInbox) {
       hostTrace(
         `daemon-xs(slots): RECV ${env.verb} handle=${env.handle} bytes=${env.payload.length}`,
       );
-      slotInbox({ verb: env.verb, payload: env.payload });
+      workerInbox({ verb: env.verb, payload: env.payload });
+      return;
+    }
+    const clientInbox = clientSlotInboxes.get(env.handle);
+    if (clientInbox) {
+      hostTrace(
+        `daemon-xs(slots): client RECV ${env.verb} handle=${env.handle} bytes=${env.payload.length}`,
+      );
+      clientInbox({ verb: env.verb, payload: env.payload });
       return;
     }
   }

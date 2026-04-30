@@ -126,7 +126,14 @@ impl Supervisor {
             // (`bind_session_kref` returns `Conflict`, ignored), so
             // sends to later workers translated to the wrong target
             // and looped.
-            if h >= 2 {
+            // Pre-bind only for worker handles (where `info` is Some).
+            // External client connections (info = None, registered by
+            // socket.rs) are passed through unchanged — they speak
+            // slot-machine peer-to-peer with the daemon and flip
+            // descriptor direction at the codec layer rather than
+            // through kref translation.  Pre-binding their edge would
+            // double-count the flip and break dispatch.
+            if h >= 2 && info.is_some() {
                 let daemon_edge = session_for_edge(1, h);
                 let worker_edge = session_for_edge(h, 1);
                 let _ = sm.open_session(daemon_edge, "daemon");

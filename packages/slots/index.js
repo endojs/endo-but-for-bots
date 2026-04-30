@@ -29,3 +29,4 @@ export { makeSlotCodec } from './src/codec.js';
 export { makeSlotClient } from './src/client.js';
 export { LOCAL_ROOT, REMOTE_ROOT, bootstrap } from './src/bootstrap.js';
 export { makeMessageSlots } from './src/message.js';
+export { flipEnvelopePayload } from './src/flip.js';
