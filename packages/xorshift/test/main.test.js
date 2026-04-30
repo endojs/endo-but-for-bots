@@ -3,12 +3,40 @@ import test from '@endo/ses-ava/test.js';
 import { makeXorShift } from '../index.js';
 
 const seedA = Uint8Array.of(
-  0xb0, 0xb5, 0xc0, 0xff, 0xee, 0xfa, 0xca, 0xde,
-  0xb0, 0xb5, 0xc0, 0xff, 0xee, 0xfa, 0xca, 0xde,
+  0xb0,
+  0xb5,
+  0xc0,
+  0xff,
+  0xee,
+  0xfa,
+  0xca,
+  0xde,
+  0xb0,
+  0xb5,
+  0xc0,
+  0xff,
+  0xee,
+  0xfa,
+  0xca,
+  0xde,
 );
 const seedB = Uint8Array.of(
-  0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0,
-  0x0f, 0xed, 0xcb, 0xa9, 0x87, 0x65, 0x43, 0x21,
+  0x12,
+  0x34,
+  0x56,
+  0x78,
+  0x9a,
+  0xbc,
+  0xde,
+  0xf0,
+  0x0f,
+  0xed,
+  0xcb,
+  0xa9,
+  0x87,
+  0x65,
+  0x43,
+  0x21,
 );
 
 test('determinism: same seed produces same sequence', t => {
@@ -119,9 +147,7 @@ test('golden vector: first random() outputs match a pinned reference', t => {
   // produce the literal floats below.  If a future "optimization"
   // silently changes either the stream or the reduction, this fails.
   const expected = [
-    0.3805466890025484,
-    0.16858873939604369,
-    0.19273154059149178,
+    0.3805466890025484, 0.16858873939604369, 0.19273154059149178,
     0.27779393587648316,
   ];
   const prng = makeXorShift(seedA);
@@ -193,8 +219,7 @@ test('int throws on bad args', t => {
     instanceOf: TypeError,
   });
   // Range overflowing safe-integer space, even if both bounds are safe.
-  t.throws(
-    () => prng.int(Number.MIN_SAFE_INTEGER, Number.MAX_SAFE_INTEGER),
-    { instanceOf: RangeError },
-  );
+  t.throws(() => prng.int(Number.MIN_SAFE_INTEGER, Number.MAX_SAFE_INTEGER), {
+    instanceOf: RangeError,
+  });
 });
