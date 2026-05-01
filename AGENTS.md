@@ -90,3 +90,12 @@ Always run `yarn lint` in each package you've modified before committing.
 - Use conventional commits: `feat(pkg):`, `fix(pkg):`, `refactor(pkg):`, `chore:`, `test(pkg):`
 - Breaking changes: `feat(pkg)!:` or `fix(pkg)!:`
 - File conversions (`.js` to `.ts`) get their own `refactor:` commit
+
+## Prose style
+
+- Avoid em-dashes (`—`, U+2014) in prose.
+  Prefer separate sentences, parentheses, or colons.
+  In technical documentation, em-dashes obscure the rhythm of the prose
+  and almost always read better as their own sentence.
+- Wrap markdown lines at 80 to 100 columns.
+- Start each sentence on a new line so that diffs are per-sentence.
