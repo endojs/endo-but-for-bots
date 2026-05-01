@@ -98,6 +98,40 @@ jobs:
       - name: Run yarn test
         run: yarn test
 
+  sandbox-drivers:
+    name: sandbox-drivers
+
+    # begin macro
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      # without this, setup-node errors on mismatched yarn versions
+      - run: corepack enable
+
+      - name: Use Node.js 22.x
+        uses: actions/setup-node@6044e13b5dc448c55e2357c09f80417699197238 # v6
+        with:
+          node-version: 22.x
+          cache: yarn
+
+      - name: Install dependencies
+        run: yarn install --immutable
+
+      # end macro
+
+      - name: Install bubblewrap
+        run: sudo apt-get update && sudo apt-get install -y bubblewrap
+
+      - name: Run yarn build
+        run: yarn build
+
+      - name: Run sandbox driver tests
+        run: yarn workspace @endo/sandbox run test:drivers
+
   test-async-hooks:
     name: test-async-hooks
 

@@ -32,13 +32,18 @@ installed.
 
 ## Tasks
 
-- [ ] Add a `test:drivers` script entry in `packages/sandbox/package.json`
+- [x] Add a `test:drivers` script entry in `packages/sandbox/package.json`
   that runs only the driver test files, e.g.
   `ses-ava test/bwrap.test.js test/podman.test.js`.
   Verify `ses-ava` correctly forwards explicit test-file paths through to
   ava (see `packages/ses-ava/src/command.js`'s `passThroughArgs` handling)
   across all four `sesAvaConfigs` (lockdown / unsafe / endo / noop-harden).
-- [ ] Decide whether the default `test` script should still include the
+  Confirmed: in `command.js` the parser treats any non-flag, non-`--`
+  argument as a pass-through (the final `else { passThroughArgs.push(rawArg) }`
+  branch) and forwards `passThroughArgs` to every selected config's `ava`
+  invocation, so explicit test-file paths are run under all four
+  `sesAvaConfigs`.
+- [x] Decide whether the default `test` script should still include the
   driver files.
   Recommendation: leave them in — they skip cleanly when the driver is
   absent, and the CI cost on Linux runners that already exercise the new
@@ -46,7 +51,9 @@ installed.
   The `test:drivers` script is purely *additive*: a way to run only the
   driver subset on hosts that have the drivers, without paying for the
   rest of the suite.
-- [ ] Add a new `sandbox-drivers` job to `.github/workflows/ci.yml`:
+  Decision: kept the default `test` script unchanged; `test:drivers` is
+  additive only.
+- [x] Add a new `sandbox-drivers` job to `.github/workflows/ci.yml`:
   - `runs-on: ubuntu-latest` (drivers are Linux-only — macOS already
     skips both).
   - Standard "begin macro / end macro" steps from the existing `test` job:
@@ -56,12 +63,16 @@ installed.
   - `sudo apt-get update && sudo apt-get install -y bubblewrap` step
     before the test step.
   - `yarn workspace @endo/sandbox run test:drivers` as the test step.
-- [ ] Single node version, single platform.
+- [x] Single node version, single platform.
   No matrix — the cost is in the drivers, not in repeating the run.
 - [ ] Sanity-check that the new job behaves correctly when bwrap is
   present and podman pulls work, including in the persistent-EAGAIN-flake
   mode (the new `runInSlice` already converts that into a clean SKIP, so
   the job should still pass).
+  Deferred to first push: needs a real GHA run on the new job to confirm
+  bwrap cases stop printing `SKIP: bwrap slice unavailable: …` and that
+  podman pulls + EAGAIN-skip dispatch behave as expected.  See
+  "Verification plan" below.
 
 ## Out of scope
 
