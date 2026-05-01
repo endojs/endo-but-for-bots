@@ -189,6 +189,10 @@ Running the following before pushing avoids the churn:
 
 - Wrap lines at 80 to 100 columns.
 - Start each sentence on a new line so that diffs are per-sentence.
+- Avoid em-dashes (—) in prose.
+  Prefer separate sentences, parentheses, or colons.
+  Em-dashes signal an aside that almost always reads better as its own
+  sentence; in technical documentation they obscure the rhythm of the prose.
 - See `CONTRIBUTING.md` § "Markdown Style Guide" for full details.
 
 ## Package Structure
