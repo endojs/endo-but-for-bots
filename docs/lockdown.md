@@ -1222,12 +1222,12 @@ and eventually remove this option.
 # Limitations
 
 Compartments isolate the *authority* and *intrinsics* available to guest code,
-but every compartment in a realm shares the same JavaScript *agent* &mdash; in
-engine terms, a single thread of execution and a single heap.
+but every compartment in a realm shares the same JavaScript *agent*.
+In engine terms, that is a single thread of execution and a single heap.
 The following limitations are intrinsic to running JavaScript in one agent and
 are not threats a `Compartment` can mitigate.
-A host that needs to defend against them must impose a coarser boundary, such
-as a separate worker, process, or operating-system sandbox, around the
+A host that needs to defend against them must impose a coarser boundary,
+as a separate worker or process around the
 suspect code.
 
 ## Availability
@@ -1235,16 +1235,16 @@ suspect code.
 A compartment cannot protect availability for code running in sibling
 compartments or in the start compartment.
 Because all compartments share the agent's single thread, a guest that enters
-an infinite loop, a `while (true) {}`, a runaway recursion, or any other
+an infinite loop (such as `for (;;) {}`), a runaway recursion, or any other
 non-terminating synchronous computation denies synchronous progress to every
 other compartment until the engine itself intervenes (for example, by hitting
 an engine-imposed call-stack limit or by the host terminating the worker or
 process).
 
-This applies even to ostensibly cooperative code: a guest method invoked
-synchronously by host code &mdash; through a property accessor, a proxy trap,
-a `then` callback resolved synchronously, or any other synchronous call &mdash;
-can refuse to return.
+This applies even to ostensibly cooperative code.
+A guest method invoked synchronously by host code can refuse to return.
+This includes calls through a property accessor, a proxy trap, a `then`
+callback resolved synchronously, or any other synchronous call.
 Host code that wishes to remain available in the face of an unresponsive guest
 must arrange to interact with guest objects across an asynchronous boundary
 (for example, by using promises and a watchdog timer in a separate agent), or
@@ -1263,9 +1263,9 @@ In its absence, a malicious compartment can intentionally allocate stack
 frames or heap objects until the engine raises a `RangeError` or other
 allocation failure at an arbitrary point in unrelated code.
 
-Because the failure can surface inside an unrelated synchronous call &mdash;
-including a call into an object exported from another compartment &mdash; the
-victim object may be left in a partially updated state.
+The failure can surface inside an unrelated synchronous call, including a
+call into an object exported from another compartment.
+The victim object may then be left in a partially updated state.
 The result is an *integrity* compromise (broken invariants on otherwise
 trusted objects) on top of the *availability* compromise (the agent or
 process may exit).
