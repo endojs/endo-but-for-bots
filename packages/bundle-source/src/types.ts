@@ -247,7 +247,7 @@ export type BundleSourceGeneral = <T extends ModuleFormat = 'endoZipBase64'>(
 export type BundleOptions<T extends ModuleFormat> = {
   format?: T | undefined;
   /**
-   * - when true, render source maps to a per-user per-host cache
+   * when true, render source maps to a per-user per-host cache
    * directory. Defaults to false. See README for details.
    */
   cacheSourceMaps?: boolean | undefined;
@@ -274,13 +274,13 @@ export type BundleOptions<T extends ModuleFormat> = {
    */
   conditions?: string[] | undefined;
   /**
-   * - common dependencies for the entry package.
+   * common dependencies for the entry package.
    */
   commonDependencies?: Record<string, string> | undefined;
 } & (T extends 'endoZipBase64'
   ? {
       /**
-       * - import hook for exit modules, only honored
+       * import hook for exit modules, only honored
        * for the `endoZipBase64` format.
        */
       importHook?:
