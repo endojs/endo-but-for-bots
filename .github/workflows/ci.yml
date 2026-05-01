@@ -129,6 +129,16 @@ jobs:
       - name: Run yarn build
         run: yarn build
 
+      # Pre-pull the OCI image used by packages/sandbox/test/podman.test.js
+      # (`ALPINE_REF`) so the first podman test does not pay the registry
+      # round-trip and so docker.io flakes surface as a single visible
+      # job-setup failure rather than an obscure mid-test timeout.
+      # Keep this ref in sync with `ALPINE_REF` in
+      # packages/sandbox/test/podman.test.js and the references in
+      # packages/sandbox/README.md.
+      - name: Pre-pull alpine OCI image
+        run: podman pull docker.io/library/alpine:3.19
+
       - name: Run sandbox driver tests
         run: yarn workspace @endo/sandbox run test:drivers
 
