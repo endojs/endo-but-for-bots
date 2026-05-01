@@ -38,13 +38,20 @@ const { getPrototypeOf, getOwnPropertyDescriptor } = Object;
 test('getAnonymousIntrinsics returns the expected anonymous intrinsics', t => {
   const intrinsics = getAnonymousIntrinsics();
 
+  // Tracks the names the test expects to find in `intrinsics`, so we can
+  // fail closed if `getAnonymousIntrinsics` ever adds a new entry without
+  // a matching test branch. Each `isSame` call records its name; each
+  // `isAbsent` call deliberately does not.
+  const expectedKeys = new Set();
+
   // Using `===` and `t.true` instead of `t.is` avoids the AVA-side
   // diff-formatter trying to enumerate iterator prototypes when an
-  // assertion fails — the iterator's `next()` would throw on the
+  // assertion fails. The iterator's `next()` would throw on the
   // `[object Foo Iterator]` placeholder concordance constructs. This way
   // failures still pinpoint the offending line via the stack trace, and
   // the message field tells the reader which intrinsic mismatched.
   const isSame = (name, actual, expected) => {
+    expectedKeys.add(name);
     t.true(
       actual === expected,
       `${name} should equal the independently derived value`,
@@ -54,7 +61,7 @@ test('getAnonymousIntrinsics returns the expected anonymous intrinsics', t => {
     t.true(!(name in intrinsics), `${name} ${reason}`);
   };
 
-  // %ThrowTypeError% — the shared getter of `arguments.callee` on a
+  // %ThrowTypeError% is the shared getter of `arguments.callee` on a
   // strict-mode arguments object.
   const expectedThrowTypeError = (function makeArgs() {
     // eslint-disable-next-line prefer-rest-params
@@ -88,6 +95,11 @@ test('getAnonymousIntrinsics returns the expected anonymous intrinsics', t => {
       intrinsics['%RegExpStringIteratorPrototype%'],
       expectedRegExpStringIteratorPrototype,
     );
+  } else {
+    isAbsent(
+      '%RegExpStringIteratorPrototype%',
+      'should be absent when host lacks RegExp.prototype[Symbol.matchAll]',
+    );
   }
 
   // %ArrayIteratorPrototype%
@@ -118,7 +130,7 @@ test('getAnonymousIntrinsics returns the expected anonymous intrinsics', t => {
     expectedSetIteratorPrototype,
   );
 
-  // %IteratorPrototype% — the common ancestor of array/map/set iterators.
+  // %IteratorPrototype% is the common ancestor of array/map/set iterators.
   const expectedIteratorPrototype = getPrototypeOf(
     expectedArrayIteratorPrototype,
   );
@@ -138,7 +150,7 @@ test('getAnonymousIntrinsics returns the expected anonymous intrinsics', t => {
     'SetIteratorPrototype should inherit from IteratorPrototype',
   );
 
-  // %TypedArray% — the shared abstract supertype of Int8Array etc.
+  // %TypedArray% is the shared abstract supertype of Int8Array etc.
   const expectedTypedArray = getPrototypeOf(Int8Array);
   isSame('%TypedArray%', intrinsics['%TypedArray%'], expectedTypedArray);
   // The shim derives this from Float64Array; cross-check that all typed
@@ -175,8 +187,9 @@ test('getAnonymousIntrinsics returns the expected anonymous intrinsics', t => {
   );
 
   // %InertAsyncGeneratorFunction% / %AsyncGenerator% / %AsyncGeneratorPrototype% /
-  // %AsyncIteratorPrototype% — only present when the host supports async
-  // generators. Mirrors the conditional inside `getAnonymousIntrinsics`.
+  // %AsyncIteratorPrototype% are only present when the host supports
+  // async generators. Mirrors the conditional inside
+  // `getAnonymousIntrinsics`.
   let expectedAsyncGeneratorFunction;
   try {
     // Use indirection because some platforms (notably Hermes) cannot parse
@@ -220,20 +233,21 @@ test('getAnonymousIntrinsics returns the expected anonymous intrinsics', t => {
     );
   }
 
-  // %InertFunction% — the (inert post-lockdown) Function constructor.
+  // %InertFunction% is the (inert post-lockdown) Function constructor.
   // Before lockdown it is just Function; the shim only renders it inert
   // later via tameFunctionConstructors.
   isSame('%InertFunction%', intrinsics['%InertFunction%'], Function);
 
   // %InertCompartment% is provided by the shim itself, not derived from a
   // host intrinsic. Just check it is present and a function.
+  expectedKeys.add('%InertCompartment%');
   t.is(
     typeof intrinsics['%InertCompartment%'],
     'function',
     '%InertCompartment%',
   );
 
-  // Iterator-helpers proposal intrinsics — only when host implements them.
+  // Iterator-helpers proposal intrinsics, only when host implements them.
   if (globalThis.Iterator) {
     const expectedIteratorHelperPrototype = getPrototypeOf(
       // eslint-disable-next-line @endo/no-polymorphic-call
@@ -290,10 +304,10 @@ test('getAnonymousIntrinsics returns the expected anonymous intrinsics', t => {
     );
   }
 
-  // %ImmutableArrayBufferPrototype% — the shim provides
-  // `ArrayBuffer.prototype.sliceToImmutable` itself when the host lacks it,
-  // so this entry is only included when the immutable slice has its own
-  // prototype distinct from `ArrayBuffer.prototype`.
+  // %ImmutableArrayBufferPrototype%. The shim provides
+  // `ArrayBuffer.prototype.sliceToImmutable` itself when the host lacks
+  // it, so this entry is only included when the immutable slice has its
+  // own prototype distinct from `ArrayBuffer.prototype`.
   const ab = new ArrayBuffer(0);
   // eslint-disable-next-line @endo/no-polymorphic-call
   const iab = ab.sliceToImmutable();
@@ -313,12 +327,25 @@ test('getAnonymousIntrinsics returns the expected anonymous intrinsics', t => {
 
   // Sanity check: every key in the intrinsics record begins and ends with
   // `%`, matching the conventional spec name. This is what
-  // `permits-intrinsics.js` expects to look up.
+  // `permits-intrinsics.js` expects to look up. Also reject `null` and
+  // `undefined` as values (defense in depth alongside the identity
+  // checks above).
   for (const name of Object.keys(intrinsics)) {
     t.true(
       name.startsWith('%') && name.endsWith('%'),
-      `intrinsic name ${name} should be wrapped in %…%`,
+      `intrinsic name ${name} should be wrapped in %...%`,
     );
-    t.not(intrinsics[name], undefined, `${name} should be defined`);
+    t.not(intrinsics[name], undefined, `${name} should not be undefined`);
+    t.not(intrinsics[name], null, `${name} should not be null`);
   }
+
+  // Fail closed when a future patch adds a new intrinsic without a
+  // matching test branch. This catches drift that the per-name identity
+  // checks alone cannot: a new key with no corresponding `isSame` call
+  // would slip through silently.
+  t.deepEqual(
+    Object.keys(intrinsics).slice().sort(),
+    [...expectedKeys].sort(),
+    'intrinsics keys should match the set the test branches assert against',
+  );
 });
