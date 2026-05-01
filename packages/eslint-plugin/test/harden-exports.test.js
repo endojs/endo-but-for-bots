@@ -417,6 +417,28 @@ harden(aliasName);
 harden(inner);
     `,
   },
+  // Object rest with a hardened sibling but a different identifier hardened
+  // alongside: the rule must still flag the rest binding by its own name and
+  // not be fooled by an unrelated harden() call.
+  {
+    code: `
+export const { name, ...rest } = obj;
+harden(name);
+harden(notRest);
+    `,
+    errors: [
+      {
+        message:
+          "Named export 'rest' should be followed by a call to 'harden'.",
+      },
+    ],
+    output: `
+export const { name, ...rest } = obj;
+harden(rest);
+harden(name);
+harden(notRest);
+    `,
+  },
 ];
 
 const jsTester = new RuleTester({
@@ -443,6 +465,34 @@ export interface Bar {
 }
           `,
     },
+    // TypeScript-annotated destructuring still binds the names; harden covers.
+    {
+      code: `
+export const { name, ...rest }: { name: string; [k: string]: unknown } = obj;
+harden(name);
+harden(rest);
+          `,
+    },
   ],
-  invalid,
+  invalid: [
+    ...invalid,
+    // TypeScript-annotated destructuring missing harden calls; the rule must
+    // see through the type annotation and report the value bindings.
+    {
+      code: `
+export const { name, ...rest }: { name: string; [k: string]: unknown } = obj;
+    `,
+      errors: [
+        {
+          message:
+            "Named exports 'name, rest' should be followed by a call to 'harden'.",
+        },
+      ],
+      output: `
+export const { name, ...rest }: { name: string; [k: string]: unknown } = obj;
+harden(name);
+harden(rest);
+    `,
+    },
+  ],
 });

@@ -15,64 +15,74 @@
  * binding pattern.
  *
  * Handles all binding pattern shapes that may appear on the left-hand side of
- * an `export const … = …` declaration:
+ * an `export const ... = ...` declaration:
  *
- * - `Identifier` — `export const a = …`
- * - `ObjectPattern` properties — `export const { a } = …` and
- *   `export const { propName: aliasName } = …`. We recurse into `prop.value`
- *   (the binding target) rather than `prop.key` (the source property name);
+ * - Identifier: `export const a = ...`.
+ * - ObjectPattern properties: `export const { a } = ...` and
+ *   `export const { propName: aliasName } = ...`. We recurse into prop.value
+ *   (the binding target) rather than prop.key (the source property name);
  *   in shorthand they are the same node, but with an alias they differ.
- * - `ObjectPattern` rest — `export const { …rest } = …`
- * - `ArrayPattern` elements — `export const [ a, b ] = …`. Skips null elements
+ * - ObjectPattern rest: `export const { ...rest } = ...`.
+ * - ArrayPattern elements: `export const [ a, b ] = ...`. Skips null elements
  *   that represent sparse holes (`[ , a ]`).
- * - `AssignmentPattern` — defaults like `export const [ a = 1 ] = …` or
- *   `export const { a: b = 1 } = …`. The bound name lives in `node.left`.
- * - `RestElement` — `export const [ a, …rest ] = …` and object rest above.
+ * - AssignmentPattern: defaults like `export const [ a = 1 ] = ...` or
+ *   `export const { a: b = 1 } = ...`. The bound name lives in node.left.
+ * - RestElement: `export const [ a, ...rest ] = ...` and object rest above.
+ *
+ * Returns true if every encountered sub-pattern was a recognized shape, false
+ * if any unknown pattern type was traversed (so the caller may decide whether
+ * to surface a report rather than silently produce a possibly incomplete name
+ * list).
  * @param {ESTree.Pattern | null} pattern
  * @param {string[]} names
- * @returns {void}
+ * @returns {boolean}
  */
 const pushDeclaredNames = (pattern, names) => {
   if (pattern === null) {
-    // Sparse array hole, e.g., `const [ , a ] = …`.
-    return;
+    // Sparse array hole, e.g., `const [ , a ] = ...`.
+    return true;
   }
   switch (pattern.type) {
     case 'Identifier': {
       names.push(pattern.name);
-      break;
+      return true;
     }
     case 'ObjectPattern': {
+      let ok = true;
       for (const prop of pattern.properties) {
         if (prop.type === 'RestElement') {
-          pushDeclaredNames(prop.argument, names);
-        } else {
+          ok = pushDeclaredNames(prop.argument, names) && ok;
+        } else if (prop.type === 'Property') {
           // For `{ propName: aliasName }`, prop.value is the binding target
           // (`aliasName`); for shorthand `{ name }`, prop.value === prop.key.
-          pushDeclaredNames(/** @type {ESTree.Pattern} */ (prop.value), names);
+          // ESTree narrows ObjectPattern's properties to Property|RestElement,
+          // so prop.value is always a Pattern here.
+          ok = pushDeclaredNames(prop.value, names) && ok;
+        } else {
+          ok = false;
         }
       }
-      break;
+      return ok;
     }
     case 'ArrayPattern': {
+      let ok = true;
       for (const element of pattern.elements) {
-        pushDeclaredNames(element, names);
+        ok = pushDeclaredNames(element, names) && ok;
       }
-      break;
+      return ok;
     }
     case 'AssignmentPattern': {
-      // The default value lives in `node.right`; the binding is in `node.left`.
-      pushDeclaredNames(pattern.left, names);
-      break;
+      // The default value lives in node.right; the binding is in node.left.
+      return pushDeclaredNames(pattern.left, names);
     }
     case 'RestElement': {
-      pushDeclaredNames(pattern.argument, names);
-      break;
+      return pushDeclaredNames(pattern.argument, names);
     }
     default: {
-      // Unknown pattern shape; nothing to declare. This branch keeps the
-      // helper resilient to future ECMAScript binding patterns.
-      break;
+      // Unknown pattern shape; the caller is responsible for surfacing this.
+      // Returning false keeps the helper resilient to future ECMAScript
+      // binding patterns while making the gap visible.
+      return false;
     }
   }
 };
@@ -92,6 +102,16 @@ module.exports = {
     },
     fixable: 'code',
     schema: [],
+    messages: {
+      missingHardenCallSingle:
+        "Named export '{{names}}' should be followed by a call to 'harden'.",
+      missingHardenCallMultiple:
+        "Named exports '{{names}}' should be followed by a call to 'harden'.",
+      functionExportNotConst:
+        "Export '{{name}}' should be a const declaration with an arrow function.",
+      unknownBindingPattern:
+        'Unrecognized binding pattern in named export; rule cannot verify harden coverage.',
+    },
   },
   /**
    * Create function for the rule.
@@ -116,13 +136,24 @@ module.exports = {
           if (exportNode.declaration) {
             if (exportNode.declaration.type === 'VariableDeclaration') {
               for (const declaration of exportNode.declaration.declarations) {
-                pushDeclaredNames(declaration.id, exportNames);
+                const recognized = pushDeclaredNames(
+                  declaration.id,
+                  exportNames,
+                );
+                if (!recognized) {
+                  context.report({
+                    node: declaration,
+                    messageId: 'unknownBindingPattern',
+                  });
+                }
               }
             } else if (exportNode.declaration.type === 'FunctionDeclaration') {
               context.report({
                 node: exportNode,
-                // The 'function' keyword hoisting makes the valuable mutable before it can be hardened.
-                message: `Export '${exportNode.declaration.id.name}' should be a const declaration with an arrow function.`,
+                // The 'function' keyword hoisting makes the value mutable
+                // before it can be hardened.
+                messageId: 'functionExportNotConst',
+                data: { name: exportNode.declaration.id.name },
               });
             }
           } else if (exportNode.specifiers) {
@@ -153,10 +184,14 @@ module.exports = {
           }
 
           if (missingHardenCalls.length > 0) {
-            const noun = missingHardenCalls.length === 1 ? 'export' : 'exports';
+            const messageId =
+              missingHardenCalls.length === 1
+                ? 'missingHardenCallSingle'
+                : 'missingHardenCallMultiple';
             context.report({
               node: exportNode,
-              message: `Named ${noun} '${missingHardenCalls.join(', ')}' should be followed by a call to 'harden'.`,
+              messageId,
+              data: { names: missingHardenCalls.join(', ') },
               fix(fixer) {
                 const hardenCalls = missingHardenCalls
                   .map(name => `harden(${name});`)
