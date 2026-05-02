@@ -64,6 +64,16 @@ jobs:
       - name: Cargo test (slots unit tests)
         run: cargo test -p slots
 
+      # Bundle the XS-side bootstrap scripts before any cargo step
+      # that compiles `xsnap` (lib): `lib.rs` `include_str!`s these
+      # three files and they are gitignored (generated artifacts).
+      - name: Generate XS bootstrap bundles
+        working-directory: packages/daemon
+        run: |
+          node scripts/bundle-bus-worker-xs-ses-boot.mjs
+          node scripts/bundle-bus-daemon-rust-xs.mjs
+          node scripts/bundle-bus-worker-xs.mjs
+
       - name: Cargo test (endo lib)
         run: cargo test -p endo --lib
 
