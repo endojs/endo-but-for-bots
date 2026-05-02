@@ -62,15 +62,15 @@ export const flipEnvelopePayload = (verb, payload) => {
     });
   }
   if (verb === VERB_DROP) {
-    const p = decodeDropPayload(payload);
-    return encodeDropPayload({
-      deltas: p.deltas.map(d => ({
+    const deltas = decodeDropPayload(payload);
+    return encodeDropPayload(
+      deltas.map(d => ({
         target: flipDesc(d.target),
         ram: d.ram,
         clist: d.clist,
         export: d.export,
       })),
-    });
+    );
   }
   return payload;
 };

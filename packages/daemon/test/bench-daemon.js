@@ -24,9 +24,9 @@ const makeConfig = (...root) => ({
   cachePath: path.join(dirname, ...root, 'cache'),
   sockPath: path.join(dirname, ...root, 'endo.sock'),
   address: '127.0.0.1:0',
-  gcEnabled: false,
   pets: new Map(),
   values: new Map(),
+  gcEnabled: false,
 });
 
 // ---------------------------------------------------------------------------
@@ -63,13 +63,13 @@ const bench = async (label, fn, iterations = 1) => {
 /**
  * @param {string} variant - "node" | "rust-xs"
  * @param {ReturnType<makeConfig>} config
- * @param {Promise<never>} cancelled
+ * @param {Promise<unknown>} cancelled
  */
 const runBenchmarks = async (variant, config, cancelled) => {
   const { getBootstrap } = await makeEndoClient(
     'bench-client',
     config.sockPath,
-    cancelled,
+    /** @type {Promise<void>} */ (cancelled),
   );
   const bootstrap = getBootstrap();
   const host = E(bootstrap).host();

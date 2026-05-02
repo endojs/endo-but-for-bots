@@ -252,7 +252,7 @@ export const makeNetstringCapTP = (
  * @param {Promise<void>} cancelled
  * @param {TBootstrap} bootstrap
  * @returns {{
- *   getBootstrap: () => unknown,
+ *   getBootstrap: () => TBootstrap,
  *   closed: Promise<void>,
  *   close: (reason?: Error) => Promise<void>,
  * }}
@@ -284,11 +284,15 @@ export const makeNetstringSlots = (
     const env = decodeEnvelope(frame);
     return { verb: env.verb, payload: env.payload };
   });
-  return makeMessageSlots(
-    name,
-    envelopeWriter,
-    envelopeReader,
-    cancelled,
-    bootstrap,
+  return /** @type {ReturnType<typeof makeNetstringSlots<TBootstrap>>} */ (
+    /** @type {unknown} */ (
+      makeMessageSlots(
+        name,
+        /** @type {any} */ (envelopeWriter),
+        /** @type {any} */ (envelopeReader),
+        cancelled,
+        bootstrap,
+      )
+    )
   );
 };

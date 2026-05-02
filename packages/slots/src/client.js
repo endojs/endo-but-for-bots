@@ -287,7 +287,11 @@ export const makeSlotClient = ({
       const remotableTarget = Remotable(
         `Alleged: SlotPresence@${desc.position}`,
       );
-      new HandledPromise((_resolve, _reject, resolveWithPresence) => {
+      // eslint-disable-next-line no-new -- HandledPromise's
+      // resolveWithPresence is the public API for installing a
+      // remotable presence with a handler; the constructed promise
+      // itself is intentionally discarded.
+      void new HandledPromise((_resolve, _reject, resolveWithPresence) => {
         presence = resolveWithPresence(harden(handler), {
           proxy: {
             target: remotableTarget,
@@ -315,7 +319,10 @@ export const makeSlotClient = ({
       // Only register newly-created presences — if the c-list
       // already held an entry we reuse it and its existing
       // finalisation hook.
-      finalizer.register(presence, harden({ ...desc }));
+      finalizer.register(
+        /** @type {WeakKey} */ (presence),
+        harden({ ...desc }),
+      );
     }
     // Return whichever presence the c-list canonicalised on, so
     // repeat calls to makePresence with the same descriptor yield

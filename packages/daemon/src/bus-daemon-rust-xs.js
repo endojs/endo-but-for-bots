@@ -324,12 +324,20 @@ const makeInMemoryPetStoreDb = () => {
   };
 };
 
-const petStorePowers = makePetStoreMaker(makeInMemoryPetStoreDb());
-const daemonicPersistencePowers = makeDaemonicPersistencePowers(
-  filePowers,
-  cryptoPowers,
-  config,
-);
+// `daemonDb`, `petStorePowers`, and `daemonicPersistencePowers` are
+// initialised inside `main()` once the state directory has been
+// created and the SQLite database file can be opened.  Declaring
+// them as `let` here keeps a single, sharable binding for code paths
+// that need to inspect them after `main()` runs.
+/** @type {ReturnType<typeof makeDaemonDatabase>} */
+// @ts-expect-error initialised in main()
+let daemonDb;
+/** @type {ReturnType<typeof makePetStoreMaker>} */
+// @ts-expect-error initialised in main()
+let petStorePowers = makePetStoreMaker(makeInMemoryPetStoreDb());
+/** @type {ReturnType<typeof makeDaemonicPersistencePowers>} */
+// @ts-expect-error initialised in main()
+let daemonicPersistencePowers;
 
 // ---------------------------------------------------------------------------
 // Envelope I/O via issueCommand
