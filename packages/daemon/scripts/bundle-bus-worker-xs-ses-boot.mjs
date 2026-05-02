@@ -27,11 +27,7 @@ const __dirname = path.dirname(url.fileURLToPath(import.meta.url));
 const outDir = path.resolve(__dirname, '../../../rust/endo/xsnap/src');
 
 // Node-only packages excluded from the XS ses-boot bundle.
-const EXCLUDED_PACKAGES = new Set([
-  '@endo/init',
-  '@endo/lockdown',
-  'ses',
-]);
+const EXCLUDED_PACKAGES = new Set(['@endo/init', '@endo/lockdown', 'ses']);
 
 const entryUrl = url.pathToFileURL(
   path.resolve(__dirname, '../src/bus-worker-xs-ses-boot.js'),
