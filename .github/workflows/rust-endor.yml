@@ -75,10 +75,37 @@ jobs:
       # `makeUnconfined` host functions, which cascades into ~150
       # failures unrelated to slot-machine.  Flip `continue-on-error`
       # to `false` once the XS worker implements those verbs.
-      - name: Daemon integration tests against endor
+      - name: Daemon integration tests against endor (CapTP)
         working-directory: packages/daemon
         continue-on-error: true
         env:
           ENDO_BIN: ../../target/release/endor
           ENDO_WORKER_BIN: ../../target/release/endor worker
         run: yarn ava --timeout=120s
+
+      # Slot-machine validation: same bench harness that pins down
+      # the CapTP baseline, but with ENDO_USE_SLOT_MACHINE=1 so the
+      # whole chain (bench-client - daemon - workers) speaks the
+      # slot-machine wire protocol.  Validates Rust+XS only, since
+      # Rust+Node also speaks slot-machine end-to-end through the
+      # same code paths and the XS variant exercises the supervisor
+      # kref translation that is unique to that path.  Reports but
+      # does not block CI for now (continue-on-error: true) so a
+      # transient bench hang doesn't take the rest of the workflow
+      # down with it; promote to required once the bench is stable
+      # across two consecutive runs.
+      - name: Slot-machine bench (Rust+XS, end-to-end)
+        working-directory: packages/daemon
+        continue-on-error: true
+        timeout-minutes: 4
+        env:
+          ENDO_BIN: ../../target/release/endor
+          ENDO_WORKER_BIN: ../../target/release/endor worker
+          ENDO_USE_SLOT_MACHINE: '1'
+        run: node test/bench-daemon.js --rust-only
+
+      # Slot-machine unit tests (the @endo/slots package) under the
+      # CapTP-mode workflow.  These pin down the wire format and
+      # codec invariants; they do not require the endor binary.
+      - name: '@endo/slots unit tests'
+        run: yarn workspace @endo/slots ava
