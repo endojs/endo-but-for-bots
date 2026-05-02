@@ -218,7 +218,7 @@ export const getInterfaceOf = val => {
     val[PASS_STYLE] !== 'remotable' ||
     !confirmRemotable(val, false)
   ) {
-    // @ts-expect-error narrowed
+    // @ts-ignore narrowed
     return undefined;
   }
   // @ts-expect-error narrowed

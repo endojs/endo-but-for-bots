@@ -34,7 +34,7 @@ const adaptImmutableArrayBuffer = () => {
   const immutableArrayBufferPrototype = getPrototypeOf(anImmutableArrayBuffer);
 
   const immutableGetter = /** @type {(this: ArrayBuffer) => boolean} */ (
-    // @ts-expect-error We know the desciptor is there.
+    // @ts-ignore We know the descriptor is there.
     getOwnPropertyDescriptor(immutableArrayBufferPrototype, 'immutable').get
   );
 

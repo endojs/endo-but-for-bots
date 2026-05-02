@@ -105,7 +105,7 @@ export const makeMessageBreakpointTester = optionName => {
       Fail`Expected ${q(optionName)} option to be a JSON breakpoints record`;
 
     /** @type {BreakpointTable} */
-    // @ts-expect-error confused by __proto__
+    // @ts-ignore confused by __proto__
     const newBreakpointsTable = { __proto__: null };
 
     for (const [tag, methodBPs] of entries(newBreakpoints)) {
@@ -127,7 +127,7 @@ export const makeMessageBreakpointTester = optionName => {
         const classBPs = hasOwn(newBreakpointsTable, methodName)
           ? newBreakpointsTable[methodName]
           : (newBreakpointsTable[methodName] = {
-              // @ts-expect-error confused by __proto__
+              // @ts-ignore confused by __proto__
               __proto__: null,
             });
         classBPs[tag] = count;
