@@ -30,7 +30,7 @@ const endorBin =
   process.env.ENDO_BIN || path.resolve(dirname, '../../target/release/endor');
 const hasEndor = fs.existsSync(endorBin);
 
-const test_ = hasEndor ? test.serial : test.serial.skip;
+const testIfEndor = hasEndor ? test.serial : test.serial.skip;
 
 const makeConfig = (...root) => ({
   statePath: path.join(dirname, ...root, 'state'),
@@ -103,7 +103,7 @@ const storeAndList = async host => {
 
 const expectedNames = ['parity-alpha', 'parity-beta', 'parity-gamma'];
 
-test_('SQLite parity — Rust+XS writes, Node reads', async t => {
+testIfEndor('SQLite parity — Rust+XS writes, Node reads', async t => {
   const config = makeConfig('tmp', 'sqlite-parity-rxs-then-node');
   await purge(config);
 
@@ -144,7 +144,7 @@ test_('SQLite parity — Rust+XS writes, Node reads', async t => {
   }
 });
 
-test_('SQLite parity — Node writes, Rust+XS reads', async t => {
+testIfEndor('SQLite parity — Node writes, Rust+XS reads', async t => {
   const config = makeConfig('tmp', 'sqlite-parity-node-then-rxs');
   await purge(config);
 
@@ -184,7 +184,7 @@ test_('SQLite parity — Node writes, Rust+XS reads', async t => {
   }
 });
 
-test_('SQLite parity — rename survives backend swap', async t => {
+testIfEndor('SQLite parity — rename survives backend swap', async t => {
   const config = makeConfig('tmp', 'sqlite-parity-rename');
   await purge(config);
 
