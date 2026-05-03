@@ -35,17 +35,40 @@ for all further operations on passable data.
 
 For the purposes of this guide, two facts about passables matter:
 
-1. Every passable has a **canonical string encoding** under
-   `@endo/marshal`'s `makePassableKit`/`makeEncodePassable`. The
-   encoding is stable, deterministic, and total: two passables that are
-   equivalent under distributed equality (`keyEQ`) encode to the same
-   string, and every passable encodes to *some* string.
+1. Every passable has a string encoding under `@endo/marshal`'s
+   `makePassableKit`/`makeEncodePassable`. For passables built from
+   primitives, byte arrays, copyArrays, copyRecords, tagged values,
+   and (key-comparable) symbols — the *atomic* and *pure-copy* parts
+   of the data model — the encoding is stable, deterministic, and
+   round-trips through `keyEQ`: two such passables are
+   `keyEQ`-equivalent iff they encode to the same string, and that
+   property holds across vats and across processes.
+
+   For passables that contain *remotables*, *errors*, or *promises*,
+   the encoding goes through the `encodeRemotable`, `encodeError`, and
+   `encodePromise` callbacks supplied to `makePassableKit`. Those
+   callbacks are typically stateful — for instance, assigning ordinal
+   strings the first time a remotable is seen — so encodings of
+   such values are stable only within the lifetime of a particular
+   `encodePassable` instance, and are *not* portable across vats. The
+   `keyEQ` ⇒ equal-encoding implication only holds across vats when
+   neither passable contains a remotable, error, or promise.
 
 2. The encoding is **rank-order preserving**. If `compareRank(a, b) < 0`
-   then `encodePassable(a) < encodePassable(b)` (lexicographic, by
-   UTF-16 code unit). The whole point of the encoding format is to push
-   rank comparison down into the byte-by-byte string comparison that
-   any sorted store already does well.
+   then `encodePassable(a) < encodePassable(b)` lexicographically. By
+   default that lexicographic order is by UTF-16 code unit (the
+   default `ENDO_RANK_STRINGS=utf16-code-unit-order`); the
+   `unicode-code-point-order` setting selects code-point ordering
+   instead, which is what we are gradually moving toward.
+
+   This means a sorted store that compares keys by raw byte (or UTF-16
+   code unit) gives you rank order for free. **The store's collation
+   has to match the configured comparison.** A code-point store with a
+   code-unit `compareRank`, or vice versa, can disagree on strings that
+   contain surrogate pairs, and rank cover is not a defense against
+   that mismatch. SQLite's default `BINARY` collation, for example,
+   compares by code point, so a `compactOrdered`/`legacyOrdered`
+   encoder configured for code-point order pairs cleanly with it.
 
 For deeper background, see the
 [`@endo/pass-style` README](../packages/pass-style/README.md), the
@@ -78,11 +101,15 @@ A `RankCover` is a pair of strings:
 type RankCover = [string, string];
 ```
 
-interpreted as *encoded* lower and upper bounds. The lower bound is
-inclusive; the upper bound is described in `@endo/marshal`'s types as
-inclusive, but in practice every cover Endo produces uses a
-strictly-greater upper bound such that no valid encoded passable can
-land on it — so the distinction does not matter in normal use.
+interpreted as *encoded* lower and upper bounds. **Both bounds are
+inclusive.** Some covers — for example, the per-pass-style covers
+returned by `provideStaticRanks` — use an upper bound that no valid
+encoded passable lands on, so inclusivity does not matter in those
+cases. Others *do* have valid encodings on the upper bound; for
+instance, the cover for `M.lte(k)` is
+`[lowerBoundOfPassStyle, encodePassable(k)]`, and the encoding of `k`
+itself must lie within the cover. A range-query implementation that
+treats the upper bound as exclusive will silently miss matches.
 
 A rank cover for a pattern `P` is a rank cover with this property:
 
