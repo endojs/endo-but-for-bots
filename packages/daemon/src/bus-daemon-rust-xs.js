@@ -49,7 +49,7 @@ import { makeMessageSlots, isSlotVerb, flipEnvelopePayload } from '@endo/slots';
 import { makeDaemon } from './daemon.js';
 import { makeDaemonicPersistencePowers } from './daemon-persistence-powers.js';
 import { makeDaemonDatabase } from './daemon-database.js';
-import XsDatabase from './better-sqlite3-xs.js';
+import XsDatabase from './rust-xs-sqlite.js';
 import { makePetStoreMaker } from './pet-store.js';
 import {
   makeMessageCapTP,
