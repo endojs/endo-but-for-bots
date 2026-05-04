@@ -7,6 +7,19 @@
 | **Author** | Kris Kowal (prompted) |
 | **Status** | In Progress |
 
+## Pull request status
+
+| Repository | PR | Status | Branch |
+| --- | --- | --- | --- |
+| `endojs/endo-but-for-bots` | [#35](https://github.com/endojs/endo-but-for-bots/pull/35) | open | `review/3-mount-core` (Phase 4 sub-mounts, snapshot, capability VFS) |
+| `endojs/endo-but-for-bots` | [#37](https://github.com/endojs/endo-but-for-bots/pull/37) | open | `review/4-mount-extensions` (revocation, deny patterns, glob/grep/stat/json) |
+| `endojs/endo-but-for-bots` | [#38](https://github.com/endojs/endo-but-for-bots/pull/38) | open | `review/5-cli-assorted` (zip checkin/out, write-text mount I/O) |
+
+> **Note:** These pull requests are on the **bots** mirror
+> (`endojs/endo-but-for-bots`), not on the upstream `endojs/endo`
+> repository. The bots repo is where in-flight work and review-only
+> mirrors live; bringing a change upstream is a separate step.
+
 ## Status
 
 Phases 1, 2, 3, and 5 are implemented.  Phase 4 (sub-mounts and snapshot)

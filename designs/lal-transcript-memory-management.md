@@ -7,6 +7,17 @@
 | **Author** | Kris Kowal (prompted) |
 | **Status** | Not Started |
 
+## Pull request status
+
+| Repository | PR | Status | Branch |
+| --- | --- | --- | --- |
+| `endojs/endo-but-for-bots` | [#33](https://github.com/endojs/endo-but-for-bots/pull/33) | open | `review/2-lal-transcript-fix` (broken-chain detection groundwork) |
+
+> **Note:** This pull request is on the **bots** mirror
+> (`endojs/endo-but-for-bots`), not on the upstream `endojs/endo`
+> repository. The bots repo is where in-flight work and review-only
+> mirrors live; bringing a change upstream is a separate step.
+
 ## What is the Problem Being Solved?
 
 The Lal agent participates in conversations via Endo messages. Each message

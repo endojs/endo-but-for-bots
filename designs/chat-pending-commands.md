@@ -6,6 +6,17 @@
 | **Author** | Kris Kowal (prompted) |
 | **Status** | Not Started |
 
+## Pull request status
+
+| Repository | PR | Status | Branch |
+| --- | --- | --- | --- |
+| `endojs/endo-but-for-bots` | [#43](https://github.com/endojs/endo-but-for-bots/pull/43) | open | `review/7-chat-pending-commands` |
+
+> **Note:** This pull request is on the **bots** mirror
+> (`endojs/endo-but-for-bots`), not on the upstream `endojs/endo`
+> repository. The bots repo is where in-flight work and review-only
+> mirrors live; bringing a change upstream is a separate step.
+
 ## What is the Problem Being Solved?
 
 When the user issues a command in Chat — `/dismiss 5`, `/adopt 3 edge name`,

@@ -7,6 +7,18 @@
 | **Author** | Kris Kowal (prompted) |
 | **Status** | Not Started |
 
+## Pull request status
+
+| Repository | PR | Status | Branch |
+| --- | --- | --- | --- |
+| `endojs/endo-but-for-bots` | [#59](https://github.com/endojs/endo-but-for-bots/pull/59) | open | `ocapn-noise-restaged-on-master` (Noise IK netlayer) |
+| `endojs/endo-but-for-bots` | [#49](https://github.com/endojs/endo-but-for-bots/pull/49) | open | `ocapn-noise-review-fixes` (security, ergonomics, portability) |
+
+> **Note:** These pull requests are on the **bots** mirror
+> (`endojs/endo-but-for-bots`), not on the upstream `endojs/endo`
+> repository. The bots repo is where in-flight work and review-only
+> mirrors live; bringing a change upstream is a separate step.
+
 ## What is the Problem Being Solved?
 
 The `@endo/ocapn-noise` package (v0.1.0) currently provides Noise Protocol

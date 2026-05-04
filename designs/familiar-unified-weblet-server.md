@@ -7,6 +7,17 @@
 | **Author** | Kris Kowal (prompted) |
 | **Status** | In Progress |
 
+## Pull request status
+
+| Repository | PR | Status | Branch |
+| --- | --- | --- | --- |
+| `endojs/endo-but-for-bots` | [#48](https://github.com/endojs/endo-but-for-bots/pull/48) | open | `review/10-design-loop-scaffolding` (revises this design; corrects status; adds dependencies on OCapN Noise) |
+
+> **Note:** This pull request is on the **bots** mirror
+> (`endojs/endo-but-for-bots`), not on the upstream `endojs/endo`
+> repository. The bots repo is where in-flight work and review-only
+> mirrors live; bringing a change upstream is a separate step.
+
 ## Status
 
 **Implemented.** The unified weblet server is in

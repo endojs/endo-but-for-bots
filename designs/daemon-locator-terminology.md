@@ -7,6 +7,17 @@
 | **Author** | Kris Kowal (prompted) |
 | **Status** | In Progress |
 
+## Pull request status
+
+| Repository | PR | Status | Branch |
+| --- | --- | --- | --- |
+| `endojs/endo-but-for-bots` | [#34](https://github.com/endojs/endo-but-for-bots/pull/34) | open | `review/2-locator-v2` (path-based V2 locator format) |
+
+> **Note:** This pull request is on the **bots** mirror
+> (`endojs/endo-but-for-bots`), not on the upstream `endojs/endo`
+> repository. The bots repo is where in-flight work and review-only
+> mirrors live; bringing a change upstream is a separate step.
+
 ## Current State
 
 This document describes terminology and format changes for the daemon's

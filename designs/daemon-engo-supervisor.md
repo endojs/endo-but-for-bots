@@ -6,6 +6,23 @@
 | **Author** | Kris Kowal (prompted) |
 | **Status** | Not Started |
 
+## Pull request status
+
+The implementation pivoted from Go to Rust. The `endor` supervisor stack
+plays the role this design proposed for `engo`.
+
+| Repository | PR | Status | Branch |
+| --- | --- | --- | --- |
+| `endojs/endo-but-for-bots` | [#17](https://github.com/endojs/endo-but-for-bots/pull/17) | merged | `endor` (Rust endor supervisor + makeArchive) |
+| `endojs/endo-but-for-bots` | [#22](https://github.com/endojs/endo-but-for-bots/pull/22) | open | `slot-machine-pr` (slot-machine c-list manager with Rust daemon CI) |
+| `endojs/endo-but-for-bots` | [#31](https://github.com/endojs/endo-but-for-bots/pull/31) | open | `design/endor-tui` (rust/endor TUI skeleton) |
+| `endojs/endo-but-for-bots` | [#32](https://github.com/endojs/endo-but-for-bots/pull/32) | open | `design/endor-bus-tui` (TUI stub packages) |
+
+> **Note:** These pull requests are on the **bots** mirror
+> (`endojs/endo-but-for-bots`), not on the upstream `endojs/endo`
+> repository. The bots repo is where in-flight work and review-only
+> mirrors live; bringing a change upstream is a separate step.
+
 ## What is the Problem Being Solved?
 
 The Endo daemon is currently a Node.js process that supervises Node.js worker

@@ -7,6 +7,17 @@
 | **Author** | Kris Kowal (prompted) |
 | **Status** | Not Started |
 
+## Pull request status
+
+| Repository | PR | Status | Branch |
+| --- | --- | --- | --- |
+| `endojs/endo-but-for-bots` | [#40](https://github.com/endojs/endo-but-for-bots/pull/40) | open | `review/6-agent-tools` (interval scheduler, HTTP client, webhook endpoint) |
+
+> **Note:** This pull request is on the **bots** mirror
+> (`endojs/endo-but-for-bots`), not on the upstream `endojs/endo`
+> repository. The bots repo is where in-flight work and review-only
+> mirrors live; bringing a change upstream is a separate step.
+
 ## What is the Problem Being Solved?
 
 AI coding agents like Claude Code ("Claw"), Cursor, and Devin have a

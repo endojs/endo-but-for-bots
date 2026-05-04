@@ -7,6 +7,17 @@
 | **Author** | Kris Kowal (prompted) |
 | **Status** | In Progress |
 
+## Pull request status
+
+| Repository | PR | Status | Branch |
+| --- | --- | --- | --- |
+| `endojs/endo-but-for-bots` | [#46](https://github.com/endojs/endo-but-for-bots/pull/46) | open | `review/8-ocapn-network-separation` |
+
+> **Note:** This pull request is on the **bots** mirror
+> (`endojs/endo-but-for-bots`), not on the upstream `endojs/endo`
+> repository. The bots repo is where in-flight work and review-only
+> mirrors live; bringing a change upstream is a separate step.
+
 ## What is the Problem Being Solved?
 
 OCapN currently conflates the concepts of "network" and "transport". The

@@ -8,6 +8,17 @@
 | **Status** | Proposed |
 | **Supersedes** | (replaces earlier revision of this document) |
 
+## Pull request status
+
+| Repository | PR | Status | Branch |
+| --- | --- | --- | --- |
+| `endojs/endo-but-for-bots` | [#42](https://github.com/endojs/endo-but-for-bots/pull/42) | open | `review/7-chat-markdown-render` |
+
+> **Note:** This pull request is on the **bots** mirror
+> (`endojs/endo-but-for-bots`), not on the upstream `endojs/endo`
+> repository. The bots repo is where in-flight work and review-only
+> mirrors live; bringing a change upstream is a separate step.
+
 ## Motivation
 
 The inline formatting parser in `packages/chat/markdown-render.js`

@@ -7,6 +7,18 @@
 | **Author** | Kris Kowal (prompted) |
 | **Status** | Not Started |
 
+## Pull request status
+
+| Repository | PR | Status | Branch |
+| --- | --- | --- | --- |
+| `endojs/endo-but-for-bots` | [#38](https://github.com/endojs/endo-but-for-bots/pull/38) | open | `review/5-cli-assorted` (`endo workers` CLI, listWorkerTenants foundation) |
+| `endojs/endo-but-for-bots` | [#39](https://github.com/endojs/endo-but-for-bots/pull/39) | open | `review/5-formula-introspection` (listWorkerTenants host API) |
+
+> **Note:** These pull requests are on the **bots** mirror
+> (`endojs/endo-but-for-bots`), not on the upstream `endojs/endo`
+> repository. The bots repo is where in-flight work and review-only
+> mirrors live; bringing a change upstream is a separate step.
+
 ## What is the Problem Being Solved?
 
 Workers are opaque. There is no way to see which worker processes are running,
