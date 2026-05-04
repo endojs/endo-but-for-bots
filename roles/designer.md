@@ -45,9 +45,27 @@ implement from later.
 - Reference any related design (`designs/<sibling>.md`) by relative
   link. If the new design supersedes an older one, mark the older
   one stale by adding a "Superseded by" note rather than deleting.
-- The designer does not commit, push, or open PRs. The output is
-  the file; an agent in the `builder` or `fixer` role takes it
-  from there.
+- The designer does not commit, push, or open PRs by default.
+  The output is the file; an agent in the `builder` or `fixer`
+  role takes it from there. When a brief overrides this and asks
+  the designer to also open a PR (the steward does this for the
+  design-pipeline dispatches), the branch carrying the design
+  must be rooted at `bots/llm` (or the PR's actual base), not at
+  `garden`. Garden carries agent-infrastructure
+  (`roles/`, `skills/`, `process/`, an overlay `CLAUDE.md`)
+  whose presence in a substantive PR's diff is a defect.
+  Procedure when opening the PR yourself:
+  ```sh
+  git fetch bots-ssh llm
+  git switch -c design/<slug> bots-ssh/llm
+  git add designs/<slug>.md
+  git commit -m '...'
+  ```
+  Any role/skill self-improvement made during the engagement is
+  committed separately on the `garden` branch, never on the
+  design branch. Verify before pushing:
+  `git diff bots-ssh/llm --name-only` should list only files
+  under `designs/`.
 - Wrap markdown lines at 80 to 100 columns; sentence per line.
   Avoid em-dashes; prefer separate sentences, parentheses, or
   colons.

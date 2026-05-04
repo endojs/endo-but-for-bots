@@ -209,6 +209,28 @@ Per cycle, in order:
   weighed in. Do not redispatch the same builder on the same
   design until the PR's head SHA advances or a maintainer
   comment lands.
+- **PR branches base off `bots/llm`, not off `garden`.** Every
+  brief the steward sends to a builder, designer, fixer, weaver,
+  or shepherd that opens or pushes a PR must instruct the
+  sub-agent to create its branch from `bots/llm` (or whatever
+  base the PR targets), not from the local `garden` checkout.
+  Garden carries agent-infrastructure (`roles/`, `skills/`,
+  `process/`, the steward's overlay `CLAUDE.md`) that has no
+  business in a substantive PR's diff. The brief should direct
+  the sub-agent to:
+  ```sh
+  git fetch bots-ssh llm
+  git switch -c <branch> bots-ssh/llm
+  ```
+  before staging design or code commits. Any role/skill
+  self-improvement the sub-agent makes during the engagement is
+  committed separately on `garden`, never on the design or
+  feature branch. The steward verifies the resulting PR's diff
+  with `gh pr diff <N> --name-only` before logging the dispatch
+  as successful; an unexpected `roles/`, `skills/`, or
+  `process/` entry means the branch was rooted wrong and the
+  steward must rebase the PR onto `bots/llm` (cherry-picking
+  only the substantive commits) before the next cycle.
 - **Read state before deciding.** A cycle that skips the read
   step produces duplicate dispatches and lost notes. The state
   files are not optional; they are the steward's whole memory.
