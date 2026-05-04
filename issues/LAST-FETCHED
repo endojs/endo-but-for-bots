@@ -1,0 +1,5 @@
+last-fetched: 2026-05-04T20:58:30Z
+source: endojs/endo (issues, state=open)
+files: 338 (failed=0)
+script: scripts/fetch-issues.sh
+note: initial baseline; future fetch-issues.sh runs refresh in place
