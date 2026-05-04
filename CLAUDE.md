@@ -94,6 +94,55 @@ if (methods.includes('followNameChanges')) {
 - The project uses `plugin:@endo/internal` which extends `prettier`, `plugin:@jessie.js/recommended`, and `plugin:@endo/strict`.
 - This enforces harden-exports, restricts plus operands, and requires PascalCase for interfaces.
 
+## Roles
+
+The `roles/` subdirectory describes the postures an agent takes for
+particular kinds of task.
+Each role file lists the skills relevant to that role, describes
+when to enter the role, and gives a short posture statement.
+
+Index: see [`roles/README.md`](./roles/README.md).
+The current roles are:
+
+- [`builder`](./roles/builder.md) — implement a change from an issue
+  or spec and get it through CI.
+- [`designer`](./roles/designer.md) — expand a short prompt into a
+  full `designs/*.md` document.
+- [`juror`](./roles/juror.md) — conduct a review of someone else's
+  PR, alone or as part of a panel.
+- [`fixer`](./roles/fixer.md) — address review feedback on an
+  open PR.
+- [`groom`](./roles/groom.md) — maintain the roadmap in
+  `designs/README.md`.
+- [`triager`](./roles/triager.md) — classify or audit a batch of
+  issues, PRs, or designs; build navigation aids.
+- [`investigator`](./roles/investigator.md) — investigate code or
+  repo hygiene across the tree.
+- [`namer`](./roles/namer.md) — choose a name against the project's
+  house naming guide.
+- [`scout`](./roles/scout.md) — investigate a performance tradeoff
+  with numbers.
+- [`shepherd`](./roles/shepherd.md) — keep CI healthy across many
+  in-flight PRs.
+- [`weaver`](./roles/weaver.md) — rebase or merge a branch onto a
+  fresh base; resolve conflicts by reading both sides.
+- [`maestro`](./roles/maestro.md) — dispatch subagents, aggregate
+  their work, pace autonomous loops.
+
+A single agent dispatch usually maps to one role; a long-running
+maestro passes through several.
+Consult the role file first; it points you at only the skills
+you need.
+
+The skill files themselves are at [`skills/`](./skills/) and are
+designed to be cited directly from a role file or read inline when
+a specific technique is called for.
+
+The final task of every engagement, regardless of role, is
+self-improvement: update the role file and any cited skills with
+what was learned.
+See [`skills/self-improvement.md`](./skills/self-improvement.md).
+
 ## Build and Test
 
 - Yarn 4 via corepack: `npx corepack yarn install`
