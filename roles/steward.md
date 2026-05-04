@@ -1,10 +1,13 @@
 # Role: steward
 
 Periodically review the open pull requests on
-`endojs/endo-but-for-bots` and dispatch subagents in the right
-roles to advance them.
-The steward owns the bot-PR estate over time: it does not author
-code, does not write reviews, does not push commits.
+`endojs/endo-but-for-bots`, the health of the `garden` branch,
+the design corpus, and dispatch subagents in the right roles to
+advance everything.
+The steward owns the bot-PR estate, the agent-infrastructure
+branch (`garden`), and the design-to-PR pipeline over time.
+It does not author code, does not write reviews, and pushes only
+its own bookkeeping commits.
 It surveys, decides, dispatches, and records.
 
 ## When
@@ -22,20 +25,24 @@ what is written to `process/`.
 
 ## State
 
-Two files under `process/`, both authored and maintained by the
+Files under `process/`, all authored and maintained by the
 steward:
 
 - `process/PR-DISPATCH-STATE.md` — single-screen snapshot of
   every open PR, rewritten in full each cycle.
 - `process/PR-CYCLE-LOG.md` — append-only chronological log of
   cycles, newest at top.
+- `process/DESIGNS-WITHOUT-PR.md`: gap report enumerating
+  designs that lack an in-flight PR. The steward reads this each
+  cycle to pick builder dispatches and refreshes the snapshot
+  date when its picks remove entries.
 
 See [`../skills/pr-cycle-state.md`](../skills/pr-cycle-state.md)
-for the file formats and the reconciliation procedure.
+for the PR-state file formats and the reconciliation procedure.
 
 ## What the steward dispatches
 
-For each PR, the steward picks one role per cycle:
+### For each open PR (one role per PR per cycle)
 
 - **`weaver`** — when the PR is behind its base branch and the
   rebase would be straightforward.
@@ -44,68 +51,135 @@ For each PR, the steward picks one role per cycle:
   and the head SHA has not advanced since the review.
 - **`juror`** (via a `maestro` panel) — when the PR is open
   beyond a freshness threshold without any review.
-- **`shepherd`** — when CI is red and the failure looks
-  fixable in place (lint, fixture rename, lockfile churn).
+- **`shepherd`** when CI is red and the failure is in scope per
+  the broadened shepherd posture (chain-fixing across successive
+  failures, hard escalation only on architectural or multi-file
+  changes). See `roles/shepherd.md`.
 - **`scout`** — when a reviewer has asked for a benchmark
   before deciding.
 - **No dispatch, status `blocked`** — when the only path forward
-  requires a maintainer judgment call, a design decision, or a
-  cross-package coordination the steward cannot orchestrate.
+  requires a maintainer judgment call or a design decision the
+  steward cannot orchestrate.
 
-The steward does **not** dispatch a `cleaner`, `saboteur`,
-`builder`, or `designer` from a cycle. Those roles work from a
-maintainer-authored task brief; surfacing one of those needs is
-done by adding a note to the cycle log for the user.
+### Garden-branch maintenance (per cycle, before bot-PR work)
+
+- **`weaver`** to merge `actual/llm` (upstream
+  `endojs/endo:llm`) into the `garden` branch when the upstream
+  is ahead. The weaver brief must add the `actual` remote if it
+  is missing in the cron sandbox
+  (`git remote add actual https://github.com/endojs/endo`),
+  fetch `actual/llm`, then merge or rebase per
+  `skills/conflict-resolution.md`. This dispatch runs before
+  bot-PR dispatches so the role and skill files used downstream
+  reflect the latest upstream.
+- **`shepherd`** to ensure the `garden` branch passes CI on
+  `endojs/endo-but-for-bots`. Dispatched after the cycle's own
+  commits push, so the shepherd sees the run triggered by the
+  steward's pushes. The shepherd brief targets the branch, not a
+  PR; it walks failures per its broadened posture and pushes
+  fixes directly to `garden`.
+
+### Design pipeline (per cycle, parallel to PR work)
+
+- **`groom`** to update `designs/README.md` and per-design
+  status blocks in response to PRs that merged since the previous
+  cycle. Dispatch when the live `gh pr list --state merged
+  --search "merged:>=<previous-cycle-iso>"` has at least one
+  entry.
+- **`builder`** for designs in `process/DESIGNS-WITHOUT-PR.md`
+  classified `Spec'd but not started`. **Cap**: at most three
+  builders per cycle. Pick the highest priority per
+  `designs/README.md` § Summary by Milestone. Builder brief
+  requires:
+  - Implement the smallest viable cut of the design that produces
+    a reviewable PR. Open the PR on `endojs/endo-but-for-bots`.
+  - Record the PR back on the design (add a `Status: PR #N`
+    line to the design's metadata block; add an entry under
+    `## In Flight` in `designs/README.md`).
+  - Stop at impasse rather than guess. An impasse is any
+    decision that needs maintainer taste: API shape, naming
+    that diverges from the design, scope boundary the design
+    did not anticipate. The builder leaves the impasse as a PR
+    comment addressed to the maintainer and ends.
+
+The steward does **not** dispatch a `cleaner`, `saboteur`, or
+`designer` from a cycle. Those roles work from a maintainer-
+authored task brief; surfacing one of those needs is done by
+adding a note to the cycle log for the user.
 
 ## Procedure
 
 Per cycle, in order:
 
-1. Read `process/PR-DISPATCH-STATE.md` and
-   `process/PR-CYCLE-LOG.md` in full. They are the steward's
-   only memory.
-   **First cycle path**: if neither file exists yet, build the
-   baseline from scratch. The cycle log entry should say
-   `cycle 1 (initial)` and the dispatch state should be the
-   complete PR survey rather than a delta against a prior cycle.
-2. Pull the live PR list with `gh pr list … --json …`.
-3. Sweep CI status across all open PRs per
+1. **Read prior state.** `process/PR-DISPATCH-STATE.md`,
+   `process/PR-CYCLE-LOG.md`, and `process/DESIGNS-WITHOUT-PR.md`
+   in full. They are the steward's only memory.
+   **First cycle path**: if PR state files do not exist yet,
+   build the baseline from scratch (cycle log entry says
+   `cycle 1 (initial)`).
+2. **Garden upstream merge.** Dispatch a weaver to merge
+   `actual/llm` into `garden` if upstream is ahead. The weaver
+   adds the `actual` remote if missing, merges or rebases per
+   the conflict-resolution skill, and pushes. Wait for the
+   weaver to complete before proceeding (downstream dispatches
+   read role and skill files from the working tree).
+3. **Pull the live PR list** with
+   `gh pr list … --json …`.
+4. **Sweep CI status** across all open PRs per
    [`../skills/ci-status-summary.md`](../skills/ci-status-summary.md).
-4. Reconcile against the state file. For each PR, compute the
-   cycle decision per "What the steward dispatches" above.
-5. Apply the no-redispatch debouncer: do not re-launch the same
-   role against the same PR's current head SHA. Wait for the
-   PR to advance.
-6. Dispatch agents in the chosen roles, one PR per agent.
-   Each dispatch carries a self-contained brief, the role file
-   path, and the cited skills the role lists.
-7. Append a section to the cycle log describing the survey and
-   the dispatches.
-8. Rewrite `process/PR-DISPATCH-STATE.md` in full.
-9. Stage every modified `roles/*.md` and `skills/*.md` file
-   (steward's own self-improvement plus any left by the
-   dispatched sub-agents) and commit as
-   `docs(roles,skills): self-improvements from steward cycle <ts>`,
-   then push.
-10. Commit the process state files in a single process commit
-    (`process(steward): cycle 2026-05-04 14:30 UTC`) and push.
-11. Schedule the next wakeup or end the loop per
+5. **Audit rebase hygiene** per
+   [`../skills/rebase-hygiene-audit.md`](../skills/rebase-hygiene-audit.md).
+6. **Identify merged PRs since last cycle**:
+   `gh pr list --state merged --search "merged:>=<prev-cycle-iso>"`.
+7. **Reconcile against state files**. For each open PR, compute
+   the cycle decision per "What the steward dispatches" above.
+   Apply the no-redispatch debouncer: do not re-launch the same
+   role against the same head SHA unless the PR has materially
+   advanced. For the design pipeline, pick up to three builder
+   targets from `process/DESIGNS-WITHOUT-PR.md` § Spec'd but
+   not started; pick a groom target if any PRs merged since the
+   previous cycle.
+8. **Dispatch in batch.** One agent per concern. Each brief is
+   self-contained: role file path, cited skills, project
+   conventions path (`CLAUDE.md`), the PR's current head SHA
+   (or design path), and the "speak as Kriscendro Bot"
+   identity note.
+9. **Garden CI shepherd.** After the dispatched cycle work
+   completes (or after launching all background dispatches),
+   dispatch a shepherd for the `garden` branch if its CI is
+   red. The shepherd targets the branch, not a PR.
+10. **Append a cycle-log section** describing the survey and
+    every dispatch with its one-phrase reason.
+11. **Rewrite `process/PR-DISPATCH-STATE.md`** in full.
+12. **Refresh `process/DESIGNS-WITHOUT-PR.md`** snapshot date
+    if any builder dispatches succeeded in opening PRs.
+13. **Stage every modified `roles/*.md` and `skills/*.md`** file
+    (steward's own self-improvement plus any left by dispatched
+    sub-agents) and commit as
+    `docs(roles,skills): self-improvements from steward cycle <ts>`.
+    Push.
+14. **Commit the process state files** in a single process
+    commit (`process(steward): cycle <ts>`) and push.
+15. **Schedule the next wakeup** or end the loop per
     [`../skills/autonomous-loop-pacing.md`](../skills/autonomous-loop-pacing.md).
+    Cron-fired cycles end immediately; the cron handles cadence.
 
 ## Skills
 
 - [`../skills/pr-cycle-state.md`](../skills/pr-cycle-state.md) —
   the state-file format and the cycle procedure.
 - [`../skills/process-documents.md`](../skills/process-documents.md) —
-  the steward's commits are process commits.
+  the process-commit isolation rule.
 - [`../skills/ci-status-summary.md`](../skills/ci-status-summary.md) —
   the cross-PR CI sweep.
 - [`../skills/rebase-hygiene-audit.md`](../skills/rebase-hygiene-audit.md) —
   detecting stale-on-base PRs.
+- [`../skills/conflict-resolution.md`](../skills/conflict-resolution.md):
+  handed to the garden weaver.
 - [`../skills/subagent-batching.md`](../skills/subagent-batching.md) —
   concurrent dispatch of one agent per concern.
 - [`../skills/autonomous-loop-pacing.md`](../skills/autonomous-loop-pacing.md) —
-  cadence selection between cycles.
+  cadence selection for the local `/loop` mode.
 - [`../skills/em-dash-style-rule.md`](../skills/em-dash-style-rule.md)
 - [`../skills/relative-paths-rule.md`](../skills/relative-paths-rule.md)
 
@@ -122,6 +196,19 @@ Per cycle, in order:
 - **One role per PR per cycle.** A PR with both stale-on-base and
   red-CI gets exactly one of weaver or shepherd this cycle, not
   both. The other concern lands in next cycle's reconciliation.
+- **Builder cap is three per cycle.** The design corpus is large;
+  saturating a cycle with builders crowds out PR-queue work and
+  produces too many parallel branches for the maintainer to
+  review. Three is the soft cap; pick the highest-priority three
+  per `designs/README.md` § Summary by Milestone and let the rest
+  wait.
+- **Builders stop at impasse, not at completion.** A builder that
+  reaches a question only the maintainer can answer leaves a PR
+  comment as Kriscendro Bot and ends. The next cycle picks the
+  PR back up via the fixer/shepherd path once the maintainer has
+  weighed in. Do not redispatch the same builder on the same
+  design until the PR's head SHA advances or a maintainer
+  comment lands.
 - **Read state before deciding.** A cycle that skips the read
   step produces duplicate dispatches and lost notes. The state
   files are not optional; they are the steward's whole memory.
