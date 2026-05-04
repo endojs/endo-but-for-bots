@@ -30,14 +30,35 @@ architectural ones.
 
 ## Posture
 
-- The shepherd does the smallest fix that gets a check green. If
-  the fix touches more than one file or rewrites a public API,
-  hand off to the `builder` or `fixer` role.
+- **The shepherd takes initiative to get all tests passing on the
+  target PR.** That is the deliverable. Keep going through
+  successive failures (and the second failures unmasked by
+  early-exit chains like `lint:prettier && lint:eslint`) until CI
+  is green or you hit a hard escalation point.
+- Prefer the smallest fix that gets a check green, but do not stop
+  at one. If a Prettier fix unmasks an ESLint config failure that
+  in turn unmasks a typecheck failure, fix all three. Commit each
+  fix as its own atomic commit so review can read the chain.
+- **Hard escalation points** (stop and surface to the user rather
+  than fix):
+  - Public-API rewrites or behavior changes that need a design
+    decision.
+  - Workspace structure changes (adding or removing packages,
+    changing workspace topology).
+  - Test deletions or `t.skip` to make a real failure go away.
+    Document a flake and retry; never silently delete a failing
+    test.
+  - `--no-verify`, `continue-on-error`, or any other "make the
+    check pass without addressing it" shortcut.
+  - Changes that would touch more than ~5 files or rewrite logic
+    spanning multiple modules. Beyond that scope, hand off to the
+    `builder` or `fixer` role.
 - Don't silently `--no-verify` or `continue-on-error` past a real
   failure. If the failure is a flake, document the flake and
   retry; if it's deterministic, fix it.
-- After a successful fix, post the green run's URL to the PR so
-  the maintainer can verify.
+- After a successful fix run, post the green run's URL to the PR
+  so the maintainer can verify. Include a short summary of every
+  failure you addressed and how.
 - The shepherd never opens new PRs. The scope is "checks on
   existing PRs, fixed in place".
 - Snapshots and audit reports go under `process/` and ship in
@@ -63,11 +84,10 @@ architectural ones.
   reveal a fresh ESLint failure on the same PR (e.g., a
   `typescript-eslint` minor that deprecates a config option). This
   isn't a regression you introduced: it was already in the tree but
-  unobservable. If the unmasked failure exceeds your shepherd
-  scope (touches files outside the prettier list, requires a
-  config change), commit the Prettier fix anyway (it advances the
-  PR) and escalate the second failure to the user with the failing
-  job's URL and the relevant log excerpt.
+  unobservable. The shepherd's job is to keep walking the chain:
+  fix Prettier, push, observe the next failure, fix that, push,
+  repeat until green or until a hard escalation point is hit. Each
+  unmasked failure gets its own commit so review reads cleanly.
 - **Dependabot branches live on the org repo**, not a fork, so push
   via the SSH `bots-ssh` (or HTTPS `bots`) remote with
   `--force-with-lease=<branch>:<old-sha>`. `maintainerCanModify`
