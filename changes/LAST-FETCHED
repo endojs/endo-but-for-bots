@@ -1,0 +1,5 @@
+last-fetched: 2026-05-04T20:58:30Z
+source: endojs/endo (pull requests, state=all)
+files: 2127 (failed=0)
+script: scripts/fetch-prs.sh
+note: initial baseline; future fetch-prs.sh runs refresh in place
