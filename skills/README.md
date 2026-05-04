@@ -31,6 +31,9 @@ the whole context.
 
 - [subagent-batching.md](./subagent-batching.md)
 - [autonomous-loop-pacing.md](./autonomous-loop-pacing.md)
+- [pr-cycle-state.md](./pr-cycle-state.md) — the two-file
+  `process/` state pattern for a periodic queue-managing role
+  whose context clears between cycles.
 
 ### CI and quality
 

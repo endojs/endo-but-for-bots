@@ -128,6 +128,9 @@ The current roles are:
   with numbers.
 - [`shepherd`](./roles/shepherd.md) — keep CI healthy across many
   in-flight PRs.
+- [`steward`](./roles/steward.md) — periodically review the
+  bot-PR estate and dispatch the right role per PR; stateful
+  across context clears via `process/` files.
 - [`weaver`](./roles/weaver.md) — rebase or merge a branch onto a
   fresh base; resolve conflicts by reading both sides.
 - [`maestro`](./roles/maestro.md) — dispatch subagents, aggregate

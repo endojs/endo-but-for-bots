@@ -39,6 +39,9 @@ playing both `juror` and `fixer`; consult both.
   tradeoff with numbers.
 - [shepherd.md](./shepherd.md) — keep CI healthy across many
   in-flight PRs.
+- [steward.md](./steward.md) — periodically review the bot-PR
+  estate and dispatch the right role per PR; tracks state in
+  `process/` files across context clears.
 - [weaver.md](./weaver.md) — rebase or merge a branch onto a
   fresh base; resolve conflicts by reading both sides.
 - [maestro.md](./maestro.md) — dispatch subagents,
