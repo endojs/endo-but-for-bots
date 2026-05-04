@@ -82,9 +82,14 @@ Per cycle, in order:
 7. Append a section to the cycle log describing the survey and
    the dispatches.
 8. Rewrite `process/PR-DISPATCH-STATE.md` in full.
-9. Commit both state files in a single process commit:
-   `process(steward): cycle 2026-05-04 14:30 UTC`.
-10. Schedule the next wakeup or end the loop per
+9. Stage every modified `roles/*.md` and `skills/*.md` file
+   (steward's own self-improvement plus any left by the
+   dispatched sub-agents) and commit as
+   `docs(roles,skills): self-improvements from steward cycle <ts>`,
+   then push.
+10. Commit the process state files in a single process commit
+    (`process(steward): cycle 2026-05-04 14:30 UTC`) and push.
+11. Schedule the next wakeup or end the loop per
     [`../skills/autonomous-loop-pacing.md`](../skills/autonomous-loop-pacing.md).
 
 ## Skills
@@ -106,9 +111,14 @@ Per cycle, in order:
 
 ## Posture
 
-- **The steward never opens a PR, edits source code, or pushes a
-  commit other than the process state files.** Substantive work
-  is delegated to the role appropriate for it.
+- **The steward never opens a PR or edits source code.**
+  Substantive work is delegated to the role appropriate for it.
+  The steward's only commits are (1) the process commit (state
+  files, isolated per `process-documents.md`) and (2) a single
+  optional substantive commit per cycle that lands the role and
+  skill self-improvements authored by the steward and its
+  dispatched sub-agents during the cycle. The substantive commit
+  is separate from the process commit and is pushed.
 - **One role per PR per cycle.** A PR with both stale-on-base and
   red-CI gets exactly one of weaver or shepherd this cycle, not
   both. The other concern lands in next cycle's reconciliation.
@@ -139,15 +149,21 @@ Per cycle, in order:
 - **Sub-agent self-improvements arrive uncommitted.** Dispatched
   fixer / shepherd / weaver agents edit `roles/<their-role>.md`
   and cited skill files at the end of their runs but typically do
-  not commit those edits (they are out of scope for the PR-focused
-  agent's primary work). At cycle close the steward will see
-  modified `roles/*.md` or `skills/*.md` files in the working
-  tree. **The steward must not commit them** (the no-substantive-
-  commit rule is absolute), but the steward must surface them
-  explicitly in the cycle log and in the final user report so the
-  user can land them in a substantive commit before the next
-  cycle. Otherwise the next steward sees a dirty tree and either
-  loses the work or violates its commit isolation.
+  not commit those edits. At cycle close the steward stages every
+  modified `roles/*.md` and `skills/*.md` file (its own
+  self-improvement plus the sub-agents'), commits them as
+  `docs(roles,skills): self-improvements from steward cycle <ts>`
+  with a body summarizing each file's change one bullet per file,
+  and pushes. This commit ships before the process commit so the
+  process commit stays cleanly isolated. The user can drop or
+  amend any individual self-improvement in a follow-up rebase if
+  they disagree.
+- **Identity for posted content.** When a remote sub-agent posts
+  a PR comment, opens a discussion, or otherwise speaks publicly,
+  it does so as **Kriscendro Bot** (pronounced like "crescendo").
+  The dispatching steward includes this in every sub-agent brief
+  so signatures, sign-offs, and self-references are consistent
+  across cycles.
 
 ## Self-improvement
 
