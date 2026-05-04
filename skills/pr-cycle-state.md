@@ -132,6 +132,32 @@ Every wake-up does these steps, in order, every time:
   longer but trims old sections older than thirty days into a
   rolling archive (`process/archive/PR-CYCLE-LOG-<YYYY-MM>.md`).
 
+## Distinguishing "author addressed" from "author silent"
+
+For PRs in `CHANGES_REQUESTED`, the cycle decision turns on whether
+the head SHA has advanced since the review. Pull both timestamps
+in one query and compare:
+
+```sh
+gh pr view <N> -R <owner>/<repo> --json headRefOid,reviews,commits \
+  --jq '{
+    head: .headRefOid,
+    last_review_at: (.reviews | sort_by(.submittedAt) | last | .submittedAt),
+    last_commit_at: (.commits | sort_by(.committedDate) | last | .committedDate)
+  }'
+```
+
+If `last_commit_at > last_review_at`, the author already pushed a
+fixup; status is `awaiting maintainer` (re-review). **Do not
+dispatch a fixer.** If `last_review_at > last_commit_at`, the
+review applies to the current head and the feedback is
+unaddressed; dispatch a fixer.
+
+A one-minute gap can go either way; verify by reading the latest
+commit's message: a `fix:`/`docs:`/`test:` prefix usually means
+the author was responding to feedback, while `chore: rebase` or
+similar suggests no real response.
+
 ## Pitfalls
 
 - **Forgetting to read state.** Each cycle has fresh context;

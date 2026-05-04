@@ -46,6 +46,34 @@ architectural ones.
 - When the global state is "all green and no agents in flight",
   end the autonomous loop. Don't keep ticking out of habit.
 
+## Recurring patterns
+
+- **Dependabot all-minor-patch + Prettier minor bump**: when the
+  group includes a `prettier` minor (e.g., 3.6 -> 3.8) the lint
+  job's `prettier --check` will fail on N files that the new
+  Prettier reformats. Fix by running `npx corepack yarn prettier
+  --write <listed files>` from the lint job log, *only the listed
+  files*, and committing as `chore: yarn format after prettier
+  minor bump`. Verify each diff is whitespace/wrapping only before
+  committing; if a Prettier change rewrote semantics (very rare in
+  a minor) escalate to the user.
+- **Unmasked second failure**: the project's `lint` script chains
+  `lint:prettier && lint:eslint`, so an early Prettier failure
+  short-circuits and hides any ESLint problems. Fixing Prettier can
+  reveal a fresh ESLint failure on the same PR (e.g., a
+  `typescript-eslint` minor that deprecates a config option). This
+  isn't a regression you introduced: it was already in the tree but
+  unobservable. If the unmasked failure exceeds your shepherd
+  scope (touches files outside the prettier list, requires a
+  config change), commit the Prettier fix anyway (it advances the
+  PR) and escalate the second failure to the user with the failing
+  job's URL and the relevant log excerpt.
+- **Dependabot branches live on the org repo**, not a fork, so push
+  via the SSH `bots-ssh` (or HTTPS `bots`) remote with
+  `--force-with-lease=<branch>:<old-sha>`. `maintainerCanModify`
+  reads false on these PRs because the head repo equals the base
+  repo, not because access is restricted.
+
 ## Self-improvement
 
 The final task of every engagement is to update this role file and

@@ -57,6 +57,25 @@ gh api repos/<owner>/<repo>/actions/jobs/<job-id>/logs | tail -100
   step that runs `lerna prepack`, which is the one most likely to
   surface lerna `ECYCLE` or workspace-cycle bugs. See
   `lerna-ecycle-fix.md`.
+- `gh pr checks` rollup can briefly report stale results across
+  SHAs right after a force-push: it may show "all SUCCESS" from the
+  prior head before the new head's checks register. Cross-check
+  with `gh api repos/<owner>/<repo>/actions/runs/<run-id>/jobs` for
+  the specific run id when the count looks suspicious (e.g., 26
+  SUCCESS within seconds of a push). Don't post a green-CI comment
+  off the rollup alone; verify against the run's job list.
+- The `/jobs` endpoint can momentarily report all jobs as
+  `status=completed` mid-run (likely a re-runner / matrix re-expand
+  artifact). When polling for "is the run done?", monitor the
+  **run-level** `status=="completed"` instead of summing per-job
+  states, e.g.:
+
+  ```sh
+  gh api repos/<owner>/<repo>/actions/runs/<id> --jq '.status'
+  ```
+
+  Only treat the run as terminal when the run object itself reports
+  `completed`; then read `conclusion` for success/failure.
 
 ## Session example
 

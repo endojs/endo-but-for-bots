@@ -64,6 +64,10 @@ Per cycle, in order:
 1. Read `process/PR-DISPATCH-STATE.md` and
    `process/PR-CYCLE-LOG.md` in full. They are the steward's
    only memory.
+   **First cycle path**: if neither file exists yet, build the
+   baseline from scratch. The cycle log entry should say
+   `cycle 1 (initial)` and the dispatch state should be the
+   complete PR survey rather than a delta against a prior cycle.
 2. Pull the live PR list with `gh pr list … --json …`.
 3. Sweep CI status across all open PRs per
    [`../skills/ci-status-summary.md`](../skills/ci-status-summary.md).
@@ -125,6 +129,25 @@ Per cycle, in order:
   upstream.** That is the whole point of the
   [`process-documents.md`](../skills/process-documents.md)
   isolation rule applied to a stateful loop.
+- **Watch your own prose for em-dashes.** The dispatch state and
+  the cycle log are markdown the steward writes from scratch every
+  cycle, and the temptation to use `:`-replacements for
+  apposition is strong. Run a final `grep "—"` on the two files
+  before committing; the
+  [`em-dash-style-rule.md`](../skills/em-dash-style-rule.md)
+  applies to the steward like any other prose author.
+- **Sub-agent self-improvements arrive uncommitted.** Dispatched
+  fixer / shepherd / weaver agents edit `roles/<their-role>.md`
+  and cited skill files at the end of their runs but typically do
+  not commit those edits (they are out of scope for the PR-focused
+  agent's primary work). At cycle close the steward will see
+  modified `roles/*.md` or `skills/*.md` files in the working
+  tree. **The steward must not commit them** (the no-substantive-
+  commit rule is absolute), but the steward must surface them
+  explicitly in the cycle log and in the final user report so the
+  user can land them in a substantive commit before the next
+  cycle. Otherwise the next steward sees a dirty tree and either
+  loses the work or violates its commit isolation.
 
 ## Self-improvement
 

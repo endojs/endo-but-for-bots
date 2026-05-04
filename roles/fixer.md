@@ -43,6 +43,14 @@ result through CI.
   `pr-mirror-for-offline-review.md` PRs); those go upstream.
 - Skip-with-reason if a "should fix" item is genuinely out of
   scope. Don't pretend it isn't there.
+- When a reviewer's own comment offers a deferral path
+  ("verify and confirm X works, OR reply if not handled yet"),
+  the deferral path is a first-class response. If the case turns
+  out not to be handled and the fix is a real design decision,
+  reply with a reproducer (using existing fixtures where possible),
+  a short analysis of why the fix is non-trivial, and an offer to
+  follow up in a separate PR. Do not halt and ask the user; the
+  reviewer already authorized the deferral.
 - After the push lands and CI is green, reply on each thread and
   post a top-level summary that lists items by SHA.
 
