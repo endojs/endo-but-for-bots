@@ -5,6 +5,17 @@ code that is currently unexercised, and delete code that is
 genuinely unreachable.
 The role is per-package; one engagement targets one package.
 
+**Prefer integration tests** that exercise paths reachable from
+the package's public API.
+A coverage gap is best closed by realistic exercise of the
+exported surface, not by a unit test that calls an internal
+function directly.
+A unit test written **solely to retain otherwise-dead code** is an
+anti-pattern: if no public-API path reaches the code, the test is
+the only caller, the code is dead, and the right answer is to
+delete the code rather than ship a test that pretends it's
+alive.
+
 ## When
 
 - The user says "clean up coverage on `<package>`" or "find dead
@@ -17,14 +28,28 @@ The role is per-package; one engagement targets one package.
 
 1. **Establish a baseline** with `c8` per
    [`../skills/coverage-driven-testing.md`](../skills/coverage-driven-testing.md).
-2. **Pick one source file at a time.** Walk every uncovered
-   line and decide: reachable-but-untested, reachable-only-
-   adversarially (hand off to the `saboteur`), or unreachable.
-3. **Write tests** for reachable-but-untested cases. Each test
-   must catch a real failure mode; see
+2. **Pick one source file at a time.** Walk every uncovered line
+   and decide:
+   - **reachable from a public-API entry point but not yet
+     exercised** — write an integration test through that entry
+     point;
+   - **reachable only by adversarial inputs** — hand off to the
+     `saboteur`;
+   - **reachable only by a unit test that calls the internal
+     function directly** — that's dead, not untested. Delete the
+     code.
+3. **Write integration tests** that drive the package's public
+   API and let the uncovered branch fall out as a side effect of
+   realistic exercise.
+   Reach for a unit test only when the branch genuinely cannot
+   be reached from the public surface and you've confirmed it is
+   reachable in production (a host hook, a platform-conditional,
+   etc.).
+   Each test must still catch a real failure mode; see
    [`../skills/regression-evidence.md`](../skills/regression-evidence.md).
 4. **Delete dead code** in a separate commit. Confirm the four
    "dead" criteria from the coverage skill before deleting.
+   Test-only call sites do **not** count as live callers.
 5. **Re-run coverage** after each change and record the move.
 6. **Open the PR** or hand off to a `builder` / `fixer` if the
    work has grown beyond a single small commit set.
@@ -43,6 +68,14 @@ The role is per-package; one engagement targets one package.
 
 - One package per engagement. Cross-package sweeps are
   `triager`'s job; the cleaner does deep work on one target.
+- **Prefer integration tests through public-API entry points**
+  over unit tests against internal helpers. The integration test
+  is more realistic, exercises more of the package per assertion,
+  and resists drift when internals refactor.
+- **Never ship a unit test whose only purpose is to keep
+  otherwise-dead code alive.** If the only caller of a function
+  is the test you would have to write, delete the function. The
+  test is the smell, not the cure.
 - Test additions and deletions go in **separate commits** so a
   reviewer can take one without the other.
 - Don't write contortion-tests that mock half the dependencies
@@ -53,7 +86,8 @@ The role is per-package; one engagement targets one package.
   Reachability questions that turn into API questions go to the
   user.
 - Coverage is a means, not an end. A clean package at 88% with
-  every tested branch meaningful beats a contorted 95%.
+  every tested branch meaningfully reachable beats a contorted
+  95% kept alive by tests-as-callers.
 
 ## Self-improvement
 

@@ -24,11 +24,16 @@ configuration.
    package at once; focus produces sharper tests and cleaner
    diffs.
 
-3. **For each uncovered line or branch, decide one of three:**
-   - **Reachable but untested.** Write a test that exercises the
-     branch with a realistic input. The new test must catch a
-     real failure mode; see
-     [`regression-evidence.md`](./regression-evidence.md).
+3. **For each uncovered line or branch, decide one of four:**
+   - **Reachable from a public-API entry point.** Write an
+     **integration test** that drives the entry point with a
+     realistic input and lets the uncovered branch fall out of
+     the exercise. The new test must catch a real failure mode;
+     see [`regression-evidence.md`](./regression-evidence.md).
+   - **Reachable only through a host hook, platform-conditional,
+     or other configuration the public API can't trigger.**
+     A targeted unit test is acceptable, but document why the
+     branch is not reachable from the public surface.
    - **Reachable but only by adversarial inputs.** Hand off to
      the `saboteur` role; coverage isn't the right driver for
      gotcha tests.
@@ -36,6 +41,12 @@ configuration.
      <function-or-symbol-name>` first to confirm no other
      package, no test fixture, and no `// @ts-` directive
      mentions it.
+
+**Prefer integration tests over unit tests.** A public-API
+exercise covers more of the package per test, breaks honestly
+when internals refactor, and forces the same path a real consumer
+would take. Reach for a unit test only when the branch is
+genuinely public-API-unreachable per the second bullet above.
 
 4. **Re-run coverage** after each change. The percentage should
    increase; if a new test does not move it, the test isn't
@@ -72,15 +83,32 @@ configuration.
 
 A function or branch is dead when **all** of these hold:
 
-- No call site in the package itself.
+- No call site in the package's own non-test source
+  (`src/` or equivalent). **Test-only call sites do not count
+  as live callers** — a function whose only caller is a unit test
+  in the same package is dead, and the unit test exists to keep
+  it alive.
 - No call site in any other package in the monorepo (`grep -rn
-  <name> packages/`).
+  <name> packages/ --exclude-dir=test`).
 - No `@import` JSDoc reference in any `.js` or `.ts` file.
 - The package's exported surface (`index.js` / `package.json`
   `exports`) does not include it.
 
 Anything less than all four is a "covered later" candidate, not
 dead.
+
+The grep pattern that distinguishes "live caller" from "test-only
+caller":
+
+```sh
+grep -rn '<symbol>' packages/<name>/src/        # live callers
+grep -rn '<symbol>' packages/<name>/test/       # test-only
+grep -rn '<symbol>' packages/ --exclude-dir=test --exclude-dir=node_modules
+```
+
+If the first and third are empty and only the second hits, the
+symbol is dead, the test is its only reason for existence, and
+both should be deleted in the same commit.
 
 ## Pitfalls
 
@@ -97,6 +125,12 @@ dead.
   count and consequently the absolute number of covered lines,
   even when the percentage went up. Report percentages, not
   absolutes.
+- **Unit tests as life-support for dead code.** A unit test that
+  imports an internal helper and asserts trivial behavior on it
+  is often the cleaner role's signal that the helper has no
+  real callers. Resist the impulse to write the test; check the
+  caller graph first. If the only caller would be your test,
+  delete the helper instead.
 - **`ava`'s parallel test workers and `c8`.** Some packages set
   `ava` to run serially. Coverage gathered under a different
   concurrency than CI uses can differ; if numbers look weird,
