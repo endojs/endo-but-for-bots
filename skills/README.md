@@ -39,6 +39,10 @@ the whole context.
 - [pre-pr-checklist.md](./pre-pr-checklist.md)
 - [fixture-naming-after-diagnostic.md](./fixture-naming-after-diagnostic.md)
 - [lerna-ecycle-fix.md](./lerna-ecycle-fix.md)
+- [coverage-driven-testing.md](./coverage-driven-testing.md) — run
+  c8, write tests for reachable code, delete unreachable code.
+- [adversarial-tests.md](./adversarial-tests.md) — the
+  brainstorming list for invariant-attacking gotcha tests.
 
 ### Code archaeology
 

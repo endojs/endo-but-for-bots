@@ -106,6 +106,8 @@ The current roles are:
 
 - [`builder`](./roles/builder.md) — implement a change from an issue
   or spec and get it through CI.
+- [`cleaner`](./roles/cleaner.md) — maximize coverage on a target
+  package; write tests or delete unreachable code.
 - [`designer`](./roles/designer.md) — expand a short prompt into a
   full `designs/*.md` document.
 - [`juror`](./roles/juror.md) — conduct a review of someone else's
@@ -120,6 +122,8 @@ The current roles are:
   repo hygiene across the tree.
 - [`namer`](./roles/namer.md) — choose a name against the project's
   house naming guide.
+- [`saboteur`](./roles/saboteur.md) — propose gotcha test cases
+  that attack a module's claimed invariants.
 - [`scout`](./roles/scout.md) — investigate a performance tradeoff
   with numbers.
 - [`shepherd`](./roles/shepherd.md) — keep CI healthy across many

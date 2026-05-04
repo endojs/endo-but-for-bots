@@ -15,6 +15,9 @@ playing both `juror` and `fixer`; consult both.
 
 - [builder.md](./builder.md) — implement a change from an issue or
   spec and get it through CI.
+- [cleaner.md](./cleaner.md) — maximize coverage on a target
+  package; write tests for reachable code or delete unreachable
+  code.
 - [designer.md](./designer.md) — expand a short prompt into a full
   `designs/*.md` document.
 - [juror.md](./juror.md) — conduct a review of someone else's
@@ -30,6 +33,8 @@ playing both `juror` and `fixer`; consult both.
   hygiene (TODOs, AST coverage, rebase state) across the tree.
 - [namer.md](./namer.md) — choose a name (function, package,
   flag, branch) against the project's house naming guide.
+- [saboteur.md](./saboteur.md) — propose gotcha test cases that
+  attack a module's claimed invariants.
 - [scout.md](./scout.md) — investigate a performance
   tradeoff with numbers.
 - [shepherd.md](./shepherd.md) — keep CI healthy across many
