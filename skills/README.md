@@ -58,6 +58,10 @@ the whole context.
 
 - [self-improvement.md](./self-improvement.md) — every role's final
   task is to update its own role and skills with what it learned.
+- [process-documents.md](./process-documents.md) — what counts as
+  a process document, where it lives, and the isolation-commit
+  rule that lets process commits drop cleanly when porting work
+  upstream.
 
 ### Reporting
 

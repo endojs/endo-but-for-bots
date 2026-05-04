@@ -43,6 +43,9 @@ reporting findings.
 - If the audit reveals concrete fixes that fit in the same PR,
   hand them off to the `builder` role; the investigator surfaces,
   someone else lands.
+- The audit report lives under `process/`; ship it in an isolated
+  process commit (see
+  [`../skills/process-documents.md`](../skills/process-documents.md)).
 
 ## Self-improvement
 

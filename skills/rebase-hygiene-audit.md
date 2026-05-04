@@ -74,7 +74,7 @@ whether any stacked-base situations should be cleaned up.
 ## Session example
 
 Audited 60 open PRs on `endojs/endo-but-for-bots` and produced
-`/home/kris/triage/PR-REBASE-AUDIT.md`. Headline counts: 16 green,
+`/home/kris/triage/process/PR-REBASE-AUDIT.md`. Headline counts: 16 green,
 36 needs-rebase (clean), 6 needs-rebase-with-conflicts, 2 has-merge-
 commits, 0 base-missing. Top targets to rebase first: 16 `review/*`
 PRs all 51 behind `bots/llm` (clean) plus 4 Dependabot PRs 717

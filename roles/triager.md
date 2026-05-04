@@ -41,8 +41,11 @@ searchable, and identifying actionable subsets.
   path, an issue number, or a commit SHA.
 - End with a "Suggested follow-ups" section that orders the work by
   highest-leverage action first.
-- The output is a single markdown file; avoid spawning a second
-  pass unless the user asks. Triage is a snapshot, not a process.
+- The output is a single markdown file under `process/`; avoid
+  spawning a second pass unless the user asks. Triage is a
+  snapshot, not a process.
+- Ship the report in an isolated process commit; see
+  [`../skills/process-documents.md`](../skills/process-documents.md).
 
 ## Self-improvement
 

@@ -143,6 +143,17 @@ self-improvement: update the role file and any cited skills with
 what was learned.
 See [`skills/self-improvement.md`](./skills/self-improvement.md).
 
+## Process documents
+
+Audit reports, gap reports, snapshots, open-question logs, and
+work-handoff lists live under [`process/`](./process/).
+They describe how the work was done, not what the product is.
+Process documents ship in **isolated process commits** so they drop
+cleanly when porting work from this repo or
+`endojs/endo-but-for-bots` to upstream `endojs/endo`.
+See [`skills/process-documents.md`](./skills/process-documents.md)
+for the discipline.
+
 ## Build and Test
 
 - Yarn 4 via corepack: `npx corepack yarn install`

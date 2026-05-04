@@ -12,9 +12,11 @@ next interactive turn without re-deriving the context.
 
 ## Where the note lives
 
-`/home/kris/triage/designs/GROOM-OPEN-QUESTIONS.md`. One file,
-appended to over time. The most recent grooming pass is at the
-top; older passes follow.
+`process/GROOM-OPEN-QUESTIONS.md` at the triage root.
+One file, appended to over time.
+The most recent grooming pass is at the top; older passes follow.
+Ship updates in process commits per
+[`process-documents.md`](./process-documents.md).
 
 ## Format
 
@@ -56,7 +58,7 @@ designs were reviewed, what changed in the README>
 
 ## Procedure
 
-1. Open `designs/GROOM-OPEN-QUESTIONS.md` (create if missing).
+1. Open `process/GROOM-OPEN-QUESTIONS.md` (create if missing).
 2. Insert a new dated section at the top.
 3. For each unresolved question, write one bullet that names the
    design (or the cross-cutting concern), states what the

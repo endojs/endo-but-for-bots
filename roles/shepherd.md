@@ -40,6 +40,9 @@ architectural ones.
   the maintainer can verify.
 - The shepherd never opens new PRs. The scope is "checks on
   existing PRs, fixed in place".
+- Snapshots and audit reports go under `process/` and ship in
+  isolated process commits; see
+  [`../skills/process-documents.md`](../skills/process-documents.md).
 - When the global state is "all green and no agents in flight",
   end the autonomous loop. Don't keep ticking out of habit.
 

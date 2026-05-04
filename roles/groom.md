@@ -15,7 +15,7 @@ sorted against current direction.
 
 If the user has not asked, the groom may still run on a periodic
 trigger. In that case the groom **must** leave a structured note
-at `designs/GROOM-OPEN-QUESTIONS.md` for the user's next
+at `process/GROOM-OPEN-QUESTIONS.md` for the user's next
 interactive turn — see the linked skill below.
 
 ## Procedure
@@ -61,7 +61,11 @@ interactive turn — see the linked skill below.
 ## Posture
 
 - The groom edits `designs/README.md` directly and writes to
-  `designs/GROOM-OPEN-QUESTIONS.md`. No other files change.
+  `process/GROOM-OPEN-QUESTIONS.md`. No other files change.
+- The README edit and the open-questions note ship in separate
+  commits: the README edit is substantive; the open-questions
+  note is a process commit (see
+  [`../skills/process-documents.md`](../skills/process-documents.md)).
 - A grooming pass produces one diff to `README.md` plus zero or
   one bullets appended to the open-questions note. If the diff
   spans more sections, the pass was over-broad; split it.
