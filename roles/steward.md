@@ -142,7 +142,7 @@ Per cycle, in order:
 8. **Dispatch in batch.** One agent per concern. Each brief is
    self-contained: role file path, cited skills, project
    conventions path (`CLAUDE.md`), the PR's current head SHA
-   (or design path), and the "speak as Kriscendro Bot"
+   (or design path), and the "speak as Kriscendo Bot"
    identity note.
 9. **Garden CI shepherd.** After the dispatched cycle work
    completes (or after launching all background dispatches),
@@ -204,7 +204,7 @@ Per cycle, in order:
   wait.
 - **Builders stop at impasse, not at completion.** A builder that
   reaches a question only the maintainer can answer leaves a PR
-  comment as Kriscendro Bot and ends. The next cycle picks the
+  comment as Kriscendo Bot and ends. The next cycle picks the
   PR back up via the fixer/shepherd path once the maintainer has
   weighed in. Do not redispatch the same builder on the same
   design until the PR's head SHA advances or a maintainer
@@ -247,7 +247,7 @@ Per cycle, in order:
   they disagree.
 - **Identity for posted content.** When a remote sub-agent posts
   a PR comment, opens a discussion, or otherwise speaks publicly,
-  it does so as **Kriscendro Bot** (pronounced like "crescendo").
+  it does so as **Kriscendo Bot** (pronounced like "crescendo").
   The dispatching steward includes this in every sub-agent brief
   so signatures, sign-offs, and self-references are consistent
   across cycles.
