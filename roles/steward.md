@@ -36,6 +36,13 @@ steward:
   designs that lack an in-flight PR. The steward reads this each
   cycle to pick builder dispatches and refreshes the snapshot
   date when its picks remove entries.
+- `process/PR-DISPATCH-STATE.md` § **Cleaner ledger**: a small
+  table at the bottom of the dispatch state listing every PR
+  that has had a cleaner dispatched against it (PR number, head
+  SHA at time of dispatch, package(s) targeted, outcome
+  one-phrase). The steward consults this ledger to honor the
+  "once per PR" rule and to detect whether a cleaner is
+  currently in flight (the concurrency cap of one).
 
 See [`../skills/pr-cycle-state.md`](../skills/pr-cycle-state.md)
 for the PR-state file formats and the reconciliation procedure.
@@ -57,6 +64,14 @@ for the PR-state file formats and the reconciliation procedure.
   changes). See `roles/shepherd.md`.
 - **`scout`** — when a reviewer has asked for a benchmark
   before deciding.
+- **`cleaner`** when the PR has not yet had cleaner attention
+  (no row in `process/PR-DISPATCH-STATE.md` § "Cleaner ledger"
+  for that PR number) and no other cleaner is currently
+  in flight (concurrency cap is **one cleaner at a time across
+  the whole estate**). The cleaner targets the package(s) the PR
+  touches, not the PR's own diff. Record the dispatch in the
+  ledger so subsequent cycles do not redispatch it. See
+  `roles/cleaner.md`.
 - **No dispatch, status `blocked`** — when the only path forward
   requires a maintainer judgment call or a design decision the
   steward cannot orchestrate.
@@ -102,10 +117,10 @@ for the PR-state file formats and the reconciliation procedure.
     did not anticipate. The builder leaves the impasse as a PR
     comment addressed to the maintainer and ends.
 
-The steward does **not** dispatch a `cleaner`, `saboteur`, or
-`designer` from a cycle. Those roles work from a maintainer-
-authored task brief; surfacing one of those needs is done by
-adding a note to the cycle log for the user.
+The steward does **not** dispatch a `saboteur` or `designer`
+from a cycle outside the design pipeline. Those roles work from
+a maintainer-authored task brief; surfacing one of those needs
+is done by adding a note to the cycle log for the user.
 
 ## Procedure
 
@@ -138,7 +153,12 @@ Per cycle, in order:
    advanced. For the design pipeline, pick up to three builder
    targets from `process/DESIGNS-WITHOUT-PR.md` § Spec'd but
    not started; pick a groom target if any PRs merged since the
-   previous cycle.
+   previous cycle. For the cleaner: at most one dispatch this
+   cycle, and only if no cleaner is currently in flight; pick a
+   PR whose number does not appear in the Cleaner ledger,
+   prioritizing the PR with the largest source-file diff in
+   packages with the lowest current coverage. Append the new
+   row to the ledger as soon as the dispatch is launched.
 8. **Dispatch in batch.** One agent per concern. Each brief is
    self-contained: role file path, cited skills, project
    conventions path (`CLAUDE.md`), the PR's current head SHA
@@ -202,6 +222,16 @@ Per cycle, in order:
   review. Three is the soft cap; pick the highest-priority three
   per `designs/README.md` § Summary by Milestone and let the rest
   wait.
+- **Cleaner cap is one in flight, ever.** Cleaners modify
+  package source and tests in ways that interleave poorly with
+  weaver / fixer / shepherd work on the same packages. Before
+  dispatching a cleaner, scan the cycle log and the in-flight
+  agent list for any cleaner not yet reported complete; if one
+  exists, defer this cycle's cleaner dispatch and surface the
+  defer in the cycle log. Each PR is eligible for **at most one
+  cleaner attention ever**: consult the Cleaner ledger in the
+  dispatch state file and skip any PR whose number appears
+  there, regardless of head-SHA advancement.
 - **Builders stop at impasse, not at completion.** A builder that
   reaches a question only the maintainer can answer leaves a PR
   comment as Kriscendo Bot and ends. The next cycle picks the
