@@ -59,6 +59,18 @@ vowels, you've broken the rule.
 4. Apply the three laws and the system laws in order. Stop at the
    first satisfying name.
 
+## Verify the source name
+
+When the prompt names the thing to be renamed, grep for the exact
+spelling before quoting it back.
+A maintainer paraphrasing from memory may misspell ("Mignion" for
+`MignonicPowers`, "Minion" for `Mignonic`, "Daemon" for
+`DaemonicPowers`).
+A name that the prompt reports as "Foo" may turn out to be `FooBar`
+or `FooicPowers` in the source.
+Report what you actually find; do not propose a rename target for a
+name that does not exist in the codebase.
+
 ## Deliverable
 
 The name plus one paragraph justifying it against the laws.
