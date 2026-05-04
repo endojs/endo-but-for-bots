@@ -1171,6 +1171,29 @@ export const make = (powers, _context, { env = {} } = {}) => {
    *   `ro → rw` upgrade; network broadening) with structured
    *   `makeError(X\`fork: …\`)` throws.
    * @param {EndoGuest} [parentPowers] - Optional parent guest powers for scoped child tracking
+   * @param {Record<string, string>} [introducedExtras]
+   *   Optional operator-granted introductions threaded into
+   *   `provideGuest`'s `introducedNames` map alongside the
+   *   mandatory `<agentName>-sandbox → sandbox` mapping.  Each entry
+   *   is `{ <parent-namespace pet name>: <child-namespace pet
+   *   name> }` and is resolved by the daemon's
+   *   `introduceNamesToAgent` against the parent host's pet store
+   *   (see `packages/daemon/CLAUDE.md` § "introducedNames").
+   *   Typical contents:
+   *     - extra `Mount` caps the operator wants the child to see
+   *       directly (defence-in-depth on top of the slice's
+   *       authoritative `/workspace`);
+   *     - in scoped-within-parent mode, a re-introduction of the
+   *       parent's `workspace-mount` as `'workspace'` for tools
+   *       that today read the host-side workspace path directly.
+   *   Kept as a separate parameter (rather than baked into
+   *   `childSpec`) so the `/spawn` builtin (sub-task 57) can
+   *   compose the introduction set without cracking spawnAgent
+   *   open.  Per TADA/23 Decision 3, the previous
+   *   `workspace-mount → workspace` introduction the dormant
+   *   helper baked in unconditionally is **dropped** — the
+   *   sub-slice's mount view is the authoritative `/workspace`,
+   *   exactly as it is for the root genie.
    */
   const spawnAgent = async (
     hostAgent,
@@ -1180,6 +1203,7 @@ export const make = (powers, _context, { env = {} } = {}) => {
     config,
     childSpec,
     parentPowers,
+    introducedExtras,
   ) => {
     await Promise.resolve();
 
@@ -1251,19 +1275,62 @@ export const make = (powers, _context, { env = {} } = {}) => {
       }
       throw err;
     }
-    // Reference `subAgentSlice` so the lint / ts-check pass does not
-    // flag the binding as unused while sub-tasks 52 / 53 / 54 land
-    // the wiring that consumes it.
-    void subAgentSlice;
-
-    // Build introducedNames: only grant capabilities the child needs.
-    /** @type {Record<string, string>} */
-    const introducedNames = {};
-    if (await E(hostAgent).has(WORKSPACE_MOUNT_NAME)) {
-      introducedNames[WORKSPACE_MOUNT_NAME] = 'workspace';
+    // ── Sub-slice pet-store pin (TADA/23 Decision 2 bridge) ──────
+    // `makePersistent` pins the live slice in the sandbox factory's
+    // internal `persistentSlices` keyspace and writes the resolved
+    // spec to disk, but the daemon's `introduceNamesToAgent`
+    // (`packages/daemon/src/host.js` ~line 786) only resolves names
+    // out of the host's *pet store* — it has no awareness of the
+    // sandbox plugin's keyspace.  Pin the live `subAgentSlice` here
+    // under the same `<agentName>-sandbox` name `makePersistent`
+    // recorded so the `provideGuest` `introducedNames` lookup below
+    // resolves and writes the slice cap into the child guest's pet
+    // store (rather than silently no-opping).
+    //
+    // Idempotent: a `has` guard on the parent's pet store
+    // short-circuits on restart so we do not formulate a fresh
+    // marshal-value for an already-pinned slice.  The pinned value
+    // is the live slice handle, which (alongside `makePersistent`'s
+    // disk record) is what survives the daemon restart cycle — see
+    // the surrounding `// ── Sub-slice mint via fork() +
+    // makePersistent() ──` comment for the full restart-shape
+    // rationale.
+    if (!(await E(hostAgent).has(sliceName))) {
+      await E(hostAgent).storeValue(
+        /** @type {any} */ (subAgentSlice),
+        sliceName,
+      );
     }
 
-    // Guard idempotency — on restart the guest already exists.
+    // ── Build introducedNames ────────────────────────────────────
+    // Per TADA/23 Decision 3, the legacy `workspace-mount →
+    // workspace` introduction the dormant helper baked in
+    // unconditionally is dropped — the sub-slice's mount view is
+    // the authoritative `/workspace`, exactly as it is for the
+    // root genie.  Instead, introduce the freshly-pinned sub-slice
+    // (parent-namespace key `<agentName>-sandbox`) under the
+    // child-namespace pet name `'sandbox'`, mirroring how the root
+    // genie resolves `main-genie-sandbox` from `rootPowers` in
+    // `runRootAgent` (TADA/22 Decision 1).
+    //
+    // `introducedExtras` carries any operator-granted additions
+    // (further `Mount` caps, an opt-in re-introduction of the
+    // parent's `workspace-mount` as `'workspace'` in
+    // scoped-within-parent mode, or other agent-specific
+    // bindings).  Spread last so callers can override the default
+    // child-namespace pet name `'sandbox'` only by passing the
+    // same parent-namespace key (deliberately uncommon — the
+    // sub-slice introduction is the contract `main.js`'s child
+    // boot path relies on).
+    const introducedNames = harden({
+      [sliceName]: 'sandbox',
+      ...introducedExtras,
+    });
+
+    // Guard idempotency — on restart the guest already exists, and
+    // re-passing `introducedNames` to a reincarnated guest fails
+    // because the daemon's reincarnation path lacks `write` (see
+    // `packages/daemon/CLAUDE.md` § "provideGuest idempotency").
     /** @type {EndoGuest} */
     let agentGuest;
     if (await E(hostAgent).has(agentName)) {
@@ -1274,7 +1341,7 @@ export const make = (powers, _context, { env = {} } = {}) => {
       agentGuest = /** @type {EndoGuest} */ (
         await E(hostAgent).provideGuest(agentName, {
           agentName: profileName,
-          introducedNames: harden(introducedNames),
+          introducedNames,
         })
       );
     }
