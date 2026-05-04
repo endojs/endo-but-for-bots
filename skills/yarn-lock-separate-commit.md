@@ -1,0 +1,47 @@
+# Always commit yarn.lock separately
+
+## The rule
+
+Every change that touches `yarn.lock` ships in **its own commit**,
+separate from the `package.json` change that caused the lockfile
+update, with the message `chore: Update yarn.lock`.
+
+## Why
+
+A separate lockfile commit can be dropped and regenerated cleanly on
+rebase. A combined commit turns lockfile churn into merge conflicts
+that have to be resolved by re-running `yarn install` and
+hand-stitching, which is error-prone and pollutes the history.
+
+## How
+
+After making the dep change in `package.json`:
+
+```sh
+git add packages/foo/package.json
+git commit -m "feat(foo): add bar dependency (#NNNN)"
+
+npx corepack yarn install
+git add yarn.lock
+git commit -m "chore: Update yarn.lock"
+```
+
+When force-pushing a rebased branch, the order of the two commits
+matters: put the lockfile commit *after* the package.json commit, so
+a reviewer dropping the lockfile commit gets a still-coherent state.
+
+## Pitfalls
+
+- `git commit --amend` on the package.json commit silently drags the
+  lockfile in if it's already staged. Stage and commit the
+  lockfile last.
+- Some agent runs accidentally combine the two; if you catch this on
+  review, `git reset HEAD~1`, re-stage selectively, and recommit.
+
+## Session example
+
+The PR 71 follow-up agent initially amended yarn.lock into the
+review-response commit. The orchestrator detected the policy
+violation and split it into two commits (`691ab2b45c` test +
+`7a25afb3c7 chore: Update yarn.lock`). The same pattern was applied
+on PR 75's three-commit rename push.
