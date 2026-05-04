@@ -48,3 +48,30 @@ harden(SANDBOX_FACTORY_NAME);
  */
 export const SANDBOX_SLICE_NAME = 'main-genie-sandbox';
 harden(SANDBOX_SLICE_NAME);
+
+/**
+ * Pet-name pattern `spawnAgent` passes to
+ * `SandboxFactory.makePersistent` for a child agent's sub-slice and
+ * that `removeChildAgent` resolves on teardown so a still-running
+ * child cannot race the guest removal and resurrect itself via its
+ * own pet store
+ * (TADA/23 Decision 2 — flat `<agentName>-sandbox` keyspace,
+ * deliberately parallel to `SANDBOX_SLICE_NAME` for the root genie
+ * rather than scoped under the parent's `agentDirectory`).
+ *
+ * Centralised here so the spawn helper (sub-task
+ * [`TODO/51_endo_genie_subagent_fork_slice.md`](../../../TODO/51_endo_genie_subagent_fork_slice.md))
+ * and the dispose path (sub-task
+ * [`TODO/55_endo_genie_subagent_remove.md`](../../../TODO/55_endo_genie_subagent_remove.md))
+ * derive the same identifier from `agentName` rather than re-spelling
+ * the `${agentName}-sandbox` template.
+ *
+ * @param {string} agentName - Pet name of the child agent.  No
+ *   validation here; the daemon's `provideGuest` and the sandbox
+ *   plugin's `makePersistent` both enforce the pet-name shape
+ *   (`/^[a-z0-9][a-z0-9-]{0,127}$/`) at their respective boundaries.
+ * @returns {string} The flat slice-handle pet name
+ *   (`<agentName>-sandbox`).
+ */
+export const subAgentSliceName = agentName => `${agentName}-sandbox`;
+harden(subAgentSliceName);

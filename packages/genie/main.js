@@ -61,6 +61,7 @@ import {
 import {
   SANDBOX_FACTORY_NAME,
   SANDBOX_SLICE_NAME,
+  subAgentSliceName,
   WORKSPACE_MOUNT_NAME,
 } from './src/pet-names.js';
 
@@ -1122,15 +1123,138 @@ export const make = (powers, _context, { env = {} } = {}) => {
    * receives only explicitly introduced names (e.g. workspace mount)
    * and cannot see the parent, siblings, or host-level names.
    *
+   * The sub-slice mint phase (sub-task
+   * [`TODO/51_endo_genie_subagent_fork_slice.md`](../../TODO/51_endo_genie_subagent_fork_slice.md))
+   * runs **first**: `fork()` validates the operator-supplied
+   * attenuation against the parent's slice (Phase 3 enforces mount
+   * drops / `ro → rw` rejection / network broadening bounds in
+   * `packages/sandbox/src/factory.js#validateAndResolveChildMounts`),
+   * and `makePersistent(<agentName>-sandbox, childSpec)` records the
+   * resolved spec on disk so a daemon restart re-mints the sub-slice
+   * from the same shape (TADA/33).  Errors from either call surface
+   * verbatim so the dispatcher layer (sub-task
+   * [`TODO/57_endo_genie_subagent_specials.md`](../../TODO/57_endo_genie_subagent_specials.md))
+   * can render the structured `makeError(X\`fork: …\`)` reason rather
+   * than a raw CapTP rejection.
+   *
+   * The follow-up sub-tasks 52 / 53 / 54 wire the resulting
+   * `subAgentSlice` into the child's `introducedNames`,
+   * `makeUnconfined`, and the parent's `agentDirectory` respectively;
+   * 51 owns only the slice-mint phase.
+   *
    * @param {FarRef<EndoHost>} hostAgent - The host agent reference
+   * @param {unknown} parentSliceHandle
+   *   Parent's `SandboxHandle` (the root genie's
+   *   `main-genie-sandbox` for first-tier children, a child's
+   *   `<parentName>-sandbox` for grandchildren).  Used as the
+   *   attenuation upper bound by `fork(childSpec)`.  Typed `unknown`
+   *   to mirror the `factory = await E(rootPowers).lookup(…)` pattern
+   *   in `runRootAgent` — the genie package deliberately does not
+   *   pull `@endo/sandbox` into its type graph (see
+   *   `src/tools/registry.js` `SandboxSlice` comment).
+   * @param {unknown} sandboxFactory
+   *   The plugin-side `SandboxFactory` exo (resolved from the host
+   *   pet store under `SANDBOX_FACTORY_NAME` by the caller).  Used
+   *   to pin the sub-slice under `subAgentSliceName(agentName)` for
+   *   restart reincarnation.  Typed `unknown` for the same reason
+   *   `parentSliceHandle` is.
    * @param {string} agentName - Pet name for the new agent guest
    * @param {AgentConfig} config - Agent configuration
+   * @param {object} childSpec
+   *   The operator-supplied attenuation, shaped as a
+   *   `SandboxMakeOpts` from `@endo/sandbox/src/types.d.ts`:
+   *   `mounts[]` (drops, `rw → ro` downgrades, sub-path scopes for
+   *   "scoped within parent" mode; newly-granted standalone `Mount`
+   *   caps for "wholly separate" mode), `network`, `rootfs`, etc.
+   *   Phase 3's `validateAndResolveChildMounts` rejects unsupported
+   *   attenuations (a `Mount` cap the parent does not have;
+   *   `ro → rw` upgrade; network broadening) with structured
+   *   `makeError(X\`fork: …\`)` throws.
    * @param {EndoGuest} [parentPowers] - Optional parent guest powers for scoped child tracking
    */
-  const spawnAgent = async (hostAgent, agentName, config, parentPowers) => {
+  const spawnAgent = async (
+    hostAgent,
+    parentSliceHandle,
+    sandboxFactory,
+    agentName,
+    config,
+    childSpec,
+    parentPowers,
+  ) => {
     await Promise.resolve();
 
     const profileName = `profile-for-${agentName}`;
+    const sliceName = subAgentSliceName(agentName);
+
+    // ── Sub-slice mint via fork() + makePersistent() ──────────────
+    // TADA/23 Decision 3 / sub-task 51.  The two calls play
+    // complementary roles in the current plumbing:
+    //
+    //   1. `E(parentSliceHandle).fork(childSpec)` mints the live
+    //      sub-slice with parent linkage so Phase 3's GC can cascade
+    //      a parent dispose into its children
+    //      (`packages/sandbox/src/factory.js#FactorySliceContext.children`)
+    //      and so attenuation enforcement runs against the parent's
+    //      mount view.  Mount drops / `rw → ro` downgrades / sub-path
+    //      scopes (scoped-within-parent mode) and freshly-granted
+    //      standalone `Mount` caps (wholly-separate mode) are
+    //      validated by `validateAndResolveChildMounts`; rejections
+    //      surface as `makeError(X\`fork: …\`)` for the
+    //      `/spawn` builtin (sub-task 57) to format.
+    //
+    //   2. `E(sandboxFactory).makePersistent(sliceName, childSpec)`
+    //      records the resolved spec under
+    //      `<agentName>-sandbox` so a daemon restart can re-mint the
+    //      sub-slice from disk without operator intervention (TADA/33).
+    //      Until `makePersistent` learns to accept a parent slice
+    //      handle (a follow-up tracked in TADA/23 § "Follow-ups
+    //      filed"), the recorded spec is parent-blind: on restart the
+    //      sub-slice will be re-minted as a top-level slice, and the
+    //      parent linkage from step 1 will need to be re-established
+    //      by the parent's restart path (the root genie's
+    //      `main-genie-sandbox` reincarnates first; the children's
+    //      `subAgentSliceName(name)` entries follow).  This task ships
+    //      the wiring; the parent-aware `makePersistent` extension
+    //      lands in a separate sub-task.
+    //
+    // Errors from either call propagate verbatim — the dispatcher
+    // layer (sub-task 57) is the chokepoint that converts a structured
+    // `makeError(X\`fork: …\`)` into operator-friendly text.  Wrapping
+    // here would smear the `mount` / `network` / `ro → rw` reason the
+    // Phase 3 plumbing carefully attaches.
+    const subAgentSlice = await E(
+      /** @type {any} */ (parentSliceHandle),
+    ).fork(childSpec);
+    try {
+      // makePersistent's returned handle is a parallel mint (no
+      // parent linkage in the current implementation) — discarded.
+      // The on-disk record is what survives a restart; the live
+      // sub-slice we keep using is the fork-derived one.
+      await E(/** @type {any} */ (sandboxFactory)).makePersistent(
+        sliceName,
+        childSpec,
+      );
+    } catch (err) {
+      // Persist failed after fork() succeeded; tear down the live
+      // sub-slice so we do not leak it.  Re-throw the original
+      // error so the dispatcher reports the persistence failure
+      // rather than a synthetic dispose race.
+      try {
+        await E(/** @type {any} */ (subAgentSlice)).dispose();
+      } catch (disposeErr) {
+        console.warn(
+          `[genie:${agentName}] makePersistent(${sliceName}) failed AND dispose of forked sub-slice failed: ${
+            (disposeErr && /** @type {Error} */ (disposeErr).message) ||
+            String(disposeErr)
+          }`,
+        );
+      }
+      throw err;
+    }
+    // Reference `subAgentSlice` so the lint / ts-check pass does not
+    // flag the binding as unused while sub-tasks 52 / 53 / 54 land
+    // the wiring that consumes it.
+    void subAgentSlice;
 
     // Build introducedNames: only grant capabilities the child needs.
     /** @type {Record<string, string>} */
@@ -1284,6 +1408,16 @@ export const make = (powers, _context, { env = {} } = {}) => {
    * directory and remove the host-level guest reference so GC can
    * collect the orphaned guest and its transitive dependencies.
    *
+   * Sub-task 55
+   * ([`TODO/55_endo_genie_subagent_remove.md`](../../TODO/55_endo_genie_subagent_remove.md))
+   * adds a third step at the **front** of the teardown:
+   * `E(sliceHandle).dispose()` against the sub-slice pinned under
+   * `subAgentSliceName(childName)` (resolved from the parent's
+   * `sandboxFactory`).  The slice goes first so a still-running
+   * child cannot race the guest removal and resurrect itself via
+   * its own pet store.  Sub-task 51 only centralises the pet-name
+   * pattern — the dispose call lands with 55.
+   *
    * @param {FarRef<EndoHost>} hostAgent - The host agent reference
    * @param {EndoGuest} parentPowers - The parent guest's powers
    * @param {{ agentDirectory?: string }} config - Configuration (for directory name)
@@ -1296,6 +1430,13 @@ export const make = (powers, _context, { env = {} } = {}) => {
     childName,
   ) => {
     const agentDirName = config.agentDirectory || DEFAULT_AGENT_DIRECTORY;
+    // The slice pet name `<childName>-sandbox` is captured here for
+    // forward compatibility with sub-task 55's three-step teardown
+    // (slice dispose → guest remove → directory remove).  Sourcing
+    // the name from the shared helper (rather than re-spelling the
+    // template) keeps `spawnAgent` and `removeChildAgent` aligned on
+    // a single keyspace shape.
+    void subAgentSliceName(childName);
     // Remove the child from the parent's directory.
     await E(parentPowers).remove(agentDirName, childName);
     // Remove the host-level guest reference so GC collects the guest.
