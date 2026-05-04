@@ -67,3 +67,5 @@ the whole context.
 
 - [benchmark-comparative-report.md](./benchmark-comparative-report.md)
 - [em-dash-style-rule.md](./em-dash-style-rule.md)
+- [relative-paths-rule.md](./relative-paths-rule.md) — every link
+  and path in a documentation file must be relative, never absolute.

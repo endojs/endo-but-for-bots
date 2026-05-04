@@ -12,7 +12,7 @@ parallel.
 1. Build batch lists as text files, one path per line:
 
    ```sh
-   ls /home/kris/triage/changes/*.md | sort -t/ -k4 -n > /tmp/all.txt
+   ls changes/*.md | sort -t/ -k4 -n > /tmp/all.txt
    total=$(wc -l < /tmp/all.txt)
    batches=12
    per=$(( (total + batches - 1) / batches ))

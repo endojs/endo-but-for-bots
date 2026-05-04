@@ -59,7 +59,7 @@ about 14%.
 ## Session example
 
 The `actual/master` audit produced
-`/home/kris/triage/process/UNLINKED-TODOS.md`: 365 blocks, 39 linked, 324
+`process/UNLINKED-TODOS.md`: 365 blocks, 39 linked, 324
 unlinked, 2 ambiguous. Top packages by unlinked count: `@endo/ses`
 (60), `@endo/pass-style` (40), `@endo/patterns` (38), `@endo/daemon`
 (34), `@endo/marshal` (34). The recommended follow-up is per-file

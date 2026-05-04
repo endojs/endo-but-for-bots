@@ -253,6 +253,11 @@ Running the following before pushing avoids the churn:
   Prefer separate sentences, parentheses, or colons.
   Em-dashes signal an aside that almost always reads better as its own
   sentence; in technical documentation they obscure the rhythm of the prose.
+- Every link and path in a documentation file must be **relative**,
+  never absolute.
+  External `https://` URLs are fine; absolute filesystem paths
+  (`/home/…`) are not.
+  See [`skills/relative-paths-rule.md`](./skills/relative-paths-rule.md).
 - See `CONTRIBUTING.md` § "Markdown Style Guide" for full details.
 
 ## Package Structure

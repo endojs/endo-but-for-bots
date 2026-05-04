@@ -35,6 +35,6 @@ workspaces, ESLint, AVA) finds the workspace root. The session used
 ## Session example
 
 The 10-issue parallel implementation pass created
-`/home/kris/triage/.worktrees/iss-{3156,3052,3081,2390,2632,2749,2879,1845,2742,2834}`,
+`.worktrees/iss-{3156,3052,3081,2390,2632,2749,2879,1845,2742,2834}`,
 each with its own branch off `actual/master`. Ten agents ran in
 parallel without conflicts.
