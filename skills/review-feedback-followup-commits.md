@@ -49,6 +49,14 @@ comment thread citing the commit SHA(s). See
   looks like a no-op. See `rebase-before-followup.md`.
 - If the lockfile changes, that goes in its own commit per
   `yarn-lock-separate-commit.md`.
+- When a reviewer asks you to pin an external dependency to a
+  specific version, verify the current state of the upstream
+  release before committing the pin. The dispatching prompt's
+  guessed version or release date may be stale; fetch the
+  download page or directory listing yourself, capture the
+  sha256, and embed both as workflow-level env vars so a future
+  bump is a two-line change. Key any download cache by both
+  fields so a stale blob can't shadow a version bump.
 
 ## Session example
 
@@ -56,3 +64,11 @@ PR 59 received seven follow-up commits (mock simplification, subpath
 exports, ws-browser, util de-dup, doc renames, lint fix, README) plus
 a separate `chore: Update yarn.lock`. Each commit cited the PR
 number and was individually reviewable.
+
+PR 82 received one follow-up commit promoting a pinned Guix release
+to the primary install path. The dispatching prompt guessed the
+version had shipped in 2025-04; the upstream directory listing
+showed 2026-01-22, and the prompt-claimed sha256 placeholder had
+to be replaced with the value computed by downloading and hashing
+the tarball locally. Pinning without verification would have
+shipped wrong metadata in the workflow's documentation comments.
