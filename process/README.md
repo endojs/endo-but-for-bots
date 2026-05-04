@@ -16,6 +16,8 @@ new ones, and the isolation-commit discipline, see
 | --- | --- | --- | --- |
 | [`AGENT-READY-ISSUES.md`](./AGENT-READY-ISSUES.md) | Curated handoff list | triager | 2026-04-28 |
 | [`DESIGNS-WITHOUT-PR.md`](./DESIGNS-WITHOUT-PR.md) | Gap report | triager (designs annotation pass) | 2026-05-01 |
+| [`PR-CYCLE-LOG.md`](./PR-CYCLE-LOG.md) | Append-only cycle log | steward | rolling |
+| [`PR-DISPATCH-STATE.md`](./PR-DISPATCH-STATE.md) | Per-cycle PR snapshot | steward | rewritten each cycle |
 | [`PR-REBASE-AUDIT.md`](./PR-REBASE-AUDIT.md) | Audit report | shepherd | 2026-04-30 |
 | [`TRIAGE.md`](./TRIAGE.md) | Triage snapshot (open issues + open PRs) | triager | 2026-04-26 |
 | [`UNLINKED-TODOS.md`](./UNLINKED-TODOS.md) | Hygiene scan + proposed-issue draft | investigator | 2026-05-01 |
