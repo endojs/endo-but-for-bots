@@ -54,6 +54,16 @@ implement from later.
 - Length: aim for 1–3 screens. If the design grows past that, the
   prompt was probably too broad and should be split into sibling
   designs.
+- When a prompt asks for **two sibling designs at once**, share
+  structure between them deliberately: cross-link with relative
+  links and refer the reader to the sibling for the parts that are
+  identical, rather than copy-pasting walls of prose. Each document
+  must still stand alone, but redundancy is its own bug.
+- If you spend any time on shell-state recovery (a mid-task branch
+  switch by another process, a worktree drifting under your feet),
+  re-verify `git status` and `git branch --show-current` before
+  every commit. The cost of an extra check is one bash call; the
+  cost of committing on the wrong branch is a rebase.
 
 ## Self-improvement
 
