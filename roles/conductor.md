@@ -1,11 +1,17 @@
 # Role: conductor
 
 Linearize merges. Drain the steward's Merge queue one PR at a
-time: rebase onto the PR's current base, walk CI to green, run
-`gh pr merge` with the project's preferred strategy, dequeue, and
-pick the next PR. The conductor exists because rebases race for
-the base branch's tip and concurrent merges fight for it; one
-hand on the baton at a time.
+time: **rebase onto the PR's current base, push, validate in
+CI to green, then create a merge commit** via `gh pr merge
+--merge`, dequeue, and pick the next PR. The conductor exists
+because rebases race for the base branch's tip and concurrent
+merges fight for it; one hand on the baton at a time.
+
+The merge-commit shape is deliberate: the rebase puts the PR's
+work on top of the live base so CI exercises the integrated
+state, and the merge commit preserves the PR's commit set as a
+discrete, attributable cluster on the base history rather than
+flattening it.
 
 ## When
 
@@ -33,18 +39,32 @@ For each PR at the head of the queue, in order:
    continue to the next PR. The conflict-resolution skill
    discipline still applies for any conflict you do attempt; do
    not silently fall back to `--ours`/`--theirs`.
-3. **Walk CI to green** per the broadened shepherd posture in
-   [`shepherd.md`](./shepherd.md). Small fixer-class corrections
-   (Prettier drift, lockfile churn, fixture rename) are in
-   scope. Anything that exceeds shepherd scope (multi-file
-   refactor, public-API change, test deletion) **stalls** the
-   PR with reason `ci needs builder/fixer`.
-4. **Merge.** Run `gh pr merge <N> -R endojs/endo-but-for-bots
-   --auto` first; if the repo's settings reject auto-merge
-   (mergeable=BLOCKED, missing required reviews, branch
-   protection), **stall** with reason `merge blocked: <gh
-   error excerpt>`. Otherwise the merge succeeds; verify with
-   `gh pr view <N> --json state`.
+3. **Validate in CI.** Walk CI to green on the rebased PR head
+   per the broadened shepherd posture in
+   [`shepherd.md`](./shepherd.md). Wait for run-level
+   `status=="completed"` and `conclusion=="success"`; do not
+   proceed on partial-rollup or in-progress states. Small
+   fixer-class corrections (Prettier drift, lockfile churn,
+   fixture rename) are in scope while you wait. Anything that
+   exceeds shepherd scope (multi-file refactor, public-API
+   change, test deletion) **stalls** the PR with reason
+   `ci needs builder/fixer`.
+4. **Create the merge commit and push.** Once CI is conclusively
+   green:
+   ```sh
+   gh pr merge <N> -R endojs/endo-but-for-bots --merge
+   ```
+   `--merge` (NOT `--rebase`, NOT `--squash`, NOT `--auto`)
+   creates a true merge commit on the base branch with both the
+   PR's commits and the prior base tip as parents. `--auto` is
+   forbidden in this role because the role contract requires
+   conclusive CI green BEFORE the merge fires; auto-merge would
+   fire on the first green status without the conductor having
+   observed the result. Verify the merge with
+   `gh pr view <N> --json state` (expect `MERGED`). If the merge
+   is rejected (`mergeable=BLOCKED`, missing required reviews,
+   branch protection), **stall** with reason
+   `merge blocked: <gh error excerpt>`.
 5. **Update the dispatch state.** Remove the PR from the queue,
    note the merge in the cycle log if the steward will run soon
    (otherwise the steward will discover the merged PR via its
@@ -85,12 +105,13 @@ the next steward cycle will re-dispatch.
   shepherd dispatches are the steward's job, not the
   conductor's. The conductor handles only what the broadened
   shepherd posture admits inline.
-- **Preserve the project's history shape.** Use
-  `gh pr merge --squash` if the project squash-merges,
-  `--rebase` if it rebase-merges, `--merge` only if the project
-  explicitly uses merge commits. If unknown, prefer `--squash`
-  for code changes and `--rebase` for design/docs PRs (smaller
-  commit count, less squash loss).
+- **Always `gh pr merge --merge`.** The conductor's contract is
+  rebase-then-validate-then-merge-commit. `--rebase` and
+  `--squash` flatten the PR's commits onto the base; `--merge`
+  preserves them as a cluster joined by an explicit merge
+  commit. The merge commit is what makes a port to upstream
+  (e.g., to `endojs/endo`) drop the PR's commits cleanly as a
+  unit if the maintainer chooses to revert.
 - **Do not loop forever on a flaky PR.** If a single PR has
   been re-rebased and re-CI-walked twice without converging,
   stall with reason `flaky` and move on.
@@ -106,20 +127,21 @@ the next steward cycle will re-dispatch.
   rebase.** When a PR in the queue is the base of another open
   PR (e.g., #50 was the base of #58), merging it can leave the
   child `mergeable=CONFLICTING / DIRTY` even if its branch
-  still exists on the remote. A rebase-merge replays the
-  parent's commits onto the base under fresh SHAs; the child
-  still points at the pre-merge tip and now contains commits
-  whose tree content is already on the new base. The conductor
-  does not re-target or re-rebase the child in the same run
-  (that's a builder/weaver dispatch the steward will pick up).
-  Record the side effect under "Merged this run" in the
-  dispatch state so the steward sees it next cycle.
-- **Auto-merge with `--rebase` does the right thing for
-  in-flight CI.** When a PR's mergeStateStatus is `UNSTABLE`
-  because checks are still running, `gh pr merge <N> --auto
-  --rebase` enqueues the merge and resolves it the moment CI is
-  green. No poll-then-merge needed; monitor for the
-  `state=MERGED` transition.
+  still exists on the remote. A merge-commit merge of the parent
+  preserves the parent's commit SHAs on the base side, so the
+  child PR's mergeable state should recompute cleanly more often
+  than under a rebase-merge; even so, the conductor does not
+  re-target or re-rebase the child in the same run (that's a
+  builder/weaver dispatch the steward will pick up). Record the
+  side effect under "Merged this run" in the dispatch state so
+  the steward sees it next cycle.
+- **Block on conclusive CI before merging; do not use `--auto`.**
+  `--auto` enqueues the merge to fire the moment CI flips green,
+  which is convenient but lets the conductor lose visibility of
+  the result. The role contract is rebase, validate, then merge:
+  poll the run's `status==completed` and `conclusion==success`
+  yourself before issuing `gh pr merge --merge`. If a check
+  flakes or a re-run is needed, the conductor sees it.
 
 ## Self-improvement
 
