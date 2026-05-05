@@ -90,7 +90,7 @@
 | [ocapn-noise-cryptographic-review](ocapn-noise-cryptographic-review.md) | 2026-02-14 | 2026-02-24 | Not Started |
 | [ocapn-noise-network](ocapn-noise-network.md) | 2026-02-14 | 2026-02-24 | Not Started |
 | [ocapn-tcp-for-test-extraction](ocapn-tcp-for-test-extraction.md) | 2026-02-14 | 2026-02-24 | Not Started |
-| [ocapn-tcp-syrup-framing](ocapn-tcp-syrup-framing.md) | 2026-04-23 | 2026-04-23 | Not Started |
+| [ocapn-tcp-syrups-framing](ocapn-tcp-syrups-framing.md) | 2026-04-23 | 2026-05-04 | Not Started |
 | [syrups](syrups.md) | 2026-05-04 | 2026-05-05 | Deprecated |
 | [cbors](cbors.md) | 2026-05-04 | 2026-05-04 | Not Started |
 | [outliner-design-doc](outliner-design-doc.md) | 2026-03-17 | 2026-03-18 | In Progress |
@@ -302,9 +302,9 @@ finalized.
 |--------|--------|-------|
 | ocapn-network-transport-separation | In Progress | Foundation for transport abstraction |
 | ocapn-tcp-for-test-extraction | Not Started | Clean separation before Noise |
-| ocapn-tcp-syrup-framing | Not Started | Comma-less netstring variant (`@endo/syrup-frame`) on a distinct `tcp+syrup-frame` netlayer identifier |
-| syrups | Deprecated | Consolidated with PR 29's `@endo/syrup-frame` (same shape: `Uint8Array` chunks in, `Uint8Array`-delimited messages out); recommend renaming PR 29's package to `@endo/syrups` for consistency with `@endo/cbors` |
-| cbors | Not Started | `@endo/cbors` reader/writer for length-prefixed CBOR byte strings; peer of `@endo/syrup-frame` (PR 29, queued for rename to `@endo/syrups`) and `@endo/netstring` |
+| ocapn-tcp-syrups-framing | Not Started | Comma-less netstring variant (`@endo/syrups`) on a distinct `tcp+syrups` netlayer identifier |
+| syrups | Deprecated | Consolidated with PR 29's `@endo/syrups` (same shape: `Uint8Array` chunks in, `Uint8Array`-delimited messages out); PR 29 was renamed from `@endo/syrup-frame` to `@endo/syrups` for consistency with `@endo/cbors` |
+| cbors | Not Started | `@endo/cbors` reader/writer for length-prefixed CBOR byte strings; peer of `@endo/syrups` (PR 29) and `@endo/netstring` |
 | ocapn-noise-cryptographic-review | Not Started | External review coordination |
 | daemon-agent-network-identity | Not Started | Per-agent keypairs for network identity |
 | ocapn-noise-network | Not Started | Full Noise protocol network layer |
@@ -491,9 +491,9 @@ Recalibrated on 2026-03-02 using observed velocity from 15 active work days
 | hex-package | S-M | 2-3 days | 1 | New `@endo/hex` package, migrate `daemon/src/hex.js`, `relay-server/src/protocol.js`, OCapN hex sites |
 | ocapn-network-transport-separation | M-L | 1-1.5 weeks | 2 | Architectural refactor |
 | ocapn-tcp-for-test-extraction | S-M | 2-3 days | 2 | Code relocation |
-| ocapn-tcp-syrup-framing | S-M | 2-3 days | 2 | `@endo/syrup-frame` package, new `tcp+syrup-frame` netlayer, fix chunk-boundary bug in `tcp-test-only` |
-| ~~syrups~~ | — | — | 2 | Consolidated into `ocapn-tcp-syrup-framing` (PR 29); see [`syrups.md`](syrups.md) |
-| cbors | S-M | 2-3 days | 2 | New `@endo/cbors` package; byte-string framing only (CBOR major type 2, optionally tag 24); peer of `@endo/syrup-frame` and `@endo/netstring` |
+| ocapn-tcp-syrups-framing | S-M | 2-3 days | 2 | `@endo/syrups` package, new `tcp+syrups` netlayer, fix chunk-boundary bug in `tcp-test-only` |
+| ~~syrups~~ | — | — | 2 | Consolidated into `ocapn-tcp-syrups-framing` (PR 29); see [`syrups.md`](syrups.md) |
+| cbors | S-M | 2-3 days | 2 | New `@endo/cbors` package; byte-string framing only (CBOR major type 2, optionally tag 24); peer of `@endo/syrups` and `@endo/netstring` |
 | ocapn-noise-cryptographic-review | S | 1 day | 2 | External review coordination |
 | daemon-agent-network-identity | S-M | 2-3 days | 2 | Network registration, locator construction |
 | ocapn-noise-network | L | 1.5-2 weeks | 2 | Full network + transport |
