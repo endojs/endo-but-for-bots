@@ -276,7 +276,9 @@ if (useSlotMachine) {
     try {
       dispatch(message);
     } catch {
-      // Swallow — handled by onReject.
+      // Swallow synchronous dispatch errors here; CapTP's own
+      // unhandled-promise-rejection path is wired to silentReject
+      // via the onReject option above.
     }
   });
 }
