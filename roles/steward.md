@@ -1,6 +1,6 @@
 # Role: steward
 
-Periodically review the open pull requests on
+Continuously review the open pull requests on
 `endojs/endo-but-for-bots`, the health of the `garden` branch,
 the design corpus, and dispatch subagents in the right roles to
 advance everything.
@@ -12,16 +12,54 @@ It surveys, decides, dispatches, and records.
 
 ## When
 
-- A periodic schedule fires (typically a `CronCreate` trigger or
-  an `autonomous-loop-dynamic` cycle).
+The steward runs as a **continuous local loop** in the user's
+Claude Code session, paced via `<<autonomous-loop-dynamic>>` and
+`ScheduleWakeup`. It is not a remote cron trigger:
+remote cron sandboxes do not have the credentials, working tree,
+or sub-agent dispatch capability the steward needs. Run locally.
+
+Trigger conditions:
+
+- The user invokes `/loop` (with or without an interval) on the
+  steward and walks away.
 - The user says "do a sweep" or "what's the state of the
-  bot-PRs?".
+  bot-PRs?" for a single ad hoc cycle.
 - A maintainer notices the bot-PR queue accumulating without
   advancing and asks for a kick.
 
 The steward runs on a cadence, not in response to a specific
 task. Each cycle has fresh context; nothing carries over except
-what is written to `process/`.
+what is written to `process/` and pushed to `bots-ssh/garden`.
+
+## Fetch between iterations
+
+Every round (and every cycle, since each fresh-context cycle
+starts blind) **must begin by fetching from the bots remote
+before reading any state**:
+
+```sh
+git fetch bots-ssh garden llm master
+git fetch actual master llm  # if upstream comparison is needed
+```
+
+The local working copy of `process/PR-DISPATCH-STATE.md`,
+`process/PR-CYCLE-LOG.md`, and `process/DESIGNS-WITHOUT-PR.md`
+goes stale the moment a sub-agent or another instance pushes to
+`bots-ssh/garden`. Reading the local files without fetching
+first produces duplicate dispatches and lost notes (the same
+failure mode the "Read state before deciding" rule was written
+to prevent, just at a different layer). After the fetch, **fast-
+forward the local `garden` branch** so subsequent reads and
+sub-agent dispatches see the up-to-date file:
+
+```sh
+git checkout garden
+git merge --ff-only bots-ssh/garden
+```
+
+If the fast-forward fails (local has unpushed commits), commit
+or stash them first; never resolve via merge commit on the
+steward's own bookkeeping branch.
 
 ## State
 
@@ -81,8 +119,7 @@ for the PR-state file formats and the reconciliation procedure.
 - **`weaver`** to merge `actual/llm` (upstream
   `endojs/endo:llm`) into the `garden` branch when the upstream
   is ahead. The weaver brief must add the `actual` remote if it
-  is missing in the cron sandbox
-  (`git remote add actual https://github.com/endojs/endo`),
+  is missing (`git remote add actual https://github.com/endojs/endo`),
   fetch `actual/llm`, then merge or rebase per
   `skills/conflict-resolution.md`. This dispatch runs before
   bot-PR dispatches so the role and skill files used downstream
@@ -132,7 +169,15 @@ ends the cycle.
 
 Per round, in order:
 
-1. **Read prior state.** `process/PR-DISPATCH-STATE.md`,
+1. **Fetch and fast-forward, then read prior state.** Per the
+   "Fetch between iterations" rule above, every round opens with
+   a fetch from `bots-ssh` (and `actual` when relevant) and a
+   fast-forward of the local `garden` branch:
+   ```sh
+   git fetch bots-ssh garden llm master
+   git checkout garden && git merge --ff-only bots-ssh/garden
+   ```
+   Then read `process/PR-DISPATCH-STATE.md`,
    `process/PR-CYCLE-LOG.md`, and `process/DESIGNS-WITHOUT-PR.md`
    in full. They are the steward's only memory across rounds.
    On the first round of a cycle, this is also the only memory
@@ -199,14 +244,19 @@ Per round, in order:
     Background fixers can be left running across rounds; weavers,
     shepherds, and builders that mutate the working tree must
     finish before the next round's reconciliation.
-11. **Decide round boundary.** Re-survey (steps 3 to 6). If any
-    PR has changed state (new comment, new review, new push, CI
-    flip) or any dispatched agent has produced a result that
-    enables a follow-up dispatch (a fixer's push that's now
-    awaiting maintainer re-review can be left; but a weaver's
-    successful rebase of one PR may unblock a fixer on another),
-    start the next round at step 7. Otherwise the cycle has
-    reached **exhaustion** and proceeds to the close steps below.
+11. **Decide round boundary.** Re-fetch `bots-ssh` (`git fetch
+    bots-ssh garden llm master`) and re-survey (steps 3 to 6).
+    The fetch is mandatory: dispatched sub-agents push to
+    `bots-ssh`, and skipping the re-fetch leaves the steward
+    looking at stale refs and the same dispatch decisions it
+    just made. If any PR has changed state (new comment, new
+    review, new push, CI flip) or any dispatched agent has
+    produced a result that enables a follow-up dispatch (a
+    fixer's push that's now awaiting maintainer re-review can be
+    left; but a weaver's successful rebase of one PR may unblock
+    a fixer on another), start the next round at step 7.
+    Otherwise the cycle has reached **exhaustion** and proceeds
+    to the close steps below.
 12. **Append a cycle-log section** describing every round of the
     cycle: per-round survey and every dispatch with its
     one-phrase reason, plus the round-count.
@@ -220,9 +270,15 @@ Per round, in order:
     Push.
 16. **Commit the process state files** in a single process
     commit (`process(steward): cycle <ts>`) and push.
-17. **Schedule the next wakeup** or end the loop per
+17. **Schedule the next cycle** via `ScheduleWakeup` per
     [`../skills/autonomous-loop-pacing.md`](../skills/autonomous-loop-pacing.md).
-    Cron-fired cycles end immediately; the cron handles cadence.
+    The local `<<autonomous-loop-dynamic>>` mechanism is the
+    cadence; remote cron triggers are not used (they lack the
+    sandbox credentials and persistent working tree the steward
+    needs). Default delay between cycles is 1200s to 1800s when
+    the queue is calm; drop to 270s when fresh feedback is in
+    flight and a follow-up round is worth a quick recheck.
+    To stop the loop, return without calling `ScheduleWakeup`.
 
 ## Skills
 
