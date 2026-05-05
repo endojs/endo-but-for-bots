@@ -142,16 +142,25 @@ The steward does not post the comments; that is a maintainer action.
 
 ## Merge queue
 
-| Order | PR | Base | Head at enqueue | Status |
-| --- | --- | --- | --- | --- |
-| 1 | #82 | llm | 86e8b9b0e9 | in-progress (merge weaver) |
+(empty)
 
-Merged this run:
+Merged this run (2026-05-04 weaver continuous-merge):
 
-- #50 → `741e8000fb` (rebase merge to llm at 2026-05-04).
-  Side effect: PR #58's base (`design/error-tracing-across-workers`)
-  may be deleted by GitHub branch-cleanup; surface to steward for
-  re-target/rebase next cycle.
+- #50 → `741e8000fb` (rebase merge to llm).
+  Clean: 0 behind, 26/26 SUCCESS at enqueue.
+- #82 → `730f07810a` (rebase merge to llm).
+  Required rebase from `86e8b9b0e9` to `1bb4d84b19` (2 behind after
+  PR #50 merged); auto-merge with `--rebase` resolved on green CI.
+
+Side effect for steward to handle next cycle:
+
+- PR #58 (`feat/error-tracing-implementation`) targets
+  `design/error-tracing-across-workers` (the branch behind PR #50).
+  Post-merge state of #58 is `mergeable=CONFLICTING, DIRTY` because
+  the underlying design content is now on llm via the rebase merge.
+  PR #58 needs its base re-targeted to `llm` and a rebase to drop
+  the design-doc commits already on llm.
+  Surface to steward: dispatch a weaver (or builder) to re-base #58.
 
 ## Stalled list
 
