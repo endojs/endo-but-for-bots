@@ -81,7 +81,7 @@ Object.freeze(jsEncodeBase64);
 // module load, before any caller can reach `encodeBase64` and before
 // SES lockdown freezes the prototype.
 // Post-lockdown mutation cannot redirect the dispatched binding.
-/** @type {(() => string) | undefined} */
+/** @type {((this: Uint8Array) => string) | undefined} */
 const nativeToBase64 = /** @type {any} */ (Uint8Array.prototype).toBase64;
 
 /** @type {typeof jsEncodeBase64} */
