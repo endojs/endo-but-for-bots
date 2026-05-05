@@ -144,8 +144,13 @@ The steward does not post the comments; that is a maintainer action.
 
 | Order | PR | Base | Head | Mergeable | CI | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
-| 1 | #81 | llm | `930bd7a083` | MERGEABLE | 26/0/0 green | Dependabot bump + persistence-race fix |
-| 2 | #85 | llm | `f291970b30` | MERGEABLE | 21/0/5 (5 pending; --auto --rebase will wait) | daemon-rename design |
+| 1 | #85 | llm | `f291970b30` | MERGEABLE | 21/0/5 (5 pending; --auto --rebase waiting) | daemon-rename design |
+
+Merged this run (2026-05-04 conductor):
+
+- #81 → `dac84e9de8` (rebase merge to llm).
+  Was 7 behind at enqueue; gh auto-merge with `--rebase` rebased and
+  merged on green CI immediately (mergeStateStatus=CLEAN, 26/26 SUCCESS).
 
 Merged this run (2026-05-04 weaver continuous-merge):
 
