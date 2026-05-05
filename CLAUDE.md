@@ -161,6 +161,20 @@ cleanly when porting work from this repo or
 See [`skills/process-documents.md`](./skills/process-documents.md)
 for the discipline.
 
+## Agent attribution and Claude-specific files
+
+- **Do not add `Co-Authored-By: Claude …` (or any other Claude
+  attribution) to commit messages.** All commits attribute only
+  the human or bot identity that authored them. Apply this rule
+  to every commit, in every role: builder, fixer, weaver,
+  shepherd, designer, groom, conductor, cleaner, steward,
+  saboteur, scout, juror, maestro.
+- **Never add `.github/workflows/claude*.yml` or any Claude /
+  Claude-review workflow file** to any branch under any
+  circumstance. If a rebase or stash recovery surfaces such a
+  file as a hunk, drop the hunk before committing. The repo
+  has no Claude-specific workflows by design.
+
 ## Build and Test
 
 - Yarn 4 via corepack: `npx corepack yarn install`
