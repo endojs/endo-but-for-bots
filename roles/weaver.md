@@ -170,6 +170,24 @@ the next steward cycle will re-dispatch.
 - **Speak via the authenticated `gh` account** in any PR
   comments (e.g., the merge confirmation comment). Do not name
   a persona.
+- **Stacked PRs need a steward follow-up note, not a same-run
+  rebase.** When a PR in the queue is the base of another open
+  PR (e.g., #50 was the base of #58), merging it can leave the
+  child PR `mergeable=CONFLICTING / DIRTY` even if its branch
+  literally still exists on the remote. A rebase-merge replays
+  the parent's commits onto the base under fresh shas; the child
+  still points at the pre-merge tip and now contains commits
+  whose tree content is already on the new base. The merge weaver
+  does not re-target or re-rebase the child in the same run
+  (that's a builder/weaver dispatch the steward will pick up);
+  instead, record the side effect under "Merged this run" in the
+  dispatch state so the steward sees it next cycle.
+- **Auto-merge with `--rebase` does the right thing for queued
+  CI.** When a PR's mergeStateStatus is `UNSTABLE` because checks
+  are still running, `gh pr merge <N> --auto --rebase` enqueues
+  the merge and resolves it the moment CI is green. No need to
+  poll-then-merge manually; just monitor for the `state=MERGED`
+  transition.
 
 ## Self-improvement
 
