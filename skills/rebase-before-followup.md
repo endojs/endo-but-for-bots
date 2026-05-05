@@ -66,6 +66,28 @@ lease is rejected, fetch again and re-rebase.
   2. Resolve by accepting the new base's content for each conflict
      and let the second commit become empty (skipped automatically).
   Option 1 is faster and gives a cleaner shortlog.
+- **Master may have landed a strict-superset of the PR's intent via
+  a different route.** Before resolving conflicts, diff master's
+  version of each conflicted file against the PR's version. If
+  master's content already does what the PR was trying to do (and
+  more), the PR is superseded and the right outcome is to STOP and
+  report rather than fabricate a resolution. Telltales:
+  - `git show <base>:<conflicted-file>` is structurally what the PR
+    was building toward.
+  - The reviewer's pointer to a "do this like sibling X" comment
+    may itself link to the upstream PR that already landed the
+    equivalent work; check the linked PR's `mergedAt` against the
+    PR-under-review's last push date.
+  - Resolving by accepting master's content would leave the PR's
+    feature commits empty, with only ancillary content (a design
+    doc, a changeset) surviving the rebase.
+  Encountered on bots-PR #27: upstream `endojs/endo#3216` landed
+  the same `@endo/base64` native-dispatch refactor (in a stricter
+  form: `Reflect.apply` capture, options pin, polyfill-fallback
+  diagnostic) before the bots-repo PR's reviewer asked to align
+  with the hex pattern. The reviewer's link was to the same PR
+  that had already landed the equivalent work. Closing the
+  bots-PR was the right outcome; no commits were pushed.
 
 ## Session example
 
