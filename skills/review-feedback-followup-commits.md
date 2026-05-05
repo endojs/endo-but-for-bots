@@ -67,6 +67,14 @@ comment thread citing the commit SHA(s). See
   honest about its scope; the reviewer expected the rewrite, and
   splitting it into "phase 1 of the rewrite, phase 2 of the
   rewrite" is theater.
+- When a dispatching prompt summarises each review thread with a
+  line number and a suggested action, treat the line number as
+  authoritative and the action summary as a hint. Read the file
+  at that line yourself before applying the edit. The dispatcher
+  can mismatch a line to the wrong file/identifier in the
+  surrounding paragraph (e.g. "rename `bench-X.js`" when line N
+  is actually about `webextension-X.js`); the reviewer's comment
+  is anchored to the line, not to the dispatcher's gloss.
 
 ## Session example
 
