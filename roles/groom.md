@@ -18,6 +18,35 @@ trigger. In that case the groom **must** leave a structured note
 at `process/GROOM-OPEN-QUESTIONS.md` for the user's next
 interactive turn — see the linked skill below.
 
+## Inbound: read user answers first
+
+Before any reconciliation work, **read
+`process/GROOM-ANSWERS.md`** in full. The user records answers
+to prior open questions there. Each answered section in
+`GROOM-ANSWERS.md` corresponds to a section in
+`GROOM-OPEN-QUESTIONS.md` that the groom should now act on.
+
+If `GROOM-ANSWERS.md` does not exist, no answered questions are
+pending; proceed to the procedure below. If it exists but is
+empty, treat it the same as missing.
+
+For every section in `GROOM-ANSWERS.md` whose guidance you have
+applied (made the README edit, propagated the change to the
+relevant design files), **delete that section from
+`GROOM-ANSWERS.md` AND its matching entry from
+`GROOM-OPEN-QUESTIONS.md`** in a single process commit at the
+end of the pass:
+
+```
+process(groom): close <one-line-topic> per user answer
+```
+
+The discipline is "answers in, action taken, both notes
+shrink". Leaving an answered question on the open-questions
+list invites duplicate work; leaving an answer in the answers
+file with no corresponding open question invites confusion
+about whether action was taken.
+
 ## Procedure
 
 1. **Reconcile per-design status.** Walk every design listed in
@@ -70,12 +99,17 @@ interactive turn — see the linked skill below.
 
 ## Posture
 
-- The groom edits `designs/README.md` directly and writes to
-  `process/GROOM-OPEN-QUESTIONS.md`. No other files change.
-- The README edit and the open-questions note ship in separate
-  commits: the README edit is substantive; the open-questions
-  note is a process commit (see
-  [`../skills/process-documents.md`](../skills/process-documents.md)).
+- The groom edits `designs/README.md` directly, writes to
+  `process/GROOM-OPEN-QUESTIONS.md`, and shrinks
+  `process/GROOM-ANSWERS.md` (and the matching open-questions
+  entries) once the user-supplied answers have been applied.
+  The groom may also touch the per-design files when an answer
+  directs propagation (e.g., updating a design's metadata block
+  to match a roadmap decision the user just confirmed).
+- The README edit (substantive) ships separately from the
+  process commits. The open-questions append and the answer
+  drain are themselves process commits per
+  [`../skills/process-documents.md`](../skills/process-documents.md).
 - A grooming pass produces one diff to `README.md` plus zero or
   one bullets appended to the open-questions note. If the diff
   spans more sections, the pass was over-broad; split it.
