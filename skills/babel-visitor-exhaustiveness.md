@@ -80,6 +80,37 @@ The audit also revealed footguns specific to Babel + module-source:
   shape sub-unions, you may need a *recursive* sentinel.
 - The sentinel becomes brittle if the `@babel/parser` plugins list
   changes (e.g., enabling JSX). Re-classify when plugins change.
+- **`path.buildCodeFrameError(...)` requires a Hub.** Calling
+  `traverse(ast, visitor)` initializes child paths with
+  `hub === undefined`, so any visitor that fires the
+  `path.buildCodeFrameError` guard immediately re-throws the
+  cryptic `TypeError: Cannot read properties of undefined
+  (reading 'buildError')` instead of the intended SyntaxError.
+  The fix is to construct a synthetic wrapper `parentPath`
+  carrying a `Hub` and pass it as the fifth argument to
+  `traverse(parent, opts, scope, state, parentPath)`. Per
+  `NodePath.get`, `if (!hub && parentPath) hub = parentPath.hub;`,
+  so child paths inherit the hub. This is the second crash from
+  endojs/endo#1596, fixed in PR 74's follow-up commit.
+- **`@babel/traverse` named exports are on the namespace, not on
+  `default`.** The default export of `@babel/traverse` is the
+  callable `traverse` function. `Hub`, `NodePath`, `Scope`, and
+  `visitors` are *named* exports on the module namespace itself.
+  The Endo idiom `const x = babelTraverse.default || babelTraverse`
+  works for getting at the callable, but destructuring named
+  exports requires reading from `babelTraverse` directly:
+  `const { Hub, NodePath } = babelTraverse;`. The default-or-namespace
+  shim returns the callable's own properties (`visitors`, `cache`,
+  …) but *not* the namespace's named exports, which silently
+  yields `undefined` for `Hub`/`NodePath` if you read from there.
+- **When chasing a TypeError that mentions a property name not
+  present in the codebase, grep the message in `node_modules` too.**
+  The `(reading 'buildError')` crash from #1596 has no `buildError`
+  identifier in `module-source/src/`; it lives in
+  `@babel/traverse/lib/path/index.js` as `this.hub.buildError(...)`.
+  The data-flow link is the analyzer's `path.buildCodeFrameError`
+  call, which dispatches into Babel's hub. Treat third-party
+  source as part of the search surface for analyzer bugs.
 
 ## Session example
 
@@ -90,3 +121,15 @@ also turned up a real bug: `export * as ns from 'src'` threw
 `TypeError: Cannot read properties of undefined (reading 'name')`
 because `ExportNamespaceSpecifier` nodes have no `local` property.
 Fixed in commit `914addd25f`.
+
+A follow-up commit (`e9631f5759`) on the same PR addressed the
+second half of endojs/endo#1596: the `(reading 'buildError')` crash
+that fires whenever any visitor's `path.buildCodeFrameError` guard
+trips, because `traverse(ast, visitor)` initializes child paths
+with `hub === undefined`. Fix wraps the AST in a synthetic
+`parentPath` carrying a `Hub` and threads it through both passes,
+so child paths inherit the hub and the intended SyntaxError reaches
+the caller. Two pre-existing reserved-identifier tests were
+sharpened to assert `instanceOf: SyntaxError` plus a `t.notRegex`
+against the buildError-undefined TypeError, making them
+load-bearing on the Hub wiring.
