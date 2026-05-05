@@ -142,15 +142,18 @@ The steward does not post the comments; that is a maintainer action.
 
 ## Merge queue
 
-| Order | PR | Base | Head | Mergeable | CI | Notes |
-| --- | --- | --- | --- | --- | --- | --- |
-| 1 | #85 | llm | `f291970b30` | MERGEABLE | 21/0/5 (5 pending; --auto --rebase waiting) | daemon-rename design |
+(empty)
 
 Merged this run (2026-05-04 conductor):
 
 - #81 → `dac84e9de8` (rebase merge to llm).
   Was 7 behind at enqueue; gh auto-merge with `--rebase` rebased and
   merged on green CI immediately (mergeStateStatus=CLEAN, 26/26 SUCCESS).
+- #85 → `8ddfab0d9d` (rebase merge to llm).
+  Was 11 behind after PR 81 landed; brief snapshot showed 5 pending CI
+  jobs but they completed in the interim. gh auto-merge with `--rebase`
+  rebased and merged immediately. The 6 design-rename commits land as
+  separate commits on llm under SHAs `9c8d9be2ae` through `8ddfab0d9d`.
 
 Merged this run (2026-05-04 weaver continuous-merge):
 
