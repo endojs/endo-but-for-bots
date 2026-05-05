@@ -142,7 +142,10 @@ The steward does not post the comments; that is a maintainer action.
 
 ## Merge queue
 
-(empty)
+| Order | PR | Base | Head | Mergeable | CI | Notes |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | #81 | llm | `930bd7a083` | MERGEABLE | 26/0/0 green | Dependabot bump + persistence-race fix |
+| 2 | #85 | llm | `f291970b30` | MERGEABLE | 21/0/5 (5 pending; --auto --rebase will wait) | daemon-rename design |
 
 Merged this run (2026-05-04 weaver continuous-merge):
 
