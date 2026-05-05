@@ -2533,9 +2533,9 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@endo/syrup-frame@workspace:packages/syrup-frame":
+"@endo/syrups@workspace:packages/syrups":
   version: 0.0.0-use.local
-  resolution: "@endo/syrup-frame@workspace:packages/syrup-frame"
+  resolution: "@endo/syrups@workspace:packages/syrups"
   dependencies:
     "@endo/eventual-send": "workspace:^"
     "@endo/harden": "workspace:^"
