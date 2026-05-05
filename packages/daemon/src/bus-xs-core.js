@@ -2,7 +2,7 @@
 /* eslint-disable @endo/restrict-comparison-operands -- inbound envelope
    byte length is a plain number; the rule's inference flags it because
    we access it through an `unknown`-typed input parameter. */
-/// <reference path="./bus-xs-host-globals.d.ts" />
+/// <reference path="./endor.d.ts" />
 /* global globalThis, sendRawFrame, trace */
 
 /**

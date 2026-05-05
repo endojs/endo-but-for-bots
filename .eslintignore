@@ -10,7 +10,7 @@ browser-test/
 # examples/*).  These run in XS, not Node, so the top-level
 # ESLint config does not apply.
 rust/
-!packages/daemon/src/bus-xs-host-globals.d.ts
+!packages/daemon/src/endor.d.ts
 
 *.json
 

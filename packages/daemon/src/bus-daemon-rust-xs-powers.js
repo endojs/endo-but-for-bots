@@ -4,7 +4,7 @@
 // Aligning this module with the llm-side typings is tracked as
 // follow-up; re-enable @ts-check once FilePowers gains readLink
 // and SqliteParams unifies with the SQLite migration's types.
-/// <reference path="./bus-xs-host-globals.d.ts" />
+/// <reference path="./endor.d.ts" />
 /* global btoa, atob,
    hostReadFile, hostReadFileBytes, hostMaybeReadFileBytes,
    hostWriteFile, hostReadDir, hostMkdir, hostRemove,

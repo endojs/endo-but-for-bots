@@ -15,7 +15,7 @@
 /* eslint-disable no-continue, no-plusplus, no-new -- CBOR decoding
    loop, timer id allocation, and URL polyfill constructor-only
    side-effect probe. */
-/// <reference path="./bus-xs-host-globals.d.ts" />
+/// <reference path="./endor.d.ts" />
 /* global globalThis, hostSendRawFrame, hostTrace, hostGetPid, hostGetEnv, hostDecodeUtf8 */
 
 /**

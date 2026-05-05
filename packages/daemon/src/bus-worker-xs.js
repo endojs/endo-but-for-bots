@@ -1,5 +1,5 @@
 // @ts-check
-/// <reference path="./bus-xs-host-globals.d.ts" />
+/// <reference path="./endor.d.ts" />
 /* global globalThis, hostGetDaemonHandle, hostGetEnv */
 
 /**
