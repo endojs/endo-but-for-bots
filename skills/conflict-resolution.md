@@ -104,6 +104,23 @@ shortcut is to *pretend* this applies elsewhere.
   did not exist when the PR was authored, extend the PR's commit
   to cover that file (the PR's intent already implied it). If the
   fix would change the PR's design, stop and surface the question.
+- **Two sides each add a new parameter to the same parameter list
+  / function signature / object literal.** This is the most common
+  "trivial-looking" conflict and the most error-prone. Read both
+  sides' commit messages to learn the order convention each side
+  uses, then keep BOTH parameters in a defensible order (often:
+  preserve the base side's slot to avoid breaking pre-existing call
+  sites, then append the PR side's new param). Crucially, also
+  check the implementations the type or signature is shared with:
+  if the JS impl positionally consumes the param after a slot the
+  PR knew nothing about, you must add a placeholder for the new
+  base-side param to the impl too, or the runtime arg lands in the
+  wrong slot and tests fail in subtle ways. Encountered on PR 58:
+  llm added `kind?: 'locked' | 'node'` as parameter 8 of
+  `DaemonicControlPowers.makeWorker`; PR added `marshalLoadError?`
+  as parameter 8 of the same. Resolved by ordering them
+  `kind, marshalLoadError` AND adding the matching `kind`
+  placeholder to the JS impls.
 
 ## Session example
 

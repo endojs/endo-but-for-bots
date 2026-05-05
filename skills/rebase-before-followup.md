@@ -52,6 +52,20 @@ lease is rejected, fetch again and re-rebase.
   and `git diff bots-ssh/master..HEAD` will list spurious files
   belonging to interim commits. A second `git rebase bots-ssh/master`
   resolves it cleanly.
+- **"Byte-identical duplicate commits will auto-skip" is true only
+  for the cumulative tree, not for each commit in isolation.** When
+  the new base contains a sequence `A; A'` (e.g., a draft and its
+  revision) and the rebased branch carries patch-id-equivalent
+  copies `B; B'` of those, `git rebase` replays them one at a time.
+  `B` (the draft) does not match the new base's *final* version
+  (which is `A'`), so it surfaces as a content conflict (often
+  `AA add/add` on a fresh file). Two clean options:
+  1. `git rebase -i` and `drop` the duplicate commits explicitly
+     before starting, after confirming the cumulative tree matches
+     `git diff bots/<base>:<file> bots/<head>:<file>` is empty.
+  2. Resolve by accepting the new base's content for each conflict
+     and let the second commit become empty (skipped automatically).
+  Option 1 is faster and gives a cleaner shortlog.
 
 ## Session example
 
