@@ -76,5 +76,8 @@
     "lockdown": "../../ava-endo-lockdown.config.mjs",
     "base": "../../ava-base.config.mjs",
     "noop-harden": "../../ava-noop-harden.config.mjs"
+  },
+  "typeCoverage": {
+    "atLeast": 100
   }
 }
