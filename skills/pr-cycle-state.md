@@ -158,6 +158,23 @@ commit's message: a `fix:`/`docs:`/`test:` prefix usually means
 the author was responding to feedback, while `chore: rebase` or
 similar suggests no real response.
 
+**No-op rebase pitfall.** A force-push that simply replays the
+existing commits onto a fresh base produces a new head SHA
+without addressing any review-content asks. The timestamp check
+(head SHA newer than review) flags it as "author addressed", but
+the design or code under review is byte-for-byte identical. When
+the latest commit is a previous commit replayed, check the
+*content* against the most recent review's inline comments
+before declaring the feedback addressed. The simplest test:
+
+```sh
+git diff <prev-head>..<new-head> -- <files-cited-in-review>
+```
+
+If the diff is empty for the cited paths and the review's asks
+are about content at those paths, the rebase is a no-op for the
+review's purposes and a fixer is still warranted.
+
 ## Pitfalls
 
 - **Forgetting to read state.** Each cycle has fresh context;
