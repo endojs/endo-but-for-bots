@@ -144,7 +144,18 @@ The steward does not post the comments; that is a maintainer action.
 
 | Order | PR | Base | Head | Status |
 | --- | --- | --- | --- | --- |
-| 1 | #86 | llm | `d4a8e2545c` | in-progress (conductor) |
+
+(empty)
+
+Merged this run (2026-05-05 conductor):
+
+- #86 → `d72fdc9527` (merge commit to llm).
+  Prior conductor tidied + pushed `e9a2d712db` (two clean commits,
+  byte-identical to pre-tidy). At dispatch time, attempting
+  `gh pr merge 86 --auto --merge` discovered the PR was already
+  MERGED: CI completed and the auto-merge fired in the window
+  between the prior conductor's push and this dispatch.
+  No action required beyond the bookkeeping update.
 
 Merged this run (2026-05-04 conductor):
 
