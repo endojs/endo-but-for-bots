@@ -95,6 +95,15 @@ shortcut is to *pretend* this applies elsewhere.
   replayed onto), and `REBASE_HEAD` is your branch's commit being
   replayed. During a merge, `HEAD` is your branch and
   `MERGE_HEAD` is the incoming branch. Don't confuse them.
+- **A clean rebase can still break the PR's invariant.** When the
+  branch adds an enforcement check (lint, policy script, schema
+  validator), a rebase that finishes without conflict markers may
+  still leave the check failing because the new base added a file
+  the check covers. Run the PR's own enforcement against the
+  rebased tree before pushing. If it complains about a file that
+  did not exist when the PR was authored, extend the PR's commit
+  to cover that file (the PR's intent already implied it). If the
+  fix would change the PR's design, stop and surface the question.
 
 ## Session example
 
