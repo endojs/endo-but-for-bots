@@ -73,6 +73,37 @@ architectural ones.
 
 ## Recurring patterns
 
+- **`viable-release` failure is not always ECYCLE**: the
+  `viable-release` jobs run `yarn lerna run --reject-cycles
+  --concurrency 1 prepack`, and any per-package `prepack` failure
+  surfaces here. The most common modes are lerna ECYCLE (see
+  [`../skills/lerna-ecycle-fix.md`](../skills/lerna-ecycle-fix.md))
+  **and** package-level `tsc --build` errors. When you see all
+  three viable-release matrix jobs (18.x / 20.x / 24.x) failing
+  identically, read one job's log to the bottom; the failing
+  package and TS error number (e.g. `TS2769`) tell you which
+  `prepack` step blew up. Do not assume ECYCLE without checking.
+- **typedoc as a hidden lint step**: the `lint` job runs
+  `yarn lint && yarn docs`. `yarn docs` invokes typedoc with a
+  stricter TS config than `yarn lint:types`, so test files that
+  pass local lint can still fail CI. Symptoms include
+  `'value' is possibly 'undefined'` after `t.truthy(value)` and
+  `Property 'X' does not exist on type 'Error'` for ExecaError.
+  AVA's `t.truthy` does not narrow at the TS level; use a
+  narrowing assertion (`assert(value)` from `node:assert` or
+  `@endo/errors` plus a pre-lockdown caveat) before accessing the
+  property.
+- **`@endo/errors` import order matters in tests**: importing
+  `@endo/errors` before any module that locks down SES (e.g.
+  `@endo/ses-ava/prepare-endo.js`) crashes at module load with
+  `Cannot initialize @endo/errors, missing globalThis.assert,
+  import 'ses' before '@endo/errors'`. ESM evaluates imports in
+  source order before any top-level code runs, so even putting
+  the lockdown import on the *next* line is too late. Use
+  `node:assert` instead in test helpers; it provides the same
+  `asserts condition` narrowing without the SES precondition.
+  This bites especially hard in `cli/test/*.test.js` where the
+  ava setup is vanilla (no lockdown at all).
 - **Dependabot all-minor-patch + Prettier minor bump**: when the
   group includes a `prettier` minor (e.g., 3.6 -> 3.8) the lint
   job's `prettier --check` will fail on N files that the new

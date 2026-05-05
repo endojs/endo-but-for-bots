@@ -11,6 +11,27 @@ Surfaces during the `viable-release` CI step, which runs
 `yarn lerna run --reject-cycles --concurrency 1 prepack`. The error
 is fatal: the run exits non-zero before any prepack actually runs.
 
+## Not every `viable-release` failure is ECYCLE
+
+`viable-release` runs `prepack` for every package; any per-package
+`tsc --build` error also fails the job, often across all three
+Node-version matrix slots simultaneously (because the failure is
+deterministic and source-only). When you see all three
+`viable-release` jobs red, **read one job's log to the bottom
+before assuming ECYCLE**. Look for:
+
+- `lerna ERR! ECYCLE` -> follow this skill.
+- `error TS<number>` lines -> a TypeScript error in some
+  package's `prepack`. Open that package, reproduce with
+  `cd packages/<name> && npx corepack yarn prepack`, fix the TS
+  error directly. Common in this category: `TS2769 No overload
+  matches this call` for `makeExo` when an implementation method
+  signature is structurally narrower than the matching
+  interface-guard pattern (e.g. impl says `(x: TraceRecord)` but
+  guard says `M.record()` which produces `Record<string, any>`).
+  Fix by widening the impl param to match the guard and casting
+  inside if downstream code needs the narrow type.
+
 ## Why it happens
 
 Lerna walks the *combined* `dependencies` + `devDependencies`
