@@ -45,6 +45,17 @@ This catches three classes of mistake:
 - For property-based tests, the regression demonstration is
   statistical: shrink the property to deterministically exercise
   the boundary, or seed the generator.
+- An "existing test already covers this area" is not the same as
+  "this fix is regression-tested." Async-iterator writers in
+  particular have several distinct teardown shapes: resolution with
+  `{ done: true }`, resolution with `{ done: false }` from a sink
+  that intends to stay open, rejection from a sink that errored
+  mid-stream, and `throw()` driven from upstream. A test that
+  exercises closure-by-resolution will not catch an unhandled-
+  rejection regression on the rejection path, even if both paths
+  end with the writer reporting `done`. When borrowing an existing
+  test as the regression posture, name which of these shapes it
+  covers and confirm the fix's failure mode matches.
 
 ## Session example
 
