@@ -136,3 +136,19 @@ both should be deleted in the same commit.
   concurrency than CI uses can differ; if numbers look weird,
   run `yarn test` (which uses the project's standard wrapper)
   and compare.
+- **Forked packages inherit dead branches.** When a package is
+  derived from a sibling (e.g. `@endo/syrups` from
+  `@endo/netstring`, with the only behavioral change being
+  removal of a trailing-comma check), the small grammar tweak
+  often kills branches that were live in the parent. Watch for
+  uncovered lines whose surrounding logic, after the tweak,
+  contradicts the conditions that lead into them. In syrups the
+  parent's strict `buffer.length > remainingDataLength` guard
+  became `>=`, which made the inner
+  `buffer.length === remainingDataLength` branch a logical
+  impossibility. The right fix in the derived package is to
+  delete the dead branch (in its own commit, with a comment
+  explaining why the guard is no longer needed), not to keep it
+  on life support with a contortion test. A grep against the
+  parent package will tell you which originally-shared code was
+  preserved unchanged.
