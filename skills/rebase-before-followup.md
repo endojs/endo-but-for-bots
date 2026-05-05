@@ -35,6 +35,23 @@ lease is rejected, fetch again and re-rebase.
   scope, so a rebase that reaches a commit modifying
   `.github/workflows/*` will be rejected at push time. Push via SSH
   instead. See `ssh-fallback-workflow-scope.md`.
+- **Switching base branches (e.g., `llm` → `master`) can drop or
+  conflict with bots-repo-only infrastructure files.** A PR opened
+  against `llm` may contain a "docs(designs): index ..." commit that
+  modifies `designs/README.md`, but `designs/README.md` does not
+  exist on `master`. The rebase will surface this as a `modify/delete`
+  conflict; the right resolution is `git rebase --skip` for the
+  bots-repo-only commit, leaving only the upstream-bound design
+  commits on the rebased branch. Verify post-rebase with `git diff
+  --name-only bots-ssh/master..HEAD`; the remaining files should
+  all belong on master.
+- After a base-branch switch, also re-check `git merge-base HEAD
+  bots-ssh/master` against the current `bots-ssh/master` SHA. If
+  master moved during the session (a common occurrence in busy
+  repos), the rebase target you initially passed may now be stale,
+  and `git diff bots-ssh/master..HEAD` will list spurious files
+  belonging to interim commits. A second `git rebase bots-ssh/master`
+  resolves it cleanly.
 
 ## Session example
 
