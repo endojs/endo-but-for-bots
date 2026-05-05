@@ -79,11 +79,24 @@ Post the aggregated report as a single PR comment under ~700 words.
 Cite reviewers by perspective grouped where they agreed. Don't list
 individual agent names — group them.
 
+## Pitfall: sibling-package forks miss recent peer fixes
+
+When a PR introduces a package by forking an existing peer (e.g.
+`@endo/syrups` from `@endo/netstring`), check the peer's `git log`
+for fixes that landed *between* the fork point and the PR's
+submission. The correctness juror should `git log -p
+packages/<peer>/<file>` over the last 30 days and diff against the
+new sibling. PR 29 shipped without a per-chunk-promise rejection
+handler that had landed in `@endo/netstring/writer.js` 3 days before
+the rename PR pushed; the original fork predated the peer fix and
+the rename did not pick it up. This is a one-line check that pays
+for itself on every sibling-fork PR.
+
 ## Session examples
 
-Used three times: PR 67 (harden-exports destructuring), PR 60
-(get-intrinsics test), and PR 76 (mirror of upstream
-`endojs/endo#3053` for in-organization review). All three produced
-substantive must-fix lists; the third was review-only and the report
-was posted with a relay note since the upstream PR is on a different
-repo.
+Used four times: PR 67 (harden-exports destructuring), PR 60
+(get-intrinsics test), PR 76 (mirror of upstream
+`endojs/endo#3053` for in-organization review), and PR 29
+(`@endo/syrups` sibling-of-netstring). All produced substantive
+must-fix lists. The fourth surfaced the sibling-fork-misses-peer-fix
+pitfall above.
