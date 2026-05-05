@@ -76,6 +76,26 @@ gh api repos/<owner>/<repo>/actions/jobs/<job-id>/logs | tail -100
 
   Only treat the run as terminal when the run object itself reports
   `completed`; then read `conclusion` for success/failure.
+- Run-level `status` lags per-job state by a wide margin: the run sits
+  at `queued` while half the matrix is `in_progress`, then flips to
+  `in_progress` only near the end. Don't infer "stuck" from a stale
+  run-level `queued`; cross-check with the `/jobs` rollup before
+  diagnosing.
+- The agent shell is zsh, not bash. zsh does **not** word-split
+  unquoted parameter expansions by default, so a poll loop like
+  `RUNS=$(gh api … --jq '.workflow_runs[].id'); for r in $RUNS; …`
+  iterates **once** with `r` set to the entire multi-line string.
+  Use a here-string with a `while read` loop instead:
+
+  ```sh
+  while IFS= read -r r; do
+    [ -z "$r" ] && continue
+    ...
+  done <<< "$RUNS"
+  ```
+
+  Or splat with `=(...)` if you stay in zsh deliberately. The bug is
+  invisible until you notice the loop body's `$r` contains newlines.
 
 ## Session example
 
