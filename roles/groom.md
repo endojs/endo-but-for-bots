@@ -25,6 +25,16 @@ interactive turn — see the linked skill below.
    file's metadata block. Drift goes in the open-questions note.
    Don't change the README's status row to match a file that
    itself looks stale; ask.
+   Then recompute the **Totals** line below the table from the
+   actual statuses present (counts drift between grooming passes
+   as new rows land without bumping the totals).
+   A simple bash recipe:
+   ```sh
+   awk '/^## Summary/,/^## Roadmap/' designs/README.md \
+     | grep -E '^\| \[' \
+     | awk -F'|' '{print $5}' \
+     | sed 's/^ *//;s/ *$//' | sort | uniq -c | sort -rn
+   ```
 2. **Recalibrate velocity.** Run
    [`../skills/velocity-recalibration.md`](../skills/velocity-recalibration.md)
    over the designs that completed since the previous calibration
