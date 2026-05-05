@@ -139,3 +139,14 @@ Mass-rebasing this cluster in one cycle would create force-push churn for the ma
 Nine bot PRs each 866–901 commits behind `llm`.
 The rebase distance exceeds the practical threshold; recommend `@dependabot recreate` on each rather than manual rebase.
 The steward does not post the comments; that is a maintainer action.
+
+## Merge queue
+
+| Order | PR | Base | Head at enqueue | Status |
+| --- | --- | --- | --- | --- |
+| 1 | #50 | llm | 921067c115 | in-progress (merge weaver) |
+| 2 | #82 | llm | 86e8b9b0e9 | queued |
+
+## Stalled list
+
+(empty)
