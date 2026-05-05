@@ -6,12 +6,12 @@
 | **Updated** | 2026-05-05 |
 | **Author** | Kris Kowal (prompted) |
 | **Status** | Deprecated |
-| **Superseded by** | [`ocapn-tcp-syrup-framing.md`](./ocapn-tcp-syrup-framing.md) (PR 29) |
+| **Superseded by** | [`ocapn-tcp-syrups-framing.md`](./ocapn-tcp-syrups-framing.md) (PR 29) |
 
 ## Status
 
 This design is consolidated with PR 29's `@endo/syrup-frame`
-([`ocapn-tcp-syrup-framing.md`](./ocapn-tcp-syrup-framing.md)).
+([`ocapn-tcp-syrups-framing.md`](./ocapn-tcp-syrups-framing.md)).
 The two packages are the same in shape: each adapts a stream of
 `Uint8Array` chunks into a stream of `Uint8Array`-delimited messages,
 using length-prefixed Syrup byte-string framing on the wire
