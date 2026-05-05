@@ -10,6 +10,11 @@ their own sentence.
 The rule covers prose only. Em-dashes inside code formatting
 (quoting the character itself, regex literals, ASCII art) are fine.
 En-dashes (`–`, U+2013) for numeric ranges (`80–100`) are also fine.
+Table-cell sentinels are also fine: rows like `| ~~name~~ | — | — |
+... | Done |` use `—` as a "not applicable" placeholder for size and
+duration columns in `designs/README.md`, and that is the existing
+repo convention. Do not sweep them; only sweep prose your PR adds or
+modifies.
 
 ## Where it lives
 
