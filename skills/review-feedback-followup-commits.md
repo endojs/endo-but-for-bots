@@ -75,6 +75,24 @@ comment thread citing the commit SHA(s). See
   surrounding paragraph (e.g. "rename `bench-X.js`" when line N
   is actually about `webextension-X.js`); the reviewer's comment
   is anchored to the line, not to the dispatcher's gloss.
+- A package rename touches more than `package.json:name` and the
+  source identifiers. Sweep:
+  - The package directory under `packages/` (`git mv`).
+  - `package.json` `name`, `homepage`, `repository.directory`.
+  - The AVA test file under `test/<old>.test.js`; rename to
+    `test/<new>.test.js` so the file name still matches the package.
+  - The `.changeset/<old>-*.md` file (rename and update the package
+    name on the YAML front-matter line).
+  - Any error-message text that names the package (e.g.
+    `Invalid <pkg> length prefix`); these are between identifier and
+    prose and are easy to miss with an `*Reader`/`*Writer` grep.
+  - The companion design document under `designs/`, if the rename
+    flows from a name decision recorded there.
+  - `yarn.lock` (separate commit; see this file).
+  After all renames, `grep -rn '<old-name>' packages/ designs/
+  .changeset/ yarn.lock` should return only intentional historical
+  references (e.g. an "originally named X" line in a design's
+  candidates table or the verbatim `## Prompt` block).
 
 ## Session example
 
