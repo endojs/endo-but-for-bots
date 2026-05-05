@@ -144,7 +144,16 @@ The steward does not post the comments; that is a maintainer action.
 
 | Order | PR | Base | Head | Status |
 | --- | --- | --- | --- | --- |
-| 1 | 90 | llm | `160fb5a56b` | in-progress (conductor) |
+
+(empty)
+
+Merged this run (2026-05-05 conductor, second cycle):
+
+- #90 → `49bb6b2a6d` (merge commit to llm).
+  Roadmap reconciliation PR from groom; was 0 behind, 1 ahead at
+  enqueue with 26/0/0 green CI and CLEAN mergeStateStatus. Single
+  commit (`docs(designs): roadmap reconciliation 2026-05-05`) so
+  no tidy needed. Direct `--merge` succeeded; state=MERGED.
 
 Merged this run (2026-05-05 conductor):
 
