@@ -101,6 +101,22 @@ for the procedure and the three narrow exceptions.
   ask the user. Repeated aborts mean the conflict load is too
   high for a clean rebase; an explicit merge commit may be more
   honest.
+- **Rename-vs-content conflicts radiate beyond the conflict
+  markers.** When the PR's intent is "rename file X to Y" and the
+  new base independently added file Z whose links point at X, the
+  README conflict is the visible part; Z's link to X is the
+  silent part. Grep the post-rebase tree for the old name across
+  all files the new base added (sibling designs, deprecation
+  stubs, dependency tables, READMEs in adjacent packages) and
+  fix those references in a follow-up commit on the same branch.
+  Encountered on PR 29: PR 86 added `designs/syrups.md` (a
+  supersession stub) and `designs/cbors.md` (a sibling design),
+  both linking to the pre-rename `ocapn-tcp-syrup-framing.md`.
+  Only the README surfaced as a conflict; the other two would
+  have shipped with broken links. Updating the supersession stub
+  was in scope; the sibling design's many cross-references were
+  out of scope for the weaver and were noted for a follow-up
+  fixer.
 
 Continuous queue-draining merge work has its own role: see
 [`conductor.md`](./conductor.md). The steward dispatches the
