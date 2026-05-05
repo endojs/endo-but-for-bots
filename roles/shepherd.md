@@ -22,6 +22,10 @@ architectural ones.
   the canonical "new diagnostic surfaces an unnamed fixture" fix.
 - [`../skills/lerna-ecycle-fix.md`](../skills/lerna-ecycle-fix.md) —
   the `viable-release` fail mode you'll hit most often.
+- [`../skills/ts-pin-skew-prepack-fail.md`](../skills/ts-pin-skew-prepack-fail.md) —
+  TS2578-in-someone-else's-source during `viable-release` prepack:
+  a package pins typescript below the catalog and the older `tsc`
+  visits sibling sources via `allowJs`.
 - [`../skills/autonomous-loop-pacing.md`](../skills/autonomous-loop-pacing.md) —
   how to schedule the next tick (or end the loop cleanly).
 - [`../skills/pre-pr-checklist.md`](../skills/pre-pr-checklist.md) —
@@ -93,6 +97,24 @@ architectural ones.
   `--force-with-lease=<branch>:<old-sha>`. `maintainerCanModify`
   reads false on these PRs because the head repo equals the base
   repo, not because access is restricted.
+- **Conflicting PR blocks CI dispatch.**
+  `pull_request` workflows run on the synthetic merge ref
+  (`refs/pull/<N>/merge`).
+  When `mergeable_state == "dirty"` (`mergeable: CONFLICTING`),
+  GitHub does not create the merge ref and **no workflow run is
+  dispatched** for new pushes to the PR head.
+  Push events appear in the repo events feed, but the
+  Actions/runs API stays empty for that SHA.
+  Symptom: every other PR triggers CI on push, but yours sits
+  with `statusCheckRollup: []` indefinitely.
+  Diagnose with
+  `gh api repos/<o>/<r>/pulls/<N> --jq '{mergeable, mergeable_state, merge_commit_sha}'`.
+  If `merge_commit_sha: null` and `mergeable_state: dirty`, the PR
+  is blocked on conflict resolution.
+  This is a weaver task, not a shepherd one: hand off and stop
+  pushing nudge commits.
+  Cancelling stuck in-progress runs from the prior SHA does **not**
+  unblock CI on the new SHA when the merge ref is missing.
 
 ## Self-improvement
 

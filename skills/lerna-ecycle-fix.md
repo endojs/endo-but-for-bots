@@ -51,6 +51,11 @@ Three options, in order of preference:
   but not which file/import caused it. Track it down with
   `git diff bots/master <head> -- packages/*/package.json` and
   follow the `workspace:^` additions.
+- Not every `viable-release` failure is an ECYCLE.
+  A `tsc` error referencing a sibling package's source
+  (e.g. `../harden/make-hardener.js(...)`) is usually a TS pin
+  skew, not a cycle.
+  See [`ts-pin-skew-prepack-fail.md`](./ts-pin-skew-prepack-fail.md).
 
 ## Session example
 
