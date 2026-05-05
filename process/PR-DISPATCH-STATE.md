@@ -144,8 +144,14 @@ The steward does not post the comments; that is a maintainer action.
 
 | Order | PR | Base | Head at enqueue | Status |
 | --- | --- | --- | --- | --- |
-| 1 | #50 | llm | 921067c115 | in-progress (merge weaver) |
-| 2 | #82 | llm | 86e8b9b0e9 | queued |
+| 1 | #82 | llm | 86e8b9b0e9 | in-progress (merge weaver) |
+
+Merged this run:
+
+- #50 → `741e8000fb` (rebase merge to llm at 2026-05-04).
+  Side effect: PR #58's base (`design/error-tracing-across-workers`)
+  may be deleted by GitHub branch-cleanup; surface to steward for
+  re-target/rebase next cycle.
 
 ## Stalled list
 
