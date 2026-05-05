@@ -43,6 +43,17 @@ issue or design document, and shepherding it through to a green PR.
 - Verify regression evidence for every new test before pushing.
 - Open the PR on `endojs/endo-but-for-bots`, not on `endojs/endo`,
   unless the user has said otherwise.
+- When the user asks for a branch "based on `actual/master`" and the
+  PR is going to the bots repo, expect `bots/master` to lag
+  `actual/master` by some number of upstream commits.
+  The PR diff will include those inherited commits.
+  Disclose the lag explicitly in the PR body so the maintainer is not
+  surprised by unrelated files in `gh pr diff --name-only`.
+- When the user names a target file location that does not exist on
+  `actual/master`, do not silently invent a different target.
+  Confirm the actual location, make the focused change there, and
+  surface the discrepancy in the PR body so the maintainer can
+  redirect.
 
 ## Self-improvement
 
