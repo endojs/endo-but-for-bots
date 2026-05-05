@@ -57,6 +57,14 @@ result through CI.
   the workflow file path and line numbers (or the test names) that
   prove it, not just an assertion. Do not push an empty commit; the
   reply IS the artifact.
+- When a review item implies cross-PR coordination ("if X then
+  also rename PR Y"), **surface but do not act**. Decide the local
+  question (does X hold?), record the verdict and the conditional
+  recommendation in a "For the steward" section in the design or
+  in the top-level PR summary, and let the steward dispatch the
+  cross-PR follow-up. The fixer's lane is the current PR; reaching
+  into another PR risks two simultaneous in-flight rewrites
+  fighting each other.
 - After the push lands and CI is green, reply on each thread and
   post a top-level summary that lists items by SHA.
 

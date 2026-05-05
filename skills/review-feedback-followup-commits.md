@@ -57,6 +57,16 @@ comment thread citing the commit SHA(s). See
   sha256, and embed both as workflow-level env vars so a future
   bump is a two-line change. Key any download cache by both
   fields so a stale blob can't shadow a version bump.
+- When one review item demands a major rewrite (e.g. a scope
+  reduction that re-frames an entire design document), don't try
+  to fake atomic commits for the rest. Land the rewrite as commit
+  A. Then commits B, C, ... should be **additive sharpenings** of
+  the new content (a clarifying paragraph, a new design-decision
+  bullet, a hedging adjective) that a reviewer could request be
+  dropped without unwinding the rewrite. Keep the rewrite commit
+  honest about its scope; the reviewer expected the rewrite, and
+  splitting it into "phase 1 of the rewrite, phase 2 of the
+  rewrite" is theater.
 
 ## Session example
 
