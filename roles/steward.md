@@ -124,27 +124,51 @@ is done by adding a note to the cycle log for the user.
 
 ## Procedure
 
-Per cycle, in order:
+A cycle is a sequence of **rounds**. Each round is the survey,
+reconcile, dispatch, wait-for-completion sequence below. The
+cycle iterates rounds until exhaustion: a round that produces
+no new dispatches (debouncer satisfied across the whole queue)
+ends the cycle.
+
+Per round, in order:
 
 1. **Read prior state.** `process/PR-DISPATCH-STATE.md`,
    `process/PR-CYCLE-LOG.md`, and `process/DESIGNS-WITHOUT-PR.md`
-   in full. They are the steward's only memory.
+   in full. They are the steward's only memory across rounds.
+   On the first round of a cycle, this is also the only memory
+   from the previous cycle.
    **First cycle path**: if PR state files do not exist yet,
    build the baseline from scratch (cycle log entry says
    `cycle 1 (initial)`).
-2. **Garden upstream merge.** Dispatch a weaver to merge
-   `actual/llm` into `garden` if upstream is ahead. The weaver
-   adds the `actual` remote if missing, merges or rebases per
-   the conflict-resolution skill, and pushes. Wait for the
-   weaver to complete before proceeding (downstream dispatches
-   read role and skill files from the working tree).
+2. **Garden upstream merge** (first round only). Dispatch a
+   weaver to merge `actual/llm` into `garden` if upstream is
+   ahead. The weaver adds the `actual` remote if missing,
+   merges or rebases per the conflict-resolution skill, and
+   pushes. Wait for the weaver to complete before proceeding
+   (downstream dispatches read role and skill files from the
+   working tree). Subsequent rounds skip this step.
 3. **Pull the live PR list** with
    `gh pr list … --json …`.
 4. **Sweep CI status** across all open PRs per
    [`../skills/ci-status-summary.md`](../skills/ci-status-summary.md).
 5. **Audit rebase hygiene** per
    [`../skills/rebase-hygiene-audit.md`](../skills/rebase-hygiene-audit.md).
-6. **Identify merged PRs since last cycle**:
+6. **Surface fresh feedback.** Compute the previous-round
+   timestamp from the cycle log (or the previous cycle's
+   close-time on the first round) and run:
+   ```sh
+   prev=<previous-round-or-cycle-iso>
+   gh search prs --repo endojs/endo-but-for-bots \
+     "updated:>=$prev" --state open \
+     --json number,title,updatedAt
+   ```
+   Cross-reference with per-PR `gh api repos/.../pulls/<N>/comments`
+   and `gh api repos/.../pulls/<N>/reviews` filtered by the same
+   timestamp. Any PR with a new review comment, review
+   submission, or push since the prior round is a high-priority
+   target this round (overrides the per-cycle quotas for fixer
+   dispatches; the cleaner and builder caps still apply).
+   **Identify merged PRs since the prior cycle**:
    `gh pr list --state merged --search "merged:>=<prev-cycle-iso>"`.
 7. **Reconcile against state files**. For each open PR, compute
    the cycle decision per "What the steward dispatches" above.
@@ -165,23 +189,38 @@ Per cycle, in order:
    (or design path). Posting identity is implied by whatever
    bot account is authenticated in the sandbox; do not name a
    persona in the brief.
-9. **Garden CI shepherd.** After the dispatched cycle work
-   completes (or after launching all background dispatches),
-   dispatch a shepherd for the `garden` branch if its CI is
-   red. The shepherd targets the branch, not a PR.
-10. **Append a cycle-log section** describing the survey and
-    every dispatch with its one-phrase reason.
-11. **Rewrite `process/PR-DISPATCH-STATE.md`** in full.
-12. **Refresh `process/DESIGNS-WITHOUT-PR.md`** snapshot date
+9. **Garden CI shepherd** (every round). After the round's
+   dispatches launch (or complete, your choice for the wait
+   shape), dispatch a shepherd for the `garden` branch if its
+   CI is red. The shepherd targets the branch, not a PR.
+10. **Wait for this round's dispatches.** Block on completion
+    of the agents you launched this round (or those that block
+    the next round's reconciliation) before the next round.
+    Background fixers can be left running across rounds; weavers,
+    shepherds, and builders that mutate the working tree must
+    finish before the next round's reconciliation.
+11. **Decide round boundary.** Re-survey (steps 3 to 6). If any
+    PR has changed state (new comment, new review, new push, CI
+    flip) or any dispatched agent has produced a result that
+    enables a follow-up dispatch (a fixer's push that's now
+    awaiting maintainer re-review can be left; but a weaver's
+    successful rebase of one PR may unblock a fixer on another),
+    start the next round at step 7. Otherwise the cycle has
+    reached **exhaustion** and proceeds to the close steps below.
+12. **Append a cycle-log section** describing every round of the
+    cycle: per-round survey and every dispatch with its
+    one-phrase reason, plus the round-count.
+13. **Rewrite `process/PR-DISPATCH-STATE.md`** in full.
+14. **Refresh `process/DESIGNS-WITHOUT-PR.md`** snapshot date
     if any builder dispatches succeeded in opening PRs.
-13. **Stage every modified `roles/*.md` and `skills/*.md`** file
+15. **Stage every modified `roles/*.md` and `skills/*.md`** file
     (steward's own self-improvement plus any left by dispatched
     sub-agents) and commit as
     `docs(roles,skills): self-improvements from steward cycle <ts>`.
     Push.
-14. **Commit the process state files** in a single process
+16. **Commit the process state files** in a single process
     commit (`process(steward): cycle <ts>`) and push.
-15. **Schedule the next wakeup** or end the loop per
+17. **Schedule the next wakeup** or end the loop per
     [`../skills/autonomous-loop-pacing.md`](../skills/autonomous-loop-pacing.md).
     Cron-fired cycles end immediately; the cron handles cadence.
 
