@@ -301,3 +301,47 @@ test('round-trip across adversarial chunk boundaries', async t => {
     got,
   );
 });
+
+// Exercise writer.throw(): the syrups writer must forward the error to
+// the underlying output stream's throw().  pump() in @endo/stream calls
+// writer.throw(err) when the reader side fails, so the writer must
+// honor the iterator-protocol throw method.
+test('writer.throw forwards the error to the underlying output', async t => {
+  /** @type {Error[]} */
+  const thrown = [];
+  const writer = makeSyrupsWriter({
+    async next() {
+      return { done: false };
+    },
+    async return() {
+      return { done: true };
+    },
+    async throw(error) {
+      thrown.push(error);
+      return { done: true };
+    },
+  });
+  const boom = Error('boom');
+  const result = await writer.throw(boom);
+  t.is(result.done, true);
+  t.deepEqual(thrown, [boom]);
+});
+
+// Exercise Symbol.asyncIterator: the syrups writer is itself an async
+// iterator, and `for await ... of writer` is the protocol-level way to
+// drive a writer.  This confirms the writer returns itself from
+// Symbol.asyncIterator (the iterable contract).
+test('writer is its own async iterator', t => {
+  const writer = makeSyrupsWriter({
+    async next() {
+      return { done: false };
+    },
+    async return() {
+      return { done: true };
+    },
+    async throw() {
+      return { done: true };
+    },
+  });
+  t.is(writer[Symbol.asyncIterator](), writer);
+});
