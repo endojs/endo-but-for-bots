@@ -7,27 +7,15 @@ designed to interoperate byte-for-byte with the Rust crate at
 
 ## Architecture
 
-```
-                              ┌─────────────────┐
-   makeMessageSlots(name,     │  byte pipe via  │
-     writer, reader,          │ {verb, payload} │
-     cancelled, bootstrap)    │  envelopes      │
-   └───────────┬───────────┐  └────────┬────────┘
-               │           │           │
-               ▼           ▼           ▼
-       makeSlotClient    makeSlotCodec  ─┐
-       │ presences      │ encode/decode │
-       │ reply table    │ smallcaps body│
-       │ drop / abort   │ slot strings  │
-       └────┬───────────┴────────┬──────┘
-            │                    │
-            ▼                    ▼
-        makeCList            payload.js
-        ┌─────────┐         ┌──────────────┐
-        │ vref ↔  │         │ canonical    │
-        │ value   │         │ CBOR codec   │
-        │ tables  │         │ (cbor.js)    │
-        └─────────┘         └──────────────┘
+```mermaid
+flowchart TD
+  MMS["makeMessageSlots(name, writer, reader, cancelled, bootstrap)"]
+  Pipe["byte pipe via {verb, payload} envelopes"]
+  MMS --> Pipe
+  MMS --> SlotClient["makeSlotClient<br/>presences · reply table · drop/abort"]
+  MMS --> SlotCodec["makeSlotCodec<br/>encode/decode · smallcaps body · slot strings"]
+  SlotClient --> CList["makeCList<br/>vref &harr; value tables"]
+  SlotCodec --> Payload["payload.js<br/>canonical CBOR codec (cbor.js)"]
 ```
 
 ## Quick start
