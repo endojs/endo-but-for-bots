@@ -997,30 +997,29 @@ const setupClientSession = connectionHandle => {
     hostTrace(
       `daemon-xs(slots): client session created handle=${connectionHandle}`,
     );
-    return;
-  }
+  } else {
+    /**
+     * @param {Record<string, unknown>} message
+     */
+    const send = message => {
+      const json = JSON.stringify(message);
+      const bytes = textEncoder.encode(json);
+      hostTrace(
+        `daemon-xs: client SEND handle=${connectionHandle} type=${message.type || '?'}`,
+      );
+      sendEnvelope(connectionHandle, 'deliver', bytes);
+    };
 
-  /**
-   * @param {Record<string, unknown>} message
-   */
-  const send = message => {
-    const json = JSON.stringify(message);
-    const bytes = textEncoder.encode(json);
-    hostTrace(
-      `daemon-xs: client SEND handle=${connectionHandle} type=${message.type || '?'}`,
+    const { dispatch, abort } = makeCapTP(
+      `Client ${connectionHandle}`,
+      send,
+      bootstrap,
+      { onReject: silentReject },
     );
-    sendEnvelope(connectionHandle, 'deliver', bytes);
-  };
 
-  const { dispatch, abort } = makeCapTP(
-    `Client ${connectionHandle}`,
-    send,
-    bootstrap,
-    { onReject: silentReject },
-  );
-
-  clientSessions.set(connectionHandle, { dispatch, abort });
-  hostTrace(`daemon-xs: client session created handle=${connectionHandle}`);
+    clientSessions.set(connectionHandle, { dispatch, abort });
+    hostTrace(`daemon-xs: client session created handle=${connectionHandle}`);
+  }
 };
 
 /**
