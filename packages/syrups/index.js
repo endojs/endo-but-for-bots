@@ -1,2 +1,2 @@
-export { makeSyrupFrameReader } from './reader.js';
-export { makeSyrupFrameWriter } from './writer.js';
+export { makeSyrupsReader } from './reader.js';
+export { makeSyrupsWriter } from './writer.js';

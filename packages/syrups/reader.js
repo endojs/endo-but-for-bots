@@ -2,10 +2,10 @@
 
 import harden from '@endo/harden';
 
-// Syrup-frame grammar: <length> ":" <payload> (no trailing separator).
+// Syrups grammar: <length> ":" <payload> (no trailing separator).
 // Derived from @endo/netstring; the only behavioral difference is that
 // there is no COMMA check after the payload.  See
-// designs/ocapn-tcp-syrup-framing.md.
+// designs/ocapn-tcp-syrups-framing.md.
 
 const COLON = ':'.charCodeAt(0);
 const ZERO = '0'.charCodeAt(0);
@@ -17,7 +17,7 @@ const NINE = '9'.charCodeAt(0);
  * @param {string} [opts.name]
  * @param {number} [opts.maxMessageLength]
  */
-async function* makeSyrupFrameIterator(
+async function* makeSyrupsIterator(
   input,
   { name = '<unknown>', maxMessageLength = 999999999 } = {},
 ) {
@@ -57,7 +57,7 @@ async function* makeSyrupFrameIterator(
             lengthBuffer.push(c);
             if (lengthBuffer.length === maxPrefixLength) {
               throw Error(
-                `Too long syrup-frame length prefix ${JSON.stringify(
+                `Too long syrups length prefix ${JSON.stringify(
                   String.fromCharCode(...lengthBuffer),
                 )}... at offset ${offset} of ${name}`,
               );
@@ -67,7 +67,7 @@ async function* makeSyrupFrameIterator(
             break;
           } else {
             throw Error(
-              `Invalid syrup-frame length prefix ${JSON.stringify(
+              `Invalid syrups length prefix ${JSON.stringify(
                 String.fromCharCode(...lengthBuffer, c),
               )} at offset ${offset} of ${name}`,
             );
@@ -82,11 +82,11 @@ async function* makeSyrupFrameIterator(
           remainingDataLength = +prefix;
           if (Number.isNaN(remainingDataLength)) {
             throw Error(
-              `Invalid syrup-frame prefix length ${prefix} at offset ${offset} of ${name}`,
+              `Invalid syrups prefix length ${prefix} at offset ${offset} of ${name}`,
             );
           } else if (remainingDataLength > maxMessageLength) {
             throw Error(
-              `Syrup-frame message too big (length ${remainingDataLength}) at offset ${offset} of ${name}`,
+              `Syrups message too big (length ${remainingDataLength}) at offset ${offset} of ${name}`,
             );
           }
           offset += lengthBuffer.length + 1;
@@ -95,7 +95,7 @@ async function* makeSyrupFrameIterator(
       }
 
       // Waiting for data.  The payload is exactly `remainingDataLength`
-      // bytes with no trailing separator — this is the one behavioral
+      // bytes with no trailing separator.  This is the one behavioral
       // departure from @endo/netstring.
       if (!lengthBuffer) {
         if (buffer.length >= remainingDataLength) {
@@ -133,7 +133,7 @@ async function* makeSyrupFrameIterator(
 
   return undefined;
 }
-harden(makeSyrupFrameIterator);
+harden(makeSyrupsIterator);
 
 /**
  * @param {Iterable<Uint8Array> | AsyncIterable<Uint8Array>} input
@@ -142,7 +142,7 @@ harden(makeSyrupFrameIterator);
  * @param {number} [opts.maxMessageLength]
  * @returns {import('@endo/stream').Reader<Uint8Array, undefined>} input
  */
-export const makeSyrupFrameReader = (input, opts) => {
-  return harden(makeSyrupFrameIterator(input, opts));
+export const makeSyrupsReader = (input, opts) => {
+  return harden(makeSyrupsIterator(input, opts));
 };
-harden(makeSyrupFrameReader);
+harden(makeSyrupsReader);

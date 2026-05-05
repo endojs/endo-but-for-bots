@@ -3,10 +3,10 @@
 import harden from '@endo/harden';
 import { makePromiseKit } from '@endo/promise-kit';
 
-// Syrup-frame grammar: <length> ":" <payload> (no trailing separator).
+// Syrups grammar: <length> ":" <payload> (no trailing separator).
 // Derived from @endo/netstring; the only behavioral difference is that
 // the writer emits no trailing comma after the payload.  See
-// designs/ocapn-tcp-syrup-framing.md.
+// designs/ocapn-tcp-syrups-framing.md.
 
 /** @param {number} length */
 const getLengthPrefixCharCodes = length =>
@@ -14,7 +14,7 @@ const getLengthPrefixCharCodes = length =>
   [...`${length | 0}:`].map(char => char.charCodeAt(0));
 
 /**
- * Create a writer stream which wraps messages into the syrup-frame
+ * Create a writer stream which wraps messages into the syrups
  * encoding and writes them to an output writer stream.
  *
  * This transform can be zero-copy, if the output stream supports
@@ -29,7 +29,7 @@ const getLengthPrefixCharCodes = length =>
  * @param {boolean} [opts.chunked]
  * @returns {import('@endo/stream').Writer<Uint8Array | Uint8Array[], undefined>}
  */
-export const makeSyrupFrameWriter = (output, { chunked = false } = {}) => {
+export const makeSyrupsWriter = (output, { chunked = false } = {}) => {
   return harden({
     async next(messageChunks) {
       if (!Array.isArray(messageChunks)) {
@@ -92,4 +92,4 @@ export const makeSyrupFrameWriter = (output, { chunked = false } = {}) => {
     },
   });
 };
-harden(makeSyrupFrameWriter);
+harden(makeSyrupsWriter);

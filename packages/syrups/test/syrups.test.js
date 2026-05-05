@@ -5,8 +5,8 @@ import '@endo/init/debug.js';
 
 import test from 'ava';
 import { makePipe } from '@endo/stream';
-import { makeSyrupFrameReader } from '../reader.js';
-import { makeSyrupFrameWriter } from '../writer.js';
+import { makeSyrupsReader } from '../reader.js';
+import { makeSyrupsWriter } from '../writer.js';
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -21,7 +21,7 @@ async function read(source) {
 }
 
 const readChunkedMessage = async (t, chunkStrings, expectedDataStrings) => {
-  const r = makeSyrupFrameReader(
+  const r = makeSyrupsReader(
     chunkStrings.map(chunkString => encoder.encode(chunkString)),
     {
       name: '<unknown>',
@@ -83,7 +83,7 @@ test(
 );
 
 const readErroneousChunkedMessage = async (t, chunkStrings, opts) => {
-  const r = makeSyrupFrameReader(
+  const r = makeSyrupsReader(
     chunkStrings.map(chunkString => encoder.encode(chunkString)),
     opts,
   );
@@ -129,7 +129,7 @@ function delay(ms) {
 
 const makeArrayWriter = opts => {
   const array = [];
-  const writer = makeSyrupFrameWriter(
+  const writer = makeSyrupsWriter(
     {
       async next(value) {
         // Provide some back pressure to give the producer an
@@ -161,7 +161,7 @@ const shortMessages = async (t, opts) => {
 
   t.deepEqual(
     [encoder.encode(''), encoder.encode('A'), encoder.encode('hello')],
-    await read(makeSyrupFrameReader(array)),
+    await read(makeSyrupsReader(array)),
   );
 };
 test('round-trip short messages', shortMessages);
@@ -178,7 +178,7 @@ const concurrentWrites = async (t, opts) => {
 
   t.deepEqual(
     [encoder.encode(''), encoder.encode('A'), encoder.encode('hello')],
-    await read(makeSyrupFrameReader(array)),
+    await read(makeSyrupsReader(array)),
   );
 };
 test('concurrent writes', concurrentWrites);
@@ -192,7 +192,7 @@ const chunkedWrite = async (t, opts) => {
 
   t.deepEqual(
     [encoder.encode(strChunks.join(''))],
-    await read(makeSyrupFrameReader(array)),
+    await read(makeSyrupsReader(array)),
   );
 };
 test('chunked write', chunkedWrite);
@@ -205,7 +205,7 @@ test('writer closes anywhere within chunk', async t => {
   // reader at any point yields `done: true` to the writer.
   for (let count = 0; count < 3; count += 1) {
     const pipe = makePipe();
-    const writer = makeSyrupFrameWriter(pipe[1], { chunked: true });
+    const writer = makeSyrupsWriter(pipe[1], { chunked: true });
     for (let i = 0; i < count; i += 1) {
       pipe[0].next();
     }
@@ -236,7 +236,7 @@ const varyingMessages = async (t, opts) => {
   const producer = (async () => {
     await null;
     /** @type {import('@endo/stream').Writer<Uint8Array, undefined>} */
-    const w = makeSyrupFrameWriter(output, opts);
+    const w = makeSyrupsWriter(output, opts);
     for (let i = 0; i < array.length; i += 1) {
       // eslint-disable-next-line no-await-in-loop
       await w.next(encoder.encode(array[i]));
@@ -248,7 +248,7 @@ const varyingMessages = async (t, opts) => {
 
   const consumer = (async () => {
     /** @type {import('@endo/stream').Reader<Uint8Array, undefined>} */
-    const r = makeSyrupFrameReader(input);
+    const r = makeSyrupsReader(input);
     let i = 0;
     for await (const message of r) {
       await delay(10);
@@ -273,7 +273,7 @@ test('round-trip across adversarial chunk boundaries', async t => {
 
   const producer = (async () => {
     await null;
-    const w = makeSyrupFrameWriter(output);
+    const w = makeSyrupsWriter(output);
     for (const m of messages) {
       // eslint-disable-next-line no-await-in-loop
       await w.next(encoder.encode(m));
@@ -293,7 +293,7 @@ test('round-trip across adversarial chunk boundaries', async t => {
   }
   const byteByByte = byteByByteGen();
 
-  const r = makeSyrupFrameReader(byteByByte);
+  const r = makeSyrupsReader(byteByByte);
   const got = await read(r);
   await producer;
   t.deepEqual(
