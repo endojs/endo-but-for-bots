@@ -43,6 +43,14 @@ each item, the commit that addressed it, and any deferrals.
 - Bash heredocs and `-f body=` quoting interact poorly with backticks
   in the body. Escape with `\`...\`` or use `--field` and pass the
   body as a here-string.
+- When a review comment lands on a JSDoc / TypeScript type
+  annotation, fetch the comment's `diff_hunk` (it is included in the
+  `comments` payload). The hunk shows what the type used to be, and
+  the reviewer is almost always asking about what was lost in the
+  refactor (e.g. a `typeof Foo.prototype.method` carried `this:
+  Foo`; downgrading to `() => string` silently dropped that). The
+  fix is usually to restore the missing piece structurally
+  (`((this: Foo) => string)`), not to revert the whole annotation.
 
 ## Session example
 

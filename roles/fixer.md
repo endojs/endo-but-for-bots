@@ -51,6 +51,12 @@ result through CI.
   a short analysis of why the fix is non-trivial, and an offer to
   follow up in a separate PR. Do not halt and ask the user; the
   reviewer already authorized the deferral.
+- "Verified, no change needed" is a first-class outcome alongside
+  fix / defer / surface. When a reviewer says "make it so" for an
+  invariant that the code already satisfies, the right reply cites
+  the workflow file path and line numbers (or the test names) that
+  prove it, not just an assertion. Do not push an empty commit; the
+  reply IS the artifact.
 - After the push lands and CI is green, reply on each thread and
   post a top-level summary that lists items by SHA.
 
