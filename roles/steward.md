@@ -82,14 +82,14 @@ steward:
   "once per PR" rule and to detect whether a cleaner is
   currently in flight (the concurrency cap of one).
 - `process/PR-DISPATCH-STATE.md` § **Merge queue**: an ordered
-  list of approved PRs awaiting the continuous merge weaver, plus
-  a sibling **Stalled list** for PRs the merge weaver hit an
+  list of approved PRs awaiting the conductor, plus
+  a sibling **Stalled list** for PRs the conductor hit an
   impasse on (rebase conflict, CI failure that needs
   builder/fixer attention, mergeable=BLOCKED, branch protection,
   required-review missing). Format: `#N | base | approved-at |
   head-at-enqueue | status` where status is `queued`,
-  `in-progress (merge weaver)`, or `stalled: <one-phrase
-  reason>`. The steward enqueues each round; the merge weaver
+  `in-progress (conductor)`, or `stalled: <one-phrase
+  reason>`. The steward enqueues each round; the conductor
   drains.
 
 See [`../skills/pr-cycle-state.md`](../skills/pr-cycle-state.md)
@@ -120,47 +120,47 @@ for the PR-state file formats and the reconciliation procedure.
   touches, not the PR's own diff. Record the dispatch in the
   ledger so subsequent cycles do not redispatch it. See
   `roles/cleaner.md`.
-- **Enqueue for the continuous merge weaver** when a PR's
+- **Enqueue for the conductor** when a PR's
   `reviewDecision` is `APPROVED` and the PR is not already on
   the Merge queue or Stalled list. The steward does not do the
   rebase / CI / merge itself; it only appends to the queue and
-  ensures one weaver dispatch is in flight to drain it. See
-  "Continuous merge weaver" below.
+  ensures one conductor dispatch is in flight to drain it.
+  See "Conductor" below.
 - **No dispatch, status `blocked`** — when the only path forward
   requires a maintainer judgment call or a design decision the
   steward cannot orchestrate.
 
-### Continuous merge weaver (across cycles, one in flight)
+### Conductor (across cycles, one in flight)
 
-- **`weaver` (continuous merge mode)** drains the Merge queue.
-  Per `roles/weaver.md` § Continuous merge mode, the weaver
-  processes one PR at a time from the queue: rebase onto the
-  PR's current base, push with `--force-with-lease`, walk CI to
-  green per the broadened shepherd posture inline (the merge
-  weaver may make small fixer-class corrections during this
-  walk; larger corrections trigger a stall), then `gh pr merge`
-  with the project's preferred strategy. On success, dequeue and
-  pick the next PR. On impasse (rebase conflict, CI failure
-  outside the merge weaver's scope, branch-protection block),
-  move the PR from the queue to the Stalled list with a
-  one-phrase reason and continue with the next PR.
+- **`conductor`** drains the Merge queue.
+  Per `roles/conductor.md`, the conductor processes one PR at a
+  time from the queue: rebase onto the PR's current base, push
+  with `--force-with-lease`, walk CI to green per the broadened
+  shepherd posture inline (the conductor may make small
+  fixer-class corrections during this walk; larger corrections
+  trigger a stall), then `gh pr merge` with the project's
+  preferred strategy. On success, dequeue and pick the next PR.
+  On impasse (rebase conflict, CI failure outside the
+  conductor's scope, branch-protection block), move the PR from
+  the queue to the Stalled list with a one-phrase reason and
+  continue with the next PR.
 
-  **Concurrency**: at most **one continuous merge weaver in
-  flight across the whole estate**, mirroring the cleaner cap.
-  If the prior cycle's merge weaver is still running (notification
-  not yet received), do not redispatch this cycle.
+  **Concurrency**: at most **one conductor in flight across the
+  whole estate**, mirroring the cleaner cap. If the prior
+  cycle's conductor is still running (notification not yet
+  received), do not redispatch this cycle.
 
-  **Dispatch criterion**: the queue is non-empty AND no merge
-  weaver is currently in flight.
+  **Dispatch criterion**: the queue is non-empty AND no
+  conductor is currently in flight.
 
   **Brief contents**: the queue snapshot (PR list with current
   bases and head SHAs), the project's merge strategy preference,
   the impasse-vs-fix scope from the broadened shepherd posture,
   and a reminder to update the dispatch state's Merge queue and
-  Stalled list as it goes (the weaver commits these process
+  Stalled list as it goes (the conductor commits these process
   updates itself, separately from any code commits, since the
-  steward will not see the queue state until the weaver finishes
-  and the steward re-fetches).
+  steward will not see the queue state until the conductor
+  finishes and the steward re-fetches).
 
 ### Garden-branch maintenance (per cycle, before bot-PR work)
 
@@ -280,8 +280,8 @@ Per round, in order:
    `reviewDecision`. Append every `APPROVED` PR not already on
    the queue or Stalled list to the Merge queue with a status
    of `queued`. If the queue is non-empty AND no continuous
-   merge weaver is currently in flight, dispatch one this round
-   per "Continuous merge weaver" above. The merge weaver brief
+   conductor is currently in flight, dispatch one this round
+   per "Continuous conductor" above. The conductor brief
    includes the queue snapshot.
 8. **Dispatch in batch.** One agent per concern. Each brief is
    self-contained: role file path, cited skills, project
