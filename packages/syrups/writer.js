@@ -51,13 +51,21 @@ export const makeSyrupsWriter = (output, { chunked = false } = {}) => {
           ...messageChunks.map(chunk => output.next(chunk)),
         ];
 
-        // Resolve early if the output writer closes early.
+        // Resolve early if the output writer closes early.  Each
+        // per-chunk promise also gets a swallowing catch so that a
+        // rejection from one chunk (e.g. socket FIN'd mid-stream)
+        // does not surface as an unhandled rejection.  The aggregate
+        // is already observed by the Promise.all chain below, which
+        // routes failures into ack.reject.
         for (const promise of partsWritten) {
-          promise.then(partWritten => {
-            if (partWritten.done) {
-              ack.resolve(partWritten);
-            }
-          });
+          promise.then(
+            partWritten => {
+              if (partWritten.done) {
+                ack.resolve(partWritten);
+              }
+            },
+            () => {},
+          );
         }
 
         Promise.all(partsWritten).then(results => {
