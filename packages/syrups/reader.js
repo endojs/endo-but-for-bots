@@ -78,13 +78,13 @@ async function* makeSyrupsIterator(
 
         if (lengthBuffer[lengthBuffer.length - 1] === COLON) {
           lengthBuffer.pop();
+          // The prefix is composed only of ASCII digits (the inner
+          // loop pushes on `c >= ZERO && c <= NINE` and rejects
+          // everything else), so `+prefix` is always a finite,
+          // non-negative integer.  No NaN guard needed.
           const prefix = String.fromCharCode(...lengthBuffer);
           remainingDataLength = +prefix;
-          if (Number.isNaN(remainingDataLength)) {
-            throw Error(
-              `Invalid syrups prefix length ${prefix} at offset ${offset} of ${name}`,
-            );
-          } else if (remainingDataLength > maxMessageLength) {
+          if (remainingDataLength > maxMessageLength) {
             throw Error(
               `Syrups message too big (length ${remainingDataLength}) at offset ${offset} of ${name}`,
             );
@@ -114,12 +114,11 @@ async function* makeSyrupsIterator(
           lengthBuffer = [];
           yield data;
         } else if (buffer.length) {
-          if (!dataBuffer && buffer.length === remainingDataLength) {
-            dataBuffer = buffer;
-          } else {
-            dataBuffer = dataBuffer || new Uint8Array(remainingDataLength);
-            dataBuffer.set(buffer, dataBuffer.length - remainingDataLength);
-          }
+          // The outer `>=` guard is false here, so buffer.length is
+          // strictly less than remainingDataLength.  Allocate or
+          // grow into a payload buffer and copy the partial chunk.
+          dataBuffer = dataBuffer || new Uint8Array(remainingDataLength);
+          dataBuffer.set(buffer, dataBuffer.length - remainingDataLength);
           remainingDataLength -= buffer.length;
           buffer = buffer.subarray(buffer.length);
         }
