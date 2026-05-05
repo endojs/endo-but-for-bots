@@ -161,9 +161,10 @@ Per cycle, in order:
    row to the ledger as soon as the dispatch is launched.
 8. **Dispatch in batch.** One agent per concern. Each brief is
    self-contained: role file path, cited skills, project
-   conventions path (`CLAUDE.md`), the PR's current head SHA
-   (or design path), and the "speak as Kriscendo Bot"
-   identity note.
+   conventions path (`CLAUDE.md`), and the PR's current head SHA
+   (or design path). Posting identity is implied by whatever
+   bot account is authenticated in the sandbox; do not name a
+   persona in the brief.
 9. **Garden CI shepherd.** After the dispatched cycle work
    completes (or after launching all background dispatches),
    dispatch a shepherd for the `garden` branch if its CI is
@@ -234,11 +235,10 @@ Per cycle, in order:
   there, regardless of head-SHA advancement.
 - **Builders stop at impasse, not at completion.** A builder that
   reaches a question only the maintainer can answer leaves a PR
-  comment as Kriscendo Bot and ends. The next cycle picks the
-  PR back up via the fixer/shepherd path once the maintainer has
-  weighed in. Do not redispatch the same builder on the same
-  design until the PR's head SHA advances or a maintainer
-  comment lands.
+  comment and ends. The next cycle picks the PR back up via the
+  fixer/shepherd path once the maintainer has weighed in. Do not
+  redispatch the same builder on the same design until the PR's
+  head SHA advances or a maintainer comment lands.
 - **PR branches base off `bots/llm`, not off `garden`.** Every
   brief the steward sends to a builder, designer, fixer, weaver,
   or shepherd that opens or pushes a PR must instruct the
@@ -297,13 +297,6 @@ Per cycle, in order:
   process commit stays cleanly isolated. The user can drop or
   amend any individual self-improvement in a follow-up rebase if
   they disagree.
-- **Identity for posted content.** When a remote sub-agent posts
-  a PR comment, opens a discussion, or otherwise speaks publicly,
-  it does so as **Kriscendo Bot** (pronounced like "crescendo").
-  The dispatching steward includes this in every sub-agent brief
-  so signatures, sign-offs, and self-references are consistent
-  across cycles.
-
 ## Self-improvement
 
 The final task of every engagement is to update this role file
