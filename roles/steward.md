@@ -310,8 +310,10 @@ Per round, in order:
     fixer's push that's now awaiting maintainer re-review can be
     left; but a weaver's successful rebase of one PR may unblock
     a fixer on another), start the next round at step 7.
-    Otherwise the cycle has reached **exhaustion** and proceeds
-    to the close steps below.
+    Otherwise the cycle has reached **within-fire exhaustion**;
+    proceed to the close steps below. (Within-fire exhaustion
+    is not a stop condition for the loop overall; the loop is
+    indefinite. Step 17 schedules the next fire regardless.)
 12. **Append a cycle-log section** describing every round of the
     cycle: per-round survey and every dispatch with its
     one-phrase reason, plus the round-count.
@@ -325,15 +327,50 @@ Per round, in order:
     Push.
 16. **Commit the process state files** in a single process
     commit (`process(steward): cycle <ts>`) and push.
-17. **Schedule the next cycle** via `ScheduleWakeup` per
-    [`../skills/autonomous-loop-pacing.md`](../skills/autonomous-loop-pacing.md).
+17. **Schedule the next cycle** via `ScheduleWakeup`. **The
+    steward loop is indefinite; always call `ScheduleWakeup`,
+    never return without scheduling.** Picking the delay:
+
+    - **Hard upper bound: 32400 seconds (9 hours).** No fire is
+      more than 9 hours out, ever. This is the worst-case
+      latency the steward will exhibit when the estate is fully
+      idle and no contributor is expected to engage soon.
+    - **Active mode: ≤ 1800 seconds (30 minutes).** Use this
+      whenever ANY of the following holds:
+      - A sub-agent dispatched in this cycle is still in flight.
+      - CI is propagating on any open PR (in_progress/queued
+        on a PR head pushed in the last cycle).
+      - A maintainer comment, review, or commit landed on any
+        open PR within the prior fire's lookback window.
+      - A PR is in `awaiting maintainer re-review` status (the
+        next reviewer pass is plausibly imminent).
+      - The Merge queue is non-empty.
+    - **Idle mode: between active-mode and the 9-hour cap.**
+      Pick toward the shorter end (e.g., 2-4h) when there's any
+      reason to think a contributor might engage; pick toward
+      9h only when the estate is entirely quiescent (no green
+      PRs awaiting review, no in-flight CI, no recent activity
+      across the estate, the day-of-week and time-of-day make
+      maintainer activity unlikely).
+
+    `endo-but-for-bots` is guarded against non-contributor
+    comments; the only feedback the steward needs to catch is
+    from contributors, who tend to engage in clusters. The
+    active-mode cadence catches a feedback cluster within
+    ~30 min; the idle-mode cap catches a contributor returning
+    after a long pause within a workday.
+
     The local `<<autonomous-loop-dynamic>>` mechanism is the
     cadence; remote cron triggers are not used (they lack the
     sandbox credentials and persistent working tree the steward
-    needs). Default delay between cycles is 1200s to 1800s when
-    the queue is calm; drop to 270s when fresh feedback is in
-    flight and a follow-up round is worth a quick recheck.
-    To stop the loop, return without calling `ScheduleWakeup`.
+    needs). See
+    [`../skills/autonomous-loop-pacing.md`](../skills/autonomous-loop-pacing.md)
+    for the cache-window discussion behind the 270s/1200s/1800s
+    sweet spots within active mode.
+
+    The loop is stopped only by the user (kill the wakeup task,
+    send a stop message, or `TaskStop` the loop). The steward
+    does not self-terminate on within-fire exhaustion.
 
 ## Skills
 
