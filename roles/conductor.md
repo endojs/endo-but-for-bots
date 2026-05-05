@@ -78,30 +78,44 @@ For each PR at the head of the queue, in order:
    `--force-with-lease=<head>:<old-sha>` to the PR branch. The
    force-push triggers a fresh CI run that the next step
    validates.
-4. **Validate in CI.** Walk CI to green on the tidied PR head
-   per the broadened shepherd posture in
-   [`shepherd.md`](./shepherd.md). Wait for run-level
-   `status=="completed"` and `conclusion=="success"`; do not
-   proceed on partial-rollup or in-progress states. Small
-   fixer-class corrections (Prettier drift, lockfile churn,
-   fixture rename) are in scope while you wait. Anything that
-   exceeds shepherd scope (multi-file refactor, public-API
-   change, test deletion) **stalls** the PR with reason
-   `ci needs builder/fixer`.
-5. **Create the merge commit and push.** Once CI is conclusively
-   green:
+4. **Check CI state.** Sample the run-level
+   `status` and `conclusion` per `skills/ci-status-summary.md`.
+   - **Green now** (`status=="completed"` AND
+     `conclusion=="success"`): proceed to step 5 with direct
+     `gh pr merge --merge`.
+   - **Failing** (`conclusion=="failure"`): walk the failure per
+     the broadened shepherd posture inline. Small fixer-class
+     corrections (Prettier drift, lockfile churn, fixture
+     rename) are in scope; multi-file refactor, public-API
+     change, or test deletion **stalls** the PR with reason
+     `ci needs builder/fixer`.
+   - **In flight** (still propagating): do **not** wall on the
+     wait. Skip to step 5 with `--auto --merge`. GitHub holds
+     the merge until CI is green; if a check flips red, the
+     auto-merge cancels and the PR stays open for the next
+     conductor dispatch to walk.
+
+   The role spent four consecutive dispatches losing its turn
+   budget polling for a slow macOS test job; the wait is GitHub's
+   to do, not the conductor's.
+5. **Create the merge commit and push.** Pick the form that
+   matches the CI state from step 4:
    ```sh
+   # CI is green now:
    gh pr merge <N> -R endojs/endo-but-for-bots --merge
+
+   # CI is in flight (delegate the wait to GitHub):
+   gh pr merge <N> -R endojs/endo-but-for-bots --auto --merge
    ```
-   `--merge` (NOT `--rebase`, NOT `--squash`, NOT `--auto`)
-   creates a true merge commit on the base branch with both the
-   PR's commits and the prior base tip as parents. `--auto` is
-   forbidden in this role because the role contract requires
-   conclusive CI green BEFORE the merge fires; auto-merge would
-   fire on the first green status without the conductor having
-   observed the result. Verify the merge with
-   `gh pr view <N> --json state` (expect `MERGED`). If the merge
-   is rejected (`mergeable=BLOCKED`, missing required reviews,
+   **Always `--merge`**: NOT `--rebase`, NOT `--squash`. The
+   merge-commit shape is the role's whole point.
+   `--auto --merge` (combined) is permitted and is the right
+   call when CI has not yet finished. `--auto --rebase` is
+   still forbidden (it discards the merge-commit shape).
+   Verify the merge with `gh pr view <N> --json state`
+   (`MERGED` if direct, `OPEN` with `autoMergeRequest`
+   populated if `--auto`). If the merge or auto-merge is
+   rejected (`mergeable=BLOCKED`, missing required reviews,
    branch protection), **stall** with reason
    `merge blocked: <gh error excerpt>`.
 6. **Update the dispatch state.** Remove the PR from the queue,
@@ -197,13 +211,15 @@ the next steward cycle will re-dispatch.
   builder/weaver dispatch the steward will pick up). Record the
   side effect under "Merged this run" in the dispatch state so
   the steward sees it next cycle.
-- **Block on conclusive CI before merging; do not use `--auto`.**
-  `--auto` enqueues the merge to fire the moment CI flips green,
-  which is convenient but lets the conductor lose visibility of
-  the result. The role contract is rebase, validate, then merge:
-  poll the run's `status==completed` and `conclusion==success`
-  yourself before issuing `gh pr merge --merge`. If a check
-  flakes or a re-run is needed, the conductor sees it.
+- **Delegate the CI wait to GitHub via `--auto --merge`.**
+  `--auto --merge` enqueues the merge with the merge-commit
+  shape preserved; GitHub fires it the moment CI is green and
+  cancels it if a check flips red. The conductor uses direct
+  `--merge` only when CI is conclusively green at the moment of
+  issue, and `--auto --merge` whenever CI is still in flight.
+  `--auto --rebase` and `--auto --squash` remain forbidden
+  because they break the merge-commit shape; `--auto --merge`
+  preserves it.
 
 ## Self-improvement
 
