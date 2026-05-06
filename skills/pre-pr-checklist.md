@@ -17,6 +17,29 @@ Run before every push to a PR branch:
 - `cd packages/<name> && npx ava` — at least the tests nearest the
   change. For broader changes, run the full package suite.
 
+## PR body template
+
+When `gh pr create` opens a new PR, populate the body from
+`.github/PULL_REQUEST_TEMPLATE.md` (in the repo you are
+opening against). Read the template at the head of the base
+branch and fill the section headings rather than inventing your
+own structure. Delete the guidance lines (the prompted prose
+under each heading) before submitting. Default to the template
+unless the PR is a one-line trivial change AND the maintainer
+has previously waved the template for that change class.
+
+```sh
+gh api "repos/<owner>/<repo>/contents/.github/PULL_REQUEST_TEMPLATE.md?ref=<base>" \
+  --jq '.content' | base64 -d > /tmp/pr-body.md
+# edit /tmp/pr-body.md to fill in the sections
+gh pr create --base <base> --head <head> --body-file /tmp/pr-body.md --title '...'
+```
+
+If the template file is missing on the base branch, fall back
+to the conventions in the repo's `CONTRIBUTING.md` and surface
+the missing-template observation in the PR body so the
+maintainer can decide whether to add one.
+
 ## Lockfile rule
 
 If the change adds or updates a dependency, commit `yarn.lock`
