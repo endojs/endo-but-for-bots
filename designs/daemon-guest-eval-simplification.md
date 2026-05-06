@@ -3,10 +3,8 @@
 | | |
 |---|---|
 | **Created** | 2026-03-21 |
-| **Updated** | 2026-05-06 |
 | **Author** | Kris Kowal (prompted) |
-| **Status** | **Implemented** |
-| **PR** | [#92](https://github.com/endojs/endo-but-for-bots/pull/92) (merged 2026-05-06) |
+| **Status** | Not Started |
 
 ## Motivation
 

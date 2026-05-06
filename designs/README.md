@@ -1,6 +1,6 @@
 # Endo Design Documents
 
-*Last updated: 2026-05-06*
+*Last updated: 2026-05-02*
 
 *See also: [daemon-make-archive](daemon-make-archive.md) (added 2026-04-23).*
 
@@ -17,7 +17,7 @@
 | [chat-focus-message](chat-focus-message.md) | 2026-03-04 | 2026-03-04 | Active |
 | [chat-markdown-render](chat-markdown-render.md) | 2026-03-03 | 2026-03-27 | Proposed |
 | [chat-pending-commands](chat-pending-commands.md) | 2026-03-11 | 2026-03-11 | Not Started |
-| [chat-rename-dismiss-to-clear](chat-rename-dismiss-to-clear.md) | 2026-03-03 | 2026-05-06 | **Implemented** (PR [#93](https://github.com/endojs/endo-but-for-bots/pull/93)) |
+| [chat-rename-dismiss-to-clear](chat-rename-dismiss-to-clear.md) | 2026-03-03 | 2026-03-03 | Proposed |
 | [chat-slot-slash-commands](chat-slot-slash-commands.md) | 2026-04-23 | 2026-04-23 | Not Started |
 | [chat-view-edit-commands](chat-view-edit-commands.md) | 2026-03-21 | 2026-03-21 | Not Started |
 | [chat-reply-chain-visualization](chat-reply-chain-visualization.md) | 2026-02-23 | 2026-02-28 | Deprecated |
@@ -39,7 +39,7 @@
 | [daemon-capability-persona](daemon-capability-persona.md) | 2026-02-16 | 2026-02-24 | Not Started |
 | [daemon-cross-peer-gc](daemon-cross-peer-gc.md) | 2026-03-07 | 2026-04-29 | **Complete** |
 | [daemon-retention-paths](daemon-retention-paths.md) | 2026-04-30 | 2026-04-30 | Not Started |
-| [daemon-guest-eval-simplification](daemon-guest-eval-simplification.md) | 2026-03-21 | 2026-05-06 | **Implemented** (PR [#92](https://github.com/endojs/endo-but-for-bots/pull/92)) |
+| [daemon-guest-eval-simplification](daemon-guest-eval-simplification.md) | 2026-03-21 | 2026-03-21 | Not Started |
 | [daemon-docker-selfhost](daemon-docker-selfhost.md) | 2026-03-02 | 2026-03-02 | Not Started |
 | [daemon-capability-bus](daemon-capability-bus.md) | 2026-02-25 | 2026-04-11 | In Progress |
 | [daemon-endo-rust-sqlite](daemon-endo-rust-sqlite.md) | 2026-04-14 | 2026-04-16 | **Complete** |
@@ -65,7 +65,7 @@
 | [endoclaw-timer](endoclaw-timer.md) | 2026-03-03 | 2026-03-18 | In Progress |
 | [endoclaw-voice](endoclaw-voice.md) | 2026-03-03 | 2026-03-03 | Not Started |
 | [endoclaw-webhooks](endoclaw-webhooks.md) | 2026-03-03 | 2026-03-03 | Not Started |
-| [daemon-locator-terminology](daemon-locator-terminology.md) | 2026-02-24 | 2026-03-18 | In Progress (PR [#34](https://github.com/endojs/endo-but-for-bots/pull/34)) |
+| [daemon-locator-terminology](daemon-locator-terminology.md) | 2026-02-24 | 2026-02-24 | Not Started |
 | [daemon-os-sandbox-plugin](daemon-os-sandbox-plugin.md) | 2026-02-15 | 2026-03-19 | Not Started |
 | [daemon-value-message](daemon-value-message.md) | 2026-03-02 | 2026-03-03 | **Complete** |
 | [daemon-web-gateway](daemon-web-gateway.md) | 2026-03-11 | 2026-03-11 | **Complete** |
@@ -99,7 +99,7 @@
 | [weblet-next](weblet-next.md) | 2026-03-24 | 2026-03-24 | Reference |
 | [workers-panel](workers-panel.md) | 2026-02-14 | 2026-02-24 | Not Started |
 
-**Totals:** 26 Complete/Implemented, 15 In Progress, 41 Not Started, 1 Proposed, 3 Active, 2 Reference, 1 Deprecated, 1 Draft (90 designs)
+**Totals:** 22 Complete/Implemented, 6 In Progress, 45 Not Started, 2 Proposed, 1 Active, 1 Reference, 1 Deprecated
 
 ## Roadmap
 
@@ -129,7 +129,7 @@ flowchart TD
         lalfp[lal-fae-form-provisioning<br/><i>COMPLETE</i>]
         fagent[familiar-bundled-agents<br/><i>COMPLETE</i>]
         dtools[daemon-agent-tools]
-        deval[daemon-guest-eval-simplification<br/><i>IMPLEMENTED</i>]
+        deval[daemon-guest-eval-simplification]
         dform --> lalfp
         dval --> lalfp
         laltx --> lalfp
@@ -272,7 +272,7 @@ capabilities available to agents.
 | endoclaw-timer | In Progress | **Strategic:** Core capability concern — SES removes `setTimeout`/`setInterval`; Timer is the only way agents get scheduled execution. Prerequisite for proactive behavior. First implementation in `@endo/genie`. |
 | endoclaw-network-fetch | Not Started | **Strategic:** `HttpClient` with origin allowlist. Self-hosted agents need outbound HTTP; foundation for OAuth and all external integrations. |
 | ~~daemon-cross-peer-gc~~ | **Complete** | Replaced the proposed CRDT-of-pet-stores with a one-way retention-set sync per peer connection (`retention-accumulator.js`, `EndoGateway.followRetentionSet`, SQLite `retention` table). Solves the GC gap; bidirectional shared namespace deferred as YAGNI. |
-| ~~daemon-guest-eval-simplification~~ | **Implemented** | Eval-proposal handshake (`mail.evaluate`/`grantEvaluate`/`counterEvaluate`, `EvalProposalReviewer`/`EvalProposalProposer` types, `Responder`) removed; guest eval delegates directly to `formulateEval`. Regression test guards the no-message contract. PR [#92](https://github.com/endojs/endo-but-for-bots/pull/92), merged 2026-05-06. |
+| daemon-guest-eval-simplification | Not Started | Remove eval-proposal handshake; guest eval delegates directly to `formulateEval` |
 | ci-no-npm-lifecycle | Not Started | Pin `enableScripts: false` posture into CI; enforcement check for workflows |
 | base64-native-fallthrough | Not Started | `@endo/base64` dispatches to `Uint8Array.fromBase64` / `toBase64` when available |
 | hex-package | Not Started | New `@endo/hex` ponyfill with native fallthrough; audit and migrate scattered hex sites |
@@ -477,7 +477,7 @@ Recalibrated on 2026-03-02 using observed velocity from 15 active work days
 | daemon-mount | M-L | 1-1.5 weeks | 1 | Mount exo, symlink confinement, scratch lifecycle, host methods |
 | daemon-locator-terminology | S | 1 day | 1 | locator.js + host.js changes |
 | endoclaw-timer | S-M | 2-3 days | 1 | IntervalScheduler with tick delivery, durable formulas, host-controlled limits |
-| ~~daemon-guest-eval-simplification~~ | — | — | 1 | ✅ Implemented (PR [#92](https://github.com/endojs/endo-but-for-bots/pull/92), merged 2026-05-06) |
+| daemon-guest-eval-simplification | S | 1 day | 1 | Remove eval-proposal flow, guest eval delegates to `formulateEval` |
 | endoclaw-network-fetch | S-M | 2-3 days | 1 | HttpClient with origin allowlist, rate/size limits |
 | ci-no-npm-lifecycle | S | 1 day | 1 | Workflow audit, env var pinning, enforcement check |
 | base64-native-fallthrough | S | 1 day | 1 | Detect `Uint8Array.fromBase64`, dispatch, dual-path tests |
@@ -523,13 +523,13 @@ Recalibrated on 2026-03-02 using observed velocity from 15 active work days
 | Milestone | Items | Total Estimate (1 dev, serial) |
 |-----------|-------|-------------------------------|
 | M0: AI Agent Experience | 0 remaining | **Complete** |
-| M1: Remote Access & Tools | 12 remaining | 7-8 weeks |
+| M1: Remote Access & Tools | 13 remaining | 7-8 weeks |
 | M2: Networking | 6 | 3-4 weeks |
 | M3: Weblets & Integrations | 8 | 4-6 weeks |
 | M4: UX & Tooling | 11 | 7-9 weeks |
 | M5: Confinement & Ecosystem | 6 | 8-12 weeks |
 | M6: Rust Daemon (`endor`) | 2 | 10-14 weeks |
-| **Total remaining** | **45** | **~39-53 weeks** |
+| **Total remaining** | **46** | **~39-53 weeks** |
 
 ### Timeline
 
@@ -586,9 +586,7 @@ because they are foundational rather than features:
 | endoclaw-timer | M1 | **Core capability concern.** SES lockdown removes `setTimeout` and `setInterval`. Timer is the *only* mechanism for scheduled agent execution. Prerequisite for proactive messages, monitoring, reminders. Without it, agents are purely reactive. |
 | endoclaw-network-fetch | M1 | **Foundation for all external access.** M1 already does Docker/remote access. A self-hosted agent that cannot reach external APIs is inert. HttpClient with origin allowlist is the minimal network capability. OAuth, channel bridges, and all integrations depend on it. |
 
-**Progress as of 2026-05-06:** 26 of 90 designs complete/implemented, 15 in progress. M0 complete.
-PRs #92 (daemon-guest-eval-simplification) and #93 (chat-rename-dismiss-to-clear) merged on 2026-05-06,
-both small M1/M4 follow-ups. M1, M2, M3, and M4 designs continue to land in parallel review queues.
+**Progress as of 2026-03-21:** 21 of 69 designs complete/implemented, 5 in progress. M0 complete.
 18 active work days elapsed (Feb 15 – Mar 5), primarily 1 developer
 (128 of 201 commits). Observed throughput: ~9 commits/day, ~500-2500 LOC/day.
 `daemon-form-request` and `daemon-value-message` complete (value type,

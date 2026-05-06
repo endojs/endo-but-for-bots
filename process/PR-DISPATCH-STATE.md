@@ -186,44 +186,6 @@ Merged this run (2026-05-06 conductor, resume cycle):
   Pending checks completed in the interim, so GitHub processed the
   auto-merge as a direct merge; state=MERGED on first verify.
 
-Merged this run (2026-05-06 conductor, PR 95 cycle):
-
-- #95 → `1435471dbf` (merge commit to llm).
-  Single-commit fix: `fix(chat): source harden from @endo/harden so
-  the bundle runs without lockdown()`. Was 11 behind `llm`, 1 ahead
-  at survey; APPROVED, MERGEABLE/CLEAN, 26/26 SUCCESS on prior head.
-  Rebased onto current `bots-ssh/llm` (clean, no conflicts);
-  force-pushed `9105eeaf24` with `--force-with-lease`. No tidy
-  required (single commit). Issued `--auto --merge`; GitHub
-  processed it as a direct merge immediately because branch
-  protection on `llm` does not gate on CI. state=MERGED.
-
-Side effect for steward to handle next cycle:
-
-- PR #94 (`feat/chat-playwright-smoke`) targets
-  `feat/chat-endo-harden` (the branch behind PR #95). Post-merge
-  state of #94 is expected to be `mergeable=CONFLICTING/DIRTY`
-  because PR #95's content is now on `llm` via the merge commit.
-  PR #94 needs its base re-targeted from `feat/chat-endo-harden`
-  to `llm` and a rebase to drop the harden-source commit already
-  on llm. Surface to steward: dispatch a weaver (or builder) to
-  re-base #94.
-
-Merged this run (2026-05-06 conductor, PR 97 cycle):
-
-- #97 → `9f69b737ab` (merge commit to garden).
-  Roadmap reconciliation refresh from groom; was 2 behind `garden`,
-  5 ahead at survey; APPROVED; CI mostly green with a few test
-  matrix jobs IN_PROGRESS / QUEUED. Five single-author commits
-  (Kris Kowal), each a coherent concern: status reconciliation,
-  roadmap reconciliation, DESIGNS-WITHOUT-PR snapshot, GROOM
-  open-questions drain, and a structural-status-drift naming +
-  branch-awareness step. No tidy required. Rebased onto current
-  `bots-ssh/garden` (clean); force-pushed `5fc8d7ec82` with
-  `--force-with-lease`. Issued `--auto --merge`; GitHub processed
-  it as a direct merge immediately because branch protection on
-  `garden` does not gate on CI. state=MERGED.
-
 Merged this run (2026-05-06 conductor):
 
 - #91 → `e3c1ef10b4` (merge commit to llm).

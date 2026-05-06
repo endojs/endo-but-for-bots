@@ -90,6 +90,26 @@ issue or design document, and shepherding it through to a green PR.
      adversarial tests) or a separate issue/PR if it surfaced a
      real bug.
 
+     **Scope saboteur tests to the new contract, not the
+     surrounding system.** The saboteur posture says "stop when
+     the next gotcha tests a property the module does not claim."
+     For a builder dispatching the saboteur, the temptation is to
+     reuse the test scaffolding that already exists in the
+     package (e.g., `endo.test.js` patterns that exercise
+     directory removal, pet-store cascades, or worker
+     termination). When those scaffolds depend on neighbor
+     subsystems, a saboteur test "against the new module" can
+     fail because of a quirk in the neighbor, not the new code.
+     Build the saboteur tests against the most direct API path
+     to the new contract; if you find yourself reaching for
+     `host.makeDirectory` / `host.move` / `host.remove(dir)` to
+     surface a single-blob behavior, you are testing the
+     directory-GC cascade, not the content-store cleanup.
+     Exercised on PR 99 (content-store GC), where two saboteur
+     tests written via directory-removal initially failed; the
+     fix was to attack the new contract directly with sequential
+     `host.remove(petName)` calls on each named blob.
+
   **Submit the aggregated panel report as a formal review, not a
   plain comment.** A plain comment is invisible to the steward's
   dispatch matrix (which keys on `reviewDecision`); a formal
