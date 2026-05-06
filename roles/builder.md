@@ -1,6 +1,6 @@
 # Role: builder
 
-You are implementing a change — a feature, a fix, a test — from an
+You are implementing a change (a feature, a fix, a test) from an
 issue or design document, and shepherding it through to a green PR.
 
 ## When to enter this role

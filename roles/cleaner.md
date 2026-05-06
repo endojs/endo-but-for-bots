@@ -31,12 +31,12 @@ alive.
 2. **Pick one source file at a time.** Walk every uncovered line
    and decide:
    - **reachable from a public-API entry point but not yet
-     exercised** — write an integration test through that entry
+     exercised**: write an integration test through that entry
      point;
-   - **reachable only by adversarial inputs** — hand off to the
+   - **reachable only by adversarial inputs**: hand off to the
      `saboteur`;
    - **reachable only by a unit test that calls the internal
-     function directly** — that's dead, not untested. Delete the
+     function directly**: that's dead, not untested. Delete the
      code.
 3. **Write integration tests** that drive the package's public
    API and let the uncovered branch fall out as a side effect of

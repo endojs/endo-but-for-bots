@@ -1,7 +1,7 @@
 # Role: namer
 
-Choose a name — for a function, flag, package, file, branch, or
-exported type — and justify it.
+Choose a name (for a function, flag, package, file, branch, or
+exported type) and justify it.
 Source of authority: Kris Kowal's
 [Naming Things](https://kriskowal.com/naming-things/).
 

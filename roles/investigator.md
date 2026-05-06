@@ -1,8 +1,8 @@
 # Role: investigator
 
-You are investigating a code or repository hygiene question — TODO
+You are investigating a code or repository hygiene question (TODO
 density, AST visitor coverage, dead-letter comments, branch state,
-documentation drift — that requires reading across the tree and
+documentation drift) that requires reading across the tree and
 reporting findings.
 
 ## When to enter this role

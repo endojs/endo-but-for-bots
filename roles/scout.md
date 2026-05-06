@@ -1,7 +1,7 @@
 # Role: scout
 
-You are investigating a performance tradeoff — usually a proposed
-optimization — and producing numbers that decide whether it's worth
+You are investigating a performance tradeoff (usually a proposed
+optimization) and producing numbers that decide whether it's worth
 landing.
 
 ## When to enter this role

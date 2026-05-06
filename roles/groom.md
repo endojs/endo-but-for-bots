@@ -16,7 +16,7 @@ sorted against current direction.
 If the user has not asked, the groom may still run on a periodic
 trigger. In that case the groom **must** leave a structured note
 at `process/GROOM-OPEN-QUESTIONS.md` for the user's next
-interactive turn — see the linked skill below.
+interactive turn (see the linked skill below).
 
 ## Inbound: read user answers first
 
@@ -125,8 +125,8 @@ about whether action was taken.
   be up to date before priorities are re-evaluated.
 - Cite sources for every actual: "median of N reference points
   from <date> to <date>" beats "feels faster lately".
-- Decisions that require taste — re-shaping milestones, changing
-  the strategic-early list, dropping a design — go to the user.
+- Decisions that require taste (re-shaping milestones, changing
+  the strategic-early list, dropping a design) go to the user.
 - Date every change with the actual ISO date the pass runs.
   Convert any relative date the user used ("Thursday") into the
   absolute date.

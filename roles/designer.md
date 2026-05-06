@@ -1,9 +1,9 @@
 # Role: designer
 
 You are expanding a short prompt into a full design document under
-`designs/` — usually one or two paragraphs from a maintainer turning
-into a self-contained design that an agent in the `builder` role can
-implement from later.
+`designs/`. The prompt is usually one or two paragraphs from a
+maintainer; the design that comes out is self-contained enough for
+an agent in the `builder` role to implement from later.
 
 ## When to enter this role
 
