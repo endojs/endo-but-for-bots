@@ -33,6 +33,10 @@ playing both `juror` and `fixer`; consult both.
   or PRs, build navigation aids.
 - [investigator.md](./investigator.md) — investigate code or repo
   hygiene (TODOs, AST coverage, rebase state) across the tree.
+- [liaison.md](./liaison.md) — manage issues on
+  endo-but-for-bots: read every contributor comment, reply
+  with the action taken, track per-issue posture under
+  `process/tracking/<N>.md`.
 - [namer.md](./namer.md) — choose a name (function, package,
   flag, branch) against the project's house naming guide.
 - [saboteur.md](./saboteur.md) — propose gotcha test cases that

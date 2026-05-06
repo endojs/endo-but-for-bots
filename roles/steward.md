@@ -96,6 +96,17 @@ the queue snapshot.
 - **`shepherd`** for the `garden` branch when its CI is red.
   Targets the branch, not a PR.
 
+### Issue tracking (per cycle, parallel to PR work)
+
+- **`liaison`**: dispatch one top-level liaison per cycle.
+  The liaison fetches fresh issue snapshots, scans
+  `process/tracking/`, and dispatches a per-issue liaison
+  subagent for each issue with new contributor activity since
+  the prior cycle. The top-level liaison batches per-issue
+  updates into one process commit and ends; the steward picks
+  up code-work asks the liaison surfaced via the cycle log
+  next cycle. See `roles/liaison.md`.
+
 ### Design pipeline (per cycle, parallel to PR work)
 
 - **`groom`** when any PR has merged since the previous cycle.
