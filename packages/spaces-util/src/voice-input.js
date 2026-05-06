@@ -15,7 +15,9 @@
 
 /**
  * @typedef {object} VoiceInputAPI
- * @property {() => void} destroy - Remove event listeners and DOM.
+ * @property {() => void} destroy - Stop any active session, remove event
+ *   listeners, and detach the mic button. Called from the chat bar's
+ *   dispose chain on unmount; safe to call from other tear-down paths.
  */
 
 /**

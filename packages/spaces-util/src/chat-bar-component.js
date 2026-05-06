@@ -494,13 +494,13 @@ export const chatBarComponent = (
    */
   const modEnterHint = label => ({ keys: [modKey, 'Enter'], text: label });
 
-  // Initialize voice input (Web Speech API).
+  // Initialize voice input (Web Speech API). `voiceInput` is null on
+  // browsers without SpeechRecognition (Firefox, non-browser); we
+  // capture the handle so the chat bar's dispose chain can tear the
+  // recognizer down on unmount.
   const $buttonWrapper = /** @type {HTMLElement} */ (
     $parent.querySelector('#chat-button-wrapper')
   );
-  // voiceInput returns null if SpeechRecognition is not supported; we
-  // attach handlers via side effect so the return value is not consumed.
-  // eslint-disable-next-line no-unused-vars
   const voiceInput = makeVoiceInput({
     $container: $buttonWrapper,
     $input,
@@ -2288,6 +2288,9 @@ export const chatBarComponent = (
       unmount($commandHeaderMount);
       unmount($commandFooterMount);
       unmount($commandErrorMount);
+      if (voiceInput) {
+        voiceInput.destroy();
+      }
       sendForm.dispose();
     },
   });
