@@ -82,6 +82,25 @@ implement from later.
   re-verify `git status` and `git branch --show-current` before
   every commit. The cost of an extra check is one bash call; the
   cost of committing on the wrong branch is a rebase.
+- When the brief asks the designer to also open a PR, the safest
+  flow is: (1) `git switch -c design/<slug> bots-ssh/llm` first, on
+  a clean tree; (2) **then** Write the design file; (3) `git add` it
+  immediately; (4) make any README edits; (5) `git add` and commit
+  in one burst. Do **not** Write the design file before switching
+  branches and do **not** rely on `git stash` to ferry untracked
+  files across branches. A worktree shared with a concurrent agent
+  (a maestro, a scheduled groom, an autoformatter watching the
+  tree) can switch branches under you between Write and commit, and
+  an untracked design file vanishes when its parent directory is
+  re-checked-out from a different ref. Atomic Write+add+commit
+  while pinned to the design branch sidesteps the race.
+- If the README on `garden` and the README on `bots-ssh/llm` have
+  drifted (different milestone counts, different totals, different
+  rows added since the design branch base), reset
+  `designs/README.md` to the bots-ssh/llm version with `git checkout
+  bots-ssh/llm -- designs/README.md` before applying README edits.
+  Otherwise the apparent merge conflict is between two valid states
+  and the resolution is non-obvious.
 
 ## Self-improvement
 
