@@ -158,7 +158,29 @@ re-dispatches.
   CI as `QUEUED`. This is benign; the cluster is on the base, the
   fresh CI run continues against the merge commit. Record as
   merged with the merge-commit SHA; do not interpret the immediate
-  resolution as a missed CI failure.
+  resolution as a missed CI failure. Empirically true for `llm`
+  and `garden` as base branches; the protection profile is the
+  same.
+- **Trust the local survey, not `gh pr view --json mergeable`.**
+  The GH API can report `mergeable=MERGEABLE` and even
+  `mergeStateStatus=CLEAN` for a PR that is many commits behind
+  its base (observed: PR 95 reported `MERGEABLE/CLEAN` while 11
+  behind `llm`). The mergeable flag tracks whether GitHub thinks
+  it can merge with the base, not whether the branch is up to
+  date. Always run the `git rev-list --count <base>..<head>`
+  survey from the rebase-hygiene-audit skill to know
+  behind/ahead, and rebase whenever `behind > 0`. The brief's
+  enqueue snapshot may also call out `MERGEABLE` from the same
+  API; do not let it short-circuit the survey.
+- **Base-branch worktree collisions.** If the PR's base branch
+  (e.g., `garden`) is already checked out in another worktree
+  on the same machine, `git worktree add <path> <base>` rejects
+  with "already used by worktree at …". Use
+  `git worktree add --detach <path> bots-ssh/<base>` and then
+  `git checkout -B <local-branch> bots-ssh/<head>` inside the
+  detached worktree. The conductor's branch operations don't
+  need a long-lived local `<base>` checkout; they only need the
+  PR's head branch to push from.
 - **Authenticated `gh` account** speaks; no persona name.
 - **Bookkeeping commits push immediately** before moving to the
   next PR, so a crash mid-loop leaves the queue accurate.
