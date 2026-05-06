@@ -143,6 +143,22 @@ re-dispatches.
   `--auto --merge`, or record it as merged after direct `--merge`.
 - **Do not loop forever on a flaky PR.** Two re-rebase-and-walk
   attempts without convergence: stall `flaky` and move on.
+- **A rebase moots prior-head flake plans.** When a PR enters with
+  `mergeStateStatus=UNSTABLE` because of a known transient on the
+  prior head's CI, and the PR is also behind its base, the rebase
+  step's force-push resets CI to a fresh matrix. Skip any
+  prearranged `gh run rerun --failed` step from the brief; the new
+  matrix supersedes it. Only run a targeted re-run if you reach
+  step 4 with no rebase having intervened (i.e., the PR was 0
+  behind and the failed job is on the *current* head).
+- **`--auto --merge` may resolve immediately even with CI
+  pending.** When the repo's branch protection does not gate on
+  CI, `gh pr merge --auto --merge` can produce `state=MERGED` at
+  the next `gh pr view` even though the push you just issued left
+  CI as `QUEUED`. This is benign; the cluster is on the base, the
+  fresh CI run continues against the merge commit. Record as
+  merged with the merge-commit SHA; do not interpret the immediate
+  resolution as a missed CI failure.
 - **Authenticated `gh` account** speaks; no persona name.
 - **Bookkeeping commits push immediately** before moving to the
   next PR, so a crash mid-loop leaves the queue accurate.
