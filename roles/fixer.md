@@ -203,6 +203,61 @@ result through CI.
      counter-PR.
   The check-in is a status update, not a fix; the smoke staying
   red is the point until the counter-PR lands.
+- **Integration tests for "novel surfaces" sometimes catch a deeper
+  bug than the panel flagged.** When the panel asks for integration
+  coverage of a new wiring (mail-tick delivery, persistence
+  recovery, transport round-trip) and the first attempt to write
+  that test rejects with a runtime error from the system under
+  test, do not contort the test until it passes. Diagnose the
+  error: it is often a real bug in the bundle that the unit-tests
+  could not reach. Two outcomes:
+  1. The fix is small and contained: include it in the same fixer
+     pass as a separate atomic commit.
+  2. The fix is structural (touches the maker's parameter list,
+     plumbs a new dependency through several layers): convert the
+     failing assertion into a `test.serial.skip(..., t => {
+     t.fail(<bug description>) })` placeholder with a description
+     long enough to seed the follow-up issue, surface it in the
+     top-level summary as a *Follow-up surface and other findings*
+     bullet, and land the rest of the integration coverage. Do
+     not delete the test (it would be rediscovered next round); do
+     not block the bundle on the structural fix.
+  Session example: PR 40's mail-tick delivery: `E(handle).receive(
+  tickMessage, agentId)` from the maker scope hits "Mail fraud:
+  unrecognized parcel" because the maker bypasses the sender's
+  outbox. The catch handler swallowed it silently, so the unit
+  tests passed and the panel reviewers never saw it. The
+  integration test surfaced the bug; the proper fix needed the
+  agent's mailbox `deliver()` plumbed into the maker scope, larger
+  than a fixer pass; landed as `test.serial.skip` placeholder.
+- **Regression-evidence tests must target the specific bug-symptom,
+  not a related correctness invariant.** A "cancel during tick must
+  not produce more ticks" assertion can pass against the racy code
+  if other guards (e.g. an `armInterval` status check) prevent the
+  user-visible symptom while the bug still corrupts hidden state
+  (an extra `onEntryChange` write with an advanced `nextTickAt`).
+  Before declaring a regression test load-bearing, stash the fix
+  and confirm the test fails with the *exact* assertion you wrote,
+  not a side effect. If it passes, the test is asserting something
+  the racy code already satisfies; refine it to detect the bug's
+  actual signature (callback count, persistence-write count,
+  mutated field on a hardened-record snapshot).
+  Session example: PR 40's cancellation-race regression test first
+  asserted `ticks.length === 1` after a late `resolve()`; that
+  passed against racy code because `armInterval`'s status check
+  prevented the new tick. Refining to assert `persisted.length`
+  unchanged caught the late `onEntryChange` write that corrupted
+  on-disk state.
+- **`git filter-branch --msg-filter` is the right tool for stripping
+  trailers across a range, even though git warns about it.** The
+  modern alternative `git filter-repo` is not always installed; the
+  warning is suppressible with `FILTER_BRANCH_SQUELCH_WARNING=1`
+  and the operation is mechanical (one `sed` over the message
+  body, no tree edits). Pair the message filter with an
+  `--env-filter` that re-exports the author / committer identity
+  so the rewrite also normalizes attribution. Verify with `git
+  log --format='%B' <base>..HEAD | grep -c '<trailer>'` returning
+  0 before pushing.
 
 ## Self-improvement
 
