@@ -97,6 +97,29 @@ result through CI.
      rebase). Do not fix the system from inside the smoke PR. The
      "diagnose, improve, escalate" sequence stays on the PR; the
      system fix is a steward dispatch.
+- **Check-in mode for an already-escalated PR.** When the steward
+  re-dispatches the fixer to a PR whose diagnose/improve/escalate
+  has already happened (e.g. a queued counter-PR is in flight),
+  the posture is *verify, then status*, not re-fix:
+  1. Re-read the latest failed job log on the current head SHA
+     and confirm the failure trace matches the previously-described
+     regression (same error, same module). If the symptom has
+     drifted (different error, different file, new browser-only
+     issue), surface that as a meaningful event; do not silently
+     re-post the same status.
+  2. Verify the queued counter-PR's diff still covers the failure:
+     it modifies the right files (and **only** the right files),
+     and adds the fix the trace points at. If the counter-PR's
+     diff has drifted into something that wouldn't fix the smoke,
+     surface that.
+  3. Post a short top-level comment on the smoke PR (3-5 sentences)
+     citing the SHA you re-read, linking the counter-PR, and
+     stating the recommended sequence. Do **not** push commits to
+     the smoke PR, do **not** re-request review (no
+     `CHANGES_REQUESTED` to respond to), and do **not** touch the
+     counter-PR.
+  The check-in is a status update, not a fix; the smoke staying
+  red is the point until the counter-PR lands.
 
 ## Self-improvement
 
