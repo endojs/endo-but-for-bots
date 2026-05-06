@@ -42,6 +42,16 @@ in parallel via a single tool call. If the Agent tool is not exposed
 diff once, then write twelve separate review blocks each from one
 perspective.
 
+**When the PR bundles N independent capabilities** (e.g., PR 40
+shipped scheduler + HTTP client + webhook + TickResponse in one
+diff), elevate **diff hygiene** from the standard slot to a
+load-bearing perspective with `request-changes` posture by default.
+The bundling itself becomes the strongest finding; without an
+elevated diff-hygiene lens, the panel will produce N lists of
+substantive code findings while missing the meta-finding that the
+PR should not have been a single PR. The split-recommendation is
+then the panel's anchor; per-capability findings hang from it.
+
 Either way, each reviewer returns:
 
 ```
