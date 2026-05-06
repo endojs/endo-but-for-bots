@@ -101,7 +101,7 @@ export const makeWebhookKit = options => {
     if (hmacKeyPromise === undefined) {
       hmacKeyPromise = crypto.subtle.importKey(
         'raw',
-        secretBytes,
+        /** @type {BufferSource} */ (secretBytes),
         { name: 'HMAC', hash: 'SHA-256' },
         false,
         ['sign'],
