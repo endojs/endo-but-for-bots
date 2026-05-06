@@ -27,6 +27,7 @@
  */
 
 import harden from '@endo/harden';
+import { makeError, q, X } from '@endo/errors';
 import { makeQueue } from '@endo/stream';
 import { makeCryptography, makeSessionId } from '@endo/ocapn/cryptography';
 import {
@@ -478,7 +479,9 @@ export const makeOcapnNoiseNetwork = ({
   const selectOutgoingTransport = location => {
     const { hints } = location;
     if (!hints || typeof hints !== 'object') {
-      throw Error(`ocapn-noise: location ${location.designator} has no hints`);
+      throw makeError(
+        X`ocapn-noise: location ${q(location.designator)} has no hints`,
+      );
     }
     for (const transport of registeredTransports) {
       const prefix = `${transport.scheme}:`;
@@ -493,8 +496,8 @@ export const makeOcapnNoiseNetwork = ({
         return { transport, hints: matching };
       }
     }
-    throw Error(
-      `ocapn-noise: no registered transport matches hints ${JSON.stringify(hints)}`,
+    throw makeError(
+      X`ocapn-noise: no registered transport matches hints ${q(hints)}`,
     );
   };
 
@@ -547,13 +550,13 @@ export const makeOcapnNoiseNetwork = ({
     const msgReader = codec.makeReader(plain);
     const message = readOcapnHandshakeMessage(msgReader);
     if (message.type !== 'op:start-session') {
-      throw Error(
-        `ocapn-noise: expected op:start-session, got ${message.type}`,
+      throw makeError(
+        X`ocapn-noise: expected op:start-session, got ${q(message.type)}`,
       );
     }
     if (message.captpVersion !== CAPTP_VERSION) {
-      throw Error(
-        `ocapn-noise: captp version mismatch ${message.captpVersion} vs ${CAPTP_VERSION}`,
+      throw makeError(
+        X`ocapn-noise: captp version mismatch ${q(message.captpVersion)} vs ${q(CAPTP_VERSION)}`,
       );
     }
     const peerPublicKey = cryptography.publicKeyDescriptorToPublicKey(
@@ -561,7 +564,7 @@ export const makeOcapnNoiseNetwork = ({
     );
     const peerBytes = asUint8(peerPublicKey.bytes);
     if (peerBytes.length !== peerEd25519.length) {
-      throw Error('ocapn-noise: peer public key length mismatch');
+      throw makeError(X`ocapn-noise: peer public key length mismatch`);
     }
     // Non-constant-time comparison is safe: both operands are the
     // peer's public key (one from the authenticated Noise handshake,
@@ -570,7 +573,9 @@ export const makeOcapnNoiseNetwork = ({
     // oracle to extract.
     for (let i = 0; i < peerBytes.length; i += 1) {
       if (peerBytes[i] !== peerEd25519[i]) {
-        throw Error('ocapn-noise: peer key mismatch with Noise identity');
+        throw makeError(
+          X`ocapn-noise: peer key mismatch with Noise identity`,
+        );
       }
     }
     // Bind the peer's advertised location signature to our verified
@@ -584,8 +589,8 @@ export const makeOcapnNoiseNetwork = ({
     );
     const advertised = /** @type {OcapnLocation} */ (message.location);
     if (advertised.designator !== toHex(peerEd25519)) {
-      throw Error(
-        `ocapn-noise: advertised designator ${advertised.designator} does not match Noise identity ${toHex(peerEd25519)}`,
+      throw makeError(
+        X`ocapn-noise: advertised designator ${q(advertised.designator)} does not match Noise identity ${q(toHex(peerEd25519))}`,
       );
     }
     return {
@@ -1005,10 +1010,12 @@ export const makeOcapnNoiseNetwork = ({
   /** @type {OcapnNoiseNetwork['addSigningKeys']} */
   const addSigningKeys = ({ privateKey, publicKey }) => {
     if (privateKey.length !== 32) {
-      throw Error('ocapn-noise: privateKey must be 32 bytes');
+      throw makeError(X`ocapn-noise: privateKey must be 32 bytes`);
     }
     if (publicKey && publicKey.length !== 32) {
-      throw Error('ocapn-noise: publicKey must be 32 bytes when supplied');
+      throw makeError(
+        X`ocapn-noise: publicKey must be 32 bytes when supplied`,
+      );
     }
     // Always derive the verifying key from the private key so the
     // `keyId` and the bytes handed to the Noise WASM agree. If the
@@ -1022,8 +1029,8 @@ export const makeOcapnNoiseNetwork = ({
     );
     if (publicKey) {
       if (compareUint8Arrays(publicKey, derivedPublicKey) !== 0) {
-        throw Error(
-          'ocapn-noise: supplied publicKey does not match privateKey',
+        throw makeError(
+          X`ocapn-noise: supplied publicKey does not match privateKey`,
         );
       }
     }
@@ -1057,8 +1064,8 @@ export const makeOcapnNoiseNetwork = ({
     // overwrite each other.
     for (const t of registeredTransports) {
       if (t.scheme === transport.scheme) {
-        throw Error(
-          `ocapn-noise: a transport with scheme ${JSON.stringify(transport.scheme)} is already registered`,
+        throw makeError(
+          X`ocapn-noise: a transport with scheme ${q(transport.scheme)} is already registered`,
         );
       }
     }
@@ -1091,7 +1098,7 @@ export const makeOcapnNoiseNetwork = ({
   /** @type {OcapnNoiseNetwork['locationFor']} */
   const locationFor = keyId => {
     const rk = registeredKeys.get(keyId);
-    if (!rk) throw Error(`ocapn-noise: unknown keyId ${keyId}`);
+    if (!rk) throw makeError(X`ocapn-noise: unknown keyId ${q(keyId)}`);
     return buildLocationFor(rk);
   };
 
@@ -1102,24 +1109,24 @@ export const makeOcapnNoiseNetwork = ({
    */
   const provideSession = async (remote, { localKeyId } = {}) => {
     if (registeredKeys.size === 0) {
-      throw Error(
-        'ocapn-noise: provideSession requires at least one signing key',
+      throw makeError(
+        X`ocapn-noise: provideSession requires at least one signing key`,
       );
     }
     if (localKeyId === undefined && registeredKeys.size > 1) {
-      throw Error(
-        `ocapn-noise: provideSession requires \`localKeyId\` when ${registeredKeys.size} keys are registered — pass \`{ localKeyId: '<64-hex>' }\``,
+      throw makeError(
+        X`ocapn-noise: provideSession requires \`localKeyId\` when ${q(registeredKeys.size)} keys are registered (pass \`{ localKeyId: '<64-hex>' }\`)`,
       );
     }
     const rk = localKeyId
       ? registeredKeys.get(localKeyId)
       : registeredKeys.values().next().value;
     if (!rk) {
-      throw Error(`ocapn-noise: unknown local keyId ${localKeyId}`);
+      throw makeError(X`ocapn-noise: unknown local keyId ${q(localKeyId)}`);
     }
     if (remote.designator.length !== 64) {
-      throw Error(
-        `ocapn-noise: peer designator must be a 32-byte Ed25519 key (got ${remote.designator.length} chars)`,
+      throw makeError(
+        X`ocapn-noise: peer designator must be a 32-byte Ed25519 key (got ${q(remote.designator.length)} chars)`,
       );
     }
     const peerId = remote.designator;
@@ -1141,8 +1148,8 @@ export const makeOcapnNoiseNetwork = ({
     const existing = active.get(peerId);
     if (existing) {
       if (existing.session.selfIdentity.keyId !== rk.keyId) {
-        throw Error(
-          `ocapn-noise: peer ${peerId} already has an active session under local keyId ${existing.session.selfIdentity.keyId}; cannot open a second session under ${rk.keyId} (the active map is keyed by peer)`,
+        throw makeError(
+          X`ocapn-noise: peer ${q(peerId)} already has an active session under local keyId ${q(existing.session.selfIdentity.keyId)}; cannot open a second session under ${q(rk.keyId)} (the active map is keyed by peer)`,
         );
       }
       return existing.session;

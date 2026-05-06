@@ -53,6 +53,7 @@
     "test:xs": "exit 0"
   },
   "dependencies": {
+    "@endo/errors": "workspace:^",
     "@endo/harden": "workspace:^",
     "@endo/netstring": "workspace:^",
     "@endo/ocapn": "workspace:^",

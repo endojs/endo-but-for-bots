@@ -58,8 +58,7 @@ test('handshake fails with corrupted SYNACK message', async t => {
   synack[1] = 0xff;
 
   t.throws(() => initiatorReadSynack(synack), {
-    message:
-      "OCapN Noise Protocol initiator cannot read responder's SYNACK message",
+    message: /initiator cannot read responder's SYNACK/,
   });
 });
 
@@ -77,8 +76,7 @@ test('handshake fails with corrupted SYN message', async t => {
 
   const synack = new Uint8Array(SYNACK_LENGTH);
   t.throws(() => responder.responderReadSynWriteSynack(prefixedSyn, synack), {
-    message:
-      "OCapN Noise Protocol responder cannot read initiator's SYN message",
+    message: /responder cannot read initiator's SYN/,
   });
 });
 
@@ -100,8 +98,7 @@ test('handshake fails with no mutually supported encodings', async t => {
   const synack = new Uint8Array(SYNACK_LENGTH);
 
   t.throws(() => responder.responderReadSynWriteSynack(prefixedSyn, synack), {
-    message:
-      'OCapN Noise Protocol no mutually supported encoding versions. Responder supports 3, 4; initiator supports 2, 1',
+    message: /no mutually supported encoding versions/,
   });
 });
 
@@ -120,8 +117,7 @@ test('encryption fails when message is too long', async t => {
   longMessage.fill(0x42);
 
   t.throws(() => initiatorEncrypt(longMessage), {
-    message:
-      'OCapN Noise Protocol message exceeds maximum length for encryption',
+    message: /message exceeds maximum length for encryption/,
   });
 });
 
@@ -142,7 +138,7 @@ test('decryption fails when message is too short', async t => {
   const shortMessage = new Uint8Array(15);
 
   t.throws(() => responderDecrypt(shortMessage), {
-    message: 'OCapN Noise Protocol message not long enough for decryption',
+    message: /message not long enough for decryption/,
   });
 });
 
@@ -163,8 +159,7 @@ test('decryption fails when message is too long', async t => {
   const longMessage = new Uint8Array(65536);
 
   t.throws(() => responderDecrypt(longMessage), {
-    message:
-      'OCapN Noise Protocol message exceeds maximum length for decryption',
+    message: /message exceeds maximum length for decryption/,
   });
 });
 
@@ -178,7 +173,7 @@ test('encoding versions are validated at construction', async t => {
         supportedEncodings: [65536],
       }).asInitiator(),
     {
-      message: 'Cannot support encoding versions beyond 65535, got 65536',
+      message: /encoding versions beyond 65535/,
     },
   );
 
@@ -193,7 +188,7 @@ test('encoding versions are validated at construction', async t => {
         ],
       }).asInitiator(),
     {
-      message: 'Cannot support more than 17 encoding versions simultaneously',
+      message: /more than 17 encoding versions/,
     },
   );
 
@@ -206,7 +201,7 @@ test('encoding versions are validated at construction', async t => {
         supportedEncodings: [],
       }).asInitiator(),
     {
-      message: 'Must support at least one encoding version',
+      message: /at least one encoding version/,
     },
   );
 
@@ -219,8 +214,7 @@ test('encoding versions are validated at construction', async t => {
         supportedEncodings: [1, 18],
       }).asInitiator(),
     {
-      message:
-        'Cannot simultaneously support encodings that are more than 16 versions apart, got 1, 18',
+      message: /more than 16 versions apart/,
     },
   );
 });
@@ -243,7 +237,7 @@ test('decryption fails on a tampered ciphertext', async t => {
   invalidMessage.fill(0xff);
 
   t.throws(() => responderDecrypt(invalidMessage), {
-    message: 'OCapN Noise Protocol decryption failed',
+    message: /decryption failed/,
   });
 });
 
@@ -276,8 +270,7 @@ test('initiatorReadSynack on uninitialised state surfaces an error', async t => 
   const shortSynack = new Uint8Array(SYNACK_LENGTH);
   shortSynack.fill(0); // all zeros — not a valid Noise message
   t.throws(() => initiatorReadSynack(shortSynack), {
-    message:
-      "OCapN Noise Protocol initiator cannot read responder's SYNACK message",
+    message: /initiator cannot read responder's SYNACK/,
   });
 });
 
@@ -307,7 +300,7 @@ test('SYN intended for a different responder is rejected', async t => {
   t.throws(
     () => wrongResponder.responderReadSynWriteSynack(prefixedSyn, synack),
     {
-      message: 'OCapN Noise Protocol SYN intended for different responder',
+      message: /SYN intended for different responder/,
     },
   );
 });

@@ -29,7 +29,7 @@ const addFreshKey = network => {
  * cipher state. `network.shutdown()` is idempotent, so explicit
  * shutdown calls in the test body remain safe.
  *
- * @param {import('@endo/ses-ava').ExecutionContext<unknown>} t
+ * @param {import('ava').ExecutionContext<unknown>} t
  * @param {Parameters<typeof makeOcapnNoiseNetwork>[0]} options
  */
 const makeNetworkForTest = (t, options) => {
@@ -41,7 +41,7 @@ const makeNetworkForTest = (t, options) => {
 /**
  * Build a mock-mesh fabric with automatic teardown.
  *
- * @param {import('@endo/ses-ava').ExecutionContext<unknown>} t
+ * @param {import('ava').ExecutionContext<unknown>} t
  */
 const makeFabricForTest = t => {
   const fabric = makeMockMeshFabric();
@@ -589,7 +589,9 @@ test('location signature is bound to the Noise handshake hash', async t => {
 
   // Different binding → fails. Captures the deferred replay-resistance
   // property: a signature minted under one Noise handshake hash cannot
-  // be replayed into a different session.
+  // be replayed into a different session. Pin to the signature error
+  // message so a regression that downgrades the failure to e.g. a
+  // generic codec error is caught.
   t.throws(
     () =>
       crypto.assertLocationSignatureValid(
@@ -598,7 +600,7 @@ test('location signature is bound to the Noise handshake hash', async t => {
         keyPair.publicKey,
         bindingB.buffer,
       ),
-    { instanceOf: Error },
+    { message: /signature/i },
   );
 
   // Empty binding (the tcp-testing-only convention) is also a distinct
@@ -611,6 +613,6 @@ test('location signature is bound to the Noise handshake hash', async t => {
         keyPair.publicKey,
         new ArrayBuffer(0),
       ),
-    { instanceOf: Error },
+    { message: /signature/i },
   );
 });
