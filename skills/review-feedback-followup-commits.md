@@ -63,11 +63,9 @@ the cited reference for the full handling.
 
 - **The reviewer flags a naming issue on one line of a design
   document.** The same name almost always appears in several
-  contexts (permits-table cell vs. consumer-facing surface vs.
-  pure-prose abstraction), each wanting a different
-  treatment. SES-intrinsic renames are the canonical case
-  (`%SharedURL%` in permits, `globalThis.URL` in compartment
-  code). Walk every occurrence with `grep -n`, classify each
-  into one of the contexts, then edit. Mechanical
-  sed-substitution silently swaps consumer-facing names for
-  permits-machinery names and breaks coherence.
+  contexts, each wanting a different treatment. Walk every
+  occurrence with `grep -n`, classify, then edit; mechanical
+  sed-substitution swaps consumer-facing names for
+  machinery-facing names and breaks coherence. SES-intrinsic
+  renames are the canonical case; full handling at
+  [`ses-intrinsic-naming.md`](./ses-intrinsic-naming.md).

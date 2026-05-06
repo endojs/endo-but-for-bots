@@ -71,6 +71,14 @@ compared to the cost of a missed match.
 - [adversarial-tests.md](./adversarial-tests.md) — the
   brainstorming list for invariant-attacking gotcha tests.
 
+### Package-specific conventions
+
+- [ses-intrinsic-naming.md](./ses-intrinsic-naming.md) — the
+  `%Foo%` / `globalThis.Foo` / bare-`Foo` three-context rule
+  for shared SES intrinsics. Read when working in
+  `packages/ses/` (the package has a scoped `CLAUDE.md`
+  pointing here).
+
 ### Code archaeology
 
 - [todo-link-classification.md](./todo-link-classification.md)
