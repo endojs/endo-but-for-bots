@@ -38,6 +38,7 @@
     "./package.json": "./package.json",
     "./token-autocomplete.js": "./src/token-autocomplete.js",
     "./chat-bar-component.js": "./src/chat-bar-component.js",
+    "./voice-input.js": "./src/voice-input.js",
     "./send-form.js": "./src/send-form.js",
     "./command-selector.js": "./src/command-selector.js",
     "./inline-command-form.js": "./src/inline-command-form.js",
