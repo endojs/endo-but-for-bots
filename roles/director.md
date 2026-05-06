@@ -84,12 +84,39 @@ dispatches that as a first-round-only weaver.
    [`../skills/ci-status-summary.md`](../skills/ci-status-summary.md).
 3. **Audit rebase hygiene** per
    [`../skills/rebase-hygiene-audit.md`](../skills/rebase-hygiene-audit.md).
-4. **Surface fresh feedback.** `gh search prs --updated >=<lookback>`
-   plus per-PR `gh api .../comments` and `.../reviews` filtered by
-   the same timestamp. Any PR with new activity is high-priority
-   for fixer dispatch (overrides per-cycle quotas; cleaner cap
-   still applies). **Leave a `eyes` reactji on every fresh comment
-   you read** per
+4. **Surface fresh feedback** via the repo events API. The
+   helper script does the right thing:
+   ```sh
+   bash scripts/scan-fresh-feedback.sh '4 hours ago'
+   ```
+   It paginates through `/repos/<owner>/<repo>/events`, filters to
+   `IssueCommentEvent` / `PullRequestReviewEvent` /
+   `PullRequestReviewCommentEvent`, skips the bot's own activity
+   (auto-detects via `gh api user`), and emits a chronological
+   stream of `<timestamp>  <type>  by <author>  on #<N>  [<state>]`
+   blocks with body preview + comment URL. Use a lookback that
+   covers the time since the prior steward fire, plus a margin for
+   the events API's eventual consistency.
+
+   This is the primary discovery mechanism. Do NOT rely on
+   `gh pr list --search "updated:>=..."` alone: that only flips on
+   state changes (push, label, APPROVED), and silently misses
+   inline review comments. Per-PR `gh api .../pulls/<N>/comments`
+   queries are a useful fallback for targeted deep-dive after the
+   script surfaces a PR number.
+
+   The recurring failure mode this rule prevents: the
+   per-PR-survey-only approach silently missed PR 29's 01:10 review
+   for ~22 hours, jcorbin's PR 94 question for ~10 hours, PR 99's
+   transitive-hashes-must-fix promotion for ~18 hours, plus PR 96
+   and PR 68 reviews. All five would have been caught by one
+   `scan-fresh-feedback.sh` invocation.
+
+   For each fresh comment the script surfaces: dispatch the right
+   sub-role (fixer, builder, designer) per the matrix above. Any
+   PR with new activity is high-priority (overrides per-cycle
+   quotas; cleaner cap still applies). **Leave a `eyes` reactji on
+   every fresh comment you read** per
    [`../skills/reactji-acknowledgment.md`](../skills/reactji-acknowledgment.md);
    the reactji is the immediate "received" signal so contributors
    don't wonder whether the bot saw their comment. The substantive

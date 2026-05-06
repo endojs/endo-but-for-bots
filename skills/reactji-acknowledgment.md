@@ -92,6 +92,27 @@ reactji is already present; just post it.
   `pr-mirror-for-offline-review.md`) — those should be addressed
   upstream.
 
+## Reviews are NOT reactable; comments are
+
+GitHub's REST API exposes reactions on issue comments
+(`/issues/comments/<id>/reactions`) and PR review comments
+(`/pulls/comments/<id>/reactions`) but **not on PR reviews
+themselves**. A "review" is a structured artifact (with state
+`APPROVED` / `CHANGES_REQUESTED` / `COMMENTED`) that carries an
+optional body; the body has no reactions endpoint. When a maintainer
+posts a review with a substantive body (e.g., a top-level
+"COMMENTED" review asking for a follow-up), the agent's
+acknowledgment is a substantive top-level conversation comment
+(`gh pr comment <N> --body "Acknowledged: ..."`) rather than a
+reactji. Reserve the reactji for actual comments.
+
+If unsure whether the artifact is a review or a comment: the
+`gh pr view <N> --json reviews` block lists reviews (no reactions
+endpoint); the `--json comments` block lists conversation comments
+(reactable via `/issues/comments/<id>/reactions`). The `gh api
+.../pulls/<N>/comments` returns inline review comments (reactable
+via `/pulls/comments/<id>/reactions`).
+
 ## Relationship to the substantive response
 
 The reactji is **always** in addition to the substantive response,

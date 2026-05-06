@@ -100,6 +100,19 @@ gh issue list -R endojs/endo-but-for-bots --state open --limit 200 \
 The fetch is the cycle's first step; everything downstream
 reads from the snapshot.
 
+**For fresh comments specifically** (issue body comments,
+not the issue list itself), use the events-API script that the
+director also uses, filtered to issue events:
+
+```sh
+bash scripts/scan-fresh-feedback.sh '4 hours ago'
+```
+
+This surfaces `IssueCommentEvent` activity on every issue (and
+PR conversation comment) since the lookback. The events API's
+chronological stream is dramatically more efficient than per-issue
+comment polls; see `roles/director.md` step 4 for the rationale.
+
 ## State
 
 `process/tracking/<N>.md` per open issue (`<N>` is the issue

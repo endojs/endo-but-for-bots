@@ -91,6 +91,31 @@ Skip this and the steward reads stale `process/*.md`. If the
 fast-forward fails, commit or stash; never resolve via merge
 commit on `garden`.
 
+## The director's per-PR comment sweep is mandatory every fire
+
+The director's "Surface fresh feedback" step (per
+[`./director.md`](./director.md) step 4) does the per-PR
+`gh api .../pulls/<N>/comments` and `.../reviews` filtered by
+the prior cycle's timestamp. This catches **inline review
+comments and review-as-comment artifacts** that a top-level
+`gh pr list --search "updated:>=..."` does NOT catch
+(`updated:>=` only flips on state changes like APPROVED, push,
+or label change; inline comments arrive without an updatedAt
+bump in the search index until the next push). The discovery
+gap is real and recurring: PR 29's 01:10 review asking for the
+split-into-two-PRs sat undetected for ~22 hours because idle
+cycles were running the cheap top-level survey only.
+
+**The director's full per-PR sweep runs every steward fire**,
+not just on cycles that produce other dispatches. On cycles where
+the steward does the survey inline (no separate director sub-agent
+dispatched), include the per-PR `gh api` calls explicitly. On
+cycles where the director is dispatched as a sub-agent, the
+director's report carries the comment+review survey results and
+the steward records them in the cycle log even when "no action
+warranted" is the outcome. Silence on the comment-survey step is
+the recurring failure mode this rule prevents.
+
 ## State
 
 All under `process/`, all written by the steward (aggregating
