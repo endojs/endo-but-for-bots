@@ -181,6 +181,23 @@ re-dispatches.
   detached worktree. The conductor's branch operations don't
   need a long-lived local `<base>` checkout; they only need the
   PR's head branch to push from.
+- **Always `git status --short` and verify the diff before
+  staging in a shared base-branch worktree.** When another
+  parallel session is also working on the base branch
+  (especially `garden`, which several roles touch), a fresh
+  push from that session can land between your fetch and your
+  next commit. If you `git add <file>` and `git commit` without
+  re-fetching, you may make a commit whose tree is parented to
+  the *prior* tip and silently revert the parallel session's
+  intervening commit. Mitigation: before each commit on the
+  base branch, run `git fetch bots-ssh <base>` and then
+  `git status --short` to confirm only your intended file
+  appears, and inspect `git diff --stat <prior-tip>..HEAD` after
+  the commit to confirm the change set matches your intent. If
+  you discover after-the-fact that you clobbered a parallel
+  commit, recover with `git reset --hard <their-tip>`,
+  re-apply your change as a patch, and force-push with
+  `--force-with-lease=<their-tip-sha>`.
 - **Authenticated `gh` account** speaks; no persona name.
 - **Bookkeeping commits push immediately** before moving to the
   next PR, so a crash mid-loop leaves the queue accurate.
