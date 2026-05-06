@@ -56,6 +56,24 @@ An **eligible design** is one that:
    dependencies or already in review. Return a
    `vacuous-satisfaction` outcome with the count: `N waiting on
    dependencies, M in review`.
+
+5. **If eligible designs exist BUT the maintainer review queue
+   exceeds turnaround capacity**: the floor-of-1 invariant is
+   pragmatically subordinate to the maintainer's review
+   bandwidth. Each new builder dispatch produces another PR;
+   when the open-PR-awaiting-review count crosses ~10 entries,
+   adding more dilutes maintainer attention without forward
+   motion. Return a `vacuous-satisfaction (review-queue depth=N,
+   deferring <next-eligible-slug>)` outcome and idle. The
+   marshal does not unilaterally judge "too deep"; ~10 is the
+   default heuristic, but the steward (or maintainer) can override
+   either direction. The vacuous-satisfaction line in the cycle
+   log MUST cite the review-queue depth so the back-pressure
+   reasoning is visible. This is distinct from drift-A
+   (design-vs-code) and drift-B (compose-pattern deps); the
+   blocker is downstream (review bandwidth), not upstream
+   (design or dependency). Encountered after the PR 106
+   (endoclaw-browser) dispatch when the queue hit 14 PRs.
 5. **Return a structured report to the steward**: which design
    was dispatched (or `vacuous-satisfaction` outcome,
    `needs-groom-first` outcome), in-flight count after dispatch,
