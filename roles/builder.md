@@ -47,6 +47,24 @@ issue or design document, and shepherding it through to a green PR.
 - Implement the smallest change that satisfies the acceptance
   criteria.
 - Don't refactor adjacent code unless the task calls for it.
+- **Before opening a worktree, verify that "Done" markings on the
+  design's sub-items match the current code.** A design with
+  `Status: In Progress` and several sub-items marked Done can hide
+  the case where a later refactor undid one or more of those items.
+  Cheap pre-flight check: `git log --oneline -- <key file from
+  design>` for any commit between the design's last `Updated` date
+  and HEAD whose subject line touches the design's central concept
+  (a refactor commit titled "remove X" undoes a sub-item that
+  introduced X). The cost is one `git log` call; the payoff is
+  catching impasses before paying the worktree-setup and
+  exploration cost. Encountered on the
+  `daemon-agent-network-identity` dispatch: items 1 and 2 were
+  marked Done in the design, but `d0ce26b327 refactor(daemon):
+  migrate to SQLite, remove LOCAL_NODE and synced pet stores`
+  (~3 weeks after the design's last update) explicitly removed the
+  LOCAL_NODE sentinel that those items introduced. The design and
+  the code disagreed; the right action was to stop at impasse and
+  surface the discrepancy rather than build against either side.
 - Commit messages are conventional (`feat(pkg):`, `fix(pkg):`,
   `chore:` etc.) with the issue number in parens.
 - Run the full pre-PR checklist before pushing.
