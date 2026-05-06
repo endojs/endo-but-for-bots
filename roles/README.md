@@ -5,7 +5,7 @@ Each file in this directory describes one role, lists the skills
 that role draws on, and explains when to enter the role.
 
 A single agent dispatch will usually map to one role; a long-running
-maestro will pass through several.
+steward orchestrates many across cycles.
 
 The roles below are not exclusive.
 A juror responding to feedback on a panel they themselves ran is
@@ -53,8 +53,6 @@ playing both `juror` and `fixer`; consult both.
   iterate as both branches advance.
 - [weaver.md](./weaver.md) — rebase or merge a branch onto a
   fresh base; resolve conflicts by reading both sides.
-- [maestro.md](./maestro.md) — dispatch subagents,
-  aggregate their work, pace autonomous loops.
 
 The skill files are at [`../skills/`](../skills/).
 Each role file references skills by relative path so an agent in the

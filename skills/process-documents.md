@@ -71,8 +71,7 @@ Roles that habitually produce process documents:
 - `investigator` — hygiene scans.
 - `shepherd` — multi-PR snapshots.
 - `groom` — open-question logs and roadmap snapshots.
-- `maestro` — dispatch summaries when an orchestration produced
-  results worth recording across sessions.
+- `steward` — dispatch summaries and cycle logs.
 
 A role that does *not* produce a process document should not write
 one. The product is the deliverable (the PR, the design, the

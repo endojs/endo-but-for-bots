@@ -138,11 +138,9 @@ The current roles are:
   proposal, iterate as both branches advance.
 - [`weaver`](./roles/weaver.md) — rebase or merge a branch onto a
   fresh base; resolve conflicts by reading both sides.
-- [`maestro`](./roles/maestro.md) — dispatch subagents, aggregate
-  their work, pace autonomous loops.
 
-A single agent dispatch usually maps to one role; a long-running
-maestro passes through several.
+A single agent dispatch usually maps to one role; the steward
+orchestrates many across cycles.
 Consult the role file first; it points you at only the skills
 you need.
 
@@ -191,7 +189,7 @@ for the discipline.
   the human or bot identity that authored them. Apply this rule
   to every commit, in every role: builder, fixer, weaver,
   shepherd, designer, groom, conductor, cleaner, steward,
-  stratego, saboteur, scout, juror, maestro.
+  stratego, saboteur, scout, juror.
 - **Never add `.github/workflows/claude*.yml` or any Claude /
   Claude-review workflow file** to any branch under any
   circumstance. If a rebase or stash recovery surfaces such a

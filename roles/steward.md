@@ -68,8 +68,15 @@ verify state before dispatching.
 - **`fixer`**: `CHANGES_REQUESTED` review unaddressed; head SHA
   has not advanced since the review (verify via content diff per
   the no-op-rebase pitfall in `pr-cycle-state.md`).
-- **`juror`** (via `maestro` panel): PR open beyond freshness
-  threshold without any review.
+- **`juror` panel**: PR open beyond freshness threshold without
+  any review AND not opened by a builder this cycle (the builder
+  hands off fresh PRs to a panel directly per `roles/builder.md`).
+  The steward dispatches the panel itself per
+  [`../skills/panel-review-12-perspectives.md`](../skills/panel-review-12-perspectives.md),
+  fanned out via
+  [`../skills/subagent-batching.md`](../skills/subagent-batching.md),
+  and posts the aggregated must-fix / should-fix / out-of-scope
+  report as a single PR comment.
 - **`shepherd`**: CI red, in scope per the broadened shepherd
   posture (chain-fixing, escalates only on architectural /
   multi-file).

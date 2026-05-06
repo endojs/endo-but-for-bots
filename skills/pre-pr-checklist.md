@@ -73,7 +73,7 @@ agent role in the body or title. A reviewer should read the PR
 and learn what changed and why; how an agent assembled the PR
 is irrelevant to that reader. Strip self-narrating phrases
 ("ran the pre-PR checklist", "filled per template", "addressed
-in cycle N", "the maestro panel found", and similar) before
+in cycle N", "the juror panel found", and similar) before
 submitting. If a section heading from the template would
 otherwise be empty, write `No impact.` rather than narrating
 that you considered it.

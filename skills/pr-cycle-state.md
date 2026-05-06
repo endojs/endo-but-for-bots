@@ -28,7 +28,7 @@ Last cycle: 2026-05-04 14:30 UTC.
 | PR | Title | Base | CI | Reviews | Last dispatch | Status |
 | --- | --- | --- | --- | --- | --- | --- |
 | 82 | guix-ci-resilience | llm | green | 1 changes-requested | 2026-05-04 fixer | awaiting maintainer |
-| 75 | @endo/chacha12 | master | green | none | 2026-05-02 maestro panel | awaiting merge |
+| 75 | @endo/chacha12 | master | green | none | 2026-05-02 juror panel | awaiting merge |
 | 67 | harden-exports destructuring | master | green | none | 2026-05-01 fixer | awaiting maintainer |
 | 59 | ocapn-noise restaged | master | green | 0 | 2026-04-30 fixer | awaiting review |
 | … | … | … | … | … | … | … |
@@ -97,7 +97,8 @@ Every wake-up does these steps, in order, every time:
    - **CHANGES_REQUESTED** review and the head SHA hasn't
      advanced since → dispatch `fixer`.
    - **No reviews and PR is older than a chosen threshold** →
-     dispatch a `juror` panel through a `maestro`.
+     dispatch a `juror` panel directly per
+     `panel-review-12-perspectives.md`.
    - **CI red** → dispatch `shepherd`.
    - **Blocked by maintainer call** (open question, design
      review, taste decision) → leave for the user, status

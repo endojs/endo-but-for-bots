@@ -89,7 +89,7 @@ an agent in the `builder` role to implement from later.
   in one burst. Do **not** Write the design file before switching
   branches and do **not** rely on `git stash` to ferry untracked
   files across branches. A worktree shared with a concurrent agent
-  (a maestro, a scheduled groom, an autoformatter watching the
+  (a steward, a scheduled groom, an autoformatter watching the
   tree) can switch branches under you between Write and commit, and
   an untracked design file vanishes when its parent directory is
   re-checked-out from a different ref. Atomic Write+add+commit

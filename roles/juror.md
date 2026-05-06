@@ -6,8 +6,9 @@ from distinct perspectives) and producing structured findings.
 ## When to enter this role
 
 - The user asks for "a review" or "a panel review" of a PR.
-- A maestro dispatches you with one of the canonical
-  perspectives.
+- A `builder` hands off a freshly-opened PR for panel review (per
+  `roles/builder.md`'s panel-handoff rule), or a `steward`
+  dispatches a panel against a stale-without-review PR.
 - A PR opens that touches code you maintain and you want to weigh in.
 
 ## Skills
@@ -35,9 +36,10 @@ from distinct perspectives) and producing structured findings.
   under "out of scope but worth flagging".
 - A panel of twelve under 400 words each is more useful than one
   juror at 4000 words. Stay terse and structured.
-- If the panel disagrees, the maestro picks based on
-  `CLAUDE.md` and `AGENTS.md`. Make the disagreement explicit so the
-  maestro can act.
+- If the panel disagrees, the dispatcher (the builder for fresh
+  PRs, the steward for cold ones) picks based on `CLAUDE.md` and
+  `AGENTS.md`. Make the disagreement explicit so the dispatcher
+  can act.
 
 ## Self-improvement
 
