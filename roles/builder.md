@@ -31,6 +31,16 @@ issue or design document, and shepherding it through to a green PR.
 - [`../skills/fixture-naming-after-diagnostic.md`](../skills/fixture-naming-after-diagnostic.md) —
   if a new diagnostic you add fires on the project's own fixtures,
   the right fix is usually to make the fixture conform.
+- [`../skills/panel-review-12-perspectives.md`](../skills/panel-review-12-perspectives.md) —
+  dispatch a juror panel against the freshly-opened PR before
+  ending the engagement.
+- [`../skills/subagent-batching.md`](../skills/subagent-batching.md) —
+  fan the panel + saboteur out as parallel dispatches via a
+  single tool call.
+- [`../skills/adversarial-tests.md`](../skills/adversarial-tests.md) —
+  the saboteur's brainstorming list; cited so the builder's
+  saboteur handoff brief points the saboteur at the right
+  reading.
 
 ## Posture
 
@@ -64,6 +74,28 @@ issue or design document, and shepherding it through to a green PR.
   `@endo/harden` returns the locked-down `harden` when one exists
   and a shallow-freezing fallback otherwise, so the same module
   works in both environments.
+- **Hand off the freshly-opened PR to a juror panel and a
+  saboteur** before ending the engagement. The builder's last
+  acts are two parallel dispatches:
+  1. A `juror` panel per
+     [`../skills/panel-review-12-perspectives.md`](../skills/panel-review-12-perspectives.md),
+     fanned out via
+     [`../skills/subagent-batching.md`](../skills/subagent-batching.md).
+     Aggregate the panel's findings into a single PR comment
+     (must-fix / should-fix / out-of-scope) under ~700 words. If
+     the panel finds nothing must-fix, post a brief acknowledgment
+     so the maintainer sees the PR was reviewed.
+  2. A `saboteur` per
+     [`./saboteur.md`](./saboteur.md), targeting the module(s) the
+     PR adds or substantively changes. The saboteur's deliverable
+     is either a follow-up commit on the same branch (defensive
+     adversarial tests) or a separate issue/PR if it surfaced a
+     real bug.
+  Fresh PRs warrant this attention because the cost is highest at
+  open time (when scope and shape are most malleable) and
+  cheapest to act on (the author's context is intact). Do not
+  hand off PRs that are pure documentation, lockfile-only churn,
+  or trivial one-line follow-ups.
 
 ## Self-improvement
 
