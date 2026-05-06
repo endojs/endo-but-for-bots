@@ -90,6 +90,34 @@ issue or design document, and shepherding it through to a green PR.
   and let the steward bump the dependent design back to "blocked
   on dependency" until the dependency's Phase 2 lands.
   Encountered on the `endoclaw-proactive-messages` dispatch.
+- **Cross-check `designs/README.md`'s milestone-summary
+  annotations against the design's own `Depends On` section.**
+  The design's own `Depends On` is author-curated and is often
+  the source of the eligibility-filter fooling above; the
+  README's milestone summary table, by contrast, frequently
+  carries a one-line "needs X" annotation that the author wrote
+  while building the roadmap and forgot to back-port into the
+  design file. Pre-flight check: `grep <design-slug>
+  designs/README.md` and read the rightmost column of the
+  Status row and the milestone-summary row. If either says
+  "needs <transport>" or "needs <bridge>" or "needs <new design>"
+  and that prerequisite is not in the design's `Depends On`
+  list, the design is **under-declared**: the eligibility filter
+  passed because of an author-side omission. Treat the README
+  annotation as the authoritative dependency statement and stop
+  at impasse if the prerequisite is not yet built. Encountered
+  on the `endoclaw-notifications` dispatch: the design's
+  `Depends On` says "No other designs required; standalone
+  capability", but `designs/README.md` rows for that design
+  read `Notify exo → Electron Notification; needs daemon↔Electron
+  bridge`, and no such bridge design exists. The Familiar's
+  Electron main process spawns the daemon as a separate Node
+  child and consumes no CapTP from it, so the design's
+  step-3 transport ("the Familiar's Electron main process
+  receives the notification request over CapTP and calls
+  `new Notification(title, { body })`") cannot be implemented as
+  a small reviewable cut; the cut would be the missing
+  bridge, not the cap.
 - Commit messages are conventional (`feat(pkg):`, `fix(pkg):`,
   `chore:` etc.) with the issue number in parens.
 - Run the full pre-PR checklist before pushing.
