@@ -54,6 +54,16 @@ issue or design document, and shepherding it through to a green PR.
   Confirm the actual location, make the focused change there, and
   surface the discrepancy in the PR body so the maintainer can
   redirect.
+- Browser-bundled code (Vite, Rollup, esbuild) cannot rely on
+  `import 'ses'` to install `globalThis.harden`.
+  `lockdown()` is what installs the global, and many browser entry
+  points (Chat, Familiar) cannot call `lockdown()` because Monaco
+  and other dependencies need mutable intrinsics.
+  When adding `harden(...)` to a module that ships in such a bundle,
+  source it as `import harden from '@endo/harden'`.
+  `@endo/harden` returns the locked-down `harden` when one exists
+  and a shallow-freezing fallback otherwise, so the same module
+  works in both environments.
 
 ## Self-improvement
 
