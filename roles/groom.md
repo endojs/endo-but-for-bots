@@ -47,9 +47,40 @@ list invites duplicate work; leaving an answer in the answers
 file with no corresponding open question invites confusion
 about whether action was taken.
 
+## Output: direct push to `bots/garden`, no PR
+
+The groom's changes target the `garden` branch, which has no
+review gate. Opening a PR is wasteful overhead; the groom pushes
+directly to `bots-ssh garden` and rebases until the push lands.
+
+Per the worktree-discipline rule
+([`../skills/worktree-per-pr.md`](../skills/worktree-per-pr.md))
+the groom does not operate in `/home/kris/garden` (the steward's
+seat). Each pass uses a dedicated worktree:
+
+```sh
+mkdir -p /home/kris/endo-wt
+git worktree add /home/kris/endo-wt/groom garden
+cd /home/kris/endo-wt/groom
+```
+
+If `/home/kris/endo-wt/groom` already exists from a prior pass,
+remove and recreate (cheap; the working tree is small).
+
 ## Procedure
 
-1. **Reconcile per-design status.** Walk every design listed in
+1. **Stand on garden in the dedicated worktree.** `cd
+   /home/kris/endo-wt/groom`. Verify with `git branch
+   --show-current` (expect `garden`).
+2. **Fetch and fast-forward merge `bots-ssh garden`** so the
+   pass starts from the current tip:
+   ```sh
+   git fetch bots-ssh garden
+   git merge --ff-only bots-ssh/garden
+   ```
+   If the fast-forward fails, the local branch has diverged;
+   investigate (do not resolve via a merge commit).
+3. **Reconcile per-design status.** Walk every design listed in
    `designs/README.md` § Summary; compare its row to the design
    file's metadata block. Drift goes in the open-questions note.
    Don't change the README's status row to match a file that
@@ -64,29 +95,55 @@ about whether action was taken.
      | awk -F'|' '{print $5}' \
      | sed 's/^ *//;s/ *$//' | sort | uniq -c | sort -rn
    ```
-2. **Recalibrate velocity.** Run
+4. **Recalibrate velocity.** Run
    [`../skills/velocity-recalibration.md`](../skills/velocity-recalibration.md)
    over the designs that completed since the previous calibration
    line in § "Estimation Methodology". Refresh the reference-point
    table and the size-bucket durations.
-3. **Re-project the roadmap.** Run
+5. **Re-project the roadmap.** Run
    [`../skills/roadmap-projection.md`](../skills/roadmap-projection.md)
    to recompute § "Summary by Milestone", § Timeline (Mermaid +
    table), and the trailing "Progress as of …" line.
-4. **Update the dependency graph.** Run
+6. **Update the dependency graph.** Run
    [`../skills/dependency-graph-maintenance.md`](../skills/dependency-graph-maintenance.md)
    over the design files; reconcile new edges, surface cycles,
    flag any divergence between design files and the README graph
    in the open-questions note.
-5. **Reprioritize.** For any design whose milestone now looks
+7. **Reprioritize.** For any design whose milestone now looks
    wrong (its prerequisite shipped, its rationale changed, or the
    `## Strategic Early Items` reasoning no longer applies), draft
    a recommendation. Recommendations that are mechanical (move A
    from M4 to M3 because its sole M3 dep just landed) can be
    applied directly; recommendations that involve trade-offs go
    in the open-questions note.
-6. **Leave open questions** wherever the procedure asked for one.
+8. **Leave open questions** wherever the procedure asked for one.
    See [`../skills/groom-open-questions.md`](../skills/groom-open-questions.md).
+9. **Commit.** README edits ship as one substantive commit; the
+   open-questions append and the answer drain ship as separate
+   process commits per
+   [`../skills/process-documents.md`](../skills/process-documents.md).
+   Author commits as Kris Kowal via env vars (no `git config`
+   changes); no `Co-Authored-By: Claude` lines.
+10. **Push to `bots-ssh garden`, rebasing on conflict until
+    success.** Garden is a high-traffic branch (steward,
+    conductor, and other agents push concurrently); the first
+    push attempt may be rejected because the remote tip advanced.
+    Loop until the push lands:
+    ```sh
+    until git push bots-ssh garden --force-with-lease; do
+      git fetch bots-ssh garden
+      git rebase bots-ssh/garden
+    done
+    ```
+    `--force-with-lease` is the safety net: if the remote has
+    moved beyond the lease, the push is rejected (and the loop
+    re-fetches + rebases). A plain force-push could clobber
+    concurrent work.
+11. **Clean up the worktree** at the end of the pass:
+    ```sh
+    cd /home/kris/garden
+    git worktree remove /home/kris/endo-wt/groom
+    ```
 
 ## Skills
 
