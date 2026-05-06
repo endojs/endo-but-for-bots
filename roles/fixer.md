@@ -96,6 +96,64 @@ result through CI.
   Do not re-request review on a deferral-path reply (the reviewer
   already authorized the deferral); only when the fixer's response
   is a substantive fix that the reviewer should re-evaluate.
+- **Panel reports cite line numbers from the snapshot the panel
+  reviewed, not from current `HEAD`.** When the dispatch summarizes
+  a panel comment with line numbers, treat the file path and the
+  symptom as authoritative, the line number as a hint. The first
+  step before editing is `grep -n` for the pattern the symptom
+  describes (`freeze\(`, `throw Error`, `^\s*/\*\*\s*$` for a stray
+  doc opener) and verify the actual location in the current tree.
+  Session example (PR 59 panel report): "malformed JSDoc at
+  `network.js:1716-1717`" pointed to a 1211-line file; the bug was
+  at lines 404-405.
+- **Restoring deleted historical content is a legitimate fixer
+  outcome.** Most fixer commits add new content; some panel reports
+  catch a load-bearing block (CHANGELOG entry, design-doc section,
+  test fixture) the PR inadvertently dropped during a base switch
+  or rebase. The fix is `git show <upstream-base>:<file>` to
+  retrieve the deleted region, paste it back into place, and commit
+  with a message that says "restore" rather than "add". Pair the
+  restore with whatever the PR was *supposed* to add (e.g. a new
+  major-version changeset alongside the restored 1.0.0 changelog).
+- **Dropping a single commit during rebase wants `git rebase -i`,
+  not `git rebase --onto`.** `git rebase --onto <new-base>
+  <commit>^` keeps only `<commit>..HEAD`, dropping everything
+  before. The right shape for "drop the top commit, keep the rest"
+  is interactive rebase with the unwanted line removed:
+  ```sh
+  GIT_SEQUENCE_EDITOR="sed -i '/^pick <SHA>/d'" git rebase -i <base>
+  ```
+  Verify post-rebase with `git log --oneline <base>..HEAD` and
+  confirm the expected commit count.
+- **Bulk em-dash sweeps want one Edit per occurrence, not a
+  `sed`-style mass replacement.** The em-dash maps to a comma,
+  semicolon, colon, or pair of parentheses depending on the
+  surrounding clause. Mechanical substitution to one symbol reads
+  worse than the original in most contexts. Walk the `grep -n`
+  output and pick the right substitute per site; `replace_all` is
+  only safe when the surrounding text is identical (the same
+  template literal repeated, an identifier rename).
+- **Test helpers that call the production factory should accept
+  `t` and register `t.teardown` at the helper.** When a single test
+  file holds 20+ tests that each call `makeFooFromOptions(...)`,
+  introduce `makeFooForTest(t, options)` near the file's top, swap
+  every direct call mechanically, and let the helper handle the
+  teardown registration. This keeps the per-test diff to one line
+  per resource (the helper call) instead of three (acquire,
+  teardown-register, trailing close). Watch for the
+  `const x = makeXForTest(t)` body accidentally calling
+  `makeXForTest` recursively after a `replace_all` over the
+  pre-rename name; a single-pass test run catches it.
+- **`shutdown()` (and similar idempotent-by-intent finalizers)
+  should be made structurally idempotent before introducing
+  `t.teardown` registration.** Otherwise an explicit `shutdown()`
+  in the test body plus the teardown's `shutdown()` race each
+  other and the second call observes already-cleared state. The
+  smallest fix is an `if (isShutdown) return;` guard at the top
+  of the function; pair it with a flag the in-flight async work
+  also reads (`recordCandidate` / `decrementAndSettle` style) so
+  late-arriving work doesn't write into the post-shutdown empty
+  maps.
 - When the failing CI signal IS the PR (a new smoke / lint / coverage
   check, with the unrelated CI matrix passing), do not silence the
   signal. Two outcomes are appropriate:
