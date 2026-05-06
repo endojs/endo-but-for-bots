@@ -47,7 +47,7 @@ Reads as a polished design ready to be acted on; no branch, no PR.
 Each entry is followed by its drift-check classification and a
 one-sentence "why".
 
-### eligible-for-builder (4)
+### eligible-for-builder (3)
 
 Both drift-pattern A (design vs. later code refactor) and drift-pattern
 B (compose-pattern dependency) checks pass. The marshal can dispatch a
@@ -64,9 +64,6 @@ builder against any of these.
   Deps are Playwright (external) and worker infrastructure
   (`makeUnconfined` already exists); `daemon-os-sandbox-plugin` is
   listed as optional.
-- [`designs/endoclaw-notifications.md`](./designs/endoclaw-notifications.md)
-  `Notify` exo bridging daemon to Electron `Notification` API.
-  Standalone capability; only Familiar (present) is required.
 - [`designs/endoclaw-skill-registry.md`](./designs/endoclaw-skill-registry.md)
   capability-aware skills directory.
   Design's `Depends On` section explicitly notes EndoDirectory,
@@ -108,12 +105,27 @@ extract a focused sub-design before a builder can act.
   `daemon-capability-filesystem` above; needs extraction of a focused
   sub-design.
 
-### blocked-on-dependency (5)
+### blocked-on-dependency (6)
 
 Drift pattern B failed (a named dependency is in flight but the phase
-the dependent needs has not shipped). Needs the named dependency to
-land before the design is actionable.
+the dependent needs has not shipped, OR the design's own `Depends On`
+under-declared a dependency the README's milestone-summary annotation
+caught). Needs the named dependency to land before the design is
+actionable.
 
+- [`designs/endoclaw-notifications.md`](./designs/endoclaw-notifications.md)
+  `Notify` exo bridging daemon to Electron `Notification` API.
+  Drift B (under-declared dep): the design's `Depends On` claims
+  standalone, but `designs/README.md`'s milestone-summary annotation
+  explicitly notes "needs daemon↔Electron bridge", which does not
+  exist as a design. Architecturally verified: Familiar spawns the
+  daemon as a detached Node child with no daemon→Electron-main CapTP
+  path. Needs a `daemon-electron-bridge` design (or equivalent) to
+  ship before this is actionable. Reclassified from
+  eligible-for-builder on 2026-05-06 after a dispatched builder hit
+  the impasse and surfaced the under-declaration; `roles/builder.md`
+  now cross-checks README annotations against the design's own
+  `Depends On` for future passes (see commit `fe9d7ab950`).
 - [`designs/daemon-weblet-application.md`](./designs/daemon-weblet-application.md)
   weblet applications hosted from readable-tree zip archives.
   Depends on `familiar-unified-weblet-server` (PR #100, open) for
@@ -156,18 +168,16 @@ slot for future passes.
 
 ### Eligibility ranking for the marshal
 
-Filtered to the four `eligible-for-builder` entries only, ranked by
+Filtered to the three `eligible-for-builder` entries only, ranked by
 the prior groom's roadmap-priority signal (M1 capabilities and tools
 ahead of M3 weblets/integrations, with smaller surface area as a
 tiebreaker):
 
-1. [`designs/endoclaw-notifications.md`](./designs/endoclaw-notifications.md)
-   smallest surface (55 lines), no design deps, Familiar present.
-2. [`designs/endoclaw-skill-registry.md`](./designs/endoclaw-skill-registry.md)
+1. [`designs/endoclaw-skill-registry.md`](./designs/endoclaw-skill-registry.md)
    moderate surface (252 lines), all deps already implemented.
-3. [`designs/endoclaw-browser.md`](./designs/endoclaw-browser.md)
+2. [`designs/endoclaw-browser.md`](./designs/endoclaw-browser.md)
    small surface (93 lines), one external dep (Playwright install).
-4. [`designs/daemon-os-sandbox-plugin.md`](./designs/daemon-os-sandbox-plugin.md)
+3. [`designs/daemon-os-sandbox-plugin.md`](./designs/daemon-os-sandbox-plugin.md)
    largest surface (516 lines), platform-specific backends; broadest
    M1 capability impact.
 
