@@ -142,9 +142,20 @@ The steward does not post the comments; that is a maintainer action.
 
 ## Merge queue
 
-| Order | PR | Base | Head SHA | Status |
-| --- | --- | --- | --- | --- |
-| 1 | #93 | llm | `e2fddb3599` | in-progress (conductor) |
+(empty)
+
+Merged this run (2026-05-06 conductor, PR 93 cycle):
+
+- #93 → `31df9e3cf1` (merge commit to llm).
+  Was 2 behind at survey, MERGEABLE/UNSTABLE with CI in flight (16
+  pass, 10 pending). Three commits, atomic per concern (rename,
+  alias+test, design status). Rebased onto current `bots-ssh/llm` (no
+  conflicts); kept the three commits discrete (the `feat(cli)` alias
+  introduces a new behavior plus its own test, distinct from the pure
+  rename refactor; design-status is independent bookkeeping).
+  Force-pushed `3a3f0a7560` with `--force-with-lease`. Issued
+  `--auto --merge`; GitHub processed it as a direct merge because CI
+  converged in the interim. state=MERGED.
 
 Merged this run (2026-05-06 conductor, resume cycle):
 
