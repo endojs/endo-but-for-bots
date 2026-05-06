@@ -1,5 +1,5 @@
 // @ts-check
-/* global fetch */
+/* global fetch, AbortController */
 
 import { makeExo } from '@endo/exo';
 import harden from '@endo/harden';
@@ -12,6 +12,84 @@ import {
 
 const DEFAULT_MAX_REQUESTS_PER_MINUTE = 60;
 const DEFAULT_MAX_RESPONSE_BYTES = 10 * 1024 * 1024; // 10 MB
+
+/**
+ * Read a fetch Response body chunk-by-chunk, accumulating bytes
+ * until either the stream ends or the cumulative byte count reaches
+ * `maxBytes`.  When the cap is hit, the stream is aborted and the
+ * accumulated prefix is returned.  This bounds the buffer the
+ * client allocates per response, regardless of the Content-Length
+ * header (which a malicious origin can lie about).
+ *
+ * @param {Response} response
+ * @param {number} maxBytes
+ * @param {AbortController} controller - The AbortController whose
+ *   signal was passed to `fetch`; aborted when the cap is reached.
+ * @returns {Promise<{ text: string, truncated: boolean }>}
+ */
+const readResponseBoundedText = async (response, maxBytes, controller) => {
+  const body = response.body;
+  if (body === null || body === undefined) {
+    return { text: '', truncated: false };
+  }
+  const reader = body.getReader();
+  /** @type {Uint8Array[]} */
+  const chunks = [];
+  let total = 0;
+  let truncated = false;
+  try {
+    for (;;) {
+      // eslint-disable-next-line no-await-in-loop
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value === undefined) continue;
+      const remaining = maxBytes - total;
+      if (value.byteLength > remaining) {
+        if (remaining > 0) {
+          chunks.push(value.subarray(0, remaining));
+          total += remaining;
+        }
+        truncated = true;
+        try {
+          controller.abort();
+        } catch {
+          /* ignore */
+        }
+        try {
+          // eslint-disable-next-line no-await-in-loop
+          await reader.cancel();
+        } catch {
+          /* ignore */
+        }
+        break;
+      }
+      chunks.push(value);
+      total += value.byteLength;
+    }
+  } finally {
+    try {
+      reader.releaseLock();
+    } catch {
+      /* ignore */
+    }
+  }
+
+  // Concatenate exactly `total` bytes (cheaper than `Buffer.concat`-style
+  // pre-sizing miscalculations: each chunk's `byteLength` already added).
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    out.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  // `fatal: false` so a truncation that lands mid-multibyte-codepoint
+  // produces a replacement character rather than a thrown decode error.
+  return {
+    text: new TextDecoder('utf-8', { fatal: false }).decode(out),
+    truncated,
+  };
+};
+harden(readResponseBoundedText);
 
 /**
  * Parse the origin from a URL string.
@@ -87,29 +165,35 @@ export const makeHttpClientKit = options => {
     fetch: async (url, opts = undefined) => {
       assertNotRevoked();
 
+      const protocol = new URL(url).protocol;
+      protocol === 'https:' ||
+        protocol === 'http:' ||
+        Fail`Only HTTP and HTTPS protocols are supported, got ${q(protocol)}`;
+
       const origin = originOf(url);
       assertAllowedOrigin(origin);
       assertRateLimit();
 
       const { method = 'GET', headers = {}, body = undefined } = opts || {};
 
-      const protocol = new URL(url).protocol;
-      protocol === 'https:' ||
-        protocol === 'http:' ||
-        Fail`Only HTTP and HTTPS protocols are supported, got ${q(protocol)}`;
-
+      const controller = new AbortController();
       const response = await fetchFn(url, {
         method,
         headers,
+        signal: controller.signal,
         ...(body !== undefined ? { body } : {}),
       });
 
-      // Read response text, truncated to max size.
-      const text = await response.text();
-      const truncated =
-        text.length > currentMaxResponseBytes
-          ? text.slice(0, currentMaxResponseBytes)
-          : text;
+      // Stream the response body with a hard byte cap.  This bounds the
+      // memory the daemon will allocate for the response regardless of
+      // a malicious origin advertising (or omitting) a Content-Length.
+      // The AbortController signal is fired when the cap is reached so
+      // the underlying socket is closed promptly.
+      const { text, truncated } = await readResponseBoundedText(
+        response,
+        currentMaxResponseBytes,
+        controller,
+      );
 
       /** @type {Record<string, string>} */
       const responseHeaders = {};
@@ -122,7 +206,9 @@ export const makeHttpClientKit = options => {
         statusText: response.statusText,
         ok: response.ok,
         headers: responseHeaders,
-        text: truncated,
+        text,
+        truncated,
+        maxResponseBytes: currentMaxResponseBytes,
       });
     },
 

@@ -645,13 +645,18 @@ const FetchOptionsShape = M.splitRecord(
   },
 );
 
-const FetchResponseShape = M.splitRecord({
-  status: M.number(),
-  statusText: M.string(),
-  ok: M.boolean(),
-  headers: M.recordOf(M.string(), M.string()),
-  text: M.string(),
-});
+const FetchResponseShape = M.splitRecord(
+  {
+    status: M.number(),
+    statusText: M.string(),
+    ok: M.boolean(),
+    headers: M.recordOf(M.string(), M.string()),
+    text: M.string(),
+    truncated: M.boolean(),
+    maxResponseBytes: M.number(),
+  },
+  {},
+);
 
 export const HttpClientInterface = M.interface('EndoHttpClient', {
   fetch: M.callWhen(M.string())
