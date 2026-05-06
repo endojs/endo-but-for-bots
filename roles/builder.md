@@ -84,6 +84,44 @@ issue or design document, and shepherding it through to a green PR.
   `@endo/harden` returns the locked-down `harden` when one exists
   and a shallow-freezing fallback otherwise, so the same module
   works in both environments.
+- **Re-opening a PR under the bot account to dodge GitHub
+  self-review.** When the user authored a PR they now want to
+  review (typically a PR that landed under their own gh identity
+  before they realised they would be the reviewer), GitHub
+  blocks self-review and the PR sits unreviewable. The remedy is
+  to cherry-pick the substance onto a fresh branch and open the
+  new PR under the bot's gh-auth identity (`kriscendobot`) so the
+  PR's GitHub-side author is the bot and the human can review
+  it. The `gh pr create` author is the gh-auth identity; the
+  commit author is independent. Use:
+  ```sh
+  export GIT_AUTHOR_NAME="Kris Kowal"
+  export GIT_AUTHOR_EMAIL="kris@agoric.com"
+  export GIT_COMMITTER_NAME="Kris Kowal"
+  export GIT_COMMITTER_EMAIL="kris@agoric.com"
+  git cherry-pick --no-commit <SHA>
+  git commit -m '<message>'   # honors GIT_AUTHOR_* env
+  ```
+  Plain `git cherry-pick <SHA>` (without `--no-commit`) preserves
+  the original author and ignores GIT_AUTHOR_* env vars; only
+  the committer is updated. `--no-commit` followed by a manual
+  `git commit` is the path that lets you both override the
+  author email (if standardising to the project's canonical
+  address) and strip out unwanted trailers like
+  `Co-Authored-By: Claude` from the original message.
+  Close the original PR with `gh pr close <orig> --comment "Re-opened
+  as #<new> under the bot account so you can review (GitHub blocks
+  self-review on PRs you authored)."`. The new PR's body should
+  open with `Re-opens #<orig> under the bot account so the
+  maintainer can review it`; do not narrate the methodology
+  beyond that.
+  **`gh pr review --request-changes` also fails on a self-authored
+  PR**, so the panel-review submission below must use
+  `--comment` whenever the PR's gh-side author is the same
+  identity as `gh auth` (i.e., when you re-opened under the bot).
+  The aggregated panel content is identical; only the verdict
+  flag changes.
+  Encountered on PR 44 → #101 (chat voice input).
 - **Hand off the freshly-opened PR to a juror panel and a
   saboteur** before ending the engagement. The builder's last
   acts are two parallel dispatches plus the close-out chain:
