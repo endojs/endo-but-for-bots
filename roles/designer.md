@@ -154,6 +154,45 @@ an agent in the `builder` role to implement from later.
   `designs/README.md`. Loop scaffolding, process documents, and
   agent infrastructure that lived in the source PR must not
   appear.
+- **Design plus scaffolded implementation as a single PR.** When a
+  maintainer comment says "design and implement a follow-up PR" or
+  "I want to see what the change looks like before deciding whether
+  to fold it in", the right shape is one PR that ships both the
+  `designs/<slug>.md` document AND a focused implementation scaffold
+  in the same commit. The scaffold is a proof of surface, not a
+  full port: enough code (one source file plus tests) for the
+  maintainer to read the adapter shape, the API names, and the
+  error-handling stance without having to imagine the implementation
+  from the design alone. The "smallest reviewable cut" rule from
+  `./builder.md` applies; if the smallest cut still requires a
+  major rewrite, stop at impasse and ask the maintainer for the
+  open questions to resolve first.
+  Two structural points specific to this hybrid shape:
+  1. **Base branch.** When the design proposes adapting a package
+     that does not yet exist on `bots-ssh/llm` because it is being
+     introduced by the parent PR, base the follow-up PR on the
+     parent PR's head, not on `bots-ssh/llm`. The scaffold cannot
+     compile against `llm` if `llm` does not have the package.
+     Pick the parent PR's branch as `--base` to `gh pr create` so
+     GitHub renders the diff as just the follow-up's contribution.
+     Note the base choice in the PR body so the maintainer sees
+     why the diff against `llm` would be huge: it includes the
+     parent PR's commits.
+     If the maintainer's brief said "open the PR off bots-ssh/llm"
+     and the package dependency makes that impossible, follow the
+     dependency and explain in the PR body. The brief was written
+     before the dependency was visible.
+  2. **PR body structure.** The body has three load-bearing
+     sections: (a) link to the originating maintainer comment with
+     a verbatim quote of the ask; (b) what is in the PR (design
+     file path + the implementation surface, named); (c) what is
+     intentionally out of scope (the natural-but-not-asked-for
+     follow-ons). The third section is the one most often missing
+     and the one that prevents the maintainer from asking
+     "why didn't you also do X?" in review.
+  Encountered on PR #75 -> PR #107 (`pure-rand` v8 adapter for
+  `@endo/random/fast-check.js`).
+
 - **Re-opening a maintainer-authored design PR under the bot
   account.** When the design PR you are extracting from was
   authored by the maintainer who must now review it (typically
