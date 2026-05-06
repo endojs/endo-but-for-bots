@@ -92,6 +92,12 @@ compared to the cost of a missed match.
 - [roadmap-projection.md](./roadmap-projection.md)
 - [dependency-graph-maintenance.md](./dependency-graph-maintenance.md)
 - [groom-open-questions.md](./groom-open-questions.md)
+- [design-queue-drift-check.md](./design-queue-drift-check.md) — the
+  triage-pass procedure that re-classifies
+  `process/DESIGNS-WITHOUT-PR.md`'s Spec'd-but-not-started entries by
+  drift-pattern A (design vs. later code refactor) and drift-pattern B
+  (compose-pattern with unsatisfied phase dependency) so the marshal's
+  eligibility filter stops sending builders into walls.
 
 ### Cross-cutting
 

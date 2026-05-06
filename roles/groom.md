@@ -18,6 +18,20 @@ trigger. In that case the groom **must** leave a structured note
 at `process/GROOM-OPEN-QUESTIONS.md` for the user's next
 interactive turn (see the linked skill below).
 
+### Drift-check sub-mode
+
+A separate, lighter mode is available when the marshal has been
+returning `needs-groom-first` outcomes or when consecutive builder
+dispatches hit pre-flight impasses. The drift-check pass updates only
+`process/DESIGNS-WITHOUT-PR.md` and skips the velocity / roadmap /
+dependency-graph procedures entirely. It re-classifies the
+`Spec'd-but-not-started` section so the marshal's eligibility filter
+draws from a clean priority list. See
+[`../skills/design-queue-drift-check.md`](../skills/design-queue-drift-check.md).
+Cap: ~30 minutes. Output: one process commit to
+`process/DESIGNS-WITHOUT-PR.md`, no `designs/README.md` edit, no
+open-questions append.
+
 ## Inbound: read user answers first
 
 Before any reconciliation work, **read
@@ -216,6 +230,12 @@ no answer drain.
   surface cycles.
 - [`../skills/groom-open-questions.md`](../skills/groom-open-questions.md):
   format and discipline of the open-questions / answers ledger.
+- [`../skills/design-queue-drift-check.md`](../skills/design-queue-drift-check.md):
+  the drift-check sub-mode procedure (drift-pattern A: design vs.
+  later refactor; drift-pattern B: compose-pattern with unsatisfied
+  phase dependency). Re-classifies
+  `process/DESIGNS-WITHOUT-PR.md`'s Spec'd-but-not-started entries
+  so the marshal's eligibility filter dispatches from a clean list.
 - [`../skills/em-dash-style-rule.md`](../skills/em-dash-style-rule.md):
   applies to all roadmap prose.
 
