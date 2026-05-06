@@ -40,6 +40,12 @@ to the conventions in the repo's `CONTRIBUTING.md` and surface
 the missing-template observation in the PR body so the
 maintainer can decide whether to add one.
 
+The same template applies to **after-the-fact body rewrites**
+(`gh pr edit <N> --body-file ...`), not just initial creation.
+A PR that grew in scope after open should be reset to the
+template structure rather than appended to; reviewers expect
+the section headings in the same order on every PR in the repo.
+
 ## Lockfile rule
 
 If the change adds or updates a dependency, commit `yarn.lock`
