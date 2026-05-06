@@ -153,6 +153,56 @@ remove and recreate (cheap; the working tree is small).
     git worktree remove /home/kris/endo-wt/groom
     ```
 
+## Recovery: cross-role clobber of `designs/README.md`
+
+A non-groom role (commonly a builder or fixer working from a
+stale worktree base) can inadvertently include a revert of the
+last groom's README reconciliation alongside its intended edit
+to a different file. Symptom: a recent commit's diff for
+`designs/README.md` undoes the previous groom-pass changes
+(M-counts regress, "Last updated" date moves backward, status
+rows revert to "Not Started" / "Proposed", "Progress as of …"
+line goes back to an older date) while the same commit's other
+file changes are legitimate.
+
+This is **not** a force-push lease failure (no commits were
+overwritten on the remote); it is a regular commit whose
+working-tree base predated the groom's merge. The other-file
+changes in that commit must stay; only the README revert
+needs undoing.
+
+Recovery procedure:
+
+1. Identify the most recent groom-pass merge commit on `garden`
+   (the one whose `designs/README.md` is the target state).
+   Typically the most recent `Merge pull request #<N> from
+   endojs/groom/<date>` commit.
+2. From the dedicated worktree on `garden`, restore that
+   single file from the merge commit:
+   ```sh
+   git checkout <groom-merge-sha> -- designs/README.md
+   ```
+3. Verify only legitimate edits intervened. The list of
+   commits since the groom merge that touched the file should
+   be exactly the offending commit (and nothing else):
+   ```sh
+   git log --oneline <groom-merge-sha>.. -- designs/README.md
+   ```
+   If a later commit also legitimately edited the file, do not
+   blindly check out the merge SHA; merge by hand, taking the
+   groom-pass values for the reconciled rows on top of the
+   later legitimate change.
+4. Recompute the totals row to confirm the restored state still
+   matches the actual statuses present (the awk recipe in the
+   Procedure step 3). Skip the full velocity / roadmap re-projection
+   unless data substantially changed since the groom merge.
+5. Commit as `docs(designs): restore README rows clobbered by
+   <short-sha>` and push per step 10 above.
+
+The clobber-recovery pass is narrower than a normal grooming
+pass: one file restored, one commit, no open-questions append,
+no answer drain.
+
 ## Skills
 
 - [`../skills/velocity-recalibration.md`](../skills/velocity-recalibration.md):
