@@ -37,6 +37,18 @@ result through CI.
 
 ## Posture
 
+- **Reuse the PR's dedicated worktree at
+  `/home/kris/endo-wt/pr-<N>`** per
+  [`../skills/worktree-per-pr.md`](../skills/worktree-per-pr.md).
+  The builder created it; later fixers reuse the same path. If
+  the directory already exists, `cd` in, `git fetch
+  bots-ssh/<head-ref>`, and `git reset --hard` to align with
+  the PR's current head before applying any fix. If it does not
+  exist (the conductor cleaned up but the PR was reopened, or
+  the fixer is the first to touch the PR), `git worktree add`
+  it from the PR's current head. Do not work in
+  `/home/kris/garden` (the steward's seat) or any other shared
+  tree.
 - Read all comments before touching code, including any panel
   report. Group them by area before fixing them.
 - Don't address feedback on review-only mirrors (e.g.

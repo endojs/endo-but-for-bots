@@ -89,10 +89,30 @@ For each PR at the head of the queue:
    (`MERGED` direct, `OPEN` + `autoMergeRequest` for `--auto`).
    Reject (`mergeable=BLOCKED`, missing reviews, branch
    protection): stall `merge blocked: <gh error>`.
-6. **Update the dispatch state.** Remove the PR from the queue;
+6. **Clean up the PR's worktree and branches.** Per
+   [`../skills/worktree-per-pr.md`](../skills/worktree-per-pr.md),
+   the builder/fixer have been working in
+   `/home/kris/endo-wt/pr-<N>` and on branch `<head-ref-name>`.
+   After the merge lands, both are dead weight. Cleanup is the
+   conductor's responsibility:
+   ```sh
+   cd /home/kris/garden  # leave any conductor worktree first
+   N=<PR-number>
+   BRANCH=<head-ref-name>
+   WT=/home/kris/endo-wt/pr-${N}
+   [ -d "$WT" ] && git worktree remove "$WT"
+   git branch -D "$BRANCH" 2>/dev/null || true
+   gh api -X DELETE \
+     "repos/endojs/endo-but-for-bots/git/refs/heads/$BRANCH" 2>/dev/null \
+     || true
+   ```
+   `gh pr merge --merge --delete-branch` deletes the remote
+   branch automatically; the local worktree and local branch
+   need explicit cleanup either way.
+7. **Update the dispatch state.** Remove the PR from the queue;
    commit + push as `process(conductor): merge queue update <ts>`
    so the next steward cycle sees the drain.
-7. **Pick the next PR**, return to step 1.
+8. **Pick the next PR**, return to step 1.
 
 End the engagement when the queue is empty, every remaining
 entry has stalled this run, or the harness is about to time out.
@@ -108,6 +128,7 @@ re-dispatches.
 - [`../skills/ci-status-summary.md`](../skills/ci-status-summary.md): step-4 status check.
 - [`../skills/ssh-fallback-workflow-scope.md`](../skills/ssh-fallback-workflow-scope.md): push fallback for branches touching workflows.
 - [`../skills/process-documents.md`](../skills/process-documents.md): the dispatch-state edit ships in isolation.
+- [`../skills/worktree-per-pr.md`](../skills/worktree-per-pr.md): step-6 cleanup of the merged PR's worktree and branches.
 - [`../skills/em-dash-style-rule.md`](../skills/em-dash-style-rule.md).
 
 ## Posture

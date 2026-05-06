@@ -64,6 +64,16 @@ issue or design document, and shepherding it through to a green PR.
   Confirm the actual location, make the focused change there, and
   surface the discrepancy in the PR body so the maintainer can
   redirect.
+- **Always work inside a dedicated worktree at
+  `/home/kris/endo-wt/pr-<N>`** per
+  [`../skills/worktree-per-pr.md`](../skills/worktree-per-pr.md).
+  Before the PR opens you don't know `<N>` yet, so create under
+  `/home/kris/endo-wt/<branch-slug>` and move with `git worktree
+  move` to `/home/kris/endo-wt/pr-<N>` immediately after `gh pr
+  create` returns. Do not work in `/home/kris/garden` (that's
+  the steward's seat) or in any other shared tree. The fixer
+  inherits this worktree on the next round; the conductor
+  removes it after merge.
 - Browser-bundled code (Vite, Rollup, esbuild) cannot rely on
   `import 'ses'` to install `globalThis.harden`.
   `lockdown()` is what installs the global, and many browser entry
