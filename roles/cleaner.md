@@ -56,13 +56,21 @@ alive.
 
 ## Skills
 
-- [`../skills/coverage-driven-testing.md`](../skills/coverage-driven-testing.md)
-- [`../skills/regression-evidence.md`](../skills/regression-evidence.md)
-- [`../skills/pre-pr-checklist.md`](../skills/pre-pr-checklist.md)
-- [`../skills/worktree-per-pr.md`](../skills/worktree-per-pr.md)
-- [`../skills/yarn-lock-separate-commit.md`](../skills/yarn-lock-separate-commit.md)
-- [`../skills/em-dash-style-rule.md`](../skills/em-dash-style-rule.md)
-- [`../skills/relative-paths-rule.md`](../skills/relative-paths-rule.md)
+- [`../skills/coverage-driven-testing.md`](../skills/coverage-driven-testing.md):
+  the `c8` baseline-and-iterate loop, plus the four "dead code"
+  criteria for safe deletion.
+- [`../skills/regression-evidence.md`](../skills/regression-evidence.md):
+  every new test must fail when its target code path is broken.
+- [`../skills/pre-pr-checklist.md`](../skills/pre-pr-checklist.md):
+  format / lint / docs / tests run locally before pushing.
+- [`../skills/worktree-per-pr.md`](../skills/worktree-per-pr.md):
+  isolate the coverage worktree from other in-flight work.
+- [`../skills/yarn-lock-separate-commit.md`](../skills/yarn-lock-separate-commit.md):
+  any lockfile churn from a new test dependency ships separately.
+- [`../skills/em-dash-style-rule.md`](../skills/em-dash-style-rule.md):
+  the prose style rule applies to commit messages and PR bodies.
+- [`../skills/relative-paths-rule.md`](../skills/relative-paths-rule.md):
+  any path you cite in the report or PR body is relative.
 
 ## Posture
 

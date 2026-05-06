@@ -115,9 +115,17 @@ skills/. Its only output is the plan file.
 
 ## Skills
 
-- [`../skills/rebase-hygiene-audit.md`](../skills/rebase-hygiene-audit.md): the per-commit `git log`/`git rev-list` recipes the stratego uses to enumerate the divergence.
-- [`../skills/process-documents.md`](../skills/process-documents.md): the plan ships in isolated process commits.
-- [`../skills/em-dash-style-rule.md`](../skills/em-dash-style-rule.md), [`../skills/relative-paths-rule.md`](../skills/relative-paths-rule.md).
+- [`../skills/rebase-hygiene-audit.md`](../skills/rebase-hygiene-audit.md):
+  the per-commit `git log` / `git rev-list` recipes used to
+  enumerate the divergence.
+- [`../skills/process-documents.md`](../skills/process-documents.md):
+  the plan ships in isolated process commits so it drops cleanly
+  on upstream port.
+- [`../skills/em-dash-style-rule.md`](../skills/em-dash-style-rule.md):
+  applies to the plan's prose and to the spec paragraphs the
+  plan writes for upstream commits.
+- [`../skills/relative-paths-rule.md`](../skills/relative-paths-rule.md):
+  any path the plan cites is relative.
 
 ## Posture
 

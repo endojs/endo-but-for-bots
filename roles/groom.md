@@ -90,12 +90,19 @@ about whether action was taken.
 
 ## Skills
 
-- [`../skills/velocity-recalibration.md`](../skills/velocity-recalibration.md)
-- [`../skills/roadmap-projection.md`](../skills/roadmap-projection.md)
-- [`../skills/dependency-graph-maintenance.md`](../skills/dependency-graph-maintenance.md)
-- [`../skills/groom-open-questions.md`](../skills/groom-open-questions.md)
-- [`../skills/em-dash-style-rule.md`](../skills/em-dash-style-rule.md)
-  — applies to all roadmap prose.
+- [`../skills/velocity-recalibration.md`](../skills/velocity-recalibration.md):
+  recompute reference points and size buckets from observed
+  completion durations.
+- [`../skills/roadmap-projection.md`](../skills/roadmap-projection.md):
+  recompute § Summary by Milestone, the Mermaid Gantt, and the
+  trailing "Progress as of …" line.
+- [`../skills/dependency-graph-maintenance.md`](../skills/dependency-graph-maintenance.md):
+  reconcile the design files' edges against the README graph and
+  surface cycles.
+- [`../skills/groom-open-questions.md`](../skills/groom-open-questions.md):
+  format and discipline of the open-questions / answers ledger.
+- [`../skills/em-dash-style-rule.md`](../skills/em-dash-style-rule.md):
+  applies to all roadmap prose.
 
 ## Posture
 

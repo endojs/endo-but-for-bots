@@ -43,11 +43,16 @@ the invariant it attacks.
 
 ## Skills
 
-- [`../skills/adversarial-tests.md`](../skills/adversarial-tests.md)
-- [`../skills/regression-evidence.md`](../skills/regression-evidence.md)
-- [`../skills/pre-pr-checklist.md`](../skills/pre-pr-checklist.md)
-- [`../skills/em-dash-style-rule.md`](../skills/em-dash-style-rule.md)
-- [`../skills/relative-paths-rule.md`](../skills/relative-paths-rule.md)
+- [`../skills/adversarial-tests.md`](../skills/adversarial-tests.md):
+  the canonical brainstorming list of invariant attacks.
+- [`../skills/regression-evidence.md`](../skills/regression-evidence.md):
+  prove each new test is load-bearing before shipping it.
+- [`../skills/pre-pr-checklist.md`](../skills/pre-pr-checklist.md):
+  format / lint / docs / tests before pushing the test PR.
+- [`../skills/em-dash-style-rule.md`](../skills/em-dash-style-rule.md):
+  prose style in commit messages, test names, and PR body.
+- [`../skills/relative-paths-rule.md`](../skills/relative-paths-rule.md):
+  any path you cite is relative.
 
 ## Posture
 
