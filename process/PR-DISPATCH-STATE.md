@@ -144,9 +144,16 @@ The steward does not post the comments; that is a maintainer action.
 
 | Order | PR | Base | Head | Status |
 | --- | --- | --- | --- | --- |
-| 1 | 84 | master | `d9a3c93b1c` | in-progress (conductor) |
-| 2 | 88 | llm | `eec30fff98` | queued |
-| 3 | 91 | llm | `2a97b2d6c4` | queued |
+| 1 | 84 | master | `ef6ea98885` | in-progress (conductor, CI in flight post-tidy) |
+| 2 | 88 | llm | `1d1a0bc78f` | in-progress (conductor, CI in flight post-tidy) |
+
+Merged this run (2026-05-06 conductor):
+
+- #91 → `e3c1ef10b4` (merge commit to llm).
+  Single-commit PR (`design(chat): Playwright build-and-load smoke
+  in browser CI`); 0 behind, 26/26 SUCCESS at survey, MERGEABLE.
+  Direct `gh pr merge --merge` succeeded; state=MERGED.
+  No tidy required.
 
 Merged this run (2026-05-05 conductor, second cycle):
 
