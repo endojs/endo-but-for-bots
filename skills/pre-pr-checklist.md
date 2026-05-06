@@ -14,7 +14,7 @@ Run before every push to a PR branch:
   Catches missing members on exported interfaces, type drift, broken
   `@import` specifiers. This is the load-bearing check for type-only
   changes; CI will surface them but local catches them faster.
-- `cd packages/<name> && npx ava` — at least the tests nearest the
+- `cd packages/<name> && npx ava`: at least the tests nearest the
   change. For broader changes, run the full package suite.
 
 ## PR body template

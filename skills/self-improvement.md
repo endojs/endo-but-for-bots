@@ -81,7 +81,7 @@ warranted, which is meaningfully different from forgetting the step.
 - **Premature rules.** A new "law" added on one engagement's
   evidence is usually wrong. Wait for the pattern.
 - **Skill bloat.** Resist the urge to append every small
-  observation. After a long arc, refactor — split overgrown
+  observation. After a long arc, refactor: split overgrown
   skills, prune stale examples, consolidate duplicate rules.
 - **Voice drift.** Different agents write differently. Match the
   surrounding text's tone; a role file written terse-imperative

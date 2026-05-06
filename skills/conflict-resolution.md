@@ -18,7 +18,7 @@ might as well read.
 
 A real merge conflict is a signal that two intentions touched the
 same lines. The resolution that matters is usually a *third*
-state — both intentions, woven together — not either input
+state (both intentions, woven together), not either input
 verbatim.
 
 ## Procedure
@@ -30,16 +30,16 @@ verbatim.
 2. **For each conflicted file, look at three things, in order:**
    - The conflict markers in the working tree (`<<<<<<<`,
      `=======`, `>>>>>>>`).
-   - `git log -1 --stat HEAD -- <file>` — what the rebase target
+   - `git log -1 --stat HEAD -- <file>`: what the rebase target
      was doing here.
    - `git log -1 --stat MERGE_HEAD -- <file>` (during a merge) or
-     `git log -1 --stat REBASE_HEAD -- <file>` (during a rebase) —
+     `git log -1 --stat REBASE_HEAD -- <file>` (during a rebase):
      what your branch was doing here.
    For longer histories on either side, expand the `-1` to the full
    range that touches the file.
 3. **Open both authors' commits** for the file: `git show
-   <sha>:<file>` for context. Often the conflict is mechanical —
-   the same constant renamed in two places — but the markers
+   <sha>:<file>` for context. Often the conflict is mechanical
+   (the same constant renamed in two places) but the markers
    make it look semantic.
 4. **Write the resolution** as if you were authoring the file
    from scratch, knowing both intents. If the two changes are
@@ -88,8 +88,8 @@ shortcut is to *pretend* this applies elsewhere.
 - **Conflict in renames.** When git detects a rename, the
   conflict can appear under the new name with no obvious
   signal. `git status` shows `UA` or `AU` markers; treat these
-  with extra care — both sides may have edited the file under
-  different paths.
+  with extra care, since both sides may have edited the file
+  under different paths.
 - **`MERGE_HEAD` and `REBASE_HEAD` semantics differ.** During a
   rebase, `HEAD` is the **target** branch's commit (the one being
   replayed onto), and `REBASE_HEAD` is your branch's commit being
