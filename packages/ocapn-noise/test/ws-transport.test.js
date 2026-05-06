@@ -175,7 +175,7 @@ test('ws transport: connect to a closed port rejects without hanging', async t =
 
   const transport = makeWebSocketTransport({ WebSocket });
   // The `ws` library rejects with a raw ErrorEvent (not an Error), so
-  // pass `any: true` — we only care that the connect path settles
+  // pass `any: true`; we only care that the connect path settles
   // rather than hanging.
   await t.throwsAsync(
     () => transport.connect({ url: `ws://127.0.0.1:${port}` }),

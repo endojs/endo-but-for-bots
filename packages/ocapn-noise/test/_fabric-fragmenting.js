@@ -6,7 +6,7 @@
  * atomic `reader.next()` value.  This exposes any framing assumption
  * baked into the network layer (`readFrame` expects one
  * `reader.next()` to yield one whole message) by forcing it to flow
- * through `@endo/netstring`'s reassembly path — exactly what the TCP
+ * through `@endo/netstring`'s reassembly path: exactly what the TCP
  * transport relies on at the kernel boundary.
  *
  * @typedef {import('../src/types.js').ByteStream} ByteStream

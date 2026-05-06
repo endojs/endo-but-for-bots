@@ -69,7 +69,7 @@ test('two noise-backed OCapN peers exchange method calls via bootstrap fetch', a
   t.teardown(() => peerB.client.shutdown());
 
   // B opens a session to A, fetches A's greeter via SturdyRef, and calls
-  // it — a round trip of two CapTP deliveries over Noise.
+  // it: a round trip of two CapTP deliveries over Noise.
   const sturdyRef = peerB.client.makeSturdyRef(peerA.location, 'Greeter');
   const greeter = await peerB.client.enlivenSturdyRef(sturdyRef);
   const reply = await E(greeter).hello('Alice');

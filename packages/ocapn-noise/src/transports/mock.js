@@ -11,7 +11,7 @@ import { makeQueue } from '@endo/stream';
 
 /**
  * Buffered one-direction pipe modeled after a transport that acks
- * every write the moment the bytes leave the application — exactly
+ * every write the moment the bytes leave the application: exactly
  * what an unreliable in-process pseudo-transport does. The writer's
  * `next()` resolves as soon as the value is enqueued, regardless of
  * whether the reader has caught up. (`@endo/stream`'s `makePipe`
@@ -77,7 +77,7 @@ const makeBufferedPipe = () => {
  * stream to whatever handler `transportB.listen(...)` registered under
  * that designator, and vice versa.
  *
- * Each connection is two `@endo/stream` pipes — one per direction.
+ * Each connection is two `@endo/stream` pipes, one per direction.
  * The `to` hint names which listener on the opposing side to route
  * to; the default is `'default'`.
  */

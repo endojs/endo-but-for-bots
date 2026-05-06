@@ -322,7 +322,7 @@ const makeMakeHandlerForRemoteReference = ({
 
     /**
      * Send a fire-and-forget invocation. Folded into `op:deliver`
-     * with `answerPosition: false` and `resolveMeDesc: false` —
+     * with `answerPosition: false` and `resolveMeDesc: false`;
      * Spritely Goblins (and the OCapN draft spec) no longer accept
      * a separate `op:deliver-only` opcode.
      *
@@ -1070,7 +1070,7 @@ export const makeOcapn = (
     }
 
     if (type === 'o' || type === 'p') {
-      // Remote object or promise — tell peer to decrement export
+      // Remote object or promise: tell peer to decrement export
       // refcount. Wrap in a one-element list because OCapN batches
       // these into `op:gc-exports` (plural, list payload) per the
       // ocapn-test-suite wire format.
@@ -1080,7 +1080,7 @@ export const makeOcapn = (
         wireDeltas: [BigInt(refcount)],
       });
     } else if (type === 'a') {
-      // Remote answer — same plural-list shape as gc-exports.
+      // Remote answer: same plural-list shape as gc-exports.
       send({
         type: 'op:gc-answers',
         answerPositions: [position],

@@ -228,7 +228,7 @@ test('provideSession rejects when an active session under a different local key 
 
 /**
  * A transport whose `connect` returns a stream that never delivers any
- * bytes — a slow-loris peer used to exercise the handshake-timeout and
+ * bytes (a slow-loris peer) used to exercise the handshake-timeout and
  * shutdown paths.
  *
  * @returns {import('../src/types.js').OcapnNoiseTransport}
@@ -428,7 +428,7 @@ test('SYN addressed to an unknown local key is silently dropped', async t => {
   // Remove A's key before B dials. B's SYN will be addressed to a
   // designator that A no longer recognizes; A must drop the stream
   // (not spin, not throw on A's side). B's initiate sees a closed
-  // stream and its provideSession rejects — that's the observable
+  // stream and its provideSession rejects; that's the observable
   // consequence.
   netA.removeSigningKeys(keyA);
   t.deepEqual(netA.listSigningKeys(), [], 'A has no keys left');
@@ -476,7 +476,7 @@ test('addSigningKeys rejects mismatched (privateKey, publicKey) pair', t => {
     () => net.addSigningKeys({ privateKey, publicKey: tamperedPublicKey }),
     { message: /publicKey does not match privateKey/ },
   );
-  // Sanity: omitting publicKey is fine — it's derived from privateKey.
+  // Sanity: omitting publicKey is fine; it's derived from privateKey.
   const keyId = net.addSigningKeys({
     privateKey,
     publicKey: /** @type {any} */ (undefined),
@@ -539,7 +539,7 @@ test('active session is forgotten after close so a fresh dial starts new', async
   const cached = await netA.provideSession(locB);
   t.is(cached, first, 'cache hits return the same session');
 
-  // Close — the network should forget the entry; otherwise a third
+  // Close: the network should forget the entry; otherwise a third
   // call would resurrect a dead session and the read below would
   // observe {done:true} immediately.
   first.close();

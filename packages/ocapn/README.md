@@ -19,7 +19,7 @@ This package provides:
   layer of OCapN.
   See also the related [`@endo/captp`](../captp/README.md) package for a
   minimal CapTP implementation.
-- **Wire codecs**: Two interchangeable encodings for OCapN messages —
+- **Wire codecs**: Two interchangeable encodings for OCapN messages,
   [Syrup][] and CBOR (per RFC 8949).
   The OCapN standards group has not yet settled on a single encoding;
   a client selects one at construction time and both peers must agree
@@ -73,15 +73,15 @@ OCapN messages are carried on the wire in a canonical binary encoding.
 This package ships two complete, interchangeable codecs behind a common
 `OcapnCodec` interface:
 
-- [Syrup][] (`@endo/ocapn/syrup`) — text-delimited canonical format, OCapN's
+- [Syrup][] (`@endo/ocapn/syrup`): text-delimited canonical format, OCapN's
   original wire form. See the [Syrup codec README](./src/syrup/README.md) for
   the supported type table and implementation notes.
-- CBOR (`@endo/ocapn/cbor`) — RFC 8949 canonical CBOR with OCapN-specific
+- CBOR (`@endo/ocapn/cbor`): RFC 8949 canonical CBOR with OCapN-specific
   tags. See the [CBOR codec README](./src/cbor/README.md) and
   [`docs/cbor-encoding.md`](./docs/cbor-encoding.md).
 
 The codec you pass to `makeOcapn` determines the wire format for every byte
-that crosses the session — handshake frames, operation messages, and the
+that crosses the session: handshake frames, operation messages, and the
 canonical bytes signed by handoff/location signatures. Two peers that chose
 different codecs cannot interoperate; codec choice is not negotiated.
 See [`docs/codec-usage.md`](./docs/codec-usage.md) for the full injection

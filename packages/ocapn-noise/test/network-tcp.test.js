@@ -101,7 +101,7 @@ test('tcp transport with framing:none delivers raw socket bytes', async t => {
     sock.once('connect', resolve);
     sock.once('error', reject);
   });
-  sock.write(Uint8Array.of(0x48, 0x49)); // raw 'HI' — not a netstring
+  sock.write(Uint8Array.of(0x48, 0x49)); // raw 'HI', not a netstring
 
   const serverStream = await serverStreamPromise;
   const first = await serverStream.reader.next(undefined);
@@ -115,7 +115,7 @@ test('tcp transport with framing:none delivers raw socket bytes', async t => {
 
 // `makeTcpTransport` validates options synchronously, so this case
 // doesn't actually need the listen permission gate that wraps the
-// rest of this file — but keeping it under the same `test` keeps the
+// rest of this file, but keeping it under the same `test` keeps the
 // file uniform.
 test('tcp transport rejects an invalid framing option', t => {
   t.throws(

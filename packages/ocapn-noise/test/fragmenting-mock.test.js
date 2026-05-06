@@ -4,7 +4,7 @@
  * Round-trip + crossed-hellos coverage on a fragmenting in-process
  * fabric.  Each `writer.next(value)` is split into 1..maxChunk-byte
  * sub-writes before delivery, with the netstring layer reassembling
- * frames — exactly the path that flows through TCP under real load.
+ * frames: exactly the path that flows through TCP under real load.
  *
  * The fabric is seeded so any failure reproduces; the seed is asserted
  * back so the failure message tells you which seed to retry.

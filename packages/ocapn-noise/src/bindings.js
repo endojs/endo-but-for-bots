@@ -164,7 +164,7 @@ const decodeSupportedEncodingsFrom = bytes => {
  * wireguard-tools convention) so a single Ed25519 keypair backs both
  * the OCapN identity and the Noise handshake.
  *
- * The handshake completes after Noise message 2 — there is no message
+ * The handshake completes after Noise message 2; there is no message
  * 3 (ACK).
  *
  * @param {OcapnSessionCryptographyOptions} options - Configuration options

@@ -12,7 +12,7 @@ import { makeQueue } from '@endo/stream';
 /**
  * Ack-less byte pipe: `writer.next(value)` queues `value` for the
  * reader without waiting for a read. Needed for any test where both
- * peers write before either reads — `@endo/stream`'s `makePipe` uses
+ * peers write before either reads. `@endo/stream`'s `makePipe` uses
  * ack-based back-pressure and would deadlock.
  *
  * @template T

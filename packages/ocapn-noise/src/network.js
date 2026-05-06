@@ -90,7 +90,7 @@ const asUint8 = buf =>
 
 /**
  * Pull one whole message from a message-framed `Reader<Uint8Array>`
- * (the transport applies its own framing — netstring for TCP, WebSocket
+ * (the transport applies its own framing: netstring for TCP, WebSocket
  * frames for WS, atomic puts for mock). Any message arriving on a byte
  * stream with no framing is a bug in the transport, not something we
  * paper over here.
@@ -245,7 +245,7 @@ export const makeOcapnNoiseNetwork = ({
 
   /**
    * Queue of graduated sessions that nobody asked for via
-   * `provideSession` — i.e. peer-initiated handshakes. Drained by any
+   * `provideSession` (i.e. peer-initiated handshakes). Drained by any
    * consumer iterating `inboundSessions`.
    *
    * @type {import('@endo/stream').AsyncQueue<IteratorResult<OcapnNoiseSession, undefined>>}
@@ -392,7 +392,7 @@ export const makeOcapnNoiseNetwork = ({
     if (queue.length > 0) {
       for (const { resolve } of queue) resolve(winner.session);
     } else if (!inboundClosed) {
-      // Nobody is waiting on provideSession for this peer — this is a
+      // Nobody is waiting on provideSession for this peer; this is a
       // peer-initiated session. Hand it off to the inboundSessions
       // iterable for the embedding client to wire up. If the queue
       // would exceed `MAX_PENDING_INBOUND_SESSIONS`, drop the oldest
@@ -425,7 +425,13 @@ export const makeOcapnNoiseNetwork = ({
   };
 
   /**
-  /** @param {KeyIdHex} peerId */
+   * Resolve when an active session for `peerId` is available, or
+   * reject when the in-flight handshakes all fail. Used by both
+   * `provideSession` (after kicking off `runInitiator`) and
+   * `waitForInboundSession`.
+   *
+   * @param {KeyIdHex} peerId
+   */
   const awaitActiveSession = peerId =>
     new Promise((resolve, reject) => {
       const existing = active.get(peerId);
@@ -573,9 +579,7 @@ export const makeOcapnNoiseNetwork = ({
     // oracle to extract.
     for (let i = 0; i < peerBytes.length; i += 1) {
       if (peerBytes[i] !== peerEd25519[i]) {
-        throw makeError(
-          X`ocapn-noise: peer key mismatch with Noise identity`,
-        );
+        throw makeError(X`ocapn-noise: peer key mismatch with Noise identity`);
       }
     }
     // Bind the peer's advertised location signature to our verified
@@ -1013,16 +1017,14 @@ export const makeOcapnNoiseNetwork = ({
       throw makeError(X`ocapn-noise: privateKey must be 32 bytes`);
     }
     if (publicKey && publicKey.length !== 32) {
-      throw makeError(
-        X`ocapn-noise: publicKey must be 32 bytes when supplied`,
-      );
+      throw makeError(X`ocapn-noise: publicKey must be 32 bytes when supplied`);
     }
     // Always derive the verifying key from the private key so the
     // `keyId` and the bytes handed to the Noise WASM agree. If the
     // caller supplied a public key, assert it matches what we derive
-    // — silent disagreement here would let a peer be addressable
+    // (silent disagreement here would let a peer be addressable
     // under one keyId but unable to complete a handshake as that
-    // identity, which is a debugging cliff to fall off.
+    // identity, which is a debugging cliff to fall off).
     const keyPair = cryptography.makeOcapnKeyPairFromPrivateKey(privateKey);
     const derivedPublicKey = new Uint8Array(
       /** @type {ArrayBuffer} */ (keyPair.publicKey.bytes.slice()),
@@ -1156,7 +1158,7 @@ export const makeOcapnNoiseNetwork = ({
     }
 
     // Register our handshake, kick it off in the background, and
-    // wait for settlement — either our own handshake graduates, or a
+    // wait for settlement: either our own handshake graduates, or a
     // concurrent inbound handshake (crossed hello) wins.
     bumpInProgress(peerId);
     runInitiator(rk, remote, peerEd25519)
@@ -1243,7 +1245,7 @@ export const makeOcapnNoiseNetwork = ({
           // Stop accepting further inbound sessions and close any
           // queued ones the consumer never pulled. This is the only
           // signal we have that the embedder no longer wants the
-          // stream — without it, sessions accumulated in
+          // stream; without it, sessions accumulated in
           // `pendingInbound` would pin sockets indefinitely.
           inboundClosed = true;
           while (pendingInbound.length > 0) {

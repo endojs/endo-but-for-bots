@@ -8,7 +8,7 @@ import { makeNetstringReader, makeNetstringWriter } from '@endo/netstring';
  * A minimal ack-less byte pipe for test-driving `@endo/netstring` over
  * a raw byte stream with deterministic chunk boundaries. `makeWriter`
  * yields a `Writer<Uint8Array>` whose `next(chunk)` hands `chunk` to
- * the reader verbatim — no splitting or coalescing.
+ * the reader verbatim, no splitting or coalescing.
  */
 const makeBytePipe = () => {
   /** @type {import('@endo/stream').AsyncQueue<IteratorResult<Uint8Array, undefined>>} */
@@ -77,7 +77,7 @@ const netstringBytes = payload => {
 
 test('netstring reader reassembles a message split across many chunks', async t => {
   // Build a 5-byte netstring and deliver it one byte at a time over
-  // the raw pipe — the length prefix, the data, and the terminating
+  // the raw pipe: the length prefix, the data, and the terminating
   // comma all land separately.
   const { writer: raw, reader: rawReader } = makeBytePipe();
   const framed = makeNetstringReader(rawReader);

@@ -38,7 +38,7 @@ test('crossed hellos: both peers end on the same session with a stable session i
   };
 
   // Fire both provideSession calls in the same microtask so the two
-  // handshakes register `inProgress` before either completes — the
+  // handshakes register `inProgress` before either completes: the
   // canonical crossed-hellos race.
   const [sessionA, sessionB] = await Promise.all([
     netA.provideSession(locB),
@@ -55,7 +55,7 @@ test('crossed hellos: both peers end on the same session with a stable session i
   t.is(sessionA.remoteLocation.designator, keyB);
   t.is(sessionB.remoteLocation.designator, keyA);
 
-  // Both peers must agree on who won — isInitiator on one side must
+  // Both peers must agree on who won: isInitiator on one side must
   // be the complement of isInitiator on the other.
   t.not(
     sessionA.isInitiator,

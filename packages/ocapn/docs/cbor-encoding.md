@@ -545,7 +545,7 @@ the delivery as a method call, the first argument is conventionally a selector
 However, targets may freely implement either **object-like** behavior (where
 the first argument is a method selector) or **function-like** behavior (where
 all arguments are passed directly). The wire format does not distinguish these
-cases—it is up to the target's implementation.
+cases; it is up to the target's implementation.
 
 > **Endo implementation note**: The Endo OCapN implementation with Exo provides
 > an affordance for implementing targets in the JavaScript idiom, where each
@@ -763,7 +763,7 @@ Where `position` is a non-negative integer.
 The `signed-object` is wrapped in Tag 24 (encoded CBOR data item) as a byte string.
 This preserves the exact bytes over which the signature was computed, allowing
 verification without reserialization. This design makes the protocol resilient
-to any defects in canonicalization—the verifier extracts and verifies against
+to any defects in canonicalization; the verifier extracts and verifies against
 the original bytes rather than re-encoding the parsed object.
 
 ### handoff-give

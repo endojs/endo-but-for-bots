@@ -34,7 +34,7 @@ const MAX_FRAME_LENGTH = 65_551;
  *   bytes. This is what OCapN-Noise needs once its own handshake is
  *   complete and session messages start flowing.
  *
- * - `'none'`: raw bytes in, raw bytes out — each `reader.next()` value
+ * - `'none'`: raw bytes in, raw bytes out. Each `reader.next()` value
  *   is whatever the kernel happened to deliver (possibly a fragment,
  *   possibly multiple messages concatenated). This mode exists to let
  *   us interoperate with peers that do their own framing (e.g. the

@@ -208,12 +208,12 @@ export const makeOcapn = async ({
 }) => {
   if (!codec) {
     throw Error(
-      'makeOcapn: `codec` is required — import one of `cborCodec` from `@endo/ocapn/cbor` or `syrupCodec` from `@endo/ocapn/syrup`',
+      'makeOcapn: `codec` is required (import one of `cborCodec` from `@endo/ocapn/cbor` or `syrupCodec` from `@endo/ocapn/syrup`)',
     );
   }
   if (!networkArg) {
     throw Error(
-      'makeOcapn: `network` is required — pass an `OcapnNoiseNetwork` (from `@endo/ocapn-noise`) or a legacy `NetLayer`',
+      'makeOcapn: `network` is required (pass an `OcapnNoiseNetwork` from `@endo/ocapn-noise`, or a legacy `NetLayer`)',
     );
   }
   const cryptography = makeCryptography(codec);
@@ -653,7 +653,7 @@ export const makeOcapn = async ({
   const networkCodec = /** @type {OcapnNetwork} */ (network).codec;
   if (networkCodec && networkCodec !== codec) {
     throw Error(
-      'makeOcapn: `network.codec` does not match `codec` — both peers must use the same wire codec',
+      'makeOcapn: `network.codec` does not match `codec`; both peers must use the same wire codec',
     );
   }
 
@@ -675,8 +675,8 @@ export const makeOcapn = async ({
           // the noise network's active session for this peer. The
           // network may then ALSO publish the same session here.
           // Discard the duplicate idempotently rather than building
-          // an InternalSession we'd immediately have to abort —
-          // aborting would tear down the underlying networkSession
+          // an InternalSession we'd immediately have to abort.
+          // Aborting would tear down the underlying networkSession
           // that the active path now owns.
           if (!sessionManager.getActiveSession(locationId)) {
             const internalSession = makeInternalSessionFromNetwork(

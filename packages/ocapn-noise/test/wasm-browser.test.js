@@ -7,7 +7,7 @@
  *
  * The loader's full behavior (top-level await + `fetch(import.meta.url-relative
  * URL)` + `WebAssembly.compileStreaming`) needs a real HTTP server to
- * exercise end-to-end — that lives in `browser-test/` under
+ * exercise end-to-end; that lives in `browser-test/` under
  * Playwright.  This test instead exercises the same primitive
  * sequence by hand against the committed wasm bytes:
  *

@@ -58,7 +58,7 @@ export interface OcapnNoiseTransport {
    */
   connect(hints: Record<string, string>): Promise<ByteStream>;
   /**
-   * Start listening for inbound streams. Optional — a transport that
+   * Start listening for inbound streams. Optional; a transport that
    * supports only outgoing connections omits `listen`.
    */
   listen?(handler: (stream: ByteStream) => void): Promise<TransportListener>;
@@ -83,7 +83,7 @@ export interface OcapnNoiseSession {
     location: OcapnLocation;
     locationSignature: OcapnSignature;
     /**
-     * Our Ed25519 keypair for this session — the same keypair the Noise
+     * Our Ed25519 keypair for this session: the same keypair the Noise
      * handshake used and that handoff signing will use.
      */
     keyPair: import('@endo/ocapn/cryptography').OcapnKeyPair;

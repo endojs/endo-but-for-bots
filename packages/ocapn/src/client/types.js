@@ -242,7 +242,7 @@
  * @property {(location: OcapnLocation) => Promise<Session>} provideSession
  *   Open (or reuse) a CapTP session to the peer at `location`.
  * @property {(location: OcapnLocation, secret: string | Uint8Array) => SturdyRef} makeSturdyRef
- *   Mint a SturdyRef — an addressable, passable `(location, secret)`
+ *   Mint a SturdyRef: an addressable, passable `(location, secret)`
  *   pair. The secret may be a printable-ASCII string (the friendly
  *   form for locators keyed by name) or raw bytes for arbitrary-byte
  *   sturdyrefs (e.g. the 24-byte randoms Spritely Goblins mints).

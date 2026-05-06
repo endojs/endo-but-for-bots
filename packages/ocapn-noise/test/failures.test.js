@@ -246,7 +246,7 @@ test('initiatorReadSynack on uninitialised state surfaces an error', async t => 
     wasmModule,
     getRandomValues,
   }).asInitiator();
-  // No initiatorWriteSyn — go straight to readSynack with garbage.
+  // No initiatorWriteSyn: go straight to readSynack with garbage.
   // We invoke it directly via a fresh closure: asInitiator returns
   // initiatorWriteSyn but no readSynack until SYN is written.  Build a
   // minimal closure stand-in by performing the SYN exchange against
@@ -268,7 +268,7 @@ test('initiatorReadSynack on uninitialised state surfaces an error', async t => 
   );
   // Truncated SYNACK: AEAD read fails.
   const shortSynack = new Uint8Array(SYNACK_LENGTH);
-  shortSynack.fill(0); // all zeros — not a valid Noise message
+  shortSynack.fill(0); // all zeros, not a valid Noise message
   t.throws(() => initiatorReadSynack(shortSynack), {
     message: /initiator cannot read responder's SYNACK/,
   });

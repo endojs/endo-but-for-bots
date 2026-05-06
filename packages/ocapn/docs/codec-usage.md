@@ -1,6 +1,6 @@
 # OCapN Codec Usage
 
-This package ships two wire codecs — **Syrup** and **CBOR** — behind a common
+This package ships two wire codecs (**Syrup** and **CBOR**) behind a common
 `OcapnCodec` interface. An application picks one at construction time and
 passes it to `makeOcapn`. The codec determines the wire format for every
 byte that crosses the session, including the canonical bytes covered by
@@ -9,7 +9,7 @@ location and handoff signatures.
 > **No negotiation.** The OCapN standards group has not yet settled on a single
 > wire encoding. Both codecs ship so applications can experiment, but codec
 > choice is a static per-network decision; peers using different codecs cannot
-> interoperate and will not bridge. Do not expect a negotiation step — there
+> interoperate and will not bridge. Do not expect a negotiation step. There
 > is none.
 
 ## The `OcapnCodec` interface
@@ -46,7 +46,7 @@ import { cborCodec } from '@endo/ocapn/cbor';
 
 Each module also exports its lower-level primitives (`makeSyrupReader` /
 `makeSyrupWriter`, `makeCborReader` / `makeCborWriter`, the diagnostic
-helpers) for callers that need to drive the reader/writer directly — for
+helpers) for callers that need to drive the reader/writer directly: for
 example, test harnesses or tools that inspect raw bytes.
 
 ## Using `makeOcapn`
