@@ -176,9 +176,31 @@ const assertPublishFields = fields => {
 };
 
 /**
+ * Suffix appended to the target name to form the temporary staging name
+ * during publish. The staging directory holds the in-progress descriptor
+ * until every metadata field has been written successfully.
+ */
+const skillStagingSuffix = '.staging';
+
+/**
  * Publish (or replace) a skill descriptor in a registry. Creates a sub-
  * directory at `registry/name`, writes the metadata text values, and
  * populates the `requires` sub-directory if any requirements are given.
+ *
+ * Publishing is staged: descriptor contents are first written to a
+ * sibling directory named `<name>.staging`, and the prior descriptor at
+ * `<name>` is only removed once staging completes. If any `writeText` or
+ * `makeDirectory` call fails partway through, the staging directory is
+ * removed (best-effort) and the prior descriptor (if any) is left intact.
+ * This guarantees that callers observe one of two states: the prior
+ * descriptor (on failure) or the new descriptor (on success), never a
+ * half-populated descriptor under the published name.
+ *
+ * The final swap (`remove(<name>)` followed by `move([<staging>], [<name>])`)
+ * is two operations. A crash between them leaves the staging directory in
+ * place and the published name absent; a subsequent `publishSkill` call
+ * for the same name reclaims the staging name and proceeds. Callers that
+ * cannot tolerate this brief window should retry on observed absence.
  *
  * The `code` entry is intentionally not handled here; callers stage the
  * installable module separately and `storeIdentifier` it onto the
@@ -198,52 +220,79 @@ export const publishSkill = async (registry, name, fields) => {
     throw makeError(X`Skill name must be a non-empty string, got ${q(name)}`);
   }
 
-  // Replace any prior descriptor under the same name; publishing is
-  // idempotent from the caller's perspective.
+  const stagingName = `${name}${skillStagingSuffix}`;
+
+  // Reclaim a leftover staging directory from a prior failed publish.
+  // The staging name is unique to this target name, so reclaiming it is
+  // safe: any leftover content was an in-progress publish for this same
+  // skill that did not complete.
+  const stagingExisted = await E(registry).has(stagingName);
+  if (stagingExisted) {
+    await E(registry).remove(stagingName);
+  }
+
+  const stagingDescriptor = await E(registry).makeDirectory(stagingName);
+
+  try {
+    await Promise.all(
+      skillMetadataNames.map(async fieldName => {
+        const value = /** @type {Record<string, string | undefined>} */ (
+          fields
+        )[fieldName];
+        if (value === undefined) {
+          return;
+        }
+        if (typeof value !== 'string') {
+          throw makeError(
+            X`Skill field ${q(fieldName)} must be a string, got ${q(value)}`,
+          );
+        }
+        await E(stagingDescriptor).writeText(fieldName, value);
+      }),
+    );
+
+    const requires = fields.requires;
+    if (requires !== undefined) {
+      if (typeof requires !== 'object' || requires === null) {
+        throw makeError(
+          X`Skill field 'requires' must be a record, got ${q(requires)}`,
+        );
+      }
+      const requiresDir =
+        await E(stagingDescriptor).makeDirectory(skillRequiresName);
+      await Promise.all(
+        Object.entries(requires).map(async ([reqName, scope]) => {
+          if (typeof scope !== 'string') {
+            throw makeError(
+              X`Requirement scope ${q(reqName)} must be a string, got ${q(
+                scope,
+              )}`,
+            );
+          }
+          await E(requiresDir).writeText(reqName, scope);
+        }),
+      );
+    }
+  } catch (error) {
+    // Best-effort cleanup of the partial staging directory. Swallow any
+    // remove failure so the original error reaches the caller; the
+    // staging name will be reclaimed on the next publishSkill for this
+    // skill regardless.
+    try {
+      await E(registry).remove(stagingName);
+    } catch {
+      // Intentionally ignored: best-effort cleanup of staging directory;
+      // the original error must still propagate.
+    }
+    throw error;
+  }
+
+  // Staging succeeded; atomically replace any prior descriptor under
+  // `name` with the staged contents.
   const existing = await E(registry).has(name);
   if (existing) {
     await E(registry).remove(name);
   }
-
-  const descriptor = await E(registry).makeDirectory(name);
-
-  await Promise.all(
-    skillMetadataNames.map(async fieldName => {
-      const value = /** @type {Record<string, string | undefined>} */ (fields)[
-        fieldName
-      ];
-      if (value === undefined) {
-        return;
-      }
-      if (typeof value !== 'string') {
-        throw makeError(
-          X`Skill field ${q(fieldName)} must be a string, got ${q(value)}`,
-        );
-      }
-      await E(descriptor).writeText(fieldName, value);
-    }),
-  );
-
-  const requires = fields.requires;
-  if (requires !== undefined) {
-    if (typeof requires !== 'object' || requires === null) {
-      throw makeError(
-        X`Skill field 'requires' must be a record, got ${q(requires)}`,
-      );
-    }
-    const requiresDir = await E(descriptor).makeDirectory(skillRequiresName);
-    await Promise.all(
-      Object.entries(requires).map(async ([reqName, scope]) => {
-        if (typeof scope !== 'string') {
-          throw makeError(
-            X`Requirement scope ${q(reqName)} must be a string, got ${q(
-              scope,
-            )}`,
-          );
-        }
-        await E(requiresDir).writeText(reqName, scope);
-      }),
-    );
-  }
+  await E(registry).move([stagingName], [name]);
 };
 harden(publishSkill);

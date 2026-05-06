@@ -14,11 +14,22 @@ import {
 /**
  * Build an in-memory mock of the directory subset the skill-registry
  * helpers depend on (`has`, `list`, `lookup`, `readText`, `writeText`,
- * `makeDirectory`, `remove`). The mock keeps the test free of daemon
- * fork/teardown overhead while still exercising the same public API
- * surface that an EndoDirectory exposes over CapTP.
+ * `makeDirectory`, `remove`, `move`). The mock keeps the test free of
+ * daemon fork/teardown overhead while still exercising the same public
+ * API surface that an EndoDirectory exposes over CapTP.
+ *
+ * @param {object} [hooks]
+ * @param {(path: Array<string>, name: string, value: string) => void} [hooks.beforeWriteText]
+ *   Called before every `writeText` on this directory or any sub-directory
+ *   created via `makeDirectory`. Throwing from the hook simulates a
+ *   mid-publish write failure. The first argument is the chain of names
+ *   from the root mock (so the hook can target writes inside a particular
+ *   staging or requires sub-directory).
+ * @param {Array<string>} [parentPath] - Internal: chain of pet names from
+ *   the root of the mock to this directory. Used to give nested
+ *   `writeText` calls a stable identity for the `beforeWriteText` hook.
  */
-const makeMockDirectory = () => {
+const makeMockDirectory = (hooks = {}, parentPath = []) => {
   /** @type {Map<string, { kind: 'text', value: string } | { kind: 'dir', dir: any }>} */
   const entries = new Map();
 
@@ -43,15 +54,32 @@ const makeMockDirectory = () => {
       return entry.value;
     },
     writeText: async (name, value) => {
+      if (hooks.beforeWriteText) {
+        hooks.beforeWriteText(parentPath, name, value);
+      }
       entries.set(name, { kind: 'text', value });
     },
     makeDirectory: async name => {
-      const dir = makeMockDirectory();
+      const dir = makeMockDirectory(hooks, [...parentPath, name]);
       entries.set(name, { kind: 'dir', dir });
       return dir;
     },
     remove: async name => {
       entries.delete(name);
+    },
+    // EndoDirectory.move signature is (fromPath, toPath) where each path
+    // is a string array. The skill-registry only ever uses single-segment
+    // paths within the same hub (renaming the staging directory onto the
+    // target name), so the mock implements only that case.
+    move: async (fromPath, toPath) => {
+      const [from] = fromPath;
+      const [to] = toPath;
+      const entry = entries.get(from);
+      if (entry === undefined) {
+        throw new Error(`Unknown ${from}`);
+      }
+      entries.delete(from);
+      entries.set(to, entry);
     },
     // Expose for white-box assertions.
     inspect: () => entries,
@@ -264,4 +292,93 @@ test('readSkillDescriptor preserves empty-string scope hints', async t => {
   });
   const read = await readSkillDescriptor(registry, 'open-net');
   t.deepEqual(read.requires, { 'network-fetch': '' });
+});
+
+// publishSkill is staged: a writeText failure mid-publish must not
+// destroy the prior descriptor. The caller observes either the prior
+// descriptor (failure case) or the new descriptor (success), never a
+// half-populated descriptor under the published name.
+test('publishSkill preserves the prior descriptor when staging fails', async t => {
+  // The hook fires on every writeText. The flag below is flipped after
+  // the first (known-good) publish, so only the second (re-publish)
+  // sees the simulated failure.
+  let armFailure = false;
+  const hooks = {
+    beforeWriteText: (parentPath, name, _value) => {
+      if (
+        armFailure &&
+        parentPath[parentPath.length - 1] === 'gmail-bridge.staging' &&
+        name === 'version'
+      ) {
+        throw new Error('simulated mid-publish failure');
+      }
+    },
+  };
+  const registry = makeMockDirectory(hooks);
+
+  // First, publish a known-good descriptor.
+  await publishSkill(registry, 'gmail-bridge', {
+    description: 'first version',
+    version: '1.0.0',
+    author: 'first author',
+  });
+
+  // Confirm the descriptor reads back as expected before the failed
+  // re-publish attempt.
+  const before = await readSkillDescriptor(registry, 'gmail-bridge');
+  t.is(before.description, 'first version');
+  t.is(before.version, '1.0.0');
+  t.is(before.author, 'first author');
+
+  // Arm the failure for the second publish.
+  armFailure = true;
+
+  await t.throwsAsync(
+    publishSkill(registry, 'gmail-bridge', {
+      description: 'second version',
+      version: '2.0.0',
+      author: 'second author',
+    }),
+    { message: /simulated mid-publish failure/ },
+  );
+
+  // The published descriptor must still be the first version. The
+  // failed publish must not have overwritten or partly-overwritten it.
+  const after = await readSkillDescriptor(registry, 'gmail-bridge');
+  t.is(after.description, 'first version');
+  t.is(after.version, '1.0.0');
+  t.is(after.author, 'first author');
+
+  // The staging directory must have been cleaned up; only the published
+  // name should be visible to a subsequent listSkills.
+  const names = await listSkills(registry);
+  t.deepEqual(names, ['gmail-bridge']);
+});
+
+// Even after a failed publish leaves a staging directory behind (e.g.
+// the cleanup itself crashed), a subsequent successful publishSkill for
+// the same name reclaims the staging slot and proceeds. The replay
+// path is part of the contract.
+test('publishSkill reclaims a leftover staging directory on retry', async t => {
+  const registry = makeMockDirectory();
+
+  // Manually create a staging directory to simulate a leftover from a
+  // crashed prior publish.
+  await registry.makeDirectory('gmail-bridge.staging');
+  const stagingBefore = await registry.lookup('gmail-bridge.staging');
+  await stagingBefore.writeText('description', 'leftover from prior publish');
+
+  // A fresh publishSkill for the same name reclaims the staging slot
+  // and writes the new descriptor.
+  await publishSkill(registry, 'gmail-bridge', {
+    description: 'fresh publish',
+    version: '2.0.0',
+  });
+
+  const read = await readSkillDescriptor(registry, 'gmail-bridge');
+  t.is(read.description, 'fresh publish');
+  t.is(read.version, '2.0.0');
+
+  // No staging directory should remain after a successful publish.
+  t.false(await registry.has('gmail-bridge.staging'));
 });
