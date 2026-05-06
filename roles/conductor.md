@@ -66,6 +66,16 @@ For each PR at the head of the queue:
    Do not poll synchronously. The wait is GitHub's, not the
    conductor's (the role lost four consecutive dispatches to
    the synchronous wait before this contract changed).
+
+   **Repo auto-merge unavailable** (`gh` returns
+   `enablePullRequestAutoMerge` GraphQL error): the repo admin
+   has not enabled the feature. Use a `Monitor` poll loop with a
+   bounded timeout (CI typically completes in 15-25 min) to
+   reach green before direct `--merge`, or stall the PR with
+   `awaiting CI (auto-merge not enabled)` if other PRs in the
+   queue are ready to land first. Process other queue entries
+   in parallel; the monitor delivers a notification when CI
+   converges, at which point complete the merge.
 5. **Create the merge commit and push:**
    ```sh
    gh pr merge <N> -R endojs/endo-but-for-bots --merge
