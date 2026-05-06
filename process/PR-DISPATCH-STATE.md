@@ -13,14 +13,14 @@ mass cleanup of older review/* dependabot bots PRs).
 | --- | --- | --- | --- | --- |
 | 106 | Browser exo with origin allowlist | llm | - | awaiting review (panel-vetted: 0 must-fix) |
 | 105 | skill-registry helpers | llm | - | awaiting review (panel + fixer done) |
-| 104 | re-import ses for assert global | llm | - | awaiting review (9-line; unblocks #94) |
+| ~~104~~ | re-import ses for assert global | llm | - | merged 2026-05-06 conductor → `ac5dd05663` |
 | 103 | chat slot-and-slash commands design | llm | - | awaiting review (re-opened from #30) |
 | 102 | chat voice command parser design | llm | - | awaiting review (sibling design for #101) |
 | 101 | chat voice input | llm | - | awaiting review (re-opened from #44) |
 | 100 | familiar unified weblet server design | llm | - | awaiting review (re-opened from #48) |
 | 99 | content-store-gc | llm | CHANGES_REQUESTED | awaiting review (panel + builder fixer addressed should-fix) |
 | 96 | aux package.json overrides design | llm | CHANGES_REQUESTED | awaiting review (designer-authored) |
-| 94 | chat playwright smoke | llm | APPROVED | gated on #104 (assert regression in CI) |
+| 94 | chat playwright smoke | llm | APPROVED | conductor in flight (rebased post-#104; CI converging) |
 | 89 | genie-integration design | llm | - | awaiting review (older) |
 | 83 | garden agent-infrastructure perpetual | llm | - | meta-PR (steward bookkeeping) |
 | 79 | ses namespace mutation test | llm | - | awaiting review (older, stale-on-base) |
@@ -334,6 +334,23 @@ Side effect for steward to handle next cycle:
   PR #58 needs its base re-targeted to `llm` and a rebase to drop
   the design-doc commits already on llm.
   Surface to steward: dispatch a weaver (or builder) to re-base #58.
+
+Merged this run (2026-05-06 conductor, PR 104 cycle):
+
+- #104 → `ac5dd05663` (merge commit to llm).
+  `fix(chat): re-import ses to install globalThis.assert without
+  lockdown`. 9-line one-file fix that addresses the assert-global
+  regression flagged by #94's smoke test (parallel to #95's fix
+  for `harden`). At survey: APPROVED, MERGEABLE/UNSTABLE, 1 commit,
+  1 behind `bots-ssh/llm` (clean). CI mostly green with two
+  pre-existing macos-15 test flakes (`test (18.x, macos-15)` and
+  `test (22.x, macos-15)`) unrelated to the patch. Per the brief's
+  guidance that branch protection on this repo does not gate on CI,
+  ran direct `gh pr merge --merge` without rebase. state=MERGED on
+  first verify. Local + remote `fix/chat-import-ses` branch deleted;
+  pr-104 worktree at `/home/kris/endo-wt/pr-104` removed. Unblocks
+  #94 (the chat bundle now ships with `assert` available at module
+  load).
 
 ## Stalled list
 
