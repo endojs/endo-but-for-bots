@@ -676,6 +676,7 @@ export const HttpClientControlInterface = M.interface('EndoHttpClientControl', {
 export const WebhookEndpointInterface = M.interface('EndoWebhookEndpoint', {
   url: M.call().returns(M.string()),
   secret: M.call().returns(M.string()),
+  verify: M.callWhen(M.string(), M.string()).returns(M.boolean()),
   disable: M.call().returns(M.undefined()),
   enable: M.call().returns(M.undefined()),
   help: M.call().returns(M.string()),

@@ -13,6 +13,8 @@ import {
 const DEFAULT_MAX_PAYLOAD_BYTES = 1024 * 1024; // 1 MB
 const DEFAULT_RATE_LIMIT = 60; // requests per minute
 
+const textEncoder = new TextEncoder();
+
 /**
  * Generate a random hex secret for HMAC verification.
  *
@@ -26,6 +28,45 @@ const generateSecret = () => {
 harden(generateSecret);
 
 /**
+ * Decode a lowercase hex string to bytes.
+ * Returns undefined if the input is not even-length lowercase hex.
+ *
+ * @param {string} hex
+ * @returns {Uint8Array | undefined}
+ */
+const hexToBytes = hex => {
+  if (typeof hex !== 'string' || hex.length === 0 || hex.length % 2 !== 0) {
+    return undefined;
+  }
+  const out = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < out.length; i += 1) {
+    const byte = Number.parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+    if (Number.isNaN(byte)) return undefined;
+    out[i] = byte;
+  }
+  return out;
+};
+harden(hexToBytes);
+
+/**
+ * Constant-time comparison of two equal-length byte arrays.
+ * Always inspects every position; never short-circuits on first mismatch.
+ *
+ * @param {Uint8Array} a
+ * @param {Uint8Array} b
+ * @returns {boolean}
+ */
+const timingSafeEqual = (a, b) => {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i += 1) {
+    diff |= a[i] ^ b[i];
+  }
+  return diff === 0;
+};
+harden(timingSafeEqual);
+
+/**
  * Create a WebhookEndpoint / WebhookControl facet pair.
  *
  * @param {object} options
@@ -34,7 +75,7 @@ harden(generateSecret);
  * @param {number} [options.maxPayloadBytes]
  * @param {number} [options.rateLimit] - Max requests per minute.
  * @param {(payload: string, headers: Record<string, string>) => void} [options.onPayload] - Callback when a payload is received.
- * @returns {{ endpoint: object, control: object, handleRequest: (body: string, headers: Record<string, string>) => { status: number, body: string } }}
+ * @returns {{ endpoint: object, control: object, handleRequest: (body: string, headers: Record<string, string>) => Promise<{ status: number, body: string }> }}
  */
 export const makeWebhookKit = options => {
   const {
@@ -50,6 +91,45 @@ export const makeWebhookKit = options => {
   let enabled = true;
   let revoked = false;
   const webhookSecret = generateSecret();
+  const secretBytes = /** @type {Uint8Array} */ (hexToBytes(webhookSecret));
+
+  // HMAC-SHA256 key material derived from the hex secret.  The promise is
+  // memoized so concurrent verify() calls share one import.
+  /** @type {Promise<CryptoKey> | undefined} */
+  let hmacKeyPromise;
+  const getHmacKey = () => {
+    if (hmacKeyPromise === undefined) {
+      hmacKeyPromise = crypto.subtle.importKey(
+        'raw',
+        secretBytes,
+        { name: 'HMAC', hash: 'SHA-256' },
+        false,
+        ['sign'],
+      );
+    }
+    return hmacKeyPromise;
+  };
+
+  /**
+   * Verify a hex-encoded HMAC-SHA256 signature for the given body.
+   * Uses constant-time comparison so verify() leaks no information
+   * about which byte first diverged between the expected and received
+   * signatures.
+   *
+   * @param {string} body - The exact bytes-as-string the sender signed.
+   * @param {string} signatureHex - Hex-encoded HMAC the sender computed
+   *   using this webhook's secret.
+   * @returns {Promise<boolean>}
+   */
+  const verifySignature = async (body, signatureHex) => {
+    const provided = hexToBytes(signatureHex);
+    if (provided === undefined) return false;
+    const key = await getHmacKey();
+    const expected = new Uint8Array(
+      await crypto.subtle.sign('HMAC', key, textEncoder.encode(body)),
+    );
+    return timingSafeEqual(expected, provided);
+  };
 
   // Sliding window rate limiter
   /** @type {number[]} */
@@ -66,11 +146,17 @@ export const makeWebhookKit = options => {
   /**
    * Handle an incoming webhook request.
    *
+   * If the request carries an `x-webhook-signature` header, the HMAC is
+   * verified in constant time before the payload is delivered.  Requests
+   * without the header are delivered unconditionally; callers that want
+   * to require a signature should reject unsigned payloads inside
+   * `onPayload` (or use `endpoint.verify(body, signatureHex)` directly).
+   *
    * @param {string} body - Request body.
    * @param {Record<string, string>} headers - Request headers.
-   * @returns {{ status: number, body: string }}
+   * @returns {Promise<{ status: number, body: string }>}
    */
-  const handleRequest = (body, headers) => {
+  const handleRequest = async (body, headers) => {
     if (revoked) {
       return { status: 410, body: 'Gone' };
     }
@@ -94,6 +180,15 @@ export const makeWebhookKit = options => {
       return { status: 413, body: 'Payload too large' };
     }
 
+    // Constant-time HMAC verification for signed payloads.
+    const signatureHex = headers['x-webhook-signature'];
+    if (signatureHex !== undefined) {
+      const ok = await verifySignature(body, signatureHex);
+      if (!ok) {
+        return { status: 401, body: 'Invalid signature' };
+      }
+    }
+
     if (onPayload) {
       onPayload(body, headers);
     }
@@ -110,6 +205,14 @@ export const makeWebhookKit = options => {
       assertNotRevoked();
       return webhookSecret;
     },
+    /**
+     * @param {string} body
+     * @param {string} signatureHex
+     */
+    verify: async (body, signatureHex) => {
+      assertNotRevoked();
+      return verifySignature(body, signatureHex);
+    },
     disable: () => {
       assertNotRevoked();
       enabled = false;
@@ -120,7 +223,8 @@ export const makeWebhookKit = options => {
     },
     help: () =>
       `WebhookEndpoint receives HTTP POSTs at ${webhookUrl}. ` +
-      `Methods: url(), secret(), disable(), enable(), help(). ` +
+      `Methods: url(), secret(), verify(body, signatureHex), ` +
+      `disable(), enable(), help(). ` +
       `Status: ${enabled ? 'enabled' : 'disabled'}.`,
   });
 
