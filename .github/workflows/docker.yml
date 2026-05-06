@@ -1,0 +1,87 @@
+name: Docker
+
+# Validate the docker/ self-hosting setup.
+#
+# Triggers on PRs that touch the docker/ tree, the daemon (whose
+# foreground/CIDR/static-files behaviour the container exercises),
+# or this workflow itself; and on pushes to the long-lived branches
+# `master` and `llm` so a regression is caught at merge time.
+#
+# The job is intentionally small: build the image, validate the
+# compose manifest, and smoke-test that the container responds on
+# the gateway port. The full daemon test suite already runs in
+# `ci.yml`; this workflow's job is to prove the container assembles
+# and starts, not to re-test the daemon.
+
+on:
+  push:
+    branches: [master, llm]
+  pull_request:
+    paths:
+      - 'docker/**'
+      - 'packages/daemon/**'
+      - '.github/workflows/docker.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-smoke:
+    name: build-and-smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Validate docker-compose.yml
+        # `docker compose config` parses the manifest and renders
+        # the resolved configuration. A non-zero exit means the
+        # YAML is invalid or references unknown keys.
+        working-directory: docker
+        run: docker compose config
+
+      - name: Build image
+        # Build context is the repository root because the
+        # Dockerfile copies package.json, yarn.lock, .yarnrc.yml,
+        # .yarn, and packages from there.
+        run: docker build -f docker/Dockerfile -t endo-selfhost:ci .
+
+      - name: Smoke-test the container
+        # Start the container in the background, wait for the
+        # gateway to bind, then issue an HTTP request. The default
+        # gateway response (no static dir) is the literal string
+        # `Endo Gateway`; assert that the body matches.
+        #
+        # ENDO_GATEWAY_REMOTE=1 is needed because the request
+        # arrives from the Docker bridge address, not 127.0.0.1
+        # inside the container.
+        run: |
+          set -eu
+          docker run --rm -d \
+            --name endo-smoke \
+            -p 8920:8920 \
+            -e ENDO_GATEWAY_REMOTE=1 \
+            endo-selfhost:ci
+          # Always tear down, even on failure.
+          trap 'docker logs endo-smoke || true; docker rm -f endo-smoke || true' EXIT
+
+          # Wait up to 60s for the gateway to answer.
+          for i in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:8920/ > /tmp/body 2>/dev/null; then
+              break
+            fi
+            sleep 1
+          done
+
+          # Assert the body matches the default gateway response.
+          if ! grep -Fxq 'Endo Gateway' /tmp/body; then
+            echo "Unexpected gateway response:" >&2
+            cat /tmp/body >&2 || true
+            exit 1
+          fi
+          echo "Gateway responded as expected."
