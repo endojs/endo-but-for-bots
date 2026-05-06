@@ -361,6 +361,14 @@ export const HostInterface = M.interface('EndoHost', {
   makeTimer: M.call(NameShape, M.number())
     .optional(M.string())
     .returns(M.promise()),
+  // Create an HTTP client capability
+  makeHttpClient: M.call(NameShape, M.arrayOf(M.string()))
+    .optional(M.record())
+    .returns(M.promise()),
+  // Create an interval scheduler capability
+  makeIntervalScheduler: M.call(NameShape)
+    .optional(M.record())
+    .returns(M.promise()),
   // Cancel a value
   cancel: M.call(NameOrPathShape).optional(M.error()).returns(M.promise()),
   // Get the greeter
