@@ -81,6 +81,15 @@ const makeMockDirectory = (hooks = {}, parentPath = []) => {
       entries.delete(from);
       entries.set(to, entry);
     },
+    // Insert a non-text entry by name, used by tests that simulate a
+    // descriptor with a presence-only `requires` entry (e.g. a publisher
+    // who put a directory under `requires/foo`).
+    insertNonText: name => {
+      entries.set(name, {
+        kind: 'dir',
+        dir: makeMockDirectory(hooks, [...parentPath, name]),
+      });
+    },
     // Expose for white-box assertions.
     inspect: () => entries,
     storeIdentifier: async (_name, _id) => {
@@ -292,6 +301,40 @@ test('readSkillDescriptor preserves empty-string scope hints', async t => {
   });
   const read = await readSkillDescriptor(registry, 'open-net');
   t.deepEqual(read.requires, { 'network-fetch': '' });
+});
+
+// A presence-only `requires` entry (one carrying no text value) surfaces
+// as `undefined`, distinguishable from an explicit empty-string scope
+// hint. The two are deliberately not collapsed: the empty string means
+// "publisher granted no scope"; undefined means "publisher omitted a
+// scope hint entirely".
+test('readSkillDescriptor distinguishes missing scope from empty scope', async t => {
+  const registry = makeMockDirectory();
+  await publishSkill(registry, 'mixed', {
+    description: 'mixed scopes',
+    requires: { 'with-empty': '' },
+  });
+
+  // Splice in a presence-only requirement directly: a sub-directory
+  // under requires/no-text simulates a publisher who created the entry
+  // without writing a scope-hint string.
+  const descriptor = await registry.lookup('mixed');
+  const requiresDir = await descriptor.lookup(skillRequiresName);
+  requiresDir.insertNonText('no-text');
+
+  const read = await readSkillDescriptor(registry, 'mixed');
+  t.is(
+    read.requires['with-empty'],
+    '',
+    'explicit empty-string scope is preserved',
+  );
+  t.is(
+    read.requires['no-text'],
+    undefined,
+    'presence-only entry surfaces as undefined, not coerced to empty string',
+  );
+  // The two values must be distinguishable.
+  t.not(read.requires['with-empty'], read.requires['no-text']);
 });
 
 // publishSkill is staged: a writeText failure mid-publish must not

@@ -52,7 +52,14 @@ export const skillCodeName = 'code';
 
 /**
  * Read a string-valued entry from a directory, returning `undefined` if the
- * entry is absent.
+ * entry is absent or not a text entry.
+ *
+ * A return of `undefined` from this helper carries two meanings:
+ * - the entry does not exist, or
+ * - the entry exists but is not a text value (e.g. a sub-directory).
+ *
+ * Distinguishing the two is intentionally not done here; callers that
+ * need to assert presence call `E(directory).has(name)` separately.
  *
  * @param {any} directory - An EndoDirectory presence.
  * @param {string} name - The pet name to look up.
@@ -63,7 +70,15 @@ const readOptionalText = async (directory, name) => {
   if (!present) {
     return undefined;
   }
-  return E(directory).readText(name);
+  // Tolerate a non-text presence: a publisher who placed a sub-directory
+  // (or any non-text value) under this name surfaces as `undefined`
+  // rather than rejecting. The catch-all is narrow enough to be useful
+  // while not masking lower-layer transport failures: `has` already
+  // confirmed the entry exists, so the only readText failure mode left
+  // is the entry being non-text.
+  return E(directory)
+    .readText(name)
+    .catch(() => undefined);
 };
 
 /**
@@ -85,10 +100,13 @@ harden(listSkills);
  * @property {string | undefined} version
  * @property {string | undefined} author
  * @property {string | undefined} homepage
- * @property {Record<string, string>} requires - Pet-name to scope-hint
- *   mapping enumerated from the descriptor's `requires` sub-directory. An
- *   empty object means the descriptor has no `requires` directory or the
- *   directory is empty.
+ * @property {Record<string, string | undefined>} requires - Pet-name to
+ *   scope-hint mapping enumerated from the descriptor's `requires`
+ *   sub-directory. An empty object means the descriptor has no `requires`
+ *   directory or the directory is empty. A value of `undefined` means the
+ *   capability is required but the publisher supplied no scope-hint text
+ *   (presence-only requirement); a value of `''` means the publisher
+ *   explicitly granted no scope. The two are distinct on purpose.
  * @property {boolean} hasCode - Whether the descriptor exposes a `code`
  *   entry. The presence is reported but the value is not resolved here;
  *   callers fetch it via `E(skillDescriptor).lookup('code')`.
@@ -118,18 +136,18 @@ export const readSkillDescriptor = async (registry, name) => {
       E(descriptor).has(skillRequiresName),
     ]);
 
-  /** @type {Record<string, string>} */
+  /** @type {Record<string, string | undefined>} */
   const requires = {};
   if (hasRequires) {
     const requiresDir = await E(descriptor).lookup(skillRequiresName);
     const reqNames = await E(requiresDir).list();
     await Promise.all(
       reqNames.map(async reqName => {
-        const scope = await readOptionalText(requiresDir, reqName);
-        // Capability requirements that omit a scope hint surface as the
-        // empty string rather than undefined; the requirement itself is
-        // still asserted by virtue of the entry's existence.
-        requires[reqName] = scope === undefined ? '' : scope;
+        // A missing text entry surfaces as `undefined` (presence-only
+        // requirement, distinct from an explicit empty-string scope hint).
+        // The two are deliberately not collapsed, so consumers can tell a
+        // publisher who omitted a scope hint from one who granted none.
+        requires[reqName] = await readOptionalText(requiresDir, reqName);
       }),
     );
   }
