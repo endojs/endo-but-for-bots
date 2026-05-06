@@ -115,6 +115,39 @@ an agent in the `builder` role to implement from later.
   bots-ssh/llm -- designs/README.md` before applying README edits.
   Otherwise the apparent merge conflict is between two valid states
   and the resolution is non-obvious.
+- **Extracting a design from an existing PR.** A maintainer may
+  ask you to lift one design file out of a multi-purpose PR (loop
+  scaffolding plus design revisions, design plus exploratory notes,
+  etc.) and ship it as a focused PR off `bots-ssh/llm`, then close
+  the source PR as superseded. Procedure:
+  1. `git show <source-pr-head>:designs/<slug>.md` to read the
+     PR's version of the file.
+  2. `git show bots-ssh/llm:designs/<slug>.md` to see what is
+     already on `llm`. If the file already exists, the task is
+     **not** automatically moot: the PR's version may be a
+     substantive revision the maintainer wants to land, in which
+     case you replace `llm`'s content with the PR's content (with
+     prose refinements). If the file content is identical, the
+     extraction is moot; close the source PR with a note.
+  3. Sweep em-dashes per `../skills/em-dash-style-rule.md` on the
+     extracted prose, even if the source PR's prose left them in.
+     The extraction is your commit; em-dashes in your commit are
+     yours to fix.
+  4. Update the `Updated:` field to today's date and verify the
+     `Status:` field reflects current implementation reality, not
+     the source PR's stale status.
+  5. Update the `designs/README.md` row's `Updated` column to
+     match. Reset to `bots-ssh/llm`'s README first if drift is
+     suspected.
+  6. After the new PR opens, `gh pr close <source>` with a
+     comment naming the new PR and listing the discarded files
+     by name so the closure is self-explanatory in the source
+     PR's history.
+  Verify before pushing: `git diff bots-ssh/llm --name-only`
+  should list only `designs/<slug>.md` and (if you touched it)
+  `designs/README.md`. Loop scaffolding, process documents, and
+  agent infrastructure that lived in the source PR must not
+  appear.
 
 ## Self-improvement
 
