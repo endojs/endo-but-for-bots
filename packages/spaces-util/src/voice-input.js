@@ -58,28 +58,59 @@ export const makeVoiceInput = ({ $container, $input, lang = 'en-US' }) => {
   /** @type {string} */
   let savedContent = '';
 
-  const startListening = () => {
-    if (isListening) return;
-    isListening = true;
-    savedContent = $input.textContent || '';
-    $micButton.classList.add('listening');
-    $micButton.title = 'Listening... (click to stop)';
-    try {
-      recognition.start();
-    } catch {
-      // Already started; ignore.
-    }
-  };
+  /** @type {MutationObserver | null} */
+  let chipObserver = null;
+
+  /**
+   * The voice-input flow assumes a plain-text input; writing the
+   * transcript via `textContent` would clobber any `.chat-token` chip
+   * elements present in the contenteditable. CSS hides the mic when
+   * `.has-content` is set on the chat bar, but a chip can still be
+   * inserted mid-listen via keyboard. Treat any chip in the input as
+   * an immediate stop signal.
+   *
+   * @returns {boolean} true if `$input` contains at least one chip.
+   */
+  const hasChips = () => $input.querySelector('.chat-token') !== null;
 
   const stopListening = () => {
     if (!isListening) return;
     isListening = false;
+    if (chipObserver) {
+      chipObserver.disconnect();
+      chipObserver = null;
+    }
     $micButton.classList.remove('listening');
     $micButton.title = 'Voice input (click to speak)';
     try {
       recognition.stop();
     } catch {
       // Already stopped; ignore.
+    }
+  };
+
+  const startListening = () => {
+    if (isListening) return;
+    // Refuse to start if the input already holds chips; the result
+    // handler would clobber them on the first interim transcript.
+    if (hasChips()) return;
+    isListening = true;
+    savedContent = $input.textContent || '';
+    $micButton.classList.add('listening');
+    $micButton.title = 'Listening... (click to stop)';
+    // Watch for a chip appearing mid-session (e.g. via keyboard
+    // autocomplete). Stop on the first chip insertion so the next
+    // interim result does not overwrite it.
+    chipObserver = new MutationObserver(() => {
+      if (hasChips()) {
+        stopListening();
+      }
+    });
+    chipObserver.observe($input, { childList: true, subtree: true });
+    try {
+      recognition.start();
+    } catch {
+      // Already started; ignore.
     }
   };
 
@@ -94,6 +125,12 @@ export const makeVoiceInput = ({ $container, $input, lang = 'en-US' }) => {
   $micButton.addEventListener('click', handleClick);
 
   recognition.addEventListener('result', (/** @type {any} */ event) => {
+    // A chip may have appeared between `startListening` and this
+    // result event firing; the MutationObserver will have stopped
+    // listening, but a queued result can still arrive. Drop it
+    // rather than clobber the chip.
+    if (!isListening || hasChips()) return;
+
     /** @type {any} */
     const results = event.results;
     if (!results || results.length === 0) return;
