@@ -130,6 +130,26 @@ result through CI.
   and expects a re-ping when it lands. (Session example: PR 47's
   Docker CI direction came in as a `COMMENTED` review and was
   handled identically to a `CHANGES_REQUESTED` round.)
+- **A maintainer `CHANGES_REQUESTED` that promotes a panel's
+  should-fix to must-fix overrides any prior deferral plan and
+  must land in the current PR.** When the panel's report classified
+  an item as a should-fix (deferable to a follow-up) and a later
+  maintainer review explicitly cites that item with language like
+  "is not a deferrable feature and must be incorporated in this
+  PR", the dispatch context flips: the deferral path is closed,
+  the original panel verdict is overridden, and the fixer's job
+  is to land the substantive fix in the same PR. Do not open a
+  follow-up issue, do not surface the work as a "for the steward"
+  cross-PR coordination item, and do not skip-with-reason; the
+  maintainer has already weighed the in-scope cost and decided.
+  Treat the maintainer's one-line review as the authoritative
+  scope expansion and inherit the panel's symptom description as
+  the implementation brief. Session example (PR 99 review id
+  4233429522): the panel had logged "transitive tree descendants
+  leak" as a should-fix; kriskowal's `CHANGES_REQUESTED` review
+  promoted it to must-fix and the fixer landed
+  `collectTransitiveTreeHashes` plus three regression tests in
+  the same PR rather than as a follow-up.
 - **Panel reports cite line numbers from the snapshot the panel
   reviewed, not from current `HEAD`.** When the dispatch summarizes
   a panel comment with line numbers, treat the file path and the
