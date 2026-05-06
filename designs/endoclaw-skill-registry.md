@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | **Created** | 2026-03-03 |
-| **Updated** | 2026-03-03 |
+| **Updated** | 2026-05-06 |
 | **Author** | Kris Kowal (prompted) |
-| **Status** | Not Started |
+| **Status** | PR #105 |
 | **Parent** | [endoclaw](endoclaw.md) |
 
 ## Summary
