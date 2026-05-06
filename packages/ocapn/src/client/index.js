@@ -5,7 +5,7 @@
  * @import { OcapnPublicKey } from '../cryptography.js'
  * @import { OcapnCodec } from '../codec-interface.js'
  * @import { SturdyRef } from './sturdyrefs.js'
- * @import { Client, Connection, InternalSession, Locator, LocationId, Logger, NetLayer, NetlayerHandlers, NetworkSession, OcapnNetwork, PendingSession, SelfIdentity, Session, SessionManager, SocketOperations, SwissNum } from './types.js'
+ * @import { Client, Connection, InternalSession, LocationId, Logger, NetLayer, NetlayerHandlers, NetworkSession, NonceLocator, OcapnNetwork, PendingSession, SelfIdentity, Session, SessionManager, SocketOperations, SwissNum } from './types.js'
  */
 
 import harden from '@endo/harden';
@@ -184,7 +184,7 @@ const makeSessionManager = () => {
  * @param {object} options
  * @param {OcapnCodec} options.codec
  * @param {AnyNetwork | NetworkFactory} options.network
- * @param {Locator} [options.locator]
+ * @param {NonceLocator} [options.locator]
  * @param {string} [options.debugLabel]
  * @param {boolean} [options.verbose]
  * @param {Map<string, any>} [options.giftTable]

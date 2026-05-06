@@ -265,10 +265,11 @@ export const hostRoom = async ({
   const swissStr = makeFreshSwissString();
   const chatroom = makeChatroom(roomName);
 
-  // Locator is mutated below to register the chatroom under its swissnum
-  // *after* makeOcapn returns; the new client API takes the locator at
-  // construction time but holds a live reference, so subsequent
-  // `locator.set` calls are visible to incoming bootstrap.fetch lookups.
+  // The NonceLocator is mutated below to register the chatroom under
+  // its swissnum *after* makeOcapn returns; the new client API takes
+  // the locator at construction time but holds a live reference, so
+  // subsequent `locator.set` calls are visible to incoming
+  // bootstrap.fetch lookups.
   const locator = new Map();
   /** @type {{ netlayer?: Awaited<ReturnType<typeof makeWebSocketNetLayer>> }} */
   const netlayerRef = {};

@@ -229,9 +229,15 @@
  * local capability (via `bootstrap.fetch(secret)`) or when resolving a
  * self-local `SturdyRef`. Any object with a `get(secret)` that returns a
  * capability, `undefined`, or a promise of either works; a plain `Map`
- * is a valid locator.
+ * is a valid `NonceLocator`.
  *
- * @typedef {object} Locator
+ * The name parallels the `NonceLocator` term of art in E and Spritely
+ * Goblins for a registry that resolves nonces (here, swissnums or
+ * other secrets) to local capabilities. It also avoids the existing
+ * `formatLocator`/`parseLocator` URI helpers in `@endo/daemon`, which
+ * use the word `Locator` for the addressable URI form.
+ *
+ * @typedef {object} NonceLocator
  * @property {(secret: string) => unknown | Promise<unknown>} get
  */
 
@@ -246,7 +252,7 @@
  *   pair. The secret may be a printable-ASCII string (the friendly
  *   form for locators keyed by name) or raw bytes for arbitrary-byte
  *   sturdyrefs (e.g. the 24-byte randoms Spritely Goblins mints).
- *   Peers resolve the secret against their own `Locator`.
+ *   Peers resolve the secret against their own `NonceLocator`.
  * @property {(sturdyRef: SturdyRef) => Promise<any>} enlivenSturdyRef
  *   Resolve a SturdyRef to a live capability: local SturdyRefs go
  *   through the injected locator; remote SturdyRefs fetch from the

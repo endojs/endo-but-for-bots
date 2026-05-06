@@ -229,7 +229,7 @@ export const makeCodecTestKit = (
   };
 
   // Mock SturdyRef tracker for tests; an empty Map satisfies the
-  // duck-typed `Locator.get(secret)` contract.
+  // duck-typed `NonceLocator.get(secret)` contract.
   const locator = new Map();
   const sturdyRefTracker = makeSturdyRefTracker(locator);
   const testHandoffMap = new Map();

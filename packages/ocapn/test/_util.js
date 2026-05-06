@@ -6,7 +6,7 @@ import harden from '@endo/harden';
 /** @typedef {import('@endo/ses-ava/prepare-endo.js').default} Test */
 
 /**
- * @import { Client, ClientDebug, Connection, InternalSession, LocationId, Locator, Session } from '../src/client/types.js'
+ * @import { Client, ClientDebug, Connection, InternalSession, LocationId, NonceLocator, Session } from '../src/client/types.js'
  * @import { OcapnLocation } from '../src/codecs/components.js'
  * @import { TcpTestOnlyNetLayer } from '../src/netlayers/tcp-test-only.js'
  * @import { Ocapn, OcapnDebug } from '../src/client/ocapn.js'
@@ -187,6 +187,7 @@ export const makeTestClient = async ({
 }) => {
   /** @type {{ netlayer?: TcpTestOnlyNetLayer }} */
   const netlayerRef = {};
+  /** @type {NonceLocator} */
   const locator = makeDefaultSwissnumTable
     ? makeDefaultSwissnumTable()
     : new Map();
