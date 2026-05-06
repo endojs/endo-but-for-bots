@@ -93,6 +93,24 @@ comment thread citing the commit SHA(s). See
   .changeset/ yarn.lock` should return only intentional historical
   references (e.g. an "originally named X" line in a design's
   candidates table or the verbatim `## Prompt` block).
+- When a reviewer flags a naming issue on one line of a design
+  document, the same name almost always appears in several different
+  contexts in the surrounding prose, each wanting a different
+  treatment. SES-intrinsic renames are the canonical case: the
+  reviewer says "use `%SharedURL%` not `SharedURL`", and the right
+  answer depends on the local context:
+  - Permits-table cells, intrinsic identifiers, and "binding lives
+    on `sharedGlobalPropertyNames`" prose want `%SharedURL%`.
+  - Code that runs inside a compartment wants the binding name
+    (`globalThis.URL` or just `URL`).
+  - TC39-style discussion of the abstract intrinsic in pure prose
+    can use the bare `SharedURL` form, but only when the surrounding
+    text makes the abstraction clear.
+  Walk every occurrence of the flagged name with `grep -n` before
+  editing; classify each into one of the contexts above; then edit.
+  Mechanical sed-style substitution will silently replace
+  consumer-facing surface names with permits-machinery names and
+  break the design's coherence.
 
 ## Session example
 
