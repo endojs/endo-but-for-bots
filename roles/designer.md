@@ -94,6 +94,20 @@ an agent in the `builder` role to implement from later.
   an untracked design file vanishes when its parent directory is
   re-checked-out from a different ref. Atomic Write+add+commit
   while pinned to the design branch sidesteps the race.
+- **When you detect a concurrent agent in the same worktree, get
+  out of the shared worktree.** Symptoms: `.claude/scheduled_tasks.lock`
+  exists with a live `pid`, an unrelated branch shows up as the
+  current branch when you did not switch to it, an unrelated commit
+  appears in your `git log` between calls, your staged design file
+  reappears bundled with someone else's changes. Recovery: rescue your
+  draft (`git show <orphan-sha>:designs/<slug>.md > /tmp/<slug>.md` if
+  it was committed and reset away; otherwise the file in your
+  Write-tool history), then `git worktree add /home/kris/endo-wt/<slug>
+  design/<slug>` and continue all design work in that dedicated
+  worktree. The concurrent agent cannot reach in to a separate
+  worktree, so branch swaps cease and the atomic Write+add+commit
+  flow becomes reliable. Verify with `git worktree list` before
+  pushing.
 - If the README on `garden` and the README on `bots-ssh/llm` have
   drifted (different milestone counts, different totals, different
   rows added since the design branch base), reset
