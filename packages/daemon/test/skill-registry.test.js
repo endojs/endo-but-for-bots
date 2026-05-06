@@ -210,3 +210,58 @@ test('publishSkill creates the requires sub-directory only when needed', async t
   const reqDescriptor = await registry.lookup('with-reqs');
   t.true(await reqDescriptor.has(skillRequiresName));
 });
+
+// Adversarial: a descriptor that carries spurious sibling entries
+// (e.g. a publisher's experimental field, or a leftover from a prior
+// schema) must still produce the well-known metadata fields and must
+// not leak the spurious entries through SkillDescriptor.
+test('readSkillDescriptor ignores spurious sibling entries on a descriptor', async t => {
+  const registry = makeMockDirectory();
+  await publishSkill(registry, 'gmail-bridge', {
+    description: 'bridge',
+    version: '1.0.0',
+  });
+  // Publisher wrote a non-conventional entry directly on the
+  // descriptor directory after publishSkill returned.
+  const descriptor = await registry.lookup('gmail-bridge');
+  await descriptor.writeText('experimental-tag', 'beta');
+
+  const read = await readSkillDescriptor(registry, 'gmail-bridge');
+  t.is(read.description, 'bridge');
+  t.is(read.version, '1.0.0');
+  // The spurious key does not surface as a top-level metadata field
+  // (the typedef pins which keys exist), and it does not leak into
+  // the requires record.
+  t.deepEqual(Object.keys(read.requires), []);
+});
+
+// Adversarial: an explicit empty `requires` object publishes an empty
+// requires directory; reading back must reflect "no requirements" rather
+// than throwing or returning undefined.
+test('publishSkill with empty requires creates an empty requires directory', async t => {
+  const registry = makeMockDirectory();
+  await publishSkill(registry, 'no-deps', {
+    description: 'standalone skill',
+    requires: {},
+  });
+
+  const descriptor = await registry.lookup('no-deps');
+  t.true(await descriptor.has(skillRequiresName));
+  const requiresDir = await descriptor.lookup(skillRequiresName);
+  t.deepEqual(await requiresDir.list(), []);
+
+  const read = await readSkillDescriptor(registry, 'no-deps');
+  t.deepEqual(read.requires, {});
+});
+
+// Adversarial: a `requires` entry with an empty-string scope hint
+// (publisher's deliberate "no scope" signal) round-trips as the empty
+// string rather than being coerced to undefined or filtered out.
+test('readSkillDescriptor preserves empty-string scope hints', async t => {
+  const registry = makeMockDirectory();
+  await publishSkill(registry, 'open-net', {
+    requires: { 'network-fetch': '' },
+  });
+  const read = await readSkillDescriptor(registry, 'open-net');
+  t.deepEqual(read.requires, { 'network-fetch': '' });
+});
