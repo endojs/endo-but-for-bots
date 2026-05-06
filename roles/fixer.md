@@ -330,6 +330,44 @@ result through CI.
   Without `parentPath`, a hook that throws on `name === 'version'`
   also throws on the first known-good publish, masking the bug
   the test was meant to expose.
+- **Deferred-pending-maintainer-pick rename items follow a specific
+  re-engagement shape.** When the original fixer left a rename
+  deferred with a list of candidate names and the maintainer later
+  picks a name (possibly *not* on the candidate list), the second
+  fixer must:
+  1. Treat the maintainer's pick as authoritative even if it
+     wasn't among the offered candidates. Session example: PR 59's
+     `Locator` rename offered `CapabilityRegistry`, `Holdings`,
+     `SwissnumDirectory`; the maintainer picked `NonceLocator`
+     based on prior art in E.
+  2. Re-verify each file in the original deferred-note's
+     "affected files" list before editing. The original fixer's
+     estimate may over-include: PR 59's note listed
+     `docs/cbor-encoding.md` as affected, but that file's
+     `Locator` reference was the URI form (the OCapN Peer
+     locator), not the cap-table type being renamed; trusting the
+     list verbatim would have changed the wrong file. Use `grep
+     -nE '\b<OldName>\b'` and read each hit in context.
+  3. Distinguish the *type* (Title-cased) from same-named
+     identifiers (lowercase parameter / variable / option) and
+     limit the rename to the type unless the maintainer asked
+     for both. PR 59's cap-table type went `Locator` →
+     `NonceLocator`; the lowercase `locator` parameter and option
+     name stayed (it's a fine common noun, and the public API
+     surface).
+- **Pure-type renames want regression evidence via `@type`
+  annotations on previously-unused imports.** A `@typedef` rename
+  has no runtime presence, so a runtime test cannot detect the
+  rename was applied incompletely. The cheap structural-evidence
+  move is to find a file that already imports the type via
+  `@import` but doesn't reference it, and add a one-line `/**
+  @type {<NewName>} */` annotation on an existing local. That
+  makes the import load-bearing: any partial revert of the
+  rename now fails `tsc` closed with "Module has no exported
+  member" errors. PR 59 used this on
+  `packages/ocapn/test/_util.js`'s locator binding; reverting
+  the typedef name alone produced two tsc errors in the files
+  whose `@import` chains depended on the new name.
 
 ## Self-improvement
 
