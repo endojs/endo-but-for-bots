@@ -28,6 +28,9 @@ import harden from '@endo/harden';
 import { E } from '@endo/far';
 import { makeError, q, X } from '@endo/errors';
 
+/** @import { ERef } from '@endo/eventual-send' */
+/** @import { EndoDirectory } from './types.js' */
+
 /**
  * Names of the well-known string-value entries on a skill descriptor
  * directory. Listed here so a single source of truth governs both the
@@ -61,7 +64,7 @@ export const skillCodeName = 'code';
  * Distinguishing the two is intentionally not done here; callers that
  * need to assert presence call `E(directory).has(name)` separately.
  *
- * @param {any} directory - An EndoDirectory presence.
+ * @param {ERef<EndoDirectory>} directory - An EndoDirectory presence.
  * @param {string} name - The pet name to look up.
  * @returns {Promise<string | undefined>}
  */
@@ -84,8 +87,8 @@ const readOptionalText = async (directory, name) => {
 /**
  * List the skill names published in a registry.
  *
- * @param {any} registry - An EndoDirectory presence acting as a skill
- *   registry.
+ * @param {ERef<EndoDirectory>} registry - An EndoDirectory presence acting
+ *   as a skill registry.
  * @returns {Promise<Array<string>>}
  */
 export const listSkills = async registry => {
@@ -115,8 +118,8 @@ harden(listSkills);
 /**
  * Read the metadata fields of one skill descriptor.
  *
- * @param {any} registry - An EndoDirectory presence acting as a skill
- *   registry.
+ * @param {ERef<EndoDirectory>} registry - An EndoDirectory presence acting
+ *   as a skill registry.
  * @param {string} name - The pet name of the skill to read.
  * @returns {Promise<SkillDescriptor>}
  */
@@ -125,7 +128,9 @@ export const readSkillDescriptor = async (registry, name) => {
   if (!present) {
     throw makeError(X`No skill named ${q(name)} in registry`);
   }
-  const descriptor = await E(registry).lookup(name);
+  const descriptor = /** @type {ERef<EndoDirectory>} */ (
+    await E(registry).lookup(name)
+  );
   const [description, version, author, homepage, hasCode, hasRequires] =
     await Promise.all([
       readOptionalText(descriptor, 'description'),
@@ -139,7 +144,9 @@ export const readSkillDescriptor = async (registry, name) => {
   /** @type {Record<string, string | undefined>} */
   const requires = {};
   if (hasRequires) {
-    const requiresDir = await E(descriptor).lookup(skillRequiresName);
+    const requiresDir = /** @type {ERef<EndoDirectory>} */ (
+      await E(descriptor).lookup(skillRequiresName)
+    );
     const reqNames = await E(requiresDir).list();
     await Promise.all(
       reqNames.map(async reqName => {
@@ -226,8 +233,8 @@ const skillStagingSuffix = '.staging';
  * archive/eval/unconfined ceremony and avoids implying a particular module
  * source format.
  *
- * @param {any} registry - An EndoDirectory presence acting as a skill
- *   registry. The caller must have write authority.
+ * @param {ERef<EndoDirectory>} registry - An EndoDirectory presence acting
+ *   as a skill registry. The caller must have write authority.
  * @param {string} name - The pet name to publish under.
  * @param {PublishSkillFields} fields - Descriptor fields.
  * @returns {Promise<void>}

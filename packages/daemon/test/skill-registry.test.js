@@ -28,6 +28,13 @@ import {
  * @param {Array<string>} [parentPath] - Internal: chain of pet names from
  *   the root of the mock to this directory. Used to give nested
  *   `writeText` calls a stable identity for the `beforeWriteText` hook.
+ * @returns {any} The mock is intentionally typed as `any` so that
+ *   white-box test code (which calls mock-only helpers like
+ *   `insertNonText`) is not forced into a cast on every site, and so
+ *   that the production helpers (typed as `ERef<EndoDirectory>`) can
+ *   accept it without per-call casts. The mock's runtime shape is
+ *   pinned by the body below; the type erasure is a deliberate test
+ *   convenience.
  */
 const makeMockDirectory = (hooks = {}, parentPath = []) => {
   /** @type {Map<string, { kind: 'text', value: string } | { kind: 'dir', dir: any }>} */
