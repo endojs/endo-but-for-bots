@@ -67,6 +67,19 @@ result through CI.
   fighting each other.
 - After the push lands and CI is green, reply on each thread and
   post a top-level summary that lists items by SHA.
+- When the failing CI signal IS the PR (a new smoke / lint / coverage
+  check, with the unrelated CI matrix passing), do not silence the
+  signal. Two outcomes are appropriate:
+  1. The smoke is buggy: fix the smoke.
+  2. The smoke caught a real regression in the system under test:
+     widen the smoke's diagnostic surface (so the next CI failure
+     is actionable from the log alone, no trace download needed),
+     then post a top-level PR comment describing the root cause,
+     the evidence, and the recommended split (land this PR red as
+     the load-bearing signal, or sequence the system fix first and
+     rebase). Do not fix the system from inside the smoke PR. The
+     "diagnose, improve, escalate" sequence stays on the PR; the
+     system fix is a steward dispatch.
 
 ## Self-improvement
 
