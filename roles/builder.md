@@ -212,13 +212,16 @@ issue or design document, and shepherding it through to a green PR.
   open with `Re-opens #<orig> under the bot account so the
   maintainer can review it`; do not narrate the methodology
   beyond that.
-  **`gh pr review --request-changes` also fails on a self-authored
-  PR**, so the panel-review submission below must use
-  `--comment` whenever the PR's gh-side author is the same
-  identity as `gh auth` (i.e., when you re-opened under the bot).
-  The aggregated panel content is identical; only the verdict
-  flag changes.
-  Encountered on PR 44 → #101 (chat voice input).
+  **`gh pr review --request-changes` also fails on any
+  self-authored PR**, so the panel-review submission below must
+  use `--comment` whenever the PR's gh-side author is the same
+  identity as `gh auth login` reports. This applies in two
+  scenarios: a re-opened-under-bot PR (the original case), and
+  any greenfield PR opened directly under the bot's gh-auth
+  identity (every design-pipeline builder dispatch since the
+  marshal landed). The aggregated panel content is identical;
+  only the verdict flag changes. Encountered on PR 44 → #101
+  (chat voice input) and again on PR #105 (skill-registry).
 - **Hand off the freshly-opened PR to a juror panel and a
   saboteur** before ending the engagement. The builder's last
   acts are two parallel dispatches plus the close-out chain:
