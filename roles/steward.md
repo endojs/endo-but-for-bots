@@ -117,13 +117,60 @@ the queue snapshot.
 ### Design pipeline (per cycle, parallel to PR work)
 
 - **`groom`** when any PR has merged since the previous cycle.
-  Updates `designs/README.md` and per-design status blocks.
-- **`builder`** for designs in `process/DESIGNS-WITHOUT-PR.md` §
-  Spec'd-but-not-started. Cap: three per cycle, prioritized by
-  `designs/README.md` § Summary by Milestone. Builder implements
-  the smallest reviewable cut, opens a PR, records `Status: PR #N`
-  on the design, and stops at impasse with a PR comment rather
-  than guessing on maintainer-taste questions.
+  Updates `designs/README.md`, per-design status blocks, and
+  `process/DESIGNS-WITHOUT-PR.md`. The groom's snapshot is
+  load-bearing for the builder dispatch below; a stale snapshot
+  causes the builder to target a design that already has a PR.
+  If the most recently merged PR is newer than
+  `DESIGNS-WITHOUT-PR.md`'s snapshot timestamp, dispatch a groom
+  before reading the design queue.
+
+- **`builder` — continuous-occupancy invariant.** At all times,
+  **at least one builder must be in flight** against an eligible
+  design until every design is accounted for. The previous
+  "cap-three-per-cycle" rule was a ceiling without a floor and
+  silently never fired; this is its replacement.
+
+  An **eligible design** is one that:
+  - sits in `process/DESIGNS-WITHOUT-PR.md` §
+    Spec'd-but-not-started (no PR open; design's `Status` is not
+    "In Progress" or `PR #N`), AND
+  - has every upstream dependency satisfied (each design listed
+    in its `## Dependencies` section is `Complete` /
+    `Implemented` / has a merged PR), AND
+  - is not already the target of an in-flight builder dispatch.
+
+  At step 7 (reconcile-and-dispatch) of every cycle: count
+  in-flight design-builder dispatches. If zero are in flight AND
+  at least one eligible design exists, dispatch one builder
+  against the highest-priority such design, prioritized by
+  `designs/README.md` § Summary by Milestone.
+
+  **Cap: 3 in-flight at once across cycles**, not three per cycle.
+  If one or two are already in flight from a prior cycle, the
+  reconcile step may dispatch up to the cap (subject to eligible
+  designs being available). The floor is 1; the ceiling is 3.
+
+  **Vacuous satisfaction**: if every remaining
+  Spec'd-but-not-started design is blocked on dependencies or
+  already in review, record this explicitly in the cycle log
+  (`design pipeline: no eligible designs (N waiting on
+  dependencies, M in review)`) and proceed. The rule is satisfied
+  by the explicit accounting, not by silence.
+
+  Builder implements the smallest reviewable cut, opens a PR,
+  hands off to a juror panel and a saboteur per
+  [`./builder.md`](./builder.md), records `Status: PR #N` on the
+  design, and stops at impasse with a PR comment rather than
+  guessing on maintainer-taste questions.
+
+  **Close-gating**: the cycle cannot reach step 12 (cycle-log
+  append) until either (a) at least one design-builder is in
+  flight, OR (b) the cycle-log entry being drafted contains the
+  vacuous-satisfaction line above. A close that skips the design
+  pipeline silently is the failure mode this rule prevents; if
+  the steward catches itself about to close without satisfying
+  either condition, re-enter step 7 and dispatch.
 
 ### Not dispatched from a cycle
 
@@ -166,7 +213,13 @@ Per round:
    the no-redispatch debouncer (skip if same role + same head SHA
    + no material advance). For the merge queue: append every
    `APPROVED` PR not already queued, dispatch a conductor if the
-   queue is non-empty and none in flight.
+   queue is non-empty and none in flight. **Then check the
+   design-builder continuous-occupancy invariant** per "Design
+   pipeline" above; if zero design-builders are in flight and at
+   least one eligible design exists, dispatch one. If
+   `DESIGNS-WITHOUT-PR.md`'s snapshot is older than the most
+   recently merged PR, dispatch the groom first and wait before
+   reading the queue.
 8. **Dispatch in batch.** One agent per concern. Each brief is
    self-contained: role file path, cited skills, `CLAUDE.md`,
    and the PR's head SHA (or design path). Posting identity is
