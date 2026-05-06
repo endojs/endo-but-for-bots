@@ -57,6 +57,14 @@ about whether action was taken.
    Then recompute the **Totals** line below the table from the
    actual statuses present (counts drift between grooming passes
    as new rows land without bumping the totals).
+   The drift is **structural**, not incidental: PRs merge
+   without updating the affected design's `Status` and
+   `Updated` fields, so the README continually falls behind the
+   real state. Cross-check `gh pr list --state merged` since the
+   prior pass against each annotated design's metadata to find
+   the misses; flip statuses where the bump is mechanical
+   (Not Started → Implemented after a clear merge); ask only
+   when the merge implements only part of the design.
    A simple bash recipe:
    ```sh
    awk '/^## Summary/,/^## Roadmap/' designs/README.md \
@@ -104,6 +112,24 @@ about whether action was taken.
 - [`../skills/em-dash-style-rule.md`](../skills/em-dash-style-rule.md):
   applies to all roadmap prose.
 
+## Branch awareness
+
+The substantive design corpus on `bots-ssh/llm` and the
+agent-infrastructure copy on `bots-ssh/garden` can drift from
+each other when llm receives design merges that do not
+propagate immediately to garden (or vice-versa). Before the
+reconciliation walk:
+
+- Check `git ls-tree garden -- designs/` against
+  `git ls-tree bots-ssh/llm -- designs/` for added or removed
+  files, and `git diff garden bots-ssh/llm -- designs/README.md`
+  for table drift. If the dispatch named one branch as the
+  target, groom only that branch's README; flag the divergence
+  as an open question for the user to decide on a mirror policy.
+- Each substantive `designs/README.md` edit lands on the branch
+  the dispatch targeted; the prior pass on a different branch
+  does not reduce the work for this pass.
+
 ## Posture
 
 - The groom edits `designs/README.md` directly, writes to
@@ -112,7 +138,9 @@ about whether action was taken.
   entries) once the user-supplied answers have been applied.
   The groom may also touch the per-design files when an answer
   directs propagation (e.g., updating a design's metadata block
-  to match a roadmap decision the user just confirmed).
+  to match a roadmap decision the user just confirmed) or when
+  reconciling a recent PR merge into the design's `Status` and
+  `Updated` fields.
 - The README edit (substantive) ships separately from the
   process commits. The open-questions append and the answer
   drain are themselves process commits per
