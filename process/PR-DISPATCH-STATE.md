@@ -71,6 +71,39 @@ trigger.
 (empty by current cycle's standard; see "Per-PR notes" below for
 session history)
 
+### Closed (no further tracking)
+
+Per CLAUDE.md's "Closed PRs and issues are inert" rule, the
+following closed-not-merged PRs receive no further dispatch,
+follow-up, or tracking. The steward does not re-survey them and
+will not dispatch any role against them. Discoveries that would
+have warranted action go to a fresh follow-up artifact (a new PR
+against the same code area, a new issue citing the closed one,
+or a steward cycle-log note for the user).
+
+Closed during this session (2026-05-06):
+
+- #30 (`docs(designs): add chat-slot-slash-commands design`) closed 06:33 UTC, superseded by #103.
+- #44 (`feat(chat): voice input via Web Speech API`) closed 05:55 UTC, superseded by #101.
+- #48 (`docs: design loop scaffolding and unified-weblet-server revisions`) closed 05:44 UTC, superseded by #100.
+- #56 (`feat(marshal): admit immutable ArrayBuffer through codecs`) closed 05:33 UTC, withdrawn by maintainer.
+- #62 (`feat(random): add @endo/random ChaCha20-based seedable PRNG`) closed 05:32 UTC, superseded by the @endo/random + chacha12 split in #75.
+- #70 (`feat(compartment-mapper): diagnose package.json without a name`) closed 04:15 UTC by maintainer; the auxiliary-package.json design lives at #96 instead.
+
+Closed earlier (per session-history snapshot):
+
+- #87 (`docs(bundle-source): drop NEWS.md recommendation`) closed 2026-05-05.
+- #72 (`fix(bundle-source): include cacheSourceMaps in options type`) closed 2026-05-05.
+- #52 (`feat(xorshift): add @endo/xorshift package`) closed 2026-05-06.
+- #27 (`feat(base64): dispatch to native Uint8Array base64 intrinsic`) closed 2026-05-05.
+- #24 (`chore: bump the all-minor-patch group`) closed 2026-05-02.
+- #53, #77, #25, #63, #65, #66, #28, #61, #18 closed pre-session per the GraphQL audit; treat all of these as inert.
+
+If a user direction explicitly references a closed PR by number,
+verify state before dispatching: `gh pr view <N> --json state`
+must return `OPEN`. A `CLOSED` or `MERGED` state means stop and
+report; do not dispatch a sub-agent against it.
+
 ---
 
 ## Historical snapshot below (kept for session-history reference)
