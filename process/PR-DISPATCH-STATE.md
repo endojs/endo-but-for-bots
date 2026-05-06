@@ -144,6 +144,23 @@ The steward does not post the comments; that is a maintainer action.
 
 (empty)
 
+Merged this run (2026-05-06 conductor, PR 92 cycle):
+
+- #92 → `e398264405` (merge commit to llm).
+  `feat(daemon): simplify guest eval per design (refs
+  guest-eval-simplification)`. Was 6 behind, 3 ahead at survey;
+  MERGEABLE/UNSTABLE with `reviewDecision=APPROVED`. Single CI
+  failure on `test (20.x, macos-15)` was a known transient
+  (`1 unhandled rejection` in `ws-relay` teardown, not in the
+  daemon-guest-eval code path). The three commits were already
+  coherent (drop dead artifacts → regression test → design PR ref);
+  no tidy. Rebased onto current `bots-ssh/llm` (clean, line-number
+  drift only in `designs/README.md`); force-pushed `2b787690c9`
+  with `--force-with-lease`. Issued `gh pr merge --auto --merge`;
+  GitHub processed it as a direct merge immediately on the freshly
+  pushed (still QUEUED) CI. state=MERGED. The fresh push obviated
+  the macOS flake re-run plan since CI restarted from scratch.
+
 Merged this run (2026-05-06 conductor, PR 93 cycle):
 
 - #93 → `31df9e3cf1` (merge commit to llm).
