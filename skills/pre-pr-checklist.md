@@ -71,6 +71,14 @@ submitting. If a section heading from the template would
 otherwise be empty, write `No impact.` rather than narrating
 that you considered it.
 
+The most pernicious form of methodology leak is a literal
+`skills/<file>.md` or `roles/<file>.md` path citation in the
+body. These expose the agent's internal directory layout to
+every reader of the public PR. Cite the *substance* of the
+discipline (e.g., "Reverting the fix causes the new assertions
+to fail closed, confirming they are load-bearing.") instead of
+the file that documents the discipline.
+
 ## Lockfile rule
 
 If the change adds or updates a dependency, commit `yarn.lock`
