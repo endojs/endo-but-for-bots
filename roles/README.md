@@ -18,6 +18,8 @@ playing both `juror` and `fixer`; consult both.
 - [cleaner.md](./cleaner.md) — maximize coverage on a target
   package; write tests for reachable code or delete unreachable
   code.
+- [conductor.md](./conductor.md) — drain the steward's merge
+  queue one PR at a time: rebase, tidy, validate CI, merge.
 - [designer.md](./designer.md) — expand a short prompt into a full
   `designs/*.md` document.
 - [juror.md](./juror.md) — conduct a review of someone else's
@@ -42,6 +44,9 @@ playing both `juror` and `fixer`; consult both.
 - [steward.md](./steward.md) — periodically review the bot-PR
   estate and dispatch the right role per PR; tracks state in
   `process/` files across context clears.
+- [stratego.md](./stratego.md) — own the upstream-port plan;
+  cluster llm-vs-master substance into a linear stack proposal,
+  iterate as both branches advance.
 - [weaver.md](./weaver.md) — rebase or merge a branch onto a
   fresh base; resolve conflicts by reading both sides.
 - [maestro.md](./maestro.md) — dispatch subagents,

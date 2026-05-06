@@ -108,6 +108,8 @@ The current roles are:
   or spec and get it through CI.
 - [`cleaner`](./roles/cleaner.md) — maximize coverage on a target
   package; write tests or delete unreachable code.
+- [`conductor`](./roles/conductor.md) — drain the steward's
+  merge queue: rebase, tidy, validate CI, `gh pr merge --merge`.
 - [`designer`](./roles/designer.md) — expand a short prompt into a
   full `designs/*.md` document.
 - [`juror`](./roles/juror.md) — conduct a review of someone else's
@@ -131,6 +133,9 @@ The current roles are:
 - [`steward`](./roles/steward.md) — periodically review the
   bot-PR estate and dispatch the right role per PR; stateful
   across context clears via `process/` files.
+- [`stratego`](./roles/stratego.md) — own the upstream-port
+  plan; cluster llm-vs-master substance into a linear stack
+  proposal, iterate as both branches advance.
 - [`weaver`](./roles/weaver.md) — rebase or merge a branch onto a
   fresh base; resolve conflicts by reading both sides.
 - [`maestro`](./roles/maestro.md) — dispatch subagents, aggregate
@@ -168,7 +173,7 @@ for the discipline.
   the human or bot identity that authored them. Apply this rule
   to every commit, in every role: builder, fixer, weaver,
   shepherd, designer, groom, conductor, cleaner, steward,
-  saboteur, scout, juror, maestro.
+  stratego, saboteur, scout, juror, maestro.
 - **Never add `.github/workflows/claude*.yml` or any Claude /
   Claude-review workflow file** to any branch under any
   circumstance. If a rebase or stash recovery surfaces such a
