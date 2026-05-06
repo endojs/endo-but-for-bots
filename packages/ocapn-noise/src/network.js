@@ -48,7 +48,6 @@ import {
 } from './bindings.js';
 import { compareUint8Arrays } from './bytewise-compare.js';
 
-const { freeze } = Object;
 const CAPTP_VERSION = '1.0';
 
 /**
@@ -438,12 +437,12 @@ export const makeOcapnNoiseNetwork = ({
    */
   const buildLocationFor = rk => {
     const hints = aggregatedHints();
-    return freeze({
+    return harden({
       type: /** @type {'ocapn-peer'} */ ('ocapn-peer'),
       network: 'np',
       transport: 'np',
       designator: rk.keyId,
-      hints: Object.keys(hints).length > 0 ? freeze({ ...hints }) : false,
+      hints: Object.keys(hints).length > 0 ? { ...hints } : false,
     });
   };
 
@@ -699,12 +698,12 @@ export const makeOcapnNoiseNetwork = ({
 
     return harden({
       sessionId,
-      selfIdentity: freeze({
+      selfIdentity: {
         location,
         locationSignature,
         keyPair: localKey.keyPair,
         keyId: localKey.keyId,
-      }),
+      },
       remoteLocation: peerLocation,
       remoteLocationSignature: peerLocationSignature,
       remotePublicKeyBytes: peerEd25519Buffer,

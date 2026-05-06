@@ -1,5 +1,7 @@
 /* eslint-disable no-use-before-define */
 
+import harden from '@endo/harden';
+
 /**
  * @typedef {object} SigningKeys
  * @property {Uint8Array} privateKey - The ed25519 signing-key seed (32 bytes)
@@ -249,10 +251,10 @@ export const makeOcapnSessionCryptography = ({
       supportedEncodings,
     );
 
-    return {
+    return harden({
       signingKeys,
       initiatorWriteSyn,
-    };
+    });
   };
 
   /**
@@ -288,10 +290,10 @@ export const makeOcapnSessionCryptography = ({
       );
       signingKeys = { privateKey, publicKey };
     }
-    return {
+    return harden({
       signingKeys,
       responderReadSynWriteSynack,
-    };
+    });
   };
 
   /**
@@ -341,7 +343,7 @@ export const makeOcapnSessionCryptography = ({
       )
       .set(buffer.subarray(SYN_OFFSET, SYN_OFFSET + SYN_LENGTH));
 
-    return { initiatorReadSynack };
+    return harden({ initiatorReadSynack });
   };
 
   /**
@@ -436,13 +438,13 @@ export const makeOcapnSessionCryptography = ({
     );
     const handshakeHash = readHandshakeHash();
 
-    return {
+    return harden({
       initiatorVerifyingKey,
       encoding: acceptedEncoding,
       encrypt,
       decrypt,
       handshakeHash,
-    };
+    });
   };
 
   /**
@@ -467,12 +469,12 @@ export const makeOcapnSessionCryptography = ({
 
     const encoding = buffer[ACCEPTED_ENCODING_OFFSET];
     const handshakeHash = readHandshakeHash();
-    return {
+    return harden({
       encoding,
       encrypt,
       decrypt,
       handshakeHash,
-    };
+    });
   };
 
   /**
@@ -531,8 +533,8 @@ export const makeOcapnSessionCryptography = ({
     return buffer.slice(0, message.length - 16);
   };
 
-  return {
+  return harden({
     asInitiator,
     asResponder,
-  };
+  });
 };
