@@ -8,6 +8,30 @@ The intent is reproducibility: if you came back six months from now,
 each file should let you re-acquire the technique without re-deriving
 the whole context.
 
+## Trigger-and-filter convention
+
+The role / skill hierarchy is **trigger-broad at the parent,
+filter-narrow at the child**:
+
+- The role index in `CLAUDE.md` lists each role with one
+  succinct trigger line. The line should be **slightly
+  overbroad on purpose**: it casts a wide enough net that an
+  agent skimming the index will follow the link in any
+  plausibly-relevant case.
+- Each role file then narrows: it states what *would not*
+  warrant entering the role, and lists its skills with their
+  own one-line triggers. Same overbroad-at-parent rule applies
+  to the skill list.
+- Each skill file is the deepest layer; it can be **specific
+  and a little verbose** to filter out the false positives the
+  parent's overbroad trigger let through.
+
+Practical effect: a skill is allowed to lead with "Read this
+when X" and "Skip this when Y" before any technique. A role's
+skill list is allowed to read "[skill](./skill.md): when X
+matches even loosely". The cost of an unnecessary read is small
+compared to the cost of a missed match.
+
 ## Index
 
 ### Git and worktree workflow
