@@ -117,6 +117,43 @@ review → dispatch fixer. Skipping the formal-review step strands
 the PR (no orchestration trigger fires); skipping the fixer
 dispatch strands the verdict (no agent picks it up).
 
+## Pitfall: panel-report prose is not exempt from the project style rules
+
+The aggregated panel report is markdown that ships in a public PR
+review. The same prose rules apply as everywhere else in the repo:
+no em-dashes (per [`em-dash-style-rule.md`](./em-dash-style-rule.md)),
+no methodology leaks (per
+[`pre-pr-checklist.md`](./pre-pr-checklist.md)). The temptation to
+write the report quickly with em-dash parentheticals is real because
+the writer thinks of it as ephemeral commentary; it is not. Sweep the
+panel body for `—` before submitting.
+
+Encountered on PR 106 (endoclaw-browser builder), where the panel
+report shipped with several em-dashes that the builder's own source
+files and PR body had carefully avoided. The PR review body is
+non-revisable in practice (you can edit it but the original lands in
+the timeline first), so this is a "before-submit" sweep, not an
+after-submit fix.
+
+## Pitfall: a "shadow" finding may be a panel hallucination
+
+Variable-shadowing claims by the TypeScript or naming juror need a
+30-second sanity check before promoting them to a should-fix item:
+literally re-read the offending lines and confirm they are in the
+same lexical scope. A panel run that reads the diff once can mis-name
+a parameter as shadowing an outer const that lives in a different
+function. Panel findings are independent reviewer outputs; treating
+them as ground truth without a quick scope check leads to
+make-work fixer dispatches that the fixer correctly refuses.
+
+Encountered on PR 106 where Reviewer 3 flagged
+`closures.map(closer => closer.close())` (inside `revoke`) as
+shadowing an outer `const closer = harden(...)` (inside `makePage`).
+The two scopes are disjoint; there is no shadow. The builder caught
+this before dispatching the fixer; if the panel had auto-dispatched,
+the fixer would have either refused the change or surfaced an
+embarrassing no-op commit.
+
 ## Pitfall: sibling-package forks miss recent peer fixes
 
 When a PR introduces a package by forking an existing peer (e.g.
@@ -137,4 +174,5 @@ Used four times: PR 67 (harden-exports destructuring), PR 60
 `endojs/endo#3053` for in-organization review), and PR 29
 (`@endo/syrups` sibling-of-netstring). All produced substantive
 must-fix lists. The fourth surfaced the sibling-fork-misses-peer-fix
-pitfall above.
+pitfall above. PR 106 (endoclaw-browser greenfield) surfaced both
+the panel-prose-em-dash and the false-shadow pitfalls above.
