@@ -3015,30 +3015,53 @@ const makeDaemonCore = async (
               );
             });
         },
-        onTick: (entry, tickNumber, _tickResponse) => {
-          const tickMessage = harden({
-            type: /** @type {const} */ ('package'),
-            strings: [
-              `Interval "${entry.label}" tick #${tickNumber} ` +
-                `(period: ${entry.periodMs}ms)`,
-            ],
-            names: [],
-            ids: [],
-            messageId: /** @type {import('./types.js').FormulaNumber} */ (
-              `tick-${entry.id}-${tickNumber}`
-            ),
-            from: agentId,
-            to: agentId,
-          });
-          // Fire-and-forget delivery to the agent's inbox.
-          E(agentHandle)
-            .receive(tickMessage, agentId)
-            .catch(err => {
+        onTick: (entry, tickNumber, tickResponse) => {
+          // Fire a tick into the agent's inbox.  Mail-mode is the only
+          // wired transport, and the TickResponse remotable cannot be
+          // passed through a Package message body: `ids[]` carries
+          // formula identifiers, not transient remotables.  Wire the
+          // round-trip end-to-end here: the scheduler advances to the
+          // next period as soon as the agent's mailbox has accepted
+          // the message (or fails to), so a mis-configured agent
+          // never leaves the deadline timer to expire before the next
+          // tick is armed.
+          //
+          // An agent that needs to slow ticks down (the use case
+          // tickResponse.reschedule covers for in-process callers)
+          // talks to the IntervalControl instead: pause(), resume(),
+          // and setMinPeriodMs() cover the throttling vocabulary
+          // mail-mode supports.
+          (async () => {
+            const messageId = /** @type {import('./types.js').FormulaNumber} */ (
+              await randomHex256()
+            );
+            const tickMessage = harden({
+              type: /** @type {const} */ ('package'),
+              strings: [
+                `Interval "${entry.label}" tick #${tickNumber} ` +
+                  `(period: ${entry.periodMs}ms)`,
+              ],
+              names: [],
+              ids: [],
+              messageId,
+              from: agentId,
+              to: agentId,
+            });
+            try {
+              await E(agentHandle).receive(tickMessage, agentId);
+            } catch (err) {
               console.error(
                 `[interval-scheduler] tick delivery failed:`,
                 /** @type {Error} */ (err).message,
               );
-            });
+            }
+            tickResponse.resolve();
+          })().catch(err => {
+            console.error(
+              `[interval-scheduler] tick wiring failed:`,
+              /** @type {Error} */ (err).message,
+            );
+          });
         },
       });
 
