@@ -222,6 +222,54 @@ issue or design document, and shepherding it through to a green PR.
   marshal landed). The aggregated panel content is identical;
   only the verdict flag changes. Encountered on PR 44 → #101
   (chat voice input) and again on PR #105 (skill-registry).
+- **Splitting an existing PR into design + implementation halves
+  on different bases.** When a maintainer asks to split a PR that
+  bundles a design document and an implementation package
+  (typical when a single design-and-implement PR has grown past
+  reviewable size), the right shape is two new PRs rooted at two
+  different bases plus a supersession comment closing the
+  original. The maintainer's brief usually names the bases
+  explicitly ("design changes off llm, implementation changes
+  off master").
+  Procedure:
+  1. Two dedicated worktrees, one per new PR (per
+     [`../skills/worktree-per-pr.md`](../skills/worktree-per-pr.md)),
+     each rooted at the named base.
+  2. **Do not cherry-pick the original PR's commit chain onto the
+     new branches.** A multi-commit chain that includes renames,
+     fix-ups, and weaver merges from the original PR is brittle
+     to cherry-pick onto a divergent base. Instead, read the
+     cumulative state at the original PR's HEAD via `git show
+     <head>:<path>` and write each file to the new worktree as a
+     fresh commit. This preserves the panel-fix + cleaner +
+     coverage-gate state without re-applying the intermediate
+     rename and fix-up commits. The original PR's history stays
+     intact in the closed PR's record; the new PRs ship a clean
+     two-commit history (one substantive, one `chore: Update
+     yarn.lock`).
+  3. Author commits as the human (`GIT_AUTHOR_NAME` /
+     `GIT_AUTHOR_EMAIL` env vars per the re-open-under-bot
+     section above) so the gh-side PR author is the bot but the
+     commit-side author is the human.
+  4. Each new PR's body opens with `Refs: #<orig> #<sibling>` and
+     a one-line "design half" or "implementation half" framing
+     plus the verbatim quote of the maintainer's split request.
+     The implementation PR's body must reference the design PR
+     so a reader can find the design from the implementation PR
+     even when the design PR is rooted at a base the
+     implementation PR's reader does not have checked out.
+  5. Close the original PR with a supersession comment naming
+     both new PRs and the chosen continuation venue (typically
+     the implementation PR for code-side conversation).
+  6. The full panel + saboteur + cleaner chain runs against the
+     implementation PR per the standard hand-off below; the
+     design PR usually does not warrant a panel because it is
+     a single-document change with no code surface.
+  Encountered on PR 29 → #108 (design, off llm) + #109
+  (implementation, off master). The 13-commit cherry-pick path
+  was rejected after weighing rename-fix-up complexity against
+  the direct-copy-at-HEAD alternative; the latter took two
+  commits and zero conflicts.
 - **Hand off the freshly-opened PR to a juror panel and a
   saboteur** before ending the engagement. The builder's last
   acts are two parallel dispatches plus the close-out chain:
