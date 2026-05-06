@@ -1,5 +1,12 @@
 # Pre-PR checklist
 
+## Trigger
+
+Read this skill before every push to a PR branch (initial create
+or follow-up), and again before any `gh pr edit --body` rewrite.
+The checklist below is the minimum; the PR-body template section
+applies whenever `gh pr create` or `gh pr edit --body` runs.
+
 ## The minimum
 
 Run before every push to a PR branch:
