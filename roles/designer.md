@@ -193,6 +193,27 @@ an agent in the `builder` role to implement from later.
   Encountered on PR #75 -> PR #107 (`pure-rand` v8 adapter for
   `@endo/random/fast-check.js`).
 
+- **Revising a design PR under CHANGES_REQUESTED review.** When a
+  steward dispatch hands you a design PR with inline review
+  comments, treat the brief's enumeration of comments as a starting
+  set, not the closed set. Pull the full inline comment list with
+  `gh api repos/<owner>/<repo>/pulls/<N>/comments` first; the brief
+  may have been written before a later comment landed, or may
+  understandably summarize a multi-comment thread by its two
+  loudest items. Address every inline comment in the same revision
+  even if the brief only enumerated some, because the reviewer's
+  comments often reinforce one another structurally: a "name the
+  field" comment and a "no downstream consumer depends on the old
+  shape" comment can both be load-bearing arguments for the same
+  underlying redesign, and addressing only one leaves the design
+  internally inconsistent. If a comment is genuinely out of scope
+  for the dispatch, say so on the inline thread (with a deferral
+  rationale) rather than ignoring it. Reactji every comment per
+  `../skills/reactji-acknowledgment.md` whether or not the brief
+  named it, so the reviewer sees you read the whole review.
+  Encountered on PR 96 (compartment-mapper auxiliary package.json
+  overrides).
+
 - **Re-opening a maintainer-authored design PR under the bot
   account.** When the design PR you are extracting from was
   authored by the maintainer who must now review it (typically
