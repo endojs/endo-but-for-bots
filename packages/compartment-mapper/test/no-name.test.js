@@ -11,7 +11,7 @@ import { makeReadPowers } from '../node-powers.js';
 const readPowers = makeReadPowers({ fs, url });
 
 const escapeRegex = /** @param {string} s */ s =>
-  s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  RegExp.escape?.(s) ?? s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 const dependencyEntry = new URL(
   'fixtures-no-name/node_modules/app/index.js',
