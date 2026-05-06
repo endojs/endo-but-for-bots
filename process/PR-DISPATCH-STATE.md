@@ -186,6 +186,21 @@ Merged this run (2026-05-06 conductor, resume cycle):
   Pending checks completed in the interim, so GitHub processed the
   auto-merge as a direct merge; state=MERGED on first verify.
 
+Merged this run (2026-05-06 conductor, PR 97 cycle):
+
+- #97 → `9f69b737ab` (merge commit to garden).
+  Roadmap reconciliation refresh from groom; was 2 behind `garden`,
+  5 ahead at survey; APPROVED; CI mostly green with a few test
+  matrix jobs IN_PROGRESS / QUEUED. Five single-author commits
+  (Kris Kowal), each a coherent concern: status reconciliation,
+  roadmap reconciliation, DESIGNS-WITHOUT-PR snapshot, GROOM
+  open-questions drain, and a structural-status-drift naming +
+  branch-awareness step. No tidy required. Rebased onto current
+  `bots-ssh/garden` (clean); force-pushed `5fc8d7ec82` with
+  `--force-with-lease`. Issued `--auto --merge`; GitHub processed
+  it as a direct merge immediately because branch protection on
+  `garden` does not gate on CI. state=MERGED.
+
 Merged this run (2026-05-06 conductor):
 
 - #91 → `e3c1ef10b4` (merge commit to llm).
