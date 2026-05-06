@@ -99,8 +99,21 @@ result through CI.
     -f reviewers[]=<login>
   ```
   Multiple reviewers: repeat `-f reviewers[]=<login>`. If the
-  reviewer is the PR author, GitHub rejects the request; in that
-  case post a `@<login>` mention in the top-level summary instead.
+  reviewer is the PR author, GitHub rejects the request with
+  `422 Review cannot be requested from pull request author`; in
+  that case post a `@<login>` mention in the top-level summary
+  instead. **Do NOT fall back to requesting the bot's own
+  identity** (`kriscendobot` requesting itself) as a workaround.
+  The bot reviewing its own work is meaningless and breaks the
+  signal: the maintainer never sees the PR re-enter their queue,
+  and `requested_reviewers: [kriscendobot]` is what a stalled
+  PR looks like in the dispatch state. PR 59 sat with this
+  exact misconfiguration for hours before a maintainer pointed at
+  the `pullrequestreview-4233224044` review and asked why it was
+  going nowhere; the fix was `DELETE requested_reviewers[]=kriscendobot`
+  + a top-level `@<author>` ping. Verify the post-request state
+  with `gh pr view <N> --json reviewRequests`; if the bot is in
+  the list, you have not done the right thing.
   Do not re-request review on a deferral-path reply (the reviewer
   already authorized the deferral); only when the fixer's response
   is a substantive fix that the reviewer should re-evaluate.
