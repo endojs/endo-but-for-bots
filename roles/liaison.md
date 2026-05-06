@@ -197,21 +197,26 @@ The liaison **does not**:
    comment history.
 2. Read the issue's comments since the tracking file's last
    snapshot timestamp.
-3. **For each new comment, classify the response shape** before
-   acting (the four shapes; pick the lightest one that fits):
+3. **For each new comment, leave a `eyes` reactji first** per
+   [`../skills/reactji-acknowledgment.md`](../skills/reactji-acknowledgment.md)
+   so the contributor sees the comment was received. Then
+   classify the response shape (the four shapes; pick the
+   lightest one that fits):
    - **Reply** — the comment is directed at agents, asks a
      direct question the liaison can answer from current state,
      or contains an instruction the liaison can act on. Post a
      reply that names the action taken (or the deferral path).
-   - **Reactji + log** — the comment is directed at humans
+     The `eyes` reactji posted in advance signals the response is
+     in flight.
+   - **Reactji-only + log** — the comment is directed at humans
      (contributor-to-contributor discussion, design banter,
      off-topic interjection), or is informational with no ask.
-     Leave a `eyes` reaction on the comment so the contributor
-     sees it was read; log the observation in the tracking file
-     with the rationale ("contributor-to-contributor design
-     discussion; no agent action warranted"). The reactji is the
-     lightweight acknowledgment that prevents the liaison from
-     re-evaluating the same comment next cycle:
+     The `eyes` reactji from step 3 IS the response; log the
+     observation in the tracking file with the rationale
+     ("contributor-to-contributor design discussion; no agent
+     action warranted"). The reactji is the lightweight
+     acknowledgment that prevents the liaison from re-evaluating
+     the same comment next cycle:
      ```sh
      gh api -X POST \
        repos/endojs/endo-but-for-bots/issues/comments/<COMMENT_ID>/reactions \

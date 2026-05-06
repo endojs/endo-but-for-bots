@@ -88,7 +88,13 @@ dispatches that as a first-round-only weaver.
    plus per-PR `gh api .../comments` and `.../reviews` filtered by
    the same timestamp. Any PR with new activity is high-priority
    for fixer dispatch (overrides per-cycle quotas; cleaner cap
-   still applies).
+   still applies). **Leave a `eyes` reactji on every fresh comment
+   you read** per
+   [`../skills/reactji-acknowledgment.md`](../skills/reactji-acknowledgment.md);
+   the reactji is the immediate "received" signal so contributors
+   don't wonder whether the bot saw their comment. The substantive
+   dispatch (fixer / builder / reply) follows the reactji, not the
+   other way around.
 5. **For each open PR, compute the dispatch decision.** Apply the
    debouncer.
 6. **Dispatch in batch.** One agent per concern per PR. Each brief
@@ -120,6 +126,8 @@ director does not edit process files directly.
   juror panel dispatch + formal review submission + fixer chain.
 - [`../skills/subagent-batching.md`](../skills/subagent-batching.md):
   concurrent dispatch.
+- [`../skills/reactji-acknowledgment.md`](../skills/reactji-acknowledgment.md):
+  leave `eyes` on every fresh comment read during step 4.
 - [`../skills/em-dash-style-rule.md`](../skills/em-dash-style-rule.md).
 
 ## Posture

@@ -50,7 +50,15 @@ result through CI.
   `/home/kris/garden` (the steward's seat) or any other shared
   tree.
 - Read all comments before touching code, including any panel
-  report. Group them by area before fixing them.
+  report. Group them by area before fixing them. **Leave a `eyes`
+  reactji on each comment you read** per
+  [`../skills/reactji-acknowledgment.md`](../skills/reactji-acknowledgment.md).
+  The reactji is the immediate "received and processing" signal;
+  the substantive fix (commit + thread reply) is the load-bearing
+  follow-up. Both inline review comments
+  (`gh api .../pulls/comments/<id>/reactions`) and conversation
+  comments (`gh api .../issues/comments/<id>/reactions`) get the
+  reactji.
 - Don't address feedback on review-only mirrors (e.g.
   `pr-mirror-for-offline-review.md` PRs); those go upstream.
 - Skip-with-reason if a "should fix" item is genuinely out of
