@@ -39,9 +39,9 @@
  * @property {string} networkId - Unique identifier for this network.
  * @property {import('../codec-interface.js').OcapnCodec} [codec] -
  *   Wire codec this network uses. If present, the client adopts it at
- *   registration time; this lets `makeClient()` be constructed without
+ *   registration time; this lets `makeOcapn()` be constructed without
  *   an explicit codec. Two registered networks must agree on the codec
- *   (and a codec passed to `makeClient({ codec })` must match).
+ *   (and a codec passed to `makeOcapn({ codec })` must match).
  * @property {() => void} shutdown - Shut the network down, closing
  *   outgoing and inbound state.
  * @property {((location: OcapnLocation) => Connection | Promise<Connection>)} [connect] -

@@ -228,9 +228,10 @@ export const makeCodecTestKit = (
     return harden({ promise, settler });
   };
 
-  // Mock SturdyRef tracker for tests
-  const swissnumTable = new Map(); // Empty table for tests
-  const sturdyRefTracker = makeSturdyRefTracker(swissnumTable);
+  // Mock SturdyRef tracker for tests; an empty Map satisfies the
+  // duck-typed `Locator.get(secret)` contract.
+  const locator = new Map();
+  const sturdyRefTracker = makeSturdyRefTracker(locator);
   const testHandoffMap = new Map();
 
   /**

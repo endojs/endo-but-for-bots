@@ -80,7 +80,7 @@ This package ships two complete, interchangeable codecs behind a common
   tags. See the [CBOR codec README](./src/cbor/README.md) and
   [`docs/cbor-encoding.md`](./docs/cbor-encoding.md).
 
-The codec you pass to `makeClient` determines the wire format for every byte
+The codec you pass to `makeOcapn` determines the wire format for every byte
 that crosses the session — handshake frames, operation messages, and the
 canonical bytes signed by handoff/location signatures. Two peers that chose
 different codecs cannot interoperate; codec choice is not negotiated.

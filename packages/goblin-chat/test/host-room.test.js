@@ -31,7 +31,7 @@ import { hostRoom, hostRegistry } from '../src/host-room.js';
 import { parseLocator } from '../src/uri-parse.js';
 
 // Match what the in-process interop test uses; the websocket loopback
-// path through `makeClient`/`makeWebSocketNetLayer` is most-tested at
+// path through `makeOcapn`/`makeWebSocketNetLayer` is most-tested at
 // this version.
 const CAPTP_VERSION = 'goblins-0.16';
 

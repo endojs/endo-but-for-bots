@@ -6,7 +6,7 @@ codec. It is the first proposed OCapN wire format.
 ## Usage
 
 ```js
-// Preferred: the bundled OcapnCodec instance, for makeClient({ codec })
+// Preferred: the bundled OcapnCodec instance, for makeOcapn({ codec })
 import { syrupCodec } from '@endo/ocapn/syrup';
 
 // Or the reader/writer primitives directly (tests, tools, custom drivers)

@@ -2,7 +2,7 @@
 
 This package ships two wire codecs — **Syrup** and **CBOR** — behind a common
 `OcapnCodec` interface. An application picks one at construction time and
-passes it to `makeClient`. The codec determines the wire format for every
+passes it to `makeOcapn`. The codec determines the wire format for every
 byte that crosses the session, including the canonical bytes covered by
 location and handoff signatures.
 
@@ -49,34 +49,34 @@ Each module also exports its lower-level primitives (`makeSyrupReader` /
 helpers) for callers that need to drive the reader/writer directly — for
 example, test harnesses or tools that inspect raw bytes.
 
-## Using the client
+## Using `makeOcapn`
 
-Pass the codec to `makeClient`:
+Pass the codec to `makeOcapn`:
 
 ```js
-import { makeClient } from '@endo/ocapn';
+import { makeOcapn } from '@endo/ocapn';
 import { syrupCodec } from '@endo/ocapn/syrup';
 
-const client = makeClient({ codec: syrupCodec });
+const ocapn = makeOcapn({ codec: syrupCodec });
 ```
 
-The `codec` option is required — the constructor intentionally has no
-default, so the codec you are not using never enters your bundle graph.
+The `codec` option is required (the constructor intentionally has no
+default), so the codec you are not using never enters your bundle graph.
 For CBOR networks:
 
 ```js
-import { makeClient } from '@endo/ocapn';
+import { makeOcapn } from '@endo/ocapn';
 import { cborCodec } from '@endo/ocapn/cbor';
 
-const client = makeClient({ codec: cborCodec });
+const ocapn = makeOcapn({ codec: cborCodec });
 ```
 
-Everything downstream — handshake frames, session messages, and the canonical
-bytes that feed `ed25519` signatures — is produced and consumed through the
-codec you supplied. Two clients constructed with different codecs will reject
-each other's handshakes.
+Everything downstream (handshake frames, session messages, and the canonical
+bytes that feed `ed25519` signatures) is produced and consumed through the
+codec you supplied. Two `ocapn` instances constructed with different codecs
+will reject each other's handshakes.
 
-## Using the codec outside of a client
+## Using the codec outside of `makeOcapn`
 
 The same codec bundle is enough to drive the serialize/deserialize helpers
 directly, and to obtain codec-bound cryptographic helpers:

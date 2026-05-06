@@ -118,7 +118,7 @@ const formatLocator = (location, swissStr) => {
 };
 
 /**
- * Wrap a `LogSink` into the `Logger` shape that `makeClient` /
+ * Wrap a `LogSink` into the `Logger` shape that `makeOcapn` /
  * `makeWebSocketNetLayer` expect. Each level forwards through to the
  * sink (when one is provided), tagged with `source` so the entrypoint
  * file log can distinguish host-side lines from participant-side lines.
@@ -209,7 +209,7 @@ export const hostRegistry = harden({
  *   The chatroom's `self-proposed-name`. Returned to remote subscribers
  *   verbatim from the `'self-proposed-name'` selector.
  * @property {string} [captpVersion]
- *   Forwarded to `makeClient`. Defaults to the client's own default
+ *   Forwarded to `makeOcapn`. Defaults to the client's own default
  *   when omitted.
  * @property {LogSink} [logSink]
  *   Optional log sink for the host's `client` and `netlayer` logs (the

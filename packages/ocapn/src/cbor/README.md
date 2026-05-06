@@ -28,7 +28,7 @@ cbor/
 ## Usage
 
 ```js
-// Preferred: the bundled OcapnCodec instance, for makeClient({ codec })
+// Preferred: the bundled OcapnCodec instance, for makeOcapn({ codec })
 import { cborCodec } from '@endo/ocapn/cbor';
 
 // Or the reader/writer primitives directly (tests, tools, custom drivers)
