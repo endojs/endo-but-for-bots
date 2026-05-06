@@ -9,7 +9,11 @@ import { makeOcapnNoiseNetwork } from '../index.js';
 import { makeTcpTransport } from '../src/transports/tcp.js';
 import { netListenAllowed } from './_net-permission.js';
 
-const test = netListenAllowed ? baseTest : baseTest.skip;
+// `test.serial` because every test in this file binds an OS port via
+// `makeTcpTransport()` and shares filesystem and socket state. A
+// failure mid-test would otherwise leak the listener into the next
+// concurrent test.
+const test = netListenAllowed ? baseTest.serial : baseTest.serial.skip;
 
 /**
  * @param {ReturnType<typeof makeOcapnNoiseNetwork>} network
@@ -23,6 +27,8 @@ const addFreshKey = network => {
 test('two noise peers exchange encrypted messages over TCP', async t => {
   const netA = makeOcapnNoiseNetwork({ codec: cborCodec });
   const netB = makeOcapnNoiseNetwork({ codec: cborCodec });
+  t.teardown(() => netA.shutdown());
+  t.teardown(() => netB.shutdown());
   const { keyId: keyA } = addFreshKey(netA);
   const { keyId: keyB } = addFreshKey(netB);
   await netA.addTransport(makeTcpTransport());
@@ -49,12 +55,11 @@ test('two noise peers exchange encrypted messages over TCP', async t => {
 
   sessionA.close();
   sessionB.close();
-  netA.shutdown();
-  netB.shutdown();
 });
 
 test('noise network rejects a tcp-testing-only location that has no tcp-scheme hints', async t => {
   const network = makeOcapnNoiseNetwork({ codec: cborCodec });
+  t.teardown(() => network.shutdown());
   addFreshKey(network);
   await network.addTransport(makeTcpTransport());
   await t.throwsAsync(
@@ -68,11 +73,11 @@ test('noise network rejects a tcp-testing-only location that has no tcp-scheme h
       }),
     { message: /no registered transport matches hints/ },
   );
-  network.shutdown();
 });
 
 test('tcp transport with framing:none delivers raw socket bytes', async t => {
   const transport = makeTcpTransport({ framing: 'none' });
+  t.teardown(() => transport.shutdown());
   /** @type {(s: import('../src/types.js').ByteStream) => void} */
   let resolveStream = () => {};
   /** @type {Promise<import('../src/types.js').ByteStream>} */
@@ -106,7 +111,6 @@ test('tcp transport with framing:none delivers raw socket bytes', async t => {
   }
 
   sock.destroy();
-  transport.shutdown();
 });
 
 // `makeTcpTransport` validates options synchronously, so this case

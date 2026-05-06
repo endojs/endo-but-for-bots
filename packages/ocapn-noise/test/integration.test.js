@@ -49,6 +49,7 @@ const makeNoisePeer = async ({ fabric, name, locator = new Map() }) => {
 
 test('two noise-backed OCapN peers exchange method calls via bootstrap fetch', async t => {
   const fabric = makeMockMeshFabric();
+  t.teardown(() => fabric.shutdown());
 
   const locatorA = new Map();
   locatorA.set(
@@ -63,7 +64,9 @@ test('two noise-backed OCapN peers exchange method calls via bootstrap fetch', a
     name: 'A',
     locator: locatorA,
   });
+  t.teardown(() => peerA.client.shutdown());
   const peerB = await makeNoisePeer({ fabric, name: 'B' });
+  t.teardown(() => peerB.client.shutdown());
 
   // B opens a session to A, fetches A's greeter via SturdyRef, and calls
   // it — a round trip of two CapTP deliveries over Noise.
@@ -71,14 +74,11 @@ test('two noise-backed OCapN peers exchange method calls via bootstrap fetch', a
   const greeter = await peerB.client.enlivenSturdyRef(sturdyRef);
   const reply = await E(greeter).hello('Alice');
   t.is(reply, 'hello, Alice');
-
-  peerA.client.shutdown();
-  peerB.client.shutdown();
-  fabric.shutdown();
 });
 
 test('three-party handoff: A forwards a cap from B into C, and C invokes it', async t => {
   const fabric = makeMockMeshFabric();
+  t.teardown(() => fabric.shutdown());
 
   const locatorB = new Map();
   locatorB.set(
@@ -101,16 +101,19 @@ test('three-party handoff: A forwards a cap from B into C, and C invokes it', as
   );
 
   const peerA = await makeNoisePeer({ fabric, name: 'A' });
+  t.teardown(() => peerA.client.shutdown());
   const peerB = await makeNoisePeer({
     fabric,
     name: 'B',
     locator: locatorB,
   });
+  t.teardown(() => peerB.client.shutdown());
   const peerC = await makeNoisePeer({
     fabric,
     name: 'C',
     locator: locatorC,
   });
+  t.teardown(() => peerC.client.shutdown());
 
   // A fetches ObjectMaker from B and ObjectUser from C via SturdyRefs.
   // Asking ObjectUser to invoke an Object created on B triggers the
@@ -127,9 +130,4 @@ test('three-party handoff: A forwards a cap from B into C, and C invokes it', as
   const object = await E(objectMaker).makeObject();
   const number = await E(objectUser).useObject(object);
   t.is(number, 42, 'C invokes Object via a handoff from A and reaches B');
-
-  peerA.client.shutdown();
-  peerB.client.shutdown();
-  peerC.client.shutdown();
-  fabric.shutdown();
 });

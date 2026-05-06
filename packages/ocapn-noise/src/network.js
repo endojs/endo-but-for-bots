@@ -1172,6 +1172,11 @@ export const makeOcapnNoiseNetwork = ({
   };
 
   const shutdown = () => {
+    // Idempotent: a second call (often from a `t.teardown` overlapping
+    // an explicit test-body `shutdown()`) is a no-op rather than
+    // putting a second `done: true` on `inboundQueue` and rebumping
+    // any already-released listener.
+    if (isShutdown) return;
     // Set the flag first so any `runInitiator` or `handleIncoming`
     // that resolves while we are tearing down sees the network is
     // shutting down and closes its candidate rather than writing it

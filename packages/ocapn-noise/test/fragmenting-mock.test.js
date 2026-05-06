@@ -27,8 +27,11 @@ const addFreshKey = network => {
 
 test('fragmenting mock fabric: handshake completes and message round-trips', async t => {
   const fabric = makeFragmentingMockMeshFabric({ seed: 0xc0ffee, maxChunk: 7 });
+  t.teardown(() => fabric.shutdown());
   const netA = makeOcapnNoiseNetwork({ codec: cborCodec });
+  t.teardown(() => netA.shutdown());
   const netB = makeOcapnNoiseNetwork({ codec: cborCodec });
+  t.teardown(() => netB.shutdown());
   const keyA = addFreshKey(netA).keyId;
   const keyB = addFreshKey(netB).keyId;
   await netA.addTransport(fabric.transportFor('A'));
@@ -58,15 +61,15 @@ test('fragmenting mock fabric: handshake completes and message round-trips', asy
 
   sessionA.close();
   sessionB.close();
-  netA.shutdown();
-  netB.shutdown();
-  fabric.shutdown();
 });
 
 test('fragmenting mock fabric: crossed hellos resolve to one session per side', async t => {
   const fabric = makeFragmentingMockMeshFabric({ seed: 0xfeedfa, maxChunk: 5 });
+  t.teardown(() => fabric.shutdown());
   const netA = makeOcapnNoiseNetwork({ codec: cborCodec });
+  t.teardown(() => netA.shutdown());
   const netB = makeOcapnNoiseNetwork({ codec: cborCodec });
+  t.teardown(() => netB.shutdown());
   const keyA = addFreshKey(netA).keyId;
   const keyB = addFreshKey(netB).keyId;
   await netA.addTransport(fabric.transportFor('A'));
@@ -96,7 +99,4 @@ test('fragmenting mock fabric: crossed hellos resolve to one session per side', 
 
   aSession.close();
   bSession.close();
-  netA.shutdown();
-  netB.shutdown();
-  fabric.shutdown();
 });

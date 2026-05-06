@@ -22,8 +22,35 @@ const addFreshKey = network => {
   return { keyId, ...signingKeys };
 };
 
+/**
+ * Build an OcapnNoiseNetwork and register an automatic
+ * `t.teardown(() => net.shutdown())` so a failed assertion mid-test
+ * still releases the network's transports, listeners, and WASM
+ * cipher state. `network.shutdown()` is idempotent, so explicit
+ * shutdown calls in the test body remain safe.
+ *
+ * @param {import('@endo/ses-ava').ExecutionContext<unknown>} t
+ * @param {Parameters<typeof makeOcapnNoiseNetwork>[0]} options
+ */
+const makeNetworkForTest = (t, options) => {
+  const net = makeOcapnNoiseNetwork(options);
+  t.teardown(() => net.shutdown());
+  return net;
+};
+
+/**
+ * Build a mock-mesh fabric with automatic teardown.
+ *
+ * @param {import('@endo/ses-ava').ExecutionContext<unknown>} t
+ */
+const makeFabricForTest = t => {
+  const fabric = makeMockMeshFabric();
+  t.teardown(() => fabric.shutdown());
+  return fabric;
+};
+
 test('makeOcapnNoiseNetwork exposes the np network identity without any keys', async t => {
-  const network = makeOcapnNoiseNetwork({ codec: cborCodec });
+  const network = makeNetworkForTest(t, { codec: cborCodec });
   t.is(network.networkId, 'np');
   t.deepEqual(network.listSigningKeys(), []);
   t.deepEqual(network.listTransports(), []);
@@ -32,7 +59,7 @@ test('makeOcapnNoiseNetwork exposes the np network identity without any keys', a
 });
 
 test('addSigningKeys returns the 64-char keyId and registers a locator', async t => {
-  const network = makeOcapnNoiseNetwork({ codec: cborCodec });
+  const network = makeNetworkForTest(t, { codec: cborCodec });
   const { keyId } = addFreshKey(network);
   t.is(keyId.length, 64);
   t.deepEqual(network.listSigningKeys(), [keyId]);
@@ -43,7 +70,7 @@ test('addSigningKeys returns the 64-char keyId and registers a locator', async t
 });
 
 test('addTransport picks up transport hints in subsequent locations()', async t => {
-  const network = makeOcapnNoiseNetwork({ codec: cborCodec });
+  const network = makeNetworkForTest(t, { codec: cborCodec });
   const { keyId } = addFreshKey(network);
   t.is(network.locationFor(keyId).hints, false);
 
@@ -58,8 +85,8 @@ test('addTransport picks up transport hints in subsequent locations()', async t 
 });
 
 test('two peers handshake and exchange encrypted messages via mock transport', async t => {
-  const netA = makeOcapnNoiseNetwork({ codec: cborCodec });
-  const netB = makeOcapnNoiseNetwork({ codec: cborCodec });
+  const netA = makeNetworkForTest(t, { codec: cborCodec });
+  const netB = makeNetworkForTest(t, { codec: cborCodec });
   const { keyId: keyA } = addFreshKey(netA);
   const { keyId: keyB } = addFreshKey(netB);
 
@@ -98,7 +125,7 @@ test('two peers handshake and exchange encrypted messages via mock transport', a
 });
 
 test('provideSession rejects without any registered signing keys', async t => {
-  const network = makeOcapnNoiseNetwork({ codec: cborCodec });
+  const network = makeNetworkForTest(t, { codec: cborCodec });
   const { transportA } = makeMockTransportPair();
   await network.addTransport(transportA);
   await t.throwsAsync(
@@ -116,7 +143,7 @@ test('provideSession rejects without any registered signing keys', async t => {
 });
 
 test('provideSession rejects locations with a short designator', async t => {
-  const network = makeOcapnNoiseNetwork({ codec: cborCodec });
+  const network = makeNetworkForTest(t, { codec: cborCodec });
   addFreshKey(network);
   const { transportA } = makeMockTransportPair();
   await network.addTransport(transportA);
@@ -135,8 +162,8 @@ test('provideSession rejects locations with a short designator', async t => {
 });
 
 test('multiple keys on one network route inbound sessions to the right local key', async t => {
-  const netA = makeOcapnNoiseNetwork({ codec: cborCodec });
-  const netB = makeOcapnNoiseNetwork({ codec: cborCodec });
+  const netA = makeNetworkForTest(t, { codec: cborCodec });
+  const netB = makeNetworkForTest(t, { codec: cborCodec });
   const { keyId: keyA1 } = addFreshKey(netA);
   const { keyId: keyA2 } = addFreshKey(netA);
   const { keyId: keyB } = addFreshKey(netB);
@@ -161,8 +188,8 @@ test('multiple keys on one network route inbound sessions to the right local key
 });
 
 test('provideSession rejects when an active session under a different local key already exists', async t => {
-  const netA = makeOcapnNoiseNetwork({ codec: cborCodec });
-  const netB = makeOcapnNoiseNetwork({ codec: cborCodec });
+  const netA = makeNetworkForTest(t, { codec: cborCodec });
+  const netB = makeNetworkForTest(t, { codec: cborCodec });
   const { keyId: keyA1 } = addFreshKey(netA);
   const { keyId: keyA2 } = addFreshKey(netA);
   const { keyId: keyB } = addFreshKey(netB);
@@ -234,9 +261,9 @@ const makeStallingTransport = () => {
 };
 
 test('active session is preserved when a second inbound handshake arrives', async t => {
-  const fabric = makeMockMeshFabric();
-  const netA = makeOcapnNoiseNetwork({ codec: cborCodec });
-  const netB = makeOcapnNoiseNetwork({ codec: cborCodec });
+  const fabric = makeFabricForTest(t);
+  const netA = makeNetworkForTest(t, { codec: cborCodec });
+  const netB = makeNetworkForTest(t, { codec: cborCodec });
   const keyA = addFreshKey(netA).keyId;
   const keyB = addFreshKey(netB).keyId;
   await netA.addTransport(fabric.transportFor('A'));
@@ -275,7 +302,7 @@ test('active session is preserved when a second inbound handshake arrives', asyn
 });
 
 test('provideSession rejects after handshake timeout', async t => {
-  const net = makeOcapnNoiseNetwork({
+  const net = makeNetworkForTest(t, {
     codec: cborCodec,
     handshakeTimeoutMs: 50,
   });
@@ -298,7 +325,7 @@ test('provideSession rejects after handshake timeout', async t => {
 });
 
 test('provideSession with multiple keys demands an explicit localKeyId', async t => {
-  const net = makeOcapnNoiseNetwork({ codec: cborCodec });
+  const net = makeNetworkForTest(t, { codec: cborCodec });
   addFreshKey(net);
   addFreshKey(net);
   const { transportA } = makeMockTransportPair();
@@ -318,7 +345,7 @@ test('provideSession with multiple keys demands an explicit localKeyId', async t
 });
 
 test('provideSession rejects an unknown localKeyId', async t => {
-  const net = makeOcapnNoiseNetwork({ codec: cborCodec });
+  const net = makeNetworkForTest(t, { codec: cborCodec });
   addFreshKey(net);
   const { transportA } = makeMockTransportPair();
   await net.addTransport(transportA);
@@ -340,7 +367,7 @@ test('provideSession rejects an unknown localKeyId', async t => {
 });
 
 test('addTransport rolls back when listen fails', async t => {
-  const net = makeOcapnNoiseNetwork({ codec: cborCodec });
+  const net = makeNetworkForTest(t, { codec: cborCodec });
   addFreshKey(net);
   const broken = harden({
     scheme: 'broken',
@@ -361,7 +388,7 @@ test('addTransport rolls back when listen fails', async t => {
 });
 
 test('shutdown rejects pending provideSession waiters', async t => {
-  const net = makeOcapnNoiseNetwork({ codec: cborCodec });
+  const net = makeNetworkForTest(t, { codec: cborCodec });
   addFreshKey(net);
   await net.addTransport(makeStallingTransport());
   const pending = net.provideSession({
@@ -377,7 +404,7 @@ test('shutdown rejects pending provideSession waiters', async t => {
 });
 
 test('generateSigningKeys produces a valid 32-byte keypair without booting WASM', t => {
-  const net = makeOcapnNoiseNetwork({ codec: cborCodec });
+  const net = makeNetworkForTest(t, { codec: cborCodec });
   const { privateKey, publicKey } = net.generateSigningKeys();
   t.is(privateKey.length, 32);
   t.is(publicKey.length, 32);
@@ -389,9 +416,9 @@ test('generateSigningKeys produces a valid 32-byte keypair without booting WASM'
 });
 
 test('SYN addressed to an unknown local key is silently dropped', async t => {
-  const fabric = makeMockMeshFabric();
-  const netA = makeOcapnNoiseNetwork({ codec: cborCodec });
-  const netB = makeOcapnNoiseNetwork({ codec: cborCodec });
+  const fabric = makeFabricForTest(t);
+  const netA = makeNetworkForTest(t, { codec: cborCodec });
+  const netB = makeNetworkForTest(t, { codec: cborCodec });
   const keyA = addFreshKey(netA).keyId;
   addFreshKey(netB);
   await netA.addTransport(fabric.transportFor('A'));
@@ -417,7 +444,7 @@ test('SYN addressed to an unknown local key is silently dropped', async t => {
 });
 
 test('removeSigningKeys forgets a previously registered identity', t => {
-  const net = makeOcapnNoiseNetwork({ codec: cborCodec });
+  const net = makeNetworkForTest(t, { codec: cborCodec });
   const { keyId } = addFreshKey(net);
   t.deepEqual(net.listSigningKeys(), [keyId]);
   net.removeSigningKeys(keyId);
@@ -426,7 +453,7 @@ test('removeSigningKeys forgets a previously registered identity', t => {
 });
 
 test('addSigningKeys rejects wrong-length keys', t => {
-  const net = makeOcapnNoiseNetwork({ codec: cborCodec });
+  const net = makeNetworkForTest(t, { codec: cborCodec });
   t.throws(
     () =>
       net.addSigningKeys({
@@ -439,7 +466,7 @@ test('addSigningKeys rejects wrong-length keys', t => {
 });
 
 test('addSigningKeys rejects mismatched (privateKey, publicKey) pair', t => {
-  const net = makeOcapnNoiseNetwork({ codec: cborCodec });
+  const net = makeNetworkForTest(t, { codec: cborCodec });
   const { privateKey, publicKey } = net.generateSigningKeys();
   // Replace the first byte with a different value so the tampered
   // key no longer matches the one derived from privateKey.
@@ -459,8 +486,8 @@ test('addSigningKeys rejects mismatched (privateKey, publicKey) pair', t => {
 });
 
 test('addTransport rejects a second transport with the same scheme', async t => {
-  const net = makeOcapnNoiseNetwork({ codec: cborCodec });
-  const fabric = makeMockMeshFabric();
+  const net = makeNetworkForTest(t, { codec: cborCodec });
+  const fabric = makeFabricForTest(t);
   await net.addTransport(fabric.transportFor('A'));
   await t.throwsAsync(async () => net.addTransport(fabric.transportFor('B')), {
     message: /scheme.*already registered/,
@@ -470,9 +497,9 @@ test('addTransport rejects a second transport with the same scheme', async t => 
 });
 
 test('inboundSessions.return closes queued sessions that nobody consumed', async t => {
-  const fabric = makeMockMeshFabric();
-  const netA = makeOcapnNoiseNetwork({ codec: cborCodec });
-  const netB = makeOcapnNoiseNetwork({ codec: cborCodec });
+  const fabric = makeFabricForTest(t);
+  const netA = makeNetworkForTest(t, { codec: cborCodec });
+  const netB = makeNetworkForTest(t, { codec: cborCodec });
   const keyA = addFreshKey(netA).keyId;
   addFreshKey(netB);
   await netA.addTransport(fabric.transportFor('A'));
@@ -498,9 +525,9 @@ test('inboundSessions.return closes queued sessions that nobody consumed', async
 });
 
 test('active session is forgotten after close so a fresh dial starts new', async t => {
-  const fabric = makeMockMeshFabric();
-  const netA = makeOcapnNoiseNetwork({ codec: cborCodec });
-  const netB = makeOcapnNoiseNetwork({ codec: cborCodec });
+  const fabric = makeFabricForTest(t);
+  const netA = makeNetworkForTest(t, { codec: cborCodec });
+  const netB = makeNetworkForTest(t, { codec: cborCodec });
   addFreshKey(netA);
   const keyB = addFreshKey(netB).keyId;
   await netA.addTransport(fabric.transportFor('A'));

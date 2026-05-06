@@ -16,8 +16,11 @@ const addFreshKey = network => {
 
 test('crossed hellos: both peers end on the same session with a stable session id', async t => {
   const fabric = makeMockMeshFabric();
+  t.teardown(() => fabric.shutdown());
   const netA = makeOcapnNoiseNetwork({ codec: cborCodec });
+  t.teardown(() => netA.shutdown());
   const netB = makeOcapnNoiseNetwork({ codec: cborCodec });
+  t.teardown(() => netB.shutdown());
   const keyA = addFreshKey(netA);
   const keyB = addFreshKey(netB);
 
@@ -74,7 +77,4 @@ test('crossed hellos: both peers end on the same session with a stable session i
 
   sessionA.close();
   sessionB.close();
-  netA.shutdown();
-  netB.shutdown();
-  fabric.shutdown();
 });

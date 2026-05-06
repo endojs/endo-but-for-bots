@@ -24,7 +24,10 @@ import { netListenAllowed } from './_net-permission.js';
 const WebSocket = /** @type {any} */ (wsModule.WebSocket);
 const WebSocketServer = /** @type {any} */ (wsModule.WebSocketServer);
 
-const test = netListenAllowed ? baseTest : baseTest.skip;
+// `test.serial` because every test in this file binds an OS port via
+// `makeWebSocketTransport()` / `WebSocketServer`. A failure mid-test
+// would otherwise leak the listener into the next concurrent test.
+const test = netListenAllowed ? baseTest.serial : baseTest.serial.skip;
 
 const noopHandler = () => {};
 
@@ -49,14 +52,17 @@ test('ws transport: peer round-trip exchanges binary frames in both directions',
     host: '127.0.0.1',
     port: 0,
   });
+  t.teardown(() => serverTransport.shutdown());
   const listen = serverTransport.listen;
   if (!listen) throw Error('ws transport must expose listen');
   const listener = await listen(stream => resolveServerStream(stream));
+  t.teardown(() => listener.close());
 
   const clientTransport = makeWebSocketTransport({
     WebSocket,
     WebSocketServer,
   });
+  t.teardown(() => clientTransport.shutdown());
   const clientStream = await clientTransport.connect(listener.hints);
   const sStream = await serverStream;
 
@@ -74,8 +80,6 @@ test('ws transport: peer round-trip exchanges binary frames in both directions',
 
   await clientStream.writer.return(undefined);
   await drainEventLoop();
-  listener.close();
-  serverTransport.shutdown();
 });
 
 test('ws transport: receiving a non-binary frame rejects the next reader.next()', async t => {
@@ -87,6 +91,7 @@ test('ws transport: receiving a non-binary frame rejects the next reader.next()'
   });
 
   const wss = new WebSocketServer({ host: '127.0.0.1', port: 0 });
+  t.teardown(() => wss.close());
   await new Promise(resolve => {
     wss.on('listening', () => resolve(undefined));
   });
@@ -98,10 +103,12 @@ test('ws transport: receiving a non-binary frame rejects the next reader.next()'
   }
 
   const clientTransport = makeWebSocketTransport({ WebSocket });
+  t.teardown(() => clientTransport.shutdown());
   const clientStream = await clientTransport.connect({
     url: `ws://${addr.address}:${addr.port}`,
   });
   const serverWs = await serverWsPromise;
+  t.teardown(() => serverWs.close());
 
   // The server sends a text (non-binary) message. The transport's
   // adapter should reject the next reader.next() with the
@@ -111,9 +118,6 @@ test('ws transport: receiving a non-binary frame rejects the next reader.next()'
   await t.throwsAsync(() => clientStream.reader.next(undefined), {
     message: /non-binary message/,
   });
-
-  serverWs.close();
-  wss.close();
 });
 
 test('ws transport: calling listen twice throws', async t => {
@@ -123,15 +127,15 @@ test('ws transport: calling listen twice throws', async t => {
     host: '127.0.0.1',
     port: 0,
   });
+  t.teardown(() => transport.shutdown());
   const listen = transport.listen;
   if (!listen) throw Error('ws transport must expose listen');
 
   const listener = await listen(noopHandler);
+  t.teardown(() => listener.close());
   await t.throwsAsync(() => listen(noopHandler), {
     message: /listen called more than once/,
   });
-  listener.close();
-  transport.shutdown();
 });
 
 test('ws transport: listening on 0.0.0.0 advertises 127.0.0.1 in the url hint', async t => {
@@ -141,14 +145,14 @@ test('ws transport: listening on 0.0.0.0 advertises 127.0.0.1 in the url hint', 
     host: '0.0.0.0',
     port: 0,
   });
+  t.teardown(() => transport.shutdown());
   const listen = transport.listen;
   if (!listen) throw Error('ws transport must expose listen');
   const listener = await listen(noopHandler);
+  t.teardown(() => listener.close());
   const url = new URL(listener.hints.url);
   t.is(url.hostname, '127.0.0.1', 'wildcard host substituted with loopback');
   t.not(url.port, '', 'port is populated');
-  listener.close();
-  transport.shutdown();
 });
 
 test('ws transport: connect to a closed port rejects without hanging', async t => {
@@ -179,7 +183,9 @@ test('ws transport: connect to a closed port rejects without hanging', async t =
   );
 
   // After the connect rejection settles, `transport.shutdown()` must
-  // be a no-op (no leaked socket, no double-close throw).
+  // be a no-op (no leaked socket, no double-close throw). Verify
+  // inline rather than registering as a teardown so the assertion is
+  // still made when the test passes.
   await drainEventLoop();
   t.notThrows(() => transport.shutdown());
 });
