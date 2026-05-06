@@ -127,6 +127,32 @@ issue or design document, and shepherding it through to a green PR.
   `@endo/harden` returns the locked-down `harden` when one exists
   and a shallow-freezing fallback otherwise, so the same module
   works in both environments.
+- **The `globalThis.assert` shim is a different story than `harden`.**
+  `assert` does not (yet) have a `@endo/harden`-style self-bootstrap
+  package: `@endo/errors` itself requires `globalThis.assert` to be
+  installed and throws "Cannot initialize @endo/errors, missing
+  globalThis.assert" if it is not. Worse, several `@endo/eventual-send`
+  shim modules (`E.js`, `local.js`, `handled-promise.js`,
+  `message-breakpoints.js`) destructure bare `assert` at module-load
+  (`const { Fail, quote } = assert;`); a bundle that imports
+  `@endo/eventual-send/shim.js` therefore needs `globalThis.assert`
+  endowed before the shim module body runs. The `assert-shim.js`
+  side effect of `import 'ses'` (`packages/ses/src/assert-shim.js`)
+  installs the global without calling `lockdown()` and without
+  freezing intrinsics, so a browser entry point that pulls in
+  eventual-send needs `import 'ses'` even if no chat-side code
+  references `lockdown`, `Compartment`, or `Realm`. Removing
+  `import 'ses'` from such an entry point on the premise that "no
+  chat-side code names a SES API" misses the eventual-send
+  dependency. Encountered on PR endojs/endo-but-for-bots#104, the
+  follow-up to PR endojs/endo-but-for-bots#95: PR #95 removed
+  `import 'ses'` from `packages/chat/main.js` and PR #94's
+  Playwright smoke caught the resulting
+  `ReferenceError: assert is not defined` from inside the bundled
+  `eventual-send` library code (not from any chat-side source line).
+  Diagnostic shortcut: the byte position in the chromium stack
+  trace points at the bundled location of the failing destructure;
+  decoding it reveals which library module needs the global.
 - **Re-opening a PR under the bot account to dodge GitHub
   self-review.** When the user authored a PR they now want to
   review (typically a PR that landed under their own gh identity
