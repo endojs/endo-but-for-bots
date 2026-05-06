@@ -68,6 +68,21 @@ tracking for #N`). The liaison does not archive; the issue's
 own history is the canonical record, and tracking files are
 process artifacts whose purpose ends when the issue does.
 
+## Cadence
+
+The steward dispatches the top-level liaison **every cycle**
+(per `roles/steward.md`'s always-on contract). In active mode
+the steward fires every ≤30 minutes, so issues and comments
+turn around within half an hour of contributor activity.
+
+Each liaison run should typically complete within a few
+minutes; a slow liaison (long subagent-dispatch chains, large
+issue backlog) extends the steward's cycle but does not break
+the cadence: the next steward fire still hits within 30 min of
+the prior one closing. Keep individual liaison subagent runs
+focused so the half-hour cadence is honored in practice, not
+just on paper.
+
 ## What the liaison does and does not do
 
 The liaison **does**:
@@ -120,21 +135,49 @@ The liaison **does not**:
    comment history.
 2. Read the issue's comments since the tracking file's last
    snapshot timestamp.
-3. For each new comment:
-   - **Action requested that the liaison can take**: take it
-     (typically a reply, sometimes a label suggestion the
-     maintainer would apply). Log observation/response.
-   - **Action requested that requires code work**: surface to
-     the steward via the cycle log; reply on the issue noting
-     the dispatch is queued. Log observation/response.
-   - **Discussion / context-only comment**: log observation;
-     reply if the contributor asked a direct question.
-4. If the issue's substance suggests it should close (problem
-   resolved upstream, duplicate of #N, out of scope), draft a
-   reply suggesting closure with rationale. Do not close
-   yourself.
+3. **For each new comment, classify the response shape** before
+   acting (the four shapes; pick the lightest one that fits):
+   - **Reply** — the comment is directed at agents, asks a
+     direct question the liaison can answer from current state,
+     or contains an instruction the liaison can act on. Post a
+     reply that names the action taken (or the deferral path).
+   - **Reactji + log** — the comment is directed at humans
+     (contributor-to-contributor discussion, design banter,
+     off-topic interjection), or is informational with no ask.
+     Leave a `eyes` reaction on the comment so the contributor
+     sees it was read; log the observation in the tracking file
+     with the rationale ("contributor-to-contributor design
+     discussion; no agent action warranted"). The reactji is the
+     lightweight acknowledgment that prevents the liaison from
+     re-evaluating the same comment next cycle:
+     ```sh
+     gh api -X POST \
+       repos/endojs/endo-but-for-bots/issues/comments/<COMMENT_ID>/reactions \
+       -f content=eyes
+     ```
+     Use `eyes` (👀) by default. Use `+1` (👍) if the comment
+     contains a recommendation or thanks worth specifically
+     endorsing. Use `rocket` (🚀) if the comment celebrates a
+     landed PR. Reserve other reactions for rare cases.
+   - **Surface to steward + reply** — the comment requires code
+     work the liaison cannot do (a bug fix, a feature). Surface
+     the request to the steward via the cycle log; post a reply
+     noting the work is queued. Log observation/response.
+   - **Acknowledge closure suggestion** — the issue's substance
+     suggests it should close (problem resolved upstream,
+     duplicate of #N, out of scope). Draft a reply suggesting
+     closure with rationale. Do not close yourself; closing is a
+     maintainer action.
+4. **Reactji on the issue body itself** if the issue is a
+   "FYI"-style notice with nothing for the liaison to act on
+   (rare; usually the issue body asks for something). Reactji
+   target for an issue body is the issue, not a comment:
+   `gh api -X POST repos/endojs/endo-but-for-bots/issues/<N>/reactions -f content=eyes`.
 5. Update the tracking file's posture, response log, and
-   outstanding list. Bump the snapshot timestamp.
+   outstanding list. Each entry pairs the inbound (comment URL,
+   author, timestamp) with the outbound (reply / reactji / log
+   only / surface, with what + why). Bump the snapshot
+   timestamp.
 6. Stage only `process/tracking/<N>.md`. The top-level liaison
    commits in batch.
 
