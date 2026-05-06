@@ -279,11 +279,7 @@ test('cancel-during-tick: late resolve() must not mutate or re-persist the entry
   // Wait long enough that the interval, were it re-armed, would fire
   // a second tick.  No additional tick may arrive.
   await new Promise(resolve => setTimeout(resolve, 80));
-  t.is(
-    ticks.length,
-    1,
-    'late resolve() must not revive a cancelled interval',
-  );
+  t.is(ticks.length, 1, 'late resolve() must not revive a cancelled interval');
   t.is(
     persisted.length,
     persistedAtCancel,

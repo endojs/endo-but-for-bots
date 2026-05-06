@@ -543,9 +543,8 @@ export const main = async rawArgs => {
       if (!name) {
         throw new Error('--name is required for interval-scheduler');
       }
-      const { intervalScheduler: intervalSchedulerCmd } = await import(
-        './commands/interval-scheduler.js'
-      );
+      const { intervalScheduler: intervalSchedulerCmd } =
+        await import('./commands/interval-scheduler.js');
       return intervalSchedulerCmd({
         name,
         agentNames,
@@ -573,9 +572,8 @@ export const main = async rawArgs => {
       if (!origins || origins.length === 0) {
         throw new Error('--origins is required for http-client');
       }
-      const { httpClient: httpClientCmd } = await import(
-        './commands/http-client.js'
-      );
+      const { httpClient: httpClientCmd } =
+        await import('./commands/http-client.js');
       return httpClientCmd({
         name,
         origins,

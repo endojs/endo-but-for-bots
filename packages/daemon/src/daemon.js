@@ -3032,9 +3032,10 @@ const makeDaemonCore = async (
           // and setMinPeriodMs() cover the throttling vocabulary
           // mail-mode supports.
           (async () => {
-            const messageId = /** @type {import('./types.js').FormulaNumber} */ (
-              await randomHex256()
-            );
+            const messageId =
+              /** @type {import('./types.js').FormulaNumber} */ (
+                await randomHex256()
+              );
             const tickMessage = harden({
               type: /** @type {const} */ ('package'),
               strings: [
