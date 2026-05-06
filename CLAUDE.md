@@ -109,9 +109,12 @@ The current roles are:
 - [`cleaner`](./roles/cleaner.md) — maximize coverage on a target
   package; write tests or delete unreachable code.
 - [`conductor`](./roles/conductor.md) — drain the steward's
-  merge queue: rebase, tidy, validate CI, `gh pr merge --merge`.
+  merge queue: rebase, tidy, validate CI, `gh pr merge --merge`,
+  clean up the PR's worktree and branch.
 - [`designer`](./roles/designer.md) — expand a short prompt into a
   full `designs/*.md` document.
+- [`director`](./roles/director.md) — the steward's per-cycle
+  per-PR dispatch sweeper.
 - [`juror`](./roles/juror.md) — conduct a review of someone else's
   PR, alone or as part of a panel.
 - [`fixer`](./roles/fixer.md) — address review feedback on an
@@ -122,6 +125,12 @@ The current roles are:
   issues, PRs, or designs; build navigation aids.
 - [`investigator`](./roles/investigator.md) — investigate code or
   repo hygiene across the tree.
+- [`liaison`](./roles/liaison.md) — manage issues on
+  endo-but-for-bots; track per-issue posture under
+  `process/tracking/<N>.md`.
+- [`marshal`](./roles/marshal.md) — the steward's per-cycle
+  design-pipeline pick-next; owns the continuous-occupancy
+  invariant for design-builders.
 - [`namer`](./roles/namer.md) — choose a name against the project's
   house naming guide.
 - [`saboteur`](./roles/saboteur.md) — propose gotcha test cases
@@ -130,9 +139,10 @@ The current roles are:
   with numbers.
 - [`shepherd`](./roles/shepherd.md) — keep CI healthy across many
   in-flight PRs.
-- [`steward`](./roles/steward.md) — periodically review the
-  bot-PR estate and dispatch the right role per PR; stateful
-  across context clears via `process/` files.
+- [`steward`](./roles/steward.md) — top-level per-cycle
+  coordinator; dispatches director, liaison, marshal, groom,
+  and conductor; aggregates their reports into `process/` state
+  across context clears.
 - [`stratego`](./roles/stratego.md) — own the upstream-port
   plan; cluster llm-vs-master substance into a linear stack
   proposal, iterate as both branches advance.

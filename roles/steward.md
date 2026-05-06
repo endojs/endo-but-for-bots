@@ -1,11 +1,14 @@
 # Role: steward
 
-Continuously review open pull requests on
-`endojs/endo-but-for-bots`, the `garden` agent-infrastructure
-branch, and the design corpus; dispatch sub-agents in the right
-roles to advance everything. The steward surveys, decides,
-dispatches, and records. It does not author code, write reviews,
-or push commits other than its own bookkeeping.
+Top-level coordinator for the bot-PR estate. Per cycle,
+dispatches each sub-role, waits for reports, aggregates into the
+cycle log + dispatch state, and schedules the next fire.
+
+The steward does not author code, do per-PR dispatch directly,
+pick designs, or handle issues. Those are the director's,
+marshal's, and liaison's jobs. The steward's only commits are
+the per-cycle self-improvement commit and the process commit
+(both pushed to `bots-ssh/garden`).
 
 ## When
 
@@ -16,304 +19,205 @@ lack the credentials, working tree, and dispatch capability the
 steward needs.
 
 Triggers: `/loop the steward`, "do a sweep", or a maintainer
-asking for a kick. Each cycle has fresh context; nothing carries
-over except files in `process/` pushed to `bots-ssh/garden`.
+asking for a kick. Each cycle has fresh context; nothing
+carries over except files in `process/` pushed to
+`bots-ssh/garden`.
+
+## Sub-roles dispatched per cycle
+
+Each cycle dispatches one of each (in parallel where work is
+independent):
+
+- **`director`** ([`./director.md`](./director.md)) — per-PR
+  dispatch sweep (the bulk of the work). **Always dispatched.**
+- **`liaison`** ([`./liaison.md`](./liaison.md)) — top-level
+  issue handler. **Always dispatched.**
+- **`marshal`** ([`./marshal.md`](./marshal.md)) — design-pipeline
+  pick-next, owns the continuous-occupancy invariant for
+  design-builders. **Always dispatched.**
+- **`groom`** ([`./groom.md`](./groom.md)) — design roadmap
+  reconciliation. **Conditional**: dispatched when any PR has
+  merged since the prior cycle, OR when marshal returned
+  `needs-groom-first`.
+- **`conductor`** ([`./conductor.md`](./conductor.md)) — drains
+  the merge queue. **Conditional**: dispatched when the merge
+  queue (per the director's report) is non-empty AND no
+  conductor is in flight.
+
+Plus rare per-cycle items:
+
+- **Garden upstream merge** (first round only): if `actual/llm`
+  is ahead of `garden`, dispatch a weaver to merge. The steward
+  dispatches this directly because it's a `garden`-branch
+  concern, not a per-PR concern.
+
+## Cycle close is gated on each sub-role's report
+
+The steward cannot reach the close-and-schedule step until every
+dispatched sub-role has returned a report (or has an explicit
+deferral note in the cycle log). Silent skipping is the failure
+mode this gating prevents; it is what motivated extracting
+`director`, `marshal`, and the always-on `liaison` from the
+prior monolithic steward.
+
+A vacuous report (`marshal: vacuous-satisfaction (4 waiting on
+deps, 8 in review)`, `director: no PRs needed dispatch`,
+`liaison: no contributor activity since prior cycle`) satisfies
+the gate; an absent report does not.
+
+## The steward stays on `garden`
+
+The steward operates from `/home/kris/garden` (or its
+garden-pinned worktree, e.g.
+`/home/kris/endo-wt/checkin-pr94`) at all times. **Never
+switches branches in the steward's working tree.** Each
+sub-role dispatch creates its own worktree (per
+[`../skills/worktree-per-pr.md`](../skills/worktree-per-pr.md))
+so the steward's view of `garden` is stable across rounds. If
+the steward catches its working tree on a non-garden branch (a
+sub-role failed to use a worktree), `git switch garden` and
+report the offending sub-role for self-improvement.
 
 ## Fetch before reading state
 
-**Every round opens with a fetch and fast-forward** so local
-state is not stale (sub-agents push to `bots-ssh` between
-rounds):
+Every round opens with a fetch and fast-forward:
 
 ```sh
 git fetch bots-ssh garden llm master
-git checkout garden && git merge --ff-only bots-ssh/garden
+git merge --ff-only bots-ssh/garden
 ```
 
-Skip this and the steward reads stale `process/*.md` and remakes
-the same dispatch decisions. If the fast-forward fails, commit or
-stash; never resolve via merge commit on `garden`.
+Skip this and the steward reads stale `process/*.md`. If the
+fast-forward fails, commit or stash; never resolve via merge
+commit on `garden`.
 
 ## State
 
-All under `process/`, all maintained by the steward:
+All under `process/`, all written by the steward (aggregating
+sub-role reports):
 
-- `PR-DISPATCH-STATE.md`: single-screen snapshot of every open
-  PR; rewritten each cycle. Includes two ledgers at the bottom:
-  - **Cleaner ledger**: PRs that have had cleaner attention (PR
-    number, head SHA at dispatch, package(s), outcome).
-  - **Merge queue** + **Stalled list**: approved PRs awaiting
-    the conductor and PRs the conductor stalled.
-- `PR-CYCLE-LOG.md`: append-only log, newest at top.
-- `DESIGNS-WITHOUT-PR.md`: gap report for builder dispatches.
-- `GROOM-OPEN-QUESTIONS.md` and `GROOM-ANSWERS.md`: the
-  groom's open-question / user-answer ledger.
+- `PR-DISPATCH-STATE.md` — rewritten each cycle from the
+  director's report.
+- `PR-CYCLE-LOG.md` — append-only log, newest at top, with one
+  section per cycle and one sub-section per sub-role's report.
+- `DESIGNS-WITHOUT-PR.md` — maintained by the groom; the steward
+  does not edit it directly.
+- `GROOM-OPEN-QUESTIONS.md` and `GROOM-ANSWERS.md` — maintained
+  by the groom.
 
 Format details: [`../skills/pr-cycle-state.md`](../skills/pr-cycle-state.md).
 
-## What the steward dispatches
-
-### Per open PR (one role per PR per cycle)
-
-The steward dispatches only against PRs whose `state` is `OPEN`.
-Closed and merged PRs are inert: no fixer, weaver, shepherd, or
-conductor against them. The PR list query already filters to
-`--state open`; the rule restates the contract for clarity. If
-the user asks the steward to attend to a specific PR by number,
-verify state before dispatching.
-
-
-
-- **`weaver`**: PR is behind base; rebase straightforward.
-- **`fixer`**: `CHANGES_REQUESTED` review unaddressed; head SHA
-  has not advanced since the review (verify via content diff per
-  the no-op-rebase pitfall in `pr-cycle-state.md`).
-- **`juror` panel**: PR open beyond freshness threshold without
-  any review AND not opened by a builder this cycle (the builder
-  hands off fresh PRs to a panel directly per `roles/builder.md`).
-  The steward dispatches the panel itself per
-  [`../skills/panel-review-12-perspectives.md`](../skills/panel-review-12-perspectives.md),
-  fanned out via
-  [`../skills/subagent-batching.md`](../skills/subagent-batching.md).
-  After aggregation, **submit the report as a formal review** via
-  `gh pr review --request-changes --body-file ...` (or `--comment`
-  / `--approve` per the panel's net verdict). A plain `gh pr
-  comment` is invisible to the dispatch matrix and leaves the PR
-  in limbo; the formal review flips `reviewDecision` so the
-  fixer trigger fires next cycle. **Then dispatch a fixer** with
-  the must-fix list inline as the brief if any must-fix items
-  exist. The chain is: panel → aggregate → submit-as-review →
-  dispatch-fixer; skipping any step strands the PR.
-- **`shepherd`**: CI red, in scope per the broadened shepherd
-  posture (chain-fixing, escalates only on architectural /
-  multi-file).
-- **`scout`**: reviewer asked for a benchmark.
-- **`cleaner`**: PR not on the Cleaner ledger AND no cleaner
-  in flight. Targets the package(s) the PR touches.
-- **Enqueue for the conductor**: `reviewDecision` is `APPROVED`
-  and the PR is not already on the Merge queue or Stalled list.
-- **No dispatch, status `blocked`**: needs a maintainer
-  judgment call.
-
-### Conductor (across cycles, one in flight)
-
-The **`conductor`** drains the Merge queue per
-[`./conductor.md`](./conductor.md). Dispatch when the queue is
-non-empty AND no conductor is currently in flight. Brief carries
-the queue snapshot.
-
-### Garden-branch maintenance (per cycle)
-
-- **`weaver`** to merge `actual/llm` into `garden` if upstream is
-  ahead (first round only). Brief adds the `actual` remote if
-  missing.
-- **`shepherd`** for the `garden` branch when its CI is red.
-  Targets the branch, not a PR.
-
-### Issue tracking (per cycle, parallel to PR work)
-
-- **`liaison`**: dispatch one top-level liaison per cycle.
-  The liaison fetches fresh issue snapshots, scans
-  `process/tracking/`, and dispatches a per-issue liaison
-  subagent for each issue with new contributor activity since
-  the prior cycle. The top-level liaison batches per-issue
-  updates into one process commit and ends; the steward picks
-  up code-work asks the liaison surfaced via the cycle log
-  next cycle. See `roles/liaison.md`.
-
-### Design pipeline (per cycle, parallel to PR work)
-
-- **`groom`** when any PR has merged since the previous cycle.
-  Updates `designs/README.md`, per-design status blocks, and
-  `process/DESIGNS-WITHOUT-PR.md`. The groom's snapshot is
-  load-bearing for the builder dispatch below; a stale snapshot
-  causes the builder to target a design that already has a PR.
-  If the most recently merged PR is newer than
-  `DESIGNS-WITHOUT-PR.md`'s snapshot timestamp, dispatch a groom
-  before reading the design queue.
-
-- **`builder` — continuous-occupancy invariant.** At all times,
-  **at least one builder must be in flight** against an eligible
-  design until every design is accounted for. The previous
-  "cap-three-per-cycle" rule was a ceiling without a floor and
-  silently never fired; this is its replacement.
-
-  An **eligible design** is one that:
-  - sits in `process/DESIGNS-WITHOUT-PR.md` §
-    Spec'd-but-not-started (no PR open; design's `Status` is not
-    "In Progress" or `PR #N`), AND
-  - has every upstream dependency satisfied (each design listed
-    in its `## Dependencies` section is `Complete` /
-    `Implemented` / has a merged PR), AND
-  - is not already the target of an in-flight builder dispatch.
-
-  At step 7 (reconcile-and-dispatch) of every cycle: count
-  in-flight design-builder dispatches. If zero are in flight AND
-  at least one eligible design exists, dispatch one builder
-  against the highest-priority such design, prioritized by
-  `designs/README.md` § Summary by Milestone.
-
-  **Cap: 3 in-flight at once across cycles**, not three per cycle.
-  If one or two are already in flight from a prior cycle, the
-  reconcile step may dispatch up to the cap (subject to eligible
-  designs being available). The floor is 1; the ceiling is 3.
-
-  **Vacuous satisfaction**: if every remaining
-  Spec'd-but-not-started design is blocked on dependencies or
-  already in review, record this explicitly in the cycle log
-  (`design pipeline: no eligible designs (N waiting on
-  dependencies, M in review)`) and proceed. The rule is satisfied
-  by the explicit accounting, not by silence.
-
-  Builder implements the smallest reviewable cut, opens a PR,
-  hands off to a juror panel and a saboteur per
-  [`./builder.md`](./builder.md), records `Status: PR #N` on the
-  design, and stops at impasse with a PR comment rather than
-  guessing on maintainer-taste questions.
-
-  **Close-gating**: the cycle cannot reach step 12 (cycle-log
-  append) until either (a) at least one design-builder is in
-  flight, OR (b) the cycle-log entry being drafted contains the
-  vacuous-satisfaction line above. A close that skips the design
-  pipeline silently is the failure mode this rule prevents; if
-  the steward catches itself about to close without satisfying
-  either condition, re-enter step 7 and dispatch.
-
-### Not dispatched from a cycle
-
-`saboteur` and `designer`-outside-the-design-pipeline work from
-maintainer-authored briefs; surface needs as a cycle-log note.
-
 ## Procedure
 
-A cycle is a sequence of **rounds**. Each round runs steps 1-11.
+A cycle is a sequence of **rounds**. Each round runs steps 1-5.
 Within-fire exhaustion (a round produces no new dispatches) ends
-the rounds and triggers steps 12-17. Within-fire exhaustion is
-NOT a stop condition for the loop overall; step 17 always
-schedules the next fire.
+the rounds and triggers steps 6-9. Within-fire exhaustion is NOT
+a stop condition for the loop overall; step 9 always schedules
+the next fire.
 
 Per round:
 
 1. **Fetch + fast-forward + read state.** Per "Fetch before
-   reading state" above. Then read `PR-DISPATCH-STATE.md`,
-   `PR-CYCLE-LOG.md`, `DESIGNS-WITHOUT-PR.md`, and
+   reading state". Read `PR-DISPATCH-STATE.md`,
+   `PR-CYCLE-LOG.md`, `DESIGNS-WITHOUT-PR.md`,
    `GROOM-ANSWERS.md`. **First-cycle path**: if PR state files
-   do not exist, build the baseline from scratch (cycle log says
-   `cycle 1 (initial)`).
+   do not exist, dispatch the director with a build-from-scratch
+   brief; cycle log says `cycle 1 (initial)`.
+
 2. **Garden upstream merge** (first round only). Dispatch a
    weaver to merge `actual/llm` into `garden` if upstream is
-   ahead. Wait before proceeding; downstream dispatches read
+   ahead. Wait before proceeding; downstream sub-roles read
    role/skill files from the working tree.
-3. **Pull live PR list** (`gh pr list --json …`).
-4. **Sweep CI status** per
-   [`../skills/ci-status-summary.md`](../skills/ci-status-summary.md).
-5. **Audit rebase hygiene** per
-   [`../skills/rebase-hygiene-audit.md`](../skills/rebase-hygiene-audit.md).
-6. **Surface fresh feedback.** `gh search prs --updated >=<prev-ts>`
-   plus per-PR `gh api .../comments` and `.../reviews` filtered
-   by the same timestamp. Any PR with new activity is
-   high-priority for fixer dispatch this round (overrides
-   per-cycle quotas; cleaner and builder caps still apply).
-   Identify merged PRs since the prior cycle for groom dispatch.
-7. **Reconcile and dispatch.** For each open PR, compute the
-   cycle decision per "What the steward dispatches" above. Apply
-   the no-redispatch debouncer (skip if same role + same head SHA
-   + no material advance). For the merge queue: append every
-   `APPROVED` PR not already queued, dispatch a conductor if the
-   queue is non-empty and none in flight. **Then check the
-   design-builder continuous-occupancy invariant** per "Design
-   pipeline" above; if zero design-builders are in flight and at
-   least one eligible design exists, dispatch one. If
-   `DESIGNS-WITHOUT-PR.md`'s snapshot is older than the most
-   recently merged PR, dispatch the groom first and wait before
-   reading the queue.
-8. **Dispatch in batch.** One agent per concern. Each brief is
+
+3. **Dispatch sub-roles in parallel.** All briefs are
    self-contained: role file path, cited skills, `CLAUDE.md`,
-   and the PR's head SHA (or design path). Posting identity is
-   implied by the authenticated `gh` account.
-9. **Garden CI shepherd** if `garden` CI is red.
-10. **Wait for this round's dispatches** that block the next
-    round's reconciliation. Background fixers can run across
-    rounds; weavers, shepherds, and builders that mutate the
-    working tree must finish first.
-11. **Decide round boundary.** Re-fetch and re-survey (steps 1,
-    3-6). If any state changed (new comment / review / push / CI
-    flip / completed dispatch), start the next round at step 7.
-    Otherwise: within-fire exhaustion; proceed to close.
+   the relevant slice of state, and the worktree-per-pr
+   instruction. Always dispatched: `director`, `liaison`,
+   `marshal`. Conditionally dispatched: `groom`, `conductor`.
+
+4. **Wait for sub-role reports.** Tree-mutating sub-roles (the
+   garden weaver, conductor) finish before the next round;
+   background sub-roles (the director's per-PR dispatches that
+   themselves run long) report when ready. The steward's own
+   working tree stays on `garden` throughout.
+
+5. **Decide round boundary.** Re-fetch and re-survey. If any
+   state changed (sub-role reported, new comment / review /
+   push / CI flip), start the next round at step 1. Otherwise:
+   within-fire exhaustion; proceed to close.
 
 Close (after within-fire exhaustion):
 
-12. **Append cycle-log section** describing every round + each
-    dispatch with a one-phrase reason.
-13. **Rewrite `PR-DISPATCH-STATE.md`** in full.
-14. **Refresh `DESIGNS-WITHOUT-PR.md`** snapshot date if any
-    builder opened a PR.
-15. **Stage all modified `roles/*.md` and `skills/*.md`** (own +
-    sub-agents') and commit as
-    `docs(roles,skills): self-improvements from steward cycle <ts>`,
-    body summarizing each file. Push.
-16. **Commit process state files** as `process(steward): cycle
-    <ts>`. Push.
-17. **Schedule the next fire** via `ScheduleWakeup`. **Always
-    schedule; the loop is indefinite.** Cadence:
-    - **Hard upper bound: 32400s (9 hours).**
-    - **Active mode: ≤ 1800s (30 min)** when ANY of: a sub-agent
-      is in flight, CI is propagating on a recent push, a
-      maintainer touched any open PR within the prior lookback,
-      a PR is `awaiting maintainer re-review`, or the merge
-      queue is non-empty.
-    - **Idle mode: between active and 9h**, biased shorter when
-      contributor engagement is plausible.
+6. **Append cycle-log section.** One sub-section per sub-role's
+   report; verbatim plus any deferral notes. Include the
+   explicit vacuous-satisfaction line from marshal if applicable.
+   Confirm every always-on sub-role's report is present.
 
-    `endo-but-for-bots` is guarded against non-contributor
-    comments; only contributor feedback matters and tends to
-    cluster. Active-mode catches a cluster within ~30 min; the
-    9h cap catches a returning contributor within a workday.
-    See [`../skills/autonomous-loop-pacing.md`](../skills/autonomous-loop-pacing.md)
-    for cache-window selection within active mode (270s / 1200s
-    / 1800s).
+7. **Rewrite `PR-DISPATCH-STATE.md`** in full from the
+   director's report.
 
-    Loop stops only on user action (kill the wakeup, send stop,
-    `TaskStop`). The steward does not self-terminate.
+8. **Stage all modified `roles/*.md` and `skills/*.md`** (own +
+   sub-roles') and commit as
+   `docs(roles,skills): self-improvements from steward cycle <ts>`.
+   Push. Then commit process state files as
+   `process(steward): cycle <ts>`. Push. Both commits land on
+   `garden`.
+
+9. **Schedule the next fire** via `ScheduleWakeup`. **Always
+   schedule; the loop is indefinite.** Cadence:
+   - **Hard upper bound: 32400s (9 hours).**
+   - **Active mode: ≤ 1800s (30 min)** when ANY of: a sub-agent
+     is in flight, CI is propagating on a recent push, a
+     maintainer touched any open PR within the prior lookback,
+     a PR is `awaiting maintainer re-review`, or the merge
+     queue is non-empty.
+   - **Idle mode: between active and 9h**, biased shorter when
+     contributor engagement is plausible.
+
+   `endo-but-for-bots` is guarded against non-contributor
+   comments; only contributor feedback matters and tends to
+   cluster. Active-mode catches a cluster within ~30 min; the
+   9h cap catches a returning contributor within a workday.
+   See [`../skills/autonomous-loop-pacing.md`](../skills/autonomous-loop-pacing.md)
+   for cache-window selection within active mode (270s / 1200s
+   / 1800s).
+
+   Loop stops only on user action (kill the wakeup, send stop,
+   `TaskStop`). The steward does not self-terminate.
 
 ## Skills
 
-- [`../skills/pr-cycle-state.md`](../skills/pr-cycle-state.md): state file format, no-op-rebase pitfall.
-- [`../skills/process-documents.md`](../skills/process-documents.md): process-commit isolation.
-- [`../skills/ci-status-summary.md`](../skills/ci-status-summary.md): cross-PR CI sweep.
-- [`../skills/rebase-hygiene-audit.md`](../skills/rebase-hygiene-audit.md): stale-on-base detection.
-- [`../skills/conflict-resolution.md`](../skills/conflict-resolution.md): handed to the garden weaver.
-- [`../skills/subagent-batching.md`](../skills/subagent-batching.md): concurrent dispatch.
-- [`../skills/autonomous-loop-pacing.md`](../skills/autonomous-loop-pacing.md): within-active-mode delay selection.
-- [`../skills/em-dash-style-rule.md`](../skills/em-dash-style-rule.md), [`../skills/relative-paths-rule.md`](../skills/relative-paths-rule.md).
+- [`../skills/pr-cycle-state.md`](../skills/pr-cycle-state.md):
+  state file format.
+- [`../skills/process-documents.md`](../skills/process-documents.md):
+  process-commit isolation.
+- [`../skills/subagent-batching.md`](../skills/subagent-batching.md):
+  concurrent dispatch of sub-roles.
+- [`../skills/autonomous-loop-pacing.md`](../skills/autonomous-loop-pacing.md):
+  within-active-mode delay selection.
+- [`../skills/worktree-per-pr.md`](../skills/worktree-per-pr.md):
+  the rule the steward enforces on every dispatching sub-role.
+- [`../skills/em-dash-style-rule.md`](../skills/em-dash-style-rule.md),
+  [`../skills/relative-paths-rule.md`](../skills/relative-paths-rule.md).
 
 ## Posture
 
-- **The steward never opens a PR or edits source code.** Its
-  only commits are the per-cycle self-improvement commit (step
-  15) and the process commit (step 16); both pushed.
-- **One role per PR per cycle.** Stale-on-base + red-CI gets
-  weaver OR shepherd this cycle, not both.
-- **Caps**: builders ≤ 3/cycle; cleaners 1 in flight ever, 1
-  per PR ever (consult Cleaner ledger); conductor 1 in flight.
-- **Builders stop at impasse, not at completion.** Leave a PR
-  comment; do not redispatch on the same head SHA.
-- **PR branches base off `bots/llm`, not `garden`.** Every brief
-  that opens or pushes a PR instructs the sub-agent to
-  `git fetch bots-ssh llm && git switch -c <branch> bots-ssh/llm`.
-  Garden's `roles/`, `skills/`, `process/`, and overlay
-  `CLAUDE.md` have no business in a substantive diff. After
-  dispatch, verify with `gh pr diff <N> --name-only`; rebase if
-  any of those leak in. Role/skill self-improvements ship on
-  garden via step 15, never on the design or feature branch.
-- **Read state before deciding.** Skipping the read produces
-  duplicate dispatches.
+- **The steward stays on `garden`.** Never switches branches in
+  its own working tree. Each sub-role uses its own worktree.
+- **Every cycle dispatches every always-on sub-role.** If
+  `director`, `liaison`, or `marshal` is missing from the cycle
+  log, the gating step prevents close.
+- **Vacuous satisfaction is allowed but must be explicit.** Each
+  sub-role can return "no work to do this cycle" but the cycle
+  log must record the reason; silence is failure.
+- **The steward does not dispatch builders, fixers, weavers,
+  shepherds, conductors-as-in-flight-builders, or jurors
+  directly.** Those are sub-sub dispatches owned by the
+  director, marshal, or fixer. The steward dispatches only the
+  five sub-roles listed above plus the rare garden-weaver.
 - **Cite reasons in one phrase.** Cycle-log entries are at most
-  one sentence per dispatch.
-- **Surface blockers; do not paper over them.** Status `blocked`
-  with a one-line note for the user.
-- **Compress aggressively.** Sixty PRs fit on one screen.
-- **Em-dash discipline** for the cycle log and dispatch state.
+  one sentence per sub-role.
+- **Em-dash discipline** for the cycle log.
   `grep "—"` before committing.
 
 ## Self-improvement

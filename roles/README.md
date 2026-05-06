@@ -19,9 +19,13 @@ playing both `juror` and `fixer`; consult both.
   package; write tests for reachable code or delete unreachable
   code.
 - [conductor.md](./conductor.md) — drain the steward's merge
-  queue one PR at a time: rebase, tidy, validate CI, merge.
+  queue one PR at a time: rebase, tidy, validate CI, merge,
+  clean up the PR's worktree and branch.
 - [designer.md](./designer.md) — expand a short prompt into a full
   `designs/*.md` document.
+- [director.md](./director.md) — the steward's per-cycle per-PR
+  dispatch sweeper; applies the dispatch matrix and enqueues
+  the conductor.
 - [juror.md](./juror.md) — conduct a review of someone else's
   PR, alone or as part of a panel.
 - [fixer.md](./fixer.md) — address review feedback on an
@@ -37,6 +41,9 @@ playing both `juror` and `fixer`; consult both.
   endo-but-for-bots: read every contributor comment, reply
   with the action taken, track per-issue posture under
   `process/tracking/<N>.md`.
+- [marshal.md](./marshal.md) — the steward's per-cycle
+  design-pipeline pick-next; owns the continuous-occupancy
+  invariant for design-builders.
 - [namer.md](./namer.md) — choose a name (function, package,
   flag, branch) against the project's house naming guide.
 - [saboteur.md](./saboteur.md) — propose gotcha test cases that
@@ -45,9 +52,9 @@ playing both `juror` and `fixer`; consult both.
   tradeoff with numbers.
 - [shepherd.md](./shepherd.md) — keep CI healthy across many
   in-flight PRs.
-- [steward.md](./steward.md) — periodically review the bot-PR
-  estate and dispatch the right role per PR; tracks state in
-  `process/` files across context clears.
+- [steward.md](./steward.md) — top-level per-cycle coordinator;
+  dispatches director, liaison, marshal, groom, and conductor;
+  aggregates their reports into `process/` state.
 - [stratego.md](./stratego.md) — own the upstream-port plan;
   cluster llm-vs-master substance into a linear stack proposal,
   iterate as both branches advance.
