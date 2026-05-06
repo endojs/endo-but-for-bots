@@ -65,6 +65,31 @@ issue or design document, and shepherding it through to a green PR.
   LOCAL_NODE sentinel that those items introduced. The design and
   the code disagreed; the right action was to stop at impasse and
   surface the discrepancy rather than build against either side.
+- **A "compose A + B + C" design with all dependencies still
+  Not-Started or in flight is impasse, not implementable.** Some
+  designs describe a pattern rather than a new capability ("no new
+  mechanism is needed; this composes Timer, data caps, and
+  send()"). The smallest reviewable cut for such a design is an
+  example agent that exercises the composition, but that example
+  needs the composed APIs to actually exist with the shape the
+  design assumes. Pre-flight check: walk the design's `Depends On`
+  list and confirm each entry is `Complete` / `Implemented` / has
+  a merged PR, not just `In Progress`. An in-flight Phase 1 PR
+  for a dependency is **not** sufficient when the design needs a
+  Phase 2 deliverable from that same dependency (e.g.,
+  `endoclaw-proactive-messages` depends on `endoclaw-timer`
+  delivering ticks as mail messages, but PR #40 implements only
+  Phase 1 with `onTick` host-side callbacks; mail-based tick
+  delivery is explicitly deferred to Phase 2). The marshal's
+  eligibility check verifies dependencies are satisfied; when the
+  dependency design's Status field claims `In Progress` but its
+  own "Not yet implemented" list still includes the precise
+  capability the dependent design needs, the eligibility filter
+  is fooled and dispatch lands on the builder. Stop at impasse,
+  surface the dependency-shape mismatch in the cycle-log report,
+  and let the steward bump the dependent design back to "blocked
+  on dependency" until the dependency's Phase 2 lands.
+  Encountered on the `endoclaw-proactive-messages` dispatch.
 - Commit messages are conventional (`feat(pkg):`, `fix(pkg):`,
   `chore:` etc.) with the issue number in parens.
 - Run the full pre-PR checklist before pushing.
