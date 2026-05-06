@@ -55,6 +55,15 @@ Format details: [`../skills/pr-cycle-state.md`](../skills/pr-cycle-state.md).
 
 ### Per open PR (one role per PR per cycle)
 
+The steward dispatches only against PRs whose `state` is `OPEN`.
+Closed and merged PRs are inert: no fixer, weaver, shepherd, or
+conductor against them. The PR list query already filters to
+`--state open`; the rule restates the contract for clarity. If
+the user asks the steward to attend to a specific PR by number,
+verify state before dispatching.
+
+
+
 - **`weaver`**: PR is behind base; rebase straightforward.
 - **`fixer`**: `CHANGES_REQUESTED` review unaddressed; head SHA
   has not advanced since the review (verify via content diff per

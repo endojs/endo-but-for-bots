@@ -166,6 +166,24 @@ cleanly when porting work from this repo or
 See [`skills/process-documents.md`](./skills/process-documents.md)
 for the discipline.
 
+## Closed PRs and issues are inert
+
+- **Do not author further work on a closed PR or issue.** Closed
+  state is a maintainer signal: the work is finished, withdrawn,
+  superseded, or out of scope. No new commits, force-pushes,
+  body rewrites, or follow-up dispatches against a closed PR.
+  No fix-it commits, comments, or issue-edits against a closed
+  issue.
+- Before any dispatch that touches a PR or issue, check
+  `gh pr view <N> --json state` (expect `OPEN`) or
+  `gh issue view <N> --json state`. A `CLOSED` or `MERGED`
+  state means stop and report; do not dispatch a sub-agent
+  against it.
+- Discoveries that would have warranted action on a now-closed
+  PR or issue go to a fresh follow-up artifact: a new PR
+  against the same code area, a new issue citing the closed
+  one, or a steward cycle-log note for the user.
+
 ## Agent attribution and Claude-specific files
 
 - **Do not add `Co-Authored-By: Claude …` (or any other Claude
