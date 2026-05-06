@@ -46,6 +46,15 @@ searchable, and identifying actionable subsets.
   snapshot, not a process.
 - Ship the report in an isolated process commit; see
   [`../skills/process-documents.md`](../skills/process-documents.md).
+- **Editorial audits of `roles/*.md` and `skills/*.md` are a
+  triager engagement.** Cap the substantive commits up front
+  (eight is a workable default). Land the mechanical fixes (a
+  missing trigger line, an em-dash in newly-added prose, a bare
+  skill list) as small focused commits; surface the systemic
+  findings (a sweep that touches the whole corpus) in the audit
+  report at `process/ROLES-SKILLS-AUDIT.md` so the user can
+  approve a follow-up dispatch rather than the triager
+  exhausting itself rewriting at the limit.
 
 ## Self-improvement
 
