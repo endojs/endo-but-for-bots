@@ -1,5 +1,84 @@
 # PR dispatch state
 
+Last cycle: 2026-05-06 14:30 UTC.
+Surveyed 30 open PRs on `endojs/endo-but-for-bots`. Down from 59 at
+the prior snapshot; 29 PRs closed or merged across the session
+(11 merged via the conductor, 18 closed-as-superseded by the
+re-open-under-bot pattern: PRs 30, 44, 48 → 103, 101, 100; plus
+mass cleanup of older review/* dependabot bots PRs).
+
+## Snapshot 2026-05-06 14:30 UTC
+
+| PR | Title | Base | Review | Status |
+| --- | --- | --- | --- | --- |
+| 106 | Browser exo with origin allowlist | llm | - | awaiting review (panel-vetted: 0 must-fix) |
+| 105 | skill-registry helpers | llm | - | awaiting review (panel + fixer done) |
+| 104 | re-import ses for assert global | llm | - | awaiting review (9-line; unblocks #94) |
+| 103 | chat slot-and-slash commands design | llm | - | awaiting review (re-opened from #30) |
+| 102 | chat voice command parser design | llm | - | awaiting review (sibling design for #101) |
+| 101 | chat voice input | llm | - | awaiting review (re-opened from #44) |
+| 100 | familiar unified weblet server design | llm | - | awaiting review (re-opened from #48) |
+| 99 | content-store-gc | llm | CHANGES_REQUESTED | awaiting review (panel + builder fixer addressed should-fix) |
+| 96 | aux package.json overrides design | llm | CHANGES_REQUESTED | awaiting review (designer-authored) |
+| 94 | chat playwright smoke | llm | APPROVED | gated on #104 (assert regression in CI) |
+| 89 | genie-integration design | llm | - | awaiting review (older) |
+| 83 | garden agent-infrastructure perpetual | llm | - | meta-PR (steward bookkeeping) |
+| 79 | ses namespace mutation test | llm | - | awaiting review (older, stale-on-base) |
+| 76 | rankcover narrowing (mirror endo#3053) | master | - | blocked (CONFLICT, mirror) |
+| 75 | random + chacha12 | master | - | awaiting review (Gibson follow-up addressed) |
+| 74 | module-source robustness | master | CHANGES_REQUESTED | awaiting maintainer (older) |
+| 73 | marshal compareRankRemotablesTied | master | - | awaiting review (older) |
+| 71 | env-options per-compartment | master | - | awaiting review (older) |
+| 69 | pass-style document.all-like | master | - | awaiting review (older) |
+| 68 | docs Compartment OOM limits | master | CHANGES_REQUESTED | awaiting maintainer re-review (older) |
+| 67 | eslint-plugin harden-exports patterns | master | - | awaiting review (older) |
+| 64 | eslint-plugin harden-exports M.* | master | CHANGES_REQUESTED | awaiting maintainer re-review (older) |
+| 60 | ses get-intrinsics test | master | - | awaiting review (older) |
+| 59 | ocapn-noise IK netlayer | master | CHANGES_REQUESTED | awaiting review (panel + fixer done; needs Locator rename pick) |
+| 58 | error tracing daemon/cli | llm | - | awaiting review (older, stacked-on-#50 base resolved) |
+| 57 | marshal immutable ArrayBuffer | master | - | awaiting review (older) |
+| 55 | base64 hardened module | master | - | blocked (CONFLICT) |
+| 54 | xorshift consolidation | master | - | blocked (CONFLICT) |
+| 49 | ocapn-noise review fixes | llm | - | awaiting review (older) |
+| 47 | docker self-hosting | llm | - | awaiting review (Docker CI workflow added; ENDO_GATEWAY_REMOTE follow-up flagged) |
+| 46-22 | various older review/* + endor PRs | llm | - | awaiting review or blocked (see prior snapshot) |
+| 40 | agent-tools (post-fixer) | llm | CHANGES_REQUESTED | awaiting maintainer (panel verdict + fixer addressed code-only items; structural split deferred) |
+| 1-10 | ancient dependabot | llm | - | blocked (ancient; `@dependabot recreate`) |
+
+### Counts
+
+- `awaiting maintainer review`: 24 (the action queue)
+- `blocked (CONFLICT)`: 4 (#55, #54, #76 mirror, plus a few older review/*)
+- `gated`: 1 (#94 on #104)
+- `blocked (ancient dependabot)`: 9
+- `meta`: 1 (#83)
+
+Total: 30 open PRs (down from 59).
+
+### Dispatched-but-active builders
+
+None in flight. Marshal is in vacuous-satisfaction (review-queue
+depth=14 in the bot-managed subset; deferring sandbox-plugin
+builder until queue draws down). See `roles/marshal.md` for the
+trigger.
+
+### Merge queue
+
+(empty)
+
+### Stalled list
+
+(empty by current cycle's standard; see "Per-PR notes" below for
+session history)
+
+---
+
+## Historical snapshot below (kept for session-history reference)
+
+The table below is the 2026-05-04 snapshot as the cycle 1 baseline.
+Many entries have since merged or closed; the snapshot above is
+authoritative for current dispatch decisions.
+
 Last cycle: 2026-05-04 21:04 UTC.
 Surveyed 59 open PRs on `endojs/endo-but-for-bots`.
 
