@@ -144,8 +144,9 @@ The steward does not post the comments; that is a maintainer action.
 
 | Order | PR | Base | Head | Status |
 | --- | --- | --- | --- | --- |
-
-(empty)
+| 1 | 84 | master | `d9a3c93b1c` | in-progress (conductor) |
+| 2 | 88 | llm | `eec30fff98` | queued |
+| 3 | 91 | llm | `2a97b2d6c4` | queued |
 
 Merged this run (2026-05-05 conductor, second cycle):
 
