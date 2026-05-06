@@ -121,6 +121,19 @@ touch your local clone. Always do all three steps.
 - A previously-merged PR's worktree might already have been
   cleaned up by the conductor. The fixer's reuse-if-present
   guard handles this; do not assume the worktree exists.
+- **Reused worktrees can hold stale absolute paths to since-pruned
+  sibling worktrees in their `node_modules/.bin/*` shims and
+  `.pnp.cjs` resolvers.** When the first call to `npx corepack
+  yarn format` (or any other yarn-installed CLI) fails with
+  `MODULE_NOT_FOUND` pointing at a path like `/home/kris/endo-wt/
+  <some-other-slug>/node_modules/.store/...`, re-run `npx corepack
+  yarn install` in the reused worktree to rewrite the store
+  references to the current path. This is one install cycle, not
+  a re-checkout, and resolves the cross-worktree leakage that
+  yarn 4's portable store creates when sibling worktrees come and
+  go. (Session example: PR 101 fixer reused the builder's pr-101
+  worktree weeks later; the `.bin/prettier` shim still pointed at
+  a deleted sibling `voice-fresh` worktree until the reinstall.)
 
 ## Session example
 
