@@ -46,6 +46,19 @@ A PR that grew in scope after open should be reset to the
 template structure rather than appended to; reviewers expect
 the section headings in the same order on every PR in the repo.
 
+**Do not line-wrap paragraphs in the PR body.** GitHub renders
+PR descriptions in a flavor of Markdown where line breaks are
+interpreted literally (single newlines render as `<br>`-style
+breaks, not paragraph continuations). Wrapping a paragraph at
+80 to 100 columns the way the rest of the repo's markdown does
+produces visible ragged-edge breaks in the rendered description.
+Each paragraph in the PR body is a single physical line; let
+the browser wrap it. Lists and headings still get their own
+lines (that's what they need); only the prose under them stays
+unwrapped. This is a deliberate exception to the project's
+markdown line-wrap convention; it applies to PR descriptions
+only.
+
 **The PR body describes the change, not the methodology.** Do
 not mention this checklist, the template-fill workflow, the
 process discipline, the steward, the conductor, or any internal
