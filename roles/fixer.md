@@ -96,6 +96,19 @@ result through CI.
   Do not re-request review on a deferral-path reply (the reviewer
   already authorized the deferral); only when the fixer's response
   is a substantive fix that the reviewer should re-evaluate.
+- **A `COMMENTED`-state review that asks for a substantive change is
+  the same trigger as `CHANGES_REQUESTED`.** GitHub records the
+  review state the reviewer chose, but maintainers routinely use
+  `COMMENTED` (or even an inline comment thread, which has no
+  review-state at all) to ask for a fix that they would consider
+  blocking. The fixer's response sequence is the same in both cases:
+  apply the fix, push, post a top-level summary citing the SHA, and
+  re-request review (or `@`-mention if the reviewer is the PR
+  author). Do not let the absence of `CHANGES_REQUESTED` lull you
+  into skipping the re-request; the maintainer asked for a change
+  and expects a re-ping when it lands. (Session example: PR 47's
+  Docker CI direction came in as a `COMMENTED` review and was
+  handled identically to a `CHANGES_REQUESTED` round.)
 - **Panel reports cite line numbers from the snapshot the panel
   reviewed, not from current `HEAD`.** When the dispatch summarizes
   a panel comment with line numbers, treat the file path and the
