@@ -142,10 +142,19 @@ The steward does not post the comments; that is a maintainer action.
 
 ## Merge queue
 
-| Order | PR | Base | Head | Status |
-| --- | --- | --- | --- | --- |
-| 1 | 84 | master | `ef6ea98885` | in-progress (conductor, CI in flight post-tidy) |
-| 2 | 88 | llm | `1d1a0bc78f` | in-progress (conductor, CI in flight post-tidy) |
+(empty)
+
+Merged this run (2026-05-06 conductor, resume cycle):
+
+- #84 → merged (merge commit to master).
+  Prior conductor tidied; resume conductor found CI conclusively green
+  (26 SUCCESS, MERGEABLE) and ran direct `gh pr merge --merge`.
+  state=MERGED.
+- #88 → merged (merge commit to llm).
+  Prior conductor tidied; resume conductor sampled CI as 18 SUCCESS + 8
+  pending and issued `--auto --merge`.
+  Pending checks completed in the interim, so GitHub processed the
+  auto-merge as a direct merge; state=MERGED on first verify.
 
 Merged this run (2026-05-06 conductor):
 
