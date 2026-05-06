@@ -160,6 +160,45 @@ test('multiple keys on one network route inbound sessions to the right local key
   netB.shutdown();
 });
 
+test('provideSession rejects when an active session under a different local key already exists', async t => {
+  const netA = makeOcapnNoiseNetwork({ codec: cborCodec });
+  const netB = makeOcapnNoiseNetwork({ codec: cborCodec });
+  const { keyId: keyA1 } = addFreshKey(netA);
+  const { keyId: keyA2 } = addFreshKey(netA);
+  const { keyId: keyB } = addFreshKey(netB);
+  const { transportA, transportB } = makeMockTransportPair();
+  await netA.addTransport(transportA);
+  await netB.addTransport(transportB);
+
+  // First session: A reaches B as A1.
+  const [sessionA, sessionB] = await Promise.all([
+    netA.provideSession(netB.locationFor(keyB), { localKeyId: keyA1 }),
+    netB.waitForInboundSession(keyA1),
+  ]);
+  t.is(sessionA.selfIdentity.keyId, keyA1);
+  t.is(sessionB.remoteLocation.designator, keyA1);
+
+  // Second `provideSession` to the same peer under A2 must not be
+  // silently aliased to the A1 session: the caller asked to be
+  // authenticated as A2 and would otherwise be unwittingly speaking
+  // as A1.
+  await t.throwsAsync(
+    netA.provideSession(netB.locationFor(keyB), { localKeyId: keyA2 }),
+    { message: /already has an active session under local keyId/ },
+  );
+
+  // Same caller, same key: still returns the live session.
+  const sessionAReuse = await netA.provideSession(netB.locationFor(keyB), {
+    localKeyId: keyA1,
+  });
+  t.is(sessionAReuse, sessionA);
+
+  sessionA.close();
+  sessionB.close();
+  netA.shutdown();
+  netB.shutdown();
+});
+
 /**
  * A transport whose `connect` returns a stream that never delivers any
  * bytes — a slow-loris peer used to exercise the handshake-timeout and

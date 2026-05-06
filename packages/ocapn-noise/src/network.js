@@ -252,6 +252,14 @@ export const makeOcapnNoiseNetwork = ({
   const inboundQueue = makeQueue();
   let inboundClosed = false;
 
+  /**
+   * Set true by `shutdown()`. Used by `recordCandidate` and
+   * `decrementAndSettle` to avoid promoting a late-arriving candidate
+   * into the now-emptied `active` map (where nothing would ever close
+   * it again, leaking the underlying socket and WASM cipher state).
+   */
+  let isShutdown = false;
+
   /** @param {KeyIdHex} peerId */
   const bumpInProgress = peerId => {
     inProgress.set(peerId, (inProgress.get(peerId) ?? 0) + 1);
@@ -262,6 +270,13 @@ export const makeOcapnNoiseNetwork = ({
    * @param {Candidate} candidate
    */
   const recordCandidate = (peerId, candidate) => {
+    if (isShutdown) {
+      // Network is shutting down. The candidate's underlying socket
+      // and WASM cipher state would otherwise become unreachable
+      // through the post-shutdown empty `active` map. Close it now.
+      candidate.close();
+      return;
+    }
     const list = candidates.get(peerId) ?? [];
     list.push(candidate);
     candidates.set(peerId, list);
@@ -303,6 +318,14 @@ export const makeOcapnNoiseNetwork = ({
 
   /** @param {KeyIdHex} peerId */
   const decrementAndSettle = peerId => {
+    if (isShutdown) {
+      // `shutdown()` already cleared `inProgress`, `candidates`,
+      // `active`, and `waiters`, and closed every candidate it knew
+      // about. A late-arriving handshake whose own `recordCandidate`
+      // call now sees `isShutdown === true` will close itself; nothing
+      // here is safe to touch.
+      return;
+    }
     const next = (inProgress.get(peerId) ?? 0) - 1;
     if (next > 0) {
       inProgress.set(peerId, next);
@@ -861,6 +884,19 @@ export const makeOcapnNoiseNetwork = ({
         return;
       }
 
+      // Cheap-prefix gating: cap concurrent in-progress handshakes
+      // per local identity before paying for any Noise IK SYN-decrypt
+      // (the per-handshake cost includes a `WebAssembly.Instance`
+      // construction and a Diffie-Hellman). The peer's verifying key
+      // is encrypted in the SYN payload and not visible until after
+      // the decrypt, so we have no source-IP-equivalent identifier
+      // here; the per-identity cap bounds the responder's exposure
+      // when an attacker spams one of our identities with junk SYNs.
+      if (inProgressFull(intendedKeyId)) {
+        await stream.writer.return(undefined);
+        return;
+      }
+
       const noise = makeOcapnSessionCryptography({
         wasmModule,
         getRandomValues,
@@ -876,9 +912,9 @@ export const makeOcapnNoiseNetwork = ({
       const { initiatorVerifyingKey, encrypt, decrypt, handshakeHash } =
         asResp.responderReadSynWriteSynack(prefixedSyn, synack);
       const initiatorKeyHex = toHex(initiatorVerifyingKey);
-      // Reject early if a single peer is already saturating the
-      // in-flight cap; otherwise a misbehaving initiator could open
-      // many parallel sockets and pin handshakeTimeoutMs of work each.
+      // Re-check against the verified peer identity now that we know
+      // who they really are, in case a single peer is saturating the
+      // cap by hitting many of our identities at once.
       if (inProgressFull(initiatorKeyHex)) {
         await stream.writer.return(undefined);
         return;
@@ -1095,8 +1131,22 @@ export const makeOcapnNoiseNetwork = ({
     // resolves any waiters with the live session. Spawning another
     // outbound dial would just produce a second candidate that the
     // same code path will close.
+    //
+    // The cached session must have been established under the same
+    // local identity the caller asked for. Returning a session whose
+    // `selfIdentity.keyId` differs would silently swap the caller's
+    // identity. Reject loudly so the caller knows the active map is
+    // keyed by peer alone and they are competing with another local
+    // identity for the same peer.
     const existing = active.get(peerId);
-    if (existing) return existing.session;
+    if (existing) {
+      if (existing.session.selfIdentity.keyId !== rk.keyId) {
+        throw Error(
+          `ocapn-noise: peer ${peerId} already has an active session under local keyId ${existing.session.selfIdentity.keyId}; cannot open a second session under ${rk.keyId} (the active map is keyed by peer)`,
+        );
+      }
+      return existing.session;
+    }
 
     // Register our handshake, kick it off in the background, and
     // wait for settlement — either our own handshake graduates, or a
@@ -1122,6 +1172,11 @@ export const makeOcapnNoiseNetwork = ({
   };
 
   const shutdown = () => {
+    // Set the flag first so any `runInitiator` or `handleIncoming`
+    // that resolves while we are tearing down sees the network is
+    // shutting down and closes its candidate rather than writing it
+    // into a now-empty `active` map.
+    isShutdown = true;
     // Reject any still-waiting provideSession callers first so their
     // promises settle before we tear down transports beneath them.
     const shutdownReason = Error('ocapn-noise: network shutdown');
@@ -1130,6 +1185,13 @@ export const makeOcapnNoiseNetwork = ({
     }
     waiters.clear();
     inProgress.clear();
+    // Close any candidates that recorded themselves between
+    // `runInitiator` resolution and `decrementAndSettle`. After this
+    // sweep, future `recordCandidate` calls short-circuit on
+    // `isShutdown` and close their candidate inline.
+    for (const [, list] of candidates) {
+      for (const c of list) c.close();
+    }
     candidates.clear();
     recentErrors.clear();
     for (const [, c] of active) c.close();
