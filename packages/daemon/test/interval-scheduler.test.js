@@ -222,3 +222,139 @@ test('help returns documentation', async t => {
 
   await interval.cancel();
 });
+
+test('cancel-during-tick: late resolve() must not mutate or re-persist the entry', async t => {
+  // Capture every tickResponse so the test can call resolve() after
+  // the entry is cancelled, simulating the network round-trip race
+  // (onTick fires, agent receives the tick, agent calls cancel(),
+  // agent then calls resolve() before the daemon learns of cancel).
+  /** @type {Array<{ entryId: string, tickResponse: object }>} */
+  const responses = [];
+  const ticks = [];
+  /** @type {Array<{ id: string, status: string, nextTickAt: number }>} */
+  const persisted = [];
+  const { scheduler } = makeIntervalSchedulerKit({
+    minPeriodMs: 1,
+    onTick: (entry, tickNumber, tickResponse) => {
+      ticks.push(tickNumber);
+      responses.push({ entryId: entry.id, tickResponse });
+    },
+    onEntryChange: entry => {
+      persisted.push({
+        id: entry.id,
+        status: entry.status,
+        nextTickAt: entry.nextTickAt,
+      });
+    },
+  });
+
+  const interval = await scheduler.makeInterval('race', 5000, {
+    firstDelayMs: 0,
+    tickTimeoutMs: 60_000,
+  });
+
+  // Wait for the first tick to fire (firstDelayMs=0 schedules a 0-ms timeout).
+  await new Promise(resolve => setTimeout(resolve, 30));
+  t.is(ticks.length, 1, 'first tick fired');
+  t.is(responses.length, 1, 'one tickResponse handed to onTick');
+
+  // Snapshot the persistence trace at the cancel point.  After
+  // cancel(), the only persistence write that may follow is one
+  // identifying the entry as cancelled; under the race fix, late
+  // resolve() must not produce any further onEntryChange for this
+  // entry.
+  await interval.cancel();
+  t.is(interval.info().status, 'cancelled');
+  const persistedAtCancel = persisted.length;
+  const cancelledEntry = persisted[persisted.length - 1];
+  t.is(cancelledEntry.status, 'cancelled');
+  const nextTickAtCancel = cancelledEntry.nextTickAt;
+
+  // Late resolve: must drop on the floor; must not re-arm and must
+  // not produce a new persistence write that reflects an advanced
+  // nextTickAt (which would corrupt the on-disk state and make a
+  // restart try to revive the cancelled entry).
+  responses[0].tickResponse.resolve();
+
+  // Wait long enough that the interval, were it re-armed, would fire
+  // a second tick.  No additional tick may arrive.
+  await new Promise(resolve => setTimeout(resolve, 80));
+  t.is(
+    ticks.length,
+    1,
+    'late resolve() must not revive a cancelled interval',
+  );
+  t.is(
+    persisted.length,
+    persistedAtCancel,
+    'late resolve() must not produce a new onEntryChange for a cancelled entry',
+  );
+  // The entry's nextTickAt must not have advanced as a side effect
+  // of the late resolve.
+  t.is(
+    interval.info().nextTickAt,
+    nextTickAtCancel,
+    'late resolve() must not advance nextTickAt on a cancelled entry',
+  );
+});
+
+test('cancel-during-tick: late reschedule() must not mutate or re-persist the entry', async t => {
+  /** @type {Array<{ tickResponse: object }>} */
+  const responses = [];
+  const ticks = [];
+  /** @type {Array<{ id: string, status: string, nextTickAt: number }>} */
+  const persisted = [];
+  const { scheduler } = makeIntervalSchedulerKit({
+    minPeriodMs: 1,
+    onTick: (_entry, tickNumber, tickResponse) => {
+      ticks.push(tickNumber);
+      responses.push({ tickResponse });
+    },
+    onEntryChange: entry => {
+      persisted.push({
+        id: entry.id,
+        status: entry.status,
+        nextTickAt: entry.nextTickAt,
+      });
+    },
+  });
+
+  // periodMs/10 = 50 > tickTimeoutMs = 5, so reschedule's
+  // `min(baseBackoff*..., tickTimeoutMs)` clamps backoffDelay to 5;
+  // retryAt > deadline (current nextTickAt + 5), so reschedule takes
+  // the auto-resolve-via-advanceToNextPeriod branch.  Under the old
+  // racy code, that branch writes a fresh nextTickAt for an
+  // already-cancelled entry; the fix drops on the floor.
+  const interval = await scheduler.makeInterval('race-reschedule', 500, {
+    firstDelayMs: 0,
+    tickTimeoutMs: 5,
+  });
+
+  // Wait briefly so onTick fires and gives us a tickResponse, but
+  // not so long that the 5ms deadline has already auto-resolved.
+  // Capture the response synchronously the moment it arrives.
+  const start = Date.now();
+  while (responses.length === 0 && Date.now() - start < 50) {
+    // eslint-disable-next-line no-await-in-loop
+    await new Promise(resolve => setTimeout(resolve, 1));
+  }
+  t.is(responses.length, 1, 'one tickResponse handed to onTick');
+
+  await interval.cancel();
+  const persistedAtCancel = persisted.length;
+  const cancelledNextTickAt = interval.info().nextTickAt;
+  responses[0].tickResponse.reschedule();
+
+  await new Promise(resolve => setTimeout(resolve, 80));
+  t.is(
+    persisted.length,
+    persistedAtCancel,
+    'late reschedule() (deadline-exceeded branch) must not produce ' +
+      'a new onEntryChange for a cancelled entry',
+  );
+  t.is(
+    interval.info().nextTickAt,
+    cancelledNextTickAt,
+    'late reschedule() must not advance nextTickAt on a cancelled entry',
+  );
+});

@@ -114,6 +114,15 @@ export const makeIntervalSchedulerKit = (options = {}) => {
     }
 
     // Create a one-shot TickResponse exo for this tick.
+    //
+    // Both resolve() and reschedule() must observe the entry's current
+    // status before doing anything: a tick fires onTick asynchronously
+    // (the caller may pass tickResponse to a remote agent and await a
+    // network round-trip), and during that window a concurrent
+    // interval.cancel() or control.revoke() may have flipped the entry
+    // to 'cancelled'.  Without the status check the late response would
+    // re-arm the interval after cancel(), reviving a dead entry and
+    // queuing a future tick the caller can no longer disarm.
     const tickResponse = makeExo(
       `TickResponse ${entry.label}#${entry.tickCount}`,
       TickResponseInterface,
@@ -121,12 +130,19 @@ export const makeIntervalSchedulerKit = (options = {}) => {
         resolve: () => {
           if (responded) return;
           responded = true;
-          // Clear the deadline timeout.
+          // Clear the deadline timeout in either branch.  The deadline
+          // timer is shared with the cancel path, so the entry-removal
+          // case does not need to clear it again.
           const dh = tickDeadlines.get(entryId);
           if (dh !== undefined) {
             clearTimeout(dh);
             tickDeadlines.delete(entryId);
           }
+          // Late resolve from a cancelled or revoked entry: drop on
+          // the floor.  cancel() / revoke() already disarmed the
+          // interval and updated status; advancing here would re-arm
+          // a dead interval and the caller has no way to stop it.
+          if (entry.status !== 'active') return;
           advanceToNextPeriod(entry);
         },
         reschedule: () => {
@@ -138,6 +154,13 @@ export const makeIntervalSchedulerKit = (options = {}) => {
             clearTimeout(dh);
             tickDeadlines.delete(entryId);
           }
+          // Late reschedule from a cancelled or revoked entry: drop.
+          // Same reasoning as resolve(): re-arming a dead entry
+          // produces a tick the caller cannot stop.
+          if (entry.status !== 'active') {
+            responded = true;
+            return;
+          }
           // Exponential backoff, capped at tickTimeoutMs.
           const baseBackoff = Math.min(1000, entry.periodMs / 10);
           const backoffDelay = Math.min(
@@ -147,7 +170,7 @@ export const makeIntervalSchedulerKit = (options = {}) => {
           const retryAt = Date.now() + backoffDelay;
           const deadline = entry.nextTickAt + entry.tickTimeoutMs;
           if (retryAt >= deadline) {
-            // Backoff would exceed deadline — auto-resolve instead.
+            // Backoff would exceed deadline; auto-resolve instead.
             responded = true;
             advanceToNextPeriod(entry);
             return;
@@ -166,12 +189,15 @@ export const makeIntervalSchedulerKit = (options = {}) => {
       onTick(entry, entry.tickCount, tickResponse);
     }
 
-    // Arm tick timeout — auto-resolve if agent doesn't respond.
+    // Arm tick timeout: auto-resolve if agent doesn't respond.
     const deadlineHandle = setTimeout(() => {
       if (!responded) {
         responded = true;
         tickDeadlines.delete(entryId);
-        console.log(
+        // Drop the auto-resolve on the floor for cancelled entries,
+        // for the same race-safety reason as resolve()/reschedule().
+        if (entry.status !== 'active') return;
+        console.error(
           `Interval "${entry.label}" tick #${entry.tickCount} timed out ` +
             `after ${entry.tickTimeoutMs}ms`,
         );
