@@ -144,6 +144,21 @@ The steward does not post the comments; that is a maintainer action.
 
 (empty)
 
+Merged this run (2026-05-06 conductor, PR 51 cycle):
+
+- #51 → `96222a06e5` (merge commit to llm).
+  `docs: distill PR-review best practices into CLAUDE.md and
+  CONTRIBUTING.md`. Was 228 behind, 1 ahead at survey;
+  MERGEABLE/CLEAN with `reviewDecision=APPROVED` and 25/25 SUCCESS.
+  Single commit (already coherent); no tidy. Rebased onto current
+  `bots-ssh/llm` (clean, no conflicts; merge-tree probe reported
+  clean before the rebase). Force-pushed `76a65b77df` with
+  `--force-with-lease=design/best-practices-from-review:4b08c7de65`.
+  Issued `gh pr merge --auto --merge`; GitHub processed it as a
+  direct merge immediately on the freshly pushed CI. state=MERGED.
+  Local + remote `design/best-practices-from-review` branch
+  deleted; no `pr-51` worktree existed (predates the lifecycle).
+
 Merged this run (2026-05-06 conductor, PR 92 cycle):
 
 - #92 → `e398264405` (merge commit to llm).
@@ -243,4 +258,24 @@ Side effect for steward to handle next cycle:
 
 ## Stalled list
 
-(empty)
+Stalled this run (2026-05-06 conductor, PR 94 cycle):
+
+- #94 (`feat(browser-test): chat build-and-load smoke`) →
+  `ci needs builder/fixer`.
+  Head `3a63392372` was already rebased onto current `bots-ssh/llm`
+  (the prior pr-94 worktree did the rebase + the harden-fix
+  validation by re-targeting onto #95 then back onto `llm` after
+  #95 merged). MERGEABLE/UNSTABLE with `reviewDecision=APPROVED`
+  but `browser-tests` (Playwright) FAILED with a NEW regression:
+  `ReferenceError: Can't find variable: assert` at module load of
+  `chat/assets/main-*.js`. Same shape as the harden regression
+  that #95 fixed, but for a different missing global (`assert`
+  rather than `harden`). The smoke test is doing its job —
+  catching an unshimmed top-level `assert(...)` call in the chat
+  bundle that breaks production-bundle execution. Out of conductor
+  scope (the fix is in `packages/chat`, parallel to #95). Needs a
+  follow-up fixer/builder to source `assert` from `@endo/errors`
+  (or equivalent) in the chat modules that use it at top level.
+  pr-94 worktree at `/home/kris/endo-wt/pr-94` left in place for
+  the follow-up dispatch; remote branch
+  `feat/chat-playwright-smoke` left intact.
