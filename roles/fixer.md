@@ -258,6 +258,37 @@ result through CI.
   so the rewrite also normalizes attribution. Verify with `git
   log --format='%B' <base>..HEAD | grep -c '<trailer>'` returning
   0 before pushing.
+- **You cannot monkey-patch a `Far`-wrapped (or `makeExo`-wrapped)
+  remotable after the fact; the wrapper freezes the object.** A
+  regression test that wants to inject a mid-call failure into a
+  Far-built mock cannot do `const realLookup = registry.lookup;
+  registry.lookup = async name => { ... }` after `Far('Mock', {
+  ... })` returned: assignment fails with `Cannot assign to read
+  only property 'lookup' of object '[object Alleged: Mock]'`. The
+  right shape is to thread a hook into the mock factory itself
+  (`makeMockDirectory({ beforeWriteText: ... })`) that the Far
+  wrapper closes over before freezing. The hook fires from inside
+  the wrapped method body, where it has access to mutable test
+  state (an `armFailure = false` flag the test flips after the
+  known-good setup completes). Same pattern applies to any
+  hardened factory's output; if you find yourself wanting to
+  swap a method on a returned remotable, parameterize the factory
+  instead. Session example: PR 105 fixer's `publishSkill` staging
+  regression test.
+- **For nested mocks that need addressable per-call hooks, give
+  each sub-directory a `parentPath` argument and pass it into the
+  hook.** When a mock factory recursively builds sub-mocks (e.g.
+  `makeMockDirectory.makeDirectory(name)` returns another mock),
+  a top-level hook needs to know which sub-mock fired the call so
+  the test can target a specific staging or sub-directory write.
+  Track the path through the recursive call and surface it as the
+  hook's first argument: `hooks.beforeWriteText(parentPath, name,
+  value)` where `parentPath` is the chain of pet names from the
+  root. The test then matches on `parentPath[parentPath.length -
+  1] === '<staging-name>'` rather than on the leaf name alone.
+  Without `parentPath`, a hook that throws on `name === 'version'`
+  also throws on the first known-good publish, masking the bug
+  the test was meant to expose.
 
 ## Self-improvement
 
