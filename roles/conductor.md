@@ -132,6 +132,15 @@ re-dispatches.
 - **Delegate the CI wait** via `--auto --merge` whenever CI is
   in flight at the moment of issue. Direct `--merge` only when
   CI is conclusively green right then.
+- **Issue the merge command before ending the run.** A push
+  followed by exit leaves `autoMergeRequest=null`; the next
+  conductor inherits a tidied branch with no pending merge. After
+  step 3's force-push, step 5's `gh pr merge` is mandatory in the
+  same dispatch. If you mark a queue row "in-progress (conductor,
+  CI in flight post-tidy)" without recording an `auto-merge
+  enabled` bookkeeping commit, you have stalled the PR silently.
+  Either record it as `auto-merge enabled` after issuing
+  `--auto --merge`, or record it as merged after direct `--merge`.
 - **Do not loop forever on a flaky PR.** Two re-rebase-and-walk
   attempts without convergence: stall `flaky` and move on.
 - **Authenticated `gh` account** speaks; no persona name.
