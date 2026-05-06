@@ -67,6 +67,23 @@ result through CI.
   fighting each other.
 - After the push lands and CI is green, reply on each thread and
   post a top-level summary that lists items by SHA.
+- **Re-request review after a `CHANGES_REQUESTED` round.** GitHub's
+  review state stays `CHANGES_REQUESTED` until the reviewer is asked
+  again; without a re-request, the dismissed-but-unresolved status
+  hides the PR in the reviewer's queue and the maintainer has no
+  signal to look. After posting the top-level summary, request a
+  fresh review from the same reviewer(s) whose review is being
+  responded to:
+  ```sh
+  gh api -X POST repos/<owner>/<repo>/pulls/<N>/requested_reviewers \
+    -f reviewers[]=<login>
+  ```
+  Multiple reviewers: repeat `-f reviewers[]=<login>`. If the
+  reviewer is the PR author, GitHub rejects the request; in that
+  case post a `@<login>` mention in the top-level summary instead.
+  Do not re-request review on a deferral-path reply (the reviewer
+  already authorized the deferral); only when the fixer's response
+  is a substantive fix that the reviewer should re-evaluate.
 - When the failing CI signal IS the PR (a new smoke / lint / coverage
   check, with the unrelated CI matrix passing), do not silence the
   signal. Two outcomes are appropriate:
