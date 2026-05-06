@@ -126,19 +126,27 @@ remove and recreate (cheap; the working tree is small).
    changes); no `Co-Authored-By: Claude` lines.
 10. **Push to `bots-ssh garden`, rebasing on conflict until
     success.** Garden is a high-traffic branch (steward,
-    conductor, and other agents push concurrently); the first
-    push attempt may be rejected because the remote tip advanced.
-    Loop until the push lands:
+    conductor, liaison, and other agents push concurrently);
+    the first push attempt may be rejected because the remote
+    tip advanced. Loop until the push lands:
     ```sh
     until git push bots-ssh garden --force-with-lease; do
       git fetch bots-ssh garden
       git rebase bots-ssh/garden
     done
     ```
-    `--force-with-lease` is the safety net: if the remote has
-    moved beyond the lease, the push is rejected (and the loop
-    re-fetches + rebases). A plain force-push could clobber
-    concurrent work.
+    Use the **no-value** `--force-with-lease` form, NOT
+    `--force-with-lease=garden:<sha>`. The no-value form uses
+    the most recently fetched ref as the lease, so a concurrent
+    push between your fetch and your push fails the lease and
+    triggers the rebase loop. The explicit-value form, with a
+    SHA captured before the latest fetch, can silently overwrite
+    concurrent commits because the lease still matches the value
+    you supplied. Recovery if you hit this: rescue the clobbered
+    commits with
+    `git rebase --onto HEAD <last-fetched-tip> <clobbered-tip>`
+    and re-push. A plain force-push (without `--with-lease`)
+    has the same hazard with no recovery hint; do not use it.
 11. **Clean up the worktree** at the end of the pass:
     ```sh
     cd /home/kris/garden
