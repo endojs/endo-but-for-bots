@@ -153,6 +153,16 @@ re-dispatches.
 - **Delegate the CI wait** via `--auto --merge` whenever CI is
   in flight at the moment of issue. Direct `--merge` only when
   CI is conclusively green right then.
+- **Arming a Monitor is not the same as issuing the merge.** A
+  Monitor watches; it does not merge. If you find yourself ending
+  a dispatch with "let the monitor wait" and no `gh pr merge`
+  command issued, you have stalled silently. The PR sits at
+  `state=OPEN`, `autoMergeRequest=null`, and the steward has to
+  notice and issue the merge as a fallback (this happened on
+  PR 94 → conductor stalled after rebasing). Verify before
+  reporting: `gh pr view <N> --json state,autoMergeRequest`
+  must show either `state=MERGED` or `autoMergeRequest != null`.
+  If neither: you have not done the merge.
 - **Issue the merge command before ending the run.** A push
   followed by exit leaves `autoMergeRequest=null`; the next
   conductor inherits a tidied branch with no pending merge. After

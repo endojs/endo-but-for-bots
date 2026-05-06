@@ -14,13 +14,13 @@ mass cleanup of older review/* dependabot bots PRs).
 | 106 | Browser exo with origin allowlist | llm | - | awaiting review (panel-vetted: 0 must-fix) |
 | 105 | skill-registry helpers | llm | - | awaiting review (panel + fixer done) |
 | ~~104~~ | re-import ses for assert global | llm | - | merged 2026-05-06 conductor → `ac5dd05663` |
+| ~~94~~ | chat playwright smoke | llm | APPROVED | merged 2026-05-06 (post-#104 rebase + auto-merge from steward fallback after conductor stalled) |
 | 103 | chat slot-and-slash commands design | llm | - | awaiting review (re-opened from #30) |
 | 102 | chat voice command parser design | llm | - | awaiting review (sibling design for #101) |
 | 101 | chat voice input | llm | - | awaiting review (re-opened from #44) |
 | 100 | familiar unified weblet server design | llm | - | awaiting review (re-opened from #48) |
 | 99 | content-store-gc | llm | CHANGES_REQUESTED | awaiting review (panel + builder fixer addressed should-fix) |
 | 96 | aux package.json overrides design | llm | CHANGES_REQUESTED | awaiting review (designer-authored) |
-| 94 | chat playwright smoke | llm | APPROVED | conductor in flight (rebased post-#104; CI converging) |
 | 89 | genie-integration design | llm | - | awaiting review (older) |
 | 83 | garden agent-infrastructure perpetual | llm | - | meta-PR (steward bookkeeping) |
 | 79 | ses namespace mutation test | llm | - | awaiting review (older, stale-on-base) |
