@@ -74,9 +74,16 @@ verify state before dispatching.
   The steward dispatches the panel itself per
   [`../skills/panel-review-12-perspectives.md`](../skills/panel-review-12-perspectives.md),
   fanned out via
-  [`../skills/subagent-batching.md`](../skills/subagent-batching.md),
-  and posts the aggregated must-fix / should-fix / out-of-scope
-  report as a single PR comment.
+  [`../skills/subagent-batching.md`](../skills/subagent-batching.md).
+  After aggregation, **submit the report as a formal review** via
+  `gh pr review --request-changes --body-file ...` (or `--comment`
+  / `--approve` per the panel's net verdict). A plain `gh pr
+  comment` is invisible to the dispatch matrix and leaves the PR
+  in limbo; the formal review flips `reviewDecision` so the
+  fixer trigger fires next cycle. **Then dispatch a fixer** with
+  the must-fix list inline as the brief if any must-fix items
+  exist. The chain is: panel → aggregate → submit-as-review →
+  dispatch-fixer; skipping any step strands the PR.
 - **`shepherd`**: CI red, in scope per the broadened shepherd
   posture (chain-fixing, escalates only on architectural /
   multi-file).

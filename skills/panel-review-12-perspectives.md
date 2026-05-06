@@ -73,11 +73,39 @@ Dedupe overlapping findings. Where reviewers disagree, present both
 views and pick the side most consistent with `CLAUDE.md` /
 `AGENTS.md`.
 
-## Posting
+## Posting and dispatching the fixer
 
-Post the aggregated report as a single PR comment under ~700 words.
-Cite reviewers by perspective grouped where they agreed. Don't list
-individual agent names — group them.
+**Submit the aggregated report as a formal review, not a plain
+comment.** A plain `gh pr comment` posts a comment that the
+steward's dispatch matrix (which keys on `reviewDecision`) does
+not see; the PR ends up reviewed-but-invisible-to-orchestration.
+Use `gh pr review` so `reviewDecision` flips and the fixer
+trigger fires:
+
+```sh
+gh pr review <N> -R <repo> --request-changes --body-file /tmp/panel.md
+# OR if must-fix is empty but should-fix has items:
+gh pr review <N> -R <repo> --comment --body-file /tmp/panel.md
+# OR if the panel net-approves:
+gh pr review <N> -R <repo> --approve --body-file /tmp/panel.md
+```
+
+The body is the same aggregated under-700-words report. Cite
+reviewers by perspective grouped where they agreed; don't list
+individual agent names.
+
+**After submitting the review, dispatch a fixer with the must-fix
+list inline as the brief**, if any must-fix items exist. The
+panel's whole point is independent review; the orchestrator (the
+builder for fresh PRs, the steward for cold ones) hands the
+verdict to a fixer rather than doubling back on its own work.
+The fixer brief includes the must-fix items inline, not just a
+link to the review, so the fixer doesn't re-parse comment markup.
+
+The chain is: dispatch panel → aggregate → submit as formal
+review → dispatch fixer. Skipping the formal-review step strands
+the PR (no orchestration trigger fires); skipping the fixer
+dispatch strands the verdict (no agent picks it up).
 
 ## Pitfall: sibling-package forks miss recent peer fixes
 

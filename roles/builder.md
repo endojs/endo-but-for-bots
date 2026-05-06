@@ -76,21 +76,44 @@ issue or design document, and shepherding it through to a green PR.
   works in both environments.
 - **Hand off the freshly-opened PR to a juror panel and a
   saboteur** before ending the engagement. The builder's last
-  acts are two parallel dispatches:
+  acts are two parallel dispatches plus the close-out chain:
   1. A `juror` panel per
      [`../skills/panel-review-12-perspectives.md`](../skills/panel-review-12-perspectives.md),
      fanned out via
      [`../skills/subagent-batching.md`](../skills/subagent-batching.md).
-     Aggregate the panel's findings into a single PR comment
-     (must-fix / should-fix / out-of-scope) under ~700 words. If
-     the panel finds nothing must-fix, post a brief acknowledgment
-     so the maintainer sees the PR was reviewed.
+     Aggregate the panel's findings into a single must-fix /
+     should-fix / out-of-scope report under ~700 words.
   2. A `saboteur` per
      [`./saboteur.md`](./saboteur.md), targeting the module(s) the
      PR adds or substantively changes. The saboteur's deliverable
      is either a follow-up commit on the same branch (defensive
      adversarial tests) or a separate issue/PR if it surfaced a
      real bug.
+
+  **Submit the aggregated panel report as a formal review, not a
+  plain comment.** A plain comment is invisible to the steward's
+  dispatch matrix (which keys on `reviewDecision`); a formal
+  review flips `reviewDecision` and is the load-bearing trigger
+  for everything downstream. Use:
+  ```sh
+  gh pr review <N> -R <repo> --request-changes --body-file /tmp/panel.md
+  # OR if the must-fix list is empty:
+  gh pr review <N> -R <repo> --comment --body-file /tmp/panel.md
+  # OR if the panel net-approves with no findings:
+  gh pr review <N> -R <repo> --approve --body-file /tmp/panel.md
+  ```
+  `--approve` is rare for a 12-perspective panel; default to
+  `--request-changes` when any reviewer requested changes.
+
+  **After submitting the review, dispatch a `fixer` with the
+  must-fix list as the brief** if any must-fix items exist. The
+  fixer is the agent that converts the review into commits; the
+  builder does not double back to fix its own PR (the panel's
+  whole point is independence). The fixer brief includes the must-fix
+  items inline (not just a link), so the fixer doesn't have to
+  re-parse the comment. Same rule applies to bugs the saboteur
+  surfaces.
+
   Fresh PRs warrant this attention because the cost is highest at
   open time (when scope and shape are most malleable) and
   cheapest to act on (the author's context is intact). Do not
