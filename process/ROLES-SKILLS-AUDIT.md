@@ -45,11 +45,10 @@ Most skills lead with `## When to use`, `## Trigger`,
 error`. All work as triggers; the variation in heading is
 cosmetic.
 
-`pre-pr-checklist.md` opens with `## The minimum` (no trigger
-heading). Given the file is cited from every role that pushes a
-PR, an explicit trigger lead would make it self-explanatory at
-the section anchor. Not fixed; flagged for follow-up because the
-fix is a small reorganization rather than a one-line addition.
+`pre-pr-checklist.md` previously opened with `## The minimum`
+(no trigger heading). Fixed in this engagement: a `## Trigger`
+section now leads, explicitly covering both `gh pr create` and
+`gh pr edit --body` paths.
 
 ### Skills that have accreted unrelated pitfalls
 
