@@ -142,7 +142,9 @@ The steward does not post the comments; that is a maintainer action.
 
 ## Merge queue
 
-(empty)
+| Order | PR | Base | Head SHA | Status |
+| --- | --- | --- | --- | --- |
+| 1 | #93 | llm | `e2fddb3599` | in-progress (conductor) |
 
 Merged this run (2026-05-06 conductor, resume cycle):
 
