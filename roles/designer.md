@@ -128,7 +128,13 @@ an agent in the `builder` role to implement from later.
      substantive revision the maintainer wants to land, in which
      case you replace `llm`'s content with the PR's content (with
      prose refinements). If the file content is identical, the
-     extraction is moot; close the source PR with a note.
+     extraction is **still not necessarily moot**: the source PR
+     may carry unaddressed inline review comments whose responses
+     are the actual substantive change. In that case the new PR
+     extracts the file unchanged, then applies the comment
+     responses as its commit. Read the source PR's review threads
+     (`gh api repos/.../pulls/<N>/comments`) before declaring the
+     extraction moot.
   3. Sweep em-dashes per `../skills/em-dash-style-rule.md` on the
      extracted prose, even if the source PR's prose left them in.
      The extraction is your commit; em-dashes in your commit are
@@ -148,6 +154,27 @@ an agent in the `builder` role to implement from later.
   `designs/README.md`. Loop scaffolding, process documents, and
   agent infrastructure that lived in the source PR must not
   appear.
+- **Re-opening a maintainer-authored design PR under the bot
+  account.** When the design PR you are extracting from was
+  authored by the maintainer who must now review it (typically
+  because they were also the prior agent's user identity),
+  GitHub blocks self-review. The remedy is the same posture
+  documented in `./builder.md` under "Re-opening a PR under the
+  bot account to dodge GitHub self-review": cherry-pick or extract
+  the substance onto a fresh branch, commit under the canonical
+  human identity via `GIT_AUTHOR_*` env vars, then `gh pr create`
+  while the bot identity is the active `gh auth` account so the
+  PR's GitHub author is the bot. Close the original PR with a
+  supersession comment naming the new PR. Two designer-specific
+  notes: (1) address each inline review comment in the
+  extraction commit so the new PR is the substantive answer to
+  the old PR's review, not a verbatim re-open. (2) when pushing
+  under a bot account that does not own the upstream repo,
+  `gh pr create` may need the head ref namespaced explicitly
+  (`--head endojs:design/<slug>-bot`) because the default
+  `<branch>` form resolves against the bot user's namespace
+  and fails permissions. Encountered on PR 30 → #103 (chat slot
+  slash commands).
 
 ## Self-improvement
 
