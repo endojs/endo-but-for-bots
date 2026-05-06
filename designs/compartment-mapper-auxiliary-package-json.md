@@ -3,6 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-05-06 |
+| **Updated** | 2026-05-06 |
 | **Author** | Kris Kowal (prompted) |
 | **Status** | Not Started |
 | **Source** | Maintainer comment on PR endojs/endo-but-for-bots#70; tracks endojs/endo issue #1845. |
@@ -118,12 +119,13 @@ What changes is that lookups by file path become a recognized
 operation, and that the cache distinguishes the two descriptor kinds
 at insert time so neither lookup needs to re-classify.
 
-### Sketch of the new lane
+### Sketch of the cache module and the upgraded `mapNodeModules`
 
-Rather than mutate `mapNodeModules`'s shape, add a sibling module that
-exports the cache and the two read APIs.
-A future refactor can rebuild `mapNodeModules` on top of this module;
-this design only requires that the new lane be additive.
+Add a sibling module that exports the descriptor cache and the two read
+APIs, then thread the cache through `mapNodeModules` as an opt-in
+capability.
+The cache is the load-bearing factoring; `mapNodeModules` itself
+keeps its public signature.
 
 ```js
 // @ts-check
@@ -178,38 +180,48 @@ export const makePackageDescriptorCache = maybeRead => {
 };
 ```
 
-The new lane on `mapNodeModules` is opt-in.
-Two shapes are equivalent on the surface; the prompt asks for an
-additive lane, so prefer the sibling-function shape over a flag.
+`mapNodeModules` keeps its public signature.
+The upgraded behavior is reached by threading a
+`packageDescriptorCache` (and any related capabilities the cache
+needs) through `MapNodeModulesOptions`.
+When a caller passes the cache, `mapNodeModules` walks past
+intermediate auxiliary descriptors to find the enclosing named
+compartment and layers their language-for-extension fields per the
+"Computing language-for-extension overrides per file" section.
+When a caller does not pass it, the call site continues to use the
+existing private read-and-memoize closure, and the PR 70 diagnostic
+fires unchanged on an entry that lands in an unnamed `package.json`.
 
 ```js
 // packages/compartment-mapper/src/node-modules.js
 
 /**
- * Like {@link mapNodeModules}, but resolves auxiliary package.json files
- * (descriptors without a `name`) as language-for-extension overrides on
- * the enclosing named compartment, rather than as compartment roots.
- *
- * @param {ReadFn | ReadPowers | MaybeReadPowers} readPowers
- * @param {string} moduleLocation
- * @param {MapNodeModulesOptions} [options]
- * @returns {Promise<PackageCompartmentMapDescriptor>}
+ * @typedef {object} MapNodeModulesOptions
+ * ...
+ * @property {PackageDescriptorCache} [packageDescriptorCache]
+ *   When supplied, `mapNodeModules` resolves auxiliary `package.json`
+ *   files (descriptors without a `name`) as language-for-extension
+ *   overrides on the enclosing named compartment, rather than treating
+ *   them as compartment roots.
+ *   When omitted, behavior is unchanged: an entry that lands in an
+ *   unnamed `package.json` triggers the PR 70 diagnostic.
  */
-export const mapNodeModulesWithAuxiliaryDescriptors = async (
-  readPowers,
-  moduleLocation,
-  options = {},
-) => { /* ... */ };
 ```
 
-The existing `mapNodeModules` continues to throw via the PR 70
-diagnostic when an entry lands in an unnamed `package.json`.
-A follow-up release can promote `mapNodeModulesWithAuxiliaryDescriptors`
-behavior to the default, but that is out of scope for this design.
+This keeps a single public entry point (`mapNodeModules`) and lets
+adopters opt in by constructing and threading the cache.
+A subsequent release can construct the cache by default and remove
+the opt-in switch, at which point auxiliary handling is the only
+behavior.
+The maintainer's review on this design records that no downstream
+consumer can depend on the current handling of auxiliary descriptors
+(see Design Decisions §4), so the opt-in is a near-term carrying
+strategy rather than a permanent dual lane.
 
 ### Resolving the entry
 
-When the entry path falls inside an auxiliary subtree:
+When `mapNodeModules` is invoked with a `packageDescriptorCache`
+and the entry path falls inside an auxiliary subtree:
 
 1. Use `findEnclosingCompartmentRoot(moduleLocation)` to get the named
    compartment's `packageLocation` and descriptor.
@@ -223,29 +235,35 @@ When the entry path falls inside an auxiliary subtree:
 For `apackage/afolder/file.js` the result is a compartment rooted at
 `apackage/`, with `moduleSpecifier === './afolder/file.js'`.
 
-### Computing parsers per file
+### Computing language-for-extension overrides per file
 
 Today `inferParsers` runs once per compartment using the compartment
 root's descriptor.
 That stays.
 The new behavior layers on top.
 
-For a single compartment, build a base parser map from the named
-descriptor.
+For a single compartment, build a base language-for-extension map from
+the named descriptor.
 For each auxiliary descriptor on the path between the compartment root
-and any traversed file, layer its `type`, `module`, and `parsers`
-fields shallow-to-deep, with deeper auxiliaries overriding shallower
-ones for conflicting extensions.
-The result is a map from a directory prefix within the compartment to
-a parser map.
-At parse time, the deepest matching prefix's parsers are used.
+and any traversed file, layer its `type`, `module`, and existing
+`parsers` field shallow-to-deep, with deeper auxiliaries overriding
+shallower ones for conflicting extensions.
+The result is an ordered list of `(directoryPrefix, languageForExtension)`
+tuples within the compartment, sorted from shortest prefix to longest
+so that lookup by the deepest matching prefix is a linear scan from
+the end.
+At parse time, the deepest matching prefix's map is used.
 
 The compartment descriptor in the resulting `CompartmentMapDescriptor`
-carries this prefix map (a new optional field) alongside its existing
-flat `parsers` field.
-When the prefix map is absent or empty, downstream consumers fall back
-to the flat field, preserving current behavior for compartments
-without auxiliary descriptors.
+carries this list as a new optional field alongside its existing flat
+`parsers` field.
+The candidate field name is open (see Open Questions, "Naming the
+prefix-keyed override list").
+The working name in this design is `languageOverrides`, an ordered
+array of `{ prefix, languageForExtension }` records.
+When the override list is absent or empty, downstream consumers fall
+back to the flat existing field, preserving current behavior for
+compartments without auxiliary descriptors.
 
 The aliased-sub-path case
 (`readDescriptorUpwards` reading the type of an aliased path's
@@ -257,7 +275,7 @@ becomes a particular query on the cache.
 If the upward walk reaches a filesystem boundary without finding any
 named `package.json`, the entry's package itself is anonymous (not just
 its subtree).
-The new lane delegates to the PR 70 diagnostic in that case.
+The cache-supplied path delegates to the PR 70 diagnostic in that case.
 The diagnostic is unchanged: it points at the topmost `package.json`
 encountered and reports a missing `name`.
 Callers who want auxiliary semantics for the *workspace root* (an
@@ -280,16 +298,23 @@ The diagnostic from PR 70 is already a strict improvement over the
 silent `name: undefined` regression; replacing it with a more
 permissive error trades a clear failure for a less clear failure.
 
-**Mutate `mapNodeModules` semantics in place.**
-Rejected per the maintainer's direction.
-The existing `mapNodeModules` is consumed by every downstream tool
-(bundlers, archivers, the daemon's import path, the test harness).
-A semantic change risks changing behavior on packages that today
-*depend* on the current "first `package.json` found is the compartment
-root" heuristic, including any anonymous workspace package whose
-behavior was previously a happy accident.
-The additive lane lets adopters opt in per call site and lets us study
-real-world impact before promoting it.
+**A separate sibling entry point
+(`mapNodeModulesWithAuxiliaryDescriptors`).**
+Rejected after maintainer review.
+A first draft proposed a sibling function so adopters could opt in
+per call site without touching `mapNodeModules`'s contract.
+The maintainer observed that no downstream consumer can depend on
+the current handling of auxiliary descriptors: any package whose
+entry sits inside an unnamed `package.json` is unbundle-able today
+(the bundle would treat the package as nameless), and the PR 70
+diagnostic now fails the same case loudly.
+There is therefore no working caller whose behavior the upgrade
+would change, and a permanent dual lane would only multiply the
+public surface to be documented and tested.
+The opt-in via `MapNodeModulesOptions.packageDescriptorCache` is a
+near-term carrying strategy that lets adopters land the cache
+incrementally, after which the option can be removed and the
+auxiliary handling becomes unconditional.
 
 **Single-pass walk that classifies as it goes, no separate cache
 module.**
@@ -302,20 +327,22 @@ two-question API, two test vectors, and one place for the policy work
 
 ## Test Plan
 
-The new lane needs evidence that the auxiliary case works, that
-auxiliary nesting works, that the named-vs-unnamed disambiguation
-holds, and that the PR 70 diagnostic still fires when there is no
-named ancestor at all.
+The upgraded `mapNodeModules` needs evidence that the auxiliary case
+works, that auxiliary nesting works, that the named-vs-unnamed
+disambiguation holds, and that the PR 70 diagnostic still fires when
+there is no named ancestor at all.
+Each test case runs against `mapNodeModules` with a
+`packageDescriptorCache` supplied via options.
 
 **Auxiliary type-scoping case.**
 Use the existing
 `fixtures-nested-pkg/node_modules/apackage/afolder/package.json`
 fixture.
-Call `mapNodeModulesWithAuxiliaryDescriptors` with an entry
+Call `mapNodeModules` with the cache option and an entry
 `apackage/afolder/file.js`.
 Assert: the resulting compartment is rooted at `apackage/`, its name
-is `"apackage"`, and the layered parsers for files under `afolder/`
-report `mjs` for `.js` files.
+is `"apackage"`, and the layered language overrides for files under
+`afolder/` report `mjs` for `.js` files.
 Round-trip through `loadLocation` to assert the file actually
 imports.
 
@@ -335,18 +362,24 @@ contributes only its language overrides.
 
 **PR 70 diagnostic regression.**
 The existing PR 70 fixtures (`fixtures-no-name`) still throw the
-"must have a `name` field" diagnostic when called via the new lane,
-because the entry sits inside a fully anonymous package with no
-named ancestor.
-This proves the new lane does not silently relax the diagnostic in
-the cases PR 70 was written to catch.
+"must have a `name` field" diagnostic when called with the cache
+option, because the entry sits inside a fully anonymous package with
+no named ancestor.
+This proves the upgraded path does not silently relax the diagnostic
+in the cases PR 70 was written to catch.
+
+**Cache-omitted regression.**
+A call to `mapNodeModules` without the cache option exercises the
+unchanged code path; the existing `nested-pkg.test.js` continues to
+pass.
+This proves the opt-in does not silently retire the existing behavior.
 
 **Existing nested-pkg test.**
-The original `nested-pkg.test.js` continues to pass against
-`mapNodeModules` (existing semantics) and against
-`mapNodeModulesWithAuxiliaryDescriptors` (new semantics), since the
-existing test exercises an aliased sub-path and the new lane handles
-that case at least as well as the old.
+The original `nested-pkg.test.js` continues to pass under both
+shapes: against `mapNodeModules` without the cache (existing
+semantics) and with the cache supplied (new semantics), since the
+existing test exercises an aliased sub-path and the cache-supplied
+path handles that case at least as well as the old.
 
 ## Phased Implementation
 
@@ -367,27 +400,33 @@ that case at least as well as the old.
    Test the cache module in isolation against synthetic file URLs and
    a stub `maybeRead`.
 
-3. **Add the new lane.**
-   Add `mapNodeModulesWithAuxiliaryDescriptors` to
-   `packages/compartment-mapper/src/node-modules.js` (and re-export it
-   from `compartment-mapper/index.js` and from `node-modules.js`'s
-   public surface).
-   Internally it calls the cache, computes the entry's compartment
-   root and module specifier, builds the layered parser map, and
-   delegates to `compartmentMapForNodeModules_`.
+3. **Thread the cache through `mapNodeModules`.**
+   Extend `MapNodeModulesOptions` with an optional
+   `packageDescriptorCache`.
+   When supplied, `mapNodeModules` calls the cache to find the
+   enclosing named compartment, computes the entry's module
+   specifier against the named ancestor, builds the layered
+   language-for-extension override list, and delegates to
+   `compartmentMapForNodeModules_`.
+   When omitted, behavior is unchanged.
 
 4. **Add fixtures and tests.**
    Add new fixtures for the nested-auxiliary and named-vs-unnamed
    cases.
    Reuse the existing `fixtures-nested-pkg` fixture and the PR 70
    `fixtures-no-name` fixture.
+   Cover both the cache-supplied and cache-omitted code paths so
+   the unchanged-default behavior is also load-bearing in tests.
 
-5. **Deprecate (do not remove) the subsumed paths.**
-   Mark the existing `mapNodeModules` with a JSDoc note that
-   recommends the new lane for new code.
-   Do not change `mapNodeModules`'s runtime behavior in this design.
-   A subsequent major release can flip the default; that is out of
-   scope here.
+5. **Promote the cache to the default in a later release.**
+   Once adopters have moved over and the auxiliary semantics are
+   confirmed in the field, construct the cache by default inside
+   `mapNodeModules` and remove the `packageDescriptorCache` option.
+   At that point auxiliary handling is the only behavior; the
+   `parsers` field on the resulting compartment descriptor falls
+   back to the flat shape only when the entry has no auxiliary
+   ancestors. This phase is out of scope for this design but is
+   the intended endpoint.
 
 ## Design Decisions
 
@@ -407,17 +446,25 @@ that case at least as well as the old.
 
 3. **Auxiliary descriptors do not contribute exports, dependencies,
    aliases, conditions, or a policy seat.**
-   Even if a third-party author writes them, the new lane ignores
-   them.
+   Even if a third-party author writes them, the cache-supplied path
+   ignores them.
    The semantics of an unnamed descriptor are scoped to "what does
    this subdirectory look like to the parser?" and nothing else.
    A future revision can broaden this if a real use case appears,
    but the conservative scope is easier to defend.
 
-4. **An additive new lane, not a flag on the existing one.**
-   Per the maintainer's direction.
-   This keeps `mapNodeModules`'s contract stable for every existing
-   caller and concentrates risk on opt-in adopters.
+4. **Upgrade `mapNodeModules` in place via an opt-in cache option.**
+   Per the maintainer's review on this design.
+   No working downstream consumer can depend on the current handling
+   of auxiliary descriptors: a package whose entry sits inside an
+   unnamed `package.json` would be interpreted as a nameless
+   compartment and is unbundle-able today, and the PR 70 diagnostic
+   already fails the same case loudly.
+   Threading the cache through `MapNodeModulesOptions` lets adopters
+   move incrementally without forcing a public sibling entry point
+   that would have to be supported indefinitely.
+   The opt-in is a near-term carrying strategy; the endpoint is
+   constructing the cache by default.
 
 5. **The cache is the right factoring for both questions.**
    Both `findEnclosingCompartmentRoot` and `collectLanguageOverrides`
@@ -427,19 +474,63 @@ that case at least as well as the old.
    classify the boundary also classify the overrides).
 
 6. **PR 70 diagnostic stays as the floor.**
-   The new lane only reclassifies *intermediate* unnamed
-   descriptors.
+   The upgraded `mapNodeModules` only reclassifies *intermediate*
+   unnamed descriptors.
    When there is no named ancestor at all, the entry's package is
    genuinely anonymous and PR 70 is right to fail loudly.
 
-## Known Gaps and TODOs
+## Open Questions
 
-- [ ] Final naming for the new lane is open.
-  `mapNodeModulesWithAuxiliaryDescriptors` is descriptive but long.
-  Maintainer to decide.
-- [ ] Whether the new behavior should be the default in the next
-  major version, with a deprecation window for the existing
-  semantics.
+### Naming the prefix-keyed override list
+
+The maintainer's review on PR 96 flagged that `parsers` (a flat map
+from extension to language) is a poor name for either the existing
+field or the new prefix-keyed structure that layers them.
+The proposal under review is "an array of tuples, from prefix to
+language for extension map" rather than a nested object.
+The working name in this design is `languageOverrides`, an array
+of `{ prefix, languageForExtension }` records.
+Candidates the maintainer asked to consider:
+
+1. **`languageOverrides`** (working choice in this design).
+   Pros: short, says what the field does (it overrides the
+   compartment-root language map for files under `prefix`).
+   Cons: leaves the flat existing field still called `parsers`,
+   so the compartment descriptor carries two differently-named
+   shapes for the same idea.
+
+2. **`languageForExtensionByPrefix`** (or its
+   `commonjs`/`module`-split variants).
+   Pros: literally describes the structure; mirrors the existing
+   `parsers` semantics one-to-one.
+   Cons: long; redundant with the field's tuple shape.
+
+3. **Split into three fields:
+   `languageForExtension`, `commonjsLanguageForExtension`,
+   `moduleLanguageForExtension`.**
+   The maintainer asked whether this finer split is worth the
+   complexity, and asked for test cases that would exercise a
+   meaningful difference between the three.
+   A meaningful difference would arise when the same extension
+   (e.g. `.js`) needs to resolve to different languages depending
+   on whether the *enclosing* descriptor declared
+   `"type": "module"` or `"type": "commonjs"`.
+   The current `parsers` field already conflates the three; if no
+   real fixture in the test suite distinguishes them, the unified
+   shape suffices and the split can wait for the first reproducer
+   that needs it.
+
+The working text uses `languageOverrides` so the design reads
+end-to-end; the maintainer's choice settles the field's ultimate
+name before the builder lands the implementation.
+
+### Other open items
+
+- [ ] Whether the cache should be constructed by default in a
+  later release, removing the `packageDescriptorCache` opt-in
+  entirely.
+  The Phased Implementation §5 anticipates this but does not
+  schedule it.
 - [ ] Whether composition with `policy` JSON is in scope.
   Today policy is keyed by canonical name and an auxiliary
   descriptor produces no canonical name.
@@ -448,9 +539,8 @@ that case at least as well as the old.
 - [ ] Whether the same model applies to `archive`, `bundle`, and
   `import` (which today funnel through `mapNodeModules`'s
   contract).
-  The new lane should be reachable from each, either by opting them
-  into the new behavior or by exposing a parallel
-  `archiveWithAuxiliaryDescriptors` family.
+  Each should accept the same `packageDescriptorCache` option,
+  or share a constructor that builds the cache once per call.
 - [ ] Performance: the cache adds one descriptor read per ancestor
   directory along each entry's path.
   This is bounded by directory depth (typically less than ten) and
