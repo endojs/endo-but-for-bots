@@ -149,18 +149,28 @@ remove and recreate (cheap; the working tree is small).
       git rebase bots-ssh/garden
     done
     ```
-    Use the **no-value** `--force-with-lease` form, NOT
-    `--force-with-lease=garden:<sha>`. The no-value form uses
-    the most recently fetched ref as the lease, so a concurrent
-    push between your fetch and your push fails the lease and
-    triggers the rebase loop. The explicit-value form, with a
-    SHA captured before the latest fetch, can silently overwrite
-    concurrent commits because the lease still matches the value
-    you supplied. Recovery if you hit this: rescue the clobbered
-    commits with
-    `git rebase --onto HEAD <last-fetched-tip> <clobbered-tip>`
-    and re-push. A plain force-push (without `--with-lease`)
-    has the same hazard with no recovery hint; do not use it.
+    **Even the no-value `--force-with-lease` form has a race
+    window**: it computes the lease from the most-recently-fetched
+    `bots-ssh/garden`, so if a concurrent agent pushes between
+    your last fetch and your push, the lease still passes against
+    your stale cached ref and the concurrent commits are
+    overwritten silently. The explicit-value form
+    (`--force-with-lease=garden:<sha>`) has the same race window
+    plus a tighter SHA mismatch when the cache is stale; both
+    forms require a fresh fetch immediately before the push to
+    close the window. The `until` loop is what makes this
+    eventually-safe: an overwritten push triggers no rebase
+    (because the lease passed), but the next agent's
+    fast-forward-failure rebase notices and recovers. Always run
+    `git fetch bots-ssh garden && git diff --stat HEAD..FETCH_HEAD`
+    immediately before the push and verify the diff is empty
+    (your local has all of remote); if not, rebase before
+    pushing. Recovery if you clobber concurrent commits anyway
+    (the push log shows a non-fast-forward update where `<old>`
+    is not your last-fetched garden tip): rescue with
+    `git rebase --onto HEAD <last-fetched> <clobbered-tip>` and
+    re-push. A plain force-push (without `--with-lease`) has the
+    same hazard with no recovery hint; do not use it.
 11. **Clean up the worktree** at the end of the pass:
     ```sh
     cd /home/kris/garden
