@@ -117,6 +117,26 @@ for the procedure and the three narrow exceptions.
   was in scope; the sibling design's many cross-references were
   out of scope for the weaver and were noted for a follow-up
   fixer.
+- **Cross-repo merges (`actual/master` into `bots-ssh/llm`) can
+  land conflict-free even when both sides carry "the same fix".**
+  Git's merge looks at tree content, not commit identity. When the
+  bot side mirrored an upstream fix (e.g., the guix-CI-resilience
+  change shipped as PR #82 on the bot estate and PR #3242 upstream
+  with byte-identical workflow content), `git merge` sees identical
+  blobs at the same path on both sides and produces no conflict
+  marker at all. The dispatch may warn you to expect a textual
+  conflict; verify post-merge with `git diff actual/master HEAD --
+  <files>` that the touched paths really are byte-identical, and
+  cite both SHAs in the merge commit body so a future reviewer
+  can trace the duplicate landing. If the diff is non-empty, the
+  bot mirror diverged from upstream and you must read both sides.
+- **Pre-merge survey distinguishes "merge me" from "I have nothing
+  new".** Before invoking `git merge`, run both
+  `git log --oneline <target>..<source>` and the inverse. If the
+  first list is empty the target is already current; if the second
+  list is short it tells you what bot-side commits will need to
+  rebase later. Capture the second list in your report so the
+  steward knows which in-flight PRs will need attention next cycle.
 
 Continuous queue-draining merge work has its own role: see
 [`conductor.md`](./conductor.md). The steward dispatches the
