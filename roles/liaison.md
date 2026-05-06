@@ -22,6 +22,66 @@ Two layers, both dispatched from the steward:
    (maintainer or contributor closes it), the tracking file is
    deleted in a process commit.
 
+## Output: direct push to `bots/garden`, no PR
+
+Liaison commits target the `garden` branch, which has no review
+gate. Opening a PR for a tracking-file commit would be wasteful
+overhead, the same overhead the groom rule fixed. The liaison
+pushes directly to `bots-ssh garden` and rebases until the push
+lands.
+
+Per the worktree-discipline rule
+([`../skills/worktree-per-pr.md`](../skills/worktree-per-pr.md))
+the liaison does not operate in `/home/kris/garden` (the
+steward's seat). Each pass uses a dedicated worktree:
+
+```sh
+mkdir -p /home/kris/endo-wt
+git worktree add /home/kris/endo-wt/liaison garden
+cd /home/kris/endo-wt/liaison
+git fetch bots-ssh garden
+git merge --ff-only bots-ssh/garden
+```
+
+If `garden` is already checked out elsewhere (the steward's
+seat or another active worktree), the `git worktree add` will
+fail; create the liaison worktree with `--detach` against
+`bots-ssh/garden` instead, and push to `HEAD:garden` rather than
+to `garden`.
+
+If `/home/kris/endo-wt/liaison` already exists from a prior
+pass, remove and recreate (cheap; the working tree is small).
+
+After staging the tracking-file changes, commit and push:
+
+```sh
+GIT_AUTHOR_NAME="Kris Kowal" GIT_AUTHOR_EMAIL="kris@agoric.com" \
+GIT_COMMITTER_NAME="Kris Kowal" GIT_COMMITTER_EMAIL="kris@agoric.com" \
+  git commit -m 'process(liaison): cycle <ts>'
+until git push bots-ssh HEAD:garden; do
+  git fetch bots-ssh garden
+  git rebase bots-ssh/garden
+done
+```
+
+**Use plain `git push` (no `--force-with-lease`), not the lease
+form.** The reason: a `process/tracking/<N>.md` commit is a
+new-file or new-line addition that always rebases cleanly; a
+plain push's "non-fast-forward" rejection is the loop trigger,
+and rebase-then-push is the recovery. `--force-with-lease=garden`
+also works, but a malformed explicit-value form
+(`--force-with-lease=garden:<stale-sha>` constructed from a
+stale local `bots-ssh/garden`) silently force-overwrites
+concurrent commits that landed between fetch and push. The plain
+push form has no such hazard.
+
+If you mistakenly clobber concurrent garden commits (the push
+output shows `+ <old>...<new> HEAD -> garden (forced update)`
+where `<old>` is not your last fetched garden tip), recover
+immediately with `git rebase --onto HEAD <last-fetched>
+<clobbered-tip>` to layer the lost commits back on, then push
+again.
+
 ## Inbound: fetch fresh issue data
 
 A fresh issue snapshot is the liaison's load-bearing input.
@@ -125,7 +185,9 @@ The liaison **does not**:
    leave background subagents to finish across rounds).
 5. Stage all `process/tracking/` changes (new files,
    updated files, deletions) and commit as
-   `process(liaison): cycle <ts>`. Push.
+   `process(liaison): cycle <ts>`. Push directly to
+   `bots-ssh garden` per the "Output" section above (plain
+   `git push HEAD:garden` with rebase-on-failure; no PR).
 6. End the engagement; the steward schedules the next cycle.
 
 ## Procedure (per-issue liaison subagent)
@@ -179,7 +241,10 @@ The liaison **does not**:
    only / surface, with what + why). Bump the snapshot
    timestamp.
 6. Stage only `process/tracking/<N>.md`. The top-level liaison
-   commits in batch.
+   commits in batch and pushes per the "Output" section above.
+   When the per-issue subagent is dispatched standalone (not
+   under a top-level liaison cycle), it commits and pushes
+   itself per the same direct-push pattern.
 
 ## Skills
 
@@ -211,6 +276,16 @@ The liaison **does not**:
 - **Authenticated `gh` account** speaks; no persona name in
   replies.
 - **No `Co-Authored-By: Claude …`** on any commit.
+- **Read the source-of-truth file at the live HEAD before
+  quoting it.** A dispatch brief often summarizes what a
+  recently-merged PR did (e.g., "the groom refreshed the
+  milestone table in PR 97"), but a later commit on the same
+  file may have inadvertently reverted parts of that refresh.
+  Always read `designs/README.md` (or whichever file the brief
+  cites) at the actual current `bots-ssh/garden` HEAD before
+  quoting numbers from it. If the live state differs from what
+  the brief implies, surface the discrepancy in the reply
+  rather than uncritically restating the brief.
 
 ## Self-improvement
 
