@@ -1,9 +1,10 @@
 // @ts-check
 
 import test from '@endo/ses-ava/test.js';
+import { decodeHex } from '@endo/hex';
 import { makeCborReader } from '../../src/cbor/decode.js';
 import { makeCborWriter } from '../../src/cbor/encode.js';
-import { hexToBytes, cborToDiagnostic } from '../../src/cbor/diagnostic.js';
+import { cborToDiagnostic } from '../../src/cbor/diagnostic.js';
 
 /**
  * Test helper: decode bytes and return the reader
@@ -11,7 +12,7 @@ import { hexToBytes, cborToDiagnostic } from '../../src/cbor/diagnostic.js';
  * @returns {ReturnType<typeof makeCborReader>}
  */
 function decode(hex) {
-  return makeCborReader(hexToBytes(hex), { name: 'test' });
+  return makeCborReader(decodeHex(hex), { name: 'test' });
 }
 
 /**
@@ -264,7 +265,7 @@ test('decode record', t => {
   const reader = decode(hex);
 
   // Verify diagnostic notation
-  const diag = cborToDiagnostic(hexToBytes(hex));
+  const diag = cborToDiagnostic(decodeHex(hex));
   t.is(diag, '27([280("test"), 2(h\'2a\')])');
 
   // Read the record

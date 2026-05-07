@@ -7,7 +7,7 @@
  * into JavaScript values.
  */
 
-import { hexToBytes } from './util.js';
+import { decodeHex } from '@endo/hex';
 
 /**
  * Parse array elements from diagnostic notation
@@ -111,7 +111,7 @@ export function decode(diagnostic) {
   // Hex byte string: h'...'
   const hexMatch = trimmed.match(/^h'([0-9a-fA-F]*)'$/);
   if (hexMatch) {
-    return hexToBytes(hexMatch[1]);
+    return decodeHex(hexMatch[1]);
   }
 
   // Text string: "..."

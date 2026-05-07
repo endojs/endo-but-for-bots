@@ -12,8 +12,6 @@ export {
   cborToDiagnostic,
   decode,
   parseDiagnostic,
-  hexToBytes,
-  bytesToHexString,
   equals,
   diagnosticEquals,
 } from './diagnostic/index.js';

@@ -1,11 +1,9 @@
 // @ts-check
 
 import test from '@endo/ses-ava/test.js';
+import { encodeHex } from '@endo/hex';
 import { makeCborWriter } from '../../src/cbor/encode.js';
-import {
-  cborToDiagnostic,
-  bytesToHexString,
-} from '../../src/cbor/diagnostic.js';
+import { cborToDiagnostic } from '../../src/cbor/diagnostic.js';
 import { uint8ArrayToImmutableArrayBuffer } from '../../src/buffer-utils.js';
 
 /**
@@ -19,7 +17,7 @@ function encode(encoder) {
   const bytes = writer.getBytes();
   return {
     bytes,
-    hex: bytesToHexString(bytes),
+    hex: encodeHex(bytes),
     diagnostic: cborToDiagnostic(bytes),
   };
 }
@@ -238,7 +236,7 @@ test('encode empty array', t => {
   const writer = makeCborWriter({ name: 'test' });
   writer.writeArrayHeader(0);
   const bytes = writer.getBytes();
-  t.is(bytesToHexString(bytes), '80'); // Major 4, length 0
+  t.is(encodeHex(bytes), '80'); // Major 4, length 0
   t.is(cborToDiagnostic(bytes), '[]');
 });
 
@@ -271,7 +269,7 @@ test('encode empty map', t => {
   const writer = makeCborWriter({ name: 'test' });
   writer.writeMapHeader(0);
   const bytes = writer.getBytes();
-  t.is(bytesToHexString(bytes), 'a0'); // Major 5, length 0
+  t.is(encodeHex(bytes), 'a0'); // Major 5, length 0
   t.is(cborToDiagnostic(bytes), '{}');
 });
 

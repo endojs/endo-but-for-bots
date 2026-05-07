@@ -3,43 +3,10 @@
 /**
  * @file Utility functions for CBOR Diagnostic Notation.
  *
- * Hex conversion and value comparison helpers.
+ * Value comparison helpers. Hex conversion is provided by `@endo/hex`
+ * (`encodeHex` / `decodeHex`); callers should import directly from
+ * there.
  */
-
-/**
- * Convert hex string to Uint8Array
- * @param {string} hex - Hex string (with or without spaces)
- * @returns {Uint8Array}
- */
-export function hexToBytes(hex) {
-  // Remove spaces and ensure even length
-  const cleanHex = hex.replace(/\s+/g, '');
-  if (cleanHex.length % 2 !== 0) {
-    throw new Error('Hex string must have even length');
-  }
-
-  const bytes = new Uint8Array(cleanHex.length / 2);
-  for (let i = 0; i < bytes.length; i += 1) {
-    bytes[i] = parseInt(cleanHex.slice(i * 2, i * 2 + 2), 16);
-  }
-  return bytes;
-}
-
-/**
- * Convert Uint8Array to hex string with optional formatting
- * @param {Uint8Array} bytes
- * @param {object} [options]
- * @param {boolean} [options.uppercase] - Use uppercase hex
- * @param {boolean} [options.spaces] - Add spaces between bytes
- * @returns {string}
- */
-export function bytesToHexString(bytes, options = {}) {
-  const { uppercase = false, spaces = false } = options;
-  const hex = Array.from(bytes)
-    .map(b => b.toString(16).padStart(2, '0'))
-    .map(s => (uppercase ? s.toUpperCase() : s));
-  return spaces ? hex.join(' ') : hex.join('');
-}
 
 /**
  * Compare two values for structural equality.

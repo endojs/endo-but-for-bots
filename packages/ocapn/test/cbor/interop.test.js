@@ -11,11 +11,9 @@
 import { Buffer } from 'buffer';
 import test from '@endo/ses-ava/test.js';
 import cbor from 'cbor';
+import { encodeHex } from '@endo/hex';
 import { makeCborWriter } from '../../src/cbor/encode.js';
-import {
-  bytesToHexString,
-  cborToDiagnostic,
-} from '../../src/cbor/diagnostic.js';
+import { cborToDiagnostic } from '../../src/cbor/diagnostic.js';
 import { uint8ArrayToImmutableArrayBuffer } from '../../src/buffer-utils.js';
 
 /**
@@ -27,7 +25,7 @@ async function encodeAndValidate(encoder) {
   const writer = makeCborWriter({ name: 'test' });
   encoder(writer);
   const bytes = writer.getBytes();
-  const hex = bytesToHexString(bytes);
+  const hex = encodeHex(bytes);
   const diagnostic = cborToDiagnostic(bytes);
 
   // Decode with the external cbor library

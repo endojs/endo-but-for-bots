@@ -23,8 +23,6 @@ export {
   encode as diagnosticEncode,
   decode as diagnosticDecode,
   cborToDiagnostic,
-  hexToBytes,
-  bytesToHexString,
   parseDiagnostic,
   diagnosticEquals,
 } from './diagnostic/index.js';

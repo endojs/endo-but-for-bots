@@ -94,10 +94,11 @@ This is useful for:
 - Validating interoperability with other implementations
 
 ```javascript
-import { encode, decode, hexToBytes } from './diagnostic/index.js';
+import { decodeHex } from '@endo/hex';
+import { encode, decode } from './diagnostic/index.js';
 
 // Encode: CBOR bytes → diagnostic string
-const bytes = hexToBytes('d90118666d6574686f64');
+const bytes = decodeHex('d90118666d6574686f64');
 console.log(encode(bytes)); // 280("method")
 
 // Decode: diagnostic string → JavaScript values
