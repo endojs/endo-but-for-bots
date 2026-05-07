@@ -1,33 +1,22 @@
 // @ts-check
 /**
  * llama.cpp server provider for the Lal agent.
- * Uses the OpenAI-compatible API that many llama.cpp servers expose.
- * Supports context-size and request options that differ from Anthropic.
+ * Thin wrapper over the shared OpenAI Chat Completions shape that
+ * injects llama.cpp-typical defaults (e.g. a placeholder API key for
+ * servers that don't require auth).
  */
 
 // eslint-disable-next-line import/no-unresolved
 import OpenAI from 'openai';
 
-/**
- * @typedef {object} Logger
- * @property {(...args: unknown[]) => void} log
- * @property {(...args: unknown[]) => void} error
- * @property {(...args: unknown[]) => void} warn
- */
+import {
+  toOpenAIChatMessages,
+  toOpenAIChatTools,
+  parseOpenAIChatChoice,
+  truncateMessages,
+} from './openai-chat.js';
 
-/**
- * @typedef {object} CommonTool
- * @property {'function'} type
- * @property {{ name: string, description: string, parameters: object }} function
- */
-
-/**
- * @typedef {object} CommonChatMessage
- * @property {'system'|'user'|'assistant'|'tool'} role
- * @property {string} content
- * @property {Array<{ id?: string, function: { name: string, arguments: string|object }}>} [tool_calls]
- * @property {string} [tool_call_id]
- */
+/** @import { Logger, CommonTool, CommonChatMessage } from './openai-chat.js' */
 
 /**
  * Create a llama.cpp-backed chat provider (OpenAI-compatible API).
@@ -54,53 +43,21 @@ export const makeLlamaCppProvider = ({
 
   return {
     async chat(messages, tools) {
-      let sendMessages = messages;
-      if (
-        typeof maxMessages === 'number' &&
-        maxMessages > 0 &&
-        messages.length > maxMessages
-      ) {
-        sendMessages = messages.slice(-maxMessages);
-        logger.log(
-          `[LAL] Truncated to last ${maxMessages} messages (was ${messages.length})`,
-        );
-      }
+      const sendMessages = truncateMessages(messages, maxMessages, logger);
       logger.log(`[LAL] Calling llama.cpp at ${baseURL} with model: ${model}`);
       let response;
       try {
         response = await client.chat.completions.create({
           model,
           max_tokens: maxTokens,
-          tools,
-          // @ts-expect-error - our message format matches OpenAI's for this path
-          messages: sendMessages,
+          tools: toOpenAIChatTools(tools),
+          messages: toOpenAIChatMessages(sendMessages),
         });
       } catch (error) {
         logger.error('[LAL] llama.cpp API error:', error);
         throw error;
       }
-      const choice = response.choices?.[0];
-      if (!choice) {
-        return { message: { role: 'assistant', content: '' } };
-      }
-      /** @type {CommonChatMessage} */
-      const message = {
-        role: 'assistant',
-        content: choice.message?.content ?? '',
-      };
-      if (
-        choice.message?.tool_calls &&
-        /** @type {unknown[]} */ (choice.message.tool_calls).length > 0
-      ) {
-        message.tool_calls = choice.message.tool_calls.map(tc => ({
-          id: tc.id,
-          function: {
-            name: tc.function?.name ?? '',
-            arguments: tc.function?.arguments ?? '{}',
-          },
-        }));
-      }
-      return { message };
+      return { message: parseOpenAIChatChoice(response.choices?.[0]) };
     },
   };
 };

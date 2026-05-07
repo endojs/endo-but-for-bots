@@ -11,26 +11,14 @@
 
 import https from 'node:https';
 
-/**
- * @typedef {object} Logger
- * @property {(...args: unknown[]) => void} log
- * @property {(...args: unknown[]) => void} error
- * @property {(...args: unknown[]) => void} warn
- */
+import {
+  toOpenAIChatMessages,
+  toOpenAIChatTools,
+  parseOpenAIChatChoice,
+  truncateMessages,
+} from './openai-chat.js';
 
-/**
- * @typedef {object} CommonTool
- * @property {'function'} type
- * @property {{ name: string, description: string, parameters: object }} function
- */
-
-/**
- * @typedef {object} CommonChatMessage
- * @property {'system'|'user'|'assistant'|'tool'} role
- * @property {string} content
- * @property {Array<{ id?: string, function: { name: string, arguments: string|object }}>} [tool_calls]
- * @property {string} [tool_call_id]
- */
+/** @import { Logger, CommonTool, CommonChatMessage } from './openai-chat.js' */
 
 /**
  * @param {string} baseURL
@@ -129,17 +117,7 @@ export const makeGeminiProvider = ({
 
   return {
     async chat(messages, tools) {
-      let sendMessages = messages;
-      if (
-        typeof maxMessages === 'number' &&
-        maxMessages > 0 &&
-        messages.length > maxMessages
-      ) {
-        sendMessages = messages.slice(-maxMessages);
-        logger.log(
-          `[LAL] Truncated to last ${maxMessages} messages (was ${messages.length})`,
-        );
-      }
+      const sendMessages = truncateMessages(messages, maxMessages, logger);
       logger.log(
         `[LAL] Calling Gemini at ${url.origin}${url.pathname} with model: ${model}`,
       );
@@ -148,35 +126,14 @@ export const makeGeminiProvider = ({
         response = await postJson(url, apiKey, {
           model,
           max_tokens: maxTokens,
-          tools,
-          messages: sendMessages,
+          tools: toOpenAIChatTools(tools),
+          messages: toOpenAIChatMessages(sendMessages),
         });
       } catch (error) {
         logger.error('[LAL] Gemini API error:', error);
         throw error;
       }
-      const choice = response.choices?.[0];
-      if (!choice) {
-        return { message: { role: 'assistant', content: '' } };
-      }
-      /** @type {CommonChatMessage} */
-      const message = {
-        role: 'assistant',
-        content: choice.message?.content ?? '',
-      };
-      if (
-        choice.message?.tool_calls &&
-        /** @type {unknown[]} */ (choice.message.tool_calls).length > 0
-      ) {
-        message.tool_calls = choice.message.tool_calls.map(tc => ({
-          id: tc.id,
-          function: {
-            name: tc.function?.name ?? '',
-            arguments: tc.function?.arguments ?? '{}',
-          },
-        }));
-      }
-      return { message };
+      return { message: parseOpenAIChatChoice(response.choices?.[0]) };
     },
   };
 };
