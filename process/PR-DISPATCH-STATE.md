@@ -1,7 +1,59 @@
 # PR dispatch state
 
-Last cycle: 2026-05-07 07:00 UTC (master synced; fixer for PR 114; PR 111 fold-in dispatched).
-Prior cycle: 2026-05-07 06:30 UTC (designer fold-in for PR 115 + PR 117).
+Last cycle: 2026-05-07 14:55 UTC (PR 119 contributor review).
+Prior cycle: 2026-05-07 07:00 UTC (master synced; fixer for PR 114; PR 111 fold-in dispatched).
+Earlier: 2026-05-07 06:30 UTC (designer fold-in for PR 115 + PR 117).
+
+Many vacuous cycles between 08:00 and 14:30 UTC — both liaison + marshal returned `no state change since prior` each fire; no contributor activity, no merges, no maintainer feedback. Estate steady.
+
+## Cycle 2026-05-07 14:55 UTC
+
+- **PR 119** (`feat(sandbox): provide default $PATH derived from
+  rootfs`, jcorbin, +1598/-17, 11 files) opened at 14:53 UTC.
+  First non-bot, non-maintainer activity in 7 hours. Touches
+  `packages/sandbox/` — same package the daemon-os-sandbox-plugin
+  reclassification surfaced.
+- **Panel review** posted as `CHANGES_REQUESTED` (review
+  `pullrequestreview-4245100904`): 10 approve/comment-only, 2
+  request-changes. Must-fix:
+  1. Empty PR body for a 1.6 kLOC cross-cutting change spanning
+     11 files and 3 TADA design docs. Add summary cross-linking
+     `TADA/21..23`.
+  2. Six dead doc citations: source code references
+     `TODO/22_sandbox_bwrap_path_refinements.md` and
+     `TODO/23_sandbox_podman_path.md`, but those files actually
+     live in `TADA/`. Sites: `src/drivers/path.js` (lines 13, 14,
+     217), `src/drivers/bwrap.js` (line 335),
+     `test/bwrap.test.js` (line 906),
+     `test/podman.test.js` (line 660).
+- **Saboteur findings** posted as PR comment
+  (`issuecomment-4398264566`): 4 concrete fix targets across 7
+  attack vectors:
+  1. `realpath` survivors in `filterAmbientPathForHostBind`
+     (symlink farm bypasses the `/tmp` blocklist).
+  2. Reject `:` / control chars in `joinPathEntries`
+     (delimiter injection via `mount.innerPath`).
+  3. Early-return `[]` in `probeMountRootfsBinPaths` when
+     `hostPath` is non-absolute.
+  4. Document or change empty-probe `mount`-rootfs fallback
+     (currently falls back to host-shaped DEFAULT_PATH that
+     doesn't exist in the slice).
+- **Hand-off**: PR is a contributor PR (jcorbin), so the bot does
+  NOT auto-dispatch a fixer. Findings surfaced to jcorbin +
+  kriskowal via the review + comment. If jcorbin doesn't address
+  before merge, the maintainer can request a bot fixer dispatch
+  via the steward.
+- **Saboteur self-improvement**: new skill
+  `skills/saboteur-adversarial-review.md` (commit `6c0665ee23`)
+  captures the rootfs-derived environment derivation attack class
+  for future reuse on `drivers/path.js`-shaped code.
+
+## Cycle 2026-05-07 07:30 UTC
+
+PR 115 merged via conductor → `12e8600e8c`. Liaison surfaced new
+issue #118 (OCapN/Daemon integration). Marshal vacuous (awaiting
+your reclassification of `daemon-os-sandbox-plugin`). Groom
+reconciled post-merge state (`bbc7448951`).
 
 Merged this cycle (2026-05-07 conductor, PR 115 cycle):
 
