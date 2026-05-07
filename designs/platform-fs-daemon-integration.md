@@ -34,6 +34,17 @@ can open. The answer is to keep the unsafe constructors on the host side of
 the membrane and ensure that **every reference an agent ever sees is already
 clamped to a confined subtree** by the time it crosses.
 
+## Goals and Scope
+
+`@endo/platform` exists to be the layer the daemon stands on.
+Its job is to expose the host's ambient capabilities (filesystem, network,
+clock, process) in a shape the daemon can wrap, attenuate, and hand out as
+confined exos.
+This integration plan is therefore a daemon-side concern: it specifies how
+`@endo/daemon` consumes `@endo/platform/fs/node` to produce agent-visible
+`Mount` exos, and it does **not** add agent-visible APIs to `@endo/platform`
+itself.
+
 ## Design
 
 ### Layer Cake
