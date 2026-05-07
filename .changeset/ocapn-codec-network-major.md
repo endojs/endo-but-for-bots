@@ -23,11 +23,3 @@ surface; no deprecation aliases ship with this release.
   `get(secret) => unknown | Promise<unknown>` method. Existing callers
   that passed a `Map` should wrap it as
   `{ get: secret => map.get(secret) }`.
-
-Embedders that need a soft-migration path can wrap the new API
-themselves:
-
-```js
-import { makeOcapn } from '@endo/ocapn';
-export const makeClient = makeOcapn;
-```
