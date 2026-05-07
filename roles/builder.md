@@ -356,6 +356,65 @@ issue or design document, and shepherding it through to a green PR.
   files was rejected in favor of file-copy-at-HEAD per layer;
   each layer was 2 commits (substance + lockfile) and the byte
   identity check confirmed zero drift.
+- **Working-mirror dispatch is distinct from the strict review-only
+  mirror in
+  [`../skills/pr-mirror-for-offline-review.md`](../skills/pr-mirror-for-offline-review.md).**
+  The review-only mirror's posture is "do not modify any commits;
+  do not address feedback; relay findings upstream." A
+  working-mirror dispatch instead opens a real iterating PR on
+  the bot mirror where panel + saboteur findings AND eventual
+  follow-up fix commits land on top of the upstream tip, with
+  the explicit goal of cherry-picking the fix-commit chain back
+  to upstream when the maintainer accepts it. The constraint
+  that survives is the **base** of the mirror equals the
+  upstream tip (so cherry-picks back are trivial); follow-up
+  commits go ON TOP, never as a force-push that rewrites the
+  upstream tip's bytes. The two shapes share the
+  `git push bots-ssh HEAD:<branch>` mechanics but diverge on
+  the lifecycle: review-only closes after the panel posts;
+  working-mirror lives until the upstream PR merges, at which
+  point the mirror closes with a "superseded by upstream merge"
+  note. When the user describes the dispatch as "iterate, address
+  feedback, shepherd CI," it is the working-mirror shape; when
+  they describe it as "12-perspective review, then close," it is
+  the review-only shape.
+- **CI may not auto-fire on a mirror branch whose head SHA is
+  inherited from an upstream commit the bot fork has never seen
+  before.** GitHub Actions ties check-suite triggering to the
+  push event, and a `git push bots-ssh actual/<branch>:<mirror>`
+  may land in a state where renovate / claude check-suites get
+  queued but the repo's own `ci.yml` workflow does not start.
+  Symptoms: `gh pr checks` reports `no checks reported`, the
+  check-suites endpoint shows only `renovate` and `claude` apps
+  queued, and the workflow runs endpoint
+  (`/actions/runs?head_sha=...`) returns
+  `{"total_count": 0}`. This means the local pre-PR checklist
+  (`yarn install`, `yarn format`, `yarn lint`, `yarn docs`,
+  `yarn test`) is the load-bearing CI substitute for the
+  working-mirror shape, not just a pre-push convenience. Run it
+  to completion before opening the mirror PR; the steward / next
+  fixer cannot rely on the bot-side CI matrix to surface a
+  format / lint / type / test regression. Encountered on PR 114
+  (mirror of `endojs/endo#3152`) where the mirror was pushed
+  from `actual/markm-compartment-mapper-errors` and CI never
+  fired despite the workflow being `pull_request:`-triggered.
+- **The bot mirror's `master` can be ahead AND behind upstream's
+  `master` simultaneously.** The previous lag-disclosure
+  guidance ("expect `bots/master` to lag `actual/master` by some
+  number of upstream commits") frames the divergence as
+  one-directional. In practice, `bots-ssh/master` carries
+  `design/*` PRs that exist only in the bot fork (a working area
+  for design documents under maintainer review) AND lacks many
+  upstream commits that have landed since the last mirror sync.
+  When opening a mirror PR off an upstream branch whose merge
+  base is older than the bot fork's last sync, the diff against
+  `bots-ssh/master` may include both bot-only design commits
+  (showing as deletions) and upstream-only commits (showing as
+  additions), neither of which are part of the mirror's
+  substantive change. Disclose both directions of the lag in the
+  PR body, not just one. Encountered on PR 114 where the upstream
+  branch was rooted at a commit ~132 commits behind
+  `bots-ssh/master` first-parent history.
 - **Hand off the freshly-opened PR to a juror panel and a
   saboteur** before ending the engagement. The builder's last
   acts are two parallel dispatches plus the close-out chain:
