@@ -17,12 +17,21 @@ Prior cycle: 2026-05-07 06:30 UTC (designer fold-in for PR 115 + PR 117).
   pending CI). Re-requested review from kriskowal.
 - **PR 111** received an 8-comment review batch from kriskowal
   06:39-06:53 UTC. Reactji'd 👀 on all 8. Note: a transient
-  GitHub indexing anomaly hides these comments from the PR's
+  GitHub indexing anomaly hid these comments from the PR's
   review-thread API endpoint; comment bodies were captured from
-  the events API payload and the fixer has the verbatim list.
-  Fixer dispatched to fold 6 actionable items + reply on 2
-  architectural questions (passable-CBOR layer extraction,
-  sturdyreftracker layering).
+  the events API payload. Fixer landed: 5 fold-ins applied
+  (changeset omit, captp Slot type restore, `@endo/hex` adoption,
+  drop deprecated `diagnosticEquals` shim, drop ava-duplicative
+  `equals` helper + empty-file removal); 1 stalled with reply
+  (cancelled-Promise<never> threading needs maintainer guidance);
+  2 architectural-only replies (passable-CBOR extraction,
+  sturdyreftracker vs noncelocator). HEAD `0116aa1283` (was
+  `459d52c4aa`). 556 tests passed, lint clean. Re-requested
+  review from kriskowal. Fold-in replies posted as one top-level
+  summary (inline-reply API was 404'ing for these comments per
+  the GitHub indexing anomaly). **Stack follow-up**: PRs 112 and
+  113 stacked on 111; expect CONFLICTING/DIRTY after force-push;
+  restage as separate steward concern.
 - **Master sync** moved bots-ssh/master to incorporate ~5 commits
   of actual/master drift; affects all PRs based on master (75,
   73, 74, 71, 69, 68, 67, 64, 60, 59, 57, 55, 54, 76, 114).

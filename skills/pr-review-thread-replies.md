@@ -51,6 +51,35 @@ each item, the commit that addressed it, and any deferrals.
   Foo`; downgrading to `() => string` silently dropped that). The
   fix is usually to restore the missing piece structurally
   (`((this: Foo) => string)`), not to revert the whole annotation.
+- **Inline comments visible in the browser are sometimes not yet
+  indexed by the REST API.** When `GET /pulls/<N>/comments` returns
+  `[]` and `GET /pulls/comments/<id>` returns 404 for a comment whose
+  body, path, position, and reactjis are clearly visible on the PR
+  page, the comment is real but not yet propagated to the REST index.
+  This typically happens when the maintainer left the comments as
+  draft-or-pending review state (no published `Review`) and the
+  GraphQL/Events APIs see them but the REST `/comments` index does
+  not. The `/replies` endpoint will 404 in this state, and `POST
+  /pulls/<N>/comments` with `in_reply_to: <id>` rejects with `422
+  pull_request_review_thread_id must be published or must have review
+  with same author as comment`. The dispatch payload (which the
+  conductor populates from the events API) is the authoritative
+  source for the comment bodies, paths, and positions in this state.
+  The fallback for posting fold-in replies is a single top-level PR
+  comment via `POST /issues/<N>/comments` that maps each comment id
+  to its outcome (applied + commit SHA, stalled + reason, or
+  replied-only). Cite the maintenance state in the top-level comment
+  ("the inline-reply REST endpoints currently 404 against these
+  comment ids -- a transient GitHub indexing glitch -- so this
+  top-level comment carries the per-thread outcomes") so the
+  maintainer knows why the threads themselves don't show resolution
+  notes. Session example: PR 111's eight kriskowal inline comments
+  on 2026-05-07 06:39-06:53 UTC; the dispatch payload carried
+  bodies and positions, the `/replies` endpoint 404'd, and the
+  `/issues/111/comments` top-level summary became the load-bearing
+  reply. Eyes-reactjis on the comment ids worked from the same
+  endpoint that 404'd on read, confirming the comments were
+  reachable for some POSTs but not GETs.
 
 ## Session example
 

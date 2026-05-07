@@ -476,6 +476,48 @@ result through CI.
   `packages/ocapn/test/_util.js`'s locator binding; reverting
   the typedef name alone produced two tsc errors in the files
   whose `@import` chains depended on the new name.
+- **A "duplicative with ava test executor methods" review note on a
+  hand-rolled deep-equal helper means delete, not rewrite.** When
+  the maintainer flags a custom `equals` / `assertDeepEqual` /
+  similar with that note, the canonical fix is to verify nothing in
+  production code calls it (a `grep -n` across the whole tree, not
+  just the package's tests; tests using it should be using
+  `t.deepEqual` instead) and drop the helper. Ava's `t.deepEqual`
+  already handles bigints, NaN-equals-NaN via `Object.is`,
+  Uint8Array byte-by-byte comparison, and nested structures via
+  `concordance`. The custom helper's only "extras" are typically
+  ad-hoc shapes the maintainer doesn't want shipped (e.g. an
+  `actual.tag !== undefined` case treating any object with a `tag`
+  field as a tagged-value). If dropping the helper leaves the
+  containing file empty, delete the file too and prune its
+  re-exports from the package's index; the absence of the file is
+  the load-bearing signal that the helper is gone. Session example:
+  PR 111's `cbor/diagnostic/util.js` `equals` helper (no production
+  callers; tests used `t.deepEqual` directly); dropped the helper
+  and the now-empty file in commit `0116aa1283`.
+- **Position-based inline comments need careful diff-line accounting
+  when the dispatch summary cites only the position number.** GitHub's
+  `position` field is 1-indexed and counts every line in the unified
+  diff after the first `@@` hunk header for that file (context, `+`,
+  and `-` lines all count, but the `@@` line itself does not). When
+  the dispatch hands over a list of `(path, position, body)` triples
+  without the resolved file line, the fixer maps each position to its
+  diff line with:
+  ```sh
+  git diff <base>..HEAD -- <path> | awk '
+  BEGIN { pos=0; in_hunk=0 }
+  { if (/^@@/) { in_hunk=1; print "POS="pos": "$0; next }
+    if (in_hunk) { pos++; print "POS="pos": "$0 } }
+  '
+  ```
+  Then `sed -n` to the position cited in the dispatch. A position
+  that lands on a closing brace, JSDoc closer, or property line is
+  often a "footnote" cite — the maintainer is commenting on the
+  *containing* function or block, not the specific token. Read 5-10
+  lines of surrounding context before deciding what the comment is
+  about. PR 111's position-53 comment on `cbor/diagnostic/util.js`
+  landed on the `*/` closing the `equals` JSDoc, but the comment
+  was about the whole `equals` function below it.
 
 ## Self-improvement
 
