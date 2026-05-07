@@ -8,6 +8,31 @@ import harden from '@endo/harden';
  */
 
 /**
+ * Normalize a POSIX path: collapse `.`, resolve `..`, drop empty segments.
+ *
+ * Throws if `..` would escape the root (i.e. when popping above the start).
+ *
+ * @param {string} p
+ * @returns {string}
+ */
+const normalizePosix = p => {
+  const parts = p.split('/').filter(s => s.length > 0 && s !== '.');
+  /** @type {string[]} */
+  const out = [];
+  for (const part of parts) {
+    if (part === '..') {
+      if (out.length === 0) {
+        throw new Error(`Invalid path: escapes root: ${p}`);
+      }
+      out.pop();
+    } else {
+      out.push(part);
+    }
+  }
+  return out.join('/');
+};
+
+/**
  * Create a VFS adapter backed by a Mount exo capability.
  *
  * This bridges the Genie tool system's VFS interface to an Endo Mount
@@ -97,6 +122,45 @@ export const makeCapabilityVFS = mount => {
     async rm(filePath, _opts) {
       const segments = filePath.split('/').filter(s => s.length > 0);
       await E(mount).remove(segments);
+    },
+
+    sep: '/',
+
+    join(...parts) {
+      return parts.join('/').replace(/\/+/g, '/');
+    },
+
+    relative(from, to) {
+      const fromParts = normalizePosix(from).split('/').filter(Boolean);
+      const toParts = normalizePosix(to).split('/').filter(Boolean);
+      let i = 0;
+      while (
+        i < fromParts.length &&
+        i < toParts.length &&
+        fromParts[i] === toParts[i]
+      ) {
+        i += 1;
+      }
+      const up = fromParts.slice(i).map(() => '..');
+      const down = toParts.slice(i);
+      const joined = [...up, ...down].join('/');
+      return joined.length > 0 ? joined : '.';
+    },
+
+    resolve(...paths) {
+      // The Mount is the root; resolved paths stay under it.
+      // Absolute segments reset to root, matching POSIX `path.resolve`.
+      let current = '';
+      for (const p of paths) {
+        if (p.startsWith('/')) {
+          current = p.slice(1);
+        } else if (current.length > 0) {
+          current = `${current}/${p}`;
+        } else {
+          current = p;
+        }
+      }
+      return `/${normalizePosix(current)}`;
     },
 
     readdir(dirPath, opts = {}) {
