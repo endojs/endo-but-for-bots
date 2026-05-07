@@ -294,6 +294,91 @@ issue or design document, and shepherding it through to a green PR.
   marshal landed). The aggregated panel content is identical;
   only the verdict flag changes. Encountered on PR 44 → #101
   (chat voice input) and again on PR #105 (skill-registry).
+- **Re-open-under-bot at sweep scale (N>10 PRs in one
+  dispatch).** When the maintainer requests a one-time sweep that
+  re-opens N PRs at once, the per-PR procedure compounds three
+  classes of breakage that are rare on a single re-open but
+  become dominant at scale. Bake these into the sweep script
+  before running:
+
+  1. **The dominant stall mode is base drift, not author
+     identity.** Most PRs older than a few weeks sit on a head
+     that is hundreds of commits **behind** their declared base
+     (e.g., `bots-ssh/llm` advanced 245-296 commits past several
+     review/* heads). The captured `gh pr diff` is base→head at
+     gh-fetch time, so applying it to current `<BASE>` will fail
+     on any file the upstream base has touched in the
+     intervening commits. In a 17-PR sweep on 2026-05-07, 5 of
+     17 PRs (29%) stalled on diff-apply against current `llm`,
+     all due to drift-induced conflicts in shared files
+     (`Cargo.toml`, `Cargo.lock`, `designs/README.md`,
+     `packages/daemon/src/types.d.ts`, a single test file). The
+     substantive PR diffs themselves were small; the conflicts
+     were on header-area edits both sides made independently.
+     Surface stall counts as `STALLED: weaver-needed` per the
+     playbook and let the steward dispatch a weaver per PR. Do
+     NOT silently fall back to `git push <orig-sha>:refs/heads/<new-slug>`
+     (which is technically possible since the original heads
+     live on `bots-ssh`); that approach would create new PRs
+     with the same ahead/behind divergence as the originals,
+     defeating the rebased-onto-current-base intent of the
+     re-open pattern.
+  2. **`git apply --3way` returns 0 even with unresolved
+     conflicts left in the tree.** The conflict-detection has
+     to be done via `git status --porcelain | grep -E
+     '^(UU|AA|DD|AU|UA|DU|UD) '`, NOT via the apply exit code.
+     A naive script that does `git apply --3way && git add -A
+     && git commit` will commit conflict markers verbatim. Fail
+     fast on the porcelain check before staging.
+  3. **`gh pr diff` does NOT include `--full-index` lines, so
+     binary-file hunks in the diff fail to apply silently and
+     the surrounding text hunks may still report "Applied
+     cleanly".** AVA snapshot files (`*.snap`) are the common
+     trigger; image and other binary fixtures behave the same.
+     The script must detect "no staged changes after `git add
+     -A`" as a stall signal because the partial-success state
+     has no merge markers but no committable substance either.
+     Surface as `STALLED: PR <N> - apply produced no staged
+     changes (likely binary patch); rerun with cherry-pick from
+     bots-ssh/<orig-head>` so the weaver knows where to look.
+
+  Beyond breakage detection, the script-discipline notes:
+  - **The original PR's commits are usually already authored by
+    the human** (`kriskowal`'s gh-side identity matches the
+    commit-author identity). The `GIT_AUTHOR_*` env-var dance
+    from the single-PR re-open procedure above is still safe to
+    run unconditionally (it's a no-op when author is already
+    correct), but skipping the cherry-pick path entirely (apply
+    the diff as one squash commit) loses no metadata that
+    wasn't already preserved on the closed original PR. The
+    diff-apply path is faster than cherry-pick at scale.
+  - **Per-PR comment forwarding via a body builder script** is
+    cheap to write once and amortises across all N PRs. Capture
+    `gh api .../pulls/<N>/comments` (inline review comments),
+    `gh api .../pulls/<N>/reviews` (top-level review summaries),
+    and `gh api .../issues/<N>/comments` (PR conversation,
+    which uses the issues endpoint, NOT the pulls endpoint
+    despite living on the PR page). Render each as a markdown
+    list section in the new PR body so the maintainer doesn't
+    have to chase the closed PR for context.
+  - **Slug collisions with leftover local branches** are
+    common: a previously-attempted slug from a long-ago panel
+    may still exist in `~/garden`'s local branches even when
+    free on the remote. Pre-flight `git -C ~/garden branch -D
+    <slug> 2>/dev/null` for each candidate slug, OR detect the
+    `git worktree add -b` failure and recover.
+  - **Workflow-touching PRs (#26, #47 in the 2026-05-07 sweep)
+    push fine over `bots-ssh` because SSH key auth doesn't
+    enforce the OAuth `workflow` scope check** (per
+    [`../skills/ssh-fallback-workflow-scope.md`](../skills/ssh-fallback-workflow-scope.md)).
+    No special remote needed when the default `bots-ssh` remote
+    is already SSH.
+
+  Encountered on the 2026-05-07 sweep that re-opened 12 of 17
+  open kriskowal-authored PRs (#22 → #124, #23 → #125, #26 →
+  #126, #33 → #123, #37 → #127, #38 → #128, #39 → #129, #40 →
+  #130, #41 → #131, #42 → #132, #43 → #133, #47 → #134) and
+  stalled 5 (#31, #32, #34, #45, #46) for weaver follow-up.
 - **Splitting an existing PR into design + implementation halves
   on different bases.** When a maintainer asks to split a PR that
   bundles a design document and an implementation package
