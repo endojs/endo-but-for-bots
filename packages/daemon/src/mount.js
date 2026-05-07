@@ -5,6 +5,7 @@
 
 import { q } from '@endo/errors';
 import { makeExo } from '@endo/exo';
+import { makeDirectory as makePlatformDirectory } from '@endo/platform/fs/node';
 
 import { mountHelp, mountFileHelp, makeHelp } from './help-text.js';
 import { MountInterface, MountFileInterface } from './interfaces.js';
@@ -36,35 +37,53 @@ const assertValidSegment = segment => {
 harden(assertValidSegment);
 
 /**
- * Resolve path segments relative to a current directory, clamped to a
- * confinement root.  '.' skips, '..' pops (clamped at root).
+ * Clamp a sequence of path segments to a relative segment array under the
+ * Mount's current directory.  '.' segments are dropped; '..' segments pop
+ * the last accumulated segment (clamped at the empty root, never escaping
+ * the current directory).
  *
- * @param {string} currentDir
- * @param {string} confinementRoot
+ * The result is an array of validated, plain-name segments suitable for
+ * passing to `@endo/platform/fs/node` directory operations.
+ *
  * @param {string[]} segments
- * @param {FilePowers} filePowers
- * @returns {string}
+ * @returns {string[]}
  */
-const resolveSegments = (currentDir, confinementRoot, segments, filePowers) => {
-  let resolved = currentDir;
+const clampSegments = segments => {
+  /** @type {string[]} */
+  const clamped = [];
   for (const segment of segments) {
     if (segment === '.') {
       // skip
     } else if (segment === '..') {
-      const parent = filePowers.joinPath(resolved, '..');
-      if (parent.length >= confinementRoot.length) {
-        resolved = parent;
-      } else {
-        resolved = confinementRoot;
+      if (clamped.length > 0) {
+        clamped.pop();
       }
     } else {
       assertValidSegment(segment);
-      resolved = filePowers.joinPath(resolved, segment);
+      clamped.push(segment);
     }
+  }
+  return clamped;
+};
+harden(clampSegments);
+
+/**
+ * Resolve clamped relative segments against a current directory, producing
+ * an absolute path suitable for symlink-confinement assertions.
+ *
+ * @param {string} currentDir
+ * @param {string[]} clampedSegments
+ * @param {FilePowers} filePowers
+ * @returns {string}
+ */
+const segmentsToAbsolutePath = (currentDir, clampedSegments, filePowers) => {
+  let resolved = currentDir;
+  for (const segment of clampedSegments) {
+    resolved = filePowers.joinPath(resolved, segment);
   }
   return resolved;
 };
-harden(resolveSegments);
+harden(segmentsToAbsolutePath);
 
 /**
  * Assert that a resolved path is contained within the confinement root.
@@ -160,12 +179,27 @@ harden(isConfinedPath);
 /**
  * Create a mount exo for a filesystem directory.
  *
+ * Mount delegates the unconfined filesystem work to the platform
+ * `makeDirectory` primitive from `@endo/platform/fs/node`.  The Mount exo
+ * keeps only the confinement policy: segment validation, `.`/`..` clamping,
+ * symlink-escape assertion, and the `readOnly` attenuation.
+ *
+ * Sub-directory `lookup` retains its bespoke transient sub-exo
+ * construction rather than reusing `directory.lookup()`, because the
+ * confinement policy must apply at every traversal step.  Reusing the
+ * platform `directory.lookup` would require either a clamping-policy hook
+ * on the platform side or a wrapper that re-clamps every returned exo;
+ * both are out of scope for this PR.
+ * See `designs/platform-fs-daemon-integration.md` for the alternative.
+ *
  * @param {MountContext} ctx
  * @returns {object}
  */
 const makeMountExo = ctx => {
   const { currentDir, confinementRoot, readOnly, filePowers, description } =
     ctx;
+
+  const directory = makePlatformDirectory(currentDir);
 
   const assertWritable = () => {
     if (readOnly) {
@@ -174,11 +208,17 @@ const makeMountExo = ctx => {
   };
 
   /**
+   * Clamp incoming segments and compute the absolute path for the
+   * symlink-confinement assertion.
+   *
    * @param {string[]} segments
-   * @returns {string}
+   * @returns {{ clamped: string[], absolute: string }}
    */
-  const resolve = segments =>
-    resolveSegments(currentDir, confinementRoot, segments, filePowers);
+  const clamp = segments => {
+    const clamped = clampSegments(segments);
+    const absolute = segmentsToAbsolutePath(currentDir, clamped, filePowers);
+    return { clamped, absolute };
+  };
 
   const help = makeHelp(mountHelp);
 
@@ -190,22 +230,35 @@ const makeMountExo = ctx => {
       if (pathSegments.length === 0) {
         return true;
       }
-      const target = resolve(pathSegments);
-      const pathExists = await filePowers.exists(target);
+      const { clamped, absolute } = clamp(pathSegments);
+      const pathExists = await filePowers.exists(absolute);
       if (!pathExists) {
         return false;
       }
-      return isConfinedPath(target, confinementRoot, filePowers);
+      const confined = await isConfinedPath(
+        absolute,
+        confinementRoot,
+        filePowers,
+      );
+      if (!confined) {
+        return false;
+      }
+      return directory.has(...clamped);
     },
 
     async list(...pathSegments) {
       await null;
-      const target = resolve(pathSegments);
-      await assertConfined(target, confinementRoot, filePowers);
-      const entries = await filePowers.readDirectory(target);
+      const { absolute } = clamp(pathSegments);
+      await assertConfined(absolute, confinementRoot, filePowers);
+      // Mount keeps its own list rather than delegating to the platform
+      // directory because the platform list filters out symlinks
+      // unconditionally, while Mount surfaces internal-pointing symlinks
+      // (the symlink-confinement assertion catches escapes at use time).
+      // See `designs/platform-fs-daemon-integration.md`.
+      const entries = await filePowers.readDirectory(absolute);
       const confined = [];
       for (const entry of entries.sort()) {
-        const entryPath = filePowers.joinPath(target, entry);
+        const entryPath = filePowers.joinPath(absolute, entry);
         // eslint-disable-next-line no-await-in-loop
         if (await isConfinedPath(entryPath, confinementRoot, filePowers)) {
           confined.push(entry);
@@ -217,36 +270,36 @@ const makeMountExo = ctx => {
     async lookup(pathArg) {
       await null;
       const segments = typeof pathArg === 'string' ? [pathArg] : pathArg;
-      const target = resolve(segments);
-      await assertConfined(target, confinementRoot, filePowers);
+      const { absolute } = clamp(segments);
+      await assertConfined(absolute, confinementRoot, filePowers);
 
-      const isDir = await filePowers.isDirectory(target);
+      const isDir = await filePowers.isDirectory(absolute);
       if (isDir) {
         return makeMountExo({
           ...ctx,
-          currentDir: target,
+          currentDir: absolute,
           description: `Subdirectory of ${description}`,
         });
       }
 
-      return makeMountFileExo(target, readOnly, filePowers, confinementRoot);
+      return makeMountFileExo(absolute, readOnly, filePowers, confinementRoot);
     },
 
     async readText(pathArg) {
       await null;
       const segments = typeof pathArg === 'string' ? [pathArg] : pathArg;
-      const target = resolve(segments);
-      await assertConfined(target, confinementRoot, filePowers);
-      return filePowers.readFileText(target);
+      const { absolute } = clamp(segments);
+      await assertConfined(absolute, confinementRoot, filePowers);
+      return filePowers.readFileText(absolute);
     },
 
     async maybeReadText(pathArg) {
       await null;
       const segments = typeof pathArg === 'string' ? [pathArg] : pathArg;
-      const target = resolve(segments);
+      const { absolute } = clamp(segments);
       try {
-        await assertConfined(target, confinementRoot, filePowers);
-        return await filePowers.readFileText(target);
+        await assertConfined(absolute, confinementRoot, filePowers);
+        return await filePowers.readFileText(absolute);
       } catch {
         return undefined;
       }
@@ -256,39 +309,47 @@ const makeMountExo = ctx => {
       await null;
       assertWritable();
       const segments = typeof pathArg === 'string' ? [pathArg] : pathArg;
-      const target = resolve(segments);
-      await assertConfinedOrAncestor(target, confinementRoot, filePowers);
-      const parent = filePowers.joinPath(target, '..');
+      const { absolute } = clamp(segments);
+      await assertConfinedOrAncestor(absolute, confinementRoot, filePowers);
+      const parent = filePowers.joinPath(absolute, '..');
       await filePowers.makePath(parent);
-      await filePowers.writeFileText(target, content);
+      await filePowers.writeFileText(absolute, content);
     },
 
     async remove(pathArg) {
       await null;
       assertWritable();
       const segments = typeof pathArg === 'string' ? [pathArg] : pathArg;
-      const target = resolve(segments);
-      await assertConfined(target, confinementRoot, filePowers);
-      await filePowers.removePath(target);
+      const { clamped, absolute } = clamp(segments);
+      await assertConfined(absolute, confinementRoot, filePowers);
+      await directory.remove(clamped);
     },
 
     async move(fromArg, toArg) {
       await null;
       assertWritable();
-      const from = resolve(typeof fromArg === 'string' ? [fromArg] : fromArg);
-      const to = resolve(typeof toArg === 'string' ? [toArg] : toArg);
-      await assertConfined(from, confinementRoot, filePowers);
-      await assertConfinedOrAncestor(to, confinementRoot, filePowers);
-      await filePowers.renamePath(from, to);
+      const fromSegments =
+        typeof fromArg === 'string' ? [fromArg] : fromArg;
+      const toSegments = typeof toArg === 'string' ? [toArg] : toArg;
+      const { clamped: fromClamped, absolute: fromAbsolute } =
+        clamp(fromSegments);
+      const { clamped: toClamped, absolute: toAbsolute } = clamp(toSegments);
+      await assertConfined(fromAbsolute, confinementRoot, filePowers);
+      await assertConfinedOrAncestor(
+        toAbsolute,
+        confinementRoot,
+        filePowers,
+      );
+      await directory.move(fromClamped, toClamped);
     },
 
     async makeDirectory(pathArg) {
       await null;
       assertWritable();
       const segments = typeof pathArg === 'string' ? [pathArg] : pathArg;
-      const target = resolve(segments);
-      await assertConfinedOrAncestor(target, confinementRoot, filePowers);
-      await filePowers.makePath(target);
+      const { clamped, absolute } = clamp(segments);
+      await assertConfinedOrAncestor(absolute, confinementRoot, filePowers);
+      await directory.makeDirectory(clamped);
     },
 
     readOnly() {
