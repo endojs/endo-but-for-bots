@@ -1,8 +1,31 @@
 # PR dispatch state
 
-Last cycle: 2026-05-07 (conductor PR 99 merge).
-Prior cycle: 2026-05-07 14:55 UTC (PR 119 contributor review).
+Last cycle: 2026-05-07 (conductor PR 119 merge).
+Prior cycle: 2026-05-07 (conductor PR 99 merge).
+Earlier: 2026-05-07 14:55 UTC (PR 119 contributor review).
 Earlier: 2026-05-07 07:00 UTC (master synced; fixer for PR 114; PR 111 fold-in dispatched).
+
+## Cycle 2026-05-07 (conductor PR 119)
+
+Merged this run:
+
+- #119 → `42a452928dfea2938f18e2ff0fb79375fe5d325d` (merge commit
+  to `llm`). `feat(sandbox): provide default $PATH derived from
+  rootfs`, original author jcorbin. At survey: APPROVED (kriscendobot
+  21:11), MERGEABLE/CLEAN, 27/27 CI SUCCESS at brief, 3 behind
+  `bots-ssh/llm`, 3 ahead. Three commits at entry read coherently:
+  `feat(sandbox): provide a fallback $PATH semantics`,
+  `chore(sandbox): fix dead TODO/ vs TADA/ citation paths`
+  (shepherd's citation fix), and `fix(sandbox): mounted bin paths
+  have predictable dependencies` (jcorbin's iterative refinement
+  with new TADA/25 design doc). Skipped tidy — discrete commits
+  document discrete concerns. Rebased onto `bots-ssh/llm` cleanly
+  (no conflicts), force-pushed `ac19b79d59` with `--force-with-lease`.
+  Per role guidance, rebase moots brief's "direct `--merge`" claim;
+  used `--auto --merge --delete-branch`. GitHub resolved as direct
+  merge immediately (branch protection does not gate on CI).
+  state=MERGED on first verify. Local `shepherd/pr-119` branch
+  deleted; `shepherd-119` worktree removed.
 
 ## Cycle 2026-05-07 (conductor PR 99)
 
