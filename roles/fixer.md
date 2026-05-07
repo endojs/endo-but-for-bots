@@ -120,6 +120,54 @@ result through CI.
   because PR 75 narrowed `@endo/random`'s exports surface and
   re-adding a `./random.types.d.ts` subpath would have been
   inconsistent with that narrowing.
+- **"Extract this feature into its own package" is a self-contained
+  fixer dispatch shape, distinct from a rename and from the
+  cross-PR coordinated move above.** A maintainer reviewing a
+  feature added inside an existing package (e.g. a new exo dropped
+  into `packages/daemon/src/`) may CHANGES_REQUESTED with a
+  one-line ask to lift it into a new sibling package, often citing
+  a name pattern (e.g. "named for the backend it adapts, like
+  `@endo/exo-<backend>`"). The maintainer's example name is
+  authoritative; do not second-guess it even if the current
+  implementation is a fake/skeleton (the name names what it
+  adapts, not what is currently shipping). The flow:
+  `git mv packages/<src>/src/<file>.js packages/<new>/src/<file>.js`
+  plus the matching `test/*.test.js` files (relative imports stay
+  intact when source and tests move together); scaffold
+  `package.json` / `tsconfig.json` / `tsconfig.build.json` /
+  `index.js` / `README.md` / `LICENSE` / `SECURITY.md` modeled on
+  a recent simple sibling (`packages/hex/` is a good template);
+  declare every `@endo/*` the moved code imports as a
+  `dependency` and every test-only import (e.g.
+  `@endo/eventual-send`, `@endo/far`, `@endo/init`,
+  `@endo/ses-ava`, `@endo/pass-style`) as a `devDependency`;
+  update the design document to cite the new package path.
+  No daemon-side import-cleanup is needed if the moved file was
+  only consumed by its own tests; verify with `grep -rn
+  '<moved-symbol>' packages/<source-pkg>/`. Ship as
+  `refactor(<new-name>): extract <thing> into its own package
+  (#<N> review)` plus the obligatory separate `chore: Update
+  yarn.lock`. The `workspaces: ["packages/*"]` glob auto-discovers
+  the new package, so no `lerna.json` or root `package.json`
+  edits are required. Session example: PR 106's
+  `Browser` exo was extracted from `@endo/daemon` into
+  `@endo/exo-playwright` per a one-line maintainer review,
+  bringing 36 tests across two test files; the daemon's
+  `package.json` `exports` and `tsconfig` include globs continued
+  to work unchanged.
+- **`git stash` followed by `git stash pop` loses the index's
+  rename detection on `git mv`-staged files.** A staged rename
+  becomes an unstaged `D` + an unstaged `A` after pop; `git
+  status` shows them as separate operations rather than a
+  rename. Re-`git add` the deleted paths to bring the deletion
+  back into the index, and the rename is re-detected on the next
+  `git status`. The content of the new path is unaffected; only
+  the index's pairing of the two paths is lost. This is
+  particularly easy to hit when bracketing a check (e.g. a
+  control-comparison lint run) with `git stash` / `git stash
+  pop`. Prefer `git diff --cached -- <path>` to inspect a
+  staged file in place, or use a separate worktree for the
+  comparison run, rather than stashing.
 - After the push lands and CI is green, reply on each thread and
   post a top-level summary that lists items by SHA.
 - **A `CHANGES_REQUESTED` review that asks for both a code change
