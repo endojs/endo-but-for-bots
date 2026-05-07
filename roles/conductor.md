@@ -193,6 +193,15 @@ re-dispatches.
 - **Authenticated `gh` account** speaks; no persona name.
 - **Bookkeeping commits push immediately** before moving to the
   next PR, so a crash mid-loop leaves the queue accurate.
+- **The conductor's own scratch worktree may need detached HEAD.**
+  When the brief says "create a conductor worktree from `garden`",
+  but `garden` is already checked out at another worktree (the
+  steward's, or a checkin-pr* worktree), `git worktree add … garden`
+  fails with "already used by worktree at …". Use
+  `git worktree add --detach <path> bots-ssh/garden` instead; the
+  conductor's worktree is for issuing `gh pr merge` and survey
+  commands, not for authoring on `garden`. The bookkeeping commit
+  goes in whichever worktree currently holds the `garden` branch.
 
 ## Self-improvement
 
