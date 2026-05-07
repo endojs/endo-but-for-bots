@@ -57,15 +57,15 @@ list). Surface-level Status check missed it.
    [`./worktree-per-pr.md`](./worktree-per-pr.md):
 
    ```sh
-   mkdir -p /home/kris/endo-wt
-   git worktree add --detach /home/kris/endo-wt/groom-drift-check garden
-   cd /home/kris/endo-wt/groom-drift-check
+   mkdir -p ~/endo-wt
+   git worktree add --detach ~/endo-wt/groom-drift-check garden
+   cd ~/endo-wt/groom-drift-check
    git fetch bots-ssh garden
    git checkout -B groom-drift-check bots-ssh/garden
    ```
 
    `--detach` first because the `garden` branch is held by the
-   steward's seat (`/home/kris/endo-wt/checkin-pr94` or a sibling).
+   steward's seat (`~/garden` or a sibling).
    Then `checkout -B <local-name> bots-ssh/garden` gives a tracking
    branch that pushes back to garden. Use `git push bots-ssh
    HEAD:garden` to push into the remote `garden` ref without needing

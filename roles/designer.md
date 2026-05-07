@@ -102,7 +102,7 @@ an agent in the `builder` role to implement from later.
   reappears bundled with someone else's changes. Recovery: rescue your
   draft (`git show <orphan-sha>:designs/<slug>.md > /tmp/<slug>.md` if
   it was committed and reset away; otherwise the file in your
-  Write-tool history), then `git worktree add /home/kris/endo-wt/<slug>
+  Write-tool history), then `git worktree add ~/endo-wt/<slug>
   design/<slug>` and continue all design work in that dedicated
   worktree. The concurrent agent cannot reach in to a separate
   worktree, so branch swaps cease and the atomic Write+add+commit

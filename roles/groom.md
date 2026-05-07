@@ -99,22 +99,22 @@ directly to `bots-ssh garden` and rebases until the push lands.
 
 Per the worktree-discipline rule
 ([`../skills/worktree-per-pr.md`](../skills/worktree-per-pr.md))
-the groom does not operate in `/home/kris/garden` (the steward's
+the groom does not operate in `~/garden` (the steward's
 seat). Each pass uses a dedicated worktree:
 
 ```sh
-mkdir -p /home/kris/endo-wt
-git worktree add /home/kris/endo-wt/groom garden
-cd /home/kris/endo-wt/groom
+mkdir -p ~/endo-wt
+git worktree add ~/endo-wt/groom garden
+cd ~/endo-wt/groom
 ```
 
-If `/home/kris/endo-wt/groom` already exists from a prior pass,
+If `~/endo-wt/groom` already exists from a prior pass,
 remove and recreate (cheap; the working tree is small).
 
 ## Procedure
 
 1. **Stand on garden in the dedicated worktree.** `cd
-   /home/kris/endo-wt/groom`. Verify with `git branch
+   ~/endo-wt/groom`. Verify with `git branch
    --show-current` (expect `garden`).
 2. **Fetch and fast-forward merge `bots-ssh garden`** so the
    pass starts from the current tip:
@@ -203,8 +203,8 @@ remove and recreate (cheap; the working tree is small).
     same hazard with no recovery hint; do not use it.
 11. **Clean up the worktree** at the end of the pass:
     ```sh
-    cd /home/kris/garden
-    git worktree remove /home/kris/endo-wt/groom
+    cd ~/garden
+    git worktree remove ~/endo-wt/groom
     ```
 
 ## Recovery: cross-role clobber of `designs/README.md`

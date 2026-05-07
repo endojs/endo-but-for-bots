@@ -4,13 +4,13 @@
 
 **Every dispatched subagent operates outside the steward's
 working tree, full stop.** The steward stays pinned to a
-garden-only worktree (typically `/home/kris/endo-wt/checkin-pr94`);
+garden-only worktree (typically `~/garden`);
 no subagent touches that path. Three lanes:
 
 1. **Mutating subagents** (builder, fixer, weaver, shepherd,
    cleaner, conductor, designer, groom, liaison writing tracking
    files) work inside a **dedicated `git worktree`** at
-   `/home/kris/endo-wt/<slug>` or `pr-<N>`.
+   `~/endo-wt/<slug>` or `pr-<N>`.
 2. **Read-only-on-tree subagents** (panel jurors reading the
    diff, saboteur perspective on a contributor PR) work in a
    **detached read-only worktree** created with
@@ -30,17 +30,19 @@ commits land on the wrong tip).
 **Every subagent dispatch brief leads with an explicit `cd <path>`
 line.** A brief that omits the cd and says "work on PR <N>"
 delegates the cwd to whatever the harness inherited — typically
-`/home/kris/garden` (the user's fix-branch-pinned worktree), which
-is the worst possible default. Encountered 2026-05-07: a saboteur
-dispatch wrote its self-improvement skill file to
-`/home/kris/garden/skills/` on `fix/pr70-regexp-escape` because
-its brief did not pin cwd. The steward had to rescue the file
-manually. Cheap to prevent: the cd line is one sentence in the
-brief.
+the steward's seat (`~/garden` itself), which is the worst
+possible default: the subagent can accidentally commit to
+`garden` or step on the steward's mid-cycle state. Encountered
+2026-05-07 when `~/garden` was temporarily pinned to a fix-branch
+(`fix/pr70-regexp-escape`): a saboteur dispatch wrote its
+self-improvement skill file to `~/garden/skills/` on the wrong
+branch because its brief did not pin cwd. The steward had to
+rescue the file manually. Cheap to prevent: the cd line is one
+sentence in the brief.
 
 ## Lifecycle: one worktree per PR, hand off across roles
 
-The worktree at `/home/kris/endo-wt/pr-<N>` is the canonical
+The worktree at `~/endo-wt/pr-<N>` is the canonical
 location for **all** work on PR `<N>`. The builder creates it,
 the fixer reuses it across rounds, and the conductor cleans it
 up after merge. Same worktree across all three roles; no
@@ -53,16 +55,16 @@ create` returns. Create the worktree under the branch slug
 first, then move it to `pr-<N>` once the number is known:
 
 ```sh
-mkdir -p /home/kris/endo-wt
+mkdir -p ~/endo-wt
 git fetch bots-ssh llm
-git worktree add /home/kris/endo-wt/<branch-slug> \
+git worktree add ~/endo-wt/<branch-slug> \
   -b <branch-name> bots-ssh/llm
-cd /home/kris/endo-wt/<branch-slug>
+cd ~/endo-wt/<branch-slug>
 # … implement, push, gh pr create …
 N=$(gh pr view --json number --jq .number)
-cd /home/kris/garden  # leave the worktree before moving it
-git worktree move /home/kris/endo-wt/<branch-slug> \
-  /home/kris/endo-wt/pr-${N}
+cd ~/garden  # leave the worktree before moving it
+git worktree move ~/endo-wt/<branch-slug> \
+  ~/endo-wt/pr-${N}
 ```
 
 The `git worktree move` updates internal pointers; a plain `mv`
@@ -76,7 +78,7 @@ PR:
 
 ```sh
 N=70   # the PR number you're working on
-WT=/home/kris/endo-wt/pr-${N}
+WT=~/endo-wt/pr-${N}
 if [ -d "$WT" ]; then
   cd "$WT"
   git fetch bots-ssh <head-ref>
@@ -105,9 +107,9 @@ dead weight.
 # After successful merge
 N=<PR-number>
 BRANCH=<head-ref-name>
-WT=/home/kris/endo-wt/pr-${N}
+WT=~/endo-wt/pr-${N}
 
-cd /home/kris/garden  # leave the worktree before removing
+cd ~/garden  # leave the worktree before removing
 [ -d "$WT" ] && git worktree remove "$WT"
 git branch -D "$BRANCH" 2>/dev/null  # local copy if any
 gh api -X DELETE \
@@ -122,12 +124,12 @@ touch your local clone. Always do all three steps.
 
 ## Worktree naming
 
-- **`/home/kris/endo-wt/pr-<N>`** — the canonical location for
+- **`~/endo-wt/pr-<N>`** — the canonical location for
   any open PR's work, for any role.
-- **`/home/kris/endo-wt/<slug>`** — temporary, only during the
+- **`~/endo-wt/<slug>`** — temporary, only during the
   pre-PR window of a builder dispatch. Move to `pr-<N>` as soon
   as the PR opens.
-- **`/home/kris/garden`** (or another garden-pinned worktree) —
+- **`~/garden`** (or another garden-pinned worktree) —
   reserved for the steward and any cycle-level work that
   modifies `garden`. Never switch branches here.
 
@@ -144,7 +146,7 @@ touch your local clone. Always do all three steps.
   changes unless you pass `--force`. Investigate before forcing
   (the changes may be unmerged work the next role needs).
 - `git worktree move` rejects if the source IS the cwd. Always
-  `cd /home/kris/garden` first, then `git worktree move`.
+  `cd ~/garden` first, then `git worktree move`.
 - A previously-merged PR's worktree might already have been
   cleaned up by the conductor. The fixer's reuse-if-present
   guard handles this; do not assume the worktree exists.
@@ -152,7 +154,7 @@ touch your local clone. Always do all three steps.
   sibling worktrees in their `node_modules/.bin/*` shims and
   `.pnp.cjs` resolvers.** When the first call to `npx corepack
   yarn format` (or any other yarn-installed CLI) fails with
-  `MODULE_NOT_FOUND` pointing at a path like `/home/kris/endo-wt/
+  `MODULE_NOT_FOUND` pointing at a path like `~/endo-wt/
   <some-other-slug>/node_modules/.store/...`, re-run `npx corepack
   yarn install` in the reused worktree to rewrite the store
   references to the current path. This is one install cycle, not

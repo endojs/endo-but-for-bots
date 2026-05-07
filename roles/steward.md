@@ -28,7 +28,8 @@ cadence):** a 30s conditional-GET poll against the GitHub events
 API runs as a long-lived background process feeding a `Monitor`
 task. The script is
 [`../scripts/poll-events-conditional.sh`](../scripts/poll-events-conditional.sh);
-it spawns once per session as
+it spawns once per session from `~/garden` (or wherever the
+steward's garden-pinned worktree lives) as
 `nohup bash scripts/poll-events-conditional.sh > /tmp/poll-events.log 2> /tmp/poll-events.err &`
 and the steward arms a `Monitor` watching the log files for the
 distinctive `NEW <count>` trigger line. The monitor fires a
@@ -117,22 +118,19 @@ fire actually dispatches the liaison.
 
 ## The steward stays on `garden`
 
-The steward operates from a garden-pinned worktree at all times
-(typically `/home/kris/endo-wt/checkin-pr94`; the user's
-`/home/kris/garden` is a separate worktree often pinned to a
-working branch like `fix/pr70-...`). **Never switches branches in
-the steward's working tree.** If the steward catches its working
+The steward operates from `~/garden`, the canonical garden-pinned
+worktree, at all times. **Never switches branches in the
+steward's working tree.** If the steward catches its working
 tree on a non-garden branch (a sub-role failed to use a
 worktree), `git switch garden` and report the offending sub-role
 for self-improvement.
 
-**The steward's worktree is exclusive to the steward.** No
-subagent operates inside `/home/kris/endo-wt/checkin-pr94` or
-`/home/kris/garden`. Every subagent dispatch brief MUST specify
-an explicit `cd <path>` as the agent's first action, with `<path>`
-being one of:
+**The steward's worktree (`~/garden`) is exclusive to the
+steward.** No subagent operates inside `~/garden`. Every subagent
+dispatch brief MUST specify an explicit `cd <path>` as the
+agent's first action, with `<path>` being one of:
 
-- A **dedicated worktree** at `/home/kris/endo-wt/<slug>` per
+- A **dedicated worktree** at `~/endo-wt/<slug>` per
   [`../skills/worktree-per-pr.md`](../skills/worktree-per-pr.md)
   for any subagent that touches files (builder, fixer,
   weaver, shepherd, cleaner, conductor, designer, groom,
@@ -146,14 +144,15 @@ being one of:
 
 The first action of every subagent brief is the `cd`, not a
 suggestion. A brief that says "work on PR <N>" without an
-explicit `cd /home/kris/endo-wt/pr-<N>` line is a steward bug;
-the agent will land in whatever cwd the harness happened to
-inherit (typically `/home/kris/garden`, the user's
-fix-branch-pinned worktree, which is exactly the wrong place).
+explicit `cd ~/endo-wt/pr-<N>` line is a steward bug; the agent
+will land in whatever cwd the harness happened to inherit
+(typically the steward's seat `~/garden` itself, which is
+exactly the wrong place — the agent could accidentally commit on
+`garden` or step on the steward's mid-cycle state).
 Encountered 2026-05-07: a saboteur dispatch dropped its
-self-improvement skill file in `/home/kris/garden/skills/` on
-the wrong branch because its brief did not pin its working
-directory.
+self-improvement skill file in `~/garden/skills/` on the wrong
+branch (the steward seat was on a fix-branch worktree at the
+time) because its brief did not pin its working directory.
 
 ## Fetch before reading state
 

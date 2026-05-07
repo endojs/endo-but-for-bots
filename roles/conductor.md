@@ -92,14 +92,14 @@ For each PR at the head of the queue:
 6. **Clean up the PR's worktree and branches.** Per
    [`../skills/worktree-per-pr.md`](../skills/worktree-per-pr.md),
    the builder/fixer have been working in
-   `/home/kris/endo-wt/pr-<N>` and on branch `<head-ref-name>`.
+   `~/endo-wt/pr-<N>` and on branch `<head-ref-name>`.
    After the merge lands, both are dead weight. Cleanup is the
    conductor's responsibility:
    ```sh
-   cd /home/kris/garden  # leave any conductor worktree first
+   cd ~/garden  # leave any conductor worktree first
    N=<PR-number>
    BRANCH=<head-ref-name>
-   WT=/home/kris/endo-wt/pr-${N}
+   WT=~/endo-wt/pr-${N}
    [ -d "$WT" ] && git worktree remove "$WT"
    git branch -D "$BRANCH" 2>/dev/null || true
    gh api -X DELETE \

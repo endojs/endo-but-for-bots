@@ -104,7 +104,7 @@ issue or design document, and shepherding it through to a green PR.
   packages for one problem, which is clearly not the intent.
   Pre-flight check: when the design names a package
   (`packages/<X>`) or a problem domain (e.g. "OS sandbox plugin"),
-  run `git -C /home/kris/garden ls-tree -r bots-ssh/llm
+  run `git -C ~/garden ls-tree -r bots-ssh/llm
   --name-only | grep -E '^packages/<plausible-name>'` for both
   the design's literal package name AND any plausible synonyms
   (e.g. `daemon-os-sandbox-plugin` design vs. `@endo/sandbox`
@@ -175,12 +175,12 @@ issue or design document, and shepherding it through to a green PR.
   surface the discrepancy in the PR body so the maintainer can
   redirect.
 - **Always work inside a dedicated worktree at
-  `/home/kris/endo-wt/pr-<N>`** per
+  `~/endo-wt/pr-<N>`** per
   [`../skills/worktree-per-pr.md`](../skills/worktree-per-pr.md).
   Before the PR opens you don't know `<N>` yet, so create under
-  `/home/kris/endo-wt/<branch-slug>` and move with `git worktree
-  move` to `/home/kris/endo-wt/pr-<N>` immediately after `gh pr
-  create` returns. Do not work in `/home/kris/garden` (that's
+  `~/endo-wt/<branch-slug>` and move with `git worktree
+  move` to `~/endo-wt/pr-<N>` immediately after `gh pr
+  create` returns. Do not work in `~/garden` (that's
   the steward's seat) or in any other shared tree. The fixer
   inherits this worktree on the next round; the conductor
   removes it after merge.

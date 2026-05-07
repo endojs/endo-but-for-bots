@@ -32,13 +32,13 @@ lands.
 
 Per the worktree-discipline rule
 ([`../skills/worktree-per-pr.md`](../skills/worktree-per-pr.md))
-the liaison does not operate in `/home/kris/garden` (the
+the liaison does not operate in `~/garden` (the
 steward's seat). Each pass uses a dedicated worktree:
 
 ```sh
-mkdir -p /home/kris/endo-wt
-git worktree add /home/kris/endo-wt/liaison garden
-cd /home/kris/endo-wt/liaison
+mkdir -p ~/endo-wt
+git worktree add ~/endo-wt/liaison garden
+cd ~/endo-wt/liaison
 git fetch bots-ssh garden
 git merge --ff-only bots-ssh/garden
 ```
@@ -49,7 +49,7 @@ fail; create the liaison worktree with `--detach` against
 `bots-ssh/garden` instead, and push to `HEAD:garden` rather than
 to `garden`.
 
-If `/home/kris/endo-wt/liaison` already exists from a prior
+If `~/endo-wt/liaison` already exists from a prior
 pass, remove and recreate (cheap; the working tree is small).
 
 After staging the tracking-file changes, commit and push:
