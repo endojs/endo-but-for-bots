@@ -32,6 +32,9 @@ import {
  *   DigestedCompartmentDescriptor} from './types.js'
  */
 
+// TODO convert remaining `assert(...)` sites in this file to `||` style
+// for full consistency.
+
 const { keys, entries } = Object;
 const { isArray } = Array;
 
