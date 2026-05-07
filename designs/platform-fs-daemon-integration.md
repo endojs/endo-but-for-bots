@@ -194,11 +194,16 @@ The Agent _does_ see (post-integration):
 3. **Does `Mount.lookup()` returning a transient sub-exo break the
    `Directory` interface?** The `Mount` exo's transient sub-exos do not
    round-trip through pet names; they are equality-distinct on every
-   lookup. If agent code expects sub-directory references to be stable
-   (e.g., for memoization), this is a behavioural difference from
-   `makeDirectory`'s sub-lookup which returns the same identity for the
-   same path within a process. May warrant a documented caveat or a
-   memoization layer.
+   lookup.
+   This is a behavioural difference from `makeDirectory`'s sub-lookup
+   which returns the same identity for the same path within a process.
+   This design does **not** add a memoization layer for `Directory`
+   references.
+   Memoizing them is risky because the filesystem may change beneath the
+   Node.js interface, so cached references could refer to entries that
+   have been removed, replaced, or shadowed.
+   Plan: warrant a documented caveat instead, and let agent code re-look
+   up on demand.
 
 4. **Should `provideMount` accept a `Mount` reference instead of an
    absolute path?** Sub-mounting (Phase 4 of `daemon-mount.md`) wants a
@@ -228,3 +233,12 @@ The Agent _does_ see (post-integration):
 - Sub-mount Phase 4 of `daemon-mount.md` itself. That phase is tracked in
   its own document; this design assumes Phase 4 either lands first or
   arrives as a sibling design that this document references.
+- A "lookup formula" mechanism that would derive a new pet-name-bearing
+  formula from an arbitrary `Directory` reference (analogous to how
+  `link(namePath, resultName)` would let a holder of a value mint a
+  named formula for it).
+  Without such a mechanism there is no way to symbolically retain a
+  reference to a specific transient sub-directory across sessions.
+  This is a known gap and warrants a future companion design (paralleling
+  the `link(namePath, resultName)` follow-on noted on the workers-panel
+  PR thread); it is not in scope here.
