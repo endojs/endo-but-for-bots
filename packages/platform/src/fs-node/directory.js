@@ -1,6 +1,26 @@
 // @ts-check
 /* eslint-disable no-await-in-loop */
 
+/**
+ * Ambient-authority factory for a mutable Directory exo backed by an
+ * arbitrary absolute filesystem path.
+ *
+ * The capability returned by `makeDirectory` conveys read, write, rename,
+ * copy, and (with an explicit flag) recursive remove authority on the
+ * entire subtree rooted at the given path: any holder can list, mutate,
+ * or destroy anything below.
+ *
+ * This factory is intended to live entirely on the host side of the daemon
+ * membrane.
+ * It must never be exposed to a guest, worker, caplet, or chat-side bot;
+ * doing so would hand that party ambient filesystem authority to a real
+ * subtree of the host process's view of the disk.
+ * Confined `Directory` references reach agents only via the `Mount` exo,
+ * which applies path clamping and symlink confinement before composing
+ * this factory.
+ * See `designs/platform-fs-daemon-integration.md`.
+ */
+
 import fs from 'node:fs';
 import path from 'node:path';
 import harden from '@endo/harden';

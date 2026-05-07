@@ -1,6 +1,25 @@
 // @ts-check
 /* eslint-disable no-await-in-loop */
 
+/**
+ * Ambient-authority factory for a mutable File exo backed by an arbitrary
+ * absolute filesystem path.
+ *
+ * The capability returned by `makeFile` conveys read and write authority on
+ * exactly that path: any holder can read its contents, overwrite it, append
+ * to it, and snapshot it through the optional content store.
+ *
+ * This factory is intended to live entirely on the host side of the
+ * daemon membrane.
+ * It must never be exposed to a guest, worker, caplet, or chat-side bot;
+ * doing so would hand that party ambient filesystem authority to whatever
+ * path the host process can open.
+ * Confined `File` references reach agents only via the `Mount` exo, which
+ * applies path clamping and symlink confinement before composing this
+ * factory.
+ * See `designs/platform-fs-daemon-integration.md`.
+ */
+
 import fs from 'node:fs';
 import harden from '@endo/harden';
 import { makeExo } from '@endo/exo';

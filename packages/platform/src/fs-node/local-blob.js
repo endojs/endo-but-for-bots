@@ -1,5 +1,22 @@
 // @ts-check
 
+/**
+ * Ambient-authority factory for a read-only ReadableBlob exo backed by an
+ * arbitrary absolute filesystem path.
+ *
+ * The capability returned by `makeLocalBlob` conveys read authority on
+ * exactly that path: any holder can stream or load its contents.
+ *
+ * This factory is intended for host-side use.
+ * It must never cross the daemon membrane to a guest, worker, caplet, or
+ * chat-side bot; doing so would hand that party ambient read authority to
+ * whatever path the host process can open.
+ * Confined `ReadableBlob` references reach agents only via the `Mount`
+ * exo, which clamps paths to a confined subtree before composing this
+ * factory.
+ * See `designs/platform-fs-daemon-integration.md`.
+ */
+
 import fs from 'node:fs';
 import harden from '@endo/harden';
 import { makeExo } from '@endo/exo';

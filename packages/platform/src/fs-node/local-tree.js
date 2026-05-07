@@ -1,6 +1,23 @@
 // @ts-check
 /* eslint-disable no-await-in-loop */
 
+/**
+ * Ambient-authority factory for a read-only ReadableTree exo backed by an
+ * arbitrary absolute filesystem path.
+ *
+ * The capability returned by `makeLocalTree` conveys read and traversal
+ * authority on the entire subtree rooted at the given path: any holder
+ * can list and stream anything reachable below.
+ *
+ * This factory is intended for host-side checkin pipelines.
+ * It must never cross the daemon membrane to a guest, worker, caplet, or
+ * chat-side bot; doing so would hand that party ambient read authority to
+ * a real subtree of the host process's view of the disk.
+ * Confined `ReadableTree` references reach agents only via the `Mount`
+ * exo's `readOnly()` view, which clamps paths to a confined subtree.
+ * See `designs/platform-fs-daemon-integration.md`.
+ */
+
 import fs from 'node:fs';
 import path from 'node:path';
 import harden from '@endo/harden';
