@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-05-06 |
-| **Updated** | 2026-05-06 |
+| **Updated** | 2026-05-07 |
 | **Author** | Kris Kowal (prompted) |
 | **Status** | Not Started |
 
@@ -141,8 +141,10 @@ The Send-mode table:
 | `at <pet-name>` | `commit-token` for `<pet-name>` |
 | `slash` | `enter-mode: command-selecting` |
 | `slash <command>` | `pick-command: <command>` |
-| `send` | `submit` |
-| `cancel` | `cancel` |
+| `submit` (with the framing pause described below) | `submit` |
+| `cancel` (with the framing pause described below) | `cancel` |
+| `quote <word>` | `append-text: <word>` (literal escape) |
+| anything else | `append-text` for the fragment |
 
 The Command-Selecting table consumes the rest of the transcript
 as a command-name fuzzy match against the registry.
@@ -153,6 +155,10 @@ and the rest of the transcript flows into the field's value.
 The wake-word tables are the load-bearing piece of the design.
 They live next to the command registry so a new command picks up
 voice support automatically when its registry entry is added.
+
+The literal `quote` escape and the framing-pause requirement on
+submit-class wake words are spelled out in the next-but-one
+section, "Escape and Enter".
 
 ## Modeline Integration
 
@@ -177,12 +183,15 @@ implementation:
 
 ### Pattern: Send a one-line message
 
-1. User clicks mic, says "at Alice send hello world"
+1. User clicks mic, says "at Alice hello world"
 2. Parser dispatches `at` → `commit-token: alice` (pet-name
    lookup happens here)
-3. Parser dispatches `send hello world` → `append-text: hello
-   world` then waits
-4. Mic stops; user clicks `Send` (or says "send" before stopping)
+3. Parser dispatches `hello world` → `append-text: hello world`,
+   then waits
+4. User pauses, says "submit" with the framing pause described in
+   "Escape and Enter" below; parser dispatches `submit`. Or the
+   user clicks the on-screen Send button. Or the user releases
+   the mic button if push-to-talk is in use.
 
 ### Pattern: Run an immediate command
 
@@ -232,6 +241,104 @@ any unconsumed buffer becomes a final `append-text` into the
 input, and the parser returns to the mode it was in when
 listening began.
 
+## Escape and Enter
+
+The wake-word vocabulary collides with the open vocabulary of
+prose the speaker may want to put into a message or a text field.
+The user must be able to say the literal words "submit", "slash
+list", or "at" without triggering the parser; conversely, the
+parser must recognise the user's intent to submit the form
+without waiting for the mic button to be released.
+
+The design picks two complementary mechanisms.
+
+### Escape: a literal-quote prefix
+
+The reserved word `quote` (configurable per locale) marks the
+following word as literal.
+A speaker who says "send the message quote slash list to Alice"
+produces the text "send the message slash list to Alice", with
+no command-mode entry.
+The parser consumes `quote` and emits `append-text` for the next
+whitespace-delimited token, then resumes ordinary parsing on the
+fragment that follows.
+
+The choice of `quote` over alternatives is deliberate:
+
+- It is unlikely to appear by accident in chat prose
+  (compared to `say`, which is conversational, or `literally`,
+  which is conversational filler).
+- It is one syllable and unambiguous when transcribed.
+- It generalises: a future `quote begin ... quote end` pair can
+  cover multi-word literals if the single-token form proves
+  insufficient.
+
+Alternatives considered are catalogued in "Open Questions".
+
+The Inline-Command-Form mode applies the same escape inside a
+field's value, so a `request` command's `description` field can
+contain the words `from` or `description` literally.
+
+### Enter: a framing-pause submit cue
+
+The parser commits a `submit` effect when it observes the wake
+word `submit` (or the synonym `send now`) flanked by silence on
+both sides.
+"Flanked" means the `SpeechRecognition` interim transcript ended
+on the previous fragment, a silence interval of at least 600 ms
+elapsed (a tunable; the existing `voice-input.js` already
+exposes a silence threshold via the `endpointing` parameter),
+and the next fragment begins with the wake word as its first
+token.
+The same pause is required after the wake word before any
+following content is accepted as the next utterance.
+
+The framing pause is what distinguishes the user saying "...
+remember to submit the form by Friday" (no pauses) from "...
+remember to submit the form by Friday. [pause] submit. [pause]"
+(framed cue).
+
+Two non-pause submit channels remain available unconditionally:
+
+- The on-screen Send button click. The chat bar's existing
+  Send-button handler always wins over voice; voice never
+  blocks a click.
+- The mic button release, if the user has enabled push-to-talk
+  in chat preferences. Release flushes the buffer to
+  `append-text` and emits `submit`.
+
+### Cancel and other framed cues
+
+The same framing-pause rule covers `cancel`, since a speaker may
+also want to say the word "cancel" inside a message ("please
+cancel my reservation").
+The full set of framed cues is `submit`, `send now`, and
+`cancel`; the `quote` escape itself does not require framing
+because its semantic is local to the next token.
+
+The wake-word table in "Wake words per mode" above marks framed
+cues with the parenthetical "with the framing pause described
+below".
+
+### Why two mechanisms instead of one
+
+A single mechanism leaves a usability hole.
+A pure modal toggle (a separate "command mode" the user enters
+explicitly) imposes a context switch on the speaker for every
+command and conflicts with the design's premise that voice
+should drive the same flow as the keyboard.
+A pure confidence-threshold approach (drop low-confidence
+command matches into dictation) cannot distinguish a
+high-confidence transcription of the literal word "submit" from
+a high-confidence transcription of the submit cue.
+
+Splitting the two cases (escape for accidental keyword
+collisions inside a fragment; framing pauses for terminal cues)
+keeps each mechanism load-bearing for one job, and matches what
+voice-assistant prior art (Google Assistant's "okay"
+disambiguation, Apple Dictation's "press period" model) already
+trains the speaker to expect.
+
 ## Test Plan
 
 The parser's unit tests are pure: feed a state and a transcript
@@ -246,6 +353,12 @@ Coverage targets:
 - Cancel from each mode.
 - Pet-name lookup failure (an `at` whose name does not resolve
   emits `append-text` rather than `commit-token`).
+- `quote <token>` escape suppresses wake-word interpretation of
+  the next token, in Send mode and inside an
+  Inline-Command-Form field value.
+- `submit`, `send now`, and `cancel` only fire when flanked by
+  the configured silence threshold; an embedded "submit" inside
+  a fragment without framing pauses is treated as `append-text`.
 
 Integration tests live alongside the existing chat tests under
 `packages/chat/test/component/` and exercise a stub
@@ -291,12 +404,20 @@ end-to-end.
    Re-applying every interim would flicker the UI.
    Wake words commit at word boundaries; only retracted wake
    words trigger inverses.
-4. **No wake-word for "submit" until the user opts in.**
+4. **Framed-pause submit, not always-on submit wake word.**
    A speaker who pauses naturally between sentences should not
-   accidentally submit; the implementation should require an
-   explicit "send now" or "submit" with a brief pause before and
-   after.
-   The exact phrasing is open (see Open Questions).
+   accidentally submit; the parser requires "submit" or "send now"
+   to be flanked by a configured silence interval (initially 600
+   ms) on both sides.
+   See "Escape and Enter" for the rule.
+5. **Per-token literal-quote escape.**
+   The reserved word `quote` marks the next token as literal and
+   suppresses wake-word interpretation, so a message can contain
+   the words "slash", "at", "submit", or any other vocabulary
+   the parser would otherwise eat.
+   Chosen over a modal command-mode toggle because the modal
+   approach forces a context switch the keyboard pipeline does
+   not require.
 
 ## Open Questions
 
@@ -317,6 +438,28 @@ end-to-end.
   does each mic click reset to Send mode?
   The latter is simpler; the former enables resuming a
   multi-step command after an accidental pause.
+- Is `quote` the right literal-escape wake word, or does an
+  alternative read better aloud?
+  Candidates considered:
+  `literally` (conversational filler; risk of false trigger),
+  `say` (collides with imperative speech in messages),
+  `quote unquote` (requires a closing token; doubles the
+  recognition surface),
+  `escape` (overloaded with the keyboard's Escape semantics).
+  `quote` was picked but the choice deserves a usability check
+  before voice support ships beyond a feature flag.
+- What is the right framing-pause threshold for the submit cue?
+  600 ms is a starting point that aligns with the
+  `endpointing` default in the existing `voice-input.js`, but
+  short-pause speakers may trip it accidentally and long-pause
+  speakers may need to wait.
+  The threshold should be tunable per user, and the modeline
+  should hint how long to wait.
+- Should the parser also accept a non-voice "enter" gesture
+  (e.g., a long-press on the mic button) as a submit cue, in
+  addition to the framing-pause "submit" wake word?
+  This would parallel push-to-talk's release-to-submit
+  behaviour for tap-to-talk users.
 
 ## Prompt
 
