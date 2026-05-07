@@ -85,6 +85,41 @@ result through CI.
   cross-PR follow-up. The fixer's lane is the current PR; reaching
   into another PR risks two simultaneous in-flight rewrites
   fighting each other.
+- **Coordinated cross-PR moves dispatched explicitly by the steward
+  (PR A removes content; PR B, based on PR A, gains the content as
+  a new package) follow a strict sequence.** First land PR A's
+  removal commit and push. Then in PR B's worktree, fetch PR A's
+  new tip and rebase. If PR B's only commit was `add X to file Y`
+  and PR A just deleted file Y, the cleanest path is to drop PR
+  B's commit during the rebase rather than fight conflicts:
+  `git rebase --onto bots-ssh/<PR-A-branch> <old-PR-A-tip>`
+  with PR B's old base SHA leaves the working tree at PR A's new
+  tip with PR B's original commit dropped, ready for a fresh
+  package-creation commit on top. Apply the equivalent change as
+  a new commit (here, "create the new package" rather than "modify
+  the deleted file"). Push PR B with `--force-with-lease` because
+  the rebase rewrote history. Session example: PR 75 removed
+  `packages/random/fast-check.js`; PR 107 was based on a tip that
+  added v8 adapters to that file. Rebase dropped the v8 commit;
+  the fresh commit created `packages/random-fast-check/` with
+  both v5 and v8 adapters bundled into the new package.
+- **When relocating an adapter to its own package, restate the
+  thin upstream types locally rather than depend on the source
+  package exposing its `*.types.d.ts` subpath.** A cross-package
+  `@import { Foo } from '@upstream/pkg/types.d.ts'` requires
+  `@upstream/pkg`'s `package.json` to list `./types.d.ts` (or
+  `./*.d.ts`) as an export. If the upstream is being narrowed in
+  the same coordinated move (so its exports list shrinks), adding
+  the type subpath back conflicts with the narrowing. The
+  decoupled choice is to restate the small contract type in the
+  new package's own `*.types.d.ts`. The duplication is ~5 lines
+  and removes an artificial dependency. Session example:
+  `RandomSource` (a one-line `(out: Uint8Array) => void` type) was
+  duplicated in `packages/random-fast-check/random-fast-check.types.d.ts`
+  rather than imported from `@endo/random/random.types.d.ts`,
+  because PR 75 narrowed `@endo/random`'s exports surface and
+  re-adding a `./random.types.d.ts` subpath would have been
+  inconsistent with that narrowing.
 - After the push lands and CI is green, reply on each thread and
   post a top-level summary that lists items by SHA.
 - **A `CHANGES_REQUESTED` review that asks for both a code change
