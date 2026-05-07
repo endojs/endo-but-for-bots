@@ -270,6 +270,36 @@ an agent in the `builder` role to implement from later.
   upstream repo so the head ref is read from the right namespace.
   Encountered on issue #110 → PR 115 (filesystem watchers).
 
+- **Inline review comment as the explicit dispatch instruction.**
+  A maintainer can write `Dispatch a subagent to design a response to
+  this question for later consideration` (or a close paraphrase) as
+  an **inline** review comment anchored to a specific line of an
+  existing design (typically inside an Open Questions section).
+  That comment is the brief: the surrounding section is the prompt,
+  the comment id is the reply target, and the parent design is the
+  sibling that the new design must cross-link.
+  Procedure:
+  1. The new design is a fresh sibling at
+     `designs/<slug>.md`, not an edit to the parent design's body.
+     PR #115 stays focused on its own scope; the deferred question
+     gets its own document with its own metadata table.
+  2. The PR body for the sibling design opens by linking the inline
+     comment URL (`#discussion_r<id>`) and quoting the maintainer's
+     ask verbatim.
+     `Source` on the metadata table reads
+     `PR #<N> inline review comment on Open Question #<K>`.
+  3. After opening the sibling PR, post the link as an
+     `in_reply_to` reply on the original inline thread:
+     `gh api -X POST "repos/<owner>/<repo>/pulls/<N>/comments" -f
+     body="Sibling design opened in #<M>..." -F in_reply_to=<id>`.
+     The reply ties the deferral to its resolution so neither
+     thread is orphaned.
+  4. `Status` on the new design is `Proposed` (not `Not Started`)
+     when the design's purpose is to surface choice points rather
+     than commit to one; the README summary reflects the same.
+  Encountered on PR 115 OQ #6 → PR 117 (NameHub interface
+  unification).
+
 ## Self-improvement
 
 The final task of every engagement is to update this role file and
