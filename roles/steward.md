@@ -227,6 +227,21 @@ the steward records them in the cycle log even when "no action
 warranted" is the outcome. Silence on the comment-survey step is
 the recurring failure mode this rule prevents.
 
+**Pitfall: the bots repo defaults to `llm`, not `main`, and
+`process/*.md` lives on `garden`.** A `gh api
+repos/endojs/endo-but-for-bots/contents/<path>` call without an
+explicit `?ref=` lands on the default branch (`llm`), which
+carries the design tree but NOT `process/PR-DISPATCH-STATE.md`
+or any of the steward's process files (those are on `garden`).
+Subagent briefs that ask the agent to fetch process files via
+the contents API must pass `?ref=garden`; design files use the
+default ref or `?ref=llm`. Subagent briefs that ask the agent
+to fetch its own brief context (read-only) should also note this.
+Encountered 2026-05-07 on the #120 review-priority researcher:
+the brief asked it to fetch `process/PR-DISPATCH-STATE.md` via
+the contents API; that 404'd because `?ref=garden` was missing.
+The agent worked around it by skipping that input.
+
 **Pitfall: the lightweight liaison-vacuous-check brief is NOT a
 substitute for the director sweep.** A common shortcut on quiet
 cycles is to dispatch a 50-word "liaison: scan and report

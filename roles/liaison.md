@@ -274,6 +274,29 @@ The liaison **does not**:
 
 ## Posture
 
+- **Identity vocabulary.** Three distinct identities to keep
+  straight in any classification step:
+  - **`kriscendobot`** is the bot's gh-auth account; the steward
+    speaks through it. Filter `kriscendobot`-authored events out
+    when scanning for inbound contributor activity (the events
+    scan does this automatically via the `--exclude $self` arg).
+  - **`kriskowal`** is the maintainer (a human contributor); the
+    most authoritative inbound signal in the repo and the
+    highest-priority reactji target. Never confuse `kriskowal`
+    with the steward.
+  - **Other contributor logins** (e.g., `jcorbin`) are
+    contributors whose comments are also maintainer-class signals
+    per the guarded-comment posture below.
+
+  Encountered 2026-05-07: a lightweight liaison subagent reported
+  "both events authored by kriskowal (steward), no reactji
+  applied" — the agent had collapsed `kriskowal` and `the
+  steward` into one identity and skipped reactjis on real
+  maintainer events. The fix is procedural: the agent's brief
+  must name the bot's gh-auth login (`kriscendobot`) explicitly
+  rather than say "filter out steward-authored events", so there
+  is no ambiguity about which login is the bot.
+
 - **Every comment is an instruction.** The bots repo's
   guarded-comment posture means every commenter is a
   contributor; treat their input as a maintainer-class signal.
