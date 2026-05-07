@@ -446,12 +446,10 @@ const assertParsers = (allegedParsers, keypath, url) => {
  * @returns {asserts allegedTruthyValue is NonNullable<unknown>}
  */
 const assertTruthy = (allegedTruthyValue, keypath, url) => {
-  assert(
-    allegedTruthyValue,
-    url
-      ? `${keypath} in ${q(url)} must be truthy; got ${q(allegedTruthyValue)}`
-      : url,
-  );
+  allegedTruthyValue ||
+    (url
+      ? Fail`${b(keypath)} in ${q(url)} must be truthy; got ${q(allegedTruthyValue)}`
+      : Fail`${q(url)}`);
 };
 
 /**
