@@ -43,9 +43,33 @@ wakeup still fires per the cadence rules below even if the daemon
 or the monitor dies. Both paths converge on the same `/loop the
 steward` re-entry. The daemon's PID + log files live in `/tmp`,
 so a session restart needs to re-spawn it. State (ETag + last
-seen event ID) persists at `~/.cache/endo-events-poll-state` so
-a daemon restart does not replay every prior event as a fresh
-trigger.
+seen `created_at` timestamp) persists at
+`~/.cache/endo-events-poll-state` so a daemon restart does not
+replay every prior event as a fresh trigger.
+
+**Pitfall: `tail -F` doesn't replay history; read the log at
+cycle start.** A `Monitor` armed with `tail -F /tmp/poll-events.log`
+only streams lines added AFTER the Monitor's tail starts; it does
+NOT replay lines that the daemon wrote while the prior Monitor
+was dead (Monitors die at conversation-turn boundaries — the
+`bg2kx8s47`-style task IDs from before the boundary are gone the
+next time `TaskList` is called). Combined with the
+turn-boundary-monitor-death pattern, this means: events that fire
+during the gap between turns are written to the log but never
+delivered as `<task-notification>`.
+
+Fix: every steward cycle's first action is `tail -50
+/tmp/poll-events.log` (or whatever depth covers the time since
+the prior cycle's wake-up). Treat any `NEW [0-9]` line newer than
+the prior cycle's close as an event the steward must action,
+exactly as if it had arrived as a notification. The daemon log
+is the source of truth; the Monitor is just the early-wake
+optimization. Encountered 2026-05-07: kriskowal submitted a
+review on PR 119 at 18:15:58, the daemon caught it at 18:16:24
+and wrote `NEW 2 ... PullRequestReviewEvent/...@#119` to the
+log, but the Monitor armed at 18:25 only saw lines after 18:25
+and never fired on the 18:16 line. The maintainer pointed at
+the missed review directly.
 
 ## Sub-roles dispatched per cycle
 
