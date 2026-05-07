@@ -269,11 +269,20 @@ export const makeDirectory = (dirPath, options = {}) => {
         },
 
         /**
+         * Remove a file or empty directory at the given path.
+         *
+         * Pass `{ recursive: true }` to delete a non-empty directory and
+         * everything beneath it.
+         * Without that flag, attempting to remove a non-empty directory
+         * fails loudly rather than silently destroying the subtree.
+         *
          * @param {string[]} pathSegments
+         * @param {{ recursive?: boolean }} [removeOptions]
          */
-        remove: async pathSegments => {
+        remove: async (pathSegments, removeOptions = {}) => {
+          const { recursive = false } = removeOptions;
           const target = resolve(pathSegments);
-          await fs.promises.rm(target, { recursive: true });
+          await fs.promises.rm(target, { recursive });
         },
 
         /**
