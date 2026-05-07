@@ -25,6 +25,7 @@
       "node": "./src/fs-node/index.js"
     },
     "./fs/lite": "./src/fs/index.js",
+    "./fs/lite/interfaces": "./src/fs/interfaces.js",
     "./fs/lite/types": "./src/fs/types.js",
     "./fs/node": "./src/fs-node/index.js",
     "./proc": "./src/proc.js",

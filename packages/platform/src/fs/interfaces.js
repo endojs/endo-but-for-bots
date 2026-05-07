@@ -1,5 +1,21 @@
 // @ts-check
 
+/**
+ * Shared exo interface guards for the platform fs surface.
+ *
+ * Importable as `@endo/platform/fs/lite/interfaces` (no `node:fs`
+ * dependency), so workers, caplets, and confined agents can declare or
+ * accept exos satisfying these guards without dragging in Node-only
+ * primitives.
+ *
+ * The `@endo/platform/fs/node` `makeFile` and `makeDirectory` exos
+ * satisfy `FileInterface` and `DirectoryInterface` respectively.
+ * Daemon-side wrappers (notably `@endo/daemon`'s `Mount` exo) compose
+ * these primitives behind a confinement membrane and likewise expose a
+ * `Directory`-shaped surface to agents.
+ * See `designs/platform-fs-daemon-integration.md`.
+ */
+
 import { M } from '@endo/patterns';
 
 export const AsyncIteratorInterface = M.interface('AsyncIterator', {
