@@ -1016,13 +1016,25 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@endo/ocapn-noise@workspace:packages/ocapn-noise"
   dependencies:
+    "@endo/errors": "workspace:^"
+    "@endo/eventual-send": "workspace:^"
+    "@endo/harden": "workspace:^"
+    "@endo/init": "workspace:^"
     "@endo/lockdown": "workspace:^"
+    "@endo/marshal": "workspace:^"
+    "@endo/netstring": "workspace:^"
+    "@endo/ocapn": "workspace:^"
     "@endo/ses-ava": "workspace:^"
+    "@endo/stream": "workspace:^"
+    "@endo/stream-node": "workspace:^"
+    "@types/ws": "npm:^8.18.1"
     ava: "catalog:dev"
     c8: "catalog:dev"
     eslint: "catalog:dev"
+    ses: "workspace:^"
     tsd: "catalog:dev"
     typescript: "catalog:dev"
+    ws: "npm:^8.13.0"
   languageName: unknown
   linkType: soft
 
@@ -2735,7 +2747,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@types/ws@npm:^8":
+"@types/ws@npm:^8, @types/ws@npm:^8.18.1":
   version: 8.18.1
   resolution: "@types/ws@npm:8.18.1"
   dependencies:
