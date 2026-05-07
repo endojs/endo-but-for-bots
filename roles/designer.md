@@ -214,6 +214,25 @@ an agent in the `builder` role to implement from later.
   Encountered on PR 96 (compartment-mapper auxiliary package.json
   overrides).
 
+  **Verify the brief's line-to-section mapping against the actual
+  comment line numbers.** When the brief includes a table mapping
+  inline-comment IDs to specific sections of the design (Open
+  Question #N, Alternative Y, etc.), and a comment lands on the
+  boundary between two sections, the brief is at risk of
+  off-by-one. A `line: 446` comment that the brief calls "OQ #3
+  follow-on" is the last line of OQ #4 if OQ #4 happens to end at
+  446; a "Agreed." on a recommendation line endorses the
+  recommendation immediately above it, not the one two paragraphs
+  up. The brief is a starting point; the comment's `line` field is
+  ground truth. When the mapping disagrees: trust the line, fold
+  the answer into the section the line actually anchors, and call
+  out the discrepancy in the top-level summary so the maintainer
+  can flag it cheaply if their intent was different. Do not silently
+  fold an answer into the section the brief named when the line
+  number disagrees; that risks promoting a question with the wrong
+  decision and is harder to undo than a corrective top-level note.
+  Encountered on PR 115 (filesystem-watchers, line 446).
+
 - **Re-opening a maintainer-authored design PR under the bot
   account.** When the design PR you are extracting from was
   authored by the maintainer who must now review it (typically
