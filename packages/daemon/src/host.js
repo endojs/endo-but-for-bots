@@ -1263,6 +1263,8 @@ export const makeHostMaker = ({
       submit,
       sendValue,
       deliverValueById,
+      editMessage,
+      messageHistory,
     } = mailbox;
 
     /**
@@ -1392,6 +1394,8 @@ export const makeHostMaker = ({
       reply,
       request,
       send,
+      editMessage,
+      messageHistory,
       form,
       // Host
       storeBlob,
