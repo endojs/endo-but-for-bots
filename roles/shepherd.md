@@ -128,6 +128,31 @@ architectural ones.
   `--force-with-lease=<branch>:<old-sha>`. `maintainerCanModify`
   reads false on these PRs because the head repo equals the base
   repo, not because access is restricted.
+- **"Monitor armed; ending dispatch" is not the same as a live
+  monitor.** A persistent Monitor armed inside a sub-agent
+  dispatch is scoped to that agent's lifetime; when the agent
+  ends, the Monitor task is reaped along with it. A shepherd
+  that ends its dispatch with "monitor running, I'll wait
+  passively" leaves the orchestrator (the steward) with NO
+  active monitor — the next steward sweep is the actual
+  re-check, not a `<task-notification>` event. Same recurring
+  failure mode the conductor surfaced in
+  [`./conductor.md`](./conductor.md) under "Arming a Monitor is
+  not the same as issuing the merge". For the shepherd, this is
+  benign: the next steward fire scans CI again and either
+  sees green (deliver the green-run-URL comment then) or sees
+  a fresh failure to address. But the wording "monitor running"
+  in the shepherd's report is misleading; report the actual
+  state ("pushed `<sha>`; CI propagating; next steward cycle
+  will verify convergence") instead.
+
+  Encountered on PR 119 (jcorbin-sandbox-paths CI repair):
+  shepherd pushed the fix and ended with "monitor running"; the
+  steward's `TaskList` showed no live tasks. CI did converge
+  green via the next sweep, so functionally fine, but the
+  steward had to verify ground truth rather than trust the
+  hand-off note.
+
 - **Conflicting PR blocks CI dispatch.**
   `pull_request` workflows run on the synthetic merge ref
   (`refs/pull/<N>/merge`).
