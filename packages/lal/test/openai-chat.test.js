@@ -37,7 +37,7 @@ test('toOpenAIChatMessages converts system/user/tool/assistant roles', t => {
   ]);
 });
 
-test('toOpenAIChatMessages preserves assistant tool_calls', t => {
+test('toOpenAIChatMessages emits tool_calls with type: function', t => {
   /** @type {CommonChatMessage[]} */
   const input = [
     {
@@ -54,10 +54,34 @@ test('toOpenAIChatMessages preserves assistant tool_calls', t => {
       role: 'assistant',
       content: '',
       tool_calls: [
-        { id: 'call_1', function: { name: 'foo', arguments: '{"x":1}' } },
+        {
+          id: 'call_1',
+          type: 'function',
+          function: { name: 'foo', arguments: '{"x":1}' },
+        },
       ],
     },
   ]);
+});
+
+test('toOpenAIChatMessages stringifies object arguments', t => {
+  /** @type {CommonChatMessage[]} */
+  const input = [
+    {
+      role: 'assistant',
+      content: '',
+      tool_calls: [
+        { id: 'call_1', function: { name: 'foo', arguments: { x: 1 } } },
+      ],
+    },
+  ];
+  const result = toOpenAIChatMessages(input);
+  const [msg] = result;
+  t.is(msg.role, 'assistant');
+  t.is(
+    /** @type {any} */ (msg).tool_calls[0].function.arguments,
+    '{"x":1}',
+  );
 });
 
 test('parseOpenAIChatChoice returns empty assistant message for missing choice', t => {

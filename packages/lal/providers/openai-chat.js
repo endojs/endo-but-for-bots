@@ -61,20 +61,22 @@ harden(toOpenAIChatTools);
 export const toOpenAIChatMessages = messages =>
   messages.map(msg => {
     if (msg.role === 'assistant') {
+      /** @type {import('openai/resources/chat/completions').ChatCompletionAssistantMessageParam} */
       const out = { role: 'assistant', content: msg.content || '' };
       if (msg.tool_calls && msg.tool_calls.length > 0) {
-        // @ts-expect-error tool_calls lacks the `type: 'function'`
-        // discriminator until a follow-up commit; the OpenAI server
-        // tolerates the omission today.
         out.tool_calls = msg.tool_calls.map(tc => ({
-          id: tc.id,
+          id: tc.id ?? '',
+          type: 'function',
           function: {
             name: tc.function.name,
-            arguments: tc.function.arguments,
+            arguments:
+              typeof tc.function.arguments === 'string'
+                ? tc.function.arguments
+                : JSON.stringify(tc.function.arguments ?? {}),
           },
         }));
       }
-      return /** @type {ChatCompletionMessageParam} */ (out);
+      return out;
     }
     if (msg.role === 'tool') {
       return {
