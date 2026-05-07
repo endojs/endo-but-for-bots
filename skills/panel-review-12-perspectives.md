@@ -24,6 +24,21 @@ perspective genuinely not applicable to the change:
 10. Backwards compatibility (existing-user impact)
 11. Documentation / metadata (README, rule index, changelog)
 12. Security / capability surface
+13. Adversarial / saboteur — runs the
+    [`adversarial-tests.md`](./adversarial-tests.md) brainstorming
+    list and the
+    [`saboteur-adversarial-review.md`](./saboteur-adversarial-review.md)
+    pattern catalog against the diff, surfacing concrete attack
+    vectors with verdicts (real concern / mitigated / out of scope).
+    The deliverable is review findings, not test files; the
+    test-writing variant lives in [`../roles/saboteur.md`](../roles/saboteur.md)
+    and is dispatched separately when explicitly asked. The
+    adversarial juror folds into the same single panel verdict as
+    the other twelve, so the steward's hand-off is one fixer
+    dispatch, not two parallel ones. Per maintainer direction
+    2026-05-07: "fold the saboteur into the jury, as one of the
+    assigned juror roles, then it is straight forward to
+    synchronize a verdict and hand off to a fixer."
 
 For specific kinds of PRs, swap in:
 

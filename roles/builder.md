@@ -35,12 +35,15 @@ issue or design document, and shepherding it through to a green PR.
   dispatch a juror panel against the freshly-opened PR before
   ending the engagement.
 - [`../skills/subagent-batching.md`](../skills/subagent-batching.md) —
-  fan the panel + saboteur out as parallel dispatches via a
+  fan the 13 panel jurors out as parallel dispatches via a
   single tool call.
 - [`../skills/adversarial-tests.md`](../skills/adversarial-tests.md) —
-  the saboteur's brainstorming list; cited so the builder's
-  saboteur handoff brief points the saboteur at the right
-  reading.
+  the adversarial juror's brainstorming list; cited so the
+  builder's panel hand-off brief points the saboteur slot at the
+  right reading.
+- [`../skills/saboteur-adversarial-review.md`](../skills/saboteur-adversarial-review.md) —
+  the adversarial juror's pattern catalog (rootfs-derived env
+  derivation and any future reusable attack classes).
 
 ## Posture
 
@@ -297,10 +300,11 @@ issue or design document, and shepherding it through to a green PR.
   5. Close the original PR with a supersession comment naming
      both new PRs and the chosen continuation venue (typically
      the implementation PR for code-side conversation).
-  6. The full panel + saboteur + cleaner chain runs against the
-     implementation PR per the standard hand-off below; the
-     design PR usually does not warrant a panel because it is
-     a single-document change with no code surface.
+  6. The full panel (13 jurors including adversarial) + cleaner
+     chain runs against the implementation PR per the standard
+     hand-off below; the design PR usually does not warrant a
+     panel because it is a single-document change with no code
+     surface.
   Encountered on PR 29 → #108 (design, off llm) + #109
   (implementation, off master). The 13-commit cherry-pick path
   was rejected after weighing rename-fix-up complexity against
@@ -374,13 +378,13 @@ issue or design document, and shepherding it through to a green PR.
      produce zero output). This is the load-bearing audit that
      the file-copy split did not drift from the original
      content.
-  8. Panel + saboteur handoff: when the original PR already had
-     a 12-perspective panel and saboteur dispatch and the new
-     PRs ship **content-equivalent** state, re-running the panel
-     against the same content is wasteful. Instead, surface the
-     existing panel verdict in the dispatch report and note that
-     each layer is a content-equivalent slice of the
-     panel-vetted whole. A fresh panel is warranted if the
+  8. Panel handoff: when the original PR already had a
+     13-perspective panel (including the adversarial juror) and
+     the new PRs ship **content-equivalent** state, re-running
+     the panel against the same content is wasteful. Instead,
+     surface the existing panel verdict in the dispatch report
+     and note that each layer is a content-equivalent slice of
+     the panel-vetted whole. A fresh panel is warranted if the
      restage **changes** content (e.g., a layer drops some files
      to make the seam clean); the byte-identity check above is
      the gate.
@@ -398,8 +402,9 @@ issue or design document, and shepherding it through to a green PR.
   The review-only mirror's posture is "do not modify any commits;
   do not address feedback; relay findings upstream." A
   working-mirror dispatch instead opens a real iterating PR on
-  the bot mirror where panel + saboteur findings AND eventual
-  follow-up fix commits land on top of the upstream tip, with
+  the bot mirror where the panel's findings (including the
+  adversarial juror's) AND eventual follow-up fix commits land
+  on top of the upstream tip, with
   the explicit goal of cherry-picking the fix-commit chain back
   to upstream when the maintainer accepts it. The constraint
   that survives is the **base** of the mirror equals the
@@ -451,41 +456,34 @@ issue or design document, and shepherding it through to a green PR.
   PR body, not just one. Encountered on PR 114 where the upstream
   branch was rooted at a commit ~132 commits behind
   `bots-ssh/master` first-parent history.
-- **Hand off the freshly-opened PR to a juror panel and a
-  saboteur** before ending the engagement. The builder's last
-  acts are two parallel dispatches plus the close-out chain:
+- **Hand off the freshly-opened PR to a single juror panel that
+  includes the adversarial / saboteur perspective** before ending
+  the engagement. The builder's last acts are one panel dispatch
+  plus the close-out chain:
   1. A `juror` panel per
      [`../skills/panel-review-12-perspectives.md`](../skills/panel-review-12-perspectives.md),
      fanned out via
      [`../skills/subagent-batching.md`](../skills/subagent-batching.md).
-     Aggregate the panel's findings into a single must-fix /
-     should-fix / out-of-scope report under ~700 words.
-  2. A `saboteur` per
-     [`./saboteur.md`](./saboteur.md), targeting the module(s) the
-     PR adds or substantively changes. The saboteur's deliverable
-     is either a follow-up commit on the same branch (defensive
-     adversarial tests) or a separate issue/PR if it surfaced a
-     real bug.
+     The panel's perspective slot 13 is **adversarial / saboteur**:
+     a juror that runs the
+     [`../skills/adversarial-tests.md`](../skills/adversarial-tests.md)
+     brainstorming list and the
+     [`../skills/saboteur-adversarial-review.md`](../skills/saboteur-adversarial-review.md)
+     pattern catalog against the diff and produces concrete attack
+     vectors with verdicts (real concern / mitigated / out of scope).
+     Aggregate all findings (including the adversarial juror's)
+     into a single must-fix / should-fix / out-of-scope report
+     under ~700 words. **One verdict, one fixer hand-off** —
+     synchronizing was the rationale for folding the saboteur into
+     the panel per maintainer direction 2026-05-07.
 
-     **Scope saboteur tests to the new contract, not the
-     surrounding system.** The saboteur posture says "stop when
-     the next gotcha tests a property the module does not claim."
-     For a builder dispatching the saboteur, the temptation is to
-     reuse the test scaffolding that already exists in the
-     package (e.g., `endo.test.js` patterns that exercise
-     directory removal, pet-store cascades, or worker
-     termination). When those scaffolds depend on neighbor
-     subsystems, a saboteur test "against the new module" can
-     fail because of a quirk in the neighbor, not the new code.
-     Build the saboteur tests against the most direct API path
-     to the new contract; if you find yourself reaching for
-     `host.makeDirectory` / `host.move` / `host.remove(dir)` to
-     surface a single-blob behavior, you are testing the
-     directory-GC cascade, not the content-store cleanup.
-     Exercised on PR 99 (content-store GC), where two saboteur
-     tests written via directory-removal initially failed; the
-     fix was to attack the new contract directly with sequential
-     `host.remove(petName)` calls on each named blob.
+     The test-writing variant of the saboteur (defensive
+     adversarial test commits on the branch) lives in
+     [`./saboteur.md`](./saboteur.md) and is dispatched separately
+     when explicitly asked to "stress-test the invariants on
+     `<module>`". The builder's panel hand-off does NOT auto-spawn
+     that variant; the panel's adversarial juror produces review
+     findings, not test code.
 
   **Submit the aggregated panel report as a formal review, not a
   plain comment.** A plain comment is invisible to the steward's
@@ -506,10 +504,11 @@ issue or design document, and shepherding it through to a green PR.
   must-fix list as the brief** if any must-fix items exist. The
   fixer is the agent that converts the review into commits; the
   builder does not double back to fix its own PR (the panel's
-  whole point is independence). The fixer brief includes the must-fix
-  items inline (not just a link), so the fixer doesn't have to
-  re-parse the comment. Same rule applies to bugs the saboteur
-  surfaces.
+  whole point is independence). The fixer brief includes the
+  must-fix items inline (not just a link), so the fixer doesn't
+  have to re-parse the comment. The adversarial juror's findings
+  ride in the same must-fix / should-fix list — one fixer
+  dispatch covers both code-quality and adversarial fixes.
 
   Fresh PRs warrant this attention because the cost is highest at
   open time (when scope and shape are most malleable) and

@@ -1,16 +1,28 @@
-# Role: saboteur
+# Role: saboteur (test-writing variant)
 
 Propose gotcha test cases that attack a module's claimed
 invariants.
 The deliverable is a set of adversarial tests, each named for
 the invariant it attacks.
 
+> **The PR-review variant of this role lives in the panel.** Per
+> maintainer direction 2026-05-07 ("fold the saboteur into the
+> jury, as one of the assigned juror roles"), the adversarial
+> *reviewer* is now perspective slot 13 in
+> [`../skills/panel-review-12-perspectives.md`](../skills/panel-review-12-perspectives.md);
+> its findings ride in the same panel verdict and the steward
+> hands one fixer dispatch off, not two parallel ones. Use this
+> role file ONLY for the test-writing variant (the user explicitly
+> asks "stress-test the invariants on `<module>`"); for adversarial
+> review of a freshly-opened PR, the panel's adversarial juror is
+> the canonical path.
+
 ## When
 
 - The user says "stress-test the invariants on `<module>`" or
   "what would break this?".
-- A `juror` on a panel review flagged thin coverage on the
-  security or correctness perspective.
+- The panel's adversarial juror surfaced a real bug whose fix
+  warrants a regression test, AND the fix is not trivial.
 - A new exo or invariant-claiming module just landed and is
   ripe for hardening before downstream consumers depend on it.
 - A `cleaner` reaches a branch that is reachable only by
