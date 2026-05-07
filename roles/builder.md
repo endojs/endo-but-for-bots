@@ -270,6 +270,92 @@ issue or design document, and shepherding it through to a green PR.
   was rejected after weighing rename-fix-up complexity against
   the direct-copy-at-HEAD alternative; the latter took two
   commits and zero conflicts.
+- **Restaging an oversized PR into a stack of N homogeneous
+  layers.** When a maintainer says "this has become an unwieldy
+  review; restage these commits into a stack of smaller
+  reviewable layers," the request is **not** the design /
+  implementation split above. It is a same-base-class
+  size-reduction split: every layer is code (or every layer is
+  doc), each layer ships one reviewable concern, and each layer
+  is **based on the previous layer's branch**, not on `master`.
+  This builds a stack the maintainer can review and merge
+  top-down; later layers rebase onto the new master tip as each
+  predecessor lands.
+  Procedure:
+  1. Read the PR's diff once and identify the natural seams.
+     Per-package boundaries are the strongest seam (`packages/X`
+     vs `packages/Y`); per-directory boundaries within a package
+     (`src/` vs `test/`) are the next-strongest. Test files that
+     exercise modified-existing API land with the API change
+     (the test asserts the new contract), not in a tests-only
+     layer; brand-new test files for brand-new modules land in
+     the tests layer. The PR-59 split landed
+     `bindings.test.js` / `failures.test.js` /
+     `encodings.test.js` (modified-existing) with the bindings
+     in layer 2, and only the brand-new `network.test.js` /
+     `crossed-hellos.test.js` / `integration.test.js` / fabrics
+     in layer 3.
+  2. Surface impasse if a seam fails the **lint+build+test
+     standalone** check. A layer that lints clean against
+     master's stale tests of the new API is impasse: either the
+     stale tests come along (preferred) or the layer must be
+     bigger. The PR-59 layer 2 attempted to ship bindings
+     without the updated bindings tests; `tsc` failed against
+     master's old bindings test signatures. The fix was to
+     promote the three modified-existing test files into layer
+     2.
+  3. **Same direct-copy-at-HEAD pattern as the design /
+     implementation split.** Do not cherry-pick the original
+     PR's 13-commit chain onto N branches; that is N times the
+     conflict surface. Instead, for each layer's branch:
+     - `git worktree add` off the previous layer's branch (or
+       `bots-ssh/master` for layer 1).
+     - For each file the layer owns:
+       `git checkout <pr-head-sha> -- <file>`.
+     - `npx corepack yarn install` to refresh the lock; commit
+       substance, then commit `yarn.lock` separately as
+       `chore: Update yarn.lock`.
+     - Run the pre-PR checklist for **each layer** so each layer
+       lints, builds, and tests cleanly on its own.
+  4. Each layer's PR body opens with `Refs: #<orig> #<prev-layer>`
+     and a one-line "Layer N of M" framing. Each layer's body
+     names the next/prev layer's PR number (after they exist).
+     Per the standard pre-PR checklist's no-methodology-leak
+     rule, do not cite "the agent" or "the steward" or this
+     procedure in the body; cite **substance** ("split the test
+     surface so the netlayer-driver review is not crowded by
+     fabrics").
+  5. Close the original PR with a supersession comment naming
+     all N new PRs and their dependency chain ("merging
+     top-down").
+  6. Request review from the maintainer on **each** new PR
+     (`gh api -X POST .../pulls/<n>/requested_reviewers --input -
+     <<< '{"reviewers":["<login>"]}'`). The maintainer reviews
+     bottom-up (layer 1 first) and merges top-down.
+  7. **Verify the stack tip is byte-identical to the original
+     PR head** before closing the original
+     (`git diff --stat <stack-tip-ref>..<orig-pr-head>` should
+     produce zero output). This is the load-bearing audit that
+     the file-copy split did not drift from the original
+     content.
+  8. Panel + saboteur handoff: when the original PR already had
+     a 12-perspective panel and saboteur dispatch and the new
+     PRs ship **content-equivalent** state, re-running the panel
+     against the same content is wasteful. Instead, surface the
+     existing panel verdict in the dispatch report and note that
+     each layer is a content-equivalent slice of the
+     panel-vetted whole. A fresh panel is warranted if the
+     restage **changes** content (e.g., a layer drops some files
+     to make the seam clean); the byte-identity check above is
+     the gate.
+  Encountered on PR 59 → #111 (layer 1: ocapn codec injection +
+  NonceLocator, off master) + #112 (layer 2: ocapn-noise
+  netlayer + Rust + WASM + bindings tests, off layer 1) + #113
+  (layer 3: integration + transport tests, off layer 2). The
+  13-commit cherry-pick path across three branches with shared
+  files was rejected in favor of file-copy-at-HEAD per layer;
+  each layer was 2 commits (substance + lockfile) and the byte
+  identity check confirmed zero drift.
 - **Hand off the freshly-opened PR to a juror panel and a
   saboteur** before ending the engagement. The builder's last
   acts are two parallel dispatches plus the close-out chain:
