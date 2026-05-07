@@ -57,23 +57,6 @@ An **eligible design** is one that:
    `vacuous-satisfaction` outcome with the count: `N waiting on
    dependencies, M in review`.
 
-5. **If eligible designs exist BUT the maintainer review queue
-   exceeds turnaround capacity**: the floor-of-1 invariant is
-   pragmatically subordinate to the maintainer's review
-   bandwidth. Each new builder dispatch produces another PR;
-   when the open-PR-awaiting-review count crosses ~10 entries,
-   adding more dilutes maintainer attention without forward
-   motion. Return a `vacuous-satisfaction (review-queue depth=N,
-   deferring <next-eligible-slug>)` outcome and idle. The
-   marshal does not unilaterally judge "too deep"; ~10 is the
-   default heuristic, but the steward (or maintainer) can override
-   either direction. The vacuous-satisfaction line in the cycle
-   log MUST cite the review-queue depth so the back-pressure
-   reasoning is visible. This is distinct from drift-A
-   (design-vs-code) and drift-B (compose-pattern deps); the
-   blocker is downstream (review bandwidth), not upstream
-   (design or dependency). Encountered after the PR 106
-   (endoclaw-browser) dispatch when the queue hit 14 PRs.
 5. **Return a structured report to the steward**: which design
    was dispatched (or `vacuous-satisfaction` outcome,
    `needs-groom-first` outcome), in-flight count after dispatch,
@@ -103,16 +86,19 @@ marshal does not edit process files directly.
 - **No-redispatch.** A design with an already-in-flight builder
   is not eligible. The marshal does not double-dispatch the same
   design across cycles.
-- **Persistent re-deferral surfaces, does not silently recur.**
-  When `vacuous-satisfaction (review-queue depth=N, deferring
-  <slug>)` repeats across two or more cycles for the same `<slug>`
-  AND the depth has not decreased materially between cycles, the
-  marshal's report should explicitly flag "persistent deferral —
-  consider maintainer escalation" so the steward records it as a
-  surface-to-maintainer item rather than just a procedural log
-  line. Silent re-deferral is how the design pipeline becomes
-  invisible. Encountered 2026-05-07: depth=14 → depth=~30 across
-  two re-deferrals of `daemon-os-sandbox-plugin`.
+- **Concurrent-builder cap is the only back-pressure.** The
+  ceiling of 3 in flight protects context bandwidth; review-queue
+  depth does NOT factor into the dispatch decision. Maintainer
+  review capacity is the maintainer's concern; if the queue is
+  deep, the maintainer can park the builder via direct
+  instruction. The marshal's previous `review-queue depth >10`
+  back-pressure rule was removed 2026-05-07 by maintainer
+  direction: "Let's remove the back pressure threshold. It is
+  sufficient to cap concurrent builder projects." Vacuous
+  satisfaction now only fires when the in-flight count is
+  already at ceiling, OR when no eligible design remains
+  (everything blocked on drift-A / drift-B / dependency / open
+  question).
 - **Builder, not designer.** If a design is too vague to
   implement (rather than being implementable), surface it to the
   user via the cycle log; do not dispatch a designer (that's a
