@@ -12,6 +12,13 @@
 import https from 'node:https';
 
 /**
+ * @typedef {object} Logger
+ * @property {(...args: unknown[]) => void} log
+ * @property {(...args: unknown[]) => void} error
+ * @property {(...args: unknown[]) => void} warn
+ */
+
+/**
  * @typedef {object} CommonTool
  * @property {'function'} type
  * @property {{ name: string, description: string, parameters: object }} function
@@ -107,7 +114,7 @@ const postJson = (url, apiKey, payload) =>
 /**
  * Create a Gemini-backed chat provider via the Google OpenAI-compatible API.
  *
- * @param {{ baseURL: string, model: string, apiKey: string, maxTokens?: number, maxMessages?: number }} options
+ * @param {{ baseURL: string, model: string, apiKey: string, maxTokens?: number, maxMessages?: number, logger?: Logger }} options
  * @returns {{ chat: (messages: CommonChatMessage[], tools: CommonTool[]) => Promise<{ message: CommonChatMessage }> }}
  */
 export const makeGeminiProvider = ({
@@ -116,6 +123,7 @@ export const makeGeminiProvider = ({
   apiKey,
   maxTokens = 4096,
   maxMessages = undefined,
+  logger = console,
 }) => {
   const url = makeChatCompletionsUrl(baseURL);
 
@@ -128,11 +136,11 @@ export const makeGeminiProvider = ({
         messages.length > maxMessages
       ) {
         sendMessages = messages.slice(-maxMessages);
-        console.log(
+        logger.log(
           `[LAL] Truncated to last ${maxMessages} messages (was ${messages.length})`,
         );
       }
-      console.log(
+      logger.log(
         `[LAL] Calling Gemini at ${url.origin}${url.pathname} with model: ${model}`,
       );
       let response;
@@ -144,7 +152,7 @@ export const makeGeminiProvider = ({
           messages: sendMessages,
         });
       } catch (error) {
-        console.error('[LAL] Gemini API error:', error);
+        logger.error('[LAL] Gemini API error:', error);
         throw error;
       }
       const choice = response.choices?.[0];

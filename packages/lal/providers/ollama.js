@@ -8,6 +8,13 @@
 import { Ollama } from 'ollama';
 
 /**
+ * @typedef {object} Logger
+ * @property {(...args: unknown[]) => void} log
+ * @property {(...args: unknown[]) => void} error
+ * @property {(...args: unknown[]) => void} warn
+ */
+
+/**
  * @typedef {object} CommonTool
  * @property {'function'} type
  * @property {{ name: string, description: string, parameters: object }} function
@@ -82,10 +89,15 @@ const toOllamaMessages = messages => {
  * Uses OLLAMA_HOST for the Ollama server URL (defaults to http://localhost:11434).
  * Uses OLLAMA_API_KEY for authentication if required.
  *
- * @param {{ host?: string, model: string, apiKey?: string }} options
+ * @param {{ host?: string, model: string, apiKey?: string, logger?: Logger }} options
  * @returns {{ chat: (messages: CommonChatMessage[], tools: CommonTool[]) => Promise<{ message: CommonChatMessage }> }}
  */
-export const makeOllamaProvider = ({ host, model, apiKey }) => {
+export const makeOllamaProvider = ({
+  host,
+  model,
+  apiKey,
+  logger = console,
+}) => {
   const ollama = new Ollama({
     ...(host && { host }),
     headers: {
@@ -95,7 +107,7 @@ export const makeOllamaProvider = ({ host, model, apiKey }) => {
 
   return {
     async chat(messages, tools) {
-      console.log(
+      logger.log(
         `[LAL] Calling Ollama at ${host || 'localhost:11434'} with model: ${model}`,
       );
 
@@ -107,7 +119,7 @@ export const makeOllamaProvider = ({ host, model, apiKey }) => {
           tools: toOllamaTools(tools),
         });
       } catch (error) {
-        console.error('[LAL] Ollama API error:', error);
+        logger.error('[LAL] Ollama API error:', error);
         throw error;
       }
 

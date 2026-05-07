@@ -11,6 +11,13 @@ import { makeOllamaProvider } from './ollama.js';
 import { detectProviderKind, resolveModelForHost } from './config.js';
 
 /**
+ * @typedef {object} Logger
+ * @property {(...args: unknown[]) => void} log
+ * @property {(...args: unknown[]) => void} error
+ * @property {(...args: unknown[]) => void} warn
+ */
+
+/**
  * @typedef {object} Provider
  * @property {(messages: object[], tools: object[]) => Promise<{ message: object }>} chat
  */
@@ -31,9 +38,10 @@ import { detectProviderKind, resolveModelForHost } from './config.js';
  * - LAL_MAX_MESSAGES: Truncate to last N messages (llama.cpp only)
  *
  * @param {{ LAL_HOST?: string, LAL_MODEL?: string, LAL_AUTH_TOKEN?: string, LAL_MAX_TOKENS?: string, LAL_MAX_MESSAGES?: string }} env
+ * @param {{ logger?: Logger }} [options]
  * @returns {Provider}
  */
-export const createProvider = env => {
+export const createProvider = (env, { logger = console } = {}) => {
   const baseURL = env.LAL_HOST || 'http://localhost:11434';
   const providerKind = detectProviderKind(baseURL);
   const model = resolveModelForHost(baseURL, env.LAL_MODEL);
@@ -45,8 +53,8 @@ export const createProvider = env => {
         'LAL_AUTH_TOKEN is required for Anthropic. Set it to your API key.',
       );
     }
-    console.log(`[LAL] Using Anthropic provider with model: ${model}`);
-    return makeAnthropicProvider({ apiKey, model });
+    logger.log(`[LAL] Using Anthropic provider with model: ${model}`);
+    return makeAnthropicProvider({ apiKey, model, logger });
   }
 
   if (providerKind === 'gemini') {
@@ -62,7 +70,7 @@ export const createProvider = env => {
     const maxMessages = env.LAL_MAX_MESSAGES
       ? parseInt(env.LAL_MAX_MESSAGES, 10)
       : undefined;
-    console.log(
+    logger.log(
       `[LAL] Using Gemini provider at ${baseURL} with model: ${model}`,
     );
     return makeGeminiProvider({
@@ -71,6 +79,7 @@ export const createProvider = env => {
       apiKey,
       maxTokens,
       maxMessages,
+      logger,
     });
   }
 
@@ -83,7 +92,7 @@ export const createProvider = env => {
     const maxMessages = env.LAL_MAX_MESSAGES
       ? parseInt(env.LAL_MAX_MESSAGES, 10)
       : undefined;
-    console.log(
+    logger.log(
       `[LAL] Using llama.cpp provider at ${baseURL} with model: ${model}`,
     );
     return makeLlamaCppProvider({
@@ -92,18 +101,20 @@ export const createProvider = env => {
       apiKey,
       maxTokens,
       maxMessages,
+      logger,
     });
   }
 
   // Default: Use native Ollama provider
   const apiKey = env.LAL_AUTH_TOKEN;
-  console.log(
+  logger.log(
     `[LAL] Using native Ollama provider at ${baseURL} with model: ${model}`,
   );
   return makeOllamaProvider({
     host: baseURL,
     model,
     apiKey,
+    logger,
   });
 };
 

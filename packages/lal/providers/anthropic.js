@@ -7,6 +7,13 @@
 import Anthropic from '@anthropic-ai/sdk';
 
 /**
+ * @typedef {object} Logger
+ * @property {(...args: unknown[]) => void} log
+ * @property {(...args: unknown[]) => void} error
+ * @property {(...args: unknown[]) => void} warn
+ */
+
+/**
  * @typedef {object} CommonTool
  * @property {'function'} type
  * @property {{ name: string, description: string, parameters: object }} function
@@ -94,18 +101,18 @@ const toAnthropicMessages = messages => {
 
 /**
  * Create an Anthropic-backed chat provider.
- * @param {{ apiKey: string, model: string }} options
+ * @param {{ apiKey: string, model: string, logger?: Logger }} options
  * @returns {{ chat: (messages: CommonChatMessage[], tools: CommonTool[]) => Promise<{ message: CommonChatMessage }> }}
  */
-export const makeAnthropicProvider = ({ apiKey, model }) => {
+export const makeAnthropicProvider = ({ apiKey, model, logger = console }) => {
   const client = new Anthropic({ apiKey });
 
   return {
     async chat(messages, tools) {
       const { system, messages: anthropicMessages } =
         toAnthropicMessages(messages);
-      console.log('[LAL] Calling Anthropic API...');
-      console.log(
+      logger.log('[LAL] Calling Anthropic API...');
+      logger.log(
         '[LAL] Messages:',
         JSON.stringify(anthropicMessages, null, 2),
       );
@@ -118,9 +125,9 @@ export const makeAnthropicProvider = ({ apiKey, model }) => {
           tools: toAnthropicTools(tools),
           messages: anthropicMessages,
         });
-        console.log('[LAL] Anthropic response received');
+        logger.log('[LAL] Anthropic response received');
       } catch (error) {
-        console.error('[LAL] Anthropic API error:', error);
+        logger.error('[LAL] Anthropic API error:', error);
         const status = error?.status ?? error?.statusCode;
         const errBody = error?.error ?? error?.body;
         const isAuthError =

@@ -9,6 +9,13 @@
 import OpenAI from 'openai';
 
 /**
+ * @typedef {object} Logger
+ * @property {(...args: unknown[]) => void} log
+ * @property {(...args: unknown[]) => void} error
+ * @property {(...args: unknown[]) => void} warn
+ */
+
+/**
  * @typedef {object} CommonTool
  * @property {'function'} type
  * @property {{ name: string, description: string, parameters: object }} function
@@ -29,7 +36,7 @@ import OpenAI from 'openai';
  * If the server returns "context size" errors, increase the server's n_ctx
  * or set LAL_MAX_MESSAGES to truncate to the last N messages before sending.
  *
- * @param {{ baseURL: string, model: string, apiKey?: string, maxTokens?: number, maxMessages?: number }} options
+ * @param {{ baseURL: string, model: string, apiKey?: string, maxTokens?: number, maxMessages?: number, logger?: Logger }} options
  * @returns {{ chat: (messages: CommonChatMessage[], tools: CommonTool[]) => Promise<{ message: CommonChatMessage }> }}
  */
 export const makeLlamaCppProvider = ({
@@ -38,6 +45,7 @@ export const makeLlamaCppProvider = ({
   apiKey = 'ollama',
   maxTokens = 4096,
   maxMessages = undefined,
+  logger = console,
 }) => {
   const client = new OpenAI({
     apiKey,
@@ -53,11 +61,11 @@ export const makeLlamaCppProvider = ({
         messages.length > maxMessages
       ) {
         sendMessages = messages.slice(-maxMessages);
-        console.log(
+        logger.log(
           `[LAL] Truncated to last ${maxMessages} messages (was ${messages.length})`,
         );
       }
-      console.log(`[LAL] Calling llama.cpp at ${baseURL} with model: ${model}`);
+      logger.log(`[LAL] Calling llama.cpp at ${baseURL} with model: ${model}`);
       let response;
       try {
         response = await client.chat.completions.create({
@@ -68,7 +76,7 @@ export const makeLlamaCppProvider = ({
           messages: sendMessages,
         });
       } catch (error) {
-        console.error('[LAL] llama.cpp API error:', error);
+        logger.error('[LAL] llama.cpp API error:', error);
         throw error;
       }
       const choice = response.choices?.[0];
