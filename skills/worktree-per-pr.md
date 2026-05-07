@@ -2,14 +2,41 @@
 
 ## When to use
 
-Every dispatched sub-role that mutates a branch — builder, fixer,
-weaver, shepherd, cleaner, conductor — works inside a dedicated
-`git worktree`. The steward's own working tree stays pinned to
-`garden`; sub-roles never switch branches in the steward's tree.
+**Every dispatched subagent operates outside the steward's
+working tree, full stop.** The steward stays pinned to a
+garden-only worktree (typically `/home/kris/endo-wt/checkin-pr94`);
+no subagent touches that path. Three lanes:
+
+1. **Mutating subagents** (builder, fixer, weaver, shepherd,
+   cleaner, conductor, designer, groom, liaison writing tracking
+   files) work inside a **dedicated `git worktree`** at
+   `/home/kris/endo-wt/<slug>` or `pr-<N>`.
+2. **Read-only-on-tree subagents** (panel jurors reading the
+   diff, saboteur perspective on a contributor PR) work in a
+   **detached read-only worktree** created with
+   `git worktree add --detach <path> <ref>`. They never commit;
+   the worktree is removed at end of dispatch.
+3. **API-only subagents** (vacuous-check liaison/marshal that
+   just runs `gh api` queries, scan-only director) don't need a
+   git tree at all; their brief specifies `cd /tmp` (or a
+   similar throwaway location) as their first action so they
+   don't accidentally land in the steward's worktree.
+
 The cost of an extra worktree is one `git worktree add` and a
 ~30 MB checkout; the cost of a branch-swap race in the shared
 tree is hours of recovery (other agents' edits stash-disappear,
 commits land on the wrong tip).
+
+**Every subagent dispatch brief leads with an explicit `cd <path>`
+line.** A brief that omits the cd and says "work on PR <N>"
+delegates the cwd to whatever the harness inherited — typically
+`/home/kris/garden` (the user's fix-branch-pinned worktree), which
+is the worst possible default. Encountered 2026-05-07: a saboteur
+dispatch wrote its self-improvement skill file to
+`/home/kris/garden/skills/` on `fix/pr70-regexp-escape` because
+its brief did not pin cwd. The steward had to rescue the file
+manually. Cheap to prevent: the cd line is one sentence in the
+brief.
 
 ## Lifecycle: one worktree per PR, hand off across roles
 
