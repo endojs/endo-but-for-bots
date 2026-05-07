@@ -47,6 +47,37 @@ seen `created_at` timestamp) persists at
 `~/.cache/endo-events-poll-state` so a daemon restart does not
 replay every prior event as a fresh trigger.
 
+**Monitor filter: wake on review-wrap, not on per-comment-during-draft.**
+A maintainer drafting a PR review fires
+`PullRequestReviewCommentEvent` per inline comment as they're
+added; only when they hit "Submit review" does
+`PullRequestReviewEvent` fire (state COMMENTED / APPROVED /
+CHANGES_REQUESTED). Waking on every per-comment event during the
+draft creates notification thrash and tempts the steward to act
+on partial context. The Monitor's grep should fire only on
+**terminal-state** event classes:
+
+```
+NEW [0-9].*(IssueCommentEvent/|IssuesEvent/|PullRequestEvent/|PullRequestReviewEvent/|PushEvent/)|HTTP [45][0-9][0-9]|curl failed|polling stopped
+```
+
+`PullRequestReviewEvent/` (the wrap) is not a substring of
+`PullRequestReviewCommentEvent/` (they diverge at `Event/` vs
+`CommentEvent/`), so the regex cleanly excludes the per-comment
+class.
+
+Edge case: a single inline comment posted via the "Add single
+comment" button bypasses the review-wrap and fires a standalone
+`PullRequestReviewCommentEvent` with no following
+`PullRequestReviewEvent`. The Monitor stays silent until the
+next periodic steward-cycle log-tail (max 25-30 min via
+ScheduleWakeup). Acceptable: the unwrapped-single-comment case
+is rare; the periodic safety net catches it.
+
+The bot's own pushes are filtered out by the daemon's `$self`
+filter at the data layer, so wake-on-`PushEvent/` only fires for
+contributor pushes (CI state changes, etc).
+
 **Pitfall: `tail -F` doesn't replay history; read the log at
 cycle start.** A `Monitor` armed with `tail -F /tmp/poll-events.log`
 only streams lines added AFTER the Monitor's tail starts; it does
