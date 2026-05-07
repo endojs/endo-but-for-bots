@@ -182,6 +182,30 @@ re-dispatches.
   matrix supersedes it. Only run a targeted re-run if you reach
   step 4 with no rebase having intervened (i.e., the PR was 0
   behind and the failed job is on the *current* head).
+- **A rebase also moots a brief's "direct `--merge`" claim.** When
+  the brief reports `27/27 CI SUCCESS` and instructs a direct
+  `--merge` (no `--auto`), but the survey shows the PR is behind
+  its base, the rebase + force-push invalidates the prior matrix.
+  The fresh CI is in flight at the moment of merge issue, so step
+  4's "in flight → `--auto --merge`" branch applies. Use
+  `--auto --merge`; do not re-read the brief's "CI green, no need
+  for `--auto`" guidance literally once you've performed the rebase
+  step. (The `--auto --merge` path is a strict superset of `--merge`:
+  if branch protection does not gate on CI, GitHub resolves it
+  immediately as a direct merge anyway. See the immediately-resolves
+  bullet below.)
+- **A tidy can require rewording the absorbed-into commit, not just
+  fixing it up.** When a `fix(...)` follow-up's body contradicts a
+  caveat in the original commit's message ("transitively-referenced
+  blobs ... out of scope for this cut and tracked as a follow-up"
+  vs. an absorbed-in commit that implements the transitive sweep),
+  a plain `fixup` carries the stale caveat into the merge cluster
+  unchanged. Use `reword` (or a follow-up `git commit --amend` while
+  HEAD is on the absorbed-target) to bring the message in line with
+  the absorbed code. The byte-identical-tree check still applies;
+  only the message changes. Pre-tidy SHA recorded before the reword,
+  not just before the initial fixup, so the diff comparison spans
+  both edits.
 - **`--auto --merge` may resolve immediately even with CI
   pending.** When the repo's branch protection does not gate on
   CI, `gh pr merge --auto --merge` can produce `state=MERGED` at
