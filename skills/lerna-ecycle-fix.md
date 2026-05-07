@@ -88,3 +88,43 @@ cycle. The fix was option 1: revert the ses-ava additions, keep the
 parallel marshal test (which already had both packages devDep'd).
 Coverage of the per-compartment behavior was preserved because the
 marshal test exercises the same code path end-to-end.
+
+## Turbo trips on the same dev-dep cycles
+
+Adopting `turbo` (PR 121, issue #116) surfaces the same cycle from a
+new direction. Turbo's canonical task pipeline uses `dependsOn:
+["^build"]` (the `^` means "all upstream workspace deps' `build`
+first"). Turbo walks the same combined `dependencies` +
+`devDependencies` graph that lerna's `--reject-cycles` does, and
+emits a `Cyclic dependency detected` warning on this repo even
+though `^build` is exactly what the turbo docs recommend.
+
+Symptom (running `yarn turbo run test --filter=...` for the first
+time):
+
+```
+WARNING  Circular package dependency detected: @endo/module-source,
+@endo/lockdown, @endo/eventual-send, @endo/evasive-transform,
+@endo/zip, @endo/promise-kit, @endo/init, @endo/hex,
+@endo/compartment-mapper, @endo/test262-runner, ses, @endo/harden,
+@endo/ses-ava
+```
+
+The turbo-side workaround that fits this monorepo: drop the `^`
+prefix and use in-package `dependsOn: ["build"]` only. That is, a
+package's `test` runs after its own `build`, but turbo does not try
+to walk upstream workspace deps' `build` first. The yarn-workspaces
++ lerna ordering already handles the cross-package build sequence
+when invoked at the root (`yarn build` runs `yarn workspaces foreach
+--all run build` topologically).
+
+The "true fix" is the same as the lerna-side fix above: break the
+dev-dep cycle by moving test code or restructuring imports. Until
+that is done across the whole repo, the in-package-only
+`dependsOn` is the pragmatic choice. PR 121's `turbo.json` uses this
+shape and documents the trade-off in the PR body.
+
+Pitfall: do not reach for `turbo`'s `--ignore-deps` or
+`globalDependencies` to silence the warning; both have load-bearing
+semantics that hide real misses. The right knob is the `dependsOn`
+shape itself.
