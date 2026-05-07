@@ -176,14 +176,20 @@ The Agent _does_ see (post-integration):
    same surface shape). Maintainer preference?
 
 2. **Where do the shared `Directory` / `File` / `ReadOnlyDirectory`
-   interface guards live?** Options:
-   - `packages/platform/src/fs/interfaces.js` (today's home for some
-     interfaces; would need new exports).
-   - `packages/daemon/src/interfaces.js` (the home for `MountInterface`
-     today; adding agent-visible aliases there couples agents to daemon).
-   - A new `@endo/platform/fs/interfaces` subpath.
-   The first option keeps the membrane clean; recommend that unless the
-   maintainer sees a reason against.
+   interface guards live?** Current direction: `@endo/platform` stays
+   focused on exposing capabilities, and `@endo/daemon` exposes the Exo
+   interfaces (since the daemon must expose them at this layer in any
+   case).
+   This may require experimentation before a final answer emerges.
+   In other packages we are establishing a precedent like `@endo/exo-stream`
+   as the Exo wrapper for the underlying `@endo/stream` (or
+   `@endo/stream-node`) capabilities.
+   It is not yet clear whether to cut a similar line within
+   `@endo/platform`; for now we keep `platform` focused on capabilities
+   and let the daemon own the Exo interfaces, and we can introduce an
+   intermediate `@endo/exo-fs`-style layer with reusable interfaces in a
+   future PR if the need becomes concrete.
+   This PR does not introduce that intermediate layer.
 
 3. **Does `Mount.lookup()` returning a transient sub-exo break the
    `Directory` interface?** The `Mount` exo's transient sub-exos do not
