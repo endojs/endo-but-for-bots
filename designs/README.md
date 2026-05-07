@@ -4,6 +4,8 @@
 
 *See also: [daemon-make-archive](daemon-make-archive.md) (added 2026-04-23),
 [filesystem-watchers](filesystem-watchers.md) (added 2026-05-07),
+[ocapn-daemon-integration](ocapn-daemon-integration.md) (added 2026-05-07;
+per-agent `@transports` succeeds the host-singleton `@nets`; closes #118 b),
 [endo-posix-sandbox](endo-posix-sandbox.md) (added 2026-05-07; mirrors
 `PLAN/endo_posix_sandbox.md` for roadmap calibration),
 [exo-zip-package](exo-zip-package.md) (added 2026-05-08; PR #128 reshape
@@ -124,6 +126,7 @@ PR #151 row-format unblocker; sibling of
 | [ocapn-noise-network](ocapn-noise-network.md) | 2026-02-14 | 2026-02-24 | Not Started |
 | [ocapn-tcp-for-test-extraction](ocapn-tcp-for-test-extraction.md) | 2026-02-14 | 2026-02-24 | Not Started |
 | [ocapn-tcp-syrups-framing](ocapn-tcp-syrups-framing.md) | 2026-04-23 | 2026-05-06 | Not Started |
+| [ocapn-daemon-integration](ocapn-daemon-integration.md) | 2026-05-07 | 2026-05-07 | Not Started |
 | [syrups](syrups.md) | 2026-05-04 | 2026-05-06 | Deprecated |
 | [cbors](cbors.md) | 2026-05-04 | 2026-05-05 | Not Started |
 | [trust-on-first-bind](trust-on-first-bind.md) | 2026-05-08 | 2026-05-10 | Reference |
@@ -231,9 +234,13 @@ flowchart TD
         otcp[ocapn-tcp-for-test-extraction]
         orev[ocapn-noise-cryptographic-review]
         onoise[ocapn-noise-network]
+        odint[ocapn-daemon-integration]
         onet --> otcp --> onoise
         orev --> onoise
         dnet --> onoise
+        onoise --> odint
+        onet --> odint
+        dnet --> odint
     end
 
     subgraph Chat UX
@@ -360,6 +367,7 @@ finalized.
 | ocapn-noise-cryptographic-review | Not Started | External review coordination |
 | daemon-agent-network-identity | Not Started | Per-agent keypairs for network identity |
 | ocapn-noise-network | Not Started | Full Noise protocol network layer |
+| ocapn-daemon-integration | Not Started | Per-agent `@transports` succeeds the host-singleton `@nets`; cap-handoff path from daemon to agent (closes #118 b) |
 
 **Exit criterion:** Two Endo daemons can connect securely over
 OCapN-Noise. Locator format supports node identification via agent
@@ -628,6 +636,7 @@ Recalibrated on 2026-03-02 using observed velocity from 15 active work days
 | ocapn-noise-cryptographic-review | S | 1 day | 2 | External review coordination |
 | daemon-agent-network-identity | S-M | 3 days | 2 | Network registration, locator construction |
 | ocapn-noise-network | L | 2-3 weeks | 2 | Full network + transport (L bumped 1.5x); netlayer largely complete in stacked PRs #111/#112/#113, awaiting review |
+| ocapn-daemon-integration | M-L | 2-4 weeks | 2 | New `Transports` formula type, host method, agent-side `@transports`, migration shim from `@nets`, CLI verbs |
 | familiar-unified-weblet-server | M | 3 days | 3 | Web-server restructuring; design revised in PR #100 |
 | familiar-chat-weblet-hosting | M | 4-5 days | 3 | Iframe hosting, guest profiles (1.2x bump) |
 | daemon-checkin-checkout | S-M | 3 days | 3 | `endo ci`/`co`, readable-tree formula, zip support |
@@ -674,12 +683,12 @@ ready-to-merge and actually-merged for the in-flight backlog.
 |-----------|-------|-----------------|----------------------------------|
 | M0: AI Agent Experience | 0 remaining | **Complete** | — |
 | M1: Remote Access & Tools | 12 remaining | 8-10 weeks | 10-12 weeks |
-| M2: Networking | 7 | 4-5 weeks | 5-7 weeks |
+| M2: Networking | 8 | 6-9 weeks | 7-11 weeks |
 | M3: Weblets & Integrations | 9 | 5-7 weeks | 6-9 weeks |
 | M4: UX & Tooling | 12 | 8-11 weeks | 10-13 weeks |
 | M5: Confinement & Ecosystem | 6 active (1 superseded) | 14-20 weeks | 16-22 weeks |
 | M6: Rust Daemon (`endor`) | 2 | 12-17 weeks | 14-19 weeks |
-| **Total remaining** | **50** | **~51-70 weeks** | **~61-82 weeks** |
+| **Total remaining** | **51** | **~53-74 weeks** | **~63-86 weeks** |
 
 ### Timeline
 
