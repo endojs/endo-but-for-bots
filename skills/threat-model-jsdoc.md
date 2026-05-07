@@ -1,10 +1,15 @@
-# Module-header threat-model JSDoc on ambient-authority factories
+# Module-header threat-model JSDoc on ambient-authority attenuators
 
 ## When to use
 
-A reviewer asks for a "threat-model" comment on a module that exports a
-factory taking ambient authority (e.g., a function that takes `node:fs`,
-an absolute path, a network socket, a process handle).
+A reviewer asks for a "threat-model" comment on a module that exports an
+attenuator taking ambient authority (e.g., a function that takes
+`node:fs`, an absolute path, a network socket, a process handle) and
+returns a confined capability.
+The function narrows ambient authority to a specific capability that
+can be safely passed around an ocap system; "factory" misnames this
+pattern because the function consumes ambient authority rather than
+producing more of it.
 
 The endo monorepo does not have a single canonical example of this
 convention.
@@ -49,21 +54,21 @@ paragraphs:
 // @ts-check
 
 /**
- * Ambient-authority factory for a mutable Directory exo backed by an
+ * Ambient-authority attenuator for a mutable Directory exo backed by an
  * arbitrary absolute filesystem path.
  *
  * The capability returned by `makeDirectory` conveys read, write,
  * rename, copy, and (with an explicit flag) recursive remove authority
  * on the entire subtree rooted at the given path.
  *
- * This factory is intended to live entirely on the host side of the
+ * This attenuator is intended to live entirely on the host side of the
  * daemon membrane.
  * It must never be exposed to a guest, worker, caplet, or chat-side
  * bot; doing so would hand that party ambient filesystem authority to
  * a real subtree of the host process's view of the disk.
  * Confined `Directory` references reach agents only via the `Mount`
  * exo, which applies path clamping and symlink confinement before
- * composing this factory.
+ * composing this attenuator.
  * See `designs/platform-fs-daemon-integration.md`.
  */
 
@@ -85,6 +90,10 @@ import fs from 'node:fs';
 
 PR endojs/endo-but-for-bots#122 panel must-fix, 2026-05-07.
 The reviewer asked for module-header threat-model JSDoc on every file
-in `packages/platform/src/fs-node/` that exports a factory taking
+in `packages/platform/src/fs-node/` that exports an attenuator taking
 ambient authority (`makeFile`, `makeDirectory`, `makeTreeWriter`,
 `makeLocalBlob`, `makeLocalTree`).
+A follow-up review on the same PR (comment 3204484622) renamed the
+pattern from "ambient-authority factory" to "ambient-authority
+attenuator" because the function narrows authority rather than
+manufacturing it.
