@@ -133,14 +133,6 @@ const assertBoolean = (value, keypath, url) => {
 };
 
 /**
- * @param {Record<string, unknown>} object
- * @param {string} message
- */
-const assertEmptyObject = (object, message) => {
-  keys(object).length === 0 || Fail`${b(message)}`;
-};
-
-/**
  * @param {unknown} conditions
  * @param {string} url
  * @returns {asserts conditions is CompartmentMapDescriptor['tags']}
@@ -207,10 +199,8 @@ const assertCompartmentModuleConfiguration = (
     getModuleConfigurationSpecificProperties(
       /** @type {CompartmentModuleConfiguration} */ (moduleDescriptor),
     );
-  assertEmptyObject(
-    extra,
-    `${keypath} must not have extra properties; got ${q(extra)} in ${q(url)}`,
-  );
+  keys(extra).length === 0 ||
+    Fail`${b(keypath)} must not have extra properties; got ${q(extra)} in ${q(url)}`;
 
   assertString(compartment, `${keypath}.compartment`, url);
   assertString(module, `${keypath}.module`, url);
@@ -227,12 +217,8 @@ const assertFileModuleConfiguration = (moduleDescriptor, keypath, url) => {
     getModuleConfigurationSpecificProperties(
       /** @type {FileModuleConfiguration} */ (moduleDescriptor),
     );
-  assertEmptyObject(
-    extra,
-    `${keypath} must not have extra properties; got ${q(
-      keys(extra),
-    )} in ${q(url)}`,
-  );
+  keys(extra).length === 0 ||
+    Fail`${b(keypath)} must not have extra properties; got ${q(keys(extra))} in ${q(url)}`;
   if (location !== undefined) {
     assertString(location, `${keypath}.location`, url);
   }
@@ -253,12 +239,8 @@ const assertExitModuleConfiguration = (moduleDescriptor, keypath, url) => {
   const { exit, ...extra } = getModuleConfigurationSpecificProperties(
     /** @type {ExitModuleConfiguration} */ (moduleDescriptor),
   );
-  assertEmptyObject(
-    extra,
-    `${keypath} must not have extra properties; got ${q(
-      keys(extra),
-    )} in ${q(url)}`,
-  );
+  keys(extra).length === 0 ||
+    Fail`${b(keypath)} must not have extra properties; got ${q(keys(extra))} in ${q(url)}`;
   assertString(exit, `${keypath}.exit`, url);
 };
 
@@ -488,12 +470,8 @@ const assertScope = (allegedScope, keypath, url, assertCompartmentValue) => {
   assertPlainObject(allegedScope, keypath, url);
 
   const { compartment, ...extra } = allegedScope;
-  assertEmptyObject(
-    extra,
-    `${keypath} must not have extra properties; got ${q(
-      keys(extra),
-    )} in ${q(url)}`,
-  );
+  keys(extra).length === 0 ||
+    Fail`${b(keypath)} must not have extra properties; got ${q(keys(extra))} in ${q(url)}`;
 
   if (assertCompartmentValue) {
     assertCompartmentValue(compartment, `${keypath}.compartment`, url);
@@ -692,12 +670,8 @@ const assertPackageCompartmentDescriptor = (
     ...extra
   } = /** @type {PackageCompartmentDescriptor} */ (allegedCompartment);
 
-  assertEmptyObject(
-    extra,
-    `${keypath} must not have extra properties; got ${q(
-      keys(extra),
-    )} in ${q(url)}`,
-  );
+  keys(extra).length === 0 ||
+    Fail`${b(keypath)} must not have extra properties; got ${q(keys(extra))} in ${q(url)}`;
 
   assertPackageLocation(location, `${keypath}.location`, url);
   assertLabel(label, `${keypath}.label`, url);
@@ -732,12 +706,8 @@ const assertDigestedCompartmentDescriptor = (
     ...extra
   } = allegedCompartment;
 
-  assertEmptyObject(
-    extra,
-    `${keypath} must not have extra properties; got ${q(
-      keys(extra),
-    )} in ${q(url)}`,
-  );
+  keys(extra).length === 0 ||
+    Fail`${b(keypath)} must not have extra properties; got ${q(keys(extra))} in ${q(url)}`;
 };
 
 /**
@@ -763,12 +733,8 @@ const assertFileCompartmentDescriptor = (allegedCompartment, keypath, url) => {
     ...extra
   } = /** @type {FileCompartmentDescriptor} */ (allegedCompartment);
 
-  assertEmptyObject(
-    extra,
-    `${keypath} must not have extra properties; got ${q(
-      keys(extra),
-    )} in ${q(url)}`,
-  );
+  keys(extra).length === 0 ||
+    Fail`${b(keypath)} must not have extra properties; got ${q(keys(extra))} in ${q(url)}`;
 
   assertString(label, `${keypath}.label`, url);
 };
@@ -828,12 +794,8 @@ const assertPackageCompartmentDescriptors = (allegedCompartments, url) => {
 const assertEntry = (allegedEntry, url) => {
   assertPlainObject(allegedEntry, 'entry', url);
   const { compartment, module, ...extra } = allegedEntry;
-  assertEmptyObject(
-    extra,
-    `"entry" must not have extra properties in compartment map; got ${q(
-      keys(extra),
-    )} in ${q(url)}`,
-  );
+  keys(extra).length === 0 ||
+    Fail`"entry" must not have extra properties in compartment map; got ${q(keys(extra))} in ${q(url)}`;
   assertString(compartment, 'entry.compartment', url);
   assertString(module, 'entry.module', url);
 };
@@ -853,12 +815,8 @@ const assertCompartmentMap = (allegedCompartmentMap, url) => {
     compartments: _compartments,
     ...extra
   } = allegedCompartmentMap;
-  assertEmptyObject(
-    extra,
-    `Compartment map must not have extra properties; got ${q(
-      keys(extra),
-    )} in ${q(url)}`,
-  );
+  keys(extra).length === 0 ||
+    Fail`Compartment map must not have extra properties; got ${q(keys(extra))} in ${q(url)}`;
   assertConditions(conditions, url);
   assertEntry(entry, url);
   assertTruthy(
