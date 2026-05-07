@@ -116,6 +116,41 @@ shorter steward cadence (the steward is already firing every
 ≤30 min in active mode); it is enforcing this checklist so each
 fire actually dispatches the liaison.
 
+## Distinguish "surfaced for dispatch" from "dispatched"
+
+A liaison or marshal sub-role report frequently ends with a
+phrase like "queued for a future steward cycle to dispatch a
+researcher subagent" or "needs a builder dispatch next cycle".
+That is a **directive to the steward**, not a state-file note.
+Treat it as one of two things:
+
+1. **Dispatch it in the current cycle** if a sub-role of the
+   right shape (researcher, builder, designer, fixer) is
+   appropriate and the steward has the brief to write.
+2. **Queue it as an explicit pending-dispatch entry** in
+   `process/PR-DISPATCH-STATE.md` (or an equivalent
+   issue-side state file) with the issue/PR number, the
+   sub-role shape required, and the brief sketch.
+
+What is **not** acceptable: leaving the directive only in the
+cycle log as a free-text intent. Cycle log entries are
+read-once; nothing in the next cycle's procedure causes the
+steward to re-read prior cycle logs to find pending dispatches.
+Encountered 2026-05-07 on issue endojs/endo-but-for-bots#116:
+the liaison surfaced "needs a researcher dispatch" twice over
+prior cycles and the steward shipped each cycle without
+dispatching, because the surfaces lived in cycle-log entries
+the next steward never re-read. The maintainer eventually
+asked for a progress report and a researcher had to be
+dispatched mid-cycle to recover.
+
+The fix is structural: when a sub-role report contains a
+phrase matching `(needs|queue[ds]?|dispatch).*(researcher|
+builder|designer|fixer|investigator|scout)`, the steward MUST
+either dispatch in the current cycle or write an entry to a
+file that the next cycle's read-state step will pick up. Free
+text in the cycle log alone is silent failure.
+
 ## The steward stays on `garden`
 
 The steward operates from `~/garden`, the canonical garden-pinned
@@ -191,6 +226,27 @@ director's report carries the comment+review survey results and
 the steward records them in the cycle log even when "no action
 warranted" is the outcome. Silence on the comment-survey step is
 the recurring failure mode this rule prevents.
+
+**Pitfall: the lightweight liaison-vacuous-check brief is NOT a
+substitute for the director sweep.** A common shortcut on quiet
+cycles is to dispatch a 50-word "liaison: scan and report
+vacuous if no `IssueCommentEvent|IssuesEvent`" subagent. That
+filter intentionally narrow — it's the issue-side check — and it
+**misses** the inline review classes
+`PullRequestReviewCommentEvent` and `PullRequestReviewEvent`.
+The lightweight-liaison output `liaison: vacuous` therefore says
+nothing about whether a maintainer left an inline comment on an
+open PR; the director sweep (or an inline equivalent that greps
+for `Review` / `Comment` more broadly) is the only path that
+catches those. Encountered 2026-05-07: the maintainer left
+`Please finish this job.` on PR 114 line 37 at 07:06 UTC; the
+07:30 lightweight-liaison cycle reported vacuous; the steward
+shipped the cycle without dispatching a director PR sweep; the
+comment sat undetected for ~10 hours until the maintainer
+pointed at it directly. Fix: a vacuous lightweight-liaison
+report does NOT discharge the director sweep gate. Either
+broaden the scan to include the review event classes, or
+dispatch the director sweep separately.
 
 ## State
 
