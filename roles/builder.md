@@ -90,6 +90,42 @@ issue or design document, and shepherding it through to a green PR.
   and let the steward bump the dependent design back to "blocked
   on dependency" until the dependency's Phase 2 lands.
   Encountered on the `endoclaw-proactive-messages` dispatch.
+- **A "Not Started" design with a sibling package already shipped
+  under a different shape is impasse, not greenfield.** A design
+  whose Status field reads `Not Started` (and whose
+  `designs/README.md` annotation agrees) can still be stale. If a
+  later commit on a non-master branch (`bots-ssh/llm`,
+  `bots-ssh/garden`, an integration branch) has shipped the same
+  problem domain under a different capability shape, scaffolding
+  the design's surface as a NEW package would create two parallel
+  packages for one problem, which is clearly not the intent.
+  Pre-flight check: when the design names a package
+  (`packages/<X>`) or a problem domain (e.g. "OS sandbox plugin"),
+  run `git -C /home/kris/garden ls-tree -r bots-ssh/llm
+  --name-only | grep -E '^packages/<plausible-name>'` for both
+  the design's literal package name AND any plausible synonyms
+  (e.g. `daemon-os-sandbox-plugin` design vs. `@endo/sandbox`
+  package). The design's `Affected Packages` section names the
+  literal target; a sibling package under a different name that
+  covers the same problem domain is the trap. If you find such a
+  sibling, compare the capability shape: a fundamentally different
+  shape (e.g. design says
+  `SandboxMaker.describe(endowments).run(cmd, args) → {stdout,
+  stderr, exitCode}`, code says
+  `SandboxFactory.make(opts).spawn(args) → ProcessHandle`) means
+  the design has not absorbed the implementation's lessons; the
+  steward must reclassify the design (revise to match shipped
+  shape, or supersede with a new design that builds on the
+  shipped surface) before the dispatch is implementable. STOP at
+  this impasse and surface both the existing-package path and the
+  shape-divergence summary in your report. Do NOT scaffold a
+  parallel package. Encountered on the
+  `daemon-os-sandbox-plugin` dispatch: the design's status was
+  `Not Started`, both README rows agreed, but
+  `bots-ssh/llm`'s `packages/sandbox/` had shipped Phase 0/1/1.5/2
+  (bwrap + podman drivers, scratch mounts, network profiles,
+  Landlock probe, seccomp, prlimit caps) under a substantially
+  richer interface that the design never mentions.
 - **Cross-check `designs/README.md`'s milestone-summary
   annotations against the design's own `Depends On` section.**
   The design's own `Depends On` is author-curated and is often

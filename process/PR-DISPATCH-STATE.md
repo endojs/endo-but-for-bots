@@ -50,9 +50,30 @@ Prior cycle: 2026-05-07 06:30 UTC (designer fold-in for PR 115 + PR 117).
   flight and 1 eligible design, marshal would now dispatch a
   builder against `daemon-os-sandbox-plugin` (M5 capability,
   516-line spec, external deps only).
-- **Builder dispatched**: `daemon-os-sandbox-plugin` (the sole
-  remaining eligible design). In-flight design-builder count
-  becomes 1 / ceiling 3.
+- **Builder dispatched**: `daemon-os-sandbox-plugin` — STALLED
+  at pre-flight. The design's `Status: Not Started` is stale:
+  `bots-ssh/llm` ships `packages/sandbox/` (Phase 0/1/1.5/2 done:
+  bwrap + podman drivers, scratch mounts, network profiles,
+  Landlock probe, seccomp, prlimit caps) under a substantially
+  richer interface (`SandboxFactory.make(opts).spawn(args) →
+  ProcessHandle`) than the design specifies (`SandboxMaker
+  .describe(endowments).run(cmd, args) → {stdout, stderr,
+  exitCode}`). The builder added a pre-flight rule to
+  `roles/builder.md` ("Not Started but actually shipped under
+  different name is impasse, not greenfield") and surfaced for
+  reclassification. **Surface for maintainer**: pick one of three
+  paths:
+  1. Revise the design to describe the shipped `@endo/sandbox`
+     shape (mounts as remotables, network profiles by name,
+     ProcessHandle with reader/writer streams) → bumps to
+     `Status: Complete`.
+  2. Supersede with a new design that layers on `@endo/sandbox`
+     (e.g. a thin `Sandbox.run(cmd, args) → {stdout, stderr,
+     exitCode}` convenience wrapper).
+  3. Mark obsolete if `@endo/sandbox` is the canonical answer.
+  In-flight design-builder count remains 0 / ceiling 3 (no
+  builder dispatched). Marshal's eligibility list now empty
+  pending the reclassification.
 
 - **Master sync** moved bots-ssh/master to incorporate ~5 commits
   of actual/master drift; affects all PRs based on master (75,
