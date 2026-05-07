@@ -147,10 +147,11 @@ const assertEmptyObject = (object, message) => {
  */
 const assertConditions = (conditions, url) => {
   if (conditions === undefined) return;
-  if (!isArray(conditions)) {
-    throw Fail`conditions must be an array; got ${b(String(conditions))} in ${q(url)}`;
-  }
-  for (const [index, value] of enumerate(conditions)) {
+  isArray(conditions) ||
+    Fail`conditions must be an array; got ${q(conditions)} in ${q(url)}`;
+  for (const [index, value] of enumerate(
+    /** @type {unknown[]} */ (conditions),
+  )) {
     assertString(value, `conditions[${index}]`, url);
   }
 };
