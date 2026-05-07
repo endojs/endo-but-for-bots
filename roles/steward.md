@@ -204,6 +204,16 @@ Close (after within-fire exhaustion):
    report; verbatim plus any deferral notes. Include the
    explicit vacuous-satisfaction line from marshal if applicable.
    Confirm every always-on sub-role's report is present.
+   **Hard stop: if the cycle-log section being drafted has no
+   `liaison:` line, do not write the section yet — dispatch the
+   liaison now and append its report when it returns.** Same
+   for `marshal`. The director carries the explicit
+   inline-fallback exemption above; `liaison` and `marshal` do
+   not. This is the "redispatch more frequently" answer in
+   procedural form: the gate is at section-draft time, not at
+   schedule-wakeup time, because once the process commit is
+   queued the temptation to ship-and-schedule overrides
+   re-dispatch.
 
 7. **Rewrite `PR-DISPATCH-STATE.md`** in full from the
    director's report.
