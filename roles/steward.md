@@ -23,6 +23,29 @@ asking for a kick. Each cycle has fresh context; nothing
 carries over except files in `process/` pushed to
 `bots-ssh/garden`.
 
+**Early-wake mechanism (redundant with the ScheduleWakeup
+cadence):** a 30s conditional-GET poll against the GitHub events
+API runs as a long-lived background process feeding a `Monitor`
+task. The script is
+[`../scripts/poll-events-conditional.sh`](../scripts/poll-events-conditional.sh);
+it spawns once per session as
+`nohup bash scripts/poll-events-conditional.sh > /tmp/poll-events.log 2> /tmp/poll-events.err &`
+and the steward arms a `Monitor` watching the log files for the
+distinctive `NEW <count>` trigger line. The monitor fires a
+`<task-notification>` within 30s of any new contributor event,
+waking the steward immediately rather than waiting for the next
+ScheduleWakeup. The poll uses ETag conditional GETs, so 304
+responses (the steady state) are free against the API rate limit.
+
+This is **redundant** with `ScheduleWakeup`: the safety-net
+wakeup still fires per the cadence rules below even if the daemon
+or the monitor dies. Both paths converge on the same `/loop the
+steward` re-entry. The daemon's PID + log files live in `/tmp`,
+so a session restart needs to re-spawn it. State (ETag + last
+seen event ID) persists at `~/.cache/endo-events-poll-state` so
+a daemon restart does not replay every prior event as a fresh
+trigger.
+
 ## Sub-roles dispatched per cycle
 
 Each cycle dispatches one of each (in parallel where work is
