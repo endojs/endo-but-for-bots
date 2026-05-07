@@ -1,6 +1,32 @@
 # PR dispatch state
 
-Last cycle: 2026-05-06 15:30 UTC (conductor drained 2-PR queue).
+Last cycle: 2026-05-07 06:30 UTC (designer fold-in for PR 115 + PR 117).
+Prior cycle: 2026-05-06 15:30 UTC (conductor drained 2-PR queue).
+
+## Cycle 2026-05-07 06:30 UTC
+
+Discovery: scan-fresh-feedback surfaced an 11-comment review batch
+from kriskowal on PR 115 (1 inline) and PR 117 (10 inline + review
+summary), 06:00-06:17 UTC. All comments reactji'd 👀; both
+designer dispatches landed in the same cycle:
+
+- **PR 115** (`design/filesystem-watchers`): renamed
+  `entry: 'file' | 'directory'` discriminator to `type`
+  (alias `MountEntryType`); HEAD `cd4a9d1bc6` (was `2244e30c9b`);
+  re-requested review from kriskowal.
+- **PR 117** (`design/namehub-interface-unification`): adopted
+  `ReadableNameHubInterface` as the unified abstraction;
+  established `maybeLookup` as the primitive with `lookup`
+  derived; narrowed mount surface (no locator methods, no
+  formula-implying methods); converted Open Questions to
+  Decisions; flagged future `link(namePath, resultName)` design.
+  HEAD `1bebbaa383` (was `610b907d6f`); re-requested review from
+  kriskowal.
+
+Designer self-improvement landed on garden as `2c655756d5`:
+"convert open questions to decisions on settled review".
+
+
 Surveyed 30 open PRs on `endojs/endo-but-for-bots`. Down from 59 at
 the prior snapshot; 29 PRs closed or merged across the session
 (11 merged via the conductor, 18 closed-as-superseded by the
