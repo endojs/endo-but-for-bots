@@ -4,6 +4,7 @@
 
 *See also: [daemon-make-archive](daemon-make-archive.md) (added 2026-04-23),
 [filesystem-watchers](filesystem-watchers.md) (added 2026-05-07),
+[platform-fs-daemon-integration](platform-fs-daemon-integration.md) (added 2026-05-07),
 [endo-posix-sandbox](endo-posix-sandbox.md) (added 2026-05-07; mirrors
 `PLAN/endo_posix_sandbox.md` for roadmap calibration),
 [exo-zip-package](exo-zip-package.md) (added 2026-05-08; PR #128 reshape
@@ -44,6 +45,7 @@ blocker).*
 | [daemon-mount](daemon-mount.md) | 2026-03-20 | 2026-03-20 | In Progress |
 | [filesystem-watchers](filesystem-watchers.md) | 2026-05-07 | 2026-05-07 | Not Started |
 | [platform-fs](platform-fs.md) | 2026-03-18 | 2026-03-18 | In Progress |
+| [platform-fs-daemon-integration](platform-fs-daemon-integration.md) | 2026-05-07 | 2026-05-07 | Not Started |
 | [daemon-capability-persona](daemon-capability-persona.md) | 2026-02-16 | 2026-02-24 | Not Started |
 | [daemon-cross-peer-gc](daemon-cross-peer-gc.md) | 2026-03-07 | 2026-04-29 | **Complete** |
 | [daemon-retention-paths](daemon-retention-paths.md) | 2026-04-30 | 2026-04-30 | Not Started |
@@ -285,6 +287,7 @@ capabilities available to agents.
 | daemon-docker-selfhost | Not Started | Dockerfile, state persistence, network exposure, Chat hosting |
 | daemon-agent-tools | Not Started | Filesystem, shell, git tools backed by capabilities |
 | platform-fs | In Progress | `@endo/platform/fs` — shared types, content store, tree adapters |
+| platform-fs-daemon-integration | Not Started | How the daemon `Mount` exo composes `@endo/platform/fs/node` ambient-authority factories without exposing them to agents |
 | daemon-capability-filesystem | Not Started | `Dir`/`File` capabilities for structural filesystem confinement |
 | ~~daemon-content-store-gc~~ | **Complete** | Content-store pruning and scratch-mount directory cleanup at GC time; landed in PR #99 |
 | daemon-mount | In Progress | Phases 1-3, 5 implemented; symlink confinement, 20 integration tests; Phase 4 (sub-mounts, snapshot) and Phase 6 (CLI) remaining |
