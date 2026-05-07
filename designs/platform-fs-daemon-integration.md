@@ -118,12 +118,18 @@ This is already possible via `provideMount` on `HostInterface` (see
 
 | Phase | Owner | Notes |
 |-------|-------|-------|
-| Creation | Host (via `endo mount` / `endo mkscratch`, or programmatic `provideMount`) | Returns a `Mount` formula identifier; the underlying `makeDirectory(absolutePath)` is invoked once, on the daemon side. |
+| Creation | Host (via `endo mount` / `endo mktmp`, or programmatic `provideMount`) | Returns a `Mount` formula identifier; the underlying `makeDirectory(absolutePath)` is invoked once, on the daemon side. |
 | Lookup | Agent (via pet name) | The daemon resolves the pet name to the `Mount` formula and returns the exo reference. |
 | Sub-lookup | Agent (via `directory.lookup('subdir')`) | Returns a transient sub-exo. Not a new formula, not a new pet-store entry. |
 | Snapshot | Agent (via `directory.snapshot()`) | Stages content into a content-addressed `readable-tree` formula (see `daemon-mount.md` Phase 4). |
 | Revocation | Host (via `endo remove foo-mount`) | The pet-store entry is dropped; outstanding exo references continue to work until GC because the formula is still reachable via outstanding refs. |
 | Garbage collection | Daemon | When the formula is unreachable from any pet store and any outstanding ref, the formula and (for `scratch-mount`) its backing directory are deleted. |
+
+The CLI verb is `endo mktmp` for familiarity with the POSIX `mktemp` convention.
+The noun for the resulting temporary space inside the daemon's store is
+"scratch" (as in `scratch-mount` and `provideScratchMount`).
+The verb names the user-facing action; the noun names the persistent thing it
+creates.
 
 ### Capability Surface Summary
 
