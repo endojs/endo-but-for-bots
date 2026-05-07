@@ -270,6 +270,30 @@ an agent in the `builder` role to implement from later.
   upstream repo so the head ref is read from the right namespace.
   Encountered on issue #110 → PR 115 (filesystem watchers).
 
+- **A cluster of review comments often answers the design's Open
+  Questions and turns them into Decisions.** When a substantive
+  fold-in batch lands inline comments on six of the design's
+  Open Questions (or on Alternative-considered "Recommendation:"
+  lines), the right revision is not to leave the Open Questions
+  as Open Questions with a maintainer reply attached: it is to
+  convert the section into a `## Decisions` heading and rewrite
+  each item in the affirmative with a sentence of rationale.
+  The Status field updates correspondingly (`Proposed` becomes
+  `Accepted, not yet implemented`, and an `Updated:` row is
+  added if missing). The do-nothing alternative's
+  "Recommendation: this is the do-nothing alternative" prose
+  becomes "Rejected." with the chosen-alternative rationale
+  inlined; the recommended alternative's "Recommendation: defer"
+  similarly becomes a "Rejected." or "Accepted." line.
+  When the maintainer also asks for follow-on work that is
+  explicitly out of scope (a new sibling design like
+  `link(namePath, resultName)`), capture it in a new
+  `## Out of Scope, Future Work` section rather than burying it
+  in the rationale paragraph that pointed at it.
+  This keeps the document readable as a settled design instead
+  of as an in-flight conversation.
+  Encountered on PR 117 (NameHub interface unification fold-in).
+
 - **Inline review comment as the explicit dispatch instruction.**
   A maintainer can write `Dispatch a subagent to design a response to
   this question for later consideration` (or a close paraphrase) as
