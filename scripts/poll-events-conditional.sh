@@ -83,8 +83,10 @@ while true; do
 
       # The Monitor trigger: ONE line on stdout per batch. Includes
       # the count + a tail-of-payload digest so the steward gets
-      # actionable detail in the notification.
-      DIGEST="$(echo "$NEW_EVENTS" | jq -r '[.[] | "\(.type)/\(.payload.action // \"-\")@#\(.payload.issue.number // .payload.pull_request.number // \"?\")"] | join(", ")' 2>/dev/null || echo "?")"
+      # actionable detail in the notification. Concatenation form
+      # avoids the shell-escape pain of \"-\" inside jq's
+      # "\(...)" string interpolation.
+      DIGEST="$(echo "$NEW_EVENTS" | jq -r '[.[] | (.type) + "/" + ((.payload.action // "-") | tostring) + "@#" + ((.payload.issue.number // .payload.pull_request.number // "?") | tostring)] | join(", ")' 2>/dev/null || echo "?")"
       echo "[$(date -u +%H:%M:%S)] NEW $COUNT on $REPO: $DIGEST"
 
       LAST_EVENT_ID="$(echo "$NEW_EVENTS" | jq -r 'max_by(.id | tonumber) | .id' 2>/dev/null || echo "$LAST_EVENT_ID")"
