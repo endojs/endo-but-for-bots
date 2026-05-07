@@ -112,10 +112,7 @@ export const makeAnthropicProvider = ({ apiKey, model, logger = console }) => {
       const { system, messages: anthropicMessages } =
         toAnthropicMessages(messages);
       logger.log('[LAL] Calling Anthropic API...');
-      logger.log(
-        '[LAL] Messages:',
-        JSON.stringify(anthropicMessages, null, 2),
-      );
+      logger.log('[LAL] Messages:', JSON.stringify(anthropicMessages, null, 2));
       let response;
       try {
         response = await client.messages.create({

@@ -8,9 +8,10 @@ import {
   truncateMessages,
 } from '../providers/openai-chat.js';
 
-/** @import { CommonChatMessage } from '../providers/openai-chat.js' */
+/** @import { CommonChatMessage, CommonTool } from '../providers/openai-chat.js' */
 
 test('toOpenAIChatTools passes tools through unchanged', t => {
+  /** @type {CommonTool[]} */
   const tools = harden([
     {
       type: 'function',
@@ -78,10 +79,7 @@ test('toOpenAIChatMessages stringifies object arguments', t => {
   const result = toOpenAIChatMessages(input);
   const [msg] = result;
   t.is(msg.role, 'assistant');
-  t.is(
-    /** @type {any} */ (msg).tool_calls[0].function.arguments,
-    '{"x":1}',
-  );
+  t.is(/** @type {any} */ (msg).tool_calls[0].function.arguments, '{"x":1}');
 });
 
 test('parseOpenAIChatChoice returns empty assistant message for missing choice', t => {
@@ -93,19 +91,29 @@ test('parseOpenAIChatChoice returns empty assistant message for missing choice',
 
 test('parseOpenAIChatChoice extracts content', t => {
   t.deepEqual(
-    parseOpenAIChatChoice({ message: { role: 'assistant', content: 'hi' } }),
+    parseOpenAIChatChoice({
+      finish_reason: 'stop',
+      index: 0,
+      logprobs: null,
+      message: { role: 'assistant', content: 'hi', refusal: null },
+    }),
     { role: 'assistant', content: 'hi' },
   );
 });
 
 test('parseOpenAIChatChoice extracts tool_calls', t => {
   const result = parseOpenAIChatChoice({
+    finish_reason: 'tool_calls',
+    index: 0,
+    logprobs: null,
     message: {
       role: 'assistant',
       content: '',
+      refusal: null,
       tool_calls: [
         {
           id: 'call_1',
+          type: 'function',
           function: { name: 'foo', arguments: '{"x":1}' },
         },
       ],

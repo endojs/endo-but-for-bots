@@ -157,11 +157,7 @@ harden(parseOpenAIChatChoice);
  * @param {Logger} [logger]
  * @returns {CommonChatMessage[]}
  */
-export const truncateMessages = (
-  messages,
-  maxMessages,
-  logger = console,
-) => {
+export const truncateMessages = (messages, maxMessages, logger = console) => {
   if (
     typeof maxMessages !== 'number' ||
     maxMessages <= 0 ||

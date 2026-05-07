@@ -6,8 +6,12 @@
 /**
  * Detect the provider kind from a base URL.
  *
+ * Matches vendor-specific domains first; the trailing `/v1` check is the
+ * generic OpenAI-compatible catchall (typically a localhost or private
+ * server such as llama.cpp / vLLM).
+ *
  * @param {string} baseURL
- * @returns {'anthropic' | 'gemini' | 'openai-compatible' | 'ollama'}
+ * @returns {'anthropic' | 'gemini' | 'openrouter' | 'openai-compatible' | 'ollama'}
  */
 export const detectProviderKind = baseURL => {
   if (baseURL.includes('anthropic.com')) {
@@ -18,6 +22,9 @@ export const detectProviderKind = baseURL => {
     baseURL.includes('generativelanguage')
   ) {
     return 'gemini';
+  }
+  if (baseURL.includes('openrouter.ai')) {
+    return 'openrouter';
   }
   if (baseURL.includes('/v1')) {
     return 'openai-compatible';
@@ -30,6 +37,7 @@ harden(detectProviderKind);
 const defaultModels = {
   anthropic: 'claude-sonnet-4-6-20250514',
   gemini: 'gemini-2.5-pro',
+  openrouter: 'anthropic/claude-sonnet-4-5',
   'openai-compatible': 'qwen3',
   ollama: 'qwen3',
 };

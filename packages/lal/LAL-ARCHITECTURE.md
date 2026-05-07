@@ -362,6 +362,7 @@ Based on the `LAL_HOST` environment variable:
 | Host URL pattern | Provider | SDK | Default model |
 |------------------|----------|-----|---------------|
 | Contains `anthropic.com` | `makeAnthropicProvider` | `@anthropic-ai/sdk` | `claude-opus-4-5-20251101` |
+| Contains `openrouter.ai` | `makeOpenRouterProvider` | `openai` | `anthropic/claude-sonnet-4-5` |
 | Contains `/v1` | `makeLlamaCppProvider` | `openai` | `qwen3` |
 | Other | `makeOllamaProvider` | `ollama` | `qwen3` |
 
