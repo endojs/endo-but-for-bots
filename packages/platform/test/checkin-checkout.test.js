@@ -62,7 +62,7 @@ const makeMemoryContentStore = () => {
  * @param {import('ava').ExecutionContext} _t
  * @returns {Promise<string>}
  */
-const makeTmpDir = async _t => {
+const makeTemporaryDirectory = async _t => {
   const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'endo-ci-'));
   return dir;
 };
@@ -79,7 +79,7 @@ const scaffold = async root => {
 };
 
 test('checkinTree ingests a local tree into a store', async t => {
-  const dir = await makeTmpDir(t);
+  const dir = await makeTemporaryDirectory(t);
   await scaffold(dir);
 
   const contentStore = makeMemoryContentStore();
@@ -95,7 +95,7 @@ test('checkinTree ingests a local tree into a store', async t => {
 });
 
 test('checkinTree produces a loadable snapshot tree', async t => {
-  const dir = await makeTmpDir(t);
+  const dir = await makeTemporaryDirectory(t);
   await scaffold(dir);
 
   const contentStore = makeMemoryContentStore();
@@ -118,7 +118,7 @@ test('checkinTree produces a loadable snapshot tree', async t => {
 });
 
 test('snapshot tree has() method', async t => {
-  const dir = await makeTmpDir(t);
+  const dir = await makeTemporaryDirectory(t);
   await scaffold(dir);
 
   const contentStore = makeMemoryContentStore();
@@ -138,7 +138,7 @@ test('snapshot tree has() method', async t => {
 });
 
 test('snapshot tree list() with subpath', async t => {
-  const dir = await makeTmpDir(t);
+  const dir = await makeTemporaryDirectory(t);
   await scaffold(dir);
 
   const contentStore = makeMemoryContentStore();
@@ -153,7 +153,7 @@ test('snapshot tree list() with subpath', async t => {
 });
 
 test('snapshot tree lookup() with multi-segment path', async t => {
-  const dir = await makeTmpDir(t);
+  const dir = await makeTemporaryDirectory(t);
   await scaffold(dir);
 
   const contentStore = makeMemoryContentStore();
@@ -169,7 +169,7 @@ test('snapshot tree lookup() with multi-segment path', async t => {
 });
 
 test('snapshot tree lookup() throws for unknown name', async t => {
-  const dir = await makeTmpDir(t);
+  const dir = await makeTemporaryDirectory(t);
   await scaffold(dir);
 
   const contentStore = makeMemoryContentStore();
@@ -185,7 +185,7 @@ test('snapshot tree lookup() throws for unknown name', async t => {
 });
 
 test('checkinTree with nested directory', async t => {
-  const dir = await makeTmpDir(t);
+  const dir = await makeTemporaryDirectory(t);
   await scaffold(dir);
 
   const contentStore = makeMemoryContentStore();

@@ -122,7 +122,7 @@ export const makeDirectory = (dirPath, options = {}) => {
       /** @type {any} */
       let child;
       if (stat.isDirectory()) {
-        child = makeReadOnlyDir(fullPath);
+        child = makeReadOnlyDirectory(fullPath);
       } else {
         child = makeFile(fullPath, { store }).readOnly();
       }
@@ -140,7 +140,7 @@ export const makeDirectory = (dirPath, options = {}) => {
      * @param {string} readOnlyPath
      * @returns {object}
      */
-    const makeReadOnlyDir = readOnlyPath =>
+    const makeReadOnlyDirectory = readOnlyPath =>
       makeExo(
         'ReadableTree',
         ReadableTreeInterface,
@@ -182,7 +182,7 @@ export const makeDirectory = (dirPath, options = {}) => {
             /** @type {any} */
             let child;
             if (stat.isDirectory()) {
-              child = makeReadOnlyDir(fullPath);
+              child = makeReadOnlyDirectory(fullPath);
             } else {
               child = makeFile(fullPath, { store }).readOnly();
             }
@@ -290,7 +290,7 @@ export const makeDirectory = (dirPath, options = {}) => {
 
         readOnly: () => {
           if (!readOnlyFacet) {
-            readOnlyFacet = makeReadOnlyDir(currentPath);
+            readOnlyFacet = makeReadOnlyDirectory(currentPath);
           }
           return readOnlyFacet;
         },
@@ -299,7 +299,7 @@ export const makeDirectory = (dirPath, options = {}) => {
           if (!store) {
             throw new Error('No snapshot store provided');
           }
-          const readOnlyTree = makeReadOnlyDir(currentPath);
+          const readOnlyTree = makeReadOnlyDirectory(currentPath);
           const { sha256 } = await checkinTree(readOnlyTree, store);
           return store.loadTree(sha256);
         },

@@ -10,7 +10,7 @@ import { makeFile } from '../src/fs-node/file.js';
  * @param {import('ava').ExecutionContext} _t
  * @returns {Promise<string>}
  */
-const makeTmpDir = async _t => {
+const makeTemporaryDirectory = async _t => {
   const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'endo-test-'));
   return dir;
 };
@@ -32,7 +32,7 @@ const scaffold = async root => {
 };
 
 test('makeDirectory list', async t => {
-  const dir = await makeTmpDir(t);
+  const dir = await makeTemporaryDirectory(t);
   await scaffold(dir);
 
   const directory = makeDirectory(dir);
@@ -44,7 +44,7 @@ test('makeDirectory list', async t => {
 });
 
 test('makeDirectory has', async t => {
-  const dir = await makeTmpDir(t);
+  const dir = await makeTemporaryDirectory(t);
   await scaffold(dir);
 
   const directory = makeDirectory(dir);
@@ -59,7 +59,7 @@ test('makeDirectory has', async t => {
 });
 
 test('makeDirectory lookup file', async t => {
-  const dir = await makeTmpDir(t);
+  const dir = await makeTemporaryDirectory(t);
   await scaffold(dir);
 
   const directory = makeDirectory(dir);
@@ -73,7 +73,7 @@ test('makeDirectory lookup file', async t => {
 });
 
 test('makeDirectory lookup subdirectory', async t => {
-  const dir = await makeTmpDir(t);
+  const dir = await makeTemporaryDirectory(t);
   await scaffold(dir);
 
   const directory = makeDirectory(dir);
@@ -89,7 +89,7 @@ test('makeDirectory lookup subdirectory', async t => {
 });
 
 test('makeDirectory lookup with path array', async t => {
-  const dir = await makeTmpDir(t);
+  const dir = await makeTemporaryDirectory(t);
   await scaffold(dir);
 
   const directory = makeDirectory(dir);
@@ -101,7 +101,7 @@ test('makeDirectory lookup with path array', async t => {
 });
 
 test('makeDirectory makeDirectory creates nested dir', async t => {
-  const dir = await makeTmpDir(t);
+  const dir = await makeTemporaryDirectory(t);
 
   const directory = makeDirectory(dir);
   const nested = await directory.makeDirectory(['new', 'deep']);
@@ -114,7 +114,7 @@ test('makeDirectory makeDirectory creates nested dir', async t => {
 });
 
 test('makeDirectory remove', async t => {
-  const dir = await makeTmpDir(t);
+  const dir = await makeTemporaryDirectory(t);
   await scaffold(dir);
 
   const directory = makeDirectory(dir);
@@ -130,7 +130,7 @@ test('makeDirectory remove', async t => {
 });
 
 test('makeDirectory move', async t => {
-  const dir = await makeTmpDir(t);
+  const dir = await makeTemporaryDirectory(t);
   await scaffold(dir);
 
   const directory = makeDirectory(dir);
@@ -149,7 +149,7 @@ test('makeDirectory move', async t => {
 });
 
 test('makeDirectory copy', async t => {
-  const dir = await makeTmpDir(t);
+  const dir = await makeTemporaryDirectory(t);
   await scaffold(dir);
 
   const directory = makeDirectory(dir);
@@ -168,7 +168,7 @@ test('makeDirectory copy', async t => {
 });
 
 test('makeDirectory readOnly returns ReadableTree', async t => {
-  const dir = await makeTmpDir(t);
+  const dir = await makeTemporaryDirectory(t);
   await scaffold(dir);
 
   const directory = makeDirectory(dir);
@@ -195,7 +195,7 @@ test('makeDirectory readOnly returns ReadableTree', async t => {
 });
 
 test('makeDirectory write blob from file', async t => {
-  const dir = await makeTmpDir(t);
+  const dir = await makeTemporaryDirectory(t);
   await scaffold(dir);
 
   const directory = makeDirectory(dir);
@@ -214,7 +214,7 @@ test('makeDirectory write blob from file', async t => {
 });
 
 test('makeDirectory snapshot throws without store', async t => {
-  const dir = await makeTmpDir(t);
+  const dir = await makeTemporaryDirectory(t);
   await scaffold(dir);
 
   const directory = makeDirectory(dir);
@@ -227,7 +227,7 @@ test('makeDirectory snapshot throws without store', async t => {
 });
 
 test('makeDirectory ignores .git by default', async t => {
-  const dir = await makeTmpDir(t);
+  const dir = await makeTemporaryDirectory(t);
   await fs.promises.mkdir(path.join(dir, '.git'), { recursive: true });
   await fs.promises.writeFile(
     path.join(dir, '.git', 'config'),
