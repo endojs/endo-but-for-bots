@@ -65,6 +65,33 @@ deps, 8 in review)`, `director: no PRs needed dispatch`,
 `liaison: no contributor activity since prior cycle`) satisfies
 the gate; an absent report does not.
 
+**Pre-`ScheduleWakeup` checklist.** Before the next-fire schedule
+in step 9, the steward asks itself: *did this cycle actually
+dispatch a `liaison`, a `marshal`, and either dispatch a
+`director` sub-agent OR run the director's per-PR sweep inline?*
+The director carries an explicit inline-fallback exemption
+(below); `liaison` and `marshal` do NOT. If either is absent
+when reaching close, dispatch them now (even at the tail of the
+cycle) before scheduling the next fire.
+
+The recurring failure mode this checklist prevents: the steward
+threads the per-PR comment sweep and the per-PR designer/fixer
+dispatches (director-style work) inline, ships a process commit,
+schedules the next fire, and never dispatches the liaison
+sub-agent. Two-plus consecutive cycles of this and the issue
+backlog rots. Issue-side activity (new issues, comments on
+existing issues) does NOT surface in the per-PR comment sweep
+the steward runs inline; the liaison's `gh issue list` +
+`scan-fresh-feedback IssueCommentEvent` calls are the only path
+that catches it. Skipping liaison even once silently drops every
+issue-side comment from that cycle's window.
+
+If a maintainer says some variation of "the liaison seems
+stalled, redispatch more frequently", the answer is not a
+shorter steward cadence (the steward is already firing every
+≤30 min in active mode); it is enforcing this checklist so each
+fire actually dispatches the liaison.
+
 ## The steward stays on `garden`
 
 The steward operates from `/home/kris/garden` (or its
