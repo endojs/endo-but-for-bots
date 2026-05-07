@@ -1,16 +1,18 @@
 # PR dispatch state
 
-Last cycle: 2026-05-06 14:30 UTC.
+Last cycle: 2026-05-06 15:30 UTC (conductor drained 2-PR queue).
 Surveyed 30 open PRs on `endojs/endo-but-for-bots`. Down from 59 at
 the prior snapshot; 29 PRs closed or merged across the session
 (11 merged via the conductor, 18 closed-as-superseded by the
 re-open-under-bot pattern: PRs 30, 44, 48 → 103, 101, 100; plus
-mass cleanup of older review/* dependabot bots PRs).
+mass cleanup of older review/* dependabot bots PRs). PRs 108 and
+100 merged via the conductor at 2026-05-06 15:30 UTC.
 
-## Snapshot 2026-05-06 14:30 UTC
+## Snapshot 2026-05-06 15:30 UTC
 
 | PR | Title | Base | Review | Status |
 | --- | --- | --- | --- | --- |
+| ~~108~~ | TCP syrups transport framing design | llm | APPROVED | merged 2026-05-06 conductor → `677329b22f` |
 | 106 | Browser exo with origin allowlist | llm | - | awaiting review (panel-vetted: 0 must-fix) |
 | 105 | skill-registry helpers | llm | - | awaiting review (panel + fixer done) |
 | ~~104~~ | re-import ses for assert global | llm | - | merged 2026-05-06 conductor → `ac5dd05663` |
@@ -18,7 +20,7 @@ mass cleanup of older review/* dependabot bots PRs).
 | 103 | chat slot-and-slash commands design | llm | - | awaiting review (re-opened from #30) |
 | 102 | chat voice command parser design | llm | - | awaiting review (sibling design for #101) |
 | 101 | chat voice input | llm | - | awaiting review (re-opened from #44) |
-| 100 | familiar unified weblet server design | llm | - | awaiting review (re-opened from #48) |
+| ~~100~~ | familiar unified weblet server design | llm | APPROVED | merged 2026-05-06 conductor → `07d36112d6` |
 | 99 | content-store-gc | llm | CHANGES_REQUESTED | awaiting review (panel + builder fixer addressed should-fix) |
 | 96 | aux package.json overrides design | llm | CHANGES_REQUESTED | awaiting review (designer-authored) |
 | 89 | genie-integration design | llm | - | awaiting review (older) |
@@ -47,13 +49,12 @@ mass cleanup of older review/* dependabot bots PRs).
 
 ### Counts
 
-- `awaiting maintainer review`: 24 (the action queue)
+- `awaiting maintainer review`: 22 (the action queue; #100 + #108 merged this cycle)
 - `blocked (CONFLICT)`: 4 (#55, #54, #76 mirror, plus a few older review/*)
-- `gated`: 1 (#94 on #104)
 - `blocked (ancient dependabot)`: 9
 - `meta`: 1 (#83)
 
-Total: 30 open PRs (down from 59).
+Total: 28 open PRs (down from 30).
 
 ### Dispatched-but-active builders
 
