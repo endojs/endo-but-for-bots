@@ -531,6 +531,19 @@ harden(makeMountFileExo);
 /**
  * Create a mount exo backed by a filesystem directory.
  *
+ * `Mount` is the agent-visible name for a `Directory`-shaped capability
+ * (see `@endo/platform/fs/lite/types`) whose root is a confined real
+ * filesystem subtree.
+ * It exposes a structural superset of the platform `DirectoryInterface`
+ * for backward compatibility with daemon-only clients (notably the
+ * convenience `readText`/`writeText`/`maybeReadText` text I/O methods).
+ * The strict `Directory` facet returned by `Mount.asDirectory()` is the
+ * canonical surface for cross-realm consumers (workers, caplets) that
+ * have been written against `import { Directory } from '@endo/platform/fs/lite/types'`.
+ *
+ * See `designs/platform-fs-daemon-integration.md` for the integration
+ * modes and the platform layer cake.
+ *
  * @param {object} opts
  * @param {string} opts.rootPath
  * @param {boolean} opts.readOnly

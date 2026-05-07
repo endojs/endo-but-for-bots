@@ -74,5 +74,52 @@
  * @property {(pathSegments: string[]) => Promise<void>} makeDirectory
  */
 
+/**
+ * A File presents a mutable interface over a single filesystem entry.
+ * Exposed by the `@endo/platform/fs/node` `makeFile` exo, and by
+ * daemon-side wrappers (such as the `MountFile` exo, modulo the gaps
+ * documented in `designs/platform-fs-daemon-integration.md`).
+ *
+ * Agents typically import this type — not `makeFile` — so they can
+ * accept any object satisfying the structural contract without
+ * dragging in `node:fs`.
+ *
+ * @typedef {object} File
+ * @property {() => unknown} streamBase64
+ * @property {() => Promise<string>} text
+ * @property {() => Promise<any>} json
+ * @property {(content: string) => Promise<void>} writeText
+ * @property {(readableRef: unknown) => Promise<void>} writeBytes
+ * @property {(text: string) => Promise<void>} append
+ * @property {() => ReadableBlob} readOnly
+ * @property {() => Promise<SnapshotBlob>} snapshot
+ */
+
+/**
+ * A Directory presents a mutable interface over a filesystem subtree.
+ * Exposed by the `@endo/platform/fs/node` `makeDirectory` exo, and by
+ * daemon-side wrappers — most notably the `Mount` exo from
+ * `@endo/daemon`, which is the agent-visible name for a `Directory`-
+ * shaped capability whose root is a confined real filesystem subtree.
+ *
+ * Agents typically import this type — not `makeDirectory` — so they
+ * can accept any object satisfying the structural contract without
+ * dragging in `node:fs`.
+ *
+ * See `designs/platform-fs-daemon-integration.md`.
+ *
+ * @typedef {object} Directory
+ * @property {(...petNamePath: string[]) => Promise<boolean>} has
+ * @property {(...petNamePath: string[]) => Promise<string[]>} list
+ * @property {(petNamePath: string | string[]) => Promise<unknown>} lookup
+ * @property {(pathSegments: string[], value: unknown) => Promise<void>} write
+ * @property {(pathSegments: string[], options?: { recursive?: boolean }) => Promise<void>} remove
+ * @property {(from: string[], to: string[]) => Promise<void>} move
+ * @property {(from: string[], to: string[]) => Promise<void>} copy
+ * @property {(pathSegments: string[]) => Promise<Directory>} makeDirectory
+ * @property {() => ReadableTree} readOnly
+ * @property {() => Promise<SnapshotTree>} snapshot
+ */
+
 // This module has no runtime exports.
 export {};
