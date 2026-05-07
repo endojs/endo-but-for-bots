@@ -240,7 +240,9 @@ treatment for the `URL` constructor and `URLSearchParams`).*
 
 *Earlier additions: [daemon-make-archive](daemon-make-archive.md) (added
 2026-04-23), [filesystem-watchers](filesystem-watchers.md) (added
-2026-05-07), [endo-posix-sandbox](endo-posix-sandbox.md) (added
+2026-05-07), [ocapn-daemon-integration](ocapn-daemon-integration.md) (added
+2026-05-07; per-agent `@transports` succeeds the host-singleton `@nets`; closes
+#118 item (b)), [endo-posix-sandbox](endo-posix-sandbox.md) (added
 2026-05-07; roadmap-calibration record for the `packages/sandbox` branch),
 [exo-zip-package](exo-zip-package.md) (added 2026-05-08; PR #128 reshape
 blocker), [pass-style-promise](pass-style-promise.md) (added 2026-05-10;
@@ -418,6 +420,7 @@ LLM-agent stack).*
 | [ocapn-orthogonal-persistence](ocapn-orthogonal-persistence.md) | 2026-07-16 | 2026-07-22 | In Progress |
 | [ocapn-tcp-for-test-extraction](ocapn-tcp-for-test-extraction.md) | 2026-02-14 | 2026-02-24 | Not Started |
 | [ocapn-tcp-syrup-framing](ocapn-tcp-syrup-framing.md) | 2026-04-23 | 2026-05-06 | Not Started |
+| [ocapn-daemon-integration](ocapn-daemon-integration.md) | 2026-05-07 | 2026-05-07 | Not Started |
 | [syrup-frame](syrup-frame.md) | 2026-05-04 | 2026-05-06 | Deprecated |
 | [cbor-frame](cbor-frame.md) | 2026-05-04 | 2026-07-15 | Implemented (PR #288) |
 | [cbor-codec](cbor-codec.md) | 2026-07-12 | 2026-07-28 | Phase 1 implemented |
@@ -634,6 +637,7 @@ flowchart TD
         oreconn[ocapn-noise-session-reconnect]
         oortho[ocapn-orthogonal-persistence<br/><i>IN PROGRESS</i>]
         docapn[daemon-ocapn-external-connectivity<br/><i>IN PROGRESS</i>]
+        odint[ocapn-daemon-integration]
         onet --> otcp --> onoise
         orev --> onoise
         dnet --> onoise
@@ -648,6 +652,9 @@ flowchart TD
         onoise --> docapn
         oreconn --> docapn
         dnet --> docapn
+        onoise --> odint
+        onet --> odint
+        dnet --> odint
     end
 
     subgraph Chat UX
@@ -934,6 +941,7 @@ finalized.
 | ~~ocapn-noise-network~~ | **Complete** | Noise IK netlayer for OCapN landed via PR #137 (merged 2026-05-08), consolidating the stacked PRs #111 (CBOR codec) + #112 (Noise IK netlayer) + #113 (transport tests) |
 | ~~ocapn-iroh-netlayer~~ | **Complete** | iroh 1.0 QUIC netlayer for `@endo/ocapn` (`@endo/ocapn-iroh`): dial-by-EndpointId with discovery/relays, netstring framing under the `ocapn/netstring/0` ALPN, standard `op:start-session`; implemented with the design |
 | ocapn-orthogonal-persistence | In Progress | Phases 1-4 landed and hardened 2026-07-17: `@endo/thixotrope` with resumable sessions at the export-table layer, real XS heap snapshots (`rust/thixotrope-xs-worker` + `makeXsEngine`), sleepy workers with delivered-watermark journals, durable host exports and cross-worker object/promise links, the worker controller, at-most-once host obligations, and post-ultrareview crash hardening. Vat-level GC landed ahead of schedule (collectVats mark-and-sweep, retireWorker with tombstoned links, unpublish, shared-snapshot-ref guard). Doc now also carries the accepted forward plans: Phase 7 name hub + upgrade-by-rebinding (pet-store-style indirection preserving orthogonal purity — no in-place code upgrade, succession + name rebinding instead) and vat-level GC with explicit retirement; Phase 8 resource vats; Phase 9 non-reifying (comms-vat) host adopting the tables records as c-lists. Remaining implementation: Phases 5-9 plus ses lockdown on XS |
+| ocapn-daemon-integration | Not Started | Per-agent `@transports` succeeds the host-singleton `@nets`; cap-handoff path from daemon to agent (closes #118 item (b)) |
 
 **Exit criterion:** Two Endo daemons can connect securely over
 OCapN-Noise. Locator format supports node identification via agent
@@ -1550,6 +1558,7 @@ have been remapped: 0 -> 1, ½ -> 2, 1 -> 3, 2 -> 4, 3 -> 7, 4 -> 9,
 | daemon-agent-network-identity | S-M | 3 days | 4 | Network registration, locator construction |
 | ~~ocapn-noise-network~~ | L | — | 4 | ✅ Complete (PR #137 consolidates stacked PRs #111/#112/#113; merged 2026-05-08) |
 | ~~ocapn-iroh-netlayer~~ | M | — | 4 | ✅ Complete (implemented with the design: `@endo/ocapn-iroh`, mock-iroh CI tests plus `ENDO_IROH_INTEGRATION=1`-gated real-endpoint test) |
+| ocapn-daemon-integration | M-L | 2-4 weeks | 4 | New `Transports` formula type, host method, agent-side `@transports`, single cutover from `@nets` (no migration shim), CLI verbs |
 | ocapn-noise-key-only-session-boundary | M | 3-4 days | 4 | Noise-free key-sniffing relay and independent terminating listener, application-injected OCapN network adapter, static SIGHUP-reloadable route configuration from a loosely coupled Node controller exo, and WebSocket-to-relay handoff migration; Node prototype prepared for a Rust data plane behind a CBOR configuration protocol |
 | gateway-packaging-ci | S-M | 3 days | 5 | CI workflow that builds and signs OS package artifacts; PR [#356](https://github.com/endojs/endo-but-for-bots/pull/356) stacked sibling |
 | gateway-aws-deployment | M | 4-5 days | 5 | AWS deployment automation; PR #356 stacked sibling |
@@ -1630,7 +1639,7 @@ date of this pass.
 | M1: AI Agent Experience (was M0) | 0 | **Complete** | — |
 | M2: Project Hygiene (was M½) | 0 | **Complete** | — |
 | M3: Remote Access & Tools (was M1) | 19 (`gateway-package`, `daemon-docker-selfhost`, `daemon-agent-tools`, `endo-agent-tools`, `agentry-agent-builder`, `agentry-git-verb-gaps`, `agentry-git-eval-scenarios`, `exo-git-follow-root-advancement`, `daemon-mount`, `daemon-worker-import-from-mount`, `npm-registry-as-directory-tree`, `mvs-resolver`, `snapshot-mapper`, `filesystem-watchers`, `daemon-locator-terminology`, `daemon-rename-to-manager`, `daemon-xs-worker-snapshot`, `endoclaw-timer`, `endoclaw-network-fetch`) | 9-13 weeks | 11-15 weeks |
-| M4: Networking (was M2) | 8 (`ocapn-network-transport-separation`, `ocapn-tcp-for-test-extraction`, `ocapn-tcp-syrup-framing`, `cbor-frame`, `cbor-codec`, `ocapn-noise-cryptographic-review`, `daemon-agent-network-identity`, `ocapn-orthogonal-persistence`) | 5-6 weeks | 6-8 weeks |
+| M4: Networking (was M2) | 9 (`ocapn-network-transport-separation`, `ocapn-tcp-for-test-extraction`, `ocapn-tcp-syrup-framing`, `cbor-frame`, `cbor-codec`, `ocapn-noise-cryptographic-review`, `daemon-agent-network-identity`, `ocapn-orthogonal-persistence`, `ocapn-daemon-integration`) | 6-8 weeks | 7-10 weeks |
 | M5: Public Hosting & Billing (was M7) | 4 in-flight on PR #356 stack (`gateway-package` counted under M3; `gateway-packaging-ci`, `gateway-aws-deployment`, `gateway-aws-attuned` counted here) + 3 design gaps (`gateway-oauth-bonding`, `gateway-key-recovery`, `gateway-stripe-adapter`) | 4-6 weeks design + impl | merge cadence of PRs #343 and #356 |
 | M6: MCP Bridge Hosting (was Milestone B) | 2 net-new (`endo-gateway-mcp` impl, `endo-claude`); cross-milestone slices in M3 (P0) and M5 (P2/P3/P4 gaps) | ~3-3.5 weeks own work (endo-gateway-mcp ~2 weeks + endo-claude ~1-1.5 weeks) + ~6-9 weeks across P0-P4 | gated by M3 gateway-package phases 2/7/8 merge cadence |
 | M7: Weblets & Integrations (was M3) | 12 (`familiar-unified-weblet-server`, `familiar-chat-weblet-hosting`, `cli-store-verb-text-modes`, `cli-edit-verb`, `daemon-weblet-application`, `exo-zip-package`, `endoclaw-oauth`, `exo-google-sheets`, `endoclaw-proactive-messages`, `endoclaw-notifications`, `endoclaw-webhooks`, `endoclaw-voice`) | 6-8 weeks | 8-11 weeks |
@@ -1638,7 +1647,7 @@ date of this pass.
 | M9: UX & Tooling (was M4) | 13 (`chat-pending-commands`, `chat-slot-slash-commands`, `daemon-commands-as-messages`, `inventory-cancel-and-liveness`, `inventory-grouping-by-type`, `inventory-drag-and-drop`, `formula-inspector`, `workers-panel`, `daemon-retention-paths`, `chat-edit-message-ui`, `chat-inventory-create-menu`, `lal-transcript-memory-management`, `namehub-interface-unification`) | 9-12 weeks | 11-14 weeks |
 | M10: Confinement & Ecosystem (was M5) | 6 (`endo-posix-sandbox`, `daemon-capability-persona`, `daemon-capability-bank`, `endoclaw-browser`, `endoclaw-channel-bridges`, `endoclaw-skill-registry`) | 14-20 weeks | 16-22 weeks |
 | M11: Rust Daemon (`endor`) (was M6) | 6 (`endor-git-bindings`, `endor-registry-proxy-worker`, `daemon-endor-sqlite-iterate-streaming`, `endor-tui`, `endor-bus-tui`, `endor-native-zip-xs`) | 15-22 weeks | 17-24 weeks |
-| **Total remaining** | **64** + 7 M5 rows (4 in-flight + 3 design gaps) + 2 M6 own-work rows | **~61-83 weeks** + M5 4-6 weeks + M6 ~3-3.5 weeks | **~74-101 weeks** |
+| **Total remaining** | **65** + 7 M5 rows (4 in-flight + 3 design gaps) + 2 M6 own-work rows | **~62-85 weeks** + M5 4-6 weeks + M6 ~3-3.5 weeks | **~75-103 weeks** |
 
 The 2026-05-20 reconciliation corrects a counting gap in the prior
 snapshot's narrative: M1, M3, and M4 had absorbed new rows since the
