@@ -47,6 +47,28 @@ seen `created_at` timestamp) persists at
 `~/.cache/endo-events-poll-state` so a daemon restart does not
 replay every prior event as a fresh trigger.
 
+**On a `PullRequestReviewEvent` wake, enumerate ALL inline
+comments under that review's `pull_request_review_id`.** The
+draft-then-wrap pattern means inline comments can be hours or
+days older than the review submission. A timestamp filter
+("comments since the wake-up time") will miss everything written
+before the maintainer hit "Submit review". The reliable query
+is by review id:
+
+```sh
+REVIEW_ID=<the review's databaseId from the event>
+gh api "repos/endojs/endo-but-for-bots/pulls/<N>/comments" \
+  --jq "[.[] | select(.pull_request_review_id == $REVIEW_ID)]"
+```
+
+Reactji and process every comment in that set, including the ones
+older than the wrap. Encountered 2026-05-07: PR 119 review id
+4246586901 wrapped at 18:15 with three inline comments, the
+oldest at 18:10 (a directive to mirror `PLAN/endo_posix_sandbox.md`
+into `designs/`); the steward's narrow timestamp window ("comments
+since 18:25") missed the 18:10 comment for ~2 hours until the
+maintainer pointed at it directly.
+
 **Monitor filter: wake on review-wrap, not on per-comment-during-draft.**
 A maintainer drafting a PR review fires
 `PullRequestReviewCommentEvent` per inline comment as they're
