@@ -32,6 +32,18 @@ Prior cycle: 2026-05-07 06:30 UTC (designer fold-in for PR 115 + PR 117).
   the GitHub indexing anomaly). **Stack follow-up**: PRs 112 and
   113 stacked on 111; expect CONFLICTING/DIRTY after force-push;
   restage as separate steward concern.
+- **Liaison cycle landed** (after this dispatch state was first
+  written): issue #98 was closed upstream, tracking file deleted.
+  Issue #116 (`Frugal use of CI`, kriskowal 04:55 UTC) opened;
+  reactji + reply posted, `process/tracking/116.md` created.
+  **Surface to steward for next marshal cycle**: #116 needs a
+  researcher dispatch to survey change-impact-aware test selection
+  for a primarily-Node monorepo (turborepo affected-by, nx
+  affected, lerna `--since`, GH Actions path filters), with
+  smaller C/Go/Rust components; deliverable is a proposal, not an
+  implementation. Maintainer disprefers Bazel-scale solutions if
+  lighter approach suffices.
+
 - **Master sync** moved bots-ssh/master to incorporate ~5 commits
   of actual/master drift; affects all PRs based on master (75,
   73, 74, 71, 69, 68, 67, 64, 60, 59, 57, 55, 54, 76, 114).
