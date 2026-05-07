@@ -236,6 +236,21 @@ an agent in the `builder` role to implement from later.
   and fails permissions. Encountered on PR 30 → #103 (chat slot
   slash commands).
 
+- **`gh pr create` from a bot-pushed branch on the canonical repo.**
+  When the design branch was pushed directly to `endojs/endo-but-for-bots`
+  (not to a fork), invoking `gh pr create --base llm` in the worktree
+  fails with `aborted: you must first push the current branch to a
+  remote, or use the --head flag` even though the branch is already
+  on the remote. Adding `--head endojs:design/<slug>` then fails
+  with `kriscendobot does not have the correct permissions to execute
+  CreatePullRequest`. The working invocation is
+  `gh pr create -R endojs/endo-but-for-bots --base llm --head
+  design/<slug>` (explicit `-R`, plain head ref). The `gh` CLI
+  resolves the head namespace against the active account
+  (`kriscendobot`) by default; `-R` redirects the resolution to the
+  upstream repo so the head ref is read from the right namespace.
+  Encountered on issue #110 → PR 115 (filesystem watchers).
+
 ## Self-improvement
 
 The final task of every engagement is to update this role file and
