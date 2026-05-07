@@ -87,6 +87,28 @@ result through CI.
   fighting each other.
 - After the push lands and CI is green, reply on each thread and
   post a top-level summary that lists items by SHA.
+- **A `CHANGES_REQUESTED` review that asks for both a code change
+  AND a PR-body rewrite is two deliverables, not one.** When the
+  maintainer's review combines an inline-comment fix ("scope this
+  doc more narrowly") with a top-level ask ("rewrite the PR
+  description to capture the substance and not the methodology"),
+  treat the body rewrite as a peer of the code commit. Land the
+  code fix first (so the new SHA is real and citable), then
+  `gh pr edit <N> --body-file <path>` per
+  [`../skills/pre-pr-checklist.md`](../skills/pre-pr-checklist.md)'s
+  PR-body-template + no-methodology-leak rules, then post the
+  top-level summary that cites BOTH the addressing SHA AND the
+  body rewrite. If you re-request review having only pushed the
+  code fix, the maintainer's body-rewrite ask is still
+  unaddressed and the next round bounces. Pre-existing PR bodies
+  that grew out of split / re-open / cycle dispatches are the
+  most common methodology leakers; reset to the template
+  structure rather than appending. Session example: PR 109's
+  CHANGES_REQUESTED review asked for both a README scope tighten
+  and a body rewrite; addressing only the code change would have
+  left "Implementation half of the split of #29 per the
+  maintainer's ... review" prose in the body that was the
+  maintainer's specific complaint.
 - **Re-request review after a `CHANGES_REQUESTED` round.** GitHub's
   review state stays `CHANGES_REQUESTED` until the reviewer is asked
   again; without a re-request, the dismissed-but-unresolved status
@@ -98,7 +120,10 @@ result through CI.
   gh api -X POST repos/<owner>/<repo>/pulls/<N>/requested_reviewers \
     -f reviewers[]=<login>
   ```
-  Multiple reviewers: repeat `-f reviewers[]=<login>`. If the
+  Multiple reviewers: repeat `-f reviewers[]=<login>`. Under zsh
+  the `[]` triggers a "no matches found" glob error; in that shell
+  use `--input - <<<'{"reviewers":["<login>"]}'` instead, which
+  passes the JSON body verbatim. If the
   reviewer is the PR author, GitHub rejects the request with
   `422 Review cannot be requested from pull request author`; in
   that case post a `@<login>` mention in the top-level summary
