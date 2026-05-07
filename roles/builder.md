@@ -134,16 +134,34 @@ issue or design document, and shepherding it through to a green PR.
   authoritative design-of-record is `PLAN/endo_posix_sandbox.md`**
   (NOT `designs/daemon-os-sandbox-plugin.md`, which is a stale
   outline per the impasse above). The PLAN doc tracks a phased
-  implementation: 1-2 shipped, 3 in flight (nested sub-slicing),
-  4 macos, 5 lost to refinement, 6 windows. The `TADA/` tree
-  carries the per-phase test-and-demonstrate-assumption notes
-  cited from source code (e.g.,
-  `TADA/22_sandbox_bwrap_path_refinements.md`). Subagent briefs
-  against any sandbox PR (panel jurors, fixer, shepherd, builder
-  with sandbox surface) should cite `PLAN/endo_posix_sandbox.md`
-  as required reading and use the phase progression to scope
-  must-fix vs. out-of-scope. Per jcorbin's 2026-05-07 orientation
-  comment on PR 119 (discussion_r3204173690).
+  implementation:
+  - **Phase 1-2** shipped (bwrap + podman drivers).
+  - **Phase 3** in flight (nested sub-slicing).
+  - **Phase 4** macOS via lima + Apple Containerization.framework:
+    lima VM with virtiofs-shared cap-resolved host paths runs the
+    bwrap/podman driver unmodified inside the guest; host-side
+    `SandboxHandle` is a thin SSH or WS-CapTP proxy. Optional
+    Apple driver on macOS 15+ behind a runtime check, same
+    `SandboxInterface`.
+  - **Phase 5** lost to refinement.
+  - **Phase 6** Windows via WSL2: reuses the in-guest-backend +
+    host-side-proxy pattern from Phase 4 against a long-lived
+    WSL2 distro.
+  - The architectural through-line for cross-platform: **driver
+    runs unmodified inside a guest VM, host facade is a proxy.**
+    Cite this when scoping cross-platform sandbox PRs.
+
+  The `TADA/` tree carries the per-phase
+  test-and-demonstrate-assumption notes cited from source code
+  (e.g., `TADA/22_sandbox_bwrap_path_refinements.md`). Subagent
+  briefs against any sandbox PR (panel jurors, fixer, shepherd,
+  builder with sandbox surface) should cite
+  `PLAN/endo_posix_sandbox.md` as required reading. Don't
+  paraphrase the phase summary; the phase sections themselves
+  carry load-bearing architectural detail. Per jcorbin's
+  2026-05-07 orientation on PR 119 (discussion_r3204173690 +
+  the follow-up "*taps phase 4 and 6 sections*"
+  discussion_r3204245484).
 - **Cross-check `designs/README.md`'s milestone-summary
   annotations against the design's own `Depends On` section.**
   The design's own `Depends On` is author-curated and is often
