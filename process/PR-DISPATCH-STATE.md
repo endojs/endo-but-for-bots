@@ -1,8 +1,33 @@
 # PR dispatch state
 
-Last cycle: 2026-05-07 14:55 UTC (PR 119 contributor review).
-Prior cycle: 2026-05-07 07:00 UTC (master synced; fixer for PR 114; PR 111 fold-in dispatched).
-Earlier: 2026-05-07 06:30 UTC (designer fold-in for PR 115 + PR 117).
+Last cycle: 2026-05-07 (conductor PR 99 merge).
+Prior cycle: 2026-05-07 14:55 UTC (PR 119 contributor review).
+Earlier: 2026-05-07 07:00 UTC (master synced; fixer for PR 114; PR 111 fold-in dispatched).
+
+## Cycle 2026-05-07 (conductor PR 99)
+
+Merged this run:
+
+- #99 → `eefbff0b2ad185ef07a9a59a7480f444a13eee04` (merge commit
+  to `llm`). `feat(daemon): garbage-collect content store and
+  scratch-mount dirs` + adversarial test coverage. At survey:
+  APPROVED, MERGEABLE/CLEAN, 19 behind `bots-ssh/llm`, 3 ahead.
+  Rebased onto `bots-ssh/llm` cleanly (no conflicts). Three
+  commits at entry: `feat(daemon)`, `test(daemon)`,
+  `fix(daemon): mark transitive hashes retained ... (#99 review)`.
+  The third was a review-followup that addressed a defect in the
+  feat commit (transitive tree-hash sweep), so reordered it to
+  position 2 and absorbed via `fixup`. Tree byte-identical
+  against pre-tidy `1f425236d1` (empty `git diff`). Reworded the
+  feat commit message to drop the "out of scope, tracked as a
+  follow-up" caveat and instead document the
+  `collectTransitiveTreeHashes` helper that the absorbed fix
+  introduced. Force-pushed `8c0d7d8493` with
+  `--force-with-lease`. Issued `gh pr merge --auto --merge
+  --delete-branch`; GitHub processed it as a direct merge
+  immediately (branch protection does not gate on CI). state=MERGED
+  on first verify. Local + remote `feat/daemon-content-store-gc`
+  branch deleted; `pr-99` worktree removed.
 
 Many vacuous cycles between 08:00 and 14:30 UTC — both liaison + marshal returned `no state change since prior` each fire; no contributor activity, no merges, no maintainer feedback. Estate steady.
 
