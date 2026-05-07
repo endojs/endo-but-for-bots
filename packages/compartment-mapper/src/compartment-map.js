@@ -341,10 +341,8 @@ function assertModuleConfiguration(allegedModule, keypath, url, kinds) {
     }
   }
 
-  assert(
-    errors.length < finalKinds.length,
-    `invalid module descriptor in ${q(url)} at ${q(keypath)}; expected to match one of ${q(kinds)}: ${errors.map(err => err.message).join('; ')}`,
-  );
+  errors.length < finalKinds.length ||
+    Fail`invalid module descriptor in ${q(url)} at ${q(keypath)}; expected to match one of ${q(kinds)}: ${errors.map(err => err.message).join('; ')}`;
 }
 
 /**
