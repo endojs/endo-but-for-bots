@@ -593,14 +593,10 @@ const assertCompartmentDescriptor = (
  */
 const assertFileUrlString = (allegedFileUrlString, keypath, url) => {
   assertString(allegedFileUrlString, keypath, url);
-  assert(
-    allegedFileUrlString.startsWith('file://'),
-    `${keypath} must be a file URL in ${q(url)}; got ${q(allegedFileUrlString)}`,
-  );
-  assert(
-    allegedFileUrlString.length > 7,
-    `${keypath} must contain a non-empty path in ${q(url)}; got ${q(allegedFileUrlString)}`,
-  );
+  allegedFileUrlString.startsWith('file://') ||
+    Fail`${b(keypath)} must be a file URL in ${q(url)}; got ${q(allegedFileUrlString)}`;
+  allegedFileUrlString.length > 7 ||
+    Fail`${b(keypath)} must contain a non-empty path in ${q(url)}; got ${q(allegedFileUrlString)}`;
 };
 
 /**
