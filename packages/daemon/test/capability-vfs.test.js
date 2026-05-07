@@ -36,8 +36,32 @@ const setup = async t => {
   const filePowers = {
     readDirectory: dir => fs.promises.readdir(dir),
     readFileText: p => fs.promises.readFile(p, 'utf-8'),
+    readFileBytes: async p => new Uint8Array(await fs.promises.readFile(p)),
+    readFile: async p => new Uint8Array(await fs.promises.readFile(p)),
+    maybeReadFile: async p => {
+      try {
+        return new Uint8Array(await fs.promises.readFile(p));
+      } catch (err) {
+        if (/** @type {NodeJS.ErrnoException} */ (err).code === 'ENOENT') {
+          return undefined;
+        }
+        throw err;
+      }
+    },
+    maybeReadFileText: async p => {
+      try {
+        return await fs.promises.readFile(p, 'utf-8');
+      } catch (err) {
+        if (/** @type {NodeJS.ErrnoException} */ (err).code === 'ENOENT') {
+          return undefined;
+        }
+        throw err;
+      }
+    },
     writeFileText: (p, c) => fs.promises.writeFile(p, c, 'utf-8'),
-    makePath: p => fs.promises.mkdir(p, { recursive: true }),
+    makePath: async p => {
+      await fs.promises.mkdir(p, { recursive: true });
+    },
     removePath: p => fs.promises.rm(p, { recursive: true, force: true }),
     renamePath: (a, b) => fs.promises.rename(a, b),
     joinPath: (...parts) => path.join(...parts),
@@ -66,7 +90,7 @@ const setup = async t => {
     },
   };
 
-  const { mount } = makeMount({
+  const mount = makeMount({
     rootPath: tmpDir,
     readOnly: false,
     filePowers,
