@@ -104,6 +104,24 @@ shortcut is to *pretend* this applies elsewhere.
   did not exist when the PR was authored, extend the PR's commit
   to cover that file (the PR's intent already implied it). If the
   fix would change the PR's design, stop and surface the question.
+- **The `expr || Fail\`...\`` assertion shape does not narrow types.**
+  When a panel asks you to convert `if (!expr) throw Fail\`...\`` to
+  `expr || Fail\`...\`` for file-level consistency, watch for a TS
+  break at the next use of the narrowed-by-`expr` variable. TypeScript's
+  control-flow analyzer narrows through `if (!isFoo(x)) throw ...`
+  but does NOT narrow through `isFoo(x) || Fail\`...\`` (the `||`
+  is an expression statement; `Fail`'s `: never` return type does
+  not propagate to the surrounding scope). The fix is an explicit
+  cast at the first use, e.g.
+  `for (const v of /** @type {unknown[]} */ (conditions)) { ... }`.
+  Worse, the cast is hunk-conflict-bait on the next rebase. If
+  the file's other sibling assertions narrow via JSDoc-declared
+  `asserts` helpers (e.g. `assertString`'s
+  `@returns {asserts value is string}`), prefer extracting the
+  narrowing into a named helper rather than inlining the cast at
+  every use site. Encountered on PR 114: `assertConditions`
+  converted from `throw Fail` to `||` shape; the cast at the
+  `enumerate(conditions)` use site was the minimum viable fix.
 - **Two sides each add a new parameter to the same parameter list
   / function signature / object literal.** This is the most common
   "trivial-looking" conflict and the most error-prone. Read both

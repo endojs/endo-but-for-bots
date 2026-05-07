@@ -89,6 +89,38 @@ lease is rejected, fetch again and re-rebase.
   that had already landed the equivalent work. Closing the
   bots-PR was the right outcome; no commits were pushed.
 
+- **Working-mirror PRs require a master-sync sub-stage before the
+  rebase.** When the PR is a working mirror (per
+  [`pr-mirror-for-offline-review.md`](./pr-mirror-for-offline-review.md))
+  of an upstream branch and the bots-repo's `master` lags upstream,
+  rebasing the mirror PR onto stale `bots-ssh/master` would still
+  leave it missing the upstream peer-fixes the panel flagged. The
+  fix is a two-step: first sync `bots-ssh/master` with
+  `actual/master`, then rebase the mirror PR onto the new master.
+  Concrete sequence (in a separate worktree, NOT the PR's worktree):
+  ```sh
+  ORIG=$(git rev-parse bots-ssh/master)  # save for force-with-lease
+  git worktree add --detach <path> bots-ssh/master
+  cd <path>
+  git checkout -B master-sync HEAD
+  git rebase --onto actual/master \
+    $(git merge-base actual/master bots-ssh/master) master-sync
+  # Verify the rebased tip carries ONLY bot-fork-only commits
+  # (typically design-doc-only) by diffing against actual/master:
+  git diff --stat actual/master..HEAD
+  # If anything outside the expected paths shows up, STOP.
+  git push --force-with-lease=master:$ORIG bots-ssh master-sync:master
+  ```
+  Empty merge commits drop themselves during the rebase. After the
+  push, `git fetch bots-ssh master` from the PR's worktree before
+  the standard `git rebase bots-ssh/master`. Encountered on PR 114:
+  the bot fork's master was 3 design-doc commits ahead of, and 5
+  commits behind, `actual/master`; the sync replayed the 2
+  non-merge bot-only commits onto upstream and the merge commit
+  emptied out. The PR then rebased onto the new tip with one
+  package.json conflict (both sides added dependencies — merge
+  both alphabetically).
+
 ## Session example
 
 PRs 71, 72, 75, and 59 all received follow-up commits where the

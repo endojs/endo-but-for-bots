@@ -1,7 +1,33 @@
 # PR dispatch state
 
-Last cycle: 2026-05-07 06:30 UTC (designer fold-in for PR 115 + PR 117).
-Prior cycle: 2026-05-06 15:30 UTC (conductor drained 2-PR queue).
+Last cycle: 2026-05-07 07:00 UTC (master synced; fixer for PR 114; PR 111 fold-in dispatched).
+Prior cycle: 2026-05-07 06:30 UTC (designer fold-in for PR 115 + PR 117).
+
+## Cycle 2026-05-07 07:00 UTC
+
+- **PR 115** approved by kriskowal at 06:38 UTC (review
+  `pullrequestreview-4241651383`). Add to merge queue once a
+  conductor cycle is dispatched.
+- **PR 114** fixer landed: master synced (bots-ssh/master moved
+  from `4cb1ed4d26` to `f37c4b2d8f`, preserving 2 design-doc
+  commits on top of `actual/master`); PR 114 rebased onto the
+  new master; HEAD now `482ad077dc` (was `a8f1243f3b`); panel +
+  saboteur fixes folded; saboteur tests added; CI in flight at
+  cycle close (10 SUCCESS, 16 PENDING; mergeStateStatus=UNSTABLE
+  pending CI). Re-requested review from kriskowal.
+- **PR 111** received an 8-comment review batch from kriskowal
+  06:39-06:53 UTC. Reactji'd 👀 on all 8. Note: a transient
+  GitHub indexing anomaly hides these comments from the PR's
+  review-thread API endpoint; comment bodies were captured from
+  the events API payload and the fixer has the verbatim list.
+  Fixer dispatched to fold 6 actionable items + reply on 2
+  architectural questions (passable-CBOR layer extraction,
+  sturdyreftracker layering).
+- **Master sync** moved bots-ssh/master to incorporate ~5 commits
+  of actual/master drift; affects all PRs based on master (75,
+  73, 74, 71, 69, 68, 67, 64, 60, 59, 57, 55, 54, 76, 114).
+  Most are now N commits behind their new base; rebases will be
+  triggered as those PRs progress.
 
 ## Cycle 2026-05-07 06:30 UTC
 
