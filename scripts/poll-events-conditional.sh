@@ -11,11 +11,16 @@
 #   nohup bash scripts/poll-events-conditional.sh > /tmp/poll-events.log 2>&1 &
 #   # then arm a Monitor watching the log file or the process stdout
 #
-# State (ETag + last seen event ID) persists at $STATE_FILE so a
-# restart does not re-fire on every prior event.
+# State (ETag + last seen `created_at` timestamp) persists at
+# $STATE_FILE so a restart does not re-fire on every prior event.
 #
 # Conditional GET 304s do NOT count against the API rate limit, so a
 # 30s poll is essentially free under the 5000 req/hr authenticated cap.
+#
+# Note: GitHub event IDs are NOT monotonic across event types
+# (PushEvent IDs occupy a different ID space from
+# IssueCommentEvent / IssuesEvent / PullRequestEvent IDs), so the
+# filter compares `created_at` ISO timestamps, not the numeric .id.
 
 set -uo pipefail
 
@@ -32,16 +37,16 @@ SELF="$(gh api user --jq '.login')"
 TOKEN="$(gh auth token)"
 
 ETAG=""
-LAST_EVENT_ID=""
+LAST_SEEN_TS=""
 if [ -f "$STATE_FILE" ]; then
   ETAG="$(sed -n '1p' "$STATE_FILE")"
-  LAST_EVENT_ID="$(sed -n '2p' "$STATE_FILE")"
+  LAST_SEEN_TS="$(sed -n '2p' "$STATE_FILE")"
 fi
 
 # Diagnostics on stderr so Monitor stdout stays quiet until the
 # "NEW:" trigger line fires.
 echo "[$(date -u +%H:%M:%S)] polling $REPO every ${INTERVAL}s (filter excludes $SELF)" >&2
-echo "[$(date -u +%H:%M:%S)] starting state: etag=${ETAG:-<none>} last_event=${LAST_EVENT_ID:-<none>}" >&2
+echo "[$(date -u +%H:%M:%S)] starting state: etag=${ETAG:-<none>} last_seen_ts=${LAST_SEEN_TS:-<none>}" >&2
 
 while true; do
   RESP_HEADERS="$(mktemp)"
@@ -66,12 +71,14 @@ while true; do
   if [ "$CODE" = "200" ]; then
     NEW_ETAG="$(grep -i '^etag:' "$RESP_HEADERS" | head -1 | sed -e 's/^[Ee]tag:[[:space:]]*//' -e 's/\r$//')"
 
-    # Filter to events newer than LAST_EVENT_ID and not by SELF. Event
-    # IDs are monotonic numeric strings; sort_by handles them correctly.
-    NEW_EVENTS="$(jq --arg self "$SELF" --arg lastid "$LAST_EVENT_ID" '
+    # Filter to events newer than LAST_SEEN_TS and not by SELF.
+    # Filter on .created_at (ISO 8601, lexically comparable) since
+    # event IDs are NOT monotonic across event types — a PushEvent
+    # ID and an IssueCommentEvent ID occupy disjoint ID spaces.
+    NEW_EVENTS="$(jq --arg self "$SELF" --arg lastts "$LAST_SEEN_TS" '
       [.[]
         | select(.actor.login != $self)
-        | select(($lastid == "") or ((.id | tonumber) > ($lastid | tonumber)))
+        | select(($lastts == "") or (.created_at > $lastts))
       ]
     ' "$RESP_BODY" 2>/dev/null || echo "[]")"
 
@@ -89,11 +96,11 @@ while true; do
       DIGEST="$(echo "$NEW_EVENTS" | jq -r '[.[] | (.type) + "/" + ((.payload.action // "-") | tostring) + "@#" + ((.payload.issue.number // .payload.pull_request.number // "?") | tostring)] | join(", ")' 2>/dev/null || echo "?")"
       echo "[$(date -u +%H:%M:%S)] NEW $COUNT on $REPO: $DIGEST"
 
-      LAST_EVENT_ID="$(echo "$NEW_EVENTS" | jq -r 'max_by(.id | tonumber) | .id' 2>/dev/null || echo "$LAST_EVENT_ID")"
+      LAST_SEEN_TS="$(echo "$NEW_EVENTS" | jq -r 'max_by(.created_at) | .created_at' 2>/dev/null || echo "$LAST_SEEN_TS")"
     fi
 
     ETAG="$NEW_ETAG"
-    printf '%s\n%s\n' "$ETAG" "$LAST_EVENT_ID" > "$STATE_FILE"
+    printf '%s\n%s\n' "$ETAG" "$LAST_SEEN_TS" > "$STATE_FILE"
 
   elif [ "$CODE" = "304" ]; then
     : # no new events; stay silent on both stdout and stderr
