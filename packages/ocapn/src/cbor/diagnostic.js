@@ -12,5 +12,4 @@ export {
   cborToDiagnostic,
   decode,
   parseDiagnostic,
-  equals,
 } from './diagnostic/index.js';
