@@ -103,6 +103,16 @@ marshal does not edit process files directly.
 - **No-redispatch.** A design with an already-in-flight builder
   is not eligible. The marshal does not double-dispatch the same
   design across cycles.
+- **Persistent re-deferral surfaces, does not silently recur.**
+  When `vacuous-satisfaction (review-queue depth=N, deferring
+  <slug>)` repeats across two or more cycles for the same `<slug>`
+  AND the depth has not decreased materially between cycles, the
+  marshal's report should explicitly flag "persistent deferral —
+  consider maintainer escalation" so the steward records it as a
+  surface-to-maintainer item rather than just a procedural log
+  line. Silent re-deferral is how the design pipeline becomes
+  invisible. Encountered 2026-05-07: depth=14 → depth=~30 across
+  two re-deferrals of `daemon-os-sandbox-plugin`.
 - **Builder, not designer.** If a design is too vague to
   implement (rather than being implementable), surface it to the
   user via the cycle log; do not dispatch a designer (that's a

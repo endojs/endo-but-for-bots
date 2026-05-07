@@ -44,6 +44,17 @@ Prior cycle: 2026-05-07 06:30 UTC (designer fold-in for PR 115 + PR 117).
   implementation. Maintainer disprefers Bazel-scale solutions if
   lighter approach suffices.
 
+- **Marshal cycle landed** (after this dispatch state was first
+  written): `vacuous-satisfaction (review-queue depth=~30,
+  deferring daemon-os-sandbox-plugin)`. Snapshot fresh, 0
+  builders in flight, 1 eligible design (`daemon-os-sandbox-plugin`,
+  516-line spec). Depth grew from 14 (prior deferral) to ~30 as
+  PRs 105/106/108/etc accumulated awaiting review. The marshal
+  flagged the persistent-re-deferral pattern: at some point the
+  maintainer should drain the queue rather than the marshal
+  silently re-deferring each cycle. Surface for maintainer
+  attention.
+
 - **Master sync** moved bots-ssh/master to incorporate ~5 commits
   of actual/master drift; affects all PRs based on master (75,
   73, 74, 71, 69, 68, 67, 64, 60, 59, 57, 55, 54, 76, 114).
