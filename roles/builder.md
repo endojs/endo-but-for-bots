@@ -129,6 +129,21 @@ issue or design document, and shepherding it through to a green PR.
   (bwrap + podman drivers, scratch mounts, network profiles,
   Landlock probe, seccomp, prlimit caps) under a substantially
   richer interface that the design never mentions.
+
+  **For `packages/sandbox/`-adjacent dispatches specifically, the
+  authoritative design-of-record is `PLAN/endo_posix_sandbox.md`**
+  (NOT `designs/daemon-os-sandbox-plugin.md`, which is a stale
+  outline per the impasse above). The PLAN doc tracks a phased
+  implementation: 1-2 shipped, 3 in flight (nested sub-slicing),
+  4 macos, 5 lost to refinement, 6 windows. The `TADA/` tree
+  carries the per-phase test-and-demonstrate-assumption notes
+  cited from source code (e.g.,
+  `TADA/22_sandbox_bwrap_path_refinements.md`). Subagent briefs
+  against any sandbox PR (panel jurors, fixer, shepherd, builder
+  with sandbox surface) should cite `PLAN/endo_posix_sandbox.md`
+  as required reading and use the phase progression to scope
+  must-fix vs. out-of-scope. Per jcorbin's 2026-05-07 orientation
+  comment on PR 119 (discussion_r3204173690).
 - **Cross-check `designs/README.md`'s milestone-summary
   annotations against the design's own `Depends On` section.**
   The design's own `Depends On` is author-curated and is often
