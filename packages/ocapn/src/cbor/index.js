@@ -24,7 +24,6 @@ export {
   decode as diagnosticDecode,
   cborToDiagnostic,
   parseDiagnostic,
-  diagnosticEquals,
 } from './diagnostic/index.js';
 
 /**

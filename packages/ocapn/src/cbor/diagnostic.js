@@ -13,5 +13,4 @@ export {
   decode,
   parseDiagnostic,
   equals,
-  diagnosticEquals,
 } from './diagnostic/index.js';

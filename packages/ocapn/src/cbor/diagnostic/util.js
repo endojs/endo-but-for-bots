@@ -82,9 +82,3 @@ export function equals(actual, expected) {
   // Primitives
   return Object.is(actual, expected);
 }
-
-/**
- * Alias for backwards compatibility
- * @deprecated Use `equals` instead
- */
-export const diagnosticEquals = equals;

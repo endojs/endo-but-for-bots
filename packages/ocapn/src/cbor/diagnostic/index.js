@@ -15,4 +15,4 @@
 
 export { encode, cborToDiagnostic } from './encode.js';
 export { decode, parseDiagnostic } from './decode.js';
-export { equals, diagnosticEquals } from './util.js';
+export { equals } from './util.js';
