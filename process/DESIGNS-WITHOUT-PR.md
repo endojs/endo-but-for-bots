@@ -1,19 +1,35 @@
 # Designs without an in-flight PR on endo-but-for-bots
 
-Snapshot at 2026-05-06T00:00:00Z (drift-check pass).
+Snapshot at 2026-05-07T00:00:00Z (post-PR-115 reconciliation; targeted, not a full drift-check).
 
 Of 79 design documents in `designs/` (75 in the root plus 4 under
 `channel threads/`, excluding `README.md` and `CLAUDE.md`), 32 have at
 least one associated pull request on `endojs/endo-but-for-bots`; the
 remaining 47 are listed below grouped by classification.
 
-This snapshot applies the **drift-check pass** procedure (see
-[`../roles/groom.md`](../roles/groom.md)) to every entry that the
-prior groom marked `Spec'd-but-not-started`. Each entry is
-re-classified into `eligible-for-builder`,
+This snapshot is a **targeted post-merge reconciliation** (not a full
+drift-check pass): it inherits the prior 2026-05-06 drift-check's
+classifications and only adjusts entries the current cycle's events
+disturbed. The full drift-check pass procedure (see
+[`../roles/groom.md`](../roles/groom.md)) re-classifies every
+`Spec'd-but-not-started` entry into `eligible-for-builder`,
 `blocked-on-design-revision`, `blocked-on-dependency`, or
-`blocked-on-maintainer-decision` so the marshal's eligibility filter
-can dispatch from a clean priority list.
+`blocked-on-maintainer-decision`; that pass is a separate, heavier
+dispatch.
+
+Changes since the 2026-05-06 snapshot:
+
+- `daemon-os-sandbox-plugin` moves from `eligible-for-builder` (3 → 2)
+  to `blocked-on-design-revision` (4 → 5) after a builder pre-flight
+  discovered that `bots-ssh/llm`'s `packages/sandbox/` already ships
+  Phase 0/1/1.5/2 of an OS-sandbox capability under a substantially
+  richer interface than the design specifies (commit `446896aded`).
+  Awaiting maintainer reclassification (revise / supersede / obsolete).
+- PR #115 (`design/filesystem-watchers`) merged as commit `12e8600e8c`
+  on `bots-ssh/llm`. The merged design itself ships the artifact; it
+  was never on this list (it was in flight as PR #115) so no entry
+  moves. The garden branch does not yet carry the new design file or a
+  README row for it; that sync is a separate concern.
 
 ## Summary
 
@@ -47,18 +63,12 @@ Reads as a polished design ready to be acted on; no branch, no PR.
 Each entry is followed by its drift-check classification and a
 one-sentence "why".
 
-### eligible-for-builder (3)
+### eligible-for-builder (2)
 
 Both drift-pattern A (design vs. later code refactor) and drift-pattern
 B (compose-pattern dependency) checks pass. The marshal can dispatch a
 builder against any of these.
 
-- [`designs/daemon-os-sandbox-plugin.md`](./designs/daemon-os-sandbox-plugin.md)
-  pluggable platform-specific worker sandboxing (bwrap, podman,
-  sandbox-exec, AppContainer).
-  No upstream design dependencies; deps are external (bubblewrap,
-  sandbox-exec). 516-line concrete spec with capability flow, endowment
-  descriptors, and test plan.
 - [`designs/endoclaw-browser.md`](./designs/endoclaw-browser.md)
   Playwright-backed `Browser` exo with origin allowlist.
   Deps are Playwright (external) and worker infrastructure
@@ -70,13 +80,26 @@ builder against any of these.
   guest-plugin install infrastructure, and string value storage are all
   already implemented.
 
-### blocked-on-design-revision (4)
+### blocked-on-design-revision (5)
 
 Drift pattern A failed (a later refactor invalidated the design's
 premise) or the document is structurally an idea-bag / parent index
 rather than a single-PR target. Needs a designer to reconcile or to
 extract a focused sub-design before a builder can act.
 
+- [`designs/daemon-os-sandbox-plugin.md`](./designs/daemon-os-sandbox-plugin.md)
+  pluggable platform-specific worker sandboxing (bwrap, podman,
+  sandbox-exec, AppContainer).
+  Reclassified from `eligible-for-builder` on 2026-05-07. The marshal's
+  pre-flight cycle dispatched a builder against this design, which hit
+  an impasse and STOPped (commit `446896aded`): `bots-ssh/llm`'s
+  `packages/sandbox/` has shipped Phase 0/1/1.5/2 of an OS-sandbox
+  capability under a substantially richer interface than the
+  516-line spec describes. Scaffolding the design's surface as a NEW
+  package would create two parallel packages for one problem. Awaiting
+  maintainer reclassification: revise to match the shipped
+  `@endo/sandbox` shape, supersede with a layered design over the
+  shipped package, or mark obsolete.
 - [`designs/daemon-agent-network-identity.md`](./designs/daemon-agent-network-identity.md)
   per-agent Ed25519 keypair identity for OCapN network registration.
   Drift A: items 1 and 2 are marked `*(Done)*` against a `LOCAL_NODE`
@@ -168,7 +191,7 @@ slot for future passes.
 
 ### Eligibility ranking for the marshal
 
-Filtered to the three `eligible-for-builder` entries only, ranked by
+Filtered to the two `eligible-for-builder` entries only, ranked by
 the prior groom's roadmap-priority signal (M1 capabilities and tools
 ahead of M3 weblets/integrations, with smaller surface area as a
 tiebreaker):
@@ -177,9 +200,12 @@ tiebreaker):
    moderate surface (252 lines), all deps already implemented.
 2. [`designs/endoclaw-browser.md`](./designs/endoclaw-browser.md)
    small surface (93 lines), one external dep (Playwright install).
-3. [`designs/daemon-os-sandbox-plugin.md`](./designs/daemon-os-sandbox-plugin.md)
-   largest surface (516 lines), platform-specific backends; broadest
-   M1 capability impact.
+
+`daemon-os-sandbox-plugin` was the third-ranked entry on the prior
+snapshot. It moved to `blocked-on-design-revision` on 2026-05-07 after
+a builder pre-flight discovered the shipped `@endo/sandbox` package on
+`bots-ssh/llm` (commit `446896aded`); awaiting maintainer
+reclassification.
 
 ## Stale (1)
 

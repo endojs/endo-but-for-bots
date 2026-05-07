@@ -32,6 +32,36 @@ Cap: ~30 minutes. Output: one process commit to
 `process/DESIGNS-WITHOUT-PR.md`, no `designs/README.md` edit, no
 open-questions append.
 
+### Targeted post-event reconciliation sub-mode
+
+The lightest mode: a single-event trigger (a PR merging this cycle, a
+builder pre-flight surfacing a reclassification, etc.) asks the groom
+to adjust only the disturbed entries in `process/DESIGNS-WITHOUT-PR.md`
+without re-running every drift check. The targeted pass *inherits* the
+prior drift-check's classifications and notes the deltas in a "Changes
+since the <prior-snapshot-date> snapshot" block at the file's top.
+Cap: ~10 minutes. Output: one process commit; no full re-survey, no
+open-questions append.
+
+This mode also accommodates the **branch-asymmetry** between `garden`
+and `bots-ssh/llm`: design-only PRs (the design is the artifact) merge
+on `llm`, not `garden`. A targeted reconciliation against `garden`
+should *not* try to mirror the new design file or its README row;
+those live on `llm` and reach `garden` through a separate sync. The
+groom's job is to confirm `process/DESIGNS-WITHOUT-PR.md` does not
+list the merged design (it shouldn't have, since it had a PR) and to
+note the merge in the "Changes since" block for context.
+
+Procedure summary (full procedure inherits from the drift-check skill,
+minus the per-design re-classification):
+
+1. Stand on garden in a dedicated worktree.
+2. Read the prior snapshot's classification.
+3. For each disturbed entry, edit only that entry's classification and
+   bump the section counts in the Summary table.
+4. Bump the snapshot timestamp. Add a "Changes since" block.
+5. Commit, push (rebase-on-failure loop), clean up.
+
 ## Inbound: read user answers first
 
 Before any reconciliation work, **read
