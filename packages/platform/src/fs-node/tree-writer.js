@@ -1,5 +1,4 @@
 // @ts-check
-/* global Buffer */
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -7,6 +6,29 @@ import harden from '@endo/harden';
 import { makeExo } from '@endo/exo';
 
 import { TreeWriterInterface } from '../fs/interfaces.js';
+
+/**
+ * Concatenates Uint8Array chunks into a single Uint8Array.
+ *
+ * Avoids `Buffer.concat` so the same aggregator pattern works in XS and SES
+ * realms where Node `Buffer` is unavailable.
+ *
+ * @param {Uint8Array[]} chunks
+ * @returns {Uint8Array}
+ */
+const concatChunks = chunks => {
+  let totalLength = 0;
+  for (const chunk of chunks) {
+    totalLength += chunk.length;
+  }
+  const result = new Uint8Array(totalLength);
+  let offset = 0;
+  for (const chunk of chunks) {
+    result.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return result;
+};
 
 /**
  * Creates a TreeWriter Exo that writes to a local directory.
@@ -30,8 +52,7 @@ export const makeTreeWriter = dirPath => {
         for await (const chunk of readable) {
           chunks.push(chunk);
         }
-        const buffer = Buffer.concat(chunks);
-        await fs.promises.writeFile(filePath, buffer);
+        await fs.promises.writeFile(filePath, concatChunks(chunks));
       },
       /**
        * @param {string[]} pathSegments

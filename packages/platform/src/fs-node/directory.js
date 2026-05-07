@@ -1,5 +1,4 @@
 // @ts-check
-/* global Buffer */
 /* eslint-disable no-await-in-loop */
 
 import fs from 'node:fs';
@@ -18,6 +17,29 @@ import { makeTreeWriter } from './tree-writer.js';
 /** @import { SnapshotStore } from '../fs/types.js' */
 
 const ALWAYS_IGNORED = harden(new Set(['.git']));
+
+/**
+ * Concatenates Uint8Array chunks into a single Uint8Array.
+ *
+ * Avoids `Buffer.concat` so the same aggregator pattern works in XS and SES
+ * realms where Node `Buffer` is unavailable.
+ *
+ * @param {Uint8Array[]} chunks
+ * @returns {Uint8Array}
+ */
+const concatChunks = chunks => {
+  let totalLength = 0;
+  for (const chunk of chunks) {
+    totalLength += chunk.length;
+  }
+  const result = new Uint8Array(totalLength);
+  let offset = 0;
+  for (const chunk of chunks) {
+    result.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return result;
+};
 
 /**
  * Creates a mutable Directory Exo backed by a local filesystem directory.
@@ -242,7 +264,7 @@ export const makeDirectory = (dirPath, options = {}) => {
             for await (const chunk of reader) {
               chunks.push(chunk);
             }
-            await fs.promises.writeFile(target, Buffer.concat(chunks));
+            await fs.promises.writeFile(target, concatChunks(chunks));
           }
         },
 
