@@ -1,14 +1,14 @@
 // @ts-check
 
 /**
- * Ambient-authority factory for a TreeWriter exo that writes blobs and
+ * Ambient-authority attenuator for a TreeWriter exo that writes blobs and
  * subdirectories anywhere beneath an arbitrary absolute filesystem path.
  *
  * The capability returned by `makeTreeWriter` conveys write authority on
  * the entire subtree rooted at the given path: any holder can create files
  * and directories at any sub-path.
  *
- * This factory is intended for host-side checkout pipelines.
+ * This attenuator is intended for host-side checkout pipelines.
  * It must never cross the daemon membrane to a guest, worker, caplet, or
  * chat-side bot; doing so would hand that party ambient write authority to
  * a real subtree of the host process's view of the disk.
