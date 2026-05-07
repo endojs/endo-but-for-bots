@@ -513,11 +513,21 @@ export const MountInterface = M.interface('EndoMount', {
   maybeReadText: M.call(PathArgShape).returns(M.promise()),
   writeText: M.call(PathArgShape, M.string()).returns(M.promise()),
   // Mutation
-  remove: M.call(PathArgShape).returns(M.promise()),
+  remove: M.call(PathArgShape)
+    .optional(M.splitRecord({}, { recursive: M.boolean() }))
+    .returns(M.promise()),
   move: M.call(PathArgShape, PathArgShape).returns(M.promise()),
+  copy: M.call(PathArgShape, PathArgShape).returns(M.promise()),
+  // Write a remote ReadableBlob or ReadableTree into the mount.
+  // Compatible with the @endo/platform/fs/lite Directory.write guard.
+  write: M.call(PathSegmentsShape, M.remotable()).returns(M.promise()),
   makeDirectory: M.call(PathArgShape).returns(M.promise()),
   // Attenuation
   readOnly: M.call().returns(M.remotable()),
+  // A Directory-strict facet of this mount, satisfying the
+  // @endo/platform/fs/lite DirectoryInterface guard exactly.
+  // See `designs/platform-fs-daemon-integration.md` Mode 2.
+  asDirectory: M.call().returns(M.remotable('Directory')),
   // Snapshot
   snapshot: M.call().returns(M.promise()),
   // Discoverability

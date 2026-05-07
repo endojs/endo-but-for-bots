@@ -4822,3 +4822,65 @@ test('mount symlink - all symlink types together in one listing', async t => {
   t.is(rawEntries.length, 8); // 2 real + 2 internal + 4 escaping
   t.is(entries.length, 4); // 2 real + 2 internal
 });
+
+test('mount asDirectory facet - read and list', async t => {
+  const { host, config } = await prepareHost(t);
+
+  const mountPath = path.join(config.statePath, '..', 'mount-test-as-dir');
+  await createMountFixture(mountPath, {
+    'a.txt': 'alpha',
+    'sub/b.txt': 'bravo',
+  });
+
+  await E(host).provideMount(mountPath, 'as-dir');
+  const mount = await E(host).lookup(['as-dir']);
+  const directory = await E(mount).asDirectory();
+
+  // List works through the facet (already sorted by Mount).
+  const entries = await E(directory).list();
+  t.deepEqual([...entries].sort(), ['a.txt', 'sub']);
+
+  // Sub-lookup re-wraps as a Directory facet.
+  const sub = await E(directory).lookup('sub');
+  t.is(typeof (await E(sub).list), 'function');
+  const subEntries = await E(sub).list();
+  t.deepEqual(subEntries, ['b.txt']);
+});
+
+test('mount asDirectory facet - mutation goes through confinement', async t => {
+  const { host, config } = await prepareHost(t);
+
+  const mountPath = path.join(config.statePath, '..', 'mount-test-as-dir-mut');
+  await createMountFixture(mountPath, {});
+
+  await E(host).provideMount(mountPath, 'as-dir-mut');
+  const mount = await E(host).lookup(['as-dir-mut']);
+  const directory = await E(mount).asDirectory();
+
+  // makeDirectory through facet (strict array-segments call).
+  await E(directory).makeDirectory(['nested', 'deep']);
+  t.true(await E(mount).has('nested', 'deep'));
+
+  // remove with recursive option through facet.
+  await E(directory).remove(['nested'], { recursive: true });
+  t.false(await E(mount).has('nested'));
+});
+
+test('mount copy operation', async t => {
+  const { host, config } = await prepareHost(t);
+
+  const mountPath = path.join(config.statePath, '..', 'mount-test-copy');
+  await createMountFixture(mountPath, {
+    'src.txt': 'copy me',
+  });
+
+  await E(host).provideMount(mountPath, 'copy-mount');
+  const mount = await E(host).lookup(['copy-mount']);
+
+  await E(mount).copy(['src.txt'], ['dst.txt']);
+  t.true(await E(mount).has('src.txt'));
+  t.true(await E(mount).has('dst.txt'));
+
+  const file = await E(mount).lookup('dst.txt');
+  t.is(await E(file).text(), 'copy me');
+});

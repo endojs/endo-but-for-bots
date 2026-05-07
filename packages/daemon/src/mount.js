@@ -6,6 +6,7 @@
 import { q } from '@endo/errors';
 import { makeExo } from '@endo/exo';
 import { makeDirectory as makePlatformDirectory } from '@endo/platform/fs/node';
+import { DirectoryInterface as PlatformDirectoryInterface } from '@endo/platform/fs/lite/interfaces';
 
 import { mountHelp, mountFileHelp, makeHelp } from './help-text.js';
 import { MountInterface, MountFileInterface } from './interfaces.js';
@@ -222,7 +223,13 @@ const makeMountExo = ctx => {
 
   const help = makeHelp(mountHelp);
 
-  return makeExo('EndoMount', MountInterface, {
+  /** @type {object | undefined} */
+  let directoryFacet;
+  /** @type {object} */
+  let mountExo;
+
+  // eslint-disable-next-line prefer-const
+  mountExo = makeExo('EndoMount', MountInterface, {
     help,
 
     async has(...pathSegments) {
@@ -316,13 +323,13 @@ const makeMountExo = ctx => {
       await filePowers.writeFileText(absolute, content);
     },
 
-    async remove(pathArg) {
+    async remove(pathArg, removeOptions = {}) {
       await null;
       assertWritable();
       const segments = typeof pathArg === 'string' ? [pathArg] : pathArg;
       const { clamped, absolute } = clamp(segments);
       await assertConfined(absolute, confinementRoot, filePowers);
-      await directory.remove(clamped);
+      await directory.remove(clamped, removeOptions);
     },
 
     async move(fromArg, toArg) {
@@ -343,6 +350,32 @@ const makeMountExo = ctx => {
       await directory.move(fromClamped, toClamped);
     },
 
+    async copy(fromArg, toArg) {
+      await null;
+      assertWritable();
+      const fromSegments =
+        typeof fromArg === 'string' ? [fromArg] : fromArg;
+      const toSegments = typeof toArg === 'string' ? [toArg] : toArg;
+      const { clamped: fromClamped, absolute: fromAbsolute } =
+        clamp(fromSegments);
+      const { clamped: toClamped, absolute: toAbsolute } = clamp(toSegments);
+      await assertConfined(fromAbsolute, confinementRoot, filePowers);
+      await assertConfinedOrAncestor(
+        toAbsolute,
+        confinementRoot,
+        filePowers,
+      );
+      await directory.copy(fromClamped, toClamped);
+    },
+
+    async write(pathSegments, value) {
+      await null;
+      assertWritable();
+      const { clamped, absolute } = clamp(pathSegments);
+      await assertConfinedOrAncestor(absolute, confinementRoot, filePowers);
+      await directory.write(clamped, value);
+    },
+
     async makeDirectory(pathArg) {
       await null;
       assertWritable();
@@ -354,7 +387,7 @@ const makeMountExo = ctx => {
 
     readOnly() {
       if (readOnly) {
-        return this; // eslint-disable-line no-invalid-this
+        return mountExo;
       }
       return makeMountExo({
         ...ctx,
@@ -363,12 +396,69 @@ const makeMountExo = ctx => {
       });
     },
 
+    asDirectory() {
+      if (!directoryFacet) {
+        directoryFacet = makeMountDirectoryFacet(mountExo);
+      }
+      return directoryFacet;
+    },
+
     async snapshot() {
       throw new Error('snapshot() is not yet implemented');
     },
   });
+
+  return mountExo;
 };
 harden(makeMountExo);
+
+/**
+ * Create a strict-`DirectoryInterface` facet of a Mount.
+ *
+ * Adapts the Mount's lenient calling conventions (string-or-array
+ * `pathArg`) to the platform's strict array-only segments.
+ * Forwards every operation to the underlying Mount, so confinement,
+ * symlink-escape, and `readOnly` policies still apply.
+ *
+ * The returned exo satisfies `@endo/platform/fs/lite` `DirectoryInterface`
+ * and may be handed to a worker or caplet that has been written
+ * against `import { DirectoryInterface } from '@endo/platform/fs/lite/interfaces'`.
+ * See `designs/platform-fs-daemon-integration.md` Mode 2.
+ *
+ * @param {any} mount
+ * @returns {object}
+ */
+const makeMountDirectoryFacet = mount => {
+  return makeExo(
+    'Directory',
+    PlatformDirectoryInterface,
+    /** @type {any} */ ({
+      has: (...segments) => mount.has(...segments),
+      list: (...segments) => mount.list(...segments),
+      // Re-wrap sub-Mounts as Directory facets so the consumer never
+      // observes a `Mount`-shaped exo from a `Directory`-shaped one.
+      // Sub-files surface as `MountFile` exos, which expose a subset of
+      // the platform `FileInterface` (no `append`, no `snapshot`).
+      // The gap is intentional and surfaced in
+      // `designs/platform-fs-daemon-integration.md`.
+      lookup: async pathArg => {
+        const child = await mount.lookup(pathArg);
+        if (typeof child.asDirectory === 'function') {
+          return child.asDirectory();
+        }
+        return child;
+      },
+      write: (segments, value) => mount.write(segments, value),
+      remove: (segments, options) => mount.remove(segments, options),
+      move: (from, to) => mount.move(from, to),
+      copy: (from, to) => mount.copy(from, to),
+      makeDirectory: segments => mount.makeDirectory(segments),
+      readOnly: () => mount.readOnly(),
+      snapshot: () => mount.snapshot(),
+    }),
+  );
+};
+harden(makeMountDirectoryFacet);
 
 /**
  * Create a transient file exo for a file within a mount.
