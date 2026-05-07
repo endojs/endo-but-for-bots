@@ -742,20 +742,16 @@ const assertFileCompartmentDescriptor = (allegedCompartment, keypath, url) => {
 const assertCompartmentDescriptors = (allegedCompartments, url) => {
   assertPlainObject(allegedCompartments, 'compartments', url);
   const compartmentNames = keys(allegedCompartments);
-  assert(
-    compartmentNames.length > 0,
-    `compartments must not be empty in ${q(url)}`,
-  );
+  compartmentNames.length > 0 ||
+    Fail`compartments must not be empty in ${q(url)}`;
   for (const key of keys(allegedCompartments)) {
     assertString(
       key,
       `all keys of compartments must be strings; got ${key} in ${q(url)}`,
     );
   }
-  assert(
-    compartmentNames.every(name => typeof name === 'string'),
-    `all keys of compartments must be strings; got ${q(compartmentNames)} in ${q(url)}`,
-  );
+  compartmentNames.every(name => typeof name === 'string') ||
+    Fail`all keys of compartments must be strings; got ${q(compartmentNames)} in ${q(url)}`;
 };
 
 /**
