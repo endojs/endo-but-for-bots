@@ -35,9 +35,10 @@ import {
 const { keys, entries } = Object;
 const { isArray } = Array;
 
-/** @type {(a: string, b: string) => number} */
-// eslint-disable-next-line no-nested-ternary, no-shadow
-export const stringCompare = (a, b) => (a === b ? 0 : a < b ? -1 : 1);
+/** @type {(left: string, right: string) => number} */
+export const stringCompare = (left, right) =>
+  // eslint-disable-next-line no-nested-ternary
+  left === right ? 0 : left < right ? -1 : 1;
 
 /**
  * @template T
