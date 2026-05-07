@@ -3,6 +3,25 @@
 Last cycle: 2026-05-07 07:00 UTC (master synced; fixer for PR 114; PR 111 fold-in dispatched).
 Prior cycle: 2026-05-07 06:30 UTC (designer fold-in for PR 115 + PR 117).
 
+Merged this cycle (2026-05-07 conductor, PR 115 cycle):
+
+- #115 → `12e8600e8c3315ab4d797d4fe1766e0fb178b861` (merge commit
+  to llm). `design(daemon): filesystem watchers (closes #110)`.
+  At survey: APPROVED, MERGEABLE/CLEAN, 0 behind `bots-ssh/llm`,
+  3 ahead. Three commits: the original design doc plus two
+  follow-up tweaks (fold-in of maintainer answers, then
+  `entry`→`type` rename) — both clear fixups against the doc
+  introduced in the first commit. Interactive-rebase absorbed
+  both as `fixup` into the base commit; tree byte-identical
+  (empty `git diff` against pre-tidy `cd4a9d1bc6`). Force-pushed
+  `b952c8bb54` with `--force-with-lease`. Issued `--auto --merge
+  --delete-branch`; GitHub processed it as a direct merge
+  immediately (branch protection here does not gate on CI).
+  state=MERGED on first verify. Local + remote
+  `design/filesystem-watchers` branch deleted; `pr-115`
+  worktree removed. Next-up PR 114 has CI green; awaiting
+  kriskowal approval before queueing.
+
 ## Cycle 2026-05-07 07:00 UTC
 
 - **PR 115** approved by kriskowal at 06:38 UTC (review
