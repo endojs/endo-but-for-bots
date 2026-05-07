@@ -120,6 +120,38 @@ test('parseOpenAIChatChoice extracts tool_calls', t => {
   });
 });
 
+test('toOpenAIChatMessages forwards reasoning_details on assistant turns', t => {
+  /** @type {CommonChatMessage[]} */
+  const input = [
+    {
+      role: 'assistant',
+      content: 'thought',
+      reasoning_details: [{ type: 'reasoning.encrypted', data: 'xyz' }],
+    },
+  ];
+  const result = toOpenAIChatMessages(input);
+  t.deepEqual(/** @type {any} */ (result[0]).reasoning_details, [
+    { type: 'reasoning.encrypted', data: 'xyz' },
+  ]);
+});
+
+test('parseOpenAIChatChoice extracts reasoning and reasoning_details', t => {
+  const result = parseOpenAIChatChoice(
+    /** @type {any} */ ({
+      message: {
+        role: 'assistant',
+        content: 'answer',
+        reasoning: 'plain trace',
+        reasoning_details: [{ type: 'reasoning.encrypted', data: 'xyz' }],
+      },
+    }),
+  );
+  t.is(result.reasoning, 'plain trace');
+  t.deepEqual(result.reasoning_details, [
+    { type: 'reasoning.encrypted', data: 'xyz' },
+  ]);
+});
+
 test('truncateMessages no-ops below threshold', t => {
   /** @type {CommonChatMessage[]} */
   const msgs = [

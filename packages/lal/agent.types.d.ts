@@ -45,6 +45,12 @@ export type ChatMessage = {
   content: string;
   tool_calls?: ToolCall[];
   tool_call_id?: string;
+  /** Plaintext reasoning trace (OpenRouter extension). */
+  reasoning?: string;
+  /** Structured reasoning blocks; carries encrypted/signed thinking traces
+   *  for upstream providers and must be forwarded verbatim on the next
+   *  assistant turn. */
+  reasoning_details?: object[];
 };
 
 export type ToolResult = {

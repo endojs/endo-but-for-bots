@@ -37,6 +37,10 @@
  * @property {string} content
  * @property {Array<{ id?: string, function: { name: string, arguments: string|object }}>} [tool_calls]
  * @property {string} [tool_call_id]
+ * @property {string} [reasoning] Plaintext reasoning trace (OpenRouter extension).
+ * @property {object[]} [reasoning_details] Structured reasoning blocks. Carries
+ *   encrypted/signed thinking traces for upstream providers (notably Anthropic
+ *   via OpenRouter) and must be forwarded verbatim on the next assistant turn.
  */
 
 /**
@@ -75,6 +79,9 @@ export const toOpenAIChatMessages = messages =>
                 : JSON.stringify(tc.function.arguments ?? {}),
           },
         }));
+      }
+      if (msg.reasoning_details) {
+        /** @type {any} */ (out).reasoning_details = msg.reasoning_details;
       }
       return out;
     }
@@ -122,6 +129,21 @@ export const parseOpenAIChatChoice = choice => {
         arguments: tc.function?.arguments ?? '{}',
       },
     }));
+  }
+  // OpenRouter (and some other proxies) extend the response with reasoning
+  // fields not present in the OpenAI Chat Completions schema. Read them via
+  // an ad-hoc cast so the parser can preserve them when present.
+  const extended =
+    /** @type {{ reasoning?: unknown, reasoning_details?: unknown }} */ (
+      choiceMsg ?? {}
+    );
+  if (typeof extended.reasoning === 'string') {
+    message.reasoning = extended.reasoning;
+  }
+  if (Array.isArray(extended.reasoning_details)) {
+    message.reasoning_details = /** @type {object[]} */ (
+      extended.reasoning_details
+    );
   }
   return message;
 };
