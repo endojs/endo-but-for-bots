@@ -1273,3 +1273,32 @@ Hosts that need to defend exported objects against this class of attack
 should run untrusted guests in a separate agent (such as a worker or
 subprocess) with its own heap, and treat any synchronous call into a guest as
 potentially failure-inducing.
+
+## Timing side-channels
+
+A compartment cannot prevent a guest from measuring durations.
+The default `Compartment` deliberately excludes every standard timer:
+`Date` is not in the global scope, `performance.now` is unavailable, and
+neither `setTimeout`, `setImmediate`, nor any other host scheduling
+primitive is exposed.
+Removing the obvious clocks is necessary but not sufficient.
+
+A guest with the ability to make asynchronous calls to any other agent
+(another worker, another process, a network peer, or even a host-supplied
+promise that resolves on a host-driven schedule) can recover wall-clock
+duration from the round-trip.
+Two consecutive round-trips to the same correspondent yield a coarse
+interval, and many such samples yield a usable timer at the resolution of
+the round-trip jitter.
+Any asynchronous boundary that the guest can drive at will is therefore a
+potential timing source, regardless of whether the host intended it as one.
+
+Confined code that needs to defeat timing side-channels requires a careful
+audit of every async boundary the guest can reach, not just an enumeration
+of timer-like APIs in the global scope.
+The mitigations available to a host include running the suspect guest in a
+separate worker or process so that the timing channel does not leak into
+the host's own heap, throttling the rate at which the guest can send
+outbound messages, and padding the timing of guest-visible message delivery
+so that the round-trip distribution conveys less information about
+host-internal events.
