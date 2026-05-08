@@ -1,3 +1,8 @@
+// @ts-nocheck -- this fixture intentionally violates several typing
+// invariants to probe the runtime's handling of namespace mutation.
+/* eslint-disable no-import-assign -- the point of this fixture is to verify
+   that mutating the namespace object is rejected, both via direct assignment
+   and via Reflect.set. */
 import * as foo from './a.cjs';
 
 const result = {

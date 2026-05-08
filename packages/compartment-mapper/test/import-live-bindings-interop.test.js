@@ -33,12 +33,12 @@ test('import mutability compared with node.js', async t => {
     ses: await namespace.getSummary(),
   };
   const differences = Object.entries(compare.node).map(([key, value]) => {
-    if(value !== compare.ses[key]) {
+    if (value !== compare.ses[key]) {
       return `[!] ${key}: node=${value} endo=${compare.ses[key]} `;
     } else {
       return `    ${key}: both ${value}`;
     }
-  })
+  });
   t.log(differences.join('\n'));
   t.snapshot(differences);
 });

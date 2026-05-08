@@ -9,6 +9,7 @@
 // (descriptor form, frozen state, error name on assignment), and this test
 // pins down those differences so future changes to either side are noticed.
 
+/* global process */
 import test from 'ava';
 import { execFile } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
@@ -37,10 +38,13 @@ const runInCompartment = async () => {
   // identical module bodies for a.js, b.js, and c.js.
   const fixtureUrl = new URL('_namespace-mutation/', import.meta.url);
   const readSource = name => readFile(new URL(name, fixtureUrl), 'utf8');
+  const aSource = await readSource('a.cjs');
+  const bSource = await readSource('b.js');
+  const cSource = await readSource('c.js');
   const sources = {
-    './a.cjs': await readSource('a.cjs'),
-    './b.js': await readSource('b.js'),
-    './c.js': await readSource('c.js'),
+    './a.cjs': aSource,
+    './b.js': bSource,
+    './c.js': cSource,
     // main.js writes to process.stdout in Node.js; in the Compartment we pull
     // values straight off the namespace, so substitute a re-exporting entry.
     './main.js': `
@@ -81,7 +85,12 @@ const runInCompartment = async () => {
   // Round-trip through JSON to drop functions (e.g. accessor descriptors) and
   // make a fair structural comparison with the Node.js subprocess output,
   // which can only emit JSON.
-  const ns = await compartment.import('./main.js');
+  // The compartment was constructed with `__noNamespaceBox__: true`, so
+  // `import()` resolves to the namespace directly (not `{ namespace }`),
+  // but the type signature still reflects the legacy boxed shape.
+  const ns = /** @type {Record<string, any>} */ (
+    /** @type {unknown} */ (await compartment.import('./main.js'))
+  );
   return JSON.parse(
     JSON.stringify({
       result: ns.result,

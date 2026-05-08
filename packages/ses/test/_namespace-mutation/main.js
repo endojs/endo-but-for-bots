@@ -1,3 +1,4 @@
+/* global process */
 import { result } from './b.js';
 import { seenByLaterImport } from './c.js';
 

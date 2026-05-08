@@ -44,7 +44,6 @@ export const makeVirtualModuleInstance = (
   const notifiers = create(null);
   const exportsProps = create(null);
 
-
   if (moduleSource.exports) {
     if (
       !isArray(moduleSource.exports) ||
