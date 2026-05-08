@@ -143,6 +143,14 @@ test.serial(
 // the agent's mailbox `deliver()` (or call `agent.send()`) into the
 // scheduler maker scope, which is a follow-up larger than a fixer
 // pass.
+//
+// As of the post-panel fixer pass mail-mode is gated off by default
+// (`mailModeEnabled: false`); callers must opt in explicitly.  When
+// the gate is off the scheduler resolves each tick locally and emits
+// a single warning per scheduler instance so the disabled state is
+// observable.  This skipped test documents what success looks like
+// once the follow-up plumbing lands and `mailModeEnabled: true`
+// becomes safe to default.
 test.serial.skip(
   'integration (follow-up): tick delivery actually lands in the agent inbox',
   async t => {
@@ -154,7 +162,8 @@ test.serial.skip(
         'fail with "Mail fraud: unrecognized parcel" inside the catch ' +
         'handler.  The fix is to pass the agent mailbox `deliver()` ' +
         '(or use `agent.send`) from the maker scope; tracked as a ' +
-        'follow-up.',
+        'follow-up.  Until then the formula gates mail-mode off ' +
+        '(mailModeEnabled: false default).',
     );
   },
 );

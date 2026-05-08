@@ -3126,7 +3126,14 @@ const makeDaemonCore = async (
       });
     },
     'interval-scheduler': async (
-      { agent: agentId, handle: handleId, maxActive, minPeriodMs, paused },
+      {
+        agent: agentId,
+        handle: handleId,
+        maxActive,
+        minPeriodMs,
+        paused,
+        mailModeEnabled,
+      },
       context,
       id,
     ) => {
@@ -3181,11 +3188,52 @@ const makeDaemonCore = async (
         });
       };
 
+      // Mail-mode disabled warning: one log line per scheduler
+      // instance, regardless of how many ticks fire.
+      let mailModeDisabledWarned = false;
+      const warnMailModeDisabled = () => {
+        if (mailModeDisabledWarned) return;
+        mailModeDisabledWarned = true;
+        console.warn(
+          `[interval-scheduler] mail-mode tick delivery is disabled ` +
+            `(mailModeEnabled=false).  Ticks fire and the scheduler ` +
+            `advances, but no message is delivered to the agent's ` +
+            `inbox.  See the interval-scheduler design note for the ` +
+            `mail-mode-disabled-pending-fix state.`,
+        );
+      };
+
       const { scheduler, control, loadEntry } = makeIntervalSchedulerKit({
         maxActive,
         minPeriodMs,
         onEntryChange: persistEntry,
         onTick: (entry, tickNumber, tickResponse) => {
+          // Mail-mode tick delivery is gated off by default: the
+          // current `E(agentHandle).receive(tickMessage, agentId)` call
+          // path rejects with "Mail fraud: unrecognized parcel" because
+          // `receive()` expects an envelope previously enrolled by the
+          // sender's outbox.  Wiring the agent mailbox `deliver()` (or
+          // `agent.send()`) into this maker scope is a deeper plumbing
+          // change tracked as a follow-up; until then `mailModeEnabled`
+          // remains `false` so we do not silently advance the
+          // scheduler while no message ever reaches the inbox.
+          //
+          // When the gate is off the scheduler still advances each
+          // period (so timers, persistence, cancel/revoke paths, and
+          // the IntervalControl surface stay exercised), but a single
+          // warning per scheduler instance is logged so an operator
+          // does not mistake "scheduler healthy" for "ticks landing".
+          //
+          // When the gate is on, the original mail-mode dispatch is
+          // attempted; the catch path no longer swallows the
+          // delivery error silently — an explicit warning is emitted
+          // alongside the resolve() so a misconfigured agent surfaces.
+          if (!mailModeEnabled) {
+            // eslint-disable-next-line no-use-before-define
+            warnMailModeDisabled();
+            tickResponse.resolve();
+            return;
+          }
           // Fire a tick into the agent's inbox.  Mail-mode is the only
           // wired transport, and the TickResponse remotable cannot be
           // passed through a Package message body: `ids[]` carries
@@ -3749,7 +3797,11 @@ const makeDaemonCore = async (
     options,
     deferredTasks,
   ) => {
-    const { maxActive = 5, minPeriodMs = 30_000 } = options || {};
+    const {
+      maxActive = 5,
+      minPeriodMs = 30_000,
+      mailModeEnabled = false,
+    } = options || {};
     return withFormulaGraphLock(async () => {
       const schedulerNumber = /** @type {FormulaNumber} */ (
         await randomHex256()
@@ -3769,6 +3821,7 @@ const makeDaemonCore = async (
         maxActive,
         minPeriodMs,
         paused: false,
+        mailModeEnabled,
       });
 
       return formulate(schedulerNumber, formula);

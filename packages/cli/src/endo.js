@@ -538,8 +538,19 @@ export const main = async rawArgs => {
       '--min-period <ms>',
       'minimum interval period in ms (default 30000)',
     )
+    .option(
+      '--mail-mode-enabled',
+      'opt in to mail-mode tick delivery to the agent inbox (default off; ' +
+        'currently rejects with "Mail fraud" pending follow-up plumbing)',
+    )
     .action(async cmd => {
-      const { name, as: agentNames, maxActive, minPeriod } = cmd.opts();
+      const {
+        name,
+        as: agentNames,
+        maxActive,
+        minPeriod,
+        mailModeEnabled,
+      } = cmd.opts();
       if (!name) {
         throw new Error('--name is required for interval-scheduler');
       }
@@ -550,6 +561,7 @@ export const main = async rawArgs => {
         agentNames,
         maxActive,
         minPeriodMs: minPeriod,
+        mailModeEnabled: Boolean(mailModeEnabled),
       });
     });
 

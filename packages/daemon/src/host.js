@@ -985,6 +985,10 @@ export const makeHostMaker = ({
      * @param {object} [opts]
      * @param {number} [opts.maxActive] - Max concurrent intervals.
      * @param {number} [opts.minPeriodMs] - Min interval period.
+     * @param {boolean} [opts.mailModeEnabled] - Opt in to mail-mode tick
+     *   delivery to the agent inbox (default `false`; the current
+     *   `E(handle).receive(...)` path rejects with "Mail fraud" until
+     *   the follow-up plumbing lands).
      */
     const makeIntervalSchedulerCmd = async (petName, opts = {}) => {
       assertPetName(petName);

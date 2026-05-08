@@ -409,6 +409,17 @@ export type IntervalSchedulerFormula = {
   minPeriodMs: number;
   /** Whether all intervals are paused (default false). */
   paused: boolean;
+  /**
+   * Whether mail-mode tick delivery to the agent's inbox is enabled
+   * (default `false`).  Disabled because the current
+   * `E(handle).receive(tickMessage, agentId)` path rejects with
+   * "Mail fraud: unrecognized parcel"; tracked as a follow-up.
+   * When false, the scheduler still advances on each period so the
+   * timing/persistence/control surface stays exercised, but no tick
+   * message is delivered.  A single warning is emitted per scheduler
+   * instance.
+   */
+  mailModeEnabled: boolean;
 };
 
 export type Formula =
@@ -1042,7 +1053,11 @@ export interface EndoHost extends EndoAgent {
   ): Promise<unknown>;
   makeIntervalScheduler(
     petName: string,
-    options?: { maxActive?: number; minPeriodMs?: number },
+    options?: {
+      maxActive?: number;
+      minPeriodMs?: number;
+      mailModeEnabled?: boolean;
+    },
   ): Promise<unknown>;
   /** Locate a formula with connection hints for sharing with remote peers. */
   locateForSharing(...petNamePath: string[]): Promise<string | undefined>;
@@ -1629,7 +1644,11 @@ export interface DaemonCore {
   formulateIntervalScheduler: (
     agentId: FormulaIdentifier,
     handleId: FormulaIdentifier,
-    options: { maxActive?: number; minPeriodMs?: number },
+    options: {
+      maxActive?: number;
+      minPeriodMs?: number;
+      mailModeEnabled?: boolean;
+    },
     deferredTasks: DeferredTasks<Record<string, string | string[]>>,
   ) => FormulateResult<unknown>;
 
