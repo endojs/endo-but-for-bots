@@ -50,15 +50,19 @@ result through CI.
   `~/garden` (the steward's seat) or any other shared
   tree.
 - Read all comments before touching code, including any panel
-  report. Group them by area before fixing them. **Leave a `eyes`
-  reactji on each comment you read** per
-  [`../skills/reactji-acknowledgment.md`](../skills/reactji-acknowledgment.md).
-  The reactji is the immediate "received and processing" signal;
-  the substantive fix (commit + thread reply) is the load-bearing
-  follow-up. Both inline review comments
-  (`gh api .../pulls/comments/<id>/reactions`) and conversation
-  comments (`gh api .../issues/comments/<id>/reactions`) get the
-  reactji.
+  report. Group them by area before fixing them. **The triage
+  role (steward / director / liaison) already posted the `eyes`
+  reactji at the moment the comment was first noticed**, per
+  [`../skills/reactji-acknowledgment.md`](../skills/reactji-acknowledgment.md);
+  the fixer does NOT need to re-react. The fixer's reading is
+  for substance, not acknowledgment.
+
+  Exception: when the fixer enumerates ALL inline comments under
+  a review's `pull_request_review_id` and discovers comments the
+  triage brief did not pre-surface (older drafts, comments on
+  files the brief did not mention), react on those at the moment
+  of discovery. The rule is "first-to-notice"; the triage role
+  is usually first, but not always.
 - Don't address feedback on review-only mirrors (e.g.
   `pr-mirror-for-offline-review.md` PRs); those go upstream.
 - Skip-with-reason if a "should fix" item is genuinely out of

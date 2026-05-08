@@ -69,6 +69,34 @@ into `designs/`); the steward's narrow timestamp window ("comments
 since 18:25") missed the 18:10 comment for ~2 hours until the
 maintainer pointed at it directly.
 
+**The steward owns the `eyes` reactji at triage time.** Per
+[`../skills/reactji-acknowledgment.md`](../skills/reactji-acknowledgment.md),
+the reactji belongs to the role that first notices the activity
+and begins formulating a response. For Monitor-driven wakes
+(`PullRequestReviewEvent`, `IssueCommentEvent`,
+`PullRequestReviewCommentEvent`), that role is the steward. The
+ordered cycle on each wake is:
+
+1. Read the comment(s) and any inline thread under the review id.
+2. **Post the `eyes` reactji on each unaddressed comment** (and
+   on each inline thread comment under the review id) BEFORE
+   dispatching any worker. The reactji is the
+   under-30-seconds-after-post acknowledgment the human sees;
+   worker-dispatch latency (10-30 minutes from dispatch to first
+   action) is unacceptable for the receipt signal.
+3. Decide the dispatch shape (fixer / builder / shepherd /
+   conductor / cleaner / weaver / etc.).
+4. Dispatch with a brief that surfaces the comment context.
+   The dispatched worker does NOT re-react on comments the
+   steward already pre-surfaced; the worker's reading is for
+   substance.
+
+The exception is when the worker discovers comments the triage
+brief did not pre-surface (older drafts, side-thread comments,
+comments that arrive while the worker's dispatch is in flight) —
+those get the worker's reactji at the moment of discovery, per
+the "first to notice" rule.
+
 **Monitor filter: wake on review-wrap, not on per-comment-during-draft.**
 A maintainer drafting a PR review fires
 `PullRequestReviewCommentEvent` per inline comment as they're

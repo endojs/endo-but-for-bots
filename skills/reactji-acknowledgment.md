@@ -2,20 +2,48 @@
 
 ## When to use
 
-Any time an agent reads a comment (an issue body, an issue comment,
-a PR review, a PR review comment, an inline review thread reply) AND
-decides on a response shape, leave a reactji on the source comment as
-the "received and processing" signal. The reply, commit, dispatch, or
-deferral that follows is the substantive answer; the reactji is the
-cheap immediate acknowledgment that prevents the contributor from
-wondering whether the bot saw the comment yet.
+**At the moment the activity is noticed and a response shape begins
+to form** — leave a reactji on the source comment as the "received
+and processing" signal. The reply, commit, dispatch, or deferral that
+follows is the substantive answer; the reactji is the cheap immediate
+acknowledgment that prevents the contributor from wondering whether
+the bot saw the comment yet.
 
-The discipline applies to every role that reads contributor input:
-`liaison` (issues), `director` (PR reviews + comments surfaced in the
-fresh-feedback sweep), `fixer` (review comments being addressed),
-`builder` (review comments on the builder's own PR), `conductor`
-(comments that arrive between merge-queue enqueue and merge), and
-any maintainer-authored comment that triggers a steward dispatch.
+**The triage role owns the reactji, not the dispatched worker.** When
+the steward, director, or liaison notices a new comment and decides
+to dispatch a fixer / builder / shepherd / conductor in response,
+the **triage role posts the reactji at the moment of decision**, not
+the worker after dispatch starts. Worker latency (10-30 minutes
+from dispatch to first action) is unacceptable for the
+"received" signal; the human sees the reactji within seconds of
+posting, when the steward's Monitor or per-cycle sweep first reads
+the comment.
+
+This means:
+
+- **Steward** (per ~/garden/roles/steward.md): on every Monitor wake
+  for a `PullRequestReviewEvent` / `IssueCommentEvent` /
+  `PullRequestReviewCommentEvent`, the steward's first action after
+  reading the comment(s) is to post the reactji. Then dispatch.
+- **Director** (per ~/garden/roles/director.md): on every per-PR
+  sweep, react on each freshly-surfaced comment before deciding the
+  per-PR action.
+- **Liaison** (per ~/garden/roles/liaison.md): on every per-issue
+  pass, react on each unaddressed comment before deciding the
+  per-issue action.
+- **Worker roles** (`fixer`, `builder`, `conductor`, `shepherd`,
+  `cleaner`, `weaver`, `designer`, `scribe`, `juror`) inherit the
+  reactji from the triage role and do NOT need to re-react on
+  comments the dispatch brief surfaced. The worker's reading is
+  for substance; the acknowledgment was already posted at triage
+  time.
+
+Exception: when a worker reads a comment that the triage role did
+NOT pre-surface (e.g. the worker discovers a relevant earlier
+comment by enumerating all inline comments under a review id, or a
+contributor comments on the PR while the worker's dispatch is in
+flight), the worker reacts on those comments at the moment of
+discovery. The rule is "first to notice", not "only the steward".
 
 ## Reaction vocabulary
 
