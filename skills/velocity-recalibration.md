@@ -75,3 +75,61 @@ A diff to `designs/README.md` § "Size and Time Estimates" that:
 - A design that was completed by merging an existing PR that already
   had several months of work in it should be excluded from velocity
   measurements. The completion date is artificial.
+
+## Matching designs to PRs
+
+The PR catalog has at least three patterns; check all of them when
+binding a design to its merged PRs:
+
+1. **Branch slug.** `design/<slug>`, `feat/<slug>`, `fix/<slug>` are
+   the common shapes. The slug usually matches the design filename
+   (without `.md`), but not always (e.g., `design/daemon-rename-to-manager`
+   matches `daemon-rename-to-manager.md`; `feat/chat-rename-clear`
+   matches `chat-rename-dismiss-to-clear.md`).
+2. **Body `Refs:` line.** Implementation PRs typically open with
+   `Refs designs/<slug>.md` or `Refs: #N`. The latter resolves to a
+   prior design-only PR you then trace back to the design file.
+3. **Re-opened-under-bot pattern.** PRs whose body starts with
+   "Forwarded from #N under the bot per the re-open-under-bot
+   pattern" point at an *original* PR (closed-unmerged) whose
+   metadata holds the true creation date and slug. For elapsed-time
+   purposes, use the original's creation date, not the bot
+   re-opening's.
+
+If a design ships in multiple PRs (a stack split, a design-only PR
+followed by an impl PR, or an impl PR plus follow-up fix PRs), fold
+them into one design's velocity by summing their elapsed times *and*
+recording the union of PR numbers. Don't double-count overlap; use
+`max(merged_at) − min(created_at)` of the set as a wall-clock proxy
+when the PRs ran in parallel.
+
+## Distinguish effort from queue time
+
+Time-to-merge measures two very different things depending on the PR:
+
+- **Implementation PRs (real code):** time-to-merge approximates
+  effort, modulo CI flakes and review back-and-forth.
+- **Design-only PRs (one or two `.md` files):** time-to-merge measures
+  CI plus reviewer latency, not design effort.
+  Don't pool design-only and impl PRs in the same ratio; report them
+  separately.
+
+When the in-flight queue is deep, *minimum elapsed since branch
+creation* across open PRs gives a lower bound on completion time
+that often dwarfs the per-PR effort estimate.
+If the median open-PR-age is materially larger than any reasonable
+per-design effort estimate, the binding constraint on the milestone
+is review bandwidth, not author throughput.
+Surface this as a separate "review queue carry" addition to the
+milestone totals rather than folding it into per-design estimates.
+
+## Reporting per-size ratios
+
+Aggregate the actual / estimate ratio per size bucket (S, M, L, XL)
+and report each separately.
+A single overall median collapses bucket-specific signal: in practice
+S-sized work tends to undershoot estimates while L and XL tend to
+overshoot, and the recalibration multiplier should differ accordingly.
+With a small N per bucket, prefer the median over the mean; report N
+alongside each bucket's number so readers can see which buckets are
+provisional.
