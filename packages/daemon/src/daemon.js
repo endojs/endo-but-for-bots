@@ -3147,23 +3147,44 @@ const makeDaemonCore = async (
       );
       await filePowers.makePath(schedulerDir);
 
+      // Per-entry write serializer: a `Map<entryId, Promise>` chain
+      // ensures concurrent ticks (or close-spaced reschedule paths
+      // re-entering `advanceToNextPeriod`) never race two
+      // `writeFileText` calls against the same `${entry.id}.json`,
+      // which would otherwise tear the JSON file or interleave
+      // partial writes.  Each new write awaits the prior in-flight
+      // write for the same id; the chain entry is cleared once
+      // settled so the map does not grow unboundedly.
+      /** @type {Map<string, Promise<void>>} */
+      const entryWriteChains = new Map();
+      const persistEntry = entry => {
+        const entryPath = filePowers.joinPath(schedulerDir, `${entry.id}.json`);
+        const text = `${JSON.stringify(entry)}\n`;
+        const prior = entryWriteChains.get(entry.id) || Promise.resolve();
+        const next = prior.then(() =>
+          filePowers.writeFileText(entryPath, text).catch(err => {
+            console.error(
+              `[interval-scheduler] persist failed:`,
+              /** @type {Error} */ (err).message,
+            );
+          }),
+        );
+        entryWriteChains.set(entry.id, next);
+        // Clear our chain entry once settled, but only if we're still
+        // the tail.  A later `persistEntry` for the same id will have
+        // overwritten the map entry; we must not erase that newer
+        // chain.
+        next.finally(() => {
+          if (entryWriteChains.get(entry.id) === next) {
+            entryWriteChains.delete(entry.id);
+          }
+        });
+      };
+
       const { scheduler, control, loadEntry } = makeIntervalSchedulerKit({
         maxActive,
         minPeriodMs,
-        onEntryChange: entry => {
-          const entryPath = filePowers.joinPath(
-            schedulerDir,
-            `${entry.id}.json`,
-          );
-          filePowers
-            .writeFileText(entryPath, `${JSON.stringify(entry)}\n`)
-            .catch(err => {
-              console.error(
-                `[interval-scheduler] persist failed:`,
-                /** @type {Error} */ (err).message,
-              );
-            });
-        },
+        onEntryChange: persistEntry,
         onTick: (entry, tickNumber, tickResponse) => {
           // Fire a tick into the agent's inbox.  Mail-mode is the only
           // wired transport, and the TickResponse remotable cannot be
