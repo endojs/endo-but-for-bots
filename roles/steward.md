@@ -292,23 +292,31 @@ boundary; the in-flight intent does not survive context clears,
 but the GitHub state does.
 
 ```sh
+# `gh pr list --search "review:changes-requested"` returns empty
+# on this gh CLI; the search-qualifier syntax does not match.
+# Filter via `reviewDecision` field instead.
 for N in $(gh pr list --repo endojs/endo-but-for-bots \
-    --state open --search "review:changes-requested" \
-    --json number --jq '.[].number'); do
+    --state open --limit 100 \
+    --json number,reviewDecision \
+    --jq '.[] | select(.reviewDecision == "CHANGES_REQUESTED")
+              | .number'); do
   CR_TS=$(gh api "repos/endojs/endo-but-for-bots/pulls/$N/reviews" \
     --jq '[.[] | select(.state == "CHANGES_REQUESTED")] | last
           | .submitted_at')
   PUSH_TS=$(gh api "repos/endojs/endo-but-for-bots/pulls/$N/commits" \
     --jq '.[-1].commit.committer.date')
-  if [ "$PUSH_TS" \< "$CR_TS" ]; then
-    echo "PR $N: UNACTIONED — CR at $CR_TS, last push at $PUSH_TS"
+  # Use `[[ ]]` for string comparison — POSIX `[ "$a" \< "$b" ]`
+  # fails silently in zsh ("condition expected: <") and falls
+  # through to the false branch, so EVERY PR shows as addressed.
+  if [[ "$PUSH_TS" < "$CR_TS" ]]; then
+    echo "PR $N: UNACTIONED — CR $CR_TS, push $PUSH_TS"
   fi
 done
 ```
 
-`gh pr view` even shows an empty `CR_TS` when the most recent
-review action was an APPROVAL after an earlier CR — that's fine,
-the comparison just shows nothing to do.
+If the most recent review action on a PR was an APPROVAL after an
+earlier CR, `reviewDecision` flips to `APPROVED` and the PR drops
+out of the audit set entirely — correct, no action to take.
 
 A push timestamp later than the CR timestamp is a necessary but
 not sufficient signal: the push might be unrelated to the
