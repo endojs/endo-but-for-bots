@@ -211,6 +211,43 @@ architectural ones.
   maintainer, leave the failure visible, focus on PR-specific
   failures.
 
+  **Resolved root cause (PR #158, 2026-05-08):** the `build-wasm`
+  drift was *not* path-embedding or toolchain skew. The previous
+  reproducibility work (`--remap-path-prefix`,
+  `CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1`) was correct.
+  The actual cause: `rust/ocapn_noise` is a member of the top-level
+  Rust workspace (`Cargo.toml` lists it alongside `rust/endo` and
+  `rust/endo/xsnap`), so cargo silently uses `../../Cargo.lock`
+  and ignores `rust/ocapn_noise/Cargo.lock`. When 8073e0fad7
+  added the xsnap members to the workspace, cargo re-resolved and
+  bumped the noise crate's transitive deps in the workspace lockfile
+  (`crypto-common 0.1.6` -> `0.1.7`, `noise-protocol 0.2.0` -> `0.2.1`,
+  `cfg-if 1.0.3` -> `1.0.4`, `base64ct 1.8.0` -> `1.8.3`). The
+  committed wasm was built before, so all subsequent rebuilds embed
+  different dep versions and the bytes differ.
+  General lesson for the shepherd: when a wasm/binary-artifact CI job
+  goes red across all PRs simultaneously after an unrelated
+  workspace-config change, suspect lockfile drift in the workspace
+  the artifact's source crate sits in, NOT toolchain/path issues.
+  `cargo tree --locked` from the inner crate dir is enough to confirm:
+  if it shows different versions than the inner `Cargo.lock`, the
+  workspace is overriding it.
+
+- **Workspace-rooted Rust crates need their committed binary
+  artifacts regenerated whenever the *workspace* lockfile churns,
+  even if the artifact's own crate source did not change.** For
+  `rust/ocapn_noise`, any commit that runs `cargo update` for an
+  unrelated workspace member (e.g. `rust/endo`, `rust/endo/xsnap`)
+  must also rebuild and recommit
+  `packages/ocapn-noise/gen/ocapn-noise.wasm` in the same change,
+  or `build-wasm` goes red on every subsequent PR. PR #158 added
+  `--locked` to `rust/ocapn_noise/build.sh` so a contributor who
+  forgets gets a build-time error rather than silently committing
+  a stale binary. If a wasm/artifact regen is needed, the shepherd
+  may run it inline (small, mechanical) and ship as a separate
+  commit; if the regen requires a Rust toolchain the shepherd
+  doesn't have, escalate to a fixer dispatch.
+
 - **Workflow-edit PRs that add a top-level `env:` need to merge
   with any pre-existing one.** Prettier's YAML parser rejects
   duplicate map keys with `SyntaxError: Map keys must be unique;

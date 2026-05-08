@@ -89,6 +89,23 @@ lease is rejected, fetch again and re-rebase.
   that had already landed the equivalent work. Closing the
   bots-PR was the right outcome; no commits were pushed.
 
+- **Cross-base rebase requires `--onto`, not bare `git rebase
+  <new-base>`.** When the PR's old base (e.g., `bots-ssh/llm`) and
+  the new base (`actual/master`) share only a deep ancestor, plain
+  `git rebase actual/master` will replay every commit between
+  `actual/master` and the PR head — typically hundreds of commits
+  from the old base's own history that have nothing to do with the
+  PR. The first conflict (often `yarn.lock`) is a strong signal that
+  this is what happened; abort and use the explicit form:
+  ```sh
+  git rebase --onto <new-base> <old-base> HEAD
+  ```
+  This replays only the PR's own commits (`<old-base>..HEAD`) onto
+  the new base. Encountered on PR 155 (master-sync): bare
+  `git rebase actual/master` started replaying 696 commits from
+  llm's history; `git rebase --onto actual/master ada6d43c7d HEAD`
+  replayed only the 9 PR commits cleanly.
+
 - **Working-mirror PRs require a master-sync sub-stage before the
   rebase.** When the PR is a working mirror (per
   [`pr-mirror-for-offline-review.md`](./pr-mirror-for-offline-review.md))
