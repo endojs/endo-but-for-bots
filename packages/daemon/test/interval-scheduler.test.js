@@ -330,6 +330,37 @@ test('loadEntry seeds nextId so post-restart makeInterval ids do not collide', a
   await fresh.cancel();
 });
 
+test('control.revoke() persists cancelled state via onEntryChange', async t => {
+  // The daemon registers `context.onCancel(() => control.revoke())`,
+  // so `revoke()` must notify the persistence layer or persisted
+  // files stay marked `active` and get revived on next startup.
+  /** @type {Array<{ id: string, status: string }>} */
+  const persisted = [];
+  const { scheduler, control } = makeIntervalSchedulerKit({
+    minPeriodMs: 1000,
+    onEntryChange: entry => {
+      persisted.push({ id: entry.id, status: entry.status });
+    },
+  });
+
+  const i1 = await scheduler.makeInterval('a', 5000, { firstDelayMs: 50_000 });
+  const i2 = await scheduler.makeInterval('b', 5000, { firstDelayMs: 50_000 });
+  void i1;
+  void i2;
+
+  // Drop the create-time persistence entries.
+  persisted.length = 0;
+
+  control.revoke();
+
+  // Each revoked entry must produce an onEntryChange with cancelled status.
+  t.is(persisted.length, 2, 'revoke() persists each entry');
+  t.true(
+    persisted.every(p => p.status === 'cancelled'),
+    'all revoked entries persisted as cancelled',
+  );
+});
+
 test('cancel-during-tick: late reschedule() must not mutate or re-persist the entry', async t => {
   /** @type {Array<{ tickResponse: object }>} */
   const responses = [];

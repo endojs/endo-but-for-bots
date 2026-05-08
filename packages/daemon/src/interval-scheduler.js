@@ -351,6 +351,15 @@ export const makeIntervalSchedulerKit = (options = {}) => {
       for (const entry of entries.values()) {
         disarmInterval(entry.id);
         entry.status = 'cancelled';
+        // Persist the cancellation so the next daemon startup does not
+        // revive the revoked entries.  The daemon registers
+        // `context.onCancel(() => control.revoke())`, so without this
+        // notification a cancelled scheduler formula would leave its
+        // on-disk entries marked `active` and the loader would re-arm
+        // them on next startup.
+        if (onEntryChange) {
+          onEntryChange(entry);
+        }
       }
     },
     listAll: async () =>
