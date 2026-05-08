@@ -628,6 +628,45 @@ issue or design document, and shepherding it through to a green PR.
   ride in the same must-fix / should-fix list — one fixer
   dispatch covers both code-quality and adversarial fixes.
 
+  **Then dispatch a `cleaner` against the most-affected
+  package(s).** The panel finds bugs and gaps in the diff's
+  surface; the cleaner finds bugs and gaps in the diff's
+  *coverage*: untested branches added by the build, code that the
+  panel glanced past because it was syntactically reasonable but
+  has no caller, and adversarial inputs that the panel's
+  saboteur slot enumerated as concerns but didn't write tests
+  for. A panel-only hand-off lets the diff's quality plateau at
+  "looks right on paper"; the cleaner forces "and is exercised."
+
+  - **Pick the affected package** by counting changed lines per
+    package directory (`git diff --stat <base>..HEAD | awk
+    '/packages\//'`). One cleaner dispatch per package, in
+    parallel if multiple packages have substantial change.
+    Skip packages with under ~20 lines of net change; the cleaner's
+    overhead exceeds its yield on tiny touches.
+  - **The cleaner runs in the SAME worktree as the builder's
+    PR head** (`~/endo-wt/pr-<N>` once the PR number is known).
+    Its commits land on the same branch and push to the same PR.
+    Do NOT create a separate worktree or open a separate PR for
+    cleaner output; the test additions and dead-code deletions
+    are part of the change, not a follow-up.
+  - **The cleaner's brief includes the panel's report** as
+    context: any "thin coverage" or "untested branch" finding
+    the panel surfaced is the cleaner's first target. The
+    adversarial juror's saboteur entries are a second source of
+    target inputs — even if the panel verdict was "mitigated /
+    no real concern", a regression test pinning the mitigation is
+    valuable.
+  - **The cleaner's hand-off is back to the steward** (or, if its
+    work surfaces an architecture question, back to the user via
+    a comment on the PR). The cleaner does NOT re-run the panel —
+    the panel already vetted the surface; cleaner-added tests and
+    deletions are scoped enough that a fresh panel is wasteful.
+  - **Skip the cleaner dispatch** when the PR is pure docs, a
+    lockfile-only churn, a one-file Prettier sweep, or a single
+    bug-fix line whose test fixture is already in the diff. Those
+    have no coverage surface to expand.
+
   Fresh PRs warrant this attention because the cost is highest at
   open time (when scope and shape are most malleable) and
   cheapest to act on (the author's context is intact). Do not
