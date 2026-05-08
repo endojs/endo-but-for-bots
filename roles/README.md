@@ -15,6 +15,11 @@ playing both `juror` and `fixer`; consult both.
 
 - [builder.md](./builder.md) — implement a change from an issue or
   spec and get it through CI.
+- [chronicler.md](./chronicler.md) — observe and catalogue
+  documentation gaps (JSDoc, code comments, READMEs, tutorials)
+  per PR or per package; maintain `process/doc-debt/<package>.md`
+  and `process/doc-debt/QUEUE.md`. Hands off to the
+  [`scribe`](./scribe.md) for the actual writing.
 - [cleaner.md](./cleaner.md) — maximize coverage on a target
   package; write tests for reachable code or delete unreachable
   code.
@@ -50,6 +55,10 @@ playing both `juror` and `fixer`; consult both.
   attack a module's claimed invariants.
 - [scout.md](./scout.md) — investigate a performance
   tradeoff with numbers.
+- [scribe.md](./scribe.md) — land documentation work the
+  [`chronicler`](./chronicler.md) prioritized: JSDoc, code-comment
+  fixes, README refreshes, tutorials. Doc-side analog of
+  builder/fixer.
 - [shepherd.md](./shepherd.md) — keep CI healthy across many
   in-flight PRs.
 - [steward.md](./steward.md) — top-level per-cycle coordinator;
