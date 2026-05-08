@@ -1,10 +1,34 @@
 # PR dispatch state
 
-Last cycle: 2026-05-07 (conductor PR 137 merge).
-Prior cycle: 2026-05-07 (conductor PR 119 merge).
+Last cycle: 2026-05-08 (conductor PR 136 merge).
+Prior cycle: 2026-05-07 (conductor PR 137 merge).
+Earlier: 2026-05-07 (conductor PR 119 merge).
 Earlier: 2026-05-07 (conductor PR 99 merge).
 Earlier: 2026-05-07 14:55 UTC (PR 119 contributor review).
 Earlier: 2026-05-07 07:00 UTC (master synced; fixer for PR 114; PR 111 fold-in dispatched).
+
+## Cycle 2026-05-08 (conductor PR 136)
+
+PR 136 merged → `9573569c48226a74926fee050b25fe24f777f1f0` (merge commit
+to `llm`).
+`design(sandbox): mirror PLAN/endo_posix_sandbox.md into designs/`,
+designer-authored mirror for milestone calibration.
+At survey: APPROVED (kriskowal 01:18 with two minor cleanup comments),
+isDraft=true, MERGEABLE/UNSTABLE, reviewDecision=APPROVED.
+Addressed both review comments on `designs/endo-posix-sandbox.md`:
+removed kriskowal from the Author field (replaced with `kriscendobot
+(prompted by kriskowal)`); fixed phase-progression table column
+alignment by hand (Prettier with default config does not auto-align
+markdown table cells, but the column widths now match throughout).
+Force-pushed `08bf2a5e8e` with `--force-with-lease`.
+Replied to both review comments (3205638470, 3205640040) with `Done.
+<sha>` confirmations.
+Marked PR ready for review (was draft); `gh pr merge --auto --merge
+--delete-branch` resolved as direct merge immediately (branch
+protection does not gate on CI).
+state=MERGED on first verify.
+Local `design/sandbox-roadmap` branch deleted; `design-sandbox-roadmap`
+worktree removed.
 
 ## Cycle 2026-05-07 (conductor PR 137)
 
