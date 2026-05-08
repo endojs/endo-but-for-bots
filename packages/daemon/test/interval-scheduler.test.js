@@ -295,6 +295,41 @@ test('cancel-during-tick: late resolve() must not mutate or re-persist the entry
   );
 });
 
+test('loadEntry seeds nextId so post-restart makeInterval ids do not collide', async t => {
+  // Simulate a restart: a fresh kit loads a previously persisted entry
+  // with id `interval-7`, then makeInterval is called.  Without the
+  // nextId seeding, the newly generated id would be `interval-1`,
+  // ..., colliding with the loaded entry once nextId reaches 7 and
+  // silently overwriting it via `entries.set(entry.id, ...)`.  After
+  // the fix, the loader seeds nextId so the next id is `interval-8`.
+  const { scheduler, loadEntry } = makeIntervalSchedulerKit({
+    minPeriodMs: 1000,
+  });
+  loadEntry({
+    id: 'interval-7',
+    label: 'persisted',
+    periodMs: 5000,
+    firstDelayMs: 50_000,
+    tickTimeoutMs: 2500,
+    nextTickAt: Date.now() + 50_000,
+    createdAt: Date.now(),
+    tickCount: 0,
+    status: 'active',
+  });
+
+  const fresh = await scheduler.makeInterval('fresh', 5000, {
+    firstDelayMs: 50_000,
+  });
+  const freshInfo = fresh.info();
+  t.not(freshInfo.id, 'interval-7', 'new id must not collide with loaded id');
+  t.is(freshInfo.id, 'interval-8', 'new id must follow the highest loaded id');
+
+  // Both entries should appear in list().
+  const list = await scheduler.list();
+  t.is(list.length, 2, 'loaded and fresh both visible after seeding');
+  await fresh.cancel();
+});
+
 test('cancel-during-tick: late reschedule() must not mutate or re-persist the entry', async t => {
   /** @type {Array<{ tickResponse: object }>} */
   const responses = [];

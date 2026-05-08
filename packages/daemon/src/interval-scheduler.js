@@ -25,12 +25,6 @@ import {
  * @property {'active' | 'paused' | 'cancelled'} status
  */
 
-let nextId = 0;
-const generateId = () => {
-  nextId += 1;
-  return `interval-${nextId}`;
-};
-
 /**
  * Create an IntervalScheduler / IntervalControl facet pair.
  *
@@ -55,6 +49,34 @@ export const makeIntervalSchedulerKit = (options = {}) => {
   let currentMinPeriodMs = minPeriodMs;
   let paused = false;
   let revoked = false;
+
+  // Per-kit id counter, seeded by `loadEntry` from any persisted ids so
+  // post-restart `makeInterval` calls do not collide with restored
+  // entries.  A module-scoped counter would reset to `0` on every
+  // daemon process start; the loader restores `interval-7`, the next
+  // `makeInterval` returns `interval-1`, ..., until `entries.set` of an
+  // already-restored id silently overwrites the live entry, leaking
+  // its timer and corrupting persistence.
+  let nextId = 0;
+  const generateId = () => {
+    nextId += 1;
+    return `interval-${nextId}`;
+  };
+
+  /**
+   * Seed `nextId` from a previously-persisted id so that newly generated
+   * ids will not collide with the loaded entry.  Tolerates ids that do
+   * not match the `interval-<n>` shape (e.g. from a future generator).
+   *
+   * @param {string} id
+   */
+  const seedNextIdFromLoaded = id => {
+    const match = /^interval-(\d+)$/u.exec(id);
+    if (match === null) return;
+    const n = Number(match[1]);
+    if (!Number.isFinite(n)) return;
+    if (n > nextId) nextId = n;
+  };
 
   /** @type {Map<string, IntervalEntry>} */
   const entries = new Map();
@@ -346,6 +368,7 @@ export const makeIntervalSchedulerKit = (options = {}) => {
    */
   const loadEntry = entry => {
     entries.set(entry.id, entry);
+    seedNextIdFromLoaded(entry.id);
     if (entry.status === 'active' && !paused) {
       armInterval(entry);
     }
