@@ -335,36 +335,26 @@ const makeMountExo = ctx => {
     async move(fromArg, toArg) {
       await null;
       assertWritable();
-      const fromSegments =
-        typeof fromArg === 'string' ? [fromArg] : fromArg;
+      const fromSegments = typeof fromArg === 'string' ? [fromArg] : fromArg;
       const toSegments = typeof toArg === 'string' ? [toArg] : toArg;
       const { clamped: fromClamped, absolute: fromAbsolute } =
         clamp(fromSegments);
       const { clamped: toClamped, absolute: toAbsolute } = clamp(toSegments);
       await assertConfined(fromAbsolute, confinementRoot, filePowers);
-      await assertConfinedOrAncestor(
-        toAbsolute,
-        confinementRoot,
-        filePowers,
-      );
+      await assertConfinedOrAncestor(toAbsolute, confinementRoot, filePowers);
       await directory.move(fromClamped, toClamped);
     },
 
     async copy(fromArg, toArg) {
       await null;
       assertWritable();
-      const fromSegments =
-        typeof fromArg === 'string' ? [fromArg] : fromArg;
+      const fromSegments = typeof fromArg === 'string' ? [fromArg] : fromArg;
       const toSegments = typeof toArg === 'string' ? [toArg] : toArg;
       const { clamped: fromClamped, absolute: fromAbsolute } =
         clamp(fromSegments);
       const { clamped: toClamped, absolute: toAbsolute } = clamp(toSegments);
       await assertConfined(fromAbsolute, confinementRoot, filePowers);
-      await assertConfinedOrAncestor(
-        toAbsolute,
-        confinementRoot,
-        filePowers,
-      );
+      await assertConfinedOrAncestor(toAbsolute, confinementRoot, filePowers);
       await directory.copy(fromClamped, toClamped);
     },
 
