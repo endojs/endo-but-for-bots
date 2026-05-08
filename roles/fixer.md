@@ -170,45 +170,36 @@ result through CI.
   comparison run, rather than stashing.
 - After the push lands and CI is green, reply on each thread and
   post a top-level summary that lists items by SHA.
-- **After the fix-up commits land and CI is green, dispatch a
-  `cleaner` against the most-affected package(s).** A fixer round
-  changes behavior — even a "small" fix often adds a branch, a
-  guard, or a new error path. The panel that originally vetted
-  the PR ran against the pre-fix surface; the fix's added lines
-  are unvetted for coverage. The cleaner closes that gap by
-  exercising the new branches via the package's public API and
-  by deleting any code the fix made unreachable.
-
-  - **Pick the affected package** by counting changed lines per
-    package directory in the fixer's commits since the prior
-    panel review (`git diff --stat <prior-panel-tip>..HEAD | awk
-    '/packages\//'`). One cleaner per package; parallel if
-    multiple packages saw substantial change. Skip packages with
-    under ~20 net lines of change in the fix-up round; the
-    cleaner's overhead exceeds its yield on tiny touches.
-  - **The cleaner runs in the SAME worktree** (`~/endo-wt/pr-<N>`)
-    on the SAME branch. Cleaner commits land on the PR as
-    additional commits; do NOT open a separate PR for them.
-  - **The cleaner's brief includes the fix-up scope** (which
-    branches were added, which guards changed) plus the original
-    panel report's "thin coverage" or "untested branch" findings
-    if they were deferred at original-panel time. The cleaner's
-    job is to close those gaps now that the surface has stabilized.
-  - **The cleaner hands off back to the steward** for close-out;
-    it does NOT re-run the panel. (The panel already vetted the
-    surface; cleaner-added tests and deletions are scoped enough
-    that a fresh panel is wasteful.)
-  - **Skip the cleaner dispatch** when the fix-up round was pure
-    docs, lockfile-only churn, a Prettier sweep, a single bug-fix
-    line whose test fixture is already in the diff, or a comment
-    rewording. Those have no coverage surface to expand.
-  - **The cleaner is a fix-up-round handoff, not a per-fix
-    handoff.** When the fixer is iterating across multiple
-    `CHANGES_REQUESTED` rounds in quick succession (e.g.
-    maintainer reviews, fix lands, second review, second fix
-    lands), only the LAST fix-up round in a settled-CI state
-    triggers the cleaner. Mid-round cleaner dispatches race the
-    next maintainer review and produce orphan test commits.
+- **After fix-up commits land, dispatch a `shepherd` to drive CI
+  to green BEFORE re-requesting maintainer review.** Per
+  maintainer directive 2026-05-08 (kriskowal on PR #157): "After
+  any proposed change between build and approve, the shepherd
+  should be invoked to get CI green and the conductor should
+  only merge changes that are passing in CI." A red-CI PR in
+  the maintainer's review queue forces the maintainer to decide
+  whether the red is "yours" or "mine" before reviewing
+  substance; the bot's job is to remove that ambiguity.
+  - If the fixer can drive CI to green inline (rerun a known
+    flake, push a tiny CI-only fix-up), do so without dispatching
+    a separate shepherd; one agent acting as both fixer and
+    shepherd is fine when the boundary is clean.
+  - Only `gh api` calls to `pulls/<N>/requested_reviewers`
+    (re-request) belong AFTER CI is green, not before.
+- **The cleaner does NOT re-run on fixer rounds in response to
+  maintainer feedback.** Per the new builder hand-off chain (see
+  ~/garden/roles/builder.md "Then dispatch a `cleaner` against
+  the most-affected package(s) BEFORE the maintainer ever sees
+  the PR"), the cleaner is the LAST bot-side preparation step
+  on the initial build. After that, the fixer's loop is:
+  fixer → shepherd → re-request maintainer; no cleaner. The
+  rationale: the cleaner already established a coverage baseline
+  for the package; small fix-up changes don't warrant a fresh
+  package-wide coverage pass, and dispatching a cleaner in the
+  middle of an active fixer loop races the next maintainer
+  review and produces orphan test commits. If a fix-up round
+  significantly expands the diff (a new branch, a new file, a
+  reshape across multiple call sites), THEN dispatch a cleaner
+  before re-requesting review; small fix-ups skip the cleaner.
 - **A `CHANGES_REQUESTED` review that asks for both a code change
   AND a PR-body rewrite is two deliverables, not one.** When the
   maintainer's review combines an inline-comment fix ("scope this

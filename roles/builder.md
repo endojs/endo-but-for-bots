@@ -629,14 +629,13 @@ issue or design document, and shepherding it through to a green PR.
   dispatch covers both code-quality and adversarial fixes.
 
   **Then dispatch a `cleaner` against the most-affected
-  package(s).** The panel finds bugs and gaps in the diff's
-  surface; the cleaner finds bugs and gaps in the diff's
-  *coverage*: untested branches added by the build, code that the
-  panel glanced past because it was syntactically reasonable but
-  has no caller, and adversarial inputs that the panel's
-  saboteur slot enumerated as concerns but didn't write tests
-  for. A panel-only hand-off lets the diff's quality plateau at
-  "looks right on paper"; the cleaner forces "and is exercised."
+  package(s) BEFORE the maintainer ever sees the PR.** Per
+  maintainer directive 2026-05-08 (kriskowal on PR #157): "the
+  builder should pass directly to the cleaner before passing to
+  the shepherd. The only work that should follow approval from a
+  maintainer is the final merge." The cleaner is the LAST
+  bot-side preparation step; the maintainer should see a
+  CI-green, panel-vetted, coverage-cleaned PR.
 
   - **Pick the affected package** by counting changed lines per
     package directory (`git diff --stat <base>..HEAD | awk
@@ -657,15 +656,34 @@ issue or design document, and shepherding it through to a green PR.
     target inputs — even if the panel verdict was "mitigated /
     no real concern", a regression test pinning the mitigation is
     valuable.
-  - **The cleaner's hand-off is back to the steward** (or, if its
-    work surfaces an architecture question, back to the user via
-    a comment on the PR). The cleaner does NOT re-run the panel —
-    the panel already vetted the surface; cleaner-added tests and
-    deletions are scoped enough that a fresh panel is wasteful.
+  - **After the cleaner, dispatch a `shepherd` to drive CI to
+    green** before requesting maintainer review. Per the same
+    directive: "After any proposed change between build and
+    approve, the shepherd should be invoked to get CI green."
+    The cleaner's test additions or deletions count as a
+    proposed change. Only request maintainer review once
+    `gh pr checks` shows green (or only the documented
+    pre-existing infra failures like `build-wasm` drift on a
+    sibling-PR commit).
+  - **The cleaner's hand-off is to the shepherd, then back to the
+    steward** for the maintainer-review request. The cleaner does
+    NOT re-run the panel — the panel already vetted the surface;
+    cleaner-added tests and deletions are scoped enough that a
+    fresh panel is wasteful.
   - **Skip the cleaner dispatch** when the PR is pure docs, a
     lockfile-only churn, a one-file Prettier sweep, or a single
     bug-fix line whose test fixture is already in the diff. Those
-    have no coverage surface to expand.
+    have no coverage surface to expand. Still run shepherd if CI
+    is red.
+
+  **Maintainer review only after CI is green.** The hand-off
+  chain ends with `gh pr edit --add-reviewer kriskowal` (or the
+  appropriate maintainer) only after panel + (fixer-if-must-fix)
+  + cleaner + shepherd have all settled and `gh pr checks` is
+  green. A red-CI PR in the maintainer's review queue wastes the
+  maintainer's time deciding whether the red is "yours" or
+  "mine"; the bot's job is to remove that ambiguity before
+  asking for review.
 
   Fresh PRs warrant this attention because the cost is highest at
   open time (when scope and shape are most malleable) and
