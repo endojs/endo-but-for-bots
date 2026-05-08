@@ -122,12 +122,12 @@ test('makeDirectory remove', async t => {
 
   t.false(await directory.has('a.txt'));
 
-  // Removing a non-empty directory without an explicit flag fails loud.
+  // Removing a non-empty directory with remove fails loud.
   await t.throwsAsync(() => directory.remove(['sub']));
   t.true(await directory.has('sub'));
 
-  // The recursive flag opts in to subtree deletion.
-  await directory.remove(['sub'], { recursive: true });
+  // removeTree opts in to subtree deletion.
+  await directory.removeTree(['sub']);
   t.false(await directory.has('sub'));
 
   await fs.promises.rm(dir, { recursive: true });

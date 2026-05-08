@@ -291,18 +291,30 @@ export const makeDirectory = (dirPath, options = {}) => {
         /**
          * Remove a file or empty directory at the given path.
          *
-         * Pass `{ recursive: true }` to delete a non-empty directory and
+         * Fails loudly on a non-empty directory rather than silently
+         * destroying the subtree.
+         * Use `removeTree` to delete a non-empty directory and
          * everything beneath it.
-         * Without that flag, attempting to remove a non-empty directory
-         * fails loudly rather than silently destroying the subtree.
          *
          * @param {string[]} pathSegments
-         * @param {{ recursive?: boolean }} [removeOptions]
          */
-        remove: async (pathSegments, removeOptions = {}) => {
-          const { recursive = false } = removeOptions;
+        remove: async pathSegments => {
           const target = resolve(pathSegments);
-          await fs.promises.rm(target, { recursive });
+          await fs.promises.rm(target, { recursive: false });
+        },
+
+        /**
+         * Recursively remove a file or directory subtree at the given
+         * path.
+         *
+         * Strictly more authority than `remove`; an attenuator may
+         * withhold `removeTree` while exposing `remove`.
+         *
+         * @param {string[]} pathSegments
+         */
+        removeTree: async pathSegments => {
+          const target = resolve(pathSegments);
+          await fs.promises.rm(target, { recursive: true });
         },
 
         /**

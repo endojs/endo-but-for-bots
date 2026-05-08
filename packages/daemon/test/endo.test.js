@@ -4861,8 +4861,8 @@ test('mount asDirectory facet - mutation goes through confinement', async t => {
   await E(directory).makeDirectory(['nested', 'deep']);
   t.true(await E(mount).has('nested', 'deep'));
 
-  // remove with recursive option through facet.
-  await E(directory).remove(['nested'], { recursive: true });
+  // removeTree through facet.
+  await E(directory).removeTree(['nested']);
   t.false(await E(mount).has('nested'));
 });
 

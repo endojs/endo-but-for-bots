@@ -513,9 +513,10 @@ export const MountInterface = M.interface('EndoMount', {
   maybeReadText: M.call(PathArgShape).returns(M.promise()),
   writeText: M.call(PathArgShape, M.string()).returns(M.promise()),
   // Mutation
-  remove: M.call(PathArgShape)
-    .optional(M.splitRecord({}, { recursive: M.boolean() }))
-    .returns(M.promise()),
+  // remove: single entry (file or empty directory); fails on non-empty.
+  // removeTree: recursive subtree deletion.
+  remove: M.call(PathArgShape).returns(M.promise()),
+  removeTree: M.call(PathArgShape).returns(M.promise()),
   move: M.call(PathArgShape, PathArgShape).returns(M.promise()),
   copy: M.call(PathArgShape, PathArgShape).returns(M.promise()),
   // Write a remote ReadableBlob or ReadableTree into the mount.

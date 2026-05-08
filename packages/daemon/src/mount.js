@@ -323,13 +323,22 @@ const makeMountExo = ctx => {
       await filePowers.writeFileText(absolute, content);
     },
 
-    async remove(pathArg, removeOptions = {}) {
+    async remove(pathArg) {
       await null;
       assertWritable();
       const segments = typeof pathArg === 'string' ? [pathArg] : pathArg;
       const { clamped, absolute } = clamp(segments);
       await assertConfined(absolute, confinementRoot, filePowers);
-      await directory.remove(clamped, removeOptions);
+      await directory.remove(clamped);
+    },
+
+    async removeTree(pathArg) {
+      await null;
+      assertWritable();
+      const segments = typeof pathArg === 'string' ? [pathArg] : pathArg;
+      const { clamped, absolute } = clamp(segments);
+      await assertConfined(absolute, confinementRoot, filePowers);
+      await directory.removeTree(clamped);
     },
 
     async move(fromArg, toArg) {
@@ -439,7 +448,8 @@ const makeMountDirectoryFacet = mount => {
         return child;
       },
       write: (segments, value) => mount.write(segments, value),
-      remove: (segments, options) => mount.remove(segments, options),
+      remove: segments => mount.remove(segments),
+      removeTree: segments => mount.removeTree(segments),
       move: (from, to) => mount.move(from, to),
       copy: (from, to) => mount.copy(from, to),
       makeDirectory: segments => mount.makeDirectory(segments),

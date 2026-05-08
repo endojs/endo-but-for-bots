@@ -698,6 +698,13 @@ Creates parent directories as needed. Throws if read-only.
 
 Remove a file or empty directory.
 path: string | string[] — Name or path segments.
+Fails on a non-empty directory; use removeTree for recursive deletion.
+
+## removeTree(path) -> Promise<void>
+
+Recursively remove a file or directory subtree.
+path: string | string[] — Name or path segments.
+Strictly more authority than remove.
 
 ## move(from, to) -> Promise<void>
 

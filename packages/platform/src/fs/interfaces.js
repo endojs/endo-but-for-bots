@@ -94,9 +94,13 @@ export const DirectoryInterface = M.interface('Directory', {
   list: M.call().rest(M.arrayOf(M.string())).returns(M.promise()),
   lookup: M.call(M.or(M.string(), M.arrayOf(M.string()))).returns(M.promise()),
   write: M.call(M.arrayOf(M.string()), M.remotable()).returns(M.promise()),
-  remove: M.call(M.arrayOf(M.string()))
-    .optional(M.splitRecord({}, { recursive: M.boolean() }))
-    .returns(M.promise()),
+  // Remove a single entry (file or empty directory).
+  // Fails on a non-empty directory; use removeTree for recursive deletion.
+  remove: M.call(M.arrayOf(M.string())).returns(M.promise()),
+  // Recursively remove a subtree.
+  // Strictly more authority than remove; an attenuator may withhold
+  // removeTree while exposing remove.
+  removeTree: M.call(M.arrayOf(M.string())).returns(M.promise()),
   move: M.call(M.arrayOf(M.string()), M.arrayOf(M.string())).returns(
     M.promise(),
   ),
