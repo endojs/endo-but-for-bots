@@ -5,7 +5,7 @@
 | **Created** | 2026-05-07 |
 | **Author** | kriscendobot (steward, prompted by kriskowal) |
 | **Status** | Not Started |
-| **Source** | Issue #118 |
+| **Source** | Issue [endojs/endo-but-for-bots#118](https://github.com/endojs/endo-but-for-bots/issues/118) |
 
 ## What is the Problem Being Solved?
 
@@ -19,8 +19,13 @@ Every agent the daemon hosts sees the same registry, can list every
 registered net, and can connect through every net the daemon knows
 about.
 
-The just-consolidated OCapN-Noise stack (PR #118 item (a), folding
-PRs #111, #112, #113 into `llm`) introduces a real, mutually
+The just-consolidated OCapN-Noise stack
+(PR [endojs/endo-but-for-bots#118](https://github.com/endojs/endo-but-for-bots/issues/118)
+item (a), folding PRs
+[endojs/endo-but-for-bots#111](https://github.com/endojs/endo-but-for-bots/issues/111),
+[endojs/endo-but-for-bots#112](https://github.com/endojs/endo-but-for-bots/issues/112),
+[endojs/endo-but-for-bots#113](https://github.com/endojs/endo-but-for-bots/issues/113)
+into `llm`) introduces a real, mutually
 authenticated transport family for the daemon to mediate.
 Bringing that stack online while keeping `@nets` as the agent-facing
 surface would fix the singleton problem in the wrong layer and would
@@ -73,7 +78,9 @@ The limitations of `@nets` as a singleton are:
   `@transports` capability that the daemon mints on the agent's
   behalf.
 - Preserve OCapN-Noise IK netlayer compatibility with the
-  consolidated #111/#112/#113 stack.
+  consolidated
+  [endojs/endo-but-for-bots#111](https://github.com/endojs/endo-but-for-bots/issues/111)/[endojs/endo-but-for-bots#112](https://github.com/endojs/endo-but-for-bots/issues/112)/[endojs/endo-but-for-bots#113](https://github.com/endojs/endo-but-for-bots/issues/113)
+  stack.
 - Define the cap-handoff path: how the daemon manufactures
   per-agent transports, how an agent obtains them, how they are
   revoked, and how they cohabit with mounts and other agent-held
@@ -81,7 +88,9 @@ The limitations of `@nets` as a singleton are:
 - Reuse the in-guest-backend / host-side-proxy pattern from the
   cross-platform sandbox work (jcorbin, `PLAN/endo_posix_sandbox.md`)
   and the agent-held + daemon-mediated pattern from the in-flight
-  `Mount` reshape (PR #122, `designs/platform-fs-daemon-integration.md`
+  `Mount` reshape
+  (PR [endojs/endo-but-for-bots#122](https://github.com/endojs/endo-but-for-bots/issues/122),
+  `designs/platform-fs-daemon-integration.md`
   on `feat/platform-fs`).
 
 ### Out of scope
@@ -503,8 +512,10 @@ Shape only:
 
 - Agents bundled with the daemon (Lal, Fae, Familiar) must be
   updated to use `@transports`.
-  This is coordinated with the consolidated #111/#112/#113 stack
-  (item (a) of #118).
+  This is coordinated with the consolidated
+  [endojs/endo-but-for-bots#111](https://github.com/endojs/endo-but-for-bots/issues/111)/[endojs/endo-but-for-bots#112](https://github.com/endojs/endo-but-for-bots/issues/112)/[endojs/endo-but-for-bots#113](https://github.com/endojs/endo-but-for-bots/issues/113)
+  stack
+  (item (a) of [endojs/endo-but-for-bots#118](https://github.com/endojs/endo-but-for-bots/issues/118)).
 
 - External consumers of `@endo/ocapn` are unaffected; the
   network-transport-separation work governs their surface.
