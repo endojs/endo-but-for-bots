@@ -172,6 +172,45 @@ architectural ones.
   Cancelling stuck in-progress runs from the prior SHA does **not**
   unblock CI on the new SHA when the merge ref is missing.
 
+- **Turbo parallel-test rollout unmasks soft test-timeout assumptions
+  across packages.** PR 121 (`feat(ci): adopt turborepo`) replaced
+  the sequential `yarn test` with `yarn turbo run test --filter='...
+  [origin/llm]'`. The change is functionally fine but exposes every
+  package whose test config relied on idle-runner timing:
+  - `@endo/eslint-plugin` mocha tests (default 2000ms).
+  - `@endo/bundle-source` ava tests (no `timeout` in package.json
+    → default 10s; the entire suite shows ◌ pending and ava
+    reports "Timed out while running tests").
+  - `@endo/ocapn` `client.test.js` `client aborts on …` tests via
+    `waitUntilTrue(() => firstConnection.isDestroyed)` with the
+    util's default 1000ms — under turbo parallelism on Ubuntu
+    runners, 1s of polling isn't enough to observe destruction.
+  Pattern: each package surfaces a new shepherd-fixable timeout per
+  CI cycle. Smallest fix is a per-package timeout bump (match the
+  workspace convention of `"timeout": "2m"` for ava, 60s for mocha,
+  10s for bespoke poll-with-timeout helpers). Don't try to find them
+  all up front — the CI matrix will surface the next one. Encountered
+  by 2026-05-07 shepherd dispatches over PR 121 (eslint-plugin first,
+  then bundle-source + ocapn second). Two atomic commits per dispatch
+  is normal; if a third dispatch surfaces yet another package,
+  consider escalating to "test infrastructure-level retry" rather
+  than per-package timeout creep.
+
+- **Pre-existing `build-wasm` drift on `llm` is not a PR-121
+  problem.** The build-wasm job verifies that the committed
+  `packages/ocapn-noise/gen/ocapn-noise.wasm` matches a fresh
+  rebuild from `rust/ocapn_noise/`. After feat/ocapn-noise (#137)
+  merged into llm, the committed wasm and the CI-rebuilt wasm
+  differ — tracked as a separate run failure on multiple PR
+  branches (e.g. design/ocapn-daemon-integration). Likely
+  causes: non-deterministic rustc build (path/timestamp
+  embedding) or toolchain version skew between the contributor
+  who built the committed wasm and the CI runner. PR 121 does
+  not touch wasm or rust source; the shepherd should NOT try to
+  rebuild and recommit the wasm on a CI-fix PR. Surface to
+  maintainer, leave the failure visible, focus on PR-specific
+  failures.
+
 ## Self-improvement
 
 The final task of every engagement is to update this role file and
