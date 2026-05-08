@@ -124,6 +124,36 @@ log, but the Monitor armed at 18:25 only saw lines after 18:25
 and never fired on the 18:16 line. The maintainer pointed at
 the missed review directly.
 
+## Per-PR lifecycle (canonical flow)
+
+The per-PR lifecycle the steward orchestrates is the state
+machine documented in [`./README.md`](./README.md).
+In summary:
+
+- **Pre-maintainer (one-shot):**
+  builder -> panel -> (fixer if must-fix from panel) -> cleaner
+  -> shepherd -> request maintainer review.
+- **Post-maintainer loop:**
+  - maintainer `CHANGES_REQUESTED` -> fixer -> shepherd ->
+    re-request maintainer review.
+  - maintainer `APPROVED` -> conductor merges, but only if CI
+    is green at merge time.
+
+Key invariants the steward enforces by sub-role choice:
+
+- The cleaner runs **once**, on initial bot-side prep before
+  maintainer review; subsequent fixer rounds skip the cleaner.
+- The shepherd runs after every change between build and
+  approve, so the maintainer never sees a red-CI PR.
+- The conductor only merges CI-green PRs; an APPROVED PR with
+  red CI is a shepherd dispatch, not a conductor merge.
+
+The director's per-PR dispatch matrix (in
+[`./director.md`](./director.md)) implements these transitions
+per cycle; the conductor's CI gate (in
+[`./conductor.md`](./conductor.md)) enforces the green-CI
+precondition at merge time.
+
 ## Sub-roles dispatched per cycle
 
 Each cycle dispatches one of each (in parallel where work is

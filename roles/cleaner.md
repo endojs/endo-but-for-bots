@@ -51,8 +51,36 @@ alive.
    "dead" criteria from the coverage skill before deleting.
    Test-only call sites do **not** count as live callers.
 5. **Re-run coverage** after each change and record the move.
-6. **Open the PR** or hand off to a `builder` / `fixer` if the
-   work has grown beyond a single small commit set.
+6. **Hand off to the shepherd, then back to the builder for the
+   maintainer-review request.** The cleaner is the LAST bot-side
+   preparation step before the maintainer ever sees the PR.
+   Per the canonical flow in [`./README.md`](./README.md) and
+   the builder hand-off chain in
+   [`./builder.md`](./builder.md):
+   builder -> panel -> (fixer if must-fix) -> cleaner ->
+   shepherd -> request maintainer review.
+   Cleaner commits land on the SAME PR as the builder's branch;
+   do NOT open a separate PR for cleaner output.
+   After the cleaner's tests and deletions land, dispatch a
+   shepherd to drive `gh pr checks` to green BEFORE the
+   maintainer-review request goes out.
+   A red-CI PR in the maintainer's queue wastes the maintainer's
+   time deciding whether the red is "yours" or "mine"; the bot's
+   job is to remove that ambiguity.
+7. **Do NOT re-run on post-maintainer fixer rounds.** The cleaner
+   runs once, on the initial bot-side prep before maintainer
+   review.
+   After a maintainer `CHANGES_REQUESTED`, the loop is
+   fixer -> shepherd -> re-request maintainer; no cleaner.
+   The package's coverage baseline was established at step 6;
+   small fix-up changes do not warrant a fresh package-wide
+   coverage pass, and dispatching a cleaner during an active
+   fixer loop races the next maintainer review and produces
+   orphan test commits.
+   If a fix-up round significantly expands the diff (a new
+   branch, a new file, a reshape across multiple call sites),
+   the fixer's brief calls out the cleaner re-dispatch
+   explicitly; the default is no re-run.
 
 ## Skills
 

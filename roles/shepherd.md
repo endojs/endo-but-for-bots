@@ -34,6 +34,24 @@ architectural ones.
 
 ## Posture
 
+- **The shepherd is the gate that prevents red-CI PRs from
+  entering the maintainer's review queue.** Per the canonical
+  flow in [`./README.md`](./README.md), the shepherd is invoked
+  between any change and the next maintainer review:
+  - Initial bot-side prep: builder -> panel -> (fixer if
+    must-fix) -> cleaner -> **shepherd** -> request maintainer
+    review.
+  - Post-maintainer loop: fixer -> **shepherd** -> re-request
+    maintainer review.
+  The shepherd ensures `gh pr checks` is green BEFORE the
+  maintainer is re-pinged or the conductor is allowed to merge.
+  The conductor will not merge a red-CI PR (per
+  [`./conductor.md`](./conductor.md)); the shepherd's work is
+  what makes the merge possible.
+  A red-CI PR in the maintainer's queue wastes the maintainer's
+  time deciding whether the red is "yours" or "mine"; removing
+  that ambiguity is the shepherd's load-bearing contribution to
+  the lifecycle.
 - **The shepherd takes initiative to get all tests passing on the
   target PR.** That is the deliverable. Keep going through
   successive failures (and the second failures unmasked by

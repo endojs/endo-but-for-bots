@@ -40,6 +40,22 @@ from distinct perspectives) and producing structured findings.
   PRs, the steward for cold ones) picks based on `CLAUDE.md` and
   `AGENTS.md`. Make the disagreement explicit so the dispatcher
   can act.
+- **The panel's job ends at submitting the verdict.** Per the
+  canonical flow in [`./README.md`](./README.md), the hand-off
+  chain after the panel is:
+  panel verdict -> builder dispatches fixer (if must-fix) ->
+  builder dispatches cleaner -> builder dispatches shepherd ->
+  request maintainer review.
+  Subsequent dispatches are the builder's responsibility, not
+  the panel's.
+  An individual juror does NOT dispatch a fixer, cleaner, or
+  shepherd directly; the must-fix list rides in the aggregated
+  panel report and the builder converts that into the next
+  dispatches.
+  The panel's only post-verdict obligation is the
+  `gh pr review --request-changes` (or `--comment` /
+  `--approve`) submission that flips `reviewDecision` so the
+  builder's downstream chain has a load-bearing trigger.
 
 ## Self-improvement
 

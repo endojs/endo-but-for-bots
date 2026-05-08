@@ -55,11 +55,22 @@ For each PR at the head of the queue:
    push triggers a fresh CI run that step 4 reads.
 4. **Check CI state** via run-level `status` /  `conclusion`
    (`skills/ci-status-summary.md`):
-   - **Green**: step 5 with direct `--merge`.
-   - **Failing**: walk the failure inline per the broadened
-     shepherd posture; out-of-scope (multi-file refactor,
-     public-API change, test deletion) stalls
-     `ci needs builder/fixer`.
+   - **Green**: step 5 with direct `--merge`. (Documented
+     pre-existing infra failures like `build-wasm` drift on
+     a sibling-PR commit do not count as red for this gate;
+     see the shepherd's recurring-patterns notes for the
+     known list.)
+   - **Failing**: do NOT merge.
+     Per the canonical flow in [`./README.md`](./README.md),
+     an approved-but-red PR's correct next dispatch is a
+     **shepherd**, not a conductor merge.
+     Stall with reason `ci red: needs shepherd` and surface
+     to the steward so the next cycle can dispatch a
+     shepherd; in-scope chain-fixes the conductor itself can
+     do per the broadened shepherd posture are still
+     acceptable, but the merge waits until CI is green.
+     Out-of-scope (multi-file refactor, public-API change,
+     test deletion) stalls `ci needs builder/fixer`.
    - **In flight**: step 5 with `--auto --merge`. GitHub holds
      the merge until CI is green; cancels on red.
 
@@ -134,6 +145,18 @@ re-dispatches.
 ## Posture
 
 - **One PR at a time.** Linear is the whole point.
+- **Only merge CI-green PRs.** Per the canonical flow in
+  [`./README.md`](./README.md) and per maintainer directive on
+  PR #157: the conductor only merges PRs whose `gh pr checks` is
+  green at merge time (excluding documented pre-existing infra
+  failures the shepherd's notes call out, e.g. `build-wasm`
+  drift on a sibling-PR commit).
+  An APPROVED PR with red CI is not a merge candidate; it is a
+  shepherd dispatch.
+  Stall such PRs with `ci red: needs shepherd` and let the
+  steward dispatch a shepherd next cycle.
+  The conductor never short-circuits the shepherd by merging
+  red.
 - **Stall, do not escalate.** Builder, fixer, standalone
   shepherd are the steward's job.
 - **Always `--merge`.** Preserves the cluster the merge commit

@@ -32,6 +32,15 @@ The director fetches the live PR list itself:
 
 ## Per-PR dispatch matrix
 
+The matrix implements the canonical per-PR flow in
+[`./README.md`](./README.md):
+
+- **Pre-maintainer (one-shot):** builder -> panel -> (fixer if
+  must-fix) -> cleaner -> shepherd -> request maintainer review.
+- **Post-maintainer loop:** CR -> fixer -> shepherd ->
+  re-request review; APPROVED -> conductor merges only if CI
+  green.
+
 For each open PR, compute the cycle decision in this order (first
 match wins):
 
@@ -39,29 +48,54 @@ match wins):
 - **`fixer`**: `CHANGES_REQUESTED` review unaddressed; head SHA
   has not advanced since the review (verify via content diff per
   the no-op-rebase pitfall in `pr-cycle-state.md`).
+  After the fixer pushes, the next-cycle decision for that PR
+  becomes `shepherd` (if CI is still red) or APPROVED-enqueue
+  (after the maintainer re-reviews); the cleaner does NOT re-run
+  on post-maintainer fixer rounds.
+- **`shepherd`**: CI red.
+  This dispatch fires after a fixer round (post-maintainer loop)
+  AND after the initial cleaner pass before maintainer review.
+  The shepherd is the gate that prevents red-CI PRs from
+  reaching the maintainer's queue or the conductor's merge.
+  In scope per the broadened shepherd posture (chain-fixing,
+  escalates only on architectural / multi-file).
 - **`juror` panel**: PR open beyond freshness threshold without
   any review AND not opened by a builder this cycle (the builder
-  hands off fresh PRs to a panel directly per `roles/builder.md`).
+  hands off fresh PRs to a panel directly per
+  [`./builder.md`](./builder.md)).
   Dispatch the panel per
   [`../skills/panel-review-12-perspectives.md`](../skills/panel-review-12-perspectives.md),
   fanned out via
   [`../skills/subagent-batching.md`](../skills/subagent-batching.md).
   After aggregation, **submit the report as a formal review** via
   `gh pr review --request-changes --body-file ...` (or `--comment`
-  / `--approve` per the panel's net verdict). Then dispatch a
-  fixer with the must-fix list inline as the brief. The chain is:
-  panel → aggregate → submit-as-review → dispatch-fixer; skipping
-  any step strands the PR.
-- **`shepherd`**: CI red, in scope per the broadened shepherd
-  posture (chain-fixing, escalates only on architectural /
-  multi-file).
+  / `--approve` per the panel's net verdict).
+  Then walk the post-panel chain: dispatch a fixer with the
+  must-fix list inline as the brief (if any), then a cleaner
+  against the most-affected package, then a shepherd to drive
+  CI to green, then request maintainer review.
+  The chain is:
+  panel -> aggregate -> submit-as-review ->
+  (fixer if must-fix) -> cleaner -> shepherd ->
+  request-maintainer-review.
+  Skipping any step strands the PR.
 - **`scout`**: reviewer asked for a benchmark.
 - **`cleaner`**: PR not on the Cleaner ledger AND no cleaner in
-  flight. Targets the package(s) the PR touches.
+  flight AND the PR is in the pre-maintainer-review window
+  (panel done, no maintainer review yet).
+  Targets the package(s) the PR touches.
+  The cleaner runs **once** per PR, on initial bot-side prep
+  before maintainer review; once the maintainer has reviewed,
+  the matrix never re-dispatches a cleaner for that PR (the
+  fixer's loop is fixer -> shepherd, no cleaner).
 - **Enqueue for the conductor**: `reviewDecision` is `APPROVED`
-  and the PR is not already on the Merge queue or Stalled list.
+  AND `gh pr checks` is green (excluding documented
+  pre-existing infra failures the shepherd's notes call out)
+  AND the PR is not already on the Merge queue or Stalled list.
   Append to the queue in the report; the steward dispatches the
   conductor when the queue is non-empty.
+  An APPROVED PR with red CI is a **shepherd** dispatch, not a
+  conductor enqueue; the conductor will not merge red.
 - **No dispatch, status `blocked`**: needs a maintainer judgment
   call.
 
