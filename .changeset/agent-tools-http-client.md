@@ -16,3 +16,12 @@ control facet allows adjusting the allowlist, rate limit, byte cap,
 and timeout, and revoking the client. The CLI command `endo
 http-client --name <petname> --origins <urls>` provisions one for the
 host's agent.
+
+Known limitation: the allowlist is name-based (matched against
+`new URL(url).origin`). An allowlisted hostname whose DNS A record
+resolves to a loopback or RFC1918 address still passes, and a DNS
+rebinding attack between the lookup and the connect can swap a public
+address for a private one. Operators should treat the allowlist as a
+*hostname* gate, not an *address* gate, and avoid allowlisting
+attacker-controlled domains. A future opt-in resolver that pins the
+URL to a public IP before connect is tracked as a TODO.
