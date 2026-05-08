@@ -1,9 +1,31 @@
 # PR dispatch state
 
-Last cycle: 2026-05-07 (conductor PR 119 merge).
-Prior cycle: 2026-05-07 (conductor PR 99 merge).
+Last cycle: 2026-05-07 (conductor PR 137 merge).
+Prior cycle: 2026-05-07 (conductor PR 119 merge).
+Earlier: 2026-05-07 (conductor PR 99 merge).
 Earlier: 2026-05-07 14:55 UTC (PR 119 contributor review).
 Earlier: 2026-05-07 07:00 UTC (master synced; fixer for PR 114; PR 111 fold-in dispatched).
+
+## Cycle 2026-05-07 (conductor PR 137)
+
+PR 137 merged → `6a5aecd01d133e807b2666102a6450ea12487d29` (consolidation
+of OCapN noise stack #111+#112+#113); source PRs #111/#112/#113 left
+open per kriskowal's reopen at 23:57 (history/discussion). At survey:
+APPROVED (kriskowal), MERGEABLE/UNSTABLE (CI propagating: 18/29
+SUCCESS, 11 pending, 0 fail), 0 behind `bots-ssh/llm`, 4 ahead. Four
+commits read coherently (`feat(ocapn): codec injection +
+network/transport split`, `feat(ocapn-noise): Noise IK netlayer with
+browser portability`, `test(ocapn-noise): integration, transports,
+fabrics`, `chore: update yarn.lock for ocapn + ocapn-noise` — the
+lockfile per yarn-lock-separate-commit convention). Skipped tidy and
+skipped rebase (0 behind). Issued `gh pr merge --auto --merge
+--delete-branch`; GitHub resolved as direct merge immediately (branch
+protection does not gate on CI). state=MERGED on first verify. Local
+`feat/ocapn-noise` branch in `~/endo.repo` deleted; worktrees
+`~/endo-wt/feat-ocapn-noise` and `~/endo-wt/conductor-pr137` removed.
+Source PRs #111/#112/#113 NOT closed — the maintainer's reopen at
+23:57 overrode the bot's prior close, signalling intent to keep them
+open for history/discussion.
 
 ## Cycle 2026-05-07 (conductor PR 119)
 
