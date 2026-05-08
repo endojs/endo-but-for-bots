@@ -649,10 +649,14 @@ Returns EndoReadable for files, ReadableTree for subdirectories.
 Example: lookup("index.html") → EndoReadable
 Example: lookup(["assets", "style.css"]) → EndoReadable
 
-# EndoMount - Live mutable access to a filesystem directory.
+# EndoMountDirectory - Live mutable access to a filesystem directory.
 
 All paths are confined to the mount root. Symlinks that escape
 the root are invisible. Use readOnly() for an attenuated view.
+
+EndoMountDirectory implements the same Directory interface as
+`@endo/platform/fs/node`'s makeDirectory, plus convenience text I/O
+methods (readText, writeText, maybeReadText) for daemon-internal use.
 
 ## help(methodName?) -> string
 
@@ -670,11 +674,11 @@ Each argument is one path segment: list("subdir").
 Call with no arguments to list the root.
 Entries with symlinks escaping the mount root are excluded.
 
-## lookup(path) -> Promise<EndoMount | EndoMountFile>
+## lookup(path) -> Promise<EndoMountDirectory | EndoMountFile>
 
 Resolve a path within the mount.
 path: string | string[] — Name or path segments.
-Returns EndoMount for directories, EndoMountFile for files.
+Returns EndoMountDirectory for directories, EndoMountFile for files.
 
 ## readText(path) -> Promise<string>
 
@@ -697,27 +701,39 @@ Creates parent directories as needed. Throws if read-only.
 ## remove(path) -> Promise<void>
 
 Remove a file or empty directory.
-path: string | string[] — Name or path segments.
+path: string[] — Path segments.
 Fails on a non-empty directory; use removeTree for recursive deletion.
 
 ## removeTree(path) -> Promise<void>
 
 Recursively remove a file or directory subtree.
-path: string | string[] — Name or path segments.
+path: string[] — Path segments.
 Strictly more authority than remove.
 
 ## move(from, to) -> Promise<void>
 
 Rename an entry within the mount.
-from: string | string[] — Source name or path segments.
-to: string | string[] — Destination name or path segments.
+from: string[] — Source path segments.
+to: string[] — Destination path segments.
+
+## copy(from, to) -> Promise<void>
+
+Copy an entry within the mount.
+from: string[] — Source path segments.
+to: string[] — Destination path segments.
+
+## write(path, value) -> Promise<void>
+
+Write a remote ReadableBlob or ReadableTree into the mount.
+path: string[] — Path segments.
+value: ReadableBlob | ReadableTree — Source content.
 
 ## makeDirectory(path) -> Promise<void>
 
 Create a directory (and missing parents).
-path: string | string[] — Name or path segments.
+path: string[] — Path segments.
 
-## readOnly() -> EndoMount
+## readOnly() -> EndoMountDirectory
 
 Returns a read-only view of this mount.
 

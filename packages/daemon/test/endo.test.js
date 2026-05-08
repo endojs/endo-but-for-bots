@@ -4823,7 +4823,7 @@ test('mount symlink - all symlink types together in one listing', async t => {
   t.is(entries.length, 4); // 2 real + 2 internal
 });
 
-test('mount asDirectory facet - read and list', async t => {
+test('mount used directly as a Directory - read and list', async t => {
   const { host, config } = await prepareHost(t);
 
   const mountPath = path.join(config.statePath, '..', 'mount-test-as-dir');
@@ -4834,20 +4834,21 @@ test('mount asDirectory facet - read and list', async t => {
 
   await E(host).provideMount(mountPath, 'as-dir');
   const mount = await E(host).lookup(['as-dir']);
-  const directory = await E(mount).asDirectory();
 
-  // List works through the facet (already sorted by Mount).
-  const entries = await E(directory).list();
+  // The Mount IS a Directory — strict array-of-segments calls work
+  // directly without any asDirectory facet adaptation.
+  const entries = await E(mount).list();
   t.deepEqual([...entries].sort(), ['a.txt', 'sub']);
 
-  // Sub-lookup re-wraps as a Directory facet.
-  const sub = await E(directory).lookup('sub');
+  // Sub-lookup yields another EndoMountDirectory that is also a
+  // Directory; the consumer never observes a different exo shape.
+  const sub = await E(mount).lookup('sub');
   t.is(typeof (await E(sub).list), 'function');
   const subEntries = await E(sub).list();
   t.deepEqual(subEntries, ['b.txt']);
 });
 
-test('mount asDirectory facet - mutation goes through confinement', async t => {
+test('mount used directly as a Directory - mutation goes through confinement', async t => {
   const { host, config } = await prepareHost(t);
 
   const mountPath = path.join(config.statePath, '..', 'mount-test-as-dir-mut');
@@ -4855,14 +4856,13 @@ test('mount asDirectory facet - mutation goes through confinement', async t => {
 
   await E(host).provideMount(mountPath, 'as-dir-mut');
   const mount = await E(host).lookup(['as-dir-mut']);
-  const directory = await E(mount).asDirectory();
 
-  // makeDirectory through facet (strict array-segments call).
-  await E(directory).makeDirectory(['nested', 'deep']);
+  // Strict array-segments calls go directly to the Mount.
+  await E(mount).makeDirectory(['nested', 'deep']);
   t.true(await E(mount).has('nested', 'deep'));
 
-  // removeTree through facet.
-  await E(directory).removeTree(['nested']);
+  // removeTree directly on the Mount.
+  await E(mount).removeTree(['nested']);
   t.false(await E(mount).has('nested'));
 });
 

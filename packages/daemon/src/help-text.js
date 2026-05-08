@@ -39,7 +39,7 @@ export const endoHelp = helpMap.get('Endo Bootstrap') || {};
 export const readableTreeHelp = helpMap.get('ReadableTree') || {};
 
 /** @type {HelpText} */
-export const mountHelp = helpMap.get('EndoMount') || {};
+export const mountHelp = helpMap.get('EndoMountDirectory') || {};
 
 /** @type {HelpText} */
 export const mountFileHelp = helpMap.get('EndoMountFile') || {};

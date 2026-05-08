@@ -6,7 +6,6 @@
 import { q } from '@endo/errors';
 import { makeExo } from '@endo/exo';
 import { makeDirectory as makePlatformDirectory } from '@endo/platform/fs/node';
-import { DirectoryInterface as PlatformDirectoryInterface } from '@endo/platform/fs/lite/interfaces';
 
 import { mountHelp, mountFileHelp, makeHelp } from './help-text.js';
 import { MountInterface, MountFileInterface } from './interfaces.js';
@@ -178,12 +177,20 @@ harden(isConfinedPath);
  */
 
 /**
- * Create a mount exo for a filesystem directory.
+ * Create an EndoMountDirectory exo for a filesystem directory.
  *
- * Mount delegates the unconfined filesystem work to the platform
- * `makeDirectory` primitive from `@endo/platform/fs/node`.  The Mount exo
- * keeps only the confinement policy: segment validation, `.`/`..` clamping,
- * symlink-escape assertion, and the `readOnly` attenuation.
+ * EndoMountDirectory delegates the unconfined filesystem work to the
+ * platform `makeDirectory` primitive from `@endo/platform/fs/node`.
+ * The exo keeps only the confinement policy: segment validation,
+ * `.`/`..` clamping, cap-std-style symlink-escape assertion, and the
+ * `readOnly` attenuation.
+ *
+ * The exo's interface is a strict superset of the platform
+ * `DirectoryInterface` from `@endo/platform/fs/lite/interfaces`:
+ * a worker or caplet authored against
+ * `import { Directory } from '@endo/platform/fs/lite/types'` accepts
+ * an EndoMountDirectory directly, with no facet adaptation.
+ * See `designs/platform-fs-daemon-integration.md` Decision 4.
  *
  * Sub-directory `lookup` retains its bespoke transient sub-exo
  * construction rather than reusing `directory.lookup()`, because the
@@ -191,12 +198,11 @@ harden(isConfinedPath);
  * platform `directory.lookup` would require either a clamping-policy hook
  * on the platform side or a wrapper that re-clamps every returned exo;
  * both are out of scope for this PR.
- * See `designs/platform-fs-daemon-integration.md` for the alternative.
  *
  * @param {MountContext} ctx
  * @returns {object}
  */
-const makeMountExo = ctx => {
+const makeMountDirectoryExo = ctx => {
   const { currentDir, confinementRoot, readOnly, filePowers, description } =
     ctx;
 
@@ -223,13 +229,11 @@ const makeMountExo = ctx => {
 
   const help = makeHelp(mountHelp);
 
-  /** @type {object | undefined} */
-  let directoryFacet;
   /** @type {object} */
   let mountExo;
 
   // eslint-disable-next-line prefer-const
-  mountExo = makeExo('EndoMount', MountInterface, {
+  mountExo = makeExo('EndoMountDirectory', MountInterface, {
     help,
 
     async has(...pathSegments) {
@@ -257,10 +261,11 @@ const makeMountExo = ctx => {
       await null;
       const { absolute } = clamp(pathSegments);
       await assertConfined(absolute, confinementRoot, filePowers);
-      // Mount keeps its own list rather than delegating to the platform
-      // directory because the platform list filters out symlinks
-      // unconditionally, while Mount surfaces internal-pointing symlinks
-      // (the symlink-confinement assertion catches escapes at use time).
+      // EndoMountDirectory keeps its own list rather than delegating to
+      // the platform directory because the platform list filters out
+      // symlinks unconditionally, while EndoMountDirectory surfaces
+      // internal-pointing symlinks (the symlink-confinement assertion
+      // catches escapes at use time).
       // See `designs/platform-fs-daemon-integration.md`.
       const entries = await filePowers.readDirectory(absolute);
       const confined = [];
@@ -282,7 +287,7 @@ const makeMountExo = ctx => {
 
       const isDir = await filePowers.isDirectory(absolute);
       if (isDir) {
-        return makeMountExo({
+        return makeMountDirectoryExo({
           ...ctx,
           currentDir: absolute,
           description: `Subdirectory of ${description}`,
@@ -323,29 +328,25 @@ const makeMountExo = ctx => {
       await filePowers.writeFileText(absolute, content);
     },
 
-    async remove(pathArg) {
+    async remove(pathSegments) {
       await null;
       assertWritable();
-      const segments = typeof pathArg === 'string' ? [pathArg] : pathArg;
-      const { clamped, absolute } = clamp(segments);
+      const { clamped, absolute } = clamp(pathSegments);
       await assertConfined(absolute, confinementRoot, filePowers);
       await directory.remove(clamped);
     },
 
-    async removeTree(pathArg) {
+    async removeTree(pathSegments) {
       await null;
       assertWritable();
-      const segments = typeof pathArg === 'string' ? [pathArg] : pathArg;
-      const { clamped, absolute } = clamp(segments);
+      const { clamped, absolute } = clamp(pathSegments);
       await assertConfined(absolute, confinementRoot, filePowers);
       await directory.removeTree(clamped);
     },
 
-    async move(fromArg, toArg) {
+    async move(fromSegments, toSegments) {
       await null;
       assertWritable();
-      const fromSegments = typeof fromArg === 'string' ? [fromArg] : fromArg;
-      const toSegments = typeof toArg === 'string' ? [toArg] : toArg;
       const { clamped: fromClamped, absolute: fromAbsolute } =
         clamp(fromSegments);
       const { clamped: toClamped, absolute: toAbsolute } = clamp(toSegments);
@@ -354,11 +355,9 @@ const makeMountExo = ctx => {
       await directory.move(fromClamped, toClamped);
     },
 
-    async copy(fromArg, toArg) {
+    async copy(fromSegments, toSegments) {
       await null;
       assertWritable();
-      const fromSegments = typeof fromArg === 'string' ? [fromArg] : fromArg;
-      const toSegments = typeof toArg === 'string' ? [toArg] : toArg;
       const { clamped: fromClamped, absolute: fromAbsolute } =
         clamp(fromSegments);
       const { clamped: toClamped, absolute: toAbsolute } = clamp(toSegments);
@@ -375,11 +374,10 @@ const makeMountExo = ctx => {
       await directory.write(clamped, value);
     },
 
-    async makeDirectory(pathArg) {
+    async makeDirectory(pathSegments) {
       await null;
       assertWritable();
-      const segments = typeof pathArg === 'string' ? [pathArg] : pathArg;
-      const { clamped, absolute } = clamp(segments);
+      const { clamped, absolute } = clamp(pathSegments);
       await assertConfinedOrAncestor(absolute, confinementRoot, filePowers);
       await directory.makeDirectory(clamped);
     },
@@ -388,18 +386,11 @@ const makeMountExo = ctx => {
       if (readOnly) {
         return mountExo;
       }
-      return makeMountExo({
+      return makeMountDirectoryExo({
         ...ctx,
         readOnly: true,
         description: `Read-only view of ${description}`,
       });
-    },
-
-    asDirectory() {
-      if (!directoryFacet) {
-        directoryFacet = makeMountDirectoryFacet(mountExo);
-      }
-      return directoryFacet;
     },
 
     async snapshot() {
@@ -409,56 +400,7 @@ const makeMountExo = ctx => {
 
   return mountExo;
 };
-harden(makeMountExo);
-
-/**
- * Create a strict-`DirectoryInterface` facet of a Mount.
- *
- * Adapts the Mount's lenient calling conventions (string-or-array
- * `pathArg`) to the platform's strict array-only segments.
- * Forwards every operation to the underlying Mount, so confinement,
- * symlink-escape, and `readOnly` policies still apply.
- *
- * The returned exo satisfies `@endo/platform/fs/lite` `DirectoryInterface`
- * and may be handed to a worker or caplet that has been written
- * against `import { DirectoryInterface } from '@endo/platform/fs/lite/interfaces'`.
- * See `designs/platform-fs-daemon-integration.md` Mode 2.
- *
- * @param {any} mount
- * @returns {object}
- */
-const makeMountDirectoryFacet = mount => {
-  return makeExo(
-    'Directory',
-    PlatformDirectoryInterface,
-    /** @type {any} */ ({
-      has: (...segments) => mount.has(...segments),
-      list: (...segments) => mount.list(...segments),
-      // Re-wrap sub-Mounts as Directory facets so the consumer never
-      // observes a `Mount`-shaped exo from a `Directory`-shaped one.
-      // Sub-files surface as `MountFile` exos, which expose a subset of
-      // the platform `FileInterface` (no `append`, no `snapshot`).
-      // The gap is intentional and surfaced in
-      // `designs/platform-fs-daemon-integration.md`.
-      lookup: async pathArg => {
-        const child = await mount.lookup(pathArg);
-        if (typeof child.asDirectory === 'function') {
-          return child.asDirectory();
-        }
-        return child;
-      },
-      write: (segments, value) => mount.write(segments, value),
-      remove: segments => mount.remove(segments),
-      removeTree: segments => mount.removeTree(segments),
-      move: (from, to) => mount.move(from, to),
-      copy: (from, to) => mount.copy(from, to),
-      makeDirectory: segments => mount.makeDirectory(segments),
-      readOnly: () => mount.readOnly(),
-      snapshot: () => mount.snapshot(),
-    }),
-  );
-};
-harden(makeMountDirectoryFacet);
+harden(makeMountDirectoryExo);
 
 /**
  * Create a transient file exo for a file within a mount.
@@ -529,17 +471,22 @@ const makeMountFileExo = (filePath, readOnly, filePowers, confinementRoot) => {
 harden(makeMountFileExo);
 
 /**
- * Create a mount exo backed by a filesystem directory.
+ * Create an EndoMountDirectory exo backed by a filesystem directory.
  *
- * `Mount` is the agent-visible name for a `Directory`-shaped capability
- * (see `@endo/platform/fs/lite/types`) whose root is a confined real
- * filesystem subtree.
- * It exposes a structural superset of the platform `DirectoryInterface`
- * for backward compatibility with daemon-only clients (notably the
- * convenience `readText`/`writeText`/`maybeReadText` text I/O methods).
- * The strict `Directory` facet returned by `Mount.asDirectory()` is the
- * canonical surface for cross-realm consumers (workers, caplets) that
- * have been written against `import { Directory } from '@endo/platform/fs/lite/types'`.
+ * `EndoMountDirectory` is the agent-visible directory exo whose root
+ * is a confined real filesystem subtree (see
+ * `@endo/platform/fs/lite/types` for the cross-realm `Directory` type).
+ * Its interface guard (`MountInterface`) is a strict superset of the
+ * platform `DirectoryInterface`: a worker or caplet authored against
+ * `import { Directory } from '@endo/platform/fs/lite/types'` accepts an
+ * EndoMountDirectory directly, and the additional convenience methods
+ * (`readText` / `writeText` / `maybeReadText` / `help`) are
+ * daemon-internal text I/O outside the cross-realm Directory contract.
+ *
+ * "Mount" remains the user-facing lifecycle concept (a pet-store entry
+ * naming a confined subtree, created by `provideMount` /
+ * `provideScratchMount`); `EndoMountDirectory` is the directory exo
+ * the lifecycle yields.
  *
  * See `designs/platform-fs-daemon-integration.md` for the integration
  * modes and the platform layer cake.
@@ -561,6 +508,6 @@ export const makeMount = ({ rootPath, readOnly, filePowers }) => {
     description: `${prefix} at ${rootPath}`,
   };
 
-  return makeMountExo(ctx);
+  return makeMountDirectoryExo(ctx);
 };
 harden(makeMount);

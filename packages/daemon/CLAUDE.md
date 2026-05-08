@@ -120,7 +120,7 @@ is a recurring review finding on the mount and host facets.
 ### Keep exported facet `.d.ts` interfaces in sync
 
 When adding a method to an exo (e.g. `EndoHost`, `EndoGuest`,
-`EndoMount`), add the method to both the runtime `M.interface(...)`
+`EndoMountDirectory`), add the method to both the runtime `M.interface(...)`
 guard and the exported TypeScript interface in `src/types.d.ts`.
 TypeDoc and downstream type consumers fail silently if a method exists
 at runtime but not in the exported interface.
