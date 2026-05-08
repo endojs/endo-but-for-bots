@@ -279,6 +279,68 @@ Skip this and the steward reads stale `process/*.md`. If the
 fast-forward fails, commit or stash; never resolve via merge
 commit on `garden`.
 
+## Audit the CHANGES_REQUESTED queue every cycle
+
+A subroutine that runs alongside the director's per-PR comment
+sweep: enumerate every open PR with
+`reviewDecision == "CHANGES_REQUESTED"` and check whether **any
+commit was pushed AFTER the most recent CHANGES_REQUESTED review
+timestamp**. A PR with a CR review and no follow-up commit is an
+**unactioned miss** even if the prior cycle "dispatched a fixer"
+for it. The fixer might have failed silently across a session
+boundary; the in-flight intent does not survive context clears,
+but the GitHub state does.
+
+```sh
+for N in $(gh pr list --repo endojs/endo-but-for-bots \
+    --state open --search "review:changes-requested" \
+    --json number --jq '.[].number'); do
+  CR_TS=$(gh api "repos/endojs/endo-but-for-bots/pulls/$N/reviews" \
+    --jq '[.[] | select(.state == "CHANGES_REQUESTED")] | last
+          | .submitted_at')
+  PUSH_TS=$(gh api "repos/endojs/endo-but-for-bots/pulls/$N/commits" \
+    --jq '.[-1].commit.committer.date')
+  if [ "$PUSH_TS" \< "$CR_TS" ]; then
+    echo "PR $N: UNACTIONED — CR at $CR_TS, last push at $PUSH_TS"
+  fi
+done
+```
+
+`gh pr view` even shows an empty `CR_TS` when the most recent
+review action was an APPROVAL after an earlier CR — that's fine,
+the comparison just shows nothing to do.
+
+A push timestamp later than the CR timestamp is a necessary but
+not sufficient signal: the push might be unrelated to the
+maintainer's asks. The audit catches the **silent-miss** class
+(no push at all); confirming the push actually addresses the CR
+is a separate read-the-commit-message check the director does
+inline during the per-PR sweep.
+
+The recurring failure mode this audit prevents: prior session
+dispatches a fixer for PR `<N>`, fixer either fails or is
+preempted by the conversation gap, prior session's tracking
+("fixers in flight for 121, 122, 126, 134, ...") doesn't survive
+the context clear, the next session has no record of the
+incomplete dispatch, and the PR sits CHANGES_REQUESTED until the
+maintainer points at it directly. Encountered 2026-05-08:
+PR 121 (`feat(ci): turborepo`) had CR at 00:05 with the directive
+"please address the feedback above and shepherd through CI";
+prior session dispatched a fixer that pushed a partial fix at
+00:54 but never marked the PR ready or addressed all must-fix
+items; cross-session gap dropped the in-flight tracking; the
+maintainer pointed at the missed review ~18 hours later. PR 128
+hit a more severe form of the same failure: CR at 01:25 with no
+push at all since 20:45 the prior day — the prior session's
+"reshape dispatch surfaced for steward" never converted to an
+actual dispatch because the surface lived only in cycle-log free
+text (the same failure mode the surfaced-vs-dispatched rule
+already covers, repeated under a different label).
+
+The audit adds a concrete bash check that any cycle can run in
+under 5 seconds across the full open-PR set; it is cheap enough
+to run unconditionally each fire.
+
 ## The director's per-PR comment sweep is mandatory every fire
 
 The director's "Surface fresh feedback" step (per
