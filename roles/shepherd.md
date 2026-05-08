@@ -326,6 +326,26 @@ architectural ones.
   fixing prettier surfaced 9 eslint errors, which on fix surfaced
   TS errors only `yarn docs` (not `yarn lint`) reports.
 
+- **`require(esm)` fixtures fail on Node 18; verify the failure mode
+  before believing a substance hypothesis.** The brief for PR 155
+  hypothesised that the `import-live-bindings-interop` test was
+  pinning a pre-fix divergence that naugtur's namespace-consistency
+  change had eliminated; the actual log showed `ERR_REQUIRE_ESM`
+  thrown from a `consumer-cjs-from-esm.cjs` fixture that does
+  `require('./source-esm.mjs')`. Node only supports `require(esm)`
+  from 20.17 onward (default-on in 22.12 and backported to 20 LTS);
+  Node 18 has no support at all. The snapshot was never reached.
+  Fix is a Node-major guard at the top of the test:
+  `if (parseInt(process.versions.node.split('.')[0], 10) < 20) {
+  t.pass('...'); return; }` (matches the existing pattern in
+  `packages/init/test/async_hooks.test.js`). Add `/* global process
+  */` since the file's `// @ts-nocheck` setup does not implicitly
+  expose node globals. General lesson: **never trust the brief's
+  hypothesis over the failing job's actual log.** A 30-second
+  `gh run view --log | grep -A 30 <test-name>` would have re-pointed
+  the entire investigation. Encountered PR 155 (mirror of upstream
+  endojs/endo#3246) 2026-05-08; same fix needed upstream.
+
 ## Self-improvement
 
 The final task of every engagement is to update this role file and
