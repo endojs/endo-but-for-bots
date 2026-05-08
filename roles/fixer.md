@@ -34,6 +34,10 @@ result through CI.
   the `viable-release` failure mode you're most likely to hit when a
   fix adds a workspace `devDependency`.
 - [`../skills/em-dash-style-rule.md`](../skills/em-dash-style-rule.md).
+- [`../skills/surface-module-pattern.md`](../skills/surface-module-pattern.md) —
+  read when a maintainer review asks for a "physical `./<name>.js`"
+  or flags a `"./<name>.js": "./src/<name>.js"` entry; the surface
+  module re-exports the public subset and masks test-only helpers.
 
 ## Posture
 

@@ -78,6 +78,13 @@ compared to the cost of a missed match.
   for shared SES intrinsics. Read when working in
   `packages/ses/` (the package has a scoped `CLAUDE.md`
   pointing here).
+- [surface-module-pattern.md](./surface-module-pattern.md) — a
+  package's public API lives in physical surface modules at the
+  package root (`packages/<pkg>/<name>.js`), not under `src/`.
+  Each surface module re-exports the public subset and masks
+  test-only helpers. Read when adding to a package's `exports`
+  map, or when a maintainer review asks for a "physical
+  `./<name>.js`".
 
 ### Code archaeology
 

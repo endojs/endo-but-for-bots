@@ -44,6 +44,10 @@ issue or design document, and shepherding it through to a green PR.
 - [`../skills/saboteur-adversarial-review.md`](../skills/saboteur-adversarial-review.md) —
   the adversarial juror's pattern catalog (rootfs-derived env
   derivation and any future reusable attack classes).
+- [`../skills/surface-module-pattern.md`](../skills/surface-module-pattern.md) —
+  every newly-public module in a package's `exports` map needs a
+  physical surface module at the package root (not under `src/`)
+  that re-exports the public subset and masks test-only helpers.
 
 ## Posture
 
