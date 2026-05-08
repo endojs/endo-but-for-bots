@@ -678,3 +678,5 @@ Stalled this run (2026-05-06 conductor, PR 94 cycle):
   pr-94 worktree at `/home/kris/endo-wt/pr-94` left in place for
   the follow-up dispatch; remote branch
   `feat/chat-playwright-smoke` left intact.
+
+PR 143 merged → 1c1e792c61 (chronicler proposal: roles/chronicler.md + roles/scribe.md + roles/README.md)
