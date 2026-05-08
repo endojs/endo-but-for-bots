@@ -99,10 +99,22 @@ marshal does not edit process files directly.
   already at ceiling, OR when no eligible design remains
   (everything blocked on drift-A / drift-B / dependency / open
   question).
-- **Builder, not designer.** If a design is too vague to
-  implement (rather than being implementable), surface it to the
-  user via the cycle log; do not dispatch a designer (that's a
-  maintainer-authored brief outside the pipeline).
+- **Builder, not designer — for vague existing designs.** If an
+  existing design is too vague to implement (rather than being
+  implementable), surface it to the user via the cycle log; do
+  not recommend a designer dispatch to refine it (refining a
+  vague design is a maintainer-authored brief outside the
+  pipeline).
+- **Designer recommendation IS in scope when the needed design
+  is missing entirely.** Reshape directives that depend on a
+  package or surface that has no design at all (e.g. PR #128's
+  `@endo/exo-zip` and `cli-store-verb-text-modes` directives,
+  2026-05-08) warrant recommending a designer dispatch to the
+  steward, with a stub design path and prompt-to-expand. The
+  marshal still does not dispatch directly; the recommendation
+  goes in the marshal's report and the steward executes. The
+  vague-existing-design case above and this missing-design case
+  are different; do not collapse them.
 - **Authenticated `gh` account** speaks; no persona name.
 - **No `Co-Authored-By: Claude …`** on any commit.
 

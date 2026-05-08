@@ -22,6 +22,17 @@ Two layers, both dispatched from the steward:
    (maintainer or contributor closes it), the tracking file is
    deleted in a process commit.
 
+The top-level liaison's only kind of dispatch is **another
+liaison** (the per-issue subagent). It does not dispatch any
+other role. When a contributor's instruction would warrant a
+designer, builder, fixer, or other role, the per-issue liaison
+records the recommendation in its tracking file and surfaces
+it in its report; the steward (not the liaison) executes the
+follow-up dispatch. "Liaison does not directly dispatch other
+roles" and "top-level liaison dispatches per-issue subagents"
+are both true and not in tension; the constraint is on cross-role
+dispatch, not on self-fan-out.
+
 ## Output: direct push to `bots/garden`, no PR
 
 Liaison commits target the `garden` branch, which has no review

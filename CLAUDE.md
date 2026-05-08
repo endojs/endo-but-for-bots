@@ -106,6 +106,10 @@ The current roles are:
 
 - [`builder`](./roles/builder.md) — implement a change from an issue
   or spec and get it through CI.
+- [`chronicler`](./roles/chronicler.md) — observe and catalogue
+  documentation gaps per PR or per package; maintain
+  `process/doc-debt/<package>.md` and the doc-debt queue. Hands
+  off to the [`scribe`](./roles/scribe.md) for the writing.
 - [`cleaner`](./roles/cleaner.md) — maximize coverage on a target
   package; write tests or delete unreachable code.
 - [`conductor`](./roles/conductor.md) — drain the steward's
@@ -137,6 +141,10 @@ The current roles are:
   that attack a module's claimed invariants.
 - [`scout`](./roles/scout.md) — investigate a performance tradeoff
   with numbers.
+- [`scribe`](./roles/scribe.md) — land the documentation work the
+  [`chronicler`](./roles/chronicler.md) prioritized: JSDoc,
+  code-comment fixes, README refreshes, tutorials. Doc-side
+  analog of builder/fixer.
 - [`shepherd`](./roles/shepherd.md) — keep CI healthy across many
   in-flight PRs.
 - [`steward`](./roles/steward.md) — top-level per-cycle
