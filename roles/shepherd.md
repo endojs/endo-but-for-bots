@@ -211,6 +211,35 @@ architectural ones.
   maintainer, leave the failure visible, focus on PR-specific
   failures.
 
+- **Workflow-edit PRs that add a top-level `env:` need to merge
+  with any pre-existing one.** Prettier's YAML parser rejects
+  duplicate map keys with `SyntaxError: Map keys must be unique;
+  "env" is repeated`, and the lint script fails before any other
+  check runs. Fix is mechanical: merge the two `env:` mappings
+  into one (preserving comments) and re-run prettier. Encountered
+  on PR 126 (`ci: disable npm lifecycle scripts in workflows`):
+  the PR added `YARN_ENABLE_SCRIPTS` / `npm_config_ignore_scripts`
+  at the top of every workflow, but `ocapn-guile-interop.yml`
+  already had a top-level `env:` block carrying `GUIX_VERSION` /
+  `GUIX_TARBALL_SHA256`. When auditing a workflow-wide
+  search-and-add patch, grep for `^env:` per file before pushing.
+
+- **Single-matrix-cell macOS test failure with "N tests passed,
+  M tests skipped, 1 unhandled rejection" is a flake, not a
+  regression.** Pattern observed on PR 126's `test (20.x,
+  macos-15)` job: 512 tests passed, 1 unhandled rejection in
+  the captp/ws-relay teardown path, exit 1. Sibling cells
+  (18.x/22.x/24.x macos, all ubuntu Node versions) all green.
+  When the failing PR doesn't touch the daemon/captp code at
+  all (here: workflows-only), do not chase the rejection —
+  re-trigger CI by pushing the next commit (the lint fix here
+  was sufficient) and the matrix cell typically clears. If a
+  workflows-only PR has *no* substantive commit to piggy-back
+  on, an empty `git commit --allow-empty -m "ci: nudge"` is
+  acceptable; if the flake repeats on a clean re-run, escalate
+  to the maintainer with the unhandled-rejection stack rather
+  than swallow it.
+
 ## Self-improvement
 
 The final task of every engagement is to update this role file and
