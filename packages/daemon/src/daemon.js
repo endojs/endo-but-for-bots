@@ -3128,6 +3128,7 @@ const makeDaemonCore = async (
         allowedOrigins,
         maxRequestsPerMinute,
         maxResponseBytes,
+        timeoutMs,
       },
       context,
     ) => {
@@ -3137,6 +3138,7 @@ const makeDaemonCore = async (
         allowedOrigins,
         maxRequestsPerMinute,
         maxResponseBytes,
+        timeoutMs,
       });
 
       context.onCancel(() => {
@@ -3616,11 +3618,17 @@ const makeDaemonCore = async (
    * @param {string[]} options.allowedOrigins
    * @param {number} [options.maxRequestsPerMinute]
    * @param {number} [options.maxResponseBytes]
+   * @param {number} [options.timeoutMs]
    * @param {import('./types.js').DeferredTasks<any>} deferredTasks
    */
   const formulateHttpClient = async (
     agentId,
-    { allowedOrigins, maxRequestsPerMinute = 60, maxResponseBytes = 10485760 },
+    {
+      allowedOrigins,
+      maxRequestsPerMinute = 60,
+      maxResponseBytes = 10485760,
+      timeoutMs = 30_000,
+    },
     deferredTasks,
   ) => {
     return withFormulaGraphLock(async () => {
@@ -3639,6 +3647,7 @@ const makeDaemonCore = async (
         allowedOrigins,
         maxRequestsPerMinute,
         maxResponseBytes,
+        timeoutMs,
       });
 
       return formulate(clientNumber, formula);

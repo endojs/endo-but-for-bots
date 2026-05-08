@@ -407,6 +407,8 @@ export type HttpClientFormula = {
   maxRequestsPerMinute: number;
   /** Maximum response body size in bytes (default 10MB). */
   maxResponseBytes: number;
+  /** Per-request timeout in milliseconds (default 30000). */
+  timeoutMs: number;
 };
 
 export type Formula =
@@ -1041,7 +1043,11 @@ export interface EndoHost extends EndoAgent {
   makeHttpClient(
     petName: string,
     allowedOrigins: string[],
-    opts?: { maxRequestsPerMinute?: number; maxResponseBytes?: number },
+    opts?: {
+      maxRequestsPerMinute?: number;
+      maxResponseBytes?: number;
+      timeoutMs?: number;
+    },
   ): Promise<unknown>;
   /** Locate a formula with connection hints for sharing with remote peers. */
   locateForSharing(...petNamePath: string[]): Promise<string | undefined>;
@@ -1631,6 +1637,7 @@ export interface DaemonCore {
       allowedOrigins: string[];
       maxRequestsPerMinute?: number;
       maxResponseBytes?: number;
+      timeoutMs?: number;
     },
     deferredTasks: DeferredTasks<Record<string, string | string[]>>,
   ) => FormulateResult<unknown>;

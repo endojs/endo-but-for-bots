@@ -986,6 +986,7 @@ export const makeHostMaker = ({
      * @param {object} [opts]
      * @param {number} [opts.maxRequestsPerMinute]
      * @param {number} [opts.maxResponseBytes]
+     * @param {number} [opts.timeoutMs]
      */
     const makeHttpClientCmd = async (petName, allowedOrigins, opts = {}) => {
       assertPetName(petName);

@@ -618,6 +618,7 @@ export const HttpClientControlInterface = M.interface('EndoHttpClientControl', {
   setAllowedOrigins: M.call(M.arrayOf(M.string())).returns(M.undefined()),
   setMaxRequestsPerMinute: M.call(M.number()).returns(M.undefined()),
   setMaxResponseBytes: M.call(M.number()).returns(M.undefined()),
+  setTimeoutMs: M.call(M.number()).returns(M.undefined()),
   revoke: M.call().returns(M.undefined()),
   help: M.call().returns(M.string()),
 });

@@ -14,6 +14,7 @@ import { parsePetNamePath } from '../pet-name.js';
  * @param {string[]} options.origins - Allowed origin URLs.
  * @param {number} [options.maxRequestsPerMinute] - Rate limit.
  * @param {number} [options.maxResponseBytes] - Max response size.
+ * @param {number} [options.timeoutMs] - Per-request timeout in ms.
  * @param {string} [options.agentNames] - Agent to act as.
  */
 export const httpClient = async ({
@@ -22,6 +23,7 @@ export const httpClient = async ({
   agentNames,
   maxRequestsPerMinute,
   maxResponseBytes,
+  timeoutMs,
 }) => {
   const parsedName = parsePetNamePath(name);
 
@@ -32,6 +34,9 @@ export const httpClient = async ({
     }
     if (maxResponseBytes !== undefined) {
       opts.maxResponseBytes = Number(maxResponseBytes);
+    }
+    if (timeoutMs !== undefined) {
+      opts.timeoutMs = Number(timeoutMs);
     }
     await E(agent).makeHttpClient(parsedName, origins, opts);
     console.log(

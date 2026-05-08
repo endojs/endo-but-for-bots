@@ -1,5 +1,5 @@
 // @ts-check
-/* global fetch, AbortController */
+/* global fetch, AbortController, setTimeout, clearTimeout */
 
 import { makeExo } from '@endo/exo';
 import harden from '@endo/harden';
@@ -12,6 +12,7 @@ import {
 
 const DEFAULT_MAX_REQUESTS_PER_MINUTE = 60;
 const DEFAULT_MAX_RESPONSE_BYTES = 10 * 1024 * 1024; // 10 MB
+const DEFAULT_TIMEOUT_MS = 30_000; // 30 s
 
 /**
  * Read a fetch Response body chunk-by-chunk, accumulating bytes
@@ -117,6 +118,9 @@ harden(originOf);
  * @param {string[]} options.allowedOrigins - Initial origin allowlist.
  * @param {number} [options.maxRequestsPerMinute]
  * @param {number} [options.maxResponseBytes]
+ * @param {number} [options.timeoutMs] - Per-request timeout in milliseconds.
+ *   Defaults to 30000.  A slow-loris origin would otherwise pin a
+ *   rate-limit slot and a daemon promise indefinitely.
  * @param {typeof globalThis.fetch} [options.fetchFn] - Injected fetch for testing.
  * @returns {{ client: object, control: object }}
  */
@@ -125,12 +129,14 @@ export const makeHttpClientKit = options => {
     allowedOrigins: initialOrigins,
     maxRequestsPerMinute = DEFAULT_MAX_REQUESTS_PER_MINUTE,
     maxResponseBytes = DEFAULT_MAX_RESPONSE_BYTES,
+    timeoutMs = DEFAULT_TIMEOUT_MS,
     fetchFn = fetch,
   } = options;
 
   let allowedOrigins = new Set(initialOrigins);
   let currentMaxRequestsPerMinute = maxRequestsPerMinute;
   let currentMaxResponseBytes = maxResponseBytes;
+  let currentTimeoutMs = timeoutMs;
   let revoked = false;
 
   // Sliding window rate limiter: track timestamps of recent requests.
@@ -180,6 +186,21 @@ export const makeHttpClientKit = options => {
       const { method = 'GET', headers = {}, body = undefined } = opts || {};
 
       const controller = new AbortController();
+      // Per-request timeout.  Without this a slow-loris origin pins
+      // a rate-limit slot and a daemon promise indefinitely.  The
+      // same AbortController is used for the byte-cap abort, so the
+      // timeout terminates both the connect/headers phase and any
+      // in-progress body read.
+      let timedOut = false;
+      const timeoutId = setTimeout(() => {
+        timedOut = true;
+        try {
+          controller.abort();
+        } catch {
+          /* ignore */
+        }
+      }, currentTimeoutMs);
+
       // `redirect: 'manual'` prevents the server from steering the
       // client off the allowlist via a `Location:` header.  The
       // allowlist guards only the URL the caller supplied; with the
@@ -188,40 +209,49 @@ export const makeHttpClientKit = options => {
       // address the daemon happens to be able to reach (SSRF).
       // 3xx responses are surfaced to the caller as-is so they can
       // re-issue against an explicitly allowlisted target if desired.
-      const response = await fetchFn(url, {
-        method,
-        headers,
-        signal: controller.signal,
-        redirect: 'manual',
-        ...(body !== undefined ? { body } : {}),
-      });
+      try {
+        const response = await fetchFn(url, {
+          method,
+          headers,
+          signal: controller.signal,
+          redirect: 'manual',
+          ...(body !== undefined ? { body } : {}),
+        });
 
-      // Stream the response body with a hard byte cap.  This bounds the
-      // memory the daemon will allocate for the response regardless of
-      // a malicious origin advertising (or omitting) a Content-Length.
-      // The AbortController signal is fired when the cap is reached so
-      // the underlying socket is closed promptly.
-      const { text, truncated } = await readResponseBoundedText(
-        response,
-        currentMaxResponseBytes,
-        controller,
-      );
+        // Stream the response body with a hard byte cap.  This bounds the
+        // memory the daemon will allocate for the response regardless of
+        // a malicious origin advertising (or omitting) a Content-Length.
+        // The AbortController signal is fired when the cap is reached so
+        // the underlying socket is closed promptly.
+        const { text, truncated } = await readResponseBoundedText(
+          response,
+          currentMaxResponseBytes,
+          controller,
+        );
 
-      /** @type {Record<string, string>} */
-      const responseHeaders = {};
-      response.headers.forEach((value, key) => {
-        responseHeaders[key] = value;
-      });
+        /** @type {Record<string, string>} */
+        const responseHeaders = {};
+        response.headers.forEach((value, key) => {
+          responseHeaders[key] = value;
+        });
 
-      return harden({
-        status: response.status,
-        statusText: response.statusText,
-        ok: response.ok,
-        headers: responseHeaders,
-        text,
-        truncated,
-        maxResponseBytes: currentMaxResponseBytes,
-      });
+        return harden({
+          status: response.status,
+          statusText: response.statusText,
+          ok: response.ok,
+          headers: responseHeaders,
+          text,
+          truncated,
+          maxResponseBytes: currentMaxResponseBytes,
+        });
+      } catch (err) {
+        if (timedOut) {
+          throw Fail`HTTP request to ${q(url)} timed out after ${q(currentTimeoutMs)}ms`;
+        }
+        throw err;
+      } finally {
+        clearTimeout(timeoutId);
+      }
     },
 
     allowedOrigins: () => harden([...allowedOrigins]),
@@ -230,7 +260,7 @@ export const makeHttpClientKit = options => {
       `HttpClient makes HTTP requests to allowed origins. ` +
       `Methods: fetch(url, opts?), allowedOrigins(), help(). ` +
       `Allowed origins: ${[...allowedOrigins].join(', ') || '(none)'}. ` +
-      `Limits: ${currentMaxRequestsPerMinute} req/min, ${currentMaxResponseBytes} max bytes.`,
+      `Limits: ${currentMaxRequestsPerMinute} req/min, ${currentMaxResponseBytes} max bytes, ${currentTimeoutMs}ms timeout.`,
   });
 
   const control = makeExo('HttpClientControl', HttpClientControlInterface, {
@@ -248,13 +278,18 @@ export const makeHttpClientKit = options => {
       n >= 1 || Fail`maxResponseBytes must be >= 1`;
       currentMaxResponseBytes = n;
     },
+    /** @param {number} ms */
+    setTimeoutMs: ms => {
+      ms >= 1 || Fail`timeoutMs must be >= 1`;
+      currentTimeoutMs = ms;
+    },
     revoke: () => {
       revoked = true;
     },
     help: () =>
       `HttpClientControl manages an HttpClient. ` +
       `Methods: setAllowedOrigins(origins), setMaxRequestsPerMinute(n), ` +
-      `setMaxResponseBytes(n), revoke(), help().`,
+      `setMaxResponseBytes(n), setTimeoutMs(ms), revoke(), help().`,
   });
 
   return harden({ client, control });

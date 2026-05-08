@@ -332,6 +332,59 @@ test('help returns documentation', t => {
   t.true(control.help().includes('HttpClientControl'));
 });
 
+test('fetch aborts and rejects when timeoutMs elapses', async t => {
+  // A slow-loris origin that never resolves the response.  Without a
+  // timeout the fetch promise (and the rate-limit slot) would be
+  // pinned indefinitely; the timeout must fire the AbortController
+  // and surface a clear timeout error.
+  /** @type {AbortSignal | undefined} */
+  let captured;
+  const slowFetch = (_url, opts) => {
+    captured = opts.signal;
+    return new Promise((_resolve, reject) => {
+      opts.signal.addEventListener('abort', () => {
+        reject(new Error('aborted'));
+      });
+    });
+  };
+  const { client } = makeHttpClientKit({
+    allowedOrigins: ['https://api.example.com'],
+    timeoutMs: 25,
+    fetchFn: slowFetch,
+  });
+  await t.throwsAsync(() => client.fetch('https://api.example.com/slow'), {
+    message: /timed out after 25ms/,
+  });
+  t.true(
+    captured?.aborted,
+    'AbortController.signal must be aborted on timeout',
+  );
+});
+
+test('fetch does not time out when response arrives in time', async t => {
+  const { mockFetch } = makeMockFetch({ text: 'fast' });
+  const { client } = makeHttpClientKit({
+    allowedOrigins: ['https://api.example.com'],
+    timeoutMs: 5_000,
+    fetchFn: mockFetch,
+  });
+  const response = await client.fetch('https://api.example.com/fast');
+  t.is(response.text, 'fast');
+});
+
+test('control setTimeoutMs validates and updates the timeout', async t => {
+  const { mockFetch } = makeMockFetch();
+  const { client, control } = makeHttpClientKit({
+    allowedOrigins: ['https://api.example.com'],
+    timeoutMs: 5_000,
+    fetchFn: mockFetch,
+  });
+  control.setTimeoutMs(10_000);
+  t.throws(() => control.setTimeoutMs(0), { message: /must be >= 1/ });
+  // Help text reflects the updated value.
+  t.true(client.help().includes('10000ms timeout'));
+});
+
 test('fetch passes redirect: manual to prevent SSRF via Location header', async t => {
   // The allowlist guards only the URL the caller supplies; if fetch is
   // permitted to follow redirects, an allowlisted origin can steer the
