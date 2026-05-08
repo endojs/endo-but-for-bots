@@ -30,17 +30,26 @@ Changes since the 2026-05-06 snapshot:
   was never on this list (it was in flight as PR #115) so no entry
   moves. The garden branch does not yet carry the new design file or a
   README row for it; that sync is a separate concern.
+- `endoclaw-webhooks` moves onto this list as
+  `blocked-on-maintainer-decision` (0 → 1). PR #130 (the
+  re-open-under-bot of #40) bundled webhook with HTTP client and
+  interval scheduler. On 2026-05-08 kriskowal's review wrap split the
+  PR and asked for the webhook bundle to be deferred until the Endo
+  Gateway HTTP server design matures
+  ([`pullrequestreview-4248730906`](https://github.com/endojs/endo-but-for-bots/pull/130#pullrequestreview-4248730906)).
+  HTTP client landed as PR #144, interval scheduler as PR #145; the
+  webhook bundle was intentionally not re-opened.
 
 ## Summary
 
 | Classification | Count |
 | --- | --- |
 | Started but stalled (branch exists, no PR) | 0 |
-| Spec'd but not started | 13 |
+| Spec'd but not started | 14 |
 | Stale (superseded by another design) | 1 |
 | Aspirational / discussion-only | 10 |
 | Already complete (work landed without an explicit open PR) | 23 |
-| **Total** | **47** |
+| **Total** | **48** |
 
 The Spec'd-but-not-started count dropped from 16 to 13 since the
 2026-05-02 snapshot because three entries acquired PRs:
@@ -48,6 +57,9 @@ The Spec'd-but-not-started count dropped from 16 to 13 since the
 - `chat-rename-dismiss-to-clear` merged as PR #93.
 - `daemon-guest-eval-simplification` merged as PR #92.
 - `daemon-content-store-gc` is in flight as open PR #99.
+
+It rose from 13 to 14 on 2026-05-08 when `endoclaw-webhooks` was
+deferred out of PR #130 (see the change-log entry above).
 
 ## Started but stalled (0)
 
@@ -57,7 +69,7 @@ remaining unannotated designs. Two open branches that match queue
 slugs (`feat/chat-rename-clear`, `feat/daemon-guest-eval-simplification`)
 correspond to merged PRs #93 and #92 above.
 
-## Spec'd but not started (13)
+## Spec'd but not started (14)
 
 Reads as a polished design ready to be acted on; no branch, no PR.
 Each entry is followed by its drift-check classification and a
@@ -159,23 +171,23 @@ actionable.
   Vercel `chat` SDK adapters for Slack, Telegram, Discord, etc.
   Depends on `endoclaw-network-fetch` or `endoclaw-oauth` for platform
   API access. Both are unshipped: `endoclaw-network-fetch` is in flight
-  as part of PR #40 (`HttpClient` exo) and `endoclaw-oauth` is itself
-  blocked on that same PR.
+  as PR #144 (`HttpClient` exo, split out of #130 on 2026-05-08) and
+  `endoclaw-oauth` is itself blocked on that same dependency.
 - [`designs/endoclaw-oauth.md`](./designs/endoclaw-oauth.md)
   credential capability so an agent uses a service without seeing the
   raw token.
-  Depends on `endoclaw-network-fetch`, which is in flight as PR #40 but
-  not merged. The OAuth design wraps the `HttpClient` from that PR;
-  building before the wrapped API lands risks shape mismatch.
+  Depends on `endoclaw-network-fetch`, which is in flight as PR #144
+  but not merged. The OAuth design wraps the `HttpClient` from that
+  PR; building before the wrapped API lands risks shape mismatch.
 - [`designs/endoclaw-proactive-messages.md`](./designs/endoclaw-proactive-messages.md)
   pattern for composing Timer plus data caps plus `send()` for
   briefings and reminders.
-  Drift B: depends on `endoclaw-timer`. PR #40 ships only Phase 1
-  (`onTick` host-side callback). The proactive-messages pseudo-code
-  needs Phase 2 (mail-delivered ticks via the agent's inbox, explicitly
-  deferred in the timer design's "Not yet implemented" list). The
-  surface-level `Status: In Progress` on the timer design fooled the
-  prior eligibility check.
+  Drift B: depends on `endoclaw-timer`. PR #145 (the interval
+  scheduler split out of #130 on 2026-05-08) ships fire-and-forget
+  mail-mode tick delivery; the proactive-messages pseudo-code needs
+  the deeper TickResponse round-trip explicitly deferred in PR #145's
+  `test.serial.skip`. The surface-level `Status: In Progress` on the
+  timer design fooled the prior eligibility check.
 - [`designs/familiar-chat-weblet-hosting.md`](./designs/familiar-chat-weblet-hosting.md)
   iframe hosting and guest profiles for Chat-side weblets.
   Depends on `familiar-unified-weblet-server` (PR #100, open) for the
@@ -183,11 +195,24 @@ actionable.
   `localhttp://` infrastructure has shipped, but the design's
   remaining-work list assumes the unified server is available.
 
-### blocked-on-maintainer-decision (0)
+### blocked-on-maintainer-decision (1)
 
-No designs in this pass had open questions that the builder couldn't
-guess at; all blockers reduced to drift-A or drift-B causes. Reserved
-slot for future passes.
+- [`designs/endoclaw-webhooks.md`](./designs/endoclaw-webhooks.md)
+  Gateway webhook endpoints routed to the agent inbox as messages.
+  An implementation shipped as the third feature in PR #130, but on
+  2026-05-08 ([`pullrequestreview-4248730906`](https://github.com/endojs/endo-but-for-bots/pull/130#pullrequestreview-4248730906))
+  kriskowal asked for the webhook bundle to be deferred until the
+  Endo Gateway HTTP server design matures: "The WebHook API should
+  perhaps be postponed until the design of the Endo Gateway HTTP
+  server matures.
+  We have open questions about whether there will be one such Gateway
+  on a host with potentially a separate daemon for each user, or
+  whether the Endo Daemon is more like a system service.
+  It is likely we will need both, on different configurations."
+  PR #130 was split: HTTP client landed as #144, interval scheduler as
+  #145, and the webhook bundle was intentionally not re-opened.
+  Reclassify out of this slot once the Gateway HTTP server design
+  lands and answers the per-host vs. per-user question.
 
 ### Eligibility ranking for the marshal
 
