@@ -71,6 +71,33 @@ or `FooicPowers` in the source.
 Report what you actually find; do not propose a rename target for a
 name that does not exist in the codebase.
 
+## Check sibling PRs for already-applied conventions
+
+When proposing names for a PR that layers on top of (or runs
+parallel to) another PR, check the foundation PR's already-applied
+renames before drafting the proposal table.
+System law 2 (no synonyms in one system) extends across PRs: if
+PR `<F>` has already renamed `tmpDir → temporaryDirectory` and
+`opts → options`, PR `<N>` must not introduce fresh
+`tmpDir`/`opts` even if they read fine in isolation.
+
+```sh
+gh pr diff <F> -R <repo> | grep -E '^[-+].*\b(tmp|opts|Fn|Dir|Ref)\b'
+gh api "repos/<repo>/pulls/<F>/comments" --jq '.[].body' \
+  | grep -iE 'rename|spell|abbrev|namer'
+```
+
+The grep on review comments often surfaces rename rationales
+verbatim ("spell `directory`", "no abbreviations on public
+surface") that should propagate to PR `<N>`.
+
+Encountered on PR 135 reshape: PR 122 had already applied
+`tmpDir → temporaryDirectory`, `mkScratch → makeScratch`,
+"factory" → "attenuator". The PR 135 plan inherited those
+conventions plus extended them (`Fn → Function`, `Dir → Directory`,
+`opts → options`, `Iter → Iterator`, `seg → segment`, `Ref` dropped
+in favour of the bound thing).
+
 ## Deliverable
 
 The name plus one paragraph justifying it against the laws.
@@ -81,7 +108,11 @@ A `builder`, `fixer`, or `designer` applies the name.
 
 - [`../skills/em-dash-style-rule.md`](../skills/em-dash-style-rule.md)
 - [`../skills/cherry-pick-followup.md`](../skills/cherry-pick-followup.md)
-  — for renames that cross several PRs.
+  for renames that cross several PRs.
+- [`../skills/defer-stacking-on-in-flight-pr.md`](../skills/defer-stacking-on-in-flight-pr.md)
+  when a fixer dispatch consults you while the foundation PR is
+  mid-reshape; the rename table must anticipate the foundation's
+  destination, not its current state.
 
 ## Self-improvement
 
