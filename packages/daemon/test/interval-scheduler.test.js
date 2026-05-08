@@ -361,6 +361,31 @@ test('control.revoke() persists cancelled state via onEntryChange', async t => {
   );
 });
 
+test('makeInterval rejects non-finite period (Infinity, NaN)', async t => {
+  const { scheduler } = makeIntervalSchedulerKit({ minPeriodMs: 1000 });
+
+  // `Infinity` is `> minPeriodMs` for every finite minimum, so the
+  // `>= currentMinPeriodMs` check alone admits it; without the
+  // explicit finite check, `nextTickAt` becomes `Infinity` and
+  // `setTimeout(Infinity)` fires immediately.
+  await t.throwsAsync(() => scheduler.makeInterval('inf', Infinity), {
+    message: /must be a finite number/,
+  });
+  await t.throwsAsync(() => scheduler.makeInterval('nan', NaN), {
+    // NaN fails both the finite check and the >= check; either is fine.
+    message: /must be a finite number|below minimum/,
+  });
+});
+
+test('setPeriod rejects non-finite period', async t => {
+  const { scheduler } = makeIntervalSchedulerKit({ minPeriodMs: 1000 });
+  const interval = await scheduler.makeInterval('finite', 5000);
+  await t.throwsAsync(() => interval.setPeriod(Infinity), {
+    message: /must be a finite number/,
+  });
+  await interval.cancel();
+});
+
 test('cancel-during-tick: late reschedule() must not mutate or re-persist the entry', async t => {
   /** @type {Array<{ tickResponse: object }>} */
   const responses = [];

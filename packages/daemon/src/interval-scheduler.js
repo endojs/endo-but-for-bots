@@ -25,6 +25,11 @@ import {
  * @property {'active' | 'paused' | 'cancelled'} status
  */
 
+// `setTimeout` accepts a 32-bit signed delay; values above this silently
+// truncate and fire immediately.  Cap delays at this max and re-arm after
+// the partial wait.  See node.js docs for `setTimeout(callback, delay)`.
+const MAX_SET_TIMEOUT_DELAY_MS = 2 ** 31 - 1;
+
 /**
  * Create an IntervalScheduler / IntervalControl facet pair.
  *
@@ -113,8 +118,22 @@ export const makeIntervalSchedulerKit = (options = {}) => {
   const armInterval = entry => {
     if (paused || entry.status !== 'active') return;
     const now = Date.now();
-    const delay = Math.max(0, entry.nextTickAt - now);
-    const handle = setTimeout(() => onIntervalTick(entry.id), delay);
+    const rawDelay = Math.max(0, entry.nextTickAt - now);
+    // `setTimeout` silently truncates delays above the 32-bit signed
+    // limit (~24.8 days) and fires immediately.  Cap at the maximum and
+    // re-arm when the partial wait elapses; the entry's nextTickAt is
+    // unchanged so the next arm will compute the remaining delay.
+    let fires;
+    if (rawDelay > MAX_SET_TIMEOUT_DELAY_MS) {
+      fires = () => {
+        activeTimeouts.delete(entry.id);
+        armInterval(entry);
+      };
+    } else {
+      fires = () => onIntervalTick(entry.id);
+    }
+    const delay = Math.min(rawDelay, MAX_SET_TIMEOUT_DELAY_MS);
+    const handle = setTimeout(fires, delay);
     handle.unref();
     activeTimeouts.set(entry.id, handle);
   };
@@ -255,6 +274,8 @@ export const makeIntervalSchedulerKit = (options = {}) => {
       period: () => entry.periodMs,
       setPeriod: async newPeriodMs => {
         assertNotRevoked();
+        Number.isFinite(newPeriodMs) ||
+          Fail`Period ${q(newPeriodMs)}ms must be a finite number`;
         newPeriodMs >= currentMinPeriodMs ||
           Fail`Period ${q(newPeriodMs)}ms is below minimum ${q(currentMinPeriodMs)}ms`;
         entry.periodMs = newPeriodMs;
@@ -277,6 +298,12 @@ export const makeIntervalSchedulerKit = (options = {}) => {
       assertNotRevoked();
       const { firstDelayMs = 0, tickTimeoutMs = periodMs / 2 } = opts || {};
 
+      // `Infinity` is `> currentMinPeriodMs` for every finite minimum, so
+      // the comparison alone admits a non-firing interval whose
+      // `nextTickAt` is `Infinity` (and `setTimeout(Infinity)` fires
+      // immediately).  Reject explicitly.
+      Number.isFinite(periodMs) ||
+        Fail`Period ${q(periodMs)}ms must be a finite number`;
       periodMs >= currentMinPeriodMs ||
         Fail`Period ${q(periodMs)}ms is below minimum ${q(currentMinPeriodMs)}ms`;
 
