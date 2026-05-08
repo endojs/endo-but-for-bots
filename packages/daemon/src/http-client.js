@@ -180,10 +180,19 @@ export const makeHttpClientKit = options => {
       const { method = 'GET', headers = {}, body = undefined } = opts || {};
 
       const controller = new AbortController();
+      // `redirect: 'manual'` prevents the server from steering the
+      // client off the allowlist via a `Location:` header.  The
+      // allowlist guards only the URL the caller supplied; with the
+      // default `'follow'` mode an allowed origin could redirect to
+      // 169.254.169.254 (cloud metadata), 127.0.0.1, or any RFC1918
+      // address the daemon happens to be able to reach (SSRF).
+      // 3xx responses are surfaced to the caller as-is so they can
+      // re-issue against an explicitly allowlisted target if desired.
       const response = await fetchFn(url, {
         method,
         headers,
         signal: controller.signal,
+        redirect: 'manual',
         ...(body !== undefined ? { body } : {}),
       });
 

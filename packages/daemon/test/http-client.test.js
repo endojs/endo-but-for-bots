@@ -332,6 +332,26 @@ test('help returns documentation', t => {
   t.true(control.help().includes('HttpClientControl'));
 });
 
+test('fetch passes redirect: manual to prevent SSRF via Location header', async t => {
+  // The allowlist guards only the URL the caller supplies; if fetch is
+  // permitted to follow redirects, an allowlisted origin can steer the
+  // daemon to 169.254.169.254 (cloud metadata), 127.0.0.1, or any
+  // RFC1918 address by responding 3xx with a `Location:` header.
+  const { mockFetch, calls } = makeMockFetch();
+  const { client } = makeHttpClientKit({
+    allowedOrigins: ['https://api.example.com'],
+    fetchFn: mockFetch,
+  });
+
+  await client.fetch('https://api.example.com/data');
+  t.is(
+    calls[0].opts.redirect,
+    'manual',
+    'fetch must be invoked with redirect: manual so Location headers ' +
+      'cannot bypass the origin allowlist',
+  );
+});
+
 test('response includes headers', async t => {
   const { mockFetch } = makeMockFetch({
     headers: { 'x-custom': 'test-value' },
