@@ -361,6 +361,10 @@ export const HostInterface = M.interface('EndoHost', {
   makeTimer: M.call(NameShape, M.number())
     .optional(M.string())
     .returns(M.promise()),
+  // Create an HTTP client capability
+  makeHttpClient: M.call(NameShape, M.arrayOf(M.string()))
+    .optional(M.record())
+    .returns(M.promise()),
   // Cancel a value
   cancel: M.call(NameOrPathShape).optional(M.error()).returns(M.promise()),
   // Get the greeter
@@ -577,6 +581,48 @@ export const WorkerFacetForDaemonInterface = M.interface(
     ),
   },
 );
+
+// #region HttpClient
+
+const FetchOptionsShape = M.splitRecord(
+  {},
+  {
+    method: M.string(),
+    headers: M.recordOf(M.string(), M.string()),
+    body: M.string(),
+  },
+);
+
+const FetchResponseShape = M.splitRecord(
+  {
+    status: M.number(),
+    statusText: M.string(),
+    ok: M.boolean(),
+    headers: M.recordOf(M.string(), M.string()),
+    text: M.string(),
+    truncated: M.boolean(),
+    maxResponseBytes: M.number(),
+  },
+  {},
+);
+
+export const HttpClientInterface = M.interface('EndoHttpClient', {
+  fetch: M.callWhen(M.string())
+    .optional(FetchOptionsShape)
+    .returns(FetchResponseShape),
+  allowedOrigins: M.call().returns(M.arrayOf(M.string())),
+  help: M.call().returns(M.string()),
+});
+
+export const HttpClientControlInterface = M.interface('EndoHttpClientControl', {
+  setAllowedOrigins: M.call(M.arrayOf(M.string())).returns(M.undefined()),
+  setMaxRequestsPerMinute: M.call(M.number()).returns(M.undefined()),
+  setMaxResponseBytes: M.call(M.number()).returns(M.undefined()),
+  revoke: M.call().returns(M.undefined()),
+  help: M.call().returns(M.string()),
+});
+
+// #endregion
 
 export const EndoInterface = M.interface('Endo', {
   help: M.call().optional(M.string()).returns(M.string()),

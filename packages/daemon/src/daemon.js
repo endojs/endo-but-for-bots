@@ -49,6 +49,7 @@ import { makeChangeTopic } from './pubsub.js';
 import { makeRetentionAccumulator } from './retention-accumulator.js';
 import { makeResidenceTracker } from './residence.js';
 import { toHex, fromHex } from './hex.js';
+import { makeHttpClientKit } from './http-client.js';
 import { makeSerialJobs } from './serial-jobs.js';
 import { makeLocalStoreController } from './store-controller.js';
 import { makeWeakMultimap } from './multimap.js';
@@ -613,6 +614,8 @@ const makeDaemonCore = async (
           ['hostAgent', formula.hostAgent],
           ['hostHandle', formula.hostHandle],
         ];
+      case 'http-client':
+        return [['agent', formula.agent]];
       default:
         return [];
     }
@@ -3119,6 +3122,29 @@ const makeDaemonCore = async (
           `Timer "${timerLabel || 'timer'}" firing every ${interval}ms. Ticks: ${tickCount}`,
       });
     },
+    'http-client': async (
+      {
+        agent: agentId,
+        allowedOrigins,
+        maxRequestsPerMinute,
+        maxResponseBytes,
+      },
+      context,
+    ) => {
+      context.thisDiesIfThatDies(agentId);
+
+      const { client, control } = makeHttpClientKit({
+        allowedOrigins,
+        maxRequestsPerMinute,
+        maxResponseBytes,
+      });
+
+      context.onCancel(() => {
+        control.revoke();
+      });
+
+      return harden({ client, control });
+    },
     channel: async (formula, context, id) => {
       const {
         handle: handleId,
@@ -3581,6 +3607,41 @@ const makeDaemonCore = async (
       });
 
       return formulate(timerNumber, formula);
+    });
+  };
+
+  /**
+   * @param {FormulaIdentifier} agentId
+   * @param {object} options
+   * @param {string[]} options.allowedOrigins
+   * @param {number} [options.maxRequestsPerMinute]
+   * @param {number} [options.maxResponseBytes]
+   * @param {import('./types.js').DeferredTasks<any>} deferredTasks
+   */
+  const formulateHttpClient = async (
+    agentId,
+    { allowedOrigins, maxRequestsPerMinute = 60, maxResponseBytes = 10485760 },
+    deferredTasks,
+  ) => {
+    return withFormulaGraphLock(async () => {
+      const clientNumber = /** @type {FormulaNumber} */ (await randomHex256());
+      const clientId = formatId({
+        number: clientNumber,
+        node: localNodeNumber,
+      });
+
+      await deferredTasks.execute({ clientId });
+
+      /** @type {import('./types.js').HttpClientFormula} */
+      const formula = harden({
+        type: /** @type {const} */ ('http-client'),
+        agent: agentId,
+        allowedOrigins,
+        maxRequestsPerMinute,
+        maxResponseBytes,
+      });
+
+      return formulate(clientNumber, formula);
     });
   };
 
@@ -5284,6 +5345,7 @@ const makeDaemonCore = async (
     getFormulaForId,
     formulateChannel,
     formulateTimer,
+    formulateHttpClient,
     makeMailbox,
     makeDirectoryNode,
     localNodeNumber,

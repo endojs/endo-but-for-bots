@@ -397,6 +397,18 @@ export type TimerFormula = {
   label: string;
 };
 
+export type HttpClientFormula = {
+  type: 'http-client';
+  /** The agent this client is bound to. */
+  agent: FormulaIdentifier;
+  /** Allowed origin URLs for outbound requests. */
+  allowedOrigins: string[];
+  /** Maximum requests per minute (default 60). */
+  maxRequestsPerMinute: number;
+  /** Maximum response body size in bytes (default 10MB). */
+  maxResponseBytes: number;
+};
+
 export type Formula =
   | ChannelFormula
   | EndoFormula
@@ -427,7 +439,8 @@ export type Formula =
   | DirectoryFormula
   | PeerFormula
   | InvitationFormula
-  | TimerFormula;
+  | TimerFormula
+  | HttpClientFormula;
 
 export type Builtins = {
   NONE: FormulaIdentifier;
@@ -1025,6 +1038,11 @@ export interface EndoHost extends EndoAgent {
     intervalMs: number,
     label?: string,
   ): Promise<unknown>;
+  makeHttpClient(
+    petName: string,
+    allowedOrigins: string[],
+    opts?: { maxRequestsPerMinute?: number; maxResponseBytes?: number },
+  ): Promise<unknown>;
   /** Locate a formula with connection hints for sharing with remote peers. */
   locateForSharing(...petNamePath: string[]): Promise<string | undefined>;
   /** Adopt a value from a locator that includes connection hints. */
@@ -1605,6 +1623,16 @@ export interface DaemonCore {
     intervalMs: number,
     label: string,
     deferredTasks: DeferredTasks<{ timerId: FormulaIdentifier }>,
+  ) => FormulateResult<unknown>;
+
+  formulateHttpClient: (
+    agentId: FormulaIdentifier,
+    options: {
+      allowedOrigins: string[];
+      maxRequestsPerMinute?: number;
+      maxResponseBytes?: number;
+    },
+    deferredTasks: DeferredTasks<Record<string, string | string[]>>,
   ) => FormulateResult<unknown>;
 
   formulateHost: (
