@@ -49,6 +49,7 @@ import { makeChangeTopic } from './pubsub.js';
 import { makeRetentionAccumulator } from './retention-accumulator.js';
 import { makeResidenceTracker } from './residence.js';
 import { toHex, fromHex } from './hex.js';
+import { makeIntervalSchedulerKit } from './interval-scheduler.js';
 import { makeSerialJobs } from './serial-jobs.js';
 import { makeLocalStoreController } from './store-controller.js';
 import { makeWeakMultimap } from './multimap.js';
@@ -612,6 +613,11 @@ const makeDaemonCore = async (
         return [
           ['hostAgent', formula.hostAgent],
           ['hostHandle', formula.hostHandle],
+        ];
+      case 'interval-scheduler':
+        return [
+          ['agent', formula.agent],
+          ['handle', formula.handle],
         ];
       default:
         return [];
@@ -3119,6 +3125,130 @@ const makeDaemonCore = async (
           `Timer "${timerLabel || 'timer'}" firing every ${interval}ms. Ticks: ${tickCount}`,
       });
     },
+    'interval-scheduler': async (
+      { agent: agentId, handle: handleId, maxActive, minPeriodMs, paused },
+      context,
+      id,
+    ) => {
+      context.thisDiesIfThatDies(agentId);
+      context.thisDiesIfThatDies(handleId);
+
+      // Resolve the agent's handle for tick message delivery.
+      const agentHandle = await provide(handleId, 'handle');
+
+      // Set up persistence directory for interval entries.
+      const { number: formulaNumber } = parseId(id);
+      const schedulerDir = filePowers.joinPath(
+        persistencePowers.statePath,
+        'interval-scheduler',
+        formulaNumber.slice(0, 2),
+        formulaNumber.slice(2),
+        'intervals',
+      );
+      await filePowers.makePath(schedulerDir);
+
+      const { scheduler, control, loadEntry } = makeIntervalSchedulerKit({
+        maxActive,
+        minPeriodMs,
+        onEntryChange: entry => {
+          const entryPath = filePowers.joinPath(
+            schedulerDir,
+            `${entry.id}.json`,
+          );
+          filePowers
+            .writeFileText(entryPath, `${JSON.stringify(entry)}\n`)
+            .catch(err => {
+              console.error(
+                `[interval-scheduler] persist failed:`,
+                /** @type {Error} */ (err).message,
+              );
+            });
+        },
+        onTick: (entry, tickNumber, tickResponse) => {
+          // Fire a tick into the agent's inbox.  Mail-mode is the only
+          // wired transport, and the TickResponse remotable cannot be
+          // passed through a Package message body: `ids[]` carries
+          // formula identifiers, not transient remotables.  Wire the
+          // round-trip end-to-end here: the scheduler advances to the
+          // next period as soon as the agent's mailbox has accepted
+          // the message (or fails to), so a mis-configured agent
+          // never leaves the deadline timer to expire before the next
+          // tick is armed.
+          //
+          // An agent that needs to slow ticks down (the use case
+          // tickResponse.reschedule covers for in-process callers)
+          // talks to the IntervalControl instead: pause(), resume(),
+          // and setMinPeriodMs() cover the throttling vocabulary
+          // mail-mode supports.
+          (async () => {
+            const messageId =
+              /** @type {import('./types.js').FormulaNumber} */ (
+                await randomHex256()
+              );
+            const tickMessage = harden({
+              type: /** @type {const} */ ('package'),
+              strings: [
+                `Interval "${entry.label}" tick #${tickNumber} ` +
+                  `(period: ${entry.periodMs}ms)`,
+              ],
+              names: [],
+              ids: [],
+              messageId,
+              from: agentId,
+              to: agentId,
+            });
+            try {
+              await E(agentHandle).receive(tickMessage, agentId);
+            } catch (err) {
+              console.error(
+                `[interval-scheduler] tick delivery failed:`,
+                /** @type {Error} */ (err).message,
+              );
+            }
+            tickResponse.resolve();
+          })().catch(err => {
+            console.error(
+              `[interval-scheduler] tick wiring failed:`,
+              /** @type {Error} */ (err).message,
+            );
+          });
+        },
+      });
+
+      if (paused) {
+        control.pause();
+      }
+
+      // Startup recovery: load persisted interval entries.
+      try {
+        const entryFiles = await filePowers.readDirectory(schedulerDir);
+        for (const fileName of entryFiles) {
+          if (!fileName.endsWith('.json')) {
+            // eslint-disable-next-line no-continue
+            continue;
+          }
+          try {
+            const entryPath = filePowers.joinPath(schedulerDir, fileName);
+            // eslint-disable-next-line no-await-in-loop
+            const text = await filePowers.readFileText(entryPath);
+            const entry = JSON.parse(text);
+            if (entry && entry.id && entry.status === 'active') {
+              loadEntry(entry);
+            }
+          } catch {
+            // Skip corrupt entry files.
+          }
+        }
+      } catch {
+        // No persisted entries — fresh scheduler.
+      }
+
+      context.onCancel(() => {
+        control.revoke();
+      });
+
+      return harden({ scheduler, control });
+    },
     channel: async (formula, context, id) => {
       const {
         handle: handleId,
@@ -3581,6 +3711,46 @@ const makeDaemonCore = async (
       });
 
       return formulate(timerNumber, formula);
+    });
+  };
+
+  /**
+   * @param {FormulaIdentifier} agentId
+   * @param {FormulaIdentifier} handleId
+   * @param {object} options
+   * @param {number} [options.maxActive]
+   * @param {number} [options.minPeriodMs]
+   * @param {import('./types.js').DeferredTasks<any>} deferredTasks
+   */
+  const formulateIntervalScheduler = async (
+    agentId,
+    handleId,
+    options,
+    deferredTasks,
+  ) => {
+    const { maxActive = 5, minPeriodMs = 30_000 } = options || {};
+    return withFormulaGraphLock(async () => {
+      const schedulerNumber = /** @type {FormulaNumber} */ (
+        await randomHex256()
+      );
+      const schedulerId = formatId({
+        number: schedulerNumber,
+        node: localNodeNumber,
+      });
+
+      await deferredTasks.execute({ schedulerId });
+
+      /** @type {import('./types.js').IntervalSchedulerFormula} */
+      const formula = harden({
+        type: /** @type {const} */ ('interval-scheduler'),
+        agent: agentId,
+        handle: handleId,
+        maxActive,
+        minPeriodMs,
+        paused: false,
+      });
+
+      return formulate(schedulerNumber, formula);
     });
   };
 
@@ -5284,6 +5454,7 @@ const makeDaemonCore = async (
     getFormulaForId,
     formulateChannel,
     formulateTimer,
+    formulateIntervalScheduler,
     makeMailbox,
     makeDirectoryNode,
     localNodeNumber,

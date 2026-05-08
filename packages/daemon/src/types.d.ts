@@ -397,6 +397,20 @@ export type TimerFormula = {
   label: string;
 };
 
+export type IntervalSchedulerFormula = {
+  type: 'interval-scheduler';
+  /** The agent this scheduler is bound to. */
+  agent: FormulaIdentifier;
+  /** The handle used by the scheduler to deliver tick messages. */
+  handle: FormulaIdentifier;
+  /** Maximum number of active intervals (default 5). */
+  maxActive: number;
+  /** Minimum allowed period in ms (default 30_000). */
+  minPeriodMs: number;
+  /** Whether all intervals are paused (default false). */
+  paused: boolean;
+};
+
 export type Formula =
   | ChannelFormula
   | EndoFormula
@@ -427,7 +441,8 @@ export type Formula =
   | DirectoryFormula
   | PeerFormula
   | InvitationFormula
-  | TimerFormula;
+  | TimerFormula
+  | IntervalSchedulerFormula;
 
 export type Builtins = {
   NONE: FormulaIdentifier;
@@ -1025,6 +1040,10 @@ export interface EndoHost extends EndoAgent {
     intervalMs: number,
     label?: string,
   ): Promise<unknown>;
+  makeIntervalScheduler(
+    petName: string,
+    options?: { maxActive?: number; minPeriodMs?: number },
+  ): Promise<unknown>;
   /** Locate a formula with connection hints for sharing with remote peers. */
   locateForSharing(...petNamePath: string[]): Promise<string | undefined>;
   /** Adopt a value from a locator that includes connection hints. */
@@ -1605,6 +1624,13 @@ export interface DaemonCore {
     intervalMs: number,
     label: string,
     deferredTasks: DeferredTasks<{ timerId: FormulaIdentifier }>,
+  ) => FormulateResult<unknown>;
+
+  formulateIntervalScheduler: (
+    agentId: FormulaIdentifier,
+    handleId: FormulaIdentifier,
+    options: { maxActive?: number; minPeriodMs?: number },
+    deferredTasks: DeferredTasks<Record<string, string | string[]>>,
   ) => FormulateResult<unknown>;
 
   formulateHost: (
