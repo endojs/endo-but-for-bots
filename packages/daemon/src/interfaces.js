@@ -511,8 +511,8 @@ export const MountInterface = M.interface('EndoMount', {
   // Metadata
   stat: M.call(PathArgShape).returns(M.promise()),
   // ReadableTree-compatible surface
-  has: M.call().rest(M.string()).returns(M.promise()),
-  list: M.call().rest(M.string()).returns(M.promise()),
+  has: M.call().rest(M.arrayOf(M.string())).returns(M.promise()),
+  list: M.call().rest(M.arrayOf(M.string())).returns(M.promise()),
   lookup: M.call(PathArgShape).returns(M.promise()),
   // Raw data I/O
   readText: M.call(PathArgShape).returns(M.promise()),
@@ -527,10 +527,15 @@ export const MountInterface = M.interface('EndoMount', {
   // Search
   glob: M.call(M.string()).returns(M.promise()),
   grep: M.call(M.string())
-    .optional(M.splitRecord({}, {
-      glob: M.string(),
-      maxResults: M.number(),
-    }))
+    .optional(
+      M.splitRecord(
+        {},
+        {
+          glob: M.string(),
+          maxResults: M.number(),
+        },
+      ),
+    )
     .returns(M.promise()),
   // Attenuation
   readOnly: M.call().returns(M.remotable()),

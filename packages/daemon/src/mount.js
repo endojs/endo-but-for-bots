@@ -278,10 +278,14 @@ const walkGlob = async (
     }
     for (const entry of entries.sort()) {
       if (results.length >= maxResults) return;
-      if (isDeniedSegment(entry)) continue;
+      if (isDeniedSegment(entry)) {
+        // eslint-disable-next-line no-continue
+        continue;
+      }
       const childPath = filePowers.joinPath(dir, entry);
       // eslint-disable-next-line no-await-in-loop
       if (!(await isConfinedPath(childPath, confinementRoot, filePowers))) {
+        // eslint-disable-next-line no-continue
         continue;
       }
       // eslint-disable-next-line no-await-in-loop
@@ -312,11 +316,18 @@ const walkGlob = async (
   }
   for (const entry of entries.sort()) {
     if (results.length >= maxResults) return;
-    if (isDeniedSegment(entry)) continue;
-    if (!matchSegment(entry, head)) continue;
+    if (isDeniedSegment(entry)) {
+      // eslint-disable-next-line no-continue
+      continue;
+    }
+    if (!matchSegment(entry, head)) {
+      // eslint-disable-next-line no-continue
+      continue;
+    }
     const childPath = filePowers.joinPath(dir, entry);
     // eslint-disable-next-line no-await-in-loop
     if (!(await isConfinedPath(childPath, confinementRoot, filePowers))) {
+      // eslint-disable-next-line no-continue
       continue;
     }
     const childPrefix = prefix ? `${prefix}/${entry}` : entry;
@@ -355,7 +366,7 @@ const GLOB_MAX_RESULTS = 10000;
  * Create a mount exo for a filesystem directory.
  *
  * @param {MountContext} ctx
- * @returns {object}
+ * @returns {any}
  */
 const makeMountExo = ctx => {
   const {
@@ -609,13 +620,17 @@ const makeMountExo = ctx => {
         // Skip directories and binary files.
         // eslint-disable-next-line no-await-in-loop
         const isDir = await filePowers.isDirectory(filePath);
-        if (isDir) continue;
+        if (isDir) {
+          // eslint-disable-next-line no-continue
+          continue;
+        }
         let content;
         try {
           // eslint-disable-next-line no-await-in-loop
           content = await filePowers.readFileText(filePath);
         } catch {
           // Skip unreadable files (binary, permission errors).
+          // eslint-disable-next-line no-continue
           continue;
         }
         const lines = content.split('\n');
@@ -778,8 +793,8 @@ harden(makeMountFileExo);
  * @param {string} opts.rootPath
  * @param {boolean} opts.readOnly
  * @param {FilePowers} opts.filePowers
- * @param {((mount: object) => Promise<object>) | undefined} [opts.snapshotFn]
- * @returns {{ mount: object, control: object }}
+ * @param {((mount: any) => Promise<any>) | undefined} [opts.snapshotFn]
+ * @returns {{ mount: any, control: any }}
  */
 export const makeMount = ({ rootPath, readOnly, filePowers, snapshotFn }) => {
   const prefix = readOnly ? 'Read-only mount' : 'Mount';

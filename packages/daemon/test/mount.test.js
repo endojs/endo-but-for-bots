@@ -51,39 +51,42 @@ const setup = async t => {
     await fs.promises.rm(tmpDir, { recursive: true, force: true });
   });
 
-  /** @type {import('../src/types.js').FilePowers} */
-  const filePowers = {
-    readDirectory: dir => fs.promises.readdir(dir),
-    readFileText: p => fs.promises.readFile(p, 'utf-8'),
-    writeFileText: (p, c) => fs.promises.writeFile(p, c, 'utf-8'),
-    makePath: p => fs.promises.mkdir(p, { recursive: true }),
-    removePath: p => fs.promises.rm(p, { recursive: true, force: true }),
-    renamePath: (a, b) => fs.promises.rename(a, b),
-    joinPath: (...parts) => path.join(...parts),
-    realPath: p => fs.promises.realpath(p),
-    exists: async p => {
-      try {
-        await fs.promises.access(p);
-        return true;
-      } catch {
-        return false;
-      }
-    },
-    isDirectory: async p => {
-      try {
-        const stat = await fs.promises.stat(p);
-        return stat.isDirectory();
-      } catch {
-        return false;
-      }
-    },
-    makeFileReader: _p => {
-      throw new Error('not implemented');
-    },
-    makeFileWriter: _p => {
-      throw new Error('not implemented');
-    },
-  };
+  const filePowers = /** @type {import('../src/types.js').FilePowers} */ (
+    /** @type {unknown} */ ({
+      readDirectory: dir => fs.promises.readdir(dir),
+      readFileText: p => fs.promises.readFile(p, 'utf-8'),
+      writeFileText: (p, c) => fs.promises.writeFile(p, c, 'utf-8'),
+      makePath: async p => {
+        await fs.promises.mkdir(p, { recursive: true });
+      },
+      removePath: p => fs.promises.rm(p, { recursive: true, force: true }),
+      renamePath: (a, b) => fs.promises.rename(a, b),
+      joinPath: (...parts) => path.join(...parts),
+      realPath: p => fs.promises.realpath(p),
+      exists: async p => {
+        try {
+          await fs.promises.access(p);
+          return true;
+        } catch {
+          return false;
+        }
+      },
+      isDirectory: async p => {
+        try {
+          const stat = await fs.promises.stat(p);
+          return stat.isDirectory();
+        } catch {
+          return false;
+        }
+      },
+      makeFileReader: _p => {
+        throw new Error('not implemented');
+      },
+      makeFileWriter: _p => {
+        throw new Error('not implemented');
+      },
+    })
+  );
 
   return { tmpDir, filePowers };
 };
@@ -109,7 +112,9 @@ test('stat returns file and directory info', async t => {
     filePowers,
   });
 
-  const fileStat = await mount.stat('hello.txt');
+  const fileStat = /** @type {{ type: string, size: number }} */ (
+    await mount.stat('hello.txt')
+  );
   t.is(fileStat.type, 'file');
   t.true(fileStat.size > 0);
 

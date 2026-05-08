@@ -107,10 +107,9 @@ export const makeCapabilityVFS = mount => {
 
             // Recurse if requested and entry is a directory.
             if (opts.recursive && entry.type === 'directory') {
-              const subPath = segments.length > 0
-                ? `${dirPath}/${name}`
-                : name;
+              const subPath = segments.length > 0 ? `${dirPath}/${name}` : name;
               const subIter = vfs.readdir(subPath, opts);
+              // eslint-disable-next-line no-await-in-loop
               for await (const subEntry of subIter) {
                 yield harden({
                   ...subEntry,
@@ -121,6 +120,66 @@ export const makeCapabilityVFS = mount => {
           }
         },
       });
+    },
+
+    sep: '/',
+
+    join(...parts) {
+      const filtered = parts.filter(p => p.length > 0);
+      if (filtered.length === 0) {
+        return '.';
+      }
+      const joined = filtered.join('/').replace(/\/+/g, '/');
+      // Preserve a leading slash, drop a trailing one (unless joined === '/').
+      const trimmed = joined.length > 1 ? joined.replace(/\/$/, '') : joined;
+      return trimmed;
+    },
+
+    relative(from, to) {
+      const fromSegs = from.split('/').filter(s => s.length > 0);
+      const toSegs = to.split('/').filter(s => s.length > 0);
+      let common = 0;
+      while (
+        common < fromSegs.length &&
+        common < toSegs.length &&
+        fromSegs[common] === toSegs[common]
+      ) {
+        common += 1;
+      }
+      const up = fromSegs.slice(common).map(() => '..');
+      const down = toSegs.slice(common);
+      const parts = [...up, ...down];
+      return parts.length === 0 ? '' : parts.join('/');
+    },
+
+    resolve(...paths) {
+      // Mount confines all paths under its root, so `resolve` returns a
+      // path relative to that root.  Absolute inputs reset the
+      // accumulator; otherwise we append.  The mount layer enforces
+      // confinement when the resolved path is used.
+      let acc = [];
+      for (const p of paths) {
+        if (p.length === 0) {
+          // eslint-disable-next-line no-continue
+          continue;
+        }
+        if (p.startsWith('/')) {
+          acc = p.split('/').filter(s => s.length > 0);
+        } else {
+          for (const seg of p.split('/')) {
+            if (seg.length === 0 || seg === '.') {
+              // eslint-disable-next-line no-continue
+              continue;
+            }
+            if (seg === '..') {
+              acc.pop();
+            } else {
+              acc.push(seg);
+            }
+          }
+        }
+      }
+      return acc.length === 0 ? '/' : `/${acc.join('/')}`;
     },
   };
 
