@@ -240,6 +240,37 @@ architectural ones.
   to the maintainer with the unhandled-rejection stack rather
   than swallow it.
 
+- **`M.call().rest(P)` matches the rest *array* against `P`, not each
+  rest arg.** When you see exo guard errors of the form `...rest:
+  copyArray ["foo"] - Must be a string`, the interface declared
+  `M.call().rest(M.string())` but the runtime passed a one-element
+  rest array `["foo"]`, which can never match `M.string()`. The fix
+  is `M.call().rest(M.arrayOf(M.string()))`. This bites the most
+  when the interface comment says "ReadableTree-compatible surface"
+  and the author copied the method names without copying the
+  matching pattern. Encountered on PR 127 (`MountInterface.has` /
+  `.list`) where 31 mount-related tests rejected at the guard.
+
+- **Don't `find -name '*.d.ts' -delete` to "clean" generated types.**
+  The daemon package commits a few `.d.ts` files alongside its `.js`
+  (e.g. `types.d.ts`, `bus-xs-host-globals.d.ts`). A bulk delete
+  removes them. Use `prepack`'s built-in `git clean -fX` (which only
+  removes ignored files), or list intended targets explicitly. After
+  any wider deletion, run `git status -s | grep '^ D'` and `git
+  checkout HEAD -- <file>` for any tracked deletions before
+  proceeding.
+
+- **`yarn docs` is the typecheck of last resort, and it's stricter
+  than `yarn lint`.** `yarn lint` runs prettier + eslint only;
+  `yarn docs` (typedoc) invokes tsc on every workspace and surfaces
+  TS2339 / TS2322 issues that `yarn lint:types` would also catch but
+  that no top-level lint script runs. The CI lint job runs both:
+  `yarn lint && yarn docs`. When chasing a CI failure for the lint
+  job, run **both** locally; if the prettier/eslint pass is clean,
+  the failure is downstream in `yarn docs`. Encountered PR 127 where
+  fixing prettier surfaced 9 eslint errors, which on fix surfaced
+  TS errors only `yarn docs` (not `yarn lint`) reports.
+
 ## Self-improvement
 
 The final task of every engagement is to update this role file and
