@@ -320,7 +320,35 @@ The Agent _does_ see (post-integration):
    platform API.
    Defer until a second consumer of the policy hook appears.
 
-4. **Closing the `MountFile` / `FileInterface` gap.** The MountFile
+4. **Cap-std-style overwrite-replaces-symlink semantics.** The
+   confinement rules in Decision 6 say "Overwrite paths may replace
+   such a symlink with new content; the symlink ceases to exist
+   after the write." PR 122 implements the **read-side** confinement
+   (invisible from `list`, denied from `lookup` / `has` /
+   `readText`) and the **remove-side** confinement (`remove()` acts
+   on the symlink entry itself, since `fs.rm` does not follow
+   symlinks).
+   The **overwrite-side** is partial: `writeText` and `write`
+   currently call `fs.writeFile` which **follows** the symlink.  For
+   a broken symlink with an absolute target (e.g.
+   `link -> /etc/secret`), this would create a regular file at the
+   absolute target, escaping confinement.
+   `assertConfinedOrAncestor` blocks this for already-resolvable
+   escaping symlinks (where `realpath` returns the outside target),
+   but does not catch broken absolute symlinks (where `realpath`
+   throws and the walk-to-parent confines the symlink's parent
+   inside the mount).
+   The fix is to `lstat` the destination before writing, and if it
+   is a symlink, `unlink` it first so the subsequent `writeFile`
+   creates a regular file at the symlink's name.
+   Out of scope for PR 122 because it requires extending
+   `FilePowers` with `lstat` (or moving Mount to `node:fs`
+   directly).
+   Surfaced here for follow-up; see also the test in
+   `endo.test.js` that exercises the read-side and remove-side but
+   not the overwrite-side.
+
+5. **Closing the `MountFile` / `FileInterface` gap.** The MountFile
    exo returned by `EndoMountDirectory.lookup(filename)` exposes
    `text`, `streamBase64`, `json`, `writeText`, `writeBytes`, and
    `readOnly` — a strict subset of the platform `FileInterface`,

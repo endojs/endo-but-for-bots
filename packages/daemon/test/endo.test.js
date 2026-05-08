@@ -4390,6 +4390,14 @@ const createSymlinkFixture = async basePath => {
     path.join(mountRoot, 'escape-file-rel'),
   );
 
+  // Broken symlink (target does not exist).  Cap-std treats these
+  // the same as escaping symlinks: invisible from list, denied on
+  // read, but overwritable.
+  await fs.promises.symlink(
+    'no-such-target',
+    path.join(mountRoot, 'broken-link'),
+  );
+
   return { mountRoot, outsideDir };
 };
 
@@ -4817,10 +4825,64 @@ test('mount symlink - all symlink types together in one listing', async t => {
   t.false(entries.includes('escape-file-abs'));
   t.false(entries.includes('escape-file-rel'));
 
-  // Cross-reference: raw readdir sees all 8 entries, mount sees only 4.
+  // Broken symlink is also excluded.
+  t.false(entries.includes('broken-link'));
+
+  // Cross-reference: raw readdir sees all 9 entries, mount sees only 4.
   const rawEntries = await fs.promises.readdir(mountRoot);
-  t.is(rawEntries.length, 8); // 2 real + 2 internal + 4 escaping
+  t.is(rawEntries.length, 9); // 2 real + 2 internal + 4 escaping + 1 broken
   t.is(entries.length, 4); // 2 real + 2 internal
+});
+
+test('mount symlink - broken symlink hidden from list, rejected on use', async t => {
+  const { host, config } = await prepareHost(t);
+
+  const basePath = path.join(
+    config.statePath,
+    '..',
+    'mount-test-symlink-broken',
+  );
+  const { mountRoot } = await createSymlinkFixture(basePath);
+
+  await E(host).provideMount(mountRoot, 'sym-broken');
+  const mount = await E(host).lookup(['sym-broken']);
+
+  // Broken symlink is filtered from list().
+  const entries = await E(mount).list();
+  t.false(entries.includes('broken-link'));
+
+  // has() returns false.
+  t.false(await E(mount).has('broken-link'));
+
+  // lookup() rejects.
+  await t.throwsAsync(E(mount).lookup('broken-link'), {
+    message: /(escapes mount root|cannot be verified)/,
+  });
+});
+
+test('mount symlink - broken symlink rejected on remove', async t => {
+  // Cap-std-style invisibility currently extends to the mutation
+  // path: an invisible entry cannot be reached via remove() either,
+  // because remove() asserts the path is confined and the broken
+  // symlink fails the realpath-based check.
+  // The cap-std model would allow overwrite (and therefore reclaim
+  // the name); see Open Question 4 in
+  // designs/platform-fs-daemon-integration.md.
+  const { host, config } = await prepareHost(t);
+
+  const basePath = path.join(
+    config.statePath,
+    '..',
+    'mount-test-symlink-broken-remove',
+  );
+  const { mountRoot } = await createSymlinkFixture(basePath);
+
+  await E(host).provideMount(mountRoot, 'sym-broken-rm');
+  const mount = await E(host).lookup(['sym-broken-rm']);
+
+  await t.throwsAsync(E(mount).remove(['broken-link']), {
+    message: /(escapes mount root|cannot be verified)/,
+  });
 });
 
 test('mount used directly as a Directory - read and list', async t => {
