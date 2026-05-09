@@ -346,6 +346,63 @@ architectural ones.
   the entire investigation. Encountered PR 155 (mirror of upstream
   endojs/endo#3246) 2026-05-08; same fix needed upstream.
 
+- **`endojs/endo-but-for-bots` has `allow_auto_merge: false` at the
+  repo level**, so `gh pr merge --auto --merge` returns exit 0 but
+  silently no-ops -- no auto-merge is enqueued. Verify with
+  `gh api repos/endojs/endo-but-for-bots/pulls/<N> --jq .auto_merge`
+  (it stays `null`). Same caveat the conductor documents. For a
+  shepherd dispatch whose brief says "queue for merge" via
+  `--auto`, the proper disposition is **report the PR as rebased +
+  scanned + ready, with a comment posted summarising the scan, and
+  leave the merge to the maintainer once CI is green.** Don't
+  pretend `--auto` worked. Encountered 2026-05-08 on the four
+  npm-dependabot PRs (#7, #8, #9, #10).
+
+- **Dependabot branches based on a stale tip can carry commits
+  the current `llm` has since dropped, including forbidden files
+  like `.github/workflows/claude*.yml`.** A `git rebase
+  bots-ssh/llm` will surface those forbidden files as conflicts or
+  worse, silently include them after rebase. Safer pattern when the
+  PR is single-commit (which dependabot's almost always is):
+  `git checkout -B <head-ref> bots-ssh/llm && git cherry-pick
+  <dependabot-commit>`, then resolve any conflict against `--ours`
+  and re-apply only the dep version bump. Verify the result with
+  `git diff --name-only bots-ssh/llm...HEAD` and confirm no
+  `.github/workflows/claude*.yml` appears. Encountered PR #8
+  (`@noble/hashes`) 2026-05-08: the dependabot branch's parent
+  carried `Add Claude Code GitHub Workflow` and two `claude*.yml`
+  files; the cherry-pick approach dropped them cleanly.
+
+- **npm dependabot PR rebase: cherry-pick and regenerate, don't
+  carry the lockfile.** Dependabot's `yarn.lock` change is computed
+  against a base that's now far behind `llm`, so the lockfile diff
+  conflicts on every entry that has churned upstream. The cleanest
+  resolution is: cherry-pick the dependabot commit, take `--ours`
+  for both `package.json` and `yarn.lock`, manually re-apply the
+  single version-bump line in `package.json`, drop the dependabot
+  yarn.lock change entirely, then `npx corepack yarn install` to
+  regenerate the lock file fresh and commit it as a separate `chore:
+  Update yarn.lock` commit per
+  [`../skills/yarn-lock-separate-commit.md`](../skills/yarn-lock-separate-commit.md).
+  Result is two clean commits: dependabot's authored bump + a
+  fresh lock regen. Authorship of the bump commit is preserved.
+
+- **Supply-chain scan is on the *installed* package contents, not
+  the upstream repo.** Yarn 4 with `nodeLinker: pnpm` puts packages
+  under `node_modules/.store/<name>-<ver>-<hash>/package/`; follow
+  the symlink (`realpath node_modules/<name>`) to find the actual
+  directory. Then check `package.json` for `scripts.{preinstall,
+  install,postinstall,prepare}`, `bin`, and `dependencies`; grep
+  the source for `child_process|eval\(|new Function\(|fetch\(|
+  atob\(|process\.env\.\w+(_TOKEN|_KEY|_SECRET)`; verify maintainer
+  continuity via `npm view <pkg>@<ver> _npmUser maintainers`; and
+  verify SLSA provenance via `npm view <pkg>@<ver>
+  dist.attestations`. The repo's `enableScripts: false` in
+  `.yarnrc.yml` neutralises any `prepare`/`install` script (e.g.
+  `eslint-plugin-jsdoc 62.x`'s `prepare: husky`), but call this
+  out explicitly in the report rather than glossing over a
+  lifecycle hit.
+
 ## Self-improvement
 
 The final task of every engagement is to update this role file and
