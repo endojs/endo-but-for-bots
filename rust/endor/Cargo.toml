@@ -1,0 +1,17 @@
+[package]
+name = "endor"
+version = "0.1.0"
+edition = "2024"
+description = "Terminal UI for the endor Rust daemon"
+
+[[bin]]
+name = "endor"
+path = "src/main.rs"
+
+[dependencies]
+ratatui = "0.29"
+crossterm = "0.28"
+
+[dependencies.tokio]
+version = "1.40"
+features = ["rt", "rt-multi-thread", "macros", "io-std", "signal", "time"]
