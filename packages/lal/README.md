@@ -13,21 +13,26 @@ The LLM agent uses tool calls to interact with the Endo daemon, enabling it to:
 ## Configuration
 
 The agent is configured via environment variables.
-If `LAL_HOST` contains `anthropic.com`, the Anthropic provider is used;
+The provider is selected from `LAL_HOST`:
+if it contains `anthropic.com`, the Anthropic provider is used;
+if it contains `openrouter.ai`, the OpenRouter provider is used;
 otherwise the llama.cpp (OpenAI-compatible) provider is used.
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `LAL_HOST` | API base URL (Ollama, llama.cpp, or Anthropic) | `http://localhost:11434/v1` |
-| `LAL_MODEL` | Model name | `qwen3` (llama.cpp) or `claude-opus-4-5-20251101` (Anthropic) |
+| `LAL_HOST` | API base URL (Ollama, llama.cpp, OpenRouter, or Anthropic) | `http://localhost:11434/v1` |
+| `LAL_MODEL` | Model name | `qwen3` (llama.cpp), `anthropic/claude-sonnet-4-5` (OpenRouter), or `claude-opus-4-5-20251101` (Anthropic) |
 | `LAL_AUTH_TOKEN` | API key (optional for local servers) | - |
 | `LAL_MAX_TOKENS` | Max completion tokens (llama.cpp provider) | `4096` |
 | `LAL_MAX_MESSAGES` | Truncate to last N messages before sending (avoids context-size errors) | - |
+| `LAL_OPENROUTER_REFERER` | Optional `HTTP-Referer` header for OpenRouter dashboard attribution | - |
+| `LAL_OPENROUTER_TITLE` | Optional `X-Title` header for OpenRouter dashboard attribution | - |
 
 Example configuration files are provided:
 - `local.env.example` - Local Ollama instance
 - `cloud.env.example` - Remote Ollama with authentication
 - `openai.env.example` - OpenAI API (OpenAI-compatible provider)
+- `openrouter.env.example` - OpenRouter (multi-vendor LLM gateway)
 - `opus.env.example` - Anthropic Claude (Opus)
 
 For a llama.cpp server that returns "context size" errors, set `LAL_MAX_MESSAGES`
