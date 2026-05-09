@@ -586,6 +586,49 @@ result through CI.
   wrapper"; the fixup commit rewrote 617/260 lines of a 616-line
   doc rather than the ~20 lines an inline-only response would have
   touched.
+- **A maintainer verb-naming directive that lists candidates ("trap, tame,
+  occlude, mask") wants a pick from the established codebase vocabulary,
+  not a tournament of synonyms.** When the review offers several near-
+  synonyms for a verb, the right move is to scan the codebase for which
+  family already has currency (`grep -rn '\b<candidate>[A-Z]'` across
+  `packages/`) and pick the one with prior art. In Endo specifically,
+  `tame*` is everywhere (`tame-math-object`, `tame-regexp-constructor`,
+  `tame-domains` in `@endo/ses` alone) and connotes "render an ambient
+  capability safe to surface across a membrane", which is usually what
+  the function under rename does. `mask`, `occlude`, `trap` are valid
+  English but invent new vocabulary the reader has to learn; `tame`
+  matches an existing mental model. Cite the rationale in the inline
+  reply so the maintainer can see you considered the alternatives and
+  picked deliberately. Session example: PR 122's `confineAclErrors` →
+  `tameAclErrors` rename, picked from a four-way candidate list.
+- **An abbreviated identifier with a "do not abbreviate; if shadows,
+  elaborate one or both" directive is a request to invent a non-
+  shadowing expansion, not just to drop the abbreviation.** The
+  obvious expansion (`makeDir` → `makeDirectory`) usually shadows
+  another in-scope binding (the outer module-level export, an exo
+  method of the same name); the maintainer is asking for a third
+  name that is unabbreviated AND distinct from the existing two.
+  Pick a descriptive suffix from the parameter or the role: e.g.
+  `makeDirectoryAt` (parameterised by `currentPath`) reads as "make
+  a Directory at the given path" and is non-shadowing. Run a
+  `grep -n '\b<name>\b'` over the file before renaming so all call
+  sites are updated atomically. Session example: PR 122's
+  `makeDir` → `makeDirectoryAt` (the inner recursive Directory-exo
+  factory; both the outer `makeDirectory` export and the exo's
+  own `makeDirectory` method would have shadowed a plain expansion).
+- **A "drop the cause" security directive is not a JSDoc edit alone;
+  the prose around it must flip too.** When the maintainer says
+  "stop threading the cause; we leak what we purport to hide", the
+  edit is `throw new Error(msg, { cause: e })` → `throw new Error(msg)`
+  AND a JSDoc rewrite from "the original error is preserved on
+  `cause` for host-side debugging" to "the original error is dropped,
+  not threaded as `cause`: a `cause` chain would re-export the
+  OS-level structure (path, errno, syscall) we are deliberately
+  occluding". Leaving the JSDoc claiming the old (now-untrue)
+  invariant is worse than the original code; a future reader trusts
+  the doc. Session example: PR 122's `tameAclErrors` (formerly
+  `confineAclErrors`) — both the throw site and the surrounding
+  JSDoc paragraph were rewritten in one edit.
 - **Position-based inline comments need careful diff-line accounting
   when the dispatch summary cites only the position number.** GitHub's
   `position` field is 1-indexed and counts every line in the unified
