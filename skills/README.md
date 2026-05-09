@@ -114,6 +114,11 @@ compared to the cost of a missed match.
   a process document, where it lives, and the isolation-commit
   rule that lets process commits drop cleanly when porting work
   upstream.
+- [no-backward-compat-stage.md](./no-backward-compat-stage.md) —
+  daemon / familiar / chat do not preserve backward compatibility
+  at this stage of the project. Rename / remove freely, update
+  in-tree call sites in the same PR, do not add deprecation
+  shims. Other `@endo/*` packages remain semver-stable.
 
 ### Reporting
 

@@ -48,6 +48,11 @@ issue or design document, and shepherding it through to a green PR.
   every newly-public module in a package's `exports` map needs a
   physical surface module at the package root (not under `src/`)
   that re-exports the public subset and masks test-only helpers.
+- [`../skills/no-backward-compat-stage.md`](../skills/no-backward-compat-stage.md) —
+  daemon, familiar, and chat do not preserve backward compatibility
+  at this stage; rename freely, update in-tree call sites in the
+  same PR, do not add deprecation shims. Other `@endo/*` packages
+  remain semver-stable.
 
 ## Posture
 

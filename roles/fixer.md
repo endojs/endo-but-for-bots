@@ -38,6 +38,11 @@ result through CI.
   read when a maintainer review asks for a "physical `./<name>.js`"
   or flags a `"./<name>.js": "./src/<name>.js"` entry; the surface
   module re-exports the public subset and masks test-only helpers.
+- [`../skills/no-backward-compat-stage.md`](../skills/no-backward-compat-stage.md) —
+  read when a maintainer review says "just remove" on a backward-
+  compat alias / shim / deprecation block in daemon, familiar, or
+  chat; the rule is rename / remove and update call sites in the
+  same PR, no deprecation period.
 
 ## Posture
 
