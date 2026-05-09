@@ -3,9 +3,11 @@
 import test from '@endo/ses-ava/test.js';
 
 import harden from '@endo/harden';
+import { makeChaCha12 } from '@endo/chacha12';
 import { encodeHex } from '@endo/hex';
+import { random as randomFloat } from '@endo/random/random.js';
+import { bobsCoffee64 } from '@endo/random/seeds.js';
 import { makeTagged } from '@endo/pass-style';
-import { XorShift } from '../_xorshift.js';
 import { makeSyrupWriter } from '../../src/syrup/encode.js';
 import { makeSyrupReader } from '../../src/syrup/decode.js';
 import { makeSelector } from '../../src/selector.js';
@@ -120,12 +122,10 @@ function fuzzyPassable(budget, random) {
   }
 }
 
-// Chris Hibbert really wanted the default i to be Bob's Coffee Façade,
-// which is conveniently exactly 64 bits long.
-const defaultSeed = [0xb0b5c0ff, 0xeefacade, 0xb0b5c0ff, 0xeefacade];
-
-const prng = new XorShift(defaultSeed);
-const random = () => prng.random();
+// Default seed shared across the hex/ocapn fuzz suites; see
+// `@endo/random/seeds.js`.
+const source = makeChaCha12(bobsCoffee64);
+const randomNumber = () => randomFloat(source);
 
 /**
  * @param {any} passable
@@ -151,7 +151,7 @@ test('fuzz', t => {
   const descDecoder = new TextDecoder('utf-8', { fatal: false });
   for (let i = 0; i < 1000; i += 1) {
     (index => {
-      const object1 = fuzzyPassable(random() * 100, random);
+      const object1 = fuzzyPassable(randomNumber() * 100, randomNumber);
       const syrupBytes2 = encodePassable(object1);
       const syrupString2 = descDecoder.decode(syrupBytes2);
       const desc = JSON.stringify(syrupString2);
