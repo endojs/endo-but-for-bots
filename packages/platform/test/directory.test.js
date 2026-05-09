@@ -270,7 +270,7 @@ test('makeDirectory makeDirectoryHere creates a child directory by name', async 
   t.true(grandStat.isDirectory());
 });
 
-test.skip('directory.write accepts a tree (TreeWriterInterface guard rejects raw AsyncGenerator)', // Pre-existing bug exposed by writing this test: directory.write's
+// Pre-existing bug exposed by writing this test: directory.write's
 // tree-detection branch calls
 //   const writer = makeTreeWriter(target);
 //   await checkoutTree(value, writer);
@@ -293,7 +293,7 @@ test.skip('directory.write accepts a tree (TreeWriterInterface guard rejects raw
 // tree-write branch in directory.js (the `methods.includes('list')`
 // path) genuinely uncovered until the fix lands as a follow-up so a
 // future reader sees the gap rather than a misleading green test.
-() => {});
+test.skip('directory.write accepts a tree (TreeWriterInterface guard rejects raw AsyncGenerator)', () => {});
 
 test('makeDirectory snapshot delegates to the store', async t => {
   const dir = await makeTemporaryDirectory(t);
