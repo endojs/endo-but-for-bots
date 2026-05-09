@@ -50,6 +50,20 @@ gh api repos/<owner>/<repo>/actions/jobs/<job-id>/logs | tail -100
 
 - `gh pr checks --watch` waits even for queued checks. The
   one-shot summary sweep avoids that and gives a global view.
+- **`gh pr checks <N>` text output uses tab/space-separated columns,
+  but check names contain spaces** (e.g. `test (18.x, ubuntu-latest)`,
+  `viable-release (24.x, ubuntu-latest)`).
+  Do not pipe to `awk '{print $2}'` for the state column; the
+  parenthetical lands in column 2 for matrixed checks and you get a
+  meaningless `(18,` / `(20.x,` summary.
+  Use `--json` against `pr view <N> --json statusCheckRollup` and
+  jq-extract `.status` / `.conclusion`, e.g.
+  ```sh
+  gh pr view <N> -R <owner>/<repo> --json statusCheckRollup --jq \
+    '[.statusCheckRollup[] | (if .status=="COMPLETED" then .conclusion else .status end)] | group_by(.) | map("\(.[0])=\(length)") | join(" ")'
+  ```
+  This treats each check name as one logical unit regardless of
+  embedded spaces.
 - The job logs API is silent during an in-progress run if the
   step's stdout is buffered. Wait for the step to complete before
   reading.

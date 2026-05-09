@@ -77,6 +77,50 @@ local-pre-PR-checklist guidance (CI may not auto-fire on a mirror
 branch whose head SHA is inherited from upstream, so the local
 checklist is the substitute, not just a convenience).
 
+## Resync after upstream curation
+
+When the upstream branch has since been **renamed or curated**
+(e.g. the original `kriskowal-random-chacha12` was manually
+re-curated as `kriskowal-random-chacha20` upstream), the mirror's
+working-mirror branch must be force-updated to adopt the upstream
+content. Per maintainer's directive, **keep the mirror's branch
+NAME** and only update the ref. The pattern is:
+
+```sh
+git fetch actual <new-upstream-branch>
+git fetch bots-ssh <mirror-branch>
+git -C <wt> reset --hard actual/<new-upstream-branch>
+# Survey what was on the bots head not on the new upstream
+git log --oneline <old-bots-head> ^<new-upstream-head>
+# Cherry-pick any bots-only CI fixes worth preserving (usually none;
+# the maintainer's directive implies upstream is now the truth)
+git push --force-with-lease=<mirror-branch>:<old-bots-sha> \
+  bots-ssh HEAD:<mirror-branch>
+```
+
+If a fixer/shepherd is asked to layer follow-ups on top of the
+resynced branch in the same dispatch (e.g. a small rename to
+absorb into the introducing commit), do the rename first against
+the new tip, then `git rebase -i --autosquash <upstream-base>` to
+absorb the fixup into the introducing commit before pushing.
+Verify the final tree differs from `actual/<new-branch>` only by
+the intended deltas with `git diff actual/<new-branch> HEAD --stat`.
+
+The bots-side branch name (`kriskowal-random-chacha12`) and the
+upstream branch name (`kriskowal-random-chacha20`) may diverge
+intentionally; the bots PR's title can carry a
+`[resync to actual/<new-name>]` suffix to signal the underlying
+upstream identity change without renaming the bots ref.
+
+Encountered on PR 75 (2026-05-08): bots-side
+`kriskowal-random-chacha12` had 23 follow-up commits from earlier
+shepherd cycles; upstream re-curated to a 10-commit
+`kriskowal-random-chacha20` with the bot-side iterations consolidated.
+The bots branch was hard-reset to upstream, the maintainer's
+`read-uint.js` -> `uint.js` rename was absorbed into the introducing
+commit via autosquash, and the resync + rename pushed in a single
+force-with-lease cycle.
+
 ## Session example
 
 PR 76 mirrored `endojs/endo#3053` (gibson042's
