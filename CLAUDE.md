@@ -29,6 +29,26 @@
   over raw `string` in the rest of the code.
   This pushes assertions to the boundary where they are cheap and makes
   downstream sites check-free.
+- **Narrowing a wrapper's parameter type to satisfy an inner call can
+  cascade contravariant errors at the wrapper's own callers.**
+  When a thin pass-through (`f(x) { inner(x) }`) fails because `inner`
+  requires a narrower input than the wrapper's declared parameter,
+  the temptation is to tighten the wrapper's `@param`. But function
+  parameters are contravariant: a tighter wrapper parameter is
+  *less* assignable to slots that expect the wider type, so callers
+  passing a wider value now error in turn.
+  Prefer the inline cast at the inner call site
+  (`inner(/** @type {Narrow} */ (x))`) when you can prove the input
+  satisfies the narrower contract.
+  Reserve parameter narrowing for cases where you genuinely want to
+  reject the wider input at the boundary (and are prepared to update
+  every caller).
+  Session example: the `@types/node` v25 split of
+  `Uint8Array<ArrayBuffer>` vs `Uint8Array<ArrayBufferLike>` made
+  `nodeGetRandomValues(array)` fail in `wasm/node.js`; tightening
+  the wrapper's `@param {Uint8Array<ArrayBuffer>}` cascaded errors
+  to `network.js` callers that supplied a wider buffer-backed view.
+  The cast at the call site fixed the inner error in isolation.
 
 ### Modernisms
 
