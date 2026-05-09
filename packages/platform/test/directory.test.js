@@ -247,3 +247,115 @@ test('makeDirectory ignores .git by default', async t => {
 
   await fs.promises.rm(dir, { recursive: true });
 });
+
+test('makeDirectory makeDirectoryHere creates a child directory by name', async t => {
+  const dir = await makeTemporaryDirectory(t);
+  t.teardown(() => fs.promises.rm(dir, { recursive: true, force: true }));
+
+  const directory = makeDirectory(dir);
+  // The single-name "in directory" form: operates on the receiver's
+  // identity rather than via path-segment arithmetic.  See design
+  // Decision 7.
+  const child = await directory.makeDirectoryHere('child');
+
+  t.truthy(child);
+  const stat = await fs.promises.stat(path.join(dir, 'child'));
+  t.true(stat.isDirectory());
+
+  // The returned child is itself a Directory; verify by writing a
+  // grand-child through it, again using makeDirectoryHere.
+  const grandChild = await child.makeDirectoryHere('grand');
+  t.truthy(grandChild);
+  const grandStat = await fs.promises.stat(path.join(dir, 'child', 'grand'));
+  t.true(grandStat.isDirectory());
+});
+
+test.skip('directory.write accepts a tree (TreeWriterInterface guard rejects raw AsyncGenerator)', // Pre-existing bug exposed by writing this test: directory.write's
+// tree-detection branch calls
+//   const writer = makeTreeWriter(target);
+//   await checkoutTree(value, writer);
+// and `checkoutTree` then calls `writer.writeBlob(childPath, readable)`
+// where `readable = makeRefReader(readerRef)` is a raw AsyncGenerator
+// produced by `mapReader`.  TreeWriterInterface.writeBlob declares its
+// second arg as `M.remotable()`, but the raw AsyncGenerator is a
+// hardened plain object with `constructor` (and other inherited
+// non-method properties) that fail the remotable shape check with:
+//   "cannot serialize Remotables with non-methods like \"constructor\"
+//   in \"[AsyncGenerator]\""
+//
+// The fix is structural and lives outside this PR's scope: either
+//   (a) loosen TreeWriterInterface.writeBlob's second-arg guard to
+//       M.any() with an explicit AsyncIterable shape comment, or
+//   (b) wrap `readable` in an Exo before passing it to writeBlob in
+//       checkoutTree (and in directory.write's blob branch).
+//
+// Filed as a known gap in the cleaner pass on PR #122; leaving the
+// tree-write branch in directory.js (the `methods.includes('list')`
+// path) genuinely uncovered until the fix lands as a follow-up so a
+// future reader sees the gap rather than a misleading green test.
+() => {});
+
+test('makeDirectory snapshot delegates to the store', async t => {
+  const dir = await makeTemporaryDirectory(t);
+  t.teardown(() => fs.promises.rm(dir, { recursive: true, force: true }));
+  await scaffold(dir);
+
+  const fakeTree = harden({ list: async () => ['fake-tree'] });
+  /** @type {{ [k: string]: any }} */
+  const calls = { storedReadables: 0, loadTreeCalledWith: undefined };
+  const fakeStore = harden({
+    store: async readable => {
+      calls.storedReadables += 1;
+      // Drain the readable; chunk values are intentionally ignored.
+      // eslint-disable-next-line no-unused-vars
+      for await (const chunk of readable) {
+        /* drain */
+      }
+      return `sha-${calls.storedReadables}`;
+    },
+    loadBlob: () => harden({ text: async () => 'fake-blob' }),
+    loadTree: sha => {
+      calls.loadTreeCalledWith = sha;
+      return fakeTree;
+    },
+    has: async () => true,
+    fetch: () => {
+      throw new Error('fetch not implemented in fake');
+    },
+  });
+
+  const directory = makeDirectory(dir, {
+    store: /** @type {any} */ (fakeStore),
+  });
+  const tree = await directory.snapshot();
+
+  t.is(tree, fakeTree, 'snapshot returns the loaded tree');
+  t.is(
+    typeof calls.loadTreeCalledWith,
+    'string',
+    'loadTree was called with a sha',
+  );
+});
+
+test('makeDirectory readOnly tree lookup descends and reads files', async t => {
+  const dir = await makeTemporaryDirectory(t);
+  t.teardown(() => fs.promises.rm(dir, { recursive: true, force: true }));
+  await scaffold(dir);
+
+  const directory = makeDirectory(dir);
+  const ro = directory.readOnly();
+
+  // Lookup a sub-directory through readOnly returns a ReadableTree
+  // for the sub-directory; further lookup descends.
+  const sub = await ro.lookup('sub');
+  t.is(typeof sub.list, 'function', 'sub is itself a ReadableTree');
+  t.deepEqual(await sub.list(), ['c.txt']);
+
+  // Multi-segment lookup via array on the readOnly facet.
+  const cBlob = await ro.lookup(['sub', 'c.txt']);
+  t.is(await cBlob.text(), 'charlie');
+
+  // Listing inside a readOnly subdirectory.
+  t.true(await ro.has('sub', 'c.txt'));
+  t.false(await ro.has('sub', 'missing'));
+});

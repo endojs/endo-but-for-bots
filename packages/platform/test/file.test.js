@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { makeFile } from '../src/fs-node/file.js';
+import { makeIteratorRef } from '../src/fs/reader-ref.js';
 
 /**
  * @param {import('ava').ExecutionContext} t
@@ -113,4 +114,75 @@ test('makeFile snapshot throws without store', async t => {
   });
 
   await fs.promises.rm(dir, { recursive: true });
+});
+
+test('makeFile writeBytes overwrites content from a remote-shaped reader', async t => {
+  const dir = await makeTemporaryDirectory(t);
+  t.teardown(() => fs.promises.rm(dir, { recursive: true, force: true }));
+  const filePath = path.join(dir, 'bytes.bin');
+  await fs.promises.writeFile(filePath, 'old content', 'utf-8');
+
+  // The writeBytes parameter is a remotable async iterator of Uint8Array
+  // (the form that crosses CapTP from a remote `streamBase64()` result).
+  // makeIteratorRef wraps a plain async iterable as an Exo so it
+  // satisfies the FileInterface.writeBytes guard's M.remotable() shape.
+  const chunks = [
+    new TextEncoder().encode('first '),
+    new TextEncoder().encode('second '),
+    new TextEncoder().encode('third'),
+  ];
+  const readableRef = makeIteratorRef(
+    (async function* gen() {
+      for (const chunk of chunks) yield chunk;
+    })(),
+  );
+
+  const file = makeFile(filePath);
+  await file.writeBytes(readableRef);
+
+  t.is(await file.text(), 'first second third');
+});
+
+test('makeFile snapshot delegates to the store', async t => {
+  const dir = await makeTemporaryDirectory(t);
+  t.teardown(() => fs.promises.rm(dir, { recursive: true, force: true }));
+  const filePath = path.join(dir, 'snap.txt');
+  await fs.promises.writeFile(filePath, 'snapshot me', 'utf-8');
+
+  /** @type {Uint8Array | undefined} */
+  let stored;
+  /** @type {string | undefined} */
+  let loadCalledWith;
+  const fakeBlob = harden({
+    text: async () => 'fake-blob',
+  });
+  const fakeStore = harden({
+    store: async readable => {
+      const chunks = [];
+      for await (const chunk of readable) chunks.push(chunk);
+      const total = new Uint8Array(chunks.reduce((n, c) => n + c.length, 0));
+      let offset = 0;
+      for (const chunk of chunks) {
+        total.set(chunk, offset);
+        offset += chunk.length;
+      }
+      stored = total;
+      return 'sha-fake';
+    },
+    loadBlob: sha => {
+      loadCalledWith = sha;
+      return fakeBlob;
+    },
+  });
+
+  const file = makeFile(filePath, { store: /** @type {any} */ (fakeStore) });
+  const blob = await file.snapshot();
+
+  t.is(blob, fakeBlob, 'snapshot returns the loaded blob');
+  t.is(loadCalledWith, 'sha-fake', 'snapshot calls loadBlob with the sha');
+  t.is(
+    new TextDecoder().decode(stored),
+    'snapshot me',
+    'store received the file bytes',
+  );
 });

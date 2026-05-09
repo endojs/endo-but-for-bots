@@ -149,36 +149,6 @@ export const makeDirectory = (dirPath, options = {}) => {
     };
 
     /**
-     * Resolve a path to a read-only ReadableBlob or ReadableTree.
-     *
-     * @param {string | string[]} pathArg
-     * @returns {Promise<object>}
-     */
-    // eslint-disable-next-line no-unused-vars
-    const lookupReadOnly = async pathArg => {
-      const segments = typeof pathArg === 'string' ? [pathArg] : pathArg;
-      const [head, ...tail] = segments;
-      const fullPath = path.join(currentPath, head);
-      const stat = await fs.promises.stat(fullPath);
-
-      /** @type {any} */
-      let child;
-      if (stat.isDirectory()) {
-        child = makeReadOnlyDirectory(fullPath);
-      } else {
-        child = makeFile(fullPath, { store }).readOnly();
-      }
-
-      if (tail.length === 0) return child;
-      /** @type {any} */
-      let current = child;
-      for (const name of tail) {
-        current = await current.lookup(name);
-      }
-      return current;
-    };
-
-    /**
      * @param {string} readOnlyPath
      * @returns {object}
      */
