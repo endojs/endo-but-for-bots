@@ -388,6 +388,30 @@ issue or design document, and shepherding it through to a green PR.
   #126, #33 → #123, #37 → #127, #38 → #128, #39 → #129, #40 →
   #130, #41 → #131, #42 → #132, #43 → #133, #47 → #134) and
   stalled 5 (#31, #32, #34, #45, #46) for weaver follow-up.
+- **Single-PR re-open after a sweep stall: check for partial
+  upstream landing first.** When circling back to one of the
+  sweep-stalled PRs (e.g., the 2026-05-09 follow-up on PR #31 →
+  #166), the diff-against-current-base may be misleadingly large
+  not because of conflict drift but because **part of the
+  original PR's substance has since landed independently on the
+  base** (typically a sibling PR pulled out the design document
+  while the implementation half waited). Pre-flight: for each
+  file `<f>` the original PR touches, run `git diff
+  bots-ssh-pr/<N>:<f> bots-ssh/<base>:<f>` and `git cat-file -e
+  bots-ssh/<base>:<f>`. Files whose content already matches on
+  the base are no-ops; only the files that differ (or are absent
+  on the base) need reconstruction. The PR-31 → #166 reconstruct
+  found `designs/endor-tui.md` already on `llm` (identical
+  bytes); only `rust/endor/Cargo.toml` (new), `rust/endor/src/
+  main.rs` (new), `Cargo.toml` (workspace `members` line), and
+  `Cargo.lock` (regenerated via `cargo check`) needed to land.
+  The new PR's body must call out which subset of the original's
+  files were actually re-introduced so the reviewer is not
+  surprised that `gh pr diff` shows a smaller surface than the
+  closed PR's diff. Cargo.lock churn ships in its own commit
+  (`chore: update Cargo.lock for <crate>` per the project's
+  established cargo lockfile convention, parallel to the
+  `chore: Update yarn.lock` rule).
 - **Splitting an existing PR into design + implementation halves
   on different bases.** When a maintainer asks to split a PR that
   bundles a design document and an implementation package
