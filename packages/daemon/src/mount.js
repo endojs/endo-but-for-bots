@@ -169,7 +169,9 @@ harden(isConfinedPath);
 
 /**
  * Cap-std-style normalization of OS-level errors that would betray
- * host filesystem structure to an agent.
+ * host filesystem structure to an agent.  ("Cap-std" is Rust's
+ * capability-oriented filesystem library; see
+ * https://github.com/bytecodealliance/cap-std.)
  *
  * `EACCES`, `EPERM`, `EROFS`, `ENOTEMPTY`, `EISDIR`, immutable-bit
  * rejections, etc., are surfaced to the agent as a generic
@@ -178,15 +180,15 @@ harden(isConfinedPath);
  * `/etc/hostname` exists, is immutable, and rejected the write.
  * The agent has no business observing that detail.
  *
- * The original error is preserved on the rejection's `cause` for
- * host-side debugging via the daemon log; only the surface message
- * is normalized.
+ * The original error is dropped, not threaded as `cause`: a `cause`
+ * chain would re-export the OS-level structure (path, errno, syscall)
+ * we are deliberately occluding from the agent.
  *
  * @template T
  * @param {() => Promise<T>} thunk
  * @returns {Promise<T>}
  */
-const confineAclErrors = async thunk => {
+const tameAclErrors = async thunk => {
   await null;
   try {
     return await thunk();
@@ -197,12 +199,12 @@ const confineAclErrors = async thunk => {
     // (entry does not exist) are legitimate caller-actionable signals
     // and pass through unchanged.
     if (code === 'EACCES' || code === 'EPERM' || code === 'EROFS') {
-      throw new Error('Operation not permitted within mount', { cause: e });
+      throw new Error('Operation not permitted within mount');
     }
     throw e;
   }
 };
-harden(confineAclErrors);
+harden(tameAclErrors);
 
 /**
  * @typedef {object} MountContext
@@ -361,7 +363,7 @@ const makeMountDirectoryExo = ctx => {
       const { absolute } = clamp(segments);
       await assertConfinedOrAncestor(absolute, confinementRoot, filePowers);
       const parent = filePowers.joinPath(absolute, '..');
-      await confineAclErrors(async () => {
+      await tameAclErrors(async () => {
         await filePowers.makePath(parent);
         await filePowers.writeFileText(absolute, content);
       });
@@ -372,7 +374,7 @@ const makeMountDirectoryExo = ctx => {
       assertWritable();
       const { clamped, absolute } = clamp(pathSegments);
       await assertConfined(absolute, confinementRoot, filePowers);
-      await confineAclErrors(() => directory.remove(clamped));
+      await tameAclErrors(() => directory.remove(clamped));
     },
 
     async removeTree(pathSegments) {
@@ -380,7 +382,7 @@ const makeMountDirectoryExo = ctx => {
       assertWritable();
       const { clamped, absolute } = clamp(pathSegments);
       await assertConfined(absolute, confinementRoot, filePowers);
-      await confineAclErrors(() => directory.removeTree(clamped));
+      await tameAclErrors(() => directory.removeTree(clamped));
     },
 
     async move(fromSegments, toSegments) {
@@ -391,7 +393,7 @@ const makeMountDirectoryExo = ctx => {
       const { clamped: toClamped, absolute: toAbsolute } = clamp(toSegments);
       await assertConfined(fromAbsolute, confinementRoot, filePowers);
       await assertConfinedOrAncestor(toAbsolute, confinementRoot, filePowers);
-      await confineAclErrors(() => directory.move(fromClamped, toClamped));
+      await tameAclErrors(() => directory.move(fromClamped, toClamped));
     },
 
     async copy(fromSegments, toSegments) {
@@ -402,7 +404,7 @@ const makeMountDirectoryExo = ctx => {
       const { clamped: toClamped, absolute: toAbsolute } = clamp(toSegments);
       await assertConfined(fromAbsolute, confinementRoot, filePowers);
       await assertConfinedOrAncestor(toAbsolute, confinementRoot, filePowers);
-      await confineAclErrors(() => directory.copy(fromClamped, toClamped));
+      await tameAclErrors(() => directory.copy(fromClamped, toClamped));
     },
 
     async write(pathSegments, value) {
@@ -410,7 +412,7 @@ const makeMountDirectoryExo = ctx => {
       assertWritable();
       const { clamped, absolute } = clamp(pathSegments);
       await assertConfinedOrAncestor(absolute, confinementRoot, filePowers);
-      await confineAclErrors(() => directory.write(clamped, value));
+      await tameAclErrors(() => directory.write(clamped, value));
     },
 
     async makeDirectory(pathSegments) {
@@ -418,7 +420,7 @@ const makeMountDirectoryExo = ctx => {
       assertWritable();
       const { clamped, absolute } = clamp(pathSegments);
       await assertConfinedOrAncestor(absolute, confinementRoot, filePowers);
-      await confineAclErrors(() => directory.makeDirectory(clamped));
+      await tameAclErrors(() => directory.makeDirectory(clamped));
     },
 
     async makeDirectoryHere(name) {
@@ -432,7 +434,7 @@ const makeMountDirectoryExo = ctx => {
       assertWritable();
       const { clamped, absolute } = clamp([name]);
       await assertConfinedOrAncestor(absolute, confinementRoot, filePowers);
-      await confineAclErrors(() => directory.makeDirectoryHere(clamped[0]));
+      await tameAclErrors(() => directory.makeDirectoryHere(clamped[0]));
     },
 
     readOnly() {

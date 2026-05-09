@@ -77,7 +77,7 @@ export const makeDirectory = (dirPath, options = {}) => {
    * @param {string} currentPath
    * @returns {object}
    */
-  const makeDir = currentPath => {
+  const makeDirectoryAt = currentPath => {
     /**
      * @param {string[]} segments
      * @returns {string}
@@ -134,7 +134,7 @@ export const makeDirectory = (dirPath, options = {}) => {
       /** @type {any} */
       let child;
       if (stat.isDirectory()) {
-        child = makeDir(fullPath);
+        child = makeDirectoryAt(fullPath);
       } else {
         child = makeFile(fullPath, { store });
       }
@@ -324,7 +324,7 @@ export const makeDirectory = (dirPath, options = {}) => {
         makeDirectory: async pathSegments => {
           const target = resolve(pathSegments);
           await fs.promises.mkdir(target, { recursive: true });
-          return makeDir(target);
+          return makeDirectoryAt(target);
         },
 
         /**
@@ -343,7 +343,7 @@ export const makeDirectory = (dirPath, options = {}) => {
         makeDirectoryHere: async name => {
           const target = path.join(currentPath, name);
           await fs.promises.mkdir(target, { recursive: false });
-          return makeDir(target);
+          return makeDirectoryAt(target);
         },
 
         readOnly: () => {
@@ -365,6 +365,6 @@ export const makeDirectory = (dirPath, options = {}) => {
     );
   };
 
-  return makeDir(dirPath);
+  return makeDirectoryAt(dirPath);
 };
 harden(makeDirectory);

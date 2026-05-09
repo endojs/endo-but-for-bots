@@ -37,6 +37,8 @@ import { makeRefIterator } from '../fs/ref-reader.js';
  * Avoids `Buffer.concat` so the same aggregator pattern works in XS and SES
  * realms where Node `Buffer` is unavailable.
  *
+ * TODO(#142): refactor to use `@endo/bytes` once that package lands.
+ *
  * @param {Uint8Array[]} chunks
  * @returns {Uint8Array}
  */

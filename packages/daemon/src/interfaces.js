@@ -503,14 +503,11 @@ export const BlobInterface = M.interface('EndoBlob', {
 const PathSegmentsShape = M.arrayOf(M.string());
 const PathArgShape = M.or(M.string(), PathSegmentsShape);
 
-// EndoMountDirectory (renamed from EndoMount) is a directory exo whose
-// methods are a strict superset of the platform DirectoryInterface from
+// EndoMountDirectory is a directory exo whose methods are a strict
+// superset of the platform DirectoryInterface from
 // @endo/platform/fs/lite/interfaces, with the same array-of-segments
 // argument convention; agents and workers may treat an
 // EndoMountDirectory as a Directory without an adapter facet.
-// The additional methods (readText, maybeReadText, writeText, help)
-// are convenience text I/O for daemon-internal callers; they do not
-// participate in the cross-realm Directory contract.
 // See `designs/platform-fs-daemon-integration.md` Decision 4.
 export const MountDirectoryInterface = M.interface('EndoMountDirectory', {
   // Directory contract (strict array-of-segments convention; lookup
@@ -537,7 +534,7 @@ export const MountDirectoryInterface = M.interface('EndoMountDirectory', {
   makeDirectoryHere: M.call(M.string()).returns(M.promise()),
   readOnly: M.call().returns(M.remotable()),
   snapshot: M.call().returns(M.promise()),
-  // Convenience text I/O (daemon-internal; not in the Directory contract).
+  // Convenience text I/O.
   readText: M.call(PathArgShape).returns(M.promise()),
   maybeReadText: M.call(PathArgShape).returns(M.promise()),
   writeText: M.call(PathArgShape, M.string()).returns(M.promise()),
