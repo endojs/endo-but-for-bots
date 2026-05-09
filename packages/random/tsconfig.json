@@ -4,6 +4,7 @@
     "*.js",
     "*.ts",
     "src",
-    "test"
+    "test",
+    "random.types.d.ts"
   ]
 }

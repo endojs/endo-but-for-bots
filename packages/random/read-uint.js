@@ -1,7 +1,3 @@
-// @ts-check
-
-export { random } from './src/random.js';
-export { randomInt } from './src/int.js';
 export {
   randomUint8,
   randomUint16,
