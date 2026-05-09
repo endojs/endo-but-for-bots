@@ -290,18 +290,56 @@ The Agent _does_ see (post-integration):
 
 [comment 3205540627]: https://github.com/endojs/endo-but-for-bots/pull/122#discussion_r3205540627
 
+7. **Both "from path" and "from directory" interfaces are exposed in
+   parallel for mount creation and `makeDirectory`.** Per maintainer
+   review of PR 122 ([comment 3212520373][]), the design commits to
+   exposing both forms because Rust `cap-std` will eventually let the
+   host hold an inode handle and offer less-racy, more-ocap-correct
+   semantics for the directory-handle form.
+   Today on node:fs the two forms are functionally equivalent;
+   tomorrow on cap-std the directory-handle form gains the race-free
+   guarantee.
+
+   The dual surfaces:
+
+   - **Mount creation.**
+     - `provideMount(absolutePath, petName, { readOnly })` — from
+       path; current. Convenient for agents holding a host-side
+       absolute path string.
+     - `provideMount(parentMount, relativePath, petName, { readOnly })`
+       — from mount; new sub-mount overload to be added in a
+       follow-up PR. Composes naturally with `Mount.lookup()`
+       confinement and lets a holder of a parent Mount mint a new
+       pet-store entry for a sub-tree without ambient-authority
+       leakage.
+   - **Directory creation within an existing Directory.**
+     - `directory.makeDirectory(pathSegments)` — at relative path
+       (multi-segment path arithmetic); current.
+     - `directory.makeDirectoryHere(name)` — in directory (single
+       name, operates on the receiver's inode handle); added in
+       PR 122 to both `DirectoryInterface` (platform) and
+       `MountDirectoryInterface` (daemon).
+
+   The single-name `makeDirectoryHere` and the path-segment
+   `makeDirectory` are functionally equivalent on the current node:fs
+   backend.  The distinction is that `makeDirectoryHere` names a
+   strictly-narrower authority: it binds to the receiver's identity
+   and admits no traversal, so a future cap-std host can implement it
+   race-free using the inode handle the receiver already holds.
+   Callers that have a Directory reference and want a specific
+   sub-name should prefer `makeDirectoryHere(name)`; callers
+   composing a relative path from segments stay with
+   `makeDirectory(segments)`.
+
+   The mount-from-mount (`provideMount(parentMount, relativePath,
+   ...)`) overload is left for a follow-up PR; this design commits
+   to its shape so the API consumer can plan around it now.
+
+[comment 3212520373]: https://github.com/endojs/endo-but-for-bots/pull/122#discussion_r3212520373
+
 ## Open Questions
 
-1. **Should `provideMount` accept a `Mount` reference instead of an
-   absolute path?** Sub-mounting (Phase 4 of `daemon-mount.md`) wants
-   a parent-mount-relative path; today's signature only accepts an
-   absolute path. A second overload — `provideMount(parentMount,
-   relativePath, petName, { readOnly })` — composes naturally with
-   the `Mount.lookup()` confinement and would let agents create new
-   pet-store entries from sub-trees of mounts they already hold.
-   Out of scope for PR 122.
-
-2. **Streaming back-pressure between platform-fs primitives and
+1. **Streaming back-pressure between platform-fs primitives and
    daemon workers.** The `streamBase64()` returned by `makeFile` is
    an async iterable; the daemon's `EndoReadable` adapter wraps it.
    Today the wrap is straightforward, but a worker-side caplet that
@@ -311,16 +349,31 @@ The Agent _does_ see (post-integration):
    PR 122's Mode 2 facet does not exercise the streaming case
    end-to-end; confirmation needed before a worker is handed a
    `File`-shaped capability and asked to stream large content.
+   Per maintainer review of PR 122
+   ([comment on design line 195][comment 3204494183]): the long-term
+   direction is to refactor the streaming surface to use a future
+   `@endo/exo-stream` package once it lands (paralleling the
+   `@endo/exo-playwright` pattern that wraps an underlying
+   capability behind an Exo).
+   This question therefore resolves to "defer to `@endo/exo-stream`
+   when ready"; PR 122 ships the straightforward wrap and the
+   refactor is tracked as a follow-up keyed off that package's
+   arrival.
+   kriskowal: re-checked against direction comment, treated as
+   resolved-by-deferral.
 
-3. **Reuse of `directory.lookup()` for sub-exo construction.** PR 122
+[comment 3204494183]: https://github.com/endojs/endo-but-for-bots/pull/122#discussion_r3204494183
+
+2. **Reuse of `directory.lookup()` for sub-exo construction.** PR 122
    keeps Mount's bespoke transient sub-exo construction.
    The alternative — having `directory.lookup()` accept a
    clamping-policy hook so Mount can reuse it — would eliminate the
    remaining bespoke traversal code at the cost of widening the
    platform API.
    Defer until a second consumer of the policy hook appears.
+   kriskowal: re-checked, still open.
 
-4. **Cap-std-style overwrite-replaces-symlink semantics.** The
+3. **Cap-std-style overwrite-replaces-symlink semantics.** The
    confinement rules in Decision 6 say "Overwrite paths may replace
    such a symlink with new content; the symlink ceases to exist
    after the write." PR 122 implements the **read-side** confinement
@@ -347,8 +400,9 @@ The Agent _does_ see (post-integration):
    Surfaced here for follow-up; see also the test in
    `endo.test.js` that exercises the read-side and remove-side but
    not the overwrite-side.
+   kriskowal: re-checked, still open.
 
-5. **Closing the `MountFile` / `FileInterface` gap.** The MountFile
+4. **Closing the `MountFile` / `FileInterface` gap.** The MountFile
    exo returned by `EndoMountDirectory.lookup(filename)` exposes
    `text`, `streamBase64`, `json`, `writeText`, `writeBytes`, and
    `readOnly` — a strict subset of the platform `FileInterface`,
@@ -358,6 +412,7 @@ The Agent _does_ see (post-integration):
    confinement-aware path) or be replaced by the platform `File` exo
    wrapped in a confinement-checking adapter.
    Out of scope for PR 122.
+   kriskowal: re-checked, still open.
 
 ## Implementation Notes (PR 122)
 
