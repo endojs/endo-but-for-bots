@@ -85,6 +85,20 @@
   do not need runtime type checking.
 - The `help()` method is conventional on capabilities and should return
   a descriptive string.
+- **Module specifiers (file names) use `kebab-case`, not `camelCase`
+  or `snake_case`.** A multi-word module is `bytes-equal.js`, not
+  `bytesEqual.js` or `bytes_equal.js`. A single-word module like
+  `equals.js` needs no separator. The exported identifier inside the
+  file is `camelCase` (and may be qualified, e.g. `bytesEqual`); the
+  file name and the export name do not need to match. Subpath imports
+  read as `import { bytesEqual } from '@endo/bytes/equals.js'` (or
+  `'@endo/bytes/bytes-equal.js'` for a multi-word file).
+  This rule applies to every `.js` / `.ts` / `.d.ts` source file under
+  `packages/*/src/` and to surface modules at the package root.
+  Encountered on PR #142 (2026-05-09): a fixer renamed
+  `equals.js` → `bytesEqual.js` to match the qualified export name;
+  the maintainer pushed back: "the exported module names do not
+  need to stutter 'bytes'. Just the exported names."
 
 ### Eventual send
 
