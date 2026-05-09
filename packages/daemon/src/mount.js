@@ -8,7 +8,7 @@ import { makeExo } from '@endo/exo';
 import { makeDirectory as makePlatformDirectory } from '@endo/platform/fs/node';
 
 import { mountHelp, mountFileHelp, makeHelp } from './help-text.js';
-import { MountInterface, MountFileInterface } from './interfaces.js';
+import { MountDirectoryInterface, MountFileInterface } from './interfaces.js';
 import { makeIteratorRef } from './reader-ref.js';
 
 /**
@@ -270,7 +270,7 @@ const makeMountDirectoryExo = ctx => {
   let mountExo;
 
   // eslint-disable-next-line prefer-const
-  mountExo = makeExo('EndoMountDirectory', MountInterface, {
+  mountExo = makeExo('EndoMountDirectory', MountDirectoryInterface, {
     help,
 
     async has(...pathSegments) {
@@ -421,6 +421,20 @@ const makeMountDirectoryExo = ctx => {
       await confineAclErrors(() => directory.makeDirectory(clamped));
     },
 
+    async makeDirectoryHere(name) {
+      // The single-name "in directory" form: operates on this Mount's
+      // inode handle directly rather than via path-segment arithmetic.
+      // Race-free under future cap-std-style hosts; on node:fs today the
+      // confinement membrane normalizes the segment through the same
+      // clamping path used by makeDirectory.
+      // See `designs/platform-fs-daemon-integration.md` Decision 7.
+      await null;
+      assertWritable();
+      const { clamped, absolute } = clamp([name]);
+      await assertConfinedOrAncestor(absolute, confinementRoot, filePowers);
+      await confineAclErrors(() => directory.makeDirectoryHere(clamped[0]));
+    },
+
     readOnly() {
       if (readOnly) {
         return mountExo;
@@ -515,7 +529,7 @@ harden(makeMountFileExo);
  * `EndoMountDirectory` is the agent-visible directory exo whose root
  * is a confined real filesystem subtree (see
  * `@endo/platform/fs/lite/types` for the cross-realm `Directory` type).
- * Its interface guard (`MountInterface`) is a strict superset of the
+ * Its interface guard (`MountDirectoryInterface`) is a strict superset of the
  * platform `DirectoryInterface`: a worker or caplet authored against
  * `import { Directory } from '@endo/platform/fs/lite/types'` accepts an
  * EndoMountDirectory directly, and the additional convenience methods

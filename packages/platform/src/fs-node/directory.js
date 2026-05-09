@@ -342,12 +342,37 @@ export const makeDirectory = (dirPath, options = {}) => {
         },
 
         /**
+         * Make a directory at a relative path within this directory.
+         *
+         * Resolves the segments via path arithmetic from this directory's
+         * current path.  The path-form parallel to `makeDirectoryHere`;
+         * see `designs/platform-fs-daemon-integration.md` Decision 7.
+         *
          * @param {string[]} pathSegments
          * @returns {Promise<object>}
          */
         makeDirectory: async pathSegments => {
           const target = resolve(pathSegments);
           await fs.promises.mkdir(target, { recursive: true });
+          return makeDir(target);
+        },
+
+        /**
+         * Make a sub-directory at a single name inside this directory.
+         *
+         * The receiver Directory is the inode handle; the new directory
+         * is created at `name` within it.  Functionally equivalent to
+         * `makeDirectory([name])` on the current node:fs backend, but
+         * names a strictly-narrower authority that future cap-std-style
+         * hosts can implement race-free using inode handles.
+         * See `designs/platform-fs-daemon-integration.md` Decision 7.
+         *
+         * @param {string} name
+         * @returns {Promise<object>}
+         */
+        makeDirectoryHere: async name => {
+          const target = path.join(currentPath, name);
+          await fs.promises.mkdir(target, { recursive: false });
           return makeDir(target);
         },
 

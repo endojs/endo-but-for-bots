@@ -512,7 +512,7 @@ const PathArgShape = M.or(M.string(), PathSegmentsShape);
 // are convenience text I/O for daemon-internal callers; they do not
 // participate in the cross-realm Directory contract.
 // See `designs/platform-fs-daemon-integration.md` Decision 4.
-export const MountInterface = M.interface('EndoMountDirectory', {
+export const MountDirectoryInterface = M.interface('EndoMountDirectory', {
   // Directory contract (strict array-of-segments convention; lookup
   // accepts string or string[] for ergonomic single-segment lookup).
   has: M.call().rest(PathSegmentsShape).returns(M.promise()),
@@ -525,7 +525,16 @@ export const MountInterface = M.interface('EndoMountDirectory', {
   removeTree: M.call(PathSegmentsShape).returns(M.promise()),
   move: M.call(PathSegmentsShape, PathSegmentsShape).returns(M.promise()),
   copy: M.call(PathSegmentsShape, PathSegmentsShape).returns(M.promise()),
+  // Make a directory at a relative path (path-arithmetic form).
+  // See also makeDirectoryHere for the more-ocapy single-name form
+  // that operates on this directory's inode handle directly.
   makeDirectory: M.call(PathSegmentsShape).returns(M.promise()),
+  // Make a sub-directory at a single name within this directory.
+  // Less racy and more ocap-correct than makeDirectory(['name'])
+  // once a Rust cap-std-style host is available; functionally
+  // equivalent today on the node:fs backend.
+  // See `designs/platform-fs-daemon-integration.md` Decision 7.
+  makeDirectoryHere: M.call(M.string()).returns(M.promise()),
   readOnly: M.call().returns(M.remotable()),
   snapshot: M.call().returns(M.promise()),
   // Convenience text I/O (daemon-internal; not in the Directory contract).

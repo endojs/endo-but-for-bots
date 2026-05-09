@@ -107,7 +107,18 @@ export const DirectoryInterface = M.interface('Directory', {
   copy: M.call(M.arrayOf(M.string()), M.arrayOf(M.string())).returns(
     M.promise(),
   ),
+  // Make a directory at a relative path (segments interpreted as path
+  // arithmetic from this directory).  See also `makeDirectoryHere` for
+  // the more-ocapy single-name form that operates directly on the
+  // receiver's inode handle.
   makeDirectory: M.call(M.arrayOf(M.string())).returns(M.promise()),
+  // Make a sub-directory at a single name within this directory.
+  // The receiver Directory is the inode handle; no path arithmetic.
+  // Less racy and more ocap-correct than `makeDirectory(['name'])` once
+  // a Rust cap-std-style host is available; functionally equivalent
+  // today on the node:fs backend.
+  // See `designs/platform-fs-daemon-integration.md` Decision 7.
+  makeDirectoryHere: M.call(M.string()).returns(M.promise()),
   readOnly: M.call().returns(M.remotable('ReadableTree')),
   snapshot: M.call().returns(M.promise()),
 });
