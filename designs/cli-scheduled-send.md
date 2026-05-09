@@ -23,10 +23,10 @@ the surface back to design with two specific moves:
    delivery is delayed and may repeat.
 2. The reaction should be configurable, so the schedule formula is
    not coupled to one canned tick payload.
-   The cleanest factoring is two formulas: a *reactor*
-   (an `evaluate` formula that produces an exo with a `tick(...)`
-   method) and a *schedule* (a daemon-managed periodic prodder that
-   calls the reactor's `tick`).
+   The cleanest factoring is two formulas: a *reactor* (any formula
+   whose value implements the `tick(count, timestamps)` *Tickable*
+   contract) and a *schedule* (a daemon-managed periodic prodder
+   that calls the reactor's `tick`).
 3. The schedule table belongs in sqlite, not on disk as JSON files,
    to match the daemon's existing `endo.sqlite` storage and to get
    indexed queries on `next_tick_at`.
@@ -46,18 +46,28 @@ two-piece composition and documents the catch-up vocabulary.
 
 In scope:
 
-- A `schedule` formula type, persisted in `endo.sqlite`, that ticks
-  a configurable verb on a configurable target at configurable
-  cadences.
-- A reactor pattern that uses the existing `evaluate` formula type
-  to produce an exo whose interface exposes the verb the schedule
-  prods.
-- A `endo schedule` family of CLI commands to create, list, pause,
-  resume, and cancel schedules, plus a `endo scheduled-send`
-  composite that creates the matched reactor and schedule together.
+- A `schedule` formula type, persisted in `endo.sqlite`, that calls
+  a hardcoded `tick(count, timestamps)` method on a *Tickable*
+  reference at configurable cadences.
+- The *Tickable* contract: any formula whose value implements
+  `tick(count, asyncIterator<scheduledTickAt>)` qualifies as a
+  reactor.
+  The standard CLI production path is an `evaluate` formula, but
+  any formula type that produces a Tickable value is acceptable.
+- Scheduling flags on the existing `endo send` command (e.g.
+  `endo send <handle> <message> --every <interval>` and
+  `endo send <handle> <message> --at <iso-timestamp>`) plus an
+  `endo schedule` family of commands to list, pause, resume, and
+  cancel schedules.
 - A documented catch-up policy with one default and three named
   alternatives, drawn from CloudFlare Queues' consumer-concurrency
   and batching vocabulary.
+- Retry semantics for failed ticks: exponential backoff with full
+  jitter, with the backoff parameters captured in the schedule
+  formula's persisted state.
+- A telemetry / message handle passed to the schedule on
+  construction, used for surfacing tick failures and other
+  operational events.
 
 Out of scope:
 
@@ -71,9 +81,20 @@ Out of scope:
   Cron is a follow-up that adds a `cron` cadence kind without
   changing the schedule formula's other fields.
 - Distributed coordination across multiple daemons.
-  A schedule is owned by one node; cross-node ticking is a
-  follow-up that depends on
-  [daemon-cross-peer-gc](daemon-cross-peer-gc.md) being settled.
+  Schedule-per-node is the end state.
+  It is possible for the schedule and the reactor to live on
+  different peers (ordinary CapTP reachability and retention rules
+  apply), but no cross-peer coordination is performed by the
+  schedule itself.
+- A telemetry meter shape.
+  The schedule accepts a message-handle capability for textual
+  events; a structured meter (counter / histogram / gauge) is a
+  follow-up that does not change the schedule's persisted shape.
+- A Chat-UI surface for scheduling.
+  The Chat UI will eventually want analogous controls (a
+  "schedule this message" affordance on the send composer) but
+  that surface is designed separately; this document is the CLI
+  side only.
 
 ## Two-Piece Composition: Reactor + Schedule
 
@@ -82,8 +103,9 @@ A scheduled send is the composite creation of two formulas:
 ```
 +-----------+              +----------+
 | Schedule  |  E(reactor)  | Reactor  |
-| (daemon)  |------tick--->| (eval)   |
-+-----------+              +----------+
+| (daemon)  |-----tick---->| (eval,   |
++-----------+              |  default)|
+                           +----------+
                                  |
                                  | E(agent).send(handle, ...)
                                  v
@@ -93,46 +115,45 @@ A scheduled send is the composite creation of two formulas:
 ```
 
 The schedule is a daemon-managed formula whose only authority is to
-prod the reactor on a cadence; the reactor is an `evaluate` formula
-whose endowments include the agent and handle it sends from / to,
-plus whatever canned content the send carries.
+call `tick` on the reactor on a cadence.
+The reactor is, by convention from `endo send --every <interval>`,
+an `evaluate` formula whose endowments include the agent and handle
+it sends from / to plus whatever canned content the send carries.
+The reactor source is not constrained to `evaluate`; any formula
+whose value implements the *Tickable* contract qualifies (see
+"Reactor source" below).
 
 ### Reactor shape
 
-A reactor is an `evaluate` formula whose source produces an exo with
-a `tick(batch)` method (and, by convention, `help()` and any
-operational methods the reactor wants to expose).
-The reactor's authority is whatever its endowments grant; the
-schedule has no special authority over the reactor beyond the right
-to call its `tick` verb.
+The schedule calls a hardcoded `tick(count, timestamps)` method.
+A reactor that wants a different verb name MUST provide an adapter
+exo whose `tick` forwards to its native verb.
+Hardcoding the verb keeps the schedule's interface shape minimal
+and removes a per-schedule configuration knob; reactors that need a
+different name pay the adapter cost once.
 
-```js
-// reactor source, evaluated under endowments
-//   { agent, handle, message } provided by `endo scheduled-send`
-import { E, Far } from '@endo/far';
-import { makeExo } from '@endo/exo';
-import { M } from '@endo/patterns';
+The *Tickable* interface:
 
-const ReactorInterface = M.interface('ScheduledSendReactor', {
-  tick: M.callWhen(M.arrayOf(M.record())).returns(M.undefined()),
-  help: M.call().returns(M.string()),
-});
+| Position | Type | Meaning |
+|----------|------|---------|
+| `count`  | `number` | Reliable count of ticks accumulated since the last successful tick.  In steady state, `1`.  After a slow tick or daemon restart, the number of missed ticks per the catch-up policy. |
+| `timestamps` | `AsyncIterator<number>` | Lazy stream that yields each backed-up tick's scheduled wall-clock time (ms), in order, on demand.  The reactor MAY ignore this argument; iterating is opt-in. |
 
-const reactor = makeExo('ScheduledSendReactor', ReactorInterface, {
-  tick: async batch => {
-    // batch is a list of tick records the schedule has accumulated
-    // since the reactor last acked.  Default policy is "Backfill":
-    // length 1 in steady state, length > 1 only after a daemon
-    // restart or a slow tick.
-    for (const tick of batch) {
-      await E(agent).send(handle, message);
-    }
-  },
-  help: () => 'Sends a canned message on each schedule tick.',
-});
+The `count` is the reliable signal.
+The `timestamps` async iterator is constructed lazily because
+materializing N timestamp records eagerly would be wasted work for
+the common case (a reactor that only cares "how many ticks").
+Reactors that surface per-tick timing (digest emails, audit logs)
+iterate the stream; reactors that only want to act once iterate
+zero times.
 
-reactor;
-```
+This is not a queue system.
+The only datum currently associated with each backed-up tick is
+its scheduled time.
+The shape leaves room to grow into a per-tick payload queue (each
+iterator yield could become a `{ scheduledTickAt, payload }`
+record) without changing the schedule's outer call shape; that
+growth is a follow-up, not part of this design.
 
 The reactor is `makeExo`-shaped by default so that
 `__getMethodNames__()` introspection works (per
@@ -142,6 +163,55 @@ boundary.
 A bare exo function alternative is discussed under
 "Alternatives Considered."
 
+```js
+// reactor source, evaluated under endowments
+//   { agent, handle, message } provided by `endo send --every`
+import { E } from '@endo/far';
+import { makeExo } from '@endo/exo';
+import { M } from '@endo/patterns';
+
+const TickableInterface = M.interface('Tickable', {
+  tick: M.callWhen(M.number(), M.any()).returns(M.undefined()),
+  help: M.call().returns(M.string()),
+});
+
+const reactor = makeExo('CannedSendReactor', TickableInterface, {
+  tick: async (count, _timestamps) => {
+    // The canned-send reactor only cares about `count`; it ignores
+    // the timestamps iterator.  Default policy is "Backfill": one
+    // call per missed tick in steady state, count > 1 only after a
+    // daemon restart or a slow tick.
+    for (let i = 0; i < count; i += 1) {
+      await E(agent).send(handle, message);
+    }
+  },
+  help: () => 'Sends a canned message on each schedule tick.',
+});
+
+reactor;
+```
+
+### Reactor source
+
+The reactor reference is the value produced by *any* formula
+capable of producing a *Tickable* value.
+The standard CLI production path is an `evaluate` formula, because
+`endo send --every <interval>` (and equivalents) constructs the
+canned-send reactor by evaluating the template above with the
+caller-supplied endowments.
+Other producers are explicitly allowed:
+
+- A formula that imports a worker module exporting a Tickable
+  exo.
+- A formula that resolves to a Tickable received from a peer over
+  CapTP.
+- A future formula type whose dedicated purpose is to produce a
+  particular shape of Tickable.
+
+What matters is that the formula's resolved value implements
+`tick(count, timestamps)`; the schedule does not inspect how that
+value was produced.
+
 ### Schedule formula
 
 A schedule is a new daemon formula type, stored in sqlite.
@@ -150,26 +220,32 @@ Its fields:
 | Field            | Meaning                                              |
 |------------------|------------------------------------------------------|
 | `id`             | Formula id of the schedule (256-bit hex).            |
-| `reactor`        | Formula id of the reactor exo to prod.               |
-| `verb`           | Method name to call on the reactor (default `tick`). |
+| `reactor`        | Formula id of the Tickable reactor to call.          |
+| `messageHandle`  | Capability for surfacing tick failures and other operational telemetry as text events.  Required at construction; persisted by formula id, recovered on daemon restart. |
 | `cadence`        | `{ kind: 'rate', periodMs }` or `{ kind: 'one-shot', tickAt }`. |
 | `firstTickAt`    | Wall-clock ms; for `rate`, the first scheduled tick; for `one-shot`, the only tick. |
-| `nextTickAt`     | Wall-clock ms; the next scheduled tick (advances on ack). |
+| `nextTickAt`     | Wall-clock ms; the next scheduled tick.  Advances on successful ack; for a tick currently in retry backoff, this is `lastTickAt + currentBackoffMs`. |
 | `lastTickAt`     | Wall-clock ms; the wall-clock at which the most recent tick was queued. Null until first tick. |
-| `lastAckAt`      | Wall-clock ms; the wall-clock at which the reactor most recently acked. Null until first ack. |
+| `lastAckAt`      | Wall-clock ms; the wall-clock at which the reactor most recently acked successfully. Null until first successful ack. |
 | `pendingTicks`   | Integer; ticks queued but not yet acked (the catch-up backlog). |
 | `catchUpPolicy`  | `backfill` (default) / `batch` / `skip` / `suspend`. |
 | `maxBatch`       | Maximum batch size when `catchUpPolicy === 'batch'` (default 10, mirrors CloudFlare Queues' `max_batch_size`). |
+| `consecutiveTickFailures` | Integer; count of consecutive `tick` rejections.  Reset to 0 on a successful ack.  Used to compute the current backoff delay. |
+| `backoffInitialDelayMs`   | Initial retry delay (default 1_000). |
+| `backoffMaxDelayMs`       | Cap on retry delay (default 300_000, i.e. 5 min). |
+| `backoffMultiplier`       | Exponential growth factor per consecutive failure (default 2.0). |
+| `backoffJitterFraction`   | Full-jitter fraction in `[0, 1]` (default 1.0, i.e. AWS-style "full jitter"). |
 | `status`         | `active` / `paused` / `cancelled` / `suspended`.     |
 | `createdAt`      | Wall-clock ms.                                       |
 
 The schedule's only behavior, on each tick, is to call
-`E(reactor)[verb](batch)` where `batch` is shaped by the
-`catchUpPolicy` (see next section).
+`E(reactor).tick(count, timestamps)` where `count` and the lazy
+`timestamps` async iterator are shaped by the `catchUpPolicy` (see
+next section).
 
-The schedule formula declares its dependency on the reactor via
-`extractDeps`, so reactor liveness drives schedule liveness:
-revoking the reactor cancels the schedule.
+The schedule formula declares its dependency on the reactor and on
+the message handle via `extractDeps`, so reactor liveness drives
+schedule liveness: revoking the reactor cancels the schedule.
 
 ## Catch-Up Policy
 
@@ -178,27 +254,29 @@ when a consumer falls behind: batching, concurrency scale-out,
 delayed retry, and (eventually) message expiry under retention
 limits.
 The schedule formula adapts that vocabulary to the
-schedule-prods-reactor pattern, where "behind" means the wall-clock
+schedule-calls-reactor pattern, where "behind" means the wall-clock
 has advanced past `nextTickAt` while the reactor still has an
 outstanding `tick`.
 Four named policies cover the design space:
 
 - **`backfill` (default).**
-  `tick(batch)` is called once per missed tick, in order, with
-  `batch.length === 1` each time.
+  `tick(count, timestamps)` is called once per missed tick, in
+  order, with `count === 1` each time.
   In steady state this degenerates to one tick per period.
   After a daemon restart that missed N ticks, the schedule ticks
   back-to-back N times.
   Recommended when the reactor's effect is per-tick and not
   idempotent (a sent message must arrive once per missed period).
 - **`batch`.**
-  `tick(batch)` is called once with `batch.length` up to
+  `tick(count, timestamps)` is called once with `count` up to
   `maxBatch`, accumulating missed ticks into a single call.
+  The `timestamps` iterator yields the scheduled wall-clock for
+  each accumulated tick in order.
   Recommended when the reactor's effect aggregates well (a metrics
   flush, a poll, a digest send).
 - **`skip`.**
   Missed ticks are dropped; only the most recent `nextTickAt` is
-  delivered, with `batch.length === 1`.
+  delivered, with `count === 1`.
   `pendingTicks` is reset to 0 on the next tick.
   Recommended for "is it still alive" heartbeats where stale ticks
   carry no information.
@@ -210,17 +288,6 @@ Four named policies cover the design space:
   Recommended when an unbounded backlog implies a real fault and
   silently accumulating ticks would mask it.
 
-The reactor's `tick` resolution is the ack: on `tick`'s promise
-settling (resolve or reject), the schedule recomputes
-`nextTickAt`, decrements `pendingTicks` by `batch.length`, and
-arms the next tick.
-A `tick` that rejects increments a `consecutiveFailures` counter
-(not in the table above; tracked in memory) but does not by itself
-suspend the schedule.
-A future revision can add a `maxConsecutiveFailures` field that
-flips the schedule to `suspended` after N rejects, mirroring
-CloudFlare Queues' DLQ semantics.
-
 The default of `backfill` is the most conservative: every tick
 shows up at the reactor exactly once, in order, and the operator
 can change the policy with one CLI flag once the workload's
@@ -229,6 +296,77 @@ This mirrors CloudFlare Queues' default behavior of "treat the
 batch as all-or-nothing for retry purposes": the reactor sees
 each tick and decides what to do with it, rather than the
 scheduler making the policy decision implicitly.
+
+## Failure Semantics: Reactor Rejection vs Tick Rejection
+
+The schedule distinguishes two failure modes with different
+responses:
+
+### Reactor reference rejected (cancel)
+
+If the schedule's `reactor` formula reference rejects (the formula
+itself failed to resolve, the underlying value is no longer
+reachable, the reactor was revoked) the schedule transitions to
+`status === 'cancelled'` and emits a final telemetry event on the
+message handle.
+A schedule whose reactor cannot resolve has no path to make
+progress, and accumulating pending ticks against an unreachable
+reactor would silently grow the backlog.
+The cancellation also flows through `extractDeps`-driven GC: the
+reactor's death triggers the schedule's GC.
+
+### Tick rejected (retry with exponential backoff)
+
+If the reactor resolves and `tick(count, timestamps)` returns a
+promise that *rejects*, the schedule treats the tick as failed and
+schedules a retry with exponential backoff and full jitter:
+
+```
+delay = min(
+  backoffInitialDelayMs * (backoffMultiplier ** consecutiveTickFailures),
+  backoffMaxDelayMs,
+)
+jitter = random() * delay * backoffJitterFraction
+nextRetryAt = now + (delay - jitter)
+```
+
+The default parameters (1s initial, 5min max, 2.0 multiplier, 1.0
+jitter fraction) come from the AWS "exponential backoff with full
+jitter" recommendation: full jitter avoids retry-thundering-herd
+when many schedules co-fail (e.g. a reactor's downstream service
+is unavailable for all of them).
+
+`consecutiveTickFailures` is persisted in sqlite (so it survives
+daemon restart) and reset to 0 on the next successful ack.
+The retry's `tick` call carries the *same* `count` and
+`timestamps` as the failed call: a retry is a re-attempt, not a
+new tick.
+
+Each tick failure emits a telemetry event on the message handle
+with the failure's reason, the consecutive-failures count, and the
+computed retry delay.
+A schedule whose `consecutiveTickFailures` exceeds a future
+`maxConsecutiveTickFailures` field could transition to `suspended`
+to surface persistent failure to an operator; that field is not
+in scope for the first cut and is logged as a follow-up.
+
+### Telemetry / message handle
+
+The schedule is constructed with a *messageHandle* capability used
+for textual event surfacing.
+Events emitted on the handle:
+
+- `tick.failed`: `{ scheduleId, reason, consecutiveTickFailures, retryDelayMs }`
+- `tick.recovered`: `{ scheduleId, consecutiveTickFailures }` (the previous failure-streak length, just before reset)
+- `reactor.cancelled`: `{ scheduleId, reason }` (terminal)
+- `schedule.suspended` / `schedule.resumed`: `{ scheduleId, reason }`
+
+A structured telemetry meter (counter / histogram / gauge) is a
+deliberate non-goal of this design.
+The daemon does not yet have a meter facility; once one lands, the
+schedule will route the same events through both the message
+handle (for text logs) and the meter (for aggregation), without
+changing the schedule's persisted shape.
 
 ## Sqlite Schema
 
@@ -243,15 +381,20 @@ CREATE TABLE IF NOT EXISTS schedule_runtime (
   -- Formula id of the schedule (256-bit hex).
   schedule_number TEXT PRIMARY KEY,
 
-  -- Formula id of the reactor exo (256-bit hex), redundantly
+  -- Formula id of the reactor (256-bit hex), redundantly
   -- mirrored from the formula body for index-only lookups.
   reactor_id TEXT NOT NULL,
+
+  -- Formula id of the message handle capability used for
+  -- telemetry events.
+  message_handle_id TEXT NOT NULL,
 
   -- Cadence in serialized form (JSON of the discriminated union
   -- in the field table above).
   cadence TEXT NOT NULL,
 
-  -- Wall-clock ms.  Null lastTickAt / lastAckAt mean "never ticked".
+  -- Wall-clock ms.  Null last_tick_at / last_ack_at mean
+  -- "never ticked" / "never acked".
   first_tick_at INTEGER NOT NULL,
   next_tick_at INTEGER NOT NULL,
   last_tick_at INTEGER,
@@ -262,8 +405,17 @@ CREATE TABLE IF NOT EXISTS schedule_runtime (
   catch_up_policy TEXT NOT NULL DEFAULT 'backfill',
   max_batch INTEGER NOT NULL DEFAULT 10,
 
+  -- Retry / backoff bookkeeping.  consecutive_tick_failures is
+  -- reset to 0 on the next successful ack.  next_tick_at
+  -- incorporates the current backoff delay when the schedule is
+  -- in retry (consecutive_tick_failures > 0).
+  consecutive_tick_failures INTEGER NOT NULL DEFAULT 0,
+  backoff_initial_delay_ms INTEGER NOT NULL DEFAULT 1000,
+  backoff_max_delay_ms INTEGER NOT NULL DEFAULT 300000,
+  backoff_multiplier REAL NOT NULL DEFAULT 2.0,
+  backoff_jitter_fraction REAL NOT NULL DEFAULT 1.0,
+
   status TEXT NOT NULL DEFAULT 'active',
-  verb TEXT NOT NULL DEFAULT 'tick',
   created_at INTEGER NOT NULL
 );
 
@@ -285,11 +437,15 @@ Prepared-statement methods on the `DaemonDatabase` interface
 (matching the existing pattern):
 
 ```js
-writeSchedule(scheduleNumber, reactorId, cadence, firstTickAt,
-              nextTickAt, catchUpPolicy, maxBatch, verb)
+writeSchedule(scheduleNumber, reactorId, messageHandleId, cadence,
+              firstTickAt, nextTickAt, catchUpPolicy, maxBatch,
+              backoffInitialDelayMs, backoffMaxDelayMs,
+              backoffMultiplier, backoffJitterFraction)
 updateScheduleAfterTick(scheduleNumber, lastTickAt, pendingTicks)
 updateScheduleAfterAck(scheduleNumber, lastAckAt, nextTickAt,
                        pendingTicks)
+updateScheduleAfterTickFailure(scheduleNumber, nextTickAt,
+                               consecutiveTickFailures)
 setScheduleStatus(scheduleNumber, status)
 deleteSchedule(scheduleNumber)
 listActiveSchedules()         // for startup recovery
@@ -302,87 +458,138 @@ Startup recovery (the analog of PR #145's
 re-arms each via `setTimeout` against `next_tick_at - Date.now()`,
 catching up any `next_tick_at` already in the past per the row's
 `catch_up_policy`.
+For schedules in retry (`consecutive_tick_failures > 0`), the
+persisted `next_tick_at` already incorporates the current backoff
+delay, so recovery does not need to recompute the backoff from
+scratch.
 
 ## CLI Surface
 
-Two-piece composition deserves two-piece commands, plus one
-composite for the most common case:
+Scheduling is folded into the existing `endo send` command via
+flags rather than introduced as a standalone verb.
+This keeps the user model coherent: "send this message, but on a
+schedule" is one mental act, not two.
 
-- `endo schedule mk --reactor <petname> --cadence rate=<ms>`
-  `[--verb tick] [--catch-up backfill|batch|skip|suspend]`
-  `[--max-batch 10] [--name <petname>]`
+### Scheduling flags on `endo send`
 
-  Creates a schedule that prods the reactor.
-  The reactor must already exist; the operator (or a higher-level
-  command) is responsible for evaluating it.
+```
+endo send <handle> <message>
+  [ --every <interval>            # rate cadence
+  | --at <iso-timestamp> ]        # one-shot cadence
+  [ --catch-up backfill|batch|skip|suspend ]
+  [ --max-batch 10 ]
+  [ --name <petname> ]            # schedule pet name
+  [ --backoff-initial 1s ]
+  [ --backoff-max 5m ]
+  [ --backoff-multiplier 2.0 ]
+  [ --backoff-jitter 1.0 ]
+```
 
-- `endo schedule list`, `endo schedule pause <name>`,
-  `endo schedule resume <name>`, `endo schedule cancel <name>`,
-  `endo schedule tick <name>`
-  (manual one-shot prod, useful for testing).
+Without `--every` or `--at`, `endo send` retains its existing
+synchronous behavior: send the message once, immediately, no
+schedule formula is created.
 
-- `endo scheduled-send <recipient> --message <text>`
-  `--cadence rate=<ms> [--name <petname>]`
+With `--every <interval>` or `--at <iso-timestamp>`, the CLI
+performs the composite creation:
 
-  The composite verb the maintainer named in the review.
-  Internally, this:
+1. Evaluates a reactor formula whose source is the canned-send
+   reactor template above, with `agent`, `handle`, and `message`
+   endowments resolved from the caller's pet store and the
+   `<handle>` and `<message>` arguments.
+   The eval formula is the standard production path for the CLI
+   surface; other formula types may also produce Tickable values
+   per the "Reactor source" section above, but the CLI itself
+   uses an eval formula.
+2. Creates a schedule formula against the resulting reactor with
+   the supplied cadence, catch-up policy, and backoff parameters.
+3. Stores the schedule under `<petname>` (or a generated name) so
+   the operator can manage it with the `endo schedule` family
+   later.
 
-  1. Evaluates a reactor formula whose source is the canned-send
-     reactor template above, with `agent`, `handle`, and `message`
-     endowments resolved from the caller's pet store and the
-     `<recipient>` argument.
-  2. Calls `endo schedule mk` against the resulting reactor with
-     the supplied `--cadence`.
-  3. Stores the schedule under `<petname>` so the operator can
-     manage it with the `endo schedule` family later.
+The `<handle>` and `<message>` arguments follow the same
+pet-name-path and message-shape conventions as the existing
+`endo send`.
+Message types beyond plain text (the existing `Package` shapes
+with `strings`, `names`, `ids`) work unchanged because the
+canned-send reactor's source carries whichever shape `endo send`
+itself supports.
 
-  The `<recipient>` argument follows the same pet-name-path
-  conventions as `endo send`.
-  Message types beyond plain text (the existing `Package` shapes
-  with `strings`, `names`, `ids`) follow the same flag conventions
-  as `endo send`; the design does not enumerate them here because
-  the canned-send reactor's source can carry whichever shape `endo
-  send` itself supports.
+### `endo schedule` management commands
 
-## Verb Naming
+`endo schedule list`, `endo schedule pause <name>`,
+`endo schedule resume <name>`, `endo schedule cancel <name>`,
+`endo schedule tick <name>` (manual one-shot prod, useful for
+testing).
 
-The default verb name on the reactor's exo is `tick`, matching the
-maintainer's suggestion in the inline comment.
-The schedule formula's `verb` field is configurable, defaulting to
-`tick`, so a reactor that already has a domain-natural method
-(`flush`, `poll`, `digest`, `prune`) can be prodded directly
-without an adapter exo.
+These commands operate on the schedule formula by pet name.
+There is **no** standalone `endo schedule mk` verb: schedule
+creation always happens via `endo send --every` (the canned-send
+case) or via direct `evaluate` of a Tickable plus a follow-up
+internal helper that the design intentionally does not expose as
+a CLI command (so that operators do not assemble reactor +
+schedule by hand when a single-flag invocation suffices).
+
+### Future: Chat-UI surface
+
+The Chat UI will eventually want analogous controls: a "schedule
+this message" affordance on the send composer, plus a panel for
+managing existing schedules.
+That surface is a separate design; this document is the CLI side
+only.
+The shared substrate is the schedule formula's persisted state
+and the message-handle telemetry, both of which are agnostic to
+the surface that drives them.
+
+## Verb
+
+The reactor's verb is hardcoded to `tick`.
+The schedule's call shape is exactly:
+
+```js
+E(reactor).tick(count, timestamps)
+```
+
+A reactor whose domain-natural method is `flush`, `poll`,
+`digest`, or `prune` MUST provide an adapter exo whose `tick`
+forwards.
+Hardcoding the verb keeps the schedule formula's persisted shape
+minimal (no `verb` column), removes a configuration knob from the
+schedule's interface, and concentrates the naming concern in the
+reactor's source where it belongs.
 
 The verb's contract is:
 
-- It accepts one argument, `batch`, an array of tick records.
-  Each tick record has `{ scheduledTickAt, tickSequenceNumber }`
-  at minimum; future revisions may add fields without breaking
-  reactors that ignore them.
+- It accepts two arguments: a reliable `count` (integer >= 1) and
+  a lazy `timestamps` async iterator yielding the scheduled
+  wall-clock for each backed-up tick in order.
+  The reactor MAY ignore `timestamps`.
 - It returns a promise.
-  Resolution is the ack; rejection is logged as a tick failure but
-  does not by itself suspend the schedule.
+  Resolution is the ack and resets `consecutive_tick_failures`;
+  rejection schedules an exponential-backoff retry per the
+  "Failure Semantics" section above.
 - It is allowed to take longer than one period; the schedule does
   not arm the next tick until the previous `tick` has settled (the
   catch-up backlog accumulates in `pending_ticks`).
 
 ## Cap Surface
 
-The schedule has authority to call `E(reactor)[verb](batch)`.
+The schedule has authority to call `E(reactor).tick(count,
+timestamps)` and to emit text events on the `messageHandle`.
 That is the entire cap.
 It does not hold the agent, the handle, or the message contents;
 those endowments live inside the reactor.
 A compromised schedule (say, an operator confused two
-similar-looking pet names) can prod the wrong reactor at the wrong
-times, but cannot send a different message or send to a different
-recipient.
+similar-looking pet names) can call the wrong reactor's `tick` at
+the wrong times, but cannot send a different message, send to a
+different recipient, or emit telemetry through any handle other
+than the one it was constructed with.
 
 The reactor has whatever authority its endowments grant.
-For the canned-send reactor produced by `endo scheduled-send`,
-that is `E(agent).send(handle, message)` and nothing else.
-A reactor that needs richer authority is just an `evaluate`
-formula with richer endowments, evaluated by the operator outside
-the `endo scheduled-send` composite.
+For the canned-send reactor produced by `endo send --every`, that
+is `E(agent).send(handle, message)` and nothing else.
+A reactor that needs richer authority is any formula type that
+produces a Tickable with richer endowments, created by the
+operator outside the `endo send --every` composite.
 
 ## Comparison Against PR #145's `IntervalScheduler`
 
@@ -415,15 +622,24 @@ formula carries the lifecycle.
 2. The `schedule` formula type, `formulateSchedule`,
    `extractDeps`, and the `case 'schedule'` handler with
    sqlite-backed startup recovery.
-3. `endo schedule` CLI commands.
-4. The canned-send reactor template plus the `endo scheduled-send`
-   composite that evaluates the reactor and invokes `schedule mk`.
+   This includes the failure semantics (cancel-on-reactor-rejection,
+   retry-on-tick-rejection with exponential backoff and full
+   jitter) and the message-handle telemetry emit points.
+3. `endo schedule` management CLI commands (list / pause / resume
+   / cancel / tick).
+4. The canned-send reactor template plus the `endo send --every`
+   and `endo send --at` flag handling that evaluates the reactor
+   and creates the schedule.
 5. The four catch-up policies; the default (`backfill`) is enough
    for Phase 1, and `batch` / `skip` / `suspend` can land
    together in Phase 5 once the basic shape is reviewed.
 
 Each phase is independently reviewable and ships its own tests.
 Treat each phase as one PR.
+
+The Chat-UI surface is a separate dispatch chain after Phase 4
+lands; it shares the schedule formula type and the message-handle
+telemetry but introduces no new daemon-side primitives.
 
 ## Alternatives Considered
 
@@ -432,7 +648,8 @@ Treat each phase as one PR.
 Instead of an exo with a `tick` method, the reactor could be a
 bare callable exo function (`makeExo('Reactor', ..., () => ...)`
 or a `Far` callable).
-The schedule would then call `E(reactor)(batch)` directly.
+The schedule would then call `E(reactor)(count, timestamps)`
+directly.
 
 Pros: simpler reactor source; no method-name dispatch.
 
@@ -440,12 +657,26 @@ Cons: no `__getMethodNames__()` introspection; no separate `help`
 method; the schedule has no way to call a richer reactor's
 `pause` or `flush` operations through the same handle.
 
-Recommendation: support both via the `verb` field.
-A schedule with `verb === undefined` calls the reactor as a bare
-function; a schedule with `verb === 'tick'` (the default) calls
-the named method.
-The CLI default is the named method; bare-function reactors are an
-escape hatch for one-line `evaluate` prototypes.
+Recommendation: rejected.
+The schedule's call shape is hardcoded to `tick(count, timestamps)`.
+A bare-function reactor that wants to be schedulable can be
+wrapped in a one-line adapter exo whose `tick` forwards to the
+function.
+
+### Configurable verb name
+
+The previous draft proposed a `verb` field on the schedule
+formula, defaulting to `tick` but configurable per schedule.
+This let a reactor with a domain-natural method (`flush`, `poll`,
+`digest`, `prune`) be called directly without an adapter.
+
+Rejected.
+Hardcoding the verb keeps the schedule's interface shape minimal
+(no `verb` column in sqlite, no per-call dispatch parameter, no
+configuration knob in the CLI) and concentrates naming concerns
+in the reactor source where they belong.
+Reactors that want a different name pay the adapter cost once;
+the schedule pays the simplification permanently.
 
 ### Schedule the agent directly, no reactor
 
@@ -474,48 +705,116 @@ A schedule with sub-second cadence is out of scope for the first
 cut and can use an in-memory advance with periodic checkpoint
 writes if it ever lands.
 
+## Resolved Decisions
+
+The following questions were raised in earlier drafts and have
+been settled by maintainer review:
+
+- **Reactor verb name.**
+  The verb is hardcoded to `tick`.
+  No `verb` field on the schedule, no `verb` column in sqlite.
+  Reactors that want a different name provide an adapter.
+- **Reactor source restriction.**
+  Any formula whose value implements the *Tickable* contract
+  qualifies, not only `evaluate` formulas.
+  `evaluate` is the standard CLI production path because that is
+  how `endo send --every` constructs the canned-send reactor;
+  other producers are equally valid.
+- **CLI surface shape.**
+  Scheduling is folded into `endo send` via flags
+  (`--every <interval>`, `--at <iso-timestamp>`, plus catch-up
+  and backoff knobs).
+  There is no standalone `endo schedule mk` verb.
+  An analogous Chat-UI surface is a future, separately-designed
+  follow-up.
+- **Batch shape.**
+  The schedule calls `tick(count, timestamps)` where `count` is a
+  reliable integer and `timestamps` is a lazy
+  `AsyncIterator<number>` yielding scheduled wall-clock times on
+  demand.
+  This is not a queue system; the only datum per backed-up tick
+  is its scheduled time.
+  The shape leaves room to grow into a per-tick payload queue
+  without changing the outer call.
+- **Reactor rejection vs tick rejection.**
+  A schedule whose reactor reference rejects (formula failed to
+  resolve, value unreachable) cancels.
+  A schedule whose `tick` call rejects retries with exponential
+  backoff and full jitter; the backoff parameters
+  (initial-delay, max-delay, multiplier, jitter-fraction) are
+  persisted in the schedule formula's sqlite row.
+- **Telemetry handle.**
+  The schedule is constructed with a message-handle capability
+  used for textual operational events.
+  A structured telemetry meter is deferred until the daemon has
+  a meter facility.
+- **Per-batch re-arm.**
+  When `batch` catch-up policy hands a backlog larger than
+  `maxBatch`, the schedule calls once with `count === maxBatch`
+  and re-arms immediately so the next call picks up the rest.
+  This matches CloudFlare Queues' batching shape and keeps each
+  `tick` call bounded.
+
 ## Open Questions
 
-1. Should the reactor's `tick(batch)` method see the
-   `pending_ticks` count, or only the batch it is being handed?
-   Recommendation: only the batch; if the reactor wants to know
-   the backlog it can call back to the schedule's exo.
-2. When a reactor is revoked while a schedule still points at it,
+1. When a reactor is revoked while a schedule still points at it,
    does the schedule transition to `cancelled` or `suspended`?
    Recommendation: `cancelled`.
    The schedule's `extractDeps` already encodes the dependency, so
    the daemon's GC will collect the schedule on reactor death; the
    `cancelled` transition is the user-visible signal.
-3. Should `endo scheduled-send` accept an existing reactor by pet
-   name, or always evaluate a fresh canned-send reactor?
+   The "Failure Semantics" section states `cancelled`; this
+   question is captured here only as a place for future
+   reconsideration if `suspended` proves more useful (e.g. if
+   reactor revocation can be undone in a future revision).
+2. Should `endo send --every` accept an existing reactor by pet
+   name (treating the canned-send reactor template as one option
+   among several), or always evaluate a fresh canned-send reactor?
    Recommendation: always evaluate a fresh reactor for the
-   composite; users who want to reuse a reactor use
-   `endo schedule mk` directly.
-4. Does the schedule need a `consecutiveFailures` column in
-   sqlite, or is in-memory tracking sufficient?
-   Recommendation: in-memory for Phase 1; promote to a column when
-   `maxConsecutiveFailures` lands.
-5. Should the `batch` catch-up policy split a backlog larger than
-   `maxBatch` into multiple back-to-back tick calls, or call once
-   with `batch.length === maxBatch` and re-arm immediately so the
-   next call picks up the rest?
-   Recommendation: call once with up to `maxBatch`, re-arm
-   immediately; this matches CloudFlare Queues' batching shape
-   and keeps each `tick` call bounded.
+   `--every` / `--at` path; operators who want to schedule an
+   existing Tickable use a separate (currently unsurfaced)
+   helper.
+3. Should the schedule emit a `tick.attempted` event for every
+   call, or only `tick.failed` / `tick.recovered` / lifecycle
+   transitions?
+   Recommendation: only the failure / recovery / lifecycle
+   events for Phase 1.
+   A future structured meter would carry the per-tick rate as a
+   counter, removing the need for per-call text events.
+4. What is the right shape for the future `maxConsecutiveTickFailures`
+   field that flips a perma-failing schedule to `suspended`?
+   Recommendation: defer to a follow-up that lands the field, the
+   CLI flag, and the suspend transition together; the current
+   design's `consecutive_tick_failures` column is forward-compatible.
 
 ## Test Plan
 
 - Unit tests in `packages/daemon/test/schedule.test.js`:
   - Each catch-up policy in isolation, with a clock-injected
     fake timer ticking N missed ticks while a tick is in flight.
+  - The lazy `timestamps` async iterator: a reactor that iterates
+    sees the correct scheduled wall-clock per yield; a reactor
+    that does not iterate observes no materialization cost.
+  - Tick failure retry: a reactor whose `tick` rejects K times in
+    a row triggers backoff with the documented schedule
+    (`min(initial * multiplier^K, max) - jitter`), and a
+    subsequent successful tick resets `consecutive_tick_failures`
+    to 0.
+  - Reactor reference rejection: a schedule whose reactor formula
+    rejects transitions to `cancelled` and emits a
+    `reactor.cancelled` telemetry event.
+  - Telemetry: each lifecycle and failure event lands on the
+    message handle with the documented payload shape.
   - Schedule lifecycle: pause / resume / cancel / suspend
     transitions.
   - Sqlite round-trip: write a schedule, restart the daemon's
     in-process database, recover the active schedule, observe
     that the next tick arms at the correct wall-clock.
+    For a schedule mid-retry, the recovered `next_tick_at`
+    already incorporates the persisted backoff delay.
 - Integration tests in
   `packages/daemon/test/scheduled-send.test.js`:
-  - End-to-end `endo scheduled-send` against a fake recipient
+  - End-to-end `endo send --every` against a fake recipient
     agent; observe that N ticks deliver N messages over the
     expected wall-clock window.
   - Daemon restart mid-schedule: kill the daemon between ticks,
