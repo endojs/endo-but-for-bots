@@ -31,8 +31,9 @@ the surface back to design with two specific moves:
    to match the daemon's existing `endo.sqlite` storage and to get
    indexed queries on `next_tick_at`.
    PR #145 stored entries as one JSON file per interval under
-   `state/interval-scheduler/<prefix>/<rest>/intervals/`; the
-   maintainer asked to do sqlite now rather than defer.
+   `state/interval-scheduler/<prefix>/<rest>/intervals/`; this
+   design MUST land sqlite-backed storage in the same change rather
+   than ship a JSON-on-disk stage first.
 4. When a reactor falls behind the schedule (the daemon was offline,
    the worker is slow, the reactor reschedules), the schedule needs
    a documented catch-up policy rather than the implicit
