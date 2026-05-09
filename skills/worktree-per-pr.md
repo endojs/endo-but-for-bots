@@ -163,6 +163,28 @@ touch your local clone. Always do all three steps.
   go. (Session example: PR 101 fixer reused the builder's pr-101
   worktree weeks later; the `.bin/prettier` shim still pointed at
   a deleted sibling `voice-fresh` worktree until the reinstall.)
+- **`git stash` to "test the baseline" mid-dispatch is the failure
+  mode itself.** When a fixer wants to confirm a CI failure or test
+  failure is pre-existing on the parent commit, the temptation is to
+  `git stash`, run the test, then `git stash pop`. This loses
+  rename-detection on `git mv`-staged files (see the rename pitfall
+  above) AND surfaces a flurry of "file modified by user/linter"
+  system-reminders for every previously-edited file as the stash
+  reverts them, which is misleading mid-fixer when those reminders
+  normally indicate real concurrent edits. The cheap alternative is
+  `git diff HEAD~1` to inspect what your changes look like, or
+  `git show HEAD~1:<path>` to read the parent's version of a single
+  file, neither of which mutates the working tree. For a full-tree
+  baseline test, `git worktree add --detach <tmp-path> <parent-sha>`
+  creates an isolated tree to run the test in; remove it after with
+  `git worktree remove <tmp-path>`. Session example: PR 142 fixer
+  ran `git stash; cd packages/ocapn; npx ava test/buffer-utils.test.js;
+  git stash pop` to confirm 25 pre-existing test failures were not
+  caused by the bytes-rename fixup; the stash pop emitted ~10 system
+  reminders showing reverted file content as if the user/linter had
+  re-edited them, and rename detection on the four `git mv` renames
+  was lost (had to `git add -A` again). `git show HEAD:<file>` or a
+  detached worktree would have avoided both.
 
 ## Session example
 
