@@ -538,6 +538,31 @@ result through CI.
   PR 111's `cbor/diagnostic/util.js` `equals` helper (no production
   callers; tests used `t.deepEqual` directly); dropped the helper
   and the now-empty file in commit `0116aa1283`.
+- **When a dispatch summary's restatement of a maintainer comment
+  appears to contradict an already-settled prior decision in the
+  same PR, trust the maintainer's actual comment (re-read inline)
+  and the prior settlement, not the dispatch's paraphrase.** Brief
+  authors writing fixer dispatches do not always re-read the full
+  PR review history; their summary of "what to do" can drift into
+  shapes the maintainer never asked for. The discipline: before
+  applying a substantive change, enumerate `gh api repos/<o>/<r>/
+  pulls/<N>/comments` and read every prior maintainer comment plus
+  every prior `kriscendobot` reply. If a prior comment thread
+  settled a question the dispatch now appears to re-open, the fix
+  is to apply the maintainer's *actual* L<line> comment (which is
+  almost always a narrower edit than the dispatch summary
+  suggests), not to undo the prior settlement. Session example:
+  PR 153 round 2 dispatch said "make `--text` a UTF-8 convenience
+  that encodes to bytes and stores as a blob"; the prior round
+  had already settled (per maintainer review 4256759685 reply
+  3212448305: "We use `--blob` for blob storage and `--text` for
+  a primitive string") that `--blob` and `--text` produce
+  *different formula kinds*. The maintainer's actual L327
+  comment ("blobs are bytes") was about killing the now-stale
+  Open Question's premise of a `cat`-time render distinction on
+  blobs, not about reshaping `--text`'s formula kind. The fixer
+  preserved the prior settlement and applied only what L327
+  actually asked.
 - **Position-based inline comments need careful diff-line accounting
   when the dispatch summary cites only the position number.** GitHub's
   `position` field is 1-indexed and counts every line in the unified
