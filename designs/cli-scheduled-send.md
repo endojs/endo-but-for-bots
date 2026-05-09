@@ -29,7 +29,7 @@ the surface back to design with two specific moves:
    calls the reactor's `tick`).
 3. The schedule table belongs in sqlite, not on disk as JSON files,
    to match the daemon's existing `endo.sqlite` storage and to get
-   indexed queries on `next_fire_at`.
+   indexed queries on `next_tick_at`.
    PR #145 stored entries as one JSON file per interval under
    `state/interval-scheduler/<prefix>/<rest>/intervals/`; the
    maintainer asked to do sqlite now rather than defer.
@@ -45,7 +45,7 @@ two-piece composition and documents the catch-up vocabulary.
 
 In scope:
 
-- A `schedule` formula type, persisted in `endo.sqlite`, that fires
+- A `schedule` formula type, persisted in `endo.sqlite`, that ticks
   a configurable verb on a configurable target at configurable
   cadences.
 - A reactor pattern that uses the existing `evaluate` formula type
@@ -70,7 +70,7 @@ Out of scope:
   Cron is a follow-up that adds a `cron` cadence kind without
   changing the schedule formula's other fields.
 - Distributed coordination across multiple daemons.
-  A schedule is owned by one node; cross-node firing is a
+  A schedule is owned by one node; cross-node ticking is a
   follow-up that depends on
   [daemon-cross-peer-gc](daemon-cross-peer-gc.md) being settled.
 
@@ -119,11 +119,11 @@ const ReactorInterface = M.interface('ScheduledSendReactor', {
 
 const reactor = makeExo('ScheduledSendReactor', ReactorInterface, {
   tick: async batch => {
-    // batch is a list of fire records the schedule has accumulated
+    // batch is a list of tick records the schedule has accumulated
     // since the reactor last acked.  Default policy is "Backfill":
     // length 1 in steady state, length > 1 only after a daemon
     // restart or a slow tick.
-    for (const fire of batch) {
+    for (const tick of batch) {
       await E(agent).send(handle, message);
     }
   },
@@ -151,18 +151,18 @@ Its fields:
 | `id`             | Formula id of the schedule (256-bit hex).            |
 | `reactor`        | Formula id of the reactor exo to prod.               |
 | `verb`           | Method name to call on the reactor (default `tick`). |
-| `cadence`        | `{ kind: 'rate', periodMs }` or `{ kind: 'one-shot', fireAt }`. |
-| `firstFireAt`    | Wall-clock ms; for `rate`, the first scheduled fire; for `one-shot`, the only fire. |
-| `nextFireAt`     | Wall-clock ms; the next scheduled fire (advances on ack). |
-| `lastFireAt`     | Wall-clock ms; the wall-clock at which the most recent fire was queued. Null until first fire. |
+| `cadence`        | `{ kind: 'rate', periodMs }` or `{ kind: 'one-shot', tickAt }`. |
+| `firstTickAt`    | Wall-clock ms; for `rate`, the first scheduled tick; for `one-shot`, the only tick. |
+| `nextTickAt`     | Wall-clock ms; the next scheduled tick (advances on ack). |
+| `lastTickAt`     | Wall-clock ms; the wall-clock at which the most recent tick was queued. Null until first tick. |
 | `lastAckAt`      | Wall-clock ms; the wall-clock at which the reactor most recently acked. Null until first ack. |
-| `pendingFires`   | Integer; fires queued but not yet acked (the catch-up backlog). |
+| `pendingTicks`   | Integer; ticks queued but not yet acked (the catch-up backlog). |
 | `catchUpPolicy`  | `backfill` (default) / `batch` / `skip` / `suspend`. |
 | `maxBatch`       | Maximum batch size when `catchUpPolicy === 'batch'` (default 10, mirrors CloudFlare Queues' `max_batch_size`). |
 | `status`         | `active` / `paused` / `cancelled` / `suspended`.     |
 | `createdAt`      | Wall-clock ms.                                       |
 
-The schedule's only behavior, on each fire, is to call
+The schedule's only behavior, on each tick, is to call
 `E(reactor)[verb](batch)` where `batch` is shaped by the
 `catchUpPolicy` (see next section).
 
@@ -178,41 +178,41 @@ delayed retry, and (eventually) message expiry under retention
 limits.
 The schedule formula adapts that vocabulary to the
 schedule-prods-reactor pattern, where "behind" means the wall-clock
-has advanced past `nextFireAt` while the reactor still has an
+has advanced past `nextTickAt` while the reactor still has an
 outstanding `tick`.
 Four named policies cover the design space:
 
 - **`backfill` (default).**
-  `tick(batch)` is called once per missed fire, in order, with
+  `tick(batch)` is called once per missed tick, in order, with
   `batch.length === 1` each time.
-  In steady state this degenerates to one fire per period.
-  After a daemon restart that missed N fires, the schedule fires
+  In steady state this degenerates to one tick per period.
+  After a daemon restart that missed N ticks, the schedule ticks
   back-to-back N times.
-  Recommended when the reactor's effect is per-fire and not
+  Recommended when the reactor's effect is per-tick and not
   idempotent (a sent message must arrive once per missed period).
 - **`batch`.**
   `tick(batch)` is called once with `batch.length` up to
-  `maxBatch`, accumulating missed fires into a single call.
+  `maxBatch`, accumulating missed ticks into a single call.
   Recommended when the reactor's effect aggregates well (a metrics
   flush, a poll, a digest send).
 - **`skip`.**
-  Missed fires are dropped; only the most recent `nextFireAt` is
+  Missed ticks are dropped; only the most recent `nextTickAt` is
   delivered, with `batch.length === 1`.
-  `pendingFires` is reset to 0 on the next fire.
-  Recommended for "is it still alive" heartbeats where stale fires
+  `pendingTicks` is reset to 0 on the next tick.
+  Recommended for "is it still alive" heartbeats where stale ticks
   carry no information.
 - **`suspend`.**
-  When `pendingFires` exceeds a threshold (default `maxBatch`),
+  When `pendingTicks` exceeds a threshold (default `maxBatch`),
   the schedule transitions to `status === 'suspended'` and stops
-  arming new fires until an operator (or the reactor itself, via a
+  arming new ticks until an operator (or the reactor itself, via a
   control-facet method) resumes it.
   Recommended when an unbounded backlog implies a real fault and
-  silently accumulating fires would mask it.
+  silently accumulating ticks would mask it.
 
 The reactor's `tick` resolution is the ack: on `tick`'s promise
 settling (resolve or reject), the schedule recomputes
-`nextFireAt`, decrements `pendingFires` by `batch.length`, and
-arms the next fire.
+`nextTickAt`, decrements `pendingTicks` by `batch.length`, and
+arms the next tick.
 A `tick` that rejects increments a `consecutiveFailures` counter
 (not in the table above; tracked in memory) but does not by itself
 suspend the schedule.
@@ -220,13 +220,13 @@ A future revision can add a `maxConsecutiveFailures` field that
 flips the schedule to `suspended` after N rejects, mirroring
 CloudFlare Queues' DLQ semantics.
 
-The default of `backfill` is the most conservative: every fire
+The default of `backfill` is the most conservative: every tick
 shows up at the reactor exactly once, in order, and the operator
 can change the policy with one CLI flag once the workload's
 shape is known.
 This mirrors CloudFlare Queues' default behavior of "treat the
 batch as all-or-nothing for retry purposes": the reactor sees
-each fire and decides what to do with it, rather than the
+each tick and decides what to do with it, rather than the
 scheduler making the policy decision implicitly.
 
 ## Sqlite Schema
@@ -235,7 +235,7 @@ The schedule table joins the existing `formula` table on
 `reactor`'s formula id; the schedule's own row in `formula`
 carries the formula body (the cadence configuration), and the
 `schedule_runtime` table below carries the mutable state that
-advances on every fire.
+advances on every tick.
 
 ```sql
 CREATE TABLE IF NOT EXISTS schedule_runtime (
@@ -250,14 +250,14 @@ CREATE TABLE IF NOT EXISTS schedule_runtime (
   -- in the field table above).
   cadence TEXT NOT NULL,
 
-  -- Wall-clock ms.  Null lastFireAt / lastAckAt mean "never fired".
-  first_fire_at INTEGER NOT NULL,
-  next_fire_at INTEGER NOT NULL,
-  last_fire_at INTEGER,
+  -- Wall-clock ms.  Null lastTickAt / lastAckAt mean "never ticked".
+  first_tick_at INTEGER NOT NULL,
+  next_tick_at INTEGER NOT NULL,
+  last_tick_at INTEGER,
   last_ack_at INTEGER,
 
   -- Catch-up bookkeeping.
-  pending_fires INTEGER NOT NULL DEFAULT 0,
+  pending_ticks INTEGER NOT NULL DEFAULT 0,
   catch_up_policy TEXT NOT NULL DEFAULT 'backfill',
   max_batch INTEGER NOT NULL DEFAULT 10,
 
@@ -266,10 +266,10 @@ CREATE TABLE IF NOT EXISTS schedule_runtime (
   created_at INTEGER NOT NULL
 );
 
--- Startup recovery scans active schedules ordered by next_fire_at
--- so the daemon can re-arm timers in firing order.
-CREATE INDEX IF NOT EXISTS idx_schedule_runtime_active_next_fire
-  ON schedule_runtime(status, next_fire_at)
+-- Startup recovery scans active schedules ordered by next_tick_at
+-- so the daemon can re-arm timers in tick order.
+CREATE INDEX IF NOT EXISTS idx_schedule_runtime_active_next_tick
+  ON schedule_runtime(status, next_tick_at)
   WHERE status = 'active';
 ```
 
@@ -284,11 +284,11 @@ Prepared-statement methods on the `DaemonDatabase` interface
 (matching the existing pattern):
 
 ```js
-writeSchedule(scheduleNumber, reactorId, cadence, firstFireAt,
-              nextFireAt, catchUpPolicy, maxBatch, verb)
-updateScheduleAfterFire(scheduleNumber, lastFireAt, pendingFires)
-updateScheduleAfterAck(scheduleNumber, lastAckAt, nextFireAt,
-                       pendingFires)
+writeSchedule(scheduleNumber, reactorId, cadence, firstTickAt,
+              nextTickAt, catchUpPolicy, maxBatch, verb)
+updateScheduleAfterTick(scheduleNumber, lastTickAt, pendingTicks)
+updateScheduleAfterAck(scheduleNumber, lastAckAt, nextTickAt,
+                       pendingTicks)
 setScheduleStatus(scheduleNumber, status)
 deleteSchedule(scheduleNumber)
 listActiveSchedules()         // for startup recovery
@@ -298,8 +298,8 @@ readSchedule(scheduleNumber)  // for debug / introspection
 
 Startup recovery (the analog of PR #145's
 `schedulerDir` directory scan) loads `listActiveSchedules()` and
-re-arms each via `setTimeout` against `next_fire_at - Date.now()`,
-catching up any `next_fire_at` already in the past per the row's
+re-arms each via `setTimeout` against `next_tick_at - Date.now()`,
+catching up any `next_tick_at` already in the past per the row's
 `catch_up_policy`.
 
 ## CLI Surface
@@ -317,7 +317,7 @@ composite for the most common case:
 
 - `endo schedule list`, `endo schedule pause <name>`,
   `endo schedule resume <name>`, `endo schedule cancel <name>`,
-  `endo schedule fire <name>`
+  `endo schedule tick <name>`
   (manual one-shot prod, useful for testing).
 
 - `endo scheduled-send <recipient> --message <text>`
@@ -354,16 +354,16 @@ without an adapter exo.
 
 The verb's contract is:
 
-- It accepts one argument, `batch`, an array of fire records.
-  Each fire record has `{ scheduledFireAt, fireSequenceNumber }`
+- It accepts one argument, `batch`, an array of tick records.
+  Each tick record has `{ scheduledTickAt, tickSequenceNumber }`
   at minimum; future revisions may add fields without breaking
   reactors that ignore them.
 - It returns a promise.
   Resolution is the ack; rejection is logged as a tick failure but
   does not by itself suspend the schedule.
 - It is allowed to take longer than one period; the schedule does
-  not arm the next fire until the previous `tick` has settled (the
-  catch-up backlog accumulates in `pending_fires`).
+  not arm the next tick until the previous `tick` has settled (the
+  catch-up backlog accumulates in `pending_ticks`).
 
 ## Cap Surface
 
@@ -463,10 +463,10 @@ without changing the schedule formula's other fields, the
 Phase 1 ships rate and one-shot; cron lands when an actual user
 needs it.
 
-### Per-fire database round-trip
+### Per-tick database round-trip
 
-Each fire writes the new `next_fire_at` and decrements
-`pending_fires`.
+Each tick writes the new `next_tick_at` and decrements
+`pending_ticks`.
 At a one-second cadence with N schedules, that is N writes per
 second, which is well within sqlite WAL-mode's throughput.
 A schedule with sub-second cadence is out of scope for the first
@@ -476,7 +476,7 @@ writes if it ever lands.
 ## Open Questions
 
 1. Should the reactor's `tick(batch)` method see the
-   `pending_fires` count, or only the batch it is being handed?
+   `pending_ticks` count, or only the batch it is being handed?
    Recommendation: only the batch; if the reactor wants to know
    the backlog it can call back to the schedule's exo.
 2. When a reactor is revoked while a schedule still points at it,
@@ -506,19 +506,19 @@ writes if it ever lands.
 
 - Unit tests in `packages/daemon/test/schedule.test.js`:
   - Each catch-up policy in isolation, with a clock-injected
-    fake timer firing N missed fires while a tick is in flight.
+    fake timer ticking N missed ticks while a tick is in flight.
   - Schedule lifecycle: pause / resume / cancel / suspend
     transitions.
   - Sqlite round-trip: write a schedule, restart the daemon's
     in-process database, recover the active schedule, observe
-    that the next fire arms at the correct wall-clock.
+    that the next tick arms at the correct wall-clock.
 - Integration tests in
   `packages/daemon/test/scheduled-send.test.js`:
   - End-to-end `endo scheduled-send` against a fake recipient
-    agent; observe that N fires deliver N messages over the
+    agent; observe that N ticks deliver N messages over the
     expected wall-clock window.
-  - Daemon restart mid-schedule: kill the daemon between fires,
-    relaunch, observe that the missed fires are delivered per
+  - Daemon restart mid-schedule: kill the daemon between ticks,
+    relaunch, observe that the missed ticks are delivered per
     the configured policy.
 - AVA test discipline per
   [`../CLAUDE.md`](../CLAUDE.md) "Testing with AVA":
