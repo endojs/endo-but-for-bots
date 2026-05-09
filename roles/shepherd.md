@@ -110,7 +110,23 @@ architectural ones.
   AVA's `t.truthy` does not narrow at the TS level; use a
   narrowing assertion (`assert(value)` from `node:assert` or
   `@endo/errors` plus a pre-lockdown caveat) before accessing the
-  property.
+  property. **Watch out for `t.assert` as well**: its signature
+  `<T>(actual: T): actual is T extends Falsy<T> ? never : T` is a
+  *type predicate*, not an `asserts` function. TypeScript only
+  narrows on type-predicate calls when the return value is consumed
+  (as a condition or expression); used as a bare statement, the
+  discarded predicate does **not** flow narrowing forward and the
+  next dereference still trips `TS2532` / `TS18048`. `node:assert`
+  has signature `function assert(value: unknown): asserts value`,
+  which narrows unconditionally regardless of how the call is used.
+  When patching a "post-`t.assert(x)` access of `x.foo` is still
+  possibly undefined" lint failure, switch the call to
+  `import assert from 'node:assert'; assert(x)`. Encountered PR
+  #161 (zip deflate mirror) 2026-05-09: three test files in
+  check-bundle and compartment-mapper started failing typedoc after
+  the deflate PR tightened `ZipReader#files` to
+  `Map<string, ArchivedFile>`; the first fix attempt used
+  `t.assert(...)` and produced identical errors at the next line.
 - **`@endo/errors` import order matters in tests**: importing
   `@endo/errors` before any module that locks down SES (e.g.
   `@endo/ses-ava/prepare-endo.js`) crashes at module load with
