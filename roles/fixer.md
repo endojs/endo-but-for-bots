@@ -563,6 +563,29 @@ result through CI.
   blobs, not about reshaping `--text`'s formula kind. The fixer
   preserved the prior settlement and applied only what L327
   actually asked.
+- **A maintainer review that reframes a design's primary surface
+  ("X is the primary surface, not Y") demands a top-to-bottom
+  rewrite, not a new section appended to the existing structure.**
+  When the maintainer's directive inverts the design's framing (e.g.
+  "agents drive the daemon via tool-calls, so the daemon API is
+  primary; the CLI is a thin wrapper"), the prior structure of the
+  document is built on the wrong axis. Rewrite the headings, the
+  capability section, the rationale ("Why X-side and not Y-side"
+  flips to "Why Y-side and not X-side"), the worked examples, and
+  the open questions to align with the new framing. Adding an
+  "EndoGuest API surface" section while the rest of the doc still
+  reads as "this is a CLI verb that composes existing capabilities"
+  produces a document that contradicts itself; a reviewer reading
+  it will land on whichever section they read first and the
+  maintainer's correction is wasted. The fix is uncomfortable
+  because it touches more lines than the inline comment count
+  suggests, but it is what "EndoGuest-API-first reshape" actually
+  means. Session example: PR 162's `cli-edit-verb.md` review id
+  4258583660 inverted "CLI is primary; daemon-side editText is a
+  Future extension" into "EndoGuest.edit is primary; CLI is a thin
+  wrapper"; the fixup commit rewrote 617/260 lines of a 616-line
+  doc rather than the ~20 lines an inline-only response would have
+  touched.
 - **Position-based inline comments need careful diff-line accounting
   when the dispatch summary cites only the position number.** GitHub's
   `position` field is 1-indexed and counts every line in the unified
