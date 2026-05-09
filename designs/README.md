@@ -7,7 +7,8 @@
 [endo-posix-sandbox](endo-posix-sandbox.md) (added 2026-05-07; mirrors
 `PLAN/endo_posix_sandbox.md` for roadmap calibration),
 [exo-zip-package](exo-zip-package.md) (added 2026-05-08; PR #128 reshape
-blocker).*
+blocker), [cli-scheduled-send](cli-scheduled-send.md) (added 2026-05-08;
+PR #145 design revision: reactor + schedule via sqlite).*
 
 ## Summary
 
@@ -106,6 +107,7 @@ blocker).*
 | [outliner-design-doc](outliner-design-doc.md) | 2026-03-17 | 2026-03-18 | In Progress |
 | [base64-native-fallthrough](base64-native-fallthrough.md) | 2026-04-23 | 2026-04-23 | Not Started |
 | [ci-no-npm-lifecycle](ci-no-npm-lifecycle.md) | 2026-04-23 | 2026-04-23 | Not Started |
+| [cli-scheduled-send](cli-scheduled-send.md) | 2026-05-08 | 2026-05-08 | Proposed |
 | [endor-bus-tui](endor-bus-tui.md) | 2026-04-23 | 2026-04-23 | Not Started |
 | [endor-tui](endor-tui.md) | 2026-04-23 | 2026-04-23 | Not Started |
 | [hex-package](hex-package.md) | 2026-04-23 | 2026-04-23 | Not Started |
