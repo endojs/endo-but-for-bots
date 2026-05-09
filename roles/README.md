@@ -128,6 +128,7 @@ stateDiagram-v2
     MaintainerReview --> MaintainerApproved : maintainer approves
 
     MaintainerCR --> MaintainerFixerActive : fixer addresses feedback
+    MaintainerCR --> CleanerActive : maintainer explicitly requests cleaner re-run
 
     state MaintainerFixerActive {
         [*] --> Fixing2
@@ -141,9 +142,12 @@ stateDiagram-v2
 
     MaintainerFixerActive --> MaintainerReview : fixer re-requests review
     note right of MaintainerFixerActive
-      No cleaner re-run on fixer rounds.
+      No cleaner re-run on fixer rounds by default.
       Coverage baseline was set in the
       pre-maintainer CleanerActive pass.
+      Maintainer-explicit ask ("dispatch a cleaner")
+      overrides the default; see CleanerActive arrow
+      from MaintainerCR.
     end note
 
     MaintainerApproved --> Merged : conductor gh pr merge --merge (CI green)
@@ -171,10 +175,19 @@ Notes on the state machine:
   The maintainer should see a CI-green, panel-vetted, coverage-cleaned
   PR on the first look.
 - The maintainer-review loop is fixer → shepherd → re-request review.
-  No cleaner re-run.
+  No cleaner re-run by default.
   The cleaner already established a coverage baseline; small fix-up
   changes do not warrant a fresh package-wide pass and dispatching a
   cleaner mid-loop races the next maintainer review.
+  **Exception:** the maintainer may explicitly request a cleaner
+  re-run inside a `CHANGES_REQUESTED` review (phrasings like
+  "dispatch a cleaner then a shepherd to maximize coverage on
+  `<package>`").
+  When that happens, MaintainerCR transitions back to CleanerActive
+  rather than to MaintainerFixerActive; the cleaner runs again, then
+  hands off to the shepherd per the canonical pre-maintainer chain.
+  Encountered on PR #122 (2026-05-09): kriskowal asked for a cleaner
+  re-run, coverage moved from 87.6% to 96.6%.
 - `CIRunning` / `CIRed` / `CIGreen` / `ShepherdInline` are nested
   inside both `PanelFixerActive` and `MaintainerFixerActive` because
   every fixer push triggers fresh CI and may require a shepherd to

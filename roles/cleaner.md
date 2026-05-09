@@ -61,15 +61,41 @@ alive.
    shepherd -> request maintainer review.
    Cleaner commits land on the SAME PR as the builder's branch;
    do NOT open a separate PR for cleaner output.
-   After the cleaner's tests and deletions land, dispatch a
-   shepherd to drive `gh pr checks` to green BEFORE the
-   maintainer-review request goes out.
+
+   **The shepherd hand-off is mandatory and load-bearing.** The
+   cleaner does NOT end its engagement until ONE of the following
+   has happened:
+   - **`gh pr checks` shows green** (or only documented
+     pre-existing infra red like `build-wasm` drift on a
+     sibling-PR commit), confirmed by the cleaner inline before
+     reporting done; OR
+   - **A separate shepherd sub-agent has been dispatched** with a
+     brief that names the PR, the new HEAD SHA, and the cleaner's
+     coverage delta as context; OR
+   - **The PR is `mergeable: CONFLICTING / dirty`**, in which
+     case the cleaner's report explicitly surfaces "needs a
+     weaver before shepherd" so the steward dispatches the weaver
+     first.
+
+   A cleaner that pushes coverage commits, runs `npx ava`
+   locally, and ends without verifying the remote CI state OR
+   dispatching a shepherd has stalled the hand-off chain.
+   Encountered on PR #122 (2026-05-09): a cleaner-fixer combined
+   dispatch pushed coverage commits and reported "44 platform
+   tests pass, lint clean", but the PR was `CONFLICTING` against
+   `llm` (so GitHub never dispatched CI) and the dispatch did
+   not surface the conflict; the steward had to notice the missing
+   CI run and dispatch a separate weaver, then a separate fixer
+   for the llm-base regression that surfaced once CI ran. The
+   cleaner-side failure was: ended without confirming `gh pr
+   checks` had even started, let alone converged.
+
    A red-CI PR in the maintainer's queue wastes the maintainer's
    time deciding whether the red is "yours" or "mine"; the bot's
    job is to remove that ambiguity.
-7. **Do NOT re-run on post-maintainer fixer rounds.** The cleaner
-   runs once, on the initial bot-side prep before maintainer
-   review.
+7. **Do NOT re-run on post-maintainer fixer rounds (default).**
+   The cleaner runs once, on the initial bot-side prep before
+   maintainer review.
    After a maintainer `CHANGES_REQUESTED`, the loop is
    fixer -> shepherd -> re-request maintainer; no cleaner.
    The package's coverage baseline was established at step 6;
@@ -81,6 +107,18 @@ alive.
    branch, a new file, a reshape across multiple call sites),
    the fixer's brief calls out the cleaner re-dispatch
    explicitly; the default is no re-run.
+
+   **Exception: the maintainer may explicitly request a cleaner
+   re-run inside a CR.** Phrasings like "dispatch a cleaner then
+   a shepherd to maximize coverage on `<package>`" override the
+   default no-re-run rule. The cleaner runs again, then hands
+   off to the shepherd per step 6; the maintainer-explicit ask
+   short-circuits the "post-maintainer fixer rounds skip cleaner"
+   default. Encountered on PR #122 (2026-05-09): kriskowal's CR
+   review explicitly asked "Please dispatch a cleaner then a
+   shepherd to maximize code coverage in the platform package."
+   Coverage went from 87.6% to 96.6%; the explicit request was
+   the right trigger.
 
 ## Skills
 
