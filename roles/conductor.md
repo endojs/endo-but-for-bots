@@ -123,6 +123,21 @@ For each PR at the head of the queue:
 7. **Update the dispatch state.** Remove the PR from the queue;
    commit + push as `process(conductor): merge queue update <ts>`
    so the next steward cycle sees the drain.
+   If the merge unblocks downstream PRs (e.g., a fix that other
+   PRs were waiting to rebase onto), record the unblocked PR
+   numbers in the dispatch-state entry so the **steward** can
+   fan out the weaver / shepherd follow-ups in the next cycle.
+   The conductor does NOT dispatch those follow-ups itself: the
+   conductor's tool surface may not include `Agent`, and the
+   one-conductor-at-a-time concurrency cap means follow-up
+   dispatches naturally belong to the steward's per-cycle
+   coordinator role.
+   Encountered on PR #167 (2026-05-10): the brief asked the
+   conductor to dispatch two weavers in parallel after the merge;
+   the conductor reported back that `Agent` was not in its
+   exposed deferred-tool set and recorded the briefs in
+   dispatch-state instead, which the steward then dispatched
+   from the parent loop.
 8. **Pick the next PR**, return to step 1.
 
 End the engagement when the queue is empty, every remaining
