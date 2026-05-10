@@ -341,7 +341,7 @@ const makeMountDirectoryExo = ctx => {
       const segments = typeof pathArg === 'string' ? [pathArg] : pathArg;
       const { absolute } = clamp(segments);
       await assertConfined(absolute, confinementRoot, filePowers);
-      return filePowers.readFileText(absolute);
+      return tameAclErrors(() => filePowers.readFileText(absolute));
     },
 
     async maybeReadText(pathArg) {
@@ -481,7 +481,7 @@ const makeMountFileExo = (filePath, readOnly, filePowers, confinementRoot) => {
     async text() {
       await null;
       await assertConfined(filePath, confinementRoot, filePowers);
-      return filePowers.readFileText(filePath);
+      return tameAclErrors(() => filePowers.readFileText(filePath));
     },
 
     streamBase64() {
@@ -491,7 +491,8 @@ const makeMountFileExo = (filePath, readOnly, filePowers, confinementRoot) => {
 
     async json() {
       await null;
-      const text = await filePowers.readFileText(filePath);
+      await assertConfined(filePath, confinementRoot, filePowers);
+      const text = await tameAclErrors(() => filePowers.readFileText(filePath));
       return JSON.parse(text);
     },
 
