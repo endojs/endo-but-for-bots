@@ -24,6 +24,7 @@ import {
   isErrorLike,
 } from './error.js';
 import { RemotableHelper } from './remotable.js';
+import { PromiseHelper } from './promise.js';
 
 import { assertPassableSymbol } from './symbol.js';
 import { assertSafePromise } from './safe-promise.js';
@@ -51,6 +52,7 @@ const makeHelperTable = passStyleHelpers => {
     tagged: undefined,
     error: undefined,
     remotable: undefined,
+    promise: undefined,
   };
   for (const helper of passStyleHelpers) {
     const { styleName } = helper;
@@ -242,6 +244,7 @@ export const passStyleOf =
     TaggedHelper,
     ErrorHelper,
     RemotableHelper,
+    PromiseHelper,
   ]);
 
 export const assertPassable = val => {
