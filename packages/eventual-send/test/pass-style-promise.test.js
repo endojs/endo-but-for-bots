@@ -479,3 +479,54 @@ test('subscribe error inside callback does not corrupt other subscribers', async
   await Promise.resolve();
   t.is(observedB, 'ok');
 });
+
+test('rejectExternalPassStylePromise: bridges external producer rejection', async t => {
+  // Counterpart to the `resolveExternalPassStylePromise` test above:
+  // a host (CapTP, liveSlots) that mints a carrier outside
+  // `makeSubscribableKit` and signals rejection through the external
+  // channel. The recorded rejection MUST surface to a subscriber
+  // attached via HandledPromise.subscribe.
+  const { promise } = makeSubscribableKit();
+  /** @type {any} */
+  let rejection;
+  HandledPromise.subscribe(
+    promise,
+    () => t.fail('onFulfilled must not fire on a rejected carrier'),
+    reason => {
+      rejection = reason;
+    },
+  );
+  rejectExternalPassStylePromise(promise, new Error('external-reject'));
+  await Promise.resolve();
+  await Promise.resolve();
+  t.true(rejection instanceof Error);
+  t.is(/** @type {Error} */ (rejection).message, 'external-reject');
+});
+
+test('subscribe after settle with throwing callback does not corrupt other subscribers', async t => {
+  // Documents the behavior of `enqueueSubscriber`'s post-settle path
+  // (`pass-style-promise.js` `onNextTurn` catch). When a subscriber is
+  // attached AFTER the producer settled, the callback fires inside a
+  // bare microtask thunk; if the callback throws, the error reaches
+  // the `onNextTurn` catch handler, which logs and swallows it.
+  // Without this catch, the bare microtask would surface as an
+  // unhandled rejection and (in AVA) would tear down the test file.
+  // The observable signal is that a SECOND post-settle subscriber
+  // attached after the throwing one still receives its target; if the
+  // unhandled rejection escaped, AVA would mark the test file failed.
+  // The test file's clean exit is the load-bearing assertion.
+  const { promise, settle } = makeSubscribableKit();
+  settle('after');
+  HandledPromise.subscribe(promise, () => {
+    throw new Error('post-settle-throw');
+  });
+  /** @type {any} */
+  let secondObserved;
+  HandledPromise.subscribe(promise, target => {
+    secondObserved = target;
+  });
+  await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
+  t.is(secondObserved, 'after');
+});
