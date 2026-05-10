@@ -157,10 +157,7 @@ test('inbound: rejection with no local subscriber does not get swallowed', async
   await Promise.resolve();
   // The producer-side rejection still surfaced to CapTP's onReject.
   t.true(observedRejections.length >= 1);
-  t.is(
-    /** @type {Error} */ (observedRejections[0]).message,
-    'no-subscriber',
-  );
+  t.is(/** @type {Error} */ (observedRejections[0]).message, 'no-subscriber');
 });
 
 test('round-trip: send carrier and receive it back', async t => {

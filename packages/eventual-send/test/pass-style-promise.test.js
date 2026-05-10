@@ -281,7 +281,11 @@ test('subscribe delivers each of the four target shapes verbatim', async t => {
     settle(nativeP);
     await Promise.resolve();
     await Promise.resolve();
-    t.is(observed, nativeP, 'native Promise delivered verbatim (not unwrapped)');
+    t.is(
+      observed,
+      nativeP,
+      'native Promise delivered verbatim (not unwrapped)',
+    );
   }
   // Case 3: HandledPromise.
   {
