@@ -1,6 +1,6 @@
 # Endo Design Documents
 
-*Last updated: 2026-05-08*
+*Last updated: 2026-05-10*
 
 *See also: [daemon-make-archive](daemon-make-archive.md) (added 2026-04-23),
 [filesystem-watchers](filesystem-watchers.md) (added 2026-05-07),
@@ -10,7 +10,10 @@
 blocker),
 [trust-on-first-bind](trust-on-first-bind.md) (added 2026-05-08; shared
 capability-policy adapter referenced by HTTP client and browser controller
-designs; addendum to PR #144 HttpClient).*
+designs; addendum to PR #144 HttpClient),
+[watchmen](watchmen.md) (added 2026-05-10; refactor of the steward's
+scheduling and watching machinery into three narrowly focused
+sub-roles).*
 
 ## Summary
 
@@ -114,10 +117,11 @@ designs; addendum to PR #144 HttpClient).*
 | [endor-tui](endor-tui.md) | 2026-04-23 | 2026-04-23 | Not Started |
 | [hex-package](hex-package.md) | 2026-04-23 | 2026-04-23 | Not Started |
 | [endo-bytes](endo-bytes.md) | 2026-05-08 | 2026-05-10 | Implemented |
+| [watchmen](watchmen.md) | 2026-05-10 | 2026-05-10 | Proposed |
 | [weblet-next](weblet-next.md) | 2026-03-24 | 2026-03-24 | Reference |
 | [workers-panel](workers-panel.md) | 2026-02-14 | 2026-02-24 | Not Started |
 
-**Totals:** 27 Complete/Implemented, 15 In Progress, 43 Not Started, 2 Proposed, 3 Active, 3 Reference, 2 Deprecated, 1 Draft, 1 Superseded (97 designs)
+**Totals:** 27 Complete/Implemented, 15 In Progress, 43 Not Started, 3 Proposed, 3 Active, 3 Reference, 2 Deprecated, 1 Draft, 1 Superseded (98 designs)
 
 ## Roadmap
 
