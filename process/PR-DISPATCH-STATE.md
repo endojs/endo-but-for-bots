@@ -1,6 +1,7 @@
 # PR dispatch state
 
-Last cycle: 2026-05-10 (conductor PR 164 merge).
+Last cycle: 2026-05-10 (conductor PR 140 merge).
+Prior cycle: 2026-05-10 (conductor PR 164 merge).
 Prior cycle: 2026-05-10 (conductor PR 146 merge).
 Prior cycle: 2026-05-10 (conductor PR 103 merge).
 Prior cycle: 2026-05-10 (conductor PR 161 merge).
@@ -11,6 +12,36 @@ Earlier: 2026-05-07 (conductor PR 119 merge).
 Earlier: 2026-05-07 (conductor PR 99 merge).
 Earlier: 2026-05-07 14:55 UTC (PR 119 contributor review).
 Earlier: 2026-05-07 07:00 UTC (master synced; fixer for PR 114; PR 111 fold-in dispatched).
+
+## Cycle 2026-05-10 (conductor PR 140)
+
+PR 140 merged → `d5b50506605009e772bf49032ff0f744ab7a30e3` (merge commit
+to `llm`) at 2026-05-10T11:07:33Z.
+`design(bytes): @endo/bytes package for Uint8Array helpers`, docs-only
+design proposing a small leaf package providing `concatBytes`,
+`bytesEqual`, `bytesFromText`, and `bytesToText` for platform-neutral
+byte handling, retiring duplicated helpers in
+`packages/platform/src/fs-node/`. Built on `Uint8Array` with
+`TextEncoder`/`TextDecoder` captured once at module load.
+At survey: APPROVED, MERGEABLE/CLEAN, 28/28 CI SUCCESS at head
+`469082d216` (single consolidated commit per kriskowal directive;
+rebased after #164 merged with conflict resolution in
+`designs/README.md`). No rebase needed (CLEAN); tidy skipped (already
+consolidated to a single commit). Merge-commit title and body sourced
+from the PR per the 2026-05-10 repo settings change
+(`merge_commit_title=PR_TITLE`, `merge_commit_message=PR_BODY`).
+Direct `gh pr merge 140 --repo endojs/endo-but-for-bots --merge
+--delete-branch`; state=MERGED on first verify. Local
+`design/endo-bytes` branch and remote branch deleted; worktree
+`/home/kris/endo-wt/design-endo-bytes` removed; safety tag
+`pr140-pre-consolidate` deleted.
+
+Downstream: PR 142 (`feat(bytes): @endo/bytes package`) is the
+implementation of this design and the obvious next merge candidate
+once it is review-ready. Worktree `/home/kris/endo-wt/pr-142`,
+branch `feat/endo-bytes` at `e33273682e`. Steward to verify CI / review
+state and dispatch a weaver (PR 142 will now be behind base by at
+least one merge commit) before considering for the queue.
 
 ## Cycle 2026-05-10 (conductor PR 164)
 
