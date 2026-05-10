@@ -1628,6 +1628,11 @@ export const permitted = {
     getSendOnly: fn,
     prototype: '%PromisePrototype%',
     resolve: fn,
+    // Pass-style promise integration: subscribe is the fire-once
+    // callback-based primitive; settle is the promise-returning
+    // convenience layered on subscribe. See packages/eventual-send.
+    subscribe: fn,
+    settle: fn,
   },
 
   // https://github.com/tc39/proposal-source-phase-imports?tab=readme-ov-file#js-module-source

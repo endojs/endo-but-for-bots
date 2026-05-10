@@ -14,10 +14,18 @@ const hp = HandledPromise;
  * promise for the property.  The promise value will be the property fetched from whatever 'x' designates (or
  * resolves to) in a future turn, not this one.
  *
- * E.when(x, res, rej) is equivalent to HandledPromise.resolve(x).then(res, rej)
+ * E.when(x, res, rej) is equivalent to HandledPromise.settle(x).then(res, rej),
+ * walking through any chain of pass-style promises, native Promises, and
+ * HandledPromises until a non-promise Passable is reached.
  */
 export const E = makeE(hp);
 export { hp as HandledPromise };
+
+export {
+  makeSubscribableKit,
+  resolveExternalPassStylePromise,
+  rejectExternalPassStylePromise,
+} from './pass-style-promise.js';
 
 // eslint-disable-next-line import/export
 export * from './exports.js';
