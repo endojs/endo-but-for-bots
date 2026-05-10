@@ -1,6 +1,7 @@
 # PR dispatch state
 
-Last cycle: 2026-05-10 (conductor PR 140 merge).
+Last cycle: 2026-05-10 (conductor PR 142 merge).
+Prior cycle: 2026-05-10 (conductor PR 140 merge).
 Prior cycle: 2026-05-10 (conductor PR 164 merge).
 Prior cycle: 2026-05-10 (conductor PR 146 merge).
 Prior cycle: 2026-05-10 (conductor PR 103 merge).
@@ -12,6 +13,39 @@ Earlier: 2026-05-07 (conductor PR 119 merge).
 Earlier: 2026-05-07 (conductor PR 99 merge).
 Earlier: 2026-05-07 14:55 UTC (PR 119 contributor review).
 Earlier: 2026-05-07 07:00 UTC (master synced; fixer for PR 114; PR 111 fold-in dispatched).
+
+## Cycle 2026-05-10 (conductor PR 142)
+
+PR 142 merged → `0945a3aaef6971588e37fbe2ab2c6a701170d553` (merge commit
+to `llm`) at 2026-05-10T17:35:04Z.
+`feat(bytes): @endo/bytes package for platform-neutral byte operations`,
+the implementation of the design landed in PR 140 (a small leaf package
+providing `concatBytes`, `bytesEqual`, `bytesFromText`, `bytesToText` on
+`Uint8Array` with `TextEncoder`/`TextDecoder` captured once at module
+load).
+At survey: APPROVED (kriskowal 2026-05-10T17:18:34Z), MERGEABLE/CLEAN,
+29/29 CI SUCCESS at head `03244bf0a4` (6-commit per-package shape;
+title and body recently reauthored to be merge-commit-ready per
+kriskowal's directive). No rebase needed (CLEAN); tidy already done
+(per-package shape is the intended cluster). Merge-commit title and
+body sourced from the PR per the 2026-05-10 repo settings change
+(`merge_commit_title=PR_TITLE`, `merge_commit_message=PR_BODY`).
+Direct `gh pr merge 142 --repo endojs/endo-but-for-bots --merge
+--delete-branch`; state=MERGED on first verify. Local
+`feat/endo-bytes` branch deleted; remote branch deleted via
+`--delete-branch`; worktrees `/home/kris/endo-wt/pr-142` and
+`/home/kris/endo-wt/feat-endo-bytes` removed; safety tags
+`pr142-pre-reshape`, `pr142-pre-perpkg-reshape`, `pr142-pre-resplit`,
+`pr142-pre-reshape-4`, `pr142-pre-perpkg-resplit` deleted.
+
+**Follow-up needed (steward to dispatch)**: kriskowal asked at
+2026-05-10T17:19:20Z for a follow-up PR replaying this change on
+`actual/master` (upstream `endojs/endo`). Next steward cycle should
+dispatch a builder for the upstream replay: port the per-package shape
+of `@endo/bytes` to upstream master, plus the call-site adoption that
+retired duplicated helpers in `packages/platform/src/fs-node/`.
+Reference merge commit on `bots-ssh/llm`:
+`0945a3aaef6971588e37fbe2ab2c6a701170d553`.
 
 ## Cycle 2026-05-10 (conductor PR 140)
 
