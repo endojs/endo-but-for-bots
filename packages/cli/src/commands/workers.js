@@ -18,7 +18,7 @@ export const workers = async ({ json }) =>
 
     if (workerEntries.length === 0) {
       if (!json) {
-        console.log('No workers found.');
+        console.error('No workers found.');
       } else {
         console.log('[]');
       }
