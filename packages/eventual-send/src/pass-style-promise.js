@@ -403,14 +403,3 @@ export const isThenable = candidate =>
   (typeof candidate === 'object' || typeof candidate === 'function') &&
   typeof candidate.then === 'function';
 freeze(isThenable);
-
-/**
- * Assertion helper: a producer is created for an externally-minted carrier
- * the first time a subscriber attaches. This is exposed only for tests.
- *
- * @param {object} carrier
- * @returns {boolean}
- */
-export const hasProducerForTesting = carrier =>
-  passStylePromiseProducers.has(carrier);
-freeze(hasProducerForTesting);
