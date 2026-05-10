@@ -1,13 +1,15 @@
 # Endo Design Documents
 
-*Last updated: 2026-05-08*
+*Last updated: 2026-05-10*
 
 *See also: [daemon-make-archive](daemon-make-archive.md) (added 2026-04-23),
 [filesystem-watchers](filesystem-watchers.md) (added 2026-05-07),
 [endo-posix-sandbox](endo-posix-sandbox.md) (added 2026-05-07; mirrors
 `PLAN/endo_posix_sandbox.md` for roadmap calibration),
 [exo-zip-package](exo-zip-package.md) (added 2026-05-08; PR #128 reshape
-blocker).*
+blocker),
+[unhandled-rejection-display](unhandled-rejection-display.md) (added
+2026-05-10; closes issue #171).*
 
 ## Summary
 
@@ -109,10 +111,11 @@ blocker).*
 | [endor-bus-tui](endor-bus-tui.md) | 2026-04-23 | 2026-04-23 | Not Started |
 | [endor-tui](endor-tui.md) | 2026-04-23 | 2026-04-23 | Not Started |
 | [hex-package](hex-package.md) | 2026-04-23 | 2026-04-23 | Not Started |
+| [unhandled-rejection-display](unhandled-rejection-display.md) | 2026-05-10 | 2026-05-10 | Proposed |
 | [weblet-next](weblet-next.md) | 2026-03-24 | 2026-03-24 | Reference |
 | [workers-panel](workers-panel.md) | 2026-02-14 | 2026-02-24 | Not Started |
 
-**Totals:** 26 Complete/Implemented, 15 In Progress, 43 Not Started, 2 Proposed, 3 Active, 2 Reference, 2 Deprecated, 1 Draft, 1 Superseded (95 designs)
+**Totals:** 26 Complete/Implemented, 15 In Progress, 43 Not Started, 3 Proposed, 3 Active, 2 Reference, 2 Deprecated, 1 Draft, 1 Superseded (96 designs)
 
 ## Roadmap
 
