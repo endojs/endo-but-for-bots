@@ -422,6 +422,47 @@ result through CI.
   integration test surfaced the bug; the proper fix needed the
   agent's mailbox `deliver()` plumbed into the maker scope, larger
   than a fixer pass; landed as `test.serial.skip` placeholder.
+- **A "further isolate the repro" maintainer directive on a
+  failing-regression-test PR wants a sentinel test in addition to,
+  not in place of, the failing regression.** When the repro PR's
+  whole purpose is to ship a test that fails until a future fix
+  lands, a directive like "this should be possible to repro without
+  the daemon" is asking the bot to demonstrate the underlying
+  language fact (or library fact) at a layer that does NOT need the
+  system under repair. The cleanest shape is two artifacts:
+  1. A **sentinel** test in the package that owns the relevant
+     protocol or shape (here: captp owns the `CTP_DISCONNECT`
+     envelope), asserting the broken-but-language-defined behavior
+     directly (`t.is(JSON.stringify(Error('x')), '{}')`). This passes
+     today and will keep passing after the fix; it documents WHY the
+     symptom occurs and serves as a tripwire if the language fact
+     ever changes.
+  2. The original **regression** test stays as integration coverage,
+     asserting the post-fix invariant; it fails today and will pass
+     after the fix.
+  Resist collapsing both into one assertion: a sentinel-shaped
+  assertion that flips after the fix would mean asserting that the
+  language behavior changes, which it does not. Cite both files in
+  the reply: which is the sentinel, which is the regression, and why
+  one cannot replace the other. Session example: PR 174 (#171
+  repro) — added `packages/captp/test/disconnect-error-display.test.js`
+  as the language-fact sentinel; kept
+  `packages/daemon/test/disconnect-error-display.test.js` as the
+  failing regression on `messageToBytes`.
+- **`yarn format` (and the project's `format` script in general) walks
+  the whole tree, not just your staged files.** A pre-existing file
+  in the PR's diff that the original committer did not pre-format
+  will get reformatted on your machine and show up as a spurious
+  modification when you stage. Revert with
+  `git checkout <path>` before committing your own work; if the
+  pre-existing format drift is genuinely the maintainer's concern,
+  ship it as a separate `chore: prettier` commit, not folded into
+  the substantive change. Use `node node_modules/prettier/bin/prettier.cjs
+  --check <your-new-file>` to format-check a single file in
+  isolation. Session example: PR 174 fixer pass — `yarn format`
+  reformatted a previously-existing daemon test file in the PR's
+  diff; reverted with `git checkout` before committing the new
+  captp test.
 - **Regression-evidence tests must target the specific bug-symptom,
   not a related correctness invariant.** A "cancel during tick must
   not produce more ticks" assertion can pass against the racy code
