@@ -59,6 +59,28 @@ issue or design document, and shepherding it through to a green PR.
 - Implement the smallest change that satisfies the acceptance
   criteria.
 - Don't refactor adjacent code unless the task calls for it.
+- **Before opening a worktree against any queued issue, verify that
+  no open PR already implements it.** A queue assembled hours or
+  days earlier (e.g. `process/AGENT-READY-ISSUES.md`) can
+  silently overlap PRs that another builder dispatch opened in the
+  interim. Cheap pre-flight check per issue:
+  `gh pr list --repo endojs/endo-but-for-bots --state all --search "<N> in:title"`
+  AND the same against `endojs/endo`. An OPEN PR with green CI
+  authored by the bot is the strongest possible signal that the
+  work is already in flight; opening a duplicate wastes review
+  bandwidth, splits comments across two PRs, and forces the
+  steward to close one. A CLOSED PR (especially one merged
+  upstream) means the issue itself is also typically closed
+  upstream; double-check the issue state via `gh issue view <N>
+  --repo endojs/endo --json state` before doing anything. Skip and
+  surface the existing PR number in the dispatch report. Encountered
+  on the 2026-05-10 Builder B dispatch (queue of 7): 4 of 7 issues
+  (#2390, #2632, #2742, #2749) had pre-existing open or merged PRs
+  that the queue did not flag. Net yield was 1 PR (#947), 1 impasse
+  (#1298 has 38 files of behavior-changing risk under a "mop-up"
+  label), 1 misclassification (#922 names a package not in this
+  repo), and 4 already-covered.
+
 - **Before opening a worktree, verify that "Done" markings on the
   design's sub-items match the current code.** A design with
   `Status: In Progress` and several sub-items marked Done can hide
