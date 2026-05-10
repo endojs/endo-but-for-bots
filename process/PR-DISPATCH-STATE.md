@@ -1,6 +1,7 @@
 # PR dispatch state
 
-Last cycle: 2026-05-10 (conductor PR 146 merge).
+Last cycle: 2026-05-10 (conductor PR 164 merge).
+Prior cycle: 2026-05-10 (conductor PR 146 merge).
 Prior cycle: 2026-05-10 (conductor PR 103 merge).
 Prior cycle: 2026-05-10 (conductor PR 161 merge).
 Prior cycle: 2026-05-10 (conductor PR 167 merge).
@@ -10,6 +11,37 @@ Earlier: 2026-05-07 (conductor PR 119 merge).
 Earlier: 2026-05-07 (conductor PR 99 merge).
 Earlier: 2026-05-07 14:55 UTC (PR 119 contributor review).
 Earlier: 2026-05-07 07:00 UTC (master synced; fixer for PR 114; PR 111 fold-in dispatched).
+
+## Cycle 2026-05-10 (conductor PR 164)
+
+PR 164 merged → `62ae0d27011f59ce3957e0ff78685269e2407233` (merge commit
+to `llm`) at 2026-05-10T08:25:35Z.
+`design(cap-policy): trust-on-first-bind for capability-policy bindings
+(PR #144 addendum)`, docs-only design proposing a TOFU adapter for
+allowlist-bearing capability bindings (origins, paths, commands), as
+follow-up to a PR #144 inline review request.
+At survey: APPROVED, MERGEABLE/CLEAN, 34 behind / 2 ahead
+`bots-ssh/llm`, 28/28 CI SUCCESS at head `337329bdd0`. The earlier
+macos-15 flake had cleared by survey time; no rerun needed.
+GitHub reported MERGEABLE/CLEAN despite the 34-behind delta (the merge
+commit absorbs the base advance), so no rebase performed; tidy skipped
+(single-commit, coherent docs-only PR with authoritative title and
+body). Merge-commit title and body now sourced from the PR per the
+2026-05-10 repo settings change (`merge_commit_title=PR_TITLE`,
+`merge_commit_message=PR_BODY`).
+Direct `gh pr merge 164 --repo endojs/endo-but-for-bots --merge
+--delete-branch` (this repo lacks auto-merge); state=MERGED on first
+verify, mergedBy=kriscendobot. Local + remote
+`design/trust-on-first-bind` branch deleted;
+`/home/kris/endo-wt/trust-on-first-bind-design` worktree removed; no
+safety tags existed.
+
+No known downstream PRs were waiting on PR 164. Per the design's
+"Composes with PR #144" note, future implementation issues for the
+`policyMode` constructor parameter on `HttpController` and the
+`endo http policy` subcommand surface remain TODO; both are
+documented in the design body's Test Plan as follow-on work to file
+once the design is accepted.
 
 ## Cycle 2026-05-10 (conductor PR 146)
 
