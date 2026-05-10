@@ -437,6 +437,50 @@ architectural ones.
   `eslint-plugin-jsdoc 62.x`'s `prepare: husky`), but call this
   out explicitly in the report rather than glossing over a
   lifecycle hit.
+  **For pure-metadata packages like
+  `@lavamoat/preinstall-always-fail`, where the entire payload is
+  4 files (CHANGELOG, LICENSE, README, package.json) and the
+  package's purpose is its `preinstall: ... && exit 1` script,
+  inspect the `scripts.preinstall` byte-for-byte across the bump
+  via `npm view <pkg>@<ver> scripts.preinstall`** rather than
+  installing and grepping. A change to that string is the
+  package's only attack surface.
+
+- **Predicting a TS-major-bump's lint:types failures: diff per-package
+  `tsc --noEmit` head-to-head against the old and new TS at the
+  PR's exact pin set, before relying on CI.** When a typescript-bump
+  PR sweeps 7 packages from `~5.9.2` to `~6.0.3`, the workspace
+  catalog (`typescript: ~6.0.2` in `.yarnrc.yml`) already pins the
+  rest of the workspace at 6.x. So the per-package
+  `node_modules/typescript` install (5.9.2) and the workspace-root
+  `node_modules/typescript` install (6.0.2) coexist in the same
+  checkout. From each affected package dir, run
+  `./node_modules/typescript/bin/tsc --noEmit --pretty false`
+  (5.9.2) and `../../node_modules/typescript/bin/tsc --noEmit
+  --pretty false` (6.0.2 catalog) to get a clean A/B comparison.
+  Strip pre-existing errors (those present under both versions)
+  and report only the **new** errors as the bump's blast radius.
+  TS 6.x's most common new failure is the catch-binding inference
+  change: `} catch (error) { error.foo }` worked under TS 5.x
+  with default `useUnknownInCatchVariables: false`, but TS 6.x
+  narrows to `unknown`/`{}` in many configs and TS2339s on the
+  property access. Encountered PR #196 (typescript 5.9.2 → 6.0.3)
+  2026-05-10: `lal/providers/anthropic.js` had 5 such accesses
+  that 5.9.2 didn't catch and 6.0.2 does, predicting a
+  `lal:lint:types` CI failure before the lint job even ran.
+
+- **Don't trust `EXIT=$?` after a pipeline; it captures the
+  *last* command's exit, not your tool's.** Specifically,
+  `tsc --noEmit | grep -c "error TS"; echo "EXIT=$?"` always
+  prints `EXIT=0` when there are matching errors (because
+  `grep -c` succeeded). Either run the tool unpiped and check
+  `$?` directly, redirect to a file and inspect the file
+  (`tsc --noEmit > /tmp/x.log 2>&1; echo $?; grep -c "error
+  TS" /tmp/x.log`), or use `set -o pipefail` for the duration.
+  This bit a TS6-bump audit (PR #196) hard: the first sweep
+  reported "all packages exit=0" and almost shipped a
+  RECOMMEND-MERGE; the unpiped re-run revealed `lal` exiting 2
+  with 5 new errors and flipped the recommendation to HOLD.
 
 - **Familiar's Electron bumps are not exercised by standard CI.**
   `packages/familiar` has no `test` script and is not in the
