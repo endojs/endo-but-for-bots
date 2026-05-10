@@ -245,6 +245,42 @@ test('E(passStylePromise) dispatch on chained pass-style carrier', async t => {
   t.is(await callP, 5);
 });
 
+test('reject without subscribers retains the rejection (intentional)', async t => {
+  // Producer rejects with NO subscriber attached and NO downstream
+  // promise-returning facade. The rejection MUST NOT trip an unhandled
+  // rejection on the host (we cannot easily observe absence in-process,
+  // but we DO assert the recorded rejection is delivered verbatim to a
+  // subscriber attached after the fact).
+  const { promise, reject } = makeSubscribableKit();
+  reject(new Error('produced-but-unobserved'));
+  // No microtask flush in between: late subscriber should still see it.
+  await Promise.resolve();
+  await Promise.resolve();
+  /** @type {any} */
+  let rejection;
+  HandledPromise.subscribe(
+    promise,
+    () => t.fail('onFulfilled must not fire'),
+    reason => {
+      rejection = reason;
+    },
+  );
+  await Promise.resolve();
+  await Promise.resolve();
+  t.true(rejection instanceof Error);
+  t.is(/** @type {Error} */ (rejection).message, 'produced-but-unobserved');
+});
+
+test('settle as facade: reject before settle still rejects the facade', async t => {
+  // Demonstrates the intentional retention contract: the rejection is
+  // delivered to the synchronous-handler facade attached after the fact.
+  const { promise, reject } = makeSubscribableKit();
+  reject(new Error('producer-side'));
+  await t.throwsAsync(() => HandledPromise.settle(promise), {
+    message: 'producer-side',
+  });
+});
+
 test('subscribe error inside callback does not corrupt other subscribers', async t => {
   const { promise, settle } = makeSubscribableKit();
   /** @type {any} */

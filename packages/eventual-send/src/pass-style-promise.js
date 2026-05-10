@@ -211,6 +211,23 @@ const settleProducer = (producer, fulfilled, value) => {
  * (or, transitively, observers calling `HandledPromise.settle(promise)`)
  * are notified on the next turn after `settle` or `reject` fires.
  *
+ * **Rejection-without-subscribers retention.** A `reject(reason)` call with
+ * no subscribers attached records the rejection on the producer record and
+ * does NOT surface it through the host's unhandled-rejection path. The
+ * recorded reason is delivered to subscribers attached after settlement
+ * (the kit lets a producer mint and reject a carrier before any consumer
+ * subscribes; e.g., a host that forwards the carrier as an opaque kref and
+ * settles it from the kernel before downstream code attaches a subscriber).
+ * Consumers that want host-level unhandled-rejection diagnostics should
+ * route through `HandledPromise.settle(promise)` (which returns a native
+ * Promise that participates in the host's standard rejection bookkeeping)
+ * or `E.when(promise, ...)`. A pure-`subscribe` consumer that omits the
+ * `onRejected` argument gets the standard "rethrow on next turn" default
+ * (see `HandledPromise.subscribe`), which IS the host-side surfacing. The
+ * only case in which the rejection is silently retained is the "produced,
+ * rejected, no subscriber, no facade" case described above; that is the
+ * intentional contract.
+ *
  * @returns {{ promise: object, settle: (target: any) => void, reject: (reason: any) => void }}
  */
 export const makeSubscribableKit = () => {
@@ -307,6 +324,19 @@ freeze(resolveExternalPassStylePromise);
 
 /**
  * The rejection counterpart of `resolveExternalPassStylePromise`.
+ *
+ * **Retention semantics.** Like `makeSubscribableKit`'s `reject`, calling
+ * this with no subscribers attached records the rejection on the producer
+ * record without surfacing it through the host's unhandled-rejection path.
+ * The recorded reason is delivered to subscribers attached after the
+ * rejection. This is intentional: a host-driven settlement channel
+ * (CapTP's `CTP_RESOLVE`, a kernel slot table) often signals settlement
+ * before any local consumer has subscribed, and surfacing such a rejection
+ * to the host's unhandled-rejection path would produce false positives.
+ * Consumers that want host-level diagnostics should route through
+ * `HandledPromise.settle` or `E.when` (both of which attach a synchronous
+ * rejection handler that participates in the standard Promise unhandled-
+ * rejection mechanism).
  *
  * @param {object} carrier
  * @param {any} reason
