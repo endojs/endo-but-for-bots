@@ -247,6 +247,72 @@ test('E(passStylePromise) dispatch on chained pass-style carrier', async t => {
   t.is(await callP, 5);
 });
 
+test('subscribe delivers each of the four target shapes verbatim', async t => {
+  // Test Plan item 8 from designs/pass-style-promise.md: the four target
+  // cases (final Passable, native Promise, HandledPromise, another
+  // pass-style promise) must each be delivered verbatim to the
+  // subscriber, distinguishable by passStyleOf + isPromise checks. We
+  // exercise `HandledPromise.subscribe` directly (NOT `settle`, which
+  // walks the chain) so each carrier's recorded target identity is
+  // observable.
+  // Case 1: final Passable.
+  {
+    const { promise, settle } = makeSubscribableKit();
+    const target = harden({ kind: 'passable' });
+    /** @type {any} */
+    let observed;
+    HandledPromise.subscribe(promise, t1 => {
+      observed = t1;
+    });
+    settle(target);
+    await Promise.resolve();
+    await Promise.resolve();
+    t.is(observed, target, 'final passable delivered verbatim');
+  }
+  // Case 2: native Promise.
+  {
+    const { promise, settle } = makeSubscribableKit();
+    const nativeP = Promise.resolve('inside-native');
+    /** @type {any} */
+    let observed;
+    HandledPromise.subscribe(promise, t1 => {
+      observed = t1;
+    });
+    settle(nativeP);
+    await Promise.resolve();
+    await Promise.resolve();
+    t.is(observed, nativeP, 'native Promise delivered verbatim (not unwrapped)');
+  }
+  // Case 3: HandledPromise.
+  {
+    const { promise, settle } = makeSubscribableKit();
+    const hp = HandledPromise.resolve('inside-handled');
+    /** @type {any} */
+    let observed;
+    HandledPromise.subscribe(promise, t1 => {
+      observed = t1;
+    });
+    settle(hp);
+    await Promise.resolve();
+    await Promise.resolve();
+    t.is(observed, hp, 'HandledPromise delivered verbatim (not unwrapped)');
+  }
+  // Case 4: another pass-style promise carrier.
+  {
+    const { promise: outer, settle: settleOuter } = makeSubscribableKit();
+    const { promise: inner } = makeSubscribableKit();
+    /** @type {any} */
+    let observed;
+    HandledPromise.subscribe(outer, t1 => {
+      observed = t1;
+    });
+    settleOuter(inner);
+    await Promise.resolve();
+    await Promise.resolve();
+    t.is(observed, inner, 'pass-style carrier delivered verbatim');
+  }
+});
+
 test('reject without subscribers retains the rejection (intentional)', async t => {
   // Producer rejects with NO subscriber attached and NO downstream
   // promise-returning facade. The rejection MUST NOT trip an unhandled
