@@ -349,6 +349,37 @@ test('settle as facade: reject before settle still rejects the facade', async t 
   });
 });
 
+test('isPassStylePromiseShape rejects extra own properties (strict shape)', t => {
+  // Hostile shape: looks like a carrier but has a poisoned extra
+  // property. Should NOT be classified as a pass-style carrier; must
+  // not slip into the subscribe path. Without the strict-shape check,
+  // this would auto-install a producer record (or now, fail with the
+  // unregistered-carrier diagnostic). Either is wrong: this is not a
+  // carrier at all, so HandledPromise.subscribe must treat it as an
+  // unknown value and deliver it verbatim on the next turn.
+  const hostile = harden(
+    Object.defineProperties(
+      {},
+      {
+        [Symbol.for('passStyle')]: { value: 'promise' },
+        [Symbol.toStringTag]: { value: 'Promise' },
+        poisoned: { value: 42, enumerable: true },
+      },
+    ),
+  );
+  /** @type {any} */
+  let observed;
+  HandledPromise.subscribe(hostile, target => {
+    observed = target;
+  });
+  // No throw, no hang: delivered verbatim.
+  return Promise.resolve()
+    .then(() => Promise.resolve())
+    .then(() => {
+      t.is(observed, hostile);
+    });
+});
+
 test('subscribe to unregistered carrier fails with a diagnostic', t => {
   // Hostile / typo case: a carrier-shaped object that no one registered.
   // The prior auto-install behavior would silently install a producer

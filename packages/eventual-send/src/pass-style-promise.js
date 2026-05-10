@@ -64,17 +64,39 @@ const passStylePromiseProducers = new WeakMap();
  * @param {any} candidate
  * @returns {boolean} Whether `candidate` is a pass-style promise carrier
  *   (the non-thenable shape recognized by `@endo/pass-style`).
- *   This duck-types the carrier shape to avoid importing pass-style;
- *   `passStyleOf` enforces the full contract on the way in.
+ *   This duck-types the carrier shape to avoid importing pass-style.
+ *   We tighten the check beyond the bare `[PASS_STYLE] === 'promise' &&
+ *   no .then` minimum to also require exactly the two expected own
+ *   property keys (`[PASS_STYLE]` and `[Symbol.toStringTag]`), matching
+ *   `@endo/pass-style`'s `confirmPassStylePromise` strict shape. Without
+ *   this, a hostile object with the right `[PASS_STYLE]` value plus an
+ *   extra own property (an attacker-controlled getter, a poisoned
+ *   `subscribe` field, etc.) would slip through this duck-type into the
+ *   subscribe path. The strict shape is small enough to enforce locally.
  */
 export const isPassStylePromiseShape = candidate => {
   if (!candidate || typeof candidate !== 'object') return false;
   if (candidate[PASS_STYLE] !== 'promise') return false;
   // A native Promise has `then`. A pass-style carrier does not.
-  // We check the `then` property to discriminate from the native fast-path.
-  // (A safer discrimination would consult `passStyleOf`, but we cannot
-  // depend on `pass-style` from this module.)
   if (typeof candidate.then === 'function') return false;
+  // Strict-shape check: exactly `[PASS_STYLE]` and `[Symbol.toStringTag]`
+  // own properties. Anything else is rejected by
+  // `@endo/pass-style`'s `confirmPassStylePromise` and must be rejected
+  // here too so subscribers / settle callers cannot be tricked into
+  // treating an arbitrary tagged object as a carrier.
+  const ownStringKeys = Object.getOwnPropertyNames(candidate);
+  if (ownStringKeys.length !== 0) return false;
+  const ownSymbolKeys = Object.getOwnPropertySymbols(candidate);
+  if (ownSymbolKeys.length !== 2) return false;
+  // The two symbol keys must be PASS_STYLE and Symbol.toStringTag (in
+  // either order). Membership check is sufficient; the indexing checks
+  // above already verified the values.
+  if (
+    !ownSymbolKeys.includes(PASS_STYLE) ||
+    !ownSymbolKeys.includes(toStringTag)
+  ) {
+    return false;
+  }
   return true;
 };
 freeze(isPassStylePromiseShape);
