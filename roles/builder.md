@@ -81,6 +81,42 @@ issue or design document, and shepherding it through to a green PR.
   label), 1 misclassification (#922 names a package not in this
   repo), and 4 already-covered.
 
+  **Also check `git log -- <key-file-from-issue>` against
+  `bots-ssh/master` for the issue number before starting.** The same
+  2026-05-10 Builder A dispatch found that 3 of 7 queued issues
+  (#3081, #3202, #2834) had a fix already merged to `bots-ssh/master`
+  (commit subject lines included "(#NNNN)" referencing the issue) or
+  an APPROVED upstream PR awaiting merge. The `gh pr list` check
+  catches the upstream PR; `git log` catches the already-merged
+  fixes. Both checks together cost two seconds per issue and
+  preempt the entire worktree-setup overhead. Specifically:
+  `git log --oneline bots-ssh/master -- <packages/<X>/src/<file>>
+  | head -10` will surface a commit subject like `fix(<pkg>):
+  <description> (#NNNN)`. Skip and surface the merged-commit SHA
+  in the dispatch report.
+
+  **The `<N> in:title` substring search is necessary but not
+  sufficient: bot-repo PRs whose branch follows the
+  `design/issue-<N>-<slug>` pattern frequently use a title that
+  describes the substance and only references the issue inside the
+  body, not the title.** The 2026-05-10 Builder A dispatch
+  (continued) opened 4 of 4 PRs (#180, #183, #184, #185) without
+  realizing each duplicated a pre-existing OPEN bot-repo PR (#65/#69
+  /#71 from `design/issue-3052-...` / `design/issue-3156-...` /
+  `design/issue-2879-...` and a closed predecessor #70 superseded by
+  upstream PR #3243). All 4 had to be closed as duplicates.
+  Improved pre-flight: search by **branch name** as well, which is
+  much more reliable than title text for the bot-repo's
+  design-pipeline naming convention:
+  `gh pr list --repo endojs/endo-but-for-bots --state all
+  --search "head:issue-<N> OR head:design/issue-<N>"`. AND check
+  the upstream `endojs/endo` for an OPEN or APPROVED PR with a
+  matching subject — `gh pr list --repo endojs/endo --state all
+  --search "<N> in:title"` typically finds it. CLOSED bot-repo PRs
+  with a "Transferred to <upstream URL>" or "superseded by
+  upstream" comment are the strongest signal that the work has
+  moved to upstream and the bot-repo should not re-open it.
+
 - **Before opening a worktree, verify that "Done" markings on the
   design's sub-items match the current code.** A design with
   `Status: In Progress` and several sub-items marked Done can hide
