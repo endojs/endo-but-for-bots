@@ -530,3 +530,135 @@ test('subscribe after settle with throwing callback does not corrupt other subsc
   await Promise.resolve();
   t.is(secondObserved, 'after');
 });
+
+test('onFirstSubscribe (Option A): fires once via HandledPromise.subscribe; second subscriber does not refire', async t => {
+  t.timeout(5_000);
+  let count = 0;
+  const { promise, settle } = makeSubscribableKit({
+    onFirstSubscribe: () => {
+      count += 1;
+    },
+  });
+  // Pre-subscribe: not yet fired (must wait for an actual subscriber).
+  t.is(count, 0);
+  HandledPromise.subscribe(promise, () => {});
+  // Hook fires on a future turn, not synchronously.
+  t.is(count, 0, 'onFirstSubscribe must not fire synchronously');
+  await Promise.resolve();
+  await Promise.resolve();
+  t.is(
+    count,
+    1,
+    'onFirstSubscribe fires exactly once after the first subscriber',
+  );
+  // Second subscriber attaching after the first must NOT re-fire.
+  HandledPromise.subscribe(promise, () => {});
+  await Promise.resolve();
+  await Promise.resolve();
+  t.is(count, 1, 'second subscriber must not refire onFirstSubscribe');
+  // Third subscriber attaching post-settlement: still no refire.
+  settle('done');
+  HandledPromise.subscribe(promise, () => {});
+  await Promise.resolve();
+  await Promise.resolve();
+  t.is(count, 1, 'post-settle subscriber must not refire onFirstSubscribe');
+});
+
+test('onFirstSubscribe (Option A): same-turn double subscribe yields exactly one notification', async t => {
+  t.timeout(5_000);
+  let count = 0;
+  const { promise } = makeSubscribableKit({
+    onFirstSubscribe: () => {
+      count += 1;
+    },
+  });
+  // Two subscribers attaching synchronously in the same turn must not race.
+  HandledPromise.subscribe(promise, () => {});
+  HandledPromise.subscribe(promise, () => {});
+  await Promise.resolve();
+  await Promise.resolve();
+  t.is(count, 1, 'same-turn double subscribe yields one onFirstSubscribe call');
+});
+
+test('onFirstSubscribe (Option A): fires when subscriber arrives transitively via HandledPromise.settle', async t => {
+  t.timeout(5_000);
+  let count = 0;
+  const { promise, settle } = makeSubscribableKit({
+    onFirstSubscribe: () => {
+      count += 1;
+    },
+  });
+  // HandledPromise.settle internally calls subscribe; that counts.
+  const settledP = HandledPromise.settle(promise);
+  t.is(count, 0, 'no synchronous fire');
+  settle('via-settle');
+  const observed = await settledP;
+  t.is(observed, 'via-settle');
+  t.is(count, 1, 'onFirstSubscribe fires for a settle-driven subscriber');
+});
+
+test('onFirstSubscribe (Option A): producer settles before any subscriber; hook fires on the first late subscriber', async t => {
+  t.timeout(5_000);
+  let count = 0;
+  const { promise, settle } = makeSubscribableKit({
+    onFirstSubscribe: () => {
+      count += 1;
+    },
+  });
+  settle('produced-first');
+  // No subscriber yet: hook stays silent across several turns.
+  await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
+  t.is(count, 0, 'no subscriber, no onFirstSubscribe');
+  // Late subscriber arrives: hook fires alongside settlement delivery.
+  /** @type {any} */
+  let observed;
+  HandledPromise.subscribe(promise, target => {
+    observed = target;
+  });
+  await Promise.resolve();
+  await Promise.resolve();
+  t.is(observed, 'produced-first');
+  t.is(
+    count,
+    1,
+    'onFirstSubscribe fires on first late subscriber after settle',
+  );
+});
+
+test('onFirstSubscribe (Option A): omitting the option is a no-op (existing behavior unchanged)', async t => {
+  t.timeout(5_000);
+  // No options at all: the historical no-arg call form must still work.
+  const { promise: a, settle: settleA } = makeSubscribableKit();
+  /** @type {any} */
+  let observedA;
+  HandledPromise.subscribe(a, target => {
+    observedA = target;
+  });
+  settleA('plain');
+  await Promise.resolve();
+  await Promise.resolve();
+  t.is(observedA, 'plain');
+  // Empty options object: also a no-op, no error.
+  const { promise: b, settle: settleB } = makeSubscribableKit({});
+  /** @type {any} */
+  let observedB;
+  HandledPromise.subscribe(b, target => {
+    observedB = target;
+  });
+  settleB('empty-options');
+  await Promise.resolve();
+  await Promise.resolve();
+  t.is(observedB, 'empty-options');
+});
+
+test('onFirstSubscribe (Option A): non-function option rejected at the boundary', t => {
+  t.throws(
+    () =>
+      makeSubscribableKit(
+        /** @type {any} */ ({ onFirstSubscribe: 'not a function' }),
+      ),
+    { message: /onFirstSubscribe must be a function/ },
+  );
+});
