@@ -1,11 +1,47 @@
 # PR dispatch state
 
-Last cycle: 2026-05-08 (conductor PR 136 merge).
-Prior cycle: 2026-05-07 (conductor PR 137 merge).
+Last cycle: 2026-05-10 (conductor PR 167 merge).
+Prior cycle: 2026-05-08 (conductor PR 136 merge).
+Earlier: 2026-05-07 (conductor PR 137 merge).
 Earlier: 2026-05-07 (conductor PR 119 merge).
 Earlier: 2026-05-07 (conductor PR 99 merge).
 Earlier: 2026-05-07 14:55 UTC (PR 119 contributor review).
 Earlier: 2026-05-07 07:00 UTC (master synced; fixer for PR 114; PR 111 fold-in dispatched).
+
+## Cycle 2026-05-10 (conductor PR 167)
+
+PR 167 merged → `2755cd23df43fa05226af501a3b044c1b2318e6c` (merge commit
+to `llm`).
+`fix(ocapn,ocapn-noise): typed-array casts for @types/node v25`,
+unblocker for the `@types/node` v25 family of breakage.
+At survey: APPROVED (kriskowal 2026-05-10T01:39:27Z), MERGEABLE/CLEAN,
+0 behind `bots-ssh/llm`, 3 ahead, 29/29 CI SUCCESS.
+Three discrete commits, each touching one file in a distinct package
+(`packages/ocapn/src/netlayers/tcp-test-only.js`,
+`packages/ocapn-noise/src/wasm/node.js`,
+`packages/daemon/src/daemon-node-powers.js`); no fix-up follow-ups
+to absorb, history reads coherently as-is. Skipped tidy and skipped
+rebase (0 behind).
+Direct `gh pr merge 167 --repo endojs/endo-but-for-bots --merge`
+(this repo lacks auto-merge); state=MERGED on first verify.
+Local + remote `fix/tcp-test-only-buffer-type` branch deleted;
+`/home/kris/endo-wt/fix-tcp-test-only` worktree removed.
+
+**Follow-up needed (steward to dispatch)**: PRs 142 and 161 were
+blocked on PR 167's @types/node v25 casts per kriskowal's
+shepherd-until-green directive at 2026-05-09T23:48Z and the bot's
+reply at 2026-05-10T00:21Z. Both need a **weaver** to rebase onto
+fresh `llm` (now containing #167's commits), then a **shepherd** to
+confirm CI converges green.
+Conductor could not self-dispatch the sub-agents (the harness in
+this run did not expose the Agent tool).
+Briefs:
+- PR 142 (`feat(bytes): @endo/bytes package`): worktree
+  `/home/kris/endo-wt/pr-142`, branch `feat/endo-bytes` at
+  `4750ee9169`.
+- PR 161 (`feat(zip): Support deflate compression`): worktree
+  `/home/kris/endo-wt/pr-161`, branch `mirror/endo-2997-zip-deflate`
+  at `f8bacc903f`.
 
 ## Cycle 2026-05-08 (conductor PR 136)
 
