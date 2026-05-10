@@ -634,6 +634,34 @@ result through CI.
   The fix was the SES permits entry the design doc explicitly called
   for at lines 393-405 and 766 but the implementation PR forgot to
   land. None of the dispatch's three options would have solved it.
+- **A lazy adapter that wraps a constructor surface MUST be `new`-able;
+  arrow functions and frozen plain objects throw `TypeError: X is not
+  a constructor` when invoked with `new`.** When migrating a legacy
+  constructor (`new HandledPromise(executor, handler)`) behind a
+  lazy/install-on-first-use adapter, the natural-looking shape is a
+  frozen object literal whose methods are arrow functions that defer
+  to `getDelegate()` on call. That shape supports static methods
+  (`X.resolve(...)`) but throws `X is not a constructor` at every
+  legacy `new X(...)` call site, and the failure surfaces only at
+  consumer packages whose tests exercise the constructor (e.g.
+  `@endo/captp`'s `crosstalk`, `gc`, `trap`, `loopback` tests), not
+  at the producer package's own tests (which may only cover the
+  static surface). The fix is a regular `function` declaration (or a
+  `class`); the constructor body forwards to the same lazy delegate
+  call that produces a settler bag, then runs the executor against it
+  and returns the promise. Static methods attach as own properties
+  exactly as in the object-literal version. The `Object.freeze`
+  discipline still applies (the function object is frozen after
+  property assignment). Verify by `grep -rn 'new <Adapter>' packages/`
+  before declaring the adapter shape final, and by reproducing the
+  failure on a downstream consumer's test (not just the producer's
+  own suite). Session example: PR 186's `lazyHandledPromise` was
+  initially a `Object.freeze({ resolve: (...args) => getDelegate().
+  resolve(...args), ... })` literal; recovered via a `function
+  lazyHandledPromise(executor, handler) { const { promise, resolve,
+  reject, resolveWithPresence } = getDelegate()(handler);
+  executor(resolve, reject, resolveWithPresence); return promise; }`
+  declaration with the static methods attached after.
 - **When a dispatch summary's restatement of a maintainer comment
   appears to contradict an already-settled prior decision in the
   same PR, trust the maintainer's actual comment (re-read inline)
