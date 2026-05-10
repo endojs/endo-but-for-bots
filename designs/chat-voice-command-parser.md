@@ -436,7 +436,7 @@ end-to-end.
   An aural cue is out of scope for this design but worth noting.
 - Does the parser want a shared state across mic sessions, or
   does each mic click reset to Send mode?
-  The latter is simpler; the former enables resuming a
+  The latter is simpler per se; the former enables resuming a
   multi-step command after an accidental pause.
 - Is `quote` the right literal-escape wake word, or does an
   alternative read better aloud?
