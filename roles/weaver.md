@@ -137,6 +137,36 @@ for the procedure and the three narrow exceptions.
   list is short it tells you what bot-side commits will need to
   rebase later. Capture the second list in your report so the
   steward knows which in-flight PRs will need attention next cycle.
+- **Rebasing a multi-commit PR after upstream squash-landed its
+  substance: skip per-commit, do not merge or take-theirs.** When
+  an upstream maintainer squashes a PR's N commits into one
+  upstream commit, then the bot mirror later rebases the original
+  N-commit chain onto the new upstream tip, every PR commit will
+  conflict against the squash commit (HEAD already contains a
+  superset of what the PR commit is trying to introduce). The
+  weaver instinct to "read both sides and synthesize" is wrong
+  here: HEAD already **is** the synthesis. The right move per
+  conflicting commit is `git rebase --skip`. Empty commits (typically
+  the test-and-changeset commits whose blobs upstream took
+  byte-identically) drop automatically with `--empty=drop`. What
+  remains is exactly the substance the upstream squash did NOT take
+  — usually a small late-fixup that arrived after the squash. Pre-flight
+  check: `git diff HEAD actual/<base> -- <PR-files>` per file.
+  Files that report "IDENTICAL" against the upstream tip are
+  already-landed; the surviving substance is whatever differs. If
+  every PR file is identical, the PR is fully superseded and
+  should close as "superseded by upstream <SHA>" rather than
+  rebase. If only a small subset differs, run the rebase with
+  `--empty=drop` and `--skip` each conflicting commit; amend the
+  surviving commit's message to describe what actually survives
+  (the original "fixup!" subject is misleading after the rebase
+  collapses everything else away). Encountered on PR
+  endojs/endo-but-for-bots#55 (kriskowal-base64): four PR commits
+  rebased to one 3-line commit after upstream `7325bbe15f` squashed
+  three of the four plus most of the fixup; the surviving substance
+  was the `Object.defineProperty(adaptDecoder(...), 'name', { value:
+  'xsDecodeBase64' })` rename that the upstream squash had not picked
+  up.
 
 Continuous queue-draining merge work has its own role: see
 [`conductor.md`](./conductor.md). The steward dispatches the
