@@ -98,6 +98,29 @@ result through CI.
   cross-PR follow-up. The fixer's lane is the current PR; reaching
   into another PR risks two simultaneous in-flight rewrites
   fighting each other.
+- **A dispatch that asks for a test against a function that lives in
+  a different open PR cannot be satisfied in the current PR's lane.**
+  When the dispatch summary says "add a test for `funcName` in
+  `packages/<pkg>/test/`" and `grep -rn 'funcName'` across the
+  current PR's worktree only finds the call site (no definition),
+  check `git log --all --grep='funcName'` for the function's actual
+  origin. A function defined in PR #129 that PR #151 calls but does
+  not introduce cannot be tested from PR #151's diff: the test
+  module would fail to import on PR #151's base. The dispatch author
+  may have assumed the function was local to the PR they dispatched
+  against. Apply whatever is in-lane (a console.log → console.error
+  fix, a JSDoc clarification), surface the test as cross-PR
+  coordination work in the reply, name the PR where the function
+  lives, and seed a regression-evidence brief the steward can hand
+  to the next dispatch (construction inputs, the call to make,
+  the assertion shape, an edge case). Do NOT pull the function
+  definition into the current PR (it conflicts with the other PR's
+  diff) and do NOT push to the other PR from the current dispatch
+  (cross-PR action without explicit dispatch). Session example:
+  PR 151's dispatch asked for a daemon test for `listWorkerTenants`;
+  the function is in PR #129's `host.js`, not PR #151's CLI-only
+  diff; landed the in-lane diagnostic fix and surfaced the test
+  placement issue.
 - **Coordinated cross-PR moves dispatched explicitly by the steward
   (PR A removes content; PR B, based on PR A, gains the content as
   a new package) follow a strict sequence.** First land PR A's
