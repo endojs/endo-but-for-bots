@@ -190,10 +190,7 @@ const settleProducer = (producer, fulfilled, value) => {
         // and downstream throw-through-then via the standard Promise
         // unhandled-rejection mechanism.
         // eslint-disable-next-line no-console
-        console.error(
-          'pass-style promise subscriber threw:',
-          subscriberError,
-        );
+        console.error('pass-style promise subscriber threw:', subscriberError);
       }
     }
   });
@@ -256,11 +253,7 @@ freeze(makeSubscribableKit);
  * @param {(target: any) => void} onFulfilled
  * @param {(reason: any) => void} onRejected
  */
-export const subscribePassStylePromise = (
-  carrier,
-  onFulfilled,
-  onRejected,
-) => {
+export const subscribePassStylePromise = (carrier, onFulfilled, onRejected) => {
   let producer = passStylePromiseProducers.get(carrier);
   if (producer === undefined) {
     // Carrier minted outside this module (e.g., directly via
