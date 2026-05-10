@@ -133,6 +133,28 @@ touch your local clone. Always do all three steps.
   reserved for the steward and any cycle-level work that
   modifies `garden`. Never switch branches here.
 
+**Keep the pre-PR slug short for any dispatch that runs the
+`packages/daemon/` test suite.** The daemon tests construct Unix
+domain socket paths under `<worktree>/packages/daemon/tmp/<test-slug
++ hash>/endo.sock`. Linux caps the sockaddr_un path at 108 bytes
+(`UNIX_PATH_MAX`); the project base path plus a long worktree slug
+plus the test fixture's `~hash` suffix can exceed the cap. The
+daemon then logs a `Warning: Length of path for domain socket ...
+exceeeds common maximum` and the test fails with
+`ENOENT: no such file or directory, access '<...>/endo.sock'`,
+which looks like a fs race but is actually that the listen() never
+succeeded so the socket file was never created. Pre-PR window:
+prefer slug names under ~16 characters
+(`feat-rej` over `feat-unhandled-rejection-display`); if the slug
+is forced longer, `git worktree move ~/endo-wt/<slug>
+~/endo-wt/<short>` before running the daemon suite. The post-PR
+`pr-<N>` rename automatically lands inside the budget. Encountered
+on the 2026-05-10 PR #187 builder dispatch: the long slug
+`feat-unhandled-rejection-display` (32 chars) put 151 of the 261
+`packages/daemon` tests over the 108-byte cap; renaming to
+`feat-rej` (8 chars) brought the path back under the cap and all
+261 tests passed.
+
 ## Pitfalls
 
 - `git checkout <branch>` from inside one worktree fails if
