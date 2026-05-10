@@ -15,7 +15,7 @@ designs; addendum to PR #144 HttpClient),
 2026-05-11; synthetic test-package factoring to retire the workspace
 devDep SCC; follow-up to PR #121),
 [eventual-send-shim-race](eventual-send-shim-race.md) (added 2026-05-10;
-race-to-install ponyfill for `Promise[Symbol.for('delegate')]`).*
+revised 2026-05-10 to eager-shim/lazy-main delegate ponyfill).*
 
 ## Summary
 
@@ -124,7 +124,11 @@ race-to-install ponyfill for `Promise[Symbol.for('delegate')]`).*
 | [weblet-next](weblet-next.md) | 2026-03-24 | 2026-03-24 | Reference |
 | [workers-panel](workers-panel.md) | 2026-02-14 | 2026-02-24 | Not Started |
 
+<<<<<<< HEAD
 **Totals:** 27 Complete/Implemented, 15 In Progress, 43 Not Started, 4 Proposed, 3 Active, 3 Reference, 2 Deprecated, 1 Draft, 1 Superseded (99 designs)
+=======
+**Totals:** 27 Complete/Implemented, 15 In Progress, 43 Not Started, 3 Proposed, 3 Active, 3 Reference, 2 Deprecated, 1 Draft, 1 Superseded (98 designs)
+>>>>>>> 2c4d855361 (design(eventual-send-shim-race): fully specify delegate(handler) + eager-shim/lazy-main (closes #172))
 
 ## Roadmap
 
@@ -638,7 +642,7 @@ Recalibrated on 2026-03-02 using observed velocity from 15 active work days
 | endoclaw-skill-registry | S-M | 3 days | 5 | Skills directory with capability declarations; PR #105 open |
 | endor-tui | XL | 5-8 weeks | 6 | Rust TUI: ratatui/crossterm, concept-map of every Chat component, XS `mxDebug` debugger integration (XL bumped 1.3x) |
 | endor-bus-tui | XL | 4-7 weeks | 6 | Bus-verb spec, XS handle API, Exo/CapTP wrapper; cross-worker layout composition (XL bumped 1.3x) |
-| eventual-send-shim-race | S-M | 3 days | — | Race-to-install ponyfill at `Promise[Symbol.for('delegate')]`; modeled on `@endo/harden`'s pattern. Phases 1-2 (ponyfill plus default entry switch) ship together; Phase 3 (SES integration) is a follow-on. Platform infrastructure; not on a milestone path. |
+| eventual-send-shim-race | S-M | 3 days | — | Eager-shim/lazy-main `delegate(handler)` ponyfill at `Promise[Symbol.for('delegate')]`; modeled on `@endo/harden`'s pattern but simpler (one code path, one slot, optional SES integration). Phases 1-2 (install path plus eager shim rewrite) ship together; Phase 3 (SES integration) is a follow-on. Platform infrastructure; not on a milestone path. |
 
 #### Summary by Milestone
 
