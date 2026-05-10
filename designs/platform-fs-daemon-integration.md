@@ -12,8 +12,8 @@
 `@endo/platform/fs/node` (introduced as Phase 4 of [`platform-fs.md`](platform-fs.md))
 ships two new mutable lower-level primitives:
 
-- `makeFile(path)` — text / json / streamBase64 / append / readOnly / snapshot.
-- `makeDirectory(path)` — has / list / lookup / write / remove / move / copy /
+- `makeFile(path)`: text / json / streamBase64 / append / readOnly / snapshot.
+- `makeDirectory(path)`: has / list / lookup / write / remove / move / copy /
   makeDirectory / readOnly / snapshot.
 
 These primitives complement (and are **strictly less safe** than) the daemon's
@@ -52,19 +52,19 @@ itself.
 
 ```
 Agent (guest / worker / caplet / chat bot)
-   ↑   only ever sees: {File, Directory, ReadOnlyDirectory} exos
-   ↑   confined by construction
-─── daemon-side membrane ─────────────────────────────────
+   ^   only ever sees: {File, Directory, ReadOnlyDirectory} exos
+   ^   confined by construction
+--- daemon-side membrane ---------------------------------
 EndoMountDirectory exo  (daemon/src/mount.js)
    - holds confined root path
    - applies path clamping, cap-std-style symlink confinement
    - normalizes ACL-class OS errors to a generic confinement error
    - composes makeDirectory / makeFile under the hood
-   ↑
+   ^
 Platform primitives  (@endo/platform/fs/node)
-   - makeFile(absolutePath)        ← ambient authority
-   - makeDirectory(absolutePath)   ← ambient authority
-   ↑
+   - makeFile(absolutePath)        <- ambient authority
+   - makeDirectory(absolutePath)   <- ambient authority
+   ^
 node:fs
 ```
 
@@ -158,9 +158,9 @@ creates.
 
 The Daemon exposes:
 
-- `provideMount(absolutePath, petName, { readOnly })` on `HostInterface` —
+- `provideMount(absolutePath, petName, { readOnly })` on `HostInterface`:
   already implemented, see `packages/daemon/src/interfaces.js:319`.
-- `provideScratchMount(petName, { readOnly })` on `HostInterface` —
+- `provideScratchMount(petName, { readOnly })` on `HostInterface`:
   already implemented, see `packages/daemon/src/interfaces.js:323`.
 
 The Agent never sees:
@@ -207,9 +207,9 @@ The Agent _does_ see (post-integration):
    `DirectoryInterface` directly and expose no extra methods that
    would prevent a worker or caplet from accepting them as a
    `Directory`.
-   The originally-considered alternative — letting `@endo/daemon` own
+   The originally-considered alternative (letting `@endo/daemon` own
    the Exo interfaces and treating `@endo/platform` as
-   capability-only — was rejected because the daemon then could not
+   capability-only) was rejected because the daemon then could not
    declare its mount-backed directory to a worker as a `Directory`
    without the worker also depending on `@endo/daemon`, which defeats
    Mode 2.
@@ -225,9 +225,9 @@ The Agent _does_ see (post-integration):
    implemented as an exo whose interface guard is
    `DirectoryInterface` from `@endo/platform/fs/lite/interfaces`,
    identical to the platform `makeDirectory` exo.
-   The earlier `Mount.asDirectory()` facet — which adapted Mount's
+   The earlier `Mount.asDirectory()` facet (which adapted Mount's
    lenient `string|string[]` argument convention to the strict
-   array-only segments expected by the platform interface — is
+   array-only segments expected by the platform interface) is
    removed.
    `EndoMountDirectory` accepts only the strict array-of-segments
    convention; convenience methods (`readText`, `writeText`,
@@ -241,8 +241,8 @@ The Agent _does_ see (post-integration):
 
 5. **The `remove` capability is split into `remove` (single entry,
    fails on non-empty directory) and `removeTree` (recursive
-   subtree).** The earlier shape — a single `remove(path, {
-   recursive })` option — collapsed two distinct authorities into
+   subtree).** The earlier shape (a single `remove(path, {
+   recursive })` option) collapsed two distinct authorities into
    one method shaped by an option bag.
    Splitting them gives a holder of `remove` strictly less authority
    than a holder of `removeTree`, lets attenuators withhold
@@ -303,19 +303,19 @@ The Agent _does_ see (post-integration):
    The dual surfaces:
 
    - **Mount creation.**
-     - `provideMount(absolutePath, petName, { readOnly })` — from
+     - `provideMount(absolutePath, petName, { readOnly })`: from
        path; current. Convenient for agents holding a host-side
        absolute path string.
-     - `provideMount(parentMount, relativePath, petName, { readOnly })`
-       — from mount; new sub-mount overload to be added in a
+     - `provideMount(parentMount, relativePath, petName, { readOnly })`:
+       from mount; new sub-mount overload to be added in a
        follow-up PR. Composes naturally with `Mount.lookup()`
        confinement and lets a holder of a parent Mount mint a new
        pet-store entry for a sub-tree without ambient-authority
        leakage.
    - **Directory creation within an existing Directory.**
-     - `directory.makeDirectory(pathSegments)` — at relative path
+     - `directory.makeDirectory(pathSegments)`: at relative path
        (multi-segment path arithmetic); current.
-     - `directory.makeDirectoryHere(name)` — in directory (single
+     - `directory.makeDirectoryHere(name)`: in directory (single
        name, operates on the receiver's inode handle); added in
        PR 122 to both `DirectoryInterface` (platform) and
        `MountDirectoryInterface` (daemon).
@@ -366,8 +366,8 @@ The Agent _does_ see (post-integration):
 
 2. **Reuse of `directory.lookup()` for sub-exo construction.** PR 122
    keeps Mount's bespoke transient sub-exo construction.
-   The alternative — having `directory.lookup()` accept a
-   clamping-policy hook so Mount can reuse it — would eliminate the
+   The alternative (having `directory.lookup()` accept a
+   clamping-policy hook so Mount can reuse it) would eliminate the
    remaining bespoke traversal code at the cost of widening the
    platform API.
    Defer until a second consumer of the policy hook appears.
@@ -405,7 +405,7 @@ The Agent _does_ see (post-integration):
 4. **Closing the `MountFile` / `FileInterface` gap.** The MountFile
    exo returned by `EndoMountDirectory.lookup(filename)` exposes
    `text`, `streamBase64`, `json`, `writeText`, `writeBytes`, and
-   `readOnly` — a strict subset of the platform `FileInterface`,
+   `readOnly`: a strict subset of the platform `FileInterface`,
    missing `append` and `snapshot`.
    For Mode 2 to be complete, MountFile should either grow these
    methods (delegating to a platform `makeFile` instance with
