@@ -3,6 +3,7 @@ import test from '@endo/ses-ava/test.js';
 import harden from '@endo/harden';
 
 import { makeTagged, getTag, passStyleOf, PASS_STYLE } from '@endo/pass-style';
+import { makePassableKit } from '@endo/marshal';
 import {
   isCopyBag,
   assertCopyBag,
@@ -10,7 +11,7 @@ import {
   makeCopyBagFromElements,
   getCopyBagEntries,
 } from '../src/keys/checkKey.js';
-import { matches } from '../src/patterns/patternMatchers.js';
+import { matches, M, getRankCover } from '../src/patterns/patternMatchers.js';
 
 const assertIsCopyBag = (t, bag) => {
   t.is(passStyleOf(bag), 'tagged');
@@ -214,4 +215,16 @@ test('types', t => {
   count + 1n; // bigint
 
   t.pass();
+});
+
+test('getRankCover treats copyBag like copySet and copyMap', t => {
+  // Regression for endojs/endo#3052: getRankCover threw a TypeError
+  // for M.kind('copyBag') because the matchKindHelper switch only
+  // mapped 'copySet' and 'copyMap' to the 'tagged' pass style.
+  const { encodePassable } = makePassableKit();
+  const setCover = getRankCover(M.kind('copySet'), encodePassable);
+  const bagCover = getRankCover(M.kind('copyBag'), encodePassable);
+  const mapCover = getRankCover(M.kind('copyMap'), encodePassable);
+  t.deepEqual(bagCover, setCover);
+  t.deepEqual(bagCover, mapCover);
 });
