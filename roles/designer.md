@@ -270,6 +270,43 @@ an agent in the `builder` role to implement from later.
   upstream repo so the head ref is read from the right namespace.
   Encountered on issue #110 → PR 115 (filesystem watchers).
 
+- **A "verify the char-set / format / invariant against actual code"
+  inline comment on a notation-defining design is load-bearing.**
+  When a design proposes a textual notation with delimiter characters
+  and a maintainer asks "verify this against the actual validator",
+  the design's grammar choice depends on the answer. Read the
+  validator (e.g., `packages/daemon/src/pet-name.js` for pet names,
+  `formula-identifier.js` for ids) and quote the rules verbatim into
+  a Status-quo subsection of the design before deciding what the
+  notation can use as delimiters. Assumed forbid-lists ("pet names
+  cannot contain `:` or `~`") that turn out to be optimistic force a
+  late escape mechanism (quoted segments, percent-encoding) that the
+  rest of the design has already taken for granted. The verification
+  is cheap (one Read), the cleanup if skipped is structural. Session
+  example: PR 181 (retention-path notation) claimed pet names
+  forbade `:`, `~`, `#`, and `@`; only `/`, `\0`, `@` are forbidden
+  on `PetName`, and `@` is the leading-character marker for special
+  names rather than a body character. The fix introduced
+  `/"name with stuff"` quoted form for segments containing reserved
+  characters and a Status-quo subsection reproducing the validator
+  rules.
+
+- **A "redundant array wrapper" comment on a typed bulk-return signature
+  is usually a structural reshape, not a typo fix.** When a maintainer
+  flags `Promise<Array<T[]>>` (or similarly-nested) as redundant on a
+  bulk method that returns "N things, each of which is K of something",
+  the right reading is often "drop the inner level: this method should
+  return one thing per input, not K things per input". The K-things-
+  per-input use case usually has its own per-target single-target API
+  (in a sibling design or already in the codebase); the bulk method
+  exists for the row-oriented surface that needs exactly one. Treat
+  the wrapper-arity question as load-bearing; reshape the method's
+  semantics, not just the type. Session example: PR 181 (#181 review
+  wrap) reshaped `listRetentionPaths(targetIds): Promise<Array<RetentionPath[]>>`
+  into `Promise<Array<RetentionPath>>` (one best path per target);
+  the multi-path use case stays on the per-target call from the
+  sibling `daemon-retention-paths.md` design.
+
 - **A cluster of review comments often answers the design's Open
   Questions and turns them into Decisions.** When a substantive
   fold-in batch lands inline comments on six of the design's
