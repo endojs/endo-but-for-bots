@@ -755,6 +755,12 @@ const graphPackages = async (
   assertPackageDescriptor(allegedPackageDescriptor);
   const packageDescriptor = allegedPackageDescriptor;
 
+  if (typeof packageDescriptor.name !== 'string') {
+    throw Error(
+      `Application package.json at ${q(packageLocation)} must have a "name" field; consider naming it after the parent directory`,
+    );
+  }
+
   conditions = new Set(conditions || []);
   conditions.add('import');
   conditions.add('default');
