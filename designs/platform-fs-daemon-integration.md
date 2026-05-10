@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-05-07 |
-| **Updated** | 2026-05-08 |
+| **Updated** | 2026-05-10 |
 | **Author** | Kris Kowal (prompted) |
 | **Status** | Modes 1, 2, 3 implemented in PR 122; follow-ups noted below |
 
@@ -75,36 +75,49 @@ root) or a transient sub-exo derived from a lookup (clamped to a
 subdirectory of the same root, with the same confinement rules
 applied transitively).
 
+### Mount Composes the Platform Primitives
+
+`packages/daemon/src/mount.js` composes `makeDirectory(currentDir)`
+from `@endo/platform/fs/node` once per `EndoMountDirectory` construction
+and once per sub-directory lookup, and delegates the unconfined
+filesystem work for `has`, `remove`, `removeTree`, `move`, `copy`,
+`write`, and `makeDirectory` to that platform exo.
+The `clampSegments` helper produces clamped relative segments so a
+sub-mount handed to an agent cannot use `..` to traverse back toward
+the original mount root.
+
+`list` retains a bespoke implementation because the platform `list`
+filters out symlinks unconditionally while the Mount surfaces
+internal-pointing symlinks (the symlink-confinement assertion catches
+escapes at use time).
+`readText`, `writeText`, and `maybeReadText` continue to use
+`filePowers` directly, since the platform `Directory` surface does
+not expose path-relative text I/O.
+`lookup` retains its bespoke transient sub-exo construction; the
+clamping policy is local to the Mount layer.
+
 ### Three Integration Modes
 
 The integration plan covers three distinct ways an agent comes to hold a
-`Directory` / `File` reference:
+`Directory` / `File` reference.
 
-#### 1. Replace the Mount-directory exo's internal helpers
+#### 1. Mount delegates to the platform primitives
 
-Today, `packages/daemon/src/mount.js` implements `has` / `list` / `lookup` /
-`write` / `remove` / `removeTree` / `move` / `makeDirectory` directly
-against `node:fs`. With `@endo/platform/fs/node` shipped, the
-`EndoMountDirectory` exo can delegate the **unconfined** filesystem
-work to `makeDirectory(rootPath)` and keep only the **confinement
-policy** (path clamping, cap-std-style symlink confinement,
-ACL-error normalization, `readOnly` attenuation) in `mount.js`.
-This is a pure refactor: agent-visible behaviour is unchanged, but
-the duplication between `mount.js` and `platform/fs-node` disappears.
-
-Open question: does `mount.js` retain its bespoke transient sub-exo
-construction, or does it reuse `directory.lookup()` from
-`@endo/platform/fs/node`? The latter requires `lookup` to accept a
-clamping-policy hook; the former keeps the policy and the primitives
-separate at the cost of some duplication.
+`EndoMountDirectory` keeps the **confinement policy** (path clamping,
+cap-std-style symlink confinement, ACL-error normalization, `readOnly`
+attenuation) in `mount.js` and delegates the **unconfined** filesystem
+work to a `makeDirectory(rootPath)` instance from
+`@endo/platform/fs/node`.
+Agent-visible behaviour is unchanged from the prior all-`node:fs`
+implementation; the duplication between `mount.js` and `platform/fs-node`
+is gone.
 
 #### 2. Expose a mount-directory as a confined `Directory` to a worker
 
 A worker that wants to use `@endo/platform/fs/node`-shaped APIs (e.g., a
 caplet authored against `import { Directory } from '@endo/platform/fs/lite/types'`)
-can be handed an `EndoMountDirectory` directly: the exo's interface
-guard is `DirectoryInterface`, identical to the platform's
-`makeDirectory` exo.
+is handed an `EndoMountDirectory` directly: the exo's interface guard is
+`DirectoryInterface`, identical to the platform's `makeDirectory` exo.
 The agent imports the type (a structural contract), the daemon hands
 it an instance (a confined implementation).
 This requires:
@@ -126,16 +139,139 @@ foo-mount`. The pet-store entry `foo-mount` resolves to the
 The agent then `provideMount('foo-mount')` from its host or guest
 reference and holds a `Directory`-shaped capability.
 
-This is already possible via `provideMount` on `HostInterface` (see
-`packages/daemon/src/host.js:253`). The integration plan is therefore to:
+This is enabled by `provideMount` on `HostInterface` (see
+`packages/daemon/src/host.js:253`).
+The integration plan therefore:
 
-- Document that `EndoMountDirectory` is the agent-visible name for a
+- Documents that `EndoMountDirectory` is the agent-visible name for a
   `Directory`-shaped capability whose root is a real filesystem
   subtree.
-- Add a `Directory` type alias importable as
+- Adds a `Directory` type alias importable as
   `@endo/platform/fs/lite/types` (the package convention is JSDoc
   typedefs in `.js`; see `packages/platform/src/fs/types.js`) that
   agents can import without dragging in `node:fs`.
+
+### Shared Interface Guards
+
+`FileInterface`, `DirectoryInterface`, `ReadableBlobInterface`, and
+their siblings live in `packages/platform/src/fs/interfaces.js` and
+are exported as `@endo/platform/fs/lite/interfaces`.
+The `@endo/platform` layer holds the canonical guards; daemon-side
+wrappers (notably `EndoMountDirectory`) implement `DirectoryInterface`
+directly and expose no extra methods that would prevent a worker or
+caplet from accepting them as a `Directory`.
+
+### `EndoMountDirectory` as a `Directory`
+
+`EndoMountDirectory` is implemented as an exo whose interface guard is
+`DirectoryInterface` from `@endo/platform/fs/lite/interfaces`,
+identical to the platform `makeDirectory` exo.
+It accepts only the strict array-of-segments path convention; the
+convenience methods (`readText`, `writeText`, `maybeReadText`, `help`)
+live on a separate side-channel exo and are out of the `Directory`
+surface.
+
+The naming `EndoMountDirectory` reflects that it is one kind of
+directory among several (alongside the read-only `ReadableTree`, the
+in-memory directory, and the platform's `makeDirectory` exo); a
+`Mount` (the lifecycle concept tied to a pet-store entry) yields an
+`EndoMountDirectory` at its root.
+
+### Symlink Confinement at the Mount Layer
+
+`@endo/platform/fs/node`'s `makeDirectory` is an ambient-authority
+attenuator: it accepts any absolute path and does not clamp symlinks.
+The `EndoMountDirectory` wrapper enforces the confinement and is the
+only directory-shaped exo an agent ever holds.
+Confinement rules (modeled after Rust `cap-std`):
+
+- **Listing.** `list()` filters out absolute-target symlinks,
+  relative-target symlinks that exit the mount, and broken
+  symlinks; they are invisible.
+- **Read.** `lookup()`, `has()`, `readText()`, and `maybeReadText()`
+  deny access to the same set of symlinks; even direct lookup by
+  name fails as if the entry did not exist (or with a generic
+  confinement error for `lookup`).
+- **Overwrite.** `write()`, `writeText()`, `move()` (target side),
+  `copy()` (target side), and `makeDirectory()` may replace such
+  a symlink with new content; the symlink ceases to exist after
+  the write, and the new entry is a regular file or directory
+  inside the mount.
+- **Errors.** When the underlying OS rejects an overwrite with an
+  ACL error (`EACCES`, `EPERM`, `EROFS`, immutable-bit, etc.),
+  the Mount layer surfaces a generic confinement error rather
+  than the OS-specific code; specific filesystem structure
+  ("immutable file at /etc/hostname") would betray host detail
+  that an agent has no business observing.
+
+The platform `makeDirectory` exo applies none of these rules; its
+callers are trusted host-side code that benefits from the precise OS
+error.
+The Mount wrapper substitutes a generic error before the confinement
+boundary.
+
+### `remove` and `removeTree` are Distinct Capabilities
+
+`DirectoryInterface` exposes `remove` (single entry, fails on a
+non-empty directory) and `removeTree` (recursive subtree) as separate
+methods.
+A holder of `remove` has strictly less authority than a holder of
+`removeTree`; attenuators can withhold `removeTree` while exposing
+`remove`.
+The split applies symmetrically to the platform `DirectoryInterface`
+and to `EndoMountDirectoryInterface`; both exos expose both methods.
+
+### Dual "From Path" and "From Directory" Forms
+
+Both forms are exposed in parallel for mount creation and for
+`makeDirectory`.
+Today on `node:fs` the two forms are functionally equivalent;
+tomorrow on Rust `cap-std` (where the host can hold an inode handle)
+the directory-handle form gains race-free, more-ocap-correct
+semantics.
+
+The dual surfaces:
+
+- **Mount creation.**
+  - `provideMount(absolutePath, petName, { readOnly })`: from
+    path. Convenient for agents holding a host-side absolute path
+    string.
+  - `provideMount(parentMount, relativePath, petName, { readOnly })`:
+    from mount; new sub-mount overload to be added in a follow-up
+    PR. Composes naturally with `Mount.lookup()` confinement and
+    lets a holder of a parent Mount mint a new pet-store entry for
+    a sub-tree without ambient-authority leakage.
+- **Directory creation within an existing Directory.**
+  - `directory.makeDirectory(pathSegments)`: at relative path
+    (multi-segment path arithmetic).
+  - `directory.makeDirectoryHere(name)`: in directory (single
+    name, operates on the receiver's inode handle). Both
+    `DirectoryInterface` (platform) and `MountDirectoryInterface`
+    (daemon) expose it.
+
+The single-name `makeDirectoryHere` and the path-segment
+`makeDirectory` are functionally equivalent on the current `node:fs`
+backend.
+The distinction is that `makeDirectoryHere` names a strictly-narrower
+authority: it binds to the receiver's identity and admits no
+traversal, so a future cap-std host can implement it race-free using
+the inode handle the receiver already holds.
+Callers that have a Directory reference and want a specific sub-name
+should prefer `makeDirectoryHere(name)`; callers composing a relative
+path from segments stay with `makeDirectory(segments)`.
+
+The mount-from-mount form (`provideMount(parentMount, relativePath,
+...)`) is left for a follow-up PR; this design commits to its shape
+so the API consumer can plan around it now.
+
+### `Mount.lookup` Returns a Transient Sub-Exo
+
+`EndoMountDirectory.lookup()` constructs a fresh sub-exo on each call.
+Reference identity across calls is intentionally non-stable; the
+construction is bespoke because confinement policy lives at the Mount
+layer.
+Agents should re-look up on demand and treat the returned reference as
+transient.
 
 ### Lifecycle
 
@@ -159,9 +295,9 @@ creates.
 The Daemon exposes:
 
 - `provideMount(absolutePath, petName, { readOnly })` on `HostInterface`:
-  already implemented, see `packages/daemon/src/interfaces.js:319`.
+  see `packages/daemon/src/interfaces.js:319`.
 - `provideScratchMount(petName, { readOnly })` on `HostInterface`:
-  already implemented, see `packages/daemon/src/interfaces.js:323`.
+  see `packages/daemon/src/interfaces.js:323`.
 
 The Agent never sees:
 
@@ -169,7 +305,7 @@ The Agent never sees:
 - An absolute path string.
 - The `node:fs` module.
 
-The Agent _does_ see (post-integration):
+The Agent _does_ see:
 
 - A `Directory`-shaped exo (the `EndoMountDirectory` exo, whose
   interface guard IS `DirectoryInterface` from
@@ -177,165 +313,6 @@ The Agent _does_ see (post-integration):
 - A `File`-shaped exo (the transient file exo returned by
   `directory.lookup('some-file')`, satisfying the `File` interface guard).
 - A `ReadOnlyDirectory`-shaped exo via `directory.readOnly()`.
-
-## Decisions (answered by PR 122 implementation)
-
-1. **Mount delegates to `@endo/platform/fs/node`.** Per PR 122,
-   `mount.js` composes `makeDirectory(currentDir)` once per
-   `EndoMountDirectory` construction and per sub-directory lookup,
-   and delegates `has`, `remove`, `removeTree`, `move`, `copy`,
-   `write`, and `makeDirectory` to that platform exo.
-   `list` retains a bespoke implementation because the platform `list`
-   filters out symlinks unconditionally while the Mount surfaces
-   internal-pointing symlinks (the symlink-confinement assertion
-   catches escapes at use time).
-   `readText` / `writeText` / `maybeReadText` continue to use
-   `filePowers` directly, since the platform `Directory` surface does
-   not expose path-relative text I/O.
-   `lookup` retains its bespoke transient sub-exo construction;
-   reusing `directory.lookup()` would require either a clamping-policy
-   hook on the platform side or a wrapper that re-clamps every
-   returned exo, both out of scope for PR 122.
-
-2. **Shared interface guards live in `@endo/platform/fs/lite/interfaces`.**
-   PR 122 adds the package-export entry `./fs/lite/interfaces`
-   resolving to `src/fs/interfaces.js`, the cross-realm-safe location
-   for `FileInterface`, `DirectoryInterface`, `ReadableBlobInterface`,
-   and friends.
-   The `@endo/platform` layer keeps the canonical guards; daemon-side
-   wrappers (notably `EndoMountDirectory`) implement
-   `DirectoryInterface` directly and expose no extra methods that
-   would prevent a worker or caplet from accepting them as a
-   `Directory`.
-   The originally-considered alternative (letting `@endo/daemon` own
-   the Exo interfaces and treating `@endo/platform` as
-   capability-only) was rejected because the daemon then could not
-   declare its mount-backed directory to a worker as a `Directory`
-   without the worker also depending on `@endo/daemon`, which defeats
-   Mode 2.
-
-3. **`Mount.lookup` returning a transient sub-exo is a documented
-   caveat, not a memoization gap.** PR 122 changes nothing here.
-   The bespoke construction is required for confinement; agents should
-   re-look up on demand and treat reference identity across calls as
-   non-stable.
-
-4. **Mount-directory and platform-directory implement the same
-   interface.** `EndoMountDirectory` (renamed from `EndoMount`) is
-   implemented as an exo whose interface guard is
-   `DirectoryInterface` from `@endo/platform/fs/lite/interfaces`,
-   identical to the platform `makeDirectory` exo.
-   The earlier `Mount.asDirectory()` facet (which adapted Mount's
-   lenient `string|string[]` argument convention to the strict
-   array-only segments expected by the platform interface) is
-   removed.
-   `EndoMountDirectory` accepts only the strict array-of-segments
-   convention; convenience methods (`readText`, `writeText`,
-   `maybeReadText`, `help`) move to a separate side-channel and are
-   not part of the `Directory` surface.
-   The naming change reflects that an `EndoMountDirectory` is one
-   kind of directory among several (alongside the read-only
-   `ReadableTree`, the in-memory directory, and the platform's
-   `makeDirectory` exo); a `Mount` (the lifecycle concept tied to a
-   pet-store entry) yields an `EndoMountDirectory` at its root.
-
-5. **The `remove` capability is split into `remove` (single entry,
-   fails on non-empty directory) and `removeTree` (recursive
-   subtree).** The earlier shape (a single `remove(path, {
-   recursive })` option) collapsed two distinct authorities into
-   one method shaped by an option bag.
-   Splitting them gives a holder of `remove` strictly less authority
-   than a holder of `removeTree`, lets attenuators withhold
-   `removeTree` while exposing `remove`, and removes the
-   easy-to-overlook `{ recursive: true }` argument that silently
-   destroys a subtree.
-   The split applies symmetrically to the platform `DirectoryInterface`
-   and to `EndoMountDirectoryInterface`; both exos expose both
-   methods.
-
-6. **The Mount layer enforces cap-std-style symlink confinement; the
-   platform layer intentionally does not.** Per the layer cake,
-   `@endo/platform/fs/node`'s `makeDirectory` is an
-   ambient-authority attenuator: it accepts any absolute path and
-   does not clamp symlinks.
-   The `EndoMountDirectory` wrapper enforces the confinement and is
-   the only directory-shaped exo an agent ever holds.
-   Confinement rules (modeled after Rust `cap-std`):
-   - **Listing.** `list()` filters out absolute-target symlinks,
-     relative-target symlinks that exit the mount, and broken
-     symlinks; they are invisible.
-   - **Read.** `lookup()`, `has()`, `readText()`, and `maybeReadText()`
-     deny access to the same set of symlinks; even direct lookup by
-     name fails as if the entry did not exist (or with a generic
-     confinement error for `lookup`).
-   - **Overwrite.** `write()`, `writeText()`, `move()` (target side),
-     `copy()` (target side), and `makeDirectory()` may replace such
-     a symlink with new content; the symlink ceases to exist after
-     the write, and the new entry is a regular file or directory
-     inside the mount.
-   - **Errors.** When the underlying OS rejects an overwrite with an
-     ACL error (`EACCES`, `EPERM`, `EROFS`, immutable-bit, etc.),
-     the Mount layer surfaces a generic confinement error rather
-     than the OS-specific code; specific filesystem structure
-     ("immutable file at /etc/hostname") would betray host detail
-     that an agent has no business observing.
-
-   The platform `makeDirectory` exo is unchanged; its callers are
-   trusted host-side code that benefits from the precise OS error.
-   The Mount wrapper substitutes a generic error before the
-   confinement boundary.
-
-   Encountered: maintainer review of PR 122
-   ([comment 3205540627][]).
-
-[comment 3205540627]: https://github.com/endojs/endo-but-for-bots/pull/122#discussion_r3205540627
-
-7. **Both "from path" and "from directory" interfaces are exposed in
-   parallel for mount creation and `makeDirectory`.** Per maintainer
-   review of PR 122 ([comment 3212520373][]), the design commits to
-   exposing both forms because Rust `cap-std` will eventually let the
-   host hold an inode handle and offer less-racy, more-ocap-correct
-   semantics for the directory-handle form.
-   Today on node:fs the two forms are functionally equivalent;
-   tomorrow on cap-std the directory-handle form gains the race-free
-   guarantee.
-
-   The dual surfaces:
-
-   - **Mount creation.**
-     - `provideMount(absolutePath, petName, { readOnly })`: from
-       path; current. Convenient for agents holding a host-side
-       absolute path string.
-     - `provideMount(parentMount, relativePath, petName, { readOnly })`:
-       from mount; new sub-mount overload to be added in a
-       follow-up PR. Composes naturally with `Mount.lookup()`
-       confinement and lets a holder of a parent Mount mint a new
-       pet-store entry for a sub-tree without ambient-authority
-       leakage.
-   - **Directory creation within an existing Directory.**
-     - `directory.makeDirectory(pathSegments)`: at relative path
-       (multi-segment path arithmetic); current.
-     - `directory.makeDirectoryHere(name)`: in directory (single
-       name, operates on the receiver's inode handle); added in
-       PR 122 to both `DirectoryInterface` (platform) and
-       `MountDirectoryInterface` (daemon).
-
-   The single-name `makeDirectoryHere` and the path-segment
-   `makeDirectory` are functionally equivalent on the current node:fs
-   backend.  The distinction is that `makeDirectoryHere` names a
-   strictly-narrower authority: it binds to the receiver's identity
-   and admits no traversal, so a future cap-std host can implement it
-   race-free using the inode handle the receiver already holds.
-   Callers that have a Directory reference and want a specific
-   sub-name should prefer `makeDirectoryHere(name)`; callers
-   composing a relative path from segments stay with
-   `makeDirectory(segments)`.
-
-   The mount-from-mount (`provideMount(parentMount, relativePath,
-   ...)`) overload is left for a follow-up PR; this design commits
-   to its shape so the API consumer can plan around it now.
-
-[comment 3212520373]: https://github.com/endojs/endo-but-for-bots/pull/122#discussion_r3212520373
 
 ## Open Questions
 
@@ -346,44 +323,36 @@ The Agent _does_ see (post-integration):
    holds a `File` reference and reads it across CapTP needs the
    back-pressure protocol from `@endo/platform/fs/lite/reader-ref` to
    apply end-to-end.
-   PR 122's Mode 2 facet does not exercise the streaming case
-   end-to-end; confirmation needed before a worker is handed a
-   `File`-shaped capability and asked to stream large content.
-   Per maintainer review of PR 122
-   ([comment on design line 195][comment 3204494183]): the long-term
-   direction is to refactor the streaming surface to use a future
-   `@endo/exo-stream` package once it lands (paralleling the
-   `@endo/exo-playwright` pattern that wraps an underlying
-   capability behind an Exo).
+   The Mode 2 facet does not exercise the streaming case end-to-end;
+   confirmation needed before a worker is handed a `File`-shaped
+   capability and asked to stream large content.
+   The long-term direction is to refactor the streaming surface to use
+   a future `@endo/exo-stream` package once it lands (paralleling the
+   `@endo/exo-playwright` pattern that wraps an underlying capability
+   behind an Exo); see [comment 3204494183][].
    This question therefore resolves to "defer to `@endo/exo-stream`
-   when ready"; PR 122 ships the straightforward wrap and the
-   refactor is tracked as a follow-up keyed off that package's
-   arrival.
-   kriskowal: re-checked against direction comment, treated as
-   resolved-by-deferral.
+   when ready"; the straightforward wrap ships now and the refactor
+   is tracked as a follow-up keyed off that package's arrival.
 
 [comment 3204494183]: https://github.com/endojs/endo-but-for-bots/pull/122#discussion_r3204494183
 
-2. **Reuse of `directory.lookup()` for sub-exo construction.** PR 122
-   keeps Mount's bespoke transient sub-exo construction.
-   The alternative (having `directory.lookup()` accept a
-   clamping-policy hook so Mount can reuse it) would eliminate the
-   remaining bespoke traversal code at the cost of widening the
-   platform API.
+2. **Reuse of `directory.lookup()` for sub-exo construction.** The
+   alternative (having `directory.lookup()` accept a clamping-policy
+   hook so Mount can reuse it) would eliminate the remaining bespoke
+   traversal code at the cost of widening the platform API.
    Defer until a second consumer of the policy hook appears.
-   kriskowal: re-checked, still open.
 
 3. **Cap-std-style overwrite-replaces-symlink semantics.** The
-   confinement rules in Decision 6 say "Overwrite paths may replace
-   such a symlink with new content; the symlink ceases to exist
-   after the write." PR 122 implements the **read-side** confinement
-   (invisible from `list`, denied from `lookup` / `has` /
-   `readText`) and the **remove-side** confinement (`remove()` acts
-   on the symlink entry itself, since `fs.rm` does not follow
-   symlinks).
+   confinement rules above say "Overwrite paths may replace such a
+   symlink with new content; the symlink ceases to exist after the
+   write."
+   The current implementation handles the **read-side** confinement
+   (invisible from `list`, denied from `lookup` / `has` / `readText`)
+   and the **remove-side** confinement (`remove()` acts on the
+   symlink entry itself, since `fs.rm` does not follow symlinks).
    The **overwrite-side** is partial: `writeText` and `write`
-   currently call `fs.writeFile` which **follows** the symlink.  For
-   a broken symlink with an absolute target (e.g.
+   currently call `fs.writeFile` which **follows** the symlink.
+   For a broken symlink with an absolute target (e.g.
    `link -> /etc/secret`), this would create a regular file at the
    absolute target, escaping confinement.
    `assertConfinedOrAncestor` blocks this for already-resolvable
@@ -394,13 +363,11 @@ The Agent _does_ see (post-integration):
    The fix is to `lstat` the destination before writing, and if it
    is a symlink, `unlink` it first so the subsequent `writeFile`
    creates a regular file at the symlink's name.
-   Out of scope for PR 122 because it requires extending
+   Out of scope for the current PR because it requires extending
    `FilePowers` with `lstat` (or moving Mount to `node:fs`
    directly).
-   Surfaced here for follow-up; see also the test in
-   `endo.test.js` that exercises the read-side and remove-side but
-   not the overwrite-side.
-   kriskowal: re-checked, still open.
+   See also the test in `endo.test.js` that exercises the
+   read-side and remove-side but not the overwrite-side.
 
 4. **Closing the `MountFile` / `FileInterface` gap.** The MountFile
    exo returned by `EndoMountDirectory.lookup(filename)` exposes
@@ -411,97 +378,114 @@ The Agent _does_ see (post-integration):
    methods (delegating to a platform `makeFile` instance with
    confinement-aware path) or be replaced by the platform `File` exo
    wrapped in a confinement-checking adapter.
-   Out of scope for PR 122.
-   kriskowal: re-checked, still open.
+   A worker-side caplet declaring
+   `import { File } from '@endo/platform/fs/lite/types'`
+   and accepting any conforming exo observes the gap as missing
+   methods at call time.
 
-## Implementation Notes (PR 122)
+## Alternatives Considered
 
-What landed:
+### `Mount.asDirectory()` facet (deprecated)
 
-- **Mode 1.** `packages/daemon/src/mount.js` composes
-  `makeDirectory(currentDir)` from `@endo/platform/fs/node` and
-  delegates the unconfined filesystem work for `has`, `remove`,
-  `removeTree`, `move`, `copy`, `write`, and `makeDirectory`.
-  The new `clampSegments` helper produces clamped relative segments
-  (rather than the prior `resolveSegments` which produced absolute
-  paths and clamped at `confinementRoot`).
-  This is a confinement strengthening for sub-mounts: a sub-mount
-  handed to an agent can no longer use `..` to traverse back toward
-  the original mount root.
-  No tests exercised the prior weaker behavior.
+An earlier shape exposed an `asDirectory()` facet on `Mount` that
+adapted Mount's lenient `string|string[]` argument convention to the
+strict array-only segments expected by the platform `Directory`
+interface.
+Rejected in favour of having `EndoMountDirectory` itself implement
+`DirectoryInterface` directly: the facet was extra surface that
+worked around a paper-cut in argument conventions, and the
+straight-through implementation eliminates the paper-cut by adopting
+the strict convention everywhere.
 
-- **Mode 2 prereq.** New package export
-  `@endo/platform/fs/lite/interfaces` resolves to
-  `packages/platform/src/fs/interfaces.js`, where `FileInterface`,
-  `DirectoryInterface`, `ReadableBlobInterface`, etc. already lived.
+### `EndoMount` exo name (deprecated)
 
-- **Mode 2.** `EndoMountDirectory` (renamed from `EndoMount`)
-  implements `DirectoryInterface` directly; there is no facet method.
-  A worker or caplet that has been written against
-  `import { Directory } from '@endo/platform/fs/lite/types'`
-  accepts an `EndoMountDirectory` instance with no adaptation.
-  The exo accepts only the strict array-of-segments convention;
-  convenience methods (`readText`, `writeText`, `maybeReadText`,
-  `help`) live on a separate side-channel exo and are out of the
-  `Directory` surface.
+The exo was originally named `EndoMount`; renamed to
+`EndoMountDirectory` because it is one kind of directory among
+several (alongside the read-only `ReadableTree`, the in-memory
+directory, and the platform's `makeDirectory` exo).
+The shorter name conflated the lifecycle concept (a `Mount` tied to a
+pet-store entry) with the directory exo it yields at its root.
 
-- **Mode 3.** New `File` and `Directory` JSDoc typedefs in
-  `packages/platform/src/fs/types.js`, importable as
-  `@endo/platform/fs/lite/types`.
-  `EndoMountDirectory` is documented (in `mount.js`) as the
-  agent-visible directory exo whose root is a confined real
-  filesystem subtree; a `Mount` (the lifecycle concept) yields one
-  of these at its root.
+### Single `remove(path, { recursive })` method (deprecated)
 
-- **Cap-std symlink confinement.** The Mount layer filters out
-  symlinks whose targets exit the mount root (absolute targets,
-  relative `..` escapes, broken targets) from `list()` and rejects
-  them from `lookup()`, `has()`, and the read paths.
-  Overwrite paths replace such symlinks atomically with new
-  in-mount content.
-  ACL-class OS errors (`EACCES`, `EPERM`, `EROFS`) are normalized to
-  a generic confinement error before crossing the boundary so the
-  agent observes "operation not permitted within mount" rather than
-  the OS-specific failure detail.
+The earlier shape collapsed entry removal and recursive subtree
+removal into a single method shaped by an option bag.
+Rejected because it conflated two distinct authorities under one
+method, made the easy-to-overlook `{ recursive: true }` argument
+silently destructive, and prevented attenuators from withholding
+recursive removal while preserving single-entry removal.
+Split into `remove` and `removeTree`.
 
-- **`remove` / `removeTree` split.** Replaces the earlier
-  `remove(path, { recursive: true })` shape on both the platform
-  `DirectoryInterface` and the daemon `EndoMountDirectoryInterface`.
-  `remove` fails on a non-empty directory; `removeTree` recursively
-  removes a subtree.
+### `@endo/daemon` owning the Exo interfaces (deprecated)
 
-- **`MountFile` does not satisfy `FileInterface`.** Surfaced as Open
-  Question 4 above.
-  `EndoMountDirectory.lookup()` resolves a file path to a
-  `MountFile`, which lacks `append` and `snapshot`.
-  A worker-side caplet declaring
-  `import { File } from '@endo/platform/fs/lite/types'`
-  and accepting any conforming exo observes the gap as missing
-  methods at call time.
+An alternative placed `FileInterface`, `DirectoryInterface`, and
+friends in `@endo/daemon` rather than `@endo/platform`, treating
+`@endo/platform` as capability-only.
+Rejected because the daemon could then not declare its mount-backed
+directory to a worker as a `Directory` without the worker also
+depending on `@endo/daemon`, which defeats Mode 2.
+The canonical guards therefore live in `@endo/platform`.
 
-- **`fs/lite/types.d.ts` vs. JSDoc-in-.js.** The original design
-  copy referred to `fs/lite/types.d.ts`.
-  The package convention is JSDoc typedefs in `.js` plus an export
-  entry in `package.json`.
-  PR 122 follows the convention; the design copy is corrected here.
+### `resolveSegments` returning absolute paths (deprecated)
+
+The prior `resolveSegments` helper produced absolute paths and
+clamped at `confinementRoot`.
+Replaced by `clampSegments`, which produces clamped relative
+segments.
+The change is a confinement strengthening for sub-mounts: a sub-mount
+handed to an agent can no longer use `..` to traverse back toward the
+original mount root.
+
+### `fs/lite/types.d.ts` rather than JSDoc-in-`.js` (deprecated)
+
+The original design copy referred to `fs/lite/types.d.ts`.
+The package convention is JSDoc typedefs in `.js` plus an export
+entry in `package.json`; the design follows the convention and the
+type alias is exported as `@endo/platform/fs/lite/types` resolving to
+`packages/platform/src/fs/types.js`.
+
+### Single-form mount creation and `makeDirectory` (deprecated)
+
+An earlier shape exposed only one form of each: `provideMount` from
+absolute path, and `directory.makeDirectory(pathSegments)` from
+multi-segment relative path.
+Both forms are now exposed in parallel ([comment 3212520373][]):
+the path form is convenient on `node:fs`, and the directory-handle
+form (`provideMount(parentMount, relativePath, ...)` and
+`makeDirectoryHere(name)`) gains race-free, more-ocap-correct
+semantics on a future Rust `cap-std` host.
+
+[comment 3212520373]: https://github.com/endojs/endo-but-for-bots/pull/122#discussion_r3212520373
+
+### Surfacing the OS-specific ACL error (deprecated)
+
+An earlier draft considered surfacing the underlying OS error code
+(`EACCES`, `EPERM`, `EROFS`, immutable-bit) directly to the agent.
+Rejected because the OS-specific failure detail betrays host structure
+("immutable file at `/etc/hostname`") that an agent has no business
+observing.
+The Mount layer normalizes ACL-class errors to a generic confinement
+error before the boundary; the platform `makeDirectory` exo is
+unchanged for trusted host-side callers.
+See [comment 3205540627][].
+
+[comment 3205540627]: https://github.com/endojs/endo-but-for-bots/pull/122#discussion_r3205540627
 
 ## Out of Scope
 
-- Implementation. This document is a design-only deliverable; the actual
-  daemon-side wiring is a follow-up PR pending feedback on the open
-  questions above.
-- Browser / non-Node hosts. The `"browser"` and `"endo-go"` / `"endo-rust"`
-  conditions in `@endo/platform/fs` package exports are reserved for
-  future work and do not affect the daemon-side integration plan.
-- Sub-mount Phase 4 of `daemon-mount.md` itself. That phase is tracked in
-  its own document; this design assumes Phase 4 either lands first or
-  arrives as a sibling design that this document references.
-- A "lookup formula" mechanism that would derive a new pet-name-bearing
-  formula from an arbitrary `Directory` reference (analogous to how
-  `link(namePath, resultName)` would let a holder of a value mint a
-  named formula for it).
+- Browser / non-Node hosts. The `"browser"` and `"endo-go"` /
+  `"endo-rust"` conditions in `@endo/platform/fs` package exports are
+  reserved for future work and do not affect the daemon-side
+  integration plan.
+- Sub-mount Phase 4 of `daemon-mount.md` itself. That phase is tracked
+  in its own document; this design assumes Phase 4 either lands first
+  or arrives as a sibling design that this document references.
+- A "lookup formula" mechanism that would derive a new
+  pet-name-bearing formula from an arbitrary `Directory` reference
+  (analogous to how `link(namePath, resultName)` would let a holder
+  of a value mint a named formula for it).
   Without such a mechanism there is no way to symbolically retain a
   reference to a specific transient sub-directory across sessions.
-  This is a known gap and warrants a future companion design (paralleling
-  the `link(namePath, resultName)` follow-on noted on the workers-panel
-  PR thread); it is not in scope here.
+  This is a known gap and warrants a future companion design
+  (paralleling the `link(namePath, resultName)` follow-on noted on
+  the workers-panel PR thread); it is not in scope here.
