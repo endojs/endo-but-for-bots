@@ -161,16 +161,26 @@ export const makeDefaultCapTPImportExportTables = ({
         const carrier = makePromise();
         val = carrier;
         actualSettler = Far('passStylePromiseSettler', {
-          resolve: target => resolveExternalPassStylePromise(carrier, target),
-          reject: reason => rejectExternalPassStylePromise(carrier, reason),
+          resolve: target => {
+            // Settle the original local promise too: this routes a
+            // producer-side resolution through the makeRemoteKit
+            // bookkeeping (presence registration, quietReject silencer)
+            // even though the public value is the opaque carrier. Without
+            // this, the local promise is dead weight; with it, real
+            // producer-side rejections still flow through CapTP's
+            // standard onReject diagnostic path.
+            settler.resolve(target);
+            resolveExternalPassStylePromise(carrier, target);
+          },
+          reject: reason => {
+            settler.reject(reason);
+            rejectExternalPassStylePromise(carrier, reason);
+          },
           // resolveWithPresence is not meaningful for an opaque carrier;
           // delegate to the underlying remote kit's settler in case some
           // codepath calls it (it should not for 'p' slots).
           resolveWithPresence: () => settler.resolveWithPresence(),
         });
-        // Keep the original promise alive in the local export table so
-        // the unhandled-rejection silencer in makeRemoteKit still works.
-        promise.catch(() => {});
       } else {
         val = promise;
       }

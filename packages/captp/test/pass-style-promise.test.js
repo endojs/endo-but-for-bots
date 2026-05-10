@@ -125,6 +125,44 @@ test('default mode: native await synchronizes through inbound HandledPromise', a
   t.is(await E(far).getCarrier(), 'classic');
 });
 
+test('inbound: rejection with no local subscriber does not get swallowed', async t => {
+  // Regression for the prior `promise.catch(() => {})` band-aid: a real
+  // producer-side rejection flowing across CapTP must reach the standard
+  // CapTP `onReject` diagnostic path even when the local consumer never
+  // attaches a subscriber to the inbound carrier.
+  /** @type {any[]} */
+  const observedRejections = [];
+  const { makeFar } = makeLoopback(
+    'inbound-reject-no-subscriber',
+    /* nearOptions */ {
+      usePassStylePromiseInbound: true,
+      onReject: reason => {
+        observedRejections.push(reason);
+      },
+    },
+  );
+  const { promise: producerCarrier, reject } = makeSubscribableKit();
+  const remote = Far('holder', {
+    getCarrier: () => producerCarrier,
+  });
+  const far = await makeFar(remote);
+  reject(new Error('no-subscriber'));
+  // Receive the inbound carrier but DO NOT subscribe to it: that is the
+  // hostile shape the band-aid hid.
+  const inboundCarrier = await E(far).getCarrier();
+  t.true(isPassStylePromise(inboundCarrier));
+  // Allow the bridged settler to fire.
+  await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
+  // The producer-side rejection still surfaced to CapTP's onReject.
+  t.true(observedRejections.length >= 1);
+  t.is(
+    /** @type {Error} */ (observedRejections[0]).message,
+    'no-subscriber',
+  );
+});
+
 test('round-trip: send carrier and receive it back', async t => {
   // The carrier minted on the near side, sent to the far side, and
   // sent back: the near side recognizes its own export.
