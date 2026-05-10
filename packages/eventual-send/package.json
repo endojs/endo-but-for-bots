@@ -20,6 +20,7 @@
   "exports": {
     "./package.json": "./package.json",
     ".": "./src/no-shim.js",
+    "./handled-promise.js": "./handled-promise.js",
     "./shim.js": "./shim.js",
     "./utils.js": "./utils.js"
   },

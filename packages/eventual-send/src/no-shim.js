@@ -1,10 +1,11 @@
+import { getHandledPromise } from '../handled-promise.js';
 import makeE from './E.js';
 
 // XXX module exports for HandledPromise fail if these aren't in scope
 /** @import {Handler, HandledExecutor} from './handled-promise.js' */
 /** @import {ECallableOrMethods, EGetters, ERef, ESendOnlyCallableOrMethods, LocalRecord, RemoteFunctions} from './E.js' */
 
-const hp = HandledPromise;
+const hp = getHandledPromise();
 
 /**
  * E(x) returns a proxy on which you can call arbitrary methods. Each of these method calls returns a promise.
