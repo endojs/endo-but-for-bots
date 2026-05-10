@@ -215,6 +215,20 @@ Plus rare per-cycle items:
   route directly to the botanist. The steward bypasses the
   director's per-PR matrix for any PR whose `author.login`
   matches `dependabot`.
+- **`major-general`** ([`./major-general.md`](./major-general.md)) —
+  proactive scout for major-version upgrades to direct
+  dependencies. **Conditional**: dispatched when the "next
+  scheduled engagement" date in the header of
+  [`../process/major-generalship.md`](../process/major-generalship.md)
+  is on or before today (UTC). Read the date at cycle start as
+  part of the same per-cycle process-doc sweep that picks up
+  dependabotany maturity dates. The major general updates the
+  date to today plus seven on completion; default cadence is
+  weekly. The major general is the complement of the botanist:
+  the botanist gates each upgrade proposal at merge time, and
+  the major general scouts for the major bumps Dependabot does
+  not surface (because the project's range pins below the new
+  major).
 - **Garden upstream merge** (first round only): if `actual/llm`
   is ahead of `garden`, dispatch a weaver to merge. The steward
   dispatches this directly because it's a `garden`-branch

@@ -170,6 +170,13 @@ The current roles are:
 - [`liaison`](./roles/liaison.md) — manage issues on
   endo-but-for-bots; track per-issue posture under
   `process/tracking/<N>.md`.
+- [`major-general`](./roles/major-general.md) — proactive scout
+  for major-version upgrades to direct dependencies; reads
+  migration guides and opens adoption PRs (with changesets only
+  when the change is observable downstream); per-package posture
+  in [`process/major-generalship.md`](./process/major-generalship.md).
+  Complement of the [`botanist`](./roles/botanist.md), which
+  gates each upgrade at merge.
 - [`marshal`](./roles/marshal.md) — the steward's per-cycle
   design-pipeline pick-next; owns the continuous-occupancy
   invariant for design-builders.

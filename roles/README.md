@@ -51,6 +51,13 @@ playing both `juror` and `fixer`; consult both.
   endo-but-for-bots: read every contributor comment, reply
   with the action taken, track per-issue posture under
   `process/tracking/<N>.md`.
+- [major-general.md](./major-general.md) — proactive scout for
+  major-version upgrades to direct dependencies; reads migration
+  guides and opens adoption PRs (with changesets only when the
+  change is observable downstream); records per-package posture in
+  [`../process/major-generalship.md`](../process/major-generalship.md).
+  Complement of the [botanist](./botanist.md), which gates each
+  upgrade at merge.
 - [marshal.md](./marshal.md) — the steward's per-cycle
   design-pipeline pick-next; owns the continuous-occupancy
   invariant for design-builders.
