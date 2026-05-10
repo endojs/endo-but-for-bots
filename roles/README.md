@@ -13,6 +13,11 @@ playing both `juror` and `fixer`; consult both.
 
 ## Index
 
+- [botanist.md](./botanist.md) — review a single Dependabot PR
+  (read lockfile diff, install with scripts disabled, read source
+  + release notes + CVE feed, embargo by default for non-vuln-fix
+  upgrades); record per-PR posture in
+  [`../process/dependabotany.md`](../process/dependabotany.md).
 - [builder.md](./builder.md) — implement a change from an issue or
   spec and get it through CI.
 - [chronicler.md](./chronicler.md) — observe and catalogue

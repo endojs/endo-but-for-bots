@@ -138,6 +138,10 @@ when to enter the role, and gives a short posture statement.
 Index: see [`roles/README.md`](./roles/README.md).
 The current roles are:
 
+- [`botanist`](./roles/botanist.md) — review a single Dependabot
+  PR; read lockfile diff + source + CVE feed; embargo non-vuln-fix
+  upgrades for a maturity period. Per-PR posture in
+  [`process/dependabotany.md`](./process/dependabotany.md).
 - [`builder`](./roles/builder.md) — implement a change from an issue
   or spec and get it through CI.
 - [`chronicler`](./roles/chronicler.md) — observe and catalogue

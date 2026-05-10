@@ -205,6 +205,16 @@ independent):
 
 Plus rare per-cycle items:
 
+- **`botanist`** ([`./botanist.md`](./botanist.md)) —
+  Dependabot PR review. **Conditional**: dispatched per
+  Dependabot PR, EITHER when a new `dependabot[bot]`-authored
+  PR appears, OR when an embargoed PR's maturity date has
+  arrived (read [`../process/dependabotany.md`](../process/dependabotany.md)
+  at cycle start to find due re-dispatches). Dependabot PRs do
+  NOT route through the usual builder/juror/fixer flow; they
+  route directly to the botanist. The steward bypasses the
+  director's per-PR matrix for any PR whose `author.login`
+  matches `dependabot`.
 - **Garden upstream merge** (first round only): if `actual/llm`
   is ahead of `garden`, dispatch a weaver to merge. The steward
   dispatches this directly because it's a `garden`-branch
