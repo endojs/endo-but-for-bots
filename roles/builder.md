@@ -171,6 +171,35 @@ issue or design document, and shepherding it through to a green PR.
   2026-05-07 orientation on PR 119 (discussion_r3204173690 +
   the follow-up "*taps phase 4 and 6 sections*"
   discussion_r3204245484).
+- **A "modeled on X" design abbreviates X; read X's source line
+  by line.** When a design says "this implements pattern X from
+  package Y" and provides a sketch (often as a code block in the
+  design body), the sketch is almost always a short reading of X
+  that omits boundary cases X actually handles. Implementing
+  strictly from the design's sketch then surfaces those omissions
+  as runtime failures or test gaps. The cheap defensive read:
+  before writing the first line of the implementation, open X's
+  source files (the ones the design cites by path) and read each
+  in full. Look specifically for selector / fallback / catch
+  branches that the design's sketch does not mention. If you
+  find some, decide whether the implementation should mirror them
+  faithfully (usually yes for well-trodden patterns like
+  `@endo/harden`'s race-to-install) and surface the gap as
+  feedback to the design PR.
+  Encountered on the `eventual-send-shim-race` builder dispatch
+  (PR #177 against design PR #175): the design's two-step
+  `getHandledPromise()` sketch (read `Promise.delegate`, then
+  read `Promise[Symbol.for('delegate')]`, then install) abbreviated
+  `@endo/harden`'s `make-selector.js`, which actually has THREE
+  steps (read `Object[Symbol.for('harden')]`, then read
+  `globalThis.harden` for legacy back-compat, then install). The
+  missing step matters because `@endo/init`'s standard workflow
+  (shim.js writes `globalThis.HandledPromise` pre-lockdown, then
+  lockdown freezes the realm) requires the legacy fallback for
+  Phase 2's switch-the-entry-point change to not break existing
+  consumers. The implementation added the third step by mirroring
+  `@endo/harden`'s selector exactly, and surfaced the gap as
+  design feedback in the PR body.
 - **Cross-check `designs/README.md`'s milestone-summary
   annotations against the design's own `Depends On` section.**
   The design's own `Depends On` is author-curated and is often
