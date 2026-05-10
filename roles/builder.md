@@ -316,6 +316,24 @@ issue or design document, and shepherding it through to a green PR.
   author email (if standardising to the project's canonical
   address) and strip out unwanted trailers like
   `Co-Authored-By: Claude` from the original message.
+  **For the rebased-multi-commit-chain re-open shape (fetch the
+  source branch, `git rebase bots-ssh/<base>`, push the rebased
+  branch),** the per-commit `--no-commit` dance does not apply:
+  the rebased commits inherit their original messages verbatim,
+  including any `Co-Authored-By: Claude …` trailers from the
+  source PR. Strip them in one shot before pushing:
+  ```sh
+  git filter-branch -f --msg-filter \
+    'grep -v -i "^Co-Authored-By: Claude"' \
+    bots-ssh/<base>..HEAD
+  ```
+  Then `git log --format="%B" bots-ssh/<base>..HEAD | grep -i
+  "co-authored-by.*claude"` to verify zero matches before push.
+  Encountered on the 2026-05-10 migration of PR #45 → #179
+  (`feat/daemon-chat-commands-as-messages`): all 10 rebased
+  commits carried `Co-Authored-By: Claude Opus 4.6/4.7` lines
+  that CLAUDE.md forbids; `filter-branch --msg-filter` cleaned
+  them in one pass.
   Close the original PR with `gh pr close <orig> --comment "Re-opened
   as #<new> under the bot account so you can review (GitHub blocks
   self-review on PRs you authored)."`. The new PR's body should
