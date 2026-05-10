@@ -187,6 +187,25 @@ architectural ones.
   steward had to verify ground truth rather than trust the
   hand-off note.
 
+  **Corollary: a watch-CI-only shepherd is the wrong dispatch.**
+  When the brief is purely "wait for CI to converge on `<sha>`
+  and report" with no expected substantive repair, the shepherd
+  has no way to actually wait — its session ends after the
+  first poll. The steward should instead arm a Monitor in the
+  parent context (a polling loop on `gh pr view <N> --json
+  statusCheckRollup` that exits on convergence) and skip the
+  shepherd dispatch entirely. Reserve the shepherd for cases
+  where there IS substantive work: pushing a fix, diagnosing a
+  red, dispatching a fixer, posting a green-run-URL after a
+  push the shepherd itself made.
+  Encountered on PRs #142, #161, #170 (2026-05-10): three
+  shepherd dispatches in succession all ended with
+  "Waiting on monitor events" / "Monitor armed" within seconds
+  of starting, because the brief asked them to watch CI
+  converge with no associated fix. The steward armed parent
+  Monitors in each case, which is what should have been done
+  from the start.
+
 - **Conflicting PR blocks CI dispatch.**
   `pull_request` workflows run on the synthetic merge ref
   (`refs/pull/<N>/merge`).
