@@ -1,4 +1,5 @@
 /* eslint-disable max-classes-per-file */
+/* global process */
 import test from '@endo/ses-ava/test.js';
 
 import harden from '@endo/harden';
@@ -12,7 +13,7 @@ import {
 import { passStyleOf } from '../src/passStyleOf.js';
 import { Far, ToFarFunction } from '../src/make-far.js';
 import { makeTagged } from '../src/makeTagged.js';
-import { PASS_STYLE } from '../src/passStyle-helpers.js';
+import { isPrimitive, PASS_STYLE } from '../src/passStyle-helpers.js';
 
 const { getPrototypeOf, defineProperty, freeze } = Object;
 
@@ -536,4 +537,82 @@ test('Allow toStringTag overrides', t => {
   t.is(Object.prototype.toString.call(fred), '[object DebugName: Friedrich]');
   t.is(fred.name, 'fred');
   t.is(`${q(fred)}`, '"[Function fred]"');
+});
+
+/**
+ * `document.all` (the only object with the `[[IsHTMLDDA]]` Internal
+ * Slot per the HTML spec annex) reports `typeof === 'undefined'` and
+ * is loosely `== null`/`== undefined`, but is strictly neither.
+ * Before endojs/endo#3156, `isPrimitive` and `passStyleOf` mistakenly
+ * classified such a value as the primitive `undefined`. The fix routes
+ * a strict `null`/`undefined` check ahead of `typeof` so an
+ * `IsHTMLDDA`-slot value falls through to the 'object' branch, where
+ * the not-frozen check produces "Cannot pass non-frozen objects".
+ *
+ * V8 exposes a real `[[IsHTMLDDA]]` object via the natives-syntax
+ * `%GetUndetectable()` intrinsic. AVA workers are not started with
+ * `--allow-natives-syntax`, so the assertions below run in a child
+ * Node process that does, and we t.pass() if the child reports the
+ * expected behavior. The fix's correctness is also exercised
+ * indirectly by the existing pass-style tests for true `null` /
+ * `undefined`, which still classify those primitives correctly under
+ * the new ternary.
+ */
+test('passStyleOf rejects an [[IsHTMLDDA]]-slot value (document.all-like)', async t => {
+  // Sanity check: even after the fix, plain `null` and `undefined`
+  // remain primitive, so the existing primitive test cases above are
+  // still exercising the same code path.
+  t.true(isPrimitive(undefined));
+  t.true(isPrimitive(null));
+  t.is(passStyleOf(undefined), 'undefined');
+  t.is(passStyleOf(null), 'null');
+
+  const { spawnSync } = await import('node:child_process');
+  const { fileURLToPath } = await import('node:url');
+  const path = await import('node:path');
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  const child = spawnSync(
+    process.execPath,
+    [
+      '--allow-natives-syntax',
+      '--input-type=module',
+      '-e',
+      [
+        `import 'ses';`,
+        `import { isPrimitive } from '${path.join(here, '..', 'src', 'passStyle-helpers.js')}';`,
+        `import { passStyleOf } from '${path.join(here, '..', 'src', 'passStyleOf.js')}';`,
+        `// eslint-disable-next-line no-eval`,
+        `const dda = (0, eval)('(() => %GetUndetectable())')();`,
+        `if (typeof dda !== 'undefined') process.exit(10);`,
+        `// eslint-disable-next-line eqeqeq`,
+        `if (!(dda == null)) process.exit(11);`,
+        `if (dda === null) process.exit(12);`,
+        `if (dda === undefined) process.exit(13);`,
+        `if (isPrimitive(dda)) process.exit(20);`,
+        `try {`,
+        `  passStyleOf(dda);`,
+        `  process.exit(30);`,
+        `} catch (e) {`,
+        `  if (!/Cannot pass non-frozen objects/.test(e.message)) process.exit(31);`,
+        `}`,
+        `process.exit(0);`,
+      ].join('\n'),
+    ],
+    { encoding: 'utf8' },
+  );
+  if (
+    child.error &&
+    /** @type {NodeJS.ErrnoException} */ (child.error).code === 'ENOENT'
+  ) {
+    t.pass('skipped: cannot spawn node subprocess for --allow-natives-syntax');
+    return;
+  }
+  if (child.status === 0) {
+    t.pass();
+    return;
+  }
+  // Surface the failure mode for debugging if it ever regresses.
+  t.fail(
+    `subprocess exited ${child.status}: stdout=${child.stdout} stderr=${child.stderr}`,
+  );
 });

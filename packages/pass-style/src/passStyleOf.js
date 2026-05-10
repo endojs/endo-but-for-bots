@@ -144,8 +144,28 @@ const makePassStyleOf = passStyleHelpers => {
     };
 
     const passStyleOfInternal = inner => {
-      const typestr = typeof inner;
+      // Use strict null/undefined checks before `typeof`. The
+      // `[[IsHTMLDDA]]` slot (`document.all`) reports `typeof inner ===
+      // 'undefined'` and `inner == undefined` (loose), but
+      // `inner === undefined` is false. Routing through strict equality
+      // first ensures only true `null` and `undefined` get the
+      // 'null'/'undefined' pass styles; `document.all` falls through to
+      // the 'object' branch, where the not-frozen check produces a
+      // "Cannot pass non-frozen objects" diagnostic. See
+      // endojs/endo#3156.
+      /* eslint-disable no-nested-ternary */
+      const typestr =
+        inner != null
+          ? typeof inner
+          : inner === null
+            ? 'null'
+            : inner === undefined
+              ? 'undefined'
+              : // probably document.all
+                'object';
+      /* eslint-enable no-nested-ternary */
       switch (typestr) {
+        case 'null':
         case 'undefined':
         case 'boolean':
         case 'number':
