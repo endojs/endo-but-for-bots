@@ -19,14 +19,20 @@ test('PASS_STYLE symbol agreement across @endo/pass-style and @endo/eventual-sen
   // We assert this by comparing the symbol on a carrier minted by
   // `makeSubscribableKit` (which uses eventual-send's local re-derivation)
   // against the `PASS_STYLE` symbol exported from `@endo/pass-style`.
+  // pass-style narrows the static type of `PASS_STYLE` to a string literal
+  // for type-overload reasons; the runtime value is the actual symbol.
+  // Cast through unknown to unify the two views.
+  const passStyleSymbol = /** @type {symbol} */ (
+    /** @type {unknown} */ (PASS_STYLE)
+  );
   const { promise } = makeSubscribableKit();
   // The symbol used as the carrier's PASS_STYLE key must be the same
   // identity as the PASS_STYLE export from @endo/pass-style.
   const ownSymbols = Object.getOwnPropertySymbols(promise);
   t.true(
-    ownSymbols.includes(PASS_STYLE),
+    ownSymbols.includes(passStyleSymbol),
     'eventual-send carrier uses the same PASS_STYLE symbol as @endo/pass-style',
   );
   // And the canonical Symbol.for source agrees with both.
-  t.is(PASS_STYLE, Symbol.for('passStyle'));
+  t.is(passStyleSymbol, Symbol.for('passStyle'));
 });
