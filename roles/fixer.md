@@ -602,6 +602,38 @@ result through CI.
   PR 111's `cbor/diagnostic/util.js` `equals` helper (no production
   callers; tests used `t.deepEqual` directly); dropped the helper
   and the now-empty file in commit `0116aa1283`.
+- **A dispatch's stated diagnosis of a CI failure can be wrong; reproduce
+  the failure and read the trace before applying the proposed fix
+  shape.** The dispatch summary may identify a plausible-but-incorrect
+  cause and recommend a strategy menu (Options A/B/C). If the recommended
+  options don't match the actual root cause, applying any of them adds
+  noise without fixing the failure. The discipline:
+  1. Reproduce the failure locally on the PR's HEAD before touching
+     code (`node node_modules/ava/entrypoints/cli.mjs <one-failing-test>`
+     in the affected package; corepack-yarn-install first if node_modules
+     is missing).
+  2. Read the actual stack trace, not the dispatch's summary of it.
+     Where does the throw originate? `cauterizeProperty` lives in SES,
+     not in the package the dispatch named.
+  3. Re-check the design doc the PR implements against the actual diff.
+     If the design calls out a specific change (a permits entry, a
+     migration step, a back-compat shim) and the PR's diff is missing
+     it, that gap is the most likely cause of the failure, regardless
+     of what the dispatch hypothesised.
+  4. If the design doc has an obvious typo or inconsistency the PR
+     would have inherited (the design said `UniqueSymbol(delegate)`;
+     the actual SES form for `Symbol.for(...)` is `RegisteredSymbol(...)`
+     per the precedent at `packages/ses/src/permits.js:519`), apply the
+     correct form, not the typo. Cite the precedent in the commit.
+  Session example: PR 186's CI failed with `Cannot delete property
+  'Symbol(delegate)' of function Promise()` across all 15 test cells.
+  The dispatch hypothesised the failure came from tests deleting the
+  slot between cases and offered three test-restructuring options.
+  No test deleted the slot: SES's own `lockdown()` did, as the standard
+  intrinsic-cauterization step on a Promise property it didn't recognise.
+  The fix was the SES permits entry the design doc explicitly called
+  for at lines 393-405 and 766 but the implementation PR forgot to
+  land. None of the dispatch's three options would have solved it.
 - **When a dispatch summary's restatement of a maintainer comment
   appears to contradict an already-settled prior decision in the
   same PR, trust the maintainer's actual comment (re-read inline)
