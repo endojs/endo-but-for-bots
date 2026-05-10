@@ -152,3 +152,25 @@ both should be deleted in the same commit.
   on life support with a contortion test. A grep against the
   parent package will tell you which originally-shared code was
   preserved unchanged.
+- **AVA intercepts unhandled rejections.** Code paths whose
+  observable behavior is "schedule a microtask that throws and
+  let the host's unhandled-rejection bookkeeping surface it"
+  (e.g., a default rejection handler in a callback-based
+  primitive) are intrinsically hard to test under AVA. Any
+  rejection that escapes inside a test file fails the file,
+  even with a `process.on('unhandledRejection', ...)` listener
+  installed in the test (AVA's own listener also fires and
+  fails the file regardless of order). Two paths that work, both
+  of which the cleaner should reject as contortion:
+  monkey-patching `Promise.resolve` for the test's duration to
+  attach a `.catch`, or installing a `process.prependOnceListener`
+  that mutates the rejection state before AVA observes it.
+  Neither belongs in a coverage-driven test. The honest move is
+  to leave the path uncovered with a one-line note in the
+  source citing why coverage isn't pursued, and report the gap
+  in the cleaner summary as "out of scope: contortion required."
+  Encountered on PR #170 (2026-05-10): the
+  `HandledPromise.subscribe` default rejection handler in
+  `eventual-send/src/handled-promise.js` L502-506; the
+  cleaner shipped two clean tests for adjacent gaps and
+  documented this one gap as deliberately uncovered.
