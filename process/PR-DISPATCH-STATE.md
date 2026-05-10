@@ -1,6 +1,7 @@
 # PR dispatch state
 
-Last cycle: 2026-05-10 (conductor PR 103 merge).
+Last cycle: 2026-05-10 (conductor PR 146 merge).
+Prior cycle: 2026-05-10 (conductor PR 103 merge).
 Prior cycle: 2026-05-10 (conductor PR 161 merge).
 Prior cycle: 2026-05-10 (conductor PR 167 merge).
 Earlier: 2026-05-08 (conductor PR 136 merge).
@@ -9,6 +10,32 @@ Earlier: 2026-05-07 (conductor PR 119 merge).
 Earlier: 2026-05-07 (conductor PR 99 merge).
 Earlier: 2026-05-07 14:55 UTC (PR 119 contributor review).
 Earlier: 2026-05-07 07:00 UTC (master synced; fixer for PR 114; PR 111 fold-in dispatched).
+
+## Cycle 2026-05-10 (conductor PR 146)
+
+PR 146 merged → `438d30809ad95ae22b6ed64043ad34d738c013e5` (merge commit
+to `llm`) at 2026-05-10T06:42:02Z.
+`fix(fae): bind provider via storeIdentifier in setup scripts`,
+contributor bug-fix PR from `0xpatrickdev` (cross-repo fork) addressing
+a `storeLocator requires an endo:// locator` error during
+`yarn setup-factory` in `packages/fae`.
+At survey: APPROVED (kriskowal 2026-05-10T06:40:15Z, empty body),
+MERGEABLE, 32 behind `bots-ssh/llm`, 1 ahead, 28/28 CI SUCCESS at head
+`e4beebf371`.
+Cross-repo fork; no rebase performed (no push rights to fork, and GitHub
+reported MERGEABLE with green CI on the head SHA). `git merge-tree` dry
+run showed no conflicts; integration with current base is clean.
+Single-commit PR with authoritative title and body (real bug-fix
+description with the captp error trace, not process narrative); merge
+commit message now uses PR_TITLE/PR_BODY per the 2026-05-10 repo
+settings change.
+Direct `gh pr merge 146 --repo endojs/endo-but-for-bots --merge
+--delete-branch` (this repo lacks auto-merge); state=MERGED on first
+verify. Remote branch `fix-fae-bind-provider-store-identifier` on the
+contributor's fork deleted via `--delete-branch`; no local branch
+existed; `/home/kris/endo-wt/pr-146` worktree force-removed (carried
+stale `packages/fae/tmp/` test-fixture deletes, no real working changes).
+No known downstream PRs were waiting on PR 146.
 
 ## Cycle 2026-05-10 (conductor PR 103)
 
