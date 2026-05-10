@@ -652,6 +652,49 @@ result through CI.
   about. PR 111's position-53 comment on `cbor/diagnostic/util.js`
   landed on the `*/` closing the `equals` JSDoc, but the comment
   was about the whole `equals` function below it.
+- **A `1 unhandled rejection` from a daemon-class test on CI that
+  doesn't reproduce locally is most often a teardown timing race,
+  not a code-path regression.** Daemon tests fork full processes,
+  rely on socket lifecycle, and run an `afterEach.always` that calls
+  `stop(config)` then `cancel(Error('teardown'))`. The test files
+  themselves often acknowledge this with comments like "Stopping
+  first avoids an unhandled rejection race". When the failure
+  surfaces as an empty `{}` rejection (the JSON-stringified form of
+  an Error sent across the wire as `CTP_DISCONNECT.reason`, since
+  Error properties are non-enumerable), it is the disconnect path
+  rejecting a settler whose silencer is racing the unhandled-rejection
+  bookkeeping. The sequence to follow:
+  1. Pull the FULL job log (`gh run view <id> --repo <r> --log >
+     /tmp/full.log`) and grep for `Unhandled rejection in test/`,
+     not just `unhandled rejection`. The "filter for failed steps"
+     output (`gh run view --job <id> --log-failed`) sometimes shows
+     only the verbose-output tests and hides the actual file name.
+  2. Verify the dispatch's identification of the failing test against
+     the log. The `--log-failed` filter may surface a test that
+     happened to be the LAST verbose-output test before the run-summary
+     line, when the actual rejection came from a different file
+     entirely. PR 170 round 3 dispatch identified `ws-relay.test.js`
+     as the failing file; the actual rejection was in
+     `endo.test.js` (verifiable via `gh run view --log | grep
+     "Unhandled rejection in test/"`).
+  3. Audit the new code paths for: callbacks-without-onRejected
+     in `subscribe`-like primitives, settler.reject without a
+     silencer, default rejection handlers that surface to the
+     host's unhandled-rejection path. If all paths check out and
+     a 500+ test suite plus a focused solo-run pass locally, this
+     is a CI-only flake. Document the analysis with the SHA you
+     reproduced against, and let the fresh push's CI provide a
+     second sample.
+  Do NOT add a band-aid `.catch(() => {})` to mask the rejection
+  if a panel review has already rejected that pattern as a
+  must-fix. The honest fixer outcome is "lint fix landed, daemon
+  failure documented as suspected flake, CI rerun arming."
+  Session example: PR 170 round 3 — lint failure was real and
+  fixed mechanically; daemon `1 unhandled rejection` did not
+  reproduce across a 524-test full daemon-package run plus a
+  154-test solo `endo.test.js` run, despite extensive code-path
+  analysis identifying no plausible new leak in the
+  default-mode (non-pass-style-inbound) CapTP path.
 
 ## Self-improvement
 
