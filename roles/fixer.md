@@ -695,6 +695,45 @@ result through CI.
   154-test solo `endo.test.js` run, despite extensive code-path
   analysis identifying no plausible new leak in the
   default-mode (non-pass-style-inbound) CapTP path.
+- **A "preserve byte-identical tree" reshape rebases onto the
+  ORIGINAL base, not the current upstream tip.** When a steward
+  dispatch asks for a commit-grouping reshape with a load-bearing
+  "tree must equal `<safety-tag>`" invariant, the rebase target
+  is the merge-base of the safety tag and the upstream branch,
+  not the upstream branch's current head. Rebasing onto the
+  current head pulls in unrelated upstream churn (workflow SHA
+  bumps, transitive dep upgrades, `@types/node` major bumps)
+  and the diff-vs-safety-tag invariant fails. Compute the base
+  with `git merge-base <safety-tag> <upstream-branch>` and use
+  THAT as the rebase target. The reshape's own dispatch may say
+  "rebase onto `bots-ssh/<branch>`"; treat the upstream-branch
+  reference as a hint pointing at the merge-base, not at the
+  current tip. If the maintainer wants the PR re-based onto the
+  fresh tip too, that is a separate move (different reshape,
+  different verification: tree changes per the upstream churn).
+  Session example: PR 147's `providers` reshape — original base
+  `7015f2082e`, current `bots-ssh/llm` `2755cd23df`; rebasing
+  onto `2755cd23df` produced a non-empty diff vs. `pr147-pre-tidy`
+  showing `@types/node` v20→v25 + workflow SHA bumps; rebasing
+  onto `7015f2082e` produced an empty diff.
+- **A contributor PR's head repo is the contributor's fork, not
+  `bots-ssh`.** Before pushing a fixer reshape, verify the head
+  repo with `gh pr view <N> --json headRepository,headRefName`.
+  When the dispatch says "push: `git push --force-with-lease
+  bots-ssh providers`" but the PR's `headRepository.nameWithOwner`
+  is `<contributor>/endo-but-for-bots`, push to that contributor's
+  remote (already configured as `<contributor>-ssh` in the worktree)
+  instead. Pushing to `bots-ssh` will create a new branch on
+  `endojs/endo-but-for-bots` (the dispatch's view) without updating
+  the PR head; the PR sits at the original tip and the maintainer
+  has no signal anything happened. Cleanup: `git push bots-ssh
+  --delete <branch>` to remove the accidentally-created branch.
+  Verify the PR head SHA updated with `gh pr view <N> --json
+  headRefOid` before claiming the reshape is complete. Session
+  example: PR 147's `providers` was on `0xpatrickdev/endo-but-for-bots`;
+  the first push to `bots-ssh` created an orphan `providers`
+  branch on the endojs fork while the PR stayed at `e41542b9b7`;
+  the corrective push to `0xpatrickdev-ssh` updated the PR.
 
 ## Self-improvement
 
