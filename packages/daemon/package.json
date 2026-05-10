@@ -87,7 +87,7 @@
     "@libp2p/kad-dht": "14.2.15",
     "@libp2p/ping": "^2.0.37",
     "@libp2p/webrtc": "^5.2.24",
-    "@libp2p/websockets": "^9.2.19",
+    "@libp2p/websockets": "^10.1.11",
     "@multiformats/multiaddr": "^12.4.4",
     "better-sqlite3": "^11.0.0",
     "libp2p": "^2.10.0",

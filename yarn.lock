@@ -1754,7 +1754,7 @@ __metadata:
     "@libp2p/kad-dht": "npm:14.2.15"
     "@libp2p/ping": "npm:^2.0.37"
     "@libp2p/webrtc": "npm:^5.2.24"
-    "@libp2p/websockets": "npm:^9.2.19"
+    "@libp2p/websockets": "npm:^10.1.11"
     "@multiformats/multiaddr": "npm:^12.4.4"
     "@types/ws": "npm:^8.18.1"
     ava: "catalog:dev"
@@ -4191,24 +4191,22 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@libp2p/websockets@npm:^9.2.19":
-  version: 9.2.19
-  resolution: "@libp2p/websockets@npm:9.2.19"
+"@libp2p/websockets@npm:^10.1.11":
+  version: 10.1.11
+  resolution: "@libp2p/websockets@npm:10.1.11"
   dependencies:
-    "@libp2p/interface": "npm:^2.11.0"
-    "@libp2p/utils": "npm:^6.7.2"
-    "@multiformats/multiaddr": "npm:^12.4.4"
-    "@multiformats/multiaddr-matcher": "npm:^2.0.0"
-    "@multiformats/multiaddr-to-uri": "npm:^11.0.0"
-    "@types/ws": "npm:^8.18.1"
-    it-ws: "npm:^6.1.5"
+    "@libp2p/interface": "npm:^3.2.2"
+    "@libp2p/utils": "npm:^7.1.0"
+    "@multiformats/multiaddr": "npm:^13.0.1"
+    "@multiformats/multiaddr-matcher": "npm:^3.0.1"
+    "@multiformats/multiaddr-to-uri": "npm:^12.0.0"
     main-event: "npm:^1.0.1"
-    p-defer: "npm:^4.0.1"
-    p-event: "npm:^6.0.1"
+    p-event: "npm:^7.0.0"
     progress-events: "npm:^1.0.1"
-    race-signal: "npm:^1.1.3"
-    ws: "npm:^8.18.2"
-  checksum: 10c0/98cf60acfe37148e5bb02f2f7bbf292e8e045d54a34108ec7159f962148f271a157ea8ce18d5723cac064466f3d7adf39076f57aabc375f3c577ba7ff8f92f89
+    uint8arraylist: "npm:^2.4.8"
+    uint8arrays: "npm:^5.1.0"
+    ws: "npm:^8.18.3"
+  checksum: 10c0/7f3e720a4474f765f0ab0d15cdb7a359faf85775ef6ac5970a3c5eaeea867769b06fe2f110b2debe186ed219c4c971ef7ccecd41abf1a3f077014bdd94fa7024
   languageName: node
   linkType: hard
 
@@ -4347,16 +4345,16 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@multiformats/multiaddr-to-uri@npm:^11.0.0":
-  version: 11.0.2
-  resolution: "@multiformats/multiaddr-to-uri@npm:11.0.2"
+"@multiformats/multiaddr-to-uri@npm:^12.0.0":
+  version: 12.0.0
+  resolution: "@multiformats/multiaddr-to-uri@npm:12.0.0"
   dependencies:
-    "@multiformats/multiaddr": "npm:^12.3.0"
-  checksum: 10c0/1c10f9fccba205d018d1c12561bf8dc95b88fde3ce55f94088a245a7a8083b9b2e49252dd69a088536ac354bcaf04de6b458eb4d8541f35a4bfbfe508c277089
+    "@multiformats/multiaddr": "npm:^13.0.0"
+  checksum: 10c0/78ff27861e6a9de5619b2fefe22b959a935aed011800621f40749494ada24d492eeaaf26afeb894f7b5de3a3083053f53051f4284366724a81dedb9faedcc74b
   languageName: node
   linkType: hard
 
-"@multiformats/multiaddr@npm:^12.0.0, @multiformats/multiaddr@npm:^12.3.0, @multiformats/multiaddr@npm:^12.3.3, @multiformats/multiaddr@npm:^12.4.4":
+"@multiformats/multiaddr@npm:^12.0.0, @multiformats/multiaddr@npm:^12.3.3, @multiformats/multiaddr@npm:^12.4.4":
   version: 12.5.1
   resolution: "@multiformats/multiaddr@npm:12.5.1"
   dependencies:
@@ -6577,7 +6575,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@types/ws@npm:^8, @types/ws@npm:^8.18.1, @types/ws@npm:^8.2.2":
+"@types/ws@npm:^8, @types/ws@npm:^8.18.1":
   version: 8.18.1
   resolution: "@types/ws@npm:8.18.1"
   dependencies:
@@ -10217,13 +10215,6 @@ __metadata:
   languageName: node
   linkType: hard
 
-"event-iterator@npm:^2.0.0":
-  version: 2.0.0
-  resolution: "event-iterator@npm:2.0.0"
-  checksum: 10c0/fc1ca17a003cc7c2489ab1448f6b7cb2c34924a82de6f8b2faf189af4bc66cd3469ecd9ccdac493233a74dee63df2a753238d60d80a8936b1756bd78863bfe74
-  languageName: node
-  linkType: hard
-
 "event-target-shim@npm:6.0.2":
   version: 6.0.2
   resolution: "event-target-shim@npm:6.0.2"
@@ -12965,19 +12956,6 @@ __metadata:
   version: 3.0.11
   resolution: "it-take@npm:3.0.11"
   checksum: 10c0/9ee16ab831fe67e968d1229bbb5e251539689b55d8b7d141cac05de3fd903ed77a6b8e7874414417f5f141c3d79bac14c346195321b71723e2fad717935bd05c
-  languageName: node
-  linkType: hard
-
-"it-ws@npm:^6.1.5":
-  version: 6.1.5
-  resolution: "it-ws@npm:6.1.5"
-  dependencies:
-    "@types/ws": "npm:^8.2.2"
-    event-iterator: "npm:^2.0.0"
-    it-stream-types: "npm:^2.0.1"
-    uint8arrays: "npm:^5.0.0"
-    ws: "npm:^8.4.0"
-  checksum: 10c0/3bb97cda258adb64f79ea1c7ddc5f0d6c3d73d979f7a4a3a02894957661aec1e5d8749564ee103de821143779268c5e3494223f20466bfed2e3734753401966f
   languageName: node
   linkType: hard
 
@@ -19491,7 +19469,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"ws@npm:>=8.14.2, ws@npm:^8.13.0, ws@npm:^8.18.0, ws@npm:^8.18.2, ws@npm:^8.20.0, ws@npm:^8.4.0":
+"ws@npm:>=8.14.2, ws@npm:^8.13.0, ws@npm:^8.18.0, ws@npm:^8.18.3, ws@npm:^8.20.0":
   version: 8.20.0
   resolution: "ws@npm:8.20.0"
   peerDependencies:
