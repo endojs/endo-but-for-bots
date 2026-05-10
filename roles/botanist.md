@@ -132,8 +132,18 @@ In a fresh worktree (NEVER in the working directory):
 
 ```sh
 cd ~/endo-wt/dependabot-N   # create with `git worktree add`
-yarn config set enableScripts false   # one-shot, scoped to the worktree
+# Confirm `.yarnrc.yml` already sets `enableScripts: false`
+# (the project default for endo-but-for-bots). If not, run:
+#   yarn config set enableScripts false
 npx corepack yarn install
+```
+
+Worktree creation pattern (verified on PR #194):
+
+```sh
+cd ~/endo.repo
+git fetch bots-ssh pull/N/head:dependabot/N
+git worktree add ~/endo-wt/dependabot-N dependabot/N
 ```
 
 If the install fails (e.g. because `enableScripts: false` blocks a
@@ -191,6 +201,16 @@ unnecessary. Read CI's verdict via:
 gh pr view N --repo endojs/endo-but-for-bots \
   --json statusCheckRollup --jq '.statusCheckRollup'
 ```
+
+**Pull the failing-job logs before you start a deep source
+read.** A red required check in `statusCheckRollup` already
+contains the precise upstream-API symbol that broke. Fetch
+each failed job's logs with `gh api
+repos/<repo>/actions/jobs/<id>/logs | tail -100` and grep for
+`error TS`, `Cannot find module`, `ENOENT`, etc. That diagnosis
+short-circuits the source read: you go directly to whether the
+break is benign-but-incompatible (REJECT, queue follow-up
+issue) versus malicious (REJECT, alert maintainer).
 
 ### 7. Render the verdict
 

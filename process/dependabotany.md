@@ -37,7 +37,7 @@ the prior verdict's "next dispatch" instruction.
 
 | PR | Headline upgrade | Verdict | Maturity date | State | Notes |
 |---|---|---|---|---|---|
-| (none yet) | | | | | |
+| [194](https://github.com/endojs/endo-but-for-bots/pull/194) | `@libp2p/websockets` 9.2.19 → 10.1.11 | REJECT | n/a | OPEN | Major API break: `WebSocketsInit.filter` removed, `./filters` subpath missing from v10.1.11 tarball, transitive `@libp2p/interface` 2→3 cascades type errors. Lint and `viable-release` jobs red. Migration to `connectionGater.denyDialMultiaddr` requires a human-authored PR. Recommend follow-up issue and close PR as superseded. ([verdict comment](https://github.com/endojs/endo-but-for-bots/pull/194#issuecomment-4416647046)) |
 
 ## Scheduled engagements
 
@@ -53,4 +53,32 @@ per-PR table because some engagements span multiple PRs.
 Pitfalls and patterns surfaced during prior engagements; informs
 future dispatches without re-discovering them.
 
-(none yet)
+- **Read CI's failing logs early.**
+  On PR #194 the lint and `viable-release` jobs had already
+  diagnosed the API break (`Cannot find module
+  '@libp2p/websockets/filters'`, `'filter' does not exist in type
+  'WebSocketsInit'`).
+  CI's red signal short-circuits a long source read: pull
+  `gh api repos/<repo>/actions/jobs/<id>/logs` for every failing
+  required check before reaching for `npm pack`.
+- **`enableScripts: false` is already the project default.**
+  `endo-but-for-bots/.yarnrc.yml` sets `enableScripts: false`
+  globally, so an `npx corepack yarn install` in a worktree is
+  already passive.
+  No need to set it again per worktree; just confirm the file's
+  contents.
+- **An upstream `package.json` `exports` map can lie.**
+  `@libp2p/websockets@10.1.11` declares `"./filters"` in
+  `exports`, but the actual `dist/src/filters.js` is missing
+  from the published tarball.
+  When a PR fails with `ENOENT` on a deep import path, verify
+  by `tar tzf` on the tarball, not by trusting the `exports`
+  map.
+- **A `@deprecated` tag in vN often becomes "removed" in vN+1.**
+  v9 marked `@libp2p/websockets/filters` as JSDoc-`@deprecated`,
+  with the migration path being a libp2p-level
+  `connectionGater.denyDialMultiaddr`.
+  The v10 major bump completed the removal.
+  When reading source for a major bump, search the prior major
+  for `@deprecated` JSDoc tags on the consumed surface; those
+  are the things the new major has likely deleted.
