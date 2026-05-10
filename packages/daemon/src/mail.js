@@ -742,19 +742,21 @@ export const makeMailboxMaker = ({
 
     /**
      * Record a command in the agent's own inbox.
-     * Returns the message number for linking the result.
+     * Returns the messageId so the corresponding command-result can
+     * cite it as its `replyTo`. The bigint sequence number stays
+     * internal to deliver() and is never exposed; only the
+     * randomly-generated messageId crosses the boundary.
      *
      * @param {string} commandName
      * @param {Record<string, unknown>} args
-     * @param {string} messageId
-     * @returns {Promise<bigint>}
+     * @returns {Promise<FormulaNumber>}
      */
-    const recordCommand = async (commandName, args, messageId) => {
-      const typedMessageId = /** @type {FormulaNumber} */ (messageId);
+    const recordCommand = async (commandName, args) => {
+      const messageId = /** @type {FormulaNumber} */ (await randomHex256());
       /** @type {import('./types.js').CommandMessage & { from: FormulaIdentifier, to: FormulaIdentifier }} */
       const message = harden({
         type: /** @type {const} */ ('command'),
-        messageId: typedMessageId,
+        messageId,
         commandName,
         args,
         strings: [`${commandName}`],
@@ -764,29 +766,24 @@ export const makeMailboxMaker = ({
         to: selfId,
       });
       await deliver(message);
-      // Return the message number assigned by deliver (nextMessageNumber - 1).
-      return nextMessageNumber - 1n;
+      return messageId;
     };
 
     /**
-     * Record a command result in the agent's own inbox.
+     * Record a command result in the agent's own inbox, threaded as a
+     * reply to the recording command via its messageId.
      *
-     * @param {bigint} commandMessageNumber - The command's message number.
+     * @param {FormulaNumber} commandMessageId - The command's messageId.
      * @param {boolean} success
      * @param {string} summary
-     * @param {string} resultMessageId
      */
-    const recordCommandResult = async (
-      commandMessageNumber,
-      success,
-      summary,
-      resultMessageId,
-    ) => {
+    const recordCommandResult = async (commandMessageId, success, summary) => {
+      const messageId = /** @type {FormulaNumber} */ (await randomHex256());
       /** @type {import('./types.js').CommandResultMessage & { from: FormulaIdentifier, to: FormulaIdentifier }} */
       const message = harden({
         type: /** @type {const} */ ('command-result'),
-        messageId: /** @type {FormulaNumber} */ (resultMessageId),
-        replyTo: /** @type {FormulaNumber} */ (String(commandMessageNumber)),
+        messageId,
+        replyTo: commandMessageId,
         success,
         summary,
         strings: [summary],
@@ -852,14 +849,19 @@ export const makeMailboxMaker = ({
         throw new Error(`Invalid request, ${q(messageNumber)}`);
       }
 
-      const cmdMsgId = `cmd-resolve-${normalizedMessageNumber}-${Date.now()}`;
-      const cmdNumber = await recordCommand(
+      if (message.type !== 'request') {
+        throw new Error(
+          `Cannot resolve message ${q(messageNumber)} (type ${q(message.type)})`,
+        );
+      }
+      const req = message;
+
+      const cmdMessageId = await recordCommand(
         'resolve',
         harden({
           messageNumber: String(normalizedMessageNumber),
           resolution: String(resolutionNameOrPath),
         }),
-        cmdMsgId,
       ).catch(() => undefined);
 
       try {
@@ -869,8 +871,6 @@ export const makeMailboxMaker = ({
             `No formula exists for the pet name ${q(resolutionNameOrPath)}`,
           );
         }
-        // TODO validate shape of request
-        const req = /** @type {Request} */ (message);
         const resolver = /** @type {ERef<Responder>} */ (
           provide(req.resolverId, 'resolver')
         );
@@ -878,21 +878,17 @@ export const makeMailboxMaker = ({
           /** @type {FormulaIdentifier} */ (id),
         );
         await E(resolver).resolveWithId(externalizedId);
-        if (cmdNumber !== undefined) {
-          await recordCommandResult(
-            cmdNumber,
-            true,
-            'resolved',
-            `${cmdMsgId}-result`,
-          ).catch(() => {});
+        if (cmdMessageId !== undefined) {
+          await recordCommandResult(cmdMessageId, true, 'resolved').catch(
+            () => {},
+          );
         }
       } catch (error) {
-        if (cmdNumber !== undefined) {
+        if (cmdMessageId !== undefined) {
           await recordCommandResult(
-            cmdNumber,
+            cmdMessageId,
             false,
             /** @type {Error} */ (error).message,
-            `${cmdMsgId}-result`,
           ).catch(() => {});
         }
         throw error;
@@ -906,25 +902,23 @@ export const makeMailboxMaker = ({
       if (message === undefined) {
         throw new Error(`No such message with number ${q(messageNumber)}`);
       }
-      if (message.type === 'definition') {
+      if (message.type !== 'request') {
         throw new Error(
           `Cannot reject message ${q(messageNumber)} (type ${q(message.type)})`,
         );
       }
+      const req = message;
 
-      const cmdMsgId = `cmd-reject-${normalizedMessageNumber}-${Date.now()}`;
       await recordCommand(
         'reject',
         harden({
           messageNumber: String(normalizedMessageNumber),
           reason,
         }),
-        cmdMsgId,
       ).catch(() => {});
 
       const rejection = harden(Promise.reject(harden(new Error(reason))));
       // request messages use a persisted resolver formula.
-      const req = /** @type {Request} */ (message);
       const resolver = /** @type {ERef<Responder>} */ (
         provide(req.resolverId, 'resolver')
       );
@@ -939,14 +933,12 @@ export const makeMailboxMaker = ({
       petNamesOrPaths,
       replyToMessageNumber,
     ) => {
-      const cmdMsgId = `cmd-send-${Date.now()}`;
       await recordCommand(
         'send',
         harden({
           to: String(toNameOrPath),
           text: strings.join(' '),
         }),
-        cmdMsgId,
       ).catch(() => {});
 
       const toPath = namePathFrom(toNameOrPath);
@@ -1086,33 +1078,25 @@ export const makeMailboxMaker = ({
         throw new Error(`Invalid request number ${messageNumber}`);
       }
       // Record the command in the agent's inbox.
-      const cmdMsgId = `cmd-dismiss-${normalizedMessageNumber}-${Date.now()}`;
-      const cmdNumber = await recordCommand(
+      const cmdMessageId = await recordCommand(
         'dismiss',
         harden({ messageNumber: String(normalizedMessageNumber) }),
-        cmdMsgId,
       ).catch(() => undefined);
 
       const { dismisser } = E.get(message);
       try {
         await E(dismisser).dismiss();
-        if (cmdNumber !== undefined) {
-          const resultId = `${cmdMsgId}-result`;
-          await recordCommandResult(
-            cmdNumber,
-            true,
-            'dismissed',
-            resultId,
-          ).catch(() => {});
+        if (cmdMessageId !== undefined) {
+          await recordCommandResult(cmdMessageId, true, 'dismissed').catch(
+            () => {},
+          );
         }
       } catch (error) {
-        if (cmdNumber !== undefined) {
-          const resultId = `${cmdMsgId}-result`;
+        if (cmdMessageId !== undefined) {
           await recordCommandResult(
-            cmdNumber,
+            cmdMessageId,
             false,
             /** @type {Error} */ (error).message,
-            resultId,
           ).catch(() => {});
         }
         throw error;
@@ -1141,15 +1125,13 @@ export const makeMailboxMaker = ({
         throw new Error(`No such message with number ${q(messageNumber)}`);
       }
 
-      const cmdMsgId = `cmd-adopt-${normalizedMessageNumber}-${Date.now()}`;
-      const cmdNumber = await recordCommand(
+      const cmdMessageId = await recordCommand(
         'adopt',
         harden({
           messageNumber: String(normalizedMessageNumber),
           edgeName,
           petName: petNamePath.join('/'),
         }),
-        cmdMsgId,
       ).catch(() => undefined);
 
       try {
@@ -1162,6 +1144,13 @@ export const makeMailboxMaker = ({
           const id = /** @type {FormulaIdentifier} */ (message.valueId);
           context.thisDiesIfThatDies(id);
           await E(directory).storeIdentifier(petNamePath, id);
+          if (cmdMessageId !== undefined) {
+            await recordCommandResult(
+              cmdMessageId,
+              true,
+              `adopted as ${petNamePath.join('/')}`,
+            ).catch(() => {});
+          }
           return;
         }
         if (message.type !== 'package') {
@@ -1185,21 +1174,19 @@ export const makeMailboxMaker = ({
         }
         context.thisDiesIfThatDies(id);
         await E(directory).storeIdentifier(petNamePath, id);
-        if (cmdNumber !== undefined) {
+        if (cmdMessageId !== undefined) {
           await recordCommandResult(
-            cmdNumber,
+            cmdMessageId,
             true,
             `adopted as ${petNamePath.join('/')}`,
-            `${cmdMsgId}-result`,
           ).catch(() => {});
         }
       } catch (error) {
-        if (cmdNumber !== undefined) {
+        if (cmdMessageId !== undefined) {
           await recordCommandResult(
-            cmdNumber,
+            cmdMessageId,
             false,
             /** @type {Error} */ (error).message,
-            `${cmdMsgId}-result`,
           ).catch(() => {});
         }
         throw error;
@@ -1208,14 +1195,12 @@ export const makeMailboxMaker = ({
 
     /** @type {Mail['request']} */
     const request = async (toNameOrPath, description, responseName) => {
-      const cmdMsgId = `cmd-request-${Date.now()}`;
       await recordCommand(
         'request',
         harden({
           to: String(toNameOrPath),
           description,
         }),
-        cmdMsgId,
       ).catch(() => {});
 
       const toPath = namePathFrom(toNameOrPath);
