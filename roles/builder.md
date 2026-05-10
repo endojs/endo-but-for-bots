@@ -258,6 +258,40 @@ issue or design document, and shepherding it through to a green PR.
   consumers. The implementation added the third step by mirroring
   `@endo/harden`'s selector exactly, and surfaced the gap as
   design feedback in the PR body.
+- **A coordinated designer+builder rework brief that names a
+  CLOSED implementation PR ships as a fresh PR, not as a force-push
+  to the closed PR's branch.** The CLAUDE.md "closed PRs and issues
+  are inert" rule applies even when the closing maintainer comment
+  is the same comment that triggered the rework. The maintainer's
+  closure is the load-bearing signal that the closed implementation
+  is to be replaced wholesale, not iterated on; force-pushing to its
+  branch would update the branch but not reopen the PR, and a
+  reviewer landing on the closed PR sees stale content with no
+  pointer to the rework. Procedure when this shape arises:
+  1. Phase 1 (design revision on the OPEN design PR) proceeds
+     normally: rebase, edit, commit, force-push, comment.
+  2. Phase 2 (implementation): branch off the revised design's
+     branch with a new branch name (e.g. append `-v2`), apply the
+     restructure, push the new branch, open a NEW PR with
+     `--base <design-branch>` so the diff is just the
+     implementation contribution. The new PR's body opens with
+     `Refs: #<orig-design> #<orig-issue>` AND
+     `Supersedes: #<closed-impl>` so reviewers can find the
+     prior context.
+  3. Leave a one-line "superseded by #<new>" comment on the
+     closed implementation PR pointing to the new one. This is
+     not "authoring further work on a closed PR"; it is a
+     navigation aid for anyone landing on the closed PR.
+  4. The new PR's worktree is renamed to `~/endo-wt/pr-<new>`
+     with `git worktree move` immediately after `gh pr create`
+     returns the number, per the worktree-per-pr rule.
+  Encountered on the eventual-send-shim-race rework
+  (closed PR #177 -> new PR #186, paired with design PR #175):
+  the directive comment that asked for the rework also closed
+  the implementation PR. The new PR shipped clean off the
+  revised design's branch with all the restructured surfaces
+  and tests, while the closed PR retained its review history
+  for context.
 - **Cross-check `designs/README.md`'s milestone-summary
   annotations against the design's own `Depends On` section.**
   The design's own `Depends On` is author-curated and is often
