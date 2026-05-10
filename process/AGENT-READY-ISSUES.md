@@ -55,6 +55,10 @@ The bar:
 
 - **[#2390](./issues/2390.md)** — `harden-exports` rule mishandles many
   `export`s.
+  **In flight as bots PR #67** (`fix(eslint-plugin): harden-exports
+  handles destructuring patterns (#2390)`, branch
+  `design/issue-2390-harden-exports-patterns`). Skip; do not open a
+  duplicate.
   - **Plan:** In `packages/eslint-plugin/lib/rules/harden-exports.js`, replace
     the ad-hoc traversal at lines 51–61 with a recursive
     `pushDeclaredNames(pattern, names)` helper that handles `Identifier`,
@@ -65,6 +69,10 @@ The bar:
 
 - **[#2632](./issues/2632.md)** — Make `harden-exports` aware that
   already-hardened initializers do not need a follow-up `harden`.
+  **In flight as bots PR #64** (`feat(eslint-plugin): harden-exports
+  skips M.* pattern makers (#2632)`, branch
+  `design/issue-2632-harden-exports-pattern-makers`). Skip; do not open
+  a duplicate.
   - **Plan:** In `packages/eslint-plugin/lib/rules/harden-exports.js`, when
     collecting `exportNames`, skip names whose initializer is a
     `CallExpression` to a member of `M` (i.e. `M.something(...)`) per
@@ -75,6 +83,9 @@ The bar:
     counter-example that still warns.
 
 - **[#2749](./issues/2749.md)** — Disable `require-param` for `.ts` files.
+  **Already merged upstream as endojs/endo#3227.** The bots-side
+  mirror PR #66 is CLOSED. Skip; the upstream issue should auto-close
+  on the next master sync.
   - **Plan:** Mirror Agoric/agoric-sdk PR #11165: in the root `.eslintrc.cjs`
     (and any `tsconfig.eslint-*` overrides applying to `*.ts`), add an
     override disabling `jsdoc/require-param` and any sibling
@@ -106,6 +117,10 @@ The bar:
 
 - **[#2742](./issues/2742.md)** — Document `Compartment` availability and OOM
   limitations.
+  **In flight as bots PR #68** (`docs(ses): document Compartment
+  availability and OOM limits (#2742)`, branch
+  `design/issue-2742-compartment-limits-doc`). Skip; do not open a
+  duplicate.
   - **Plan:** Add a "Limitations" section to `packages/ses/docs/lockdown.md`
     (cross-link a paragraph from `packages/ses/README.md`) describing
     (a) compartments share an agent so an infinite loop in one denies
@@ -125,24 +140,46 @@ The bar:
 ## Partial-done — mop-up is ready (3)
 
 - **[#922](./issues/922.md)** — Fix `@agoric/harden` deprecation notice.
+  **Plan misclassified — needs maintainer scoping.** `@agoric/harden`
+  lives in `agoric-sdk`, not `endojs/endo`. The plan to replace
+  `packages/harden/README.md` would actually edit `@endo/harden`'s
+  current README (a working ~160-line document, not a deprecated
+  package). Maintainer call needed: file something on agoric-sdk,
+  add a deprecation paragraph to `@endo/harden`'s README naming
+  `@agoric/harden` as the deprecated sibling, or close as
+  not-this-repo's-problem.
   - Already done: the package itself is deprecated and instructions tell
     users to use `ses`.
-  - **Mop-up plan:** Replace `packages/harden/README.md` with a short
-    deprecation notice that names `@endo/harden` and `ses`'s `harden`
-    global, links to the migration path, and removes the dummy `index.js`
-    re-export advice.
+  - **Mop-up plan (do not execute as written):** Replace
+    `packages/harden/README.md` with a short deprecation notice that
+    names `@endo/harden` and `ses`'s `harden` global, links to the
+    migration path, and removes the dummy `index.js` re-export advice.
 
 - **[#1298](./issues/1298.md)** — Some endo tests are not using `@endo/init`.
+  **Plan underestimates risk.** 38 test files in
+  `packages/compartment-mapper/test/` use bare `import 'ses'`; many
+  have a commented-out `// import "./ses-lockdown.js";` indicating
+  they previously called `lockdown()` with custom options that were
+  intentionally suppressed. Mechanical replacement with
+  `import '@endo/init'` (which calls `lockdown()` with defaults)
+  changes behavior. Builder B verified: the swap on
+  `error-handling.test.js` failed 36 of 45 tests because snapshotted
+  error stacks change. Right cut is per-file investigation; that
+  exceeds "mop-up" scope. Consider closing as superseded by mhofman's
+  note on issue #2711 instead.
   - Already done: many tests have migrated; the remaining offenders are
     enumerated in the issue's third comment (compartment-mapper
     `test-error-handling.js`, `test-transform.js`).
-  - **Mop-up plan:** Replace remaining bare `import 'ses'` lines in
-    `packages/compartment-mapper/test/*.js` with `import '@endo/init'`,
-    then run the package's tests.
+  - **Mop-up plan (do not execute as written):** Replace remaining bare
+    `import 'ses'` lines in `packages/compartment-mapper/test/*.js`
+    with `import '@endo/init'`, then run the package's tests.
     If any test relies on raw `ses` (e.g. to test `lockdown` taming
     options), leave a comment explaining why.
 
 - **[#947](./issues/947.md)** — iOS Safari fails to lockdown.
+  **Regression test landed as bots PR #182** (`test(ses):
+  isImmutableDataProperty regression for iOS Safari fix (closes #947)`).
+  Awaiting CI + maintainer review.
   - Already done: `packages/ses/src/scope-constants.js` already guards with
     `desc &&` (verified on disk).
   - **Mop-up plan:** Close the issue.
