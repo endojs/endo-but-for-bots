@@ -8,7 +8,13 @@
 
 import harden from '@endo/harden';
 import { Remotable, Far, makeMarshal, QCLASS } from '@endo/marshal';
-import { E, HandledPromise } from '@endo/eventual-send';
+import { isPassStylePromise, makePromise } from '@endo/pass-style';
+import {
+  E,
+  HandledPromise,
+  resolveExternalPassStylePromise,
+  rejectExternalPassStylePromise,
+} from '@endo/eventual-send';
 import { isPromise, makePromiseKit } from '@endo/promise-kit';
 
 import { X, Fail, annotateError } from '@endo/errors';
@@ -65,7 +71,16 @@ const reverseSlot = slot => {
  * @property {boolean} gcImports
  * @property {(slot: CapTPSlot) => void} releaseSlot
  * @property {(slot: CapTPSlot) => RemoteKit} makeRemoteKit
- 
+ * @property {boolean} [usePassStylePromiseInbound] When true, inbound
+ *   `'p'`-prefixed slots produce a pass-style promise carrier (from
+ *   `@endo/pass-style`'s `makePromise()`) rather than a native
+ *   HandledPromise. The carrier's settlement is bridged to
+ *   `@endo/eventual-send`'s subscription machinery via
+ *   `resolveExternalPassStylePromise` / `rejectExternalPassStylePromise`.
+ *   This is the migration option corresponding to FUDCo's example in
+ *   endojs/endo#1312: instead of a `WeakMap<Promise, kref>`, the inbound
+ *   token is itself the opaque kref carrier.
+
  * @param {MakeCapTPImportExportTablesOptions} options
  * @returns {CapTPImportExportTables}
  */
@@ -73,6 +88,7 @@ export const makeDefaultCapTPImportExportTables = ({
   gcImports,
   releaseSlot,
   makeRemoteKit,
+  usePassStylePromiseInbound = false,
 }) => {
   /** @type {Map<CapTPSlot, any>} */
   const slotToExported = new Map();
@@ -98,10 +114,12 @@ export const makeDefaultCapTPImportExportTables = ({
   const makeSlotForValue = val => {
     /** @type {CapTPSlot} */
     let slot;
-    if (isPromise(val)) {
-      // This is a promise, so we're going to increment the lastPromiseID
-      // and use that to construct the slot name.  Promise slots are prefaced
-      // with 'p+'.
+    if (isPromise(val) || isPassStylePromise(val)) {
+      // Either a native Promise or a pass-style promise carrier (the
+      // non-thenable token from `@endo/pass-style`'s `makePromise()`).
+      // Both are encoded as `'p+'`-prefixed slots so the receiving side
+      // sees a single uniform "promise" wire kind. The local side
+      // tracks them in the export table the same way.
       lastPromiseID += 1;
       slot = `p+${lastPromiseID}`;
     } else {
@@ -123,18 +141,43 @@ export const makeDefaultCapTPImportExportTables = ({
    */
   const makeValueForSlot = (slot, iface) => {
     let val;
-    // Make a new handled promise for the slot.
+    // Make a new handled promise for the slot. We always create a
+    // remote kit, even for the pass-style inbound mode, because the
+    // remote kit's settler is what CapTP's CTP_RESOLVE handler calls.
+    // For the pass-style mode we substitute a settler that bridges
+    // to the external pass-style promise registry.
     const { promise, settler } = makeRemoteKit(slot);
+    let actualSettler = settler;
     if (slot[0] === 'o' || slot[0] === 't') {
       // A new remote presence
       // Use Remotable rather than Far to make a remote from a presence
       val = Remotable(iface, undefined, settler.resolveWithPresence());
     } else if (slot[0] === 'p') {
-      val = promise;
+      if (usePassStylePromiseInbound) {
+        // Mint an opaque pass-style carrier as the inbound value;
+        // bridge CTP_RESOLVE to the external pass-style promise
+        // registry so that subscribers (HandledPromise.subscribe,
+        // HandledPromise.settle, E.when) observe the eventual settlement.
+        const carrier = makePromise();
+        val = carrier;
+        actualSettler = Far('passStylePromiseSettler', {
+          resolve: target => resolveExternalPassStylePromise(carrier, target),
+          reject: reason => rejectExternalPassStylePromise(carrier, reason),
+          // resolveWithPresence is not meaningful for an opaque carrier;
+          // delegate to the underlying remote kit's settler in case some
+          // codepath calls it (it should not for 'p' slots).
+          resolveWithPresence: () => settler.resolveWithPresence(),
+        });
+        // Keep the original promise alive in the local export table so
+        // the unhandled-rejection silencer in makeRemoteKit still works.
+        promise.catch(() => {});
+      } else {
+        val = promise;
+      }
     } else {
       Fail`Unknown slot type ${slot}`;
     }
-    return { val, settler };
+    return { val, settler: actualSettler };
   };
 
   return {
@@ -165,6 +208,15 @@ export const makeDefaultCapTPImportExportTables = ({
  * objects marked with makeTrapHandler to synchronous clients (guests)
  * @property {boolean} [gcImports] if true, aggressively garbage collect imports
  * @property {(MakeCapTPImportExportTablesOptions) => CapTPImportExportTables} [makeCapTPImportExportTables] provide external import/export tables
+ * @property {boolean} [usePassStylePromiseInbound] When true, inbound
+ *   `'p'`-prefixed slots produce a pass-style promise carrier (from
+ *   `@endo/pass-style`'s `makePromise()`) rather than a native
+ *   HandledPromise. The carrier is non-thenable, so `await
+ *   inboundCarrier` resolves to the carrier itself; explicit
+ *   `HandledPromise.settle(inboundCarrier)` (or `E.when(...)`) is
+ *   required to observe the eventual settlement. Default false for
+ *   backward compatibility; opt in to migrate to the
+ *   non-implicit-await semantics.
  */
 
 /**
@@ -205,6 +257,7 @@ export const makeCapTP = (
     trapHost,
     gcImports = false,
     makeCapTPImportExportTables = makeDefaultCapTPImportExportTables,
+    usePassStylePromiseInbound = false,
   } = opts;
 
   // It's a hazard to have trapGuest and trapHost both enabled, as we may
@@ -448,6 +501,7 @@ export const makeCapTP = (
     releaseSlot,
     // eslint-disable-next-line no-use-before-define
     makeRemoteKit,
+    usePassStylePromiseInbound,
   });
 
   /**
@@ -471,9 +525,11 @@ export const makeCapTP = (
       if (exportHook) {
         exportHook(val, slot);
       }
-      if (isPromise(val)) {
+      if (isPromise(val) || isPassStylePromise(val)) {
         // Set up promise listener to inform other side when this promise
-        // is fulfilled/broken
+        // is fulfilled/broken. For a pass-style carrier this routes
+        // through HandledPromise.subscribe (via E.when -> settle), so
+        // the producer's settle/reject closures drive the CTP_RESOLVE.
         const promiseID = reverseSlot(slot);
         const resolved = result =>
           send({
