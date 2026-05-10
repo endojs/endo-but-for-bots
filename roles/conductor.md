@@ -138,6 +138,23 @@ For each PR at the head of the queue:
    exposed deferred-tool set and recorded the briefs in
    dispatch-state instead, which the steward then dispatched
    from the parent loop.
+
+   **Conductor briefs MUST verify CI is green BEFORE dispatch;
+   "wait for CI" reduces to armed-and-flee.** The conductor's
+   session-bounded Monitor task dies when the conductor exits.
+   A brief that says "wait for CI to converge then merge" sees
+   the conductor poll once, see PENDING, end the engagement, and
+   the merge never happens. The steward must verify
+   `gh pr view <N> --json statusCheckRollup` returns all-green
+   BEFORE dispatching the conductor; if CI isn't green, arm a
+   parent-context Monitor first and dispatch the conductor only
+   from the Monitor's convergence event.
+   Encountered on PR #140 (2026-05-10): consolidation push
+   restarted CI; conductor brief said "wait for CI to converge
+   then merge"; the conductor armed a Monitor and ended within
+   ~50 seconds. The steward had to arm a parent Monitor and
+   re-dispatch the conductor on convergence. Pre-conductor CI
+   verification is the steward's job, not the conductor's.
 8. **Pick the next PR**, return to step 1.
 
 End the engagement when the queue is empty, every remaining
