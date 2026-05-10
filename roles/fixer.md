@@ -780,6 +780,46 @@ result through CI.
   onto `2755cd23df` produced a non-empty diff vs. `pr147-pre-tidy`
   showing `@types/node` v20→v25 + workflow SHA bumps; rebasing
   onto `7015f2082e` produced an empty diff.
+- **A `.catch(() => undefined)` (or `.catch(() => {})`) wrapped
+  around a recording-side helper masks programmer errors as
+  ruthlessly as it masks transient I/O.** When a fixer dispatch
+  cites "not a valid formula identifier" (or any "invalid X" /
+  "wrong shape" assertion) inside a helper that is wrapped in a
+  `.catch(() => undefined)` at every call site, the helper has
+  almost certainly been silently failing in production: the catch
+  swallows the assertion, the caller sees `undefined`, and the
+  feature appears to "work" without ever recording anything.
+  Before fixing the assertion error, audit every call site for the
+  catch pattern and decide whether the catch should stay (transient
+  storage I/O) or go (validation belongs as the caller's
+  precondition). The surface fix (replace the bad input with a
+  good one) is necessary but the underlying catch-everything pattern
+  is what let the bug live to review. Session example: PR 179's
+  `cmd-resolve-N-Date.now()` synthetic strings failed
+  `assertFormulaNumber` inside `deliver`; every `recordCommand`
+  call site had `.catch(() => undefined)`, so no command was ever
+  persisted and the chat-side rendering quietly displayed nothing.
+- **`await x; return nextSequence - 1n` is interleaving-broken even
+  when the await is on a serialized queue.** The pattern looks
+  microtask-safe (the resolve and the next statement land adjacent
+  on the microtask queue), but a serial-jobs queue's `unlock` runs
+  synchronously inside `enqueue`'s `finally`, which immediately
+  starts the next queued job. That next job can run to its first
+  internal await BEFORE my continuation reads the sequence, and
+  has by then incremented the sequence past my message. The fix is
+  to capture the assignment INSIDE the critical section (e.g.
+  return the assigned number from the queued function) or to use a
+  per-message identifier minted before deliver (a 64-hex random)
+  rather than reading the post-deliver sequence value. The latter
+  is also the right answer for any "do not leak our message-number
+  sequence to other parties" review note: the bigint sequence
+  stays internal; an opaque random crosses the boundary. Session
+  example: PR 179's `recordCommand` originally did
+  `await deliver(message); return nextMessageNumber - 1n;` which
+  raced concurrent `deliver` calls under `mailboxStoreJobs`; the
+  fix returned a freshly-minted `messageId` (already used as the
+  threading key for `send`/`request`) so neither the sequence nor
+  the leak hazard remained.
 - **A contributor PR's head repo is the contributor's fork, not
   `bots-ssh`.** Before pushing a fixer reshape, verify the head
   repo with `gh pr view <N> --json headRepository,headRefName`.
