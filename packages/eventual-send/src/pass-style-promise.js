@@ -43,6 +43,14 @@ const PASS_STYLE_PROMISE_TAG = 'Promise';
  * @property {boolean} fulfilled
  * @property {any} target
  * @property {any} reason
+ * @property {boolean} firstSubscribed Whether any subscriber has yet
+ *   arrived at this producer. Set synchronously inside `enqueueSubscriber`
+ *   on the first call so two subscribers attaching in the same turn cannot
+ *   race two notifications.
+ * @property {(() => void) | undefined} onFirstSubscribe Optional callback
+ *   from the kit's `options.onFirstSubscribe`; fired exactly once on the
+ *   next turn after the first subscriber arrives. `undefined` for kits
+ *   minted without the option and for externally-registered carriers.
  */
 
 /**
@@ -143,6 +151,23 @@ const onNextTurn = thunk => {
  * @param {(reason: any) => void} onRejected
  */
 const enqueueSubscriber = (producer, onFulfilled, onRejected) => {
+  // Mark first-subscriber arrival BEFORE either branch runs, so that
+  // two subscribers attaching in the same turn cannot both observe
+  // `firstSubscribed === false` and schedule two `onFirstSubscribe`
+  // notifications. Capturing the callback into a local before clearing
+  // the slot makes the fire-once invariant robust against re-entrancy
+  // from inside `onFirstSubscribe` itself.
+  if (!producer.firstSubscribed) {
+    producer.firstSubscribed = true;
+    const { onFirstSubscribe } = producer;
+    if (onFirstSubscribe !== undefined) {
+      // Drop the slot so a re-entrant subscribe inside the callback
+      // cannot re-enqueue another notification (defense-in-depth on
+      // top of the `firstSubscribed` flag).
+      producer.onFirstSubscribe = undefined;
+      onNextTurn(onFirstSubscribe);
+    }
+  }
   if (producer.settled) {
     // Already settled: fire on the next turn with the recorded outcome.
     onNextTurn(() => {
@@ -252,9 +277,37 @@ const settleProducer = (producer, fulfilled, value) => {
  * rejected, no subscriber, no facade" case described above; that is the
  * intentional contract.
  *
+ * **`onFirstSubscribe` (Option A).** When supplied, the callback fires
+ * exactly once on the next turn after the first subscriber attaches to
+ * the kit's carrier (via `HandledPromise.subscribe`, transitively via
+ * `HandledPromise.settle` / `E.when`, or via `subscribePassStylePromise`
+ * directly). Subsequent subscribers do not re-trigger it. The flag that
+ * records arrival is set synchronously, so two subscribers attaching in
+ * the same turn cannot race two notifications. If the producer settles
+ * BEFORE any subscriber arrives, the recorded settlement is delivered to
+ * the first late subscriber and `onFirstSubscribe` fires alongside it
+ * (the hook tracks subscriber arrival, not settlement). The hook lives
+ * only on this kit; there is no analogue on `HandledPromise` or on the
+ * native `Promise` (Option B is explicitly deferred). Errors thrown
+ * synchronously by the callback are reported via `onNextTurn`'s
+ * unhandled-rejection bridge.
+ *
+ * @param {object} [options]
+ * @param {() => void} [options.onFirstSubscribe] Optional fire-once
+ *   callback invoked on the next turn after the first subscriber attaches
+ *   to the returned `promise`.
  * @returns {{ promise: object, settle: (target: any) => void, reject: (reason: any) => void }}
  */
-export const makeSubscribableKit = () => {
+export const makeSubscribableKit = options => {
+  const onFirstSubscribe = options && options.onFirstSubscribe;
+  if (
+    onFirstSubscribe !== undefined &&
+    typeof onFirstSubscribe !== 'function'
+  ) {
+    Fail`makeSubscribableKit: options.onFirstSubscribe must be a function, got ${q(
+      onFirstSubscribe,
+    )}`;
+  }
   const promise = makeCarrier();
   /** @type {PassStyleProducer} */
   const producer = {
@@ -263,6 +316,8 @@ export const makeSubscribableKit = () => {
     fulfilled: false,
     target: undefined,
     reason: undefined,
+    firstSubscribed: false,
+    onFirstSubscribe,
   };
   passStylePromiseProducers.set(promise, producer);
   /**
@@ -306,6 +361,11 @@ export const registerExternalPassStylePromise = carrier => {
     fulfilled: false,
     target: undefined,
     reason: undefined,
+    firstSubscribed: false,
+    // Externally-registered carriers have no kit, hence no
+    // `onFirstSubscribe` hook. The `firstSubscribed` flag still flips
+    // so the producer record stays internally consistent.
+    onFirstSubscribe: undefined,
   };
   passStylePromiseProducers.set(carrier, producer);
 };
