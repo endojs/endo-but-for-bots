@@ -4,6 +4,8 @@
 
 import harden from '@endo/harden';
 
+const { Fail, quote: q } = assert;
+
 /**
  * Subscription support for pass-style promise carriers, layered alongside
  * `HandledPromise`. The carrier shape itself (`[PASS_STYLE]: 'promise'`,
@@ -258,35 +260,54 @@ export const makeSubscribableKit = () => {
 freeze(makeSubscribableKit);
 
 /**
- * Register a subscriber on a pass-style promise carrier. If the carrier is
- * known to this module (because it came from `makeSubscribableKit` here),
- * the subscriber is enqueued on the producer; otherwise, the subscriber
- * is enqueued in a "pending" state awaiting an external producer
- * registration. Callers that pass an unknown carrier are responsible for
- * driving its settlement via a host-specific channel (e.g., CapTP's slot
- * table).
+ * Make and register a fresh producer record for an externally-minted
+ * carrier. Hosts that mint pass-style promise carriers via
+ * `pass-style`'s `makePromise()` (CapTP, liveSlots-style kernels) MUST
+ * call this before any consumer subscribes or before any external settle
+ * is dispatched; without it, `subscribePassStylePromise` and the
+ * external settle helpers fail loudly rather than silently install a
+ * never-resolved producer record.
+ *
+ * Idempotent: a second call on the same carrier is a no-op (the existing
+ * producer record is preserved).
+ *
+ * @param {object} carrier
+ */
+export const registerExternalPassStylePromise = carrier => {
+  if (passStylePromiseProducers.has(carrier)) {
+    return;
+  }
+  /** @type {PassStyleProducer} */
+  const producer = {
+    subscribers: [],
+    settled: false,
+    fulfilled: false,
+    target: undefined,
+    reason: undefined,
+  };
+  passStylePromiseProducers.set(carrier, producer);
+};
+freeze(registerExternalPassStylePromise);
+
+/**
+ * Register a subscriber on a pass-style promise carrier. The carrier MUST
+ * already have a producer record, either from `makeSubscribableKit` here
+ * or from a prior `registerExternalPassStylePromise` call by the host
+ * that minted the carrier. Subscribing to an unknown carrier fails with
+ * a diagnostic that quotes the carrier identity, so a typo / wrong-realm
+ * carrier surfaces immediately rather than hanging forever.
  *
  * @param {object} carrier
  * @param {(target: any) => void} onFulfilled
  * @param {(reason: any) => void} onRejected
  */
 export const subscribePassStylePromise = (carrier, onFulfilled, onRejected) => {
-  let producer = passStylePromiseProducers.get(carrier);
+  const producer = passStylePromiseProducers.get(carrier);
   if (producer === undefined) {
-    // Carrier minted outside this module (e.g., directly via
-    // `pass-style`'s `makePromise()`). Lazily install a producer record
-    // so a subsequent host-driven `resolveExternalPassStylePromise` can
-    // settle it. Without that resolution, the subscriber waits forever
-    // (analogous to a native promise that never settles).
-    /** @type {PassStyleProducer} */
-    producer = {
-      subscribers: [],
-      settled: false,
-      fulfilled: false,
-      target: undefined,
-      reason: undefined,
-    };
-    passStylePromiseProducers.set(carrier, producer);
+    Fail`Cannot subscribe to unregistered pass-style promise carrier ${q(
+      carrier,
+    )}: a producer record must be installed via makeSubscribableKit or registerExternalPassStylePromise before subscribing`;
+    return;
   }
   enqueueSubscriber(producer, onFulfilled, onRejected);
 };
@@ -300,23 +321,21 @@ freeze(subscribePassStylePromise);
  * Used by hosts (CapTP, liveSlots-like kernels) that mint carriers via
  * `pass-style`'s `makePromise()` and track settlement in their own slot
  * tables; calling this function bridges their settlement signal to
- * eventual-send's subscriber notification.
+ * eventual-send's subscriber notification. The carrier MUST already
+ * have a producer record (via `registerExternalPassStylePromise` or
+ * `makeSubscribableKit`); resolving an unregistered carrier fails with a
+ * diagnostic that quotes the carrier identity.
  *
  * @param {object} carrier
  * @param {any} target
  */
 export const resolveExternalPassStylePromise = (carrier, target) => {
-  let producer = passStylePromiseProducers.get(carrier);
+  const producer = passStylePromiseProducers.get(carrier);
   if (producer === undefined) {
-    /** @type {PassStyleProducer} */
-    producer = {
-      subscribers: [],
-      settled: false,
-      fulfilled: false,
-      target: undefined,
-      reason: undefined,
-    };
-    passStylePromiseProducers.set(carrier, producer);
+    Fail`Cannot resolve unregistered pass-style promise carrier ${q(
+      carrier,
+    )}: a producer record must be installed via registerExternalPassStylePromise before settling`;
+    return;
   }
   settleProducer(producer, true, target);
 };
@@ -342,17 +361,12 @@ freeze(resolveExternalPassStylePromise);
  * @param {any} reason
  */
 export const rejectExternalPassStylePromise = (carrier, reason) => {
-  let producer = passStylePromiseProducers.get(carrier);
+  const producer = passStylePromiseProducers.get(carrier);
   if (producer === undefined) {
-    /** @type {PassStyleProducer} */
-    producer = {
-      subscribers: [],
-      settled: false,
-      fulfilled: false,
-      target: undefined,
-      reason: undefined,
-    };
-    passStylePromiseProducers.set(carrier, producer);
+    Fail`Cannot reject unregistered pass-style promise carrier ${q(
+      carrier,
+    )}: a producer record must be installed via registerExternalPassStylePromise before settling`;
+    return;
   }
   settleProducer(producer, false, reason);
 };

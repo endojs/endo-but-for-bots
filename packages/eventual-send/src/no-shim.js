@@ -23,6 +23,7 @@ export { hp as HandledPromise };
 
 export {
   makeSubscribableKit,
+  registerExternalPassStylePromise,
   resolveExternalPassStylePromise,
   rejectExternalPassStylePromise,
 } from './pass-style-promise.js';

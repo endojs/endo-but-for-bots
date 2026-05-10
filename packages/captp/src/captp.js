@@ -12,6 +12,7 @@ import { isPassStylePromise, makePromise } from '@endo/pass-style';
 import {
   E,
   HandledPromise,
+  registerExternalPassStylePromise,
   resolveExternalPassStylePromise,
   rejectExternalPassStylePromise,
 } from '@endo/eventual-send';
@@ -159,6 +160,10 @@ export const makeDefaultCapTPImportExportTables = ({
         // registry so that subscribers (HandledPromise.subscribe,
         // HandledPromise.settle, E.when) observe the eventual settlement.
         const carrier = makePromise();
+        // Register the producer record with eventual-send so consumers
+        // that subscribe before CTP_RESOLVE arrives queue against it
+        // rather than failing the unregistered-carrier diagnostic.
+        registerExternalPassStylePromise(carrier);
         val = carrier;
         actualSettler = Far('passStylePromiseSettler', {
           resolve: target => {

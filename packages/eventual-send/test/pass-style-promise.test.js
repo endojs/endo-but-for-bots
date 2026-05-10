@@ -7,7 +7,9 @@ import test from 'ava';
 import { HandledPromise, E } from './_get-hp.js';
 import {
   makeSubscribableKit,
+  registerExternalPassStylePromise,
   resolveExternalPassStylePromise,
+  rejectExternalPassStylePromise,
 } from '../src/pass-style-promise.js';
 
 test('makeSubscribableKit: returns a non-thenable promise carrier', t => {
@@ -279,6 +281,83 @@ test('settle as facade: reject before settle still rejects the facade', async t 
   await t.throwsAsync(() => HandledPromise.settle(promise), {
     message: 'producer-side',
   });
+});
+
+test('subscribe to unregistered carrier fails with a diagnostic', t => {
+  // Hostile / typo case: a carrier-shaped object that no one registered.
+  // The prior auto-install behavior would silently install a producer
+  // record and the subscriber would wait forever; now we fail loudly.
+  const orphan = harden(
+    Object.defineProperties(
+      {},
+      {
+        [Symbol.for('passStyle')]: { value: 'promise' },
+        [Symbol.toStringTag]: { value: 'Promise' },
+      },
+    ),
+  );
+  t.throws(
+    () =>
+      HandledPromise.subscribe(orphan, () => {
+        t.fail('onFulfilled must not fire');
+      }),
+    { message: /unregistered pass-style promise carrier/ },
+  );
+});
+
+test('resolveExternalPassStylePromise on unregistered carrier fails with a diagnostic', t => {
+  const orphan = harden(
+    Object.defineProperties(
+      {},
+      {
+        [Symbol.for('passStyle')]: { value: 'promise' },
+        [Symbol.toStringTag]: { value: 'Promise' },
+      },
+    ),
+  );
+  t.throws(() => resolveExternalPassStylePromise(orphan, 'value'), {
+    message: /unregistered pass-style promise carrier/,
+  });
+});
+
+test('rejectExternalPassStylePromise on unregistered carrier fails with a diagnostic', t => {
+  const orphan = harden(
+    Object.defineProperties(
+      {},
+      {
+        [Symbol.for('passStyle')]: { value: 'promise' },
+        [Symbol.toStringTag]: { value: 'Promise' },
+      },
+    ),
+  );
+  t.throws(() => rejectExternalPassStylePromise(orphan, new Error('x')), {
+    message: /unregistered pass-style promise carrier/,
+  });
+});
+
+test('registerExternalPassStylePromise enables subscribe + external settle', async t => {
+  // Externally-minted carrier (mimics CapTP's `makePromise()` flow).
+  const carrier = harden(
+    Object.defineProperties(
+      {},
+      {
+        [Symbol.for('passStyle')]: { value: 'promise' },
+        [Symbol.toStringTag]: { value: 'Promise' },
+      },
+    ),
+  );
+  registerExternalPassStylePromise(carrier);
+  // Idempotent: a second call is a no-op.
+  registerExternalPassStylePromise(carrier);
+  /** @type {any} */
+  let observed;
+  HandledPromise.subscribe(carrier, target => {
+    observed = target;
+  });
+  resolveExternalPassStylePromise(carrier, 'driven-from-host');
+  await Promise.resolve();
+  await Promise.resolve();
+  t.is(observed, 'driven-from-host');
 });
 
 test('subscribe error inside callback does not corrupt other subscribers', async t => {
