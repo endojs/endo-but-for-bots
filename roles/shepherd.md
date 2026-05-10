@@ -438,6 +438,54 @@ architectural ones.
   out explicitly in the report rather than glossing over a
   lifecycle hit.
 
+- **Familiar's Electron bumps are not exercised by standard CI.**
+  `packages/familiar` has no `test` script and is not in the
+  matrix; only `familiar-release.yml` builds it, and that workflow
+  runs on tag push or manual dispatch. A green `gh pr checks` on
+  an electron-bump PR proves the lockfile resolves and lint/types
+  pass for non-Familiar packages, NOT that the Electron shell
+  builds or runs. For any electron major bump (40 -> 41/42 is the
+  current example), the verdict must be HOLD pending a manual
+  `yarn workspace @endo/familiar build:app` and smoke-test, even
+  if every CI cell is green. Cross-check the upstream
+  electronjs.org breaking-changes page for each major spanned
+  (bumps frequently skip a major, e.g. 40 -> 42), and grep
+  Familiar's `import.*'electron'` surface against the listed API
+  removals before recommending merge. Encountered PR #197 (2026-05-10):
+  electron 40.9.3 -> 42.0.1, surfacing `Session.clearStorageData`
+  `quotas` removal (41), cookie `'changed'` cause split (41),
+  postinstall-binary-download removal (42), and macOS
+  UNNotification code-signing requirement (42); none observable
+  via repo CI.
+
+- **Solo-bump in an interface-coupled ecosystem is a block, not a
+  pass.** Some package families ship a shared "interface" type
+  package whose **major version** is shared across every
+  implementation. The libp2p ecosystem is the canonical example:
+  `@libp2p/interface@^2.x` couples `libp2p@^2.x`, every
+  `@libp2p/<transport-or-service>` whose own version line allows
+  it, and `@multiformats/multiaddr@^12.x`. Bumping a single
+  consumer (e.g. `@libp2p/websockets@^9` -> `^10`, where v10's
+  peer is `@libp2p/interface@^3.2.2`) drags in a parallel copy
+  of the interface package; the v3-typed transport will not
+  satisfy the v2 `Transport` slot the host's `createLibp2p()`
+  expects, and `yarn docs` (typedoc/tsc-build) fails. Even when
+  it duck-types at runtime, the typecheck is gone.
+  When auditing a major-bump dependabot PR for one member of
+  such a family, run `npm view <pkg>@<new-ver> peerDependencies
+  dependencies` and check whether any returned peer is a
+  shared-interface package whose major doesn't match the host
+  package's other dependencies (`grep -E '"@<scope>/' <pkg>.json`
+  on the host, then `npm view` each to compare). The verdict
+  for a solo bump in a coupled family is `hold for maintainer
+  attention`; recommend the maintainer either close the PR or
+  bundle it with a coordinated whole-family bump in a separate
+  branch.
+  Encountered 2026-05-10 on PR #194 (`@libp2p/websockets` 9 -> 10):
+  daemon's `libp2p@^2.10.0` plus eight other `@libp2p/*` packages
+  all on `@libp2p/interface@^2.x`; v10 of websockets needs `^3.2.2`.
+  Block.
+
 ## Self-improvement
 
 The final task of every engagement is to update this role file and
