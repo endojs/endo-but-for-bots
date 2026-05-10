@@ -1,12 +1,45 @@
 # PR dispatch state
 
-Last cycle: 2026-05-10 (conductor PR 167 merge).
-Prior cycle: 2026-05-08 (conductor PR 136 merge).
+Last cycle: 2026-05-10 (conductor PR 161 merge).
+Prior cycle: 2026-05-10 (conductor PR 167 merge).
+Earlier: 2026-05-08 (conductor PR 136 merge).
 Earlier: 2026-05-07 (conductor PR 137 merge).
 Earlier: 2026-05-07 (conductor PR 119 merge).
 Earlier: 2026-05-07 (conductor PR 99 merge).
 Earlier: 2026-05-07 14:55 UTC (PR 119 contributor review).
 Earlier: 2026-05-07 07:00 UTC (master synced; fixer for PR 114; PR 111 fold-in dispatched).
+
+## Cycle 2026-05-10 (conductor PR 161)
+
+PR 161 merged → `72b7d2771052a6938175a2b7a2bc92676c92e9e6` (merge commit
+to `llm`) at 2026-05-10T06:09:48Z.
+`feat(zip): Support deflate compression (bring your own)`,
+mirror of upstream endojs/endo#2997.
+At survey: APPROVED (kriskowal 2026-05-10T06:08:21Z), MERGEABLE/CLEAN,
+0 behind `bots-ssh/llm`, 3 ahead, 28/28 CI SUCCESS at head
+`7ad3687437`.
+Three commits at entry read coherently as a stack of distinct concerns:
+`feat(zip): Support deflate compression (bring your own)` (the upstream
+work), `chore(zip): adapt to llm tip after rebase` (TS6 BlobPart casts +
+"ZIP file" diagnostic regex update for llm-tip differences), and
+`test(compartment-mapper,check-bundle): narrow files.get() result with
+node:assert` (purely structural typedef fix for the tightened
+`Map<string, ArchivedFile>`). Each documents a distinct adaptation;
+kept discrete per "when in doubt, keep discrete". Skipped tidy and
+skipped rebase (0 behind).
+Direct `gh pr merge 161 --repo endojs/endo-but-for-bots --merge
+--delete-branch` (this repo lacks auto-merge); state=MERGED on first
+verify. Local + remote `mirror/endo-2997-zip-deflate` branch deleted;
+`/home/kris/endo-wt/pr-161` worktree removed.
+
+**Downstream-unblocker note (steward to consider next cycle)**: PR
+160 (`feat(exo-zip): in-memory ZIP as exo readable-tree`) cited PR
+161 as an unblocker in a kriscendobot comment. PR 160 is OPEN against
+`llm`, mergeable=UNKNOWN at the moment of this entry (GitHub
+recomputing post-merge); a weaver may be appropriate if 160 is now
+behind. Conductor did not self-dispatch (Agent tool not in this run's
+surface, and per the recently-updated conductor.md downstream
+follow-ups belong to the steward).
 
 ## Cycle 2026-05-10 (conductor PR 167)
 
@@ -41,7 +74,9 @@ Briefs:
   `4750ee9169`.
 - PR 161 (`feat(zip): Support deflate compression`): worktree
   `/home/kris/endo-wt/pr-161`, branch `mirror/endo-2997-zip-deflate`
-  at `f8bacc903f`.
+  at `f8bacc903f`. **Resolved 2026-05-10T06:09:48Z**: PR 161 merged
+  this cycle (see entry above) after weaver+shepherd cycle landed
+  the test-narrowing fix.
 
 ## Cycle 2026-05-08 (conductor PR 136)
 
