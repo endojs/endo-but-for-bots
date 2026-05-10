@@ -1,4 +1,35 @@
-# Steward state snapshot — 2026-05-10T07:02Z
+# Steward state snapshot — 2026-05-10T07:02Z (delta @ 21:05Z)
+
+## Delta since 07:02Z
+
+- **#142 MERGED** (per-package `@endo/bytes` reshape, 6 commits). Upstream
+  replay still BLOCKED on push access; branch ready at
+  `~/endo-wt/upstream-bytes` HEAD `63fb5330cb`.
+- **#181 rebased onto current `llm`** (was CONFLICTING after #142 landed).
+  HEAD now `ba08af670f`. Conflict was `designs/README.md` only — combined
+  the "Recently added" sentence (kept `trust-on-first-bind` + added
+  `retention-path-notation`) and updated Totals to `27/15/43/3/3/3/2/1/1
+  (98 designs)`. Force-pushed; CI will rerun.
+- **kumavis Open Question on #170/#169** (first-subscribe hook): kumavis
+  confirmed Option A (callback in `makeSubscribableKit`, scoped to
+  PassStylePromise, error-early on non-PassStylePromise). Answered his
+  follow-up on #169 (sample code for chain-walking via
+  `HandledPromise.subscribe`). Still waiting on kriskowal to confirm
+  Option A vs Option B before dispatching the design+impl rework.
+- **PRs awaiting kriskowal review** (CI green or all-feedback-addressed):
+  #170, #178, #179, #181, #186, #187, #182, plus older
+  #122, #128, #134, #151, #160, #163, #164, #165.
+- **Dependabot batch #188-#197**: opened 2026-05-10 19:53Z by
+  dependabot. Awaits maintainer triage; no bot action in scope per
+  `roles/shepherd.md`.
+- **Stale TaskList**: monitor task IDs `bi3ivosg5`, `bezu4scns` from
+  prior contexts are still emitting events alongside the freshly
+  re-armed `ba86i6wob`. Harmless duplication; TaskList is empty so they
+  cannot be stopped via TaskStop.
+
+---
+
+# Original snapshot — 2026-05-10T07:02Z
 
 A point-in-time capture of every load-bearing in-flight workstream
 the steward is babysitting. Written so a context compaction or a
