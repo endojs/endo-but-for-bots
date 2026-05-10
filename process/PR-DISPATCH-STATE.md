@@ -1,6 +1,7 @@
 # PR dispatch state
 
-Last cycle: 2026-05-10 (conductor PR 161 merge).
+Last cycle: 2026-05-10 (conductor PR 103 merge).
+Prior cycle: 2026-05-10 (conductor PR 161 merge).
 Prior cycle: 2026-05-10 (conductor PR 167 merge).
 Earlier: 2026-05-08 (conductor PR 136 merge).
 Earlier: 2026-05-07 (conductor PR 137 merge).
@@ -8,6 +9,28 @@ Earlier: 2026-05-07 (conductor PR 119 merge).
 Earlier: 2026-05-07 (conductor PR 99 merge).
 Earlier: 2026-05-07 14:55 UTC (PR 119 contributor review).
 Earlier: 2026-05-07 07:00 UTC (master synced; fixer for PR 114; PR 111 fold-in dispatched).
+
+## Cycle 2026-05-10 (conductor PR 103)
+
+PR 103 merged → `98c581315946eb0a0d429812d1147b29a94b7914` (merge commit
+to `llm`) at 2026-05-10T06:12:32Z.
+`design(chat): slot-and-slash commands`, docs-only design (re-opened
+from #30).
+At survey: APPROVED (kriskowal 2026-05-10T06:11:22Z, empty body),
+MERGEABLE/CLEAN, 0 behind `bots-ssh/llm`, 26/26 CI SUCCESS at head
+`f3bf100cec`.
+No tidy needed (clean docs-only PR); skipped rebase (0 behind).
+Direct `gh pr merge 103 --repo endojs/endo-but-for-bots --merge
+--delete-branch` (this repo lacks auto-merge); state=MERGED on first
+verify, mergedBy=kriscendobot.
+Local + remote `design/chat-slot-slash-commands-bot` branch deleted;
+`/home/kris/endo-wt/pr-103` worktree removed.
+
+No known downstream PRs were waiting on PR 103. The sibling
+`~/endo-wt/chat-slot-slash-commands` worktree (branch
+`design/chat-slot-slash-commands` without the `-bot` suffix) is a
+separate older-style local branch and was not touched by this merge;
+left for the steward to triage if relevant.
 
 ## Cycle 2026-05-10 (conductor PR 161)
 
@@ -357,7 +380,7 @@ mass cleanup of older review/* dependabot bots PRs). PRs 108 and
 | 105 | skill-registry helpers | llm | - | awaiting review (panel + fixer done) |
 | ~~104~~ | re-import ses for assert global | llm | - | merged 2026-05-06 conductor → `ac5dd05663` |
 | ~~94~~ | chat playwright smoke | llm | APPROVED | merged 2026-05-06 (post-#104 rebase + auto-merge from steward fallback after conductor stalled) |
-| 103 | chat slot-and-slash commands design | llm | - | awaiting review (re-opened from #30) |
+| ~~103~~ | chat slot-and-slash commands design | llm | APPROVED | merged 2026-05-10 conductor → `98c5813159` |
 | 102 | chat voice command parser design | llm | - | awaiting review (sibling design for #101) |
 | 101 | chat voice input | llm | - | awaiting review (re-opened from #44) |
 | ~~100~~ | familiar unified weblet server design | llm | APPROVED | merged 2026-05-06 conductor → `07d36112d6` |
