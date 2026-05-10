@@ -662,6 +662,32 @@ result through CI.
   reject, resolveWithPresence } = getDelegate()(handler);
   executor(resolve, reject, resolveWithPresence); return promise; }`
   declaration with the static methods attached after.
+- **`t.is(X.foo, Y.foo)` on functions is a reference-identity assertion;
+  AVA's diff prints the function `name` because that is the visible
+  difference, but renaming the actual will not flip `===`.** When a
+  dispatch hypothesises that a `Function {}` vs `Function foo {}` AVA
+  diff is "the static methods are unnamed arrow functions; give them
+  names", verify the underlying claim before applying the rename: ARE
+  the two function values the same reference, just printed differently
+  due to a name property quirk, or are they actually distinct closures?
+  If they are distinct closures (one an arrow wrapper that defers to a
+  realm singleton, the other a method on the realm singleton itself),
+  naming the wrapper changes its `.name` for printing but `t.is` still
+  fails because identity remains different. The real fix is to make the
+  two values the *same reference*, typically by routing both through a
+  getter that returns the singleton's own property after first install.
+  Session example: PR 186's `t.is(E.resolve, HandledPromise.resolve)`
+  failed because `E.resolve` was an arrow `(x) => getDelegate().
+  resolve(x)` and `HandledPromise.resolve` (set by the eager shim) was
+  the realm constructor's `staticMethods.resolve`. Naming the arrow
+  would have produced "Function resolve {}" for both sides of the diff
+  but `===` would still fail. The fix replaced the arrow statics on the
+  lazy adapter with `Object.defineProperty` getters returning
+  `getDelegate().HandledPromise[name]`, and deferred `makeE()` until
+  first use so its eagerly-captured statics also referenced the realm
+  constructor's own methods. This preserved the lazy-install invariant
+  (no install at module load) AND restored identity across the eager
+  and lazy paths.
 - **When a dispatch summary's restatement of a maintainer comment
   appears to contradict an already-settled prior decision in the
   same PR, trust the maintainer's actual comment (re-read inline)
