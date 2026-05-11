@@ -1132,6 +1132,126 @@ inventory.
       a hostile worker could saturate the bus with canvas updates.
       Phase 5 should add per-worker draw-call budgets.
 
+## Host modes and the inspector surface
+
+*Added 2026-05-11 in response to kriskowal's review on PR #32.*
+
+`endor` decides at startup which host mode to run in for each
+program-running invocation (initially `endor run`; later, by
+extension, `endor daemon`):
+
+- **Conventional UNIX-output mode** (the default).
+  The archive runs as any other UNIX process would.
+  Stdout is the program's output; stderr is for diagnostics; there
+  is no curses-style repaint.
+  No TUI is opened.
+  In this mode the JS-side wrapper resolves to a no-op inspector
+  (`makeNoopInspector` in `packages/tui/src/inspector.js`) and a
+  silent `LogSink`; library code that holds the `LogSink`
+  capability does the right thing without branching on mode.
+- **Interactive TUI mode** (`endor -i` / `endor --interactive`).
+  `endor` opens the TUI host and constructs the screen, windows,
+  and regions described in the layers above.
+  The host also exposes an **inspector** surface (a `TuiInspector`
+  exo, see `interfaces.js` and `inspector.js`) on a dedicated
+  window.
+  The user toggles the inspector open and closed with a host-side
+  keybinding.
+
+The mode flag is parsed by the Rust `endor` binary
+(`rust/endo/src/bin/endor.rs`, `parse_tui_mode`) and forwarded to
+the JS-side `make({ mode })` factory in `packages/tui/index.js`.
+The JS side is mode-agnostic by design: every callee receives
+either a real or a no-op inspector and behaves the same way.
+
+### Inspector surface
+
+The inspector has three roles, all stubbed in this PR:
+
+1. **Console-log capture.**
+   Worker `console.*` records are intercepted by the daemon's
+   per-worker log sink and forwarded across the bus to the
+   inspector's `appendLog` verb.
+   See "Logging is not console.log" below for why this is a
+   dedicated channel and not a side-channel onto stdout.
+2. **Telemetry samples.**
+   Counters, gauges, and histograms produced by the daemon and by
+   workers are surfaced as samples on `appendSample`.
+   Stub today; depends on the metrics design.
+3. **Stepping debugger.**
+   The XS `mxDebug` protocol bridge described in
+   [`endor-tui.md`](endor-tui.md) routes its frames through the
+   inspector window.
+   Stub today; the bridge lands in a follow-up.
+
+The inspector is also the natural surface for the **Endo Chat UI
+when re-used as a TUI**.
+See "Chat-as-TUI re-use" below.
+
+### Logging is not console.log
+
+In the Endo platform, `console` is not a stdout writer.
+Worker `console.log("hello")` does not write `"hello\n"` to the
+terminal; it produces a structured log record that the daemon
+captures and routes to the inspector (or discards in UNIX mode).
+
+This invariant is load-bearing for the TUI:
+
+- A region's character grid is sacred.
+  If a worker could call `console.log()` and have raw bytes appear
+  on the terminal, the region's contents would be corrupted on
+  every log call.
+- The inspector is where logs *should* land.
+  Routing them through `console` and then trying to disentangle
+  them from program output is a layering inversion.
+- Tests and confined programs benefit too.
+  A confined guest cannot accidentally exfiltrate to the user's
+  terminal by calling `console.error`.
+
+The JS-side encodes the invariant in two places:
+
+- `LogSink` (`packages/tui-xs/src/tui-xs.types.d.ts`).
+  An explicit capability that library code asks for and uses
+  instead of `console.*`.
+- `makeInspectorLogSink(inspector)` (`packages/tui/src/inspector.js`).
+  Adapts the `LogSink` interface onto the inspector's `appendLog`
+  verb.
+
+The Rust side encodes it by forwarding worker log records to the
+inspector exo over the bus instead of unioning them with the
+program's stdout stream.
+
+### Chat-as-TUI re-use
+
+The same Exo wrapper backs the Endo Chat UI when surfaced as a
+TUI rather than a DOM application.
+Chat is a confined program; in interactive TUI mode it would:
+
+- Acquire a screen handle from the host.
+- Open windows for the spaces gutter, the inbox transcript, the
+  command bar, and pending commands.
+- Receive user keystrokes through `region.events()`.
+- Display permission-request prompts as modals on its own windows.
+  The user grants or denies through a keystroke; the request and
+  reply travel over the messaging layer the same way they would
+  in the web Chat.
+
+Nothing in `packages/tui/index.js` is Chat-specific; the wrapper
+is the universal TUI substrate.
+The Chat-flavored powers surface (which Chat-specific exos to
+expose, what keybindings to bind) is left for a follow-up
+design; this section's purpose is to record the intent so future
+work doesn't double-roll the substrate.
+
+### Open question: Rust TUI crate
+
+The companion design `endor-tui.md` lists `ratatui` + `crossterm`
+as the leading candidates for the Rust side.
+Closing this gap is a prerequisite for implementing the
+interactive mode beyond the stub introduced here.
+The substrate in this PR is crate-agnostic; the host-side wiring
+in `rust/endo/` will pick the crate.
+
 ## Prompt
 
 > Write a design document at

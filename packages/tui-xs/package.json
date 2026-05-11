@@ -1,0 +1,57 @@
+{
+  "name": "@endo/tui-xs",
+  "version": "0.1.0",
+  "private": true,
+  "description": "XS-side handle API for endor TUI regions — stub.",
+  "keywords": [
+    "endo",
+    "endor",
+    "tui",
+    "xs"
+  ],
+  "author": "Endo contributors",
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/endojs/endo/blob/master/packages/tui-xs/README.md",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/endojs/endo.git",
+    "directory": "packages/tui-xs"
+  },
+  "bugs": {
+    "url": "https://github.com/endojs/endo/issues"
+  },
+  "type": "module",
+  "main": "./index.js",
+  "module": "./index.js",
+  "types": "./src/tui-xs.types.d.ts",
+  "exports": {
+    ".": {
+      "types": "./src/tui-xs.types.d.ts",
+      "default": "./index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "exit 0",
+    "lint": "yarn lint:types && yarn lint:eslint",
+    "lint-fix": "eslint --fix .",
+    "lint:eslint": "eslint .",
+    "lint:types": "tsc",
+    "test": "exit 0"
+  },
+  "dependencies": {
+    "@endo/harden": "workspace:^"
+  },
+  "devDependencies": {
+    "eslint": "catalog:dev",
+    "typescript": "catalog:dev"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "eslintConfig": {
+    "extends": [
+      "plugin:@endo/internal"
+    ]
+  }
+}
