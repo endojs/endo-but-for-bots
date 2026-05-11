@@ -124,11 +124,7 @@ revised 2026-05-10 to eager-shim/lazy-main delegate ponyfill).*
 | [weblet-next](weblet-next.md) | 2026-03-24 | 2026-03-24 | Reference |
 | [workers-panel](workers-panel.md) | 2026-02-14 | 2026-02-24 | Not Started |
 
-<<<<<<< HEAD
 **Totals:** 27 Complete/Implemented, 15 In Progress, 43 Not Started, 4 Proposed, 3 Active, 3 Reference, 2 Deprecated, 1 Draft, 1 Superseded (99 designs)
-=======
-**Totals:** 27 Complete/Implemented, 15 In Progress, 43 Not Started, 3 Proposed, 3 Active, 3 Reference, 2 Deprecated, 1 Draft, 1 Superseded (98 designs)
->>>>>>> 2c4d855361 (design(eventual-send-shim-race): fully specify delegate(handler) + eager-shim/lazy-main (closes #172))
 
 ## Roadmap
 
