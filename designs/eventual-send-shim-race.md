@@ -133,7 +133,9 @@ const delegate = handler => { /* ... */ };
 
 The return value is a settler bag, the same shape `Promise.withResolvers()`
 returns plus a `resolveWithPresence` for promises that resolve to a
-remote-presence proxy.
+remote presence (not literally an ECMAScript `Proxy`; the remotable
+object that stands in for the remote target on this side of the
+boundary).
 The promise itself is an ordinary `Promise` instance: `instanceof Promise`
 holds, `Promise.prototype.then` works, no subclass relationship is required.
 
