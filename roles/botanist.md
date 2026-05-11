@@ -270,6 +270,21 @@ its verdict, its maturity date, and its current state (open,
 merged, closed). The steward reads it per cycle to know which
 embargoed PRs are due.
 
+### 9a. Toolchain bumps: gate by what CI actually runs
+
+When the bumped package is a type-checker / linter / bundler
+(`typescript`, `eslint`, `esbuild`, `prettier`, `electron`),
+identify what subset of the toolchain runs in CI vs locally.
+Root `yarn lint` on `endo-but-for-bots` does NOT run
+per-workspace `lint:types`; only `yarn build-ts` (= `tsc --build
+tsconfig.build.json`) gates TypeScript.
+Local `lint:types` errors that don't break `build-ts` are latent
+issues, not merge blockers; record them as follow-up cleanup.
+See dependabotany self-notes for the TypeScript 5→6 example
+(PR #196): TS 6.0 narrowed `catch (error)` to `unknown`/`{}`,
+emitting `TS2339` in places that worked under TS 5.x with the
+implicit `any`.
+
 ### 10. Self-improvement
 
 If during the work you encountered a non-obvious pitfall (a new

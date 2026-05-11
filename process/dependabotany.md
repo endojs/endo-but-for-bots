@@ -43,6 +43,7 @@ the prior verdict's "next dispatch" instruction.
 | [190](https://github.com/endojs/endo-but-for-bots/pull/190) | `actions/configure-pages` 5.0.0 → 6.0.0 | MERGE-NOW | n/a | OPEN | GH Actions bump. Single `uses:` line in `typedoc-gh-pages.yml`. Pure node24 runtime upgrade. Project calls action with no `with:` block, so input semantics cannot regress. CI green. No CVEs. Manual merge by kriskowal required. ([verdict comment](https://github.com/endojs/endo-but-for-bots/pull/190#issuecomment-4417084480)) |
 | [191](https://github.com/endojs/endo-but-for-bots/pull/191) | `nick-fields/retry` 3.0.2 → 4.0.0 | MERGE-NOW | n/a | OPEN | GH Actions bump. Two `uses:` lines in `ocapn-guile-interop.yml`. v4.0.0 release notes are auto-generated and empty; commit-log inspection shows the only substantive change is a node20 → node24 runtime upgrade. All four consumed inputs (`max_attempts`, `retry_wait_seconds`, `command`, `timeout_seconds`) unchanged. CI green except for an unrelated macos-15 ws-relay daemon flake (`1 unhandled rejection` in `@endo/daemon`, orphan-process cleanup error from runner). No CVEs. Manual merge by kriskowal required. ([verdict comment](https://github.com/endojs/endo-but-for-bots/pull/191#issuecomment-4417085121)) |
 | [192](https://github.com/endojs/endo-but-for-bots/pull/192) | `actions/checkout` 4.3.1 → 6.0.2 | MERGE-NOW | n/a | OPEN | GH Actions bump. 9 workflow files, ~26 `uses:` lines. v5 = node24 runtime; v6 = "persist creds to a separate file" internal refactor (PR #2286, observable behavior unchanged, `persist-credentials` still defaults `true`); v6.0.1/v6.0.2 = small worktree and tag-handling fixes. All five consumed inputs (`path`, `token`, `repository`, `ref`, `submodules`) byte-identical between `action.yml@v4.3.1` and `action.yml@v6.0.2`. CI green. No CVEs. Resolves the standing `Node.js 20 actions are deprecated` CI warning. Manual merge by kriskowal required. ([verdict comment](https://github.com/endojs/endo-but-for-bots/pull/192#issuecomment-4417085990)) |
+| [196](https://github.com/endojs/endo-but-for-bots/pull/196) | `typescript` 5.9.2 → 6.0.3 | MERGE-NOW | n/a | OPEN | Catalog (`~6.0.2`) is already on TS 6.0.x; this PR only catches up the seven workspaces (`chat`, `familiar`, `lal`, `markmdown`, `platform`, `sandbox`, `trampoline`) that still pinned `~5.9.2` directly outside the catalog. 6.0.3 published 2026-04-16 (24 days mature). Zero CVE/advisory hits. All 25+ CI checks green; `yarn build-ts` clean. Latent: `packages/lal/providers/anthropic.js` has 5 new `tsc` errors locally from TS 6.0's stricter `catch (error)` narrowing (parameter is `unknown`/`{}` instead of `any`), but per-workspace `lint:types` is not gated by CI; follow-up cleanup recommended on lal. ([verdict comment](https://github.com/endojs/endo-but-for-bots/pull/196#issuecomment-4417093830)) |
 
 ## Scheduled engagements
 
@@ -118,3 +119,31 @@ future dispatches without re-discovering them.
   `no matches found`.
   Use `gh api 'repos/.../contents/x.yml?ref=v6.0.0'`
   (single-quoted) when fetching a file at a tag.
+- **Root `lint` does NOT run per-workspace `lint:types`.**
+  On `endo-but-for-bots`, the CI job `lint` runs only
+  `yarn lint:prettier && yarn lint:eslint`; the per-workspace
+  `lint:types` (which is `tsc`) is invoked only via
+  `yarn lint:workspaces`, which CI does not run.
+  `yarn build-ts` (= `tsc --build tsconfig.build.json`) IS the
+  only TypeScript gate in CI.
+  When evaluating a TypeScript bump, compare local `tsc` errors
+  against `yarn build-ts` results: errors that surface only in
+  per-workspace `lint:types` are latent (real bugs but not CI
+  blockers).
+  Discovered on PR #196 (TS 5→6 bump): `packages/lal` `tsc`
+  emitted 5 new errors in `providers/anthropic.js` from TS 6.0's
+  stricter `catch (error)` narrowing, but `yarn build-ts` was
+  clean and CI was fully green.
+- **TypeScript 6.0 narrows `catch (error)` to `unknown`/`{}` by
+  default.**
+  Code patterns like `error?.status` or `error?.message` that
+  worked under TS 5.x (where the implicit type was `any`) emit
+  `TS2339: Property 'status' does not exist on type '{}'` under
+  TS 6.0.
+  Fixes: cast at the catch site
+  (`} catch (/** @type {any} */ (error)) { ... }`), or refine
+  via `if (error instanceof Error) { ... }`, or annotate
+  with a narrower expected shape.
+  This is the dominant break-class in a 5→6 TypeScript bump; if
+  the project consumes a network/HTTP-style API in JSDoc-typed
+  JS, expect a handful of these.
