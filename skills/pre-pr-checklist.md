@@ -23,6 +23,10 @@ Run before every push to a PR branch:
   changes; CI will surface them but local catches them faster.
 - `cd packages/<name> && npx ava`: at least the tests nearest the
   change. For broader changes, run the full package suite.
+- Decide whether to add a `.changeset/<name>.md` per
+  [`./changeset-discipline.md`](./changeset-discipline.md).
+  Most internal-hygiene PRs (devDep cleanup, test moves, refactors
+  that don't change exported surfaces) skip the changeset.
 
 ## PR body template
 
