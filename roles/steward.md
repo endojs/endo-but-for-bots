@@ -1,8 +1,9 @@
 # Role: steward
 
 Top-level coordinator for the bot-PR estate. Per cycle,
-dispatches each sub-role, waits for reports, aggregates into the
-cycle log + dispatch state, and schedules the next fire.
+consults each watchman, dispatches each sub-role, waits for
+reports, aggregates into the cycle log + dispatch state, and
+schedules the next fire.
 
 The steward does not author code, do per-PR dispatch directly,
 pick designs, or handle issues. Those are the director's,
@@ -14,143 +15,52 @@ the per-cycle self-improvement commit and the process commit
 
 Runs as a continuous local loop in the user's Claude Code
 session, paced via `<<autonomous-loop-dynamic>>` and
-`ScheduleWakeup`. Not a remote cron trigger; remote sandboxes
-lack the credentials, working tree, and dispatch capability the
-steward needs.
+`ScheduleWakeup` (the latter delegated to
+[`watchman-cadence`](./watchman-cadence.md)).
+Not a remote cron trigger; remote sandboxes lack the
+credentials, working tree, and dispatch capability the steward
+needs.
 
 Triggers: `/loop the steward`, "do a sweep", or a maintainer
 asking for a kick. Each cycle has fresh context; nothing
 carries over except files in `process/` pushed to
 `bots-ssh/garden`.
 
-**Early-wake mechanism (redundant with the ScheduleWakeup
-cadence):** a 30s conditional-GET poll against the GitHub events
-API runs as a long-lived background process feeding a `Monitor`
-task. The script is
-[`../scripts/poll-events-conditional.sh`](../scripts/poll-events-conditional.sh);
-it spawns once per session from `~/garden` (or wherever the
-steward's garden-pinned worktree lives) as
-`nohup bash scripts/poll-events-conditional.sh > /tmp/poll-events.log 2> /tmp/poll-events.err &`
-and the steward arms a `Monitor` watching the log files for the
-distinctive `NEW <count>` trigger line. The monitor fires a
-`<task-notification>` within 30s of any new contributor event,
-waking the steward immediately rather than waiting for the next
-ScheduleWakeup. The poll uses ETag conditional GETs, so 304
-responses (the steady state) are free against the API rate limit.
+## The watchmen
 
-This is **redundant** with `ScheduleWakeup`: the safety-net
-wakeup still fires per the cadence rules below even if the daemon
-or the monitor dies. Both paths converge on the same `/loop the
-steward` re-entry. The daemon's PID + log files live in `/tmp`,
-so a session restart needs to re-spawn it. State (ETag + last
-seen `created_at` timestamp) persists at
-`~/.cache/endo-events-poll-state` so a daemon restart does not
-replay every prior event as a fresh trigger.
+The steward's scheduling and watching machinery is factored into
+three inline subsections, each documented in its own role file
+(see [`../designs/watchmen.md`](../designs/watchmen.md) for the
+design rationale):
 
-**On a `PullRequestReviewEvent` wake, enumerate ALL inline
-comments under that review's `pull_request_review_id`.** The
-draft-then-wrap pattern means inline comments can be hours or
-days older than the review submission. A timestamp filter
-("comments since the wake-up time") will miss everything written
-before the maintainer hit "Submit review". The reliable query
-is by review id:
+- [`watchman-events`](./watchman-events.md) — owns the GitHub
+  events poll daemon's contract, the `Monitor` arming, the
+  wake-on-event regex, and the post-wake routing.
+  Read this for the daemon spawn invocation, the regex, the
+  `tail -F`-doesn't-replay pitfall, the review-wrap-vs-per-comment
+  filter rule, and the "first to notice" reactji discipline.
+- [`watchman-schedule`](./watchman-schedule.md) — owns the
+  calendar of date-keyed engagements via
+  [`../process/scheduled-engagements.md`](../process/scheduled-engagements.md).
+  Read this for the per-source process docs that contribute
+  rows, the `today >= scheduled` rule, and the overdue-detection
+  surface.
+- [`watchman-cadence`](./watchman-cadence.md) — owns the
+  `ScheduleWakeup` call site and the cache-window-aware delay
+  rules from
+  [`../skills/autonomous-loop-pacing.md`](../skills/autonomous-loop-pacing.md).
+  Read this for the cadence breakpoints (270 s / 1200 s / 1800 s),
+  the active-vs-idle mode decision, and the "always schedule;
+  loop is indefinite" invariant.
 
-```sh
-REVIEW_ID=<the review's databaseId from the event>
-gh api "repos/endojs/endo-but-for-bots/pulls/<N>/comments" \
-  --jq "[.[] | select(.pull_request_review_id == $REVIEW_ID)]"
-```
-
-Reactji and process every comment in that set, including the ones
-older than the wrap. Encountered 2026-05-07: PR 119 review id
-4246586901 wrapped at 18:15 with three inline comments, the
-oldest at 18:10 (a directive to mirror `PLAN/endo_posix_sandbox.md`
-into `designs/`); the steward's narrow timestamp window ("comments
-since 18:25") missed the 18:10 comment for ~2 hours until the
-maintainer pointed at it directly.
-
-**The steward owns the `eyes` reactji at triage time.** Per
-[`../skills/reactji-acknowledgment.md`](../skills/reactji-acknowledgment.md),
-the reactji belongs to the role that first notices the activity
-and begins formulating a response. For Monitor-driven wakes
-(`PullRequestReviewEvent`, `IssueCommentEvent`,
-`PullRequestReviewCommentEvent`), that role is the steward. The
-ordered cycle on each wake is:
-
-1. Read the comment(s) and any inline thread under the review id.
-2. **Post the `eyes` reactji on each unaddressed comment** (and
-   on each inline thread comment under the review id) BEFORE
-   dispatching any worker. The reactji is the
-   under-30-seconds-after-post acknowledgment the human sees;
-   worker-dispatch latency (10-30 minutes from dispatch to first
-   action) is unacceptable for the receipt signal.
-3. Decide the dispatch shape (fixer / builder / shepherd /
-   conductor / cleaner / weaver / etc.).
-4. Dispatch with a brief that surfaces the comment context.
-   The dispatched worker does NOT re-react on comments the
-   steward already pre-surfaced; the worker's reading is for
-   substance.
-
-The exception is when the worker discovers comments the triage
-brief did not pre-surface (older drafts, side-thread comments,
-comments that arrive while the worker's dispatch is in flight) —
-those get the worker's reactji at the moment of discovery, per
-the "first to notice" rule.
-
-**Monitor filter: wake on review-wrap, not on per-comment-during-draft.**
-A maintainer drafting a PR review fires
-`PullRequestReviewCommentEvent` per inline comment as they're
-added; only when they hit "Submit review" does
-`PullRequestReviewEvent` fire (state COMMENTED / APPROVED /
-CHANGES_REQUESTED). Waking on every per-comment event during the
-draft creates notification thrash and tempts the steward to act
-on partial context. The Monitor's grep should fire only on
-**terminal-state** event classes:
-
-```
-NEW [0-9].*(IssueCommentEvent/|IssuesEvent/|PullRequestEvent/|PullRequestReviewEvent/|PushEvent/)|HTTP [45][0-9][0-9]|curl failed|polling stopped
-```
-
-`PullRequestReviewEvent/` (the wrap) is not a substring of
-`PullRequestReviewCommentEvent/` (they diverge at `Event/` vs
-`CommentEvent/`), so the regex cleanly excludes the per-comment
-class.
-
-Edge case: a single inline comment posted via the "Add single
-comment" button bypasses the review-wrap and fires a standalone
-`PullRequestReviewCommentEvent` with no following
-`PullRequestReviewEvent`. The Monitor stays silent until the
-next periodic steward-cycle log-tail (max 25-30 min via
-ScheduleWakeup). Acceptable: the unwrapped-single-comment case
-is rare; the periodic safety net catches it.
-
-The bot's own pushes are filtered out by the daemon's `$self`
-filter at the data layer, so wake-on-`PushEvent/` only fires for
-contributor pushes (CI state changes, etc).
-
-**Pitfall: `tail -F` doesn't replay history; read the log at
-cycle start.** A `Monitor` armed with `tail -F /tmp/poll-events.log`
-only streams lines added AFTER the Monitor's tail starts; it does
-NOT replay lines that the daemon wrote while the prior Monitor
-was dead (Monitors die at conversation-turn boundaries — the
-`bg2kx8s47`-style task IDs from before the boundary are gone the
-next time `TaskList` is called). Combined with the
-turn-boundary-monitor-death pattern, this means: events that fire
-during the gap between turns are written to the log but never
-delivered as `<task-notification>`.
-
-Fix: every steward cycle's first action is `tail -50
-/tmp/poll-events.log` (or whatever depth covers the time since
-the prior cycle's wake-up). Treat any `NEW [0-9]` line newer than
-the prior cycle's close as an event the steward must action,
-exactly as if it had arrived as a notification. The daemon log
-is the source of truth; the Monitor is just the early-wake
-optimization. Encountered 2026-05-07: kriskowal submitted a
-review on PR 119 at 18:15:58, the daemon caught it at 18:16:24
-and wrote `NEW 2 ... PullRequestReviewEvent/...@#119` to the
-log, but the Monitor armed at 18:25 only saw lines after 18:25
-and never fired on the 18:16 line. The maintainer pointed at
-the missed review directly.
+The watchmen are **not** independent agent dispatches; they are
+inline subsections of this role's per-cycle procedure.
+A separate-agent watchman could return a vacuous report when it
+should have surfaced work, exactly the failure mode the
+cycle-close-is-gated discipline prevents.
+Inlining keeps the gating tight: the cycle log must contain a
+labeled section per watchman, exactly as it must for
+[`liaison`](./liaison.md) and [`marshal`](./marshal.md) today.
 
 ## Per-PR lifecycle (canonical flow)
 
@@ -203,32 +113,32 @@ independent):
   queue (per the director's report) is non-empty AND no
   conductor is in flight.
 
-Plus rare per-cycle items:
+Plus rare per-cycle items, surfaced by the watchmen:
 
 - **`botanist`** ([`./botanist.md`](./botanist.md)) —
   Dependabot PR review. **Conditional**: dispatched per
   Dependabot PR, EITHER when a new `dependabot[bot]`-authored
-  PR appears, OR when an embargoed PR's maturity date has
-  arrived (read [`../process/dependabotany.md`](../process/dependabotany.md)
-  at cycle start to find due re-dispatches). Dependabot PRs do
-  NOT route through the usual builder/juror/fixer flow; they
-  route directly to the botanist. The steward bypasses the
-  director's per-PR matrix for any PR whose `author.login`
-  matches `dependabot`.
+  PR appears (surfaced by [`watchman-events`](./watchman-events.md)),
+  OR when an embargoed PR's maturity date has arrived (surfaced
+  by [`watchman-schedule`](./watchman-schedule.md) from
+  [`../process/dependabotany.md`](../process/dependabotany.md)).
+  Dependabot PRs do NOT route through the usual
+  builder/juror/fixer flow; they route directly to the botanist.
+  The steward bypasses the director's per-PR matrix for any PR
+  whose `author.login` matches `dependabot`.
 - **`major-general`** ([`./major-general.md`](./major-general.md)) —
   proactive scout for major-version upgrades to direct
   dependencies. **Conditional**: dispatched when the "next
   scheduled engagement" date in the header of
   [`../process/major-generalship.md`](../process/major-generalship.md)
-  is on or before today (UTC). Read the date at cycle start as
-  part of the same per-cycle process-doc sweep that picks up
-  dependabotany maturity dates. The major general updates the
-  date to today plus seven on completion; default cadence is
-  weekly. The major general is the complement of the botanist:
-  the botanist gates each upgrade proposal at merge time, and
-  the major general scouts for the major bumps Dependabot does
-  not surface (because the project's range pins below the new
-  major).
+  is on or before today (UTC), surfaced by
+  [`watchman-schedule`](./watchman-schedule.md).
+  The major general updates the date to today plus seven on
+  completion; default cadence is weekly.
+  The major general is the complement of the botanist: the
+  botanist gates each upgrade proposal at merge time, and the
+  major general scouts for the major bumps Dependabot does not
+  surface (because the project's range pins below the new major).
 - **Garden upstream merge** (first round only): if `actual/llm`
   is ahead of `garden`, dispatch a weaver to merge. The steward
   dispatches this directly because it's a `garden`-branch
@@ -238,24 +148,31 @@ Plus rare per-cycle items:
 
 The steward cannot reach the close-and-schedule step until every
 dispatched sub-role has returned a report (or has an explicit
-deferral note in the cycle log). Silent skipping is the failure
-mode this gating prevents; it is what motivated extracting
-`director`, `marshal`, and the always-on `liaison` from the
-prior monolithic steward.
+deferral note in the cycle log).
+Silent skipping is the failure mode this gating prevents; it is
+what motivated extracting `director`, `marshal`, and the
+always-on `liaison` from the prior monolithic steward.
 
 A vacuous report (`marshal: vacuous-satisfaction (4 waiting on
 deps, 8 in review)`, `director: no PRs needed dispatch`,
 `liaison: no contributor activity since prior cycle`) satisfies
 the gate; an absent report does not.
 
+The gate extends to the watchmen: a missing
+`watchman-events:`, `watchman-schedule:`, or
+`watchman-cadence:` line in the cycle log blocks close, exactly
+as a missing `liaison:` or `marshal:` line does.
+
 **Pre-`ScheduleWakeup` checklist.** Before the next-fire schedule
 in step 9, the steward asks itself: *did this cycle actually
 dispatch a `liaison`, a `marshal`, and either dispatch a
-`director` sub-agent OR run the director's per-PR sweep inline?*
+`director` sub-agent OR run the director's per-PR sweep inline?
+Did this cycle's `watchman-events` and `watchman-schedule`
+sweeps both produce labeled sections?*
 The director carries an explicit inline-fallback exemption
-(below); `liaison` and `marshal` do NOT. If either is absent
-when reaching close, dispatch them now (even at the tail of the
-cycle) before scheduling the next fire.
+(below); `liaison`, `marshal`, and the watchmen do NOT.
+If any is absent when reaching close, dispatch them now (even at
+the tail of the cycle) before scheduling the next fire.
 
 The recurring failure mode this checklist prevents: the steward
 threads the per-PR comment sweep and the per-PR designer/fixer
@@ -471,26 +388,10 @@ the brief asked it to fetch `process/PR-DISPATCH-STATE.md` via
 the contents API; that 404'd because `?ref=garden` was missing.
 The agent worked around it by skipping that input.
 
-**Pitfall: the lightweight liaison-vacuous-check brief is NOT a
-substitute for the director sweep.** A common shortcut on quiet
-cycles is to dispatch a 50-word "liaison: scan and report
-vacuous if no `IssueCommentEvent|IssuesEvent`" subagent. That
-filter intentionally narrow — it's the issue-side check — and it
-**misses** the inline review classes
-`PullRequestReviewCommentEvent` and `PullRequestReviewEvent`.
-The lightweight-liaison output `liaison: vacuous` therefore says
-nothing about whether a maintainer left an inline comment on an
-open PR; the director sweep (or an inline equivalent that greps
-for `Review` / `Comment` more broadly) is the only path that
-catches those. Encountered 2026-05-07: the maintainer left
-`Please finish this job.` on PR 114 line 37 at 07:06 UTC; the
-07:30 lightweight-liaison cycle reported vacuous; the steward
-shipped the cycle without dispatching a director PR sweep; the
-comment sat undetected for ~10 hours until the maintainer
-pointed at it directly. Fix: a vacuous lightweight-liaison
-report does NOT discharge the director sweep gate. Either
-broaden the scan to include the review event classes, or
-dispatch the director sweep separately.
+The lightweight liaison-vacuous-check is also NOT a substitute
+for the director sweep; that pitfall is documented in
+[`watchman-events`](./watchman-events.md), where it belongs with
+the other event-classification rules.
 
 ## State
 
@@ -500,7 +401,12 @@ sub-role reports):
 - `PR-DISPATCH-STATE.md` — rewritten each cycle from the
   director's report.
 - `PR-CYCLE-LOG.md` — append-only log, newest at top, with one
-  section per cycle and one sub-section per sub-role's report.
+  section per cycle and one sub-section per sub-role's report
+  (including the labeled `watchman-events:`,
+  `watchman-schedule:`, `watchman-cadence:` lines).
+- `scheduled-engagements.md` — regenerated each cycle's close by
+  [`watchman-schedule`](./watchman-schedule.md) from per-source
+  process docs.
 - `DESIGNS-WITHOUT-PR.md` — maintained by the groom; the steward
   does not edit it directly.
 - `GROOM-OPEN-QUESTIONS.md` and `GROOM-ANSWERS.md` — maintained
@@ -512,9 +418,9 @@ Format details: [`../skills/pr-cycle-state.md`](../skills/pr-cycle-state.md).
 
 A cycle is a sequence of **rounds**. Each round runs steps 1-5.
 Within-fire exhaustion (a round produces no new dispatches) ends
-the rounds and triggers steps 6-9. Within-fire exhaustion is NOT
-a stop condition for the loop overall; step 9 always schedules
-the next fire.
+the rounds and triggers steps 6-11. Within-fire exhaustion is
+NOT a stop condition for the loop overall; step 11 always
+schedules the next fire.
 
 Per round:
 
@@ -530,71 +436,79 @@ Per round:
    ahead. Wait before proceeding; downstream sub-roles read
    role/skill files from the working tree.
 
-3. **Dispatch sub-roles in parallel.** All briefs are
+3. **Watchman-events sweep.** Per
+   [`watchman-events`](./watchman-events.md): `tail -50` the
+   poll log, post the `eyes` reactji on every unaddressed
+   contributor comment, and surface routings for the dispatch
+   step.
+
+4. **Watchman-schedule sweep.** Per
+   [`watchman-schedule`](./watchman-schedule.md): read
+   `process/scheduled-engagements.md`, surface every row whose
+   `Date` is on or before today (UTC).
+
+5. **Dispatch sub-roles in parallel.** All briefs are
    self-contained: role file path, cited skills, `CLAUDE.md`,
    the relevant slice of state, and the worktree-per-pr
    instruction. Always dispatched: `director`, `liaison`,
-   `marshal`. Conditionally dispatched: `groom`, `conductor`.
+   `marshal`. Conditionally dispatched: `groom`, `conductor`,
+   plus whatever the watchmen surfaced (botanist for an embargo
+   maturity, major-general for the weekly date, etc).
 
-4. **Wait for sub-role reports.** Tree-mutating sub-roles (the
+6. **Wait for sub-role reports.** Tree-mutating sub-roles (the
    garden weaver, conductor) finish before the next round;
    background sub-roles (the director's per-PR dispatches that
    themselves run long) report when ready. The steward's own
    working tree stays on `garden` throughout.
 
-5. **Decide round boundary.** Re-fetch and re-survey. If any
+7. **Decide round boundary.** Re-fetch and re-survey. If any
    state changed (sub-role reported, new comment / review /
    push / CI flip), start the next round at step 1. Otherwise:
    within-fire exhaustion; proceed to close.
 
 Close (after within-fire exhaustion):
 
-6. **Append cycle-log section.** One sub-section per sub-role's
+8. **Append cycle-log section.** One sub-section per sub-role's
    report; verbatim plus any deferral notes. Include the
    explicit vacuous-satisfaction line from marshal if applicable.
-   Confirm every always-on sub-role's report is present.
-   **Hard stop: if the cycle-log section being drafted has no
-   `liaison:` line, do not write the section yet — dispatch the
-   liaison now and append its report when it returns.** Same
-   for `marshal`. The director carries the explicit
-   inline-fallback exemption above; `liaison` and `marshal` do
-   not. This is the "redispatch more frequently" answer in
-   procedural form: the gate is at section-draft time, not at
+   Confirm every always-on sub-role's report is present, plus
+   the labeled `watchman-events:`, `watchman-schedule:`, and
+   (after step 11) `watchman-cadence:` lines.
+   **Hard stop: if the cycle-log section being drafted is missing
+   any of `liaison:`, `marshal:`, `watchman-events:`, or
+   `watchman-schedule:`, do not write the section yet — dispatch
+   the missing role now and append its report when it returns.**
+   The director carries the explicit inline-fallback exemption
+   above; the others do not.
+   This is the "redispatch more frequently" answer in procedural
+   form: the gate is at section-draft time, not at
    schedule-wakeup time, because once the process commit is
    queued the temptation to ship-and-schedule overrides
    re-dispatch.
 
-7. **Rewrite `PR-DISPATCH-STATE.md`** in full from the
-   director's report.
+9. **Rewrite `PR-DISPATCH-STATE.md`** in full from the
+   director's report, and **regenerate
+   `process/scheduled-engagements.md`** from per-source process
+   docs (per
+   [`watchman-schedule`](./watchman-schedule.md)).
 
-8. **Stage all modified `roles/*.md` and `skills/*.md`** (own +
-   sub-roles') and commit as
-   `docs(roles,skills): self-improvements from steward cycle <ts>`.
-   Push. Then commit process state files as
-   `process(steward): cycle <ts>`. Push. Both commits land on
-   `garden`.
+10. **Stage all modified `roles/*.md` and `skills/*.md`** (own +
+    sub-roles') and commit as
+    `docs(roles,skills): self-improvements from steward cycle <ts>`.
+    Push. Then commit process state files as
+    `process(steward): cycle <ts>`. Push. Both commits land on
+    `garden`.
 
-9. **Schedule the next fire** via `ScheduleWakeup`. **Always
-   schedule; the loop is indefinite.** Cadence:
-   - **Hard upper bound: 32400s (9 hours).**
-   - **Active mode: ≤ 1800s (30 min)** when ANY of: a sub-agent
-     is in flight, CI is propagating on a recent push, a
-     maintainer touched any open PR within the prior lookback,
-     a PR is `awaiting maintainer re-review`, or the merge
-     queue is non-empty.
-   - **Idle mode: between active and 9h**, biased shorter when
-     contributor engagement is plausible.
+11. **Schedule the next fire** via
+    [`watchman-cadence`](./watchman-cadence.md). **Always
+    schedule; the loop is indefinite.** The watchman-cadence
+    selects the cache-window-aware delay (270 s / 1200 s /
+    1800 s within active mode; up to 32400 s in idle mode, capped
+    at the next-engagement date from
+    `scheduled-engagements.md`).
 
-   `endo-but-for-bots` is guarded against non-contributor
-   comments; only contributor feedback matters and tends to
-   cluster. Active-mode catches a cluster within ~30 min; the
-   9h cap catches a returning contributor within a workday.
-   See [`../skills/autonomous-loop-pacing.md`](../skills/autonomous-loop-pacing.md)
-   for cache-window selection within active mode (270s / 1200s
-   / 1800s).
-
-   Loop stops only on user action (kill the wakeup, send stop,
-   `TaskStop`). The steward does not self-terminate.
+    Loop stops only on user action (kill the wakeup, send stop,
+    `TaskStop`). The steward does not self-terminate.
 
 ## Skills
 
@@ -604,20 +518,25 @@ Close (after within-fire exhaustion):
   process-commit isolation.
 - [`../skills/subagent-batching.md`](../skills/subagent-batching.md):
   concurrent dispatch of sub-roles.
-- [`../skills/autonomous-loop-pacing.md`](../skills/autonomous-loop-pacing.md):
-  within-active-mode delay selection.
 - [`../skills/worktree-per-pr.md`](../skills/worktree-per-pr.md):
   the rule the steward enforces on every dispatching sub-role.
 - [`../skills/em-dash-style-rule.md`](../skills/em-dash-style-rule.md),
   [`../skills/relative-paths-rule.md`](../skills/relative-paths-rule.md).
+
+The watchmen carry their own skill citations:
+
+- [`watchman-events`](./watchman-events.md) cites
+  [`../skills/reactji-acknowledgment.md`](../skills/reactji-acknowledgment.md).
+- [`watchman-cadence`](./watchman-cadence.md) cites
+  [`../skills/autonomous-loop-pacing.md`](../skills/autonomous-loop-pacing.md).
 
 ## Posture
 
 - **The steward stays on `garden`.** Never switches branches in
   its own working tree. Each sub-role uses its own worktree.
 - **Every cycle dispatches every always-on sub-role.** If
-  `director`, `liaison`, or `marshal` is missing from the cycle
-  log, the gating step prevents close.
+  `director`, `liaison`, `marshal`, or any watchman is missing
+  from the cycle log, the gating step prevents close.
 - **Vacuous satisfaction is allowed but must be explicit.** Each
   sub-role can return "no work to do this cycle" but the cycle
   log must record the reason; silence is failure.
@@ -625,7 +544,8 @@ Close (after within-fire exhaustion):
   shepherds, conductors-as-in-flight-builders, or jurors
   directly.** Those are sub-sub dispatches owned by the
   director, marshal, or fixer. The steward dispatches only the
-  five sub-roles listed above plus the rare garden-weaver.
+  five sub-roles listed above plus the rare garden-weaver and
+  the watchman-surfaced botanist / major-general.
 - **Cite reasons in one phrase.** Cycle-log entries are at most
   one sentence per sub-role.
 - **Em-dash discipline** for the cycle log.
@@ -639,3 +559,5 @@ skills with what you learned. See
 
 The steward sees more cycles than any other role; patterns that
 recur across cycles are exactly where a new rule pays for itself.
+Patterns that are specific to events / scheduling / cadence
+belong in the relevant watchman role file, not in this file.

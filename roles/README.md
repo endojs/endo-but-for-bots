@@ -74,11 +74,26 @@ playing both `juror` and `fixer`; consult both.
 - [shepherd.md](./shepherd.md) — keep CI healthy across many
   in-flight PRs.
 - [steward.md](./steward.md) — top-level per-cycle coordinator;
-  dispatches director, liaison, marshal, groom, and conductor;
-  aggregates their reports into `process/` state.
+  consults the watchmen, dispatches director, liaison, marshal,
+  groom, and conductor; aggregates their reports into `process/`
+  state.
 - [stratego.md](./stratego.md) — own the upstream-port plan;
   cluster llm-vs-master substance into a linear stack proposal,
   iterate as both branches advance.
+- [watchman-cadence.md](./watchman-cadence.md) — owns the
+  steward's `ScheduleWakeup` call site and the
+  cache-window-aware delay rules; inline subsection of the
+  steward's per-cycle close. See
+  [`../designs/watchmen.md`](../designs/watchmen.md).
+- [watchman-events.md](./watchman-events.md) — owns the GitHub
+  events poll daemon contract, Monitor arming, and post-wake
+  routing; inline subsection of the steward's per-cycle sweep.
+  See [`../designs/watchmen.md`](../designs/watchmen.md).
+- [watchman-schedule.md](./watchman-schedule.md) — owns the
+  calendar of date-keyed engagements via
+  [`../process/scheduled-engagements.md`](../process/scheduled-engagements.md);
+  inline subsection of the steward's per-cycle sweep. See
+  [`../designs/watchmen.md`](../designs/watchmen.md).
 - [weaver.md](./weaver.md) — rebase or merge a branch onto a
   fresh base; resolve conflicts by reading both sides.
 
