@@ -7,7 +7,7 @@ export {};
  * `@endo/chacha12`-backed source returned by `makeChaCha12(seed)` are
  * both directly usable wherever a `RandomSource` is expected.
  *
- * Implementations MUST mutate the supplied buffer in place; they
- * MUST NOT retain the buffer reference after the call returns.
+ * Implementations MUST set every element of the supplied `Uint8Array`
+ * and MUST NOT retain any reference after the call returns.
  */
 export type RandomSource = (out: Uint8Array) => void;
