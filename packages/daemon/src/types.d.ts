@@ -933,6 +933,20 @@ export interface EndoGuest extends EndoAgent {
   ): Promise<void>;
   submit(messageNumber: bigint, values: Record<string, unknown>): Promise<void>;
   sendValue: Mail['sendValue'];
+  /**
+   * Apply a hashline patch atomically. Per design `cli-edit-verb.md`.
+   *
+   * @param directoryRef the mount whose path to edit
+   * @param path the path within the mount
+   * @param patch the EditPatch envelope (validated at the mount)
+   * @param options EditOptions (e.g. `{ reapply: true }`)
+   */
+  edit(
+    directoryRef: unknown,
+    path: string | string[],
+    patch: import('./hashline.types.js').EditPatch,
+    options?: import('./hashline.types.js').EditOptions,
+  ): Promise<import('./hashline.types.js').EditResult>;
 }
 
 export type FarEndoGuest = FarRef<EndoGuest>;

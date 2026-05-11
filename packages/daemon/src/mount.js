@@ -1,7 +1,10 @@
 // @ts-check
 /// <reference types="ses"/>
 
-/** @import { FilePowers } from './types.js' */
+/** @import { CryptoPowers, FilePowers } from './types.js' */
+/**
+ * @import { EditOptions, EditPatch, EditResult } from './hashline.types.js'
+ */
 
 import { q } from '@endo/errors';
 import { makeExo } from '@endo/exo';
@@ -9,6 +12,14 @@ import { makeExo } from '@endo/exo';
 import { mountHelp, mountFileHelp, makeHelp } from './help-text.js';
 import { MountInterface, MountFileInterface } from './interfaces.js';
 import { makeIteratorRef } from './reader-ref.js';
+import { makeSerialJobs } from './serial-jobs.js';
+import {
+  applyPatch,
+  joinLines,
+  splitLines,
+  validateAnchors,
+  validateEditPatch,
+} from './hashline.js';
 
 /**
  * Validate a single path segment.
@@ -154,8 +165,23 @@ harden(isConfinedPath);
  * @property {string} confinementRoot
  * @property {boolean} readOnly
  * @property {FilePowers} filePowers
+ * @property {CryptoPowers} cryptoPowers
+ * @property {ReturnType<typeof makeSerialJobs>} editLock per-mount lock
+ *   serializing read-validate-write critical sections; shared across
+ *   subdirectory mounts derived via `lookup()`.
  * @property {string} description
  */
+
+/**
+ * Compute SHA-256 of `text` as 64-char lowercase hex.
+ * @param {CryptoPowers} cryptoPowers
+ * @param {string} text
+ */
+const sha256Hex = (cryptoPowers, text) => {
+  const digester = cryptoPowers.makeSha256();
+  digester.updateText(text);
+  return digester.digestHex();
+};
 
 /**
  * Create a mount exo for a filesystem directory.
@@ -164,8 +190,15 @@ harden(isConfinedPath);
  * @returns {object}
  */
 const makeMountExo = ctx => {
-  const { currentDir, confinementRoot, readOnly, filePowers, description } =
-    ctx;
+  const {
+    currentDir,
+    confinementRoot,
+    readOnly,
+    filePowers,
+    cryptoPowers,
+    editLock,
+    description,
+  } = ctx;
 
   const assertWritable = () => {
     if (readOnly) {
@@ -261,6 +294,123 @@ const makeMountExo = ctx => {
       const parent = filePowers.joinPath(target, '..');
       await filePowers.makePath(parent);
       await filePowers.writeFileText(target, content);
+    },
+
+    /**
+     * Apply a hashline patch atomically: acquire the mount-internal
+     * lock, read the file, validate the SHA-256 file-rev CAS, validate
+     * per-line CRC32 anchors, splice, write, return.
+     *
+     * Per design `cli-edit-verb.md` §"CAS semantics" and §"Phase 2".
+     *
+     * @param {string | string[]} pathArg
+     * @param {EditPatch | unknown} patchInput - already-validated EditPatch
+     *   or a raw object to be validated here (CapTP delivers plain
+     *   objects, so we revalidate at the boundary).
+     * @param {EditOptions} [_options]
+     * @returns {Promise<EditResult>}
+     */
+    async edit(pathArg, patchInput, _options = {}) {
+      // The lock guards the read-validate-write critical section so
+      // two concurrent edits do not interleave. The CAS check is the
+      // outer guard against modifications by *other* writers; the
+      // lock is the inner guard against ourselves.
+      return editLock.enqueue(async () => {
+        // Resolve and confine path. We re-throw confinement errors
+        // as plain errors (not structured failures) because they are
+        // programming errors, not patch-content failures.
+        const segments = typeof pathArg === 'string' ? [pathArg] : pathArg;
+        const target = resolve(segments);
+        // Read the current file; absent file → path-not-found.
+        let current;
+        try {
+          await assertConfined(target, confinementRoot, filePowers);
+          current = await filePowers.readFileText(target);
+        } catch (/** @type {any} */ e) {
+          /** @type {EditResult} */
+          const result = harden({
+            success: false,
+            fileHashAfter: '',
+            failure: harden({
+              reason: 'path-not-found',
+              message: /** @type {Error} */ (e).message,
+            }),
+          });
+          return result;
+        }
+
+        // Validate the patch envelope. Structural errors → patch-syntax.
+        let patch;
+        try {
+          patch = validateEditPatch(patchInput);
+        } catch (/** @type {any} */ e) {
+          /** @type {EditResult} */
+          const result = harden({
+            success: false,
+            fileHashAfter: sha256Hex(cryptoPowers, current),
+            failure: harden({
+              reason: 'patch-syntax',
+              message: /** @type {Error} */ (e).message,
+            }),
+          });
+          return result;
+        }
+
+        // Compute current SHA-256 and check CAS.
+        const fileHashCurrent = sha256Hex(cryptoPowers, current);
+        if (fileHashCurrent !== patch.expectedFileHash) {
+          /** @type {EditResult} */
+          const result = harden({
+            success: false,
+            fileHashAfter: fileHashCurrent,
+            failure: harden({
+              reason: 'file-rev-mismatch',
+              fileHashActual: fileHashCurrent,
+            }),
+          });
+          return result;
+        }
+
+        // Split into lines and validate per-line anchors.
+        const { lines, trailingNewline } = splitLines(current);
+        const mismatches = validateAnchors(patch, lines);
+        if (mismatches.length > 0) {
+          /** @type {EditResult} */
+          const result = harden({
+            success: false,
+            fileHashAfter: fileHashCurrent,
+            failure: harden({
+              reason: 'hash-mismatch',
+              mismatches,
+            }),
+          });
+          return result;
+        }
+
+        // Apply the splice.
+        const { lines: newLines } = applyPatch(patch, lines);
+        const next = joinLines(newLines, trailingNewline);
+        if (readOnly) {
+          /** @type {EditResult} */
+          const result = harden({
+            success: false,
+            fileHashAfter: fileHashCurrent,
+            failure: harden({
+              reason: 'permission-denied',
+              message: 'Mount is read-only',
+            }),
+          });
+          return result;
+        }
+        await filePowers.writeFileText(target, next);
+        const fileHashAfter = sha256Hex(cryptoPowers, next);
+        /** @type {EditResult} */
+        const result = harden({
+          success: true,
+          fileHashAfter,
+        });
+        return result;
+      });
     },
 
     async remove(pathArg) {
@@ -384,16 +534,23 @@ harden(makeMountFileExo);
  * @param {string} opts.rootPath
  * @param {boolean} opts.readOnly
  * @param {FilePowers} opts.filePowers
+ * @param {CryptoPowers} opts.cryptoPowers
  * @returns {object}
  */
-export const makeMount = ({ rootPath, readOnly, filePowers }) => {
+export const makeMount = ({ rootPath, readOnly, filePowers, cryptoPowers }) => {
   const prefix = readOnly ? 'Read-only mount' : 'Mount';
+  // One lock per mount root; subdirectory mounts derived via `lookup`
+  // share the same lock so cross-subdir edits inside one mount tree
+  // remain serialized.
+  const editLock = makeSerialJobs();
   /** @type {MountContext} */
   const ctx = {
     currentDir: rootPath,
     confinementRoot: rootPath,
     readOnly,
     filePowers,
+    cryptoPowers,
+    editLock,
     description: `${prefix} at ${rootPath}`,
   };
 

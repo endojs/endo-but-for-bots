@@ -312,6 +312,25 @@ export const makeGuestMaker = ({
       await unpinTransient(id);
     };
 
+    /**
+     * Hashline edit (per design cli-edit-verb.md).
+     * Delegates to the mount's `edit` method, which holds the
+     * mount-internal lock for atomicity.
+     *
+     * @param {any} directoryRef the mount whose path to edit
+     * @param {string | string[]} path path within the mount
+     * @param {any} patch EditPatch envelope; revalidated at the mount
+     * @param {any} [options] EditOptions
+     * @returns {Promise<any>}
+     */
+    const edit = async (directoryRef, path, patch, options) => {
+      // The directoryRef is expected to be an EndoMount (or a
+      // sub-mount obtained via `lookup`). The mount's `edit` method
+      // performs the entire read-validate-splice-write under its
+      // internal lock.
+      return E(directoryRef).edit(path, patch, options);
+    };
+
     /** @type {EndoGuest} */
     const guest = {
       // Directory
@@ -359,6 +378,7 @@ export const makeGuestMaker = ({
       storeValue,
       submit,
       sendValue,
+      edit,
     };
 
     return makeExo(

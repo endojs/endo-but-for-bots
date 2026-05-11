@@ -50,6 +50,11 @@ const EvaluateMethodGuard = M.call(
   .optional(NameOrPathShape)
   .returns(M.promise());
 
+// Mount path argument: string or array of segments. Defined here so
+// it is reachable from GuestInterface's `edit` method guard.
+const PathSegmentsShape = M.arrayOf(M.string());
+const PathArgShape = M.or(M.string(), PathSegmentsShape);
+
 // #region Interfaces
 
 export const WorkerInterface = M.interface('EndoWorker', {});
@@ -247,6 +252,11 @@ export const GuestInterface = M.interface('EndoGuest', {
   deliver: M.call(M.record()).returns(),
   // Evaluate code directly in a worker
   evaluate: EvaluateMethodGuard,
+  // Hashline edit (per design cli-edit-verb.md):
+  // edit(directoryRef, path, patch, options).
+  edit: M.call(M.remotable(), PathArgShape, M.record())
+    .optional(M.record())
+    .returns(M.promise()),
 });
 
 export const HostInterface = M.interface('EndoHost', {
@@ -500,9 +510,6 @@ export const BlobInterface = M.interface('EndoBlob', {
   json: M.call().returns(M.promise()),
 });
 
-const PathSegmentsShape = M.arrayOf(M.string());
-const PathArgShape = M.or(M.string(), PathSegmentsShape);
-
 export const MountInterface = M.interface('EndoMount', {
   // ReadableTree-compatible surface
   has: M.call().rest(PathSegmentsShape).returns(M.promise()),
@@ -516,6 +523,11 @@ export const MountInterface = M.interface('EndoMount', {
   remove: M.call(PathArgShape).returns(M.promise()),
   move: M.call(PathArgShape, PathArgShape).returns(M.promise()),
   makeDirectory: M.call(PathArgShape).returns(M.promise()),
+  // Hashline edit (per design cli-edit-verb.md). Patch arrives as a
+  // plain record from CapTP; the mount validates structure on entry.
+  edit: M.call(PathArgShape, M.record())
+    .optional(M.record())
+    .returns(M.promise()),
   // Attenuation
   readOnly: M.call().returns(M.remotable()),
   // Snapshot
