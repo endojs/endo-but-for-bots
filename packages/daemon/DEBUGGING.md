@@ -24,7 +24,7 @@ endo start -f --feral-errors
 | `ENDO_DAEMON_PATH`      | Path to the daemon script to use when not loading from `package.json`     |
 | `ENDO_SOCK_PATH`        | Path to the unix socket file that endo clients use for communication with |
 | `ENDO_CACHE_PATH`       | Path to the endo cache directory                                          |
-| `ENDO_GC`               | Enable GC (off by default for now)                                        |
+| `ENDO_GC`               | Formula GC. On by default; set `ENDO_GC=0` to disable.                    |
 | `LOCKDOWN_ERROR_TAMING` | Configure error suppression behavior for error messages                   |
 
 ## Reading Logs

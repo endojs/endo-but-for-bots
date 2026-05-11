@@ -88,7 +88,7 @@ const defaultConfig = {
   sockPath: whereEndoSock(process.platform, process.env, info),
   cachePath: whereEndoCache(process.platform, process.env, info),
   address: process.env.ENDO_ADDR || '127.0.0.1:8920',
-  gcEnabled: process.env.ENDO_GC === '1',
+  gcEnabled: process.env.ENDO_GC !== '0',
 };
 /** @typedef {typeof defaultConfig} Config */
 
@@ -101,7 +101,7 @@ const configToEnv = config => ({
   ENDO_SOCK_PATH: config.sockPath,
   ENDO_CACHE_PATH: config.cachePath,
   ENDO_ADDR: config.address,
-  ENDO_GC: config.gcEnabled ? '1' : '',
+  ENDO_GC: config.gcEnabled ? '' : '0',
 });
 
 /**
@@ -124,7 +124,7 @@ const configFromEnv = env => {
     sockPath,
     cachePath,
     address,
-    gcEnabled: gcEnabledStr === '1',
+    gcEnabled: gcEnabledStr !== '0',
   };
 };
 

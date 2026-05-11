@@ -656,7 +656,7 @@ const main = async () => {
     filePowers,
   });
 
-  const gcEnabled = hostGetEnv('ENDO_GC') === '1';
+  const gcEnabled = hostGetEnv('ENDO_GC') !== '0';
   const result = await makeDaemon(
     powers,
     daemonLabel,

@@ -40,7 +40,7 @@ if (args.length < 4) {
 
 const [sockPath, statePath, ephemeralStatePath, cachePath] = args;
 
-const gcEnabled = process.env.ENDO_GC === '1';
+const gcEnabled = process.env.ENDO_GC !== '0';
 
 /** @type {Config} */
 const config = {
