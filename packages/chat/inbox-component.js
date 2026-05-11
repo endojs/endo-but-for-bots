@@ -72,6 +72,17 @@ export const inboxComponent = async (
   }, 150);
 
   const selfLocator = await E(powers).locate('@self');
+  // TODO(endojs/endo-but-for-bots#203): integrate the daemon
+  // `editMessage` / `messageHistory` capability surfaced by
+  // endojs/endo-but-for-bots#125.  When a sender edits a message,
+  // followMessages re-emits the same number with `done` and a new
+  // payload; this loop currently treats every emission as a fresh
+  // envelope and would therefore append a duplicate DOM node.  The
+  // intended behavior is to swap the existing `.message-envelope`
+  // contents in place, render `done: false` with a progress
+  // affordance, and offer a "view history" control that calls
+  // `E(powers).messageHistory(number)`.  Tracked as a follow-up
+  // design question in endojs/endo-but-for-bots#203.
   for await (const message of makeRefIterator(E(powers).followMessages())) {
     // Read DOM at animation frame to determine whether to pin scroll to bottom
     // of the messages pane. Use 80px tolerance (matching channel-component)
