@@ -503,6 +503,38 @@ export const main = async rawArgs => {
     });
 
   program
+    .command('edit <name-path>')
+    .description(
+      'apply a hashline patch to a text file inside a mount ' +
+        '(per design cli-edit-verb.md). Phase 2: hashline + hashline-json ' +
+        'formats only.',
+    )
+    .option(...commonOptions.as)
+    .option('--patch <file>', 'read patch from file')
+    .option('--patch-stdin', 'read patch from stdin')
+    .option(
+      '--format <format>',
+      "patch format: 'hashline' (default) or 'hashline-json'",
+      'hashline',
+    )
+    .action(async (name, cmd) => {
+      const {
+        as: agentNames,
+        patch: patchPath,
+        patchStdin = false,
+        format,
+      } = cmd.opts();
+      const { edit } = await import('./commands/edit.js');
+      return edit({
+        name,
+        agentNames,
+        patchPath,
+        patchStdin,
+        format,
+      });
+    });
+
+  program
     .command('checkin <path>')
     .alias('ci')
     .description('checks in a local directory as a readable tree')
