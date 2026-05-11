@@ -60,43 +60,75 @@ lines 369-391.
 
 This design proposes an analogous (but simpler) pattern for `HandledPromise`,
 anticipating the TC39 `Promise.delegate` direction.
-The chosen slot is `Promise[Symbol.for('delegate')]`.
+The pattern is uniform across every `HandledPromise.*` class method, not
+just the constructor-equivalent `delegate`: each method gets its own
+registered-symbol slot on `Promise`, and the eager-shim/lazy-main install
+sequence treats them as a flat set.
 
 ## Design
 
-The architecture has two surfaces and one slot.
+The architecture has two surfaces and a flat set of registered-symbol slots
+on `Promise`.
 
 | Surface | Role | Side effect at import? |
 |---|---|---|
-| `@endo/eventual-send/shim.js` | **Eager installer.** Imports unconditionally write `Promise[Symbol.for('delegate')]` if the slot is empty. | Yes. |
-| `@endo/eventual-send` (main entry) | **Lazy consumer.** First call into `E()` or `HandledPromise.*` reads `Promise[Symbol.for('delegate')]`; if the slot is empty, the call installs on demand. | No. |
+| `@endo/eventual-send/shim.js` | **Eager installer.** Imports unconditionally write every empty slot in the `Promise[Symbol.for(<method>)]` set. | Yes. |
+| `@endo/eventual-send` (main entry) | **Lazy consumer.** First call into `E()`, `delegate(...)`, or `dispatch.<method>(...)` reads the corresponding slot; if the slot is empty, the call installs on demand. | No. |
 
-The slot `Promise[Symbol.for('delegate')]` is shared across every instance
-of `@endo/eventual-send` in the same realm, including instances loaded into
-child compartments that share the realm's `Promise`.
+Every slot is shared across every instance of `@endo/eventual-send` in the
+same realm, including instances loaded into child compartments that share
+the realm's `Promise`.
 
-There is exactly **one implementation** of the `delegate` function shipped by
-the package; both surfaces install the same function via the same code path.
+There is exactly **one implementation** per slot shipped by the package;
+both surfaces install the same functions via the same code path.
 The two surfaces differ only in **when** they trigger the install.
 
-### The slot: `Promise[Symbol.for('delegate')]`
+### The slot set
 
-The registered-symbol slot lives on the `Promise` constructor, not on
+The full set of slots installed on the `Promise` constructor:
+
+| Slot | Replaces | Notes |
+|---|---|---|
+| `Promise[Symbol.for('delegate')]` | `new HandledPromise(executor, handler)` | The constructor-equivalent factory. |
+| `Promise[Symbol.for('applyMethod')]` | `HandledPromise.applyMethod(target, prop, args)` | Eventual method send. |
+| `Promise[Symbol.for('applyFunction')]` | `HandledPromise.applyFunction(target, args)` | Eventual function call. |
+| `Promise[Symbol.for('applyMethodSendOnly')]` | `HandledPromise.applyMethodSendOnly(target, prop, args)` | Send-only variant; no return-value promise. |
+| `Promise[Symbol.for('applyFunctionSendOnly')]` | `HandledPromise.applyFunctionSendOnly(target, args)` | Send-only variant. |
+| `Promise[Symbol.for('get')]` | `HandledPromise.get(target, prop)` | Eventual property get. |
+| `Promise[Symbol.for('getSendOnly')]` | `HandledPromise.getSendOnly(target, prop)` | Send-only variant. |
+| `Promise[Symbol.for('resolve')]` | `HandledPromise.resolve(value)` | Lifts any thenable into the handled-promise machinery; distinct from the standard `Promise.resolve`. |
+
+Naming each slot after the corresponding `HandledPromise` class method
+keeps the migration path mechanical: `HandledPromise.X` becomes the
+deprecated alias that forwards to `Promise[Symbol.for('X')]`.
+
+The `'resolve'` slot is the only one where the registered-symbol name
+overlaps with a standard `Promise` member.
+The two are distinct: `Promise.resolve` is the standard string-keyed
+property; `Promise[Symbol.for('resolve')]` is a symbol-keyed slot the
+host treats as a separate own property.
+The shim install does not touch `Promise.resolve`.
+
+### The slots live on the constructor, not the prototype
+
+Every slot in the set is written to the `Promise` **constructor**, not to
 `Promise.prototype`.
 
 The constructor is the surface the standard's `Promise.delegate`
 proposal targets.
-Naming the slot `Promise[Symbol.for('delegate')]` keeps the
-forward-compatibility story simple: a future migration is
+Naming the constructor-equivalent slot `Promise[Symbol.for('delegate')]`
+keeps the forward-compatibility story simple: a future migration is
 `Promise.delegate ?? Promise[Symbol.for('delegate')]`.
+The remaining slots (`applyMethod`, `applyFunction`, `get`, etc.) have
+no current standardization track; they remain registered-symbol slots
+indefinitely or until TC39 surfaces a parallel proposal.
 
-The constructor is also writable by user code on every host runtime
-relevant to `@endo/eventual-send` (V8, JSC, SpiderMonkey, XS) before
-lockdown.
+The constructor is writable by user code on every host runtime relevant
+to `@endo/eventual-send` (V8, JSC, SpiderMonkey, XS) before lockdown.
 After lockdown, SES freezes the `Promise` constructor along with the
 rest of the permitted intrinsics.
-A library that wants the slot installed therefore must arrange for
-the install to happen before lockdown.
+A library that wants the slots installed therefore must arrange for the
+install to happen before lockdown.
 `@endo/eventual-send/shim.js` is the explicit hook for that, and is
 the package surface that consumers opt into pre-lockdown (via
 `@endo/init` or directly).
@@ -210,8 +242,9 @@ const delegate = handler => {
 The static methods `applyMethod`, `applyFunction`, `get`, `getSendOnly`,
 `applyMethodSendOnly`, `applyFunctionSendOnly`, `resolve` continue to
 exist for `E()` to call into.
-They are accessed via a separate slot in the package's main entry; see
-"Public surface" below.
+Each occupies its own registered-symbol slot on `Promise` per "The slot
+set" above; the package's `dispatch` sibling export (see "Public surface"
+below) reads each slot lazily.
 
 ### Public surface
 
@@ -239,101 +272,148 @@ import { delegate, makeDelegate } from '@endo/eventual-send';
   This is the answer to OQ2 from the prior revision.
 
 The static methods (`applyMethod`, `applyFunction`, etc.) move to a
-sibling export `dispatch` keyed by operation, since they are no longer
-properties on a constructor:
+sibling export `dispatch` keyed by operation.
+Each `dispatch.<method>` reads the corresponding `Promise[Symbol.for(<method>)]`
+slot on first call (lazy install) and caches the resolved function:
 
 ```js
 import { dispatch } from '@endo/eventual-send';
 dispatch.applyMethod(target, prop, args);  // returns a promise
+dispatch.get(target, prop);
+dispatch.applyMethodSendOnly(target, prop, args);
 ```
 
 `HandledPromise.applyMethod(target, prop, args)` continues to work as a
-deprecated alias that forwards to `dispatch.applyMethod(...)`.
+deprecated alias that forwards to `dispatch.applyMethod(...)`, which in
+turn dispatches through `Promise[Symbol.for('applyMethod')]`.
+The same shim/main rendezvous pattern applies to every method in the
+set; nothing about the dispatch path is delegate-specific.
 
 ### How the eager shim and lazy main share state
 
-The two surfaces both call into the same install path:
+The two surfaces both call into the same install path, generalized
+across the slot set:
 
 ```js
-// packages/eventual-send/src/install-delegate.js (private)
-import { makeDelegate } from './make-delegate.js';
+// packages/eventual-send/src/install-handled-promise-shim.js (private)
+import { makeHandledPromiseShim } from './make-handled-promise-shim.js';
 
-const SLOT = Symbol.for('delegate');
+// The slot set, keyed by method name. The shim ships one
+// implementation per key; both surfaces install the same set.
+const METHOD_NAMES = harden([
+  'delegate',
+  'applyMethod',
+  'applyFunction',
+  'applyMethodSendOnly',
+  'applyFunctionSendOnly',
+  'get',
+  'getSendOnly',
+  'resolve',
+]);
 
-let cached;
+const SLOTS = harden(
+  Object.fromEntries(METHOD_NAMES.map(n => [n, Symbol.for(n)])),
+);
 
-export const installOrAdoptDelegate = () => {
-  if (cached) return cached;
+const cached = {};
 
-  // Forward-compat: prefer the standard.
-  if (typeof Promise.delegate === 'function') {
-    cached = Promise.delegate;
-    return cached;
+const installOrAdoptSlot = (name, fresh) => {
+  if (cached[name]) return cached[name];
+  const slot = SLOTS[name];
+
+  // Forward-compat for the standardization candidate.
+  if (name === 'delegate' && typeof Promise.delegate === 'function') {
+    cached[name] = Promise.delegate;
+    return cached[name];
   }
 
-  // Adopt a previously-installed delegate.
-  const present = Promise[SLOT];
+  // Adopt a previously-installed slot value.
+  const present = Promise[slot];
   if (typeof present === 'function') {
-    cached = present;
-    return cached;
+    cached[name] = present;
+    return cached[name];
   }
 
-  // Install. defineProperty with configurable:false will throw if a
-  // racing writer or a frozen Promise prevents the write; the catch
-  // path adopts the racing winner if there is one.
-  const fresh = makeDelegate();
+  // Install. defineProperty with configurable:false throws if a racing
+  // writer or a frozen Promise prevents the write; the catch path
+  // adopts the racing winner if there is one.
   try {
-    Object.defineProperty(Promise, SLOT, {
+    Object.defineProperty(Promise, slot, {
       value: fresh,
       configurable: false,
       writable: false,
       enumerable: false,
     });
-    cached = fresh;
+    cached[name] = fresh;
   } catch (err) {
-    const winner = Promise[SLOT];
+    const winner = Promise[slot];
     if (typeof winner === 'function') {
-      cached = winner;
+      cached[name] = winner;
     } else {
       throw err;
     }
   }
+  return cached[name];
+};
+
+export const installOrAdopt = () => {
+  const shim = makeHandledPromiseShim();
+  // Install or adopt every slot in one pass. Each slot races
+  // independently; the package only depends on its own slot's resolved
+  // function, so a partial-install state is acceptable as long as each
+  // dispatch path checks its own slot before dispatching.
+  for (const name of METHOD_NAMES) {
+    installOrAdoptSlot(name, shim[name]);
+  }
   return cached;
+};
+
+// Per-method accessor for lazy callers that only need one slot.
+export const installOrAdoptOne = name => {
+  if (cached[name]) return cached[name];
+  const shim = makeHandledPromiseShim();
+  return installOrAdoptSlot(name, shim[name]);
 };
 ```
 
-The two surfaces differ only in when they call `installOrAdoptDelegate()`:
+The two surfaces differ only in when they call into the install path:
 
 ```js
 // packages/eventual-send/shim.js  (eager: import has side effect)
-import { installOrAdoptDelegate } from './src/install-delegate.js';
-installOrAdoptDelegate();
+import { installOrAdopt } from './src/install-handled-promise-shim.js';
+installOrAdopt();
 ```
 
 ```js
 // packages/eventual-send/src/no-shim.js  (lazy: install on first use)
-import { installOrAdoptDelegate } from './install-delegate.js';
+import { installOrAdoptOne } from './install-handled-promise-shim.js';
 import makeE from './E.js';
 
-let cachedDelegate;
-const getDelegate = () => {
-  if (!cachedDelegate) {
-    cachedDelegate = installOrAdoptDelegate();
-  }
-  return cachedDelegate;
-};
+const getMethod = name => () => installOrAdoptOne(name);
 
-export const delegate = handler => getDelegate()(handler);
-export const E = makeE(getDelegate);
+export const delegate = handler => installOrAdoptOne('delegate')(handler);
+export const dispatch = harden({
+  applyMethod: (...args) => installOrAdoptOne('applyMethod')(...args),
+  applyFunction: (...args) => installOrAdoptOne('applyFunction')(...args),
+  applyMethodSendOnly: (...args) =>
+    installOrAdoptOne('applyMethodSendOnly')(...args),
+  applyFunctionSendOnly: (...args) =>
+    installOrAdoptOne('applyFunctionSendOnly')(...args),
+  get: (...args) => installOrAdoptOne('get')(...args),
+  getSendOnly: (...args) => installOrAdoptOne('getSendOnly')(...args),
+  resolve: (...args) => installOrAdoptOne('resolve')(...args),
+});
+export const E = makeE(getMethod);
 // ... HandledPromise back-compat re-export (see below) ...
 ```
 
 Multiple import sites of `@endo/eventual-send` (the main entry) each
-have their own `cachedDelegate` closure, but every one converges on
-the same realm-shared function via the slot.
-Identity is preserved: every call to `delegate(handler)` from any
-instance of the package returns a settler tied to a `delegate` that
-identifies as `Promise[Symbol.for('delegate')]`.
+have their own `cached` closure, but every one converges on the same
+realm-shared functions via the slot set.
+Identity is preserved per slot: every call to `dispatch.applyMethod(...)`
+from any instance of the package routes through the function at
+`Promise[Symbol.for('applyMethod')]`, which is one stable identity in
+the realm.
 
 ## How this is simpler than `@endo/harden`
 
@@ -345,7 +425,7 @@ complicated than the harden equivalent.
 
 | Concern | `@endo/harden` | This design |
 |---|---|---|
-| Number of code paths | Two: `hardened.js` (assumes pre-installed) and `noop.js` (installs a shallow-freeze fallback). | One. The eager-shim and lazy-main paths call the same `installOrAdoptDelegate()`. |
+| Number of code paths | Two: `hardened.js` (assumes pre-installed) and `noop.js` (installs a shallow-freeze fallback). | One. The eager-shim and lazy-main paths call the same `installOrAdopt()`. |
 | Number of slots watched | Two: `Object[Symbol.for('harden')]` and `globalThis.harden` (legacy back-compat). | One: `Promise[Symbol.for('delegate')]`. The legacy `globalThis.HandledPromise` story is handled by Stage 4 of the migration (`shim.js` writes both), not by the selector. |
 | SES integration | Mandatory: SES must install `harden` because every hardened module depends on it. | Optional: SES does not need to install a delegate; consumers that want one import `@endo/eventual-send/shim.js` (or `@endo/init`) before lockdown. |
 | Diagnostic `lockdownError` | Required: harden carries a stack-trace error so SES lockdown can blame the right module if harden was used pre-lockdown without SES adoption. | Not required: a post-lockdown import of `@endo/eventual-send` that finds an empty slot fails at the call site of `delegate(...)`, not at lockdown. The error message names the loading-order constraint. |
@@ -510,14 +590,14 @@ The migration is staged so existing consumers do not break.
 
 **Stage 1: introduce the install path.**
 Add `packages/eventual-send/src/install-delegate.js` exporting
-`installOrAdoptDelegate()`.
+`installOrAdopt()`.
 Add `packages/eventual-send/src/make-delegate.js` exporting
 `makeDelegate()`.
 Existing code paths are untouched.
 
 **Stage 2: switch the lazy main entry.**
 Update `packages/eventual-send/src/no-shim.js` to call
-`installOrAdoptDelegate()` lazily on first use of `E` or `delegate`.
+`installOrAdopt()` lazily on first use of `E` or `delegate`.
 Add the new `delegate`, `makeDelegate`, and `dispatch` exports.
 Preserve the `HandledPromise` export as a deprecated back-compat alias.
 The `import { HandledPromise, E } from '@endo/eventual-send'` surface
@@ -525,7 +605,7 @@ continues to work.
 
 **Stage 3: rewrite the eager shim.**
 Update `packages/eventual-send/shim.js` to call
-`installOrAdoptDelegate()` at module load (eagerly), and additionally
+`installOrAdopt()` at module load (eagerly), and additionally
 write `globalThis.HandledPromise` for legacy back-compat.
 
 **Stage 4: SES integration.**
@@ -643,7 +723,7 @@ expected to take.
 5. **The shim is eager; the main entry is lazy.**
    `@endo/eventual-send/shim.js` installs at import.
    `@endo/eventual-send` (main entry) installs on first use.
-   Both call the same `installOrAdoptDelegate()` function.
+   Both call the same `installOrAdopt()` function.
 
 6. **SES yields to a pre-installed delegate and does not install a
    default.**
@@ -742,12 +822,12 @@ simplifications enumerated under "How this is simpler than
 ### Phase 1: install path and main entry (S)
 
 - Add `packages/eventual-send/src/install-delegate.js` exporting
-  `installOrAdoptDelegate()`.
+  `installOrAdopt()`.
 - Add `packages/eventual-send/src/make-delegate.js` exporting
   `makeDelegate()` (the function-shaped delegate factory built on the
   existing `makeHandledPromise()`).
 - Update `packages/eventual-send/src/no-shim.js` to call
-  `installOrAdoptDelegate()` lazily and export the new `delegate`,
+  `installOrAdopt()` lazily and export the new `delegate`,
   `makeDelegate`, and `dispatch` surfaces.
 - Preserve `HandledPromise` as a back-compat alias.
 - Add unit tests for the lazy install, adoption, lost race,
@@ -756,7 +836,7 @@ simplifications enumerated under "How this is simpler than
 ### Phase 2: rewrite the eager shim (S)
 
 - Update `packages/eventual-send/shim.js` to call
-  `installOrAdoptDelegate()` at module load and additionally write
+  `installOrAdopt()` at module load and additionally write
   `globalThis.HandledPromise` for back-compat.
 - Add unit tests for the eager install behavior and the convergence
   with the lazy main entry.
