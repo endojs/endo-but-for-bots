@@ -125,13 +125,17 @@ export const makeAnthropicProvider = ({ apiKey, model, logger = console }) => {
         logger.log('[LAL] Anthropic response received');
       } catch (error) {
         logger.error('[LAL] Anthropic API error:', error);
-        const status = error?.status ?? error?.statusCode;
-        const errBody = error?.error ?? error?.body;
+        const e =
+          /** @type {{ status?: number, statusCode?: number, error?: { type?: string, message?: string }, body?: { type?: string, message?: string }, message?: string }} */ (
+            error
+          );
+        const status = e.status ?? e.statusCode;
+        const errBody = e.error ?? e.body;
         const isAuthError =
           status === 401 ||
           errBody?.type === 'authentication_error' ||
           /invalid x-api-key|api key|authentication/i.test(
-            errBody?.message || error?.message || '',
+            errBody?.message || e.message || '',
           );
         if (isAuthError) {
           throw new Error(
