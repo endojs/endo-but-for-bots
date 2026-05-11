@@ -33,6 +33,8 @@ import { Far } from '@endo/far';
 import test from 'ava';
 
 import { makeLocalSandboxPowers } from '../src/sandbox/local-powers.js';
+import { makeFileTools } from '../src/tools/filesystem.js';
+import { makeMountVFS } from '../src/tools/vfs-mount.js';
 
 // ---------------------------------------------------------------------------
 // provideScratchMount
@@ -84,11 +86,15 @@ test('provideHostPath round-trips a cap minted by makeMountCapForPath', async t 
   const resolved = await E(powers).provideHostPath(cap);
   t.is(resolved, workspaceDir, 'round-trip must yield the original path');
 
-  // The cap also exposes the Mount surface the genie's `spawnAgent`
-  // validation requires, so a future consumer can drive it through
-  // `E(cap).readText` / `writeText` / `makeDirectory` / `has` / `list`.
-  // The factory itself never calls these, but pinning the surface
-  // here guards against an accidental method-name regression.
+  // The cap exposes the full Mount surface the genie's downstream
+  // consumers drive: `spawnAgent`'s pet-name validation,
+  // `initWorkspaceMount`, and (the one that broke in TODO/57) the
+  // `vfs-mount.js` adapter for the `files` tool group.  `vfs-mount.js`
+  // drives `lookup` to discriminate file vs. directory before listing
+  // / removing, and `remove` to back the `unlink` / `rmdir` / `rm`
+  // tools.  Pinning the wider surface here guards against the next
+  // refactor accidentally re-thinning the cap and silently breaking
+  // the dev-repl's `listDirectory` again.
   const methods = /** @type {string[]} */ (
     // eslint-disable-next-line no-underscore-dangle
     await E(/** @type {any} */ (cap)).__getMethodNames__()
@@ -96,10 +102,14 @@ test('provideHostPath round-trips a cap minted by makeMountCapForPath', async t 
   for (const m of [
     'help',
     'readText',
+    'maybeReadText',
     'writeText',
     'makeDirectory',
     'has',
     'list',
+    'lookup',
+    'remove',
+    'move',
   ]) {
     t.true(
       methods.includes(m),
@@ -203,4 +213,111 @@ test('dispose() does not remove operator-supplied paths from makeMountCapForPath
     await fs.readFile(join(operatorDir, 'precious.txt'), 'utf8'),
     'do not delete me',
   );
+});
+
+// ---------------------------------------------------------------------------
+// vfs-mount integration: the dev-repl's `files` tool group rides the
+// local Mount cap through `vfs-mount.js`, which drives `lookup` /
+// `remove` (and not just the trivial readText/writeText subset).  An
+// earlier rev of `local-powers.js` exposed only the trivial subset, so
+// the genie's `listDirectory` / `unlink` / `rmdir` / `rm` tools failed
+// at runtime with "target has no method \"lookup\"".  These tests pin
+// the surface end-to-end through the same code path the dev-repl uses,
+// so the next refactor that thins the cap fails here loudly rather
+// than only at runtime under an interactive prompt.  See
+// `TODO/57_genie_dev_repl_sandbox_test_fails.md`.
+// ---------------------------------------------------------------------------
+
+test('vfs-mount listDirectory drives lookup through the local Mount cap', async t => {
+  const { makeMountCapForPath, dispose } = makeLocalSandboxPowers();
+  t.teardown(dispose);
+
+  const workspaceDir = mkdtempSync(join(tmpdir(), 'genie-local-test-ws-'));
+  t.teardown(() => fs.rm(workspaceDir, { recursive: true, force: true }));
+
+  // Seed a few entries so we have both files and a subdirectory.
+  await fs.mkdir(join(workspaceDir, 'sub'), { recursive: true });
+  await fs.writeFile(join(workspaceDir, 'a.txt'), 'alpha');
+  await fs.writeFile(join(workspaceDir, 'sub', 'b.txt'), 'beta');
+
+  const mount = /** @type {any} */ (makeMountCapForPath(workspaceDir));
+  const vfs = makeMountVFS({ mount, rootDir: workspaceDir });
+  const { listDirectory } = makeFileTools({ root: workspaceDir, vfs });
+
+  const result =
+    /** @type {{ entries: Array<{ name: string, type: string }> }} */ (
+      await listDirectory.execute({ path: '.' })
+    );
+  const byName = Object.fromEntries(result.entries.map(e => [e.name, e.type]));
+  t.is(byName['a.txt'], 'file');
+  t.is(byName.sub, 'directory');
+});
+
+test('vfs-mount stat drives lookup + text on the local Mount cap', async t => {
+  const { makeMountCapForPath, dispose } = makeLocalSandboxPowers();
+  t.teardown(dispose);
+
+  const workspaceDir = mkdtempSync(join(tmpdir(), 'genie-local-test-ws-'));
+  t.teardown(() => fs.rm(workspaceDir, { recursive: true, force: true }));
+
+  await fs.writeFile(join(workspaceDir, 'sized.txt'), 'twelve chars');
+
+  const mount = /** @type {any} */ (makeMountCapForPath(workspaceDir));
+  const vfs = makeMountVFS({ mount, rootDir: workspaceDir });
+  const { stat } = makeFileTools({ root: workspaceDir, vfs });
+
+  const fileInfo = /** @type {{ type: string, size: number }} */ (
+    await stat.execute({ path: 'sized.txt' })
+  );
+  t.is(fileInfo.type, 'file');
+  t.is(fileInfo.size, 'twelve chars'.length);
+
+  const rootInfo = /** @type {{ type: string }} */ (
+    await stat.execute({ path: '.' })
+  );
+  t.is(rootInfo.type, 'directory');
+});
+
+test('vfs-mount removeFile drives lookup + remove on the local Mount cap', async t => {
+  const { makeMountCapForPath, dispose } = makeLocalSandboxPowers();
+  t.teardown(dispose);
+
+  const workspaceDir = mkdtempSync(join(tmpdir(), 'genie-local-test-ws-'));
+  t.teardown(() => fs.rm(workspaceDir, { recursive: true, force: true }));
+
+  await fs.writeFile(join(workspaceDir, 'doomed.txt'), 'goodbye');
+
+  const mount = /** @type {any} */ (makeMountCapForPath(workspaceDir));
+  const vfs = makeMountVFS({ mount, rootDir: workspaceDir });
+  const { removeFile } = makeFileTools({ root: workspaceDir, vfs });
+
+  await removeFile.execute({ path: 'doomed.txt' });
+  await t.throwsAsync(() => fs.stat(join(workspaceDir, 'doomed.txt')), {
+    code: 'ENOENT',
+  });
+});
+
+test('vfs-mount removeDirectory recursive walks the local Mount tree', async t => {
+  const { makeMountCapForPath, dispose } = makeLocalSandboxPowers();
+  t.teardown(dispose);
+
+  const workspaceDir = mkdtempSync(join(tmpdir(), 'genie-local-test-ws-'));
+  t.teardown(() => fs.rm(workspaceDir, { recursive: true, force: true }));
+
+  // Build a small tree so the depth-first walk inside `vfs.rm` has
+  // something to traverse.  `rm` exercises `lookup` + `list` +
+  // `remove` together, so a regression in any one of those surfaces
+  // here.
+  await fs.mkdir(join(workspaceDir, 'tree', 'inner'), { recursive: true });
+  await fs.writeFile(join(workspaceDir, 'tree', 'top.txt'), '1');
+  await fs.writeFile(join(workspaceDir, 'tree', 'inner', 'leaf.txt'), '2');
+
+  const mount = /** @type {any} */ (makeMountCapForPath(workspaceDir));
+  const vfs = makeMountVFS({ mount, rootDir: workspaceDir });
+  const { removeDirectory } = makeFileTools({ root: workspaceDir, vfs });
+
+  await removeDirectory.execute({ path: 'tree', recursive: true });
+  await t.throwsAsync(() => fs.stat(join(workspaceDir, 'tree')), {
+    code: 'ENOENT',
+  });
 });

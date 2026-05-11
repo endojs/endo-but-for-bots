@@ -31,15 +31,35 @@
  * hands you a `SandboxPowers`-shaped exo plus a helper to mint a
  * Mount cap from any operator-supplied host path.
  *
- * The exposed Mount methods (`help`, `has`, `list`, `readText`,
- * `writeText`, `makeDirectory`) match the daemon's `MountInterface`
- * subset that the genie's `spawnAgent` Mount-cap validation requires
- * (`packages/genie/main.js` checks `__getMethodNames__()` against
- * `['readText', 'writeText', 'makeDirectory', 'has', 'list']`) and that
- * `initWorkspaceMount` drives.  The factory itself never calls these
- * methods on the cap — it only passes the cap through `provideHostPath`
- * to recover the host path — so a fully-faithful Mount surface is not
- * needed here.  See `TODO/51_genie_dev_repl_local_sandbox_powers.md`.
+ * The exposed Mount methods match the daemon's `MountInterface` as far
+ * as the genie's downstream consumers drive it.  Three callers matter:
+ *
+ *   1. `spawnAgent`'s Mount-cap validation (`packages/genie/main.js`),
+ *      which only checks `__getMethodNames__()` against the subset
+ *      `['readText', 'writeText', 'makeDirectory', 'has', 'list']`.
+ *   2. `initWorkspaceMount` (`packages/genie/src/workspace/init.js`),
+ *      which drives `has` / `readText` / `writeText` / `makeDirectory`
+ *      for the template-seed flow.
+ *   3. The `files` tool group's Mount-backed VFS adapter
+ *      (`packages/genie/src/tools/vfs-mount.js`), which drives `has`,
+ *      `list`, `lookup`, `readText`, `writeText`, `remove`, and
+ *      `makeDirectory`.  `lookup` returns either a sub-Mount-shaped exo
+ *      (for directories) or a `MountFile`-shaped exo with a `text()`
+ *      method (for files); the adapter uses both shapes to discriminate
+ *      file vs. directory before listing / removing.
+ *
+ * The third caller is the one that drove the surface here from "just
+ * what the factory needs" up to the full daemon-side method set.  An
+ * earlier rev exposed only the first-caller subset; that left the
+ * dev-repl's `listDirectory` / `unlink` / `rmdir` tools failing with
+ * "target has no method \"lookup\"" because they were silently driving
+ * the third caller through the same cap.  See
+ * `TODO/57_genie_dev_repl_sandbox_test_fails.md` for the regression.
+ *
+ * The factory itself never calls these methods on the cap — it only
+ * passes the cap through `provideHostPath` to recover the host path
+ * — but it does forward the cap to other callers that do.  See
+ * `TODO/51_genie_dev_repl_local_sandbox_powers.md`.
  *
  * Out of scope (deliberately a thinner abstraction than the daemon's):
  *   - Honouring Endo `provideMount`'s confinement-root semantics
@@ -74,9 +94,18 @@ const LocalMountInterface = M.interface('LocalMount', {
   help: M.call().returns(M.string()),
   has: M.call().rest(PathSegmentsShape).returns(M.promise()),
   list: M.call().rest(PathSegmentsShape).returns(M.promise()),
+  lookup: M.call(PathArgShape).returns(M.promise()),
   readText: M.call(PathArgShape).returns(M.promise()),
+  maybeReadText: M.call(PathArgShape).returns(M.promise()),
   writeText: M.call(PathArgShape, M.string()).returns(M.promise()),
   makeDirectory: M.call(PathArgShape).returns(M.promise()),
+  remove: M.call(PathArgShape).returns(M.promise()),
+  move: M.call(PathArgShape, PathArgShape).returns(M.promise()),
+});
+
+const LocalMountFileInterface = M.interface('LocalMountFile', {
+  help: M.call().returns(M.string()),
+  text: M.call().returns(M.promise()),
 });
 
 const LocalSandboxPowersInterface = M.interface('LocalSandboxPowers', {
@@ -143,6 +172,26 @@ const makeLocalMountCap = (hostPath, capToHostPath) => {
     return segments.length === 0 ? hostPath : join(hostPath, ...segments);
   };
 
+  /**
+   * Build a `MountFile`-shaped exo for a file lookup result.  The
+   * adapter in `vfs-mount.js` discriminates file vs. directory via
+   * `__getMethodNames__()`; presence of `text` says "file".  The
+   * surface is intentionally minimal — only what `vfs-mount.js` and
+   * `initWorkspaceMount` drive.
+   *
+   * @param {string} filePath
+   */
+  const makeLocalMountFile = filePath =>
+    makeExo('LocalMountFile', LocalMountFileInterface, {
+      help() {
+        return `local MountFile @ ${filePath}`;
+      },
+      async text() {
+        await null;
+        return fs.readFile(filePath, 'utf8');
+      },
+    });
+
   const cap = makeExo('LocalMount', LocalMountInterface, {
     help() {
       return `local Mount @ ${hostPath}`;
@@ -167,10 +216,65 @@ const makeLocalMountCap = (hostPath, capToHostPath) => {
       return harden(entries.sort());
     },
 
+    /**
+     * Mirror the daemon's `Mount.lookup` shape: return a sub-Mount cap
+     * for directories (the genie tools only feature-test it, so any
+     * Mount-shaped exo will do — we rebuild it rooted at the child path
+     * so subsequent `list` / `readText` calls go through a fresh cap
+     * with its own `hostPath` confinement check) and a
+     * `MountFile`-shaped exo for files.  Throws ENOENT for missing
+     * entries so the VFS adapter (`vfs-mount.js`) can wrap the error
+     * in its usual "Path not found" wording.
+     *
+     * The returned sub-Mount is recorded in `capToHostPath` so a future
+     * caller can resolve it back to the host path; this matches the
+     * daemon-side behaviour (`packages/daemon/src/mount.js` `lookup`
+     * returns a Mount that shares the daemon's mount registry).
+     *
+     * @param {string | string[]} pathArg
+     */
+    async lookup(pathArg) {
+      const segments = segmentsOf(pathArg);
+      const target = resolve(segments);
+      /** @type {import('fs').Stats} */
+      let info;
+      try {
+        info = await fs.stat(target);
+      } catch (err) {
+        if (/** @type {NodeJS.ErrnoException} */ (err).code === 'ENOENT') {
+          throw makeError(X`local Mount.lookup: ${q(target)} does not exist`);
+        }
+        throw err;
+      }
+      if (info.isDirectory()) {
+        return makeLocalMountCap(target, capToHostPath);
+      }
+      return makeLocalMountFile(target);
+    },
+
     /** @param {string | string[]} pathArg */
     async readText(pathArg) {
       const target = resolve(segmentsOf(pathArg));
       return fs.readFile(target, 'utf8');
+    },
+
+    /**
+     * Best-effort read that returns `undefined` on miss rather than
+     * throwing, mirroring `EndoMountInterface.maybeReadText`.  The
+     * genie tools do not drive this yet but adding it now keeps the
+     * surface matched to the daemon-side counterpart so a future
+     * consumer cannot regress with a "no method maybeReadText" error
+     * the same way `lookup` did (see TODO/57).
+     *
+     * @param {string | string[]} pathArg
+     */
+    async maybeReadText(pathArg) {
+      const target = resolve(segmentsOf(pathArg));
+      try {
+        return await fs.readFile(target, 'utf8');
+      } catch {
+        return undefined;
+      }
     },
 
     /**
@@ -193,6 +297,72 @@ const makeLocalMountCap = (hostPath, capToHostPath) => {
     async makeDirectory(pathArg) {
       const target = resolve(segmentsOf(pathArg));
       await fs.mkdir(target, { recursive: true });
+    },
+
+    /**
+     * Remove a single entry — a file, symlink, or empty directory.
+     * Non-recursive: a non-empty directory raises ENOTEMPTY so the
+     * caller (typically `vfs-mount.js`'s depth-first `rm` walk) sees
+     * an explicit failure rather than silent recursive deletion.
+     *
+     * Discriminates file vs. directory before dispatching because
+     * Node's `fs.rm(path, { force: true })` refuses directories
+     * outright (returns EISDIR) without `recursive: true`, so the
+     * naive "one call handles both" shape doesn't work.  Files /
+     * symlinks go through `fs.rm` (so missing entries are tolerated
+     * via `force: true`, matching the daemon's idempotent semantics);
+     * directories go through `fs.rmdir`.
+     *
+     * @param {string | string[]} pathArg
+     */
+    async remove(pathArg) {
+      const segments = segmentsOf(pathArg);
+      if (segments.length === 0) {
+        throw makeError(X`local Mount.remove: cannot remove the mount root`);
+      }
+      const target = resolve(segments);
+      /** @type {import('fs').Stats | undefined} */
+      let info;
+      try {
+        info = await fs.lstat(target);
+      } catch (err) {
+        if (/** @type {NodeJS.ErrnoException} */ (err).code === 'ENOENT') {
+          // Idempotent miss, matching the daemon's `force: true`
+          // semantics.
+          return;
+        }
+        throw err;
+      }
+      if (info.isDirectory()) {
+        await fs.rmdir(target);
+      } else {
+        await fs.rm(target, { force: true });
+      }
+    },
+
+    /**
+     * Atomically move (rename) one path under the mount to another.
+     * Both segments must stay within the mount; the textual
+     * `assertNoEscape` veto is applied by `resolve()` on both ends.
+     *
+     * @param {string | string[]} fromArg
+     * @param {string | string[]} toArg
+     */
+    async move(fromArg, toArg) {
+      const fromSegments = segmentsOf(fromArg);
+      const toSegments = segmentsOf(toArg);
+      if (fromSegments.length === 0 || toSegments.length === 0) {
+        throw makeError(X`local Mount.move: cannot move the mount root`);
+      }
+      const from = resolve(fromSegments);
+      const to = resolve(toSegments);
+      // Ensure the destination's parent exists, mirroring writeText.
+      const parent =
+        toSegments.length <= 1
+          ? hostPath
+          : join(hostPath, ...toSegments.slice(0, -1));
+      await fs.mkdir(parent, { recursive: true });
+      await fs.rename(from, to);
     },
   });
 
