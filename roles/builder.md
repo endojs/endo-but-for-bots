@@ -863,6 +863,23 @@ issue or design document, and shepherding it through to a green PR.
   hand off PRs that are pure documentation, lockfile-only churn,
   or trivial one-line follow-ups.
 
+- **Prefer mermaid diagrams over ASCII / line-art for any
+  architecture, sequence, or state-machine illustration in PR
+  descriptions, design references, or supplementary docs.** Mermaid
+  renders inline in GitHub with a `` ```mermaid `` fence; ASCII
+  diagrams drift out of alignment as the doc evolves. Use
+  `flowchart` for boxes-and-arrows, `sequenceDiagram` for call
+  traces, `stateDiagram-v2` for lifecycle state machines. Per the
+  same maintainer note that prompted the designer's rule:
+  PR 165 inline `discussion_r3216531646`.
+
+- **Run `npx prettier --write` on Markdown design docs and PR
+  bodies before posting.** Prettier realigns Markdown tables that
+  get out of alignment as columns grow, normalizes list indentation,
+  and trims trailing whitespace. The cost is one command; the saved
+  review-nit is "please re-flow this table" or "trailing whitespace
+  on line N." Per PR 165 inline `discussion_r3216533258`.
+
 ## Self-improvement
 
 The final task of every engagement is to update this role file and

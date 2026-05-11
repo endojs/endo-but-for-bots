@@ -361,6 +361,48 @@ an agent in the `builder` role to implement from later.
   Encountered on PR 115 OQ #6 → PR 117 (NameHub interface
   unification).
 
+- **Prefer mermaid diagrams over ASCII / line-art for any
+  architecture, sequence, or state-machine illustration.** Mermaid
+  renders inline in GitHub with a `` ```mermaid `` fence; ASCII
+  diagrams drift out of alignment as the doc evolves and become
+  unreadable. Use `flowchart` for boxes-and-arrows, `sequenceDiagram`
+  for call traces, `stateDiagram-v2` for lifecycle state machines.
+  The rule applies to any diagram in any markdown file the designer
+  produces, not just `designs/*.md`. Encountered on PR 165
+  (cli-scheduled-send), inline `discussion_r3216531646`: a
+  box-and-arrow ASCII diagram in the Architecture Overview section
+  was flagged on review with "Prefer mermaid diagram. Please make a
+  note for designers and builders in general, that we prefer mermaid
+  diagrams of all kinds over ascii or line art diagrams of any kind."
+
+- **Run `npx prettier --write` on Markdown design docs before
+  posting.** Prettier realigns Markdown tables that get out of
+  alignment as columns grow during an editing pass: a single edit to
+  one cell of a 5-row, 3-column table can leave the pipe characters
+  staggered across rows, and a hand-tidy is fragile. Prettier on
+  Markdown also normalizes list indentation and trailing whitespace,
+  which keeps diffs minimal between revisions. Encountered on PR 165
+  (cli-scheduled-send), inline `discussion_r3216533258`.
+
+- **An "editorial pass, omit consensus-building content" review
+  comment is asking for a structural cut.** When the maintainer
+  closes a review with "do an editorial pass, omitting anything
+  that is a distraction to the builder" or "the process of building
+  the consensus on the design is unnecessary," the right read is
+  **delete the consensus log**: `## Resolved Decisions` lists, `##
+  Open Questions` sections whose answers landed in earlier review
+  rounds, "Comparison Against PR #N" sections, multi-paragraph
+  `## Alternatives Considered` discussions explaining the journey.
+  Keep only normative content (what the chosen approach is) and
+  one-line "Considered and rejected: X. Reason: Y." anti-design
+  steers for items a future implementer might be tempted to revisit.
+  The cut is usually substantial: PR 165's pass dropped the design
+  from 1258 to 953 lines (~24%), with -685 / +380. Builder-facing
+  specs read top-to-bottom as the implementation guide; reviewer-
+  facing journey logs belong in PR review threads, not in the
+  document itself. Encountered on PR 165 review wrap (review id
+  4260936309).
+
 ## Self-improvement
 
 The final task of every engagement is to update this role file and
