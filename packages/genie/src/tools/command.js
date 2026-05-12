@@ -279,30 +279,26 @@ const runProcess = async ({
     });
     throw err;
   }
-  const exitCode = status.code ?? -1;
-  if (exitCode !== 0) {
-    const err = new Error(`Command failed with exit code ${exitCode}`);
-    // Attach a structured diagnostic payload so callers (in particular
-    // the dev-repl and chatlog renderers) can show *why* the command
-    // failed instead of just "exit code N".  `err.code` is kept for
-    // legacy callers that grep for it.
-    Object.assign(err, {
-      code: exitCode,
-      exitCode,
-      command: fullCommand,
-      stdout: trimmedStdout,
-      stderr: trimmedStderr,
-    });
-    throw err;
-  }
 
+  // Non-zero exits are *data*, not errors — see TADA/60.  Many command-
+  // line tools use the exit code to answer yes/no questions (`grep` for
+  // "did this file contain the pattern", `test -f` for "does this path
+  // exist", `diff` for "do these files differ").  Throwing here would
+  // strand the model with an opaque error and no way to react to the
+  // legitimate negative result.  The schema already advertises both
+  // `success` and `exitCode` — honour the contract.
+  //
+  // Only spawner-init failures (program-not-found, factory reject) and
+  // the timeout-kill branch above still throw; those *are* errors the
+  // caller cannot reason about as data.
+  const exitCode = status.code ?? -1;
   /** @type {{success: boolean, command: string, stdout: string, stderr: string, exitCode: number, path?: string}} */
   const out = {
-    success: true,
+    success: exitCode === 0,
     command: fullCommand,
     stdout: trimmedStdout,
     stderr: trimmedStderr,
-    exitCode: 0,
+    exitCode,
   };
   if (allowPath) {
     out.path = cwd;
@@ -528,6 +524,15 @@ const makeExecTool = ({ spawner } = {}) =>
       'Runs a system command (ls, grep, find, cat, curl, etc.).',
       'Use for general tasks not covered by other tools.',
       'NOTE: does not execute through a shell',
+      '',
+      'Returns `{ success, exitCode, stdout, stderr, command }`.',
+      'A non-zero `exitCode` is reported as data with `success: false` — many',
+      'tools answer yes/no questions through the exit code (`grep` exits 1',
+      'when there is no match; `test -f` exits 1 when the path is missing;',
+      '`diff` exits 1 when files differ).  Inspect `exitCode`, `stdout`, and',
+      '`stderr` to decide what the result means; only an actual error (the',
+      'program could not be launched, or the command timed out) causes the',
+      'tool call itself to fail.',
     ].join('\n'),
     policies: [rejectPatterns(DANGEROUS_PATTERNS)],
     ...(spawner ? { spawner } : {}),
@@ -547,6 +552,15 @@ const makeBashTool = ({ spawner } = {}) =>
     description: [
       'Runs a shell command (ls, grep, find, cat, curl, etc.).',
       'Use for general tasks not covered by other tools.',
+      '',
+      'Returns `{ success, exitCode, stdout, stderr, command }`.',
+      'A non-zero `exitCode` is reported as data with `success: false` — many',
+      'tools answer yes/no questions through the exit code (`grep` exits 1',
+      'when there is no match; `test -f` exits 1 when the path is missing;',
+      '`diff` exits 1 when files differ).  Inspect `exitCode`, `stdout`, and',
+      '`stderr` to decide what the result means; only an actual error (the',
+      'program could not be launched, or the command timed out) causes the',
+      'tool call itself to fail.',
     ].join('\n'),
     policies: [rejectPatterns(DANGEROUS_PATTERNS)],
     shell: true,
