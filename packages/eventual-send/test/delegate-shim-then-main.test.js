@@ -20,26 +20,23 @@ test.serial('shim and main converge on the same Promise[@delegate]', t => {
   t.is(slotAfter, slotBefore, 'main did not replace the slot value');
 });
 
-test.serial(
-  'lazy thunk applyMethod IS the peer at @applyMethod',
-  async t => {
-    const peer = /** @type {any} */ (Promise)[symbolFor('applyMethod')];
-    // Sanity: the peer was installed by the shim. The lexical thunk
-    // dispatches to it on call. Identity at the function level is a
-    // dispatch property, not a thunk-vs-peer reference identity, so we
-    // check that calling the thunk reaches the peer-installed function
-    // by behavior.
-    t.is(typeof peer, 'function', 'applyMethod peer present');
-    const target = Object.freeze({
-      noop() {
-        return 'noop-result';
-      },
-    });
-    const result = applyMethod(target, 'noop', []);
-    t.is(typeof result.then, 'function', 'thunk returns a thenable');
-    t.is(await result, 'noop-result', 'thunk routes through peer');
-  },
-);
+test.serial('lazy thunk applyMethod IS the peer at @applyMethod', async t => {
+  const peer = /** @type {any} */ (Promise)[symbolFor('applyMethod')];
+  // Sanity: the peer was installed by the shim. The lexical thunk
+  // dispatches to it on call. Identity at the function level is a
+  // dispatch property, not a thunk-vs-peer reference identity, so we
+  // check that calling the thunk reaches the peer-installed function
+  // by behavior.
+  t.is(typeof peer, 'function', 'applyMethod peer present');
+  const target = Object.freeze({
+    noop() {
+      return 'noop-result';
+    },
+  });
+  const result = applyMethod(target, 'noop', []);
+  t.is(typeof result.then, 'function', 'thunk returns a thenable');
+  t.is(await result, 'noop-result', 'thunk routes through peer');
+});
 
 test.serial(
   'HandledPromise.resolve (lazy) === Promise[@resolve] peer (eager)',

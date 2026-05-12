@@ -62,7 +62,11 @@ test.serial(
     const promiseFromThunk = applyMethod(target, 'noop', []);
     t.is(typeof promiseFromThunk.then, 'function', 'thunk returns a promise');
     const peer = /** @type {any} */ (Promise)[symbolFor('applyMethod')];
-    t.is(typeof peer, 'function', 'applyMethod peer installed after first call');
+    t.is(
+      typeof peer,
+      'function',
+      'applyMethod peer installed after first call',
+    );
   },
 );
 

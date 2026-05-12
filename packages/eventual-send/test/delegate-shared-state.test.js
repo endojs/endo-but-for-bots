@@ -32,14 +32,11 @@ test.serial(
   },
 );
 
-test.serial(
-  'a second installOrAdoptOne call returns the same function',
-  t => {
-    const a = installOrAdoptOne('delegate');
-    const b = installOrAdoptOne('delegate');
-    t.is(a, b, 'cache returns identical reference');
-  },
-);
+test.serial('a second installOrAdoptOne call returns the same function', t => {
+  const a = installOrAdoptOne('delegate');
+  const b = installOrAdoptOne('delegate');
+  t.is(a, b, 'cache returns identical reference');
+});
 
 test.serial(
   'installOrAdoptAll returns a bank whose entries match the slots',

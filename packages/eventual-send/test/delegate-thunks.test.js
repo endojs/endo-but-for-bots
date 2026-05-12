@@ -84,7 +84,10 @@ test.serial(
   t => {
     delegate();
     t.is(applyMethodSendOnly({}, 'noop', []), undefined);
-    t.is(applyFunctionSendOnly(() => {}, []), undefined);
+    t.is(
+      applyFunctionSendOnly(() => {}, []),
+      undefined,
+    );
     t.is(getSendOnly({}, 'missing'), undefined);
   },
 );

@@ -211,9 +211,7 @@ const ensureRealE = () => {
     // the realm-shared peers themselves (not arrow wrappers). `makeE`
     // copies these via Object.assign, so the references it captures
     // ARE the realm peers.
-    const HP = /** @type {any} */ (
-      /** @type {unknown} */ (lazyHandledPromise)
-    );
+    const HP = /** @type {any} */ (/** @type {unknown} */ (lazyHandledPromise));
     /** @type {any} */
     const facade = function FacadeHandledPromise(executor, handler) {
       return lazyHandledPromise(executor, handler);
