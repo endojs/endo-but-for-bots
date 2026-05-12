@@ -262,14 +262,37 @@ const runProcess = async ({
     clearTimeout(timer);
   }
 
+  const trimmedStdout = stdout.trim();
+  const trimmedStderr = stderr.trim();
+
   if (killed) {
-    throw new Error(`${name} timed out after ${timeoutMs}ms`);
+    const err = new Error(`${name} timed out after ${timeoutMs}ms`);
+    // Attach the same diagnostic fields the non-zero-exit path uses so
+    // callers (and `makeCommandTool.execute`'s error wrapper below) can
+    // surface partial stdout / stderr captured before the kill.
+    Object.assign(err, {
+      command: fullCommand,
+      stdout: trimmedStdout,
+      stderr: trimmedStderr,
+      exitCode: status.code ?? null,
+      signal: status.signal,
+    });
+    throw err;
   }
   const exitCode = status.code ?? -1;
   if (exitCode !== 0) {
     const err = new Error(`Command failed with exit code ${exitCode}`);
-    // @ts-expect-error — attach extra fields for callers
-    err.code = exitCode;
+    // Attach a structured diagnostic payload so callers (in particular
+    // the dev-repl and chatlog renderers) can show *why* the command
+    // failed instead of just "exit code N".  `err.code` is kept for
+    // legacy callers that grep for it.
+    Object.assign(err, {
+      code: exitCode,
+      exitCode,
+      command: fullCommand,
+      stdout: trimmedStdout,
+      stderr: trimmedStderr,
+    });
     throw err;
   }
 
@@ -277,8 +300,8 @@ const runProcess = async ({
   const out = {
     success: true,
     command: fullCommand,
-    stdout: stdout.trim(),
-    stderr: stderr.trim(),
+    stdout: trimmedStdout,
+    stderr: trimmedStderr,
     exitCode: 0,
   };
   if (allowPath) {
@@ -439,7 +462,47 @@ const makeCommandTool = ({
           fullCommand,
         });
       } catch (err) {
-        throw new Error(`${name} execution failed: ${err.message}`);
+        const cast =
+          /** @type {Error & { stderr?: string, stdout?: string, exitCode?: number, command?: string }} */ (
+            err
+          );
+        // Compose a diagnostic message that surfaces stderr (and a
+        // truncated stdout when stderr is empty) so that callers — the
+        // dev-repl's red `✗ failed:` line and chatlog renderers — show
+        // *why* the command failed.  Without this every non-zero exit
+        // collapses to an opaque `Command failed with exit code N`.
+        const STDERR_BUDGET = 2048;
+        const STDOUT_BUDGET = 2048;
+        /**
+         * @param {string} text
+         * @param {number} budget
+         */
+        const clip = (text, budget) =>
+          text.length > budget
+            ? `${text.slice(0, budget)}… (truncated, ${text.length - budget} more bytes)`
+            : text;
+        const parts = [`${name} execution failed: ${cast.message}`];
+        if (cast.stderr) {
+          parts.push(`stderr: ${clip(cast.stderr, STDERR_BUDGET)}`);
+        } else if (cast.stdout) {
+          // Some failing commands write their diagnostic to stdout
+          // (e.g. `npm run` indirected through a script).  Surface that
+          // when stderr was empty so the model still has a clue.
+          parts.push(`stdout: ${clip(cast.stdout, STDOUT_BUDGET)}`);
+        }
+        const wrapped = new Error(parts.join('\n'));
+        // Forward the structured fields so a programmatic caller can
+        // still inspect them after the wrap.
+        if (cast.exitCode !== undefined) {
+          Object.assign(wrapped, {
+            code: cast.exitCode,
+            exitCode: cast.exitCode,
+            stdout: cast.stdout,
+            stderr: cast.stderr,
+            command: cast.command,
+          });
+        }
+        throw wrapped;
       }
     },
   });
