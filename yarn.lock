@@ -756,19 +756,28 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@endo/errors@workspace:^, @endo/errors@workspace:packages/errors":
+"@endo/errors-test@workspace:packages/errors-test":
   version: 0.0.0-use.local
-  resolution: "@endo/errors@workspace:packages/errors"
+  resolution: "@endo/errors-test@workspace:packages/errors-test"
   dependencies:
+    "@endo/errors": "workspace:^"
     "@endo/eventual-send": "workspace:^"
-    "@endo/harden": "workspace:^"
     "@endo/lockdown": "workspace:^"
     "@endo/ses-ava": "workspace:^"
     ava: "catalog:dev"
     c8: "catalog:dev"
     eslint: "catalog:dev"
-    ses: "workspace:^"
     ses0.18.3: "npm:ses@0.18.3"
+  languageName: unknown
+  linkType: soft
+
+"@endo/errors@workspace:^, @endo/errors@workspace:packages/errors":
+  version: 0.0.0-use.local
+  resolution: "@endo/errors@workspace:packages/errors"
+  dependencies:
+    "@endo/harden": "workspace:^"
+    eslint: "catalog:dev"
+    ses: "workspace:^"
     tsd: "catalog:dev"
     typescript: "catalog:dev"
   languageName: unknown
@@ -819,17 +828,25 @@ __metadata:
   languageName: unknown
   linkType: soft
 
+"@endo/eventual-send-test@workspace:packages/eventual-send-test":
+  version: 0.0.0-use.local
+  resolution: "@endo/eventual-send-test@workspace:packages/eventual-send-test"
+  dependencies:
+    "@endo/eventual-send": "workspace:^"
+    "@endo/lockdown": "workspace:^"
+    ava: "catalog:dev"
+    c8: "catalog:dev"
+    eslint: "catalog:dev"
+  languageName: unknown
+  linkType: soft
+
 "@endo/eventual-send@workspace:^, @endo/eventual-send@workspace:packages/eventual-send":
   version: 0.0.0-use.local
   resolution: "@endo/eventual-send@workspace:packages/eventual-send"
   dependencies:
     "@endo/env-options": "workspace:^"
     "@endo/harden": "workspace:^"
-    "@endo/lockdown": "workspace:^"
-    ava: "catalog:dev"
-    c8: "catalog:dev"
     eslint: "catalog:dev"
-    ses: "workspace:^"
     tsd: "catalog:dev"
     typescript: "catalog:dev"
   languageName: unknown
@@ -909,6 +926,18 @@ __metadata:
   languageName: unknown
   linkType: soft
 
+"@endo/harden-test@workspace:packages/harden-test":
+  version: 0.0.0-use.local
+  resolution: "@endo/harden-test@workspace:packages/harden-test"
+  dependencies:
+    "@endo/harden": "workspace:^"
+    ava: "catalog:dev"
+    c8: "catalog:dev"
+    eslint: "catalog:dev"
+    ses: "workspace:^"
+  languageName: unknown
+  linkType: soft
+
 "@endo/harden@workspace:^, @endo/harden@workspace:packages/harden":
   version: 0.0.0-use.local
   resolution: "@endo/harden@workspace:packages/harden"
@@ -916,9 +945,21 @@ __metadata:
     ava: "catalog:dev"
     c8: "catalog:dev"
     eslint: "catalog:dev"
-    ses: "workspace:^"
     tsd: "catalog:dev"
     typescript: "catalog:dev"
+  languageName: unknown
+  linkType: soft
+
+"@endo/hex-test@workspace:packages/hex-test":
+  version: 0.0.0-use.local
+  resolution: "@endo/hex-test@workspace:packages/hex-test"
+  dependencies:
+    "@endo/hex": "workspace:^"
+    "@endo/ses-ava": "workspace:^"
+    ava: "catalog:dev"
+    c8: "catalog:dev"
+    eslint: "catalog:dev"
+    ses: "workspace:^"
   languageName: unknown
   linkType: soft
 
@@ -926,18 +967,10 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@endo/hex@workspace:packages/hex"
   dependencies:
-    "@endo/chacha12": "workspace:^"
-    "@endo/eventual-send": "workspace:^"
     "@endo/harden": "workspace:^"
-    "@endo/init": "workspace:^"
-    "@endo/random": "workspace:^"
-    "@endo/ses-ava": "workspace:^"
-    ava: "catalog:dev"
     babel-eslint: "npm:^10.1.0"
-    c8: "catalog:dev"
     eslint: "catalog:dev"
     prettier: "npm:^3.5.3"
-    ses: "workspace:^"
     typescript: "catalog:dev"
   languageName: unknown
   linkType: soft
@@ -1400,8 +1433,6 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@endo/zip@workspace:packages/zip"
   dependencies:
-    "@endo/eventual-send": "workspace:^"
-    "@endo/ses-ava": "workspace:^"
     ava: "catalog:dev"
     c8: "catalog:dev"
     eslint: "catalog:dev"
