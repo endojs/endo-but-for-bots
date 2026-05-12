@@ -1,6 +1,6 @@
 # Endo Design Documents
 
-*Last updated: 2026-05-11*
+*Last updated: 2026-05-12*
 
 *See also: [daemon-make-archive](daemon-make-archive.md) (added 2026-04-23),
 [filesystem-watchers](filesystem-watchers.md) (added 2026-05-07),
@@ -27,7 +27,12 @@ PR #151 row-format unblocker; sibling of
 [unhandled-rejection-display](unhandled-rejection-display.md) (added
 2026-05-10; closes issue #171),
 [cli-edit-verb](cli-edit-verb.md) (added 2026-05-08; sibling of PR #153
-`cli-store-verb-text-modes`; hashline patches for AI agents).*
+`cli-store-verb-text-modes`; hashline patches for AI agents),
+[eslint-plugin-import-x-migration](eslint-plugin-import-x-migration.md)
+(added 2026-05-12; replace `eslint-plugin-import` +
+`eslint-import-resolver-exports` with `eslint-plugin-import-x` for
+`exports`-aware lint resolution; includes upstream supply-chain
+trust assessment; closes issue #218).*
 
 ## Summary
 
@@ -138,10 +143,11 @@ PR #151 row-format unblocker; sibling of
 | [endo-bytes](endo-bytes.md) | 2026-05-08 | 2026-05-10 | Implemented |
 | [endo-gateway](endo-gateway.md) | 2026-05-10 | 2026-05-10 | Proposed |
 | [unhandled-rejection-display](unhandled-rejection-display.md) | 2026-05-10 | 2026-05-10 | Proposed |
+| [eslint-plugin-import-x-migration](eslint-plugin-import-x-migration.md) | 2026-05-12 | 2026-05-12 | Proposed |
 | [weblet-next](weblet-next.md) | 2026-03-24 | 2026-03-24 | Reference |
 | [workers-panel](workers-panel.md) | 2026-02-14 | 2026-02-24 | Not Started |
 
-**Totals:** 27 Complete/Implemented, 15 In Progress, 43 Not Started, 9 Proposed, 3 Active, 3 Reference, 2 Deprecated, 1 Draft, 1 Superseded (104 designs)
+**Totals:** 27 Complete/Implemented, 15 In Progress, 43 Not Started, 10 Proposed, 3 Active, 3 Reference, 2 Deprecated, 1 Draft, 1 Superseded (105 designs)
 
 ## Roadmap
 
