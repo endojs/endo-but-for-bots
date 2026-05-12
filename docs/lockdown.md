@@ -1302,3 +1302,8 @@ the host's own heap, throttling the rate at which the guest can send
 outbound messages, and padding the timing of guest-visible message delivery
 so that the round-trip distribution conveys less information about
 host-internal events.
+
+For a fuller threat catalog of side-channels and other JavaScript-confinement
+risks, see Agoric's
+[Taxonomy of Security Issues](https://papers.agoric.com/taxonomy-of-security-issues/),
+which surveys the broader space this section samples.
