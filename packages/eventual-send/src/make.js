@@ -111,6 +111,7 @@ export const make = () => {
   // `E.resolve === HandledPromise.resolve === Promise[@resolve]`.
   /** @type {Bank} */
   const bank = {
+    // eslint-disable-next-line object-shorthand
     delegate: /** @type {Delegate} */ (delegate),
     applyFunction: HandledPromise.applyFunction,
     applyFunctionSendOnly: HandledPromise.applyFunctionSendOnly,
