@@ -52,9 +52,7 @@ const makeCapturingOnReject = name => {
     // arguments.
     const msg = err?.message || err;
     const stack = err?.stack || '';
-    captured.push(
-      `CapTP ${name} exception: ${inspect(msg)} ${inspect(stack)}`,
-    );
+    captured.push(`CapTP ${name} exception: ${inspect(msg)} ${inspect(stack)}`);
   };
   return { onReject, captured };
 };
