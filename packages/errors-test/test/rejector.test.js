@@ -1,8 +1,8 @@
 import test from '@endo/ses-ava/test.js';
-import { Fail, q, hideAndHardenFunction } from '../index.js';
+import { Fail, q, hideAndHardenFunction } from '@endo/errors';
 
 /**
- * @import {Rejector} from '../rejector.js';
+ * @import {Rejector} from '@endo/errors/rejector.js';
  */
 
 /**
