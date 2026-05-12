@@ -25,12 +25,132 @@ To construct an environment suitable for Eventual Send requires the
 `HandledPromise` shim:
 
 ```js
-import '@agoric/eventual-send/shim.js';
+import '@endo/eventual-send/shim.js';
 ```
 
 The shim ensures that every instance of Eventual Send can recognize every other
 instance's handled promises.
 This is how we mitigate, what we call, "eval twins".
+
+## Architecture: ponyfill on `Promise` peer slots
+
+The package installs a bank of related functions onto the realm-shared
+`Promise` constructor, each at its own registered-symbol slot:
+
+| Slot | Function |
+|---|---|
+| `Promise[Symbol.for('delegate')]` | `delegate(handler)` returns a settler bag for a new pending handled promise. |
+| `Promise[Symbol.for('applyMethod')]` | `applyMethod(target, prop, args)` eventually invokes a method. |
+| `Promise[Symbol.for('applyMethodSendOnly')]` | Fire-and-forget variant. |
+| `Promise[Symbol.for('applyFunction')]` | `applyFunction(target, args)` eventually invokes a function. |
+| `Promise[Symbol.for('applyFunctionSendOnly')]` | Fire-and-forget variant. |
+| `Promise[Symbol.for('get')]` | `get(target, prop)` eventually reads a property. |
+| `Promise[Symbol.for('getSendOnly')]` | Fire-and-forget variant. |
+| `Promise[Symbol.for('resolve')]` | Wraps a value as a handled promise. |
+| `Promise[Symbol.for('HandledPromise')]` | Back-compat: the constructor itself. |
+
+The peer functions are siblings on `Promise`, not properties of any one
+function.
+This keeps the `delegate(handler)` slot aligned with the proposed TC39
+`Promise.delegate` direction (a single function) while still exposing
+the full dispatch surface.
+
+Each slot is installed `configurable: false, writable: false`.
+Two libraries that ship copies of the package race to install; the
+first writer wins per slot, and subsequent module instances read the
+slot and adopt the winner.
+The slots are realm-wide: every compartment that shares the realm's
+`Promise` sees the same peers.
+
+The `delegate` slot has a forward-compatibility hook.
+If a host or earlier shim has installed `Promise.delegate` (the
+expected standard slot), the install path returns it without consulting
+the registry symbol.
+
+### Two import surfaces
+
+| Import | When the install runs |
+|---|---|
+| `@endo/eventual-send/shim.js` | Eagerly at module load, before `lockdown()`. |
+| `@endo/eventual-send` (main entry) | Lazily, on first call to any exported thunk. |
+
+Both surfaces converge on the same realm-shared peers via the
+registered-symbol slots, regardless of import order vs lockdown.
+
+The eager shim must run before `lockdown()` because lockdown freezes
+`Promise`.
+A pre-lockdown writer arranges the slots; a post-lockdown reader
+through the lazy main entry sees the slots already populated and
+adopts.
+
+### Lexical ponyfill thunks
+
+The package main entry exports a lexical thunk for each peer:
+
+```js
+import {
+  delegate,
+  applyMethod,
+  applyMethodSendOnly,
+  applyFunction,
+  applyFunctionSendOnly,
+  get,
+  getSendOnly,
+  resolve,
+} from '@endo/eventual-send';
+
+const settler = delegate(handler);
+const value = await get(target, 'x');
+await applyMethod(target, 'greet', ['world']);
+```
+
+Each thunk on first call resolves the realm-shared
+`Promise[Symbol.for(<name>)]` peer (installing it if absent), caches
+the resulting function in module scope, and dispatches.
+Subsequent calls go through the cached reference with one indirection.
+
+This lets consumers write code that does not name a symbol or import
+the install path directly; the thunks are the public API.
+
+### `HandledPromise` back-compat
+
+The legacy `HandledPromise` constructor surface remains:
+
+```js
+import { HandledPromise } from '@endo/eventual-send';
+
+new HandledPromise((resolve, reject, resolveWithPresence) => { ... }, handler);
+HandledPromise.resolve(x);
+HandledPromise.applyMethod(t, p, a);
+```
+
+`HandledPromise` is a thin lazy adapter.
+The constructor body forwards to `delegate(handler)` and wires the
+executor up to the settler bag.
+The static methods (`resolve`, `applyMethod`, `applyFunction`, `get`,
+`getSendOnly`, etc.) are getters that defer to the realm-shared peers.
+
+Reading any static returns the SAME function reference held by
+`Promise[Symbol.for(<name>)]`, so identity assertions like
+`E.resolve === HandledPromise.resolve === Promise[Symbol.for('resolve')]`
+hold across both eager-shim and lazy-main paths.
+
+The eager shim additionally writes `globalThis.HandledPromise` to the
+realm constructor when the global is currently undefined, for legacy
+consumers that read from the global.
+
+### SES interaction
+
+SES `lockdown()` permits each peer slot.
+The permits enumerate `RegisteredSymbol(delegate)`,
+`RegisteredSymbol(applyMethod)`, `RegisteredSymbol(applyFunction)`,
+`RegisteredSymbol(get)`, etc. on the `Promise` constructor.
+Without the permits, `lockdown()` would attempt to delete the
+non-configurable slots and fail.
+
+The pattern is strictly parallel to `@endo/harden`'s
+`Object[Symbol.for('harden')]` slot, which SES permits at the same
+intrinsic level.
 
 ## Importing
 
@@ -276,7 +396,11 @@ const handler = {
 ```
 
 **Most users don't need to use HandledPromise directly.**
-The `E()` proxy provides the ergonomic interface.
+The `E()` proxy provides the ergonomic interface, or call the lexical
+ponyfill thunks (`delegate`, `applyMethod`, `applyFunction`, `get`,
+`resolve`) for direct dispatch without the constructor-shaped facade.
+See [Architecture: ponyfill on `Promise` peer slots](#architecture-ponyfill-on-promise-peer-slots)
+above for the slot layout and lazy-vs-eager install behavior.
 
 ## Use in Tests
 
