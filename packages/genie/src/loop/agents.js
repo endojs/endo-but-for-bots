@@ -1,6 +1,7 @@
 // @ts-check
 
 /** @import { Agent as PiAgent } from '@mariozechner/pi-agent-core' */
+/** @import { Api, Model } from '@mariozechner/pi-ai' */
 /** @import { Observer } from '../observer/index.js' */
 /** @import { Reflector } from '../reflector/index.js' */
 /** @import { GenieTools } from '../tools/registry.js' */
@@ -13,14 +14,18 @@ import { makeReflector } from '../reflector/index.js';
 
 /**
  * @typedef {object} GenieAgentsConfig
- * @property {string} [model]
- * - Baseline model string used by the main chat agent.
- *   Default model for any sub-agent that does not supply its own override.
- * @property {string} [observerModel]
+ * @property {string | Model<Api>} [model]
+ * - Baseline model used by the main chat agent.  Either a
+ *   `provider/modelId` string the pi-ai registry can resolve or a
+ *   pre-constructed `Model<…>` object (used by the dev-repl when a
+ *   `GENIE_FAUX_SCRIPT` registration supplies its own model).
+ *   Default model for any sub-agent that does not supply its own
+ *   override.
+ * @property {string | Model<Api>} [observerModel]
  *   - Override model for the observer sub-agent.
- * @property {string} [reflectorModel]
+ * @property {string | Model<Api>} [reflectorModel]
  *   - Override model for the reflector sub-agent.
- * @property {string} [heartbeatModel]
+ * @property {string | Model<Api>} [heartbeatModel]
  *   - Override model for the heartbeat sub-agent.
  * @property {boolean} [dedicatedHeartbeatAgent]
  * - When `true` (default), `heartbeatAgent` is a separately constructed

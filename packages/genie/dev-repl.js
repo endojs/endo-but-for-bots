@@ -54,6 +54,7 @@ import '@endo/init/debug.js';
 import { createRequire } from 'module';
 import readline, { createInterface } from 'readline';
 import { resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 /** @import { Interface as ReadlineInterface } from 'readline' */
 
 import { makeError, q, X } from '@endo/errors';
@@ -61,6 +62,7 @@ import { E } from '@endo/eventual-send';
 import { make as makeSandboxFactoryFromPowers } from '@endo/sandbox';
 /** @import { RootfsSpec, SandboxHandle } from '@endo/sandbox/types.js' */
 import { registerBuiltInApiProviders } from '@mariozechner/pi-ai';
+/** @import { Api, Model } from '@mariozechner/pi-ai' */
 /** @import { Agent as PiAgent } from '@mariozechner/pi-agent-core' */
 
 import {
@@ -113,6 +115,40 @@ function inconceivable(nope, wat) {
 
 // Register built-in API providers so getModel lookups work for known providers
 registerBuiltInApiProviders();
+
+/**
+ * When the `GENIE_FAUX_SCRIPT` env var is set, dynamically import the
+ * pointed-at ESM module and call its default export to register a
+ * `pi-ai` faux provider inside this process.  The module's default
+ * export must return a pre-constructed `Model<…>` object that the
+ * dev-repl passes straight into `makePiAgent` (bypassing the
+ * `provider/modelId` string parser).
+ *
+ * This is the test-side seam that lets
+ * `test/dev-repl-sandbox.test.js` drive the agent with a deterministic
+ * scripted assistant rather than a live `ollama/llama3.2` round-trip.
+ * See `packages/genie/test/_helpers/faux.js` for the parent-side
+ * helper that writes the script module.
+ *
+ * Returning `undefined` (env var unset) means the model comes from
+ * the `-m` CLI flag as usual.
+ *
+ * @returns {Promise<Model<Api> | undefined>}
+ */
+const loadFauxScript = async () => {
+  const scriptPath = process.env.GENIE_FAUX_SCRIPT;
+  if (!scriptPath) {
+    return undefined;
+  }
+  /** @type {{ default: () => Promise<Model<Api>> | Model<Api> }} */
+  const mod = await import(pathToFileURL(scriptPath).href);
+  if (typeof mod.default !== 'function') {
+    throw makeError(
+      X`GENIE_FAUX_SCRIPT ${q(scriptPath)} must export a default function returning a pi-ai Model object`,
+    );
+  }
+  return mod.default();
+};
 
 /** @param {AgentError} err */
 function* errorLines(err) {
@@ -1011,17 +1047,27 @@ async function* runMain(args) {
   const { tools, memoryTools } = genieTools;
   const memoryIndexing = memoryTools ? memoryTools.indexing : Promise.resolve();
 
+  // Optionally install a scripted faux provider before the agent
+  // pack is built.  When `GENIE_FAUX_SCRIPT` is set, the returned
+  // `Model<…>` object becomes the agent's model and `--model` /
+  // `-m` is ignored for the chat agent — the faux model id wins.
+  const fauxModel = await loadFauxScript();
+  /** @type {string | Model<Api> | undefined} */
+  const effectiveModel = fauxModel ?? modelArg;
+
   // Assemble the shared agent pack.
   const { piAgent, heartbeatAgent, observer, reflector } =
     await makeGenieAgents({
       hostname: 'dev-repl',
       workspaceDir,
       tools: genieTools,
-      config: { model: modelArg },
+      config: { model: effectiveModel },
     });
 
   function* describe() {
-    const modelName = modelArg || `default (${DEFAULT_MODEL_STRING})`;
+    const modelName = fauxModel
+      ? `faux (${fauxModel.api}/${fauxModel.id})`
+      : modelArg || `default (${DEFAULT_MODEL_STRING})`;
     const toolNames = Object.keys(tools);
     const rootfsLabel =
       parsedRootfs.kind === 'oci'
