@@ -338,6 +338,13 @@ const runProcess = async ({
  *   Defaults to a freshly-built host spawner (see
  *   {@link makeHostSpawner}).  Pass a sandbox spawner to run the tool
  *   inside an `@endo/sandbox` slice.
+ * @property {string}    [sliceWorkspacePath] - When the `spawner` routes
+ *   this tool through a sandbox slice, the slice-internal mount path
+ *   where the workspace is visible (e.g. `/workspace`).  Threaded into
+ *   `help()` so the tool-level docs mention the slice path the model
+ *   should use rather than the host workspace path.  Avoid hard-coding
+ *   the path here — pass it down from the slice-mint site so the same
+ *   wire feeds both the system prompt and the tool descriptions.
  */
 
 /**
@@ -358,6 +365,7 @@ const makeCommandTool = ({
   spawner = makeHostSpawner(
     searchPath !== undefined ? { searchPath } : undefined,
   ),
+  sliceWorkspacePath,
 }) => {
   const hasProgram = program !== undefined;
 
@@ -391,6 +399,17 @@ const makeCommandTool = ({
         yield `Executes ${program} commands.`;
       } else {
         yield 'Executes shell commands.';
+      }
+      if (sliceWorkspacePath !== undefined) {
+        // The model's workspace path inside the slice is not the host
+        // directory the system prompt mentions as the working
+        // directory — the host workspace is bind-mounted to this fixed
+        // path.  Surfacing the slice path here (in addition to the
+        // runtime-info section) makes the tool-level docs self-
+        // sufficient and avoids the host-path-into-bash failure mode
+        // described in TODO/62.
+        yield '';
+        yield `**Workspace path:** This tool runs inside a sandbox slice; the workspace is mounted at \`${sliceWorkspacePath}\`.  Use that path (not the host workspace directory) when referencing the workspace from a shell command.`;
       }
       yield '';
       yield '**Parameters:**';
@@ -515,9 +534,9 @@ harden(makeCommandTool);
  * spawner override so a sandbox-aware caller (e.g. the daemon-hosted
  * genie's tool registry) can route execution through a slice.
  *
- * @param {{ spawner?: Spawner }} [options]
+ * @param {{ spawner?: Spawner, sliceWorkspacePath?: string }} [options]
  */
-const makeExecTool = ({ spawner } = {}) =>
+const makeExecTool = ({ spawner, sliceWorkspacePath } = {}) =>
   makeCommandTool({
     name: 'exec',
     description: [
@@ -536,6 +555,7 @@ const makeExecTool = ({ spawner } = {}) =>
     ].join('\n'),
     policies: [rejectPatterns(DANGEROUS_PATTERNS)],
     ...(spawner ? { spawner } : {}),
+    ...(sliceWorkspacePath !== undefined ? { sliceWorkspacePath } : {}),
   });
 harden(makeExecTool);
 
@@ -544,9 +564,9 @@ harden(makeExecTool);
  * dangerous-pattern blocking.  Accepts an optional spawner override
  * (see {@link makeExecTool}).
  *
- * @param {{ spawner?: Spawner }} [options]
+ * @param {{ spawner?: Spawner, sliceWorkspacePath?: string }} [options]
  */
-const makeBashTool = ({ spawner } = {}) =>
+const makeBashTool = ({ spawner, sliceWorkspacePath } = {}) =>
   makeCommandTool({
     name: 'bash',
     description: [
@@ -565,6 +585,7 @@ const makeBashTool = ({ spawner } = {}) =>
     policies: [rejectPatterns(DANGEROUS_PATTERNS)],
     shell: true,
     ...(spawner ? { spawner } : {}),
+    ...(sliceWorkspacePath !== undefined ? { sliceWorkspacePath } : {}),
   });
 harden(makeBashTool);
 

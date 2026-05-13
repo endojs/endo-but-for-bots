@@ -90,6 +90,7 @@ import {
   DEFAULT_BACKEND,
   DEFAULT_NETWORK_PROFILE,
   DEFAULT_ROOTFS_KIND,
+  SLICE_WORKSPACE_PATH,
   assertRootfsBackendCompatible,
   isAllowedBackend,
   isAllowedNetworkProfile,
@@ -1034,6 +1035,15 @@ async function* runMain(args) {
     /** @type {import('./src/tools/vfs-mount.js').MountVFSCap} */ (
       /** @type {unknown} */ (workspaceMount)
     );
+  // When a slice was minted (`spawner` is set), the `bash` / `exec` /
+  // `git` tools' descriptions and the agent's system prompt both need
+  // to advertise the slice-internal workspace path so the model knows
+  // not to feed the host path into a shell command (see TADA/62).
+  // `--sandbox off` and the `--sandbox auto` no-backend fallback both
+  // leave `spawner` undefined, in which case the runtime-info section
+  // stays single-path and the model treats `workspaceDir` as the one
+  // and only Workspace.
+  const innerSlicePath = spawner ? SLICE_WORKSPACE_PATH : undefined;
   const genieTools = buildGenieTools({
     workspaceDir,
     searchBackend,
@@ -1041,6 +1051,9 @@ async function* runMain(args) {
       ? []
       : ['bash', 'exec', 'git', 'files', 'memory', 'webFetch', 'webSearch'],
     ...(spawner ? { spawner } : {}),
+    ...(innerSlicePath !== undefined
+      ? { sliceWorkspacePath: innerSlicePath }
+      : {}),
     workspaceMount: workspaceMountForVFS,
   });
 
@@ -1060,6 +1073,9 @@ async function* runMain(args) {
     await makeGenieAgents({
       hostname: 'dev-repl',
       workspaceDir,
+      ...(innerSlicePath !== undefined
+        ? { sliceWorkspacePath: innerSlicePath }
+        : {}),
       tools: genieTools,
       config: { model: effectiveModel },
     });

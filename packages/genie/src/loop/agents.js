@@ -41,6 +41,14 @@ import { makeReflector } from '../reflector/index.js';
  *   - Hostname string passed through to `makePiAgent`.
  * @property {string} workspaceDir
  *   - Workspace root, relevant for any file tools.
+ * @property {string} [sliceWorkspacePath]
+ *   - When the agent's command-style tools are routed through a sandbox
+ *     slice that bind-mounts `workspaceDir` to a fixed path, the
+ *     slice-internal mount path (e.g. `/workspace`).  Threaded into
+ *     every `makePiAgent` call so the main and heartbeat agents'
+ *     system prompts advertise both the host workspace path (used by
+ *     daemon-side file / memory tools) and the slice-internal path
+ *     (used by `bash` / `exec` / `git`).  Omit when no slice is in use.
  * @property {GenieTools} tools
  *   - The pack re-uses `tools.listTools` / `tools.execTool` for the
  *     main/heartbeat agents and `tools.memoryTools` / `tools.searchBackend`
@@ -95,6 +103,7 @@ import { makeReflector } from '../reflector/index.js';
 export const makeGenieAgents = async ({
   hostname,
   workspaceDir,
+  sliceWorkspacePath,
   tools,
   config = {},
   makeAgent = makePiAgent,
@@ -113,10 +122,17 @@ export const makeGenieAgents = async ({
 
   const currentTime = new Date().toISOString();
 
+  // Thread `sliceWorkspacePath` into the main and heartbeat agents only:
+  // observer / reflector run daemon-side and never invoke command-style
+  // tools, so the slice asymmetry is irrelevant to their prompts.
+  const sliceArg =
+    sliceWorkspacePath !== undefined ? { sliceWorkspacePath } : {};
+
   const piAgent = await makeAgent({
     hostname,
     currentTime,
     workspaceDir,
+    ...sliceArg,
     model,
     listTools,
     execTool,
@@ -127,6 +143,7 @@ export const makeGenieAgents = async ({
         hostname,
         currentTime,
         workspaceDir,
+        ...sliceArg,
         model: heartbeatModel,
         listTools,
         execTool,
