@@ -219,6 +219,10 @@ PR #151 row-format unblocker; sibling of
 2026-05-10; impl landed via PR #187 closing issue #171),
 [cli-edit-verb](cli-edit-verb.md) (added 2026-05-08; sibling of PR #153
 `cli-store-verb-text-modes`; hashline patches for AI agents),
+[familiar-run-apps-vfs](familiar-run-apps-vfs.md) (added 2026-05-13;
+hosts and guests run applications out of mount caps; confined XS path
+uses npm-to-sqlite plus Go-style transitive resolution; host-eject path
+shells out to Node; POSIX-sandbox follow-up gated),
 [ocapn-noise-session-reconnect](ocapn-noise-session-reconnect.md) (added
 2026-05-14; amends [ocapn-noise-network](ocapn-noise-network.md) with a
 meta-TCP session layer per erights' 2026-05-14 framing on liveness and
@@ -335,6 +339,7 @@ LLM-agent stack).*
 | [exo-zip-package](exo-zip-package.md) | 2026-05-08 | 2026-05-08 | Proposed (PR #154 open questions resolved) |
 | [familiar-bundled-agents](familiar-bundled-agents.md) | 2026-03-02 | 2026-03-05 | **Complete** |
 | [familiar-chat-weblet-hosting](familiar-chat-weblet-hosting.md) | 2026-02-14 | 2026-02-26 | Not Started |
+| [familiar-run-apps-vfs](familiar-run-apps-vfs.md) | 2026-05-13 | 2026-05-15 | Proposed |
 | [familiar-daemon-bundling](familiar-daemon-bundling.md) | 2026-02-14 | 2026-03-05 | **Complete** |
 | [familiar-electron-shell](familiar-electron-shell.md) | 2026-02-14 | 2026-02-26 | **Complete** |
 | [familiar-gateway-migration](familiar-gateway-migration.md) | 2026-02-14 | 2026-02-26 | **Complete** |
@@ -722,6 +727,7 @@ capabilities available to agents.
 | daemon-capability-filesystem | Reference | `Dir`/`File` capabilities sketch retained as reference; narrower mount slice ships via daemon-mount |
 | ~~daemon-content-store-gc~~ | **Complete** | Content-store pruning and scratch-mount directory cleanup at GC time; landed in PR #99 |
 | daemon-mount | In Progress | Phases 1-3, 5 on `llm` (commit `e22f71327`); symlink confinement, 20 integration tests; Phase 4 (sub-mounts, snapshot) in PR #135 open, mount extensions in PR #127 open, `followNameChanges` in PR #277 open |
+| familiar-run-apps-vfs | Proposed | JS-side mirror of `endor` Form 3: hosts and guests run apps over mount caps; confined XS path uses a sqlite-backed module store and Go-style transitive resolution; host-eject path shells out to Node; POSIX-sandbox follow-up gated |
 | daemon-mount-capabilities | Proposed | Complete `EndoMount`: snapshot bridge, mount-scoped descriptors, `makeFile` sibling, entry overloads on `has`/`stat`/`lookup`, trusted backing provenance |
 | daemon-worker-import-from-mount | Proposed | **Integration layer** of a four-layer stack (decomposed 2026-06-02 per kriskowal CHANGES_REQUESTED on #358). `makeFromPackage(mountName)` daemon-worker entry that runs a `package.json`-rooted `EndoMount` through `compartment-mapper.importLocation`; this layer carries `makeFromMount` dispatcher, worker dispatch body, CLI shape, XS bridging, architecture diagram. Sibling of `daemon-make-archive` § Phase 7 (`makeFromTree` for `compartment-map.json`-rooted trees) |
 | registry-capability | Proposed | Layer 1 of 4. `EndoRegistry` capability shape, `@registry` host special name, snapshot-vs-live-read contract, two-backend roadmap (JS reference impl ships first, Rust drop-in deferred to Phase 5). Required `registry` slot on `HostFormula` with one-shot upgrade pass for already-formulated hosts (the `@node` migration precedent) |
@@ -1330,6 +1336,7 @@ have been remapped: 0 → 1, ½ → 2, 1 → 3, 2 → 4, 3 → 7, 4 → 9,
 | daemon-capability-filesystem | L | — | 3 | Reference sketch; narrower mount slice ships via daemon-mount |
 | ~~daemon-content-store-gc~~ | S | — | 3 | ✅ Complete (PR #99, ~2 days actual vs 1 day estimate) |
 | daemon-mount | M-L | 1.5 weeks | 3 | Mount exo, symlink confinement; Phase 4 in PR #135 forwarded under bot |
+| familiar-run-apps-vfs | L | 2-3 weeks | 3 | JS-side mirror of `endor` Form 3; sqlite-backed module store, Go-style transitive resolution, ad-hoc compartment map, host-eject path; depends on `daemon-mount`, `endor-npm-registry-proxy`, and `daemon-cas-management` |
 | daemon-worker-import-from-mount | S-M | 3-4 days | 3 | **Integration layer** of the four-layer stack (decomposed 2026-06-02). `makeFromPackage` host method + `makeFromMount` dispatcher + CLI `endo run <mount>` / `endo make <mount>` + XS bridging deferral. Driven by the three preceding layers (`registry-capability`, `mvs-resolver`, `snapshot-mapper`); first cut limited to MVS; lockfile honoring deferred. Does not depend on the Rust subsystem (separate lane). |
 | registry-capability | S-M | 3 days | 3 | Layer 1 of 4. `EndoRegistry` exo + `@registry` host special name + `HostFormula.registry` migration pass. Structured `@endo/errors` failure surface. JS reference backend default; Rust drop-in deferred to Phase 5 |
 | mvs-resolver | S-M | 3-4 days | 3 | Layer 2 of 4. JS reference MVS algorithm, eager single-pass resolution producing `RegistryResolution` (content-addressed `resolutionHash`). Multi-major coexistence under distinct `<name>@<version>` keys. Lockfile follow-up tracked as constraint-pass insertion point |
