@@ -188,7 +188,7 @@ const tableDecode = arrayTableDecode;
 // Deterministic PRNG: shared default seed across the hex/ocapn fuzz
 // suites; see `@endo/random/seeds.js`.
 const makeBytes = size => {
-  const fillRandomBytes = makeChaCha12(bobsCoffee64);
+  const { fillRandomBytes } = makeChaCha12(bobsCoffee64);
   const out = new Uint8Array(size);
   fillRandomBytes(out);
   return out;

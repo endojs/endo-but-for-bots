@@ -1,3 +1,3 @@
 // @ts-check
 
-export { makeChaCha12 } from './src/chacha12.js';
+export { makeChaCha12, makeChaCha12FromState } from './src/chacha12.js';

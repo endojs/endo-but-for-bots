@@ -17,7 +17,7 @@ const seedRev = (() => {
 })();
 
 /** @param {Uint8Array} seed */
-export const makeSource = seed => makeChaCha12(seed);
+export const makeSource = seed => makeChaCha12(seed).fillRandomBytes;
 
 export const seedA = seedAll;
 export const seedB = seedRev;

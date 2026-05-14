@@ -10,11 +10,25 @@
 // state add).  The only difference is the loop count: 6
 // double-rounds in ChaCha12 (= 12 rounds), 10 in ChaCha20.
 //
-// `makeChaCha12(key)` returns a `(out: Uint8Array) => void` function
-// matching the `RandomSource` shape from `@endo/random`: the caller
-// passes a buffer of any length and the keystream fills it.  The
-// function-shaped result also lines up with `crypto.getRandomValues`
-// (modulo the return value), so the two are interchangeable.
+// `makeChaCha12(key)` returns a `ChaCha12Generator` record with
+// `next`, `getState`, `clone`, and `fillRandomBytes` methods.  The
+// shape was chosen to align with `pure-rand` v8's `RandomGenerator`
+// interface (the contract `fast-check@4` uses to drive property-based
+// tests):
+//
+//   interface RandomGenerator {
+//     next(): number;                  // signed int32
+//     clone(): RandomGenerator;        // independent copy
+//     getState(): readonly number[];   // serializable snapshot
+//   }
+//
+// `fillRandomBytes(out)` is the pre-existing byte-keystream entry
+// point preserved for `@endo/random` and other consumers that want a
+// `(out: Uint8Array) => void` `RandomSource`.
+//
+// `makeChaCha12FromState(state)` reconstructs a generator at the
+// position recorded by a previous `getState()`, completing the
+// pure-rand convention of paired `xxxFromState(state)` factories.
 //
 // `chacha12Block(state, out)` and `chacha12State(key, nonce?,
 // counter?)` are exported for known-answer testing against
@@ -37,6 +51,14 @@ const C0 = 0x61707865;
 const C1 = 0x3320646e;
 const C2 = 0x79622d32;
 const C3 = 0x6b206574;
+
+// `getState()` shape: [16 base words, counter, offset, 16 block words].
+// Total length is 34 numbers.  Both the counter and the offset are
+// always present so the array shape is uniform regardless of whether
+// the generator is mid-block or block-aligned.  When `offset` is at
+// `BLOCK_SIZE` the trailing 16 block words are zero (the next call
+// will refill).
+const STATE_LENGTH = 34;
 
 const rotl = (x, n) => ((x << n) | (x >>> (32 - n))) >>> 0;
 
@@ -166,33 +188,50 @@ export const chacha12State = (key, nonce = undefined, counter = 0) => {
 harden(chacha12State);
 
 /**
- * Creates a ChaCha12-backed `RandomSource`: a function `(out:
- * Uint8Array) => void` that fills `out` with successive bytes of the
- * keystream produced by ChaCha12 with the supplied 32-byte key,
- * counter starting at 0, nonce all-zero.
- *
- * The function manages its own block buffer internally; callers may
- * request any number of bytes per call.  After `2 ** 32` blocks
- * (256 GiB of keystream) the counter would wrap; the function
- * throws `RangeError` instead.
- *
- * The returned function shape matches `crypto.getRandomValues` minus
- * the return value, and conforms to `@endo/random`'s `RandomSource`
- * type.
- *
- * `makeChaCha12` reads the key bytes once, into a private state
- * vector, and does not retain the supplied `Uint8Array` reference.
- * Callers do not need to defensively copy the key; passing a frozen
- * or shared key array is safe.
- *
- * @param {Uint8Array} key 32-byte key.
- * @returns {(out: Uint8Array) => void}
+ * @typedef {object} ChaCha12Generator
+ * @property {() => number} next Returns a signed 32-bit integer in
+ *   `[-0x80000000, 0x7fffffff]` drawn from the next 4 keystream
+ *   bytes (little-endian), advancing the keystream by 4 bytes.  This
+ *   matches the `pure-rand` v8 `RandomGenerator.next` contract.
+ * @property {() => readonly number[]} getState Returns a serializable
+ *   snapshot of the generator's full state: `[base0..base15, counter,
+ *   offset, block0..block15]`, 34 numbers in total.  Pass to
+ *   `makeChaCha12FromState` to reconstruct an independent generator
+ *   that produces the same subsequent keystream.
+ * @property {() => ChaCha12Generator} clone Returns a fully
+ *   independent generator at the same keystream position.  Calling
+ *   `next` / `fillRandomBytes` on the clone does not affect this
+ *   generator and vice versa.
+ * @property {(out: Uint8Array) => void} fillRandomBytes Fills `out`
+ *   with successive bytes of the keystream.  Conforms to
+ *   `@endo/random`'s `RandomSource` and to `crypto.getRandomValues`
+ *   (minus the return value), so this method is interchangeable with
+ *   either as a byte source.
  */
-export const makeChaCha12 = key => {
-  const baseState = chacha12State(key);
-  const block = new Uint8Array(BLOCK_SIZE);
-  let offset = BLOCK_SIZE; // empty; first call refills.
-  let counter = 0;
+
+// Internal builder shared by `makeChaCha12` and
+// `makeChaCha12FromState`.  Takes the three pieces of mutable state
+// (base, counter, offset) plus the current block buffer (which may
+// be empty when offset === BLOCK_SIZE) and returns the public
+// generator.
+/**
+ * @param {Uint32Array} baseState 16 u32 words, ownership transferred
+ *   to the generator (must not be retained by the caller).
+ * @param {number} initialCounter
+ * @param {number} initialOffset
+ * @param {Uint8Array} initialBlock 64 bytes, ownership transferred
+ *   (must not be retained by the caller).
+ * @returns {ChaCha12Generator}
+ */
+const makeGenerator = (
+  baseState,
+  initialCounter,
+  initialOffset,
+  initialBlock,
+) => {
+  let counter = initialCounter;
+  let offset = initialOffset;
+  const block = initialBlock;
 
   const refill = () => {
     // Correctness guard at 256 GiB of keystream; not test-reachable.
@@ -224,6 +263,138 @@ export const makeChaCha12 = key => {
     }
   };
 
-  return harden(fillRandomBytes);
+  // 32-bit signed integer reader.  Pulls 4 little-endian bytes from
+  // the keystream and reinterprets them as int32 with `| 0`.  This is
+  // the `pure-rand` v8 `next()` contract: values in
+  // `[-0x80000000, 0x7fffffff]`, mutating the generator state.
+  const next = () => {
+    if (offset + 4 <= BLOCK_SIZE) {
+      // Hot path: 4 bytes available in the current block.
+      const b0 = block[offset];
+      const b1 = block[offset + 1];
+      const b2 = block[offset + 2];
+      const b3 = block[offset + 3];
+      offset += 4;
+      return b0 | (b1 << 8) | (b2 << 16) | (b3 << 24) | 0;
+    }
+    // Slow path: spans a block boundary (or starts at the boundary).
+    // Defer to `fillRandomBytes` so the cross-block plumbing lives in
+    // exactly one place.
+    const buf = new Uint8Array(4);
+    fillRandomBytes(buf);
+    return buf[0] | (buf[1] << 8) | (buf[2] << 16) | (buf[3] << 24) | 0;
+  };
+
+  const getState = () => {
+    const snapshot = new Array(STATE_LENGTH);
+    for (let i = 0; i < 16; i += 1) snapshot[i] = baseState[i];
+    snapshot[16] = counter;
+    snapshot[17] = offset;
+    // Block buffer encoded as 16 little-endian u32 words.  When
+    // `offset === BLOCK_SIZE` the block bytes are unused but we copy
+    // them anyway to keep the array shape uniform; the
+    // reconstruction path will then refill on first use.
+    for (let i = 0; i < 16; i += 1) {
+      const off = i * 4;
+      snapshot[18 + i] =
+        (block[off] |
+          (block[off + 1] << 8) |
+          (block[off + 2] << 16) |
+          (block[off + 3] << 24)) >>>
+        0;
+    }
+    return harden(snapshot);
+  };
+
+  const clone = () => {
+    const baseCopy = new Uint32Array(16);
+    for (let i = 0; i < 16; i += 1) baseCopy[i] = baseState[i];
+    const blockCopy = new Uint8Array(BLOCK_SIZE);
+    for (let i = 0; i < BLOCK_SIZE; i += 1) blockCopy[i] = block[i];
+    return makeGenerator(baseCopy, counter, offset, blockCopy);
+  };
+
+  return harden({ next, getState, clone, fillRandomBytes });
+};
+
+/**
+ * Creates a ChaCha12-backed `RandomGenerator` keyed by `key`, with
+ * counter starting at 0 and an all-zero nonce.
+ *
+ * The returned `ChaCha12Generator` exposes both the `pure-rand` v8
+ * `RandomGenerator` interface (`next` / `clone` / `getState`) and the
+ * pre-existing byte-fill `fillRandomBytes` method that conforms to
+ * `@endo/random`'s `RandomSource` and `crypto.getRandomValues`-style
+ * ergonomics.  Callers can pick whichever entry point matches the
+ * downstream consumer.
+ *
+ * After `2 ** 32` blocks (256 GiB of keystream) the counter would
+ * wrap; the generator throws `RangeError` instead.
+ *
+ * `makeChaCha12` reads the key bytes once, into a private state
+ * vector, and does not retain the supplied `Uint8Array` reference.
+ * Callers do not need to defensively copy the key; passing a frozen
+ * or shared key array is safe.
+ *
+ * @param {Uint8Array} key 32-byte key.
+ * @returns {ChaCha12Generator}
+ */
+export const makeChaCha12 = key => {
+  const baseState = chacha12State(key);
+  const block = new Uint8Array(BLOCK_SIZE);
+  // First call refills.  Empty mid-block buffer is represented by
+  // offset === BLOCK_SIZE.
+  return makeGenerator(baseState, 0, BLOCK_SIZE, block);
 };
 harden(makeChaCha12);
+
+/**
+ * Reconstructs a `ChaCha12Generator` from a state snapshot returned
+ * by a previous `getState()` call.  The reconstructed generator
+ * produces exactly the same subsequent keystream as the generator
+ * whose state was captured, and is fully independent of any other
+ * generator (including the original).
+ *
+ * The state shape is `[base0..base15, counter, offset,
+ * block0..block15]`, 34 numbers total: 16 u32 base-state words, the
+ * next-block counter, the byte offset within the current block
+ * (0..64), and 16 u32 words encoding the 64-byte current block
+ * (little-endian).  When `offset === BLOCK_SIZE` the block words are
+ * unused (the next read refills); they are included for shape
+ * uniformity.
+ *
+ * Throws `TypeError` for malformed state.
+ *
+ * @param {readonly number[]} state
+ * @returns {ChaCha12Generator}
+ */
+export const makeChaCha12FromState = state => {
+  if (!Array.isArray(state) || state.length !== STATE_LENGTH) {
+    throw TypeError(
+      `chacha12 state must be a ${STATE_LENGTH}-element number array`,
+    );
+  }
+  const offset = Number(state[17]);
+  if (!Number.isInteger(offset) || offset < 0 || offset > BLOCK_SIZE) {
+    throw TypeError(
+      `chacha12 state offset must be an integer in [0, ${BLOCK_SIZE}]`,
+    );
+  }
+  const counter = Number(state[16]);
+  if (!Number.isInteger(counter) || counter < 0 || counter > 0xffffffff) {
+    throw TypeError('chacha12 state counter must be a u32 integer');
+  }
+  const baseState = new Uint32Array(16);
+  for (let i = 0; i < 16; i += 1) baseState[i] = state[i] >>> 0;
+  const block = new Uint8Array(BLOCK_SIZE);
+  for (let i = 0; i < 16; i += 1) {
+    const w = state[18 + i] >>> 0;
+    const off = i * 4;
+    block[off] = w & 0xff;
+    block[off + 1] = (w >>> 8) & 0xff;
+    block[off + 2] = (w >>> 16) & 0xff;
+    block[off + 3] = (w >>> 24) & 0xff;
+  }
+  return makeGenerator(baseState, counter, offset, block);
+};
+harden(makeChaCha12FromState);

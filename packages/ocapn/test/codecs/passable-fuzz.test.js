@@ -124,7 +124,7 @@ function fuzzyPassable(budget, random) {
 
 // Default seed shared across the hex/ocapn fuzz suites; see
 // `@endo/random/seeds.js`.
-const source = makeChaCha12(bobsCoffee64);
+const source = makeChaCha12(bobsCoffee64).fillRandomBytes;
 const randomNumber = () => randomFloat(source);
 
 /**

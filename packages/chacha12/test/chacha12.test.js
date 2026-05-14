@@ -1,8 +1,15 @@
 // @ts-check
+/* eslint no-bitwise: ["off"] */
 
 import test from '@endo/ses-ava/test.js';
 
-import { chacha12Block, chacha12State, makeChaCha12 } from '../src/chacha12.js';
+import {
+  BLOCK_SIZE,
+  chacha12Block,
+  chacha12State,
+  makeChaCha12,
+  makeChaCha12FromState,
+} from '../src/chacha12.js';
 
 // Inline hex helpers: `@endo/hex` already depends on `@endo/chacha12`
 // in this workspace, so chacha12 cannot devDep on hex without a
@@ -137,9 +144,9 @@ test('makeChaCha12 rejects bad keys', t => {
 });
 
 test('makeChaCha12 first 64 bytes match Strombergson TC1 block 0', t => {
-  const fillRandomBytes = makeChaCha12(new Uint8Array(32));
+  const gen = makeChaCha12(new Uint8Array(32));
   const out = new Uint8Array(64);
-  fillRandomBytes(out);
+  gen.fillRandomBytes(out);
   const expected = fromHex(
     '9bf49a6a 0755f953 811fce12 5f2683d5' +
       ' 0429c3bb 49e07414 7e0089a5 2eae155f' +
@@ -152,11 +159,11 @@ test('makeChaCha12 first 64 bytes match Strombergson TC1 block 0', t => {
 test('makeChaCha12 advances across blocks monotonically', t => {
   const key = new Uint8Array(32);
   for (let i = 0; i < 32; i += 1) key[i] = i;
-  const fillRandomBytes = makeChaCha12(key);
+  const gen = makeChaCha12(key);
   const a = new Uint8Array(64);
   const b = new Uint8Array(64);
-  fillRandomBytes(a);
-  fillRandomBytes(b);
+  gen.fillRandomBytes(a);
+  gen.fillRandomBytes(b);
   t.not(encodeHex(a), encodeHex(b));
 });
 
@@ -167,13 +174,13 @@ test('makeChaCha12 fills any length, crossing block boundaries', t => {
   const key = new Uint8Array(32);
   for (let i = 0; i < 32; i += 1) key[i] = i;
   const single = new Uint8Array(192);
-  makeChaCha12(key)(single);
-  const fillTwin = makeChaCha12(key);
+  makeChaCha12(key).fillRandomBytes(single);
+  const twin = makeChaCha12(key);
   const piecewise = new Uint8Array(192);
   let off = 0;
   for (const n of [7, 57, 64, 32, 32]) {
     const chunk = piecewise.subarray(off, off + n);
-    fillTwin(chunk);
+    twin.fillRandomBytes(chunk);
     off += n;
   }
   t.is(off, 192);
@@ -203,16 +210,185 @@ test('chacha12State validates key and nonce', t => {
   });
 });
 
-test('makeChaCha12 result is a Uint8Array-filling function', t => {
-  // Compile-time check that the function returned by makeChaCha12
-  // matches `@endo/random`'s `RandomSource` shape (a function `(out:
-  // Uint8Array) => void`).  We restate the type locally because
-  // chacha12 cannot devDepend on @endo/random without a cycle (random
-  // already devDeps on chacha12).  tsc rejects this assignment if
-  // the shape ever drifts.
+test('makeChaCha12 fillRandomBytes matches @endo/random RandomSource shape', t => {
+  // Compile-time check that the `fillRandomBytes` method on the
+  // generator matches `@endo/random`'s `RandomSource` shape (a
+  // function `(out: Uint8Array) => void`).  We restate the type
+  // locally because chacha12 cannot devDepend on @endo/random
+  // without a cycle (random already devDeps on chacha12).  tsc
+  // rejects this assignment if the shape ever drifts.
   /** @type {(out: Uint8Array) => void} */
-  const fillRandomBytes = makeChaCha12(new Uint8Array(32));
+  const fillRandomBytes = makeChaCha12(new Uint8Array(32)).fillRandomBytes;
   const out = new Uint8Array(8);
   fillRandomBytes(out);
   t.is(out.length, 8);
+});
+
+// `getState` / `clone` / `makeChaCha12FromState` together implement
+// the keystream-introspection surface required by `pure-rand` v8's
+// `RandomGenerator` contract (and adjacent fast-check use).  The
+// tests below validate the round-trip and clone-independence
+// properties that contract requires.
+
+test('next returns a signed int32 in [-0x80000000, 0x7fffffff]', t => {
+  const gen = makeChaCha12(new Uint8Array(32));
+  for (let i = 0; i < 100; i += 1) {
+    const v = gen.next();
+    t.is(typeof v, 'number');
+    t.is(v | 0, v, 'next() result is int32');
+    t.true(v >= -0x80000000);
+    t.true(v <= 0x7fffffff);
+  }
+});
+
+test('next reads the same little-endian u32 sequence as fillRandomBytes', t => {
+  const key = new Uint8Array(32);
+  for (let i = 0; i < 32; i += 1) key[i] = i + 1;
+  const a = makeChaCha12(key);
+  const b = makeChaCha12(key);
+  const buf = new Uint8Array(4);
+  for (let i = 0; i < 50; i += 1) {
+    b.fillRandomBytes(buf);
+    const expected =
+      buf[0] | (buf[1] << 8) | (buf[2] << 16) | (buf[3] << 24) | 0;
+    t.is(a.next(), expected, `index ${i}`);
+  }
+});
+
+test('next correctly crosses a block boundary', t => {
+  // Drain to within 2 bytes of a block boundary, then call `next()`
+  // (which needs 4) and confirm the result matches the
+  // byte-equivalent draw from a parallel fresh generator.
+  const key = new Uint8Array(32);
+  for (let i = 0; i < 32; i += 1) key[i] = (i * 7) & 0xff;
+  const a = makeChaCha12(key);
+  const b = makeChaCha12(key);
+  // Drain 62 bytes from `a`; the next `next()` call spans bytes
+  // [62, 63, 64, 65] which crosses into block 1.
+  const drain = new Uint8Array(62);
+  a.fillRandomBytes(drain);
+  // Drain the same 62 bytes from `b`, then read a 4-byte int the
+  // long way and compare.
+  b.fillRandomBytes(drain);
+  const four = new Uint8Array(4);
+  b.fillRandomBytes(four);
+  const expected =
+    four[0] | (four[1] << 8) | (four[2] << 16) | (four[3] << 24) | 0;
+  t.is(a.next(), expected);
+});
+
+test('getState / makeChaCha12FromState round-trip reproduces the keystream', t => {
+  const key = new Uint8Array(32);
+  for (let i = 0; i < 32; i += 1) key[i] = i;
+  const original = makeChaCha12(key);
+  // Advance by an irregular amount: 70 bytes (mid-block 2), then
+  // capture state.
+  const skip = new Uint8Array(70);
+  original.fillRandomBytes(skip);
+  const snapshot = original.getState();
+  // Snapshot is a plain serializable readonly array.
+  t.true(Array.isArray(snapshot));
+  t.is(snapshot.length, 34);
+  for (const v of snapshot) {
+    t.is(typeof v, 'number');
+  }
+  // JSON round-trip survives.
+  const json = JSON.stringify(snapshot);
+  const restored = makeChaCha12FromState(JSON.parse(json));
+  // Subsequent draws agree byte-for-byte.
+  const a = new Uint8Array(200);
+  const b = new Uint8Array(200);
+  original.fillRandomBytes(a);
+  restored.fillRandomBytes(b);
+  t.deepEqual([...a], [...b]);
+});
+
+test('getState round-trip works at every offset across a block boundary', t => {
+  // For every offset 0..64, snapshot-and-restore must yield the
+  // same subsequent stream as the unsnapshot original.  This guards
+  // against off-by-one errors at the block boundary in the snapshot
+  // shape (offset === BLOCK_SIZE is the "empty / next call refills"
+  // sentinel and must round-trip correctly too).
+  const key = new Uint8Array(32);
+  for (let i = 0; i < 32; i += 1) key[i] = (0xff - i) & 0xff;
+  for (let pre = 0; pre <= BLOCK_SIZE; pre += 1) {
+    const a = makeChaCha12(key);
+    const b = makeChaCha12(key);
+    if (pre > 0) {
+      const skip = new Uint8Array(pre);
+      a.fillRandomBytes(skip);
+      b.fillRandomBytes(skip);
+    }
+    const restored = makeChaCha12FromState(a.getState());
+    const x = new Uint8Array(150);
+    const y = new Uint8Array(150);
+    b.fillRandomBytes(x);
+    restored.fillRandomBytes(y);
+    t.deepEqual([...x], [...y], `pre=${pre}`);
+  }
+});
+
+test('clone produces an independent generator', t => {
+  const key = new Uint8Array(32);
+  for (let i = 0; i < 32; i += 1) key[i] = i * 3;
+  const a = makeChaCha12(key);
+  // Advance original by a non-block-aligned amount.
+  const skip = new Uint8Array(13);
+  a.fillRandomBytes(skip);
+  const b = a.clone();
+  // Both generators yield the same bytes from this point.
+  const x = new Uint8Array(100);
+  const y = new Uint8Array(100);
+  a.fillRandomBytes(x);
+  b.fillRandomBytes(y);
+  t.deepEqual([...x], [...y]);
+  // Subsequent draws on `a` do not affect `b`.
+  const xMore = new Uint8Array(50);
+  const yMore = new Uint8Array(50);
+  a.fillRandomBytes(xMore);
+  // `b` should still be at position +100 from its clone time, same
+  // as `a` was before the latest draw.
+  b.fillRandomBytes(yMore);
+  t.deepEqual([...xMore], [...yMore]);
+});
+
+test('clone interleaves: alternating next() on parent and clone yields a paired run', t => {
+  // A typical fast-check shrinking-style use: snapshot a generator,
+  // explore one branch, then resume the other branch from the
+  // clone.  The two branches must each produce the same prefix that
+  // a single uninterrupted run would have produced.
+  const key = new Uint8Array(32);
+  for (let i = 0; i < 32; i += 1) key[i] = (i ^ 0x5a) & 0xff;
+  const a = makeChaCha12(key);
+  const reference = makeChaCha12(key);
+  const b = a.clone();
+  const refSeq = [];
+  for (let i = 0; i < 16; i += 1) refSeq.push(reference.next());
+  const aSeq = [];
+  for (let i = 0; i < 16; i += 1) aSeq.push(a.next());
+  const bSeq = [];
+  for (let i = 0; i < 16; i += 1) bSeq.push(b.next());
+  t.deepEqual(aSeq, refSeq);
+  t.deepEqual(bSeq, refSeq);
+});
+
+test('makeChaCha12FromState rejects malformed states', t => {
+  t.throws(() => makeChaCha12FromState(/** @type {any} */ (null)), {
+    instanceOf: TypeError,
+  });
+  t.throws(() => makeChaCha12FromState(/** @type {any} */ ('not an array')), {
+    instanceOf: TypeError,
+  });
+  t.throws(() => makeChaCha12FromState([]), { instanceOf: TypeError });
+  t.throws(() => makeChaCha12FromState(new Array(33).fill(0)), {
+    instanceOf: TypeError,
+  });
+  // Bad offset (out of range).
+  const bad = new Array(34).fill(0);
+  bad[17] = 65;
+  t.throws(() => makeChaCha12FromState(bad), { instanceOf: TypeError });
+  // Bad counter (negative).
+  bad[17] = 0;
+  bad[16] = -1;
+  t.throws(() => makeChaCha12FromState(bad), { instanceOf: TypeError });
 });

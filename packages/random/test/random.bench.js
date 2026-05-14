@@ -115,7 +115,7 @@ const runBench = () => {
     );
   }
   {
-    const fillRandomBytes = makeChaCha12(Uint8Array.from(seedBytes));
+    const { fillRandomBytes } = makeChaCha12(Uint8Array.from(seedBytes));
     const out = new Uint8Array(N);
     bulk.chacha12 = time('chacha12 (12 rounds)', ITERS_BYTES, () =>
       fillRandomBytes(out),
@@ -147,7 +147,9 @@ const runBench = () => {
     );
   }
   {
-    const source = makeChaCha12(Uint8Array.from(seedBytes));
+    const { fillRandomBytes: source } = makeChaCha12(
+      Uint8Array.from(seedBytes),
+    );
     printRow(
       time('chacha12 (12 rounds)', 1, () => {
         for (let i = 0; i < ITERS_RANDOM; i += 1) random(source);
@@ -176,7 +178,9 @@ const runBench = () => {
     );
   }
   {
-    const source = makeChaCha12(Uint8Array.from(seedBytes));
+    const { fillRandomBytes: source } = makeChaCha12(
+      Uint8Array.from(seedBytes),
+    );
     printRow(
       time('chacha12 (12 rounds)', 1, () => {
         for (let i = 0; i < ITERS_INT; i += 1) randomInt(source, 0, 99);

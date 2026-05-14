@@ -41,8 +41,9 @@ type RandomSource = (out: Uint8Array) => void;
 A `RandomSource` writes random bytes into `out`.  Implementations
 MUST mutate the buffer in place and MUST NOT retain the buffer
 reference after the call returns.  Block-stream PRNGs such as
-`@endo/chacha12` conform directly: `makeChaCha12(seed)` returns a
-function with this exact shape, internally managing block buffering.
+`@endo/chacha12` provide this shape via the `fillRandomBytes`
+method on the `ChaCha12Generator` returned by `makeChaCha12(seed)`,
+internally managing block buffering.
 
 ## Subpath exports
 
