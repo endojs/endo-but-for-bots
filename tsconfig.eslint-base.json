@@ -9,6 +9,7 @@
     "verbatimModuleSyntax": true,
     "moduleResolution": "NodeNext",
     "noImplicitAny": false,
+    "skipLibCheck": true,
     "types": ["node"],
   },
   "include": [],
