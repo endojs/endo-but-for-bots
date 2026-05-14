@@ -2,14 +2,14 @@
 
 import harden from '@endo/harden';
 
-import { randomUint53 } from './read-uint.js';
+import { randomUint53 } from './uint.js';
 
 // 1 / 2 ** 53.  Multiplying a 53-bit non-negative integer by this
 // produces a float in [0, 1) using deterministic integer arithmetic,
 // so the same seed produces the same float across runs and engines.
 const POW2_M53 = 1.1102230246251565e-16; // = 2 ** -53
 
-/** @typedef {import('../random.types.d.ts').RandomSource} RandomSource */
+/** @import { RandomSource } from '../types.d.ts' */
 
 /**
  * Returns a float in `[0, 1)`.

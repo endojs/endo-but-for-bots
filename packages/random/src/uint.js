@@ -21,7 +21,7 @@
 
 import harden from '@endo/harden';
 
-/** @typedef {import('../random.types.d.ts').RandomSource} RandomSource */
+/** @import { RandomSource } from '../types.d.ts' */
 
 const BUF1 = new Uint8Array(1);
 

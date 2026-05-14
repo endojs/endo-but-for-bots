@@ -9,9 +9,9 @@ import {
   randomUint24,
   randomUint32,
   randomUint53,
-} from './read-uint.js';
+} from './uint.js';
 
-/** @typedef {import('../random.types.d.ts').RandomSource} RandomSource */
+/** @import { RandomSource } from '../types.d.ts' */
 
 /**
  * Returns a uniformly distributed integer in the closed interval

@@ -52,7 +52,7 @@ internally managing block buffering.
 | `@endo/random` | `random`, `randomInt`, `randomUint8`, `randomUint16`, `randomUint24`, `randomUint32`, `randomUint53` |
 | `@endo/random/random.js` | `random` |
 | `@endo/random/int.js` | `randomInt` |
-| `@endo/random/read-uint.js` | `randomUint8`, `randomUint16`, `randomUint24`, `randomUint32`, `randomUint53` |
+| `@endo/random/uint.js` | `randomUint8`, `randomUint16`, `randomUint24`, `randomUint32`, `randomUint53` |
 | `@endo/random/seeds.js` | `bobsCoffee64` (canonical 32-byte fuzz seed) |
 
 A `fast-check` / `pure-rand` `RandomGenerator` adapter for these

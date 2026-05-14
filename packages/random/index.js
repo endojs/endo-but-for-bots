@@ -8,4 +8,4 @@ export {
   randomUint24,
   randomUint32,
   randomUint53,
-} from './src/read-uint.js';
+} from './src/uint.js';

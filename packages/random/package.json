@@ -27,7 +27,7 @@
     ".": "./index.js",
     "./random.js": "./random.js",
     "./int.js": "./int.js",
-    "./read-uint.js": "./read-uint.js",
+    "./uint.js": "./uint.js",
     "./seeds.js": "./seeds.js",
     "./package.json": "./package.json"
   },
