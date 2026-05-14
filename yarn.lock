@@ -566,7 +566,6 @@ __metadata:
   dependencies:
     "@endo/bundle-source": "workspace:^"
     "@endo/bytes": "workspace:^"
-    "@endo/compartment-mapper": "workspace:^"
     "@endo/daemon": "workspace:^"
     "@endo/errors": "workspace:^"
     "@endo/eventual-send": "workspace:^"
