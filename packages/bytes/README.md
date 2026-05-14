@@ -10,9 +10,6 @@ and SES-locked compartments
 This package is the canonical home for the `Uint8Array` helpers that
 those realms share.
 
-See `designs/endo-bytes.md` for the audit of pre-existing duplicates
-and the rationale for the API surface.
-
 ## Install
 
 ```sh
@@ -101,7 +98,7 @@ methods.
 
 Every export is hardened.
 The `TextEncoder` and `TextDecoder` instances backing `bytesFromText`
-and `bytesToText` are captured once at module load and frozen, so
-post-lockdown mutation of the corresponding globals cannot redirect the
-dispatched calls.
+and `bytesToText` are captured once at module load, so post-lockdown
+mutation of the corresponding globals cannot redirect the dispatched
+calls.
 The modules have no other mutable state.
