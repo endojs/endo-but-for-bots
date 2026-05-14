@@ -24,27 +24,33 @@ import { randomInt } from '@endo/random/int.js';
 The package also ships:
 
 - `@endo/random/fast-check.js` -- bidirectional adapters between
-  `RandomSource` and `pure-rand`'s `RandomGenerator` (the contract
-  `fast-check` uses via the `randomType` parameter), plus a
-  `randomType` builder.  Imports nothing from `pure-rand` or
-  `fast-check`; depends only on those interfaces being structurally
-  compatible.
+  `RandomSource` and `pure-rand` v8's `RandomGenerator` (the
+  contract `fast-check` v4 consumes via the `randomType`
+  parameter), plus a `randomType` builder.  Imports nothing from
+  `pure-rand` or `fast-check`; depends only on those interfaces
+  being structurally compatible.
 - `@endo/random/seeds.js` -- the canonical `bobsCoffee64` 32-byte
   seed, shared across Endo deterministic fuzz suites.
 
 Add `@endo/chacha12`: a pure-JavaScript ChaCha12 keystream.  The
-factory `makeChaCha12(key)` returns a `(out: Uint8Array) => void`
-function that conforms to `@endo/random`'s `RandomSource` and to
-`crypto.getRandomValues`-style ergonomics; pass it directly to the
-samplers.  The keystream is cross-checked against three published
-ChaCha12 test vectors from
+factory `makeChaCha12(key)` returns a `ChaCha12Generator` record
+`{ next, getState, clone, fillRandomBytes }`.  The
+`fillRandomBytes` method has the shape
+`(out: Uint8Array) => void`, conforming to `@endo/random`'s
+`RandomSource` and to `crypto.getRandomValues`-style ergonomics; it
+can be passed directly to the samplers.  The remaining methods
+expose the keystream's internal state (snapshot via `getState`,
+independent copy via `clone`, signed-int32 pull via `next`) so the
+generator satisfies `pure-rand` v8's `RandomGenerator` interface
+structurally, driving `fast-check` v4's `randomType` parameter
+without a separate adapter.  A companion
+`makeChaCha12FromState(state)` reconstructs a generator from a
+snapshot for deterministic resumption.
+
+The keystream is cross-checked against three published ChaCha12
+test vectors from
 [`draft-strombergson-chacha-test-vectors-01`](https://datatracker.ietf.org/doc/html/draft-strombergson-chacha-test-vectors-01)
 (TC1, TC4, TC8).
-
-Rewires the `@endo/hex` encode/decode benchmarks and the
-`@endo/ocapn` syrup and passable fuzz tests to draw deterministic
-bytes from `@endo/chacha12` directly, using the shared seed from
-`@endo/random/seeds.js`.
 
 ChaCha12 is the 12-round variant of Daniel J. Bernstein's ChaCha
 family.  The block function is identical to ChaCha20 modulo the
