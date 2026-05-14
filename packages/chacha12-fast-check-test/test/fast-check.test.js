@@ -23,7 +23,7 @@ import {
   makeChaCha12,
   makeChaCha12FromState,
   makeChaCha12RandomType,
-} from '../index.js';
+} from './_random-type.js';
 
 test('fast-check accepts ChaCha12Generator as a randomType source', t => {
   const randomType = makeChaCha12RandomType();

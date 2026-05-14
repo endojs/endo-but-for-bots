@@ -22,10 +22,7 @@
     "url": "https://github.com/endojs/endo/issues"
   },
   "type": "module",
-  "main": "./index.js",
-  "module": "./index.js",
   "exports": {
-    ".": "./index.js",
     "./package.json": "./package.json"
   },
   "scripts": {
