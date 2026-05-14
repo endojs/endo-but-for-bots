@@ -43,6 +43,36 @@ harden(item1);
 harden(item2);
     `,
   },
+  {
+    code: `
+export const { wrapper: { propName } } = objWithWrapper;
+harden(propName);
+    `,
+  },
+  {
+    code: `
+export const { wrapper: { propName: exportName } } = objWithWrapper;
+harden(exportName);
+    `,
+  },
+  {
+    code: `
+export const [{ wrapper: { propName: exportName } }] = [objWithWrapper];
+harden(exportName);
+    `,
+  },
+  {
+    code: `
+export const [[deepItem]] = [[fn]];
+harden(deepItem);
+    `,
+  },
+  {
+    code: `
+export const { wrapper: { propName = defaultValue } } = objWithWrapper;
+harden(propName);
+    `,
+  },
 ];
 
 const invalid = [
@@ -223,6 +253,36 @@ harden(item1);
 export const [ item1, item2 ] = [fn1, fn2];
 harden(item2);
 harden(item1);
+    `,
+  },
+  {
+    code: `
+export const { wrapper: { propName } } = objWithWrapper;
+    `,
+    errors: [
+      {
+        message:
+          "Named export 'propName' should be followed by a call to 'harden'.",
+      },
+    ],
+    output: `
+export const { wrapper: { propName } } = objWithWrapper;
+harden(propName);
+    `,
+  },
+  {
+    code: `
+export const [{ wrapper: { propName: exportName } }] = [objWithWrapper];
+    `,
+    errors: [
+      {
+        message:
+          "Named export 'exportName' should be followed by a call to 'harden'.",
+      },
+    ],
+    output: `
+export const [{ wrapper: { propName: exportName } }] = [objWithWrapper];
+harden(exportName);
     `,
   },
 ];

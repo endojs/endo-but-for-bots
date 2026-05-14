@@ -35,6 +35,49 @@ module.exports = {
     /** @type {Array<ESTree.ExportNamedDeclaration & Rule.NodeParentExtension>} */
     const exportNodes = [];
 
+    /**
+     * Recursively collect the identifier names introduced by a destructuring
+     * pattern, an assignment pattern, or a bare identifier. Nested
+     * ObjectPattern / ArrayPattern values are walked so shapes like
+     * `{ wrapper: { propName } }` and `[{ wrapper: { propName: exportName } }]`
+     * contribute the inner identifier names.
+     * @param {ESTree.Node | null} node
+     * @param {string[]} acc
+     */
+    function collectPatternNames(node, acc) {
+      if (!node) return;
+      switch (node.type) {
+        case 'Identifier':
+          acc.push(node.name);
+          break;
+        case 'AssignmentPattern':
+          collectPatternNames(node.left, acc);
+          break;
+        case 'ObjectPattern':
+          for (const prop of node.properties) {
+            if (prop.type === 'RestElement') {
+              console.warn('Rest elements are not supported');
+            } else {
+              collectPatternNames(prop.value, acc);
+            }
+          }
+          break;
+        case 'ArrayPattern':
+          for (const element of node.elements) {
+            if (element && element.type === 'RestElement') {
+              console.warn('Rest elements are not supported');
+            } else {
+              collectPatternNames(element, acc);
+            }
+          }
+          break;
+        default:
+          // Other node types (MemberExpression in nested assignment targets,
+          // etc.) do not introduce a new binding; ignore them.
+          break;
+      }
+    }
+
     return {
       /** @param {ESTree.ExportNamedDeclaration & Rule.NodeParentExtension} node */
       ExportNamedDeclaration(node) {
@@ -49,30 +92,7 @@ module.exports = {
           if (exportNode.declaration) {
             if (exportNode.declaration.type === 'VariableDeclaration') {
               for (const declaration of exportNode.declaration.declarations) {
-                if (declaration.id.type === 'ObjectPattern') {
-                  for (const prop of declaration.id.properties) {
-                    if (prop.type === 'RestElement') {
-                      console.warn('Rest elements are not supported');
-                      continue;
-                    }
-                    if (prop.value.type === 'Identifier') {
-                      exportNames.push(prop.value.name);
-                    } else if (
-                      prop.value.type === 'AssignmentPattern' &&
-                      prop.value.left.type === 'Identifier'
-                    ) {
-                      exportNames.push(prop.value.left.name);
-                    }
-                  }
-                } else if (declaration.id.type === 'ArrayPattern') {
-                  for (const element of declaration.id.elements) {
-                    if (element && element.type === 'Identifier') {
-                      exportNames.push(element.name);
-                    }
-                  }
-                } else if (declaration.id.type === 'Identifier') {
-                  exportNames.push(declaration.id.name);
-                }
+                collectPatternNames(declaration.id, exportNames);
               }
             } else if (exportNode.declaration.type === 'FunctionDeclaration') {
               const nodeName = exportNode.declaration.id?.name ?? '<missing>';
