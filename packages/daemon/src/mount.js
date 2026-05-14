@@ -647,8 +647,9 @@ const makeMountExo = ctx => {
           )}`,
         );
       }
+      const targetReal = await filePowers.realPath(target);
       // A genuine confinement shift: the sub-view's own `confinementRoot`
-      // is `target`, so `..` clamps at the sub-view root and cannot reach
+      // is the target realpath, so `..` clamps at the sub-view root and cannot reach
       // the parent mount's siblings or root. This is unlike a `lookup`
       // sub-handle, which deliberately inherits the mount's
       // `confinementRoot` for in-mount navigation. For a *persisted*
@@ -664,9 +665,9 @@ const makeMountExo = ctx => {
       // working.
       return makeMountExo({
         ...ctx,
-        currentDir: target,
+        currentDir: targetReal,
         currentSegments: [],
-        confinementRoot: target,
+        confinementRoot: targetReal,
         rootId: harden({}),
         description: `Subview of ${description}`,
       });
@@ -801,7 +802,7 @@ const makeMountExo = ctx => {
       const segments = subpath.split('/').filter(s => s.length > 0);
       for (const seg of segments) {
         if (seg === '..' || seg === '.') {
-          throw new Error(`Invalid subDir segment: ${seg}`);
+          throw new Error(`Invalid subDir segment: ${q(seg)}`);
         }
       }
       return this.self.subView(segments); // eslint-disable-line no-invalid-this
