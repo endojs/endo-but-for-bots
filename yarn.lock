@@ -793,6 +793,7 @@ __metadata:
     eslint-plugin-import: "catalog:dev"
     prettier: "npm:^3.5.3"
     ses: "workspace:^"
+    tsd: "catalog:dev"
     typescript: "catalog:dev"
   languageName: unknown
   linkType: soft
