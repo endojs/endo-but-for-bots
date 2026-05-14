@@ -125,7 +125,7 @@ function fuzzyPassable(budget, random) {
 // Default seed shared across the hex/ocapn fuzz suites; see
 // `@endo/random/seeds.js`.
 const source = makeChaCha12(bobsCoffee64).fillRandomBytes;
-const randomNumber = () => randomFloat(source);
+const random = () => randomFloat(source);
 
 /**
  * @param {any} passable
@@ -151,7 +151,7 @@ test('fuzz', t => {
   const descDecoder = new TextDecoder('utf-8', { fatal: false });
   for (let i = 0; i < 1000; i += 1) {
     (index => {
-      const object1 = fuzzyPassable(randomNumber() * 100, randomNumber);
+      const object1 = fuzzyPassable(random() * 100, random);
       const syrupBytes2 = encodePassable(object1);
       const syrupString2 = descDecoder.decode(syrupBytes2);
       const desc = JSON.stringify(syrupString2);
