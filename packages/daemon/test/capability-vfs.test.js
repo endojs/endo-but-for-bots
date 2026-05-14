@@ -63,6 +63,7 @@ const setup = async t => {
       await fs.promises.mkdir(p, { recursive: true });
     },
     removePath: p => fs.promises.rm(p, { recursive: true, force: true }),
+    removeDirectory: p => fs.promises.rm(p, { recursive: true, force: true }),
     renamePath: (a, b) => fs.promises.rename(a, b),
     joinPath: (...parts) => path.join(...parts),
     realPath: p => fs.promises.realpath(p),
