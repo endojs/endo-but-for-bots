@@ -35,6 +35,11 @@ module.exports = {
     /** @type {Array<ESTree.ExportNamedDeclaration & Rule.NodeParentExtension>} */
     const exportNodes = [];
 
+    // ------------------------------------------------------------------
+    // Pattern walking: extract the binding names introduced by an
+    // `export const <pattern> = ...;` declaration.
+    // ------------------------------------------------------------------
+
     /**
      * Recursively collect the identifier names introduced by a destructuring
      * pattern, an assignment pattern, or a bare identifier. Nested
@@ -78,6 +83,70 @@ module.exports = {
       }
     }
 
+    // ------------------------------------------------------------------
+    // Harden-call detection: given a top-level statement and an exported
+    // binding name, decide whether the statement is a `harden(...)` call
+    // that covers that binding.
+    // ------------------------------------------------------------------
+
+    /**
+     * True iff `arg` is a one-element argument list to a `harden(...)` call
+     * whose single argument references `exportName`, accepting the three
+     * argument shapes documented at the call site:
+     *   harden(name)        // bare Identifier
+     *   harden({ name })    // ObjectPattern with `name` as a property value
+     *   harden([name])      // ArrayPattern with `name` as an element
+     * The match is shallow within the argument; nested destructuring inside
+     * the argument is not unwrapped.
+     * @param {ESTree.Expression | ESTree.SpreadElement} arg
+     * @param {string} exportName
+     */
+    function argumentReferencesName(arg, exportName) {
+      if (arg.type === 'Identifier') {
+        return arg.name === exportName;
+      }
+      // @ts-expect-error ObjectPattern / ArrayPattern are pattern node types,
+      // not expression node types, but they show up here in practice when the
+      // source is `harden({ a, b })` parsed as an expression-position object
+      // / array literal that gets matched structurally.
+      if (arg.type === 'ObjectPattern') {
+        // @ts-expect-error see above
+        return arg.properties.some(
+          prop =>
+            prop.type !== 'RestElement' &&
+            prop.value.type === 'Identifier' &&
+            prop.value.name === exportName,
+        );
+      }
+      // @ts-expect-error see above
+      if (arg.type === 'ArrayPattern') {
+        // @ts-expect-error see above
+        return arg.elements.some(
+          element =>
+            element &&
+            element.type === 'Identifier' &&
+            element.name === exportName,
+        );
+      }
+      return false;
+    }
+
+    /**
+     * True iff `statement` is a top-level `harden(<arg>)` call expression
+     * whose single argument covers `exportName` per `argumentReferencesName`.
+     * @param {ESTree.Node} statement
+     * @param {string} exportName
+     */
+    function statementHardensName(statement, exportName) {
+      if (statement.type !== 'ExpressionStatement') return false;
+      const expr = statement.expression;
+      if (expr.type !== 'CallExpression') return false;
+      if (expr.callee.type !== 'Identifier') return false;
+      if (expr.callee.name !== 'harden') return false;
+      if (expr.arguments.length !== 1) return false;
+      return argumentReferencesName(expr.arguments[0], exportName);
+    }
+
     return {
       /** @param {ESTree.ExportNamedDeclaration & Rule.NodeParentExtension} node */
       ExportNamedDeclaration(node) {
@@ -108,36 +177,20 @@ module.exports = {
             }
           }
 
+          // For each exported binding, scan the top-level program body for a
+          // matching `harden(...)` call. The matcher accepts three argument
+          // shapes:
+          //   harden(name)                      // direct identifier
+          //   harden({ name })                  // object-literal argument
+          //   harden([name])                    // array-literal argument
+          // (The object / array shapes appear in idiomatic batched calls like
+          // `harden({ a, b, c });`. The matcher is intentionally shallow and
+          // does not recurse into nested patterns inside the harden argument.)
           const missingHardenCalls = [];
           for (const exportName of exportNames) {
-            const hasHardenCall = sourceCode.ast.body.some(
-              statement =>
-                statement.type === 'ExpressionStatement' &&
-                statement.expression.type === 'CallExpression' &&
-                statement.expression.callee.type === 'Identifier' &&
-                statement.expression.callee.name === 'harden' &&
-                statement.expression.arguments.length === 1 &&
-                ((statement.expression.arguments[0].type === 'Identifier' &&
-                  statement.expression.arguments[0].name === exportName) ||
-                  // @ts-expect-error XXX non-overlapping
-                  (statement.expression.arguments[0].type === 'ObjectPattern' &&
-                    // @ts-expect-error XXX non-overlapping
-                    statement.expression.arguments[0].properties.some(
-                      prop =>
-                        prop.value.type === 'Identifier' &&
-                        prop.value.name === exportName,
-                    )) ||
-                  // @ts-expect-error XXX non-overlapping
-                  (statement.expression.arguments[0].type === 'ArrayPattern' &&
-                    // @ts-expect-error XXX non-overlapping
-                    statement.expression.arguments[0].elements.some(
-                      element =>
-                        element &&
-                        element.type === 'Identifier' &&
-                        element.name === exportName,
-                    ))),
+            const hasHardenCall = sourceCode.ast.body.some(statement =>
+              statementHardensName(statement, exportName),
             );
-
             if (!hasHardenCall) {
               missingHardenCalls.push(exportName);
             }
