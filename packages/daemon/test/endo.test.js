@@ -17,6 +17,8 @@ import { E, Far } from '@endo/far';
 import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
 import { makeCancelKit } from '@endo/cancel';
+import { makePromiseKit } from '@endo/promise-kit';
+import { decodeBase64 } from '@endo/base64';
 import { makeArchive as makeCompartmentArchive } from '@endo/compartment-mapper';
 import { makeReadPowers } from '@endo/compartment-mapper/node-powers.js';
 import { defaultParserForLanguage as sourceParserForLanguage } from '@endo/compartment-mapper/import-parsers.js';
@@ -5530,6 +5532,230 @@ test('mount subDir creates confined sub-mount', async t => {
   });
 });
 
+test('mount subDir rejects "." segment', async t => {
+  const { host, config } = await prepareHost(t);
+
+  const mountPath = path.join(config.statePath, '..', 'mount-test-subdir-dot');
+  await createMountFixture(mountPath, {});
+  await fs.promises.mkdir(path.join(mountPath, 'pkg'), { recursive: true });
+
+  await E(host).provideMount(mountPath, 'dot-project');
+  const mount = await E(host).lookup(['dot-project']);
+
+  // "." is not a real subdirectory and must be rejected to keep the
+  // segment-validation surface symmetric with "..".
+  await t.throwsAsync(() => E(mount).subDir('.'), {
+    message: /Invalid subDir segment/,
+  });
+  await t.throwsAsync(() => E(mount).subDir('pkg/./inner'), {
+    message: /Invalid subDir segment/,
+  });
+});
+
+test('mount subDir result supports snapshot()', async t => {
+  const { host } = await prepareHost(t);
+
+  // Use a scratch mount so snapshotFn is wired (the daemon-side
+  // scratch-mount formulator installs checkinTree as snapshotFn).
+  await E(host).provideScratchMount('snap-mount');
+  const mount = await E(host).lookup(['snap-mount']);
+
+  // Materialise a small directory tree inside the scratch mount.
+  await E(mount).makeDirectory('lib');
+  await E(mount).writeText(['lib', 'util.js'], 'export const x = 1;');
+
+  // Sub-mount inherits the parent's snapshotFn via ctx-spread.
+  const libMount = await E(mount).subDir('lib');
+  const snapshot = await E(libMount).snapshot();
+
+  // The snapshot exposes the ReadableTree shape (list/lookup/has).
+  const names = await E(snapshot).list();
+  t.deepEqual(names, ['util.js']);
+  const file = await E(snapshot).lookup('util.js');
+  // Snapshot files expose text() (ReadableBlob surface).
+  const content = await E(file).text();
+  t.is(content, 'export const x = 1;');
+});
+
+test('mount subDir rejects symlink escape', async t => {
+  const { host, config } = await prepareHost(t);
+
+  const basePath = path.join(
+    config.statePath,
+    '..',
+    'mount-test-subdir-symlink',
+  );
+  const mountRoot = path.join(basePath, 'mount-root');
+  const outsideDir = path.join(basePath, 'outside');
+
+  await fs.promises.rm(basePath, { recursive: true, force: true });
+  await fs.promises.mkdir(mountRoot, { recursive: true });
+  await fs.promises.mkdir(outsideDir, { recursive: true });
+  await fs.promises.writeFile(
+    path.join(outsideDir, 'secret.txt'),
+    'leaked',
+    'utf-8',
+  );
+  // A directory symlink at <mountRoot>/escape that resolves outside
+  // the mount root.  Without realpath confinement, subDir('escape')
+  // would form a child mount whose confinementRoot resolves to
+  // <outsideDir>, escaping the parent's confinement.
+  await fs.promises.symlink(outsideDir, path.join(mountRoot, 'escape'));
+
+  await E(host).provideMount(mountRoot, 'sym-subdir-mount');
+  const mount = await E(host).lookup(['sym-subdir-mount']);
+
+  await t.throwsAsync(() => E(mount).subDir('escape'), {
+    message: /escapes mount root/,
+  });
+});
+
+test('host provideSubMount stores a usable mount formula', async t => {
+  const { host, config } = await prepareHost(t);
+
+  const mountPath = path.join(
+    config.statePath,
+    '..',
+    'mount-test-provideSubMount',
+  );
+  await createMountFixture(mountPath, {
+    'top.txt': 'top',
+  });
+  await fs.promises.mkdir(path.join(mountPath, 'inner'), { recursive: true });
+  await fs.promises.writeFile(
+    path.join(mountPath, 'inner', 'leaf.txt'),
+    'leaf content',
+    'utf-8',
+  );
+
+  await E(host).provideMount(mountPath, 'parent-mount');
+  await E(host).provideSubMount('parent-mount', 'inner', 'inner-mount');
+
+  // The new pet name resolves to a mount with the expected entry set.
+  const inner = await E(host).lookup(['inner-mount']);
+  const innerEntries = await E(inner).list();
+  t.deepEqual(innerEntries, ['leaf.txt']);
+
+  const leaf = await E(inner).lookup('leaf.txt');
+  const leafText = await E(leaf).text();
+  t.is(leafText, 'leaf content');
+
+  // The sub-mount's confinement is the inner directory: it must not
+  // see 'top.txt' from the parent (resolveSegments clamps ".." at
+  // the new currentDir).
+  t.false(await E(inner).has('top.txt'));
+});
+
+test('host provideSubMount rejects "." segment', async t => {
+  const { host, config } = await prepareHost(t);
+
+  const mountPath = path.join(
+    config.statePath,
+    '..',
+    'mount-test-provideSubMount-dot',
+  );
+  await createMountFixture(mountPath, {});
+  await fs.promises.mkdir(path.join(mountPath, 'inner'), { recursive: true });
+  await E(host).provideMount(mountPath, 'parent-dot');
+
+  await t.throwsAsync(
+    () => E(host).provideSubMount('parent-dot', '.', 'inner-dot'),
+    {
+      message: /Invalid subDir segment/,
+    },
+  );
+  await t.throwsAsync(
+    () => E(host).provideSubMount('parent-dot', 'inner/./x', 'inner-dot'),
+    {
+      message: /Invalid subDir segment/,
+    },
+  );
+});
+
+test('host provideSubMount rejects symlink escape', async t => {
+  const { host, config } = await prepareHost(t);
+
+  const basePath = path.join(
+    config.statePath,
+    '..',
+    'mount-test-provideSubMount-symlink',
+  );
+  const mountRoot = path.join(basePath, 'mount-root');
+  const outsideDir = path.join(basePath, 'outside');
+
+  await fs.promises.rm(basePath, { recursive: true, force: true });
+  await fs.promises.mkdir(mountRoot, { recursive: true });
+  await fs.promises.mkdir(outsideDir, { recursive: true });
+  await fs.promises.writeFile(
+    path.join(outsideDir, 'secret.txt'),
+    'leaked',
+    'utf-8',
+  );
+  await fs.promises.symlink(outsideDir, path.join(mountRoot, 'escape'));
+
+  await E(host).provideMount(mountRoot, 'sym-parent-mount');
+
+  await t.throwsAsync(
+    () => E(host).provideSubMount('sym-parent-mount', 'escape', 'sym-child'),
+    {
+      message: /escapes parent mount root/,
+    },
+  );
+});
+
+test('mount file streamBase64 yields base64-encoded chunks', async t => {
+  const { host, config } = await prepareHost(t);
+
+  const mountPath = path.join(
+    config.statePath,
+    '..',
+    'mount-test-streamBase64',
+  );
+  await createMountFixture(mountPath, {
+    'hello.txt': 'Hello, mount!',
+  });
+
+  await E(host).provideMount(mountPath, 'stream-mount');
+  const mount = await E(host).lookup(['stream-mount']);
+  const file = await E(mount).lookup('hello.txt');
+
+  // streamBase64 returns a promise-chain stream whose chunks are
+  // base64-encoded strings. Decoding each chunk and concatenating the
+  // decoded bytes must reproduce the original file content.
+  const { promise: synHead, resolve: initialSynResolve } = makePromiseKit();
+  let synResolve = initialSynResolve;
+  const advance = () => {
+    const { promise, resolve } = makePromiseKit();
+    synResolve(harden({ value: undefined, promise }));
+    synResolve = resolve;
+  };
+  const ackHead = E(file).streamBase64(synHead);
+  advance();
+  let ack = await ackHead;
+  const chunks = [];
+  for (;;) {
+    if (ack.promise === null) {
+      break;
+    }
+    t.is(typeof ack.value, 'string', 'each chunk is a base64 string');
+    chunks.push(ack.value);
+    advance();
+    // eslint-disable-next-line no-await-in-loop
+    ack = await ack.promise;
+  }
+  t.true(chunks.length > 0, 'stream produced at least one chunk');
+  // Decode each base64 chunk independently, then concatenate the bytes.
+  const parts = chunks.map(chunk => decodeBase64(chunk));
+  const totalLength = parts.reduce((acc, p) => acc + p.length, 0);
+  const allBytes = new Uint8Array(totalLength);
+  let offset = 0;
+  for (const part of parts) {
+    allBytes.set(part, offset);
+    offset += part.length;
+  }
+  const decoded = new TextDecoder().decode(allBytes);
+  t.is(decoded, 'Hello, mount!');
+});
 // symlink confinement tests
 
 /**
