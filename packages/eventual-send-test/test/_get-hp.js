@@ -1,5 +1,4 @@
-import makeE from '@endo/eventual-send/src/E.js';
-import { makeHandledPromise } from '@endo/eventual-send/src/handled-promise.js';
+import '@endo/eventual-send/shim.js';
+import { E, HandledPromise } from '@endo/eventual-send';
 
-export const HandledPromise = makeHandledPromise();
-export const E = makeE(HandledPromise);
+export { E, HandledPromise };
