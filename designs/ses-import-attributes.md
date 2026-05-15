@@ -588,11 +588,38 @@ test catalogue, in `packages/ses/test/` and
 
 ## References
 
-- [TC39 proposal-import-attributes](https://github.com/tc39/proposal-import-attributes) (Stage 4)
-- [TC39 proposal-json-modules](https://github.com/tc39/proposal-json-modules) (Stage 4)
+External, Markdown link text:
+
+- [TC39 proposal-import-attributes](https://github.com/tc39/proposal-import-attributes)
+  (Stage 4, merged into ECMA-262; the spec this design hosts).
 - [test262 import-attributes coverage](https://github.com/tc39/test262/tree/main/test/language/module-code/import-attributes)
-- `packages/ses/src/module-load.js` (memo and hook invocation)
-- `packages/ses/src/module-link.js` (variant brand-check seat)
-- `packages/ses/src/compartment.js` (`compartmentImport`, dynamic-import path)
-- `packages/ses/types.d.ts` (`ImportHook`, `ImportNowHook`, `ModuleSource`, `ModuleDescriptor`)
-- `packages/module-source/src/module-source.js` (parser entry point; future home of `normalizeImportAttributes`)
+  (the conformance suite the eventual SES test plan can borrow shape
+  from).
+
+In-repo, backticked paths:
+
+- `packages/ses/src/module-load.js` (memo and hook invocation).
+- `packages/ses/src/module-link.js` (variant brand-check seat).
+- `packages/ses/src/compartment.js` (`compartmentImport`,
+  dynamic-import path).
+- `packages/ses/types.d.ts` (`ImportHook`, `ImportNowHook`,
+  `ModuleSource`, `ModuleDescriptor`).
+- `packages/module-source/src/module-source.js` (parser entry point;
+  future home of `normalizeImportAttributes`).
+- `packages/compartment-mapper/src/link.js` (synthetic compartment
+  construction; the seat for `modulesWithAttributes` plumbing).
+
+## Prompt
+
+> Draft a design document for SES and `@endo/module-source` covering
+> TC39 import attributes (Stage 4). The document should cover the
+> normalization of attribute bags, the extension of SES's per-
+> compartment module memo to carry attributes in the cache key, the
+> shape of `importHook` / `importNowHook` after the extension,
+> backward compatibility for hooks authored before the change,
+> backward compatibility for `@endo/compartment-mapper` archives
+> captured before the change, and how attributes flow through
+> `compartment-mapper` once the SES surface is in place. Out of scope
+> for v1: any new `ModuleSource` shape (virtual module sources cover
+> JSON, CSS, and Wasm equally), and per-`package.json` propagation of
+> attributes through the compartment-mapper resolver.
