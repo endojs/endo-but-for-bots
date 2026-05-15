@@ -99,27 +99,36 @@ produces different module instances.
 SES's normalization rule, applied wherever attributes enter the system
 (parser, hook return values, compartment `moduleMap` entries):
 
-1. **Coerce to a frozen plain object.** The wire shape is
-   `{ [key: string]: string }` with `__proto__: null`, all values primitive
-   strings.
+1. **Clone, then freeze.** The wire shape is
+   `{ [key: string]: string }` with `__proto__: null`, all values
+   primitive strings.
+   The normalizer never mutates the input; it builds a fresh
+   null-prototype object, copies validated key / value pairs into it,
+   and `harden`s the result.
+   The original options bag the caller passed remains unmodified.
    `undefined` and `null` values are rejected.
    Non-string values are rejected.
 2. **Reject duplicate keys at parse time.** Per the spec, two attributes with
    the same key in one `with` clause is a *SyntaxError*.
    The analyzer enforces this; runtime adapters trust it.
 3. **Sort keys lexicographically (UTF-16 code unit order).**
-   This makes object identity irrelevant to the downstream memo key.
+   The fresh object's keys are written in sorted order, making object
+   identity irrelevant to the downstream memo key.
 4. **Canonicalize the empty case to a single sentinel.**
    Imports without a `with` clause carry the frozen empty
-   `Object.create(null)` value
-   exported as `EMPTY_ATTRIBUTES` from `@endo/module-source`.
+   `{ __proto__: null }` value exported as `EMPTY_ATTRIBUTES` from
+   `@endo/module-source`.
+   Returning a single shared sentinel for the dominant empty case
+   avoids per-import allocation; non-empty inputs always yield a fresh
+   frozen clone.
    The memo key collapses to the legacy specifier-only shape when this
    sentinel is present (see Backward compatibility for serialized bundles).
-5. **Serialize for use as a memo-key suffix as `JSON.stringify` over the
-   sorted-key object.**
-   The serialization is what enters the `Map<string, ...>` memo, not the
-   object itself: two distinct object instances with the same normalized
-   content collapse to the same key.
+5. **Serialize for use in the extended memo key as `JSON.stringify`
+   over a `[fullSpecifier, attributes]` tuple.**
+   The serialization is what enters the `Map<string, ...>` memo, not
+   the object itself: two distinct object instances with the same
+   normalized content collapse to the same key.
+   See `## Memo key extension` for the encoding.
 
 The normalization function lives in `@endo/module-source` as
 `normalizeImportAttributes(attributes)` and is re-exported from `ses` for the
@@ -132,44 +141,62 @@ SES's per-compartment module memo currently keys on a bare
 `Map<fullSpecifier, ModuleRecord>` (`packages/ses/src/compartment.js`,
 the `moduleRecords` map, populated throughout
 `packages/ses/src/module-load.js`).
+Today, the key for `import x from './a.js'` is the resolved string
+`'./a.js'` directly.
 
-The extended key is the string
+The extended key is the JSON-stringification of a two-element tuple:
 
 ```
-<fullSpecifier> + '\0' + <normalized-attributes-json>
+JSON.stringify([fullSpecifier, normalizedAttributes])
 ```
 
-with `\0` (U+0000) chosen because it cannot appear in a valid module
-specifier.
-The legacy collapse rule: when the normalized attributes JSON is the empty
-object literal `{}`, the key is `<fullSpecifier>` alone, byte-identical to
-the pre-attributes key.
-This keeps the hot path (modules with no attributes) untouched and lets
-existing bundles thread through without re-keying.
+Both halves are JSON-stringified, so the key is unambiguous for any
+specifier the host accepts.
+An earlier draft picked `U+0000` as a separator on the assumption that
+NUL cannot appear in a module specifier; the import-attributes spec
+does not forbid NUL in specifiers, so the unambiguous embedding has to
+come from the encoding itself.
+JSON encodes string contents (escaping `"`, `\`, control characters,
+and NUL), so two distinct (specifier, attributes) tuples cannot
+collide on serialization.
+
+Legacy collapse rule.
+When the normalized attributes are empty (the `EMPTY_ATTRIBUTES`
+sentinel), the memo continues to use the bare `fullSpecifier` string
+as the key.
+The legacy and extended keys live in the same `Map` keyed by string;
+the legacy form is the bare specifier, the extended form is the
+two-element JSON tuple.
+The two forms cannot collide because the extended form always begins
+with `[` and a bare specifier never does.
+This keeps the hot path (modules with no attributes) on the same key
+shape as today, so pre-attributes bundles thread through without
+re-keying.
 
 Worked example.
-A compartment imports the same specifier with two types:
+A compartment imports the same specifier two ways:
 
 ```js
-import schema from './doc.json' with { type: 'json' };
-import sheet  from './doc.json' with { type: 'css'  };
+import a   from './doc.json';                          // no `with` clause
+import b   from './doc.json' with { type: 'json' };
+import c   from './doc.json' with { type: 'css'  };
 ```
 
-After resolution against the compartment's `resolveHook`, both produce
-`fullSpecifier = './doc.json'`.
+After resolution against the compartment's `resolveHook`, all three
+produce `fullSpecifier = './doc.json'`.
 The memo entries are:
 
-| Memo key                                | ModuleSource variant |
-|-----------------------------------------|----------------------|
-| `./doc.json` (no `with` clause anywhere)| legacy collapse      |
-| `./doc.json\0{"type":"json"}`           | JSON source          |
-| `./doc.json\0{"type":"css"}`            | CSS source (v2)      |
+| Memo key                                          | Form                 |
+|---------------------------------------------------|----------------------|
+| `./doc.json`                                      | legacy collapse      |
+| `["./doc.json",{"type":"json"}]`                  | extended (JSON tuple)|
+| `["./doc.json",{"type":"css"}]`                   | extended (JSON tuple)|
 
-A third import without an attribute would land in the legacy-collapse slot
-and is distinct from either typed import.
-This is the spec's behavior: an unattributed import and a `with { type: 'js' }`
-import are *not* the same module, because the host is allowed to pick
-different bytes for them.
+The unattributed import lands in the legacy-collapse slot and is
+distinct from either typed import.
+This is the spec's behavior: an unattributed import and a
+`with { type: 'js' }` import are *not* the same module, because the
+host is allowed to pick different bytes for them.
 
 Implication for parent-module caches.
 `moduleRecord.resolvedImports` today is a `Record<importSpecifier,
