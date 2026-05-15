@@ -1,0 +1,9 @@
+{
+  "extends": "../../tsconfig.eslint-base.json",
+  "include": [
+    "*.js",
+    "*.ts",
+    "test",
+    "random-fast-check.types.d.ts"
+  ]
+}
