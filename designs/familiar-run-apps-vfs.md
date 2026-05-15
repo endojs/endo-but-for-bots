@@ -1,8 +1,9 @@
-# Familiar / Host Run Applications over a VFS
+# Familiar and host run applications over a VFS
 
 | | |
 |---|---|
 | **Created** | 2026-05-13 |
+| **Updated** | 2026-05-15 |
 | **Author** | kriscendobot (prompted by kriskowal) |
 | **Status** | Proposed |
 
@@ -17,7 +18,7 @@ Case 1 is the confined path.
 An application is hosted inside an XS worker (via `endor`) whose only
 filesystem reach is one or more `Mount` capabilities the host has handed
 it.
-Within case 1, the design's main subject is the fully virtualized
+Within Case 1, the design's main subject is the fully virtualized
 sub-case: when the entry-point is a bare `entry.js` rather than a
 prebuilt `compartment-map.json`, the design replaces `node_modules` with
 a sqlite-backed module store and constructs the compartment map ad hoc
@@ -81,7 +82,7 @@ exposes a host-mediated action to the agent.
 A Lal caplet that wraps `endor run` lets an agent run an application
 against a mount set the host authorized.
 **Ejection**: producing a host-filesystem layout from a mount such
-that an external program (in case 2, `node`) can read it directly.
+that an external program (in Case 2, `node`) can read it directly.
 The dual of `endo checkin` (the readable-tree commit step defined in
 `daemon-checkin-checkout.md`).
 
@@ -226,7 +227,7 @@ operator patterns for guaranteeing it:
   regardless of registry-table state, so ingestion that fires after
   the lock has no effect on the resolution.
 
-The default mode for case 1 is "no lockfile, resolution computed at
+The default mode for Case 1 is "no lockfile, resolution computed at
 each `endor run`."
 This default is appropriate for ad-hoc application execution where a
 single horizon spans only one process lifetime; reproducibility-
@@ -377,11 +378,11 @@ daemon's existing integration-test harness.
 ## Case 2: host-eject to Node.js
 
 Case 1 covers applications that fit inside the XS worker's confined
-surface; case 2 covers the remainder, where the application needs
+surface; Case 2 covers the remainder, where the application needs
 Node.js APIs that XS cannot satisfy.
 The two cases share the mount-cap front end but diverge sharply at
-the execution boundary: case 1 stays inside the daemon's
-`endor`-hosted worker, case 2 shells out to a Node child process
+the execution boundary: Case 1 stays inside the daemon's
+`endor`-hosted worker, Case 2 shells out to a Node child process
 against a materialised tree.
 
 ### Shape
@@ -420,13 +421,13 @@ with `node_modules` inside it (ejected from a sub-mount that is
 itself the cached output of an earlier `npm install`, or
 re-materialised from the CAS-backed module store on demand).
 
-This case is intentionally smaller in scope than case 1.
+This case is intentionally smaller in scope than Case 1.
 The compartment-mapper machinery is not exercised; the application
 runs under Node's native module resolution.
 The confinement against the host filesystem comes entirely from
 the scratch directory's containment plus whatever the supervisor
 chooses to bind-mount or chroot around it; this design does not
-extend the confinement model and defers that to the Posix-sandbox
+extend the confinement model and defers that to the POSIX-sandbox
 follow-up (below).
 
 ### Re-eject discipline
@@ -451,16 +452,16 @@ that runs inside the daemon's manager JS rather than inside Rust.
 
 Alignment:
 
-- The mount-backed import hook in case 1 is the JS-side mirror of
+- The mount-backed import hook in Case 1 is the JS-side mirror of
   `endor`'s CAS-backed module loading
   (`endor-run-expanded.md` § Form 3).
   Both read module bytes by hash; the difference is whether the
   hash comes from a mount lookup or directly from a CAS root.
-- The sqlite-backed module store (case 1, sub-case "fully
+- The sqlite-backed module store (Case 1, sub-case "fully
   virtualized") is the same sqlite the Rust side already opens
   via `daemon-endo-rust-sqlite.md`.
   The schema is shared.
-- The Go-style resolver in case 1 reuses the algorithm
+- The Go-style resolver in Case 1 reuses the algorithm
   `endor-npm-registry-proxy.md` § Minimal Version Selection
   specifies for the Rust side.
 
@@ -499,14 +500,14 @@ Divergence:
    reproducibility but adds operational burden for the
    ad-hoc-application case; offered as a follow-up command
    (`endor lock`) rather than a requirement.
-5. **Run case 2 inside the Posix sandbox today (no scratch-mount
-   eject step).** Rejected: gated on the Posix sandbox shipping
+5. **Run Case 2 inside the POSIX sandbox today (no scratch-mount
+   eject step).** Rejected: gated on the POSIX sandbox shipping
    on the host platform.
    Listed as the case-2 follow-up below.
 
 ## Recommended approach
 
-Land case 1 first, including the sqlite-backed module store and
+Land Case 1 first, including the sqlite-backed module store and
 the Go-style resolver, behind the existing `endor run entry.js`
 form-3 entry point.
 This lets the daemon's manager JS, the CLI, and any guest with an
@@ -515,7 +516,7 @@ today.
 Case 2 (host-eject) lands second, gated on a per-formula opt-in
 (`type: 'host-node-app'` or similar) so the maintainer can audit
 each application that elects host-Node execution.
-The Posix-sandbox follow-up retires case 2's ad-hoc confinement
+The POSIX-sandbox follow-up retires Case 2's ad-hoc confinement
 once the sandbox is available on the deployment target.
 
 ## Open questions for the maintainer
@@ -538,7 +539,7 @@ once the sandbox is available on the deployment target.
 3. **Cross-major-version compartment hosting.** The compartment
    map already supports multiple major versions of the same
    package in distinct compartments; should the host-eject case
-   (case 2) accept the same multi-major shape, or should host-eject
+   (Case 2) accept the same multi-major shape, or should host-eject
    require a single-major resolution per package (Node's
    native-resolver constraint)?
 4. **`peerDependencies` and `optionalDependencies` in MVS
@@ -552,24 +553,24 @@ once the sandbox is available on the deployment target.
    needs revision.
    `endor-npm-registry-proxy.md` § Known gaps flags the underlying
    ambiguity.
-5. **Eject equality.** Should re-eject equality (case 2) be
+5. **Eject equality.** Should re-eject equality (Case 2) be
    computed by content hash only, or also by mount-formula
    identity?
    The latter is cheaper for `readable-tree`-backed mounts but
    may miss cases where two distinct readable-tree formulas
    happen to point at the same content.
 
-## Follow-up gated on Posix sandbox
+## Follow-up gated on POSIX sandbox
 
 When [endo-posix-sandbox](endo-posix-sandbox.md) lands on the host
 platform, guests can also run Node.js applications safely via the
 case-2 eject-to-scratch path: the host's eject step is unchanged,
-but the spawned `node` process runs inside a Posix-sandbox slice
+but the spawned `node` process runs inside a POSIX-sandbox slice
 whose only filesystem reach is the scratch directory plus any
 mount caps the guest's caplet was authorized to pass through.
 The network profile is the sandbox's `private` default
 (`endo-posix-sandbox.md` § Network policy ladder).
-This converts case 2 from a host-only privilege to a primitive
+This converts Case 2 from a host-only privilege to a primitive
 guests can request.
 Detailed flow is out of scope for this design; the dependency
 gate is named here so the case-2 ground truth does not bake in
@@ -581,9 +582,9 @@ the assumption that host-eject is a host-only path forever.
 |--------|--------------|
 | [daemon-mount](daemon-mount.md) | Provides the `MountInterface` guard the case-1 import hook and the case-2 eject step both consume |
 | [endor-run-expanded](endor-run-expanded.md) | Case 1 is the JS-side mirror of Form 3 |
-| [endor-npm-registry-proxy](endor-npm-registry-proxy.md) | Provides the sqlite-backed module store and the MVS algorithm reused in case 1 |
+| [endor-npm-registry-proxy](endor-npm-registry-proxy.md) | Provides the sqlite-backed module store and the MVS algorithm reused in Case 1 |
 | [daemon-cas-management](daemon-cas-management.md) | Provides the CAS that backs the module store |
-| [daemon-endo-rust-sqlite](daemon-endo-rust-sqlite.md) | Provides the sqlite host power and the spawn pattern case 2 borrows |
+| [daemon-endo-rust-sqlite](daemon-endo-rust-sqlite.md) | Provides the sqlite host power and the spawn pattern Case 2 borrows |
 | [daemon-endor-architecture](daemon-endor-architecture.md) | Case 1's confined worker is a regular `endor` worker |
 | [endo-posix-sandbox](endo-posix-sandbox.md) | Gates the case-2 follow-up that opens host-eject to guests |
 | [familiar-electron-shell](familiar-electron-shell.md) | Case 2 uses the bundled Node binary the Familiar already carries |
@@ -605,5 +606,5 @@ the assumption that host-eject is a host-only path forever.
 > time, minimum-version selection per (name, major). In the
 > host-eject case, the host writes a readable tree to a scratch
 > mount and shells out to node; this is the small subcase.
-> Posix sandbox is the follow-up that lets guests also use the
+> POSIX sandbox is the follow-up that lets guests also use the
 > eject path.
