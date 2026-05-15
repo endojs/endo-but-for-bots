@@ -4,10 +4,10 @@ import { parseBigint } from '../src/number-parse.js';
 test('returns a bigint when input is a valid integer string', t => {
   t.is(parseBigint('42'), 42n);
   t.is(parseBigint('0'), 0n);
-  t.is(parseBigint('   9007199254740993   '), 9007199254740993n);
+  t.is(parseBigint('   9007199254740993   '), 9_007_199_254_740_993n);
   t.is(
     parseBigint('123456789012345678901234567890'),
-    123456789012345678901234567890n,
+    123_456_789_012_345_678_901_234_567_890n,
   );
 });
 
