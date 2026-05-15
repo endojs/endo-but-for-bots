@@ -7,7 +7,8 @@ export interface AsyncSpring<TValue> {
 }
 
 export interface AsyncQueue<TSpringValue, TSinkValue = TSpringValue>
-  extends AsyncSpring<TSpringValue>, AsyncSink<TSinkValue> {}
+  extends AsyncSpring<TSpringValue>,
+    AsyncSink<TSinkValue> {}
 
 // Stream is nearly identical to AsyncGenerator and AsyncGenerator should
 // probably be identical to this definition of Stream.

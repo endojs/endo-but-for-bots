@@ -26,6 +26,12 @@ import {
  */
 const hexToImmutableBuffer = hex => bytesToImmutable(decodeHex(hex));
 
+/**
+ * @param {string} hex
+ * @returns {ArrayBuffer}
+ */
+const hexToImmutableBuffer = hex => bytesToImmutable(decodeHex(hex));
+
 /** @type {CodecTestEntry[]} */
 export const table = [
   {

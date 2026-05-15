@@ -129,16 +129,14 @@ interface BaseAssertionFixtureNamespace<T = unknown> {
   results: Record<string, T>;
 }
 
-export interface AssertionLocationFixtureNamespace<
-  T = unknown,
-> extends BaseAssertionFixtureNamespace<T> {
+export interface AssertionLocationFixtureNamespace<T = unknown>
+  extends BaseAssertionFixtureNamespace<T> {
   __dirname: string;
   __filename: string;
 }
 
-export interface AssertionFixtureNamespace<
-  T = unknown,
-> extends BaseAssertionFixtureNamespace<T> {
+export interface AssertionFixtureNamespace<T = unknown>
+  extends BaseAssertionFixtureNamespace<T> {
   __dirname?: null;
   __filename?: null;
 }
@@ -149,9 +147,8 @@ interface BaseFixtureAssertionFnParameters {
   policy?: SomePolicy;
 }
 
-interface FixtureAssertionFnLocationParameters<
-  T = unknown,
-> extends BaseFixtureAssertionFnParameters {
+interface FixtureAssertionFnLocationParameters<T = unknown>
+  extends BaseFixtureAssertionFnParameters {
   namespace: AssertionLocationFixtureNamespace<T>;
   testCategoryHint: 'Location';
 }
