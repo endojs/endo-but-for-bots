@@ -102,6 +102,17 @@ export const universalPropertyNames = {
   JSON: 'JSON',
   Reflect: 'Reflect',
 
+  // WHATWG URL Standard
+  // https://url.spec.whatwg.org/
+  // URL and URLSearchParams are permitted universally with the dangerous
+  // static methods `createObjectURL` and `revokeObjectURL` cauterized off
+  // the constructor and the otherwise-hidden URL search params iterator
+  // prototype seeded into the anonymous-intrinsics graph so its `next` is
+  // hardened. On hosts that do not provide them (XS), the sampling pass
+  // tolerates the absence.
+  URL: 'URL',
+  URLSearchParams: 'URLSearchParams',
+
   // *** Annex B
 
   escape: 'escape',
@@ -2056,6 +2067,83 @@ export const permitted = {
     Instant: '%Temporal.Instant%',
     PlainYearMonth: '%Temporal.PlainYearMonth%',
     PlainMonthDay: '%Temporal.PlainMonthDay%',
+    '@@toStringTag': 'string',
+  },
+
+  // WHATWG URL Standard
+  // https://url.spec.whatwg.org/
+  // The static methods `createObjectURL` and `revokeObjectURL` are
+  // deliberately omitted; both mint or revoke handles into a host blob
+  // registry observable across realms, which is ambient authority. SES's
+  // whitelisting pass cauterizes them off the constructor everywhere.
+  // The static parse helpers `parse` and `canParse` are pure and admitted
+  // on hosts that provide them; absence on older hosts is handled by the
+  // skip-when-missing pass.
+
+  URL: {
+    // Properties of the URL Constructor
+    '[[Proto]]': '%FunctionPrototype%',
+    prototype: '%URLPrototype%',
+    parse: fn,
+    canParse: fn,
+    // Explicitly excluded: both mint or revoke handles into a host blob
+    // registry observable across realms, which is ambient authority.
+    createObjectURL: false,
+    revokeObjectURL: false,
+  },
+
+  '%URLPrototype%': {
+    constructor: 'URL',
+    toString: fn,
+    href: accessor,
+    origin: getter,
+    protocol: accessor,
+    username: accessor,
+    password: accessor,
+    host: accessor,
+    hostname: accessor,
+    port: accessor,
+    pathname: accessor,
+    search: accessor,
+    searchParams: getter,
+    hash: accessor,
+    toJSON: fn,
+    '@@toStringTag': 'string',
+  },
+
+  URLSearchParams: {
+    // Properties of the URLSearchParams Constructor
+    '[[Proto]]': '%FunctionPrototype%',
+    prototype: '%URLSearchParamsPrototype%',
+  },
+
+  '%URLSearchParamsPrototype%': {
+    constructor: 'URLSearchParams',
+    size: getter,
+    append: fn,
+    delete: fn,
+    get: fn,
+    getAll: fn,
+    has: fn,
+    set: fn,
+    sort: fn,
+    entries: fn,
+    forEach: fn,
+    keys: fn,
+    values: fn,
+    toString: fn,
+    '@@iterator': fn,
+    '@@toStringTag': 'string',
+  },
+
+  '%URLSearchParamsIteratorPrototype%': {
+    // The %URLSearchParamsIteratorPrototype% Object. Reachable only as
+    // `Object.getPrototypeOf(new URLSearchParams().entries())`; sampled
+    // by getAnonymousIntrinsics. Hardened along with the rest of the
+    // intrinsics so a compartment that gets one URLSearchParams cannot
+    // influence iteration in any other compartment.
+    '[[Proto]]': '%IteratorPrototype%',
+    next: fn,
     '@@toStringTag': 'string',
   },
 

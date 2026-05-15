@@ -170,5 +170,20 @@ export const getAnonymousIntrinsics = () => {
     );
   }
 
+  // The %URLSearchParamsIteratorPrototype% Object
+  //
+  // The URLSearchParams iterator prototype is reachable only by walking an
+  // instance: it is not on `globalThis` and not in `permits.js`'s named
+  // graph. Seed it here so the whitelist pass freezes it; otherwise a
+  // compartment that gets one URLSearchParams could mutate `.next` on its
+  // prototype and influence every other compartment's iteration. On hosts
+  // without `URLSearchParams` (XS), skip.
+  if (typeof globalThis.URLSearchParams === 'function') {
+    const urlSearchParamsIterator = new globalThis.URLSearchParams().entries();
+    intrinsics['%URLSearchParamsIteratorPrototype%'] = getPrototypeOf(
+      urlSearchParamsIterator,
+    );
+  }
+
   return intrinsics;
 };
