@@ -1,0 +1,38 @@
+{
+  "recordedAt": "2026-05-15",
+  "optimizer": "gepa",
+  "rounds": 1,
+  "metricCallLimit": 5,
+  "trialCount": 4,
+  "trainingScore": 0.16666666666666674,
+  "modelScores": {
+    "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free": 0.16666666666666674
+  },
+  "systemPromptSha256": "534d995f0f7f5fcac81270b132e4a3c772514182a904059a8806a4596030b7bc",
+  "repairMessagesSha256": "a0a474404dc3e12b7c860c49806b81e378d0c53358fe2f4dc5839ffd81479c90",
+  "examplesSha256": "d877e3f896461c366a76e13fce180d453430e797e955c12f15d161fc8542f77d",
+  "trainingExamples": [
+    "basic-chat",
+    "reply-tool",
+    "reply-over-send",
+    "timestamp",
+    "timestamp-adopt-before-commentary",
+    "timestamp-wrong-petname",
+    "math",
+    "math-rephrase",
+    "math-adopt-before-commentary",
+    "math-word-problem",
+    "math-wrong-petname",
+    "read-file",
+    "read-file-rephrase",
+    "read-file-wrong-petname",
+    "timestamp-and-math",
+    "math-and-timestamp"
+  ],
+  "validationExamples": [
+    "read-file-and-math",
+    "math-chain",
+    "timestamp-direct-order",
+    "read-file-direct-order"
+  ]
+}

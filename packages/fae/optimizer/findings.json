@@ -1,0 +1,29 @@
+{
+  "recordedAt": "2026-05-15",
+  "optimizer": "gepa",
+  "models": [
+    "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free"
+  ],
+  "runConfig": {
+    "rounds": 1,
+    "metricCallLimit": 5,
+    "trialCount": 4,
+    "trainingExamples": 16,
+    "validationExamples": 4
+  },
+  "result": {
+    "bestScore": 0.16666666666666674,
+    "adoptionSectionChanged": false
+  },
+  "observations": [
+    "One bounded GEPA round on the stricter corpus kept the adoption section unchanged.",
+    "The trace metric now distinguishes canonical direct dispatch from accepted exec fallback paths and explicitly penalizes tool errors, repair hints, and extra round-trips.",
+    "The stricter score dropped after replacing low-value paraphrases with reply-selection and adopt-before-commentary cases; this bounded free-tier run is useful for exercising the loop, not for claiming a strong score-to-smoke-pass correlation yet.",
+    "The optimizer can now expand runs across a model list and has a separate matrix evaluation mode; this record contains only the weak-model slice that was actually run.",
+    "A retained multi-tool trial reached the provider call with both attachments delivered correctly, then timed out before the model returned."
+  ],
+  "cost": {
+    "providerTier": "OpenRouter free tier",
+    "providerCostUsd": 0
+  }
+}

@@ -35,11 +35,14 @@
     "debug:llm": "node scripts/debug-llm-logs.js",
     "debug:llm:tools": "node scripts/debug-llm-logs.js --state=tmp/smoke/state --tools",
     "smoke": "ava --serial --timeout=10m scripts/smoke.test.js",
+    "optimize:prompt": "node optimizer/optimize-prompt.js",
     "test": "ava",
     "test:c8": "c8 ${C8_OPTIONS:-} ava",
-    "lint": "yarn lint:eslint",
+    "lint": "yarn lint:eslint && yarn lint:prompt",
     "lint-fix": "yarn lint:eslint --fix",
-    "lint:eslint": "eslint '**/*.js'"
+    "lint:eslint": "eslint '**/*.js'",
+    "lint:prompt": "node optimizer/check-prompt-baseline.js",
+    "lint:types": "tsc"
   },
   "ava": {
     "files": [
@@ -63,10 +66,12 @@
     "@endo/promise-kit": "workspace:^"
   },
   "devDependencies": {
+    "@ax-llm/ax": "^21.0.0",
     "@endo/cli": "workspace:^",
     "ava": "catalog:dev",
     "c8": "catalog:dev",
-    "eslint": "catalog:dev"
+    "eslint": "catalog:dev",
+    "typescript": "catalog:dev"
   },
   "eslintConfig": {
     "extends": [
