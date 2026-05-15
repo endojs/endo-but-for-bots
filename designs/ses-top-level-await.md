@@ -9,6 +9,15 @@
 
 ## Problem statement
 
+SES today loads modules synchronously. Each module's body runs to
+completion before any importer reads its exports, and the linker is
+free to assume that "the body has run" and "the exports are settled"
+are the same fact. Top-level `await` (TLA) makes a module's body
+asynchronous: the body suspends across microtasks while awaiting a
+promise, so "the body has run" is no longer synchronous with
+"exports are settled." Three things break in SES under that change;
+the design below addresses each.
+
 The SES module loader executes modules synchronously, bottom up, cycle
 tolerant ([packages/ses/src/module-instance.js line 401](../packages/ses/src/module-instance.js#L401)).
 A module's `execute()` returns `undefined`; the linker assumes
@@ -104,6 +113,31 @@ directory, which is the canonical reference for what "TLA conformance"
 means at the spec level. Each row's *Equivalent* names the matching
 test262 fixture; the SES test transliterates the spec scenario into the
 shim's `Compartment` + `importHook` shape.
+
+A handful of design terms appear in the row cells before the Design
+section defines them; reading the next paragraph first or skimming
+the Design section before returning to this table is fine. The terms:
+
+- `__moduleIsAsync__` is a static boolean on the precompiled module
+  record, set by the analyzer when the body contains a top-level
+  `AwaitExpression`. See [Static analysis](#static-analysis-detect-async-at-parse-time).
+- `[[AsyncEvaluation]]` is the spec field that distinguishes a
+  module whose evaluation is asynchronous (because the module itself
+  is async or it transitively depends on one) from a fully-sync
+  module. On the instance side this is the `asyncEvaluation` field.
+  See [Module-instance contract](#module-instance-contract).
+- `[[PendingAsyncDependencies]]` counts the async deps that have not
+  yet fulfilled; on the instance, `pendingAsyncDependencies`. See
+  the same section.
+- `[[TopLevelCapability]]` is the deferred-promise pair the
+  `compartment.import` promise resolves through when the async body
+  completes; on the instance, `topLevelCapability`. Same section.
+
+The seventeen rows below are framed as the implementation's
+acceptance criteria. test262's TLA directory is the canonical
+upstream; if a future test262 addition catches a regression these
+rows do not, a follow-up adds the row (or imports the test262
+fixture directly through the shim's transliteration harness).
 
 | # | Shape | Equivalent test262 fixture | What it asserts |
 |---|-------|---------------------------|-----------------|
@@ -219,6 +253,17 @@ output. The flag travels in the precompiled record alongside
 the program source; the *Async* dimension is the new
 `__moduleIsAsync__` boolean).
 
+A note on class static blocks. The `path.getFunctionParent()` check
+treats a class static block as a non-function scope: `await` is a
+syntax error inside a static block per the current 262 grammar (the
+static block is not an async-function body), so the
+`AwaitExpression` visitor never fires inside one. If a future
+proposal lifts that restriction (e.g. an `async` static block, or a
+`top-level-await-in-static-block` grammar variant), the visitor will
+need a static-block check parallel to the function-parent check. Out
+of scope for this design; flagged so the next analyzer revision
+recognizes it as an explicit decision.
+
 ### Module-instance contract
 
 The shape below tracks the SES-shim's existing `makeModuleInstance`
@@ -321,27 +366,38 @@ spec requires.
 
 ```mermaid
 sequenceDiagram
-  participant U as User code
-  participant C as Compartment
-  participant L as Linker
-  participant R as Root module
-  participant D as Async dep
+  participant User as User code
+  participant Compartment
+  participant Linker
+  participant Root as Root module
+  participant Dep as Async dep
 
-  U->>C: compartment.import(spec)
-  C->>L: load + link spec
-  L-->>C: rootInstance (with caps)
-  C->>R: execute()
-  Note over R: walks resolvedImports bottom-up
-  R->>D: execute()
-  D-->>R: Promise<undefined>
-  Note over R: pendingAsyncDependencies > 0;<br/>register completion handler
-  R-->>C: topLevelCapability.promise
-  Note over D: awaited promise resolves
-  D->>D: AsyncModuleExecutionFulfilled
-  D->>R: notify parent (decrement pending)
-  Note over R: pending==0; if [[Async]],<br/>start async body; else resolve capability
-  R-->>U: resolved namespace
+  User->>Compartment: compartment.import(spec)
+  Compartment->>Linker: load + link spec
+  Linker-->>Compartment: rootInstance (with caps)
+  Compartment->>Root: execute()
+  Note over Root: walks resolvedImports bottom-up
+  Root->>Dep: execute()
+  Dep-->>Root: Promise<undefined>
+  Note over Root: pendingAsyncDependencies > 0;<br/>register completion handler
+  Root-->>Compartment: topLevelCapability.promise
+  Note over Dep: awaited promise resolves
+  Dep->>Dep: AsyncModuleExecutionFulfilled
+  Dep->>Root: notify parent (decrement pending)
+  Note over Root: pending==0; if [[Async]],<br/>start async body; else resolve capability
+  Root-->>User: resolved namespace
 ```
+
+The Root module is the importer the user named in
+`compartment.import(spec)`; the Async dep is any transitively-reached
+module whose `asyncEvaluation` is true. The
+`topLevelCapability.promise` is the same promise the user holds via
+`compartment.import`; its resolution is what the User actor observes
+as "the import resolved." The `pendingAsyncDependencies` field on Root
+is non-zero between the dep registering and `AsyncModuleExecutionFulfilled`
+walking the parent edges; the field reaching zero is what gates the
+Root's own body (if Root is `[[Async]]`) or the Root's capability
+resolution (if Root is purely-sync importing async).
 
 The recursive `instance.execute()` in `module-instance.js` line 401 has
 to change shape:
