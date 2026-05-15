@@ -269,3 +269,107 @@ test('@@toStringTag is preserved on the URL and URLSearchParams prototypes', t =
     'URLSearchParams Iterator',
   );
 });
+
+test('URL and URLSearchParams inherit from Function.prototype', t => {
+  if (!hasURL || !hasURLSearchParams) {
+    t.pass('host does not provide URL/URLSearchParams');
+    return;
+  }
+  // The permits table names `[[Proto]]: '%FunctionPrototype%'` on both
+  // constructors. A regression that pointed the [[Proto]] elsewhere would
+  // break `Function.prototype` inheritance and the standard call/apply/bind
+  // surface on the constructor.
+  t.is(Object.getPrototypeOf(URL), Function.prototype);
+  t.is(Object.getPrototypeOf(URLSearchParams), Function.prototype);
+});
+
+test('URLSearchParams iterator prototype inherits from %IteratorPrototype%', t => {
+  if (!hasURLSearchParams) {
+    t.pass('host does not provide URLSearchParams');
+    return;
+  }
+  // The permits table names `[[Proto]]: '%IteratorPrototype%'` on the
+  // URLSearchParams iterator prototype, which the anonymous-intrinsics
+  // sampler seeds. A regression that misnamed or omitted the [[Proto]]
+  // permit would break `Symbol.iterator` inheritance and prevent the
+  // iterator from being spreadable or for-of usable.
+  const iteratorProto = Object.getPrototypeOf(new URLSearchParams().entries());
+  // %IteratorPrototype% is the shared object reached from any built-in
+  // iterator; comparing against the Array iterator's [[Proto]] is the
+  // canonical way to obtain a reference to it.
+  const sharedIteratorProto = Object.getPrototypeOf(
+    Object.getPrototypeOf([][Symbol.iterator]()),
+  );
+  t.is(Object.getPrototypeOf(iteratorProto), sharedIteratorProto);
+  // The shared %IteratorPrototype% carries `@@iterator` returning `this`,
+  // which is what makes a bare iterator usable in `for-of` and spread.
+  t.is(typeof sharedIteratorProto[Symbol.iterator], 'function');
+});
+
+test('constructor reverse-link is preserved on URL and URLSearchParams prototypes', t => {
+  if (!hasURL || !hasURLSearchParams) {
+    t.pass('host does not provide URL/URLSearchParams');
+    return;
+  }
+  // The permits table names `constructor: 'URL'` and
+  // `constructor: 'URLSearchParams'` on the respective prototypes. A
+  // regression that cut these reverse-links would make
+  // `new URL(...).constructor` fall through to `Object`, breaking
+  // duck-typing checks consumers may legitimately do.
+  t.is(URL.prototype.constructor, URL);
+  t.is(URLSearchParams.prototype.constructor, URLSearchParams);
+  t.is(new URL('http://example.com/').constructor, URL);
+  t.is(new URLSearchParams('a=1').constructor, URLSearchParams);
+});
+
+test('URL.prototype.toString and toJSON are preserved', t => {
+  if (!hasURL) {
+    t.pass('host does not provide URL');
+    return;
+  }
+  // The permits table names both `toString: fn` and `toJSON: fn` on
+  // %URLPrototype%. A regression that pruned either would lose the
+  // standard string-coercion surface (`toString`) or break
+  // `JSON.stringify(url)` (`toJSON`), each of which consumers rely on.
+  const url = new URL('https://example.com/path?q=1#frag');
+  t.is(typeof URL.prototype.toString, 'function');
+  t.is(typeof URL.prototype.toJSON, 'function');
+  t.is(url.toString(), 'https://example.com/path?q=1#frag');
+  t.is(url.toJSON(), 'https://example.com/path?q=1#frag');
+  t.is(JSON.stringify({ u: url }), '{"u":"https://example.com/path?q=1#frag"}');
+});
+
+test('URL prototype accessor setters mutate the instance after lockdown', t => {
+  if (!hasURL) {
+    t.pass('host does not provide URL');
+    return;
+  }
+  // The permits table marks `href`, `protocol`, `username`, `password`,
+  // `host`, `hostname`, `port`, `pathname`, `search`, and `hash` as
+  // `accessor` (get + set), not `getter`. A regression that demoted any of
+  // them to `getter` would silently break assignment because the setter
+  // would be removed and the assignment would do nothing in non-strict
+  // code (or throw in strict mode); this exercises each setter and reads
+  // the result back through the getter.
+  const url = new URL('https://example.com/');
+  url.href = 'https://other.example.com/x?y=1#z';
+  t.is(url.href, 'https://other.example.com/x?y=1#z');
+  url.protocol = 'http:';
+  t.is(url.protocol, 'http:');
+  url.username = 'alice';
+  t.is(url.username, 'alice');
+  url.password = 'secret';
+  t.is(url.password, 'secret');
+  url.hostname = 'inner.example.com';
+  t.is(url.hostname, 'inner.example.com');
+  url.port = '8080';
+  t.is(url.port, '8080');
+  url.host = 'host.example.com:9090';
+  t.is(url.host, 'host.example.com:9090');
+  url.pathname = '/new/path';
+  t.is(url.pathname, '/new/path');
+  url.search = '?a=2';
+  t.is(url.search, '?a=2');
+  url.hash = '#frag2';
+  t.is(url.hash, '#frag2');
+});
