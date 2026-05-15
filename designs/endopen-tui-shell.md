@@ -18,8 +18,11 @@ center, status bar with model + tokens + cost at the bottom, and a
 keyboard-first command palette accessed by a leader key.
 
 Endo's primary UX surfaces are:
-- **Chat** ([`packages/chat`](../packages/chat)): browser-based, message-list-oriented, color-scheme-aware.
-- **Familiar** ([`packages/familiar`](../packages/familiar)): the Electron shell that wraps Chat for desktop installation.
+
+- **Chat** ([`packages/chat`](../packages/chat)):
+  browser-based, message-list-oriented, color-scheme-aware.
+- **Familiar** ([`packages/familiar`](../packages/familiar)):
+  the Electron shell that wraps Chat for desktop installation.
 
 Neither is shaped like a coding agent's IDE. The Chat UI's strength
 is messaging; its weakness for coding work is the lack of a file
@@ -176,15 +179,38 @@ bindings are scoped to when the focus is *not* in the chat bar.
 
 ## Phased Implementation
 
-1. **New space-kind plumbing**: register the `coding` space kind in
-   `packages/chat/spaces-gutter.js`; add a kind selector to
-   `add-space-modal.js`. ~150 LOC. **Size: S.**
-2. **Layout shell**: three-column CSS grid (sidebar | center | dialog overlay); reuse `blob-viewer.js` for the center column when a file is selected. ~300 LOC. **Size: M.**
-3. **File-tree pane**: rebind `browser-tree.js` to a `Mount` capability rather than the pet-name namespace. ~200 LOC. **Size: M.**
-4. **Todo pane**: a new component subscribing to a `todo` shape on the space's guest. ~150 LOC. **Size: S.**
-5. **Status bar**: a new component reading model / tokens / cost from the latest Lal envelope. ~100 LOC. **Size: S.**
-6. **Diff viewer**: a new component for rendering unified-diff blobs inline. ~250 LOC. **Size: M.**
-7. **Keyboard map**: extend `platform-keys.js` with the coding-space bindings. ~80 LOC. **Size: S.**
+1. **New space-kind plumbing**:
+   register the `coding` space kind in `packages/chat/spaces-gutter.js`;
+   add a kind selector to `add-space-modal.js`.
+   ~150 LOC.
+   **Size: S.**
+2. **Layout shell**:
+   three-column CSS grid (sidebar | center | dialog overlay);
+   reuse `blob-viewer.js` for the center column when a file is selected.
+   ~300 LOC.
+   **Size: M.**
+3. **File-tree pane**:
+   rebind `browser-tree.js` to a `Mount` capability rather than the
+   pet-name namespace.
+   ~200 LOC.
+   **Size: M.**
+4. **Todo pane**:
+   a new component subscribing to a `todo` shape on the space's guest.
+   ~150 LOC.
+   **Size: S.**
+5. **Status bar**:
+   a new component reading model / tokens / cost from the latest Lal
+   envelope.
+   ~100 LOC.
+   **Size: S.**
+6. **Diff viewer**:
+   a new component for rendering unified-diff blobs inline.
+   ~250 LOC.
+   **Size: M.**
+7. **Keyboard map**:
+   extend `platform-keys.js` with the coding-space bindings.
+   ~80 LOC.
+   **Size: S.**
 
 Total: 4-5 weeks for all phases; phases 1+2+3 alone deliver a usable
 shell.
@@ -201,9 +227,25 @@ shell.
 
 ## Open Questions
 
-- **Default model selection**: should the coding space default to a different model than a regular chat space? Proposal: yes — agent-mode default is a stronger model (Sonnet / Opus class), plan-mode default is the same. The user can override via the model dialog.
-- **Multi-session in one space**: OpenCode's TUI lets the user have multiple sessions in one window via tabs. Should the coding space have tabs? Proposal: no in v1; the spaces gutter already provides multi-space navigation and tabs would duplicate that surface.
-- **Mobile**: the layout assumes ≥120 columns; what is the mobile fallback? Proposal: the coding space is desktop-only in v1; on narrow viewports, fall back to the regular chat space.
+- **Default model selection**:
+  should the coding space default to a different model than a regular
+  chat space?
+  Proposal: yes;
+  agent-mode default is a stronger model (Sonnet / Opus class),
+  plan-mode default is the same.
+  The user can override via the model dialog.
+- **Multi-session in one space**:
+  OpenCode's TUI lets the user have multiple sessions in one window
+  via tabs.
+  Should the coding space have tabs?
+  Proposal: no in v1;
+  the spaces gutter already provides multi-space navigation and tabs
+  would duplicate that surface.
+- **Mobile**:
+  the layout assumes ≥120 columns;
+  what is the mobile fallback?
+  Proposal: the coding space is desktop-only in v1;
+  on narrow viewports, fall back to the regular chat space.
 
 ## Design Decisions
 

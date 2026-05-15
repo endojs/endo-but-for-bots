@@ -10,23 +10,26 @@
 ## What is the Problem Being Solved?
 
 The [Agent Client Protocol](https://agentclientprotocol.com/) is a
-JSON-RPC over stdio protocol for editor / IDE clients to drive
-coding agents. Zed integrates with OpenCode via ACP; the Zed
-configuration is a four-line `agent_servers` block in
-`~/.config/zed/settings.json` (per
-[`packages/opencode/src/acp/README.md`](../../external/opencode/packages/opencode/src/acp/README.md)).
+JSON-RPC over stdio protocol for editor / IDE clients to drive coding
+agents.
+Zed integrates with OpenCode via ACP;
+the Zed configuration is a four-line `agent_servers` block in
+`~/.config/zed/settings.json`
+(per [`packages/opencode/src/acp/README.md`](../../external/opencode/packages/opencode/src/acp/README.md)).
 
 Endo has no ACP surface, so Endo guests are not addressable from
-Zed or any other ACP-aware client. Closing this gap is operationally
-significant: it makes Endo a *drop-in* alternative to OpenCode for
-ACP clients, without the client needing to learn OCapN or CapTP.
+Zed or any other ACP-aware client.
+Closing this gap is operationally significant:
+it makes Endo a *drop-in* alternative to OpenCode for ACP clients,
+without the client needing to learn OCapN or CapTP.
 
-The capability story has to be preserved. OpenCode's ACP server
-auto-approves all permission requests
+The capability story has to be preserved.
+OpenCode's ACP server auto-approves all permission requests
 ([`acp/README.md`](../../external/opencode/packages/opencode/src/acp/README.md)
-*Current Limitations*, point 4); Endo's ACP server must route
-permission requests through the existing form-request machinery
-[daemon-form-request](daemon-form-request.md) so the user-in-the-loop
+*Current Limitations*, point 4);
+Endo's ACP server must route permission requests through the existing
+form-request machinery
+([daemon-form-request](daemon-form-request.md)) so the user-in-the-loop
 guarantee survives the protocol bridge.
 
 ## Design
@@ -36,27 +39,41 @@ guarantee survives the protocol bridge.
 ACP is a JSON-RPC protocol with the following methods (per
 OpenCode's
 [`acp/agent.ts`](../../external/opencode/packages/opencode/src/acp/agent.ts)
-imports lines 1 through 32):
+imports lines 1 through 32).
+The object of every session-scoped method is the session;
+where a method also acts on something inside the session, that
+something is named after the colon.
 
 - `initialize`: protocol version negotiation, capability advertisement.
 - `authenticate`: authentication flow (ACP supports OAuth / API key / none).
 - `session/new`: create a new session with a working directory and MCP servers.
 - `session/load`: resume an existing session.
-- `session/prompt`: send a prompt; stream back updates.
-- `session/cancel`: interrupt a prompt in flight.
+- `session/prompt`: send a prompt into a session; stream back updates.
+- `session/cancel`: interrupt a session's in-flight prompt.
 - `session/close`: tear down a session.
 - `session/list`: enumerate active sessions.
-- `session/fork`: branch a session into a child.
+- `session/fork`: branch a session into a child session.
 - `session/resume`: re-attach to a paused session.
 
 The adapter is a standalone node process at `packages/endo-acp/`
 (or `packages/cli/src/acp.js` as a verb) that:
 
-1. Speaks JSON-RPC on stdio (using `@agentclientprotocol/sdk` for the protocol parser).
-2. Holds a single Endo client connection to the user's daemon (via the standard `@endo/client` library or the gateway's bearer-token-auth endpoint).
-3. Maps each ACP session onto one Endo *guest*. ACP `session/new` calls `provideGuest`; ACP `session/load` looks up by formula ID stored in a per-process session map.
-4. Maps `session/prompt` onto `E(guest).request(prompt)` plus a subscription on the guest's inbox; streams `session/update` notifications for each tool call and result.
-5. Translates ACP permission requests into Endo form-request submissions; the daemon's existing UI surfaces (Familiar / Chat) render the prompt, the user answers, and the answer flows back as the ACP permission response.
+1. Speaks JSON-RPC on stdio
+   (using `@agentclientprotocol/sdk` for the protocol parser).
+2. Holds a single Endo client connection to the user's daemon
+   (via the standard `@endo/client` library or the gateway's
+   bearer-token-auth endpoint).
+3. Maps each ACP session onto one Endo *guest*.
+   ACP `session/new` calls `provideGuest`;
+   ACP `session/load` looks up by formula ID stored in a per-process
+   session map.
+4. Maps `session/prompt` onto `E(guest).request(prompt)` plus a
+   subscription on the guest's inbox;
+   streams `session/update` notifications for each tool call and result.
+5. Translates ACP permission requests into Endo form-request submissions;
+   the daemon's existing UI surfaces (Familiar / Chat) render the prompt,
+   the user answers, and the answer flows back as the ACP permission
+   response.
 
 ### Wire diagram
 
@@ -209,10 +226,32 @@ Total: 4-5 weeks for phases 1-6; phase 7 is a follow-on toggle.
 
 ## Open Questions
 
-- **Authentication**: the ACP spec has an `authenticate` method (OAuth / API key / none). Proposal: the adapter holds the daemon's bearer token; the ACP `authenticate` step is a no-op (the user authenticated the adapter at config time, not via ACP). Document this in the README so clients do not expect a credential dance.
-- **Multi-tenancy**: can one adapter process serve multiple ACP clients simultaneously? Proposal: yes; the per-process session map keys sessions by ACP-supplied session-id. The daemon does not learn about ACP clients.
-- **Mapping ACP `cwd` to Endo `Mount`**: the adapter needs a default `Mount` capability or the user must endow each session manually. Proposal: a wildcard `~/projects/*` mount delegated to the adapter at config time; the adapter narrows per-session to the requested `cwd`.
-- **Streaming format**: ACP's `session/update` is one update-per-tool-call; how do we render a many-second LLM token stream? Proposal: emit `session/update` per assistant *message* (post-streaming), and per *tool call* (start, result). OpenCode does not stream tokens to ACP today ([`acp/README.md`](../../external/opencode/packages/opencode/src/acp/README.md) *Current Limitations*, point 1); we match this and revisit when ACP gains a token-stream channel.
+- **Authentication**:
+  the ACP spec has an `authenticate` method (OAuth / API key / none).
+  Proposal: the adapter holds the daemon's bearer token;
+  the ACP `authenticate` step is a no-op
+  (the user authenticated the adapter at config time, not via ACP).
+  Document this in the README so clients do not expect a credential dance.
+- **Multi-tenancy**:
+  can one adapter process serve multiple ACP clients simultaneously?
+  Proposal: yes;
+  the per-process session map keys sessions by ACP-supplied session-id.
+  The daemon does not learn about ACP clients.
+- **Mapping ACP `cwd` to Endo `Mount`**:
+  the adapter needs a default `Mount` capability or the user must endow
+  each session manually.
+  Proposal: a wildcard `~/projects/*` mount delegated to the adapter at
+  config time;
+  the adapter narrows per-session to the requested `cwd`.
+- **Streaming format**:
+  ACP's `session/update` is one update-per-tool-call;
+  how do we render a many-second LLM token stream?
+  Proposal: emit `session/update` per assistant *message* (post-streaming),
+  and per *tool call* (start, result).
+  OpenCode does not stream tokens to ACP today
+  ([`acp/README.md`](../../external/opencode/packages/opencode/src/acp/README.md)
+  *Current Limitations*, point 1);
+  we match this and revisit when ACP gains a token-stream channel.
 
 ## Design Decisions
 
@@ -241,8 +280,12 @@ Total: 4-5 weeks for phases 1-6; phase 7 is a follow-on toggle.
 - [endopen](endopen.md) — primary comparative analysis.
 - [gateway-bearer-token-auth](gateway-bearer-token-auth.md) — auth substrate.
 - [daemon-form-request](daemon-form-request.md) — permission UX.
-- [trust-on-first-bind](trust-on-first-bind.md) — capability-policy adapter referenced by future MCP-client design.
-- OpenCode reference: [`packages/opencode/src/acp/agent.ts`](../../external/opencode/packages/opencode/src/acp/agent.ts) and [`acp/README.md`](../../external/opencode/packages/opencode/src/acp/README.md).
+- [trust-on-first-bind](trust-on-first-bind.md) — capability-policy
+  adapter referenced by future MCP-client design.
+- OpenCode reference:
+  [`packages/opencode/src/acp/agent.ts`](../../external/opencode/packages/opencode/src/acp/agent.ts)
+  and
+  [`acp/README.md`](../../external/opencode/packages/opencode/src/acp/README.md).
 
 ## Prompt
 

@@ -11,29 +11,33 @@
 
 OpenCode is a free and open-source AI coding agent built by Anomaly Co
 (the creators of [terminal.shop](https://terminal.shop)), released under
-the MIT license. The canonical repository is
+the MIT license.
+The canonical repository is
 [`github.com/anomalyco/opencode`](https://github.com/anomalyco/opencode);
-the alternate `github.com/sst/opencode` is unrelated. OpenCode is
-distributed via `npm i -g opencode-ai`, `brew install opencode`,
+the alternate `github.com/sst/opencode` is unrelated.
+OpenCode is distributed via `npm i -g opencode-ai`, `brew install opencode`,
 `scoop install opencode`, and a single-binary `curl | bash` installer.
 
-OpenCode positions itself as Claude Code's open-source counterpart:
+OpenCode positions itself as the open-source counterpart of Claude Code
+(Anthropic's terminal coding agent):
 provider-agnostic LLM routing, an opinionated TUI built on Bubble Tea
 (Go) wrapping a TypeScript core (Bun runtime), built-in LSP, and a
 client/server architecture that lets the same daemon power the local
 TUI, a remote ACP client, or a future mobile shell.
 
 The clone walked for this document is at
-[`external/opencode/`](../../external/opencode/) (HEAD
-`d59d9966`, captured 2026-05-15) in the dispatch root. The
-monorepo carries 21 packages under `packages/`; the
-load-bearing one is `packages/opencode/` (the TypeScript core
-running on Bun). The Go-based TUI lives under
+[`external/opencode/`](../../external/opencode/) in the dispatch root
+(HEAD `d59d9966`, captured 2026-05-15).
+The monorepo carries 21 packages under `packages/`;
+the load-bearing one is `packages/opencode/` (the TypeScript core
+running on Bun).
+The Go-based TUI lives under
 `packages/opencode/src/cli/cmd/tui/`.
 
 This document enumerates OpenCode's features and integrations and
 maps each to the Endo equivalent: already exists, designed, or
-would require new work. It mirrors the shape of
+would require new work.
+It mirrors the shape of
 [`endoclaw.md`](endoclaw.md), the prior OpenClaw comparative analysis.
 
 ## Architecture Comparison
@@ -56,30 +60,37 @@ would require new work. It mirrors the shape of
 The fundamental architectural difference is the **capability model**.
 OpenCode's agents run as a single OS process with ambient authority;
 the `Permission` service evaluates each tool call against a ruleset
-([`packages/opencode/src/permission/index.ts`](../../external/opencode/packages/opencode/src/permission/index.ts)
-lines 128 through 263) and either allows, asks, or denies. The agent
-itself is unconfined: if the ruleset misses a case, the process can
-read `~/.ssh/id_rsa` directly. Endo's object-capability model means
-each guest is structurally unable to name what it has not been
-granted; the permission story is "you only hold what you were given",
+(see `permission/index.ts` lines 128 through 263 in the citation
+index below) and either allows, asks, or denies.
+The agent itself is unconfined:
+if the ruleset misses a case, the process can read `~/.ssh/id_rsa` directly.
+Endo's object-capability model means each guest is structurally unable
+to name what it has not been granted;
+the permission story is "you only hold what you were given",
 not "you are running in a sandbox that filters your system calls".
 
 The second fundamental difference is **the unit of isolation**.
 OpenCode isolates *sessions* (rows in SQLite, parent-child links via
-the `parent_id` column,
-[`packages/opencode/src/session/session.ts`](../../external/opencode/packages/opencode/src/session/session.ts)
-lines 1 through 1011); all sessions share one OS process and one
-permission service. Endo isolates *guests* (formula-typed entities
-in a durable graph,
+the `parent_id` column;
+see `session.ts` lines 1 through 1011 in the citation index);
+all sessions share one OS process and one permission service.
+Endo isolates *guests*, formula-typed entities in a durable graph.
+Endo's daemon enumerates 30 formula types in
 [`packages/daemon/src/formula-type.js`](../packages/daemon/src/formula-type.js)
-lines 6 through 35); each guest can hold a different capability
-set, and the daemon's worker model puts the guest in its own SES
-compartment within its own XS or Node worker. Concurrent execution
-is the default in Endo and the exception in OpenCode (the
-`background: true` flag is gated behind
-`OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true`,
-[`packages/opencode/src/tool/task.ts`](../../external/opencode/packages/opencode/src/tool/task.ts)
-lines 113 through 117).
+lines 6 through 37 (one of which is `guest`, the type covering this case).
+Each guest can hold a different capability set,
+and the daemon's worker model puts the guest in its own SES
+compartment within its own XS or Node worker.
+In the OCapN sense each guest is a *vat*:
+an isolated message-queue plus compartment plus worker
+(see [daemon-256-bit-identifiers](daemon-256-bit-identifiers.md) for
+the formula identity story and
+[daemon-capability-filesystem](daemon-capability-filesystem.md) for
+the capability-graph story).
+Concurrent execution is the default in Endo and the exception in OpenCode:
+the `background: true` flag is gated behind
+`OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true`
+(see `task.ts` lines 113 through 117 in the citation index).
 
 ## Feature-by-Feature Mapping
 
@@ -98,22 +109,26 @@ lines 113 through 117).
 | Cloudflare AI Gateway          | —                                  | Not designed                                      |
 | LLM Gateway (router)           | —                                  | Not designed                                      |
 
-OpenCode bundles a router-aware provider table at
-[`packages/opencode/src/provider/provider.ts`](../../external/opencode/packages/opencode/src/provider/provider.ts)
-lines 88 through 119 (the `BUNDLED_PROVIDERS` map; each entry is a
-lazy import of an `@ai-sdk/<vendor>` package) and adds vendor-specific
-header injection at lines 410 through 459 (the `customLoaders`
-dictionary; OpenRouter's `HTTP-Referer` and `X-Title` headers are at
-line 420). The Vercel AI SDK is the common shape; vendor-specific
-quirks live in 15-line loader closures, not in scattered conditionals.
+OpenCode bundles a router-aware provider table at `provider.ts`
+lines 88 through 119:
+the `BUNDLED_PROVIDERS` map, with each entry a lazy import of an
+`@ai-sdk/<vendor>` package.
+It adds vendor-specific header injection at lines 410 through 459,
+the `customLoaders` dictionary;
+OpenRouter's `HTTP-Referer` and `X-Title` headers are at line 420.
+The Vercel AI SDK is the common shape;
+vendor-specific quirks live in 15-line loader closures,
+not in scattered conditionals
+(see `provider.ts` in the citation index below).
 
 Endo's Lal has one provider per file with a single `chat(messages, tools)`
 shape ([`packages/lal/providers/index.js`](../packages/lal/providers/index.js)
-lines 33 through 65). The shape is consistent but the dispatch is by
-host URL string-match, not by an explicit provider registry. Adding a
-router-aware provider (OpenRouter) requires either a new branch in
-`createProvider` or a registry refactor; see
-[endopen-openrouter](endopen-openrouter.md) for the design.
+lines 33 through 65).
+The shape is consistent but the dispatch is by host URL string-match,
+not by an explicit provider registry.
+Adding a router-aware provider (OpenRouter) requires either a new branch in
+`createProvider` or a registry refactor;
+see [endopen-openrouter](endopen-openrouter.md) for the design.
 
 ### Tools
 
@@ -138,21 +153,22 @@ router-aware provider (OpenRouter) requires either a new branch in
 | `question`        | `daemon-form-request` interactive form                           | **Complete**                          |
 | `plan`            | (would be an agent-mode flag, prompt-only)                       | Not designed                          |
 
-OpenCode's tool registry is centralized at
-[`packages/opencode/src/tool/registry.ts`](../../external/opencode/packages/opencode/src/tool/registry.ts);
-each tool ships as a `<name>.ts` + `<name>.txt` pair (executable +
-description prompt). The shell tool
-([`packages/opencode/src/tool/shell.ts`](../../external/opencode/packages/opencode/src/tool/shell.ts))
-parses commands, classifies them by side effect (read-only / mutating /
-cwd-changing, lines 27 through 65), and routes through the permission
-service for ask/deny decisions.
+OpenCode's tool registry is centralized at `tool/registry.ts`;
+each tool ships as a `<name>.ts` + `<name>.txt` pair
+(executable + description prompt).
+The shell tool (`tool/shell.ts`) parses commands,
+classifies them by side effect
+(read-only / mutating / cwd-changing, lines 27 through 65),
+and routes through the permission service for ask/deny decisions
+(see the citation index below).
 
 The Endo analog of OpenCode's tool registry would be a guest's
-capability bundle plus its agent's tool-arming layer. There is no
-single registry; each agent module receives `powers` and elects
-which capabilities to expose to its LLM client. The two-layer pattern
-(capability + tool wrapper that calls the capability) is documented
-in [`daemon-agent-tools`](daemon-agent-tools.md).
+capability bundle plus its agent's tool-arming layer.
+There is no single registry;
+each agent module receives `powers` and elects
+which capabilities to expose to its LLM client.
+The two-layer pattern (capability + tool wrapper that calls the
+capability) is documented in [`daemon-agent-tools`](daemon-agent-tools.md).
 
 ### Subagents and Concurrent Execution
 
@@ -165,26 +181,27 @@ in [`daemon-agent-tools`](daemon-agent-tools.md).
 | `task_status` polling                                    | Inbox / `followMessages`                         | **Available**                                   |
 | Concurrent panel review (the maintainer's framing)       | Concurrent guest execution                       | Endo advantage; see [endopen-concurrent-subagents](endopen-concurrent-subagents.md) |
 
-OpenCode's subagent story is in the `task` tool
-([`packages/opencode/src/tool/task.ts`](../../external/opencode/packages/opencode/src/tool/task.ts)
-lines 95 through 326) and the agent registry
-([`packages/opencode/src/agent/agent.ts`](../../external/opencode/packages/opencode/src/agent/agent.ts)
-lines 79 through 461). The maintainer's framing is right: OpenCode
-synchronously launches one subagent at a time, returns its final text
-to the parent, and only experimental flags unlock fire-and-forget
-parallelism. The `BackgroundJob` service
-([`packages/opencode/src/background/job.ts`](../../external/opencode/packages/opencode/src/background/job.ts))
-is the supporting plumbing; the gate is one boolean in
-[`task.ts`](../../external/opencode/packages/opencode/src/tool/task.ts)
-line 113.
+OpenCode's subagent story is in the `task` tool (`tool/task.ts`
+lines 95 through 326) and the agent registry (`agent/agent.ts`
+lines 79 through 461;
+see the citation index below).
+The maintainer's framing is right:
+OpenCode synchronously launches one subagent at a time,
+returns its final text to the parent,
+and only experimental flags unlock fire-and-forget parallelism.
+The `BackgroundJob` service (`background/job.ts`) is the supporting
+plumbing;
+the gate is one boolean in `task.ts` line 113.
 
-Endo's concurrency story is structurally different. Each guest is a
-vat in the OCapN sense: its own SES compartment, its own message
-loop, addressable by formula ID. A guest spawning another guest is a
-regular `formulateGuest` + `send` interaction, not a special tool;
-several guests are in flight simultaneously by default. The
-*hard* problem in OpenCode (concurrent subagents) is the *trivial*
-fall-out in Endo. See [endopen-concurrent-subagents](endopen-concurrent-subagents.md)
+Endo's concurrency story is structurally different.
+Each guest is a vat in the OCapN sense:
+its own SES compartment, its own message loop, addressable by formula ID.
+A guest spawning another guest is a regular `formulateGuest` + `send`
+interaction, not a special tool;
+several guests are in flight simultaneously by default.
+The *hard* problem in OpenCode (concurrent subagents) is the *trivial*
+fall-out in Endo.
+See [endopen-concurrent-subagents](endopen-concurrent-subagents.md)
 for the UX surface that exposes this advantage.
 
 ### UX Surface: The TUI Question
@@ -199,16 +216,18 @@ for the UX surface that exposes this advantage.
 | Remote-driven from mobile       | Chat UI in mobile browser (via gateway)  | Designed (gateway-bearer-token-auth)          |
 
 The maintainer's framing is that a "space more like opencode UX
-might be helpful". The Endo answer is **not** to replace Chat or
-Familiar with a TUI; both ship and both work. Instead, this is an
-opportunity for a *new space kind* (in the Chat sense) whose layout
-borrows OpenCode's idioms: keyboard-first command palette, file-tree
-sidebar, an inline diff viewer, a "todo list" pane fed by the
-agent's plan, a status bar showing model + tokens + cost. The
-endor-tui design (M6) is the Rust terminal incarnation; this design
-proposes a complementary browser-side opencode-shaped space that
-ships before the Rust port. See
-[endopen-tui-shell](endopen-tui-shell.md) for the surface.
+might be helpful".
+The Endo answer is **not** to replace Chat or Familiar with a TUI;
+both ship and both work.
+Instead, this is an opportunity for a *new space kind* (in the Chat sense)
+whose layout borrows OpenCode's idioms:
+keyboard-first command palette, file-tree sidebar, an inline diff viewer,
+a "todo list" pane fed by the agent's plan,
+a status bar showing model + tokens + cost.
+The endor-tui design (M6) is the Rust terminal incarnation;
+this design proposes a complementary browser-side opencode-shaped space
+that ships before the Rust port.
+See [endopen-tui-shell](endopen-tui-shell.md) for the surface.
 
 ### Plugin / Skill / MCP Ecosystem
 
@@ -222,43 +241,39 @@ ships before the Rust port. See
 | ACP server (be an ACP backend)    | —                                                 | Not designed ([endopen-acp-server](endopen-acp-server.md)) |
 | Skill registry / index            | —                                                 | Not designed ([endoclaw-skill-registry](endoclaw-skill-registry.md)) |
 
-OpenCode's plugin module
-([`packages/opencode/src/plugin/index.ts`](../../external/opencode/packages/opencode/src/plugin/index.ts)
-lines 56 through 100) keeps a list of built-in `INTERNAL_PLUGINS`
-plus user-installed NPM modules. The skill subsystem
-([`packages/opencode/src/skill/index.ts`](../../external/opencode/packages/opencode/src/skill/index.ts)
-lines 1 through 60) treats `SKILL.md` files as a content-addressed
-playbook: each skill has a `name` and a `description`; the agent's
-prompt enumerates the skill names, and the agent invokes one via a
-`skill` tool call (resolution: filesystem-walk for `**/SKILL.md`
-files). MCP integration
-([`packages/opencode/src/mcp/index.ts`](../../external/opencode/packages/opencode/src/mcp/index.ts)
-lines 1 through 80) is bidirectional: OpenCode is an MCP client
-(calling out to MCP servers configured in `opencode.json`), and the
-ACP server ([`packages/opencode/src/acp/agent.ts`](../../external/opencode/packages/opencode/src/acp/agent.ts))
-makes OpenCode an ACP-protocol backend for any ACP client (Zed
-integrates this way).
+OpenCode's plugin module (`plugin/index.ts` lines 56 through 100)
+keeps a list of built-in `INTERNAL_PLUGINS` plus user-installed NPM modules.
+The skill subsystem (`skill/index.ts` lines 1 through 60) treats `SKILL.md`
+files as a content-addressed playbook:
+each skill has a `name` and a `description`;
+the agent's prompt enumerates the skill names,
+and the agent invokes one via a `skill` tool call
+(resolution: filesystem-walk for `**/SKILL.md` files).
+MCP integration (`mcp/index.ts` lines 1 through 80) is bidirectional:
+OpenCode is an MCP client (calling out to MCP servers configured in
+`opencode.json`), and the ACP server (`acp/agent.ts`) makes OpenCode an
+ACP-protocol backend for any ACP client
+(Zed integrates this way; see the citation index below).
 
-Endo's plugin model is structurally stricter (a plugin is a guest
-module receiving capabilities) but does not interoperate with the
-broader agent ecosystem. The ACP server gap is the most concrete
-adoption-relevant gap: writing an ACP adapter for the daemon would
-let Zed (and other ACP clients) drive Endo as if it were OpenCode,
-without losing Endo's capability story. See
-[endopen-acp-server](endopen-acp-server.md).
+Endo's plugin model is structurally stricter
+(a plugin is a guest module receiving capabilities)
+but does not interoperate with the broader agent ecosystem.
+The ACP server gap is the most concrete adoption-relevant gap:
+writing an ACP adapter for the daemon would let Zed (and other ACP clients)
+drive Endo as if it were OpenCode, without losing Endo's capability story.
+See [endopen-acp-server](endopen-acp-server.md).
 
 ### Permission Model
 
 OpenCode's permission model is a flat ruleset of triples
 (`permission name`, `pattern`, `action`) where `action` is one of
 `allow` / `ask` / `deny`, evaluated in source order
-([`packages/opencode/src/permission/index.ts`](../../external/opencode/packages/opencode/src/permission/index.ts)
-lines 128 through 175). Defaults are set per-agent in
-[`agent.ts`](../../external/opencode/packages/opencode/src/agent/agent.ts)
-lines 103 through 122; user overrides come from `opencode.json`'s
-`permission` field. The subagent-spawning case derives a stricter
-ruleset for the child from the parent's
-([`packages/opencode/src/agent/subagent-permissions.ts`](../../external/opencode/packages/opencode/src/agent/subagent-permissions.ts)).
+(`permission/index.ts` lines 128 through 175).
+Defaults are set per-agent in `agent.ts` lines 103 through 122;
+user overrides come from `opencode.json`'s `permission` field.
+The subagent-spawning case derives a stricter ruleset for the child
+from the parent's (`subagent-permissions.ts`;
+see the citation index below).
 
 This is an *ambient-deny* model with `ask` as the user-in-the-loop
 escape. It works because the agent runs in one process with full OS
@@ -277,42 +292,58 @@ already designed in [daemon-capability-filesystem](daemon-capability-filesystem.
 ### Persistence and Session Model
 
 OpenCode's session model is row-oriented SQLite:
-- Session table with `id`, `parent_id`, `agent`, `model`, `tokens_*`, `cost`, timestamps ([`packages/opencode/src/session/session.sql.ts`](../../external/opencode/packages/opencode/src/session/session.sql.ts) and `fromRow` at [`session.ts`](../../external/opencode/packages/opencode/src/session/session.ts) lines 55 through 95).
+
+- Session table with `id`, `parent_id`, `agent`, `model`, `tokens_*`,
+  `cost`, timestamps (`session.sql.ts` and `fromRow` at `session.ts`
+  lines 55 through 95).
 - Part table for message parts (text / tool-call / tool-result blocks).
 - Permission approvals table (`PermissionTable`, ruleset persisted per project).
-- Background jobs ephemeral in-memory ([`background/job.ts`](../../external/opencode/packages/opencode/src/background/job.ts)).
+- Background jobs ephemeral in-memory (`background/job.ts`).
 
-This is a familiar shape: rows, foreign keys, joins. The session is
-the unit; messages compose into it.
+See the citation index below for full source paths.
 
-Endo's persistence is the formula store: a typed durable graph of
-formulae of the types enumerated in
+This is a familiar shape: rows, foreign keys, joins.
+The session is the unit;
+messages compose into it.
+
+Endo's persistence is the formula store:
+a typed durable graph of formulae of the types enumerated in
 [`formula-type.js`](../packages/daemon/src/formula-type.js) lines 6
-through 35 (33 formula types as of HEAD `68246ad9`). Each entry is
-content-addressed by its formula ID (256-bit, as of
-[daemon-256-bit-identifiers](daemon-256-bit-identifiers.md)) and the
-daemon reconstitutes its objects on demand. Where OpenCode says
-"resume session X from row 47", Endo says "look up formula
-`abcd1234...` and incarnate it". The two models are not in conflict
-(Endo has inbox-history per guest which is the analogue of a
-session); the difference is whether persistence is a database or a
-graph of formulae.
+through 37 (30 formula types as of HEAD `68246ad9`).
+Each entry is content-addressed by its formula ID
+(256-bit, as of [daemon-256-bit-identifiers](daemon-256-bit-identifiers.md))
+and the daemon reconstitutes its objects on demand.
+Where OpenCode says "resume session X from row 47",
+Endo says "look up formula `abcd1234...` and incarnate it".
+The two models are not in conflict
+(Endo has inbox-history per guest which is the analogue of a session);
+the difference is whether persistence is a database or a graph of formulae.
 
 ### Client/Server and Protocol Surfaces
 
 OpenCode has three external protocol surfaces:
 
-- **HTTP/WebSocket** ([`server/routes/instance/httpapi/public.ts`](../../external/opencode/packages/opencode/src/server/routes/instance/httpapi/public.ts), 507 lines): OpenAPI-described, used by the TUI, the SDK clients, and the desktop shell.
-- **ACP** ([`acp/agent.ts`](../../external/opencode/packages/opencode/src/acp/agent.ts) and [`acp/README.md`](../../external/opencode/packages/opencode/src/acp/README.md)): JSON-RPC over stdio, conforming to the Agent Client Protocol spec; Zed integrates this way.
-- **MCP** ([`mcp/index.ts`](../../external/opencode/packages/opencode/src/mcp/index.ts)): bidirectional; OpenCode is an MCP client and can be an MCP server.
+- **HTTP/WebSocket** (`server/routes/instance/httpapi/public.ts`,
+  507 lines):
+  OpenAPI-described, used by the TUI, the SDK clients, and the
+  desktop shell.
+- **ACP** (`acp/agent.ts` and `acp/README.md`):
+  JSON-RPC over stdio, conforming to the Agent Client Protocol spec;
+  Zed integrates this way.
+- **MCP** (`mcp/index.ts`):
+  bidirectional;
+  OpenCode is an MCP client and can be an MCP server.
 
-Endo has one external protocol surface (OCapN over WebSocket;
-Noise transport in flight via the M2 design family) and uses
-CapTP / E() / makeExo internally. The protocol surfaces do not
-overlap; Endo's strength is the capability story OCapN preserves,
+See the citation index below for full source paths.
+
+Endo has one external protocol surface
+(OCapN over WebSocket; Noise transport in flight via the M2 design family)
+and uses CapTP / E() / makeExo internally.
+The protocol surfaces do not overlap;
+Endo's strength is the capability story OCapN preserves,
 OpenCode's strength is interoperability with the existing agent
-tooling ecosystem (Zed, MCP servers, etc.). See
-[endopen-acp-server](endopen-acp-server.md) for the adapter that
+tooling ecosystem (Zed, MCP servers, etc.).
+See [endopen-acp-server](endopen-acp-server.md) for the adapter that
 would close the interop gap without losing the capability story.
 
 ## Major Gaps (Sibling Designs)
@@ -320,7 +351,7 @@ would close the interop gap without losing the capability story.
 This document is a roadmap; each of the four spin-outs lives as its
 own implementable design.
 
-### Gap 1: A first-class concurrent-subagent UX in Endo
+### Gap 1: A First-Class Concurrent-Subagent UX in Endo
 
 OpenCode lacks first-class concurrent subagents; Endo gets them for
 free, but the *UX surface* in Chat does not yet show it. Today a
@@ -339,7 +370,7 @@ formula isolation + capability model".
 See **[endopen-concurrent-subagents](endopen-concurrent-subagents.md)**
 for the design.
 
-### Gap 2: OpenRouter integration
+### Gap 2: OpenRouter Integration
 
 OpenCode works well with OpenRouter; Endo does not have an
 OpenRouter adapter at all. OpenRouter is a meta-provider that routes
@@ -358,7 +389,7 @@ pattern*. The design proposes a registry refactor as the path.
 
 See **[endopen-openrouter](endopen-openrouter.md)** for the design.
 
-### Gap 3: An opencode-like UX surface for Endo
+### Gap 3: An Opencode-Like UX Surface for Endo
 
 The maintainer's framing: "a space more like opencode UX might be
 helpful". The Endo answer is not to replace Chat or Familiar; both
@@ -376,7 +407,7 @@ the browser-side complement that ships earlier.
 
 See **[endopen-tui-shell](endopen-tui-shell.md)** for the design.
 
-### Gap 4: ACP server adapter (interop with Zed and the ACP ecosystem)
+### Gap 4: ACP Server Adapter (Interop with Zed and the ACP Ecosystem)
 
 OpenCode is an ACP backend; that is how Zed integrates with it.
 Endo has no ACP surface. Adding one is a *daemon-side adapter*: an
@@ -397,7 +428,7 @@ See **[endopen-acp-server](endopen-acp-server.md)** for the design.
 
 ## Major Contrasts (No Spin-out Needed)
 
-### Capability model: structural vs. ruleset
+### Capability Model: Structural vs. Ruleset
 
 Covered above. The contrast is not a gap to close: Endo's structural
 confinement is the differentiating story. The takeaway is that any
@@ -405,21 +436,21 @@ ported feature must respect it: when adopting an OpenCode idiom,
 the design's permission story must compile to "the guest holds the
 capability or it does not", not "we consult a ruleset".
 
-### Persistence: row store vs. formula graph
+### Persistence: Row Store vs. Formula Graph
 
 Covered above. Not a gap; the formula store is the persistence
 substrate Endo wants. The takeaway is that any imported OpenCode
 data model (sessions, parts, todos) lands as new formula types or
 as fields on existing types; SQLite is not adopted.
 
-### Extensibility: NPM plugins vs. confined guests
+### Extensibility: NPM Plugins vs. Confined Guests
 
 Covered above. The Endo plugin model is structurally stricter but
 catalog-poorer. The bridge is a skill / plugin registry analogous
 to OpenCode's, but capability-aware; this is already on the roadmap
 as [endoclaw-skill-registry](endoclaw-skill-registry.md).
 
-### Security: process-level ambient vs. compartment-level structural
+### Security: Process-Level Ambient vs. Compartment-Level Structural
 
 Covered above. The contrast is the design's headline contribution.
 No spin-out needed.
@@ -456,16 +487,22 @@ Total: 19 OpenCode source files cited.
 
 ## Summary: Coverage and Gaps
 
-### Endo-specific advantages (no OpenCode equivalent)
+### Endo-Specific Advantages (No OpenCode Equivalent)
 
-- **Object-capability confinement** at the structural level; OpenCode is process-ambient.
-- **Concurrent subagents by default** (every guest is a vat); OpenCode gates background subagents behind an experimental flag.
-- **Caretaker revocation** of capabilities; OpenCode has no such mechanism.
-- **OCapN protocol** for capability-preserving inter-daemon communication; no analogue in OpenCode.
-- **SES lockdown** (frozen primordials); OpenCode's tools run with full V8 / Bun semantics.
-- **Formula-based persistence**; OpenCode is row-oriented SQLite.
+- **Object-capability confinement** at the structural level;
+  OpenCode is process-ambient.
+- **Concurrent subagents by default** (every guest is a vat);
+  OpenCode gates background subagents behind an experimental flag.
+- **Caretaker revocation** of capabilities;
+  OpenCode has no such mechanism.
+- **OCapN protocol** for capability-preserving inter-daemon communication;
+  no analogue in OpenCode.
+- **SES lockdown** (frozen primordials);
+  OpenCode's tools run with full V8 / Bun semantics.
+- **Formula-based persistence**;
+  OpenCode is row-oriented SQLite.
 
-### Already covered or designed in Endo
+### Already Covered or Designed in Endo
 
 - Multi-agent isolation (guests vs. agents).
 - Inter-agent messaging (`send` vs. `task`).
@@ -473,20 +510,26 @@ Total: 19 OpenCode source files cited.
 - Familiar desktop app.
 - LLM model support (Anthropic, Gemini, Ollama, llama.cpp).
 - Plugin installation (`endo install`).
-- Filesystem capabilities (designed via [daemon-capability-filesystem](daemon-capability-filesystem.md)).
-- Shell capabilities (designed via [daemon-agent-tools](daemon-agent-tools.md)).
-- Network capabilities (designed via [endoclaw-network-fetch](endoclaw-network-fetch.md)).
-- Form-based questioning (designed and shipped via [daemon-form-request](daemon-form-request.md)).
-- HTTP gateway with bearer-token auth ([gateway-bearer-token-auth](gateway-bearer-token-auth.md)).
+- Filesystem capabilities
+  (designed via [daemon-capability-filesystem](daemon-capability-filesystem.md)).
+- Shell capabilities
+  (designed via [daemon-agent-tools](daemon-agent-tools.md)).
+- Network capabilities
+  (designed via [endoclaw-network-fetch](endoclaw-network-fetch.md)).
+- Form-based questioning
+  (designed and shipped via [daemon-form-request](daemon-form-request.md)).
+- HTTP gateway with bearer-token auth
+  ([gateway-bearer-token-auth](gateway-bearer-token-auth.md)).
 
-### Gaps closed by this design's spin-outs
+### Gaps Closed by This Design's Spin-Outs
 
-- Concurrent-subagent UX surface → [endopen-concurrent-subagents](endopen-concurrent-subagents.md).
+- Concurrent-subagent UX surface →
+  [endopen-concurrent-subagents](endopen-concurrent-subagents.md).
 - OpenRouter LLM provider → [endopen-openrouter](endopen-openrouter.md).
 - Opencode-like UX layout → [endopen-tui-shell](endopen-tui-shell.md).
 - ACP server adapter → [endopen-acp-server](endopen-acp-server.md).
 
-### Gaps surfaced but not closed by a spin-out
+### Gaps Surfaced but Not Closed by a Spin-Out
 
 | Gap                                       | Priority | Notes                                                            |
 |-------------------------------------------|----------|------------------------------------------------------------------|
