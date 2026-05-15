@@ -33,6 +33,7 @@ const formulaTypes = new Set([
   'resolver',
   'scratch-mount',
   'timer',
+  'transports',
   'worker',
 ]);
 

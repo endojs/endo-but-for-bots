@@ -232,6 +232,46 @@ export type ScratchMountDeferredTaskParams = {
   scratchMountId: FormulaIdentifier;
 };
 
+// Transports — per-agent network capability surface.
+// SKELETON: see designs/ocapn-daemon-integration.md and the gap log
+// in the impl PR. Several fields are placeholders pending design
+// resolution.
+export type TransportsOptions = {
+  // GAP: the design lists default = "host's currently-enabled set"
+  // but does not say how that set is discovered or whether it is
+  // serialized into the formula. We persist `undefined` to mean
+  // "inherit from host at materialization time"; revisit when
+  // gap #8 is resolved.
+  allowedSchemes?: ReadonlyArray<string>;
+  // GAP: design has signingKeys "defaults to a fresh per-agent
+  // Ed25519 pair (see daemon-agent-network-identity)". The agent
+  // already has an Ed25519 keypair (line 3829 of daemon.js,
+  // `@keypair`). Whether to reuse that or mint a *second* pair
+  // for transports is unanswered. We persist undefined here; the
+  // factory short-circuits to the agent keypair. See gap #6.
+  signingKeys?: { publicKey: string; privateKey: string } | undefined;
+  // 'none' | 'request' | 'allow' per the design; we don't narrow at
+  // the type level because the validation site is unspecified (gap #2).
+  listenPolicy?: string;
+  // GAP: design says "address allowlist or matcher"; no DSL is
+  // specified. See gap #5.
+  outboundPolicy?: unknown;
+};
+
+type TransportsFormula = {
+  type: 'transports';
+  // The agent the Transports exo belongs to.
+  agent: FormulaIdentifier;
+  // The host-singleton networks directory the proxy dispatches
+  // through.
+  networks: FormulaIdentifier;
+  options: TransportsOptions;
+};
+
+export type TransportsDeferredTaskParams = {
+  transportsId: FormulaIdentifier;
+};
+
 type LookupFormula = {
   type: 'lookup';
 
@@ -411,6 +451,7 @@ export type Formula =
   | ReadableTreeFormula
   | MountFormula
   | ScratchMountFormula
+  | TransportsFormula
   | LookupFormula
   | MakeUnconfinedFormula
   | MakeArchiveFormula
@@ -958,6 +999,16 @@ export interface EndoHost extends EndoAgent {
     opts?: { readOnly?: boolean },
   ): Promise<unknown>;
   provideScratchMount(petName: string | string[]): Promise<unknown>;
+  /**
+   * SKELETON: see `designs/ocapn-daemon-integration.md`. The `options`
+   * record is intentionally untyped; the design's four-field shape
+   * has open questions on `signingKeys` and `outboundPolicy` (see
+   * the gap log in the implementation PR).
+   */
+  provideTransports(
+    petName: string | string[],
+    options?: TransportsOptions,
+  ): Promise<unknown>;
   provideGuest(
     petName?: string,
     opts?: MakeHostOrGuestOptions,

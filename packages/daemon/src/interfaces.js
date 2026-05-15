@@ -319,6 +319,15 @@ export const HostInterface = M.interface('EndoHost', {
   provideMount: M.call(M.string(), NameOrPathShape)
     .optional(M.splitRecord({}, { readOnly: M.boolean() }))
     .returns(M.promise()),
+  // Provide a per-agent Transports capability.
+  // SKELETON: see designs/ocapn-daemon-integration.md and the gap
+  // catalog in the implementation PR. The options shape is loose
+  // because the design's four-field options record carries fields
+  // (signingKeys, listenPolicy enum, outboundPolicy DSL) whose
+  // type-level commitments are still in question.
+  provideTransports: M.call(NameOrPathShape)
+    .optional(M.record())
+    .returns(M.promise()),
   // Create a daemon-managed scratch mount
   provideScratchMount: M.call(NameOrPathShape)
     .optional(M.splitRecord({}, { readOnly: M.boolean() }))
@@ -577,6 +586,45 @@ export const WorkerFacetForDaemonInterface = M.interface(
     ),
   },
 );
+
+// Transports — per-agent network capability surface. See
+// designs/ocapn-daemon-integration.md.
+//
+// SKELETON / GAP-REVEALING DRAFT. The guard shape mirrors the design
+// almost verbatim. Several shapes are intentionally permissive
+// (M.any() instead of a narrower Locator or Session pattern) because
+// the design under-specifies them; the gaps are catalogued in the
+// implementation PR body.
+export const TransportsInterface = M.interface('EndoTransports', {
+  // Discovery
+  list: M.call().returns(M.promise()),
+  has: M.call(M.string()).returns(M.promise()),
+
+  // Outgoing sessions.
+  // GAP: design says `connect(Locator | string)`; the Locator type
+  // does not exist in this codebase, only string locators. See PR
+  // gap #4.
+  connect: M.call(M.any())
+    .optional(M.record())
+    .returns(M.promise()),
+
+  // Incoming sessions.
+  // GAP: `listen` accepts `{ port?, host? }` per the design's exo
+  // sketch but the design's listenPolicy enumerates `none|request|allow`
+  // without naming where validation happens. See PR gap #2.
+  listen: M.call(M.string())
+    .optional(M.record())
+    .returns(M.promise()),
+
+  // Lifecycle
+  // GAP: `disconnect(handle)` — the design does not define the
+  // shape of `handle`. Is it a remotable Session, a serializable id,
+  // both? See PR gap #7.
+  disconnect: M.call(M.any()).returns(M.promise()),
+  shutdown: M.call().returns(M.promise()),
+
+  help: M.call().optional(M.string()).returns(M.string()),
+});
 
 export const EndoInterface = M.interface('Endo', {
   help: M.call().optional(M.string()).returns(M.string()),

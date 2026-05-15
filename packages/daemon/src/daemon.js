@@ -65,6 +65,7 @@ import {
   readableTreeHelp,
 } from './help-text.js';
 import { makeMount } from './mount.js';
+import { makeTransports } from './transports.js';
 
 // Sorted:
 import {
@@ -606,6 +607,11 @@ const makeDaemonCore = async (
         return [];
       case 'scratch-mount':
         return [];
+      case 'transports':
+        // The proxy lives only as long as its agent; it does *not*
+        // pin the netlayer directory (the daemon's @endo formula
+        // does that). See design § Garbage collection.
+        return [['agent', formula.agent]];
       case 'pet-inspector':
         return [['petStore', formula.petStore]];
       case 'directory':
@@ -2612,6 +2618,37 @@ const makeDaemonCore = async (
       await filePowers.makePath(rootPath);
       return makeMount({ rootPath, readOnly, filePowers });
     },
+    // Transports — per-agent network capability surface.
+    // SKELETON: see designs/ocapn-daemon-integration.md.
+    //
+    // GAP #10 (restart failure mode on malformed Transports formula):
+    // If `formula.options` is undefined, missing fields, or carries
+    // unknown keys, the design does not say what the restart path
+    // should do. We default-spread and proceed, matching the
+    // `mount` maker's permissive style; the design author should
+    // confirm or harden.
+    //
+    // GAP #11 (proxy needs the networks directory by formula-id):
+    // We pass through `formula.networks` so the proxy can resolve
+    // the host's per-scheme netlayers. The design's layer-cake
+    // diagram shows the daemon retaining the netlayer registry, so
+    // this is consistent, but the design does not name the field.
+    transports: async ({ agent, networks, options }) => {
+      const getReadyNetworks = async () => {
+        const networksDirectory = await provide(networks, 'directory');
+        const networkIds = await networksDirectory.listIdentifiers();
+        const readyNetworks = networkIds
+          .map(id => /** @type {FormulaIdentifier} */ (id))
+          .filter(id => refForId.has(id))
+          .map(id => /** @type {EndoNetwork} */ (refForId.get(id)));
+        return readyNetworks;
+      };
+      return makeTransports({
+        agentId: agent,
+        getReadyNetworks,
+        options: options ?? {},
+      });
+    },
     lookup: ({ hub, path }, context) =>
       makeLookup(
         hub,
@@ -3399,6 +3436,67 @@ const makeDaemonCore = async (
       })
     );
   };
+
+  /**
+   * Skeleton formulator for the per-agent Transports capability.
+   * See designs/ocapn-daemon-integration.md.
+   *
+   * GAP #12 (formulateTransports placement):
+   * The design suggests `formulateTransports(agentId, options)` is
+   * called at agent-formulation time (when `makeHost` / `makeGuest`
+   * runs). The natural site is `formulateHostDependencies` /
+   * `formulateGuestDependencies`, but those functions thread
+   * `networksDirectoryId` through to the agent and would now also
+   * need to thread `transportsId`. We expose the formulator but do
+   * NOT yet call it from those sites (avoids over-committing to a
+   * shape the design author can still influence). See PR body.
+   *
+   * @param {FormulaIdentifier} agentId
+   * @param {FormulaIdentifier} networksDirectoryId
+   * @param {import('./types.js').TransportsOptions} options
+   * @param {DeferredTasks<import('./types.js').TransportsDeferredTaskParams>} deferredTasks
+   */
+  // eslint-disable-next-line no-unused-vars
+  const formulateTransports = async (
+    agentId,
+    networksDirectoryId,
+    options,
+    deferredTasks,
+  ) => {
+    return /** @type {FormulateResult<unknown>} */ (
+      withFormulaGraphLock(async () => {
+        await null;
+        const formulaNumber = /** @type {FormulaNumber} */ (
+          await randomHex256()
+        );
+
+        await deferredTasks.execute({
+          transportsId: formatId({
+            number: formulaNumber,
+            node: localNodeNumber,
+          }),
+        });
+
+        /** @type {import('./types.js').TransportsFormula} */
+        const formula = harden({
+          type: 'transports',
+          agent: agentId,
+          networks: networksDirectoryId,
+          options: harden(options),
+        });
+
+        return formulate(formulaNumber, formula);
+      })
+    );
+  };
+  // GAP #13 (no caller yet):
+  // formulateTransports is declared but unused. The `host.provideTransports`
+  // method below references it, but agent-formulation paths do not.
+  // ESLint will complain; we silence the warning rather than wire
+  // the call in half-heartedly. See PR body's "Skeleton not
+  // implemented" section.
+  // eslint-disable-next-line no-unused-expressions
+  formulateTransports;
 
   /** @type {DaemonCore['formulateScratchMount']} */
   const formulateScratchMount = async (readOnly, deferredTasks) => {

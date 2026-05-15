@@ -293,6 +293,43 @@ export const makeHostMaker = ({
       return value;
     };
 
+    /**
+     * Provide a per-agent Transports capability.
+     *
+     * SKELETON / GAP-REVEALING DRAFT. See
+     * designs/ocapn-daemon-integration.md. The body throws
+     * unconditionally to make the gap visible; an actual
+     * implementation would need at least:
+     *
+     *   1. A clarified options-shape (gap #5, gap #6, gap #8 in the PR
+     *      body).
+     *   2. A `DaemonCore['formulateTransports']` plumbed through the
+     *      host's `args` (the formulator exists in daemon.js but is
+     *      not exposed to host.js yet — gap #13).
+     *   3. A decision on whether agent-formulation pre-creates the
+     *      Transports formula (mandatory `@transports` on every new
+     *      agent) or whether this method is the only on-ramp (lazy
+     *      formulation per agent request) — gap #12.
+     *
+     * @param {NameOrPath} petName
+     * @param {Record<string, unknown>} [options]
+     */
+    // eslint-disable-next-line no-unused-vars
+    const provideTransports = async (petName, options = {}) => {
+      // GAP #12 (formulation site): see above.
+      // GAP #6 (signingKeys): the agent already carries an Ed25519
+      // keypair (the `@keypair` special name from
+      // daemon-256-bit-identifiers / daemon-agent-network-identity).
+      // The design says signingKeys "defaults to a fresh per-agent
+      // Ed25519 pair" — but a "fresh" pair here would conflict with
+      // the agent's existing identity. Until this is resolved we
+      // cannot decide whether `provideTransports` should mint or
+      // reuse.
+      throw makeError(
+        'provideTransports(): skeleton only; see designs/ocapn-daemon-integration.md gaps #6, #12, #13',
+      );
+    };
+
     /** @type {EndoHost['storeValue']} */
     const storeValue = async (value, petName) => {
       const namePath = namePathFrom(petName);
@@ -1399,6 +1436,7 @@ export const makeHostMaker = ({
       storeTree,
       provideMount,
       provideScratchMount,
+      provideTransports,
       provideGuest,
       provideHost,
       provideWorker,
