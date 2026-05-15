@@ -9,20 +9,26 @@
 ## Purpose
 
 Endo hosts and guests should both be able to run a JavaScript application
-out of any tree that implements the Endo filesystem mount interface.
+out of any tree that implements the Endo filesystem mount interface (the
+VFS).
 Two cases are in scope.
-Case 1 is the confined path: an application is hosted inside an XS
-worker (via `endor`) whose only filesystem reach is one or more
-`Mount` capabilities the host has handed it.
-Case 2 is the host-eject path: the host writes a readable tree to a
-scratch directory on the real filesystem and then shells out to a
-`node` child process that loads the application from disk, for the
-case where the application genuinely needs Node.js APIs and the
-guest-side Posix sandbox is not yet available.
-The case-1 subcase that powers the confined run is the source-of-truth
-move from `node_modules` to a sqlite-backed module store, with
-compartment maps constructed ad hoc from a Go-style transitive
-dependency resolution against that store.
+
+Case 1 is the confined path.
+An application is hosted inside an XS worker (via `endor`) whose only
+filesystem reach is one or more `Mount` capabilities the host has handed
+it.
+Within case 1, the design's main subject is the fully virtualized
+sub-case: when the entry-point is a bare `entry.js` rather than a
+prebuilt `compartment-map.json`, the design replaces `node_modules` with
+a sqlite-backed module store and constructs the compartment map ad hoc
+per run.
+The detail of that sub-case lives in `## Case 1` below.
+
+Case 2 is the host-eject path.
+The host writes a readable tree to a scratch directory on the real
+filesystem and then shells out to a `node` child process that loads the
+application from disk, for applications that genuinely need Node.js APIs
+and where the guest-side POSIX sandbox is not yet available.
 
 ## Glossary
 
