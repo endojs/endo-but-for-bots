@@ -73,6 +73,40 @@ export const { wrapper: { propName = defaultValue } } = objWithWrapper;
 harden(propName);
     `,
   },
+  {
+    // RestElement in an ObjectPattern is silently skipped (with a console.warn);
+    // the non-rest binding is the only one the rule expects a harden call for.
+    // ObjectPattern rest needs ecmaVersion >= 2018.
+    code: `
+export const { a, ...rest } = obj;
+harden(a);
+    `,
+    parserOptions: { ecmaVersion: 2018, sourceType: 'module' },
+  },
+  {
+    // RestElement in an ArrayPattern is silently skipped (with a console.warn);
+    // the non-rest binding is the only one the rule expects a harden call for.
+    code: `
+export const [first, ...rest] = arr;
+harden(first);
+    `,
+  },
+  {
+    // Specifier-form export (`export { x }`) with a matching harden call.
+    code: `
+const x = 1;
+harden(x);
+export { x };
+    `,
+  },
+  {
+    // Aliased specifier-form export; the rule keys on the exported (aliased) name.
+    code: `
+const local = 1;
+harden(renamed);
+export { local as renamed };
+    `,
+  },
 ];
 
 const invalid = [
@@ -283,6 +317,43 @@ export const [{ wrapper: { propName: exportName } }] = [objWithWrapper];
     output: `
 export const [{ wrapper: { propName: exportName } }] = [objWithWrapper];
 harden(exportName);
+    `,
+  },
+  {
+    // Specifier-form export missing a harden call.
+    code: `
+const x = 1;
+export { x };
+    `,
+    errors: [
+      {
+        message: "Named export 'x' should be followed by a call to 'harden'.",
+      },
+    ],
+    output: `
+const x = 1;
+export { x };
+harden(x);
+    `,
+  },
+  {
+    // Aliased specifier-form export missing a harden call; the rule reports
+    // the aliased (exported) name, and the autofix inserts a harden of that
+    // exported name (which need not match a local binding).
+    code: `
+const local = 1;
+export { local as renamed };
+    `,
+    errors: [
+      {
+        message:
+          "Named export 'renamed' should be followed by a call to 'harden'.",
+      },
+    ],
+    output: `
+const local = 1;
+export { local as renamed };
+harden(renamed);
     `,
   },
 ];
