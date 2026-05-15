@@ -39,9 +39,19 @@ Specifically:
   module descriptor; the dispatch on source type happens entirely on the
   hook implementer's side without participating in the memo.
 
-This design extends the analyzer, the memo, the hooks, and the `ModuleSource`
-surface so SES can host import attributes, with JSON modules as the first
-source-type variant.
+This design extends the analyzer, the memo, and the hooks so SES can carry
+`with { ... }` clauses to the host's loader.
+SES already exposes a virtual-module-source surface
+(`VirtualModuleSource` in `packages/ses/src/module-link.js`), and that
+surface is sufficient for hosts that want to serve JSON, CSS, Wasm, or
+any other content-typed module: the hook reads bytes, parses, and
+returns a virtual source whose `execute` binds the parsed value to
+`default`.
+This design therefore does not introduce a JSON-specific source variant.
+The `ModuleSource` shapes (`PrecompiledModuleSource`, `VirtualModuleSource`)
+stay as they are today; the import-attributes work threads attributes
+through to the existing hook surface, which a host implementation can use
+to dispatch to a virtual-source response.
 
 ## Scope and non-goals
 
@@ -53,24 +63,30 @@ In scope for v1:
 - Extending SES's module memo key to include normalized attributes.
 - An augmented `importHook` / `importNowHook` signature that receives
   attributes, with explicit backward compatibility for single-argument hooks.
-- A `'json'` source-type variant of `ModuleSource`.
+- A new compartment-construction option (`modulesWithAttributes`) for
+  priming memo entries with non-default attributes.
 - Backward compatibility for archive bundles produced before attributes
   existed.
 
-Out of scope (deferred to follow-up designs):
+Out of scope (already served by virtual module sources, or deferred to
+follow-up designs):
 
-- CSS modules (`with { type: 'css' }`). Sketched here only at the
-  source-type-variant table level; the CSS source-type record and the
-  CSSStyleSheet intrinsic question are left for a follow-up.
-- WebAssembly modules (`with { type: 'wasm' }`).
-  Source-phase imports add a second axis that needs its own design.
+- JSON modules (`with { type: 'json' }`), CSS modules
+  (`with { type: 'css' }`), and WebAssembly modules
+  (`with { type: 'wasm' }`).
+  A host's `importHook` already returns a `VirtualModuleSource` whose
+  `execute` binds parsed JSON, a `CSSStyleSheet`, or Wasm instance
+  bindings to `default`.
+  Standardizing per-type source variants in `@endo/module-source` is a
+  separate question that this design does not need to answer.
 - Any host-defined attribute key beyond `type`.
   The spec leaves these to the host; SES intentionally normalizes them but
   does not interpret them.
 - The compartment-mapper-side propagation of attributes through
   `package.json` resolution.
-  That work consumes the surfaces this design defines and gets its own
-  document.
+  This design walks the surfaces of `@endo/compartment-mapper` that the
+  shim-side work touches (see `## Compartment-mapper implications`),
+  but the per-`package.json` propagation is deferred.
 
 ## Normalized attribute representation
 
@@ -229,71 +245,42 @@ For hooks that genuinely want to ignore attributes, the explicit two-argument
 form with `attributes` unused is enough to satisfy the arity check and pass
 through.
 
-## Source-type multiplex
+## Source dispatch
 
-The `importHook` can return a `ModuleSource` (or a `ModuleDescriptor`
-wrapping one) whose shape depends on the declared type.
-SES v1 ships the JSON variant and reserves the design space for others.
+`ModuleSource` shapes (`PrecompiledModuleSource`, `VirtualModuleSource`)
+are unchanged.
+The hook's job is to dispatch on the attribute and return whichever
+existing source shape carries the parsed result.
+For a hook serving JSON under `with { type: 'json' }`:
 
-| `type`     | v1     | ModuleSource variant      | Default export contract                  | Notes |
-|------------|--------|---------------------------|------------------------------------------|-------|
-| (omitted)  | yes    | existing JS variants      | as today                                 | Legacy collapse keeps memo key compatible |
-| `'json'`   | yes    | `JsonModuleSource`        | parsed JSON value                        | Sole export is `default`; no named exports |
-| `'css'`    | future | `CssModuleSource` (TBD)   | `CSSStyleSheet` instance (TBD)           | Sketched; deferred for follow-up |
-| `'wasm'`   | future | `WasmModuleSource` (TBD)  | instance bindings (TBD)                  | Coordinates with source-phase imports |
+```js
+const importHook = async (specifier, attributes) => {
+  const bytes = await readBytes(specifier);
+  if (attributes.type === 'json') {
+    const value = harden(JSON.parse(new TextDecoder().decode(bytes)));
+    return {
+      source: harden({
+        imports: [],
+        exports: ['default'],
+        execute(env) { env.default = value; },
+      }),
+    };
+  }
+  /* default JS path returns a PrecompiledModuleSource or a
+     VirtualModuleSource with a code-bearing execute */
+};
+```
+
+The `VirtualModuleSource` shape (`{ imports, exports, execute }`) is the
+existing surface; it covers JSON, CSS, and Wasm equally well.
+A type-specific source variant in `@endo/module-source` is not introduced
+by this design.
 
 A hook may also throw when it receives an unsupported attribute combination;
 the SES loader surfaces that throw as a module load failure annotated with
-the offending specifier and attributes JSON.
-This matches the JSON-modules spec's mandate that hosts reject content that
-does not match the declared type.
-
-### JSON modules in detail
-
-The `JsonModuleSource` variant is a third kind of `ModuleSource` alongside
-the existing `PrecompiledModuleSource` and `VirtualModuleSource`.
-Its shape:
-
-```ts
-export interface JsonModuleSource {
-  imports: readonly [];                   // JSON modules import nothing
-  exports: readonly ['default'];          // sole export
-  /** Pre-parsed value, frozen.  Produced by the hook or by an analyzer. */
-  json: unknown;
-}
-```
-
-`imports` is empty, `exports` is the singleton `['default']`, and `json` is
-the parsed value.
-The linker recognizes the variant by the presence of the `json` own property
-(the same kind of brand-check that distinguishes `PrecompiledModuleSource`
-from `VirtualModuleSource` today via `__syncModuleProgram__` and
-`execute`, in `packages/ses/src/module-link.js`).
-
-The evaluator binds `default` directly from `json` without entering a
-function evaluator, which preserves SES's invariant that JSON evaluation
-cannot run code.
-
-Round trip for `import data from './data.json' with { type: 'json' };`:
-
-```mermaid
-sequenceDiagram
-  participant U as User module
-  participant P as @endo/module-source parser
-  participant L as SES loader (module-load.js)
-  participant H as importHook
-  participant E as SES evaluator (module-link / module-instance)
-
-  U->>P: source text with `with { type: 'json' }`
-  P->>P: analyze; record import as<br/>{ specifier: './data.json',<br/>  attributes: { type: 'json' } }
-  P-->>L: ModuleSource.imports[i]<br/>= ('./data.json', {type:'json'})
-  L->>L: normalize attributes;<br/>memo key = './data.json\0{"type":"json"}'
-  L->>H: importHook('./data.json',<br/>frozen {type:'json'})
-  H-->>L: { source: JsonModuleSource{<br/>  imports:[], exports:['default'],<br/>  json: <parsed value> } }
-  L->>L: memoize under extended key
-  L->>E: link: bind 'default' = json
-  E-->>U: namespace.default === <parsed value>
-```
+the offending specifier and the normalized attributes.
+The host (not SES) is responsible for content-type rejection per the
+import-attributes spec.
 
 ## Backward compatibility for serialized bundles
 
@@ -338,18 +325,26 @@ The compatibility contract:
   shim's adoption of attributes, even for graphs that never use them.
   Arity-based backward compatibility costs little and avoids the breaking
   change.
-- **Separate `jsonImportHook` for JSON modules.**
-  Adding a parallel hook just for JSON and keeping `importHook` untouched.
-  Rejected: it forecloses CSS, Wasm, and any future host-defined type;
-  each would need its own parallel hook.
-  The single attribute-bearing hook composes.
-- **Carry attributes only as far as the linker, not the hook.**
-  Doing the JSON parse inside the linker so the hook never sees the
-  attribute.
-  Rejected: the hook is where filesystem / network fetches happen and
-  where the host is required by the JSON-modules spec to reject
-  content-type mismatches.
-  The hook must see the attribute to enforce that rejection.
+- **A type-specific source variant (`JsonModuleSource`, `CssModuleSource`).**
+  Adding a new `ModuleSource` shape per content type, alongside
+  `PrecompiledModuleSource` and `VirtualModuleSource`, with a
+  type-tag own-property the linker dispatches on.
+  Rejected: the existing `VirtualModuleSource` shape already covers
+  every content type a host might want to serve (the hook parses,
+  builds an `execute` that binds the parsed value to `default`, and
+  returns the virtual source).
+  Introducing per-type variants in `@endo/module-source` would
+  duplicate the surface for no semantic gain and would require
+  publishing a new source-shape every time a new type appears in the
+  ecosystem.
+  Standardizing such variants remains an option for a follow-up design
+  if a concrete need emerges.
+- **A separate `jsonImportHook` for JSON modules.**
+  Adding a parallel hook just for JSON and keeping `importHook`
+  untouched.
+  Rejected: the single attribute-bearing hook composes across types;
+  parallel hooks would multiply the surface per content type and would
+  not give the host any expressive power it does not already have.
 
 ## Open questions
 
