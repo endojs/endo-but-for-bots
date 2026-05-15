@@ -607,7 +607,7 @@ const readPidFile = async pidPath => {
 /** @type {EndProcPolicy} */
 const defaultEndProcPolicy = harden([
   { kill: 'SIGTERM' },
-  { wait: 2_000 }, // try SIGTERM for 2s
+  { wait: 2000 }, // try SIGTERM for 2s
   { kill: 'SIGKILL' },
   { wait: 400 }, // try SIGKILL for 0.4s
   { notify: 'warn' }, // or warn of zombie remnant
@@ -717,7 +717,7 @@ const killDaemonProcess = async config => {
   await politeEndProcess(pid, {
     // Wait up to 5s for the process to exit on its own
     // (graceful shutdown from a prior terminate() call).
-    waitBefore: 5_000,
+    waitBefore: 5000,
   });
 };
 

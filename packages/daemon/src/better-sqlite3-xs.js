@@ -45,6 +45,7 @@ const throwIfError = result => {
  * Number when safe, BigInt otherwise.  Better-sqlite3 returns
  * Number by default, so the safe-integer projection keeps tests
  * comparing apples to apples.
+ * @param obj
  */
 const decodeBigintTag = obj => {
   const s = obj.$bigint;
@@ -88,6 +89,7 @@ const decodeRow = row => {
 /**
  * Encode a JS value as a JSON-serialisable parameter recognised by
  * the Rust side (numbers, strings, bigint, Uint8Array).
+ * @param v
  */
 const encodeParam = v => {
   if (v === null || v === undefined) return null;
@@ -185,6 +187,7 @@ class XsDatabase {
    * (no rows expected).  daemon-database.js uses both as
    * fire-and-forget — we model them as exec() calls with the
    * `PRAGMA ` prefix prepended.
+   * @param stmt
    */
   pragma(stmt) {
     this.exec(`PRAGMA ${stmt};`);
