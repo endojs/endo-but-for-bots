@@ -155,20 +155,35 @@ With a CAS-backed module store we can replace both with a Go-style
 resolution computed at compartment-map construction time and never
 materialised on disk.
 
-The resolution shape mirrors Go's `go.mod`:
+The resolution shape mirrors Go's `go.mod`.
+In Go's MVS, each module's `go.mod` declares the minimum version of
+each direct dependency it builds against, and the build picks the
+greatest of those minimums across the whole transitive graph.
+We adapt the same shape to npm's `package.json`:
 
 - The entry package's `package.json` lists *direct* dependencies as
-  it does today (the `dependencies` and `peerDependencies` fields).
+  it does today (the `dependencies`, `peerDependencies`, and
+  `optionalDependencies` fields).
   No transitive declarations.
+  See *peer and optional policy* below for how `peerDependencies` and
+  `optionalDependencies` are treated.
+- The resolver bootstraps by reading the entry package's
+  `package.json` directly from the entry mount (since no module-store
+  row exists for the entry package itself); this is the entry-side
+  hook described in `endor-run-expanded.md` § Form 3 § Step 1.
 - For each direct dependency, the resolver fetches the package's own
   `package.json` from the module store (or from the registry the
-  first time) and reads its direct dependencies.
+  first time, see *ingestion failures* below for the on-miss path)
+  and reads its direct dependencies.
 - The full transitive set is computed by walking this graph from
   the entry package's direct dependencies down.
 - Within each `(name, major)` group, the resolver picks the
-  *greatest explicitly mentioned minor.patch* per
+  *highest minimum across the transitive set*: for each
+  `(name, major)`, it scans every range any transitive dependency
+  declares against that name and major, computes each range's
+  minimum, and selects the greatest of those minimums.
+  This is Go's MVS rule restated in npm terms, per
   `endor-npm-registry-proxy.md` § Minimal Version Selection.
-  This is the Go-mod selection rule.
 
 The resolution is a deterministic function of the entry package's
 direct deps plus the registry table's contents at resolution time.
@@ -208,6 +223,40 @@ newer `(name, version)` row, and the run's behavior changes
 accordingly.
 A future revision may promote `endor lock` to the default once the
 command lands and the operational ergonomics are clear.
+
+**Peer and optional policy.**
+`peerDependencies` are treated as direct dependencies of the entry
+package: the entry's `package.json` is expected to provide each
+peer (declared in its own `dependencies` or `peerDependencies`),
+and the resolver fails closed at compartment-map construction
+time if a peer is unprovided.
+This matches how `peerDependencies` are operationally satisfied in
+npm's `node_modules` (the consumer carries the dep) without
+inheriting npm's silent-deduplication semantics.
+`optionalDependencies` are best-effort: the resolver tries to walk
+them but does not fail if the package is unavailable; the
+compartment whose require would have resolved into the optional
+package instead resolves to a missing-module exit, and the
+application receives a runtime error at first use.
+Open question 4 (below) is a confirmation rather than an unresolved
+choice; demoting the open question to a confirmation requires
+maintainer sign-off.
+
+**Ingestion failures.**
+When `endor run` fetches a package the registry refuses (404, 5xx,
+or a checksum mismatch against the registry's manifest), the
+resolver raises an `IngestionError` (the existing structured-error
+shape from `@endo/errors` per the project's error-handling
+convention).
+Partial CAS writes from a failed extraction are rolled back: the
+CAS is content-addressed and a partial blob has no row in the
+registry table, so a re-run sees a clean state.
+The registry table does not record failed attempts; a subsequent
+`endor run` retries from scratch.
+A persistent ingestion failure that blocks resolution surfaces as
+the compartment-map build aborting before the worker starts, with
+`IngestionError` carrying the offending `(name, version)` pair and
+the registry's response.
 
 This design names a possible new manifest shape, `endo.mod`, as
 the Go-mod analogue.
@@ -417,12 +466,17 @@ once the sandbox is available on the deployment target.
    (case 2) accept the same multi-major shape, or should host-eject
    require a single-major resolution per package (Node's
    native-resolver constraint)?
-4. **`peerDependencies` and `optionalDependencies` in MVS.**
-   `endor-npm-registry-proxy.md` § Known gaps already flags these;
-   the design should pick a policy before case-1 ships.
-   Suggested: treat `peerDependencies` as direct-deps that must be
-   provided by the entry package, `optionalDependencies` as
-   best-effort and silent on failure.
+4. **`peerDependencies` and `optionalDependencies` in MVS
+   (confirmation).** The design takes the position in § Case 1
+   Resolution (above) that `peerDependencies` are direct deps the
+   entry package must provide (fail-closed at compartment-map build
+   time) and `optionalDependencies` are best-effort (missing-module
+   exit, runtime error at first use).
+   This question is a maintainer confirmation rather than an open
+   choice; if the maintainer prefers a different policy, the body
+   needs revision.
+   `endor-npm-registry-proxy.md` § Known gaps flags the underlying
+   ambiguity.
 5. **Eject equality.** Should re-eject equality (case 2) be
    computed by content hash only, or also by mount-formula
    identity?
