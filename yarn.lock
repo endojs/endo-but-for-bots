@@ -1187,6 +1187,27 @@ __metadata:
   languageName: unknown
   linkType: soft
 
+"@endo/random-fast-check@workspace:packages/random-fast-check":
+  version: 0.0.0-use.local
+  resolution: "@endo/random-fast-check@workspace:packages/random-fast-check"
+  dependencies:
+    "@endo/chacha12": "workspace:^"
+    "@endo/eventual-send": "workspace:^"
+    "@endo/harden": "workspace:^"
+    "@endo/init": "workspace:^"
+    "@endo/random": "workspace:^"
+    "@endo/ses-ava": "workspace:^"
+    "@fast-check/ava": "catalog:dev"
+    ava: "catalog:dev"
+    babel-eslint: "npm:^10.1.0"
+    c8: "catalog:dev"
+    eslint: "catalog:dev"
+    prettier: "npm:^3.5.3"
+    ses: "workspace:^"
+    typescript: "catalog:dev"
+  languageName: unknown
+  linkType: soft
+
 "@endo/random@workspace:^, @endo/random@workspace:packages/random":
   version: 0.0.0-use.local
   resolution: "@endo/random@workspace:packages/random"
