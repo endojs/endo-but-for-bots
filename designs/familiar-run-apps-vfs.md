@@ -326,6 +326,54 @@ underlying mount (a `mount` formula writes through to the host
 directory; a `scratch-mount` formula writes to the daemon's state
 dir; a CAS-backed read-only mount throws on write).
 
+### Test catalog
+
+Case 1 lands with at least the following integration tests, all
+exercised against a real `endor` worker spawned by the daemon:
+
+- **Fresh CAS run.** Given an `entry.js` Mount with no module-store
+  rows pre-populated, `endor run` ingests every transitive package
+  from the configured registry, builds the compartment map, and
+  runs the application to a clean exit.
+  Verifies: ingestion path, MVS resolution against newly written
+  rows, ad-hoc compartment-map construction, CAS-backed module
+  load.
+- **Partially-populated CAS, ingestion on miss.** Given a module
+  store pre-populated with the entry's direct deps but missing one
+  transitive dep, `endor run` resolves the populated rows from
+  sqlite without network, ingests the missing transitive only, and
+  runs to clean exit.
+  Verifies: the on-miss boundary; that the resolver does not refetch
+  already-resolved rows.
+- **`--offline` against empty CAS fails predictably.** Given an
+  `entry.js` Mount and `--offline`, with no module-store rows for
+  the entry's direct deps, `endor run` fails at compartment-map
+  build time with an offline-resolution error naming the first
+  unresolvable `(name, version)`.
+  Verifies: the failure shape under § Offline mode; that the
+  worker is never spawned when resolution fails.
+- **Ingestion failure rollback.** Given a registry that returns 5xx
+  for one transitive dep, `endor run` raises `IngestionError`,
+  leaves no partial registry-table row, and a subsequent run
+  against the same entry (with the registry recovered) succeeds.
+  Verifies: the rollback story under § Ingestion failures.
+- **Prebuilt-compartment-map sub-case parity.** Given a Mount whose
+  entry-point hint is a `compartment-map.json`, `endor run`
+  bypasses ingestion and resolution and constructs the in-memory
+  compartment map directly.
+  Verifies: the sub-case branch in `### Sub-case: prebuilt
+  compartment-map.json`.
+- **Worker confinement.** A test application that calls into a
+  mount's `lookup` for a path outside the mount root, or attempts
+  ambient host-fs access, receives an authorization failure (not a
+  silent fallthrough to the daemon's host fs).
+  Verifies: the cap-std parametrisation seam under § Shape.
+
+The test catalog above is the minimum acceptance set; the
+implementation may add more.
+Tests are AVA-shaped per the project convention and run under the
+daemon's existing integration-test harness.
+
 ## Case 2: host-eject to Node.js
 
 ### Shape
