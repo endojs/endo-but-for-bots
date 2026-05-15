@@ -519,6 +519,22 @@ each application that elects host-Node execution.
 The POSIX-sandbox follow-up retires Case 2's ad-hoc confinement
 once the sandbox is available on the deployment target.
 
+**Cross-major-version migration tradeoff.**
+Case 1 hosts multiple major versions of the same package in distinct
+compartments without operator intervention; this is the
+compartment-map's native shape.
+If open question 3 (below) resolves toward single-major resolution
+for Case 2 (Node's native-resolver constraint), an application that
+runs cleanly under Case 1 today and migrates to Case 2 tomorrow may
+need a stricter resolution re-run that rejects the multi-major
+graph.
+The cost is bounded (one resolution failure per offending package,
+fixed by adjusting direct deps) but real, and operators choosing
+between Case 1 and Case 2 should know the cross-major shape is not
+portable.
+Open question 3 names the resolution; this note records the cost
+even while the question is unresolved.
+
 ## Open questions for the maintainer
 
 1. **New manifest vs. extension of `compartment-map.json` for the
