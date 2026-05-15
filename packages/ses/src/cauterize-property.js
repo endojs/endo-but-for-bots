@@ -1,4 +1,4 @@
-import { hasOwn } from './commons.js';
+import { getOwnPropertyDescriptor, hasOwn } from './commons.js';
 
 /**
  * @import {Reporter} from './reporting-types.js'
@@ -24,6 +24,16 @@ import { hasOwn } from './commons.js';
  * set the value of that bogus `.prototype` property to `undefined`,
  * we do so, issuing a warning, rather than failing to initialize ses.
  *
+ * Similarly, some host environments expose native constructors as
+ * `function` style objects that carry non-configurable `arguments` and
+ * `caller` own properties (for example, Chromium V8 exposes its native
+ * `TextEncoder` and `TextDecoder` this way; Node's class-style
+ * implementations do not). These own properties cannot be deleted and
+ * cannot be reassigned; the only safe action is to leave them in place
+ * and warn. In strict mode any subsequent read of `.arguments` or
+ * `.caller` throws, so the property's continued presence is not a
+ * post-lockdown integrity hazard.
+ *
  * @param {object} obj
  * @param {PropertyKey} prop
  * @param {boolean} known If deletion is expected, don't warn
@@ -48,6 +58,22 @@ export const cauterizeProperty = (
   // the language evolves new features to existing intrinsics.
   if (!known) {
     warn(`Removing ${subPath}`);
+  }
+  // Detect the Chromium-native-function case: V8 surfaces native function
+  // intrinsics (such as `TextEncoder` and `TextDecoder`) with own,
+  // non-configurable `arguments` and `caller` properties that neither
+  // `delete` nor reassignment can dislodge. Skip with a warning rather
+  // than fall into the catch path's `error` branch, which would abort
+  // lockdown.
+  if (
+    typeof obj === 'function' &&
+    (prop === 'arguments' || prop === 'caller')
+  ) {
+    const desc = getOwnPropertyDescriptor(obj, prop);
+    if (desc && desc.configurable === false) {
+      warn(`Tolerating undeletable ${subPath} on native function`);
+      return;
+    }
   }
   try {
     delete obj[prop];
