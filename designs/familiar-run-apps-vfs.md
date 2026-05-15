@@ -376,6 +376,14 @@ daemon's existing integration-test harness.
 
 ## Case 2: host-eject to Node.js
 
+Case 1 covers applications that fit inside the XS worker's confined
+surface; case 2 covers the remainder, where the application needs
+Node.js APIs that XS cannot satisfy.
+The two cases share the mount-cap front end but diverge sharply at
+the execution boundary: case 1 stays inside the daemon's
+`endor`-hosted worker, case 2 shells out to a Node child process
+against a materialised tree.
+
 ### Shape
 
 The host has an application bound to one or more `Mount`s.
@@ -398,8 +406,13 @@ The host instead:
    The child process is a regular `make-unconfined` worker per
    `daemon-endo-rust-sqlite.md`'s spawn pattern; it speaks CBOR
    envelopes back to the supervisor on fds 3 and 4.
-4. When the worker exits or the formula is unpinned, the scratch
-   mount is reclaimed by the daemon's existing scratch GC.
+4. Runs the application to completion under Node's native
+   module resolution.
+   The supervisor relays stdout, stderr, and the worker's CBOR
+   envelopes; on exit, the supervisor records the worker's exit
+   code and surfaces it to the formula owner.
+5. The daemon's existing scratch GC reclaims the scratch mount
+   when the worker exits or the formula is unpinned.
 
 The host-eject path uses `node`'s native resolver to load the
 application: the ejected directory is a normal Node.js source tree
@@ -456,9 +469,9 @@ Divergence:
 - Case 2 (host-eject) has no equivalent in the Rust design.
   `endor` does not shell out to `node`; the Rust supervisor either
   hosts an XS machine or fails.
-  Host-eject is a Node.js host concession that exists because
-  the Familiar / the Node-side daemon are deployed in places where
-  Node.js is the only viable runtime for the unconfined leaf.
+  Host-eject is a Node.js-host concession; the Familiar and the
+  Node-side daemon are deployed in places where Node.js is the
+  only viable runtime for the unconfined leaf.
 - Case 1's compartment-map construction lives in JS (using the
   existing `@endo/compartment-mapper`); the Rust side has its own
   archive loader.
