@@ -34,9 +34,10 @@ and where the guest-side POSIX sandbox is not yet available.
 
 We reuse vocabulary from existing designs rather than coining new
 terms.
-**Filesystem mount interface**: the `MountInterface` defined by
+**Filesystem mount interface (VFS)**: the `MountInterface` defined by
 [daemon-mount](daemon-mount.md) (has / list / lookup / write / remove
 / move / makeDirectory / readOnly / snapshot).
+We use VFS as a short name for this interface throughout.
 **Readable tree**: the immutable, content-addressed snapshot of a
 directory tree per [daemon-checkin-checkout](daemon-checkin-checkout.md);
 the shape a `MountInterface.snapshot()` produces.
@@ -45,15 +46,44 @@ the shape a `MountInterface.snapshot()` produces.
 `MountInterface` guard (a `readable-tree`, a sqlite-backed view, an
 in-memory tree).
 **Scratch space**: the daemon-managed backing storage produced by
-`provideScratchMount` (`daemon-mount.md` § Scratch Mount).
+`provideScratchMount` (`daemon-mount.md` § Scratch Mount Provisioning
+and Lifecycle).
 A scratch mount is the case-2 destination.
 **Compartment map**: a `CompartmentMapDescriptor` per
 `@endo/compartment-mapper`'s `types/compartment-map-schema.ts`; the
 graph of compartments, modules, and exit-module entries that
 `endor run` consumes today via `compartment-map.json`.
+**CAS**: content-addressed store; the blob and tree store described in
+[daemon-cas-management](daemon-cas-management.md).
+Files are addressed by their content hash, so identical bytes are
+deduplicated across packages and across runs.
+**`endor`**: the Rust-side daemon and worker host described in
+[daemon-endor-architecture](daemon-endor-architecture.md) and
+[endor-run-expanded](endor-run-expanded.md).
+The `endor run` command is its entry point for running a JavaScript
+application against a mount set.
+**XS worker**: an XS-engine JavaScript worker hosted by `endor` per
+`daemon-endor-architecture.md` § Worker platforms.
+XS is the embedded JavaScript engine that Endo uses for confined
+execution; an XS worker has no ambient host capabilities beyond what
+its host explicitly provides.
+**`cap-std`**: the Rust capability-oriented standard-filesystem library
+used by `endor`'s host-side `fs` module to back the VFS bindings; see
+`daemon-endor-architecture.md` § Host powers.
+**Formula**: the persisted, GC-pinned record from which the daemon
+incarnates a capability.
+A worker formula incarnates a worker; a `mount` formula incarnates a
+mount; see `daemon-endor-architecture.md` § Worker formula for the
+worker case.
+**Lal caplet**: a guest-facing capability granted to a Lal-shaped agent
+(per [lal-fae-form-provisioning](lal-fae-form-provisioning.md)) that
+exposes a host-mediated action to the agent.
+A Lal caplet that wraps `endor run` lets an agent run an application
+against a mount set the host authorized.
 **Ejection**: producing a host-filesystem layout from a mount such
 that an external program (in case 2, `node`) can read it directly.
-The dual of `endo checkin`.
+The dual of `endo checkin` (the readable-tree commit step defined in
+`daemon-checkin-checkout.md`).
 
 ## Case 1: confined application execution
 
