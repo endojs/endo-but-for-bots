@@ -77,7 +77,7 @@ async function* collectIt(have, it) {
 const DEFAULT_AGENT_DIRECTORY = 'genie';
 
 /** Default heartbeat period: 30 minutes. */
-const DEFAULT_HEARTBEAT_PERIOD_MS = 30 * 60 * 1_000;
+const DEFAULT_HEARTBEAT_PERIOD_MS = 30 * 60 * 1000;
 
 // Register built-in API providers so getModel lookups work for known providers.
 registerBuiltInApiProviders();
