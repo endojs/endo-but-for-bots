@@ -338,12 +338,15 @@ import-attributes spec.
 
 ## Backward compatibility for serialized bundles
 
-`@endo/compartment-mapper` archives capture the closed graph of modules as a
-single bundle and replay it at runtime through a synthetic `importHook`.
-A bundle captured before this design lands does not record attributes at
-the import sites and does not key its synthetic memo by attributes.
-
-The compatibility contract:
+`@endo/compartment-mapper` is the package that turns a Node-style
+application's package graph into a single, replayable archive
+(typically a `tar.gz`) containing every module in the graph plus a
+synthetic compartment configuration that re-instantiates it at runtime.
+The archive replays through a synthetic `importHook` the mapper
+generates from the captured graph.
+A bundle captured before this design lands does not record attributes
+at the import sites and does not key its synthetic memo by attributes.
+The user-visible compatibility guarantees:
 
 - **Bundle reader.** When the bundle does not record an `attributes` field
   on an import, the reader injects `EMPTY_ATTRIBUTES` (the frozen empty
@@ -358,12 +361,16 @@ The compatibility contract:
   to today's output, which preserves SHA-pinned archive integrity for the
   vast majority of consumers.
 - **Hooks shipped inside a bundle.**
-  A bundle's synthetic importHook produced by an older mapper is by
+  A bundle's synthetic `importHook` produced by an older mapper is by
   construction a single-arg hook.
-  Per the arity rule, the SES loader still accepts it and only throws if
-  the bundle now contains an import with non-empty attributes, which an
-  old mapper could not have produced.
+  Per the arity rule, the SES loader still accepts it; it would only
+  throw if the bundle now contained an import with a non-JS `type`,
+  which an old mapper could not have produced.
   No upgrade is required for bundles that never used attributes.
+
+The implementation surfaces inside `@endo/compartment-mapper` that
+realize this contract are enumerated under
+`## Compartment-mapper implications`.
 
 ## Alternatives considered
 
@@ -400,56 +407,184 @@ The compatibility contract:
   parallel hooks would multiply the surface per content type and would
   not give the host any expressive power it does not already have.
 
-## Open questions
+## Compartment construction: priming attribute-bearing modules
 
-- **Should the normalization function freeze the input object or return a
-  new frozen object?**
-  Mutating-and-returning the input avoids allocation in the hot path but
-  surprises a caller that retains the original reference.
-  Returning a fresh frozen object is cleaner but doubles allocations
-  for the dominant empty case (mitigated by the `EMPTY_ATTRIBUTES`
-  sentinel).
-  Likely answer: always return the sentinel for the empty case, return a
-  fresh frozen object otherwise.
-  Maintainer to confirm.
-- **Should the legacy-hook arity rule throw or warn when a single-arg hook
-  receives a request with non-empty attributes?**
-  This design proposes *throw*.
-  A `console.warn` fallback that loads the module without honoring the
-  attribute is less safe (silently misinterprets JSON as JS) but might be
-  the right pragmatic posture during the migration window.
-  Maintainer to pick.
-- **Where exactly does the JSON parse happen, in the hook or in the
-  linker?**
-  Per the spec the host parses, so the natural seat is *the hook*: the
-  hook reads bytes, verifies the MIME / extension, parses, and returns a
-  `JsonModuleSource` whose `json` field is the already-parsed value.
-  The linker would then have no JSON-specific code path at all, which is
-  the design's preference.
-  Confirmation needed that `compartment-mapper`'s archive flow can
-  accommodate parsing at archive-replay time rather than at archive-build
-  time (it likely can; archives already record `ModuleSource` values, not
-  raw bytes).
-- **Dynamic-import options bag.**
-  `import(specifier, { with: { type: 'json' } })` exists in the spec;
-  SES's dynamic-import implementation in
-  `packages/ses/src/compartment.js` (`compartmentImport`) currently takes a
-  bare `fullSpecifier`.
-  Augmenting it to accept and propagate attributes is straightforward but
-  the *resolution* step (`resolveHook`) does not currently see attributes.
-  Should `resolveHook` also gain a second argument, or do attributes
-  bypass `resolveHook` entirely?
-  Maintainer's call; the design assumes attributes bypass `resolveHook`
-  (specifiers resolve identically regardless of attributes) unless told
-  otherwise.
-- **Interaction with `moduleMap` and `moduleMapHook`.**
-  The compartment's `moduleMap` is keyed by specifier today.
-  Two natural choices: extend the map key to include attributes
-  (symmetric with the memo), or treat `moduleMap` as resolving the
-  specifier-to-source binding and let attributes select the variant on
-  the resolved side.
-  The latter is simpler and preserves the existing `moduleMap` shape.
-  Maintainer to confirm direction.
+`moduleMap` and `moduleMapHook` are preserved unchanged.
+The compartment's `moduleMap` is keyed by specifier and an entry's
+implicit attribute set is the empty bag (equivalently `{ type: 'js' }`).
+This keeps the existing surface stable for every caller that does not
+use attributes.
+
+A new compartment-construction option `modulesWithAttributes` carries
+the attribute-bearing priming path.
+Its shape is an array of three-element tuples:
+
+```ts
+new Compartment({
+  globals,
+  resolveHook,
+  importHook,
+  moduleMap: {
+    './a.js': aSource,                       // specifier-keyed, type: 'js' implicit
+  },
+  modulesWithAttributes: [
+    ['./data.json', { type: 'json' }, jsonSource],
+    ['./styles.css', { type: 'css' }, cssSource],
+  ],
+});
+```
+
+Each triple is `[specifier, attributes, source]`.
+The compartment normalizes the `attributes` half on construction (per
+`## Normalized attribute representation`), JSON-stringifies the
+`[specifier, normalizedAttributes]` tuple to produce the extended memo
+key, and seats the source under that key.
+A subsequent `import './data.json' with { type: 'json' }` from inside
+the compartment hits the primed entry before the `importHook` is
+consulted.
+
+`moduleMap` and `modulesWithAttributes` cannot collide.
+`moduleMap` only ever seats the legacy-collapse slot (bare specifier),
+and `modulesWithAttributes` only ever seats the extended slot (JSON
+tuple); a compartment that wants both for the same specifier supplies
+the legacy form via `moduleMap` and the typed form via
+`modulesWithAttributes`.
+
+`moduleMapHook` is unchanged.
+The hook is called as today with just the specifier and returns a
+specifier-keyed module record.
+Attributes do not pass through `moduleMapHook` for the same reason
+they do not pass through `resolveHook`: resolution and specifier-map
+linkage do not need attributes to do their job today.
+A future revision may add an `attributesMapHook` or an
+attribute-bearing argument if a concrete need emerges.
+
+## Resolution and resolveHook
+
+Attributes do not pass through `resolveHook`.
+The compartment resolves specifiers identically regardless of any
+`with` clause; the attributes accompany the resolved full specifier
+only at the *load* boundary (the memo key and the `importHook` call).
+A specifier means the same module-shaped reference whether it appears
+under a `with` clause or not, so adding attributes to the signature of
+`resolveHook` would burden every existing implementation for no
+expressive gain.
+
+This is a watch point.
+If a concrete case emerges where the host genuinely needs to resolve
+two specifier strings to different paths based on attributes (a
+content-typed redirect at resolution time, say), the design will
+extend `resolveHook` rather than silently strip the information.
+The forward-compatible move is to keep the attribute-bearing
+information adjacent to the resolved specifier so a later revision
+can plumb it through if needed.
+
+The dynamic-import options bag, `import(specifier, { with: { ... } })`,
+threads through `compartmentImport` in
+`packages/ses/src/compartment.js`.
+The runtime carries the attributes from the call site to the loader's
+memo lookup directly, bypassing `resolveHook` per the rule above, and
+the loader treats the resulting `(fullSpecifier, attributes)` pair
+identically to the static-import path.
+
+## Compartment-mapper implications
+
+`@endo/compartment-mapper` consumes the SES surface this design
+extends.
+A `compartment-mapper` archive is a `tar.gz` (or similar) bundle that
+captures the full closed module graph of an application together with
+a synthetic compartment configuration that replays it at runtime
+through a `Compartment`-shaped wrapper.
+The mapper builds those archives at design time and replays them at
+runtime via a synthetic `importHook`.
+The following surfaces are touched by the attribute-bearing
+extension; each is sketched here so the implementation PR for
+`compartment-mapper` starts with the catalogue.
+
+- **`packages/compartment-mapper/src/link.js`.**
+  This is the file the SES re-export of `normalizeImportAttributes`
+  most directly addresses.
+  The linker constructs compartments from the mapped graph, populates
+  `moduleMap` and (in the new world) `modulesWithAttributes`, and
+  wires the synthetic `importHook`.
+  Touchpoints:
+  - When a module record carries non-empty attributes, the linker
+    routes that triple through `modulesWithAttributes` instead of
+    `moduleMap`.
+  - The synthetic `importHook` becomes a two-arg hook (its `length`
+    is 2) so the SES loader does not gate it against the legacy
+    single-arg rule.
+- **Archive read path.**
+  The compartment-mapper archive format records each import's
+  resolved specifier; under this design, it also records the
+  normalized attributes when non-empty.
+  The reader injects `EMPTY_ATTRIBUTES` for archive entries that
+  predate this design.
+- **Archive write path.**
+  An attributes-aware mapper records the attributes field only on
+  imports whose `with` clause is non-empty.
+  This keeps archives produced from purely-JavaScript graphs
+  byte-identical to today's output, which preserves SHA-pinned
+  archive integrity for the vast majority of consumers.
+- **Synthetic-importHook construction.**
+  The mapper produces a synthetic `importHook` per compartment that
+  dispatches on the in-archive specifier.
+  The new version dispatches on `[specifier, attributes]` (the same
+  tuple SES uses for the memo key).
+  Single-arg synthetic hooks produced by older mapper versions still
+  load under the arity rule for graphs that never used attributes.
+- **`package.json` resolution.**
+  The compartment-mapper resolves bare-specifier imports against the
+  application's `package.json` graph today.
+  Propagating attributes through that resolution (e.g., to honor
+  package-level conditions on a `with { type: '...' }` import) is
+  *not* in this design's scope.
+  This design's only requirement on the resolver is that it preserves
+  attributes alongside the resolved specifier so a downstream
+  refactor can pick them up; the per-`package.json` propagation work
+  is a follow-up design.
+
+## Test plan
+
+The eventual implementation PR is expected to ship the following
+test catalogue, in `packages/ses/test/` and
+`packages/module-source/test/`:
+
+- **Parser.** A static import with a `with` clause produces a
+  `ModuleSource.imports` entry whose attributes match the source.
+  A `with` clause with duplicate keys raises a *SyntaxError* at parse
+  time.
+  A `with` clause with a non-string value raises a *TypeError* at
+  parse time.
+- **Normalization.** `normalizeImportAttributes` returns
+  `EMPTY_ATTRIBUTES` for an empty bag and a fresh frozen object for
+  every non-empty input.
+  The same input passed twice returns objects that JSON-stringify to
+  the same string (sorted-key invariant).
+  The caller's input is not mutated.
+- **Memo collapse.** Two imports of the same specifier without a
+  `with` clause share a single memo entry (legacy collapse).
+- **Per-attribute memo separation.** Two imports of the same
+  specifier with different `type` values produce two memo entries.
+  An unattributed import and a `with { type: 'json' }` import for the
+  same specifier produce two memo entries.
+- **Arity-rule throw.** A `with { type: 'json' }` import against a
+  legacy single-arg `importHook` raises the documented *TypeError*
+  (asserting on the exact text from `## importHook signature`).
+  A `with { type: 'js' }` import against the same hook succeeds.
+- **Arity-rule pass-through.** A two-arg hook receives the normalized
+  attributes object on every call, including the empty case
+  (`EMPTY_ATTRIBUTES`).
+- **modulesWithAttributes priming.** A compartment constructed with a
+  `modulesWithAttributes` triple satisfies the matching attribute-
+  bearing import from the primed entry without invoking `importHook`.
+- **Dynamic-import path.** `import('./x.json', { with: { type: 'json' } })`
+  threads attributes through to the loader and produces the same
+  memo entry as the static form.
+- **Bundle replay.** A `compartment-mapper` archive captured before
+  this design loads identically after; its synthetic single-arg
+  `importHook` continues to satisfy specifier-only imports without
+  the arity throw.
 
 ## References
 
