@@ -113,9 +113,23 @@ output (logs, generated artifacts, persisted state) through the same
 mount surface.
 The XS host-powers `fs` module ([daemon-endor-architecture](daemon-endor-architecture.md)
 § Host powers) is the natural home for the cap-std bindings that
-back this; in the confined case `cap-std` is parametrised by the
-mount-resolved host paths rather than the daemon's ambient
-host-paths power.
+back this.
+In the confined case `cap-std` is parametrised by the mount-resolved
+host paths rather than the daemon's ambient host-paths power.
+The exact parametrisation seam is left open: `cap-std`'s public API
+roots each capability at an `OpenDir` (a real directory descriptor),
+so the natural binding is one `OpenDir` per `Mount` whose backing is
+a physical directory subtree, opened by the daemon at mount-formula
+incarnation and passed into the worker's `fs` host power.
+For `Mount`s whose backing is not a physical directory (a
+`readable-tree`, a sqlite-backed view, an in-memory tree), the
+worker's `fs` shim short-circuits the `cap-std` path and reads from
+the mount's `MountInterface` directly, since `cap-std` has no
+generic adapter for non-directory backings.
+The exact shape of the seam (whether the shim lives in the `fs`
+module or behind a thin `MountReadOpenable` trait) is TBD and
+should be worked out alongside the case-1 implementation; the
+implementation should not assume `cap-std` covers every `Mount`.
 
 ### Sub-case: fully virtualized
 
