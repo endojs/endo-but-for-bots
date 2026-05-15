@@ -72,6 +72,13 @@ uses existing `lookup` and `marshal` formulas, supports replacement,
 revocation, metadata-only audit, and a value-blind Secret Blobs Space, and
 leaves OAuth, signing, brokers, and consumer-specific policy to layers above
 it),
+[ses-top-level-await](ses-top-level-await.md) (added 2026-05-14, revived
+2026-09-01; SES + `@endo/module-source` top-level await per 262's
+cyclic-module-records algorithm — [[AsyncEvaluation]] /
+[[PendingAsyncDependencies]] / [[AsyncParentModules]] on the module instance, an
+async-IIFE wrapper in the module-source transform, and bundle-source coupling
+with a sibling `@endo/check-bundle` policy gate; the synchronous fast path is
+preserved; extreme low priority, unscheduled),
 [npm-registry-as-directory-tree](npm-registry-as-directory-tree.md) (added
 2026-08-29; supersedes the bespoke `EndoRegistry` capability with an enumerable
 registry root, non-enumerable npm and scope lookup hubs, enumerable exact-version
@@ -532,6 +539,7 @@ LLM-agent stack).*
 | [genie-integration](genie-integration.md) | 2026-05-02 | 2026-08-27 | Largely realized (retrospective; genie retired) |
 | [unhandled-rejection-display](unhandled-rejection-display.md) | 2026-05-10 | 2026-05-18 | **Complete** |
 | [ui-view-not-driver](ui-view-not-driver.md) | 2026-08-10 | 2026-09-07 | **Complete** (consolidated into [floot-daemon-owned-turns](floot-daemon-owned-turns.md)) |
+| [ses-top-level-await](ses-top-level-await.md) | 2026-05-14 | 2026-09-01 | Proposed |
 | [weblet-next](weblet-next.md) | 2026-03-24 | 2026-03-24 | Reference |
 | [workers-panel](workers-panel.md) | 2026-02-14 | 2026-02-24 | In Progress |
 | [pass-style-promise](pass-style-promise.md) | 2026-05-10 | 2026-05-10 | In Progress |
@@ -580,6 +588,8 @@ LLM-agent stack).*
 **Current totals (2026-10-07, hardened-text-codecs-shim to Implemented):** 77 Complete/Implemented, 84 In Progress, 18 Not Started, 25 Proposed, 3 Active, 21 Reference, 4 Deprecated, 2 Draft, 5 Superseded, 1 Consolidated, 1 Abandoned, and 1 Approved (`ironhorse-engine`), plus [cbor-codec](cbor-codec.md) at *Phases 1–2 implemented* and [genie-integration](genie-integration.md) as a *Largely realized* retrospective (**244 indexed records**). The bucket sum is 244. The raw audit covered 242 files (`designs/*.md` plus `packages/*/designs/*.md`): six ledger/support files were excluded, while four already-indexed nested channel-thread research records lie outside those two globs. Every indexed record and untallied file was checked in six disjoint batches against document metadata, all-state PR searches, and the `llm` log; 63 claimed-to-verified status corrections and 16 new rows are recorded in [`ARCHIVE.md`](ARCHIVE.md). The totals also count [daemon-guest-bot-incarnation](daemon-guest-bot-incarnation.md) (**Implemented**, #1306), which landed on `llm` concurrently with this pass and was folded in at rebase. The Cloudflare pass adds [thixotrope-on-cloudflare](thixotrope-on-cloudflare.md) (Proposed), [thixotrope-on-cloudflare-addendum-single-vat-hub](thixotrope-on-cloudflare-addendum-single-vat-hub.md) (Proposed) and [thixotrope-on-cloudflare-review](thixotrope-on-cloudflare-review.md) (Reference) to the summary table (Proposed 23 -> 25, Reference 20 -> 21, records 240 -> 243), and both Proposed designs to the M4 table, the dependency graph and the estimates table. Neither is estimated: the base design's Phase 0 is a go/no-go measurement gated on the engine work in `rust/engine/WASM-BLOCKERS.md` and `rust/engine/STACK-DEPTH-REFACTOR.md`, so no milestone-duration, critical-path or timeline change is assigned.
 
 The 2026-09-30 rebase of PR #1116 adds [guest-native-invitations](guest-native-invitations.md) (**In Progress**: the guest `invite`/`accept` surface landed in #1305 and #1310), increasing In Progress from 83 to 84 and the indexed records from 243 to 244.
+
+The 2026-09-04 rebase revives [ses-top-level-await](ses-top-level-await.md) (Proposed) onto `llm` (PR #249), increasing Proposed from 39 to 40 and the design count from 195 to 196.
 
 ## Roadmap
 
@@ -1967,6 +1977,7 @@ have been remapped: 0 -> 1, ½ -> 2, 1 -> 3, 2 -> 4, 3 -> 7, 4 -> 9,
 | familiar-deep-link-invitations | S-M | 3 days | 8 | `endo://` capture in shell + Chat confirm/naming modal; daemon `invite`/`accept` already Complete |
 | endo-app-sharing | M | 4-5 days | 8 | App handle + cross-daemon `endo clone` (hash-verified) vs remote reference (1.2x bump) |
 | familiar-app-ui-hosting | M | 4-5 days | 8 | App UI manifest + sandbox tiers over the existing weblet substrate (1.2x bump) |
+| ses-top-level-await | L | 1.5-3 weeks | — | Adds [[AsyncEvaluation]] / [[PendingAsyncDependencies]] / [[AsyncParentModules]] to the SES module instance, an async-IIFE wrapper in the `@endo/module-source` transform, bundle-source coupling, and a sibling `@endo/check-bundle` policy gate. Synchronous fast path preserved. Out-of-milestone; extreme low priority, no roadmap pull (revived 2026-09-01, PR #249). (L size; 1.5x bump already applied per calibration round.) |
 
 #### Summary by Milestone
 
@@ -2039,6 +2050,18 @@ does not erase the real parallel lane: M11 implementation has already landed
 ahead of several earlier milestones.  M3-M6 remain the hosted-Gateway critical
 path, M7 may interleave once its substrate is available, and the Strategic
 Early Items below remain the only explicit carve-out.
+
+### Unscheduled Platform Designs
+
+These designs sit outside the M0-M6 milestone trajectory because they
+target platform substrates (SES shim, module-source pipeline,
+bundle-source format) on a longer horizon than the agent-experience
+roadmap requires. They are queued for a future builder and do not
+affect the milestone critical path.
+
+| Design | Priority | Rationale |
+|--------|----------|-----------|
+| ses-top-level-await | **extreme low** | Adds top-level-await (TLA) to the SES shim and the `@endo/module-source` pipeline per 262's cyclic-module-records algorithm. The synchronous fast path is preserved for the 99% of modules that do not use TLA; the design's scope is the new async-evaluation path only. No near-term roadmap pull. The design's load-bearing implementation surfaces are SES, `@endo/module-source`, `@endo/bundle-source`, and a sibling change in `@endo/check-bundle` for the policy gate. See the [bundle-source coupling section](ses-top-level-await.md#bundle-source-coupling) for the check-bundle composition with the Agoric chain's upgrade pattern. Size: L (architectural, multi-package). |
 
 ### Strategic Early Items
 
