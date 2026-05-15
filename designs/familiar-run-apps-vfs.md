@@ -169,16 +169,45 @@ The resolution shape mirrors Go's `go.mod`:
   *greatest explicitly mentioned minor.patch* per
   `endor-npm-registry-proxy.md` § Minimal Version Selection.
   This is the Go-mod selection rule.
-  No lockfile is required: the resolution is a deterministic
-  function of the entry package's direct deps plus the registry
-  table's contents at resolution time.
 
-The optional follow-up to a lockfile is an `endor lock` command
-(see `endor-npm-registry-proxy.md` § Design decision 5) that
-snapshots the resolved `(name, version)` set into a file the host
-can carry between runs for reproducibility.
+The resolution is a deterministic function of the entry package's
+direct deps plus the registry table's contents at resolution time.
+"Deterministic" here is conditional: two runs that observe the same
+registry-table contents at resolution time will produce the same
+resolution.
+Two runs that resolve the same entry but trigger ingestion of a new
+`(name, version)` between them may resolve to different transitive
+sets, because the second run sees a row the first did not.
+This is a real time-dependence in the no-lockfile default, not a
+contradiction: the design takes the position that registry-table
+stability is a precondition for reproducibility, and exposes two
+operator patterns for guaranteeing it:
+
+- **Snapshot the registry table per reproducibility horizon.** A host
+  that needs run-to-run reproducibility freezes the registry table
+  (either by configuring `--offline` and pre-populating, per
+  `endor-npm-registry-proxy.md` § Offline mode, or by carrying a
+  registry-table snapshot in the daemon's state directory) so that
+  ingestion cannot fire mid-horizon.
+- **Use `endor lock`.** The follow-up to a lockfile is an
+  `endor lock` command (see `endor-npm-registry-proxy.md`
+  § Design decision 5) that snapshots the resolved
+  `(name, version)` set into a file the host can carry between runs.
+  A run that resolves against a lock pins the transitive set
+  regardless of registry-table state, so ingestion that fires after
+  the lock has no effect on the resolution.
+
 The default mode for case 1 is "no lockfile, resolution computed at
 each `endor run`."
+This default is appropriate for ad-hoc application execution where a
+single horizon spans only one process lifetime; reproducibility-
+sensitive deployments should adopt one of the two patterns above.
+The failure mode under the default is silent transitive drift: a
+run that re-resolves after an unrelated ingestion may pick up a
+newer `(name, version)` row, and the run's behavior changes
+accordingly.
+A future revision may promote `endor lock` to the default once the
+command lands and the operational ergonomics are clear.
 
 This design names a possible new manifest shape, `endo.mod`, as
 the Go-mod analogue.
