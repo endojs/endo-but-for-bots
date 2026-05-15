@@ -528,6 +528,33 @@ export const main = async rawArgs => {
       return checkout({ treeName, destPath, agentNames });
     });
 
+  // SKELETON: see designs/ocapn-daemon-integration.md.
+  // Only `provide` is implemented; the design's Open Question 9
+  // ("endo transports list/add/revoke vs endo agent <name>
+  // transports ...") is unresolved.
+  program
+    .command('transports <subcommand>')
+    .description(
+      '(skeleton) per-agent network capability — only `provide` works',
+    )
+    .option(...commonOptions.as)
+    .option(...commonOptions.requiredName)
+    .action(async (subcommand, cmd) => {
+      const { name, as: agentNames } = cmd.opts();
+      if (subcommand !== 'provide') {
+        throw new Error(
+          `endo transports ${subcommand}: not implemented (gap #14, see designs/ocapn-daemon-integration.md)`,
+        );
+      }
+      if (!name) {
+        throw new Error('--name is required for transports provide');
+      }
+      const { provide: provideCmd } = await import(
+        './commands/transports.js'
+      );
+      return provideCmd({ name, agentNames });
+    });
+
   program
     .command('mount <path>')
     .description('mounts an external filesystem directory')
