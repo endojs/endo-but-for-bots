@@ -237,20 +237,47 @@ Making it optional on the type lets old hook implementations type-check
 unchanged.
 
 Arity-based backward compatibility.
-The loader, before invoking a hook, inspects `hook.length`:
+JavaScript's `function.length` returns the number of declared
+parameters before the first default-valued parameter or rest element.
+The SES loader uses this property on a hook to detect whether the hook
+was authored against the pre-attributes signature; before invoking, it
+inspects `hook.length`:
 
 | `hook.length` | Behavior                                                                                     |
 |---------------|----------------------------------------------------------------------------------------------|
 | `0`           | Treated as a hook that does its own argument parsing.  Called with both arguments anyway.    |
-| `1`           | Legacy single-arg hook.  Called with `(specifier)` only.  If attributes are non-empty, the loader throws a *TypeError* explaining the hook does not support attributes. |
+| `1`           | Legacy single-arg hook.  Called with `(specifier)` only when the attributes are empty or carry `{ type: 'js' }`.  When the attributes carry any other `type` value, the loader throws a *TypeError* (see exact text below). |
 | `2` or more   | New hook.  Called with `(specifier, attributes)`.                                            |
 
-The throw-on-non-empty-attributes-against-legacy-hook is the safe default:
-a legacy hook cannot honor `with { type: 'json' }` (it has no way to know
-the import asked for JSON), so silently dropping the attribute would let
-the user import the file as JavaScript and execute attacker-controlled
-content as code.
+The throw-on-non-js-type-against-legacy-hook is the safe default.
+A legacy hook cannot honor `with { type: 'json' }` (it has no way to
+know the import asked for JSON), so silently dropping the attribute
+would let the user import the file as JavaScript and execute
+attacker-controlled content as code.
+The `type: 'js'` case is treated the same as the empty case because a
+JS request is what a legacy hook already serves; the only attribute a
+non-attributes-aware hook cannot honor is a request for a non-JS
+content type.
 The same arity dispatch applies to `importNowHook`.
+
+This arity-based detection is shim-side only.
+It exists to ease migration across the SES ecosystem's existing hook
+implementations and is not part of any upstream proposal; a host
+language never sees `hook.length`-based dispatch in the standard
+import-attributes flow.
+
+Exact `TypeError` text.
+The loader raises:
+
+```
+TypeError: importHook for "<full-specifier>" does not accept attributes;
+  request was with { type: "<type>" }
+  (hook arity 1; expected 2+ to honor non-JS attributes)
+```
+
+`importNowHook` raises the same shape with the hook name substituted.
+Naming the exact text lets a downstream test suite assert on it without
+duplicating the message.
 
 Migration path for existing hooks.
 The cookbook entry: change
