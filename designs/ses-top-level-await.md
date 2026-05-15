@@ -1,17 +1,17 @@
 # SES top-level await
 
-| Field | Value |
-|------|------|
-| Status | Draft |
-| Author | designer |
-| Created | 2026-05-14 |
-| Updated | 2026-05-14 |
+| | |
+|---|---|
+| **Created** | 2026-05-14 |
+| **Updated** | 2026-05-15 |
+| **Author** | Designer (prompted) |
+| **Status** | Proposed |
 
 ## Problem statement
 
 The SES module loader executes modules synchronously, bottom up, cycle
-tolerant ([packages/ses/src/module-instance.js](../packages/ses/src/module-instance.js)
-line 401). A module's `execute()` returns `undefined`; the linker assumes
+tolerant ([packages/ses/src/module-instance.js line 401](../packages/ses/src/module-instance.js#L401)).
+A module's `execute()` returns `undefined`; the linker assumes
 that when `execute()` returns, the module's bindings are settled. Top-level
 `await` at module scope (henceforth TLA) violates this assumption: a module
 that awaits is, by construction, *suspended* across microtasks, and its
@@ -21,11 +21,11 @@ resumes.
 Three observable problems follow.
 
 1. **Source rejection.** The module-source transform parses with
-   `sourceType: 'module'` ([packages/module-source/src/transform-source.js](../packages/module-source/src/transform-source.js)
-   line 26), so `@babel/parser` accepts the `await` token at module top
+   `sourceType: 'module'` ([packages/module-source/src/transform-source.js line 26](../packages/module-source/src/transform-source.js#L26)),
+   so `@babel/parser` accepts the `await` token at module top
    level. The transform then wraps the body in an arrow IIFE
-   ([packages/module-source/src/transform-analyze.js](../packages/module-source/src/transform-analyze.js)
-   line 100): `({imports,liveVar,onceVar,import,importMeta})=>(function(){'use
+   ([packages/module-source/src/transform-analyze.js line 100](../packages/module-source/src/transform-analyze.js#L100)):
+   `({imports,liveVar,onceVar,import,importMeta})=>(function(){'use
    strict'; ... })()`. The inner IIFE is **not async**, so the parser later
    refuses the `await` inside it. SES users today see a syntax error from
    the second-pass evaluation of the functor, not from the user's source.
@@ -61,8 +61,8 @@ In scope:
   `gatherAsyncParentCompletions` walk, and `[[CycleRoot]]` selection.
 - `compartment.import(...)` returns the existing
   `[[TopLevelCapability]]`-shaped promise that already gates dynamic import
-  ([packages/ses/src/compartment.js](../packages/ses/src/compartment.js)
-  line 435); the contract becomes: the promise settles *after* TLA in the
+  ([packages/ses/src/compartment.js line 435](../packages/ses/src/compartment.js#L435));
+  the contract becomes: the promise settles *after* TLA in the
   imported subgraph resolves, where today it settles synchronously after a
   `link`+`execute` round-trip.
 - `compartment.importNow(...)` stays synchronous and **rejects any module
@@ -145,7 +145,7 @@ The DFS-invariant case (row 9) and the cycle case (row 10) take the
 named tick onto a shared `globalThis.test262` array, and the test
 asserts the concatenated string.
 
-### Test fixtures that do NOT translate
+### Test fixtures that do not translate
 
 A small subset of test262 TLA fixtures depend on host-driven
 `$DONE`/`Test262Error` infrastructure that does not have a direct
@@ -230,8 +230,7 @@ boundary.
 
 ### Linker bookkeeping
 
-`link()` ([packages/ses/src/module-link.js](../packages/ses/src/module-link.js))
-gains a second pass that walks the linked instance graph in DFS
+`link()` ([packages/ses/src/module-link.js](../packages/ses/src/module-link.js)) gains a second pass that walks the linked instance graph in DFS
 post-order. For each instance:
 
 1. If its source has `__moduleIsAsync__: true`, set `asyncEvaluation =
@@ -374,8 +373,8 @@ build time. The `__moduleIsAsync__: true` flag must round-trip through:
    "evaluating-async" in a sync context? The current draft picks
    `TypeError` to match the existing "Compartment does not support
    dynamic import" diagnostic at
-   [packages/ses/src/compartment.js](../packages/ses/src/compartment.js)
-   line 438; the maintainer's call.
+   [packages/ses/src/compartment.js line 438](../packages/ses/src/compartment.js#L438);
+   the maintainer's call.
 5. **Bundle-source format coverage.** Is the `endoScript`-format error
    acceptable, or should `bundle-source` silently fall back to
    `endoZipBase64` when it detects an async source in the input
@@ -389,3 +388,46 @@ build time. The `__moduleIsAsync__: true` flag must round-trip through:
    acquire new edges. Does any current use case re-link with new
    edges? If so, `cycleRoot` may need to be re-derived; today's draft
    assumes a one-shot link.
+
+## Prompt
+
+> Design a solution for **top-level-await (TLA)** in SES and
+> `@endo/module-source`. The design should be implementable on
+> `actual/master` (upstream endo's master branch, not the bots-fork
+> `llm`). The maintainer's framing:
+>
+> - **Lead with the test suite.** TDD shape: spec out what tests would
+>   cover the feature before sketching the implementation. The proposal's
+>   organizing principle should be: "here are the tests that an
+>   implementation must pass; here is the implementation strategy that
+>   makes them pass."
+> - **Babel's TLA test suite is a useful reference.** They have an
+>   extensive suite that exercises top-level-await across many module
+>   shapes. Reading those test fixtures tells the designer how the spec's
+>   edge cases (await on a rejected promise at top level; await + cyclic
+>   imports; await + dynamic import; etc.) get exercised.
+> - **Backward compatibility on serialized ModuleSource bundles.** A
+>   `ModuleSource` captured in an `@endo/bundle-source` bundle today is a
+>   serialized form with a specific shape (the functor is synchronous;
+>   the imports / exports / metadata layout is fixed). Adding TLA must
+>   preserve the existing shape for synchronous modules; only the new
+>   async-module case introduces new fields or a new variant.
+> - **The functor is synchronous by convention; augment SES with an
+>   async-module convention.** Today `ModuleSource`'s functor signature
+>   is synchronous. The TLA design introduces a new convention that SES
+>   recognizes and routes through a different initialization path.
+> - **Read 262 background on module initialization synchronization.**
+>   The ECMAScript spec has a precise account of how TLA composes with
+>   the module-graph evaluation order ([Cyclic Module Records, evaluation
+>   phase](https://tc39.es/ecma262/#sec-cyclic-module-records)). The
+>   design's evaluation algorithm should compose with that spec, not
+>   invent a separate model.
+> - **Look for inspiration in test262 fixtures.** The test262 test suite
+>   has a `language/module-code/top-level-await/` directory exercising
+>   TLA in a fixture-shaped way.
+>
+> Lead with the test suite. Sections (adapt to local convention): status
+> table; problem statement; scope and non-goals; **test suite** (first
+> class); backward compatibility for serialized ModuleSource bundles;
+> SES augmentation; ModuleSource augmentation; alternatives considered;
+> open questions.
