@@ -10,8 +10,10 @@
  * `src/score.js` for the pure scoring rules.
  */
 
+/** @import { Choice, GameResult } from './src/score.js' */
+
 export { make } from './src/rock-paper-scissors.js';
 export { score, choices } from './src/score.js';
 
-/** @typedef {import('./src/score.js').Choice} Choice */
-/** @typedef {import('./src/score.js').GameResult} GameResult */
+/** @typedef {Choice} Choice */
+/** @typedef {GameResult} GameResult */
