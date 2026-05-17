@@ -40,11 +40,11 @@ const GameResultShape = M.or('draw', {
   why: M.string(),
 });
 
-const DefenderShape = M.interface('Defender', {
+const DefenderI = M.interface('Defender', {
   defend: M.call(ChoiceShape).returns(GameResultShape),
 });
 
-const AttackerShape = M.interface('Attacker', {
+const AttackerI = M.interface('Attacker', {
   attack: M.call(ChoiceShape).returns(M.remotable('Defender')),
   getResult: M.call().returns(M.promise()),
 });
@@ -74,12 +74,12 @@ const makeAttacker = () => {
   /** @type {Choice | undefined} */
   let attackerChoice;
 
-  return makeExo('Attacker', AttackerShape, {
+  return makeExo('Attacker', AttackerI, {
     /** @param {Choice} c1 */
     attack(c1) {
       attackerChoice === undefined || Fail`already chose ${attackerChoice}`;
       attackerChoice = c1;
-      return makeExo('Defender', DefenderShape, {
+      return makeExo('Defender', DefenderI, {
         /** @param {Choice} c2 */
         defend(c2) {
           const outcome = score(c1, c2);
