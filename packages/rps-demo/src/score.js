@@ -25,14 +25,14 @@ export const choices = harden(
  *   - a verb string ("crushes", "covers", "cuts") if `a` beats `b`,
  *   - `null` if `a === b` (draw),
  *   - `false` if `a` loses to `b`.
- *
- * @type {Readonly<Record<Choice, Readonly<Record<Choice, string | null | false>>>>}
  */
-const defeats = harden({
-  rock: { rock: null, paper: false, scissors: 'crushes' },
-  paper: { rock: 'covers', paper: null, scissors: false },
-  scissors: { rock: false, paper: 'cuts', scissors: null },
-});
+const defeats = harden(
+  /** @type {const} */ ({
+    rock: { rock: null, paper: false, scissors: 'crushes' },
+    paper: { rock: 'covers', paper: null, scissors: false },
+    scissors: { rock: false, paper: 'cuts', scissors: null },
+  }),
+);
 
 /**
  * Score a single round of Rock Paper Scissors.
