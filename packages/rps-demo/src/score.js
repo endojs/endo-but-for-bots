@@ -9,12 +9,12 @@
  * function and validates inputs with a pattern guard at the boundary.
  */
 
-/** @typedef {'rock' | 'paper' | 'scissors'} Choice */
-
 /** The three legal choices. Frozen so callers can use it as a switch table. */
 export const choices = harden(
   /** @type {const} */ (['rock', 'paper', 'scissors']),
 );
+
+/** @typedef {(typeof choices)[number]} Choice */
 
 /**
  * @typedef {'draw' | { winner: 1 | 2, why: string }} GameResult
