@@ -6,7 +6,11 @@ The whole package fits in two source files and exists for one purpose:
 to show, end to end, how to author a distributed game as an Endo
 daemon plugin.
 
-The game itself is the classic three-throw rules.
+The game itself is the classic Rock Paper Scissors comparison.
+Rather than modeling the "three throws" countdown, the demo
+synchronizes the reveal of both players' picks for the same effect:
+the attacker commits a choice and hands the defender a capability
+that can reveal a counter-choice exactly once.
 The interesting part is the shape of the code: a pure scoring function,
 a daemon-loadable module that wraps it in an `Exo` remotable with
 `@endo/patterns` guards, and the capability discipline that lets two
