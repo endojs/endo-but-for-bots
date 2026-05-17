@@ -38,7 +38,9 @@ import { makeError, X } from '@endo/errors';
  */
 
 const notImplemented = name => {
-  throw makeError(X`hashline.${name}: not implemented (Phase 2 of designs/cli-edit-verb.md)`);
+  throw makeError(
+    X`hashline.${name}: not implemented (Phase 2 of designs/cli-edit-verb.md)`,
+  );
 };
 
 /**
