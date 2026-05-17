@@ -44,16 +44,13 @@ In rough order of "where the lesson lives":
 
 ## The capability sketch
 
-```
-                 +-----------+    attack(c1)    +-----------+
-   attacker ---> |  Attacker | ---------------> |  Defender |
-                 +-----------+                  +-----------+
-                       |                               |
-                       | getResult()                   | defend(c2)
-                       v                               v
-                 +-----------+   resolves with   +-----------+
-                 |  Promise  | <---------------- |  score()  |
-                 +-----------+                   +-----------+
+```mermaid
+flowchart LR
+    attacker([attacker]) -->|attack&#40;c1&#41;| Attacker
+    Attacker -->|returns| Defender
+    Defender -->|defend&#40;c2&#41;| score
+    Attacker -->|getResult&#40;&#41;| Promise
+    score -->|resolves with| Promise
 ```
 
 The `Attacker` is a one-shot capability: the first `attack(choice)`
