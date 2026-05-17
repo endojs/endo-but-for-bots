@@ -2505,6 +2505,26 @@ __metadata:
   languageName: unknown
   linkType: soft
 
+"@endo/rps-demo@workspace:packages/rps-demo":
+  version: 0.0.0-use.local
+  resolution: "@endo/rps-demo@workspace:packages/rps-demo"
+  dependencies:
+    "@endo/errors": "workspace:^"
+    "@endo/eventual-send": "workspace:^"
+    "@endo/exo": "workspace:^"
+    "@endo/init": "workspace:^"
+    "@endo/lockdown": "workspace:^"
+    "@endo/patterns": "workspace:^"
+    "@endo/promise-kit": "workspace:^"
+    "@endo/ses-ava": "workspace:^"
+    ava: "catalog:dev"
+    c8: "catalog:dev"
+    eslint: "catalog:dev"
+    tsd: "catalog:dev"
+    typescript: "catalog:dev"
+  languageName: unknown
+  linkType: soft
+
 "@endo/sandbox@workspace:^, @endo/sandbox@workspace:packages/sandbox":
   version: 0.0.0-use.local
   resolution: "@endo/sandbox@workspace:packages/sandbox"
