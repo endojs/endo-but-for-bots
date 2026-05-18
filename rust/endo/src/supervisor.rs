@@ -748,4 +748,173 @@ mod tests {
             );
         });
     }
+
+    #[test]
+    fn take_suspended_on_unknown_handle_with_cas_is_noop() {
+        // `take_suspended` on a handle that was never marked
+        // suspended must return None and must not attempt to
+        // release any CAS root.  This pins the early-return branch
+        // in the new release logic (the `if let Some(ref sw)` arm
+        // must not fire when nothing was removed).
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let tmp = tempfile::tempdir().unwrap();
+            let cas = Arc::new(ContentStore::open(tmp.path()).unwrap());
+            let (sup, _outbox_rx) = Supervisor::new();
+            sup.set_cas(Arc::clone(&cas));
+
+            // Hand-retain a hash that is unrelated to any worker so
+            // we can prove the no-op `take_suspended` did not call
+            // release on anything that would have driven this
+            // refcount to zero.
+            let hash = "unrelated".to_string();
+            write_snapshot_blob(tmp.path(), &hash, b"keep-me");
+            cas.retain(&hash);
+
+            // Handle 9999 was never suspended; the call returns None.
+            let result = sup.take_suspended(9999);
+            assert!(result.is_none());
+
+            // The unrelated retain is still live; gc must not
+            // collect it.
+            let report = cas.gc(&std::collections::HashSet::new()).unwrap();
+            assert_eq!(report.freed_count, 0);
+            assert!(tmp.path().join(&hash).exists());
+        });
+    }
+
+    #[test]
+    fn suspend_resume_resuspend_with_different_hash() {
+        // A worker's lifetime spans many suspend / resume cycles,
+        // each with a fresh snapshot hash.  The bookkeeping
+        // invariant for each cycle is independent: a hash retained
+        // at suspend-N is released at resume-N, and gc after the
+        // release reclaims that hash even if a later cycle has
+        // pinned a different one.
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let tmp = tempfile::tempdir().unwrap();
+            let cas = Arc::new(ContentStore::open(tmp.path()).unwrap());
+            let (sup, _outbox_rx) = Supervisor::new();
+            sup.set_cas(Arc::clone(&cas));
+            let handle = sup.alloc_handle();
+            make_worker(&sup, handle);
+
+            let hash_a = "aaaaaaaa".to_string();
+            let hash_b = "bbbbbbbb".to_string();
+            write_snapshot_blob(tmp.path(), &hash_a, b"snap-a");
+            write_snapshot_blob(tmp.path(), &hash_b, b"snap-b");
+
+            // Cycle 1: suspend with hash A, resume (take).
+            sup.mark_suspended(handle, hash_a.clone(), tmp.path().to_path_buf());
+            // Re-register worker info as a real resume path would.
+            make_worker(&sup, handle);
+            let taken_a = sup.take_suspended(handle).unwrap();
+            assert_eq!(taken_a.sha256, hash_a);
+
+            // Cycle 2: suspend the same handle with a different hash.
+            sup.mark_suspended(handle, hash_b.clone(), tmp.path().to_path_buf());
+
+            // A gc here must reclaim hash A (refcount fell to 0 at
+            // the resume in cycle 1) but must not reclaim hash B
+            // (still pinned by the cycle-2 suspend).
+            let report = cas.gc(&std::collections::HashSet::new()).unwrap();
+            assert_eq!(report.freed_count, 1, "exactly hash A must be reclaimed");
+            assert!(
+                !tmp.path().join(&hash_a).exists(),
+                "hash A must be gone after gc"
+            );
+            assert!(
+                tmp.path().join(&hash_b).exists(),
+                "hash B must survive while worker is suspended on it"
+            );
+
+            // Resume cycle 2 to drain.
+            let taken_b = sup.take_suspended(handle).unwrap();
+            assert_eq!(taken_b.sha256, hash_b);
+            let report = cas.gc(&std::collections::HashSet::new()).unwrap();
+            assert_eq!(report.freed_count, 1);
+            assert!(!tmp.path().join(&hash_b).exists());
+        });
+    }
+
+    #[test]
+    fn two_workers_sharing_same_snapshot_use_refcount() {
+        // Two distinct workers happen to suspend on the same
+        // snapshot hash (e.g., two clones of an identical-shape XS
+        // machine).  The CAS refcount is the only protection
+        // against collecting the shared blob while one worker has
+        // resumed but the other has not.  This test pins that the
+        // bookkeeping is refcount-based, not occupancy-based.
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let tmp = tempfile::tempdir().unwrap();
+            let cas = Arc::new(ContentStore::open(tmp.path()).unwrap());
+            let (sup, _outbox_rx) = Supervisor::new();
+            sup.set_cas(Arc::clone(&cas));
+
+            let h1 = sup.alloc_handle();
+            let h2 = sup.alloc_handle();
+            make_worker(&sup, h1);
+            make_worker(&sup, h2);
+
+            let hash = "sharedhash".to_string();
+            write_snapshot_blob(tmp.path(), &hash, b"shared-bytes");
+
+            sup.mark_suspended(h1, hash.clone(), tmp.path().to_path_buf());
+            sup.mark_suspended(h2, hash.clone(), tmp.path().to_path_buf());
+
+            // Resume worker 1 only.  Worker 2 still depends on the
+            // snapshot; gc must not reclaim it.
+            let _ = sup.take_suspended(h1).unwrap();
+            let report = cas.gc(&std::collections::HashSet::new()).unwrap();
+            assert_eq!(
+                report.freed_count, 0,
+                "shared snapshot must survive while one worker is still suspended"
+            );
+            assert!(tmp.path().join(&hash).exists());
+
+            // Resume worker 2.  Now both retains are released; the
+            // snapshot becomes collectable.
+            let _ = sup.take_suspended(h2).unwrap();
+            let report = cas.gc(&std::collections::HashSet::new()).unwrap();
+            assert_eq!(report.freed_count, 1);
+            assert!(!tmp.path().join(&hash).exists());
+        });
+    }
+
+    #[test]
+    fn cas_accessor_returns_wired_store() {
+        // The `cas()` accessor is the surface the resume path in
+        // `endo.rs` reaches through to release a previously
+        // retained hash.  The returned Arc must point to the same
+        // ContentStore the supervisor was wired with, so a release
+        // call via the accessor affects the same refcounts as a
+        // release call via the supervisor's internal path.
+        let tmp = tempfile::tempdir().unwrap();
+        let cas = Arc::new(ContentStore::open(tmp.path()).unwrap());
+        let (sup, _outbox_rx) = Supervisor::new();
+        assert!(sup.cas().is_none());
+        sup.set_cas(Arc::clone(&cas));
+
+        let accessed = sup.cas().expect("cas wired");
+        // A retain via the original handle and a release via the
+        // accessor handle must net to zero; both refer to the same
+        // underlying store.
+        let hash = "accessor-hash".to_string();
+        write_snapshot_blob(tmp.path(), &hash, b"x");
+        cas.retain(&hash);
+        accessed.release(&hash);
+        let report = cas.gc(&std::collections::HashSet::new()).unwrap();
+        assert_eq!(
+            report.freed_count, 1,
+            "release via cas() accessor must affect the same refcount"
+        );
+    }
 }
