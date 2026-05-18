@@ -153,13 +153,24 @@ export const makeHttpClient = (controllerRef, powers) => {
   return makeExo('EndoHttpClient', HttpClientInterface, {
     async request(req) {
       const { url: requestUrl, method = 'GET', headers } = req;
+      // Phase 1 of the cli-http-client design admits GET-class verbs
+      // only (GET, HEAD).  Methods beyond GET-class (POST, PUT, DELETE,
+      // PATCH, etc.) land in Phase 4 alongside the request-body shape.
+      // Enforce here so a guest holding the client cannot escalate
+      // beyond read authority by passing a non-GET method.
+      if (method !== 'GET' && method !== 'HEAD') {
+        throw makeError(
+          X`Phase 1 http-client admits GET-class verbs only; got ${q(method)}`,
+        );
+      }
       await assertOriginAllowed(requestUrl);
       const response = await fetch(requestUrl, {
         method,
         headers,
-        // Phase 1 bounds the surface to GET-class verbs: redirect: 'manual'
-        // and no body field.  Body and method allowlisting beyond GET land
-        // in Phase 4 per the cli-http-client design's Status section.
+        // redirect: 'manual' defangs the allowed-to-disallowed redirect
+        // SSRF vector: a 302 from an allowlisted origin to an
+        // unallowlisted one is surfaced to the caller as a 3xx response
+        // rather than followed by the daemon.
         redirect: 'manual',
       });
       const responseHeaders = {};
