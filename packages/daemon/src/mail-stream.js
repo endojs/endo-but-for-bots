@@ -159,8 +159,11 @@ export const makeMailStream = ({ initialPhase } = {}) => {
   // The recipient-side reader is an exo with the AsyncIterator interface
   // shape (next/return/throw) so it can travel cleanly over CapTP.  The
   // recipient wraps it with makeRefIterator (or iterates the methods
-  // directly).  Each iteration starts a fresh cursor: callers wanting
-  // multi-consumer semantics should subscribe before the writer emits.
+  // directly).  The reader is single-consumer: makeReaderIterator is
+  // called once and its cursor is shared across every next() invocation
+  // on the exo.  A late subscriber that begins iterating after events
+  // have been emitted still observes the full sequence because the
+  // cursor starts at 0 and the buffer retains every event.
   const reader = makeExo(
     'StreamReader',
     AsyncIteratorInterface,
