@@ -9,6 +9,7 @@ import { makeRefIterator } from '@endo/daemon/ref-reader.js';
 import { makeLocalTree } from '@endo/platform/fs/node';
 
 import { createProvider } from './providers/index.js';
+import { makeTranscriptStore } from './transcript-store.js';
 
 /** @import { FarRef } from '@endo/eventual-send' */
 /** @import { GuestPowers, NameOrPath, ToolParameterProperty, ToolParameters, ToolFunction, Tool, ToolCall, ChatMessage, ToolResult, ToolCallArgs, InboxMessage, LalContext } from './agent.types.js' */
@@ -821,78 +822,17 @@ export const spawnWorkerLoop = async (powers, context, workerEnv) => {
   // Each transcript is a linked chain of nodes. Each node stores only the
   // messages appended at that step, plus a pointer to the parent node.
   // The full transcript is assembled by walking the chain when calling the LLM.
+  //
+  // The store is backed by the agent's pet store via the makeTranscriptStore
+  // helper in ./transcript-store.js: every node is persisted under the pet
+  // name `transcript-<messageId>` and survives both inbox-message dismissal
+  // and a cold restart of the agent (the in-memory Map is a write-through
+  // cache; the pet store is the source of truth).
 
   /** @import { TranscriptNode } from './agent.types.js' */
 
-  /** @type {Map<string, TranscriptNode>} */
-  const nodeCache = new Map();
-
-  /**
-   * Look up a transcript node, loading from durable storage if needed.
-   * @param {string} messageId
-   * @returns {Promise<TranscriptNode | undefined>}
-   */
-  const getNode = async messageId => {
-    const cached = nodeCache.get(messageId);
-    if (cached !== undefined) return cached;
-
-    const petName = `transcript-${messageId}`;
-    try {
-      if (await E(powers).has(petName)) {
-        const stored = /** @type {TranscriptNode} */ (
-          await E(powers).lookup(petName)
-        );
-        // The stored node is hardened; make a mutable working copy.
-        const mutable = { ...stored, messages: [...stored.messages] };
-        nodeCache.set(messageId, mutable);
-        return mutable;
-      }
-    } catch {
-      // Storage lookup failed; treat as missing.
-    }
-    return undefined;
-  };
-
-  /**
-   * Store a transcript node both in cache and durable storage.
-   * @param {TranscriptNode} node
-   */
-  const putNode = async node => {
-    nodeCache.set(node.messageId, node);
-    const petName = `transcript-${node.messageId}`;
-    try {
-      // Harden a snapshot for storage; the working node stays mutable.
-      await E(powers).storeValue(
-        harden({ ...node, messages: [...node.messages] }),
-        petName,
-      );
-    } catch (error) {
-      console.error(
-        `[transcript] Failed to persist node ${node.messageId}:`,
-        error instanceof Error ? error.message : String(error),
-      );
-    }
-  };
-
-  /**
-   * Assemble the full LLM transcript by walking the chain from leaf to root.
-   * @param {string} leafMessageId
-   * @returns {Promise<ChatMessage[]>}
-   */
-  const assembleTranscript = async leafMessageId => {
-    /** @type {ChatMessage[][]} */
-    const chain = [];
-    /** @type {string | null} */
-    let current = leafMessageId;
-    while (current !== null) {
-      const node = await getNode(current);
-      if (node === undefined) break;
-      chain.push(node.messages);
-      current = node.parentMessageId;
-    }
-    chain.reverse();
-    return chain.flat();
-  };
+  const transcriptStore = makeTranscriptStore(powers);
+  const { getNode, putNode, putAlias, assembleTranscript } = transcriptStore;
 
   /**
    * Compute the conversational depth of a transcript (user + assistant turns).
@@ -1419,16 +1359,7 @@ export const spawnWorkerLoop = async (powers, context, workerEnv) => {
     // Create an alias: outboundMessageId → same node as replyTo.
     const node = await getNode(replyTo);
     if (node !== undefined) {
-      nodeCache.set(messageId, node);
-      const petName = `transcript-${messageId}`;
-      try {
-        await E(powers).storeValue(harden(node), petName);
-      } catch (error) {
-        console.error(
-          `[transcript] Failed to alias ${messageId}:`,
-          error instanceof Error ? error.message : String(error),
-        );
-      }
+      await putAlias(messageId, node);
     }
   };
 

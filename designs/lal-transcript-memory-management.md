@@ -3,9 +3,62 @@
 | | |
 |---|---|
 | **Created** | 2026-03-05 |
-| **Updated** | 2026-03-05 |
+| **Updated** | 2026-05-18 |
 | **Author** | Kris Kowal (prompted) |
-| **Status** | Not Started |
+| **Status** | In Progress |
+
+## Status
+
+Phase 1 in flight.
+
+### Delivered in Phase 1
+
+- Extracted the transcript-node store from `packages/lal/agent.js` into a
+  dedicated `packages/lal/transcript-store.js` module so the durable
+  persistence boundary is independently testable.
+- `makeTranscriptStore(powers)` exposes `getNode`, `putNode`, `putAlias`,
+  `hasNode`, `walkParents`, `assembleTranscript`, and
+  `assembleTranscriptStrict`.
+  The pet-name convention (`transcript-<messageId>`) is exported as
+  `transcriptPetName` so future cleanup tools and tests do not re-derive it.
+- Durable mapping: every `putNode` writes a hardened snapshot to the
+  agent's pet store via `E(powers).storeValue`.
+  The in-memory `Map` is a write-through cache; the pet store is the
+  source of truth, so a freshly-instantiated store still resolves nodes
+  that an earlier instance persisted.
+- Tree walk: `walkParents(leafMessageId)` returns either
+  `{ ok: true, chain }` with the root-to-leaf node list, or
+  `{ ok: false, reason: 'missing-node', brokenAt, leafMessageId }` when
+  any intermediate node fails to resolve.
+- Persistence boundary: the agent commits a node on every step where
+  state could be lost.
+  The root node is committed when a new conversation starts; the turn
+  node is committed once when created and again after every
+  agentic-loop iteration (so partial tool-call progress survives a
+  restart).
+  Commits are awaited at each boundary, so the persistence is
+  synchronous with respect to the agent's processing of a single inbound
+  message.
+- Tests: `packages/lal/test/transcript-store.test.js` covers the durable
+  mapping, lookup, tree walk (cold-start), reply-chain reassembly after
+  simulated inbox dismissal, orphan reporting, and the persistence
+  boundary.
+  Each test is load-bearing: temporary breaks of `getNode`,
+  `walkParents`, and `putNode` each failed the expected subset of tests;
+  the breaks were reverted.
+
+### Deferred from Phase 1
+
+- **Garbage collection of transcript nodes.**
+  The design says transcript nodes accumulate over the agent's lifetime;
+  Phase 1 does not enforce a per-message free.
+  Whether and how to GC is a separate design.
+- **Conversation-tree visualization in the chat UI.**
+  Tree-shape inspection from the Familiar shell is not part of Phase 1.
+- **Migration from an older transcript-store shape.**
+  Phase 1 keeps the pet-name convention used by the existing code, so no
+  migration is needed today.
+  Any future schema change carries its own migration plan.
 
 ## What is the Problem Being Solved?
 
