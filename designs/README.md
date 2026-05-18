@@ -118,7 +118,7 @@ PR #151 row-format unblocker; sibling of
 | [inventory-grouping-by-type](inventory-grouping-by-type.md) | 2026-02-14 | 2026-02-24 | Not Started |
 | [lal-fae-form-provisioning](lal-fae-form-provisioning.md) | 2026-03-02 | 2026-03-05 | **Complete** |
 | [lal-reply-chain-transcripts](lal-reply-chain-transcripts.md) | 2026-02-26 | 2026-03-05 | **Complete** |
-| [lal-transcript-memory-management](lal-transcript-memory-management.md) | 2026-03-05 | 2026-03-05 | Not Started |
+| [lal-transcript-memory-management](lal-transcript-memory-management.md) | 2026-03-05 | 2026-05-18 | In Progress |
 | [ocapn-network-transport-separation](ocapn-network-transport-separation.md) | 2026-02-14 | 2026-02-24 | In Progress |
 | [ocapn-noise-cryptographic-review](ocapn-noise-cryptographic-review.md) | 2026-02-14 | 2026-02-24 | Not Started |
 | [ocapn-noise-network](ocapn-noise-network.md) | 2026-02-14 | 2026-02-24 | Not Started |
@@ -418,7 +418,7 @@ webhook events.
 | retention-path-notation | Proposed | Canonical string notation for one path; bulk `listRetentionPaths(targetIds)` and `describeRetentionPaths(targetIds)`; row-format unblocker for `endo workers` (PR #151); sibling of daemon-retention-paths |
 | chat-view-edit-commands | Not Started | `/view` and `/edit` for blobs; Monaco editor, Markdown split preview |
 | chat-edit-message-ui | Not Started | `/edit` slash command, `e` focus shortcut, hover pencil for editing previously sent messages; revision-history panel |
-| lal-transcript-memory-management | Not Started | Durable transcript nodes outliving dismissed messages |
+| lal-transcript-memory-management | In Progress | Durable transcript nodes outliving dismissed messages |
 
 **Exit criterion:** Chat UI feature-complete for current design scope.
 Commands are non-blocking with visible pending state. Developer tools
