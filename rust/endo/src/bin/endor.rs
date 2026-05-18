@@ -153,7 +153,11 @@ fn print_help() {
     eprintln!("Child-facing commands (XS engine by default):");
     eprintln!("  worker  [-e xs]                Run a supervised worker child");
     eprintln!("  run     [-e xs] <archive.zip>  Run a compartment-map ZIP archive");
-    eprintln!("  run     [-e xs] <entry.js>     Run a single entry-point source (no deps)");
+    eprintln!("  run     [-e xs] <entry>        Run a single entry-point source");
+    eprintln!("                                 (no deps; .js, .mjs, .cjs, .json)");
+    eprintln!("                                 Files without an extension that begin");
+    eprintln!("                                 with the ZIP magic (PK\\x03\\x04) are");
+    eprintln!("                                 also recognised as archives.");
     eprintln!();
     eprintln!("Maintenance:");
     eprintln!("  gc                             Garbage-collect the CAS");
@@ -239,9 +243,12 @@ fn print_subcommand_help(sub: &str) {
             eprintln!("Options:");
             eprintln!("  -e, --engine <engine>  Engine to use (default: xs)");
             eprintln!("  --cas <hash>           Run from a previously ingested CAS root hash.");
-            eprintln!(
-                "  --no-cas               Skip CAS ingestion (ZIP only); legacy in-memory path."
-            );
+            eprintln!("  --no-cas               Skip CAS ingestion; legacy in-memory path.");
+            eprintln!("                         ZIP inputs only. Entry-point inputs always");
+            eprintln!("                         use the CAS (the synthesised compartment-map");
+            eprintln!("                         needs a content-addressed home); passing");
+            eprintln!("                         --no-cas with an entry-point input exits with");
+            eprintln!("                         code 2 and prints a diagnostic.");
         }
         "gc" => {
             eprintln!("Usage: endor gc");
@@ -456,8 +463,15 @@ fn cmd_run_entry_point_with_cas(entry_path: &std::path::Path) -> Result<(), Endo
     let cas = endo::cas::ContentStore::open(&cas_dir)
         .map_err(|e| EndoError::Config(format!("CAS open: {e}")))?;
 
+    // Match `cmd_run_with_cas`'s wrapping: the inner error from
+    // `ingest_entry_point` already names the offending path
+    // (`unsupported entry-point extension: /tmp/foo.txt`, `not a
+    // regular file: /tmp/bar`), so the outer prefix only names
+    // the operation. Doubling the path produced the awkward
+    // `CAS ingest from /tmp/foo.txt: unsupported entry-point
+    // extension: /tmp/foo.txt` users saw before the fix.
     let ingested = endo::cas_archive::ingest_entry_point(&cas, entry_path)
-        .map_err(|e| EndoError::Config(format!("CAS ingest from {}: {e}", entry_path.display())))?;
+        .map_err(|e| EndoError::Config(format!("CAS ingest: {e}")))?;
 
     eprintln!("endor[run]: archive root {}", ingested.root_hash);
 
