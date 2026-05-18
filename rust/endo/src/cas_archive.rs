@@ -20,6 +20,18 @@ use std::path::Path;
 
 use crate::cas::{ContentStore, TreeEntry, TreeManifest};
 
+/// Compartment id used by [`ingest_entry_point`] for the synthetic
+/// one-compartment archive it wraps around a single entry-point
+/// source file. The `v1.0.0` suffix is a placeholder version, not a
+/// reference to any real package: the `<name>-v<version>` shape
+/// mirrors `@endo/compartment-mapper`'s output for ZIP-shaped
+/// archives so the same downstream loader handles both shapes
+/// uniformly. Phase 5's mapper-driven path is expected to re-use
+/// the same id for the no-dependency fast path; collecting the
+/// literal in one named constant keeps the symbol grep-discoverable
+/// at every call site (helper + tests).
+pub const SYNTHETIC_COMPARTMENT_ID: &str = "entry-v1.0.0";
+
 /// Result of ingesting an archive into the CAS.
 pub struct IngestedArchive {
     /// Root tree hash of the ingested archive.
@@ -168,6 +180,16 @@ pub fn ingest_archive<R: Read + Seek>(
 /// - I/O errors propagate from the underlying file read and CAS
 ///   writes.
 pub fn ingest_entry_point(cas: &ContentStore, entry_path: &Path) -> io::Result<IngestedArchive> {
+    // Validation-before-storage is a deliberate ordering invariant
+    // of this function: every check that can reject the input
+    // (the `is_file()` precheck, the `parser_for_extension`
+    // extension check, the `file_name()` extraction) runs before
+    // the first `cas.store` call. A refactor that inserts a CAS
+    // write above the parser check would leave orphan blobs in the
+    // store on the rejection path; the `cas_after_rejected_ingest_
+    // is_unchanged` test below pins this invariant by asserting the
+    // CAS layout is byte-identical before and after a rejected
+    // ingest.
     if !entry_path.is_file() {
         return Err(io::Error::new(
             io::ErrorKind::NotFound,
@@ -208,8 +230,10 @@ pub fn ingest_entry_point(cas: &ContentStore, entry_path: &Path) -> io::Result<I
     // test fixtures and the @endo/compartment-mapper output:
     // `<name>-v<version>` is the canonical compartment id even for
     // synthetic single-entry archives where the version is a
-    // placeholder.
-    let compartment_id = "entry-v1.0.0".to_string();
+    // placeholder. The literal lives in [`SYNTHETIC_COMPARTMENT_ID`]
+    // at module scope so the helper and its tests share one source
+    // of truth.
+    let compartment_id = SYNTHETIC_COMPARTMENT_ID.to_string();
 
     // Build the compartment-map.json describing one compartment
     // with one module. The `parser` field is derived once at the
@@ -290,9 +314,18 @@ pub fn ingest_entry_point(cas: &ContentStore, entry_path: &Path) -> io::Result<I
 /// `@endo/compartment-mapper`'s default when no `package.json`
 /// `type` is present). `.cjs` yields `cjs`. `.json` yields
 /// `json`. Anything else returns `None`.
+///
+/// The extension is matched case-insensitively to mirror
+/// [`crate::run_input::classify_run_input`]: a path like
+/// `Hello.JS` classifies as an entry point in the CLI and must
+/// also be acceptable to the ingest helper. Without the
+/// `to_ascii_lowercase()` step the two halves of the
+/// extension-to-form contract would silently diverge (the CLI
+/// would accept the input, then `ingest_entry_point` would reject
+/// it as `InvalidData`).
 fn parser_for_extension(ext: Option<&OsStr>) -> Option<&'static str> {
-    let ext = ext?.to_str()?;
-    match ext {
+    let ext = ext?.to_str()?.to_ascii_lowercase();
+    match ext.as_str() {
         "js" | "mjs" => Some("mjs"),
         "cjs" => Some("cjs"),
         "json" => Some("json"),
@@ -309,6 +342,17 @@ fn parser_for_extension(ext: Option<&OsStr>) -> Option<&'static str> {
 /// authoritative: it is produced upstream by
 /// `parser_for_extension` so the on-disk JSON and the
 /// pre-flight validation cannot disagree.
+///
+/// Each interpolated string is passed through
+/// `serde_json::to_string` so a file name containing `"`, `\`, a
+/// control byte, or a non-BMP code point produces well-formed
+/// JSON (a regular file named `foo"bar.js` is legal on every
+/// POSIX filesystem and must not break the synthesised map). The
+/// `compartment_id` and `parser` strings come from compile-time
+/// constants or a fixed match arm and therefore cannot
+/// realistically contain a JSON-significant character, but they
+/// are escaped uniformly so the function has no implicit
+/// "trusted" arguments.
 fn build_entry_compartment_map_json(
     compartment_id: &str,
     specifier: &str,
@@ -326,10 +370,28 @@ fn build_entry_compartment_map_json(
     //    string alongside the new test fixtures.
     // The map intentionally omits optional fields (label,
     // sha512, etc.) so the on-disk JSON is a pure function of
-    // the inputs.
+    // the inputs. The `escape` helper below threads every
+    // interpolation through `serde_json::to_string` so the
+    // hand-built template still produces valid JSON for any
+    // string the caller can pass.
+    let cid = escape(compartment_id);
+    let spec = escape(specifier);
+    let fname = escape(file_name);
+    let parser_json = escape(parser);
     format!(
-        r#"{{"entry":{{"compartment":"{compartment_id}","module":"{specifier}"}},"compartments":{{"{compartment_id}":{{"name":"entry","modules":{{"{specifier}":{{"parser":"{parser}","location":"{file_name}"}}}}}}}}}}"#,
+        r#"{{"entry":{{"compartment":{cid},"module":{spec}}},"compartments":{{{cid}:{{"name":"entry","modules":{{{spec}:{{"parser":{parser_json},"location":{fname}}}}}}}}}}}"#,
     )
+}
+
+/// Encode a string as a JSON string literal (including the
+/// surrounding double quotes). Falls back to the empty JSON
+/// string only if `serde_json` cannot serialise the input, which
+/// in practice does not happen for `&str` because
+/// `serde_json::to_string` of any `&str` is infallible; the
+/// fallback is defensive belt-and-braces against a future API
+/// signature change.
+fn escape(s: &str) -> String {
+    serde_json::to_string(s).unwrap_or_else(|_| "\"\"".to_string())
 }
 
 /// Load a `LoadedArchive` from the CAS given a root tree hash.
@@ -534,11 +596,17 @@ mod tests {
 
         // The synthesised archive is a one-compartment, one-module
         // archive whose entry points at the source file.
-        assert_eq!(ingested.archive.map.entry.compartment, "entry-v1.0.0");
+        assert_eq!(
+            ingested.archive.map.entry.compartment,
+            SYNTHETIC_COMPARTMENT_ID
+        );
         assert_eq!(ingested.archive.map.entry.module, "./hello.js");
 
         // The module source was stored faithfully.
-        let key = ("entry-v1.0.0".to_string(), "./hello.js".to_string());
+        let key = (
+            SYNTHETIC_COMPARTMENT_ID.to_string(),
+            "./hello.js".to_string(),
+        );
         assert_eq!(
             ingested.archive.sources.get(&key).unwrap(),
             "export default 'hello';"
@@ -561,7 +629,7 @@ mod tests {
 
         let names = cas.list_tree(&ingested.root_hash).unwrap();
         assert!(names.contains(&"compartment-map.json".to_string()));
-        assert!(names.contains(&"entry-v1.0.0".to_string()));
+        assert!(names.contains(&SYNTHETIC_COMPARTMENT_ID.to_string()));
 
         // The compartment subtree contains exactly the entry
         // file at its on-disk name.
@@ -597,10 +665,13 @@ mod tests {
         let root_hash = ingested.root_hash.clone();
 
         let reloaded = load_archive_from_cas(&cas, &root_hash).unwrap();
-        assert_eq!(reloaded.map.entry.compartment, "entry-v1.0.0");
+        assert_eq!(reloaded.map.entry.compartment, SYNTHETIC_COMPARTMENT_ID);
         assert_eq!(reloaded.map.entry.module, "./main.js");
 
-        let key = ("entry-v1.0.0".to_string(), "./main.js".to_string());
+        let key = (
+            SYNTHETIC_COMPARTMENT_ID.to_string(),
+            "./main.js".to_string(),
+        );
         assert_eq!(reloaded.sources.get(&key).unwrap(), "globalThis.x = 42;");
     }
 
@@ -835,5 +906,227 @@ mod tests {
             .clone();
         let ep_source = ep_ingested.archive.sources.values().next().unwrap().clone();
         assert_eq!(zip_source, ep_source);
+    }
+
+    #[test]
+    fn ingest_entry_point_uppercase_extension_routes_to_parser() {
+        // `parser_for_extension` matches case-insensitively so the
+        // CLI's `classify_run_input` (which lowercases the
+        // extension before matching) and this helper agree on what
+        // counts as a valid entry-point source. Without the
+        // `to_ascii_lowercase()` step in `parser_for_extension`,
+        // `Hello.JS` would route to `RunInput::EntryPoint` at the
+        // CLI and then fail with `InvalidData ("unsupported
+        // entry-point extension: Hello.JS")` at ingest time, a
+        // classify/ingest divergence the user observes as a
+        // confusing error. The assertion reads the on-disk JSON
+        // blob from the CAS so a parser-selection regression is
+        // observed at the on-disk boundary.
+        let tmp = tempfile::tempdir().unwrap();
+        let cas = ContentStore::open(tmp.path()).unwrap();
+        let (_src_dir, src_path) = write_temp_source("Hello.JS", b"export default 1;");
+
+        let ingested = ingest_entry_point(&cas, &src_path).unwrap();
+
+        let map_bytes = cas
+            .fetch_from_tree(&ingested.root_hash, "compartment-map.json")
+            .unwrap();
+        let map_text = String::from_utf8(map_bytes).unwrap();
+        assert!(
+            map_text.contains(r#""parser":"mjs""#),
+            "uppercase .JS extension should route to mjs parser; got {map_text}",
+        );
+    }
+
+    #[test]
+    fn ingest_entry_point_escapes_quote_in_file_name() {
+        // A file whose name contains a literal `"` is legal on
+        // every POSIX filesystem. Without JSON-escaping in
+        // `build_entry_compartment_map_json`, the interpolation
+        // would produce a `compartment-map.json` blob that is not
+        // parseable JSON, and the immediate
+        // `load_archive_from_cas` round-trip inside
+        // `ingest_entry_point` would surface as
+        // `InvalidData ("invalid map: ...")` rather than the
+        // upstream input being accepted cleanly. The assertion
+        // exercises both the JSON-validity invariant (the
+        // synthesised blob parses) and the round-trip invariant
+        // (the reloaded archive's specifier and source match what
+        // the helper recorded).
+        let tmp = tempfile::tempdir().unwrap();
+        let cas = ContentStore::open(tmp.path()).unwrap();
+        let (_src_dir, src_path) = write_temp_source(r#"foo"bar.js"#, b"export default 1;");
+
+        let ingested = ingest_entry_point(&cas, &src_path).unwrap();
+
+        // The synthesised compartment-map.json must be valid JSON
+        // and parse against the upstream `CompartmentMap` schema.
+        let map_bytes = cas
+            .fetch_from_tree(&ingested.root_hash, "compartment-map.json")
+            .unwrap();
+        let parsed: xsnap::archive::CompartmentMap = serde_json::from_slice(&map_bytes)
+            .expect("synthesised map must be valid JSON for an awkward file name");
+
+        // The specifier preserves the original (unescaped) file
+        // name; the escaping is a wire-format concern, not a
+        // user-visible one.
+        let expected_specifier = r#"./foo"bar.js"#;
+        assert_eq!(parsed.entry.module, expected_specifier);
+
+        // The round-trip through `load_archive_from_cas` (which
+        // `ingest_entry_point` already performs internally) found
+        // the source by the awkward specifier.
+        let key = (
+            SYNTHETIC_COMPARTMENT_ID.to_string(),
+            expected_specifier.to_string(),
+        );
+        assert_eq!(
+            ingested.archive.sources.get(&key).map(String::as_str),
+            Some("export default 1;"),
+            "the source bytes must survive the synthesise/store/load round trip for an \
+             awkwardly-named file",
+        );
+    }
+
+    #[test]
+    fn cas_is_unchanged_after_rejected_ingest() {
+        // Validation-before-storage is a deliberate ordering
+        // invariant of `ingest_entry_point`: every check that can
+        // reject the input runs before any `cas.store` call, so a
+        // rejected ingest leaves the CAS byte-identical to its
+        // pre-call state. A refactor that inserts a CAS write
+        // above the parser check would leak orphan blobs on the
+        // rejection path; this test catches that regression by
+        // taking a snapshot of the CAS directory before the
+        // rejected call and asserting the snapshot is preserved
+        // after the call returns.
+        //
+        // We sample two rejection paths to cover both validation
+        // gates: an unsupported extension (`InvalidData` after the
+        // `is_file()` precheck succeeds) and a non-existent path
+        // (`NotFound` from the precheck itself).
+        let tmp = tempfile::tempdir().unwrap();
+        let cas = ContentStore::open(tmp.path()).unwrap();
+
+        let snapshot_before = list_cas_dir(tmp.path());
+        // Sanity: a fresh CAS contains no stored entries (the
+        // directory exists but holds no blob/tree files).
+        assert!(
+            snapshot_before.is_empty(),
+            "fresh CAS should have no stored entries; got {snapshot_before:?}",
+        );
+
+        // Rejection path 1: unsupported extension.
+        let (_src_dir, bad_ext_path) = write_temp_source("hello.txt", b"not javascript");
+        let err = match ingest_entry_point(&cas, &bad_ext_path) {
+            Ok(_) => panic!("expected InvalidData for unsupported extension"),
+            Err(e) => e,
+        };
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        let snapshot_after_ext = list_cas_dir(tmp.path());
+        assert_eq!(
+            snapshot_after_ext, snapshot_before,
+            "unsupported-extension rejection must not write to the CAS; before={snapshot_before:?} after={snapshot_after_ext:?}",
+        );
+
+        // Rejection path 2: non-existent path.
+        let missing = tmp.path().join("does-not-exist.js");
+        let err = match ingest_entry_point(&cas, &missing) {
+            Ok(_) => panic!("expected NotFound for missing path"),
+            Err(e) => e,
+        };
+        assert_eq!(err.kind(), io::ErrorKind::NotFound);
+        let snapshot_after_missing = list_cas_dir(tmp.path());
+        assert_eq!(
+            snapshot_after_missing, snapshot_before,
+            "missing-path rejection must not write to the CAS; before={snapshot_before:?} after={snapshot_after_missing:?}",
+        );
+    }
+
+    /// List the file names directly under `dir` (the CAS root),
+    /// excluding `.tmp` artifacts from racing writers (there are
+    /// none in this test, but the helper stays robust against
+    /// them) and returning a sorted Vec so equality comparisons
+    /// are deterministic. CAS entries are stored as
+    /// `{dir}/{hex-sha256}` per `cas.rs`, so any committed write
+    /// shows up as a new entry here.
+    fn list_cas_dir(dir: &Path) -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| !n.ends_with(".tmp"))
+            .collect();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn synthesised_map_round_trips_through_compartment_map_schema() {
+        // The synthesised `compartment-map.json` must remain
+        // structurally compatible with `xsnap::archive::
+        // CompartmentMap`: the immediate `load_archive_from_cas`
+        // round-trip inside `ingest_entry_point` only asserts that
+        // the parse succeeds, but a schema drift that, say, made
+        // `parser` required-as-enum or renamed `location` would
+        // surface here at compile-or-test time rather than
+        // silently at the next upstream Endo bump. The shape
+        // asserted here is the load-bearing one: one entry
+        // descriptor, one compartment whose `modules` map carries
+        // a single `File` descriptor with the expected `parser`
+        // and `location` strings.
+        let tmp = tempfile::tempdir().unwrap();
+        let cas = ContentStore::open(tmp.path()).unwrap();
+        let (_src_dir, src_path) = write_temp_source("greet.mjs", b"export default 1;");
+
+        let ingested = ingest_entry_point(&cas, &src_path).unwrap();
+
+        // Parse the synthesised JSON directly through the upstream
+        // `CompartmentMap` type.
+        let map_bytes = cas
+            .fetch_from_tree(&ingested.root_hash, "compartment-map.json")
+            .unwrap();
+        let parsed: xsnap::archive::CompartmentMap =
+            serde_json::from_slice(&map_bytes).expect("synthesised map must parse");
+
+        // Entry descriptor.
+        assert_eq!(parsed.entry.compartment, SYNTHETIC_COMPARTMENT_ID);
+        assert_eq!(parsed.entry.module, "./greet.mjs");
+
+        // One compartment with the synthetic id, named "entry".
+        assert_eq!(parsed.compartments.len(), 1);
+        let compartment = parsed
+            .compartments
+            .get(SYNTHETIC_COMPARTMENT_ID)
+            .expect("compartment-map.json must carry the synthetic compartment id");
+        assert_eq!(compartment.name, "entry");
+        assert!(
+            compartment.label.is_none(),
+            "the synthesised map intentionally omits the optional label field",
+        );
+
+        // One module: `./greet.mjs` → File { parser: mjs, location: greet.mjs }.
+        assert_eq!(compartment.modules.len(), 1);
+        let module = compartment
+            .modules
+            .get("./greet.mjs")
+            .expect("module specifier should be `./greet.mjs`");
+        match module {
+            xsnap::archive::ModuleDescriptor::File {
+                parser,
+                location,
+                sha512,
+            } => {
+                assert_eq!(parser, "mjs");
+                assert_eq!(location.as_deref(), Some("greet.mjs"));
+                assert!(
+                    sha512.is_none(),
+                    "the synthesised map intentionally omits the optional sha512 field",
+                );
+            }
+            other => {
+                panic!("expected File descriptor; got {other:?} (schema drift would land here)",)
+            }
+        }
     }
 }
