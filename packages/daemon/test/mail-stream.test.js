@@ -60,10 +60,7 @@ test('initial phase is recorded in finalization but not emitted as an event', as
   await E(stream.writer).end();
 
   const events = await eventsP;
-  t.deepEqual(events, [
-    { type: 'append', text: 'hi' },
-    { type: 'end' },
-  ]);
+  t.deepEqual(events, [{ type: 'append', text: 'hi' }, { type: 'end' }]);
 
   const final = await stream.finalization;
   t.deepEqual(final, { status: 'ended', text: 'hi', phase: 'thinking' });

@@ -1080,14 +1080,15 @@ export const makeMailboxMaker = ({
       }
       const otherId = parent.from === selfId ? parent.to : parent.from;
       const initialPhase =
-        options && typeof options.phase === 'string' ? options.phase : undefined;
+        options && typeof options.phase === 'string'
+          ? options.phase
+          : undefined;
 
       const stream = makeMailStream({ initialPhase });
 
-      const newMessageId =
-        /** @type {import('./types.js').FormulaNumber} */ (
-          await randomHex256()
-        );
+      const newMessageId = /** @type {import('./types.js').FormulaNumber} */ (
+        await randomHex256()
+      );
       const to = await provideHandle(
         /** @type {FormulaIdentifier} */ (otherId),
       );
