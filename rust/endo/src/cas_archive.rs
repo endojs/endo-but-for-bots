@@ -697,4 +697,629 @@ mod tests {
         let b = ingest_directory(&cas, dir_tmp_b.path()).unwrap();
         assert_eq!(a.root_hash, b.root_hash);
     }
+
+    /// Build a ZIP archive in memory whose entries are exactly
+    /// `(name, contents)` in the given order. Used to confirm that
+    /// `ingest_archive` and `ingest_directory` agree on the same root
+    /// hash for inputs richer than the single-file fixture.
+    fn make_zip_from_entries(entries: &[(&str, &[u8])]) -> Vec<u8> {
+        let mut buf = io::Cursor::new(Vec::new());
+        {
+            let mut zip = zip::ZipWriter::new(&mut buf);
+            let options = zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Stored);
+            for (name, contents) in entries {
+                zip.start_file(*name, options).unwrap();
+                zip.write_all(contents).unwrap();
+            }
+            zip.finish().unwrap();
+        }
+        buf.into_inner()
+    }
+
+    /// Compartment-map.json that names two compartments, each with one
+    /// module. Used by both the multi-compartment and the nested-file
+    /// directory-ingest tests.
+    const TEST_TWO_COMPARTMENT_MAP: &str = r#"{
+                "entry": {"compartment": "app-v1.0.0", "module": "./index.js"},
+                "compartments": {
+                    "app-v1.0.0": {
+                        "name": "app",
+                        "modules": {
+                            "./index.js": {
+                                "parser": "mjs",
+                                "location": "index.js"
+                            }
+                        }
+                    },
+                    "lib-v1.0.0": {
+                        "name": "lib",
+                        "modules": {
+                            "./util.js": {
+                                "parser": "mjs",
+                                "location": "util.js"
+                            }
+                        }
+                    }
+                }
+            }"#;
+
+    #[test]
+    fn ingest_directory_handles_nested_subdirectories() {
+        // `collect_compartment_blobs` walks a compartment recursively.
+        // The contract this test locks is the *CAS layout* the walker
+        // produces: each nested file becomes one blob entry in the
+        // compartment sub-tree, keyed by its `/`-joined path relative
+        // to the compartment root (matching `ingest_archive`'s ZIP
+        // semantics, where ZIP entry names already carry the
+        // `/`-joined path). Without the recursion or the
+        // `{prefix}/{name}` join, a nested file is either missed
+        // entirely or keyed by its leaf name (colliding with any
+        // sibling at the compartment root).
+        //
+        // Note on `LoadedArchive.sources`: the loader currently fetches
+        // module sources via `fetch_from_tree`, which splits on `/`
+        // and walks a tree-of-trees, while the sub-tree stores nested
+        // keys flat with embedded `/`. The two encodings do not meet,
+        // so nested modules silently drop out of `sources`. That gap
+        // is pre-existing (it affects ZIP-ingested archives the same
+        // way) and out of scope for this Phase 3 PR; see the
+        // `load_archive_from_cas_drops_nested_module_sources_today`
+        // test below for the current contract there.
+        let cas_tmp = tempfile::tempdir().unwrap();
+        let dir_tmp = tempfile::tempdir().unwrap();
+        let cas = ContentStore::open(cas_tmp.path()).unwrap();
+
+        let map = r#"{
+            "entry": {"compartment": "app-v1.0.0", "module": "./index.js"},
+            "compartments": {
+                "app-v1.0.0": {
+                    "name": "app",
+                    "modules": {
+                        "./index.js": {"parser": "mjs", "location": "index.js"},
+                        "./lib/util.js": {"parser": "mjs", "location": "lib/util.js"},
+                        "./lib/deep/inner.js": {
+                            "parser": "mjs",
+                            "location": "lib/deep/inner.js"
+                        }
+                    }
+                }
+            }
+        }"#;
+        std::fs::write(dir_tmp.path().join("compartment-map.json"), map).unwrap();
+        let compartment = dir_tmp.path().join("app-v1.0.0");
+        std::fs::create_dir_all(compartment.join("lib").join("deep")).unwrap();
+        std::fs::write(compartment.join("index.js"), b"export const a = 1;").unwrap();
+        std::fs::write(
+            compartment.join("lib").join("util.js"),
+            b"export const b = 2;",
+        )
+        .unwrap();
+        std::fs::write(
+            compartment.join("lib").join("deep").join("inner.js"),
+            b"export const c = 3;",
+        )
+        .unwrap();
+
+        let ingested = ingest_directory(&cas, dir_tmp.path()).unwrap();
+
+        // The compartment sub-tree carries every nested file as a
+        // single flat entry keyed by its `/`-joined relative path,
+        // exactly as `ingest_archive` would for a ZIP with the same
+        // contents.
+        let names = cas.list_tree(&ingested.root_hash).unwrap();
+        assert!(names.contains(&"app-v1.0.0".to_string()));
+        let app_entry = cas
+            .read_tree(&ingested.root_hash)
+            .unwrap()
+            .entries
+            .remove("app-v1.0.0")
+            .unwrap();
+        let sub_tree_names = cas.list_tree(&app_entry.hash).unwrap();
+        for expected in ["index.js", "lib/util.js", "lib/deep/inner.js"] {
+            assert!(
+                sub_tree_names.contains(&expected.to_string()),
+                "expected nested key {expected} in sub-tree, got {sub_tree_names:?}",
+            );
+        }
+
+        // Each blob's bytes can still be retrieved by fetching its
+        // hash directly out of the sub-tree manifest, which is what
+        // a future `load_archive_from_cas` will rely on once it walks
+        // flat keys instead of tree-of-trees.
+        let sub_manifest = cas.read_tree(&app_entry.hash).unwrap();
+        for (key, expected_bytes) in [
+            ("index.js", &b"export const a = 1;"[..]),
+            ("lib/util.js", &b"export const b = 2;"[..]),
+            ("lib/deep/inner.js", &b"export const c = 3;"[..]),
+        ] {
+            let entry = sub_manifest
+                .entries
+                .get(key)
+                .unwrap_or_else(|| panic!("missing sub-tree entry {key}"));
+            let bytes = cas.fetch(&entry.hash).unwrap();
+            assert_eq!(bytes, expected_bytes, "wrong bytes for {key}");
+        }
+    }
+
+    #[test]
+    fn load_archive_from_cas_drops_nested_module_sources_today() {
+        // Document the loader's current behavior for nested module
+        // files: `fetch_from_tree` splits the path on `/` and walks a
+        // tree-of-trees, but `ingest_directory` / `ingest_archive`
+        // store the compartment sub-tree as a single flat manifest
+        // with `/`-joined keys. The two encodings do not meet, so a
+        // module whose `location` contains a `/` is silently absent
+        // from `LoadedArchive.sources`. Top-level modules in the
+        // same archive load normally.
+        //
+        // This test exists to lock the contract until the loader
+        // (or the sub-tree writer) is changed; once that lands, this
+        // test flips to assert the source is present, which keeps the
+        // fix from drifting back.
+        let cas_tmp = tempfile::tempdir().unwrap();
+        let dir_tmp = tempfile::tempdir().unwrap();
+        let cas = ContentStore::open(cas_tmp.path()).unwrap();
+
+        let map = r#"{
+            "entry": {"compartment": "app-v1.0.0", "module": "./index.js"},
+            "compartments": {
+                "app-v1.0.0": {
+                    "name": "app",
+                    "modules": {
+                        "./index.js": {"parser": "mjs", "location": "index.js"},
+                        "./lib/util.js": {"parser": "mjs", "location": "lib/util.js"}
+                    }
+                }
+            }
+        }"#;
+        std::fs::write(dir_tmp.path().join("compartment-map.json"), map).unwrap();
+        let compartment = dir_tmp.path().join("app-v1.0.0");
+        std::fs::create_dir_all(compartment.join("lib")).unwrap();
+        std::fs::write(compartment.join("index.js"), b"export const a = 1;").unwrap();
+        std::fs::write(
+            compartment.join("lib").join("util.js"),
+            b"export const b = 2;",
+        )
+        .unwrap();
+
+        let ingested = ingest_directory(&cas, dir_tmp.path()).unwrap();
+
+        // Top-level module loads.
+        let key_index = ("app-v1.0.0".to_string(), "./index.js".to_string());
+        assert_eq!(
+            ingested.archive.sources.get(&key_index).map(|s| s.as_str()),
+            Some("export const a = 1;"),
+        );
+        // Nested module does not (pre-existing flat-key/tree-walk
+        // mismatch, see the test docstring).
+        let key_util = ("app-v1.0.0".to_string(), "./lib/util.js".to_string());
+        assert!(
+            !ingested.archive.sources.contains_key(&key_util),
+            "loader currently drops nested sources; if this asserts \
+             becomes false, flip the assertion and remove the gap note",
+        );
+    }
+
+    #[test]
+    fn ingest_directory_matches_zip_root_hash_with_nested_files() {
+        // The cross-form invariant (a directory ingests to the same
+        // root hash as the equivalent ZIP) must hold for nested files
+        // too, not just flat ones. This is what guarantees the
+        // `--cas <hash>` re-run path is interchangeable across input
+        // forms when the input has any structure at all.
+        let cas_tmp = tempfile::tempdir().unwrap();
+        let cas = ContentStore::open(cas_tmp.path()).unwrap();
+
+        let map = r#"{
+            "entry": {"compartment": "app-v1.0.0", "module": "./index.js"},
+            "compartments": {
+                "app-v1.0.0": {
+                    "name": "app",
+                    "modules": {
+                        "./index.js": {"parser": "mjs", "location": "index.js"},
+                        "./lib/util.js": {"parser": "mjs", "location": "lib/util.js"}
+                    }
+                }
+            }
+        }"#;
+        let index_src = b"export const a = 1;";
+        let util_src = b"export const b = 2;";
+
+        // ZIP form: the directory entries in the archive are flat,
+        // keyed by their `/`-joined path.
+        let zip_bytes = make_zip_from_entries(&[
+            ("compartment-map.json", map.as_bytes()),
+            ("app-v1.0.0/index.js", index_src),
+            ("app-v1.0.0/lib/util.js", util_src),
+        ]);
+        let zip_ingested = ingest_archive(&cas, io::Cursor::new(&zip_bytes)).unwrap();
+
+        // Directory form: same files on disk.
+        let dir_tmp = tempfile::tempdir().unwrap();
+        std::fs::write(dir_tmp.path().join("compartment-map.json"), map).unwrap();
+        let compartment = dir_tmp.path().join("app-v1.0.0");
+        std::fs::create_dir_all(compartment.join("lib")).unwrap();
+        std::fs::write(compartment.join("index.js"), index_src).unwrap();
+        std::fs::write(compartment.join("lib").join("util.js"), util_src).unwrap();
+        let dir_ingested = ingest_directory(&cas, dir_tmp.path()).unwrap();
+
+        assert_eq!(dir_ingested.root_hash, zip_ingested.root_hash);
+    }
+
+    #[test]
+    fn ingest_directory_handles_multiple_compartments() {
+        // The `compartment_trees` loop in `ingest_directory` must
+        // build one sub-tree per compartment. With a single-compartment
+        // fixture the loop runs once and any "first entry wins" bug
+        // (e.g., reading from a non-iterating accumulator) would be
+        // invisible; two compartments forces both sub-tree manifests
+        // into the root tree.
+        let cas_tmp = tempfile::tempdir().unwrap();
+        let dir_tmp = tempfile::tempdir().unwrap();
+        let cas = ContentStore::open(cas_tmp.path()).unwrap();
+
+        std::fs::write(
+            dir_tmp.path().join("compartment-map.json"),
+            TEST_TWO_COMPARTMENT_MAP,
+        )
+        .unwrap();
+        let app = dir_tmp.path().join("app-v1.0.0");
+        std::fs::create_dir_all(&app).unwrap();
+        std::fs::write(app.join("index.js"), b"export const x = 1;").unwrap();
+        let lib = dir_tmp.path().join("lib-v1.0.0");
+        std::fs::create_dir_all(&lib).unwrap();
+        std::fs::write(lib.join("util.js"), b"export const y = 2;").unwrap();
+
+        let ingested = ingest_directory(&cas, dir_tmp.path()).unwrap();
+
+        let names = cas.list_tree(&ingested.root_hash).unwrap();
+        assert!(names.contains(&"compartment-map.json".to_string()));
+        assert!(names.contains(&"app-v1.0.0".to_string()));
+        assert!(names.contains(&"lib-v1.0.0".to_string()));
+
+        // Both compartments' modules are loadable.
+        let key_app = ("app-v1.0.0".to_string(), "./index.js".to_string());
+        let key_lib = ("lib-v1.0.0".to_string(), "./util.js".to_string());
+        assert_eq!(
+            ingested.archive.sources.get(&key_app).map(|s| s.as_str()),
+            Some("export const x = 1;"),
+        );
+        assert_eq!(
+            ingested.archive.sources.get(&key_lib).map(|s| s.as_str()),
+            Some("export const y = 2;"),
+        );
+    }
+
+    #[test]
+    fn ingest_directory_handles_multiple_files_per_compartment() {
+        // Within `collect_compartment_blobs` the per-entry insert into
+        // `out` must accumulate across multiple sibling files. A bug
+        // that re-creates `out` per iteration (or accidentally returns
+        // after the first file) would surface as only one of the
+        // sibling files being reachable in the compartment sub-tree.
+        let cas_tmp = tempfile::tempdir().unwrap();
+        let dir_tmp = tempfile::tempdir().unwrap();
+        let cas = ContentStore::open(cas_tmp.path()).unwrap();
+
+        let map = r#"{
+            "entry": {"compartment": "app-v1.0.0", "module": "./index.js"},
+            "compartments": {
+                "app-v1.0.0": {
+                    "name": "app",
+                    "modules": {
+                        "./index.js": {"parser": "mjs", "location": "index.js"},
+                        "./a.js": {"parser": "mjs", "location": "a.js"},
+                        "./b.js": {"parser": "mjs", "location": "b.js"}
+                    }
+                }
+            }
+        }"#;
+        std::fs::write(dir_tmp.path().join("compartment-map.json"), map).unwrap();
+        let compartment = dir_tmp.path().join("app-v1.0.0");
+        std::fs::create_dir_all(&compartment).unwrap();
+        std::fs::write(compartment.join("index.js"), b"export const i = 0;").unwrap();
+        std::fs::write(compartment.join("a.js"), b"export const a = 1;").unwrap();
+        std::fs::write(compartment.join("b.js"), b"export const b = 2;").unwrap();
+
+        let ingested = ingest_directory(&cas, dir_tmp.path()).unwrap();
+
+        // All three sibling files end up in the compartment sub-tree.
+        let app_entry = cas
+            .read_tree(&ingested.root_hash)
+            .unwrap()
+            .entries
+            .remove("app-v1.0.0")
+            .unwrap();
+        let sub_names = cas.list_tree(&app_entry.hash).unwrap();
+        for expected in ["index.js", "a.js", "b.js"] {
+            assert!(
+                sub_names.contains(&expected.to_string()),
+                "expected sub-tree to contain {expected}, got {sub_names:?}",
+            );
+        }
+
+        // And each is loadable from the LoadedArchive.
+        for (spec, body) in [
+            ("./index.js", "export const i = 0;"),
+            ("./a.js", "export const a = 1;"),
+            ("./b.js", "export const b = 2;"),
+        ] {
+            let key = ("app-v1.0.0".to_string(), spec.to_string());
+            assert_eq!(
+                ingested.archive.sources.get(&key).map(|s| s.as_str()),
+                Some(body),
+                "missing source for {spec}",
+            );
+        }
+    }
+
+    /// Symlink-handling tests are Unix-only. On Windows the
+    /// `symlink_file` / `symlink_dir` split and the
+    /// developer-mode requirement make a portable assertion noisy;
+    /// the underlying `ft.is_file()` / `ft.is_dir()` check is platform-
+    /// neutral so Unix coverage is sufficient to lock the behavior.
+    #[cfg(unix)]
+    #[test]
+    fn ingest_directory_skips_symlinks_at_root() {
+        // The contract of `ingest_directory` is that only regular files
+        // and directories at the root participate in the ingest; a
+        // symlink at the root (even if pointing at a real file) is
+        // skipped. Without this branch, a symlink would either follow
+        // (silently ingesting the link target under the link's name,
+        // surprising the caller) or surface a file_type() error and
+        // abort an otherwise-valid ingest.
+        let cas_tmp = tempfile::tempdir().unwrap();
+        let dir_tmp = tempfile::tempdir().unwrap();
+        let cas = ContentStore::open(cas_tmp.path()).unwrap();
+        make_test_directory(dir_tmp.path());
+
+        // Hard-to-misread name so the assertion is concrete.
+        let outside = dir_tmp.path().join("dangling-target.txt");
+        std::fs::write(&outside, b"should not be ingested").unwrap();
+        let link = dir_tmp.path().join("link.txt");
+        std::os::unix::fs::symlink(&outside, &link).unwrap();
+
+        let ingested = ingest_directory(&cas, dir_tmp.path()).unwrap();
+
+        // The symlink entry is absent from the root tree. The actual
+        // target file (`dangling-target.txt`) is still a regular file
+        // at the root and *is* ingested; the symlink itself is not.
+        let names = cas.list_tree(&ingested.root_hash).unwrap();
+        assert!(
+            !names.contains(&"link.txt".to_string()),
+            "symlink should be skipped, got {names:?}",
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ingest_directory_skips_symlinks_inside_compartment() {
+        // Same contract inside `collect_compartment_blobs`: a symlink
+        // within a compartment directory is skipped, so the sub-tree
+        // manifest mirrors a literal walk of regular files only.
+        let cas_tmp = tempfile::tempdir().unwrap();
+        let dir_tmp = tempfile::tempdir().unwrap();
+        let cas = ContentStore::open(cas_tmp.path()).unwrap();
+        make_test_directory(dir_tmp.path());
+
+        let compartment = dir_tmp.path().join("app-v1.0.0");
+        let target = compartment.join("real.js");
+        std::fs::write(&target, b"export const r = 1;").unwrap();
+        let link = compartment.join("link.js");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+
+        let ingested = ingest_directory(&cas, dir_tmp.path()).unwrap();
+
+        let app_entry = cas
+            .read_tree(&ingested.root_hash)
+            .unwrap()
+            .entries
+            .remove("app-v1.0.0")
+            .unwrap();
+        let sub_names = cas.list_tree(&app_entry.hash).unwrap();
+        assert!(
+            sub_names.contains(&"real.js".to_string()),
+            "regular file alongside symlink should be ingested, got {sub_names:?}",
+        );
+        assert!(
+            !sub_names.contains(&"link.js".to_string()),
+            "symlink in compartment should be skipped, got {sub_names:?}",
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // load_archive_from_cas error and edge-case paths
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn load_archive_from_cas_errors_when_compartment_map_missing() {
+        // If the root tree references no `compartment-map.json` blob,
+        // `load_archive_from_cas` must surface NotFound rather than
+        // panicking or silently returning an empty LoadedArchive.
+        // The CLI's `--cas <hash>` path relies on this error to tell
+        // the user the supplied hash is not a runnable archive root.
+        let cas_tmp = tempfile::tempdir().unwrap();
+        let cas = ContentStore::open(cas_tmp.path()).unwrap();
+
+        // Build a minimal root tree with one unrelated blob, no
+        // compartment-map.json entry.
+        let mut entries: HashMap<String, TreeEntry> = HashMap::new();
+        let blob_hash = cas.store(b"unrelated", "blob").unwrap();
+        entries.insert(
+            "other.bin".to_string(),
+            TreeEntry {
+                entry_type: "blob".to_string(),
+                hash: blob_hash,
+                size: Some(9),
+            },
+        );
+        let root_tree = TreeManifest { entries };
+        let root_json = encode_manifest_sorted(&root_tree).unwrap();
+        let root_hash = cas.store_tree(&root_json).unwrap();
+
+        let err = match load_archive_from_cas(&cas, &root_hash) {
+            Ok(_) => panic!("expected NotFound, got Ok"),
+            Err(e) => e,
+        };
+        assert_eq!(err.kind(), io::ErrorKind::NotFound);
+        // The error message names what was missing, so a caller's
+        // diagnostic does not become a guessing game over which hash
+        // / blob / tree entry is at fault.
+        let msg = err.to_string();
+        assert!(
+            msg.contains("compartment-map.json"),
+            "error should mention compartment-map.json, got: {msg}",
+        );
+    }
+
+    #[test]
+    fn load_archive_from_cas_skips_non_script_parsers() {
+        // The loader only fetches sources for parsers it knows how to
+        // hand to the engine (`mjs`, `cjs`, `json`). A `wasm` (or
+        // other future) parser must be skipped silently here so the
+        // engine, not this loader, decides how to surface it.
+        let cas_tmp = tempfile::tempdir().unwrap();
+        let dir_tmp = tempfile::tempdir().unwrap();
+        let cas = ContentStore::open(cas_tmp.path()).unwrap();
+
+        let map = r#"{
+            "entry": {"compartment": "app-v1.0.0", "module": "./index.js"},
+            "compartments": {
+                "app-v1.0.0": {
+                    "name": "app",
+                    "modules": {
+                        "./index.js": {"parser": "mjs", "location": "index.js"},
+                        "./blob.wasm": {"parser": "wasm", "location": "blob.wasm"}
+                    }
+                }
+            }
+        }"#;
+        std::fs::write(dir_tmp.path().join("compartment-map.json"), map).unwrap();
+        let compartment = dir_tmp.path().join("app-v1.0.0");
+        std::fs::create_dir_all(&compartment).unwrap();
+        std::fs::write(compartment.join("index.js"), b"export const i = 0;").unwrap();
+        std::fs::write(compartment.join("blob.wasm"), [0x00, 0x61, 0x73, 0x6d]).unwrap();
+
+        let ingested = ingest_directory(&cas, dir_tmp.path()).unwrap();
+
+        // The mjs module is present, but the wasm module is not loaded
+        // into `sources` — the loader skipped it at parser dispatch.
+        let key_index = ("app-v1.0.0".to_string(), "./index.js".to_string());
+        let key_wasm = ("app-v1.0.0".to_string(), "./blob.wasm".to_string());
+        assert!(ingested.archive.sources.contains_key(&key_index));
+        assert!(
+            !ingested.archive.sources.contains_key(&key_wasm),
+            "wasm module must be skipped by load_archive_from_cas",
+        );
+    }
+
+    #[test]
+    fn load_archive_from_cas_falls_back_to_specifier_when_location_missing() {
+        // When a module descriptor omits the `location` field, the
+        // loader strips a leading `./` from the specifier and uses
+        // that as the path under the compartment sub-tree. This is
+        // what the @endo/compartment-mapper contract guarantees when
+        // location and specifier coincide; a regression here would
+        // leave the source absent from the LoadedArchive even though
+        // the file is present in the CAS.
+        let cas_tmp = tempfile::tempdir().unwrap();
+        let dir_tmp = tempfile::tempdir().unwrap();
+        let cas = ContentStore::open(cas_tmp.path()).unwrap();
+
+        let map = r#"{
+            "entry": {"compartment": "app-v1.0.0", "module": "./index.js"},
+            "compartments": {
+                "app-v1.0.0": {
+                    "name": "app",
+                    "modules": {
+                        "./index.js": {"parser": "mjs"}
+                    }
+                }
+            }
+        }"#;
+        std::fs::write(dir_tmp.path().join("compartment-map.json"), map).unwrap();
+        let compartment = dir_tmp.path().join("app-v1.0.0");
+        std::fs::create_dir_all(&compartment).unwrap();
+        std::fs::write(compartment.join("index.js"), b"export default 99;").unwrap();
+
+        let ingested = ingest_directory(&cas, dir_tmp.path()).unwrap();
+
+        let key = ("app-v1.0.0".to_string(), "./index.js".to_string());
+        assert_eq!(
+            ingested.archive.sources.get(&key).map(|s| s.as_str()),
+            Some("export default 99;"),
+        );
+    }
+
+    #[test]
+    fn load_archive_from_cas_tolerates_missing_module_file() {
+        // A module the manifest names but whose file is not present in
+        // the CAS tree is intentionally swallowed (`Err(_) => {}`) on
+        // the loader side. The contract is that any subsequent
+        // engine-side import of that specifier surfaces the missing-
+        // module condition; loading itself does not fail. Without this
+        // arm, a typo in the manifest would block every other source
+        // in the archive from loading.
+        let cas_tmp = tempfile::tempdir().unwrap();
+        let cas = ContentStore::open(cas_tmp.path()).unwrap();
+
+        // Build the CAS layout by hand: a compartment sub-tree that
+        // is empty, and a root tree referencing it plus a compartment
+        // map that names one module.
+        let map_json = r#"{
+            "entry": {"compartment": "app-v1.0.0", "module": "./index.js"},
+            "compartments": {
+                "app-v1.0.0": {
+                    "name": "app",
+                    "modules": {
+                        "./missing.js": {
+                            "parser": "mjs",
+                            "location": "missing.js"
+                        }
+                    }
+                }
+            }
+        }"#;
+        let map_hash = cas.store(map_json.as_bytes(), "blob").unwrap();
+
+        let empty_sub_json = encode_manifest_sorted(&TreeManifest {
+            entries: HashMap::new(),
+        })
+        .unwrap();
+        let sub_hash = cas.store_tree(&empty_sub_json).unwrap();
+
+        let mut root_entries: HashMap<String, TreeEntry> = HashMap::new();
+        root_entries.insert(
+            "compartment-map.json".to_string(),
+            TreeEntry {
+                entry_type: "blob".to_string(),
+                hash: map_hash,
+                size: Some(map_json.len() as u64),
+            },
+        );
+        root_entries.insert(
+            "app-v1.0.0".to_string(),
+            TreeEntry {
+                entry_type: "tree".to_string(),
+                hash: sub_hash,
+                size: None,
+            },
+        );
+        let root_json = encode_manifest_sorted(&TreeManifest {
+            entries: root_entries,
+        })
+        .unwrap();
+        let root_hash = cas.store_tree(&root_json).unwrap();
+
+        // Loader succeeds and returns an empty `sources` map.
+        let loaded = load_archive_from_cas(&cas, &root_hash).unwrap();
+        let key = ("app-v1.0.0".to_string(), "./missing.js".to_string());
+        assert!(
+            !loaded.sources.contains_key(&key),
+            "missing module file must not surface in sources",
+        );
+        // The compartment map itself was still parsed and is intact.
+        assert_eq!(loaded.map.entry.compartment, "app-v1.0.0");
+    }
 }
