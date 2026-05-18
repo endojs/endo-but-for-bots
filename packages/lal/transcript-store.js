@@ -11,13 +11,19 @@ import { E } from '@endo/eventual-send';
  * @property {true} ok
  * @property {TranscriptNode[]} chain - Nodes ordered root-to-leaf.
  *
- * @typedef {object} WalkFailure
+ * @typedef {object} WalkMissing
  * @property {false} ok
  * @property {'missing-node'} reason
  * @property {string} brokenAt - The messageId whose node could not be resolved.
  * @property {string} leafMessageId - The leaf the walk started from.
  *
- * @typedef {WalkSuccess | WalkFailure} WalkResult
+ * @typedef {object} WalkCycle
+ * @property {false} ok
+ * @property {'cycle-detected'} reason
+ * @property {string} brokenAt - The messageId visited a second time.
+ * @property {string} leafMessageId - The leaf the walk started from.
+ *
+ * @typedef {WalkSuccess | WalkMissing | WalkCycle} WalkResult
  */
 
 /**
@@ -171,8 +177,18 @@ export const makeTranscriptStore = powers => {
    *
    * Returns a result discriminated by `ok`.
    * On success, `chain` is the ordered list of nodes from root to leaf.
-   * On failure (a missing intermediate node), `brokenAt` is the messageId
-   * that could not be resolved.
+   * On failure, `reason` distinguishes the two breakage modes the store
+   * defends against:
+   *
+   * - `'missing-node'`: an intermediate `parentMessageId` does not resolve
+   *   to a persisted node.  `brokenAt` is the unresolved messageId.
+   * - `'cycle-detected'`: the chain visits the same messageId twice
+   *   (a corrupted durable store, never produced by normal `putNode`
+   *   traffic).  `brokenAt` is the messageId that closed the cycle.
+   *
+   * The cycle guard ensures the walk terminates in O(chain length)
+   * regardless of durable-store state, so a corrupt pet-store entry
+   * cannot wedge the agent's loop.
    *
    * @param {string} leafMessageId
    * @returns {Promise<WalkResult>}
@@ -180,9 +196,20 @@ export const makeTranscriptStore = powers => {
   const walkParents = async leafMessageId => {
     /** @type {TranscriptNode[]} */
     const chain = [];
+    /** @type {Set<string>} */
+    const seen = new Set();
     /** @type {string | null} */
     let current = leafMessageId;
     while (current !== null) {
+      if (seen.has(current)) {
+        return harden({
+          ok: false,
+          reason: 'cycle-detected',
+          brokenAt: current,
+          leafMessageId,
+        });
+      }
+      seen.add(current);
       const node = await getNode(current);
       if (node === undefined) {
         return harden({
@@ -239,8 +266,12 @@ export const makeTranscriptStore = powers => {
   const assembleTranscriptStrict = async leafMessageId => {
     const result = await walkParents(leafMessageId);
     if (!result.ok) {
+      const detail =
+        result.reason === 'cycle-detected'
+          ? `cycle detected at ${result.brokenAt}`
+          : `missing node ${result.brokenAt}`;
       throw new Error(
-        `Broken transcript chain: missing node ${result.brokenAt} ` +
+        `Broken transcript chain: ${detail} ` +
           `(walking from ${result.leafMessageId})`,
       );
     }
