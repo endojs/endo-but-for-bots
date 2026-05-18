@@ -286,3 +286,197 @@ test('hasNode is true once persisted, false otherwise', async t => {
   t.true(await fresh.hasNode('x'));
   t.false(await fresh.hasNode('y'));
 });
+
+// ---------------------------------------------------------------------------
+// Adversarial coverage: persistence semantics under failure / corruption.
+// ---------------------------------------------------------------------------
+
+test('walkParents terminates on a synthesized cycle rather than infinite-looping', async t => {
+  // A corrupt durable pet store can produce a cycle (`A -> B -> A`) that
+  // ordinary `putNode` traffic never creates.  The walk must terminate
+  // cleanly with a structured `cycle-detected` result instead of looping
+  // forever; otherwise a single corrupted entry wedges the agent.
+  //
+  // We inject the cycle through the mock backing directly to bypass the
+  // store's harden-frozen invariants.
+  const powers = makeMockStoragePowers();
+  powers.backing.set(
+    transcriptPetName('A'),
+    harden({
+      messageId: 'A',
+      parentMessageId: 'B',
+      messages: [{ role: 'user', content: 'a' }],
+    }),
+  );
+  powers.backing.set(
+    transcriptPetName('B'),
+    harden({
+      messageId: 'B',
+      parentMessageId: 'A',
+      messages: [{ role: 'user', content: 'b' }],
+    }),
+  );
+  const store = makeTranscriptStore(powers);
+
+  const walk = await store.walkParents('A');
+  t.false(walk.ok);
+  if (!walk.ok) {
+    t.is(walk.reason, 'cycle-detected');
+    // 'A' is the leaf and the messageId that closes the cycle when revisited.
+    t.is(walk.brokenAt, 'A');
+    t.is(walk.leafMessageId, 'A');
+  }
+
+  // The strict assembler surfaces the cycle in its error message so the
+  // agent's diagnostic distinguishes corruption from a normal missing-node.
+  await t.throwsAsync(() => store.assembleTranscriptStrict('A'), {
+    message: /cycle detected at A/,
+  });
+});
+
+test('walkParents completes in linear time on a 100-deep chain', async t => {
+  // Deeply nested conversations must not blow stack or scale badly.
+  // 100 is well below the realistic conversation depth bound; a cycle bug
+  // or accidental O(n^2) traversal would show up as a timeout here.
+  const DEPTH = 100;
+  const powers = makeMockStoragePowers();
+  const store = makeTranscriptStore(powers);
+  await buildLinearChain(store, DEPTH);
+
+  // Cold-start the store so every lookup must round-trip the mock storage
+  // rather than hitting the write-through cache.
+  const fresh = makeTranscriptStore(powers);
+
+  t.timeout(5000);
+  const walk = await fresh.walkParents(`msg-${DEPTH - 1}`);
+  t.true(walk.ok);
+  if (walk.ok) {
+    t.is(walk.chain.length, DEPTH);
+    t.is(walk.chain[0].messageId, 'msg-0');
+    t.is(walk.chain[DEPTH - 1].messageId, `msg-${DEPTH - 1}`);
+  }
+
+  // The flattened transcript is system(1) + (DEPTH-1) * (user + assistant).
+  const transcript = await fresh.assembleTranscript(`msg-${DEPTH - 1}`);
+  t.is(transcript.length, 1 + (DEPTH - 1) * 2);
+});
+
+test('concurrent putNode for the same messageId resolves to last-write-wins', async t => {
+  // Two callers race to persist competing snapshots of the same node.
+  // The store's contract is last-write-wins on durable state: whichever
+  // `storeValue` resolves last is what a cold-start reader sees.  The
+  // mock storage resolves synchronously per `Promise.resolve`, so the
+  // *invocation* order pins the durable winner.  This test documents and
+  // pins that behavior so a future refactor (e.g. introducing a queue or
+  // a CAS) makes the choice deliberate rather than accidental.
+  //
+  // We capture every `storeValue` argument in arrival order so the test
+  // remains sensitive to behavior changes like first-write-wins (which
+  // would either skip the second write or reorder the writes).
+  const backing = new Map();
+  /** @type {string[]} */
+  const writeOrder = [];
+  const orderedPowers = harden({
+    has: petName => Promise.resolve(backing.has(petName)),
+    lookup: petName =>
+      backing.has(petName)
+        ? Promise.resolve(backing.get(petName))
+        : Promise.reject(new Error(`Unknown: ${petName}`)),
+    storeValue: (value, petName) => {
+      const tag = value.messages[value.messages.length - 1].content;
+      writeOrder.push(tag);
+      backing.set(petName, value);
+      return Promise.resolve();
+    },
+  });
+  const store = makeTranscriptStore(orderedPowers);
+
+  const first = store.putNode({
+    messageId: 'race',
+    parentMessageId: null,
+    messages: [{ role: 'user', content: 'first' }],
+  });
+  const second = store.putNode({
+    messageId: 'race',
+    parentMessageId: null,
+    messages: [
+      { role: 'user', content: 'first' },
+      { role: 'assistant', content: 'second' },
+    ],
+  });
+  await Promise.all([first, second]);
+
+  // Both writes must reach durable storage in the order they were issued.
+  // A first-write-wins implementation (skipping the second `storeValue`)
+  // would break this assertion.
+  t.deepEqual(writeOrder, ['first', 'second']);
+
+  // Cold-start: the second (later) write is what survives.
+  const fresh = makeTranscriptStore(orderedPowers);
+  const recovered = await fresh.getNode('race');
+  t.truthy(recovered);
+  t.is(recovered && recovered.messages.length, 2);
+  t.is(recovered && recovered.messages[1].content, 'second');
+});
+
+test('a putNode whose durable write fails leaves the store cold-recoverable to its prior state', async t => {
+  // Builder's `putNode` swallows storage errors with `console.error` so a
+  // transient pet-store failure does not crash the agent.  The trade-off
+  // is that a failed write is invisible at the call site but observable
+  // on cold restart: the in-memory cache holds the new node, but the
+  // durable layer does not.  Pin that behavior so any future change
+  // (e.g. propagating the error or retrying) is a conscious decision.
+  const backing = new Map();
+  let failNextWrite = false;
+  const crashablePowers = harden({
+    has: petName => Promise.resolve(backing.has(petName)),
+    lookup: petName => {
+      if (!backing.has(petName)) {
+        return Promise.reject(new Error(`Unknown: ${petName}`));
+      }
+      return Promise.resolve(backing.get(petName));
+    },
+    storeValue: (value, petName) => {
+      if (failNextWrite) {
+        return Promise.reject(new Error('simulated crash'));
+      }
+      backing.set(petName, value);
+      return Promise.resolve();
+    },
+  });
+
+  // First, persist a known-good node so we have a prior durable state.
+  const store = makeTranscriptStore(crashablePowers);
+  await store.putNode({
+    messageId: 'before',
+    parentMessageId: null,
+    messages: [{ role: 'system', content: 'sys' }],
+  });
+  t.true(backing.has(transcriptPetName('before')));
+
+  // Now make the next durable write fail (simulate process death between
+  // accepting the call and committing the value).
+  failNextWrite = true;
+  await store.putNode({
+    messageId: 'crashed',
+    parentMessageId: 'before',
+    messages: [{ role: 'user', content: 'lost' }],
+  });
+  failNextWrite = false;
+
+  // Recovery: the durable layer is up again, but the failed write was
+  // never persisted.  Cold-start sees only `before`.
+  t.false(backing.has(transcriptPetName('crashed')));
+  const fresh = makeTranscriptStore(crashablePowers);
+  t.true(await fresh.hasNode('before'));
+  t.false(await fresh.hasNode('crashed'));
+
+  // And walking from the never-persisted leaf reports a clean missing-node
+  // failure rather than producing a partial transcript.
+  const walk = await fresh.walkParents('crashed');
+  t.false(walk.ok);
+  if (!walk.ok) {
+    t.is(walk.reason, 'missing-node');
+    t.is(walk.brokenAt, 'crashed');
+  }
+});
