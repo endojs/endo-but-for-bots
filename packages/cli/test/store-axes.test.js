@@ -269,3 +269,40 @@ test('endo cat --tree without -p <dir> is rejected', async t => {
     'usage error should explain that --tree needs -p <dir>',
   );
 });
+
+test('endo store --tree --literal is rejected', async t => {
+  // `--tree --literal` is incoherent: a directory is not an argv string.
+  // The store command explicitly rejects this combination; if the guard
+  // regresses, the command would silently treat the literal as a path.
+  const result = await execa(
+    process.execPath,
+    [endoBin, 'store', '-n', 'foo', '--tree', '--literal', './src'],
+    { reject: false },
+  );
+  t.not(result.exitCode, 0);
+  t.regex(
+    /** @type {string} */ (result.stderr) +
+      /** @type {string} */ (result.stdout),
+    /tree.*literal|literal.*tree|not supported/i,
+    'usage error should reject --tree --literal',
+  );
+});
+
+test('endo cat --blob --show is rejected', async t => {
+  // --show is for passable values (text/json), not for byte streams.
+  // The cat command explicitly rejects --blob --show with a usage error;
+  // if the guard regresses, the byte stream would be passed to
+  // formatValue and the output would be a meaningless `[object Object]`.
+  const result = await execa(
+    process.execPath,
+    [endoBin, 'cat', 'name', '--blob', '--show'],
+    { reject: false },
+  );
+  t.not(result.exitCode, 0);
+  t.regex(
+    /** @type {string} */ (result.stderr) +
+      /** @type {string} */ (result.stdout),
+    /blob.*show|show.*blob|passable/i,
+    'usage error should reject --blob --show',
+  );
+});

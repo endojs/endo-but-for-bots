@@ -119,6 +119,11 @@ export const cat = async ({
   if (representation === 'tree' && sink !== 'path') {
     usage('`endo cat --tree` requires `-p <dir>` (a destination directory).');
   }
+  if (representation === 'blob' && sink === 'show') {
+    usage(
+      '`endo cat --blob --show` is not supported; --show is for passable values, use --text or --json.',
+    );
+  }
 
   const namePath = parsePetNamePath(name);
 
@@ -172,11 +177,7 @@ export const cat = async ({
         });
         return;
       }
-      if (sink === 'show') {
-        usage(
-          '`endo cat --blob --show` is not supported; --show is for passable values, use --text or --json.',
-        );
-      }
+      // sink === 'show' is rejected up-front (before opening the daemon connection).
       // default sink: stdout
       for await (const chunk of reader) {
         process.stdout.write(chunk);
