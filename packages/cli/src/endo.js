@@ -456,49 +456,136 @@ export const main = async rawArgs => {
 
   program
     .command('cat <name>')
-    .description('dumps a blob')
+    .description('dumps a blob, value, or tree (unified read verb)')
     .option(...commonOptions.as)
+    // Representation axis (default --blob):
+    .option('--blob', 'representation: readable-blob bytes (default)')
+    .option('--text', 'representation: primitive string value')
+    .option('--json', 'representation: structured passable value as JSON')
+    .option('--tree', 'representation: readable-tree (requires -p <dir>)')
+    // Sink axis (default --stdout):
+    .option('-p,--path <path>', 'sink: filesystem path (file or directory)')
+    .option('--stdout', 'sink: standard output (default)')
+    .option('--show', 'sink: pretty-printed display of a passable value')
     .action(async (name, cmd) => {
-      const { as: agentNames } = cmd.opts();
+      const {
+        as: agentNames,
+        blob,
+        text,
+        json,
+        tree,
+        path: dstPath,
+        stdout,
+        show,
+      } = cmd.opts();
       const { cat } = await import('./commands/cat.js');
-      return cat({ name, agentNames });
+      return cat({
+        name,
+        agentNames,
+        blob,
+        text,
+        json,
+        tree,
+        path: dstPath,
+        stdout,
+        show,
+      });
     });
 
   program
     .command('store')
-    .description('stores a blob or structured value')
+    .description('stores a blob, value, or tree (unified store verb)')
     .option(...commonOptions.as)
-    .option(...commonOptions.name)
-    .option('-p,--path <path>', 'store a file as a blob')
-    .option('--stdin', 'store stdin as a blob')
-    .option('--text <text>', 'store a string of UTF-8 text')
-    .option('--text-stdin', 'store STDIN as UTF-8 text')
-    .option('--json <json>', 'store JSON')
-    .option('--json-stdin', 'store STDIN JSON')
-    .option('--bigint <bigint>', 'store a bigint')
+    .option(...commonOptions.requiredName)
+    // Representation axis (one required):
+    .option('--blob', 'representation: readable-blob (CAS bytes)')
+    .option('--text', 'representation: primitive string value')
+    .option('--json', 'representation: structured passable value')
+    .option('--bigint', 'representation: bigint value')
+    .option('--tree', 'representation: readable-tree (CAS, walks directory)')
+    // Source axis (one required):
+    .option('-p,--path <path>', 'source: filesystem path (file or directory)')
+    .option('--stdin', 'source: standard input')
+    .option('--literal <text>', 'source: argv literal string')
     .action(async cmd => {
       const {
         name,
         as: agentNames,
-        path: storePath,
-        stdin: storeStdin,
-        text: storeText,
-        textStdin: storeTextStdin,
-        json: storeJson,
-        jsonStdin: storeJsonStdin,
-        bigint: storeBigInt,
+        blob,
+        text,
+        json,
+        bigint,
+        tree,
+        path: srcPath,
+        stdin,
+        literal,
       } = cmd.opts();
       const { store } = await import('./commands/store.js');
       return store({
-        storePath,
-        storeStdin,
-        storeText,
-        storeTextStdin,
-        storeJson,
-        storeJsonStdin,
-        storeBigInt,
         name,
         agentNames,
+        blob,
+        text,
+        json,
+        bigint,
+        tree,
+        path: srcPath,
+        stdin,
+        literal,
+      });
+    });
+
+  program
+    .command('write <target>')
+    .description('writes through a mutable mount path')
+    .option(...commonOptions.as)
+    // Representation axis (default --text):
+    .option('--text', 'representation: UTF-8 text (default)')
+    .option('--blob', 'representation: opaque bytes (not yet implemented)')
+    .option('--json', 'representation: JSON-encoded text')
+    // Source axis (one required):
+    .option('-p,--path <path>', 'source: filesystem path')
+    .option('--stdin', 'source: standard input')
+    .option('--literal <text>', 'source: argv literal string')
+    .action(async (target, cmd) => {
+      const {
+        as: agentNames,
+        text,
+        blob,
+        json,
+        path: srcPath,
+        stdin,
+        literal,
+      } = cmd.opts();
+      const { write } = await import('./commands/write.js');
+      return write({
+        target,
+        agentNames,
+        text,
+        blob,
+        json,
+        path: srcPath,
+        stdin,
+        literal,
+      });
+    });
+
+  program
+    .command('read <target>')
+    .description('reads through a mutable mount path')
+    .option(...commonOptions.as)
+    .option('--text', 'representation: UTF-8 text (default)')
+    .option('--blob', 'representation: opaque bytes (not yet implemented)')
+    .option('-p,--path <path>', 'sink: filesystem path (default: stdout)')
+    .action(async (target, cmd) => {
+      const { as: agentNames, text, blob, path: dstPath } = cmd.opts();
+      const { read } = await import('./commands/read.js');
+      return read({
+        target,
+        agentNames,
+        text,
+        blob,
+        path: dstPath,
       });
     });
 
@@ -903,6 +990,8 @@ export const main = async rawArgs => {
         'cat',
         'follow',
         'store',
+        'write',
+        'read',
         'checkin',
         'checkout',
         'mount',

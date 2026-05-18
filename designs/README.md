@@ -34,7 +34,7 @@ PR #151 row-format unblocker; sibling of
 | Design | Created | Updated | Status |
 |--------|---------|---------|--------|
 | [chat-color-schemes](chat-color-schemes.md) | 2026-02-26 | 2026-02-26 | **Complete** |
-| [cli-store-verb-text-modes](cli-store-verb-text-modes.md) | 2026-05-08 | 2026-05-08 | Proposed |
+| [cli-store-verb-text-modes](cli-store-verb-text-modes.md) | 2026-05-08 | 2026-05-15 | In Progress |
 | [cli-edit-verb](cli-edit-verb.md) | 2026-05-08 | 2026-05-08 | Proposed |
 | [chat-command-bar](chat-command-bar.md) | 2026-03-02 | 2026-03-02 | **Complete** |
 | [chat-components](chat-components.md) | 2026-03-02 | 2026-03-02 | **Complete** |
@@ -380,7 +380,7 @@ automation.
 | familiar-unified-weblet-server | In Progress | Web-server restructuring |
 | familiar-chat-weblet-hosting | Not Started | Iframe hosting, guest profiles |
 | daemon-checkin-checkout | Not Started | `endo ci` / `endo co` for readable-tree ↔ filesystem |
-| cli-store-verb-text-modes | Proposed | Reshape blocker for PR #128: unify `endo store` flag scheme across source/sink/representation axes; subsume `write-text`/`read-text` |
+| cli-store-verb-text-modes | In Progress | Reshape blocker for PR #128: unify `endo store` flag scheme across source/sink/representation axes; subsume `write-text`/`read-text` |
 | cli-edit-verb | Proposed | `endo edit` with hashline patches for AI agents; sibling of `cli-store-verb-text-modes` (PR #153) |
 | daemon-weblet-application | Not Started | Readable trees, zip archives |
 | exo-zip-package | Proposed | `@endo/exo-zip` adapter: in-memory ZIP as `ReadableTree` exo; PR #128 reshape blocker |
