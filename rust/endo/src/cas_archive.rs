@@ -692,6 +692,109 @@ mod tests {
     }
 
     #[test]
+    fn ingest_entry_point_rejects_extensionless_file() {
+        // A regular file with no extension at all is rejected with
+        // `InvalidData` for the same reason `.txt` is: the
+        // synthesised compartment-map needs a parser, and the
+        // classifier has no way to guess one from a bare name.
+        // The `parser_for_extension(None)` branch is the second
+        // half of the parser-selection contract (the other being
+        // an unrecognised extension); without this test the
+        // `ext?` short-circuit in `parser_for_extension` is
+        // exercised only at the bin layer.
+        let tmp = tempfile::tempdir().unwrap();
+        let cas = ContentStore::open(tmp.path()).unwrap();
+        let (_src_dir, src_path) = write_temp_source("entry", b"export default 1;");
+
+        let err = match ingest_entry_point(&cas, &src_path) {
+            Ok(_) => panic!("expected error for extensionless file"),
+            Err(e) => e,
+        };
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        assert!(
+            err.to_string()
+                .contains("unsupported entry-point extension"),
+            "unexpected error message: {err}"
+        );
+    }
+
+    #[test]
+    fn load_archive_from_cas_errors_when_compartment_map_missing() {
+        // A synthetic root tree with no `compartment-map.json`
+        // entry must surface `NotFound` from
+        // `load_archive_from_cas`. The branch is reachable in
+        // production from a malformed re-ingest or a partial GC
+        // race; pinning it keeps the error path from regressing
+        // into a panic or a silent empty-archive return.
+        let tmp = tempfile::tempdir().unwrap();
+        let cas = ContentStore::open(tmp.path()).unwrap();
+
+        // Build a root tree whose only entry is an unrelated
+        // blob: no `compartment-map.json` reference at all.
+        let blob_hash = cas.store(b"not a map", "blob").unwrap();
+        let mut entries: HashMap<String, TreeEntry> = HashMap::new();
+        entries.insert(
+            "filler.bin".to_string(),
+            TreeEntry {
+                entry_type: "blob".to_string(),
+                hash: blob_hash,
+                size: Some(9),
+            },
+        );
+        let root = TreeManifest { entries };
+        let root_json = serde_json::to_vec(&root).unwrap();
+        let root_hash = cas.store_tree(&root_json).unwrap();
+
+        let err = match load_archive_from_cas(&cas, &root_hash) {
+            Ok(_) => panic!("expected NotFound when compartment-map.json missing"),
+            Err(e) => e,
+        };
+        assert_eq!(err.kind(), io::ErrorKind::NotFound);
+        assert!(
+            err.to_string().contains("compartment-map.json"),
+            "error message should name the missing entry: {err}",
+        );
+    }
+
+    #[test]
+    fn load_archive_from_cas_errors_on_invalid_map_json() {
+        // A root tree whose `compartment-map.json` blob is not
+        // parseable JSON surfaces `InvalidData` with a message
+        // that names the failure as a map-parse problem. This
+        // covers the `map_err` closure on the `serde_json::from_
+        // slice` call (otherwise dead unless the CAS is corrupt
+        // or a different writer produced the blob).
+        let tmp = tempfile::tempdir().unwrap();
+        let cas = ContentStore::open(tmp.path()).unwrap();
+
+        // Store a deliberately-malformed blob and reference it as
+        // `compartment-map.json` from a fresh root tree.
+        let bad_map_hash = cas.store(b"{ not valid json", "blob").unwrap();
+        let mut entries: HashMap<String, TreeEntry> = HashMap::new();
+        entries.insert(
+            "compartment-map.json".to_string(),
+            TreeEntry {
+                entry_type: "blob".to_string(),
+                hash: bad_map_hash,
+                size: Some(16),
+            },
+        );
+        let root = TreeManifest { entries };
+        let root_json = serde_json::to_vec(&root).unwrap();
+        let root_hash = cas.store_tree(&root_json).unwrap();
+
+        let err = match load_archive_from_cas(&cas, &root_hash) {
+            Ok(_) => panic!("expected InvalidData on malformed compartment-map.json"),
+            Err(e) => e,
+        };
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        assert!(
+            err.to_string().contains("invalid map"),
+            "error message should name the parse failure: {err}",
+        );
+    }
+
+    #[test]
     fn ingest_entry_point_run_path_matches_zip_run_path() {
         // The whole point of synthesising a one-compartment
         // archive in CAS is that the downstream `LoadedArchive`
