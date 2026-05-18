@@ -11,6 +11,7 @@ pub mod mailbox;
 pub mod paths;
 pub mod pidfile;
 pub mod proc;
+pub mod run_input;
 pub mod socket;
 pub mod supervisor;
 pub mod types;
