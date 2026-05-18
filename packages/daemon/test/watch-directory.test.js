@@ -74,37 +74,46 @@ test('watchDirectory yields a rename event after a debounce window', async t => 
 
 test('watchDirectory buffers events arriving before the consumer awaits next()', async t => {
   const dir = await makeTempDir(t, 'buffer');
-  const powers = makeFilePowers({ fs, path });
+
+  // Stub fs.watch so we can deliver events deterministically without
+  // racing the platform's debounce / coalesce behavior (which varies
+  // between Linux's inotify and macOS's FSEvents).  The test
+  // exercises the buffered.push() branch in the events iterator:
+  // events arrive (via debounced deliver) before any consumer is
+  // parked on a waiter, so they accumulate in the buffer for the
+  // first next() call to drain.
+  let stubListener;
+  const stubWatcher = {
+    on(event, fn) {
+      if (event === 'change') stubListener = fn;
+      return stubWatcher;
+    },
+    close() {},
+  };
+  const stubFs = { ...fs, watch: () => stubWatcher };
+
+  const powers = makeFilePowers({ fs: stubFs, path });
   const { events, cancel } = powers.watchDirectory(dir);
   t.teardown(() => cancel());
 
-  // Race the watcher startup, then synchronously create three files
-  // and wait through the debounce window so the events buffer
-  // before we drain.
-  await new Promise(resolve => setTimeout(resolve, 50));
-  await fs.promises.writeFile(path.join(dir, 'a.txt'), 'a');
-  await fs.promises.writeFile(path.join(dir, 'b.txt'), 'b');
-  await fs.promises.writeFile(path.join(dir, 'c.txt'), 'c');
-  await new Promise(resolve => setTimeout(resolve, 200));
+  // Synchronously fire two rename events.  Both schedule debounced
+  // timers; after the debounce window, both call deliver() with no
+  // waiter parked, so both events buffer.
+  stubListener('rename', 'a.txt');
+  stubListener('rename', 'b.txt');
 
-  // Drain the buffered events.
+  // Wait past the debounce window so both timers fire and the
+  // buffer has both entries before we await next().
+  await new Promise(resolve => setTimeout(resolve, 150));
+
   const iterator = events[Symbol.asyncIterator]();
-  const seen = new Set();
-  for (let i = 0; i < 3 && seen.size < 3; i += 1) {
-    // eslint-disable-next-line no-await-in-loop
-    const result = await Promise.race([
-      iterator.next(),
-      // Short watchdog: the events are already buffered.
-      new Promise(resolve =>
-        setTimeout(() => resolve({ done: true, value: undefined }), 500),
-      ),
-    ]);
-    if (result.done) break;
-    seen.add(result.value.name);
-  }
-  t.true(seen.has('a.txt'), 'a.txt observed');
-  t.true(seen.has('b.txt'), 'b.txt observed');
-  t.true(seen.has('c.txt'), 'c.txt observed');
+  const first = await iterator.next();
+  t.false(first.done);
+  const second = await iterator.next();
+  t.false(second.done);
+  const seen = new Set([first.value.name, second.value.name]);
+  t.true(seen.has('a.txt'), 'a.txt observed from buffer');
+  t.true(seen.has('b.txt'), 'b.txt observed from buffer');
 });
 
 test('watchDirectory coalesces a quick rewrite of the same name', async t => {
