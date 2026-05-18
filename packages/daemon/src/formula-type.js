@@ -14,6 +14,8 @@ const formulaTypes = new Set([
   'guest',
   'handle',
   'host',
+  'http-client',
+  'http-controller',
   'invitation',
   'known-peers-store',
   'least-authority',

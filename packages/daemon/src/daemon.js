@@ -1,7 +1,7 @@
 // @ts-check
 /** @import { EndoGit } from '@endo/exo-git' */
 /* eslint-disable no-await-in-loop */
-/* global clearTimeout, process, setTimeout */
+/* global clearTimeout, globalThis, process, setTimeout */
 
 import harden from '@endo/harden';
 import { makeExo } from '@endo/exo';
@@ -85,6 +85,11 @@ import {
   readableTreeHelp,
 } from './help-text.js';
 import { getMountBacking, lineageOf, makeMount } from './mount.js';
+import {
+  makeHttpClient as makeHttpClientExo,
+  makeHttpController as makeHttpControllerExo,
+  parseAllowedOrigins,
+} from './http-client.js';
 
 // Sorted:
 import {
@@ -797,6 +802,10 @@ const makeDaemonCore = async (
         }
         return deps;
       }
+      case 'http-controller':
+        return [];
+      case 'http-client':
+        return [['controller', formula.controller]];
       case 'pet-inspector':
         return [['petStore', formula.petStore]];
       case 'directory':
@@ -3175,6 +3184,25 @@ const makeDaemonCore = async (
       });
       return remote;
     },
+    'http-controller': ({ allowedOrigins }) =>
+      makeHttpControllerExo({ allowedOrigins: harden([...allowedOrigins]) }),
+    'http-client': async ({ controller: controllerId }) => {
+      const controller = await provide(controllerId, 'http-controller');
+      // Phase 1 of designs/cli-http-client.md uses the platform fetch
+      // (Node 18+ ships it as a global, SES preserves it through lockdown).
+      // Tests inject a stub by overriding `globalThis.fetch` before the
+      // formula incarnates.  Subsequent phases route fetch through a
+      // dedicated power for finer test control.
+      const fetchImpl = /** @type {any} */ (globalThis).fetch;
+      if (typeof fetchImpl !== 'function') {
+        throw makeError(
+          X`http-client formula requires a global fetch; none found on this runtime`,
+        );
+      }
+      return makeHttpClientExo(controller, {
+        fetch: (input, init) => fetchImpl(input, init),
+      });
+    },
     lookup: ({ hub, path }, context) =>
       makeLookup(
         hub,
@@ -4243,6 +4271,62 @@ const makeDaemonCore = async (
         });
 
         return formulate(formulaNumber, formula);
+      })
+    );
+  };
+
+  /** @type {DaemonCore['formulateHttpClient']} */
+  const formulateHttpClient = async (allowedOrigins, deferredTasks) => {
+    // Parse and validate the allowlist up front so the rejection
+    // surfaces on the host's CLI invocation, not on a future guest
+    // request.  parseAllowedOrigins also rejects an empty list (a
+    // controller that allows nothing is almost certainly a mistake).
+    const normalizedOrigins = parseAllowedOrigins(allowedOrigins);
+    return /** @type {import('./types.js').FormulateResult<unknown>} */ (
+      withFormulaGraphLock(async () => {
+        await null;
+        // Allocate both formula numbers up front so we can populate the
+        // deferred-tasks identifiers (which the host's task closure uses
+        // to register both pet names).  The two formulas are persisted
+        // before either pet-store binding lands so a partial write
+        // cannot leave a pet name pointing at a missing formula.
+        const controllerNumber =
+          /** @type {import('./types.js').FormulaNumber} */ (
+            await randomHex256()
+          );
+        const clientNumber = /** @type {import('./types.js').FormulaNumber} */ (
+          await randomHex256()
+        );
+        const controllerId = formatId({
+          number: controllerNumber,
+          node: localNodeNumber,
+        });
+        const clientId = formatId({
+          number: clientNumber,
+          node: localNodeNumber,
+        });
+
+        await deferredTasks.execute({
+          httpControllerId: controllerId,
+          httpClientId: clientId,
+        });
+
+        /** @type {import('./types.js').HttpControllerFormula} */
+        const controllerFormula = harden({
+          type: 'http-controller',
+          allowedOrigins: harden([...normalizedOrigins]),
+        });
+        /** @type {import('./types.js').HttpClientFormula} */
+        const clientFormula = harden({
+          type: 'http-client',
+          controller: controllerId,
+        });
+
+        // Order matters: the controller is the client's dependency, so
+        // the controller formula must be on disk and in the graph
+        // before the client formula tries to reference it.
+        await formulate(controllerNumber, controllerFormula);
+        return formulate(clientNumber, clientFormula);
       })
     );
   };
@@ -6596,6 +6680,7 @@ const makeDaemonCore = async (
     formulateShell,
     formulateGitCredential,
     formulateGitRemote,
+    formulateHttpClient,
     formulateInvitation,
     formulateDirectoryForStore,
     getPeerIdForNodeIdentifier,

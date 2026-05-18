@@ -17,6 +17,8 @@ const ALL_FORMULA_TYPES = [
   'guest',
   'handle',
   'host',
+  'http-client',
+  'http-controller',
   'invitation',
   'known-peers-store',
   'least-authority',

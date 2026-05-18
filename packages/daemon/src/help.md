@@ -874,3 +874,55 @@ Write bytes from an async iterator. Throws if read-only.
 Returns a structural ReadableBlob view (text, json, streamBase64, getInfo,
 fetch) of this file. The view is a write-disabled face over the live file,
 not a snapshot. Mount-specific extensions (stat, snapshot) are not on it.
+
+# EndoHttpController - Host-retained policy capability for an HTTP client.
+
+Phase 1 of designs/cli-http-client.md.
+The controller bears the policy (the origin allowlist) and is what
+the host retains; the paired EndoHttpClient bears the
+use-the-policy authority.
+The controller has no `request` method by design — a guest holding
+only the controller cannot make outbound HTTP calls.
+Mutators (`addAllowedOrigin`, `setMaxRequestsPerMinute`, etc.) and
+`revoke()` land in subsequent phases.
+
+## help(methodName?) -> string
+
+Get documentation for this interface or a specific method.
+
+## inspect() -> Promise<{ allowedOrigins: string[] }>
+
+Return the policy this controller bears.
+Phase 1: the allowed origin set only.
+
+# EndoHttpClient - Use-the-policy authority paired with an EndoHttpController.
+
+Phase 1 of designs/cli-http-client.md.
+The client bears the `request()` method and enforces the
+host-curated origin allowlist on every call.
+The client cannot widen its own allowlist; the host mutates
+or revokes through the paired controller.
+Phase 1 limits the surface to GET-class verbs and a buffered
+response body; rate / size / timing guards and response
+streaming land in subsequent phases.
+
+## help(methodName?) -> string
+
+Get documentation for this interface or a specific method.
+
+## request(req) -> Promise<Response>
+
+Make an HTTP request against the controller-bound allowlist.
+req: { url: string, method?: string, headers?: Record<string, string> }
+The URL's origin must match a member of the controller's allowlist;
+otherwise the call rejects with a structured "not in allowlist" error.
+fetch is invoked with `redirect: 'manual'` to defang the
+allowed-to-disallowed redirect SSRF vector.
+Returns a Response with { status, statusText, ok, headers, body }
+where `body` is the response body buffered as a UTF-8 string.
+
+## allowedOrigins() -> Promise<string[]>
+
+Return the live allowlist as read through the paired controller.
+
+Returns a read-only view of this file.

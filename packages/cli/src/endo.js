@@ -768,6 +768,42 @@ export const main = async rawArgs => {
       return cancelCommand({ name, agentNames, reason });
     });
 
+  // `endo http <verb>` subcommand tree per designs/cli-http-client.md.
+  // Phase 1 lands `mk` only; `allow`, `deny`, `revoke`, `inspect` and
+  // the per-policy controls land in subsequent phases.
+  const http = program
+    .command('http')
+    .description(
+      'HTTP client capabilities (controller + client cap pair)\n' +
+        'Phase 1: mk only. allow/deny/revoke/inspect land in later phases.',
+    );
+
+  http
+    .command('mk <controller-name> <client-name>')
+    .description(
+      'create a paired HTTP controller + client capability with an origin allowlist',
+    )
+    .option(...commonOptions.as)
+    .option(
+      '--origin <url>',
+      'Allowed origin URL (http: or https:); repeat for multiple',
+      (val, acc) => {
+        acc.push(val);
+        return acc;
+      },
+      [],
+    )
+    .action(async (controllerName, clientName, cmd) => {
+      const { as: agentNames, origin: allowedOrigins } = cmd.opts();
+      const { httpMk } = await import('./commands/http-mk.js');
+      return httpMk({
+        controllerName,
+        clientName,
+        allowedOrigins,
+        agentNames,
+      });
+    });
+
   const where = program
     .command('where')
     .option('-j,--json', 'Output as JOSN rather than simple text')
@@ -1017,6 +1053,11 @@ export const main = async rawArgs => {
     {
       title: 'Agents',
       commands: ['mkhost', 'mkguest', 'invite', 'accept'],
+    },
+
+    {
+      title: 'Network',
+      commands: ['http'],
     },
 
     {

@@ -5,7 +5,7 @@
 
 /** @import { ERef } from '@endo/eventual-send' */
 /** @import { PassableBytesReader } from '@endo/exo-stream' */
-/** @import { AgentDeferredTaskParams, ChannelDeferredTaskParams, Context, DaemonCore, DeferredTasks, EndoDiagnostics, EndoGuest, EndoHost, EnvRecord, EvalDeferredTaskParams, FormulaIdentifier, FormulaNumber, FormulaRecord, GitCredentialDeferredTaskParams, GitDeferredTaskParams, GitRemoteDeferredTaskParams, InvitationDeferredTaskParams, MakeCapletDeferredTaskParams, MakeCapletOptions, MakeDirectoryNode, MakeHostOrGuestOptions, MakeMailbox, MountDeferredTaskParams, Name, NameOrPath, NamePath, NodeNumber, PeerInfo, PetName, ReadableBlobDeferredTaskParams, ReadableTreeDeferredTaskParams, MarshalDeferredTaskParams, ScratchMountDeferredTaskParams, ShellDeferredTaskParams, WorkerDeferredTaskParams } from './types.js' */
+/** @import { AgentDeferredTaskParams, ChannelDeferredTaskParams, Context, DaemonCore, DeferredTasks, EndoDiagnostics, EndoGuest, EndoHost, EnvRecord, EvalDeferredTaskParams, FormulaIdentifier, FormulaNumber, FormulaRecord, GitCredentialDeferredTaskParams, GitDeferredTaskParams, GitRemoteDeferredTaskParams, HttpClientDeferredTaskParams, InvitationDeferredTaskParams, MakeCapletDeferredTaskParams, MakeCapletOptions, MakeDirectoryNode, MakeHostOrGuestOptions, MakeMailbox, MountDeferredTaskParams, Name, NameOrPath, NamePath, NodeNumber, PeerInfo, PetName, ReadableBlobDeferredTaskParams, ReadableTreeDeferredTaskParams, MarshalDeferredTaskParams, ScratchMountDeferredTaskParams, ShellDeferredTaskParams, WorkerDeferredTaskParams } from './types.js' */
 /** @import { makeTraceAggregator } from './trace-aggregator.js' */
 
 import { E } from '@endo/eventual-send';
@@ -184,6 +184,7 @@ harden(normalizeShellPolicy);
  * @param {DaemonCore['formulateShell']} args.formulateShell
  * @param {DaemonCore['formulateGitCredential']} args.formulateGitCredential
  * @param {DaemonCore['formulateGitRemote']} args.formulateGitRemote
+ * @param {DaemonCore['formulateHttpClient']} args.formulateHttpClient
  * @param {DaemonCore['formulateInvitation']} args.formulateInvitation
  * @param {DaemonCore['formulateDirectoryForStore']} args.formulateDirectoryForStore
  * @param {DaemonCore['getPeerIdForNodeIdentifier']} args.getPeerIdForNodeIdentifier
@@ -229,6 +230,7 @@ export const makeHostMaker = ({
   formulateShell,
   formulateGitCredential,
   formulateGitRemote,
+  formulateHttpClient,
   formulateInvitation,
   formulateDirectoryForStore,
   getPeerIdForNodeIdentifier,
@@ -1536,6 +1538,48 @@ export const makeHostMaker = ({
     };
 
     /**
+     * Create a paired HTTP controller + client capability and register
+     * the two facets under the given pet names.  See
+     * `designs/cli-http-client.md` § Cap surface for the rationale.
+     *
+     * Phase 1 of the design lands the immutable-allowlist subset only:
+     * the controller exposes `inspect()` (no mutators, no `revoke()`),
+     * and the client exposes `request()` and `allowedOrigins()` (no
+     * rate / size / timing guards, no methods beyond GET, no streaming
+     * body).  Mutators, revocation, and the defense knobs land in
+     * subsequent phases.
+     *
+     * @param {PetName} controllerName - Pet name for the host-retained controller.
+     * @param {PetName} clientName - Pet name for the guest-granted client.
+     * @param {string[]} allowedOrigins - Initial allowlist.
+     */
+    const makeHttpClientCmd = async (
+      controllerName,
+      clientName,
+      allowedOrigins,
+    ) => {
+      assertPetName(controllerName);
+      assertPetName(clientName);
+      if (controllerName === clientName) {
+        throw makeError(
+          X`Controller and client pet names must differ; both were ${q(
+            controllerName,
+          )}`,
+        );
+      }
+      /** @type {DeferredTasks<HttpClientDeferredTaskParams>} */
+      const tasks = makeDeferredTasks();
+      tasks.push(identifiers =>
+        petStore.storeIdentifier(controllerName, identifiers.httpControllerId),
+      );
+      tasks.push(identifiers =>
+        petStore.storeIdentifier(clientName, identifiers.httpClientId),
+      );
+      const { value } = await formulateHttpClient(allowedOrigins, tasks);
+      return value;
+    };
+
+    /**
      * Create a new channel and store it under the given pet name.
      * @param {NameOrPath} petName - Pet name or path to store the channel under.
      * @param {string} channelProposedName - Display name for the channel creator.
@@ -2149,6 +2193,7 @@ export const makeHostMaker = ({
       deliver,
       makeChannel: makeChannelCmd,
       makeTimer: makeTimerCmd,
+      makeHttpClient: makeHttpClientCmd,
       invite,
       accept,
       endow,

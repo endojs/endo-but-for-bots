@@ -3,11 +3,69 @@
 | | |
 |---|---|
 | **Created** | 2026-05-09 |
-| **Updated** | 2026-05-10 |
+| **Updated** | 2026-05-18 |
 | **Author** | Kris Kowal (prompted) |
-| **Status** | Proposed |
+| **Status** | In Progress |
 | **Source** | PR #144 review id 4256844646 (`CHANGES_REQUESTED`) |
 | **Supersedes (in part)** | [endoclaw-network-fetch](endoclaw-network-fetch.md) |
+
+## Status
+
+**Phase 1 in flight** (this PR).
+The substrate (formula types, daemon-side controller + client kit, host
+mint, CLI verb) is new; PR #144 is closed and the pre-flight audit
+found no existing `endo http` CLI verb or `HttpClient` daemon formula
+on the `llm` head.
+
+Phase 1 lands:
+
+- Two daemon formula types: `http-controller` (holds the immutable
+  allowlist) and `http-client` (holds a reference to its paired
+  controller).
+- `EndoHost.makeHttpClient(controllerName, clientName, allowedOrigins)`
+  mints both formulas and registers them under the given pet names.
+- `EndoHttpController` exo: `inspect()` (read the policy) + `help()`.
+- `EndoHttpClient` exo: `request({ url, method?, headers? })` and
+  `allowedOrigins()` + `help()`.  `request()` enforces the host-curated
+  allowlist on every call and uses the platform `fetch` (Node 18+ /
+  SES-preserved global) with `redirect: 'manual'` to defang the
+  redirect-following SSRF vector.
+- CLI: `endo http mk <controller-name> <client-name> --origin <url>
+  [--origin <url>...]` constructs the pair and prints the two pet names
+  it registered.
+- Tests: a unit-level test of the `http-client` module (origin
+  parsing, the controller / client invariant, the fetch-spy regression
+  evidence) and a daemon-level test that drives the host through a
+  real local HTTP server (allowed-origin success, disallowed-origin
+  rejection, controller-bears-policy / client-uses-it invariant).
+- Changesets: `@endo/daemon` minor, `@endo/cli` minor.
+
+Phase 1 explicitly **does not** ship:
+
+- `endo http allow`, `endo http deny`, `endo http revoke`, `endo http
+  inspect` verbs.  These follow in Phase 2; the controller's mutator
+  surface and the `revoke()` knob land alongside the verbs.
+- The streaming `ReadableBlob` request and response body shape from
+  the design's *Exo interfaces* section.  Phase 1 buffers both
+  directions through `text()` and limits the request to a header-only
+  GET-class shape (no `body` field); the streaming surface lands in
+  Phase 4 (response streaming) together with the byte cap.
+- Methods beyond GET-class verbs (HEAD, POST, PUT, etc.) — Phase 4.
+- Rate limit, byte cap, per-request timeout — Phase 3.  The
+  controller does not yet expose `setMaxRequestsPerMinute`,
+  `setMaxResponseBytes`, or `setTimeoutMs`.
+- The `cancellation: Promise<never>` second argument to `request`.
+  The cited daemon precedents already establish the convention; the
+  argument is added in the phase that wires through the timeout and
+  rate-limit guards (Phase 3).
+- The trust-on-first-bind policy mode (the addendum tracked at PR #164
+  and its successors).
+
+The placeholder verb / method / option names in this document remain
+placeholders.  The namer dispatch's recommendation may rename
+`makeHttpClient`, `mk`, `--origin`, the formula types, or the exo
+interface names; the change is mechanical because none of the
+identifiers escape this PR's diff.
 
 ## What is the Problem Being Solved?
 

@@ -685,6 +685,52 @@ export {
 // snapshot. Its read surface is the shared `readableTreeMethodGuards` from
 // `@endo/platform/fs` (help / has / list / lookup); it adds `sha256`, making it
 // the `SnapshotTree` shape. See designs/fs-interface-consolidation.md § C3.
+// HTTP client surface per designs/cli-http-client.md Phase 1.
+// The kit is a paired Controller + Client; the host retains the
+// controller, the guest holds the client.  Phase 1 lands the
+// immutable-allowlist subset (inspect, request, allowedOrigins);
+// subsequent phases add mutators, revoke, rate / size / timing guards,
+// methods beyond GET, and response streaming.
+
+const HttpPolicyShape = M.splitRecord(
+  {
+    allowedOrigins: M.arrayOf(M.string()),
+  },
+  {},
+);
+
+const HttpRequestShape = M.splitRecord(
+  { url: M.string() },
+  {
+    method: M.string(),
+    headers: M.recordOf(M.string(), M.string()),
+  },
+);
+
+const HttpResponseShape = M.splitRecord(
+  {
+    status: M.number(),
+    statusText: M.string(),
+    ok: M.boolean(),
+    headers: M.recordOf(M.string(), M.string()),
+    body: M.string(),
+  },
+  {},
+);
+
+export const HttpControllerInterface = M.interface('EndoHttpController', {
+  inspect: M.call().returns(M.or(M.promise(), HttpPolicyShape)),
+  help: M.call().optional(M.string()).returns(M.string()),
+});
+
+export const HttpClientInterface = M.interface('EndoHttpClient', {
+  request: M.call(HttpRequestShape).returns(
+    M.or(M.promise(), HttpResponseShape),
+  ),
+  allowedOrigins: M.call().returns(M.promise()),
+  help: M.call().optional(M.string()).returns(M.string()),
+});
+
 export const ReadableTreeInterface = M.interface('EndoReadableTree', {
   ...readableTreeMethodGuards,
   ...getInfoMethodGuard,

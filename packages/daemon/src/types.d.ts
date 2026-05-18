@@ -529,6 +529,35 @@ export type TimerFormula = {
   label: string;
 };
 
+/**
+ * Controller half of an HTTP client kit per
+ * `designs/cli-http-client.md` Phase 1.  The controller bears the
+ * policy (currently just the allowlist; rate / size / timing guards
+ * land in later phases) and is what the host retains.
+ */
+export type HttpControllerFormula = {
+  type: 'http-controller';
+  allowedOrigins: string[];
+};
+
+/**
+ * Client half of an HTTP client kit per
+ * `designs/cli-http-client.md` Phase 1.  The client bears the
+ * use-the-policy authority (`request`, `allowedOrigins`) and is what
+ * the host hands to a guest.  It references its paired controller by
+ * formula identifier; the controller is the source of truth for the
+ * live policy.
+ */
+export type HttpClientFormula = {
+  type: 'http-client';
+  controller: FormulaIdentifier;
+};
+
+export type HttpClientDeferredTaskParams = {
+  httpControllerId: FormulaIdentifier;
+  httpClientId: FormulaIdentifier;
+};
+
 export type Formula =
   | ChannelFormula
   | EndoFormula
@@ -563,7 +592,9 @@ export type Formula =
   | DirectoryFormula
   | PeerFormula
   | InvitationFormula
-  | TimerFormula;
+  | TimerFormula
+  | HttpControllerFormula
+  | HttpClientFormula;
 
 export type Builtins = {
   NONE: FormulaIdentifier;
@@ -1486,6 +1517,26 @@ export interface EndoHost extends EndoAgent {
   ): Promise<unknown>;
   /** Locate a formula with connection hints. */
   locateWithHints(...petNamePath: string[]): Promise<string | undefined>;
+  /**
+   * Create a paired HTTP controller + client capability and register
+   * the two facets under the given pet names.  See
+   * `designs/cli-http-client.md` for the controller / client cap split.
+   * Phase 1 lands the immutable-allowlist subset; mutators (`allow`,
+   * `deny`, `set-rate`, `set-bytes`, `set-time`) and `revoke()` land in
+   * later phases.
+   *
+   * @param controllerName - Pet name for the host-retained controller.
+   * @param clientName - Pet name for the guest-granted client.
+   * @param allowedOrigins - Initial allowlist; each entry must parse
+   *   with `new URL(...)` and use the `http:` or `https:` scheme.
+   * @returns The newly-minted client exo.  The controller is
+   *   accessible by pet name via `lookup(controllerName)`.
+   */
+  makeHttpClient(
+    controllerName: string,
+    clientName: string,
+    allowedOrigins: string[],
+  ): Promise<unknown>;
   /** Adopt a value from a locator that includes connection hints. */
   adoptFromLocator(
     locator: string,
@@ -2142,6 +2193,29 @@ export type FormulaValueTypes = {
   guest: EndoGuest;
   handle: Handle;
   host: EndoHost;
+  // Phase 1 of designs/cli-http-client.md.  The exo surfaces are
+  // hand-typed here rather than imported from a runtime module so the
+  // `Provide` signature can resolve `'http-controller'` and
+  // `'http-client'` without a circular type import.
+  'http-controller': {
+    inspect(): Promise<{ readonly allowedOrigins: readonly string[] }>;
+    help(methodName?: string): string;
+  };
+  'http-client': {
+    request(req: {
+      url: string;
+      method?: string;
+      headers?: Record<string, string>;
+    }): Promise<{
+      status: number;
+      statusText: string;
+      ok: boolean;
+      headers: Record<string, string>;
+      body: string;
+    }>;
+    allowedOrigins(): Promise<readonly string[]>;
+    help(methodName?: string): string;
+  };
   invitation: Invitation;
   worker: EndoWorker;
 };
@@ -2358,6 +2432,18 @@ export interface DaemonCore {
     policy: GitRemoteFormula['policy'],
     deferredTasks: DeferredTasks<GitRemoteDeferredTaskParams>,
   ) => FormulateResult<GitRemote>;
+
+  /**
+   * Mint a paired HTTP controller + client capability.  Allocates two
+   * formula numbers (one per facet); both formulas are persisted before
+   * either pet name binds.  The returned value resolves to the client
+   * exo (the controller is reachable by pet name via the deferred-tasks
+   * binding).  See `designs/cli-http-client.md` § Cap surface.
+   */
+  formulateHttpClient: (
+    allowedOrigins: string[],
+    deferredTasks: DeferredTasks<HttpClientDeferredTaskParams>,
+  ) => FormulateResult<unknown>;
 
   formulateInvitation: (
     hostAgentId: FormulaIdentifier,
