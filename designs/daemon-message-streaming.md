@@ -3,8 +3,73 @@
 |             |                          |
 |-------------|--------------------------|
 | **Created** | 2026-03-26               |
+| **Updated** | 2026-05-18               |
 | **Author**  | Joshua T Corbin (evoked) |
-| **Status**  | Not Started              |
+| **Status**  | In Progress              |
+
+## Status
+
+Phase 1 lands the daemon-level streaming primitive on `llm`:
+
+- `streamReply(messageNumber, options?)` on the mail facet (exposed via
+  the `EndoHost` and `EndoGuest` exo interfaces).
+- A `StreamWriter` exo returned to the sender with `append(text)`,
+  `setPhase(phase)`, `end()`, and `abort(reason)` methods.
+- A `StreamReader` exo on the recipient side, exposed as the `stream`
+  field of the recipient's inbox message.  The reader implements the
+  daemon's standard `AsyncIterator` interface (`next` / `return` /
+  `throw`) so it travels cleanly over CapTP; recipients wrap it with
+  `makeRefIterator` (or iterate the methods directly) to consume
+  `StreamEvent` objects (`type` ∈ {`append`, `phase`, `end`, `abort`},
+  with `text` / `phase` / `reason` per type).
+- An in-memory event buffer guarantees that a recipient that subscribes
+  after the writer has already emitted events still observes the full
+  sequence; the stream terminates the recipient's iteration on `end()`
+  or `abort()`.
+
+### Persistence shape (the simpler-of-two-shapes choice)
+
+While streaming, the message lives only in the mailbox's in-memory
+`messages` map and on the change topic; no formula is persisted.  On
+`end()`, the assembled text is persisted as a normal `package` message
+whose `strings[0]` is the concatenated text and whose `phase` carries
+the most recent phase label.  On `abort()`, the partial text plus
+`aborted: true` and `abortReason` are persisted in the same shape.
+A daemon restart drops any in-flight streams and reads back only the
+finalised messages.
+
+### Phase 1 scope
+
+In:
+
+- `streamReply` + `StreamWriter` + `StreamReader` async-iterable shape
+  on the recipient side, for same-daemon host+guest pairs.
+- Persistence on `end()` / `abort()` per the shape above.
+- Tests at the daemon level (real two-host round-trip exercising append
+  / phase / end and the open + immediate end, phase-only, abort
+  mid-stream, and recipient-cancellation-mid-stream edge cases).
+
+Out (deferred):
+
+- **Back-pressure / throttling.**  The design's named future item; the
+  current writer is fire-and-forget.  A follow-up phase introduces the
+  `append`-returns-when-consumed shape if measurements show the
+  unthrottled CapTP volume hurts.
+- **CLI integration.**  The Genie main module's switch from discrete
+  "Thinking…" / "Calling tool…" / final-response messages to a single
+  streamed reply happens in a subsequent phase that consumes the
+  Phase 1 API from a guest module.
+- **Persistent intermediate stream state across daemon restarts.**
+  In-flight streams die on restart by design; the recipient sees only
+  the persisted (finalised) record after restart.
+- **Cross-peer streams.**  The Far reader and finalisation references
+  do flow over CapTP in principle but Phase 1 verifies only the
+  same-daemon round-trip.
+
+The alternative mail method `streamSend(recipientName, options?)` (for
+starting a brand-new streaming conversation rather than replying)
+remains future work; Phase 1 covers only `streamReply` because the
+Genie use case is reply-shaped.
 
 ## Motivation
 

@@ -463,7 +463,53 @@ export type Package = MessageBase & {
   strings: Array<string>; // text that appears before, between, and after named formulas.
   names: Array<Name>; // edge names
   ids: Array<FormulaIdentifier>; // formula identifiers
+  // Phase 1 of designs/daemon-message-streaming.md adds optional streaming
+  // metadata to package messages.  `stream` is a Far reference to the
+  // recipient's StreamReader; absent on durable records (persisted only
+  // after the stream is finalised).  `phase` carries the most recent phase
+  // label; `aborted` and `abortReason` record an aborted stream's reason.
+  stream?: unknown;
+  phase?: string;
+  aborted?: boolean;
+  abortReason?: string;
 };
+
+/**
+ * A single event in a streaming message.  Recipient consumes a sequence of
+ * these via the message's `stream` async iterable; per Phase 1 of
+ * designs/daemon-message-streaming.md.
+ */
+export type StreamEvent =
+  | { type: 'append'; text: string }
+  | { type: 'phase'; phase: string }
+  | { type: 'end' }
+  | { type: 'abort'; reason: string };
+
+/**
+ * The sender-side handle on a streaming message; returned by streamReply.
+ */
+export interface StreamWriter {
+  append(text: string): Promise<void>;
+  setPhase(phase: string): Promise<void>;
+  end(): Promise<void>;
+  abort(reason?: string): Promise<void>;
+}
+
+/**
+ * Final state of a stream once the writer ends or aborts.  Mailboxes use
+ * this to persist a durable record after the in-flight stream completes.
+ */
+export type StreamFinalization =
+  | { status: 'ended'; text: string; phase?: string }
+  | { status: 'aborted'; text: string; phase?: string; reason: string };
+
+/**
+ * Options accepted by Mail.streamReply.
+ */
+export interface StreamReplyOptions {
+  /** Initial phase label, e.g. "thinking". */
+  phase?: string;
+}
 
 export type DefineRequest = MessageBase & {
   type: 'definition';
@@ -757,6 +803,10 @@ export interface Mail {
     edgeNames: Array<string>,
     petNamesOrPaths: Array<string | string[]>,
   ): Promise<void>;
+  streamReply(
+    messageNumber: bigint,
+    options?: StreamReplyOptions,
+  ): Promise<StreamWriter>;
   request(
     recipientNameOrPath: string | string[],
     what: string,
@@ -889,6 +939,7 @@ export interface EndoAgent extends EndoDirectory {
   dismiss: Mail['dismiss'];
   dismissAll: Mail['dismissAll'];
   reply: Mail['reply'];
+  streamReply: Mail['streamReply'];
   request: Mail['request'];
   send: Mail['send'];
   sendValue: Mail['sendValue'];

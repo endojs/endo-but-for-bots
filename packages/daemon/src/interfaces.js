@@ -216,6 +216,11 @@ export const GuestInterface = M.interface('EndoGuest', {
     EdgeNamesShape,
     NamesOrPathsShape,
   ).returns(M.promise()),
+  // Open a streaming reply to an existing message; returns a StreamWriter.
+  // Phase 1 of designs/daemon-message-streaming.md.
+  streamReply: M.call(MessageNumberShape)
+    .optional(M.splitRecord({}, { phase: M.string() }))
+    .returns(M.promise()),
   // Define code with named slots
   define: M.call(
     M.string(), // source
@@ -392,6 +397,11 @@ export const HostInterface = M.interface('EndoHost', {
     EdgeNamesShape,
     NamesOrPathsShape,
   ).returns(M.promise()),
+  // Open a streaming reply to an existing message; returns a StreamWriter.
+  // Phase 1 of designs/daemon-message-streaming.md.
+  streamReply: M.call(MessageNumberShape)
+    .optional(M.splitRecord({}, { phase: M.string() }))
+    .returns(M.promise()),
   // Endow a definition request with bindings
   endow: M.call(
     MessageNumberShape, // messageNumber

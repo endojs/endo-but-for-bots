@@ -62,7 +62,7 @@ PR #151 row-format unblocker; sibling of
 | [daemon-checkin-checkout](daemon-checkin-checkout.md) | 2026-03-17 | 2026-03-17 | Not Started |
 | [daemon-capability-filesystem](daemon-capability-filesystem.md) | 2026-02-15 | 2026-02-24 | Not Started |
 | [daemon-content-store-gc](daemon-content-store-gc.md) | 2026-03-20 | 2026-05-08 | **Complete** |
-| [daemon-message-streaming](daemon-message-streaming.md) | 2026-03-26 | 2026-03-26 | Draft |
+| [daemon-message-streaming](daemon-message-streaming.md) | 2026-03-26 | 2026-05-18 | In Progress |
 | [daemon-mount](daemon-mount.md) | 2026-03-20 | 2026-03-20 | In Progress |
 | [filesystem-watchers](filesystem-watchers.md) | 2026-05-07 | 2026-05-07 | Not Started |
 | [platform-fs](platform-fs.md) | 2026-03-18 | 2026-03-18 | In Progress |

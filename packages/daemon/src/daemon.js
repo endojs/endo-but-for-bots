@@ -2990,6 +2990,7 @@ const makeDaemonCore = async (
             dismiss: disallowedFn,
             dismissAll: disallowedFn,
             reply: disallowedFn,
+            streamReply: disallowedFn,
             request: disallowedFn,
             send: disallowedFn,
             evaluate: disallowedFn,

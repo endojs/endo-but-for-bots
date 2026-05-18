@@ -23,6 +23,7 @@ import {
 import { makeDeferredTasks } from './deferred-tasks.js';
 import { makeSerialJobs } from './serial-jobs.js';
 import { externalizeId } from './locator.js';
+import { makeMailStream } from './mail-stream.js';
 
 import {
   EnvelopeInterface,
@@ -301,12 +302,17 @@ export const makeMailboxMaker = ({
       }
 
       if (type === 'package') {
+        const env = /** @type {any} */ (envelope);
         return harden({
           type: 'message',
           ...envelopeRecord,
           strings: envelope.strings,
           names: envelope.names,
           ids: /** @type {FormulaIdentifier[]} */ (envelope.ids),
+          ...(env.phase !== undefined ? { phase: env.phase } : {}),
+          ...(env.aborted === true
+            ? { aborted: true, abortReason: env.abortReason }
+            : {}),
         });
       }
 
@@ -372,7 +378,13 @@ export const makeMailboxMaker = ({
             )}) for every edge name (${q(envelope.names.length)})`,
           );
         }
-        if (envelope.strings.length < envelope.names.length) {
+        // A streaming package message carries no embedded formula
+        // references, so the per-edge-name string invariant only
+        // applies to non-streaming packages.
+        if (
+          /** @type {any} */ (envelope).stream === undefined &&
+          envelope.strings.length < envelope.names.length
+        ) {
           throw new Error(
             `Message must have one string before every value delivered`,
           );
@@ -493,6 +505,7 @@ export const makeMailboxMaker = ({
             )}) for every edge name (${q(formula.names.length)})`,
           );
         }
+        const fp = /** @type {any} */ (formula);
         return harden({
           type: formula.messageType,
           from: formula.from,
@@ -502,6 +515,11 @@ export const makeMailboxMaker = ({
           ids: formula.ids,
           messageId: formula.messageId,
           ...(formula.replyTo !== undefined && { replyTo: formula.replyTo }),
+          ...(fp.phase !== undefined && { phase: fp.phase }),
+          ...(fp.aborted === true && {
+            aborted: true,
+            abortReason: fp.abortReason,
+          }),
           number: messageNumber,
           date: formula.date,
           dismissed: dismissal.promise,
@@ -720,6 +738,58 @@ export const makeMailboxMaker = ({
     };
 
     /**
+     * Allocate a message number, publish the message to subscribers, and
+     * return a hook to persist the durable record later.  Used by
+     * streamReply: the message becomes visible immediately (with its
+     * stream attached), but no formula is persisted until the stream is
+     * finalised.  Phase 1 of designs/daemon-message-streaming.md keeps the
+     * in-flight stream state in memory; abort discards it.
+     *
+     * @param {EnvelopedMessage} envelope
+     */
+    const deliverTransient = async envelope => {
+      let bound;
+      await mailboxStoreJobs.enqueue(async () => {
+        assertMessageEnvelope(envelope);
+        const messageNumber = nextMessageNumber;
+        const date = new Date().toISOString();
+        nextMessageNumber += 1n;
+        await persistNextMessageNumber(nextMessageNumber);
+
+        /** @type {PromiseKit<void>} */
+        const dismissal = makePromiseKit();
+        const dismisser = makeDismisser(messageNumber, dismissal);
+
+        const message = harden({
+          ...envelope,
+          number: messageNumber,
+          date,
+          dismissed: dismissal.promise,
+          dismisser,
+        });
+
+        messages.set(messageNumber, message);
+        messagesTopic.publisher.next(message);
+
+        bound = { messageNumber, date };
+      });
+      /* c8 ignore next */
+      if (bound === undefined) throw new Error('panic: transient deliver lost');
+      const { messageNumber, date } = bound;
+      /**
+       * @param {EnvelopedMessage} finalEnvelope
+       */
+      const persist = async finalEnvelope => {
+        await mailboxStoreJobs.enqueue(async () => {
+          assertMessageEnvelope(finalEnvelope);
+          const formula = makeMessageFormula(finalEnvelope, date);
+          await persistMessage(messageNumber, formula);
+        });
+      };
+      return { messageNumber, date, persist };
+    };
+
+    /**
      * Resolve a formula identifier to its handle.
      * If the id points to an agent (host or guest formula), follows the
      * formula's handle field to provide the actual handle.
@@ -754,8 +824,62 @@ export const makeMailboxMaker = ({
       await E(recipient).receive(envelope, selfId);
       // Send to own inbox.
       if (message.from !== message.to) {
-        await deliver(message);
+        if (/** @type {any} */ (message).stream !== undefined) {
+          const transient = await deliverTransient(message);
+          attachStreamPersistOnSenderSide(message, transient);
+        } else {
+          await deliver(message);
+        }
       }
+    };
+
+    /**
+     * Attach a finalisation hook on the sender side: when the stream ends
+     * or aborts, the assembled text replaces the transient in-memory entry
+     * in durable storage.  Mirrors the recipient-side hook in receive().
+     *
+     * @param {EnvelopedMessage} envelope
+     * @param {{ messageNumber: bigint, persist: (e: EnvelopedMessage) => Promise<void> }} transient
+     */
+    const attachStreamPersistOnSenderSide = (envelope, transient) => {
+      const finalizationRef = /** @type {any} */ (envelope).streamFinalization;
+      void E(finalizationRef)
+        .get()
+        .then(
+          async final => {
+            const finalEnvelope = buildFinalisedEnvelope(envelope, final);
+            await transient.persist(finalEnvelope);
+          },
+          () => {
+            // Finalization rejection: leave the transient entry as-is.
+          },
+        );
+    };
+
+    /**
+     * Build a non-streaming envelope that captures the finalised text and
+     * phase of a stream.  The persisted form drops the live stream Far ref
+     * so the formula record holds only durable, passable data.
+     *
+     * @param {EnvelopedMessage} envelope
+     * @param {import('./types.js').StreamFinalization} final
+     * @returns {EnvelopedMessage}
+     */
+    const buildFinalisedEnvelope = (envelope, final) => {
+      const base = /** @type {any} */ ({ ...envelope });
+      delete base.stream;
+      delete base.streamFinalization;
+      base.strings = [final.text];
+      base.names = [];
+      base.ids = [];
+      if (final.phase !== undefined) {
+        base.phase = final.phase;
+      }
+      if (final.status === 'aborted') {
+        base.aborted = true;
+        base.abortReason = final.reason;
+      }
+      return harden(base);
     };
 
     /** @type {Mail['resolve']} */
@@ -944,6 +1068,51 @@ export const makeMailboxMaker = ({
       await post(to, message);
     };
 
+    /** @type {Mail['streamReply']} */
+    const streamReply = async (messageNumber, options = {}) => {
+      const normalizedMessageNumber = mustParseBigint(messageNumber, 'message');
+      const parent = messages.get(normalizedMessageNumber);
+      if (parent === undefined) {
+        throw new Error(`No such message with number ${q(messageNumber)}`);
+      }
+      if (typeof parent.messageId !== 'string') {
+        throw new Error(`Message ${q(messageNumber)} has no messageId`);
+      }
+      const otherId = parent.from === selfId ? parent.to : parent.from;
+      const initialPhase =
+        options && typeof options.phase === 'string' ? options.phase : undefined;
+
+      const stream = makeMailStream({ initialPhase });
+
+      const newMessageId =
+        /** @type {import('./types.js').FormulaNumber} */ (
+          await randomHex256()
+        );
+      const to = await provideHandle(
+        /** @type {FormulaIdentifier} */ (otherId),
+      );
+
+      const envelope = harden({
+        type: /** @type {const} */ ('package'),
+        strings: [''],
+        names: [],
+        ids: [],
+        messageId: newMessageId,
+        replyTo: parent.messageId,
+        from: selfId,
+        to: /** @type {FormulaIdentifier} */ (otherId),
+        ...(initialPhase !== undefined ? { phase: initialPhase } : {}),
+        stream: stream.reader,
+        streamFinalization: stream.finalizationGetter,
+      });
+
+      // post() routes streaming envelopes through deliverTransient on both
+      // sides; the persist hook fires when the writer ends or aborts.
+      await post(to, envelope);
+
+      return stream.writer;
+    };
+
     /** @type {Mail['dismiss']} */
     const dismiss = async messageNumber => {
       const normalizedMessageNumber = mustParseBigint(messageNumber, 'request');
@@ -1095,6 +1264,26 @@ export const makeMailboxMaker = ({
       // correctly routed back.
       const { node: senderNode } = parseId(senderId);
       const isRemoteSender = !isLocalKey(senderNode);
+      const dispatch =
+        /** @type {any} */ (message).stream !== undefined
+          ? async finalised => {
+              const transient = await deliverTransient(finalised);
+              const finalizationRef = /** @type {any} */ (finalised)
+                .streamFinalization;
+              void E(finalizationRef)
+                .get()
+                .then(
+                  async final => {
+                    const finalEnvelope = buildFinalisedEnvelope(
+                      finalised,
+                      final,
+                    );
+                    await transient.persist(finalEnvelope);
+                  },
+                  () => {},
+                );
+            }
+          : deliver;
       if (isRemoteSender) {
         const externalize = id => {
           const { number, node } = parseId(id);
@@ -1121,9 +1310,9 @@ export const makeMailboxMaker = ({
         if (m.valueId) {
           patched.valueId = externalize(m.valueId);
         }
-        await deliver(harden(patched));
+        await dispatch(harden(patched));
       } else {
-        await deliver(message);
+        await dispatch(message);
       }
     };
 
@@ -1374,6 +1563,7 @@ export const makeMailboxMaker = ({
       request,
       send,
       reply,
+      streamReply,
       resolve,
       reject,
       dismiss,

@@ -1226,6 +1226,220 @@ test('reply links to parent message', async t => {
   t.is(replyMessage.replyTo, hostMessage.messageId);
 });
 
+// Phase 1 of designs/daemon-message-streaming.md.  streamReply opens a
+// streaming message; the recipient consumes a sequence of StreamEvent
+// objects via the message.stream async-iterator exo until the writer
+// ends or aborts.
+
+/**
+ * Drain a recipient-side message's `stream` (an AsyncIterator exo
+ * exposed over CapTP via next/return/throw) into an array of
+ * StreamEvent objects.
+ *
+ * @param {any} streamRef
+ */
+const collectStreamEvents = async streamRef => {
+  const events = [];
+  for await (const event of makeRefIterator(streamRef)) {
+    events.push(event);
+  }
+  return events;
+};
+
+test('streamReply delivers a streaming message with append, phase, and end events', async t => {
+  const { host } = await prepareHost(t);
+
+  const guest = E(host).provideGuest('guest');
+  const hostMessages = E(host).followMessages();
+  const guestMessages = E(guest).followMessages();
+
+  await E(guest).send('@host', ['question'], [], []);
+  const [{ value: hostMessage }] = await Promise.all([
+    E(hostMessages).next(),
+    E(guestMessages).next(),
+  ]);
+  t.is(hostMessage.type, 'package');
+
+  const writer = await E(host).streamReply(hostMessage.number, {
+    phase: 'thinking',
+  });
+
+  const { value: streamingOnGuest } = await E(guestMessages).next();
+  t.is(streamingOnGuest.type, 'package');
+  t.is(streamingOnGuest.replyTo, hostMessage.messageId);
+  t.truthy(streamingOnGuest.stream, 'streaming reply carries a stream ref');
+
+  const eventsP = collectStreamEvents(streamingOnGuest.stream);
+
+  await E(writer).append('Hello, ');
+  await E(writer).setPhase('responding');
+  await E(writer).append('world!');
+  await E(writer).end();
+
+  const events = await eventsP;
+  t.deepEqual(events, [
+    { type: 'append', text: 'Hello, ' },
+    { type: 'phase', phase: 'responding' },
+    { type: 'append', text: 'world!' },
+    { type: 'end' },
+  ]);
+});
+
+test('streamReply: empty stream (open + immediate end)', async t => {
+  const { host } = await prepareHost(t);
+
+  const guest = E(host).provideGuest('guest');
+  const guestMessages = E(guest).followMessages();
+  const hostMessages = E(host).followMessages();
+
+  await E(guest).send('@host', ['ping'], [], []);
+  const { value: hostMessage } = await E(hostMessages).next();
+  await E(guestMessages).next(); // discard guest's own outgoing
+
+  const writer = await E(host).streamReply(hostMessage.number);
+
+  const { value: streamingOnGuest } = await E(guestMessages).next();
+  const eventsP = collectStreamEvents(streamingOnGuest.stream);
+
+  await E(writer).end();
+
+  const events = await eventsP;
+  t.deepEqual(events, [{ type: 'end' }]);
+});
+
+test('streamReply: phase-only stream emits no append events', async t => {
+  const { host } = await prepareHost(t);
+
+  const guest = E(host).provideGuest('guest');
+  const guestMessages = E(guest).followMessages();
+  const hostMessages = E(host).followMessages();
+
+  await E(guest).send('@host', ['hello'], [], []);
+  const { value: hostMessage } = await E(hostMessages).next();
+  await E(guestMessages).next();
+
+  const writer = await E(host).streamReply(hostMessage.number);
+
+  const { value: streamingOnGuest } = await E(guestMessages).next();
+  const eventsP = collectStreamEvents(streamingOnGuest.stream);
+
+  await E(writer).setPhase('thinking');
+  await E(writer).setPhase('responding');
+  await E(writer).end();
+
+  const events = await eventsP;
+  t.deepEqual(events, [
+    { type: 'phase', phase: 'thinking' },
+    { type: 'phase', phase: 'responding' },
+    { type: 'end' },
+  ]);
+});
+
+test('streamReply: abort after partial append surfaces the partial content', async t => {
+  const { host } = await prepareHost(t);
+
+  const guest = E(host).provideGuest('guest');
+  const guestMessages = E(guest).followMessages();
+  const hostMessages = E(host).followMessages();
+
+  await E(guest).send('@host', ['hello'], [], []);
+  const { value: hostMessage } = await E(hostMessages).next();
+  await E(guestMessages).next();
+
+  const writer = await E(host).streamReply(hostMessage.number);
+
+  const { value: streamingOnGuest } = await E(guestMessages).next();
+  const eventsP = collectStreamEvents(streamingOnGuest.stream);
+
+  await E(writer).append('partial ');
+  await E(writer).append('content');
+  await E(writer).abort('upstream timeout');
+
+  const events = await eventsP;
+  t.deepEqual(events, [
+    { type: 'append', text: 'partial ' },
+    { type: 'append', text: 'content' },
+    { type: 'abort', reason: 'upstream timeout' },
+  ]);
+});
+
+test('streamReply: recipient cancels iteration mid-stream; sender continues', async t => {
+  const { host } = await prepareHost(t);
+
+  const guest = E(host).provideGuest('guest');
+  const guestMessages = E(guest).followMessages();
+  const hostMessages = E(host).followMessages();
+
+  await E(guest).send('@host', ['hello'], [], []);
+  const { value: hostMessage } = await E(hostMessages).next();
+  await E(guestMessages).next();
+
+  const writer = await E(host).streamReply(hostMessage.number);
+
+  const { value: streamingOnGuest } = await E(guestMessages).next();
+
+  const iterator = makeRefIterator(streamingOnGuest.stream);
+
+  await E(writer).append('first');
+  const r1 = await iterator.next();
+  t.deepEqual(r1.value, { type: 'append', text: 'first' });
+
+  // Recipient stops listening; the sender's writer still operates.
+  await iterator.return(undefined);
+  const r2 = await iterator.next();
+  t.is(r2.done, true);
+
+  // Sender continues; no error from the writer's perspective.
+  await E(writer).append('second');
+  await E(writer).end();
+
+  // The persisted final record reflects everything the writer emitted,
+  // regardless of recipient cancellation.
+  t.pass();
+});
+
+test('streamReply persists the finalised text in the recipient inbox after end()', async t => {
+  const { host } = await prepareHost(t);
+
+  const guest = E(host).provideGuest('guest');
+  const guestMessages = E(guest).followMessages();
+  const hostMessages = E(host).followMessages();
+
+  await E(guest).send('@host', ['question'], [], []);
+  const { value: hostMessage } = await E(hostMessages).next();
+  await E(guestMessages).next();
+
+  const writer = await E(host).streamReply(hostMessage.number);
+  const { value: streamingOnGuest } = await E(guestMessages).next();
+  const streamingNumber = streamingOnGuest.number;
+
+  // Drain events as they arrive so the writer can complete.
+  const eventsP = collectStreamEvents(streamingOnGuest.stream);
+  await E(writer).append('the answer ');
+  await E(writer).append('is 42');
+  await E(writer).end();
+  await eventsP;
+
+  // The recipient's persisted view of the stream is a normal package
+  // message whose @strings reads the assembled final text.  The persist
+  // hook fires asynchronously after end() resolves on the writer side,
+  // so poll briefly for the lookup to succeed.
+  let streamingHub;
+  await waitForCondition(async () => {
+    try {
+      streamingHub = await E(guest).lookup([
+        '@mail',
+        String(streamingNumber),
+        '@strings',
+      ]);
+      return true;
+    } catch {
+      return false;
+    }
+  });
+  t.deepEqual(streamingHub, ['the answer is 42']);
+});
+
 test('message hub avoids kebab-case reply metadata names', async t => {
   const { host } = await prepareHost(t);
 
