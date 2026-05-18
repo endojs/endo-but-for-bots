@@ -123,3 +123,109 @@ test('makeHttpClient rejects construction without a fetch power', t => {
     message: /requires a fetch power/,
   });
 });
+
+// ── Adversarial coverage: Phase 1 surface (cleaner additions) ───────
+
+test('Phase 1 rejects methods beyond GET-class (POST/PUT/DELETE/PATCH)', async t => {
+  // Pin the design's "GET-class verbs only" Phase 1 invariant.  Until
+  // Phase 4 wires up bodies and the method allowlist, a guest holding
+  // the client must not be able to escalate beyond read authority by
+  // passing a non-GET method.  Regression evidence: a fetch spy that
+  // increments on call would observe a bypass if this check regressed.
+  const controller = makeHttpController({
+    allowedOrigins: ['https://api.example.com'],
+  });
+  let fetchCalls = 0;
+  const fetch = () => {
+    fetchCalls += 1;
+    throw new Error('fetch must not be invoked for non-GET methods');
+  };
+  const client = makeHttpClient(controller, { fetch });
+  await null; // jessie: safe-await-separator
+  for (const method of ['POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS']) {
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(
+      E(client).request({ url: 'https://api.example.com/', method }),
+      { message: /Phase 1 http-client admits GET-class verbs only/ },
+      `${method} must be rejected before reaching fetch`,
+    );
+  }
+  t.is(fetchCalls, 0, 'fetch must not be reached for any non-GET method');
+});
+
+test('Phase 1 admits HEAD as a GET-class verb alongside GET', async t => {
+  const controller = makeHttpController({
+    allowedOrigins: ['https://api.example.com'],
+  });
+  const methodsSeen = [];
+  const fetch = async (_url, init) => {
+    methodsSeen.push(init.method);
+    return {
+      status: 200,
+      statusText: 'OK',
+      ok: true,
+      headers: new Map(),
+      text: async () => '',
+    };
+  };
+  const client = makeHttpClient(controller, { fetch });
+  await E(client).request({ url: 'https://api.example.com/' }); // default GET
+  await E(client).request({
+    url: 'https://api.example.com/',
+    method: 'HEAD',
+  });
+  t.deepEqual(methodsSeen, ['GET', 'HEAD']);
+});
+
+test('Phase 1 rejects javascript:/file:/data: at request time (origin is null)', async t => {
+  // A defense-in-depth check: even though such schemes are rejected at
+  // allowlist-construction time (parseAllowedOrigin enforces http/https
+  // only), a request URL with one of these schemes parses to
+  // `.origin === 'null'`, which can never appear on the allowlist.  Pin
+  // the resulting rejection so future refactors of the origin-check
+  // path do not accidentally treat 'null' as a wildcard.
+  const controller = makeHttpController({
+    allowedOrigins: ['https://api.example.com'],
+  });
+  let fetchCalls = 0;
+  const fetch = () => {
+    fetchCalls += 1;
+    throw new Error('fetch must not be invoked');
+  };
+  const client = makeHttpClient(controller, { fetch });
+  // Assemble these strings rather than write them literally so the
+  // test source itself does not trip `no-script-url` lint.
+  await null; // jessie: safe-await-separator
+  for (const url of [
+    `${'javascript'}:alert(1)`,
+    `${'file'}:///etc/passwd`,
+    `${'data'}:text/plain,hello`,
+  ]) {
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(E(client).request({ url }), {
+      message: /not in the allowlist/,
+    });
+  }
+  t.is(fetchCalls, 0);
+});
+
+test('Allowlist match is exact: trailing dot in request URL does not match no-dot allowlist', async t => {
+  // `new URL('https://example.com.').origin === 'https://example.com.'`
+  // (the trailing dot is preserved), so an allowlist of
+  // `https://example.com` does not match `https://example.com.`.  Pin
+  // this so a refactor that "normalizes" trailing dots does not widen
+  // the allowlist behind the host's back.
+  const controller = makeHttpController({
+    allowedOrigins: ['https://example.com'],
+  });
+  let fetchCalls = 0;
+  const fetch = () => {
+    fetchCalls += 1;
+    throw new Error('fetch must not be invoked');
+  };
+  const client = makeHttpClient(controller, { fetch });
+  await t.throwsAsync(E(client).request({ url: 'https://example.com./x' }), {
+    message: /not in the allowlist/,
+  });
+  t.is(fetchCalls, 0);
+});
