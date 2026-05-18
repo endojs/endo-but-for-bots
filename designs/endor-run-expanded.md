@@ -3,13 +3,15 @@
 | | |
 |---|---|
 | **Created** | 2026-04-17 |
-| **Updated** | 2026-04-17 |
+| **Updated** | 2026-05-18 |
 | **Author** | Kris Kowal (prompted) |
 | **Status** | In Progress |
 
 ## Status
 
-Phases 1-2 implemented:
+Phases 1-2 and Phase 4 (no-dependency case) implemented; Phase 3
+is in review on PR #278; Phase 5 (entry-point with dependency
+resolution) remains.
 
 - **Phase 1**: `ContentStore` is available standalone via
   `endo::cas::ContentStore::open()` (implemented in
@@ -21,9 +23,74 @@ Phases 1-2 implemented:
   `endor run --cas <hash>` re-runs from CAS. `--no-cas` preserves
   legacy behavior. `run_xs_archive_loaded` added to xsnap for
   executing pre-loaded archives.
+- **Phase 4** (no-dependency case):
+  `rust/endo/src/cas_archive.rs` — `ingest_entry_point(cas, path)`
+  synthesises a one-compartment, one-module archive around a
+  single source file, stores both the synthesised
+  `compartment-map.json` and the entry source as CAS blobs, and
+  returns the same `IngestedArchive` shape Phases 2 and 3 use.
+  `rust/endo/src/bin/endor.rs` — `endor run <entry.js>` detects
+  source-extension inputs (`.js`, `.mjs`, `.cjs`, `.json`) via
+  the new `classify_run_input` helper and dispatches to
+  `cmd_run_entry_point_with_cas`. The ZIP-versus-entry-point
+  discrimination follows the design's "input form detection by
+  file type, not flags" rule: extension first, then a four-byte
+  `PK\x03\x04` magic check for extension-less ZIPs.
+  Execution converges with Phases 2 and 3 on
+  `run_xs_archive_loaded`, so the same XS install path runs all
+  three forms.
 
-Remaining: Phase 3 (directory input), Phase 4-5 (entry-point with
-compartment mapper).
+### Deviation from the design's Option B (deferred to Phase 5)
+
+The design proposes an XS-hosted compartment mapper bundle
+(Option B § Compartment mapper implementation) as the chosen
+near-term approach for Phase 4. For the no-dependency case the
+design pins for Phase 4 ("`endor run hello.js` with a simple
+module that has no dependencies"), the XS-hosted mapper would
+walk an empty `package.json` and produce exactly the
+one-compartment, one-module shape `ingest_entry_point`
+synthesises directly. The Rust-side synthesis is the smallest
+change that satisfies Phase 4's acceptance criterion without
+landing the (substantial) bundling, fs-power-wiring, and
+two-machine-handshake infrastructure the XS-hosted mapper
+requires.
+
+The XS-hosted mapper becomes load-bearing in Phase 5, where it
+walks `package.json`, follows `dependencies`, and resolves a
+non-trivial graph. Phase 5 lands the bundle and the
+mapper-machine handshake; at that point Phase 4's synthetic
+helper can either remain (as the fast path for the
+no-dependency case) or be replaced by a single XS-mapper
+invocation with an empty resolver. The choice is a Phase 5
+design decision and is not pre-empted here.
+
+### Cross-PR coordination with Phase 3
+
+Phase 3 (directory input, PR #278) is in review against `llm` at
+this PR's open time; both Phase 3 and Phase 4 branch off `llm`
+and target `llm`. The two PRs touch `cas_archive.rs` and
+`endor.rs` in non-overlapping regions: Phase 3 adds
+`ingest_directory` and the `RunInput::Directory` dispatch
+branch; Phase 4 adds `ingest_entry_point` and the
+`RunInput::EntryPoint` dispatch branch. When Phase 3 lands
+first, this PR's rebase needs:
+
+1. The `RunInput` enum gains a `Directory` variant; the
+   classifier returns it when `p.is_dir()`.
+2. The CLI dispatch grows a `RunInput::Directory` arm calling
+   `cmd_run_directory_with_cas`.
+3. The `encode_manifest_sorted` determinism helper Phase 3
+   introduces should be used by `ingest_entry_point`'s tree
+   serialisation calls so the synthesised root hash is
+   reproducible across runs. This is not required by Phase 4's
+   own tests (the synthetic map has one or two entries and
+   `HashMap` iteration is effectively stable per-run for those
+   sizes) but it brings entry-point ingestion under the same
+   determinism contract as the ZIP and directory paths.
+
+When this PR lands first, Phase 3's rebase needs the mirror
+change: insert the `Directory` arm alongside the existing
+`EntryPoint` arm in the classifier and dispatch.
 
 ## What is the Problem Being Solved?
 
@@ -289,13 +356,29 @@ undesirable (e.g., read-only filesystems).
 
 ### Phase 4: Entry-point module input
 
-1. Bundle the compartment mapper for XS execution.
-2. Implement the two-phase flow: map in XS, then execute
-   in a fresh XS machine.
-3. CAS ingestion during the mapping phase writes sources
-   directly to the CAS.
+**Status**: Implemented for the no-dependency case in Rust;
+the XS-hosted mapper is deferred to Phase 5 where the bundle
+and the dependency walk become load-bearing together. See the
+*Deviation from the design's Option B* note in the Status
+section.
+
+1. (Deferred to Phase 5.) Bundle the compartment mapper for
+   XS execution.
+2. (Deferred to Phase 5.) Implement the two-phase flow: map
+   in XS, then execute in a fresh XS machine.
+3. Synthesise a one-compartment, one-module
+   `compartment-map.json` directly in Rust. CAS ingestion
+   stores the entry source and the synthesised map as blobs;
+   the root tree mirrors `ingest_archive`'s layout so the
+   shared `load_archive_from_cas` reader handles all input
+   forms identically.
 4. **Test**: `endor run hello.js` with a simple module that
-   has no dependencies.
+   has no dependencies. Eight new tests in
+   `cas_archive::tests` cover the synthesis, the root tree
+   layout, the CAS round-trip, the parser-by-extension
+   mapping, the rejection paths (missing file, directory
+   input, unsupported extension), and the shape equivalence
+   with the ZIP path.
 
 ### Phase 5: Entry-point with dependencies
 
