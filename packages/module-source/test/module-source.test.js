@@ -164,6 +164,7 @@ function initialize(t, source, options = {}) {
     imports: updateImports,
     liveVar: liveUpdaters,
     onceVar: onceUpdaters,
+    defineProperty: Object.defineProperty,
     importMeta: { url: 'file://meta.url' },
   });
 
@@ -793,6 +794,21 @@ test('export namespace as from re-export end-to-end', t => {
     ]),
   });
   t.deepEqual(namespace.ns, { apples: 'apples', oranges: 'oranges' });
+});
+
+test('hoisted function name survives Object import', t => {
+  const { namespace } = initialize(
+    t,
+    `
+      import { Object } from './object.js';
+      export function F() {}
+    `,
+    {
+      imports: new Map([['./object.js', new Map([['Object', () => null]])]]),
+    },
+  );
+
+  t.is(namespace.F.name, 'F');
 });
 
 test('source map generation', t => {
