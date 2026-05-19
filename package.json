@@ -91,5 +91,8 @@
       "@ipshipyard/node-datachannel": true,
       "better-sqlite3": true
     }
+  },
+  "resolutions": {
+    "partial-json@npm:^0.1.7": "patch:partial-json@npm%3A0.1.7#~/.yarn/patches/partial-json-npm-0.1.7-0621cfbf4c.patch"
   }
 }

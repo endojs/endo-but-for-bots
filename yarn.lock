@@ -1993,6 +1993,7 @@ __metadata:
   resolution: "@endo/genie@workspace:packages/genie"
   dependencies:
     "@endo/cli": "workspace:^"
+    "@endo/compartment-mapper": "workspace:^"
     "@endo/daemon": "workspace:^"
     "@endo/errors": "workspace:^"
     "@endo/eventual-send": "workspace:^"
@@ -15800,10 +15801,17 @@ __metadata:
   languageName: node
   linkType: hard
 
-"partial-json@npm:^0.1.7":
+"partial-json@npm:0.1.7":
   version: 0.1.7
   resolution: "partial-json@npm:0.1.7"
   checksum: 10c0/cd5f994c3a5ca903918c028a6947ebc1d46459234c1c57c7ab98e234d8dca49cb46b05a71889ee422b39d1f66b95c59a5ce3a6ae06966aca95a8960ad20c12d2
+  languageName: node
+  linkType: hard
+
+"partial-json@patch:partial-json@npm%3A0.1.7#~/.yarn/patches/partial-json-npm-0.1.7-0621cfbf4c.patch":
+  version: 0.1.7
+  resolution: "partial-json@patch:partial-json@npm%3A0.1.7#~/.yarn/patches/partial-json-npm-0.1.7-0621cfbf4c.patch::version=0.1.7&hash=7e8e8c"
+  checksum: 10c0/c9e1106dc5d2f37fc611c0c3da5379aa60f85180e023aa1f0b2e1302884c3e71a0d516b7af731a006a0865f668cbbdb9625cb64ae9341b75cd3628d6646cae9d
   languageName: node
   linkType: hard
 
