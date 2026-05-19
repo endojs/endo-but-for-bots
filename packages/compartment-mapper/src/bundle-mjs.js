@@ -134,6 +134,7 @@ ${exportsCellRecord(__fixedExportMap__)}${exportsCellRecord(
     onceVar: {
 ${importsCellSetter(__fixedExportMap__, index)}\
     },
+    defineProperty,
     importMeta: {},
   });
 `;

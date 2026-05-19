@@ -215,6 +215,39 @@ test('live binding through reexporting intermediary', async t => {
   await compartment.import('./main.js');
 });
 
+test('cycle through reexport-all intermediary', async t => {
+  t.plan(1);
+
+  const makeImportHook = makeNodeImporter({
+    'https://example.com/barrel.js': `
+      export * from './leaf.js';
+      export * from './cycle.js';
+    `,
+    'https://example.com/leaf.js': `
+      export const answer = 42;
+    `,
+    'https://example.com/cycle.js': `
+      import { answer } from './barrel.js';
+      export const getObserved = () => answer;
+    `,
+    'https://example.com/main.js': `
+      import { getObserved } from './barrel.js';
+      export default getObserved();
+    `,
+  });
+
+  const compartment = new Compartment({
+    resolveHook: resolveNode,
+    importHook: makeImportHook('https://example.com'),
+    __noNamespaceBox__: true,
+    __options__: true,
+  });
+
+  const namespace = await compartment.import('./main.js');
+
+  t.is(namespace.default, 42);
+});
+
 test('export name as default', async t => {
   t.plan(1);
 

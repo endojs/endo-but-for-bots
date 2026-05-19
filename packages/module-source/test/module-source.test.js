@@ -164,6 +164,7 @@ function initialize(t, source, options = {}) {
     imports: updateImports,
     liveVar: liveUpdaters,
     onceVar: onceUpdaters,
+    defineProperty: Object.defineProperty,
     importMeta: { url: 'file://meta.url' },
   });
 
@@ -728,6 +729,34 @@ test('export name as default from', t => {
     ],
   });
   t.deepEqual(exports, ['default', 'less', 'more'].sort());
+});
+
+test('export namespace from', t => {
+  const { __fixedExportMap__, __liveExportMap__, __reexportMap__, exports } =
+    new ModuleSource(`
+      export * as meaning from './meaning.js';
+    `);
+  t.deepEqual(__fixedExportMap__, {});
+  t.deepEqual(__liveExportMap__, {});
+  t.deepEqual(__reexportMap__, {
+    './meaning.js': [['*', 'meaning']],
+  });
+  t.deepEqual(exports, ['meaning']);
+});
+
+test('hoisted function name survives Object import', t => {
+  const { namespace } = initialize(
+    t,
+    `
+      import { Object } from './object.js';
+      export function F() {}
+    `,
+    {
+      imports: new Map([['./object.js', new Map([['Object', () => null]])]]),
+    },
+  );
+
+  t.is(namespace.F.name, 'F');
 });
 
 test('source map generation', t => {
