@@ -730,6 +730,19 @@ test('export name as default from', t => {
   t.deepEqual(exports, ['default', 'less', 'more'].sort());
 });
 
+test('export namespace from', t => {
+  const { __fixedExportMap__, __liveExportMap__, __reexportMap__, exports } =
+    new ModuleSource(`
+      export * as meaning from './meaning.js';
+    `);
+  t.deepEqual(__fixedExportMap__, {});
+  t.deepEqual(__liveExportMap__, {});
+  t.deepEqual(__reexportMap__, {
+    './meaning.js': [['*', 'meaning']],
+  });
+  t.deepEqual(exports, ['meaning']);
+});
+
 test('source map generation', t => {
   t.plan(5);
   const { __syncModuleProgram__ } = new ModuleSource(`'Hello, World!'`, {
