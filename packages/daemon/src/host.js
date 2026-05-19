@@ -1411,6 +1411,26 @@ export const makeHostMaker = ({
     };
 
     /**
+     * Push a trace record from a network caplet that holds this host
+     * as its `@agent` powers. The daemon overwrites the scope as
+     * `@network:${hostId}` so the caplet cannot forge entries under
+     * another scope.
+     *
+     * @param {import('./trace-aggregator.js').TraceRecord} record
+     */
+    const reportTrace = async record => {
+      if (traceAggregator === undefined) return;
+      try {
+        traceAggregator.record(`@network:${hostId}`, record);
+      } catch (err) {
+        console.error(
+          `Endo network trace push from host ${hostId} rejected:`,
+          /** @type {Error} */ (err).message,
+        );
+      }
+    };
+
+    /**
      * Returns a snapshot of the formula dependency graph for all formulas
      * reachable from this agent's pet store entries.
      */
@@ -1508,6 +1528,7 @@ export const makeHostMaker = ({
       getFormulaGraph,
       // Traces
       traces,
+      reportTrace,
     };
 
     const hostExo = makeExo(

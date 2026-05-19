@@ -6,6 +6,8 @@ import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
 import { makePromiseKit } from '@endo/promise-kit';
 
+import { recordInboundErrorId } from './error-trace.js';
+
 /**
  * @typedef {object} ConnectionOptions
  * @property {string} gateway - Gateway address (host:port)
@@ -85,7 +87,12 @@ export const connectToGateway = ({ gateway, agent }) => {
       ws.send(bytes);
     };
 
-    const captp = makeCapTP('Chat', send, clientBootstrap);
+    const captp = makeCapTP('Chat', send, clientBootstrap, {
+      // Capture every decoded error's wire-level errorId so the chat
+      // UI can later look up the corresponding trace through the
+      // host's privileged `traces` facet.
+      marshalLoadError: recordInboundErrorId,
+    });
     dispatch = captp.dispatch;
     abort = captp.abort;
 

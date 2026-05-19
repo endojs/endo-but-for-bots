@@ -22,6 +22,7 @@ import {
 } from './command-registry.js';
 import { createMessagePicker } from './message-picker.js';
 import { createHelpModal } from './help-modal.js';
+import { fetchTraceForError, formatTraceReport } from './error-trace.js';
 import { kbd, modKey } from './platform-keys.js';
 
 /**
@@ -263,11 +264,8 @@ export const chatBarComponent = (
     showError: error => {
       const message = error?.message || String(error) || 'Unknown error';
       // Use command error element in command mode, chat error otherwise
-      if (mode === 'inline') {
-        $commandError.textContent = message;
-      } else {
-        $error.textContent = message;
-      }
+      const $target = mode === 'inline' ? $commandError : $error;
+      $target.textContent = message;
       console.error(`[Chat] Command error:`, message);
       const { errors } = /** @type {{ errors?: Error[] }} */ (error);
       if (errors?.length) {
@@ -281,6 +279,31 @@ export const chatBarComponent = (
           /** @type {Error} */ (error.cause)?.message || error.cause,
         );
       }
+      // Capture which target this error was rendered into so a late
+      // trace lookup doesn't overwrite a different error rendered in
+      // the meantime.
+      const tokenMessage = message;
+      fetchTraceForError({ powers }, error).then(
+        report => {
+          if (report === undefined) return;
+          if ($target.textContent !== tokenMessage) return;
+          const formatted = formatTraceReport(report);
+          $target.textContent = '';
+          const $msg = document.createElement('div');
+          $msg.className = 'chat-error-summary';
+          $msg.textContent = message;
+          const $stack = document.createElement('pre');
+          $stack.className = 'chat-error-trace';
+          $stack.textContent = formatted;
+          $target.appendChild($msg);
+          $target.appendChild($stack);
+          // Also dump to dev console for copy/paste convenience.
+          console.error(`[Chat] Worker trace:\n${formatted}`);
+        },
+        traceError => {
+          console.error(`[Chat] trace lookup failed:`, traceError);
+        },
+      );
     },
   });
 

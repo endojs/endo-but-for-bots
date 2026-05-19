@@ -1,6 +1,8 @@
 // @ts-check
 /* global globalThis, process */
 
+import { format as formatUtil } from 'util';
+
 import harden from '@endo/harden';
 import { E, Far } from '@endo/far';
 import { makeExo } from '@endo/exo';
@@ -224,6 +226,188 @@ export const makeWorkerFacet = ({ cancel }) => {
 };
 
 /**
+ * Privileged hook that the SES shim exposes on the start-compartment
+ * `globalThis` for `@endo/ses-ava`. Given a Logger function, it
+ * returns a Console-shaped object whose methods unredact the Error
+ * details that SES error-taming hides — stack and annotation trail
+ * included.
+ *
+ * The worker is the start compartment of its Node.js process, so the
+ * hook is reachable here. This is the same mechanism `ses-ava` uses
+ * to surface real stacks in test failures and is the load-bearing
+ * piece that lets the trace facility return useful information
+ * without requiring `LOCKDOWN_ERROR_TAMING=unsafe`.
+ */
+const MAKE_CAUSAL_CONSOLE_KEY = Symbol.for(
+  'MAKE_CAUSAL_CONSOLE_FROM_LOGGER_KEY_FOR_SES_AVA',
+);
+
+const optMakeCausalConsoleFromLogger =
+  /** @type {((logger: (...args: unknown[]) => void) => Console) | undefined} */ (
+    /** @type {any} */ (globalThis)[MAKE_CAUSAL_CONSOLE_KEY]
+  );
+
+/**
+ * Side-table of unfiltered V8 callsites for every Error V8 has lazily
+ * formatted in this worker. SES's tame `prepareStackTrace` returns
+ * `''` and stashes callsites in a closed-over WeakMap reachable only
+ * via `globalThis.getStackString`, which then reapplies the "concise"
+ * filter. By layering our own preparer on top, we capture the
+ * `safeV8SST` attenuation (still SES-safe — only the permitted
+ * callsite accessors are exposed) before the filter runs and keep
+ * the records keyed by the original error.
+ *
+ * Capturing here, at worker startup, is the only point where we run
+ * before V8 lazily fills `error.stack` as a data property. After that
+ * the slot is locked in by SES's harden of the decoded error, and our
+ * preparer never gets another chance for that error.
+ *
+ * @type {WeakMap<Error, unknown[]>}
+ */
+const callSitesByError = new WeakMap();
+{
+  /** @type {any} */
+  const ErrorRef = Error;
+  // SES's setter wraps any function we install: the wrapper stashes
+  // the unattenuated SST in its own private WeakMap and then calls us
+  // with `safeV8SST(sst)`. So `sst` here is already attenuated to the
+  // accessors SES considers safe to expose to user code.
+  const previousPrepare = ErrorRef.prepareStackTrace;
+  ErrorRef.prepareStackTrace = (err, sst) => {
+    if (
+      err !== null &&
+      typeof err === 'object' &&
+      Array.isArray(sst) &&
+      !callSitesByError.has(err)
+    ) {
+      callSitesByError.set(err, sst);
+    }
+    if (typeof previousPrepare === 'function') {
+      return previousPrepare(err, sst);
+    }
+    return '';
+  };
+}
+
+/**
+ * Format the call sites we captured for `err` into a stack-string,
+ * bypassing SES's "concise" `filterFileName`. This shows compartment
+ * frames that the default replay drops (e.g., `<anonymous>` frames
+ * produced by `compartment.evaluate`).
+ *
+ * Returns `undefined` when no call sites were captured for this
+ * error, e.g., the error was constructed before our preparer hook
+ * was installed or never had its stack lazily formatted.
+ *
+ * @param {Error} err
+ * @returns {string | undefined}
+ */
+const formatCapturedThrowSiteStack = err => {
+  // Force V8 to invoke `prepareStackTrace` if it hasn't already, so
+  // freshly-thrown errors get into our side-table.
+  void /** @type {Error & { stack?: string }} */ (err).stack;
+  const sst = callSitesByError.get(err);
+  if (sst === undefined || sst.length === 0) return undefined;
+  return sst.map(cs => `  at ${cs}`).join('\n');
+};
+
+/**
+ * Format an error to a multi-line string that includes the unredacted
+ * stack, error tag, and any accumulated assert annotations, by
+ * replaying it through a SES causal console wired to a string-buffer
+ * logger.
+ *
+ * Returns `undefined` when the SES privileged hook is unavailable
+ * (e.g. running without lockdown) so the caller can fall back to
+ * `err.stack`.
+ *
+ * @param {Error} err
+ * @returns {string | undefined}
+ */
+const formatErrorWithCausalConsole = err => {
+  if (optMakeCausalConsoleFromLogger === undefined) return undefined;
+  /** @type {string[]} */
+  const lines = [];
+  let causalConsole;
+  try {
+    causalConsole = optMakeCausalConsoleFromLogger((...args) => {
+      lines.push(formatUtil(...args));
+    });
+    causalConsole.error(err);
+  } catch (formatError) {
+    return undefined;
+  }
+  return lines.join('\n');
+};
+
+/**
+ * Capture the unfiltered V8 callsites of a freshly-constructed Error
+ * at the `anchorFn` boundary, by transiently installing our own
+ * `Error.prepareStackTrace` and forcing it to run.
+ *
+ * SES's default `prepareStackTrace` drops every callsite whose
+ * `fileName` is null — exactly the frames `compartment.evaluate`
+ * produces. The privileged `globalThis.getStackString` uses the same
+ * filter, so neither path can surface the throw site of a confined
+ * eval directly. By installing our own preparer for the brief window
+ * we read `.stack`, we receive the `safeV8SST` attenuation (still
+ * security-safe) but bypass the filename filter.
+ *
+ * SES wraps assignments to `Error.prepareStackTrace` so the SST we
+ * receive is already attenuated; we never see unattenuated callsites.
+ * The override is short-lived — `finally` restores the previous
+ * preparer so concurrent stack reads landing on another turn do not
+ * observe our hook.
+ *
+ * The returned stack reflects the worker frames at the point this
+ * helper was called, not the original throw site. For the throw site
+ * of a confined eval, V8 populated `err.stack=''` lazily during
+ * marshal encoding and hardening locked in that data property; the
+ * unfiltered callsites for the original error are not addressable
+ * after that point. The worker emission frames are still useful: they
+ * pinpoint the path the error took out of the worker (compartment →
+ * marshal → CapTP → daemon).
+ *
+ * Returns `undefined` when the runtime is not V8 or when the override
+ * is unavailable.
+ *
+ * @param {Function} anchorFn V8 omits frames at and above `anchorFn`;
+ *   pass the function holding the call site so the trace starts where
+ *   the worker observed the error.
+ * @returns {string | undefined}
+ */
+const captureWorkerEmissionStack = anchorFn => {
+  /** @type {any} */
+  const ErrorRef = Error;
+  if (typeof ErrorRef.captureStackTrace !== 'function') return undefined;
+  const captureSite = {};
+  try {
+    ErrorRef.captureStackTrace(captureSite, anchorFn);
+  } catch (captureError) {
+    return undefined;
+  }
+  const previous = ErrorRef.prepareStackTrace;
+  /** @type {string | undefined} */
+  let formatted;
+  try {
+    ErrorRef.prepareStackTrace = (_subject, sst) => {
+      // Stringifying each callsite is permitted by SES's safeV8SST
+      // attenuation. We deliberately do NOT apply the SES "concise"
+      // filename filter here; the worker is privileged code and the
+      // record never crosses into a confined guest.
+      formatted = sst.map(cs => `  at ${cs}`).join('\n');
+      return formatted;
+    };
+    void /** @type {{ stack?: string }} */ (captureSite).stack;
+  } catch (captureError) {
+    formatted = undefined;
+  } finally {
+    ErrorRef.prepareStackTrace = previous;
+  }
+  return formatted;
+};
+
+/**
  * Build a `marshalSaveError` callback that pushes a worker-side trace
  * record to the daemon for every outbound error this worker's CapTP
  * marshal serializes.
@@ -240,22 +424,55 @@ export const makeWorkerFacet = ({ cancel }) => {
  */
 const makeWorkerPushTrace = (getDaemonFacet, site) => {
   /**
+   * Named function expression so `pushTrace` is bindable inside its
+   * own body without polluting the outer scope. We pass it as the
+   * anchor to `captureWorkerEmissionStack` so V8 omits frames at and
+   * above this function from the captured stack.
+   *
    * @param {Error} err
    * @param {string} [errorId]
    */
-  return (err, errorId) => {
+  return function pushTrace(err, errorId) {
     if (errorId === undefined) return;
     const daemonFacet = getDaemonFacet();
     if (daemonFacet === undefined) return;
-    let stack = '';
-    if (typeof err.stack === 'string' && err.stack.length > 0) {
+    // Build the trace's stack field from up to three best-effort
+    // sources:
+    //
+    //   1. The unfiltered call sites our `prepareStackTrace` hook
+    //      captured at the original throw site. This is the answer
+    //      to "where did this error come from in the worker?",
+    //      including frames inside `compartment.evaluate` that SES's
+    //      default replay drops.
+    //   2. The worker frames at this emission site, captured via a
+    //      transient `Error.prepareStackTrace` override on a fresh
+    //      anchor object. Shows the path the error took out of the
+    //      worker (compartment → marshal → CapTP) and is useful even
+    //      when (1) is unavailable.
+    //   3. The SES causal console replay of the original error, which
+    //      contributes the unredacted error tag, message, and the
+    //      assert annotation trail (`Sent as ...`, `cause`, etc.) —
+    //      the same hook `@endo/ses-ava` uses to surface this info.
+    //
+    // All are best-effort; we fall through to `err.stack` if none
+    // produce anything.
+    const throwSiteStack = formatCapturedThrowSiteStack(err);
+    const emissionStack = captureWorkerEmissionStack(pushTrace);
+    const causalReplay = formatErrorWithCausalConsole(err);
+    /** @type {string[]} */
+    const stackParts = [];
+    if (throwSiteStack !== undefined && throwSiteStack.length > 0) {
+      stackParts.push(throwSiteStack);
+    }
+    if (emissionStack !== undefined && emissionStack.length > 0) {
+      stackParts.push(`-- emitted from --\n${emissionStack}`);
+    }
+    if (causalReplay !== undefined && causalReplay.length > 0) {
+      stackParts.push(causalReplay);
+    }
+    let stack = stackParts.join('\n');
+    if (stack.length === 0 && typeof err.stack === 'string') {
       stack = err.stack;
-    } else {
-      // SES redacts the original stack to the causal console; capture
-      // a fresh trace at marshal time so the operator at least sees
-      // where the error left the worker.
-      const captureSite = Error('trace capture');
-      stack = typeof captureSite.stack === 'string' ? captureSite.stack : '';
     }
     /** @type {TraceRecord} */
     const record = harden({

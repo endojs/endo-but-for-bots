@@ -5,6 +5,11 @@ import { E } from '@endo/far';
 import { whereEndoSock } from '@endo/where';
 import { provideEndoClient } from './client.js';
 import { isTerminalError } from './doe-normaal.js';
+import {
+  isErrorPrinted,
+  markErrorPrinted,
+  printTraceForError,
+} from './error-trace.js';
 import { parsePetNamePath } from './pet-name.js';
 
 export const withInterrupt = async callback => {
@@ -20,7 +25,9 @@ export const withInterrupt = async callback => {
     await callback({ cancel, cancelled });
   } catch (error) {
     if (!isTerminalError(error)) {
-      console.error(error);
+      if (!isErrorPrinted(error)) {
+        console.error(error);
+      }
       cancel(error);
       throw error;
     }
@@ -62,12 +69,26 @@ export const withEndoHost = ({ os, process }, callback) =>
     { os, process },
     async ({ cancel, cancelled, bootstrap }) => {
       const host = E(bootstrap).host();
-      await callback({
-        cancel,
-        cancelled,
-        bootstrap,
-        host,
-      });
+      try {
+        await callback({
+          cancel,
+          cancelled,
+          bootstrap,
+          host,
+        });
+      } catch (error) {
+        // Surface the worker-side stack and worker id via the daemon's
+        // trace facility before unwinding any further. The lookup is
+        // best-effort: if the trace facet is unavailable or the record
+        // is missing, the original error continues to propagate
+        // unchanged.
+        if (!isTerminalError(error) && !isErrorPrinted(error)) {
+          console.error(error);
+          markErrorPrinted(error);
+          await printTraceForError({ host }, error);
+        }
+        throw error;
+      }
     },
   );
 

@@ -22,6 +22,7 @@ import { E, Far } from '@endo/far';
 import { fromHex } from '../hex.js';
 import { makeNetstringCapTP } from '../connection.js';
 import { adaptLibp2pStream } from './libp2p-stream-adapter.js';
+import { makeNetworkMarshalSaveError } from './network-marshal-save-error.js';
 
 const PROTOCOL = '/endo-captp/1.0.0';
 const URL_PROTOCOL = 'libp2p+captp0';
@@ -363,6 +364,14 @@ export const make = async (powers, context) => {
   const { node: localNodeId } = await E(powers).getPeerInfo();
   const localGreeter = E(powers).greeter();
   const localGateway = E(powers).gateway();
+  const inboundSaveError = makeNetworkMarshalSaveError(
+    powers,
+    'libp2p-inbound',
+  );
+  const outboundSaveError = makeNetworkMarshalSaveError(
+    powers,
+    'libp2p-outbound',
+  );
 
   const connectionNumbers = (function* generateNumbers() {
     let n = 0;
@@ -662,6 +671,7 @@ export const make = async (powers, context) => {
         reader,
         cancelled,
         localGreeter,
+        { marshalSaveError: inboundSaveError },
       );
 
       streamClosed.then(
@@ -991,7 +1001,9 @@ export const make = async (powers, context) => {
       closed: capTpClosed,
       getBootstrap,
       close: closeCapTp,
-    } = makeNetstringCapTP('Endo', writer, reader, cancelled, localGateway);
+    } = makeNetstringCapTP('Endo', writer, reader, cancelled, localGateway, {
+      marshalSaveError: outboundSaveError,
+    });
 
     streamClosed.then(
       () => closeCapTp(new Error('libp2p stream closed')),

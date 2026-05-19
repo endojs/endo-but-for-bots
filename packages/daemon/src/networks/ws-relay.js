@@ -11,6 +11,7 @@ import { makePromiseKit } from '@endo/promise-kit';
 import { bytesFromText } from '@endo/bytes/from-string.js';
 import { makeNetstringCapTP } from '../connection.js';
 import { fromHex, toHex } from '../hex.js';
+import { makeNetworkMarshalSaveError } from './network-marshal-save-error.js';
 // eslint-disable-next-line import/order
 import {
   MSG_CHALLENGE,
@@ -91,6 +92,14 @@ export const make = async (
   const { node: localNodeId } = await E(powers).getPeerInfo();
   const localGreeter = E(powers).greeter();
   const localGateway = E(powers).gateway();
+  const inboundSaveError = makeNetworkMarshalSaveError(
+    powers,
+    'ws-relay-inbound',
+  );
+  const outboundSaveError = makeNetworkMarshalSaveError(
+    powers,
+    'ws-relay-outbound',
+  );
 
   const relayUrl = env.WS_RELAY_URL;
   const relayDomain = env.WS_RELAY_DOMAIN;
@@ -193,6 +202,7 @@ export const make = async (
       reader,
       cancelled,
       localGreeter,
+      { marshalSaveError: inboundSaveError },
     );
 
     closed.then(
@@ -462,7 +472,9 @@ export const make = async (
       closed: capTpClosed,
       getBootstrap,
       close: closeCapTp,
-    } = makeNetstringCapTP('Endo', writer, reader, cancelled, localGateway);
+    } = makeNetstringCapTP('Endo', writer, reader, cancelled, localGateway, {
+      marshalSaveError: outboundSaveError,
+    });
 
     closed.then(
       () => closeCapTp(new Error('Relay channel closed')),

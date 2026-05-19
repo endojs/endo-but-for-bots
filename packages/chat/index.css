@@ -935,6 +935,7 @@ body.resizing * {
   display: none;
   position: absolute;
   left: 0;
+  right: 0;
   bottom: 100%;
   margin-bottom: 6px;
   padding: 6px 10px;
@@ -942,9 +943,28 @@ body.resizing * {
   color: #ffffff;
   font-size: 12px;
   border-radius: var(--radius-md);
-  white-space: nowrap;
   z-index: 10;
   box-shadow: var(--shadow-md);
+  max-height: 60vh;
+  overflow: auto;
+}
+
+#chat-error .chat-error-summary {
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+
+#chat-error .chat-error-trace {
+  margin: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  line-height: 1.4;
+  white-space: pre;
+  overflow-x: auto;
+  color: #ffffff;
+  background: rgba(0, 0, 0, 0.18);
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
 }
 
 #chat-error:not(:empty) {

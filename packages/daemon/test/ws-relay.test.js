@@ -398,6 +398,80 @@ test.serial(
   },
 );
 
+test.serial(
+  'ws-relay marshalSaveError records into the trace aggregator',
+  async t => {
+    const relay = await provideRelay();
+    try {
+      const hostA = await prepareHostWithWsRelay(
+        t,
+        relay.relayUrl,
+        relay.relayDomain,
+      );
+      const hostB = await prepareHostWithWsRelay(
+        t,
+        relay.relayUrl,
+        relay.relayDomain,
+      );
+
+      await E(hostA).addPeerInfo(await E(hostB).getPeerInfo());
+
+      // Create a remotable on B whose method always throws.
+      await E(hostB).evaluate(
+        '@main',
+        'Far("Thrower", { boom: () => { throw new Error("intentional ws-relay-test failure"); } })',
+        [],
+        [],
+        ['thrower'],
+      );
+      const throwerLocator = await E(hostB).locate('thrower');
+      await E(hostA).storeLocator(['thrower'], throwerLocator);
+
+      // From A, invoke the throwing method through the relay. The
+      // returned error reaches A by being serialized on B's ws-relay
+      // inbound CapTP (B is the receiving end of A's dial), which
+      // fires B's `marshalSaveError` and records a trace under
+      // `@network:<hostB-id>`.
+      await t.throwsAsync(
+        E(hostA).evaluate(
+          '@main',
+          'E(thrower).boom()',
+          ['thrower'],
+          ['thrower'],
+        ),
+        { message: /intentional ws-relay-test failure/ },
+      );
+
+      // Allow E.sendOnly(reportTrace) to settle on B's side.
+      await new Promise(resolve => setTimeout(resolve, 250));
+
+      const tracesB = await E(hostB).traces();
+      /** @type {Array<{ workerId: string, site: string }>} */
+      const recent = await E(tracesB).recent({ limit: 50 });
+      const networkRecord = recent.find(
+        (/** @type {{ workerId: string, site: string }} */ rec) =>
+          typeof rec.workerId === 'string' &&
+          rec.workerId.startsWith('@network:') &&
+          (rec.site === 'ws-relay-inbound' ||
+            rec.site === 'ws-relay-outbound'),
+      );
+      t.truthy(
+        networkRecord,
+        `expected at least one ws-relay trace; got: ${JSON.stringify(
+          recent.map(
+            (/** @type {{ workerId: string, site: string }} */ r) => ({
+              workerId: r.workerId,
+              site: r.site,
+            }),
+          ),
+        )}`,
+      );
+    } finally {
+      await relay.teardown();
+    }
+  },
+);
+
 test.serial('relay server health endpoint works', async t => {
   const relay = await provideRelay();
   try {

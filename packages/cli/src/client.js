@@ -1,5 +1,6 @@
 import { start, makeEndoClient } from '@endo/daemon';
 import { isTerminalError } from './doe-normaal.js';
+import { recordInboundErrorId } from './error-trace.js';
 
 /**
  * Custom onReject handler that suppresses "normal termination" errors.
@@ -14,8 +15,13 @@ const onReject = err => {
   }
 };
 
-/** @type {{ onReject?: (err: any) => void }} */
-const capTpOptions = harden({ onReject });
+const capTpOptions = harden({
+  onReject,
+  // Capture the wire-level errorId for every decoded error so the CLI
+  // can later look up the corresponding trace through the host's
+  // privileged `traces` facet.
+  marshalLoadError: recordInboundErrorId,
+});
 
 /**
  * @template TBootstrap

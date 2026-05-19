@@ -185,6 +185,7 @@ const main = async () => {
     host: gatewayHost,
     port: gatewayPort,
     cancelled,
+    marshalSaveError,
   });
 
   const services = [privatePathService, wsGateway];

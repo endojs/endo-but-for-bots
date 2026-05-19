@@ -3,6 +3,7 @@ import type { ERef } from '@endo/eventual-send';
 import type { FarRef } from '@endo/far';
 import type { CapTPOptions } from '@endo/captp';
 import type { Reader, Writer, Stream } from '@endo/stream';
+import type { TraceRecord } from './trace-aggregator.js';
 
 // Branded string types for pet names and special names
 declare const PetNameBrand: unique symbol;
@@ -1054,6 +1055,13 @@ export interface EndoHost extends EndoAgent {
   }>;
   /** Returns a privileged Exo for inspecting the daemon's error-trace aggregate. */
   traces(): Promise<EndoTraces>;
+  /**
+   * Push a trace record from a network caplet whose `@agent` powers
+   * resolved to this host. The daemon overwrites the scope as
+   * `@network:${hostId}` so the caplet cannot forge entries under
+   * another scope.
+   */
+  reportTrace(record: TraceRecord): Promise<void>;
 }
 
 export interface EndoTraces {

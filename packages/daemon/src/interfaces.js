@@ -420,6 +420,10 @@ export const HostInterface = M.interface('EndoHost', {
   getFormulaGraph: M.call().returns(M.promise()),
   // Access the privileged error-trace aggregator.
   traces: M.call().returns(M.promise()),
+  // Push a trace record from a network caplet that holds this host
+  // as its `@agent` powers. The daemon overwrites the scope so the
+  // caplet cannot forge entries under another id.
+  reportTrace: M.call(M.record()).returns(M.promise()),
 });
 
 export const ChannelInterface = M.interface('EndoChannel', {

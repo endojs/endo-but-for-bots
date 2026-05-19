@@ -72,9 +72,21 @@ harden(makeRateLimiter);
  * @param {string} opts.host
  * @param {number} opts.port
  * @param {Promise<never>} opts.cancelled
+ * @param {(err: Error, errorId?: string) => void} [opts.marshalSaveError]
+ *   Hook the daemon installs on each gateway-side outbound CapTP so
+ *   the wire-level errorId minted on the way out to the browser is
+ *   aliased back to the daemon's existing trace record. Without this
+ *   the chat sees a fresh `error:captp:Gateway#…` id that has no
+ *   record in the trace aggregator.
  * @returns {{ started: Promise<string>, stopped: Promise<void> }}
  */
-export const startWsGateway = ({ endoBootstrap, host, port, cancelled }) => {
+export const startWsGateway = ({
+  endoBootstrap,
+  host,
+  port,
+  cancelled,
+  marshalSaveError = undefined,
+}) => {
   const fetchLimiter = makeRateLimiter(1000);
   const gatewayP = E(endoBootstrap).gateway();
 
@@ -174,6 +186,7 @@ export const startWsGateway = ({ endoBootstrap, host, port, cancelled }) => {
       messageReader,
       cancelled,
       clientBootstrap,
+      marshalSaveError !== undefined ? { marshalSaveError } : undefined,
     );
     const remoteBootstrap = getBootstrap();
     E.sendOnly(remoteBootstrap).ping();

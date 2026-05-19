@@ -5,6 +5,7 @@
 /** @import { EndoHost } from '@endo/daemon' */
 
 import { createMonacoEditor } from './monaco-wrapper.js';
+import { logTraceForError } from './error-trace.js';
 import { petNamePathAutocomplete } from './petname-path-autocomplete.js';
 import { keyCombo, modKey } from './platform-keys.js';
 
@@ -332,6 +333,10 @@ export const createEvalForm = async ({
       onClose();
     } catch (err) {
       showError(/** @type {Error} */ (err).message);
+      // Best-effort: surface the worker-side trace to dev console.
+      logTraceForError({ powers }, err).catch(traceError => {
+        console.error('[Chat] eval trace lookup failed:', traceError);
+      });
     } finally {
       $submitBtn.classList.remove('btn-spinner');
       $submitBtn.disabled = false;
