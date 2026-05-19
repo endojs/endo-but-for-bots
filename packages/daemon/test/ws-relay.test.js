@@ -452,18 +452,15 @@ test.serial(
         (/** @type {{ workerId: string, site: string }} */ rec) =>
           typeof rec.workerId === 'string' &&
           rec.workerId.startsWith('@network:') &&
-          (rec.site === 'ws-relay-inbound' ||
-            rec.site === 'ws-relay-outbound'),
+          (rec.site === 'ws-relay-inbound' || rec.site === 'ws-relay-outbound'),
       );
       t.truthy(
         networkRecord,
         `expected at least one ws-relay trace; got: ${JSON.stringify(
-          recent.map(
-            (/** @type {{ workerId: string, site: string }} */ r) => ({
-              workerId: r.workerId,
-              site: r.site,
-            }),
-          ),
+          recent.map((/** @type {{ workerId: string, site: string }} */ r) => ({
+            workerId: r.workerId,
+            site: r.site,
+          })),
         )}`,
       );
     } finally {

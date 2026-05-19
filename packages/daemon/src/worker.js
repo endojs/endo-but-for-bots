@@ -305,7 +305,7 @@ const callSitesByError = new WeakMap();
 const formatCapturedThrowSiteStack = err => {
   // Force V8 to invoke `prepareStackTrace` if it hasn't already, so
   // freshly-thrown errors get into our side-table.
-  void /** @type {Error & { stack?: string }} */ (err).stack;
+  void (/** @type {Error & { stack?: string }} */ (err).stack);
   const sst = callSitesByError.get(err);
   if (sst === undefined || sst.length === 0) return undefined;
   return sst.map(cs => `  at ${cs}`).join('\n');
@@ -398,7 +398,7 @@ const captureWorkerEmissionStack = anchorFn => {
       formatted = sst.map(cs => `  at ${cs}`).join('\n');
       return formatted;
     };
-    void /** @type {{ stack?: string }} */ (captureSite).stack;
+    void (/** @type {{ stack?: string }} */ (captureSite).stack);
   } catch (captureError) {
     formatted = undefined;
   } finally {

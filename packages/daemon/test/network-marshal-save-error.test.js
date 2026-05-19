@@ -57,7 +57,10 @@ test('forwards a TraceRecord to powers.reportTrace', async t => {
 
 test('skips when errorId is undefined', async t => {
   const { host, drain, getCaptured } = makeFakeHost();
-  const marshalSaveError = makeNetworkMarshalSaveError(host, 'ws-relay-inbound');
+  const marshalSaveError = makeNetworkMarshalSaveError(
+    host,
+    'ws-relay-inbound',
+  );
   marshalSaveError(new Error('nope'), undefined);
   await drain();
   t.is(getCaptured(), undefined, 'no record should be reported');
