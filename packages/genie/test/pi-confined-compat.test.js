@@ -13,35 +13,8 @@
  * loaded through compartment-mapper's source parser — i.e. the bar an
  * Endo-confined formula would have to clear.
  *
- * ## Current state: pi is NOT confined-compatible
- *
- * `@mariozechner/pi-agent-core` depends on `typebox` (v1.1.37 at time
- * of writing), and every `typebox` `.mjs` source uses ES2020's
- * namespace re-export syntax:
- *
- *   // node_modules/.../typebox/build/system/arguments/index.mjs
- *   export * as Arguments from './arguments.mjs';
- *
- * `@endo/compartment-mapper`'s default source parser does not accept
- * `export * as X from '...'` and rejects each typebox module with
- * `Error transforming source ...: Cannot read properties of undefined
- * (reading 'name')`.  The result is a hard load failure with hundreds
- * of underlying transform errors before pi's own module bodies even
- * evaluate.
- *
- * This test pins that failure with `t.throwsAsync` so:
- *
- *   - CI stays green on the (correct) observation that pi is not
- *     confined-Compartment-loadable today.
- *   - If a future pi/typebox release switches to a syntax
- *     compartment-mapper accepts (or compartment-mapper learns to
- *     transform `export * as`), the assertion regresses and prompts
- *     us to switch to a positive-assertion test that checks each
- *     fixture probe.
- *
- * Once pi/typebox or compartment-mapper closes this gap, flip the
- * assertion below to inspect the fixture's `types`, `providersProbe`,
- * `getModelProbe`, and `constructProbe` exports.
+ * Marked `test.failing` until pi and its dependencies clear confined
+ * Compartment loading; flip to `test` when it starts passing.
  *
  * Debug: see the header of `pi-ses-compat.test.js`.
  * `LOCKDOWN_ERROR_TAMING=unsafe-debug yarn test` un-redacts errors
@@ -64,24 +37,62 @@ const fixtureLocation = new URL(
   import.meta.url,
 ).toString();
 
-test('pi-mono fails to load in a confined Endo Compartment (typebox `export * as` is not yet parseable)', async t => {
-  const err = await t.throwsAsync(() =>
-    importLocation(readPowers, fixtureLocation),
+test.failing('pi-mono loads in a confined Endo Compartment', async t => {
+  const fixture =
+    /** @type {typeof import('./fixtures/pi-confined-fixture.js') | undefined} */ (
+      await importLocation(readPowers, fixtureLocation).catch(err => {
+        t.fail(
+          `pi-mono must load when compartment-mapper evaluates its dependency graph: ${err}`,
+        );
+        return undefined;
+      })
+    );
+  if (fixture === undefined) {
+    return;
+  }
+
+  t.deepEqual(
+    fixture.types,
+    {
+      PiAgent: 'function',
+      getModel: 'function',
+      getProviders: 'function',
+    },
+    'the confined fixture should expose the expected pi entrypoint types',
   );
-  t.truthy(err);
-  // The error is wrapped — the underlying cause names typebox and the
-  // transform-source failure.  Match on both so a future regression
-  // (e.g. typebox switches to ESM but pi keeps the same dep, or
-  // compartment-mapper learns `export * as`) surfaces here.
-  const message = /** @type {Error} */ (err).message;
-  t.regex(
-    message,
-    /typebox/,
-    'pi-mono is unloadable in a confined Compartment because typebox is — the message must name typebox so future failures are diagnosable',
+
+  t.true(
+    fixture.providersProbe.ok,
+    fixture.providersProbe.ok
+      ? 'getProviders should run under confinement'
+      : `getProviders should run under confinement: ${fixture.providersProbe.error}`,
   );
-  t.regex(
-    message,
-    /Error transforming source/,
-    'the failure mode is a compartment-mapper source-transform error, not a runtime throw inside pi',
+  if (fixture.providersProbe.ok) {
+    const providerCount = fixture.providersProbe.value;
+    t.is(
+      typeof providerCount,
+      'number',
+      'getProviders should report a numeric provider count under confinement',
+    );
+    if (typeof providerCount === 'number') {
+      t.true(
+        providerCount > 0,
+        'getProviders should report available providers under confinement',
+      );
+    }
+  }
+
+  t.true(
+    fixture.getModelProbe.ok,
+    fixture.getModelProbe.ok
+      ? 'getModel should accept a model lookup under confinement'
+      : `getModel should accept a model lookup under confinement: ${fixture.getModelProbe.error}`,
+  );
+
+  t.true(
+    fixture.constructProbe.ok,
+    fixture.constructProbe.ok
+      ? 'PiAgent should construct under confinement'
+      : `PiAgent should construct under confinement: ${fixture.constructProbe.error}`,
   );
 });
