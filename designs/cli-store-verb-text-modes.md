@@ -3,9 +3,51 @@
 | | |
 |---|---|
 | **Created** | 2026-05-08 |
+| **Updated** | 2026-05-18 |
 | **Author** | Kris Kowal (prompted) |
-| **Status** | Proposed |
+| **Status** | In Progress |
 | **Source** | PR [#128](https://github.com/endojs/endo-but-for-bots/pull/128) inline review comment [discussion_r3205660244](https://github.com/endojs/endo-but-for-bots/pull/128#discussion_r3205660244) on `packages/cli/src/commands/write-text.js:15` |
+
+## Status
+
+The design landed via PR [#153](https://github.com/endojs/endo-but-for-bots/pull/153)
+(merged 2026-05-12) as a reshape blocker for the closed PR
+[#128](https://github.com/endojs/endo-but-for-bots/pull/128) (which was
+closed unmerged 2026-05-14 in favor of this design's unified scheme).
+
+Implementation is in flight on the `llm` roadmap branch:
+
+- PR [#254](https://github.com/endojs/endo-but-for-bots/pull/254) is the
+  tracking PR for the design (placeholder README note, open).
+- PR [#283](https://github.com/endojs/endo-but-for-bots/pull/283)
+  (`feat(cli): unify store/cat axes; add write/read for mount paths
+  (#153)`, open) is the implementation. It rewrites
+  `packages/cli/src/commands/store.js` and `cat.js` around the
+  three-axis flag scheme, adds `packages/cli/src/commands/write.js`
+  and `read.js` for the mount-path mutation pair, and lands 19 new
+  option-parser tests in `packages/cli/test/store-axes.test.js`.
+
+What landed in PR #283 vs. what is deferred:
+
+- **Landed.** The three orthogonal flag axes
+  (`--blob`/`--text`/`--json`/`--bigint`/`--tree` for representation;
+  `-p <file>`/`--stdin`/`--literal <s>` for source; `-n <name-path>`
+  for destination) on `endo store`. Mirrored axes on `endo cat`. New
+  `endo write` and `endo read` for mount-path mutation
+  (`EndoDirectory.writeText` / `readText`).
+- **Deferred.** Zip-framed tree ingest/egress
+  (`endo store --tree -z`, `endo store --tree --zip --stdin`,
+  `endo cat --tree -z`), blocked on `daemon-checkin-checkout`.
+  Mount-path bytes (`endo write --blob`, `endo read --blob`), pending
+  a daemon-side `writeBytes`/`readBytes` mount method. Retiring
+  `endo checkin` / `endo checkout` as separate verbs in favor of
+  `endo store --tree` / `endo cat --tree` (kept as shorthands; a
+  follow-up may remove them after call-site migration).
+
+A sibling design, [`cli-edit-verb`](cli-edit-verb.md), extends the same
+mount-path verb family with a delta-based `endo edit` for
+hash-anchored line patches; its implementation lands separately on a
+phased schedule.
 
 ## What is the Problem Being Solved?
 

@@ -3,21 +3,35 @@
 | | |
 |---|---|
 | **Created** | 2026-05-08 |
+| **Updated** | 2026-05-18 |
 | **Author** | Kris Kowal (prompted) |
 | **Status** | In Progress (pure core landed [#796](https://github.com/endojs/endo-but-for-bots/pull/796)) |
 | **Source** | PR [#153](https://github.com/endojs/endo-but-for-bots/pull/153) inline review comment [discussion_r3212462309](https://github.com/endojs/endo-but-for-bots/pull/153#discussion_r3212462309) on `designs/cli-store-verb-text-modes.md:403` |
 
 ## Status
 
-The pure edit-format core landed in [#796](https://github.com/endojs/endo-but-for-bots/pull/796)
-as `packages/daemon/src/hashline.js` (one canonical module in `@endo/daemon`,
-exported for `@endo/cli` to import when CLI wiring lands — not the two
-`packages/{cli,daemon}/src/hashline.js` copies this design's prose earlier
-implied): CRC32 per-line anchors, the SHA-256 whole-file CAS, the textual
-`hashline` parser and `hashline-json` validator, the read rendering, the
-deterministic splice, and the opt-in bounded `reapply` search. The
-daemon-side `EndoMount.edit` / `EndoGuest.edit` capability and the `endo edit`
-CLI verb remain follow-up work.
+The design landed via PR [#162](https://github.com/endojs/endo-but-for-bots/pull/162)
+(merged 2026-05-12) as a sibling to
+[`cli-store-verb-text-modes`](cli-store-verb-text-modes.md) (PR #153).
+
+Implementation has progressed in phases:
+
+- PR [#204](https://github.com/endojs/endo-but-for-bots/pull/204)
+  (`feat(cli,daemon): tentative endo edit verb impl (per design #162)
+  — surfaces design gaps`, closed 2026-05-11) was the tentative
+  builder probe that surfaced 14 design gaps by reducing the design
+  to code. Twelve of those gaps are resolved inline below
+  (see "Resolved during builder dispatch"); two remain in "Open
+  Questions surfaced by builder dispatch".
+- The pure edit-format core landed in [#796](https://github.com/endojs/endo-but-for-bots/pull/796)
+  as `packages/daemon/src/hashline.js` (one canonical module in `@endo/daemon`,
+  exported for `@endo/cli` to import when CLI wiring lands — not the two
+  `packages/{cli,daemon}/src/hashline.js` copies this design's prose earlier
+  implied): CRC32 per-line anchors, the SHA-256 whole-file CAS, the textual
+  `hashline` parser and `hashline-json` validator, the read rendering, the
+  deterministic splice, and the opt-in bounded `reapply` search. The
+  daemon-side `EndoMount.edit` / `EndoGuest.edit` capability and the `endo edit`
+  CLI verb remain follow-up work.
 
 Deviations from the prose below, as landed:
 
@@ -34,6 +48,18 @@ Deviations from the prose below, as landed:
   anchors, and requires both endpoints of a range op to relocate by the same
   delta. See [Reapply search algorithm](#reapply-search-algorithm) §
   Relocation soundness constraints.
+
+Phase 2 (daemon-side splice with mount-internal lock) landed with the
+pure core in #796. Phase 3 (secondary `udiff` / `search-replace`
+formats) and Phase 4 (multi-file `editBatch`) are scheduled per the
+"Phase" sections below and land as follow-up PRs once the two
+remaining open questions are resolved. The `endo edit` CLI verb is the
+thin wrapper around the daemon-side `EndoGuest.edit` /
+`EndoDirectory.edit` capability; the daemon API is the load-bearing
+surface (it holds the mount-internal lock across the
+read-validate-splice-write critical section), and the CLI exists for
+human ergonomics. See "Design framing: agent tool-calls drive the
+daemon, not the CLI" below for the framing.
 
 ## What is the Problem Being Solved?
 

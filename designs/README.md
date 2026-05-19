@@ -281,7 +281,7 @@ LLM-agent stack).*
 | [buffered-channel-exo-stream-consolidation](buffered-channel-exo-stream-consolidation.md) | 2026-07-06 | 2026-07-24 | **Complete** |
 | [endo-fs-backend-seam](endo-fs-backend-seam.md) | 2026-05-28 | 2026-05-28 | **Complete** |
 | [chat-color-schemes](chat-color-schemes.md) | 2026-02-26 | 2026-02-26 | **Complete** |
-| [cli-store-verb-text-modes](cli-store-verb-text-modes.md) | 2026-05-08 | 2026-05-08 | Proposed |
+| [cli-store-verb-text-modes](cli-store-verb-text-modes.md) | 2026-05-08 | 2026-05-18 | In Progress |
 | [cli-edit-verb](cli-edit-verb.md) | 2026-05-08 | 2026-08-23 | In Progress |
 | [chat-command-bar](chat-command-bar.md) | 2026-03-02 | 2026-03-02 | **Complete** |
 | [chat-components](chat-components.md) | 2026-03-02 | 2026-03-02 | **Complete** |
@@ -1113,8 +1113,8 @@ automation.
 | familiar-unified-weblet-server | In Progress | Web-server restructuring |
 | familiar-chat-weblet-hosting | Not Started | Iframe hosting, guest profiles |
 | ~~daemon-checkin-checkout~~ | **Complete** | `endo ci` / `endo checkin` and `endo co` / `endo checkout` verbs ship in `packages/cli/src/endo.js`; readable-tree <-> filesystem round-trips work. Zip-archive interchange tracked separately under [exo-zip-package](exo-zip-package.md) |
-| cli-store-verb-text-modes | Proposed | Reshape blocker for PR #128: unify `endo store` flag scheme across source/sink/representation axes; subsume `write-text`/`read-text` |
-| cli-edit-verb | In Progress | `endo edit` with hashline patches for AI agents; sibling of `cli-store-verb-text-modes` (PR #153); pure core landed in #796 |
+| cli-store-verb-text-modes | In Progress | Reshape blocker for PR #128: unify `endo store` flag scheme across source/sink/representation axes; subsume `write-text`/`read-text`. Design merged in PR #153; implementation in flight in PR #283 (open) |
+| cli-edit-verb | In Progress | `endo edit` with hashline patches for AI agents; sibling of `cli-store-verb-text-modes` (PR #153). Design merged in PR #162; tentative builder probe (PR #204, closed) surfaced 12 inline-resolved design gaps; pure core landed in #796 |
 | daemon-weblet-application | Not Started | Readable trees, zip archives |
 | exo-zip-package | Proposed | `@endo/exo-unzip` (`unzip(bytes) -> ReadableTree`) and `@endo/exo-zip` (`zip(tree) -> bytes`); PR #128 reshape blocker |
 | endoclaw-oauth | Not Started | Credential capability — agent uses service without seeing token |
