@@ -384,3 +384,48 @@ test('getCommandsByCategory respects context filter', t => {
   t.true(channelNames.includes('adopt'));
   t.true(channelNames.includes('reply'));
 });
+
+// Coverage for chat-edit-message-ui: the design adds an /edit-message
+// inline command for revising a previously-sent message.  The legacy
+// /edit (blob editor) is preserved unchanged so existing /edit users
+// see no behavior change.
+test('edit-message command is registered with the right shape', t => {
+  const cmd = getCommand('edit-message');
+  t.truthy(cmd);
+  if (!cmd) return;
+  t.is(cmd.name, 'edit-message');
+  t.is(cmd.category, 'messaging');
+  t.is(cmd.context, 'inbox');
+  t.is(cmd.mode, 'inline');
+  const fieldNames = cmd.fields.map(f => f.name);
+  t.deepEqual(fieldNames, ['messageNumber', 'message']);
+  const numField = cmd.fields.find(f => f.name === 'messageNumber');
+  t.is(numField?.type, 'messageNumber');
+  t.true(numField?.required);
+  const bodyField = cmd.fields.find(f => f.name === 'message');
+  t.is(bodyField?.type, 'message');
+  t.true(bodyField?.required);
+});
+
+test('edit-message has an alias for terse typing', t => {
+  // Per design open question 1 (resolved by the maintainer as
+  // "overload /edit"), /edit and /edit-message coexist for now and a
+  // follow-up will unify them.  The `editmsg` alias gives users a
+  // shorter slash-command form in the interim.
+  t.is(getCommand('editmsg')?.name, 'edit-message');
+});
+
+test('legacy /edit command is preserved unchanged', t => {
+  const cmd = getCommand('edit');
+  t.truthy(cmd);
+  if (!cmd) return;
+  t.is(cmd.name, 'edit');
+  t.is(cmd.category, 'storage');
+  // The blob /edit takes only petName; the addition of /edit-message
+  // must not have accidentally added a messageNumber field that would
+  // break the existing blob editor's form rendering.
+  t.deepEqual(
+    cmd.fields.map(f => f.name),
+    ['petName'],
+  );
+});

@@ -72,17 +72,17 @@ export const inboxComponent = async (
   }, 150);
 
   const selfLocator = await E(powers).locate('@self');
-  // TODO(endojs/endo-but-for-bots#203): integrate the daemon
-  // `editMessage` / `messageHistory` capability surfaced by
-  // endojs/endo-but-for-bots#125.  When a sender edits a message,
-  // followMessages re-emits the same number with `done` and a new
-  // payload; this loop currently treats every emission as a fresh
-  // envelope and would therefore append a duplicate DOM node.  The
-  // intended behavior is to swap the existing `.message-envelope`
-  // contents in place, render `done: false` with a progress
-  // affordance, and offer a "view history" control that calls
-  // `E(powers).messageHistory(number)`.  Tracked as a follow-up
-  // design question in endojs/endo-but-for-bots#203.
+  // Per chat-edit-message-ui design: when a sender edits a message,
+  // followMessages re-emits the same number with the revised payload.
+  // The inbox swaps the existing envelope in place rather than
+  // appending a duplicate.  Partial-stream progress affordance and
+  // history disclosure (the broader integration documented in
+  // endojs/endo-but-for-bots#203) are intentionally deferred to a
+  // follow-up.  The swap-on-edit handled here is what the
+  // chat-edit-message-ui design needs to keep the local user's edits
+  // visible to themselves; the rich progress + history affordances
+  // are needed to consume agent-driven streamed edits and are scoped
+  // to that follow-up.
   for await (const message of makeRefIterator(E(powers).followMessages())) {
     // Read DOM at animation frame to determine whether to pin scroll to bottom
     // of the messages pane. Use 80px tolerance (matching channel-component)
@@ -152,6 +152,26 @@ export const inboxComponent = async (
     if (message.replyTo) {
       $envelope.dataset.replyTo = String(message.replyTo);
     }
+    // Per chat-edit-message-ui design § Authority: edit affordances
+    // are visible only on messages whose sender matches the current
+    // profile.  data-sent lets the focus-mode shortcut handler and
+    // any external consumer (e.g. tests) check editability without
+    // reaching into the inner .message classlist.
+    if (isSent) {
+      $envelope.dataset.sent = 'true';
+    }
+    // data-editable distills the design's authority + done-state
+    // rules into one dataset attribute that the focus-mode handler
+    // and any hover-button code can consult uniformly.  Set to false
+    // when the message is mid-stream so the `e` shortcut is a no-op
+    // and any hover button is suppressed; updated below if the
+    // settled state changes.
+    const isSentDone =
+      isSent &&
+      (!('done' in message) || /** @type {{ done: boolean }} */ (message).done);
+    if (isSentDone) {
+      $envelope.dataset.editable = 'true';
+    }
 
     const $message = document.createElement('div');
     $message.className = isSent ? 'message sent' : 'message';
@@ -192,6 +212,38 @@ export const inboxComponent = async (
         });
     };
     $controls.appendChild($dismiss);
+
+    // Per chat-edit-message-ui design § "Hover affordance: edit
+    // button": when the message is editable by the current user, a
+    // small pencil button appears in the same affordance row as the
+    // existing dismiss button.  The button dispatches a CustomEvent
+    // that the chat bar listens for; the chat bar opens the inline
+    // /edit-message form, pre-populated with the current body
+    // (sourced from messageHistory per Design Decision 3).  The
+    // button is keyboard-reachable through normal Tab order.  On
+    // touch platforms hover does not exist, so the button is always
+    // visible (CSS hides it on hover-capable platforms when the
+    // envelope is not hovered or focused).
+    // Per Design Decision 2: edit is hidden until the message
+    // settles.  When the focused message is a not-done message
+    // produced by the local user, /edit is not offered (the streaming
+    // sender owns the message during a streaming session and a manual
+    // edit would race the agent's own edits).
+    if (isSentDone) {
+      const $edit = document.createElement('button');
+      $edit.className = 'edit-button';
+      $edit.innerText = '✎'; // lower-right pencil
+      $edit.title = 'Edit';
+      $edit.onclick = () => {
+        // `number` is a bigint; the chat-bar consumer needs a value
+        // it can pass back into editMessage / messageHistory (both
+        // accept bigint), so pass it through as-is.
+        document.dispatchEvent(
+          new CustomEvent('chat:edit-message', { detail: { number } }),
+        );
+      };
+      $controls.appendChild($edit);
+    }
 
     $tooltip.appendChild($controls);
 
@@ -817,9 +869,47 @@ export const inboxComponent = async (
     }
 
     $envelope.appendChild($message);
-    $parent.insertBefore($envelope, $end);
+    // If a prior envelope with the same message number already lives
+    // in the DOM (the case after `editMessage`), swap the new
+    // envelope into the prior's place rather than appending a
+    // duplicate.  See the loop's header comment for scope.  Message
+    // numbers are bigint-coerced decimal integers, so the
+    // unquoted-then-formatted attribute selector is safe without a
+    // CSS.escape call (which happy-dom does not expose in the
+    // component-test environment).
+    const numberStr = String(number);
+    const $prior = /** @type {HTMLElement | null} */ (
+      $parent.querySelector(`.message-envelope[data-number="${numberStr}"]`)
+    );
+    if ($prior) {
+      // Annotate the swap: per chat-edit-message-ui § Surfacing edit
+      // history, an edited message carries an "edited <timestamp>"
+      // caption.  We materialize the caption inline next to the
+      // existing timestamp; the rich revision panel (which calls
+      // messageHistory and renders the array oldest-first) is open
+      // question 2 in the design and is deferred.
+      const $editedCaption = document.createElement('span');
+      $editedCaption.className = 'timestamp-edited';
+      $editedCaption.innerText = ` edited ${timeFormatter.format(parsedDate)}`;
+      $editedCaption.title = `Last edited ${date}`;
+      const $newTimestamp = /** @type {HTMLElement | null} */ (
+        $envelope.querySelector('.timestamp')
+      );
+      if ($newTimestamp) {
+        $newTimestamp.appendChild($editedCaption);
+      }
+      const wasFocused = $prior.classList.contains('focused');
+      $prior.replaceWith($envelope);
+      if (wasFocused) {
+        // Per chat-edit-message-ui § Interaction with focus chains:
+        // the focused message stays focused across an edit.
+        $envelope.classList.add('focused');
+      }
+    } else {
+      $parent.insertBefore($envelope, $end);
+    }
 
-    if (!isSent && Date.now() - new Date(date).getTime() < 2000) {
+    if (!isSent && !$prior && Date.now() - new Date(date).getTime() < 2000) {
       playChime();
     }
 

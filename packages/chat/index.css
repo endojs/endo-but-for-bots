@@ -2605,6 +2605,35 @@ body.resizing * {
   color: #ffffff;
 }
 
+/* Per chat-edit-message-ui design: pencil button next to dismiss
+   on messages the local profile sent.  Uses the accent palette to
+   distinguish it from the destructive dismiss action. */
+.edit-button {
+  padding: 4px 8px;
+  font-size: 14px;
+  line-height: 1;
+  background: transparent;
+  color: var(--accent-primary);
+  border: 1px solid var(--accent-primary);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  margin-left: 4px;
+}
+
+.edit-button:hover {
+  background: var(--accent-primary);
+  color: #ffffff;
+}
+
+/* "edited <timestamp>" caption that the inbox renders next to the
+   timestamp when followMessages re-emits the envelope after an edit.
+   Faint, italic, and inline so it does not crowd the layout. */
+.timestamp-edited {
+  margin-left: 6px;
+  font-style: italic;
+  opacity: 0.6;
+}
+
 .message b {
   background: var(--bubble-chip-bg);
   color: var(--bubble-chip-fg);
@@ -5766,17 +5795,17 @@ button.btn-spinner::after {
 .inbox-adopt-btn {
   font-size: 11px;
   padding: 3px 8px;
-  border: 1px solid var(--accent);
+  border: 1px solid var(--accent-primary);
   border-radius: var(--radius-sm);
   background: none;
-  color: var(--accent);
+  color: var(--accent-primary);
   cursor: pointer;
   transition: all var(--transition-fast);
   margin: 2px 4px 2px 0;
 }
 
 .inbox-adopt-btn:hover {
-  background: var(--accent);
+  background: var(--accent-primary);
   color: white;
 }
 

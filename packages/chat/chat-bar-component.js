@@ -739,6 +739,71 @@ export const chatBarComponent = (
   };
 
   /**
+   * Open the inline /edit-message form for a previously-sent
+   * message, pre-populated with the current body sourced from
+   * messageHistory.
+   *
+   * Per chat-edit-message-ui Design Decision 3 ("Pre-populate from
+   * the model, not the DOM"), the body field is filled from the last
+   * entry in messageHistory rather than from the rendered DOM, so a
+   * round-trip no-op edit is byte-equivalent.  When the history fetch
+   * fails (e.g. the message no longer exists), the form opens with
+   * just the message number filled and the user can re-enter the body
+   * by hand.
+   *
+   * @param {string | bigint} messageNumber - The message number (a
+   *   bigint-coercible value; the inbox passes a bigint and the
+   *   focus-mode dispatch passes a string from the envelope's
+   *   data-number).
+   */
+  const editMessage = messageNumber => {
+    const numberAsBigint = BigInt(messageNumber);
+    // Pre-fill messageNumber synchronously so the user sees the form
+    // immediately; fill the body once messageHistory resolves.
+    enterCommandMode('edit-message', {
+      messageNumber: String(messageNumber),
+    });
+    E(powers)
+      .messageHistory(numberAsBigint)
+      .then(historyResult => {
+        const history = /** @type {Array<{ envelope: any }>} */ (historyResult);
+        const latest = history?.[history.length - 1];
+        if (!latest) return;
+        const envelope = latest.envelope;
+        const strings = /** @type {string[]} */ (envelope.strings || []);
+        const names = /** @type {string[]} */ (
+          envelope.names || envelope.edgeNames || []
+        );
+        // Per Design Decision 4 (chip carries the locator, not the
+        // stale pet name): if the embedded-token chip's underlying
+        // pet name has since been renamed or removed, we fall back to
+        // the edge name as the placeholder.  Restoring the chip's
+        // locator is a follow-up; the simplest correct preload is the
+        // string body interleaved with `@<edgeName>` markers so the
+        // user can re-pick references.
+        const $msgInput = /** @type {HTMLElement | null} */ (
+          $inlineFormContainer.querySelector('.message-field-input')
+        );
+        if ($msgInput) {
+          $msgInput.innerText = strings
+            .map((part, idx) => {
+              const name = names[idx];
+              return name !== undefined ? `${part}@${name}` : part;
+            })
+            .join('');
+          $msgInput.dispatchEvent(new Event('input', { bubbles: true }));
+          $msgInput.focus();
+        }
+      })
+      .catch(err => {
+        // Surface the failure but keep the form open so the user can
+        // still hand-author a replacement body if they wish.
+        $commandError.textContent =
+          /** @type {Error} */ (err).message || String(err);
+      });
+  };
+
+  /**
    * Exit command mode and return to send mode.
    * @param root0
    * @param root0.skipFocus
@@ -769,6 +834,14 @@ export const chatBarComponent = (
     a: 'adopt',
     g: 'grant',
     s: 'submit',
+    // Per chat-edit-message-ui design § "Focus-mode shortcut: e":
+    // adds e for editing the focused message.  The shortcut is
+    // conditional on the focused message being editable by the
+    // current user; the handler checks `data-editable` on the focused
+    // envelope and is a no-op otherwise.  The `e` letter is
+    // disambiguated from the blob-editor /edit binding by what the
+    // focus is on (message envelope vs blob value chip).
+    e: 'edit-message',
   };
 
   /**
@@ -1099,6 +1172,9 @@ export const chatBarComponent = (
     } else {
       $messages[index].scrollIntoView({ block: 'nearest' });
     }
+    // Refresh the modeline so the conditional `e` hint reflects the
+    // newly-focused message's editability.
+    updateFocusModeline(); // eslint-disable-line no-use-before-define
   };
 
   /**
@@ -1139,12 +1215,24 @@ export const chatBarComponent = (
    * Update the modeline for focus mode.
    */
   const updateFocusModeline = () => {
+    // Per chat-edit-message-ui § "Modeline updates": the focus-mode
+    // modeline appends `e` to the shortcut row only when the focused
+    // message is editable by the current user.  Hide otherwise so
+    // users don't see an affordance the daemon would reject.
+    const $focused = /** @type {HTMLElement | null} */ (
+      $messagesContainer.querySelector('.message-envelope.focused')
+    );
+    const editHint =
+      $focused && $focused.dataset.editable === 'true'
+        ? '<span class="modeline-hint"><kbd>e</kbd> edit</span>'
+        : '';
     $modeline.innerHTML = `
       <span class="modeline-hint"><kbd>r</kbd> reply</span>
       <span class="modeline-hint"><kbd>d</kbd> dismiss</span>
       <span class="modeline-hint"><kbd>a</kbd> adopt</span>
       <span class="modeline-hint"><kbd>g</kbd> grant</span>
       <span class="modeline-hint"><kbd>s</kbd> submit</span>
+      ${editHint}
       <span class="modeline-hint"><kbd>Esc</kbd> back</span>
     `;
     $chatBar.classList.add('has-modeline');
@@ -1628,6 +1716,23 @@ export const chatBarComponent = (
         event.preventDefault();
         const messageNumber = getFocusedMessageNumber();
         if (messageNumber) {
+          // Per chat-edit-message-ui design: edit affordances are
+          // visible only on messages whose sender matches the
+          // current profile.  When the focused message is not
+          // editable by the current user, e is a no-op.
+          if (commandName === 'edit-message') {
+            const $focused = /** @type {HTMLElement | null} */ (
+              $messagesContainer.querySelector('.message-envelope.focused')
+            );
+            if (!$focused || $focused.dataset.editable !== 'true') {
+              return;
+            }
+            exitFocusMode();
+            // editMessage fetches the current body via messageHistory
+            // and opens the inline form with both fields pre-filled.
+            editMessage(messageNumber); // eslint-disable-line no-use-before-define
+            return;
+          }
           exitFocusMode();
           enterCommandMode(commandName, { messageNumber });
         }
@@ -1721,6 +1826,22 @@ export const chatBarComponent = (
   // Apply passive focus on initial load.
   updatePassiveFocus();
 
+  // Per chat-edit-message-ui § "Hover affordance: edit button": the
+  // inbox emits a chat:edit-message CustomEvent when the user clicks
+  // the per-envelope pencil button.  The chat bar listens here and
+  // opens the inline /edit-message form; this keeps the two
+  // components decoupled (the inbox has no chat-bar handle and the
+  // chat bar has no list of envelopes to wire individually).
+  /** @param {Event} event */
+  const handleEditMessageEvent = event => {
+    const detail = /** @type {{ number?: bigint | string }} */ (
+      /** @type {CustomEvent} */ (event).detail || {}
+    );
+    if (detail.number === undefined) return;
+    editMessage(detail.number);
+  };
+  document.addEventListener('chat:edit-message', handleEditMessageEvent);
+
   return {
     setReplyTo: sendForm.setReplyTo,
     clearReplyTo: sendForm.clearReplyTo,
@@ -1730,6 +1851,10 @@ export const chatBarComponent = (
     getReplyType: sendForm.getReplyType,
     setText: sendForm.setText,
     focus: sendForm.focus,
-    dispose: sendForm.dispose,
+    editMessage,
+    dispose: () => {
+      document.removeEventListener('chat:edit-message', handleEditMessageEvent);
+      sendForm.dispose();
+    },
   };
 };

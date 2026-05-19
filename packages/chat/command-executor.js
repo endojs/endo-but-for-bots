@@ -210,6 +210,30 @@ export const createCommandExecutor = ({
           };
         }
 
+        case 'edit-message': {
+          const { messageNumber, message } = params;
+          const { strings, edgeNames, petNames } =
+            /** @type {{ strings: string[], edgeNames: string[], petNames: string[] }} */ (
+              message
+            );
+          // Per the chat-edit-message-ui design (Edit while in flight):
+          // the daemon's revision log is append-only and the recipient
+          // resolves ordering from revision timestamps, so concurrent
+          // edits degrade to "last edit wins" rather than to a broken
+          // envelope. The UI does not gate concurrent edits.
+          await E(powers).editMessage(
+            BigInt(/** @type {number} */ (messageNumber)),
+            strings,
+            edgeNames,
+            petNames,
+            { done: true },
+          );
+          return {
+            success: true,
+            message: `Message #${messageNumber} edited`,
+          };
+        }
+
         case 'form': {
           const { recipient, description, fields: fieldDefs } = params;
           const recipientPath = String(recipient).split('/');
