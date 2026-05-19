@@ -13,8 +13,7 @@
  * loaded through compartment-mapper's source parser — i.e. the bar an
  * Endo-confined formula would have to clear.
  *
- * Marked `test.failing` until pi and its dependencies clear confined
- * Compartment loading; flip to `test` when it starts passing.
+ * This test verifies the behavior an Endo-confined formula needs from pi.
  *
  * Debug: see the header of `pi-ses-compat.test.js`.
  * `LOCKDOWN_ERROR_TAMING=unsafe-debug yarn test` un-redacts errors
@@ -37,19 +36,24 @@ const fixtureLocation = new URL(
   import.meta.url,
 ).toString();
 
-test.failing('pi-mono loads in a confined Endo Compartment', async t => {
-  const fixture =
-    /** @type {typeof import('./fixtures/pi-confined-fixture.js') | undefined} */ (
-      await importLocation(readPowers, fixtureLocation).catch(err => {
+const globals = { Float64Array, TextDecoder, TextEncoder };
+
+test('pi-mono loads in a confined Endo Compartment', async t => {
+  const application =
+    /** @type {{ namespace: typeof import('./fixtures/pi-confined-fixture.js') } | undefined} */ (
+      await importLocation(readPowers, fixtureLocation, {
+        globals,
+      }).catch(err => {
         t.fail(
           `pi-mono must load when compartment-mapper evaluates its dependency graph: ${err}`,
         );
         return undefined;
       })
     );
-  if (fixture === undefined) {
+  if (application === undefined) {
     return;
   }
+  const { namespace: fixture } = application;
 
   t.deepEqual(
     fixture.types,
