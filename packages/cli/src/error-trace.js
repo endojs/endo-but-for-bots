@@ -1,4 +1,4 @@
-/* global console, setTimeout, clearTimeout */
+/* global setTimeout, clearTimeout */
 
 import { E } from '@endo/far';
 
