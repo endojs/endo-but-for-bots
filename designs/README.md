@@ -1,13 +1,13 @@
 # Endo Design Documents
 
-*Last updated: 2026-05-17*
+*Last updated: 2026-05-18*
 
 *See also: [garden-as-primer-and-journal](garden-as-primer-and-journal.md)
-(added 2026-05-17; proposes modeling the garden's roles, skills, journal,
-dispatches, monitors, bot identity, and authorization shapes as Endo
-primers and familiars; threat-model walk against the Sleeper Channels
-persistence × firing matrix; phased toward D2-grade attestation on the
-boatman),
+(added 2026-05-17; updated 2026-05-18; extracts lessons from the
+garden's journal-driven multi-role workflow about what primer and
+agent-harness primitives Endo would need to host such workflows
+natively; threat-model walk against the Sleeper Channels persistence
+× firing matrix; phased toward D2-grade attestation on the boatman),
 [daemon-make-archive](daemon-make-archive.md) (added 2026-04-23),
 [filesystem-watchers](filesystem-watchers.md) (added 2026-05-07),
 [endo-posix-sandbox](endo-posix-sandbox.md) (added 2026-05-07; mirrors
@@ -146,7 +146,7 @@ PR #151 row-format unblocker; sibling of
 | [unhandled-rejection-display](unhandled-rejection-display.md) | 2026-05-10 | 2026-05-10 | Proposed |
 | [weblet-next](weblet-next.md) | 2026-03-24 | 2026-03-24 | Reference |
 | [workers-panel](workers-panel.md) | 2026-02-14 | 2026-02-24 | Not Started |
-| [garden-as-primer-and-journal](garden-as-primer-and-journal.md) | 2026-05-17 | 2026-05-17 | Proposed |
+| [garden-as-primer-and-journal](garden-as-primer-and-journal.md) | 2026-05-17 | 2026-05-18 | Proposed |
 
 **Totals:** 27 Complete/Implemented, 15 In Progress, 43 Not Started, 9 Proposed, 3 Active, 3 Reference, 2 Deprecated, 1 Draft, 1 Superseded (104 designs)
 
