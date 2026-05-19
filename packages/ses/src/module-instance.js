@@ -373,6 +373,53 @@ export const makeModuleInstance = (
     }
   };
 
+  const reexportGetNotify = create(null);
+  const ensureReexportNotifier = exportName => {
+    if (notifiers[exportName]) {
+      return notifiers[exportName];
+    }
+
+    let value;
+    let tdz = true;
+    const updaters = [];
+    const update = newValue => {
+      value = newValue;
+      tdz = false;
+      for (const updater of updaters) {
+        updater(newValue);
+      }
+    };
+    const notify = updater => {
+      arrayPush(updaters, updater);
+      if (!tdz) {
+        updater(value);
+      }
+    };
+    reexportGetNotify[exportName] = update;
+    notifiers[exportName] = notify;
+    exportsProps[exportName] = {
+      get() {
+        if (tdz) {
+          throw ReferenceError(`binding ${q(exportName)} not yet initialized`);
+        }
+        return value;
+      },
+      set: undefined,
+      enumerable: true,
+      configurable: false,
+    };
+    return notify;
+  };
+
+  const wireUpReexportNotifier = (exportName, notify) => {
+    const update = reexportGetNotify[exportName];
+    if (update && notify !== false) {
+      notify(update);
+    } else {
+      wireUpExportNotifier(exportName, notify);
+    }
+  };
+
   // Per the calling convention for the moduleFunctor generated from
   // an ESM, the `imports` function gets called once up front
   // to populate or arrange the population of imports and reexports.
@@ -393,22 +440,30 @@ export const makeModuleInstance = (
     candidateAll.default = false;
     for (const [specifier, importUpdaters] of updateRecord) {
       const instance = mapGet(importedInstances, specifier);
+      const {
+        execute: executeInstance,
+        ensureReexportNotifier: ensureInstanceReexportNotifier,
+        hasReexports,
+        isExecuting: isInstanceExecuting,
+        notifiers: importNotifiers,
+      } = instance;
       // The module instance object is an internal literal, does not bind this,
       // and never revealed outside the SES shim.
       // There are two instantiation sites for instances and they are both in
       // this module.
       // eslint-disable-next-line @endo/no-polymorphic-call
-      instance.execute(); // bottom up cycle tolerant
-      const { notifiers: importNotifiers } = instance;
+      executeInstance(); // bottom up cycle tolerant
       for (const [importName, updaters] of importUpdaters) {
         const importNotify = importNotifiers[importName];
-        if (!importNotify) {
+        if (!importNotify && (!hasReexports || !isInstanceExecuting())) {
           throw SyntaxError(
             `The requested module '${specifier}' does not provide an export named '${importName}'`,
           );
         }
+        const actualImportNotify =
+          importNotify || ensureInstanceReexportNotifier(importName);
         for (const updater of updaters) {
-          importNotify(updater);
+          actualImportNotify(updater);
         }
       }
       if (arrayIncludes(exportAlls, specifier)) {
@@ -428,13 +483,22 @@ export const makeModuleInstance = (
       if (reexportMap[specifier]) {
         // Set up reexport notifiers instantly so they are available in cycles.
         for (const [localName, exportedName] of reexportMap[specifier]) {
-          wireUpExportNotifier(exportedName, importNotifiers[localName]);
+          const importNotify = importNotifiers[localName];
+          if (!importNotify && (!hasReexports || !isInstanceExecuting())) {
+            throw SyntaxError(
+              `The requested module '${specifier}' does not provide an export named '${localName}'`,
+            );
+          }
+          wireUpReexportNotifier(
+            exportedName,
+            importNotify || ensureInstanceReexportNotifier(localName),
+          );
         }
       }
     }
 
     for (const [exportName, notify] of entries(candidateAll)) {
-      wireUpExportNotifier(exportName, notify);
+      wireUpReexportNotifier(exportName, notify);
     }
 
     // Sort the module exports namespace as per spec.
@@ -466,11 +530,14 @@ export const makeModuleInstance = (
   }
   let didThrow = false;
   let thrownError;
+  let isExecuting = false;
+  const getIsExecuting = () => isExecuting;
   function execute() {
     if (optFunctor) {
       // uninitialized
       const functor = optFunctor;
       optFunctor = null;
+      isExecuting = true;
       // initializing - call with `this` of `undefined`.
       try {
         functor(
@@ -485,6 +552,8 @@ export const makeModuleInstance = (
       } catch (e) {
         didThrow = true;
         thrownError = e;
+      } finally {
+        isExecuting = false;
       }
       // initialized
     }
@@ -495,6 +564,9 @@ export const makeModuleInstance = (
 
   return freeze({
     notifiers,
+    hasReexports: exportAlls.length !== 0,
+    ensureReexportNotifier,
+    isExecuting: getIsExecuting,
     exportsProxy,
     execute,
   });
