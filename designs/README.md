@@ -51,13 +51,13 @@ PR #151 row-format unblocker; sibling of
 | [chat-high-contrast-mode](chat-high-contrast-mode.md) | 2026-02-26 | 2026-02-26 | **Complete** |
 | [chat-invariants](chat-invariants.md) | 2026-03-02 | 2026-03-02 | **Complete** |
 | [chat-per-space-color-scheme](chat-per-space-color-scheme.md) | 2026-02-26 | 2026-02-26 | **Complete** |
-| [chat-focus-message](chat-focus-message.md) | 2026-03-04 | 2026-03-04 | Active |
-| [chat-markdown-render](chat-markdown-render.md) | 2026-03-03 | 2026-03-27 | Proposed |
-| [chat-pending-commands](chat-pending-commands.md) | 2026-03-11 | 2026-03-11 | Not Started |
+| [chat-focus-message](chat-focus-message.md) | 2026-03-04 | 2026-05-19 | **Complete** |
+| [chat-markdown-render](chat-markdown-render.md) | 2026-03-03 | 2026-05-19 | **Complete** |
+| [chat-pending-commands](chat-pending-commands.md) | 2026-03-11 | 2026-05-19 | In Progress (PR #133) |
 | [chat-playwright-smoke](chat-playwright-smoke.md) | 2026-05-06 | 2026-05-08 | **Complete** |
 | [chat-rename-dismiss-to-clear](chat-rename-dismiss-to-clear.md) | 2026-03-03 | 2026-05-04 | PR #93 |
 | [chat-slot-slash-commands](chat-slot-slash-commands.md) | 2026-04-23 | 2026-05-06 | Proposed |
-| [chat-view-edit-commands](chat-view-edit-commands.md) | 2026-03-21 | 2026-03-21 | Not Started |
+| [chat-view-edit-commands](chat-view-edit-commands.md) | 2026-03-21 | 2026-05-19 | **Complete** |
 | [chat-edit-message-ui](chat-edit-message-ui.md) | 2026-05-05 | 2026-05-05 | Not Started |
 | [chat-reply-chain-visualization](chat-reply-chain-visualization.md) | 2026-02-23 | 2026-02-28 | Deprecated |
 | [chat-spaces-home](chat-spaces-home.md) | 2026-03-02 | 2026-03-02 | **Complete** |
@@ -69,17 +69,17 @@ PR #151 row-format unblocker; sibling of
 | [daemon-agent-tools](daemon-agent-tools.md) | 2026-03-02 | 2026-03-02 | Not Started |
 | [daemon-commands-as-messages](daemon-commands-as-messages.md) | 2026-03-11 | 2026-03-11 | Not Started |
 | [daemon-capability-bank](daemon-capability-bank.md) | 2026-02-15 | 2026-02-24 | Not Started |
-| [daemon-checkin-checkout](daemon-checkin-checkout.md) | 2026-03-17 | 2026-03-17 | Not Started |
-| [daemon-capability-filesystem](daemon-capability-filesystem.md) | 2026-02-15 | 2026-02-24 | Not Started |
+| [daemon-checkin-checkout](daemon-checkin-checkout.md) | 2026-03-17 | 2026-05-19 | **Complete** |
+| [daemon-capability-filesystem](daemon-capability-filesystem.md) | 2026-02-15 | 2026-05-19 | Reference |
 | [daemon-content-store-gc](daemon-content-store-gc.md) | 2026-03-20 | 2026-05-08 | **Complete** |
-| [daemon-message-streaming](daemon-message-streaming.md) | 2026-03-26 | 2026-03-26 | Draft |
-| [daemon-mount](daemon-mount.md) | 2026-03-20 | 2026-03-20 | In Progress |
+| [daemon-message-streaming](daemon-message-streaming.md) | 2026-03-26 | 2026-05-19 | In Progress (PR #287) |
+| [daemon-mount](daemon-mount.md) | 2026-03-20 | 2026-05-19 | In Progress |
 | [filesystem-watchers](filesystem-watchers.md) | 2026-05-07 | 2026-05-07 | Not Started |
-| [platform-fs](platform-fs.md) | 2026-03-18 | 2026-03-18 | In Progress |
+| [platform-fs](platform-fs.md) | 2026-03-18 | 2026-05-19 | **Complete** |
 | [daemon-capability-persona](daemon-capability-persona.md) | 2026-02-16 | 2026-02-24 | Not Started |
 | [daemon-cross-peer-gc](daemon-cross-peer-gc.md) | 2026-03-07 | 2026-04-29 | **Complete** |
-| [daemon-retention-paths](daemon-retention-paths.md) | 2026-04-30 | 2026-04-30 | Not Started |
-| [retention-path-notation](retention-path-notation.md) | 2026-05-10 | 2026-05-10 | Proposed |
+| [daemon-retention-paths](daemon-retention-paths.md) | 2026-04-30 | 2026-05-19 | In Progress (PR #284) |
+| [retention-path-notation](retention-path-notation.md) | 2026-05-10 | 2026-05-19 | Reference |
 | [daemon-rename-to-manager](daemon-rename-to-manager.md) | 2026-05-04 | 2026-05-05 | Not Started |
 | [daemon-guest-eval-simplification](daemon-guest-eval-simplification.md) | 2026-03-21 | 2026-05-04 | **Implemented** |
 | [daemon-docker-selfhost](daemon-docker-selfhost.md) | 2026-03-02 | 2026-03-02 | Not Started |
@@ -377,10 +377,10 @@ capabilities available to agents.
 | endo-gateway | Proposed | Per-host system-service HTTP virtual host for OCapN; lifts hosting out of per-user Daemon; closes issue #173, unblocks PR #134. Raised to M1 per kriskowal directive on `#134#issuecomment-4444987124` (2026-05-13) |
 | daemon-docker-selfhost | Not Started | Dockerfile, state persistence, network exposure, Chat hosting |
 | daemon-agent-tools | Not Started | Filesystem, shell, git tools backed by capabilities |
-| platform-fs | In Progress | `@endo/platform/fs` — shared types, content store, tree adapters |
-| daemon-capability-filesystem | Not Started | `Dir`/`File` capabilities for structural filesystem confinement |
+| ~~platform-fs~~ | **Complete** | `@endo/platform/fs` — shared types, content store, tree adapters; landed on `llm` (initial commit e0dda06fb + PR #122 review cycle fixups) |
+| daemon-capability-filesystem | Reference | `Dir`/`File` capabilities sketch retained as reference; narrower mount slice ships via daemon-mount |
 | ~~daemon-content-store-gc~~ | **Complete** | Content-store pruning and scratch-mount directory cleanup at GC time; landed in PR #99 |
-| daemon-mount | In Progress | Phases 1-3, 5 implemented; symlink confinement, 20 integration tests; Phase 4 (sub-mounts, snapshot) and Phase 6 (CLI) remaining |
+| daemon-mount | In Progress | Phases 1-3, 5 on `llm` (commit e22f71327); symlink confinement, 20 integration tests; Phase 4 (sub-mounts, snapshot) in PR #135 open, mount extensions in PR #127 open, followNameChanges in PR #277 open |
 | filesystem-watchers | Not Started | `EndoMount.followNameChanges` parity with `EndoDirectory`; Node `fs.watch` adapter on `FilePowers` |
 | daemon-locator-terminology | Not Started | Clean locator API; unblocked |
 | daemon-rename-to-manager | Not Started | Rename `daemon.js`/`Daemon`/`MignonicPowers` to `manager.js`/`Manager`/`WorkerPowers` to align JS with Rust `endor` nomenclature |
@@ -436,7 +436,7 @@ automation.
 |--------|--------|-------|
 | familiar-unified-weblet-server | In Progress | Web-server restructuring |
 | familiar-chat-weblet-hosting | Not Started | Iframe hosting, guest profiles |
-| daemon-checkin-checkout | Not Started | `endo ci` / `endo co` for readable-tree ↔ filesystem |
+| ~~daemon-checkin-checkout~~ | **Complete** | `endo ci` / `endo co` for readable-tree ↔ filesystem; landed on `llm` (commit d60ba38b2 + a6e20c5e2 zip support); reshape via #153 |
 | cli-store-verb-text-modes | Proposed | Reshape blocker for PR #128: unify `endo store` flag scheme across source/sink/representation axes; subsume `write-text`/`read-text` |
 | cli-edit-verb | Proposed | `endo edit` with hashline patches for AI agents; sibling of `cli-store-verb-text-modes` (PR #153) |
 | daemon-weblet-application | Not Started | Readable trees, zip archives |
@@ -463,7 +463,7 @@ webhook events.
 | Design | Status | Notes |
 |--------|--------|-------|
 | ~~chat-reply-chain-visualization~~ | Deprecated | Superseded by chat-focus-message |
-| chat-pending-commands | Not Started | Pending commands region, unlocked command bar |
+| chat-pending-commands | In Progress | Pending commands region, unlocked command bar; PR #133 open (re-opened from #43) |
 | chat-slot-slash-commands | Not Started | Slash commands (e.g. `/js`) inside slot inputs; daemon-side transient pinning until retained by the outer formula |
 | daemon-commands-as-messages | Not Started | Commands as self-addressed messages with reply results; subsumes pending region |
 | inventory-cancel-and-liveness | Not Started | Cancel button with liveness indicator, coalesced watcher protocol |
@@ -471,9 +471,9 @@ webhook events.
 | inventory-drag-and-drop | Not Started | HTML5 DnD handlers |
 | formula-inspector | Not Started | New panel, daemon API exposure (retention-paths surface factored out into `daemon-retention-paths`) |
 | workers-panel | Not Started | Metrics, sparklines (retention-paths section factored out into `daemon-retention-paths`) |
-| daemon-retention-paths | Not Started | Host-only `listRetentionPaths` / `followRetentionPaths`, `endo paths` CLI, Chat paths panel with delete-pet-name and disincarnate/reincarnate |
-| retention-path-notation | Proposed | Canonical string notation for one path; bulk `listRetentionPaths(targetIds)` and `describeRetentionPaths(targetIds)`; row-format unblocker for `endo workers` (PR #151); sibling of daemon-retention-paths |
-| chat-view-edit-commands | Not Started | `/view` and `/edit` for blobs; Monaco editor, Markdown split preview |
+| daemon-retention-paths | In Progress | Host-only `listRetentionPaths` / `followRetentionPaths`, `endo paths` CLI, Chat paths panel; Phase 1 forwarded as PR #284 (open) |
+| retention-path-notation | Reference | Notation + bulk-collection sketch captured for reference; not a forward-looking proposal |
+| ~~chat-view-edit-commands~~ | **Complete** | `/view` and `/edit` for blobs; Monaco editor, Markdown split preview; landed on `llm` (commit ae2b074ac) |
 | chat-edit-message-ui | Not Started | `/edit` slash command, `e` focus shortcut, hover pencil for editing previously sent messages; revision-history panel |
 | lal-transcript-memory-management | Not Started | Durable transcript nodes outliving dismissed messages |
 
@@ -670,8 +670,8 @@ Recalibrated on 2026-03-02 using observed velocity from 15 active work days
 | endo-gateway | L | 1.5-3 weeks | 1 | Per-host system-service HTTP virtual host for OCapN; lifts hosting out of per-user Daemon. Raised to M1 per kriskowal directive on `#134#issuecomment-4444987124` (2026-05-13). Size set at L pending per-phase backfill |
 | daemon-docker-selfhost | S-M | 3 days | 1 | Dockerfile, entrypoint, compose; PR #134 forwarded under bot, awaiting review |
 | daemon-agent-tools | M-L | 1.5 weeks | 1 | Shell, git, fs tool wrappers; PR #130 forwarded under bot |
-| platform-fs | S-M | 3 days | 1 | Shared types, content store extraction, tree adapters; PR #122 forwarded under bot |
-| daemon-capability-filesystem | L | 1.5-3 weeks | 1 | Dir/File exos, physical backend (1.5x for L size) |
+| ~~platform-fs~~ | S-M | — | 1 | ✅ Complete; `@endo/platform` package landed on `llm` (commit e0dda06fb); PR #122 carried review-cycle fixups |
+| daemon-capability-filesystem | L | — | 1 | Reference sketch; narrower mount slice ships via daemon-mount |
 | ~~daemon-content-store-gc~~ | S | — | 1 | ✅ Complete (PR #99, ~2 days actual vs 1 day estimate) |
 | daemon-mount | M-L | 1.5 weeks | 1 | Mount exo, symlink confinement; Phase 4 in PR #135 forwarded under bot |
 | ~~filesystem-watchers~~ (design) | S | — | 1 | ✅ Design merged (PR #115); implementation TBD |
@@ -697,7 +697,7 @@ Recalibrated on 2026-03-02 using observed velocity from 15 active work days
 | ocapn-noise-network | L | 2-3 weeks | 2 | Full network + transport (L bumped 1.5x); netlayer largely complete in stacked PRs #111/#112/#113, awaiting review |
 | familiar-unified-weblet-server | M | 3 days | 3 | Web-server restructuring; design revised in PR #100 |
 | familiar-chat-weblet-hosting | M | 4-5 days | 3 | Iframe hosting, guest profiles (1.2x bump) |
-| daemon-checkin-checkout | S-M | 3 days | 3 | `endo ci`/`co`, readable-tree formula, zip support |
+| ~~daemon-checkin-checkout~~ | S-M | — | 3 | ✅ Complete; landed on `llm` (commit d60ba38b2 + zip support a6e20c5e2); reshape via PR #153 |
 | cli-edit-verb | S-M | 3 days | 3 | `endo edit` with hashline parser, anchor validator, splice; CLI-side, no daemon surface change |
 | daemon-weblet-application | M | 4-5 days | 3 | Formula types, gateway serving (1.2x bump) |
 | exo-zip-package | S | 1-2 days | 3 | `@endo/exo-zip` adapter: in-memory ZIP as `ReadableTree` exo; PR #128 reshape blocker |
@@ -715,9 +715,9 @@ Recalibrated on 2026-03-02 using observed velocity from 15 active work days
 | inventory-drag-and-drop | S-M | 3 days | 4 | HTML5 DnD; PR #131 forwarded under bot |
 | formula-inspector | M | 4-5 days | 4 | New panel, daemon API |
 | workers-panel | M | 4-6 days | 4 | Metrics, sparklines |
-| daemon-retention-paths | M-L | 1.5 weeks | 4 | Snapshot + subscription daemon API, CLI verb, Chat paths panel; superset of retention-path slices in formula-inspector and workers-panel |
-| retention-path-notation | S-M | 3 days | 4 | Notation renderer + parser, bulk `describeRetentionPaths` host method, `endo workers` and chat tenant-chip integration; sibling of daemon-retention-paths |
-| chat-view-edit-commands | M | 4-6 days | 4 | `/view`, `/edit` modal, Monaco reuse, Markdown split preview (Phase 4) |
+| daemon-retention-paths | M-L | 1.5 weeks | 4 | Snapshot + subscription daemon API, CLI verb, Chat paths panel; Phase 1 in PR #284 (open) |
+| retention-path-notation | — | — | 4 | Reference; notation + bulk-collection sketch captured for future reference |
+| ~~chat-view-edit-commands~~ | M | — | 4 | ✅ Complete; landed on `llm` (commit ae2b074ac); `/view`, `/edit` modal, Monaco, Markdown preview |
 | chat-edit-message-ui | S-M | 3 days | 4 | `/edit` command, `e` focus shortcut, hover pencil; design merged (PR #88); daemon impl in PR #125 forwarded under bot |
 | lal-transcript-memory-management | S | 1 day | 4 | Durable message-to-node mapping, broken chain detection |
 | ~~daemon-os-sandbox-plugin~~ | — | — | 5 | Superseded by `endo-posix-sandbox` |

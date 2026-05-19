@@ -3,8 +3,25 @@
 | | |
 |---|---|
 | **Created** | 2026-03-17 |
+| **Updated** | 2026-05-19 |
 | **Author** | Kris Kowal (prompted) |
-| **Status** | Not Started |
+| **Status** | **Complete** |
+
+## Status
+
+Implemented on the `llm` branch:
+
+- Initial CLI verbs landed in commit d60ba38b2
+  ("CLI: add checkin and checkout commands", 2026-03-20).
+- Zip support (`-z` flag) added in commit a6e20c5e2
+  ("feat(cli): add zip support to checkin and checkout (-z flag)").
+- Subsequent verb unification landed via #153
+  ("feat(cli): unify store/cat axes; add write/read for mount paths",
+  merged 2026-05-12, commit 8a8e872d4) which reshapes the CLI
+  surface around the same readable-tree / readable-blob substrate.
+
+The primary commits predate the bot-forwarded PR workflow, so there
+is no single implementing PR number for the original verbs.
 
 ## What is the Problem Being Solved?
 

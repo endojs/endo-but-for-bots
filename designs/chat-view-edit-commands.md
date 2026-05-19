@@ -3,8 +3,21 @@
 | | |
 |---|---|
 | **Created** | 2026-03-21 |
+| **Updated** | 2026-05-19 |
 | **Author** | Kris Kowal (prompted) |
-| **Status** | Not Started |
+| **Status** | **Complete** |
+
+## Status
+
+Implemented directly on the `llm` branch in commit ae2b074ac
+("Blob view and edit", 2026-03-23).
+The implementation landed before the bot-forwarded PR workflow was
+in place, so there is no PR number; the change is on `llm` only.
+The new `packages/chat/blob-viewer.js`, `markdown-preview.js`,
+`monaco-wrapper.js`, `language-detect.js`, plus updates to
+`command-executor.js`, `command-registry.js`, and `index.css` land
+the modal viewer, the Monaco-backed editor, and the Markdown
+preview pipeline described here.
 
 ## What is the Problem Being Solved?
 
