@@ -113,7 +113,7 @@ daemon discovers it as an active transport.
 
 ```bash
 # Store the listen address so the network module can find it
-yarn exec endo store --text "127.0.0.1:8940" --name tcp-listen-addr
+yarn exec endo store --text --literal "127.0.0.1:8940" --name tcp-listen-addr
 
 # Install the network as an unconfined module (needs Node.js access for `net`)
 yarn exec endo make --UNCONFINED packages/daemon/src/networks/tcp-netstring.js --powers @agent --name network-service

@@ -3,9 +3,39 @@
 | | |
 |---|---|
 | **Created** | 2026-05-08 |
+| **Updated** | 2026-05-15 |
 | **Author** | Kris Kowal (prompted) |
-| **Status** | Proposed |
+| **Status** | In Progress |
 | **Source** | PR [#128](https://github.com/endojs/endo-but-for-bots/pull/128) inline review comment [discussion_r3205660244](https://github.com/endojs/endo-but-for-bots/pull/128#discussion_r3205660244) on `packages/cli/src/commands/write-text.js:15` |
+
+## Status
+
+In progress.
+Implemented on the `llm` branch:
+
+- `endo store` reshaped around the three axes
+  (`packages/cli/src/commands/store.js`,
+  `packages/cli/src/endo.js`).
+- `endo cat` extended with `--blob` / `--text` / `--json` / `--tree`
+  representations and `--stdout` / `-p` / `--show` sinks
+  (`packages/cli/src/commands/cat.js`).
+- `endo write <mount>/<path>` and `endo read <mount>/<path>`
+  added as the mount-path mutation pair
+  (`packages/cli/src/commands/write.js`,
+  `packages/cli/src/commands/read.js`).
+- Option-parser unit tests in
+  `packages/cli/test/store-axes.test.js`.
+
+Deferred for follow-up PRs:
+
+- Zip-framed tree ingest / egress
+  (`--tree -z` and `--tree --zip --stdin`); blocked on
+  `daemon-checkin-checkout`.
+- `endo write --blob` and `endo read --blob` for mount-path bytes;
+  the daemon side needs a `writeBytes` mount method first.
+- Removal of `endo checkin` / `endo checkout` as separate verbs in
+  favor of `endo store --tree` / `endo cat --tree`; kept as
+  shorthands for now to avoid breaking call sites.
 
 ## What is the Problem Being Solved?
 
