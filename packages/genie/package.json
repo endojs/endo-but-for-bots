@@ -49,6 +49,7 @@
   },
   "devDependencies": {
     "@endo/cli": "workspace:^",
+    "@endo/compartment-mapper": "workspace:^",
     "@endo/ses-ava": "workspace:^",
     "@fast-check/ava": "catalog:dev",
     "ava": "catalog:dev",
