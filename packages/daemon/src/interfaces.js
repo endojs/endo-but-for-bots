@@ -117,13 +117,30 @@ export const DismisserInterface = M.interface('EndoDismisser', {
   dismiss: M.call().returns(M.promise()),
 });
 
+// Shape of a single epithet entry as exposed by Handle.epithets().
+// `principal` is a remote Handle reference (resolved at read time from
+// the persisted formula identifier).  See designs/daemon-capability-persona.md.
+export const EpithetShape = M.splitRecord({
+  relationship: M.string(),
+  principal: M.remotable('Handle'),
+});
+
 // CRITICAL: HandleInterface must use defaultGuards: 'passable' to preserve
 // envelope object identity when passed through E() calls. Explicit guards
 // like M.remotable('Envelope') cause envelope identity loss and "mail fraud"
-// errors.
+// errors. The unlisted `receive` and `open` methods inherit the passable
+// default; the persona methods (`epithets`, `verify`) carry their own
+// explicit guards.
 export const HandleInterface = M.interface(
   'EndoHandle',
-  {},
+  {
+    // Read this Handle's epithet chain (most-recent first).
+    epithets: M.call().returns(M.promise()),
+    // Confirm or deny that the given subordinate Handle stands in the
+    // named relationship to this Handle. Returns false if the subordinate
+    // has no matching epithet whose principal is this Handle.
+    verify: M.call(M.remotable('Handle'), M.string()).returns(M.promise()),
+  },
   { defaultGuards: 'passable' },
 );
 

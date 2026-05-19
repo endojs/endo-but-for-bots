@@ -4523,17 +4523,27 @@ const makeDaemonCore = async (
    * @param {FormulaNumber} formulaNumber - The formula number of the handle to formulate.
    * @param {FormulaIdentifier} agentId - The formula identifier of the handle's agent.
    * @param {NodeNumber} [nodeNumber] - The node number to use (defaults to localNodeNumber).
+   * @param {ReadonlyArray<import('./types.js').Epithet>} [epithets] - Persona
+   *   chain (most-recent first) to persist on the handle formula. Omitted when
+   *   the handle carries no delegation claims (the common case). The daemon
+   *   does not validate or transform the chain here; callers (see
+   *   `formulateGuestDependencies`) are responsible for prepending the
+   *   creator's inherited chain.
    * @returns {Promise<FormulaIdentifier>}
    */
   const formulateNumberedHandle = async (
     formulaNumber,
     agentId,
     nodeNumber = localNodeNumber,
+    epithets = undefined,
   ) => {
     /** @type {HandleFormula} */
     const formula = {
       type: 'handle',
       agent: agentId,
+      ...(epithets !== undefined && epithets.length > 0
+        ? { epithets: [...epithets] }
+        : {}),
     };
     await persistencePowers.writeFormula(formulaNumber, nodeNumber, formula);
     const id = formatId({
@@ -4732,8 +4742,12 @@ const makeDaemonCore = async (
    * @type {DaemonCore['formulateHostDependencies']}
    */
   const formulateHostDependencies = async specifiedIdentifiers => {
-    const { specifiedWorkerId, workerLabel, ...remainingSpecifiedIdentifiers } =
-      specifiedIdentifiers;
+    const {
+      specifiedWorkerId,
+      workerLabel,
+      epithets,
+      ...remainingSpecifiedIdentifiers
+    } = specifiedIdentifiers;
 
     // Pin each dependency formula to protect it from collection until the
     // parent host formula links them via formulaDeps.
@@ -4797,6 +4811,7 @@ const makeDaemonCore = async (
         /** @type {FormulaNumber} */ (await randomHex256()),
         hostId,
         agentNodeNumber,
+        epithets,
       ),
     );
 
@@ -4885,6 +4900,7 @@ const makeDaemonCore = async (
     specifiedWorkerId,
     hostHandleId,
     workerLabel,
+    epithets = undefined,
   ) => {
     return withFormulaGraphLock(async () => {
       const identifiers = await formulateHostDependencies({
@@ -4894,6 +4910,7 @@ const makeDaemonCore = async (
         specifiedWorkerId,
         hostHandleId,
         workerLabel,
+        epithets,
       });
 
       await deferredTasks.execute({
@@ -4914,6 +4931,7 @@ const makeDaemonCore = async (
     hostAgentId,
     hostHandleId,
     workerLabel,
+    epithets = undefined,
   ) => {
     // Pin each dependency formula to protect it from collection until the
     // parent guest formula links them via formulaDeps.
@@ -4949,6 +4967,7 @@ const makeDaemonCore = async (
         /** @type {FormulaNumber} */ (await randomHex256()),
         guestId,
         agentNodeNumber,
+        epithets,
       ),
     );
     const mailboxStoreId = pin(
@@ -5036,12 +5055,14 @@ const makeDaemonCore = async (
     hostHandleId,
     deferredTasks,
     workerLabel,
+    epithets = undefined,
   ) => {
     return withFormulaGraphLock(async () => {
       const identifiers = await formulateGuestDependencies(
         hostAgentId,
         hostHandleId,
         workerLabel,
+        epithets,
       );
 
       await deferredTasks.execute({

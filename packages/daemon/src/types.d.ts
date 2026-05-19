@@ -567,9 +567,34 @@ type PeerFormula = {
   addresses: Array<string>;
 };
 
+/**
+ * A single epithet on a Handle: a structured claim that the Handle
+ * stands in `relationship` to `principal`. Persisted on the handle
+ * formula by formula identifier; surfaced as a remote Handle reference
+ * by `Handle.epithets()`. See designs/daemon-capability-persona.md.
+ */
+export type Epithet = {
+  relationship: string;
+  principal: FormulaIdentifier;
+};
+
+/**
+ * As exposed at the API surface: a Handle bearing a relationship to
+ * another Handle. The `principal` is a remote Handle reference; the
+ * persisted form (`Epithet`) carries the formula identifier instead.
+ */
+export type ExposedEpithet = {
+  relationship: string;
+  principal: unknown; // Handle remotable
+};
+
 type HandleFormula = {
   type: 'handle';
   agent: FormulaIdentifier;
+  // Persona chain, most-recent first. Absent for handles that carry no
+  // delegation claims (the common case). Set at formula creation by the
+  // daemon; the holder of the handle cannot mutate this.
+  epithets?: Array<Epithet>;
 };
 
 type KnownPeersStoreFormula = {
@@ -898,6 +923,23 @@ export interface Envelope {}
 export interface Handle {
   receive(envelope: Envelope, allegedFromId: string): void;
   open(envelope: Envelope): EnvelopedMessage;
+  /**
+   * Read this Handle's persona epithet chain, most-recent first. Each
+   * entry names a relationship and a principal (the Handle this Handle
+   * stands in relationship to). The principal is a remote Handle
+   * reference, suitable for `E(principal).verify(this, relationship)`.
+   * See `designs/daemon-capability-persona.md`.
+   */
+  epithets(): Promise<
+    ReadonlyArray<{ relationship: string; principal: Handle }>
+  >;
+  /**
+   * Confirm or deny that the subordinate Handle stands in the named
+   * relationship to this Handle. The default implementation returns
+   * true exactly when the subordinate's most-recent epithet names this
+   * Handle as principal under the given relationship.
+   */
+  verify(subordinateHandle: Handle, relationship: string): Promise<boolean>;
 }
 
 export type MakeSha256 = () => Sha256;
@@ -1322,6 +1364,15 @@ export interface EndoWorker {}
 export type MakeHostOrGuestOptions = {
   agentName?: string | string[];
   introducedNames?: Record<string, string>;
+  /**
+   * Persona epithets to add to the new agent's Handle. Each entry names a
+   * relationship; the daemon fills in the principal as the creator's own
+   * Handle and prepends the creator's existing epithet chain so the new
+   * Handle carries the full delegation chain. Strictly additive: the
+   * delegate cannot strip its inherited chain. See
+   * `designs/daemon-capability-persona.md`.
+   */
+  epithets?: Array<{ relationship: string }>;
 };
 
 export type MakeCapletOptions = {
@@ -2222,6 +2273,14 @@ type FormulateHostDependenciesParams = {
   specifiedWorkerId?: FormulaIdentifier | undefined;
   hostHandleId?: FormulaIdentifier | undefined;
   workerLabel?: string | undefined;
+  /**
+   * Optional persona chain to persist on the new host's handle formula.
+   * Most-recent first. Callers (typically `provideHost` in `host.js`) are
+   * responsible for prepending the creator's inherited chain so the
+   * daemon-side write is the final chain. See
+   * `designs/daemon-capability-persona.md`.
+   */
+  epithets?: ReadonlyArray<Epithet> | undefined;
 };
 
 type FormulateNumberedHostParams = {
@@ -2361,6 +2420,7 @@ export interface DaemonCore {
     hostHandleId: FormulaIdentifier,
     deferredTasks: DeferredTasks<AgentDeferredTaskParams>,
     workerLabel?: string,
+    epithets?: ReadonlyArray<Epithet>,
   ) => FormulateResult<EndoGuest>;
 
   /**
@@ -2368,12 +2428,17 @@ export interface DaemonCore {
    * @param hostAgentId - The formula identifier of the host agent.
    * @param hostHandleId - The formula identifier of the host handle.
    * @param workerLabel - Optional label for the guest worker.
+   * @param epithets - Optional persona chain to persist on the new guest's
+   *   handle formula. Most-recent first. Callers (typically `provideGuest`
+   *   in `host.js`) are responsible for prepending the creator's inherited
+   *   chain so the daemon-side write is the final chain.
    * @returns The formula identifiers for the guest formulation's dependencies.
    */
   formulateGuestDependencies: (
     hostAgentId: FormulaIdentifier,
     hostHandleId: FormulaIdentifier,
     workerLabel?: string,
+    epithets?: ReadonlyArray<Epithet>,
   ) => Promise<Readonly<FormulateNumberedGuestParams>>;
 
   formulateChannel: (
@@ -2397,6 +2462,7 @@ export interface DaemonCore {
     specifiedWorkerId?: FormulaIdentifier | undefined,
     hostHandleId?: FormulaIdentifier,
     workerLabel?: string,
+    epithets?: ReadonlyArray<Epithet>,
   ) => FormulateResult<EndoHost>;
 
   /**

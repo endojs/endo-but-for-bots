@@ -6748,3 +6748,165 @@ test('readLog follow discovers new logs and settles on disconnect', async t => {
   cancel(Error('readLog follow new-log test done'));
   t.is(await pending, 'settled');
 });
+
+// --- daemon-capability-persona ---
+// designs/daemon-capability-persona.md: a Handle carries a persona chain
+// of `{ relationship, principal }` epithets stamped at creation time by
+// the creating agent. The chain is immutable to the holder, additive
+// only through delegation, and verifiable by asking each principal in
+// the chain.
+
+test('persona: handle without epithets returns an empty chain', async t => {
+  const { host } = await prepareHost(t);
+
+  const hostHandle = await E(host).lookup('@self');
+  const chain = await E(hostHandle).epithets();
+  t.deepEqual([...chain], [], 'top-level host carries no inherited claims');
+});
+
+test('persona: creating a guest with epithets stores the chain', async t => {
+  const { host } = await prepareHost(t);
+
+  const aifred = await E(host).provideGuest('aifred', {
+    epithets: [{ relationship: 'assistant' }],
+  });
+  const aifredHandle = await E(aifred).lookup('@self');
+  const chain = await E(aifredHandle).epithets();
+
+  t.is(chain.length, 1, 'one inherited epithet');
+  t.is(chain[0].relationship, 'assistant', 'relationship preserved');
+});
+
+test('persona: epithet principal equals the creating handle', async t => {
+  const { host } = await prepareHost(t);
+
+  const hostHandle = await E(host).lookup('@self');
+  const aifred = await E(host).provideGuest('aifred', {
+    epithets: [{ relationship: 'assistant' }],
+  });
+  const aifredHandle = await E(aifred).lookup('@self');
+  const chain = await E(aifredHandle).epithets();
+
+  // Pass-invariant Handle equality: the principal returned by the
+  // chain is the same exo as the host's @self handle, because the
+  // daemon caches handle exos by formula id.
+  t.is(
+    chain[0].principal,
+    hostHandle,
+    'principal is the same Handle as the creator',
+  );
+});
+
+test('persona: verify confirms a valid relationship', async t => {
+  const { host } = await prepareHost(t);
+
+  const hostHandle = await E(host).lookup('@self');
+  const aifred = await E(host).provideGuest('aifred', {
+    epithets: [{ relationship: 'assistant' }],
+  });
+  const aifredHandle = await E(aifred).lookup('@self');
+
+  const confirmed = await E(hostHandle).verify(aifredHandle, 'assistant');
+  t.true(confirmed, 'creator confirms its own delegation');
+});
+
+test('persona: verify denies a wrong relationship name', async t => {
+  const { host } = await prepareHost(t);
+
+  const hostHandle = await E(host).lookup('@self');
+  const aifred = await E(host).provideGuest('aifred', {
+    epithets: [{ relationship: 'assistant' }],
+  });
+  const aifredHandle = await E(aifred).lookup('@self');
+
+  const wrongRelationship = await E(hostHandle).verify(
+    aifredHandle,
+    'majordomo',
+  );
+  t.false(wrongRelationship, 'creator denies a relationship it did not stamp');
+});
+
+test('persona: verify denies when asked of the wrong principal', async t => {
+  const { host } = await prepareHost(t);
+
+  // Create two siblings of the same host. The host stamped both with the
+  // relationship 'assistant'; their principals point at the host, not at
+  // each other.
+  const aifred = await E(host).provideGuest('aifred', {
+    epithets: [{ relationship: 'assistant' }],
+  });
+  const bertie = await E(host).provideGuest('bertie', {
+    epithets: [{ relationship: 'assistant' }],
+  });
+  const aifredHandle = await E(aifred).lookup('@self');
+  const bertieHandle = await E(bertie).lookup('@self');
+
+  // Bertie is not Aifred's principal, so Bertie's verify must say no
+  // even though the relationship name matches.
+  const verdict = await E(bertieHandle).verify(aifredHandle, 'assistant');
+  t.false(
+    verdict,
+    'a non-principal handle denies a relationship it did not stamp',
+  );
+});
+
+test('persona: verify denies when the subordinate carries no epithets', async t => {
+  const { host } = await prepareHost(t);
+
+  const hostHandle = await E(host).lookup('@self');
+  // A plain guest with no persona chain.
+  const plain = await E(host).provideGuest('plain');
+  const plainHandle = await E(plain).lookup('@self');
+
+  const verdict = await E(hostHandle).verify(plainHandle, 'assistant');
+  t.false(verdict, 'a chainless subordinate cannot be verified');
+});
+
+test('persona: chains propagate recursively through delegated provideHost + provideGuest', async t => {
+  const { host } = await prepareHost(t);
+
+  const hostHandle = await E(host).lookup('@self');
+
+  // Host (Alice) creates Aifred as her assistant. Aifred is a child
+  // host (not a guest) so it can in turn provideGuest a sub-delegate.
+  const aifred = await E(host).provideHost('aifred', {
+    epithets: [{ relationship: 'assistant' }],
+  });
+  const aifredHandle = await E(aifred).lookup('@self');
+
+  // Aifred creates Jarvis as Aifred's majordomo. The daemon prepends
+  // Aifred's inherited chain so Jarvis carries both links.
+  const jarvis = await E(aifred).provideGuest('jarvis', {
+    epithets: [{ relationship: 'majordomo' }],
+  });
+  const jarvisHandle = await E(jarvis).lookup('@self');
+
+  const chain = await E(jarvisHandle).epithets();
+  t.is(
+    chain.length,
+    2,
+    'composite chain has the new link plus the inherited one',
+  );
+  t.is(chain[0].relationship, 'majordomo', 'newest link first');
+  t.is(chain[1].relationship, 'assistant', 'inherited link follows');
+  t.is(
+    chain[0].principal,
+    aifredHandle,
+    "Jarvis's top-link principal is Aifred",
+  );
+  t.is(
+    chain[1].principal,
+    hostHandle,
+    "the inherited link's principal is the original creator (Alice)",
+  );
+
+  // Each link verifies against its respective principal.
+  t.true(
+    await E(aifredHandle).verify(jarvisHandle, 'majordomo'),
+    'Aifred confirms Jarvis as majordomo',
+  );
+  t.true(
+    await E(hostHandle).verify(aifredHandle, 'assistant'),
+    'Alice confirms Aifred as assistant',
+  );
+});
