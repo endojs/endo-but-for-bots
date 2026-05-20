@@ -103,10 +103,10 @@ test.serial(
       // the default replay path.
       t.regex(error.stderr, /at Compartment\.evaluate/);
       t.regex(error.stderr, /packages\/daemon\/src\/worker\.js/);
-      // The "emitted from" section locates the marshal/CapTP
+      // The "from emission site" section locates the marshal/CapTP
       // emission frames so the operator sees the path the rejection
       // took out of the worker.
-      t.regex(error.stderr, /-- emitted from --/);
+      t.regex(error.stderr, /from emission site:/);
       t.regex(error.stderr, /at encodeErrorCommon/);
       // The causal console replay used by the worker's pushTrace
       // surfaces the SES error tag and the "Sent as" annotation —

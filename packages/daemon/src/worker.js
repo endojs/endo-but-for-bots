@@ -365,8 +365,8 @@ const formatErrorWithCausalConsole = err => {
  * marshal encoding and hardening locked in that data property; the
  * unfiltered callsites for the original error are not addressable
  * after that point. The worker emission frames are still useful: they
- * pinpoint the path the error took out of the worker (compartment →
- * marshal → CapTP → daemon).
+ * pinpoint the path the error took out of the worker (compartment to
+ * marshal to CapTP to daemon).
  *
  * Returns `undefined` when the runtime is not V8 or when the override
  * is unavailable.
@@ -447,11 +447,11 @@ const makeWorkerPushTrace = (getDaemonFacet, site) => {
     //   2. The worker frames at this emission site, captured via a
     //      transient `Error.prepareStackTrace` override on a fresh
     //      anchor object. Shows the path the error took out of the
-    //      worker (compartment → marshal → CapTP) and is useful even
+    //      worker (compartment to marshal to CapTP) and is useful even
     //      when (1) is unavailable.
     //   3. The SES causal console replay of the original error, which
     //      contributes the unredacted error tag, message, and the
-    //      assert annotation trail (`Sent as ...`, `cause`, etc.) —
+    //      assert annotation trail (`Sent as ...`, `cause`, etc.):
     //      the same hook `@endo/ses-ava` uses to surface this info.
     //
     // All are best-effort; we fall through to `err.stack` if none
@@ -465,7 +465,7 @@ const makeWorkerPushTrace = (getDaemonFacet, site) => {
       stackParts.push(throwSiteStack);
     }
     if (emissionStack !== undefined && emissionStack.length > 0) {
-      stackParts.push(`-- emitted from --\n${emissionStack}`);
+      stackParts.push(`from emission site:\n${emissionStack}`);
     }
     if (causalReplay !== undefined && causalReplay.length > 0) {
       stackParts.push(causalReplay);
