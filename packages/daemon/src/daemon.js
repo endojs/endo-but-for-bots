@@ -82,6 +82,7 @@ import {
   EndoInterface,
 } from './interfaces.js';
 import { makeTraceAggregator } from './trace-aggregator.js';
+import { extractErrorIdFromTag } from './error-id.js';
 
 /** @import { Passable } from '@endo/pass-style' */
 /** @import { ERef, FarRef } from '@endo/eventual-send' */
@@ -97,24 +98,6 @@ const parseTraceEnvNumber = (raw, fallback) => {
   const n = Number(raw);
   if (!Number.isFinite(n) || n < 0) return fallback;
   return n;
-};
-
-/**
- * Extract the wire-level errorId stamped onto a decoded error by
- * `@endo/marshal`'s `decodeErrorCommon`. Falls back to scraping the
- * SES error tag (the parenthesized form of `err.name`) for
- * environments where the marshal patch is unavailable.
- *
- * @param {Error & { errorId?: string }} err
- * @returns {string | undefined}
- */
-const extractInboundErrorId = err => {
-  if (!err) return undefined;
-  if (typeof err.errorId === 'string') return err.errorId;
-  if (typeof err.name !== 'string') return undefined;
-  const m = /\(error:[^)]+\)/.exec(err.name);
-  if (m === null) return undefined;
-  return m[0].slice(1, -1);
 };
 
 /**
@@ -145,7 +128,7 @@ const makeOutboundMarshalSaveError =
       });
       return;
     }
-    const inboundErrorId = extractInboundErrorId(err);
+    const inboundErrorId = extractErrorIdFromTag(err);
     if (inboundErrorId !== undefined) {
       aggregator.aliasByErrorId(inboundErrorId, outboundErrorId);
       return;

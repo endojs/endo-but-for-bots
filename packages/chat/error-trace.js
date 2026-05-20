@@ -2,6 +2,7 @@
 
 import harden from '@endo/harden';
 import { E } from '@endo/far';
+import { makeInboundErrorIdRegistry } from '@endo/daemon/error-id.js';
 
 /** @import { ERef } from '@endo/eventual-send' */
 
@@ -32,60 +33,15 @@ import { E } from '@endo/far';
  * @property {boolean} partial
  */
 
-const ERROR_ID_PATTERN = /\(error:[^)]+\)/;
-
 /**
- * Side-table populated by the chat client's CapTP `marshalLoadError`
- * hook. `@endo/marshal` does not expose the wire-level errorId as an
- * enumerable property on the decoded Error — only as part of the SES
- * error tag, which is not addressable from JavaScript. We capture it
- * here at decode time so the chat UI can correlate a caught error
- * with its trace record without re-parsing.
+ * Side-table-backed registry for correlating chat-client-side decoded
+ * errors with their wire-level errorIds. The chat client installs
+ * `recordInboundErrorId` as a `marshalLoadError` hook on its CapTP
+ * marshal; later, `extractErrorId` consults the side-table (with an
+ * SES-tag fallback) to recover the errorId for a caught error.
  */
-const inboundErrorIds = new WeakMap();
-
-/**
- * Hook installed on the chat client's CapTP marshal. Stores the
- * wire-level errorId associated with a decoded Error so
- * `extractErrorId` can find it later.
- *
- * @param {unknown} err
- * @param {string | undefined} errorId
- */
-export const recordInboundErrorId = (err, errorId) => {
-  if (
-    err !== null &&
-    typeof err === 'object' &&
-    typeof errorId === 'string' &&
-    errorId.length > 0
-  ) {
-    inboundErrorIds.set(/** @type {object} */ (err), errorId);
-  }
-};
-harden(recordInboundErrorId);
-
-/**
- * Extract the wire-level errorId from an Error decoded by
- * `@endo/marshal`. Prefers the side-table populated by
- * `recordInboundErrorId` (set when the marshal layer decoded the
- * error). Falls back to scraping the SES error tag exposed by
- * `err.name` for environments where the marshalLoadError hook is
- * unavailable.
- *
- * @param {unknown} err
- * @returns {string | undefined}
- */
-export const extractErrorId = err => {
-  if (err === null || typeof err !== 'object') return undefined;
-  const recorded = inboundErrorIds.get(/** @type {object} */ (err));
-  if (typeof recorded === 'string') return recorded;
-  const name = /** @type {{ name?: unknown }} */ (err).name;
-  if (typeof name !== 'string') return undefined;
-  const match = ERROR_ID_PATTERN.exec(name);
-  if (match === null) return undefined;
-  return match[0].slice(1, -1);
-};
-harden(extractErrorId);
+export const { recordInboundErrorId, extractErrorId } =
+  makeInboundErrorIdRegistry();
 
 /**
  * Format a TraceReport for display in the browser's developer

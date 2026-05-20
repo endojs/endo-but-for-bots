@@ -31,6 +31,7 @@
     "./reader-ref.js": "./reader-ref.js",
     "./locator.js": "./locator.js",
     "./pet-name.js": "./src/pet-name.js",
+    "./error-id.js": "./src/error-id.js",
     "./src/interfaces.js": "./src/interfaces.js",
     "./package.json": "./package.json"
   },
