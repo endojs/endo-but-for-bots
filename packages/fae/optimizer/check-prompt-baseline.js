@@ -32,7 +32,16 @@ harden(sha256);
  *   examplesSha256: string,
  *   trainingScore: number,
  *   modelScores?: Record<string, number>,
+ *   mode?: 'evaluate' | 'gepa' | 'ace' | 'bootstrap',
+ *   comment?: string,
  * }} PromptBaseline
+ *
+ * `trainingScore` is the corpus average from
+ * `yarn optimize:prompt --evaluate` over the named model. It is NOT the
+ * mid-pass score the GEPA optimizer reports during search; for the same
+ * provider, examples, and prompts, the evaluate average is the stable
+ * regression floor. `mode: 'evaluate'` flags the recorded run as the
+ * canonical evaluate form.
  */
 
 /**
@@ -166,8 +175,9 @@ const main = async () => {
     return;
   }
 
+  const modeLabel = baseline.mode ? ` (${baseline.mode})` : '';
   console.log(
-    `Prompt optimizer baseline is current at score ${baseline.trainingScore}.`,
+    `Prompt optimizer baseline is current at score ${baseline.trainingScore}${modeLabel}.`,
   );
 };
 

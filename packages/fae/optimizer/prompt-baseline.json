@@ -1,21 +1,22 @@
 {
-  "recordedAt": "2026-05-15",
+  "recordedAt": "2026-05-20",
   "provider": "openrouter",
   "models": [
     "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free"
   ],
-  "optimizer": "gepa",
-  "rounds": 1,
-  "metricCallLimit": 5,
-  "trialCount": 4,
-  "trainingScore": 0.16666666666666674,
+  "mode": "evaluate",
+  "comment": "trainingScore is the corpus average produced by `yarn optimize:prompt --evaluate` over all `examples.js` cases on the named model. It is NOT the GEPA optimizer's mid-pass score (which can rise as the optimizer explores). `check-prompt-baseline.js` enforces non-regression of trainingScore and modelScores; a score below this floor on the same model means the system prompt, repair messages, or examples corpus regressed against the recorded run.",
+  "evaluateExamples": 20,
+  "withinLimits": 6,
+  "minimumScore": -16,
+  "trainingScore": 1.5875,
   "modelScores": {
-    "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free": 0.16666666666666674
+    "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free": 1.5875
   },
   "systemPromptSha256": "280a1710a8a015aca62ecf3d4959872083b51e2b9f3f08ae8b1a861e4de90d3d",
   "repairMessagesSha256": "bd24a5d33f860ccc48bd238c13de3b0a12f215dd4e6c760b2ff0f59b14d6c27f",
   "examplesSha256": "45ec3a6b9e27d7d54a455a8b303761c49ae646f7f348001afd3630c91ef1995a",
-  "trainingExamples": [
+  "exampleIds": [
     "basic-chat",
     "reply-tool",
     "reply-over-send",
@@ -31,9 +32,7 @@
     "read-file-rephrase",
     "read-file-wrong-petname",
     "timestamp-and-math",
-    "math-and-timestamp"
-  ],
-  "validationExamples": [
+    "math-and-timestamp",
     "read-file-and-math",
     "math-chain",
     "timestamp-direct-order",
