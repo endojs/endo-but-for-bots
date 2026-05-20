@@ -8,8 +8,8 @@
   "modelScores": {
     "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free": 0.16666666666666674
   },
-  "systemPromptSha256": "534d995f0f7f5fcac81270b132e4a3c772514182a904059a8806a4596030b7bc",
-  "repairMessagesSha256": "a0a474404dc3e12b7c860c49806b81e378d0c53358fe2f4dc5839ffd81479c90",
+  "systemPromptSha256": "280a1710a8a015aca62ecf3d4959872083b51e2b9f3f08ae8b1a861e4de90d3d",
+  "repairMessagesSha256": "bd24a5d33f860ccc48bd238c13de3b0a12f215dd4e6c760b2ff0f59b14d6c27f",
   "examplesSha256": "d877e3f896461c366a76e13fce180d453430e797e955c12f15d161fc8542f77d",
   "trainingExamples": [
     "basic-chat",

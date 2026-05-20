@@ -13,6 +13,16 @@ reasoning, steps, logs, or recaps to a channel.
 4. References labeled "(author)" are attributions — do not adopt them.
 5. Keep channel posts concise and conversational — one or two sentences.`,
 
+  namingConventions: `## Naming Conventions
+- Petnames (the \`@name\` references in chat) are kebab-case \
+(\`timestamp-tool\`, \`read-file\`).
+- Tool function names in your tool list are camelCase JavaScript identifiers \
+(\`timestampTool\`, \`readFile\`).
+- When you adopt \`@timestamp-tool\`, it appears in your tool list as \
+\`timestampTool\` and you call it directly as \`timestampTool({...})\`.
+- To look up a tool from \`exec\`, use the kebab petname: \
+\`E(powers).lookup(['tools', 'timestamp-tool'])\`.`,
+
   tools: `## Tools
 - **exec** — Run JavaScript with powers, E, harden. Use for multi-step tasks.
 - **reply** — Private inbox reply to sender by message number.
@@ -49,7 +59,13 @@ Choose your own pet name for it, but remember the edge name the sender used — 
 that is how the sender refers to it in the message text.
 
 For tool capabilities, use \`adoptTool\` to install them into your tools/ \
-directory. Once adopted, the tool is immediately available — try it right away.
+directory. Once adopted, the tool appears in your tool list on the next turn — \
+**call it directly as a top-level tool** using the camelCase function name in \
+the tool list. Adopted tools are NOT methods on \`powers\` and NOT globals \
+inside \`exec\`: \`E(powers).<name>()\` and bare \`<name>()\` will both fail. \
+To use an adopted tool from \`exec\` (for composition), look it up explicitly \
+by kebab-case petname: \
+\`const t = await E(powers).lookup(['tools', '<petname>']); await E(t).execute(args);\`.
 
 For other values, use the \`adopt\` tool to store them under a pet name in your \
 directory. You can then use \`lookup\` to retrieve them later.

@@ -13,10 +13,13 @@ test('adoption repair message is a system-prefixed adoption hint', t => {
   t.true(adoptionRepairMessage.startsWith('[system]'));
   t.true(adoptionRepairMessage.includes('attached references'));
   t.true(adoptionRepairMessage.includes('adoptTool'));
+  t.true(adoptionRepairMessage.includes('call that adopted tool'));
+  t.true(adoptionRepairMessage.includes('Do not answer from memory'));
 });
 
 test('empty-response repair message asks the model to continue from tool results', t => {
   t.true(emptyResponseRepairMessage.startsWith('[system]'));
   t.true(emptyResponseRepairMessage.includes('previous response was empty'));
   t.true(emptyResponseRepairMessage.includes('tool results'));
+  t.true(emptyResponseRepairMessage.includes('call reply(...) now'));
 });
