@@ -146,7 +146,10 @@ itself might want.
 
 ## Conclusion
 
-The implication is that we are moving in the direction of enabling hardened
-modules to make use of features like harden, eventual-send, assert, and the
-causal console without needing to run shims in advance.
-The spackle pattern is facilitating this transition.
+This new invention enables us to make *hardened modules* and for applications
+to use them without arranging shims.
+These are modules that work with or without HardenedJS `lockdown`, within or
+without compartments.
+We are using this spackle pattern to make modules using `harden`,
+`eventual-send`, `assert` / `errors`, and the causal `console` easier to adopt
+and use.
