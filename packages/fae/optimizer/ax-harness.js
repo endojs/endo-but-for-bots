@@ -19,6 +19,7 @@ import { scoreObservedTrace } from './trace-metric.js';
  * @property {ObservedTrace} trace
  * @property {string} [workerLog]
  * @property {string} [replyText]
+ * @property {boolean} [timedOut]
  *
  * @typedef {(input: {
  *   example: TraceExample,
@@ -107,5 +108,7 @@ harden(makePromptOptimizer);
  * @param {{ prediction: TrialResult, example: TraceExample }} input
  */
 export const traceMetric = ({ prediction, example }) =>
-  scoreObservedTrace(prediction.trace, example).score;
+  scoreObservedTrace(prediction.trace, example, {
+    timedOut: prediction.timedOut,
+  }).score;
 harden(traceMetric);

@@ -237,14 +237,29 @@ export const traceEditDistance = (observed, expected) => {
 harden(traceEditDistance);
 
 /**
+ * @typedef {object} ScoreOptions
+ * @property {boolean} [timedOut] Set when the trial harness aborted before
+ *   the model produced a reply (e.g., `daemon-trial.js` hit
+ *   `REPLY_TIMEOUT_MS`). A timed-out trial is treated as a hard fail
+ *   regardless of how clean the partial trace looks.
+ */
+
+/**
  * Score a worker-log trace against the smoke-derived trace expectations.
  * The first acceptable trace is canonical; exact matches to alternate traces
  * still pass, but receive less credit so the search prefers direct calls.
  *
+ * Hard-fail floor: when the trial timed out (`options.timedOut`) or the
+ * observed trace contains no `reply` tool call, the resulting score is
+ * clamped to be non-positive and `withinLimits` is forced to `false`. A
+ * clean-looking partial trace that never produced a reply is task failure,
+ * not a partial credit case.
+ *
  * @param {ObservedTrace} observed
  * @param {TraceExample} example
+ * @param {ScoreOptions} [options]
  */
-export const scoreObservedTrace = (observed, example) => {
+export const scoreObservedTrace = (observed, example, options = {}) => {
   if (example.acceptableTraces.length === 0) {
     throw new Error(`example "${example.id}" has no acceptable traces`);
   }
@@ -284,7 +299,7 @@ export const scoreObservedTrace = (observed, example) => {
     adoptionReminderOverage +
     emptyContentOverage +
     roundTripOverage;
-  const score =
+  const rawScore =
     (canonicalExact ? 10 : 0) +
     (alternateExact ? 3 : 0) +
     5 * partial -
@@ -295,6 +310,18 @@ export const scoreObservedTrace = (observed, example) => {
     0.25 * extraRoundTrips -
     2 * overBudgetTotal;
 
+  const hasReply = observed.toolCalls.some(call => call.tool === 'reply');
+  const timedOut = options.timedOut === true;
+  const hardFail = timedOut || !hasReply;
+  // Hard-fail floor: clamp to <= 0 so a clean-but-empty trace (model
+  // adopted the tool, then stalled or never replied) cannot score above
+  // a noisy-but-completed trace. Subtract a fixed penalty for each
+  // failure flag so the optimizer still distinguishes "timed out" from
+  // "no reply" from both.
+  const hardFailPenalty =
+    (timedOut ? 5 : 0) + (!hasReply ? 5 : 0) + Math.max(0, rawScore);
+  const score = hardFail ? rawScore - hardFailPenalty : rawScore;
+
   return harden({
     score,
     bestDistance,
@@ -302,7 +329,10 @@ export const scoreObservedTrace = (observed, example) => {
     canonicalExact,
     alternateExact,
     partial,
-    withinLimits: overBudgetTotal === 0,
+    withinLimits: overBudgetTotal === 0 && !hardFail,
+    hardFail,
+    timedOut,
+    hasReply,
     penalties: {
       toolErrors: observed.toolErrors,
       adoptionReminderRetries: observed.adoptionReminderRetries,

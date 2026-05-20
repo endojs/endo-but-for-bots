@@ -116,3 +116,61 @@ test('scoreObservedTrace marks traces over budget for errors, repair hints, and 
     roundTrips: 2,
   });
 });
+
+test('scoreObservedTrace hard-fails when the trial timed out', t => {
+  // Clean trace shape (adopt then call), but the trial harness aborted
+  // before any reply — score must be non-positive and withinLimits false.
+  const stalled = parseWorkerLogTrace(`
+[fae] sent:
+[tool] adoptTool({edgeName:"timestamp-tool"})
+[fae] sent:
+[tool] timestampTool({})
+[tool] timestampTool -> "2026-05-15T12:00:00.000Z"
+`);
+
+  const score = scoreObservedTrace(stalled, timestampExample, {
+    timedOut: true,
+  });
+  t.true(score.hardFail);
+  t.true(score.timedOut);
+  t.false(score.hasReply);
+  t.false(score.withinLimits);
+  t.true(score.score <= 0);
+});
+
+test('scoreObservedTrace hard-fails when the trace has no reply call', t => {
+  // No reply tool call ever made — even without an explicit timedOut
+  // flag the score floor applies, because the task was not completed.
+  const noReply = parseWorkerLogTrace(`
+[fae] sent:
+[tool] adoptTool({edgeName:"timestamp-tool"})
+[fae] sent:
+[tool] timestampTool({})
+[tool] timestampTool -> "2026-05-15T12:00:00.000Z"
+`);
+
+  const score = scoreObservedTrace(noReply, timestampExample);
+  t.true(score.hardFail);
+  t.false(score.timedOut);
+  t.false(score.hasReply);
+  t.false(score.withinLimits);
+  t.true(score.score <= 0);
+});
+
+test('scoreObservedTrace leaves successful traces unchanged when timedOut is omitted', t => {
+  // Regression guard: the canonical direct-dispatch trace must still
+  // score 15 with the hard-fail floor in place.
+  const direct = parseWorkerLogTrace(`
+[fae] sent:
+[tool] adoptTool({edgeName:"timestamp-tool"})
+[fae] sent:
+[tool] timestampTool({})
+[tool] reply({strings:["2026-05-15"]})
+`);
+
+  const score = scoreObservedTrace(direct, timestampExample);
+  t.is(score.score, 15);
+  t.false(score.hardFail);
+  t.true(score.hasReply);
+  t.true(score.withinLimits);
+});

@@ -136,7 +136,7 @@ const runScoredTrial = async ({
     replyText: result.replyText,
     timedOut: result.timedOut,
     trace,
-    score: scoreObservedTrace(trace, example),
+    score: scoreObservedTrace(trace, example, { timedOut: result.timedOut }),
   });
 };
 
