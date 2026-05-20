@@ -11,8 +11,16 @@
  * Uses child_process.spawn (not fork) with the embedded Node binary so the
  * daemon can outlive the Familiar process.
  *
- * Stop and purge still use the CLI since those commands use CapTP client
- * connections and don't have `import.meta.url` resolution issues.
+ * Stop and purge dispatch through `bundles/daemon-control.cjs`, a tiny
+ * SES-locked-down helper that takes a verb argv and delegates to the
+ * `stop` / `purge` exports of `@endo/daemon`. Those exports send a
+ * single `E(bootstrap).terminate()` CapTP message over the daemon's
+ * Unix-socket harbinger bootstrap (see `packages/daemon/index.js`
+ * `terminate()`) and then perform the local filesystem / pid sweep.
+ * Consolidating onto one entry point removes the per-CLI-subcommand
+ * argument shape that the previous `runEndoCommand(['stop' | 'purge'])`
+ * surface required (#231 G8); the entire `endo-cli.cjs` bundle is no
+ * longer on the daemon-control code path.
  */
 
 import fs from 'fs';
@@ -70,16 +78,21 @@ const makeDaemonManager = logger => {
   };
 
   /**
-   * Run an Endo CLI command and return a promise that resolves on success.
+   * Issue a single daemon-lifecycle verb through the bundled
+   * daemon-control helper. The helper runs in its own SES-locked-down
+   * subprocess (Electron main cannot lockdown without breaking
+   * Electron internals) and dispatches the verb to `@endo/daemon`,
+   * which sends `E(bootstrap).terminate()` over the daemon's Unix
+   * socket and then performs the local cleanup sweep.
    *
-   * @param {string[]} args - CLI arguments (e.g., ['stop'], ['purge'])
+   * @param {'stop' | 'purge' | 'restart'} verb
    * @returns {Promise<void>}
    */
-  const runEndoCommand = args => {
+  const runDaemonControl = verb => {
     return new Promise((resolve, reject) => {
       const child = spawn(
         resourcePaths.nodePath,
-        [resourcePaths.endoCliPath, ...args],
+        [resourcePaths.daemonControlPath, verb],
         {
           stdio: ['ignore', 'pipe', 'pipe'],
         },
@@ -96,7 +109,7 @@ const makeDaemonManager = logger => {
           return;
         }
         reject(
-          new Error(`endo ${args.join(' ')} failed (code ${code}): ${stderr}`),
+          new Error(`daemon-control ${verb} failed (code ${code}): ${stderr}`),
         );
       });
 
@@ -104,7 +117,7 @@ const makeDaemonManager = logger => {
 
       setTimeout(() => {
         child.kill();
-        reject(new Error(`Timeout running endo ${args.join(' ')}`));
+        reject(new Error(`Timeout running daemon-control ${verb}`));
       }, 30_000);
     });
   };
@@ -234,27 +247,28 @@ const makeDaemonManager = logger => {
   };
 
   /**
-   * Restart the Endo daemon (stop via CLI, then start directly).
+   * Restart the Endo daemon: stop via the consolidated CapTP control
+   * helper, then start directly.
    *
    * @returns {Promise<DaemonStartResult>}
    */
   const restartDaemon = async () => {
     logger.log('[Familiar] Restarting Endo daemon...');
-    await runEndoCommand(['stop']);
+    await runDaemonControl('stop');
     const result = await startDaemon();
     logger.log('[Familiar] Endo daemon restarted');
     return result;
   };
 
   /**
-   * Purge the Endo daemon (terminate and remove all state via CLI,
-   * then start directly).
+   * Purge the Endo daemon: terminate and remove all state via the
+   * consolidated CapTP control helper, then start directly.
    *
    * @returns {Promise<DaemonStartResult>}
    */
   const purgeDaemon = async () => {
     logger.log('[Familiar] Purging Endo daemon...');
-    await runEndoCommand(['purge']);
+    await runDaemonControl('purge');
     const result = await startDaemon();
     logger.log('[Familiar] Endo daemon purged and restarted');
     return result;
