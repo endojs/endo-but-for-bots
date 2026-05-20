@@ -745,8 +745,14 @@ const makeDaemonCore = async (
       }
       case 'peer':
         return [['networks', formula.networks]];
-      case 'handle':
-        return [['agent', formula.agent]];
+      case 'handle': {
+        /** @type {Array<[string, FormulaIdentifier]>} */
+        const deps = [['agent', formula.agent]];
+        for (const [i, { principal }] of (formula.epithets ?? []).entries()) {
+          deps.push([`epithet-${i}`, principal]);
+        }
+        return deps;
+      }
       case 'mail-hub':
         return [['store', formula.store]];
       case 'message': {

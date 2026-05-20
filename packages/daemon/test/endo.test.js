@@ -6910,3 +6910,88 @@ test('persona: chains propagate recursively through delegated provideHost + prov
     'Alice confirms Aifred as assistant',
   );
 });
+
+test('persona: epithet principals survive intermediate-agent removal under GC', async t => {
+  // Regression for the formula-graph dep gap on the `handle` formula:
+  // `extractLabeledDeps`'s `case 'handle'` must list `epithets[*].principal`
+  // as dependencies so the formula GC graph treats principals named only
+  // through a downstream delegate's epithet chain as reachable. The bug
+  // (missing dep edges) lets the GC sweep collect a principal whose
+  // sole inbound reference is a deeper handle's persona chain; the
+  // deeper handle's `epithets()` call then fails because
+  // `provide(principal, 'handle')` cannot resolve a deleted formula.
+  //
+  // In a single-node chain like the one below, the standard `hostHandle`
+  // / `hostAgent` deps on `host` and `guest` formulas already retain the
+  // immediate ancestor; the bug surfaces in scenarios where those deps
+  // are not present (e.g. cross-node principals, or after future
+  // refactors that detach the agency lineage from the epithet lineage).
+  // This test asserts the structural invariant the dep edges provide:
+  // after dropping the intermediate agent's pet name and letting the GC
+  // sweep run, the deeper handle's chain still resolves end-to-end and
+  // each principal remains a live, queryable Handle.
+  // See designs/daemon-capability-persona.md § Recursive epithet chains.
+  const { cancelled, config } = await prepareConfig(t, { gcEnabled: true });
+  const { host } = await makeHost(config, cancelled);
+
+  const hostHandle = await E(host).lookup('@self');
+
+  // Build the Alice -> Aifred -> Jarvis chain.
+  const aifred = await E(host).provideHost('aifred', {
+    epithets: [{ relationship: 'assistant' }],
+  });
+  await E(aifred).provideGuest('jarvis', {
+    epithets: [{ relationship: 'majordomo' }],
+  });
+
+  const aifredHandleId = await E(host).identify('aifred');
+  const jarvisHandleId = await E(aifred).identify('jarvis');
+
+  // Give Jarvis an independent reference path in the top host's pet
+  // store so the test can observe Jarvis after Aifred is dropped from
+  // the host's pet names.
+  await E(host).storeIdentifier(['jarvis-pin'], jarvisHandleId);
+
+  // Drop Aifred's pet-store edge from the top host. The structural
+  // claim the fix codifies is that the persona chain on Jarvis's
+  // handle counts as a graph-level reference to Aifred's handle.
+  await E(host).remove('aifred');
+
+  // Yield to let the GC sweep settle, then assert both handles are
+  // still on disk.
+  await waitForCondition(async () => {
+    return (
+      formulaExistsInDb(config.statePath, jarvisHandleId) &&
+      formulaExistsInDb(config.statePath, aifredHandleId)
+    );
+  });
+  t.true(
+    formulaExistsInDb(config.statePath, jarvisHandleId),
+    "Jarvis's handle formula is retained by the pet-store pin",
+  );
+  t.true(
+    formulaExistsInDb(config.statePath, aifredHandleId),
+    "Aifred's handle formula is retained (epithet dep edge is the " +
+      'structural guarantee even when other deps coincidentally retain it)',
+  );
+
+  // The behavioural surface: resolving Jarvis's persona chain still
+  // returns both principals as live Handle references.
+  const jarvisHandle = await E(host).lookup(['jarvis-pin']);
+  const chain = await E(jarvisHandle).epithets();
+  t.is(chain.length, 2, 'chain length preserved across GC');
+  t.is(chain[0].relationship, 'majordomo', 'newest link preserved');
+  t.is(chain[1].relationship, 'assistant', 'inherited link preserved');
+  t.is(
+    chain[1].principal,
+    hostHandle,
+    "the inherited link's principal is still the live top-host handle",
+  );
+  // Verify Aifred's handle is still a live exo by exercising its
+  // verify() method; the call would fail if the underlying handle
+  // formula had been collected.
+  t.true(
+    await E(chain[0].principal).verify(jarvisHandle, 'majordomo'),
+    "Aifred's handle is still live and verifies its own delegation",
+  );
+});
