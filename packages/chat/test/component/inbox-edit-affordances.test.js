@@ -34,6 +34,21 @@ const { document: testDocument } = createDOM();
  * @param {object} opts.message
  */
 const makePackagePowers = ({ selfId, message }) => {
+  return makePackagePowersFromList({ selfId, messages: [message] });
+};
+
+/**
+ * Build a mock powers object that yields multiple package messages
+ * in order, then blocks.  The inbox uses this to drive the swap-on-
+ * edit path: emit the original envelope, let the DOM settle, then
+ * emit the second envelope carrying the same `number` but a revised
+ * body so the inbox sees the re-emission `editMessage` causes.
+ *
+ * @param {object} opts
+ * @param {string} opts.selfId
+ * @param {Array<object>} opts.messages
+ */
+const makePackagePowersFromList = ({ selfId, messages }) => {
   const powers = Far('MockPowers', {
     locate(...path) {
       if (path.length === 1 && path[0] === '@self') {
@@ -47,12 +62,13 @@ const makePackagePowers = ({ selfId, message }) => {
     },
 
     followMessages() {
-      let delivered = false;
+      let i = 0;
       return Far('MessageIterator', {
         next() {
-          if (!delivered) {
-            delivered = true;
-            return Promise.resolve({ value: message, done: false });
+          if (i < messages.length) {
+            const value = messages[i];
+            i += 1;
+            return Promise.resolve({ value, done: false });
           }
           return new Promise(() => {});
         },
@@ -188,4 +204,92 @@ test('pencil click dispatches chat:edit-message with the message number', async 
 
   t.is(events.length, 1);
   t.is(events[0].number, 7n);
+});
+
+// Per chat-edit-message-ui design § Surfacing edit history: a
+// re-emission of `followMessages` for the same `number` indicates the
+// sender has edited the message.  The inbox swaps the existing
+// envelope in place rather than appending a duplicate.  The added
+// envelope carries an "edited <timestamp>" caption inside the
+// timestamp tooltip.  This test exercises the load-bearing path the
+// PR adds in inbox-component.js (the prior-envelope lookup, the
+// caption insertion, and the replaceWith swap).
+test('re-emission of a package message swaps the envelope in place rather than appending', async t => {
+  const { $parent, $end } = createInboxDOM();
+  const original = makePackageMessage({
+    number: 11n,
+    strings: ['hello'],
+  });
+  const edited = makePackageMessage({
+    number: 11n,
+    strings: ['hello, world'],
+    date: new Date(Date.now() + 1000).toISOString(),
+  });
+  const powers = makePackagePowersFromList({
+    selfId: 'self-id',
+    messages: [original, edited],
+  });
+  stubRAF();
+
+  inboxComponent($parent, $end, powers, { showValue: () => {} });
+  await tick(50);
+
+  const $envelopes = $parent.querySelectorAll(
+    '.message-envelope[data-number="11"]',
+  );
+  t.is($envelopes.length, 1, 'edit must not append a duplicate envelope');
+  const $edited = $envelopes[0];
+  // The edited caption is materialized inside the timestamp tooltip
+  // so a reader of the conversation knows the body changed without
+  // having to open the (deferred) revision panel.
+  const $caption = $edited.querySelector('.timestamp-edited');
+  t.truthy($caption, 'edited envelope carries timestamp-edited caption');
+  t.true(
+    /^ edited /.test($caption.innerText),
+    `caption text "${$caption.innerText}" begins with " edited "`,
+  );
+});
+
+// Per chat-edit-message-ui design § Interaction with focus chains:
+// the focused envelope stays focused across an edit, so the
+// keyboard user's place in the conversation does not move when their
+// own edit re-emits.  This pins the load-bearing branch that copies
+// the `focused` class across the swap.
+test('focus state survives a swap-on-edit', async t => {
+  const { $parent, $end } = createInboxDOM();
+  const original = makePackageMessage({
+    number: 13n,
+    strings: ['draft'],
+  });
+  const edited = makePackageMessage({
+    number: 13n,
+    strings: ['final'],
+    date: new Date(Date.now() + 1000).toISOString(),
+  });
+  const powers = makePackagePowersFromList({
+    selfId: 'self-id',
+    messages: [original, edited],
+  });
+  stubRAF();
+
+  inboxComponent($parent, $end, powers, { showValue: () => {} });
+  // After the first emission, mark the original envelope focused so
+  // the second emission's swap path has to preserve the class.  The
+  // tick split here is the synchronization point between emissions:
+  // it lets the iterator step through both messages with a moment
+  // for the DOM mutation in between.
+  await tick(10);
+  const $first = $parent.querySelector('.message-envelope[data-number="13"]');
+  t.truthy($first);
+  $first.classList.add('focused');
+  await tick(60);
+
+  const $envelopes = $parent.querySelectorAll(
+    '.message-envelope[data-number="13"]',
+  );
+  t.is($envelopes.length, 1);
+  t.true(
+    $envelopes[0].classList.contains('focused'),
+    'edited envelope keeps focused class across the swap',
+  );
 });
