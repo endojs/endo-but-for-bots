@@ -1,8 +1,10 @@
 {
-  "recordedAt": null,
-  "provider": null,
-  "models": [],
+  "recordedAt": "2026-05-20",
+  "provider": "openrouter",
+  "models": ["nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free"],
   "systemPromptSha256": "1ad57c519372194261b7582a63c45d497b0cd13fea0e42977cf821b2016d3893",
   "examplesSha256": "15c7254f6f5be9a2107d2981b9c2811cd989899ae2fcb74c9b985260096e26d9",
-  "scores": {}
+  "scores": {
+    "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free": -0.9715354090354088
+  }
 }
