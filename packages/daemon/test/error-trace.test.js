@@ -162,28 +162,31 @@ test.serial('evaluate rejection produces a worker trace record', async t => {
   t.is(r.partial, false);
 });
 
-test.serial(`${DAEMON_WORKER_ID} stub records cover daemon-internal errors`, async t => {
-  const { cancelled, config } = await prepareConfig(t);
-  const { host, getErrorId } = await makeHost(config, cancelled);
-  // Look up a name that does not exist; this rejection originates in
-  // the daemon, not in any worker, so the trace facet should record a
-  // stub under the @daemon synthetic worker.
-  const rejection = await t.throwsAsync(E(host).lookup('does-not-exist'));
-  t.truthy(rejection);
-  const errorId = getErrorId(/** @type {Error} */ (rejection));
-  if (errorId === undefined) {
-    // If marshal didn't tag, the alias path is unreachable; the test
-    // still verifies the @daemon stub can be located via recent().
+test.serial(
+  `${DAEMON_WORKER_ID} stub records cover daemon-internal errors`,
+  async t => {
+    const { cancelled, config } = await prepareConfig(t);
+    const { host, getErrorId } = await makeHost(config, cancelled);
+    // Look up a name that does not exist; this rejection originates in
+    // the daemon, not in any worker, so the trace facet should record a
+    // stub under the @daemon synthetic worker.
+    const rejection = await t.throwsAsync(E(host).lookup('does-not-exist'));
+    t.truthy(rejection);
+    const errorId = getErrorId(/** @type {Error} */ (rejection));
+    if (errorId === undefined) {
+      // If marshal didn't tag, the alias path is unreachable; the test
+      // still verifies the @daemon stub can be located via recent().
+      const traces = await E(host).traces();
+      const list = await E(traces).recent({ limit: 5 });
+      t.true(list.some(r => r.workerId === DAEMON_WORKER_ID));
+      return;
+    }
     const traces = await E(host).traces();
-    const list = await E(traces).recent({ limit: 5 });
-    t.true(list.some(r => r.workerId === DAEMON_WORKER_ID));
-    return;
-  }
-  const traces = await E(host).traces();
-  const report = await E(traces).lookup(errorId);
-  t.truthy(report, `expected a daemon stub trace for ${errorId}`);
-  t.is(report.workerId, DAEMON_WORKER_ID);
-});
+    const report = await E(traces).lookup(errorId);
+    t.truthy(report, `expected a daemon stub trace for ${errorId}`);
+    t.is(report.workerId, DAEMON_WORKER_ID);
+  },
+);
 
 test.serial('recent() lists multiple worker emissions', async t => {
   const { cancelled, config } = await prepareConfig(t);
