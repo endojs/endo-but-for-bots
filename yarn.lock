@@ -1933,7 +1933,7 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@endo/genie@workspace:packages/genie":
+"@endo/genie@workspace:^, @endo/genie@workspace:packages/genie":
   version: 0.0.0-use.local
   resolution: "@endo/genie@workspace:packages/genie"
   dependencies:
@@ -2136,8 +2136,11 @@ __metadata:
     "@anthropic-ai/sdk": "npm:^0.95.1"
     "@endo/cli": "workspace:^"
     "@endo/daemon": "workspace:^"
+    "@endo/errors": "workspace:^"
     "@endo/eventual-send": "workspace:^"
     "@endo/exo": "workspace:^"
+    "@endo/genie": "workspace:^"
+    "@endo/harden": "workspace:^"
     "@endo/init": "workspace:^"
     "@endo/lockdown": "workspace:^"
     "@endo/marshal": "workspace:^"
@@ -2145,6 +2148,8 @@ __metadata:
     "@endo/platform": "workspace:^"
     "@endo/promise-kit": "workspace:^"
     "@endo/ses-ava": "workspace:^"
+    "@mariozechner/pi-agent-core": "npm:^0.73.1"
+    "@mariozechner/pi-ai": "npm:^0.73.1"
     ava: "catalog:dev"
     c8: "catalog:dev"
     eslint: "catalog:dev"
