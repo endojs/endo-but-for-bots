@@ -150,6 +150,64 @@ const expandExamplesByModel = (examples, models) =>
     : examples;
 
 /**
+ * Resolve the provider name from the host URL. Mirrors makeAxAI's
+ * provider-selection logic so the banner and the provenance header
+ * name the provider that will actually be used.
+ *
+ * @param {string} host
+ */
+const resolveProviderName = host => {
+  if (host.includes('openrouter.ai')) return 'openrouter';
+  if (host.includes('anthropic.com')) return 'anthropic';
+  if (host.includes('generativelanguage.googleapis.com'))
+    return 'google-gemini';
+  if (host.includes('api.openai.com')) return 'openai';
+  return 'ollama';
+};
+
+/**
+ * Print a one-line banner naming the LLM provider and model the run is
+ * about to use. Reads from ENDO_LLM_HOST / ENDO_LLM_MODEL first, then
+ * falls back to LAL_HOST / LAL_MODEL (the api-key-injection wrapper
+ * exports both families). The banner is written to stderr so it does
+ * not contaminate the JSON the script prints to stdout.
+ *
+ * @param {NodeJS.ProcessEnv} env
+ */
+const printProviderBanner = env => {
+  const host = env.ENDO_LLM_HOST || env.LAL_HOST || '';
+  const model = env.ENDO_LLM_MODEL || env.LAL_MODEL || '(unset)';
+  const provider = host ? resolveProviderName(host) : '(unset)';
+  console.error(`Provider: ${provider}, Model: ${model}`);
+};
+
+/**
+ * Standardized provenance header for optimizer output JSON. Every JSON
+ * the optimizer writes leads with these fields so a future reader can
+ * tell which provider and model(s) produced the numbers:
+ *
+ *   { recordedAt: ISO date (UTC),
+ *     provider:   resolved provider name from the host URL,
+ *     models:     string[] (always an array; single-model runs ship a
+ *                 one-element array). }
+ *
+ * The same shape is mirrored in the on-disk findings.json and
+ * prompt-baseline.json checked into the repo so recorded artifacts and
+ * fresh writes share one schema.
+ *
+ * @param {NodeJS.ProcessEnv} env
+ * @param {string[]} models
+ */
+const provenanceHeader = (env, models) => {
+  const host = env.ENDO_LLM_HOST || env.LAL_HOST || '';
+  return {
+    recordedAt: new Date().toISOString().slice(0, 10),
+    provider: host ? resolveProviderName(host) : '(unset)',
+    models,
+  };
+};
+
+/**
  * @param {NodeJS.ProcessEnv} env
  * @param {string} model
  */
@@ -216,6 +274,7 @@ const main = async () => {
   const trialId = argFor('--trial');
   if (trialId) {
     await loadEnv();
+    printProviderBanner(process.env);
     const example = examples.find(item => item.id === trialId);
     if (!example) {
       throw new Error(`Unknown example "${trialId}"`);
@@ -233,6 +292,7 @@ const main = async () => {
   }
 
   await loadEnv();
+  printProviderBanner(process.env);
   const runnerModule = await loadRunner(runnerPath);
   const evalModels = csvValues(
     argFor('--eval-models') ||
@@ -268,8 +328,8 @@ const main = async () => {
     console.log(
       JSON.stringify(
         {
+          ...provenanceHeader(process.env, evalModels),
           mode: 'evaluate',
-          models: evalModels,
           summary: summarizeModelTrials(trials),
           trials,
         },
@@ -330,9 +390,9 @@ const main = async () => {
   console.log(
     JSON.stringify(
       {
+        ...provenanceHeader(process.env, evalModels),
         optimizer: optimizerKind,
         rounds,
-        evalModels,
         examples: {
           train: trainBase.map(example => example.id),
           validation: validationBase.map(example => example.id),

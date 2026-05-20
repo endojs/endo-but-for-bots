@@ -105,7 +105,37 @@ const loadPreviousBaseline = () => {
   }
 };
 
+/**
+ * Resolve the provider name from the host URL.
+ *
+ * @param {string} host
+ */
+const resolveProviderName = host => {
+  if (host.includes('openrouter.ai')) return 'openrouter';
+  if (host.includes('anthropic.com')) return 'anthropic';
+  if (host.includes('generativelanguage.googleapis.com'))
+    return 'google-gemini';
+  if (host.includes('api.openai.com')) return 'openai';
+  return 'ollama';
+};
+
+/**
+ * Print a one-line banner naming the LLM provider and model the user
+ * has configured. Mirrors optimize-prompt.js's banner so every
+ * optimizer-related script prints a consistent provenance line. The
+ * banner is written to stderr.
+ *
+ * @param {NodeJS.ProcessEnv} env
+ */
+const printProviderBanner = env => {
+  const host = env.ENDO_LLM_HOST || env.LAL_HOST || '';
+  const model = env.ENDO_LLM_MODEL || env.LAL_MODEL || '(unset)';
+  const provider = host ? resolveProviderName(host) : '(unset)';
+  console.error(`Provider: ${provider}, Model: ${model}`);
+};
+
 const main = async () => {
+  printProviderBanner(process.env);
   const [baseline, promptSource, repairMessagesSource] = await Promise.all([
     fs.readFile(baselinePath, 'utf8').then(JSON.parse),
     fs.readFile(promptPath),

@@ -1,5 +1,9 @@
 {
   "recordedAt": "2026-05-15",
+  "provider": "openrouter",
+  "models": [
+    "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free"
+  ],
   "optimizer": "gepa",
   "rounds": 1,
   "metricCallLimit": 5,
