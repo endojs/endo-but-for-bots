@@ -50,62 +50,55 @@ const makeTrackedMathTool = executions => {
   });
 };
 
-// Marked test.failing because the fixture's adoption + tool-turn flow
-// is fully wired only by endojs/endo-but-for-bots#298's attachment-driven
-// tool-turn hardening; on this PR the worker loop does not yet drive the
-// replayed trace to completion.
-test.failing(
-  'current fixture replays Fae attachment adoption through mock provider',
-  async t => {
-    const trace = findMockTrace(loadFixtures(), 'fae.current.math-tool');
-    t.deepEqual(
-      actualToolCallNames(trace),
-      trace.expectedToolNames,
-      'fixture rounds should invoke exactly the declared expectedToolNames',
-    );
+test('current fixture replays Fae attachment adoption through mock provider', async t => {
+  const trace = findMockTrace(loadFixtures(), 'fae.current.math-tool');
+  t.deepEqual(
+    actualToolCallNames(trace),
+    trace.expectedToolNames,
+    'fixture rounds should invoke exactly the declared expectedToolNames',
+  );
 
-    /** @type {Array<Record<string, unknown>>} */
-    const toolExecutions = [];
-    const mathTool = makeTrackedMathTool(toolExecutions);
-    const attachments = new Map([['math-tool-id', mathTool]]);
+  /** @type {Array<Record<string, unknown>>} */
+  const toolExecutions = [];
+  const mathTool = makeTrackedMathTool(toolExecutions);
+  const attachments = new Map([['math-tool-id', mathTool]]);
 
-    const initialMessage = harden({
-      number: 1,
-      type: 'package',
-      from: '@host',
-      to: 'lal-self-id',
-      messageId: 'mock-fae-msg-1',
-      strings: [
-        'Here is a math tool ',
-        '. Adopt it, then use it to compute 7 * 6 and reply with just the number.',
-      ],
-      names: ['math-tool'],
-      ids: ['math-tool-id'],
-    });
+  const initialMessage = harden({
+    number: 1,
+    type: 'package',
+    from: '@host',
+    to: 'lal-self-id',
+    messageId: 'mock-fae-msg-1',
+    strings: [
+      'Here is a math tool ',
+      '. Adopt it, then use it to compute 7 * 6 and reply with just the number.',
+    ],
+    names: ['math-tool'],
+    ids: ['math-tool-id'],
+  });
 
-    const { powers, sent, adoptions } = makeMockPowers({
-      initialMessage,
-      attachments,
-    });
+  const { powers, sent, adoptions } = makeMockPowers({
+    initialMessage,
+    attachments,
+  });
 
-    await spawnWorkerLoop(powers, null, {
-      provider: makeMockProvider({ trace }),
-    });
+  await spawnWorkerLoop(powers, null, {
+    provider: makeMockProvider({ trace }),
+  });
 
-    t.deepEqual(adoptions, [
-      { messageNumber: '1', edgeName: 'math-tool', petName: 'tools/math-tool' },
-    ]);
-    t.deepEqual(toolExecutions, [{ b: 6, a: 7, operation: 'multiply' }]);
+  t.deepEqual(adoptions, [
+    { messageNumber: '1', edgeName: 'math-tool', petName: 'tools/math-tool' },
+  ]);
+  t.deepEqual(toolExecutions, [{ b: 6, a: 7, operation: 'multiply' }]);
 
-    const replies = sent.filter(record => record.replyTo !== undefined);
-    t.true(
-      replies.some(reply =>
-        /** @type {string[]} */ (reply.strings).join('').includes('42'),
-      ),
-      'fixture should drive Fae to reply with the math result',
-    );
-  },
-);
+  const replies = sent.filter(record => record.replyTo !== undefined);
+  t.true(
+    replies.some(reply =>
+      /** @type {string[]} */ (reply.strings).join('').includes('42'),
+    ),
+    'fixture should drive Fae to reply with the math result',
+  );
+});
 
 test('fixtures capture current prompt improvement over llm tip', async t => {
   const fixtures = loadFixtures();
