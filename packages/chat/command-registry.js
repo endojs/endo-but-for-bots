@@ -496,6 +496,45 @@ export const COMMANDS = {
     submitLabel: 'Edit',
   },
 
+  // Edit a previously-sent message. Per the
+  // chat-edit-message-ui design (designs/chat-edit-message-ui.md),
+  // the maintainer's resolution to the slash-command name collision
+  // (open question 1) was "overload /edit on referent type".  This
+  // PR delivers the message-edit path under a distinct registry
+  // entry (slug `edit-message`) with the slash-command alias
+  // `/edit-message`; the type-dispatching overload on bare /edit can
+  // be a follow-up that picks the right entry based on whether the
+  // typed argument parses as a message number or a pet name path.
+  // The load-bearing entry points (focus-mode `e` key, hover pencil
+  // button) target this entry directly and do not depend on the
+  // slash-command surface decision.
+  'edit-message': {
+    name: 'edit-message',
+    label: 'Edit Message',
+    description: 'Revise a message you previously sent',
+    category: 'messaging',
+    mode: 'inline',
+    context: 'inbox',
+    fields: [
+      {
+        name: 'messageNumber',
+        label: 'Message #',
+        type: 'messageNumber',
+        required: true,
+        placeholder: '#',
+      },
+      {
+        name: 'message',
+        label: 'New body',
+        type: 'message',
+        required: true,
+        placeholder: 'Edit message text...',
+      },
+    ],
+    submitLabel: 'Save',
+    aliases: ['editmsg'],
+  },
+
   locate: {
     name: 'locate',
     label: 'Locate',

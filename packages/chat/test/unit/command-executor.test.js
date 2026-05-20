@@ -120,6 +120,22 @@ const createMockContext = () => {
         cancel: async (pathParts, error) => {
           calls.push({ method: 'cancel', args: [pathParts, error] });
         },
+        editMessage: async (
+          messageNumber,
+          strings,
+          edgeNames,
+          petNames,
+          options,
+        ) => {
+          calls.push({
+            method: 'editMessage',
+            args: [messageNumber, strings, edgeNames, petNames, options],
+          });
+        },
+        messageHistory: async messageNumber => {
+          calls.push({ method: 'messageHistory', args: [messageNumber] });
+          return [];
+        },
       },
     )
   );
@@ -1016,4 +1032,76 @@ test('execute handles slash-path splitting', async t => {
   await executor.execute('show', { petName: 'a/b/c/d' });
 
   t.deepEqual(ctx.calls[0].args, [['a', 'b', 'c', 'd']]);
+});
+
+// Coverage for the chat-edit-message-ui design: the slash command
+// `/edit-message` (dispatched here as the `edit-message` case) calls
+// the daemon's editMessage with the parsed message body, coercing the
+// numeric message number to bigint to match the host interface.
+test('execute edit-message coerces messageNumber to bigint and forwards body', async t => {
+  const ctx = createMockContext();
+  const executor = createCommandExecutor({
+    powers: ctx.powers,
+    showValue: v => ctx.showValueCalls.push(v),
+    showMessage: m => ctx.showMessageCalls.push(m),
+    showError: e => ctx.showErrorCalls.push(e),
+  });
+
+  // The 'messageNumber' field is a text input in the command
+  // registry, so the production executor receives a string from the
+  // form. Exercise the same path here by passing a string and assert
+  // it coerces to the expected bigint.
+  const result = await executor.execute('edit-message', {
+    messageNumber: '7',
+    message: {
+      strings: ['hello, ', '!'],
+      edgeNames: ['name'],
+      petNames: ['alice'],
+    },
+  });
+
+  t.true(result.success);
+  t.is(result.message, 'Message #7 edited');
+  t.is(ctx.calls.length, 1);
+  t.is(ctx.calls[0].method, 'editMessage');
+  // bigint coercion is load-bearing; the daemon's editMessage shape
+  // accepts only bigint message numbers, and a string '7' must
+  // coerce to 7n via the executor's BigInt(...) call.
+  t.is(ctx.calls[0].args[0], 7n);
+  t.is(typeof ctx.calls[0].args[0], 'bigint');
+  t.deepEqual(ctx.calls[0].args[1], ['hello, ', '!']);
+  t.deepEqual(ctx.calls[0].args[2], ['name']);
+  t.deepEqual(ctx.calls[0].args[3], ['alice']);
+  // The UI always sends `done: true` because the design defers
+  // partial-stream edits to the streaming-agent path; see Design
+  // Decision 2.
+  t.deepEqual(ctx.calls[0].args[4], { done: true });
+});
+
+// Regression-evidence check: if the executor accidentally dispatched
+// `edit-message` to the blob `edit` case, no editMessage power call
+// would be made.  Asserting that the daemon edit call landed (above)
+// proves the dispatch is wired.  The complementary assertion here is
+// that the blob `edit` case still routes to openBlobViewer and does
+// not invoke editMessage; without that, a regression that conflated
+// the two cases would still pass the first test.
+test('execute edit (blob) does not call editMessage', async t => {
+  const ctx = createMockContext();
+  /** @type {Array<[string, boolean]>} */
+  const viewerCalls = [];
+  const executor = createCommandExecutor({
+    powers: ctx.powers,
+    showValue: v => ctx.showValueCalls.push(v),
+    showMessage: m => ctx.showMessageCalls.push(m),
+    showError: e => ctx.showErrorCalls.push(e),
+    openBlobViewer: async (path, readOnly) => {
+      viewerCalls.push([path, readOnly]);
+    },
+  });
+
+  const result = await executor.execute('edit', { petName: 'my/file.md' });
+
+  t.true(result.success);
+  t.deepEqual(viewerCalls, [['my/file.md', false]]);
+  t.false(ctx.calls.some(c => c.method === 'editMessage'));
 });

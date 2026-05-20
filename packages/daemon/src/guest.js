@@ -158,6 +158,8 @@ export const makeGuestMaker = ({
       request,
       send,
       deliver,
+      editMessage,
+      messageHistory,
       define: mailboxDefine,
       form: mailboxForm,
       submit: mailboxSubmit,
@@ -351,6 +353,8 @@ export const makeGuestMaker = ({
       request,
       send,
       deliver,
+      editMessage,
+      messageHistory,
       evaluate,
       // Define/Form
       define,

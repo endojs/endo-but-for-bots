@@ -888,6 +888,14 @@ export const channelComponent = async (
     initialScrollTimer = 0;
   }, 150);
 
+  // TODO(endojs/endo-but-for-bots#203): the daemon `editMessage`
+  // capability added in endojs/endo-but-for-bots#125 re-emits the
+  // same message number when its envelope is edited.  This loop,
+  // like the inbox loop, currently treats each emission as a fresh
+  // node.  The channel layer also has its own edit/deletion model
+  // expressed as typed reply messages (see edit-queue.js); reconciling
+  // the two models (envelope-level edits vs. reply-typed edits) is
+  // a UI design question tracked in endojs/endo-but-for-bots#203.
   for await (const message of messageIterator) {
     if (disposed) break;
     const typedMessage = /** @type {ChannelMessage} */ (message);
