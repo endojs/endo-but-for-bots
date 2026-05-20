@@ -578,16 +578,6 @@ export type Epithet = {
   principal: FormulaIdentifier;
 };
 
-/**
- * As exposed at the API surface: a Handle bearing a relationship to
- * another Handle. The `principal` is a remote Handle reference; the
- * persisted form (`Epithet`) carries the formula identifier instead.
- */
-export type ExposedEpithet = {
-  relationship: string;
-  principal: unknown; // Handle remotable
-};
-
 type HandleFormula = {
   type: 'handle';
   agent: FormulaIdentifier;

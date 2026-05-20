@@ -125,21 +125,29 @@ export const EpithetShape = M.splitRecord({
   principal: M.remotable('Handle'),
 });
 
-// CRITICAL: HandleInterface must use defaultGuards: 'passable' to preserve
-// envelope object identity when passed through E() calls. Explicit guards
-// like M.remotable('Envelope') cause envelope identity loss and "mail fraud"
-// errors. The unlisted `receive` and `open` methods inherit the passable
-// default; the persona methods (`epithets`, `verify`) carry their own
-// explicit guards.
+// HandleInterface uses defaultGuards: 'passable' so that the envelope-
+// carrying methods (`receive`, `open`) preserve envelope object identity
+// when passed through E() calls; explicit guards like
+// M.remotable('Envelope') on those methods cause envelope identity loss
+// and "mail fraud" errors, so they are intentionally unlisted and inherit
+// the passable default. The persona methods (`epithets`, `verify`) do
+// not carry envelopes, so they declare explicit guards on top of the
+// passable default: their argument and return shapes are well-defined
+// and benefit from boundary checking.
 export const HandleInterface = M.interface(
   'EndoHandle',
   {
     // Read this Handle's epithet chain (most-recent first).
-    epithets: M.call().returns(M.promise()),
+    // `callWhen` awaits the implementation's returned promise so the
+    // `EpithetShape` array shape is checked at the boundary against
+    // the resolved value, not the promise wrapper.
+    epithets: M.callWhen().returns(M.arrayOf(EpithetShape)),
     // Confirm or deny that the given subordinate Handle stands in the
     // named relationship to this Handle. Returns false if the subordinate
     // has no matching epithet whose principal is this Handle.
-    verify: M.call(M.remotable('Handle'), M.string()).returns(M.promise()),
+    verify: M.callWhen(M.remotable('Handle'), M.string()).returns(
+      M.boolean(),
+    ),
   },
   { defaultGuards: 'passable' },
 );
