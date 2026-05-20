@@ -22,6 +22,13 @@ import type {
 export { makeRefReader, makeRefIterator } from './src/ref-reader.js';
 export { makeReaderRef, makeIteratorRef } from './src/reader-ref.js';
 
+// New-protocol exo-stream re-exports (see ./index.js for the rationale
+// and the wire-pairing note).
+export { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iterator.js';
+export { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
+export { readerFromIterator } from '@endo/exo-stream/reader-from-iterator.js';
+export { iterateReader } from '@endo/exo-stream/iterate-reader.js';
+
 export type {
   Config,
   DefineRequest,

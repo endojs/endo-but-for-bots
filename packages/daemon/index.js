@@ -26,6 +26,24 @@ export { makeEndoClient } from './src/client.js';
 export { makeRefReader, makeRefIterator } from './src/ref-reader.js';
 export { makeReaderRef, makeIteratorRef } from './src/reader-ref.js';
 
+// Re-exports from @endo/exo-stream, the successor to the legacy
+// reader-ref / ref-reader pair (per PR endojs/endo#3036 and the
+// llm-side exo-stream package rename).
+//
+// Recommended for new code; the legacy makeRefReader / makeReaderRef /
+// makeRefIterator / makeIteratorRef exports above are retained for
+// backward compatibility and for daemon-internal modules
+// (channel.js, mount.js, worker.js, and several tests) that have not
+// yet migrated. Wire-protocol pairing: bytesReaderFromIterator
+// <-> iterateBytesReader, readerFromIterator <-> iterateReader.
+// Old-protocol producers cannot be consumed by new-protocol
+// consumers or vice versa, so any in-flight migration must move
+// paired producer/consumer endpoints atomically.
+export { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iterator.js';
+export { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
+export { readerFromIterator } from '@endo/exo-stream/reader-from-iterator.js';
+export { iterateReader } from '@endo/exo-stream/iterate-reader.js';
+
 const removePath = async removalPath => {
   return fs.promises
     .rm(removalPath, { recursive: true, force: true })
