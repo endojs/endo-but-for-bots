@@ -27,6 +27,7 @@
     "packages/compartment-mapper",
     "packages/daemon",
     "packages/evasive-transform",
+    "packages/hex-integration-test",
     "packages/hardened262",
     "packages/memoize",
     "packages/module-source",

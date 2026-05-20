@@ -1,0 +1,67 @@
+{
+  "name": "@endo/hex-integration-test",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Integration tests for @endo/hex (encode/decode round-trip and surface coverage; uses @endo/ses-ava as test runner). Hosted in an internal package (not published, nothing else depends on it) to break the workspace devDep cycle.",
+  "keywords": [],
+  "author": "Endo contributors",
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/endojs/endo/tree/master/packages/hex-integration-test#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/endojs/endo.git",
+    "directory": "packages/hex-integration-test"
+  },
+  "bugs": {
+    "url": "https://github.com/endojs/endo/issues"
+  },
+  "type": "module",
+  "exports": {},
+  "scripts": {
+    "build": "exit 0",
+    "lint": "yarn lint:types && yarn lint:eslint",
+    "lint-fix": "eslint --fix .",
+    "lint:eslint": "eslint .",
+    "lint:types": "tsc",
+    "test": "ava"
+  },
+  "dependencies": {
+    "@endo/hex": "workspace:^",
+    "@endo/ses-ava": "workspace:^",
+    "ses": "workspace:^"
+  },
+  "devDependencies": {
+    "ava": "catalog:dev",
+    "eslint": "catalog:dev",
+    "typescript": "catalog:dev"
+  },
+  "ava": {
+    "files": [
+      "test/**/*.test.js"
+    ],
+    "nodeArguments": [
+      "--conditions=test-endo-hex"
+    ],
+    "timeout": "60s"
+  },
+  "publishConfig": {
+    "access": "restricted"
+  },
+  "eslintConfig": {
+    "extends": [
+      "plugin:@endo/internal"
+    ],
+    "settings": {
+      "import-x/resolver": {
+        "node": {
+          "conditionNames": [
+            "import",
+            "require",
+            "default",
+            "test-endo-hex"
+          ]
+        }
+      }
+    }
+  }
+}
