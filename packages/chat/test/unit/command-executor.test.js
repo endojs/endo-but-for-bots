@@ -1047,8 +1047,12 @@ test('execute edit-message coerces messageNumber to bigint and forwards body', a
     showError: e => ctx.showErrorCalls.push(e),
   });
 
+  // The 'messageNumber' field is a text input in the command
+  // registry, so the production executor receives a string from the
+  // form. Exercise the same path here by passing a string and assert
+  // it coerces to the expected bigint.
   const result = await executor.execute('edit-message', {
-    messageNumber: 7,
+    messageNumber: '7',
     message: {
       strings: ['hello, ', '!'],
       edgeNames: ['name'],
@@ -1061,8 +1065,10 @@ test('execute edit-message coerces messageNumber to bigint and forwards body', a
   t.is(ctx.calls.length, 1);
   t.is(ctx.calls[0].method, 'editMessage');
   // bigint coercion is load-bearing; the daemon's editMessage shape
-  // accepts only bigint message numbers.
+  // accepts only bigint message numbers, and a string '7' must
+  // coerce to 7n via the executor's BigInt(...) call.
   t.is(ctx.calls[0].args[0], 7n);
+  t.is(typeof ctx.calls[0].args[0], 'bigint');
   t.deepEqual(ctx.calls[0].args[1], ['hello, ', '!']);
   t.deepEqual(ctx.calls[0].args[2], ['name']);
   t.deepEqual(ctx.calls[0].args[3], ['alice']);
