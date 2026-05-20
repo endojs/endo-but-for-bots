@@ -66,7 +66,10 @@ import { scoreObservedTrace } from './trace-metric.js';
  * @property {string} [studentModelEnvVar]  Env var holding the GEPA student model (default `AGENTRY_STUDENT_MODEL`).
  * @property {string} [teacherModelEnvVar]  Env var holding the GEPA teacher model (default `AGENTRY_TEACHER_MODEL`).
  * @property {string} [evalModelsEnvVar]    Env var holding the CSV of `--eval-models` (default `AGENTRY_EVAL_MODELS`).
+ * @property {string} [hostEnvVar]          Env var holding the LLM host URL (default `AGENTRY_LLM_HOST`).
+ * @property {string} [modelEnvVar]         Env var holding the LLM model name for the provenance banner (default `AGENTRY_LLM_MODEL`).
  * @property {string} [legacyModelEnvVar]   Optional legacy env var for default model (e.g. `LAL_MODEL`).
+ * @property {string} [legacyHostEnvVar]    Optional legacy env var for the LLM host URL (e.g. `LAL_HOST`).
  * @property {string} [scriptName]          Script name printed in --help (default `optimize:prompt`).
  */
 
@@ -85,6 +88,79 @@ const csvValues = value =>
     .split(',')
     .map(item => item.trim())
     .filter(Boolean);
+
+/**
+ * Resolve the provider name from the host URL. Mirrors the
+ * provider-selection logic the consumer's `makeAxAI` uses so the
+ * banner and the provenance header name the provider that will
+ * actually be used. Host substrings match the set
+ * `packages/lal/model-resolution.js` understands; provider names
+ * match fae's canonical mapping (so artifacts produced by either
+ * consumer share one shape).
+ *
+ * @param {string} host
+ */
+const resolveProviderName = host => {
+  if (host.includes('openrouter.ai')) return 'openrouter';
+  if (host.includes('anthropic.com')) return 'anthropic';
+  if (host.includes('generativelanguage.googleapis.com'))
+    return 'google-gemini';
+  if (host.includes('api.openai.com')) return 'openai';
+  return 'ollama';
+};
+
+/**
+ * Print a one-line banner naming the LLM provider and model the run
+ * is about to use. Reads `hostEnvVar` / `modelEnvVar` first (default
+ * `AGENTRY_LLM_HOST` / `AGENTRY_LLM_MODEL`), then falls back to the
+ * consumer-supplied legacy env vars (e.g. `LAL_HOST` / `LAL_MODEL`).
+ * Written to stderr so it does not contaminate the JSON the script
+ * prints to stdout.
+ *
+ * @param {NodeJS.ProcessEnv} env
+ * @param {{ hostEnvVar: string, modelEnvVar: string, legacyHostEnvVar?: string, legacyModelEnvVar?: string }} envVars
+ */
+const printProviderBanner = (env, envVars) => {
+  const host =
+    env[envVars.hostEnvVar] ||
+    (envVars.legacyHostEnvVar ? env[envVars.legacyHostEnvVar] : '') ||
+    '';
+  const model =
+    env[envVars.modelEnvVar] ||
+    (envVars.legacyModelEnvVar ? env[envVars.legacyModelEnvVar] : '') ||
+    '(unset)';
+  const provider = host ? resolveProviderName(host) : '(unset)';
+  console.error(`Provider: ${provider}, Model: ${model}`);
+};
+
+/**
+ * Standardized provenance header for optimizer output JSON. Every
+ * JSON the optimizer writes leads with these fields so a future
+ * reader can tell which provider and model(s) produced the numbers:
+ *
+ *   { recordedAt: ISO date (UTC),
+ *     provider:   resolved provider name from the host URL,
+ *     models:     string[] (always an array; single-model runs ship a
+ *                 one-element array). }
+ *
+ * Mirrored in on-disk `prompt-baseline.json` so checked-in artifacts
+ * and fresh writes share one schema.
+ *
+ * @param {NodeJS.ProcessEnv} env
+ * @param {string[]} models
+ * @param {{ hostEnvVar: string, legacyHostEnvVar?: string }} envVars
+ */
+const provenanceHeader = (env, models, envVars) => {
+  const host =
+    env[envVars.hostEnvVar] ||
+    (envVars.legacyHostEnvVar ? env[envVars.legacyHostEnvVar] : '') ||
+    '';
+  return {
+    recordedAt: new Date().toISOString().slice(0, 10),
+    provider: host ? resolveProviderName(host) : '(unset)',
+    models,
+  };
+};
 
 /** @param {string} scriptName */
 const printUsage = scriptName => {
@@ -184,9 +260,20 @@ export const runOptimizerCli = async config => {
     studentModelEnvVar = 'AGENTRY_STUDENT_MODEL',
     teacherModelEnvVar = 'AGENTRY_TEACHER_MODEL',
     evalModelsEnvVar = 'AGENTRY_EVAL_MODELS',
+    hostEnvVar = 'AGENTRY_LLM_HOST',
+    modelEnvVar = 'AGENTRY_LLM_MODEL',
     legacyModelEnvVar,
+    legacyHostEnvVar,
     scriptName = 'optimize:prompt',
   } = config;
+
+  const bannerEnvVars = {
+    hostEnvVar,
+    modelEnvVar,
+    legacyHostEnvVar,
+    legacyModelEnvVar,
+  };
+  const provenanceEnvVars = { hostEnvVar, legacyHostEnvVar };
 
   if (hasFlag('--help') || hasFlag('-h')) {
     printUsage(scriptName);
@@ -215,6 +302,10 @@ export const runOptimizerCli = async config => {
   if (envPath) {
     await loadEnv(envPath);
   }
+  // The banner reads the host/model env vars AFTER loadEnv so the
+  // `.env` values are visible. Printed once at the head of any
+  // LLM-touching run (--trial, --evaluate, default GEPA).
+  printProviderBanner(process.env, bannerEnvVars);
   const [
     { ai },
     { AgentryPromptProgram, makePromptOptimizer, traceMetric },
@@ -280,8 +371,8 @@ export const runOptimizerCli = async config => {
     console.log(
       JSON.stringify(
         {
+          ...provenanceHeader(process.env, evalModels, provenanceEnvVars),
           mode: 'evaluate',
-          models: evalModels,
           summary: summarizeModelTrials(trials),
           trials,
         },
@@ -335,9 +426,9 @@ export const runOptimizerCli = async config => {
   console.log(
     JSON.stringify(
       {
+        ...provenanceHeader(process.env, evalModels, provenanceEnvVars),
         optimizer: optimizerKind,
         rounds,
-        evalModels,
         examples: {
           train: trainBase.map((/** @type {any} */ e) => e.id),
           validation: validationBase.map((/** @type {any} */ e) => e.id),

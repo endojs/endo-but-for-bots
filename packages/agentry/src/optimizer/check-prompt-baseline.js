@@ -32,6 +32,9 @@ harden(sha256);
 
 /**
  * @typedef {{
+ *   recordedAt?: string | null,
+ *   provider?: string | null,
+ *   models?: string[],
  *   systemPromptSha256: string,
  *   examplesSha256: string,
  *   scores?: Record<string, number>,
@@ -128,7 +131,48 @@ const loadPreviousBaseline = ({ baselinePath, repoRoot }) => {
  * @property {string} [systemPromptLabel] Display label for the system-prompt file.
  * @property {string} [examplesLabel]     Display label for the examples file.
  * @property {string} [reEvaluateHint]    Per-package re-evaluation hint (defaults to lal's script name).
+ * @property {string} [hostEnvVar]        Env var holding the LLM host URL for the provenance banner (default `AGENTRY_LLM_HOST`).
+ * @property {string} [modelEnvVar]       Env var holding the LLM model name for the provenance banner (default `AGENTRY_LLM_MODEL`).
+ * @property {string} [legacyHostEnvVar]  Optional legacy env var for the LLM host URL (e.g. `LAL_HOST`).
+ * @property {string} [legacyModelEnvVar] Optional legacy env var for the LLM model name (e.g. `LAL_MODEL`).
  */
+
+/**
+ * Resolve the provider name from the host URL. Mirrors
+ * `optimize-prompt.js`'s mapping so optimizer-related scripts share
+ * one provenance vocabulary.
+ *
+ * @param {string} host
+ */
+const resolveProviderName = host => {
+  if (host.includes('openrouter.ai')) return 'openrouter';
+  if (host.includes('anthropic.com')) return 'anthropic';
+  if (host.includes('generativelanguage.googleapis.com'))
+    return 'google-gemini';
+  if (host.includes('api.openai.com')) return 'openai';
+  return 'ollama';
+};
+
+/**
+ * Print the same one-line provenance banner `optimize-prompt.js`
+ * prints, so every optimizer-related script names the LLM the
+ * operator has configured. Written to stderr.
+ *
+ * @param {NodeJS.ProcessEnv} env
+ * @param {{ hostEnvVar: string, modelEnvVar: string, legacyHostEnvVar?: string, legacyModelEnvVar?: string }} envVars
+ */
+const printProviderBanner = (env, envVars) => {
+  const host =
+    env[envVars.hostEnvVar] ||
+    (envVars.legacyHostEnvVar ? env[envVars.legacyHostEnvVar] : '') ||
+    '';
+  const model =
+    env[envVars.modelEnvVar] ||
+    (envVars.legacyModelEnvVar ? env[envVars.legacyModelEnvVar] : '') ||
+    '(unset)';
+  const provider = host ? resolveProviderName(host) : '(unset)';
+  console.error(`Provider: ${provider}, Model: ${model}`);
+};
 
 /**
  * Run the baseline check against the consumer's paths. Sets
@@ -147,7 +191,17 @@ export const runBaselineCheck = async config => {
     systemPromptLabel,
     examplesLabel,
     reEvaluateHint,
+    hostEnvVar = 'AGENTRY_LLM_HOST',
+    modelEnvVar = 'AGENTRY_LLM_MODEL',
+    legacyHostEnvVar,
+    legacyModelEnvVar,
   } = config;
+  printProviderBanner(process.env, {
+    hostEnvVar,
+    modelEnvVar,
+    legacyHostEnvVar,
+    legacyModelEnvVar,
+  });
   const [baseline, promptSource, examplesSource] = await Promise.all([
     fs.readFile(baselinePath, 'utf8').then(JSON.parse),
     fs.readFile(systemPromptPath),
