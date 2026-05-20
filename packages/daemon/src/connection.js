@@ -270,12 +270,87 @@ export const messageToBytes = message => {
   return bytes;
 };
 
-/** @param {Uint8Array} bytes */
+/**
+ * Reconstitute the `{ '@@error': true, name, message, stack }` wire shape
+ * `messageToBytes` writes for `CTP_DISCONNECT.reason` back into a real
+ * Error instance. Without this, the underlying CapTP's settlers (and any
+ * questions made against an unplugged remote) reject with a plain object,
+ * which AVA's Node-22 unhandled-rejection trap surfaces as
+ * `SES_UNHANDLED_REJECTION: { '@@error': true, ... }` whenever a single
+ * rejection from teardown slips past a `.catch()`. Restoring the Error
+ * shape keeps rejection values uniform with the locally-generated
+ * `Error('Connection stream ended')` path, which is itself never
+ * surfaced by the same trap.
+ *
+ * Idempotent and narrow: only touches `CTP_DISCONNECT` messages whose
+ * `reason` is the documented `@@error` plain shape. Any other message
+ * (or a `CTP_DISCONNECT` whose reason was a non-Error passable) passes
+ * through unchanged.
+ *
+ * @param {unknown} message
+ * @returns {unknown}
+ */
+const reviveErrorReason = message => {
+  if (
+    message === null ||
+    typeof message !== 'object' ||
+    /** @type {{type?: unknown}} */ (message).type !== 'CTP_DISCONNECT'
+  ) {
+    return message;
+  }
+  const reason = /** @type {{reason?: unknown}} */ (message).reason;
+  if (
+    reason === null ||
+    typeof reason !== 'object' ||
+    /** @type {any} */ (reason)[ERROR_SENTINEL] !== true
+  ) {
+    return message;
+  }
+  const {
+    name = 'Error',
+    message: errMessage = '',
+    stack = '',
+  } = /** @type {{name?: string, message?: string, stack?: string}} */ (reason);
+  /** @type {any} */
+  const Ctor =
+    name === 'TypeError'
+      ? TypeError
+      : name === 'RangeError'
+        ? RangeError
+        : name === 'SyntaxError'
+          ? SyntaxError
+          : name === 'ReferenceError'
+            ? ReferenceError
+            : Error;
+  const err = new Ctor(errMessage);
+  if (err.name !== name) {
+    Object.defineProperty(err, 'name', {
+      value: name,
+      writable: true,
+      enumerable: false,
+      configurable: true,
+    });
+  }
+  if (typeof stack === 'string' && stack.length > 0) {
+    Object.defineProperty(err, 'stack', {
+      value: stack,
+      writable: true,
+      enumerable: false,
+      configurable: true,
+    });
+  }
+  return { .../** @type {object} */ (message), reason: err };
+};
+
+/**
+ * @param {Uint8Array} bytes
+ * @returns {any}
+ */
 export const bytesToMessage = bytes => {
   const text = bytesToText(bytes);
   // console.log('<-', text);
   const message = JSON.parse(text);
-  return message;
+  return reviveErrorReason(message);
 };
 
 /**

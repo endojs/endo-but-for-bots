@@ -84,7 +84,10 @@ test('messageToBytes preserves a custom Error subclass name on the wire', t => {
   const reason = new CustomError('detonated');
   const message = harden({ type: 'CTP_DISCONNECT', epoch: 0, reason });
   const decoded = bytesToMessage(messageToBytes(message));
-  t.is(decoded.reason['@@error'], true);
+  // `bytesToMessage` reconstitutes the wire `@@error` shape back into a
+  // real Error so rejection chains downstream are uniform; the custom
+  // subclass name and message must survive the round-trip.
+  t.true(decoded.reason instanceof Error);
   t.is(decoded.reason.name, 'CustomError');
   t.is(decoded.reason.message, 'detonated');
   t.is(typeof decoded.reason.stack, 'string');

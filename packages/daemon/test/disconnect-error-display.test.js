@@ -75,15 +75,14 @@ test('Error reason on CTP_DISCONNECT survives wire round-trip with its message',
     decoded.reason !== undefined && decoded.reason !== null,
     'reason should not be undefined or null after round-trip',
   );
-  // `JSON.stringify(Error('boom'))` yields `'{}'` today because
-  // Error own-properties are non-enumerable. The fix must preserve
-  // the message text in some form on the wire.
-  const reasonJson = JSON.stringify(decoded.reason);
-  t.not(
-    reasonJson,
-    '{}',
-    'round-tripped Error reason serializes to the empty object',
-  );
+  // `bytesToMessage` reconstitutes the wire `{ '@@error': true, ... }`
+  // shape back into a real Error so settler rejections carry an Error
+  // through the rest of the pipeline (uniform with the local
+  // `Error('Connection stream ended')` path). The original message
+  // text must be preserved on the reconstituted Error.
+  t.true(decoded.reason instanceof Error, 'reason is reconstituted as Error');
+  t.is(decoded.reason.message, 'boom', 'message text is preserved');
+  t.is(decoded.reason.name, 'Error', 'name is preserved');
 });
 
 test('round-tripped Error reason rendered through onReject contains the original message', t => {
