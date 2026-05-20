@@ -1,5 +1,5 @@
 /* global process */
-import '../index.js';
+import 'ses';
 import fs from 'fs';
 import { makeBundle } from '@endo/compartment-mapper/bundle.js';
 import { minify } from 'terser';
@@ -9,7 +9,10 @@ import { hermesTransforms } from './hermes-transforms.js';
 lockdown();
 
 const resolve = (rel, abs) => fileURLToPath(new URL(rel, abs).toString());
-const root = new URL('..', import.meta.url).toString();
+// Root is the sibling `packages/ses/` directory, since this script lives in
+// `packages/ses-module-source-integration-test/scripts/` but builds the SES
+// dist outputs into the SES package.
+const root = new URL('../../ses/', import.meta.url).toString();
 
 const read = async location => fs.promises.readFile(fileURLToPath(location));
 const write = async (target, content) => {
@@ -51,7 +54,7 @@ const writeBundle = async ({ buildType } = {}) => {
 
   const bundle = await makeBundle(
     read,
-    pathToFileURL(resolve('../index.js', import.meta.url)).toString(),
+    pathToFileURL(resolve('index.js', root)).toString(),
     { syncModuleTransforms },
   );
   const versionedBundle = `// ses@${version}\n${bundle}`;
@@ -71,7 +74,7 @@ const writeBundle = async ({ buildType } = {}) => {
     console.log(`Minified bundle size: ${terse.length} bytes`);
   }
 
-  await fs.promises.mkdir('dist', { recursive: true });
+  await fs.promises.mkdir(resolve('dist', root), { recursive: true });
 
   await Promise.all([
     ...bundleFilePaths.map(dest => write(dest, versionedBundle)),

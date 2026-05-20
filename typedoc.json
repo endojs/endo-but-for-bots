@@ -30,6 +30,7 @@
     "packages/ses-eventual-send-integration-test",
     "packages/ses-harden-integration-test",
     "packages/hex-integration-test",
+    "packages/ses-module-source-integration-test",
     "packages/hardened262",
     "packages/memoize",
     "packages/module-source",
