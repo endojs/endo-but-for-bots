@@ -203,7 +203,10 @@ export const scoreObservedTrace = (observedInput, example, options = {}) => {
   if (example.acceptableTraces.length === 0) {
     throw new Error(`example "${example.id}" has no acceptable traces`);
   }
-  const weights = { ...DEFAULT_TRACE_METRIC_WEIGHTS, ...(options.weights || {}) };
+  const weights = {
+    ...DEFAULT_TRACE_METRIC_WEIGHTS,
+    ...(options.weights || {}),
+  };
   const observed = Array.isArray(observedInput)
     ? summarizeTrace(observedInput)
     : observedInput;
