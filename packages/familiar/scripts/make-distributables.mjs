@@ -77,9 +77,11 @@ if (fs.existsSync(aggregatedLicense)) {
   console.log(`Copied: out/make/LICENSE.third-party.txt`);
 } else {
   console.error(
-    `Warning: ${aggregatedLicense} not found.\n` +
-      `Run scripts/aggregate-licenses.mjs (or build.mjs) before make.`,
+    `Error: ${aggregatedLicense} not found.\n` +
+      `Run scripts/aggregate-licenses.mjs (or yarn step:licenses) before make.\n` +
+      `A distributable without third-party attribution is not a valid release artifact.`,
   );
+  process.exit(1);
 }
 
 // --- ZIP ---
