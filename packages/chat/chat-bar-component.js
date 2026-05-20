@@ -2,6 +2,7 @@
 
 /** @import { ERef } from '@endo/far' */
 /** @import { EndoHost } from '@endo/daemon' */
+/** @import { MessageRevision } from '@endo/daemon' */
 
 import { E } from '@endo/far';
 import { makeRefIterator } from './ref-iterator.js';
@@ -766,14 +767,14 @@ export const chatBarComponent = (
     E(powers)
       .messageHistory(numberAsBigint)
       .then(historyResult => {
-        const history = /** @type {Array<{ envelope: any }>} */ (historyResult);
+        const history = /** @type {MessageRevision[]} */ (historyResult);
         const latest = history?.[history.length - 1];
         if (!latest) return;
-        const envelope = latest.envelope;
-        const strings = /** @type {string[]} */ (envelope.strings || []);
-        const names = /** @type {string[]} */ (
-          envelope.names || envelope.edgeNames || []
-        );
+        // Only package envelopes carry strings/names; the messageHistory
+        // record can structurally hold any Message variant, so narrow
+        // here and bail otherwise.
+        if (latest.envelope.type !== 'package') return;
+        const { strings, names } = latest.envelope;
         // Per Design Decision 4 (chip carries the locator, not the
         // stale pet name): if the embedded-token chip's underlying
         // pet name has since been renamed or removed, we fall back to
