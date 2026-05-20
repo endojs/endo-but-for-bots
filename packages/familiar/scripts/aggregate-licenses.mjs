@@ -204,15 +204,16 @@ for (const meta of metafiles) {
     // esbuild reports inputs as repo-relative paths.
     const absolute = path.resolve(repoRoot, inputPath);
     const pkgJson = findNearestPackageJson(absolute);
-    if (!pkgJson) continue;
-    try {
-      recordPackage(readPackageRecord(pkgJson));
-    } catch (e) {
-      console.warn(
-        `Skipping malformed package.json at ${pkgJson}: ${
-          /** @type {Error} */ (e).message
-        }`,
-      );
+    if (pkgJson) {
+      try {
+        recordPackage(readPackageRecord(pkgJson));
+      } catch (e) {
+        console.warn(
+          `Skipping malformed package.json at ${pkgJson}: ${
+            /** @type {Error} */ (e).message
+          }`,
+        );
+      }
     }
   }
 }
@@ -258,28 +259,32 @@ if (fs.existsSync(chatPackageJson)) {
     const { packageJsonPath } = /** @type {{ packageJsonPath: string }} */ (
       queue.shift()
     );
-    if (visited.has(packageJsonPath)) continue;
-    visited.add(packageJsonPath);
-    let record;
-    try {
-      record = readPackageRecord(packageJsonPath);
-    } catch {
-      continue;
-    }
-    // The chat package itself is first-party; we only seed its
-    // dependency walk. Do not record it as a third-party entry.
-    if (packageJsonPath !== chatPackageJson) {
-      recordPackage(record);
-    }
-    const fromDir = path.dirname(packageJsonPath);
-    const allDeps = {
-      ...record.dependencies,
-      ...record.peerDependencies,
-    };
-    for (const depName of Object.keys(allDeps)) {
-      const resolved = resolvePackageJson(fromDir, depName);
-      if (resolved && !visited.has(resolved)) {
-        queue.push({ packageJsonPath: resolved });
+    if (!visited.has(packageJsonPath)) {
+      visited.add(packageJsonPath);
+      /** @type {ReturnType<typeof readPackageRecord> | null} */
+      let record = null;
+      try {
+        record = readPackageRecord(packageJsonPath);
+      } catch {
+        // Malformed package.json; skip without recording or recursing.
+      }
+      if (record) {
+        // The chat package itself is first-party; we only seed its
+        // dependency walk. Do not record it as a third-party entry.
+        if (packageJsonPath !== chatPackageJson) {
+          recordPackage(record);
+        }
+        const fromDir = path.dirname(packageJsonPath);
+        const allDeps = {
+          ...record.dependencies,
+          ...record.peerDependencies,
+        };
+        for (const depName of Object.keys(allDeps)) {
+          const resolved = resolvePackageJson(fromDir, depName);
+          if (resolved && !visited.has(resolved)) {
+            queue.push({ packageJsonPath: resolved });
+          }
+        }
       }
     }
   }
