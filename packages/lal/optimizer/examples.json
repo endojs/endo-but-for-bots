@@ -1,0 +1,462 @@
+[
+  {
+    "id": "ack-reply",
+    "prompt": "Smoke test: please reply with the single word \"ack\" and then dismiss this message.",
+    "attachments": [],
+    "acceptableTraces": [
+      [
+        { "tool": "listMessages" },
+        { "tool": "reply", "rawArgsIncludes": ["ack"] },
+        { "tool": "dismiss" }
+      ],
+      [
+        { "tool": "reply", "rawArgsIncludes": ["ack"] },
+        { "tool": "dismiss" }
+      ]
+    ],
+    "minLength": 2,
+    "minRoundTrips": 1,
+    "maxRoundTrips": 4,
+    "maxToolErrors": 0
+  },
+  {
+    "id": "hello-greeting",
+    "prompt": "Please reply with a brief friendly greeting and dismiss this message.",
+    "attachments": [],
+    "acceptableTraces": [
+      [
+        { "tool": "listMessages" },
+        { "tool": "reply" },
+        { "tool": "dismiss" }
+      ],
+      [
+        { "tool": "reply" },
+        { "tool": "dismiss" }
+      ]
+    ],
+    "minLength": 2,
+    "minRoundTrips": 1,
+    "maxRoundTrips": 4
+  },
+  {
+    "id": "locate-self",
+    "prompt": "Call locate([\"@self\"]) and reply with the resulting URL, then dismiss this message.",
+    "attachments": [],
+    "acceptableTraces": [
+      [
+        { "tool": "listMessages" },
+        { "tool": "locate", "rawArgsIncludes": ["@self"] },
+        { "tool": "reply", "rawArgsIncludes": ["endo://"] },
+        { "tool": "dismiss" }
+      ]
+    ],
+    "minLength": 3,
+    "minRoundTrips": 2,
+    "maxRoundTrips": 5
+  },
+  {
+    "id": "list-root",
+    "prompt": "List the root of your inventory and reply with the names you found, then dismiss.",
+    "attachments": [],
+    "acceptableTraces": [
+      [
+        { "tool": "listMessages" },
+        { "tool": "list" },
+        { "tool": "reply" },
+        { "tool": "dismiss" }
+      ]
+    ],
+    "minLength": 3,
+    "minRoundTrips": 2,
+    "maxRoundTrips": 5
+  },
+  {
+    "id": "lookup-host",
+    "prompt": "Look up @host and reply with whatever lookup returns, then dismiss.",
+    "attachments": [],
+    "acceptableTraces": [
+      [
+        { "tool": "listMessages" },
+        { "tool": "lookup", "rawArgsIncludes": ["@host"] },
+        { "tool": "reply" },
+        { "tool": "dismiss" }
+      ]
+    ],
+    "minLength": 3,
+    "minRoundTrips": 2,
+    "maxRoundTrips": 5
+  },
+  {
+    "id": "has-present",
+    "prompt": "Use has() to check whether @self exists in your directory and reply with the result, then dismiss.",
+    "attachments": [],
+    "acceptableTraces": [
+      [
+        { "tool": "listMessages" },
+        { "tool": "has", "rawArgsIncludes": ["@self"] },
+        { "tool": "reply", "rawArgsIncludes": ["true"] },
+        { "tool": "dismiss" }
+      ]
+    ],
+    "minLength": 3,
+    "minRoundTrips": 2,
+    "maxRoundTrips": 5
+  },
+  {
+    "id": "has-absent",
+    "prompt": "Use has() to check whether a pet name called \"never-existed\" is in your directory and reply with the result, then dismiss.",
+    "attachments": [],
+    "acceptableTraces": [
+      [
+        { "tool": "listMessages" },
+        { "tool": "has", "rawArgsIncludes": ["never-existed"] },
+        { "tool": "reply", "rawArgsIncludes": ["false"] },
+        { "tool": "dismiss" }
+      ]
+    ],
+    "minLength": 3,
+    "minRoundTrips": 2,
+    "maxRoundTrips": 5
+  },
+  {
+    "id": "make-directory",
+    "prompt": "Create a new directory under the pet name \"scratch\", then list your root and reply with the names. Dismiss this message when done.",
+    "attachments": [],
+    "acceptableTraces": [
+      [
+        { "tool": "listMessages" },
+        { "tool": "makeDirectory", "rawArgsIncludes": ["scratch"] },
+        { "tool": "list" },
+        { "tool": "reply", "rawArgsIncludes": ["scratch"] },
+        { "tool": "dismiss" }
+      ]
+    ],
+    "minLength": 4,
+    "minRoundTrips": 2,
+    "maxRoundTrips": 6
+  },
+  {
+    "id": "list-messages",
+    "prompt": "List your inbox messages and reply with the count, then dismiss this message.",
+    "attachments": [],
+    "acceptableTraces": [
+      [
+        { "tool": "listMessages" },
+        { "tool": "reply" },
+        { "tool": "dismiss" }
+      ]
+    ],
+    "minLength": 2,
+    "minRoundTrips": 1,
+    "maxRoundTrips": 4
+  },
+  {
+    "id": "dismiss-notification",
+    "prompt": "This is a notification only — no reply needed. Just dismiss this message.",
+    "attachments": [],
+    "acceptableTraces": [
+      [
+        { "tool": "listMessages" },
+        { "tool": "dismiss" }
+      ],
+      [
+        { "tool": "dismiss" }
+      ]
+    ],
+    "minLength": 1,
+    "minRoundTrips": 1,
+    "maxRoundTrips": 3
+  },
+  {
+    "id": "send-no-attachments",
+    "prompt": "Send a brief message to @host with the text \"status: ok\" and no attachments, then dismiss this message.",
+    "attachments": [],
+    "acceptableTraces": [
+      [
+        { "tool": "listMessages" },
+        { "tool": "send", "rawArgsIncludes": ["status: ok", "@host"] },
+        { "tool": "dismiss" }
+      ]
+    ],
+    "minLength": 2,
+    "minRoundTrips": 2,
+    "maxRoundTrips": 5
+  },
+  {
+    "id": "reply-with-greeting",
+    "prompt": "Reply to this message with the text \"hello, world\" and dismiss it.",
+    "attachments": [],
+    "acceptableTraces": [
+      [
+        { "tool": "listMessages" },
+        { "tool": "reply", "rawArgsIncludes": ["hello, world"] },
+        { "tool": "dismiss" }
+      ],
+      [
+        { "tool": "reply", "rawArgsIncludes": ["hello, world"] },
+        { "tool": "dismiss" }
+      ]
+    ],
+    "minLength": 2,
+    "minRoundTrips": 1,
+    "maxRoundTrips": 4
+  },
+  {
+    "id": "read-primer-readme",
+    "prompt": "Read the file \"README.md\" from your \"primer\" directory and reply with the first line, then dismiss.",
+    "attachments": [
+      {
+        "edgeName": "primer",
+        "kind": "directory",
+        "files": {
+          "README.md": "# Lal Primer\nWelcome to the Lal primer.\n"
+        }
+      }
+    ],
+    "acceptableTraces": [
+      [
+        { "tool": "listMessages" },
+        { "tool": "readText", "rawArgsIncludes": ["primer", "README.md"] },
+        { "tool": "reply", "rawArgsIncludes": ["Lal Primer"] },
+        { "tool": "dismiss" }
+      ]
+    ],
+    "minLength": 3,
+    "minRoundTrips": 2,
+    "maxRoundTrips": 5
+  },
+  {
+    "id": "write-then-read-text",
+    "prompt": "Write the text \"hello\" into the file \"greeting.txt\" inside the \"notes\" directory, then read it back and reply with the contents. Dismiss when done.",
+    "attachments": [
+      {
+        "edgeName": "notes",
+        "kind": "directory",
+        "files": {}
+      }
+    ],
+    "acceptableTraces": [
+      [
+        { "tool": "listMessages" },
+        {
+          "tool": "writeText",
+          "rawArgsIncludes": ["notes", "greeting.txt", "hello"]
+        },
+        { "tool": "readText", "rawArgsIncludes": ["notes", "greeting.txt"] },
+        { "tool": "reply", "rawArgsIncludes": ["hello"] },
+        { "tool": "dismiss" }
+      ]
+    ],
+    "minLength": 4,
+    "minRoundTrips": 2,
+    "maxRoundTrips": 6
+  },
+  {
+    "id": "inspect-primer",
+    "prompt": "Inspect the capability stored under the pet name \"primer\" by calling its help() method, and reply with the description, then dismiss.",
+    "attachments": [
+      {
+        "edgeName": "primer",
+        "kind": "directory",
+        "files": {
+          "README.md": "Primer overview."
+        }
+      }
+    ],
+    "acceptableTraces": [
+      [
+        { "tool": "listMessages" },
+        { "tool": "inspect", "rawArgsIncludes": ["primer"] },
+        { "tool": "reply" },
+        { "tool": "dismiss" }
+      ]
+    ],
+    "minLength": 3,
+    "minRoundTrips": 2,
+    "maxRoundTrips": 5
+  },
+  {
+    "id": "evaluate-expression",
+    "prompt": "Use evaluate() to compute 7 * 6 and reply with just the number, then dismiss.",
+    "attachments": [],
+    "acceptableTraces": [
+      [
+        { "tool": "listMessages" },
+        { "tool": "evaluate", "rawArgsIncludes": ["7"] },
+        { "tool": "reply", "rawArgsIncludes": ["42"] },
+        { "tool": "dismiss" }
+      ]
+    ],
+    "minLength": 3,
+    "minRoundTrips": 2,
+    "maxRoundTrips": 5
+  },
+  {
+    "id": "define-lambda",
+    "prompt": "Use define() to propose a program that returns the sum of two numbers. Use slots named \"a\" and \"b\". Reply with confirmation and dismiss.",
+    "attachments": [],
+    "acceptableTraces": [
+      [
+        { "tool": "listMessages" },
+        { "tool": "define", "rawArgsIncludes": ["a", "b"] },
+        { "tool": "reply" },
+        { "tool": "dismiss" }
+      ]
+    ],
+    "minLength": 3,
+    "minRoundTrips": 2,
+    "maxRoundTrips": 5
+  },
+  {
+    "id": "request-from-self",
+    "prompt": "Use request() to ask @self for a value labeled \"a-color\" (any color), then dismiss this message.",
+    "attachments": [],
+    "acceptableTraces": [
+      [
+        { "tool": "listMessages" },
+        { "tool": "request", "rawArgsIncludes": ["@self"] },
+        { "tool": "dismiss" }
+      ]
+    ],
+    "minLength": 2,
+    "minRoundTrips": 2,
+    "maxRoundTrips": 5
+  },
+  {
+    "id": "resolve-request",
+    "prompt": "Resolve message number 1 with the pet name \"@self\", then dismiss this message.",
+    "attachments": [],
+    "acceptableTraces": [
+      [
+        { "tool": "listMessages" },
+        { "tool": "resolve", "rawArgsIncludes": ["@self"] },
+        { "tool": "dismiss" }
+      ]
+    ],
+    "minLength": 2,
+    "minRoundTrips": 2,
+    "maxRoundTrips": 5
+  },
+  {
+    "id": "reject-request",
+    "prompt": "Reject message number 1 with the reason \"declined\", then dismiss it.",
+    "attachments": [],
+    "acceptableTraces": [
+      [
+        { "tool": "listMessages" },
+        { "tool": "reject", "rawArgsIncludes": ["declined"] },
+        { "tool": "dismiss" }
+      ]
+    ],
+    "minLength": 2,
+    "minRoundTrips": 2,
+    "maxRoundTrips": 5
+  },
+  {
+    "id": "remove-edge",
+    "prompt": "Remove the pet name \"scratch\" from your directory and reply with confirmation, then dismiss.",
+    "attachments": [
+      { "edgeName": "scratch", "value": "placeholder" }
+    ],
+    "acceptableTraces": [
+      [
+        { "tool": "listMessages" },
+        { "tool": "remove", "rawArgsIncludes": ["scratch"] },
+        { "tool": "reply" },
+        { "tool": "dismiss" }
+      ]
+    ],
+    "minLength": 3,
+    "minRoundTrips": 2,
+    "maxRoundTrips": 5
+  },
+  {
+    "id": "copy-edge",
+    "prompt": "Copy the pet name \"original\" to \"backup\" and reply with confirmation, then dismiss.",
+    "attachments": [
+      { "edgeName": "original", "value": "placeholder" }
+    ],
+    "acceptableTraces": [
+      [
+        { "tool": "listMessages" },
+        { "tool": "copy", "rawArgsIncludes": ["original", "backup"] },
+        { "tool": "reply" },
+        { "tool": "dismiss" }
+      ]
+    ],
+    "minLength": 3,
+    "minRoundTrips": 2,
+    "maxRoundTrips": 5
+  },
+  {
+    "id": "move-edge",
+    "prompt": "Move the pet name \"old-name\" to \"new-name\" and reply with confirmation, then dismiss.",
+    "attachments": [
+      { "edgeName": "old-name", "value": "placeholder" }
+    ],
+    "acceptableTraces": [
+      [
+        { "tool": "listMessages" },
+        { "tool": "move", "rawArgsIncludes": ["old-name", "new-name"] },
+        { "tool": "reply" },
+        { "tool": "dismiss" }
+      ]
+    ],
+    "minLength": 3,
+    "minRoundTrips": 2,
+    "maxRoundTrips": 5
+  },
+  {
+    "id": "help-method",
+    "prompt": "Call help() with no arguments and reply with whatever it returns, then dismiss.",
+    "attachments": [],
+    "acceptableTraces": [
+      [
+        { "tool": "listMessages" },
+        { "tool": "help" },
+        { "tool": "reply" },
+        { "tool": "dismiss" }
+      ]
+    ],
+    "minLength": 3,
+    "minRoundTrips": 2,
+    "maxRoundTrips": 5
+  },
+  {
+    "id": "lookup-unknown-name",
+    "prompt": "Try to look up the pet name \"definitely-does-not-exist\". When the lookup fails, reply with the error message and dismiss this message.",
+    "attachments": [],
+    "acceptableTraces": [
+      [
+        { "tool": "listMessages" },
+        {
+          "tool": "lookup",
+          "rawArgsIncludes": ["definitely-does-not-exist"]
+        },
+        { "tool": "reply", "rawArgsIncludes": ["Unknown"] },
+        { "tool": "dismiss" }
+      ]
+    ],
+    "minLength": 3,
+    "minRoundTrips": 2,
+    "maxRoundTrips": 5,
+    "maxToolErrors": 1
+  },
+  {
+    "id": "reply-missing-arg",
+    "prompt": "Attempt a reply() call with no strings parameter. When the call fails, observe the error and instead reply with the text \"recovered\", then dismiss.",
+    "attachments": [],
+    "acceptableTraces": [
+      [
+        { "tool": "listMessages" },
+        { "tool": "reply" },
+        { "tool": "reply", "rawArgsIncludes": ["recovered"] },
+        { "tool": "dismiss" }
+      ]
+    ],
+    "minLength": 3,
+    "minRoundTrips": 2,
+    "maxRoundTrips": 6,
+    "maxToolErrors": 2
+  }
+]
