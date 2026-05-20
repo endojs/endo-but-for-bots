@@ -6995,3 +6995,77 @@ test('persona: epithet principals survive intermediate-agent removal under GC', 
     "Aifred's handle is still live and verifies its own delegation",
   );
 });
+
+test('persona: handle formulas predating the feature load with an empty chain', async t => {
+  // Backward-compatibility regression: a `handle` formula written
+  // before the persona feature existed lacks the `epithets` field
+  // entirely. The Handle exo's `epithets()` must report an empty
+  // chain in that case rather than throwing or surfacing internal
+  // shape errors. We simulate the pre-feature on-disk shape by
+  // creating a guest with epithets, stopping the daemon, rewriting
+  // its handle formula to drop the field, and restarting.
+  const { cancelled, config, host } = await prepareHost(t);
+
+  const aifred = await E(host).provideGuest('aifred', {
+    epithets: [{ relationship: 'assistant' }],
+  });
+  const aifredHandleId = await E(aifred).identify('@self');
+
+  await stop(config);
+
+  const db = openTestDb(config.statePath);
+  const { number: handleNumber } = parseId(aifredHandleId);
+  const { node, formula } = db.readFormula(handleNumber);
+  // Strip the field to match the pre-PR-#306 shape.
+  const { epithets: _stripped, ...preFeatureFormula } = formula;
+  t.false(
+    'epithets' in preFeatureFormula,
+    'precondition: rewritten formula has no epithets field',
+  );
+  db.writeFormula(handleNumber, node, preFeatureFormula);
+  db.close();
+
+  await restart(config);
+
+  const { host: hostAfter } = await makeHost(config, cancelled);
+  // Resolve the pet name 'aifred' (a Handle in the host's pet store)
+  // and read its epithet chain. The Handle now points at a formula
+  // shaped like a pre-PR-#306 handle (no `epithets` field), so the
+  // implementation's fallback path must produce an empty chain.
+  const aifredHandleAfter = await E(hostAfter).lookup('aifred');
+  const chain = await E(aifredHandleAfter).epithets();
+  t.deepEqual(
+    [...chain],
+    [],
+    'a handle formula without the epithets field reports an empty chain',
+  );
+});
+
+test('persona: verify of self denies (a handle is not its own subordinate)', async t => {
+  // Calling `verify(myself, ...)` on my own handle must return
+  // false: my own handle's top-link principal is whoever created
+  // me, not myself, so the equality check at the top link fails.
+  // For the top-level host, the chain is empty, which is also a
+  // deny case by the chain-length-zero path.
+  const { host } = await prepareHost(t);
+
+  const hostHandle = await E(host).lookup('@self');
+  const selfVerdict = await E(hostHandle).verify(hostHandle, 'assistant');
+  t.false(selfVerdict, 'top-level host denies a self-verify (empty chain)');
+
+  // Same property holds for a delegated handle: Aifred's top-link
+  // principal is the host, not Aifred, so Aifred verifying itself
+  // also denies.
+  const aifred = await E(host).provideGuest('aifred', {
+    epithets: [{ relationship: 'assistant' }],
+  });
+  const aifredHandle = await E(aifred).lookup('@self');
+  const aifredSelfVerdict = await E(aifredHandle).verify(
+    aifredHandle,
+    'assistant',
+  );
+  t.false(
+    aifredSelfVerdict,
+    'a delegated handle denies a self-verify (top-link principal is the creator, not self)',
+  );
+});
