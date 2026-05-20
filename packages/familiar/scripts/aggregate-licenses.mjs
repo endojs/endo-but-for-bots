@@ -288,6 +288,11 @@ if (fs.existsSync(chatPackageJson)) {
       }
     }
   }
+} else {
+  console.warn(
+    `aggregate-licenses: @endo/chat package.json not found at ` +
+      `${chatPackageJson}; chat-tree coverage skipped.`,
+  );
 }
 
 // -----------------------------------------------------------------
@@ -436,9 +441,4 @@ if (writeFile) {
 
 if (verify && gaps.length > 0) {
   process.exit(1);
-}
-
-if (!verify && !writeFile) {
-  // Shouldn't reach here; argument combinations exhausted.
-  process.exit(0);
 }
