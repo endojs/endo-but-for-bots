@@ -21,10 +21,15 @@ const readFileSpecifier = new URL('../tools/read-file.js', import.meta.url)
 const timestampSpecifier = new URL('../tools/timestamp.js', import.meta.url)
   .href;
 
+// 90 s to match `scripts/smoke.test.js`'s per-row timeout. On free-tier
+// providers (OpenRouter nemotron) a clean tool-sequence trial regularly
+// runs 40-60 s wall-clock; the prior 30 s ceiling produced spurious
+// `timedOut: true` on roughly half the corpus. `FAE_OPTIMIZER_REPLY_TIMEOUT_MS`
+// remains overridable for paid models that want a tighter budget.
 const REPLY_TIMEOUT_MS =
   Number(process.env.FAE_OPTIMIZER_REPLY_TIMEOUT_MS) > 0
     ? Number(process.env.FAE_OPTIMIZER_REPLY_TIMEOUT_MS)
-    : 30_000;
+    : 90_000;
 const POLL_INTERVAL_MS = 500;
 
 /**
