@@ -1,11 +1,10 @@
 // @ts-check
 /**
- * Trace metric for the lal prompt optimizer.
+ * Trace metric for the agentry prompt optimizer.
  *
- * lal's hooks API (`hooks/index.js`) lets the trial runner observe the
- * agent's per-event stream directly, without parsing console output. The
- * trial runner therefore emits a structured trace array (each element
- * is a `TraceEvent`):
+ * The consumer's trial runner observes the agent's per-event stream
+ * (e.g. via lal's `Hooks` API) and emits a structured trace array; each
+ * element is a `TraceEvent`:
  *
  *   [
  *     { kind: 'tool-call', name: 'reply', args: {messageNumber: '+1', strings:['hi'], ...},
@@ -17,13 +16,12 @@
  *     { kind: 'round',     round: 1 },
  *   ]
  *
- * The four kinds are exactly what `runRound` in `round-runner.js`
- * already observes; the metric only cares about `tool-call`, `round`,
- * and `error`. `rawArgs` is the JSON-encoded args record (the LLM's
- * literal call shape) so example specs can pin specific substrings
+ * The metric only cares about `tool-call`, `round`, and `error`.
+ * `rawArgs` is the JSON-encoded args record (the LLM's literal call
+ * shape) so example specs can pin specific substrings
  * (`rawArgsIncludes`) or regexes (`rawArgsMatches`).
  *
- * Scoring rubric (mirrors fae):
+ * Default scoring rubric (`DEFAULT_TRACE_METRIC_WEIGHTS`):
  *
  *   +10  perfect match to the canonical (first acceptable) trace
  *   + 3  perfect match to an alternate acceptable trace
@@ -33,6 +31,9 @@
  *   - 0.5 per extra tool call beyond example.minLength
  *   - 0.25 per extra round beyond example.minRoundTrips
  *   - 2   per budget violation (tool errors, round trips over max)
+ *
+ * Consumers needing a different rubric pass a `weights` override to
+ * `scoreObservedTrace`.
  */
 
 import './init.js';
@@ -167,6 +168,28 @@ export const traceEditDistance = (observed, expected) => {
 harden(traceEditDistance);
 
 /**
+ * @typedef {object} TraceMetricWeights
+ * @property {number} canonicalExact     Reward for an exact match to the canonical trace.
+ * @property {number} alternateExact     Reward for an exact match to an alternate trace.
+ * @property {number} partialCredit      Coefficient on `(1 - editDistance/denom)`.
+ * @property {number} toolError          Penalty per observed tool error.
+ * @property {number} extraCall          Penalty per tool call beyond example.minLength.
+ * @property {number} extraRoundTrip     Penalty per round-trip beyond example.minRoundTrips.
+ * @property {number} overBudget         Penalty per budget violation (tool-errors / round-trip overage).
+ */
+
+/** @type {TraceMetricWeights} */
+export const DEFAULT_TRACE_METRIC_WEIGHTS = harden({
+  canonicalExact: 10,
+  alternateExact: 3,
+  partialCredit: 5,
+  toolError: 1,
+  extraCall: 0.5,
+  extraRoundTrip: 0.25,
+  overBudget: 2,
+});
+
+/**
  * Score an observed trace (raw event array OR pre-summarized) against
  * the example's `acceptableTraces`. The first acceptable trace is
  * canonical; alternates pass with reduced credit so the optimizer
@@ -174,11 +197,13 @@ harden(traceEditDistance);
  *
  * @param {TraceEvent[] | ObservedTrace} observedInput
  * @param {TraceExample} example
+ * @param {{ weights?: Partial<TraceMetricWeights> }} [options]
  */
-export const scoreObservedTrace = (observedInput, example) => {
+export const scoreObservedTrace = (observedInput, example, options = {}) => {
   if (example.acceptableTraces.length === 0) {
     throw new Error(`example "${example.id}" has no acceptable traces`);
   }
+  const weights = { ...DEFAULT_TRACE_METRIC_WEIGHTS, ...(options.weights || {}) };
   const observed = Array.isArray(observedInput)
     ? summarizeTrace(observedInput)
     : observedInput;
@@ -206,13 +231,13 @@ export const scoreObservedTrace = (observedInput, example) => {
   const roundTripOverage = Math.max(0, observed.llmRoundTrips - maxRoundTrips);
   const overBudgetTotal = toolErrorOverage + roundTripOverage;
   const score =
-    (canonicalExact ? 10 : 0) +
-    (alternateExact ? 3 : 0) +
-    5 * partial -
-    observed.toolErrors -
-    0.5 * extraCalls -
-    0.25 * extraRoundTrips -
-    2 * overBudgetTotal;
+    (canonicalExact ? weights.canonicalExact : 0) +
+    (alternateExact ? weights.alternateExact : 0) +
+    weights.partialCredit * partial -
+    weights.toolError * observed.toolErrors -
+    weights.extraCall * extraCalls -
+    weights.extraRoundTrip * extraRoundTrips -
+    weights.overBudget * overBudgetTotal;
   return harden({
     score,
     bestDistance,

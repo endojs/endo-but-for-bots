@@ -1,18 +1,18 @@
 // @ts-check
 /* eslint-disable import/no-extraneous-dependencies */
 /**
- * Ax harness for lal: bridges Ax's optimizer API to lal's trial runner.
+ * Ax harness for the agentry prompt optimizer.
  *
  * Ax sees one optimizable instruction string (the system prompt). The
- * lal trial runner is what actually executes that prompt against a
- * `PiAgent` over mock guest powers, returning a structured trace.
+ * consumer's trial runner is what actually executes that prompt against
+ * the agent under test (over its mock powers or otherwise), returning a
+ * structured trace.
  */
 
 import './init.js';
 
 import { AxACE, AxBootstrapFewShot, AxGEPA, AxGen } from '@ax-llm/ax';
 
-import { systemPrompt as defaultSystemPrompt } from '../prompts/system.js';
 import { scoreObservedTrace } from './trace-metric.js';
 
 /**
@@ -34,19 +34,26 @@ import { scoreObservedTrace } from './trace-metric.js';
 /**
  * One trial per Ax `forward(...)` call. Ax owns the
  * instruction-mutation outer loop; the trial runner owns the
- * mock-powers + PiAgent inner loop.
+ * mock-powers + agent inner loop.
+ *
+ * The caller supplies the initial system prompt; agentry does not own a
+ * default. lal passes `prompts/system.js`'s baseline.
  */
-export class LalPromptProgram extends AxGen {
+export class AgentryPromptProgram extends AxGen {
   /** @type {RunTrial} */
   #runTrial;
 
+  /** @type {string} */
+  #defaultSystemPrompt;
+
   /**
    * @param {RunTrial} runTrial
-   * @param {string} [initialSystemPrompt]
+   * @param {string} initialSystemPrompt
    */
-  constructor(runTrial, initialSystemPrompt = defaultSystemPrompt) {
+  constructor(runTrial, initialSystemPrompt) {
     super('prompt:string, attachments:json -> trace:json');
     this.#runTrial = runTrial;
+    this.#defaultSystemPrompt = initialSystemPrompt;
     this.setInstruction(initialSystemPrompt);
   }
 
@@ -59,7 +66,7 @@ export class LalPromptProgram extends AxGen {
    * }} example
    */
   async forward(_ai, example) {
-    const systemPrompt = this.getInstruction() || defaultSystemPrompt;
+    const systemPrompt = this.getInstruction() || this.#defaultSystemPrompt;
     return this.#runTrial({
       example,
       systemPrompt,
