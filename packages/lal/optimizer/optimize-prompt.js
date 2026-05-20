@@ -95,6 +95,7 @@ const main = async () => {
     teacherModelEnvVar: 'LAL_OPTIMIZER_TEACHER_MODEL',
     evalModelsEnvVar: 'LAL_OPTIMIZER_EVAL_MODELS',
     legacyModelEnvVar: 'LAL_MODEL',
+    legacyHostEnvVar: 'LAL_HOST',
     scriptName: 'optimize:prompt',
   });
 };

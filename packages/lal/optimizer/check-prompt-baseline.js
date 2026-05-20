@@ -30,6 +30,8 @@ const main = async () => {
     examplesLabel: 'optimizer/examples.json',
     reEvaluateHint:
       'Re-run yarn optimize:prompt --evaluate, review the result, and update optimizer/prompt-baseline.json before committing.',
+    legacyHostEnvVar: 'LAL_HOST',
+    legacyModelEnvVar: 'LAL_MODEL',
   });
 };
 
