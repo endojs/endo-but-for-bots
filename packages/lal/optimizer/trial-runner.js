@@ -28,7 +28,7 @@
  * hung LLM does not block the optimizer.
  */
 
-import './init.js';
+import '@endo/agentry/optimizer/init';
 
 import { spawnWorkerLoop } from '../agent.js';
 import { makeMockPowers } from '../tools/mock-powers.js';
@@ -125,7 +125,7 @@ const seedAttachments = async (mock, attachments) => {
 };
 
 /**
- * @typedef {import('./trace-metric.js').TraceEvent} TraceEvent
+ * @typedef {import('@endo/agentry/optimizer/trace-metric').TraceEvent} TraceEvent
  *
  * @typedef {{
  *   id: string,
@@ -166,7 +166,7 @@ const stableRawArgs = args => {
 /**
  * Build a `Hooks` implementation that records the LLM's per-event
  * stream into a `TraceEvent[]`. The trace shape is documented at the
- * top of `trace-metric.js`.
+ * top of `@endo/agentry/optimizer/trace-metric`.
  *
  * The pi-agent-core event union widens slightly between versions; we
  * read only the fields lal's `round-runner.js` exposes today, so this

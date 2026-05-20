@@ -55,7 +55,6 @@
     "openai": "^4.77.0"
   },
   "devDependencies": {
-    "@ax-llm/ax": "^21.0.0",
     "@endo/cli": "workspace:^",
     "@endo/init": "workspace:^",
     "@endo/lockdown": "workspace:^",
