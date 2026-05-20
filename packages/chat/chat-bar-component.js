@@ -1731,7 +1731,7 @@ export const chatBarComponent = (
             exitFocusMode();
             // editMessage fetches the current body via messageHistory
             // and opens the inline form with both fields pre-filled.
-            editMessage(messageNumber); // eslint-disable-line no-use-before-define
+            editMessage(messageNumber);
             return;
           }
           exitFocusMode();
@@ -1852,7 +1852,6 @@ export const chatBarComponent = (
     getReplyType: sendForm.getReplyType,
     setText: sendForm.setText,
     focus: sendForm.focus,
-    editMessage,
     dispose: () => {
       document.removeEventListener('chat:edit-message', handleEditMessageEvent);
       sendForm.dispose();
