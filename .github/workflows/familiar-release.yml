@@ -46,6 +46,15 @@ jobs:
       - name: Bundle CLI and gateway
         run: yarn workspace @endo/familiar step:bundle
 
+      - name: Aggregate and verify third-party licenses
+        # Aggregates LICENSE files for every production package pulled
+        # into the esbuild bundles plus the @endo/chat dependency tree
+        # and writes bundles/LICENSE.third-party.txt. The `--verify`
+        # flag fails the build when one or more production deps ship
+        # without a detectable LICENSE file, so an attribution gap
+        # cannot reach a release unnoticed.
+        run: yarn workspace @endo/familiar step:licenses -- --verify
+
       - name: Upload chat dist
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:

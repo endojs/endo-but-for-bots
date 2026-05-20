@@ -4,10 +4,11 @@
  * Steps:
  *   1. Build chat dist (vite)
  *   2. Bundle Electron main-process code (esbuild)
- *   3. Download Node binary for embedding
- *   4. Prepare package (copy node binary + chat dist)
- *   5. Package with @electron/packager (produces .app)
- *   6. Create distributables (DMG + zip) — skipped with --app-only
+ *   3. Aggregate third-party LICENSE files into bundles/
+ *   4. Download Node binary for embedding
+ *   5. Prepare package (copy node binary + chat dist)
+ *   6. Package with @electron/packager (produces .app)
+ *   7. Create distributables (DMG + zip) — skipped with --app-only
  *
  * Cross-platform: works on macOS, Linux, and Windows.
  */
@@ -42,20 +43,26 @@ run('yarn workspace @endo/chat build', repoRoot);
 step('Bundling Electron main-process code...');
 run(`node ${JSON.stringify(path.join(dirname, 'bundle.mjs'))}`);
 
-// 3. Download Node
+// 3. Aggregate licenses
+step('Aggregating third-party LICENSE files...');
+run(
+  `node ${JSON.stringify(path.join(dirname, 'aggregate-licenses.mjs'))} --verify`,
+);
+
+// 4. Download Node
 step('Downloading Node binary...');
 run(`node ${JSON.stringify(path.join(dirname, 'download-node.mjs'))}`);
 
-// 4. Prepare package
+// 5. Prepare package
 step('Preparing package...');
 run(`node ${JSON.stringify(path.join(dirname, 'prepare-package.mjs'))}`);
 
-// 5. Package
+// 6. Package
 step('Packaging with @electron/packager...');
 run(`node ${JSON.stringify(path.join(dirname, 'package-app.mjs'))}`);
 
 if (!appOnly) {
-  // 6. Distributables
+  // 7. Distributables
   step('Creating distributables (DMG + zip)...');
   run(`node ${JSON.stringify(path.join(dirname, 'make-distributables.mjs'))}`);
 

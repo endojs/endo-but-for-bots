@@ -4,6 +4,11 @@
  * - macOS: DMG (via electron-installer-dmg/appdmg) + zip (via ditto)
  * - Linux: zip
  * - Windows: zip
+ *
+ * Also copies `bundles/LICENSE.third-party.txt` (produced by
+ * `aggregate-licenses.mjs`) into `out/make/` next to the distributable
+ * so downstream release uploads include the attribution file
+ * alongside the binary archive.
  */
 
 /* global process */
@@ -58,6 +63,24 @@ const pkg = JSON.parse(
   fs.readFileSync(path.join(familiarDir, 'package.json'), 'utf8'),
 );
 const version = pkg.version || '0.0.0';
+
+// --- Third-party LICENSE attribution ---
+// Copy the aggregated LICENSE file next to the binary so the release
+// upload step picks it up alongside the distributable archives.
+const aggregatedLicense = path.join(
+  familiarDir,
+  'bundles/LICENSE.third-party.txt',
+);
+if (fs.existsSync(aggregatedLicense)) {
+  const destLicense = path.join(makeDir, 'LICENSE.third-party.txt');
+  fs.copyFileSync(aggregatedLicense, destLicense);
+  console.log(`Copied: out/make/LICENSE.third-party.txt`);
+} else {
+  console.error(
+    `Warning: ${aggregatedLicense} not found.\n` +
+      `Run scripts/aggregate-licenses.mjs (or build.mjs) before make.`,
+  );
+}
 
 // --- ZIP ---
 const zipName = `Familiar-${version}-${platform}-${arch}.zip`;

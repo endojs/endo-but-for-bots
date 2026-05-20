@@ -28,6 +28,8 @@
     "build:app": "node scripts/build.mjs --app-only",
     "build:package": "node scripts/build.mjs",
     "step:bundle": "node scripts/bundle.mjs",
+    "step:licenses": "node scripts/aggregate-licenses.mjs",
+    "step:licenses:verify": "node scripts/aggregate-licenses.mjs --verify-only",
     "step:download-node": "node scripts/download-node.mjs",
     "step:prepare": "node scripts/prepare-package.mjs",
     "step:package": "node scripts/package-app.mjs",
