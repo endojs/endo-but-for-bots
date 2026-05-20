@@ -1372,7 +1372,7 @@ export type MakeHostOrGuestOptions = {
    * delegate cannot strip its inherited chain. See
    * `designs/daemon-capability-persona.md`.
    */
-  epithets?: Array<{ relationship: string }>;
+  epithets?: ReadonlyArray<{ relationship: string }>;
 };
 
 export type MakeCapletOptions = {
