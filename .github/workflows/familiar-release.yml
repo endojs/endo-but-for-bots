@@ -53,7 +53,7 @@ jobs:
         # flag fails the build when one or more production deps ship
         # without a detectable LICENSE file, so an attribution gap
         # cannot reach a release unnoticed.
-        run: yarn workspace @endo/familiar step:licenses -- --verify
+        run: yarn workspace @endo/familiar step:licenses:write-and-verify
 
       - name: Upload chat dist
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
