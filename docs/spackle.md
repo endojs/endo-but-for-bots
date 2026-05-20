@@ -15,7 +15,7 @@ Spackle combines a polyfill (installs on a shared intrinsic) with a ponyfill
 (an ergonomic import) and a race discipline (first writer wins, mediated by a
 registered symbol).
 
-## Why a new pattern
+## Eval twins
 
 A piece of code that gets instantiated more than once in a realm has *eval
 twins*.
@@ -24,7 +24,8 @@ do not recognize each other, and `instanceof` does not work across eval twins
 of the same class.
 Eval twins of registered symbols, however, are equal.
 A library whose eval twins must agree on shared state, not merely on
-convention, needs a coordination mechanism that survives this duplication.
+structure or convention, needs a coordination mechanism that survives this
+duplication.
 
 The promise ecosystem converged on `then` methods because two copies of the
 same Promise library could not otherwise recognize each other's instances.
@@ -36,7 +37,11 @@ point and ergonomic exports as the calling convention.
 
 A *shim* or *polyfill* is JavaScript that runs early to modify the global
 environment so it more closely resembles a later standard.
-Remy Sharp coined "polyfill"; "shim" has older and less attributable use.
+Remy Sharp coined "polyfill" in [*What is a Polyfill?*](https://remysharp.com/2010/10/08/what-is-a-polyfill)
+(2010), drawing on the British brand name *Polyfilla* for spackling paste.
+"Shim" has older and less attributable use, predating its JavaScript
+application as a general term in systems software for a thin compatibility
+layer interposed between a caller and a changed interface.
 
 A polyfill that anticipates a future standard should not overwrite a native
 implementation that may already be present, in case the native behavior differs
@@ -56,6 +61,9 @@ or differs.
 
 A *ponyfill* is a function exported from a module that falls through to the
 native behavior when present and provides a user-code fallback when not.
+Sindre Sorhus coined "ponyfill" alongside the [`object-assign`](https://github.com/sindresorhus/object-assign)
+package (2014) and later collected the convention at
+[sindresorhus/ponyfill](https://github.com/sindresorhus/ponyfill).
 A ponyfill leaves the global context untouched, so there is no race to install,
 but the calling code receives whatever the ponyfill chose for it rather than a
 realm-wide consensus.
@@ -75,8 +83,6 @@ carried into child compartments alongside the intrinsic itself.
 ## How `@endo/harden` uses spackle
 
 The canonical instance of the pattern is `@endo/harden`.
-The package's README describes the multi-instance behavior in package terms;
-this section describes what the spackle pattern contributes.
 
 `harden` is realm-wide for two reasons.
 Performance: each instance maintains a `WeakSet` of already-hardened objects,
@@ -120,9 +126,9 @@ for the package-level detail.
 Eventual send needs realm-wide identity, not merely realm-wide performance.
 It recognizes and forwards messages through native promises that have been
 marked at the rendezvous symbol, and it will need to mark non-native promises
-in the future.
-Eval twins of eventual-send cannot diverge on which promise is which without
-losing the ability to deliver messages across the boundary.
+and presences in the future.
+Eval twins of eventual-send cannot diverge on which promise or presence is
+which without losing the ability to deliver messages across the boundary.
 A spackle install gives eventual send a single source of truth for marked
 promises, presences, and the operations defined over them.
 
@@ -137,3 +143,10 @@ tell the registered-symbol install from the well-known one and adapt.
 The registered symbol is a deliberate choice for that reason: it gives
 implementers a recognizable name without claiming a slot that the language
 itself might want.
+
+## Conclusion
+
+The implication is that we are moving in the direction of enabling hardened
+modules to make use of features like harden, eventual-send, assert, and the
+causal console without needing to run shims in advance.
+The spackle pattern is facilitating this transition.
