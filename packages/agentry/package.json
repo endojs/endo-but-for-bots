@@ -37,6 +37,12 @@
       "types": "./src/eval/index.js",
       "default": "./src/eval/index.js"
     },
+    "./optimizer/ax-harness": "./src/optimizer/ax-harness.js",
+    "./optimizer/trace-metric": "./src/optimizer/trace-metric.js",
+    "./optimizer/model-matrix": "./src/optimizer/model-matrix.js",
+    "./optimizer/check-prompt-baseline": "./src/optimizer/check-prompt-baseline.js",
+    "./optimizer/optimize-prompt": "./src/optimizer/optimize-prompt.js",
+    "./optimizer/init": "./src/optimizer/init.js",
     "./package.json": "./package.json"
   },
   "scripts": {
@@ -51,6 +57,7 @@
     "test:live": "ava --config ava-live.config.js"
   },
   "dependencies": {
+    "@ax-llm/ax": "^21.0.0",
     "@earendil-works/pi-agent-core": "^0.79.0",
     "@earendil-works/pi-ai": "^0.79.0",
     "@endo/agent-tools": "workspace:^",
