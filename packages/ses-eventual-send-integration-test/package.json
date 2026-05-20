@@ -1,0 +1,69 @@
+{
+  "name": "@endo/ses-eventual-send-integration-test",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Integration tests exercising @endo/eventual-send against ses (HandledPromise, eventual-send semantics under lockdown). Hosted in an internal package (not published, nothing else depends on it) to break the workspace devDep cycle.",
+  "keywords": [],
+  "author": "Endo contributors",
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/endojs/endo/tree/master/packages/ses-eventual-send-integration-test#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/endojs/endo.git",
+    "directory": "packages/ses-eventual-send-integration-test"
+  },
+  "bugs": {
+    "url": "https://github.com/endojs/endo/issues"
+  },
+  "type": "module",
+  "exports": {},
+  "scripts": {
+    "build": "exit 0",
+    "lint": "yarn lint:eslint",
+    "lint-fix": "yarn lint:eslint --fix",
+    "lint:eslint": "eslint '**/*.js'",
+    "test": "ava",
+    "test:c8": "c8 ${C8_OPTIONS:-} ava",
+    "test:xs": "exit 0"
+  },
+  "dependencies": {
+    "@endo/eventual-send": "workspace:^",
+    "@endo/lockdown": "workspace:^",
+    "ses": "workspace:^"
+  },
+  "devDependencies": {
+    "ava": "catalog:dev",
+    "c8": "catalog:dev",
+    "eslint": "catalog:dev",
+    "tsd": "catalog:dev"
+  },
+  "publishConfig": {
+    "access": "restricted"
+  },
+  "eslintConfig": {
+    "extends": [
+      "plugin:@endo/internal"
+    ],
+    "settings": {
+      "import-x/resolver": {
+        "node": {
+          "conditionNames": [
+            "import",
+            "require",
+            "default",
+            "test-endo-eventual-send"
+          ]
+        }
+      }
+    }
+  },
+  "ava": {
+    "files": [
+      "test/**/*.test.*"
+    ],
+    "nodeArguments": [
+      "--conditions=test-endo-eventual-send"
+    ],
+    "timeout": "2m"
+  }
+}
