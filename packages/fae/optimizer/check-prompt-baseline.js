@@ -10,13 +10,14 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import url from 'node:url';
 
+import examplesCorpus from './examples.js';
+
 const dirname = path.dirname(url.fileURLToPath(import.meta.url));
 const packageRoot = path.join(dirname, '..');
 const repoRoot = path.join(packageRoot, '..', '..');
 const baselinePath = path.join(dirname, 'prompt-baseline.json');
 const promptPath = path.join(packageRoot, 'src', 'system-prompt.js');
 const repairMessagesPath = path.join(packageRoot, 'src', 'repair-messages.js');
-const examplesPath = path.join(dirname, 'examples.json');
 const baselineRepoPath = path.relative(repoRoot, baselinePath);
 
 /** @param {string | Buffer} value */
@@ -64,7 +65,7 @@ export const findBaselineIssues = ({
     );
   }
   if (baseline.examplesSha256 !== examplesSha256) {
-    issues.push('optimizer/examples.json changed since the recorded baseline');
+    issues.push('optimizer/examples.js changed since the recorded baseline');
   }
   if (
     previousBaseline &&
@@ -105,13 +106,16 @@ const loadPreviousBaseline = () => {
 };
 
 const main = async () => {
-  const [baseline, promptSource, repairMessagesSource, examplesSource] =
-    await Promise.all([
-      fs.readFile(baselinePath, 'utf8').then(JSON.parse),
-      fs.readFile(promptPath),
-      fs.readFile(repairMessagesPath),
-      fs.readFile(examplesPath),
-    ]);
+  const [baseline, promptSource, repairMessagesSource] = await Promise.all([
+    fs.readFile(baselinePath, 'utf8').then(JSON.parse),
+    fs.readFile(promptPath),
+    fs.readFile(repairMessagesPath),
+  ]);
+  // Hash the corpus by its canonical JSON serialization rather than the
+  // raw examples.js file bytes so editorial comments and source-level
+  // formatting do not invalidate the baseline; only changes to the
+  // semantic content of the corpus do.
+  const examplesSource = JSON.stringify(examplesCorpus);
   const issues = findBaselineIssues({
     baseline,
     previousBaseline: loadPreviousBaseline(),

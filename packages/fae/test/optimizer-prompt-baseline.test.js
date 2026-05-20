@@ -56,7 +56,7 @@ test('prompt baseline reports stale hashes, score regressions, and missing model
     [
       'system-prompt.js changed since the recorded optimizer baseline',
       'repair-messages.js changed since the recorded optimizer baseline',
-      'optimizer/examples.json changed since the recorded baseline',
+      'optimizer/examples.js changed since the recorded baseline',
       'training score regressed from 9 to 8',
       'model score for weak regressed from 8 to 7',
       'model score for strong is missing from the baseline',

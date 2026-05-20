@@ -10,7 +10,7 @@
   },
   "systemPromptSha256": "280a1710a8a015aca62ecf3d4959872083b51e2b9f3f08ae8b1a861e4de90d3d",
   "repairMessagesSha256": "bd24a5d33f860ccc48bd238c13de3b0a12f215dd4e6c760b2ff0f59b14d6c27f",
-  "examplesSha256": "d877e3f896461c366a76e13fce180d453430e797e955c12f15d161fc8542f77d",
+  "examplesSha256": "45ec3a6b9e27d7d54a455a8b303761c49ae646f7f348001afd3630c91ef1995a",
   "trainingExamples": [
     "basic-chat",
     "reply-tool",

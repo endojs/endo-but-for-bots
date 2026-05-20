@@ -22,9 +22,9 @@ import {
   makeGuestSystemPrompt,
 } from '../src/system-prompt.js';
 import { summarizeModelTrials } from './model-matrix.js';
+import examplesCorpus from './examples.js';
 
 const dirname = path.dirname(url.fileURLToPath(import.meta.url));
-const examplesPath = path.join(dirname, 'examples.json');
 const envPath = path.join(dirname, '..', '.env');
 
 /**
@@ -56,8 +56,7 @@ trial. A custom runner module must export async runTrial({ example,
 adoptionSection, systemPrompt, model }) and return { trace } or { workerLog }.`);
 };
 
-const loadExamples = async () =>
-  JSON.parse(await fs.readFile(examplesPath, 'utf8'));
+const loadExamples = async () => examplesCorpus;
 
 const loadEnv = async () => {
   let text;

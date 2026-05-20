@@ -2,17 +2,13 @@
 
 import '@endo/init/debug.js';
 
-import fs from 'node:fs/promises';
-
 import test from 'ava';
+
+import examples from '../optimizer/examples.js';
 
 const capabilityTools = new Set(['timestampTool', 'mathTool', 'readFile']);
 
 test('capability examples accept both direct tool calls and exec composition', async t => {
-  const examples = JSON.parse(
-    await fs.readFile(new URL('../optimizer/examples.json', import.meta.url)),
-  );
-
   for (const example of examples) {
     const hasDirectCapabilityTrace = example.acceptableTraces.some(trace =>
       trace.some(step => capabilityTools.has(step.tool)),
