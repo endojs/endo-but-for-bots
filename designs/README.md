@@ -383,7 +383,7 @@ LLM-agent stack).*
 | [endopen-concurrent-subagents](endopen-concurrent-subagents.md) | 2026-05-15 | 2026-05-15 | Not Started |
 | [endopen-openrouter](endopen-openrouter.md) | 2026-05-15 | 2026-05-15 | Not Started |
 | [endopen-tui-shell](endopen-tui-shell.md) | 2026-05-15 | 2026-05-15 | Not Started |
-| [endopen-acp-server](endopen-acp-server.md) | 2026-05-15 | 2026-05-15 | Not Started |
+| [endopen-acp-server](endopen-acp-server.md) | 2026-05-15 | 2026-05-20 | Not Started |
 | [endoclaw-browser](endoclaw-browser.md) | 2026-03-03 | 2026-03-03 | Not Started |
 | [endoclaw-channel-bridges](endoclaw-channel-bridges.md) | 2026-03-03 | 2026-03-03 | Not Started |
 | [endoclaw-network-fetch](endoclaw-network-fetch.md) | 2026-03-03 | 2026-07-13 | Superseded by [endo-fetch](endo-fetch.md) |

@@ -3,6 +3,7 @@
 |             |                                              |
 |-------------|----------------------------------------------|
 | **Created** | 2026-05-15                                   |
+| **Updated** | 2026-05-20                                   |
 | **Author**  | kriscendobot (prompted by kriskowal)         |
 | **Status**  | Not Started                                  |
 | **Source**  | [`endopen.md`](endopen.md) § Gap 4           |
@@ -119,11 +120,43 @@ This is in deliberate contrast to OpenCode's ACP server, which
 auto-approves. Endo's strength is the capability story, and the
 ACP adapter must not undermine it.
 
+### Authentication and multiplexing
+
+The ACP `authenticate` step uses the guest's formula identifier as
+its bearer token.
+The formula identifier is the durable, unforgeable handle the daemon
+already issues for every guest;
+reusing it as the ACP credential avoids inventing a parallel auth
+surface and ties the client's authority to the same capability the
+daemon enforces.
+
+One adapter process serves multiple ACP clients by multiplexing on
+the formula identifier:
+each connection presents its guest's formula identifier on
+`authenticate`, and the per-process session map keys sessions by
+that identifier.
+The daemon does not learn about ACP clients;
+it sees ordinary `E(guest).request(prompt)` traffic from the adapter,
+demultiplexed per-formula on the way in.
+
+### ACP cwd as a virtual mount on the guest agent
+
+The ACP client's `cwd` is exposed to the session as a *virtual mount*
+on the guest agent rather than as a freshly delegated host-filesystem
+`Mount` capability per session.
+The guest agent itself owns a parent `Mount` (granted at guest
+creation, typically scoped to the user's projects root);
+each ACP `session/new` narrows that parent into a child mount rooted
+at the ACP-supplied `cwd`.
+The narrowing happens in the guest agent's address space, so the host
+filesystem capability never leaks to the ACP client and the daemon
+does not have to mint a new `Mount` per session.
+
 ### Session lifecycle
 
 | ACP method        | Endo translation                                                           |
 |-------------------|----------------------------------------------------------------------------|
-| `session/new`     | `provideGuest(pet-name, powers)`; powers derived from user defaults + ACP `cwd` |
+| `session/new`     | `provideGuest(pet-name, powers)`; the ACP `cwd` becomes a virtual mount narrowed from the guest agent's parent `Mount` |
 | `session/load`    | Look up guest by formula ID stored in adapter-local SQLite                 |
 | `session/prompt`  | `E(guest).request(prompt)`; subscribe to guest inbox; stream as session/update |
 | `session/cancel`  | `E(guest).cancel()` if implemented; else best-effort by closing the request promise |
@@ -226,23 +259,6 @@ Total: 4-5 weeks for phases 1-6; phase 7 is a follow-on toggle.
 
 ## Open Questions
 
-- **Authentication**:
-  the ACP spec has an `authenticate` method (OAuth / API key / none).
-  Proposal: the adapter holds the daemon's bearer token;
-  the ACP `authenticate` step is a no-op
-  (the user authenticated the adapter at config time, not via ACP).
-  Document this in the README so clients do not expect a credential dance.
-- **Multi-tenancy**:
-  can one adapter process serve multiple ACP clients simultaneously?
-  Proposal: yes;
-  the per-process session map keys sessions by ACP-supplied session-id.
-  The daemon does not learn about ACP clients.
-- **Mapping ACP `cwd` to Endo `Mount`**:
-  the adapter needs a default `Mount` capability or the user must endow
-  each session manually.
-  Proposal: a wildcard `~/projects/*` mount delegated to the adapter at
-  config time;
-  the adapter narrows per-session to the requested `cwd`.
 - **Streaming format**:
   ACP's `session/update` is one update-per-tool-call;
   how do we render a many-second LLM token stream?
@@ -266,12 +282,28 @@ Total: 4-5 weeks for phases 1-6; phase 7 is a follow-on toggle.
    session that the ACP client closes still exists as an Endo
    guest under its pet name. The user can resume from any client
    that re-attaches.
-4. **Considered and rejected: making the daemon directly speak
+4. **ACP `authenticate` uses the guest's formula identifier as a
+   bearer token.** The formula identifier is the durable handle the
+   daemon already issues; reusing it as the ACP credential ties the
+   client's authority to the same capability the daemon enforces and
+   avoids a parallel auth surface.
+5. **One adapter process serves multiple clients by multiplexing on
+   the formula identifier.** Each ACP connection presents its guest's
+   formula identifier on `authenticate`; the per-process session map
+   keys on that identifier. The daemon sees ordinary per-guest
+   traffic, demultiplexed at the adapter boundary.
+6. **The ACP `cwd` is exposed as a virtual mount on the guest
+   agent, not as a fresh host-filesystem `Mount` per session.** The
+   guest agent owns the parent `Mount` (typically the user's
+   projects root); each session narrows that parent in the guest's
+   address space to the ACP-supplied `cwd`. The host filesystem
+   capability never leaves the guest.
+7. **Considered and rejected: making the daemon directly speak
    ACP.** Reason: protocol coupling. The daemon is the OCapN node;
    adding ACP to its top-level routing makes it harder to keep
    the OCapN story clean and harder to deprecate ACP if the
    ecosystem moves elsewhere.
-5. **Considered and rejected: also implementing the MCP server
+8. **Considered and rejected: also implementing the MCP server
    in the same adapter.** Reason: scope. The MCP server is a
    sibling design, not part of this one.
 
