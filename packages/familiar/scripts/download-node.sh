@@ -5,7 +5,10 @@ set -euo pipefail
 # Usage: ./scripts/download-node.sh [node-version] [target-os] [target-arch]
 # Defaults to current platform when target-os and target-arch are not specified.
 
-NODE_VERSION="${1:-v20.18.1}"
+# Bundled Node LTS pin. Node 22 (Jod) is in Maintenance LTS as of 2026-05;
+# Node 20 (Iron) reached EOL in 2026-04. Bump in lockstep with the
+# download-node.mjs pin and the familiar-release.yml workflow.
+NODE_VERSION="${1:-v22.22.3}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 BINARIES_DIR="$SCRIPT_DIR/../binaries"
 
