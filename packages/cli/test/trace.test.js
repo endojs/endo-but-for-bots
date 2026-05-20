@@ -183,3 +183,55 @@ test.serial(
     }
   },
 );
+
+test.serial(
+  'endo trace text-mode renders --stats, --recent, lookup, and usage hint',
+  async t => {
+    const execa = $({ cwd: dirname });
+    await execa`endo purge -f`;
+    await execa`endo start`;
+    try {
+      // No args: the command prints a usage hint to stderr and exits 1.
+      const usageError = await t.throwsAsync(execa`endo trace`);
+      t.regex(usageError.stderr, /Usage: endo trace/);
+
+      // --stats text mode (no --json) prints labeled lines.
+      const stats = await execa`endo trace --stats`;
+      t.regex(stats.stdout, /workers:\s+\d+/);
+      t.regex(stats.stdout, /totalRecords:\s+\d+/);
+      t.regex(stats.stdout, /bytes:\s+\d+/);
+      t.regex(stats.stdout, /aliases:\s+\d+/);
+
+      // --recent text mode on an empty aggregate shows the placeholder.
+      const emptyRecent = await execa`endo trace --recent`;
+      t.regex(emptyRecent.stdout, /no recent error traces/);
+
+      // Force an emission, then read --recent (text mode) and the
+      // lookup-by-errorId text path.
+      await t.throwsAsync(
+        execa`endo eval ${'throw new Error("trace-text-boom")'}`,
+      );
+
+      const recentText = await execa`endo trace --recent --limit 5`;
+      // Text mode prints `<errorId>` and a `worker: <id>` line.
+      t.regex(recentText.stdout, /error:[^\s]+/);
+      t.regex(recentText.stdout, /worker: /);
+      t.regex(recentText.stdout, /site:\s+/);
+      t.regex(recentText.stdout, /trace-text-boom/);
+
+      // Pull an actual errorId out of the recent --json listing and
+      // exercise the lookup happy-path text branch.
+      const jsonRecent = await execa`endo trace --recent --limit 5 --json`;
+      /** @type {Array<{ errorId: string, message: string }>} */
+      const list = JSON.parse(jsonRecent.stdout);
+      const target = list.find(r => /trace-text-boom/.test(r.message));
+      t.truthy(target, `expected to find trace-text-boom emission`);
+      const lookup = await execa`endo trace ${target.errorId}`;
+      // Text mode wraps the body with `(end trace errorId=...)`.
+      t.regex(lookup.stdout, /\(end trace errorId=/);
+      t.regex(lookup.stdout, /trace-text-boom/);
+    } finally {
+      await execa`endo purge -f`;
+    }
+  },
+);

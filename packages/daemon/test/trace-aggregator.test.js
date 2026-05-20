@@ -247,3 +247,27 @@ test('two workers may record under the same errorId without colliding', t => {
   t.is(r1.message, 'from-w1');
   t.is(r2.message, 'from-w2');
 });
+
+test('lookup forwards compartmentId when present on the record', t => {
+  const agg = makeTraceAggregator();
+  agg.record('w1', {
+    ...baseRecord({ errorId: 'error:Endo#1' }),
+    compartmentId: 'compartment-7',
+  });
+  const report = agg.lookup('error:Endo#1');
+  t.is(report.compartmentId, 'compartment-7');
+});
+
+test('clear by workerId also drops aliases targeting that worker', t => {
+  const agg = makeTraceAggregator();
+  agg.record('w1', baseRecord({ errorId: 'inner' }));
+  agg.record('w2', baseRecord({ errorId: 'other', workerId: 'w2' }));
+  agg.alias({ workerId: 'w1', errorId: 'inner', aliasErrorId: 'cli:w1' });
+  agg.alias({ workerId: 'w2', errorId: 'other', aliasErrorId: 'cli:w2' });
+  agg.clear('w1');
+  // Alias whose target was on the cleared worker should be gone too.
+  t.is(agg.lookup('cli:w1'), undefined);
+  // Alias targeting the other worker survives.
+  t.truthy(agg.lookup('cli:w2'));
+  t.is(agg.stats().aliases, 1);
+});
