@@ -32,6 +32,7 @@
     "./locator.js": "./locator.js",
     "./pet-name.js": "./src/pet-name.js",
     "./error-id.js": "./src/error-id.js",
+    "./trace-constants.js": "./src/trace-constants.js",
     "./src/interfaces.js": "./src/interfaces.js",
     "./package.json": "./package.json"
   },

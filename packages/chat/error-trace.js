@@ -3,6 +3,7 @@
 import harden from '@endo/harden';
 import { E } from '@endo/far';
 import { makeInboundErrorIdRegistry } from '@endo/daemon/error-id.js';
+import { DAEMON_WORKER_ID } from '@endo/daemon/trace-constants.js';
 
 /** @import { ERef } from '@endo/eventual-send' */
 
@@ -55,7 +56,7 @@ export const { recordInboundErrorId, extractErrorId } =
 export const logTraceReport = report => {
   const groupLabel = `[Chat] Trace ${report.errorId}${
     report.partial ? ' (partial)' : ''
-  } — worker ${report.workerId || '@daemon'} (site ${report.site})`;
+  } (worker ${report.workerId || DAEMON_WORKER_ID}, site ${report.site})`;
   // eslint-disable-next-line no-restricted-syntax
   console.group(groupLabel);
   try {
@@ -85,7 +86,7 @@ export const logTraceReport = report => {
         for (const cause of report.causes) {
           const partial = cause.partial ? ' (partial)' : '';
           console.log(
-            `${cause.errorId}${partial} ${cause.name}: ${cause.message} (worker ${cause.workerId || '@daemon'})`,
+            `${cause.errorId}${partial} ${cause.name}: ${cause.message} (worker ${cause.workerId || DAEMON_WORKER_ID})`,
           );
           if (cause.stack) console.log(cause.stack);
         }
@@ -112,7 +113,7 @@ export const formatTraceReport = report => {
   /** @type {string[]} */
   const lines = [];
   lines.push(
-    `${report.errorId}${report.partial ? ' (partial)' : ''} — worker ${report.workerId || '@daemon'} (site ${report.site})`,
+    `${report.errorId}${report.partial ? ' (partial)' : ''} (worker ${report.workerId || DAEMON_WORKER_ID}, site ${report.site})`,
   );
   lines.push(`${report.name}: ${report.message}`);
   if (report.t) {
@@ -135,7 +136,7 @@ export const formatTraceReport = report => {
     for (const cause of report.causes) {
       const partial = cause.partial ? ' (partial)' : '';
       lines.push(
-        `  ${cause.errorId}${partial} ${cause.name}: ${cause.message} (worker ${cause.workerId || '@daemon'})`,
+        `  ${cause.errorId}${partial} ${cause.name}: ${cause.message} (worker ${cause.workerId || DAEMON_WORKER_ID})`,
       );
       if (cause.stack) {
         for (const stackLine of cause.stack.split('\n')) {

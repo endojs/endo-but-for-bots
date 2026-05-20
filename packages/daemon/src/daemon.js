@@ -83,6 +83,7 @@ import {
 } from './interfaces.js';
 import { makeTraceAggregator } from './trace-aggregator.js';
 import { extractErrorIdFromTag } from './error-id.js';
+import { DAEMON_WORKER_ID } from './trace-constants.js';
 
 /** @import { Passable } from '@endo/pass-style' */
 /** @import { ERef, FarRef } from '@endo/eventual-send' */
@@ -136,9 +137,9 @@ const makeOutboundMarshalSaveError =
     // Daemon-internal error with no preceding worker push. Record a
     // stub so `lookup(outboundErrorId)` at least returns something
     // with the daemon-side context.
-    aggregator.record('@daemon', {
+    aggregator.record(DAEMON_WORKER_ID, {
       errorId: outboundErrorId,
-      workerId: '@daemon',
+      workerId: DAEMON_WORKER_ID,
       name: typeof err.name === 'string' ? err.name : 'Error',
       message: typeof err.message === 'string' ? err.message : `${err}`,
       stack: typeof err.stack === 'string' ? err.stack : '',

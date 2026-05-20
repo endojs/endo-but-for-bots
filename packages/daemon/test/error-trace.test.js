@@ -14,6 +14,7 @@ import { makePromiseKit } from '@endo/promise-kit';
 
 import { start, stop, purge, makeEndoClient } from '../index.js';
 import { makeCryptoPowers } from '../src/daemon-node-powers.js';
+import { DAEMON_WORKER_ID } from '../src/trace-constants.js';
 
 const cryptoPowers = makeCryptoPowers(crypto);
 
@@ -161,7 +162,7 @@ test.serial('evaluate rejection produces a worker trace record', async t => {
   t.is(r.partial, false);
 });
 
-test.serial('@daemon stub records cover daemon-internal errors', async t => {
+test.serial(`${DAEMON_WORKER_ID} stub records cover daemon-internal errors`, async t => {
   const { cancelled, config } = await prepareConfig(t);
   const { host, getErrorId } = await makeHost(config, cancelled);
   // Look up a name that does not exist; this rejection originates in
@@ -175,13 +176,13 @@ test.serial('@daemon stub records cover daemon-internal errors', async t => {
     // still verifies the @daemon stub can be located via recent().
     const traces = await E(host).traces();
     const list = await E(traces).recent({ limit: 5 });
-    t.true(list.some(r => r.workerId === '@daemon'));
+    t.true(list.some(r => r.workerId === DAEMON_WORKER_ID));
     return;
   }
   const traces = await E(host).traces();
   const report = await E(traces).lookup(errorId);
   t.truthy(report, `expected a daemon stub trace for ${errorId}`);
-  t.is(report.workerId, '@daemon');
+  t.is(report.workerId, DAEMON_WORKER_ID);
 });
 
 test.serial('recent() lists multiple worker emissions', async t => {

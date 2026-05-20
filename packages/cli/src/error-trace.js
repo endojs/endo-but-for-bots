@@ -2,6 +2,7 @@
 
 import { E } from '@endo/far';
 import { makeInboundErrorIdRegistry } from '@endo/daemon/error-id.js';
+import { DAEMON_WORKER_ID } from '@endo/daemon/trace-constants.js';
 
 /**
  * @typedef {object} TraceCauseReport
@@ -75,7 +76,7 @@ const formatCauseLines = (report, indent) => {
   const lines = [];
   const partial = report.partial ? ' (partial)' : '';
   lines.push(
-    `${indent}${report.errorId}${partial} worker=${report.workerId || '@daemon'}`,
+    `${indent}${report.errorId}${partial} worker=${report.workerId || DAEMON_WORKER_ID}`,
   );
   lines.push(`${indent}  ${report.name}: ${report.message}`);
   if (report.stack) {
@@ -101,7 +102,7 @@ export const printTraceReport = report => {
   const lines = [];
   const partial = report.partial ? ' (partial)' : '';
   lines.push(
-    `Trace ${report.errorId}${partial} (worker ${report.workerId || '@daemon'}, site ${report.site})`,
+    `Trace ${report.errorId}${partial} (worker ${report.workerId || DAEMON_WORKER_ID}, site ${report.site})`,
   );
   if (report.t) {
     lines.push(`  when: ${new Date(report.t).toISOString()}`);

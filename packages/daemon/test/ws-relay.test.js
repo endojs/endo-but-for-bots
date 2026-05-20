@@ -13,6 +13,7 @@ import { WebSocketServer } from 'ws';
 import { E } from '@endo/far';
 import { makePromiseKit } from '@endo/promise-kit';
 import { start, stop, purge, makeEndoClient } from '../index.js';
+import { networkWorkerId } from '../src/trace-constants.js';
 
 // All ws-relay tests require multi-daemon networking that uses an
 // unconfined Node worker via makeUnconfined.  The Rust supervisor
@@ -448,10 +449,11 @@ test.serial(
       const tracesB = await E(hostB).traces();
       /** @type {Array<{ workerId: string, site: string }>} */
       const recent = await E(tracesB).recent({ limit: 50 });
+      const networkPrefix = networkWorkerId('');
       const networkRecord = recent.find(
         (/** @type {{ workerId: string, site: string }} */ rec) =>
           typeof rec.workerId === 'string' &&
-          rec.workerId.startsWith('@network:') &&
+          rec.workerId.startsWith(networkPrefix) &&
           (rec.site === 'ws-relay-inbound' || rec.site === 'ws-relay-outbound'),
       );
       t.truthy(

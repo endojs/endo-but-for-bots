@@ -6,6 +6,7 @@ import path from 'path';
 import test from 'ava';
 import url from 'url';
 import { $ } from 'execa';
+import { DAEMON_WORKER_ID } from '@endo/daemon/trace-constants.js';
 
 const dirname = url.fileURLToPath(new URL('.', import.meta.url)).toString();
 
@@ -66,7 +67,7 @@ test.serial(
       );
       // The aggregate stamps the worker's authoritative id; a worker
       // emission must not be filed under @daemon.
-      t.true(found.workerId !== '@daemon');
+      t.true(found.workerId !== DAEMON_WORKER_ID);
     } finally {
       await execa`endo purge -f`;
     }
@@ -91,7 +92,10 @@ test.serial(
       // The worker id must not be the daemon stub: the rejection
       // originated in a worker, so the alias map should resolve to a
       // worker formula identifier.
-      t.notRegex(error.stderr, /Trace error:[^ ]+ \(worker @daemon/);
+      t.notRegex(
+        error.stderr,
+        new RegExp(`Trace error:[^ ]+ \\(worker ${DAEMON_WORKER_ID}`),
+      );
       // The throw-site stack captured by the worker's
       // `Error.prepareStackTrace` hook surfaces the
       // `Compartment.evaluate` frames and the worker's own

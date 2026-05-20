@@ -29,6 +29,7 @@ import { makeDeferredTasks } from './deferred-tasks.js';
 
 import { HostInterface, TracesInterface } from './interfaces.js';
 import { hostHelp, makeHelp } from './help-text.js';
+import { networkWorkerId } from './trace-constants.js';
 
 /**
  * @param {string} name
@@ -1413,15 +1414,15 @@ export const makeHostMaker = ({
     /**
      * Push a trace record from a network caplet that holds this host
      * as its `@agent` powers. The daemon overwrites the scope as
-     * `@network:${hostId}` so the caplet cannot forge entries under
-     * another scope.
+     * `networkWorkerId(hostId)` so the caplet cannot forge entries
+     * under another scope.
      *
      * @param {import('./trace-aggregator.js').TraceRecord} record
      */
     const reportTrace = async record => {
       if (traceAggregator === undefined) return;
       try {
-        traceAggregator.record(`@network:${hostId}`, record);
+        traceAggregator.record(networkWorkerId(hostId), record);
       } catch (err) {
         console.error(
           `Endo network trace push from host ${hostId} rejected:`,
