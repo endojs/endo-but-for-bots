@@ -25,6 +25,13 @@ import './init.js';
  * @property {string} tool
  * @property {string[]} [rawArgsIncludes]
  * @property {string} [rawArgsMatches]
+ * @property {string} [rawArgsIncludesFromTool]
+ *   When set, the step matches only if the observed `rawArgs` contains a
+ *   non-trivial substring of the previous result emitted by the named
+ *   tool. Used to catch hallucinated reply values: a model that
+ *   "adopts" `timestampTool` and then replies with a fabricated date
+ *   without ever calling it will fail this constraint, because the named
+ *   tool produced no result the reply could quote.
  */
 
 /**
@@ -173,10 +180,55 @@ export const parseWorkerLogTrace = workerLog => {
 harden(parseWorkerLogTrace);
 
 /**
+ * The minimum substring length the `rawArgsIncludesFromTool` check must
+ * find in the reply before declaring a match. A two-character overlap
+ * (e.g., a year fragment, a single digit and a unit) is too easy to hit
+ * by accident; six characters of contiguous output excludes incidental
+ * collisions while still tolerating partial paraphrase.
+ */
+const MIN_TOOL_EVIDENCE_FRAGMENT = 6;
+
+/**
+ * Walk a previous tool's recorded result and check whether `rawArgs`
+ * quotes any contiguous slice of it at least
+ * `MIN_TOOL_EVIDENCE_FRAGMENT` characters long. Returns `true` when a
+ * matching fragment exists. The result is stripped of surrounding
+ * quotes so an OpenAI-style `"2026-05-15T12:00:00.000Z"` result still
+ * matches when the model embeds the bare ISO date in its reply.
+ *
+ * @param {string} rawArgs
+ * @param {string | undefined} result
+ */
+const rawArgsIncludesFragment = (rawArgs, result) => {
+  if (!result) {
+    return false;
+  }
+  const stripped = result.trim().replace(/^"|"$/g, '').replace(/\\"/g, '"');
+  if (stripped.length < MIN_TOOL_EVIDENCE_FRAGMENT) {
+    return false;
+  }
+  for (
+    let start = 0;
+    start + MIN_TOOL_EVIDENCE_FRAGMENT <= stripped.length;
+    start += 1
+  ) {
+    const fragment = stripped.slice(start, start + MIN_TOOL_EVIDENCE_FRAGMENT);
+    if (rawArgs.includes(fragment)) {
+      return true;
+    }
+  }
+  return false;
+};
+
+/**
  * @param {ObservedToolCall} observed
  * @param {ExpectedStep} expected
+ * @param {ObservedToolCall[]} [priorCalls]
+ *   Calls observed strictly before `observed`. Used by the
+ *   `rawArgsIncludesFromTool` constraint to verify that the named tool
+ *   produced a result the current step can quote.
  */
-export const matchesExpectedStep = (observed, expected) => {
+export const matchesExpectedStep = (observed, expected, priorCalls = []) => {
   if (observed.tool !== expected.tool) {
     return false;
   }
@@ -193,6 +245,14 @@ export const matchesExpectedStep = (observed, expected) => {
     !new RegExp(expected.rawArgsMatches).test(observed.rawArgs)
   ) {
     return false;
+  }
+  if (expected.rawArgsIncludesFromTool) {
+    const source = [...priorCalls]
+      .reverse()
+      .find(call => call.tool === expected.rawArgsIncludesFromTool);
+    if (!source || !rawArgsIncludesFragment(observed.rawArgs, source.result)) {
+      return false;
+    }
   }
   return true;
 };
@@ -221,6 +281,7 @@ export const traceEditDistance = (observed, expected) => {
       const substitutionCost = matchesExpectedStep(
         observed[i - 1],
         expected[j - 1],
+        observed.slice(0, i - 1),
       )
         ? 0
         : 1;

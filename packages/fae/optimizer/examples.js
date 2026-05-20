@@ -25,6 +25,7 @@
  *   tool: string,
  *   rawArgsIncludes?: string[],
  *   rawArgsMatches?: string,
+ *   rawArgsIncludesFromTool?: string,
  * }} TraceStep
  *
  * @typedef {{

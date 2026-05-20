@@ -157,6 +157,72 @@ test('scoreObservedTrace hard-fails when the trace has no reply call', t => {
   t.true(score.score <= 0);
 });
 
+test('rawArgsIncludesFromTool rejects a reply that quotes nothing from the named tool', t => {
+  // Model adopted timestampTool but never invoked it; the reply contains
+  // a plausible-looking ISO date that the model fabricated. The
+  // hallucination assertion fails because no prior timestampTool call
+  // produced any result the reply could quote.
+  const hallucinated = harden({
+    id: 'timestamp-evidence',
+    acceptableTraces: [
+      [
+        { tool: 'adoptTool' },
+        { tool: 'timestampTool' },
+        {
+          tool: 'reply',
+          rawArgsIncludesFromTool: 'timestampTool',
+        },
+      ],
+    ],
+    minLength: 3,
+    minRoundTrips: 2,
+  });
+
+  const noToolCall = parseWorkerLogTrace(`
+[fae] sent:
+[tool] adoptTool({edgeName:"timestamp-tool"})
+[tool] adoptTool -> "ok"
+[fae] sent:
+[tool] reply({strings:["Wed May 20 2026 14:47:49 GMT-0400"]})
+`);
+
+  const scoreNoCall = scoreObservedTrace(noToolCall, hallucinated);
+  // Distance is 1 (missing timestampTool step), not 0 — the canonical
+  // trace is not an exact match.
+  t.false(scoreNoCall.canonicalExact);
+
+  const withToolEvidence = parseWorkerLogTrace(`
+[fae] sent:
+[tool] adoptTool({edgeName:"timestamp-tool"})
+[tool] adoptTool -> "ok"
+[fae] sent:
+[tool] timestampTool({})
+[tool] timestampTool -> "2026-05-15T12:00:00.000Z"
+[tool] reply({strings:["The time is 2026-05-15T12:00:00.000Z"]})
+`);
+
+  const scoreWithEvidence = scoreObservedTrace(withToolEvidence, hallucinated);
+  t.true(scoreWithEvidence.canonicalExact);
+
+  // Same shape as withToolEvidence but the reply substitutes a different
+  // ISO date that the tool did not produce — the constraint catches it.
+  const fabricated = parseWorkerLogTrace(`
+[fae] sent:
+[tool] adoptTool({edgeName:"timestamp-tool"})
+[tool] adoptTool -> "ok"
+[fae] sent:
+[tool] timestampTool({})
+[tool] timestampTool -> "2026-05-15T12:00:00.000Z"
+[tool] reply({strings:["The time is 1999-12-31T23:59:59.000Z"]})
+`);
+
+  const scoreFabricated = scoreObservedTrace(fabricated, hallucinated);
+  // The reply step does not match (the fragment is missing), so the
+  // canonical trace edit distance is 1.
+  t.false(scoreFabricated.canonicalExact);
+  t.true(scoreFabricated.bestDistance >= 1);
+});
+
 test('scoreObservedTrace leaves successful traces unchanged when timedOut is omitted', t => {
   // Regression guard: the canonical direct-dispatch trace must still
   // score 15 with the hard-fail floor in place.
