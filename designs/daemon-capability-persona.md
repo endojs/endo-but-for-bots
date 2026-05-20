@@ -7,6 +7,50 @@
 | **Author** | Kris Kowal (prompted) |
 | **Status** | Not Started |
 
+## Status
+
+The metadata `Status` above remains `Not Started` because the broader
+design (connectors, HandleControl caretaker, cross-node verification,
+revocation, voluntary epithets) is not yet implemented.
+A near-term slice landed in PR #306 to validate the core mechanism:
+
+- `EpithetShape` and the `epithets` / `verify` method guards on
+  `HandleInterface` (`packages/daemon/src/interfaces.js`).
+- The `Epithet` formula shape on `HandleFormula`
+  (`packages/daemon/src/types.d.ts`).
+- The persona surface on the Handle exo: `epithets()` reads the
+  persisted chain and resolves each principal id to a remote Handle
+  reference; `verify(subordinateHandle, relationship)` returns true
+  iff the subordinate's top-link epithet names this handle as
+  principal under the given relationship
+  (`packages/daemon/src/mail.js`).
+- Chain stamping at delegation time: `EndoHost.provideGuest` and
+  `EndoHost.provideHost` accept an `epithets: [{ relationship }, ...]`
+  option, and the daemon prepends the creator's inherited chain so
+  the persisted chain is the full delegation path
+  (`packages/daemon/src/host.js`, `packages/daemon/src/daemon.js`).
+- Backward compatibility: handle formulas predating this PR omit the
+  `epithets` field and report an empty chain at read time.
+- Tests under the `persona:` block of
+  `packages/daemon/test/endo.test.js` cover the chain read, the
+  creator-confirms-and-non-principal-denies invariants, and
+  recursive propagation through `provideHost` + `provideGuest`.
+
+Deferred items, not implemented in #306:
+
+- The `HandleControl` caretaker and pluggable verification policies
+  (`confirm-all` / `deny-all` / `selective`); the current `verify`
+  hard-codes the confirm-when-stamped-by-me default.
+- Cross-node verification (the present implementation depends on
+  local exo identity for the `principal === handle` check).
+- Service connectors (Slack, Discord, Google Workspace, generic
+  OAuth) that render the epithet chain into platform identity.
+- Revocation via `HandleControl.revoke()`.
+- Voluntary (self-described) epithets alongside obligatory ones.
+
+This document remains the authority for the rest of the work; update
+this section as further slices land.
+
 This document explores how an agent in Endo can create subordinate
 agents — **delegates** — that carry obligatory, verifiable, deniable
 claims about their relationships.  We call these claims **epithets**.
