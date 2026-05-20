@@ -1,0 +1,785 @@
+// @ts-nocheck
+/* global Buffer, process, setTimeout */
+/* eslint-disable import/order, no-await-in-loop */
+
+// Establish a perimeter:
+import '@endo/init/debug.js';
+
+import test from 'ava';
+import net from 'node:net';
+import path from 'node:path';
+import url from 'node:url';
+import { mkdtemp, rm, access } from 'node:fs/promises';
+import os from 'node:os';
+
+import { E } from '@endo/far';
+import { makePromiseKit } from '@endo/promise-kit';
+
+import {
+  start as startEndo,
+  stop as stopEndo,
+  purge,
+  makeEndoClient,
+} from '@endo/daemon';
+import { start as startOrch } from '@endo/claude-orch/src/main.js';
+import { buildFrame, consumeFrames } from '@endo/claude-orch/src/stdio/mux.js';
+
+import { iterateBytesWriter } from '@endo/exo-stream/iterate-bytes-writer.js';
+
+import {
+  makeReader,
+  makeWriter,
+  tryParseMessage,
+  wrapMessage,
+} from '@endo/9p-server/src/wire.js';
+import { T, E as ERRNO, QT } from '@endo/9p-server/src/types.js';
+
+const { raw } = String;
+const dirname = url.fileURLToPath(new URL('..', import.meta.url));
+
+let configPathId = 0;
+
+const makeEndoConfig = (...root) => ({
+  statePath: path.join(dirname, ...root, 'state'),
+  ephemeralStatePath: path.join(dirname, ...root, 'run'),
+  cachePath: path.join(dirname, ...root, 'cache'),
+  sockPath:
+    process.platform === 'win32'
+      ? raw`\\?\pipe\endo-${root.join('-')}-claude-container.sock`
+      : path.join(dirname, ...root, 'endo.sock'),
+  address: '127.0.0.1:0',
+  pets: new Map(),
+  values: new Map(),
+});
+
+const getConfigDir = (title, idx) => {
+  const base = title.replace(/\s/giu, '-').replace(/[^\w-]/giu, '');
+  const tid = String(configPathId).padStart(4, '0');
+  const cid = String(idx).padStart(2, '0');
+  configPathId += 1;
+  // Keep short — UDS path limit (~108 chars on linux).
+  return `${base.slice(0, 16)}#${tid}-${cid}`;
+};
+
+const connectEndo = async (config, t) => {
+  const { reject: cancel, promise: cancelled } = makePromiseKit();
+  cancelled.catch(() => {});
+  t.context.endoConfigs.push({ cancel, cancelled, config });
+
+  const { getBootstrap } = await makeEndoClient(
+    'client',
+    config.sockPath,
+    cancelled,
+  );
+  const bootstrap = getBootstrap();
+  const host = E(bootstrap).host();
+  return { config, host, cancel, cancelled };
+};
+
+const prepareEndo = async t => {
+  const config = makeEndoConfig(
+    'tmp',
+    getConfigDir(t.title, t.context.endoConfigs.length),
+  );
+  await purge(config);
+  await startEndo(config);
+  return connectEndo(config, t);
+};
+
+const waitConnect = sock =>
+  new Promise((resolve, reject) => {
+    sock.once('connect', resolve);
+    sock.once('error', reject);
+  });
+
+const readLine = sock =>
+  new Promise((resolve, reject) => {
+    let buf = '';
+    const onData = chunk => {
+      buf += chunk.toString('utf8');
+      const i = buf.indexOf('\n');
+      if (i >= 0) {
+        sock.off('data', onData);
+        resolve(buf.slice(0, i));
+      }
+    };
+    sock.on('data', onData);
+    sock.once('error', reject);
+  });
+
+/**
+ * Build a mock guest that drives the orchestrator's bootstrap/agent
+ * handshake and echoes a single canned stream-json event back when it
+ * receives a `claude -p`-shaped user prompt.
+ */
+const makeMockGuest = ({ record, onBootConfig }) => {
+  /** @type {net.Server | null} */
+  let stdioServer = null;
+  /** @type {net.Socket | null} */
+  let stdioConn = null;
+  /** @type {net.Socket | null} */
+  let agentSocket = null;
+  let killed = false;
+
+  /** @type {Buffer[]} */
+  const promptBuffers = [];
+
+  const onAttachData = payload => {
+    promptBuffers.push(payload);
+    const all = Buffer.concat(promptBuffers).toString('utf8');
+    if (!all.includes('\n')) return;
+    // Echo back one assistant event per received line.
+    const lines = all.split('\n').filter(l => l.length > 0);
+    for (const line of lines) {
+      try {
+        const msg = JSON.parse(line);
+        const userText = msg?.message?.content?.[0]?.text ?? '<no-text>';
+        const event = {
+          type: 'assistant',
+          message: {
+            role: 'assistant',
+            content: [{ type: 'text', text: `echo: ${userText}` }],
+          },
+        };
+        if (stdioConn) {
+          stdioConn.write(
+            buildFrame('default0', Buffer.from(`${JSON.stringify(event)}\n`)),
+          );
+        }
+      } catch {
+        // Ignore non-JSON; the orchestrator's stdio mux may emit framing-
+        // probe bytes during start.
+      }
+    }
+    promptBuffers.length = 0;
+  };
+
+  const run = async () => {
+    stdioServer = net.createServer(conn => {
+      stdioConn = conn;
+      let buf = Buffer.alloc(0);
+      conn.on('data', chunk => {
+        buf = consumeFrames(Buffer.concat([buf, chunk]), (id, payload) => {
+          if (id === 'default0') onAttachData(Buffer.from(payload));
+        });
+      });
+      conn.on('error', () => {});
+      conn.on('close', () => {
+        stdioConn = null;
+      });
+    });
+    stdioServer.on('error', () => {});
+    await new Promise(r => stdioServer?.listen(record.stdioSocketPath, r));
+
+    const ctl = net.createConnection(record.ctlSocketPath);
+    ctl.on('error', () => {});
+    await waitConnect(ctl);
+    ctl.write(
+      `${JSON.stringify({
+        type: 'hello',
+        sessionId: record.id,
+        bootNonce: record.bootNonce,
+        agentVersion: '0.0.0',
+        hostname: 'mock-guest',
+      })}\n`,
+    );
+    const ctlReply = await readLine(ctl);
+    const bootConfig = JSON.parse(ctlReply);
+    if (bootConfig.type !== 'boot_config') {
+      throw new Error(`expected boot_config, got ${bootConfig.type}`);
+    }
+    if (onBootConfig) onBootConfig(bootConfig);
+    ctl.end();
+
+    agentSocket = net.createConnection(record.agentSocketPath);
+    agentSocket.on('error', () => {});
+    await waitConnect(agentSocket);
+    agentSocket.write(
+      `${JSON.stringify({ type: 'ready', capabilities: ['stdio-mux'] })}\n`,
+    );
+
+    let buf = '';
+    agentSocket.on('data', chunk => {
+      buf += chunk.toString('utf8');
+      for (;;) {
+        const i = buf.indexOf('\n');
+        if (i < 0) break;
+        const line = buf.slice(0, i);
+        buf = buf.slice(i + 1);
+        try {
+          const msg = JSON.parse(line);
+          if (msg.type === 'terminate') {
+            killed = true;
+            agentSocket?.end();
+          }
+        } catch {
+          // ignore non-json
+        }
+      }
+    });
+  };
+
+  return {
+    run,
+    stop() {
+      killed = true;
+      stdioConn?.destroy();
+      stdioServer?.close(() => {});
+      agentSocket?.destroy();
+    },
+    get killed() {
+      return killed;
+    },
+  };
+};
+
+const makeStubNetwork = () => ({
+  async initialize() {
+    // no-op
+  },
+  async attachSession() {
+    return {
+      qemuArgs: [],
+      cleanup: async () => {
+        // no-op
+      },
+    };
+  },
+  async detachSession() {
+    // no-op
+  },
+  async shutdown() {
+    // no-op
+  },
+});
+
+const makeStubBroker = () => ({
+  async issue() {
+    return { apiKey: 'sk-test-12345' };
+  },
+  async revoke() {
+    // no-op
+  },
+  async rotateIfNeeded() {
+    return null;
+  },
+});
+
+const startOrchestrator = async (t, opts = {}) => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'claude-orch-live-'));
+  t.teardown(() => rm(dir, { recursive: true, force: true }));
+
+  const apiSock = path.join(dir, 'api.sock');
+  const sessionsDir = path.join(dir, 'sessions');
+
+  /** @type {ReturnType<typeof makeMockGuest> | null} */
+  let mockGuest = null;
+  const observedBootConfigs = [];
+  const mockSpawn = ({ record }) => {
+    const guest = makeMockGuest({
+      record,
+      onBootConfig: bc => observedBootConfigs.push(bc),
+    });
+    mockGuest = guest;
+    setTimeout(() => guest.run().catch(() => {}), 5);
+    const child = /** @type {any} */ ({ pid: 99999, killed: false });
+    let resolveExit;
+    const exitCode = new Promise(r => {
+      resolveExit = r;
+    });
+    return {
+      child,
+      exitCode,
+      kill: () => {
+        guest.stop();
+        resolveExit?.(0);
+      },
+    };
+  };
+
+  const orch = await startOrch({
+    config: {
+      socketPath: apiSock,
+      imageDir: '/unused',
+      sessionDir: sessionsDir,
+      brokerSocketPath: '/unused',
+      defaults: { arch: 'x86_64', vcpus: 2, memMB: 2048 },
+      bootDeadlineMs: 10000,
+      heartbeatTimeoutMs: 60000,
+    },
+    networkController: makeStubNetwork(),
+    brokerClient: /** @type {any} */ (makeStubBroker()),
+    spawnVm: mockSpawn,
+  });
+  t.teardown(() => orch.stop());
+
+  return {
+    apiSocketPath: apiSock,
+    getMockGuest: () => mockGuest,
+    observedBootConfigs,
+  };
+};
+
+test.beforeEach(t => {
+  t.context.endoConfigs = [];
+});
+
+test.afterEach.always(async t => {
+  for (const { cancel, cancelled, config } of t.context.endoConfigs) {
+    await stopEndo(config).catch(() => {});
+    cancel(new Error('teardown'));
+    await cancelled.catch(() => {});
+  }
+});
+
+/**
+ * Drive the factory caplet through one form submission cycle and
+ * return the resulting session metadata. Used by multiple tests that
+ * need a populated factory + orchestrator pair.
+ *
+ * @param {import('ava').ExecutionContext<any>} t
+ * @param {object} opts
+ * @param {object} opts.host             — Endo host ERef.
+ * @param {string} opts.apiSocketPath    — orchestrator UDS path.
+ * @param {string} [opts.fsName]         — FS pet name to bind.
+ * @param {string} [opts.clientName]     — pet name for the ClaudeClient.
+ * @param {any}    [opts.fsValue]        — value stored under `fsName`.
+ *                                          Defaults to a passable mock; pass
+ *                                          a real endo-fs `Filesystem` to
+ *                                          exercise the bridge end-to-end.
+ */
+const driveFactorySubmission = async (
+  t,
+  {
+    host,
+    apiSocketPath,
+    fsName = 'workspace-fs',
+    clientName = 'claude-test',
+    fsValue,
+    credentialsName = '',
+  },
+) => {
+  if (fsValue !== 'ALREADY_REGISTERED') {
+    const valueToStore =
+      fsValue !== undefined ? fsValue : harden({ kind: 'mock-fs-cap' });
+    await E(host).storeValue(/** @type {any} */ (valueToStore), fsName);
+  }
+
+  const factoryName = 'claude-container-factory';
+  const factorySpecifier = new URL(
+    '../src/claude-container-factory.js',
+    import.meta.url,
+  ).href;
+  const profileName = `profile-for-${factoryName}`;
+
+  await E(host).provideGuest(factoryName, {
+    introducedNames: harden({ '@agent': 'host-agent' }),
+    agentName: profileName,
+  });
+  await E(host).makeUnconfined('@main', factorySpecifier, {
+    powersName: profileName,
+    resultName: `controller-for-${factoryName}`,
+    env: harden({ ORCHESTRATOR_SOCKET: apiSocketPath }),
+  });
+
+  const hostMessages = E(host).followMessages();
+  let formNumber;
+  let drainsLeft = 8;
+  while (drainsLeft > 0) {
+    const { value: msg } = await E(hostMessages).next();
+    if (msg && msg.type === 'form') {
+      formNumber = msg.number;
+      break;
+    }
+    drainsLeft -= 1;
+  }
+  t.is(typeof formNumber, 'bigint');
+
+  await E(host).submit(
+    formNumber,
+    harden({
+      name: clientName,
+      filesystem: fsName,
+      network: 'none',
+      model: 'claude-sonnet-4-6',
+      credentials: credentialsName,
+      initialPrompt: '',
+    }),
+  );
+
+  let replyText;
+  drainsLeft = 20;
+  while (drainsLeft > 0) {
+    const { value: msg } = await E(hostMessages).next();
+    if (msg && msg.type === 'package') {
+      replyText = (msg.strings ?? []).join('\n');
+      break;
+    }
+    drainsLeft -= 1;
+  }
+  t.regex(replyText ?? '', new RegExp(`ClaudeClient "${clientName}" created`));
+
+  const client = await E(host).lookup(clientName);
+  const status = await E(client).status();
+  return { client, status, replyText };
+};
+
+test.serial(
+  'live: factory provisions ClaudeClient and round-trips a stream-json event',
+  async t => {
+    const { host } = await prepareEndo(t);
+    const { apiSocketPath } = await startOrchestrator(t);
+
+    const { client, status } = await driveFactorySubmission(t, {
+      host,
+      apiSocketPath,
+    });
+    t.truthy(status.sessionId);
+    t.false(status.terminated);
+
+    const reader = await E(client).send('hello from test');
+    const first = await E(reader).next();
+    t.false(first.done);
+    t.is(first.value.type, 'assistant');
+    t.regex(first.value.message.content[0].text, /echo: hello from test/);
+
+    await E(client).terminate();
+    const statusAfter = await E(client).status();
+    t.true(statusAfter.terminated);
+  },
+);
+
+test.serial(
+  'live: 9P bridge reincarnates after Endo daemon restart (R4 bridge re-attach)',
+  async t => {
+    const { config, host, cancel } = await prepareEndo(t);
+    const { apiSocketPath } = await startOrchestrator(t);
+
+    const { status } = await driveFactorySubmission(t, {
+      host,
+      apiSocketPath,
+      clientName: 'claude-survivor',
+    });
+    t.truthy(status.sessionId);
+    const fsSocketPath = status.fsSocketPath;
+    t.truthy(fsSocketPath);
+
+    // Bridge is up — UDS exists at fsSocketPath.
+    await access(fsSocketPath);
+
+    // Stop the Endo daemon. Its workers die with it, taking the
+    // bridge caplet (and the ClaudeClient caplet) with them. The
+    // orchestrator's UDS socket and the session record survive
+    // (orchestrator is a separate process).
+    await stopEndo(config);
+    cancel(new Error('restart'));
+
+    // Sanity: after the daemon stops, the bridge socket's owning
+    // process is gone. We don't assert non-existence — the inode may
+    // linger if the worker didn't get a chance to unlink — but a
+    // fresh connect to it should fail.
+    const probe = net.createConnection(fsSocketPath);
+    const probeOutcome = await new Promise(resolve => {
+      probe.once('connect', () => resolve('connected'));
+      probe.once('error', () => resolve('refused'));
+      setTimeout(() => resolve('timeout'), 500);
+    });
+    probe.destroy();
+    t.is(probeOutcome, 'refused');
+
+    // Start a fresh daemon at the same statePath. The factory's
+    // form-driven submission would normally re-create the bridge, but
+    // for R4 we want the bridge to come back without re-submitting —
+    // just by looking up the formula by its pet name.
+    await startEndo(config);
+    const { host: host2 } = await connectEndo(config, t);
+
+    // Trigger bridge reincarnation by resolving its pet name.
+    const sessionId = status.sessionId;
+    const bridgeName = `bridge-for-${sessionId}`;
+    const bridge = await E(host2).lookup(bridgeName);
+    t.truthy(bridge);
+
+    // The bridge module's `make` calls `start()` eagerly, so by the
+    // time `lookup` resolves, the UDS is listening again.
+    await access(fsSocketPath);
+
+    // And a fresh client connection succeeds.
+    const probe2 = net.createConnection(fsSocketPath);
+    const outcome2 = await new Promise(resolve => {
+      probe2.once('connect', () => resolve('connected'));
+      probe2.once('error', () => resolve('refused'));
+      setTimeout(() => resolve('timeout'), 1000);
+    });
+    probe2.destroy();
+    t.is(outcome2, 'connected');
+  },
+);
+
+/**
+ * Helpers for driving a 9P client against the factory's bridge UDS.
+ *
+ * Used by the MVP test below to confirm the bridge actually serves
+ * 9P from a real `@endo/endo-fs` Filesystem stored as the form's
+ * `filesystem` value.
+ */
+
+const connectClient9p = socketPath => {
+  const sock = net.createConnection(socketPath);
+  let buf = Buffer.alloc(0);
+  /** @type {{ resolve: (m: any) => void, reject: (e: any) => void }[]} */
+  const waiters = [];
+  sock.on('data', chunk => {
+    buf = Buffer.concat([buf, chunk]);
+    for (;;) {
+      const parsed = tryParseMessage(buf);
+      if (!parsed) break;
+      buf = parsed.rest;
+      const w = waiters.shift();
+      if (w) w.resolve(parsed.msg);
+    }
+  });
+  sock.on('error', e => {
+    for (const w of waiters.splice(0)) w.reject(e);
+  });
+  const wait = () =>
+    new Promise((resolve, reject) => {
+      waiters.push({ resolve, reject });
+    });
+  return {
+    sock,
+    async waitConnect() {
+      if (sock.readyState === 'open') return;
+      await new Promise((resolve, reject) => {
+        sock.once('connect', resolve);
+        sock.once('error', reject);
+      });
+    },
+    send(type, tag, payload) {
+      sock.write(wrapMessage(type, tag, payload));
+    },
+    recv() {
+      return wait();
+    },
+    close() {
+      sock.destroy();
+    },
+  };
+};
+
+const readQid9p = r => ({
+  type: r.u8(),
+  ver: r.u32(),
+  path: r.u64(),
+});
+
+test.serial(
+  'live MVP: factory → bridge serves 9P from a real in-memory Filesystem',
+  async t => {
+    // Stand up the orchestrator with a mock VM, plus an in-memory
+    // endo-fs minted as a formulated caplet under @host so it can
+    // be looked up by pet name. `storeValue` rejects bare Far refs;
+    // `makeUnconfined` of a small entry module produces a real
+    // formulated FS that the factory's bridge module can consume.
+    const { host } = await prepareEndo(t);
+    const { apiSocketPath } = await startOrchestrator(t);
+
+    const fsModuleUrl = new URL(
+      '../../endo-fs/src/in-memory-module.js',
+      import.meta.url,
+    ).href;
+    const workspaceFs = await E(host).makeUnconfined('@main', fsModuleUrl, {
+      powersName: '@none',
+      resultName: 'workspace-fs',
+    });
+
+    // Populate the now-formulated FS in-place from the test process
+    // (the same exo backs the cap the factory will look up).
+    const wsRoot = await E(workspaceFs).root();
+    const greet = await E(wsRoot).create('greet.txt', {});
+    {
+      const w = iterateBytesWriter(await E(greet).write(0n));
+      await w.next(new TextEncoder().encode('from in-memory FS'));
+      await w.return();
+    }
+    await E(greet).close();
+    const sub = await E(wsRoot).mkdir('sub', {});
+    const inner = await E(sub).create('inner.txt', {});
+    {
+      const w = iterateBytesWriter(await E(inner).write(0n));
+      await w.next(new TextEncoder().encode('deep'));
+      await w.return();
+    }
+    await E(inner).close();
+
+    const { client, status } = await driveFactorySubmission(t, {
+      host,
+      apiSocketPath,
+      clientName: 'mvp-client',
+      // `workspace-fs` is already registered via makeUnconfined
+      // above; skip storeValue by passing a sentinel that the
+      // helper detects and treats as "already present."
+      fsValue: 'ALREADY_REGISTERED',
+    });
+    t.truthy(status.sessionId);
+    t.truthy(status.fsSocketPath);
+
+    // Connect a 9P client to the bridge UDS the factory minted.
+    const c = connectClient9p(status.fsSocketPath);
+    await c.waitConnect();
+    t.teardown(() => c.close());
+
+    // Tversion
+    {
+      const w = makeWriter();
+      w.u32(8192);
+      w.str('9P2000.L');
+      c.send(T.Tversion, 0xffff, w.finish());
+      const rep = await c.recv();
+      const r = makeReader(rep.payload);
+      t.true(r.u32() >= 4096);
+      t.is(r.str(), '9P2000.L');
+    }
+
+    // Tattach
+    {
+      const w = makeWriter();
+      w.u32(1);
+      w.u32(0xffffffff);
+      w.str('');
+      w.str('');
+      w.u32(0);
+      c.send(T.Tattach, 1, w.finish());
+      const rep = await c.recv();
+      t.is(rep.type, T.Rattach);
+      const qid = readQid9p(makeReader(rep.payload));
+      t.is(qid.type, QT.DIR);
+    }
+
+    // Twalk to greet.txt (single component)
+    {
+      const w = makeWriter();
+      w.u32(1);
+      w.u32(2);
+      w.u16(1);
+      w.str('greet.txt');
+      c.send(T.Twalk, 2, w.finish());
+      const rep = await c.recv();
+      t.is(rep.type, T.Rwalk);
+      const r = makeReader(rep.payload);
+      t.is(r.u16(), 1);
+      const qid = readQid9p(r);
+      t.is(qid.type, QT.FILE);
+    }
+
+    // Tlopen + Tread
+    {
+      const w = makeWriter();
+      w.u32(2);
+      w.u32(0);
+      c.send(T.Tlopen, 3, w.finish());
+      const rep = await c.recv();
+      t.is(rep.type, T.Rlopen);
+    }
+    {
+      const w = makeWriter();
+      w.u32(2);
+      w.u64(0n);
+      w.u32(4096);
+      c.send(T.Tread, 4, w.finish());
+      const rep = await c.recv();
+      t.is(rep.type, T.Rread);
+      const r = makeReader(rep.payload);
+      const count = r.u32();
+      const bytes = r.take(count);
+      t.is(bytes.toString('utf8'), 'from in-memory FS');
+    }
+
+    // Pipelined Twalk to /sub/inner.txt (two components)
+    {
+      const w = makeWriter();
+      w.u32(1);
+      w.u32(3);
+      w.u16(2);
+      w.str('sub');
+      w.str('inner.txt');
+      c.send(T.Twalk, 5, w.finish());
+      const rep = await c.recv();
+      t.is(rep.type, T.Rwalk);
+      const r = makeReader(rep.payload);
+      t.is(r.u16(), 2);
+      const q1 = readQid9p(r);
+      const q2 = readQid9p(r);
+      t.is(q1.type, QT.DIR);
+      t.is(q2.type, QT.FILE);
+    }
+
+    // Walk to a missing name → Rlerror(ENOENT)
+    {
+      const w = makeWriter();
+      w.u32(1);
+      w.u32(4);
+      w.u16(1);
+      w.str('missing.txt');
+      c.send(T.Twalk, 6, w.finish());
+      const rep = await c.recv();
+      t.is(rep.type, T.Rlerror);
+      const r = makeReader(rep.payload);
+      t.is(r.u32(), ERRNO.ENOENT);
+    }
+
+    // Terminate to clean up.
+    await E(client).terminate();
+  },
+);
+
+test.serial(
+  'live MVP: form-supplied ClaudeCredentials override the broker',
+  async t => {
+    const { host } = await prepareEndo(t);
+    const { apiSocketPath, observedBootConfigs } = await startOrchestrator(t);
+
+    // Mint an endo-fs Filesystem under 'workspace-fs' (same trick
+    // as the other MVP test).
+    const fsModuleUrl = new URL(
+      '../../endo-fs/src/in-memory-module.js',
+      import.meta.url,
+    ).href;
+    await E(host).makeUnconfined('@main', fsModuleUrl, {
+      powersName: '@none',
+      resultName: 'workspace-fs',
+    });
+
+    // Mint a ClaudeCredentials cap under 'my-creds' via
+    // claude-credentials-module.js. The factory will resolve it
+    // and pass `issue(name)` through to the orchestrator.
+    const credsModuleUrl = new URL(
+      '../src/claude-credentials-module.js',
+      import.meta.url,
+    ).href;
+    await E(host).makeUnconfined('@main', credsModuleUrl, {
+      powersName: '@none',
+      resultName: 'my-creds',
+      env: harden({ API_KEY: 'sk-ant-from-form' }),
+    });
+
+    const { client, status } = await driveFactorySubmission(t, {
+      host,
+      apiSocketPath,
+      clientName: 'creds-client',
+      fsValue: 'ALREADY_REGISTERED',
+      credentialsName: 'my-creds',
+    });
+    t.truthy(status.sessionId);
+
+    // The orchestrator should have used the caller-supplied
+    // credentials in the BootConfig, not the broker's stub key.
+    t.true(observedBootConfigs.length >= 1);
+    const bc = observedBootConfigs[0];
+    t.is(bc.credentials.apiKey, 'sk-ant-from-form');
+    // Sanity: NOT the broker stub value.
+    t.not(bc.credentials.apiKey, 'sk-test-12345');
+
+    await E(client).terminate();
+  },
+);
