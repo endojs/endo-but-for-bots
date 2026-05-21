@@ -17,7 +17,8 @@
   "type": "module",
   "exports": {
     ".": "./src/claude-container-factory.js",
-    "./setup.js": "./setup.js",
+    "./factory.js": "./factory.js",
+    "./credentials.js": "./credentials.js",
     "./src/claude-client.js": "./src/claude-client.js",
     "./src/orchestrator-client.js": "./src/orchestrator-client.js",
     "./src/claude-credentials-factory.js": "./src/claude-credentials-factory.js",
@@ -26,8 +27,8 @@
   "scripts": {
     "build": "exit 0",
     "test": "ava",
-    "setup": "endo run --UNCONFINED setup.js --powers @agent -E FACTORY_NAME=${FACTORY_NAME:-claude-container-factory} -E ORCHESTRATOR_SOCKET=${ORCHESTRATOR_SOCKET:-/run/claude-orch/api.sock}",
-    "create-factory": "./scripts/create-factory.sh",
+    "factory": "endo run --UNCONFINED factory.js --powers @agent",
+    "credentials": "endo run --UNCONFINED credentials.js --powers @agent",
     "lint": "yarn lint:eslint",
     "lint-fix": "yarn lint:eslint --fix",
     "lint:eslint": "eslint '**/*.js'"

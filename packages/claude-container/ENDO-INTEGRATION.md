@@ -130,7 +130,7 @@ to other inboxes.
 
 Pet name: `claude-container-factory` (configurable).
 
-Created by: `scripts/create-factory.sh` (§5).
+Created by: `yarn workspace @endo/claude-container factory` (§5).
 
 ```js
 M.interface('ClaudeContainerFactory', {
@@ -199,27 +199,38 @@ A richer, more efficient FS surface lives on the roadmap (§9).
 ### 5.1 One-time factory creation
 
 ```sh
-./packages/claude-container/scripts/create-factory.sh
+# Container factory (positional args optional):
+yarn workspace @endo/claude-container factory \
+  [<factoryName>] [<orchestratorSocket>]
+
+# R3 credentials factory (optional):
+yarn workspace @endo/claude-container credentials [<factoryName>]
 ```
 
-Behind the scenes (see the script for the canonical version):
+Defaults: `claude-container-factory` /
+`/run/claude-orch/api.sock` / `claude-credentials-factory`.
 
-```sh
-endo run --UNCONFINED ./setup.js --powers @agent \
-  -E FACTORY_NAME=claude-container-factory \
-  -E ORCHESTRATOR_SOCKET=/run/claude-orch/api.sock
-```
+Each yarn script is a thin wrapper around
+`endo run --UNCONFINED <module>.js --powers @agent <positionals...>`;
+the underlying setup modules (`factory.js`, `credentials.js`) at the
+package root export `main(agent, ...args)` and follow the
+`@endo/fae` setup-module shape.
 
-`setup.js`:
+`factory.js`:
 
-1. If `<factory-name>` already exists in HOST's petstore, exit
-   idempotently (matches `@endo/fae`'s `setup.js`).
-2. Provide a guest named `<factory-name>` with
+1. If `controller-for-<factoryName>` already exists in HOST's
+   petstore, exit idempotently (matches `@endo/fae`'s `setup.js`).
+2. Provide a guest named `<factoryName>` with
    `introducedNames: { '@agent': 'host-agent' }`.
 3. `makeUnconfined` the factory caplet from
    `src/claude-container-factory.js`, naming the result
-   `controller-for-<factory-name>` and binding the orchestrator socket
+   `controller-for-<factoryName>` and binding the orchestrator socket
    path into the guest's environment.
+
+`credentials.js` follows the same shape against
+`src/claude-credentials-factory.js`; the resulting caplet presents a
+"Create Claude Credentials" form whose submissions store
+`ClaudeCredentials` caps in HOST's petstore.
 
 ### 5.2 Per-sandbox creation
 
@@ -273,9 +284,10 @@ orchestrator and removes the entry from the petstore.
 If the factory caplet dies, in-flight sandboxes remain owned by the
 orchestrator (which has its own session table and TTLs per
 §11 of `DESIGN.md`).
-Re-running `create-factory.sh` after a daemon restart is idempotent
-and re-attaches the factory's name to a fresh caplet; existing
-`ClaudeClient` exos become unreachable and the user discards them.
+Re-running `yarn workspace @endo/claude-container factory` after a
+daemon restart is idempotent and re-attaches the factory's name to a
+fresh caplet; existing `ClaudeClient` exos become unreachable and the
+user discards them.
 
 Better restart semantics (capability stitching across daemon restarts)
 are roadmap (§9).
@@ -339,9 +351,8 @@ packages/claude-container/
 ├── ENDO-INTEGRATION.md             # this document
 ├── README.md
 ├── package.json
-├── scripts/
-│   └── create-factory.sh           # one-shot factory provisioner
-├── setup.js                        # ran by create-factory.sh
+├── factory.js                      # fae-style ClaudeContainer setup
+├── credentials.js                  # fae-style ClaudeCredentials setup
 └── src/
     ├── claude-container-factory.js # the factory caplet
     ├── claude-client-module.js     # per-session ClaudeClient caplet

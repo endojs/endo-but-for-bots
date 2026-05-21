@@ -25,15 +25,31 @@ credential broker — lives in `@endo/claude-orch` as a sibling package.
 With the orchestrator (`@endo/claude-orch`) running on the host:
 
 ```sh
-./scripts/create-factory.sh
+# Register the container factory on @host
+yarn workspace @endo/claude-container factory
+
+# Optional: also register the credentials factory (R3)
+yarn workspace @endo/claude-container credentials
 ```
 
-That registers `claude-container-factory` on `@host` and surfaces a
-"Create Claude Container" form in the host's inbox.
-Each form submission spins up a microVM, projects the named filesystem
-capability into `/workspace`, starts Claude Code inside, and stores a
-`ClaudeClient` exo back in `@host`'s petstore under the name you
-chose.
+Both scripts are fae-style setup modules invoked via
+`endo run --UNCONFINED ... --powers @agent`; they are idempotent
+(re-running with the same name is a no-op) and accept positional args
+to override the defaults:
+
+```sh
+# yarn workspace @endo/claude-container factory <factoryName> <orchestratorSocket>
+yarn workspace @endo/claude-container factory my-claude-factory /tmp/orch.sock
+
+# yarn workspace @endo/claude-container credentials <factoryName>
+yarn workspace @endo/claude-container credentials my-creds-factory
+```
+
+That registers the factory on `@host` and surfaces the corresponding
+form ("Create Claude Container" / "Create Claude Credentials") in the
+host's inbox. Each form submission stores the resulting exo
+(`ClaudeClient` / `ClaudeCredentials`) back in `@host`'s petstore
+under the name the submitter chose.
 
 ```js
 const claude = await E(host).lookup('claude-1');
@@ -48,9 +64,8 @@ for await (const event of makeRefIterator(reader)) {
 ```
 DESIGN.md                          # microVM sandbox design
 ENDO-INTEGRATION.md                # endo capability surface + roadmap
-scripts/
-  create-factory.sh                # one-shot factory provisioner
-setup.js                           # ran by create-factory.sh
+factory.js                         # fae-style setup for ClaudeContainer
+credentials.js                     # fae-style setup for ClaudeCredentials
 src/
   claude-container-factory.js      # factory caplet (form loop)
   claude-client-module.js          # per-session ClaudeClient caplet
@@ -73,7 +88,7 @@ test/
 The Endo-side surface is implemented and validated end-to-end against
 a live Endo daemon plus a live `@endo/claude-orch` daemon (with a
 mock VM in place of QEMU). `factory-live.test.js` drives the full
-flow: `create-factory.sh`-equivalent provisioning → form submission
+flow: `yarn ... factory`-equivalent provisioning → form submission
 on `@host` → orchestrator `POST /v1/sessions` → 9P bridge start →
 `POST /v1/sessions/:id/ready` (which kicks the mock guest's
 bootstrap + agent handshake) → `makeUnconfined` of a per-session

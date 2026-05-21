@@ -980,8 +980,8 @@ endo/
 │   ├── claude-container/                 # Endo capability side
 │   │   ├── DESIGN.md                     # this document
 │   │   ├── ENDO-INTEGRATION.md           # Endo capability surface + roadmap
-│   │   ├── scripts/create-factory.sh
-│   │   ├── setup.js
+│   │   ├── factory.js                    # fae-style ClaudeContainer setup
+│   │   ├── credentials.js                # fae-style ClaudeCredentials setup
 │   │   └── src/
 │   │       ├── claude-container-factory.js
 │   │       ├── claude-client-module.js
