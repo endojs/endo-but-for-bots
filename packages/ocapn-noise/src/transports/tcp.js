@@ -24,6 +24,42 @@ const { isNaN } = Number;
 const MAX_FRAME_LENGTH = 65_551;
 
 /**
+ * Wrap a byte reader so an abrupt socket teardown surfaces as a clean
+ * end-of-stream (`{ done: true }`) instead of an unhandled
+ * `ERR_STREAM_PREMATURE_CLOSE` rejection. Destroying a socket (which
+ * `shutdown()` does, and which a peer crash produces) rejects any
+ * pending `reader.next()`; a destroyed socket *is* a closed stream, so
+ * the session layer above should observe an orderly end and tear its
+ * session down rather than catch a stray throw.
+ *
+ * @param {import('@endo/stream').Reader<Uint8Array>} reader
+ * @returns {import('@endo/stream').Reader<Uint8Array>}
+ */
+const makeGracefulReader = reader => {
+  /** @type {import('@endo/stream').Reader<Uint8Array>} */
+  const graceful = {
+    next: async value => {
+      try {
+        return await reader.next(value);
+      } catch (err) {
+        if (
+          err != null &&
+          /** @type {{ code?: string }} */ (err).code ===
+            'ERR_STREAM_PREMATURE_CLOSE'
+        ) {
+          return harden({ value: undefined, done: true });
+        }
+        throw err;
+      }
+    },
+    return: value => reader.return(value),
+    throw: err => reader.throw(err),
+    [Symbol.asyncIterator]: () => graceful,
+  };
+  return harden(graceful);
+};
+
+/**
  * TCP byte-stream transport.
  *
  * `framing` controls how messages are delimited on the wire:
@@ -84,12 +120,16 @@ export const makeTcpTransport = ({
     const rawWriter = makeNodeWriter(socket);
     if (framing === 'none') {
       return harden({
-        reader: /** @type {any} */ (rawReader),
+        reader: /** @type {any} */ (makeGracefulReader(rawReader)),
         writer: /** @type {any} */ (rawWriter),
       });
     }
     const reader = /** @type {any} */ (
-      makeNetstringReader(rawReader, { maxMessageLength: MAX_FRAME_LENGTH })
+      makeGracefulReader(
+        /** @type {any} */ (
+          makeNetstringReader(rawReader, { maxMessageLength: MAX_FRAME_LENGTH })
+        ),
+      )
     );
     const writer = /** @type {any} */ (makeNetstringWriter(rawWriter));
     return harden({ reader, writer });
