@@ -39,10 +39,6 @@ const protocol = 'ocapn+noise+tcp';
 // is read, mirroring `tcp-netstring.js`'s `tcp-listen-addr`.
 const LISTEN_ADDR_NAME = 'ocapn-listen-addr';
 
-/**
- * @param {any} powers
- * @param {any} context
- */
 export const make = async (powers, context) => {
   const cancelled = /** @type {Promise<never>} */ (E(context).whenCancelled());
 
@@ -94,6 +90,10 @@ export const make = async (powers, context) => {
 
   const client = await makeOcapn({
     codec,
+    // The ocapn-noise network's exported type is defined independently
+    // of `@endo/ocapn`'s `OcapnNetwork` and does not structurally
+    // unify with it; cast at this single boundary.
+    // eslint-disable-next-line object-shorthand
     network: /** @type {any} */ (network),
     locator,
     debugLabel: `endo-peer-${String(localNodeId).slice(0, 8)}`,
@@ -119,17 +119,13 @@ export const make = async (powers, context) => {
     `Endo daemon OCapN-Noise peer transport ready (designator ${shortKeyId} at ${hintHost}:${hintPort})`,
   );
 
-  const shutdown = () => {
-    client.shutdown();
-    network.shutdown();
-  };
-  E.sendOnly(context).addDisposalHook(() => shutdown());
-  cancelled.catch(() => shutdown());
+  // `client.shutdown()` tears down the OCapN sessions and the
+  // network's transports (closing the TCP listener); shutting the
+  // network down again separately would destroy sockets out from
+  // under the in-flight session close.
+  E.sendOnly(context).addDisposalHook(() => client.shutdown());
+  cancelled.catch(() => client.shutdown());
 
-  /**
-   * @param {string} peerAddress
-   * @param {any} connectionContext
-   */
   const connect = async (peerAddress, connectionContext) => {
     const url = new URL(peerAddress);
     const locParam = url.searchParams.get('loc');

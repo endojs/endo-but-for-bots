@@ -28,6 +28,19 @@ Built:
 - `@endo/ocapn` and `@endo/ocapn-noise` added to `packages/daemon`
   dependencies.
 - `MULTIPLAYER.md` documents the OCapN-Noise transport.
+- `packages/daemon/test/networks-ocapn.test.js` — an integration test
+  that stands up two transport instances and connects them over
+  OCapN-Noise end to end: the `EndoNetwork` shape, the address
+  encoding, the `hello` handshake, capability passing, and a method
+  call that round-trips across the session. Passing.
+- `packages/ocapn-noise/src/transports/tcp.js` — fixed so an abrupt
+  socket teardown surfaces as a clean end-of-stream rather than
+  leaking an `ERR_STREAM_PREMATURE_CLOSE` rejection. Surfaced by the
+  integration test's shutdown path; OCapN-Noise's own transport tests
+  still pass.
+
+The new code is lint-, type-, and format-clean, and the integration
+test passes.
 
 Deviations from the design as first written, and why:
 
@@ -67,8 +80,9 @@ Known blocker — per-agent keys (`daemon-agent-network-identity`):
 
 Remaining (Phases 2-3): bind the OCapN identity to the agent keypair,
 make `@nets/ocapn` the default transport, route `endo://` locators
-through OCapN sturdyrefs, retire `tcp-netstring.js`, and add the
-forked-daemon integration test from the Test Plan below.
+through OCapN sturdyrefs, retire `tcp-netstring.js`, and extend the
+in-process integration test to the forked-daemon multiplayer flow
+described in the Test Plan below.
 
 ## What is the Problem Being Solved?
 
