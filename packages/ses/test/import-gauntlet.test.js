@@ -239,46 +239,13 @@ test('export name as default', async t => {
   await compartment.import('./main.js');
 });
 
-// Regression for endojs/endo#59. A module reached more than once via
-// `export *` and a renaming reexport with a different `exported` name
-// formerly raised a spurious "does not provide an export named X"
-// SyntaxError (latterly a `TypeError: notify is not a function`):
-// mod2's `export { y as x } from './mod1.js'` was wired before mod1's
-// star-import from mod2 had populated mod1's notifier for `y`.
-test('cyclic star export with renaming reexport (issue #59)', async t => {
-  t.plan(3);
-
-  const makeImportHook = makeNodeImporter({
-    'https://example.com/mod1.js': `
-      export * from './mod2.js';
-    `,
-    'https://example.com/mod2.js': `
-      export { y as x } from './mod1.js';
-      export var y = 45;
-    `,
-    'https://example.com/main.js': `
-      import { x } from './mod1.js';
-      import * as ns1 from './mod1.js';
-      import * as ns2 from './mod2.js';
-      export const captured = x;
-      export const namespace1 = { x: ns1.x, y: ns1.y };
-      export const namespace2 = { x: ns2.x, y: ns2.y };
-    `,
-  });
-
-  const compartment = new Compartment({
-    resolveHook: resolveNode,
-    importHook: makeImportHook('https://example.com'),
-    __noNamespaceBox__: true,
-    __options__: true,
-  });
-
-  const namespace = await compartment.import('./main.js');
-
-  t.is(namespace.captured, 45);
-  t.deepEqual(namespace.namespace1, { x: 45, y: 45 });
-  t.deepEqual(namespace.namespace2, { x: 45, y: 45 });
-});
+// Regression for endojs/endo#59 (cyclic star export with renaming reexport)
+// is tested in the compartment-mapper suite. The compartment-mapper test
+// drives the same SES linker through scaffold.js's full pipeline and is
+// pinned to Node.js's reference behavior by a companion parity test, which
+// teases the linker behavior out of SES. See
+// packages/compartment-mapper/test/cycle-rename.test.js and
+// packages/compartment-mapper/test/cycle-rename-node-parity.test.js.
 
 test('export-as with duplicated export name', async t => {
   t.plan(4);
