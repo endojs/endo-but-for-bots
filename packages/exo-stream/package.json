@@ -83,7 +83,7 @@
     "lint-fix": "yarn lint:eslint --fix && yarn lint:types",
     "lint:eslint": "eslint '**/*.js'",
     "lint:types": "tsc",
-    "postpack": "git clean -fX \"*.tsbuildinfo\"",
+    "postpack": "git clean -fX -e node_modules/",
     "prepack": "tsc --build tsconfig.build.json --noCheck",
     "test": "ava",
     "test:c8": "c8 ${C8_OPTIONS:-} ses-ava",
