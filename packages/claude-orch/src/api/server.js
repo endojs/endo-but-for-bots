@@ -11,6 +11,56 @@
 import http from 'node:http';
 import { unlink, chmod } from 'node:fs/promises';
 
+// Defense-in-depth: the API socket is 0600 so only the orchestrator's
+// own UID can connect, but trusting in-process callers to send
+// well-formed bodies is still a footgun. A buggy or compromised
+// factory could otherwise drive unbounded memory growth here.
+// 256 KiB is comfortably larger than a CreateSessionRequest in any
+// realistic shape (vcpus / memMB / arch / network / credentials).
+const MAX_BODY_BYTES = 256 * 1024;
+
+// Allow-list scalar shapes we'll forward to createSession. Anything
+// outside this surface is rejected at the boundary rather than
+// trusting `createSession` to defend itself.
+const ALLOWED_ARCHES = new Set(['x86_64', 'aarch64']);
+const ALLOWED_NETWORKS = new Set(['egress', 'none']);
+const ALLOWED_ATTACH_MODES = new Set(['stream', 'none']);
+
+/**
+ * Reject request bodies that aren't shaped like a `CreateSessionRequest`.
+ * Strict enough to bounce obvious typos and hostile inputs, loose enough
+ * to keep evolving fields working — anything not on the allow-list
+ * passes through to be filtered downstream.
+ *
+ * @param {any} body
+ * @returns {string | undefined}  error message, or undefined if OK
+ */
+const validateCreateSessionBody = body => {
+  if (body === null || typeof body !== 'object') return 'body must be an object';
+  if (body.arch !== undefined && !ALLOWED_ARCHES.has(body.arch)) {
+    return `arch must be one of ${[...ALLOWED_ARCHES].join(', ')}`;
+  }
+  if (body.network !== undefined && !ALLOWED_NETWORKS.has(body.network)) {
+    return `network must be one of ${[...ALLOWED_NETWORKS].join(', ')}`;
+  }
+  if (body.attachMode !== undefined && !ALLOWED_ATTACH_MODES.has(body.attachMode)) {
+    return `attachMode must be one of ${[...ALLOWED_ATTACH_MODES].join(', ')}`;
+  }
+  if (body.resources !== undefined) {
+    if (body.resources === null || typeof body.resources !== 'object') {
+      return 'resources must be an object';
+    }
+    const { vcpus, memMB } = body.resources;
+    if (vcpus !== undefined && (!Number.isInteger(vcpus) || vcpus < 1 || vcpus > 32)) {
+      return 'resources.vcpus must be an integer in [1, 32]';
+    }
+    if (memMB !== undefined && (!Number.isInteger(memMB) || memMB < 64 || memMB > 65536)) {
+      return 'resources.memMB must be an integer in [64, 65536]';
+    }
+  }
+  return undefined;
+};
+
 /**
  * HTTP/1.1 caller-facing API over a UDS (DESIGN.md §6.1).
  *
@@ -43,7 +93,18 @@ export const makeApiServer = ({ socketPath, handlers }) => {
         parts[0] === 'v1' &&
         parts[1] === 'sessions'
       ) {
-        const body = await readBody(req);
+        let body;
+        try {
+          body = await readBody(req);
+        } catch (e) {
+          respondJson(res, 413, { error: /** @type {Error} */ (e).message });
+          return;
+        }
+        const validationError = validateCreateSessionBody(body);
+        if (validationError) {
+          respondJson(res, 400, { error: validationError });
+          return;
+        }
         const session = await handlers.createSession(body);
         respondJson(res, 200, session);
         return;
@@ -133,7 +194,19 @@ harden(makeApiServer);
  */
 const readBody = async req => {
   const chunks = [];
-  for await (const chunk of req) chunks.push(chunk);
+  let total = 0;
+  for await (const chunk of req) {
+    total += chunk.length;
+    if (total > MAX_BODY_BYTES) {
+      // Stop draining — Node will continue to fill the socket buffer
+      // but we won't allocate more from it. The 413 response above
+      // handles the client side.
+      throw new Error(
+        `request body exceeds MAX_BODY_BYTES (${MAX_BODY_BYTES})`,
+      );
+    }
+    chunks.push(chunk);
+  }
   if (chunks.length === 0) return {};
   const text = Buffer.concat(chunks).toString('utf8');
   return JSON.parse(text);

@@ -23,6 +23,13 @@ import { unlink } from 'node:fs/promises';
 const STREAM_ID_LEN = 8;
 const HEADER_LEN = STREAM_ID_LEN + 4;
 export const DEFAULT_STREAM_ID = 'default0';
+// Defense-in-depth: cap the per-frame payload before buffering. A
+// compromised or buggy guest could otherwise claim `len=0xFFFFFFFF`
+// and force the stdio buffer to grow to 4 GiB before any frame is
+// emitted. 8 MiB comfortably exceeds Claude Code's stream-json
+// turn size and matches the largest payload the agent emits today
+// (rough headroom over Anthropic's 1 MB tool-result limit).
+export const MAX_FRAME_LEN = 8 * 1024 * 1024;
 
 /**
  * Pad/truncate to exactly 8 ASCII bytes.
@@ -82,6 +89,11 @@ export const consumeFrames = (buf, onFrame) => {
   let off = 0;
   while (buf.length - off >= HEADER_LEN) {
     const len = buf.readUInt32BE(off + STREAM_ID_LEN);
+    if (len > MAX_FRAME_LEN) {
+      throw new Error(
+        `stdio mux: frame length ${len} exceeds MAX_FRAME_LEN (${MAX_FRAME_LEN}); aborting to bound peer-driven memory growth`,
+      );
+    }
     if (buf.length - off < HEADER_LEN + len) break;
     const streamId = decodeStreamId(buf.subarray(off, off + STREAM_ID_LEN));
     const payload = buf.subarray(off + HEADER_LEN, off + HEADER_LEN + len);
@@ -153,12 +165,26 @@ export const makeStdioMux = ({
     stdioSocket = await connectWithRetry(stdioSocketPath, 5000);
     stdioSocket.on('data', (/** @type {Buffer} */ chunk) => {
       const combined = Buffer.concat([stdioBuf, chunk]);
-      stdioBuf = consumeFrames(combined, (streamId, payload) => {
-        if (streamId === DEFAULT_STREAM_ID && attachConn) {
-          attachConn.write(payload);
+      try {
+        stdioBuf = consumeFrames(combined, (streamId, payload) => {
+          if (streamId === DEFAULT_STREAM_ID && attachConn) {
+            attachConn.write(payload);
+          }
+          // Other streamIds (exec-*) are dropped in v1; future work.
+        });
+      } catch (e) {
+        // Frame protocol violation (e.g. payload length > MAX_FRAME_LEN).
+        // Surface via onError, drop the framing buffer, and tear down the
+        // guest socket so the orchestrator can decide whether to recreate
+        // the session. We don't want a runaway guest to drive unbounded
+        // memory growth here.
+        handleError(/** @type {Error} */ (e));
+        stdioBuf = Buffer.alloc(0);
+        if (stdioSocket) {
+          stdioSocket.destroy();
+          stdioSocket = null;
         }
-        // Other streamIds (exec-*) are dropped in v1; future work.
-      });
+      }
     });
     stdioSocket.on('error', handleError);
     stdioSocket.on('close', () => {

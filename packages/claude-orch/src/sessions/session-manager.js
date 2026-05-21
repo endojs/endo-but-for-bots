@@ -39,6 +39,30 @@ export const makeSessionManager = ({ config, persistencePath }) => {
   const sessions = new Map();
   let persistTimer = null;
 
+  // Sessions live under config.sessionDir. Anything restored from disk
+  // is treated as untrusted: the JSON file could have been edited or
+  // corrupted, and `record.sessionDir` feeds a `rm -rf`-equivalent in
+  // `forget()`. Refuse any record whose sessionDir doesn't land inside
+  // our sessionDir prefix.
+  const sessionDirRoot = path.resolve(config.sessionDir);
+
+  /**
+   * @param {unknown} rec
+   * @returns {rec is SessionRecord}
+   */
+  const isPlausibleRecord = rec => {
+    if (rec === null || typeof rec !== 'object') return false;
+    const r = /** @type {Record<string, unknown>} */ (rec);
+    if (typeof r.id !== 'string' || !/^[a-zA-Z0-9_-]+$/.test(r.id)) return false;
+    if (typeof r.sessionDir !== 'string' || r.sessionDir === '') return false;
+    const resolved = path.resolve(r.sessionDir);
+    // Refuse traversal: sessionDir must be directly under sessionDirRoot
+    // and named like the session id.
+    if (path.dirname(resolved) !== sessionDirRoot) return false;
+    if (path.basename(resolved) !== r.id) return false;
+    return true;
+  };
+
   const persistNow = async () => {
     if (!persistencePath) return;
     const entries = Array.from(sessions.values()).map(r => ({
@@ -222,21 +246,34 @@ export const makeSessionManager = ({ config, persistencePath }) => {
     } catch {
       return [];
     }
-    /** @type {SessionRecord[]} */
     let parsed;
     try {
       parsed = JSON.parse(data);
     } catch {
       return [];
     }
+    if (!Array.isArray(parsed)) return [];
+    /** @type {SessionRecord[]} */
+    const validated = [];
     for (const rec of parsed) {
+      if (!isPlausibleRecord(rec)) {
+        // Don't sessions.set() this record — its sessionDir might point
+        // anywhere, and forget() would then `rm -rf` it.
+        // eslint-disable-next-line no-console
+        console.error(
+          '[session-manager] refusing to restore implausible record:',
+          rec,
+        );
+        continue;
+      }
       // The bootNonce can't be reused; if a session somehow re-enters the
       // bootstrap path after restart, it must be torn down.
       rec.bootNonceUsed = true;
       rec.bootNonce = '';
       sessions.set(rec.id, rec);
+      validated.push(rec);
     }
-    return parsed;
+    return validated;
   };
 
   return harden({

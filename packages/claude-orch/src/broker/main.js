@@ -70,10 +70,13 @@ export const makeBroker = ({ socketPath, apiKey }) => {
             if (i < 0) break;
             const line = buf.slice(0, i);
             buf = buf.slice(i + 1);
-            // Serialize each request to handle() and reply when it resolves;
-            // requests can run concurrently since the broker has no
-            // per-session ordering requirement.
-            handle(/** @type {BrokerRequest} */ (JSON.parse(line)))
+            // Parse the request inside the try/catch chain rather than
+            // as an argument: a non-JSON line throws synchronously and
+            // would otherwise tear down the `'data'` listener and kill
+            // the broker process. Reply with `{type: 'error'}` and keep
+            // serving.
+            Promise.resolve(line)
+              .then(raw => handle(/** @type {BrokerRequest} */ (JSON.parse(raw))))
               .then(res => conn.write(`${JSON.stringify(res)}\n`))
               .catch(e => {
                 const msg = /** @type {Error} */ (e).message;
