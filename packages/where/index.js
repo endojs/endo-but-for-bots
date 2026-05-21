@@ -113,3 +113,92 @@ export const whereEndoCache = (platform, env, info) => {
   const home = env.HOME !== undefined ? env.HOME : info.home;
   return `${home}/.cache/endo`;
 };
+
+/**
+ * Returns the path for the Endo Gateway's durable host-scope state
+ * (the gateway's sqlite formula store, operator policy files).
+ * In contrast to {@link whereEndoState}, which is per-user, the Gateway's
+ * state lives at host scope under a service-account-owned directory.
+ *
+ * @type {typeof import('./types.js').whereEndoGatewayState}
+ */
+export const whereEndoGatewayState = (platform, env, info) => {
+  if (env.ENDO_GATEWAY_STATE !== undefined) {
+    return env.ENDO_GATEWAY_STATE;
+  } else if (platform === 'win32') {
+    const programData =
+      env.PROGRAMDATA !== undefined
+        ? env.PROGRAMDATA
+        : `${info.home}\\..\\..\\ProgramData`;
+    return `${programData}\\Endo Gateway`;
+  } else if (platform === 'darwin') {
+    return '/Library/Application Support/Endo Gateway';
+  }
+  return '/var/lib/endo-gateway';
+};
+
+/**
+ * Returns the path for the Endo Gateway's ephemeral host-scope state
+ * (the gateway PID file).
+ *
+ * @type {typeof import('./types.js').whereEndoGatewayEphemeralState}
+ */
+export const whereEndoGatewayEphemeralState = (platform, env, info) => {
+  if (env.ENDO_GATEWAY_EPHEMERAL_STATE !== undefined) {
+    return env.ENDO_GATEWAY_EPHEMERAL_STATE;
+  } else if (platform === 'win32') {
+    const programData =
+      env.PROGRAMDATA !== undefined
+        ? env.PROGRAMDATA
+        : `${info.home}\\..\\..\\ProgramData`;
+    return `${programData}\\Endo Gateway\\Run`;
+  } else if (platform === 'darwin') {
+    return '/var/run/endo-gateway';
+  }
+  return '/run/endo-gateway';
+};
+
+/**
+ * Returns the path for the Endo Gateway's registrar IPC channel,
+ * the UNIX domain socket or Windows named pipe at which per-user
+ * Daemons converge to register their public keys and weblets.
+ * The channel is local-by-construction: any registration arriving
+ * here is from a process on this host.
+ *
+ * @type {typeof import('./types.js').whereEndoGatewayRegistrarSock}
+ */
+export const whereEndoGatewayRegistrarSock = (platform, env, info) => {
+  if (env.ENDO_GATEWAY_REGISTRAR_SOCK !== undefined) {
+    return env.ENDO_GATEWAY_REGISTRAR_SOCK;
+  } else if (platform === 'win32') {
+    return '\\\\.\\pipe\\endo-gateway\\registrar';
+  }
+  const ephemeralStatePath = whereEndoGatewayEphemeralState(
+    platform,
+    env,
+    info,
+  );
+  return `${ephemeralStatePath}/registrar.sock`;
+};
+
+/**
+ * Returns the path for the Endo Gateway's content-addressed store
+ * cache, where the Gateway holds weblet static assets it serves
+ * directly without round-tripping to the originating User Daemon.
+ *
+ * @type {typeof import('./types.js').whereEndoGatewayCache}
+ */
+export const whereEndoGatewayCache = (platform, env, info) => {
+  if (env.ENDO_GATEWAY_CACHE !== undefined) {
+    return env.ENDO_GATEWAY_CACHE;
+  } else if (platform === 'win32') {
+    const programData =
+      env.PROGRAMDATA !== undefined
+        ? env.PROGRAMDATA
+        : `${info.home}\\..\\..\\ProgramData`;
+    return `${programData}\\Endo Gateway\\Cache`;
+  } else if (platform === 'darwin') {
+    return '/Library/Caches/Endo Gateway';
+  }
+  return '/var/cache/endo-gateway';
+};
