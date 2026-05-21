@@ -63,15 +63,47 @@ export const makeSessionManager = ({ config, persistencePath }) => {
     return true;
   };
 
-  const persistNow = async () => {
-    if (!persistencePath) return;
-    const entries = Array.from(sessions.values()).map(r => ({
-      ...r,
+  /**
+   * Strip the API key out of `request.credentials` (and any other
+   * sub-key whose name suggests a secret). Sessions don't recreate
+   * the BootConfig on restart from disk; the credentials cap that
+   * fed the original `createSession` is gone, so persisting the key
+   * bytes here would only ever leak them. See kumavis review #2 on
+   * PR #328 — the persisted projection used to keep
+   * `request.credentials.apiKey` in a world-readable file.
+   *
+   * @param {SessionRecord} r
+   */
+  const sanitizeForPersist = r => {
+    const { request, ...rest } = r;
+    /** @type {Record<string, unknown> | undefined} */
+    let sanitizedRequest;
+    if (request !== undefined) {
+      // Drop `credentials` entirely from the persisted projection.
+      // The orchestrator only needs it during the live boot path; if
+      // a restart loses the in-memory record's credentials, the
+      // session should be torn down (its bootNonce has already been
+      // marked used by `restoreFromDisk`).
+      const { credentials: _dropCreds, ...restRequest } = request;
+      sanitizedRequest = restRequest;
+    }
+    return {
+      ...rest,
+      request: sanitizedRequest,
       // Drop runtime-only fields that don't survive restart.
       netAttachment: undefined,
-    }));
+    };
+  };
+
+  const persistNow = async () => {
+    if (!persistencePath) return;
+    const entries = Array.from(sessions.values()).map(sanitizeForPersist);
     const tmp = `${persistencePath}.tmp`;
-    await writeFile(tmp, JSON.stringify(entries, null, 2));
+    // 0600 — sessions.json carries session ids, UDS paths, and a
+    // (sanitized) request projection. Cross-UID readers don't need
+    // any of that. Set the mode at create time rather than chmod'ing
+    // after, so there's no window where the file is world-readable.
+    await writeFile(tmp, JSON.stringify(entries, null, 2), { mode: 0o600 });
     await rename(tmp, persistencePath);
   };
 
