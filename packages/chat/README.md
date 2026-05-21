@@ -93,10 +93,10 @@ Example: `Hello! Here is @my-file for you.`
 The chat bar exposes a microphone button (when the browser supports
 the Web Speech API) for voice-to-text dictation into the message
 input.
-The transcribed text is treated as plain prose; structured voice
-commands (wake words, recipient parsing, slot filling) are designed
-separately in PR
-[#102](https://github.com/endojs/endo-but-for-bots/pull/102).
+The transcribed text is treated as plain prose.
+Structured voice commands (wake words, recipient parsing, slot
+filling) are designed in `designs/chat-voice-command-parser.md` at
+the repository root.
 
 ## Dependencies
 

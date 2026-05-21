@@ -10,7 +10,7 @@
 ## What is the Problem Being Solved?
 
 The chat bar accepts speech-to-text via the Web Speech API
-(see PR #101 and the implementation at `packages/chat/voice-input.js`).
+(the implementation lives at `packages/chat/voice-input.js`).
 The transcription currently arrives as a flat string that lands in
 the contenteditable input, exactly as if the user had typed those
 characters.
