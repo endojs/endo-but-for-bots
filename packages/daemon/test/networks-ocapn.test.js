@@ -65,7 +65,8 @@ test('OCapN-Noise transport conforms to the EndoNetwork interface', async t => {
   t.timeout(60_000);
   const context = makeMockContext();
   t.teardown(() => context.cancel());
-  const { powers } = makeMockPowers('a'.repeat(64), 'A');
+  const nodeId = 'a'.repeat(64);
+  const { powers } = makeMockPowers(nodeId, 'A');
 
   const service = await makeOcapnNetwork(powers, context);
 
@@ -75,7 +76,11 @@ test('OCapN-Noise transport conforms to the EndoNetwork interface', async t => {
   t.true(address.startsWith('ocapn+noise+tcp://'));
   // The address must be a well-formed URL so the daemon's `makePeer`
   // can read its `.protocol`.
-  t.is(new URL(address).protocol, 'ocapn+noise+tcp:');
+  const url = new URL(address);
+  t.is(url.protocol, 'ocapn+noise+tcp:');
+  // The address carries the daemon node id so a dialing peer can
+  // cross-check the identity reported by the bootstrap object.
+  t.is(url.searchParams.get('node'), nodeId);
 
   t.true(await E(service).supports(address));
   t.true(await E(service).supports('ocapn+noise+tcp:'));
@@ -97,8 +102,9 @@ test('OCapN-Noise transport carries a peer connection end to end', async t => {
 
   const [addressB] = await E(serviceB).addresses();
 
-  // A dials B: this opens an OCapN-Noise session, fetches B's greeter
-  // by swissnum, and runs the `hello` handshake — the same handshake
+  // A dials B: this opens an OCapN-Noise session, fetches B's
+  // bootstrap object by swissnum, cross-checks B's reported node id,
+  // and runs the `hello` handshake — the same handshake
   // `tcp-netstring.js` ran over CapTP.
   const connectionContext = makeMockContext();
   const remoteGateway = await E(serviceA).connect(addressB, connectionContext);
@@ -110,4 +116,30 @@ test('OCapN-Noise transport carries a peer connection end to end', async t => {
   // call on it round-trips to B and back.
   const result = await E(remoteGateway).provide('formula-x');
   t.is(result, 'B:value-for:formula-x');
+});
+
+test('OCapN-Noise transport rejects a peer whose identity does not match the address', async t => {
+  t.timeout(60_000);
+  const contextA = makeMockContext();
+  const contextB = makeMockContext();
+  t.teardown(() => contextA.cancel());
+  t.teardown(() => contextB.cancel());
+
+  const a = makeMockPowers('a'.repeat(64), 'A');
+  const b = makeMockPowers('b'.repeat(64), 'B');
+
+  const serviceA = await makeOcapnNetwork(a.powers, contextA);
+  const serviceB = await makeOcapnNetwork(b.powers, contextB);
+
+  const [addressB] = await E(serviceB).addresses();
+  // Rewrite the connection hint so it names a node other than the one
+  // B's bootstrap will report.
+  const tampered = new URL(addressB);
+  tampered.searchParams.set('node', 'c'.repeat(64));
+
+  const connectionContext = makeMockContext();
+  await t.throwsAsync(
+    () => E(serviceA).connect(tampered.href, connectionContext),
+    { message: /OCapN peer identity mismatch/ },
+  );
 });

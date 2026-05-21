@@ -18,10 +18,14 @@ Built:
 - `packages/daemon/src/networks/ocapn.js` — an OCapN-Noise transport
   that conforms to the existing `EndoNetwork` interface (`addresses`,
   `supports`, `connect`). It embeds an `@endo/ocapn` client over an
-  `@endo/ocapn-noise` network with a TCP transport, publishes the
-  daemon's `EndoGreeter` through the OCapN locator, and dials peers by
-  fetching their greeter over an OCapN session and running the
-  existing `hello` handshake.
+  `@endo/ocapn-noise` network with a TCP transport and registers an
+  `EndoOcapnBootstrap` exo in the OCapN locator under a well-known
+  swissnum. The bootstrap is the peer protocol's single entry point:
+  it reports the daemon's node identity (`getNodeId`) and hands back
+  the `EndoGreeter` (`getGreeter`). `connect` fetches a dialed peer's
+  bootstrap over an OCapN session, cross-checks the reported node id
+  against the connection hint, and runs the existing `hello`
+  handshake.
 - `packages/daemon/src/networks/setup-ocapn.js` — the unconfined-caplet
   installer that registers the transport at `@nets/ocapn`, mirroring
   `setup-libp2p.js`.
@@ -31,8 +35,10 @@ Built:
 - `packages/daemon/test/networks-ocapn.test.js` — an integration test
   that stands up two transport instances and connects them over
   OCapN-Noise end to end: the `EndoNetwork` shape, the address
-  encoding, the `hello` handshake, capability passing, and a method
-  call that round-trips across the session. Passing.
+  encoding, the bootstrap object's node-identity report and its
+  cross-check (a mismatched connection hint is rejected), the `hello`
+  handshake, capability passing, and a method call that round-trips
+  across the session. Passing.
 - `packages/ocapn-noise/src/transports/tcp.js` — fixed so an abrupt
   socket teardown surfaces as a clean end-of-stream rather than
   leaking an `ERR_STREAM_PREMATURE_CLOSE` rejection. Surfaced by the
