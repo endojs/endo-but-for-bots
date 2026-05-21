@@ -493,6 +493,14 @@ All three sub-pieces shipped:
   same `env`, re-resolves the FS, and re-binds the same UDS path —
   no factory coordination needed.
 
+  The resolved FS is wrapped with `@endo/endo-fs`'s `withCachedReads`
+  by default (LRU-bounded in-memory CAS, 256 entries). The FS lives
+  on the far side of a CapTP link, so each uncached read costs one
+  round-trip; the hash-keyed cache serves repeat reads of unchanged
+  files with zero RTT. Tunable via `FS_CACHE` (`off` to bypass, e.g.
+  for backings without a cheap snapshot-hash path) and
+  `FS_CACHE_CAPACITY` (positive integer).
+
 Verified by `test/factory-live.test.js`'s
 `9P bridge reincarnates after Endo daemon restart` case: provision a
 session, stop the daemon, confirm the UDS goes cold, restart the
