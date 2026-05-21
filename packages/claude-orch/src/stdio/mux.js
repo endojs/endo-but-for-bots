@@ -161,8 +161,21 @@ export const makeStdioMux = ({
 
     // Guest side: connect to QEMU stdio chardev (server=on means QEMU is
     // listening). Retry briefly because QEMU may not have created the
-    // socket yet at the moment markReady fires.
-    stdioSocket = await connectWithRetry(stdioSocketPath, 5000);
+    // socket yet at the moment markReady fires. If we exhaust the
+    // deadline (ENOENT / EACCES / timeout), the attach server is
+    // already bound — close it and unlink the UDS so callers can retry
+    // cleanly rather than tripping over a stale socket.
+    try {
+      stdioSocket = await connectWithRetry(stdioSocketPath, 5000);
+    } catch (e) {
+      const srv = attachServer;
+      if (srv) {
+        attachServer = null;
+        await new Promise(resolve => srv.close(() => resolve(undefined)));
+      }
+      await unlink(attachSocketPath).catch(() => {});
+      throw e;
+    }
     stdioSocket.on('data', (/** @type {Buffer} */ chunk) => {
       const combined = Buffer.concat([stdioBuf, chunk]);
       try {

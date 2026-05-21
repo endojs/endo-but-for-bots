@@ -508,9 +508,14 @@ jobs:
       - name: Run smoke-boot under TCG
         env:
           SMOKE_BOOT_ACCEL: tcg
-          # Pin the Linux source tarball digest. Bump together with the
-          # LINUX_VERSION default in smoke-boot.sh after cross-checking
-          # the upstream PGP-signed linux-<v>.tar.sign on kernel.org.
+          # When non-empty, smoke-boot.sh verifies the downloaded Linux
+          # tarball against this digest and fails on mismatch; when
+          # empty it warns and proceeds (so the CI job is not blocked
+          # before a pin is established). Bump LINUX_VERSION in
+          # smoke-boot.sh and this digest together, after cross-checking
+          # the upstream PGP-signed `linux-<v>.tar.sign` on kernel.org.
+          # TODO(claude-orch): set the SHA-256 for the current
+          # LINUX_VERSION once smoke-boot lands on a green TCG run.
           LINUX_TARBALL_SHA256: ''
         run: ./packages/claude-orch/scripts/smoke-boot.sh
 

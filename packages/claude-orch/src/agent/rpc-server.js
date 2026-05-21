@@ -42,7 +42,15 @@ export const makeAgentLink = ({ agentSocketPath }) => {
   const closeHandlers = [];
   const agentReadyKit = makePromiseKit();
 
-  server.once('error', linkKit.reject);
+  // Server-level errors (bind failure, accept failure during startup, etc.)
+  // must reject *both* settlement promises and close the server. Otherwise
+  // `readyKit` stays pending and any caller awaiting `ready` deadlocks
+  // (e.g. `markReady` awaits `agentPromise.ready` after spawning QEMU).
+  server.once('error', err => {
+    readyKit.reject(err);
+    linkKit.reject(err);
+    server.close();
+  });
 
   server.once('connection', socket => {
     conn = socket;

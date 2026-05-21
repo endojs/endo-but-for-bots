@@ -46,6 +46,20 @@ export const makeSessionManager = ({ config, persistencePath }) => {
   // our sessionDir prefix.
   const sessionDirRoot = path.resolve(config.sessionDir);
 
+  // The minimal record shape downstream code touches after restore:
+  // `state` (string), `request.{network, attachMode}`, and the three
+  // UDS path strings (`ctlSocketPath`, `agentSocketPath`,
+  // `fsSocketPath`; `attachSocketPath` is optional because attachMode
+  // can be 'none'). Any record missing one of these will crash a
+  // later API read or QEMU spawn, so reject at load time.
+  const VALID_NETWORKS = new Set(['egress', 'none']);
+  const VALID_ATTACH_MODES = new Set(['stream', 'none']);
+  const SOCKET_PATH_KEYS = /** @type {const} */ ([
+    'ctlSocketPath',
+    'agentSocketPath',
+    'fsSocketPath',
+  ]);
+
   /**
    * @param {unknown} rec
    * @returns {rec is SessionRecord}
@@ -60,6 +74,25 @@ export const makeSessionManager = ({ config, persistencePath }) => {
     // and named like the session id.
     if (path.dirname(resolved) !== sessionDirRoot) return false;
     if (path.basename(resolved) !== r.id) return false;
+
+    if (typeof r.state !== 'string' || r.state.length === 0) return false;
+
+    if (r.request === null || typeof r.request !== 'object') return false;
+    const req = /** @type {Record<string, unknown>} */ (r.request);
+    if (!VALID_NETWORKS.has(/** @type {string} */ (req.network))) return false;
+    if (!VALID_ATTACH_MODES.has(/** @type {string} */ (req.attachMode))) {
+      return false;
+    }
+
+    for (const key of SOCKET_PATH_KEYS) {
+      if (typeof r[key] !== 'string' || r[key] === '') return false;
+    }
+    // attachSocketPath is only present when attachMode === 'stream'.
+    if (req.attachMode === 'stream') {
+      if (typeof r.attachSocketPath !== 'string' || r.attachSocketPath === '') {
+        return false;
+      }
+    }
     return true;
   };
 
@@ -244,6 +277,11 @@ export const makeSessionManager = ({ config, persistencePath }) => {
     if (record.bootNonce !== nonce) return false;
     record.bootNonceUsed = true;
     record.bootNonce = ''; // purge from memory
+    // Flush the consumed-nonce flag to disk now rather than waiting
+    // for the next state transition. A crash between consumption and
+    // markReady would otherwise leave a still-redeemable nonce on
+    // disk; with this flush the single-use invariant is durable.
+    schedulePersist();
     return true;
   };
 

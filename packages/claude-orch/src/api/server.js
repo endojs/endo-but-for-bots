@@ -40,10 +40,14 @@ const validateCreateSessionBody = body => {
   if (body.arch !== undefined && !ALLOWED_ARCHES.has(body.arch)) {
     return `arch must be one of ${[...ALLOWED_ARCHES].join(', ')}`;
   }
-  if (body.network !== undefined && !ALLOWED_NETWORKS.has(body.network)) {
+  // `network` and `attachMode` are required. Empty / omitted bodies
+  // used to flow through (because `readBody` returns `{}` on empty
+  // input) and then the orchestrator would proceed with `undefined`
+  // request fields. Reject at the boundary.
+  if (!ALLOWED_NETWORKS.has(body.network)) {
     return `network must be one of ${[...ALLOWED_NETWORKS].join(', ')}`;
   }
-  if (body.attachMode !== undefined && !ALLOWED_ATTACH_MODES.has(body.attachMode)) {
+  if (!ALLOWED_ATTACH_MODES.has(body.attachMode)) {
     return `attachMode must be one of ${[...ALLOWED_ATTACH_MODES].join(', ')}`;
   }
   if (body.resources !== undefined) {
@@ -111,7 +115,14 @@ export const makeApiServer = ({ socketPath, handlers }) => {
         try {
           body = await readBody(req);
         } catch (e) {
-          respondJson(res, 413, { error: /** @type {Error} */ (e).message });
+          // Size cap throws a tagged Error; JSON.parse throws SyntaxError.
+          // Map them to distinct status codes so callers can tell why the
+          // request bounced.
+          if (e instanceof SyntaxError) {
+            respondJson(res, 400, { error: `invalid JSON: ${e.message}` });
+          } else {
+            respondJson(res, 413, { error: /** @type {Error} */ (e).message });
+          }
           return;
         }
         const validationError = validateCreateSessionBody(body);
