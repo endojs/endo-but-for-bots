@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-05-06 |
-| **Updated** | 2026-05-06 |
+| **Updated** | 2026-05-21 |
 | **Author** | Kris Kowal (prompted) |
 | **Status** | Not Started |
 | **Source** | Maintainer comment on PR endojs/endo-but-for-bots#70; tracks endojs/endo issue #1845. |
@@ -208,15 +208,23 @@ fires unchanged on an entry that lands in an unnamed `package.json`.
  */
 ```
 
-This keeps a single public entry point (`mapNodeModules`) and lets
-adopters opt in by constructing and threading the cache.
-A subsequent release can construct the cache by default and remove
-the opt-in switch, at which point auxiliary handling is the only
-behavior.
+This keeps a single public entry point (`mapNodeModules`) with its
+existing contract, and lets advanced adopters thread their own cache
+when they want to share it across calls.
+Alongside `mapNodeModules`, export a new sibling function (working
+name `mapNodeModulesWithAuxiliary`) that constructs the cache from
+the same `MaybeReadFn` the caller already supplies and then delegates
+to `mapNodeModules` with the constructed cache injected.
+Per the maintainer convention for upgrading a base function whose
+contract must stay stable: the base keeps its signature, the new
+sibling layers the upgraded behavior on top by injecting the default
+cache so casual callers get auxiliary handling without threading a
+new capability.
 The maintainer's review on this design records that no downstream
 consumer can depend on the current handling of auxiliary descriptors
-(see Design Decisions §4), so the opt-in is a near-term carrying
-strategy rather than a permanent dual lane.
+(see Design Decisions §4), so a subsequent release can promote the
+sibling's wiring into `mapNodeModules` itself and retire the explicit
+opt-in.
 
 ### Resolving the entry
 
@@ -257,10 +265,8 @@ At parse time, the deepest matching prefix's map is used.
 The compartment descriptor in the resulting `CompartmentMapDescriptor`
 carries this list as a new optional field alongside its existing flat
 `parsers` field.
-The candidate field name is open (see Open Questions, "Naming the
-prefix-keyed override list").
-The working name in this design is `languageOverrides`, an ordered
-array of `{ prefix, languageForExtension }` records.
+The field is named `languageForExtensionByPrefix`: an ordered array of
+`{ prefix, languageForExtension }` records, shortest prefix first.
 When the override list is absent or empty, downstream consumers fall
 back to the flat existing field, preserving current behavior for
 compartments without auxiliary descriptors.
@@ -410,7 +416,18 @@ path handles that case at least as well as the old.
    `compartmentMapForNodeModules_`.
    When omitted, behavior is unchanged.
 
-4. **Add fixtures and tests.**
+4. **Export a sibling that injects the cache by default.**
+   Alongside `mapNodeModules`, export `mapNodeModulesWithAuxiliary`
+   (or equivalent), which constructs a `PackageDescriptorCache` from
+   the caller's `MaybeReadFn` and delegates to `mapNodeModules` with
+   the cache pre-injected.
+   Casual callers reach the auxiliary behavior without threading a
+   new capability; advanced callers retain the threaded-cache path
+   for sharing a cache across calls.
+   This follows the maintainer's convention for upgrading a base
+   function whose contract must stay stable.
+
+5. **Add fixtures and tests.**
    Add new fixtures for the nested-auxiliary and named-vs-unnamed
    cases.
    Reuse the existing `fixtures-nested-pkg` fixture and the PR 70
@@ -418,10 +435,22 @@ path handles that case at least as well as the old.
    Cover both the cache-supplied and cache-omitted code paths so
    the unchanged-default behavior is also load-bearing in tests.
 
-5. **Promote the cache to the default in a later release.**
+6. **Apply the same shape to `mapNodeModules`'s relatives.**
+   `archive`, `bundle`, and `import` funnel through the same
+   `mapNodeModules` contract; each accepts the same
+   `packageDescriptorCache` option, and each gains a sibling
+   constructor that injects a default cache.
+   Exception: `importArchive` and any relative that consumes a
+   fully described compartment map (every individual module's
+   language is noted explicitly on the descriptor) does not need
+   the cache and is unaffected; the auxiliary lookup has no work
+   to do when the language is already pinned per module.
+
+7. **Promote the cache to the default in a later release.**
    Once adopters have moved over and the auxiliary semantics are
-   confirmed in the field, construct the cache by default inside
-   `mapNodeModules` and remove the `packageDescriptorCache` option.
+   confirmed in the field, fold the sibling's default-cache wiring
+   into `mapNodeModules` and remove the `packageDescriptorCache`
+   option.
    At that point auxiliary handling is the only behavior; the
    `parsers` field on the resulting compartment descriptor falls
    back to the flat shape only when the entry has no auxiliary
@@ -479,73 +508,48 @@ path handles that case at least as well as the old.
    When there is no named ancestor at all, the entry's package is
    genuinely anonymous and PR 70 is right to fail loudly.
 
-## Open Questions
-
-### Naming the prefix-keyed override list
-
-The maintainer's review on PR 96 flagged that `parsers` (a flat map
-from extension to language) is a poor name for either the existing
-field or the new prefix-keyed structure that layers them.
-The proposal under review is "an array of tuples, from prefix to
-language for extension map" rather than a nested object.
-The working name in this design is `languageOverrides`, an array
-of `{ prefix, languageForExtension }` records.
-Candidates the maintainer asked to consider:
-
-1. **`languageOverrides`** (working choice in this design).
-   Pros: short, says what the field does (it overrides the
-   compartment-root language map for files under `prefix`).
-   Cons: leaves the flat existing field still called `parsers`,
-   so the compartment descriptor carries two differently-named
+7. **Field name: `languageForExtensionByPrefix`.**
+   Per the maintainer's review on PR 96.
+   The name literally describes the structure (an array of records,
+   each mapping a directory prefix to a language-for-extension map)
+   and mirrors the existing `parsers` semantics one-to-one.
+   Considered and rejected: the shorter `languageOverrides`.
+   Reason: it leaves the flat existing field still called `parsers`,
+   so the compartment descriptor would carry two differently-named
    shapes for the same idea.
+   Considered and deferred: a three-field split into
+   `languageForExtension`, `commonjsLanguageForExtension`, and
+   `moduleLanguageForExtension`.
+   Reason: no fixture in the current test suite would distinguish
+   them.
+   The unified shape suffices until a reproducer needs the finer
+   split.
 
-2. **`languageForExtensionByPrefix`** (or its
-   `commonjs`/`module`-split variants).
-   Pros: literally describes the structure; mirrors the existing
-   `parsers` semantics one-to-one.
-   Cons: long; redundant with the field's tuple shape.
+8. **Default-cache wrapper alongside the threaded option.**
+   Per the maintainer's review on PR 96.
+   Export a sibling function that constructs the cache by default
+   and delegates to `mapNodeModules`, so casual callers reach the
+   auxiliary behavior without threading a new capability.
+   The threaded `packageDescriptorCache` option remains for advanced
+   callers that share a cache across calls.
+   See Phased Implementation §4.
 
-3. **Split into three fields:
-   `languageForExtension`, `commonjsLanguageForExtension`,
-   `moduleLanguageForExtension`.**
-   The maintainer asked whether this finer split is worth the
-   complexity, and asked for test cases that would exercise a
-   meaningful difference between the three.
-   A meaningful difference would arise when the same extension
-   (e.g. `.js`) needs to resolve to different languages depending
-   on whether the *enclosing* descriptor declared
-   `"type": "module"` or `"type": "commonjs"`.
-   The current `parsers` field already conflates the three; if no
-   real fixture in the test suite distinguishes them, the unified
-   shape suffices and the split can wait for the first reproducer
-   that needs it.
+9. **`mapNodeModules`'s relatives accept the same option, with one
+   exception.**
+   Per the maintainer's review on PR 96.
+   `archive`, `bundle`, and `import` accept `packageDescriptorCache`
+   on the same shape.
+   Exception: `importArchive` (and relatives consuming a fully
+   described compartment map where every individual module's
+   language is noted explicitly) is unaffected; the auxiliary
+   lookup has no work to do when language is already pinned per
+   module.
 
-The working text uses `languageOverrides` so the design reads
-end-to-end; the maintainer's choice settles the field's ultimate
-name before the builder lands the implementation.
-
-### Other open items
-
-- [ ] Whether the cache should be constructed by default in a
-  later release, removing the `packageDescriptorCache` opt-in
-  entirely.
-  The Phased Implementation §5 anticipates this but does not
-  schedule it.
-- [ ] Whether composition with `policy` JSON is in scope.
-  Today policy is keyed by canonical name and an auxiliary
-  descriptor produces no canonical name.
-  Plausibly there is no interaction; confirm with a fixture and
-  document.
-- [ ] Whether the same model applies to `archive`, `bundle`, and
-  `import` (which today funnel through `mapNodeModules`'s
-  contract).
-  Each should accept the same `packageDescriptorCache` option,
-  or share a constructor that builds the cache once per call.
-- [ ] Performance: the cache adds one descriptor read per ancestor
-  directory along each entry's path.
-  This is bounded by directory depth (typically less than ten) and
-  amortized by memoization, but worth confirming on a large
-  monorepo before promoting to default.
+10. **Policy JSON composition is out of scope (and likely a no-op).**
+    Policy is keyed by canonical name and an auxiliary descriptor
+    produces no canonical name, so the two structures do not meet.
+    Confirmed by the maintainer's review; no fixture or
+    documentation work is required for this release.
 
 ## Dependencies
 
