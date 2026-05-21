@@ -467,6 +467,10 @@ web-gateway edges are demonstrably unaffected.
   transports rather than `EndoNetwork` caplets.
 - [ ] Coordinate the user-facing locator string format with
   `daemon-locator-terminology`.
+- [ ] A wildcard listen bind (`0.0.0.0` / `::`) advertises a
+  connection hint that is not dialable from a remote daemon; the
+  transport needs an operator-supplied or discovered external
+  address. This limitation is shared with `tcp-netstring.js`.
 
 ## Prompt
 

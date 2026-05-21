@@ -63,11 +63,13 @@ export const make = async (powers, context) => {
   // ephemeral port.
   let host = '127.0.0.1';
   let port = 0;
+  /** @type {string | undefined} */
+  let configuredHostPort;
   try {
-    const hostPort = /** @type {string} */ (
+    configuredHostPort = /** @type {string} */ (
       await E(powers).lookup(LISTEN_ADDR_NAME)
     );
-    const listenUrl = new URL(`tcp://${hostPort}`);
+    const listenUrl = new URL(`tcp://${configuredHostPort}`);
     host = listenUrl.hostname;
     port = listenUrl.port !== '' ? Number(listenUrl.port) : 0;
   } catch {
@@ -127,24 +129,29 @@ export const make = async (powers, context) => {
   // (bound host and port) a peer needs in order to dial us.
   const localLocation = network.locationFor(keyId);
   const localHints = localLocation.hints || {};
+  const boundPort = String(localHints['tcp:port'] || port);
+
+  // Persist the resolved listen address so an OS-assigned ephemeral
+  // port stays stable across daemon restarts; otherwise every restart
+  // would advertise a different port and invalidate stored locators.
+  // Mirrors `tcp-netstring.js`.
+  const resolvedHostPort = `${host}:${boundPort}`;
+  if (resolvedHostPort !== configuredHostPort) {
+    await E(powers).storeValue(resolvedHostPort, LISTEN_ADDR_NAME);
+  }
 
   // The connection-hint address embeds both the daemon node id and
   // the full OCapN location, so a dialing peer can reconstruct the
   // location without guessing transport hint keys and can check that
-  // it reached the daemon the address names. The `host:port`
-  // authority is informational — it keeps the address a well-formed
-  // URL so the daemon's `new URL(address)` and `.protocol` checks in
-  // `makePeer` continue to work.
+  // it reached the daemon the address names. The dialable transport
+  // hints live inside the OCapN location; the `host:port` authority is
+  // informational — it keeps the address a well-formed URL so the
+  // daemon's `new URL(address)` and `.protocol` checks in `makePeer`
+  // continue to work.
   const hintHost = localHints['tcp:host'] || host;
-  const hintPort = localHints['tcp:port'] || String(port);
   const encodedNode = encodeURIComponent(String(localNodeId));
   const encodedLocation = encodeURIComponent(JSON.stringify(localLocation));
-  const address = `${protocol}://${hintHost}:${hintPort}/?node=${encodedNode}&loc=${encodedLocation}`;
-
-  const shortKeyId = keyId.slice(0, 8);
-  console.error(
-    `Endo daemon OCapN-Noise peer transport ready (designator ${shortKeyId} at ${hintHost}:${hintPort})`,
-  );
+  const address = `${protocol}://${hintHost}:${boundPort}/?node=${encodedNode}&loc=${encodedLocation}`;
 
   // `client.shutdown()` tears down the OCapN sessions and the
   // network's transports (closing the TCP listener); shutting the

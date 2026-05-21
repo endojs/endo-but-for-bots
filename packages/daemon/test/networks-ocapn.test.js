@@ -38,6 +38,7 @@ const makeMockContext = () => {
  */
 const makeMockPowers = (nodeId, label) => {
   const helloCalls = [];
+  const storedValues = [];
   const gateway = Far('Gateway', {
     /** @param {string} id */
     provide: id => `${label}:value-for:${id}`,
@@ -57,8 +58,11 @@ const makeMockPowers = (nodeId, label) => {
     lookup: name => {
       throw Error(`no such name ${name}`);
     },
+    storeValue: (value, name) => {
+      storedValues.push({ value, name });
+    },
   });
-  return { powers, gateway, greeter, helloCalls };
+  return { powers, gateway, greeter, helloCalls, storedValues };
 };
 
 test('OCapN-Noise transport conforms to the EndoNetwork interface', async t => {
@@ -66,7 +70,7 @@ test('OCapN-Noise transport conforms to the EndoNetwork interface', async t => {
   const context = makeMockContext();
   t.teardown(() => context.cancel());
   const nodeId = 'a'.repeat(64);
-  const { powers } = makeMockPowers(nodeId, 'A');
+  const { powers, storedValues } = makeMockPowers(nodeId, 'A');
 
   const service = await makeOcapnNetwork(powers, context);
 
@@ -81,6 +85,14 @@ test('OCapN-Noise transport conforms to the EndoNetwork interface', async t => {
   // The address carries the daemon node id so a dialing peer can
   // cross-check the identity reported by the bootstrap object.
   t.is(url.searchParams.get('node'), nodeId);
+
+  // The resolved OS-assigned listen address is persisted so the port
+  // stays stable across restarts.
+  t.deepEqual(
+    storedValues.map(entry => entry.name),
+    ['ocapn-listen-addr'],
+  );
+  t.regex(storedValues[0].value, /^127\.0\.0\.1:\d+$/);
 
   t.true(await E(service).supports(address));
   t.true(await E(service).supports('ocapn+noise+tcp:'));
