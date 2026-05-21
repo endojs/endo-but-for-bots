@@ -1916,6 +1916,8 @@ __metadata:
     "@endo/init": "workspace:^"
     "@endo/marshal": "workspace:^"
     "@endo/netstring": "workspace:^"
+    "@endo/ocapn": "workspace:^"
+    "@endo/ocapn-noise": "workspace:^"
     "@endo/pass-style": "workspace:^"
     "@endo/patterns": "workspace:^"
     "@endo/platform": "workspace:^"
@@ -2903,7 +2905,7 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@endo/ocapn-noise@workspace:packages/ocapn-noise":
+"@endo/ocapn-noise@workspace:^, @endo/ocapn-noise@workspace:packages/ocapn-noise":
   version: 0.0.0-use.local
   resolution: "@endo/ocapn-noise@workspace:packages/ocapn-noise"
   dependencies:
