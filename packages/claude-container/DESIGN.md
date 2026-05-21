@@ -140,7 +140,7 @@ The orchestrator runs as a trusted process on the host. Inside the sandbox, all 
 | Client | Node.js (host, separate process) | Calls the orchestrator's API; serves the workspace FS over 9P. |
 | QEMU | C binary (host, one per session) | Provides the VM. |
 | Bootstrap Init | Static binary (guest, PID 1) | One-shot: Hello to orchestrator, mount 9P workspace, write creds, exec runtime agent. |
-| Runtime Agent | Static binary (guest, unprivileged) | Spawns Claude Code in tmux; streams stdio; heartbeats; receives credential rotations. |
+| Runtime Agent | Static binary (guest, unprivileged) | Execs Claude Code directly; muxes its stdio onto the orchestrator's attach socket; heartbeats; receives credential rotations. (v1 reports `capabilities: ["stdio-mux"]`; the `tmux` / `exec` capabilities listed elsewhere in this document are roadmap.) |
 
 ---
 
@@ -247,7 +247,7 @@ The runtime agent is the only long-lived guest-side component. It runs as the un
 | `Heartbeat` | A→O | Periodic; carries `{last_input_at, cpu_pct, mem_rss, idle_seconds}`. |
 | `Log` | A→O | Structured log line for orchestrator's logging. |
 | `Exited` | A→O | Sent immediately before agent voluntarily exits. |
-| `Attach` | O→A | Start streaming stdin/stdout of the claude-code tmux session over a new stream-id. |
+| `Attach` | O→A | Start streaming stdin/stdout of the claude-code child over a new stream-id. (v1 uses a single `default0` stream framed in the stdio mux; tmux-session multiplexing is roadmap.) |
 | `Detach` | O→A | Stop streaming. |
 | `RotateCreds` | O→A | Push: new credentials payload. Agent atomically replaces the creds file and SIGHUPs Claude Code if needed. |
 | `Exec` | O→A | Run a one-shot command, return exit code + output. Optional; restrict to operator use, gate behind a per-session capability. |
@@ -536,7 +536,8 @@ After BootConfig is sent, the orchestrator closes the bootstrap port. The bootst
 
 ```js
 // Agent -> Orchestrator
-{ type: "ready", capabilities: ["tmux", "exec"] }
+// v1 ships `capabilities: ["stdio-mux"]`. `tmux` and `exec` are roadmap.
+{ type: "ready", capabilities: ["stdio-mux"] }
 { type: "heartbeat", lastInputAt: string, cpuPct: number, memRss: number, idleSeconds: number }
 { type: "log", level: "info"|"warn"|"error", msg: string, fields?: object }
 { type: "exited", reason: string, exitCode: number }
@@ -1065,7 +1066,7 @@ Six milestones, each independently demoable.
 
 **Tasks**:
 
-1. Pin a Claude Code version in the rootfs. Verify it runs under tmux from the agent.
+1. Pin a Claude Code version in the rootfs. Verify it runs under the agent (v1 execs directly; tmux session multiplexing is roadmap).
 2. Build the credential broker. v1 supports API-key mode only.
 3. Wire `IssueCreds` into the bootstrap path. Write `~/.claude/.credentials.json` from BootConfig.
 4. Implement `RotateCreds` push from orchestrator → agent. Agent atomically replaces creds file.
@@ -1308,7 +1309,7 @@ T+830ms agent           opens /dev/virtio-ports/agent
                         sends Ready
 T+832ms orchestrator    marks state=ready
                         forwards initial prompt via attach stream
-T+835ms agent           spawns tmux + claude-code
+T+835ms agent           execs claude-code directly
                         wires stdio to stream multiplexer
 ... session runs ...
 T+5min  client          DELETE /v1/sessions/abc12345

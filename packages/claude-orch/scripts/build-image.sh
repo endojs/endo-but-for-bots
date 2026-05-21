@@ -27,7 +27,9 @@ REPO_ROOT="$(cd "$PACKAGE_DIR/../.." && pwd)"
 IMAGE_DIR="$PACKAGE_DIR/images"
 BUILD_DIR="$IMAGE_DIR/build/$ARCH"
 LINUX_SRC="${LINUX_SRC:-/usr/src/linux}"
-CLAUDE_CODE_VERSION="${CLAUDE_CODE_VERSION:-latest}"
+# Pin to an exact version by default; floating tags are a supply-chain
+# surface. Bump after testing the CLI shape end-to-end with smoke-boot.
+CLAUDE_CODE_VERSION="${CLAUDE_CODE_VERSION:-2.0.0}"
 
 require_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then

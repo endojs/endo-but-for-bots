@@ -156,7 +156,7 @@ export const makeClaudeClient = ({
         return [
           'ClaudeClient: a single Claude Code microVM session.',
           '  send(prompt, opts?) → reader of stream-json events',
-          '  interrupt()         → cancel the in-flight prompt',
+          '  interrupt()         → not implemented in v1 (throws)',
           '  terminate()         → tear down the microVM',
           '  status()            → { sessionId, createdAt, terminated }',
         ].join('\n');

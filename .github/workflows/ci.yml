@@ -449,7 +449,7 @@ jobs:
     # binaries, then runs the smoke-boot.sh script with
     # SMOKE_BOOT_ACCEL=tcg. Exercises the real
     # @endo/claude-container 9P bridge backed by an
-    # @endo/remote-fs in-memory Filesystem (closing R1 with
+    # @endo/endo-fs in-memory Filesystem (closing R1 with
     # kernel-mount confidence).
     #
     # Kernel build is the dominant cost; the build dir is cached
@@ -503,11 +503,15 @@ jobs:
       - name: Run smoke-boot under TCG
         env:
           SMOKE_BOOT_ACCEL: tcg
+          # Pin the Linux source tarball digest. Bump together with the
+          # LINUX_VERSION default in smoke-boot.sh after cross-checking
+          # the upstream PGP-signed linux-<v>.tar.sign on kernel.org.
+          LINUX_TARBALL_SHA256: ''
         run: ./packages/claude-orch/scripts/smoke-boot.sh
 
       - name: Upload smoke-boot logs on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: smoke-boot-logs
           path: |

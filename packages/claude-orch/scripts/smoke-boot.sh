@@ -55,11 +55,23 @@ if [ ! -f "$BUILD_DIR/vmlinux-x86_64" ]; then
   if [ ! -d "$KSRC" ]; then
     step "Fetching linux-$LINUX_VERSION source"
     TARBALL="${LINUX_TARBALL:-https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-$LINUX_VERSION.tar.xz}"
+    # Maintainer-supplied digest. Cross-check against the upstream PGP-signed
+    # `linux-<v>.tar.sign` from kernel.org before bumping LINUX_VERSION here.
+    # Leave empty only for local one-shot experiments — CI sets it.
+    LINUX_TARBALL_SHA256="${LINUX_TARBALL_SHA256:-}"
+    DL="$BUILD_DIR/linux-$LINUX_VERSION.tar.xz"
     if [[ "$TARBALL" == http* ]]; then
-      curl -sL "$TARBALL" | tar -xJ -C "$BUILD_DIR"
+      curl -sLo "$DL" "$TARBALL"
     else
-      tar -xJf "$TARBALL" -C "$BUILD_DIR"
+      cp -f "$TARBALL" "$DL"
     fi
+    if [ -n "$LINUX_TARBALL_SHA256" ]; then
+      echo "${LINUX_TARBALL_SHA256}  ${DL}" | sha256sum -c -
+    else
+      echo "WARN: LINUX_TARBALL_SHA256 not set; skipping checksum verification" >&2
+    fi
+    tar -xJf "$DL" -C "$BUILD_DIR"
+    rm -f "$DL"
   fi
   step "Configuring + building kernel ($LINUX_VERSION)"
   ( cd "$KSRC" && \

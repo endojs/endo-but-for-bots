@@ -10,10 +10,11 @@ adduser -D -u 1000 -G claude -h /home/claude -s /bin/bash claude || true
 #
 # The runtime-agent invokes `claude --print --input-format stream-json
 # --output-format stream-json`, so pin to a version whose CLI surface
-# matches that contract. Default is the latest in the major series we
-# track; build-image.sh's $CLAUDE_CODE_VERSION env overrides without
-# editing this file.
-: "${CLAUDE_CODE_VERSION:=^2}"
+# matches that contract. Default is an exact version; bump together
+# after testing the CLI shape end-to-end with smoke-boot. The
+# build-image.sh `$CLAUDE_CODE_VERSION` env overrides without
+# editing this file (caller is then responsible for the pin).
+: "${CLAUDE_CODE_VERSION:=2.0.0}"
 npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
 # Verify the CLI is on PATH and answers --version (smoke check inside
 # the rootfs build). If this fails the image is unusable; fail the

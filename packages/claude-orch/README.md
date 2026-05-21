@@ -77,8 +77,12 @@ shipped through R3:
   `PreemptiveRotate`.
 - [x] `BootConfig.credentials` plumbed from broker through bootstrap
   to `~/.claude/.credentials.json` in guest.
-- [x] `RotateCreds` push from orchestrator → runtime-agent
-  (`rust/claude-orch/runtime-agent/src/main.rs`).
+- [~] `RotateCreds` push from orchestrator → runtime-agent. The
+  runtime-agent handler is wired
+  (`rust/claude-orch/runtime-agent/src/main.rs`) but the
+  orchestrator never invokes it: broker `rotate_if_needed` is a
+  hardcoded noop (`src/broker/main.js:48-49`), so no rotations
+  reach the guest in v1.
 - [x] `initialPrompt` plumbing (`src/main.js`).
 - [ ] Live Anthropic API end-to-end (today's smoke-boot uses a stub
   prompt).
@@ -87,8 +91,9 @@ shipped through R3:
 deferred:
 - [x] Runtime agent drops privileges and runs as `claude` user
   (`rust/claude-orch/bootstrap-init/src/main.rs`).
-- [x] Optional seccomp-bpf filter
-  (`rust/claude-orch/runtime-agent/src/seccomp.rs`).
+- [x] seccomp-bpf filter wired into the default build
+  (`rust/claude-orch/runtime-agent/src/seccomp.rs`;
+  `Cargo.toml`'s default features include `seccomp`).
 - [x] Agent RPC vocabulary contains no `GetCreds` or file-proxy verb
   (`protocol.types.d.ts`).
 - [x] Boot nonce single-use enforcement + replay regression
