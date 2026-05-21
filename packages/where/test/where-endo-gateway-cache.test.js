@@ -21,6 +21,17 @@ test('windows', t => {
     'C:\\ProgramData\\Endo Gateway\\Cache',
     'Use PROGRAMDATA\\Endo Gateway\\Cache on Windows',
   );
+  t.is(
+    whereEndoGatewayCache(
+      'win32',
+      {},
+      {
+        home: 'C:\\Users\\Bill',
+      },
+    ),
+    'C:\\Users\\Bill\\..\\..\\ProgramData\\Endo Gateway\\Cache',
+    'Fall back to a path relative to home when PROGRAMDATA is unset',
+  );
 });
 
 test('darwin', t => {

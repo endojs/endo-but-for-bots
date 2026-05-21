@@ -21,6 +21,17 @@ test('windows', t => {
     'C:\\ProgramData\\Endo Gateway\\Run',
     'Use PROGRAMDATA\\Endo Gateway\\Run for ephemeral state on Windows',
   );
+  t.is(
+    whereEndoGatewayEphemeralState(
+      'win32',
+      {},
+      {
+        home: 'C:\\Users\\Bill',
+      },
+    ),
+    'C:\\Users\\Bill\\..\\..\\ProgramData\\Endo Gateway\\Run',
+    'Fall back to a path relative to home when PROGRAMDATA is unset',
+  );
 });
 
 test('darwin', t => {
