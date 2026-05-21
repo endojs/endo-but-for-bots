@@ -288,7 +288,14 @@ export const makeSessionManager = ({ config, persistencePath }) => {
     /** @type {SessionRecord[]} */
     const validated = [];
     for (const rec of parsed) {
-      if (!isPlausibleRecord(rec)) {
+      if (isPlausibleRecord(rec)) {
+        // The bootNonce can't be reused; if a session somehow re-enters
+        // the bootstrap path after restart, it must be torn down.
+        rec.bootNonceUsed = true;
+        rec.bootNonce = '';
+        sessions.set(rec.id, rec);
+        validated.push(rec);
+      } else {
         // Don't sessions.set() this record — its sessionDir might point
         // anywhere, and forget() would then `rm -rf` it.
         // eslint-disable-next-line no-console
@@ -296,14 +303,7 @@ export const makeSessionManager = ({ config, persistencePath }) => {
           '[session-manager] refusing to restore implausible record:',
           rec,
         );
-        continue;
       }
-      // The bootNonce can't be reused; if a session somehow re-enters the
-      // bootstrap path after restart, it must be torn down.
-      rec.bootNonceUsed = true;
-      rec.bootNonce = '';
-      sessions.set(rec.id, rec);
-      validated.push(rec);
     }
     return validated;
   };

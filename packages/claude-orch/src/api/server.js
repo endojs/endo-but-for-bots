@@ -51,11 +51,25 @@ const validateCreateSessionBody = body => {
       return 'resources must be an object';
     }
     const { vcpus, memMB } = body.resources;
-    if (vcpus !== undefined && (!Number.isInteger(vcpus) || vcpus < 1 || vcpus > 32)) {
-      return 'resources.vcpus must be an integer in [1, 32]';
+    if (vcpus !== undefined) {
+      if (
+        typeof vcpus !== 'number' ||
+        !Number.isInteger(vcpus) ||
+        vcpus < 1 ||
+        vcpus > 32
+      ) {
+        return 'resources.vcpus must be an integer in [1, 32]';
+      }
     }
-    if (memMB !== undefined && (!Number.isInteger(memMB) || memMB < 64 || memMB > 65536)) {
-      return 'resources.memMB must be an integer in [64, 65536]';
+    if (memMB !== undefined) {
+      if (
+        typeof memMB !== 'number' ||
+        !Number.isInteger(memMB) ||
+        memMB < 64 ||
+        memMB > 65536
+      ) {
+        return 'resources.memMB must be an integer in [64, 65536]';
+      }
     }
   }
   return undefined;
