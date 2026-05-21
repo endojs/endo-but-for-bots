@@ -50,6 +50,10 @@ export const createDOM = () => {
     globalThis.HTMLElement = /** @type {typeof HTMLElement} */ (w.HTMLElement);
   if (w.CustomEvent)
     globalThis.CustomEvent = /** @type {typeof CustomEvent} */ (w.CustomEvent);
+  if (w.MutationObserver)
+    globalThis.MutationObserver = /** @type {typeof MutationObserver} */ (
+      w.MutationObserver
+    );
 
   // Fallback Node constants if not provided by happy-dom
   if (!globalThis.Node) {
@@ -93,6 +97,8 @@ export const createDOM = () => {
       delete globalThis.HTMLElement;
       // @ts-expect-error - cleanup
       delete globalThis.CustomEvent;
+      // @ts-expect-error - cleanup
+      delete globalThis.MutationObserver;
     },
   };
 };
