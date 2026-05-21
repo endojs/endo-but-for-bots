@@ -133,10 +133,15 @@ test('form submission stores a ClaudeCredentials under the chosen name', async t
 
   const cred = hostAgent.storedValues.get('my-creds');
   const issued = await cred.issue('session-1');
-  t.is(issued.apiKey, 'sk-ant-xyz');
+  // `issue` now returns an IssuedCredential cap, not a `{apiKey}` bag.
+  // The key bytes only flow at `materialise` time, single-shot.
+  t.is(await issued.materialise(), 'sk-ant-xyz');
+  await t.throwsAsync(() => issued.materialise(), {
+    message: /single-shot/,
+  });
 });
 
-test('rotate replaces the stored key', async t => {
+test('rotate replaces the stored key and invalidates outstanding grants', async t => {
   const hostAgent = makeMockHostAgent();
   const mock = makeMockPowers({ hostAgent });
   make(mock.powers, undefined, { inProcessFactory: true });
@@ -144,9 +149,15 @@ test('rotate replaces the stored key', async t => {
   mock.simulateSubmission({ name: 'c', apiKey: 'sk-old' });
   await waitFor(() => hostAgent.storedValues.size > 0);
   const cred = hostAgent.storedValues.get('c');
+  // Issue a grant *before* rotating; the rotation must invalidate it.
+  const stale = await cred.issue('session-1');
   await cred.rotate('sk-new');
-  const issued = await cred.issue('session-1');
-  t.is(issued.apiKey, 'sk-new');
+  await t.throwsAsync(() => stale.materialise(), {
+    message: /revoked or rotated/,
+  });
+  // Fresh grants after rotation see the new key.
+  const fresh = await cred.issue('session-2');
+  t.is(await fresh.materialise(), 'sk-new');
 });
 
 test('rotate rejects empty string', async t => {

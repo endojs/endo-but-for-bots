@@ -1,5 +1,6 @@
 // @ts-nocheck — E() generics don't compose well with JSDoc for remote objects.
 /* eslint-disable no-await-in-loop */
+/* global process */
 
 /**
  * ClaudeCredentials factory caplet (R3, ENDO-INTEGRATION.md §9).
@@ -7,29 +8,53 @@
  * Replaces the out-of-band broker config file (the v1 approach
  * documented in DESIGN.md §5.5) with a form-mintable Endo
  * capability. A user submits the form on @host with an Anthropic
- * API key; the factory stores the key inside a `ClaudeCredentials`
- * exo that lives in @host's petstore and gates access via:
+ * API key; the factory:
  *
- *   ClaudeCredentials.issue(sessionId)       → { apiKey }
- *     — opens a session-scoped grant. Currently returns the raw
- *       key bundled in a fresh record; a future v2 could mint a
- *       short-lived scoped token via Anthropic's API.
+ *  1. Writes the key bytes to a sidecar file at
+ *     `${CLAUDE_CREDENTIALS_DIR}/${name}.key` with mode 0600. The
+ *     directory is created 0700 on first use.
+ *  2. Mints a `ClaudeCredentials` exo under the chosen pet name via
+ *     `makeUnconfined` on `claude-credentials-module.js`. The
+ *     formula's `env` carries the *path* (`CREDENTIALS_FILE`), not
+ *     the key bytes. This keeps the key out of the formula JSON
+ *     store and avoids reincarnating the secret through the Endo
+ *     daemon's persisted state (kumavis review #4 on PR #328).
  *
- *   ClaudeCredentials.revoke(sessionId)      → void
- *     — closes a session's grant. v1 is a no-op (no per-session
- *       state tracked); future v2 would invalidate the issued
- *       record.
+ * The minted cap's surface:
  *
- *   ClaudeCredentials.rotate(newApiKey)      → void
- *     — replace the stored key.
+ *   ClaudeCredentials.issue(sessionTag)   → IssuedCredential cap
+ *     — opens a session-scoped grant. Returns a *capability*, not a
+ *       plain `{apiKey}` bag, so the key bytes only flow over CapTP
+ *       at the moment a consumer calls `.materialise()` rather than
+ *       at issue time (kumavis review #3 on PR #328).
  *
- *   ClaudeCredentials.help()                 → string
+ *   ClaudeCredentials.revoke(sessionTag)  → void
+ *     — invalidates every IssuedCredential previously minted for
+ *       that sessionTag (future `materialise()` calls throw).
  *
- * The factory itself is unconfined and trusted with the
- * submitted API key — the caplet's source is part of the
- * trusted compute base, same as the existing ClaudeContainer
- * factory.
+ *   ClaudeCredentials.rotate(newApiKey)   → void
+ *     — replace the stored key and invalidate every outstanding
+ *       IssuedCredential, regardless of sessionTag.
+ *
+ *   ClaudeCredentials.help()              → string
+ *
+ * IssuedCredential surface:
+ *
+ *   IssuedCredential.materialise()        → string
+ *     — return the current key bytes. Throws after `revoke` of the
+ *       same sessionTag, after `rotate`, or after a second
+ *       `materialise` (single-shot).
+ *
+ *   IssuedCredential.sessionTag()         → string
+ *     — diagnostic accessor for the tag this cap was issued under.
+ *
+ * The factory is unconfined and trusted with the submitted key
+ * bytes — the caplet's source is part of the trusted compute base.
  */
+
+import { mkdir, writeFile } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 
 import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
@@ -43,6 +68,12 @@ const CREDENTIALS_MODULE_SPECIFIER = new URL(
 ).href;
 
 const FactoryInterface = M.interface('ClaudeCredentialsFactory', {
+  help: M.call().optional(M.string()).returns(M.string()),
+});
+
+const IssuedCredentialInterface = M.interface('IssuedCredential', {
+  materialise: M.call().returns(M.promise()),
+  sessionTag: M.call().returns(M.string()),
   help: M.call().optional(M.string()).returns(M.string()),
 });
 
@@ -70,40 +101,138 @@ const FORM_FIELDS = harden([
 ]);
 
 /**
- * Build a `ClaudeCredentials` exo holding `apiKey`.
+ * Validate a credential pet name before letting it land in a file
+ * path. Restrict to the same shape Endo's pet-name validator uses
+ * (lowercase + digits + hyphens) so this can't escape the directory.
+ *
+ * @param {string} name
+ */
+const assertSafeCredentialName = name => {
+  if (typeof name !== 'string' || !/^[a-z0-9][a-z0-9-]{0,127}$/.test(name)) {
+    throw new Error(`Invalid credential name: ${JSON.stringify(name)}`);
+  }
+};
+
+/**
+ * Resolve the directory we keep credential files in. Configurable
+ * via env so the daemon owner can keep keys under a state directory
+ * rather than `$HOME`.
+ */
+const credentialsDir = () =>
+  process.env.CLAUDE_CREDENTIALS_DIR ||
+  path.join(os.homedir(), '.endo-claude-credentials');
+
+/**
+ * Write `apiKey` to `<credentialsDir>/<name>.key` with 0600 perms,
+ * creating the parent dir 0700 if it doesn't exist. Returns the
+ * absolute file path.
+ *
+ * @param {string} name
+ * @param {string} apiKey
+ * @returns {Promise<string>}
+ */
+const persistKeyToSidecar = async (name, apiKey) => {
+  assertSafeCredentialName(name);
+  const dir = credentialsDir();
+  await mkdir(dir, { mode: 0o700, recursive: true });
+  const file = path.join(dir, `${name}.key`);
+  // 0600 at create time — no chmod-after window. Trailing newline so
+  // the file is amenable to `cat`/`shred` on the operator side.
+  await writeFile(file, `${apiKey}\n`, { mode: 0o600 });
+  return file;
+};
+
+/**
+ * Build a `ClaudeCredentials` exo holding `apiKey` in memory.
+ * Used by the test path (`inProcessFactory: true`); the production
+ * path goes through `makeUnconfined` of `claude-credentials-module.js`,
+ * which reads the key from a sidecar file rather than the formula env.
  *
  * @param {string} initialKey
  */
-const makeCredentialsExo = initialKey => {
+export const makeCredentialsExo = initialKey => {
   let apiKey = initialKey;
+  /** @type {Set<{ invalidate: () => void, tag: string }>} */
+  const outstanding = new Set();
+
+  /**
+   * @param {string} sessionTag
+   */
+  const issueCap = sessionTag => {
+    let valid = true;
+    let materialised = false;
+    const handle = { tag: sessionTag, invalidate: () => { valid = false; } };
+    outstanding.add(handle);
+    const ic = makeExo('IssuedCredential', IssuedCredentialInterface, {
+      async materialise() {
+        if (!valid) {
+          throw makeError(
+            X`IssuedCredential for ${q(sessionTag)} has been revoked or rotated`,
+          );
+        }
+        if (materialised) {
+          throw makeError(
+            X`IssuedCredential for ${q(sessionTag)} is single-shot; already materialised`,
+          );
+        }
+        materialised = true;
+        return apiKey;
+      },
+      sessionTag() {
+        return sessionTag;
+      },
+      help(method) {
+        if (method === undefined) {
+          return [
+            'IssuedCredential.',
+            '',
+            '  materialise() → apiKey   (single-shot; throws after revoke/rotate)',
+            '  sessionTag()  → string   (diagnostic)',
+          ].join('\n');
+        }
+        return `No documentation for method "${q(method)}".`;
+      },
+    });
+    return ic;
+  };
+
   return makeExo('ClaudeCredentials', CredentialsInterface, {
-    async issue(_sessionId) {
-      return harden({ apiKey });
+    async issue(sessionTag) {
+      return issueCap(sessionTag);
     },
-    async revoke(_sessionId) {
-      // v1: no per-session state to invalidate. v2 may track
-      // issued tokens for revocation.
+    async revoke(sessionTag) {
+      for (const handle of outstanding) {
+        if (handle.tag === sessionTag) {
+          handle.invalidate();
+          outstanding.delete(handle);
+        }
+      }
     },
     async rotate(newApiKey) {
       if (typeof newApiKey !== 'string' || newApiKey.length === 0) {
         throw makeError(X`EINVAL: rotate requires a non-empty string`);
       }
       apiKey = newApiKey;
+      // Outstanding grants reference the *old* key bytes; invalidate
+      // them so subsequent `materialise()` calls see the rotation.
+      for (const handle of outstanding) handle.invalidate();
+      outstanding.clear();
     },
     help(method) {
       if (method === undefined) {
         return [
           'ClaudeCredentials.',
           '',
-          '  issue(sessionId) → { apiKey }   open a session-scoped grant',
-          "  revoke(sessionId) → ()          close a session's grant",
-          '  rotate(newApiKey) → ()          replace the stored key',
+          '  issue(sessionTag) → IssuedCredential   (call .materialise() to get the key)',
+          "  revoke(sessionTag) → ()                close a session's grants",
+          '  rotate(newApiKey) → ()                 replace the stored key',
         ].join('\n');
       }
-      return `No documentation for method "${method}".`;
+      return `No documentation for method "${q(method)}".`;
     },
   });
 };
+harden(makeCredentialsExo);
 
 /**
  * Factory caplet for `ClaudeCredentials`. Same form-loop shape as
@@ -164,21 +293,25 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
           if (!apiKey || typeof apiKey !== 'string') {
             throw new Error('Missing "apiKey".');
           }
-          // Mint via makeUnconfined so the resulting cap is a
-          // formulated caplet that survives daemon restarts. The
-          // module reads its API key from env.
+          assertSafeCredentialName(name);
           if (deps.inProcessFactory) {
-            // Test path: bypass daemon-formulated minting.
+            // Test path: bypass daemon-formulated minting and the
+            // sidecar file. The exo holds the bytes in memory only.
             const credentials = makeCredentialsExo(apiKey);
             await E(hostAgent).storeValue(credentials, name);
           } else {
+            // Production path: write key bytes to a 0600 sidecar
+            // file and reference *the path* (not the bytes) from
+            // the formula env. The module re-reads the file on
+            // reincarnation.
+            const credentialsFile = await persistKeyToSidecar(name, apiKey);
             await E(hostAgent).makeUnconfined(
               '@main',
               CREDENTIALS_MODULE_SPECIFIER,
               {
                 powersName: '@none',
                 resultName: name,
-                env: harden({ API_KEY: apiKey }),
+                env: harden({ CREDENTIALS_FILE: credentialsFile }),
               },
             );
           }
@@ -222,6 +355,10 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
           'Submit the "Create Claude Credentials" form on @host with:',
           '  name   — pet name for the resulting ClaudeCredentials',
           '  apiKey — Anthropic API key',
+          '',
+          'The key is persisted to a 0600 sidecar file under',
+          '`$CLAUDE_CREDENTIALS_DIR` (default `~/.endo-claude-credentials`).',
+          'The Endo formula store sees only the file path, not the key.',
         ].join('\n');
       }
       return `No documentation for method "${q(method)}".`;

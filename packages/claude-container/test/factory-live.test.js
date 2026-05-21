@@ -751,16 +751,26 @@ test.serial(
     });
 
     // Mint a ClaudeCredentials cap under 'my-creds' via
-    // claude-credentials-module.js. The factory will resolve it
-    // and pass `issue(name)` through to the orchestrator.
+    // claude-credentials-module.js. The module now reads its key
+    // bytes from a 0600 sidecar file referenced by env, rather
+    // than from the env directly — so write a temp file first.
     const credsModuleUrl = new URL(
       '../src/claude-credentials-module.js',
       import.meta.url,
     ).href;
+    const { writeFile, chmod } = await import('node:fs/promises');
+    const credsDir = await mkdtemp(
+      path.join(os.tmpdir(), 'live-creds-sidecar-'),
+    );
+    const credsFile = path.join(credsDir, 'my-creds.key');
+    await writeFile(credsFile, 'sk-ant-from-form\n');
+    await chmod(credsFile, 0o600);
+    t.teardown(() => rm(credsDir, { recursive: true, force: true }));
+
     await E(host).makeUnconfined('@main', credsModuleUrl, {
       powersName: '@none',
       resultName: 'my-creds',
-      env: harden({ API_KEY: 'sk-ant-from-form' }),
+      env: harden({ CREDENTIALS_FILE: credsFile }),
     });
 
     const { client, status } = await driveFactorySubmission(t, {

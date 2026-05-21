@@ -159,19 +159,22 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
           if (!fs) throw new Error(`Unknown filesystem: "${fsName}".`);
 
           // Resolve a caller-supplied ClaudeCredentials cap (R3)
-          // if the form provided a pet name. The cap's
-          // `issue(sessionId)` is session-scoped, but we don't
-          // know the session id yet at this call site, so we
-          // issue against the client pet name as a stand-in
-          // tag. The base ClaudeCredentials in v1 ignores the
-          // tag; v2 (revocation) may use it.
+          // if the form provided a pet name. `issue(sessionTag)`
+          // returns an IssuedCredential *capability* rather than a
+          // `{apiKey}` bag (kumavis review #3); we materialise it
+          // here, immediately before passing the bytes over
+          // HTTP/UDS to the orchestrator, so the key never sits in
+          // CapTP state. We don't know the session id yet at this
+          // call site, so the tag is the client pet name.
           let resolvedCreds;
           if (typeof credsName === 'string' && credsName.length > 0) {
             const credCap = await E(hostAgent).lookup(credsName);
             if (!credCap) {
               throw new Error(`Unknown credentials: "${credsName}".`);
             }
-            resolvedCreds = await E(credCap).issue(name);
+            const issuedCred = await E(credCap).issue(name);
+            const apiKey = await E(issuedCred).materialise();
+            resolvedCreds = harden({ apiKey });
           }
 
           const session = await orchestrator.createSession({

@@ -475,12 +475,28 @@ end-to-end through the relay on Linux 6.18 + QEMU/KVM.
 
 ### R3 — Credential capability
 
-Expose an Endo capability `ClaudeCredentials` with `issue(sessionId)`
-and `rotate(sessionId)` shapes mirroring the credential broker
-(`DESIGN.md` §5.5).
-Lets users mint tightly-scoped Anthropic credentials and pass them
-through forms the same way they pass filesystems today, replacing the
-out-of-band broker config file.
+A `ClaudeCredentials` factory caplet (`src/claude-credentials-factory.js`)
+mints per-credential exos via the "Create Claude Credentials" form
+on `@host`. The minted cap exposes:
+
+- `issue(sessionTag) → IssuedCredential`. Returns a *capability*,
+  not a `{apiKey}` bag. The IssuedCredential's `.materialise()` is
+  single-shot and yields the current key bytes; `.sessionTag()` is
+  a diagnostic accessor. Container-factory call sites
+  `await E(ic).materialise()` immediately before passing bytes to
+  the orchestrator over HTTP/UDS, so the key never sits in CapTP
+  marshalling state (kumavis review #3 on PR #328).
+- `revoke(sessionTag)` invalidates every IssuedCredential previously
+  minted for that tag.
+- `rotate(newApiKey)` replaces the stored key and invalidates every
+  outstanding grant.
+
+Key storage: the factory writes the submitted API key to a 0600
+sidecar file at `${CLAUDE_CREDENTIALS_DIR:-$HOME/.endo-claude-credentials}/<name>.key`,
+then mints the cap with `env: { CREDENTIALS_FILE: <path> }`. The
+Endo daemon's persisted formula JSON sees the *path* only, never
+the key bytes (kumavis review #4 on PR #328). Reincarnation re-reads
+the file; `rotate` rewrites it atomically (tmp + rename).
 
 ### R4 — Restart-survivable ClaudeClient  (DONE)
 
@@ -497,12 +513,16 @@ All three sub-pieces shipped:
   reconnects to the orchestrator on demand.
 - **Per-session bridge caplet** (`src/fs-bridge-module.js`): each 9P
   bridge is also a formulated caplet under HOST petstore (pet name
-  `bridge-for-<sessionId>`), parameterised by `FS_NAME` and
-  `FS_SOCKET_PATH`. The module's `make()` eagerly looks up the FS by
-  pet name on the host's namespace and starts the 9P listener before
-  resolving. On daemon restart the formula reincarnates with the
-  same `env`, re-resolves the FS, and re-binds the same UDS path —
-  no factory coordination needed.
+  `bridge-for-<sessionId>`), parameterised by `FS_SOCKET_PATH`. The
+  caplet runs under a per-session guest profile
+  (`bridge-profile-<sessionId>`) whose namespace introduces only
+  the workspace FS, under the fixed pet name `fs` — no
+  `@agent`-level enumeration of `@host`'s petstore from the bridge
+  (kumavis review #10 on PR #328). The module's `make()` eagerly
+  looks up `'fs'`, starts the 9P listener, and resolves. On daemon
+  restart the formula reincarnates with the same env + scoped
+  powers, the FS re-resolves, and the UDS re-binds — no factory
+  coordination needed.
 
   The resolved FS is wrapped with `@endo/endo-fs`'s `withCachedReads`
   by default (LRU-bounded in-memory CAS, 256 entries). The FS lives

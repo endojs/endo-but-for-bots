@@ -2,22 +2,35 @@
 /* global process */
 //
 // Per-credential ClaudeCredentials caplet. The credentials factory
-// in `claude-credentials-factory.js` calls `host.makeUnconfined`
-// on this module to mint a formulated cap under the chosen pet
-// name in @host's petstore. Same shape as the per-session
-// ClaudeClient / fs-bridge caplets.
+// in `claude-credentials-factory.js` writes the user-submitted API
+// key to a 0600 sidecar file and then calls `host.makeUnconfined`
+// on this module with the file's *path* in env. The key bytes
+// never enter the Endo daemon's persisted formula JSON
+// (kumavis review #4 on PR #328).
 //
 // Expected env:
-//   API_KEY        Anthropic API key to bundle.
+//   CREDENTIALS_FILE   Absolute path to the 0600 file containing the
+//                      Anthropic API key. Read synchronously at startup.
+//                      On daemon restart the formula reincarnates with
+//                      the same env, re-reads the same file, and the
+//                      stored cap continues to work.
 //
-// The resulting cap exposes the ClaudeCredentials surface
-// documented in `claude-credentials-factory.js`. Reincarnating the
-// formula after a daemon restart re-issues the same key from the
-// env.
+// The resulting cap exposes the ClaudeCredentials surface documented
+// in `claude-credentials-factory.js` — `issue(sessionTag)` returns
+// an `IssuedCredential` cap whose `.materialise()` yields the bytes,
+// rather than handing back a `{ apiKey }` bag at issue time.
+
+import fs from 'node:fs';
 
 import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
 import { makeError, X, q } from '@endo/errors';
+
+const IssuedCredentialInterface = M.interface('IssuedCredential', {
+  materialise: M.call().returns(M.promise()),
+  sessionTag: M.call().returns(M.string()),
+  help: M.call().optional(M.string()).returns(M.string()),
+});
 
 const CredentialsInterface = M.interface('ClaudeCredentials', {
   issue: M.call(M.string()).returns(M.promise()),
@@ -34,31 +47,113 @@ const CredentialsInterface = M.interface('ClaudeCredentials', {
  */
 export const make = (_powers, _context, contextWrapper = {}) => {
   const env = /** @type {any} */ (contextWrapper).env ?? process.env;
-  let apiKey = env.API_KEY;
-  if (typeof apiKey !== 'string' || apiKey.length === 0) {
-    throw makeError(X`claude-credentials-module: API_KEY required`);
+  const credentialsFile = env.CREDENTIALS_FILE;
+  if (typeof credentialsFile !== 'string' || credentialsFile.length === 0) {
+    throw makeError(
+      X`claude-credentials-module: CREDENTIALS_FILE required (path to a 0600 sidecar holding the API key)`,
+    );
   }
+  let apiKey;
+  try {
+    // Strip a single trailing newline that the factory writes for
+    // operator-friendliness (cat/shred), but keep any internal
+    // whitespace verbatim.
+    apiKey = fs.readFileSync(credentialsFile, 'utf8').replace(/\n$/, '');
+  } catch (e) {
+    throw makeError(
+      X`claude-credentials-module: failed to read CREDENTIALS_FILE ${q(credentialsFile)}: ${q(
+        /** @type {Error} */ (e).message,
+      )}`,
+    );
+  }
+  if (apiKey.length === 0) {
+    throw makeError(
+      X`claude-credentials-module: CREDENTIALS_FILE ${q(credentialsFile)} is empty`,
+    );
+  }
+
+  /** @type {Set<{ invalidate: () => void, tag: string }>} */
+  const outstanding = new Set();
+
+  /**
+   * @param {string} sessionTag
+   */
+  const issueCap = sessionTag => {
+    let valid = true;
+    let materialised = false;
+    const handle = {
+      tag: sessionTag,
+      invalidate: () => {
+        valid = false;
+      },
+    };
+    outstanding.add(handle);
+    return makeExo('IssuedCredential', IssuedCredentialInterface, {
+      async materialise() {
+        if (!valid) {
+          throw makeError(
+            X`IssuedCredential for ${q(sessionTag)} has been revoked or rotated`,
+          );
+        }
+        if (materialised) {
+          throw makeError(
+            X`IssuedCredential for ${q(sessionTag)} is single-shot; already materialised`,
+          );
+        }
+        materialised = true;
+        return apiKey;
+      },
+      sessionTag() {
+        return sessionTag;
+      },
+      help(method) {
+        if (method === undefined) {
+          return [
+            'IssuedCredential.',
+            '',
+            '  materialise() → apiKey   (single-shot; throws after revoke/rotate)',
+            '  sessionTag()  → string   (diagnostic)',
+          ].join('\n');
+        }
+        return `No documentation for method ${q(method)}.`;
+      },
+    });
+  };
+
   return makeExo('ClaudeCredentials', CredentialsInterface, {
-    async issue(_sessionId) {
-      return harden({ apiKey });
+    async issue(sessionTag) {
+      return issueCap(sessionTag);
     },
-    async revoke(_sessionId) {
-      // v1: no per-session state.
+    async revoke(sessionTag) {
+      for (const handle of outstanding) {
+        if (handle.tag === sessionTag) {
+          handle.invalidate();
+          outstanding.delete(handle);
+        }
+      }
     },
     async rotate(newApiKey) {
       if (typeof newApiKey !== 'string' || newApiKey.length === 0) {
         throw makeError(X`EINVAL: rotate requires a non-empty string`);
       }
+      // Write the new key back to the same sidecar file so the
+      // rotation survives a daemon restart. Use a tmp + rename to
+      // avoid a half-written state.
+      const tmp = `${credentialsFile}.tmp`;
+      fs.writeFileSync(tmp, `${newApiKey}\n`, { mode: 0o600 });
+      fs.renameSync(tmp, credentialsFile);
       apiKey = newApiKey;
+      for (const handle of outstanding) handle.invalidate();
+      outstanding.clear();
     },
     help(method) {
       if (method === undefined) {
         return [
           'ClaudeCredentials.',
           '',
-          '  issue(sessionId) → { apiKey }',
-          '  revoke(sessionId) → ()',
-          '  rotate(newApiKey) → ()',
+          '  issue(sessionTag) → IssuedCredential   (call .materialise())',
+          "  revoke(sessionTag) → ()                close a session's grants",
+          '  rotate(newApiKey) → ()                 replace the stored key',
         ].join('\n');
       }
       return `No documentation for method ${q(method)}.`;
