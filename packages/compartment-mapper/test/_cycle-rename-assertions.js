@@ -8,17 +8,17 @@
  * The fixture under fixtures-cycle-rename/node_modules/app/ exercises this
  * arrangement:
  *
- *   mod1.js: export * from './mod2.js';
- *   mod2.js: export { y as x } from './mod1.js';
- *            export var y = 45;
- *   main.js: import { x } from './mod1.js';
- *            import * as ns1 from './mod1.js';
- *            import * as ns2 from './mod2.js';
- *            export const captured = x;
- *            export const namespace1 = { x: ns1.x, y: ns1.y };
- *            export const namespace2 = { x: ns2.x, y: ns2.y };
+ *   star-reexporter.js: export * from './export-renamer.js';
+ *   export-renamer.js:  export { y as x } from './star-reexporter.js';
+ *                       export var y = 45;
+ *   main.js:            import { x } from './star-reexporter.js';
+ *                       import * as ns1 from './star-reexporter.js';
+ *                       import * as ns2 from './export-renamer.js';
+ *                       export const captured = x;
+ *                       export const namespace1 = { x: ns1.x, y: ns1.y };
+ *                       export const namespace2 = { x: ns2.x, y: ns2.y };
  *
- * Before the fix (PR #336), the SES linker visited mod1 while its
+ * Before the fix, the SES linker visited star-reexporter while its
  * star-imported notifier for `y` had not yet been wired. The synchronous
  * wireUp at the cycle's back-edge then passed `undefined` as the upstream
  * notifier, manifesting as `TypeError: notify is not a function`. Node.js
