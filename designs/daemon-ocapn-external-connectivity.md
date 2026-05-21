@@ -3,8 +3,72 @@
 | | |
 |---|---|
 | **Created** | 2026-05-21 |
+| **Updated** | 2026-05-21 |
 | **Author** | Aaron Kumavis (prompted) |
-| **Status** | Proposed |
+| **Status** | In Progress |
+
+## Status
+
+A first increment has landed: the OCapN-Noise peer transport exists
+and is installable, so daemon-to-daemon connections can be carried by
+OCapN instead of CapTP.
+
+Built:
+
+- `packages/daemon/src/networks/ocapn.js` — an OCapN-Noise transport
+  that conforms to the existing `EndoNetwork` interface (`addresses`,
+  `supports`, `connect`). It embeds an `@endo/ocapn` client over an
+  `@endo/ocapn-noise` network with a TCP transport, publishes the
+  daemon's `EndoGreeter` through the OCapN locator, and dials peers by
+  fetching their greeter over an OCapN session and running the
+  existing `hello` handshake.
+- `packages/daemon/src/networks/setup-ocapn.js` — the unconfined-caplet
+  installer that registers the transport at `@nets/ocapn`, mirroring
+  `setup-libp2p.js`.
+- `@endo/ocapn` and `@endo/ocapn-noise` added to `packages/daemon`
+  dependencies.
+- `MULTIPLAYER.md` documents the OCapN-Noise transport.
+
+Deviations from the design as first written, and why:
+
+- **The transport-module approach was used instead of removing the
+  bespoke peer spine.** Because `networks/ocapn.js` conforms to the
+  `EndoNetwork` contract, the daemon's `EndoGreeter`, `EndoGateway`,
+  `RemoteControl`, and `peer`-formula machinery are reused unchanged:
+  the peer application protocol (`hello`/`provide`/`followRetentionSet`)
+  rides on OCapN exactly as it rode on CapTP. This makes the migration
+  a localized, low-risk transport swap rather than a daemon-core
+  rewrite. `connection.js`/`@endo/captp` is now untouched on the peer
+  path; it remains only for worker, CLI, and web-gateway edges.
+- **`RemoteControl` and `EndoGreeter` are retained, not deleted.** They
+  are the protocol-agnostic *application* layer (crossed-hello policy
+  and the peer handshake), not the transport. Replacing them with
+  OCapN's own session manager is a deeper refactor that depends on
+  `ocapn-network-transport-separation` landing and on runtime
+  verification; deleting working code on speculation was not done.
+- **`tcp-netstring.js` is retained, not removed.** See the blocker
+  below — until the OCapN identity is bound to the daemon keypair,
+  removing the CapTP transport would regress cross-daemon identity.
+
+Known blocker — per-agent keys (`daemon-agent-network-identity`):
+
+- The OCapN-Noise network needs the raw Ed25519 private key bytes for
+  its handshake. The daemon's `@keypair` is a capability that
+  deliberately does not expose raw key bytes, and the only key
+  material a network caplet can read today is the *public* node id
+  from `getPeerInfo()`. So `networks/ocapn.js` currently mints a fresh
+  per-network signing key; the OCapN session identity is therefore not
+  yet the daemon node number. The connection hint carries the full
+  OCapN location so dialing still works, but binding the OCapN
+  identity to the agent keypair is exactly the
+  [`daemon-agent-network-identity`](daemon-agent-network-identity.md)
+  design and must land before the OCapN transport can replace the
+  CapTP one outright.
+
+Remaining (Phases 2-3): bind the OCapN identity to the agent keypair,
+make `@nets/ocapn` the default transport, route `endo://` locators
+through OCapN sturdyrefs, retire `tcp-netstring.js`, and add the
+forked-daemon integration test from the Test Plan below.
 
 ## What is the Problem Being Solved?
 

@@ -11,18 +11,28 @@ creates an invitation and the other accepts it. From that point on, both
 sides can send messages, share values, and make requests across the
 network.
 
-Two network transports are available:
+Three network transports are available:
 
-- **TCP** (`/network`): Direct TCP connections with netstring framing.
-  Requires an open port. Best for same-network or same-machine setups.
+- **OCapN-Noise** (`setup-ocapn.js`): Daemon-to-daemon connections
+  carried by an authenticated, encrypted OCapN-Noise session over TCP.
+  This is the transport the daemon is migrating to for all
+  daemon-to-daemon connectivity — see
+  [`designs/daemon-ocapn-external-connectivity.md`](../../designs/daemon-ocapn-external-connectivity.md).
+- **TCP** (`/network`): Direct TCP connections with netstring framing,
+  carrying plaintext JSON CapTP. Requires an open port. Retained for
+  now; superseded by the OCapN-Noise transport.
 - **iroh** (`/network-iroh`): Peer-to-peer over iroh ("dial keys, not
   IPs"). Peers are dialed by their Ed25519 NodeId and resolved through
   iroh discovery and relays over mutually authenticated, encrypted QUIC.
   No open ports needed; NAT traversal and relay fallback are built in.
 
-All use CapTP (Capability Transfer Protocol) for capability transport.
-Object identity is preserved across the wire — capabilities sent in a
-message can be adopted by the recipient and used as if they were local.
+The OCapN-Noise transport uses the OCapN (Object Capability Network)
+protocol for capability transport; the TCP and iroh transports use
+CapTP (Capability Transfer Protocol). In all three, object identity is
+preserved across the wire — capabilities sent in a message can be
+adopted by the recipient and used as if they were local. CapTP also
+carries the daemon's local edges (daemon-to-worker, daemon-to-CLI, and
+the browser web gateway), which are unaffected by the OCapN migration.
 
 ## Prerequisites
 
@@ -178,6 +188,40 @@ You can enable any combination of these transports on the same daemon.
 Invitation locators will include addresses for all active networks. When
 the accepting daemon connects, it tries each address in order and uses the
 first one that succeeds.
+
+## Step 1c: Enable OCapN-Noise Networking (Recommended)
+
+The OCapN-Noise transport carries daemon-to-daemon traffic over an
+authenticated, encrypted OCapN session instead of plaintext CapTP. It
+is installed as an unconfined caplet, the same way the other
+transports are, and registers itself under `@nets/ocapn`.
+
+### Using the CLI
+
+```bash
+# Install the OCapN-Noise network (registers at @nets/ocapn)
+yarn exec endo run --UNCONFINED packages/daemon/src/networks/setup-ocapn.js --powers @agent
+```
+
+By default the transport binds an ephemeral local TCP port. To pin a
+listen address, store it under `ocapn-listen-addr` before installing:
+
+```bash
+yarn exec endo store --text "127.0.0.1:8950" --name ocapn-listen-addr
+```
+
+After this step, each daemon advertises an `ocapn+noise+tcp://`
+connection hint in the locators produced by `invite()`,
+`locateForSharing()`, and `getPeerInfo()`. When the accepting daemon
+connects, the session is established over OCapN-Noise.
+
+> **Known limitation.** Until the
+> [`daemon-agent-network-identity`](../../designs/daemon-agent-network-identity.md)
+> work lands, the OCapN-Noise transport mints a fresh signing key per
+> network rather than reusing the daemon agent's `@keypair`. The
+> connection hint carries the full OCapN location so dialing still
+> works, but the OCapN session identity is not yet bound to the
+> daemon node number.
 
 ## Step 2: Create and Accept an Invitation
 
