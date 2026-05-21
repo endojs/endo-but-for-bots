@@ -1,0 +1,5 @@
+---
+'@endo/ocapn': minor
+---
+
+- The `framing` option to `makeTcpNetLayer` (`@endo/ocapn/netlayer/tcp-testing`) now defaults to `'cbor'` and accepts `'cbor'`, `'syrup'`, and `'none'`. The new default wraps each message in a CBOR tag-24 byte-string frame as implemented by `@endo/cbor-frame` (RFC 8949). The framing is self-describing to a generic CBOR-aware analyzer at a fixed two-byte per-frame cost, robust to TCP chunk boundaries that split a single OCapN message, and the framing the OCapN TCP-for-testing netlayer is moving toward. Pass `framing: 'syrup'` for the prior interim `<length>:<payload>` syrup framing implemented by `@endo/syrup-frame`. Pass `framing: 'none'` to interoperate with the existing `ocapn/ocapn-test-suite` Python `testing_only_tcp` netlayer, which writes a syrup-encoded record with `sendall` and reads one back with `syrup.syrup_read` (no length prefix on the wire). The `'none'` option exists only for that suite's sake and goes away once the suite either adopts framing or is retired.

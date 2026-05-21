@@ -5,6 +5,11 @@ import net from 'net';
 import harden from '@endo/harden';
 import { makePipe } from '@endo/stream';
 import { makeSyrupReader } from '@endo/syrup-frame/reader.js';
+import { makeCborFrameReader } from '@endo/cbor-frame';
+import {
+  encodeByteStringHead,
+  TAG_24_PREFIX,
+} from '@endo/cbor-frame/src/head.js';
 
 import { locationToLocationId } from '../client/util.js';
 import { sendHandshake } from '../client/handshake.js';
@@ -18,11 +23,17 @@ import { sendHandshake } from '../client/handshake.js';
 /**
  * Wire framing for the test-only TCP netlayer.
  *
- * - `'syrup'` (default): each message is wrapped in the
+ * - `'cbor'` (default): each message is wrapped in a CBOR
+ *   tag-24-wrapped byte-string frame as implemented by
+ *   `@endo/cbor-frame` (RFC 8949). The framing is self-describing
+ *   to a generic CBOR-aware analyzer, robust to TCP chunk
+ *   boundaries, and the framing the OCapN TCP-for-testing netlayer
+ *   is moving toward.
+ * - `'syrup'`: each message is wrapped in the
  *   `<length>:<payload>` framing implemented by `@endo/syrup-frame`.
  *   Robust against TCP chunk boundaries that split a single OCapN
- *   message; the spec is moving toward this framing for the
- *   TCP-for-testing netlayer.
+ *   message; the prior interim default while the spec converged on
+ *   CBOR-tag-24 framing.
  * - `'none'`: each write is sent as raw bytes, and each
  *   `socket.on('data')` chunk is dispatched as a complete OCapN
  *   message. Retained only for compatibility with the existing
@@ -31,10 +42,10 @@ import { sendHandshake } from '../client/handshake.js';
  *   one back with `syrup.syrup_read` (no length prefix on the wire).
  *   That suite is known to be inadequate against the possibility of
  *   a TCP chunk getting split across packets; the `'none'` option
- *   goes away once the Python suite either adopts syrup framing or
- *   is retired.
+ *   goes away once the Python suite either adopts framing or is
+ *   retired.
  *
- * @typedef {'none' | 'syrup'} TcpTestOnlyFraming
+ * @typedef {'none' | 'syrup' | 'cbor'} TcpTestOnlyFraming
  */
 
 const { isNaN } = Number;
@@ -100,6 +111,97 @@ const makeSyrupWritingSocketOperations = socketOps => {
     },
     end() {
       socketOps.end();
+    },
+  };
+};
+
+/**
+ * Wraps `socketOps` so that `write(bytes)` emits a CBOR-framed
+ * record (tag-24 prefix + byte-string head + payload) instead of
+ * raw bytes. Builds the framed buffer synchronously and forwards a
+ * single `socketOps.write` call, matching the synchronous shape of
+ * the `SocketOperations` interface. (Same rationale as
+ * `makeSyrupWritingSocketOperations`: the `@endo/cbor-frame`
+ * `Writer` is async, but our sink is sync; we sidestep the
+ * impedance mismatch by encoding the head directly here, which the
+ * `@endo/cbor-frame` head encoder exports as a pure function.)
+ *
+ * @param {SocketOperations} socketOps
+ * @returns {SocketOperations}
+ */
+const makeCborWritingSocketOperations = socketOps => {
+  return {
+    write(bytes) {
+      const head = encodeByteStringHead(bytes.length);
+      const frame = new Uint8Array(
+        TAG_24_PREFIX.length + head.length + bytes.length,
+      );
+      let offset = 0;
+      frame.set(TAG_24_PREFIX, offset);
+      offset += TAG_24_PREFIX.length;
+      frame.set(head, offset);
+      offset += head.length;
+      frame.set(bytes, offset);
+      socketOps.write(frame);
+    },
+    end() {
+      socketOps.end();
+    },
+  };
+};
+
+/**
+ * Wires a stream pipe between socket `data` events and the
+ * `@endo/cbor-frame` reader. Each whole frame is forwarded to
+ * `onFrame`. Errors and pipe closure are reported to `logger`.
+ *
+ * @param {Logger} logger
+ * @param {(frame: Uint8Array) => void} onFrame
+ * @returns {{ pushChunk: (chunk: Uint8Array) => void, end: () => void }}
+ */
+const makeCborDeframer = (logger, onFrame) => {
+  /** @type {[Writer<Uint8Array>, Reader<Uint8Array>]} */
+  const pipe = makePipe();
+  const [chunkWriter, chunkReader] = pipe;
+  const cborReader = makeCborFrameReader(chunkReader, {
+    name: 'tcp-testing-only',
+  });
+  let closed = false;
+  // Drain the reader in the background; surface decode errors via
+  // the logger and stop forwarding once closed.
+  const drain = async () => {
+    await null;
+    try {
+      for await (const frame of cborReader) {
+        if (closed) {
+          break;
+        }
+        // The cbor reader may yield a `subarray()` of an internal
+        // buffer; downstream OCapN syrup decoding requires a
+        // zero-`byteOffset` view, so `slice()` to allocate a fresh
+        // owned copy before dispatching.
+        onFrame(frame.slice());
+      }
+    } catch (err) {
+      if (!closed) {
+        logger.error('CBOR deframer error:', err);
+      }
+    }
+  };
+  drain();
+  return {
+    pushChunk(chunk) {
+      if (closed) {
+        return;
+      }
+      chunkWriter.next(chunk).catch(() => {});
+    },
+    end() {
+      if (closed) {
+        return;
+      }
+      closed = true;
+      chunkWriter.return(undefined).catch(() => {});
     },
   };
 };
@@ -182,7 +284,7 @@ const makeSyrupDeframer = (logger, onFrame) => {
  * @param {string} [options.specifiedHostname]
  * @param {string} [options.specifiedDesignator]
  * @param {number} [options.writeLatencyMs] - Optional artificial latency for writes (ms), useful for testing pipelining
- * @param {TcpTestOnlyFraming} [options.framing] - Wire framing for outbound writes and inbound reads. Defaults to `'syrup'`, the framing the OCapN TCP-for-testing netlayer is moving toward. Pass `'none'` to interoperate with the existing Python `ocapn-test-suite` `testing_only_tcp` netlayer (raw syrup record per write, no length prefix).
+ * @param {TcpTestOnlyFraming} [options.framing] - Wire framing for outbound writes and inbound reads. Defaults to `'cbor'`, the framing the OCapN TCP-for-testing netlayer is moving toward. Pass `'syrup'` for the prior interim syrup framing, or `'none'` to interoperate with the existing Python `ocapn-test-suite` `testing_only_tcp` netlayer (raw syrup record per write, no length prefix).
  * @returns {Promise<TcpTestOnlyNetLayer>}
  */
 export const makeTcpNetLayer = async ({
@@ -193,9 +295,9 @@ export const makeTcpNetLayer = async ({
   // Unclear if a fallback value is reasonable.
   specifiedDesignator = '0000',
   writeLatencyMs = 0,
-  framing = 'syrup',
+  framing = 'cbor',
 }) => {
-  if (framing !== 'none' && framing !== 'syrup') {
+  if (framing !== 'none' && framing !== 'syrup' && framing !== 'cbor') {
     throw Error(`Unsupported framing: ${framing}`);
   }
   // Create and start TCP server
@@ -251,22 +353,29 @@ export const makeTcpNetLayer = async ({
   const setupSocketHandlers = (socket, connection, onClose) => {
     activeSockets.add(socket);
 
-    // When framing is `'syrup'`, run inbound bytes through the
-    // syrup deframer so each call to `handleMessageData` carries
-    // exactly one OCapN message regardless of how TCP chunked the
-    // wire. With `'none'` framing, dispatch raw chunks unchanged.
-    const deframer =
-      framing === 'syrup'
-        ? makeSyrupDeframer(logger, frame => {
-            if (!connection.isDestroyed) {
-              handlers.handleMessageData(connection, frame);
-            } else {
-              logger.info(
-                'TcpTestOnlyNetLayer received message after connection was destroyed',
-              );
-            }
-          })
-        : undefined;
+    // When framing is `'cbor'` or `'syrup'`, run inbound bytes
+    // through the matching deframer so each call to
+    // `handleMessageData` carries exactly one OCapN message
+    // regardless of how TCP chunked the wire. With `'none'` framing,
+    // dispatch raw chunks unchanged.
+    /** @type {(frame: Uint8Array) => void} */
+    const onFrame = frame => {
+      if (!connection.isDestroyed) {
+        handlers.handleMessageData(connection, frame);
+      } else {
+        logger.info(
+          'TcpTestOnlyNetLayer received message after connection was destroyed',
+        );
+      }
+    };
+    let deframer;
+    if (framing === 'cbor') {
+      deframer = makeCborDeframer(logger, onFrame);
+    } else if (framing === 'syrup') {
+      deframer = makeSyrupDeframer(logger, onFrame);
+    } else {
+      deframer = undefined;
+    }
 
     socket.on('data', data => {
       // The 'data' event yields `string | Buffer` in @types/node v25; the
@@ -311,14 +420,18 @@ export const makeTcpNetLayer = async ({
 
   /**
    * Returns the socket operations the client connection should use.
-   * For `'syrup'` framing, wraps the raw socket operations in a
-   * syrup writer so every call to `connection.write` becomes one
-   * length-prefixed frame on the wire.
+   * For `'cbor'` framing, wraps the raw socket operations in a CBOR
+   * tag-24 byte-string writer; for `'syrup'`, wraps in a syrup
+   * length-prefix writer. Either way every call to
+   * `connection.write` becomes one framed record on the wire.
    * @param {net.Socket} socket
    * @returns {SocketOperations}
    */
   const makeFramedSocketOperations = socket => {
     const rawOps = makeSocketOperations(socket, writeLatencyMs);
+    if (framing === 'cbor') {
+      return makeCborWritingSocketOperations(rawOps);
+    }
     if (framing === 'syrup') {
       return makeSyrupWritingSocketOperations(rawOps);
     }
