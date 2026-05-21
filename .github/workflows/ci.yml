@@ -440,8 +440,13 @@ jobs:
           cargo test --manifest-path rust/claude-orch/bootstrap-init/Cargo.toml
           cargo test --manifest-path rust/claude-orch/runtime-agent/Cargo.toml
 
-      - name: cargo check runtime-agent with seccomp feature
-        run: cargo check --manifest-path rust/claude-orch/runtime-agent/Cargo.toml --features seccomp
+      - name: cargo check runtime-agent without default features
+        # The default feature set now includes `seccomp`, which the
+        # earlier `cargo check ... --all-targets` step already exercises.
+        # This step keeps the no-seccomp build path covered so local dev
+        # / non-linux targets that can't pull in the seccompiler crate
+        # don't regress.
+        run: cargo check --manifest-path rust/claude-orch/runtime-agent/Cargo.toml --no-default-features
 
   claude-orch-smoke-boot-tcg:
     # Full microVM boot under QEMU/TCG (no KVM): builds a minimal
