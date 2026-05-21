@@ -196,16 +196,31 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
             // the UDS is ready for the orchestrator to mount through.
             // Reincarnation after a daemon restart re-runs `make()`
             // with the same env, automatically re-binding the same
-            // FS_SOCKET_PATH against a re-resolved FS pet name —
-            // that's the caplet-side bridge re-attach for R4.
+            // UDS path against the same scoped FS — that's the
+            // caplet-side bridge re-attach for R4.
+            //
+            // Least authority: rather than handing the bridge module
+            // the full `@agent` powers (which lets it `lookup` any
+            // pet name in @host's namespace), provideGuest a scoped
+            // profile whose petstore introduces *only* the requested
+            // FS, under the fixed name `fs`. The bridge module looks
+            // up `'fs'` on its powers; it cannot enumerate the rest
+            // of @host's namespace. See kumavis review #10 on PR #328.
+            const bridgeProfileName = `bridge-profile-${session.id}`;
+            const bridgeGuestName = `bridge-guest-${session.id}`;
+            if (!(await E(hostAgent).has(bridgeGuestName))) {
+              await E(hostAgent).provideGuest(bridgeGuestName, {
+                introducedNames: harden({ [fsName]: 'fs' }),
+                agentName: bridgeProfileName,
+              });
+            }
             await E(hostAgent).makeUnconfined(
               '@main',
               FS_BRIDGE_MODULE_SPECIFIER,
               {
-                powersName: '@agent',
+                powersName: bridgeProfileName,
                 resultName: bridgeName,
                 env: harden({
-                  FS_NAME: fsName,
                   FS_SOCKET_PATH: session.fsSocketPath ?? '',
                 }),
               },
