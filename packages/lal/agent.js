@@ -6,6 +6,7 @@ import { M, mustMatch } from '@endo/patterns';
 import { E } from '@endo/eventual-send';
 import { passableAsJustin } from '@endo/marshal';
 import { makeRefIterator } from '@endo/daemon/ref-reader.js';
+import { NamePathShape, NameOrPathShape } from '@endo/daemon/type-guards.js';
 import { makeLocalTree } from '@endo/platform/fs/node';
 
 import { Agent as PiAgent } from '@mariozechner/pi-agent-core';
@@ -74,10 +75,9 @@ const LalInterface = M.interface('Lal', {
  *   reinterpreted as a BigInt, sentinel, symbol, or remotable).
  */
 
-// A pet name path is an array of one or more strings (each path segment).
-// A "name or path" accepts either a single string or such an array.
-const NamePathShape = M.arrayOf(M.string());
-const NameOrPathShape = M.or(M.string(), NamePathShape);
+// Pet-name and path matchers are imported from `@endo/daemon/type-guards.js`
+// so lal validates inbound pet-name arguments against the same shapes the
+// daemon's own interfaces use (per #290 review).
 // Message numbers arrive as SmallCaps BigInts coerced from `"+N"` literals
 // per-tool by `coerceBigintArgs`; permit a plain number too for ergonomic
 // LLM emission of small integers.
