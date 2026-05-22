@@ -17,14 +17,41 @@ const exportsCellRecord = exportMap =>
     ),
   );
 
-const importsCellSetter = (exportMap, index) =>
-  ''.concat(
-    ...Object.entries(exportMap).map(
-      ([exportName, [importName]]) => `\
-      ${importName}: cells[${index}].${exportName}.set,
-`,
-    ),
+const importsCellSetter = (exportMap, index) => {
+  // The exportMap is keyed by the exported (external) name and the value is a
+  // single-element array containing the local (import-side) binding name.
+  // A single local binding may be exported under multiple names (e.g.,
+  // `export { details, details as X, details as redacted }`); collect all
+  // exported names per local binding so the generated calling-convention
+  // entry fans out to every corresponding cell setter rather than relying on
+  // an object literal whose duplicate keys would silently collapse to the
+  // last one.
+  /** @type {Map<string, string[]>} */
+  const byLocal = new Map();
+  for (const [exportName, [importName]] of Object.entries(exportMap)) {
+    let exportNames = byLocal.get(importName);
+    if (exportNames === undefined) {
+      exportNames = [];
+      byLocal.set(importName, exportNames);
+    }
+    exportNames.push(exportName);
+  }
+  return ''.concat(
+    ...[...byLocal.entries()].map(([importName, exportNames]) => {
+      if (exportNames.length === 1) {
+        return `\
+      ${importName}: cells[${index}].${exportNames[0]}.set,
+`;
+      }
+      const fanout = exportNames
+        .map(exportName => `cells[${index}].${exportName}.set(value)`)
+        .join('; ');
+      return `\
+      ${importName}: value => { ${fanout}; },
+`;
+    }),
   );
+};
 
 const adaptReexport = reexportMap => {
   if (!reexportMap) {
