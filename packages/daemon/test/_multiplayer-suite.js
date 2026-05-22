@@ -108,12 +108,27 @@ const waitForCondition = async (check, opts = {}) => {
 };
 
 /**
+ * Structural subset of AVA's `TestFn` that the multiplayer suite uses.
+ * Declaring it as a subset rather than `import('ava').TestFn` lets the
+ * caller pass either a full `baseTest` or a skip-decorated shim that
+ * only carries the methods this suite touches — the
+ * `ENDO_BIN`/`ENDO_NODE_WORKER_BIN` skip wrapper in the entry points
+ * is exactly such a shim.
+ *
+ * @typedef {object} SuiteTestRunner
+ * @property {(title: string, impl: (t: any) => any) => void} serial
+ *   For `test.serial('title', async t => …)`.
+ * @property {(impl: (t: any) => any) => void} beforeEach
+ * @property {{ always: (impl: (t: any) => any) => any }} afterEach
+ */
+
+/**
  * Register the multiplayer invite/accept/value-exchange/GC suite
  * against a specific network. The same tests run under every
  * NetworkSpec; only the @nets/<key> installation differs.
  *
  * @param {object} options
- * @param {import('ava').TestFn} options.test  The AVA test instance to
+ * @param {SuiteTestRunner} options.test  The AVA test instance to
  *   register against (typically the result of `baseTest` after any
  *   skip/wrap decorations).
  * @param {NetworkSpec} options.network
