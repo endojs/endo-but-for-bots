@@ -91,3 +91,153 @@ mod imp {
 }
 
 pub use imp::install;
+
+// Behavioural tests. These exercise the actual filter by forking a
+// child, installing it, then attempting a denied syscall in the
+// child and observing that the kernel kills it with `SIGSYS`.
+//
+// Gated:
+//   - `target_os = "linux"`: seccomp is a linux-only kernel feature.
+//   - `feature = "seccomp"`: the filter implementation only exists
+//     when the feature is on. The default feature set includes it
+//     (see `Cargo.toml`), but `cargo test --no-default-features`
+//     skips these.
+//
+// The tests fork rather than mutating the test runner process, so
+// they're safe to run in parallel with the rest of the suite.
+#[cfg(all(test, target_os = "linux", feature = "seccomp"))]
+mod tests {
+    use super::install;
+    use std::os::unix::process::ExitStatusExt;
+
+    /// Run `body` in a forked child after `install()`-ing the
+    /// seccomp filter. Returns the child's exit status as observed
+    /// by the parent.
+    fn fork_with_filter<F: FnOnce()>(body: F) -> std::process::ExitStatus {
+        use libc::{c_int, fork, waitpid, WEXITED};
+
+        match unsafe { fork() } {
+            -1 => panic!("fork failed: {}", std::io::Error::last_os_error()),
+            0 => {
+                // Child: install filter, run body. If we make it back
+                // here without being killed, exit cleanly so the
+                // parent can distinguish "ran to completion" from
+                // "killed by SIGSYS".
+                if install().is_err() {
+                    // If installation itself fails, exit 2 so the
+                    // test can fail with a useful message rather
+                    // than getting a confusing SIGSYS report.
+                    std::process::exit(2);
+                }
+                body();
+                std::process::exit(0);
+            }
+            pid => {
+                let mut status: c_int = 0;
+                let r = unsafe { waitpid(pid, &mut status, 0) };
+                assert_ne!(r, -1, "waitpid failed");
+                // Decode into ExitStatus via from_raw — the libc
+                // status word maps directly.
+                let _ = WEXITED; // referenced to silence dead-code
+                std::process::ExitStatus::from_raw(status)
+            }
+        }
+    }
+
+    #[test]
+    fn install_succeeds_under_default_user() {
+        // Installing a seccomp filter doesn't require any
+        // capability; the kernel allows any process to add
+        // restrictions to itself. If this test fails we have a
+        // bigger problem.
+        let status = fork_with_filter(|| {});
+        assert!(
+            status.success(),
+            "child should exit cleanly: {status:?}"
+        );
+    }
+
+    #[test]
+    fn ptrace_kills_the_child() {
+        // ptrace is on the deny list (the documented top entry —
+        // blocks debugger-style memory peeking). The child should
+        // be killed by SIGSYS the moment it attempts the syscall.
+        let status = fork_with_filter(|| {
+            unsafe {
+                libc::ptrace(libc::PTRACE_TRACEME, 0, 0, 0);
+            }
+            // Unreachable on a correctly-installed filter.
+        });
+        assert_eq!(
+            status.signal(),
+            Some(libc::SIGSYS),
+            "child should have been killed by SIGSYS, got {status:?}"
+        );
+    }
+
+    #[test]
+    fn keyctl_kills_the_child() {
+        // Kernel keyring side-channel. Same expectation.
+        let status = fork_with_filter(|| {
+            unsafe {
+                libc::syscall(libc::SYS_keyctl, 0, 0, 0, 0, 0);
+            }
+        });
+        assert_eq!(status.signal(), Some(libc::SIGSYS));
+    }
+
+    #[test]
+    fn perf_event_open_kills_the_child() {
+        let status = fork_with_filter(|| {
+            unsafe {
+                libc::syscall(libc::SYS_perf_event_open, 0, 0, 0, 0, 0);
+            }
+        });
+        assert_eq!(status.signal(), Some(libc::SIGSYS));
+    }
+
+    #[test]
+    fn bpf_kills_the_child() {
+        // bpf() is on the list because the eBPF subsystem is a
+        // recurring privilege-escalation surface. We pass 0 args
+        // so the syscall would normally EINVAL without privileges;
+        // seccomp turns the policy violation into SIGSYS before
+        // the kernel gets there.
+        let status = fork_with_filter(|| {
+            unsafe {
+                libc::syscall(libc::SYS_bpf, 0, 0, 0);
+            }
+        });
+        assert_eq!(status.signal(), Some(libc::SIGSYS));
+    }
+
+    #[test]
+    fn getpid_still_works_after_install() {
+        // Negative test: confirm we haven't accidentally inverted
+        // the default action. `getpid` isn't on any deny list and
+        // must succeed after the filter is in place.
+        let status = fork_with_filter(|| {
+            let _pid = unsafe { libc::getpid() };
+            // Reaching here without SIGSYS means the filter is
+            // default-allow as intended.
+        });
+        assert!(status.success(), "getpid must remain allowed: {status:?}");
+    }
+
+    #[test]
+    fn no_new_privs_is_set() {
+        // PR_GET_NO_NEW_PRIVS returns 1 after install(). This is
+        // load-bearing: without it the filter would be stripped on
+        // any future execve, defeating the whole point.
+        let status = fork_with_filter(|| {
+            let v = unsafe { libc::prctl(libc::PR_GET_NO_NEW_PRIVS, 0, 0, 0, 0) };
+            if v != 1 {
+                std::process::exit(3);
+            }
+        });
+        assert!(
+            status.success(),
+            "PR_GET_NO_NEW_PRIVS should report 1 after install: {status:?}"
+        );
+    }
+}
