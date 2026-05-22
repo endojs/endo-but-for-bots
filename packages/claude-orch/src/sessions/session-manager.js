@@ -54,10 +54,18 @@ export const makeSessionManager = ({ config, persistencePath }) => {
   // later API read or QEMU spawn, so reject at load time.
   const VALID_NETWORKS = new Set(['egress', 'none']);
   const VALID_ATTACH_MODES = new Set(['stream', 'none']);
+  // Every per-session UDS that downstream code reads off the
+  // restored record must be present. Today that's the four chardev
+  // paths driven by `qemu/args.js` (ctl, agent, fs, stdio) plus the
+  // QMP socket QEMU listens on for `system_reset`/`quit` from the
+  // orchestrator. `attachSocketPath` is conditional on
+  // `attachMode === 'stream'` and checked separately below.
   const SOCKET_PATH_KEYS = /** @type {const} */ ([
     'ctlSocketPath',
     'agentSocketPath',
     'fsSocketPath',
+    'stdioSocketPath',
+    'qmpSocketPath',
   ]);
 
   /**
@@ -302,10 +310,12 @@ export const makeSessionManager = ({ config, persistencePath }) => {
 
   /**
    * Restore session records from disk. Called at orchestrator startup.
-   * Each restored record is set to state="terminated" because we cannot
-   * prove the QEMU process is still alive without per-pid probing — the
-   * caller (main.js) inspects vmPid against `kill 0` and re-elevates to
-   * `ready` for sessions whose VMs are still alive.
+   * Restored records keep whatever `state` was persisted (we can't
+   * prove QEMU is still alive from here); the boot nonce is the only
+   * field we mutate, purging it so a session that survives a restart
+   * cannot re-redeem its single-use Hello. The caller in `main.js`
+   * inspects `vmPid` against `kill(pid, 0)` after this returns and
+   * downgrades dead-VM records to `terminated` itself.
    *
    * @returns {Promise<SessionRecord[]>}
    */

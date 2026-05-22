@@ -54,8 +54,25 @@ check_prereqs() {
   return $missing
 }
 
+# Validate the arch positional against the supported set. Called from
+# both the `--check` early-exit path and the main build path so an
+# unknown arch can't pass `--check` and then surface a confusing
+# failure deeper in the build.
+check_arch() {
+  case "$ARCH" in
+    x86_64|aarch64|arm64) return 0 ;;
+    *)
+      echo "unknown arch: $ARCH (expected x86_64 or aarch64)" >&2
+      return 1
+      ;;
+  esac
+}
+
 if [ "$CHECK_ONLY" = "1" ]; then
-  if check_prereqs; then
+  ok=0
+  check_prereqs || ok=1
+  check_arch || ok=1
+  if [ "$ok" = 0 ]; then
     echo "All prerequisites satisfied for arch=$ARCH."
     exit 0
   fi
@@ -63,6 +80,9 @@ if [ "$CHECK_ONLY" = "1" ]; then
 fi
 
 if ! check_prereqs; then
+  exit 1
+fi
+if ! check_arch; then
   exit 1
 fi
 

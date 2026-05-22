@@ -22,10 +22,13 @@ mod imp {
     };
     use std::collections::BTreeMap;
 
-    /// Syscall numbers we explicitly deny. Linux assigns syscall numbers
-    /// per arch; we resolve them at compile time via libc constants.
+    /// Syscall numbers we explicitly deny. Linux assigns syscall
+    /// numbers per arch; we resolve them at compile time via libc
+    /// constants. Arch-specific entries (`ioperm`, `iopl`) are gated
+    /// — they're x86-only and don't exist as syscalls on aarch64.
     fn deny_list() -> Vec<i64> {
-        vec![
+        #[allow(unused_mut)]
+        let mut v = vec![
             libc::SYS_ptrace as i64,
             libc::SYS_add_key as i64,
             libc::SYS_request_key as i64,
@@ -44,9 +47,16 @@ mod imp {
             libc::SYS_reboot as i64,
             libc::SYS_settimeofday as i64,
             libc::SYS_adjtimex as i64,
-            libc::SYS_ioperm as i64,
-            libc::SYS_iopl as i64,
-        ]
+        ];
+        // `ioperm` / `iopl` are direct-hardware-port-IO syscalls; the
+        // kernel only exposes them on x86 family arches. Including
+        // them unconditionally fails to compile for aarch64 guests.
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        {
+            v.push(libc::SYS_ioperm as i64);
+            v.push(libc::SYS_iopl as i64);
+        }
+        v
     }
 
     pub fn install() -> Result<(), String> {
