@@ -189,7 +189,7 @@ Invitation locators will include addresses for all active networks. When
 the accepting daemon connects, it tries each address in order and uses the
 first one that succeeds.
 
-## Step 1c: Enable OCapN-Noise Networking (Recommended)
+## Step 1c: Enable OCapN-Noise Networking
 
 The OCapN-Noise transport carries daemon-to-daemon traffic over an
 authenticated, encrypted OCapN session instead of plaintext CapTP. It
@@ -388,14 +388,33 @@ message in the inbox and use the reply action, or compose a new message to
 
 ### Connection Lifecycle
 
-1. **TCP Transport**: Each daemon runs a TCP listener via the
-   `tcp-netstring.js` network module
-2. **Invitation URL**: Encodes the inviter's node ID, host handle ID, and
-   TCP address
-3. **Accept**: The acceptor registers the inviter's peer info, resolves
-   the remote invitation formula, and exchanges host handle IDs
-4. **CapTP Session**: A persistent CapTP session carries all subsequent
-   `E()` calls between the daemons
+The lifecycle has the same four stages regardless of transport; only
+the bytes-and-handshake layer differs.
+
+1. **Transport**: Each daemon runs a listener — TCP for `tcp-netstring`,
+   TCP carrying an OCapN-Noise session for `ocapn`, or libp2p's
+   transport stack for `libp2p`.
+2. **Invitation URL**: Encodes the inviter's node id, host handle id,
+   and one or more connection-hint addresses (TCP `at=tcp+netstring+
+   json+captp0://…`, OCapN `at=ocapn+noise+tcp://…`, or libp2p
+   multiaddrs).
+3. **Accept**: The acceptor parses the locator, registers the inviter's
+   peer info, iterates installed networks for one that `supports` the
+   hint's protocol, dials it, and runs the `hello` handshake to
+   exchange host-handle ids.
+4. **Session**: A persistent session carries all subsequent `E()` calls
+   between the daemons. Under `tcp-netstring` and `libp2p` this is a
+   CapTP session over the dialled transport; under `ocapn` it is a
+   single OCapN-Noise session — authenticated by the peer's Ed25519
+   public key and encrypted by the Noise handshake — that the
+   `EndoGreeter`/`EndoGateway` peer protocol rides on top of as
+   `E()` calls inside the OCapN session.
+
+The bootstrap object on each side is the same `EndoGreeter` regardless
+of transport; under `ocapn` the dialing peer first fetches an
+`EndoOcapnBootstrap` exo from the OCapN locator at a well-known
+swissnum and pulls the greeter from it, while under
+`tcp-netstring`/`libp2p` it is the CapTP session bootstrap directly.
 
 ### Formula IDs Across Nodes
 
@@ -408,23 +427,29 @@ gateway, and calls `E(gateway).provide(id)` to fetch the value.
 
 ### Reconnection
 
-If the TCP connection drops, the network transport cancels the peer
-formula context, which evicts the stale controller from the daemon's
-cache. The next `provide()` call for any value on the remote node triggers
-a fresh connection through the RemoteControl state machine (which resets
-to its `start` state on disconnection). Persistent formula graph entries,
-pet store entries, and message records are all strings that survive the
-reconnection.
+If the transport drops the underlying socket, the network module
+cancels the peer formula context, which evicts the stale controller
+from the daemon's cache. The next `provide()` call for any value on
+the remote node triggers a fresh connection through the
+`RemoteControl` state machine (which resets to its `start` state on
+disconnection) and a fresh handshake — over a fresh CapTP session for
+`tcp-netstring`/`libp2p`, over a fresh OCapN-Noise session for
+`ocapn`. Persistent formula graph entries, pet store entries, and
+message records are all strings that survive the reconnection.
 
-Old CapTP `Far` references (live object proxies) are invalidated by a
-connection drop and must be re-resolved via `provide(formulaId)`.
+Old live-object proxies (CapTP `Far` references, or OCapN imports)
+are invalidated by a connection drop and must be re-resolved via
+`provide(formulaId)`.
 
 ## Troubleshooting
 
 ### "Cannot connect to peer: no supported addresses"
 
-The daemon has no network transport installed. Run `/network` to set one
-up.
+The daemon has no network transport installed, or the one it has does
+not `supports` the protocol named in the connection hint. Install one:
+`/network` for TCP+CapTP, `/network-libp2p` for libp2p, or
+`endo run --UNCONFINED packages/daemon/src/networks/setup-ocapn.js
+--powers @agent` for OCapN-Noise.
 
 ### Invitation locator doesn't work
 
