@@ -4,9 +4,10 @@ Adapters for Node.js streams to Endo's async iterable streams.
 
 ## Overview
 
-This package provides functions to adapt Node.js [`Readable`][node-readable] and [`Writable`][node-writable]
-streams to Endo's stream interface, which models streams as hardened async
-iterators of `Uint8Array` chunks.
+This package provides functions to adapt
+Node.js [`Readable`][node-readable] and [`Writable`][node-writable] streams
+to Endo's stream interface,
+which models streams as hardened async iterators of `Uint8Array` chunks.
 
 See [`@endo/stream`](../stream/README.md) for more about Endo's stream model.
 
