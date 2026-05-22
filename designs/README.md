@@ -225,11 +225,12 @@ legibility follow-ups to issue #378),
 `EndoMount`, mount-scoped entry descriptors as values, snapshotting,
 and trusted physical-backing provenance as a hidden Exo facet),
 [familiar-flatpak-pipeline](familiar-flatpak-pipeline.md) (added
-2026-05-19; Flatpak packaging pipeline for the Familiar Linux
-distribution: `org.freedesktop.Platform//24.08` runtime,
-`org.electronjs.Electron2.BaseApp` base, narrow `finish-args`,
-single-file `.flatpak` bundle attached to GitHub Releases;
-implements [`familiar-release.md`](familiar-release.md) G4
+2026-05-19, revised 2026-05-22; Flatpak packaging pipeline for the
+Familiar Linux distribution: `org.freedesktop.Platform//24.08`
+runtime, `org.electronjs.Electron2.BaseApp` base, narrow
+`finish-args`, single-file `.flatpak` bundle attached to GitHub
+Releases; implements `familiar-release.md` (PR
+[#231](https://github.com/endojs/endo-but-for-bots/pull/231)) G4
 followup),
 [patterns-diagnostic-feedback](patterns-diagnostic-feedback.md) (added
 2026-05-19, revised 2026-05-20; opt-in
@@ -404,7 +405,7 @@ LLM-agent stack).*
 | [familiar-chat-weblet-hosting](familiar-chat-weblet-hosting.md) | 2026-02-14 | 2026-02-26 | Not Started |
 | [familiar-daemon-bundling](familiar-daemon-bundling.md) | 2026-02-14 | 2026-03-05 | **Complete** |
 | [familiar-electron-shell](familiar-electron-shell.md) | 2026-02-14 | 2026-02-26 | **Complete** |
-| [familiar-flatpak-pipeline](familiar-flatpak-pipeline.md) | 2026-05-19 | 2026-05-19 | Proposed |
+| [familiar-flatpak-pipeline](familiar-flatpak-pipeline.md) | 2026-05-19 | 2026-05-22 | Proposed |
 | [familiar-gateway-migration](familiar-gateway-migration.md) | 2026-02-14 | 2026-02-26 | **Complete** |
 | [familiar-localhttp-protocol](familiar-localhttp-protocol.md) | 2026-02-24 | 2026-02-25 | In Progress (partially implemented) |
 | [familiar-unified-weblet-server](familiar-unified-weblet-server.md) | 2026-02-14 | 2026-05-06 | In Progress |
