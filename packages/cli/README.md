@@ -64,6 +64,11 @@ endo run program.js --powers ENDO   # All of the power of the daemon
 endo run program.js --powers <pet>  # A named guest's powers
 ```
 
+The "primary user" is the user account that started the daemon.
+`HOST` designates everything that user has authority to do.
+See [Agents and Messages](#agents-and-messages) below for a fuller
+treatment of agents.
+
 Make a persistent worker wherein programs can run:
 
 ```sh
