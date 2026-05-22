@@ -67,6 +67,13 @@ harden(render);
  * given specimen does not match the given pattern. Returns `undefined` when
  * the specimen matches.
  *
+ * Cost note: this implementation drives `confirmMatches` with a rejector that
+ * throws and immediately catches, paying one thrown `Error` (and stack-trace
+ * capture) per leaf-failure to recover the message text. A follow-up to expose
+ * a non-throwing accessor (a "render the rejection template without throwing"
+ * entrypoint) on the production matcher would let this function format the
+ * message directly and erase the throw-and-catch overhead.
+ *
  * @param {Passable} specimen
  * @param {Pattern} pattern
  * @returns {string | undefined}
