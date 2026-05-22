@@ -57,7 +57,7 @@ Run a confined program:
 ```sh
 endo run program.js
 endo run program.js --powers NONE   # No special powers (default)
-endo run program.js --powers AGENT  # All of the primary user's agency
+endo run program.js --powers HOST   # All of the primary user's agency
 endo run program.js --powers ENDO   # All of the power of the daemon
 ```
 
