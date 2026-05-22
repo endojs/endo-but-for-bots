@@ -431,6 +431,11 @@ export const makeHostMaker = ({
    * @param {FormulaIdentifier | undefined} hostHandleId
    * @param {NodeNumber} agentNodeNumber
    * @param {(message: Uint8Array) => Uint8Array} agentSignBytes
+   * @param {{ publicKey: Uint8Array, privateKey: Uint8Array }} agentKeypair
+   *   Raw 32-byte Ed25519 keypair for this host agent. Exposed via
+   *   `getSigningKeys` so unconfined network caplets (OCapN-Noise in
+   *   particular) can bind their session identity to the agent rather
+   *   than minting fresh per-network keys.
    * @param {FormulaIdentifier} storeId
    * @param {FormulaIdentifier} mailboxStoreId
    * @param {FormulaIdentifier | undefined} mailHubId
@@ -452,6 +457,7 @@ export const makeHostMaker = ({
     hostHandleId,
     agentNodeNumber,
     agentSignBytes,
+    agentKeypair,
     storeId,
     mailboxStoreId,
     mailHubId,
@@ -2152,6 +2158,13 @@ export const makeHostMaker = ({
       return toHex(agentSignBytes(fromHex(hexBytes)));
     };
 
+    /** @type {EndoHost['getSigningKeys']} */
+    const getSigningKeys = async () =>
+      harden({
+        publicKey: agentKeypair.publicKey,
+        privateKey: agentKeypair.privateKey,
+      });
+
     /** @type {EndoHost['addPeerInfo']} */
     const addPeerInfo = async peerInfo => {
       const endoBootstrap = getEndoBootstrap();
@@ -2584,6 +2597,7 @@ export const makeHostMaker = ({
       gateway,
       greeter,
       sign,
+      getSigningKeys,
       getPeerInfo,
       addPeerInfo,
       listKnownPeers,

@@ -459,6 +459,11 @@ export const HostInterface = M.interface('EndoHost', {
   gateway: M.call().returns(M.promise()),
   // Sign hex-encoded bytes with the daemon's root Ed25519 key, returns hex signature
   sign: M.call(M.string()).returns(M.promise()),
+  // Return the agent's raw Ed25519 keypair bytes. Exposed only to
+  // confined-out network caplets (OCapN-Noise) that need the private
+  // key for the Noise handshake; do NOT extend the surface that
+  // ordinary capabilities can reach.
+  getSigningKeys: M.call().returns(M.promise()),
   // Get peer info
   getPeerInfo: M.call().returns(M.promise()),
   // Add peer info
