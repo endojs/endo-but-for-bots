@@ -105,14 +105,48 @@ const validateCreateSessionBody = body => {
     }
   }
   if (body.credentials !== undefined) {
-    if (
-      body.credentials === null ||
-      typeof body.credentials !== 'object' ||
-      Array.isArray(body.credentials) ||
-      typeof body.credentials.apiKey !== 'string' ||
-      body.credentials.apiKey.length === 0
-    ) {
-      return 'credentials must be { apiKey: <non-empty string> }';
+    // `Credentials` (from protocol.types.d.ts) has TWO optional
+    // variants: `{ apiKey }` and `{ oauthToken: { accessToken,
+    // expiresAt } }`. At least one must be present and well-formed.
+    const creds = body.credentials;
+    if (creds === null || typeof creds !== 'object' || Array.isArray(creds)) {
+      return 'credentials must be an object';
+    }
+    /** @type {string | undefined} */
+    const apiKey = typeof creds.apiKey === 'string' ? creds.apiKey : undefined;
+    const apiKeyOk = apiKey !== undefined && apiKey.length > 0;
+    const ot = creds.oauthToken;
+    /** @type {{accessToken: unknown, expiresAt: unknown} | undefined} */
+    const otRecord =
+      ot !== undefined &&
+      ot !== null &&
+      typeof ot === 'object' &&
+      !Array.isArray(ot)
+        ? /** @type {{accessToken: unknown, expiresAt: unknown}} */ (ot)
+        : undefined;
+    /** @type {string | undefined} */
+    const accessToken =
+      otRecord && typeof otRecord.accessToken === 'string'
+        ? otRecord.accessToken
+        : undefined;
+    /** @type {string | undefined} */
+    const expiresAt =
+      otRecord && typeof otRecord.expiresAt === 'string'
+        ? otRecord.expiresAt
+        : undefined;
+    const oauthOk =
+      accessToken !== undefined &&
+      accessToken.length > 0 &&
+      expiresAt !== undefined &&
+      expiresAt.length > 0;
+    if (creds.apiKey !== undefined && !apiKeyOk) {
+      return 'credentials.apiKey must be a non-empty string';
+    }
+    if (creds.oauthToken !== undefined && !oauthOk) {
+      return 'credentials.oauthToken must be { accessToken: <non-empty string>, expiresAt: <non-empty string> }';
+    }
+    if (!apiKeyOk && !oauthOk) {
+      return 'credentials must contain apiKey or oauthToken';
     }
   }
   return undefined;

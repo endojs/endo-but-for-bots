@@ -109,9 +109,14 @@ pub use imp::install;
 // Gated:
 //   - `target_os = "linux"`: seccomp is a linux-only kernel feature.
 //   - `feature = "seccomp"`: the filter implementation only exists
-//     when the feature is on. The default feature set includes it
-//     (see `Cargo.toml`), but `cargo test --no-default-features`
-//     skips these.
+//     when the feature is on. The default feature set is empty
+//     (so host-side `cargo check` / rust-analyzer on macOS+Windows
+//     works without the Linux-only deps); these tests run only when
+//     `cargo test --features seccomp` is in effect. The CI
+//     `rust-test` job opts in; the guest build path
+//     (`scripts/build-image.sh`, `scripts/smoke-boot.sh`) also
+//     opts in, so the shipping `claude-agent` always carries the
+//     filter.
 //
 // The tests fork rather than mutating the test runner process, so
 // they're safe to run in parallel with the rest of the suite.

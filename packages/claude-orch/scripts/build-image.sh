@@ -62,7 +62,7 @@ check_arch() {
   case "$ARCH" in
     x86_64|aarch64|arm64) return 0 ;;
     *)
-      echo "unknown arch: $ARCH (expected x86_64 or aarch64)" >&2
+      echo "unknown arch: $ARCH (expected x86_64, aarch64, or arm64)" >&2
       return 1
       ;;
   esac

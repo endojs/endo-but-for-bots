@@ -87,6 +87,22 @@ export const makeBroker = ({ socketPath, apiKey, rotatePolicy }) => {
       await unlink(socketPath).catch(() => {});
       const server = net.createServer(conn => {
         let buf = '';
+        // Track whether the socket is still writable. A peer hangup
+        // mid-reply (EPIPE / ECONNRESET) raises `'error'` on the
+        // socket; without a handler, the broker process would die.
+        // We also stop draining the queue's writes after `closed` so
+        // a long-running policy callback can't keep trying to write
+        // to a dead socket.
+        let closed = false;
+        conn.on('error', () => {
+          // Peer-side reset on teardown is normal; we just stop
+          // serving this connection.
+          closed = true;
+        });
+        conn.on('close', () => {
+          closed = true;
+        });
+
         // Per-connection FIFO queue. Without this each newline-
         // delimited request would run on its own promise chain and
         // a slow `handle()` (e.g. a future async OAuth refresh)
@@ -96,6 +112,13 @@ export const makeBroker = ({ socketPath, apiKey, rotatePolicy }) => {
         // handler off the previous one's settlement.
         /** @type {Promise<unknown>} */
         let queue = Promise.resolve();
+        const safeWrite = line => {
+          if (closed) return;
+          // `conn.write` can fire the socket's 'error' synchronously
+          // on a dead pipe; the handler above flips `closed` and the
+          // EPIPE won't reach the process.
+          conn.write(line);
+        };
         const enqueue = (/** @type {string} */ line) => {
           queue = queue.then(() =>
             // Parse inside the chain so a non-JSON line surfaces via
@@ -104,16 +127,17 @@ export const makeBroker = ({ socketPath, apiKey, rotatePolicy }) => {
               .then(() =>
                 handle(/** @type {BrokerRequest} */ (JSON.parse(line))),
               )
-              .then(res => conn.write(`${JSON.stringify(res)}\n`))
+              .then(res => safeWrite(`${JSON.stringify(res)}\n`))
               .catch(e => {
                 const msg = /** @type {Error} */ (e).message;
-                conn.write(
+                safeWrite(
                   `${JSON.stringify({ type: 'error', message: msg })}\n`,
                 );
               }),
           );
         };
         conn.on('data', chunk => {
+          if (closed) return;
           buf += chunk.toString('utf8');
           for (;;) {
             const i = buf.indexOf('\n');
