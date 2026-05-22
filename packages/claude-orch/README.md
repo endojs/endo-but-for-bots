@@ -132,96 +132,106 @@ names the file the test should live in and a one-line rationale;
 all of them belong on the M4 (security hardening) follow-up
 rather than M5/M6.
 
-**Rust unit tests — `rust/claude-orch/bootstrap-init/`** — zero
-tests today; the binary is only exercised by real-QEMU smoke
-boot, and that job is currently red. Backfill:
+**Rust unit tests — `rust/claude-orch/bootstrap-init/`** — was
+zero tests; now covers the pure-logic helpers. Refactored
+`parse_cmdline` and `write_credentials` so the pure parts are
+testable without `/proc/cmdline` or root:
 
-- [ ] `parse_cmdline` accepts the documented
-  `claude.session_id=… claude.boot_nonce=…` shape and rejects
-  short / missing / multi-key inputs.
+- [x] `parse_cmdline` (`parse_cmdline_str`): documented shape,
+  missing session_id, missing boot_nonce, empty input,
+  last-write-wins on duplicate keys, case-sensitive matching.
+- [x] `write_credentials` (`write_credentials_to`): file lands
+  at `0o600` at create time (no chmod-after window); existing
+  longer payload is fully truncated on overwrite.
 - [ ] `mount_workspace` uses the 9P `trans=fd` socketpair relay
   the way DESIGN §6.5 / R2a specifies (no kernel-mode-read
-  regression).
+  regression). **Deferred** — requires a running 9P responder
+  and Linux mount caps; covered indirectly by the smoke-boot
+  workspace-read probe (below).
 - [ ] `spawn_relay` handles port-fd / socket-fd lifecycle
-  correctly: child closes on parent exit, EOF from one side
-  half-closes the other.
-- [ ] `write_credentials` writes
-  `~/.claude/.credentials.json` with `0600` and refuses an empty
-  payload.
-- [ ] `chown_home` only touches the home dir; fails closed on a
-  symlink loop.
+  correctly. **Deferred** — same constraint as `mount_workspace`.
+- [ ] `chown_home` fails closed on a symlink loop. **Deferred**
+  — needs to construct a symlink loop owned by another uid,
+  which itself needs root.
 - [ ] `drop_privileges` issues `setgroups → setgid → setuid` in
-  that order, propagates each failure, and verifies a final
-  `getresuid` matches the target UID. **This is the load-bearing
-  security claim of the sandbox; not testing it is the largest
-  hole.**
+  order and verifies a final `getresuid` matches. **Deferred**
+  — the syscalls themselves require root; covered end-to-end by
+  the smoke-boot uid/gid probe (below). The "load-bearing
+  security claim" framing remains: end-to-end coverage is
+  necessary but a unit-level test of the order-of-operations
+  would catch regressions earlier.
 
-**Rust unit tests — `rust/claude-orch/runtime-agent/`** — two
-tests today (`frame_roundtrip`, `partial_frame_left_in_tail`),
-both on the framing helper. Backfill:
+**Rust unit tests — `rust/claude-orch/runtime-agent/`** — was
+two framing tests; now covers `rotate_creds` too. The remaining
+items need a substantial refactor toward an injectable
+trait surface and are deferred:
 
-- [ ] `start_attach` / `stop_attach` lifecycle: attach
-  registration is single-writer, `stop_attach` releases the
-  stream id, repeat attach to the same stream id works.
+- [x] `rotate_creds` (`rotate_creds_to`): replace-with-0o600
+  (rename carries the tmp file's mode), truncate-on-overwrite,
+  rejects a path with no `file_name()` cleanly.
+- [ ] `start_attach` / `stop_attach` lifecycle. **Deferred** —
+  requires refactoring the attach state out of `run()` into an
+  injectable struct.
 - [ ] `pump_stdout` forwards child-process stdout into the mux
-  with the right stream id and drops on EPIPE.
-- [ ] `rotate_creds` writes the new payload to a tmp file +
-  rename (atomic), 0600, and is a no-op on identical input.
-- [ ] `ensure_stdio_open` survives an EBADF mid-loop without
-  crashing the heartbeat thread.
-- [ ] `run`'s top-level happy path: open virtio ports → send
-  Ready → install seccomp → enter the heartbeat loop, against
-  fake `Read`/`Write` impls for the two ports.
+  with the right stream id and drops on EPIPE. **Deferred** —
+  same refactor.
+- [ ] `ensure_stdio_open` survives EBADF mid-loop. **Deferred**.
+- [ ] `run`'s top-level happy path against fake virtio ports.
+  **Deferred** — biggest refactor; entire `run()` would need to
+  take its IO surface as a trait object.
 
 **seccomp filter — `rust/claude-orch/runtime-agent/src/seccomp.rs`**
-— compile-checked only; the filter is never loaded and never
-exercised in any test. Backfill:
+— was compile-only; now runs the filter and observes the kill:
 
-- [ ] Per-syscall behavioural test: fork a child, `install()`
-  the filter, attempt each entry in the deny list, assert the
-  child dies with `SIGSYS` (`SECCOMP_RET_KILL_PROCESS`).
-- [ ] Negative test: a syscall *not* on the deny list (e.g.
-  `getpid`) succeeds after install. Pins that we haven't
-  accidentally inverted the default action.
-- [ ] `PR_SET_NO_NEW_PRIVS` is set before the filter is applied
-  and an immediate-following `execve` does not strip the
-  filter.
+- [x] Per-syscall behavioural test: fork a child, `install()` the
+  filter, attempt each of `ptrace` / `keyctl` / `perf_event_open`
+  / `bpf`, assert the child dies with `SIGSYS`.
+- [x] Negative test: `getpid` succeeds after install (default-allow
+  path intact).
+- [x] `PR_GET_NO_NEW_PRIVS` reports `1` post-install. The
+  "survives execve" half is implied by the bit being set (the
+  kernel guarantee), but an actual execve-then-syscall test
+  remains roadmap.
+- [ ] Execve-then-forbidden-syscall test (proves the filter
+  follows the child binary). **Deferred** — needs a tiny helper
+  binary in the test fixture.
 
-**End-to-end / fixture tests — `packages/claude-orch/test/`** —
-the JS-side fakes cover the host wire format but not the
-multi-component interactions. Backfill:
+**End-to-end / fixture tests — `packages/claude-orch/test/`**:
 
-- [ ] `RotateCreds` round-trip: orchestrator → agent push
-  changes the on-disk creds file from inside the guest fake,
-  and a subsequent broker `rotate_if_needed` returning a new
-  payload reaches the agent.
-- [ ] Broker `rotate_if_needed` fixture that returns a fresh
-  payload (the current default is a hard-coded noop, so no
-  test ever drives the rotation path).
-- [ ] `ClaudeClient.interrupt()` — currently throws
-  `"not implemented in v1"`. Pin the message + shape with a
-  `t.throwsAsync` so reading the help text never gets ahead of
-  the impl again.
+- [x] `RotateCreds` round-trip: new
+  `e2e-smoke.test.js` case wires a rotating broker stub →
+  `orch.rotateCreds(sessionId)` → mock guest sees
+  `{type: 'rotate_creds', credentials: {...}}` on its agent
+  socket. Second call returns `false` when the broker's policy
+  says noop; unknown session returns `false` without throwing.
+- [x] Broker `rotate_if_needed` fixture: new `broker.test.js`
+  (7 tests) wires the broker over its UDS, exercises issue +
+  revoke happy paths, pins the noop default, drives a non-noop
+  rotation via an injected `rotatePolicy`, and includes the
+  malformed-JSON survival case (kumavis #1) and a
+  UDS-is-0o600 pinning.
+- [x] `ClaudeClient.interrupt()` shape pin: new
+  `claude-client.test.js` (3 tests).
 
 **Real-QEMU smoke boot — `packages/claude-orch/scripts/smoke-boot.sh`**
-— asserts `hello.json` and `agent-ready.json` land. Doesn't
-verify the rest of the guest stack actually works. Backfill:
+— now captures runtime-agent `Log` frames into
+`agent-logs.ndjson` and greps for three startup probes the
+agent emits unconditionally:
 
-- [ ] Read-from-workspace assertion: pre-populate the in-memory
-  endo-fs with a known file, then have the host-side smoke
-  driver read it back through the mounted 9P (e.g. dispatch a
-  `cat /workspace/hello.txt` and check the bytes via the stdio
-  mux).
-- [ ] `claude --version` (or equivalent) launches successfully
-  inside the rootfs, proving the pinned `claude-code@2.0.0`
-  binary survives image build + boot.
-- [ ] Post-`drop_privileges` integrity check: agent reports its
-  own `uid/gid` in the first `Log` after Ready; smoke driver
-  asserts it's `1000/1000`, not `0/0`.
+- [x] Read-from-workspace assertion: agent reads
+  `/workspace/hello.txt` (pre-populated by `smoke-boot-host.js`)
+  post-drop_privileges and logs the contents.
+- [x] `claude --version` launches successfully inside the rootfs.
+- [x] Post-`drop_privileges` uid/gid is `1000/1000`. The probe
+  is emitted by the runtime-agent and the shell driver fails the
+  job if the line is missing or carries the wrong uid.
 
-Track these as a single M4 follow-up; merging them shifts the
-"Runtime agent drops privileges" `[x]` checkmark from
-"verified by reading the code" to "verified by code + tests".
+The smoke-boot probes give the previously-untested guest
+claims (mount, drop_privileges, image-build) end-to-end
+regression coverage. Unit-level coverage of the same paths in
+bootstrap-init / runtime-agent's `run()` remains the higher-
+confidence answer and stays on this list, gated on the
+refactors called out above.
 
 ## Quick smoke boot
 
