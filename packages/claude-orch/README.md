@@ -281,23 +281,173 @@ that `9p-server.test.js` exercises in-process.
 CI runs this job as `claude-orch-smoke-boot-tcg` in
 `.github/workflows/ci.yml`.
 
-## Running the full daemons
+## Operator's guide
+
+### 0. Prerequisites
+
+- Linux host with `/dev/kvm` accessible to the orchestrator UID
+  (for production; macOS `hvf` is M2 roadmap).
+- `qemu-system-x86_64` (and / or `qemu-system-aarch64`) on PATH.
+- `rustup` with the musl target for the host arch, `mkosi`, `make`,
+  and a checked-out Linux source tree at `$LINUX_SRC`
+  (default `/usr/src/linux`) — only needed to *build* the guest
+  image, not to run sessions against one.
+- The orchestrator and broker daemons should run as the same
+  non-root UID. That UID owns every per-session UDS, the
+  sessions.json state file, and the guest image directory.
+
+### 1. Build the guest image (once per arch / pinned `CLAUDE_CODE_VERSION`)
+
+`scripts/build-image.sh` cross-compiles the Rust guest binaries
+(`bootstrap-init` and `runtime-agent` with `--features seccomp`),
+builds the Linux kernel from `images/kernel/microvm.fragment`,
+and runs mkosi to assemble the rootfs. The result lands in
+`packages/claude-orch/images/build/<arch>/` as
+`vmlinux-<arch>` + `rootfs.raw`.
 
 ```sh
-# one shell — credential broker
-CLAUDE_ORCH_SOCKET=/tmp/claude/api.sock \
-CLAUDE_ORCH_SESSION_DIR=/tmp/claude/sessions \
-CLAUDE_ORCH_BROKER_SOCKET=/tmp/claude/broker.sock \
-ANTHROPIC_API_KEY=sk-... \
-  node bin/claude-broker
-
-# another shell — orchestrator
-CLAUDE_ORCH_SOCKET=/tmp/claude/api.sock \
-CLAUDE_ORCH_SESSION_DIR=/tmp/claude/sessions \
-CLAUDE_ORCH_BROKER_SOCKET=/tmp/claude/broker.sock \
-CLAUDE_ORCH_IMAGE_DIR=$PWD/images/build \
-  node bin/claude-orch
+yarn workspace @endo/claude-orch build:image
+# Pin a specific Claude Code release into the rootfs:
+CLAUDE_CODE_VERSION=2.0.0 ./packages/claude-orch/scripts/build-image.sh x86_64
+# Pre-flight check (validate prereqs without building):
+./packages/claude-orch/scripts/build-image.sh --check x86_64
 ```
+
+Both `bin/claude-orch` and `scripts/smoke-boot.sh` look for these
+artifacts under `$CLAUDE_ORCH_IMAGE_DIR`.
+
+### 2. Start the credential broker
+
+The broker holds the long-lived credential and drives all
+rotation. Run it in its own process so the credential isn't in
+the orchestrator's address space (DESIGN.md §5.5).
+
+**API-key mode** (single static credential, no rotation):
+
+```sh
+mkdir -p /tmp/claude && chmod 0700 /tmp/claude
+ANTHROPIC_API_KEY=sk-ant-... \
+CLAUDE_ORCH_BROKER_SOCKET=/tmp/claude/broker.sock \
+  node packages/claude-orch/bin/claude-broker
+```
+
+Or read the key from a 0600 sidecar file:
+
+```sh
+CLAUDE_ORCH_BROKER_CONFIG=/etc/claude/api.key \
+CLAUDE_ORCH_BROKER_SOCKET=/tmp/claude/broker.sock \
+  node packages/claude-orch/bin/claude-broker
+```
+
+**OAuth mode** (RFC 6749 §6 refresh-token grant — the broker
+periodically swaps a long-lived refresh token for a short-lived
+access token and pushes the result to every subscribed session;
+the refresh token never enters a guest VM):
+
+```sh
+CLAUDE_ORCH_BROKER_SOCKET=/tmp/claude/broker.sock \
+CLAUDE_ORCH_BROKER_OAUTH_TOKEN_URL=https://auth.example.com/oauth/token \
+CLAUDE_ORCH_BROKER_OAUTH_CLIENT_ID=$YOUR_CLIENT_ID \
+CLAUDE_ORCH_BROKER_OAUTH_CLIENT_SECRET=$YOUR_CLIENT_SECRET \
+CLAUDE_ORCH_BROKER_OAUTH_REFRESH_TOKEN=$YOUR_REFRESH_TOKEN \
+CLAUDE_ORCH_BROKER_OAUTH_SCOPE='claude:read claude:write' \
+CLAUDE_ORCH_BROKER_REFRESH_WINDOW_MS=300000 \
+  node packages/claude-orch/bin/claude-broker
+```
+
+The broker performs an initial refresh at startup; if the IdP is
+unreachable it exits 1 rather than serve stale credentials.
+`CLAUDE_ORCH_BROKER_OAUTH_CLIENT_SECRET` and `_OAUTH_SCOPE` are
+optional. `_REFRESH_WINDOW_MS` controls how far before the
+access token's `expiresAt` the broker schedules the next refresh
+(default 5 min).
+
+### 3. Start the orchestrator
+
+```sh
+CLAUDE_ORCH_SOCKET=/tmp/claude/api.sock \
+CLAUDE_ORCH_SESSION_DIR=/tmp/claude/sessions \
+CLAUDE_ORCH_STATE_PATH=/tmp/claude/sessions.json \
+CLAUDE_ORCH_BROKER_SOCKET=/tmp/claude/broker.sock \
+CLAUDE_ORCH_IMAGE_DIR=$PWD/packages/claude-orch/images/build \
+  node packages/claude-orch/bin/claude-orch
+```
+
+The orchestrator binds `$CLAUDE_ORCH_SOCKET` (0600), restores any
+sessions persisted at `$CLAUDE_ORCH_STATE_PATH`, and probes their
+QEMU PIDs with `kill(pid, 0)` to mark each as `unhealthy` (VM
+still alive) or `terminated` (VM gone) for the operator to
+handle.
+
+### 4. Drive a session via the HTTP/UDS API
+
+The API is HTTP/1.1 over `$CLAUDE_ORCH_SOCKET`. With `curl
+--unix-socket`:
+
+```sh
+SOCK=/tmp/claude/api.sock
+
+# Create a session. `network: "egress"` allows outbound only;
+# `network: "none"` is air-gapped. `attachMode: "stream"`
+# allocates a per-session attach UDS; `"none"` skips it.
+curl --unix-socket $SOCK -X POST http://h/v1/sessions \
+  -H 'content-type: application/json' \
+  -d '{
+        "network": "egress",
+        "attachMode": "stream",
+        "initialPrompt": "Hello, Claude.",
+        "resources": { "vcpus": 2, "memMB": 2048 }
+      }'
+# → 200 {"id":"<sid>","fsSocketPath":"…/fs.sock",
+#         "attachSocketPath":"…/attach.sock", ...}
+
+# Bind your 9P responder to `fsSocketPath` (the orchestrator
+# *connects* to it, server=off chardev). For development use the
+# host-side 9P bridge from @endo/9p-server backed by an
+# @endo/endo-fs Filesystem (see scripts/smoke-boot-host.js for the
+# pattern). With the Endo container factory path, the factory
+# binds this automatically.
+
+# Now tell the orchestrator the FS is ready — it spawns QEMU,
+# waits for Hello on ctl.sock, returns a fresh access token from
+# the broker subscription, BootConfig flows in, agent comes up.
+curl --unix-socket $SOCK -X POST http://h/v1/sessions/$SID/ready
+
+# Attach: stream stdin/stdout to claude-code inside the guest.
+# The attach UDS carries the stdio mux's `default0` frame.
+nc -U /tmp/claude/sessions/$SID/attach.sock
+
+# Tear down.
+curl --unix-socket $SOCK -X DELETE http://h/v1/sessions/$SID
+```
+
+`GET /v1/sessions` lists summaries; `GET /v1/sessions/<id>`
+returns the full Session record (with `state`, `vmPid`, sockets).
+
+### 5. (Alternative) Drive sessions via the Endo container factory
+
+`@endo/claude-container` exposes the orchestrator as an Endo
+capability: a form on `@host` accepting `{name, filesystem,
+network, model, credentials, initialPrompt}`. The factory does
+steps 4a/4b for you and stores a `ClaudeClient` exo in the host's
+petstore. See `packages/claude-container/README.md` for the
+factory provisioning steps and ENDO-INTEGRATION.md §5 for the
+form schema.
+
+### 6. Persistence + restart
+
+If `CLAUDE_ORCH_STATE_PATH` is set, the orchestrator journals
+session state to that file at every transition (0600,
+credentials stripped from the projection). On startup it
+restores from that file and reattaches to surviving QEMU
+processes. Sessions whose VMs are gone are marked `terminated`;
+sessions whose VMs are still alive but whose orchestrator was
+killed mid-flight are marked `unhealthy` and the operator can
+choose to `DELETE` them.
+
+The credentials broker has no on-disk state; OAuth refresh
+tokens that the IdP rotated are lost on broker restart and the
+broker walks forward from the configured `_OAUTH_REFRESH_TOKEN`.
 
 ## Layout
 
@@ -333,17 +483,45 @@ rust/claude-orch/
 
 ## Configuration
 
-All knobs are environment variables — no config file:
+All knobs are environment variables — no config file. The
+orchestrator and broker process honour different subsets; the
+table is grouped accordingly.
+
+### Orchestrator (`bin/claude-orch`)
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `CLAUDE_ORCH_SOCKET` | `/run/claude-orch/api.sock` | API socket path. |
-| `CLAUDE_ORCH_SESSION_DIR` | `/run/claude-orch/sessions` | Per-session UDS dir. |
-| `CLAUDE_ORCH_BROKER_SOCKET` | `/run/claude-orch/broker.sock` | Broker UDS. |
-| `CLAUDE_ORCH_IMAGE_DIR` | `/opt/claude-orch/share/images` | Kernel + rootfs. |
-| `CLAUDE_ORCH_DEFAULT_VCPUS` | `2` | Default per-session vCPUs. |
-| `CLAUDE_ORCH_DEFAULT_MEM_MB` | `2048` | Default per-session RAM (MB). |
-| `CLAUDE_ORCH_BOOT_DEADLINE_MS` | `30000` | Hello deadline. |
-| `CLAUDE_ORCH_HEARTBEAT_TIMEOUT_MS` | `60000` | Agent unhealthy threshold. |
+| `CLAUDE_ORCH_SOCKET` | `/run/claude-orch/api.sock` | Caller-facing HTTP/UDS API. 0600. |
+| `CLAUDE_ORCH_SESSION_DIR` | `/run/claude-orch/sessions` | Per-session UDS subdirs are minted here. |
+| `CLAUDE_ORCH_STATE_PATH` | `/var/lib/claude-orch/sessions.json` | Persisted session table for restart-survival. Set to empty to disable persistence. |
+| `CLAUDE_ORCH_BROKER_SOCKET` | `/run/claude-orch/broker.sock` | Broker UDS the orchestrator subscribes against. |
+| `CLAUDE_ORCH_IMAGE_DIR` | `/opt/claude-orch/share/images` | Where `vmlinux-<arch>` + `rootfs.raw` live (output of `build-image.sh`). |
+| `CLAUDE_ORCH_DEFAULT_VCPUS` | `2` | Default per-session vCPUs. Overridable on each create. |
+| `CLAUDE_ORCH_DEFAULT_MEM_MB` | `2048` | Default per-session RAM (MB). Overridable on each create. |
+| `CLAUDE_ORCH_BOOT_DEADLINE_MS` | `30000` | Max wall-clock to wait for the guest's Hello before `boot_failed`. |
+| `CLAUDE_ORCH_HEARTBEAT_TIMEOUT_MS` | `60000` | Mark session `unhealthy` after this many ms without an agent heartbeat. |
+
+### Broker (`bin/claude-broker`) — api-key mode
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `CLAUDE_ORCH_BROKER_SOCKET` | `/run/claude-orch/broker.sock` | UDS the orchestrator subscribes against. |
+| `ANTHROPIC_API_KEY` | _none_ | Long-lived API key (`sk-ant-…`). Used when `CLAUDE_ORCH_BROKER_CONFIG` and the OAuth env vars are unset. |
 | `CLAUDE_ORCH_BROKER_CONFIG` | _none_ | Path to a 0600 file containing the API key, alternative to `ANTHROPIC_API_KEY`. |
-| `ANTHROPIC_API_KEY` | _none_ | Used by the broker if `CLAUDE_ORCH_BROKER_CONFIG` is unset. |
+
+### Broker — OAuth mode
+
+Switches on when `CLAUDE_ORCH_BROKER_OAUTH_TOKEN_URL` is set. The
+broker does an initial RFC 6749 §6 refresh-token grant at
+startup, then schedules subsequent refreshes against the access
+token's `expiresAt` and pushes fresh credentials to every
+subscriber.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `CLAUDE_ORCH_BROKER_OAUTH_TOKEN_URL` | _none_ | OAuth2 token endpoint URL (required to enter OAuth mode). |
+| `CLAUDE_ORCH_BROKER_OAUTH_CLIENT_ID` | _none_ | Required in OAuth mode. |
+| `CLAUDE_ORCH_BROKER_OAUTH_CLIENT_SECRET` | _none_ | Optional (PKCE-only clients). |
+| `CLAUDE_ORCH_BROKER_OAUTH_REFRESH_TOKEN` | _none_ | Long-lived secret. Required in OAuth mode. Stays in the broker process — never crosses into a guest VM. |
+| `CLAUDE_ORCH_BROKER_OAUTH_SCOPE` | _none_ | Optional space-separated scope list. |
+| `CLAUDE_ORCH_BROKER_REFRESH_WINDOW_MS` | `300000` | Refresh this many ms before the current access token's `expiresAt`. |
