@@ -384,7 +384,9 @@ test('e2e: rotateCreds pushes a fresh payload to the runtime-agent', async t => 
     async issue(_sessionId) {
       return { apiKey: 'sk-original' };
     },
-    async revoke(_sessionId) {},
+    async revoke(_sessionId) {
+      // unused in the rotation round-trip test
+    },
     async rotateIfNeeded(_sessionId) {
       rotationsServed += 1;
       return rotationsServed === 1 ? { apiKey: 'sk-rotated-A' } : null;

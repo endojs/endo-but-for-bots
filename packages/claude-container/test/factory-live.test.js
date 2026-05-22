@@ -8,7 +8,6 @@ import '@endo/init/debug.js';
 import test from 'ava';
 import net from 'node:net';
 import path from 'node:path';
-import url from 'node:url';
 import { mkdtemp, rm, access } from 'node:fs/promises';
 import os from 'node:os';
 
@@ -35,30 +34,38 @@ import {
 import { T, E as ERRNO, QT } from '@endo/9p-server/src/types.js';
 
 const { raw } = String;
-const dirname = url.fileURLToPath(new URL('..', import.meta.url));
 
-let configPathId = 0;
-
-const makeEndoConfig = (...root) => ({
-  statePath: path.join(dirname, ...root, 'state'),
-  ephemeralStatePath: path.join(dirname, ...root, 'run'),
-  cachePath: path.join(dirname, ...root, 'cache'),
+// Build per-test endo configs under a short OS-tempdir-rooted path
+// rather than `${packageDir}/tmp/`. Rationale: the macOS sockaddr_un
+// limit is 104 chars and the GitHub Actions macos-15 runner's
+// checkout prefix
+// `/Users/runner/work/_temp/checkout-XXXXXX/packages/claude-container`
+// already exceeds 70 chars; adding `tmp/<test-shape>/endo.sock` then
+// the daemon's nested `state/worker/<32-char-id>/worker.sock` pushed
+// individual UDS paths past the limit and surfaced as ENOENT (the
+// daemon's `fs.access(sockPath)` couldn't even reach the long path).
+// `os.tmpdir()` is `/var/folders/.../T/` on macOS (~50 chars
+// pre-realpath) and `/tmp/` on Linux — both leave headroom for the
+// daemon's internal sub-sockets.
+const makeEndoConfig = baseDir => ({
+  statePath: path.join(baseDir, 'state'),
+  ephemeralStatePath: path.join(baseDir, 'run'),
+  cachePath: path.join(baseDir, 'cache'),
   sockPath:
     process.platform === 'win32'
-      ? raw`\\?\pipe\endo-${root.join('-')}-claude-container.sock`
-      : path.join(dirname, ...root, 'endo.sock'),
+      ? raw`\\?\pipe\endo-${path.basename(baseDir)}-cc.sock`
+      : path.join(baseDir, 'endo.sock'),
   address: '127.0.0.1:0',
   pets: new Map(),
   values: new Map(),
 });
 
-const getConfigDir = (title, idx) => {
-  const base = title.replace(/\s/giu, '-').replace(/[^\w-]/giu, '');
-  const tid = String(configPathId).padStart(4, '0');
-  const cid = String(idx).padStart(2, '0');
-  configPathId += 1;
-  // Keep short — UDS path limit (~108 chars on linux).
-  return `${base.slice(0, 16)}#${tid}-${cid}`;
+const allocConfigBaseDir = async t => {
+  // `cc-` prefix keeps the directory greppable for debugging;
+  // `mkdtemp`'s 6-char suffix is plenty for parallel-safe uniqueness.
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'cc-'));
+  t.teardown(() => rm(dir, { recursive: true, force: true }));
+  return dir;
 };
 
 const connectEndo = async (config, t) => {
@@ -77,10 +84,8 @@ const connectEndo = async (config, t) => {
 };
 
 const prepareEndo = async t => {
-  const config = makeEndoConfig(
-    'tmp',
-    getConfigDir(t.title, t.context.endoConfigs.length),
-  );
+  const baseDir = await allocConfigBaseDir(t);
+  const config = makeEndoConfig(baseDir);
   await purge(config);
   await startEndo(config);
   return connectEndo(config, t);

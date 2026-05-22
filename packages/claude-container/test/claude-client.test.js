@@ -1,5 +1,4 @@
 // @ts-nocheck
-/* global Buffer */
 /* eslint-disable import/order */
 
 import '@endo/init';
@@ -16,12 +15,17 @@ const makeStubOrchestrator = ({ onSendPrompt } = {}) => ({
   async createSession() {
     throw new Error('createSession unused in client unit tests');
   },
-  async markReady() {},
-  async terminateSession() {},
+  async markReady() {
+    // unused in the makeClaudeClient code path
+  },
+  async terminateSession() {
+    // unused; we don't assert HTTP teardown in the client unit tests
+  },
   async sendPrompt(session, prompt, opts) {
     if (onSendPrompt) onSendPrompt(session, prompt, opts);
     // Return an empty async iterable so `send()` resolves to a Far
     // iterator over zero events.
+    // eslint-disable-next-line no-empty-function
     return (async function* () {})();
   },
 });
