@@ -69,7 +69,8 @@ The "primary user" is the user account that started the daemon.
 See [Agents and Messages](#agents-and-messages) below for a fuller
 treatment of agents.
 
-Make a persistent worker wherein programs can run:
+Make a persistent worker (a long-lived process the daemon spawns to run
+guest code) wherein programs can run:
 
 ```sh
 endo make worker.js --name my-worker
