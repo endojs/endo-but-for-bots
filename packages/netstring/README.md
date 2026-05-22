@@ -12,6 +12,14 @@ For example, the frame `5:hello,` corresponds to the message `hello`, where
 This package provides `makeNetstringReader` and `makeNetstringWriter` to
 encode and decode netstrings as async iterators of `Uint8Array` chunks.
 
+`makeNetstringReader` and `makeNetstringWriter` follow the same shape
+as other `make*Reader` / `make*Writer` pairs across the Endo packages
+(for example, `@endo/stream-node`).
+A reader wraps an input iterable and yields the framed payloads;
+a writer wraps an output writer and accepts payloads to frame.
+Implementations of new framings should follow the same shape so they
+compose with the rest of the stream toolkit.
+
 See [`@endo/stream`](../stream/README.md) for more about Endo's stream model.
 
 ## Usage
