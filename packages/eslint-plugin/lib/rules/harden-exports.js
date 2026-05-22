@@ -135,6 +135,9 @@ module.exports = {
         for (const exportNode of exportNodes) {
           /** @type {string[]} */
           const exportNames = [];
+          // Stays true only if every binding pattern encountered for this
+          // export was a shape `pushDeclaredNames` recognized.
+          let allRecognized = true;
           if (exportNode.declaration) {
             if (exportNode.declaration.type === 'VariableDeclaration') {
               for (const declaration of exportNode.declaration.declarations) {
@@ -143,6 +146,7 @@ module.exports = {
                   exportNames,
                 );
                 if (!recognized) {
+                  allRecognized = false;
                   context.report({
                     node: declaration,
                     messageId: 'unknownBindingPattern',
@@ -166,41 +170,49 @@ module.exports = {
             }
           }
 
-          const missingHardenCalls = [];
-          for (const exportName of exportNames) {
-            const hasHardenCall = sourceCode.ast.body.some(statement => {
-              return (
-                statement.type === 'ExpressionStatement' &&
-                statement.expression.type === 'CallExpression' &&
-                // @ts-expect-error xxx typedef
-                statement.expression.callee.name === 'harden' &&
-                statement.expression.arguments.length === 1 &&
-                // @ts-expect-error xxx typedef
-                statement.expression.arguments[0].name === exportName
-              );
-            });
+          // Skip the missing-harden enforcement for this export entirely
+          // when any binding pattern was unrecognized. The
+          // `unknownBindingPattern` report above already names the
+          // declaration as unverifiable; emitting a missing-harden report
+          // and autofix on top of a possibly incomplete name list would
+          // contradict that admission and risk inserting wrong fixes.
+          if (allRecognized) {
+            const missingHardenCalls = [];
+            for (const exportName of exportNames) {
+              const hasHardenCall = sourceCode.ast.body.some(statement => {
+                return (
+                  statement.type === 'ExpressionStatement' &&
+                  statement.expression.type === 'CallExpression' &&
+                  // @ts-expect-error xxx typedef
+                  statement.expression.callee.name === 'harden' &&
+                  statement.expression.arguments.length === 1 &&
+                  // @ts-expect-error xxx typedef
+                  statement.expression.arguments[0].name === exportName
+                );
+              });
 
-            if (!hasHardenCall) {
-              missingHardenCalls.push(exportName);
+              if (!hasHardenCall) {
+                missingHardenCalls.push(exportName);
+              }
             }
-          }
 
-          if (missingHardenCalls.length > 0) {
-            const messageId =
-              missingHardenCalls.length === 1
-                ? 'missingHardenCallSingle'
-                : 'missingHardenCallMultiple';
-            context.report({
-              node: exportNode,
-              messageId,
-              data: { names: missingHardenCalls.join(', ') },
-              fix(fixer) {
-                const hardenCalls = missingHardenCalls
-                  .map(name => `harden(${name});`)
-                  .join('\n');
-                return fixer.insertTextAfter(exportNode, `\n${hardenCalls}`);
-              },
-            });
+            if (missingHardenCalls.length > 0) {
+              const messageId =
+                missingHardenCalls.length === 1
+                  ? 'missingHardenCallSingle'
+                  : 'missingHardenCallMultiple';
+              context.report({
+                node: exportNode,
+                messageId,
+                data: { names: missingHardenCalls.join(', ') },
+                fix(fixer) {
+                  const hardenCalls = missingHardenCalls
+                    .map(name => `harden(${name});`)
+                    .join('\n');
+                  return fixer.insertTextAfter(exportNode, `\n${hardenCalls}`);
+                },
+              });
+            }
           }
         }
       },
