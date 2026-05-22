@@ -1,5 +1,5 @@
 // @ts-check
-/* global process, setTimeout */
+/* global process, setTimeout, clearTimeout */
 
 /**
  * Daemon lifecycle management.
@@ -98,6 +98,22 @@ const makeDaemonManager = logger => {
         },
       );
 
+      /** @type {NodeJS.Timeout | undefined} */
+      let timer;
+      let settled = false;
+      const settleResolve = () => {
+        if (settled) return;
+        settled = true;
+        if (timer !== undefined) clearTimeout(timer);
+        resolve(undefined);
+      };
+      const settleReject = (/** @type {Error} */ err) => {
+        if (settled) return;
+        settled = true;
+        if (timer !== undefined) clearTimeout(timer);
+        reject(err);
+      };
+
       let stderr = '';
       child.stderr.on('data', data => {
         stderr += data.toString();
@@ -105,19 +121,19 @@ const makeDaemonManager = logger => {
 
       child.on('close', code => {
         if (code === 0) {
-          resolve(undefined);
+          settleResolve();
           return;
         }
-        reject(
+        settleReject(
           new Error(`daemon-control ${verb} failed (code ${code}): ${stderr}`),
         );
       });
 
-      child.on('error', reject);
+      child.on('error', err => settleReject(err));
 
-      setTimeout(() => {
+      timer = setTimeout(() => {
         child.kill();
-        reject(new Error(`Timeout running daemon-control ${verb}`));
+        settleReject(new Error(`Timeout running daemon-control ${verb}`));
       }, 30_000);
     });
   };
