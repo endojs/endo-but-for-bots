@@ -100,7 +100,9 @@ export const makeBroker = ({ socketPath, apiKey, rotatePolicy }) => {
             // the broker process. Reply with `{type: 'error'}` and keep
             // serving.
             Promise.resolve(line)
-              .then(raw => handle(/** @type {BrokerRequest} */ (JSON.parse(raw))))
+              .then(raw =>
+                handle(/** @type {BrokerRequest} */ (JSON.parse(raw))),
+              )
               .then(res => conn.write(`${JSON.stringify(res)}\n`))
               .catch(e => {
                 const msg = /** @type {Error} */ (e).message;

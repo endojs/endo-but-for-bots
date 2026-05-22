@@ -437,8 +437,7 @@ test('e2e: rotateCreds pushes a fresh payload to the runtime-agent', async t => 
     () =>
       (mockGuest?.agentRx ?? []).some(
         m =>
-          m.type === 'rotate_creds' &&
-          m.credentials?.apiKey === 'sk-rotated-A',
+          m.type === 'rotate_creds' && m.credentials?.apiKey === 'sk-rotated-A',
       ),
     3000,
   );

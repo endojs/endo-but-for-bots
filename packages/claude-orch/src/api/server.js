@@ -36,7 +36,8 @@ const ALLOWED_ATTACH_MODES = new Set(['stream', 'none']);
  * @returns {string | undefined}  error message, or undefined if OK
  */
 const validateCreateSessionBody = body => {
-  if (body === null || typeof body !== 'object') return 'body must be an object';
+  if (body === null || typeof body !== 'object')
+    return 'body must be an object';
   if (body.arch !== undefined && !ALLOWED_ARCHES.has(body.arch)) {
     return `arch must be one of ${[...ALLOWED_ARCHES].join(', ')}`;
   }

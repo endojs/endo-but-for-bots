@@ -67,7 +67,8 @@ export const makeSessionManager = ({ config, persistencePath }) => {
   const isPlausibleRecord = rec => {
     if (rec === null || typeof rec !== 'object') return false;
     const r = /** @type {Record<string, unknown>} */ (rec);
-    if (typeof r.id !== 'string' || !/^[a-zA-Z0-9_-]+$/.test(r.id)) return false;
+    if (typeof r.id !== 'string' || !/^[a-zA-Z0-9_-]+$/.test(r.id))
+      return false;
     if (typeof r.sessionDir !== 'string' || r.sessionDir === '') return false;
     const resolved = path.resolve(r.sessionDir);
     // Refuse traversal: sessionDir must be directly under sessionDirRoot

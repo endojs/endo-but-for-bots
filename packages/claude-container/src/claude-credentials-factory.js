@@ -161,7 +161,12 @@ export const makeCredentialsExo = initialKey => {
   const issueCap = sessionTag => {
     let valid = true;
     let materialised = false;
-    const handle = { tag: sessionTag, invalidate: () => { valid = false; } };
+    const handle = {
+      tag: sessionTag,
+      invalidate: () => {
+        valid = false;
+      },
+    };
     outstanding.add(handle);
     const ic = makeExo('IssuedCredential', IssuedCredentialInterface, {
       async materialise() {

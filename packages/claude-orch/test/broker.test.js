@@ -59,9 +59,7 @@ const setupBroker = async (t, opts = {}) => {
     ...opts,
   });
   const server = await broker.listen();
-  t.teardown(
-    () => new Promise(r => server.close(() => r(undefined))),
-  );
+  t.teardown(() => new Promise(r => server.close(() => r(undefined))));
   return { socketPath, server };
 };
 
