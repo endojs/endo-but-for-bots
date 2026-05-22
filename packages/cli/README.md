@@ -140,7 +140,7 @@ People can have more than one.
 Create agents:
 
 ```sh
-endo mkhost alice  # Create a host agent (unlimited local authority)
+endo mkhost alice  # Create a host agent (all of the primary user's authority)
 endo mkguest bob   # Create a guest agent (limited authority)
 ```
 
