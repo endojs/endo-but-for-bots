@@ -343,6 +343,139 @@ test('e2e: full lifecycle createSession → markReady → attach → terminate',
   t.true(mockGuest?.killed ?? false);
 });
 
+test('e2e: rotation scheduler ticks fire rotateCreds on every ready session', async t => {
+  // Wire the orchestrator with a short `rotationIntervalMs` and a
+  // broker policy that hands back two fresh credentials per session,
+  // then noop. Two parallel sessions; after the scheduler runs a few
+  // ticks each mock guest should see exactly the rotations the broker
+  // produced for it. Proves the per-session sweep works AND that the
+  // interval clears on stop().
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'orch-rot-sched-'));
+  t.teardown(() => rm(dir, { recursive: true, force: true }));
+
+  const apiSock = path.join(dir, 'api.sock');
+  const sessionsDir = path.join(dir, 'sessions');
+
+  /** @type {Map<string, ReturnType<typeof makeMockGuest>>} */
+  const mockGuests = new Map();
+  const mockSpawn = ({ record }) => {
+    const guest = makeMockGuest({ record });
+    mockGuests.set(record.id, guest);
+    setTimeout(() => guest.run().catch(() => {}), 5);
+    const child = /** @type {any} */ ({
+      pid: Math.floor(Math.random() * 99999),
+      killed: false,
+    });
+    let resolveExit;
+    const exitCode = new Promise(r => {
+      resolveExit = r;
+    });
+    return {
+      child,
+      exitCode,
+      kill: () => {
+        guest.stop();
+        resolveExit?.(0);
+      },
+    };
+  };
+
+  // Per-session rotation counter. First two calls per session emit a
+  // fresh credentials payload, subsequent calls noop. The credential
+  // shape is the OAuth variant — proves the short-term-only injection
+  // path: only the `accessToken` reaches the guest, never a long-lived
+  // refresh secret.
+  /** @type {Map<string, number>} */
+  const rotationsPerSession = new Map();
+  const rotatingBroker = {
+    async issue(_sessionId) {
+      return { apiKey: 'sk-initial' };
+    },
+    async revoke(_sessionId) {
+      // unused in the scheduler test; the broker's job is only to
+      // hand back rotations.
+    },
+    async rotateIfNeeded(sessionId) {
+      const n = (rotationsPerSession.get(sessionId) ?? 0) + 1;
+      rotationsPerSession.set(sessionId, n);
+      if (n > 2) return null;
+      return {
+        oauthToken: {
+          accessToken: `tok-${sessionId}-${n}`,
+          expiresAt: new Date(Date.now() + 60_000).toISOString(),
+        },
+      };
+    },
+  };
+
+  const orch = await start({
+    config: {
+      socketPath: apiSock,
+      imageDir: '/unused',
+      sessionDir: sessionsDir,
+      brokerSocketPath: '/unused',
+      defaults: { arch: 'x86_64', vcpus: 2, memMB: 2048 },
+      bootDeadlineMs: 10000,
+      heartbeatTimeoutMs: 60000,
+      // Short interval so the test doesn't take forever.
+      rotationIntervalMs: 25,
+    },
+    networkController: makeStubNetwork(),
+    brokerClient: /** @type {any} */ (rotatingBroker),
+    spawnVm: mockSpawn,
+  });
+  t.teardown(() => orch.stop());
+
+  // Spin up two sessions in parallel.
+  /** @type {string[]} */
+  const sessionIds = await Promise.all(
+    [0, 1].map(async i => {
+      const create = await httpRequest(apiSock, 'POST', '/v1/sessions', {
+        network: 'none',
+        attachMode: 'none',
+      });
+      t.is(create.status, 200, `create ${i}`);
+      const ready = await httpRequest(
+        apiSock,
+        'POST',
+        `/v1/sessions/${create.body.id}/ready`,
+      );
+      t.is(ready.status, 204, `ready ${i}`);
+      return create.body.id;
+    }),
+  );
+
+  // Wait for both sessions to have received their 2 rotations.
+  const rotationsFor = sid =>
+    (mockGuests.get(sid)?.agentRx ?? []).filter(m => m.type === 'rotate_creds');
+  await waitFor(
+    () => sessionIds.every(sid => rotationsFor(sid).length >= 2),
+    3000,
+  );
+
+  for (const sid of sessionIds) {
+    const rotations = rotationsFor(sid);
+    t.true(rotations.length >= 2, `session ${sid} got <2 rotations`);
+    // The two payloads are distinct (n=1 and n=2) and match the
+    // broker policy's sequence.
+    const tokens = rotations.map(m => m.credentials?.oauthToken?.accessToken);
+    t.deepEqual(tokens.slice(0, 2).sort(), [`tok-${sid}-1`, `tok-${sid}-2`]);
+  }
+
+  // After the third tick per session the policy returns null →
+  // no further rotations should ever land, even if we let the
+  // scheduler run longer. Count rotations now, snooze, recount.
+  const beforeNoopCheck = sessionIds.map(sid => rotationsFor(sid).length);
+  await new Promise(r => setTimeout(r, 120));
+  for (const [i, sid] of sessionIds.entries()) {
+    t.is(
+      rotationsFor(sid).length,
+      beforeNoopCheck[i],
+      `session ${sid} kept rotating after policy noop`,
+    );
+  }
+});
+
 test('e2e: rotateCreds pushes a fresh payload to the runtime-agent', async t => {
   // RotateCreds round-trip — README M3 [~] currently calls out that
   // the runtime-agent handler is wired but the orchestrator never

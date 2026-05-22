@@ -77,12 +77,18 @@ shipped through R3:
   `PreemptiveRotate`.
 - [x] `BootConfig.credentials` plumbed from broker through bootstrap
   to `~/.claude/.credentials.json` in guest.
-- [~] `RotateCreds` push from orchestrator → runtime-agent. The
-  runtime-agent handler is wired
-  (`rust/claude-orch/runtime-agent/src/main.rs`) but the
-  orchestrator never invokes it: broker `rotate_if_needed` is a
-  hardcoded noop (`src/broker/main.js:48-49`), so no rotations
-  reach the guest in v1.
+- [x] `RotateCreds` push from orchestrator → runtime-agent.
+  Per-session sweep runs every
+  `CLAUDE_ORCH_ROTATION_INTERVAL_MS` (default off; flip on once
+  the broker is wired with a real `rotatePolicy`). The broker's
+  default policy is still a noop — for api-key mode that's
+  correct (no shorter-term form exists), and operators wiring
+  OAuth replace it via the extension point in
+  `bin/claude-broker`. Wire path proven end-to-end by
+  `e2e-smoke.test.js`'s "rotation scheduler ticks" case (sets
+  `rotationIntervalMs: 25`; both mock guests observe their two
+  rotated payloads). DESIGN.md §5.5 walks through the
+  short-term-only injection model.
 - [x] `initialPrompt` plumbing (`src/main.js`).
 - [ ] Live Anthropic API end-to-end (today's smoke-boot uses a stub
   prompt).
@@ -202,12 +208,14 @@ trait surface and are deferred:
 
 **End-to-end / fixture tests — `packages/claude-orch/test/`**:
 
-- [x] `RotateCreds` round-trip: new
-  `e2e-smoke.test.js` case wires a rotating broker stub →
-  `orch.rotateCreds(sessionId)` → mock guest sees
-  `{type: 'rotate_creds', credentials: {...}}` on its agent
-  socket. Second call returns `false` when the broker's policy
-  says noop; unknown session returns `false` without throwing.
+- [x] `RotateCreds` round-trip — both the on-demand path
+  (`orch.rotateCreds(sessionId)`) and the scheduled sweep
+  (`rotateAllSessions` driven by `setInterval` at
+  `rotationIntervalMs`). The scheduler test in
+  `e2e-smoke.test.js` runs two parallel sessions, observes both
+  mock guests receive their two distinct OAuth-shaped payloads,
+  then confirms the broker's noop turns off the per-session
+  rotations.
 - [x] Broker `rotate_if_needed` fixture: new `broker.test.js`
   (7 tests) wires the broker over its UDS, exercises issue +
   revoke happy paths, pins the noop default, drives a non-noop

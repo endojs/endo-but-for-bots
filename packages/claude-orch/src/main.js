@@ -1,5 +1,5 @@
 // @ts-check
-/* global setTimeout, clearTimeout */
+/* global setTimeout, clearTimeout, setInterval, clearInterval */
 /**
  * @import {
  *   BootConfigMessage,
@@ -44,6 +44,12 @@ export const configFromEnv = () => {
     },
     bootDeadlineMs: Number(env.CLAUDE_ORCH_BOOT_DEADLINE_MS || 30_000),
     heartbeatTimeoutMs: Number(env.CLAUDE_ORCH_HEARTBEAT_TIMEOUT_MS || 60_000),
+    // Default 0 = disabled. Operators flip this on (e.g., 30_000 for
+    // a 30s tick) once the broker is wired with a real rotatePolicy
+    // — see DESIGN.md §5.5 and the broker's `rotatePolicy` injection
+    // point. With no policy the broker returns noop on every tick
+    // and we'd be polling for nothing.
+    rotationIntervalMs: Number(env.CLAUDE_ORCH_ROTATION_INTERVAL_MS || 0),
   });
 };
 harden(configFromEnv);
@@ -393,9 +399,66 @@ export const start = async ({
     return true;
   };
 
+  /**
+   * Sweep every ready session, asking the broker whether credentials
+   * need refreshing and pushing `rotate_creds` to any agent the broker
+   * answers for. Failures on one session don't poison the rest of the
+   * sweep. Used by the scheduled-rotation loop below; also exposed on
+   * the start() return so operators can force a sweep on demand.
+   *
+   * @returns {Promise<{ session: string, rotated: boolean, error?: string }[]>}
+   */
+  const rotateAllSessions = async () => {
+    // Sweep in parallel: each session's rotation is independent
+    // (broker.rotateIfNeeded is per-session) and we don't want a slow
+    // policy on one session to block the rest of the tick. Use
+    // `allSettled` so one failure doesn't poison the report.
+    const ready = sessions.listRecords().filter(r => r.state === 'ready');
+    const settled = await Promise.allSettled(
+      ready.map(async r => ({
+        session: r.id,
+        rotated: await rotateCreds(r.id),
+      })),
+    );
+    return settled.map((s, i) =>
+      s.status === 'fulfilled'
+        ? s.value
+        : {
+            session: ready[i].id,
+            rotated: false,
+            error: /** @type {Error} */ (s.reason).message,
+          },
+    );
+  };
+
+  // Rotation scheduler. Wakes every `config.rotationIntervalMs` and
+  // sweeps ready sessions. Operators enable it only after the broker
+  // is configured with a real `rotatePolicy` (e.g. an OAuth refresher
+  // — see DESIGN.md §5.5). With the default api-key broker, every
+  // tick returns noop and the scheduler is just overhead, so the
+  // sensible default is `0` (disabled).
+  const rotationIntervalMs = config.rotationIntervalMs ?? 0;
+  /** @type {NodeJS.Timeout | null} */
+  let rotationTimer = null;
+  if (rotationIntervalMs > 0) {
+    rotationTimer = setInterval(() => {
+      rotateAllSessions().catch(e => {
+        // eslint-disable-next-line no-console
+        console.error('[rotation] sweep failed:', e);
+      });
+    }, rotationIntervalMs);
+    // Don't hold the event loop open just for the rotation tick.
+    if (typeof rotationTimer.unref === 'function') rotationTimer.unref();
+  }
+
   return harden({
     rotateCreds,
+    rotateAllSessions,
     async stop() {
+      if (rotationTimer) {
+        clearInterval(rotationTimer);
+        rotationTimer = null;
+      }
       const ids = sessions.listSessions().map(s => s.id);
       await Promise.allSettled(ids.map(id => terminateSession(id)));
       await api.close();

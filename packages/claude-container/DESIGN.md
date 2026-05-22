@@ -273,6 +273,29 @@ A separate daemon (Node.js) that holds the long-lived Anthropic credential.
 
 **Why split out**: separates the long-lived secret from the orchestrator's blast radius and centralizes refresh under a single mutex, preventing thundering-herd token refresh.
 
+**Short-term-only injection (OAuth mode)**. When the broker is
+configured with a `rotatePolicy(sessionId, current) → Credentials | null`
+that hits an IdP refresh endpoint, the long-lived credential (a
+refresh token + client secret, typically) **stays in the broker
+process**. Only the result of `broker.issue(sessionId)` — a
+short-lived `{oauthToken: {accessToken, expiresAt}}` payload —
+ever crosses `ctl.sock` into the guest VM. The orchestrator's
+scheduled-rotation loop (`CLAUDE_ORCH_ROTATION_INTERVAL_MS`, off
+by default; see `src/main.js`'s `rotateAllSessions`) sweeps every
+ready session at the configured interval, asking the broker for a
+fresh payload. When the broker returns one, the orchestrator
+sends `{type: 'rotate_creds', credentials}` over `agent.sock`;
+the runtime-agent atomically replaces
+`/home/claude/.claude/.credentials.json` (`rotate_creds_to` in
+`runtime-agent/src/main.rs`) and `claude` picks up the new token
+on the next request. Net effect: the guest never holds the
+long-lived refresh secret, and a compromised guest yields only an
+already-short-lived access token.
+
+For api-key mode the split is moot — the api key IS the
+long-lived credential and there is no shorter-term form to derive.
+Operators wanting the property need to switch to OAuth.
+
 **Endo-side capability layering (R3)**: callers driving the Endo
 factory pass a `ClaudeCredentials` capability (pet name in
 `@host`'s petstore) at form-submission time rather than relying on

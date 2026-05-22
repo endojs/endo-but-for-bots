@@ -269,6 +269,15 @@ export const makeSessionManager = ({ config, persistencePath }) => {
   const listSessions = () => Array.from(sessions.values(), toSummary);
 
   /**
+   * Raw records for in-process consumers (the rotation scheduler in
+   * `main.js`, primarily). External callers should go through
+   * `listSessions()`'s summary view.
+   *
+   * @returns {SessionRecord[]}
+   */
+  const listRecords = () => Array.from(sessions.values());
+
+  /**
    * @param {string} id
    * @param {SessionState} state
    * @param {Partial<SessionRecord>} [updates]
@@ -388,6 +397,7 @@ export const makeSessionManager = ({ config, persistencePath }) => {
     getRecord,
     getSession,
     listSessions,
+    listRecords,
     setState,
     consumeBootNonce,
     forget,

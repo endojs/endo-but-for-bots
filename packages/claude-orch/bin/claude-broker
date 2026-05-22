@@ -11,7 +11,31 @@ const socketPath =
 const configPath = process.env.CLAUDE_ORCH_BROKER_CONFIG;
 
 const apiKey = await loadApiKey({ configPath });
-const broker = makeBroker({ socketPath, apiKey });
+
+// `rotatePolicy` is the extension point for short-term-only
+// credential injection (DESIGN.md §5.5). v1 ships api-key mode
+// with no rotation — the api key IS the long-term credential, no
+// shorter-term form exists. Operators wiring an IdP replace this
+// with a refresher that hits the token endpoint and returns
+// `{ oauthToken: { accessToken, expiresAt } }`. The runtime-agent
+// handles the rotate_creds wire path already; the orchestrator's
+// scheduler (`CLAUDE_ORCH_ROTATION_INTERVAL_MS`) invites this
+// policy to act every tick.
+//
+// Drop-in shape, when the IdP is wired:
+//
+//   const rotatePolicy = async (sessionId, current) => {
+//     // Refresh when there's < REFRESH_WINDOW_MS left on the
+//     // current.oauthToken.expiresAt. Returns null to noop.
+//     return tokenStillFresh(current) ? null : await refreshFromIdP();
+//   };
+//
+// Today: undefined → broker.rotateIfNeeded() returns noop and the
+// orchestrator's per-tick sweep is silent.
+/** @type {undefined} */
+const rotatePolicy = undefined;
+
+const broker = makeBroker({ socketPath, apiKey, rotatePolicy });
 const server = await broker.listen();
 
 console.error(`[claude-broker] listening on ${socketPath}`);
