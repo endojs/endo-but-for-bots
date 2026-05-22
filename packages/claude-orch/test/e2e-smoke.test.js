@@ -133,6 +133,7 @@ const makeMockGuest = ({ record, onAttachData }) => {
         buf = buf.slice(i + 1);
         try {
           const msg = JSON.parse(line);
+          agentRx.push(msg);
           if (msg.type === 'terminate') {
             killed = true;
             agentSocket?.end();
@@ -143,6 +144,9 @@ const makeMockGuest = ({ record, onAttachData }) => {
       }
     });
   };
+
+  /** @type {object[]} */
+  const agentRx = [];
 
   return {
     run,
@@ -157,6 +161,10 @@ const makeMockGuest = ({ record, onAttachData }) => {
     },
     get killed() {
       return killed;
+    },
+    /** All orchestrator → agent messages received over agent.sock. */
+    get agentRx() {
+      return agentRx;
     },
   };
 };
@@ -333,4 +341,124 @@ test('e2e: full lifecycle createSession → markReady → attach → terminate',
   );
   t.is(term.status, 204);
   t.true(mockGuest?.killed ?? false);
+});
+
+test('e2e: rotateCreds pushes a fresh payload to the runtime-agent', async t => {
+  // RotateCreds round-trip — README M3 [~] currently calls out that
+  // the runtime-agent handler is wired but the orchestrator never
+  // sends. This proves the wire path itself works when the broker is
+  // configured to actually rotate: `orch.rotateCreds(sessionId)` →
+  // `broker.rotateIfNeeded` → `link.send({type: 'rotate_creds', ...})`
+  // → mock guest receives the message on agent.sock.
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'orch-rotate-'));
+  t.teardown(() => rm(dir, { recursive: true, force: true }));
+
+  const apiSock = path.join(dir, 'api.sock');
+  const sessionsDir = path.join(dir, 'sessions');
+
+  /** @type {ReturnType<typeof makeMockGuest> | null} */
+  let mockGuest = null;
+  const mockSpawn = ({ record }) => {
+    const guest = makeMockGuest({ record });
+    mockGuest = guest;
+    setTimeout(() => guest.run().catch(() => {}), 5);
+    const child = /** @type {any} */ ({ pid: 99998, killed: false });
+    let resolveExit;
+    const exitCode = new Promise(r => {
+      resolveExit = r;
+    });
+    return {
+      child,
+      exitCode,
+      kill: () => {
+        guest.stop();
+        resolveExit?.(0);
+      },
+    };
+  };
+
+  // Broker that issues a stub key, then returns a fresh payload on
+  // the first `rotateIfNeeded` call and `null` thereafter.
+  let rotationsServed = 0;
+  const rotatingBroker = {
+    async issue(_sessionId) {
+      return { apiKey: 'sk-original' };
+    },
+    async revoke(_sessionId) {},
+    async rotateIfNeeded(_sessionId) {
+      rotationsServed += 1;
+      return rotationsServed === 1 ? { apiKey: 'sk-rotated-A' } : null;
+    },
+  };
+
+  const orch = await start({
+    config: {
+      socketPath: apiSock,
+      imageDir: '/unused',
+      sessionDir: sessionsDir,
+      brokerSocketPath: '/unused',
+      defaults: { arch: 'x86_64', vcpus: 2, memMB: 2048 },
+      bootDeadlineMs: 10000,
+      heartbeatTimeoutMs: 60000,
+    },
+    networkController: makeStubNetwork(),
+    brokerClient: /** @type {any} */ (rotatingBroker),
+    spawnVm: mockSpawn,
+  });
+  t.teardown(() => orch.stop());
+
+  const create = await httpRequest(apiSock, 'POST', '/v1/sessions', {
+    network: 'none',
+    attachMode: 'none',
+  });
+  t.is(create.status, 200);
+  const session = create.body;
+
+  const ready = await httpRequest(
+    apiSock,
+    'POST',
+    `/v1/sessions/${session.id}/ready`,
+  );
+  t.is(ready.status, 204);
+
+  // Wait for the mock guest's agent socket to land + Ready to be sent.
+  await waitFor(
+    () => (mockGuest?.agentRx ?? []).some(_m => true) || true,
+    3000,
+  );
+
+  // 1) First rotate call — broker returns a fresh payload → orch should
+  //    push `{type: 'rotate_creds', credentials: { apiKey: ... }}` over
+  //    the agent socket. Returns `true` because a rotation was sent.
+  const rotated = await orch.rotateCreds(session.id);
+  t.true(rotated);
+
+  await waitFor(
+    () =>
+      (mockGuest?.agentRx ?? []).some(
+        m =>
+          m.type === 'rotate_creds' &&
+          m.credentials?.apiKey === 'sk-rotated-A',
+      ),
+    3000,
+  );
+
+  // 2) Second call — broker returns null → orch returns false, no
+  //    additional rotate_creds reaches the guest.
+  const rxBefore = (mockGuest?.agentRx ?? []).filter(
+    m => m.type === 'rotate_creds',
+  ).length;
+  const rotated2 = await orch.rotateCreds(session.id);
+  t.false(rotated2);
+  const rxAfter = (mockGuest?.agentRx ?? []).filter(
+    m => m.type === 'rotate_creds',
+  ).length;
+  t.is(rxAfter, rxBefore);
+
+  // 3) Rotate against an unknown session — no agent link → returns
+  //    false without throwing.
+  const rotatedUnknown = await orch.rotateCreds('does-not-exist');
+  t.false(rotatedUnknown);
+
+  await httpRequest(apiSock, 'DELETE', `/v1/sessions/${session.id}`);
 });

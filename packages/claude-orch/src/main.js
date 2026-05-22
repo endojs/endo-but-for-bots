@@ -333,7 +333,32 @@ export const start = async ({
   // all subsequent socket/listener operations across the process.
   await api.listen();
 
+  /**
+   * Ask the broker for a fresh credential payload for `sessionId`. If
+   * the broker returns one (i.e. `rotate_if_needed` is configured
+   * with a real policy rather than the v1 noop), push it to the
+   * runtime-agent over the agent.sock link as `{type: 'rotate_creds'}`.
+   *
+   * Returns whether a rotation was actually sent — `false` when the
+   * broker returned noop or when no agent link is open. Surfaced on
+   * the `start()` return value so operators / future scheduling code
+   * can call it; today this is exercised primarily by
+   * `e2e-smoke.test.js`'s round-trip case.
+   *
+   * @param {string} sessionId
+   * @returns {Promise<boolean>}
+   */
+  const rotateCreds = async sessionId => {
+    const creds = await broker.rotateIfNeeded(sessionId);
+    if (!creds) return false;
+    const link = agents.get(sessionId);
+    if (!link) return false;
+    link.send({ type: 'rotate_creds', credentials: creds });
+    return true;
+  };
+
   return harden({
+    rotateCreds,
     async stop() {
       const ids = sessions.listSessions().map(s => s.id);
       await Promise.allSettled(ids.map(id => terminateSession(id)));

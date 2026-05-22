@@ -18,16 +18,22 @@ import { readFile, unlink, chmod } from 'node:fs/promises';
  * newline-delimited JSON requests over a UDS. Per-session state is
  * tracked in memory only.
  *
- * v1: API key mode. OAuth + preemptive rotation is left as roadmap.
+ * v1: API key mode. OAuth + preemptive rotation is left as roadmap;
+ * to test the wire path *before* a real OAuth refresher lands, the
+ * caller may pass `rotatePolicy(sessionId, currentApiKey)` returning
+ * `{ apiKey }` (a fresh credentials payload) or `null` (no rotation
+ * needed). The default keeps the v1 "never rotate" contract.
  *
  * @param {{
  *   socketPath: string,
  *   apiKey: string,
+ *   rotatePolicy?: (sessionId: string, currentApiKey: string) => Credentials | null,
  * }} opts
  */
-export const makeBroker = ({ socketPath, apiKey }) => {
+export const makeBroker = ({ socketPath, apiKey, rotatePolicy }) => {
   /** @type {Map<string, Credentials>} */
   const issued = new Map();
+  let currentApiKey = apiKey;
 
   /**
    * @param {BrokerRequest} req
@@ -37,7 +43,7 @@ export const makeBroker = ({ socketPath, apiKey }) => {
     switch (req.type) {
       case 'issue': {
         /** @type {Credentials} */
-        const creds = harden({ apiKey });
+        const creds = harden({ apiKey: currentApiKey });
         issued.set(req.sessionId, creds);
         return { type: 'creds', credentials: creds };
       }
@@ -46,8 +52,26 @@ export const makeBroker = ({ socketPath, apiKey }) => {
         return { type: 'ok' };
       }
       case 'rotate_if_needed': {
-        // v1 API-key mode never rotates. Return noop.
-        return { type: 'noop' };
+        const next = rotatePolicy
+          ? rotatePolicy(req.sessionId, currentApiKey)
+          : null;
+        if (next === null || next === undefined) {
+          return { type: 'noop' };
+        }
+        if (
+          typeof next !== 'object' ||
+          typeof next.apiKey !== 'string' ||
+          next.apiKey.length === 0
+        ) {
+          return {
+            type: 'error',
+            message: 'rotatePolicy must return { apiKey } or null',
+          };
+        }
+        currentApiKey = next.apiKey;
+        const creds = harden({ apiKey: currentApiKey });
+        if (issued.has(req.sessionId)) issued.set(req.sessionId, creds);
+        return { type: 'creds', credentials: creds };
       }
       default: {
         return {
