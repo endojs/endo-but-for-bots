@@ -38,9 +38,9 @@ node packages/cli/bin/endo --help
 Start, stop, and manage the Endo daemon:
 
 ```sh
-endo start    # Start the daemon
+endo start    # Start the daemon (error if already running)
 endo stop     # Stop the daemon
-endo restart  # Restart the daemon
+endo restart  # Stop the daemon if running, then start it
 endo ping     # Check if the daemon is responsive
 endo log -f   # Follow the daemon log
 ```
