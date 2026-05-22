@@ -3,7 +3,7 @@
 |             |                                                                                                                  |
 | ----------- | ---------------------------------------------------------------------------------------------------------------- |
 | **Created** | 2026-05-21                                                                                                       |
-| **Updated** | 2026-05-21                                                                                                       |
+| **Updated** | 2026-05-22                                                                                                       |
 | **Author**  | kriscendobot (prompted)                                                                                          |
 | **Status**  | Reference                                                                                                        |
 | **Source**  | <https://x.com/QuinnyPig/status/2055497559813304735> (transcript supplied by maintainer 2026-05-21)              |
@@ -234,18 +234,25 @@ The analysis lens draws on Endo's standing primitives:
 
 ### Bullet 1: Gated changes
 
-Endo's bot-side workflow already follows this pattern.
-The garden's [boatman](../../../roles/boatman/AGENT.md) is the only
-role authorized to push branches to upstream repositories; every other
-role lands work on a fork and the boatman opens a PR for a human
-maintainer to review.
-The Endo daemon's confinement of agents to capability-only operations
-means an agent cannot mutate a repository it has no capability to,
-even if the LLM were to try.
-The capability discipline is the platform's way of making the gated-PR
-pattern the path of least resistance.
-Relevant existing pieces: the per-action authorization shape in
-`roles/COMMON.md` § External-repo etiquette.
+The guardrail Endo offers here lives in the Daemon, not in any
+project-specific workflow built on top of it.
+An Endo agent is confined to the capabilities its host explicitly
+granted; it has no `process.env`, no ambient filesystem, no socket
+constructor, and no path back to a production system except through
+exo capabilities that the daemon's capability bank issued.
+That makes "agent does not mutate prod directly" a property of the
+capability model rather than a convention an agent might choose to
+ignore: an agent that holds no `Repo` or `Deploy` capability cannot
+mutate either, and an agent that holds a `Repo.openPullRequest`
+capability but not a `Repo.push` capability literally cannot route
+around the gated-PR pattern.
+The PR-and-review workflow is one shape this guardrail enables; the
+underlying primitive is the daemon-issued capability that names what
+the agent may do.
+Relevant existing designs:
+[`daemon-capability-bank`](daemon-capability-bank.md),
+[`endo-posix-sandbox`](endo-posix-sandbox.md),
+[`daemon-agent-tools`](daemon-agent-tools.md).
 
 ### Bullet 2: Secrets brokering
 
@@ -264,69 +271,136 @@ Relevant existing designs: [`endoclaw-network-fetch`](endoclaw-network-fetch.md)
 ### Bullet 3: API consistency
 
 This bullet targets AWS specifically; the Endo-side analogue is the
-exo interface guard.
-Every remotable in Endo carries an interface guard that names its
-methods and their argument shapes, and `__getMethodNames__` lets a
-caller (or an LLM) discover the surface without duck-typing.
+exo interface guard plus the reflection surface that exposes it.
+Every `makeExo` remotable carries an `M.interface()` method guard
+that names its methods and the pattern each argument must match;
+those guards are themselves reflectable.
+`__getMethodNames__()` lets a caller (or an LLM) enumerate the
+methods, and the interface guard's `getMethodGuards()` surface
+returns the argument and result patterns for each method, so a
+caller can discover both the method names and the shapes the
+implementation will accept without duck-typing.
+The pattern language itself (`@endo/patterns`) is a reflective
+type-and-shape surface that error-message rendering and runtime
+matching share.
 The discipline does not solve "240 services with bespoke verbs" at
-the AWS scale, but it does mean that within Endo a capability's
-surface is self-describing.
-Relevant existing patterns: the makeExo + M.interface pattern
-documented in the project's `CLAUDE.md`.
+the AWS scale, but within Endo a capability's surface is
+self-describing all the way down to the argument patterns.
+Relevant Endo documentation:
+[`packages/exo/docs/exo-taxonomy.md`](../packages/exo/docs/exo-taxonomy.md),
+[`packages/exo/docs/types.md`](../packages/exo/docs/types.md),
+[`packages/patterns/docs/marshal-vs-patterns-level.md`](../packages/patterns/docs/marshal-vs-patterns-level.md),
+[`docs/exo-method-banks.md`](../docs/exo-method-banks.md),
+[`docs/message-passing.md`](../docs/message-passing.md).
 
 ### Bullet 4: First-class agent identity
 
 Endo agents have unforgeable formula ids inside the daemon and (when
 networked) keypair-derived OCapN network identities.
-The garden's own bot-vs-maintainer split (`kriscendobot` for routine
-work, `kriskowal` for upstream landings) is a worked example of the
-principle at the GitHub-account layer.
-"Scoped, attestable, time-limited, revocable" is exactly the OCapN
-identity story.
-Relevant existing designs: [`daemon-agent-network-identity`](daemon-agent-network-identity.md),
+"Scoped, attestable, time-limited, revocable" maps onto the OCapN
+identity story: a per-agent network identity is a keypair (scoped to
+that agent), the public half is attestable, and the daemon's
+capability bank can revoke or rebind capabilities issued to that
+identity.
+Time-limited capabilities (see bullet 9) are the gap on this axis.
+Relevant existing designs:
+[`daemon-agent-network-identity`](daemon-agent-network-identity.md),
 [`daemon-256-bit-identifiers`](daemon-256-bit-identifiers.md),
 [`ocapn-noise-network`](ocapn-noise-network.md).
 
 ### Bullet 5: Hard budget caps that halt
 
-**Honest gap.**
-Endo does not yet have per-agent token / compute / dollar budgets as
-a first-class daemon concern.
-The current answer is "the embedding host controls API keys and can
-rate-limit at the gateway", which is incomplete relative to the
-bullet's "fail closed at the boundary" framing.
-A future design for budget capabilities (an exo that returns
-remaining budget on each charge and refuses when zero) would close
-this.
+Endo has XS metering as the substrate on which budget primitives are
+built.
+XS measures each worker's allocation and computation, the daemon can
+issue workers tokens against a quota, rate-limit messages to a worker
+that is approaching its quota, terminate a worker that exceeds its
+meter, and page a worker's heap into a content-addressable snapshot
+so the trade between compute and storage is explicit rather than
+ambient.
+Storage charging follows the same shape: the daemon can charge for
+storage on the basis of writes against a quota the server agrees to
+hold (the assumption being that the writer paid enough at write time
+to cover the storage costs from reasonable interest projections),
+and users can pay for garbage collection to reclaim storage tokens.
+Per-agent token / compute / dollar budgets layered on this substrate
+are designable rather than aspirational, the meter and the quota
+already exist; what remains is exposing the budget as a capability
+the agent and its caller can observe and the daemon can fail-closed
+on at the boundary.
+Relevant existing designs:
+[`daemon-xs-worker-metering`](daemon-xs-worker-metering.md),
+[`daemon-xs-worker-snapshot`](daemon-xs-worker-snapshot.md),
+[`daemon-content-store-gc`](daemon-content-store-gc.md),
+[`daemon-cas-management`](daemon-cas-management.md).
 
 ### Bullet 6: Cost circuit breakers with human escalation
 
-**Honest gap**, related to bullet 5.
-Endo has the confirmation UX surface (the chat UI can prompt a human)
-but no standing tie between a depletion signal and a confirmation
-prompt.
+Circuit breaking at the worker granularity is within reach for the
+same reason bullet 5's quota and termination story is: XS metering
+sees each worker's allocation and computation, and the daemon can
+trip a breaker on a worker, a group of workers, or a particular
+capability invocation when the signal warrants it.
+The maintainers have prior experience building circuit breakers for
+RPC at scale, which gives the worker-granularity story prior art
+rather than a from-scratch design.
+The remaining design work is the human-escalation half: Endo has the
+confirmation UX surface (the chat UI can prompt a user) but no
+standing tie between a depletion or breaker-trip signal and a
+confirmation prompt.
 A confirmation-as-affordance design is distinct from the capability
 denial Endo gets by default; this is its own design area.
+Relevant existing designs:
+[`daemon-xs-worker-metering`](daemon-xs-worker-metering.md),
+[`daemon-debug-worker-restart`](daemon-debug-worker-restart.md).
 
 ### Bullet 7: Cost preview as a first-class API
 
-**Honest gap.**
-No Endo capability today returns a cost estimate before a
-state-changing call.
-A `previewCost(args)` method on a typed cost-bearing exo would be
-the obvious shape; whether the embedding service can supply the
-estimate is a per-service question.
+A `previewCost(args)` method on a typed cost-bearing exo is one
+obvious shape; whether the embedding service can supply the estimate
+is a per-service question.
+A more general framing the daemon can offer is the **transactional
+dry-run**: run the workflow against an ephemeral storage proxy that
+mirrors the real CAS for reads and discards all writes when the
+dry-run completes, with the client paying the compute and network
+costs for the dry-run pass.
+The substrate is already there (the daemon's content-addressable
+store, the XS worker snapshot mechanism, and the daemon's existing
+ability to fork workers).
+Getting the economics of dry-runs to work is the interesting open
+problem: the dry-run must be cheap enough that a caller would
+actually choose it over committing speculatively, but expensive
+enough that the daemon is not asked to compute the world for free.
+A `previewCost` projection and a full transactional dry-run are
+points on the same spectrum.
+Relevant existing designs:
+[`daemon-xs-worker-snapshot`](daemon-xs-worker-snapshot.md),
+[`daemon-cas-management`](daemon-cas-management.md),
+[`daemon-content-store-gc`](daemon-content-store-gc.md).
 
 ### Bullet 8: LLM-actionable error messages
 
+This is an area that will require attention; the foundation is in
+place but the LLM-actionable framing needs deliberate design work.
 Endo's `@endo/errors` library encourages structured, taggable errors
 (`makeError(X\`No formula for ${ref}\`)`) and `q()` for safe value
-quoting in messages.
-That is closer to "instructions, not puzzles" than AWS's IAM
-boilerplate, and a per-exo error vocabulary can be tuned for LLM
-consumers when the exo author chooses.
-Relevant existing patterns: the error-handling conventions in the
-project's `CLAUDE.md`.
+quoting in messages, which is closer to "instructions, not puzzles"
+than AWS's IAM boilerplate.
+The active design surface for the pattern-mismatch case (the
+class of error an interface guard raises when an argument fails its
+pattern) is
+[`patterns-diagnostic-feedback`](patterns-diagnostic-feedback.md),
+which spells out how the `@endo/patterns` matcher renders an
+explanation of *why* a value failed a pattern.
+That diagnostic surface is where the LLM-actionable form of the
+"this agent lacks X, the owner can grant it at LINK" shape would
+live for Endo: the explanation already names the offending value's
+shape and the pattern it failed; extending the explanation to point
+at the capability authority responsible for granting the missing
+permission is the next step.
+See also Endo's general error-tracing surfaces:
+[`docs/errors.md`](../docs/errors.md),
+[`docs/error-tracing-design.md`](../docs/error-tracing-design.md).
 
 ### Bullet 9: Blast radius as a primitive
 
@@ -342,14 +416,27 @@ Relevant existing designs: [`daemon-capability-bank`](daemon-capability-bank.md)
 
 ### Bullet 10: Time travel by default
 
-Endo's daemon persists agent state as formula graphs in a
-content-addressable store; the formula graph is immutable and
-older states are recoverable until garbage-collected.
-"Roll back the last 20 minutes" is one or two formula-pointer
-rewinds in principle.
-The user-facing "one command" affordance is unbuilt.
-Relevant existing designs: [`daemon-content-store-gc`](daemon-content-store-gc.md),
+The daemon's current persistence stack is a combination of SQLite
+(for structured indices and pet-store names) and a content-addressable
+store (for immutable formula bodies, transcripts, and blobs).
+XS heap snapshots are an additional roll-back surface: a worker's
+heap can be snapshotted into the CAS, retired, and re-instantiated
+from the snapshot on demand.
+With those three substrates (SQLite for the durable name layer, CAS
+for the immutable history, XS snapshots for in-memory state) it is
+feasible to design a daemon that supports rollback as a first-class
+operation rather than a manual surgery.
+"Roll back the last 20 minutes" becomes a formula-pointer rewind in
+SQLite plus a snapshot reinstantiation for any worker whose heap
+diverged in the rolled-back window.
+The user-facing "one command" affordance and the bounding rules for
+what is reversible across CAS-GC boundaries are unbuilt; the
+substrate is there.
+Relevant existing designs:
+[`daemon-endo-rust-sqlite`](daemon-endo-rust-sqlite.md),
+[`daemon-content-store-gc`](daemon-content-store-gc.md),
 [`daemon-cas-management`](daemon-cas-management.md),
+[`daemon-xs-worker-snapshot`](daemon-xs-worker-snapshot.md),
 [`lal-reply-chain-transcripts`](lal-reply-chain-transcripts.md).
 
 ### Bullet 11: Action -> reasoning -> cost observability
@@ -378,11 +465,18 @@ work.
 ### Closing tweet: semi-autonomous operation
 
 The post's closing point ("most of this only matters because the
-agent runs semi-autonomously") is the same line the garden draws
-between liaison (user-in-the-loop, excess authority) and steward
-(bot-side, bounded authority).
-The interesting design space is the steward's, and Endo's
-capability model is the substrate it runs on.
+agent runs semi-autonomously") describes exactly the regime where
+the daemon's capability model, XS metering, and rollback substrate
+earn their keep: under attended use a less hostile CLI suffices,
+but under unattended use the platform itself has to refuse the
+runaway-loop and the unbounded-cost cases.
+This bullet becomes increasingly relevant to the extent that the
+Endo project pursues self-hosting its own development inside its
+own harness; the day an Endo agent is itself the thing editing,
+testing, and proposing changes to Endo's source is the day the
+daemon's confinement, metering, and rollback surfaces stop being
+hypothetical and start mattering for the project's own
+development loop.
 
 ### `@Hey_ross`'s reply: context injection
 
@@ -455,19 +549,30 @@ user inspect formula graphs to see what an agent is doing
 
 ### Honest gaps
 
-Areas where the Endo corpus has not yet taken a strong position, also
-flagged in the per-bullet analysis above:
+Areas where the Endo corpus has the substrate but has not yet built
+the agent-facing surface, or has not yet taken a position at all,
+also flagged in the per-bullet analysis above:
 
-- **Cost accounting**: per-agent token / compute budgets are not yet
-  a first-class daemon concern (bullets 5, 6, 7, 11).
+- **Budget-as-capability surface**: XS metering, worker rate limits,
+  worker termination, and storage-write quotas exist as substrate;
+  a per-agent token / compute / dollar budget exposed as an exo the
+  agent and its caller can observe is the unbuilt layer
+  (bullets 5, 6, 7, 11).
 - **Confirmation UX for irreversible actions**: there is no standing
   design for "agent must ask before doing X-class-of-thing" beyond
   the capability denial it gets if it lacks the capability (bullet 6).
+- **LLM-actionable error explanations beyond pattern mismatch**:
+  the `patterns-diagnostic-feedback` design covers argument-shape
+  failures; extending the explanation surface to point at the
+  capability authority that could grant a missing permission is
+  unbuilt (bullet 8).
 - **Time-limited capabilities**: capability expiry is not a built-out
   story (bullet 9).
-- **User-facing rollback affordance**: the daemon's content-addressable
-  store supports recovery in principle; the one-command rollback UX
-  is unbuilt (bullet 10).
+- **User-facing rollback affordance and rollback-aware GC bounds**:
+  SQLite plus CAS plus XS snapshots make a rollback-capable daemon
+  feasible to design; the user-facing "one command" affordance and
+  the rules that bound what is reversible across GC boundaries are
+  unbuilt (bullet 10).
 
 ## Status (Reference)
 
