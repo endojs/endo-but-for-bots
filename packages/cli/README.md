@@ -21,7 +21,7 @@ git clone https://github.com/endojs/endo.git
 cd endo
 yarn install
 cd packages/cli
-yarn start        # Start the daemon
+yarn endo start   # Start the daemon
 yarn endo --help  # Run CLI commands
 ```
 
