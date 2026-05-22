@@ -14,6 +14,54 @@ import { parseAst } from './parse-ast.js';
 import { generate } from './generate.js';
 
 /**
+ * @param {string} source
+ * @param {boolean} elideComments
+ * @returns {boolean}
+ */
+const shouldRunTransform = (source, elideComments) => {
+  if (elideComments) {
+    return true;
+  }
+  // Fast path: if none of the risky comment payload tokens appear anywhere in
+  // the source, the transform cannot change semantics-relevant content.
+  return (
+    source.includes('import(') ||
+    source.includes('<!--') ||
+    source.includes('-->')
+  );
+};
+
+/**
+ * Create a lightweight identity source map when we skip parsing.
+ *
+ * @param {string} source
+ * @param {string|undefined} sourceUrl
+ * @param {string|object|undefined} sourceMap
+ */
+const makeFastPathMap = (source, sourceUrl, sourceMap) => {
+  if (sourceMap && typeof sourceMap === 'object') {
+    return sourceMap;
+  }
+  if (typeof sourceMap === 'string') {
+    try {
+      return JSON.parse(sourceMap);
+    } catch {
+      // Fall through to an identity map if provided source map is malformed.
+    }
+  }
+  if (!sourceUrl) {
+    return undefined;
+  }
+  return {
+    version: 3,
+    names: [],
+    sources: [sourceUrl],
+    sourcesContent: [source],
+    mappings: '',
+  };
+};
+
+/**
  * Options for {@link evadeCensorSync}
  *
  * @typedef EvadeCensorOptions
@@ -25,6 +73,7 @@ import { generate } from './generate.js';
 comment contents, preserving code positions within each line
 * @property {(path: import('@babel/traverse').NodePath) => void} [customVisitor] - A visitor function to be called on each node, in addition to the standard transforms. Receives the same path argument as a normal Babel visitor.
  * @property {boolean | undefined} [useLocationUnmap] - deprecated, vestigial
+ * @property {((name: string, args?: Record<string, unknown>) => (args?: Record<string, unknown>) => void) | undefined} [profileStartSpan] - Optional profiling span hook
  * @public
  */
 
@@ -71,24 +120,57 @@ export function evadeCensorSync(source, options) {
     elideComments = false,
     onlyComments = false,
     customVisitor,
+    profileStartSpan,
   } = options || {};
+
+  const endFastPathScan = profileStartSpan?.('evasiveTransform.fastPath.scan', {
+    sourceType,
+    inputChars: source.length,
+    elideComments,
+  });
+  const fastPathHit = !shouldRunTransform(source, elideComments);
+  endFastPathScan?.({ fastPathHit });
+  if (fastPathHit) {
+    const endFastPathHit = profileStartSpan?.('evasiveTransform.fastPath.hit');
+    const map = makeFastPathMap(source, sourceUrl, sourceMap);
+    endFastPathHit?.({ hasMap: map !== undefined });
+    return {
+      code: source,
+      map,
+    };
+  }
+  const endFastPathMiss = profileStartSpan?.('evasiveTransform.fastPath.miss');
+  endFastPathMiss?.();
 
   // Parse the rolled-up chunk with Babel.
   // We are prepared for different module systems.
+  const endParse = profileStartSpan?.('evasiveTransform.babel.parse', {
+    sourceType,
+  });
   const ast = parseAst(source, {
     sourceType,
   });
+  endParse?.();
 
+  const endTraverse = profileStartSpan?.('evasiveTransform.babel.traverse', {
+    elideComments,
+  });
   transformAst(ast, { elideComments, onlyComments, customVisitor });
+  endTraverse?.();
 
+  const endGenerate = profileStartSpan?.('evasiveTransform.babel.generate');
   if (sourceUrl) {
-    return generate(ast, {
+    const generated = generate(ast, {
       source,
       sourceUrl,
       ...(sourceMap !== undefined && { sourceMap }),
     });
+    endGenerate?.();
+    return generated;
   }
-  return generate(ast, { source });
+  const generated = generate(ast, { source });
+  endGenerate?.();
+  return generated;
 }
 
 /**
