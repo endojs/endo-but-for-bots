@@ -9,6 +9,11 @@ a persistent host for guest programs running in Hardened JavaScript.
 Through the CLI, users can run confined programs, manage named values, send
 messages, and control the daemon lifecycle.
 
+The daemon is per-OS-account: each operating-system account that runs
+`endo start` gets its own daemon, listening on a socket private to that
+account.
+One account cannot stop or send messages to another account's daemon.
+
 See [`@endo/daemon`](../daemon/README.md) for more about the underlying daemon.
 For a worked tutorial that follows the same arc as this reference, see
 [`demo/README.md`](./demo/README.md).
