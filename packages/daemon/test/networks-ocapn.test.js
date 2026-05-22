@@ -187,6 +187,55 @@ test('OCapN-Noise transport rejects a peer whose identity does not match the add
   );
 });
 
+test.failing('peer teardown surfaces as a rejection on the next call', async t => {
+  // Smoke test for the disconnect path: once one side tears its
+  // transport down, the other side's next `E(remoteGateway).provide`
+  // call should reject rather than hang.
+  //
+  // Currently it hangs: cancelling peer B's transport context tears
+  // down B's listener but A's already-established OCapN session does
+  // not learn that the underlying TCP socket has closed before A
+  // tries another `op:deliver` on it. The OCapN session's
+  // disconnect-detection path needs work — likely either a TCP
+  // keepalive on the transport side or a heartbeat at the OCapN
+  // session level (the latter is exactly what
+  // `ocapn-noise-session-reconnect`, Proposed, specifies).
+  //
+  // Marked `.failing` so this test acts as a sentinel: when the
+  // disconnect plumbing gets fixed (or when the reconnect design
+  // lands and the assertion flips from "rejects" to "the next call
+  // re-establishes and succeeds"), this test starts passing and
+  // `test.failing` flags it.
+  t.timeout(30_000);
+  const contextA = makeMockContext();
+  const contextB = makeMockContext();
+  t.teardown(() => contextA.cancel());
+
+  const a = makeMockPowers('a'.repeat(64), 'A');
+  const b = makeMockPowers('b'.repeat(64), 'B');
+
+  const serviceA = await makeOcapnNetwork(a.powers, contextA);
+  const serviceB = await makeOcapnNetwork(b.powers, contextB);
+
+  const [addressB] = await E(serviceB).addresses();
+
+  const connectionContext = makeMockContext();
+  const remoteGateway = await E(serviceA).connect(addressB, connectionContext);
+
+  // Sanity: the session is live.
+  t.is(await E(remoteGateway).provide('warmup'), 'B:value-for:warmup');
+
+  // Tear down B's transport. The OCapN session A holds is now
+  // running against a dead listener.
+  contextB.cancel();
+
+  // The next call on A's remote-gateway handle must reject — not
+  // hang, not silently succeed. The exact error message is the
+  // OCapN session's disconnect surface; we only assert that
+  // something rejects within the test timeout.
+  await t.throwsAsync(() => E(remoteGateway).provide('after-drop'));
+});
+
 test('crossed-hello: two transports dialling each other reuse one OCapN session', async t => {
   // OCapN's session manager dedupes by `(localKey, remoteKey)`
   // location; two sides dialling each other simultaneously must
