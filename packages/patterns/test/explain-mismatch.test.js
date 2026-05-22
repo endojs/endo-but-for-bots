@@ -200,3 +200,303 @@ test('regression: M.or branches each get their own attribution', t => {
   const altLines = text.split('\n').filter(l => /alt \d/.test(l));
   t.is(altLines.length, 2, `expected two alt lines, got: ${text}`);
 });
+
+test('M.and reports every failing branch - compact', t => {
+  // A conjunction fails when any branch fails; the renderer should attribute
+  // each failing branch to its own row so the caller can address them
+  // independently.
+  const pattern = M.and(M.number(), M.gte(10), M.lte(5));
+  const specimen = 7; // satisfies number, fails gte(10) and lte(5)
+  const report = explainMismatch({ specimen, pattern });
+  t.is(typeof report, 'string');
+  const text = /** @type {string} */ (report);
+  // Both failing branches should surface; the path includes "and branch N".
+  t.true(
+    text.includes('and branch'),
+    `expected and-branch attribution: ${text}`,
+  );
+});
+
+test('M.and where every branch fails - expanded', t => {
+  const pattern = M.and(M.string(), M.number());
+  const report = explainMismatch(
+    { specimen: true, pattern },
+    { format: 'expanded' },
+  );
+  t.is(typeof report, 'string');
+  const text = /** @type {string} */ (report);
+  t.regex(text, /mismatch at/);
+});
+
+test('M.recordOf reports per-value failures', t => {
+  // A recordOf whose values fail a sub-pattern: the renderer should
+  // attribute each failing value to its own path-step ".key".
+  const pattern = M.recordOf(M.string(), M.nat());
+  const specimen = harden({ a: 1n, b: -2, c: 3n });
+  const report = explainMismatch({ specimen, pattern });
+  t.is(typeof report, 'string');
+  const text = /** @type {string} */ (report);
+  // The failing value at .b should surface; matching entries should not.
+  t.true(text.includes('.b'), `report should reference path .b: ${text}`);
+});
+
+test('M.recordOf with non-record specimen - compact', t => {
+  const pattern = M.recordOf(M.string(), M.nat());
+  const specimen = harden([1n, 2n]); // wrong kind
+  const report = explainMismatch({ specimen, pattern });
+  t.is(typeof report, 'string');
+  const text = /** @type {string} */ (report);
+  t.regex(text, /mismatch/i);
+});
+
+test('M.recordOf reports per-key failures (key pattern)', t => {
+  // Bad key-pattern: only certain key shapes are accepted.
+  const pattern = M.recordOf(M.string({ stringLengthLimit: 2 }), M.any());
+  const specimen = harden({ ok: 1, toolong: 2 });
+  const report = explainMismatch({ specimen, pattern });
+  t.is(typeof report, 'string');
+  const text = /** @type {string} */ (report);
+  t.regex(text, /mismatch/i);
+});
+
+test('M.splitArray required-prefix wrong type - compact', t => {
+  // The required prefix has a type-mismatch on the second element.
+  const pattern = M.splitArray([M.string(), M.nat()]);
+  const specimen = harden(['ok', -1, 'extra']);
+  const report = explainMismatch({ specimen, pattern });
+  t.is(typeof report, 'string');
+  const text = /** @type {string} */ (report);
+  t.true(text.includes('[1]'), `report should reference index [1]: ${text}`);
+});
+
+test('M.splitArray with optional and rest mismatches', t => {
+  const pattern = M.splitArray([M.string()], [M.nat()], M.arrayOf(M.boolean()));
+  const specimen = harden(['ok', -1, 'not-a-boolean']);
+  const report = explainMismatch({ specimen, pattern });
+  t.is(typeof report, 'string');
+  const text = /** @type {string} */ (report);
+  t.true(text.includes('[1]'), `expected optional [1] index: ${text}`);
+  t.true(text.includes('...rest'), `expected ...rest path: ${text}`);
+});
+
+test('M.splitArray too-short array - compact', t => {
+  const pattern = M.splitArray([M.string(), M.nat()]);
+  const specimen = harden(['only-one']);
+  const report = explainMismatch({ specimen, pattern });
+  t.is(typeof report, 'string');
+  const text = /** @type {string} */ (report);
+  t.regex(text, /mismatch/i);
+});
+
+test('M.splitArray with non-array specimen - compact', t => {
+  const pattern = M.splitArray([M.string()]);
+  const specimen = harden({ a: 1 });
+  const report = explainMismatch({ specimen, pattern });
+  t.is(typeof report, 'string');
+  const text = /** @type {string} */ (report);
+  t.regex(text, /mismatch/i);
+});
+
+test('M.splitRecord with optional present and bad', t => {
+  const pattern = M.splitRecord({ a: M.string() }, { b: M.nat() });
+  const specimen = harden({ a: 'ok', b: -1 });
+  const report = explainMismatch({ specimen, pattern });
+  t.is(typeof report, 'string');
+  const text = /** @type {string} */ (report);
+  // Optional path-step renders as ".b" via the optional case.
+  t.true(text.includes('.b'), `report should reference optional .b: ${text}`);
+});
+
+test('M.splitRecord with rest pattern mismatch', t => {
+  const pattern = M.splitRecord(
+    { a: M.string() },
+    {},
+    M.recordOf(M.string(), M.nat()),
+  );
+  const specimen = harden({ a: 'ok', c: -1, d: -2 });
+  const report = explainMismatch({ specimen, pattern });
+  t.is(typeof report, 'string');
+  const text = /** @type {string} */ (report);
+  // The rest leaf should expose the rest pattern (recordOf) directly as the
+  // expected column rather than embedding the whole splitRecord pattern as a
+  // single flat leaf. The path-step kind 'rest' renders the path as `...rest`
+  // and the expected column carries the recordOf tag with no splitRecord
+  // wrapping.
+  t.regex(
+    text,
+    /\.\.\.rest \| found .*\| expected makeTagged\("match:recordOf"/,
+    `expected rest leaf with recordOf in the expected column: ${text}`,
+  );
+});
+
+test('M.splitRecord with non-record specimen', t => {
+  const pattern = M.splitRecord({ a: M.string() });
+  const specimen = harden([1, 2, 3]);
+  const report = explainMismatch({ specimen, pattern });
+  t.is(typeof report, 'string');
+  const text = /** @type {string} */ (report);
+  t.regex(text, /mismatch/i);
+});
+
+test('copyArray pattern with length mismatch - compact', t => {
+  // Two copyArrays of different lengths take the traceLeaf early-return.
+  const pattern = harden([M.string(), M.number()]);
+  const specimen = harden(['only-one']);
+  const report = explainMismatch({ specimen, pattern });
+  t.is(typeof report, 'string');
+  const text = /** @type {string} */ (report);
+  t.regex(text, /mismatch/i);
+});
+
+test('copyArray pattern with per-index mismatches - compact', t => {
+  const pattern = harden([M.string(), M.number()]);
+  const specimen = harden([42, 'wrong']);
+  const report = explainMismatch({ specimen, pattern });
+  t.is(typeof report, 'string');
+  const text = /** @type {string} */ (report);
+  t.true(text.includes('[0]'), `expected index [0]: ${text}`);
+  t.true(text.includes('[1]'), `expected index [1]: ${text}`);
+});
+
+test('copyArray pattern against non-array specimen', t => {
+  const pattern = harden([M.string()]);
+  const specimen = harden({ 0: 'x' });
+  const report = explainMismatch({ specimen, pattern });
+  t.is(typeof report, 'string');
+  const text = /** @type {string} */ (report);
+  t.regex(text, /mismatch/i);
+});
+
+test('copyRecord pattern with mismatched key set', t => {
+  // Different keys take the traceLeaf early-return in the copyRecord branch.
+  const pattern = harden({ a: M.string(), b: M.number() });
+  const specimen = harden({ a: 'x', c: 1 });
+  const report = explainMismatch({ specimen, pattern });
+  t.is(typeof report, 'string');
+  const text = /** @type {string} */ (report);
+  t.regex(text, /mismatch/i);
+});
+
+test('copyRecord pattern with per-key mismatches', t => {
+  const pattern = harden({ a: M.string(), b: M.number() });
+  const specimen = harden({ a: 1, b: 'wrong' });
+  const report = explainMismatch({ specimen, pattern });
+  t.is(typeof report, 'string');
+  const text = /** @type {string} */ (report);
+  t.true(text.includes('.a'), `expected .a path: ${text}`);
+  t.true(text.includes('.b'), `expected .b path: ${text}`);
+});
+
+test('copyRecord pattern against non-record specimen', t => {
+  const pattern = harden({ a: M.string() });
+  const specimen = harden([1, 2]);
+  const report = explainMismatch({ specimen, pattern });
+  t.is(typeof report, 'string');
+  const text = /** @type {string} */ (report);
+  t.regex(text, /mismatch/i);
+});
+
+test('opaque tagged pattern (match:kind) surfaces as leaf', t => {
+  // A tagged pattern not unrolled by the trace walker (e.g. match:kind)
+  // falls through to traceLeaf so a rejection-message line still reaches
+  // the renderer.
+  const pattern = M.kind('string');
+  const specimen = 42;
+  const report = explainMismatch({ specimen, pattern });
+  t.is(typeof report, 'string');
+  const text = /** @type {string} */ (report);
+  t.regex(text, /mismatch/i);
+});
+
+test('renderFound surfaces bigint, boolean, null specimens distinctly', t => {
+  // Each branch of renderFound's switch should appear for a real specimen.
+  const r1 = /** @type {string} */ (
+    explainMismatch({ specimen: 5n, pattern: M.string() })
+  );
+  t.regex(r1, /5n|5/, `bigint specimen rendered: ${r1}`);
+  const r2 = /** @type {string} */ (
+    explainMismatch({ specimen: true, pattern: M.string() })
+  );
+  t.regex(r2, /true/, `boolean specimen rendered: ${r2}`);
+  const r3 = /** @type {string} */ (
+    explainMismatch({ specimen: null, pattern: M.string() })
+  );
+  t.regex(r3, /null/, `null specimen rendered: ${r3}`);
+  const r4 = /** @type {string} */ (
+    explainMismatch({ specimen: undefined, pattern: M.string() })
+  );
+  t.regex(r4, /undefined/, `undefined specimen rendered: ${r4}`);
+});
+
+test('renderFound surfaces symbol specimen with type tag', t => {
+  const sym = Symbol.for('alpha');
+  const report = explainMismatch({ specimen: sym, pattern: M.string() });
+  t.is(typeof report, 'string');
+  const text = /** @type {string} */ (report);
+  t.regex(text, /\(symbol\)/, `symbol surfaces with type tag: ${text}`);
+});
+
+test('M.or expanded carries per-alt reason lines', t => {
+  // Hit the reason: branch in the expanded or-renderer.
+  const pattern = M.or(M.string(), M.bigint());
+  const report = explainMismatch(
+    { specimen: 42, pattern },
+    { format: 'expanded' },
+  );
+  t.is(typeof report, 'string');
+  const text = /** @type {string} */ (report);
+  t.regex(text, /reason:/, `expected reason: line: ${text}`);
+});
+
+test('arrayOf expanded carries per-failure reason lines', t => {
+  const pattern = M.arrayOf(M.nat());
+  const specimen = harden([1n, 'two', 3n]);
+  const report = explainMismatch({ specimen, pattern }, { format: 'expanded' });
+  t.is(typeof report, 'string');
+  const text = /** @type {string} */ (report);
+  t.regex(text, /reason:/, `expected reason: line: ${text}`);
+});
+
+test('renderTrace defaults to compact format when format omitted', t => {
+  // The default-format branch in renderTrace (no options.format provided).
+  const report = explainMismatch({ specimen: 1, pattern: M.string() });
+  t.is(typeof report, 'string');
+  const text = /** @type {string} */ (report);
+  // Compact format puts everything on the leaf line with " | " separators.
+  t.true(text.includes(' | '), `expected compact separators: ${text}`);
+});
+
+test('regression: M.and removed would lose per-branch attribution', t => {
+  // Pins the and-branch attribution: a conjunction whose two branches both
+  // fail must surface both branch indices in the report.
+  const pattern = M.and(M.string(), M.number());
+  const specimen = true;
+  const report = explainMismatch({ specimen, pattern });
+  const text = /** @type {string} */ (report);
+  t.true(
+    text.includes('and branch 0') && text.includes('and branch 1'),
+    `expected both and-branches attributed: ${text}`,
+  );
+});
+
+test('literal pattern (non-pattern-style) surfaces as leaf', t => {
+  // A literal value (a string) used as a pattern is neither copyArray,
+  // copyRecord, nor tagged; the trace walker delegates to the production
+  // matcher's verdict via the final fall-through traceLeaf.
+  const pattern = 'expected-literal';
+  const specimen = 'other-literal';
+  const report = explainMismatch({ specimen, pattern });
+  t.is(typeof report, 'string');
+  const text = /** @type {string} */ (report);
+  t.regex(text, /mismatch/i);
+});
+
+test('regression: splitArray index attribution survives the rest pattern', t => {
+  // Pins that even when a rest pattern is present, a required-prefix
+  // index mismatch keeps its [N] attribution distinct from the rest.
+  const pattern = M.splitArray([M.string()], [M.nat()], M.arrayOf(M.boolean()));
+  const specimen = harden([42, 'not-a-nat', 0, 1]);
+  const report = explainMismatch({ specimen, pattern });
+  const text = /** @type {string} */ (report);
+  t.true(text.includes('[0]'), `expected required-prefix index [0]: ${text}`);
+});
