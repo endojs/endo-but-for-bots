@@ -1,3 +1,4 @@
+/* global setTimeout, Buffer */
 import test from 'ava';
 
 import url from 'url';
@@ -67,7 +68,7 @@ test('makeReadPowers canonical memoizes realpath lookups per location', async t 
   });
 
   const file = url.pathToFileURL('/tmp/file.js').href;
-  const dir = url.pathToFileURL('/tmp/pkg').href + '/';
+  const dir = `${url.pathToFileURL('/tmp/pkg').href}/`;
 
   const [a, b] = await Promise.all([canonical(file), canonical(file)]);
   const [c, d] = await Promise.all([canonical(dir), canonical(dir)]);

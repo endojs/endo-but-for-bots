@@ -42,9 +42,12 @@ const sumNumericArgBySpan = (events, spanName, argName) => {
   let total = 0;
   for (const event of events) {
     if (event.ph !== 'X' || event.name !== spanName) {
+      // eslint-disable-next-line no-continue
       continue;
     }
-    const args = /** @type {Record<string, unknown> | undefined} */ (event.args);
+    const args = /** @type {Record<string, unknown> | undefined} */ (
+      event.args
+    );
     const value = args && args[argName];
     if (typeof value === 'number' && Number.isFinite(value)) {
       total += value;
@@ -96,6 +99,7 @@ const findTraceFiles = async root => {
   while (queue.length > 0) {
     const dir = queue.shift();
     if (!dir) {
+      // eslint-disable-next-line no-continue
       continue;
     }
     // eslint-disable-next-line no-await-in-loop
@@ -178,11 +182,13 @@ const summarize = (events, top) => {
   const intervalsByName = new Map();
   for (const event of events) {
     if (event.ph !== 'X' || typeof event.name !== 'string') {
+      // eslint-disable-next-line no-continue
       continue;
     }
     const dur = typeof event.dur === 'number' ? event.dur : undefined;
     const ts = typeof event.ts === 'number' ? event.ts : undefined;
     if (dur === undefined || ts === undefined) {
+      // eslint-disable-next-line no-continue
       continue;
     }
     const bucket = durationsByName.get(event.name);
@@ -203,7 +209,9 @@ const summarize = (events, top) => {
   const rows = [...durationsByName.entries()].map(([name, durations]) => {
     durations.sort((a, b) => a - b);
     const total = durations.reduce((sum, value) => sum + value, 0);
-    const criticalPathUs = unionDuration([...(intervalsByName.get(name) || [])]);
+    const criticalPathUs = unionDuration([
+      ...(intervalsByName.get(name) || []),
+    ]);
     return {
       name,
       count: durations.length,
@@ -296,14 +304,17 @@ const makeDerivedMetrics = (allRows, focusSpans, events) => {
   const bundlesProcessed = allByName.get('bundleSource.total')?.count || 0;
   const modulesParsed =
     allByName.get('compartmentMapper.importHook.parseModule')?.count || 0;
-  const modulesTransformed = allByName.get('bundleSource.transformModule')?.count || 0;
+  const modulesTransformed =
+    allByName.get('bundleSource.transformModule')?.count || 0;
   const fastPathHitCount =
     focusByName.get('evasiveTransform.fastPath.hit')?.count || 0;
   const fastPathMissCount =
     focusByName.get('evasiveTransform.fastPath.miss')?.count || 0;
   const fastPathTotal = fastPathHitCount + fastPathMissCount;
-  const fastPathHitRate = fastPathTotal > 0 ? fastPathHitCount / fastPathTotal : 0;
-  const readCacheHitCount = focusByName.get('bundleSource.readCache.hit')?.count || 0;
+  const fastPathHitRate =
+    fastPathTotal > 0 ? fastPathHitCount / fastPathTotal : 0;
+  const readCacheHitCount =
+    focusByName.get('bundleSource.readCache.hit')?.count || 0;
   const readCacheMissCount =
     focusByName.get('bundleSource.readCache.miss')?.count || 0;
   const readCachePendingCount =
@@ -328,7 +339,8 @@ const makeDerivedMetrics = (allRows, focusSpans, events) => {
     'bytes',
   );
 
-  const totalBundleMs = (allByName.get('bundleSource.total')?.totalUs || 0) / 1000;
+  const totalBundleMs =
+    (allByName.get('bundleSource.total')?.totalUs || 0) / 1000;
   const totalParseMs =
     (allByName.get('compartmentMapper.importHook.parseModule')?.totalUs || 0) /
     1000;
@@ -404,7 +416,10 @@ const main = async () => {
     const events = trace.traceEvents || [];
     let maxEndUs = 0;
     for (const event of events) {
-      const copy = { ...event, args: { ...(event.args || {}), source: filePath } };
+      const copy = {
+        ...event,
+        args: { ...(event.args || {}), source: filePath },
+      };
       if (stacked) {
         if (typeof copy.ts === 'number') {
           copy.ts += offsetUs;
@@ -439,7 +454,11 @@ const main = async () => {
 
   await fs.writeFile(
     outTrace,
-    JSON.stringify({ traceEvents: mergedEvents, displayTimeUnit: 'ms' }, null, 2),
+    JSON.stringify(
+      { traceEvents: mergedEvents, displayTimeUnit: 'ms' },
+      null,
+      2,
+    ),
   );
   await fs.writeFile(outSummary, JSON.stringify(summary, null, 2));
   await fs.writeFile(outMarkdown, summarizeMarkdown(summaryTop, focusSpans));

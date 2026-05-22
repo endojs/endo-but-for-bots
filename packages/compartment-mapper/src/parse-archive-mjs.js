@@ -27,12 +27,14 @@ export const parseArchiveMjs = (
   const { sourceMap, sourceMapHook, profileStartSpan } = options;
   const canUseCache = sourceMapHook === undefined;
   const source = textDecoder.decode(bytes);
-  const sourceMapKey =
-    sourceMap === undefined
-      ? ''
-      : typeof sourceMap === 'string'
-        ? sourceMap
-        : JSON.stringify(sourceMap);
+  let sourceMapKey;
+  if (sourceMap === undefined) {
+    sourceMapKey = '';
+  } else if (typeof sourceMap === 'string') {
+    sourceMapKey = sourceMap;
+  } else {
+    sourceMapKey = JSON.stringify(sourceMap);
+  }
   const cacheKey = `${source}\n//# sourceMappingURL=${sourceMapKey}`;
   if (canUseCache) {
     const byLocation = parseArchiveMjsCache.get(sourceUrl);

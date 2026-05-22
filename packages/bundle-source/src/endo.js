@@ -137,11 +137,14 @@ export const makeBundlingKit = (
     location,
     sourceMap,
   ) => {
-    const endTransformModule = profiler?.startSpan('bundleSource.transformModule', {
-      parser,
-      specifier,
-      location,
-    });
+    const endTransformModule = profiler?.startSpan(
+      'bundleSource.transformModule',
+      {
+        parser,
+        specifier,
+        location,
+      },
+    );
     if (!['mjs', 'cjs'].includes(parser)) {
       throw Error(`Parser ${parser} not supported in evadeEvalCensor`);
     }

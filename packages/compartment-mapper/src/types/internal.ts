@@ -161,7 +161,7 @@ export type ChooseModuleDescriptorParams = {
   profileStartSpan?: (
     name: string,
     args?: Record<string, unknown>,
-  ) => (args?: Record<string, unknown>) => void;
+  ) => (extraArgs?: Record<string, unknown>) => void;
 
   strictlyRequiredForCompartment: StrictlyRequiredFn;
 } & ComputeSha512Option &

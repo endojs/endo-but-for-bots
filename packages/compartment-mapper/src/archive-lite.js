@@ -72,7 +72,11 @@ const { assign, create, freeze, keys } = Object;
  * @param {Sources} sources
  * @param {(name: string, args?: Record<string, unknown>) => (args?: Record<string, unknown>) => void} [profileStartSpan]
  */
-const addSourcesToArchive = async (archive, sources, profileStartSpan = undefined) => {
+const addSourcesToArchive = async (
+  archive,
+  sources,
+  profileStartSpan = undefined,
+) => {
   let moduleCount = 0;
   let byteCount = 0;
   const endSortCompartments = profileStartSpan?.(

@@ -201,7 +201,7 @@ export interface ProfilingOptions {
   profileStartSpan?: (
     name: string,
     args?: Record<string, unknown>,
-  ) => (args?: Record<string, unknown>) => void;
+  ) => (extraArgs?: Record<string, unknown>) => void;
 }
 
 /**
@@ -792,7 +792,7 @@ type ParseArguments = [
       | ((
           name: string,
           args?: Record<string, unknown>,
-        ) => (args?: Record<string, unknown>) => void)
+        ) => (extraArgs?: Record<string, unknown>) => void)
       | undefined;
   }> &
     ArchiveOnlyOption,

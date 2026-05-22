@@ -26,7 +26,8 @@ const configuredReadCacheMaxBytes = Number.parseInt(
   10,
 );
 const readCacheMaxBytes =
-  Number.isFinite(configuredReadCacheMaxBytes) && configuredReadCacheMaxBytes >= 0
+  Number.isFinite(configuredReadCacheMaxBytes) &&
+  configuredReadCacheMaxBytes >= 0
     ? configuredReadCacheMaxBytes
     : DEFAULT_READ_CACHE_MAX_BYTES;
 /** @type {Map<string, Uint8Array | undefined>} */
@@ -131,14 +132,17 @@ export async function bundleZipBase64(
       }
 
       const endCacheMiss = profiler.startSpan('bundleSource.readCache.miss');
-      pending = powers.maybeRead(location).then(bytes => {
-        cacheReadValue(location, bytes);
-        pendingReads.delete(location);
-        return bytes;
-      }, error => {
-        pendingReads.delete(location);
-        throw error;
-      });
+      pending = powers.maybeRead(location).then(
+        bytes => {
+          cacheReadValue(location, bytes);
+          pendingReads.delete(location);
+          return bytes;
+        },
+        error => {
+          pendingReads.delete(location);
+          throw error;
+        },
+      );
       pendingReads.set(location, pending);
       try {
         return await pending;
@@ -155,7 +159,9 @@ export async function bundleZipBase64(
       maybeRead,
     });
 
-    const endMakeBundlingKit = profiler.startSpan('bundleSource.makeBundlingKit');
+    const endMakeBundlingKit = profiler.startSpan(
+      'bundleSource.makeBundlingKit',
+    );
     const {
       sourceMapHook,
       sourceMapJobs,
@@ -204,7 +210,9 @@ export async function bundleZipBase64(
       endMapNodeModules();
     }
 
-    const endMakeArchive = profiler.startSpan('bundleSource.makeAndHashArchiveFromMap');
+    const endMakeArchive = profiler.startSpan(
+      'bundleSource.makeAndHashArchiveFromMap',
+    );
     let bytes;
     let sha512;
     try {

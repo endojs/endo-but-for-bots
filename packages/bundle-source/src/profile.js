@@ -1,4 +1,5 @@
 // @ts-check
+/* global process */
 
 import fs from 'fs';
 import os from 'os';
@@ -55,7 +56,9 @@ export const makeBundleProfiler = ({
     return {
       enabled,
       startSpan: (_name, _args = undefined) => noop,
-      async flush(_args = undefined) {},
+      async flush(_args = undefined) {
+        // No-op when profiling is disabled.
+      },
     };
   }
 
@@ -67,11 +70,13 @@ export const makeBundleProfiler = ({
     path.join(os.tmpdir(), 'endo-bundle-source-profiles');
   const phase = classifyModuleFormat(moduleFormat);
 
+  const traceFileId = nextTraceFileId;
+  nextTraceFileId += 1;
   const tracePath =
     traceFile ||
     path.join(
       traceDir,
-      `bundle-source-${phase}-${pid}-${Date.now()}-${nextTraceFileId++}.trace.json`,
+      `bundle-source-${phase}-${pid}-${Date.now()}-${traceFileId}.trace.json`,
     );
 
   /** @type {Array<Record<string, unknown>>} */
