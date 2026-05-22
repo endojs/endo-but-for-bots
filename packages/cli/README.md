@@ -186,11 +186,16 @@ endo send bob "Take @this-thing:your-name" --as alice  # bob sees it as "your-na
 Check inbox and handle messages (bob the guest receives from alice):
 
 ```sh
-endo inbox --as bob               # List bob's received messages
-endo inbox --follow --as bob      # Follow messages as they arrive
-endo adopt 1 value-name --as bob  # Adopt a value from message #1
-endo dismiss 1 --as bob           # Delete message #1
+endo inbox --as bob              # List bob's received messages
+endo inbox --follow --as bob     # Follow messages as they arrive
+endo adopt 1 your-name --as bob  # Adopt the @your-name reference from message #1
+endo dismiss 1 --as bob          # Delete message #1
 ```
+
+The second positional argument to `adopt` is the name the sender
+embedded in the message (here `your-name`, from the second `endo send`
+example above).
+Pass `--name <local-name>` to rename the value while adopting.
 
 Request and grant capabilities:
 
