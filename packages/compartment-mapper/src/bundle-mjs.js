@@ -1,6 +1,6 @@
 /* Provides ESM support for `bundle.js`. */
 
-/** @import {PrecompiledModuleSource} from 'ses' */
+/** @import {PrecompiledModuleSource, __FixedExportMap__, __LiveExportMap__} from 'ses' */
 /** @import {BundlerSupport} from './bundle-lite.js' */
 
 import { join } from './node-module-specifier.js';
@@ -8,6 +8,10 @@ import { join } from './node-module-specifier.js';
 /** quotes strings */
 const q = JSON.stringify;
 
+/**
+ * @param {__FixedExportMap__ | __LiveExportMap__} exportMap
+ * @returns {string}
+ */
 const exportsCellRecord = exportMap =>
   ''.concat(
     ...Object.keys(exportMap).map(
@@ -17,6 +21,11 @@ const exportsCellRecord = exportMap =>
     ),
   );
 
+/**
+ * @param {__FixedExportMap__ | __LiveExportMap__} exportMap
+ * @param {number} index
+ * @returns {string}
+ */
 const importsCellSetter = (exportMap, index) => {
   // The exportMap is keyed by the exported (external) name and the value is a
   // single-element array containing the local (import-side) binding name.
@@ -47,7 +56,7 @@ const importsCellSetter = (exportMap, index) => {
         .map(exportName => `cells[${index}].${exportName}.set(value)`)
         .join('; ');
       return `\
-      ${importName}: value => { ${fanout}; },
+      ${importName}: value => { ${fanout} },
 `;
     }),
   );
