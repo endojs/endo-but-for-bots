@@ -378,6 +378,37 @@ function makeModulePlugins(options) {
       const isTopLevelLiveExport = name =>
         topLevelExported[name] !== undefined && !topLevelIsOnce[name];
 
+      // Instrument a `for (X of arr) ...` / `for (X in obj) ...` loop
+      // whose `left` is a bare Identifier (no fresh declaration) when
+      // `X` names a top-level live export. The loop's per-iteration
+      // rebinding is the loop's `left`, not an AssignmentExpression, so
+      // the AssignmentExpression visitor does not see it; prepend a
+      // publish statement to the loop body so each iteration propagates
+      // to the bundled live cell.
+      const instrumentLoopRebind = path => {
+        const { left } = path.node;
+        if (!left || left.type !== 'Identifier') {
+          // `for (let X of arr) ...` introduces a fresh local that
+          // shadows the outer binding; no publish needed.
+          return;
+        }
+        const originalName = liveSoftened.get(left.name);
+        if (originalName === undefined) {
+          return;
+        }
+        allowedHiddens.add(left);
+        const publishStmt = t.expressionStatement(
+          publishLiveCall(originalName, left.name),
+        );
+        let { body } = path.node;
+        if (body.type !== 'BlockStatement') {
+          // `for (X of arr) stmt;` → `for (X of arr) { stmt; }`
+          body = t.blockStatement([body]);
+          path.node.body = body;
+        }
+        body.body.unshift(publishStmt);
+      };
+
       const moduleVisitor = (doAnalyze, doTransform) => ({
         // Pre-rename every top-level exported live `let`/`var`/`function`
         // binding to `$c_NAME` before any other transform-pass visitor
@@ -598,6 +629,32 @@ function makeModulePlugins(options) {
             ]),
           );
           path.skip();
+        },
+        // `for (X of arr) { ... }` / `for (X in obj) { ... }` rebinds
+        // the top-level live export on each iteration. The rebinding
+        // is the loop's `left` (an Identifier when no fresh
+        // declaration is introduced), not an AssignmentExpression, so
+        // the AssignmentExpression visitor never sees it. Prepend a
+        // `$h_live.NAME($c_NAME)` publish statement to the loop body
+        // so each iteration's rebinding propagates to the bundled live
+        // cell.
+        //
+        // `for (let X of arr) ...` (with a fresh declaration) is
+        // **not** a rebinding of a top-level export; the loop's `X`
+        // shadows the outer binding. Those cases land in
+        // instrumentLoopRebind with `left.type === 'VariableDeclaration'`
+        // and are skipped.
+        ForOfStatement(path) {
+          if (!doTransform) {
+            return;
+          }
+          instrumentLoopRebind(path);
+        },
+        ForInStatement(path) {
+          if (!doTransform) {
+            return;
+          }
+          instrumentLoopRebind(path);
         },
         // We handle all the import and export productions.
         ImportDeclaration(path) {

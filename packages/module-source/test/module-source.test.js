@@ -496,6 +496,58 @@ export let y = 'initial';
   t.is(namespace.y, 'updated-y');
 });
 
+test('for-of loop rebind publishes through liveVar', t => {
+  // `for (X of arr) ...` rebinds the top-level live export X on each
+  // iteration. The rebind is the loop's `left` (an Identifier), not
+  // an AssignmentExpression. The ForOfStatement visitor must prepend
+  // a publish to the loop body so each iteration's rebinding
+  // propagates to the bundled live cell.
+  const { log, namespace } = initialize(
+    t,
+    `\
+export let n = 0;
+for (n of [1, 2, 3]) {
+  // body intentionally empty; the rebinding itself is the test.
+}
+`,
+  );
+  t.deepEqual(log, ['n: 0', 'n: 1', 'n: 2', 'n: 3']);
+  t.is(namespace.n, 3);
+});
+
+test('for-in loop rebind publishes through liveVar', t => {
+  // Same shape as for-of; the rebinding happens on `left` rather
+  // than as an AssignmentExpression.
+  const { log, namespace } = initialize(
+    t,
+    `\
+export let key = '';
+for (key in { a: 1, b: 2 }) {
+  // body intentionally empty.
+}
+`,
+  );
+  t.deepEqual(log, ['key: ""', 'key: "a"', 'key: "b"']);
+  t.is(namespace.key, 'b');
+});
+
+test('for-of loop with bodyless statement still publishes', t => {
+  // `for (X of arr) stmt;` (no block body). The instrumentation
+  // wraps the body into a BlockStatement so the publish statement
+  // can be prepended.
+  const { log, namespace } = initialize(
+    t,
+    `\
+export let n = 0;
+let sum = 0;
+for (n of [10, 20, 30]) sum += n;
+export const total = sum;
+`,
+  );
+  t.deepEqual(log, ['n: 0', 'n: 10', 'n: 20', 'n: 30', 'total: 60']);
+  t.is(namespace.total, 60);
+});
+
 test.failing(
   'class reassignment publishes through liveVar (endojs/endo#2982 follow-up)',
   t => {
