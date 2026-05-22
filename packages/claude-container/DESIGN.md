@@ -1087,8 +1087,9 @@ Six milestones, each independently demoable.
 6. Verify the orchestrator runs without root on both platforms (caps on Linux, dedicated UID + pf anchor on macOS).
 7. Threat-model review of every host-to-guest and guest-to-host message.
 8. Disable IPv6 in guests unless explicitly enabled (avoids dual-stack leak surface).
+9. **Backfill guest-side test coverage.** The full immediate-fix queue lives in `@endo/claude-orch`'s README under "Test coverage gaps". Headline items: Rust unit tests for `bootstrap-init` (zero today) — in particular `drop_privileges` (the load-bearing security claim is verified only by reading code), the rest of `runtime-agent`'s guest logic (today only the framing helper is covered), a behavioural test that the seccomp filter actually kills the process on each deny-list entry, a `RotateCreds` round-trip, a broker `rotate_if_needed` fixture, and smoke-boot assertions for "workspace mount is readable from inside the guest" and "post-`drop_privileges` uid/gid is 1000/1000".
 
-**Exit criteria**: a hostile in-guest user cannot reach host services, cannot escalate via the agent RPC, and the agent process has no path to extract credentials beyond what was already issued.
+**Exit criteria**: a hostile in-guest user cannot reach host services, cannot escalate via the agent RPC, and the agent process has no path to extract credentials beyond what was already issued. Every security-relevant claim above (task 1, 2, 4, 5, 6) is anchored by a test that fails when the claim regresses.
 
 ### Milestone 5: Operational maturity (estimated 1-2 weeks)
 

@@ -124,6 +124,105 @@ and resource caps open:
 - [ ] Operator install docs for macOS + Linux.
 - [ ] Per-tag release artifacts.
 
+## Test coverage gaps (immediate-fix queue)
+
+A pass over the guest-side test surface during the kumavis +
+Copilot reviews on PR #328 found the following holes. Each item
+names the file the test should live in and a one-line rationale;
+all of them belong on the M4 (security hardening) follow-up
+rather than M5/M6.
+
+**Rust unit tests — `rust/claude-orch/bootstrap-init/`** — zero
+tests today; the binary is only exercised by real-QEMU smoke
+boot, and that job is currently red. Backfill:
+
+- [ ] `parse_cmdline` accepts the documented
+  `claude.session_id=… claude.boot_nonce=…` shape and rejects
+  short / missing / multi-key inputs.
+- [ ] `mount_workspace` uses the 9P `trans=fd` socketpair relay
+  the way DESIGN §6.5 / R2a specifies (no kernel-mode-read
+  regression).
+- [ ] `spawn_relay` handles port-fd / socket-fd lifecycle
+  correctly: child closes on parent exit, EOF from one side
+  half-closes the other.
+- [ ] `write_credentials` writes
+  `~/.claude/.credentials.json` with `0600` and refuses an empty
+  payload.
+- [ ] `chown_home` only touches the home dir; fails closed on a
+  symlink loop.
+- [ ] `drop_privileges` issues `setgroups → setgid → setuid` in
+  that order, propagates each failure, and verifies a final
+  `getresuid` matches the target UID. **This is the load-bearing
+  security claim of the sandbox; not testing it is the largest
+  hole.**
+
+**Rust unit tests — `rust/claude-orch/runtime-agent/`** — two
+tests today (`frame_roundtrip`, `partial_frame_left_in_tail`),
+both on the framing helper. Backfill:
+
+- [ ] `start_attach` / `stop_attach` lifecycle: attach
+  registration is single-writer, `stop_attach` releases the
+  stream id, repeat attach to the same stream id works.
+- [ ] `pump_stdout` forwards child-process stdout into the mux
+  with the right stream id and drops on EPIPE.
+- [ ] `rotate_creds` writes the new payload to a tmp file +
+  rename (atomic), 0600, and is a no-op on identical input.
+- [ ] `ensure_stdio_open` survives an EBADF mid-loop without
+  crashing the heartbeat thread.
+- [ ] `run`'s top-level happy path: open virtio ports → send
+  Ready → install seccomp → enter the heartbeat loop, against
+  fake `Read`/`Write` impls for the two ports.
+
+**seccomp filter — `rust/claude-orch/runtime-agent/src/seccomp.rs`**
+— compile-checked only; the filter is never loaded and never
+exercised in any test. Backfill:
+
+- [ ] Per-syscall behavioural test: fork a child, `install()`
+  the filter, attempt each entry in the deny list, assert the
+  child dies with `SIGSYS` (`SECCOMP_RET_KILL_PROCESS`).
+- [ ] Negative test: a syscall *not* on the deny list (e.g.
+  `getpid`) succeeds after install. Pins that we haven't
+  accidentally inverted the default action.
+- [ ] `PR_SET_NO_NEW_PRIVS` is set before the filter is applied
+  and an immediate-following `execve` does not strip the
+  filter.
+
+**End-to-end / fixture tests — `packages/claude-orch/test/`** —
+the JS-side fakes cover the host wire format but not the
+multi-component interactions. Backfill:
+
+- [ ] `RotateCreds` round-trip: orchestrator → agent push
+  changes the on-disk creds file from inside the guest fake,
+  and a subsequent broker `rotate_if_needed` returning a new
+  payload reaches the agent.
+- [ ] Broker `rotate_if_needed` fixture that returns a fresh
+  payload (the current default is a hard-coded noop, so no
+  test ever drives the rotation path).
+- [ ] `ClaudeClient.interrupt()` — currently throws
+  `"not implemented in v1"`. Pin the message + shape with a
+  `t.throwsAsync` so reading the help text never gets ahead of
+  the impl again.
+
+**Real-QEMU smoke boot — `packages/claude-orch/scripts/smoke-boot.sh`**
+— asserts `hello.json` and `agent-ready.json` land. Doesn't
+verify the rest of the guest stack actually works. Backfill:
+
+- [ ] Read-from-workspace assertion: pre-populate the in-memory
+  endo-fs with a known file, then have the host-side smoke
+  driver read it back through the mounted 9P (e.g. dispatch a
+  `cat /workspace/hello.txt` and check the bytes via the stdio
+  mux).
+- [ ] `claude --version` (or equivalent) launches successfully
+  inside the rootfs, proving the pinned `claude-code@2.0.0`
+  binary survives image build + boot.
+- [ ] Post-`drop_privileges` integrity check: agent reports its
+  own `uid/gid` in the first `Log` after Ready; smoke driver
+  asserts it's `1000/1000`, not `0/0`.
+
+Track these as a single M4 follow-up; merging them shifts the
+"Runtime agent drops privileges" `[x]` checkmark from
+"verified by reading the code" to "verified by code + tests".
+
 ## Quick smoke boot
 
 The fastest way to see the whole stack work on a Linux host with KVM:
