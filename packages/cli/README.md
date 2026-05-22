@@ -144,6 +144,13 @@ endo mkhost alice  # Create a host agent (all of the primary user's authority)
 endo mkguest bob   # Create a guest agent (limited authority)
 ```
 
+Subsequent commands use `--as <agent>` to act as a particular agent:
+
+```sh
+endo list --as alice
+endo list --as bob
+```
+
 Send messages with embedded references (alice the host sends to bob the guest):
 
 ```sh
@@ -170,13 +177,6 @@ endo request "I need access to the database" --as bob --to alice
 endo inbox --as alice                      # See bob's request
 endo resolve 1 database-ref --as alice     # Grant request #1 with a named value
 endo reject 1 "Not authorized" --as alice  # Or reject it
-```
-
-Act as a different agent:
-
-```sh
-endo list --as alice
-endo list --as bob
 ```
 
 ## Workers
