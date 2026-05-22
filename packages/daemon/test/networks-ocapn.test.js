@@ -5,10 +5,34 @@
 import '@endo/init/debug.js';
 
 import test from 'ava';
+import crypto from 'crypto';
 import { E, Far } from '@endo/far';
 import { makePromiseKit } from '@endo/promise-kit';
 
 import { make as makeOcapnNetwork } from '../src/networks/ocapn.js';
+
+/**
+ * Generate a raw 32-byte Ed25519 keypair via Node's `crypto`, mirroring
+ * `makeCryptoPowers.generateEd25519Keypair` in the daemon. The mock
+ * powers below need a real keypair so the OCapN-Noise handshake can
+ * complete; the daemon supplies the same shape from the per-agent
+ * `agent_key` table. Returned as hex strings to match the
+ * `getSigningKeys` wire shape (raw `Uint8Array` is not passable).
+ */
+const toHex = bytes =>
+  Array.from(bytes)
+    .map(b => b.toString(16).padStart(2, '0'))
+    .join('');
+
+const generateEd25519Keypair = () => {
+  const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
+  const publicDer = publicKey.export({ type: 'spki', format: 'der' });
+  const privateDer = privateKey.export({ type: 'pkcs8', format: 'der' });
+  return harden({
+    publicKey: toHex(publicDer.subarray(publicDer.length - 32)),
+    privateKey: toHex(privateDer.subarray(privateDer.length - 32)),
+  });
+};
 
 /**
  * A stand-in for the `context` a network caplet receives: it exposes
@@ -39,6 +63,7 @@ const makeMockContext = () => {
 const makeMockPowers = (nodeId, label) => {
   const helloCalls = [];
   const storedValues = [];
+  const signingKeys = generateEd25519Keypair();
   const gateway = Far('Gateway', {
     /** @param {string} id */
     provide: id => `${label}:value-for:${id}`,
@@ -53,6 +78,12 @@ const makeMockPowers = (nodeId, label) => {
     getPeerInfo: () => harden({ node: nodeId, addresses: [] }),
     greeter: () => greeter,
     gateway: () => gateway,
+    // The transport binds its OCapN-Noise signing key to the agent's
+    // Ed25519 keypair (the same one the agent uses to stamp `endo://`
+    // locators). In production this comes from the host's
+    // `getSigningKeys`, which reads the per-agent record out of the
+    // `agent_key` SQLite table.
+    getSigningKeys: () => signingKeys,
     // No stored listen address — the transport falls back to an
     // ephemeral local port.
     lookup: name => {
@@ -62,7 +93,7 @@ const makeMockPowers = (nodeId, label) => {
       storedValues.push({ value, name });
     },
   });
-  return { powers, gateway, greeter, helloCalls, storedValues };
+  return { powers, gateway, greeter, helloCalls, storedValues, signingKeys };
 };
 
 test('OCapN-Noise transport conforms to the EndoNetwork interface', async t => {

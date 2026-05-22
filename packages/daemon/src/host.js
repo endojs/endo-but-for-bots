@@ -2161,8 +2161,8 @@ export const makeHostMaker = ({
     /** @type {EndoHost['getSigningKeys']} */
     const getSigningKeys = async () =>
       harden({
-        publicKey: agentKeypair.publicKey,
-        privateKey: agentKeypair.privateKey,
+        publicKey: toHex(agentKeypair.publicKey),
+        privateKey: toHex(agentKeypair.privateKey),
       });
 
     /** @type {EndoHost['addPeerInfo']} */

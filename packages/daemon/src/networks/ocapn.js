@@ -7,6 +7,7 @@ import { makeOcapn } from '@endo/ocapn';
 import { cborCodec } from '@endo/ocapn/cbor';
 import { makeOcapnNoiseNetwork } from '@endo/ocapn-noise';
 import { makeTcpTransport } from '@endo/ocapn-noise/transport/tcp';
+import { fromHex } from '../hex.js';
 
 /**
  * OCapN-Noise transport for daemon-to-daemon (peer) connections.
@@ -108,18 +109,27 @@ export const make = async (powers, context) => {
   const codec = cborCodec;
   const network = makeOcapnNoiseNetwork({ codec });
 
-  // TODO(daemon-agent-network-identity): the OCapN-Noise signing key
-  // should be the daemon agent's own Ed25519 keypair (the `@keypair`
-  // special name) so that the OCapN session identity matches the node
-  // number embedded in `endo://` locators. OCapN-Noise needs the raw
-  // private key bytes for the Noise handshake, which the keypair
-  // capability deliberately does not expose; bridging that gap is the
-  // `daemon-agent-network-identity` design. Until it lands, this
-  // transport mints a fresh per-network key, so the OCapN peer
-  // identity is distinct from the daemon node number and the
-  // connection hint must carry both the OCapN location and the node
-  // number (which the bootstrap's `getNodeId` lets a peer cross-check).
-  const signingKeys = network.generateSigningKeys();
+  // Bind the OCapN-Noise signing key to the host agent's own Ed25519
+  // keypair (the same one that stamps the agent's `endo://` locators)
+  // so the OCapN session identity matches the node number a remote peer
+  // sees in those locators. The bootstrap's `getNodeId` cross-check
+  // remains as belt-and-suspenders, but the Noise handshake is now the
+  // primary proof: it authenticates the Ed25519 public key
+  // cryptographically rather than relying on the daemon to assert it
+  // truthfully.
+  //
+  // Per-agent NETS (`daemon-agent-network-identity` items 3-4) is still
+  // unstarted, so this transport carries exactly one identity — the
+  // host agent that installed it — rather than registering every
+  // agent's key with one shared network. When that lands,
+  // `addSigningKeys` is called once per agent here.
+  // `getSigningKeys` hands back hex strings (raw `Uint8Array` is not
+  // passable across CapTP); the OCapN-Noise network needs raw bytes.
+  const hexSigningKeys = await E(powers).getSigningKeys();
+  const signingKeys = harden({
+    publicKey: fromHex(hexSigningKeys.publicKey),
+    privateKey: fromHex(hexSigningKeys.privateKey),
+  });
   const keyId = network.addSigningKeys(signingKeys);
 
   const tcpTransport = makeTcpTransport({ host, port });
