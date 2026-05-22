@@ -115,7 +115,8 @@ harden(a);
               `,
     errors: [
       {
-        message: "Named export(s) 'b' should be followed by a call to 'harden'.",
+        message:
+          "Named export(s) 'b' should be followed by a call to 'harden'.",
       },
     ],
     output: `
@@ -132,7 +133,8 @@ export const a = 1;
               `,
     errors: [
       {
-        message: "Named export(s) 'a' should be followed by a call to 'harden'.",
+        message:
+          "Named export(s) 'a' should be followed by a call to 'harden'.",
       },
     ],
     output: `
@@ -196,10 +198,12 @@ export function
         `,
     errors: [
       {
-        message: "Named export(s) 'a' should be followed by a call to 'harden'.",
+        message:
+          "Named export(s) 'a' should be followed by a call to 'harden'.",
       },
       {
-        message: "Named export(s) 'b' should be followed by a call to 'harden'.",
+        message:
+          "Named export(s) 'b' should be followed by a call to 'harden'.",
       },
       {
         message:
