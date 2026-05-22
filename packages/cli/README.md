@@ -38,6 +38,13 @@ Or invoke the CLI directly:
 node packages/cli/bin/endo --help
 ```
 
+The examples below assume `endo` resolves to that binary.
+For interactive use, alias it in your current shell:
+
+```sh
+alias endo="$PWD/packages/cli/bin/endo"
+```
+
 ## Daemon Lifecycle
 
 Start, stop, and manage the Endo daemon:
