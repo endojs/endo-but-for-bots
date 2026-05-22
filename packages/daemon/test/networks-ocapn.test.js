@@ -187,6 +187,50 @@ test('OCapN-Noise transport rejects a peer whose identity does not match the add
   );
 });
 
+test('crossed-hello: two transports dialling each other reuse one OCapN session', async t => {
+  // OCapN's session manager dedupes by `(localKey, remoteKey)`
+  // location; two sides dialling each other simultaneously must
+  // converge on a single session, not two competing ones. The
+  // bespoke `RemoteControl` state machine in the daemon exists to
+  // reconcile this for the TCP+CapTP path; under OCapN-Noise the
+  // dedupe is the session manager's job, and this test pins that
+  // contract end-to-end through `networks/ocapn.js`.
+  t.timeout(60_000);
+  const contextA = makeMockContext();
+  const contextB = makeMockContext();
+  t.teardown(() => contextA.cancel());
+  t.teardown(() => contextB.cancel());
+
+  const a = makeMockPowers('a'.repeat(64), 'A');
+  const b = makeMockPowers('b'.repeat(64), 'B');
+
+  const serviceA = await makeOcapnNetwork(a.powers, contextA);
+  const serviceB = await makeOcapnNetwork(b.powers, contextB);
+
+  const [addressA] = await E(serviceA).addresses();
+  const [addressB] = await E(serviceB).addresses();
+
+  // Both sides dial simultaneously; race them with `Promise.all` so
+  // the OCapN client on each side sees both an outbound `provideSession`
+  // and an inbound session arriving roughly at the same time.
+  const ctxAtoB = makeMockContext();
+  const ctxBtoA = makeMockContext();
+  const [gatewayBFromA, gatewayAFromB] = await Promise.all([
+    E(serviceA).connect(addressB, ctxAtoB),
+    E(serviceB).connect(addressA, ctxBtoA),
+  ]);
+
+  // Both directions saw a `hello` and got a usable remote gateway.
+  // (The order helloCalls is recorded doesn't matter; we only need
+  // each side to have seen exactly one inbound peer.)
+  t.deepEqual(a.helloCalls, ['b'.repeat(64)]);
+  t.deepEqual(b.helloCalls, ['a'.repeat(64)]);
+
+  // Both gateways round-trip through their underlying session.
+  t.is(await E(gatewayBFromA).provide('x'), 'B:value-for:x');
+  t.is(await E(gatewayAFromB).provide('y'), 'A:value-for:y');
+});
+
 test('OCapN-Noise identity persists across transport restart', async t => {
   // Phase 2: the OCapN-Noise signing key is bound to the agent's
   // Ed25519 keypair (read from the `agent_key` SQLite table via
