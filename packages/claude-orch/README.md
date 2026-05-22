@@ -221,6 +221,14 @@ agent emits unconditionally:
 - [x] Read-from-workspace assertion: agent reads
   `/workspace/hello.txt` (pre-populated by `smoke-boot-host.js`)
   post-drop_privileges and logs the contents.
+- [x] Write-to-workspace assertion (kernel v9fs → bridge →
+  endo-fs round trip): agent writes
+  `/workspace/guest-wrote.txt`, `smoke-boot-host.js` re-reads it
+  through the endo-fs cap, and the shell driver fails if the
+  re-read content doesn't match. Companion JS test in
+  `factory-live.test.js` (`live MVP: factory → bridge serves 9P
+  from a real in-memory Filesystem`) drives the same write path
+  end-to-end against a Node 9P client at unit speed.
 - [x] `claude --version` launches successfully inside the rootfs.
 - [x] Post-`drop_privileges` uid/gid is `1000/1000`. The probe
   is emitted by the runtime-agent and the shell driver fails the

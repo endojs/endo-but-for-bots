@@ -24,6 +24,7 @@ import { start as startOrch } from '@endo/claude-orch/src/main.js';
 import { buildFrame, consumeFrames } from '@endo/claude-orch/src/stdio/mux.js';
 
 import { iterateBytesWriter } from '@endo/exo-stream/iterate-bytes-writer.js';
+import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
 
 import {
   makeReader,
@@ -732,6 +733,86 @@ test.serial(
       const r = makeReader(rep.payload);
       t.is(r.u32(), ERRNO.ENOENT);
     }
+
+    // ---- Write round-trip ----------------------------------------------
+    //
+    // Drive a Tlcreate + Twrite via the 9P client against the
+    // factory-minted bridge, then verify the bytes landed by reading
+    // them back through the *endo-fs cap* (server-side, in-process to
+    // the test). Closes the read-only asymmetry the MVP test had —
+    // the write path through the bridge caplet was previously only
+    // covered indirectly by the 9p-server unit test against its own
+    // in-process bridge, not against a daemon-formulated one.
+    {
+      // Twalk fid=1 newfid=7 nwname=0 — clone the root fid so
+      // Tlcreate can move it to the new file.
+      const w = makeWriter();
+      w.u32(1);
+      w.u32(7);
+      w.u16(0);
+      c.send(T.Twalk, 7, w.finish());
+      const rep = await c.recv();
+      t.is(rep.type, T.Rwalk);
+      const r = makeReader(rep.payload);
+      t.is(r.u16(), 0);
+    }
+    {
+      // Tlcreate fid=7 name='guest-wrote.txt' flags=O_WRONLY|O_CREAT
+      // mode=0644 gid=0. Linux O_CREAT=0o100, O_WRONLY=0o1; sum
+      // them inline rather than `|`ing to keep the no-bitwise rule
+      // happy (no semantic difference for a flag fixture).
+      const w = makeWriter();
+      w.u32(7);
+      w.str('guest-wrote.txt');
+      w.u32(0o101);
+      w.u32(0o644);
+      w.u32(0);
+      c.send(T.Tlcreate, 8, w.finish());
+      const rep = await c.recv();
+      t.is(rep.type, T.Rlcreate);
+    }
+    const writePayload = new TextEncoder().encode(
+      'bytes written by the 9P client',
+    );
+    {
+      // Twrite fid=7 offset=0 count=N data=...
+      const w = makeWriter();
+      w.u32(7);
+      w.u64(0n);
+      w.u32(writePayload.length);
+      w.bytes(Buffer.from(writePayload));
+      c.send(T.Twrite, 9, w.finish());
+      const rep = await c.recv();
+      t.is(rep.type, T.Rwrite);
+      const r = makeReader(rep.payload);
+      t.is(r.u32(), writePayload.length);
+    }
+    {
+      // Tclunk fid=7 — close the open file so the bridge syncs and
+      // the cap is observable to readers on the other side.
+      const w = makeWriter();
+      w.u32(7);
+      c.send(T.Tclunk, 10, w.finish());
+      const rep = await c.recv();
+      t.is(rep.type, T.Rclunk);
+    }
+
+    // Read back through the endo-fs cap (NOT via 9P). This proves
+    // the wire-level write reached the underlying Filesystem, not
+    // just the bridge's in-memory state.
+    const wrote = await E(wsRoot).lookup('guest-wrote.txt');
+    const openWrote = await E(wrote).open({});
+    let collected = new Uint8Array(0);
+    for await (const chunk of iterateBytesReader(
+      await E(openWrote).read(0n, BigInt(writePayload.length)),
+    )) {
+      const next = new Uint8Array(collected.length + chunk.length);
+      next.set(collected, 0);
+      next.set(chunk, collected.length);
+      collected = next;
+    }
+    await E(openWrote).close();
+    t.is(new TextDecoder().decode(collected), 'bytes written by the 9P client');
 
     // Terminate to clean up.
     await E(client).terminate();

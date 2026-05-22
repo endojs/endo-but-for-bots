@@ -89,7 +89,8 @@ rm -f "$BUILD_DIR"/{ctl,fs,agent}.sock
 HELLO_FILE="$BUILD_DIR/hello.json"
 READY_FILE="$BUILD_DIR/agent-ready.json"
 AGENT_LOGS_FILE="$BUILD_DIR/agent-logs.ndjson"
-rm -f "$HELLO_FILE" "$READY_FILE" "$AGENT_LOGS_FILE"
+GUEST_WRITE_FILE="$BUILD_DIR/guest-write-verify.txt"
+rm -f "$HELLO_FILE" "$READY_FILE" "$AGENT_LOGS_FILE" "$GUEST_WRITE_FILE"
 
 NONCE="$(printf 'a%.0s' {1..64})"
 
@@ -98,7 +99,7 @@ NONCE="$(printf 'a%.0s' {1..64})"
 # FS. Replaces the previous inline hand-rolled responder; the bridge
 # is now the same code path CI exercises in `9p-server.test.js`.
 node "$REPO_ROOT/packages/claude-orch/scripts/smoke-boot-host.js" \
-  "$BUILD_DIR" "$HELLO_FILE" "$READY_FILE" "$AGENT_LOGS_FILE" &
+  "$BUILD_DIR" "$HELLO_FILE" "$READY_FILE" "$AGENT_LOGS_FILE" "$GUEST_WRITE_FILE" &
 NODE_PID=$!
 sleep 0.5
 
@@ -190,6 +191,22 @@ if grep -q '"probe: claude --version=' "$AGENT_LOGS_FILE" 2>/dev/null; then
   echo "[smoke-boot] claude --version probe OK"
 else
   echo "[smoke-boot] claude --version probe missing (claude-code not on PATH inside guest?)" >&2
+  ok=0
+fi
+# Guest-write probe: smoke-boot-host.js re-reads
+# /workspace/guest-wrote.txt off the endo-fs cap the moment the
+# agent logs `probe: workspace wrote …`, and writes either
+# `ok: <bytes>` or a diagnostic line to $GUEST_WRITE_FILE. The
+# write itself is exercised in `factory-live.test.js` against a
+# Node 9P client at unit speed; this assertion is the end-to-end
+# version with the real linux kernel doing the v9fs Twrite.
+if [ -s "$GUEST_WRITE_FILE" ]; then
+  echo "Guest write verify: $(cat "$GUEST_WRITE_FILE")"
+fi
+if grep -q '^ok: bytes written by the runtime-agent' "$GUEST_WRITE_FILE" 2>/dev/null; then
+  echo "[smoke-boot] guest-write probe OK (kernel v9fs → bridge → endo-fs)"
+else
+  echo "[smoke-boot] guest-write probe missing/mismatch (kernel v9fs write didn't land on endo-fs)" >&2
   ok=0
 fi
 

@@ -12,13 +12,26 @@
 // socketpair relay (see bootstrap-init).
 //
 // argv:
-//   smoke-boot-host.js <BUILD_DIR> <hello-out> <ready-out> [<logs-out>]
+//   smoke-boot-host.js <BUILD_DIR> <hello-out> <ready-out> [<logs-out>] [<guest-write-out>]
 //
 // Writes `hello.json` when ctl.sock receives a Hello; writes
 // `agent-ready.json` when agent.sock receives a Ready; and (when
 // `<logs-out>` is provided) appends every Agent `Log` frame to
-// that file as NDJSON. Exits 0 after 30s no matter what — the
-// shell script reads those files to decide PASS/FAIL.
+// that file as NDJSON.
+//
+// When the agent emits its `probe: workspace wrote …` log line —
+// signalling that the guest has finished writing to
+// `/workspace/guest-wrote.txt` via the 9P mount — and
+// `<guest-write-out>` is provided, the host responder re-reads the
+// file through the in-process endo-fs cap and writes a marker line
+// to `<guest-write-out>` (`ok: <contents>` on match, `mismatch: …`
+// otherwise). The shell driver greps that file to decide whether
+// the guest → 9P → bridge → endo-fs write path actually delivered
+// the bytes — the read-only smoke probe doesn't cover this
+// direction.
+//
+// Exits 0 after 30s no matter what — the shell script reads those
+// files to decide PASS/FAIL.
 
 import '@endo/init/debug.js';
 
@@ -29,12 +42,13 @@ import { E } from '@endo/eventual-send';
 
 import { makeInMemoryFilesystem } from '@endo/endo-fs/src/in-memory.js';
 import { iterateBytesWriter } from '@endo/exo-stream/iterate-bytes-writer.js';
+import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
 import { makeFsBridge9p } from '@endo/9p-server';
 
-const [, , dir, helloFile, readyFile, logsFile] = process.argv;
+const [, , dir, helloFile, readyFile, logsFile, guestWriteFile] = process.argv;
 if (!dir || !helloFile || !readyFile) {
   console.error(
-    'usage: smoke-boot-host.js <BUILD_DIR> <hello-out> <ready-out> [<logs-out>]',
+    'usage: smoke-boot-host.js <BUILD_DIR> <hello-out> <ready-out> [<logs-out>] [<guest-write-out>]',
   );
   process.exit(2);
 }
@@ -90,6 +104,44 @@ const main = async () => {
   });
   await E(bridge).start();
 
+  const expectedGuestWrite = 'bytes written by the runtime-agent';
+
+  // Pull `/workspace/guest-wrote.txt` back off the endo-fs cap to
+  // confirm the guest's 9P-write reached the underlying Filesystem
+  // (not just the bridge's in-memory state).
+  const verifyGuestWrite = async () => {
+    if (!guestWriteFile) return;
+    try {
+      const root = await E(workspaceFs).root();
+      const f = await E(root).lookup('guest-wrote.txt');
+      const oh = await E(f).open({});
+      let total = new Uint8Array(0);
+      for await (const chunk of iterateBytesReader(
+        await E(oh).read(0n, BigInt(expectedGuestWrite.length)),
+      )) {
+        const next = new Uint8Array(total.length + chunk.length);
+        next.set(total, 0);
+        next.set(chunk, total.length);
+        total = next;
+      }
+      await E(oh).close();
+      const decoded = new TextDecoder().decode(total);
+      if (decoded === expectedGuestWrite) {
+        fs.writeFileSync(guestWriteFile, `ok: ${decoded}\n`);
+      } else {
+        fs.writeFileSync(
+          guestWriteFile,
+          `mismatch: expected ${JSON.stringify(expectedGuestWrite)} got ${JSON.stringify(decoded)}\n`,
+        );
+      }
+    } catch (e) {
+      fs.writeFileSync(
+        guestWriteFile,
+        `missing: ${(e && e.message) || String(e)}\n`,
+      );
+    }
+  };
+
   // ---------- agent.sock: receive Ready + Log probes ----------
   if (logsFile) {
     // Reset the logs file at startup so an old run's data doesn't
@@ -113,6 +165,19 @@ const main = async () => {
             } else if (msg.type === 'log' && logsFile) {
               // NDJSON so the shell script can grep line-by-line.
               fs.appendFileSync(logsFile, `${JSON.stringify(msg)}\n`);
+              // The runtime-agent's write-probe log line is the
+              // signal that the guest is done writing. Fire the
+              // host-side re-read once we see it.
+              if (
+                typeof msg.msg === 'string' &&
+                msg.msg.startsWith(
+                  'probe: workspace wrote /workspace/guest-wrote.txt',
+                )
+              ) {
+                verifyGuestWrite().catch(e =>
+                  console.error('[smoke-boot-host] verify failed', e),
+                );
+              }
             }
           } catch {
             // ignore non-JSON

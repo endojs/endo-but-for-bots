@@ -199,6 +199,31 @@ fn run() -> Result<(), String> {
         ),
     }
 
+    // Guest-write probe: prove the 9P mount is *writable* from the
+    // unprivileged user, not just readable. Bytes get sent down the
+    // v9fs Twrite path → relay → bridge → endo-fs cap on the host;
+    // the smoke-boot driver re-reads the file through the in-process
+    // endo-fs cap to verify the round-trip landed.
+    //
+    // The file name is a stable known string; smoke-boot-host.js
+    // matches on it.
+    let guest_write_payload = "bytes written by the runtime-agent";
+    match fs::write("/workspace/guest-wrote.txt", guest_write_payload) {
+        Ok(()) => log_to(
+            &out_tx,
+            "info",
+            &format!(
+                "probe: workspace wrote /workspace/guest-wrote.txt bytes={}",
+                guest_write_payload.len()
+            ),
+        ),
+        Err(e) => log_to(
+            &out_tx,
+            "warn",
+            &format!("probe: workspace write failed: {e}"),
+        ),
+    }
+
     match Command::new("claude").arg("--version").output() {
         Ok(out) if out.status.success() => {
             let v = String::from_utf8_lossy(&out.stdout)
