@@ -7,6 +7,8 @@
 /**
  * @import {TransformedResult, TransformedResultWithSourceMap} from './generate.js'
  * @import {SourceMapOption} from './generate.js'
+ * @import {SourceType} from './parse-ast.js'
+ * @import {NodePath} from '@babel/traverse'
  */
 
 import { transformAst } from './transform-ast.js';
@@ -77,10 +79,10 @@ const makeFastPathMap = (source, sourceUrl, sourceMap) => {
  * @property {SourceMapOption | undefined} [sourceMap] - Original source map in JSON string or object form
  * @property {string | undefined} [sourceUrl] - URL or filepath of the original source in `code`
  * @property {boolean | undefined} [elideComments] - Empties the comments but preserves interior newlines.
- * @property {import('./parse-ast.js').SourceType | undefined} [sourceType] - Module source type
+ * @property {SourceType | undefined} [sourceType] - Module source type
  * @property {boolean | undefined} [onlyComments] - if true, will limit transformation to
 comment contents, preserving code positions within each line
-* @property {(path: import('@babel/traverse').NodePath) => void} [customVisitor] - A visitor function to be called on each node, in addition to the standard transforms. Receives the same path argument as a normal Babel visitor.
+ * @property {(path: NodePath) => void} [customVisitor] - A visitor function to be called on each node, in addition to the standard transforms. Receives the same path argument as a normal Babel visitor.
  * @property {boolean | undefined} [useLocationUnmap] - deprecated, vestigial
  * @property {((name: string, args?: Record<string, unknown>) => (args?: Record<string, unknown>) => void) | undefined} [profileStartSpan] - Optional profiling span hook
  * @public

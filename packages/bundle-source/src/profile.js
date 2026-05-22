@@ -52,11 +52,19 @@ export const makeBundleProfiler = ({
   const logToStderr = parseBoolean(env.ENDO_BUNDLE_SOURCE_PROFILE_STDERR);
 
   if (!enabled) {
-    const noop = () => {};
+    /** @type {(extraArgs?: Record<string, unknown> | undefined) => void} */
+    const noop = _extraArgs => {};
     return {
       enabled,
+      /**
+       * @param {string} _name
+       * @param {Record<string, unknown> | undefined} [_args]
+       */
       startSpan: (_name, _args = undefined) => noop,
-      async flush(_args = undefined) {
+      /**
+       * @param {Record<string, unknown> | undefined} [_result]
+       */
+      async flush(_result = undefined) {
         // No-op when profiling is disabled.
       },
     };

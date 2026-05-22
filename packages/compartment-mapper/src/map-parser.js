@@ -139,7 +139,7 @@ const makeExtensionParser = (
     options,
   ) {
     const { profileStartSpan = undefined } = options || {};
-    /** @type {string} */
+    /** @type {string | undefined} */
     let language;
     const extension = parseExtension(location);
     const endLanguageSelect = profileStartSpan?.(

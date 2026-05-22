@@ -134,8 +134,8 @@ ENDO_BUNDLE_SOURCE_PROFILE_DIR=/tmp/bs-profiles \
 yarn bundle-source app.js > /tmp/app-bundle.json
 ```
 
-Each bundle call writes one `*.trace.json` file. Open these in Chrome tracing
-tools or convert for Speedscope.
+Each bundle call writes one `*.trace.json` file.
+Open these in Chrome tracing tools or convert for Speedscope.
 
 You can also control profiling in code:
 

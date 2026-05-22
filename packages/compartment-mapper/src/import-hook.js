@@ -12,6 +12,7 @@
 
 /**
  * @import {
+ *   Harden,
  *   ImportHook,
  *   ImportNowHook,
  *   RedirectStaticModuleInterface,
@@ -64,7 +65,7 @@ const { apply } = Reflect;
  * TypeScript cannot be relied upon to deal with the nuances of Readonly, so we
  * borrow the pass-through type definition of harden here.
  *
- * @type {import('ses').Harden}
+ * @type {Harden}
  */
 const freeze = Object.freeze;
 
@@ -423,6 +424,7 @@ function* chooseModuleDescriptor(
       'compartmentMapper.importHook.readModuleBytes',
       { moduleLocation },
     );
+    /** @type {Uint8Array | undefined} */
     let moduleBytes;
     try {
       moduleBytes = /** @type {Uint8Array|undefined} */ (

@@ -3,12 +3,14 @@
 import { BufferWriter } from './buffer-writer.js';
 import { writeZip as writeZipFormat } from './format-writer.js';
 
+/** @import {ArchivedFile, ArchiveWriter, WriteFn, SnapshotFn} from './types.js' */
+
 const LOCAL_FILE_HEADER_FIXED_BYTES = 30;
 const CENTRAL_FILE_HEADER_FIXED_BYTES = 46;
 const CENTRAL_DIRECTORY_END_FIXED_BYTES = 22;
 
 /**
- * @param {Array<ZFile>} files
+ * @param {Array<ArchivedFile>} files
  * @returns {number}
  */
 const estimateZipSize = files => {
@@ -34,7 +36,7 @@ export class ZipWriter {
    */
   constructor(options = { date: new Date() }) {
     const { date, profileStartSpan = undefined } = options;
-    /** type {Map<string, ZFile>} */
+    /** @type {Map<string, ArchivedFile>} */
     this.files = new Map();
     this.date = date;
     this.profileStartSpan = profileStartSpan;
@@ -45,12 +47,12 @@ export class ZipWriter {
    * @param {Uint8Array} content
    * @param {{
    *   mode?: number,
-   *   date?: Date,
+   *   date?: Date | null,
    *   comment?: string,
    * }} [options]
    */
   write(name, content, options = {}) {
-    const { mode = 0o644, date = undefined, comment = '' } = options;
+    const { mode = 0o644, date = null, comment = '' } = options;
     if (!content) {
       throw Error(`ZipWriter write requires content for ${name}`);
     }
@@ -60,6 +62,7 @@ export class ZipWriter {
       date,
       content,
       comment,
+      type: 'file',
     });
   }
 
@@ -79,15 +82,15 @@ export class ZipWriter {
  *   date?: Date,
  *   profileStartSpan?: (name: string, args?: Record<string, unknown>) => (args?: Record<string, unknown>) => void,
  * }} [options]
- * @returns {import('./types.js').ArchiveWriter}
+ * @returns {ArchiveWriter}
  */
 export const writeZip = (options = {}) => {
   const writer = new ZipWriter({ date: new Date(), ...options });
-  /** @type {import('./types.js').WriteFn} */
+  /** @type {WriteFn} */
   const write = (path, data) => {
     writer.write(path, data);
   };
-  /** @type {import('./types.js').SnapshotFn} */
+  /** @type {SnapshotFn} */
   const snapshot = () => writer.snapshot();
   return { write, snapshot };
 };

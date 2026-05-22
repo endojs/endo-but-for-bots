@@ -240,6 +240,7 @@ export async function bundleZipBase64(
     }
 
     const endEncodeBase64 = profiler.startSpan('bundleSource.encodeBase64');
+    /** @type {string | undefined} */
     let endoZipBase64;
     try {
       endoZipBase64 = encodeBase64(bytes);
