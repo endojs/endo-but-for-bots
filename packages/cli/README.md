@@ -57,7 +57,7 @@ Run a confined program:
 ```sh
 endo run program.js
 endo run program.js --powers NONE   # No special powers (default)
-endo run program.js --powers HOST   # All of the primary user's agency
+endo run program.js --powers HOST   # All of the primary user's authority
 endo run program.js --powers ENDO   # All of the power of the daemon
 endo run program.js --powers <pet>  # A named guest's powers
 ```
@@ -74,7 +74,7 @@ endo make worker.js --powers <pet>            # A named guest's powers
 ```
 
 The `--powers` vocabulary differs between `run` and `make`:
-`run` accepts `HOST` for the primary user's agency,
+`run` accepts `HOST` for the primary user's authority,
 while `make` accepts `AGENT` for the current agent's own powers.
 Both also accept any pet name; reserved pet names like `SELF` and `HOST`
 work wherever they are defined in the calling agent's namespace.
