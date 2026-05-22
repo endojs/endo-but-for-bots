@@ -3560,10 +3560,6 @@ const makeDaemonCore = async (
       const agentNodeNumber = /** @type {NodeNumber} */ (
         hostAgentKeyRecord.publicKey
       );
-      const hostAgentKeypair = harden({
-        publicKey: fromHex(hostAgentKeyRecord.publicKey),
-        privateKey: fromHex(hostAgentKeyRecord.privateKey),
-      });
 
       // Behold, forward reference:
       // eslint-disable-next-line no-use-before-define
@@ -3573,7 +3569,6 @@ const makeDaemonCore = async (
         hostHandleId,
         agentNodeNumber,
         signBytes,
-        hostAgentKeypair,
         petStoreId,
         mailboxStoreId,
         mailHubId,

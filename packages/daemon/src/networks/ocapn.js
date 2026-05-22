@@ -7,7 +7,6 @@ import { makeOcapn } from '@endo/ocapn';
 import { cborCodec } from '@endo/ocapn/cbor';
 import { makeOcapnNoiseNetwork } from '@endo/ocapn-noise';
 import { makeTcpTransport } from '@endo/ocapn-noise/transport/tcp';
-import { fromHex } from '../hex.js';
 
 /**
  * OCapN-Noise transport for daemon-to-daemon (peer) connections.
@@ -109,27 +108,18 @@ export const make = async (powers, context) => {
   const codec = cborCodec;
   const network = makeOcapnNoiseNetwork({ codec });
 
-  // Bind the OCapN-Noise signing key to the host agent's own Ed25519
-  // keypair (the same one that stamps the agent's `endo://` locators)
-  // so the OCapN session identity matches the node number a remote peer
-  // sees in those locators. The bootstrap's `getNodeId` cross-check
-  // remains as belt-and-suspenders, but the Noise handshake is now the
-  // primary proof: it authenticates the Ed25519 public key
-  // cryptographically rather than relying on the daemon to assert it
-  // truthfully.
-  //
-  // Per-agent NETS (`daemon-agent-network-identity` items 3-4) is still
-  // unstarted, so this transport carries exactly one identity — the
-  // host agent that installed it — rather than registering every
-  // agent's key with one shared network. When that lands,
-  // `addSigningKeys` is called once per agent here.
-  // `getSigningKeys` hands back hex strings (raw `Uint8Array` is not
-  // passable across CapTP); the OCapN-Noise network needs raw bytes.
-  const hexSigningKeys = await E(powers).getSigningKeys();
-  const signingKeys = harden({
-    publicKey: fromHex(hexSigningKeys.publicKey),
-    privateKey: fromHex(hexSigningKeys.privateKey),
-  });
+  // The OCapN-Noise session uses an ephemeral Ed25519 keypair, freshly
+  // minted on every install. The daemon's persistent agent identity
+  // is *not* baked into the Noise handshake — the agent keypair is
+  // confined inside the daemon and never leaves the host (per the
+  // `@keypair` capability discipline). Persistent identity is instead
+  // layered on top of the session: the bootstrap exo carries a signed
+  // attestation (`getAgentBinding`) that endorses this session's
+  // ephemeral public key with the agent's persistent key, and the
+  // dialing peer verifies that signature against the agent public key
+  // it expects from the `endo://` locator before trusting any other
+  // capability fetched through this session.
+  const signingKeys = network.generateSigningKeys();
   const keyId = network.addSigningKeys(signingKeys);
 
   const tcpTransport = makeTcpTransport({ host, port });

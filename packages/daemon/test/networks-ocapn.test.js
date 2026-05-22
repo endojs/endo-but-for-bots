@@ -14,23 +14,48 @@ import { make as makeOcapnNetwork } from '../src/networks/ocapn.js';
 /**
  * Generate a raw 32-byte Ed25519 keypair via Node's `crypto`, mirroring
  * `makeCryptoPowers.generateEd25519Keypair` in the daemon. The mock
- * powers below need a real keypair so the OCapN-Noise handshake can
- * complete; the daemon supplies the same shape from the per-agent
- * `agent_key` table. Returned as hex strings to match the
- * `getSigningKeys` wire shape (raw `Uint8Array` is not passable).
+ * `sign` method below uses it to back the agent's persistent signing
+ * surface — the same one the layered agent-binding attestation
+ * exposes via the OCapN bootstrap exo.
  */
 const toHex = bytes =>
   Array.from(bytes)
     .map(b => b.toString(16).padStart(2, '0'))
     .join('');
 
+const fromHex = hex => {
+  const bytes = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < bytes.length; i += 1) {
+    bytes[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+  }
+  return bytes;
+};
+
+const ED25519_PKCS8_PREFIX = Buffer.from([
+  0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x04,
+  0x22, 0x04, 0x20,
+]);
+
+const ed25519SignBytes = (privateKey, message) => {
+  const derKey = Buffer.concat([
+    ED25519_PKCS8_PREFIX,
+    Buffer.from(privateKey),
+  ]);
+  const keyObject = crypto.createPrivateKey({
+    key: derKey,
+    format: 'der',
+    type: 'pkcs8',
+  });
+  return new Uint8Array(crypto.sign(null, Buffer.from(message), keyObject));
+};
+
 const generateEd25519Keypair = () => {
   const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
   const publicDer = publicKey.export({ type: 'spki', format: 'der' });
   const privateDer = privateKey.export({ type: 'pkcs8', format: 'der' });
   return harden({
-    publicKey: toHex(publicDer.subarray(publicDer.length - 32)),
-    privateKey: toHex(privateDer.subarray(privateDer.length - 32)),
+    publicKey: new Uint8Array(publicDer.subarray(publicDer.length - 32)),
+    privateKey: new Uint8Array(privateDer.subarray(privateDer.length - 32)),
   });
 };
 
@@ -54,16 +79,24 @@ const makeMockContext = () => {
 
 /**
  * A stand-in for the `@agent` powers a network caplet receives. The
- * transport only reads `getPeerInfo`, `greeter`, `gateway`, and
- * `lookup`.
+ * transport reads `getPeerInfo` (for the agent's persistent node id),
+ * `sign` (for the layered agent-binding attestation), `greeter`,
+ * `gateway`, `lookup`, and `storeValue`. The mock keeps an internal
+ * Ed25519 keypair so the node id and the `sign` output are
+ * consistent — exactly as the daemon's `agent_key` SQLite row would
+ * be on a real host.
  *
- * @param {string} nodeId
+ * Per-mock keypair so two mocks produce two distinct agent identities.
+ * Pass `keypair` to reuse an identity across mocks (used to simulate
+ * a daemon restart with the same persistent agent).
+ *
  * @param {string} label
+ * @param {{ publicKey: Uint8Array, privateKey: Uint8Array }} [keypair]
  */
-const makeMockPowers = (nodeId, label) => {
+const makeMockPowers = (label, keypair = generateEd25519Keypair()) => {
   const helloCalls = [];
   const storedValues = [];
-  const signingKeys = generateEd25519Keypair();
+  const nodeId = toHex(keypair.publicKey);
   const gateway = Far('Gateway', {
     /** @param {string} id */
     provide: id => `${label}:value-for:${id}`,
@@ -78,12 +111,7 @@ const makeMockPowers = (nodeId, label) => {
     getPeerInfo: () => harden({ node: nodeId, addresses: [] }),
     greeter: () => greeter,
     gateway: () => gateway,
-    // The transport binds its OCapN-Noise signing key to the agent's
-    // Ed25519 keypair (the same one the agent uses to stamp `endo://`
-    // locators). In production this comes from the host's
-    // `getSigningKeys`, which reads the per-agent record out of the
-    // `agent_key` SQLite table.
-    getSigningKeys: () => signingKeys,
+    sign: hexBytes => toHex(ed25519SignBytes(keypair.privateKey, fromHex(hexBytes))),
     // No stored listen address — the transport falls back to an
     // ephemeral local port.
     lookup: name => {
@@ -93,15 +121,14 @@ const makeMockPowers = (nodeId, label) => {
       storedValues.push({ value, name });
     },
   });
-  return { powers, gateway, greeter, helloCalls, storedValues, signingKeys };
+  return { powers, gateway, greeter, helloCalls, storedValues, keypair, nodeId };
 };
 
 test('OCapN-Noise transport conforms to the EndoNetwork interface', async t => {
   t.timeout(60_000);
   const context = makeMockContext();
   t.teardown(() => context.cancel());
-  const nodeId = 'a'.repeat(64);
-  const { powers, storedValues } = makeMockPowers(nodeId, 'A');
+  const { powers, storedValues, nodeId } = makeMockPowers('A');
 
   const service = await makeOcapnNetwork(powers, context);
 
@@ -137,8 +164,8 @@ test('OCapN-Noise transport carries a peer connection end to end', async t => {
   t.teardown(() => contextA.cancel());
   t.teardown(() => contextB.cancel());
 
-  const a = makeMockPowers('a'.repeat(64), 'A');
-  const b = makeMockPowers('b'.repeat(64), 'B');
+  const a = makeMockPowers('A');
+  const b = makeMockPowers('B');
 
   const serviceA = await makeOcapnNetwork(a.powers, contextA);
   const serviceB = await makeOcapnNetwork(b.powers, contextB);
@@ -153,7 +180,7 @@ test('OCapN-Noise transport carries a peer connection end to end', async t => {
   const remoteGateway = await E(serviceA).connect(addressB, connectionContext);
 
   // B's greeter saw A's node id during the handshake.
-  t.deepEqual(b.helloCalls, ['a'.repeat(64)]);
+  t.deepEqual(b.helloCalls, [a.nodeId]);
 
   // The gateway `hello` returned is B's, reached over OCapN: a method
   // call on it round-trips to B and back.
@@ -168,17 +195,17 @@ test('OCapN-Noise transport rejects a peer whose identity does not match the add
   t.teardown(() => contextA.cancel());
   t.teardown(() => contextB.cancel());
 
-  const a = makeMockPowers('a'.repeat(64), 'A');
-  const b = makeMockPowers('b'.repeat(64), 'B');
+  const a = makeMockPowers('A');
+  const b = makeMockPowers('B');
 
   const serviceA = await makeOcapnNetwork(a.powers, contextA);
   const serviceB = await makeOcapnNetwork(b.powers, contextB);
 
   const [addressB] = await E(serviceB).addresses();
   // Rewrite the connection hint so it names a node other than the one
-  // B's bootstrap will report.
+  // B's bootstrap binding attests to.
   const tampered = new URL(addressB);
-  tampered.searchParams.set('node', 'c'.repeat(64));
+  tampered.searchParams.set('node', toHex(generateEd25519Keypair().publicKey));
 
   const connectionContext = makeMockContext();
   await t.throwsAsync(
@@ -210,8 +237,8 @@ test('peer teardown surfaces as a rejection on the next call', async t => {
   const contextB = makeMockContext();
   t.teardown(() => contextA.cancel());
 
-  const a = makeMockPowers('a'.repeat(64), 'A');
-  const b = makeMockPowers('b'.repeat(64), 'B');
+  const a = makeMockPowers('A');
+  const b = makeMockPowers('B');
 
   const serviceA = await makeOcapnNetwork(a.powers, contextA);
   const serviceB = await makeOcapnNetwork(b.powers, contextB);
@@ -249,8 +276,8 @@ test('crossed-hello: two transports dialling each other reuse one OCapN session'
   t.teardown(() => contextA.cancel());
   t.teardown(() => contextB.cancel());
 
-  const a = makeMockPowers('a'.repeat(64), 'A');
-  const b = makeMockPowers('b'.repeat(64), 'B');
+  const a = makeMockPowers('A');
+  const b = makeMockPowers('B');
 
   const serviceA = await makeOcapnNetwork(a.powers, contextA);
   const serviceB = await makeOcapnNetwork(b.powers, contextB);
@@ -271,26 +298,36 @@ test('crossed-hello: two transports dialling each other reuse one OCapN session'
   // Both directions saw a `hello` and got a usable remote gateway.
   // (The order helloCalls is recorded doesn't matter; we only need
   // each side to have seen exactly one inbound peer.)
-  t.deepEqual(a.helloCalls, ['b'.repeat(64)]);
-  t.deepEqual(b.helloCalls, ['a'.repeat(64)]);
+  t.deepEqual(a.helloCalls, [b.nodeId]);
+  t.deepEqual(b.helloCalls, [a.nodeId]);
 
   // Both gateways round-trip through their underlying session.
   t.is(await E(gatewayBFromA).provide('x'), 'B:value-for:x');
   t.is(await E(gatewayAFromB).provide('y'), 'A:value-for:y');
 });
 
-test('OCapN-Noise identity persists across transport restart', async t => {
-  // Phase 2: the OCapN-Noise signing key is bound to the agent's
-  // Ed25519 keypair (read from the `agent_key` SQLite table via
-  // `EndoHost.getSigningKeys()`), so two consecutive transport
-  // instantiations on the same agent must produce the same OCapN
-  // location designator and the same advertised public-key bytes in
-  // the connection hint. Before Phase 2 the transport minted a fresh
-  // key on every install and the OCapN identity reset on every
-  // restart.
+test('agent identity persists across transport restart, even though OCapN session key rotates', async t => {
+  // OCapN sessions intentionally use ephemeral keys — the daemon
+  // does not bake its persistent agent identity into the Noise
+  // handshake; the `@keypair` capability discipline keeps the agent
+  // private key inside the daemon. Persistent identity is layered on
+  // top via the bootstrap's signed `getAgentBinding` attestation, so
+  // restart-stability is asserted on:
+  //
+  //   1. the `node=` parameter of the connection-hint URL, which the
+  //      agent stamps with its own persistent public key, and
+  //   2. the OCapN session designator visibly rotating across the
+  //      two restarts (the opposite property would mean the OCapN
+  //      handshake was pinned to a persistent key, which is the
+  //      shape we explicitly reject).
+  //
+  // The layered-attestation check — that the binding's
+  // `agentPublicKey` matches the locator's `node=` and the signature
+  // verifies — is exercised end-to-end by every other test in this
+  // file via the dial path's `OCapN peer identity mismatch` guard.
   t.timeout(60_000);
-  const nodeId = 'a'.repeat(64);
-  const { powers: powersA } = makeMockPowers(nodeId, 'A');
+  const keypair = generateEd25519Keypair();
+  const { powers: powersA, nodeId } = makeMockPowers('A', keypair);
 
   const contextA1 = makeMockContext();
   t.teardown(() => contextA1.cancel());
@@ -298,28 +335,32 @@ test('OCapN-Noise identity persists across transport restart', async t => {
   const [addressA1] = await E(serviceA1).addresses();
 
   // Tear down the first instance and create a fresh one with the
-  // same mock powers (i.e., the same persisted keypair).
+  // same mock powers (i.e., the same persistent agent keypair).
   contextA1.cancel();
 
   const contextA2 = makeMockContext();
   t.teardown(() => contextA2.cancel());
-  const serviceA2 = await makeOcapnNetwork(powersA, contextA2);
+  const { powers: powersA2 } = makeMockPowers('A', keypair);
+  const serviceA2 = await makeOcapnNetwork(powersA2, contextA2);
   const [addressA2] = await E(serviceA2).addresses();
 
-  // The connection-hint URL carries the full OCapN location as a
-  // base64-encoded JSON blob in the `loc=` query param; the
-  // location's `designator` is the Ed25519 public key the Noise
-  // handshake authenticates against. That public key must match
-  // across restarts.
+  // Persistent agent identity (the `node=` param) is stable.
+  t.is(new URL(addressA1).searchParams.get('node'), nodeId);
+  t.is(new URL(addressA2).searchParams.get('node'), nodeId);
+
+  // OCapN session designator rotates (ephemeral, generated fresh on
+  // each install). If these matched, the OCapN-Noise transport would
+  // be persisting its handshake key — exactly the shape this layered
+  // attestation is designed to avoid.
   const locA1 = JSON.parse(
     /** @type {string} */ (new URL(addressA1).searchParams.get('loc')),
   );
   const locA2 = JSON.parse(
     /** @type {string} */ (new URL(addressA2).searchParams.get('loc')),
   );
-  t.deepEqual(
+  t.notDeepEqual(
     locA2.designator,
     locA1.designator,
-    'OCapN designator (Ed25519 public key) is stable across restart',
+    'OCapN designator is ephemeral and rotates across restart',
   );
 });
