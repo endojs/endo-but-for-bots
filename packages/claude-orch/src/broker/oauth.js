@@ -105,7 +105,7 @@ harden(makeOAuthRefresher);
  * (`{error: 'invalid_grant', error_description: '...'}`) in its
  * thrown message.
  *
- * @type {OAuthRefresherOpts['httpFetch']}
+ * @type {NonNullable<OAuthRefresherOpts['httpFetch']>}
  */
 const defaultHttpFetch = ({ url, body }) =>
   new Promise((resolve, reject) => {

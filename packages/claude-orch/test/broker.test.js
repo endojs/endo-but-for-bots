@@ -113,7 +113,7 @@ test('refresher push: forced refresh fans out to every subscriber', async t => {
     return {
       oauthToken: {
         accessToken: `tok-${nthCall}`,
-        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+        expiresAt: new Date(Date.now() + 10 * 60_000).toISOString(),
       },
     };
   };
@@ -121,7 +121,7 @@ test('refresher push: forced refresh fans out to every subscriber', async t => {
     initialCredentials: {
       oauthToken: {
         accessToken: 'tok-initial',
-        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+        expiresAt: new Date(Date.now() + 10 * 60_000).toISOString(),
       },
     },
     refresher,
@@ -164,7 +164,7 @@ test('refresher failure: forceRefresh propagates the error and leaves state inta
     return {
       oauthToken: {
         accessToken: 'tok-recovered',
-        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+        expiresAt: new Date(Date.now() + 10 * 60_000).toISOString(),
       },
     };
   };
@@ -172,7 +172,7 @@ test('refresher failure: forceRefresh propagates the error and leaves state inta
     initialCredentials: {
       oauthToken: {
         accessToken: 'tok-initial',
-        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+        expiresAt: new Date(Date.now() + 10 * 60_000).toISOString(),
       },
     },
     refresher,
@@ -202,14 +202,17 @@ test('refresher failure: forceRefresh propagates the error and leaves state inta
 
 test('unsubscribe: removes the connection from the subscriber set', async t => {
   // After unsubscribe, a subsequent `forceRefresh()` from another
-  // path must not deliver creds to this subscriber.
+  // path must not deliver creds to this subscriber. The expiries are
+  // pushed well beyond the default refreshWindowMs (5 min) so the
+  // auto-scheduler does not race the unsubscribe; rotations come
+  // exclusively from forceRefresh().
   let nthCall = 0;
   const refresher = async () => {
     nthCall += 1;
     return {
       oauthToken: {
         accessToken: `tok-${nthCall}`,
-        expiresAt: new Date(Date.now() + 10_000).toISOString(),
+        expiresAt: new Date(Date.now() + 10 * 60_000).toISOString(),
       },
     };
   };
@@ -217,7 +220,7 @@ test('unsubscribe: removes the connection from the subscriber set', async t => {
     initialCredentials: {
       oauthToken: {
         accessToken: 'tok-0',
-        expiresAt: new Date(Date.now() + 10_000).toISOString(),
+        expiresAt: new Date(Date.now() + 10 * 60_000).toISOString(),
       },
     },
     refresher,
