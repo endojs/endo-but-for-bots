@@ -49,9 +49,10 @@ await writer.next(encoder.encode('world'));
 await writer.return();
 ```
 
-### Writing chunked messages
+### Writing messages in parts
 
-Messages can be passed as arrays of chunks to avoid pre-concatenation:
+A message can be passed as an array of byte slices the writer
+concatenates into a single netstring, to avoid pre-concatenation:
 
 ```js
 const encoder = new TextEncoder();
@@ -62,6 +63,9 @@ await writer.next([
 ]);
 // Writes: "11:hello world,"
 ```
+
+These are message parts, not stream chunks: the netstring boundary
+still falls between messages, never between the parts of one message.
 
 ### Round-trip example
 
