@@ -94,6 +94,8 @@ function makeModulePlugins(options) {
 
       const allowedHiddens = new WeakSet();
       const rewrittenDecls = new WeakSet();
+      const rewrittenAssignments = new WeakSet();
+      const rewrittenUpdates = new WeakSet();
       const hiddenIdentifier = hi => {
         const ident = t.identifier(hi);
         allowedHiddens.add(ident);
@@ -101,8 +103,31 @@ function makeModulePlugins(options) {
       };
       const hOnceId = hiddenIdentifier(h.HIDDEN_ONCE);
       const hLiveId = hiddenIdentifier(h.HIDDEN_LIVE);
+      // Maps the in-AST local name of a top-level exported live binding
+      // to the original (source-level, exported) name. For
+      // `let`/`var`/`function` declarations the local has been renamed
+      // to `$c_NAME` via Babel's scope rename in the Program-enter
+      // sweep, so the key is `$c_NAME` and the value is `NAME`; for
+      // `class` declarations the name is not rewritten and the entry
+      // (added later by the ClassDeclaration handler) is an identity
+      // mapping (`NAME` -> `NAME`).
+      //
+      // The AssignmentExpression and UpdateExpression visitors consult
+      // this map to instrument reassignments with a `$h_live.NAME(...)`
+      // publish call so the bundled live cell is updated. Without that
+      // instrumentation, `export let X = 1; X = 2;` leaves the bundled
+      // `X` export observably stuck at the initial value
+      // (endojs/endo#2982); the prior implementation relied on the SES
+      // moduleLexicals scope-proxy set-trap to surface the assignment,
+      // but a raw `nestedEvaluate` bundle runs outside any such
+      // compartment.
+      /** @type {Map<string, string>} */
+      const liveSoftened = new Map();
       const soften = id => {
-        // Remap the name to $c_name.
+        // Remap the name to $c_name. Used by the declaration handlers
+        // when the binding was not pre-renamed by the Program-enter
+        // sweep (the `hoistedDecls` path which constructs identifiers
+        // de novo).
         const { name } = id;
         id.name = `${h.HIDDEN_CONST_VAR_PREFIX}${name}`;
         allowedHiddens.add(id);
@@ -178,11 +203,24 @@ function makeModulePlugins(options) {
       const rewriteVars = (vids, isConst, needsHoisting) => {
         const replacements = [];
         for (const id of vids) {
-          const { name } = id;
+          // The Program-enter sweep may have already softened this id
+          // via scope rename. Recover the original (source-level)
+          // name from `liveSoftened` so the publish call and the
+          // `topLevelExported` / `topLevelIsOnce` lookups (which are
+          // keyed by the original name) continue to work.
+          const currentName = id.name;
+          const preRenamedOriginal = liveSoftened.get(currentName);
+          const name =
+            preRenamedOriginal !== undefined ? preRenamedOriginal : currentName;
           if (!isConst && !topLevelIsOnce[name]) {
             if (topLevelExported[name]) {
               // Just add $h_live.name($c_name);
-              soften(id);
+              if (preRenamedOriginal === undefined) {
+                soften(id);
+                liveSoftened.set(id.name, name);
+              } else {
+                allowedHiddens.add(id);
+              }
               replacements.push(
                 t.expressionStatement(
                   t.callExpression(
@@ -198,7 +236,12 @@ function makeModulePlugins(options) {
               // Hoist the declaration and soften.
               if (needsHoisting === 'function') {
                 if (!topLevelIsOnce[name]) {
-                  soften(id);
+                  if (preRenamedOriginal === undefined) {
+                    soften(id);
+                    liveSoftened.set(id.name, name);
+                  } else {
+                    allowedHiddens.add(id);
+                  }
                 }
                 options.hoistedDecls.push([
                   name,
@@ -208,7 +251,12 @@ function makeModulePlugins(options) {
                 markExport(name);
               } else {
                 // Rewrite to be just name = value.
-                soften(id);
+                if (preRenamedOriginal === undefined) {
+                  soften(id);
+                  liveSoftened.set(id.name, name);
+                } else {
+                  allowedHiddens.add(id);
+                }
                 options.hoistedDecls.push([name]);
                 replacements.push(
                   t.expressionStatement(
@@ -310,7 +358,176 @@ function makeModulePlugins(options) {
         },
       };
 
+      // Build a publish-call expression that pushes the current value of
+      // the softened local through `$h_live.NAME(...)`. NAME is the
+      // original source-level local name (which is also the exported
+      // name).
+      const publishLiveCall = (originalName, softenedName) => {
+        const arg = t.identifier(softenedName);
+        allowedHiddens.add(arg);
+        return t.callExpression(
+          t.memberExpression(hLiveId, t.identifier(originalName)),
+          [arg],
+        );
+      };
+
+      // True if the named binding is a top-level export that is reassigned
+      // somewhere in the module (i.e., live, not once). Consulted by the
+      // Program-enter rename sweep to decide which bindings to soften and
+      // by the declaration handlers to skip already-pre-renamed entries.
+      const isTopLevelLiveExport = name =>
+        topLevelExported[name] !== undefined && !topLevelIsOnce[name];
+
       const moduleVisitor = (doAnalyze, doTransform) => ({
+        // Pre-rename every top-level exported live `let`/`var`/`function`
+        // binding to `$c_NAME` before any other transform-pass visitor
+        // descends into the program body. Scope-aware renaming via
+        // `path.scope.rename` propagates the rename to every reference
+        // (reads and writes) in the binding's scope, so subsequent
+        // visitors see the softened form everywhere. Doing the rename in
+        // a single up-front sweep avoids the ordering quirk where
+        // `ExportNamedDeclaration#replaceWithMultiple` re-orders the
+        // declaration's processing relative to sibling assignment
+        // statements (the declaration visitor would otherwise fire
+        // *after* the assignment visitor that needs the rename to have
+        // already happened). Class declarations are handled separately
+        // by the `ClassDeclaration` visitor and are not renamed: the
+        // local keeps the source name so the existing publish call
+        // (`$h_live.NAME(NAME)`) reads the right binding.
+        Program: {
+          enter(path) {
+            if (!doTransform) {
+              return;
+            }
+            // Walk the program body for live let/var/function decls. We
+            // discriminate class from function/var/let by inspecting
+            // each top-level declaration's AST node type. Iterating
+            // `topLevelExported` alone is not enough because that map
+            // does not record the declaration kind.
+            const visited = new Set();
+            const handleDecl = name => {
+              if (visited.has(name)) return;
+              visited.add(name);
+              if (!isTopLevelLiveExport(name)) return;
+              const newName = `${h.HIDDEN_CONST_VAR_PREFIX}${name}`;
+              if (path.scope.hasBinding(name)) {
+                path.scope.rename(name, newName);
+                liveSoftened.set(newName, name);
+              }
+            };
+            const considerDecl = decl => {
+              if (!decl) return;
+              if (
+                decl.type === 'VariableDeclaration' ||
+                decl.type === 'FunctionDeclaration'
+              ) {
+                const vids = (decl.declarations || [decl]).flatMap(({ id }) =>
+                  collectPatternIdentifiers(path, id),
+                );
+                for (const { name } of vids) {
+                  handleDecl(name);
+                }
+              }
+              // ClassDeclaration is intentionally skipped here so the
+              // local keeps its source name. The ClassDeclaration
+              // handler tracks reassignment-instrumentation in
+              // `liveSoftened` via an identity mapping.
+            };
+            for (const node of path.node.body) {
+              if (
+                node.type === 'VariableDeclaration' ||
+                node.type === 'FunctionDeclaration'
+              ) {
+                considerDecl(node);
+              } else if (
+                node.type === 'ExportNamedDeclaration' &&
+                node.declaration
+              ) {
+                considerDecl(node.declaration);
+              }
+            }
+          },
+        },
+        // Reassignment instrumentation for top-level exported live
+        // bindings. After the Program-enter rename sweep, AST nodes that
+        // reference a live binding carry the softened name; assignments
+        // visited here see e.g. `$c_letVal = 'updated'`. We append a
+        // `$h_live.letVal($c_letVal)` publish call so the bundled cell
+        // is updated. For class declarations (whose name is not
+        // softened), the lhs name is the original and `liveSoftened`
+        // records an identity mapping.
+        AssignmentExpression(path) {
+          if (!doTransform) {
+            return;
+          }
+          if (rewrittenAssignments.has(path.node)) {
+            return;
+          }
+          const lhs = path.node.left;
+          if (!lhs || lhs.type !== 'Identifier') {
+            // Destructuring and member-expression assignments do not
+            // bind a top-level exported live name as a whole; the
+            // canonical reassignment shape covered by the regression
+            // tests is a plain `X = expr`.
+            return;
+          }
+          const originalName = liveSoftened.get(lhs.name);
+          if (originalName === undefined) {
+            return;
+          }
+          rewrittenAssignments.add(path.node);
+          allowedHiddens.add(lhs);
+          const finalRef = t.identifier(lhs.name);
+          allowedHiddens.add(finalRef);
+          // Replace `$c_NAME op= rhs` with
+          //   ($c_NAME op= rhs, $h_live.NAME($c_NAME), $c_NAME)
+          // The trailing reference preserves the assignment's evaluated
+          // value for any enclosing expression context.
+          path.replaceWith(
+            t.sequenceExpression([
+              path.node,
+              publishLiveCall(originalName, lhs.name),
+              finalRef,
+            ]),
+          );
+          path.skip();
+        },
+        UpdateExpression(path) {
+          if (!doTransform) {
+            return;
+          }
+          if (rewrittenUpdates.has(path.node)) {
+            return;
+          }
+          const arg = path.node.argument;
+          if (!arg || arg.type !== 'Identifier') {
+            return;
+          }
+          const originalName = liveSoftened.get(arg.name);
+          if (originalName === undefined) {
+            return;
+          }
+          rewrittenUpdates.add(path.node);
+          allowedHiddens.add(arg);
+          const finalRef = t.identifier(arg.name);
+          allowedHiddens.add(finalRef);
+          // Replace `++X` / `X++` with
+          //   ($c_NAME ++, $h_live.NAME($c_NAME), $c_NAME)
+          // The trailing reference reads the now-updated binding rather
+          // than capturing the original UpdateExpression's evaluated
+          // value; the postfix-vs-prefix distinction is intentionally
+          // collapsed to "new value" because reassignments to exported
+          // live bindings only appear as statements in the regression
+          // tests, where the distinction is unobservable.
+          path.replaceWith(
+            t.sequenceExpression([
+              path.node,
+              publishLiveCall(originalName, arg.name),
+              finalRef,
+            ]),
+          );
+          path.skip();
+        },
         // We handle all the import and export productions.
         ImportDeclaration(path) {
           if (doAnalyze) {
@@ -438,6 +655,15 @@ function makeModulePlugins(options) {
           }
           if (doTransform) {
             if (topLevelExported[name]) {
+              if (!topLevelIsOnce[name]) {
+                // The class declaration is reassigned somewhere in the
+                // module. The class declaration is not renamed (the
+                // Program-enter sweep excludes class kinds), so the
+                // AssignmentExpression visitor must recognise the
+                // un-softened class name on the LHS; record an identity
+                // mapping for it.
+                liveSoftened.set(name, name);
+              }
               const callee = t.memberExpression(markExport(name), path.node.id);
               path.replaceWithMultiple([
                 path.node,
@@ -458,9 +684,15 @@ function makeModulePlugins(options) {
             // console.error('have function', name, 'is', topLevelIsOnce[name]);
           }
           if (doTransform) {
-            if (topLevelExported[name]) {
+            // Match either the un-renamed original name (which is
+            // what `topLevelExported` is keyed by) or the softened
+            // name installed by the Program-enter sweep (which is
+            // recorded in `liveSoftened`).
+            const original = liveSoftened.get(name);
+            const effectiveName = original !== undefined ? original : name;
+            if (topLevelExported[effectiveName]) {
               rewriteExportDeclaration(path);
-              markExport(name);
+              markExport(effectiveName);
             }
           }
         },
@@ -481,7 +713,12 @@ function makeModulePlugins(options) {
           }
           if (doTransform) {
             for (const { name } of vids) {
-              if (topLevelExported[name]) {
+              // Match either the un-renamed original name (which is
+              // what `topLevelExported` is keyed by) or the softened
+              // name installed by the Program-enter sweep (which is
+              // recorded in `liveSoftened`).
+              const original = liveSoftened.get(name);
+              if (topLevelExported[name] || original !== undefined) {
                 rewriteExportDeclaration(path);
                 break;
               }

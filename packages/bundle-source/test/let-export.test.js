@@ -6,7 +6,7 @@ import test from '@endo/ses-ava/prepare-endo.js';
 import * as url from 'url';
 import bundleSource from '../src/index.js';
 
-test.failing('let export', async t => {
+test('let export', async t => {
   const entryPath = url.fileURLToPath(
     new URL(`../demo/let-export.js`, import.meta.url),
   );
