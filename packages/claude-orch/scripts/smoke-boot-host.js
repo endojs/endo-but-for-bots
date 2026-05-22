@@ -12,12 +12,13 @@
 // socketpair relay (see bootstrap-init).
 //
 // argv:
-//   smoke-boot-host.js <BUILD_DIR> <hello-out-path> <ready-out-path>
+//   smoke-boot-host.js <BUILD_DIR> <hello-out> <ready-out> [<logs-out>]
 //
 // Writes `hello.json` when ctl.sock receives a Hello; writes
-// `agent-ready.json` when agent.sock receives a Ready. Exits 0
-// after 30s no matter what — the shell script reads those two
-// files to decide PASS/FAIL.
+// `agent-ready.json` when agent.sock receives a Ready; and (when
+// `<logs-out>` is provided) appends every Agent `Log` frame to
+// that file as NDJSON. Exits 0 after 30s no matter what — the
+// shell script reads those files to decide PASS/FAIL.
 
 import '@endo/init/debug.js';
 
@@ -30,10 +31,10 @@ import { makeInMemoryFilesystem } from '@endo/endo-fs/src/in-memory.js';
 import { iterateBytesWriter } from '@endo/exo-stream/iterate-bytes-writer.js';
 import { makeFsBridge9p } from '@endo/9p-server';
 
-const [, , dir, helloFile, readyFile] = process.argv;
+const [, , dir, helloFile, readyFile, logsFile] = process.argv;
 if (!dir || !helloFile || !readyFile) {
   console.error(
-    'usage: smoke-boot-host.js <BUILD_DIR> <hello-out> <ready-out>',
+    'usage: smoke-boot-host.js <BUILD_DIR> <hello-out> <ready-out> [<logs-out>]',
   );
   process.exit(2);
 }
@@ -89,7 +90,12 @@ const main = async () => {
   });
   await E(bridge).start();
 
-  // ---------- agent.sock: receive Ready ----------
+  // ---------- agent.sock: receive Ready + Log probes ----------
+  if (logsFile) {
+    // Reset the logs file at startup so an old run's data doesn't
+    // contaminate the next.
+    fs.writeFileSync(logsFile, '');
+  }
   net
     .createServer(c => {
       let buf = '';
@@ -104,6 +110,9 @@ const main = async () => {
             const msg = JSON.parse(line);
             if (msg.type === 'ready') {
               fs.writeFileSync(readyFile, JSON.stringify(msg));
+            } else if (msg.type === 'log' && logsFile) {
+              // NDJSON so the shell script can grep line-by-line.
+              fs.appendFileSync(logsFile, `${JSON.stringify(msg)}\n`);
             }
           } catch {
             // ignore non-JSON

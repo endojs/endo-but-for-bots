@@ -88,7 +88,8 @@ rm -f "$BUILD_DIR"/{ctl,fs,agent}.sock
 
 HELLO_FILE="$BUILD_DIR/hello.json"
 READY_FILE="$BUILD_DIR/agent-ready.json"
-rm -f "$HELLO_FILE" "$READY_FILE"
+AGENT_LOGS_FILE="$BUILD_DIR/agent-logs.ndjson"
+rm -f "$HELLO_FILE" "$READY_FILE" "$AGENT_LOGS_FILE"
 
 NONCE="$(printf 'a%.0s' {1..64})"
 
@@ -97,7 +98,7 @@ NONCE="$(printf 'a%.0s' {1..64})"
 # FS. Replaces the previous inline hand-rolled responder; the bridge
 # is now the same code path CI exercises in `9p-server.test.js`.
 node "$REPO_ROOT/packages/claude-orch/scripts/smoke-boot-host.js" \
-  "$BUILD_DIR" "$HELLO_FILE" "$READY_FILE" &
+  "$BUILD_DIR" "$HELLO_FILE" "$READY_FILE" "$AGENT_LOGS_FILE" &
 NODE_PID=$!
 sleep 0.5
 
@@ -153,6 +154,42 @@ if [ -s "$READY_FILE" ]; then
   echo "Ready: $(cat "$READY_FILE")"
 else
   echo "[smoke-boot] no Ready arrived" >&2
+  ok=0
+fi
+
+# Post-Ready probes: the runtime-agent emits three Log frames with a
+# stable `probe:` prefix immediately after sending Ready. Each one
+# corresponds to a roadmap M4 assertion (see
+# packages/claude-orch/README.md "Test coverage gaps"):
+#   probe: agent uid=1000 gid=1000          — drop_privileges worked.
+#   probe: workspace /workspace/hello.txt="hello from endo-fs"
+#                                           — 9P mount readable by guest user.
+#   probe: claude --version=<version>       — pinned binary on PATH.
+if [ -s "$AGENT_LOGS_FILE" ]; then
+  echo "Agent logs:"
+  cat "$AGENT_LOGS_FILE"
+fi
+if grep -q '"probe: agent uid=1000 gid=1000"' "$AGENT_LOGS_FILE" 2>/dev/null; then
+  echo "[smoke-boot] uid/gid probe OK"
+else
+  echo "[smoke-boot] post-drop_privileges uid/gid probe missing or wrong (expected uid=1000 gid=1000)" >&2
+  ok=0
+fi
+if grep -q '"probe: workspace /workspace/hello.txt=' "$AGENT_LOGS_FILE" 2>/dev/null; then
+  if grep -q 'hello from endo-fs' "$AGENT_LOGS_FILE"; then
+    echo "[smoke-boot] workspace read probe OK"
+  else
+    echo "[smoke-boot] workspace probe present but contents wrong (expected 'hello from endo-fs')" >&2
+    ok=0
+  fi
+else
+  echo "[smoke-boot] workspace read probe missing (9P mount unusable by guest user?)" >&2
+  ok=0
+fi
+if grep -q '"probe: claude --version=' "$AGENT_LOGS_FILE" 2>/dev/null; then
+  echo "[smoke-boot] claude --version probe OK"
+else
+  echo "[smoke-boot] claude --version probe missing (claude-code not on PATH inside guest?)" >&2
   ok=0
 fi
 

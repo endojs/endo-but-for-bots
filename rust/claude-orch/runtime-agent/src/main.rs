@@ -165,6 +165,58 @@ fn run() -> Result<(), String> {
         },
     );
 
+    // Startup probes — operationally useful diagnostics, also the
+    // assertion surface smoke-boot.sh uses to prove the guest stack
+    // is wired correctly end-to-end:
+    //
+    //   1. uid/gid: proves `bootstrap-init::drop_privileges` actually
+    //      lowered us to the `claude` user (uid=1000, gid=1000).
+    //   2. workspace probe: proves the 9P mount at `/workspace` is
+    //      readable from the unprivileged user — covers the full
+    //      bootstrap-init mount + chown + drop_privileges chain.
+    //   3. claude --version: proves the pinned `claude-code` binary
+    //      from `postinst.sh` is on PATH and executable inside the
+    //      rootfs (catches image-build regressions).
+    //
+    // Each emits a single Log frame with a stable `probe:` prefix
+    // so the smoke-boot driver can grep deterministically.
+    let (uid, gid) = unsafe { (libc::getuid(), libc::getgid()) };
+    log_to(&out_tx, "info", &format!("probe: agent uid={uid} gid={gid}"));
+
+    match fs::read_to_string("/workspace/hello.txt") {
+        Ok(s) => {
+            let first_line = s.lines().next().unwrap_or("").to_string();
+            log_to(
+                &out_tx,
+                "info",
+                &format!("probe: workspace /workspace/hello.txt={first_line:?}"),
+            );
+        }
+        Err(e) => log_to(
+            &out_tx,
+            "warn",
+            &format!("probe: workspace read failed: {e}"),
+        ),
+    }
+
+    match Command::new("claude").arg("--version").output() {
+        Ok(out) if out.status.success() => {
+            let v = String::from_utf8_lossy(&out.stdout)
+                .trim()
+                .to_string();
+            log_to(&out_tx, "info", &format!("probe: claude --version={v}"));
+        }
+        Ok(out) => log_to(
+            &out_tx,
+            "warn",
+            &format!(
+                "probe: claude --version exited {:?}",
+                out.status.code()
+            ),
+        ),
+        Err(e) => log_to(&out_tx, "warn", &format!("probe: claude --version failed: {e}")),
+    }
+
     // Install the seccomp filter (no-op without the `seccomp` feature).
     // After this point dangerous syscalls (ptrace, BPF, kexec, module
     // loading, ...) are rejected with SECCOMP_RET_KILL_PROCESS.
