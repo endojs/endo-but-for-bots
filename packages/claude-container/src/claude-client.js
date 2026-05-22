@@ -177,7 +177,7 @@ export const makeClaudeClient = ({
           '  send(prompt, opts?) → reader of stream-json events',
           '  interrupt()         → not implemented in v1 (throws)',
           '  terminate()         → tear down the microVM',
-          '  status()            → { sessionId, createdAt, terminated }',
+          '  status()            → { sessionId, createdAt, fsSocketPath, attachSocketPath, terminated }',
         ].join('\n');
       }
       return `No documentation for method "${methodName}".`;

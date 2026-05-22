@@ -47,17 +47,71 @@ yarn workspace @endo/claude-container credentials my-creds-factory
 
 That registers the factory on `@host` and surfaces the corresponding
 form ("Create Claude Container" / "Create Claude Credentials") in the
-host's inbox. Each form submission stores the resulting exo
-(`ClaudeClient` / `ClaudeCredentials`) back in `@host`'s petstore
-under the name the submitter chose.
+host's inbox. **You must submit the form first** (e.g. through the
+Familiar electron shell, or via the CLI) — only then does the named
+exo land in `@host`'s petstore.
+
+### Form fields — "Create Claude Container"
+
+| Field | Required | Accepted values | Notes |
+|---|---|---|---|
+| `name` | yes | pet-name shape (`[a-z][a-z0-9-]*`) | Resulting `ClaudeClient` is stored under this pet name in `@host`'s petstore. |
+| `filesystem` | yes | pet name of an FS in `@host`'s petstore | Must resolve to an `@endo/endo-fs` `Filesystem` capability. The factory replies with an error if the name is missing or not FS-shaped. |
+| `network` | no (default `egress`) | `egress` \| `none` | `egress` allows outbound only (nftables-isolated); `none` is air-gapped. |
+| `model` | no | Claude model id (e.g. `claude-sonnet-4-5`) | Forwarded to `claude -p --model`. |
+| `credentials` | no | pet name of a `ClaudeCredentials` cap | When set, overrides the broker's default key for this session. Submit the "Create Claude Credentials" form (R3) to mint one. |
+| `initialPrompt` | no | string | Sent to the agent at session ready. Fire-and-forget; the response stream is drained in the background. |
+
+### A complete first session
 
 ```js
+import { E } from '@endo/eventual-send';
+import { makeRefIterator } from '@endo/daemon/ref-reader.js';
+
+// `host` is the @host capability — your runtime hands it to you via
+// the same mechanism it hands you any other top-level cap (Familiar
+// passes it in; the CLI exposes it via `endo open ...`).
+//
+// Prerequisites: you've submitted the "Create Claude Container"
+// form on @host with name="claude-1", filesystem=<some pet name>,
+// and (optionally) initialPrompt.
 const claude = await E(host).lookup('claude-1');
+
+// Send a prompt. The reader yields one parsed JSON event per line
+// (claude -p --output-format stream-json):
+//   { type: 'system', ... }     — session metadata at start
+//   { type: 'assistant', ... }  — model output (one per turn)
+//   { type: 'user', ... }       — tool-result echoes
+//   { type: 'result', ... }     — final summary; iteration ends
 const reader = await E(claude).send('Tell me a story.');
 for await (const event of makeRefIterator(reader)) {
-  console.log(event);
+  console.log(event.type, event);
 }
+
+// Inspect lifecycle state at any point.
+const status = await E(claude).status();
+// → { sessionId, createdAt, fsSocketPath, attachSocketPath, terminated }
+
+// Tear down — releases the QEMU process, broker subscription, 9P
+// bridge, and the per-session UDS files. Idempotent.
+await E(claude).terminate();
 ```
+
+`ClaudeClient` also exposes `interrupt()`, but in v1 it always
+throws — the orchestrator does not yet surface a Detach/Attach
+interrupt path. See `ENDO-INTEGRATION.md` §9 for the roadmap.
+
+#### Failure modes worth knowing
+
+- Calling `send()` (or any verb except `terminate()`) after
+  `terminate()` throws `ClaudeClient(<id>) is terminated.`.
+- `send()` requires the session to have been created with
+  `attachMode: "stream"` — without an `attachSocketPath` the
+  orchestrator throws
+  `session "<id>" has no attach stream; use attachMode "stream".`.
+- A non-existent `filesystem` pet name causes the factory to reply
+  to the form with an error and leave no side effects (no orphan
+  session, no orphan petstore entry).
 
 ## Layout
 

@@ -179,6 +179,21 @@ Why mirror `claude -p` instead of a higher-level chat surface: the
 paseo integration already uses; matching it keeps tool-use semantics,
 permission events, and error shapes consistent.
 
+`status()` returns
+`{ sessionId, createdAt, fsSocketPath, attachSocketPath, terminated }` —
+the `terminated` boolean is the most useful field for lifecycle
+polling. `interrupt()` is declared on the interface but in v1 every
+call throws `ClaudeClient.interrupt is not implemented in v1.` — the
+orchestrator does not yet surface a Detach/Attach interrupt path.
+
+Failure modes:
+
+- Any verb except `terminate()` called after `terminate()` throws
+  `ClaudeClient(<id>) is terminated.`.
+- `send()` requires the session to have been created with
+  `attachMode: "stream"`; otherwise `sendPrompt` throws
+  `session "<id>" has no attach stream; use attachMode "stream".`.
+
 ### 4.3 Workspace FS expectations (v1)
 
 The factory accepts an `@endo/endo-fs` `Filesystem` capability. The
@@ -191,6 +206,54 @@ The bridge is intentionally not part of the public capability surface
 — it's an internal adapter the factory wires up per-session.
 
 A richer, more efficient FS surface lives on the roadmap (§9).
+
+### 4.4 ClaudeCredentials
+
+Optional companion cap minted by `ClaudeCredentialsFactory` (R3,
+see §9). The container factory accepts a `credentials` form field
+that names one of these in `@host`'s petstore; when present, it
+overrides the broker's default key for the new session.
+
+```js
+M.interface('ClaudeCredentials', {
+  // Mint a session-scoped grant. The returned IssuedCredential
+  // is single-shot: one `.materialise()` call yields the key
+  // bytes, then it throws on every subsequent call. Throws also
+  // if the grant has been revoked or its parent rotated.
+  issue: M.call(M.string()).returns(M.promise()),
+
+  // Invalidate every IssuedCredential previously minted for
+  // this sessionTag.
+  revoke: M.call(M.string()).returns(M.promise()),
+
+  // Replace the stored API key bytes and invalidate every
+  // outstanding IssuedCredential. The new key is persisted to
+  // the 0600 sidecar file atomically (tmp + rename).
+  rotate: M.call(M.string()).returns(M.promise()),
+
+  help: M.call().optional(M.string()).returns(M.string()),
+})
+```
+
+```js
+M.interface('IssuedCredential', {
+  // Yield the current API key. Single-shot; throws after a
+  // second materialise, after revoke of the parent sessionTag,
+  // or after rotate.
+  materialise: M.call().returns(M.promise()),
+
+  // Diagnostic accessor for the tag this cap was issued under.
+  sessionTag: M.call().returns(M.string()),
+
+  help: M.call().optional(M.string()).returns(M.string()),
+})
+```
+
+The factory writes the submitted key to a 0600 sidecar file under
+`$CLAUDE_CREDENTIALS_DIR` (default `~/.endo-claude-credentials`)
+and mints the cap with `env: { CREDENTIALS_FILE: <path> }`. The
+Endo daemon's persisted formula JSON sees the path only, never the
+key bytes. See §9 R3 for the full design.
 
 ---
 
@@ -238,10 +301,13 @@ package root export `main(agent, ...args)` and follow the
 
    ```
    Create Claude Container
-     name        : <pet name for the resulting ClaudeClient>
-     filesystem  : <pet name of an FS capability in @host petstore>
-     network     : egress | none           (default: egress)
-     model       : <claude model id>       (optional)
+     name         : <pet name for the resulting ClaudeClient>
+     filesystem   : <pet name of an FS capability in @host petstore>
+     network      : egress | none           (default: egress)
+     model        : <claude model id>       (optional)
+     credentials  : <pet name of a ClaudeCredentials cap>  (optional;
+                    overrides the broker's default key for this
+                    session — see §9 R3)
      initialPrompt: <string>               (optional)
    ```
 

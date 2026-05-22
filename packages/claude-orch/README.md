@@ -254,6 +254,33 @@ bootstrap-init / runtime-agent's `run()` remains the higher-
 confidence answer and stays on this list, gated on the
 refactors called out above.
 
+## Prerequisites
+
+- **Linux host** with `/dev/kvm` accessible to the orchestrator UID.
+  macOS support (`-accel hvf`) is on the M2 roadmap; the **guest
+  image build pipeline is Linux-only** because it shells out to
+  `mkosi` against an in-tree kernel source.
+- `qemu-system-x86_64` (and / or `qemu-system-aarch64`) on PATH.
+  TCG falls back transparently when `/dev/kvm` is unavailable, at
+  ~5–10× slowdown.
+- `rustup` with the musl target for the guest arch
+  (`x86_64-unknown-linux-musl` or `aarch64-unknown-linux-musl`),
+  `mkosi`, `make`, and a checked-out Linux source tree at
+  `$LINUX_SRC` (default `/usr/src/linux`). These are only needed to
+  *build* the guest image, not to run sessions against one.
+- **Root** is required to install the live nftables ruleset on the
+  host (per-session egress isolation). The orchestrator itself
+  runs as a non-root UID; the network controller shells out under
+  `sudo`/equivalent. macOS pf has the same shape.
+- The orchestrator and broker daemons should run as the same
+  non-root UID. That UID owns every per-session UDS, the
+  `sessions.json` state file, and the guest image directory.
+
+The full `Operator's guide` below walks through how these pieces fit
+together. Skip ahead to it if you want a step-by-step setup; the
+"Quick smoke boot" section is a one-shot way to see the whole stack
+boot end-to-end with no orchestrator wiring.
+
 ## Quick smoke boot
 
 The fastest way to see the whole stack work on a Linux host with KVM:
@@ -283,18 +310,9 @@ CI runs this job as `claude-orch-smoke-boot-tcg` in
 
 ## Operator's guide
 
-### 0. Prerequisites
-
-- Linux host with `/dev/kvm` accessible to the orchestrator UID
-  (for production; macOS `hvf` is M2 roadmap).
-- `qemu-system-x86_64` (and / or `qemu-system-aarch64`) on PATH.
-- `rustup` with the musl target for the host arch, `mkosi`, `make`,
-  and a checked-out Linux source tree at `$LINUX_SRC`
-  (default `/usr/src/linux`) — only needed to *build* the guest
-  image, not to run sessions against one.
-- The orchestrator and broker daemons should run as the same
-  non-root UID. That UID owns every per-session UDS, the
-  sessions.json state file, and the guest image directory.
+This guide assumes the Prerequisites section above. Steps are in
+deployment order: build the image once, then start the broker, then
+start the orchestrator, then drive sessions.
 
 ### 1. Build the guest image (once per arch / pinned `CLAUDE_CODE_VERSION`)
 
@@ -448,6 +466,19 @@ choose to `DELETE` them.
 The credentials broker has no on-disk state; OAuth refresh
 tokens that the IdP rotated are lost on broker restart and the
 broker walks forward from the configured `_OAUTH_REFRESH_TOKEN`.
+
+## Troubleshooting
+
+| Symptom | Likely cause |
+|---|---|
+| `Unknown filesystem: "<name>"` from the container factory | The `filesystem` form field must be the **pet name** of an FS capability already in `@host`'s petstore. Add one with `endo mkdir` / `endo store` first. |
+| Broker `ECONNREFUSED` from the orchestrator on `POST /v1/sessions/:id/ready` | The broker daemon isn't running, or `CLAUDE_ORCH_BROKER_SOCKET` doesn't match between the two processes. The orchestrator hard-requires a reachable broker — sessions cannot mint BootConfig credentials otherwise. |
+| `OAuth refresh: response missing access_token` / `…missing valid expires_in` | The IdP returned a 2xx with a malformed body. Confirm `CLAUDE_ORCH_BROKER_OAUTH_TOKEN_URL` is the actual token endpoint (not an authorize endpoint) and that the client is configured for the refresh-token grant. |
+| `OAuth refresh failed: HTTP 401 ... invalid_grant` at startup | The configured `_OAUTH_REFRESH_TOKEN` has been revoked or expired. The broker exits 1 rather than serve stale credentials — re-mint the refresh token at the IdP. |
+| `EADDRINUSE` when binding `CLAUDE_ORCH_SOCKET` | Another orchestrator (or a stale socket file) is using the path. Stop the other process or `rm` the stale UDS — the orchestrator deletes it on graceful SIGTERM but not on `SIGKILL`. |
+| Form submission silently produces no session | Check the factory caplet's stderr — orchestrator HTTP errors and FS lookup failures are mirrored to the form reply, but a crashed factory shows up only in the daemon log. |
+| `port !== '' ? Number(port) : default` quirk in Familiar / electron | Port 0 (OS-assigned) is falsy in JS; the Familiar shell guards explicitly. Not orchestrator-specific, but bites integrators. |
+| Session marked `unhealthy` after orchestrator restart | The session's QEMU is still alive (`kill(pid, 0)` succeeded) but the orchestrator no longer holds its agent / stdio sockets. Operators choose: `DELETE` to terminate, or leave it for an external recovery flow. |
 
 ## Layout
 

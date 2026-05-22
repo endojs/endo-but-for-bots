@@ -108,3 +108,94 @@ test('deriveMac produces a 02:.. locally-administered unicast MAC', t => {
   t.regex(mac, /^02:[0-9a-f]{2}(:[0-9a-f]{2}){4}$/);
   t.is(deriveMac('abc1234567890def'), deriveMac('abc1234567890def'));
 });
+
+/**
+ * Extract chardev specs (`-chardev socket,id=...,...`) from the argv
+ * and return a map keyed by chardev id with the parsed mode flags
+ * the test cares about (`server`, `reconnect`, `wait`).
+ *
+ * @param {string[]} args
+ * @returns {Record<string, Record<string, string>>}
+ */
+const parseChardevs = args => {
+  /** @type {Record<string, Record<string, string>>} */
+  const out = {};
+  for (let i = 0; i < args.length; i += 1) {
+    const flag = String(args[i]);
+    if (flag === '-chardev') {
+      const spec = String(args[i + 1] || '');
+      if (spec.startsWith('socket,')) {
+        /** @type {Record<string, string>} */
+        const kv = {};
+        for (const part of spec.split(',')) {
+          const eq = part.indexOf('=');
+          if (eq < 0) {
+            kv[part] = '';
+          } else {
+            kv[part.slice(0, eq)] = part.slice(eq + 1);
+          }
+        }
+        if (kv.id) out[kv.id] = kv;
+      }
+    }
+  }
+  return out;
+};
+
+// Each chardev that QEMU exposes has a fixed orchestrator-side role,
+// because the orchestrator opens these UDS endpoints from specific
+// modules. When the chardev's `server=` mode disagrees with the
+// orchestrator's role, both processes end up calling `bind(2)` on the
+// same path and the second loses with EADDRINUSE. (PR #328 Copilot
+// review caught this for `ctl` and `agent`.) This invariant pins it
+// per-chardev so future drift fails fast.
+//
+//   id     | orchestrator role | required chardev mode
+//   ─────  │ ────────────────  │ ─────────────────────
+//   ctl    │ server            │ server=off,reconnect=1
+//   fs     │ server            │ server=off,reconnect=1
+//   agent  │ server            │ server=off,reconnect=1
+//   stdio  │ client            │ server=on
+const CHARDEV_ROLES = harden({
+  ctl: 'orchestrator-server',
+  fs: 'orchestrator-server',
+  agent: 'orchestrator-server',
+  stdio: 'orchestrator-client',
+});
+
+test('chardev modes are compatible with orchestrator role (no double-bind)', t => {
+  const args = buildQemuArgs({
+    arch: 'x86_64',
+    record: baseRecord,
+    config: baseConfig,
+    netArgs: [],
+  });
+  const chardevs = parseChardevs(args);
+  for (const [id, role] of Object.entries(CHARDEV_ROLES)) {
+    const spec = chardevs[id];
+    t.truthy(spec, `chardev id=${id} missing from buildQemuArgs output`);
+    if (role === 'orchestrator-server') {
+      // Orchestrator already calls server.listen(<path>); QEMU must
+      // be the client, otherwise QEMU's bind(2) collides with the
+      // orchestrator's bound socket and the VM fails to start.
+      t.is(
+        spec.server,
+        'off',
+        `chardev id=${id} expects server=off (orchestrator binds), got server=${spec.server}`,
+      );
+      t.is(
+        spec.reconnect,
+        '1',
+        `chardev id=${id} expects reconnect=1 so the guest retries after an orchestrator restart`,
+      );
+    } else {
+      // Orchestrator (stdio mux) connects to QEMU's chardev; QEMU
+      // must be the server.
+      t.is(
+        spec.server,
+        'on',
+        `chardev id=${id} expects server=on (orchestrator connects), got server=${spec.server}`,
+      );
+    }
+  }
+});
