@@ -196,8 +196,12 @@ fi
 if grep -q '"probe: claude --version=' "$AGENT_LOGS_FILE" 2>/dev/null; then
   echo "[smoke-boot] claude --version probe OK"
 else
-  echo "[smoke-boot] claude --version probe missing (claude-code not on PATH inside guest?)" >&2
-  ok=0
+  # The kernel-only smoke-boot rootfs is assembled in this script from
+  # an empty mkfs layout plus the Rust binaries — no Node, no npm, no
+  # claude-code. The full guest image built by `scripts/build-image.sh`
+  # (mkosi + `postinst.sh`) is where `claude --version` actually
+  # succeeds. Treat it as a soft warning here.
+  echo "[smoke-boot] WARN: claude --version probe absent (expected — smoke-boot rootfs has no claude-code; build-image.sh does)" >&2
 fi
 # Guest-write probe: smoke-boot-host.js re-reads
 # /workspace/guest-wrote.txt off the endo-fs cap the moment the

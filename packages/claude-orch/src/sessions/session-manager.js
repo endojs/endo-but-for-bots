@@ -137,16 +137,36 @@ export const makeSessionManager = ({ config, persistencePath }) => {
     };
   };
 
-  const persistNow = async () => {
-    if (!persistencePath) return;
-    const entries = Array.from(sessions.values()).map(sanitizeForPersist);
-    const tmp = `${persistencePath}.tmp`;
-    // 0600 — sessions.json carries session ids, UDS paths, and a
-    // (sanitized) request projection. Cross-UID readers don't need
-    // any of that. Set the mode at create time rather than chmod'ing
-    // after, so there's no window where the file is world-readable.
-    await writeFile(tmp, JSON.stringify(entries, null, 2), { mode: 0o600 });
-    await rename(tmp, persistencePath);
+  // Serialize concurrent `persistNow()` calls. Two callers racing
+  // on the same `sessions.json.tmp` would have one rename the tmp
+  // out from under the other; the loser gets `ENOENT: rename
+  // sessions.json.tmp -> sessions.json`. The macOS test runners
+  // surfaced this consistently once `consumeBootNonce` started
+  // awaiting `persistNow()` directly (Copilot review round 3 #17)
+  // while other call sites still routed through `schedulePersist`'s
+  // `setImmediate`.
+  /** @type {Promise<unknown>} */
+  let persistQueue = Promise.resolve();
+  const persistNow = () => {
+    if (!persistencePath) return Promise.resolve();
+    persistQueue = persistQueue
+      .catch(() => {
+        // a prior write failed; don't propagate the rejection into the next
+      })
+      .then(async () => {
+        const entries = Array.from(sessions.values()).map(sanitizeForPersist);
+        const tmp = `${persistencePath}.tmp`;
+        // 0600 — sessions.json carries session ids, UDS paths, and a
+        // (sanitized) request projection. Cross-UID readers don't need
+        // any of that. Set the mode at create time rather than
+        // chmod'ing after, so there's no window where the file is
+        // world-readable.
+        await writeFile(tmp, JSON.stringify(entries, null, 2), {
+          mode: 0o600,
+        });
+        await rename(tmp, persistencePath);
+      });
+    return persistQueue;
   };
 
   const schedulePersist = () => {
@@ -274,10 +294,12 @@ export const makeSessionManager = ({ config, persistencePath }) => {
 
   /**
    * Validate and single-use the boot nonce from a Hello message.
+   * Async because we `await persistNow()` before returning — see
+   * Copilot review round 3 #17 for the durability rationale.
    *
    * @param {string} id
    * @param {string} nonce
-   * @returns {boolean}
+   * @returns {Promise<boolean>}
    */
   const consumeBootNonce = async (id, nonce) => {
     const record = sessions.get(id);

@@ -30,6 +30,12 @@
       "path": "packages/cjs-module-analyzer/tsconfig.composite.json"
     },
     {
+      "path": "packages/claude-container/tsconfig.composite.json"
+    },
+    {
+      "path": "packages/claude-orch/tsconfig.composite.json"
+    },
+    {
       "path": "packages/cli/tsconfig.composite.json"
     },
     {
