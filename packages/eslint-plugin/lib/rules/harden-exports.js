@@ -15,7 +15,9 @@
  * binding pattern.
  *
  * Handles all binding pattern shapes that may appear on the left-hand side of
- * an `export const ... = ...` declaration:
+ * any `export <kind> ... = ...` declaration where `<kind>` is `const`, `let`,
+ * or `var` (the rule visits every `ExportNamedDeclaration` carrying a
+ * `VariableDeclaration`, not just `const`):
  *
  * - Identifier: `export const a = ...`.
  * - ObjectPattern properties: `export const { a } = ...` and
