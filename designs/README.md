@@ -1,8 +1,12 @@
 # Endo Design Documents
 
-*Last updated: 2026-05-20 (daemon mount and git capability plans added — three new design docs revised per design-panel review: structured-result-shape migration deferred to Phase 7, `tree(ref)` and `readOnly()` both live on the `Git` cap, `NativeGitBackend` hardening envelope split off the essential `GitBackend` contract, `EndoMountBacking` pinned to a hidden Exo facet, credential-injection mechanism named, native git pinned to >=2.30, restart-mid-operation tests added, open-question debt reduced from 20 to 2; landed on top of the same-day forge-gap-analysis Reference design and the same-day full grooming pass that reconciled milestone-totals, added the 2026-05-20 calibration round, re-projected the Summary by Milestone and Gantt, and refreshed Progress-as-of; itself landed on top of the 2026-05-19 status-only sweep that reconciled Status fields with shipped state on `llm`, M½ project-hygiene milestone extracted from M1, endopi raft added, PR #302 consolidation absorbed, and patterns-diagnostic-feedback added)*
+*Last updated: 2026-05-22 (gateway-package overarching design added; supersedes endo-gateway)*
 
 *Recently added or revised:
+[gateway-package](gateway-package.md) (added 2026-05-22;
+overarching `@endo/gateway` package design integrating the
+gateway/weblet/Noise cluster across ten feature subsystems;
+supersedes [endo-gateway](endo-gateway.md)),
 [daemon-mount-capabilities](daemon-mount-capabilities.md) (added
 2026-05-18, revised 2026-05-20; concrete completion plan for
 `EndoMount`, mount-scoped entry descriptors as values, snapshotting,
@@ -190,14 +194,15 @@ LLM-agent stack).*
 | [endor-tui](endor-tui.md) | 2026-04-23 | 2026-04-23 | Not Started |
 | [hex-package](hex-package.md) | 2026-04-23 | 2026-05-18 | **Complete** |
 | [endo-bytes](endo-bytes.md) | 2026-05-08 | 2026-05-10 | Implemented |
-| [endo-gateway](endo-gateway.md) | 2026-05-10 | 2026-05-10 | Proposed |
+| [endo-gateway](endo-gateway.md) | 2026-05-10 | 2026-05-22 | Superseded by [gateway-package](gateway-package.md) |
+| [gateway-package](gateway-package.md) | 2026-05-22 | 2026-05-22 | Proposed |
 | [unhandled-rejection-display](unhandled-rejection-display.md) | 2026-05-10 | 2026-05-18 | **Complete** |
 | [weblet-next](weblet-next.md) | 2026-03-24 | 2026-03-24 | Reference |
 | [workers-panel](workers-panel.md) | 2026-02-14 | 2026-02-24 | Not Started |
 | [namehub-interface-unification](namehub-interface-unification.md) | 2026-05-07 | 2026-05-07 | Proposed |
 | [forge-gap-analysis](forge-gap-analysis.md) | 2026-05-20 | 2026-05-20 | Reference (exploratory) |
 
-**Totals:** 39 Complete/Implemented, 18 In Progress, 36 Not Started, 20 Proposed, 2 Active, 7 Reference, 2 Deprecated, 1 Superseded (125 designs). Refreshed 2026-05-19 by a status-only sweep (consolidating the 2026-05-18 sweep with the 2026-05-19 batch update for 11 additional designs from closed PR #302) plus the patterns-diagnostic-feedback and ocapn-noise-session-reconnect Proposed entries; the 12-design jump in Complete/Implemented over the 2026-05-08 snapshot reflects shipped work whose Status field had not previously been updated, not new completions in this pass; see the corresponding "## Status" sections in each design file for evidence pointers (commit SHA or PR number). Totals reflect the 16 design files added on `llm` since the sweep's branch point (the endopi raft of `endopi` + 8 `endopi-*` gap-closing designs, `hardened-text-codecs-shim`, `hardened-url-shim`, namehub-interface-unification (Proposed) added by PR #117 on rebase, forge-gap-analysis (Reference) added 2026-05-20, and the daemon mount and git capability trio: `daemon-mount-capabilities` + `daemon-git-capability` + `daemon-git-remotes`).
+**Totals:** 39 Complete/Implemented, 18 In Progress, 36 Not Started, 21 Proposed, 2 Active, 7 Reference, 2 Deprecated, 2 Superseded (126 designs). Refreshed 2026-05-19 by a status-only sweep (consolidating the 2026-05-18 sweep with the 2026-05-19 batch update for 11 additional designs from closed PR #302) plus the patterns-diagnostic-feedback and ocapn-noise-session-reconnect Proposed entries; the 12-design jump in Complete/Implemented over the 2026-05-08 snapshot reflects shipped work whose Status field had not previously been updated, not new completions in this pass; see the corresponding "## Status" sections in each design file for evidence pointers (commit SHA or PR number). Totals reflect the 16 design files added on `llm` since the sweep's branch point (the endopi raft of `endopi` + 8 `endopi-*` gap-closing designs, `hardened-text-codecs-shim`, `hardened-url-shim`, namehub-interface-unification (Proposed) added by PR #117 on rebase, forge-gap-analysis (Reference) added 2026-05-20, and the daemon mount and git capability trio: `daemon-mount-capabilities` + `daemon-git-capability` + `daemon-git-remotes`), plus the 2026-05-22 addition of gateway-package which marked endo-gateway as Superseded.
 
 ## Roadmap
 
@@ -259,13 +264,17 @@ flowchart TD
 
     subgraph Remote Access
         gauth[gateway-bearer-token-auth]
-        egate[endo-gateway]
         ddock[daemon-docker-selfhost]
         ewebhook[endoclaw-webhooks]
-        gauth --> egate
-        egate --> ddock
+        gpkg[gateway-package]
+        egw[endo-gateway<br/><i>SUPERSEDED</i>]
+        gauth --> ddock
         fbund --> ddock
         gauth --> ewebhook
+        egw --> gpkg
+        gauth --> gpkg
+        onoise --> gpkg
+        gpkg --> ddock
     end
 
     subgraph Agent Capabilities
@@ -422,6 +431,7 @@ capabilities available to agents.
 | ~~gateway-bearer-token-auth~~ | **Implemented** | Agent ID as bearer token, rate limiting, CIDR filtering |
 | endo-gateway | Proposed | Per-host system-service HTTP virtual host for OCapN; lifts hosting out of per-user Daemon; closes issue #173, unblocks PR #134. Raised to M1 per kriskowal directive on `#134#issuecomment-4444987124` (2026-05-13) |
 | daemon-docker-selfhost | Not Started | Dockerfile, state persistence, network exposure, Chat hosting |
+| gateway-package | Proposed | New `@endo/gateway` package integrating gateway/weblet/Noise cluster; supersedes [endo-gateway](endo-gateway.md); ten feature subsystems across four phases (virtual hosting + `/ocapn-cbor-np`; UDS + Chat hosting; Git-over-HTTP + Familiar-bundled; relay + packaging) |
 | daemon-agent-tools | Not Started | Filesystem, shell, git tools backed by capabilities |
 | ~~platform-fs~~ | **Complete** | `@endo/platform/fs` — shared types, content store, tree adapters; landed on `llm` (initial commit `e0dda06fb` + PR #122 review cycle fixups) |
 | daemon-capability-filesystem | Reference | `Dir`/`File` capabilities sketch retained as reference; narrower mount slice ships via daemon-mount |
@@ -796,6 +806,7 @@ Recalibrated on 2026-03-02 using observed velocity from 15 active work days
 | ~~gateway-bearer-token-auth~~ | — | — | 1 | ✅ Implemented |
 | endo-gateway | L | 1.5-3 weeks | 1 | Per-host system-service HTTP virtual host for OCapN; lifts hosting out of per-user Daemon; closes issue #173, unblocks PR #134. Raised to M1 per kriskowal directive on `#134#issuecomment-4444987124` (2026-05-13). Size set at L pending per-phase backfill |
 | daemon-docker-selfhost | S-M | 3 days | 1 | Dockerfile, entrypoint, compose; PR #134 forwarded under bot, awaiting review |
+| gateway-package | XL | 6-10 weeks | 1 | Overarching `@endo/gateway` package; ten feature subsystems across four phases; supersedes [endo-gateway](endo-gateway.md). XL because cross-cutting (new package extraction from daemon, multiple deployment shapes, UDS bootstrap, public-relay surface). Phase 1 (skeleton + vhost + OCapN WS) is roughly M; phases 2-4 each roughly M-L |
 | daemon-agent-tools | M-L | 1.5 weeks | 1 | Shell, git, fs tool wrappers; PR #130 forwarded under bot |
 | ~~platform-fs~~ | S-M | — | 1 | ✅ Complete; `@endo/platform` package landed on `llm` (commit `e0dda06fb`); PR #122 carried review-cycle fixups |
 | daemon-capability-filesystem | L | — | 1 | Reference sketch; narrower mount slice ships via daemon-mount |
