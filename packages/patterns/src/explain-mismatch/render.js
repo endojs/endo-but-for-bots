@@ -257,8 +257,8 @@ const renderCompact = (trace, context) => {
       oneLine(trace.pattern),
     )}`;
   }
-  const count = leaves.length;
-  const head = `${prefix}mismatch (${count} leaf${count === 1 ? '' : 'es'}):`;
+  const count = countLeaves(trace);
+  const head = `${prefix}mismatch (${count} ${count === 1 ? 'leaf' : 'leaves'}):`;
   if (count === 1) {
     return `${head} ${compactLeafLine(leaves[0])}`;
   }
@@ -348,9 +348,6 @@ const renderExpanded = (trace, context) => {
   return lines.join('\n');
 };
 harden(renderExpanded);
-
-// Avoid unused-import lint while keeping countLeaves available for callers.
-void countLeaves;
 
 /**
  * @param {Trace} trace
