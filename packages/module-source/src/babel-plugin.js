@@ -509,21 +509,47 @@ function makeModulePlugins(options) {
           }
           rewrittenUpdates.add(path.node);
           allowedHiddens.add(arg);
-          const finalRef = t.identifier(arg.name);
-          allowedHiddens.add(finalRef);
-          // Replace `++X` / `X++` with
-          //   ($c_NAME ++, $h_live.NAME($c_NAME), $c_NAME)
-          // The trailing reference reads the now-updated binding rather
-          // than capturing the original UpdateExpression's evaluated
-          // value; the postfix-vs-prefix distinction is intentionally
-          // collapsed to "new value" because reassignments to exported
-          // live bindings only appear as statements in the regression
-          // tests, where the distinction is unobservable.
+          if (path.node.prefix) {
+            // Prefix `++X` / `--X` evaluates to the **new** value of
+            // `X` (ECMA-262 §13.4.3.1 PrefixIncrement, §13.4.4.1
+            // PrefixDecrement). Rewrite as
+            //   (<op>$c_NAME, $h_live.NAME($c_NAME), $c_NAME)
+            // so the SequenceExpression's value matches the spec.
+            const finalRef = t.identifier(arg.name);
+            allowedHiddens.add(finalRef);
+            path.replaceWith(
+              t.sequenceExpression([
+                path.node,
+                publishLiveCall(originalName, arg.name),
+                finalRef,
+              ]),
+            );
+            path.skip();
+            return;
+          }
+          // Postfix `X++` / `X--` evaluates to the **old** value of
+          // `X` (ECMA-262 §13.4.4.1 PostfixIncrement, §13.4.5.1
+          // PostfixDecrement). The earlier shape appended a trailing
+          // read of `$c_NAME`, which returns the **new** value: that
+          // is observably wrong for any consumer of the expression's
+          // value (`const m = X++;` must bind `m` to the pre-update
+          // value of `X`). Capture the UpdateExpression's own value
+          // into a scope-unique scratch local before the publish and
+          // the trailing read so the SequenceExpression's value is
+          // the pre-update value the spec requires.
+          const tmp = path.scope.generateUidIdentifier('postfix');
+          allowedHiddens.add(tmp);
+          path.scope.push({ id: t.identifier(tmp.name), kind: 'var' });
+          const captureLhs = t.identifier(tmp.name);
+          allowedHiddens.add(captureLhs);
+          const finalTmp = t.identifier(tmp.name);
+          allowedHiddens.add(finalTmp);
+          // ($c_tmp = X++, $h_live.NAME($c_NAME), $c_tmp)
           path.replaceWith(
             t.sequenceExpression([
-              path.node,
+              t.assignmentExpression('=', captureLhs, path.node),
               publishLiveCall(originalName, arg.name),
-              finalRef,
+              finalTmp,
             ]),
           );
           path.skip();

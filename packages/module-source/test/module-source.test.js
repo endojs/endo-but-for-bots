@@ -399,6 +399,43 @@ n--;
   t.deepEqual(log, ['n: 0', 'n: 1', 'n: 2', 'n: 5', 'n: 4']);
 });
 
+test('postfix UpdateExpression evaluates to the pre-update value', t => {
+  // ECMA-262 §13.4.4.1 (PostfixIncrement) / §13.4.5.1
+  // (PostfixDecrement) require the expression to evaluate to the
+  // pre-update value of the operand. The rewrite must capture that
+  // value into a scratch local before publishing so the
+  // SequenceExpression's value matches the spec.
+  const { log, namespace } = initialize(
+    t,
+    `\
+export let n = 0;
+export const post = n++;
+`,
+  );
+  // The live publish for `n` fires when `n++` runs (n becomes 1).
+  // `post` is initialized to the **pre-update** value of n (0).
+  t.deepEqual(log, ['n: 0', 'n: 1', 'post: 0']);
+  t.is(namespace.post, 0);
+  t.is(namespace.n, 1);
+});
+
+test('prefix UpdateExpression evaluates to the post-update value', t => {
+  // ECMA-262 §13.4.3.1 (PrefixIncrement) / §13.4.4.1
+  // (PrefixDecrement) require the expression to evaluate to the
+  // post-update value. The rewrite preserves the existing
+  // "new value" shape for prefix forms.
+  const { log, namespace } = initialize(
+    t,
+    `\
+export let n = 0;
+export const pre = ++n;
+`,
+  );
+  t.deepEqual(log, ['n: 0', 'n: 1', 'pre: 1']);
+  t.is(namespace.pre, 1);
+  t.is(namespace.n, 1);
+});
+
 test.failing(
   'class reassignment publishes through liveVar (endojs/endo#2982 follow-up)',
   t => {
