@@ -1,6 +1,7 @@
 // @ts-check
 /* global process */
 
+import crypto from 'crypto';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -80,12 +81,24 @@ export const makeBundleProfiler = ({
 
   const traceFileId = nextTraceFileId;
   nextTraceFileId += 1;
+  // Include a random suffix so concurrent bundle calls from sibling
+  // processes in the same millisecond on the same pid (or different pids
+  // landing on the same Date.now() tick) cannot collide in the shared
+  // traceDir.
+  const collisionSuffix = crypto.randomBytes(4).toString('hex');
   const tracePath =
     traceFile ||
     path.join(
       traceDir,
-      `bundle-source-${phase}-${pid}-${Date.now()}-${traceFileId}.trace.json`,
+      `bundle-source-${phase}-${pid}-${Date.now()}-${traceFileId}-${collisionSuffix}.trace.json`,
     );
+
+  if (logToStderr) {
+    // Announce the resolved trace path at profiler construction so the
+    // user can redirect or pre-create the directory (or notice an
+    // unwritable os.tmpdir() default) before flush time.
+    process.stderr.write(`bundle-source profile trace target: ${tracePath}\n`);
+  }
 
   /** @type {Array<Record<string, unknown>>} */
   const traceEvents = [];

@@ -20,16 +20,35 @@ import { makeBundleProfiler } from './profile.js';
 
 const readPowers = makeReadPowers({ fs, url, crypto });
 const DEFAULT_READ_CACHE_MAX_BYTES = 64 * 1024 * 1024;
+const rawReadCacheMaxBytes =
+  process.env.ENDO_BUNDLE_SOURCE_READ_CACHE_MAX_BYTES;
 const configuredReadCacheMaxBytes = Number.parseInt(
-  process.env.ENDO_BUNDLE_SOURCE_READ_CACHE_MAX_BYTES ||
-    `${DEFAULT_READ_CACHE_MAX_BYTES}`,
+  rawReadCacheMaxBytes || `${DEFAULT_READ_CACHE_MAX_BYTES}`,
   10,
 );
+// Warn when the env value has a non-numeric tail (e.g., "100mb") that
+// parseInt silently truncates. The README documents the env as a raw byte
+// count; surface the truncation rather than honoring a misleading value.
+if (
+  rawReadCacheMaxBytes !== undefined &&
+  rawReadCacheMaxBytes.trim() !== '' &&
+  String(configuredReadCacheMaxBytes) !== rawReadCacheMaxBytes.trim()
+) {
+  process.stderr.write(
+    `bundle-source: ENDO_BUNDLE_SOURCE_READ_CACHE_MAX_BYTES=${JSON.stringify(rawReadCacheMaxBytes)} parsed as ${configuredReadCacheMaxBytes} (suffixes are not supported; supply a raw byte count)\n`,
+  );
+}
 const readCacheMaxBytes =
   Number.isFinite(configuredReadCacheMaxBytes) &&
   configuredReadCacheMaxBytes >= 0
     ? configuredReadCacheMaxBytes
     : DEFAULT_READ_CACHE_MAX_BYTES;
+// Insertion-order (FIFO) cache: eviction walks `cachedReads.keys()` in
+// insertion order on overflow (see `cacheReadValue` below). Cache hits do
+// not promote entries; under a working set larger than
+// `readCacheMaxBytes` this discipline degrades gracefully but is not
+// classic LRU. Documented here because the choice is load-bearing for
+// callers tuning the cache cap.
 /** @type {Map<string, Uint8Array | undefined>} */
 const cachedReads = new Map();
 /** @type {Map<string, Promise<Uint8Array | undefined>>} */

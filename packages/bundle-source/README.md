@@ -153,7 +153,8 @@ Environment variables:
 - `ENDO_BUNDLE_SOURCE_PROFILE`: enable profiling when truthy (`1`, `true`, `yes`, `on`)
 - `ENDO_BUNDLE_SOURCE_PROFILE_DIR`: output directory for generated trace files
 - `ENDO_BUNDLE_SOURCE_PROFILE_FILE`: explicit output file for a single run
-- `ENDO_BUNDLE_SOURCE_PROFILE_STDERR`: if truthy, prints each generated trace path to stderr
+- `ENDO_BUNDLE_SOURCE_PROFILE_STDERR`: if truthy, prints the resolved trace path to stderr at profiler construction
+- `ENDO_BUNDLE_SOURCE_READ_CACHE_MAX_BYTES`: cap on the process-local module-read cache used by `endoZipBase64` bundling, in raw bytes (default `67108864`, i.e. 64 MiB; set to `0` to disable the cache)
 
 Merge and summarize many profile traces:
 

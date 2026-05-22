@@ -5,7 +5,9 @@
  * @module
  */
 
-/** @import {ParseFn} from './types.js' */
+/* global process */
+
+/** @import {ParseFn, ParserImplementation} from './types.js' */
 
 import { ModuleSource } from '@endo/module-source';
 
@@ -13,8 +15,25 @@ const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
 /** @type {Map<string, Map<string, ReturnType<ParseFn>>>} */
 const parseArchiveMjsCache = new Map();
-const MAX_PARSE_ARCHIVE_MJS_CACHE_ENTRIES = 20_000;
+// Default cap chosen to bound transient memory for the agoric-sdk
+// multi-bundle workload that motivated the cache (about 12k distinct
+// parsed entries observed under `profile:agoric-bundling`). Override via
+// `ENDO_PARSE_ARCHIVE_MJS_CACHE_ENTRIES` when a different workload
+// pushes past this default.
+const DEFAULT_MAX_PARSE_ARCHIVE_MJS_CACHE_ENTRIES = 20_000;
+const configuredMaxCacheEntries = Number.parseInt(
+  (typeof process !== 'undefined' &&
+    process.env &&
+    process.env.ENDO_PARSE_ARCHIVE_MJS_CACHE_ENTRIES) ||
+    `${DEFAULT_MAX_PARSE_ARCHIVE_MJS_CACHE_ENTRIES}`,
+  10,
+);
+const MAX_PARSE_ARCHIVE_MJS_CACHE_ENTRIES =
+  Number.isFinite(configuredMaxCacheEntries) && configuredMaxCacheEntries > 0
+    ? configuredMaxCacheEntries
+    : DEFAULT_MAX_PARSE_ARCHIVE_MJS_CACHE_ENTRIES;
 let parseArchiveMjsCacheEntries = 0;
+let parseArchiveMjsCacheCapHit = false;
 
 /** @type {ParseFn} */
 export const parseArchiveMjs = (
@@ -79,6 +98,14 @@ export const parseArchiveMjs = (
     if (!byLocation.has(cacheKey)) {
       parseArchiveMjsCacheEntries += 1;
       if (parseArchiveMjsCacheEntries > MAX_PARSE_ARCHIVE_MJS_CACHE_ENTRIES) {
+        if (!parseArchiveMjsCacheCapHit) {
+          parseArchiveMjsCacheCapHit = true;
+          if (typeof process !== 'undefined' && process.stderr) {
+            process.stderr.write(
+              `compartment-mapper: parseArchiveMjs cache cap ${MAX_PARSE_ARCHIVE_MJS_CACHE_ENTRIES} reached; clearing and continuing. Set ENDO_PARSE_ARCHIVE_MJS_CACHE_ENTRIES to raise the cap if the working set exceeds the default.\n`,
+            );
+          }
+        }
         parseArchiveMjsCache.clear();
         parseArchiveMjsCacheEntries = 0;
         byLocation = new Map();
@@ -90,7 +117,7 @@ export const parseArchiveMjs = (
   return result;
 };
 
-/** @type {import('./types.js').ParserImplementation} */
+/** @type {ParserImplementation} */
 export default {
   parse: parseArchiveMjs,
   heuristicImports: false,

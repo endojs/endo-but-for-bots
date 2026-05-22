@@ -394,3 +394,28 @@ test('evadeCensor() - elideComments still forces transform on fast-path source',
   });
   t.not(code, source);
 });
+
+// Pin the three comment- and whitespace-mode cases the cleaner's widened
+// `importLikePattern` is meant to catch, mirroring SES's
+// `rejectImportExpressions` regex (`\bimport\s*(?:\(|\/[/*])`). Each
+// source embeds the risky token inside a string-literal or comment that
+// SES's `rejectImportExpressions` rejects unless the censor has already
+// escaped it; the test asserts the slow path ran by checking that the
+// output text differs from the input.
+test('evadeCensor() - fast path forces transform on "import (" (space-paren) in a string literal', async t => {
+  const source = `const x = 'import (a)';`;
+  const { code } = evadeCensorSync(source, { sourceType: 'module' });
+  t.not(code, source);
+});
+
+test('evadeCensor() - fast path forces transform on "import //" (line comment)', async t => {
+  const source = `// import // here\nconst x = 1;\nexport { x };`;
+  const { code } = evadeCensorSync(source, { sourceType: 'module' });
+  t.not(code, source);
+});
+
+test('evadeCensor() - fast path forces transform on "import /*" (block comment)', async t => {
+  const source = `/* import /* nested */\nconst x = 1;\nexport { x };`;
+  const { code } = evadeCensorSync(source, { sourceType: 'module' });
+  t.not(code, source);
+});
