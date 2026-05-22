@@ -348,6 +348,86 @@ export const fn3 = fn;
   t.is(fn(), 'foo', 'fn evaluates');
 });
 
+test('var reassignment publishes through liveVar', t => {
+  // Exercises the AssignmentExpression instrumentation for a top-level
+  // exported `var` binding. The reassignment must update the bundled
+  // live cell (and thereby the test's `liveVar` updater); without the
+  // publish call, the namespace stays stuck at the initial value.
+  const { log, namespace } = initialize(
+    t,
+    `\
+export var x = 'initial';
+x = 'updated';
+`,
+  );
+  t.deepEqual(log, ['x: "initial"', 'x: "updated"']);
+  t.is(namespace.x, 'updated');
+});
+
+test('function reassignment publishes through liveVar', t => {
+  // Exercises the AssignmentExpression instrumentation for a top-level
+  // exported `function` binding (the hoisted/softened path).
+  const { log, namespace } = initialize(
+    t,
+    `\
+export function fn() {
+  return 'initial';
+}
+fn = () => 'updated';
+`,
+  );
+  t.deepEqual(log, ['fn: undefined', 'fn: undefined']);
+  // The values are functions and thus stringify to undefined in the
+  // log; assert the runtime callable surface directly.
+  t.is(namespace.fn(), 'updated');
+});
+
+test('let postfix and compound reassignment publish through liveVar', t => {
+  // Exercises the UpdateExpression and compound-assignment instrumentation.
+  // Verifies that each individual update is observed by the liveVar
+  // updater rather than only a final value.
+  const { log } = initialize(
+    t,
+    `\
+export let n = 0;
+n++;
+++n;
+n += 3;
+n--;
+`,
+  );
+  t.deepEqual(log, ['n: 0', 'n: 1', 'n: 2', 'n: 5', 'n: 4']);
+});
+
+test.failing(
+  'class reassignment publishes through liveVar (endojs/endo#2982 follow-up)',
+  t => {
+    // Regression evidence for a gap left by the endojs/endo#2982 fix.
+    // When a top-level exported class declaration is reassigned in the
+    // direct-sibling position (no intervening eagerly-called function,
+    // no later body block), the `liveSoftened` map is populated by the
+    // `ClassDeclaration` visitor that fires *after* the
+    // `AssignmentExpression` visitor, so the reassignment is left
+    // un-instrumented and the bundled `liveVar.X` updater never sees
+    // the new value. The bundle-source `let-export` integration test
+    // happens to drive the reassignment through a deferred function
+    // call, which traverses the function body after the class visitor
+    // has already populated `liveSoftened`, so it does not surface the
+    // direct-reassignment shape this case exercises.
+    const { log, namespace } = initialize(
+      t,
+      `\
+export class X {
+  static v = 'initial';
+}
+X = class { static v = 'updated'; };
+`,
+    );
+    t.deepEqual(log, ['X: undefined', 'X: undefined']);
+    t.is(namespace.X.v, 'updated');
+  },
+);
+
 test('export class and let', t => {
   const { namespace } = initialize(
     t,
