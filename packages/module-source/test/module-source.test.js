@@ -436,6 +436,66 @@ export const pre = ++n;
   t.is(namespace.n, 1);
 });
 
+test('object-destructuring assignment publishes through liveVar', t => {
+  // `({ X } = obj)` for a top-level live export rebinds X. The
+  // AssignmentExpression visitor must recurse into the ObjectPattern
+  // LHS and emit a publish for each bound identifier that names a
+  // live export. Same class of silent bug as endojs/endo#2982 on a
+  // different surface.
+  const { log, namespace } = initialize(
+    t,
+    `\
+export let x = 'initial';
+export let y = 'initial';
+({ x, y } = { x: 'updated-x', y: 'updated-y' });
+`,
+  );
+  t.deepEqual(log, [
+    'x: "initial"',
+    'y: "initial"',
+    'x: "updated-x"',
+    'y: "updated-y"',
+  ]);
+  t.is(namespace.x, 'updated-x');
+  t.is(namespace.y, 'updated-y');
+});
+
+test('object-destructuring assignment with aliased property publishes through liveVar', t => {
+  // `({ a: X } = obj)` aliases property `a` of `obj` to the
+  // top-level live binding `X`. The LHS identifier whose binding is
+  // rewritten is the aliased local `X`, not the property name `a`.
+  const { log, namespace } = initialize(
+    t,
+    `\
+export let x = 'initial';
+({ a: x } = { a: 'updated' });
+`,
+  );
+  t.deepEqual(log, ['x: "initial"', 'x: "updated"']);
+  t.is(namespace.x, 'updated');
+});
+
+test('array-destructuring assignment publishes through liveVar', t => {
+  // `[X, Y] = arr` rebinds X and Y. Same recursion requirement as the
+  // object-destructuring case.
+  const { log, namespace } = initialize(
+    t,
+    `\
+export let x = 'initial';
+export let y = 'initial';
+[x, y] = ['updated-x', 'updated-y'];
+`,
+  );
+  t.deepEqual(log, [
+    'x: "initial"',
+    'y: "initial"',
+    'x: "updated-x"',
+    'y: "updated-y"',
+  ]);
+  t.is(namespace.x, 'updated-x');
+  t.is(namespace.y, 'updated-y');
+});
+
 test.failing(
   'class reassignment publishes through liveVar (endojs/endo#2982 follow-up)',
   t => {

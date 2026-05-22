@@ -464,33 +464,78 @@ function makeModulePlugins(options) {
             return;
           }
           const lhs = path.node.left;
-          if (!lhs || lhs.type !== 'Identifier') {
-            // Destructuring and member-expression assignments do not
-            // bind a top-level exported live name as a whole; the
-            // canonical reassignment shape covered by the regression
-            // tests is a plain `X = expr`.
+          if (!lhs) {
             return;
           }
-          const originalName = liveSoftened.get(lhs.name);
-          if (originalName === undefined) {
+          if (lhs.type === 'Identifier') {
+            const originalName = liveSoftened.get(lhs.name);
+            if (originalName === undefined) {
+              return;
+            }
+            rewrittenAssignments.add(path.node);
+            allowedHiddens.add(lhs);
+            const finalRef = t.identifier(lhs.name);
+            allowedHiddens.add(finalRef);
+            // Replace `$c_NAME op= rhs` with
+            //   ($c_NAME op= rhs, $h_live.NAME($c_NAME), $c_NAME)
+            // The trailing reference preserves the assignment's
+            // evaluated value for any enclosing expression context.
+            path.replaceWith(
+              t.sequenceExpression([
+                path.node,
+                publishLiveCall(originalName, lhs.name),
+                finalRef,
+              ]),
+            );
+            path.skip();
             return;
           }
-          rewrittenAssignments.add(path.node);
-          allowedHiddens.add(lhs);
-          const finalRef = t.identifier(lhs.name);
-          allowedHiddens.add(finalRef);
-          // Replace `$c_NAME op= rhs` with
-          //   ($c_NAME op= rhs, $h_live.NAME($c_NAME), $c_NAME)
-          // The trailing reference preserves the assignment's evaluated
-          // value for any enclosing expression context.
-          path.replaceWith(
-            t.sequenceExpression([
-              path.node,
-              publishLiveCall(originalName, lhs.name),
-              finalRef,
-            ]),
-          );
-          path.skip();
+          if (lhs.type === 'ObjectPattern' || lhs.type === 'ArrayPattern') {
+            // Destructuring rebinds each identifier in the pattern.
+            // After the Program-enter rename sweep, references to live
+            // exports inside the pattern carry the softened name (e.g.
+            // `({ X } = obj)` becomes `({ X: $c_X } = obj)` via
+            // shorthand-property expansion). Collect every bound
+            // identifier whose name is a softened live export and emit
+            // a publish call per match. Destructuring assignment is
+            // always `=`, not a compound operator, so the assignment's
+            // evaluated value is the RHS; capture it into a scope-
+            // unique scratch local to preserve any enclosing-expression
+            // value (e.g. `let v = ({ X } = obj)`).
+            const boundIds = collectPatternIdentifiers(path, lhs);
+            const liveTargets = [];
+            for (const id of boundIds) {
+              const originalName = liveSoftened.get(id.name);
+              if (originalName !== undefined) {
+                allowedHiddens.add(id);
+                liveTargets.push({ originalName, softenedName: id.name });
+              }
+            }
+            if (liveTargets.length === 0) {
+              return;
+            }
+            rewrittenAssignments.add(path.node);
+            const tmp = path.scope.generateUidIdentifier('destrAssign');
+            allowedHiddens.add(tmp);
+            // Hoist a `var` declaration for the scratch at the
+            // enclosing function or program scope; the scratch is read
+            // only inside the rewritten SequenceExpression, but the
+            // declaration ensures the bare identifier resolves.
+            path.scope.push({ id: t.identifier(tmp.name), kind: 'var' });
+            const captureLhs = t.identifier(tmp.name);
+            allowedHiddens.add(captureLhs);
+            const elements = [
+              t.assignmentExpression('=', captureLhs, path.node),
+            ];
+            for (const { originalName, softenedName } of liveTargets) {
+              elements.push(publishLiveCall(originalName, softenedName));
+            }
+            const finalTmp = t.identifier(tmp.name);
+            allowedHiddens.add(finalTmp);
+            elements.push(finalTmp);
+            path.replaceWith(t.sequenceExpression(elements));
+            path.skip();
+          }
         },
         UpdateExpression(path) {
           if (!doTransform) {
