@@ -63,19 +63,48 @@ ensureBundledPrimer();
 // Test directories.  Use a unique scratch per test under the
 // daemon's idiomatic `tmp/` to match the rest of the suite's
 // cleanup discipline.
+//
+// On Linux, UNIX domain sockets cap out around 107 chars; CI's
+// `/home/runner/work/endo-but-for-bots/endo-but-for-bots/...`
+// prefix alone consumes most of that budget.  Mirror the
+// canonical pattern from `packages/daemon/test/gateway.test.js`:
+// reserve a safety margin and truncate the per-config directory
+// name so that `path.join(tmpRoot, <dir>, 'endo.sock')` fits.  The
+// per-config counter suffix is always preserved (and appended after
+// the truncated label) so distinct calls produce distinct paths
+// even when the human-readable labels collapse to the same prefix.
 const tmpRoot = path.join(lalRoot, 'tmp');
+const MAX_UNIX_SOCKET_PATH = 90;
+// tmpRoot + '/' + dir + '/' + 'endo.sock' plus headroom matching
+// the canonical pattern in gateway.test.js.
+const SOCKET_PATH_OVERHEAD = tmpRoot.length + 1 + 'endo.sock'.length + 1 + 8;
+const MAX_CONFIG_DIR_LENGTH = Math.max(
+  8,
+  MAX_UNIX_SOCKET_PATH - SOCKET_PATH_OVERHEAD,
+);
+
 let configCounter = 0;
 const makeConfig = label => {
   configCounter += 1;
-  const suffix = `${String(configCounter).padStart(4, '0')}`;
-  const root = path.join(tmpRoot, `primer-cas-${label}-${suffix}`);
+  const suffix = String(configCounter).padStart(4, '0');
+  // The on-disk directory name is the label, optionally truncated,
+  // followed by a "#suffix" disambiguator.  This mirrors the
+  // gateway-test convention: keep the human-readable part short and
+  // append a counter so distinct configs never collide.
+  const sanitizedLabel = label.replace(/\s/giu, '-').replace(/[^\w-]/giu, '');
+  const basePath =
+    sanitizedLabel.length <= MAX_CONFIG_DIR_LENGTH
+      ? sanitizedLabel
+      : sanitizedLabel.slice(0, MAX_CONFIG_DIR_LENGTH);
+  const dir = `${basePath}#${suffix}`;
+  const root = path.join(tmpRoot, dir);
   return {
     statePath: path.join(root, 'state'),
     ephemeralStatePath: path.join(root, 'run'),
     cachePath: path.join(root, 'cache'),
     sockPath:
       process.platform === 'win32'
-        ? String.raw`\\?\pipe\endo-primer-cas-${label}-${suffix}.sock`
+        ? String.raw`\\?\pipe\endo-${dir}.sock`
         : path.join(root, 'endo.sock'),
     address: '127.0.0.1:0',
     pets: new Map(),
