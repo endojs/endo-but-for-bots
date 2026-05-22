@@ -186,3 +186,48 @@ test('OCapN-Noise transport rejects a peer whose identity does not match the add
     { message: /OCapN peer identity mismatch/ },
   );
 });
+
+test('OCapN-Noise identity persists across transport restart', async t => {
+  // Phase 2: the OCapN-Noise signing key is bound to the agent's
+  // Ed25519 keypair (read from the `agent_key` SQLite table via
+  // `EndoHost.getSigningKeys()`), so two consecutive transport
+  // instantiations on the same agent must produce the same OCapN
+  // location designator and the same advertised public-key bytes in
+  // the connection hint. Before Phase 2 the transport minted a fresh
+  // key on every install and the OCapN identity reset on every
+  // restart.
+  t.timeout(60_000);
+  const nodeId = 'a'.repeat(64);
+  const { powers: powersA } = makeMockPowers(nodeId, 'A');
+
+  const contextA1 = makeMockContext();
+  t.teardown(() => contextA1.cancel());
+  const serviceA1 = await makeOcapnNetwork(powersA, contextA1);
+  const [addressA1] = await E(serviceA1).addresses();
+
+  // Tear down the first instance and create a fresh one with the
+  // same mock powers (i.e., the same persisted keypair).
+  contextA1.cancel();
+
+  const contextA2 = makeMockContext();
+  t.teardown(() => contextA2.cancel());
+  const serviceA2 = await makeOcapnNetwork(powersA, contextA2);
+  const [addressA2] = await E(serviceA2).addresses();
+
+  // The connection-hint URL carries the full OCapN location as a
+  // base64-encoded JSON blob in the `loc=` query param; the
+  // location's `designator` is the Ed25519 public key the Noise
+  // handshake authenticates against. That public key must match
+  // across restarts.
+  const locA1 = JSON.parse(
+    /** @type {string} */ (new URL(addressA1).searchParams.get('loc')),
+  );
+  const locA2 = JSON.parse(
+    /** @type {string} */ (new URL(addressA2).searchParams.get('loc')),
+  );
+  t.deepEqual(
+    locA2.designator,
+    locA1.designator,
+    'OCapN designator (Ed25519 public key) is stable across restart',
+  );
+});
