@@ -11,13 +11,15 @@ path = "src/main.rs"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 libc = "0.2"
-# `seccompiler` is linux-only by construction; the runtime-agent only
-# ships in linux guests (x86_64-unknown-linux-musl per build-image.sh),
-# so the default feature set includes it. A `--no-default-features`
-# build still compiles for local dev / cross-target check without
-# requiring the seccompiler crate.
+# `seccompiler` and the `seccomp` feature gate are linux-only by
+# construction. Default features stay empty so plain `cargo check` /
+# rust-analyzer on macOS+Windows hosts can compile the crate without
+# pulling in Linux-only constants (`PR_SET_NO_NEW_PRIVS`, x86-specific
+# syscall numbers, etc.). The guest image build (`build-image.sh` and
+# `smoke-boot.sh`) explicitly passes `--features seccomp` so the
+# filter is in every shipping binary.
 seccompiler = { version = "0.4", optional = true }
 
 [features]
-default = ["seccomp"]
+default = []
 seccomp = ["dep:seccompiler"]

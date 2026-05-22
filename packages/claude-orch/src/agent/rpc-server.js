@@ -7,6 +7,7 @@
  */
 
 import net from 'node:net';
+import { unlinkSync } from 'node:fs';
 
 import { makePromiseKit } from '@endo/promise-kit';
 
@@ -20,14 +21,30 @@ import { makePromiseKit } from '@endo/promise-kit';
  */
 
 /**
+ * @param {string} path
+ */
+const tryUnlink = path => {
+  try {
+    unlinkSync(path);
+  } catch {
+    // ignore — ENOENT is fine, anything else surfaces on listen()
+  }
+};
+
+/**
  * Open a long-lived JSON-RPC link to the per-session runtime agent.
  *
- * Returns synchronously with two promises:
- *   - `ready` resolves when the UDS is bound and accepting connections.
- *   - `link` resolves with the AgentLink once the guest agent connects.
+ * Returns synchronously with three handles:
+ *   - `ready`: resolves when the UDS is bound and accepting connections.
+ *   - `link`: resolves with the AgentLink once the guest agent connects.
+ *   - `stop()`: tear down the listening server before any guest has
+ *     connected. Useful when `markReady` aborts mid-boot — the
+ *     pre-connection server otherwise leaks until the next link
+ *     consumer arrives. After a successful guest connection,
+ *     `link.close()` is the right teardown handle.
  *
  * @param {{ agentSocketPath: string }} opts
- * @returns {{ ready: Promise<void>, link: Promise<AgentLink> }}
+ * @returns {{ ready: Promise<void>, link: Promise<AgentLink>, stop: () => void }}
  */
 export const makeAgentLink = ({ agentSocketPath }) => {
   const linkKit = makePromiseKit();
@@ -49,7 +66,7 @@ export const makeAgentLink = ({ agentSocketPath }) => {
   server.once('error', err => {
     readyKit.reject(err);
     linkKit.reject(err);
-    server.close();
+    server.close(() => tryUnlink(agentSocketPath));
   });
 
   server.once('connection', socket => {
@@ -102,11 +119,33 @@ export const makeAgentLink = ({ agentSocketPath }) => {
     linkKit.resolve(link);
   });
 
+  // Unlink any stale UDS left from a prior boot attempt that
+  // crashed before close could unlink it, so a retry binds cleanly.
+  tryUnlink(agentSocketPath);
   server.listen(agentSocketPath, () => readyKit.resolve(undefined));
+
+  /**
+   * Tear down the listening server *before* a guest connects.
+   * Idempotent — safe to call after a successful `link.close()`.
+   * Rejects the `link` promise if it hasn't resolved yet so callers
+   * awaiting `agentPromise.link` don't deadlock.
+   */
+  const stop = () => {
+    try {
+      server.close(() => tryUnlink(agentSocketPath));
+    } catch {
+      // ignore — already closed
+    }
+    // If no guest ever connected, the link promise is still pending.
+    // Reject it so any awaiter unblocks; resolved consumers see no
+    // change (promise-kit resolve is one-shot).
+    linkKit.reject(new Error('makeAgentLink.stop() before guest connect'));
+  };
 
   return harden({
     ready: /** @type {Promise<void>} */ (readyKit.promise),
     link: /** @type {Promise<AgentLink>} */ (linkKit.promise),
+    stop,
   });
 };
 harden(makeAgentLink);

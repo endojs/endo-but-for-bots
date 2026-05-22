@@ -155,62 +155,81 @@ export const start = async ({
       );
     }
 
-    // Caller has bound the fs.sock; spawn QEMU now.
-    const arch = resolveArch(record.request, config);
-    const netAttachment = await network.attachSession(record.id, {
-      mode: record.request.network,
-    });
-    netCleanups.set(sessionId, netAttachment.cleanup);
-    sessions.setState(sessionId, 'booting', { netAttachment });
-
-    // Boot-phase RPCs: bind the bootstrap (ctl.sock) and agent (agent.sock)
-    // UDS endpoints BEFORE spawning the VM, so the guest finds them at
-    // boot. The hello/link promises stay outstanding until the guest
-    // connects and the handshakes complete.
-    const bootstrap = awaitHello({
-      ctlSocketPath: record.ctlSocketPath,
-      sessionId,
-      consumeNonce: (sid, nonce) => sessions.consumeBootNonce(sid, nonce),
-      buildBootConfig: async () => buildBootConfigForSession(sessionId),
-      deadlineMs: config.bootDeadlineMs,
-    });
-    const agentPromise = makeAgentLink({
-      agentSocketPath: record.agentSocketPath,
-    });
-    await Promise.all([bootstrap.ready, agentPromise.ready]);
-
-    const vm = spawnVmFn({
-      arch,
-      record,
-      config,
-      netArgs: netAttachment.qemuArgs,
-    });
-    vms.set(sessionId, vm);
-
-    // If the VM dies unexpectedly, surface the failure AND tear down all
-    // per-session resources (net tap, agent socket, stdio mux, broker
-    // credentials) so we don't leak state until a caller eventually
-    // DELETEs the session.
-    vm.exitCode
-      .then(async code => {
-        const cur = sessions.getRecord(sessionId);
-        if (!cur) return;
-        if (cur.state === 'terminated') return; // graceful DELETE already ran
-        const wasReady = cur.state === 'ready' || cur.state === 'unhealthy';
-        sessions.setState(sessionId, wasReady ? 'terminated' : 'boot_failed', {
-          failureReason: wasReady
-            ? `qemu exited ${code}`
-            : `qemu exited ${code} before ready`,
-        });
-        await teardownSession(sessionId).catch(() => {});
-        await broker.revoke(sessionId).catch(() => {});
-      })
-      .catch(() => {});
-
+    // Boot path runs under a single try/catch so any failure —
+    // network attach, ctl.sock/agent.sock bind, QEMU spawn,
+    // bootstrap/agent handshake — leaves the session in
+    // `boot_failed` with all per-session resources cleaned up.
+    // Pre-PR the early steps threw out of `markReady` without
+    // setting state or revoking the broker's per-session record
+    // (Copilot review round 3 #14).
+    /** @type {ReturnType<typeof makeAgentLink> | undefined} */
+    let agentPromise;
+    /** @type {ReturnType<typeof spawnVmFn> | undefined} */
+    let vm;
     try {
+      // Caller has bound the fs.sock; spawn QEMU now.
+      const arch = resolveArch(record.request, config);
+      const netAttachment = await network.attachSession(record.id, {
+        mode: record.request.network,
+      });
+      netCleanups.set(sessionId, netAttachment.cleanup);
+      sessions.setState(sessionId, 'booting', { netAttachment });
+
+      // Boot-phase RPCs: bind the bootstrap (ctl.sock) and agent
+      // (agent.sock) UDS endpoints BEFORE spawning the VM, so the
+      // guest finds them at boot. The hello/link promises stay
+      // outstanding until the guest connects and the handshakes
+      // complete.
+      const bootstrap = awaitHello({
+        ctlSocketPath: record.ctlSocketPath,
+        sessionId,
+        consumeNonce: (sid, nonce) => sessions.consumeBootNonce(sid, nonce),
+        buildBootConfig: async () => buildBootConfigForSession(sessionId),
+        deadlineMs: config.bootDeadlineMs,
+      });
+      agentPromise = makeAgentLink({
+        agentSocketPath: record.agentSocketPath,
+      });
+      await Promise.all([bootstrap.ready, agentPromise.ready]);
+
+      vm = spawnVmFn({
+        arch,
+        record,
+        config,
+        netArgs: netAttachment.qemuArgs,
+      });
+      vms.set(sessionId, vm);
+
+      // If the VM dies unexpectedly, surface the failure AND tear
+      // down all per-session resources (net tap, agent socket,
+      // stdio mux, broker credentials).
+      vm.exitCode
+        .then(async code => {
+          const cur = sessions.getRecord(sessionId);
+          if (!cur) return;
+          if (cur.state === 'terminated') return; // graceful DELETE already ran
+          const wasReady = cur.state === 'ready' || cur.state === 'unhealthy';
+          sessions.setState(
+            sessionId,
+            wasReady ? 'terminated' : 'boot_failed',
+            {
+              failureReason: wasReady
+                ? `qemu exited ${code}`
+                : `qemu exited ${code} before ready`,
+            },
+          );
+          await teardownSession(sessionId).catch(() => {});
+          await broker.revoke(sessionId).catch(() => {});
+        })
+        .catch(() => {});
+
       await bootstrap.hello;
       const link = await agentPromise.link;
       agents.set(sessionId, link);
+      // Now that `link` owns the connection, the standalone agent
+      // server is no longer needed; teardownSession() will close it
+      // via `link.close()` rather than `agentPromise.stop()`.
+      agentPromise = undefined;
       await link.ready();
 
       // Start the stdio multiplexer if the caller asked for an attach stream.
@@ -234,10 +253,27 @@ export const start = async ({
       sessions.setState(sessionId, 'boot_failed', {
         failureReason: /** @type {Error} */ (e).message,
       });
-      vm.kill('SIGTERM');
-      // Best-effort cleanup. Credentials may already have been issued by
-      // buildBootConfigForSession() above, so revoke them so the broker
-      // doesn't hold stale per-session state.
+      // If the guest never connected, the agent's listening server
+      // is still bound and isn't in the `agents` map — so
+      // teardownSession() wouldn't release it. Close it explicitly.
+      // Copilot review round 3 #19.
+      if (agentPromise) {
+        try {
+          agentPromise.stop();
+        } catch {
+          // ignore
+        }
+      }
+      if (vm) {
+        try {
+          vm.kill('SIGTERM');
+        } catch {
+          // ignore
+        }
+      }
+      // Best-effort cleanup. Credentials may already have been issued
+      // by buildBootConfigForSession() above, so revoke them so the
+      // broker doesn't hold stale per-session state.
       await teardownSession(sessionId).catch(() => {});
       await broker.revoke(sessionId).catch(() => {});
       throw e;

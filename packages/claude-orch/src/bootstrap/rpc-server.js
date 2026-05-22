@@ -8,8 +8,26 @@
  */
 
 import net from 'node:net';
+import { unlinkSync } from 'node:fs';
 
 import { makePromiseKit } from '@endo/promise-kit';
+
+/**
+ * Best-effort `unlink(path)`. Used to clear stale UDS files left
+ * behind by a prior boot attempt that crashed before its `close()`
+ * could unlink the socket itself. Swallows ENOENT (no stale file)
+ * and any other error — if the path is unreachable we'll surface
+ * that on the subsequent `listen()` call instead.
+ *
+ * @param {string} path
+ */
+const tryUnlink = path => {
+  try {
+    unlinkSync(path);
+  } catch {
+    // ignore
+  }
+};
 
 /**
  * Bootstrap RPC server. Listens on the per-session ctl.sock UDS that the
@@ -25,7 +43,7 @@ import { makePromiseKit } from '@endo/promise-kit';
  * @param {{
  *   ctlSocketPath: string,
  *   sessionId: string,
- *   consumeNonce: (sessionId: string, nonce: string) => boolean,
+ *   consumeNonce: (sessionId: string, nonce: string) => Promise<boolean>,
  *   buildBootConfig: () => Promise<BootConfigMessage>,
  *   deadlineMs: number,
  * }} opts
@@ -58,7 +76,13 @@ export const awaitHello = ({
     if (settled) return; // single-fire: don't reject after a successful Hello
     settled = true;
     clearTimeout(timer);
-    server.close(() => {});
+    server.close(() => {
+      // Unlink the UDS file on close so a subsequent retry can rebind
+      // cleanly. Without this, a session that times out on the first
+      // boot attempt leaves a stale `ctl.sock` and the next attempt
+      // hits EADDRINUSE on `listen()`.
+      tryUnlink(ctlSocketPath);
+    });
     if (err) {
       helloKit.reject(err);
       readyKit.reject(err);
@@ -90,7 +114,10 @@ export const awaitHello = ({
             `Hello sessionId mismatch: ${msg.sessionId} != ${sessionId}`,
           );
         }
-        if (!consumeNonce(sessionId, msg.bootNonce)) {
+        // `consumeNonce` returns Promise<boolean> — it awaits a
+        // disk flush so the consumed-nonce flag is durable before
+        // we hand back a BootConfig.
+        if (!(await consumeNonce(sessionId, msg.bootNonce))) {
           throw new Error(`Invalid or replayed boot nonce for ${sessionId}`);
         }
         const bootConfig = await buildBootConfig();
@@ -116,6 +143,9 @@ export const awaitHello = ({
     });
   });
 
+  // Clear any stale UDS left over from a prior boot attempt that
+  // crashed before cleanup could unlink it.
+  tryUnlink(ctlSocketPath);
   server.listen(ctlSocketPath, () => readyKit.resolve(undefined));
   return harden({
     ready: /** @type {Promise<void>} */ (readyKit.promise),

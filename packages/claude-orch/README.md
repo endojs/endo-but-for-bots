@@ -91,9 +91,13 @@ shipped through R3:
 deferred:
 - [x] Runtime agent drops privileges and runs as `claude` user
   (`rust/claude-orch/bootstrap-init/src/main.rs`).
-- [x] seccomp-bpf filter wired into the default build
-  (`rust/claude-orch/runtime-agent/src/seccomp.rs`;
-  `Cargo.toml`'s default features include `seccomp`).
+- [x] seccomp-bpf filter shipped in the guest build
+  (`rust/claude-orch/runtime-agent/src/seccomp.rs`). Default
+  features are empty so host-side `cargo check` / rust-analyzer
+  on macOS+Windows works without the Linux-only dependency;
+  `scripts/build-image.sh` and `scripts/smoke-boot.sh` pass
+  `--features seccomp` explicitly so the filter is in every
+  shipping `claude-agent` binary.
 - [x] Agent RPC vocabulary contains no `GetCreds` or file-proxy verb
   (`protocol.types.d.ts`).
 - [x] Boot nonce single-use enforcement + replay regression

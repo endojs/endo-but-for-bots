@@ -87,21 +87,22 @@ export const makeBroker = ({ socketPath, apiKey, rotatePolicy }) => {
       await unlink(socketPath).catch(() => {});
       const server = net.createServer(conn => {
         let buf = '';
-        conn.on('data', chunk => {
-          buf += chunk.toString('utf8');
-          for (;;) {
-            const i = buf.indexOf('\n');
-            if (i < 0) break;
-            const line = buf.slice(0, i);
-            buf = buf.slice(i + 1);
-            // Parse the request inside the try/catch chain rather than
-            // as an argument: a non-JSON line throws synchronously and
-            // would otherwise tear down the `'data'` listener and kill
-            // the broker process. Reply with `{type: 'error'}` and keep
-            // serving.
-            Promise.resolve(line)
-              .then(raw =>
-                handle(/** @type {BrokerRequest} */ (JSON.parse(raw))),
+        // Per-connection FIFO queue. Without this each newline-
+        // delimited request would run on its own promise chain and
+        // a slow `handle()` (e.g. a future async OAuth refresh)
+        // could let later replies overtake earlier ones, breaking
+        // the request/response ordering most clients rely on.
+        // (Copilot review round 3 #15.) Serialize by chaining each
+        // handler off the previous one's settlement.
+        /** @type {Promise<unknown>} */
+        let queue = Promise.resolve();
+        const enqueue = (/** @type {string} */ line) => {
+          queue = queue.then(() =>
+            // Parse inside the chain so a non-JSON line surfaces via
+            // .catch() rather than killing the `'data'` listener.
+            Promise.resolve()
+              .then(() =>
+                handle(/** @type {BrokerRequest} */ (JSON.parse(line))),
               )
               .then(res => conn.write(`${JSON.stringify(res)}\n`))
               .catch(e => {
@@ -109,7 +110,17 @@ export const makeBroker = ({ socketPath, apiKey, rotatePolicy }) => {
                 conn.write(
                   `${JSON.stringify({ type: 'error', message: msg })}\n`,
                 );
-              });
+              }),
+          );
+        };
+        conn.on('data', chunk => {
+          buf += chunk.toString('utf8');
+          for (;;) {
+            const i = buf.indexOf('\n');
+            if (i < 0) break;
+            const line = buf.slice(0, i);
+            buf = buf.slice(i + 1);
+            enqueue(line);
           }
         });
       });

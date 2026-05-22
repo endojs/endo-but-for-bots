@@ -33,10 +33,16 @@ step "Staging build dir at $BUILD_DIR"
 mkdir -p "$BUILD_DIR"/{rootfs/sbin,rootfs/usr/local/bin,rootfs/home/claude,rootfs/workspace,rootfs/dev,rootfs/proc,rootfs/sys,rootfs/tmp,rootfs/run,rootfs/etc}
 
 step "Cross-compiling guest Rust binaries to x86_64-unknown-linux-musl"
+# `--features seccomp` here is the load-bearing flag that puts the
+# filter into the shipping `claude-agent`. The crate's default
+# feature set is empty (so host `cargo check` works on macOS+Windows
+# without pulling in Linux-only constants); guest builds must
+# opt in explicitly.
 ( cd "$REPO_ROOT" && \
   cargo build --release --target x86_64-unknown-linux-musl \
     --manifest-path rust/claude-orch/bootstrap-init/Cargo.toml && \
   cargo build --release --target x86_64-unknown-linux-musl \
+    --features seccomp \
     --manifest-path rust/claude-orch/runtime-agent/Cargo.toml )
 install -m 0755 "$REPO_ROOT/target/x86_64-unknown-linux-musl/release/init" \
   "$BUILD_DIR/rootfs/sbin/init"

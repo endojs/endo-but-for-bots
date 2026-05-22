@@ -116,8 +116,13 @@ echo "== building guest binaries (Rust, target=$RUST_TARGET)"
 cargo build --release \
   --target "$RUST_TARGET" \
   --manifest-path "$REPO_ROOT/rust/claude-orch/bootstrap-init/Cargo.toml"
+# `--features seccomp` here is the load-bearing flag that puts the
+# filter into the shipping `claude-agent`. The crate's default
+# feature set is empty (so host `cargo check` works on macOS+Windows);
+# guest builds must opt in explicitly.
 cargo build --release \
   --target "$RUST_TARGET" \
+  --features seccomp \
   --manifest-path "$REPO_ROOT/rust/claude-orch/runtime-agent/Cargo.toml"
 
 # Drop the Rust binaries into the mkosi ExtraTrees layout.

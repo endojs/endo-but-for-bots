@@ -77,6 +77,44 @@ const validateCreateSessionBody = body => {
       }
     }
   }
+  // The remaining BootConfig-bound fields. Without these checks an
+  // invalid type would land in the persisted session and then
+  // propagate into the agent's BootConfig (Copilot review round 3
+  // #16).
+  if (
+    body.initialPrompt !== undefined &&
+    typeof body.initialPrompt !== 'string'
+  ) {
+    return 'initialPrompt must be a string';
+  }
+  if (body.envExtra !== undefined) {
+    if (
+      body.envExtra === null ||
+      typeof body.envExtra !== 'object' ||
+      Array.isArray(body.envExtra)
+    ) {
+      return 'envExtra must be a plain object of string→string';
+    }
+    for (const [k, v] of Object.entries(body.envExtra)) {
+      if (typeof k !== 'string' || k.length === 0) {
+        return 'envExtra keys must be non-empty strings';
+      }
+      if (typeof v !== 'string') {
+        return `envExtra[${JSON.stringify(k)}] must be a string`;
+      }
+    }
+  }
+  if (body.credentials !== undefined) {
+    if (
+      body.credentials === null ||
+      typeof body.credentials !== 'object' ||
+      Array.isArray(body.credentials) ||
+      typeof body.credentials.apiKey !== 'string' ||
+      body.credentials.apiKey.length === 0
+    ) {
+      return 'credentials must be { apiKey: <non-empty string> }';
+    }
+  }
   return undefined;
 };
 

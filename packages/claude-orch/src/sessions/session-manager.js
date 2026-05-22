@@ -279,18 +279,22 @@ export const makeSessionManager = ({ config, persistencePath }) => {
    * @param {string} nonce
    * @returns {boolean}
    */
-  const consumeBootNonce = (id, nonce) => {
+  const consumeBootNonce = async (id, nonce) => {
     const record = sessions.get(id);
     if (!record) return false;
     if (record.bootNonceUsed) return false;
     if (record.bootNonce !== nonce) return false;
     record.bootNonceUsed = true;
     record.bootNonce = ''; // purge from memory
-    // Flush the consumed-nonce flag to disk now rather than waiting
-    // for the next state transition. A crash between consumption and
-    // markReady would otherwise leave a still-redeemable nonce on
-    // disk; with this flush the single-use invariant is durable.
-    schedulePersist();
+    // Flush the consumed-nonce flag to disk synchronously rather
+    // than via `schedulePersist()`'s setImmediate(). A crash between
+    // consumption and the next state transition would otherwise
+    // leave a still-redeemable nonce on disk; awaiting `persistNow()`
+    // makes the single-use invariant durable in the strict sense
+    // the boot-nonce contract claims. Cheap: the projection is
+    // ~few-record JSON, and consumeBootNonce only fires once per
+    // session boot. (Copilot review round 3 #17.)
+    await persistNow();
     return true;
   };
 

@@ -55,8 +55,8 @@ test('consumeBootNonce is single-use', async t => {
   });
   const nonce = record.bootNonce;
 
-  t.true(sm.consumeBootNonce(record.id, nonce));
-  t.false(sm.consumeBootNonce(record.id, nonce));
+  t.true(await sm.consumeBootNonce(record.id, nonce));
+  t.false(await sm.consumeBootNonce(record.id, nonce));
   t.is(sm.getRecord(record.id)?.bootNonceUsed, true);
   t.is(sm.getRecord(record.id)?.bootNonce, '');
 });
@@ -71,7 +71,7 @@ test('consumeBootNonce rejects wrong nonce', async t => {
     attachMode: 'none',
   });
 
-  t.false(sm.consumeBootNonce(record.id, 'a'.repeat(64)));
+  t.false(await sm.consumeBootNonce(record.id, 'a'.repeat(64)));
   t.is(sm.getRecord(record.id)?.bootNonceUsed, false);
   t.not(sm.getRecord(record.id)?.bootNonce, '');
 });
