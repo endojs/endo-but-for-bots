@@ -20,9 +20,14 @@ output both pass the SES intrinsic `defineProperty` for this field.
 `@endo/module-source` generates `$h͏_defineProperty(fn, 'name', {value:
 'fn'})` in the functor preamble instead of `Object.defineProperty(...)`.
 
-Compatibility note: a `module-source` that emits the new preamble
-paired with an old `ses` or `compartment-mapper` will silently
-fail to set function `.name` properties (the destructured field is
-`undefined`).
-The reverse pairing — new `ses` / `compartment-mapper` with an old
-`module-source` — is harmless: the extra field is unused.
+Host-pairing requirement: a `module-source` that emits the new preamble
+paired with an old `ses` or `compartment-mapper` (one that does not
+pass `defineProperty` into the functor) will throw `TypeError` on
+initialization of any module whose source contains a hoisted function
+declaration. The preamble calls `$h͏_defineProperty(fn, 'name', ...)`
+unconditionally; if the host did not pass the field, the destructured
+value is `undefined` and the call invokes `undefined(...)`. The three
+packages should be upgraded together to land the full fix.
+
+The reverse pairing (new `ses` or `compartment-mapper` with an old
+`module-source`) is harmless: the extra field is unused.
