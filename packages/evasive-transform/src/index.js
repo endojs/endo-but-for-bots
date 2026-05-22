@@ -13,6 +13,15 @@ import { transformAst } from './transform-ast.js';
 import { parseAst } from './parse-ast.js';
 import { generate } from './generate.js';
 
+// Mirrors the conservative pattern SES uses in
+// `rejectImportExpressions` (`packages/ses/src/transforms.js`): a
+// word-boundary `import` followed by optional whitespace then `(`, `//`,
+// or `/*`. If a source contains anything matching this, the evasive
+// transform must run so SES's rejection check sees escaped text. The
+// fast-path is otherwise free to short-circuit when neither this pattern
+// nor any HTML-comment marker is present.
+const importLikePattern = /\bimport\s*(?:\(|\/[/*])/;
+
 /**
  * @param {string} source
  * @param {boolean} elideComments
@@ -25,7 +34,7 @@ const shouldRunTransform = (source, elideComments) => {
   // Fast path: if none of the risky comment payload tokens appear anywhere in
   // the source, the transform cannot change semantics-relevant content.
   return (
-    source.includes('import(') ||
+    importLikePattern.test(source) ||
     source.includes('<!--') ||
     source.includes('-->')
   );
