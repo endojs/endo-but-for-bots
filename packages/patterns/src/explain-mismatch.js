@@ -25,10 +25,6 @@ import { renderTrace } from './explain-mismatch/render.js';
  *   `'compact'` is one mismatch per line with ` | ` column separators,
  *   sized for AI-agent token economy. `'expanded'` is indented, Rust-
  *   compiler-style line-art, sized for a human reading at a REPL.
- * @property {number} [width] Reserved for future line-wrap control;
- *   currently ignored. Default `100`.
- * @property {boolean} [color] Reserved for future ANSI color support;
- *   currently ignored. Default `false`.
  */
 
 /**
