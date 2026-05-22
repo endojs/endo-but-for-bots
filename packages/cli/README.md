@@ -197,7 +197,9 @@ embedded in the message (here `your-name`, from the second `endo send`
 example above).
 Pass `--name <local-name>` to rename the value while adopting.
 
-Request and grant capabilities:
+Request and grant capabilities.
+A request is a message that expects a response; `resolve` answers it
+with a named value, `reject` answers it with a reason:
 
 ```sh
 # bob (guest) requests a capability from alice (host)
