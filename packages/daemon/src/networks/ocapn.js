@@ -5,8 +5,10 @@ import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
 import { makeOcapn } from '@endo/ocapn';
 import { cborCodec } from '@endo/ocapn/cbor';
+import { makeCryptography } from '@endo/ocapn/cryptography';
 import { makeOcapnNoiseNetwork } from '@endo/ocapn-noise';
 import { makeTcpTransport } from '@endo/ocapn-noise/transport/tcp';
+import { fromHex, toHex } from '../hex.js';
 
 /**
  * OCapN-Noise transport for daemon-to-daemon (peer) connections.
@@ -46,6 +48,24 @@ const protocol = 'ocapn+noise+tcp';
 // is read, mirroring `tcp-netstring.js`'s `tcp-listen-addr`.
 const LISTEN_ADDR_NAME = 'ocapn-listen-addr';
 
+// Domain-separation prefix for the agent-binding signature. Mixed into
+// the signed material so a signature produced for this binding cannot
+// be replayed as a signature on any other message the agent might be
+// asked to sign through its general-purpose `sign` capability. The
+// trailing `\0` is a fixed terminator that keeps the prefix unambiguous
+// against any extension that prepends data.
+const AGENT_BINDING_DOMAIN = 'endo-agent-binding\0';
+
+const textEncoder = new TextEncoder();
+const concatBytes = (a, b) => {
+  const out = new Uint8Array(a.byteLength + b.byteLength);
+  out.set(a, 0);
+  out.set(b, a.byteLength);
+  return out;
+};
+const agentBindingMessage = sessionPublicKey =>
+  concatBytes(textEncoder.encode(AGENT_BINDING_DOMAIN), sessionPublicKey);
+
 // Format an authority component. IPv6 literals contain colons and must
 // be wrapped in brackets so `new URL('proto://[::1]:8080')` and a stored
 // `[::1]:8080` listen address both round-trip through URL parsing.
@@ -59,6 +79,7 @@ const formatHostPort = (host, port) =>
 
 const EndoOcapnBootstrapInterface = M.interface('EndoOcapnBootstrap', {
   getNodeId: M.call().returns(M.string()),
+  getAgentBinding: M.call().returns(M.promise()),
   getGreeter: M.call().returns(M.any()),
   help: M.call().returns(M.string()),
 });
@@ -87,24 +108,6 @@ export const make = async (powers, context) => {
     // No stored listen address; fall back to an ephemeral local port.
   }
 
-  // The daemon's bootstrap object: the single entry point a remote
-  // peer reaches over an OCapN session. It reports this daemon's node
-  // identity and hands back the greeter that runs the handshake.
-  const bootstrap = makeExo('EndoOcapnBootstrap', EndoOcapnBootstrapInterface, {
-    getNodeId: () => localNodeId,
-    getGreeter: () => localGreeter,
-    help: () =>
-      `Endo OCapN bootstrap object. getNodeId() reports this daemon's node number; getGreeter() returns the EndoGreeter that runs the peer handshake.`,
-  });
-
-  // The OCapN locator (a "nonce locator"): the table of local
-  // capabilities a remote peer may fetch by swissnum. The bootstrap
-  // is the sole published entry; every other value is reached through
-  // the gateway that the greeter hands back from `hello`.
-  /** @type {Map<string, unknown>} */
-  const locator = new Map();
-  locator.set(BOOTSTRAP_SWISSNUM, bootstrap);
-
   const codec = cborCodec;
   const network = makeOcapnNoiseNetwork({ codec });
 
@@ -121,6 +124,43 @@ export const make = async (powers, context) => {
   // capability fetched through this session.
   const signingKeys = network.generateSigningKeys();
   const keyId = network.addSigningKeys(signingKeys);
+
+  // Compute the agent-binding signature now, while we have both the
+  // session key (just minted above) and the agent's `sign` capability
+  // (passed in via `powers`). The signature endorses
+  //   `endo-agent-binding\0` || sessionPublicKey
+  // and is verified by any dialing peer against the agent public key
+  // it expects from the `endo://` locator. Domain-separating the
+  // message keeps this signature unforgeable as a signature on
+  // anything else the agent's general-purpose `sign(...)` might be
+  // asked to produce.
+  const bindingMessage = agentBindingMessage(signingKeys.publicKey);
+  const bindingSignature = await E(powers).sign(toHex(bindingMessage));
+  const agentBinding = harden({
+    agentPublicKey: String(localNodeId),
+    signature: bindingSignature,
+  });
+
+  // The daemon's bootstrap object: the single entry point a remote
+  // peer reaches over an OCapN session. It reports this daemon's node
+  // identity, hands back the greeter that runs the handshake, and
+  // exposes the agent-binding attestation that ties this session's
+  // ephemeral OCapN key to the agent's persistent identity.
+  const bootstrap = makeExo('EndoOcapnBootstrap', EndoOcapnBootstrapInterface, {
+    getNodeId: () => localNodeId,
+    getAgentBinding: async () => agentBinding,
+    getGreeter: () => localGreeter,
+    help: () =>
+      `Endo OCapN bootstrap object. getNodeId() reports this daemon's node number; getAgentBinding() returns the signed attestation that ties this session's OCapN key to the agent; getGreeter() returns the EndoGreeter that runs the peer handshake.`,
+  });
+
+  // The OCapN locator (a "nonce locator"): the table of local
+  // capabilities a remote peer may fetch by swissnum. The bootstrap
+  // is the sole published entry; every other value is reached through
+  // the gateway that the greeter hands back from `hello`.
+  /** @type {Map<string, unknown>} */
+  const locator = new Map();
+  locator.set(BOOTSTRAP_SWISSNUM, bootstrap);
 
   const tcpTransport = makeTcpTransport({ host, port });
   await network.addTransport(tcpTransport);
@@ -216,16 +256,52 @@ export const make = async (powers, context) => {
     const remoteBootstrap = await client.enlivenSturdyRef(sturdyRef);
     const remoteGreeterP = E(remoteBootstrap).getGreeter();
 
-    // The bootstrap reports the daemon's node identity. Until the
-    // OCapN session key is the daemon's own keypair
-    // (daemon-agent-network-identity) this is the daemon asserting its
-    // id rather than a cryptographic proof, but checking it against
-    // the address still catches a stale connection hint that now
-    // resolves to a different daemon.
-    const reportedNodeId = await E(remoteBootstrap).getNodeId();
-    if (expectedNodeId !== null && reportedNodeId !== expectedNodeId) {
+    // Verify the layered agent-binding attestation: the OCapN session
+    // is authenticated as the *ephemeral* designator from
+    // `remoteLocation`, and the binding signature proves the
+    // *persistent* agent endorsed that ephemeral key. With both
+    // checks, the dialing peer knows the OCapN session it just
+    // opened is in fact this agent's session — without ever having
+    // pulled the agent's private key out of the daemon.
+    const binding = /** @type {{agentPublicKey: string, signature: string}} */ (
+      await E(remoteBootstrap).getAgentBinding()
+    );
+    if (expectedNodeId !== null && binding.agentPublicKey !== expectedNodeId) {
       throw new Error(
-        `OCapN peer identity mismatch: address names node ${expectedNodeId} but the peer reports ${reportedNodeId}`,
+        `OCapN peer identity mismatch: address names node ${expectedNodeId} but the binding claims ${binding.agentPublicKey}`,
+      );
+    }
+    // `remoteLocation.designator` is the hex string of the peer's
+    // ephemeral OCapN public key (see `buildLocationFor` in
+    // `@endo/ocapn-noise/src/network.js`). Decode it to match the
+    // bytes the signer mixed into the binding message.
+    const sessionPublicKey = fromHex(remoteLocation.designator);
+    const cryptography = makeCryptography(codec);
+    const publicKeyVerifier = cryptography.makeOcapnPublicKey(
+      fromHex(binding.agentPublicKey).buffer,
+    );
+    // Ed25519 raw signature is 64 bytes (r||s); the OCapN signature
+    // value the cryptography helper expects splits those into a
+    // structured `{ scheme: 'eddsa', r, s }` (`OcapnSignatureCodec`).
+    const sigBytes = fromHex(binding.signature);
+    const ocapnSignature = harden({
+      type: 'sig-val',
+      scheme: 'eddsa',
+      r: sigBytes
+        .subarray(0, 32)
+        .buffer.slice(sigBytes.byteOffset, sigBytes.byteOffset + 32),
+      s: sigBytes
+        .subarray(32, 64)
+        .buffer.slice(sigBytes.byteOffset + 32, sigBytes.byteOffset + 64),
+    });
+    try {
+      publicKeyVerifier.assertSignatureValid(
+        agentBindingMessage(sessionPublicKey).buffer,
+        /** @type {any} */ (ocapnSignature),
+      );
+    } catch (_e) {
+      throw new Error(
+        `OCapN peer identity mismatch: agent binding signature did not verify against the locator's agent public key ${expectedNodeId ?? binding.agentPublicKey}`,
       );
     }
 

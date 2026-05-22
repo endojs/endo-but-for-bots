@@ -37,10 +37,7 @@ const ED25519_PKCS8_PREFIX = Buffer.from([
 ]);
 
 const ed25519SignBytes = (privateKey, message) => {
-  const derKey = Buffer.concat([
-    ED25519_PKCS8_PREFIX,
-    Buffer.from(privateKey),
-  ]);
+  const derKey = Buffer.concat([ED25519_PKCS8_PREFIX, Buffer.from(privateKey)]);
   const keyObject = crypto.createPrivateKey({
     key: derKey,
     format: 'der',
@@ -111,7 +108,8 @@ const makeMockPowers = (label, keypair = generateEd25519Keypair()) => {
     getPeerInfo: () => harden({ node: nodeId, addresses: [] }),
     greeter: () => greeter,
     gateway: () => gateway,
-    sign: hexBytes => toHex(ed25519SignBytes(keypair.privateKey, fromHex(hexBytes))),
+    sign: hexBytes =>
+      toHex(ed25519SignBytes(keypair.privateKey, fromHex(hexBytes))),
     // No stored listen address — the transport falls back to an
     // ephemeral local port.
     lookup: name => {
@@ -121,7 +119,15 @@ const makeMockPowers = (label, keypair = generateEd25519Keypair()) => {
       storedValues.push({ value, name });
     },
   });
-  return { powers, gateway, greeter, helloCalls, storedValues, keypair, nodeId };
+  return {
+    powers,
+    gateway,
+    greeter,
+    helloCalls,
+    storedValues,
+    keypair,
+    nodeId,
+  };
 };
 
 test('OCapN-Noise transport conforms to the EndoNetwork interface', async t => {
@@ -206,6 +212,40 @@ test('OCapN-Noise transport rejects a peer whose identity does not match the add
   // B's bootstrap binding attests to.
   const tampered = new URL(addressB);
   tampered.searchParams.set('node', toHex(generateEd25519Keypair().publicKey));
+
+  const connectionContext = makeMockContext();
+  await t.throwsAsync(
+    () => E(serviceA).connect(tampered.href, connectionContext),
+    { message: /OCapN peer identity mismatch/ },
+  );
+});
+
+test('OCapN-Noise transport rejects a peer whose binding signature is wrong key', async t => {
+  // The layered agent-binding attestation only catches a mismatch if
+  // a dialing daemon verifies the signature. This test points a
+  // dialer at peer B's address but tells it to expect a *different*
+  // agent's public key — the binding verifies against B's actual key
+  // and so fails to verify against the impersonator's. The error
+  // surfaces as `OCapN peer identity mismatch`.
+  t.timeout(60_000);
+  const contextA = makeMockContext();
+  const contextB = makeMockContext();
+  t.teardown(() => contextA.cancel());
+  t.teardown(() => contextB.cancel());
+
+  const a = makeMockPowers('A');
+  const b = makeMockPowers('B');
+
+  const serviceA = await makeOcapnNetwork(a.powers, contextA);
+  const serviceB = await makeOcapnNetwork(b.powers, contextB);
+
+  const [addressB] = await E(serviceB).addresses();
+  // Rewrite the connection hint so it names some third party's
+  // agent key; B will return its real binding (signed by B's key),
+  // and the dialer's verification step rejects it.
+  const impersonatorPublicKey = toHex(generateEd25519Keypair().publicKey);
+  const tampered = new URL(addressB);
+  tampered.searchParams.set('node', impersonatorPublicKey);
 
   const connectionContext = makeMockContext();
   await t.throwsAsync(
