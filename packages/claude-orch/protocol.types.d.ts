@@ -261,11 +261,4 @@ export interface OrchestratorConfig {
   };
   bootDeadlineMs: number;
   heartbeatTimeoutMs: number;
-  /**
-   * How often (ms) the orchestrator polls the broker for fresh
-   * credentials on each ready session. 0 disables the loop; the
-   * broker's `rotatePolicy` must be configured for ticks to do
-   * anything (the default api-key policy is a noop).
-   */
-  rotationIntervalMs?: number;
 }

@@ -5,37 +5,86 @@ import '@endo/init';
 import process from 'node:process';
 
 import { makeBroker, loadApiKey } from '../src/broker/main.js';
+import { makeOAuthRefresher } from '../src/broker/oauth.js';
+
+const env = process.env;
 
 const socketPath =
-  process.env.CLAUDE_ORCH_BROKER_SOCKET || '/run/claude-orch/broker.sock';
-const configPath = process.env.CLAUDE_ORCH_BROKER_CONFIG;
+  env.CLAUDE_ORCH_BROKER_SOCKET || '/run/claude-orch/broker.sock';
+const configPath = env.CLAUDE_ORCH_BROKER_CONFIG;
 
-const apiKey = await loadApiKey({ configPath });
+// Mode selection: presence of the OAuth env vars switches the broker
+// into OAuth mode. Otherwise it serves a static api-key.
+//
+// OAuth mode (RFC 6749 §6 refresh-token grant):
+//   CLAUDE_ORCH_BROKER_OAUTH_TOKEN_URL          token endpoint
+//   CLAUDE_ORCH_BROKER_OAUTH_CLIENT_ID
+//   CLAUDE_ORCH_BROKER_OAUTH_CLIENT_SECRET     optional (PKCE-only clients)
+//   CLAUDE_ORCH_BROKER_OAUTH_REFRESH_TOKEN     the long-lived secret
+//   CLAUDE_ORCH_BROKER_OAUTH_SCOPE             optional space-separated list
+//   CLAUDE_ORCH_BROKER_REFRESH_WINDOW_MS       refresh this many ms before
+//                                              expiresAt. Default 5 min.
+//
+// In OAuth mode the broker:
+//   1. Performs an initial token refresh at startup to seed
+//      `initialCredentials`.
+//   2. Schedules `setTimeout` based on the access token's `expiresAt`.
+//   3. Pushes fresh credentials to every subscribed orchestrator on
+//      each rotation. The long-lived refresh token never leaves
+//      this process.
+let initialCredentials;
+let refresher;
+let refreshWindowMs;
 
-// `rotatePolicy` is the extension point for short-term-only
-// credential injection (DESIGN.md §5.5). v1 ships api-key mode
-// with no rotation — the api key IS the long-term credential, no
-// shorter-term form exists. Operators wiring an IdP replace this
-// with a refresher that hits the token endpoint and returns
-// `{ oauthToken: { accessToken, expiresAt } }`. The runtime-agent
-// handles the rotate_creds wire path already; the orchestrator's
-// scheduler (`CLAUDE_ORCH_ROTATION_INTERVAL_MS`) invites this
-// policy to act every tick.
-//
-// Drop-in shape, when the IdP is wired:
-//
-//   const rotatePolicy = async (sessionId, current) => {
-//     // Refresh when there's < REFRESH_WINDOW_MS left on the
-//     // current.oauthToken.expiresAt. Returns null to noop.
-//     return tokenStillFresh(current) ? null : await refreshFromIdP();
-//   };
-//
-// Today: undefined → broker.rotateIfNeeded() returns noop and the
-// orchestrator's per-tick sweep is silent.
-/** @type {undefined} */
-const rotatePolicy = undefined;
+if (env.CLAUDE_ORCH_BROKER_OAUTH_TOKEN_URL) {
+  const tokenUrl = env.CLAUDE_ORCH_BROKER_OAUTH_TOKEN_URL;
+  const clientId = env.CLAUDE_ORCH_BROKER_OAUTH_CLIENT_ID;
+  const refreshToken = env.CLAUDE_ORCH_BROKER_OAUTH_REFRESH_TOKEN;
+  if (!clientId) {
+    console.error(
+      'CLAUDE_ORCH_BROKER_OAUTH_CLIENT_ID is required in OAuth mode',
+    );
+    process.exit(2);
+  }
+  if (!refreshToken) {
+    console.error(
+      'CLAUDE_ORCH_BROKER_OAUTH_REFRESH_TOKEN is required in OAuth mode',
+    );
+    process.exit(2);
+  }
+  const oauth = makeOAuthRefresher({
+    tokenUrl,
+    clientId,
+    clientSecret: env.CLAUDE_ORCH_BROKER_OAUTH_CLIENT_SECRET,
+    refreshToken,
+    scope: env.CLAUDE_ORCH_BROKER_OAUTH_SCOPE?.split(/\s+/u).filter(Boolean),
+    log: (level, msg) => console.error(`[claude-broker oauth ${level}] ${msg}`),
+  });
+  refresher = oauth.refresh;
+  refreshWindowMs = env.CLAUDE_ORCH_BROKER_REFRESH_WINDOW_MS
+    ? Number(env.CLAUDE_ORCH_BROKER_REFRESH_WINDOW_MS)
+    : undefined;
+  // The initial refresh produces the access token that seeds the
+  // broker's state. If this fails the broker won't start — the
+  // alternative is starting in a stale state and refusing every
+  // subscribe, which is worse.
+  initialCredentials = await refresher();
+  console.error(
+    `[claude-broker] OAuth mode: initial token expires at ${initialCredentials.oauthToken?.expiresAt}`,
+  );
+} else {
+  const apiKey = await loadApiKey({ configPath });
+  initialCredentials = { apiKey };
+  console.error('[claude-broker] api-key mode: no rotation');
+}
 
-const broker = makeBroker({ socketPath, apiKey, rotatePolicy });
+const broker = makeBroker({
+  socketPath,
+  initialCredentials,
+  refresher,
+  refreshWindowMs,
+  log: (level, msg) => console.error(`[claude-broker ${level}] ${msg}`),
+});
 const server = await broker.listen();
 
 console.error(`[claude-broker] listening on ${socketPath}`);

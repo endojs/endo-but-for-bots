@@ -40,19 +40,56 @@ const makeStubNetwork = () => ({
 });
 
 /**
- * Stub broker that returns a fixed API key.
+ * In-process stand-in for the broker client used by `start()`.
+ *
+ * The new broker protocol is subscribe/push: `subscribe(sessionId)`
+ * resolves to a handle with `initial` credentials + `onRotate` /
+ * `onError` callbacks + `close()`. This stub records every
+ * subscription so tests can drive pushes via `broadcastRotation`.
  */
-const makeStubBroker = () => ({
-  async issue(_sessionId) {
-    return { apiKey: 'sk-test-12345' };
-  },
-  async revoke(_sessionId) {
-    // no-op
-  },
-  async rotateIfNeeded(_sessionId) {
-    return null;
-  },
-});
+const makeStubBrokerClient = ({ initialCredentials } = {}) => {
+  const initial = initialCredentials ?? { apiKey: 'sk-test-12345' };
+  /** @type {Array<{ sessionId: string, rotate: (c: any) => void, errored: (m: string) => void, closed: boolean }>} */
+  const subs = [];
+  return {
+    client: {
+      async subscribe(sessionId) {
+        /** @type {(c: any) => void} */
+        let rotateHandler = () => {};
+        /** @type {(m: string) => void} */
+        let errorHandler = () => {};
+        const entry = {
+          sessionId,
+          rotate: c => rotateHandler(c),
+          errored: m => errorHandler(m),
+          closed: false,
+        };
+        subs.push(entry);
+        return harden({
+          initial,
+          onRotate: h => {
+            rotateHandler = h;
+          },
+          onError: h => {
+            errorHandler = h;
+          },
+          async close() {
+            entry.closed = true;
+          },
+        });
+      },
+    },
+    /** Fan a fresh creds payload to every open subscription. */
+    broadcastRotation(credentials) {
+      for (const s of subs) {
+        if (!s.closed) s.rotate(credentials);
+      }
+    },
+    /** Number of subscriptions currently open. */
+    openCount: () => subs.filter(s => !s.closed).length,
+    subs,
+  };
+};
 
 /**
  * Mock guest process. In place of QEMU, opens UDS clients to ctl.sock
@@ -283,7 +320,7 @@ test('e2e: full lifecycle createSession → markReady → attach → terminate',
       heartbeatTimeoutMs: 60000,
     },
     networkController: makeStubNetwork(),
-    brokerClient: /** @type {any} */ (makeStubBroker()),
+    brokerClient: /** @type {any} */ (makeStubBrokerClient().client),
     spawnVm: mockSpawn,
   });
   t.teardown(() => orch.stop());
@@ -343,14 +380,17 @@ test('e2e: full lifecycle createSession → markReady → attach → terminate',
   t.true(mockGuest?.killed ?? false);
 });
 
-test('e2e: rotation scheduler ticks fire rotateCreds on every ready session', async t => {
-  // Wire the orchestrator with a short `rotationIntervalMs` and a
-  // broker policy that hands back two fresh credentials per session,
-  // then noop. Two parallel sessions; after the scheduler runs a few
-  // ticks each mock guest should see exactly the rotations the broker
-  // produced for it. Proves the per-session sweep works AND that the
-  // interval clears on stop().
-  const dir = await mkdtemp(path.join(os.tmpdir(), 'orch-rot-sched-'));
+test('e2e: broker pushes rotation to subscribed orchestrator (orch → agent relay)', async t => {
+  // The broker drives the schedule. The orchestrator opens a
+  // subscription per session in markReady, awaits initial creds
+  // (used in BootConfig), and relays every subsequent broker push
+  // to the agent via `link.send({type: 'rotate_creds', ...})`.
+  //
+  // No setInterval, no orch-side polling — the orch is just a
+  // relay. This test stubs the broker so `broadcastRotation()`
+  // simulates the broker's scheduled refresh; the orchestrator
+  // should faithfully forward to every active subscription.
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'orch-rot-push-'));
   t.teardown(() => rm(dir, { recursive: true, force: true }));
 
   const apiSock = path.join(dir, 'api.sock');
@@ -380,33 +420,18 @@ test('e2e: rotation scheduler ticks fire rotateCreds on every ready session', as
     };
   };
 
-  // Per-session rotation counter. First two calls per session emit a
-  // fresh credentials payload, subsequent calls noop. The credential
-  // shape is the OAuth variant — proves the short-term-only injection
-  // path: only the `accessToken` reaches the guest, never a long-lived
-  // refresh secret.
-  /** @type {Map<string, number>} */
-  const rotationsPerSession = new Map();
-  const rotatingBroker = {
-    async issue(_sessionId) {
-      return { apiKey: 'sk-initial' };
+  // Initial credentials are OAuth-shaped to demonstrate the
+  // short-term-only injection model: the BootConfig and every
+  // rotation carry only `{accessToken, expiresAt}`, never the
+  // long-lived refresh secret that the broker holds.
+  const broker = makeStubBrokerClient({
+    initialCredentials: {
+      oauthToken: {
+        accessToken: 'tok-initial',
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      },
     },
-    async revoke(_sessionId) {
-      // unused in the scheduler test; the broker's job is only to
-      // hand back rotations.
-    },
-    async rotateIfNeeded(sessionId) {
-      const n = (rotationsPerSession.get(sessionId) ?? 0) + 1;
-      rotationsPerSession.set(sessionId, n);
-      if (n > 2) return null;
-      return {
-        oauthToken: {
-          accessToken: `tok-${sessionId}-${n}`,
-          expiresAt: new Date(Date.now() + 60_000).toISOString(),
-        },
-      };
-    },
-  };
+  });
 
   const orch = await start({
     config: {
@@ -417,17 +442,15 @@ test('e2e: rotation scheduler ticks fire rotateCreds on every ready session', as
       defaults: { arch: 'x86_64', vcpus: 2, memMB: 2048 },
       bootDeadlineMs: 10000,
       heartbeatTimeoutMs: 60000,
-      // Short interval so the test doesn't take forever.
-      rotationIntervalMs: 25,
     },
     networkController: makeStubNetwork(),
-    brokerClient: /** @type {any} */ (rotatingBroker),
+    brokerClient: /** @type {any} */ (broker.client),
     spawnVm: mockSpawn,
   });
   t.teardown(() => orch.stop());
 
-  // Spin up two sessions in parallel.
-  /** @type {string[]} */
+  // Spin up two parallel sessions; each gets its own broker
+  // subscription.
   const sessionIds = await Promise.all(
     [0, 1].map(async i => {
       const create = await httpRequest(apiSock, 'POST', '/v1/sessions', {
@@ -445,154 +468,70 @@ test('e2e: rotation scheduler ticks fire rotateCreds on every ready session', as
     }),
   );
 
-  // Wait for both sessions to have received their 2 rotations.
+  // Both subscriptions should be open by now.
+  t.is(broker.openCount(), 2, 'orch opened a subscription per session');
+
+  // Push a rotation from the "broker". Both subscribers' onRotate
+  // handlers fire → orch forwards to each agent.
+  broker.broadcastRotation({
+    oauthToken: {
+      accessToken: 'tok-rotated-1',
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    },
+  });
+
   const rotationsFor = sid =>
     (mockGuests.get(sid)?.agentRx ?? []).filter(m => m.type === 'rotate_creds');
   await waitFor(
-    () => sessionIds.every(sid => rotationsFor(sid).length >= 2),
-    3000,
-  );
-
-  for (const sid of sessionIds) {
-    const rotations = rotationsFor(sid);
-    t.true(rotations.length >= 2, `session ${sid} got <2 rotations`);
-    // The two payloads are distinct (n=1 and n=2) and match the
-    // broker policy's sequence.
-    const tokens = rotations.map(m => m.credentials?.oauthToken?.accessToken);
-    t.deepEqual(tokens.slice(0, 2).sort(), [`tok-${sid}-1`, `tok-${sid}-2`]);
-  }
-
-  // After the third tick per session the policy returns null →
-  // no further rotations should ever land, even if we let the
-  // scheduler run longer. Count rotations now, snooze, recount.
-  const beforeNoopCheck = sessionIds.map(sid => rotationsFor(sid).length);
-  await new Promise(r => setTimeout(r, 120));
-  for (const [i, sid] of sessionIds.entries()) {
-    t.is(
-      rotationsFor(sid).length,
-      beforeNoopCheck[i],
-      `session ${sid} kept rotating after policy noop`,
-    );
-  }
-});
-
-test('e2e: rotateCreds pushes a fresh payload to the runtime-agent', async t => {
-  // RotateCreds round-trip — README M3 [~] currently calls out that
-  // the runtime-agent handler is wired but the orchestrator never
-  // sends. This proves the wire path itself works when the broker is
-  // configured to actually rotate: `orch.rotateCreds(sessionId)` →
-  // `broker.rotateIfNeeded` → `link.send({type: 'rotate_creds', ...})`
-  // → mock guest receives the message on agent.sock.
-  const dir = await mkdtemp(path.join(os.tmpdir(), 'orch-rotate-'));
-  t.teardown(() => rm(dir, { recursive: true, force: true }));
-
-  const apiSock = path.join(dir, 'api.sock');
-  const sessionsDir = path.join(dir, 'sessions');
-
-  /** @type {ReturnType<typeof makeMockGuest> | null} */
-  let mockGuest = null;
-  const mockSpawn = ({ record }) => {
-    const guest = makeMockGuest({ record });
-    mockGuest = guest;
-    setTimeout(() => guest.run().catch(() => {}), 5);
-    const child = /** @type {any} */ ({ pid: 99998, killed: false });
-    let resolveExit;
-    const exitCode = new Promise(r => {
-      resolveExit = r;
-    });
-    return {
-      child,
-      exitCode,
-      kill: () => {
-        guest.stop();
-        resolveExit?.(0);
-      },
-    };
-  };
-
-  // Broker that issues a stub key, then returns a fresh payload on
-  // the first `rotateIfNeeded` call and `null` thereafter.
-  let rotationsServed = 0;
-  const rotatingBroker = {
-    async issue(_sessionId) {
-      return { apiKey: 'sk-original' };
-    },
-    async revoke(_sessionId) {
-      // unused in the rotation round-trip test
-    },
-    async rotateIfNeeded(_sessionId) {
-      rotationsServed += 1;
-      return rotationsServed === 1 ? { apiKey: 'sk-rotated-A' } : null;
-    },
-  };
-
-  const orch = await start({
-    config: {
-      socketPath: apiSock,
-      imageDir: '/unused',
-      sessionDir: sessionsDir,
-      brokerSocketPath: '/unused',
-      defaults: { arch: 'x86_64', vcpus: 2, memMB: 2048 },
-      bootDeadlineMs: 10000,
-      heartbeatTimeoutMs: 60000,
-    },
-    networkController: makeStubNetwork(),
-    brokerClient: /** @type {any} */ (rotatingBroker),
-    spawnVm: mockSpawn,
-  });
-  t.teardown(() => orch.stop());
-
-  const create = await httpRequest(apiSock, 'POST', '/v1/sessions', {
-    network: 'none',
-    attachMode: 'none',
-  });
-  t.is(create.status, 200);
-  const session = create.body;
-
-  const ready = await httpRequest(
-    apiSock,
-    'POST',
-    `/v1/sessions/${session.id}/ready`,
-  );
-  t.is(ready.status, 204);
-
-  // Wait for the mock guest's agent socket to land + Ready to be sent.
-  await waitFor(
-    () => (mockGuest?.agentRx ?? []).some(_m => true) || true,
-    3000,
-  );
-
-  // 1) First rotate call — broker returns a fresh payload → orch should
-  //    push `{type: 'rotate_creds', credentials: { apiKey: ... }}` over
-  //    the agent socket. Returns `true` because a rotation was sent.
-  const rotated = await orch.rotateCreds(session.id);
-  t.true(rotated);
-
-  await waitFor(
     () =>
-      (mockGuest?.agentRx ?? []).some(
-        m =>
-          m.type === 'rotate_creds' && m.credentials?.apiKey === 'sk-rotated-A',
+      sessionIds.every(sid =>
+        rotationsFor(sid).some(
+          m => m.credentials?.oauthToken?.accessToken === 'tok-rotated-1',
+        ),
       ),
     3000,
   );
 
-  // 2) Second call — broker returns null → orch returns false, no
-  //    additional rotate_creds reaches the guest.
-  const rxBefore = (mockGuest?.agentRx ?? []).filter(
-    m => m.type === 'rotate_creds',
-  ).length;
-  const rotated2 = await orch.rotateCreds(session.id);
-  t.false(rotated2);
-  const rxAfter = (mockGuest?.agentRx ?? []).filter(
-    m => m.type === 'rotate_creds',
-  ).length;
-  t.is(rxAfter, rxBefore);
+  // Push a second rotation — same fan-out behaviour.
+  broker.broadcastRotation({
+    oauthToken: {
+      accessToken: 'tok-rotated-2',
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    },
+  });
+  await waitFor(
+    () =>
+      sessionIds.every(sid =>
+        rotationsFor(sid).some(
+          m => m.credentials?.oauthToken?.accessToken === 'tok-rotated-2',
+        ),
+      ),
+    3000,
+  );
 
-  // 3) Rotate against an unknown session — no agent link → returns
-  //    false without throwing.
-  const rotatedUnknown = await orch.rotateCreds('does-not-exist');
-  t.false(rotatedUnknown);
+  // Terminate one session — its subscription must close.
+  await httpRequest(apiSock, 'DELETE', `/v1/sessions/${sessionIds[0]}`);
+  await waitFor(() => broker.openCount() === 1, 3000);
 
-  await httpRequest(apiSock, 'DELETE', `/v1/sessions/${session.id}`);
+  // A subsequent broadcast reaches only the surviving session.
+  const beforeFinal = sessionIds.map(sid => rotationsFor(sid).length);
+  broker.broadcastRotation({
+    oauthToken: {
+      accessToken: 'tok-final',
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    },
+  });
+  await waitFor(
+    () =>
+      rotationsFor(sessionIds[1]).some(
+        m => m.credentials?.oauthToken?.accessToken === 'tok-final',
+      ),
+    3000,
+  );
+  // sessionIds[0] is terminated; its count must NOT have grown.
+  t.is(
+    rotationsFor(sessionIds[0]).length,
+    beforeFinal[0],
+    'terminated session received a rotation after its subscription closed',
+  );
 });

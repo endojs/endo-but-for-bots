@@ -1,11 +1,7 @@
 // @ts-check
-/* global globalThis */
+/* global globalThis, setTimeout, clearTimeout */
 /**
- * @import {
- *   BrokerRequest,
- *   BrokerResponse,
- *   Credentials,
- * } from '../../protocol.types.js'
+ * @import { Credentials } from '../../protocol.types.js'
  */
 
 import net from 'node:net';
@@ -14,71 +10,212 @@ import { readFile, unlink, chmod } from 'node:fs/promises';
 /**
  * Credential broker daemon (DESIGN.md §5.5).
  *
- * Loads the long-lived Anthropic credential at startup, then accepts
- * newline-delimited JSON requests over a UDS. Per-session state is
- * tracked in memory only.
+ * **Subscribe/push protocol.** The broker is the source of truth
+ * for credential expiries and refresh policy. Consumers (the
+ * orchestrator, one connection per session) open a subscription:
  *
- * v1: API key mode. OAuth + preemptive rotation is left as roadmap;
- * to test the wire path *before* a real OAuth refresher lands, the
- * caller may pass `rotatePolicy(sessionId, currentApiKey)` returning
- * `{ apiKey }` (a fresh credentials payload) or `null` (no rotation
- * needed). The default keeps the v1 "never rotate" contract.
+ *   client → broker:  {"type": "subscribe", "sessionId": "..."}
+ *   broker → client:  {"type": "creds", "sessionId": "...",
+ *                      "credentials": <Credentials>}      // immediate
+ *   broker → client:  {"type": "creds", ...}              // on every refresh
+ *   broker → client:  {"type": "error", "sessionId": "...",
+ *                      "message": "..."}                  // refresh failed
+ *   client → broker:  {"type": "unsubscribe", "sessionId": "..."}
+ *
+ * The connection stays open for the lifetime of the subscription.
+ * `subscribe` always immediately yields the current credentials so
+ * a consumer can use the same call to mint a session's BootConfig
+ * AND register for future rotations — no separate `issue` step.
+ *
+ * **API-key mode (default)**: `refresher` is undefined, so the
+ * scheduler never fires and subscribers see exactly one `{type:
+ * 'creds'}` reply for the lifetime of their subscription.
+ *
+ * **OAuth mode**: pass a `refresher() → Promise<Credentials>`
+ * along with `initialCredentials` that carries an `oauthToken`
+ * with an `expiresAt`. The broker schedules `setTimeout` to fire
+ * `refreshWindowMs` before that expiry, calls the refresher, and
+ * broadcasts the new credentials to every active subscription.
+ * Errors during refresh are surfaced as `{type: 'error'}` messages
+ * to subscribers; the broker schedules a retry after
+ * `refreshRetryMs` so a transient IdP outage doesn't permanently
+ * stall rotation.
  *
  * @param {{
  *   socketPath: string,
- *   apiKey: string,
- *   rotatePolicy?: (sessionId: string, currentApiKey: string) => Credentials | null,
+ *   initialCredentials: Credentials,
+ *   refresher?: () => Promise<Credentials>,
+ *   refreshWindowMs?: number,
+ *   refreshRetryMs?: number,
+ *   log?: (level: 'info'|'warn'|'error', msg: string) => void,
  * }} opts
  */
-export const makeBroker = ({ socketPath, apiKey, rotatePolicy }) => {
-  /** @type {Map<string, Credentials>} */
-  const issued = new Map();
-  let currentApiKey = apiKey;
+export const makeBroker = ({
+  socketPath,
+  initialCredentials,
+  refresher,
+  refreshWindowMs = 5 * 60 * 1000,
+  refreshRetryMs = 30 * 1000,
+  log = () => {},
+}) => {
+  /** @type {Credentials} */
+  let current = initialCredentials;
+
+  // Per-session set of subscriber sockets. Most callers (the
+  // orchestrator's per-session subscription) open exactly one
+  // connection per sessionId, but the set tolerates duplicates so
+  // a reconnecting client can layer atop a stale entry.
+  /** @type {Map<string, Set<net.Socket>>} */
+  const subscribers = new Map();
+
+  /** @type {NodeJS.Timeout | null} */
+  let refreshTimer = null;
 
   /**
-   * @param {BrokerRequest} req
-   * @returns {Promise<BrokerResponse>}
+   * Broadcast `current` to every active subscriber.
    */
-  const handle = async req => {
-    switch (req.type) {
-      case 'issue': {
-        /** @type {Credentials} */
-        const creds = harden({ apiKey: currentApiKey });
-        issued.set(req.sessionId, creds);
-        return { type: 'creds', credentials: creds };
-      }
-      case 'revoke': {
-        issued.delete(req.sessionId);
-        return { type: 'ok' };
-      }
-      case 'rotate_if_needed': {
-        const next = rotatePolicy
-          ? rotatePolicy(req.sessionId, currentApiKey)
-          : null;
-        if (next === null || next === undefined) {
-          return { type: 'noop' };
+  const broadcast = () => {
+    for (const [sid, conns] of subscribers.entries()) {
+      const line = `${JSON.stringify({
+        type: 'creds',
+        sessionId: sid,
+        credentials: current,
+      })}\n`;
+      for (const conn of conns) {
+        // Best-effort. Per-connection error handlers drop dead
+        // sockets out of the set; we don't crash the broker on a
+        // disconnected subscriber.
+        try {
+          conn.write(line);
+        } catch {
+          // ignore
         }
-        if (
-          typeof next !== 'object' ||
-          typeof next.apiKey !== 'string' ||
-          next.apiKey.length === 0
-        ) {
-          return {
+      }
+    }
+  };
+
+  const broadcastError = msg => {
+    for (const [sid, conns] of subscribers.entries()) {
+      const line = `${JSON.stringify({
+        type: 'error',
+        sessionId: sid,
+        message: msg,
+      })}\n`;
+      for (const conn of conns) {
+        try {
+          conn.write(line);
+        } catch {
+          // ignore
+        }
+      }
+    }
+  };
+
+  /** Extract an `expiresAt` epoch-ms from `current`, or null. */
+  const extractExpiry = () => {
+    if (!current.oauthToken?.expiresAt) return null;
+    const t = Date.parse(current.oauthToken.expiresAt);
+    return Number.isFinite(t) ? t : null;
+  };
+
+  // Floor on the scheduled delay. Prevents a tight loop if the
+  // operator misconfigures `refreshWindowMs > tokenLifetime` (the
+  // resulting `delay` would be 0, each refresh would immediately
+  // schedule another at 0, burning CPU). 50 ms is short enough to
+  // keep test fixtures snappy and long enough to bound runaway.
+  const MIN_REFRESH_DELAY_MS = 50;
+
+  const scheduleNextRefresh = () => {
+    if (refreshTimer) {
+      clearTimeout(refreshTimer);
+      refreshTimer = null;
+    }
+    if (!refresher) return; // api-key mode: no rotation
+    const expiry = extractExpiry();
+    if (expiry === null) return; // no expiry → no schedule
+    const delay = Math.max(
+      MIN_REFRESH_DELAY_MS,
+      expiry - Date.now() - refreshWindowMs,
+    );
+    refreshTimer = setTimeout(async () => {
+      refreshTimer = null;
+      try {
+        const next = await refresher();
+        if (next && typeof next === 'object') {
+          current = next;
+          broadcast();
+        }
+      } catch (e) {
+        const msg = /** @type {Error} */ (e).message;
+        log('error', `refresh failed: ${msg}`);
+        broadcastError(`refresh failed: ${msg}`);
+        // Retry on a shorter interval rather than waiting for the
+        // (now-likely-stale) expiry to come around.
+        refreshTimer = setTimeout(() => {
+          refreshTimer = null;
+          scheduleNextRefresh();
+        }, refreshRetryMs);
+        if (typeof refreshTimer.unref === 'function') refreshTimer.unref();
+        return;
+      }
+      scheduleNextRefresh();
+    }, delay);
+    if (typeof refreshTimer.unref === 'function') refreshTimer.unref();
+  };
+
+  // Kick off the first refresh schedule from `initialCredentials`.
+  scheduleNextRefresh();
+
+  const handleMessage = (conn, msg) => {
+    if (msg.type === 'subscribe') {
+      const sid = msg.sessionId;
+      if (typeof sid !== 'string' || sid.length === 0) {
+        conn.write(
+          `${JSON.stringify({
             type: 'error',
-            message: 'rotatePolicy must return { apiKey } or null',
-          };
-        }
-        currentApiKey = next.apiKey;
-        const creds = harden({ apiKey: currentApiKey });
-        if (issued.has(req.sessionId)) issued.set(req.sessionId, creds);
-        return { type: 'creds', credentials: creds };
+            message: 'subscribe: sessionId required',
+          })}\n`,
+        );
+        return;
       }
-      default: {
-        return {
-          type: 'error',
-          message: `unknown broker request type: ${/** @type {any} */ (req).type}`,
-        };
+      let set = subscribers.get(sid);
+      if (!set) {
+        set = new Set();
+        subscribers.set(sid, set);
       }
+      set.add(conn);
+      // Immediately deliver the current credentials.
+      conn.write(
+        `${JSON.stringify({
+          type: 'creds',
+          sessionId: sid,
+          credentials: current,
+        })}\n`,
+      );
+      return;
+    }
+    if (msg.type === 'unsubscribe') {
+      const sid = msg.sessionId;
+      const set = subscribers.get(sid);
+      if (set) {
+        set.delete(conn);
+        if (set.size === 0) subscribers.delete(sid);
+      }
+      return;
+    }
+    conn.write(
+      `${JSON.stringify({
+        type: 'error',
+        message: `unknown broker request type: ${msg.type}`,
+      })}\n`,
+    );
+  };
+
+  /** Drop `conn` from every subscriber set. */
+  const removeConn = conn => {
+    for (const [sid, set] of subscribers.entries()) {
+      set.delete(conn);
+      if (set.size === 0) subscribers.delete(sid);
     }
   };
 
@@ -87,64 +224,38 @@ export const makeBroker = ({ socketPath, apiKey, rotatePolicy }) => {
       await unlink(socketPath).catch(() => {});
       const server = net.createServer(conn => {
         let buf = '';
-        // Track whether the socket is still writable. A peer hangup
-        // mid-reply (EPIPE / ECONNRESET) raises `'error'` on the
-        // socket; without a handler, the broker process would die.
-        // We also stop draining the queue's writes after `closed` so
-        // a long-running policy callback can't keep trying to write
-        // to a dead socket.
-        let closed = false;
+        let connClosed = false;
+
         conn.on('error', () => {
-          // Peer-side reset on teardown is normal; we just stop
-          // serving this connection.
-          closed = true;
+          connClosed = true;
+          removeConn(conn);
         });
         conn.on('close', () => {
-          closed = true;
+          connClosed = true;
+          removeConn(conn);
         });
 
-        // Per-connection FIFO queue. Without this each newline-
-        // delimited request would run on its own promise chain and
-        // a slow `handle()` (e.g. a future async OAuth refresh)
-        // could let later replies overtake earlier ones, breaking
-        // the request/response ordering most clients rely on.
-        // (Copilot review round 3 #15.) Serialize by chaining each
-        // handler off the previous one's settlement.
-        /** @type {Promise<unknown>} */
-        let queue = Promise.resolve();
-        const safeWrite = line => {
-          if (closed) return;
-          // `conn.write` can fire the socket's 'error' synchronously
-          // on a dead pipe; the handler above flips `closed` and the
-          // EPIPE won't reach the process.
-          conn.write(line);
-        };
-        const enqueue = (/** @type {string} */ line) => {
-          queue = queue.then(() =>
-            // Parse inside the chain so a non-JSON line surfaces via
-            // .catch() rather than killing the `'data'` listener.
-            Promise.resolve()
-              .then(() =>
-                handle(/** @type {BrokerRequest} */ (JSON.parse(line))),
-              )
-              .then(res => safeWrite(`${JSON.stringify(res)}\n`))
-              .catch(e => {
-                const msg = /** @type {Error} */ (e).message;
-                safeWrite(
-                  `${JSON.stringify({ type: 'error', message: msg })}\n`,
-                );
-              }),
-          );
-        };
         conn.on('data', chunk => {
-          if (closed) return;
+          if (connClosed) return;
           buf += chunk.toString('utf8');
           for (;;) {
             const i = buf.indexOf('\n');
             if (i < 0) break;
             const line = buf.slice(0, i);
             buf = buf.slice(i + 1);
-            enqueue(line);
+            try {
+              const msg = JSON.parse(line);
+              handleMessage(conn, msg);
+            } catch (e) {
+              const m = /** @type {Error} */ (e).message;
+              try {
+                conn.write(
+                  `${JSON.stringify({ type: 'error', message: m })}\n`,
+                );
+              } catch {
+                // peer gone; close handler will clean up
+              }
+            }
           }
         });
       });
@@ -155,6 +266,18 @@ export const makeBroker = ({ socketPath, apiKey, rotatePolicy }) => {
       // 0600 — only the orchestrator UID may connect.
       await chmod(socketPath, 0o600);
       return server;
+    },
+    /** Force a refresh now (test / operator hook). */
+    async forceRefresh() {
+      if (!refresher) return false;
+      const next = await refresher();
+      if (next && typeof next === 'object') {
+        current = next;
+        broadcast();
+        scheduleNextRefresh();
+        return true;
+      }
+      return false;
     },
   });
 };

@@ -259,15 +259,29 @@ const makeStubNetwork = () => ({
   },
 });
 
+/**
+ * Stub broker client for the orchestrator's per-session credential
+ * subscription. The new broker protocol (DESIGN.md §5.5) is
+ * subscribe/push: `subscribe(sessionId)` resolves to a handle with
+ * `initial` credentials + `onRotate` / `onError` / `close`.
+ * No-rotation stub — these tests don't exercise the refresh path;
+ * they just need the orchestrator to obtain initial creds for the
+ * BootConfig and clean up the subscription on terminate.
+ */
 const makeStubBroker = () => ({
-  async issue() {
-    return { apiKey: 'sk-test-12345' };
-  },
-  async revoke() {
-    // no-op
-  },
-  async rotateIfNeeded() {
-    return null;
+  async subscribe(_sessionId) {
+    return harden({
+      initial: { apiKey: 'sk-test-12345' },
+      onRotate: () => {
+        // unused
+      },
+      onError: () => {
+        // unused
+      },
+      async close() {
+        // unused
+      },
+    });
   },
 });
 

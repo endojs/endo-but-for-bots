@@ -1,10 +1,7 @@
 // @ts-check
+/* global setTimeout */
 /**
- * @import {
- *   BrokerRequest,
- *   BrokerResponse,
- *   Credentials,
- * } from '../../protocol.types.js'
+ * @import { Credentials } from '../../protocol.types.js'
  */
 
 import net from 'node:net';
@@ -12,57 +9,127 @@ import net from 'node:net';
 import { makePromiseKit } from '@endo/promise-kit';
 
 /**
- * Send one request to the broker and resolve to its response.
+ * Subscription handle returned by `subscribe(sessionId)`.
  *
- * Connections are short-lived. Concurrency is bounded by the operating
- * system's UDS backlog; the orchestrator should not have hundreds of
- * outstanding broker calls.
+ * `initial` — Credentials the broker sent in its first reply.
+ *   Use these for BootConfig.
+ * `onRotate(handler)` — register a callback for every subsequent
+ *   credentials push. Handlers receive each fresh `Credentials`
+ *   payload as the broker rotates.
+ * `onError(handler)` — register a callback for broker error events
+ *   on this subscription (e.g. IdP refresh failures).
+ * `close()` — send unsubscribe + close the underlying UDS socket.
+ *   Idempotent.
+ *
+ * @typedef {object} CredentialSubscription
+ * @property {Credentials} initial
+ * @property {(handler: (creds: Credentials) => void) => void} onRotate
+ * @property {(handler: (message: string) => void) => void} onError
+ * @property {() => Promise<void>} close
+ */
+
+/**
+ * Open a per-session subscription to the broker. Resolves once the
+ * broker has delivered the initial credentials; subsequent
+ * rotations arrive via `onRotate`.
  *
  * @param {string} socketPath
- * @param {BrokerRequest} req
- * @returns {Promise<BrokerResponse>}
+ * @param {string} sessionId
+ * @returns {Promise<CredentialSubscription>}
  */
-const callBroker = (socketPath, req) => {
-  const { promise, resolve, reject } = makePromiseKit();
+const subscribe = (socketPath, sessionId) => {
+  const initialKit = makePromiseKit();
+  /** @type {((creds: Credentials) => void)[]} */
+  const rotateHandlers = [];
+  /** @type {((message: string) => void)[]} */
+  const errorHandlers = [];
+
   const conn = net.createConnection(socketPath);
   let buf = '';
-  let settled = false;
+  let receivedInitial = false;
+  let closed = false;
 
-  const settle = (
-    /** @type {(value: BrokerResponse) => void} */ res,
-    /** @type {BrokerResponse} */ value,
-  ) => {
-    if (settled) return;
-    settled = true;
-    res(value);
-    conn.end();
-  };
-
-  conn.once('error', reject);
+  conn.once('error', e => {
+    if (!receivedInitial) initialKit.reject(e);
+    for (const h of errorHandlers) h(/** @type {Error} */ (e).message);
+  });
+  conn.once('close', () => {
+    if (!receivedInitial) {
+      initialKit.reject(
+        new Error('broker connection closed before initial credentials'),
+      );
+    }
+    closed = true;
+  });
   conn.on('data', chunk => {
     buf += chunk.toString('utf8');
-    const i = buf.indexOf('\n');
-    if (i < 0) return;
-    try {
-      const res = /** @type {BrokerResponse} */ (JSON.parse(buf.slice(0, i)));
-      settle(resolve, res);
-    } catch (e) {
-      if (!settled) {
-        settled = true;
-        reject(e);
+    for (;;) {
+      const i = buf.indexOf('\n');
+      if (i < 0) break;
+      const line = buf.slice(0, i);
+      buf = buf.slice(i + 1);
+      let msg;
+      try {
+        msg = JSON.parse(line);
+      } catch {
+        // Broker shouldn't emit non-JSON; if it does, treat as
+        // protocol violation and stop.
+        if (!receivedInitial) {
+          initialKit.reject(new Error(`broker emitted non-JSON: ${line}`));
+        }
         conn.destroy();
+        return;
+      }
+      if (msg.type === 'creds' && msg.credentials) {
+        if (!receivedInitial) {
+          receivedInitial = true;
+          initialKit.resolve(msg.credentials);
+        } else {
+          for (const h of rotateHandlers) h(msg.credentials);
+        }
+      } else if (msg.type === 'error') {
+        if (!receivedInitial) {
+          initialKit.reject(new Error(msg.message ?? 'broker error'));
+          conn.destroy();
+          return;
+        }
+        for (const h of errorHandlers) h(msg.message ?? 'broker error');
       }
     }
   });
-  conn.once('close', () => {
-    if (!settled) {
-      settled = true;
-      reject(new Error('Broker connection closed before response'));
-    }
-  });
 
-  conn.write(`${JSON.stringify(req)}\n`);
-  return /** @type {Promise<BrokerResponse>} */ (promise);
+  conn.write(`${JSON.stringify({ type: 'subscribe', sessionId })}\n`);
+
+  return /** @type {Promise<Credentials>} */ (initialKit.promise).then(
+    initial =>
+      harden({
+        initial,
+        onRotate(h) {
+          rotateHandlers.push(h);
+        },
+        onError(h) {
+          errorHandlers.push(h);
+        },
+        async close() {
+          if (closed) return;
+          closed = true;
+          try {
+            conn.write(
+              `${JSON.stringify({ type: 'unsubscribe', sessionId })}\n`,
+            );
+          } catch {
+            // socket already gone
+          }
+          await new Promise(resolve => {
+            conn.once('close', resolve);
+            conn.end();
+            // Belt and suspenders: ensure we move on even if close
+            // doesn't fire quickly.
+            setTimeout(() => resolve(undefined), 50);
+          });
+        },
+      }),
+  );
 };
 
 /**
@@ -72,42 +139,10 @@ export const makeBrokerClient = ({ socketPath }) => {
   return harden({
     /**
      * @param {string} sessionId
-     * @returns {Promise<Credentials>}
+     * @returns {Promise<CredentialSubscription>}
      */
-    async issue(sessionId) {
-      const res = await callBroker(socketPath, { type: 'issue', sessionId });
-      if (res.type !== 'creds') {
-        const detail =
-          'message' in res && res.message ? ` (${res.message})` : '';
-        throw new Error(
-          `broker issue: unexpected response ${res.type}${detail}`,
-        );
-      }
-      return res.credentials;
-    },
-
-    /**
-     * @param {string} sessionId
-     */
-    async revoke(sessionId) {
-      const res = await callBroker(socketPath, { type: 'revoke', sessionId });
-      if (res.type !== 'ok') {
-        throw new Error(`broker revoke: unexpected response ${res.type}`);
-      }
-    },
-
-    /**
-     * @param {string} sessionId
-     * @returns {Promise<Credentials | null>}
-     */
-    async rotateIfNeeded(sessionId) {
-      const res = await callBroker(socketPath, {
-        type: 'rotate_if_needed',
-        sessionId,
-      });
-      if (res.type === 'noop') return null;
-      if (res.type === 'creds') return res.credentials;
-      throw new Error(`broker rotate: unexpected response ${res.type}`);
+    subscribe(sessionId) {
+      return subscribe(socketPath, sessionId);
     },
   });
 };

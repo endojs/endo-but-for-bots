@@ -77,18 +77,20 @@ shipped through R3:
   `PreemptiveRotate`.
 - [x] `BootConfig.credentials` plumbed from broker through bootstrap
   to `~/.claude/.credentials.json` in guest.
-- [x] `RotateCreds` push from orchestrator → runtime-agent.
-  Per-session sweep runs every
-  `CLAUDE_ORCH_ROTATION_INTERVAL_MS` (default off; flip on once
-  the broker is wired with a real `rotatePolicy`). The broker's
-  default policy is still a noop — for api-key mode that's
-  correct (no shorter-term form exists), and operators wiring
-  OAuth replace it via the extension point in
-  `bin/claude-broker`. Wire path proven end-to-end by
-  `e2e-smoke.test.js`'s "rotation scheduler ticks" case (sets
-  `rotationIntervalMs: 25`; both mock guests observe their two
-  rotated payloads). DESIGN.md §5.5 walks through the
-  short-term-only injection model.
+- [x] `RotateCreds` push from orchestrator → runtime-agent. The
+  broker drives the schedule (subscribe / push protocol; broker
+  holds a `setTimeout` keyed on the access-token `expiresAt`).
+  The orchestrator opens a subscription per session in
+  `markReady`, uses the first push as the BootConfig credentials,
+  and relays every subsequent push to the agent. Default
+  api-key mode never rotates (no shorter-term form to derive);
+  OAuth mode is real — set the `CLAUDE_ORCH_BROKER_OAUTH_*` env
+  vars on the broker bin and the refresher in `src/broker/oauth.js`
+  handles RFC 6749 §6 refresh-token grant. DESIGN.md §5.5 walks
+  through the short-term-only injection model. Wire path proven
+  end-to-end by `e2e-smoke.test.js`'s "broker pushes rotation"
+  case (two parallel sessions, broker broadcasts two distinct
+  OAuth payloads, orch relays each one to the right agent).
 - [x] `initialPrompt` plumbing (`src/main.js`).
 - [ ] Live Anthropic API end-to-end (today's smoke-boot uses a stub
   prompt).
@@ -208,20 +210,19 @@ trait surface and are deferred:
 
 **End-to-end / fixture tests — `packages/claude-orch/test/`**:
 
-- [x] `RotateCreds` round-trip — both the on-demand path
-  (`orch.rotateCreds(sessionId)`) and the scheduled sweep
-  (`rotateAllSessions` driven by `setInterval` at
-  `rotationIntervalMs`). The scheduler test in
-  `e2e-smoke.test.js` runs two parallel sessions, observes both
-  mock guests receive their two distinct OAuth-shaped payloads,
-  then confirms the broker's noop turns off the per-session
-  rotations.
-- [x] Broker `rotate_if_needed` fixture: new `broker.test.js`
-  (7 tests) wires the broker over its UDS, exercises issue +
-  revoke happy paths, pins the noop default, drives a non-noop
-  rotation via an injected `rotatePolicy`, and includes the
-  malformed-JSON survival case (kumavis #1) and a
-  UDS-is-0o600 pinning.
+- [x] `RotateCreds` round-trip — broker subscribe/push end-to-end.
+  `e2e-smoke.test.js`'s "broker pushes rotation" case runs two
+  parallel sessions, simulates two broker broadcasts via the
+  stub's `broadcastRotation`, and asserts both mock guests
+  receive the OAuth-shaped payloads (plus subscription cleanup
+  on session terminate).
+- [x] Broker subscribe / push fixture: `broker.test.js` (11
+  tests) wires the broker over its real UDS, exercises the
+  subscribe-yields-current path, api-key quiescence, OAuth
+  refresh fan-out via `forceRefresh`, refresher-failure
+  propagation, unsubscribe semantics, malformed-JSON survival,
+  UDS-0o600 pinning, and the full RFC 6749 §6 refresh-token
+  grant flow against an injected fetch.
 - [x] `ClaudeClient.interrupt()` shape pin: new
   `claude-client.test.js` (3 tests).
 

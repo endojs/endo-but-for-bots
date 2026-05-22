@@ -1,4 +1,5 @@
 // @ts-nocheck
+/* global setTimeout */
 /* eslint-disable import/order */
 
 import '@endo/init';
@@ -9,194 +10,363 @@ import { mkdtemp, rm, stat } from 'node:fs/promises';
 import os from 'node:os';
 
 import { makeBroker } from '../src/broker/main.js';
+import { makeOAuthRefresher } from '../src/broker/oauth.js';
 
 /**
- * Drive a broker over its UDS the same way the orchestrator does.
- * Returns a request fn that round-trips a single JSON line and
- * resolves with the parsed reply, plus a `close` for teardown.
+ * Open a UDS subscription and yield an interface that lets the test
+ * inject requests + read events as they arrive. Mirrors what
+ * `broker-client` does but with explicit pump-the-queue control so
+ * tests can assert about ordering.
  */
-const connectBroker = socketPath =>
-  new Promise((resolve, reject) => {
+const openSubscriber = socketPath =>
+  new Promise(resolve => {
     const conn = net.createConnection(socketPath);
-    conn.once('error', reject);
-    conn.once('connect', () => {
-      let buf = '';
-      /** @type {((res: any) => void) | null} */
-      let resolveNext = null;
-      conn.on('data', chunk => {
-        buf += chunk.toString('utf8');
-        for (;;) {
-          const i = buf.indexOf('\n');
-          if (i < 0) break;
-          const line = buf.slice(0, i);
-          buf = buf.slice(i + 1);
-          const reply = JSON.parse(line);
-          if (resolveNext) {
-            const r = resolveNext;
-            resolveNext = null;
-            r(reply);
-          }
-        }
-      });
+    let buf = '';
+    /** @type {object[]} */
+    const events = [];
+    const settlers = [];
+    const settle = () => {
+      while (settlers.length > 0 && events.length > 0) {
+        const r = settlers.shift();
+        r(events.shift());
+      }
+    };
+    conn.on('data', chunk => {
+      buf += chunk.toString('utf8');
+      for (;;) {
+        const i = buf.indexOf('\n');
+        if (i < 0) break;
+        events.push(JSON.parse(buf.slice(0, i)));
+        buf = buf.slice(i + 1);
+      }
+      settle();
+    });
+    conn.once('connect', () =>
       resolve({
-        request: req =>
+        send: msg => conn.write(`${JSON.stringify(msg)}\n`),
+        next: () =>
           new Promise(r => {
-            resolveNext = r;
-            conn.write(`${JSON.stringify(req)}\n`);
+            settlers.push(r);
+            settle();
           }),
         close: () => conn.destroy(),
-      });
-    });
+      }),
+    );
   });
 
 const setupBroker = async (t, opts = {}) => {
-  const dir = await mkdtemp(path.join(os.tmpdir(), 'broker-test-'));
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'broker-sub-'));
   t.teardown(() => rm(dir, { recursive: true, force: true }));
   const socketPath = path.join(dir, 'broker.sock');
   const broker = makeBroker({
     socketPath,
-    apiKey: 'sk-initial',
-    ...opts,
+    initialCredentials: opts.initialCredentials ?? { apiKey: 'sk-initial' },
+    refresher: opts.refresher,
+    refreshWindowMs: opts.refreshWindowMs,
+    log: opts.log,
   });
   const server = await broker.listen();
   t.teardown(() => new Promise(r => server.close(() => r(undefined))));
-  return { socketPath, server };
+  return { socketPath, broker, server };
 };
 
-test('broker: issue returns the stored apiKey and tracks per-session state', async t => {
+test('subscribe: immediately yields current credentials', async t => {
   const { socketPath } = await setupBroker(t);
-  const client = await connectBroker(socketPath);
-  t.teardown(() => client.close());
+  const sub = await openSubscriber(socketPath);
+  t.teardown(() => sub.close());
 
-  const reply = await client.request({ type: 'issue', sessionId: 'sess-A' });
-  t.is(reply.type, 'creds');
-  t.is(reply.credentials.apiKey, 'sk-initial');
+  sub.send({ type: 'subscribe', sessionId: 'sess-A' });
+  const first = await sub.next();
 
-  // Issue against a different session — same key (single-credential v1
-  // broker), distinct tracking.
-  const reply2 = await client.request({ type: 'issue', sessionId: 'sess-B' });
-  t.is(reply2.type, 'creds');
-  t.is(reply2.credentials.apiKey, 'sk-initial');
+  t.is(first.type, 'creds');
+  t.is(first.sessionId, 'sess-A');
+  t.is(first.credentials.apiKey, 'sk-initial');
 });
 
-test('broker: revoke drops per-session state without affecting other sessions', async t => {
+test('api-key mode: no rotation timer; subscribers stay quiet', async t => {
   const { socketPath } = await setupBroker(t);
-  const client = await connectBroker(socketPath);
-  t.teardown(() => client.close());
+  const sub = await openSubscriber(socketPath);
+  t.teardown(() => sub.close());
 
-  await client.request({ type: 'issue', sessionId: 'sess-A' });
-  await client.request({ type: 'issue', sessionId: 'sess-B' });
+  sub.send({ type: 'subscribe', sessionId: 'sess-A' });
+  await sub.next(); // initial
 
-  const revoke = await client.request({ type: 'revoke', sessionId: 'sess-A' });
-  t.is(revoke.type, 'ok');
-
-  // sess-B can still rotate-or-be-reissued because its entry remains.
-  const reissue = await client.request({ type: 'issue', sessionId: 'sess-B' });
-  t.is(reissue.type, 'creds');
+  // No refresher means no further pushes ever. We can't prove a
+  // negative directly; we wait a beat and assert the queue is empty
+  // by racing next() against a timeout.
+  const result = await Promise.race([
+    sub.next().then(m => ({ got: m })),
+    new Promise(r => setTimeout(() => r({ got: null }), 100)),
+  ]);
+  t.is(result.got, null, 'no rotation events should arrive in api-key mode');
 });
 
-test('broker: rotate_if_needed is a noop by default (pins v1 contract)', async t => {
-  // Without a `rotatePolicy`, the broker preserves the documented v1
-  // "API-key mode never rotates" behaviour. The README M3 status row
-  // marks this `[~]` exactly because this is the noop that needs to
-  // become a real rotation in v2.
-  const { socketPath } = await setupBroker(t);
-  const client = await connectBroker(socketPath);
-  t.teardown(() => client.close());
-
-  await client.request({ type: 'issue', sessionId: 'sess-A' });
-  const reply = await client.request({
-    type: 'rotate_if_needed',
-    sessionId: 'sess-A',
-  });
-  t.is(reply.type, 'noop');
-});
-
-test('broker: rotate_if_needed honours an injected rotatePolicy', async t => {
-  // Inject a deterministic rotator and prove the broker:
-  //  1. returns the new credentials on the rotation request,
-  //  2. updates its in-memory credentials so a subsequent `issue` on a
-  //     different session sees the rotated key (the broker is a single-
-  //     credential store; rotation replaces the global current key),
-  //  3. refreshes the per-session entry for an already-issued session.
+test('refresher push: forced refresh fans out to every subscriber', async t => {
+  // The autoschedule path is exercised by setting expiresAt in the
+  // past — but that races with subscribe in tests. Here we use a
+  // far-future expiry so the scheduler stays quiet, and drive
+  // rotations with `broker.forceRefresh()` for deterministic
+  // ordering.
   let nthCall = 0;
-  const rotatePolicy = (_sessionId, _current) => {
+  const refresher = async () => {
     nthCall += 1;
-    return nthCall === 1 ? { apiKey: 'sk-rotated-1' } : null;
+    return {
+      oauthToken: {
+        accessToken: `tok-${nthCall}`,
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      },
+    };
   };
-  const { socketPath } = await setupBroker(t, { rotatePolicy });
-  const client = await connectBroker(socketPath);
-  t.teardown(() => client.close());
-
-  await client.request({ type: 'issue', sessionId: 'sess-A' });
-  const rot = await client.request({
-    type: 'rotate_if_needed',
-    sessionId: 'sess-A',
+  const { socketPath, broker } = await setupBroker(t, {
+    initialCredentials: {
+      oauthToken: {
+        accessToken: 'tok-initial',
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      },
+    },
+    refresher,
   });
-  t.is(rot.type, 'creds');
-  t.is(rot.credentials.apiKey, 'sk-rotated-1');
 
-  // The current key updated: a fresh issue on a new session sees it.
-  const issuedB = await client.request({
-    type: 'issue',
-    sessionId: 'sess-B',
+  const subA = await openSubscriber(socketPath);
+  const subB = await openSubscriber(socketPath);
+  t.teardown(() => {
+    subA.close();
+    subB.close();
   });
-  t.is(issuedB.credentials.apiKey, 'sk-rotated-1');
 
-  // Second rotation call returns null → broker reports noop.
-  const noop = await client.request({
-    type: 'rotate_if_needed',
-    sessionId: 'sess-B',
-  });
-  t.is(noop.type, 'noop');
+  subA.send({ type: 'subscribe', sessionId: 'sess-A' });
+  subB.send({ type: 'subscribe', sessionId: 'sess-B' });
+
+  const initA = await subA.next();
+  const initB = await subB.next();
+  t.is(initA.credentials.oauthToken.accessToken, 'tok-initial');
+  t.is(initB.credentials.oauthToken.accessToken, 'tok-initial');
+
+  // Force two rotations. Both subscribers must see them in order.
+  await broker.forceRefresh();
+  await broker.forceRefresh();
+
+  const a1 = await subA.next();
+  const b1 = await subB.next();
+  const a2 = await subA.next();
+  const b2 = await subB.next();
+  t.is(a1.credentials.oauthToken.accessToken, 'tok-1');
+  t.is(b1.credentials.oauthToken.accessToken, 'tok-1');
+  t.is(a2.credentials.oauthToken.accessToken, 'tok-2');
+  t.is(b2.credentials.oauthToken.accessToken, 'tok-2');
 });
 
-test('broker: rotatePolicy returning a non-object yields an error reply', async t => {
-  const rotatePolicy = () => /** @type {any} */ ({ apiKey: '' });
-  const { socketPath } = await setupBroker(t, { rotatePolicy });
-  const client = await connectBroker(socketPath);
-  t.teardown(() => client.close());
-
-  const reply = await client.request({
-    type: 'rotate_if_needed',
-    sessionId: 'sess-A',
+test('refresher failure: forceRefresh propagates the error and leaves state intact', async t => {
+  let nthCall = 0;
+  const refresher = async () => {
+    nthCall += 1;
+    if (nthCall === 1) throw new Error('IdP went away');
+    return {
+      oauthToken: {
+        accessToken: 'tok-recovered',
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      },
+    };
+  };
+  const { socketPath, broker } = await setupBroker(t, {
+    initialCredentials: {
+      oauthToken: {
+        accessToken: 'tok-initial',
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      },
+    },
+    refresher,
   });
-  t.is(reply.type, 'error');
-  t.regex(reply.message, /rotatePolicy/);
+
+  const sub = await openSubscriber(socketPath);
+  t.teardown(() => sub.close());
+
+  sub.send({ type: 'subscribe', sessionId: 'sess-A' });
+  const initial = await sub.next();
+  t.is(initial.credentials.oauthToken.accessToken, 'tok-initial');
+
+  // First forceRefresh: refresher throws. The broker doesn't
+  // broadcast an error from forceRefresh (only the auto-scheduler
+  // path does that), but it must propagate the throw to the caller
+  // and leave `current` unchanged.
+  await t.throwsAsync(() => broker.forceRefresh(), {
+    message: /IdP went away/,
+  });
+
+  // Second forceRefresh: refresher succeeds and the recovered
+  // token reaches subscribers.
+  await broker.forceRefresh();
+  const recovered = await sub.next();
+  t.is(recovered.credentials.oauthToken.accessToken, 'tok-recovered');
 });
 
-test('broker: malformed JSON line keeps the broker alive (no crash)', async t => {
-  // kumavis review #1 — pin the JSON.parse-safety fix. Send a non-JSON
-  // line; expect an `error` reply; subsequent valid requests still work.
-  const { socketPath } = await setupBroker(t);
-  const client = await connectBroker(socketPath);
-  t.teardown(() => client.close());
-
-  // Use a raw write since `client.request` expects JSON-serializable.
-  const reply = await new Promise(resolve => {
-    const conn = net.createConnection(socketPath);
-    let buf = '';
-    conn.on('data', chunk => {
-      buf += chunk.toString('utf8');
-      const i = buf.indexOf('\n');
-      if (i >= 0) {
-        conn.destroy();
-        resolve(JSON.parse(buf.slice(0, i)));
-      }
-    });
-    conn.once('connect', () => conn.write('this-is-not-json\n'));
+test('unsubscribe: removes the connection from the subscriber set', async t => {
+  // After unsubscribe, a subsequent `forceRefresh()` from another
+  // path must not deliver creds to this subscriber.
+  let nthCall = 0;
+  const refresher = async () => {
+    nthCall += 1;
+    return {
+      oauthToken: {
+        accessToken: `tok-${nthCall}`,
+        expiresAt: new Date(Date.now() + 10_000).toISOString(),
+      },
+    };
+  };
+  const { socketPath, broker } = await setupBroker(t, {
+    initialCredentials: {
+      oauthToken: {
+        accessToken: 'tok-0',
+        expiresAt: new Date(Date.now() + 10_000).toISOString(),
+      },
+    },
+    refresher,
   });
-  t.is(reply.type, 'error');
 
-  // Subsequent valid request still succeeds.
-  const issued = await client.request({ type: 'issue', sessionId: 'sess-A' });
-  t.is(issued.type, 'creds');
+  const sub = await openSubscriber(socketPath);
+  t.teardown(() => sub.close());
+
+  sub.send({ type: 'subscribe', sessionId: 'sess-A' });
+  const initial = await sub.next();
+  t.is(initial.type, 'creds');
+
+  sub.send({ type: 'unsubscribe', sessionId: 'sess-A' });
+  // Give the broker a tick to process the unsubscribe.
+  await new Promise(r => setTimeout(r, 20));
+
+  await broker.forceRefresh();
+  // The subscriber should NOT receive a push.
+  const stale = await Promise.race([
+    sub.next().then(m => ({ got: m })),
+    new Promise(r => setTimeout(() => r({ got: null }), 100)),
+  ]);
+  t.is(stale.got, null, 'unsubscribed connection received a stale push');
 });
 
-test('broker: UDS is bound 0600', async t => {
+test('UDS is bound 0600', async t => {
   const { socketPath } = await setupBroker(t);
   const info = await stat(socketPath);
   // eslint-disable-next-line no-bitwise
   const mode = info.mode & 0o777;
   t.is(mode, 0o600);
+});
+
+test('malformed JSON line: error response, broker stays alive', async t => {
+  const { socketPath } = await setupBroker(t);
+  const sub = await openSubscriber(socketPath);
+  t.teardown(() => sub.close());
+
+  // Send a raw non-JSON line bypassing send()'s JSON.stringify.
+  const raw = net.createConnection(socketPath);
+  await new Promise(r => raw.once('connect', r));
+  raw.write('this-is-not-json\n');
+  const errReply = await new Promise(resolve => {
+    let buf = '';
+    raw.on('data', chunk => {
+      buf += chunk.toString('utf8');
+      const i = buf.indexOf('\n');
+      if (i >= 0) {
+        raw.destroy();
+        resolve(JSON.parse(buf.slice(0, i)));
+      }
+    });
+  });
+  t.is(errReply.type, 'error');
+
+  // Original subscriber still works.
+  sub.send({ type: 'subscribe', sessionId: 'sess-A' });
+  const ok = await sub.next();
+  t.is(ok.type, 'creds');
+});
+
+// --- OAuth refresher unit tests ---
+
+test('OAuth refresher: refresh-token grant against an injected fetch', async t => {
+  /** @type {Array<{url: string, body: Record<string,string>}>} */
+  const calls = [];
+  let nthCall = 0;
+  const httpFetch = async req => {
+    calls.push(req);
+    nthCall += 1;
+    return {
+      status: 200,
+      body: {
+        access_token: `at-${nthCall}`,
+        refresh_token: `rt-${nthCall + 1}`,
+        expires_in: 3600,
+        token_type: 'Bearer',
+      },
+    };
+  };
+  const oauth = makeOAuthRefresher({
+    tokenUrl: 'https://idp.example.com/oauth/token',
+    clientId: 'client-1',
+    clientSecret: 'secret',
+    refreshToken: 'rt-initial',
+    scope: ['user:read', 'sandbox:create'],
+    httpFetch,
+  });
+
+  const first = await oauth.refresh();
+  t.is(first.oauthToken.accessToken, 'at-1');
+  t.truthy(Date.parse(first.oauthToken.expiresAt));
+  t.is(calls[0].url, 'https://idp.example.com/oauth/token');
+  t.is(calls[0].body.grant_type, 'refresh_token');
+  t.is(calls[0].body.refresh_token, 'rt-initial');
+  t.is(calls[0].body.client_id, 'client-1');
+  t.is(calls[0].body.client_secret, 'secret');
+  t.is(calls[0].body.scope, 'user:read sandbox:create');
+
+  // Second call uses the rotated refresh token (rt-2 from the
+  // previous response).
+  await oauth.refresh();
+  t.is(calls[1].body.refresh_token, 'rt-2');
+});
+
+test('OAuth refresher: HTTP non-2xx surfaces the IdP body in the thrown error', async t => {
+  const httpFetch = async () => ({
+    status: 401,
+    body: { error: 'invalid_grant', error_description: 'expired refresh' },
+  });
+  const oauth = makeOAuthRefresher({
+    tokenUrl: 'https://idp.example.com/oauth/token',
+    clientId: 'c',
+    refreshToken: 'r',
+    httpFetch,
+  });
+  await t.throwsAsync(() => oauth.refresh(), {
+    message: /OAuth refresh failed: HTTP 401.*invalid_grant/,
+  });
+});
+
+test('OAuth refresher: missing access_token in response throws clearly', async t => {
+  const httpFetch = async () => ({
+    status: 200,
+    body: { expires_in: 3600 }, // missing access_token
+  });
+  const oauth = makeOAuthRefresher({
+    tokenUrl: 'https://idp.example.com/oauth/token',
+    clientId: 'c',
+    refreshToken: 'r',
+    httpFetch,
+  });
+  await t.throwsAsync(() => oauth.refresh(), {
+    message: /missing access_token/,
+  });
+});
+
+test('OAuth refresher: missing expires_in throws (we need expiry for scheduling)', async t => {
+  const httpFetch = async () => ({
+    status: 200,
+    body: { access_token: 'at-1' },
+  });
+  const oauth = makeOAuthRefresher({
+    tokenUrl: 'https://idp.example.com/oauth/token',
+    clientId: 'c',
+    refreshToken: 'r',
+    httpFetch,
+  });
+  await t.throwsAsync(() => oauth.refresh(), {
+    message: /expires_in/,
+  });
 });

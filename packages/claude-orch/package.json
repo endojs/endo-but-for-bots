@@ -33,6 +33,7 @@
     "./src/agent/rpc-server.js": "./src/agent/rpc-server.js",
     "./src/stdio/mux.js": "./src/stdio/mux.js",
     "./src/broker/main.js": "./src/broker/main.js",
+    "./src/broker/oauth.js": "./src/broker/oauth.js",
     "./src/broker-client/index.js": "./src/broker-client/index.js",
     "./package.json": "./package.json"
   },

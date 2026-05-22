@@ -261,40 +261,96 @@ The runtime agent is the only long-lived guest-side component. It runs as the un
 
 ### 5.5 Credential Broker
 
-A separate daemon (Node.js) that holds the long-lived Anthropic credential.
+A separate daemon (Node.js) that holds the long-lived credential
+(API key or OAuth refresh token) and drives all rotation. The
+orchestrator is a passive relay — it neither polls the broker
+nor schedules refreshes.
 
-**Inputs**: at startup, reads `ANTHROPIC_API_KEY` from a config file (mode 0600) or env var. Optionally supports OAuth refresh tokens with a single-process refresh loop.
+**Protocol** (UDS-only, 0600, newline-delimited JSON). Subscribe /
+push, not request / reply:
 
-**API** (UDS-only, accessible to orchestrator UID):
+```
+client  → broker: {"type": "subscribe",   "sessionId": "<id>"}
+broker  → client: {"type": "creds",       "sessionId": "<id>",
+                   "credentials": <Credentials>}    // immediate
+broker  → client: {"type": "creds",       ...}     // on every refresh
+broker  → client: {"type": "error",       "sessionId": "<id>",
+                   "message": "..."}               // refresh failed
+client  → broker: {"type": "unsubscribe", "sessionId": "<id>"}
+```
 
-- `IssueCreds(session_id) → CredsPayload` — Returns a credentials object suitable for writing to `~/.claude/.credentials.json`. For API-key mode, this is the API key (or a key derived/scoped if Anthropic exposes that). For OAuth mode, the current access token plus expiry.
-- `RevokeCreds(session_id) → ok` — Marks the session's creds as revoked in the broker's table. For OAuth, no upstream revocation in v1 (best effort).
-- `PreemptiveRotate(session_id) → CredsPayload | null` — Called by orchestrator before TTL expiry; broker returns new creds if needed, null otherwise. Orchestrator forwards via `RotateCreds` to agent.
+The connection stays open for the lifetime of the subscription.
+`subscribe` always immediately yields the current credentials so
+the orchestrator can use one call to mint the BootConfig AND
+register for future rotations — no separate issue + rotate dance.
+Per-session subscriptions are independent; closing one doesn't
+affect the others.
 
-**Why split out**: separates the long-lived secret from the orchestrator's blast radius and centralizes refresh under a single mutex, preventing thundering-herd token refresh.
+**Why subscribe / push, not poll**: the broker is the only
+process with authoritative knowledge of access-token expiries and
+the refresh-token grant flow's state. Having the orchestrator
+poll on a fixed interval either polls too often (waste) or too
+rarely (stale tokens). The broker schedules a single `setTimeout`
+per credential, keyed on `expiresAt - refreshWindowMs`, runs the
+refresher, and broadcasts the new credentials to every subscriber
+at once.
 
-**Short-term-only injection (OAuth mode)**. When the broker is
-configured with a `rotatePolicy(sessionId, current) → Credentials | null`
-that hits an IdP refresh endpoint, the long-lived credential (a
-refresh token + client secret, typically) **stays in the broker
-process**. Only the result of `broker.issue(sessionId)` — a
-short-lived `{oauthToken: {accessToken, expiresAt}}` payload —
-ever crosses `ctl.sock` into the guest VM. The orchestrator's
-scheduled-rotation loop (`CLAUDE_ORCH_ROTATION_INTERVAL_MS`, off
-by default; see `src/main.js`'s `rotateAllSessions`) sweeps every
-ready session at the configured interval, asking the broker for a
-fresh payload. When the broker returns one, the orchestrator
-sends `{type: 'rotate_creds', credentials}` over `agent.sock`;
-the runtime-agent atomically replaces
-`/home/claude/.claude/.credentials.json` (`rotate_creds_to` in
-`runtime-agent/src/main.rs`) and `claude` picks up the new token
-on the next request. Net effect: the guest never holds the
-long-lived refresh secret, and a compromised guest yields only an
-already-short-lived access token.
+**Why split out**: separates the long-lived secret from the
+orchestrator's blast radius and centralizes refresh policy under
+a single mutex, preventing thundering-herd token refresh.
 
-For api-key mode the split is moot — the api key IS the
-long-lived credential and there is no shorter-term form to derive.
-Operators wanting the property need to switch to OAuth.
+**API-key mode (default)**:
+
+- `bin/claude-broker` reads `ANTHROPIC_API_KEY` from a config file
+  (mode 0600) or env var.
+- `initialCredentials = { apiKey: <key> }`, no refresher.
+- `subscribe(sessionId)` yields the static apiKey once; no further
+  pushes ever fire. The api key IS the long-lived credential and
+  has no shorter-term form to derive — short-term-only injection
+  is a property of OAuth mode only.
+
+**OAuth mode (RFC 6749 §6 refresh-token grant)**:
+
+The bin script switches into OAuth mode when these env vars are
+present (see `bin/claude-broker` for the full list and defaults):
+
+```
+CLAUDE_ORCH_BROKER_OAUTH_TOKEN_URL
+CLAUDE_ORCH_BROKER_OAUTH_CLIENT_ID
+CLAUDE_ORCH_BROKER_OAUTH_CLIENT_SECRET   # optional (PKCE-only clients)
+CLAUDE_ORCH_BROKER_OAUTH_REFRESH_TOKEN
+CLAUDE_ORCH_BROKER_OAUTH_SCOPE           # optional, space-separated
+CLAUDE_ORCH_BROKER_REFRESH_WINDOW_MS     # refresh this far before expiry
+```
+
+`makeOAuthRefresher` (`src/broker/oauth.js`) performs a
+form-urlencoded POST to the token endpoint with
+`grant_type=refresh_token`, parses `{access_token, expires_in,
+refresh_token?}` from the JSON response, and updates its in-memory
+refresh token if the IdP rotated it (RFC 6749 §10.4 recommends
+this). The result is fed into the broker as
+`initialCredentials = { oauthToken: { accessToken, expiresAt } }`
+plus a `refresher: () => Promise<Credentials>` callback.
+
+The broker's scheduler then:
+
+  1. Reads `expiresAt` from the current credentials.
+  2. `setTimeout(refresh, expiresAt - now - refreshWindowMs)`.
+  3. On fire: `await refresher()` → new credentials → broadcast
+     `{type: 'creds', ...}` to every subscriber → reschedule.
+  4. On `refresher()` throw: broadcast
+     `{type: 'error', message}` to subscribers, retry after
+     `refreshRetryMs` (default 30 s).
+
+**Short-term-only injection**: in OAuth mode the long-lived
+credential (refresh token + client secret) **stays in the broker
+process**. Only the result of the latest refresh — a short-lived
+`{oauthToken: {accessToken, expiresAt}}` payload — ever crosses
+`ctl.sock` into the guest VM, and the runtime-agent atomically
+replaces `/home/claude/.claude/.credentials.json`
+(`rotate_creds_to` in `runtime-agent/src/main.rs`) before the
+access token expires. A compromised guest yields only an
+already-short-lived access token; the refresh token is unreachable.
 
 **Endo-side capability layering (R3)**: callers driving the Endo
 factory pass a `ClaudeCredentials` capability (pet name in

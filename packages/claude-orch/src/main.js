@@ -1,5 +1,5 @@
 // @ts-check
-/* global setTimeout, clearTimeout, setInterval, clearInterval */
+/* global setTimeout, clearTimeout */
 /**
  * @import {
  *   BootConfigMessage,
@@ -44,12 +44,6 @@ export const configFromEnv = () => {
     },
     bootDeadlineMs: Number(env.CLAUDE_ORCH_BOOT_DEADLINE_MS || 30_000),
     heartbeatTimeoutMs: Number(env.CLAUDE_ORCH_HEARTBEAT_TIMEOUT_MS || 60_000),
-    // Default 0 = disabled. Operators flip this on (e.g., 30_000 for
-    // a 30s tick) once the broker is wired with a real rotatePolicy
-    // — see DESIGN.md §5.5 and the broker's `rotatePolicy` injection
-    // point. With no policy the broker returns noop on every tick
-    // and we'd be polling for nothing.
-    rotationIntervalMs: Number(env.CLAUDE_ORCH_ROTATION_INTERVAL_MS || 0),
   });
 };
 harden(configFromEnv);
@@ -139,6 +133,15 @@ export const start = async ({
   const netCleanups = new Map();
   /** @type {Map<string, ReturnType<typeof makeStdioMux>>} */
   const stdioMuxes = new Map();
+  /**
+   * Per-session credential subscription opened against the broker.
+   * The first push satisfies BootConfig assembly; subsequent
+   * pushes are relayed to the agent over `link.send({type:
+   * 'rotate_creds', ...})`. Closed when the session ends.
+   *
+   * @type {Map<string, import('./broker-client/index.js').CredentialSubscription>}
+   */
+  const credSubscriptions = new Map();
 
   /**
    * @param {CreateSessionRequest} request
@@ -180,6 +183,32 @@ export const start = async ({
       });
       netCleanups.set(sessionId, netAttachment.cleanup);
       sessions.setState(sessionId, 'booting', { netAttachment });
+
+      // Open the broker subscription unless the caller supplied
+      // their own credentials on the createSession request (which
+      // are static and not subject to broker-driven rotation). The
+      // subscribe call yields the initial credentials immediately;
+      // every subsequent broker push gets relayed to the agent.
+      if (!record.request.credentials) {
+        const sub = await broker.subscribe(sessionId);
+        credSubscriptions.set(sessionId, sub);
+        sub.onRotate(creds => {
+          // The agent.link may not be set up yet if rotation fires
+          // during the brief window between subscribe and the
+          // guest connecting — drop silently in that case; the
+          // BootConfig delivered later will carry the latest
+          // creds via `sub.initial`, refreshed below.
+          const link = agents.get(sessionId);
+          if (!link) return;
+          link.send({ type: 'rotate_creds', credentials: creds });
+        });
+        sub.onError(msg => {
+          // Surface but don't fail the session — the broker will
+          // retry on its own schedule.
+          // eslint-disable-next-line no-console
+          console.error(`[rotation ${sessionId}] broker error: ${msg}`);
+        });
+      }
 
       // Boot-phase RPCs: bind the bootstrap (ctl.sock) and agent
       // (agent.sock) UDS endpoints BEFORE spawning the VM, so the
@@ -225,7 +254,6 @@ export const start = async ({
             },
           );
           await teardownSession(sessionId).catch(() => {});
-          await broker.revoke(sessionId).catch(() => {});
         })
         .catch(() => {});
 
@@ -277,11 +305,11 @@ export const start = async ({
           // ignore
         }
       }
-      // Best-effort cleanup. Credentials may already have been issued
-      // by buildBootConfigForSession() above, so revoke them so the
-      // broker doesn't hold stale per-session state.
+      // Best-effort cleanup. The broker subscription is closed
+      // inside `teardownSession`; nothing else to revoke since the
+      // new protocol has no per-session broker state beyond the
+      // subscription itself.
       await teardownSession(sessionId).catch(() => {});
-      await broker.revoke(sessionId).catch(() => {});
       throw e;
     }
   };
@@ -294,13 +322,27 @@ export const start = async ({
     const record = sessions.getRecord(sessionId);
     if (!record) throw new Error(`Unknown session ${sessionId}`);
     // Caller-supplied credentials (e.g. from a ClaudeCredentials
-    // cap on the Endo side) take precedence over the broker. v1
-    // simply uses them as-is; future v2 may rotate through the
-    // broker for revocation tracking even when the caller
-    // supplies the initial key.
-    const credentials = record.request.credentials
-      ? harden(record.request.credentials)
-      : await broker.issue(sessionId);
+    // cap on the Endo side) are static and bypass the broker. The
+    // markReady path doesn't open a subscription for those
+    // sessions, so the BootConfig carries those bytes once and
+    // never rotates.
+    //
+    // Otherwise the broker subscription's `initial` is the
+    // freshly-issued credentials (the same that subsequent rotations
+    // will push). The subscription was opened in `markReady` above
+    // before this callback fires.
+    let credentials;
+    if (record.request.credentials) {
+      credentials = harden(record.request.credentials);
+    } else {
+      const sub = credSubscriptions.get(sessionId);
+      if (!sub) {
+        throw new Error(
+          `buildBootConfigForSession ${sessionId}: no broker subscription`,
+        );
+      }
+      credentials = harden(sub.initial);
+    }
     return harden({
       type: /** @type {'boot_config'} */ ('boot_config'),
       credentials,
@@ -333,7 +375,6 @@ export const start = async ({
     }
     await teardownSession(sessionId);
     sessions.setState(sessionId, 'terminated');
-    await broker.revoke(sessionId).catch(() => {});
     await sessions.forget(sessionId);
   };
 
@@ -358,6 +399,11 @@ export const start = async ({
       await cleanup().catch(() => {});
       netCleanups.delete(sessionId);
     }
+    const sub = credSubscriptions.get(sessionId);
+    if (sub) {
+      await sub.close().catch(() => {});
+      credSubscriptions.delete(sessionId);
+    }
   };
 
   const api = makeApiServer({
@@ -375,90 +421,8 @@ export const start = async ({
   // all subsequent socket/listener operations across the process.
   await api.listen();
 
-  /**
-   * Ask the broker for a fresh credential payload for `sessionId`. If
-   * the broker returns one (i.e. `rotate_if_needed` is configured
-   * with a real policy rather than the v1 noop), push it to the
-   * runtime-agent over the agent.sock link as `{type: 'rotate_creds'}`.
-   *
-   * Returns whether a rotation was actually sent — `false` when the
-   * broker returned noop or when no agent link is open. Surfaced on
-   * the `start()` return value so operators / future scheduling code
-   * can call it; today this is exercised primarily by
-   * `e2e-smoke.test.js`'s round-trip case.
-   *
-   * @param {string} sessionId
-   * @returns {Promise<boolean>}
-   */
-  const rotateCreds = async sessionId => {
-    const creds = await broker.rotateIfNeeded(sessionId);
-    if (!creds) return false;
-    const link = agents.get(sessionId);
-    if (!link) return false;
-    link.send({ type: 'rotate_creds', credentials: creds });
-    return true;
-  };
-
-  /**
-   * Sweep every ready session, asking the broker whether credentials
-   * need refreshing and pushing `rotate_creds` to any agent the broker
-   * answers for. Failures on one session don't poison the rest of the
-   * sweep. Used by the scheduled-rotation loop below; also exposed on
-   * the start() return so operators can force a sweep on demand.
-   *
-   * @returns {Promise<{ session: string, rotated: boolean, error?: string }[]>}
-   */
-  const rotateAllSessions = async () => {
-    // Sweep in parallel: each session's rotation is independent
-    // (broker.rotateIfNeeded is per-session) and we don't want a slow
-    // policy on one session to block the rest of the tick. Use
-    // `allSettled` so one failure doesn't poison the report.
-    const ready = sessions.listRecords().filter(r => r.state === 'ready');
-    const settled = await Promise.allSettled(
-      ready.map(async r => ({
-        session: r.id,
-        rotated: await rotateCreds(r.id),
-      })),
-    );
-    return settled.map((s, i) =>
-      s.status === 'fulfilled'
-        ? s.value
-        : {
-            session: ready[i].id,
-            rotated: false,
-            error: /** @type {Error} */ (s.reason).message,
-          },
-    );
-  };
-
-  // Rotation scheduler. Wakes every `config.rotationIntervalMs` and
-  // sweeps ready sessions. Operators enable it only after the broker
-  // is configured with a real `rotatePolicy` (e.g. an OAuth refresher
-  // — see DESIGN.md §5.5). With the default api-key broker, every
-  // tick returns noop and the scheduler is just overhead, so the
-  // sensible default is `0` (disabled).
-  const rotationIntervalMs = config.rotationIntervalMs ?? 0;
-  /** @type {NodeJS.Timeout | null} */
-  let rotationTimer = null;
-  if (rotationIntervalMs > 0) {
-    rotationTimer = setInterval(() => {
-      rotateAllSessions().catch(e => {
-        // eslint-disable-next-line no-console
-        console.error('[rotation] sweep failed:', e);
-      });
-    }, rotationIntervalMs);
-    // Don't hold the event loop open just for the rotation tick.
-    if (typeof rotationTimer.unref === 'function') rotationTimer.unref();
-  }
-
   return harden({
-    rotateCreds,
-    rotateAllSessions,
     async stop() {
-      if (rotationTimer) {
-        clearInterval(rotationTimer);
-        rotationTimer = null;
-      }
       const ids = sessions.listSessions().map(s => s.id);
       await Promise.allSettled(ids.map(id => terminateSession(id)));
       await api.close();
