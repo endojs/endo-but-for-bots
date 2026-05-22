@@ -119,6 +119,11 @@ endo store --name my-data --json '{"a":1}'     # Store JSON
 echo "data" | endo store --name piped --stdin  # Store from stdin
 ```
 
+A "blob" in Endo is a binary value the daemon keeps in its
+content-addressed store, not a `web.Blob`.
+Storing text or a file produces a blob the daemon can later read back
+through the petname.
+
 Create directories for organizing names:
 
 ```sh
