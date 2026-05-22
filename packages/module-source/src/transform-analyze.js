@@ -82,6 +82,12 @@ const makeCreateStaticRecord = transformSource =>
         let src = '';
         if (cvname) {
           // It's a function assigned to, so set its name property.
+          // The hidden binding (rather than `Object.defineProperty`) is
+          // used here so that a module-local `import { Object }` declaration
+          // cannot shadow the call. The host passes the SES intrinsic
+          // through the functor's `defineProperty` field; see
+          // `packages/ses/src/module-instance.js` and
+          // `packages/compartment-mapper/src/bundle-mjs.js`.
           src = `${h.HIDDEN_DEFINE_PROPERTY}(${cvname},'name',{value:${js(vname)}});`;
         }
         const hDeclId = isOnce ? h.HIDDEN_ONCE : h.HIDDEN_LIVE;
