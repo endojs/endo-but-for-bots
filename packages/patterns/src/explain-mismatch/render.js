@@ -101,26 +101,6 @@ export const renderPath = path => {
         parts.push(`.${step.key}`);
         break;
       }
-      case 'mapKey': {
-        parts.push(`{mapKey ${oneLine(step.key)}}`);
-        break;
-      }
-      case 'mapValue': {
-        parts.push(`{map ${oneLine(step.key)}}`);
-        break;
-      }
-      case 'setElement': {
-        parts.push(`{set ${oneLine(step.element)}}`);
-        break;
-      }
-      case 'bagElement': {
-        parts.push(`{bag ${oneLine(step.element)}}`);
-        break;
-      }
-      case 'bagCount': {
-        parts.push(`{bag-count ${oneLine(step.element)}}`);
-        break;
-      }
       case 'orBranch': {
         parts.push(`(or alt ${step.branchIndex})`);
         break;

@@ -19,11 +19,6 @@ import {
 /**
  * @typedef {{kind: 'property', name: string}
  *         | {kind: 'index', index: number}
- *         | {kind: 'mapKey', key: Passable}
- *         | {kind: 'mapValue', key: Passable}
- *         | {kind: 'setElement', element: Passable}
- *         | {kind: 'bagElement', element: Passable}
- *         | {kind: 'bagCount', element: Passable}
  *         | {kind: 'orBranch', branchIndex: number, branchPattern: Pattern}
  *         | {kind: 'andBranch', branchIndex: number, branchPattern: Pattern}
  *         | {kind: 'arrayOfElement', index: number}
