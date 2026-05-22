@@ -174,6 +174,10 @@ const start = async () => {
         // each CapTP message on the wire as
         // `<ascii-decimal-length>:<payload>`. Use the JS netlayer's
         // default `'syrup'` framing so the two ends round-trip.
+        // OCAPN-TEST-SUITE-PIN: when the SHA on the line above
+        // moves, also move the matching pin in
+        // `.github/workflows/ci.yml`; a repo-wide grep for
+        // `OCAPN-TEST-SUITE-PIN` finds both call sites.
         framing: 'syrup',
       }),
   });

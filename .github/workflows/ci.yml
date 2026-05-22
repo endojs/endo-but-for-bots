@@ -616,6 +616,11 @@ jobs:
           # netlayer; matches `makeTcpNetLayer({ framing: 'syrup' })` in
           # @endo/ocapn (the default; backed by @endo/syrup-frame).
           # Tracks endojs/ocapn-test-suite#1.
+          # OCAPN-TEST-SUITE-PIN: when the SHA on the `ref:` line
+          # moves, also move the matching pin commentary in
+          # `packages/ocapn/test/python-test-suite/index.js`; a
+          # repo-wide grep for `OCAPN-TEST-SUITE-PIN` finds both
+          # call sites.
           repository: endojs/ocapn-test-suite
           ref: 89e80d70cf0689fce0b92936f22a84b02e9e1aee
           path: ocapn-test-suite
