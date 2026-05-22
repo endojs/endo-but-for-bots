@@ -105,10 +105,8 @@ module.exports = {
     fixable: 'code',
     schema: [],
     messages: {
-      missingHardenCallSingle:
-        "Named export '{{names}}' should be followed by a call to 'harden'.",
-      missingHardenCallMultiple:
-        "Named exports '{{names}}' should be followed by a call to 'harden'.",
+      missingHardenCall:
+        "Named export(s) '{{names}}' should be followed by a call to 'harden'.",
       functionExportNotConst:
         "Export '{{name}}' should be a const declaration with an arrow function.",
       unknownBindingPattern:
@@ -197,13 +195,9 @@ module.exports = {
             }
 
             if (missingHardenCalls.length > 0) {
-              const messageId =
-                missingHardenCalls.length === 1
-                  ? 'missingHardenCallSingle'
-                  : 'missingHardenCallMultiple';
               context.report({
                 node: exportNode,
-                messageId,
+                messageId: 'missingHardenCall',
                 data: { names: missingHardenCalls.join(', ') },
                 fix(fixer) {
                   const hardenCalls = missingHardenCalls

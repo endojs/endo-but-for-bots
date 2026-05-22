@@ -115,7 +115,7 @@ harden(a);
               `,
     errors: [
       {
-        message: "Named export 'b' should be followed by a call to 'harden'.",
+        message: "Named export(s) 'b' should be followed by a call to 'harden'.",
       },
     ],
     output: `
@@ -132,7 +132,7 @@ export const a = 1;
               `,
     errors: [
       {
-        message: "Named export 'a' should be followed by a call to 'harden'.",
+        message: "Named export(s) 'a' should be followed by a call to 'harden'.",
       },
     ],
     output: `
@@ -196,10 +196,10 @@ export function
         `,
     errors: [
       {
-        message: "Named export 'a' should be followed by a call to 'harden'.",
+        message: "Named export(s) 'a' should be followed by a call to 'harden'.",
       },
       {
-        message: "Named export 'b' should be followed by a call to 'harden'.",
+        message: "Named export(s) 'b' should be followed by a call to 'harden'.",
       },
       {
         message:
@@ -239,7 +239,7 @@ environmentOptionsListHas,
     errors: [
       {
         message:
-          "Named exports 'getEnvironmentOption, getEnvironmentOptionsList, environmentOptionsListHas' should be followed by a call to 'harden'.",
+          "Named export(s) 'getEnvironmentOption, getEnvironmentOptionsList, environmentOptionsListHas' should be followed by a call to 'harden'.",
       },
     ],
     output: `
@@ -262,7 +262,7 @@ export const { propName: exportName } = obj;
     errors: [
       {
         message:
-          "Named export 'exportName' should be followed by a call to 'harden'.",
+          "Named export(s) 'exportName' should be followed by a call to 'harden'.",
       },
     ],
     output: `
@@ -278,7 +278,7 @@ export const { name, ...rest } = obj;
     errors: [
       {
         message:
-          "Named exports 'name, rest' should be followed by a call to 'harden'.",
+          "Named export(s) 'name, rest' should be followed by a call to 'harden'.",
       },
     ],
     output: `
@@ -295,7 +295,7 @@ export const { name, parent: { subName } } = obj;
     errors: [
       {
         message:
-          "Named exports 'name, subName' should be followed by a call to 'harden'.",
+          "Named export(s) 'name, subName' should be followed by a call to 'harden'.",
       },
     ],
     output: `
@@ -312,7 +312,7 @@ export const [ first, second ] = array;
     errors: [
       {
         message:
-          "Named exports 'first, second' should be followed by a call to 'harden'.",
+          "Named export(s) 'first, second' should be followed by a call to 'harden'.",
       },
     ],
     output: `
@@ -329,7 +329,7 @@ export const [ head, ...tail ] = array;
     errors: [
       {
         message:
-          "Named exports 'head, tail' should be followed by a call to 'harden'.",
+          "Named export(s) 'head, tail' should be followed by a call to 'harden'.",
       },
     ],
     output: `
@@ -346,7 +346,7 @@ export const [ , second ] = array;
     errors: [
       {
         message:
-          "Named export 'second' should be followed by a call to 'harden'.",
+          "Named export(s) 'second' should be followed by a call to 'harden'.",
       },
     ],
     output: `
@@ -362,7 +362,7 @@ export const [ first = 1 ] = array;
     errors: [
       {
         message:
-          "Named export 'first' should be followed by a call to 'harden'.",
+          "Named export(s) 'first' should be followed by a call to 'harden'.",
       },
     ],
     output: `
@@ -377,7 +377,7 @@ export const { name = 'default' } = obj;
     errors: [
       {
         message:
-          "Named export 'name' should be followed by a call to 'harden'.",
+          "Named export(s) 'name' should be followed by a call to 'harden'.",
       },
     ],
     output: `
@@ -392,7 +392,7 @@ export const { propName: aliasName = 1 } = obj;
     errors: [
       {
         message:
-          "Named export 'aliasName' should be followed by a call to 'harden'.",
+          "Named export(s) 'aliasName' should be followed by a call to 'harden'.",
       },
     ],
     output: `
@@ -408,7 +408,7 @@ export const [ { propName: aliasName = 1 }, [ inner ] ] = data;
     errors: [
       {
         message:
-          "Named exports 'aliasName, inner' should be followed by a call to 'harden'.",
+          "Named export(s) 'aliasName, inner' should be followed by a call to 'harden'.",
       },
     ],
     output: `
@@ -429,7 +429,7 @@ harden(notRest);
     errors: [
       {
         message:
-          "Named export 'rest' should be followed by a call to 'harden'.",
+          "Named export(s) 'rest' should be followed by a call to 'harden'.",
       },
     ],
     output: `
@@ -485,7 +485,7 @@ export const { name, ...rest }: { name: string; [k: string]: unknown } = obj;
       errors: [
         {
           message:
-            "Named exports 'name, rest' should be followed by a call to 'harden'.",
+            "Named export(s) 'name, rest' should be followed by a call to 'harden'.",
         },
       ],
       output: `
