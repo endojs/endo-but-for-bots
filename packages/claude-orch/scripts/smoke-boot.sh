@@ -134,11 +134,11 @@ timeout "$QEMU_TIMEOUT" qemu-system-x86_64 \
   -drive "id=rootfs,file=$BUILD_DIR/rootfs-rw.raw,format=raw,if=none" \
   -device virtio-blk-pci,drive=rootfs \
   -device virtio-serial-pci \
-  -chardev "socket,id=ctl,path=$BUILD_DIR/ctl.sock,reconnect-ms=100" \
+  -chardev "socket,id=ctl,path=$BUILD_DIR/ctl.sock,reconnect=1" \
   -device virtserialport,chardev=ctl,name=orchestrator \
-  -chardev "socket,id=fs,path=$BUILD_DIR/fs.sock,reconnect-ms=100" \
+  -chardev "socket,id=fs,path=$BUILD_DIR/fs.sock,reconnect=1" \
   -device virtserialport,chardev=fs,name=workspace \
-  -chardev "socket,id=agent,path=$BUILD_DIR/agent.sock,reconnect-ms=100" \
+  -chardev "socket,id=agent,path=$BUILD_DIR/agent.sock,reconnect=1" \
   -device virtserialport,chardev=agent,name=agent \
   -serial stdio -display none >"$BUILD_DIR/qemu.log" 2>&1 || true
 wait "$NODE_PID" 2>/dev/null || true
