@@ -741,6 +741,42 @@ export const COMMANDS = {
     submitLabel: 'Enable',
   },
 
+  'network-ocapn': {
+    name: 'network-ocapn',
+    label: 'Enable OCapN Network',
+    description: 'Enable OCapN-Noise authenticated peer connections over TCP',
+    category: 'connections',
+    mode: 'inline',
+    fields: [
+      {
+        name: 'modulePath',
+        label: 'Module',
+        type: 'text',
+        required: false,
+        placeholder: 'ocapn.js path (auto-detected)',
+        // @ts-ignore Vite injects this at build time
+        defaultValue: import.meta.env?.OCAPN_PATH || '',
+      },
+      {
+        name: 'host',
+        label: 'Host',
+        type: 'text',
+        required: false,
+        defaultValue: '127.0.0.1',
+        placeholder: '127.0.0.1',
+      },
+      {
+        name: 'port',
+        label: 'Port',
+        type: 'text',
+        required: false,
+        defaultValue: '0',
+        placeholder: '0 for OS-assigned ephemeral port',
+      },
+    ],
+    submitLabel: 'Enable',
+  },
+
   'network-ws-relay': {
     name: 'network-ws-relay',
     label: 'Enable Relay Network',

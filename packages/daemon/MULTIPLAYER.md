@@ -196,6 +196,26 @@ authenticated, encrypted OCapN session instead of plaintext CapTP. It
 is installed as an unconfined caplet, the same way the other
 transports are, and registers itself under `@nets/ocapn`.
 
+### Using the Chat UI
+
+In each chat window, run:
+
+```
+/network-ocapn
+```
+
+Fill in the fields:
+
+- **Module**: The `file://` URL to the OCapN network module.
+  Typically `file:///path/to/endo/packages/daemon/src/networks/ocapn.js`
+  (auto-detected when running via `yarn dev`)
+- **Host**: `127.0.0.1` (default)
+- **Port**: `0` (default; OS-assigned ephemeral port)
+
+The command stores the listen address under `ocapn-listen-addr`,
+installs the network module as an unconfined caplet, and moves it to
+`@nets/ocapn` where the daemon discovers it as an active transport.
+
 ### Using the CLI
 
 ```bash
@@ -481,6 +501,7 @@ The remote daemon may be unreachable. Check that:
 |-------------------|------------------------------------------------------------|
 | `/network`        | Enable TCP networking (module path + listen address)       |
 | `/network-iroh`   | Enable iroh networking (no open ports needed)              |
+| `/network-ocapn`  | Enable OCapN-Noise authenticated networking over TCP       |
 | `/invite`         | Create an invitation for a peer (prints `endo://` locator) |
 | `/accept`         | Accept an invitation locator and name the peer             |
 | `/adopt`          | Adopt a value from a received message                      |
