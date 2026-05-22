@@ -82,8 +82,16 @@ export const buildQemuArgs = ({ arch, record, config, netArgs }) => {
     `${blkDevice},drive=rootfs`,
     '-device',
     serialDevice,
+    // ctl and agent chardevs run in *client* mode (server=off). The
+    // orchestrator binds these UDS paths (`awaitHello` and
+    // `makeAgentLink` call `server.listen`) before spawning QEMU; if
+    // QEMU were configured with `server=on` here, both processes
+    // would try to bind the same path and QEMU would fail with
+    // EADDRINUSE. `reconnect=1` lets the guest retry if the
+    // orchestrator restarts and rebinds the socket. The same pattern
+    // is mirrored in `scripts/smoke-boot.sh`.
     '-chardev',
-    `socket,id=ctl,path=${record.ctlSocketPath},server=on,wait=off`,
+    `socket,id=ctl,path=${record.ctlSocketPath},server=off,reconnect=1`,
     '-device',
     'virtserialport,chardev=ctl,name=orchestrator',
     '-chardev',
@@ -91,7 +99,7 @@ export const buildQemuArgs = ({ arch, record, config, netArgs }) => {
     '-device',
     'virtserialport,chardev=fs,name=workspace',
     '-chardev',
-    `socket,id=agent,path=${record.agentSocketPath},server=on,wait=off`,
+    `socket,id=agent,path=${record.agentSocketPath},server=off,reconnect=1`,
     '-device',
     'virtserialport,chardev=agent,name=agent',
     '-chardev',

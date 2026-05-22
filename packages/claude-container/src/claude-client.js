@@ -88,9 +88,28 @@ export const makeClaudeClient = ({
   initialPrompt,
 }) => {
   let terminated = false;
+  // `orchestrator.sendPrompt` returns an async iterable whose
+  // underlying attach socket only registers `'data'` handlers when
+  // iteration begins. The `initialPrompt` convenience does not
+  // surface the response to callers, so we must still drain the
+  // iterable in the background — otherwise the socket fd would leak
+  // and kernel buffers would backpressure the guest until the
+  // ClaudeClient is GC'd.
   const sentInitial = initialPrompt
-    ? orchestrator.sendPrompt(session, initialPrompt, { model })
+    ? (async () => {
+        const iter = await orchestrator.sendPrompt(session, initialPrompt, {
+          model,
+        });
+        // eslint-disable-next-line no-unused-vars, no-restricted-syntax
+        for await (const _ of iter) {
+          // discard — initialPrompt is fire-and-forget by contract
+        }
+      })()
     : null;
+  // Don't let a rejected drain crash the host as an unhandled
+  // rejection when the caller never invokes `send()`. The original
+  // failure still surfaces at the first `await sentInitial` below.
+  if (sentInitial) sentInitial.catch(() => {});
 
   const guardLive = () => {
     if (terminated) {

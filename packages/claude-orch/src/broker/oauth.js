@@ -9,9 +9,10 @@ import { URL } from 'node:url';
 
 /**
  * RFC 6749 §6 refresh-token grant. Returns a `refresh()` callback
- * suitable for `makeBroker`'s `refresher` option plus an `initial()`
- * that performs the first refresh (used to seed
- * `initialCredentials`).
+ * suitable for `makeBroker`'s `refresher` option. Operators call
+ * `refresh()` once at startup to obtain the seed `initialCredentials`
+ * for `makeBroker` (see `bin/claude-broker`), then hand the same
+ * callback to the broker so it can drive subsequent rotations.
  *
  * The long-lived refresh token lives only inside this closure; the
  * broker process holds it in memory and never writes it to the

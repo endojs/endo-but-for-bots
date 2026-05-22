@@ -40,13 +40,25 @@ test('buildQemuArgs emits the chardev/virtserialport quartet from Appendix A', t
     netArgs: ['-netdev', 'foo', '-device', 'bar'],
   });
   const j = args.join(' ');
-  t.regex(j, /-chardev socket,id=ctl,path=\/sessions\/abc\/ctl\.sock/);
+  // ctl, fs, and agent chardevs all run in client mode — the
+  // orchestrator binds these UDS paths. stdio runs in server mode
+  // because the stdio mux opens the connection to QEMU.
+  t.regex(
+    j,
+    /-chardev socket,id=ctl,path=\/sessions\/abc\/ctl\.sock,server=off,reconnect=1/,
+  );
   t.regex(
     j,
     /-chardev socket,id=fs,path=\/sessions\/abc\/fs\.sock,server=off,reconnect=1/,
   );
-  t.regex(j, /-chardev socket,id=agent,path=\/sessions\/abc\/agent\.sock/);
-  t.regex(j, /-chardev socket,id=stdio,path=\/sessions\/abc\/stdio\.sock/);
+  t.regex(
+    j,
+    /-chardev socket,id=agent,path=\/sessions\/abc\/agent\.sock,server=off,reconnect=1/,
+  );
+  t.regex(
+    j,
+    /-chardev socket,id=stdio,path=\/sessions\/abc\/stdio\.sock,server=on,wait=off/,
+  );
   t.regex(j, /virtserialport,chardev=ctl,name=orchestrator/);
   t.regex(j, /virtserialport,chardev=fs,name=workspace/);
   t.regex(j, /virtserialport,chardev=agent,name=agent/);
