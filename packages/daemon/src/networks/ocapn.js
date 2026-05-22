@@ -46,6 +46,17 @@ const protocol = 'ocapn+noise+tcp';
 // is read, mirroring `tcp-netstring.js`'s `tcp-listen-addr`.
 const LISTEN_ADDR_NAME = 'ocapn-listen-addr';
 
+// Format an authority component. IPv6 literals contain colons and must
+// be wrapped in brackets so `new URL('proto://[::1]:8080')` and a stored
+// `[::1]:8080` listen address both round-trip through URL parsing.
+// IPv4 addresses and DNS names have no colons and pass through unchanged.
+/**
+ * @param {string} host
+ * @param {string | number} port
+ */
+const formatHostPort = (host, port) =>
+  host.includes(':') ? `[${host}]:${port}` : `${host}:${port}`;
+
 const EndoOcapnBootstrapInterface = M.interface('EndoOcapnBootstrap', {
   getNodeId: M.call().returns(M.string()),
   getGreeter: M.call().returns(M.any()),
@@ -134,8 +145,9 @@ export const make = async (powers, context) => {
   // Persist the resolved listen address so an OS-assigned ephemeral
   // port stays stable across daemon restarts; otherwise every restart
   // would advertise a different port and invalidate stored locators.
-  // Mirrors `tcp-netstring.js`.
-  const resolvedHostPort = `${host}:${boundPort}`;
+  // Mirrors `tcp-netstring.js`. IPv6 literals are bracketed so the
+  // stored value parses through `new URL('tcp://...')` on restart.
+  const resolvedHostPort = formatHostPort(host, boundPort);
   if (resolvedHostPort !== configuredHostPort) {
     await E(powers).storeValue(resolvedHostPort, LISTEN_ADDR_NAME);
   }
@@ -151,7 +163,7 @@ export const make = async (powers, context) => {
   const hintHost = localHints['tcp:host'] || host;
   const encodedNode = encodeURIComponent(String(localNodeId));
   const encodedLocation = encodeURIComponent(JSON.stringify(localLocation));
-  const address = `${protocol}://${hintHost}:${boundPort}/?node=${encodedNode}&loc=${encodedLocation}`;
+  const address = `${protocol}://${formatHostPort(hintHost, boundPort)}/?node=${encodedNode}&loc=${encodedLocation}`;
 
   // `client.shutdown()` tears down the OCapN sessions and the
   // network's transports (closing the TCP listener); shutting the
