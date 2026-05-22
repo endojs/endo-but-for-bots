@@ -493,8 +493,29 @@ fn log_to(out: &mpsc::Sender<Vec<u8>>, level: &str, msg: &str) {
 }
 
 fn rotate_creds(creds: &serde_json::Value) -> Result<(), String> {
+    rotate_creds_to(std::path::Path::new(CREDS_PATH), creds)
+}
+
+/// Atomically replace the credentials file at `path` with the JSON
+/// encoding of `creds`. Factored out of `rotate_creds` so tests can
+/// target a tmpdir; the production path passes `CREDS_PATH`.
+///
+/// Atomicity: write to `{path}.new` with `O_TRUNC | 0o600`, `fsync()`,
+/// then `rename()` over the destination. The fsync ensures the bytes
+/// reach disk before the rename publishes them — a crash between
+/// rename and the next consumer's open can never see a partially-
+/// written credentials file.
+fn rotate_creds_to(
+    path: &std::path::Path,
+    creds: &serde_json::Value,
+) -> Result<(), String> {
     use std::os::unix::fs::OpenOptionsExt;
-    let tmp = format!("{CREDS_PATH}.new");
+    let mut tmp = path.to_path_buf();
+    let new_name = match path.file_name() {
+        Some(n) => format!("{}.new", n.to_string_lossy()),
+        None => return Err("rotate_creds_to: path has no file name".into()),
+    };
+    tmp.set_file_name(new_name);
     let data = serde_json::to_vec(creds).map_err(|e| e.to_string())?;
     let mut f = fs::OpenOptions::new()
         .write(true)
@@ -502,10 +523,12 @@ fn rotate_creds(creds: &serde_json::Value) -> Result<(), String> {
         .truncate(true)
         .mode(0o600)
         .open(&tmp)
-        .map_err(|e| format!("open {tmp}: {e}"))?;
-    f.write_all(&data).map_err(|e| format!("write {tmp}: {e}"))?;
-    f.sync_all().map_err(|e| format!("fsync {tmp}: {e}"))?;
-    fs::rename(&tmp, CREDS_PATH).map_err(|e| format!("rename: {e}"))?;
+        .map_err(|e| format!("open {}: {e}", tmp.display()))?;
+    f.write_all(&data)
+        .map_err(|e| format!("write {}: {e}", tmp.display()))?;
+    f.sync_all()
+        .map_err(|e| format!("fsync {}: {e}", tmp.display()))?;
+    fs::rename(&tmp, path).map_err(|e| format!("rename: {e}"))?;
     Ok(())
 }
 
@@ -544,5 +567,88 @@ mod tests {
         });
         assert_eq!(*count.lock().unwrap(), 0);
         assert_eq!(tail.len(), truncated.len());
+    }
+
+    #[test]
+    fn rotate_creds_writes_0600_and_replaces_atomically() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempdir();
+        let path = dir.join(".credentials.json");
+
+        // Seed with a prior payload at 0644 — a successful rotation must
+        // replace the contents *and* leave the file at 0600 (the rename
+        // brings the tmp file's mode with it).
+        fs::write(&path, b"{\"apiKey\":\"sk-old\"}").unwrap();
+        let mut perms = fs::metadata(&path).unwrap().permissions();
+        perms.set_mode(0o644);
+        fs::set_permissions(&path, perms).unwrap();
+
+        let next = serde_json::json!({ "apiKey": "sk-new", "rotatedAt": "T" });
+        super::rotate_creds_to(&path, &next).expect("rotate ok");
+
+        let bytes = fs::read(&path).expect("read ok");
+        let parsed: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(parsed["apiKey"], "sk-new");
+        assert_eq!(parsed["rotatedAt"], "T");
+
+        let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(
+            mode, 0o600,
+            "file must be 0600 after rotation (mode is carried from tmp via rename)"
+        );
+
+        // The tmp sidecar shouldn't survive a successful rotation.
+        let tmp = dir.join(".credentials.json.new");
+        assert!(
+            !tmp.exists(),
+            "rotate_creds_to must leave no .new sidecar on success"
+        );
+
+        fs::remove_file(&path).ok();
+        fs::remove_dir(&dir).ok();
+    }
+
+    #[test]
+    fn rotate_creds_overwrites_existing_truncates_tail() {
+        let dir = tempdir();
+        let path = dir.join(".credentials.json");
+        fs::write(
+            &path,
+            b"{\"apiKey\":\"this-is-much-longer-than-the-next-payload\"}",
+        )
+        .unwrap();
+
+        super::rotate_creds_to(&path, &serde_json::json!({ "apiKey": "k" }))
+            .expect("rotate ok");
+
+        let bytes = fs::read(&path).expect("read ok");
+        let parsed: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(parsed["apiKey"], "k");
+        assert_eq!(parsed.as_object().unwrap().len(), 1);
+
+        fs::remove_file(&path).ok();
+        fs::remove_dir(&dir).ok();
+    }
+
+    #[test]
+    fn rotate_creds_rejects_non_object_path() {
+        // `Path::new("/")` has no file_name → `rotate_creds_to` should
+        // refuse cleanly rather than panicking on the unwrap chain.
+        let err = super::rotate_creds_to(
+            std::path::Path::new("/"),
+            &serde_json::json!({ "apiKey": "k" }),
+        )
+        .unwrap_err();
+        assert!(err.contains("file name"), "got: {err}");
+    }
+
+    fn tempdir() -> std::path::PathBuf {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NONCE: AtomicU64 = AtomicU64::new(0);
+        let n = NONCE.fetch_add(1, Ordering::SeqCst);
+        let pid = std::process::id();
+        let p = std::env::temp_dir().join(format!("runtime-agent-test-{pid}-{n}"));
+        fs::create_dir_all(&p).expect("mkdir tempdir");
+        p
     }
 }

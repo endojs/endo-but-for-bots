@@ -300,8 +300,14 @@ fn run_relay(port_fd: RawFd, sock_fd: RawFd) -> ! {
     }
 }
 
-fn parse_cmdline() -> Result<(String, String), String> {
-    let cmdline = fs::read_to_string("/proc/cmdline").map_err(|e| format!("/proc/cmdline: {e}"))?;
+/// Pure-string version of `parse_cmdline`, factored out so tests
+/// don't depend on `/proc/cmdline` existing on the runner.
+///
+/// Last-write-wins for duplicate keys (Linux kernel cmdline parsing
+/// has no canonical resolution rule, but giving the rightmost token
+/// precedence matches how `init=...` etc. are typically expected to
+/// behave when boot loaders append extras).
+fn parse_cmdline_str(cmdline: &str) -> Result<(String, String), String> {
     let mut session_id = None;
     let mut boot_nonce = None;
     for part in cmdline.split_whitespace() {
@@ -317,18 +323,37 @@ fn parse_cmdline() -> Result<(String, String), String> {
     ))
 }
 
-fn write_credentials(creds: &serde_json::Value) -> Result<(), String> {
-    fs::create_dir_all(CREDS_DIR).ok();
+fn parse_cmdline() -> Result<(String, String), String> {
+    let cmdline = fs::read_to_string("/proc/cmdline").map_err(|e| format!("/proc/cmdline: {e}"))?;
+    parse_cmdline_str(&cmdline)
+}
+
+/// Write `creds` to `path` as JSON with 0600 perms (parent dir
+/// created at 0700 if missing). Factored out of `write_credentials`
+/// so tests can target a tmpdir; the production code path passes
+/// `CREDS_PATH`.
+fn write_credentials_to(
+    path: &std::path::Path,
+    creds: &serde_json::Value,
+) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).ok();
+    }
     let mut f = fs::OpenOptions::new()
         .write(true)
         .create(true)
         .truncate(true)
         .mode(0o600)
-        .open(CREDS_PATH)
-        .map_err(|e| format!("open {CREDS_PATH}: {e}"))?;
+        .open(path)
+        .map_err(|e| format!("open {}: {e}", path.display()))?;
     let data = serde_json::to_vec(creds).map_err(|e| e.to_string())?;
     f.write_all(&data).map_err(|e| e.to_string())?;
     Ok(())
+}
+
+fn write_credentials(creds: &serde_json::Value) -> Result<(), String> {
+    fs::create_dir_all(CREDS_DIR).ok();
+    write_credentials_to(std::path::Path::new(CREDS_PATH), creds)
 }
 
 fn write_initial_prompt(prompt: Option<&str>) -> Result<(), String> {
@@ -415,5 +440,129 @@ fn read_line<R: Read>(r: &mut R, out: &mut Vec<u8>) -> Result<(), String> {
         if out.len() > 1 << 20 {
             return Err("line too long".into());
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{parse_cmdline_str, write_credentials_to};
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn parse_cmdline_accepts_documented_shape() {
+        let line =
+            "console=ttyS0 root=/dev/vda rw rootfstype=ext4 \
+             claude.session_id=abc-123 claude.boot_nonce=AAAAAAAA";
+        let (sid, nonce) = parse_cmdline_str(line).expect("parse ok");
+        assert_eq!(sid, "abc-123");
+        assert_eq!(nonce, "AAAAAAAA");
+    }
+
+    #[test]
+    fn parse_cmdline_rejects_missing_session_id() {
+        let line = "console=ttyS0 claude.boot_nonce=N";
+        let err = parse_cmdline_str(line).unwrap_err();
+        assert!(
+            err.contains("session_id"),
+            "expected session_id-missing message, got {err}"
+        );
+    }
+
+    #[test]
+    fn parse_cmdline_rejects_missing_boot_nonce() {
+        let line = "console=ttyS0 claude.session_id=sess";
+        let err = parse_cmdline_str(line).unwrap_err();
+        assert!(
+            err.contains("boot_nonce"),
+            "expected boot_nonce-missing message, got {err}"
+        );
+    }
+
+    #[test]
+    fn parse_cmdline_rejects_empty() {
+        let err = parse_cmdline_str("").unwrap_err();
+        assert!(err.contains("session_id"));
+    }
+
+    #[test]
+    fn parse_cmdline_last_write_wins_on_duplicate_keys() {
+        // If a boot loader appends duplicates, the rightmost token
+        // should determine the final value — matches how init=... and
+        // other kernel cmdline parsers behave.
+        let line =
+            "claude.session_id=first claude.boot_nonce=NA \
+             claude.session_id=second claude.boot_nonce=NB";
+        let (sid, nonce) = parse_cmdline_str(line).expect("parse ok");
+        assert_eq!(sid, "second");
+        assert_eq!(nonce, "NB");
+    }
+
+    #[test]
+    fn parse_cmdline_ignores_unrelated_tokens() {
+        let line =
+            "claude.session_id=ok claude.boot_nonce=ok2 \
+             ignored.other=foo CLAUDE.SESSION_ID=wrong-case";
+        let (sid, _) = parse_cmdline_str(line).expect("parse ok");
+        // Case-sensitive match; the uppercased duplicate must not win.
+        assert_eq!(sid, "ok");
+    }
+
+    #[test]
+    fn write_credentials_to_writes_0600_and_correct_json() {
+        let dir = tempdir();
+        let path = dir.join(".credentials.json");
+        let creds = serde_json::json!({
+            "apiKey": "sk-ant-test",
+            "rotatedAt": "2026-05-22T00:00:00Z"
+        });
+        write_credentials_to(&path, &creds).expect("write ok");
+
+        let meta = fs::metadata(&path).expect("stat ok");
+        // eslint-disable-next-line — Rust, not JS. Mask to file mode bits.
+        let mode = meta.permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "file mode must be 0600 at create time");
+
+        let bytes = fs::read(&path).expect("read ok");
+        let parsed: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(parsed["apiKey"], "sk-ant-test");
+        assert_eq!(parsed["rotatedAt"], "2026-05-22T00:00:00Z");
+
+        // Cleanup.
+        fs::remove_file(&path).ok();
+        fs::remove_dir(&dir).ok();
+    }
+
+    #[test]
+    fn write_credentials_to_overwrites_existing_with_truncate() {
+        let dir = tempdir();
+        let path = dir.join(".credentials.json");
+        // Seed with a longer payload than what we'll overwrite, so a
+        // missing-truncate bug would leave trailing bytes.
+        fs::write(&path, b"{\"old\":\"this-is-much-longer-than-the-next-payload\"}").unwrap();
+
+        let next = serde_json::json!({ "apiKey": "k" });
+        write_credentials_to(&path, &next).expect("write ok");
+
+        let bytes = fs::read(&path).expect("read ok");
+        let parsed: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(parsed["apiKey"], "k");
+        assert!(parsed.get("old").is_none());
+
+        fs::remove_file(&path).ok();
+        fs::remove_dir(&dir).ok();
+    }
+
+    // Minimal tempdir helper — `tempfile` isn't a build dep and adding
+    // one for two tests isn't worth the surface. PID + monotonic nonce
+    // is unique enough for parallel `cargo test` runs.
+    fn tempdir() -> std::path::PathBuf {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NONCE: AtomicU64 = AtomicU64::new(0);
+        let n = NONCE.fetch_add(1, Ordering::SeqCst);
+        let pid = std::process::id();
+        let p = std::env::temp_dir().join(format!("bootstrap-init-test-{pid}-{n}"));
+        fs::create_dir_all(&p).expect("mkdir tempdir");
+        p
     }
 }
