@@ -176,8 +176,30 @@ export const make = async (powers, context) => {
     );
     const cancelConnection = () => E(connectionContext).cancel();
 
-    // Open an OCapN-Noise session and fetch the remote daemon's
-    // bootstrap object by its well-known swissnum.
+    // Establish (or reuse) an OCapN-Noise session up front, so we have
+    // an abort handle to race the dial path against cancellation. Wire
+    // `connectionCancelled` to abort the session as soon as it
+    // materializes — even if cancellation wins the race, the session
+    // that does eventually establish will be torn down rather than
+    // leaking, and any CapTP work pending on that session rejects with
+    // "Session disconnected" rather than hanging.
+    const sessionPromise = client.provideSession(remoteLocation);
+    const sessionReady = sessionPromise.then(session => {
+      connectionCancelled.catch(reason =>
+        session.abort(
+          /** @type {Error} */ (
+            reason instanceof Error ? reason : Error('connection cancelled')
+          ),
+        ),
+      );
+      return session;
+    });
+    await Promise.race([sessionReady, connectionCancelled]);
+
+    // Fetch the remote daemon's bootstrap object by its well-known
+    // swissnum. `enlivenSturdyRef` reuses the active session we just
+    // established; subsequent CapTP operations naturally fail-fast if
+    // cancellation aborts that session out from under them.
     const sturdyRef = client.makeSturdyRef(remoteLocation, BOOTSTRAP_SWISSNUM);
     const remoteBootstrap = await client.enlivenSturdyRef(sturdyRef);
     const remoteGreeterP = E(remoteBootstrap).getGreeter();
