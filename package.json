@@ -54,14 +54,14 @@
     "clean": "git clean -fX -e node_modules",
     "docs": "rm -rf api-docs packages/ses/dist && typedoc && ./scripts/posttypedoc.sh",
     "update": "echo 'DEPRECATED: use \"yarn upgrade-interactive\" or \"yarn dedupe\"'",
-    "format": "prettier --write .github packages",
+    "format": "prettier --write '*.md' .github docs designs packages",
     "lint": "yarn lint:prettier && yarn lint:eslint && yarn lint:sh",
     "lint:eslint": "scripts/eslint-repo.sh",
-    "lint:workspaces": "prettier --check .github packages && yarn workspaces foreach --all run lint",
+    "lint:workspaces": "prettier --check '*.md' .github docs designs packages && yarn workspaces foreach --all run lint",
     "lint:workspaces:eslint": "yarn workspaces foreach --all run lint:eslint",
     "lint:fix": "yarn lint:eslint -- --fix",
     "lint:workspaces:fix": "yarn workspaces foreach --all run lint-fix",
-    "lint:prettier": "prettier --check .github packages",
+    "lint:prettier": "prettier --check '*.md' .github docs designs packages",
     "lint:sh": "scripts/shellcheck.sh",
     "release:npm": "scripts/release-npm.mjs",
     "pack:all": "scripts/pack-all.mjs",
@@ -81,7 +81,15 @@
   },
   "prettier": {
     "arrowParens": "avoid",
-    "singleQuote": true
+    "singleQuote": true,
+    "overrides": [
+      {
+        "files": ["*.md", "*.markdown"],
+        "options": {
+          "proseWrap": "preserve"
+        }
+      }
+    ]
   },
   "typeCoverage": {
     "atLeast": 0
