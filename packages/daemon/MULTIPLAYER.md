@@ -246,7 +246,7 @@ connects, the session is established over OCapN-Noise.
 ## Step 2: Create and Accept an Invitation
 
 One side creates an invitation; the other accepts it. This establishes a
-CapTP session and registers each side's host handle in the other's pet
+peer session and registers each side's host handle in the other's pet
 store.
 
 ### Alice Creates the Invitation
@@ -260,7 +260,7 @@ In Alice's chat:
 Fill in the **Guest name** field with the local name for the remote peer —
 for example, `bob`. The command prints an `endo://` locator URL. Copy it.
 
-The locator looks like:
+For a daemon with TCP networking enabled, the locator looks like:
 
 ```
 endo://abc123/42@tcp%2Bnetstring%2Bjson%2Bcaptp0%3A%2F%2F127.0.0.1%3A54321?type=invitation&from=7
@@ -271,6 +271,24 @@ The first component (here `42`) is the invitation's formula address; each
 subsequent component is a connection hint of the form
 `<transport-prefix>:<transport-payload>`, URL-encoded so that `@`, `/`,
 and `?` inside a hint round-trip cleanly.
+
+For a daemon with OCapN-Noise networking enabled, the locator instead
+carries an `ocapn+noise+tcp:` connection hint that embeds the full
+OCapN location (the agent's Ed25519 public key as the `designator`,
+plus the TCP host/port hints).
+
+When the accepting daemon dials this hint, the Noise IK handshake
+authenticates Alice's agent against the `designator` (her Ed25519
+public key) cryptographically — Alice's identity is *proven* by the
+handshake rather than *asserted* in a `hello` string the way the TCP
+path does it. Subsequent `E(remoteGateway).provide(formulaId)` calls
+flow as native OCapN `op:deliver` messages on that one session; no
+CapTP framing sits on top of the OCapN wire.
+
+If a daemon has more than one transport installed (e.g. both
+`@nets/tcp` and `@nets/ocapn`), the locator carries a connection hint
+per transport and the accepting daemon dials the first one whose
+protocol a local network module `supports`.
 
 ### Bob Accepts the Invitation
 
