@@ -10,6 +10,8 @@ Through the CLI, users can run confined programs, manage named values, send
 messages, and control the daemon lifecycle.
 
 See [`@endo/daemon`](../daemon/README.md) for more about the underlying daemon.
+For a worked tutorial that follows the same arc as this reference, see
+[`demo/README.md`](./demo/README.md).
 
 ## Getting Started
 
