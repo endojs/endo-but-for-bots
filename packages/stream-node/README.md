@@ -55,6 +55,10 @@ const writer = makeNodeWriter(process.stdout);
 await pump(writer, reader);
 ```
 
+`pump` from `@endo/stream` reads every chunk from the reader and
+writes it to the writer in order, awaiting backpressure, and returns
+when the reader is exhausted.
+
 ## API
 
 ### `makeNodeReader(input)`
