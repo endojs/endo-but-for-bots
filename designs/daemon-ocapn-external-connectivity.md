@@ -69,26 +69,31 @@ Deviations from the design as first written, and why:
   below — until the OCapN identity is bound to the daemon keypair,
   removing the CapTP transport would regress cross-daemon identity.
 
-Known blocker — per-agent keys (`daemon-agent-network-identity`):
+Single-identity binding (per-agent NETS still pending):
 
-- The OCapN-Noise network needs the raw Ed25519 private key bytes for
-  its handshake. The daemon's `@keypair` is a capability that
-  deliberately does not expose raw key bytes, and the only key
-  material a network caplet can read today is the *public* node id
-  from `getPeerInfo()`. So `networks/ocapn.js` currently mints a fresh
-  per-network signing key; the OCapN session identity is therefore not
-  yet the daemon node number. The connection hint carries the full
-  OCapN location so dialing still works, but binding the OCapN
-  identity to the agent keypair is exactly the
+- `networks/ocapn.js` binds the OCapN-Noise signing key to the host
+  agent's own Ed25519 keypair via a new `EndoHost.getSigningKeys()`
+  method that reads the per-agent record out of the `agent_key`
+  SQLite table. The OCapN session identity is now the same Ed25519
+  public key that stamps the agent's `endo://` locators, and the
+  Noise handshake authenticates it cryptographically — the
+  bootstrap's `getNodeId` self-report is now belt-and-suspenders.
+- The network carries exactly one identity (the host agent that
+  installed it) rather than registering every agent's key with one
+  shared network. That broader shape is items 3-4 of
   [`daemon-agent-network-identity`](daemon-agent-network-identity.md)
-  design and must land before the OCapN transport can replace the
-  CapTP one outright.
+  (Per-Agent NETS / Network Registration), which are still Not
+  Started; when they land, this transport's keypair lookup becomes
+  one `addSigningKeys` call per registered agent.
 
-Remaining (Phases 2-3): bind the OCapN identity to the agent keypair,
-make `@nets/ocapn` the default transport, route `endo://` locators
-through OCapN sturdyrefs, retire `tcp-netstring.js`, and extend the
-in-process integration test to the forked-daemon multiplayer flow
-described in the Test Plan below.
+Remaining (Phases 2-3): make `@nets/ocapn` the default transport,
+route `endo://` locators through OCapN sturdyrefs, retire
+`tcp-netstring.js`, and extend the in-process integration test to the
+forked-daemon multiplayer flow described in the Test Plan below — the
+multiplayer suite at `packages/daemon/test/invite-retention-ocapn.
+test.js` already runs the full invite/accept/value-exchange/restart/
+partition/three-party/sub-invitation-chain/agent-ring flow over
+OCapN-Noise.
 
 ## What is the Problem Being Solved?
 
