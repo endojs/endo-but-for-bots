@@ -253,6 +253,7 @@ const zeroRow = name => ({
 
 /**
  * @param {ReturnType<typeof summarize>} rows
+ * @param focusRows
  * @returns {string}
  */
 const summarizeMarkdown = (rows, focusRows = []) => {
@@ -373,16 +374,25 @@ const makeDerivedMetrics = (allRows, focusSpans, events) => {
 };
 
 const main = async () => {
+  const { values: rawValues, positionals } = parseArgs({
+    options,
+    allowPositionals: true,
+  });
+  // Narrow each option to `string | boolean | undefined` since none of the
+  // option definitions enable multiple. parseArgs's general return type
+  // unions `string | string[] | undefined` for every value, which forces a
+  // cast at every consumer if not narrowed here.
+  const values =
+    /** @type {{ 'out-trace'?: string, 'out-summary'?: string, 'out-markdown'?: string, top?: string, stacked?: boolean }} */ (
+      rawValues
+    );
   const {
-    values: {
-      'out-trace': outTrace = 'merged.trace.json',
-      'out-summary': outSummary = 'summary.json',
-      'out-markdown': outMarkdown = 'summary.md',
-      top: topRaw = '30',
-      stacked = true,
-    },
-    positionals,
-  } = parseArgs({ options, allowPositionals: true });
+    'out-trace': outTrace = 'merged.trace.json',
+    'out-summary': outSummary = 'summary.json',
+    'out-markdown': outMarkdown = 'summary.md',
+    top: topRaw = '30',
+    stacked = true,
+  } = values;
 
   if (positionals.length === 0) {
     throw new Error(usage);
@@ -416,14 +426,16 @@ const main = async () => {
     const events = trace.traceEvents || [];
     let maxEndUs = 0;
     for (const event of events) {
+      /** @type {Record<string, unknown>} */
       const copy = {
         ...event,
-        args: { ...(event.args || {}), source: filePath },
+        args: {
+          .../** @type {Record<string, unknown>} */ (event.args || {}),
+          source: filePath,
+        },
       };
-      if (stacked) {
-        if (typeof copy.ts === 'number') {
-          copy.ts += offsetUs;
-        }
+      if (stacked && typeof copy.ts === 'number') {
+        copy.ts += offsetUs;
       }
       const ts = typeof copy.ts === 'number' ? copy.ts : 0;
       const dur = typeof copy.dur === 'number' ? copy.dur : 0;
