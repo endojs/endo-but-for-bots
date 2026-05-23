@@ -45,15 +45,15 @@ test('buildQemuArgs emits the chardev/virtserialport quartet from Appendix A', t
   // because the stdio mux opens the connection to QEMU.
   t.regex(
     j,
-    /-chardev socket,id=ctl,path=\/sessions\/abc\/ctl\.sock,server=off,reconnect=1/,
+    /-chardev socket,id=ctl,path=\/sessions\/abc\/ctl\.sock,server=off,reconnect-ms=1000/,
   );
   t.regex(
     j,
-    /-chardev socket,id=fs,path=\/sessions\/abc\/fs\.sock,server=off,reconnect=1/,
+    /-chardev socket,id=fs,path=\/sessions\/abc\/fs\.sock,server=off,reconnect-ms=1000/,
   );
   t.regex(
     j,
-    /-chardev socket,id=agent,path=\/sessions\/abc\/agent\.sock,server=off,reconnect=1/,
+    /-chardev socket,id=agent,path=\/sessions\/abc\/agent\.sock,server=off,reconnect-ms=1000/,
   );
   t.regex(
     j,
@@ -152,9 +152,9 @@ const parseChardevs = args => {
 //
 //   id     | orchestrator role | required chardev mode
 //   ─────  │ ────────────────  │ ─────────────────────
-//   ctl    │ server            │ server=off,reconnect=1
-//   fs     │ server            │ server=off,reconnect=1
-//   agent  │ server            │ server=off,reconnect=1
+//   ctl    │ server            │ server=off,reconnect-ms=1000
+//   fs     │ server            │ server=off,reconnect-ms=1000
+//   agent  │ server            │ server=off,reconnect-ms=1000
 //   stdio  │ client            │ server=on
 const CHARDEV_ROLES = harden({
   ctl: 'orchestrator-server',
@@ -184,9 +184,9 @@ test('chardev modes are compatible with orchestrator role (no double-bind)', t =
         `chardev id=${id} expects server=off (orchestrator binds), got server=${spec.server}`,
       );
       t.is(
-        spec.reconnect,
-        '1',
-        `chardev id=${id} expects reconnect=1 so the guest retries after an orchestrator restart`,
+        spec['reconnect-ms'],
+        '1000',
+        `chardev id=${id} expects reconnect-ms=1000 so the guest retries after an orchestrator restart`,
       );
     } else {
       // Orchestrator (stdio mux) connects to QEMU's chardev; QEMU
@@ -198,4 +198,44 @@ test('chardev modes are compatible with orchestrator role (no double-bind)', t =
       );
     }
   }
+});
+
+// The chardev `reconnect` knob changed spelling between QEMU
+// releases: `reconnect=<seconds>` was deprecated in 9.2 and removed
+// in 10.0; `reconnect-ms=<ms>` was added in 9.0 and is the only
+// form modern (Homebrew, current Fedora, etc.) QEMU accepts.
+// Ubuntu 24.04 LTS still ships 8.2.2 which only knows the legacy
+// form. `buildQemuArgs` picks the right one from the optional
+// `qemuVersion` opt; `spawnVm` populates it from `detectQemuVersion`
+// at spawn time.
+test('buildQemuArgs emits legacy reconnect=N when qemuVersion.major < 9', t => {
+  const args = buildQemuArgs({
+    arch: 'x86_64',
+    record: baseRecord,
+    config: baseConfig,
+    netArgs: [],
+    qemuVersion: { major: 8, minor: 2, patch: 2 },
+  }).join(' ');
+  t.regex(args, /server=off,reconnect=1/);
+  t.notRegex(args, /reconnect-ms/);
+});
+
+test('buildQemuArgs emits reconnect-ms=N when qemuVersion.major >= 9 (and by default)', t => {
+  const argsModern = buildQemuArgs({
+    arch: 'x86_64',
+    record: baseRecord,
+    config: baseConfig,
+    netArgs: [],
+    qemuVersion: { major: 10, minor: 2, patch: 0 },
+  }).join(' ');
+  t.regex(argsModern, /server=off,reconnect-ms=1000/);
+  t.notRegex(argsModern, /,reconnect=/);
+
+  const argsDefault = buildQemuArgs({
+    arch: 'x86_64',
+    record: baseRecord,
+    config: baseConfig,
+    netArgs: [],
+  }).join(' ');
+  t.regex(argsDefault, /server=off,reconnect-ms=1000/);
 });

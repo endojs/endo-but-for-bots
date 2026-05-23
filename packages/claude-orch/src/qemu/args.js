@@ -11,6 +11,29 @@ import path from 'node:path';
 import process from 'node:process';
 
 /**
+ * The chardev reconnect parameter is version-skewed across QEMU
+ * releases. `reconnect=<seconds>` was deprecated in QEMU 9.2 and
+ * removed in 10.0 — current Homebrew (10.2.x) refuses the old form
+ * with `Invalid parameter 'reconnect'`. `reconnect-ms=<ms>` was
+ * introduced in QEMU 9.0 and is the only supported spelling on
+ * 10.x. Ubuntu 24.04 LTS still ships 8.2.2, which only knows the
+ * legacy form. We emit the right one based on the detected major
+ * version (see `detectQemuVersion` in `spawner.js`); when no
+ * version is supplied we default to the modern form, which is
+ * correct for the orchestrator's target platforms (modern Linux
+ * distros + Homebrew on macOS).
+ *
+ * @param {{ major: number }} [qemuVersion]
+ * @returns {string}
+ */
+const reconnectSpec = qemuVersion => {
+  if (qemuVersion && qemuVersion.major < 9) {
+    return 'reconnect=1';
+  }
+  return 'reconnect-ms=1000';
+};
+
+/**
  * Build the argv for `qemu-system-<arch>` for one session.
  *
  * Mirrors Appendix A of DESIGN.md. The argv is platform-dependent in two
@@ -24,10 +47,17 @@ import process from 'node:process';
  *   record: SessionRecord,
  *   config: OrchestratorConfig,
  *   netArgs: readonly string[],
+ *   qemuVersion?: { major: number },
  * }} opts
  * @returns {string[]}
  */
-export const buildQemuArgs = ({ arch, record, config, netArgs }) => {
+export const buildQemuArgs = ({
+  arch,
+  record,
+  config,
+  netArgs,
+  qemuVersion,
+}) => {
   const platform = process.platform;
   const accel = platform === 'darwin' ? 'hvf' : 'kvm';
   const machine =
@@ -87,19 +117,20 @@ export const buildQemuArgs = ({ arch, record, config, netArgs }) => {
     // `makeAgentLink` call `server.listen`) before spawning QEMU; if
     // QEMU were configured with `server=on` here, both processes
     // would try to bind the same path and QEMU would fail with
-    // EADDRINUSE. `reconnect=1` lets the guest retry if the
-    // orchestrator restarts and rebinds the socket. The same pattern
-    // is mirrored in `scripts/smoke-boot.sh`.
+    // EADDRINUSE. The reconnect knob lets the guest retry if the
+    // orchestrator restarts and rebinds the socket. See
+    // `reconnectSpec` for the QEMU-version handling; the same
+    // pattern is mirrored in `scripts/smoke-boot.sh`.
     '-chardev',
-    `socket,id=ctl,path=${record.ctlSocketPath},server=off,reconnect=1`,
+    `socket,id=ctl,path=${record.ctlSocketPath},server=off,${reconnectSpec(qemuVersion)}`,
     '-device',
     'virtserialport,chardev=ctl,name=orchestrator',
     '-chardev',
-    `socket,id=fs,path=${record.fsSocketPath},server=off,reconnect=1`,
+    `socket,id=fs,path=${record.fsSocketPath},server=off,${reconnectSpec(qemuVersion)}`,
     '-device',
     'virtserialport,chardev=fs,name=workspace',
     '-chardev',
-    `socket,id=agent,path=${record.agentSocketPath},server=off,reconnect=1`,
+    `socket,id=agent,path=${record.agentSocketPath},server=off,${reconnectSpec(qemuVersion)}`,
     '-device',
     'virtserialport,chardev=agent,name=agent',
     '-chardev',

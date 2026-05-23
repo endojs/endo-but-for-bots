@@ -133,6 +133,21 @@ else
   QEMU_TIMEOUT=120
 fi
 
+# Chardev `reconnect` parameter spelling differs across QEMU
+# releases: 9.0 added `reconnect-ms=<ms>` and 9.2 deprecated
+# `reconnect=<seconds>`; 10.0 removed the legacy form entirely.
+# Ubuntu 24.04 LTS ships 8.2.2 which only knows the legacy form.
+# Mirrors `reconnectSpec` in `src/qemu/args.js`.
+QEMU_MAJOR="$(qemu-system-x86_64 --version 2>/dev/null \
+  | sed -n 's/^QEMU emulator version \([0-9][0-9]*\).*/\1/p' \
+  | head -1)"
+if [ -n "$QEMU_MAJOR" ] && [ "$QEMU_MAJOR" -lt 9 ]; then
+  CHARDEV_RECONNECT="reconnect=1"
+else
+  CHARDEV_RECONNECT="reconnect-ms=1000"
+fi
+step "QEMU chardev reconnect spec: $CHARDEV_RECONNECT (qemu major=${QEMU_MAJOR:-unknown})"
+
 timeout "$QEMU_TIMEOUT" qemu-system-x86_64 \
   -machine pc $QEMU_CPU \
   -smp 1 -m 256 -no-reboot \
@@ -141,11 +156,11 @@ timeout "$QEMU_TIMEOUT" qemu-system-x86_64 \
   -drive "id=rootfs,file=$BUILD_DIR/rootfs-rw.raw,format=raw,if=none" \
   -device virtio-blk-pci,drive=rootfs \
   -device virtio-serial-pci \
-  -chardev "socket,id=ctl,path=$BUILD_DIR/ctl.sock,reconnect=1" \
+  -chardev "socket,id=ctl,path=$BUILD_DIR/ctl.sock,$CHARDEV_RECONNECT" \
   -device virtserialport,chardev=ctl,name=orchestrator \
-  -chardev "socket,id=fs,path=$BUILD_DIR/fs.sock,reconnect=1" \
+  -chardev "socket,id=fs,path=$BUILD_DIR/fs.sock,$CHARDEV_RECONNECT" \
   -device virtserialport,chardev=fs,name=workspace \
-  -chardev "socket,id=agent,path=$BUILD_DIR/agent.sock,reconnect=1" \
+  -chardev "socket,id=agent,path=$BUILD_DIR/agent.sock,$CHARDEV_RECONNECT" \
   -device virtserialport,chardev=agent,name=agent \
   -serial stdio -display none >"$BUILD_DIR/qemu.log" 2>&1 || true
 wait "$NODE_PID" 2>/dev/null || true
