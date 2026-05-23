@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-05-22 |
-| **Updated** | 2026-05-22 |
+| **Updated** | 2026-05-23 |
 | **Author** | Kris Kowal (prompted) |
 | **Status** | Proposed |
 | **Supersedes** | [endo-gateway](endo-gateway.md) |
@@ -17,8 +17,8 @@ as the `@apps` unconfined guest formula
 That shape works for the per-user developer install: one OS user,
 one daemon, one port, one weblet hierarchy, one CapTP bridge for
 Chat.
-It does not extend to the shapes the project now wants the gateway
-to support:
+It does not extend to the deployment shapes the project now wants
+from the gateway:
 
 1. A **per-host system service** that virtual-hosts many users on
    one address and registers from a UNIX-domain bootstrap socket
@@ -42,6 +42,17 @@ A single binary configuration cannot serve all of them without
 re-introducing the per-user, multi-user, and bundled-fallback
 forks the existing design corpus has been working around one PR
 at a time.
+
+Today, the daemon's HTTP+WebSocket server lives inline in
+`packages/daemon/src/web-server-node.js` as the `@apps` formula.
+This design extracts that code into `packages/gateway/` and
+generalizes the configuration surface so the five deployment
+shapes above all reduce to one package with different feature
+toggles.
+The extracted code keeps its present per-user behavior on the
+developer install, picks up the system-service shape via a thin
+`@endo/gateway-daemon` wrapper, and rides into the Familiar via
+the same package imported into the Electron main process.
 
 The proposal is to extract the gateway concerns from `@endo/daemon`
 into a new package, **`@endo/gateway`**, that exposes a `make({ ... })`
@@ -192,53 +203,86 @@ Each subsection names what the feature is, how it composes with
 the existing corpus, the phase it lands in, and which questions
 it leaves open.
 
-### Feature 1: Chat-hosting with payment-token enhancement
+The original maintainer-directive Feature 1 ("Chat-hosting with
+payment-token enhancement") braids three orthogonal concerns:
+Chat-application hosting, per-account resource metering, and
+payment-processor integration.
+The panel review of the first draft surfaced that the braid hides
+three independent decisions (metering granularity, ledger location,
+payment-processor contract) and ships a `ResourceLedger` exo in the
+public Capability Surface before the gateway-side-vs-daemon-side
+trust boundary for metering is settled.
+This revision decomplects into three smaller features (1a, 1b, 1c),
+keeps the standalone surfaces visible, and removes the `ResourceLedger`
+from the package's public Capability Surface until the trust model
+is settled.
 
-The gateway hosts the Chat application as the entry-point weblet
-on the default virtual host (`http://<gateway-host>/` with no
-weblet-id subdomain).
+### Feature 1a: Chat-hosting
+
+The gateway hosts the Chat application as the entry-point weblet on
+the default virtual host (`http://<gateway-host>/` with no weblet-id
+subdomain).
 The Chat weblet today connects to a per-user daemon over the
 `fetch(token)` WebSocket call
 ([`daemon-web-gateway`](daemon-web-gateway.md),
-[`gateway-bearer-token-auth`](gateway-bearer-token-auth.md)); that
-flow carries forward, with the gateway routing the WS upgrade to
-the user daemon identified by the bearer token.
+[`gateway-bearer-token-auth`](gateway-bearer-token-auth.md));
+that flow carries forward, with the gateway routing the WS upgrade
+to the user daemon identified by the bearer token.
+Chat-hosting depends on Feature 2 (virtual hosting) and on no other
+Feature-1 sub-component.
 
-The **payment-token enhancement** is the new bit: the gateway
-exposes a resource-accounting surface (compute, storage, network
-counters), and the Chat weblet renders a purchase UI that
-credits resource tokens onto the user's account.
-The split:
+### Feature 1b: Resource ledger (deferred from this design's surface)
 
-- **Gateway responsibility:** maintain per-account resource counters
-  (compute seconds, storage bytes, network bytes), expose a
-  CapTP-reachable `ResourceLedger` exo with `getBalance`,
-  `chargeBalance`, and `purchaseTokens` methods, and gate
-  resource-intensive operations on a positive balance.
-- **Chat weblet responsibility:** render the purchase UI, integrate
-  with the payment processor (Stripe, Coinbase Commerce, or
-  similar), receive payment-completion webhooks, and call
-  `E(resourceLedger).purchaseTokens(tokens, paymentProof)` to credit
-  the balance.
+A per-account resource ledger (compute / storage / network counters)
+is a separate capability that any weblet, daemon, or admin tool may
+want to consult.
+A first instinct is to add a `ResourceLedger` exo to the gateway's
+Capability Surface with `getBalance`, `chargeBalance`, and
+`purchaseTokens` methods.
+This design **does not** add that exo yet.
+The reason is the trust boundary the original draft hand-waved past:
+the gateway can meter its own HTTP/WS traffic, but it cannot
+directly meter compute inside a user daemon's worker without
+instrumentation on the daemon side, and the gateway has no clean
+authority to charge for storage it does not own.
+Adding the exo to the public surface before that boundary is
+settled would lock in a contract that later trust-model work cannot
+revise without a breaking change.
 
-The payment processor is **out of scope for `@endo/gateway`** and
-is contracted via the `ResourceLedger`'s `purchaseTokens(tokens,
-proof)` interface; the `proof` is opaque to the gateway, validated
-by an external `PaymentProcessor` exo the operator supplies in
-configuration.
-This keeps the gateway agnostic to the specific payment system.
+The resource-ledger work moves to a follow-up design that resolves:
+where the counters live (gateway, daemon, or split), what the
+authority shape is (which actor may read, which may charge, which
+may credit), and what the standalone resource-ledger CapTP surface
+looks like.
+That follow-up design lands before phase 2's ledger plumbing,
+not after, so the implementation work has a settled trust model to
+build against.
+Until that follow-up lands, this design's Capability Surface omits
+`ResourceLedger`.
 
-The resource-accounting surface is implementable independent of
-the payment integration; phase 2 lands the ledger and metering,
-phase 4 lands a reference payment-processor adapter.
+### Feature 1c: Payment-adapter (deferred sibling)
 
-**Open question:** the granularity of the resource counters (per-
-request vs. per-session vs. per-weblet), and whether the gateway
+Payment-processor integration (Stripe, Coinbase Commerce, Lightning,
+on-chain stablecoin) is a separate operator-supplied external.
+The gateway delegates to a `PaymentAdapter` configured by the
+operator, but the contract between the resource ledger and the
+payment adapter depends on the ledger's settled trust model
+(Feature 1b above).
+This design **does not** pin the payment-adapter shape; it lands as
+a sibling follow-up to the resource-ledger design once the ledger's
+contract is decided.
+Phase 4 in this design's roadmap was originally going to land a
+reference payment-processor adapter; the revised roadmap defers
+that work to the post-1b follow-up design rather than tying it to
+this package's phase plan.
+
+**Open question:** the granularity of the resource counters
+(per-request, per-session, per-weblet) and whether the gateway
 itself owns the metering or delegates to the per-user daemon.
-This depends on the trust model: the gateway can meter its own
-HTTP/WS traffic, but it cannot directly meter compute inside a
-user daemon's worker without instrumentation in the daemon side.
-Surfaced rather than answered.
+The gateway can meter its own HTTP/WS traffic, but it cannot
+directly meter compute inside a user daemon's worker without
+instrumentation on the daemon side.
+The follow-up resource-ledger design picks this up.
 
 ### Feature 2: Virtual hosting (Host header → Weblet formula)
 
@@ -288,9 +332,44 @@ For multi-user hosts, each user's `@apps` NameHub is local to
 their host agent; the gateway aggregates the bindings from every
 registered user into its routing table.
 The virtual-host namespace is collision-prone (two users binding
-`chat.example.com` would fight); the gateway resolves collisions
-by operator policy (first-bind-wins by default; explicit-allowlist-
-per-user with operator override).
+`chat.example.com` would fight).
+
+**Threat model for multi-user allocation.**
+A mutually-distrusting multi-user system-service deployment cannot
+use first-bind-wins: two users on the same host can both call
+`E(apps).bind('chat.example.com', myWeblet)`; whichever lands first
+wins, the other gets a silent registration that never serves
+traffic, and a malicious user can deny service to a legitimate
+user by binding popular names first.
+This design therefore restricts the deployment shapes that may
+enable Feature 2 to one of two profiles:
+
+1. **Single-user / mutually-trusting deployment** (developer-install,
+   Familiar-bundled, single-tenant system-service). First-bind-wins
+   is acceptable because the only registrants are the same trust
+   domain. This is the default profile.
+2. **Multi-user / mutually-distrusting deployment** (a public
+   system-service, a multi-tenant host). Enabling Feature 2
+   requires the **authenticated-allocation** sub-mode: the operator
+   pre-allocates a hostname namespace per user (a subdomain prefix
+   or an explicit allowlist), and `bind` is checked against that
+   namespace at registration time.
+   First-bind-wins is **disabled** in this sub-mode.
+
+The configuration flag `vhost.allocationPolicy` selects between
+`first-bind-wins` (profile 1) and `authenticated-allocation`
+(profile 2); the gateway refuses to start under
+`first-bind-wins` if the operator has also enabled multi-user
+registration via the UDS bootstrap's group-relaxed mode (Feature 4),
+because the combination is unsafe.
+
+The [`gateway-aws-attuned`](gateway-aws-attuned.md) variant resolves
+the multi-user case differently, by moving the allocation into the
+DNS layer (each tenant gets a subdomain).
+That AWS-native resolution does **not** apply to the non-AWS
+deployment shape, which is why this design pins the
+`authenticated-allocation` sub-mode for the generic-Linux
+multi-user case.
 
 The content-tree resolution path:
 
@@ -343,15 +422,26 @@ push and pull, authenticated by a formula-identifier bearer token.
 URL shape: `/git/<repo-id>/info/refs?service=git-upload-pack`,
 where `<repo-id>` is a Git-repo formula identifier (a new daemon
 formula type wrapping a Git working tree or a packed reference).
-Authentication is HTTP Basic with the formula identifier as the
-password (Git's standard Bearer scheme is awkward in many clients;
-Basic auth with an empty username and the token as the password is
-the de-facto convention for token-authenticated Git over HTTPS).
 
-Alternative: HTTP Bearer (`Authorization: Bearer <formula-id>`)
-where the client supports it (`git-credential` does, after some
-configuration).
-The gateway accepts both; the client chooses.
+**Authentication: HTTP Basic is the primary scheme.**
+The client sends `Authorization: Basic <base64(":" + token)>`
+(empty username, formula identifier as password). This is the
+de-facto convention for token-authenticated Git over HTTPS;
+`git` clients negotiate it without configuration via the standard
+`credential.helper` integration. The gateway's documentation and
+the `endo-gateway` CLI tooling emit `https://<host>/git/<repo-id>`
+URLs that resolve to Basic auth.
+
+HTTP Bearer (`Authorization: Bearer <formula-id>`) is **a
+tolerated fallback** for clients that prefer Bearer (some
+`git-credential` integrations do, with configuration). The
+gateway accepts Bearer when present, emits a single deprecation-
+free log line per session (`info: bearer-fallback for repo=<id>`),
+and treats it as semantically equivalent to Basic.
+Documentation does not advertise Bearer; it is recognized but not
+recommended.
+A future tightening that removes Bearer is a non-breaking change
+because no canonical client tooling depends on it.
 
 The formula-identifier bearer token is **the same 256-bit hex
 string** already used as the `fetch(token)` argument on the Chat
@@ -452,6 +542,20 @@ to the UDS gets a `GatewayBootstrap`, and from it the right to
 register relays.
 The filesystem permissions on the socket gate who-may-connect;
 the proof-of-possession step gates which-public-keys-may-register.
+
+The proof-of-possession step authenticates the *registering
+public key*, not the *registering relay target*. A
+group-member who legitimately holds key K can register K with
+any `relayTarget: UserDaemonHandle` they have a handle to;
+`relayTarget` must itself be a capability the registering user
+already holds (passed in over a separate CapTP path from the
+registering user's own daemon). The gateway does not validate
+that the registering user has independent authority to direct
+traffic to the named target; the operator running a multi-user
+host therefore restricts the UDS socket's group whitelist to
+mutually-trusting accounts, or pins
+`vhost.allocationPolicy = authenticated-allocation` (Feature 2)
+as the system-wide safety net.
 
 Phase 2.
 
@@ -566,9 +670,12 @@ sequenceDiagram
 The first implementation lands closed-allowlist (registration-
 required) by default; public-relay configuration is an explicit
 opt-in by the operator.
-The rate-limit and quota machinery composes from the
-`gateway-bearer-token-auth` `makeRateLimiter` and the resource
-ledger (feature 1) where present.
+The rate-limit machinery composes from the
+`gateway-bearer-token-auth` `makeRateLimiter`. The
+resource-ledger-tied gating named in earlier drafts depends on
+feature 1b landing first; until then, abuse-prevention relies on
+per-IP and per-public-key rate limits without a ledger-side quota
+hook.
 
 Phase 4.
 
@@ -585,9 +692,9 @@ The administrator's handle is **the UDS bootstrap from feature 4**.
 A process that can connect to the gateway's bootstrap socket
 holds the administrator's authority on the gateway: it can
 inspect the registration table, override the virtual-host
-allocation policy, view per-account resource balances, force-
-deregister a peer, and rotate the gateway's per-instance signing
-key.
+allocation policy, force-deregister a peer, and rotate the
+gateway's per-instance signing key. (Inspection of per-account
+resource balances waits for Feature 1b to land.)
 
 ```ts
 interface GatewayAdmin {
@@ -611,13 +718,8 @@ interface GatewayAdmin {
   /** Override an allocation policy decision. */
   setVirtualHostAllocationPolicy(policy: AllocationPolicy): Promise<void>;
 
-  /** Read per-account resource balances. */
-  getResourceBalances(): Promise<ReadonlyArray<{
-    account: AccountId;
-    compute: number;
-    storage: number;
-    network: number;
-  }>>;
+  // getResourceBalances is deferred to Feature 1b's follow-up
+  // design; the admin's read access lands when the ledger does.
 }
 ```
 
@@ -638,11 +740,15 @@ direct-to-this-gateway sessions.
 The path name encodes the codec/transport pair:
 
 - `ocapn`: protocol family.
-- `cbor`: payload codec ([`cbors`](cbors.md), peer of
-  `@endo/syrups`).
-- `np`: Noise Protocol network identifier (per
+- `cbor`: payload codec; each OCapN message is carried as a
+  CBOR-encoded record. [`cbors`](cbors.md) is the
+  `@endo/syrups`-peer library that implements CBOR for the Endo
+  codebase.
+- `np`: the Noise Protocol network identifier (per
   [`ocapn-noise-network`](ocapn-noise-network.md) § Network
-  Identifier).
+  Identifier). The Noise Protocol layer provides confidentiality
+  and peer authentication in-band, so the gateway never decrypts
+  the payload it relays.
 
 The naming differs from [`endo-gateway`](endo-gateway.md)'s
 `/ocapn` for forward extensibility: future siblings can land at
@@ -701,6 +807,18 @@ The configuration takes a CIDR allowlist of trusted proxy IPs;
 requests from outside the allowlist are treated as direct
 client requests (X-Forwarded headers ignored, the TCP peer's IP
 is the client IP, the `Host` header is taken at face value).
+
+**Interaction with Feature 2 virtual hosting.** The trust list is
+global to the gateway, but the `X-Forwarded-Host` header is what
+the gateway uses for `Host`-header-based weblet routing once the
+immediate peer is trusted. A misconfiguration (overly-broad CIDR,
+or an immediate peer that itself does not authenticate the
+underlying client) lets a malicious immediate peer forge
+`X-Forwarded-Host` and reach another user's weblet. Operators
+running multi-user weblets behind a terminating proxy carry the
+responsibility to authenticate the immediate peer before trusting
+its `X-Forwarded-Host`; the gateway's job is to honor the trust
+list once configured, not to second-guess it.
 
 ```ts
 interface TrustedProxyConfig {
@@ -833,20 +951,30 @@ The gateway exposes the following CapTP-reachable exos:
 ### Via the UDS bootstrap (`/run/endo-gateway/bootstrap.sock`)
 
 - `GatewayBootstrap`: the entry exo, with `challenge`,
-  `registerRelay`, `getApps`, `getBindAddress`.
+  `registerRelay`, `getBindAddress`, and a single admin-tool
+  convenience `getApps(userHandle)` that returns the
+  `AppsNameHub` for the named user's host (admin / operator
+  tooling reaches a user's `@apps` through this path so it can
+  enumerate bindings without holding the user's host agent).
 - `RelayRegistration`: handle returned by `registerRelay`, with
   `update`, `deregister`.
 - `AppsNameHub`: `bind`, `unbind`, `list`, `follow` (per the
   `EndoDirectory` `lookup` shape on `readable-tree` so that
   `E(apps).lookup('chat')` returns the weblet formula identifier).
+  The **canonical access path** is `E(agent).lookup('@apps')` on
+  the calling user's own host agent's special-names; the bootstrap-
+  side `getApps(userHandle)` is a *convenience for admin tooling
+  only*. End-user code does not call `getApps`; admin tooling does
+  not reach into per-user host agents.
 - `GatewayAdmin`: `listRegistrations`, `deregisterRelay`,
-  `listVirtualHosts`, `setVirtualHostAllocationPolicy`,
-  `getResourceBalances`. Only exposed to UDS clients (never on
-  the network).
-- `ResourceLedger`: `getBalance`, `chargeBalance`,
-  `purchaseTokens`, `setQuota`. Both the GatewayAdmin and the
-  per-user host agent have handles; the per-user handle is
-  scoped to the user's own account.
+  `listVirtualHosts`, `setVirtualHostAllocationPolicy`. Only
+  exposed to UDS clients (never on the network).
+
+The `ResourceLedger` exo named in the first draft of this design
+is **not exposed** in this surface. Feature 1b above (resource
+ledger) defers the ledger's CapTP shape to a follow-up design
+that settles the gateway-vs-daemon trust model first. Once that
+follow-up lands, the ledger's surface joins this list.
 
 ### Via the public HTTP/WS surface
 
@@ -886,15 +1014,54 @@ The gateway reads configuration in three layers (later wins):
    `ENDO_GATEWAY_ALLOWED_CIDRS` from
    [`gateway-bearer-token-auth`](gateway-bearer-token-auth.md)).
 
-### Per-feature toggles
+### Named configurations
 
-Each of the ten features is gated by a configuration flag.
-The defaults match the system-service deployment:
+The first cut of the configuration model exposed ten per-feature
+booleans plus a startup-time dependency validator. Reviewing the
+shape, that flag matrix is place-oriented: each operator must
+mutate a TOML place to enable or disable a feature, downstream
+readers must consult the same place to know what is enabled,
+and the matrix invites the "ten-flag deployment" pathology where
+every flag interacts with every other.
 
-| Feature | Flag | System-service default | Familiar default |
-|---------|------|------------------------|------------------|
-| 1. Chat hosting + payments | `chat.enabled` | true | true |
+A **value-oriented** alternative is the canonical path: the
+gateway ships four named configurations that specify the feature
+subset, and the operator chooses one. Overrides on the margin are
+allowed, but the operator does not have to assemble a feature set
+from scratch.
+
+| Configuration | Use case | Active features |
+|---------------|----------|-----------------|
+| `developer` | Per-user developer install (today's daemon shape) | 1a, 2, 8 |
+| `system-service` | Per-host system service (the directive's main target) | 1a, 2, 3, 4, 7, 8 |
+| `familiar-bundled` | Familiar-bundled fallback (Feature 5 sub-mode) | 1a, 2, 8 (no UDS) |
+| `public-relay` | CapTP relay-as-a-service | 4, 6, 7, 8, 9 |
+
+The operator names the configuration in `config.toml`:
+
+```toml
+[gateway]
+profile = "system-service"
+
+# Optional per-feature overrides on the margin:
+[gateway.overrides]
+git.enabled = false       # disable Git over HTTP on this host
+```
+
+### Per-feature toggles (margin-override surface)
+
+The per-feature flags remain available as the override surface
+beneath the named profiles. The defaults below describe the
+*profile-resolved* defaults; an operator's `[gateway.overrides]`
+block adjusts on the margin:
+
+| Feature | Flag | `system-service` | `familiar-bundled` |
+|---------|------|------------------|--------------------|
+| 1a. Chat hosting | `chat.enabled` | true | true |
+| 1b. Resource ledger | `ledger.enabled` | false (deferred) | false (deferred) |
+| 1c. Payment adapter | `payment.enabled` | false (deferred) | false (deferred) |
 | 2. Virtual hosting | `vhost.enabled` | true | true |
+| 2. Allocation policy | `vhost.allocationPolicy` | `authenticated-allocation` | `first-bind-wins` |
 | 3. Git over HTTP | `git.enabled` | true | false |
 | 4. UDS bootstrap | `uds.enabled` | true | false |
 | 5. Familiar-bundled | (variant) | n/a | n/a |
@@ -906,9 +1073,10 @@ The defaults match the system-service deployment:
 
 ### Dependencies between features
 
-- Feature 1 (Chat) depends on feature 2 (virtual hosting) for the
-  Chat weblet's bind, and on the resource ledger (a feature-1
-  sub-component) for payment-token accounting.
+- Feature 1a (Chat) depends on feature 2 (virtual hosting) for the
+  Chat weblet's bind. Features 1b (resource ledger) and 1c
+  (payment adapter) are deferred to a follow-up design and are
+  not assumed by any other feature in this package's first cuts.
 - Feature 6 (relay) depends on feature 8 (`/ocapn-cbor-np`) for
   the wire surface and on feature 4 (UDS) for registration.
 - Feature 7 (admin) depends on feature 4 (UDS) for its access
@@ -956,8 +1124,10 @@ single-user case.
 
 Phase 2: **System-service shape.**
 Land feature 4 (UDS bootstrap), feature 7 (admin daemon), and
-feature 1 (Chat hosting; the resource ledger plumbing, without
-the payment-processor adapter).
+feature 1a (Chat hosting). Feature 1b (resource ledger) and
+feature 1c (payment adapter) do **not** land in this phase;
+they wait for the follow-up resource-ledger design that settles
+the trust model.
 Introduce `@endo/gateway-daemon` as the system-service entry
 point.
 
@@ -971,7 +1141,9 @@ Phase 4: **Public service.**
 Land feature 6 (CapTP relay), feature 9 (HTTPS terminating-proxy
 support), and feature 10 (OS packaging: deb, rpm, PKGBUILD,
 Dockerfile).
-Reference payment-processor adapter for feature 1 lands here.
+The reference payment-adapter for feature 1c lands in the
+post-1b follow-up design's roadmap, not as part of this
+package's phase 4.
 
 The phases are sequential because each builds on its predecessor;
 the Phase-1 and Phase-2 work is on the critical path to feature
@@ -1038,22 +1210,30 @@ Phases 3 and 4 are independently order-able once Phase 2 is in.
    from feature 4 with an extended exo (`GatewayAdmin`).
    Admin authority is not on the network surface.
 
-8. **Per-account resource ledger lives in the gateway.**
-   The gateway is the layer where HTTP/WS traffic accrues; it is
-   the natural place to meter and gate.
-   The Chat weblet renders the purchase UI but does not own
-   accounting state; the gateway does.
+8. **Per-account resource ledger deferred to a follow-up design.**
+   The first draft of this design placed the ledger on the
+   gateway. Reviewing the trust boundary (the gateway can meter
+   its own HTTP/WS traffic but not compute inside a user
+   daemon's worker) surfaced that the ledger's location depends
+   on a settled trust model the first draft hand-waved past.
+   The ledger therefore moves out of this design and into a
+   follow-up that picks the location, the authority shape, and
+   the standalone CapTP surface before phase 2's ledger plumbing
+   lands. See Feature 1b above.
 
 ## Open Questions
 
-1. **Payment-token mechanism.**
-   Which payment processor (Stripe, Coinbase Commerce, Lightning,
-   on-chain stablecoin)?
-   What is the wire shape for the `paymentProof` the
-   `ResourceLedger.purchaseTokens(tokens, proof)` validates?
-   The gateway abstracts over the processor; the reference
-   implementation choice in phase 4 is a separate maintainer
-   decision.
+1. **Resource-ledger and payment-adapter contracts (Features 1b, 1c).**
+   The trust boundary between gateway-side and daemon-side
+   compute metering is the unsettled question that motivates the
+   deferral of the `ResourceLedger` exo from this design's
+   Capability Surface. A follow-up design lands the ledger's
+   CapTP surface (where counters live, who reads, who charges,
+   who credits) and, once that contract is settled, a sibling
+   payment-adapter design pins the `PaymentAdapter` shape and
+   the reference processor (Stripe, Coinbase Commerce, Lightning,
+   on-chain stablecoin). Both follow-up designs land before any
+   phase of this package's roadmap depends on them.
 
 2. **Abuse-prevention model for the public relay.**
    Per-public-key rate limit, per-IP rate limit, billing-tied
@@ -1062,15 +1242,30 @@ Phases 3 and 4 are independently order-able once Phase 2 is in.
    required) by default; the wider policy space is the operator's
    call and not pinned by this design.
 
-3. **Virtual-host name allocation across users.**
-   When two users want to bind `chat.example.com` to their own
-   weblets, who wins?
-   Candidates: first-bind-wins (simple, race-y); per-user
-   prefix (`<user>.chat.example.com`, scales but ugly URLs);
-   operator-administered allowlist per user (mostly-static).
-   The design names the question; the implementation lands
-   first-bind-wins by default with the operator-allowlist
-   override available.
+3. **Virtual-host name allocation across users (non-AWS case).**
+   Feature 2 above pins two profiles:
+   `first-bind-wins` for mutually-trusting deployments and
+   `authenticated-allocation` for mutually-distrusting multi-user
+   deployments. The remaining open product question is the
+   *shape* of authenticated allocation on the non-AWS multi-user
+   case: is it a TOML-side per-user namespace
+   (`user.foo.namespace = ["foo.example.com", "bar.example.com"]`),
+   a NameHub the operator delegates to each user, or a runtime
+   API the operator's onboarding tool calls? The
+   [`gateway-aws-attuned`](gateway-aws-attuned.md) variant resolves
+   by moving the namespace into DNS; the non-AWS analogue is
+   underspecified. The first implementation picks the simplest
+   shape that meets the constraint (operator-pinned namespace in
+   TOML) and revisits.
+
+   For the multi-tenant CAS isolation question that Open Question 5
+   originally named, the AWS-attuned variant resolves by moving the
+   CAS to S3 + DynamoDB per
+   [`gateway-aws-attuned`](gateway-aws-attuned.md) § Resolution of
+   parent Open Question 5. The non-AWS multi-user case remains
+   underspecified; the operator picks a CAS-isolation policy
+   (per-user subdirectory, shared dedup-by-hash with reference
+   counts) until a sibling design pins it.
 
 4. **Rotation story for formula-identifier bearer tokens.**
    Inherits the Pass-Invariant-Eq follow-up from
@@ -1078,7 +1273,8 @@ Phases 3 and 4 are independently order-able once Phase 2 is in.
    A token-rotation that preserves the E `Eq` property across
    key changes is unsolved.
 
-5. **Multi-tenant filesystem isolation for the per-user CAS.**
+5. **Multi-tenant filesystem isolation for the per-user CAS
+   (non-AWS case).**
    When the gateway hosts weblets from many users, it caches
    their content trees in `/var/cache/endo-gateway/`.
    The user-daemon-side `daemon-cas-management` plumbing
@@ -1089,8 +1285,13 @@ Phases 3 and 4 are independently order-able once Phase 2 is in.
    The first implementation uses a shared dedup-by-hash CAS with
    reference counts keyed by registering user; refinement
    deferred.
+   The [`gateway-aws-attuned`](gateway-aws-attuned.md) variant
+   resolves this question for the AWS-native shape by moving the
+   CAS to S3 + DynamoDB reference counts. The non-AWS multi-user
+   case is not addressed by that resolution and remains the
+   operator's choice until a sibling design pins it.
 
-6. **`@endo/gateway` vs `@endo/web-gateway`.**
+6. **`@endo/gateway` vs. `@endo/web-gateway`.**
    The package name is a maintainer pick.
    `@endo/gateway` matches the directive's language; `@endo/web-gateway`
    is more descriptive (the package is web-shaped specifically;

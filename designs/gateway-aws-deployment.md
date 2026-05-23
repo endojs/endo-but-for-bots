@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-05-22 |
-| **Updated** | 2026-05-22 |
+| **Updated** | 2026-05-23 |
 | **Author** | Kris Kowal (prompted) |
 | **Status** | Proposed |
 | **Depends on** | [gateway-packaging-ci](gateway-packaging-ci.md), [gateway-package](gateway-package.md) |
@@ -453,7 +453,7 @@ Secrets Manager adds:
   cross-account access.
 - A higher rate-limit ceiling and a richer audit shape.
 
-The cost difference ($0.40/secret/month vs free for Parameter Store
+The cost difference ($0.40/secret/month vs. free for Parameter Store
 under the 10,000 standard parameters quota) is not material once the
 deployment has a handful of secrets.
 Use Secrets Manager for anything that meets *any* of these criteria:
@@ -579,9 +579,15 @@ Cost-reduction follow-ups:
 
 - Replace NAT Gateways with NAT Instances (cheaper, less reliable;
   trade-off depends on operator's reliability tolerance).
-- Use VPC Gateway Endpoints for S3 (free) and Interface Endpoints for
-  Secrets Manager / ECR (cheaper than NAT for these specific traffic
-  flows).
+- Use Interface Endpoints for Secrets Manager / ECR (cheaper than NAT
+  for these specific traffic flows).
+- **S3 VPC Gateway Endpoints (free)** become relevant *only* once
+  the AWS-attuned variant lands and the gateway routes substantive
+  S3 traffic. In this design (Linux-service-on-EC2), the gateway
+  reaches S3 only indirectly via apt-update traffic; the savings
+  available pre-attunement are modest. The substantive S3 traffic
+  appears in [`gateway-aws-attuned`](gateway-aws-attuned.md); plan
+  the endpoint together with that variant's landing.
 
 A staging environment runs at roughly 1/3 the production cost (1
 instance, 1 NAT Gateway, smaller ALB): ~$90/month.
@@ -749,7 +755,7 @@ gateway, D and E are quality improvements.
    roles and trust policies that let the bot's CI assume those roles
    need to be configured by the maintainer at bootstrap time.
    This is operational work outside the design's reach but the
-   design names it so the bootstrap step is not forgotten.
+   design records it so the bootstrap step is not forgotten.
 
 ## Prompt
 

@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-05-22 |
-| **Updated** | 2026-05-22 |
+| **Updated** | 2026-05-23 |
 | **Author** | Kris Kowal (prompted) |
 | **Status** | Proposed |
 | **Depends on** | [gateway-package](gateway-package.md) |
@@ -113,17 +113,22 @@ reference pattern).
 Each packaging job stages that bundle into the distribution's expected
 layout, runs the distribution's build tool, and signs the result.
 
-Independent build (rather than stacked) because:
+Three reasons drive the independent-build choice: portability
+across distributions, blast-radius containment of signing-key
+failures, and shape difference between OS packages and container
+images.
 
-- The distributions have different conventions for filesystem layout,
-  pre/post hooks, and dependency declarations; the per-distribution
-  packaging files are not derivable from one another.
-- A failure in one packaging job should not block the others.
-  An apt-repo signing-key outage should not delay an rpm release.
-- The Docker image is fundamentally a different artifact shape (a
-  container image, not an OS package); building it from the same
-  bundle stream rather than from a packaged `.deb` keeps it
-  independent of any Debian-specific bug.
+- **Portability.** The distributions have different conventions for
+  filesystem layout, pre/post hooks, and dependency declarations;
+  the per-distribution packaging files are not derivable from one
+  another.
+- **Blast-radius containment.** A failure in one packaging job
+  should not block the others. An apt-repo signing-key outage
+  should not delay an rpm release.
+- **Shape difference.** The Docker image is fundamentally a
+  different artifact shape (a container image, not an OS package);
+  building it from the same bundle stream rather than from a
+  packaged `.deb` keeps it independent of any Debian-specific bug.
 
 Common across all four:
 
@@ -245,6 +250,28 @@ Node.js binary version.
 
 ## Per-Distribution Conventions
 
+### What the package guarantees
+
+The four distribution packages diverge in their *idiomatic*
+post-install hooks (Debian's `adduser --system --group`, RHEL's
+`useradd --system`, Arch's `endo-gateway.install`) but converge
+on the same post-install invariants. The hook is implementation
+detail; the table below pins the invariant the operator can rely
+on regardless of distribution:
+
+| Invariant | Value |
+|-----------|-------|
+| System user | `endo` (no login shell, no home directory creation) |
+| System group | `endo` |
+| State directory | `/var/lib/endo-gateway/`, mode `0750`, owner `endo:endo` |
+| Cache directory | `/var/cache/endo-gateway/`, mode `0750`, owner `endo:endo` |
+| Runtime directory | `/run/endo-gateway/`, mode `0750`, owner `endo:endo` (created by systemd's `RuntimeDirectory=`) |
+| Config directory | `/etc/endo-gateway/`, mode `0640`, owner `root:endo` |
+| systemd unit | `endo-gateway.service`, enabled (deb / rpm) or operator-enabled (Arch / Docker), not started by default |
+
+Each per-distribution hook below lands these same invariants
+through its idiomatic mechanism.
+
 ### Debian / Ubuntu (`.deb`)
 
 Layout under `packaging/deb/`:
@@ -276,9 +303,13 @@ Description: Endo Gateway: HTTP+OCapN service for the Endo distributed
  CapTP relay registration.
 ```
 
-The `Recommends:` line names the HTTPS terminating proxies that
+The `Recommends:` line lists the HTTPS terminating proxies that
 [`gateway-package`](gateway-package.md) § Feature 9 expects; the
-operator picks one.
+operator picks one. Debian's `|` (space-pipe-space) syntax in the
+`Recommends:` field means apt installs the first available
+alternate from the list; the operator's choice surfaces during
+`apt install` selection rather than requiring them to edit the
+control file.
 
 Post-install hook (`debian/postinst`):
 
@@ -404,8 +435,9 @@ package() {
 ```
 
 Arch ARM (the separate distribution for ARM hardware) is not in scope
-for the first cut; the AUR convention is to support `x86_64` only and
-let downstream ARM repackagers handle their own platforms.
+for the first cut; the AUR convention prioritizes `x86_64` first, and
+downstream ARM repackagers handle their own platforms when AUR
+packages do not ship multi-arch.
 
 The PKGBUILD lands in the AUR under the bot identity (`endojs` AUR
 account; the maintainer creates and grants the bot access at release
@@ -530,6 +562,23 @@ with `cosign verify --certificate-identity-regexp` against the
 expected workflow identity.
 No long-lived signing key is stored anywhere; the OIDC chain plus the
 transparency log substitutes.
+
+**Why the asymmetry between Docker and apt / yum.** Docker's
+sigstore-keyless path works because the OCI ecosystem has the
+Fulcio OIDC chain plus the Rekor transparency log as the
+client-side verification primitive: `cosign verify` accepts a
+short-lived certificate keyed to a workflow identity, and the
+transparency log makes the issuance auditable. apt and yum
+clients do *not* have an analogous transparency-log verification
+primitive; they verify against a published repository public key
+embedded in the client's trust store. A "no long-lived signing
+key anywhere" shape on apt / yum would require either
+short-lived per-release keys (which would force every consumer
+to re-trust on every release) or a transparency-log integration
+that does not exist in apt / yum today. The asymmetry is
+structural to the per-ecosystem tooling, not a choice this
+design made; the repo-key shape on apt / yum is the right
+fit for what those clients support.
 
 ### Why not the maintainer's personal GPG key?
 
@@ -664,7 +713,7 @@ The first cut is **on-demand, maintainer-tagged**.
 Once the gateway lands in the wild and a regular cadence is justified,
 move to a monthly release on the last Tuesday of each month (the
 established pattern for upstream Linux distribution packages).
-Pinning the cadence here is premature; the design names the seam.
+Pinning the cadence here is premature; the design records the seam.
 
 ### Channels
 

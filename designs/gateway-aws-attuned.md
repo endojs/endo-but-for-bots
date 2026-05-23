@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-05-22 |
-| **Updated** | 2026-05-22 |
+| **Updated** | 2026-05-23 |
 | **Author** | Kris Kowal (prompted) |
 | **Status** | Proposed |
 | **Depends on** | [gateway-aws-deployment](gateway-aws-deployment.md), [gateway-package](gateway-package.md) |
@@ -24,6 +24,26 @@ The maintainer directive frames this design as:
 > Enclaves, Route53, and the appropriate analogue to sqlite for a
 > hosted gateway service with a domain name.
 
+**What changes from the deployment-only design.** The previous
+design in this stack ([`gateway-aws-deployment`](gateway-aws-deployment.md))
+treats AWS as a host for a generic-Linux service: the Gateway is
+the same binary that runs on a bare Linux box, the EC2 instance
+provides the kernel, EBS provides the disk, the ALB provides the
+public address, and the Gateway's local sqlite holds state.
+This design replaces five of those generic-Linux substrates with
+AWS-native services that match each subsystem's actual shape:
+the CAS moves from `/var/cache/endo-gateway/` to S3 because S3 is
+already a content-addressed object store; the relay-and-ledger
+state moves from sqlite to DynamoDB because DynamoDB is already
+a partition-keyed key-value store; the long-lived signing key
+moves from Secrets Manager (visible to the OS on the EC2 instance)
+to a Nitro Enclave (invisible to the OS); the DNS layer becomes
+part of the routing fabric instead of a single CNAME; and the
+EC2 fleet splits into control plane and data plane. The reader
+who has not seen the prior design can read this preamble as a
+standalone framing, then consult the table for the per-service
+mapping.
+
 The five named services map to five subsystems that
 [`gateway-package`](gateway-package.md) currently treats as
 generic-Linux subsystems:
@@ -39,7 +59,7 @@ generic-Linux subsystems:
 Each substitute is a deliberate trade-off: it picks up AWS-native
 durability, scalability, and integration at the cost of portability
 and cost-floor.
-This design names the trade-offs explicitly so an operator who does
+This design records the trade-offs explicitly so an operator who does
 not need AWS-native scale can stay on the simpler shape from
 [`gateway-aws-deployment`](gateway-aws-deployment.md).
 
@@ -129,8 +149,9 @@ Per-tenant isolation is provided by the **bucket prefix** plus an IAM
 condition.
 The Gateway's EC2 instance role grants S3 access to
 `s3://endo-gateway-cas-<deployment>/tenants/${aws:PrincipalTag/tenant-id}/*`
-via an IAM condition; cross-tenant access requires an explicit
-operator override.
+(the `${aws:PrincipalTag/tenant-id}` is an AWS IAM condition variable
+expanded at policy-evaluation time) via an IAM condition;
+cross-tenant access requires an explicit operator override.
 
 For shared (public) content, the `shared/cas/` prefix holds objects
 that any tenant may read but only the operator may write.
@@ -291,55 +312,105 @@ interface GatewayEnclaveService {
 }
 ```
 
-### Key release via KMS attestation conditions
+### Two key roles: durable signing identity and ephemeral KMS-handshake key
 
-The enclave's keys are not embedded in the enclave image (which would
-make them recoverable by anyone who could exfiltrate the image).
-Instead, the keys are stored in **AWS KMS** with a **key policy**
-that releases them only to a Nitro Enclave whose attestation document
-matches a specific PCR (Platform Configuration Register) value
-(the SHA-384 hash of the enclave image).
+The enclave uses **two distinct keys** that earlier drafts of this
+design conflated. Naming them separately resolves the rotation /
+verification ambiguity the panel review surfaced.
+
+1. **Durable signing key** (the enclave's *responder identity*).
+   This is the long-lived Ed25519 key whose public half is the
+   gateway's OCapN-Noise `intended-responder` key and whose
+   signature backs issued bearer tokens. It is **stored in AWS
+   KMS** with a key policy that conditions release on Nitro
+   Enclave attestation matching a specific PCR (Platform
+   Configuration Register; the SHA-384 hash of the enclave image).
+   The durable key survives enclave instance rotation: a new
+   enclave with the same PCR is granted the same key by KMS.
+
+2. **Ephemeral KMS-handshake key**. On each enclave startup, the
+   enclave generates a fresh keypair *only* to wrap the
+   KMS-returned durable-key material in transit. The ephemeral
+   key is the response target in the KMS `kms:Decrypt` call's
+   attestation block; it lets KMS encrypt the durable-key
+   material to a key only this enclave instance holds. The
+   ephemeral key never signs anything; it exists for the duration
+   of the KMS handshake and is discarded.
 
 On enclave startup:
 
-1. Enclave generates a fresh ephemeral keypair.
-2. Enclave calls `attest()` and signs its public key into the
-   attestation document.
+1. Enclave generates a fresh ephemeral keypair (KMS-handshake key).
+2. Enclave calls `attest(nonce=ephemeral_pubkey)` and the
+   attestation document binds the ephemeral public key to this
+   enclave instance.
 3. Enclave forwards the attestation to KMS via the parent EC2 (the
-   parent has IAM permission to call `kms:Decrypt` with an attestation
-   document).
-4. KMS validates the attestation (PCRs match, image signature is from
-   the operator's signing identity), encrypts the key material to the
-   enclave's ephemeral public key, returns the encrypted blob.
-5. Enclave decrypts the blob, loads the key into memory, and is
-   ready.
+   parent has IAM permission to call `kms:Decrypt` with an
+   attestation document).
+4. KMS validates the attestation (PCRs match, image signature is
+   from the operator's signing identity), encrypts the **durable
+   key material** to the ephemeral public key, returns the
+   encrypted blob.
+5. Enclave decrypts the blob using its ephemeral private key,
+   loads the **durable** signing key into memory, and is ready.
+   The ephemeral key is discarded.
 
-The parent never sees the unencrypted key; an attacker with full root
-on the parent can do operations *under* the enclave's authority but
-cannot exfiltrate the key.
-Cycling the EC2 instance generates a fresh ephemeral keypair and
-re-attests.
+The parent never sees the durable key. An attacker with full
+root on the parent can use operations *under* the enclave's
+authority (the enclave will sign while it is live) but cannot
+exfiltrate the durable key. Cycling the EC2 instance regenerates
+the ephemeral handshake key but the durable signing key is
+unchanged; the new enclave re-acquires the same durable key from
+KMS on attestation.
+
+### Durable-key rotation
+
+Rotating the durable key is a separate, deliberate operation:
+
+1. Operator publishes a new enclave image (new PCR).
+2. Operator provisions a new key in KMS, with the new PCR as the
+   attestation condition.
+3. Operator runs the per-account re-issuance flow for outstanding
+   bearer tokens (the old durable key signs a hand-off record;
+   the new durable key re-issues each account's token).
+4. After a grace period (operator-named, default 30 days), the
+   old KMS key is deleted.
+
+The historical-key registry the gateway consults during the
+grace period is the KMS key history itself: KMS retains the
+prior key version, and verifiers (gateway data-plane EC2 calling
+the enclave's `verify()` operation) check the token's signature
+against both the current and the prior durable-key versions
+until the grace period ends.
 
 ### Resolution of bearer-token rotation (parent Open Question 4)
 
 [`gateway-package`](gateway-package.md) Open Question 4 named the
 **rotation story for formula-identifier bearer tokens** as unsolved.
-The Nitro Enclave shape gives a concrete answer:
+The Nitro Enclave shape above gives a concrete answer keyed on the
+durable signing key:
 
 - The bearer token is the SHA-256 of a Pass-Invariant-Eq tuple
-  signed by the enclave: `(account-id, issuance-time, enclave-pcr)`.
-- Rotation = new enclave image (new PCR) + new key in KMS +
-  per-account re-issuance flow.
-- The old token's `Pass-Eq` semantics carry forward because the tuple
-  encoding is canonical and the underlying account-id is the durable
-  identity.
-- The enclave-bound key never reaches a long-lived host disk, so a
-  compromised AMI does not exfiltrate the key.
+  signed by the **durable** key: `(account-id, issuance-time,
+  durable-key-id)`. The `durable-key-id` is the KMS key version,
+  not the enclave PCR (the PCR identifies the enclave image; the
+  key version identifies the signing identity backing the token).
+- Rotation = new enclave image (new PCR) + new KMS key version
+  (new durable key) + per-account re-issuance flow over a
+  grace period.
+- During the grace period both the current and prior durable-key
+  versions verify; afterward, only the current verifies and old
+  tokens fail closed.
+- The durable key never leaves KMS in plaintext; it is released
+  to a specific enclave PCR via the ephemeral-handshake mechanism
+  above, so a compromised AMI does not exfiltrate the durable
+  key. The historical-key registry is KMS's own key-version
+  history.
 
-This **partially resolves** parent Open Question 4: the *mechanism*
-of rotation is concrete; the *user-visible workflow* (do clients
-re-issue every Git remote URL on rotation, or is the old token still
-valid for a grace period?) is still an open product question.
+This **fully resolves** the verification side of parent Open
+Question 4. The remaining *user-visible workflow* question (do
+clients re-issue every Git remote URL on rotation, or is the old
+token valid for the full grace period?) is the operator's
+product call, not a design gap.
 
 ### Cost
 
@@ -646,10 +717,20 @@ shape is a serious piece of software in its own right.
    Tenancy is enforced at the IAM and access-pattern layer; no
    per-tenant tables or buckets means no quota walls.
 
-3. **Single DynamoDB table, single-table design.**
+3. **Single DynamoDB table, single-table design (with a noted
+   physical-vs-logical trade-off).**
    Standard DynamoDB best practice. The table holds all entity kinds
    for all tenants; the `(pk, sk)` shape and a single GSI cover the
-   access patterns.
+   access patterns. Single-table design is *easy* (one table to
+   provision, one set of IAM policies) but ships accidental
+   complexity into every read-and-write path (every consumer must
+   know the `pk` / `sk` encoding for each entity kind). The
+   first-cut shape collapses physical schema (one table) into
+   logical schema (one model); a future refactor lands a code-side
+   data-access layer that hides the `(pk, sk)` encoding behind
+   entity-kind-specific helpers, decomplecting storage shape from
+   logical model. Acknowledged here so the trade-off is visible
+   rather than presented as the only natural choice.
 
 4. **Nitro Enclave holds the long-lived signing material.**
    Parent EC2 compromise does not exfiltrate the key. The PCR-gated
@@ -679,7 +760,7 @@ shape is a serious piece of software in its own right.
    The CapTP exo that provisions a tenant (Route53 record + ALB +
    IAM + DynamoDB prefix + S3 prefix + enclave-issued bearer-token)
    is a substantial piece of software in its own right. The first-
-   cut design names that it exists; the actual shape is a follow-up
+   cut design records that it exists; the actual shape is a follow-up
    design.
 
 2. **Per-tenant cost attribution.**
