@@ -1,8 +1,17 @@
 # Endo Design Documents
 
-*Last updated: 2026-05-20 (daemon mount and git capability plans added — three new design docs revised per design-panel review: structured-result-shape migration deferred to Phase 7, `tree(ref)` and `readOnly()` both live on the `Git` cap, `NativeGitBackend` hardening envelope split off the essential `GitBackend` contract, `EndoMountBacking` pinned to a hidden Exo facet, credential-injection mechanism named, native git pinned to >=2.30, restart-mid-operation tests added, open-question debt reduced from 20 to 2; landed on top of the same-day forge-gap-analysis Reference design and the same-day full grooming pass that reconciled milestone-totals, added the 2026-05-20 calibration round, re-projected the Summary by Milestone and Gantt, and refreshed Progress-as-of; itself landed on top of the 2026-05-19 status-only sweep that reconciled Status fields with shipped state on `llm`, M½ project-hygiene milestone extracted from M1, endopi raft added, PR #302 consolidation absorbed, and patterns-diagnostic-feedback added)*
+*Last updated: 2026-05-22 (per-platform packaging lanes and pre-release CI workflow added as two sibling designs extending `familiar-release.md`; landed on top of the 2026-05-20 daemon mount and git capability plans pass.)*
 
 *Recently added or revised:
+[familiar-platform-packaging](familiar-platform-packaging.md) (added
+2026-05-22; per-platform packaging lanes extending
+[familiar-release](familiar-release.md) G2/G3/G4/G15; macOS .dmg sign+notarize,
+Windows NSIS+EV signing, Linux .deb/.rpm via `@electron-forge/maker-*`
+invoked as libraries from `make-distributables.mjs`; cross-links Flatpak
+from PR #322 without duplication),
+[familiar-pre-release-e2e](familiar-pre-release-e2e.md) (added 2026-05-22;
+dedicated pre-release CI workflow with end-to-end validation across all
+packaging lanes; sibling of `familiar-platform-packaging`),
 [daemon-mount-capabilities](daemon-mount-capabilities.md) (added
 2026-05-18, revised 2026-05-20; concrete completion plan for
 `EndoMount`, mount-scoped entry descriptors as values, snapshotting,
@@ -160,6 +169,8 @@ LLM-agent stack).*
 | [familiar-electron-shell](familiar-electron-shell.md) | 2026-02-14 | 2026-02-26 | **Complete** |
 | [familiar-gateway-migration](familiar-gateway-migration.md) | 2026-02-14 | 2026-02-26 | **Complete** |
 | [familiar-localhttp-protocol](familiar-localhttp-protocol.md) | 2026-02-24 | 2026-02-25 | In Progress (partially implemented) |
+| [familiar-platform-packaging](familiar-platform-packaging.md) | 2026-05-22 | 2026-05-23 | Proposed |
+| [familiar-pre-release-e2e](familiar-pre-release-e2e.md) | 2026-05-22 | 2026-05-23 | Proposed |
 | [familiar-unified-weblet-server](familiar-unified-weblet-server.md) | 2026-02-14 | 2026-05-06 | In Progress |
 | [formula-inspector](formula-inspector.md) | 2026-02-14 | 2026-02-24 | Not Started |
 | [gateway-bearer-token-auth](gateway-bearer-token-auth.md) | 2026-03-02 | 2026-03-06 | **Implemented** |
@@ -197,7 +208,7 @@ LLM-agent stack).*
 | [namehub-interface-unification](namehub-interface-unification.md) | 2026-05-07 | 2026-05-07 | Proposed |
 | [forge-gap-analysis](forge-gap-analysis.md) | 2026-05-20 | 2026-05-20 | Reference (exploratory) |
 
-**Totals:** 39 Complete/Implemented, 18 In Progress, 36 Not Started, 20 Proposed, 2 Active, 7 Reference, 2 Deprecated, 1 Superseded (125 designs). Refreshed 2026-05-19 by a status-only sweep (consolidating the 2026-05-18 sweep with the 2026-05-19 batch update for 11 additional designs from closed PR #302) plus the patterns-diagnostic-feedback and ocapn-noise-session-reconnect Proposed entries; the 12-design jump in Complete/Implemented over the 2026-05-08 snapshot reflects shipped work whose Status field had not previously been updated, not new completions in this pass; see the corresponding "## Status" sections in each design file for evidence pointers (commit SHA or PR number). Totals reflect the 16 design files added on `llm` since the sweep's branch point (the endopi raft of `endopi` + 8 `endopi-*` gap-closing designs, `hardened-text-codecs-shim`, `hardened-url-shim`, namehub-interface-unification (Proposed) added by PR #117 on rebase, forge-gap-analysis (Reference) added 2026-05-20, and the daemon mount and git capability trio: `daemon-mount-capabilities` + `daemon-git-capability` + `daemon-git-remotes`).
+**Totals:** 39 Complete/Implemented, 18 In Progress, 36 Not Started, 22 Proposed, 2 Active, 7 Reference, 2 Deprecated, 1 Superseded (127 designs). Refreshed 2026-05-19 by a status-only sweep (consolidating the 2026-05-18 sweep with the 2026-05-19 batch update for 11 additional designs from closed PR #302) plus the patterns-diagnostic-feedback and ocapn-noise-session-reconnect Proposed entries; the 12-design jump in Complete/Implemented over the 2026-05-08 snapshot reflects shipped work whose Status field had not previously been updated, not new completions in this pass; see the corresponding "## Status" sections in each design file for evidence pointers (commit SHA or PR number). Totals reflect the 16 design files added on `llm` since the sweep's branch point (the endopi raft of `endopi` + 8 `endopi-*` gap-closing designs, `hardened-text-codecs-shim`, `hardened-url-shim`, namehub-interface-unification (Proposed) added by PR #117 on rebase, forge-gap-analysis (Reference) added 2026-05-20, the daemon mount and git capability trio `daemon-mount-capabilities` + `daemon-git-capability` + `daemon-git-remotes`, and the two 2026-05-22 familiar designs `familiar-platform-packaging` + `familiar-pre-release-e2e` (both Proposed)).
 
 ## Roadmap
 
@@ -248,6 +259,10 @@ flowchart TD
         dci[daemon-checkin-checkout<br/><i>COMPLETE</i>]
         dapp[daemon-weblet-application]
         exozip[exo-zip-package]
+        frel[familiar-release]
+        fplat[familiar-platform-packaging]
+        fe2e[familiar-pre-release-e2e]
+        fflat[familiar-flatpak-pipeline]
         fbund --> fweb --> fchat
         fweb --> dapp
         fchat --> dapp
@@ -255,6 +270,12 @@ flowchart TD
         dci --> dapp
         exozip --> dci
         exozip --> dapp
+        fbund --> frel
+        frel --> fplat
+        frel --> fe2e
+        fplat --> fe2e
+        frel --> fflat
+        fplat --> fflat
     end
 
     subgraph Remote Access
@@ -813,6 +834,8 @@ Recalibrated on 2026-03-02 using observed velocity from 15 active work days
 | ~~hex-package~~ | S-M | — | ½ | ✅ Complete (`@endo/hex` shipped; synthetic `@endo/hex-test` lands as Cut 2 of break-dev-dependency-cycles, PR #211) |
 | ~~endo-bytes~~ | S | — | ½ | ✅ Implemented (PR #142): `@endo/bytes` with `concatBytes`, `bytesEqual`, `bytesFromText`, `bytesToText`; follow-up `bytesToImmutable`/`bytesFromImmutable` and ocapn buffer-utils consolidation (PR #227) |
 | break-dev-dependency-cycles | M | 3 days | ½ | Synthetic test-package factoring to retire workspace devDep SCC; Cuts 2-4 merged (PRs #209, #210, #211); Cut 5 (PR #247) and Cut 1 (largest, PR #235) open |
+| familiar-platform-packaging | M | 4-5 days | 1 | Per-platform packaging lanes (macOS dmg sign+notarize, Windows NSIS+EV sign, Linux deb/rpm via `@electron-forge/maker-*` invoked as libraries from `make-distributables.mjs`); cross-links Flatpak from PR #322 |
+| familiar-pre-release-e2e | M-L | 1.5 weeks | 1 | Per-platform Playwright E2E (install / launch / lal-fae form / agent responds via stubbed LLM / clean shutdown) + dedicated pre-release CI workflow gating GitHub Release publication on full-green |
 | ~~unhandled-rejection-display~~ | S | — | — | ✅ Complete (out-of-milestone diagnostic; PR #187 closes #171). CapTP `CTP_DISCONNECT.reason` now renders structured Error reasons rather than empty `{}` |
 | ocapn-network-transport-separation | M-L | 1.5 weeks | 2 | Architectural refactor (M-L bumped 1.2x) |
 | ocapn-tcp-for-test-extraction | S-M | 3 days | 2 | Code relocation |
