@@ -3,6 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-05-22 |
+| **Updated** | 2026-05-23 |
 | **Author** | endolinbot (designer dispatch, prompted) |
 | **Status** | Proposed |
 | **Source** | Extension of [`familiar-release.md`](familiar-release.md) G1, G16 |
@@ -209,6 +210,18 @@ flowchart TD
     release --> manual[maintainer manually publishes]
 ```
 
+The topology above is the steady-state shape after Phase 3b
+lands.
+During Phase 3a (the MVR-completion subset) the `make-nsis` and
+`e2e-nsis` jobs run with `continue-on-error: true` and skip the
+EV-sign step, so the Windows lane builds an unsigned `.exe` for
+diagnostic value but does not gate `all_green`; see *Phased
+implementation* below.
+The Phase 3b cutover flips both jobs to blocking and depends on
+[`familiar-platform-packaging.md`](familiar-platform-packaging.md)
+Phase 4b (Windows signing chain via Cloud HSM or self-hosted EV
+runner).
+
 ### Preflight job
 
 The preflight job fails the workflow before any artifact is
@@ -395,12 +408,21 @@ falls into the pre-release E2E here.
 |---|---|---|
 | 1 | E2E spec scaffolding: stub LLM server, Playwright config under `packages/familiar/test/e2e/`, one spec for the platform with the simplest install (Linux deb). | Multi-day (builder). |
 | 2 | E2E specs for the remaining platforms (macOS dmg, Windows nsis, Linux rpm, Linux flatpak). One spec per platform; the test logic is shared via a `runPhases(page, platform)` helper. | Day per platform (builder). |
-| 3 | Pre-release workflow file at `.github/workflows/familiar-pre-release.yml`; preflight, build, make-*, e2e-*, checksums, release jobs wired. | Multi-day (builder). |
+| 3a | Pre-release workflow file at `.github/workflows/familiar-pre-release.yml` covering preflight, build, the make-* and e2e-* jobs for the lanes that do not require Windows signing (macOS dmg, Linux deb, Linux rpm, Linux flatpak), checksums, and the release job. The Windows `make-nsis` and `e2e-windows` jobs are scaffolded as a non-blocking continue-on-error matrix entry that builds the unsigned `.exe` and skips the EV-sign + E2E steps until Phase 3b lands. | Multi-day (builder). |
+| 3b | Windows-signing-enabled wiring: turn `make-nsis` into a blocking job that fetches the EV signing credential and produces a signed `.exe`, and turn `e2e-windows` into a blocking job that drives the installed signed artifact. Blocked on [`familiar-platform-packaging.md`](familiar-platform-packaging.md) Phase 4b (Windows signing chain via Cloud HSM or self-hosted runner with EV token). | Day (builder), after packaging Phase 4b lands. |
 | 4 | Per-platform failure-harvesting and artifact upload on E2E failure. | Day (builder). |
 | 5 | First end-to-end pre-release run (probably `familiar-v0.1.0`); iterate on whatever the first run surfaces (per-runner image quirks, notarization rate-limits, sign-step flakiness). | Day to multi-day (debugging). |
 
-Phases 1-4 are the MVR-completion work that closes G1 (CI
-emission of release artifacts) and G16 (Primer-into-CAS smoke).
+Phases 1, 2, 3a, and 4 are the MVR-completion work that closes
+G1 (CI emission of release artifacts) and G16 (Primer-into-CAS
+smoke); they assume only the signing chains that
+[`familiar-platform-packaging.md`](familiar-platform-packaging.md)
+delivers in its Phases 1 to 4 (macOS notarization, Linux deb,
+Linux rpm, Windows NSIS unsigned).
+Phase 3b is gated on packaging Phase 4b (Windows signing chain,
+multi-week post-MVR) and lands only once the EV credential is
+provisioned; until then the Windows lane runs in the non-blocking
+continue-on-error shape Phase 3a establishes.
 Phase 5 is the first real release; the iteration there is
 expected and budgeted.
 

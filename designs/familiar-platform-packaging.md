@@ -3,6 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-05-22 |
+| **Updated** | 2026-05-23 |
 | **Author** | endolinbot (designer dispatch, prompted) |
 | **Status** | Proposed |
 | **Source** | Extension of [`familiar-release.md`](familiar-release.md) G1, G2, G3, G4, G15 |
@@ -414,7 +415,7 @@ at the verification step before any artifact is built.
 | 2 | Linux deb lane (`@electron-forge/maker-deb` invoked from `make-distributables.mjs`). | Day (builder). |
 | 3 | Linux rpm lane (`@electron-forge/maker-rpm` invoked from `make-distributables.mjs`). | Day (builder). |
 | 4 | Windows NSIS lane (`electron-winstaller`); signing chain deferred to phase 4b. | Multi-day (builder). |
-| 4b | Windows signing chain (Cloud HSM or self-hosted runner with EV token). | Multi-week, dominated by cert-acquisition admin and HSM provisioning. |
+| 4b | Windows signing chain (Cloud HSM or self-hosted runner with EV token). Unblocks [`familiar-pre-release-e2e.md`](familiar-pre-release-e2e.md) Phase 3b (flipping the pre-release workflow's Windows `make-nsis` + `e2e-windows` lanes from continue-on-error to blocking). | Multi-week, dominated by cert-acquisition admin and HSM provisioning. |
 | 5 | Flatpak lane (carried by PR [#322](https://github.com/endojs/endo-but-for-bots/pull/322); designer references). | Per PR #322. |
 | 6 | Pre-release CI workflow with E2E across all lanes (companion design). | Per [`familiar-pre-release-e2e.md`](familiar-pre-release-e2e.md). |
 | 7 | Hosted apt + dnf repos with GPG-signed repo metadata; auto-update channels. | Multi-week each, post-MVR. |
