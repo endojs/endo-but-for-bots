@@ -249,16 +249,18 @@ export const exitModuleImportHookMaker = ({
  */
 const nominateCandidates = (moduleSpecifier, searchSuffixes) => {
   // Collate candidate locations for the moduleSpecifier.
-  // Apply suffix expansion only when the specifier does not already
-  // include an explicit extension.
+  // Skip suffix expansion only when the specifier already ends with one
+  // of the search suffixes; presence of a `.` in the leaf is *not*
+  // sufficient to declare an explicit extension (see fixture
+  // `path-with-dot` and master commit 3768a3eaa: package files and
+  // directories may carry literal dots in their names).
   const candidates = [moduleSpecifier];
-  const endsWithSlash = moduleSpecifier.endsWith('/');
-  const lastSlash = moduleSpecifier.lastIndexOf('/');
-  const leaf =
-    lastSlash >= 0 ? moduleSpecifier.slice(lastSlash + 1) : moduleSpecifier;
-  const hasExplicitExtension = leaf.includes('.');
-  if (!endsWithSlash && hasExplicitExtension && moduleSpecifier !== '.') {
-    return candidates;
+  if (moduleSpecifier !== '.' && !moduleSpecifier.endsWith('/')) {
+    for (const candidateSuffix of searchSuffixes) {
+      if (moduleSpecifier.endsWith(candidateSuffix)) {
+        return candidates;
+      }
+    }
   }
   for (const candidateSuffix of searchSuffixes) {
     candidates.push(`${moduleSpecifier}${candidateSuffix}`);
