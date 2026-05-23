@@ -294,13 +294,12 @@ test('e2e: full lifecycle createSession → markReady → attach → terminate',
     mockGuest = guest;
     // Defer a tick so the orchestrator has time to bind its listeners.
     setTimeout(() => guest.run().catch(() => {}), 5);
-    const child = /** @type {any} */ ({ pid: 99999, killed: false });
     let resolveExit;
     const exitCode = new Promise(r => {
       resolveExit = r;
     });
     return {
-      child,
+      pid: 99999,
       exitCode,
       kill: () => {
         guest.stop();
@@ -402,16 +401,12 @@ test('e2e: broker pushes rotation to subscribed orchestrator (orch → agent rel
     const guest = makeMockGuest({ record });
     mockGuests.set(record.id, guest);
     setTimeout(() => guest.run().catch(() => {}), 5);
-    const child = /** @type {any} */ ({
-      pid: Math.floor(Math.random() * 99999),
-      killed: false,
-    });
     let resolveExit;
     const exitCode = new Promise(r => {
       resolveExit = r;
     });
     return {
-      child,
+      pid: Math.floor(Math.random() * 99999),
       exitCode,
       kill: () => {
         guest.stop();

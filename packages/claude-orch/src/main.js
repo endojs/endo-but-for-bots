@@ -282,7 +282,7 @@ export const start = async ({
         link.send({ type: 'attach', streamId: 'default0' });
       }
 
-      sessions.setState(sessionId, 'ready', { vmPid: vm.child.pid });
+      sessions.setState(sessionId, 'ready', { vmPid: vm.pid });
     } catch (e) {
       sessions.setState(sessionId, 'boot_failed', {
         failureReason: /** @type {Error} */ (e).message,

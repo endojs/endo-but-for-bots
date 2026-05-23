@@ -5,7 +5,6 @@
  *   OrchestratorConfig,
  *   SessionRecord,
  * } from '../../protocol.types.js'
- * @import { ChildProcess } from 'node:child_process'
  */
 
 import { spawn, spawnSync } from 'node:child_process';
@@ -14,8 +13,10 @@ import { buildQemuArgs, qemuBinaryFor } from './args.js';
 
 /**
  * @typedef {object} VmHandle
- * @property {ChildProcess} child
- * @property {Promise<number>} exitCode
+ * @property {number | undefined} pid    QEMU process id once `spawn` returned.
+ * @property {Promise<number>} exitCode  Resolves with the QEMU exit code
+ *                                       (or -1 if the process was killed
+ *                                       by a signal). Never rejects.
  * @property {(signal?: NodeJS.Signals) => void} kill
  */
 
@@ -103,8 +104,24 @@ export const spawnVm = ({ arch, record, config, netArgs }) => {
     })
   );
 
+  // The returned handle is hardened so callers can hold it as a
+  // capability value. We deliberately do *not* include the live
+  // `ChildProcess` here: `harden` deep-freezes its argument's own
+  // properties, and Node's internals mutate `child.exitCode`,
+  // `child._events`, and the wrapped `Socket` objects after `spawn()`
+  // returns (e.g. on the `'exit'` event, or any time stderr is
+  // inherited and Node constructs a `Socket` for it). With the child
+  // reachable from a hardened object those writes throw
+  // "Cannot assign to read only property …", which surfaced on the
+  // first real QEMU spawn during PR #328 manual testing as a
+  // `SES_UNCAUGHT_EXCEPTION` that killed the orchestrator. The
+  // orchestrator never inspects the `ChildProcess` directly anyway —
+  // only the pid (for `vmPid` on the session record), the exit
+  // promise, and `kill`, all of which we expose as plain capabilities
+  // here. The closure over `child` keeps it alive until `exitCode`
+  // resolves.
   return harden({
-    child,
+    pid: child.pid,
     exitCode,
     kill: (signal = 'SIGTERM') => {
       if (!child.killed) child.kill(signal);
