@@ -369,7 +369,11 @@ export const start = async ({
     const vm = vms.get(sessionId);
     if (vm) {
       vm.kill('SIGTERM');
+      // SIGKILL escalator. Cleared below on graceful exit; unref'd
+      // so a session being torn down can't keep the orchestrator
+      // process alive past its own shutdown.
       const killer = setTimeout(() => vm.kill('SIGKILL'), 5000);
+      killer.unref();
       await vm.exitCode.catch(() => {});
       clearTimeout(killer);
     }

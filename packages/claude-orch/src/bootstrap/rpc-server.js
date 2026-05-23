@@ -70,6 +70,10 @@ export const awaitHello = ({
       ),
     );
   }, deadlineMs);
+  // The boot deadline is a guard, not a heartbeat — it must never
+  // keep the orchestrator alive on its own. The UDS server has its
+  // own ref keeping the process up during the boot window.
+  timer.unref();
 
   /** @param {Error | null} err */
   const cleanup = err => {

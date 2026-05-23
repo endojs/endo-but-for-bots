@@ -155,12 +155,16 @@ export const makeBroker = ({
           refreshTimer = null;
           scheduleNextRefresh();
         }, refreshRetryMs);
-        if (typeof refreshTimer.unref === 'function') refreshTimer.unref();
+        // The refresh timer must never keep the broker process
+        // alive on its own. The UDS server owns the broker's
+        // lifetime; if the server closes, the daemon should exit
+        // cleanly even with a refresh scheduled.
+        refreshTimer.unref();
         return;
       }
       scheduleNextRefresh();
     }, delay);
-    if (typeof refreshTimer.unref === 'function') refreshTimer.unref();
+    refreshTimer.unref();
   };
 
   // Kick off the first refresh schedule from `initialCredentials`.

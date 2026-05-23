@@ -124,8 +124,11 @@ const subscribe = (socketPath, sessionId) => {
             conn.once('close', resolve);
             conn.end();
             // Belt and suspenders: ensure we move on even if close
-            // doesn't fire quickly.
-            setTimeout(() => resolve(undefined), 50);
+            // doesn't fire quickly. unref so a pending 50 ms timer
+            // doesn't keep the orchestrator process alive past the
+            // last awaiter when the subscription is the only thing
+            // left running.
+            setTimeout(() => resolve(undefined), 50).unref();
           });
         },
       }),
