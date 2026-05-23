@@ -359,3 +359,63 @@ test('evadeCensor() - x-->y transform preserves meaning', async t => {
   t.is(originalResult, transformedResult);
   t.is(transformedResult, 'ok');
 });
+
+test('evadeCensor() - fast path for source without comment markers', async t => {
+  const source = `const answer = 42;\nexport { answer };`;
+  const { code, map } = evadeCensorSync(source, { sourceType: 'module' });
+  t.is(code, source);
+  t.is(map, undefined);
+});
+
+test('evadeCensor() - fast path returns source map when sourceUrl is provided', async t => {
+  const source = `const answer = 42;\nexport { answer };`;
+  const sourceUrl = 'fast-path.js';
+  const { code, map } = evadeCensorSync(source, {
+    sourceType: 'module',
+    sourceUrl,
+  });
+  t.is(code, source);
+  t.truthy(map);
+  t.deepEqual(map.sources, [sourceUrl]);
+});
+
+test('evadeCensor() - fast path can skip despite ordinary comments', async t => {
+  const source = `// hello\nconst answer = 42; /* ordinary */\nexport { answer };`;
+  const { code, map } = evadeCensorSync(source, { sourceType: 'module' });
+  t.is(code, source);
+  t.is(map, undefined);
+});
+
+test('evadeCensor() - elideComments still forces transform on fast-path source', async t => {
+  const source = `// hello\nconst answer = 42;\nexport { answer };`;
+  const { code } = evadeCensorSync(source, {
+    sourceType: 'module',
+    elideComments: true,
+  });
+  t.not(code, source);
+});
+
+// Pin the three comment- and whitespace-mode cases the cleaner's widened
+// `importLikePattern` is meant to catch, mirroring SES's
+// `rejectImportExpressions` regex (`\bimport\s*(?:\(|\/[/*])`). Each
+// source embeds the risky token inside a string-literal or comment that
+// SES's `rejectImportExpressions` rejects unless the censor has already
+// escaped it; the test asserts the slow path ran by checking that the
+// output text differs from the input.
+test('evadeCensor() - fast path forces transform on "import (" (space-paren) in a string literal', async t => {
+  const source = `const x = 'import (a)';`;
+  const { code } = evadeCensorSync(source, { sourceType: 'module' });
+  t.not(code, source);
+});
+
+test('evadeCensor() - fast path forces transform on "import //" (line comment)', async t => {
+  const source = `// import // here\nconst x = 1;\nexport { x };`;
+  const { code } = evadeCensorSync(source, { sourceType: 'module' });
+  t.not(code, source);
+});
+
+test('evadeCensor() - fast path forces transform on "import /*" (block comment)', async t => {
+  const source = `/* import /* nested */\nconst x = 1;\nexport { x };`;
+  const { code } = evadeCensorSync(source, { sourceType: 'module' });
+  t.not(code, source);
+});

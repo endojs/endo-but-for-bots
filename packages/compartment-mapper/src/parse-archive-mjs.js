@@ -5,12 +5,35 @@
  * @module
  */
 
-/** @import {ParseFn} from './types.js' */
+/* global process */
+
+/** @import {ParseFn, ParserImplementation} from './types.js' */
 
 import { ModuleSource } from '@endo/module-source';
 
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
+/** @type {Map<string, Map<string, ReturnType<ParseFn>>>} */
+const parseArchiveMjsCache = new Map();
+// Default cap chosen to bound transient memory for the agoric-sdk
+// multi-bundle workload that motivated the cache (about 12k distinct
+// parsed entries observed under `profile:agoric-bundling`). Override via
+// `ENDO_PARSE_ARCHIVE_MJS_CACHE_ENTRIES` when a different workload
+// pushes past this default.
+const DEFAULT_MAX_PARSE_ARCHIVE_MJS_CACHE_ENTRIES = 20_000;
+const configuredMaxCacheEntries = Number.parseInt(
+  (typeof process !== 'undefined' &&
+    process.env &&
+    process.env.ENDO_PARSE_ARCHIVE_MJS_CACHE_ENTRIES) ||
+    `${DEFAULT_MAX_PARSE_ARCHIVE_MJS_CACHE_ENTRIES}`,
+  10,
+);
+const MAX_PARSE_ARCHIVE_MJS_CACHE_ENTRIES =
+  Number.isFinite(configuredMaxCacheEntries) && configuredMaxCacheEntries > 0
+    ? configuredMaxCacheEntries
+    : DEFAULT_MAX_PARSE_ARCHIVE_MJS_CACHE_ENTRIES;
+let parseArchiveMjsCacheEntries = 0;
+let parseArchiveMjsCacheCapHit = false;
 
 /** @type {ParseFn} */
 export const parseArchiveMjs = (
@@ -20,22 +43,81 @@ export const parseArchiveMjs = (
   _packageLocation,
   options = {},
 ) => {
-  const { sourceMap, sourceMapHook } = options;
+  const { sourceMap, sourceMapHook, profileStartSpan } = options;
+  const canUseCache = sourceMapHook === undefined;
   const source = textDecoder.decode(bytes);
+  let sourceMapKey;
+  if (sourceMap === undefined) {
+    sourceMapKey = '';
+  } else if (typeof sourceMap === 'string') {
+    sourceMapKey = sourceMap;
+  } else {
+    sourceMapKey = JSON.stringify(sourceMap);
+  }
+  const cacheKey = `${source}\n//# sourceMappingURL=${sourceMapKey}`;
+  if (canUseCache) {
+    const byLocation = parseArchiveMjsCache.get(sourceUrl);
+    const cached = byLocation?.get(cacheKey);
+    if (cached !== undefined) {
+      profileStartSpan?.('compartmentMapper.parseArchiveMjs.cache.hit')?.();
+      return cached;
+    }
+    profileStartSpan?.('compartmentMapper.parseArchiveMjs.cache.miss')?.();
+  } else {
+    profileStartSpan?.('compartmentMapper.parseArchiveMjs.cache.bypass')?.({
+      hasSourceMap: sourceMap !== undefined,
+      hasSourceMapHook: sourceMapHook !== undefined,
+    });
+  }
+  const endModuleSource = profileStartSpan?.(
+    'compartmentMapper.parseArchiveMjs.moduleSource',
+  );
   const record = new ModuleSource(source, {
     sourceMap,
     sourceMapUrl: sourceUrl,
     sourceMapHook,
+    profileStartSpan,
   });
+  endModuleSource?.();
+  const endStringify = profileStartSpan?.(
+    'compartmentMapper.parseArchiveMjs.stringifyRecord',
+  );
   const pre = textEncoder.encode(JSON.stringify(record));
-  return {
+  endStringify?.();
+  const result = {
     parser: 'pre-mjs-json',
     bytes: pre,
     record,
   };
+  if (canUseCache) {
+    let byLocation = parseArchiveMjsCache.get(sourceUrl);
+    if (byLocation === undefined) {
+      byLocation = new Map();
+      parseArchiveMjsCache.set(sourceUrl, byLocation);
+    }
+    if (!byLocation.has(cacheKey)) {
+      parseArchiveMjsCacheEntries += 1;
+      if (parseArchiveMjsCacheEntries > MAX_PARSE_ARCHIVE_MJS_CACHE_ENTRIES) {
+        if (!parseArchiveMjsCacheCapHit) {
+          parseArchiveMjsCacheCapHit = true;
+          if (typeof process !== 'undefined' && process.stderr) {
+            process.stderr.write(
+              `compartment-mapper: parseArchiveMjs cache cap ${MAX_PARSE_ARCHIVE_MJS_CACHE_ENTRIES} reached; clearing and continuing. Set ENDO_PARSE_ARCHIVE_MJS_CACHE_ENTRIES to raise the cap if the working set exceeds the default.\n`,
+            );
+          }
+        }
+        parseArchiveMjsCache.clear();
+        parseArchiveMjsCacheEntries = 0;
+        byLocation = new Map();
+        parseArchiveMjsCache.set(sourceUrl, byLocation);
+      }
+    }
+    byLocation.set(cacheKey, result);
+  }
+  return result;
 };
 
-/** @type {import('./types.js').ParserImplementation} */
+/** @type {ParserImplementation} */
 export default {
   parse: parseArchiveMjs,
   heuristicImports: false,

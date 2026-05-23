@@ -34,6 +34,7 @@ import type {
   ModuleTransforms,
   ParseFn,
   ParserForLanguage,
+  ProfilingOptions,
   PolicyOption,
   SearchSuffixesOption,
   SourceMapHook,
@@ -94,7 +95,8 @@ export type MakeImportHookMakersOptions = {
   SearchSuffixesOption &
   ArchiveOnlyOption &
   SourceMapHookOption &
-  LogOptions;
+  LogOptions &
+  ProfilingOptions;
 
 export type MakeImportHookMakerOptions = MakeImportHookMakersOptions &
   ExitModuleImportHookOption;
@@ -156,6 +158,10 @@ export type ChooseModuleDescriptorParams = {
    */
   sourceMapHook?: SourceMapHook | undefined;
   moduleSourceHook?: ModuleSourceHook | undefined;
+  profileStartSpan?: (
+    name: string,
+    args?: Record<string, unknown>,
+  ) => (extraArgs?: Record<string, unknown>) => void;
 
   strictlyRequiredForCompartment: StrictlyRequiredFn;
 } & ComputeSha512Option &
