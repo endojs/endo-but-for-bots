@@ -8,7 +8,18 @@
  * @import {TransformedResult, TransformedResultWithSourceMap} from './generate.js'
  * @import {SourceMapOption} from './generate.js'
  * @import {SourceType} from './parse-ast.js'
- * @import {NodePath} from '@babel/traverse'
+ */
+
+/**
+ * Aliased through a `@typedef` rather than a top-level `@import` because the
+ * .d.ts emitter for JSDoc `@import` from a node_modules package drops the
+ * resulting top-level type import; consuming packages (compartment-mapper,
+ * bundle-source) then fail to resolve `NodePath` in the generated `.d.ts`
+ * (TS2304). The `@typedef` form survives the no-inline-import-jsdoc gate
+ * (which has an explicit `@typedef` carve-out) and produces a self-contained
+ * `.d.ts` that emits the inline `import()` reference.
+ *
+ * @typedef {import('@babel/traverse').NodePath} BabelNodePath
  */
 
 import { transformAst } from './transform-ast.js';
@@ -82,7 +93,7 @@ const makeFastPathMap = (source, sourceUrl, sourceMap) => {
  * @property {SourceType | undefined} [sourceType] - Module source type
  * @property {boolean | undefined} [onlyComments] - if true, will limit transformation to
 comment contents, preserving code positions within each line
- * @property {(path: NodePath) => void} [customVisitor] - A visitor function to be called on each node, in addition to the standard transforms. Receives the same path argument as a normal Babel visitor.
+ * @property {(path: BabelNodePath) => void} [customVisitor] - A visitor function to be called on each node, in addition to the standard transforms. Receives the same path argument as a normal Babel visitor.
  * @property {boolean | undefined} [useLocationUnmap] - deprecated, vestigial
  * @property {((name: string, args?: Record<string, unknown>) => (args?: Record<string, unknown>) => void) | undefined} [profileStartSpan] - Optional profiling span hook
  * @public
