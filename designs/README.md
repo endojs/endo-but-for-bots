@@ -1,8 +1,14 @@
 # Endo Design Documents
 
-*Last updated: 2026-05-20 (daemon mount and git capability plans added — three new design docs revised per design-panel review: structured-result-shape migration deferred to Phase 7, `tree(ref)` and `readOnly()` both live on the `Git` cap, `NativeGitBackend` hardening envelope split off the essential `GitBackend` contract, `EndoMountBacking` pinned to a hidden Exo facet, credential-injection mechanism named, native git pinned to >=2.30, restart-mid-operation tests added, open-question debt reduced from 20 to 2; landed on top of the same-day forge-gap-analysis Reference design and the same-day full grooming pass that reconciled milestone-totals, added the 2026-05-20 calibration round, re-projected the Summary by Milestone and Gantt, and refreshed Progress-as-of; itself landed on top of the 2026-05-19 status-only sweep that reconciled Status fields with shipped state on `llm`, M½ project-hygiene milestone extracted from M1, endopi raft added, PR #302 consolidation absorbed, and patterns-diagnostic-feedback added)*
+*Last updated: 2026-05-22 (endoclaw-pinchtab and endoclaw-browser-interfaces designs added, sibling daemon-side PinchTab backend and unified `Browser` Exo shape across Playwright and PinchTab; landed on top of the 2026-05-20 daemon mount and git capability plans — three new design docs revised per design-panel review: structured-result-shape migration deferred to Phase 7, `tree(ref)` and `readOnly()` both live on the `Git` cap, `NativeGitBackend` hardening envelope split off the essential `GitBackend` contract, `EndoMountBacking` pinned to a hidden Exo facet, credential-injection mechanism named, native git pinned to >=2.30, restart-mid-operation tests added, open-question debt reduced from 20 to 2; itself landed on top of the same-day forge-gap-analysis Reference design and the same-day full grooming pass that reconciled milestone-totals, added the 2026-05-20 calibration round, re-projected the Summary by Milestone and Gantt, and refreshed Progress-as-of; itself landed on top of the 2026-05-19 status-only sweep that reconciled Status fields with shipped state on `llm`, M½ project-hygiene milestone extracted from M1, endopi raft added, PR #302 consolidation absorbed, and patterns-diagnostic-feedback added)*
 
 *Recently added or revised:
+[endoclaw-pinchtab](endoclaw-pinchtab.md) (added 2026-05-22;
+daemon-side PinchTab backend for the Browser capability),
+[endoclaw-browser-interfaces](endoclaw-browser-interfaces.md) (added
+2026-05-22; unified `Browser` Exo shape across Playwright and PinchTab
+backends; recommends revising
+[endoclaw-browser](endoclaw-browser.md)),
 [daemon-mount-capabilities](daemon-mount-capabilities.md) (added
 2026-05-18, revised 2026-05-20; concrete completion plan for
 `EndoMount`, mount-scoped entry descriptors as values, snapshotting,
@@ -138,6 +144,8 @@ LLM-agent stack).*
 | [endopi-stdio-rpc-bridge](endopi-stdio-rpc-bridge.md) | 2026-05-15 | 2026-05-15 | Proposed |
 | [endopi-extension-package-manifest](endopi-extension-package-manifest.md) | 2026-05-15 | 2026-05-15 | Proposed |
 | [endoclaw-browser](endoclaw-browser.md) | 2026-03-03 | 2026-03-03 | Not Started |
+| [endoclaw-browser-interfaces](endoclaw-browser-interfaces.md) | 2026-05-22 | 2026-05-22 | Proposed |
+| [endoclaw-pinchtab](endoclaw-pinchtab.md) | 2026-05-22 | 2026-05-22 | Speculative |
 | [endoclaw-channel-bridges](endoclaw-channel-bridges.md) | 2026-03-03 | 2026-03-03 | Not Started |
 | [endoclaw-network-fetch](endoclaw-network-fetch.md) | 2026-03-03 | 2026-03-03 | Not Started |
 | [endoclaw-notifications](endoclaw-notifications.md) | 2026-03-03 | 2026-03-03 | Not Started |
@@ -197,7 +205,7 @@ LLM-agent stack).*
 | [namehub-interface-unification](namehub-interface-unification.md) | 2026-05-07 | 2026-05-07 | Proposed |
 | [forge-gap-analysis](forge-gap-analysis.md) | 2026-05-20 | 2026-05-20 | Reference (exploratory) |
 
-**Totals:** 39 Complete/Implemented, 18 In Progress, 36 Not Started, 20 Proposed, 2 Active, 7 Reference, 2 Deprecated, 1 Superseded (125 designs). Refreshed 2026-05-19 by a status-only sweep (consolidating the 2026-05-18 sweep with the 2026-05-19 batch update for 11 additional designs from closed PR #302) plus the patterns-diagnostic-feedback and ocapn-noise-session-reconnect Proposed entries; the 12-design jump in Complete/Implemented over the 2026-05-08 snapshot reflects shipped work whose Status field had not previously been updated, not new completions in this pass; see the corresponding "## Status" sections in each design file for evidence pointers (commit SHA or PR number). Totals reflect the 16 design files added on `llm` since the sweep's branch point (the endopi raft of `endopi` + 8 `endopi-*` gap-closing designs, `hardened-text-codecs-shim`, `hardened-url-shim`, namehub-interface-unification (Proposed) added by PR #117 on rebase, forge-gap-analysis (Reference) added 2026-05-20, and the daemon mount and git capability trio: `daemon-mount-capabilities` + `daemon-git-capability` + `daemon-git-remotes`).
+**Totals:** 39 Complete/Implemented, 18 In Progress, 36 Not Started, 21 Proposed, 2 Active, 7 Reference, 2 Deprecated, 1 Superseded, 1 Speculative (127 designs). Refreshed 2026-05-19 by a status-only sweep (consolidating the 2026-05-18 sweep with the 2026-05-19 batch update for 11 additional designs from closed PR #302) plus the patterns-diagnostic-feedback and ocapn-noise-session-reconnect Proposed entries; the 12-design jump in Complete/Implemented over the 2026-05-08 snapshot reflects shipped work whose Status field had not previously been updated, not new completions in this pass; see the corresponding "## Status" sections in each design file for evidence pointers (commit SHA or PR number). Totals reflect the 16 design files added on `llm` since the sweep's branch point (the endopi raft of `endopi` + 8 `endopi-*` gap-closing designs, `hardened-text-codecs-shim`, `hardened-url-shim`, namehub-interface-unification (Proposed) added by PR #117 on rebase, forge-gap-analysis (Reference) added 2026-05-20, and the daemon mount and git capability trio: `daemon-mount-capabilities` + `daemon-git-capability` + `daemon-git-remotes`), plus the 2026-05-22 endoclaw additions (`endoclaw-browser-interfaces` Proposed, `endoclaw-pinchtab` Speculative pending upstream-evidence confirmation).
 
 ## Roadmap
 
@@ -275,6 +283,8 @@ flowchart TD
         enotify[endoclaw-notifications]
         eproactive[endoclaw-proactive-messages]
         ebrowser[endoclaw-browser]
+        ebrowserif[endoclaw-browser-interfaces]
+        epinchtab[endoclaw-pinchtab]
         ebridge[endoclaw-channel-bridges]
         eskill[endoclaw-skill-registry]
         evoice[endoclaw-voice]
@@ -282,6 +292,8 @@ flowchart TD
         etimer --> eproactive
         eoauth --> ebridge
         eoauth --> eproactive
+        ebrowserif --> ebrowser
+        ebrowserif --> epinchtab
     end
 
     subgraph OCapN
@@ -550,6 +562,8 @@ ecosystem.
 | daemon-capability-persona | Not Started | Epithets and delegation |
 | daemon-capability-bank | Not Started | Integrates all capability categories |
 | endoclaw-browser | Not Started | Playwright-backed `Browser` exo with origin allowlist |
+| endoclaw-browser-interfaces | Proposed | Unified `Browser` Exo shape both Playwright and PinchTab implement; revises `endoclaw-browser` to declare the contract |
+| endoclaw-pinchtab | Speculative | PinchTab (~12 MB Go binary, accessibility-tree HTTP API; upstream existence pending implementer confirmation) as a Browser backend; daemon-side plugin |
 | endoclaw-channel-bridges | Not Started | `chat` SDK (Vercel) adapters for Slack, Telegram, Discord, etc. |
 | endoclaw-skill-registry | Not Started | Skills directory — capability-aware plugin index |
 
@@ -854,6 +868,8 @@ Recalibrated on 2026-03-02 using observed velocity from 15 active work days
 | daemon-capability-persona | S-M | 3 days | 5 | Handle extension, epithet tracking |
 | daemon-capability-bank | XL | 4-6 weeks | 5 | Integrates all capabilities (XL bumped 1.3x as conservative pending data) |
 | endoclaw-browser | M-L | 1.5 weeks | 5 | Playwright-backed, origin-confined; smallest cut in PR #106 |
+| endoclaw-browser-interfaces | S | 1 day | 5 | Spec-only: unified `Browser` Exo shape; revises `endoclaw-browser` editorially in a follow-up PR |
+| endoclaw-pinchtab | M-L | 1.5 weeks (Speculative; pending upstream-evidence confirmation) | 5 | Daemon-side PinchTab supervisor + Browser/Page exos; binds against the unified shape from `endoclaw-browser-interfaces`. Estimate applies when the upstream's release tag and SHA are confirmed against a real checkout. |
 | endoclaw-channel-bridges | M | 4-5 days | 5 | Vercel `chat` SDK adapters |
 | endoclaw-skill-registry | S-M | 3 days | 5 | Skills directory with capability declarations; PR #105 open |
 | endor-tui | XL | 5-8 weeks | 6 | Rust TUI: ratatui/crossterm, concept-map of every Chat component, XS `mxDebug` debugger integration (XL bumped 1.3x) |
@@ -886,9 +902,9 @@ date of this pass.
 | M2: Networking | 6 (`ocapn-network-transport-separation`, `ocapn-tcp-for-test-extraction`, `ocapn-tcp-syrups-framing`, `cbors`, `ocapn-noise-cryptographic-review`, `daemon-agent-network-identity`) | 4-5 weeks | 5-7 weeks |
 | M3: Weblets & Integrations | 11 (`familiar-unified-weblet-server`, `familiar-chat-weblet-hosting`, `cli-store-verb-text-modes`, `cli-edit-verb`, `daemon-weblet-application`, `exo-zip-package`, `endoclaw-oauth`, `endoclaw-proactive-messages`, `endoclaw-notifications`, `endoclaw-webhooks`, `endoclaw-voice`) | 6-8 weeks | 8-11 weeks |
 | M4: UX & Tooling | 12 (`chat-pending-commands`, `chat-slot-slash-commands`, `daemon-commands-as-messages`, `inventory-cancel-and-liveness`, `inventory-grouping-by-type`, `inventory-drag-and-drop`, `formula-inspector`, `workers-panel`, `daemon-retention-paths`, `chat-edit-message-ui`, `lal-transcript-memory-management`, `namehub-interface-unification`) | 8-11 weeks | 10-13 weeks |
-| M5: Confinement & Ecosystem | 6 (`endo-posix-sandbox`, `daemon-capability-persona`, `daemon-capability-bank`, `endoclaw-browser`, `endoclaw-channel-bridges`, `endoclaw-skill-registry`) | 14-20 weeks | 16-22 weeks |
+| M5: Confinement & Ecosystem | 8 (`endo-posix-sandbox`, `daemon-capability-persona`, `daemon-capability-bank`, `endoclaw-browser`, `endoclaw-browser-interfaces`, `endoclaw-pinchtab`, `endoclaw-channel-bridges`, `endoclaw-skill-registry`) | 14-20 weeks | 16-22 weeks |
 | M6: Rust Daemon (`endor`) | 2 (`endor-tui`, `endor-bus-tui`) | 12-17 weeks | 14-19 weeks |
-| **Total remaining** | **48** | **~52-71 weeks** | **~63-86 weeks** |
+| **Total remaining** | **50** | **~52-71 weeks** | **~63-86 weeks** |
 
 The 2026-05-20 reconciliation corrects a counting gap in the prior
 snapshot's narrative: M1, M3, and M4 had absorbed new rows since the
@@ -901,7 +917,14 @@ not pick up. Per-table walk gives M1 10 (not 8), M3 11 (not 8), M4 12
 PR #117); the total is 48 (not 41). M3's effort estimate widens from
 5-7 weeks to 6-8 weeks reflecting the three additional Proposed rows.
 No status flips this pass; the per-design statuses match the 2026-05-19
-sweep's reconciliation.
+sweep's reconciliation. The 2026-05-22 endoclaw additions
+(`endoclaw-browser-interfaces` Proposed, `endoclaw-pinchtab` Speculative
+pending upstream-evidence confirmation) raise M5 from 6 to 8 and the
+total from 48 to 50; the endoclaw-pinchtab M-L size estimate keeps M5's
+effort range at 14-20 weeks because the range was already wide enough
+to absorb a 1.5-week addition, and the Speculative status defers any
+implementation phasing until the upstream's release tag and SHA are
+confirmed against a real checkout.
 
 ### Timeline
 
