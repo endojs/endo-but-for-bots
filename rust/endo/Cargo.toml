@@ -6,8 +6,10 @@ edition = "2021"
 [dependencies]
 endo_iroh = { path = "../endo_iroh" }
 gix-hash = { version = "0.25", features = ["sha1"] }
+gix-lock = "23"
 gix-object = "0.61"
 gix-odb = { version = "0.81", features = ["sha1"] }
+gix-ref = "0.64"
 hex = "0.4"
 libc = "0.2"
 rusqlite = { version = "0.31", features = ["bundled"] }
