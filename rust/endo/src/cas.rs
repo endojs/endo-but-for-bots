@@ -4,6 +4,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::RwLock;
 
+use gix_object::Write as _;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -64,35 +65,68 @@ pub struct TreeEntry {
 // ContentStore
 // ---------------------------------------------------------------------------
 
-/// SHA-256 content-addressed store backed by a flat directory.
+/// SHA-256 content-addressed store backed by a git object database.
 ///
-/// Files are stored as `{dir}/{hex-sha256}`.
-/// Optional `.meta` sidecars carry advisory type and ref count.
+/// The Endo-facing content identity is the hex SHA-256 of the bytes, exactly
+/// as before; the bytes themselves live as git (loose) objects under
+/// `{dir}/objects/`, and a persistent `sha256 -> git-oid` index
+/// (`{dir}/sha256-oid.idx`) bridges the Endo key to git's internal object id.
+/// Git's object DB runs in its default (SHA-1) object format internally; the
+/// experimental git SHA-256 object mode is deliberately not used (the
+/// Endo-facing key stays SHA-256 regardless).
+///
+/// Optional `.meta` sidecars in `{dir}` carry advisory type and ref count, as
+/// before. Retention (`retain`/`release`/`gc`) is unchanged in this pass; the
+/// design's axis 4 replaces it with `refs/formulas/<id>` + `git gc`.
 pub struct ContentStore {
     dir: PathBuf,
+    /// Git loose-object database rooted at `{dir}/objects/`.
+    odb: gix_odb::loose::Store,
+    /// Persistent `sha256-hex -> git-oid` index, loaded on open and appended
+    /// on every newly stored object. Endo references the SHA-256 key; this
+    /// resolves it to the git object id used by the object DB.
+    index: RwLock<HashMap<String, gix_hash::ObjectId>>,
     /// In-memory ref count cache (flushed to `.meta` on release/retain).
     refs: RwLock<HashMap<String, u32>>,
 }
+
+/// Basename of the persistent sha256 -> git-oid index inside the store dir.
+const INDEX_FILE: &str = "sha256-oid.idx";
+/// Subdirectory of the store dir holding the git loose-object database.
+const OBJECTS_DIR: &str = "objects";
 
 impl ContentStore {
     /// Open (or create) a content store at `dir`.
     pub fn open(dir: &Path) -> io::Result<Self> {
         fs::create_dir_all(dir)?;
+        let objects_dir = dir.join(OBJECTS_DIR);
+        fs::create_dir_all(&objects_dir)?;
+        let odb = gix_odb::loose::Store::at(&objects_dir, gix_hash::Kind::Sha1, None);
+        let index = RwLock::new(load_index(dir)?);
         Ok(ContentStore {
             dir: dir.to_path_buf(),
+            odb,
+            index,
             refs: RwLock::new(HashMap::new()),
         })
     }
 
     /// Store bytes in the CAS and return the hex SHA-256 hash.
+    ///
+    /// The bytes are written as a git blob; the returned identity is the hex
+    /// SHA-256 of the bytes (unchanged contract). A `sha256 -> git-oid` entry
+    /// is recorded so subsequent `fetch`/`has` resolve back to the object.
     pub fn store(&self, data: &[u8], content_type: &str) -> io::Result<String> {
         let hash = hex_sha256(data);
-        let path = self.dir.join(&hash);
-        if !path.exists() {
-            // Write atomically: write to .tmp, then rename.
-            let tmp = self.dir.join(format!("{hash}.tmp"));
-            fs::write(&tmp, data)?;
-            fs::rename(&tmp, &path)?;
+        // Only write the git object (and index entry) the first time we see a
+        // given SHA-256 — preserves dedup. Git's own loose writer is
+        // content-addressed and atomic (tempfile + rename) under the hood.
+        if !self.index_contains(&hash) {
+            let oid = self
+                .odb
+                .write_buf(gix_object::Kind::Blob, data)
+                .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("git write: {e}")))?;
+            self.record_index(&hash, oid)?;
         }
         // Write .meta if content type is not blob (default).
         if content_type != "blob" {
@@ -103,13 +137,29 @@ impl ContentStore {
 
     /// Fetch content by hex hash.
     pub fn fetch(&self, hash: &str) -> io::Result<Vec<u8>> {
-        let path = self.dir.join(hash);
-        fs::read(&path)
+        let oid = self.oid_for(hash).ok_or_else(|| {
+            io::Error::new(io::ErrorKind::NotFound, format!("no object for {hash}"))
+        })?;
+        let mut buf = Vec::new();
+        match self
+            .odb
+            .try_find(&oid, &mut buf)
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("git read: {e}")))?
+        {
+            Some(obj) => Ok(obj.data.to_vec()),
+            None => Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("git object missing for {hash}"),
+            )),
+        }
     }
 
     /// Check whether a hash exists in the store.
     pub fn has(&self, hash: &str) -> bool {
-        self.dir.join(hash).exists()
+        match self.oid_for(hash) {
+            Some(oid) => self.odb.contains(&oid),
+            None => false,
+        }
     }
 
     /// Increment ref count for a hash.
@@ -229,32 +279,57 @@ impl ContentStore {
             // If read_tree fails, it's a blob — no children to walk.
         }
 
-        // Sweep: iterate store directory, delete unreferenced entries.
+        // Sweep: walk the sha256 -> oid index, collecting unreferenced
+        // objects. The set of CAS objects is exactly the index keyset (every
+        // stored object recorded an entry); the git object DB may hold extra
+        // intermediate objects, but the CAS only owns those it indexed.
         let mut freed_count = 0u64;
         let mut freed_bytes = 0u64;
 
-        for entry in fs::read_dir(&self.dir)? {
-            let entry = entry?;
-            let name = entry.file_name();
-            let name_str = name.to_string_lossy();
-            // Skip .meta sidecars and .tmp files.
-            if name_str.ends_with(".meta") || name_str.ends_with(".tmp") {
-                continue;
-            }
-            if !live.contains(name_str.as_ref()) {
-                let meta = entry.metadata()?;
-                let size = meta.len();
-                // Delete the blob and its meta sidecar.
-                fs::remove_file(entry.path())?;
-                let meta_path = self.dir.join(format!("{name_str}.meta"));
-                let _ = fs::remove_file(&meta_path);
-                freed_count += 1;
+        // Snapshot the hashes to collect so we don't hold the index read lock
+        // while mutating it.
+        let to_collect: Vec<(String, gix_hash::ObjectId)> = {
+            let index = self.index.read().unwrap_or_else(|e| e.into_inner());
+            index
+                .iter()
+                .filter(|(hash, _)| !live.contains(hash.as_str()))
+                .map(|(hash, oid)| (hash.clone(), *oid))
+                .collect()
+        };
+
+        for (hash, oid) in to_collect {
+            // Size of the on-disk git object (compressed), best-effort.
+            let object_path = self.odb.object_path(&oid);
+            let size = fs::metadata(&object_path).map(|m| m.len()).unwrap_or(0);
+            // Delete the git object file. It is shared by oid, so only remove
+            // it if no other indexed hash maps to the same oid.
+            let still_referenced = {
+                let index = self.index.read().unwrap_or_else(|e| e.into_inner());
+                index
+                    .iter()
+                    .any(|(other_hash, other_oid)| other_hash != &hash && *other_oid == oid)
+            };
+            if !still_referenced {
+                let _ = fs::remove_file(&object_path);
                 freed_bytes += size;
-                // Remove from in-memory refs.
-                let mut refs = self.refs.write().unwrap_or_else(|e| e.into_inner());
-                refs.remove(name_str.as_ref());
             }
+            // Drop the meta sidecar.
+            let meta_path = self.dir.join(format!("{hash}.meta"));
+            let _ = fs::remove_file(&meta_path);
+            // Drop the index entry and any in-memory ref count.
+            {
+                let mut index = self.index.write().unwrap_or_else(|e| e.into_inner());
+                index.remove(&hash);
+            }
+            {
+                let mut refs = self.refs.write().unwrap_or_else(|e| e.into_inner());
+                refs.remove(&hash);
+            }
+            freed_count += 1;
         }
+
+        // Persist the pruned index.
+        self.persist_index()?;
 
         Ok(GcReport {
             freed_count,
@@ -273,6 +348,68 @@ impl ContentStore {
         );
         fs::write(&meta_path, json.as_bytes())
     }
+
+    /// Resolve an Endo SHA-256 key to its git object id, if indexed.
+    fn oid_for(&self, hash: &str) -> Option<gix_hash::ObjectId> {
+        let index = self.index.read().unwrap_or_else(|e| e.into_inner());
+        index.get(hash).copied()
+    }
+
+    /// Whether the SHA-256 key already has an index entry.
+    fn index_contains(&self, hash: &str) -> bool {
+        let index = self.index.read().unwrap_or_else(|e| e.into_inner());
+        index.contains_key(hash)
+    }
+
+    /// Record a `sha256 -> git-oid` mapping in memory and persist it.
+    fn record_index(&self, hash: &str, oid: gix_hash::ObjectId) -> io::Result<()> {
+        {
+            let mut index = self.index.write().unwrap_or_else(|e| e.into_inner());
+            index.insert(hash.to_string(), oid);
+        }
+        self.persist_index()
+    }
+
+    /// Rewrite the persistent index file atomically (`.tmp` then rename).
+    fn persist_index(&self) -> io::Result<()> {
+        let index = self.index.read().unwrap_or_else(|e| e.into_inner());
+        let mut body = String::with_capacity(index.len() * 110);
+        for (hash, oid) in index.iter() {
+            body.push_str(hash);
+            body.push(' ');
+            body.push_str(&oid.to_hex().to_string());
+            body.push('\n');
+        }
+        let path = self.dir.join(INDEX_FILE);
+        let tmp = self.dir.join(format!("{INDEX_FILE}.tmp"));
+        fs::write(&tmp, body.as_bytes())?;
+        fs::rename(&tmp, &path)
+    }
+}
+
+/// Load the persistent `sha256 -> git-oid` index from `{dir}/sha256-oid.idx`.
+///
+/// Each line is `<sha256-hex> <git-oid-hex>`. A missing file yields an empty
+/// index (a fresh store). Malformed lines are skipped rather than failing the
+/// whole open.
+fn load_index(dir: &Path) -> io::Result<HashMap<String, gix_hash::ObjectId>> {
+    let path = dir.join(INDEX_FILE);
+    let mut map = HashMap::new();
+    let body = match fs::read_to_string(&path) {
+        Ok(b) => b,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(map),
+        Err(e) => return Err(e),
+    };
+    for line in body.lines() {
+        let mut parts = line.split_whitespace();
+        let (Some(hash), Some(oid_hex)) = (parts.next(), parts.next()) else {
+            continue;
+        };
+        if let Ok(oid) = gix_hash::ObjectId::from_hex(oid_hex.as_bytes()) {
+            map.insert(hash.to_string(), oid);
+        }
+    }
+    Ok(map)
 }
 
 /// Report from a GC run.
@@ -608,5 +745,124 @@ mod tests {
         let b2 = cas.read_tree(&h2).unwrap().entries["also-shared.js"].hash.clone();
         assert_eq!(b1, b2);
         assert_eq!(b1, shared_blob);
+    }
+
+    // -- Axis 1: git object-DB substrate ----------------------------------
+
+    /// The bytes are stored as git objects under `{dir}/objects/`, and a
+    /// persistent `sha256 -> git-oid` index file is written. This asserts the
+    /// substrate is the git object DB (not the old flat `{dir}/{hex-sha256}`).
+    #[test]
+    fn store_uses_git_object_db_and_index() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cas = ContentStore::open(tmp.path()).unwrap();
+
+        let hash = cas.store(b"git substrate", "blob").unwrap();
+
+        // The Endo key never appears as a raw flat-dir file.
+        assert!(
+            !tmp.path().join(&hash).exists(),
+            "blob must not be stored as a flat {{dir}}/{{hex-sha256}} file"
+        );
+        // The git object DB directory holds the object.
+        let objects_dir = tmp.path().join(OBJECTS_DIR);
+        assert!(objects_dir.is_dir(), "git objects/ dir must exist");
+        // The persistent index records the mapping.
+        let index_path = tmp.path().join(INDEX_FILE);
+        assert!(index_path.exists(), "sha256 -> oid index must be persisted");
+        let index_body = fs::read_to_string(&index_path).unwrap();
+        assert!(
+            index_body.starts_with(&hash),
+            "index must record the sha256 key"
+        );
+    }
+
+    /// The git oid the index maps to is a real, resolvable git blob whose
+    /// bytes equal the stored bytes. This proves the `sha256 -> git-oid`
+    /// bridge actually resolves through the git object DB.
+    #[test]
+    fn index_oid_resolves_to_git_blob() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cas = ContentStore::open(tmp.path()).unwrap();
+
+        let data = b"resolvable via oid";
+        let hash = cas.store(data, "blob").unwrap();
+
+        let oid = cas.oid_for(&hash).expect("hash must be indexed");
+        // The git object DB contains an object at that oid.
+        assert!(cas.odb.contains(&oid));
+        // Reading via the public API returns the exact bytes.
+        assert_eq!(cas.fetch(&hash).unwrap(), data);
+    }
+
+    /// The persistent index makes the store survive a reopen: a second
+    /// `ContentStore::open` on the same dir resolves content stored by the
+    /// first. (The in-memory refcount cache never survived restart; the index
+    /// is what gives the substrate durable lookups — see axis-4 framing.)
+    #[test]
+    fn index_survives_reopen() {
+        let tmp = tempfile::tempdir().unwrap();
+
+        let (hash, snapshot_hash);
+        {
+            let cas = ContentStore::open(tmp.path()).unwrap();
+            hash = cas.store(b"persisted blob", "blob").unwrap();
+            snapshot_hash = cas.store(b"persisted snapshot", "snapshot").unwrap();
+        } // drop the first store — in-memory index is gone.
+
+        let reopened = ContentStore::open(tmp.path()).unwrap();
+        assert!(reopened.has(&hash), "blob must resolve after reopen");
+        assert_eq!(reopened.fetch(&hash).unwrap(), b"persisted blob");
+        assert!(reopened.has(&snapshot_hash));
+        assert_eq!(
+            reopened.fetch(&snapshot_hash).unwrap(),
+            b"persisted snapshot"
+        );
+    }
+
+    /// Two distinct SHA-256 keys never collide in the index, and fetching one
+    /// does not return the other's bytes.
+    #[test]
+    fn distinct_keys_distinct_objects() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cas = ContentStore::open(tmp.path()).unwrap();
+
+        let a = cas.store(b"alpha", "blob").unwrap();
+        let b = cas.store(b"beta", "blob").unwrap();
+        assert_ne!(a, b);
+        assert_eq!(cas.fetch(&a).unwrap(), b"alpha");
+        assert_eq!(cas.fetch(&b).unwrap(), b"beta");
+        assert_ne!(cas.oid_for(&a), cas.oid_for(&b));
+    }
+
+    /// GC removes the underlying git object (not a flat-dir file) and prunes
+    /// the index entry; the index is re-persisted so the collection survives a
+    /// reopen.
+    #[test]
+    fn gc_prunes_git_object_and_index() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cas = ContentStore::open(tmp.path()).unwrap();
+
+        let keep = cas.store(b"keep via retain", "blob").unwrap();
+        let drop = cas.store(b"drop via gc", "blob").unwrap();
+        cas.retain(&keep);
+
+        let drop_oid = cas.oid_for(&drop).expect("indexed before gc");
+        let drop_object_path = cas.odb.object_path(&drop_oid);
+        assert!(drop_object_path.exists(), "git object present before gc");
+
+        let report = cas.gc(&HashSet::new()).unwrap();
+        assert_eq!(report.freed_count, 1);
+
+        // The git object file is gone, and the index no longer maps it.
+        assert!(!drop_object_path.exists(), "git object removed by gc");
+        assert!(cas.oid_for(&drop).is_none(), "index entry pruned by gc");
+        assert!(!cas.has(&drop));
+        assert!(cas.has(&keep));
+
+        // The pruned index is durable across reopen.
+        let reopened = ContentStore::open(tmp.path()).unwrap();
+        assert!(!reopened.has(&drop));
+        assert!(reopened.has(&keep));
     }
 }
