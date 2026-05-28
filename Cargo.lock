@@ -1088,8 +1088,10 @@ dependencies = [
  "criterion",
  "endo_iroh",
  "gix-hash",
+ "gix-lock",
  "gix-object",
  "gix-odb",
+ "gix-ref",
  "hex",
  "libc",
  "rusqlite",
@@ -1507,6 +1509,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "gix-lock"
+version = "23.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "65c9dedd9e90b0d47624d2ed241d394e09294118364e87b9b7e5f1fe755f3c2c"
+dependencies = [
+ "gix-tempfile",
+ "gix-utils",
+ "thiserror",
+]
+
+[[package]]
 name = "gix-object"
 version = "0.61.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1584,6 +1597,38 @@ dependencies = [
  "bstr",
  "gix-error",
  "gix-utils",
+]
+
+[[package]]
+name = "gix-ref"
+version = "0.64.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4c04f64c37eb7e6feb73c7060f8dc6f381cc5de5d53249bfd450bc48a86b2e8b"
+dependencies = [
+ "gix-actor",
+ "gix-features",
+ "gix-fs",
+ "gix-hash",
+ "gix-lock",
+ "gix-object",
+ "gix-path",
+ "gix-tempfile",
+ "gix-utils",
+ "gix-validate",
+ "memmap2",
+ "thiserror",
+]
+
+[[package]]
+name = "gix-tempfile"
+version = "23.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "27850097e1ff9515f46a0dad0f5f9c9d020e972727772dabab9450690c4adb22"
+dependencies = [
+ "gix-fs",
+ "libc",
+ "parking_lot",
+ "tempfile",
 ]
 
 [[package]]
