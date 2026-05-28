@@ -75,9 +75,17 @@ pub struct TreeEntry {
 /// experimental git SHA-256 object mode is deliberately not used (the
 /// Endo-facing key stays SHA-256 regardless).
 ///
-/// Optional `.meta` sidecars in `{dir}` carry advisory type and ref count, as
-/// before. Retention (`retain`/`release`/`gc`) is unchanged in this pass; the
-/// design's axis 4 replaces it with `refs/formulas/<id>` + `git gc`.
+/// Optional `.meta` sidecars in `{dir}` carry the advisory content type.
+///
+/// Retention is **reachability-driven and crash-safe** (axis 4): a retained
+/// object is recorded as a git ref under `refs/cas/<sha256>` pointing at the
+/// object's git oid, written through git's own ref-lock discipline (lock-file
+/// + atomic rename, via `gix-ref`). `gc` computes the live set from those refs
+/// — git reachability over the retained roots — rather than from an in-memory
+/// refcount that was lost on every restart. This replaces the hand-rolled
+/// `HashMap<String, u32>` refcount the store used to flush best-effort to
+/// `.meta`; the maintainer's ruling is to lean on git's ref machinery instead
+/// of rolling our own retention cache.
 pub struct ContentStore {
     dir: PathBuf,
     /// Git loose-object database rooted at `{dir}/objects/`.
@@ -86,14 +94,22 @@ pub struct ContentStore {
     /// on every newly stored object. Endo references the SHA-256 key; this
     /// resolves it to the git object id used by the object DB.
     index: RwLock<HashMap<String, gix_hash::ObjectId>>,
-    /// In-memory ref count cache (flushed to `.meta` on release/retain).
-    refs: RwLock<HashMap<String, u32>>,
+    // Retention is recorded as git refs under `{dir}/refs/cas/<sha256>`. The
+    // `gix_ref::file::Store` that reads/writes them is built on demand in
+    // `ref_store()` rather than held as a field: it carries a non-`Send`
+    // `Rc` packed-refs cache, and `ContentStore` is shared across threads via
+    // `Arc`. Constructing it is cheap (a path + options; packed refs load
+    // lazily), so per-operation construction costs nothing on the hot path.
 }
 
 /// Basename of the persistent sha256 -> git-oid index inside the store dir.
 const INDEX_FILE: &str = "sha256-oid.idx";
 /// Subdirectory of the store dir holding the git loose-object database.
 const OBJECTS_DIR: &str = "objects";
+/// Ref-namespace prefix for retained CAS objects. A ref
+/// `refs/cas/<sha256>` -> git-oid is the liveness record for one retained
+/// content hash.
+const CAS_REF_PREFIX: &str = "refs/cas/";
 
 impl ContentStore {
     /// Open (or create) a content store at `dir`.
@@ -107,7 +123,6 @@ impl ContentStore {
             dir: dir.to_path_buf(),
             odb,
             index,
-            refs: RwLock::new(HashMap::new()),
         })
     }
 
@@ -130,7 +145,7 @@ impl ContentStore {
         }
         // Write .meta if content type is not blob (default).
         if content_type != "blob" {
-            self.write_meta(&hash, content_type, 0)?;
+            self.write_meta(&hash, content_type)?;
         }
         Ok(hash)
     }
@@ -162,22 +177,29 @@ impl ContentStore {
         }
     }
 
-    /// Increment ref count for a hash.
+    /// Retain a hash: record it as a live root via `refs/cas/<sha256>`.
+    ///
+    /// The ref points at the object's git oid and is written through git's
+    /// ref-lock discipline (lock-file + atomic rename), so it survives a daemon
+    /// restart and a crash mid-write. A retained object is reachable from a
+    /// ref, which is what keeps it out of `gc`'s sweep. Best-effort: an unknown
+    /// hash (never stored) has no oid to point at and is silently ignored, and
+    /// a write failure leaves retention as it was rather than panicking on the
+    /// CapTP control path.
     pub fn retain(&self, hash: &str) {
-        let mut refs = self.refs.write().unwrap_or_else(|e| e.into_inner());
-        let count = refs.entry(hash.to_string()).or_insert(0);
-        *count += 1;
-        // Best-effort flush to .meta.
-        let _ = self.write_meta(hash, "blob", *count);
+        let Some(oid) = self.oid_for(hash) else {
+            return;
+        };
+        let _ = self.set_cas_ref(hash, oid);
     }
 
-    /// Decrement ref count for a hash.
+    /// Release a hash: drop its `refs/cas/<sha256>` retention ref.
+    ///
+    /// After release the object is collectable on the next `gc` unless some
+    /// other live root (a tree, an explicit `gc` root, another retain) keeps it
+    /// reachable. Deleting a ref that does not exist is a no-op.
     pub fn release(&self, hash: &str) {
-        let mut refs = self.refs.write().unwrap_or_else(|e| e.into_inner());
-        if let Some(count) = refs.get_mut(hash) {
-            *count = count.saturating_sub(1);
-            let _ = self.write_meta(hash, "blob", *count);
-        }
+        let _ = self.delete_cas_ref(hash);
     }
 
     /// Store a tree entry (JSON manifest) in the CAS.
@@ -243,24 +265,28 @@ impl ContentStore {
         &self.dir
     }
 
-    /// Run garbage collection. Deletes entries that:
-    /// - Have zero ref count in the in-memory cache.
-    /// - Are not in `live_roots`.
-    /// - Are not transitively referenced by a live tree.
+    /// Run garbage collection. Deletes entries that are not reachable from a
+    /// live root, where the live roots are:
+    /// - the explicit `live_roots` argument (caller-supplied, e.g. the formula
+    ///   graph the supervisor knows is live this session), and
+    /// - every retained object recorded as a durable `refs/cas/<sha256>` ref.
+    ///
+    /// The ref-derived roots are the crash-safe replacement for the old
+    /// in-memory refcount: because they live on disk through git's ref-lock
+    /// discipline, retention survives a daemon restart, and a `gc` after a
+    /// restart no longer collects everything that was retained in a prior
+    /// session. The transitive tree walk below expands those roots over their
+    /// children, which is git reachability over the retained ref set.
     ///
     /// Returns a report of what was collected.
     pub fn gc(&self, live_roots: &HashSet<String>) -> io::Result<GcReport> {
-        // Build the full live set by walking trees from live_roots.
+        // Build the full live set, seeded by the caller's explicit roots.
         let mut live = live_roots.clone();
 
-        // Also include anything with refs > 0.
-        {
-            let refs = self.refs.read().unwrap_or_else(|e| e.into_inner());
-            for (hash, count) in refs.iter() {
-                if *count > 0 {
-                    live.insert(hash.clone());
-                }
-            }
+        // Add every object retained via a `refs/cas/<sha256>` ref. These are
+        // durable across restart — the load-bearing reachability source.
+        for hash in self.retained_hashes()? {
+            live.insert(hash);
         }
 
         // Expand tree references: walk all live trees and mark children.
@@ -316,15 +342,14 @@ impl ContentStore {
             // Drop the meta sidecar.
             let meta_path = self.dir.join(format!("{hash}.meta"));
             let _ = fs::remove_file(&meta_path);
-            // Drop the index entry and any in-memory ref count.
+            // Drop the index entry.
             {
                 let mut index = self.index.write().unwrap_or_else(|e| e.into_inner());
                 index.remove(&hash);
             }
-            {
-                let mut refs = self.refs.write().unwrap_or_else(|e| e.into_inner());
-                refs.remove(&hash);
-            }
+            // A collected object is unreachable, so it carries no retention ref
+            // (refs seed the live set). Drop any stale ref defensively anyway.
+            let _ = self.delete_cas_ref(&hash);
             freed_count += 1;
         }
 
@@ -341,12 +366,115 @@ impl ContentStore {
     // Internal helpers
     // -----------------------------------------------------------------------
 
-    fn write_meta(&self, hash: &str, content_type: &str, ref_count: u32) -> io::Result<()> {
+    /// Write the advisory `.meta` sidecar carrying the content type.
+    ///
+    /// The old `refs` field is gone: retention is now a git ref under
+    /// `refs/cas/<sha256>`, not a count flushed into `.meta`.
+    fn write_meta(&self, hash: &str, content_type: &str) -> io::Result<()> {
         let meta_path = self.dir.join(format!("{hash}.meta"));
-        let json = format!(
-            "{{\"type\":\"{content_type}\",\"refs\":{ref_count}}}"
-        );
+        let json = format!("{{\"type\":\"{content_type}\"}}");
         fs::write(&meta_path, json.as_bytes())
+    }
+
+    /// Open the git ref store rooted at `{dir}`. Built per-call rather than
+    /// held as a field because `gix_ref::file::Store` is `!Send` (it caches
+    /// packed refs behind an `Rc`) while `ContentStore` is shared across
+    /// threads. Construction is cheap; the reflog is disabled because these
+    /// refs are pure liveness markers (no history, no committer identity).
+    fn ref_store(&self) -> gix_ref::file::Store {
+        gix_ref::file::Store::at(
+            self.dir.clone(),
+            gix_ref::store::init::Options {
+                write_reflog: gix_ref::store::WriteReflog::Disable,
+                object_hash: gix_hash::Kind::Sha1,
+                precompose_unicode: false,
+                prohibit_windows_device_names: false,
+            },
+        )
+    }
+
+    /// Build the `FullName` of the retention ref for a content hash.
+    fn cas_ref_name(hash: &str) -> io::Result<gix_ref::FullName> {
+        gix_ref::FullName::try_from(format!("{CAS_REF_PREFIX}{hash}"))
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, format!("ref name: {e}")))
+    }
+
+    /// Create or update `refs/cas/<hash>` -> `oid` through git's ref-lock
+    /// discipline. Crash-safe: the lock-file + atomic-rename commit means a
+    /// crash either leaves the old ref state or the new one, never a torn
+    /// write.
+    fn set_cas_ref(&self, hash: &str, oid: gix_hash::ObjectId) -> io::Result<()> {
+        let edit = gix_ref::transaction::RefEdit {
+            change: gix_ref::transaction::Change::Update {
+                log: gix_ref::transaction::LogChange {
+                    mode: gix_ref::transaction::RefLog::AndReference,
+                    force_create_reflog: false,
+                    message: Default::default(),
+                },
+                expected: gix_ref::transaction::PreviousValue::Any,
+                new: gix_ref::Target::Object(oid),
+            },
+            name: Self::cas_ref_name(hash)?,
+            deref: false,
+        };
+        self.commit_ref_edit(edit)
+    }
+
+    /// Delete `refs/cas/<hash>` if present. Deleting an absent ref is a no-op.
+    fn delete_cas_ref(&self, hash: &str) -> io::Result<()> {
+        let edit = gix_ref::transaction::RefEdit {
+            change: gix_ref::transaction::Change::Delete {
+                expected: gix_ref::transaction::PreviousValue::Any,
+                log: gix_ref::transaction::RefLog::AndReference,
+            },
+            name: Self::cas_ref_name(hash)?,
+            deref: false,
+        };
+        self.commit_ref_edit(edit)
+    }
+
+    /// Run a single ref edit through prepare + commit. The committer is `None`
+    /// because the reflog is disabled for the CAS ref store.
+    fn commit_ref_edit(&self, edit: gix_ref::transaction::RefEdit) -> io::Result<()> {
+        self.ref_store()
+            .transaction()
+            .prepare(
+                std::iter::once(edit),
+                gix_lock::acquire::Fail::Immediately,
+                gix_lock::acquire::Fail::Immediately,
+            )
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("ref prepare: {e}")))?
+            .commit(None)
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("ref commit: {e}")))?;
+        Ok(())
+    }
+
+    /// The set of content hashes currently retained via a `refs/cas/<sha256>`
+    /// ref. This is the durable, crash-safe live-root set read straight off
+    /// disk — the heart of axis 4: it survives a daemon restart, so a `gc`
+    /// after a restart no longer treats every previously-retained object as
+    /// collectable.
+    fn retained_hashes(&self) -> io::Result<Vec<String>> {
+        let store = self.ref_store();
+        let iter = store
+            .iter()
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("ref iter: {e}")))?;
+        let all = iter
+            .all()
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("ref iter all: {e}")))?;
+        let mut out = Vec::new();
+        for reference in all {
+            let reference =
+                reference.map_err(|e| io::Error::new(io::ErrorKind::Other, format!("ref: {e}")))?;
+            let name_bytes: &[u8] = reference.name.as_bstr().as_ref();
+            if let Some(rest) = std::str::from_utf8(name_bytes)
+                .ok()
+                .and_then(|s| s.strip_prefix(CAS_REF_PREFIX))
+            {
+                out.push(rest.to_string());
+            }
+        }
+        Ok(out)
     }
 
     /// Resolve an Endo SHA-256 key to its git object id, if indexed.
@@ -486,22 +614,39 @@ mod tests {
         assert!(meta.contains("\"type\":\"snapshot\""));
     }
 
+    /// Axis 4: retain records a durable git ref under `refs/cas/<sha256>`, and
+    /// release deletes it. The ref's presence — not an in-memory count — is the
+    /// liveness record, so a retained object survives a `gc` and a released one
+    /// is collectable. (The old counted-`.meta` contract is replaced by
+    /// reachability over refs per the maintainer's ruling.)
     #[test]
-    fn retain_release_updates_refs() {
+    fn retain_release_manage_cas_refs() {
         let tmp = tempfile::tempdir().unwrap();
         let cas = ContentStore::open(tmp.path()).unwrap();
 
-        let hash = cas.store(b"ref counted", "blob").unwrap();
-        cas.retain(&hash);
-        cas.retain(&hash);
+        let hash = cas.store(b"ref retained", "blob").unwrap();
 
-        let meta_path = tmp.path().join(format!("{hash}.meta"));
-        let meta = fs::read_to_string(&meta_path).unwrap();
-        assert!(meta.contains("\"refs\":2"));
+        // No ref yet — the object is collectable.
+        assert!(cas.retained_hashes().unwrap().is_empty());
+
+        cas.retain(&hash);
+        let ref_path = tmp.path().join(format!("{CAS_REF_PREFIX}{hash}"));
+        assert!(ref_path.exists(), "retain must write refs/cas/<sha256>");
+        assert!(cas.retained_hashes().unwrap().contains(&hash));
+
+        // Retained content survives GC with an empty caller root set.
+        let report = cas.gc(&HashSet::new()).unwrap();
+        assert_eq!(report.freed_count, 0);
+        assert!(cas.has(&hash));
 
         cas.release(&hash);
-        let meta = fs::read_to_string(&meta_path).unwrap();
-        assert!(meta.contains("\"refs\":1"));
+        assert!(!ref_path.exists(), "release must delete the ref");
+        assert!(cas.retained_hashes().unwrap().is_empty());
+
+        // Now collectable.
+        let report = cas.gc(&HashSet::new()).unwrap();
+        assert_eq!(report.freed_count, 1);
+        assert!(!cas.has(&hash));
     }
 
     #[test]
@@ -864,5 +1009,78 @@ mod tests {
         let reopened = ContentStore::open(tmp.path()).unwrap();
         assert!(!reopened.has(&drop));
         assert!(reopened.has(&keep));
+    }
+
+    // -- Axis 4: reachability-driven, crash-safe retention ----------------
+
+    /// The crash-safety fix. Today's bug: `retain` kept an in-memory refcount
+    /// that was rebuilt empty on `ContentStore::open`, so a `gc` after a daemon
+    /// restart collected everything that had been retained in a prior session
+    /// (the live system calls `cas.gc(&HashSet::new())`). With retention stored
+    /// as a durable `refs/cas/<sha256>` ref, the retained object survives the
+    /// reopen and the subsequent empty-root-set GC; the unretained one is
+    /// collected. This asserts the durable-liveness contract, not a mechanism.
+    #[test]
+    fn retention_survives_reopen_and_empty_root_gc() {
+        let tmp = tempfile::tempdir().unwrap();
+
+        let (retained, unretained);
+        {
+            let cas = ContentStore::open(tmp.path()).unwrap();
+            retained = cas.store(b"retained across restart", "blob").unwrap();
+            unretained = cas.store(b"only this session", "blob").unwrap();
+            cas.retain(&retained);
+        } // Drop the store — the in-memory state is gone, only disk survives.
+
+        // A fresh daemon process reopens the store and runs GC the way the live
+        // system does: with an empty caller-supplied root set.
+        let reopened = ContentStore::open(tmp.path()).unwrap();
+        let report = reopened.gc(&HashSet::new()).unwrap();
+
+        // The retained object is preserved purely because its ref persisted.
+        assert!(
+            reopened.has(&retained),
+            "retained content must survive restart + empty-root GC"
+        );
+        // The unretained object is collected.
+        assert_eq!(report.freed_count, 1);
+        assert!(!reopened.has(&unretained));
+    }
+
+    /// Retention refs act as GC roots that reach transitively into tree
+    /// children: retaining only a tree root keeps the tree's blobs alive even
+    /// though those blobs were never themselves retained. This is git
+    /// reachability over the retained ref set.
+    #[test]
+    fn retained_tree_root_keeps_children_alive() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cas = ContentStore::open(tmp.path()).unwrap();
+
+        let child = cas.store(b"reachable child", "blob").unwrap();
+        let tree = TreeManifest {
+            entries: {
+                let mut m = HashMap::new();
+                m.insert(
+                    "child.js".to_string(),
+                    TreeEntry {
+                        entry_type: "blob".to_string(),
+                        hash: child.clone(),
+                        size: Some(15),
+                    },
+                );
+                m
+            },
+        };
+        let tree_hash = cas.store_tree(&serde_json::to_vec(&tree).unwrap()).unwrap();
+        let orphan = cas.store(b"unreachable orphan", "blob").unwrap();
+
+        // Retain only the tree root — via a ref, not a caller root set.
+        cas.retain(&tree_hash);
+
+        let report = cas.gc(&HashSet::new()).unwrap();
+        assert_eq!(report.freed_count, 1, "only the orphan is collected");
+        assert!(cas.has(&tree_hash), "retained tree root preserved");
+        assert!(cas.has(&child), "child reachable from the retained tree");
+        assert!(!cas.has(&orphan), "orphan collected");
     }
 }
