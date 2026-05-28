@@ -338,6 +338,21 @@ CLAUDE_CODE_VERSION=2.0.0 ./packages/claude-orch/scripts/build-image.sh x86_64
 ./packages/claude-orch/scripts/build-image.sh --check x86_64
 ```
 
+`build-rootfs.sh` needs root for mount-bind and chroot. Re-run the
+whole thing under `sudo` (or inside a privileged container).
+
+On hosts whose default `PATH` doesn't reach the standard CA bundle
+(NixOS is the canonical example; some custom Docker layers too),
+`apk.static` can't verify TLS during the initial APKINDEX fetch.
+Pass the host's bundle through:
+
+```sh
+sudo --preserve-env=PATH,SSL_CERT_FILE,SSL_CERT_DIR \
+  SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt \
+  SSL_CERT_DIR=/etc/ssl/certs \
+  ./packages/claude-orch/scripts/build-image.sh x86_64
+```
+
 Both `bin/claude-orch` and `scripts/smoke-boot.sh` look for these
 artifacts under `$CLAUDE_ORCH_IMAGE_DIR`.
 

@@ -4,6 +4,15 @@
 # expected to layer claude-orch-specific provisioning on top. See DESIGN.md §8.1.
 set -eu
 
+# Reset PATH to Alpine's defaults. alpine-make-rootfs invokes
+# `chroot <rootfs> /bin/sh -c ...` without scrubbing the parent
+# environment, so a build host with a non-standard PATH (NixOS, a
+# nix-shell, a Docker layer with a custom PATH) leaks paths into
+# the chroot that don't exist there. The default Alpine commands
+# we use below (`addgroup`/`adduser` from busybox-suid, `npm` from
+# nodejs) all live under `/usr/sbin` or `/usr/bin`.
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
 # Create the unprivileged claude user. uid/gid 1000 to match bootstrap-init.
 addgroup -g 1000 claude || true
 adduser -D -u 1000 -G claude -h /home/claude -s /bin/bash claude || true
