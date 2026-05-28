@@ -6,10 +6,15 @@
 #   ./scripts/build-image.sh --check [arch]   # validate prereqs, no build
 #
 # Requires (on the host running this script):
-#   - mkosi
 #   - cargo + rustup with the musl target installed
+#   - e2fsprogs (mke2fs -d) and rsync, for build-rootfs.sh
 #   - linux source tree at $LINUX_SRC (default: /usr/src/linux)
-#   - Linux host (mkosi does not run on macOS)
+#   - Linux host running as root (for build-rootfs.sh's chroot)
+#
+# The rootfs step uses alpine-make-rootfs (downloaded + SHA-pinned by
+# build-rootfs.sh) — the upstream `mkosi` path that the original commit
+# of this script targeted never worked because mkosi has no Alpine
+# distribution backend. See scripts/build-rootfs.sh and DESIGN.md §8.1.
 #
 # Outputs land in build/<arch>/.
 set -euo pipefail
@@ -41,8 +46,13 @@ require_cmd() {
 check_prereqs() {
   local missing=0
   require_cmd cargo || missing=1
-  require_cmd mkosi || missing=1
   require_cmd make || missing=1
+  # build-rootfs.sh dependencies. Listing them here too so `--check`
+  # surfaces a missing mke2fs before we burn the rust build.
+  require_cmd mke2fs || missing=1
+  require_cmd rsync || missing=1
+  require_cmd curl || missing=1
+  require_cmd sha256sum || missing=1
   if [ ! -d "$LINUX_SRC" ]; then
     echo "Missing kernel source tree at LINUX_SRC=$LINUX_SRC" >&2
     missing=1
@@ -95,7 +105,7 @@ case "$ARCH" in
     KERNEL_TARGET="bzImage"
     KERNEL_IMG="vmlinux-x86_64"
     KERNEL_RELPATH="arch/x86/boot/bzImage"
-    MKOSI_ARCH="x86-64"
+    ROOTFS_IMG="rootfs-x86_64.raw"
     ;;
   aarch64|arm64)
     ARCH=aarch64
@@ -104,7 +114,7 @@ case "$ARCH" in
     KERNEL_TARGET="Image"
     KERNEL_IMG="Image-arm64"
     KERNEL_RELPATH="arch/arm64/boot/Image"
-    MKOSI_ARCH="arm64"
+    ROOTFS_IMG="rootfs-arm64.raw"
     ;;
   *)
     echo "unknown arch: $ARCH" >&2
@@ -125,24 +135,21 @@ cargo build --release \
   --features seccomp \
   --manifest-path "$REPO_ROOT/rust/claude-orch/runtime-agent/Cargo.toml"
 
-# Drop the Rust binaries into the mkosi ExtraTrees layout.
-EXTRA="$IMAGE_DIR/mkosi.conf.d/10-claude/files"
-install -m 0755 "$REPO_ROOT/target/$RUST_TARGET/release/init" \
-  "$EXTRA/sbin/init"
-install -m 0755 "$REPO_ROOT/target/$RUST_TARGET/release/claude-agent" \
-  "$EXTRA/usr/local/bin/claude-agent"
+# Stage the Rust binaries into a private directory which build-rootfs.sh
+# rsyncs onto the rootfs on top of the tracked images/files/ overlay.
+# Done out-of-tree so a previous build's binaries can never leak into a
+# tracked path or follow-on `git status`.
+STAGING="$BUILD_DIR/staging"
+rm -rf "$STAGING"
+install -m 0755 -D "$REPO_ROOT/target/$RUST_TARGET/release/init" \
+  "$STAGING/sbin/init"
+install -m 0755 -D "$REPO_ROOT/target/$RUST_TARGET/release/claude-agent" \
+  "$STAGING/usr/local/bin/claude-agent"
 
-echo "== building rootfs (mkosi, arch=$MKOSI_ARCH)"
-( cd "$IMAGE_DIR" && \
-    CLAUDE_CODE_VERSION="$CLAUDE_CODE_VERSION" \
-    mkosi --architecture="$MKOSI_ARCH" --output-dir="$BUILD_DIR" build )
-
-# Convert to flat ext4 if not already.
-ROOTFS_SRC="$BUILD_DIR/rootfs"
-ROOTFS_DST="$BUILD_DIR/rootfs-$ARCH.raw"
-if [ -f "$ROOTFS_SRC" ] && [ ! -e "$ROOTFS_DST" ]; then
-  cp "$ROOTFS_SRC" "$ROOTFS_DST"
-fi
+echo "== building rootfs (alpine-make-rootfs, arch=$ARCH)"
+CLAUDE_CODE_VERSION="$CLAUDE_CODE_VERSION" \
+  "$SCRIPT_DIR/build-rootfs.sh" "$ARCH" "$STAGING" \
+  "$BUILD_DIR/$ROOTFS_IMG"
 
 echo "== building kernel ($KERNEL_ARCH $KERNEL_TARGET)"
 if [ ! -d "$LINUX_SRC" ]; then

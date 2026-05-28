@@ -1,5 +1,7 @@
 #!/bin/sh
-# Run inside the rootfs chroot during mkosi build. See DESIGN.md §8.1.
+# Run inside the rootfs chroot during build-rootfs.sh (alpine-make-rootfs `-c`).
+# Receives a fully-installed Alpine system (packages.list resolved) and is
+# expected to layer claude-orch-specific provisioning on top. See DESIGN.md §8.1.
 set -eu
 
 # Create the unprivileged claude user. uid/gid 1000 to match bootstrap-init.

@@ -24,15 +24,22 @@ test('postinst.sh parses as valid bash', async t => {
     __dirname,
     '..',
     'images',
-    'mkosi.conf.d',
-    '10-claude',
     'postinst.sh',
   );
   await t.notThrowsAsync(execFileAsync('bash', ['-n', postinst]));
 });
 
+test('build-rootfs.sh parses as valid bash', async t => {
+  const buildRootfs = path.resolve(
+    __dirname,
+    '..',
+    'scripts',
+    'build-rootfs.sh',
+  );
+  await t.notThrowsAsync(execFileAsync('bash', ['-n', buildRootfs]));
+});
+
 test('build-image.sh --check exits cleanly when prerequisites are present (or fails fast otherwise)', async t => {
-  // We don't know whether cargo/mkosi/LINUX_SRC are present in CI, but
   // --check must EITHER succeed with code 0 ("ok") OR fail with code 1
   // and a useful message. It must not crash or hang.
   try {

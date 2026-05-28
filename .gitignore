@@ -125,3 +125,13 @@ api-docs
 packages/*/tmp/
 packages/*/test/tmp/
 .turbo/
+
+# claude-orch guest image build outputs. `scripts/build-image.sh` writes
+# the kernel, the staged Rust binaries, and the assembled ext4 rootfs
+# under images/build/<arch>/. None of it is source.
+packages/claude-orch/images/build/
+
+# claude-orch local dev helpers (macOS troubleshooting; not part of the package)
+packages/claude-orch/.local-build.dockerfile
+packages/claude-orch/bin/.local-start-orch.mjs
+packages/claude-orch/scripts/.local-host-fs-only.js

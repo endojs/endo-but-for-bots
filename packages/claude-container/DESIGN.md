@@ -893,55 +893,38 @@ All builds run in a Linux container (Docker, Podman, OrbStack, or colima — all
 
 ### 8.1 Rootfs Build
 
-Tool: **mkosi**. Configuration in `images/mkosi.conf.d/`.
+Tool: **[alpine-make-rootfs](https://github.com/alpinelinux/alpine-make-rootfs)**,
+wrapped by `scripts/build-rootfs.sh` and driven from
+`scripts/build-image.sh`. Upstream `mkosi` was never an option here —
+it has no Alpine distribution backend, so the original mkosi-based
+sketch in this section was replaced before the first working build.
 
-```ini
-# images/mkosi.conf.d/00-base/mkosi.conf
-[Distribution]
-Distribution=alpine
-Release=3.20
+Inputs under `packages/claude-orch/images/`:
 
-[Output]
-Format=disk
-ImageId=claude-sandbox
-Output=rootfs
+- `packages.list` — Alpine packages to install (one name per line).
+- `postinst.sh` — chroot hook: create the `claude` user, run
+  `npm install -g @anthropic-ai/claude-code@<pinned>`, verify
+  `claude --version`.
+- `files/` — static overlay copied onto the rootfs after bootstrap
+  (e.g. `/etc/resolv.conf`). Rust guest binaries (`/sbin/init`,
+  `/usr/local/bin/claude-agent`) are staged out-of-tree by
+  `build-image.sh` and rsynced on top — they are not checked in.
 
-[Content]
-Packages=
-    busybox
-    bash
-    coreutils findutils grep sed gawk
-    git curl ca-certificates
-    tmux ripgrep jq
-    openssh-client
-    nodejs npm
-    python3 py3-pip
-    build-base pkgconfig linux-headers
-    util-linux e2fsprogs
-```
-
-```ini
-# images/mkosi.conf.d/10-claude/mkosi.conf
-[Content]
-ExtraTrees=
-    %D/files
-PostInstallationScripts=%D/postinst.sh
-```
-
-`files/` contains the bootstrap init at `/sbin/init`, the agent at `/usr/local/bin/claude-agent`, the resolv.conf template, and any /etc files.
-
-`postinst.sh` runs `npm install -g @anthropic-ai/claude-code@<pinned>` inside the chroot.
+`build-rootfs.sh` downloads and SHA-pins `alpine-make-rootfs` and
+`apk-tools-static`, bootstraps Alpine v3.20, runs `postinst.sh` inside
+the chroot, applies the overlay, and packs the tree with `mke2fs -d`.
 
 Built per architecture:
 
 ```
-mkosi --architecture=x86_64 build -o build/x86_64/
-mkosi --architecture=arm64   build -o build/arm64/
+./packages/claude-orch/scripts/build-image.sh x86_64
+./packages/claude-orch/scripts/build-image.sh aarch64
 ```
 
-Outputs:
-- `build/x86_64/rootfs.raw` — flat ext4 image
-- `build/arm64/rootfs.raw`
+Outputs (under `images/build/<arch>/`):
+
+- `build/x86_64/rootfs-x86_64.raw` — flat ext4 image
+- `build/aarch64/rootfs-arm64.raw`
 
 ### 8.2 Kernel Build
 
@@ -1054,9 +1037,10 @@ endo/
 │   │   │   ├── broker/                   # credential broker daemon
 │   │   │   └── broker-client/            # used by main.js
 │   │   ├── scripts/
-│   │   │   ├── build-image.sh            # mkosi + kbuild + cargo
+│   │   │   ├── build-image.sh            # cargo + build-rootfs + kbuild
+│   │   │   ├── build-rootfs.sh           # alpine-make-rootfs wrapper
 │   │   │   └── smoke-boot.sh             # real-KVM end-to-end smoke
-│   │   └── images/                       # mkosi.conf + kernel fragment
+│   │   └── images/                       # packages.list + postinst + kernel fragment
 │   ├── claude-container/                 # Endo capability side
 │   │   ├── DESIGN.md                     # this document
 │   │   ├── ENDO-INTEGRATION.md           # Endo capability surface + roadmap
@@ -1084,7 +1068,7 @@ endo/
             └── src/{main.rs, seccomp.rs}
 ```
 
-The mkosi + kernel build inputs live under
+The Alpine rootfs + kernel build inputs live under
 `packages/claude-orch/images/`; image outputs are not checked in
 and land at `$CLAUDE_ORCH_IMAGE_DIR` (default
 `/opt/claude-orch/share/images`). No `nixos/` directory ships in
@@ -1116,7 +1100,7 @@ Six milestones, each independently demoable.
 
 1. Repo skeleton: workspaces, tsconfig, typedoc, lint, test.
 2. Define `@claude-sandbox/protocol` types end-to-end.
-3. Build minimal Alpine rootfs via mkosi. Boot it under QEMU manually to validate.
+3. Build minimal Alpine rootfs via `build-rootfs.sh`. Boot it under QEMU manually to validate.
 4. Write the bootstrap init (Rust): parse cmdline, send Hello over virtserialport, receive BootConfig, mount 9P with `trans=fd`, exec a stub agent.
 5. Write a stub runtime agent: send Ready, spawn a `bash`, stream over a virtserialport.
 6. Implement the orchestrator: HTTP+UDS API, QEMU spawn, network controller (Linux nftables), bootstrap RPC server, agent RPC server, attach stream multiplexer.
@@ -1410,7 +1394,7 @@ T+5m+6s orchestrator    SIGKILL QEMU if still running
 - Apple Hypervisor.framework: Apple developer docs
 - nftables manual: `man 8 nft`
 - macOS pf manual: `man 5 pf.conf`
-- mkosi: [systemd/mkosi on GitHub](https://github.com/systemd/mkosi)
+- alpine-make-rootfs: [alpinelinux/alpine-make-rootfs on GitHub](https://github.com/alpinelinux/alpine-make-rootfs)
 
 ---
 

@@ -46,6 +46,37 @@ CONFIG_UNIX98_PTYS=y
 CONFIG_SERIAL_8250=y
 CONFIG_SERIAL_8250_CONSOLE=y
 
+# arm64 console + earlycon: the QEMU `virt` machine exposes a PL011
+# at 0x9000000; without these the kernel boots completely silent (no
+# console driver for ttyAMA0, and earlycon=pl011 has no framework
+# either). hvc0 alone is not enough — until virtio-console probes,
+# /dev/console can't open and userland gets "unable to open an
+# initial console" on any boot failure during driver bringup.
+CONFIG_SERIAL_AMBA_PL011=y
+CONFIG_SERIAL_AMBA_PL011_CONSOLE=y
+CONFIG_SERIAL_EARLYCON=y
+CONFIG_SERIAL_OF_PLATFORM=y
+
+# Device tree: arm64 virt machine boots via a DTB the QEMU generates
+# at runtime; without OF_EARLY_FLATTREE the kernel can't parse it.
+CONFIG_OF=y
+CONFIG_OF_EARLY_FLATTREE=y
+CONFIG_OF_FLATTREE=y
+
+# Generic PCIe host controller for the arm64 `virt` machine. Without
+# this, the PCIe root complex (gpex-pcihost) is never registered ->
+# *nothing on the PCI bus probes*: no virtio-blk-pci -> no /dev/vda
+# -> kernel panics mounting root; no virtio-console-pci -> hvc0 has
+# nowhere to print. x86_64 microvm uses VIRTIO_MMIO instead so this
+# is arm64-specific in practice; harmless on x86_64.
+CONFIG_PCI_HOST_GENERIC=y
+
+# Posix / high-res timers — tinyconfig disables these but arm64 virt
+# guests boot expecting them (virtio-rtc-less; userland needs
+# clock_nanosleep et al). Harmless where they were already implied.
+CONFIG_HIGH_RES_TIMERS=y
+CONFIG_POSIX_TIMERS=y
+
 # Block layer + scheduler
 CONFIG_BLOCK=y
 CONFIG_BLK_DEV=y

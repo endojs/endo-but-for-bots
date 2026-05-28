@@ -29,8 +29,9 @@ validated on real KVM:
 - [x] Credential broker daemon and client (`src/broker/`,
   `src/broker-client/`).
 - [x] `bin/claude-orch`, `bin/claude-broker`.
-- [x] Guest image build pipeline: mkosi rootfs config, kernel fragment,
-  `scripts/build-image.sh` driving cargo + mkosi + kbuild.
+- [x] Guest image build pipeline: Alpine package list + post-install hook,
+  kernel fragment, `scripts/build-image.sh` driving cargo +
+  `scripts/build-rootfs.sh` (alpine-make-rootfs) + kbuild.
 - [x] Rust guest binaries: `rust/claude-orch/bootstrap-init` (PID 1,
   bootstrap handshake, 9P mount via socketpair relay, drop privs,
   exec); and `rust/claude-orch/runtime-agent` (control RPC, optional
@@ -258,16 +259,20 @@ refactors called out above.
 
 - **Linux host** with `/dev/kvm` accessible to the orchestrator UID.
   macOS support (`-accel hvf`) is on the M2 roadmap; the **guest
-  image build pipeline is Linux-only** because it shells out to
-  `mkosi` against an in-tree kernel source.
+  image build pipeline is Linux-only** because it bootstraps an
+  Alpine rootfs via chroot and shells out to kbuild against an
+  in-tree kernel source.
 - `qemu-system-x86_64` (and / or `qemu-system-aarch64`) on PATH.
   TCG falls back transparently when `/dev/kvm` is unavailable, at
   ~5–10× slowdown.
 - `rustup` with the musl target for the guest arch
   (`x86_64-unknown-linux-musl` or `aarch64-unknown-linux-musl`),
-  `mkosi`, `make`, and a checked-out Linux source tree at
-  `$LINUX_SRC` (default `/usr/src/linux`). These are only needed to
-  *build* the guest image, not to run sessions against one.
+  `make`, `e2fsprogs`, `rsync`, `curl`, `sha256sum`, and a
+  checked-out Linux source tree at `$LINUX_SRC` (default
+  `/usr/src/linux`). These are only needed to *build* the guest
+  image, not to run sessions against one. `build-rootfs.sh` downloads
+  `alpine-make-rootfs` and `apk-tools-static` on demand (both
+  SHA-pinned).
 - **Root** is required to install the live nftables ruleset on the
   host (per-session egress isolation). The orchestrator itself
   runs as a non-root UID; the network controller shells out under
@@ -319,9 +324,11 @@ start the orchestrator, then drive sessions.
 `scripts/build-image.sh` cross-compiles the Rust guest binaries
 (`bootstrap-init` and `runtime-agent` with `--features seccomp`),
 builds the Linux kernel from `images/kernel/microvm.fragment`,
-and runs mkosi to assemble the rootfs. The result lands in
+and delegates rootfs assembly to `scripts/build-rootfs.sh`, which
+uses `alpine-make-rootfs` to install `images/packages.list` and run
+`images/postinst.sh` inside a chroot. The result lands in
 `packages/claude-orch/images/build/<arch>/` as
-`vmlinux-<arch>` + `rootfs.raw`.
+`vmlinux-x86_64` / `Image-arm64` + `rootfs-x86_64.raw` / `rootfs-arm64.raw`.
 
 ```sh
 yarn workspace @endo/claude-orch build:image
@@ -502,9 +509,10 @@ packages/claude-orch/
 │   ├── broker/                  # credential broker daemon
 │   └── broker-client/           # used by main.js
 ├── scripts/
-│   ├── build-image.sh           # full image build pipeline
+│   ├── build-image.sh           # full image build pipeline (cargo + kbuild)
+│   ├── build-rootfs.sh          # alpine-make-rootfs wrapper called by ^
 │   └── smoke-boot.sh            # real-KVM end-to-end smoke test
-├── images/                      # mkosi + kernel configs
+├── images/                      # packages.list + postinst.sh + kernel fragment
 └── test/                        # 39 ava tests (no QEMU required)
 
 rust/claude-orch/
@@ -526,7 +534,7 @@ table is grouped accordingly.
 | `CLAUDE_ORCH_SESSION_DIR` | `/run/claude-orch/sessions` | Per-session UDS subdirs are minted here. |
 | `CLAUDE_ORCH_STATE_PATH` | `/var/lib/claude-orch/sessions.json` | Persisted session table for restart-survival. Set to empty to disable persistence. |
 | `CLAUDE_ORCH_BROKER_SOCKET` | `/run/claude-orch/broker.sock` | Broker UDS the orchestrator subscribes against. |
-| `CLAUDE_ORCH_IMAGE_DIR` | `/opt/claude-orch/share/images` | Where `vmlinux-<arch>` + `rootfs.raw` live (output of `build-image.sh`). |
+| `CLAUDE_ORCH_IMAGE_DIR` | `/opt/claude-orch/share/images` | Where `vmlinux-x86_64` / `Image-arm64` + `rootfs-x86_64.raw` / `rootfs-arm64.raw` live (output of `build-image.sh`). |
 | `CLAUDE_ORCH_DEFAULT_VCPUS` | `2` | Default per-session vCPUs. Overridable on each create. |
 | `CLAUDE_ORCH_DEFAULT_MEM_MB` | `2048` | Default per-session RAM (MB). Overridable on each create. |
 | `CLAUDE_ORCH_BOOT_DEADLINE_MS` | `30000` | Max wall-clock to wait for the guest's Hello before `boot_failed`. |
