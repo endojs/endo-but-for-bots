@@ -10,6 +10,7 @@ import { mkdtemp, rm, stat } from 'node:fs/promises';
 import os from 'node:os';
 
 import { makeBroker } from '../src/broker/main.js';
+import { makeBrokerClient } from '../src/broker-client/index.js';
 import { makeOAuthRefresher } from '../src/broker/oauth.js';
 
 /**
@@ -280,6 +281,61 @@ test('malformed JSON line: error response, broker stays alive', async t => {
   sub.send({ type: 'subscribe', sessionId: 'sess-A' });
   const ok = await sub.next();
   t.is(ok.type, 'creds');
+});
+
+// --- broker-client buffering ---
+
+test('broker-client buffers rotations that arrive before the first onRotate', async t => {
+  // The race: `subscribe()` resolves with `initial` once the broker
+  // sends its first `creds` reply, and the caller registers
+  // `onRotate` from a `.then` microtask after that resolve. If a
+  // rotation arrives in the gap between the resolve and the .then
+  // running, the broker-client used to dispatch into an empty
+  // handlers array and silently drop it. We force the gap by *not*
+  // registering onRotate immediately, calling `forceRefresh()` on
+  // the broker, waiting a tick, and only then registering. The
+  // buffered rotation must drain into the handler.
+  let nthCall = 0;
+  const refresher = async () => {
+    nthCall += 1;
+    return {
+      oauthToken: {
+        accessToken: `tok-${nthCall}`,
+        expiresAt: new Date(Date.now() + 10 * 60_000).toISOString(),
+      },
+    };
+  };
+  const { socketPath, broker } = await setupBroker(t, {
+    initialCredentials: {
+      oauthToken: {
+        accessToken: 'tok-initial',
+        expiresAt: new Date(Date.now() + 10 * 60_000).toISOString(),
+      },
+    },
+    refresher,
+  });
+
+  const client = makeBrokerClient({ socketPath });
+  const sub = await client.subscribe('sess-A');
+  t.is(sub.initial.oauthToken.accessToken, 'tok-initial');
+
+  // Push a rotation *before* registering onRotate. Then wait for the
+  // broker-client's data handler to observe it.
+  await broker.forceRefresh();
+  await new Promise(r => setTimeout(r, 50));
+
+  /** @type {string[]} */
+  const seen = [];
+  sub.onRotate(creds => seen.push(creds.oauthToken.accessToken));
+  // Buffered rotation must drain synchronously when onRotate runs.
+  t.deepEqual(seen, ['tok-1']);
+
+  // And subsequent rotations go straight through.
+  await broker.forceRefresh();
+  await new Promise(r => setTimeout(r, 50));
+  t.deepEqual(seen, ['tok-1', 'tok-2']);
+
+  await sub.close();
 });
 
 // --- OAuth refresher unit tests ---

@@ -43,15 +43,43 @@ const subscribe = (socketPath, sessionId) => {
   const rotateHandlers = [];
   /** @type {((message: string) => void)[]} */
   const errorHandlers = [];
+  // Events that arrive between the initial-creds resolve and the
+  // caller's `.then(sub => sub.onRotate(...))` running get buffered
+  // here. The caller's `.then` runs as a microtask after the broker's
+  // initial reply lands, but `conn.on('data', ...)` can fire again
+  // for a follow-up rotation before that microtask resolves — so
+  // without buffering, the rotation would dispatch into an empty
+  // `rotateHandlers` array and be silently dropped. Same for errors.
+  // The first `onRotate` / `onError` call drains its buffer to the
+  // newly-registered handler synchronously.
+  /** @type {Credentials[]} */
+  const pendingRotations = [];
+  /** @type {string[]} */
+  const pendingErrors = [];
 
   const conn = net.createConnection(socketPath);
   let buf = '';
   let receivedInitial = false;
   let closed = false;
 
+  const dispatchRotation = (/** @type {Credentials} */ creds) => {
+    if (rotateHandlers.length === 0) {
+      pendingRotations.push(creds);
+      return;
+    }
+    for (const h of rotateHandlers) h(creds);
+  };
+  const dispatchError = (/** @type {string} */ msg) => {
+    if (errorHandlers.length === 0) {
+      pendingErrors.push(msg);
+      return;
+    }
+    for (const h of errorHandlers) h(msg);
+  };
+
   conn.once('error', e => {
     if (!receivedInitial) initialKit.reject(e);
-    for (const h of errorHandlers) h(/** @type {Error} */ (e).message);
+    dispatchError(/** @type {Error} */ (e).message);
   });
   conn.once('close', () => {
     if (!receivedInitial) {
@@ -85,7 +113,7 @@ const subscribe = (socketPath, sessionId) => {
           receivedInitial = true;
           initialKit.resolve(msg.credentials);
         } else {
-          for (const h of rotateHandlers) h(msg.credentials);
+          dispatchRotation(msg.credentials);
         }
       } else if (msg.type === 'error') {
         if (!receivedInitial) {
@@ -93,7 +121,7 @@ const subscribe = (socketPath, sessionId) => {
           conn.destroy();
           return;
         }
-        for (const h of errorHandlers) h(msg.message ?? 'broker error');
+        dispatchError(msg.message ?? 'broker error');
       }
     }
   });
@@ -106,9 +134,18 @@ const subscribe = (socketPath, sessionId) => {
         initial,
         onRotate(h) {
           rotateHandlers.push(h);
+          // Drain any rotations that arrived between initial and now.
+          while (pendingRotations.length > 0) {
+            const c = /** @type {Credentials} */ (pendingRotations.shift());
+            h(c);
+          }
         },
         onError(h) {
           errorHandlers.push(h);
+          while (pendingErrors.length > 0) {
+            const m = /** @type {string} */ (pendingErrors.shift());
+            h(m);
+          }
         },
         async close() {
           if (closed) return;

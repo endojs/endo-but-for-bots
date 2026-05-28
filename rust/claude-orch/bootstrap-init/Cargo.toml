@@ -11,3 +11,8 @@ path = "src/main.rs"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 nix = { version = "0.29", default-features = false, features = ["fs", "mount", "user", "process", "socket", "poll"] }
+# Direct prctl call (PR_SET_NO_NEW_PRIVS) — nix 0.29's prctl wrappers
+# don't include set_no_new_privs and pulling a heavier feature set
+# just for one prctl isn't worth it. libc is already in the nix
+# transitive dep graph.
+libc = "0.2"

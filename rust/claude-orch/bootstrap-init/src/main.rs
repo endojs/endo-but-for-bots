@@ -397,6 +397,38 @@ fn chown_home() -> Result<(), String> {
 }
 
 fn drop_privileges() -> Result<(), String> {
+    // PR_SET_NO_NEW_PRIVS: forbid any privilege gain from this point
+    // on. After this prctl returns, exec'ing a setuid binary, a binary
+    // with file caps, or one labeled for an LSM transition will *not*
+    // grant the new privileges. The flag is a one-way switch and
+    // propagates to every descendant through exec, so claude-agent
+    // and every child of claude-agent are also covered.
+    //
+    // runtime-agent's seccomp installer also sets NO_NEW_PRIVS once
+    // it starts, but setting it here additionally closes the brief
+    // window between exec(claude-agent) and seccomp_install().
+    //
+    // We deliberately do NOT also drop the capability bounding set:
+    // NO_NEW_PRIVS already prevents the bounding set from being
+    // converted into effective caps via file caps on exec, so the
+    // 36-syscall PR_CAPBSET_DROP loop adds no protection.
+    //
+    // Set NO_NEW_PRIVS before the uid transition so a future audit
+    // can rely on the invariant "after this prctl, no escalation
+    // possible" through the rest of drop_privileges and the exec.
+    //
+    // SAFETY: PR_SET_NO_NEW_PRIVS = 38; the kernel's prctl ignores
+    // arg3..arg5 for this option. Returning -EINVAL is the only
+    // failure mode (on kernels < 3.5), which we surface to the
+    // caller; the rootfs builder pins kernel >= 6.6 so this is
+    // belt-and-suspenders.
+    let r = unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) };
+    if r != 0 {
+        return Err(format!(
+            "prctl(PR_SET_NO_NEW_PRIVS, 1): {}",
+            std::io::Error::last_os_error()
+        ));
+    }
     setgroups(&[Gid::from_raw(CLAUDE_GID)]).map_err(|e| format!("setgroups: {e}"))?;
     setgid(Gid::from_raw(CLAUDE_GID)).map_err(|e| format!("setgid: {e}"))?;
     setuid(Uid::from_raw(CLAUDE_UID)).map_err(|e| format!("setuid: {e}"))?;
