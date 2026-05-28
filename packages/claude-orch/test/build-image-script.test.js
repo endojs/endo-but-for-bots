@@ -20,12 +20,7 @@ test('build-image.sh parses as valid bash', async t => {
 });
 
 test('postinst.sh parses as valid bash', async t => {
-  const postinst = path.resolve(
-    __dirname,
-    '..',
-    'images',
-    'postinst.sh',
-  );
+  const postinst = path.resolve(__dirname, '..', 'images', 'postinst.sh');
   await t.notThrowsAsync(execFileAsync('bash', ['-n', postinst]));
 });
 
