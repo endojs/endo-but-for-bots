@@ -1,4 +1,5 @@
 // @ts-nocheck
+/* global Buffer */
 
 // Establish a perimeter:
 // eslint-disable-next-line import/order
