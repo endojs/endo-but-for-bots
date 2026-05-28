@@ -1,4 +1,4 @@
-// @ts-nocheck — E() generics don't compose well with JSDoc for remote objects.
+// @ts-check
 /* eslint-disable no-await-in-loop */
 /* global process */
 
@@ -8,6 +8,51 @@ import { E } from '@endo/eventual-send';
 import { makeRefIterator } from '@endo/daemon/ref-reader.js';
 
 import { makeOrchestratorClient } from './orchestrator-client.js';
+
+/**
+ * Subset of the inbox message shape this caplet cares about. The
+ * daemon's full message record carries more; we project to the
+ * fields we read. The `@host` inbox API is dynamically typed at the
+ * Endo boundary, so we narrow at the read site rather than threading
+ * an `import('@endo/daemon').Message` through the worker.
+ *
+ * @typedef {object} InboxMessage
+ * @property {string} from
+ * @property {'form' | 'value' | string} type
+ * @property {string} [messageId]
+ * @property {string} [replyTo]
+ * @property {number} number
+ * @property {string} [valueId]
+ */
+
+/**
+ * Subset of the form submission the orchestrator factory reads.
+ *
+ * @typedef {object} ContainerFormSubmission
+ * @property {string} name
+ * @property {string} filesystem
+ * @property {'egress' | 'none'} [network]
+ * @property {string} [model]
+ * @property {string} [credentials]
+ * @property {string} [initialPrompt]
+ */
+
+/**
+ * Constructor wrapper passed by Endo when the caplet is unconfined
+ * via `makeUnconfined`. The third arg overloads with test-only
+ * dependency injection.
+ *
+ * @typedef {object} ContextOrDeps
+ * @property {Record<string, string>} [env]
+ * @property {{
+ *   createSession: (req: any) => Promise<any>,
+ *   markReady: (id: string) => Promise<void>,
+ *   terminateSession: (id: string) => Promise<void>,
+ *   sendPrompt: (s: any, p: string, o?: any) => Promise<AsyncIterable<any>>,
+ * }} [orchestrator]
+ * @property {(opts: any) => any} [bridgeFactory]
+ * @property {(opts: any) => any} [clientFactory]
+ */
 
 const CLAUDE_CLIENT_MODULE_SPECIFIER = new URL(
   './claude-client-module.js',
@@ -78,7 +123,7 @@ const FORM_FIELDS = harden([
  *
  * @param {import('@endo/eventual-send').FarRef<object>} guestPowers
  * @param {Promise<object> | object | undefined} _context
- * @param {object} [contextOrDeps]
+ * @param {ContextOrDeps} [contextOrDeps]
  * @returns {object}
  */
 export const make = (guestPowers, _context, contextOrDeps = {}) => {
@@ -114,7 +159,9 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
 
     /** @type {string | undefined} */
     let formMessageId;
-    const existingMessages = await E(powers).listMessages();
+    const existingMessages = /** @type {InboxMessage[]} */ (
+      await E(powers).listMessages()
+    );
     for (const msg of existingMessages) {
       if (msg.from === selfId && msg.type === 'form') {
         formMessageId = msg.messageId;
@@ -130,7 +177,7 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
         break;
       }
 
-      const msg = message;
+      const msg = /** @type {InboxMessage} */ (message);
       const isOurForm = msg.from === selfId && msg.type === 'form';
       const isFormReply =
         msg.type === 'value' &&
@@ -142,7 +189,9 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
       } else if (isFormReply) {
         seenFormReplies.add(msg.number);
         try {
-          const submission = await E(powers).lookupById(msg.valueId);
+          const submission = /** @type {ContainerFormSubmission} */ (
+            await E(powers).lookupById(msg.valueId)
+          );
           const {
             name,
             filesystem: fsName,
@@ -277,6 +326,7 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
         } catch (error) {
           const errorMessage =
             error instanceof Error ? error.message : String(error);
+          // eslint-disable-next-line no-console
           console.error('[claude-container-factory]', errorMessage);
           try {
             await E(powers).reply(
@@ -294,6 +344,7 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
   };
 
   runFactory().catch(error => {
+    // eslint-disable-next-line no-console
     console.error('[claude-container-factory] Factory error:', error);
   });
 

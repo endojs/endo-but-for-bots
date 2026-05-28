@@ -12,7 +12,15 @@ import { makePromiseKit } from '@endo/promise-kit';
  * Subscription handle returned by `subscribe(sessionId)`.
  *
  * `initial` — Credentials the broker sent in its first reply.
- *   Use these for BootConfig.
+ *   Immutable; useful for diagnostics or callers who actually want
+ *   the first-seen value (e.g. an audit log).
+ * `current()` — getter for the latest credentials the broker has
+ *   pushed for this subscription. Use this for BootConfig assembly:
+ *   if a rotation arrives between `subscribe` resolving and the
+ *   guest's Hello, `current()` returns the rotated bytes;
+ *   `initial` would still return the stale ones. Always returns a
+ *   non-stale value as long as the broker's pushes are kept up to
+ *   date.
  * `onRotate(handler)` — register a callback for every subsequent
  *   credentials push. Handlers receive each fresh `Credentials`
  *   payload as the broker rotates.
@@ -23,6 +31,7 @@ import { makePromiseKit } from '@endo/promise-kit';
  *
  * @typedef {object} CredentialSubscription
  * @property {Credentials} initial
+ * @property {() => Credentials} current
  * @property {(handler: (creds: Credentials) => void) => void} onRotate
  * @property {(handler: (message: string) => void) => void} onError
  * @property {() => Promise<void>} close
@@ -61,8 +70,17 @@ const subscribe = (socketPath, sessionId) => {
   let buf = '';
   let receivedInitial = false;
   let closed = false;
+  // Latest creds the broker has pushed. Initialised when the first
+  // `creds` reply lands and reassigned on every rotation. Read by
+  // `current()` on the returned subscription handle so callers
+  // building BootConfig get the freshest bytes, not the stale
+  // `initial` snapshot. Closure variable rather than a field on
+  // the hardened return because `harden` freezes fields.
+  /** @type {Credentials | undefined} */
+  let currentCreds;
 
   const dispatchRotation = (/** @type {Credentials} */ creds) => {
+    currentCreds = creds;
     if (rotateHandlers.length === 0) {
       pendingRotations.push(creds);
       return;
@@ -111,6 +129,7 @@ const subscribe = (socketPath, sessionId) => {
       if (msg.type === 'creds' && msg.credentials) {
         if (!receivedInitial) {
           receivedInitial = true;
+          currentCreds = msg.credentials;
           initialKit.resolve(msg.credentials);
         } else {
           dispatchRotation(msg.credentials);
@@ -132,6 +151,12 @@ const subscribe = (socketPath, sessionId) => {
     initial =>
       harden({
         initial,
+        current() {
+          // currentCreds is assigned synchronously alongside
+          // initialKit.resolve, so the moment this subscription
+          // handle exists, currentCreds is defined.
+          return /** @type {Credentials} */ (currentCreds);
+        },
         onRotate(h) {
           rotateHandlers.push(h);
           // Drain any rotations that arrived between initial and now.

@@ -1,4 +1,4 @@
-// @ts-nocheck — E() generics don't compose well with JSDoc for remote objects.
+// @ts-check
 /* eslint-disable no-await-in-loop */
 /* global process */
 
@@ -61,6 +61,36 @@ import { M } from '@endo/patterns';
 import { E } from '@endo/eventual-send';
 import { makeError, X, q } from '@endo/errors';
 import { makeRefIterator } from '@endo/daemon/ref-reader.js';
+
+/**
+ * Subset of the inbox message shape this caplet cares about. The
+ * @host inbox API is dynamically typed at the Endo boundary; we
+ * narrow at the read site.
+ *
+ * @typedef {object} InboxMessage
+ * @property {string} from
+ * @property {'form' | 'value' | string} type
+ * @property {string} [messageId]
+ * @property {string} [replyTo]
+ * @property {number} number
+ * @property {string} [valueId]
+ */
+
+/**
+ * Subset of the credentials form submission.
+ *
+ * @typedef {object} CredentialsFormSubmission
+ * @property {string} name
+ * @property {string} apiKey
+ */
+
+/**
+ * Constructor wrapper passed by Endo when the caplet is unconfined.
+ *
+ * @typedef {object} CredsContextOrDeps
+ * @property {Record<string, string>} [env]
+ * @property {boolean} [inProcessFactory]
+ */
 
 const CREDENTIALS_MODULE_SPECIFIER = new URL(
   './claude-credentials-module.js',
@@ -244,6 +274,9 @@ harden(makeCredentialsExo);
  * the existing `ClaudeContainer` factory.
  *
  * @param {import('@endo/eventual-send').FarRef<object>} guestPowers
+ * @param {Promise<object> | object | undefined} _context
+ * @param {CredsContextOrDeps} [contextOrDeps]
+ * @returns {object}
  */
 export const make = (guestPowers, _context, contextOrDeps = {}) => {
   /** @type {any} */
@@ -265,7 +298,9 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
 
     /** @type {string | undefined} */
     let formMessageId;
-    const existingMessages = await E(powers).listMessages();
+    const existingMessages = /** @type {InboxMessage[]} */ (
+      await E(powers).listMessages()
+    );
     for (const msg of existingMessages) {
       if (msg.from === selfId && msg.type === 'form') {
         formMessageId = msg.messageId;
@@ -280,7 +315,7 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
         exhausted = true;
         break;
       }
-      const msg = message;
+      const msg = /** @type {InboxMessage} */ (message);
       const isOurForm = msg.from === selfId && msg.type === 'form';
       const isFormReply =
         msg.type === 'value' &&
@@ -292,7 +327,9 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
       } else if (isFormReply) {
         seenFormReplies.add(msg.number);
         try {
-          const submission = await E(powers).lookupById(msg.valueId);
+          const submission = /** @type {CredentialsFormSubmission} */ (
+            await E(powers).lookupById(msg.valueId)
+          );
           const { name, apiKey } = submission;
           if (!name) throw new Error('Missing "name".');
           if (!apiKey || typeof apiKey !== 'string') {

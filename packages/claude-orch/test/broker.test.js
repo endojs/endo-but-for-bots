@@ -338,6 +338,54 @@ test('broker-client buffers rotations that arrive before the first onRotate', as
   await sub.close();
 });
 
+test('broker-client `current()` returns the latest rotated creds, not the initial snapshot', async t => {
+  // The companion race: even with onRotate buffering in place, the
+  // orchestrator's `buildBootConfigForSession` runs once on Hello
+  // arrival and snapshots whichever creds it sees at that moment.
+  // If it reads `sub.initial`, a rotation between subscribe and
+  // Hello leaves the guest booting with stale credentials.
+  // `sub.current()` tracks the latest push so BootConfig always
+  // carries the freshest bytes.
+  let nthCall = 0;
+  const refresher = async () => {
+    nthCall += 1;
+    return {
+      oauthToken: {
+        accessToken: `tok-${nthCall}`,
+        expiresAt: new Date(Date.now() + 10 * 60_000).toISOString(),
+      },
+    };
+  };
+  const { socketPath, broker } = await setupBroker(t, {
+    initialCredentials: {
+      oauthToken: {
+        accessToken: 'tok-initial',
+        expiresAt: new Date(Date.now() + 10 * 60_000).toISOString(),
+      },
+    },
+    refresher,
+  });
+
+  const client = makeBrokerClient({ socketPath });
+  const sub = await client.subscribe('sess-A');
+  t.is(sub.initial.oauthToken.accessToken, 'tok-initial');
+  t.is(sub.current().oauthToken.accessToken, 'tok-initial');
+
+  // Rotate; current() must reflect the new bytes, initial must not.
+  await broker.forceRefresh();
+  await new Promise(r => setTimeout(r, 50));
+  t.is(sub.initial.oauthToken.accessToken, 'tok-initial');
+  t.is(sub.current().oauthToken.accessToken, 'tok-1');
+
+  // Rotate again — current() tracks the latest, initial never moves.
+  await broker.forceRefresh();
+  await new Promise(r => setTimeout(r, 50));
+  t.is(sub.initial.oauthToken.accessToken, 'tok-initial');
+  t.is(sub.current().oauthToken.accessToken, 'tok-2');
+
+  await sub.close();
+});
+
 // --- OAuth refresher unit tests ---
 
 test('OAuth refresher: refresh-token grant against an injected fetch', async t => {

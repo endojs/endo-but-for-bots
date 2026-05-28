@@ -327,10 +327,13 @@ export const start = async ({
     // sessions, so the BootConfig carries those bytes once and
     // never rotates.
     //
-    // Otherwise the broker subscription's `initial` is the
-    // freshly-issued credentials (the same that subsequent rotations
-    // will push). The subscription was opened in `markReady` above
-    // before this callback fires.
+    // Otherwise the broker subscription's `current()` is the
+    // freshest credentials we've seen. We deliberately read
+    // `current()` rather than `initial` so that a broker rotation
+    // pushed between `markReady`'s `subscribe()` and the guest's
+    // Hello arriving here doesn't leave the guest booting with
+    // stale credentials. The subsequent `rotate_creds` push would
+    // fix it seconds later but the brief window is avoidable.
     let credentials;
     if (record.request.credentials) {
       credentials = harden(record.request.credentials);
@@ -341,7 +344,7 @@ export const start = async ({
           `buildBootConfigForSession ${sessionId}: no broker subscription`,
         );
       }
-      credentials = harden(sub.initial);
+      credentials = harden(sub.current());
     }
     return harden({
       type: /** @type {'boot_config'} */ ('boot_config'),

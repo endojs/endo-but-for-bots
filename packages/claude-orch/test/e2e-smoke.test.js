@@ -49,7 +49,7 @@ const makeStubNetwork = () => ({
  */
 const makeStubBrokerClient = ({ initialCredentials } = {}) => {
   const initial = initialCredentials ?? { apiKey: 'sk-test-12345' };
-  /** @type {Array<{ sessionId: string, rotate: (c: any) => void, errored: (m: string) => void, closed: boolean }>} */
+  /** @type {Array<{ sessionId: string, rotate: (c: any) => void, errored: (m: string) => void, closed: boolean, current: any }>} */
   const subs = [];
   return {
     client: {
@@ -60,13 +60,22 @@ const makeStubBrokerClient = ({ initialCredentials } = {}) => {
         let errorHandler = () => {};
         const entry = {
           sessionId,
-          rotate: c => rotateHandler(c),
+          // Track current creds per subscription so the stub matches
+          // the real broker-client shape: `sub.current()` is the
+          // latest pushed credentials, `sub.initial` is the
+          // immutable first-seen snapshot.
+          current: initial,
+          rotate: c => {
+            entry.current = c;
+            rotateHandler(c);
+          },
           errored: m => errorHandler(m),
           closed: false,
         };
         subs.push(entry);
         return harden({
           initial,
+          current: () => entry.current,
           onRotate: h => {
             rotateHandler = h;
           },
