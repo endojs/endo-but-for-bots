@@ -38,6 +38,14 @@ table inet claude {
   chain forward {
     type filter hook forward priority 0; policy drop;
 
+    # Anti-spoof: drop packets from the guest bridge that don't have
+    # a source IP in our SUBNET. A compromised guest could otherwise
+    # send packets with a spoofed source (e.g. another guest's IP,
+    # or a public address) and they'd flow through masquerade.
+    # Drop before any accept to avoid leaking the spoofed packets
+    # upstream.
+    iifname "${BRIDGE}" ip saddr != ${SUBNET} drop
+
     iifname "${BRIDGE}" ip  daddr @private4 reject with icmp  type net-unreachable
     iifname "${BRIDGE}" ip6 daddr @private6 reject with icmpv6 type no-route
     iifname "${BRIDGE}" oifname != "${BRIDGE}" accept

@@ -237,7 +237,10 @@ const connectWithRetry = (socketPath, deadlineMs) => {
         if (Date.now() - start > deadlineMs) {
           reject(err);
         } else {
-          setTimeout(attempt, 50);
+          // unref so a pending 50 ms retry can't keep the
+          // orchestrator alive past stop(); the retry will still
+          // fire as long as the event loop is spinning.
+          setTimeout(attempt, 50).unref();
         }
       };
       sock.once('error', onError);

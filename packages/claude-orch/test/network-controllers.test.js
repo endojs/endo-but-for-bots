@@ -56,6 +56,13 @@ test('nftables: initialize creates the bridge if missing and installs the table'
   t.regex(nftStdin, /private4/);
   t.regex(nftStdin, /private6/);
   t.regex(nftStdin, /masquerade/);
+  // Anti-spoof: packets from the bridge whose ip saddr is outside
+  // SUBNET must be dropped. Pinned here so a future refactor of
+  // the ruleset can't quietly remove the rule.
+  t.regex(
+    nftStdin,
+    /iifname "claudebr0" ip saddr != 10\.42\.0\.0\/24 drop/,
+  );
 });
 
 test('nftables: initialize skips bridge creation if it already exists', async t => {

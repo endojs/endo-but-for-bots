@@ -357,9 +357,11 @@ factory pass a `ClaudeCredentials` capability (pet name in
 `@host`'s petstore) at form-submission time rather than relying on
 the broker reading `ANTHROPIC_API_KEY` from disk.
 The factory threads the issued record through `BootConfig.credentials`,
-so this section's protocol (`IssueCreds` / `RevokeCreds` /
-`PreemptiveRotate`) remains intact; the difference is *where* the
-credential enters the system.
+so this section's broker protocol (`subscribe` / `unsubscribe` /
+`forceRefresh` — the subscribe/push UDS protocol that replaced the
+original `IssueCreds` / `RevokeCreds` / `PreemptiveRotate` RPC
+sketch) remains intact; the difference is *where* the credential
+enters the system.
 See `ENDO-INTEGRATION.md` §9 R3 for the capability shape.
 The config-file mode documented under **Inputs** above remains the
 v1 fallback for environments without an Endo daemon.
@@ -1131,7 +1133,7 @@ Six milestones, each independently demoable.
 
 1. Pin a Claude Code version in the rootfs. Verify it runs under the agent (v1 execs directly; tmux session multiplexing is roadmap).
 2. Build the credential broker. v1 supports API-key mode only.
-3. Wire `IssueCreds` into the bootstrap path. Write `~/.claude/.credentials.json` from BootConfig.
+3. Wire the broker's `subscribe` into the bootstrap path. Write `~/.claude/.credentials.json` from BootConfig (was `IssueCreds` in the original protocol sketch — replaced by the broker-driven subscribe/push UDS protocol).
 4. Implement `RotateCreds` push from orchestrator → agent. Agent atomically replaces creds file.
 5. Add `initialPrompt` plumbing through to Claude Code.
 6. End-to-end: client creates session with an initial prompt, attaches to stdio, sees Claude Code respond.
@@ -1380,7 +1382,8 @@ T+5min  client          DELETE /v1/sessions/abc12345
 T+5m+1s orchestrator    sends Terminate to agent (5s grace)
 T+5m+6s orchestrator    SIGKILL QEMU if still running
                         removes tap, deletes UDS files, frees session
-                        broker.RevokeCreds(abc12345)
+                        broker subscription closed (broker drops the
+                        per-session entry from its subscribers map)
 ```
 
 ---

@@ -74,8 +74,10 @@ run yet:
 shipped through R3:
 - [x] Claude Code pinned in the rootfs (`scripts/build-image.sh`
   reads `CLAUDE_CODE_VERSION`).
-- [x] Credential broker (`src/broker/`) with `Issue` / `Revoke` /
-  `PreemptiveRotate`.
+- [x] Credential broker (`src/broker/`) with
+  `subscribe` / `unsubscribe` / `forceRefresh` UDS protocol
+  (broker-driven push; replaced the original
+  `Issue`/`Revoke`/`PreemptiveRotate` RPC sketch).
 - [x] `BootConfig.credentials` plumbed from broker through bootstrap
   to `~/.claude/.credentials.json` in guest.
 - [x] `RotateCreds` push from orchestrator → runtime-agent. The
