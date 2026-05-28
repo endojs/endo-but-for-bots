@@ -174,6 +174,7 @@ LLM-agent stack).*
 | [daemon-git-remotes](daemon-git-remotes.md) | 2026-05-18 | 2026-05-29 | Proposed |
 | [daemon-git-next-steps](daemon-git-next-steps.md) | 2026-05-27 | 2026-06-03 | Proposed |
 | [endo-fs-from-git](endo-fs-from-git.md) | 2026-05-28 | 2026-05-28 | In Progress |
+| [daemon-git-backbone](daemon-git-backbone.md) | 2026-05-27 | 2026-05-28 | Proposed |
 | [daemon-message-streaming](daemon-message-streaming.md) | 2026-03-26 | 2026-05-19 | In Progress (PR #287) |
 | [daemon-mount](daemon-mount.md) | 2026-03-20 | 2026-05-27 | In Progress |
 | [daemon-mount-capabilities](daemon-mount-capabilities.md) | 2026-05-18 | 2026-05-27 | **Complete** |
@@ -417,6 +418,7 @@ flowchart TD
         dgit[daemon-git-capability]
         dgitremote[daemon-git-remotes]
         dgitnext[daemon-git-next-steps]
+        dgitback[daemon-git-backbone]
         dfsw[filesystem-watchers]
         dcsgc[daemon-content-store-gc]
         dpers[daemon-capability-persona]
@@ -444,6 +446,8 @@ flowchart TD
         dgitremote --> dtools
         enetfetch --> dgitremote
         dmount --> dcsgc
+        ercas --> dgitback
+        dcsgc --> dgitback
         dsand --> dbank
         dfs --> dbank
         dpers --> dbank
@@ -593,6 +597,7 @@ capabilities available to agents.
 | daemon-git-capability | Proposed | Revised git design over `EndoMount` / `EndoMountEntry`; `tree(ref)` and `readOnly()` both live on the `Git` cap |
 | daemon-git-remotes | Proposed | MVP remote-git companion: fetch / pull / push composed from local `Git`, bounded HTTPS transport, endpoint policy, and credential caps |
 | daemon-git-next-steps | Proposed | The version-controlled filesystem loop milestone over the canonical trio: north-star agent loop (provide workspace → read/list/edit → status/diff → commit → pull/push → inspect history via `filesystemAt(ref)`) and the content/versioning/network/historical-read/bulk-storage layer split. Open `- [ ]` work: worked bot-fork reference flow, `provideGitClone` + identity boundary (→ `daemon-git-clone.md`), `tree(ref)`/`filesystemAt(ref)` reconciliation. Agent-tools layer deferred to #416 |
+| daemon-git-backbone | Proposed | Back the existing Rust CAS (`rust/endo/src/cas.rs`) with git, all four axes: objects → git object DB (sha256-keyed), `TreeManifest` → git trees, bulk transport off CapTP onto pack/smart-protocol, retention → `refs/formulas/<id>` + `git gc`. In-process `gix` (recommended) in the `endor` supervisor; sha256 stays the content key behind a sha256→oid index. Migrations out of scope. Four axes; each probe-able separately |
 | filesystem-watchers | Not Started | `EndoMount.followNameChanges` parity with `EndoDirectory`; Node `fs.watch` adapter on `FilePowers` |
 | daemon-locator-terminology | Not Started | Clean locator API; unblocked |
 | daemon-rename-to-manager | Not Started | Rename `daemon.js`/`Daemon`/`MignonicPowers` to `manager.js`/`Manager`/`WorkerPowers` to align JS with Rust `endor` nomenclature |
@@ -1181,6 +1186,7 @@ have been remapped: 0 → 1, ½ → 2, 1 → 3, 2 → 4, 3 → 7, 4 → 9,
 | ~~platform-fs~~ | S-M | — | 3 | ✅ Complete; `@endo/platform` package landed on `llm` (commit `e0dda06fb`); PR #122 carried review-cycle fixups |
 | daemon-capability-filesystem | L | — | 3 | Reference sketch; narrower mount slice ships via daemon-mount |
 | ~~daemon-content-store-gc~~ | S | — | 3 | ✅ Complete (PR #99, ~2 days actual vs 1 day estimate) |
+| daemon-git-backbone | XL | TBD | 3 | Back the existing Rust CAS with git across four axes (objects, trees, transport, GC-via-refs); maintainer-call dominant (gix-vs-git2, sha256-key-vs-object-format). Size XL pending per-axis probe; each axis lands as its own probe-then-build cycle on the Rust substrate |
 | daemon-mount | M-L | 1.5 weeks | 3 | Mount exo, symlink confinement; Phase 4 in PR #135 forwarded under bot |
 | daemon-worker-import-from-mount | S-M | 3-4 days | 3 | **Integration layer** of the four-layer stack (decomposed 2026-06-02). `makeFromPackage` host method + `makeFromMount` dispatcher + CLI `endo run <mount>` / `endo make <mount>` + XS bridging deferral. Driven by the three preceding layers (`registry-capability`, `mvs-resolver`, `snapshot-mapper`); first cut limited to MVS; lockfile honoring deferred. Does not depend on the Rust subsystem (separate lane). |
 | registry-capability | S-M | 3 days | 3 | Layer 1 of 4. `EndoRegistry` exo + `@registry` host special name + `HostFormula.registry` migration pass. Structured `@endo/errors` failure surface. JS reference backend default; Rust drop-in deferred to Phase 5 |
