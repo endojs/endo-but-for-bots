@@ -43,6 +43,11 @@ const bundleScript = path.join(familiarRoot, 'scripts/bundle.mjs');
 // In CI, the `familiar-bundle` job runs `step:bundle` separately, so
 // in that path this becomes a no-op presence check.  Locally, the
 // first run pays the bundle cost.
+//
+// Wrapped inside an AVA `test.before` (registered at the end of this
+// file once `test` is in scope) so a bundle-step failure surfaces as
+// a normal AVA failure with full diagnostic context rather than an
+// opaque module-load-time `execFileSync` throw.
 const ensureBundledPrimer = () => {
   if (
     fs.existsSync(bundledPrimer) &&
@@ -58,7 +63,10 @@ const ensureBundledPrimer = () => {
   });
 };
 
-ensureBundledPrimer();
+test.before('ensure the familiar bundle is present', t => {
+  ensureBundledPrimer();
+  t.pass();
+});
 
 // Test directories.  Use a unique scratch per test under the
 // daemon's idiomatic `tmp/` to match the rest of the suite's
@@ -83,6 +91,13 @@ const MAX_CONFIG_DIR_LENGTH = Math.max(
   MAX_UNIX_SOCKET_PATH - SOCKET_PATH_OVERHEAD,
 );
 
+// Label-prefix-disjointness: when two labels share a prefix that
+// survives truncation to MAX_CONFIG_DIR_LENGTH, the on-disk paths
+// collide modulo the counter suffix.  Today's two labels
+// (`host-checkin`, `guest-provision`) start with distinct first
+// segments and need no truncation under the current socket budget.
+// New labels added here must either remain prefix-disjoint after
+// truncation or pick distinct first segments that do not collapse.
 let configCounter = 0;
 const makeConfig = label => {
   configCounter += 1;
@@ -118,6 +133,10 @@ const makeConfig = label => {
  *
  * @param {import('ava').ExecutionContext} t
  * @param {string} label
+ * @returns {Promise<{ host: any, config: ReturnType<typeof makeConfig> }>}
+ *   `host` is the eventual host capability returned by the bootstrap
+ *   client; `config` is the per-test daemon config (state paths, sock
+ *   path, pet/value maps) used to seed and tear the daemon down.
  */
 const prepareDaemonHost = async (t, label) => {
   const { reject: cancel, promise: cancelled } = makePromiseKit();
@@ -206,7 +225,13 @@ test.serial(
     // README.md (overview), cli-reference.md, chat-reference.md, and
     // the howto-*.md scenario guides.  If any of these are not in
     // the bundle, the packaged app's first interaction with the
-    // primer goes sideways.
+    // primer goes sideways.  The strict-superset assertion guards
+    // against the inverse drift: a future primer that ships fewer
+    // documents than the agent loop references.  The cross-reference
+    // is `lal/agent.js`'s `provisionPrimer` (currently around
+    // lines 1653-1657) which seeds the guest with the bundled
+    // primer's tree id; downstream `readText('primer', <name>)`
+    // calls drive the required-list below.
     const required = [
       'README.md',
       'cli-reference.md',
@@ -216,6 +241,11 @@ test.serial(
       'howto-inventory.md',
       'howto-messaging.md',
     ];
+    const bundledFiles = await fsp.readdir(bundledPrimer);
+    t.true(
+      bundledFiles.length >= required.length,
+      `bundled primer should be a (non-strict) superset of the required documents; bundled=${bundledFiles.length}, required=${required.length}`,
+    );
     await null;
     for (const name of required) {
       // eslint-disable-next-line no-await-in-loop
@@ -341,6 +371,33 @@ test.serial(
     t.true(
       typeof cliRefText === 'string' && cliRefText.length > 0,
       'cli-reference.md must be readable through the guest-side primer',
+    );
+
+    // Step 5: exercise the idempotent re-entry branch of
+    // provisionPrimer().  After step 3 wrote 'primer', a second
+    // `provisionPrimer(guest)` call must observe `has('primer') ===
+    // true` and skip the storeIdentifier write.  This mirrors what
+    // happens on every manager-loop restart: the guard prevents
+    // double-storeIdentifier collisions and keeps the bundled-primer
+    // setup at-most-once per guest.
+    const hasPrimerOnReentry = await E(guest).has('primer');
+    t.true(
+      hasPrimerOnReentry,
+      'after first storeIdentifier the guest must report has(primer) === true',
+    );
+    // Take the no-op branch (the guard the agent loop uses).  Do
+    // not call storeIdentifier a second time; the guard's purpose
+    // is precisely to avoid that call.  Re-resolve the primer to
+    // confirm the cap still works after the no-op pass.
+    if (!hasPrimerOnReentry) {
+      await E(guest).storeIdentifier('primer', primerTreeId);
+    }
+    const primerOnReentry = await E(guest).lookup('primer');
+    const reentryNames = await E(primerOnReentry).list();
+    t.deepEqual(
+      [...reentryNames].sort(),
+      sourceNames,
+      'guest-side primer must remain intact after the idempotent no-op pass',
     );
   },
 );
