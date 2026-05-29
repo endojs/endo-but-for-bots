@@ -402,6 +402,25 @@ jobs:
         working-directory: endo
         run: yarn install --immutable
 
+      # Restore the esvu install directory before invoking install-engines.
+      # On a cache hit, install-engines.sh's are_engines_installed
+      # short-circuit fires and esvu is never invoked, so the upstream
+      # download flakes (endojs/endo#3289) cannot reach this job. On a
+      # miss, the script falls through to esvu and the retry loop in the
+      # script rides out a transient hiccup. The key is bound to the
+      # install-engines.sh hash so a script change (which can change the
+      # engine selection) invalidates the cache; the restore-keys
+      # fallback still seeds the dir from an older script revision when
+      # the engine set is unchanged in practice.
+      - name: Restore esvu engines cache
+        id: restore-esvu
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ~/.esvu
+          key: esvu-${{ runner.os }}-${{ hashFiles('endo/packages/benchmark/install-engines.sh') }}
+          restore-keys: |
+            esvu-${{ runner.os }}-
+
       - name: Install engines
         working-directory: endo
         run: yarn workspace @endo/benchmark run install-engines
