@@ -4,7 +4,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::RwLock;
 
-use gix_object::Write as _;
+use git2::{Oid, Repository};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -68,44 +68,50 @@ pub struct TreeEntry {
 /// SHA-256 content-addressed store backed by a git object database.
 ///
 /// The Endo-facing content identity is the hex SHA-256 of the bytes, exactly
-/// as before; the bytes themselves live as git (loose) objects under
-/// `{dir}/objects/`, and a persistent `sha256 -> git-oid` index
-/// (`{dir}/sha256-oid.idx`) bridges the Endo key to git's internal object id.
-/// Git's object DB runs in its default (SHA-1) object format internally; the
-/// experimental git SHA-256 object mode is deliberately not used (the
-/// Endo-facing key stays SHA-256 regardless).
+/// as before; the bytes themselves live as git (loose) objects inside a **bare
+/// git repository** at `{dir}/cas.git`, and a persistent `sha256 -> git-oid`
+/// index (`{dir}/sha256-oid.idx`) bridges the Endo key to git's internal
+/// object id. Git's object DB runs in its default (SHA-1) object format
+/// internally; the experimental git SHA-256 object mode is deliberately not
+/// used (the Endo-facing key stays SHA-256 regardless).
 ///
 /// Optional `.meta` sidecars in `{dir}` carry the advisory content type.
 ///
 /// Retention is **reachability-driven and crash-safe** (axis 4): a retained
 /// object is recorded as a git ref under `refs/cas/<sha256>` pointing at the
-/// object's git oid, written through git's own ref-lock discipline (lock-file
-/// + atomic rename, via `gix-ref`). `gc` computes the live set from those refs
-/// — git reachability over the retained roots — rather than from an in-memory
+/// object's git oid, written through libgit2's own ref-lock discipline
+/// (lock-file + atomic rename). `gc` computes the live set from those refs —
+/// git reachability over the retained roots — rather than from an in-memory
 /// refcount that was lost on every restart. This replaces the hand-rolled
 /// `HashMap<String, u32>` refcount the store used to flush best-effort to
 /// `.meta`; the maintainer's ruling is to lean on git's ref machinery instead
 /// of rolling our own retention cache.
+///
+/// The store holds no live `git2::Repository` handle as a field:
+/// `git2::Repository` is `Send` but not `Sync`, while `ContentStore` is shared
+/// across threads via `Arc` (the daemon's control thread clones it). Opening a
+/// bare repo is cheap, so each operation opens a fresh `Repository` against
+/// `repo_dir`, which keeps `ContentStore` `Send + Sync` without an interior
+/// mutex on the git handle. (libgit2 already serializes the on-disk
+/// object/ref writes through its own locking.)
 pub struct ContentStore {
     dir: PathBuf,
-    /// Git loose-object database rooted at `{dir}/objects/`.
-    odb: gix_odb::loose::Store,
+    /// Path to the bare git repository (`{dir}/cas.git`) that holds every CAS
+    /// object and the `refs/cas/*` retention refs. A fresh `Repository` is
+    /// opened against this per operation (see the type doc for why no handle
+    /// is held).
+    repo_dir: PathBuf,
     /// Persistent `sha256-hex -> git-oid` index, loaded on open and appended
     /// on every newly stored object. Endo references the SHA-256 key; this
     /// resolves it to the git object id used by the object DB.
-    index: RwLock<HashMap<String, gix_hash::ObjectId>>,
-    // Retention is recorded as git refs under `{dir}/refs/cas/<sha256>`. The
-    // `gix_ref::file::Store` that reads/writes them is built on demand in
-    // `ref_store()` rather than held as a field: it carries a non-`Send`
-    // `Rc` packed-refs cache, and `ContentStore` is shared across threads via
-    // `Arc`. Constructing it is cheap (a path + options; packed refs load
-    // lazily), so per-operation construction costs nothing on the hot path.
+    index: RwLock<HashMap<String, Oid>>,
 }
 
 /// Basename of the persistent sha256 -> git-oid index inside the store dir.
 const INDEX_FILE: &str = "sha256-oid.idx";
-/// Subdirectory of the store dir holding the git loose-object database.
-const OBJECTS_DIR: &str = "objects";
+/// Subdirectory of the store dir holding the bare git repository (object DB +
+/// retention refs).
+const REPO_DIR: &str = "cas.git";
 /// Ref-namespace prefix for retained CAS objects. A ref
 /// `refs/cas/<sha256>` -> git-oid is the liveness record for one retained
 /// content hash.
@@ -115,13 +121,17 @@ impl ContentStore {
     /// Open (or create) a content store at `dir`.
     pub fn open(dir: &Path) -> io::Result<Self> {
         fs::create_dir_all(dir)?;
-        let objects_dir = dir.join(OBJECTS_DIR);
-        fs::create_dir_all(&objects_dir)?;
-        let odb = gix_odb::loose::Store::at(&objects_dir, gix_hash::Kind::Sha1, None);
+        let repo_dir = dir.join(REPO_DIR);
+        // Initialize the bare repository if it is not already present.
+        // `Repository::open` is the fast path on an existing store; we only
+        // pay `init_bare` on first creation.
+        if Repository::open_bare(&repo_dir).is_err() {
+            Repository::init_bare(&repo_dir).map_err(git_err("init bare repo"))?;
+        }
         let index = RwLock::new(load_index(dir)?);
         Ok(ContentStore {
             dir: dir.to_path_buf(),
-            odb,
+            repo_dir,
             index,
         })
     }
@@ -137,10 +147,8 @@ impl ContentStore {
         // given SHA-256 — preserves dedup. Git's own loose writer is
         // content-addressed and atomic (tempfile + rename) under the hood.
         if !self.index_contains(&hash) {
-            let oid = self
-                .odb
-                .write_buf(gix_object::Kind::Blob, data)
-                .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("git write: {e}")))?;
+            let repo = self.open_repo()?;
+            let oid = repo.blob(data).map_err(git_err("git write"))?;
             self.record_index(&hash, oid)?;
         }
         // Write .meta if content type is not blob (default).
@@ -155,31 +163,30 @@ impl ContentStore {
         let oid = self.oid_for(hash).ok_or_else(|| {
             io::Error::new(io::ErrorKind::NotFound, format!("no object for {hash}"))
         })?;
-        let mut buf = Vec::new();
-        match self
-            .odb
-            .try_find(&oid, &mut buf)
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("git read: {e}")))?
-        {
-            Some(obj) => Ok(obj.data.to_vec()),
-            None => Err(io::Error::new(
+        let repo = self.open_repo()?;
+        let blob = repo.find_blob(oid).map_err(|e| {
+            io::Error::new(
                 io::ErrorKind::NotFound,
-                format!("git object missing for {hash}"),
-            )),
-        }
+                format!("git object missing for {hash}: {e}"),
+            )
+        })?;
+        Ok(blob.content().to_vec())
     }
 
     /// Check whether a hash exists in the store.
     pub fn has(&self, hash: &str) -> bool {
-        match self.oid_for(hash) {
-            Some(oid) => self.odb.contains(&oid),
-            None => false,
-        }
+        let Some(oid) = self.oid_for(hash) else {
+            return false;
+        };
+        let Ok(repo) = self.open_repo() else {
+            return false;
+        };
+        repo.odb().map(|odb| odb.exists(oid)).unwrap_or(false)
     }
 
     /// Retain a hash: record it as a live root via `refs/cas/<sha256>`.
     ///
-    /// The ref points at the object's git oid and is written through git's
+    /// The ref points at the object's git oid and is written through libgit2's
     /// ref-lock discipline (lock-file + atomic rename), so it survives a daemon
     /// restart and a crash mid-write. A retained object is reachable from a
     /// ref, which is what keeps it out of `gc`'s sweep. Best-effort: an unknown
@@ -272,11 +279,17 @@ impl ContentStore {
     /// - every retained object recorded as a durable `refs/cas/<sha256>` ref.
     ///
     /// The ref-derived roots are the crash-safe replacement for the old
-    /// in-memory refcount: because they live on disk through git's ref-lock
+    /// in-memory refcount: because they live on disk through libgit2's ref-lock
     /// discipline, retention survives a daemon restart, and a `gc` after a
     /// restart no longer collects everything that was retained in a prior
     /// session. The transitive tree walk below expands those roots over their
     /// children, which is git reachability over the retained ref set.
+    ///
+    /// libgit2 (unlike the `git` porcelain) ships no `git gc` / loose-object
+    /// prune; the sweep here is the same in-process manual reachability sweep
+    /// the store has always done — compute the live set, then delete the
+    /// unreachable loose objects directly. This keeps GC in-process with no
+    /// runtime dependency on a `git` binary.
     ///
     /// Returns a report of what was collected.
     pub fn gc(&self, live_roots: &HashSet<String>) -> io::Result<GcReport> {
@@ -314,7 +327,7 @@ impl ContentStore {
 
         // Snapshot the hashes to collect so we don't hold the index read lock
         // while mutating it.
-        let to_collect: Vec<(String, gix_hash::ObjectId)> = {
+        let to_collect: Vec<(String, Oid)> = {
             let index = self.index.read().unwrap_or_else(|e| e.into_inner());
             index
                 .iter()
@@ -324,8 +337,11 @@ impl ContentStore {
         };
 
         for (hash, oid) in to_collect {
-            // Size of the on-disk git object (compressed), best-effort.
-            let object_path = self.odb.object_path(&oid);
+            // The loose-object file for this oid. libgit2 has no loose-object
+            // delete API, so we reconstruct git's standard loose path
+            // (`objects/<oid[0:2]>/<oid[2:]>`) and remove it directly — the
+            // same filesystem-side deletion the manual sweep has always done.
+            let object_path = self.loose_object_path(&oid);
             let size = fs::metadata(&object_path).map(|m| m.len()).unwrap_or(0);
             // Delete the git object file. It is shared by oid, so only remove
             // it if no other indexed hash maps to the same oid.
@@ -366,6 +382,28 @@ impl ContentStore {
     // Internal helpers
     // -----------------------------------------------------------------------
 
+    /// Open the bare git repository for one operation. `git2::Repository` is
+    /// `Send` but not `Sync`, so it cannot be held as a shared field on the
+    /// `Arc`-shared `ContentStore`; opening it per call sidesteps that. The
+    /// open is cheap (a path probe + handle), and libgit2 serializes the
+    /// on-disk object/ref writes through its own locking.
+    fn open_repo(&self) -> io::Result<Repository> {
+        Repository::open_bare(&self.repo_dir).map_err(git_err("open bare repo"))
+    }
+
+    /// The on-disk path of the loose object for `oid` inside the bare repo:
+    /// `{dir}/cas.git/objects/<oid[0:2]>/<oid[2:]>`. This is git's standard
+    /// loose-object layout (libgit2 exposes no path/delete API for loose
+    /// objects, so we compute it for the GC sweep).
+    fn loose_object_path(&self, oid: &Oid) -> PathBuf {
+        let hex = oid.to_string();
+        let (prefix, rest) = hex.split_at(2);
+        self.repo_dir
+            .join("objects")
+            .join(prefix)
+            .join(rest)
+    }
+
     /// Write the advisory `.meta` sidecar carrying the content type.
     ///
     /// The old `refs` field is gone: retention is now a git ref under
@@ -376,77 +414,37 @@ impl ContentStore {
         fs::write(&meta_path, json.as_bytes())
     }
 
-    /// Open the git ref store rooted at `{dir}`. Built per-call rather than
-    /// held as a field because `gix_ref::file::Store` is `!Send` (it caches
-    /// packed refs behind an `Rc`) while `ContentStore` is shared across
-    /// threads. Construction is cheap; the reflog is disabled because these
-    /// refs are pure liveness markers (no history, no committer identity).
-    fn ref_store(&self) -> gix_ref::file::Store {
-        gix_ref::file::Store::at(
-            self.dir.clone(),
-            gix_ref::store::init::Options {
-                write_reflog: gix_ref::store::WriteReflog::Disable,
-                object_hash: gix_hash::Kind::Sha1,
-                precompose_unicode: false,
-                prohibit_windows_device_names: false,
-            },
-        )
+    /// The full ref name of the retention ref for a content hash.
+    fn cas_ref_name(hash: &str) -> String {
+        format!("{CAS_REF_PREFIX}{hash}")
     }
 
-    /// Build the `FullName` of the retention ref for a content hash.
-    fn cas_ref_name(hash: &str) -> io::Result<gix_ref::FullName> {
-        gix_ref::FullName::try_from(format!("{CAS_REF_PREFIX}{hash}"))
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, format!("ref name: {e}")))
-    }
-
-    /// Create or update `refs/cas/<hash>` -> `oid` through git's ref-lock
-    /// discipline. Crash-safe: the lock-file + atomic-rename commit means a
-    /// crash either leaves the old ref state or the new one, never a torn
-    /// write.
-    fn set_cas_ref(&self, hash: &str, oid: gix_hash::ObjectId) -> io::Result<()> {
-        let edit = gix_ref::transaction::RefEdit {
-            change: gix_ref::transaction::Change::Update {
-                log: gix_ref::transaction::LogChange {
-                    mode: gix_ref::transaction::RefLog::AndReference,
-                    force_create_reflog: false,
-                    message: Default::default(),
-                },
-                expected: gix_ref::transaction::PreviousValue::Any,
-                new: gix_ref::Target::Object(oid),
-            },
-            name: Self::cas_ref_name(hash)?,
-            deref: false,
-        };
-        self.commit_ref_edit(edit)
+    /// Create or update `refs/cas/<hash>` -> `oid` through libgit2's ref-lock
+    /// discipline. Crash-safe: libgit2 writes the ref via a `.lock` file and an
+    /// atomic rename, so a crash either leaves the old ref state or the new one,
+    /// never a torn write — git's `update-ref` guarantee. These refs are pure
+    /// liveness markers, so no reflog is requested (`reference` with an empty
+    /// log message and `force = true`).
+    fn set_cas_ref(&self, hash: &str, oid: Oid) -> io::Result<()> {
+        let repo = self.open_repo()?;
+        repo.reference(&Self::cas_ref_name(hash), oid, true, "")
+            .map_err(git_err("ref update"))?;
+        Ok(())
     }
 
     /// Delete `refs/cas/<hash>` if present. Deleting an absent ref is a no-op.
     fn delete_cas_ref(&self, hash: &str) -> io::Result<()> {
-        let edit = gix_ref::transaction::RefEdit {
-            change: gix_ref::transaction::Change::Delete {
-                expected: gix_ref::transaction::PreviousValue::Any,
-                log: gix_ref::transaction::RefLog::AndReference,
-            },
-            name: Self::cas_ref_name(hash)?,
-            deref: false,
-        };
-        self.commit_ref_edit(edit)
-    }
-
-    /// Run a single ref edit through prepare + commit. The committer is `None`
-    /// because the reflog is disabled for the CAS ref store.
-    fn commit_ref_edit(&self, edit: gix_ref::transaction::RefEdit) -> io::Result<()> {
-        self.ref_store()
-            .transaction()
-            .prepare(
-                std::iter::once(edit),
-                gix_lock::acquire::Fail::Immediately,
-                gix_lock::acquire::Fail::Immediately,
-            )
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("ref prepare: {e}")))?
-            .commit(None)
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("ref commit: {e}")))?;
-        Ok(())
+        let repo = self.open_repo()?;
+        let found = repo.find_reference(&Self::cas_ref_name(hash));
+        match found {
+            Ok(mut reference) => {
+                reference.delete().map_err(git_err("ref delete"))?;
+                Ok(())
+            }
+            // Not found — nothing to delete.
+            Err(e) if e.code() == git2::ErrorCode::NotFound => Ok(()),
+            Err(e) => Err(git_err("ref find")(e)),
+        }
     }
 
     /// The set of content hashes currently retained via a `refs/cas/<sha256>`
@@ -455,30 +453,30 @@ impl ContentStore {
     /// after a restart no longer treats every previously-retained object as
     /// collectable.
     fn retained_hashes(&self) -> io::Result<Vec<String>> {
-        let store = self.ref_store();
-        let iter = store
-            .iter()
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("ref iter: {e}")))?;
-        let all = iter
-            .all()
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("ref iter all: {e}")))?;
+        let repo = self.open_repo()?;
+        // `references_glob` over the CAS namespace; the glob is rooted at the
+        // ref prefix so unrelated refs (none, in this bare store) are skipped.
+        let glob = format!("{CAS_REF_PREFIX}*");
+        let refs = repo
+            .references_glob(&glob)
+            .map_err(git_err("ref iter"))?;
         let mut out = Vec::new();
-        for reference in all {
-            let reference =
-                reference.map_err(|e| io::Error::new(io::ErrorKind::Other, format!("ref: {e}")))?;
-            let name_bytes: &[u8] = reference.name.as_bstr().as_ref();
-            if let Some(rest) = std::str::from_utf8(name_bytes)
-                .ok()
-                .and_then(|s| s.strip_prefix(CAS_REF_PREFIX))
-            {
-                out.push(rest.to_string());
+        for reference in refs {
+            let reference = reference.map_err(git_err("ref"))?;
+            // `name()` is `Err` when the ref name is not valid UTF-8; CAS refs
+            // are always valid UTF-8 (`refs/cas/<hex>`), so a non-UTF-8 name is
+            // simply skipped.
+            if let Ok(name) = reference.name() {
+                if let Some(rest) = name.strip_prefix(CAS_REF_PREFIX) {
+                    out.push(rest.to_string());
+                }
             }
         }
         Ok(out)
     }
 
     /// Resolve an Endo SHA-256 key to its git object id, if indexed.
-    fn oid_for(&self, hash: &str) -> Option<gix_hash::ObjectId> {
+    fn oid_for(&self, hash: &str) -> Option<Oid> {
         let index = self.index.read().unwrap_or_else(|e| e.into_inner());
         index.get(hash).copied()
     }
@@ -490,7 +488,7 @@ impl ContentStore {
     }
 
     /// Record a `sha256 -> git-oid` mapping in memory and persist it.
-    fn record_index(&self, hash: &str, oid: gix_hash::ObjectId) -> io::Result<()> {
+    fn record_index(&self, hash: &str, oid: Oid) -> io::Result<()> {
         {
             let mut index = self.index.write().unwrap_or_else(|e| e.into_inner());
             index.insert(hash.to_string(), oid);
@@ -505,7 +503,7 @@ impl ContentStore {
         for (hash, oid) in index.iter() {
             body.push_str(hash);
             body.push(' ');
-            body.push_str(&oid.to_hex().to_string());
+            body.push_str(&oid.to_string());
             body.push('\n');
         }
         let path = self.dir.join(INDEX_FILE);
@@ -520,7 +518,7 @@ impl ContentStore {
 /// Each line is `<sha256-hex> <git-oid-hex>`. A missing file yields an empty
 /// index (a fresh store). Malformed lines are skipped rather than failing the
 /// whole open.
-fn load_index(dir: &Path) -> io::Result<HashMap<String, gix_hash::ObjectId>> {
+fn load_index(dir: &Path) -> io::Result<HashMap<String, Oid>> {
     let path = dir.join(INDEX_FILE);
     let mut map = HashMap::new();
     let body = match fs::read_to_string(&path) {
@@ -533,11 +531,17 @@ fn load_index(dir: &Path) -> io::Result<HashMap<String, gix_hash::ObjectId>> {
         let (Some(hash), Some(oid_hex)) = (parts.next(), parts.next()) else {
             continue;
         };
-        if let Ok(oid) = gix_hash::ObjectId::from_hex(oid_hex.as_bytes()) {
+        if let Ok(oid) = Oid::from_str(oid_hex) {
             map.insert(hash.to_string(), oid);
         }
     }
     Ok(map)
+}
+
+/// Build an `io::Error`-producing closure that frames a `git2::Error` with a
+/// short operation label. Keeps the call sites terse.
+fn git_err(op: &'static str) -> impl Fn(git2::Error) -> io::Error {
+    move |e| io::Error::new(io::ErrorKind::Other, format!("{op}: {e}"))
 }
 
 /// Report from a GC run.
@@ -630,7 +634,12 @@ mod tests {
         assert!(cas.retained_hashes().unwrap().is_empty());
 
         cas.retain(&hash);
-        let ref_path = tmp.path().join(format!("{CAS_REF_PREFIX}{hash}"));
+        // The retention ref lives inside the bare repo at
+        // `{dir}/cas.git/refs/cas/<sha256>`.
+        let ref_path = tmp
+            .path()
+            .join(REPO_DIR)
+            .join(format!("{CAS_REF_PREFIX}{hash}"));
         assert!(ref_path.exists(), "retain must write refs/cas/<sha256>");
         assert!(cas.retained_hashes().unwrap().contains(&hash));
 
@@ -894,9 +903,10 @@ mod tests {
 
     // -- Axis 1: git object-DB substrate ----------------------------------
 
-    /// The bytes are stored as git objects under `{dir}/objects/`, and a
-    /// persistent `sha256 -> git-oid` index file is written. This asserts the
-    /// substrate is the git object DB (not the old flat `{dir}/{hex-sha256}`).
+    /// The bytes are stored as git objects inside the bare repo at
+    /// `{dir}/cas.git`, and a persistent `sha256 -> git-oid` index file is
+    /// written. This asserts the substrate is the git object DB (not the old
+    /// flat `{dir}/{hex-sha256}`).
     #[test]
     fn store_uses_git_object_db_and_index() {
         let tmp = tempfile::tempdir().unwrap();
@@ -909,8 +919,8 @@ mod tests {
             !tmp.path().join(&hash).exists(),
             "blob must not be stored as a flat {{dir}}/{{hex-sha256}} file"
         );
-        // The git object DB directory holds the object.
-        let objects_dir = tmp.path().join(OBJECTS_DIR);
+        // The bare repo's object DB directory holds the object.
+        let objects_dir = tmp.path().join(REPO_DIR).join("objects");
         assert!(objects_dir.is_dir(), "git objects/ dir must exist");
         // The persistent index records the mapping.
         let index_path = tmp.path().join(INDEX_FILE);
@@ -935,7 +945,8 @@ mod tests {
 
         let oid = cas.oid_for(&hash).expect("hash must be indexed");
         // The git object DB contains an object at that oid.
-        assert!(cas.odb.contains(&oid));
+        let repo = cas.open_repo().unwrap();
+        assert!(repo.odb().unwrap().exists(oid));
         // Reading via the public API returns the exact bytes.
         assert_eq!(cas.fetch(&hash).unwrap(), data);
     }
@@ -993,7 +1004,7 @@ mod tests {
         cas.retain(&keep);
 
         let drop_oid = cas.oid_for(&drop).expect("indexed before gc");
-        let drop_object_path = cas.odb.object_path(&drop_oid);
+        let drop_object_path = cas.loose_object_path(&drop_oid);
         assert!(drop_object_path.exists(), "git object present before gc");
 
         let report = cas.gc(&HashSet::new()).unwrap();
