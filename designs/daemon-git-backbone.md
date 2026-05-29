@@ -3,9 +3,43 @@
 | | |
 |---|---|
 | **Created** | 2026-05-27 |
-| **Updated** | 2026-05-28 |
+| **Updated** | 2026-05-29 |
 | **Author** | 0xPatrick (prompted) |
-| **Status** | Proposed |
+| **Status** | In Progress |
+
+## Status
+
+Axes 1 and 4 are built on PR
+[#369](https://github.com/endojs/endo-but-for-bots/pull/369) (`endo`
+crate).
+The git library is **`git2` (libgit2 bindings)**, not the `gix`
+recommendation in Open Question 1 / § The Rust lever below — the
+maintainer ratified the mature, broadly-covered library; libgit2 is
+vendored (bundled C, no system dependency), so the no-C rationale for
+`gix` was moot because the `endo` crate already links bundled C
+(rusqlite's SQLite, xsnap's XS).
+The substrate is a **bare git repository at `{dir}/cas.git`**: objects
+at `{dir}/cas.git/objects/`, retention refs at
+`{dir}/cas.git/refs/cas/<sha256>`, with the `sha256 → git-oid`
+resolution index kept flat at `{dir}` (Open Question 2's sha256 content
+key behind a SHA-1 git object DB).
+GC is an in-process manual reachability sweep (libgit2 ships no
+`git gc` porcelain) seeded from the `refs/cas/*` refs.
+
+**Axis 4 is not yet complete.** Its highest-value piece — the
+`refs/formulas/<id>` ↔ sqlite formula-graph mirror that makes GC
+reachability-driven *from formula liveness* — is not built. The shipped
+`refs/cas/<sha256>` refs are keyed by content hash, not formula id, and
+nothing connects the formula graph to retain/release calls; the `cas-gc`
+call sites still pass an empty caller-root set (now harmless only
+because the durable `refs/cas/*` refs seed the live set). The mirror is
+blocked on an architecture seam: the formula graph lives in the **JS**
+daemon (`packages/daemon/src/daemon-database.js`, the SQLite `formula`
+table), mutated by JS (`daemon.js` → `persistencePowers.writeFormula` /
+`deleteFormula`); the Rust supervisor sees only opaque SQL strings
+crossing the XS FFI and cannot observe formula liveness. The mirror wire
+must live in JS, and no JS code calls the `cas-*` verbs today. See the
+journal seam report (2026-05-29) for the recommended landing site.
 
 ## Summary
 
@@ -25,14 +59,20 @@ This design replaces the hand-rolled substrate underneath the existing
 git** — while keeping the daemon's content identity, its CapTP control
 plane, and the `cas-*` verb surface unchanged.
 
-The load-bearing motivation is **axis 3**: get bulk data *out of the
-CapTP data plane*.
-Whole-tree reads, archive ingestion, and cross-peer content sync are
-the wrong shape for one-object-per-CapTP-turn; git's pack/smart-protocol
-is purpose-built for exactly that traffic.
-The other three axes are the substrate that makes axis 3 mechanical:
-once blobs and trees *are* git objects (axis 1, axis 2) and retention
-*is* refs (axis 4), shipping them over the git wire is free.
+The load-bearing motivation is **GC** — axis 4, plus the axis-1
+substrate it needs: a `refs/formulas/<id>` ↔ sqlite-formula-graph mirror
+so git itself can do the garbage collection.
+The retention roots are the formula graph; the most straightforward way
+to maintain the relationship is for git to hold a ref per live formula
+identifier, kept in sync with the formula rows, and to let git's own GC
+collect everything no ref keeps reachable.
+The other axes are extensions, not the crux: getting bulk data *out of
+the CapTP data plane* (axis 3 — whole-tree reads, archive ingestion,
+cross-peer content sync, the wrong shape for one-object-per-CapTP-turn)
+and native git trees (axis 2) are valuable payoffs that the same git
+substrate makes mechanical, but the reason to adopt git at all is the
+crash-safe, reachability-driven live set the hand-rolled CAS does not
+have.
 
 The four axes map almost 1:1 onto the existing CAS's four phases:
 
@@ -252,7 +292,8 @@ not today.
 | `.meta` `refs` count | superseded by refs (axis 4) |
 
 The flat `{dir}/{hex-sha256}` directory and `.meta` sidecars disappear;
-`{statePath}/store/.git/objects/` holds every blob and tree.
+the bare git repository at `{dir}/cas.git/objects/` holds every blob
+and tree.
 The `type` advisory in `.meta`
 ([daemon-cas-management](daemon-cas-management.md) § Content types)
 folds into git's native type tag, except for the daemon-specific
@@ -290,7 +331,7 @@ Two properties improve on the swap (see § What surprised us):
 Axis 2 is mechanical once axis 1 lands; it has no new external
 contract.
 
-## Axis 3 — bulk transport off the CapTP data plane (load-bearing)
+## Axis 3 — bulk transport off the CapTP data plane (extension)
 
 CapTP / OCapN stays the **control plane**: capability handshakes,
 eventual sends, retention subscriptions, GC negotiation
@@ -320,9 +361,11 @@ sideband (see Open Question 4).
 is **unchanged** — small token-streamed text is exactly what CapTP is
 for; axis 3 targets only bulk transfers.
 
-This is the axis the whole design is *for*: axes 1/2/4 are the
-substrate that makes the data plane git-shaped, and axis 3 is the
-payoff of getting bulk bytes out of the capability envelopes.
+This is a high-value extension once the substrate is git-shaped: axes
+1/2/4 make the data plane git-shaped, and axis 3 is the payoff of
+getting bulk bytes out of the capability envelopes. It is not the crux
+(that is axis 4's reachability-driven GC); it is the largest payoff the
+crux's substrate unlocks.
 
 ## Axis 4 — retention becomes `refs/formulas/<id>` + `git gc`
 

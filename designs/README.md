@@ -174,7 +174,7 @@ LLM-agent stack).*
 | [daemon-git-remotes](daemon-git-remotes.md) | 2026-05-18 | 2026-05-29 | Proposed |
 | [daemon-git-next-steps](daemon-git-next-steps.md) | 2026-05-27 | 2026-06-03 | Proposed |
 | [endo-fs-from-git](endo-fs-from-git.md) | 2026-05-28 | 2026-05-28 | In Progress |
-| [daemon-git-backbone](daemon-git-backbone.md) | 2026-05-27 | 2026-05-28 | Proposed |
+| [daemon-git-backbone](daemon-git-backbone.md) | 2026-05-27 | 2026-05-29 | In Progress |
 | [daemon-message-streaming](daemon-message-streaming.md) | 2026-03-26 | 2026-05-19 | In Progress (PR #287) |
 | [daemon-mount](daemon-mount.md) | 2026-03-20 | 2026-05-27 | In Progress |
 | [daemon-mount-capabilities](daemon-mount-capabilities.md) | 2026-05-18 | 2026-05-27 | **Complete** |
@@ -597,7 +597,7 @@ capabilities available to agents.
 | daemon-git-capability | Proposed | Revised git design over `EndoMount` / `EndoMountEntry`; `tree(ref)` and `readOnly()` both live on the `Git` cap |
 | daemon-git-remotes | Proposed | MVP remote-git companion: fetch / pull / push composed from local `Git`, bounded HTTPS transport, endpoint policy, and credential caps |
 | daemon-git-next-steps | Proposed | The version-controlled filesystem loop milestone over the canonical trio: north-star agent loop (provide workspace → read/list/edit → status/diff → commit → pull/push → inspect history via `filesystemAt(ref)`) and the content/versioning/network/historical-read/bulk-storage layer split. Open `- [ ]` work: worked bot-fork reference flow, `provideGitClone` + identity boundary (→ `daemon-git-clone.md`), `tree(ref)`/`filesystemAt(ref)` reconciliation. Agent-tools layer deferred to #416 |
-| daemon-git-backbone | Proposed | Back the existing Rust CAS (`rust/endo/src/cas.rs`) with git, all four axes: objects → git object DB (sha256-keyed), `TreeManifest` → git trees, bulk transport off CapTP onto pack/smart-protocol, retention → `refs/formulas/<id>` + `git gc`. In-process `gix` (recommended) in the `endor` supervisor; sha256 stays the content key behind a sha256→oid index. Migrations out of scope. Four axes; each probe-able separately |
+| daemon-git-backbone | In Progress | Back the existing Rust CAS (`rust/endo/src/cas.rs`) with git, all four axes: objects → git object DB (sha256-keyed), `TreeManifest` → git trees, bulk transport off CapTP onto pack/smart-protocol, retention → `refs/formulas/<id>` + git GC. The crux is GC: a `refs/formulas/<id>` ↔ sqlite formula-graph mirror so git's own GC collects what no live formula roots. In-process `git2` (libgit2, vendored) in the `endor` supervisor; bare repo at `{dir}/cas.git`; sha256 stays the content key behind a sha256→oid index. Axes 1+4-substrate shipped on PR #369; the formula-graph mirror is blocked on a JS/Rust seam (formula graph lives in the JS daemon, not reachable from the Rust CAS). Migrations out of scope. Four axes; each probe-able separately |
 | filesystem-watchers | Not Started | `EndoMount.followNameChanges` parity with `EndoDirectory`; Node `fs.watch` adapter on `FilePowers` |
 | daemon-locator-terminology | Not Started | Clean locator API; unblocked |
 | daemon-rename-to-manager | Not Started | Rename `daemon.js`/`Daemon`/`MignonicPowers` to `manager.js`/`Manager`/`WorkerPowers` to align JS with Rust `endor` nomenclature |
