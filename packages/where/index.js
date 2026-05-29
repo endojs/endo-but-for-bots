@@ -28,6 +28,20 @@ const whereHomeWindows = (env, info) => {
 };
 
 /**
+ * Returns the path of the host-scope ProgramData directory on Windows,
+ * the parent of the Endo Gateway's durable, ephemeral, and cache trees.
+ *
+ * @param {{[name: string]: string | undefined}} env
+ * @param {{home: string}} info
+ */
+const whereGatewayProgramData = (env, info) => {
+  if (env.PROGRAMDATA !== undefined) {
+    return env.PROGRAMDATA;
+  }
+  return `${info.home}\\..\\..\\ProgramData`;
+};
+
+/**
  * Returns the most suitable path for Endo state with this platform and
  * environment.
  * Endo uses the state directory for saved files including applications,
@@ -126,11 +140,7 @@ export const whereEndoGatewayState = (platform, env, info) => {
   if (env.ENDO_GATEWAY_STATE !== undefined) {
     return env.ENDO_GATEWAY_STATE;
   } else if (platform === 'win32') {
-    const programData =
-      env.PROGRAMDATA !== undefined
-        ? env.PROGRAMDATA
-        : `${info.home}\\..\\..\\ProgramData`;
-    return `${programData}\\Endo Gateway`;
+    return `${whereGatewayProgramData(env, info)}\\Endo Gateway`;
   } else if (platform === 'darwin') {
     return '/Library/Application Support/Endo Gateway';
   }
@@ -147,11 +157,7 @@ export const whereEndoGatewayEphemeralState = (platform, env, info) => {
   if (env.ENDO_GATEWAY_EPHEMERAL_STATE !== undefined) {
     return env.ENDO_GATEWAY_EPHEMERAL_STATE;
   } else if (platform === 'win32') {
-    const programData =
-      env.PROGRAMDATA !== undefined
-        ? env.PROGRAMDATA
-        : `${info.home}\\..\\..\\ProgramData`;
-    return `${programData}\\Endo Gateway\\Run`;
+    return `${whereGatewayProgramData(env, info)}\\Endo Gateway\\Run`;
   } else if (platform === 'darwin') {
     return '/var/run/endo-gateway';
   }
@@ -192,11 +198,7 @@ export const whereEndoGatewayCache = (platform, env, info) => {
   if (env.ENDO_GATEWAY_CACHE !== undefined) {
     return env.ENDO_GATEWAY_CACHE;
   } else if (platform === 'win32') {
-    const programData =
-      env.PROGRAMDATA !== undefined
-        ? env.PROGRAMDATA
-        : `${info.home}\\..\\..\\ProgramData`;
-    return `${programData}\\Endo Gateway\\Cache`;
+    return `${whereGatewayProgramData(env, info)}\\Endo Gateway\\Cache`;
   } else if (platform === 'darwin') {
     return '/Library/Caches/Endo Gateway';
   }
