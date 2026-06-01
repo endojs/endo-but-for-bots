@@ -207,3 +207,27 @@ test('writeTreeStream rejects a stream ending mid-file and cleans up', async t =
   const top = await childKinds(dest);
   t.is(top.get('x.txt'), 'file');
 });
+
+test('writeTreeStream rejects a dir frame with an empty path', async t => {
+  const destFs = makeInMemoryFilesystem();
+  const dest = await E(destFs).root();
+  await t.throwsAsync(
+    writeTreeStream(dest, readerOf([{ kind: 'dir', path: [] }])),
+    { message: /empty path/ },
+  );
+});
+
+test('writeTreeStream rejects a dir frame while a file is open', async t => {
+  const destFs = makeInMemoryFilesystem();
+  const dest = await E(destFs).root();
+  await t.throwsAsync(
+    writeTreeStream(
+      dest,
+      readerOf([
+        { kind: 'file', path: ['a.txt'] },
+        { kind: 'dir', path: ['b'] },
+      ]),
+    ),
+    { message: /file is open/ },
+  );
+});

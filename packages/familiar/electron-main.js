@@ -108,8 +108,11 @@ const handleInviteUrl = url => {
     );
     deliverInvite(parsed);
   } else {
+    // Strip query/fragment before logging: an unrecognised link is arbitrary
+    // and its query string could carry secrets. Log only scheme + path.
+    const scrubbed = String(url).split(/[?#]/)[0];
     logger.warn(
-      `[Familiar] Ignoring unrecognised deep link: ${String(url).slice(0, 32)}`,
+      `[Familiar] Ignoring unrecognised deep link: ${scrubbed.slice(0, 64)}`,
     );
   }
 };

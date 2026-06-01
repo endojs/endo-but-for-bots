@@ -183,6 +183,8 @@ export const writeTreeStream = async (destRoot, reader) => {
     for await (const frame of iterateReader(reader)) {
       switch (frame.kind) {
         case 'dir': {
+          !writer || Fail`clone stream: dir frame while a file is open`;
+          frame.path.length !== 0 || Fail`clone stream: dir frame empty path`;
           await E(destRoot).materialise(harden(frame.path), {});
           directories += 1;
           break;
