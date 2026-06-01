@@ -14,6 +14,11 @@
  * is a no-op.
  */
 
+// The Chat bundle imports `ses` but never calls `lockdown()` (Monaco needs
+// mutable intrinsics), so `harden` is not a global here — import the ponyfill
+// like the sibling modules (chime.js, channel-utils.js).
+import harden from '@endo/harden';
+
 /**
  * @typedef {object} ChatBarApi
  * @property {(commandName: string, prefill?: Record<string, string>) => void}
