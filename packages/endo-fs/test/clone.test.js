@@ -17,9 +17,20 @@ import test from 'ava';
 import { E } from '@endo/far';
 import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
 import { iterateBytesWriter } from '@endo/exo-stream/iterate-bytes-writer.js';
+import { readerFromIterator } from '@endo/exo-stream/reader-from-iterator.js';
 
 import { makeInMemoryFilesystem } from '../src/in-memory.js';
 import { cloneTree, streamTree, writeTreeStream } from '../src/clone.js';
+
+/** Wrap an array of frames as a PassableReader for writeTreeStream. */
+const readerOf = frames =>
+  readerFromIterator(
+    (async function* gen() {
+      for (const frame of frames) {
+        yield harden(frame);
+      }
+    })(),
+  );
 
 const utf8 = s => new TextEncoder().encode(s);
 const fromUtf8 = b => new TextDecoder().decode(b);
@@ -172,4 +183,27 @@ test('cloning an empty tree yields zero counts', async t => {
 
   const stats = await cloneTree(source, dest);
   t.deepEqual({ ...stats }, { directories: 0, files: 0, bytes: 0 });
+});
+
+test('writeTreeStream rejects a chunk with no open file', async t => {
+  const destFs = makeInMemoryFilesystem();
+  const dest = await E(destFs).root();
+  await t.throwsAsync(
+    writeTreeStream(dest, readerOf([{ kind: 'chunk', base64: 'AA==' }])),
+    { message: /no open file/ },
+  );
+});
+
+test('writeTreeStream rejects a stream ending mid-file and cleans up', async t => {
+  const destFs = makeInMemoryFilesystem();
+  const dest = await E(destFs).root();
+  // A file frame with no terminating fileEnd: the drain loop's post-check
+  // throws, and the finally must close the half-open destination file.
+  await t.throwsAsync(
+    writeTreeStream(dest, readerOf([{ kind: 'file', path: ['x.txt'] }])),
+    { message: /mid-file/ },
+  );
+  // The file was created then closed by the cleanup path (no leaked handle).
+  const top = await childKinds(dest);
+  t.is(top.get('x.txt'), 'file');
 });

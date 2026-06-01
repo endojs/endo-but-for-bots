@@ -266,6 +266,13 @@ const createWindow = () => {
   // Install navigation guard
   installNavigationGuard(win, { isDevMode, vitePort });
 
+  // Each (re)load — initial, restart, or purge — starts a fresh renderer that
+  // has not yet pulled queued invites. Drop ready until it pulls again, so an
+  // invite arriving mid-reload is queued rather than sent into a dead page.
+  win.webContents.on('did-start-loading', () => {
+    rendererReady = false;
+  });
+
   return win;
 };
 

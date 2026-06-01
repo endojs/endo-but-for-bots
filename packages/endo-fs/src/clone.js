@@ -171,42 +171,54 @@ export const writeTreeStream = async (destRoot, reader) => {
   /** @type {AsyncGenerator<any, any, Uint8Array> | undefined} */
   let writer;
 
-  for await (const frame of iterateReader(reader)) {
-    switch (frame.kind) {
-      case 'dir': {
-        await E(destRoot).materialise(harden(frame.path), {});
-        directories += 1;
-        break;
-      }
-      case 'file': {
-        !writer || Fail`clone stream: nested file frame`;
-        const { parent, name } = await resolveParent(destRoot, frame.path);
-        openFile = await E(parent).create(name, {});
-        writer = iterateBytesWriter(await E(openFile).write(0n));
-        files += 1;
-        break;
-      }
-      case 'chunk': {
-        writer || Fail`clone stream: chunk frame with no open file`;
-        const data = decodeBase64(frame.base64);
-        bytes += data.length;
-        await writer.next(data);
-        break;
-      }
-      case 'fileEnd': {
-        writer || Fail`clone stream: fileEnd with no open file`;
-        await writer.return();
-        await E(openFile).close();
-        writer = undefined;
-        openFile = undefined;
-        break;
-      }
-      default: {
-        throw Fail`clone stream: unknown frame kind ${frame.kind}`;
+  try {
+    for await (const frame of iterateReader(reader)) {
+      switch (frame.kind) {
+        case 'dir': {
+          await E(destRoot).materialise(harden(frame.path), {});
+          directories += 1;
+          break;
+        }
+        case 'file': {
+          !writer || Fail`clone stream: nested file frame`;
+          const { parent, name } = await resolveParent(destRoot, frame.path);
+          openFile = await E(parent).create(name, {});
+          writer = iterateBytesWriter(await E(openFile).write(0n));
+          files += 1;
+          break;
+        }
+        case 'chunk': {
+          writer || Fail`clone stream: chunk frame with no open file`;
+          const data = decodeBase64(frame.base64);
+          bytes += data.length;
+          await writer.next(data);
+          break;
+        }
+        case 'fileEnd': {
+          writer || Fail`clone stream: fileEnd with no open file`;
+          await writer.return();
+          await E(openFile).close();
+          writer = undefined;
+          openFile = undefined;
+          break;
+        }
+        default: {
+          throw Fail`clone stream: unknown frame kind ${frame.kind}`;
+        }
       }
     }
+    !writer || Fail`clone stream: ended mid-file`;
+  } finally {
+    // On a mid-stream error (malformed frame, source read failure) close the
+    // partially-written destination file rather than leaking the OpenFile and
+    // its abandoned writer.
+    if (writer) {
+      await writer.return().catch(() => {});
+      await E(openFile)
+        .close()
+        .catch(() => {});
+    }
   }
-  !writer || Fail`clone stream: ended mid-file`;
 
   return harden({ directories, files, bytes });
 };

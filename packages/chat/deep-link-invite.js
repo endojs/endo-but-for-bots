@@ -26,28 +26,39 @@
  */
 
 let wired = false;
+/**
+ * The live chat bar. Chat's `rebuild()` disposes the old bar and makes a new
+ * one on every profile / conversation / reconnect change, so the single IPC
+ * listener registered below must always target the current bar, not the one
+ * captured on first wire.
+ *
+ * @type {ChatBarApi | null}
+ */
+let currentChatBar = null;
 
 /**
- * Wire deep-link invitations to the chat bar's Accept form. Idempotent and
- * safe to call on every (re)connect; only the first call registers.
+ * Wire deep-link invitations to the chat bar's Accept form. Safe to call on
+ * every rebuild: it updates the live-bar reference each time but registers
+ * the (never-removed) IPC listener only once.
  *
  * @param {ChatBarApi} chatBar
  */
 export const wireDeepLinkInvites = chatBar => {
-  if (wired) {
-    return;
-  }
+  currentChatBar = chatBar;
   const familiar = /** @type {any} */ (window).familiar;
   if (!familiar || typeof familiar.onDeepLinkInvite !== 'function') {
+    return;
+  }
+  if (wired) {
     return;
   }
   wired = true;
 
   /** @param {DeepLinkInvite | null | undefined} invite */
   const open = invite => {
-    if (invite && typeof invite.locator === 'string') {
+    if (currentChatBar && invite && typeof invite.locator === 'string') {
       // Pre-fill the locator; the user confirms and supplies the pet name.
-      chatBar.enterCommandMode('accept', { locator: invite.locator });
+      currentChatBar.enterCommandMode('accept', { locator: invite.locator });
     }
   };
 
