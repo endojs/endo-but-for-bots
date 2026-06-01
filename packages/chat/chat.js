@@ -13,6 +13,7 @@ import { createChannelHeader } from './channel-header.js';
 import { inboxComponent } from './inbox-component.js';
 import { inventoryComponent } from './inventory-component.js';
 import { chatBarComponent } from './chat-bar-component.js';
+import { wireDeepLinkInvites } from './deep-link-invite.js';
 import { valueComponent } from './value-component.js';
 import { createSpacesGutter } from './spaces-gutter.js';
 import { inventoryGraphComponent } from './inventory-graph-component.js';
@@ -1742,6 +1743,9 @@ const bodyComponent = (
         },
       );
       chatBarRef = chatBarAPI;
+      // Route endo:// deep-link peer invitations (Familiar shell) into the
+      // Accept command form. No-op outside the Familiar.
+      wireDeepLinkInvites(chatBarAPI);
       const { focusValue, blurValue } = valueComponent(
         $parent,
         /** @type {ERef<EndoHost>} */ (resolvedPowers),

@@ -26,6 +26,7 @@ import { whereEndoState } from '@endo/where';
 import { makeDaemonManager } from './src/daemon-manager.js';
 import { resourcePaths } from './src/resource-paths.js';
 import { makeLogger } from './src/logger.js';
+import { parseInviteUrl, findInviteUrlInArgv } from './src/deep-link.js';
 import {
   registerLocalhttpScheme,
   installLocalhttpHandler,
@@ -60,6 +61,95 @@ registerLocalhttpScheme();
 configureCommandLineFlags();
 
 const vitePort = 5173;
+
+/** @type {Electron.BrowserWindow | null} */
+let mainWindow = null;
+
+// --- Deep-link (endo://) peer invitations ---
+// (designs/familiar-deep-link-invitations.md)
+
+/** @type {import('./src/deep-link.js').ParsedInvite | null} */
+let pendingInvite = null;
+// Set once the renderer has pulled any queued invite via the IPC handler
+// below; until then invites are queued rather than sent, closing the race
+// where a cold-start invite is emitted before the page registers its
+// listener.
+let rendererReady = false;
+
+/**
+ * Deliver a parsed invite to the renderer, or queue it until the renderer is
+ * ready (cold start, pre-`app.whenReady`, or before the window finishes
+ * loading).
+ *
+ * @param {import('./src/deep-link.js').ParsedInvite} parsed
+ */
+const deliverInvite = parsed => {
+  if (rendererReady && mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('familiar:deep-link-invite', parsed);
+  } else {
+    pendingInvite = parsed;
+  }
+};
+
+/**
+ * Parse and route an `endo://` URL handed to us by the OS. Unrecognised
+ * links are logged and dropped; authoritative validation is the daemon's
+ * when the renderer calls `host.accept`.
+ *
+ * @param {string} url
+ */
+const handleInviteUrl = url => {
+  const parsed = parseInviteUrl(url);
+  if (parsed) {
+    logger.log(
+      `[Familiar] Received deep-link invite from ${parsed.fingerprint}`,
+    );
+    deliverInvite(parsed);
+  } else {
+    logger.warn(
+      `[Familiar] Ignoring unrecognised deep link: ${String(url).slice(0, 32)}`,
+    );
+  }
+};
+
+// Register endo:// as this app's protocol client. In dev the app runs from
+// the electron binary, so the entry script must be passed explicitly.
+if (process.defaultApp) {
+  if (process.argv.length >= 2) {
+    app.setAsDefaultProtocolClient('endo', process.execPath, [
+      path.resolve(process.argv[1]),
+    ]);
+  }
+} else {
+  app.setAsDefaultProtocolClient('endo');
+}
+
+// Single-instance: a second launch (e.g. the OS handing us an endo:// URL on
+// Windows/Linux) routes its argv to the already-running instance instead of
+// starting a second daemon-bearing process.
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
+if (!gotSingleInstanceLock) {
+  app.quit();
+} else {
+  app.on('second-instance', (_event, argv) => {
+    const url = findInviteUrlInArgv(argv);
+    if (url) {
+      handleInviteUrl(url);
+    }
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      if (mainWindow.isMinimized()) {
+        mainWindow.restore();
+      }
+      mainWindow.focus();
+    }
+  });
+}
+
+// macOS delivers deep links via open-url, which can fire before the app is
+// ready or the window exists; deliverInvite queues until the renderer pulls.
+app.on('open-url', (_event, url) => {
+  handleInviteUrl(url);
+});
 
 /** @type {string | undefined} */
 let gatewayAddress;
@@ -281,8 +371,14 @@ const main = async () => {
   installExfiltrationDefenses();
 
   // Step 4: Create the window
-  /** @type {Electron.BrowserWindow | null} */
-  let mainWindow = createWindow();
+  mainWindow = createWindow();
+
+  // A deep link may have arrived on the command line (Windows/Linux cold
+  // start). Queue it; the renderer pulls it via get-pending-invite on init.
+  const coldStartInvite = findInviteUrlInArgv(process.argv);
+  if (coldStartInvite) {
+    handleInviteUrl(coldStartInvite);
+  }
 
   // Step 5: Build menu
   buildMenu(
@@ -296,6 +392,14 @@ const main = async () => {
   );
   ipcMain.handle('familiar:purge-daemon', () => handlePurgeDaemon(mainWindow));
   ipcMain.handle('familiar:get-version', () => app.getVersion());
+  // The renderer pulls any invite queued before it was listening, and by
+  // doing so marks itself ready for live delivery of subsequent invites.
+  ipcMain.handle('familiar:get-pending-invite', () => {
+    rendererReady = true;
+    const invite = pendingInvite;
+    pendingInvite = null;
+    return invite;
+  });
 
   // Step 7: Verify exfiltration defenses and notify renderer
   const warnings = await verifyExfiltrationDefenses();
@@ -323,7 +427,12 @@ const main = async () => {
   // Daemon continues running after quit; nothing to clean up.
 };
 
-main().catch(error => {
-  logger.error('[Familiar] Fatal error:', error);
-  process.exit(1);
-});
+// Only the instance that holds the single-instance lock boots the app; a
+// second launch has already forwarded its argv via 'second-instance' above
+// and is quitting.
+if (gotSingleInstanceLock) {
+  main().catch(error => {
+    logger.error('[Familiar] Fatal error:', error);
+    process.exit(1);
+  });
+}
