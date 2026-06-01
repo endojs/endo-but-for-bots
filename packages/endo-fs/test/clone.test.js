@@ -146,10 +146,7 @@ test('cloneTree of a sub-directory clones only that subtree', async t => {
   t.is(stats.files, 2); // index.js + deep/nested.txt
   t.is(stats.directories, 1); // deep
 
-  t.is(
-    fromUtf8(await readFileAt(dest, ['index.js'])),
-    'export const x = 1;\n',
-  );
+  t.is(fromUtf8(await readFileAt(dest, ['index.js'])), 'export const x = 1;\n');
   const top = await childKinds(dest);
   t.false(top.has('readme.txt')); // outside the cloned subtree
 });
