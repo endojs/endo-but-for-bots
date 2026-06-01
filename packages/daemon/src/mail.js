@@ -406,6 +406,27 @@ export const makeMailboxMaker = ({
         }
         return;
       }
+      if (envelope.type === 'command') {
+        if (typeof envelope.commandName !== 'string') {
+          throw new Error('Invalid command commandName');
+        }
+        if (typeof envelope.args !== 'object' || envelope.args === null) {
+          throw new Error('Invalid command args');
+        }
+        return;
+      }
+      if (envelope.type === 'command-result') {
+        if (typeof envelope.replyTo !== 'string') {
+          throw new Error('Invalid command-result replyTo');
+        }
+        if (typeof envelope.success !== 'boolean') {
+          throw new Error('Invalid command-result success');
+        }
+        if (typeof envelope.summary !== 'string') {
+          throw new Error('Invalid command-result summary');
+        }
+        return;
+      }
       throw new Error('Unknown message type');
     };
 
@@ -720,6 +741,61 @@ export const makeMailboxMaker = ({
     };
 
     /**
+     * Record a command in the agent's own inbox.
+     * Returns the messageId so the corresponding command-result can
+     * cite it as its `replyTo`. The bigint sequence number stays
+     * internal to deliver() and is never exposed; only the
+     * randomly-generated messageId crosses the boundary.
+     *
+     * @param {string} commandName
+     * @param {Record<string, unknown>} args
+     * @returns {Promise<FormulaNumber>}
+     */
+    const recordCommand = async (commandName, args) => {
+      const messageId = /** @type {FormulaNumber} */ (await randomHex256());
+      /** @type {import('./types.js').CommandMessage & { from: FormulaIdentifier, to: FormulaIdentifier }} */
+      const message = harden({
+        type: /** @type {const} */ ('command'),
+        messageId,
+        commandName,
+        args,
+        strings: [`${commandName}`],
+        names: [],
+        ids: [],
+        from: selfId,
+        to: selfId,
+      });
+      await deliver(message);
+      return messageId;
+    };
+
+    /**
+     * Record a command result in the agent's own inbox, threaded as a
+     * reply to the recording command via its messageId.
+     *
+     * @param {FormulaNumber} commandMessageId - The command's messageId.
+     * @param {boolean} success
+     * @param {string} summary
+     */
+    const recordCommandResult = async (commandMessageId, success, summary) => {
+      const messageId = /** @type {FormulaNumber} */ (await randomHex256());
+      /** @type {import('./types.js').CommandResultMessage & { from: FormulaIdentifier, to: FormulaIdentifier }} */
+      const message = harden({
+        type: /** @type {const} */ ('command-result'),
+        messageId,
+        replyTo: commandMessageId,
+        success,
+        summary,
+        strings: [summary],
+        names: [],
+        ids: [],
+        from: selfId,
+        to: selfId,
+      });
+      await deliver(message);
+    };
+
+    /**
      * Resolve a formula identifier to its handle.
      * If the id points to an agent (host or guest formula), follows the
      * formula's handle field to provide the actual handle.
@@ -753,7 +829,13 @@ export const makeMailboxMaker = ({
       outbox.set(envelope, message);
       await E(recipient).receive(envelope, selfId);
       // Send to own inbox.
-      if (message.from !== message.to) {
+      // Command messages are self-addressed and must be delivered
+      // to the sender's own inbox for transcript recording.
+      if (
+        message.from !== message.to ||
+        message.type === 'command' ||
+        message.type === 'command-result'
+      ) {
         await deliver(message);
       }
     };
@@ -766,24 +848,51 @@ export const makeMailboxMaker = ({
       if (message === undefined) {
         throw new Error(`Invalid request, ${q(messageNumber)}`);
       }
-      const id = await E(directory).identify(...resolutionPath);
-      if (id === undefined) {
-        throw new TypeError(
-          `No formula exists for the pet name ${q(resolutionNameOrPath)}`,
+
+      if (message.type !== 'request') {
+        throw new Error(
+          `Cannot resolve message ${q(messageNumber)} (type ${q(message.type)})`,
         );
       }
-      // TODO validate shape of request
-      const req = /** @type {Request} */ (message);
-      const resolver = /** @type {ERef<Responder>} */ (
-        provide(req.resolverId, 'resolver')
-      );
-      // Externalize the ID so that a remote resolver (on a different
-      // daemon) can correctly internalize it.  For same-daemon
-      // resolvers the locator is internalized back to the local ID.
-      const externalizedId = await externalizeForMessage(
-        /** @type {FormulaIdentifier} */ (id),
-      );
-      await E(resolver).resolveWithId(externalizedId);
+      const req = message;
+
+      const cmdMessageId = await recordCommand(
+        'resolve',
+        harden({
+          messageNumber: String(normalizedMessageNumber),
+          resolution: String(resolutionNameOrPath),
+        }),
+      ).catch(() => undefined);
+
+      try {
+        const id = await E(directory).identify(...resolutionPath);
+        if (id === undefined) {
+          throw new TypeError(
+            `No formula exists for the pet name ${q(resolutionNameOrPath)}`,
+          );
+        }
+        const resolver = /** @type {ERef<Responder>} */ (
+          provide(req.resolverId, 'resolver')
+        );
+        const externalizedId = await externalizeForMessage(
+          /** @type {FormulaIdentifier} */ (id),
+        );
+        await E(resolver).resolveWithId(externalizedId);
+        if (cmdMessageId !== undefined) {
+          await recordCommandResult(cmdMessageId, true, 'resolved').catch(
+            () => {},
+          );
+        }
+      } catch (error) {
+        if (cmdMessageId !== undefined) {
+          await recordCommandResult(
+            cmdMessageId,
+            false,
+            /** @type {Error} */ (error).message,
+          ).catch(() => {});
+        }
+        throw error;
+      }
     };
 
     /** @type {Mail['reject']} */
@@ -793,14 +902,23 @@ export const makeMailboxMaker = ({
       if (message === undefined) {
         throw new Error(`No such message with number ${q(messageNumber)}`);
       }
-      if (message.type === 'definition') {
+      if (message.type !== 'request') {
         throw new Error(
           `Cannot reject message ${q(messageNumber)} (type ${q(message.type)})`,
         );
       }
+      const req = message;
+
+      await recordCommand(
+        'reject',
+        harden({
+          messageNumber: String(normalizedMessageNumber),
+          reason,
+        }),
+      ).catch(() => {});
+
       const rejection = harden(Promise.reject(harden(new Error(reason))));
       // request messages use a persisted resolver formula.
-      const req = /** @type {Request} */ (message);
       const resolver = /** @type {ERef<Responder>} */ (
         provide(req.resolverId, 'resolver')
       );
@@ -815,6 +933,14 @@ export const makeMailboxMaker = ({
       petNamesOrPaths,
       replyToMessageNumber,
     ) => {
+      await recordCommand(
+        'send',
+        harden({
+          to: String(toNameOrPath),
+          text: strings.join(' '),
+        }),
+      ).catch(() => {});
+
       const toPath = namePathFrom(toNameOrPath);
       assertNames(edgeNames);
       assertUniqueEdgeNames(edgeNames);
@@ -951,8 +1077,30 @@ export const makeMailboxMaker = ({
       if (message === undefined) {
         throw new Error(`Invalid request number ${messageNumber}`);
       }
+      // Record the command in the agent's inbox.
+      const cmdMessageId = await recordCommand(
+        'dismiss',
+        harden({ messageNumber: String(normalizedMessageNumber) }),
+      ).catch(() => undefined);
+
       const { dismisser } = E.get(message);
-      return E(dismisser).dismiss();
+      try {
+        await E(dismisser).dismiss();
+        if (cmdMessageId !== undefined) {
+          await recordCommandResult(cmdMessageId, true, 'dismissed').catch(
+            () => {},
+          );
+        }
+      } catch (error) {
+        if (cmdMessageId !== undefined) {
+          await recordCommandResult(
+            cmdMessageId,
+            false,
+            /** @type {Error} */ (error).message,
+          ).catch(() => {});
+        }
+        throw error;
+      }
     };
 
     /** @type {Mail['dismissAll']} */
@@ -976,42 +1124,85 @@ export const makeMailboxMaker = ({
       if (message === undefined) {
         throw new Error(`No such message with number ${q(messageNumber)}`);
       }
-      if (message.type === 'value') {
-        if (edgeName !== 'value') {
+
+      const cmdMessageId = await recordCommand(
+        'adopt',
+        harden({
+          messageNumber: String(normalizedMessageNumber),
+          edgeName,
+          petName: petNamePath.join('/'),
+        }),
+      ).catch(() => undefined);
+
+      try {
+        if (message.type === 'value') {
+          if (edgeName !== 'value') {
+            throw new Error(
+              `Value messages only have a "value" edge, not ${q(edgeName)}`,
+            );
+          }
+          const id = /** @type {FormulaIdentifier} */ (message.valueId);
+          context.thisDiesIfThatDies(id);
+          await E(directory).storeIdentifier(petNamePath, id);
+          if (cmdMessageId !== undefined) {
+            await recordCommandResult(
+              cmdMessageId,
+              true,
+              `adopted as ${petNamePath.join('/')}`,
+            ).catch(() => {});
+          }
+          return;
+        }
+        if (message.type !== 'package') {
           throw new Error(
-            `Value messages only have a "value" edge, not ${q(edgeName)}`,
+            `Message must be a package or value ${q(messageNumber)}`,
           );
         }
-        const id = /** @type {FormulaIdentifier} */ (message.valueId);
+        const index = message.names.lastIndexOf(edgeName);
+        if (index === -1) {
+          throw new Error(
+            `No reference named ${q(edgeName)} in message ${q(messageNumber)}`,
+          );
+        }
+        const id = message.ids[index];
+        if (id === undefined) {
+          throw new Error(
+            `panic: message must contain a formula for every name, including the name ${q(
+              edgeName,
+            )} at ${q(index)}`,
+          );
+        }
         context.thisDiesIfThatDies(id);
         await E(directory).storeIdentifier(petNamePath, id);
-        return;
+        if (cmdMessageId !== undefined) {
+          await recordCommandResult(
+            cmdMessageId,
+            true,
+            `adopted as ${petNamePath.join('/')}`,
+          ).catch(() => {});
+        }
+      } catch (error) {
+        if (cmdMessageId !== undefined) {
+          await recordCommandResult(
+            cmdMessageId,
+            false,
+            /** @type {Error} */ (error).message,
+          ).catch(() => {});
+        }
+        throw error;
       }
-      if (message.type !== 'package') {
-        throw new Error(
-          `Message must be a package or value ${q(messageNumber)}`,
-        );
-      }
-      const index = message.names.lastIndexOf(edgeName);
-      if (index === -1) {
-        throw new Error(
-          `No reference named ${q(edgeName)} in message ${q(messageNumber)}`,
-        );
-      }
-      const id = message.ids[index];
-      if (id === undefined) {
-        throw new Error(
-          `panic: message must contain a formula for every name, including the name ${q(
-            edgeName,
-          )} at ${q(index)}`,
-        );
-      }
-      context.thisDiesIfThatDies(id);
-      await E(directory).storeIdentifier(petNamePath, id);
     };
 
     /** @type {Mail['request']} */
     const request = async (toNameOrPath, description, responseName) => {
+      await recordCommand(
+        'request',
+        harden({
+          to: String(toNameOrPath),
+          description,
+        }),
+      ).catch(() => {});
+
       const toPath = namePathFrom(toNameOrPath);
       await null;
       if (responseName !== undefined) {
