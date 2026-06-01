@@ -168,7 +168,10 @@ export const writeTreeStream = async (destRoot, reader) => {
 
   /** @type {any} */
   let openFile;
-  /** @type {AsyncGenerator<any, any, Uint8Array> | undefined} */
+  // The exo-stream byte writer (BytesWriterIterator) is iterator-shaped but
+  // not a full AsyncGenerator (no [Symbol.asyncDispose], 0-arg return()), so
+  // it is kept loosely typed.
+  /** @type {any} */
   let writer;
 
   try {
