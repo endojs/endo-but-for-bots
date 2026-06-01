@@ -68,8 +68,8 @@ let mainWindow = null;
 // --- Deep-link (endo://) peer invitations ---
 // (designs/familiar-deep-link-invitations.md)
 
-/** @type {import('./src/deep-link.js').ParsedInvite | null} */
-let pendingInvite = null;
+/** @type {import('./src/deep-link.js').ParsedInvite[]} */
+let pendingInvites = [];
 // Set once the renderer has pulled any queued invite via the IPC handler
 // below; until then invites are queued rather than sent, closing the race
 // where a cold-start invite is emitted before the page registers its
@@ -87,13 +87,15 @@ const deliverInvite = parsed => {
   if (rendererReady && mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send('familiar:deep-link-invite', parsed);
   } else {
-    pendingInvite = parsed;
+    // Queue rather than overwrite: several links may arrive before the
+    // renderer pulls (cold start, reload), and none should be dropped.
+    pendingInvites.push(parsed);
   }
 };
 
 /**
  * Parse and route an `endo://` URL handed to us by the OS. Unrecognised
- * links are logged and dropped; authoritative validation is the daemon's
+ * links are logged and dropped; authoritative validation happens daemon-side
  * when the renderer calls `host.accept`.
  *
  * @param {string} url
@@ -147,7 +149,10 @@ if (!gotSingleInstanceLock) {
 
 // macOS delivers deep links via open-url, which can fire before the app is
 // ready or the window exists; deliverInvite queues until the renderer pulls.
-app.on('open-url', (_event, url) => {
+// preventDefault() suppresses the OS default handling, per Electron's docs
+// for a registered protocol client.
+app.on('open-url', (event, url) => {
+  event.preventDefault();
   handleInviteUrl(url);
 });
 
@@ -403,9 +408,9 @@ const main = async () => {
   // doing so marks itself ready for live delivery of subsequent invites.
   ipcMain.handle('familiar:get-pending-invite', () => {
     rendererReady = true;
-    const invite = pendingInvite;
-    pendingInvite = null;
-    return invite;
+    const invites = pendingInvites;
+    pendingInvites = [];
+    return invites;
   });
 
   // Step 7: Verify exfiltration defenses and notify renderer

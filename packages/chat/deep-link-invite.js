@@ -70,10 +70,18 @@ export const wireDeepLinkInvites = chatBar => {
   // Live invitations that arrive while the app is running.
   familiar.onDeepLinkInvite(open);
 
-  // Any invitation queued before this listener was registered (cold start /
-  // OS launch-by-URL). Pulling it also marks the renderer ready in the shell.
+  // Invitations queued before this listener was registered (cold start / OS
+  // launch-by-URL) arrive as an array. Pulling also marks the renderer ready
+  // in the shell.
   if (typeof familiar.getPendingDeepLinkInvite === 'function') {
-    Promise.resolve(familiar.getPendingDeepLinkInvite()).then(open, () => {});
+    Promise.resolve(familiar.getPendingDeepLinkInvite()).then(
+      invites => {
+        for (const invite of invites || []) {
+          open(invite);
+        }
+      },
+      () => {},
+    );
   }
 };
 harden(wireDeepLinkInvites);

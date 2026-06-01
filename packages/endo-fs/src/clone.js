@@ -67,6 +67,8 @@ harden(CloneFrameShape);
 
 /**
  * Stable, name-sorted directory listing so a clone is reproducible.
+ * Sorts by UTF-16 code point (not `localeCompare`, whose order varies by
+ * environment locale) so the traversal order is deterministic everywhere.
  *
  * @param {any} dir  a `Directory` cap (local or remote)
  * @returns {Promise<Array<{ name: string, qid: { type: string } }>>}
@@ -74,9 +76,12 @@ harden(CloneFrameShape);
 const listSorted = async dir => {
   const cursor = await E(dir).list();
   const entries = await E(cursor).toArray();
-  return [...entries].sort((a, b) =>
-    String(a.name).localeCompare(String(b.name)),
-  );
+  return [...entries].sort((a, b) => {
+    const an = String(a.name);
+    const bn = String(b.name);
+    // eslint-disable-next-line no-nested-ternary
+    return an < bn ? -1 : an > bn ? 1 : 0;
+  });
 };
 
 /**
