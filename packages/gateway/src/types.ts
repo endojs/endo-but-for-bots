@@ -1,3 +1,6 @@
+import type { CryptoPowers, ClockPowers } from './proof-of-possession.js';
+import type { GatewayBootstrap } from './bootstrap.js';
+
 export type BindAddress = {
   /**
    * A non-empty hostname or IP literal, with no surrounding IPv6
@@ -70,9 +73,19 @@ export type AppsNameHub = {
 export type GatewayPowers = {
   /**
    * Environment-shaped map. The phase-1 skeleton uses only `env`;
-   * later phases add `net`, `fs`, `crypto`, and `time`.
+   * later phases add `net` and `fs`.
    */
   env?: { [name: string]: string | undefined };
+  /**
+   * Required when `udsBootstrap` is enabled. The bootstrap
+   * registrar needs `randomBytes`, `sha256`, and `verifyEd25519`.
+   */
+  crypto?: CryptoPowers;
+  /**
+   * Required when `udsBootstrap` is enabled. The nonce registry
+   * consumes `now()` for TTL.
+   */
+  clock?: ClockPowers;
 };
 
 export type Gateway = {
@@ -86,6 +99,14 @@ export type Gateway = {
   getBindAddress(): Promise<string>;
   getApps(): Promise<AppsNameHub>;
   getConfig(): Promise<GatewayConfig>;
+  /**
+   * Throws when `udsBootstrap` is disabled in the gateway's
+   * feature toggles. The returned exo is also the entry capability
+   * a UDS (or named-pipe) listener serves to incoming CapTP
+   * connections; a process embedding the gateway in-realm calls
+   * `getBootstrap` directly.
+   */
+  getBootstrap(): Promise<GatewayBootstrap>;
 };
 
 export declare const DEFAULT_BIND_ADDRESS: string;
