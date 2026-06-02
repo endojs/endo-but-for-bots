@@ -23,29 +23,56 @@ one PR at a time, so the gateway is extracted into its own package.
 
 ## Status
 
-This is the **phase-1 skeleton**. It establishes the package shape,
-exposes the `make({ ... })` factory, parses `ENDO_HTTP_ADDR`, and
-implements the in-memory virtual-host routing table. The remaining
-nine features land as follow-on PRs against the same design.
+This is the **phase-2 slice**, building on the phase-1 skeleton's
+package shape. Phase 2 adds Feature 4 (UDS bootstrap for local
+CapTP relay registration). The semantic core of the bootstrap (the
+`GatewayBootstrap` exo, the proof-of-possession nonce registry,
+the registration table) lands here; the actual UDS / named-pipe
+listener that serves the bootstrap to incoming CapTP connections
+is a follow-on PR, alongside CapTP-over-netstring framing reuse
+from `packages/daemon/src/connection.js`. Embedders that already
+speak CapTP (the Familiar bundle holding a process-local handle,
+tests that connect in-realm) can hold the exo directly via
+`E(gateway).getBootstrap()`.
 
-Implemented in this slice:
+Implemented:
 
-- `make({ config, powers })` factory returning a hardened gateway
-  exo with `start`, `stop`, `getBindAddress`, `getApps`.
+- `makeGateway({ config, powers })` factory returning a hardened
+  gateway exo with `start`, `stop`, `getBindAddress`, `getApps`,
+  `getConfig`, and (phase-2) `getBootstrap`.
 - `ENDO_HTTP_ADDR` parsing with the OS-assigned-port (`:0`)
   convention; defaults to `0.0.0.0:3469`.
 - In-memory `AppsNameHub` exo with `bind`, `unbind`, `list`,
-  `lookup`.
+  `lookup` (phase 1, Feature 2).
 - Per-feature configuration toggles validated at `make` time.
+- `GatewayBootstrap` exo with `challenge`, `register`,
+  `registerRelay`, `getBindAddress`, `getApps`; `Registration`
+  handle with `publishWeblet`, `unpublishWeblet`, `addPublicKey`,
+  `deregister`, `listWeblets`, `listPublicKeys` (phase 2,
+  Feature 4).
+- Proof-of-possession nonce registry with domain-separated
+  challenge hashing (`endo-gateway:registrar:nonce`), 30-second
+  TTL, single-use semantics, constant-time signature comparison
+  helper, and a Node-backed `CryptoPowers` adapter
+  (`src/node-crypto-powers.js`).
+- Bootstrap UDS / named-pipe path resolver
+  (`src/uds-paths.js`) covering `/run/endo-gateway/bootstrap.sock`
+  (system service), `${XDG_RUNTIME_DIR}/endo-gateway/...` (user
+  Linux), the macOS `Library/Application Support` variant, the
+  Windows named-pipe `\\.\pipe\endo-gateway`, the `${TMPDIR}/...`
+  fallback, and `ENDO_GATEWAY_BOOTSTRAP_SOCK` operator override.
 
 Deferred to follow-on PRs:
 
 - Feature 1 (Chat hosting + payment-token enhancement).
 - Feature 3 (Git over HTTP).
-- Feature 4 (UDS bootstrap for local CapTP relay registration).
+- Feature 4 follow-on: the actual UDS / named-pipe listener and
+  CapTP-over-netstring server that serves the bootstrap exo to
+  incoming connections.
 - Feature 5 (Familiar-bundled fallback).
 - Feature 6 (public CapTP relay).
-- Feature 7 (admin daemon).
+- Feature 7 (admin daemon; the `GatewayAdmin` exo extends the
+  bootstrap).
 - Feature 8 (`/ocapn-cbor-np` WebSocket; the network surface lands
   once `@endo/ocapn-noise` exposes the netlayer the gateway
   embeds).
@@ -130,10 +157,56 @@ and their defaults.
 ## Capability surface
 
 See `designs/gateway-package.md` § Capability Surface for the full
-inventory. The phase-1 skeleton exposes:
+inventory. The phase-1 and phase-2 slices expose:
 
-- `Gateway`: `start`, `stop`, `getBindAddress`, `getApps`.
-- `AppsNameHub`: `bind`, `unbind`, `list`, `lookup`.
+- `Gateway`: `start`, `stop`, `getBindAddress`, `getApps`,
+  `getConfig`, `getBootstrap`.
+- `AppsNameHub`: `bind`, `unbind`, `list`, `lookup`, `has`.
+- `GatewayBootstrap`: `challenge`, `register`, `registerRelay`,
+  `getBindAddress`, `getApps`.
+- `Registration`: `publishWeblet`, `unpublishWeblet`,
+  `addPublicKey`, `deregister`, `listWeblets`, `listPublicKeys`.
+
+### Bootstrap challenge-response
+
+The bootstrap channel gates which-public-keys-may-register via a
+proof-of-possession step. The flow:
+
+```js
+import { makeGateway } from '@endo/gateway';
+import { makeNodeCryptoPowers } from '@endo/gateway/src/node-crypto-powers.js';
+
+const gateway = makeGateway({
+  powers: { crypto: makeNodeCryptoPowers(), clock: { now: () => Date.now() } },
+});
+const bootstrap = await E(gateway).getBootstrap();
+
+// 1. Caller asks for a challenge.
+const { nonce, hashedNonce } = await E(bootstrap).challenge();
+
+// 2. Caller signs the *hashed* nonce with the Ed25519 private key
+//    corresponding to the public key it wants to register.
+const signature = keypair.sign(hashedNonce);
+
+// 3. Caller submits the unhashed nonce + signature + public key.
+const registration = await E(bootstrap).register({
+  publicKey: keypair.publicKey,
+  nonce,
+  signature,
+});
+
+// 4. Registration handle publishes weblets, can be deregistered.
+await E(registration).publishWeblet({
+  webletId: 'weblet-abc',
+  contentTreeRoot: 'a'.repeat(64),
+  hasWebSocket: true,
+});
+```
+
+Byte fields on the wire are immutable `ArrayBuffer` per the
+`@endo/bytes` convention. Typed arrays cannot be frozen and so are
+not passable; immutable `ArrayBuffer` is the canonical cross-realm
+byte shape.
 
 ## Tests
 

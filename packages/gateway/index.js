@@ -26,6 +26,7 @@ import {
   bindAddressFromEnv,
 } from './src/config.js';
 import { makeAppsNameHub } from './src/vhost.js';
+import { makeGatewayBootstrap } from './src/bootstrap.js';
 
 export {
   DEFAULT_BIND_ADDRESS,
@@ -38,8 +39,33 @@ export {
 
 export { normalizeVirtualHostName, makeAppsNameHub } from './src/vhost.js';
 
+export {
+  NONCE_DOMAIN_SEPARATION_PREFIX,
+  NONCE_BYTE_LENGTH,
+  DEFAULT_NONCE_TTL_MS,
+  hashNonceForSigning,
+  constantTimeEqual,
+  makeNonceRegistry,
+} from './src/proof-of-possession.js';
+
+export {
+  ED25519_PUBLIC_KEY_LENGTH,
+  ED25519_SIGNATURE_LENGTH,
+  makeGatewayBootstrap,
+} from './src/bootstrap.js';
+
+export {
+  resolveBootstrapSocketPath,
+  BOOTSTRAP_SOCKET_BASENAME,
+  BOOTSTRAP_PIPE_WINDOWS,
+  SYSTEM_RUNTIME_DIR_LINUX,
+  USER_RUNTIME_SUBDIR,
+} from './src/uds-paths.js';
+
 /** @import { GatewayConfig, FeatureToggles, BindAddress } from './src/config.js' */
 /** @import { AppsNameHub } from './src/vhost.js' */
+/** @import { GatewayBootstrap } from './src/bootstrap.js' */
+/** @import { CryptoPowers, ClockPowers } from './src/proof-of-possession.js' */
 
 const GatewayInterface = M.interface('Gateway', {
   start: M.call().returns(M.promise()),
@@ -47,15 +73,22 @@ const GatewayInterface = M.interface('Gateway', {
   getBindAddress: M.call().returns(M.promise()),
   getApps: M.call().returns(M.promise()),
   getConfig: M.call().returns(M.promise()),
+  getBootstrap: M.call().returns(M.promise()),
 });
 harden(GatewayInterface);
 
 /**
  * @typedef {object} GatewayPowers The host-supplied powers the
  *   gateway needs to listen on the network and read the
- *   environment. The phase-1 skeleton uses only `env`; later
- *   phases add `net`, `fs`, `crypto`, and `time`.
+ *   environment. The phase-1 skeleton uses only `env`; phase 2
+ *   adds `crypto` and `clock` for the bootstrap registrar; later
+ *   phases add `net` and `fs`.
  * @property {{[name: string]: string | undefined}} [env]
+ * @property {CryptoPowers} [crypto] Required when
+ *   `udsBootstrap` is enabled. The bootstrap registrar needs
+ *   `randomBytes`, `sha256`, and `verifyEd25519`.
+ * @property {ClockPowers} [clock] Required when `udsBootstrap` is
+ *   enabled. The nonce registry consumes `now()` for TTL.
  */
 
 /**
@@ -69,6 +102,12 @@ harden(GatewayInterface);
  *   when the configured port is `0`).
  * @property {() => Promise<AppsNameHub>} getApps
  * @property {() => Promise<GatewayConfig>} getConfig
+ * @property {() => Promise<GatewayBootstrap>} getBootstrap Throws
+ *   when `udsBootstrap` is disabled in the gateway's feature
+ *   toggles. The returned exo is also the entry capability a UDS
+ *   (or named-pipe) listener serves to incoming CapTP connections;
+ *   a process embedding the gateway in-realm calls `getBootstrap`
+ *   directly.
  */
 
 /**
@@ -97,6 +136,36 @@ export const makeGateway = ({ powers = {}, config: configIn = {} } = {}) => {
   const resolvedBind = parseBindAddress(mergedConfig.bindAddress);
   const apps = makeAppsNameHub();
 
+  const renderBindAddress = () =>
+    `${resolvedBind.kind === 'ipv6' ? `[${resolvedBind.host}]` : resolvedBind.host}:${resolvedBind.port}`;
+
+  // The bootstrap registrar (Feature 4) is wired in iff the
+  // udsBootstrap feature toggle is on AND the caller supplied
+  // crypto + clock powers. The toggle gates the policy; the powers
+  // are the platform-bound primitives. A toggle-on but no-powers
+  // configuration is treated as a startup error because it would
+  // otherwise silently behave like toggle-off.
+  /** @type {ReturnType<typeof makeGatewayBootstrap> | undefined} */
+  let bootstrapHandle;
+  if (mergedConfig.enableFeatures.udsBootstrap) {
+    if (powers.crypto === undefined) {
+      throw makeError(
+        X`udsBootstrap requires powers.crypto; supply a CryptoPowers adapter or disable the feature toggle`,
+      );
+    }
+    if (powers.clock === undefined) {
+      throw makeError(
+        X`udsBootstrap requires powers.clock; supply a ClockPowers adapter or disable the feature toggle`,
+      );
+    }
+    bootstrapHandle = makeGatewayBootstrap({
+      crypto: powers.crypto,
+      clock: powers.clock,
+      apps,
+      getBindAddress: renderBindAddress,
+    });
+  }
+
   const exo = makeExo(
     'Gateway',
     GatewayInterface,
@@ -111,7 +180,11 @@ export const makeGateway = ({ powers = {}, config: configIn = {} } = {}) => {
         lifecycle = 'starting';
         // The phase-1 skeleton has no network surface; later
         // phases attach the HTTP listener, the WebSocket server,
-        // the UDS bootstrap, and the OCapN relay here.
+        // the UDS bootstrap listener, and the OCapN relay here.
+        // Phase 2 lands the semantic core of the bootstrap (the
+        // GatewayBootstrap exo, the nonce registry, the
+        // registration table); the actual UDS listener is a
+        // follow-on PR.
         lifecycle = 'started';
       },
       async stop() {
@@ -124,13 +197,21 @@ export const makeGateway = ({ powers = {}, config: configIn = {} } = {}) => {
         lifecycle = 'stopped';
       },
       async getBindAddress() {
-        return `${resolvedBind.kind === 'ipv6' ? `[${resolvedBind.host}]` : resolvedBind.host}:${resolvedBind.port}`;
+        return renderBindAddress();
       },
       async getApps() {
         return apps;
       },
       async getConfig() {
         return mergedConfig;
+      },
+      async getBootstrap() {
+        if (bootstrapHandle === undefined) {
+          throw makeError(
+            X`Gateway bootstrap is disabled (set enableFeatures.udsBootstrap=true)`,
+          );
+        }
+        return bootstrapHandle.bootstrap;
       },
     }),
   );

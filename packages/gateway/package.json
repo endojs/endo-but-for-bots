@@ -32,6 +32,10 @@
     },
     "./src/config.js": "./src/config.js",
     "./src/vhost.js": "./src/vhost.js",
+    "./src/bootstrap.js": "./src/bootstrap.js",
+    "./src/proof-of-possession.js": "./src/proof-of-possession.js",
+    "./src/uds-paths.js": "./src/uds-paths.js",
+    "./src/node-crypto-powers.js": "./src/node-crypto-powers.js",
     "./package.json": "./package.json"
   },
   "scripts": {
@@ -46,6 +50,7 @@
     "test": "ava"
   },
   "dependencies": {
+    "@endo/bytes": "workspace:^",
     "@endo/errors": "workspace:^",
     "@endo/eventual-send": "workspace:^",
     "@endo/exo": "workspace:^",
