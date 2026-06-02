@@ -38,6 +38,7 @@
     "./src/node-crypto-powers.js": "./src/node-crypto-powers.js",
     "./src/ocapn-ws.js": "./src/ocapn-ws.js",
     "./src/relay-policy.js": "./src/relay-policy.js",
+    "./src/git-http.js": "./src/git-http.js",
     "./package.json": "./package.json"
   },
   "scripts": {
@@ -52,6 +53,7 @@
     "test": "ava"
   },
   "dependencies": {
+    "@endo/base64": "workspace:^",
     "@endo/bytes": "workspace:^",
     "@endo/errors": "workspace:^",
     "@endo/eventual-send": "workspace:^",
