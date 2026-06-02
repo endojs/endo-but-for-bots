@@ -172,7 +172,7 @@ harden(GatewayBootstrapInterface);
  * @param {number} expectedLength In bytes.
  * @returns {ArrayBuffer | Uint8Array}
  */
-const checkBytes = (candidate, fieldName, expectedLength) => {
+const checkBytesLength = (candidate, fieldName, expectedLength) => {
   if (
     !(candidate instanceof ArrayBuffer) &&
     !(candidate instanceof Uint8Array)
@@ -196,21 +196,21 @@ const checkBytes = (candidate, fieldName, expectedLength) => {
  * @returns {ArrayBuffer | Uint8Array}
  */
 const checkPublicKey = candidate =>
-  checkBytes(candidate, 'publicKey', ED25519_PUBLIC_KEY_LENGTH);
+  checkBytesLength(candidate, 'publicKey', ED25519_PUBLIC_KEY_LENGTH);
 
 /**
  * @param {unknown} candidate
  * @returns {ArrayBuffer | Uint8Array}
  */
 const checkSignature = candidate =>
-  checkBytes(candidate, 'signature', ED25519_SIGNATURE_LENGTH);
+  checkBytesLength(candidate, 'signature', ED25519_SIGNATURE_LENGTH);
 
 /**
  * @param {unknown} candidate
  * @returns {ArrayBuffer | Uint8Array}
  */
 const checkNonce = candidate =>
-  checkBytes(candidate, 'nonce', NONCE_BYTE_LENGTH);
+  checkBytesLength(candidate, 'nonce', NONCE_BYTE_LENGTH);
 
 /**
  * Validate a webletId shape: a non-empty string with no whitespace
@@ -315,7 +315,7 @@ const publicKeyToHex = bytes => {
  * @param {BootstrapDeps} deps
  * @returns {{
  *   bootstrap: GatewayBootstrap,
- *   listRegistrations: () => ReadonlyArray<{
+ *   listRegisteredPeers: () => ReadonlyArray<{
  *     publicKeys: ReadonlyArray<ArrayBuffer | Uint8Array>,
  *     weblets: ReadonlyArray<WebletDescriptor>,
  *     relayTarget?: unknown,
@@ -466,7 +466,7 @@ export const makeGatewayBootstrap = ({
     };
     if (extras.relayTarget !== undefined) {
       // Stash on the entry under a non-enumerable property so the
-      // shape of `listRegistrations` stays predictable. The relay
+      // shape of `listRegisteredPeers` stays predictable. The relay
       // target is for Feature 6.
       Object.defineProperty(entry, 'relayTarget', {
         value: extras.relayTarget,
@@ -534,7 +534,7 @@ export const makeGatewayBootstrap = ({
    * inspection. Not part of the CapTP exo surface; intentionally
    * exposed only on the in-process return shape.
    */
-  const listRegistrations = () => {
+  const listRegisteredPeers = () => {
     const entries = [];
     for (const entry of allRegistrations) {
       if (!entry.deregistered) {
@@ -557,7 +557,7 @@ export const makeGatewayBootstrap = ({
 
   return harden({
     bootstrap: bootstrapAsType,
-    listRegistrations,
+    listRegisteredPeers,
     pendingNonces: () => nonces.size(),
   });
 };
