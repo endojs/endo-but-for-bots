@@ -2305,6 +2305,7 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@endo/gateway@workspace:packages/gateway"
   dependencies:
+    "@endo/base64": "workspace:^"
     "@endo/bytes": "workspace:^"
     "@endo/errors": "workspace:^"
     "@endo/eventual-send": "workspace:^"
