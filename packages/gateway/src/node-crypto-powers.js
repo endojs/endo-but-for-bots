@@ -147,10 +147,13 @@ export const makeNodeCryptoPowers = () => {
           asNodeBytes(signature),
         );
       } catch (err) {
-        // A malformed public key (wrong length, non-DER) or a
-        // signature of the wrong shape lands here; the contract
-        // says we return false rather than throw, so callers see a
-        // uniform "did not verify" rejection.
+        // The bare catch covers every emissible class, including
+        // RangeError (which `crypto.verify` can raise at any time
+        // on OOM): the contract says we return false rather than
+        // throw, so callers see a uniform "did not verify"
+        // rejection. The expected shape errors land here too: a
+        // malformed public key (wrong length, non-DER) or a
+        // signature of the wrong shape.
         return false;
       }
     },
