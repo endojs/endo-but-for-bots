@@ -9,6 +9,10 @@ import harden from '@endo/harden';
 import { E } from '@endo/far';
 
 import { makeBrowserTree, checkoutToDirectory } from './browser-tree.js';
+import {
+  locatorToInviteLink,
+  normalizeInvitationInput,
+} from './invite-link.js';
 
 /**
  * @typedef {object} CommandResult
@@ -590,22 +594,33 @@ export const createCommandExecutor = ({
           }
 
           const locator = await E(invitation).locate();
-          console.log(`[Chat] Invitation locator generated`);
-          showMessage(`Invitation locator for "${guestName}":`);
-          showValue(locator, undefined, undefined, undefined);
+          // Prefer the shareable `endo://invite?...` deep link: clicking it
+          // launches the Familiar and pre-fills /accept. Fall back to the raw
+          // locator if the form is unexpectedly not an invitation locator.
+          const inviteLink = locatorToInviteLink(locator) || locator;
+          console.log(`[Chat] Invitation link generated`);
+          showMessage(
+            `Invitation link for "${guestName}" — share it, or paste it into /accept:`,
+          );
+          showValue(inviteLink, undefined, undefined, undefined);
           return {
             success: true,
-            value: locator,
+            value: inviteLink,
             message: `Invitation created for "${guestName}"`,
           };
         }
 
         case 'accept': {
           const { locator, guestName } = params;
+          // Accept either an `endo://invite?...` deep link or a raw locator.
+          const invitationLocator = normalizeInvitationInput(String(locator));
           console.log(
-            `[Chat] Accepting invitation for "${guestName}" from ${String(locator).slice(0, 40)}...`,
+            `[Chat] Accepting invitation for "${guestName}" from ${invitationLocator.slice(0, 40)}...`,
           );
-          const accepted = E(powers).accept(String(locator), String(guestName));
+          const accepted = E(powers).accept(
+            invitationLocator,
+            String(guestName),
+          );
           const timeout = new Promise((_, reject) => {
             setTimeout(
               () =>

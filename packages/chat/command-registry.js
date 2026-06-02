@@ -633,7 +633,7 @@ export const COMMANDS = {
         label: 'Invitation',
         type: 'locator',
         required: true,
-        placeholder: 'endo://...',
+        placeholder: 'endo://invite?...',
       },
       {
         name: 'guestName',
