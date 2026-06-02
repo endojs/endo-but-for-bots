@@ -42,6 +42,7 @@ import { makeNonceRegistry, NONCE_BYTE_LENGTH } from './proof-of-possession.js';
 
 /** @import { AppsNameHub } from './types.js' */
 /** @import { CryptoPowers, ClockPowers, ChallengeIssued } from './proof-of-possession.js' */
+/** @import { GatewayAdmin } from './admin.js' */
 
 /**
  * Expected raw Ed25519 public key length in bytes. The bootstrap
@@ -73,6 +74,7 @@ const GatewayBootstrapInterface = M.interface('GatewayBootstrap', {
   registerRelay: M.call(M.any()).returns(M.promise()),
   getBindAddress: M.call().returns(M.promise()),
   getApps: M.call().returns(M.promise()),
+  getAdmin: M.call().returns(M.promise()),
 });
 
 /**
@@ -277,6 +279,13 @@ const publicKeyToHex = bytes => {
  * @property {(args: RelayRegistrationArgs) => Promise<Registration>} registerRelay
  * @property {() => Promise<string>} getBindAddress
  * @property {() => Promise<AppsNameHub>} getApps
+ * @property {() => Promise<GatewayAdmin>} getAdmin
+ *   Returns the `GatewayAdmin` exo (Feature 7). The admin facet is
+ *   reachable only over the sock bootstrap (this method) and via
+ *   the in-process `gateway.getAdmin()` accessor; never over the
+ *   network. Throws when the gateway's `adminDaemon` feature
+ *   toggle is off, surfacing a clear error rather than silently
+ *   returning a no-op.
  */
 
 /**
@@ -303,12 +312,27 @@ const publicKeyToHex = bytes => {
  *   from the configured value after `start()`).
  * @property {number} [ttlMs] Nonce TTL; defaults to the registry's
  *   own default (30s).
+ * @property {() => GatewayAdmin} [getAdmin]
+ *   Returns the `GatewayAdmin` exo (Feature 7). Injected from the
+ *   gateway proper so the bootstrap and the gateway share a single
+ *   admin facet. When unset, the bootstrap's `getAdmin` method
+ *   throws "admin daemon is disabled"; the gateway proper supplies
+ *   this only when both `sockBootstrap` and `adminDaemon` toggles
+ *   are on. Keeping the admin wiring outside the bootstrap module
+ *   avoids a circular import between `bootstrap.js` and `admin.js`.
  */
 
 /**
  * Create the bootstrap exo, the registration registry, and the
  * nonce registry. The exo is the CapTP-reachable entry point a sock
  * listener serves as its bootstrap object.
+ *
+ * The second return value (`listRegistrations`,
+ * `deregisterByPublicKey`, `pendingNonces`) is the **admin
+ * backplane**: the in-process surface the `GatewayAdmin` facet
+ * (Feature 7) reads through. Keeping it out of the bootstrap exo
+ * lets the gateway wire admin operations without leaking the
+ * private registration table across the CapTP boundary.
  *
  * @param {BootstrapDeps} deps
  * @returns {{
@@ -319,6 +343,7 @@ const publicKeyToHex = bytes => {
  *     relayTarget?: unknown,
  *     daemon?: unknown,
  *   }>,
+ *   deregisterByPublicKey: (publicKey: ArrayBuffer | Uint8Array) => boolean,
  *   pendingNonces: () => number,
  * }}
  */
@@ -328,6 +353,7 @@ export const makeGatewayBootstrap = ({
   apps,
   getBindAddress,
   ttlMs,
+  getAdmin,
 }) => {
   if (crypto === undefined) {
     throw makeError(X`makeGatewayBootstrap requires crypto powers`);
@@ -524,6 +550,14 @@ export const makeGatewayBootstrap = ({
       async getApps() {
         return apps;
       },
+      async getAdmin() {
+        if (getAdmin === undefined) {
+          throw makeError(
+            X`Admin daemon is disabled (set enableFeatures.adminDaemon=true)`,
+          );
+        }
+        return getAdmin();
+      },
     }),
   );
 
@@ -549,6 +583,33 @@ export const makeGatewayBootstrap = ({
     return harden(entries);
   };
 
+  /**
+   * Force-deregister the registration that owns `publicKey`, by
+   * looking the key up in the by-hex table. Returns `true` if a
+   * matching live entry was found and torn down. Same semantics as
+   * `Registration.deregister`: the entire registration tombstones,
+   * every weblet entry is removed, every public key is freed for
+   * re-registration. Used by the `GatewayAdmin` exo (Feature 7);
+   * not part of the CapTP bootstrap exo surface.
+   *
+   * @param {ArrayBuffer | Uint8Array} publicKey
+   * @returns {boolean}
+   */
+  const deregisterByPublicKey = publicKey => {
+    const hex = publicKeyToHex(publicKey);
+    const entry = registrationsByKey.get(hex);
+    if (entry === undefined || entry.deregistered) {
+      return false;
+    }
+    entry.deregistered = true;
+    for (const key of entry.publicKeys) {
+      registrationsByKey.delete(publicKeyToHex(key));
+    }
+    entry.weblets.clear();
+    allRegistrations.delete(entry);
+    return true;
+  };
+
   const bootstrapAsType = /** @type {GatewayBootstrap} */ (
     /** @type {unknown} */ (bootstrap)
   );
@@ -556,6 +617,7 @@ export const makeGatewayBootstrap = ({
   return harden({
     bootstrap: bootstrapAsType,
     listRegisteredPeers,
+    deregisterByPublicKey,
     pendingNonces: () => nonces.size(),
   });
 };
