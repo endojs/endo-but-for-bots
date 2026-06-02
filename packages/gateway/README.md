@@ -23,33 +23,36 @@ one PR at a time, so the gateway is extracted into its own package.
 
 ## Status
 
-This is the **phase-2 slice**, building on the phase-1 skeleton's
-package shape. Phase 2 adds Feature 4 (sock bootstrap for local
-CapTP relay registration). The semantic core of the bootstrap (the
-`GatewayBootstrap` exo, the proof-of-possession nonce registry,
-the registration table) lands here; the actual sock listener that
-serves the bootstrap to incoming CapTP connections is a follow-on
-PR, alongside CapTP-over-netstring framing reuse from
-`packages/daemon/src/connection.js`. Embedders that already speak
-CapTP (the Familiar bundle holding a process-local handle, tests
-that connect in-realm) can hold the exo directly via
-`E(gateway).getBootstrap()`.
+This is the **phase-3 slice**, building on phase 2's sock bootstrap
+registrar (Feature 4) and the phase-1 skeleton's package shape.
+Phase 3 adds Feature 7 (admin daemon: the `GatewayAdmin` exo).
+The admin facet is reachable only via the in-process accessor
+(`gateway.getAdmin()`) and the sock bootstrap
+(`bootstrap.getAdmin()`); it is **never** exposed on the public
+HTTP / WS surface, keeping admin authority off the network per the
+design.
 
 Implemented:
 
 - `makeGateway({ config, powers })` factory returning a hardened
   gateway exo with `start`, `stop`, `getBindAddress`, `getApps`,
-  `getConfig`, and (phase-2) `getBootstrap`.
+  `getConfig`, `getBootstrap`, and (phase-3) `getAdmin`.
 - `ENDO_HTTP_ADDR` parsing with the OS-assigned-port (`:0`)
   convention; defaults to `0.0.0.0:3469`.
 - In-memory `AppsNameHub` exo with `bind`, `unbind`, `list`,
   `lookup` (phase 1, Feature 2).
 - Per-feature configuration toggles validated at `make` time.
 - `GatewayBootstrap` exo with `challenge`, `register`,
-  `registerRelay`, `getBindAddress`, `getApps`; `Registration`
-  handle with `publishWeblet`, `unpublishWeblet`, `addPublicKey`,
-  `deregister`, `listWeblets`, `listPublicKeys` (phase 2,
-  Feature 4).
+  `registerRelay`, `getBindAddress`, `getApps`, `getAdmin`;
+  `Registration` handle with `publishWeblet`, `unpublishWeblet`,
+  `addPublicKey`, `deregister`, `listWeblets`, `listPublicKeys`
+  (phase 2, Feature 4; phase 3 added `getAdmin`).
+- `GatewayAdmin` exo (phase 3, Feature 7) with `listRegistrations`,
+  `deregisterRelay`, `listVirtualHosts`, `getResourceBalances`,
+  `getCounters`. Reachable only over the sock bootstrap or the
+  in-process accessor; refused when `adminDaemon` is off; the
+  config validator already rejects `adminDaemon=true` with
+  `sockBootstrap=false`.
 - Proof-of-possession nonce registry with domain-separated
   challenge hashing (`endo-gateway:registrar:nonce`), 30-second
   TTL, single-use semantics, constant-time signature comparison
@@ -64,15 +67,18 @@ Implemented:
 
 Deferred to follow-on PRs:
 
-- Feature 1 (Chat hosting + payment-token enhancement).
+- Feature 1 (Chat hosting + payment-token enhancement). The
+  `ResourceLedger` is the Feature 1 surface; phase 3 ships the
+  admin facet that reads through it, and the ledger implementation
+  itself lands with Chat-hosting. Until then,
+  `getResourceBalances` returns an empty list when no ledger is
+  supplied.
 - Feature 3 (Git over HTTP).
 - Feature 4 follow-on: the actual sock listener and
   CapTP-over-netstring server that serves the bootstrap exo to
   incoming connections.
 - Feature 5 (Familiar-bundled fallback).
 - Feature 6 (public CapTP relay).
-- Feature 7 (admin daemon; the `GatewayAdmin` exo extends the
-  bootstrap).
 - Feature 8 (`/ocapn-cbor-np` WebSocket; the network surface lands
   once `@endo/ocapn-noise` exposes the netlayer the gateway
   embeds).
@@ -157,15 +163,20 @@ and their defaults.
 ## Capability surface
 
 See `designs/gateway-package.md` § Capability Surface for the full
-inventory. The phase-1 and phase-2 slices expose:
+inventory. The phase-1 through phase-3 slices expose:
 
 - `Gateway`: `start`, `stop`, `getBindAddress`, `getApps`,
-  `getConfig`, `getBootstrap`.
+  `getConfig`, `getBootstrap`, `getAdmin`.
 - `AppsNameHub`: `bind`, `unbind`, `list`, `lookup`, `has`.
 - `GatewayBootstrap`: `challenge`, `register`, `registerRelay`,
-  `getBindAddress`, `getApps`.
+  `getBindAddress`, `getApps`, `getAdmin`.
 - `Registration`: `publishWeblet`, `unpublishWeblet`,
   `addPublicKey`, `deregister`, `listWeblets`, `listPublicKeys`.
+- `GatewayAdmin`: `listRegistrations`, `deregisterRelay`,
+  `listVirtualHosts`, `getResourceBalances`, `getCounters`. The
+  admin facet is reachable only via `gateway.getAdmin()`
+  in-process and `bootstrap.getAdmin()` over the sock; the public
+  HTTP / WS surface does not expose it.
 
 ### Bootstrap challenge-response
 
