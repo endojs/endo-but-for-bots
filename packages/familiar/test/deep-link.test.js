@@ -20,21 +20,36 @@ import {
 
 const NODE = 'a'.repeat(64);
 const ID = 'b'.repeat(64);
-const VALID = `endo://invite?node=${NODE}&id=${ID}&at=127.0.0.1%3A8920`;
+const FROM = 'c'.repeat(64);
+const FROM_NODE = 'd'.repeat(64);
+const VALID = `endo://invite?node=${NODE}&id=${ID}&from=${FROM}&at=127.0.0.1%3A8920`;
 
 test('parseInviteUrl accepts a well-formed intent-path invite link', () => {
   const parsed = parseInviteUrl(VALID);
   assert.ok(parsed);
   assert.equal(parsed.node, NODE);
   assert.equal(parsed.number, ID);
+  assert.equal(parsed.from, FROM);
+  assert.equal(parsed.fromNode, undefined);
   assert.deepEqual(parsed.addresses, ['127.0.0.1:8920']);
   assert.equal(parsed.fingerprint, `${'a'.repeat(8)}…${'a'.repeat(8)}`);
-  // The reconstructed locator is the canonical daemon form host.accept wants.
+  // The reconstructed locator is the canonical daemon form host.accept wants:
+  // it must carry id, type, the required `from`, and the hints.
   assert.ok(parsed.locator.startsWith(`endo://${NODE}/`));
   assert.ok(parsed.locator.includes('type=invitation'));
   assert.ok(parsed.locator.includes(`id=${ID}`));
+  assert.ok(parsed.locator.includes(`from=${FROM}`));
   assert.ok(parsed.locator.includes('at=127.0.0.1%3A8920'));
   assert.equal(isInviteUrl(VALID), true);
+});
+
+test('parseInviteUrl carries fromNode when present', () => {
+  const parsed = parseInviteUrl(
+    `endo://invite?node=${NODE}&id=${ID}&from=${FROM}&fromNode=${FROM_NODE}`,
+  );
+  assert.ok(parsed);
+  assert.equal(parsed.fromNode, FROM_NODE);
+  assert.ok(parsed.locator.includes(`fromNode=${FROM_NODE}`));
 });
 
 test('parseInviteUrl rejects non-invitations and malformed input', () => {
@@ -44,21 +59,30 @@ test('parseInviteUrl rejects non-invitations and malformed input', () => {
   assert.equal(parseInviteUrl(`endo://adopt?node=${NODE}&id=${ID}`), null);
   // A bare canonical locator is no longer accepted as a deep link.
   assert.equal(
-    parseInviteUrl(`endo://${NODE}/?id=${ID}&type=invitation`),
+    parseInviteUrl(`endo://${NODE}/?id=${ID}&type=invitation&from=${FROM}`),
     null,
   );
+  // Missing `from` (host.accept requires it).
+  assert.equal(parseInviteUrl(`endo://invite?node=${NODE}&id=${ID}`), null);
   // Node is not 64-hex.
-  assert.equal(parseInviteUrl(`endo://invite?node=nope&id=${ID}`), null);
+  assert.equal(
+    parseInviteUrl(`endo://invite?node=nope&id=${ID}&from=${FROM}`),
+    null,
+  );
   // Disallowed extra query param.
   assert.equal(
-    parseInviteUrl(`endo://invite?node=${NODE}&id=${ID}&label=hi`),
+    parseInviteUrl(`endo://invite?node=${NODE}&id=${ID}&from=${FROM}&x=1`),
     null,
   );
-  // Missing / malformed id.
-  assert.equal(parseInviteUrl(`endo://invite?node=${NODE}`), null);
-  assert.equal(parseInviteUrl(`endo://invite?node=${NODE}&id=short`), null);
-  // Missing node.
-  assert.equal(parseInviteUrl(`endo://invite?id=${ID}`), null);
+  // Malformed id / from.
+  assert.equal(
+    parseInviteUrl(`endo://invite?node=${NODE}&id=short&from=${FROM}`),
+    null,
+  );
+  assert.equal(
+    parseInviteUrl(`endo://invite?node=${NODE}&id=${ID}&from=short`),
+    null,
+  );
   // Non-string input.
   assert.equal(parseInviteUrl(undefined), null);
   assert.equal(isInviteUrl('endo://invite'), false);
@@ -68,6 +92,8 @@ test('formatInviteUrl produces a link parseInviteUrl round-trips', () => {
   const link = formatInviteUrl({
     node: NODE,
     number: ID,
+    from: FROM,
+    fromNode: FROM_NODE,
     addresses: ['127.0.0.1:8920', 'ws://relay.example:443'],
   });
   assert.ok(link.startsWith('endo://invite?'));
@@ -75,6 +101,8 @@ test('formatInviteUrl produces a link parseInviteUrl round-trips', () => {
   assert.ok(parsed);
   assert.equal(parsed.node, NODE);
   assert.equal(parsed.number, ID);
+  assert.equal(parsed.from, FROM);
+  assert.equal(parsed.fromNode, FROM_NODE);
   assert.deepEqual(parsed.addresses, [
     '127.0.0.1:8920',
     'ws://relay.example:443',
@@ -82,8 +110,13 @@ test('formatInviteUrl produces a link parseInviteUrl round-trips', () => {
 });
 
 test('formatInviteUrl throws on malformed parts', () => {
-  assert.throws(() => formatInviteUrl({ node: 'nope', number: ID }));
-  assert.throws(() => formatInviteUrl({ node: NODE, number: 'short' }));
+  assert.throws(() =>
+    formatInviteUrl({ node: 'nope', number: ID, from: FROM }),
+  );
+  assert.throws(() =>
+    formatInviteUrl({ node: NODE, number: 'short', from: FROM }),
+  );
+  assert.throws(() => formatInviteUrl({ node: NODE, number: ID, from: 'x' }));
 });
 
 test('findInviteUrlInArgv finds the first invite argument', () => {
