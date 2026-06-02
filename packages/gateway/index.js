@@ -67,6 +67,18 @@ export {
 } from './src/ocapn-ws.js';
 
 export {
+  DEFAULT_RELAY_POLICY,
+  RELAY_POLICIES,
+  checkRelayPolicy,
+  isInboundSessionAllowed,
+  makeRelayPolicyEntry,
+  addCallerPublicKey,
+  removeCallerPublicKey,
+  listCallerAllowlist,
+  setRelayPolicy,
+} from './src/relay-policy.js';
+
+export {
   resolveBootstrapSocketPath,
   resolveAdminSocketPath,
   BOOTSTRAP_SOCKET_BASENAME,
@@ -186,11 +198,24 @@ export const makeGateway = ({ powers = {}, config: configIn = {} } = {}) => {
         ? {
             listRegisteredPeers: bootstrapHandle.listRegisteredPeers,
             deregisterByPublicKey: bootstrapHandle.deregisterByPublicKey,
+            setRelayPolicyByPublicKey:
+              bootstrapHandle.setRelayPolicyByPublicKey,
+            addRelayCallerByPublicKey:
+              bootstrapHandle.addRelayCallerByPublicKey,
+            removeRelayCallerByPublicKey:
+              bootstrapHandle.removeRelayCallerByPublicKey,
             pendingNonces: bootstrapHandle.pendingNonces,
           }
         : {
+            // When the bootstrap is off, the relay-policy admin
+            // methods have no registration to act on; the empty
+            // backplane returns `undefined` for the "key not found"
+            // case, matching the populated backplane's contract.
             listRegisteredPeers: () => harden([]),
             deregisterByPublicKey: () => false,
+            setRelayPolicyByPublicKey: () => undefined,
+            addRelayCallerByPublicKey: () => undefined,
+            removeRelayCallerByPublicKey: () => undefined,
             pendingNonces: () => 0,
           };
     adminFacet = makeGatewayAdmin({

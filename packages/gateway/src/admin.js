@@ -47,9 +47,11 @@ import { makeError, q, X } from '@endo/errors';
 import { bytesFromImmutable } from '@endo/bytes/from-immutable.js';
 
 import { ED25519_PUBLIC_KEY_LENGTH } from './bootstrap.js';
+import { checkRelayPolicy } from './relay-policy.js';
 
 /** @import { AppsNameHub } from './types.js' */
 /** @import { WebletDescriptor } from './bootstrap.js' */
+/** @import { RelayPolicy } from './relay-policy.js' */
 
 const GatewayAdminInterface = M.interface('GatewayAdmin', {
   listRegistrations: M.call().returns(M.promise()),
@@ -57,6 +59,9 @@ const GatewayAdminInterface = M.interface('GatewayAdmin', {
   listVirtualHosts: M.call().returns(M.promise()),
   getResourceBalances: M.call().returns(M.promise()),
   getCounters: M.call().returns(M.promise()),
+  setRelayPolicy: M.call(M.any(), M.string()).returns(M.promise()),
+  addRelayCaller: M.call(M.any(), M.any()).returns(M.promise()),
+  removeRelayCaller: M.call(M.any(), M.any()).returns(M.promise()),
 });
 harden(GatewayAdminInterface);
 
@@ -77,6 +82,12 @@ harden(GatewayAdminInterface);
  * @property {unknown} [daemon] Present when the registration came
  *   in through `register`; the user-daemon callback exo for the
  *   HTTP / WS surface (Feature 4 follow-on).
+ * @property {RelayPolicy} [relayPolicy] Present for relay
+ *   registrations (Phase 5). The current policy value.
+ * @property {ReadonlyArray<string>} [callerAllowlist] Present for
+ *   relay registrations (Phase 5). The set of dialer public keys
+ *   currently allowed to dial this relay under the closed policy,
+ *   rendered as lowercase hex (64 chars each), sorted.
  */
 
 /**
@@ -141,6 +152,21 @@ harden(GatewayAdminInterface);
  *   1 wires the ledger in).
  * @property {() => Promise<CountersSnapshot>} getCounters Diagnostic
  *   counter dump.
+ * @property {(publicKey: ArrayBuffer | Uint8Array, policy: RelayPolicy) => Promise<RelayPolicy>} setRelayPolicy
+ *   Set the relay policy on the matched relay registration. Returns
+ *   the previous policy value. Throws when no live registration
+ *   claims the key, or when the matching registration is not a
+ *   relay registration.
+ * @property {(publicKey: ArrayBuffer | Uint8Array, callerPublicKey: ArrayBuffer | Uint8Array) => Promise<boolean>} addRelayCaller
+ *   Add a dialer public key to the closed-policy allowlist on the
+ *   matched relay registration. Returns `true` when newly added,
+ *   `false` when already present. Throws when no live registration
+ *   claims the key, or on a non-relay registration.
+ * @property {(publicKey: ArrayBuffer | Uint8Array, callerPublicKey: ArrayBuffer | Uint8Array) => Promise<boolean>} removeRelayCaller
+ *   Remove a dialer public key from the closed-policy allowlist on
+ *   the matched relay registration. Returns `true` when removed,
+ *   `false` when not in the allowlist. Throws when no live
+ *   registration claims the key, or on a non-relay registration.
  */
 
 /**
@@ -158,6 +184,21 @@ harden(GatewayAdminInterface);
  * @property {(publicKey: ArrayBuffer | Uint8Array) => boolean} deregisterByPublicKey
  *   Synchronous force-deregister hook. Returns `true` if a matching
  *   registration was torn down.
+ * @property {(publicKey: ArrayBuffer | Uint8Array, policy: RelayPolicy) => RelayPolicy | undefined} setRelayPolicyByPublicKey
+ *   Set the relay policy on the matched relay registration. Returns
+ *   the previous policy when found, `undefined` when no live
+ *   registration claims the key; throws when the matching
+ *   registration is not a relay registration.
+ * @property {(publicKey: ArrayBuffer | Uint8Array, callerPublicKey: ArrayBuffer | Uint8Array) => boolean | undefined} addRelayCallerByPublicKey
+ *   Add a dialer public key to the closed-policy allowlist on the
+ *   matched relay registration. Returns `true` when newly added,
+ *   `false` when already present, `undefined` when no live
+ *   registration claims the key; throws on a non-relay registration.
+ * @property {(publicKey: ArrayBuffer | Uint8Array, callerPublicKey: ArrayBuffer | Uint8Array) => boolean | undefined} removeRelayCallerByPublicKey
+ *   Remove a dialer public key from the closed-policy allowlist on
+ *   the matched relay registration. Returns `true` when removed,
+ *   `false` when not in the allowlist, `undefined` when no live
+ *   registration claims the key; throws on a non-relay registration.
  * @property {() => number} pendingNonces Count of outstanding
  *   challenges.
  */
@@ -289,6 +330,51 @@ export const makeGatewayAdmin = ({ backplane, apps, resourceLedger }) => {
           totalWeblets,
           pendingNonces: backplane.pendingNonces(),
         });
+      },
+      /**
+       * @param {ArrayBuffer | Uint8Array} publicKey
+       * @param {RelayPolicy} policy
+       */
+      async setRelayPolicy(publicKey, policy) {
+        const key = checkPublicKey(publicKey);
+        const next = checkRelayPolicy(policy);
+        const prev = backplane.setRelayPolicyByPublicKey(key, next);
+        if (prev === undefined) {
+          throw makeError(
+            X`setRelayPolicy: no registration claims the supplied public key`,
+          );
+        }
+        return prev;
+      },
+      /**
+       * @param {ArrayBuffer | Uint8Array} publicKey
+       * @param {ArrayBuffer | Uint8Array} callerPublicKey
+       */
+      async addRelayCaller(publicKey, callerPublicKey) {
+        const key = checkPublicKey(publicKey);
+        const callerKey = checkPublicKey(callerPublicKey);
+        const result = backplane.addRelayCallerByPublicKey(key, callerKey);
+        if (result === undefined) {
+          throw makeError(
+            X`addRelayCaller: no registration claims the supplied public key`,
+          );
+        }
+        return result;
+      },
+      /**
+       * @param {ArrayBuffer | Uint8Array} publicKey
+       * @param {ArrayBuffer | Uint8Array} callerPublicKey
+       */
+      async removeRelayCaller(publicKey, callerPublicKey) {
+        const key = checkPublicKey(publicKey);
+        const callerKey = checkPublicKey(callerPublicKey);
+        const result = backplane.removeRelayCallerByPublicKey(key, callerKey);
+        if (result === undefined) {
+          throw makeError(
+            X`removeRelayCaller: no registration claims the supplied public key`,
+          );
+        }
+        return result;
       },
     }),
   );

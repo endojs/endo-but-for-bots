@@ -23,25 +23,33 @@ of baking one daemon mode into the implementation.
 
 ## Status
 
-This is the **phase-4 slice**, building on phase 3's admin daemon,
-phase 2's sock bootstrap registrar (Feature 4), and the phase-1
-skeleton's package shape. Phase 3 split the admin facet onto a
-separate local sock (`admin.sock`) so that registration authority
-(any local user daemon with the bootstrap sock) and admin authority
-(only the OS account that owns the admin sock) live on independent
-capability paths; the admin facet remains reachable in-process via
+This is the **phase-5 slice**, building on phase 4's
+`OcapnWebSocketHandler` (Feature 8), phase 3's admin daemon
+(Feature 7) with its bootstrap-vs-admin sock split, phase 2's
+sock bootstrap registrar (Feature 4), and the phase-1 skeleton's
+package shape. Phase 3 split the admin facet onto a separate local
+sock (`admin.sock`) so that registration authority (any local user
+daemon with the bootstrap sock) and admin authority (only the OS
+account that owns the admin sock) live on independent capability
+paths; the admin facet remains reachable in-process via
 `gateway.getAdmin()`, is **never** exposed on the public HTTP / WS
-surface, and is **never** reached through the bootstrap sock. Phase
-4 adds Feature 8 (the `OcapnWebSocketHandler` semantic core for
-`/ocapn-cbor-np` WebSocket termination). The handler is reachable
-in-process via `gateway.getOcapnHandler()`; an embedder that owns
-an HTTP server feeds it upgraded WebSocket connections, and the
-handler looks up the intended-responder public key in the
-bootstrap's registration table and hands the byte stream off to
-the registered daemon's `handleOcapnSession`. The gateway does
-**not** terminate Noise itself; Noise's encryption and peer
-authentication run end-to-end between the dialing peer and the
-registered daemon.
+surface, and is **never** reached through the bootstrap sock.
+Phase 4 adds Feature 8 (the `OcapnWebSocketHandler` semantic core
+for `/ocapn-cbor-np` WebSocket termination); the handler looks up
+the intended-responder public key in the bootstrap's registration
+table and hands the byte stream off to the registered daemon's
+`handleOcapnSession`. Phase 5 adds the data model and admission
+surface for Feature 6 (public CapTP relay): per-registration
+`relayPolicy` (`'closed'` by default, `'open'` opt-in) plus a
+caller-public-key allowlist. The handler consults the policy
+before handing off; closed-policy relays drop inbound sessions
+whose dialer is not in the allowlist. The handler accepts an
+optional `extractDialerPublicKey` adapter so a future Noise variant
+(or a pre-handshake protocol extension) that carries a cleartext
+caller-identity hint plugs in without reworking the handler; under
+today's Noise IK wire shape (which encrypts the initiator's static
+on the wire) the gateway defaults the adapter to `undefined` and
+closed-policy relays fail closed.
 
 Implemented:
 
@@ -80,6 +88,24 @@ Implemented:
   `OCAPN_WEBSOCKET_LEGACY_PATH`) and a path matcher
   (`isOcapnWebSocketPath`) ship alongside the handler for
   embedders to use in their HTTP-server upgrade routing.
+- Relay-policy data model (phase 5, Feature 6) in
+  `src/relay-policy.js`: `RelayPolicy` (`'closed'` | `'open'`,
+  default `'closed'`) plus a per-registration caller-public-key
+  allowlist. `Registration.setRelayPolicy`, `getRelayPolicy`,
+  `addCallerPublicKey`, `removeCallerPublicKey`,
+  `listCallerPublicKeys` let the registrant manage their own
+  policy; `GatewayAdmin.setRelayPolicy`, `addRelayCaller`,
+  `removeRelayCaller` let the local administrator override.
+  `registerRelay` accepts an optional `relayPolicy` field; the
+  `OcapnWebSocketHandler` consults the policy before forwarding to
+  the relay target. The handler accepts an optional
+  `extractDialerPublicKey` adapter that reads the dialer's public
+  key from the first frame; today's Noise IK wire shape encrypts
+  the initiator's static so embedders default the adapter to
+  `undefined` and closed-policy relays fail closed. The data model
+  is forward-compatible with a future Noise variant or
+  pre-handshake protocol extension that carries a cleartext
+  caller-identity hint.
 - Proof-of-possession nonce registry with domain-separated
   challenge hashing (`endo-gateway:registrar:nonce`), 30-second
   TTL, single-use semantics, constant-time signature comparison
@@ -109,7 +135,13 @@ Deferred to follow-on PRs:
   CapTP-over-netstring server that serves the bootstrap exo to
   incoming connections.
 - Feature 5 (Familiar-bundled fallback).
-- Feature 6 (public CapTP relay).
+- Feature 6 follow-on: the wire-level abuse-prevention defenses
+  named in the design (per-public-key rate limits, per-IP rate
+  limits, billing-tied gating via the resource ledger), plus the
+  Noise-side extraction of the dialer's identity (or the
+  pre-handshake protocol extension that carries a cleartext
+  caller-identity hint) so closed-policy relays can admit
+  allowlisted callers under today's Noise IK wire shape.
 - Feature 8 follow-on: the actual HTTP listener that performs the
   WebSocket upgrade on `/ocapn-cbor-np` and feeds the per-connection
   byte-stream pair into the handler. The Node-bound listener

@@ -7,6 +7,7 @@ import test from 'ava';
 import { E, Far } from '@endo/far';
 import { makePipe } from '@endo/stream';
 import { bytesFromImmutable } from '@endo/bytes/from-immutable.js';
+import { bytesToImmutable } from '@endo/bytes/to-immutable.js';
 
 import {
   isOcapnWebSocketPath,
@@ -572,4 +573,362 @@ test('lookupRegistrationByPublicKey returns undefined after deregister', async t
   await registerDaemon(handle, keypair, daemon);
   handle.deregisterByPublicKey(keypair.publicKey);
   t.is(handle.lookupRegistrationByPublicKey(keypair.publicKey), undefined);
+});
+
+// -- Relay-policy admission (Phase 5 / Feature 6) -----------------
+
+/**
+ * Register a relay target via `registerRelay`. Returns the
+ * registration handle so the test can mutate the policy through it.
+ *
+ * @param {ReturnType<typeof makeGatewayBootstrap>} handle
+ * @param {{ publicKey: ArrayBuffer, privateKey: ArrayBuffer, sign: (m: ArrayBuffer | Uint8Array) => ArrayBuffer }} keypair
+ * @param {unknown} relayTarget
+ * @param {'closed' | 'open'} [relayPolicy]
+ */
+const registerRelayTarget = async (
+  handle,
+  keypair,
+  relayTarget,
+  relayPolicy,
+) => {
+  const challenge = await E(handle.bootstrap).challenge();
+  const args = harden({
+    publicKey: keypair.publicKey,
+    nonce: challenge.nonce,
+    signature: keypair.sign(challenge.hashedNonce),
+    relayTarget,
+    ...(relayPolicy === undefined ? {} : { relayPolicy }),
+  });
+  return E(handle.bootstrap).registerRelay(args);
+};
+
+test('handleConnection drops a closed-policy relay session when no dialer extractor is wired', async t => {
+  // Regression: today's Noise IK wire shape encrypts the dialer's
+  // static; the gateway cannot identify the caller. The handler
+  // must fail closed rather than silently relay; a refactor that
+  // defaulted to allow would put the gateway in a default-open
+  // relay shape.
+  const { handle, handler } = stand();
+  const keypair = await generateNodeEd25519Keypair();
+  const calls = { count: 0 };
+  await registerRelayTarget(
+    handle,
+    keypair,
+    Far('RelayTarget', {
+      async handleOcapnSession() {
+        calls.count += 1;
+      },
+    }),
+  );
+
+  const [peerToGwRaw, gwReaderRaw] = /** @type {[any, any]} */ (makePipe());
+  const [gwWriterRaw, peerFromGw] = /** @type {[any, any]} */ (makePipe());
+  const peerToGw = peerToGwRaw;
+  const gwReader = farStream('GwReader', gwReaderRaw);
+  const gwWriter = farStream('GwWriter', gwWriterRaw);
+  const handled = E(handler).handleConnection(
+    /** @type {any} */ (harden({ reader: gwReader, writer: gwWriter })),
+  );
+  await peerToGw.next(synFrame(keypair.publicKey));
+  await handled;
+
+  // Relay target was not invoked; stream closed.
+  t.is(calls.count, 0);
+  const fromGw = await peerFromGw.next();
+  t.true(fromGw.done);
+});
+
+test('handleConnection forwards an open-policy relay session regardless of dialer', async t => {
+  const { handle, handler } = stand();
+  const keypair = await generateNodeEd25519Keypair();
+  const calls = { count: 0 };
+  await registerRelayTarget(
+    handle,
+    keypair,
+    Far('RelayTarget', {
+      async handleOcapnSession() {
+        calls.count += 1;
+      },
+    }),
+    'open',
+  );
+
+  const [peerToGwRaw, gwReaderRaw] = /** @type {[any, any]} */ (makePipe());
+  const [gwWriterRaw, _peerFromGw] = /** @type {[any, any]} */ (makePipe());
+  const peerToGw = peerToGwRaw;
+  const gwReader = farStream('GwReader', gwReaderRaw);
+  const gwWriter = farStream('GwWriter', gwWriterRaw);
+  const handled = E(handler).handleConnection(
+    /** @type {any} */ (harden({ reader: gwReader, writer: gwWriter })),
+  );
+  await peerToGw.next(synFrame(keypair.publicKey));
+  await handled;
+
+  t.is(calls.count, 1);
+});
+
+test('handleConnection forwards a closed-policy session when the dialer is allowlisted', async t => {
+  // Stand the handler with a test extractor that reads the dialer
+  // key out of the "second 32-byte slot" the dispatch prompt
+  // describes. Under today's Noise IK this slot is encrypted (so
+  // the production handler would not have an extractor); we model
+  // the future-extension case so the allowlist semantics have
+  // a working test.
+  const apps = makeAppsNameHub();
+  const handle = makeGatewayBootstrap({
+    crypto: makeNodeCryptoPowers(),
+    clock: makeFakeClock(),
+    apps,
+    getBindAddress: () => '0.0.0.0:3469',
+  });
+  /** @param {Uint8Array} firstFrame */
+  const extractDialerPublicKey = firstFrame => firstFrame.slice(32, 64);
+  const handler = makeOcapnWebSocketHandler({
+    lookupRegistrationByPublicKey: handle.lookupRegistrationByPublicKey,
+    extractDialerPublicKey,
+  });
+
+  const keypair = await generateNodeEd25519Keypair();
+  const calls = { count: 0 };
+  const r = await registerRelayTarget(
+    handle,
+    keypair,
+    Far('RelayTarget', {
+      async handleOcapnSession() {
+        calls.count += 1;
+      },
+    }),
+  );
+  // Allowlist a fixed dialer key, then dial with the matching key.
+  const dialerKey = new Uint8Array(32).fill(0x55);
+  await E(r).addCallerPublicKey(bytesToImmutable(dialerKey));
+
+  const [peerToGwRaw, gwReaderRaw] = /** @type {[any, any]} */ (makePipe());
+  const [gwWriterRaw, _peerFromGw] = /** @type {[any, any]} */ (makePipe());
+  const peerToGw = peerToGwRaw;
+  const gwReader = farStream('GwReader', gwReaderRaw);
+  const gwWriter = farStream('GwWriter', gwWriterRaw);
+  const handled = E(handler).handleConnection(
+    /** @type {any} */ (harden({ reader: gwReader, writer: gwWriter })),
+  );
+  // Build a frame whose second 32 bytes match the allowlisted key.
+  const frame = synFrame(keypair.publicKey);
+  frame.set(dialerKey, 32);
+  await peerToGw.next(frame);
+  await handled;
+
+  t.is(calls.count, 1);
+});
+
+test('handleConnection drops a closed-policy session when the dialer is not allowlisted', async t => {
+  const apps = makeAppsNameHub();
+  const handle = makeGatewayBootstrap({
+    crypto: makeNodeCryptoPowers(),
+    clock: makeFakeClock(),
+    apps,
+    getBindAddress: () => '0.0.0.0:3469',
+  });
+  /** @param {Uint8Array} firstFrame */
+  const extractDialerPublicKey = firstFrame => firstFrame.slice(32, 64);
+  const handler = makeOcapnWebSocketHandler({
+    lookupRegistrationByPublicKey: handle.lookupRegistrationByPublicKey,
+    extractDialerPublicKey,
+  });
+
+  const keypair = await generateNodeEd25519Keypair();
+  const calls = { count: 0 };
+  const r = await registerRelayTarget(
+    handle,
+    keypair,
+    Far('RelayTarget', {
+      async handleOcapnSession() {
+        calls.count += 1;
+      },
+    }),
+  );
+  // Allowlist a key the dialer will NOT match.
+  await E(r).addCallerPublicKey(
+    bytesToImmutable(new Uint8Array(32).fill(0x55)),
+  );
+
+  const [peerToGwRaw, gwReaderRaw] = /** @type {[any, any]} */ (makePipe());
+  const [gwWriterRaw, peerFromGw] = /** @type {[any, any]} */ (makePipe());
+  const peerToGw = peerToGwRaw;
+  const gwReader = farStream('GwReader', gwReaderRaw);
+  const gwWriter = farStream('GwWriter', gwWriterRaw);
+  const handled = E(handler).handleConnection(
+    /** @type {any} */ (harden({ reader: gwReader, writer: gwWriter })),
+  );
+  // The frame's "second slot" is a 0x99 fill (synFrame's filler
+  // happens to start at 1; for clarity we set explicitly).
+  const frame = synFrame(keypair.publicKey);
+  frame.set(new Uint8Array(32).fill(0x99), 32);
+  await peerToGw.next(frame);
+  await handled;
+
+  t.is(calls.count, 0);
+  const fromGw = await peerFromGw.next();
+  t.true(fromGw.done);
+});
+
+test('handleConnection ignores relayPolicy on a register (non-relay) entry', async t => {
+  // Regression: a `register` (daemon) entry has no policy. The
+  // handler must forward unconditionally; a refactor that
+  // accidentally checked policy=closed across the daemon case
+  // would silently drop user-daemon sessions.
+  const { handle, handler } = stand();
+  const keypair = await generateNodeEd25519Keypair();
+  const calls = { count: 0 };
+  await registerDaemon(
+    handle,
+    keypair,
+    Far('UserDaemon', {
+      async handleOcapnSession() {
+        calls.count += 1;
+      },
+    }),
+  );
+
+  const [peerToGwRaw, gwReaderRaw] = /** @type {[any, any]} */ (makePipe());
+  const [gwWriterRaw, _peerFromGw] = /** @type {[any, any]} */ (makePipe());
+  const peerToGw = peerToGwRaw;
+  const gwReader = farStream('GwReader', gwReaderRaw);
+  const gwWriter = farStream('GwWriter', gwWriterRaw);
+  const handled = E(handler).handleConnection(
+    /** @type {any} */ (harden({ reader: gwReader, writer: gwWriter })),
+  );
+  await peerToGw.next(synFrame(keypair.publicKey));
+  await handled;
+
+  t.is(calls.count, 1);
+});
+
+test('handleConnection drops a session when extractDialerPublicKey throws', async t => {
+  // Regression: a faulty adapter should not crash the handler. The
+  // close path mirrors the daemon-throws branch.
+  const apps = makeAppsNameHub();
+  const handle = makeGatewayBootstrap({
+    crypto: makeNodeCryptoPowers(),
+    clock: makeFakeClock(),
+    apps,
+    getBindAddress: () => '0.0.0.0:3469',
+  });
+  const extractDialerPublicKey = () => {
+    throw Error('adapter blew up');
+  };
+  const handler = makeOcapnWebSocketHandler({
+    lookupRegistrationByPublicKey: handle.lookupRegistrationByPublicKey,
+    extractDialerPublicKey,
+  });
+
+  const keypair = await generateNodeEd25519Keypair();
+  const calls = { count: 0 };
+  await registerRelayTarget(
+    handle,
+    keypair,
+    Far('RelayTarget', {
+      async handleOcapnSession() {
+        calls.count += 1;
+      },
+    }),
+  );
+
+  const [peerToGwRaw, gwReaderRaw] = /** @type {[any, any]} */ (makePipe());
+  const [gwWriterRaw, peerFromGw] = /** @type {[any, any]} */ (makePipe());
+  const peerToGw = peerToGwRaw;
+  const gwReader = farStream('GwReader', gwReaderRaw);
+  const gwWriter = farStream('GwWriter', gwWriterRaw);
+  const handled = E(handler).handleConnection(
+    /** @type {any} */ (harden({ reader: gwReader, writer: gwWriter })),
+  );
+  await peerToGw.next(synFrame(keypair.publicKey));
+  await handled;
+
+  t.is(calls.count, 0);
+  const fromGw = await peerFromGw.next();
+  t.true(fromGw.done);
+});
+
+test('makeOcapnWebSocketHandler rejects a non-function extractDialerPublicKey', t => {
+  t.throws(
+    () =>
+      makeOcapnWebSocketHandler(
+        /** @type {any} */ ({
+          lookupRegistrationByPublicKey: () => undefined,
+          extractDialerPublicKey: 'not-a-function',
+        }),
+      ),
+    { message: /must be a function/ },
+  );
+});
+
+test('handleConnection picks up a live allowlist mutation between sessions', async t => {
+  // Regression: the policy admission must read through the live
+  // policy entry. A previous design that snapshotted at lookup
+  // time would have a stale allowlist if the registrant added the
+  // dialer key between sessions.
+  const apps = makeAppsNameHub();
+  const handle = makeGatewayBootstrap({
+    crypto: makeNodeCryptoPowers(),
+    clock: makeFakeClock(),
+    apps,
+    getBindAddress: () => '0.0.0.0:3469',
+  });
+  /** @param {Uint8Array} firstFrame */
+  const extractDialerPublicKey = firstFrame => firstFrame.slice(32, 64);
+  const handler = makeOcapnWebSocketHandler({
+    lookupRegistrationByPublicKey: handle.lookupRegistrationByPublicKey,
+    extractDialerPublicKey,
+  });
+
+  const keypair = await generateNodeEd25519Keypair();
+  const calls = { count: 0 };
+  const r = await registerRelayTarget(
+    handle,
+    keypair,
+    Far('RelayTarget', {
+      async handleOcapnSession() {
+        calls.count += 1;
+      },
+    }),
+  );
+
+  const dialerKey = new Uint8Array(32).fill(0x77);
+  // First session: dialer not yet allowlisted -> dropped.
+  {
+    const [peerToGwRaw, gwReaderRaw] = /** @type {[any, any]} */ (makePipe());
+    const [gwWriterRaw, _peerFromGw] = /** @type {[any, any]} */ (makePipe());
+    const peerToGw = peerToGwRaw;
+    const gwReader = farStream('GwReader', gwReaderRaw);
+    const gwWriter = farStream('GwWriter', gwWriterRaw);
+    const handled = E(handler).handleConnection(
+      /** @type {any} */ (harden({ reader: gwReader, writer: gwWriter })),
+    );
+    const frame = synFrame(keypair.publicKey);
+    frame.set(dialerKey, 32);
+    await peerToGw.next(frame);
+    await handled;
+  }
+  t.is(calls.count, 0);
+
+  // Admin / registrant adds the dialer to the allowlist.
+  await E(r).addCallerPublicKey(bytesToImmutable(dialerKey));
+
+  // Second session with the same dialer is now admitted.
+  {
+    const [peerToGwRaw, gwReaderRaw] = /** @type {[any, any]} */ (makePipe());
+    const [gwWriterRaw, _peerFromGw] = /** @type {[any, any]} */ (makePipe());
+    const peerToGw = peerToGwRaw;
+    const gwReader = farStream('GwReader', gwReaderRaw);
+    const gwWriter = farStream('GwWriter', gwWriterRaw);
+    const handled = E(handler).handleConnection(
+      /** @type {any} */ (harden({ reader: gwReader, writer: gwWriter })),
+    );
+    const frame = synFrame(keypair.publicKey);
+    frame.set(dialerKey, 32);
+    await peerToGw.next(frame);
+    await handled;
+  }
+  t.is(calls.count, 1);
 });

@@ -536,3 +536,299 @@ test('makeGatewayBootstrap requires crypto, clock, apps, getBindAddress', t => {
     { message: /requires a getBindAddress function/ },
   );
 });
+
+// -- Relay-policy fields on registerRelay (Feature 6 / Phase 5) ---
+
+test('registerRelay defaults relayPolicy to "closed"', async t => {
+  const { handle } = stand();
+  const kp = await generateNodeEd25519Keypair();
+  const issued = await E(handle.bootstrap).challenge();
+  const r = await E(handle.bootstrap).registerRelay({
+    publicKey: kp.publicKey,
+    nonce: issued.nonce,
+    signature: kp.sign(issued.hashedNonce),
+    relayTarget: harden({ kind: 'relay-target' }),
+  });
+  t.is(await E(r).getRelayPolicy(), 'closed');
+  // listRegisteredPeers surfaces the policy.
+  const entries = handle.listRegisteredPeers();
+  t.is(entries[0].relayPolicy, 'closed');
+  t.deepEqual([...(entries[0].callerAllowlist ?? [])], []);
+});
+
+test('registerRelay accepts an explicit open policy', async t => {
+  const { handle } = stand();
+  const kp = await generateNodeEd25519Keypair();
+  const issued = await E(handle.bootstrap).challenge();
+  const r = await E(handle.bootstrap).registerRelay({
+    publicKey: kp.publicKey,
+    nonce: issued.nonce,
+    signature: kp.sign(issued.hashedNonce),
+    relayTarget: harden({ kind: 'relay-target' }),
+    relayPolicy: 'open',
+  });
+  t.is(await E(r).getRelayPolicy(), 'open');
+});
+
+test('registerRelay rejects an unknown relayPolicy value', async t => {
+  const { handle } = stand();
+  const kp = await generateNodeEd25519Keypair();
+  const issued = await E(handle.bootstrap).challenge();
+  await t.throwsAsync(
+    () =>
+      E(handle.bootstrap).registerRelay({
+        publicKey: kp.publicKey,
+        nonce: issued.nonce,
+        signature: kp.sign(issued.hashedNonce),
+        relayTarget: harden({ kind: 'relay-target' }),
+        relayPolicy: /** @type {any} */ ('semi-open'),
+      }),
+    { message: /relayPolicy must be "closed" or "open"/ },
+  );
+});
+
+// -- Registration handle: relay-policy mutators -------------------
+
+test('Registration.setRelayPolicy flips the policy and returns the previous value', async t => {
+  const { handle } = stand();
+  const kp = await generateNodeEd25519Keypair();
+  const issued = await E(handle.bootstrap).challenge();
+  const r = await E(handle.bootstrap).registerRelay({
+    publicKey: kp.publicKey,
+    nonce: issued.nonce,
+    signature: kp.sign(issued.hashedNonce),
+    relayTarget: harden({ kind: 'relay-target' }),
+  });
+  t.is(await E(r).setRelayPolicy('open'), 'closed');
+  t.is(await E(r).getRelayPolicy(), 'open');
+});
+
+test('Registration relay-policy methods throw on a register (non-relay) registration', async t => {
+  // Regression: a `register` (daemon) registration has no policy
+  // entry; the relay-policy mutators must surface the type error
+  // rather than silently storing state that the handler will never
+  // consult.
+  const { handle } = stand();
+  const kp = await generateNodeEd25519Keypair();
+  const issued = await E(handle.bootstrap).challenge();
+  const r = await E(handle.bootstrap).register({
+    publicKey: kp.publicKey,
+    nonce: issued.nonce,
+    signature: kp.sign(issued.hashedNonce),
+  });
+  await t.throwsAsync(() => E(r).setRelayPolicy('open'), {
+    message: /not a relay registration/,
+  });
+  await t.throwsAsync(() => E(r).getRelayPolicy(), {
+    message: /not a relay registration/,
+  });
+  await t.throwsAsync(() => E(r).addCallerPublicKey(immutableBytesOf(32)), {
+    message: /not a relay registration/,
+  });
+  await t.throwsAsync(() => E(r).removeCallerPublicKey(immutableBytesOf(32)), {
+    message: /not a relay registration/,
+  });
+  await t.throwsAsync(() => E(r).listCallerPublicKeys(), {
+    message: /not a relay registration/,
+  });
+});
+
+test('Registration.addCallerPublicKey adds a key and listCallerPublicKeys reports it', async t => {
+  const { handle } = stand();
+  const kp = await generateNodeEd25519Keypair();
+  const issued = await E(handle.bootstrap).challenge();
+  const r = await E(handle.bootstrap).registerRelay({
+    publicKey: kp.publicKey,
+    nonce: issued.nonce,
+    signature: kp.sign(issued.hashedNonce),
+    relayTarget: harden({ kind: 'relay-target' }),
+  });
+  t.true(await E(r).addCallerPublicKey(immutableBytesOf(32, 0x11)));
+  // Idempotent on re-add.
+  t.false(await E(r).addCallerPublicKey(immutableBytesOf(32, 0x11)));
+  const list = await E(r).listCallerPublicKeys();
+  t.deepEqual([...list], ['11'.repeat(32)]);
+});
+
+test('Registration.removeCallerPublicKey removes a previously-added key', async t => {
+  const { handle } = stand();
+  const kp = await generateNodeEd25519Keypair();
+  const issued = await E(handle.bootstrap).challenge();
+  const r = await E(handle.bootstrap).registerRelay({
+    publicKey: kp.publicKey,
+    nonce: issued.nonce,
+    signature: kp.sign(issued.hashedNonce),
+    relayTarget: harden({ kind: 'relay-target' }),
+  });
+  await E(r).addCallerPublicKey(immutableBytesOf(32, 0x22));
+  t.true(await E(r).removeCallerPublicKey(immutableBytesOf(32, 0x22)));
+  t.false(await E(r).removeCallerPublicKey(immutableBytesOf(32, 0x22)));
+  const list = await E(r).listCallerPublicKeys();
+  t.deepEqual([...list], []);
+});
+
+test('Registration.relay-policy methods reject wrong-length caller keys', async t => {
+  const { handle } = stand();
+  const kp = await generateNodeEd25519Keypair();
+  const issued = await E(handle.bootstrap).challenge();
+  const r = await E(handle.bootstrap).registerRelay({
+    publicKey: kp.publicKey,
+    nonce: issued.nonce,
+    signature: kp.sign(issued.hashedNonce),
+    relayTarget: harden({ kind: 'relay-target' }),
+  });
+  await t.throwsAsync(() => E(r).addCallerPublicKey(immutableBytesOf(16)), {
+    message: /must be 32 bytes/,
+  });
+  await t.throwsAsync(() => E(r).removeCallerPublicKey(immutableBytesOf(16)), {
+    message: /must be 32 bytes/,
+  });
+});
+
+test('Registration relay-policy methods reject after deregister', async t => {
+  const { handle } = stand();
+  const kp = await generateNodeEd25519Keypair();
+  const issued = await E(handle.bootstrap).challenge();
+  const r = await E(handle.bootstrap).registerRelay({
+    publicKey: kp.publicKey,
+    nonce: issued.nonce,
+    signature: kp.sign(issued.hashedNonce),
+    relayTarget: harden({ kind: 'relay-target' }),
+  });
+  await E(r).deregister();
+  await t.throwsAsync(() => E(r).getRelayPolicy(), {
+    message: /has been deregistered/,
+  });
+  await t.throwsAsync(() => E(r).setRelayPolicy('open'), {
+    message: /has been deregistered/,
+  });
+  await t.throwsAsync(() => E(r).addCallerPublicKey(immutableBytesOf(32)), {
+    message: /has been deregistered/,
+  });
+});
+
+// -- Bootstrap admin-backplane mutators ---------------------------
+
+test('setRelayPolicyByPublicKey updates a relay registration in place', async t => {
+  const { handle } = stand();
+  const kp = await generateNodeEd25519Keypair();
+  const issued = await E(handle.bootstrap).challenge();
+  await E(handle.bootstrap).registerRelay({
+    publicKey: kp.publicKey,
+    nonce: issued.nonce,
+    signature: kp.sign(issued.hashedNonce),
+    relayTarget: harden({ kind: 'relay-target' }),
+  });
+  t.is(handle.setRelayPolicyByPublicKey(kp.publicKey, 'open'), 'closed');
+  const entries = handle.listRegisteredPeers();
+  t.is(entries[0].relayPolicy, 'open');
+});
+
+test('setRelayPolicyByPublicKey returns undefined for unknown keys', t => {
+  const { handle } = stand();
+  const unknown = new Uint8Array(32).fill(0xee);
+  t.is(handle.setRelayPolicyByPublicKey(unknown, 'open'), undefined);
+});
+
+test('setRelayPolicyByPublicKey throws on a non-relay registration', async t => {
+  const { handle } = stand();
+  const kp = await generateNodeEd25519Keypair();
+  const issued = await E(handle.bootstrap).challenge();
+  await E(handle.bootstrap).register({
+    publicKey: kp.publicKey,
+    nonce: issued.nonce,
+    signature: kp.sign(issued.hashedNonce),
+  });
+  t.throws(() => handle.setRelayPolicyByPublicKey(kp.publicKey, 'open'), {
+    message: /is not a relay registration/,
+  });
+});
+
+test('addRelayCallerByPublicKey / removeRelayCallerByPublicKey round-trip', async t => {
+  const { handle } = stand();
+  const kp = await generateNodeEd25519Keypair();
+  const issued = await E(handle.bootstrap).challenge();
+  await E(handle.bootstrap).registerRelay({
+    publicKey: kp.publicKey,
+    nonce: issued.nonce,
+    signature: kp.sign(issued.hashedNonce),
+    relayTarget: harden({ kind: 'relay-target' }),
+  });
+  const callerKey = immutableBytesOf(32, 0x44);
+  t.is(handle.addRelayCallerByPublicKey(kp.publicKey, callerKey), true);
+  t.is(handle.addRelayCallerByPublicKey(kp.publicKey, callerKey), false);
+  t.is(handle.removeRelayCallerByPublicKey(kp.publicKey, callerKey), true);
+  t.is(handle.removeRelayCallerByPublicKey(kp.publicKey, callerKey), false);
+});
+
+test('addRelayCallerByPublicKey returns undefined for unknown public keys', t => {
+  const { handle } = stand();
+  const unknown = new Uint8Array(32).fill(0xee);
+  t.is(
+    handle.addRelayCallerByPublicKey(unknown, new Uint8Array(32).fill(0x55)),
+    undefined,
+  );
+  t.is(
+    handle.removeRelayCallerByPublicKey(unknown, new Uint8Array(32).fill(0x55)),
+    undefined,
+  );
+});
+
+test('lookupRegistrationByPublicKey surfaces the live policy entry', async t => {
+  // Regression: the handler holds the live entry by reference so
+  // admin / registrant mutations are visible immediately. If lookup
+  // returned a snapshot, the allowlist updates would lag by one
+  // session.
+  const { handle } = stand();
+  const kp = await generateNodeEd25519Keypair();
+  const issued = await E(handle.bootstrap).challenge();
+  await E(handle.bootstrap).registerRelay({
+    publicKey: kp.publicKey,
+    nonce: issued.nonce,
+    signature: kp.sign(issued.hashedNonce),
+    relayTarget: harden({ kind: 'relay-target' }),
+  });
+  const result = handle.lookupRegistrationByPublicKey(kp.publicKey);
+  t.truthy(result);
+  t.truthy(result?.policy);
+  t.is(result?.policy?.policy, 'closed');
+  t.is(result?.policy?.callerAllowlist.size, 0);
+  handle.addRelayCallerByPublicKey(kp.publicKey, immutableBytesOf(32, 0x66));
+  t.is(result?.policy?.callerAllowlist.size, 1);
+});
+
+test('lookupRegistrationByPublicKey returns no policy for a register (non-relay) entry', async t => {
+  const { handle } = stand();
+  const kp = await generateNodeEd25519Keypair();
+  const issued = await E(handle.bootstrap).challenge();
+  const daemon = harden({ kind: 'daemon' });
+  await E(handle.bootstrap).register({
+    publicKey: kp.publicKey,
+    nonce: issued.nonce,
+    signature: kp.sign(issued.hashedNonce),
+    daemon,
+  });
+  const result = handle.lookupRegistrationByPublicKey(kp.publicKey);
+  t.is(result?.daemon, daemon);
+  t.is(result?.policy, undefined);
+});
+
+test('Registration exo surfaces the new relay-policy methods in introspection', async t => {
+  const { handle } = stand();
+  const kp = await generateNodeEd25519Keypair();
+  const issued = await E(handle.bootstrap).challenge();
+  const r = await E(handle.bootstrap).registerRelay({
+    publicKey: kp.publicKey,
+    nonce: issued.nonce,
+    signature: kp.sign(issued.hashedNonce),
+    relayTarget: harden({ kind: 'relay-target' }),
+  });
+  const introspect = /** @type {any} */ (E(r));
+  // eslint-disable-next-line no-underscore-dangle
+  const methods = await introspect.__getMethodNames__();
+  t.true(methods.includes('setRelayPolicy'));
+  t.true(methods.includes('getRelayPolicy'));
+  t.true(methods.includes('addCallerPublicKey'));
+  t.true(methods.includes('removeCallerPublicKey'));
+  t.true(methods.includes('listCallerPublicKeys'));
+});
