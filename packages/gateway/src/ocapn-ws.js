@@ -50,7 +50,10 @@ import { E, Far } from '@endo/far';
 import { makeError, q, X } from '@endo/errors';
 import { bytesFromImmutable } from '@endo/bytes/from-immutable.js';
 
+import { isInboundSessionAllowed } from './relay-policy.js';
+
 /** @import { Reader, Writer } from '@endo/stream' */
+/** @import { RelayPolicyEntry } from './relay-policy.js' */
 
 /**
  * The canonical OCapN WebSocket path. Encodes the codec/transport
@@ -188,8 +191,29 @@ harden(OcapnWebSocketHandlerInterface);
  *   Both are typed as `unknown` here because the gateway treats
  *   them as opaque exo handles: the only call site is
  *   `E(target).handleOcapnSession({ reader, writer })`.
+ *
+ *   For relay registrations the lookup also returns the live
+ *   `policy` entry (a `RelayPolicyEntry` from `./relay-policy.js`).
+ *   The handler consults the policy before handing off; for
+ *   `register` (non-relay) registrations the field is `undefined`
+ *   and the handler forwards unconditionally (the registration
+ *   itself is the authorization).
  * @property {unknown} [daemon]
  * @property {unknown} [relayTarget]
+ * @property {RelayPolicyEntry} [policy]
+ */
+
+/**
+ * @typedef {(firstFrame: Uint8Array) => ArrayBuffer | Uint8Array | undefined} ExtractDialerPublicKey
+ *   The optional adapter that reads the dialer's 32-byte Ed25519
+ *   public key out of the prefixed-SYN. Today's OCapN-Noise wire
+ *   shape uses Noise IK, which encrypts the initiator's static
+ *   under the responder's static (Noise §7.8 property 8, identity
+ *   hiding); under that wire shape the adapter returns `undefined`
+ *   and `closed`-policy relay registrations fail closed. A future
+ *   Noise variant or pre-handshake protocol extension that carries
+ *   a cleartext caller-identity hint plugs in here without
+ *   reworking the handler.
  */
 
 /**
@@ -197,10 +221,20 @@ harden(OcapnWebSocketHandlerInterface);
  *   {@link makeOcapnWebSocketHandler}.
  * @property {(publicKey: ArrayBuffer | Uint8Array) =>
  *   RegistrationLookupResult | undefined} lookupRegistrationByPublicKey
- *   The bootstrap module's lookup function (the third return value
- *   of `makeGatewayBootstrap`). Returns `undefined` when no live
+ *   The bootstrap module's lookup function (one of the returns of
+ *   `makeGatewayBootstrap`). Returns `undefined` when no live
  *   registration claims the key, in which case the handler closes
  *   the WebSocket without forwarding.
+ * @property {ExtractDialerPublicKey} [extractDialerPublicKey]
+ *   Optional adapter that reads the dialer's public key from the
+ *   first WebSocket binary frame. Phase 5 introduces the hook;
+ *   today's Noise IK wire shape encrypts the dialer's identity so
+ *   embedders supply `undefined` and the gateway fails closed on
+ *   `closed`-policy relay registrations. Test code injects a
+ *   trivial extractor to exercise the allowlist-hit / allowlist-miss
+ *   branches; a future Noise variant that carries a cleartext
+ *   caller hint supplies a real adapter without touching the
+ *   handler itself.
  */
 
 /**
@@ -310,10 +344,19 @@ const prependFrame = (firstFrame, tail) => {
  */
 export const makeOcapnWebSocketHandler = ({
   lookupRegistrationByPublicKey,
+  extractDialerPublicKey,
 }) => {
   if (typeof lookupRegistrationByPublicKey !== 'function') {
     throw makeError(
       X`makeOcapnWebSocketHandler requires a lookupRegistrationByPublicKey function`,
+    );
+  }
+  if (
+    extractDialerPublicKey !== undefined &&
+    typeof extractDialerPublicKey !== 'function'
+  ) {
+    throw makeError(
+      X`makeOcapnWebSocketHandler: extractDialerPublicKey, when supplied, must be a function`,
     );
   }
 
@@ -413,6 +456,54 @@ export const makeOcapnWebSocketHandler = ({
           );
           closeStream(stream);
           return;
+        }
+
+        // Phase 5 (Feature 6): relay-policy admission. Applies only
+        // when the matched registration is a relay registration
+        // (i.e., carries a `policy` entry). `register` (non-relay)
+        // daemon registrations are inherently authorized: the
+        // registration itself is the authorization, and the daemon
+        // is the registrant's own user-daemon. Relay registrations,
+        // by contrast, forward traffic from arbitrary peers to a
+        // third-party target, so the closed-by-default policy
+        // requires explicit caller-allowlist hits before the
+        // gateway forwards.
+        //
+        // Under today's Noise IK wire shape the dialer's public key
+        // is encrypted in the first frame and not readable by a
+        // non-decrypting gateway. `extractDialerPublicKey` defaults
+        // to `undefined`, which the admission predicate maps to
+        // "deny under closed policy". A future Noise variant or
+        // pre-handshake protocol extension that carries a cleartext
+        // caller-identity hint plugs in here without changing the
+        // handler's structure. See `./relay-policy.js` § Caller-
+        // identification under Noise IK.
+        if (registration.policy !== undefined) {
+          /** @type {ArrayBuffer | Uint8Array | undefined} */
+          let dialerPublicKey;
+          if (extractDialerPublicKey !== undefined) {
+            try {
+              dialerPublicKey = extractDialerPublicKey(firstFrame);
+            } catch (e) {
+              console.error(
+                `[Gateway] extractDialerPublicKey threw for ${publicKeyToHex(intendedResponder)}:`,
+                /** @type {Error} */ (e).message,
+              );
+              closeStream(stream);
+              return;
+            }
+          }
+          const admission = isInboundSessionAllowed({
+            policy: registration.policy,
+            dialerPublicKey,
+          });
+          if (!admission.allowed) {
+            console.error(
+              `[Gateway] inbound relay session denied for ${publicKeyToHex(intendedResponder)}: ${admission.reason}`,
+            );
+            closeStream(stream);
+            return;
+          }
         }
 
         // Replay the first frame to the downstream Noise responder
