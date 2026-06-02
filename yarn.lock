@@ -3016,6 +3016,23 @@ __metadata:
   languageName: unknown
   linkType: soft
 
+"@endo/registry-capability@workspace:packages/registry-capability":
+  version: 0.0.0-use.local
+  resolution: "@endo/registry-capability@workspace:packages/registry-capability"
+  dependencies:
+    "@endo/errors": "workspace:^"
+    "@endo/exo": "workspace:^"
+    "@endo/far": "workspace:^"
+    "@endo/init": "workspace:^"
+    "@endo/patterns": "workspace:^"
+    "@endo/ses-ava": "workspace:^"
+    ava: "catalog:dev"
+    c8: "catalog:dev"
+    eslint: "catalog:dev"
+    typescript: "catalog:dev"
+  languageName: unknown
+  linkType: soft
+
 "@endo/relay-server@workspace:^, @endo/relay-server@workspace:packages/relay-server":
   version: 0.0.0-use.local
   resolution: "@endo/relay-server@workspace:packages/relay-server"
