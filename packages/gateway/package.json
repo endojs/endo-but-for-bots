@@ -36,6 +36,7 @@
     "./src/proof-of-possession.js": "./src/proof-of-possession.js",
     "./src/sock-paths.js": "./src/sock-paths.js",
     "./src/node-crypto-powers.js": "./src/node-crypto-powers.js",
+    "./src/ocapn-ws.js": "./src/ocapn-ws.js",
     "./package.json": "./package.json"
   },
   "scripts": {
@@ -57,7 +58,8 @@
     "@endo/far": "workspace:^",
     "@endo/hex": "workspace:^",
     "@endo/patterns": "workspace:^",
-    "@endo/promise-kit": "workspace:^"
+    "@endo/promise-kit": "workspace:^",
+    "@endo/stream": "workspace:^"
   },
   "devDependencies": {
     "@endo/init": "workspace:^",
