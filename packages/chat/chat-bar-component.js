@@ -1730,6 +1730,9 @@ export const chatBarComponent = (
     getReplyType: sendForm.getReplyType,
     setText: sendForm.setText,
     focus: sendForm.focus,
+    // Open a command form pre-filled with field values; used by deep-link
+    // peer invitations to launch the Accept form with the locator filled in.
+    enterCommandMode,
     dispose: sendForm.dispose,
   };
 };

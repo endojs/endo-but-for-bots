@@ -26,6 +26,7 @@ import { whereEndoState } from '@endo/where';
 import { makeDaemonManager } from './src/daemon-manager.js';
 import { resourcePaths } from './src/resource-paths.js';
 import { makeLogger } from './src/logger.js';
+import { parseInviteUrl, findInviteUrlInArgv } from './src/deep-link.js';
 import {
   registerLocalhttpScheme,
   installLocalhttpHandler,
@@ -60,6 +61,103 @@ registerLocalhttpScheme();
 configureCommandLineFlags();
 
 const vitePort = 5173;
+
+/** @type {Electron.BrowserWindow | null} */
+let mainWindow = null;
+
+// --- Deep-link (endo://) peer invitations ---
+// (designs/familiar-deep-link-invitations.md)
+
+/** @type {import('./src/deep-link.js').ParsedInvite[]} */
+let pendingInvites = [];
+// Set once the renderer has pulled any queued invite via the IPC handler
+// below; until then invites are queued rather than sent, closing the race
+// where a cold-start invite is emitted before the page registers its
+// listener.
+let rendererReady = false;
+
+/**
+ * Deliver a parsed invite to the renderer, or queue it until the renderer is
+ * ready (cold start, pre-`app.whenReady`, or before the window finishes
+ * loading).
+ *
+ * @param {import('./src/deep-link.js').ParsedInvite} parsed
+ */
+const deliverInvite = parsed => {
+  if (rendererReady && mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('familiar:deep-link-invite', parsed);
+  } else {
+    // Queue rather than overwrite: several links may arrive before the
+    // renderer pulls (cold start, reload), and none should be dropped.
+    pendingInvites.push(parsed);
+  }
+};
+
+/**
+ * Parse and route an `endo://` URL handed to us by the OS. Unrecognised
+ * links are logged and dropped; authoritative validation happens daemon-side
+ * when the renderer calls `host.accept`.
+ *
+ * @param {string} url
+ */
+const handleInviteUrl = url => {
+  const parsed = parseInviteUrl(url);
+  if (parsed) {
+    logger.log(
+      `[Familiar] Received deep-link invite from ${parsed.fingerprint}`,
+    );
+    deliverInvite(parsed);
+  } else {
+    // Strip query/fragment before logging: an unrecognised link is arbitrary
+    // and its query string could carry secrets. Log only scheme + path.
+    const scrubbed = String(url).split(/[?#]/)[0];
+    logger.warn(
+      `[Familiar] Ignoring unrecognised deep link: ${scrubbed.slice(0, 64)}`,
+    );
+  }
+};
+
+// Register endo:// as this app's protocol client. In dev the app runs from
+// the electron binary, so the entry script must be passed explicitly.
+if (process.defaultApp) {
+  if (process.argv.length >= 2) {
+    app.setAsDefaultProtocolClient('endo', process.execPath, [
+      path.resolve(process.argv[1]),
+    ]);
+  }
+} else {
+  app.setAsDefaultProtocolClient('endo');
+}
+
+// Single-instance: a second launch (e.g. the OS handing us an endo:// URL on
+// Windows/Linux) routes its argv to the already-running instance instead of
+// starting a second daemon-bearing process.
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
+if (!gotSingleInstanceLock) {
+  app.quit();
+} else {
+  app.on('second-instance', (_event, argv) => {
+    const url = findInviteUrlInArgv(argv);
+    if (url) {
+      handleInviteUrl(url);
+    }
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      if (mainWindow.isMinimized()) {
+        mainWindow.restore();
+      }
+      mainWindow.focus();
+    }
+  });
+}
+
+// macOS delivers deep links via open-url, which can fire before the app is
+// ready or the window exists; deliverInvite queues until the renderer pulls.
+// preventDefault() suppresses the OS default handling, per Electron's docs
+// for a registered protocol client.
+app.on('open-url', (event, url) => {
+  event.preventDefault();
+  handleInviteUrl(url);
+});
 
 /** @type {string | undefined} */
 let gatewayAddress;
@@ -176,6 +274,13 @@ const createWindow = () => {
   // Install navigation guard
   installNavigationGuard(win, { isDevMode, vitePort });
 
+  // Each (re)load — initial, restart, or purge — starts a fresh renderer that
+  // has not yet pulled queued invites. Drop ready until it pulls again, so an
+  // invite arriving mid-reload is queued rather than sent into a dead page.
+  win.webContents.on('did-start-loading', () => {
+    rendererReady = false;
+  });
+
   return win;
 };
 
@@ -280,22 +385,41 @@ const main = async () => {
   installLocalhttpHandler(gatewayPort);
   installExfiltrationDefenses();
 
-  // Step 4: Create the window
-  /** @type {Electron.BrowserWindow | null} */
-  let mainWindow = createWindow();
-
-  // Step 5: Build menu
-  buildMenu(
-    () => handleRestartDaemon(mainWindow),
-    () => handlePurgeDaemon(mainWindow),
-  );
-
-  // Step 6: Register IPC handlers
+  // Step 4: Register IPC handlers BEFORE creating the window. `createWindow`
+  // starts loading the renderer, which calls `get-pending-invite` on init; if
+  // that invoke reaches main before the handler is registered it rejects, and
+  // the renderer (which swallows the rejection) silently drops a cold-start
+  // invite. Registering first closes that race. The handler closures read
+  // `mainWindow` lazily, so registering before it is assigned is safe.
   ipcMain.handle('familiar:restart-daemon', () =>
     handleRestartDaemon(mainWindow),
   );
   ipcMain.handle('familiar:purge-daemon', () => handlePurgeDaemon(mainWindow));
   ipcMain.handle('familiar:get-version', () => app.getVersion());
+  // The renderer pulls any invite queued before it was listening, and by
+  // doing so marks itself ready for live delivery of subsequent invites.
+  ipcMain.handle('familiar:get-pending-invite', () => {
+    rendererReady = true;
+    const invites = pendingInvites;
+    pendingInvites = [];
+    return invites;
+  });
+
+  // Step 5: Create the window
+  mainWindow = createWindow();
+
+  // A deep link may have arrived on the command line (Windows/Linux cold
+  // start). Queue it; the renderer pulls it via get-pending-invite on init.
+  const coldStartInvite = findInviteUrlInArgv(process.argv);
+  if (coldStartInvite) {
+    handleInviteUrl(coldStartInvite);
+  }
+
+  // Step 6: Build menu
+  buildMenu(
+    () => handleRestartDaemon(mainWindow),
+    () => handlePurgeDaemon(mainWindow),
+  );
 
   // Step 7: Verify exfiltration defenses and notify renderer
   const warnings = await verifyExfiltrationDefenses();
@@ -323,7 +447,12 @@ const main = async () => {
   // Daemon continues running after quit; nothing to clean up.
 };
 
-main().catch(error => {
-  logger.error('[Familiar] Fatal error:', error);
-  process.exit(1);
-});
+// Only the instance that holds the single-instance lock boots the app; a
+// second launch has already forwarded its argv via 'second-instance' above
+// and is quitting.
+if (gotSingleInstanceLock) {
+  main().catch(error => {
+    logger.error('[Familiar] Fatal error:', error);
+    process.exit(1);
+  });
+}

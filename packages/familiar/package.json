@@ -32,6 +32,7 @@
     "step:prepare": "node scripts/prepare-package.mjs",
     "step:package": "node scripts/package-app.mjs",
     "step:make": "node scripts/make-distributables.mjs",
+    "test": "node --test",
     "lint": "yarn lint:types && yarn lint:eslint",
     "lint-fix": "yarn lint:eslint --fix && yarn lint:types",
     "lint:eslint": "eslint --ignore-pattern out '**/*.js'",
