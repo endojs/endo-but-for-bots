@@ -125,13 +125,17 @@ async function* harvestTree(dir, prefix) {
  *
  * @param {any} sourceRoot  the `Directory` cap at the root of the tree to
  *   clone (e.g. `await E(filesystem).root()` or any sub-`Directory`)
- * @param {{ buffer?: number }} [options]  `buffer` is the exo-stream
- *   pre-ack depth (frames the producer sends ahead of consumer demand);
- *   raise it over a high-latency link.
+ * @param {{ buffer?: number }} [options]  `buffer` is the exo-stream pre-ack
+ *   depth: the producer streams up to this many frames ahead of consumer
+ *   demand, so a drain costs about `frameCount / buffer` synchronization
+ *   round-trips rather than one ack per frame (a large file fans out into
+ *   many `chunk` frames). Defaults to 64; set 0 for strict per-frame
+ *   backpressure, or higher to trade more in-flight frames (memory) for
+ *   fewer round-trips on a high-latency link.
  * @returns {any}  a `PassableReader` cap over `CloneFrame`s
  */
 export const streamTree = (sourceRoot, options = {}) => {
-  const { buffer = 0 } = options;
+  const { buffer = 64 } = options;
   return readerFromIterator(harvestTree(sourceRoot, harden([])), {
     buffer,
     readPattern: CloneFrameShape,
