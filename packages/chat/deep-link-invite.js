@@ -3,7 +3,7 @@
  * Route `endo://` deep-link peer invitations into the Accept command form
  * (designs/familiar-deep-link-invitations.md).
  *
- * When the Familiar shell captures an `endo://...&type=invitation` link, it
+ * When the Familiar shell captures an `endo://invite?...` deep link, it
  * forwards the parsed invite to this renderer over the preload bridge
  * (`window.familiar`). Rather than invent a bespoke dialog, we open the
  * existing `accept` command pre-filled with the locator: the command form is

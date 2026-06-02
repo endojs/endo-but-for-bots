@@ -21,8 +21,11 @@ contextBridge.exposeInMainWorld(
         callback(warnings),
       ),
     // endo:// deep-link peer invitations
-    // (designs/familiar-deep-link-invitations.md). The renderer pulls any
-    // invite queued before it was listening, then subscribes for live ones.
+    // (designs/familiar-deep-link-invitations.md). The renderer subscribes for
+    // live invites first (`onDeepLinkInvite`), then pulls any queued before it
+    // was listening (`getPendingDeepLinkInvite`); subscribing first closes the
+    // cold-start race where an invite arrives between the pull and the
+    // subscription.
     getPendingDeepLinkInvite: () =>
       ipcRenderer.invoke('familiar:get-pending-invite'),
     onDeepLinkInvite: (/** @type {(invite: object) => void} */ callback) =>

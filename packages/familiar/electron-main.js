@@ -385,23 +385,12 @@ const main = async () => {
   installLocalhttpHandler(gatewayPort);
   installExfiltrationDefenses();
 
-  // Step 4: Create the window
-  mainWindow = createWindow();
-
-  // A deep link may have arrived on the command line (Windows/Linux cold
-  // start). Queue it; the renderer pulls it via get-pending-invite on init.
-  const coldStartInvite = findInviteUrlInArgv(process.argv);
-  if (coldStartInvite) {
-    handleInviteUrl(coldStartInvite);
-  }
-
-  // Step 5: Build menu
-  buildMenu(
-    () => handleRestartDaemon(mainWindow),
-    () => handlePurgeDaemon(mainWindow),
-  );
-
-  // Step 6: Register IPC handlers
+  // Step 4: Register IPC handlers BEFORE creating the window. `createWindow`
+  // starts loading the renderer, which calls `get-pending-invite` on init; if
+  // that invoke reaches main before the handler is registered it rejects, and
+  // the renderer (which swallows the rejection) silently drops a cold-start
+  // invite. Registering first closes that race. The handler closures read
+  // `mainWindow` lazily, so registering before it is assigned is safe.
   ipcMain.handle('familiar:restart-daemon', () =>
     handleRestartDaemon(mainWindow),
   );
@@ -415,6 +404,22 @@ const main = async () => {
     pendingInvites = [];
     return invites;
   });
+
+  // Step 5: Create the window
+  mainWindow = createWindow();
+
+  // A deep link may have arrived on the command line (Windows/Linux cold
+  // start). Queue it; the renderer pulls it via get-pending-invite on init.
+  const coldStartInvite = findInviteUrlInArgv(process.argv);
+  if (coldStartInvite) {
+    handleInviteUrl(coldStartInvite);
+  }
+
+  // Step 6: Build menu
+  buildMenu(
+    () => handleRestartDaemon(mainWindow),
+    () => handlePurgeDaemon(mainWindow),
+  );
 
   // Step 7: Verify exfiltration defenses and notify renderer
   const warnings = await verifyExfiltrationDefenses();

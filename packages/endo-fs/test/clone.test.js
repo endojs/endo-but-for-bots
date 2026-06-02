@@ -146,6 +146,26 @@ test('cloneTree reproduces the full tree and its bytes', async t => {
   t.is(top.get('empty.txt'), 'file');
 });
 
+test('cloneTree into a non-empty destination overwrites without stale tail bytes', async t => {
+  const { root: source } = await buildSource();
+
+  const destFs = makeInMemoryFilesystem();
+  const dest = await E(destFs).root();
+  // Pre-populate the destination with a file that is LONGER than the source's
+  // version. A pwrite-only overwrite would leave the old tail behind.
+  await putFile(
+    dest,
+    'readme.txt',
+    utf8('PRE-EXISTING CONTENT THAT IS LONGER THAN THE SOURCE AND MUST GO\n'),
+  );
+
+  const stats = await cloneTree(source, dest);
+  t.is(stats.files, 4);
+
+  // The clobbered file must equal the source exactly — no leftover tail.
+  t.is(fromUtf8(await readFileAt(dest, ['readme.txt'])), 'top level\n');
+});
+
 test('cloneTree of a sub-directory clones only that subtree', async t => {
   const { root: source } = await buildSource();
   const src = await E(source).lookup('src');

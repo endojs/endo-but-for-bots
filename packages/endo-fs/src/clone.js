@@ -184,7 +184,13 @@ export const writeTreeStream = async (destRoot, reader) => {
   let writer;
 
   try {
-    for await (const frame of iterateReader(reader)) {
+    // Validate frames on the consumer side too. `writeTreeStream` drains an
+    // arbitrary reader (possibly remote/untrusted), so enforce the frame shape
+    // at the stream boundary rather than failing deep in a switch case — or
+    // worse, feeding a non-string into `decodeBase64`.
+    for await (const frame of iterateReader(reader, {
+      readPattern: CloneFrameShape,
+    })) {
       switch (frame.kind) {
         case 'dir': {
           !writer || Fail`clone stream: dir frame while a file is open`;
@@ -196,7 +202,12 @@ export const writeTreeStream = async (destRoot, reader) => {
         case 'file': {
           !writer || Fail`clone stream: nested file frame`;
           const { parent, name } = await resolveParent(destRoot, frame.path);
-          openFile = await E(parent).create(name, {});
+          // Truncate: a clone overwrites the destination wholesale, so an
+          // existing longer file at this path must be shortened. `create`
+          // truncates only with this flag, and `OpenFile.write` is pwrite
+          // (no tail truncate), so without it a re-clone into a non-empty
+          // destination would leave stale trailing bytes.
+          openFile = await E(parent).create(name, { truncate: true });
           writer = iterateBytesWriter(await E(openFile).write(0n));
           files += 1;
           break;
