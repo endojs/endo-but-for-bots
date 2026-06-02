@@ -57,6 +57,7 @@
 import { makeError, q, X } from '@endo/errors';
 import { bytesToImmutable } from '@endo/bytes/to-immutable.js';
 import { bytesFromImmutable } from '@endo/bytes/from-immutable.js';
+import { encodeHex } from '@endo/hex';
 
 /**
  * The domain-separation literal hashed into every challenge nonce.
@@ -178,22 +179,6 @@ export const hashNonceForSigning = (nonce, crypto) => {
 harden(hashNonceForSigning);
 
 /**
- * Render a `Uint8Array`-shaped view as lowercase hex. Internal: the
- * nonce registry keys by hex so two byte-equal buffers (one from
- * the wire, one we kept) hit the same Map entry.
- *
- * @param {Uint8Array} bytes
- * @returns {string}
- */
-const toHex = bytes => {
-  let hex = '';
-  for (let i = 0; i < bytes.length; i += 1) {
-    hex += bytes[i].toString(16).padStart(2, '0');
-  }
-  return hex;
-};
-
-/**
  * Compare two byte-shaped inputs in constant time. Returns `true`
  * iff they have the same length and the same bytes. Accepts
  * immutable `ArrayBuffer` or `Uint8Array`.
@@ -288,10 +273,17 @@ export const makeNonceRegistry = ({
    */
   const sweep = () => {
     const now = clock.now();
+    // Entries are inserted with monotonically increasing
+    // `expiresAt` (a constant ttlMs added to a monotonically
+    // increasing `clock.now()`), and `Map` preserves insertion
+    // order, so the first entry whose `expiresAt > now` proves
+    // every later entry is also unexpired; break to skip the
+    // tail.
     for (const [key, expiresAt] of pending) {
-      if (expiresAt <= now) {
-        pending.delete(key);
+      if (expiresAt > now) {
+        break;
       }
+      pending.delete(key);
     }
   };
 
@@ -308,7 +300,7 @@ export const makeNonceRegistry = ({
       const hashedNonce = hashNonceForSigning(nonceView, crypto);
       const issuedAt = clock.now();
       const expiresAt = issuedAt + ttlMs;
-      pending.set(toHex(asUint8(hashedNonce)), expiresAt);
+      pending.set(encodeHex(asUint8(hashedNonce)), expiresAt);
       // Return immutable buffers so the caller can pass the result
       // straight back across the wire.
       const nonceOut =
@@ -353,7 +345,7 @@ export const makeNonceRegistry = ({
       // a wrong-length nonce, this throws before we reach the
       // expiration check, which is the right precedence.
       const hashedNonce = hashNonceForSigning(nonce, crypto);
-      const key = toHex(asUint8(hashedNonce));
+      const key = encodeHex(asUint8(hashedNonce));
       const expiresAt = pending.get(key);
       if (expiresAt === undefined) {
         // Either never-issued or already-consumed; both are
