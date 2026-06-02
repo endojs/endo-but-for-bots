@@ -26,6 +26,7 @@ import {
   bindAddressFromEnv,
 } from './src/config.js';
 import { makeAppsNameHub } from './src/vhost.js';
+import { makeFormulaBackedAppsNameHub } from './src/apps-formula.js';
 import { makeGatewayBootstrap } from './src/bootstrap.js';
 import { makeGatewayAdmin } from './src/admin.js';
 import { makeOcapnWebSocketHandler } from './src/ocapn-ws.js';
@@ -41,6 +42,11 @@ export {
 } from './src/config.js';
 
 export { normalizeVirtualHostName, makeAppsNameHub } from './src/vhost.js';
+
+export {
+  validateWebletFormula,
+  makeFormulaBackedAppsNameHub,
+} from './src/apps-formula.js';
 
 export {
   NONCE_DOMAIN_SEPARATION_PREFIX,
@@ -104,6 +110,10 @@ export {
  *   FeatureToggles,
  *   BindAddress,
  *   AppsNameHub,
+ *   AppsFormulaStore,
+ *   FormulaBackedAppsNameHub,
+ *   WebletFormula,
+ *   WebletBindingRecord,
  *   GatewayBootstrap,
  *   GatewayAdmin,
  *   ResourceLedger,
@@ -153,7 +163,19 @@ export const makeGateway = ({ powers = {}, config: configIn = {} } = {}) => {
   let lifecycle = 'unstarted';
   /** @type {BindAddress} */
   const resolvedBind = parseBindAddress(mergedConfig.bindAddress);
-  const apps = makeAppsNameHub();
+  // Feature 2 hub selection. When the embedder supplies a
+  // formula-store power, the gateway uses the formula-backed hub
+  // and persists bindings through it; otherwise it falls back to
+  // the in-memory phase-1 hub. The two surfaces are
+  // exchange-compatible at the AppsNameHub interface; only the
+  // formula-backed variant exposes `whenReady`. Per
+  // `designs/gateway-package.md` § Feature 2 the daemon's
+  // formula-graph wraps the store; the gateway treats the store as
+  // opaque persistence.
+  const apps =
+    powers.appsFormulaStore !== undefined
+      ? makeFormulaBackedAppsNameHub({ formulaStore: powers.appsFormulaStore })
+      : makeAppsNameHub();
 
   const renderBindAddress = () =>
     `${resolvedBind.kind === 'ipv6' ? `[${resolvedBind.host}]` : resolvedBind.host}:${resolvedBind.port}`;
@@ -287,6 +309,16 @@ export const makeGateway = ({ powers = {}, config: configIn = {} } = {}) => {
           throw makeError(X`Gateway has been stopped and cannot restart`);
         }
         lifecycle = 'starting';
+        // Feature 2: when the embedder supplied a formula-backed
+        // apps hub, await its hydration before declaring the
+        // gateway started. The hub's exo methods would await on
+        // their own anyway, but surfacing a hydration failure at
+        // `start()` is the fail-closed posture from
+        // `designs/gateway-package.md` § Feature 2: a broken store
+        // is a startup error, not a silent degrade to in-memory.
+        if (powers.appsFormulaStore !== undefined) {
+          await /** @type {FormulaBackedAppsNameHub} */ (apps).whenReady();
+        }
         // The phase-1 skeleton has no network surface; later
         // phases attach the HTTP listener, the WebSocket server,
         // the sock bootstrap listener, and the OCapN relay here.
