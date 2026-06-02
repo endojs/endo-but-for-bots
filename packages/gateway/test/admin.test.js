@@ -57,6 +57,10 @@ const standGateway = (opts = {}) =>
       crypto: makeNodeCryptoPowers(),
       clock: makeFakeClock(),
       resourceLedger: opts.resourceLedger,
+      // gitHttp is on by default and requires the resolveRepo
+      // adapter; admin tests don't exercise the Git path so they
+      // supply a 401-everything stub.
+      resolveRepo: async () => undefined,
     }),
     config: opts.config,
   });
@@ -418,7 +422,10 @@ test('Gateway getAdmin works when sockBootstrap is disabled', async t => {
   // The OCapN-WS handler (Feature 8) still requires the bootstrap
   // table for its lookups, so the disable-bootstrap shape also
   // disables `ocapnWebSocket`; the admin's standalone behavior is
-  // independent of both.
+  // independent of both. The Git smart-HTTP handler (Feature 3)
+  // is an independent powers axis (it needs `resolveRepo`); this
+  // shape disables it so the test stays focused on the admin
+  // facet's bootstrap-independence rather than the Git surface.
   const g = makeGateway({
     powers: { crypto: makeNodeCryptoPowers(), clock: makeFakeClock() },
     config: {
@@ -426,6 +433,7 @@ test('Gateway getAdmin works when sockBootstrap is disabled', async t => {
         ...defaultFeatureToggles,
         sockBootstrap: false,
         ocapnWebSocket: false,
+        gitHttp: false,
       },
     },
   });
