@@ -338,6 +338,10 @@ const publicKeyToHex = bytes => {
  *     daemon?: unknown,
  *   }>,
  *   deregisterByPublicKey: (publicKey: ArrayBuffer | Uint8Array) => boolean,
+ *   lookupRegistrationByPublicKey: (publicKey: ArrayBuffer | Uint8Array) => {
+ *     daemon?: unknown,
+ *     relayTarget?: unknown,
+ *   } | undefined,
  *   pendingNonces: () => number,
  * }}
  */
@@ -595,6 +599,33 @@ export const makeGatewayBootstrap = ({
     return true;
   };
 
+  /**
+   * Look up the registration that owns `publicKey` and return a
+   * snapshot of its forwarding targets. Returns `undefined` when no
+   * live registration claims the key. Used by the Feature 8 OCapN
+   * WebSocket handler to find the right `daemon` or `relayTarget`
+   * exo for an incoming Noise SYN's intended-responder prefix; the
+   * gateway then forwards frames to that exo without inspecting the
+   * Noise payload. Not part of the CapTP bootstrap exo surface (an
+   * arbitrary peer must not be able to enumerate the registration
+   * table); the gateway proper holds the function and shares it only
+   * with its own subsystems.
+   *
+   * @param {ArrayBuffer | Uint8Array} publicKey
+   * @returns {{ daemon?: unknown, relayTarget?: unknown } | undefined}
+   */
+  const lookupRegistrationByPublicKey = publicKey => {
+    const hex = publicKeyToHex(publicKey);
+    const entry = registrationsByKey.get(hex);
+    if (entry === undefined || entry.deregistered) {
+      return undefined;
+    }
+    return harden({
+      daemon: entry.daemon,
+      relayTarget: /** @type {any} */ (entry).relayTarget,
+    });
+  };
+
   const bootstrapAsType = /** @type {GatewayBootstrap} */ (
     /** @type {unknown} */ (bootstrap)
   );
@@ -603,6 +634,7 @@ export const makeGatewayBootstrap = ({
     bootstrap: bootstrapAsType,
     listRegisteredPeers,
     deregisterByPublicKey,
+    lookupRegistrationByPublicKey,
     pendingNonces: () => nonces.size(),
   });
 };

@@ -181,6 +181,10 @@ test('Gateway getBootstrap throws when sockBootstrap is off', async t => {
         sockBootstrap: false,
         adminDaemon: false,
         captpRelay: false,
+        // ocapnWebSocket depends on sockBootstrap (per the Phase 4
+        // dependency check); turn it off too so the validator
+        // accepts the sockBootstrap=false configuration.
+        ocapnWebSocket: false,
       },
     },
   });
