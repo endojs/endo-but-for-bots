@@ -241,7 +241,7 @@ test('registerRelay stores the relay target in the entry', async t => {
     signature: kp.sign(issued.hashedNonce),
     relayTarget: fakeTarget,
   });
-  const entries = handle.listRegistrations();
+  const entries = handle.listRegisteredPeers();
   t.is(entries.length, 1);
   t.is(entries[0].relayTarget, fakeTarget);
 });
@@ -460,7 +460,7 @@ test('getApps returns the shared AppsNameHub', async t => {
   t.is(await E(apps).lookup('chat.example.com'), 'weblet-id-abc');
 });
 
-test('listRegistrations omits deregistered entries', async t => {
+test('listRegisteredPeers omits deregistered entries', async t => {
   const { handle } = stand();
   const kp = await generateNodeEd25519Keypair();
   const issued = await E(handle.bootstrap).challenge();
@@ -469,9 +469,9 @@ test('listRegistrations omits deregistered entries', async t => {
     nonce: issued.nonce,
     signature: kp.sign(issued.hashedNonce),
   });
-  t.is(handle.listRegistrations().length, 1);
+  t.is(handle.listRegisteredPeers().length, 1);
   await E(r).deregister();
-  t.is(handle.listRegistrations().length, 0);
+  t.is(handle.listRegisteredPeers().length, 0);
 });
 
 test('GatewayBootstrap is a hardened exo with discoverable methods', async t => {
