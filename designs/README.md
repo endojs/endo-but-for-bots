@@ -220,7 +220,7 @@ LLM-agent stack).*
 | [hex-package](hex-package.md) | 2026-04-23 | 2026-05-18 | **Complete** |
 | [endo-bytes](endo-bytes.md) | 2026-05-08 | 2026-05-10 | Implemented |
 | [endo-gateway-mcp](endo-gateway-mcp.md) | 2026-05-29 | 2026-05-29 | Not Started |
-| [gateway-package](gateway-package.md) | 2026-05-22 | 2026-05-29 | Proposed (absorbs the removed endo-gateway design) |
+| [gateway-package](gateway-package.md) | 2026-05-22 | 2026-06-02 | Proposed (absorbs the removed endo-gateway design) |
 | [unhandled-rejection-display](unhandled-rejection-display.md) | 2026-05-10 | 2026-05-18 | **Complete** |
 | [weblet-next](weblet-next.md) | 2026-03-24 | 2026-03-24 | Reference |
 | [workers-panel](workers-panel.md) | 2026-02-14 | 2026-02-24 | Not Started |
