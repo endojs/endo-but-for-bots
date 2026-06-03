@@ -507,6 +507,7 @@ test('getOcapnHandler throws when the feature toggle is off', async t => {
         captpRelay: false,
         adminDaemon: true,
         ocapnWebSocket: false,
+        httpListener: false,
       }),
     }),
   });
@@ -534,6 +535,7 @@ test('mergeGatewayConfig rejects ocapnWebSocket without sockBootstrap', t => {
             captpRelay: false,
             adminDaemon: false,
             ocapnWebSocket: true,
+            httpListener: false,
           }),
         }),
       }),
