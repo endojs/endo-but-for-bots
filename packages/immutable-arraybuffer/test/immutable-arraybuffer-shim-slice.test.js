@@ -96,8 +96,8 @@ test('Standard TypedArray behavior baseline', t => {
   ta1[1] = 4;
   t.is(ta1.byteLength, 2);
 
-  // Unfortutanely, calling a TypeArray constructor with an object that
-  // is not a TypeArray, ArrayBuffer, or Iterable just creates a useless
+  // Unfortunately, calling a TypedArray constructor with an object that
+  // is not a TypedArray, ArrayBuffer, or Iterable just creates a useless
   // empty TypedArray, rather than throwing.
   // @ts-expect-error testing purposeful type violation
   const ta2 = new Uint8Array({});
@@ -206,7 +206,7 @@ test('sliceToImmutable shim', t => {
   t.deepEqual([...ta3], [5]);
 });
 
-test('(TypedArray|Buffer).(slice|subArray) baseline', t => {
+test('(TypedArray|Buffer).(slice|subarray) baseline', t => {
   const ab = new ArrayBuffer(2);
 
   const ta = new Uint8Array(ab);
@@ -235,7 +235,7 @@ test('(TypedArray|Buffer).(slice|subArray) baseline', t => {
 });
 
 test.failing(
-  '(TypedArray|Buffer).(slice|subArray) on freezable TypeArray',
+  '(TypedArray|Buffer).(slice|subarray) on freezable TypedArray',
   t => {
     const ab = new ArrayBuffer(2);
     const iab = ab.sliceToImmutable();
