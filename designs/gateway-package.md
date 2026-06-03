@@ -629,11 +629,65 @@ formula-graph GC with git GC: dropping a formula deletes its ref,
 and the next `git gc` collects the orphan objects.
 A first-iteration Node implementation may shell out to `git`; a
 later iteration may borrow @0xpatrickdev's Node Git library.
-The Rust implementation can bind libgit2.
+The Rust implementation binds **libgit2** via the `git2` crate, as
+ratified by the maintainer on the daemon-side spike (PR #369,
+`designs/daemon-git-backbone.md` § Status, 2026-05-29).
+The `gix` (gitoxide) alternative was considered and ruled against:
+libgit2 is vendored (bundled C, no system dependency), and the
+`endor` crate already links bundled C for the XS worker and
+rusqlite, so the no-C rationale for `gix` was moot.
 The gateway holds the underlying CAS implementation and vends it
 out to the HTTP server.
-We use the SHA-256 Git variant rather than SHA-1.
-See PR #394 review (2026-05-29) for the maintainer's framing.
+
+**Content key.** Endo's content identity is **sha256** (locked);
+git's internal object database runs in its **default SHA-1 object
+format** behind a persistent `sha256 -> git-oid` index, per the
+spike's Open Question 2 recommendation that the maintainer
+ratified.
+This decouples the locked decision (sha256 identity for every
+Endo formula, `cas-*` verb, and cross-peer reference) from the
+immature one (git's experimental SHA-256 object mode, whose
+library coverage trails its SHA-1 coverage, including in the
+ratified `git2` crate).
+A later transparent adoption of git's SHA-256 object format
+remains possible because the Endo-facing key never changes.
+
+**Retention is reachability-driven.** `refs/formulas/<formula-id>`
+is the durable live-set substrate: `cas-retain` writes the ref
+through libgit2's ref-lock discipline (lock-file + atomic
+rename), `cas-release` deletes it, and GC reduces to git's own
+reachability sweep over the ref set.
+libgit2 itself ships no `git gc` porcelain, so the daemon-side
+implementation drives the sweep in-process (mark from the ref
+set, sweep loose objects directly via the standard
+`objects/<oid[0:2]>/<oid[2:]>` layout); no subprocess.
+The supervisor's link to **formula liveness** is the new wire
+that makes this work: the formula graph (held in the JS daemon's
+SQLite, `packages/daemon/src/daemon-database.js`) must be
+mirrored into `refs/formulas/<formula-id>` so git's reachability
+agrees with the formula graph on the live set.
+The spike notes (and defers as Open Question 3) the atomic write
+order between the SQLite transaction and `update-ref`; the
+gateway's side of the contract is that `serveRepo(token)` resolves
+to a capability scoped to whatever ref the daemon currently
+publishes for that formula.
+
+**Bulk transport off CapTP.** The gateway's smart-HTTP endpoint is
+the remote/HTTP carrier for the spike's **axis 3** (bulk transport
+off the CapTP data plane): pack-format bytes ride the smart-HTTP
+wire from a remote peer to the daemon's one Git object store, and
+back, rather than being encoded one object per CapTP turn.
+The control plane (capability handshakes, eventual sends,
+retention subscriptions) stays on CapTP.
+The same composition holds for local cross-process reads through
+the supervisor-owned object DB: only the bulk *bytes* leave the
+capability envelopes; the *capability* itself, scoped by the
+bearer-resolved formula ref, is the CapTP control surface.
+
+See PR #394 review (2026-05-29) for the maintainer's framing and
+PR #369 (`designs/daemon-git-backbone.md`) for the
+daemon-side substrate spike whose discoveries are folded into the
+paragraphs above.
 
 **Open question:** the rotation story for formula-identifier
 bearer tokens.
