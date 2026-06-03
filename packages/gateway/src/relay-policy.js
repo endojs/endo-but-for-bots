@@ -52,10 +52,13 @@
  * say "only these specific peers may dial my relay target." We
  * preserve the data structure for the future-facing case and
  * document the today-facing gap rather than silently flattening.
+ *
+ * Byte fields are `Uint8Array` per the kriskowal directive on PR #393.
  */
 
 import { makeError, q, X } from '@endo/errors';
-import { bytesFromImmutable } from '@endo/bytes/from-immutable.js';
+
+/** @import { RelayPolicy, RelayPolicyEntry, RelayAdmissionInput, RelayAdmissionResult } from './types.js' */
 
 /**
  * Default policy applied to `registerRelay` entries that do not
@@ -81,45 +84,6 @@ harden(DEFAULT_RELAY_POLICY);
 export const RELAY_POLICIES = harden(['closed', 'open']);
 
 /**
- * @typedef {'closed' | 'open'} RelayPolicy The two recognized policy
- *   values. `'closed'` requires the dialer's public key to be in
- *   the registration's allowlist before the gateway forwards the
- *   session; `'open'` accepts any dialer that the gateway's outer
- *   filters (rate limits, CIDR allowlists) admit.
- */
-
-/**
- * @typedef {object} RelayPolicyEntry The per-registration policy
- *   record. Stored on the bootstrap's `RegistrationEntry` under a
- *   property named `policy`; the bootstrap creates one of these on
- *   `registerRelay` and updates it via the registrant-side and
- *   admin-side mutators.
- * @property {RelayPolicy} policy The current policy. Default is
- *   `'closed'` (per {@link DEFAULT_RELAY_POLICY}).
- * @property {Set<string>} callerAllowlist The set of dialer public
- *   keys (hex-encoded, lowercase, 64 chars each) currently allowed
- *   to dial this relay under the closed policy. Adding the same
- *   key twice is a no-op; removing a key that is not in the set is
- *   also a no-op. The set is empty by default; a closed-policy
- *   registration with an empty allowlist accepts no dialers.
- */
-
-/**
- * @typedef {object} RelayAdmissionInput The shape passed to
- *   {@link isInboundSessionAllowed}. The handler injects whatever
- *   it can read from the prefixed-SYN; under Noise IK today, the
- *   dialer's public key is opaque so the field is `undefined`.
- * @property {RelayPolicyEntry} policy The registration's policy
- *   record.
- * @property {ArrayBuffer | Uint8Array | undefined} dialerPublicKey
- *   The dialer's 32-byte Ed25519 public key when an
- *   `extractDialerPublicKey` adapter supplied it, `undefined`
- *   otherwise. `undefined` is the today-case under Noise IK; the
- *   adapter is the future-extension hook for a pre-handshake
- *   carrier of caller identity.
- */
-
-/**
  * Validate a `RelayPolicy` candidate. Throws on anything other than
  * `'closed'` or `'open'`. Used by the bootstrap's `registerRelay`
  * and `setRelayPolicy` validators, and by the admin facet's
@@ -142,17 +106,15 @@ harden(checkRelayPolicy);
  * Render a 32-byte Ed25519 public key as lowercase hex; matches the
  * encoding used by the bootstrap's `publicKeyToHex` so the policy
  * module's set-keying interoperates with the bootstrap's lookup
- * table. Accepts either an immutable `ArrayBuffer` (wire shape) or
- * a `Uint8Array` (internal use).
+ * table.
  *
- * @param {ArrayBuffer | Uint8Array} bytes
+ * @param {Uint8Array} bytes
  * @returns {string}
  */
 export const publicKeyToHex = bytes => {
-  const view = bytes instanceof Uint8Array ? bytes : bytesFromImmutable(bytes);
   let hex = '';
-  for (let i = 0; i < view.length; i += 1) {
-    hex += view[i].toString(16).padStart(2, '0');
+  for (let i = 0; i < bytes.length; i += 1) {
+    hex += bytes[i].toString(16).padStart(2, '0');
   }
   return hex;
 };
@@ -197,7 +159,7 @@ harden(makeRelayPolicyEntry);
  *   policy=closed, dialerPublicKey not in allowlist -> deny
  *
  * @param {RelayAdmissionInput} input
- * @returns {{ allowed: boolean, reason: string }}
+ * @returns {RelayAdmissionResult}
  */
 export const isInboundSessionAllowed = input => {
   if (input === null || typeof input !== 'object') {
@@ -217,20 +179,13 @@ export const isInboundSessionAllowed = input => {
       reason: 'closed-policy-no-dialer-identification',
     });
   }
-  if (
-    !(dialerPublicKey instanceof ArrayBuffer) &&
-    !(dialerPublicKey instanceof Uint8Array)
-  ) {
+  if (!(dialerPublicKey instanceof Uint8Array)) {
     return harden({
       allowed: false,
       reason: 'closed-policy-malformed-dialer-key',
     });
   }
-  const length =
-    dialerPublicKey instanceof Uint8Array
-      ? dialerPublicKey.length
-      : dialerPublicKey.byteLength;
-  if (length !== 32) {
+  if (dialerPublicKey.length !== 32) {
     return harden({
       allowed: false,
       reason: 'closed-policy-wrong-length-dialer-key',
@@ -250,27 +205,20 @@ harden(isInboundSessionAllowed);
  * present. Idempotent.
  *
  * @param {RelayPolicyEntry} entry
- * @param {ArrayBuffer | Uint8Array} callerPublicKey
+ * @param {Uint8Array} callerPublicKey
  * @returns {boolean}
  */
 export const addCallerPublicKey = (entry, callerPublicKey) => {
   if (entry === null || typeof entry !== 'object') {
     throw makeError(X`addCallerPublicKey expects a policy entry`);
   }
-  if (
-    !(callerPublicKey instanceof ArrayBuffer) &&
-    !(callerPublicKey instanceof Uint8Array)
-  ) {
-    throw makeError(
-      X`callerPublicKey must be an immutable ArrayBuffer or Uint8Array`,
-    );
+  if (!(callerPublicKey instanceof Uint8Array)) {
+    throw makeError(X`callerPublicKey must be a Uint8Array`);
   }
-  const length =
-    callerPublicKey instanceof Uint8Array
-      ? callerPublicKey.length
-      : callerPublicKey.byteLength;
-  if (length !== 32) {
-    throw makeError(X`callerPublicKey must be 32 bytes, got ${q(length)}`);
+  if (callerPublicKey.length !== 32) {
+    throw makeError(
+      X`callerPublicKey must be 32 bytes, got ${q(callerPublicKey.length)}`,
+    );
   }
   const hex = publicKeyToHex(callerPublicKey);
   if (entry.callerAllowlist.has(hex)) {
@@ -287,27 +235,20 @@ harden(addCallerPublicKey);
  * otherwise. Idempotent.
  *
  * @param {RelayPolicyEntry} entry
- * @param {ArrayBuffer | Uint8Array} callerPublicKey
+ * @param {Uint8Array} callerPublicKey
  * @returns {boolean}
  */
 export const removeCallerPublicKey = (entry, callerPublicKey) => {
   if (entry === null || typeof entry !== 'object') {
     throw makeError(X`removeCallerPublicKey expects a policy entry`);
   }
-  if (
-    !(callerPublicKey instanceof ArrayBuffer) &&
-    !(callerPublicKey instanceof Uint8Array)
-  ) {
-    throw makeError(
-      X`callerPublicKey must be an immutable ArrayBuffer or Uint8Array`,
-    );
+  if (!(callerPublicKey instanceof Uint8Array)) {
+    throw makeError(X`callerPublicKey must be a Uint8Array`);
   }
-  const length =
-    callerPublicKey instanceof Uint8Array
-      ? callerPublicKey.length
-      : callerPublicKey.byteLength;
-  if (length !== 32) {
-    throw makeError(X`callerPublicKey must be 32 bytes, got ${q(length)}`);
+  if (callerPublicKey.length !== 32) {
+    throw makeError(
+      X`callerPublicKey must be 32 bytes, got ${q(callerPublicKey.length)}`,
+    );
   }
   const hex = publicKeyToHex(callerPublicKey);
   if (!entry.callerAllowlist.has(hex)) {

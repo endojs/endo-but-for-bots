@@ -5,7 +5,6 @@ import '@endo/init/debug.js';
 import test from 'ava';
 
 import { E } from '@endo/far';
-import { bytesToImmutable } from '@endo/bytes/to-immutable.js';
 
 import {
   makeGatewayBootstrap,
@@ -19,16 +18,16 @@ import {
 } from '../src/node-crypto-powers.js';
 
 /**
- * Helper: build an immutable ArrayBuffer of the given length and
- * fill byte. Tests use this to construct invalid-length inputs.
+ * Helper: build a Uint8Array of the given length and fill byte.
+ * Tests use this to construct invalid-length inputs.
  *
  * @param {number} length
  * @param {number} [fill]
  */
-const immutableBytesOf = (length, fill = 0) => {
+const bytesOf = (length, fill = 0) => {
   const u = new Uint8Array(length);
   u.fill(fill);
-  return bytesToImmutable(u);
+  return u;
 };
 
 /**
@@ -105,9 +104,9 @@ test('register rejects a wrong-length publicKey', async t => {
   await t.throwsAsync(
     () =>
       E(handle.bootstrap).register({
-        publicKey: immutableBytesOf(16),
+        publicKey: bytesOf(16),
         nonce: issued.nonce,
-        signature: immutableBytesOf(ED25519_SIGNATURE_LENGTH),
+        signature: bytesOf(ED25519_SIGNATURE_LENGTH),
       }),
     { message: new RegExp(`must be ${ED25519_PUBLIC_KEY_LENGTH} bytes`) },
   );
@@ -119,9 +118,9 @@ test('register rejects a wrong-length signature', async t => {
   await t.throwsAsync(
     () =>
       E(handle.bootstrap).register({
-        publicKey: immutableBytesOf(ED25519_PUBLIC_KEY_LENGTH),
+        publicKey: bytesOf(ED25519_PUBLIC_KEY_LENGTH),
         nonce: issued.nonce,
-        signature: immutableBytesOf(16),
+        signature: bytesOf(16),
       }),
     { message: new RegExp(`must be ${ED25519_SIGNATURE_LENGTH} bytes`) },
   );
@@ -622,10 +621,10 @@ test('Registration relay-policy methods throw on a register (non-relay) registra
   await t.throwsAsync(() => E(r).getRelayPolicy(), {
     message: /not a relay registration/,
   });
-  await t.throwsAsync(() => E(r).addCallerPublicKey(immutableBytesOf(32)), {
+  await t.throwsAsync(() => E(r).addCallerPublicKey(bytesOf(32)), {
     message: /not a relay registration/,
   });
-  await t.throwsAsync(() => E(r).removeCallerPublicKey(immutableBytesOf(32)), {
+  await t.throwsAsync(() => E(r).removeCallerPublicKey(bytesOf(32)), {
     message: /not a relay registration/,
   });
   await t.throwsAsync(() => E(r).listCallerPublicKeys(), {
@@ -643,9 +642,9 @@ test('Registration.addCallerPublicKey adds a key and listCallerPublicKeys report
     signature: kp.sign(issued.hashedNonce),
     relayTarget: harden({ kind: 'relay-target' }),
   });
-  t.true(await E(r).addCallerPublicKey(immutableBytesOf(32, 0x11)));
+  t.true(await E(r).addCallerPublicKey(bytesOf(32, 0x11)));
   // Idempotent on re-add.
-  t.false(await E(r).addCallerPublicKey(immutableBytesOf(32, 0x11)));
+  t.false(await E(r).addCallerPublicKey(bytesOf(32, 0x11)));
   const list = await E(r).listCallerPublicKeys();
   t.deepEqual([...list], ['11'.repeat(32)]);
 });
@@ -660,9 +659,9 @@ test('Registration.removeCallerPublicKey removes a previously-added key', async 
     signature: kp.sign(issued.hashedNonce),
     relayTarget: harden({ kind: 'relay-target' }),
   });
-  await E(r).addCallerPublicKey(immutableBytesOf(32, 0x22));
-  t.true(await E(r).removeCallerPublicKey(immutableBytesOf(32, 0x22)));
-  t.false(await E(r).removeCallerPublicKey(immutableBytesOf(32, 0x22)));
+  await E(r).addCallerPublicKey(bytesOf(32, 0x22));
+  t.true(await E(r).removeCallerPublicKey(bytesOf(32, 0x22)));
+  t.false(await E(r).removeCallerPublicKey(bytesOf(32, 0x22)));
   const list = await E(r).listCallerPublicKeys();
   t.deepEqual([...list], []);
 });
@@ -677,10 +676,10 @@ test('Registration.relay-policy methods reject wrong-length caller keys', async 
     signature: kp.sign(issued.hashedNonce),
     relayTarget: harden({ kind: 'relay-target' }),
   });
-  await t.throwsAsync(() => E(r).addCallerPublicKey(immutableBytesOf(16)), {
+  await t.throwsAsync(() => E(r).addCallerPublicKey(bytesOf(16)), {
     message: /must be 32 bytes/,
   });
-  await t.throwsAsync(() => E(r).removeCallerPublicKey(immutableBytesOf(16)), {
+  await t.throwsAsync(() => E(r).removeCallerPublicKey(bytesOf(16)), {
     message: /must be 32 bytes/,
   });
 });
@@ -702,7 +701,7 @@ test('Registration relay-policy methods reject after deregister', async t => {
   await t.throwsAsync(() => E(r).setRelayPolicy('open'), {
     message: /has been deregistered/,
   });
-  await t.throwsAsync(() => E(r).addCallerPublicKey(immutableBytesOf(32)), {
+  await t.throwsAsync(() => E(r).addCallerPublicKey(bytesOf(32)), {
     message: /has been deregistered/,
   });
 });
@@ -754,7 +753,7 @@ test('addRelayCallerByPublicKey / removeRelayCallerByPublicKey round-trip', asyn
     signature: kp.sign(issued.hashedNonce),
     relayTarget: harden({ kind: 'relay-target' }),
   });
-  const callerKey = immutableBytesOf(32, 0x44);
+  const callerKey = bytesOf(32, 0x44);
   t.is(handle.addRelayCallerByPublicKey(kp.publicKey, callerKey), true);
   t.is(handle.addRelayCallerByPublicKey(kp.publicKey, callerKey), false);
   t.is(handle.removeRelayCallerByPublicKey(kp.publicKey, callerKey), true);
@@ -793,7 +792,7 @@ test('lookupRegistrationByPublicKey surfaces the live policy entry', async t => 
   t.truthy(result?.policy);
   t.is(result?.policy?.policy, 'closed');
   t.is(result?.policy?.callerAllowlist.size, 0);
-  handle.addRelayCallerByPublicKey(kp.publicKey, immutableBytesOf(32, 0x66));
+  handle.addRelayCallerByPublicKey(kp.publicKey, bytesOf(32, 0x66));
   t.is(result?.policy?.callerAllowlist.size, 1);
 });
 

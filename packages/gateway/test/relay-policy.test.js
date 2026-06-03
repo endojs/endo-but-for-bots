@@ -4,8 +4,6 @@ import '@endo/init/debug.js';
 
 import test from 'ava';
 
-import { bytesToImmutable } from '@endo/bytes/to-immutable.js';
-
 import {
   DEFAULT_RELAY_POLICY,
   RELAY_POLICIES,
@@ -21,15 +19,9 @@ import {
 
 /**
  * @param {number} fill
- * @returns {ArrayBuffer}
- */
-const immutableKey = fill => bytesToImmutable(new Uint8Array(32).fill(fill));
-
-/**
- * @param {number} fill
  * @returns {Uint8Array}
  */
-const mutableKey = fill => new Uint8Array(32).fill(fill);
+const bytesKey = fill => new Uint8Array(32).fill(fill);
 
 // -- Constants ----------------------------------------------------
 
@@ -91,36 +83,52 @@ test('makeRelayPolicyEntry validates the policy argument', t => {
 // -- publicKeyToHex shape parity ----------------------------------
 
 test('publicKeyToHex renders 32 bytes as 64 lowercase hex characters', t => {
-  const hex = publicKeyToHex(immutableKey(0xab));
+  const hex = publicKeyToHex(bytesKey(0xab));
   t.is(hex.length, 64);
   t.is(hex, 'ab'.repeat(32));
 });
 
-test('publicKeyToHex accepts both immutable ArrayBuffer and Uint8Array', t => {
-  const immutable = immutableKey(0xcd);
-  const mutable = mutableKey(0xcd);
-  t.is(publicKeyToHex(immutable), publicKeyToHex(mutable));
+test('publicKeyToHex produces the same hex for two byte-equal Uint8Arrays', t => {
+  // Regression: the policy keys by hex; two distinct `Uint8Array`
+  // references with the same contents must hash to the same key
+  // (the bootstrap and the policy share a hex-render so the lookup
+  // table interoperates).
+  const a = bytesKey(0xcd);
+  const b = bytesKey(0xcd);
+  t.not(a, b);
+  t.is(publicKeyToHex(a), publicKeyToHex(b));
 });
 
 // -- addCallerPublicKey -------------------------------------------
 
 test('addCallerPublicKey adds a key and returns true', t => {
   const entry = makeRelayPolicyEntry();
-  t.true(addCallerPublicKey(entry, immutableKey(1)));
+  t.true(addCallerPublicKey(entry, bytesKey(1)));
   t.is(entry.callerAllowlist.size, 1);
 });
 
 test('addCallerPublicKey is idempotent and returns false on re-add', t => {
   const entry = makeRelayPolicyEntry();
-  t.true(addCallerPublicKey(entry, immutableKey(2)));
-  t.false(addCallerPublicKey(entry, immutableKey(2)));
+  t.true(addCallerPublicKey(entry, bytesKey(2)));
+  t.false(addCallerPublicKey(entry, bytesKey(2)));
   t.is(entry.callerAllowlist.size, 1);
 });
 
 test('addCallerPublicKey rejects non-bytes', t => {
   const entry = makeRelayPolicyEntry();
   t.throws(() => addCallerPublicKey(entry, /** @type {any} */ ('not-bytes')), {
-    message: /must be an immutable ArrayBuffer or Uint8Array/,
+    message: /must be a Uint8Array/,
+  });
+});
+
+test('addCallerPublicKey rejects ArrayBuffer inputs (Uint8Array is the sole transmission unit)', t => {
+  // Regression: PR #393 review. The wire shape is `Uint8Array`
+  // exclusively; an `ArrayBuffer` (immutable or otherwise) must be
+  // rejected rather than silently re-introducing the union type.
+  const entry = makeRelayPolicyEntry();
+  const arrayBuffer = new ArrayBuffer(32);
+  t.throws(() => addCallerPublicKey(entry, /** @type {any} */ (arrayBuffer)), {
+    message: /must be a Uint8Array/,
   });
 });
 
@@ -131,27 +139,27 @@ test('addCallerPublicKey rejects wrong-length keys', t => {
   });
 });
 
-test('addCallerPublicKey treats immutable + mutable forms of the same key as equal', t => {
-  // Regression: the policy keys by hex; if the hex render diverged
-  // between the two byte shapes, this test would observe a doubled
-  // allowlist for the same logical caller.
+test('addCallerPublicKey treats two byte-equal Uint8Arrays as the same key', t => {
+  // Regression: the policy keys by hex; two distinct Uint8Array
+  // references with byte-equal contents must hash to the same key
+  // (so adding the same logical caller twice is idempotent).
   const entry = makeRelayPolicyEntry();
-  t.true(addCallerPublicKey(entry, immutableKey(7)));
-  t.false(addCallerPublicKey(entry, mutableKey(7)));
+  t.true(addCallerPublicKey(entry, bytesKey(7)));
+  t.false(addCallerPublicKey(entry, bytesKey(7)));
 });
 
 // -- removeCallerPublicKey ----------------------------------------
 
 test('removeCallerPublicKey removes a present key and returns true', t => {
   const entry = makeRelayPolicyEntry();
-  addCallerPublicKey(entry, immutableKey(3));
-  t.true(removeCallerPublicKey(entry, immutableKey(3)));
+  addCallerPublicKey(entry, bytesKey(3));
+  t.true(removeCallerPublicKey(entry, bytesKey(3)));
   t.is(entry.callerAllowlist.size, 0);
 });
 
 test('removeCallerPublicKey returns false when the key is not present', t => {
   const entry = makeRelayPolicyEntry();
-  t.false(removeCallerPublicKey(entry, immutableKey(4)));
+  t.false(removeCallerPublicKey(entry, bytesKey(4)));
 });
 
 test('removeCallerPublicKey rejects wrong-length keys', t => {
@@ -165,9 +173,9 @@ test('removeCallerPublicKey rejects wrong-length keys', t => {
 
 test('listCallerAllowlist returns a sorted snapshot of hex keys', t => {
   const entry = makeRelayPolicyEntry();
-  addCallerPublicKey(entry, immutableKey(0xff));
-  addCallerPublicKey(entry, immutableKey(0x01));
-  addCallerPublicKey(entry, immutableKey(0x80));
+  addCallerPublicKey(entry, bytesKey(0xff));
+  addCallerPublicKey(entry, bytesKey(0x01));
+  addCallerPublicKey(entry, bytesKey(0x80));
   const list = listCallerAllowlist(entry);
   t.is(list.length, 3);
   t.deepEqual([...list], ['01'.repeat(32), '80'.repeat(32), 'ff'.repeat(32)]);
@@ -193,7 +201,7 @@ test('setRelayPolicy preserves the allowlist across transitions', t => {
   // open->closed (or closed->open), a registrant who briefly
   // flipped to open would lose their seeded callers.
   const entry = makeRelayPolicyEntry('closed');
-  addCallerPublicKey(entry, immutableKey(0x10));
+  addCallerPublicKey(entry, bytesKey(0x10));
   setRelayPolicy(entry, 'open');
   setRelayPolicy(entry, 'closed');
   t.is(entry.callerAllowlist.size, 1);
@@ -235,7 +243,7 @@ test('isInboundSessionAllowed denies undefined dialer under closed policy', t =>
 
 test('isInboundSessionAllowed allows an allowlisted dialer under closed policy', t => {
   const entry = makeRelayPolicyEntry('closed');
-  const dialerKey = immutableKey(0x20);
+  const dialerKey = bytesKey(0x20);
   addCallerPublicKey(entry, dialerKey);
   const result = isInboundSessionAllowed({
     policy: entry,
@@ -247,10 +255,10 @@ test('isInboundSessionAllowed allows an allowlisted dialer under closed policy',
 
 test('isInboundSessionAllowed denies a non-allowlisted dialer under closed policy', t => {
   const entry = makeRelayPolicyEntry('closed');
-  addCallerPublicKey(entry, immutableKey(0x20));
+  addCallerPublicKey(entry, bytesKey(0x20));
   const result = isInboundSessionAllowed({
     policy: entry,
-    dialerPublicKey: immutableKey(0x21),
+    dialerPublicKey: bytesKey(0x21),
   });
   t.false(result.allowed);
   t.is(result.reason, 'closed-policy-allowlist-miss');
@@ -283,7 +291,7 @@ test('isInboundSessionAllowed sees a live allowlist after add/remove', t => {
   // at lookup time would silently delay admin / registrant
   // mutations until the next session.
   const entry = makeRelayPolicyEntry('closed');
-  const dialerKey = immutableKey(0x33);
+  const dialerKey = bytesKey(0x33);
   const denied = isInboundSessionAllowed({
     policy: entry,
     dialerPublicKey: dialerKey,

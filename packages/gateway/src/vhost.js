@@ -24,7 +24,7 @@ import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
 import { makeError, q, X } from '@endo/errors';
 
-/** @import { AppsNameHub } from './types.js' */
+/** @import { VirtualHostEntry, AppsNameHub } from './types.js' */
 
 /**
  * Validate and normalize a virtual-host name. RFC 1123 hostnames
@@ -75,6 +75,7 @@ const AppsNameHubInterface = M.interface('AppsNameHub', {
   lookup: M.call(M.string()).returns(M.promise()),
   has: M.call(M.string()).returns(M.promise()),
 });
+harden(AppsNameHubInterface);
 
 /**
  * Create an in-memory `@apps` NameHub exo. The phase-1 skeleton

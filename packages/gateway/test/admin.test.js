@@ -6,7 +6,6 @@ import test from 'ava';
 
 import { E } from '@endo/far';
 
-import { bytesToImmutable } from '@endo/bytes/to-immutable.js';
 import {
   makeGateway,
   makeGatewayAdmin,
@@ -20,17 +19,16 @@ import {
   generateNodeEd25519Keypair,
 } from '../src/node-crypto-powers.js';
 
-/** @import { ResourceLedger } from '../src/admin.js' */
-/** @import { GatewayConfig } from '../src/types.js' */
+/** @import { ResourceLedger, GatewayConfig } from '../src/types.js' */
 
 /**
  * @param {number} length
  * @param {number} [fill]
  */
-const immutableBytesOf = (length, fill = 0) => {
+const bytesOf = (length, fill = 0) => {
   const u = new Uint8Array(length);
   u.fill(fill);
-  return bytesToImmutable(u);
+  return u;
 };
 
 /**
@@ -239,7 +237,7 @@ test('deregisterRelay frees the public key for re-registration', async t => {
 
 test('deregisterRelay rejects a wrong-length publicKey', async t => {
   const { admin } = standDirect();
-  await t.throwsAsync(() => E(admin).deregisterRelay(immutableBytesOf(16)), {
+  await t.throwsAsync(() => E(admin).deregisterRelay(bytesOf(16)), {
     message: /must be 32 bytes/,
   });
 });
@@ -248,7 +246,7 @@ test('deregisterRelay rejects a non-bytes publicKey', async t => {
   const { admin } = standDirect();
   await t.throwsAsync(
     () => E(admin).deregisterRelay(/** @type {any} */ ('not-bytes')),
-    { message: /must be an immutable ArrayBuffer or Uint8Array/ },
+    { message: /must be a Uint8Array/ },
   );
 });
 
@@ -520,7 +518,7 @@ test('Gateway admin is reachable only via gateway.getAdmin', async t => {
 
 /**
  * @param {ReturnType<typeof makeGatewayBootstrap>} handle
- * @param {{ publicKey: ArrayBuffer, privateKey: ArrayBuffer, sign: (m: ArrayBuffer | Uint8Array) => ArrayBuffer }} keypair
+ * @param {{ publicKey: Uint8Array, privateKey: Uint8Array, sign: (m: Uint8Array) => Uint8Array }} keypair
  * @param {unknown} relayTarget
  * @param {'closed' | 'open'} [relayPolicy]
  */
@@ -548,10 +546,9 @@ test('GatewayAdmin.setRelayPolicy flips a relay registration policy', async t =>
 
 test('GatewayAdmin.setRelayPolicy throws on unknown public keys', async t => {
   const { admin } = standDirect();
-  await t.throwsAsync(
-    () => E(admin).setRelayPolicy(immutableBytesOf(32), 'open'),
-    { message: /no registration claims/ },
-  );
+  await t.throwsAsync(() => E(admin).setRelayPolicy(bytesOf(32), 'open'), {
+    message: /no registration claims/,
+  });
 });
 
 test('GatewayAdmin.setRelayPolicy throws on non-relay registrations', async t => {
@@ -582,7 +579,7 @@ test('GatewayAdmin.addRelayCaller / removeRelayCaller round-trip', async t => {
   const { handle, admin } = standDirect();
   const kp = await generateNodeEd25519Keypair();
   await seedRelay(handle, kp, harden({ kind: 'relay-target' }));
-  const callerKey = immutableBytesOf(32);
+  const callerKey = bytesOf(32);
   t.true(await E(admin).addRelayCaller(kp.publicKey, callerKey));
   t.false(await E(admin).addRelayCaller(kp.publicKey, callerKey));
   // Surface via listRegistrations.
@@ -594,10 +591,9 @@ test('GatewayAdmin.addRelayCaller / removeRelayCaller round-trip', async t => {
 
 test('GatewayAdmin.addRelayCaller throws on unknown public keys', async t => {
   const { admin } = standDirect();
-  await t.throwsAsync(
-    () => E(admin).addRelayCaller(immutableBytesOf(32), immutableBytesOf(32)),
-    { message: /no registration claims/ },
-  );
+  await t.throwsAsync(() => E(admin).addRelayCaller(bytesOf(32), bytesOf(32)), {
+    message: /no registration claims/,
+  });
 });
 
 test('GatewayAdmin.addRelayCaller throws on non-relay registrations', async t => {
@@ -610,7 +606,7 @@ test('GatewayAdmin.addRelayCaller throws on non-relay registrations', async t =>
     signature: kp.sign(issued.hashedNonce),
   });
   await t.throwsAsync(
-    () => E(admin).addRelayCaller(kp.publicKey, immutableBytesOf(32)),
+    () => E(admin).addRelayCaller(kp.publicKey, bytesOf(32)),
     { message: /is not a relay registration/ },
   );
 });
@@ -620,7 +616,7 @@ test('GatewayAdmin.addRelayCaller rejects wrong-length caller keys', async t => 
   const kp = await generateNodeEd25519Keypair();
   await seedRelay(handle, kp, harden({ kind: 'relay-target' }));
   await t.throwsAsync(
-    () => E(admin).addRelayCaller(kp.publicKey, immutableBytesOf(16)),
+    () => E(admin).addRelayCaller(kp.publicKey, bytesOf(16)),
     { message: /must be 32 bytes/ },
   );
 });
@@ -632,7 +628,7 @@ test('listRegistrations surfaces relayPolicy and callerAllowlist on relay entrie
   const { handle, admin } = standDirect();
   const kp = await generateNodeEd25519Keypair();
   await seedRelay(handle, kp, harden({ kind: 'relay-target' }), 'open');
-  const callerKey = immutableBytesOf(32, 0x33);
+  const callerKey = bytesOf(32, 0x33);
   await E(admin).addRelayCaller(kp.publicKey, callerKey);
   const entries = await E(admin).listRegistrations();
   t.is(entries.length, 1);

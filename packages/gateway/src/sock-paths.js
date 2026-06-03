@@ -118,36 +118,7 @@ const BOOTSTRAP_OVERRIDE_ENV = 'ENDO_GATEWAY_BOOTSTRAP_SOCK';
 /** Environment variable name for the admin sock override. */
 const ADMIN_OVERRIDE_ENV = 'ENDO_GATEWAY_ADMIN_SOCK';
 
-/**
- * @typedef {object} SocketPathInfo
- * @property {string} home Home directory for fallback resolution.
- * @property {string} user User name for fallback resolution.
- * @property {string} temp Temp directory for fallback resolution.
- */
-
-/**
- * @typedef {object} SocketPathResolution
- * @property {string} path The resolved sock path.
- * @property {'override' | 'system' | 'user-xdg' | 'user-darwin' | 'user-tmpdir'} source
- *   Where the path came from. Useful for diagnostics: when an
- *   operator misconfigures the override, the source name in the
- *   warning tells them which rule they hit.
- * @property {'unix-socket'} kind The listener shape. Always a UNIX
- *   domain socket; the gateway targets Linux primarily and macOS
- *   secondarily, both of which use a UNIX domain socket for the
- *   sock.
- */
-
-/**
- * Aliases for backwards-compatibility with the phase-2 typedef
- * names. New code should use the `Socket`-prefixed names.
- *
- * @typedef {SocketPathInfo} BootstrapPathInfo
- */
-
-/**
- * @typedef {SocketPathResolution} BootstrapPathResolution
- */
+/** @import { SocketPathInfo, SocketPathResolution } from './types.js' */
 
 /**
  * Resolve a sock path for a given basename, environment-variable

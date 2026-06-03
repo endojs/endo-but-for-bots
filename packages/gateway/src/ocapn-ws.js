@@ -35,25 +35,36 @@
  *
  * The exo uses `makeExo` + `M.interface` per `project/CLAUDE.md` §
  * Exo and Interface Authoring, so CapTP introspection
- * (`__getMethodNames__`) works out of the box.
+ * (`__getMethodNames__`) works out of the box. The single byte
+ * argument uses `M.raw()` so the exo accepts `Uint8Array`-bearing
+ * stream values without invoking `@endo/marshal`'s passable-style
+ * check.
  *
  * Identifiers carried across the registered-daemon callback
  * (`reader`, `writer`) are streams of `Uint8Array`s. The gateway
  * forwards the prefixed-SYN frame verbatim (prefix included), so the
  * downstream Noise responder sees exactly the same bytes the dialing
- * peer sent.
+ * peer sent. Byte fields are `Uint8Array` per the kriskowal directive
+ * on PR #393.
  */
 
 import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
 import { E, Far } from '@endo/far';
 import { makeError, q, X } from '@endo/errors';
-import { bytesFromImmutable } from '@endo/bytes/from-immutable.js';
 
 import { isInboundSessionAllowed } from './relay-policy.js';
 
 /** @import { Reader, Writer } from '@endo/stream' */
-/** @import { RelayPolicyEntry } from './relay-policy.js' */
+/** @import {
+ *   OcapnByteStream,
+ *   OcapnSessionTarget,
+ *   OcapnSessionHandler,
+ *   OcapnWebSocketHandler,
+ *   RegistrationLookupResult,
+ *   ExtractDialerPublicKey,
+ *   RelayPolicyEntry,
+ * } from './types.js' */
 
 /**
  * The canonical OCapN WebSocket path. Encodes the codec/transport
@@ -133,139 +144,22 @@ harden(OCAPN_INTENDED_RESPONDER_PREFIX_LENGTH);
 const OCAPN_PREFIXED_SYN_MIN_LENGTH = 32 + 132;
 
 const OcapnWebSocketHandlerInterface = M.interface('OcapnWebSocketHandler', {
-  handleConnection: M.call(M.any()).returns(M.promise()),
+  handleConnection: M.call(M.raw()).returns(M.promise()),
 });
 harden(OcapnWebSocketHandlerInterface);
-
-/**
- * @typedef {object} OcapnByteStream The per-connection byte-stream
- *   pair the embedder hands to `handleConnection`. Mirrors
- *   `@endo/ocapn-noise/src/types.d.ts` `ByteStream`: a reader of
- *   incoming WebSocket binary frames as `Uint8Array` chunks and a
- *   writer the gateway uses to send outbound frames back to the
- *   dialing peer.
- *
- *   Each binary WebSocket frame becomes one `Uint8Array` chunk
- *   (per the design's *Framing* paragraph: one Noise message per
- *   WebSocket binary frame). The gateway does not concatenate or
- *   split frames; the embedder's WS adapter preserves message
- *   boundaries.
- * @property {Reader<Uint8Array>} reader
- * @property {Writer<Uint8Array>} writer
- */
-
-/**
- * @typedef {object} OcapnSessionTarget The shape the gateway hands
- *   off to the registered daemon (or relay target) after looking up
- *   the registration by intended-responder public key. The two
- *   stream halves are independent: the `reader` yields incoming
- *   frames from the dialing peer (with the first frame replayed,
- *   prefix included), and the `writer` accepts outgoing frames to
- *   send back. The gateway does not inspect either side after the
- *   handoff.
- * @property {Reader<Uint8Array>} reader
- * @property {Writer<Uint8Array>} writer
- */
-
-/**
- * @typedef {object} OcapnSessionHandler The remote-exo contract the
- *   gateway calls into. The registered daemon (or relay target)
- *   implements `handleOcapnSession`; the gateway forwards the
- *   per-connection stream pair and the registered daemon runs its
- *   own Noise responder over those bytes.
- *
- *   The method returns once the daemon has accepted ownership of
- *   the stream pair; the daemon's own background task pumps bytes
- *   thereafter. The gateway does not await the session's completion
- *   (that would require holding the eventual-send promise open for
- *   the lifetime of the WS connection, which is open-ended).
- * @property {(target: OcapnSessionTarget) => Promise<void>} handleOcapnSession
- */
-
-/**
- * @typedef {object} RegistrationLookupResult The shape
- *   `lookupRegistrationByPublicKey` returns when a live registration
- *   claims the queried public key. Either `daemon` or `relayTarget`
- *   may be set (a registration is created via `register` with a
- *   `daemon` field, or `registerRelay` with a `relayTarget` field).
- *   Both are typed as `unknown` here because the gateway treats
- *   them as opaque exo handles: the only call site is
- *   `E(target).handleOcapnSession({ reader, writer })`.
- *
- *   For relay registrations the lookup also returns the live
- *   `policy` entry (a `RelayPolicyEntry` from `./relay-policy.js`).
- *   The handler consults the policy before handing off; for
- *   `register` (non-relay) registrations the field is `undefined`
- *   and the handler forwards unconditionally (the registration
- *   itself is the authorization).
- * @property {unknown} [daemon]
- * @property {unknown} [relayTarget]
- * @property {RelayPolicyEntry} [policy]
- */
-
-/**
- * @typedef {(firstFrame: Uint8Array) => ArrayBuffer | Uint8Array | undefined} ExtractDialerPublicKey
- *   The optional adapter that reads the dialer's 32-byte Ed25519
- *   public key out of the prefixed-SYN. Today's OCapN-Noise wire
- *   shape uses Noise IK, which encrypts the initiator's static
- *   under the responder's static (Noise §7.8 property 8, identity
- *   hiding); under that wire shape the adapter returns `undefined`
- *   and `closed`-policy relay registrations fail closed. A future
- *   Noise variant or pre-handshake protocol extension that carries
- *   a cleartext caller-identity hint plugs in here without
- *   reworking the handler.
- */
-
-/**
- * @typedef {object} OcapnWebSocketDeps Inputs to
- *   {@link makeOcapnWebSocketHandler}.
- * @property {(publicKey: ArrayBuffer | Uint8Array) =>
- *   RegistrationLookupResult | undefined} lookupRegistrationByPublicKey
- *   The bootstrap module's lookup function (one of the returns of
- *   `makeGatewayBootstrap`). Returns `undefined` when no live
- *   registration claims the key, in which case the handler closes
- *   the WebSocket without forwarding.
- * @property {ExtractDialerPublicKey} [extractDialerPublicKey]
- *   Optional adapter that reads the dialer's public key from the
- *   first WebSocket binary frame. Phase 5 introduces the hook;
- *   today's Noise IK wire shape encrypts the dialer's identity so
- *   embedders supply `undefined` and the gateway fails closed on
- *   `closed`-policy relay registrations. Test code injects a
- *   trivial extractor to exercise the allowlist-hit / allowlist-miss
- *   branches; a future Noise variant that carries a cleartext
- *   caller hint supplies a real adapter without touching the
- *   handler itself.
- */
-
-/**
- * @typedef {object} OcapnWebSocketHandler CapTP-facing exo. The
- *   single method is `async` so it crosses the wire as an eventual
- *   send.
- * @property {(stream: OcapnByteStream) => Promise<void>} handleConnection
- *   Accept an upgraded WebSocket connection as a `{ reader, writer }`
- *   pair, route to the registered daemon by the intended-responder
- *   prefix on the first frame, or close the connection on
- *   protocol-level failure (missing first frame, frame too short,
- *   no registration claims the public key, registered exo throws).
- *
- *   Resolves once the dispatching step completes (registration
- *   lookup + handoff to the daemon's `handleOcapnSession`); does not
- *   wait for the WS session itself to drain.
- */
 
 /**
  * Render a public-key view as lowercase hex; matches `bootstrap.js`'s
  * `publicKeyToHex` so the diagnostic phrasing is consistent across
  * modules.
  *
- * @param {ArrayBuffer | Uint8Array} bytes
+ * @param {Uint8Array} bytes
  * @returns {string}
  */
 const publicKeyToHex = bytes => {
-  const view = bytes instanceof Uint8Array ? bytes : bytesFromImmutable(bytes);
   let hex = '';
-  for (let i = 0; i < view.length; i += 1) {
-    hex += view[i].toString(16).padStart(2, '0');
+  for (let i = 0; i < bytes.length; i += 1) {
+    hex += bytes[i].toString(16).padStart(2, '0');
   }
   return hex;
 };
@@ -332,6 +226,27 @@ const prependFrame = (firstFrame, tail) => {
     )
   );
 };
+
+/**
+ * @typedef {object} OcapnWebSocketDeps Inputs to
+ *   {@link makeOcapnWebSocketHandler}.
+ * @property {(publicKey: Uint8Array) =>
+ *   RegistrationLookupResult | undefined} lookupRegistrationByPublicKey
+ *   The bootstrap module's lookup function (one of the returns of
+ *   `makeGatewayBootstrap`). Returns `undefined` when no live
+ *   registration claims the key, in which case the handler closes
+ *   the WebSocket without forwarding.
+ * @property {ExtractDialerPublicKey} [extractDialerPublicKey]
+ *   Optional adapter that reads the dialer's public key from the
+ *   first WebSocket binary frame. Phase 5 introduces the hook;
+ *   today's Noise IK wire shape encrypts the dialer's identity so
+ *   embedders supply `undefined` and the gateway fails closed on
+ *   `closed`-policy relay registrations. Test code injects a
+ *   trivial extractor to exercise the allowlist-hit / allowlist-miss
+ *   branches; a future Noise variant that carries a cleartext
+ *   caller hint supplies a real adapter without touching the
+ *   handler itself.
+ */
 
 /**
  * Create the `OcapnWebSocketHandler` exo. The factory is total: it
@@ -479,7 +394,7 @@ export const makeOcapnWebSocketHandler = ({
         // handler's structure. See `./relay-policy.js` § Caller-
         // identification under Noise IK.
         if (registration.policy !== undefined) {
-          /** @type {ArrayBuffer | Uint8Array | undefined} */
+          /** @type {Uint8Array | undefined} */
           let dialerPublicKey;
           if (extractDialerPublicKey !== undefined) {
             try {

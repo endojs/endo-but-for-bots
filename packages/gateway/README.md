@@ -294,10 +294,10 @@ await E(registration).publishWeblet({
 });
 ```
 
-Byte fields on the wire are immutable `ArrayBuffer` per the
-`@endo/bytes` convention. Typed arrays cannot be frozen and so are
-not passable; immutable `ArrayBuffer` is the canonical cross-realm
-byte shape.
+Byte fields use `Uint8Array` as the sole unit of transmission.
+Interface guards on byte arguments use `M.raw()` so the exo accepts
+`Uint8Array` inputs without invoking `@endo/marshal`'s passable-style
+check; the implementation validates the byte shape itself.
 
 ## Tests
 

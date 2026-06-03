@@ -87,9 +87,20 @@ export {
   USER_RUNTIME_SUBDIR,
 } from './src/sock-paths.js';
 
-/** @import { GatewayConfig, BindAddress, GatewayPowers, Gateway } from './src/types.js' */
-/** @import { GatewayAdmin } from './src/admin.js' */
-/** @import { OcapnWebSocketHandler } from './src/ocapn-ws.js' */
+/** @import {
+ *   GatewayConfig,
+ *   FeatureToggles,
+ *   BindAddress,
+ *   AppsNameHub,
+ *   GatewayBootstrap,
+ *   GatewayAdmin,
+ *   ResourceLedger,
+ *   OcapnWebSocketHandler,
+ *   CryptoPowers,
+ *   ClockPowers,
+ *   GatewayPowers,
+ *   Gateway,
+ * } from './src/types.js' */
 
 const GatewayInterface = M.interface('Gateway', {
   start: M.call().returns(M.promise()),
@@ -101,6 +112,7 @@ const GatewayInterface = M.interface('Gateway', {
   getAdmin: M.call().returns(M.promise()),
   getOcapnHandler: M.call().returns(M.promise()),
 });
+harden(GatewayInterface);
 
 /**
  * Create a hardened gateway exo. See `designs/gateway-package.md`
