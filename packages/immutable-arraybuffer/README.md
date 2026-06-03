@@ -50,19 +50,25 @@ The emulated immutable buffers inherit directly from an intermediate prototype w
 
 ## The Freezable TypedArray Ponyfill
 
-The package also provides a companion ponyfill for *freezable virtual TypedArrays*, exposed as `freezable-typedarray-pony.js`. The motivation parallels the immutable `ArrayBuffer`: a `TypedArray` view onto an immutable buffer would itself be observably immutable, but the language does not yet permit a real `TypedArray` exotic object to be frozen. The ponyfill provides emulated views that present the proposed observable shape on top of an emulated immutable backing store.
+The package also provides a companion ponyfill for *freezable virtual TypedArrays*, currently exposed as `freezable-typedarray-pony.js`. The motivation parallels the immutable `ArrayBuffer`: a `TypedArray` view onto an immutable buffer would itself be observably immutable, but the language does not yet permit a real `TypedArray` exotic object to be frozen. The ponyfill provides emulated views that present the proposed observable shape on top of an emulated immutable backing store.
 
-Two callable exports are available:
-- `makePseudoTypedArrayConstructor(OriginalConstructor)` returns a constructor that, when called with an emulated immutable `ArrayBuffer` as its sole argument, returns a freezable view whose prototype overrides the `TypedArray` mutators to throw and whose `buffer` accessor returns the emulated immutable buffer. When called with any other argument list it falls through to `OriginalConstructor`, so callers can use a single constructor uniformly across mutable and immutable buffers.
+The freezable-`TypedArray` machinery is the *implementation* of the proposal's shape. Application code should reach for it through `@endo/bytes`, not directly: see "Ramifications for `@endo/bytes` as a Spackle" below for the spackle pattern that ensures one freezable `TypedArray` constructor per realm, an idiomatic import surface, and an ESLint rule that discourages reaching for the bare constructors. The exports listed below are scheduled to become module-internal once the spackle lands; new callers should treat `@endo/bytes` as the public surface.
+
+Two callable exports are currently available:
+- `makePseudoTypedArrayConstructor(OriginalConstructor)` returns a constructor that, when called with an emulated immutable `ArrayBuffer` as its sole argument, returns a freezable view whose prototype overrides the `TypedArray` mutators to throw and whose `buffer` accessor returns the emulated immutable buffer. When called with any other argument list it falls through to `OriginalConstructor`, so callers can use a single constructor uniformly across mutable and immutable buffers. Once the spackle lands in `@endo/bytes`, this export is expected to be internalized: the public path will be `@endo/bytes`, which will install one constructor at a realm-wide registered symbol and prefer it on subsequent loads.
 - `virtualTypedArrayBufferGetter` is a `buffer`-getter function suitable for installation as the replacement of `TypedArray.prototype.buffer` by a shim. It transparently returns the emulated immutable buffer for emulated freezable views and the genuine buffer for genuine views.
 
-The `*Internal` prototype, the brand-check `WeakMap`, and the `getHiddenTypedArray` accessor are deliberately not exported: the ponyfill keeps the emulation's encapsulation just as the immutable-`ArrayBuffer` ponyfill keeps `hiddenBuffers` private to the package. Callers should construct freezable views only through `makePseudoTypedArrayConstructor`.
+The `*Internal` prototype, the brand-check `WeakMap`, and the `getHiddenTypedArray` accessor are deliberately not exported: the ponyfill keeps the emulation's encapsulation just as the immutable-`ArrayBuffer` ponyfill keeps `hiddenBuffers` private to the package. Callers should construct freezable views only through `@endo/bytes` once the spackle lands, and through `makePseudoTypedArrayConstructor` in the interim.
 
 ## Using the Ponyfills Across Native and Shim
 
-A program that wants to be source-compatible with both a future native implementation of the *Immutable ArrayBuffer* proposal and the present-day shim should import the ponyfill's named exports rather than reaching for the methods on `ArrayBuffer.prototype`. The ponyfill's exports fall through to the native methods when present and emulate them when absent, so the calling code does not need to detect which case it is in.
+The recommended public path is **`@endo/bytes`**, which presents the spackle front for immutable `ArrayBuffer`s, frozen `TypedArray`s backed by them, and the text-codec workarounds needed when those buffers cross `TextEncoder`/`TextDecoder`. Reaching directly for `@endo/immutable-arraybuffer`'s ponyfill exports (and for `freezable-typedarray-pony.js`) remains supported, but it is the *implementation surface*, not the *application surface*. The spackle pattern documented under "Ramifications for `@endo/bytes` as a Spackle" below makes the realm-wide single-source-of-truth and the ESLint-enforced idiomatic usage automatic for callers that consume `@endo/bytes`.
 
-The canonical idiom is:
+The shim is opt-in. A program that wants to reach for `arrayBuffer.sliceToImmutable(...)` and the other proposal methods directly on `ArrayBuffer.prototype` imports `@endo/immutable-arraybuffer/shim.js` at startup; a program that consumes `@endo/bytes` does not need the shim, because the spackle calls through to the registered symbol on the intrinsic when present and falls back to the ponyfill when absent. Both paths are exercised by the cross-runner parity tests described under "Proposed XS / Node.js Parity Tests" below: with and without lockdown, with and without the shim, on both Node and XS.
+
+A program that wants to be source-compatible with both a future native implementation of the *Immutable ArrayBuffer* proposal and the present-day shim should import the ponyfill's named exports (or, preferably, `@endo/bytes`'s named exports) rather than reaching for the methods on `ArrayBuffer.prototype`. The ponyfill's exports fall through to the native methods when present and emulate them when absent, so the calling code does not need to detect which case it is in.
+
+The canonical idiom for the implementation surface is:
 
 ```js
 import {
@@ -88,7 +94,26 @@ if (optTransferBufferToImmutable) {
 }
 ```
 
-The corresponding pattern for freezable virtual `TypedArrays` builds a constructor once per realm and uses it everywhere a `TypedArray` view is wanted, regardless of whether the backing buffer is mutable or immutable:
+The application-surface equivalent is to reach for `@endo/bytes`'s named exports. The recommended import-and-use shape is:
+
+```js
+import {
+  bytesToImmutable,
+  bytesFromImmutable,
+  bytesFromText,
+  bytesToText,
+  concatImmutables,
+} from '@endo/bytes';
+
+const buffer = bytesToImmutable(bytesFromText('hello'));
+// buffer is an immutable ArrayBuffer.
+const text = bytesToText(bytesFromImmutable(buffer));
+// text === 'hello'; the round trip never touches a writable buffer.
+```
+
+The ESLint rule shipped from `@endo/eslint-plugin` (see "Forbidding direct use via eslint-plugin" below) discourages reaching for `new TextEncoder()`, `new TextDecoder()`, the `TypedArray` constructors (`Uint8Array`, `Uint16Array`, and friends), and `new ArrayBuffer()` directly. Each of these has a `@endo/bytes` equivalent that captures the underlying primordial once at module load and forwards to the realm-wide spackle install, so eval twins, lockdown, and the immutable-`ArrayBuffer` shim agree on the observable shape.
+
+The corresponding pattern for freezable virtual `TypedArrays` is, at the implementation surface, to build a constructor once per realm and use it everywhere a `TypedArray` view is wanted, regardless of whether the backing buffer is mutable or immutable. The spackle pattern moves the once-per-realm install to a registered symbol on the intrinsic; while the spackle is pending, the bare ponyfill exposes the seam:
 
 ```js
 import { sliceBufferToImmutable } from '@endo/immutable-arraybuffer';
@@ -105,12 +130,24 @@ const immutable = sliceBufferToImmutable(new ArrayBuffer(4));
 const frozenView = new FreezableUint8Array(immutable);
 ```
 
-Two preconditions let this code run the same way under the shim and under a future native implementation:
+When the spackle lands in `@endo/bytes`, the equivalent shape becomes:
 
-1. *Either* the program imports `@endo/immutable-arraybuffer/shim.js` at startup *or* it never reaches for `arrayBuffer.sliceToImmutable(...)` and `arrayBuffer.transferToImmutable(...)` and `arrayBuffer.immutable` on a bare `ArrayBuffer`. The ponyfill exports remain a stable interface either way; the methods on `ArrayBuffer.prototype` only exist after the shim runs or after a native implementation ships. A program that wants to be portable should pick one of these disciplines and stay with it.
+```js
+// Hypothetical post-spackle shape; lands in a follow-up PR
+// against @endo/bytes. The application code reaches for
+// @endo/bytes's freezable view rather than constructing one
+// directly. The single realm-wide installer wins the race;
+// subsequent loads of @endo/bytes call through.
+import { freezableUint8Array } from '@endo/bytes';
+const view = freezableUint8Array(buffer);
+```
+
+Two preconditions let the implementation-surface code run the same way under the shim and under a future native implementation:
+
+1. *Either* the program consumes `@endo/bytes` (which calls through the spackle, no shim required), *or* the program imports `@endo/immutable-arraybuffer/shim.js` at startup, *or* it never reaches for `arrayBuffer.sliceToImmutable(...)` and `arrayBuffer.transferToImmutable(...)` and `arrayBuffer.immutable` on a bare `ArrayBuffer`. The ponyfill exports remain a stable interface either way; the methods on `ArrayBuffer.prototype` only exist after the shim runs or after a native implementation ships. A program that wants to be portable should pick one of these disciplines and stay with it. The shim is no longer obligatory: it is opt-in for programs that want the proposal's methods on the bare intrinsic.
 2. The program does not assume `x instanceof ArrayBuffer` distinguishes immutable from mutable. Both the proposal and this package's emulated immutable buffers inherit from `ArrayBuffer.prototype`, so they are both instances. The way to ask whether a particular buffer is immutable is `isBufferImmutable(x)` (or `x.immutable` if the shim or a native implementation is in effect).
 
-The same discipline applies to the freezable `TypedArray` ponyfill: import `makePseudoTypedArrayConstructor` and use the resulting constructor wherever the program might want to view an immutable buffer; the emulated path and the genuine path agree on the observable shape.
+The same discipline applies to the freezable `TypedArray` ponyfill: import `makePseudoTypedArrayConstructor` (or, once spackled, the `@endo/bytes` equivalent) and use the resulting constructor wherever the program might want to view an immutable buffer; the emulated path and the genuine path agree on the observable shape.
 
 ### Detecting and adapting to a native implementation
 
@@ -136,6 +173,20 @@ const hasNativeOrShim = 'immutable' in new ArrayBuffer(0);
 ```
 
 Programs that prefer not to feature-detect can require the shim at startup (importing `@endo/immutable-arraybuffer/shim.js` from the first module loaded) and treat `arrayBuffer.sliceToImmutable(...)`, `arrayBuffer.transferToImmutable(...)`, and `arrayBuffer.immutable` as available throughout the realm; modern shim practice in this package's caveats below covers what happens when a native implementation later lands underneath the shim.
+
+## Forbidding direct use via eslint-plugin
+
+The portability question that motivates the spackle pattern has a static-analysis counterpart: a program that reaches directly for `new TextEncoder()`, `new TextDecoder()`, `new Uint8Array(...)` (and the other `TypedArray` constructors), or `new ArrayBuffer(...)` bypasses the spackle. The bypass is silent (the code runs), but it forfeits the realm-wide single-source-of-truth (one constructor per realm, one decoder per realm), it forfeits the ESLint-discouraged-vs-encouraged-import audit trail, and it forfeits the lockdown-time guarantee that a compartment endowment cannot override the codec.
+
+`@endo/eslint-plugin` will ship a rule that forbids these direct uses across consumers of the spackle. The rule's shape:
+
+- **Forbidden identifiers.** `TextEncoder`, `TextDecoder`, `Uint8Array`, `Uint16Array`, `Uint32Array`, `Uint8ClampedArray`, `Int8Array`, `Int16Array`, `Int32Array`, `Float32Array`, `Float64Array`, `BigInt64Array`, `BigUint64Array`, and `ArrayBuffer` (when used as a `NewExpression` callee).
+- **Exception: capturing the intrinsic at module load.** The pattern `const Constructor = globalThis.Constructor;` (or equivalent module-init capture) is allowed at the spackle's install site. The rule whitelists the spackle module itself (`@endo/bytes`, `@endo/immutable-arraybuffer`'s freezable-typedarray-pony) by path or by a per-rule allowlist option, so the spackle's own implementation is not self-flagging.
+- **Fix-it suggestions.** The rule surfaces a hint pointing at the `@endo/bytes` equivalent: `new TextEncoder()` becomes `bytesFromText(...)`, `new TextDecoder()` becomes `bytesToText(...)`, `new Uint8Array(buffer)` becomes the spackled freezable equivalent, `new ArrayBuffer(n)` becomes `bytesToImmutable(bytesFromText(''))`-shaped construction for the immutable case (and stays bare for the throwaway-mutable case, which the rule's allowlist will accommodate).
+- **Severity.** Default `warn`, opt-in `error` for packages that consume `@endo/bytes` end-to-end.
+- **Rationale string.** Each rule emission cites the spackle pattern documented here and the lockdown-time guarantee: a compartment global endowment can replace `TextDecoder` on `globalThis`, but the spackle's installed function on `Uint8Array[Symbol.for('toUtf8String')]` is captured at module load on the realm's primordial, so the endowment override does not redirect the spackle's behavior.
+
+The rule itself, the test fixtures that prove it triggers on the forbidden patterns and does not trigger on the spackle's own capture pattern, and the package's `recommended` config entry are scope for a follow-up PR against `@endo/eslint-plugin`. The README documents the rule's shape so consumers know what to expect and so the follow-up PR's reviewer has the contract to check against.
 
 ## The Shim
 
@@ -203,6 +254,8 @@ To verify this parity by construction rather than by prose, the package will fol
 
 - An XS-side parity entry point, `packages/immutable-arraybuffer/test/_xs.js`, modeled on `packages/ses/test/_xs.js`. The XS side uses the same shared assertions and the same shared fixture; the only difference is that `t` is the minimal `assert.equal` / `assert.throws` shim, and `print('ok')` reports overall success. A companion script `packages/immutable-arraybuffer/scripts/generate-test-xs.js` (modeled on `packages/ses/scripts/generate-test-xs.js`) bundles `_xs.js` together with the ponyfill source using `@endo/compartment-mapper` with the `xs` tag; the resulting `tmp/test-xs.js` is then executed by `xst` from the Moddable SDK. `test:xs` in this package's `package.json` would point at that script once the XS toolchain wiring is in place.
 
+Once the `@endo/bytes` spackle lands, the parity tests are extended to exercise the four lockdown-vs-shim combinations described under "Required changes to `@endo/ses` permits" below: with/without lockdown crossed with with/without the immutable-`ArrayBuffer` shim. The Node side iterates the four combinations as separate Ava tests; the XS side iterates the same combinations in the `_xs.js` entry point. Shared fixtures and shared assertions cover the observable behavior; the four combinations cover the configuration matrix. The cross-runner-cross-configuration agreement is what certifies the spackle's portability.
+
 The convergence shape is the right one for the *Immutable ArrayBuffer* ponyfills because the proposal contemplates that XS will eventually implement the feature natively, and the observable behavior of the native implementation should agree with the ponyfill's emulation. If a future XS run diverges, the failing assertion in the shared module localizes the divergence and points the reader at the implementation gap. If a future Node run diverges (for example, when a TC39 `transferToImmutable` lands natively in V8), the shared assertions still hold.
 
 Implementation of the XS-side runner is deferred from this round: it requires Moddable SDK toolchain familiarity, the `xst` binary, and the generation pipeline scaffolding already in place for `@endo/ses` and `@endo/module-source`. The Node-side test pair and the shared fixture and assertions modules are reachable as a follow-up without the XS toolchain dependency, and landing them is the right next step.
@@ -211,48 +264,85 @@ Implementation of the XS-side runner is deferred from this round: it requires Mo
 
 The [spackle](https://docs.endojs.org/documents/spackle.html) pattern describes a module that installs a behavior on a shared intrinsic at a registered symbol and exports an ergonomic callable; the first instance to load wins the race, and subsequent instances find the property already defined and call through. `@endo/harden` is the canonical example: `Object[Symbol.for('harden')]` is the rendezvous; the ergonomic `harden` is the export.
 
-`@endo/bytes` is a near-fit for the same shape. It already provides ergonomic functions that work on `Uint8Array` values whose backing buffer may be an immutable `ArrayBuffer` (`bytesToImmutable`, `bytesFromImmutable`, `concatImmutables`), and it explicitly papers over a portability gap: immutable `ArrayBuffer`s cannot back a `Uint8Array` view directly, and APIs like `TextDecoder.decode` reject them. The spackle question is whether to install these behaviors on a shared intrinsic so all instances of `@endo/bytes` in a realm agree on the implementation, and so a future TC39 standard (or an XS native) can sit at the rendezvous.
+`@endo/bytes` becomes the **spackle front** for three families of behavior that this package and its consumers need uniformly across realms, regardless of whether the immutable-`ArrayBuffer` shim is installed and regardless of whether lockdown has run:
 
-### What spackling `@endo/bytes` would mean
+- **Immutable `ArrayBuffer` operations** (the existing `bytesToImmutable`, `bytesFromImmutable`, `concatImmutables`). The spackle install puts the immutable-slice operation at `ArrayBuffer.prototype[Symbol.for('sliceBufferToImmutable')]` and the round-trippable wrapping operations at companion symbols on `ArrayBuffer.prototype`.
+- **Frozen `TypedArray`s backed by immutable `ArrayBuffer`s**. The spackle install puts the freezable `TypedArray` constructor at a registered symbol on the relevant intrinsic (sketched below). The result is one freezable constructor per realm; eval twins agree on which constructor a `frozenView instanceof FreezableUint8Array` check resolves against; the `makePseudoTypedArrayConstructor` ponyfill export becomes internal as the spackle front replaces it as the public surface.
+- **Text-codec workarounds for immutable buffers**. `TextDecoder.decode` and `TextEncoder.encode` do not accept emulated immutable `ArrayBuffer`s as input/output backing stores. The spackle install captures `TextEncoder` and `TextDecoder` once at module load, installs the codec adapters at registered symbols on the relevant intrinsic (sketched below), and exposes ergonomic `bytesFromText` and `bytesToText` functions that route through the install. The capture-on-intrinsic guarantee is the load-bearing one: a compartment global endowment that later replaces `TextDecoder` on `globalThis` does not redirect the spackle's behavior, because the spackle holds the realm's original `TextDecoder` and its decode operation is reachable as `Uint8Array[Symbol.for('toUtf8String')]` (or a comparable symbol) on the realm's primordial.
 
-Three operations are candidates for the rendezvous-symbol install:
+### Symbol rendezvous shape
 
-1. `bytesToImmutable(view) -> ArrayBuffer`. The current implementation calls `sliceBufferToImmutable` from `@endo/immutable-arraybuffer` and hardens the result. A spackle would install at, e.g., `Object[Symbol.for('endo.bytesToImmutable')]`, race the first writer, and have subsequent loads of `@endo/bytes` call through to the installed function.
+The pattern proposed by the maintainer (review `4423421007`) is to put the symbols on the relevant intrinsic rather than on `Object`. The intrinsic is the one whose prototype best describes the operation: the immutable-slice operation belongs on `ArrayBuffer.prototype`; the freezable view construction and text-codec operations belong on `Uint8Array` (the constructor itself, so the symbol can be installed on the realm's `Uint8Array` primordial before any view is materialized). The candidate registrations are:
+
+- `ArrayBuffer.prototype[Symbol.for('sliceBufferToImmutable')]`: the immutable-slice operation, called as `arrayBuffer[Symbol.for('sliceBufferToImmutable')](start, end)`. The eponymous TC39 method `ArrayBuffer.prototype.sliceToImmutable` (if and when it lands) sits at the same rendezvous via the shim's installer, and the spackle prefers the standard install when present.
+- `ArrayBuffer.prototype[Symbol.for('transferBufferToImmutable')]`: the immutable-transfer operation, parallel to the slice operation. Optional on platforms that lack `structuredClone` and `ArrayBuffer.prototype.transfer`.
+- `Uint8Array[Symbol.for('toUtf8String')]`: the decode operation, called as `Uint8Array[Symbol.for('toUtf8String')](view, { fatal })`. The spackle holds the realm's original `TextDecoder` once at module load; the registered symbol on the `Uint8Array` constructor is the rendezvous; the ergonomic `bytesToText` import from `@endo/bytes` calls through. The symbol-on-constructor placement (rather than on `Uint8Array.prototype` as a method) was chosen so a compartment global endowment that later replaces `TextDecoder` on `globalThis` cannot redirect the install: the spackle captures the primordial at load time, the registered symbol on the constructor is the lookup path, and the compartment's endowment of `globalThis.TextDecoder` does not reach into the registered symbol on the realm's primordial.
+- `Uint8Array[Symbol.for('fromUtf8String')]`: the encode operation, parallel to the decode operation. The spackle holds the realm's original `TextEncoder` once at module load.
+- `Uint8Array[Symbol.for('freezableConstructor')]` (working name): the per-realm freezable `TypedArray` constructor for the `Uint8Array` family. The spackle's first loader installs `makePseudoTypedArrayConstructor(Uint8Array)`; subsequent loaders call through. Companion symbols on `Uint16Array`, `Uint32Array`, and the other `TypedArray` constructors carry the constructors for their respective views.
+
+The exact symbol names are subject to coordination with the TC39 proposal authors and with the upstream `@endo/harden` precedent; the symbol-on-intrinsic discipline is the load-bearing decision and the names are a follow-up question.
+
+### Candidates for the install dance
+
+The current `@endo/bytes` operations that become spackle installs:
+
+1. `bytesToImmutable(view) -> ArrayBuffer`. The current implementation calls `sliceBufferToImmutable` from `@endo/immutable-arraybuffer` and hardens the result. A spackle would install at, e.g., `ArrayBuffer.prototype[Symbol.for('sliceBufferToImmutable')]`, race the first writer, and have subsequent loads of `@endo/bytes` call through to the installed function.
 2. `bytesFromImmutable(buffer) -> Uint8Array`. Same shape: a registered symbol, an installed callable, the ergonomic export prefers the installed one.
 3. `concatImmutables(buffers) -> ArrayBuffer`. Same shape.
+4. `bytesFromText(s) -> Uint8Array`. The spackle holds the realm's original `TextEncoder` and installs at `Uint8Array[Symbol.for('fromUtf8String')]`. The capture-on-intrinsic is what gives the lockdown-time guarantee: a compartment global endowment of `TextEncoder` does not redirect the install.
+5. `bytesToText(view, options) -> string`. The spackle holds the realm's original `TextDecoder` (both lenient and `fatal: true` instances) and installs at `Uint8Array[Symbol.for('toUtf8String')]`. Same capture-on-intrinsic guarantee.
+6. The freezable `TypedArray` constructor family. The spackle installs `makePseudoTypedArrayConstructor(C)` for each `C` in `Uint8Array, Uint16Array, ...` at the corresponding registered symbol on the constructor. The `makePseudoTypedArrayConstructor` ponyfill export from `freezable-typedarray-pony.js` becomes internal once the spackle is the public path.
 
-The `bytesEqual`, `bytesFromText`, `bytesToText`, and `concatBytes` functions are not candidates for spackle: they operate purely on `Uint8Array` and have no realm-wide identity concern (no eval-twin recognition problem, no shared `WeakSet` to dedupe, no install-site contention with a future native API). They are conventional ponyfills and should stay that way.
+The `bytesEqual` and `concatBytes` functions remain conventional ponyfills: they operate purely on `Uint8Array` and have no realm-wide identity concern (no eval-twin recognition problem, no shared `WeakSet` to dedupe, no install-site contention with a future native API).
 
 ### Required changes to `@endo/bytes`
 
-To turn the three immutable-aware operations into spackles:
+To turn the immutable-aware operations into spackles:
 
-- Add an install-and-prefer-install dance for each of the three functions, modeled on `@endo/harden`'s pattern. The export becomes:
+- Add an install-and-prefer-install dance for each of the functions, modeled on `@endo/harden`'s pattern, but registering the symbol on the relevant intrinsic (per "Symbol rendezvous shape" above) rather than on `Object`. The export becomes:
 
   ```js
   // sketch only; actual implementation would mirror @endo/harden
-  const SYMBOL = Symbol.for('endo.bytesToImmutable');
-  const installed = Object[SYMBOL];
+  const SYMBOL = Symbol.for('sliceBufferToImmutable');
+  const installed = ArrayBuffer.prototype[SYMBOL];
   let implementation;
   if (installed) {
-    implementation = installed;
-  } else {
     implementation = view => harden(
-      sliceBufferToImmutable(view.buffer, view.byteOffset, view.byteOffset + view.byteLength),
+      installed.call(view.buffer, view.byteOffset, view.byteOffset + view.byteLength),
     );
-    Object.defineProperty(Object, SYMBOL, {
-      value: implementation,
+  } else {
+    const installedSlice = (start, end) =>
+      sliceBufferToImmutable(this, start, end);
+    Object.defineProperty(ArrayBuffer.prototype, SYMBOL, {
+      value: installedSlice,
       configurable: false,
       writable: false,
       enumerable: false,
     });
+    implementation = view => harden(
+      installedSlice.call(view.buffer, view.byteOffset, view.byteOffset + view.byteLength),
+    );
   }
   export const bytesToImmutable = implementation;
   ```
 
+  The text-codec install captures the realm's original `TextEncoder` and `TextDecoder` at module load (`const enc = new globalThis.TextEncoder()` evaluated *before* any compartment endowment could replace it) and registers the codec adapter on `Uint8Array` at the rendezvous symbol. The freezable `TypedArray` install builds `makePseudoTypedArrayConstructor(C)` for each `C` and registers the result at the corresponding symbol on `C`.
+
 - Declare an *ergonomic-and-shared* contract in the README so a downstream library can rely on the install having happened by the time it observes the symbol, regardless of which `@endo/bytes` instance ran first.
-- Coordinate with `@endo/immutable-arraybuffer`: if the immutable-`ArrayBuffer` proposal is later spackled at its own registered symbol (for example, `ArrayBuffer.prototype[Symbol.for('sliceToImmutable')]`), `@endo/bytes`'s spackle would prefer the standard install on the intrinsic over its own. The two spackles are not in tension; they layer.
+- Coordinate with `@endo/immutable-arraybuffer`: when the immutable-`ArrayBuffer` proposal lands natively (or its shim runs) and installs `ArrayBuffer.prototype.sliceToImmutable` directly, `@endo/bytes`'s spackle prefers the standard install on the intrinsic over its own. The two spackles are not in tension; they layer.
 - Decide whether `concatImmutables` is worth spackling now or after the first downstream caller materializes. The current implementation has no realm-wide identity concern of its own (it neither maintains state nor coordinates with eval twins), so the case is weaker than for `harden`. The decision can be deferred without locking out the future move.
+
+### Required changes to `@endo/ses` permits
+
+The registered symbols on `ArrayBuffer.prototype`, on `Uint8Array`, and on the other `TypedArray` constructors must be admitted by SES's permits table. Without the admission, lockdown's whitelist-enforcement phase removes them, the spackle's install loses its rendezvous after lockdown runs, and the post-lockdown behavior diverges from the pre-lockdown behavior. The permits update is a small, localized change to `@endo/ses`'s `whitelist.js` (or its successor table) that admits each `Symbol.for(...)` key the spackle uses as a permitted property name on the respective intrinsic.
+
+The lockdown-vs-shim discipline that follows from the permits update:
+
+- **Without lockdown**: the spackle install runs as ordinary `Object.defineProperty` on the realm's intrinsic; no shim is required. `@endo/bytes` works against the bare intrinsic.
+- **With lockdown, without the immutable-`ArrayBuffer` shim**: the spackle install runs *before* `lockdown()` so the registered symbols are in place when the whitelist-enforcement phase observes them. Permits must list the symbols. The immutable-`ArrayBuffer` operations are still provided by the spackle (via the ponyfill); the methods on `ArrayBuffer.prototype` (`sliceToImmutable`, `transferToImmutable`, `immutable`) are not present because the shim is not installed. Programs that consume `@endo/bytes` rather than reaching for the bare methods continue to work uniformly.
+- **With lockdown, with the immutable-`ArrayBuffer` shim**: the shim's installer puts the proposal's methods on `ArrayBuffer.prototype` *and* installs at the spackle's registered symbol; `@endo/bytes` prefers the standard install. Permits must list both the spackle's symbols and the shim's added methods. This is the configuration in which the proposal's methods are reachable on the bare intrinsic.
+
+The XS/Node parity tests described above exercise the spackle on all four combinations: with/without lockdown, with/without the shim. The Node side iterates the four combinations as separate Ava tests; the XS side iterates the same combinations in the `_xs.js` entry point. Shared assertions cover the observable behavior; shared fixtures cover the byte sequences. The cross-runner agreement is what the parity-test pattern certifies.
 
 ### What does not change
 
@@ -262,10 +352,21 @@ To turn the three immutable-aware operations into spackles:
 
 ### Migration path
 
-If `@endo/bytes` adopts the spackle pattern, the migration is non-breaking for callers:
+The migration is non-breaking for callers:
 
-1. Land the spackle install code in `@endo/bytes`'s three immutable-aware modules. The exported function names and signatures do not change.
-2. Update the README to document the rendezvous symbols and the call-through semantics, with a forward reference to the proposed TC39 standardization once that conversation is open.
-3. Existing dependents (`@endo/marshal`, `@endo/pass-style`, vat infrastructure) keep working without code changes. They benefit from the realm-wide single-source-of-truth automatically.
+1. Land the spackle install code in `@endo/bytes`'s immutable-aware modules and in the text-codec modules. The exported function names and signatures do not change. The freezable `TypedArray` constructor moves from `@endo/immutable-arraybuffer/freezable-typedarray-pony.js` (`makePseudoTypedArrayConstructor` becomes internal) to `@endo/bytes`'s spackle install.
+2. Land the SES permits update admitting the registered symbols.
+3. Land the ESLint rule in `@endo/eslint-plugin` that forbids direct use of `TextEncoder`, `TextDecoder`, the `TypedArray` constructors, and `new ArrayBuffer()`, with the spackle's install site whitelisted.
+4. Update the documentation to describe the rendezvous symbols and the call-through semantics, with a forward reference to the proposed TC39 standardization once that conversation is open.
+5. Existing dependents (`@endo/marshal`, `@endo/pass-style`, vat infrastructure) keep working without code changes. They benefit from the realm-wide single-source-of-truth automatically.
 
-The principal open question is whether the `@endo/bytes` operations are realm-identity-sensitive enough to warrant the spackle pattern's extra coordination cost. `@endo/harden` and `@endo/eventual-send` (forthcoming spackle per the spackle document) both have clear realm-identity needs (`WeakSet` dedup, marked-promise recognition). `@endo/bytes`'s immutable-aware operations have a softer case: the principal benefit is that a future native `bytesToImmutable` analog (or a TC39-standardized `Uint8Array.prototype.toImmutable`) could install at the rendezvous and the package's exports would forward to it without modification. That benefit is real but speculative, and the maintainer's judgment on whether to spackle now or wait for the precipitating downstream need is the right gate. This README section documents the option; the actual install lives in a follow-up PR against `@endo/bytes` once the decision is made.
+### Follow-up dispatches
+
+This README's reiteration is descriptive: it documents the elaborated proposal so consumers and reviewers can align on the shape. The implementation lives in follow-up dispatches against the named packages:
+
+- `@endo/bytes`: land the spackle install dance for the six operations (immutable-`ArrayBuffer` slice + transfer, text codec encode + decode, freezable `TypedArray` constructor family, idempotent install via registered symbols on the relevant intrinsic). The freezable-`TypedArray` pony module's `makePseudoTypedArrayConstructor` export migrates from public to module-internal as the spackle becomes the public surface.
+- `@endo/eslint-plugin`: land the rule that forbids direct use of `TextEncoder`, `TextDecoder`, the `TypedArray` constructors, and `new ArrayBuffer()`, with the spackle's capture-at-module-init site whitelisted. Tests cover positive triggers and negative non-triggers.
+- `@endo/ses`: land the permits update admitting the registered symbols on `ArrayBuffer.prototype` and on the `TypedArray` constructors. Without this update, lockdown removes the symbols and the spackle's post-lockdown behavior diverges from its pre-lockdown behavior.
+- XS-side parity runner wiring: land the `_xs.js` entry point, the `generate-test-xs.js` script, the `test:xs` script in `package.json`, and the four lockdown-vs-shim combinations the parity tests exercise. Requires Moddable SDK toolchain.
+
+Each follow-up is a separate PR with a separate review cycle. The split keeps the changes per package small, keeps the review surfaces focused, and lets the XS-side wiring proceed when the toolchain becomes available without blocking the rest of the work.
