@@ -364,6 +364,6 @@ test('verifyAndConsume rejects non-byte-shaped publicKey', t => {
           signature: new Uint8Array(64),
         }),
       ),
-    { message: /publicKey must be an immutable ArrayBuffer or Uint8Array/ },
+    { message: /publicKey must be a Uint8Array/ },
   );
 });

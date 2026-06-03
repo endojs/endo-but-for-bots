@@ -87,12 +87,20 @@ export {
   USER_RUNTIME_SUBDIR,
 } from './src/sock-paths.js';
 
-/** @import { GatewayConfig, FeatureToggles, BindAddress } from './src/config.js' */
-/** @import { AppsNameHub } from './src/vhost.js' */
-/** @import { GatewayBootstrap } from './src/bootstrap.js' */
-/** @import { GatewayAdmin, ResourceLedger } from './src/admin.js' */
-/** @import { OcapnWebSocketHandler } from './src/ocapn-ws.js' */
-/** @import { CryptoPowers, ClockPowers } from './src/proof-of-possession.js' */
+/** @import {
+ *   GatewayConfig,
+ *   FeatureToggles,
+ *   BindAddress,
+ *   AppsNameHub,
+ *   GatewayBootstrap,
+ *   GatewayAdmin,
+ *   ResourceLedger,
+ *   OcapnWebSocketHandler,
+ *   CryptoPowers,
+ *   ClockPowers,
+ *   GatewayPowers,
+ *   Gateway,
+ * } from './src/types.d.ts' */
 
 const GatewayInterface = M.interface('Gateway', {
   start: M.call().returns(M.promise()),
@@ -105,69 +113,6 @@ const GatewayInterface = M.interface('Gateway', {
   getOcapnHandler: M.call().returns(M.promise()),
 });
 harden(GatewayInterface);
-
-/**
- * @typedef {object} GatewayPowers The host-supplied powers the
- *   gateway needs to listen on the network and read the
- *   environment. The phase-1 skeleton uses only `env`; phase 2
- *   adds `crypto` and `clock` for the bootstrap registrar; later
- *   phases add `net` and `fs`.
- * @property {{[name: string]: string | undefined}} [env]
- * @property {CryptoPowers} [crypto] Required when
- *   `sockBootstrap` is enabled. The bootstrap registrar needs
- *   `randomBytes`, `sha256`, and `verifyEd25519`.
- * @property {ClockPowers} [clock] Required when `sockBootstrap` is
- *   enabled. The nonce registry consumes `now()` for TTL.
- * @property {ResourceLedger} [resourceLedger] Optional Feature 1
- *   resource ledger. When `adminDaemon` is on and a ledger is
- *   supplied, `GatewayAdmin.getResourceBalances` reads through
- *   this. When omitted, the admin facet still works but
- *   `getResourceBalances` returns an empty list. Feature 1's
- *   ledger implementation lands with the Chat-hosting phase;
- *   until then, embedders that want admin reads supply a stub.
- */
-
-/**
- * @typedef {object} Gateway
- * @property {() => Promise<void>} start
- * @property {() => Promise<void>} stop
- * @property {() => Promise<string>} getBindAddress The address
- *   the gateway is bound to, in `host:port` form. Before
- *   `start()`, the configured value; after `start()`, the
- *   resolved address (which differs from the configured value
- *   when the configured port is `0`).
- * @property {() => Promise<AppsNameHub>} getApps
- * @property {() => Promise<GatewayConfig>} getConfig
- * @property {() => Promise<GatewayBootstrap>} getBootstrap Throws
- *   when `sockBootstrap` is disabled in the gateway's feature
- *   toggles. The returned exo is also the entry capability a sock
- *   listener serves to incoming CapTP connections; a process
- *   embedding the gateway in-realm calls `getBootstrap` directly.
- * @property {() => Promise<GatewayAdmin>} getAdmin Returns the
- *   `GatewayAdmin` exo (Feature 7). Throws when the `adminDaemon`
- *   feature toggle is off. The admin facet is **never** served on
- *   the gateway's public HTTP / WS surface, and is **never**
- *   reached through the bootstrap sock; it is reachable only
- *   in-process (this method) and over a separate admin sock
- *   (`admin.sock`) whose listener lands in a follow-on PR alongside
- *   the bootstrap sock's listener. The two socks are distinct file
- *   paths and the admin sock's deployment is responsible for
- *   placing it under a non-world-traversable parent directory so
- *   only the administrator OS account can `connect(2)`.
- * @property {() => Promise<OcapnWebSocketHandler>} getOcapnHandler
- *   Returns the `OcapnWebSocketHandler` exo (Feature 8) that an
- *   embedder feeds upgraded `/ocapn-cbor-np` WebSocket connections
- *   to. The exo's `handleConnection({ reader, writer })` reads the
- *   first frame's intended-responder prefix, looks up the
- *   registration that owns the key (via the bootstrap registrar's
- *   table), and hands the stream pair off to the registered
- *   daemon's `handleOcapnSession`. Throws when the `ocapnWebSocket`
- *   feature toggle is off, or when `sockBootstrap` is off (the
- *   handler depends on the registration table the bootstrap owns;
- *   without it there is no daemon to forward to). The HTTP
- *   listener that performs the WS upgrade is the embedder's, not
- *   the gateway's; see `src/ocapn-ws.js` for the contract.
- */
 
 /**
  * Create a hardened gateway exo. See `designs/gateway-package.md`

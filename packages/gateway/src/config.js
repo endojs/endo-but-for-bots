@@ -62,15 +62,7 @@ export const defaultGatewayConfig = harden({
   maxProxyHops: 1,
 });
 
-/**
- * @typedef {object} BindAddress
- * @property {string} host A non-empty hostname or IP literal,
- *   with no surrounding IPv6 brackets.
- * @property {number} port An integer in [0, 65535]. `0` means
- *   "let the OS choose".
- * @property {'ipv4' | 'ipv6' | 'hostname'} kind The shape of
- *   `host`. Distinguishes `0.0.0.0` from `[::]` from `localhost`.
- */
+/** @import { BindAddress, FeatureToggles, GatewayConfig } from './types.d.ts' */
 
 /**
  * Parse an `ENDO_HTTP_ADDR`-shaped `host:port` string.
@@ -159,28 +151,6 @@ export const parseBindAddress = input => {
   return harden({ host, port, kind });
 };
 harden(parseBindAddress);
-
-/**
- * @typedef {object} FeatureToggles
- * @property {boolean} chatHosting Feature 1.
- * @property {boolean} virtualHosting Feature 2.
- * @property {boolean} gitHttp Feature 3.
- * @property {boolean} sockBootstrap Feature 4.
- * @property {boolean} captpRelay Feature 6.
- * @property {boolean} adminDaemon Feature 7.
- * @property {boolean} ocapnWebSocket Feature 8.
- */
-
-/**
- * @typedef {object} GatewayConfig
- * @property {string} bindAddress The `host:port` to bind, as
- *   accepted by {@link parseBindAddress}.
- * @property {FeatureToggles} enableFeatures
- * @property {ReadonlyArray<string>} trustedProxyCidrs Feature 9:
- *   CIDR ranges trusted to set `X-Forwarded-*` headers.
- * @property {number} maxProxyHops Feature 9: maximum
- *   `X-Forwarded-For` hops to trust.
- */
 
 /**
  * Validate the inter-feature dependency graph spelled out in the
