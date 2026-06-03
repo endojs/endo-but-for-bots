@@ -7,14 +7,20 @@
  *
  * The unit tests in `git-http.test.js` cover the handler's URL
  * parsing, header parsing, auth-scheme dispatch, and the
- * `resolveRepo` plumbing with stub repo capabilities. This test
- * stands up an actual `http.createServer` on an ephemeral port,
- * wires the handler to a `resolveRepo` that returns a capability
- * backed by the real `git http-backend` CGI binary, generates a
- * formula-id-shaped repo id and bearer token, and drives the real
+ * `serveRepo` plumbing with stub daemon repo capabilities. This
+ * test stands up an actual `http.createServer` on an ephemeral
+ * port, wires the handler to a `serveRepo` that returns a daemon
+ * repo capability backed by the real `git http-backend` CGI binary,
+ * generates a formula-id-shaped bearer token, and drives the real
  * `git` CLI through `push` and `pull` cycles. The end-to-end shape
  * is the canonical pattern for testing smart-HTTP servers (see
  * `git-http-backend(1)`).
+ *
+ * The URL has no repository segment: the daemon embedding the
+ * gateway hosts one Git object store and serves content for the
+ * formula named by the bearer token (per kriskowal directive on PR
+ * #394, 2026-05-29). The bearer corresponds to a ref like
+ * `refs/formulas/<formula-id>` within that one store.
  *
  * Skipped when `git` or `git-http-backend` are not present (most CI
  * runners have both; some sandboxed test environments do not).
@@ -25,6 +31,7 @@ import '@endo/init/debug.js';
 import test from 'ava';
 
 import { spawn, spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { createServer } from 'node:http';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -35,7 +42,6 @@ import { Far } from '@endo/far';
 
 import { makeGitHttpHandler } from '../index.js';
 
-const HEX_ALPHABET = '0123456789abcdef';
 const FORMULA_ID_LENGTH = 64;
 
 /**
@@ -71,24 +77,22 @@ const integrationTest = runIntegration ? test.serial : test.serial.skip;
 /**
  * Build a 64-character lowercase-hex string (the formula-id shape
  * the gateway validates). We do not need cryptographic randomness
- * for a test fixture; a deterministic-looking but unique value is
- * fine. `crypto.randomBytes` would also work; we use `Math.random`
- * to avoid pulling in the crypto powers.
+ * for a test fixture; a deterministic value derived from a label
+ * is fine and keeps test failures reproducible. SHA-256 of the
+ * label produces 32 bytes whose hex encoding is exactly 64 chars,
+ * which matches `FORMULA_ID_LENGTH`.
  *
- * @param {number} seed
+ * @param {string} label
  * @returns {string}
  */
-const makeHex64 = seed => {
-  // Mix the seed into a 256-bit-ish hex string by chaining a tiny
-  // multiplicative LCG modulo 2^32. Output is deterministic per
-  // seed, which makes test failures reproducible.
-  const MOD = 4_294_967_296; // 2^32
-  let state = ((seed % MOD) + MOD) % MOD;
-  if (state === 0) state = 1;
-  let out = '';
-  while (out.length < FORMULA_ID_LENGTH) {
-    state = (state * 1664525 + 1013904223) % MOD;
-    out += HEX_ALPHABET[state % 16];
+const makeHex64 = label => {
+  const out = createHash('sha256').update(label).digest('hex');
+  // Defense-in-depth: assert the shape so a future hash swap that
+  // changes the digest length surfaces here, not at the validator.
+  if (out.length !== FORMULA_ID_LENGTH) {
+    throw new Error(
+      `makeHex64: expected ${FORMULA_ID_LENGTH} hex chars, got ${out.length}`,
+    );
   }
   return out;
 };
@@ -225,14 +229,19 @@ const callGitHttpBackend = ({
 };
 
 /**
- * Build a repo capability backed by a real bare git repo on disk.
- * The three methods each invoke `git http-backend` with the
- * appropriate `PATH_INFO`.
+ * Build a daemon repo capability backed by a real bare git repo on
+ * disk. The three methods each invoke `git http-backend` with the
+ * appropriate `PATH_INFO`. The capability stands in for the
+ * daemon's single Git object store; in production the daemon would
+ * resolve the bearer's formula to a ref like `refs/formulas/<id>`
+ * within that store, but the integration test exercises the
+ * gateway-side wire shape and runs against an unconstrained bare
+ * repo.
  *
  * @param {string} repoDir
  */
-const makeFsBackedRepoCapability = repoDir => {
-  return Far('FsBackedRepo', {
+const makeFsBackedDaemonRepo = repoDir => {
+  return Far('FsBackedDaemonRepo', {
     /**
      * @param {{ service: string, headers: ReadonlyArray<readonly [string, string]> }} args
      */
@@ -418,24 +427,31 @@ integrationTest(
       cwd: bareRepoDir,
     });
 
-    // Mint a formula-id-shaped repo id and bearer token. The
-    // `Math.random` source is fine for tests; the handler validates
-    // the shape (64 lowercase hex) but does not check entropy.
-    const repoId = makeHex64(0xb0b5c4fe);
-    const token = makeHex64(0xdeadbeef);
-    const wrongToken = makeHex64(0xfeedface);
+    // Mint a formula-id-shaped bearer token. The hash source is
+    // fine for tests; the handler validates the shape (64
+    // lowercase hex) but does not check entropy.
+    //
+    // A daemon, including the gateway, should only have one
+    // repository for content to serve on virtual hosts, where the
+    // bearer token corresponds to and may even be identical to a
+    // ref like `refs/formulas/<formula-id>` (kriskowal directive,
+    // PR #394 review). The integration test exercises the
+    // gateway-side surface; the daemon-side mapping from bearer to
+    // `refs/formulas/<id>` will land alongside the daemon's Git CAS.
+    const token = makeHex64('gateway-test:authorized-bearer');
+    const wrongToken = makeHex64('gateway-test:unauthorized-bearer');
 
-    // Wire the handler with a resolveRepo that authorizes only the
-    // (repoId, token) pair we minted; everything else returns
-    // undefined (the handler maps that to 401).
-    /** @type {Array<{ token: string, repoId: string, granted: boolean }>} */
-    const resolveCalls = [];
+    // Wire the handler with a serveRepo that authorizes only the
+    // bearer token we minted; everything else returns undefined
+    // (the handler maps that to 401).
+    /** @type {Array<{ token: string, granted: boolean }>} */
+    const serveCalls = [];
     const handler = makeGitHttpHandler({
-      resolveRepo: async args => {
-        const granted = args.token === token && args.repoId === repoId;
-        resolveCalls.push({ token: args.token, repoId: args.repoId, granted });
+      serveRepo: async args => {
+        const granted = args.token === token;
+        serveCalls.push({ token: args.token, granted });
         if (!granted) return undefined;
-        return makeFsBackedRepoCapability(bareRepoDir);
+        return makeFsBackedDaemonRepo(bareRepoDir);
       },
     });
 
@@ -453,7 +469,11 @@ integrationTest(
       return;
     }
     const port = address.port;
-    const remoteUrl = `http://127.0.0.1:${port}/git/${repoId}/`;
+    // The daemon hosts one repo; the URL has no repository segment.
+    // git treats the URL up to the final `/` as the remote root and
+    // appends `info/refs`, `git-upload-pack`, or `git-receive-pack`
+    // under it.
+    const remoteUrl = `http://127.0.0.1:${port}/git/`;
 
     // Build the env the `git` CLI uses on every invocation: include
     // the bearer token via `http.extraHeader`, suppress any global
@@ -514,7 +534,7 @@ integrationTest(
       t.is(commit.status, 0, `git commit: ${commit.stderr}`);
 
       // First, prove that pushing without the bearer fails. We use a
-      // bearer that the resolveRepo does not authorize; this exercises
+      // bearer that the serveRepo does not authorize; this exercises
       // the 401 path on the wire.
       const noAuth = await gitCmd(
         ['push', remoteUrl, 'main:main'],
@@ -574,15 +594,15 @@ integrationTest(
     // The handler observed at least one rejected attempt (the wrong
     // bearer) and at least one granted attempt (push, then clone).
     // Each smart-HTTP operation makes multiple requests (info/refs
-    // then git-receive-pack or git-upload-pack), so resolveCalls is
+    // then git-receive-pack or git-upload-pack), so serveCalls is
     // larger than 3; we just check the two outcomes are both present.
     t.true(
-      resolveCalls.some(c => !c.granted),
-      `expected at least one denied resolveRepo call: ${JSON.stringify(resolveCalls)}`,
+      serveCalls.some(c => !c.granted),
+      `expected at least one denied serveRepo call: ${JSON.stringify(serveCalls)}`,
     );
     t.true(
-      resolveCalls.some(c => c.granted),
-      `expected at least one granted resolveRepo call: ${JSON.stringify(resolveCalls)}`,
+      serveCalls.some(c => c.granted),
+      `expected at least one granted serveRepo call: ${JSON.stringify(serveCalls)}`,
     );
   },
 );
