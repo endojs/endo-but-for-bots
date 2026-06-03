@@ -42,7 +42,6 @@ import { makeNonceRegistry, NONCE_BYTE_LENGTH } from './proof-of-possession.js';
 
 /** @import { AppsNameHub } from './types.js' */
 /** @import { CryptoPowers, ClockPowers, ChallengeIssued } from './proof-of-possession.js' */
-/** @import { GatewayAdmin } from './admin.js' */
 
 /**
  * Expected raw Ed25519 public key length in bytes. The bootstrap
@@ -74,7 +73,6 @@ const GatewayBootstrapInterface = M.interface('GatewayBootstrap', {
   registerRelay: M.call(M.any()).returns(M.promise()),
   getBindAddress: M.call().returns(M.promise()),
   getApps: M.call().returns(M.promise()),
-  getAdmin: M.call().returns(M.promise()),
 });
 
 /**
@@ -274,18 +272,22 @@ const publicKeyToHex = bytes => {
 /**
  * @typedef {object} GatewayBootstrap CapTP-facing exo. Methods are
  *   `async` so they cross the wire as eventual sends.
+ *
+ * The bootstrap channel carries the registrar exo only: any local
+ * user daemon that can connect to the bootstrap sock may register
+ * itself, but **none** of these daemons have administrator
+ * authority. The `GatewayAdmin` exo (Feature 7) is **not**
+ * reachable through this bootstrap; it lives on a separate sock
+ * (`admin.sock`, see `sock-paths.js` and the gateway's
+ * `getAdmin` in-process accessor) gated by a stricter access
+ * control. The split keeps registration authority and admin
+ * authority on independent capability paths.
+ *
  * @property {() => Promise<ChallengePayload>} challenge
  * @property {(args: RegistrationArgs) => Promise<Registration>} register
  * @property {(args: RelayRegistrationArgs) => Promise<Registration>} registerRelay
  * @property {() => Promise<string>} getBindAddress
  * @property {() => Promise<AppsNameHub>} getApps
- * @property {() => Promise<GatewayAdmin>} getAdmin
- *   Returns the `GatewayAdmin` exo (Feature 7). The admin facet is
- *   reachable only over the sock bootstrap (this method) and via
- *   the in-process `gateway.getAdmin()` accessor; never over the
- *   network. Throws when the gateway's `adminDaemon` feature
- *   toggle is off, surfacing a clear error rather than silently
- *   returning a no-op.
  */
 
 /**
@@ -312,14 +314,6 @@ const publicKeyToHex = bytes => {
  *   from the configured value after `start()`).
  * @property {number} [ttlMs] Nonce TTL; defaults to the registry's
  *   own default (30s).
- * @property {() => GatewayAdmin} [getAdmin]
- *   Returns the `GatewayAdmin` exo (Feature 7). Injected from the
- *   gateway proper so the bootstrap and the gateway share a single
- *   admin facet. When unset, the bootstrap's `getAdmin` method
- *   throws "admin daemon is disabled"; the gateway proper supplies
- *   this only when both `sockBootstrap` and `adminDaemon` toggles
- *   are on. Keeping the admin wiring outside the bootstrap module
- *   avoids a circular import between `bootstrap.js` and `admin.js`.
  */
 
 /**
@@ -353,7 +347,6 @@ export const makeGatewayBootstrap = ({
   apps,
   getBindAddress,
   ttlMs,
-  getAdmin,
 }) => {
   if (crypto === undefined) {
     throw makeError(X`makeGatewayBootstrap requires crypto powers`);
@@ -549,14 +542,6 @@ export const makeGatewayBootstrap = ({
       },
       async getApps() {
         return apps;
-      },
-      async getAdmin() {
-        if (getAdmin === undefined) {
-          throw makeError(
-            X`Admin daemon is disabled (set enableFeatures.adminDaemon=true)`,
-          );
-        }
-        return getAdmin();
       },
     }),
   );

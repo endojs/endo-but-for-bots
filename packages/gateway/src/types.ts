@@ -119,15 +119,16 @@ export type Gateway = {
   getBootstrap(): Promise<GatewayBootstrap>;
   /**
    * Returns the `GatewayAdmin` exo (Feature 7). Throws when the
-   * `adminDaemon` feature toggle is off, or when `sockBootstrap`
-   * is off (admin depends on the sock bootstrap for its access
-   * channel, and the config validator already rejects
-   * `adminDaemon=true` with `sockBootstrap=false`; the in-process
-   * accessor mirrors the surface contract: there is no admin
-   * authority without a sock bootstrap to gate it). The admin
-   * facet is **never** served on the gateway's public HTTP / WS
-   * surface; it is reachable only in-process (this method) and
-   * through the sock bootstrap's `getAdmin`.
+   * `adminDaemon` feature toggle is off. The admin facet is
+   * **never** served on the gateway's public HTTP / WS surface,
+   * and is **never** reached through the bootstrap sock; it is
+   * reachable only in-process (this method) and over a separate
+   * admin sock (`admin.sock`) whose listener lands in a follow-on
+   * PR alongside the bootstrap sock's listener. The two socks are
+   * distinct file paths and the admin sock's deployment is
+   * responsible for placing it under a non-world-traversable
+   * parent directory so only the administrator OS account can
+   * `connect(2)`.
    */
   getAdmin(): Promise<GatewayAdmin>;
 };
