@@ -57,10 +57,10 @@ const standGateway = (opts = {}) =>
       crypto: makeNodeCryptoPowers(),
       clock: makeFakeClock(),
       resourceLedger: opts.resourceLedger,
-      // gitHttp is on by default and requires the resolveRepo
+      // gitHttp is on by default and requires the serveRepo
       // adapter; admin tests don't exercise the Git path so they
       // supply a 401-everything stub.
-      resolveRepo: async () => undefined,
+      serveRepo: async () => undefined,
     }),
     config: opts.config,
   });
@@ -425,7 +425,7 @@ test('Gateway getAdmin works when sockBootstrap is disabled', async t => {
   // pins the admin's standalone behavior, independent of which
   // other phases have landed. The Git smart-HTTP handler
   // (Feature 3) is an independent powers axis (it needs
-  // `resolveRepo`); this shape disables it so the test stays
+  // `serveRepo`); this shape disables it so the test stays
   // focused on the admin facet's bootstrap-independence rather
   // than the Git surface.
   const g = makeGateway({

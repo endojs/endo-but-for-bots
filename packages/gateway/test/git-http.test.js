@@ -34,11 +34,10 @@ const makeFakeClock = (initial = 0) => {
 
 // -- Path matcher --------------------------------------------------
 
-test('isGitHttpPath recognizes /git/<repo-id> and rejects bare /git', t => {
-  const hex = 'a'.repeat(64);
-  t.true(isGitHttpPath(`/git/${hex}`));
-  t.true(isGitHttpPath(`/git/${hex}/info/refs`));
-  t.true(isGitHttpPath(`/git/${hex}/git-upload-pack`));
+test('isGitHttpPath recognizes /git/<op> and rejects bare /git', t => {
+  t.true(isGitHttpPath('/git/info/refs'));
+  t.true(isGitHttpPath('/git/git-upload-pack'));
+  t.true(isGitHttpPath('/git/git-receive-pack'));
   t.false(isGitHttpPath('/git'));
   t.false(isGitHttpPath('/git/'));
   t.false(isGitHttpPath('/'));
@@ -61,41 +60,29 @@ test('GIT_SERVICES enumerates the two smart-HTTP commands', t => {
 const HEX64 = 'a'.repeat(64);
 const HEX64_B = 'b'.repeat(64);
 
-test('parseGitHttpPath extracts repo-id and operation from canonical paths', t => {
+test('parseGitHttpPath extracts operation from canonical paths', t => {
   t.deepEqual(
-    parseGitHttpPath(`/git/${HEX64}/info/refs`),
-    harden({ repoId: HEX64, operation: 'info/refs' }),
+    parseGitHttpPath('/git/info/refs'),
+    harden({ operation: 'info/refs' }),
   );
   t.deepEqual(
-    parseGitHttpPath(`/git/${HEX64}/git-upload-pack`),
-    harden({ repoId: HEX64, operation: 'git-upload-pack' }),
+    parseGitHttpPath('/git/git-upload-pack'),
+    harden({ operation: 'git-upload-pack' }),
   );
   t.deepEqual(
-    parseGitHttpPath(`/git/${HEX64}/git-receive-pack`),
-    harden({ repoId: HEX64, operation: 'git-receive-pack' }),
+    parseGitHttpPath('/git/git-receive-pack'),
+    harden({ operation: 'git-receive-pack' }),
   );
-});
-
-test('parseGitHttpPath accepts <number>:<node> formula-id form', t => {
-  const fullId = `${HEX64}:${HEX64_B}`;
-  t.deepEqual(
-    parseGitHttpPath(`/git/${fullId}/info/refs`),
-    harden({ repoId: fullId, operation: 'info/refs' }),
-  );
-});
-
-test('parseGitHttpPath rejects malformed repo-ids', t => {
-  t.is(parseGitHttpPath('/git/xyz/info/refs'), undefined);
-  // Uppercase hex is not accepted; lowercase only matches the formula-id pattern.
-  const upper = 'A'.repeat(64);
-  t.is(parseGitHttpPath(`/git/${upper}/info/refs`), undefined);
-  t.is(parseGitHttpPath(`/git/${HEX64.slice(0, 63)}/info/refs`), undefined); // too short
 });
 
 test('parseGitHttpPath rejects unrecognized operations', t => {
-  t.is(parseGitHttpPath(`/git/${HEX64}/refs`), undefined);
-  t.is(parseGitHttpPath(`/git/${HEX64}/info/packs`), undefined);
-  t.is(parseGitHttpPath(`/git/${HEX64}/git-archive`), undefined);
+  t.is(parseGitHttpPath('/git/refs'), undefined);
+  t.is(parseGitHttpPath('/git/info/packs'), undefined);
+  t.is(parseGitHttpPath('/git/git-archive'), undefined);
+  // A formula-id-shaped path segment is no longer valid; the bearer
+  // carries the formula identity now, not the URL.
+  t.is(parseGitHttpPath(`/git/${HEX64}/info/refs`), undefined);
+  t.is(parseGitHttpPath(`/git/${HEX64}`), undefined);
 });
 
 test('parseGitHttpPath rejects non-Git paths', t => {
@@ -162,20 +149,21 @@ test('parseAuthorizationHeader rejects malformed inputs', t => {
 
 // -- Factory shape ------------------------------------------------
 
-test('makeGitHttpHandler requires a resolveRepo function', t => {
+test('makeGitHttpHandler requires a serveRepo function', t => {
   t.throws(() => makeGitHttpHandler(/** @type {any} */ ({})), {
-    message: /requires a resolveRepo function/,
+    message: /requires a serveRepo function/,
   });
-  t.throws(() => makeGitHttpHandler(/** @type {any} */ ({ resolveRepo: 42 })), {
-    message: /requires a resolveRepo function/,
+  t.throws(() => makeGitHttpHandler(/** @type {any} */ ({ serveRepo: 42 })), {
+    message: /requires a serveRepo function/,
   });
 });
 
 // -- Request shape validation -------------------------------------
 
 /**
- * Build a stub `resolveRepo` that returns the same repo capability
- * regardless of input. Used by tests that exercise the happy path.
+ * Build a stub `daemon repo capability` that returns canned
+ * responses regardless of input. Used by tests that exercise the
+ * happy path.
  *
  * @param {object} responses
  * @param {(args: { service: string, headers: ReadonlyArray<readonly [string, string]> }) => Promise<any>} [responses.infoRefs]
@@ -183,7 +171,7 @@ test('makeGitHttpHandler requires a resolveRepo function', t => {
  * @param {(args: { requestBody: Uint8Array, headers: ReadonlyArray<readonly [string, string]> }) => Promise<any>} [responses.gitReceivePack]
  */
 const makeStubRepo = responses => {
-  return Far('Repo', {
+  return Far('DaemonRepo', {
     infoRefs:
       responses.infoRefs ||
       (async () =>
@@ -228,7 +216,7 @@ const makeStubRepo = responses => {
 
 test('handleRequest rejects non-object input', async t => {
   const handler = makeGitHttpHandler({
-    resolveRepo: async () => undefined,
+    serveRepo: async () => undefined,
   });
   await t.throwsAsync(E(handler).handleRequest(/** @type {any} */ (null)), {
     message: /expects a request object/,
@@ -237,12 +225,12 @@ test('handleRequest rejects non-object input', async t => {
 
 test('handleRequest rejects missing method / path / headers / body', async t => {
   const handler = makeGitHttpHandler({
-    resolveRepo: async () => undefined,
+    serveRepo: async () => undefined,
   });
   await t.throwsAsync(
     E(handler).handleRequest(
       /** @type {any} */ ({
-        path: '/git/x',
+        path: '/git/info/refs',
         headers: [],
         body: new Uint8Array(0),
       }),
@@ -263,7 +251,7 @@ test('handleRequest rejects missing method / path / headers / body', async t => 
     E(handler).handleRequest(
       /** @type {any} */ ({
         method: 'GET',
-        path: '/git/x',
+        path: '/git/info/refs',
         headers: 'no',
         body: new Uint8Array(0),
       }),
@@ -274,7 +262,7 @@ test('handleRequest rejects missing method / path / headers / body', async t => 
     E(handler).handleRequest(
       /** @type {any} */ ({
         method: 'GET',
-        path: '/git/x',
+        path: '/git/info/refs',
         headers: [],
         body: 'no',
       }),
@@ -287,7 +275,7 @@ test('handleRequest rejects missing method / path / headers / body', async t => 
 
 test('handleRequest 400s on non-Git paths', async t => {
   const handler = makeGitHttpHandler({
-    resolveRepo: async () => makeStubRepo({}),
+    serveRepo: async () => makeStubRepo({}),
   });
   const resp = await E(handler).handleRequest(
     harden({
@@ -300,14 +288,16 @@ test('handleRequest 400s on non-Git paths', async t => {
   t.is(resp.status, 400);
 });
 
-test('handleRequest 400s on malformed repo-id', async t => {
+test('handleRequest 400s on legacy repo-id-in-path shape', async t => {
+  // The pre-redesign URL shape (`/git/<repo-id>/info/refs`) is no
+  // longer recognized; the bearer carries the formula identity now.
   const handler = makeGitHttpHandler({
-    resolveRepo: async () => makeStubRepo({}),
+    serveRepo: async () => makeStubRepo({}),
   });
   const resp = await E(handler).handleRequest(
     harden({
       method: 'GET',
-      path: '/git/xyz/info/refs',
+      path: `/git/${HEX64}/info/refs`,
       query: 'service=git-upload-pack',
       headers: [
         /** @type {readonly [string, string]} */ ([
@@ -323,13 +313,13 @@ test('handleRequest 400s on malformed repo-id', async t => {
 
 test('handleRequest 400s when method mismatches operation', async t => {
   const handler = makeGitHttpHandler({
-    resolveRepo: async () => makeStubRepo({}),
+    serveRepo: async () => makeStubRepo({}),
   });
   // info/refs requires GET
   const r1 = await E(handler).handleRequest(
     harden({
       method: 'POST',
-      path: `/git/${HEX64}/info/refs`,
+      path: '/git/info/refs',
       query: 'service=git-upload-pack',
       headers: [],
       body: new Uint8Array(0),
@@ -340,7 +330,7 @@ test('handleRequest 400s when method mismatches operation', async t => {
   const r2 = await E(handler).handleRequest(
     harden({
       method: 'GET',
-      path: `/git/${HEX64}/git-upload-pack`,
+      path: '/git/git-upload-pack',
       headers: [],
       body: new Uint8Array(0),
     }),
@@ -350,12 +340,12 @@ test('handleRequest 400s when method mismatches operation', async t => {
 
 test('handleRequest 400s on info/refs without service query', async t => {
   const handler = makeGitHttpHandler({
-    resolveRepo: async () => makeStubRepo({}),
+    serveRepo: async () => makeStubRepo({}),
   });
   const resp = await E(handler).handleRequest(
     harden({
       method: 'GET',
-      path: `/git/${HEX64}/info/refs`,
+      path: '/git/info/refs',
       headers: [],
       body: new Uint8Array(0),
     }),
@@ -367,12 +357,12 @@ test('handleRequest 400s on info/refs without service query', async t => {
 
 test('handleRequest 401s on missing Authorization header', async t => {
   const handler = makeGitHttpHandler({
-    resolveRepo: async () => makeStubRepo({}),
+    serveRepo: async () => makeStubRepo({}),
   });
   const resp = await E(handler).handleRequest(
     harden({
       method: 'GET',
-      path: `/git/${HEX64}/info/refs`,
+      path: '/git/info/refs',
       query: 'service=git-upload-pack',
       headers: [],
       body: new Uint8Array(0),
@@ -390,12 +380,12 @@ test('handleRequest 401s on missing Authorization header', async t => {
 
 test('handleRequest 401s on malformed token (not a formula id)', async t => {
   const handler = makeGitHttpHandler({
-    resolveRepo: async () => makeStubRepo({}),
+    serveRepo: async () => makeStubRepo({}),
   });
   const resp = await E(handler).handleRequest(
     harden({
       method: 'GET',
-      path: `/git/${HEX64}/info/refs`,
+      path: '/git/info/refs',
       query: 'service=git-upload-pack',
       headers: [
         /** @type {readonly [string, string]} */ ([
@@ -409,10 +399,10 @@ test('handleRequest 401s on malformed token (not a formula id)', async t => {
   t.is(resp.status, 401);
 });
 
-test('handleRequest 401s when resolveRepo returns undefined', async t => {
+test('handleRequest 401s when serveRepo returns undefined', async t => {
   let calls = 0;
   const handler = makeGitHttpHandler({
-    resolveRepo: async () => {
+    serveRepo: async () => {
       calls += 1;
       return undefined;
     },
@@ -420,7 +410,7 @@ test('handleRequest 401s when resolveRepo returns undefined', async t => {
   const resp = await E(handler).handleRequest(
     harden({
       method: 'GET',
-      path: `/git/${HEX64}/info/refs`,
+      path: '/git/info/refs',
       query: 'service=git-upload-pack',
       headers: [
         /** @type {readonly [string, string]} */ ([
@@ -435,16 +425,16 @@ test('handleRequest 401s when resolveRepo returns undefined', async t => {
   t.is(calls, 1);
 });
 
-test('handleRequest 500s when resolveRepo throws', async t => {
+test('handleRequest 500s when serveRepo throws', async t => {
   const handler = makeGitHttpHandler({
-    resolveRepo: async () => {
+    serveRepo: async () => {
       throw new Error('boom');
     },
   });
   const resp = await E(handler).handleRequest(
     harden({
       method: 'GET',
-      path: `/git/${HEX64}/info/refs`,
+      path: '/git/info/refs',
       query: 'service=git-upload-pack',
       headers: [
         /** @type {readonly [string, string]} */ ([
@@ -460,7 +450,7 @@ test('handleRequest 500s when resolveRepo throws', async t => {
 
 // -- Happy paths --------------------------------------------------
 
-test('handleRequest forwards info/refs to the repo capability', async t => {
+test('handleRequest forwards info/refs to the daemon repo capability', async t => {
   /** @type {Array<{ service: string }>} */
   const seen = [];
   const repo = makeStubRepo({
@@ -478,18 +468,18 @@ test('handleRequest forwards info/refs to the repo capability', async t => {
       });
     },
   });
-  /** @type {Array<{ token: string, repoId: string }>} */
-  const resolveCalls = [];
+  /** @type {Array<{ token: string }>} */
+  const serveCalls = [];
   const handler = makeGitHttpHandler({
-    resolveRepo: async args => {
-      resolveCalls.push({ token: args.token, repoId: args.repoId });
+    serveRepo: async args => {
+      serveCalls.push({ token: args.token });
       return repo;
     },
   });
   const resp = await E(handler).handleRequest(
     harden({
       method: 'GET',
-      path: `/git/${HEX64}/info/refs`,
+      path: '/git/info/refs',
       query: 'service=git-upload-pack',
       headers: [
         /** @type {readonly [string, string]} */ ([
@@ -501,14 +491,13 @@ test('handleRequest forwards info/refs to the repo capability', async t => {
     }),
   );
   t.is(resp.status, 200);
-  t.is(resolveCalls.length, 1);
-  t.is(resolveCalls[0].token, HEX64_B);
-  t.is(resolveCalls[0].repoId, HEX64);
+  t.is(serveCalls.length, 1);
+  t.is(serveCalls[0].token, HEX64_B);
   t.is(seen.length, 1);
   t.is(seen[0].service, 'git-upload-pack');
 });
 
-test('handleRequest forwards git-upload-pack POST body to the repo capability', async t => {
+test('handleRequest forwards git-upload-pack POST body to the daemon repo capability', async t => {
   const requestBody = new TextEncoder().encode('want abc\nhave def\n');
   /** @type {Uint8Array | undefined} */
   let seenBody;
@@ -523,12 +512,12 @@ test('handleRequest forwards git-upload-pack POST body to the repo capability', 
     },
   });
   const handler = makeGitHttpHandler({
-    resolveRepo: async () => repo,
+    serveRepo: async () => repo,
   });
   const resp = await E(handler).handleRequest(
     harden({
       method: 'POST',
-      path: `/git/${HEX64}/git-upload-pack`,
+      path: '/git/git-upload-pack',
       headers: [
         /** @type {readonly [string, string]} */ ([
           'authorization',
@@ -546,7 +535,7 @@ test('handleRequest forwards git-upload-pack POST body to the repo capability', 
   t.deepEqual(seenBody, requestBody);
 });
 
-test('handleRequest forwards git-receive-pack POST body to the repo capability', async t => {
+test('handleRequest forwards git-receive-pack POST body to the daemon repo capability', async t => {
   const requestBody = new TextEncoder().encode('push commands + pack\n');
   /** @type {Uint8Array | undefined} */
   let seenBody;
@@ -561,12 +550,12 @@ test('handleRequest forwards git-receive-pack POST body to the repo capability',
     },
   });
   const handler = makeGitHttpHandler({
-    resolveRepo: async () => repo,
+    serveRepo: async () => repo,
   });
   const resp = await E(handler).handleRequest(
     harden({
       method: 'POST',
-      path: `/git/${HEX64}/git-receive-pack`,
+      path: '/git/git-receive-pack',
       headers: [
         /** @type {readonly [string, string]} */ ([
           'authorization',
@@ -584,7 +573,7 @@ test('handleRequest accepts Basic auth with empty user', async t => {
   /** @type {string | undefined} */
   let seenToken;
   const handler = makeGitHttpHandler({
-    resolveRepo: async args => {
+    serveRepo: async args => {
       seenToken = args.token;
       return makeStubRepo({});
     },
@@ -592,7 +581,7 @@ test('handleRequest accepts Basic auth with empty user', async t => {
   const resp = await E(handler).handleRequest(
     harden({
       method: 'GET',
-      path: `/git/${HEX64}/info/refs`,
+      path: '/git/info/refs',
       query: 'service=git-upload-pack',
       headers: [
         /** @type {readonly [string, string]} */ ([
@@ -607,8 +596,8 @@ test('handleRequest accepts Basic auth with empty user', async t => {
   t.is(seenToken, HEX64_B);
 });
 
-test('handleRequest 500s when the repo capability throws', async t => {
-  const repo = Far('Repo', {
+test('handleRequest 500s when the daemon repo capability throws', async t => {
+  const repo = Far('DaemonRepo', {
     infoRefs: async () => {
       throw new Error('repo broke');
     },
@@ -620,12 +609,12 @@ test('handleRequest 500s when the repo capability throws', async t => {
     },
   });
   const handler = makeGitHttpHandler({
-    resolveRepo: async () => repo,
+    serveRepo: async () => repo,
   });
   const resp = await E(handler).handleRequest(
     harden({
       method: 'GET',
-      path: `/git/${HEX64}/info/refs`,
+      path: '/git/info/refs',
       query: 'service=git-upload-pack',
       headers: [
         /** @type {readonly [string, string]} */ ([
@@ -661,21 +650,21 @@ test('readerFromBuffer rejects non-Uint8Array input', t => {
 // -- makeGateway wiring -------------------------------------------
 
 test('makeGateway exposes getGitHttpHandler when gitHttp is enabled', async t => {
-  // gitHttp is on by default but requires the resolveRepo power.
+  // gitHttp is on by default but requires the serveRepo power.
   // Test the both-on path; the toggle-off path is covered separately.
   const gateway = makeGateway({
     powers: harden({
       env: {},
       crypto: makeNodeCryptoPowers(),
       clock: makeFakeClock(),
-      resolveRepo: async () => undefined,
+      serveRepo: async () => undefined,
     }),
   });
   const handler = await E(gateway).getGitHttpHandler();
   t.truthy(handler);
 });
 
-test('makeGateway throws when gitHttp is on but resolveRepo is missing', t => {
+test('makeGateway throws when gitHttp is on but serveRepo is missing', t => {
   t.throws(
     () =>
       makeGateway({
@@ -685,7 +674,7 @@ test('makeGateway throws when gitHttp is on but resolveRepo is missing', t => {
           clock: makeFakeClock(),
         }),
       }),
-    { message: /gitHttp requires powers.resolveRepo/ },
+    { message: /gitHttp requires powers.serveRepo/ },
   );
 });
 
@@ -725,7 +714,7 @@ test('handleRequest does not confuse Bearer hex with Basic hex', async t => {
   /** @type {string | undefined} */
   let seenToken;
   const handler = makeGitHttpHandler({
-    resolveRepo: async args => {
+    serveRepo: async args => {
       seenToken = args.token;
       return makeStubRepo({});
     },
@@ -735,7 +724,7 @@ test('handleRequest does not confuse Bearer hex with Basic hex', async t => {
   const resp = await E(handler).handleRequest(
     harden({
       method: 'GET',
-      path: `/git/${HEX64}/info/refs`,
+      path: '/git/info/refs',
       query: 'service=git-upload-pack',
       headers: [
         /** @type {readonly [string, string]} */ ([
@@ -748,7 +737,7 @@ test('handleRequest does not confuse Bearer hex with Basic hex', async t => {
   );
   // Bearer takes the credentials verbatim; that's not a 64-hex
   // formula id (it's base64), so the handler 401s before calling
-  // resolveRepo. seenToken stays undefined.
+  // serveRepo. seenToken stays undefined.
   t.is(resp.status, 401);
   t.is(seenToken, undefined);
 });

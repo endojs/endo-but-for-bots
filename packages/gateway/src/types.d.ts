@@ -732,13 +732,15 @@ export interface GatewayPowers {
    */
   resourceLedger?: ResourceLedger;
   /**
-   * Required when `gitHttp` is enabled. The bearer-token-plus-repo-id
-   * resolver the Git smart-HTTP handler calls per request. Until the
-   * daemon-side wiring lands, tests inject a stub resolver and
-   * embedders that want git off entirely set
+   * Required when `gitHttp` is enabled. The bearer-token resolver
+   * the Git smart-HTTP handler calls per request. Resolves the
+   * bearer formula identifier to a {@link DaemonRepoCapability}
+   * scoped to that formula's ref within the daemon's one Git object
+   * store. Until the daemon-side wiring lands, tests inject a stub
+   * resolver and embedders that want git off entirely set
    * `enableFeatures.gitHttp = false`.
    */
-  resolveRepo?: ResolveRepo;
+  serveRepo?: ServeRepo;
 }
 
 export interface Gateway {
@@ -782,10 +784,13 @@ export interface Gateway {
   getOcapnHandler(): Promise<OcapnWebSocketHandler>;
   /**
    * Returns the `GitHttpHandler` exo (Feature 3) that an embedder
-   * feeds `/git/<repo-id>/...` HTTP requests to. Throws when the
-   * `gitHttp` feature toggle is off; the HTTP listener that routes
-   * `/git/` requests to the handler is the embedder's, not the
-   * gateway's.
+   * feeds `/git/...` HTTP requests to. Throws when the `gitHttp`
+   * feature toggle is off; the HTTP listener that routes `/git/`
+   * requests to the handler is the embedder's, not the gateway's.
+   *
+   * The daemon embedding the gateway hosts one Git object store and
+   * serves content for the formula named by the bearer token; the
+   * URL path has no repository segment.
    */
   getGitHttpHandler(): Promise<GitHttpHandler>;
 }
@@ -840,22 +845,32 @@ export interface GitHttpResponse {
   body: Uint8Array;
 }
 
-/** Args to the embedder-supplied `resolveRepo` adapter. */
-export interface ResolveRepoArgs {
-  /** The repo identifier extracted from the URL path. */
-  repoId: string;
-  /** The bearer token extracted from the Authorization header. */
+/** Args to the embedder-supplied `serveRepo` adapter. */
+export interface ServeRepoArgs {
+  /**
+   * The bearer token extracted from the Authorization header. A
+   * formula identifier per `daemon-256-bit-identifiers.md`: 64
+   * lowercase hex characters, optionally followed by `:<node>`.
+   */
   token: string;
 }
 
 /**
- * The exo the adapter returns from `resolveRepo`. Two POST methods
+ * The exo the adapter returns from `serveRepo`. Two POST methods
  * for the two smart-HTTP services, and an `infoRefs` method for the
- * GET advertisement. The methods are independent: a repo capability
- * that omits one of them will surface that omission as a runtime
- * error from the gateway.
+ * GET advertisement. The methods are independent: a daemon repo
+ * capability that omits one of them will surface that omission as a
+ * runtime error from the gateway.
+ *
+ * The capability is scoped to a single formula's ref within the
+ * daemon's one Git object store; the methods do not take a repo-id
+ * argument because the daemon hosts exactly one repository for
+ * content served on virtual hosts and the bearer-resolved formula
+ * already names the ref (typically `refs/formulas/<formula-id>`).
+ * A formula GC that drops the formula deletes the matching ref;
+ * the next `git gc` collects the orphan objects.
  */
-export interface RepoCapability {
+export interface DaemonRepoCapability {
   /**
    * Serve the `info/refs?service=<service>` GET advertisement as the
    * response body.
@@ -884,16 +899,16 @@ export interface RepoCapability {
 }
 
 /**
- * The bearer-token-plus-repo-id resolver the Git smart-HTTP handler
- * calls per request. Returns the resolved repo capability when the
- * token authorizes access to the repo identified by `repoId`, or
- * `undefined` to map to a 401 response (the gateway does not
- * distinguish "wrong token" from "no such repo" so a probing
- * attacker cannot enumerate the repo namespace).
+ * The bearer-token resolver the Git smart-HTTP handler calls per
+ * request. Returns the daemon repo capability when the bearer token
+ * authorizes access to a live formula, or `undefined` to map to a
+ * 401 response (the gateway does not distinguish "wrong token" from
+ * "no such formula" so a probing attacker cannot enumerate the
+ * formula namespace).
  */
-export type ResolveRepo = (
-  args: ResolveRepoArgs,
-) => Promise<RepoCapability | undefined>;
+export type ServeRepo = (
+  args: ServeRepoArgs,
+) => Promise<DaemonRepoCapability | undefined>;
 
 /** CapTP-facing exo. The single method is `async`. */
 export interface GitHttpHandler {

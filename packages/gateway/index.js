@@ -109,7 +109,7 @@ export {
  *   ResourceLedger,
  *   OcapnWebSocketHandler,
  *   GitHttpHandler,
- *   ResolveRepo,
+ *   ServeRepo,
  *   CryptoPowers,
  *   ClockPowers,
  *   GatewayPowers,
@@ -257,20 +257,21 @@ export const makeGateway = ({ powers = {}, config: configIn = {} } = {}) => {
   // The Git smart-HTTP handler (Feature 3) is independent of every
   // other gateway feature (the design's Configuration Model
   // explicitly names it as independent). It only needs the
-  // embedder-supplied `resolveRepo` adapter that maps the bearer
-  // token plus URL repo-id to a repo capability. When `gitHttp` is
-  // on but no adapter is supplied, the gateway throws at
-  // construction time (the design's invariant: a toggle-on but
-  // no-adapter configuration would silently 401 every request,
-  // which is worse than a startup error).
+  // embedder-supplied `serveRepo` adapter that resolves the bearer
+  // formula identifier to the daemon's one repo capability scoped
+  // to that formula's ref. When `gitHttp` is on but no adapter is
+  // supplied, the gateway throws at construction time (the design's
+  // invariant: a toggle-on but no-adapter configuration would
+  // silently 401 every request, which is worse than a startup
+  // error).
   if (mergedConfig.enableFeatures.gitHttp) {
-    if (powers.resolveRepo === undefined) {
+    if (powers.serveRepo === undefined) {
       throw makeError(
-        X`gitHttp requires powers.resolveRepo; supply a ResolveRepo adapter or disable the feature toggle`,
+        X`gitHttp requires powers.serveRepo; supply a ServeRepo adapter or disable the feature toggle`,
       );
     }
     gitHttpHandler = makeGitHttpHandler({
-      resolveRepo: powers.resolveRepo,
+      serveRepo: powers.serveRepo,
     });
   }
 
@@ -369,7 +370,7 @@ export const makeGateway = ({ powers = {}, config: configIn = {} } = {}) => {
         // only Feature 3 surface; the embedder routes `/git/...`
         // requests here. We do not gate on sockBootstrap because the
         // git handler does not read from the registration table;
-        // it consults the embedder's `resolveRepo` adapter directly.
+        // it consults the embedder's `serveRepo` adapter directly.
         if (!mergedConfig.enableFeatures.gitHttp) {
           throw makeError(
             X`Git smart-HTTP handler is disabled (set enableFeatures.gitHttp=true)`,

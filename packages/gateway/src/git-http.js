@@ -1,32 +1,37 @@
 // @ts-check
 
 /**
- * @file `GitHttpHandler` for the gateway's `/git/<repo-id>/...`
- *   smart-HTTP endpoint (design Feature 3).
+ * @file `GitHttpHandler` for the gateway's `/git/...` smart-HTTP
+ *   endpoint (design Feature 3).
  *
  * The gateway hosts the Git **smart HTTP** protocol for push and pull,
  * authenticated by a formula-identifier bearer token. The URL shape is
- * `/git/<repo-id>/info/refs?service=git-upload-pack` (or
- * `git-receive-pack`), with `<repo-id>` a 64-character lowercase-hex
- * formula identifier (per `daemon-256-bit-identifiers.md`). The bearer
- * token is the same 64-character lowercase-hex shape carried in either
- * an HTTP `Authorization: Bearer <token>` header or an HTTP Basic
- * header with an empty username and the token as the password
- * (`Authorization: Basic ` followed by base64 of `:<token>`).
+ * `/git/info/refs?service=git-upload-pack` (or `git-receive-pack`),
+ * with no repository segment in the path: the daemon embedding the
+ * gateway has exactly one Git object store for content served on
+ * virtual hosts, and the bearer token is itself a formula identifier
+ * that the daemon resolves against `refs/formulas/<id>` within that
+ * one store. A `formula GC` that drops the formula from the formula
+ * graph deletes the matching ref, and the next `git gc` collects the
+ * orphan objects.
+ *
+ * The bearer token is the same 64-character lowercase-hex shape
+ * carried in either an HTTP `Authorization: Bearer <token>` header or
+ * an HTTP Basic header with an empty username and the token as the
+ * password (`Authorization: Basic ` followed by base64 of `:<token>`).
  * The empty-user Basic form is the canonical git-cli convention for
  * token-authenticated Git over HTTPS.
  *
  * This module implements the *semantic* core of Feature 3: given a
  * parsed HTTP request (method, url, headers, body bytes), it parses
  * the Authorization header, validates the URL path, resolves the
- * bearer token plus repo-id pair to a repo capability via a caller-
- * supplied `resolveRepo` adapter, and routes the smart-HTTP RPC
- * (`info/refs`, `git-upload-pack`, `git-receive-pack`) through that
- * capability. The gateway forwards the smart-HTTP request body to the
- * repo capability without parsing the Git protocol; the repo
- * capability's exo runs the actual Git server semantics (typically by
- * forwarding into the `@endo/endo-git` package's git server, but the
- * handler is agnostic to the repo's implementation).
+ * bearer token to a `DaemonRepoCapability` via a caller-supplied
+ * `serveRepo` adapter, and routes the smart-HTTP RPC (`info/refs`,
+ * `git-upload-pack`, `git-receive-pack`) through that capability. The
+ * gateway forwards the smart-HTTP request body to the daemon repo
+ * capability without parsing the Git protocol; the daemon's exo runs
+ * the actual Git server semantics over its single object store
+ * scoped to the formula's ref.
  *
  * This module does **not** open an HTTP listener; that platform-bound
  * concern follows in a separate PR alongside the Feature 4 sock
@@ -39,16 +44,16 @@
  * Exo and Interface Authoring, so CapTP introspection
  * (`__getMethodNames__`) works out of the box.
  *
- * The repo capability the gateway forwards to is expected to expose
- * two methods, mirroring the design's Feature 3 prose:
+ * The daemon repo capability the gateway forwards to is expected to
+ * expose three methods, mirroring the design's Feature 3 prose:
  *
- *   gitUploadPack({ requestBody, requestHeaders }) -> { status, headers, body }
- *   gitReceivePack({ requestBody, requestHeaders }) -> { status, headers, body }
+ *   gitUploadPack({ requestBody, headers }) -> { status, headers, body }
+ *   gitReceivePack({ requestBody, headers }) -> { status, headers, body }
+ *   infoRefs({ service, headers }) -> { status, headers, body }
  *
- * plus an `infoRefs({ service, requestHeaders }) -> { status, headers, body }`
- * for the `info/refs?service=...` advertisement. The handler shapes the
- * call by URL path; the repo capability's exo holds the actual git
- * server.
+ * The bearer-to-capability resolution happens once per request; the
+ * resolved capability already names the formula's ref, so the methods
+ * do not take a repo-id argument.
  */
 
 import { makeExo } from '@endo/exo';
@@ -63,9 +68,9 @@ import { atob } from '@endo/base64';
  *   GitOperation,
  *   GitHttpRequest,
  *   GitHttpResponse,
- *   ResolveRepoArgs,
- *   RepoCapability,
- *   ResolveRepo,
+ *   ServeRepoArgs,
+ *   DaemonRepoCapability,
+ *   ServeRepo,
  *   GitHttpHandler,
  * } from './types.d.ts' */
 
@@ -102,9 +107,9 @@ export const GIT_SERVICES = harden(['git-upload-pack', 'git-receive-pack']);
  */
 
 /**
- * The two formula-identifier shapes the gateway accepts as a repo-id
- * or bearer token: a bare 64-char hex (local formula number) or the
- * full `<number>:<node>` pair. Matches
+ * The two formula-identifier shapes the gateway accepts as a bearer
+ * token: a bare 64-char hex (local formula number) or the full
+ * `<number>:<node>` pair. Matches
  * `packages/daemon/src/formula-identifier.js`'s `numberPattern` and
  * `idPattern`; we keep our own copy rather than importing because
  * the gateway package does not depend on `@endo/daemon` (the daemon
@@ -114,13 +119,12 @@ const FORMULA_ID_PATTERN = /^[0-9a-f]{64}(?::[0-9a-f]{64})?$/;
 
 /**
  * Test whether an HTTP request path names the Git smart-HTTP
- * endpoint. The check is structural (starts with `/git/` and has at
- * least one more path component) so the embedder does not have to
- * hard-code the prefix.
+ * endpoint. The check is structural (starts with `/git/`) so the
+ * embedder does not have to hard-code the prefix.
  *
- * Returns `true` for `/git/<repo-id>` and `/git/<repo-id>/...`;
- * returns `false` for `/git` or `/git/` (no repo-id), and for any
- * path that does not start with `/git/`.
+ * Returns `true` for `/git/<op>` (a recognized smart-HTTP operation
+ * follows the prefix); returns `false` for `/git` or `/git/` (no
+ * operation), and for any path that does not start with `/git/`.
  *
  * @param {string} path
  * @returns {boolean}
@@ -223,46 +227,39 @@ harden(parseAuthorizationHeader);
  * does not name a valid Git smart-HTTP route.
  *
  * Accepted shapes:
- *   `/git/<repo-id>/info/refs?service=<service>` (the `?service=`
- *     query is supplied by the caller via {@link parseGitHttpUrl},
- *     not parsed here; this function takes the path only).
- *   `/git/<repo-id>/git-upload-pack`
- *   `/git/<repo-id>/git-receive-pack`
+ *   `/git/info/refs?service=<service>` (the `?service=` query is
+ *     supplied by the caller via {@link parseServiceQuery}, not
+ *     parsed here; this function takes the path only).
+ *   `/git/git-upload-pack`
+ *   `/git/git-receive-pack`
  *
- * The `<repo-id>` is validated as a formula identifier shape (64
- * lowercase hex chars optionally followed by `:<node>`); a malformed
- * id yields `undefined`.
+ * There is no repository segment in the path: a daemon hosts one
+ * repository and serves content for the formula named by the bearer
+ * token. The maintainer's framing is "a daemon, including the
+ * gateway, should only have one repository for content to serve on
+ * virtual hosts, where the bearer token corresponds to and may even
+ * be identical to a ref like refs/formulas/${id}" (PR #394 review,
+ * 2026-05-29).
  *
  * @param {string} path
- * @returns {{ repoId: string, operation: GitOperation } | undefined}
+ * @returns {{ operation: GitOperation } | undefined}
  */
 export const parseGitHttpPath = path => {
   if (typeof path !== 'string') return undefined;
   if (!path.startsWith(GIT_HTTP_PATH_PREFIX)) return undefined;
-  const rest = path.slice(GIT_HTTP_PATH_PREFIX.length);
-  // The repo-id is the first path segment; the operation is the
-  // remainder. We split on the first `/` to recover the two halves.
-  const slash = rest.indexOf('/');
-  if (slash < 0) return undefined;
-  const repoIdRaw = rest.slice(0, slash);
-  const opPath = rest.slice(slash + 1);
-  const repoId = validateFormulaId(repoIdRaw);
-  if (repoId === undefined) return undefined;
+  const opPath = path.slice(GIT_HTTP_PATH_PREFIX.length);
   if (opPath === 'info/refs') {
     return harden({
-      repoId,
       operation: /** @type {GitOperation} */ ('info/refs'),
     });
   }
   if (opPath === 'git-upload-pack') {
     return harden({
-      repoId,
       operation: /** @type {GitOperation} */ ('git-upload-pack'),
     });
   }
   if (opPath === 'git-receive-pack') {
     return harden({
-      repoId,
       operation: /** @type {GitOperation} */ ('git-receive-pack'),
     });
   }
@@ -315,9 +312,9 @@ harden(GitHttpHandlerInterface);
 
 /**
  * @typedef {object} GitHttpDeps Inputs to {@link makeGitHttpHandler}.
- * @property {ResolveRepo} resolveRepo The bearer-token + repo-id
- *   resolver the gateway is wired with. See the `ResolveRepo`
- *   typedef in `types.d.ts`.
+ * @property {ServeRepo} serveRepo The bearer-token-to-daemon-repo
+ *   resolver the gateway is wired with. See the `ServeRepo` typedef
+ *   in `types.d.ts`.
  */
 
 /**
@@ -345,8 +342,8 @@ const findHeader = (headers, name) => {
  * Build a {@link GitHttpResponse} with the given status and a plain
  * `text/plain; charset=utf-8` body. Used for the error paths
  * (`401 Unauthorized`, `400 Bad Request`, `500 Internal Server
- * Error`); the success paths return the repo capability's response
- * verbatim.
+ * Error`); the success paths return the daemon repo capability's
+ * response verbatim.
  *
  * The `WWW-Authenticate` header on the 401 shape names both
  * supported schemes so a Git client that received it knows which
@@ -394,9 +391,9 @@ const errorResponse = (status, message, withChallenge = false) => {
  * @param {GitHttpDeps} deps
  * @returns {GitHttpHandler}
  */
-export const makeGitHttpHandler = ({ resolveRepo }) => {
-  if (typeof resolveRepo !== 'function') {
-    throw makeError(X`makeGitHttpHandler requires a resolveRepo function`);
+export const makeGitHttpHandler = ({ serveRepo }) => {
+  if (typeof serveRepo !== 'function') {
+    throw makeError(X`makeGitHttpHandler requires a serveRepo function`);
   }
 
   const exo = makeExo(
@@ -439,12 +436,12 @@ export const makeGitHttpHandler = ({ resolveRepo }) => {
             `not a recognized git smart-HTTP path: ${path}\n`,
           );
         }
-        const { repoId, operation } = parsed;
+        const { operation } = parsed;
 
         // Match the HTTP method. The smart-HTTP protocol fixes:
-        //   GET  /git/<id>/info/refs?service=<svc>
-        //   POST /git/<id>/git-upload-pack
-        //   POST /git/<id>/git-receive-pack
+        //   GET  /git/info/refs?service=<svc>
+        //   POST /git/git-upload-pack
+        //   POST /git/git-receive-pack
         // Any other combination is a 400.
         const methodUp = method.toUpperCase();
         if (operation === 'info/refs' && methodUp !== 'GET') {
@@ -502,30 +499,33 @@ export const makeGitHttpHandler = ({ resolveRepo }) => {
           return errorResponse(401, 'Unauthorized\n', true);
         }
 
-        // Resolve the (token, repoId) pair to a repo capability.
-        /** @type {RepoCapability | undefined} */
+        // Resolve the bearer token to a daemon repo capability. The
+        // capability already names the formula's ref within the
+        // daemon's single object store; the methods do not take a
+        // repo-id argument.
+        /** @type {DaemonRepoCapability | undefined} */
         let repo;
         try {
-          repo = await resolveRepo(harden({ token, repoId }));
+          repo = await serveRepo(harden({ token }));
         } catch (e) {
           console.error(
-            `[Gateway] resolveRepo threw for repoId=${repoId}:`,
+            `[Gateway] serveRepo threw:`,
             /** @type {Error} */ (e).message,
           );
           return errorResponse(500, 'Internal Server Error\n');
         }
         if (repo === undefined) {
-          // Either the token does not authorize access or the repo
-          // does not exist. The handler conflates the two so a
-          // probing attacker cannot enumerate repo ids; see the
-          // ResolveRepo typedef.
+          // The token does not authorize access to a live formula.
+          // The 401 is uniform with "no such formula" so a probing
+          // attacker cannot enumerate the formula namespace; see the
+          // ServeRepo typedef.
           return errorResponse(401, 'Unauthorized\n', true);
         }
 
-        // Forward to the appropriate method on the repo capability.
-        // Pass the request headers through verbatim so the repo
-        // capability can read Content-Type, Accept, Git-Protocol,
-        // etc. The repo capability owns the actual git server.
+        // Forward to the appropriate method on the daemon repo
+        // capability. Pass the request headers through verbatim so
+        // the capability can read Content-Type, Accept, Git-Protocol,
+        // etc. The capability owns the actual git server.
         try {
           if (operation === 'info/refs') {
             return await E(repo).infoRefs(harden({ service, headers }));
@@ -540,7 +540,7 @@ export const makeGitHttpHandler = ({ resolveRepo }) => {
           );
         } catch (e) {
           console.error(
-            `[Gateway] ${operation} for repoId=${repoId} threw:`,
+            `[Gateway] ${operation} threw:`,
             /** @type {Error} */ (e).message,
           );
           return errorResponse(500, 'Internal Server Error\n');
@@ -561,9 +561,9 @@ harden(makeGitHttpHandler);
  * itself only deals in buffered bodies.
  *
  * The reader is `Far`-tagged so it crosses the CapTP boundary into a
- * repo capability that expects a streamed body without tripping
- * passable-style enforcement; the same pattern Phase 4's ocapn-ws
- * uses for its replay reader.
+ * daemon repo capability that expects a streamed body without
+ * tripping passable-style enforcement; the same pattern Phase 4's
+ * ocapn-ws uses for its replay reader.
  *
  * @param {Uint8Array} body
  * @returns {Reader<Uint8Array>}
