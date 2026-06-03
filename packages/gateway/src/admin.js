@@ -53,7 +53,7 @@ import { checkRelayPolicy } from './relay-policy.js';
  *   AppsNameHub,
  *   GatewayAdmin,
  *   AdminBackplane,
- *   ResourceLedger,
+ *   AdminResourceLedger,
  *   RelayPolicy,
  * } from './types.d.ts' */
 
@@ -75,7 +75,7 @@ harden(GatewayAdminInterface);
  *   backplane (returned from `makeGatewayBootstrap`).
  * @property {AppsNameHub} apps The gateway's shared `@apps`
  *   NameHub. The admin reads it for `listVirtualHosts`.
- * @property {ResourceLedger} [resourceLedger] Optional Feature 1
+ * @property {AdminResourceLedger} [resourceLedger] Optional Feature 1
  *   ledger. When absent, `getResourceBalances` returns an empty
  *   list rather than throwing, because admin reads should be
  *   benign in a partially-built gateway. A future fixer can flip

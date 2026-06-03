@@ -504,13 +504,105 @@ export interface ResourceBalance {
 }
 
 /**
- * The Feature 1 surface the administrator queries. Phase 3 ships the
- * admin facet that *calls* into the ledger; the ledger
- * implementation itself lands with the Chat-hosting feature. Until
- * then, embedders that want admin reads of resource balances supply
- * a stub.
+ * The narrow surface the admin facet uses to read balances. Phase 3
+ * ships the admin facet against this read-only handle; Phase 8 ships
+ * the concrete `ResourceLedger` (richer surface) and the admin facet
+ * accepts either: a daemon-owned external handle that only exposes
+ * `listBalances`, or the package's own concrete ledger which extends
+ * this surface.
+ */
+export interface AdminResourceLedger {
+  listBalances(): Promise<ReadonlyArray<ResourceBalance>>;
+}
+
+/**
+ * An amount of resource tokens split into the three counter classes.
+ * Used for both `chargeBalance` (debit) and `purchaseTokens` (credit).
+ * Every field is optional and defaults to zero so a caller that only
+ * meters one class can omit the others.
+ */
+export interface ResourceTokens {
+  /** Compute-time tokens (suggested unit: seconds). Non-negative integer. */
+  compute?: number;
+  /** Storage tokens (suggested unit: bytes). Non-negative integer. */
+  storage?: number;
+  /** Network tokens (suggested unit: bytes). Non-negative integer. */
+  network?: number;
+}
+
+/**
+ * Per-class maximum balance. A class set to `Infinity` (or omitted)
+ * is unbounded. Quotas bound `purchaseTokens` credits only; they do
+ * not retroactively reduce a balance that is already above the cap.
+ */
+export interface ResourceQuota {
+  compute?: number;
+  storage?: number;
+  network?: number;
+}
+
+/**
+ * The result a `verifyPaymentProof` adapter returns: `false`
+ * (invalid), `true` (valid, credit the caller's stated tokens), or a
+ * `ResourceTokens` record (valid, credit *these* tokens instead).
+ * Throwing also causes the purchase to throw.
+ */
+export type VerifyPaymentProofResult = boolean | ResourceTokens;
+
+/**
+ * The embedder-supplied payment-proof verifier. The proof shape
+ * itself is opaque to `@endo/gateway` (the design's "out of scope
+ * for the package" framing).
+ */
+export type VerifyPaymentProof = (args: {
+  agentPublicKey: Uint8Array;
+  tokens: ResourceTokens;
+  proof: unknown;
+}) => Promise<VerifyPaymentProofResult> | VerifyPaymentProofResult;
+
+/**
+ * CapTP-facing exo for the gateway's resource-accounting surface
+ * (Feature 1). All methods are async so they cross the wire as
+ * eventual sends. Byte fields are `Uint8Array` per the kriskowal
+ * directive (PR #393 review).
  */
 export interface ResourceLedger {
+  /**
+   * Returns the per-class balance for the named account. An unknown
+   * account returns the all-zeros record.
+   */
+  getBalance(agentPublicKey: Uint8Array): Promise<ResourceBalance>;
+  /**
+   * Debit the per-class tokens. Throws on an underflow (the account
+   * did not hold enough tokens in some class), leaving the account
+   * state unchanged. Returns the new balance.
+   */
+  chargeBalance(
+    agentPublicKey: Uint8Array,
+    tokens: ResourceTokens,
+  ): Promise<ResourceBalance>;
+  /**
+   * Verify the payment proof and credit the per-class tokens.
+   * Throws when the proof is invalid or when the credit would push
+   * any class above its quota; in both cases the account state is
+   * unchanged. Returns the new balance.
+   */
+  purchaseTokens(
+    agentPublicKey: Uint8Array,
+    tokens: ResourceTokens,
+    proof: unknown,
+  ): Promise<ResourceBalance>;
+  /**
+   * Set the per-class maximum balance for the named account.
+   * Existing balances above the cap are not retroactively reduced;
+   * the quota bounds future `purchaseTokens` credits.
+   */
+  setQuota(agentPublicKey: Uint8Array, quota: ResourceQuota): Promise<void>;
+  /**
+   * Snapshot every account's balance. Used by the admin facet's
+   * `getResourceBalances` surface. Accounts are keyed by hex-rendered
+   * public key in the returned `account` field.
+   */
   listBalances(): Promise<ReadonlyArray<ResourceBalance>>;
 }
 
@@ -799,14 +891,25 @@ export interface GatewayPowers {
    */
   clock?: ClockPowers;
   /**
-   * Optional Feature 1 resource ledger. When `adminDaemon` is on
-   * and a ledger is supplied, `GatewayAdmin.getResourceBalances`
-   * reads through this. When omitted, the admin facet still works
-   * but `getResourceBalances` returns an empty list. Feature 1's
-   * ledger implementation lands with the Chat-hosting phase; until
-   * then, embedders that want admin reads supply a stub.
+   * Optional Feature 1 resource-ledger handle. When supplied, the
+   * gateway wires the handle into the admin facet so
+   * `GatewayAdmin.getResourceBalances` reads through it. Phase 8
+   * ships a concrete `ResourceLedger` exo at
+   * `src/resource-ledger.js`; embedders that want the package's
+   * own ledger pass `verifyPaymentProof` instead and the gateway
+   * constructs the ledger internally (and exposes it via
+   * `getLedger()`). The two options are mutually exclusive.
    */
-  resourceLedger?: ResourceLedger;
+  resourceLedger?: AdminResourceLedger;
+  /**
+   * Optional Feature 1 payment-proof verifier. When supplied, the
+   * gateway constructs a `ResourceLedger` bound to this verifier
+   * and exposes it via `getLedger()`. The internal ledger is also
+   * passed to the admin facet's `getResourceBalances` read-through,
+   * so `resourceLedger` and `verifyPaymentProof` are mutually
+   * exclusive: supply one or the other, never both.
+   */
+  verifyPaymentProof?: VerifyPaymentProof;
   /**
    * Required when `gitHttp` is enabled. The bearer-token resolver
    * the Git smart-HTTP handler calls per request. Resolves the
@@ -856,6 +959,15 @@ export interface Gateway {
    * PR alongside the bootstrap sock's listener.
    */
   getAdmin(): Promise<GatewayAdmin>;
+  /**
+   * Returns the `ResourceLedger` exo (Feature 1, Phase 8). Throws
+   * when the gateway was not constructed with `verifyPaymentProof`
+   * (the package's concrete ledger is not wired). Embedders that
+   * supply an external `resourceLedger` (the admin read-through
+   * shape) do not get a `getLedger` accessor; the external ledger
+   * is the holder's own handle.
+   */
+  getLedger(): Promise<ResourceLedger>;
   /**
    * Returns the `OcapnWebSocketHandler` exo (Feature 8) that an
    * embedder feeds upgraded `/ocapn-cbor-np` WebSocket connections

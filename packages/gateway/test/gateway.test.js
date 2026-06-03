@@ -422,3 +422,99 @@ test('bootstrap-mediated register and publishWeblet round-trip end to end', asyn
   t.is(weblets.length, 1);
   t.is(weblets[0].webletId, 'weblet-abc');
 });
+
+// -- Feature 1 (Phase 8): ResourceLedger wiring -------------------
+
+test('getLedger throws when neither resourceLedger nor verifyPaymentProof is supplied', async t => {
+  // Default-powers gateway: no Feature 1 wiring. The accessor
+  // explains how to wire it in rather than silently returning
+  // undefined.
+  const g = gateway();
+  await t.throwsAsync(() => E(g).getLedger(), {
+    message: /Gateway ledger is not wired/,
+  });
+});
+
+test('getLedger surfaces the package ResourceLedger when verifyPaymentProof is supplied', async t => {
+  // Regression: a refactor that dropped the powers.verifyPaymentProof
+  // branch would leave the concrete ledger unreachable and force
+  // every embedder to construct it themselves.
+  const g = gateway({
+    powers: { ...defaultPowers(), verifyPaymentProof: () => true },
+  });
+  const ledger = await E(g).getLedger();
+  const introspect = /** @type {any} */ (E(ledger));
+  // eslint-disable-next-line no-underscore-dangle
+  const methods = await introspect.__getMethodNames__();
+  t.true(methods.includes('purchaseTokens'));
+  t.true(methods.includes('getBalance'));
+});
+
+test('getLedger throws when an external resourceLedger is supplied', async t => {
+  // Per Phase 8 contract: an external ledger handle is the
+  // embedder's own; the gateway has no `getLedger()` to surface
+  // because it did not construct the ledger. The error message
+  // names the right path so the embedder fixes the call site.
+  const externalLedger = harden({
+    async listBalances() {
+      return harden([]);
+    },
+  });
+  const g = gateway({
+    powers: { ...defaultPowers(), resourceLedger: externalLedger },
+  });
+  await t.throwsAsync(() => E(g).getLedger(), {
+    message: /external.*supplied via powers.resourceLedger/,
+  });
+});
+
+test('makeGateway rejects both resourceLedger and verifyPaymentProof', t => {
+  // Regression: a refactor that passed both into the admin facet
+  // would silently prefer one over the other; the design's
+  // "Gateway OWNS the surface" framing requires one canonical
+  // handle per gateway.
+  const externalLedger = harden({
+    async listBalances() {
+      return harden([]);
+    },
+  });
+  t.throws(
+    () =>
+      makeGateway({
+        powers: {
+          ...defaultPowers(),
+          resourceLedger: externalLedger,
+          verifyPaymentProof: () => true,
+        },
+      }),
+    {
+      message: /resourceLedger and.*verifyPaymentProof are mutually exclusive/,
+    },
+  );
+});
+
+test('GatewayAdmin.getResourceBalances reads through the internal ResourceLedger', async t => {
+  // End-to-end Phase 3 + Phase 8 wiring: the admin facet's
+  // read-through path that Phase 3 stubbed against an external
+  // handle should also work against the package's own ledger
+  // constructed from verifyPaymentProof.
+  const g = gateway({
+    powers: { ...defaultPowers(), verifyPaymentProof: () => true },
+  });
+  const ledger = await E(g).getLedger();
+  // Credit one account so the admin's snapshot has a row. The
+  // wire shape is `Uint8Array` per the kriskowal directive on
+  // PR #393; the exo's interface guard uses `M.raw()` so the
+  // Uint8Array passes the wire-side check.
+  const publicKey = new Uint8Array(32).fill(0xc3);
+  await E(ledger).purchaseTokens(
+    publicKey,
+    { compute: 42, storage: 0, network: 0 },
+    'proof',
+  );
+  const admin = await E(g).getAdmin();
+  const balances = await E(admin).getResourceBalances();
+  t.is(balances.length, 1);
+  t.is(balances[0].compute, 42);
+  t.is(balances[0].account, 'c3'.repeat(32));
+});

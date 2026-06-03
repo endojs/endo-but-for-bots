@@ -29,6 +29,7 @@ import { makeAppsNameHub } from './src/vhost.js';
 import { makeFormulaBackedAppsNameHub } from './src/apps-formula.js';
 import { makeGatewayBootstrap } from './src/bootstrap.js';
 import { makeGatewayAdmin } from './src/admin.js';
+import { makeResourceLedger } from './src/resource-ledger.js';
 import { makeOcapnWebSocketHandler } from './src/ocapn-ws.js';
 import { makeGitHttpHandler } from './src/git-http.js';
 
@@ -64,6 +65,8 @@ export {
 } from './src/bootstrap.js';
 
 export { makeGatewayAdmin } from './src/admin.js';
+
+export { RESOURCE_CLASSES, makeResourceLedger } from './src/resource-ledger.js';
 
 export {
   OCAPN_WEBSOCKET_PATH,
@@ -116,7 +119,9 @@ export {
  *   WebletBindingRecord,
  *   GatewayBootstrap,
  *   GatewayAdmin,
+ *   AdminResourceLedger,
  *   ResourceLedger,
+ *   VerifyPaymentProof,
  *   OcapnWebSocketHandler,
  *   GitHttpHandler,
  *   ServeRepo,
@@ -134,6 +139,7 @@ const GatewayInterface = M.interface('Gateway', {
   getConfig: M.call().returns(M.promise()),
   getBootstrap: M.call().returns(M.promise()),
   getAdmin: M.call().returns(M.promise()),
+  getLedger: M.call().returns(M.promise()),
   getOcapnHandler: M.call().returns(M.promise()),
   getGitHttpHandler: M.call().returns(M.promise()),
 });
@@ -207,6 +213,42 @@ export const makeGateway = ({ powers = {}, config: configIn = {} } = {}) => {
   let ocapnHandler;
   /** @type {GitHttpHandler | undefined} */
   let gitHttpHandler;
+
+  // Feature 1 (Phase 8) ledger selection. The two options are
+  // mutually exclusive: pass `resourceLedger` for an externally-
+  // owned ledger (admin read-through only, no `getLedger()`), or
+  // pass `verifyPaymentProof` for the package's own concrete
+  // ledger (admin read-through wired to it, `getLedger()`
+  // surfaces it). Both at once is a wiring error; the design's
+  // framing is "Gateway OWNS the surface", meaning a given
+  // gateway has at most one canonical ledger handle.
+  if (
+    powers.resourceLedger !== undefined &&
+    powers.verifyPaymentProof !== undefined
+  ) {
+    throw makeError(
+      X`makeGateway: powers.resourceLedger and powers.verifyPaymentProof are mutually exclusive`,
+    );
+  }
+  /** @type {ResourceLedger | undefined} */
+  let ledger;
+  if (powers.verifyPaymentProof !== undefined) {
+    ledger = makeResourceLedger({
+      verifyPaymentProof: powers.verifyPaymentProof,
+    });
+  }
+  // The admin facet (Phase 3) reads through whichever ledger the
+  // embedder wired in, or the package's own when constructed via
+  // `verifyPaymentProof`. The admin's `getResourceBalances`
+  // surface narrows the admin-facing read to `listBalances`; both
+  // the external and the internal ledger satisfy that shape.
+  const adminLedger = /** @type {AdminResourceLedger | undefined} */ (
+    powers.resourceLedger !== undefined
+      ? powers.resourceLedger
+      : ledger !== undefined
+        ? /** @type {unknown} */ (ledger)
+        : undefined
+  );
   if (mergedConfig.enableFeatures.sockBootstrap) {
     if (powers.crypto === undefined) {
       throw makeError(
@@ -272,7 +314,7 @@ export const makeGateway = ({ powers = {}, config: configIn = {} } = {}) => {
     adminFacet = makeGatewayAdmin({
       backplane,
       apps,
-      resourceLedger: powers.resourceLedger,
+      resourceLedger: adminLedger,
     });
   }
 
@@ -374,6 +416,27 @@ export const makeGateway = ({ powers = {}, config: configIn = {} } = {}) => {
           throw makeError(X`Gateway admin facet is not wired`);
         }
         return adminFacet;
+      },
+      async getLedger() {
+        // Feature 1 (Phase 8): the concrete ledger is wired in
+        // iff the embedder supplied `verifyPaymentProof`. An
+        // embedder that supplied an external `resourceLedger`
+        // (admin read-through only) does not get a `getLedger()`
+        // accessor; the external ledger is the holder's own
+        // handle and is not the gateway's to surface. We surface
+        // the configuration gap rather than silently returning
+        // undefined.
+        if (ledger === undefined) {
+          if (powers.resourceLedger !== undefined) {
+            throw makeError(
+              X`Gateway ledger is external (supplied via powers.resourceLedger); the gateway does not own a handle to surface`,
+            );
+          }
+          throw makeError(
+            X`Gateway ledger is not wired (supply powers.verifyPaymentProof to construct the package's ResourceLedger)`,
+          );
+        }
+        return ledger;
       },
       async getOcapnHandler() {
         // Symmetric with getAdmin: the handler is reachable only
