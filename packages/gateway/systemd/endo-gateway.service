@@ -1,0 +1,50 @@
+[Unit]
+Description=Endo Gateway
+Documentation=https://github.com/endojs/endo/blob/master/packages/gateway/README.md
+After=network.target
+
+[Service]
+Type=simple
+User=endo
+Group=endo
+ExecStart=/usr/bin/endo gateway run --system
+EnvironmentFile=-/etc/default/endo-gateway
+Restart=on-failure
+RestartSec=5s
+
+# systemd-managed directories. The unit creates them at start and
+# fills in the matching ENDO_GATEWAY_*_DIR env vars below. The
+# resolver in @endo/gateway honors those overrides.
+RuntimeDirectory=endo-gateway
+RuntimeDirectoryMode=0750
+StateDirectory=endo-gateway
+StateDirectoryMode=0750
+CacheDirectory=endo-gateway
+CacheDirectoryMode=0750
+LogsDirectory=endo-gateway
+LogsDirectoryMode=0750
+
+Environment=ENDO_GATEWAY_RUNTIME_DIR=/run/endo-gateway
+Environment=ENDO_GATEWAY_STATE_DIR=/var/lib/endo-gateway
+Environment=ENDO_GATEWAY_CACHE_DIR=/var/cache/endo-gateway
+Environment=ENDO_GATEWAY_LOG_DIR=/var/log/endo-gateway
+Environment=ENDO_GATEWAY_CONFIG_FILE=/etc/endo-gateway/config.toml
+
+# Hardening. systemd's defaults plus the gateway-specific shape
+# (no /home access, no new privileges, read-only filesystem outside
+# the managed directories above).
+ProtectSystem=strict
+ProtectHome=true
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictNamespaces=true
+RestrictRealtime=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target
