@@ -121,10 +121,17 @@ export const makeWorkerFacet = ({ cancel }) => {
         // compartment-mapper.makeArchive produces, then hand it to the
         // existing parseArchive pipeline.  Keeps tree loading on the
         // worker side without duplicating the archive loader.
-        const [{ parseArchive }, { defaultParserForLanguage }] =
+        //
+        // The evasive-transform-wrapped parser map applies the SES
+        // censorship-evasion transform to mjs/cjs source bytes before
+        // parsing, restoring the bundle-time behavior that was lost when
+        // the workflow pivoted to source-only ZIP archives.  The Rust
+        // supervisor reads the same archive untransformed; see
+        // src/worker-archive-parsers.js for the rationale.
+        const [{ parseArchive }, { evasiveParserForLanguage }] =
           await Promise.all([
             import('@endo/compartment-mapper'),
-            import('@endo/compartment-mapper/import-archive-all-parsers.js'),
+            import('./worker-archive-parsers.js'),
           ]);
         const zip = new ZipWriter();
         zip.write('compartment-map.json', bytesFromText(mapText));
@@ -155,7 +162,7 @@ export const makeWorkerFacet = ({ cancel }) => {
 
         const archiveBytes = zip.snapshot();
         const application = await parseArchive(archiveBytes, '<tree>', {
-          parserForLanguage: defaultParserForLanguage,
+          parserForLanguage: evasiveParserForLanguage,
         });
         const { namespace } = await application.import({
           globals: endowments,
@@ -198,16 +205,22 @@ export const makeWorkerFacet = ({ cancel }) => {
 
         // Defer the compartment-mapper imports so workers that never
         // call makeArchive don't pay the babel/parser load cost.
-        // Use the "all parsers" set so we accept source-form modules
-        // (mjs/cjs) but degrade gracefully if a precompiled module
-        // format slips through.
-        const [{ parseArchive }, { defaultParserForLanguage }] =
+        // The evasive-transform-wrapped parser map starts from the "all
+        // parsers" set so we accept source-form modules (mjs/cjs) but
+        // degrade gracefully if a precompiled module format slips
+        // through; it additionally wraps the mjs/cjs parsers to apply
+        // the SES censorship-evasion transform before parsing.  This
+        // restores the bundle-time behavior that was lost when the
+        // workflow pivoted to source-only ZIP archives.  See
+        // src/worker-archive-parsers.js for the rationale; the Rust
+        // supervisor reads the same archive untransformed.
+        const [{ parseArchive }, { evasiveParserForLanguage }] =
           await Promise.all([
             import('@endo/compartment-mapper'),
-            import('@endo/compartment-mapper/import-archive-all-parsers.js'),
+            import('./worker-archive-parsers.js'),
           ]);
         const application = await parseArchive(archiveBytes, '<archive>', {
-          parserForLanguage: defaultParserForLanguage,
+          parserForLanguage: evasiveParserForLanguage,
         });
         const { namespace } = await application.import({
           globals: endowments,

@@ -3336,6 +3336,62 @@ test('makeArchive rejects an unknown archive pet name', async t => {
   );
 });
 
+// makeArchive evasive-transform regression tests
+//
+// These pin the Node-worker load path's application of the SES
+// censorship-evasion transform to source-only ZIP archives.  The
+// transform used to run at bundle time inside `@endo/bundle-source`'s
+// `endoZipBase64` path; after the workflow pivoted to source-only
+// archives via `@endo/compartment-mapper`'s `makeArchive`, the transform
+// was no longer applied anywhere and modules with TS JSDoc `import()`
+// annotations or `@endo/errors`-style censored shapes failed to load.
+// The worker now applies the transform on the archive-import path via
+// the wrappers in `src/worker-archive-parsers.js`.
+//
+// Sabotaging the wrapping (swap `evasiveParserForLanguage` back to the
+// unwrapped `defaultParserForLanguage` from
+// `@endo/compartment-mapper/import-archive-all-parsers.js`) makes both
+// tests below fail with an SES SyntaxError on the censored source,
+// which is the regression-evidence shape.
+test('makeArchive evades SES censorship of TS JSDoc import() in a source-only archive', async t => {
+  const { host } = await prepareHost(t);
+  await E(host).provideWorker(['worker']);
+  const archivePath = path.join(
+    dirname,
+    'test',
+    'fixtures',
+    'archive-evasive-jsdoc-import',
+  );
+  const caplet = await doMakeArchive(host, archivePath, archiveName =>
+    E(host).makeArchive('worker', archiveName, {
+      powersName: '@none',
+      resultName: 'evasive-jsdoc-import',
+    }),
+  );
+  t.is(await E(caplet).tag(), 'archive-evasive-jsdoc-import-loaded');
+});
+
+test('makeArchive evades SES censorship of @endo/errors source in a source-only archive', async t => {
+  const { host } = await prepareHost(t);
+  await E(host).provideWorker(['worker']);
+  const archivePath = path.join(
+    dirname,
+    'test',
+    'fixtures',
+    'archive-evasive-endo-errors',
+  );
+  const caplet = await doMakeArchive(host, archivePath, archiveName =>
+    E(host).makeArchive('worker', archiveName, {
+      powersName: '@none',
+      resultName: 'evasive-endo-errors',
+    }),
+  );
+  // The caplet's quote() goes through @endo/errors' q() on a literal
+  // value.  The assertion verifies the caplet loaded and its imported
+  // dependency on @endo/errors did too.
+  t.is(await E(caplet).quote('regression-fixture'), '"regression-fixture"');
+});
+
 // Guest direct eval tests
 
 test('guest evaluate executes code directly', async t => {
