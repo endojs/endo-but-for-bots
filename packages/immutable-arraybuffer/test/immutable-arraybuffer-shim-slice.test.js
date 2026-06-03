@@ -226,7 +226,7 @@ test('(TypedArray|Buffer).(slice|subArray) baseline', t => {
   } = globalThis.Buffer;
 
   const testSlice = apply(bufSlice, ta, []);
-  // New view onto the same ArrayBuffer. This is the surpring difference
+  // New view onto the same ArrayBuffer. This is the surprising difference
   // from TypedArray.prototype.slice
   t.is(testSlice.buffer, ab);
   const testSubarray = apply(bufSubarray, ta, []);
@@ -257,7 +257,7 @@ test.failing(
     } = globalThis.Buffer;
 
     const testSlice = apply(bufSlice, fta, []);
-    // New view onto the same ArrayBuffer. This is the surpring difference
+    // New view onto the same ArrayBuffer. This is the surprising difference
     // from TypedArray.prototype.slice
     t.is(testSlice.buffer, iab);
     const testSubarray = apply(bufSubarray, fta, []);

@@ -5,5 +5,5 @@ import {
 } from '../src/freezable-typedarray-pony.js';
 
 test('freezable TypeArrays ponyfill', t => {
-  t.pass('pleaceholder');
+  t.pass('placeholder');
 });

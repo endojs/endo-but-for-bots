@@ -36,7 +36,7 @@ const { iterator: symbolIterator, toStringTag: symbolToStringTag } = Symbol;
 
 /**
  * If we could use classes with private fields everywhere, this would have
- * been a `this.#typedArray` private field on an `FreezableTypedArrayInternal`
+ * been a `this.#typedArray` private field on a `FreezableTypedArrayInternal`
  * class. But we currently cannot do so on Hermes. So, instead, we
  * emulate the `this.#typedArray` private field, including its use as a
  * brand check.
