@@ -2,15 +2,15 @@
 
 /**
  * @file `GatewayBootstrap` and `Registration` exos for the gateway's
- *   local UDS / named-pipe bootstrap channel (design Feature 4).
+ *   local sock bootstrap channel (design Feature 4).
  *
  * This module implements the *semantic* core of the bootstrap: the
  * exo objects, the nonce registry, the registration table, and the
  * proof-of-possession check that gates which-public-keys-may-register.
  *
- * It does **not** open a UDS or named-pipe listener; that is a Node
- * (or browser, or Endor) platform-bound concern that follows in a
- * separate PR alongside CapTP-over-netstring framing reuse from
+ * It does **not** open a sock listener; that is a Node (or other
+ * platform-bound) concern that follows in a separate PR alongside
+ * CapTP-over-netstring framing reuse from
  * `packages/daemon/src/connection.js`. Once the listener exists, it
  * accepts incoming CapTP connections and serves *this* bootstrap exo
  * as the connection's bootstrap object. Until then, embedders that
@@ -298,7 +298,7 @@ const publicKeyToHex = bytes => {
  * @property {AppsNameHub} apps The gateway's shared apps NameHub
  *   (Feature 2). The bootstrap returns it to authorized callers via
  *   `getApps`; bootstrap and HTTP surface share the same hub so a
- *   binding installed over UDS shows up on the routing path.
+ *   binding installed over the sock shows up on the routing path.
  * @property {() => string} getBindAddress Returns the gateway's
  *   bind address. Injected from the gateway proper so the bootstrap
  *   reports the *actual* bound address (which, for `:0`, differs
@@ -309,8 +309,8 @@ const publicKeyToHex = bytes => {
 
 /**
  * Create the bootstrap exo, the registration registry, and the
- * nonce registry. The exo is the CapTP-reachable entry point a UDS
- * (or named-pipe) listener serves as its bootstrap object.
+ * nonce registry. The exo is the CapTP-reachable entry point a sock
+ * listener serves as its bootstrap object.
  *
  * @param {BootstrapDeps} deps
  * @returns {{

@@ -6,7 +6,6 @@ import test from 'ava';
 
 import {
   resolveBootstrapSocketPath,
-  BOOTSTRAP_PIPE_WINDOWS,
   BOOTSTRAP_SOCKET_BASENAME,
   SYSTEM_RUNTIME_DIR_LINUX,
   USER_RUNTIME_SUBDIR,
@@ -76,18 +75,6 @@ test('user mode on darwin uses Library/Application Support', t => {
   t.is(result.source, 'user-darwin');
 });
 
-test('windows resolves the named-pipe path', t => {
-  const result = resolveBootstrapSocketPath({
-    mode: 'user',
-    platform: 'win32',
-    env: {},
-    info: linuxInfo,
-  });
-  t.is(result.path, BOOTSTRAP_PIPE_WINDOWS);
-  t.is(result.source, 'windows');
-  t.is(result.kind, 'windows-named-pipe');
-});
-
 test('system mode on darwin resolves under /Library/Application Support', t => {
   // The 'system' mode on darwin is the macOS LaunchDaemon variant.
   // The design names /var/run/ for the runtime directory; we still
@@ -117,17 +104,7 @@ test('ENDO_GATEWAY_BOOTSTRAP_SOCK overrides every resolution rule', t => {
   });
   t.is(result.path, '/var/run/custom.sock');
   t.is(result.source, 'override');
-});
-
-test('ENDO_GATEWAY_BOOTSTRAP_SOCK override picks the pipe kind on Windows', t => {
-  const result = resolveBootstrapSocketPath({
-    mode: 'user',
-    platform: 'win32',
-    env: { ENDO_GATEWAY_BOOTSTRAP_SOCK: '\\\\.\\pipe\\custom' },
-    info: linuxInfo,
-  });
-  t.is(result.path, '\\\\.\\pipe\\custom');
-  t.is(result.kind, 'windows-named-pipe');
+  t.is(result.kind, 'unix-socket');
 });
 
 test('empty ENDO_GATEWAY_BOOTSTRAP_SOCK is ignored', t => {

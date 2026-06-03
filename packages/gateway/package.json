@@ -34,7 +34,7 @@
     "./src/vhost.js": "./src/vhost.js",
     "./src/bootstrap.js": "./src/bootstrap.js",
     "./src/proof-of-possession.js": "./src/proof-of-possession.js",
-    "./src/uds-paths.js": "./src/uds-paths.js",
+    "./src/sock-paths.js": "./src/sock-paths.js",
     "./src/node-crypto-powers.js": "./src/node-crypto-powers.js",
     "./package.json": "./package.json"
   },
