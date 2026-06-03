@@ -111,7 +111,7 @@ export const makeInternalHeir = (
               if (genuineInstance === result) {
                 // This is just a belt-and-suspenders check to catch some
                 // leakage errors. But it does not reliably prevent leakage
-                // since result make instead contain or reveal genuineInstance.
+                // since result may instead contain or reveal genuineInstance.
                 throw new TypeError(
                   `internal: ${thisPhrase} get accessor ${String(queryKey)} broke encapsulation`,
                 );
@@ -138,7 +138,7 @@ export const makeInternalHeir = (
             if (genuineInstance === result) {
               // This is just a belt-and-suspenders check to catch some
               // leakage errors. But it does not reliably prevent leakage
-              // since result make instead contain or reveal genuineInstance.
+              // since result may instead contain or reveal genuineInstance.
               throw new TypeError(
                 `internal: ${thisPhrase} query method ${String(queryKey)} broke encapsulation`,
               );

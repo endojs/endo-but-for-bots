@@ -3,7 +3,7 @@
 import { makeInternalHeir, getGetter } from './internal-heir.js';
 
 /**
- * Stangely, TypeScript only provides types for the concrete subtypes of
+ * Strangely, TypeScript only provides types for the concrete subtypes of
  * `TypedArray`, but not `TypeArray` itself.
  * As suggested at
  * https://github.com/microsoft/TypeScript/issues/15402#issuecomment-297544403
