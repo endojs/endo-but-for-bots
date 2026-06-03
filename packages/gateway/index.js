@@ -108,6 +108,10 @@ export {
   USER_RUNTIME_SUBDIR,
 } from './src/sock-paths.js';
 
+export { makeFamiliarPublisher } from './src/familiar-publish.js';
+
+export { makeNodeFamiliarPublishPowers } from './src/node-familiar-publish-powers.js';
+
 /** @import {
  *   GatewayConfig,
  *   FeatureToggles,
@@ -129,6 +133,7 @@ export {
  *   ClockPowers,
  *   GatewayPowers,
  *   Gateway,
+ *   FamiliarPublisher,
  * } from './src/types.d.ts' */
 
 const GatewayInterface = M.interface('Gateway', {
@@ -339,6 +344,25 @@ export const makeGateway = ({ powers = {}, config: configIn = {} } = {}) => {
     });
   }
 
+  // Feature 5 (Familiar-bundled fallback): when the toggle is on,
+  // a publisher must be wired so the gateway can surface its
+  // (possibly OS-assigned) bind address to the Familiar's
+  // `localhttp://` protocol handler. Fail-closed at construction
+  // time per Phase 7's posture: a toggle-on but no-publisher
+  // configuration would otherwise let `start()` complete with the
+  // Familiar still reading a stale port (or no port), routing
+  // weblet traffic into the void. The publisher is independent of
+  // every other feature; the Familiar variant may run with
+  // `sockBootstrap`, `adminDaemon`, `gitHttp`, `captpRelay` all
+  // off (per the design's Feature 5 sample configuration).
+  if (mergedConfig.enableFeatures.familiarBundled) {
+    if (powers.familiarPublish === undefined) {
+      throw makeError(
+        X`familiarBundled requires powers.familiarPublish; supply a FamiliarPublisher (see makeFamiliarPublisher) or disable the feature toggle`,
+      );
+    }
+  }
+
   const exo = makeExo(
     'Gateway',
     GatewayInterface,
@@ -368,12 +392,50 @@ export const makeGateway = ({ powers = {}, config: configIn = {} } = {}) => {
         // GatewayBootstrap exo, the nonce registry, the
         // registration table); the actual sock listener is a
         // follow-on PR.
+        //
+        // Feature 5 (Familiar-bundled): publish the *resolved*
+        // bind address to the Familiar's local file so its
+        // `localhttp://` protocol handler can proxy to it. Today
+        // the skeleton's resolved address equals the configured
+        // address; once a future phase attaches the HTTP
+        // listener, the OS-assigned port (configured `:0`)
+        // resolves to a real port before this line runs and the
+        // published value carries the real port. The publish call
+        // happens after the apps hydration await so a
+        // configuration drift (broken apps store) does not leave
+        // a phantom port file behind. Fail-closed: a publisher
+        // exception propagates through `start`; the caller treats
+        // it as a startup error.
+        if (mergedConfig.enableFeatures.familiarBundled) {
+          // The construction-time check above ensures
+          // `familiarPublish` is defined here when the toggle is
+          // on; the local re-check satisfies TypeScript without a
+          // separate non-null assertion.
+          if (powers.familiarPublish !== undefined) {
+            await powers.familiarPublish.publish(renderBindAddress());
+          }
+        }
         lifecycle = 'started';
       },
       async stop() {
         if (lifecycle === 'unstarted' || lifecycle === 'stopped') {
           lifecycle = 'stopped';
           return;
+        }
+        // Feature 5 (Familiar-bundled): remove the published file
+        // so a restarted Familiar does not read a stale port. The
+        // publisher tolerates an externally-removed file
+        // (`ENOENT` is benign in the Node adapter), so a manual
+        // cleanup between runs does not crash the gateway here.
+        // The cleanup runs before the lifecycle transitions to
+        // `stopped` so a follow-on phase that closes listeners
+        // here can interleave its teardown without re-entering
+        // the cleanup path.
+        if (
+          mergedConfig.enableFeatures.familiarBundled &&
+          powers.familiarPublish !== undefined
+        ) {
+          await powers.familiarPublish.cleanup();
         }
         // Later phases close listeners and pending connections
         // here.

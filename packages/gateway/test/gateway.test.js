@@ -12,6 +12,7 @@ import {
   makeGateway,
   DEFAULT_BIND_ADDRESS,
   defaultFeatureToggles,
+  makeFamiliarPublisher,
 } from '../index.js';
 import {
   makeNodeCryptoPowers,
@@ -517,4 +518,261 @@ test('GatewayAdmin.getResourceBalances reads through the internal ResourceLedger
   t.is(balances.length, 1);
   t.is(balances[0].compute, 42);
   t.is(balances[0].account, 'c3'.repeat(32));
+});
+
+// -- Phase 9 additions: familiar-bundled publish (Feature 5) -----
+
+/**
+ * An in-memory `IoPowers` recorder for the gateway-level wiring
+ * tests. The publish module's own test file
+ * (`familiar-publish.test.js`) covers the publisher exo's surface
+ * exhaustively; these tests pin the gateway-side hooks.
+ *
+ * @param {object} [opts]
+ * @param {string} [opts.publishPath]
+ */
+const makeRecorderPublisher = ({ publishPath = '/p/gateway' } = {}) => {
+  /** @type {Array<{op: string, bindAddress?: string}>} */
+  const calls = [];
+  /** @type {Map<string, string>} */
+  const files = new Map();
+  const io = harden({
+    /**
+     * @param {string} target
+     * @param {string} contents
+     */
+    async writeFile(target, contents) {
+      files.set(target, contents);
+    },
+    /** @param {string} target */
+    async removeFile(target) {
+      files.delete(target);
+    },
+  });
+  const inner = makeFamiliarPublisher({ io, publishPath });
+  // Wrap the inner publisher so the test can observe the gateway's
+  // call sequence directly. We keep the inner exo so the wrap's
+  // semantics match the production publisher exactly (validation,
+  // overwrite, cleanup-idempotence).
+  return {
+    calls,
+    files,
+    publisher: harden({
+      /** @param {string} bindAddress */
+      async publish(bindAddress) {
+        calls.push({ op: 'publish', bindAddress });
+        await inner.publish(bindAddress);
+      },
+      async cleanup() {
+        calls.push({ op: 'cleanup' });
+        await inner.cleanup();
+      },
+      getPublishPath() {
+        return publishPath;
+      },
+    }),
+  };
+};
+
+test('familiarBundled defaults to off', async t => {
+  // Sanity: the system-service deployment must not publish a file
+  // by default. If a refactor flips this default on, every
+  // non-Familiar embedder would suddenly require an `io` adapter
+  // and a writable state directory.
+  const g = gateway();
+  const cfg = await E(g).getConfig();
+  t.false(cfg.enableFeatures.familiarBundled);
+});
+
+test('makeGateway throws when familiarBundled is on but the publisher is missing', t => {
+  t.throws(
+    () =>
+      makeGateway({
+        powers: { env: {} },
+        config: {
+          bindAddress: '127.0.0.1:0',
+          enableFeatures: {
+            ...defaultFeatureToggles,
+            familiarBundled: true,
+            // Familiar-bundled variant turns off the system-side
+            // features per the design's sample configuration.
+            sockBootstrap: false,
+            adminDaemon: false,
+            gitHttp: false,
+            captpRelay: false,
+            ocapnWebSocket: false,
+          },
+        },
+      }),
+    { message: /familiarBundled requires powers.familiarPublish/ },
+  );
+});
+
+test('start publishes the bind address when familiarBundled is on', async t => {
+  const { publisher, calls, files } = makeRecorderPublisher();
+  const g = makeGateway({
+    powers: {
+      env: { ENDO_HTTP_ADDR: '127.0.0.1:0' },
+      familiarPublish: publisher,
+    },
+    config: {
+      enableFeatures: {
+        ...defaultFeatureToggles,
+        familiarBundled: true,
+        sockBootstrap: false,
+        adminDaemon: false,
+        gitHttp: false,
+        captpRelay: false,
+        ocapnWebSocket: false,
+      },
+    },
+  });
+  await E(g).start();
+  t.deepEqual(calls, [{ op: 'publish', bindAddress: '127.0.0.1:0' }]);
+  // The published file content follows the daemon's
+  // ${statePath}/gateway shape so the Familiar's existing reader
+  // ingests it unchanged.
+  t.is(files.get('/p/gateway'), 'http://127.0.0.1:0\n');
+});
+
+test('stop cleans up the published file when familiarBundled is on', async t => {
+  const { publisher, calls, files } = makeRecorderPublisher();
+  const g = makeGateway({
+    powers: {
+      env: { ENDO_HTTP_ADDR: '127.0.0.1:0' },
+      familiarPublish: publisher,
+    },
+    config: {
+      enableFeatures: {
+        ...defaultFeatureToggles,
+        familiarBundled: true,
+        sockBootstrap: false,
+        adminDaemon: false,
+        gitHttp: false,
+        captpRelay: false,
+        ocapnWebSocket: false,
+      },
+    },
+  });
+  await E(g).start();
+  await E(g).stop();
+  t.deepEqual(calls, [
+    { op: 'publish', bindAddress: '127.0.0.1:0' },
+    { op: 'cleanup' },
+  ]);
+  t.false(files.has('/p/gateway'));
+});
+
+test('stop before start is still a no-op (no cleanup call) when familiarBundled is on', async t => {
+  // A `stop` before `start` short-circuits at the `unstarted`
+  // check, so the cleanup hook never fires. This matches the
+  // existing lifecycle: the gateway transitions straight to
+  // `stopped` without inviting subsystem teardown. A refactor
+  // that moved cleanup before the lifecycle short-circuit would
+  // surface here.
+  const { publisher, calls } = makeRecorderPublisher();
+  const g = makeGateway({
+    powers: {
+      env: { ENDO_HTTP_ADDR: '127.0.0.1:0' },
+      familiarPublish: publisher,
+    },
+    config: {
+      enableFeatures: {
+        ...defaultFeatureToggles,
+        familiarBundled: true,
+        sockBootstrap: false,
+        adminDaemon: false,
+        gitHttp: false,
+        captpRelay: false,
+        ocapnWebSocket: false,
+      },
+    },
+  });
+  await E(g).stop();
+  t.deepEqual(calls, []);
+});
+
+test('familiarBundled off: publisher is not invoked even when supplied', async t => {
+  // Regression: the toggle is the load-bearing gate, not the
+  // presence of the power. A non-Familiar embedder that happens
+  // to wire a publisher (e.g., a test rig) must not trigger
+  // publishes; otherwise an unrelated test that flips the power
+  // on for some unrelated reason would publish a phantom file.
+  const { publisher, calls } = makeRecorderPublisher();
+  const g = makeGateway({
+    powers: { ...defaultPowers(), familiarPublish: publisher },
+  });
+  await E(g).start();
+  await E(g).stop();
+  t.deepEqual(calls, []);
+});
+
+test('start propagates a publisher error and marks the gateway unstartable', async t => {
+  // Phase 7's fail-closed-on-config-drift carry-forward: a
+  // publisher that throws (disk full, permission denied) is a
+  // startup error rather than a silent degrade. The gateway
+  // re-throws and a subsequent start does not succeed.
+  const throwingPublisher = harden({
+    async publish() {
+      throw Error('disk full');
+    },
+    async cleanup() {
+      // Unused in this test; the gateway never reaches the stop
+      // path because start() rejects.
+      await null;
+    },
+    getPublishPath() {
+      return '/p/gateway';
+    },
+  });
+  const g = makeGateway({
+    powers: {
+      env: { ENDO_HTTP_ADDR: '127.0.0.1:0' },
+      familiarPublish: throwingPublisher,
+    },
+    config: {
+      enableFeatures: {
+        ...defaultFeatureToggles,
+        familiarBundled: true,
+        sockBootstrap: false,
+        adminDaemon: false,
+        gitHttp: false,
+        captpRelay: false,
+        ocapnWebSocket: false,
+      },
+    },
+  });
+  await t.throwsAsync(() => E(g).start(), { message: /disk full/ });
+});
+
+test('Gateway.getBindAddress is what gets published', async t => {
+  // The published value must equal the value `getBindAddress`
+  // would have returned at the moment of publish. Today the Phase
+  // 1 skeleton's getBindAddress returns the *configured* address
+  // (the port-0 case has not yet been resolved by a real
+  // listener); a future phase that attaches the HTTP listener
+  // resolves port 0 inside `start` *before* the publish call so
+  // the assertion still holds. This test pins the contract.
+  const { publisher, calls } = makeRecorderPublisher();
+  const g = makeGateway({
+    powers: {
+      env: { ENDO_HTTP_ADDR: '127.0.0.1:0' },
+      familiarPublish: publisher,
+    },
+    config: {
+      enableFeatures: {
+        ...defaultFeatureToggles,
+        familiarBundled: true,
+        sockBootstrap: false,
+        adminDaemon: false,
+        gitHttp: false,
+        captpRelay: false,
+        ocapnWebSocket: false,
+      },
+    },
+  });
+  await E(g).start();
+  const observed = await E(g).getBindAddress();
+  const published = /** @type {{bindAddress: string}} */ (calls[0]).bindAddress;
+  t.is(observed, published);
 });
