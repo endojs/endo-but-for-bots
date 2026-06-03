@@ -962,6 +962,17 @@ export interface GatewayPowers {
    * host supply their own.
    */
   wsUpgrade?: WsUpgradeAdapter;
+  /**
+   * Phase 11b: the embedder-supplied weblet-content adapter the
+   * gateway calls per Host-header-matched HTTP request. The adapter
+   * dereferences the resolved weblet formula identifier through the
+   * originating user daemon and streams matching content-tree
+   * blob bytes from the daemon's CAS. When omitted, the listener
+   * surfaces a 501 with the resolved formula id (the Phase-11a
+   * placeholder posture) so the host-header routing remains
+   * observable until a daemon-side adapter lands.
+   */
+  serveWeblet?: ServeWeblet;
 }
 
 // ---------------------------------------------------------------------
@@ -1249,6 +1260,130 @@ export interface GitHttpHandler {
    */
   handleRequest(request: GitHttpRequest): Promise<GitHttpResponse>;
 }
+
+// ---------------------------------------------------------------------
+// weblet-fetch.js
+// ---------------------------------------------------------------------
+
+/**
+ * Args to the embedder-supplied `serveWeblet` adapter. The gateway
+ * already resolved the Host header through the `@apps` NameHub
+ * (Phase 7) and obtained `webletFormulaId`; the adapter is responsible
+ * for the chain the design names under § Feature 2 *content-tree
+ * resolution path*: dereference the formula identifier on the
+ * originating user daemon, walk the `readable-tree` `contentRoot` by
+ * `pathSuffix`, and stream the matching `readable-blob` bytes from
+ * the daemon's CAS.
+ *
+ * The composite shape lets Phase 11b land the gateway-side wiring
+ * without committing to the daemon-side decomposition. Whether the
+ * power's implementation exposes one CapTP call or four is a
+ * daemon-side choice; the gateway treats the adapter as opaque
+ * persistence per the same convention the `ServeRepo` adapter
+ * established under Feature 3.
+ */
+export interface ServeWebletArgs {
+  /**
+   * The 256-bit weblet formula identifier the gateway resolved from
+   * the Host header. The adapter dereferences this through the
+   * originating user daemon to recover the `WebletFormula` and walks
+   * its `contentRoot` `readable-tree`.
+   */
+  webletFormulaId: string;
+  /**
+   * The path component of the request URL, with the bare-root case
+   * normalized to `/index.html` by the gateway-side caller so the
+   * adapter sees a uniform lookup key. The adapter treats unknown
+   * paths as a 404; the gateway does not invoke a fallback.
+   */
+  pathSuffix: string;
+  /**
+   * The request's `If-None-Match` header value when present. The
+   * adapter compares this to the resolved blob's content hash and
+   * may return a `{status: 304}` shape on match.
+   */
+  ifNoneMatch?: string;
+  /**
+   * The Feature-9 X-Forwarded parse output. Threaded through so a
+   * daemon-side implementation can key per-caller rate limits or
+   * audit logs by the original client IP.
+   */
+  forwarded?: ForwardedRequest;
+}
+
+/**
+ * The 200-OK shape the adapter returns when it resolved the request
+ * to a content-tree blob. The `body` reader yields the blob bytes as
+ * one or more `Uint8Array` chunks; the gateway streams them to the
+ * response without buffering. The `etag` is the blob's
+ * content-addressed hash (the design's "hash IS the etag" framing);
+ * the gateway echoes it on the response so a subsequent
+ * conditional GET can short-circuit.
+ */
+export interface ServeWebletOk {
+  status: 200;
+  /**
+   * The resolved content type. The adapter applies the
+   * `WebletFormula.mimeTypes` mapping and falls back to a sensible
+   * default (e.g. `application/octet-stream`) for unknown
+   * extensions; the gateway does not second-guess the choice.
+   */
+  contentType: string;
+  /**
+   * The blob's content hash, used as the ETag. The hash is opaque
+   * to the gateway; the only contract is that two responses with
+   * the same `etag` carry the same bytes.
+   */
+  etag: string;
+  /**
+   * The blob length in bytes when the adapter can compute it
+   * cheaply. The gateway sets `Content-Length` when this is
+   * present; otherwise the response is chunked (Node's default for
+   * a response whose `Content-Length` is not set before
+   * `res.end()`).
+   */
+  size?: number;
+  /**
+   * The blob bytes as an async-iterator reader. The gateway pumps
+   * chunks to the response and closes when the reader is done.
+   */
+  body: Reader<Uint8Array>;
+}
+
+/** The 304-Not-Modified shape the adapter returns on an `If-None-Match` hit. */
+export interface ServeWebletNotModified {
+  status: 304;
+  /** Echoed on the response for client-side cache validation. */
+  etag: string;
+}
+
+/** The 404 shape the adapter returns when no content-tree entry matches. */
+export interface ServeWebletNotFound {
+  status: 404;
+}
+
+/**
+ * The disjoint union the `serveWeblet` adapter returns. A daemon-side
+ * malfunction (formula not resolvable, CAS read fails) is a thrown
+ * error rather than a status shape; the gateway maps the throw to a
+ * 500.
+ */
+export type ServeWebletResult =
+  | ServeWebletOk
+  | ServeWebletNotModified
+  | ServeWebletNotFound;
+
+/**
+ * The embedder-supplied adapter the gateway calls per Host-header-
+ * matched HTTP request. The adapter encapsulates the daemon-side
+ * formula-graph walk + CAS-blob streaming; the gateway is a
+ * streaming pass-through. The daemon-side decomposition (separate
+ * `resolveWebletFormula`, `fetchContentTree`, `casFetchStream`
+ * exos) is out of scope for Phase 11b; if a daemon embedder wants to
+ * expose those primitives separately, they wrap them in a single
+ * `ServeWeblet` adapter at the gateway-power seam.
+ */
+export type ServeWeblet = (args: ServeWebletArgs) => Promise<ServeWebletResult>;
 
 // ---------------------------------------------------------------------
 // http-listener.js

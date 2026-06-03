@@ -107,6 +107,13 @@ export {
 export { makeHttpListener, makeWsWriter } from './src/http-listener.js';
 
 export {
+  CONTENT_ADDRESSED_CACHE_CONTROL,
+  INTERNAL_SERVER_ERROR_BODY,
+  fetchWebletResponse,
+  normalizeWebletPath,
+} from './src/weblet-fetch.js';
+
+export {
   makeNodeWsUpgrade,
   streamPairFromWebSocket,
 } from './src/node-ws-upgrade.js';
@@ -162,6 +169,9 @@ export { makeNodeFamiliarPublishPowers } from './src/node-familiar-publish-power
  *   ForwardedRequest,
  *   HttpListener,
  *   WsUpgradeAdapter,
+ *   ServeWeblet,
+ *   ServeWebletArgs,
+ *   ServeWebletResult,
  * } from './src/types.d.ts'
  */
 
@@ -470,6 +480,7 @@ export const makeGateway = ({ powers = {}, config: configIn = {} } = {}) => {
             gitHttpHandler,
             ocapnHandler,
             wsUpgrade: powers.wsUpgrade,
+            serveWeblet: powers.serveWeblet,
             trustedProxyCidrs: mergedConfig.trustedProxyCidrs,
             maxProxyHops: mergedConfig.maxProxyHops,
             logWarning: powers.logWarning,

@@ -44,6 +44,7 @@ import {
   makeNodeWsUpgrade,
   streamPairFromWebSocket,
   parseBindAddress,
+  CONTENT_ADDRESSED_CACHE_CONTROL,
   OCAPN_WEBSOCKET_PATH,
 } from '../index.js';
 import { makeNodeCryptoPowers } from '../src/node-crypto-powers.js';
@@ -628,6 +629,420 @@ test.serial(
     // test, now refreshed in this PR). We assert the gateway
     // started without throwing here.
     t.regex(addr, /^127\.0\.0\.1:/);
+  },
+);
+
+// ---------- Phase 11b: weblet-fetch integration via the listener ----------
+
+/**
+ * Build a Far-tagged byte reader yielding the given chunks. Mirrors
+ * the shape the daemon-side `serveWeblet` adapter hands the gateway.
+ *
+ * @param {ReadonlyArray<Uint8Array>} chunks
+ */
+const makeStubReader = chunks => {
+  let i = 0;
+  return Far('StubBlobReader', {
+    next: async () => {
+      if (i >= chunks.length) return harden({ done: true, value: undefined });
+      const value = chunks[i];
+      i += 1;
+      return harden({ done: false, value });
+    },
+    return: async () => {
+      i = chunks.length;
+      return harden({ done: true, value: undefined });
+    },
+    throw: async err => {
+      i = chunks.length;
+      throw err;
+    },
+  });
+};
+
+test.serial(
+  'Phase 11b: serveWeblet 200 streams body with content-addressed ETag and Cache-Control',
+  async t => {
+    const apps = makeAppsNameHub();
+    const formulaId = 'd'.repeat(64);
+    await E(apps).bind('chat.example', formulaId);
+    const bodyBytes = new TextEncoder().encode('<html>hello weblet</html>');
+    /** @type {Array<{webletFormulaId: string, pathSuffix: string}>} */
+    const calls = [];
+    /** @type {import('../src/types.d.ts').ServeWeblet} */
+    const serveWeblet = async ({ webletFormulaId, pathSuffix }) => {
+      calls.push({ webletFormulaId, pathSuffix });
+      return harden({
+        status: 200,
+        contentType: 'text/html; charset=utf-8',
+        etag: 'sha256-deadbeef',
+        size: bodyBytes.byteLength,
+        body: /** @type {any} */ (makeStubReader([bodyBytes])),
+      });
+    };
+    const listener = makeHttpListener({
+      bindAddress: parseBindAddress('127.0.0.1:0'),
+      apps,
+      serveWeblet,
+    });
+    await E(listener).start();
+    t.teardown(() => E(listener).stop());
+    const { port } = await E(listener).whenBound();
+    const res = await httpCall({
+      port,
+      path: '/index.html',
+      headers: { host: 'chat.example' },
+    });
+    t.is(res.status, 200);
+    t.is(res.headers['content-type'], 'text/html; charset=utf-8');
+    t.is(res.headers.etag, 'sha256-deadbeef');
+    t.is(res.headers['cache-control'], CONTENT_ADDRESSED_CACHE_CONTROL);
+    t.is(res.headers['x-endo-weblet-formula'], formulaId);
+    t.is(res.body, '<html>hello weblet</html>');
+    t.is(calls.length, 1);
+    t.is(calls[0].webletFormulaId, formulaId);
+    t.is(calls[0].pathSuffix, '/index.html');
+  },
+);
+
+test.serial(
+  'Phase 11b: bare-root request normalizes path to /index.html',
+  async t => {
+    const apps = makeAppsNameHub();
+    const formulaId = 'e'.repeat(64);
+    await E(apps).bind('chat.example', formulaId);
+    /** @type {string | undefined} */
+    let seenPath;
+    /** @type {import('../src/types.d.ts').ServeWeblet} */
+    const serveWeblet = async ({ pathSuffix }) => {
+      seenPath = pathSuffix;
+      return harden({
+        status: 200,
+        contentType: 'text/html',
+        etag: 'sha256-root',
+        body: /** @type {any} */ (
+          makeStubReader([new TextEncoder().encode('root-html')])
+        ),
+      });
+    };
+    const listener = makeHttpListener({
+      bindAddress: parseBindAddress('127.0.0.1:0'),
+      apps,
+      serveWeblet,
+    });
+    await E(listener).start();
+    t.teardown(() => E(listener).stop());
+    const { port } = await E(listener).whenBound();
+    const res = await httpCall({
+      port,
+      path: '/',
+      headers: { host: 'chat.example' },
+    });
+    t.is(res.status, 200);
+    t.is(seenPath, '/index.html');
+  },
+);
+
+test.serial(
+  'Phase 11b: serveWeblet 404 surfaces a path-bearing 404 response',
+  async t => {
+    const apps = makeAppsNameHub();
+    const formulaId = 'f'.repeat(64);
+    await E(apps).bind('chat.example', formulaId);
+    /** @type {import('../src/types.d.ts').ServeWeblet} */
+    const serveWeblet = async () => harden({ status: 404 });
+    const listener = makeHttpListener({
+      bindAddress: parseBindAddress('127.0.0.1:0'),
+      apps,
+      serveWeblet,
+    });
+    await E(listener).start();
+    t.teardown(() => E(listener).stop());
+    const { port } = await E(listener).whenBound();
+    const res = await httpCall({
+      port,
+      path: '/missing.png',
+      headers: { host: 'chat.example' },
+    });
+    t.is(res.status, 404);
+    t.regex(res.body, /Not Found: \/missing\.png/);
+    // The X-Endo-Weblet-Formula header still rides along so an
+    // observer can confirm routing happened before the adapter
+    // mapped the path to a miss.
+    t.is(res.headers['x-endo-weblet-formula'], formulaId);
+  },
+);
+
+test.serial(
+  'Phase 11b: If-None-Match → 304 round-trip preserves the ETag',
+  async t => {
+    const apps = makeAppsNameHub();
+    const formulaId = '0'.repeat(64);
+    await E(apps).bind('chat.example', formulaId);
+    /** @type {import('../src/types.d.ts').ServeWeblet} */
+    const serveWeblet = async ({ ifNoneMatch }) => {
+      if (ifNoneMatch === 'sha256-cached') {
+        return harden({ status: 304, etag: 'sha256-cached' });
+      }
+      return harden({
+        status: 200,
+        contentType: 'text/html',
+        etag: 'sha256-cached',
+        body: /** @type {any} */ (
+          makeStubReader([new TextEncoder().encode('first')])
+        ),
+      });
+    };
+    const listener = makeHttpListener({
+      bindAddress: parseBindAddress('127.0.0.1:0'),
+      apps,
+      serveWeblet,
+    });
+    await E(listener).start();
+    t.teardown(() => E(listener).stop());
+    const { port } = await E(listener).whenBound();
+    // First request: 200 + ETag.
+    const first = await httpCall({
+      port,
+      path: '/index.html',
+      headers: { host: 'chat.example' },
+    });
+    t.is(first.status, 200);
+    t.is(first.headers.etag, 'sha256-cached');
+    // Second request, conditional: 304.
+    const second = await httpCall({
+      port,
+      path: '/index.html',
+      headers: { host: 'chat.example', 'if-none-match': 'sha256-cached' },
+    });
+    t.is(second.status, 304);
+    t.is(second.headers.etag, 'sha256-cached');
+    t.is(second.body, '');
+  },
+);
+
+test.serial(
+  'Phase 11b: serveWeblet throw surfaces 500 with fixed body and logged warning',
+  async t => {
+    const apps = makeAppsNameHub();
+    const formulaId = '1'.repeat(64);
+    await E(apps).bind('chat.example', formulaId);
+    /** @type {string[]} */
+    const warnings = [];
+    /** @type {import('../src/types.d.ts').ServeWeblet} */
+    const serveWeblet = async () => {
+      throw new Error('cas: not reachable');
+    };
+    const listener = makeHttpListener({
+      bindAddress: parseBindAddress('127.0.0.1:0'),
+      apps,
+      serveWeblet,
+      logWarning: m => warnings.push(m),
+    });
+    await E(listener).start();
+    t.teardown(() => E(listener).stop());
+    const { port } = await E(listener).whenBound();
+    const res = await httpCall({
+      port,
+      path: '/index.html',
+      headers: { host: 'chat.example' },
+    });
+    t.is(res.status, 500);
+    t.regex(res.body, /Internal Server Error/);
+    t.true(
+      warnings.some(w => /serveWeblet/.test(w) && /cas: not reachable/.test(w)),
+    );
+  },
+);
+
+test.serial(
+  'Phase 11b: serveWeblet 200 with mimeTypes-mapped contentType is echoed verbatim',
+  async t => {
+    // The mimeTypes mapping lives on the WebletFormula; the daemon-
+    // side serveWeblet adapter applies it before returning. The
+    // gateway test stubs the adapter to verify the gateway echoes
+    // whatever contentType the adapter chose, without second-
+    // guessing.
+    const apps = makeAppsNameHub();
+    const formulaId = '2'.repeat(64);
+    await E(apps).bind('chat.example', formulaId);
+    /** @type {import('../src/types.d.ts').ServeWeblet} */
+    const serveWeblet = async () =>
+      harden({
+        status: 200,
+        contentType: 'image/svg+xml',
+        etag: 'sha256-svg',
+        body: /** @type {any} */ (
+          makeStubReader([new TextEncoder().encode('<svg/>')])
+        ),
+      });
+    const listener = makeHttpListener({
+      bindAddress: parseBindAddress('127.0.0.1:0'),
+      apps,
+      serveWeblet,
+    });
+    await E(listener).start();
+    t.teardown(() => E(listener).stop());
+    const { port } = await E(listener).whenBound();
+    const res = await httpCall({
+      port,
+      path: '/logo.svg',
+      headers: { host: 'chat.example' },
+    });
+    t.is(res.status, 200);
+    t.is(res.headers['content-type'], 'image/svg+xml');
+    t.is(res.body, '<svg/>');
+  },
+);
+
+test.serial(
+  'Phase 11b: missing serveWeblet power preserves Phase-11a 501 placeholder',
+  async t => {
+    // No serveWeblet wired; the listener falls back to the
+    // Phase-11a 501 + X-Endo-Weblet-Formula posture. This is the
+    // back-compat guarantee for embedders that have not yet wired
+    // a daemon-side adapter.
+    const apps = makeAppsNameHub();
+    const formulaId = '3'.repeat(64);
+    await E(apps).bind('chat.example', formulaId);
+    const listener = makeHttpListener({
+      bindAddress: parseBindAddress('127.0.0.1:0'),
+      apps,
+    });
+    await E(listener).start();
+    t.teardown(() => E(listener).stop());
+    const { port } = await E(listener).whenBound();
+    const res = await httpCall({
+      port,
+      path: '/index.html',
+      headers: { host: 'chat.example' },
+    });
+    t.is(res.status, 501);
+    t.is(res.headers['x-endo-weblet-formula'], formulaId);
+  },
+);
+
+test.serial(
+  'Phase 11b: serveWeblet 200 without size omits Content-Length',
+  async t => {
+    const apps = makeAppsNameHub();
+    const formulaId = '4'.repeat(64);
+    await E(apps).bind('chat.example', formulaId);
+    /** @type {import('../src/types.d.ts').ServeWeblet} */
+    const serveWeblet = async () =>
+      harden({
+        status: 200,
+        contentType: 'text/plain',
+        etag: 'sha256-nosize',
+        body: /** @type {any} */ (
+          makeStubReader([new TextEncoder().encode('streamed')])
+        ),
+      });
+    const listener = makeHttpListener({
+      bindAddress: parseBindAddress('127.0.0.1:0'),
+      apps,
+      serveWeblet,
+    });
+    await E(listener).start();
+    t.teardown(() => E(listener).stop());
+    const { port } = await E(listener).whenBound();
+    const res = await httpCall({
+      port,
+      path: '/streamed.txt',
+      headers: { host: 'chat.example' },
+    });
+    t.is(res.status, 200);
+    t.is(
+      /** @type {Record<string, string | undefined>} */ (res.headers)[
+        'content-length'
+      ],
+      undefined,
+    );
+    t.is(res.body, 'streamed');
+  },
+);
+
+test.serial(
+  'Phase 11b: serveWeblet result with a broken contentType maps to 500 (fail-closed)',
+  async t => {
+    const apps = makeAppsNameHub();
+    const formulaId = '5'.repeat(64);
+    await E(apps).bind('chat.example', formulaId);
+    /** @type {string[]} */
+    const warnings = [];
+    /** @type {import('../src/types.d.ts').ServeWeblet} */
+    const serveWeblet = async () =>
+      /** @type {any} */ (
+        harden({
+          status: 200,
+          contentType: '', // broken: empty
+          etag: 'sha256-broken',
+          body: /** @type {any} */ (makeStubReader([])),
+        })
+      );
+    const listener = makeHttpListener({
+      bindAddress: parseBindAddress('127.0.0.1:0'),
+      apps,
+      serveWeblet,
+      logWarning: m => warnings.push(m),
+    });
+    await E(listener).start();
+    t.teardown(() => E(listener).stop());
+    const { port } = await E(listener).whenBound();
+    const res = await httpCall({
+      port,
+      path: '/',
+      headers: { host: 'chat.example' },
+    });
+    t.is(res.status, 500);
+    t.regex(res.body, /Internal Server Error/);
+    t.true(warnings.some(w => /contentType/.test(w)));
+  },
+);
+
+test.serial(
+  'Phase 11b: makeGateway accepts powers.serveWeblet and start() succeeds',
+  async t => {
+    // Smoke test for the GatewayPowers → HttpListener wiring of
+    // serveWeblet. The dedicated Phase-11b tests above already
+    // assert the per-request behavior against `makeHttpListener`
+    // directly; this test only confirms that a gateway constructed
+    // with the new power lands the toggle and starts cleanly.
+    /** @type {string[]} */
+    const warnings = [];
+    /** @type {import('../src/types.d.ts').ServeWeblet} */
+    const serveWeblet = async () =>
+      harden({
+        status: 200,
+        contentType: 'text/plain',
+        etag: 'sha256-wired',
+        body: /** @type {any} */ (
+          makeStubReader([new TextEncoder().encode('via-gateway')])
+        ),
+      });
+    const g = makeGateway({
+      powers: {
+        env: { ENDO_HTTP_ADDR: '127.0.0.1:0' },
+        crypto: makeNodeCryptoPowers(),
+        clock: makeFakeClock(),
+        serveRepo: async () => undefined,
+        wsUpgrade: makeNodeWsUpgrade(),
+        serveWeblet,
+        logWarning: m => warnings.push(m),
+      },
+      config: {
+        enableFeatures: /** @type {any} */ ({
+          httpListener: true,
+        }),
+      },
+    });
+    await E(g).start();
+    t.teardown(() => E(g).stop());
+    const addr = await E(g).getBindAddress();
+    t.regex(addr, /^127\.0\.0\.1:/);
+    // Construction did not emit a warning (no malformed power
+    // shape, no broken wiring).
+    t.deepEqual(warnings, []);
   },
 );
 
