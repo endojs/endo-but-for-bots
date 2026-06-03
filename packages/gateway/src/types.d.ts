@@ -84,6 +84,82 @@ export interface AppsNameHub {
 }
 
 // ---------------------------------------------------------------------
+// apps-formula.js
+// ---------------------------------------------------------------------
+
+/**
+ * The shape of a `weblet` formula the daemon stores; the gateway
+ * carries the typedef and a validator so the formula-backed hub can
+ * refuse malformed entries returned by a store.
+ */
+export interface WebletFormula {
+  /** Discriminator. */
+  type: 'weblet';
+  /**
+   * The formula identifier of the `readable-tree` whose bytes the
+   * gateway serves as the weblet's static content.
+   */
+  contentRoot: string;
+  /**
+   * Per-extension MIME overrides applied when the gateway serves a
+   * file from `contentRoot`. Keys are file extensions without a
+   * leading dot.
+   */
+  mimeTypes?: Record<string, string>;
+  /**
+   * Optional formula identifier for an SSR-route handler invoked
+   * when a request path does not match a file in `contentRoot`.
+   */
+  ssrHandler?: string;
+  /**
+   * Optional list of virtual-host names this weblet may bind. When
+   * present, the formula-backed hub may use this list as a
+   * pre-allowed set.
+   */
+  virtualHosts?: ReadonlyArray<string>;
+}
+
+/**
+ * A single persisted record the formula-backed hub reads from /
+ * writes to the store. The store implementation may translate this
+ * to its preferred on-disk shape; the hub only sees the canonical
+ * record.
+ */
+export interface WebletBindingRecord {
+  /** The lowercased virtual-host name. */
+  name: string;
+  /** The 256-bit-hex weblet formula identifier. */
+  webletFormulaId: string;
+}
+
+/**
+ * The host-supplied power the formula-backed hub consults. The
+ * daemon side of this interface wraps the daemon's pet-store or
+ * formula-graph machinery; the gateway does not assume any
+ * particular backing.
+ */
+export interface AppsFormulaStore {
+  /**
+   * Returns every persisted binding. Called once at construction to
+   * hydrate the in-memory view.
+   */
+  listBindings(): Promise<ReadonlyArray<WebletBindingRecord>>;
+  /** Persist a new (or idempotently-equal) binding. */
+  writeBinding(name: string, webletFormulaId: string): Promise<void>;
+  /** Persist the removal of a binding. */
+  deleteBinding(name: string): Promise<void>;
+}
+
+/**
+ * The formula-backed hub adds a `whenReady` accessor that resolves
+ * when the initial hydration completes; rejects if the store's
+ * `listBindings` throws or returns malformed data.
+ */
+export interface FormulaBackedAppsNameHub extends AppsNameHub {
+  whenReady(): Promise<void>;
+}
+
+// ---------------------------------------------------------------------
 // proof-of-possession.js
 // ---------------------------------------------------------------------
 
@@ -741,6 +817,14 @@ export interface GatewayPowers {
    * `enableFeatures.gitHttp = false`.
    */
   serveRepo?: ServeRepo;
+  /**
+   * Optional Feature 2 formula-backed `@apps` NameHub store. When
+   * supplied, the gateway's `getApps()` returns a formula-backed
+   * hub that persists bindings through the store and hydrates from
+   * it at construction; when omitted, the gateway falls back to the
+   * in-memory hub from `vhost.js`, preserving the phase-1 behavior.
+   */
+  appsFormulaStore?: AppsFormulaStore;
 }
 
 export interface Gateway {
