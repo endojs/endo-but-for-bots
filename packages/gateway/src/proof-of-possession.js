@@ -5,7 +5,7 @@
  *   gateway's bootstrap registrar.
  *
  * Per `designs/gateway-package.md` § Feature 4: any process that can
- * connect to the gateway's local UDS bootstrap socket can call
+ * connect to the gateway's local bootstrap sock can call
  * `register({ publicKey, proofOfPossession, ... })`. The
  * filesystem permissions on the socket gate *who* may connect; the
  * proof-of-possession step gates *which public keys* the connector
@@ -80,7 +80,7 @@ harden(NONCE_BYTE_LENGTH);
  * Default lifetime in milliseconds after which an unconsumed nonce
  * is rejected. 30 seconds matches the design's Feature 4 sketch:
  * long enough for a normal challenge-sign-respond round trip across
- * a local UDS, short enough that captured-and-replayed nonces have
+ * a local sock, short enough that captured-and-replayed nonces have
  * a tight window.
  */
 export const DEFAULT_NONCE_TTL_MS = 30_000;

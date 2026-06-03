@@ -44,11 +44,11 @@ export const defaultFeatureToggles = harden({
   virtualHosting: true,
   /** Feature 3: Git over HTTP, formula-identifier bearer-token. */
   gitHttp: true,
-  /** Feature 4: UDS bootstrap for local CapTP relay registration. */
-  udsBootstrap: true,
+  /** Feature 4: sock bootstrap for local CapTP relay registration. */
+  sockBootstrap: true,
   /** Feature 6: public CapTP relay (opt-in). */
   captpRelay: false,
-  /** Feature 7: admin daemon (UDS-only). */
+  /** Feature 7: admin daemon (sock-only). */
   adminDaemon: true,
   /** Feature 8: `/ocapn-cbor-np` WebSocket subprotocol. */
   ocapnWebSocket: true,
@@ -174,14 +174,14 @@ const validateFeatureDependencies = features => {
       X`captpRelay depends on ocapnWebSocket for the wire surface; both must be enabled`,
     );
   }
-  if (features.captpRelay && !features.udsBootstrap) {
+  if (features.captpRelay && !features.sockBootstrap) {
     throw makeError(
-      X`captpRelay depends on udsBootstrap for registration; both must be enabled`,
+      X`captpRelay depends on sockBootstrap for registration; both must be enabled`,
     );
   }
-  if (features.adminDaemon && !features.udsBootstrap) {
+  if (features.adminDaemon && !features.sockBootstrap) {
     throw makeError(
-      X`adminDaemon depends on udsBootstrap for its access channel; both must be enabled`,
+      X`adminDaemon depends on sockBootstrap for its access channel; both must be enabled`,
     );
   }
   if (features.chatHosting && !features.virtualHosting) {

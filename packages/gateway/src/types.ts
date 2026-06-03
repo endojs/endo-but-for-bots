@@ -22,7 +22,7 @@ export type FeatureToggles = {
   chatHosting: boolean;
   virtualHosting: boolean;
   gitHttp: boolean;
-  udsBootstrap: boolean;
+  sockBootstrap: boolean;
   captpRelay: boolean;
   adminDaemon: boolean;
   ocapnWebSocket: boolean;
@@ -77,12 +77,12 @@ export type GatewayPowers = {
    */
   env?: { [name: string]: string | undefined };
   /**
-   * Required when `udsBootstrap` is enabled. The bootstrap
+   * Required when `sockBootstrap` is enabled. The bootstrap
    * registrar needs `randomBytes`, `sha256`, and `verifyEd25519`.
    */
   crypto?: CryptoPowers;
   /**
-   * Required when `udsBootstrap` is enabled. The nonce registry
+   * Required when `sockBootstrap` is enabled. The nonce registry
    * consumes `now()` for TTL.
    */
   clock?: ClockPowers;
@@ -100,11 +100,11 @@ export type Gateway = {
   getApps(): Promise<AppsNameHub>;
   getConfig(): Promise<GatewayConfig>;
   /**
-   * Throws when `udsBootstrap` is disabled in the gateway's
+   * Throws when `sockBootstrap` is disabled in the gateway's
    * feature toggles. The returned exo is also the entry capability
-   * a UDS (or named-pipe) listener serves to incoming CapTP
-   * connections; a process embedding the gateway in-realm calls
-   * `getBootstrap` directly.
+   * a sock listener serves to incoming CapTP connections; a
+   * process embedding the gateway in-realm calls `getBootstrap`
+   * directly.
    */
   getBootstrap(): Promise<GatewayBootstrap>;
 };
