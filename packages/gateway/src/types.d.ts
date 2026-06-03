@@ -940,6 +940,16 @@ export interface GatewayPowers {
    * publishPath })`, or an embedder-shaped equivalent.
    */
   familiarPublish?: FamiliarPublisher;
+  /**
+   * Optional Feature 9 startup-warning sink. When supplied, the
+   * gateway calls this on each diagnostic the startup path emits
+   * (the only one today is the trusted-proxy missing-bind warning
+   * the design pins in `designs/gateway-package.md` § Feature 9).
+   * When omitted, the gateway falls back to `console.error`. The
+   * function shape mirrors a single-line logger; the gateway
+   * passes one already-formatted message per call.
+   */
+  logWarning?: (message: string) => void;
 }
 
 // ---------------------------------------------------------------------
@@ -1068,7 +1078,8 @@ export type GitOperation = 'info/refs' | 'git-upload-pack' | 'git-receive-pack';
  * The per-request shape the embedder hands the handler. Mirrors a
  * conventional Node `http.IncomingMessage` slice: the parsed HTTP
  * method, the URL path, the optional query string (no leading `?`),
- * the header pairs, and the request body bytes.
+ * the header pairs, the request body bytes, and the TCP peer's IP
+ * literal (when the embedder can observe it).
  */
 export interface GitHttpRequest {
   method: string;
@@ -1083,6 +1094,56 @@ export interface GitHttpRequest {
    * repo capability without parsing the Git protocol.
    */
   body: Uint8Array;
+  /**
+   * The TCP peer's IP literal as the embedder's listener observed
+   * it. When present, the handler invokes the Feature 9
+   * X-Forwarded parser under the gateway's `trustedProxyCidrs`
+   * configuration to recover the original client IP and scheme.
+   * When omitted, the handler treats the request as direct (no
+   * X-Forwarded inspection). The bracketed-IPv6 shape (`[::1]`) is
+   * tolerated.
+   */
+  peerAddress?: string;
+}
+
+/**
+ * The recovered request shape returned by `parseForwardedRequest`
+ * (Feature 9). An embedder that owns the HTTP listener calls the
+ * parser to discover whether the immediate TCP peer is a trusted
+ * proxy and, when so, to recover the original client's IP and
+ * scheme from `X-Forwarded-*` headers. The Git smart-HTTP handler
+ * runs the same parser internally when the request carries a
+ * `peerAddress`; it does not currently surface the result on the
+ * response, but later phases may use it for per-caller rate-limit
+ * keys.
+ */
+export interface ForwardedRequest {
+  /**
+   * The original client IP. When the peer is trusted and
+   * `X-Forwarded-For` is present, the leftmost eligible hop under
+   * the configured `maxProxyHops` budget. Otherwise the TCP
+   * peer's IP.
+   */
+  callerIp: string;
+  /**
+   * The original request scheme. When the peer is trusted and
+   * `X-Forwarded-Proto` is present and recognizable, that value;
+   * otherwise `http` (the gateway never terminates TLS itself).
+   */
+  scheme: 'http' | 'https';
+  /**
+   * The original `Host` header. When the peer is trusted and
+   * `X-Forwarded-Host` is present, that value; otherwise the
+   * `Host` header from the request, or `undefined` if neither is
+   * set.
+   */
+  host: string | undefined;
+  /**
+   * `true` iff the TCP peer was inside the configured trusted-proxy
+   * CIDR list and the `X-Forwarded-*` headers were honored;
+   * `false` for direct client requests.
+   */
+  trusted: boolean;
 }
 
 /** The per-response shape the handler returns. */
@@ -1124,11 +1185,15 @@ export interface ServeRepoArgs {
 export interface DaemonRepoCapability {
   /**
    * Serve the `info/refs?service=<service>` GET advertisement as the
-   * response body.
+   * response body. The optional `forwarded` field carries the
+   * Feature-9 X-Forwarded-parser output when the embedder supplied
+   * a `peerAddress` on the request; a daemon implementation may
+   * use it to key per-caller rate limits or audit logs.
    */
   infoRefs(args: {
     service: GitService;
     headers: ReadonlyArray<readonly [string, string]>;
+    forwarded?: ForwardedRequest;
   }): Promise<GitHttpResponse>;
   /**
    * Serve the `git-upload-pack` POST: the request body carries the
@@ -1138,6 +1203,7 @@ export interface DaemonRepoCapability {
   gitUploadPack(args: {
     requestBody: Uint8Array;
     headers: ReadonlyArray<readonly [string, string]>;
+    forwarded?: ForwardedRequest;
   }): Promise<GitHttpResponse>;
   /**
    * Serve the `git-receive-pack` POST: the request body carries the
@@ -1146,6 +1212,7 @@ export interface DaemonRepoCapability {
   gitReceivePack(args: {
     requestBody: Uint8Array;
     headers: ReadonlyArray<readonly [string, string]>;
+    forwarded?: ForwardedRequest;
   }): Promise<GitHttpResponse>;
 }
 

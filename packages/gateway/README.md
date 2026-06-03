@@ -23,14 +23,28 @@ one PR at a time, so the gateway is extracted into its own package.
 
 ## Status
 
-This is the **phase-7 slice**, building on phase 6's
-`GitHttpHandler` (Feature 3), phase 5's relay-policy admission
-(Feature 6 data model), phase 4's `OcapnWebSocketHandler`
-(Feature 8), phase 3's admin daemon (Feature 7) with its
-bootstrap-vs-admin sock split, phase 2's sock bootstrap
-registrar (Feature 4), and the phase-1 skeleton's package
-shape. Phase 7 promotes Feature 2's `AppsNameHub` from
-in-memory-only to optionally formula-backed. When the embedder
+This is the **phase-10 slice**, building on phase 9's
+Familiar-bundled fallback publisher (Feature 5), phase 8's
+`ResourceLedger` (Feature 1), phase 7's formula-backed
+`AppsNameHub` (Feature 2), phase 6's `GitHttpHandler` (Feature 3),
+phase 5's relay-policy admission (Feature 6 data model), phase 4's
+`OcapnWebSocketHandler` (Feature 8), phase 3's admin daemon
+(Feature 7) with its bootstrap-vs-admin sock split, phase 2's
+sock bootstrap registrar (Feature 4), and the phase-1 skeleton's
+package shape. Phase 10 lands the **HTTPS terminating proxy
+compatibility** surface (Feature 9): an `X-Forwarded-*` parser
+gated on a trusted-proxy CIDR allowlist, plus a startup warning
+when the gateway is bound to a non-loopback address with no trust
+configured. Phase 10 also wires the parser into the Git
+smart-HTTP handler so a downstream daemon implementation can key
+per-caller rate limits or audit logs by the original client IP.
+See [`docs/https-proxy.md`](docs/https-proxy.md) for the
+deployment shape and reverse-proxy examples.
+
+### Previously implemented
+
+Phase 7 promotes Feature 2's `AppsNameHub` from in-memory-only to
+optionally formula-backed. When the embedder
 supplies an `AppsFormulaStore` power, the gateway hydrates its
 view from the store at construction, writes bindings through on
 every `bind` / `unbind`, and rolls back the in-memory map if the
@@ -122,6 +136,21 @@ Implemented:
   always distinct file paths; deployment is responsible for the
   admin sock's stricter parent-directory mode (`0700`) so only the
   administrator OS account can `connect(2)` to it.
+- `X-Forwarded-*` parser (phase 10, Feature 9) in
+  `src/x-forwarded.js`: `parseForwardedRequest` returns the
+  recovered `{ callerIp, scheme, host, trusted }` shape, gated on
+  the configured `trustedProxyCidrs` allowlist and `maxProxyHops`
+  budget. `matchTrustedProxy` and `parseCidr` are exported for
+  embedders that want the trust gate without the full parser. The
+  Git smart-HTTP handler invokes the parser when the embedder
+  supplies a `peerAddress` on the request and forwards the
+  recovered shape to the daemon repo capability for downstream
+  per-caller rate limits or audit logs. A startup warning fires
+  when the gateway binds to a non-loopback address with no
+  trusted-proxy CIDR list; the warning sink is the optional
+  `powers.logWarning` (falls back to `console.error`). See
+  [`docs/https-proxy.md`](docs/https-proxy.md) for the deployment
+  shape and reverse-proxy examples.
 
 Deferred to follow-on PRs:
 
@@ -156,7 +185,6 @@ Deferred to follow-on PRs:
   embedders that already own an HTTP server (the daemon's
   `ws-gateway.js`, a future `@endo/gateway-daemon` wrapper) feed
   the handler directly.
-- Feature 9 (HTTPS-terminating-proxy `X-Forwarded-*` parser).
 - Feature 10 (OS packaging: rpm / deb / PKGBUILD / Dockerfile).
 
 The design's `## Capability Surface` section names the exos

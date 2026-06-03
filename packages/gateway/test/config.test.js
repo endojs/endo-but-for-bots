@@ -98,6 +98,29 @@ test('mergeGatewayConfig uses defaults when nothing is given', t => {
   t.deepEqual([...cfg.trustedProxyCidrs], []);
 });
 
+test('mergeGatewayConfig defaults maxProxyHops to 1', t => {
+  // Regression: a `maxProxyHops` default of `0` (or undefined)
+  // would silently disable X-Forwarded-For walking. The safe
+  // default is `1` (trust the immediate upstream hop only),
+  // matching the design's Feature 9 trust framing.
+  const cfg = mergeGatewayConfig();
+  t.is(cfg.maxProxyHops, 1);
+});
+
+test('mergeGatewayConfig accepts trustedProxyCidrs', t => {
+  // The Feature 9 config plumbs through; downstream wiring
+  // (`makeGitHttpHandler`, `start`-time warning) consumes it.
+  const cfg = mergeGatewayConfig({
+    trustedProxyCidrs: ['10.0.0.0/8', '192.168.0.0/16'],
+  });
+  t.deepEqual([...cfg.trustedProxyCidrs], ['10.0.0.0/8', '192.168.0.0/16']);
+});
+
+test('mergeGatewayConfig accepts maxProxyHops override', t => {
+  const cfg = mergeGatewayConfig({ maxProxyHops: 3 });
+  t.is(cfg.maxProxyHops, 3);
+});
+
 test('mergeGatewayConfig overrides bind address', t => {
   const cfg = mergeGatewayConfig({ bindAddress: '127.0.0.1:0' });
   t.is(cfg.bindAddress, '127.0.0.1:0');

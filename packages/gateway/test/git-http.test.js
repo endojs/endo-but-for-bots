@@ -742,3 +742,241 @@ test('handleRequest does not confuse Bearer hex with Basic hex', async t => {
   t.is(resp.status, 401);
   t.is(seenToken, undefined);
 });
+
+// -- Feature 9: X-Forwarded parser wiring -------------------------
+
+test('makeGitHttpHandler rejects a non-array trustedProxyCidrs', t => {
+  t.throws(
+    () =>
+      makeGitHttpHandler({
+        serveRepo: async () => undefined,
+        trustedProxyCidrs: /** @type {any} */ ('10.0.0.0/8'),
+      }),
+    { message: /trustedProxyCidrs must be an array/ },
+  );
+});
+
+test('makeGitHttpHandler rejects a non-positive-integer maxProxyHops', t => {
+  // Regression: an off-by-one or string config value would
+  // otherwise collapse to NaN and silently produce
+  // never-trust-anything behavior. The construction-time check
+  // surfaces the bug at startup.
+  t.throws(
+    () =>
+      makeGitHttpHandler({
+        serveRepo: async () => undefined,
+        maxProxyHops: 0,
+      }),
+    { message: /maxProxyHops must be a positive integer/ },
+  );
+  t.throws(
+    () =>
+      makeGitHttpHandler({
+        serveRepo: async () => undefined,
+        maxProxyHops: /** @type {any} */ ('1'),
+      }),
+    { message: /maxProxyHops must be a positive integer/ },
+  );
+});
+
+test('handleRequest forwards the parsed forwarded shape to infoRefs when trusted', async t => {
+  // The trusted-proxy case must surface the recovered caller IP
+  // and scheme to the daemon repo capability. If the forwarded
+  // object is missing from the args, a downstream rate-limiter
+  // keys on the proxy IP and misses the original-client
+  // identity.
+  /** @type {any} */
+  let seenArgs;
+  const repo = makeStubRepo({
+    infoRefs: async args => {
+      seenArgs = args;
+      return harden({
+        status: 200,
+        headers: [
+          /** @type {readonly [string, string]} */ ([
+            'content-type',
+            'application/x-git-upload-pack-advertisement',
+          ]),
+        ],
+        body: new TextEncoder().encode('001e# service=git-upload-pack\n0000'),
+      });
+    },
+  });
+  const handler = makeGitHttpHandler({
+    serveRepo: async () => repo,
+    trustedProxyCidrs: harden(['10.0.0.0/8']),
+    maxProxyHops: 1,
+  });
+  const resp = await E(handler).handleRequest(
+    harden({
+      method: 'GET',
+      path: '/git/info/refs',
+      query: 'service=git-upload-pack',
+      headers: [
+        /** @type {readonly [string, string]} */ ([
+          'authorization',
+          `Bearer ${HEX64}`,
+        ]),
+        /** @type {readonly [string, string]} */ ([
+          'x-forwarded-for',
+          '203.0.113.42',
+        ]),
+        /** @type {readonly [string, string]} */ ([
+          'x-forwarded-proto',
+          'https',
+        ]),
+      ],
+      body: new Uint8Array(0),
+      peerAddress: '10.0.0.1',
+    }),
+  );
+  t.is(resp.status, 200);
+  t.truthy(seenArgs.forwarded);
+  t.is(seenArgs.forwarded.callerIp, '203.0.113.42');
+  t.is(seenArgs.forwarded.scheme, 'https');
+  t.true(seenArgs.forwarded.trusted);
+});
+
+test('handleRequest omits the forwarded shape when no peerAddress is supplied', async t => {
+  // Regression: an embedder that has not yet wired peer-address
+  // into the handler should not see a phantom `forwarded` field.
+  // The absence preserves backwards compatibility with daemon
+  // repo capabilities written before Phase 10.
+  /** @type {any} */
+  let seenArgs;
+  const repo = makeStubRepo({
+    infoRefs: async args => {
+      seenArgs = args;
+      return harden({
+        status: 200,
+        headers: [
+          /** @type {readonly [string, string]} */ ([
+            'content-type',
+            'application/x-git-upload-pack-advertisement',
+          ]),
+        ],
+        body: new TextEncoder().encode('001e# service=git-upload-pack\n0000'),
+      });
+    },
+  });
+  const handler = makeGitHttpHandler({
+    serveRepo: async () => repo,
+    trustedProxyCidrs: harden(['10.0.0.0/8']),
+  });
+  const resp = await E(handler).handleRequest(
+    harden({
+      method: 'GET',
+      path: '/git/info/refs',
+      query: 'service=git-upload-pack',
+      headers: [
+        /** @type {readonly [string, string]} */ ([
+          'authorization',
+          `Bearer ${HEX64}`,
+        ]),
+      ],
+      body: new Uint8Array(0),
+    }),
+  );
+  t.is(resp.status, 200);
+  t.is(seenArgs.forwarded, undefined);
+});
+
+test('handleRequest marks the forwarded shape untrusted when peer is outside CIDR list', async t => {
+  // The untrusted case is also surfaced (the daemon can decide
+  // to log it differently, key rate limits by the TCP peer IP,
+  // and so on). The `trusted: false` flag is the explicit
+  // discriminator.
+  /** @type {any} */
+  let seenArgs;
+  const repo = makeStubRepo({
+    gitUploadPack: async args => {
+      seenArgs = args;
+      return harden({
+        status: 200,
+        headers: [
+          /** @type {readonly [string, string]} */ ([
+            'content-type',
+            'application/x-git-upload-pack-result',
+          ]),
+        ],
+        body: new TextEncoder().encode('packfile-bytes'),
+      });
+    },
+  });
+  const handler = makeGitHttpHandler({
+    serveRepo: async () => repo,
+    trustedProxyCidrs: harden(['10.0.0.0/8']),
+  });
+  const resp = await E(handler).handleRequest(
+    harden({
+      method: 'POST',
+      path: '/git/git-upload-pack',
+      headers: [
+        /** @type {readonly [string, string]} */ ([
+          'authorization',
+          `Bearer ${HEX64}`,
+        ]),
+        // A forged XFF on an untrusted peer must be ignored.
+        /** @type {readonly [string, string]} */ ([
+          'x-forwarded-for',
+          '1.2.3.4',
+        ]),
+      ],
+      body: new Uint8Array(0),
+      peerAddress: '203.0.113.99',
+    }),
+  );
+  t.is(resp.status, 200);
+  t.truthy(seenArgs.forwarded);
+  t.false(seenArgs.forwarded.trusted);
+  t.is(seenArgs.forwarded.callerIp, '203.0.113.99');
+});
+
+test('handleRequest forwards the forwarded shape to gitReceivePack as well', async t => {
+  // Symmetry: the push path is the more dangerous one (writes to
+  // the daemon's refs), so the caller-IP context must reach it
+  // too.
+  /** @type {any} */
+  let seenArgs;
+  const repo = makeStubRepo({
+    gitReceivePack: async args => {
+      seenArgs = args;
+      return harden({
+        status: 200,
+        headers: [
+          /** @type {readonly [string, string]} */ ([
+            'content-type',
+            'application/x-git-receive-pack-result',
+          ]),
+        ],
+        body: new TextEncoder().encode('unpack ok\n'),
+      });
+    },
+  });
+  const handler = makeGitHttpHandler({
+    serveRepo: async () => repo,
+    trustedProxyCidrs: harden(['10.0.0.0/8']),
+  });
+  const resp = await E(handler).handleRequest(
+    harden({
+      method: 'POST',
+      path: '/git/git-receive-pack',
+      headers: [
+        /** @type {readonly [string, string]} */ ([
+          'authorization',
+          `Bearer ${HEX64}`,
+        ]),
+        /** @type {readonly [string, string]} */ ([
+          'x-forwarded-for',
+          '203.0.113.42',
+        ]),
+      ],
+      body: new Uint8Array(0),
+      peerAddress: '10.0.0.1',
+    }),
+  );
+  t.is(resp.status, 200);
+  t.truthy(seenArgs.forwarded);
+  t.is(seenArgs.forwarded.callerIp, '203.0.113.42');
+  t.true(seenArgs.forwarded.trusted);
+});

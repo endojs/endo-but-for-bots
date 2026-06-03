@@ -32,6 +32,10 @@ import { makeGatewayAdmin } from './src/admin.js';
 import { makeResourceLedger } from './src/resource-ledger.js';
 import { makeOcapnWebSocketHandler } from './src/ocapn-ws.js';
 import { makeGitHttpHandler } from './src/git-http.js';
+import {
+  isLoopbackBindAddress,
+  renderNoTrustedProxyWarning,
+} from './src/x-forwarded.js';
 
 export {
   DEFAULT_BIND_ADDRESS,
@@ -88,6 +92,18 @@ export {
 } from './src/git-http.js';
 
 export {
+  X_FORWARDED_FOR_HEADER,
+  X_FORWARDED_PROTO_HEADER,
+  X_FORWARDED_HOST_HEADER,
+  NO_TRUSTED_PROXY_WARNING_PREAMBLE,
+  renderNoTrustedProxyWarning,
+  isLoopbackBindAddress,
+  parseCidr,
+  matchTrustedProxy,
+  parseForwardedRequest,
+} from './src/x-forwarded.js';
+
+export {
   DEFAULT_RELAY_POLICY,
   RELAY_POLICIES,
   checkRelayPolicy,
@@ -134,6 +150,7 @@ export { makeNodeFamiliarPublishPowers } from './src/node-familiar-publish-power
  *   GatewayPowers,
  *   Gateway,
  *   FamiliarPublisher,
+ *   ForwardedRequest,
  * } from './src/types.d.ts' */
 
 const GatewayInterface = M.interface('Gateway', {
@@ -341,6 +358,8 @@ export const makeGateway = ({ powers = {}, config: configIn = {} } = {}) => {
     }
     gitHttpHandler = makeGitHttpHandler({
       serveRepo: powers.serveRepo,
+      trustedProxyCidrs: mergedConfig.trustedProxyCidrs,
+      maxProxyHops: mergedConfig.maxProxyHops,
     });
   }
 
@@ -393,6 +412,31 @@ export const makeGateway = ({ powers = {}, config: configIn = {} } = {}) => {
         // registration table); the actual sock listener is a
         // follow-on PR.
         //
+        // Feature 9 (HTTPS-proxy compat): emit the design-pinned
+        // startup warning when the gateway is bound to a non-
+        // loopback address with no trusted-proxy CIDR list. The
+        // browser-facing endpoints (Chat, weblets, Git) transmit
+        // formula-identifier bearer tokens in HTTP headers; a
+        // passive observer on an unencrypted link would otherwise
+        // see them. The warning's wording is fixed in the design
+        // (`designs/gateway-package.md` § Feature 9) so an
+        // operator who grep-searches the docs finds the same
+        // string the gateway prints. The warning never blocks
+        // startup; the operator's choice is to bind loopback,
+        // configure a trusted proxy, or accept the warning if
+        // they have arranged TLS termination some other way.
+        if (
+          !isLoopbackBindAddress(resolvedBind) &&
+          mergedConfig.trustedProxyCidrs.length === 0
+        ) {
+          const warning = renderNoTrustedProxyWarning(renderBindAddress());
+          if (typeof powers.logWarning === 'function') {
+            powers.logWarning(warning);
+          } else {
+            console.error(warning);
+          }
+        }
+
         // Feature 5 (Familiar-bundled): publish the *resolved*
         // bind address to the Familiar's local file so its
         // `localhttp://` protocol handler can proxy to it. Today
