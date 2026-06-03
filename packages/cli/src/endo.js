@@ -876,6 +876,113 @@ export const main = async rawArgs => {
       await ping();
     });
 
+  // `endo gateway` subcommand group. The gateway is a distinct
+  // service from the per-user daemon (see packages/gateway and
+  // designs/gateway-package.md); these subcommands manage its
+  // lifecycle without colliding with the daemon's top-level
+  // start/stop/log verbs.
+  const gateway = program
+    .command('gateway')
+    .description(
+      'manage the Endo Gateway service (see packages/gateway/docs/system-service.md)',
+    );
+
+  gateway
+    .command('start')
+    .description('start the Endo Gateway daemon as a background service')
+    .option(
+      '--system',
+      'run as a system service (otherwise auto-detected from euid 0 and INVOCATION_ID)',
+    )
+    .action(async cmd => {
+      const { system } = cmd.opts();
+      const { start: gatewayStart } = await import('./commands/gateway.js');
+      const exit = await gatewayStart({ system });
+      if (exit !== 0) {
+        process.exitCode = exit;
+      }
+    });
+
+  gateway
+    .command('run')
+    .description(
+      'run the Endo Gateway daemon in the foreground (for service managers)',
+    )
+    .option('--system', 'run as a system service')
+    .action(async cmd => {
+      const { system } = cmd.opts();
+      const { start: gatewayStart } = await import('./commands/gateway.js');
+      const exit = await gatewayStart({ system, foreground: true });
+      if (exit !== 0) {
+        process.exitCode = exit;
+      }
+    });
+
+  gateway
+    .command('stop')
+    .description('stop the Endo Gateway daemon')
+    .option('--system', 'address the system-service deployment')
+    .action(async cmd => {
+      const { system } = cmd.opts();
+      const { stop: gatewayStop } = await import('./commands/gateway.js');
+      const exit = await gatewayStop({ system });
+      if (exit !== 0) {
+        process.exitCode = exit;
+      }
+    });
+
+  gateway
+    .command('log')
+    .description("tail the Endo Gateway's log file")
+    .option('-f, --follow', 'follow the tail')
+    .option('--system', 'address the system-service deployment')
+    .action(async cmd => {
+      const { follow, system } = cmd.opts();
+      const { log: gatewayLog } = await import('./commands/gateway.js');
+      const exit = await gatewayLog({ follow, system });
+      if (exit !== 0) {
+        process.exitCode = exit;
+      }
+    });
+
+  gateway
+    .command('where')
+    .description(
+      'print the resolved gateway paths (state, runtime, log, cache, config)',
+    )
+    .option('-j, --json', 'output as JSON')
+    .option('--system', 'address the system-service deployment')
+    .action(async cmd => {
+      const { json, system } = cmd.opts();
+      const { where: gatewayWhere } = await import('./commands/gateway.js');
+      const exit = await gatewayWhere({ system, json });
+      if (exit !== 0) {
+        process.exitCode = exit;
+      }
+    });
+
+  gateway
+    .command('install-systemd')
+    .description(
+      'print a starter systemd unit (or write it to a file with --output)',
+    )
+    .option(
+      '-o, --output <path>',
+      'write the unit to <path> instead of stdout (use `-` for stdout)',
+    )
+    .option(
+      '--exec-start <cmd>',
+      "override the unit's ExecStart line (defaults to `which endo` + ` gateway run --system`)",
+    )
+    .action(async cmd => {
+      const { output, execStart } = cmd.opts();
+      const { installSystemd } = await import('./commands/gateway.js');
+      const exit = await installSystemd({ output, execStart });
+      if (exit !== 0) {
+        process.exitCode = exit;
+      }
+    });
+
   // Group commands by topic in the help screen.
   installGroupedHelp(
     program,
@@ -949,6 +1056,11 @@ export const main = async rawArgs => {
     {
       title: 'Configuration',
       commands: ['where'],
+    },
+
+    {
+      title: 'Gateway',
+      commands: ['gateway'],
     },
   );
 
