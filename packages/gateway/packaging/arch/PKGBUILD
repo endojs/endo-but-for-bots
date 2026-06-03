@@ -1,0 +1,53 @@
+# Maintainer: Endo contributors <noreply@endojs.org>
+pkgname=endo-gateway
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Endo Gateway: HTTP/WebSocket + virtual hosting + OCapN bridge"
+arch=('any')
+url="https://github.com/endojs/endo"
+license=('Apache-2.0')
+depends=('nodejs>=22')
+optdepends=('git: Git smart-HTTP serving (Feature 3)')
+backup=("etc/endo-gateway/config.toml")
+install=endo-gateway.install
+source=("$pkgname-$pkgver.tar.gz")
+sha256sums=('SKIP')
+
+build() {
+    # Node project; the upstream tarball is pre-built. No compile step.
+    :
+}
+
+package() {
+    cd "$srcdir/$pkgname-$pkgver"
+
+    # Application payload under /usr/lib/endo-gateway/.
+    install -d "$pkgdir/usr/lib/$pkgname"
+    cp -a packages/gateway "$pkgdir/usr/lib/$pkgname/"
+
+    # systemd unit. Arch's convention is /usr/lib/systemd/system/.
+    install -Dm644 \
+        packages/gateway/systemd/endo-gateway.service \
+        "$pkgdir/usr/lib/systemd/system/endo-gateway.service"
+
+    # Operator override file. Arch's convention is
+    # /etc/conf.d/<unit-name>, not /etc/default/<unit-name>; the
+    # systemd unit's EnvironmentFile=-/etc/default/endo-gateway is
+    # adjusted at install time via the .install hook below.
+    install -Dm640 \
+        packages/gateway/packaging/debian/endo-gateway.default \
+        "$pkgdir/etc/conf.d/endo-gateway"
+
+    # Config directory placeholder.
+    install -d "$pkgdir/etc/endo-gateway"
+
+    # Documentation.
+    install -Dm644 packages/gateway/docs/system-service.md \
+        "$pkgdir/usr/share/doc/$pkgname/system-service.md"
+    install -Dm644 packages/gateway/docs/packaging.md \
+        "$pkgdir/usr/share/doc/$pkgname/packaging.md"
+
+    # License.
+    install -Dm644 packages/gateway/LICENSE \
+        "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}
