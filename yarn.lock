@@ -2074,10 +2074,12 @@ __metadata:
     "@endo/patterns": "workspace:^"
     "@endo/promise-kit": "workspace:^"
     "@endo/stream": "workspace:^"
+    "@types/ws": "npm:^8.18.1"
     ava: "catalog:dev"
     c8: "catalog:dev"
     eslint: "catalog:dev"
     typescript: "catalog:dev"
+    ws: "npm:^8.18.0"
   languageName: unknown
   linkType: soft
 
