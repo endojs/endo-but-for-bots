@@ -49,91 +49,14 @@ import { makeError, q, X } from '@endo/errors';
 
 import { normalizeVirtualHostName } from './vhost.js';
 
-/** @import { AppsNameHub, VirtualHostEntry } from './vhost.js' */
-
-/**
- * The new daemon-side formula type the gateway's Feature 2 binds
- * names against. Per `designs/gateway-package.md` § Feature 2:
- *
- *   interface WebletFormula {
- *     type: 'weblet';
- *     contentRoot: FormulaIdentifier;
- *     mimeTypes?: Record<string, string>;
- *     ssrHandler?: FormulaIdentifier;
- *     virtualHosts?: ReadonlyArray<string>;
- *   }
- *
- * The gateway does not itself instantiate `weblet` formulas (the
- * daemon-side formula-graph integration is the consumer's job; see
- * `designs/gateway-package.md` § Phased Implementation). It carries
- * the typedef and a validator so the formula-backed hub can refuse
- * malformed entries returned by a store.
- *
- * @typedef {object} WebletFormula
- * @property {'weblet'} type Discriminator. Distinguishes the
- *   formula's shape from other daemon formula types in the same
- *   table (`readable-tree`, `make-unconfined`, etc.).
- * @property {string} contentRoot The formula identifier of the
- *   `readable-tree` whose bytes the gateway serves as the
- *   weblet's static content. Per
- *   `designs/daemon-256-bit-identifiers.md` this is a 64-character
- *   lowercase hex string optionally followed by `:<node>`.
- * @property {Record<string, string>=} mimeTypes Per-extension MIME
- *   overrides applied when the gateway serves a file from
- *   `contentRoot`. Keys are file extensions without a leading dot
- *   (`'svg'`, `'wasm'`); values are valid MIME-type strings. The
- *   default extension-to-MIME map lives at the gateway's content
- *   server (a follow-on PR); this field is the per-weblet override.
- * @property {string=} ssrHandler Optional formula identifier for an
- *   SSR-route handler invoked when a request path does not match a
- *   file in `contentRoot`. The handler is expected to be a daemon
- *   formula whose exo exposes `handleHttp(method, path, headers,
- *   body)`; per
- *   `designs/gateway-package.md` § Feature 4 (UserDaemon.handleHttp)
- *   the gateway forwards the request to this capability and returns
- *   the response.
- * @property {ReadonlyArray<string>=} virtualHosts Optional list of
- *   virtual-host names this weblet may bind. When present, the
- *   formula-backed hub may use this list as a pre-allowed set; when
- *   absent, the hub falls back to the operator-supplied allowlist
- *   (a follow-on phase per Open Question 3 in the design).
- */
-
-/**
- * @typedef {object} WebletBindingRecord A single persisted record
- *   the formula-backed hub reads from / writes to the store. The
- *   store implementation may translate this to its preferred
- *   on-disk shape; the hub only sees the canonical record.
- * @property {string} name The lowercased virtual-host name (already
- *   normalized by `normalizeVirtualHostName` at write time).
- * @property {string} webletFormulaId The 256-bit-hex weblet formula
- *   identifier.
- */
-
-/**
- * @typedef {object} AppsFormulaStore The host-supplied power the
- *   formula-backed hub consults. The daemon side of this interface
- *   wraps the daemon's pet-store or formula-graph machinery; the
- *   gateway does not assume any particular backing.
- *
- *   The store is async because typical implementations sit on a
- *   sqlite database (per `designs/daemon-endo-rust-sqlite.md`); a
- *   synchronous in-memory test stub is also fine.
- * @property {() => Promise<ReadonlyArray<WebletBindingRecord>>} listBindings
- *   Returns every persisted binding. Called once at construction
- *   to hydrate the in-memory view. The store is the source of
- *   truth; any in-memory binding that does not survive a list-on-
- *   restart will be lost.
- * @property {(name: string, webletFormulaId: string) => Promise<void>} writeBinding
- *   Persist a new (or idempotently-equal) binding. The hub calls
- *   this from `bind` after the in-memory map has accepted the
- *   binding; if the write throws, the hub rolls back the in-memory
- *   map and re-throws.
- * @property {(name: string) => Promise<void>} deleteBinding
- *   Persist the removal of a binding. The hub calls this from
- *   `unbind`. As with `writeBinding`, a throw rolls back the
- *   in-memory removal.
- */
+/** @import {
+ *   AppsNameHub,
+ *   VirtualHostEntry,
+ *   WebletFormula,
+ *   WebletBindingRecord,
+ *   AppsFormulaStore,
+ *   FormulaBackedAppsNameHub,
+ * } from './types.d.ts' */
 
 /**
  * Validate the shape of a `WebletFormula` returned by the formula
@@ -310,15 +233,6 @@ const hydrateEntries = (entries, records) => {
     entries.set(key, record.webletFormulaId);
   }
 };
-
-/**
- * @typedef {AppsNameHub & {
- *   whenReady: () => Promise<void>
- * }} FormulaBackedAppsNameHub The formula-backed hub adds a
- *   `whenReady` accessor that resolves when the initial hydration
- *   completes; rejects if the store's `listBindings` throws or
- *   returns malformed data.
- */
 
 /**
  * Create a formula-backed `@apps` NameHub exo. The hub hydrates its

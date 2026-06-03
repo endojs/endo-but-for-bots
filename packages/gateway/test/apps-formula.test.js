@@ -11,7 +11,7 @@ import {
   validateWebletFormula,
 } from '../index.js';
 
-/** @import { AppsFormulaStore, WebletBindingRecord } from '../src/apps-formula.js' */
+/** @import { AppsFormulaStore, WebletBindingRecord } from '../src/types.d.ts' */
 
 // ---- WebletFormula validator ----------------------------------------------
 
