@@ -417,6 +417,24 @@ export const makeOcapnWebSocketHandler = ({
 
         // Replay the first frame to the downstream Noise responder
         // so it sees the unmodified prefixed-SYN as its first read.
+        //
+        // This `prependFrame` wrap is a temporary workaround for the
+        // read-then-replay constraint: the gateway must consume the
+        // SYN to learn which daemon to route to, but the downstream
+        // Noise responder in `packages/ocapn-noise/src/network.js`
+        // `handleIncoming` does its own `readFrame(stream.reader)` to
+        // read the SYN, so we have to put the bytes back. The bindings
+        // layer (`packages/ocapn-noise/src/bindings.js` exposes
+        // `responderReadSynWriteSynack(prefixedSyn, synack)`) already
+        // accepts a pre-read SYN; only the network-layer session-init
+        // entry point needs a parallel shape that takes an optional
+        // pre-read SYN and skips the initial frame read. The daemon-side
+        // `handleOcapnSession` exo would then accept the same shape and
+        // forward it. Once that lands, this wrapper and the `prependFrame`
+        // helper above can be removed in favor of a plain stream pass-
+        // through plus a `prefixedSyn` parameter on the exo call below.
+        //
+        // Tracked: https://github.com/endojs/endo-but-for-bots/issues/406
         const replayReader = prependFrame(firstFrame, reader);
         // Wrap the writer as Far so it crosses the CapTP boundary
         // cleanly (see prependFrame's note on passable enforcement).
