@@ -159,7 +159,7 @@ test('Gateway getConfig returns the merged, hardened config', async t => {
 
 // -- Phase 2 additions: bootstrap (Feature 4) --------------------
 
-test('Gateway getBootstrap returns the bootstrap exo when udsBootstrap is on', async t => {
+test('Gateway getBootstrap returns the bootstrap exo when sockBootstrap is on', async t => {
   const g = gateway();
   const bootstrap = await E(g).getBootstrap();
   t.truthy(bootstrap);
@@ -170,7 +170,7 @@ test('Gateway getBootstrap returns the bootstrap exo when udsBootstrap is on', a
   t.is(issued.hashedNonce.byteLength, 32);
 });
 
-test('Gateway getBootstrap throws when udsBootstrap is off', async t => {
+test('Gateway getBootstrap throws when sockBootstrap is off', async t => {
   // Regression: the accessor must be a hard error rather than a
   // silent no-op when the feature is disabled, so a misconfigured
   // embedder fails loudly.
@@ -178,7 +178,7 @@ test('Gateway getBootstrap throws when udsBootstrap is off', async t => {
     config: {
       enableFeatures: {
         ...defaultFeatureToggles,
-        udsBootstrap: false,
+        sockBootstrap: false,
         adminDaemon: false,
         captpRelay: false,
       },
@@ -189,7 +189,7 @@ test('Gateway getBootstrap throws when udsBootstrap is off', async t => {
   });
 });
 
-test('makeGateway throws when udsBootstrap is on but crypto is missing', t => {
+test('makeGateway throws when sockBootstrap is on but crypto is missing', t => {
   t.throws(
     () =>
       makeGateway({
@@ -197,11 +197,11 @@ test('makeGateway throws when udsBootstrap is on but crypto is missing', t => {
           clock: makeFakeClock(),
         }),
       }),
-    { message: /udsBootstrap requires powers.crypto/ },
+    { message: /sockBootstrap requires powers.crypto/ },
   );
 });
 
-test('makeGateway throws when udsBootstrap is on but clock is missing', t => {
+test('makeGateway throws when sockBootstrap is on but clock is missing', t => {
   t.throws(
     () =>
       makeGateway({
@@ -209,15 +209,15 @@ test('makeGateway throws when udsBootstrap is on but clock is missing', t => {
           crypto: makeNodeCryptoPowers(),
         }),
       }),
-    { message: /udsBootstrap requires powers.clock/ },
+    { message: /sockBootstrap requires powers.clock/ },
   );
 });
 
 test('bootstrap.getApps returns the same hub as gateway.getApps', async t => {
   // The bootstrap shares the gateway's apps NameHub so a binding
-  // installed over UDS is visible to the HTTP routing path. If a
-  // refactor accidentally creates a second hub for the bootstrap,
-  // the gateway routes traffic to bindings that no UDS client can
+  // installed over the sock is visible to the HTTP routing path. If
+  // a refactor accidentally creates a second hub for the bootstrap,
+  // the gateway routes traffic to bindings that no sock client can
   // install.
   const g = gateway();
   const fromGateway = await E(g).getApps();

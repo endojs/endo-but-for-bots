@@ -57,10 +57,9 @@ export {
 export {
   resolveBootstrapSocketPath,
   BOOTSTRAP_SOCKET_BASENAME,
-  BOOTSTRAP_PIPE_WINDOWS,
   SYSTEM_RUNTIME_DIR_LINUX,
   USER_RUNTIME_SUBDIR,
-} from './src/uds-paths.js';
+} from './src/sock-paths.js';
 
 /** @import { GatewayConfig, FeatureToggles, BindAddress } from './src/config.js' */
 /** @import { AppsNameHub } from './src/vhost.js' */
@@ -85,9 +84,9 @@ harden(GatewayInterface);
  *   phases add `net` and `fs`.
  * @property {{[name: string]: string | undefined}} [env]
  * @property {CryptoPowers} [crypto] Required when
- *   `udsBootstrap` is enabled. The bootstrap registrar needs
+ *   `sockBootstrap` is enabled. The bootstrap registrar needs
  *   `randomBytes`, `sha256`, and `verifyEd25519`.
- * @property {ClockPowers} [clock] Required when `udsBootstrap` is
+ * @property {ClockPowers} [clock] Required when `sockBootstrap` is
  *   enabled. The nonce registry consumes `now()` for TTL.
  */
 
@@ -103,11 +102,10 @@ harden(GatewayInterface);
  * @property {() => Promise<AppsNameHub>} getApps
  * @property {() => Promise<GatewayConfig>} getConfig
  * @property {() => Promise<GatewayBootstrap>} getBootstrap Throws
- *   when `udsBootstrap` is disabled in the gateway's feature
- *   toggles. The returned exo is also the entry capability a UDS
- *   (or named-pipe) listener serves to incoming CapTP connections;
- *   a process embedding the gateway in-realm calls `getBootstrap`
- *   directly.
+ *   when `sockBootstrap` is disabled in the gateway's feature
+ *   toggles. The returned exo is also the entry capability a sock
+ *   listener serves to incoming CapTP connections; a process
+ *   embedding the gateway in-realm calls `getBootstrap` directly.
  */
 
 /**
@@ -140,22 +138,22 @@ export const makeGateway = ({ powers = {}, config: configIn = {} } = {}) => {
     `${resolvedBind.kind === 'ipv6' ? `[${resolvedBind.host}]` : resolvedBind.host}:${resolvedBind.port}`;
 
   // The bootstrap registrar (Feature 4) is wired in iff the
-  // udsBootstrap feature toggle is on AND the caller supplied
+  // sockBootstrap feature toggle is on AND the caller supplied
   // crypto + clock powers. The toggle gates the policy; the powers
   // are the platform-bound primitives. A toggle-on but no-powers
   // configuration is treated as a startup error because it would
   // otherwise silently behave like toggle-off.
   /** @type {ReturnType<typeof makeGatewayBootstrap> | undefined} */
   let bootstrapHandle;
-  if (mergedConfig.enableFeatures.udsBootstrap) {
+  if (mergedConfig.enableFeatures.sockBootstrap) {
     if (powers.crypto === undefined) {
       throw makeError(
-        X`udsBootstrap requires powers.crypto; supply a CryptoPowers adapter or disable the feature toggle`,
+        X`sockBootstrap requires powers.crypto; supply a CryptoPowers adapter or disable the feature toggle`,
       );
     }
     if (powers.clock === undefined) {
       throw makeError(
-        X`udsBootstrap requires powers.clock; supply a ClockPowers adapter or disable the feature toggle`,
+        X`sockBootstrap requires powers.clock; supply a ClockPowers adapter or disable the feature toggle`,
       );
     }
     bootstrapHandle = makeGatewayBootstrap({
@@ -180,10 +178,10 @@ export const makeGateway = ({ powers = {}, config: configIn = {} } = {}) => {
         lifecycle = 'starting';
         // The phase-1 skeleton has no network surface; later
         // phases attach the HTTP listener, the WebSocket server,
-        // the UDS bootstrap listener, and the OCapN relay here.
+        // the sock bootstrap listener, and the OCapN relay here.
         // Phase 2 lands the semantic core of the bootstrap (the
         // GatewayBootstrap exo, the nonce registry, the
-        // registration table); the actual UDS listener is a
+        // registration table); the actual sock listener is a
         // follow-on PR.
         lifecycle = 'started';
       },
@@ -208,7 +206,7 @@ export const makeGateway = ({ powers = {}, config: configIn = {} } = {}) => {
       async getBootstrap() {
         if (bootstrapHandle === undefined) {
           throw makeError(
-            X`Gateway bootstrap is disabled (set enableFeatures.udsBootstrap=true)`,
+            X`Gateway bootstrap is disabled (set enableFeatures.sockBootstrap=true)`,
           );
         }
         return bootstrapHandle.bootstrap;
