@@ -6,7 +6,7 @@ five deployment shapes named in `designs/gateway-package.md`:
 
 1. A per-user developer install (today's shape).
 2. A per-host system service that virtual-hosts many users on one
-   address and registers from a UNIX-domain bootstrap socket.
+   address and registers from a local bootstrap sock.
 3. A public web service reachable from the internet, serving Chat,
    Git-over-HTTP, OCapN over a Noise-encrypted WebSocket, and
    per-tenant weblets.
@@ -24,15 +24,15 @@ one PR at a time, so the gateway is extracted into its own package.
 ## Status
 
 This is the **phase-2 slice**, building on the phase-1 skeleton's
-package shape. Phase 2 adds Feature 4 (UDS bootstrap for local
+package shape. Phase 2 adds Feature 4 (sock bootstrap for local
 CapTP relay registration). The semantic core of the bootstrap (the
 `GatewayBootstrap` exo, the proof-of-possession nonce registry,
-the registration table) lands here; the actual UDS / named-pipe
-listener that serves the bootstrap to incoming CapTP connections
-is a follow-on PR, alongside CapTP-over-netstring framing reuse
-from `packages/daemon/src/connection.js`. Embedders that already
-speak CapTP (the Familiar bundle holding a process-local handle,
-tests that connect in-realm) can hold the exo directly via
+the registration table) lands here; the actual sock listener that
+serves the bootstrap to incoming CapTP connections is a follow-on
+PR, alongside CapTP-over-netstring framing reuse from
+`packages/daemon/src/connection.js`. Embedders that already speak
+CapTP (the Familiar bundle holding a process-local handle, tests
+that connect in-realm) can hold the exo directly via
 `E(gateway).getBootstrap()`.
 
 Implemented:
@@ -55,18 +55,18 @@ Implemented:
   TTL, single-use semantics, constant-time signature comparison
   helper, and a Node-backed `CryptoPowers` adapter
   (`src/node-crypto-powers.js`).
-- Bootstrap UDS / named-pipe path resolver
-  (`src/uds-paths.js`) covering `/run/endo-gateway/bootstrap.sock`
+- Bootstrap sock path resolver
+  (`src/sock-paths.js`) covering `/run/endo-gateway/bootstrap.sock`
   (system service), `${XDG_RUNTIME_DIR}/endo-gateway/...` (user
   Linux), the macOS `Library/Application Support` variant, the
-  Windows named-pipe `\\.\pipe\endo-gateway`, the `${TMPDIR}/...`
-  fallback, and `ENDO_GATEWAY_BOOTSTRAP_SOCK` operator override.
+  `${TMPDIR}/...` fallback, and `ENDO_GATEWAY_BOOTSTRAP_SOCK`
+  operator override.
 
 Deferred to follow-on PRs:
 
 - Feature 1 (Chat hosting + payment-token enhancement).
 - Feature 3 (Git over HTTP).
-- Feature 4 follow-on: the actual UDS / named-pipe listener and
+- Feature 4 follow-on: the actual sock listener and
   CapTP-over-netstring server that serves the bootstrap exo to
   incoming connections.
 - Feature 5 (Familiar-bundled fallback).
@@ -104,7 +104,7 @@ const gateway = await makeGateway({
     enableFeatures: {
       virtualHosting: true,
       ocapnWebSocket: false,
-      udsBootstrap: false,
+      sockBootstrap: false,
       chatHosting: false,
       gitHttp: false,
       captpRelay: false,
