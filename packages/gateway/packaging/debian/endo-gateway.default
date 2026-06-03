@@ -1,0 +1,25 @@
+# Operator overrides for the endo-gateway systemd unit.
+#
+# Lines in this file are read by systemd as KEY=VALUE pairs and exported
+# into the gateway process's environment. See the unit's
+# EnvironmentFile=-/etc/default/endo-gateway directive.
+#
+# Uncomment and edit as needed.
+
+# Bind address. The gateway defaults to 0.0.0.0:3469; override to
+# loopback for a reverse-proxy-only deployment.
+# ENDO_HTTP_ADDR=127.0.0.1:3469
+
+# Path overrides. The systemd unit pins these to the system-service
+# layout by default; override only if your operator policy hosts the
+# gateway under a non-standard prefix.
+# ENDO_GATEWAY_RUNTIME_DIR=/run/endo-gateway
+# ENDO_GATEWAY_STATE_DIR=/var/lib/endo-gateway
+# ENDO_GATEWAY_CACHE_DIR=/var/cache/endo-gateway
+# ENDO_GATEWAY_LOG_DIR=/var/log/endo-gateway
+# ENDO_GATEWAY_CONFIG_FILE=/etc/endo-gateway/config.toml
+
+# Trusted proxy CIDR allowlist for X-Forwarded-* parsing (Feature 9).
+# Empty by default (fail-closed). Set when an upstream reverse proxy
+# terminates TLS and forwards the client IP.
+# ENDO_GATEWAY_TRUSTED_PROXY_CIDRS=10.0.0.0/8,172.16.0.0/12,192.168.0.0/16

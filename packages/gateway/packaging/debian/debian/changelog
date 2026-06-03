@@ -1,0 +1,9 @@
+endo-gateway (0.1.0-1) unstable; urgency=medium
+
+  * Initial Debian packaging for the Endo Gateway (Feature 10 of #343).
+    Installs the systemd unit shipped at
+    packages/gateway/systemd/endo-gateway.service, creates the endo:endo
+    service account, and pre-creates the runtime / state / log / cache
+    directories under /var/lib, /var/log, /var/cache, /run.
+
+ -- Endo contributors <noreply@endojs.org>  Thu, 28 May 2026 00:00:00 +0000

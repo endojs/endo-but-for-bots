@@ -1,0 +1,42 @@
+#!/usr/bin/make -f
+# Debian rules file for endo-gateway. Uses debhelper sequencer (dh) so
+# the per-target overrides below stay short.
+
+export DH_VERBOSE = 1
+
+%:
+	dh $@
+
+override_dh_auto_build:
+	# The gateway is a Node.js project; the actual build happens during
+	# the upstream `yarn build` invocation in the source tarball
+	# preparation step. By the time the .deb is built, the staged
+	# artifacts are already in place. Skip dh_auto_build's default
+	# Makefile / configure / cmake detection.
+	:
+
+override_dh_auto_test:
+	# Tests run in upstream CI; the .deb build does not re-run them.
+	:
+
+override_dh_auto_install:
+	install -d $(CURDIR)/debian/endo-gateway/usr/lib/endo-gateway
+	cp -a packages/gateway $(CURDIR)/debian/endo-gateway/usr/lib/endo-gateway/
+
+	install -d $(CURDIR)/debian/endo-gateway/lib/systemd/system
+	install -m 0644 packages/gateway/systemd/endo-gateway.service \
+	    $(CURDIR)/debian/endo-gateway/lib/systemd/system/
+
+	install -d $(CURDIR)/debian/endo-gateway/etc/endo-gateway
+	install -d $(CURDIR)/debian/endo-gateway/etc/default
+	install -m 0640 packages/gateway/packaging/debian/endo-gateway.default \
+	    $(CURDIR)/debian/endo-gateway/etc/default/endo-gateway
+
+	install -d $(CURDIR)/debian/endo-gateway/usr/share/doc/endo-gateway
+	install -m 0644 packages/gateway/docs/system-service.md \
+	    $(CURDIR)/debian/endo-gateway/usr/share/doc/endo-gateway/
+	install -m 0644 packages/gateway/docs/packaging.md \
+	    $(CURDIR)/debian/endo-gateway/usr/share/doc/endo-gateway/
+
+override_dh_installsystemd:
+	dh_installsystemd --name=endo-gateway --no-start

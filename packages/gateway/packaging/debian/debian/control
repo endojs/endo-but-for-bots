@@ -1,0 +1,31 @@
+Source: endo-gateway
+Section: web
+Priority: optional
+Maintainer: Endo contributors <noreply@endojs.org>
+Build-Depends:
+ debhelper-compat (= 13),
+ nodejs (>= 22),
+Standards-Version: 4.6.2
+Homepage: https://github.com/endojs/endo/tree/master/packages/gateway
+Vcs-Browser: https://github.com/endojs/endo
+Vcs-Git: https://github.com/endojs/endo.git
+Rules-Requires-Root: binary-targets
+
+Package: endo-gateway
+Architecture: all
+Depends:
+ ${misc:Depends},
+ adduser,
+ nodejs (>= 22),
+Recommends:
+ git,
+Description: Endo Gateway: HTTP/WebSocket + virtual hosting + OCapN bridge
+ The Endo Gateway is a long-lived HTTP and WebSocket front-end for the
+ per-host Endo daemon. It performs virtual hosting for weblet apps,
+ terminates the OCapN-over-WebSocket transport, and serves Git over
+ HTTP for object-store-backed repositories.
+ .
+ This package installs the gateway as a systemd-managed service running
+ as the unprivileged endo:endo system account. See
+ /usr/share/doc/endo-gateway/system-service.md for the deployment shape
+ and /usr/share/doc/endo-gateway/packaging.md for upgrade workflow.

@@ -1,0 +1,50 @@
+#!/bin/sh
+# postrm script for endo-gateway.
+#
+# Stops + disables the service on `remove`. On `purge`, also removes the
+# managed directories and the system user. Removed by intention rather
+# than dh_systemd_stop's default sequencing because the state directory
+# under /var/lib carries the gateway's CapTP graph, which is irreplaceable
+# on a single-host deployment.
+
+set -e
+
+case "$1" in
+    remove)
+        # Service stop + disable handled by dh_installsystemd's emitted
+        # snippet below. The DEBHELPER macro inserts the appropriate
+        # `systemctl stop endo-gateway.service` and
+        # `systemctl disable endo-gateway.service` calls.
+        ;;
+
+    purge)
+        # State, log, cache, and config directories.
+        # /var/lib/endo-gateway holds the CapTP graph; only delete it on
+        # purge, never on a plain remove.
+        rm -rf /var/lib/endo-gateway
+        rm -rf /var/log/endo-gateway
+        rm -rf /var/cache/endo-gateway
+        rm -rf /etc/endo-gateway
+
+        # Drop the system user / group. deluser is safe to call when the
+        # user does not exist.
+        if getent passwd endo >/dev/null; then
+            deluser --system endo || true
+        fi
+        if getent group endo >/dev/null; then
+            delgroup --system endo || true
+        fi
+        ;;
+
+    upgrade|failed-upgrade|abort-install|abort-upgrade|disappear)
+        ;;
+
+    *)
+        echo "postrm called with unknown argument: $1" >&2
+        exit 1
+        ;;
+esac
+
+#DEBHELPER#
+
+exit 0
