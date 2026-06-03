@@ -8,8 +8,6 @@ import test from 'ava';
 
 import { E } from '@endo/far';
 
-import { bytesToImmutable } from '@endo/bytes/to-immutable.js';
-
 import {
   makeGateway,
   DEFAULT_BIND_ADDRESS,
@@ -505,10 +503,10 @@ test('GatewayAdmin.getResourceBalances reads through the internal ResourceLedger
   });
   const ledger = await E(g).getLedger();
   // Credit one account so the admin's snapshot has a row. The
-  // wire shape is immutable ArrayBuffer; we use the bytes helper
-  // so the value the test passes through E() satisfies the exo's
-  // pattern matcher (Uint8Array would fail the wire-side check).
-  const publicKey = bytesToImmutable(new Uint8Array(32).fill(0xc3));
+  // wire shape is `Uint8Array` per the kriskowal directive on
+  // PR #393; the exo's interface guard uses `M.raw()` so the
+  // Uint8Array passes the wire-side check.
+  const publicKey = new Uint8Array(32).fill(0xc3);
   await E(ledger).purchaseTokens(
     publicKey,
     { compute: 42, storage: 0, network: 0 },

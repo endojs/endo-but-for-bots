@@ -26,16 +26,12 @@
  *
  * An account is identified by an Ed25519 public key (32 bytes),
  * the same byte shape the bootstrap registrar uses for
- * registrations. Per the `@endo/bytes` convention the wire shape
- * is an immutable `ArrayBuffer`; the exo's pattern matcher
- * rejects mutable `Uint8Array` inputs on the wire (typed arrays
- * cannot be frozen and are not passable). The internal validator
- * keeps the `Uint8Array | ArrayBuffer` shape so an in-realm
- * caller that bypasses the exo wrapper (test code, the bootstrap
- * registrar handing over a converted view) can also call. The
- * ledger keys its internal map by lowercase hex so two byte-equal
- * inputs (one from the wire, one we kept) resolve to the same
- * account.
+ * registrations. Per the kriskowal directive on PR #393, byte
+ * fields use `Uint8Array` as the sole unit of transmission; the
+ * exo's interface guard uses `M.raw()` so the validation runs in
+ * the method body rather than at the patterns layer. The ledger
+ * keys its internal map by lowercase hex so two byte-equal inputs
+ * (one from the wire, one we kept) resolve to the same account.
  *
  * ### Counter shape
  *
@@ -95,17 +91,14 @@
 import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
 import { makeError, q, X } from '@endo/errors';
-import { bytesFromImmutable } from '@endo/bytes/from-immutable.js';
 
 import { ED25519_PUBLIC_KEY_LENGTH } from './bootstrap.js';
 
-/** @import { ResourceBalance } from './admin.js' */
-
 const ResourceLedgerInterface = M.interface('ResourceLedger', {
-  getBalance: M.call(M.any()).returns(M.promise()),
-  chargeBalance: M.call(M.any(), M.any()).returns(M.promise()),
-  purchaseTokens: M.call(M.any(), M.any(), M.any()).returns(M.promise()),
-  setQuota: M.call(M.any(), M.any()).returns(M.promise()),
+  getBalance: M.call(M.raw()).returns(M.promise()),
+  chargeBalance: M.call(M.raw(), M.raw()).returns(M.promise()),
+  purchaseTokens: M.call(M.raw(), M.raw(), M.raw()).returns(M.promise()),
+  setQuota: M.call(M.raw(), M.raw()).returns(M.promise()),
   listBalances: M.call().returns(M.promise()),
 });
 harden(ResourceLedgerInterface);
@@ -127,90 +120,14 @@ export const RESOURCE_CLASSES = harden(
  */
 const ZERO_COUNTERS = harden({ compute: 0, storage: 0, network: 0 });
 
-/**
- * @typedef {object} ResourceTokens An amount of resource tokens
- *   split into the three counter classes. Used for both
- *   `chargeBalance` (debit) and `purchaseTokens` (credit).
- *   Every field is optional and defaults to zero so a caller that
- *   only meters one class can omit the others.
- * @property {number} [compute] Compute-time tokens (suggested
- *   unit: seconds). Non-negative integer.
- * @property {number} [storage] Storage tokens (suggested unit:
- *   bytes). Non-negative integer.
- * @property {number} [network] Network tokens (suggested unit:
- *   bytes). Non-negative integer.
- */
-
-/**
- * @typedef {object} ResourceQuota Per-class maximum balance. A
- *   class set to `Infinity` (or omitted) is unbounded. Quotas
- *   bound `purchaseTokens` credits only; they do not retroactively
- *   reduce a balance that is already above the cap.
- * @property {number} [compute]
- * @property {number} [storage]
- * @property {number} [network]
- */
-
-/**
- * @typedef {object} VerifyPaymentProofResult The shape returned by
- *   a `verifyPaymentProof` adapter. The ledger interprets the
- *   result like so:
- *
- *   - A falsy result (`false`, `null`, `undefined`) means the
- *     proof is invalid; the purchase throws.
- *   - A `true` literal means the proof is valid; the ledger
- *     credits the caller's stated `tokens` argument.
- *   - A `ResourceTokens`-shaped object means the proof is valid
- *     and *these are the tokens to credit*. This shape lets a
- *     payment processor settle the actual token grant itself
- *     (e.g., when the processor rounds, splits, or otherwise
- *     transforms the requested tokens).
- *
- *   Throwing from the verifier also causes the purchase to throw;
- *   the thrown error propagates (so a verifier can supply a
- *   descriptive message).
- */
-
-/**
- * @typedef {(args: {
- *   agentPublicKey: ArrayBuffer | Uint8Array,
- *   tokens: ResourceTokens,
- *   proof: unknown,
- * }) => Promise<boolean | ResourceTokens> | boolean | ResourceTokens} VerifyPaymentProof
- *   The embedder-supplied payment-proof verifier. The ledger
- *   passes the caller's stated `agentPublicKey`, the caller's
- *   stated `tokens`, and the opaque `proof`. The verifier is
- *   responsible for cross-checking the three fields against
- *   whatever the underlying payment processor's receipt encodes.
- *   The proof shape itself is opaque to `@endo/gateway` (the
- *   design's "out of scope for the package" framing).
- */
-
-/**
- * @typedef {object} ResourceLedger CapTP-facing exo for the
- *   gateway's resource-accounting surface (Feature 1). All methods
- *   are async so they cross the wire as eventual sends.
- * @property {(agentPublicKey: ArrayBuffer | Uint8Array) => Promise<ResourceBalance>} getBalance
- *   Returns the per-class balance for the named account. An
- *   unknown account returns the all-zeros record.
- * @property {(agentPublicKey: ArrayBuffer | Uint8Array, tokens: ResourceTokens) => Promise<ResourceBalance>} chargeBalance
- *   Debit the per-class tokens. Throws on an underflow (the
- *   account did not hold enough tokens in some class), leaving
- *   the account state unchanged. Returns the new balance.
- * @property {(agentPublicKey: ArrayBuffer | Uint8Array, tokens: ResourceTokens, proof: unknown) => Promise<ResourceBalance>} purchaseTokens
- *   Verify the payment proof and credit the per-class tokens.
- *   Throws when the proof is invalid or when the credit would
- *   push any class above its quota; in both cases the account
- *   state is unchanged. Returns the new balance.
- * @property {(agentPublicKey: ArrayBuffer | Uint8Array, quota: ResourceQuota) => Promise<void>} setQuota
- *   Set the per-class maximum balance for the named account.
- *   Existing balances above the cap are not retroactively reduced;
- *   the quota bounds future `purchaseTokens` credits.
- * @property {() => Promise<ReadonlyArray<ResourceBalance>>} listBalances
- *   Snapshot every account's balance. Used by the admin facet's
- *   `getResourceBalances` surface (`admin.js`). Accounts are keyed
- *   by hex-rendered public key in the returned `account` field.
- */
+/** @import {
+ *   ResourceTokens,
+ *   ResourceQuota,
+ *   VerifyPaymentProofResult,
+ *   VerifyPaymentProof,
+ *   ResourceLedger,
+ *   ResourceBalance,
+ * } from './types.d.ts' */
 
 /**
  * @typedef {object} ResourceLedgerDeps Args to `makeResourceLedger`.
@@ -222,46 +139,34 @@ const ZERO_COUNTERS = harden({ compute: 0, storage: 0, network: 0 });
  */
 
 /**
- * Validate a byte-shaped public-key input. Mirrors the validator
- * in `bootstrap.js` and `admin.js`; the ledger keeps its own copy
- * so its dependency graph stays one-directional (it imports the
- * length constant from `bootstrap.js`, not a private helper).
+ * Validate a byte-shaped public-key input.
  *
  * @param {unknown} candidate
- * @returns {ArrayBuffer | Uint8Array}
+ * @returns {Uint8Array}
  */
 const checkAgentPublicKey = candidate => {
-  if (
-    !(candidate instanceof ArrayBuffer) &&
-    !(candidate instanceof Uint8Array)
-  ) {
-    throw makeError(
-      X`agentPublicKey must be an immutable ArrayBuffer or Uint8Array`,
-    );
+  if (!(candidate instanceof Uint8Array)) {
+    throw makeError(X`agentPublicKey must be a Uint8Array`);
   }
-  const length =
-    candidate instanceof Uint8Array ? candidate.length : candidate.byteLength;
-  if (length !== ED25519_PUBLIC_KEY_LENGTH) {
+  if (candidate.length !== ED25519_PUBLIC_KEY_LENGTH) {
     throw makeError(
-      X`agentPublicKey must be ${q(ED25519_PUBLIC_KEY_LENGTH)} bytes, got ${q(length)}`,
+      X`agentPublicKey must be ${q(ED25519_PUBLIC_KEY_LENGTH)} bytes, got ${q(candidate.length)}`,
     );
   }
   return candidate;
 };
 
 /**
- * Hex-render a byte view. The ledger keys its internal map by
- * hex so two byte-equal inputs (one from the wire, one kept by
- * the holder) hit the same Map entry. Lowercase by convention.
+ * Hex-render a byte view. The ledger keys its internal map by hex
+ * so two byte-equal inputs hit the same Map entry.
  *
- * @param {ArrayBuffer | Uint8Array} bytes
+ * @param {Uint8Array} bytes
  * @returns {string}
  */
 const publicKeyToHex = bytes => {
-  const view = bytes instanceof Uint8Array ? bytes : bytesFromImmutable(bytes);
   let hex = '';
-  for (let i = 0; i < view.length; i += 1) {
-    hex += view[i].toString(16).padStart(2, '0');
+  for (let i = 0; i < bytes.length; i += 1) {
+    hex += bytes[i].toString(16).padStart(2, '0');
   }
   return hex;
 };
@@ -439,7 +344,7 @@ export const makeResourceLedger = ({ verifyPaymentProof }) => {
    * Look up (or lazily create) the account record for the
    * supplied public key. Returns the mutable state slot.
    *
-   * @param {ArrayBuffer | Uint8Array} agentPublicKey
+   * @param {Uint8Array} agentPublicKey
    */
   const accountFor = agentPublicKey => {
     const hex = publicKeyToHex(agentPublicKey);
@@ -462,7 +367,7 @@ export const makeResourceLedger = ({ verifyPaymentProof }) => {
     'ResourceLedger',
     ResourceLedgerInterface,
     /** @type {any} */ ({
-      /** @param {ArrayBuffer | Uint8Array} agentPublicKey */
+      /** @param {Uint8Array} agentPublicKey */
       async getBalance(agentPublicKey) {
         const key = checkAgentPublicKey(agentPublicKey);
         const hex = publicKeyToHex(key);
@@ -476,7 +381,7 @@ export const makeResourceLedger = ({ verifyPaymentProof }) => {
         return harden({ account: hex, ...entry.balance });
       },
       /**
-       * @param {ArrayBuffer | Uint8Array} agentPublicKey
+       * @param {Uint8Array} agentPublicKey
        * @param {ResourceTokens} tokens
        */
       async chargeBalance(agentPublicKey, tokens) {
@@ -500,7 +405,7 @@ export const makeResourceLedger = ({ verifyPaymentProof }) => {
         return harden({ account: hex, ...entry.balance });
       },
       /**
-       * @param {ArrayBuffer | Uint8Array} agentPublicKey
+       * @param {Uint8Array} agentPublicKey
        * @param {ResourceTokens} tokens
        * @param {unknown} proof
        */
@@ -541,7 +446,7 @@ export const makeResourceLedger = ({ verifyPaymentProof }) => {
         return harden({ account: hex, ...entry.balance });
       },
       /**
-       * @param {ArrayBuffer | Uint8Array} agentPublicKey
+       * @param {Uint8Array} agentPublicKey
        * @param {ResourceQuota} quota
        */
       async setQuota(agentPublicKey, quota) {

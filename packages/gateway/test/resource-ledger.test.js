@@ -6,8 +6,6 @@ import test from 'ava';
 
 import { E } from '@endo/far';
 
-import { bytesToImmutable } from '@endo/bytes/to-immutable.js';
-
 import {
   ED25519_PUBLIC_KEY_LENGTH,
   RESOURCE_CLASSES,
@@ -18,16 +16,16 @@ import {
  * @param {number} length
  * @param {number} [fill]
  */
-const immutableBytesOf = (length, fill = 0) => {
+const bytesOf = (length, fill = 0) => {
   const u = new Uint8Array(length);
   u.fill(fill);
-  return bytesToImmutable(u);
+  return u;
 };
 
-/** A 32-byte public key (immutable) for tests. */
-const ALICE_KEY = immutableBytesOf(ED25519_PUBLIC_KEY_LENGTH, 0xa1);
-/** A second 32-byte public key (immutable) for tests. */
-const BOB_KEY = immutableBytesOf(ED25519_PUBLIC_KEY_LENGTH, 0xb2);
+/** A 32-byte public key for tests. */
+const ALICE_KEY = bytesOf(ED25519_PUBLIC_KEY_LENGTH, 0xa1);
+/** A second 32-byte public key for tests. */
+const BOB_KEY = bytesOf(ED25519_PUBLIC_KEY_LENGTH, 0xb2);
 
 const ALICE_HEX = 'a1'.repeat(ED25519_PUBLIC_KEY_LENGTH);
 const BOB_HEX = 'b2'.repeat(ED25519_PUBLIC_KEY_LENGTH);
@@ -88,22 +86,16 @@ test('getBalance returns all-zeros for an unknown account', async t => {
   t.is(balance.network, 0);
 });
 
-test('byte-equal ArrayBuffers from different sources resolve to the same account', async t => {
-  // Per the `@endo/bytes` wire shape, the exo's pattern matcher
-  // accepts only immutable `ArrayBuffer` across the wire
-  // (Uint8Arrays cannot be frozen and are rejected by the
-  // wire-side check). Two byte-equal ArrayBuffers constructed
-  // separately must still hit the same account; the ledger keys
-  // by byte content (hex), not by object identity.
+test('byte-equal Uint8Arrays from different sources resolve to the same account', async t => {
+  // Per the kriskowal directive on PR #393 the wire shape is
+  // `Uint8Array`. Two byte-equal `Uint8Array` references constructed
+  // separately must still hit the same account; the ledger keys by
+  // byte content (hex), not by object identity.
   const ledger = makeResourceLedger({
     verifyPaymentProof: trustingVerifier,
   });
-  const aliceA = bytesToImmutable(
-    new Uint8Array(ED25519_PUBLIC_KEY_LENGTH).fill(0xa1),
-  );
-  const aliceB = bytesToImmutable(
-    new Uint8Array(ED25519_PUBLIC_KEY_LENGTH).fill(0xa1),
-  );
+  const aliceA = new Uint8Array(ED25519_PUBLIC_KEY_LENGTH).fill(0xa1);
+  const aliceB = new Uint8Array(ED25519_PUBLIC_KEY_LENGTH).fill(0xa1);
   t.not(aliceA, aliceB);
   await E(ledger).purchaseTokens(aliceA, { compute: 30 }, 'p1');
   const balance = await E(ledger).getBalance(aliceB);
@@ -116,7 +108,7 @@ test('getBalance rejects a non-byte input', async t => {
     verifyPaymentProof: trustingVerifier,
   });
   await t.throwsAsync(E(ledger).getBalance(/** @type {any} */ ('not bytes')), {
-    message: /agentPublicKey must be an immutable ArrayBuffer or Uint8Array/,
+    message: /agentPublicKey must be a Uint8Array/,
   });
 });
 
@@ -124,7 +116,7 @@ test('getBalance rejects a wrong-length publicKey', async t => {
   const ledger = makeResourceLedger({
     verifyPaymentProof: trustingVerifier,
   });
-  await t.throwsAsync(E(ledger).getBalance(immutableBytesOf(16)), {
+  await t.throwsAsync(E(ledger).getBalance(bytesOf(16)), {
     message: /agentPublicKey must be .* bytes, got/,
   });
 });
@@ -549,19 +541,15 @@ test('listBalances order is stable across snapshots', async t => {
 
 // -- byte-shape parity --------------------------------------------
 
-test('two purchases against the same ArrayBuffer accumulate on one account', async t => {
+test('two purchases against byte-equal Uint8Arrays accumulate on one account', async t => {
   // Regression: a refactor that keyed by object identity (rather
   // than by byte content) would treat each call as a separate
   // account, doubling rows in the admin snapshot.
   const ledger = makeResourceLedger({
     verifyPaymentProof: trustingVerifier,
   });
-  const aliceA = bytesToImmutable(
-    new Uint8Array(ED25519_PUBLIC_KEY_LENGTH).fill(0xa1),
-  );
-  const aliceB = bytesToImmutable(
-    new Uint8Array(ED25519_PUBLIC_KEY_LENGTH).fill(0xa1),
-  );
+  const aliceA = new Uint8Array(ED25519_PUBLIC_KEY_LENGTH).fill(0xa1);
+  const aliceB = new Uint8Array(ED25519_PUBLIC_KEY_LENGTH).fill(0xa1);
   await E(ledger).purchaseTokens(aliceA, { compute: 100 }, 'p1');
   await E(ledger).purchaseTokens(aliceB, { compute: 50 }, 'p2');
   const all = await E(ledger).listBalances();
