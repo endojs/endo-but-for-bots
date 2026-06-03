@@ -22,6 +22,7 @@ const {
 } = globalThis;
 
 const {
+  freeze,
   getOwnPropertyDescriptor,
   getOwnPropertyDescriptors,
   defineProperties,
@@ -62,7 +63,7 @@ const getHiddenTypedArray = freezableTA => {
   if (result) {
     return result;
   }
-  throw new TypedArray(`Not an emulated freezable TypedArray`);
+  throw TypeError(`Not an emulated freezable TypedArray`);
 };
 
 /**
@@ -90,7 +91,7 @@ export const virtualTypedArrayBufferGetter = (() => {
   const { get: pseudoGetter } = /** @type {PropertyDescriptor} */ (
     getOwnPropertyDescriptor(obj, 'buffer')
   );
-  return pseudoGetter;
+  return freeze(pseudoGetter);
 })();
 
 const freezableTypedArrayInternalPrototype = makeInternalHeir(
@@ -189,8 +190,10 @@ export const makePseudoTypedArrayConstructor = OriginalConstructor => {
     const freezableTypedArray = {
       __proto__: PseudoTypedArrayPrototype,
     };
-    // @ts-expect-error freezableTypedArray implements TypedArray
-    weakMapSet(hiddenTypedArrays, freezableTypedArray, [hiddenTypedArray]);
+    apply(weakMapSet, hiddenTypedArrays, [
+      /** @type {TypedArray} */ (/** @type {unknown} */ (freezableTypedArray)),
+      hiddenTypedArray,
+    ]);
     return freezableTypedArray;
   }
 
@@ -199,4 +202,6 @@ export const makePseudoTypedArrayConstructor = OriginalConstructor => {
 
   defineProperties(PseudoTypedArray, constructorDescs);
   setPrototypeOf(PseudoTypedArray, TypedArray);
+  return PseudoTypedArray;
 };
+freeze(makePseudoTypedArrayConstructor);
