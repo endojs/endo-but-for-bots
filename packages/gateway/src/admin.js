@@ -4,32 +4,37 @@
  * @file `GatewayAdmin` exo for the gateway's local administrator
  *   surface (design Feature 7).
  *
- * The administrator's handle is the sock bootstrap from Feature 4
- * extended with a `GatewayAdmin` facet. A process that can connect
- * to the gateway's bootstrap sock holds the administrator's
- * authority: it can inspect the registration table, inspect the
- * virtual-host bindings, force-deregister a relay by public key,
- * and read per-account resource balances via an injected
- * `ResourceLedger` (Feature 1, deferred).
+ * The administrator's handle is a separate local sock (`admin.sock`,
+ * see `sock-paths.js`) gated by ACL such that only the administrator
+ * OS account may connect. A process that can connect to the admin
+ * sock holds the administrator's authority: it can inspect the
+ * registration table, inspect the virtual-host bindings,
+ * force-deregister a relay by public key, and read per-account
+ * resource balances via an injected `ResourceLedger` (Feature 1,
+ * deferred).
  *
  * `GatewayAdmin` is reachable in exactly two ways:
  *
  *   1. In-process, via `gateway.getAdmin()`. Embedders that already
  *      speak CapTP hold the exo directly.
- *   2. Over the local sock bootstrap, via
- *      `E(bootstrap).getAdmin()`. The filesystem permissions on the
- *      sock gate who-may-call.
+ *   2. Over the local admin sock. The admin sock is mode `0600` and
+ *      its parent directory is mode `0700` (deployment-enforced),
+ *      so only the administrator OS account can `connect(2)` to it.
+ *      The admin sock is **distinct** from the bootstrap sock
+ *      (which any local user daemon may use to register itself);
+ *      the two channels exist precisely so that registration
+ *      authority does not double as admin authority.
  *
  * The exo is **never** served on the gateway's public HTTP / WS
- * surface. The "admin authority off the network" rule lives in the
- * surface: the only entry capabilities are the in-process API and
- * the sock bootstrap. The HTTP / WS surface (which lands in later
- * phases) does not expose `GatewayAdmin`; the gateway's
- * `getBootstrap` throws when `sockBootstrap` is disabled, and
- * `getAdmin` throws when `adminDaemon` is disabled or when
- * `sockBootstrap` is disabled (the admin daemon depends on the sock
- * bootstrap for its access channel; the dependency is validated in
- * `mergeGatewayConfig`).
+ * surface, and is **never** reached through the bootstrap sock. The
+ * "admin authority off the network" rule lives in the surface: the
+ * only entry capabilities are the in-process API and the admin sock.
+ * The HTTP / WS surface (which lands in later phases) does not
+ * expose `GatewayAdmin`; the gateway's `getBootstrap` throws when
+ * `sockBootstrap` is disabled, and `getAdmin` throws when
+ * `adminDaemon` is disabled. The admin daemon does **not** depend on
+ * the bootstrap sock; the two are independent features with their
+ * own toggles and their own access channels.
  *
  * Wire shape: byte fields (public keys) follow the `@endo/bytes`
  * convention: immutable `ArrayBuffer` on the wire, `Uint8Array`

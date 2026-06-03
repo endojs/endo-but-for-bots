@@ -143,18 +143,31 @@ test('mergeGatewayConfig rejects relay without sockBootstrap', t => {
   );
 });
 
-test('mergeGatewayConfig rejects adminDaemon without sockBootstrap', t => {
-  t.throws(
-    () =>
-      mergeGatewayConfig({
-        enableFeatures: {
-          ...defaultFeatureToggles,
-          adminDaemon: true,
-          sockBootstrap: false,
-        },
-      }),
-    { message: /adminDaemon depends on sockBootstrap/ },
-  );
+test('mergeGatewayConfig accepts adminDaemon without sockBootstrap', t => {
+  // Regression for the bootstrap-vs-admin split (#389): the admin
+  // daemon uses its own sock and does not depend on the bootstrap
+  // sock for its access channel. A deployment may serve the admin
+  // sock without exposing the bootstrap sock, or vice versa; the
+  // config validator must accept either combination.
+  //
+  // Other features (notably `captpRelay` and a future
+  // `ocapnWebSocket` once Feature 8 lands) may still depend on
+  // sockBootstrap for their own reasons; those dependencies are
+  // independent of the admin facet and are exercised by their own
+  // tests. The shape this test pins is solely the admin-without-
+  // bootstrap path, with everything else either independent of
+  // sockBootstrap or explicitly disabled.
+  const merged = mergeGatewayConfig({
+    enableFeatures: {
+      ...defaultFeatureToggles,
+      adminDaemon: true,
+      sockBootstrap: false,
+      captpRelay: false,
+      ocapnWebSocket: false,
+    },
+  });
+  t.is(merged.enableFeatures.adminDaemon, true);
+  t.is(merged.enableFeatures.sockBootstrap, false);
 });
 
 test('mergeGatewayConfig rejects chatHosting without virtualHosting', t => {

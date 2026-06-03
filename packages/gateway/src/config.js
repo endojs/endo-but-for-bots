@@ -200,11 +200,6 @@ const validateFeatureDependencies = features => {
       X`captpRelay depends on sockBootstrap for registration; both must be enabled`,
     );
   }
-  if (features.adminDaemon && !features.sockBootstrap) {
-    throw makeError(
-      X`adminDaemon depends on sockBootstrap for its access channel; both must be enabled`,
-    );
-  }
   if (features.chatHosting && !features.virtualHosting) {
     throw makeError(
       X`chatHosting depends on virtualHosting for the Chat weblet's bind; both must be enabled`,

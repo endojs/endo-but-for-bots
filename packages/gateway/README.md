@@ -27,10 +27,12 @@ This is the **phase-3 slice**, building on phase 2's sock bootstrap
 registrar (Feature 4) and the phase-1 skeleton's package shape.
 Phase 3 adds Feature 7 (admin daemon: the `GatewayAdmin` exo).
 The admin facet is reachable only via the in-process accessor
-(`gateway.getAdmin()`) and the sock bootstrap
-(`bootstrap.getAdmin()`); it is **never** exposed on the public
-HTTP / WS surface, keeping admin authority off the network per the
-design.
+(`gateway.getAdmin()`) and a separate local sock (`admin.sock`,
+distinct from the bootstrap sock); it is **never** exposed on the
+public HTTP / WS surface, and is **never** reached through the
+bootstrap sock. The split keeps registration authority (anyone with
+the bootstrap sock) and admin authority (only the OS account that
+owns the admin sock) on independent capability paths.
 
 Implemented:
 
@@ -43,27 +45,32 @@ Implemented:
   `lookup` (phase 1, Feature 2).
 - Per-feature configuration toggles validated at `make` time.
 - `GatewayBootstrap` exo with `challenge`, `register`,
-  `registerRelay`, `getBindAddress`, `getApps`, `getAdmin`;
+  `registerRelay`, `getBindAddress`, `getApps`;
   `Registration` handle with `publishWeblet`, `unpublishWeblet`,
   `addPublicKey`, `deregister`, `listWeblets`, `listPublicKeys`
-  (phase 2, Feature 4; phase 3 added `getAdmin`).
+  (phase 2, Feature 4).
 - `GatewayAdmin` exo (phase 3, Feature 7) with `listRegistrations`,
   `deregisterRelay`, `listVirtualHosts`, `getResourceBalances`,
-  `getCounters`. Reachable only over the sock bootstrap or the
-  in-process accessor; refused when `adminDaemon` is off; the
-  config validator already rejects `adminDaemon=true` with
-  `sockBootstrap=false`.
+  `getCounters`. Reachable only via the in-process accessor and
+  the admin sock; refused when `adminDaemon` is off. The admin
+  daemon's toggle is independent of `sockBootstrap`; a deployment
+  may offer admin reads without exposing the bootstrap sock and
+  vice versa.
 - Proof-of-possession nonce registry with domain-separated
   challenge hashing (`endo-gateway:registrar:nonce`), 30-second
   TTL, single-use semantics, constant-time signature comparison
   helper, and a Node-backed `CryptoPowers` adapter
   (`src/node-crypto-powers.js`).
-- Bootstrap sock path resolver
+- Bootstrap and admin sock path resolvers
   (`src/sock-paths.js`) covering `/run/endo-gateway/bootstrap.sock`
-  (system service), `${XDG_RUNTIME_DIR}/endo-gateway/...` (user
-  Linux), the macOS `Library/Application Support` variant, the
-  `${TMPDIR}/...` fallback, and `ENDO_GATEWAY_BOOTSTRAP_SOCK`
-  operator override.
+  and `/run/endo-gateway/admin.sock` (system service),
+  `${XDG_RUNTIME_DIR}/endo-gateway/...` (user Linux), the macOS
+  `Library/Application Support` variant, the `${TMPDIR}/...`
+  fallback, and the `ENDO_GATEWAY_BOOTSTRAP_SOCK` /
+  `ENDO_GATEWAY_ADMIN_SOCK` operator overrides. The two socks are
+  always distinct file paths; deployment is responsible for the
+  admin sock's stricter parent-directory mode (`0700`) so only the
+  administrator OS account can `connect(2)` to it.
 
 Deferred to follow-on PRs:
 
@@ -169,14 +176,16 @@ inventory. The phase-1 through phase-3 slices expose:
   `getConfig`, `getBootstrap`, `getAdmin`.
 - `AppsNameHub`: `bind`, `unbind`, `list`, `lookup`, `has`.
 - `GatewayBootstrap`: `challenge`, `register`, `registerRelay`,
-  `getBindAddress`, `getApps`, `getAdmin`.
+  `getBindAddress`, `getApps`. The bootstrap channel carries the
+  registrar exo only; it does **not** expose the admin facet.
 - `Registration`: `publishWeblet`, `unpublishWeblet`,
   `addPublicKey`, `deregister`, `listWeblets`, `listPublicKeys`.
 - `GatewayAdmin`: `listRegistrations`, `deregisterRelay`,
   `listVirtualHosts`, `getResourceBalances`, `getCounters`. The
   admin facet is reachable only via `gateway.getAdmin()`
-  in-process and `bootstrap.getAdmin()` over the sock; the public
-  HTTP / WS surface does not expose it.
+  in-process and over the admin sock (`admin.sock`); the public
+  HTTP / WS surface does not expose it, and the bootstrap sock
+  does not expose it.
 
 ### Bootstrap challenge-response
 

@@ -6,7 +6,9 @@ import test from 'ava';
 
 import {
   resolveBootstrapSocketPath,
+  resolveAdminSocketPath,
   BOOTSTRAP_SOCKET_BASENAME,
+  ADMIN_SOCKET_BASENAME,
   SYSTEM_RUNTIME_DIR_LINUX,
   USER_RUNTIME_SUBDIR,
 } from '../index.js';
@@ -194,6 +196,152 @@ test('returned BootstrapPathResolution is hardened', t => {
   // record would let downstream code mutate `path` and silently
   // bind to a different socket than the resolver returned.
   const result = resolveBootstrapSocketPath({
+    mode: 'system',
+    platform: 'linux',
+    env: {},
+    info: linuxInfo,
+  });
+  t.true(Object.isFrozen(result));
+});
+
+// -- Admin sock path resolution -----------------------------------
+
+// The admin sock carries the `GatewayAdmin` exo. It is a separate
+// file from the bootstrap sock; the two are intentionally distinct
+// so that connecting to the bootstrap sock (any local user daemon
+// may do this to register itself) does not grant admin authority,
+// and the admin sock can live behind a stricter ACL.
+
+test('admin sock system mode on Linux resolves /run/endo-gateway/admin.sock', t => {
+  const result = resolveAdminSocketPath({
+    mode: 'system',
+    platform: 'linux',
+    env: {},
+    info: linuxInfo,
+  });
+  t.is(result.path, `${SYSTEM_RUNTIME_DIR_LINUX}/${ADMIN_SOCKET_BASENAME}`);
+  t.is(result.source, 'system');
+  t.is(result.kind, 'unix-socket');
+});
+
+test('admin sock user mode on Linux prefers XDG_RUNTIME_DIR', t => {
+  const result = resolveAdminSocketPath({
+    mode: 'user',
+    platform: 'linux',
+    env: { XDG_RUNTIME_DIR: '/run/user/1000' },
+    info: linuxInfo,
+  });
+  t.is(
+    result.path,
+    `/run/user/1000/${USER_RUNTIME_SUBDIR}/${ADMIN_SOCKET_BASENAME}`,
+  );
+  t.is(result.source, 'user-xdg');
+});
+
+test('admin sock user mode on darwin uses Library/Application Support', t => {
+  const result = resolveAdminSocketPath({
+    mode: 'user',
+    platform: 'darwin',
+    env: {},
+    info: { home: '/Users/alice', user: 'alice', temp: '/tmp' },
+  });
+  t.is(
+    result.path,
+    `/Users/alice/Library/Application Support/Endo/${USER_RUNTIME_SUBDIR}/${ADMIN_SOCKET_BASENAME}`,
+  );
+  t.is(result.source, 'user-darwin');
+});
+
+test('ENDO_GATEWAY_ADMIN_SOCK overrides the admin sock resolution', t => {
+  // Regression: a deployment that wants the admin sock under a
+  // tighter parent directory (mode 0700 instead of the bootstrap
+  // sock's 0755 parent) supplies an override; if the resolver
+  // silently ignored it, the admin sock would land in the same
+  // world-traversable directory as the bootstrap sock.
+  const result = resolveAdminSocketPath({
+    mode: 'system',
+    platform: 'linux',
+    env: { ENDO_GATEWAY_ADMIN_SOCK: '/run/endo-gateway-admin/admin.sock' },
+    info: linuxInfo,
+  });
+  t.is(result.path, '/run/endo-gateway-admin/admin.sock');
+  t.is(result.source, 'override');
+});
+
+test('admin sock override does not pick up the bootstrap override env var', t => {
+  // Regression-evidence saboteur: if a caller accidentally reads
+  // `ENDO_GATEWAY_BOOTSTRAP_SOCK` for the admin sock, the admin
+  // and bootstrap socks collapse onto the same path. Verify the
+  // admin resolver ignores the bootstrap variable.
+  const result = resolveAdminSocketPath({
+    mode: 'system',
+    platform: 'linux',
+    env: { ENDO_GATEWAY_BOOTSTRAP_SOCK: '/run/sneaky/bootstrap.sock' },
+    info: linuxInfo,
+  });
+  t.is(result.path, `${SYSTEM_RUNTIME_DIR_LINUX}/${ADMIN_SOCKET_BASENAME}`);
+  t.is(result.source, 'system');
+});
+
+test('admin and bootstrap socks resolve to distinct file paths', t => {
+  // The single most important invariant of the split: the two
+  // socks are never the same file. A registration-only daemon
+  // connecting to bootstrap.sock must not reach the admin facet;
+  // an administrator connecting to admin.sock must not be
+  // confused with a registration-only daemon. Verified across the
+  // four resolution sources.
+  const cases = harden([
+    harden({
+      mode: /** @type {'system' | 'user'} */ ('system'),
+      platform: 'linux',
+      env: {},
+      info: linuxInfo,
+    }),
+    harden({
+      mode: /** @type {'system' | 'user'} */ ('user'),
+      platform: 'linux',
+      env: { XDG_RUNTIME_DIR: '/run/user/1000' },
+      info: linuxInfo,
+    }),
+    harden({
+      mode: /** @type {'system' | 'user'} */ ('user'),
+      platform: 'darwin',
+      env: {},
+      info: { home: '/Users/alice', user: 'alice', temp: '/tmp' },
+    }),
+    harden({
+      mode: /** @type {'system' | 'user'} */ ('user'),
+      platform: 'linux',
+      env: { TMPDIR: '/tmp', USER: 'alice' },
+      info: linuxInfo,
+    }),
+  ]);
+  for (const args of cases) {
+    const bootstrap = resolveBootstrapSocketPath(args);
+    const admin = resolveAdminSocketPath(args);
+    t.not(
+      bootstrap.path,
+      admin.path,
+      `bootstrap and admin socks must be distinct for ${args.mode}/${args.platform}`,
+    );
+    t.true(bootstrap.path.endsWith(BOOTSTRAP_SOCKET_BASENAME));
+    t.true(admin.path.endsWith(ADMIN_SOCKET_BASENAME));
+  }
+});
+
+test('admin and bootstrap basenames are distinct constants', t => {
+  // Regression-evidence: if a refactor accidentally pointed
+  // ADMIN_SOCKET_BASENAME at the bootstrap basename, every other
+  // test in this suite would still pass (the resolvers would
+  // pick up the wrong constant, but consistently). Pinning the
+  // value here catches that class of mistake at the unit level.
+  t.is(BOOTSTRAP_SOCKET_BASENAME, 'bootstrap.sock');
+  t.is(ADMIN_SOCKET_BASENAME, 'admin.sock');
+  t.not(BOOTSTRAP_SOCKET_BASENAME, ADMIN_SOCKET_BASENAME);
+});
+
+test('admin sock resolution is hardened', t => {
+  const result = resolveAdminSocketPath({
     mode: 'system',
     platform: 'linux',
     env: {},
