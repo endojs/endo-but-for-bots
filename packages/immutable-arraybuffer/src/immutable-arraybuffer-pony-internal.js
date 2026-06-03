@@ -4,7 +4,7 @@ import { makeInternalHeir, getGetter } from './internal-heir.js';
 
 /**
  * Strangely, TypeScript only provides types for the concrete subtypes of
- * `TypedArray`, but not `TypeArray` itself.
+ * `TypedArray`, but not `TypedArray` itself.
  * As suggested at
  * https://github.com/microsoft/TypeScript/issues/15402#issuecomment-297544403
  * with the addition of `Float16Array` which happened recently.
@@ -49,18 +49,18 @@ const typedArrayPrototype = getPrototypeOf(Uint8Array.prototype);
 const { set: uint8ArraySet } = typedArrayPrototype;
 
 /**
- * The original `TypeArray.prototype.buffer` getter function.
+ * The original `TypedArray.prototype.buffer` getter function.
  *
  * "FERAL" because
  * - this reveals the real underlying ArrayBuffer, which this package
  *   may encapsulate inside a virtual immutable ArrayBuffer in order to
  *   contain side effects.
  * - This one happens to only work on genuine typed arrays, not emulated ones.
- * - The shim may replace `TypeArray.prototype.buffer` with a safe one that also
+ * - The shim may replace `TypedArray.prototype.buffer` with a safe one that also
  *   works on emulated freezable typed arrays.
  *
  * Therefore, this export is for use only within this package.
- * If `TypeArray.prototype.buffer` has been replaced, then
+ * If `TypedArray.prototype.buffer` has been replaced, then
  * `FERAL_GET_ARRAY_BUFFER` must not escape beyond this package.
  *
  * @type {(this: TypedArray) => ArrayBuffer}
