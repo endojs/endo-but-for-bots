@@ -6,7 +6,6 @@ import test from 'ava';
 
 import { E, Far } from '@endo/far';
 
-import { bytesToImmutable } from '@endo/bytes/to-immutable.js';
 import { btoa } from '@endo/base64';
 
 import {
@@ -180,8 +179,8 @@ test('makeGitHttpHandler requires a resolveRepo function', t => {
  *
  * @param {object} responses
  * @param {(args: { service: string, headers: ReadonlyArray<readonly [string, string]> }) => Promise<any>} [responses.infoRefs]
- * @param {(args: { requestBody: ArrayBuffer, headers: ReadonlyArray<readonly [string, string]> }) => Promise<any>} [responses.gitUploadPack]
- * @param {(args: { requestBody: ArrayBuffer, headers: ReadonlyArray<readonly [string, string]> }) => Promise<any>} [responses.gitReceivePack]
+ * @param {(args: { requestBody: Uint8Array, headers: ReadonlyArray<readonly [string, string]> }) => Promise<any>} [responses.gitUploadPack]
+ * @param {(args: { requestBody: Uint8Array, headers: ReadonlyArray<readonly [string, string]> }) => Promise<any>} [responses.gitReceivePack]
  */
 const makeStubRepo = responses => {
   return Far('Repo', {
@@ -196,9 +195,7 @@ const makeStubRepo = responses => {
               'application/x-git-upload-pack-advertisement',
             ]),
           ],
-          body: bytesToImmutable(
-            new TextEncoder().encode('001e# service=git-upload-pack\n0000'),
-          ),
+          body: new TextEncoder().encode('001e# service=git-upload-pack\n0000'),
         })),
     gitUploadPack:
       responses.gitUploadPack ||
@@ -211,7 +208,7 @@ const makeStubRepo = responses => {
               'application/x-git-upload-pack-result',
             ]),
           ],
-          body: bytesToImmutable(new TextEncoder().encode('packfile-bytes')),
+          body: new TextEncoder().encode('packfile-bytes'),
         })),
     gitReceivePack:
       responses.gitReceivePack ||
@@ -224,7 +221,7 @@ const makeStubRepo = responses => {
               'application/x-git-receive-pack-result',
             ]),
           ],
-          body: bytesToImmutable(new TextEncoder().encode('unpack ok\n')),
+          body: new TextEncoder().encode('unpack ok\n'),
         })),
   });
 };
@@ -247,7 +244,7 @@ test('handleRequest rejects missing method / path / headers / body', async t => 
       /** @type {any} */ ({
         path: '/git/x',
         headers: [],
-        body: bytesToImmutable(new Uint8Array(0)),
+        body: new Uint8Array(0),
       }),
     ),
     { message: /method must be a non-empty string/ },
@@ -257,7 +254,7 @@ test('handleRequest rejects missing method / path / headers / body', async t => 
       /** @type {any} */ ({
         method: 'GET',
         headers: [],
-        body: bytesToImmutable(new Uint8Array(0)),
+        body: new Uint8Array(0),
       }),
     ),
     { message: /path must be a non-empty string/ },
@@ -268,7 +265,7 @@ test('handleRequest rejects missing method / path / headers / body', async t => 
         method: 'GET',
         path: '/git/x',
         headers: 'no',
-        body: bytesToImmutable(new Uint8Array(0)),
+        body: new Uint8Array(0),
       }),
     ),
     { message: /headers must be an array/ },
@@ -282,7 +279,7 @@ test('handleRequest rejects missing method / path / headers / body', async t => 
         body: 'no',
       }),
     ),
-    { message: /body must be an ArrayBuffer/ },
+    { message: /body must be a Uint8Array/ },
   );
 });
 
@@ -297,7 +294,7 @@ test('handleRequest 400s on non-Git paths', async t => {
       method: 'GET',
       path: '/foo/bar',
       headers: [],
-      body: bytesToImmutable(new Uint8Array(0)),
+      body: new Uint8Array(0),
     }),
   );
   t.is(resp.status, 400);
@@ -318,7 +315,7 @@ test('handleRequest 400s on malformed repo-id', async t => {
           `Bearer ${HEX64}`,
         ]),
       ],
-      body: bytesToImmutable(new Uint8Array(0)),
+      body: new Uint8Array(0),
     }),
   );
   t.is(resp.status, 400);
@@ -335,7 +332,7 @@ test('handleRequest 400s when method mismatches operation', async t => {
       path: `/git/${HEX64}/info/refs`,
       query: 'service=git-upload-pack',
       headers: [],
-      body: bytesToImmutable(new Uint8Array(0)),
+      body: new Uint8Array(0),
     }),
   );
   t.is(r1.status, 400);
@@ -345,7 +342,7 @@ test('handleRequest 400s when method mismatches operation', async t => {
       method: 'GET',
       path: `/git/${HEX64}/git-upload-pack`,
       headers: [],
-      body: bytesToImmutable(new Uint8Array(0)),
+      body: new Uint8Array(0),
     }),
   );
   t.is(r2.status, 400);
@@ -360,7 +357,7 @@ test('handleRequest 400s on info/refs without service query', async t => {
       method: 'GET',
       path: `/git/${HEX64}/info/refs`,
       headers: [],
-      body: bytesToImmutable(new Uint8Array(0)),
+      body: new Uint8Array(0),
     }),
   );
   t.is(resp.status, 400);
@@ -378,7 +375,7 @@ test('handleRequest 401s on missing Authorization header', async t => {
       path: `/git/${HEX64}/info/refs`,
       query: 'service=git-upload-pack',
       headers: [],
-      body: bytesToImmutable(new Uint8Array(0)),
+      body: new Uint8Array(0),
     }),
   );
   t.is(resp.status, 401);
@@ -406,7 +403,7 @@ test('handleRequest 401s on malformed token (not a formula id)', async t => {
           'Bearer not-a-formula-id',
         ]),
       ],
-      body: bytesToImmutable(new Uint8Array(0)),
+      body: new Uint8Array(0),
     }),
   );
   t.is(resp.status, 401);
@@ -431,7 +428,7 @@ test('handleRequest 401s when resolveRepo returns undefined', async t => {
           `Bearer ${HEX64_B}`,
         ]),
       ],
-      body: bytesToImmutable(new Uint8Array(0)),
+      body: new Uint8Array(0),
     }),
   );
   t.is(resp.status, 401);
@@ -455,7 +452,7 @@ test('handleRequest 500s when resolveRepo throws', async t => {
           `Bearer ${HEX64_B}`,
         ]),
       ],
-      body: bytesToImmutable(new Uint8Array(0)),
+      body: new Uint8Array(0),
     }),
   );
   t.is(resp.status, 500);
@@ -477,7 +474,7 @@ test('handleRequest forwards info/refs to the repo capability', async t => {
             'application/x-git-upload-pack-advertisement',
           ]),
         ],
-        body: bytesToImmutable(new TextEncoder().encode('refs-advertisement')),
+        body: new TextEncoder().encode('refs-advertisement'),
       });
     },
   });
@@ -500,7 +497,7 @@ test('handleRequest forwards info/refs to the repo capability', async t => {
           `Bearer ${HEX64_B}`,
         ]),
       ],
-      body: bytesToImmutable(new Uint8Array(0)),
+      body: new Uint8Array(0),
     }),
   );
   t.is(resp.status, 200);
@@ -512,10 +509,8 @@ test('handleRequest forwards info/refs to the repo capability', async t => {
 });
 
 test('handleRequest forwards git-upload-pack POST body to the repo capability', async t => {
-  const requestBody = bytesToImmutable(
-    new TextEncoder().encode('want abc\nhave def\n'),
-  );
-  /** @type {ArrayBuffer | undefined} */
+  const requestBody = new TextEncoder().encode('want abc\nhave def\n');
+  /** @type {Uint8Array | undefined} */
   let seenBody;
   const repo = makeStubRepo({
     gitUploadPack: async args => {
@@ -523,7 +518,7 @@ test('handleRequest forwards git-upload-pack POST body to the repo capability', 
       return harden({
         status: 200,
         headers: [],
-        body: bytesToImmutable(new TextEncoder().encode('packfile')),
+        body: new TextEncoder().encode('packfile'),
       });
     },
   });
@@ -552,10 +547,8 @@ test('handleRequest forwards git-upload-pack POST body to the repo capability', 
 });
 
 test('handleRequest forwards git-receive-pack POST body to the repo capability', async t => {
-  const requestBody = bytesToImmutable(
-    new TextEncoder().encode('push commands + pack\n'),
-  );
-  /** @type {ArrayBuffer | undefined} */
+  const requestBody = new TextEncoder().encode('push commands + pack\n');
+  /** @type {Uint8Array | undefined} */
   let seenBody;
   const repo = makeStubRepo({
     gitReceivePack: async args => {
@@ -563,7 +556,7 @@ test('handleRequest forwards git-receive-pack POST body to the repo capability',
       return harden({
         status: 200,
         headers: [],
-        body: bytesToImmutable(new TextEncoder().encode('unpack ok\n')),
+        body: new TextEncoder().encode('unpack ok\n'),
       });
     },
   });
@@ -607,7 +600,7 @@ test('handleRequest accepts Basic auth with empty user', async t => {
           `Basic ${btoa(`:${HEX64_B}`)}`,
         ]),
       ],
-      body: bytesToImmutable(new Uint8Array(0)),
+      body: new Uint8Array(0),
     }),
   );
   t.is(resp.status, 200);
@@ -640,7 +633,7 @@ test('handleRequest 500s when the repo capability throws', async t => {
           `Bearer ${HEX64_B}`,
         ]),
       ],
-      body: bytesToImmutable(new Uint8Array(0)),
+      body: new Uint8Array(0),
     }),
   );
   t.is(resp.status, 500);
@@ -650,7 +643,7 @@ test('handleRequest 500s when the repo capability throws', async t => {
 
 test('readerFromBuffer yields the buffer once then signals done', async t => {
   const view = new Uint8Array([1, 2, 3, 4]);
-  const buf = bytesToImmutable(view);
+  const buf = view;
   const reader = readerFromBuffer(buf);
   const r1 = await E(reader).next();
   t.false(r1.done);
@@ -659,9 +652,9 @@ test('readerFromBuffer yields the buffer once then signals done', async t => {
   t.true(r2.done);
 });
 
-test('readerFromBuffer rejects non-ArrayBuffer input', t => {
+test('readerFromBuffer rejects non-Uint8Array input', t => {
   t.throws(() => readerFromBuffer(/** @type {any} */ ('not bytes')), {
-    message: /expects an ArrayBuffer/,
+    message: /expects a Uint8Array/,
   });
 });
 
@@ -750,7 +743,7 @@ test('handleRequest does not confuse Bearer hex with Basic hex', async t => {
           `Bearer ${looksLikeBase64}`,
         ]),
       ],
-      body: bytesToImmutable(new Uint8Array(0)),
+      body: new Uint8Array(0),
     }),
   );
   // Bearer takes the credentials verbatim; that's not a 64-hex
