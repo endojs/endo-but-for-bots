@@ -6,8 +6,6 @@ import test from 'ava';
 
 import { E, Far } from '@endo/far';
 import { makePipe } from '@endo/stream';
-import { bytesFromImmutable } from '@endo/bytes/from-immutable.js';
-import { bytesToImmutable } from '@endo/bytes/to-immutable.js';
 
 import {
   isOcapnWebSocketPath,
@@ -61,7 +59,7 @@ const stand = () => {
  * challenge / sign / register flow.
  *
  * @param {ReturnType<typeof makeGatewayBootstrap>} handle
- * @param {{ publicKey: ArrayBuffer, privateKey: ArrayBuffer, sign: (m: ArrayBuffer | Uint8Array) => ArrayBuffer }} keypair
+ * @param {{ publicKey: Uint8Array, privateKey: Uint8Array, sign: (m: Uint8Array) => Uint8Array }} keypair
  * @param {unknown} daemon
  */
 const registerDaemon = async (handle, keypair, daemon) => {
@@ -82,11 +80,10 @@ const registerDaemon = async (handle, keypair, daemon) => {
  * gateway's crypto adapter returns; the latter cannot back a typed
  * array directly, so we copy.
  *
- * @param {ArrayBuffer | Uint8Array} bytes
+ * @param {Uint8Array} bytes
  * @returns {Uint8Array}
  */
-const asView = bytes =>
-  bytes instanceof Uint8Array ? bytes : bytesFromImmutable(bytes);
+const asView = bytes => bytes;
 
 /**
  * Wrap a raw `@endo/stream` endpoint as a `Far`-tagged remotable so
@@ -116,7 +113,7 @@ const farStream = (label, stream) => {
  * filler. The filler is opaque to the gateway (it forwards the
  * frame to the daemon without inspection).
  *
- * @param {ArrayBuffer | Uint8Array} publicKey 32-byte intended-responder key.
+ * @param {Uint8Array} publicKey 32-byte intended-responder key.
  * @param {number} [tailLength] defaults to 132 (the OCapN-Noise
  *   SYN_LENGTH); pass a smaller value to exercise the
  *   short-frame-reject branch.
@@ -582,7 +579,7 @@ test('lookupRegistrationByPublicKey returns undefined after deregister', async t
  * registration handle so the test can mutate the policy through it.
  *
  * @param {ReturnType<typeof makeGatewayBootstrap>} handle
- * @param {{ publicKey: ArrayBuffer, privateKey: ArrayBuffer, sign: (m: ArrayBuffer | Uint8Array) => ArrayBuffer }} keypair
+ * @param {{ publicKey: Uint8Array, privateKey: Uint8Array, sign: (m: Uint8Array) => Uint8Array }} keypair
  * @param {unknown} relayTarget
  * @param {'closed' | 'open'} [relayPolicy]
  */
@@ -702,7 +699,7 @@ test('handleConnection forwards a closed-policy session when the dialer is allow
   );
   // Allowlist a fixed dialer key, then dial with the matching key.
   const dialerKey = new Uint8Array(32).fill(0x55);
-  await E(r).addCallerPublicKey(bytesToImmutable(dialerKey));
+  await E(r).addCallerPublicKey(dialerKey);
 
   const [peerToGwRaw, gwReaderRaw] = /** @type {[any, any]} */ (makePipe());
   const [gwWriterRaw, _peerFromGw] = /** @type {[any, any]} */ (makePipe());
@@ -748,9 +745,7 @@ test('handleConnection drops a closed-policy session when the dialer is not allo
     }),
   );
   // Allowlist a key the dialer will NOT match.
-  await E(r).addCallerPublicKey(
-    bytesToImmutable(new Uint8Array(32).fill(0x55)),
-  );
+  await E(r).addCallerPublicKey(new Uint8Array(32).fill(0x55));
 
   const [peerToGwRaw, gwReaderRaw] = /** @type {[any, any]} */ (makePipe());
   const [gwWriterRaw, peerFromGw] = /** @type {[any, any]} */ (makePipe());
@@ -913,7 +908,7 @@ test('handleConnection picks up a live allowlist mutation between sessions', asy
   t.is(calls.count, 0);
 
   // Admin / registrant adds the dialer to the allowlist.
-  await E(r).addCallerPublicKey(bytesToImmutable(dialerKey));
+  await E(r).addCallerPublicKey(dialerKey);
 
   // Second session with the same dialer is now admitted.
   {
