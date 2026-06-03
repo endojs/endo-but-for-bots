@@ -108,6 +108,21 @@ export {
   USER_RUNTIME_SUBDIR,
 } from './src/sock-paths.js';
 
+export {
+  SYSTEM_STATE_DIR_LINUX,
+  SYSTEM_LOG_DIR_LINUX,
+  SYSTEM_CACHE_DIR_LINUX,
+  SYSTEM_CONFIG_FILE_LINUX,
+  SYSTEM_STATE_DIR_DARWIN,
+  SYSTEM_RUNTIME_DIR_DARWIN,
+  SYSTEM_LOG_DIR_DARWIN,
+  SYSTEM_CACHE_DIR_DARWIN,
+  SYSTEM_CONFIG_FILE_DARWIN,
+  USER_DIR_SUBDIR,
+  detectServiceMode,
+  resolveGatewayPaths,
+} from './src/runtime-paths.js';
+
 export { makeFamiliarPublisher } from './src/familiar-publish.js';
 
 export { makeNodeFamiliarPublishPowers } from './src/node-familiar-publish-powers.js';
