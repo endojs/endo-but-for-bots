@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-05-22 |
-| **Updated** | 2026-05-29 |
+| **Updated** | 2026-06-02 |
 | **Author** | Kris Kowal (prompted) |
 | **Status** | Proposed |
 | **Supersedes** | endo-gateway (removed 2026-05-29; material folded into this document) |
@@ -586,18 +586,43 @@ rusqlite, so the no-C rationale for `gix` was moot.
 The gateway holds the underlying CAS implementation and vends it
 out to the HTTP server.
 
-**Content key.** Endo's content identity is **sha256** (locked);
-git's internal object database runs in its **default SHA-1 object
-format** behind a persistent `sha256 -> git-oid` index, per the
-spike's Open Question 2 recommendation that the maintainer
-ratified.
-This decouples the locked decision (sha256 identity for every
-Endo formula, `cas-*` verb, and cross-peer reference) from the
-immature one (git's experimental SHA-256 object mode, whose
-library coverage trails its SHA-1 coverage, including in the
-ratified `git2` crate).
-A later transparent adoption of git's SHA-256 object format
-remains possible because the Endo-facing key never changes.
+**Content key.** Endo's content identity is **sha256** (locked),
+and git's internal object database runs in git's **SHA-256
+object format** so that the git-oid is the sha256 of the object
+exactly as Endo names it.
+The maintainer's standing preference is to avoid SHA-1 in this
+project on the grounds that it is a compromised hash
+(kriskowal on PR #394, 2026-06-03, restating the original
+verbatim directive: "Let's also make sure we use the sha256
+Git variant and avoid the sha1 version").
+That preference governs Feature 3's content-key choice here,
+superseding the spike's earlier Open Question 2 framing that
+proposed retaining SHA-1 internally with a `sha256 -> git-oid`
+side index.
+Endo's sha256 identity stays locked across every Endo formula,
+`cas-*` verb, and cross-peer reference; git's object database
+underneath is also SHA-256, so no translation table sits on the
+hot path.
+
+The libgit2 implementation reality is that SHA-256 repository
+support shipped behind the build-time `experimental.sha256`
+feature flag and the runtime `GIT_OBJECT_FORMAT=sha256` option,
+matching git's own experimental rollout.
+Adopting it on the daemon side requires building libgit2 with
+the feature enabled and pinning a version whose SHA-256 paths
+cover the operations the daemon uses (object read and write,
+ref update, pack-file ingest, the in-process reachability
+sweep).
+If a specific operation in the chosen libgit2 version turns
+out to be SHA-1-only, the daemon-side spike (PR #369) is the
+place to record the gap and choose between waiting for upstream
+libgit2 coverage, contributing the missing path, or falling back
+to a pure-Rust SHA-256-capable git implementation (gitoxide's
+SHA-256 work is the obvious fallback if `git2` cannot cover the
+surface in time).
+The gateway-side wire shape is unaffected either way: pack-file
+bytes ride the smart-HTTP carrier in whichever object format
+the daemon publishes.
 
 **Retention is reachability-driven.** `refs/formulas/<formula-id>`
 is the durable live-set substrate: `cas-retain` writes the ref
