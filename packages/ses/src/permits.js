@@ -1196,6 +1196,14 @@ export const permitted = {
   // If this exists, it is purely an artifact of how we currently shim
   // `transferToImmutable`. As natively implemented, there would be no
   // such extra prototype.
+  //
+  // NOTE: No corresponding installer in `get-anonymous-intrinsics.js`
+  // populates this slot yet. The slot is declared here so that, when the
+  // `@endo/immutable-arraybuffer` shim wires up
+  // `makePseudoTypedArrayConstructor` (see
+  // `packages/immutable-arraybuffer/src/freezable-typedarray-pony.js`),
+  // the per-realm freezable-TypedArray prototype already has a permit
+  // shape to match.
   '%FreezableTypedArrayPrototype%': {
     '[[Proto]]': '%TypedArrayPrototype%',
     buffer: getter,
