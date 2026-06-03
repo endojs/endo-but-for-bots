@@ -394,27 +394,38 @@ test('Gateway getAdmin throws when adminDaemon is disabled', async t => {
   });
 });
 
-test('Gateway getAdmin throws when sockBootstrap is disabled', async t => {
-  // Regression: admin depends on the sock bootstrap for its access
-  // channel; without the sock, there is no path for the
-  // administrator to reach the facet, and the config validator
-  // already rejects the combination. The in-process accessor
-  // mirrors the contract by refusing to hand the facet out.
-  await t.throws(
-    () =>
-      makeGateway({
-        powers: { crypto: makeNodeCryptoPowers(), clock: makeFakeClock() },
-        config: {
-          enableFeatures: {
-            ...defaultFeatureToggles,
-            sockBootstrap: false,
-            // adminDaemon stays on; the validator rejects the
-            // combination at config-merge time.
-          },
-        },
-      }),
-    { message: /adminDaemon depends on sockBootstrap/ },
-  );
+test('Gateway getAdmin works when sockBootstrap is disabled', async t => {
+  // Regression for the bootstrap-vs-admin split (#389): the admin
+  // facet has its own access channel (the admin sock) and does
+  // not depend on the bootstrap sock. A deployment that wants
+  // admin reads of virtual hosts and the resource ledger without
+  // exposing the bootstrap sock is a supported shape; the gateway
+  // accessor returns the facet, and the registration view is the
+  // documented empty list (no bootstrap means no registrations).
+  //
+  // Other features (OCapN-WS, captp-relay, git-HTTP, chat-hosting)
+  // bring their own dependencies on `sockBootstrap` or other
+  // toggles; this test enumerates the minimal feature set that
+  // pins the admin's standalone behavior, independent of which
+  // other phases have landed.
+  const g = makeGateway({
+    powers: { crypto: makeNodeCryptoPowers(), clock: makeFakeClock() },
+    config: {
+      enableFeatures: {
+        chatHosting: false,
+        virtualHosting: false,
+        gitHttp: false,
+        sockBootstrap: false,
+        captpRelay: false,
+        adminDaemon: true,
+        ocapnWebSocket: false,
+      },
+    },
+  });
+  const admin = await E(g).getAdmin();
+  t.truthy(admin);
+  const entries = await E(admin).listRegistrations();
+  t.is(entries.length, 0);
 });
 
 test('Gateway admin and bootstrap share the same registration view', async t => {
@@ -445,55 +456,42 @@ test('Gateway admin and gateway share the same @apps NameHub', async t => {
   t.deepEqual([...names], ['via-gateway.example.com']);
 });
 
-test('Bootstrap getAdmin returns the admin exo over the sock-mediated surface', async t => {
-  // The "sock-mediated" qualifier in the test name is the surface
-  // contract: a process that holds a `GatewayBootstrap` got there
-  // through the sock bootstrap (or through the in-process
-  // `getBootstrap` accessor, equivalent for trust purposes).
+test('Bootstrap does not expose getAdmin', async t => {
+  // Regression for the bootstrap-vs-admin split (#389): any local
+  // user daemon may hold a `GatewayBootstrap` (it is what they
+  // call `register` on); none of those daemons should be able to
+  // reach the `GatewayAdmin` facet through it. The admin facet
+  // lives on a separate sock (`admin.sock`) gated by ACL such
+  // that only the administrator OS account can connect.
   const g = standGateway();
   const bootstrap = await E(g).getBootstrap();
-  const admin = await E(bootstrap).getAdmin();
-  t.truthy(admin);
-  // Smoke-test: the admin exo we got via bootstrap is the same
-  // facet we get via gateway.getAdmin.
-  const adminDirect = await E(g).getAdmin();
-  t.is(admin, adminDirect);
+  const introspect = /** @type {any} */ (E(bootstrap));
+  // eslint-disable-next-line no-underscore-dangle
+  const methods = await introspect.__getMethodNames__();
+  t.false(methods.includes('getAdmin'));
+  const adminMethods = methods.filter(name =>
+    name.toLowerCase().includes('admin'),
+  );
+  t.deepEqual([...adminMethods], []);
 });
 
-test('Bootstrap getAdmin throws when admin is disabled', async t => {
-  // Configure with sockBootstrap on but adminDaemon off; the
-  // bootstrap exists but its getAdmin must refuse to hand out a
-  // facet, because the gateway proper would refuse the same call.
-  const g = standGateway({
-    config: {
-      enableFeatures: {
-        ...defaultFeatureToggles,
-        adminDaemon: false,
-      },
-    },
-  });
-  const bootstrap = await E(g).getBootstrap();
-  await t.throwsAsync(() => E(bootstrap).getAdmin(), {
-    message: /Admin daemon is disabled/,
-  });
-});
-
-test('Gateway admin is reachable only via getAdmin and bootstrap getAdmin', async t => {
-  // The surface contract: there is no third accessor that hands
-  // out the admin facet (no `getApps().getAdmin`, no
-  // `getConfig().admin`, etc.). This test pins the contract by
-  // enumerating the gateway's method names; a refactor that
-  // accidentally added a public accessor would surface here.
+test('Gateway admin is reachable only via gateway.getAdmin', async t => {
+  // The surface contract: there is no second accessor on the
+  // gateway and no accessor on the bootstrap that hands out the
+  // admin facet. This test pins the contract by enumerating the
+  // gateway's method names and verifying the bootstrap exposes no
+  // admin-shaped method; a refactor that accidentally added a
+  // public accessor would surface here.
   const g = standGateway();
   const introspect = /** @type {any} */ (E(g));
   // eslint-disable-next-line no-underscore-dangle
   const methods = await introspect.__getMethodNames__();
-  // Exactly one accessor on the gateway.
+  // Exactly one admin accessor on the gateway.
   const adminMethods = methods.filter(name =>
     name.toLowerCase().includes('admin'),
   );
   t.deepEqual([...adminMethods], ['getAdmin']);
-  // And exactly one on the bootstrap.
+  // Zero admin accessors on the bootstrap.
   const bootstrap = await E(g).getBootstrap();
   const bootstrapIntrospect = /** @type {any} */ (E(bootstrap));
   // eslint-disable-next-line no-underscore-dangle
@@ -501,5 +499,5 @@ test('Gateway admin is reachable only via getAdmin and bootstrap getAdmin', asyn
   const adminBootstrapMethods = bootstrapMethods.filter(name =>
     name.toLowerCase().includes('admin'),
   );
-  t.deepEqual([...adminBootstrapMethods], ['getAdmin']);
+  t.deepEqual([...adminBootstrapMethods], []);
 });
