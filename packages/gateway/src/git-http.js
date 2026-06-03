@@ -55,11 +55,19 @@ import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
 import { E, Far } from '@endo/far';
 import { makeError, q, X } from '@endo/errors';
-import { bytesFromImmutable } from '@endo/bytes/from-immutable.js';
-import { bytesToImmutable } from '@endo/bytes/to-immutable.js';
 import { atob } from '@endo/base64';
 
 /** @import { Reader, Writer } from '@endo/stream' */
+/** @import {
+ *   GitService,
+ *   GitOperation,
+ *   GitHttpRequest,
+ *   GitHttpResponse,
+ *   ResolveRepoArgs,
+ *   RepoCapability,
+ *   ResolveRepo,
+ *   GitHttpHandler,
+ * } from './types.d.ts' */
 
 /**
  * The URL path prefix for the gateway's Git smart-HTTP endpoint.
@@ -301,118 +309,15 @@ export const parseServiceQuery = query => {
 harden(parseServiceQuery);
 
 const GitHttpHandlerInterface = M.interface('GitHttpHandler', {
-  handleRequest: M.call(M.any()).returns(M.promise()),
+  handleRequest: M.call(M.raw()).returns(M.promise()),
 });
 harden(GitHttpHandlerInterface);
 
 /**
- * @typedef {object} GitHttpRequest The per-request shape the
- *   embedder hands to `handleRequest`. The HTTP listener Node owns
- *   is the source of these fields; we keep the shape narrow so a
- *   non-Node embedder (a future browser or Endor host) can wire the
- *   handler with the same args.
- * @property {string} method The HTTP method, uppercased. `GET` for
- *   `info/refs`; `POST` for `git-upload-pack` and `git-receive-pack`.
- * @property {string} path The request path (the part before `?`).
- * @property {string} [query] The query string (the part after `?`,
- *   without the leading `?`). Omitted for paths with no query.
- * @property {ReadonlyArray<readonly [string, string]>} headers The
- *   request headers as a list of `[name, value]` pairs. Header
- *   names are case-insensitive; the handler lower-cases internally.
- * @property {ArrayBuffer} body The request body bytes as an
- *   immutable `ArrayBuffer` per `@endo/bytes`. Typed arrays cannot
- *   cross the CapTP boundary; immutable `ArrayBuffer` is the
- *   canonical wire shape. For GET requests this is typically a
- *   zero-byte immutable `ArrayBuffer`. The handler forwards the
- *   buffer verbatim to the repo capability; the buffered shape
- *   matches the design's `UserDaemon.handleHttp` contract
- *   (Feature 4's bootstrap exo) once that contract migrates from
- *   the design's `Uint8Array` sketch to `@endo/bytes`'s wire shape.
- */
-
-/**
- * @typedef {object} GitHttpResponse The per-response shape the
- *   handler returns. The embedder is responsible for writing the
- *   status line, headers, and body to the wire.
- *
- *   The shape matches `UserDaemon.handleHttp` so an embedder that
- *   already routes HTTP requests through a user-daemon callback can
- *   reuse the same plumbing for the Git surface.
- * @property {number} status The HTTP status code.
- * @property {ReadonlyArray<readonly [string, string]>} headers
- *   Response headers as `[name, value]` pairs.
- * @property {ArrayBuffer} body The response body bytes as an
- *   immutable `ArrayBuffer` per `@endo/bytes`. Empty bodies are
- *   zero-byte immutable `ArrayBuffer`s.
- */
-
-/**
- * @typedef {object} ResolveRepoArgs Args to the
- *   `resolveRepo` adapter the gateway is wired with. The handler
- *   calls the adapter exactly once per authenticated request; it
- *   does not cache the result (the adapter is free to cache
- *   internally if it has the right invalidation signal).
- * @property {string} token The bearer token (a formula identifier
- *   string; either bare 64-hex or the `<num>:<node>` pair). Already
- *   validated to match `FORMULA_ID_PATTERN` before the adapter is
- *   called; the adapter does not need to re-validate the shape.
- * @property {string} repoId The repo-id from the URL path. Also
- *   already validated to match the formula-id shape.
- */
-
-/**
- * @typedef {object} RepoCapability The exo the adapter returns from
- *   a successful `resolveRepo`. The gateway forwards the smart-HTTP
- *   request to one of three methods based on the URL path; the exo
- *   is expected to implement all three.
- *
- *   The handler treats every method as eventual-send and awaits the
- *   returned response shape. The methods are independent: a
- *   read-only repo handle may reject `gitReceivePack` while
- *   accepting `gitUploadPack` and `infoRefs`; the rejection bubbles
- *   up as a 500 response in the today shape (a future iteration
- *   can map specific rejection patterns to 401/403/404).
- * @property {(args: { service: GitService, headers: ReadonlyArray<readonly [string, string]> }) =>
- *   Promise<GitHttpResponse>} infoRefs The `info/refs?service=...`
- *   advertisement endpoint. Returns the smart-HTTP pkt-line
- *   service announcement as the response body.
- * @property {(args: { requestBody: ArrayBuffer, headers: ReadonlyArray<readonly [string, string]> }) =>
- *   Promise<GitHttpResponse>} gitUploadPack The fetch / clone POST
- *   endpoint. The request body carries the client's want / have
- *   negotiation; the response body carries the packfile.
- * @property {(args: { requestBody: ArrayBuffer, headers: ReadonlyArray<readonly [string, string]> }) =>
- *   Promise<GitHttpResponse>} gitReceivePack The push POST
- *   endpoint. The request body carries the client's commands and
- *   the packfile; the response body carries the per-ref status.
- */
-
-/**
- * @typedef {(args: ResolveRepoArgs) => Promise<RepoCapability | undefined>} ResolveRepo
- *   The adapter the handler is wired with. Returns a `RepoCapability`
- *   when both the bearer token authorizes access to the named repo
- *   and the named repo exists; returns `undefined` when either the
- *   token does not authorize access or the repo does not exist.
- *
- *   The undefined-on-both rule is intentional: the handler maps
- *   `undefined` to a 401 response so a probing attacker cannot
- *   distinguish "no such repo" from "wrong token". The
- *   `RepoCapability` itself may reject individual operations (a
- *   read-only handle rejects `gitReceivePack`); the handler treats
- *   those as 500 today. This mirrors the OCapN-WS handler's
- *   "log-and-close on no registration vs forward-and-let-the-daemon-
- *   reject" pattern from Phase 4.
- */
-
-/**
  * @typedef {object} GitHttpDeps Inputs to {@link makeGitHttpHandler}.
  * @property {ResolveRepo} resolveRepo The bearer-token + repo-id
- *   resolver the gateway is wired with. See {@link ResolveRepo}.
- */
-
-/**
- * @typedef {object} GitHttpHandler CapTP-facing exo. The single
- *   method is `async` so it crosses the wire as an eventual send.
- * @property {(request: GitHttpRequest) => Promise<GitHttpResponse>} handleRequest
+ *   resolver the gateway is wired with. See the `ResolveRepo`
+ *   typedef in `types.d.ts`.
  */
 
 /**
@@ -455,7 +360,7 @@ const findHeader = (headers, name) => {
  * @returns {GitHttpResponse}
  */
 const errorResponse = (status, message, withChallenge = false) => {
-  const body = bytesToImmutable(new TextEncoder().encode(message));
+  const body = new TextEncoder().encode(message);
   const headers = withChallenge
     ? [
         /** @type {readonly [string, string]} */ ([
@@ -517,9 +422,9 @@ export const makeGitHttpHandler = ({ resolveRepo }) => {
         if (!Array.isArray(headers)) {
           throw makeError(X`handleRequest: request.headers must be an array`);
         }
-        if (!(body instanceof ArrayBuffer)) {
+        if (!(body instanceof Uint8Array)) {
           throw makeError(
-            X`handleRequest: request.body must be an ArrayBuffer, got ${q(typeof body)}`,
+            X`handleRequest: request.body must be a Uint8Array, got ${q(typeof body)}`,
           );
         }
 
@@ -649,30 +554,26 @@ export const makeGitHttpHandler = ({ resolveRepo }) => {
 harden(makeGitHttpHandler);
 
 /**
- * Convenience: a `Far`-tagged trivial-streams adapter that wraps an
- * immutable `ArrayBuffer` body as a `Reader<Uint8Array>` yielding the
- * buffer in a single chunk. Exported for tests and for embedders
- * that want to push from the buffered shape into a streaming
- * pipeline; the handler itself only deals in buffered bodies.
+ * Convenience: a `Far`-tagged trivial-streams adapter that wraps a
+ * `Uint8Array` body as a `Reader<Uint8Array>` yielding the buffer in
+ * a single chunk. Exported for tests and for embedders that want to
+ * push from the buffered shape into a streaming pipeline; the handler
+ * itself only deals in buffered bodies.
  *
- * The reader is `Far`-tagged so it crosses the CapTP boundary into
- * a repo capability that expects a streamed body without tripping
+ * The reader is `Far`-tagged so it crosses the CapTP boundary into a
+ * repo capability that expects a streamed body without tripping
  * passable-style enforcement; the same pattern Phase 4's ocapn-ws
- * uses for its replay reader. The yielded value is a `Uint8Array`
- * view onto the immutable buffer (built via `bytesFromImmutable`),
- * which the downstream consumer can read but not mutate; consumers
- * that need the immutable buffer itself can `slice()` it back.
+ * uses for its replay reader.
  *
- * @param {ArrayBuffer} body
+ * @param {Uint8Array} body
  * @returns {Reader<Uint8Array>}
  */
 export const readerFromBuffer = body => {
-  if (!(body instanceof ArrayBuffer)) {
+  if (!(body instanceof Uint8Array)) {
     throw makeError(
-      X`readerFromBuffer expects an ArrayBuffer, got ${q(typeof body)}`,
+      X`readerFromBuffer expects a Uint8Array, got ${q(typeof body)}`,
     );
   }
-  const view = bytesFromImmutable(body);
   let yielded = false;
   return /** @type {Reader<Uint8Array>} */ (
     /** @type {unknown} */ (
@@ -682,7 +583,7 @@ export const readerFromBuffer = body => {
             return harden({ done: true, value: undefined });
           }
           yielded = true;
-          return harden({ done: false, value: view });
+          return harden({ done: false, value: body });
         },
         return: async value => {
           yielded = true;

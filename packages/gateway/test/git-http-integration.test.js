@@ -32,8 +32,6 @@ import { join } from 'node:path';
 import { existsSync } from 'node:fs';
 
 import { Far } from '@endo/far';
-import { bytesToImmutable } from '@endo/bytes/to-immutable.js';
-import { bytesFromImmutable } from '@endo/bytes/from-immutable.js';
 
 import { makeGitHttpHandler } from '../index.js';
 
@@ -117,7 +115,7 @@ const readRequestBody = req =>
  * request body on stdin, and collect the CGI response from stdout.
  * The CGI response is a chunk of HTTP headers terminated by a blank
  * line followed by the body; we parse that into the
- * {@link import('../src/git-http.js').GitHttpResponse} shape the
+ * {@link import('../src/types.d.ts').GitHttpResponse} shape the
  * gateway handler expects.
  *
  * @param {object} args
@@ -252,14 +250,18 @@ const makeFsBackedRepoCapability = repoDir => {
         headers: harden(
           headers.map(([k, v]) => /** @type {[string, string]} */ ([k, v])),
         ),
-        body: bytesToImmutable(body),
+        body: new Uint8Array(body.buffer, body.byteOffset, body.byteLength),
       });
     },
     /**
-     * @param {{ requestBody: ArrayBuffer, headers: ReadonlyArray<readonly [string, string]> }} args
+     * @param {{ requestBody: Uint8Array, headers: ReadonlyArray<readonly [string, string]> }} args
      */
     gitUploadPack: async args => {
-      const buf = Buffer.from(bytesFromImmutable(args.requestBody));
+      const buf = Buffer.from(
+        args.requestBody.buffer,
+        args.requestBody.byteOffset,
+        args.requestBody.byteLength,
+      );
       const { status, headers, body } = await callGitHttpBackend({
         repoDir,
         method: 'POST',
@@ -273,14 +275,18 @@ const makeFsBackedRepoCapability = repoDir => {
         headers: harden(
           headers.map(([k, v]) => /** @type {[string, string]} */ ([k, v])),
         ),
-        body: bytesToImmutable(body),
+        body: new Uint8Array(body.buffer, body.byteOffset, body.byteLength),
       });
     },
     /**
-     * @param {{ requestBody: ArrayBuffer, headers: ReadonlyArray<readonly [string, string]> }} args
+     * @param {{ requestBody: Uint8Array, headers: ReadonlyArray<readonly [string, string]> }} args
      */
     gitReceivePack: async args => {
-      const buf = Buffer.from(bytesFromImmutable(args.requestBody));
+      const buf = Buffer.from(
+        args.requestBody.buffer,
+        args.requestBody.byteOffset,
+        args.requestBody.byteLength,
+      );
       const { status, headers, body } = await callGitHttpBackend({
         repoDir,
         method: 'POST',
@@ -294,7 +300,7 @@ const makeFsBackedRepoCapability = repoDir => {
         headers: harden(
           headers.map(([k, v]) => /** @type {[string, string]} */ ([k, v])),
         ),
-        body: bytesToImmutable(body),
+        body: new Uint8Array(body.buffer, body.byteOffset, body.byteLength),
       });
     },
   });
@@ -304,7 +310,7 @@ const makeFsBackedRepoCapability = repoDir => {
  * Bridge a Node `IncomingMessage` / `ServerResponse` pair to the
  * gateway handler's request/response shape.
  *
- * @param {import('../src/git-http.js').GitHttpHandler} handler
+ * @param {import('../src/types.d.ts').GitHttpHandler} handler
  */
 const makeHttpListener = handler => {
   return async (
@@ -326,14 +332,20 @@ const makeHttpListener = handler => {
         headers: harden(
           headers.map(([k, v]) => /** @type {[string, string]} */ ([k, v])),
         ),
-        body: bytesToImmutable(new Uint8Array(bodyBuf)),
+        body: new Uint8Array(bodyBuf),
       });
       const response = await handler.handleRequest(request);
       res.statusCode = response.status;
       for (const [name, value] of response.headers) {
         res.setHeader(name, value);
       }
-      res.end(Buffer.from(bytesFromImmutable(response.body)));
+      res.end(
+        Buffer.from(
+          response.body.buffer,
+          response.body.byteOffset,
+          response.body.byteLength,
+        ),
+      );
     } catch (e) {
       res.statusCode = 500;
       res.end(String(/** @type {Error} */ (e).message));
