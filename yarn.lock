@@ -1783,6 +1783,7 @@ __metadata:
     "@endo/compartment-mapper": "workspace:^"
     "@endo/endo-fs": "workspace:^"
     "@endo/errors": "workspace:^"
+    "@endo/evasive-transform": "workspace:^"
     "@endo/eventual-send": "workspace:^"
     "@endo/exo": "workspace:^"
     "@endo/exo-git": "workspace:^"
