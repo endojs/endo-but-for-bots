@@ -559,9 +559,17 @@ The gateway hosts the Git **smart HTTP** protocol (the
 `info/refs?service=git-upload-pack` / `git-receive-pack` shape) for
 push and pull, authenticated by a formula-identifier bearer token.
 
-URL shape: `/git/<repo-id>/info/refs?service=git-upload-pack`,
-where `<repo-id>` is a Git-repo formula identifier (a new daemon
-formula type wrapping a Git working tree or a packed reference).
+URL shape: `/git/info/refs?service=git-upload-pack`.
+There is **no repository segment** in the path: a daemon, including
+the gateway, hosts one Git object store for content served on
+virtual hosts, and the bearer token names which formula's ref
+within that store the request applies to (kriskowal directive, PR
+#394 review).
+The bearer token corresponds to (and may be identical to) a
+reference like `refs/formulas/<formula-id>`, such that a formula
+GC dropping the formula from the formula graph deletes the
+matching ref, and the next `git gc` collects the orphan objects.
+
 Authentication is HTTP Basic with the formula identifier as the
 password (Git's standard Bearer scheme is awkward in many clients;
 Basic auth with an empty username and the token as the password is
@@ -578,8 +586,8 @@ gateway
 ([`gateway-bearer-token-auth`](gateway-bearer-token-auth.md),
 [`daemon-256-bit-identifiers`](daemon-256-bit-identifiers.md)).
 The token grants the authority of whichever formula it identifies;
-for Git the relevant formulas are repo handles with read-only or
-read-write powers.
+for Git, the bearer-resolved formula's ref is the read or write
+target within the daemon's one repository.
 
 Rate-limiting and CIDR-allowlisting reuse the existing
 `gateway-bearer-token-auth` machinery; the gateway exposes both
@@ -590,24 +598,42 @@ rate-limiter table keyed by remote IP.
 sequenceDiagram
     participant Git as git push
     participant GW as Gateway
-    participant Repo as Repo formula
-    Git->>GW: POST /git/<repo-id>/git-receive-pack<br/>Auth: Basic :token
+    participant Daemon as Daemon repo
+    Git->>GW: POST /git/git-receive-pack<br/>Auth: Basic :token
     GW->>GW: rate-limit check
-    GW->>Repo: resolve(repo-id, token)
-    Repo-->>GW: write-handle or 401
-    GW->>Repo: stream pack
-    Repo-->>GW: 200 OK
+    GW->>Daemon: serveRepo(token)
+    Daemon-->>GW: capability scoped to refs/formulas/<token> or 401
+    GW->>Daemon: stream pack
+    Daemon-->>GW: 200 OK
     GW-->>Git: 200 OK
 ```
 
 The smart-HTTP framing is the standard `pkt-line` format defined
 in Git's `Documentation/technical/http-protocol.txt`; the gateway
-proxies the byte stream from the client to the repo formula
-without parsing the Git protocol itself.
-The repo formula's exo exposes `gitUploadPack(reader, writer)` and
-`gitReceivePack(reader, writer)` methods that the gateway invokes.
+proxies the byte stream from the client to the daemon repo
+capability without parsing the Git protocol itself.
+The daemon repo capability's exo exposes `gitUploadPack`,
+`gitReceivePack`, and `infoRefs` methods scoped to the bearer's
+ref; the gateway invokes them with the request body and headers.
 
 Phase 3.
+
+**Daemon-side scope** (not in Phase 6's gateway-side PR): the
+daemon needs a Git-backed content-addressed store that (a) hosts
+exactly one bare repository for content served on virtual hosts,
+(b) materializes each formula as a ref like
+`refs/formulas/<formula-id>`, (c) admits the gateway-side
+`serveRepo(token)` adapter mapping a bearer formula identifier to
+a capability scoped to that formula's ref, and (d) composes
+formula-graph GC with git GC: dropping a formula deletes its ref,
+and the next `git gc` collects the orphan objects.
+A first-iteration Node implementation may shell out to `git`; a
+later iteration may borrow @0xpatrickdev's Node Git library.
+The Rust implementation can bind libgit2.
+The gateway holds the underlying CAS implementation and vends it
+out to the HTTP server.
+We use the SHA-256 Git variant rather than SHA-1.
+See PR #394 review (2026-05-29) for the maintainer's framing.
 
 **Open question:** the rotation story for formula-identifier
 bearer tokens.
