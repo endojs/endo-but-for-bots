@@ -83,9 +83,7 @@ const integrationTest = runIntegration ? test.serial : test.serial.skip;
 const makeHex64 = seed => {
   // Mix the seed into a 256-bit-ish hex string by chaining a tiny
   // multiplicative LCG modulo 2^32. Output is deterministic per
-  // seed, which makes test failures reproducible. We use modular
-  // arithmetic instead of bitwise operators so this module passes
-  // the project's `no-bitwise` ESLint rule.
+  // seed, which makes test failures reproducible.
   const MOD = 4_294_967_296; // 2^32
   let state = ((seed % MOD) + MOD) % MOD;
   if (state === 0) state = 1;
@@ -411,7 +409,7 @@ integrationTest(
     // Mint a formula-id-shaped repo id and bearer token. The
     // `Math.random` source is fine for tests; the handler validates
     // the shape (64 lowercase hex) but does not check entropy.
-    const repoId = makeHex64(0xcafebabe);
+    const repoId = makeHex64(0xb0b5c4fe);
     const token = makeHex64(0xdeadbeef);
     const wrongToken = makeHex64(0xfeedface);
 
