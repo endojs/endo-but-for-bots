@@ -1,14 +1,7 @@
 // @ts-check
 
 import harden from '@endo/harden';
-
-// Capture both `TextDecoder` modes once at module load.
-// The default UTF-8 decoder substitutes U+FFFD for malformed sequences;
-// the `fatal: true` decoder throws on the same input.
-// Capturing once at module init avoids per-call allocation and avoids
-// any post-lockdown mutation of the global from redirecting calls.
-const lenientTextDecoder = new TextDecoder();
-const fatalTextDecoder = new TextDecoder('utf-8', { fatal: true });
+import { toUtf8StringFunction } from './spackle-install.js';
 
 /**
  * @typedef {object} BytesToTextOptions
@@ -19,18 +12,22 @@ const fatalTextDecoder = new TextDecoder('utf-8', { fatal: true });
 /**
  * Decodes UTF-8 bytes to a string.
  *
+ * Calls through to the realm's `Uint8Array[Symbol.for('toUtf8String')]`
+ * slot installed by the `@endo/bytes` spackle (see
+ * `./spackle-install.js`). The spackle captures the realm's original
+ * `TextDecoder` once at module load (both lenient and `fatal: true`
+ * modes), so a compartment global endowment that later replaces
+ * `TextDecoder` on `globalThis` does not redirect the decode
+ * operation.
+ *
  * Pass `{ fatal: true }` for strict UTF-8 decoding that throws on
- * invalid input. The default lenient mode substitutes the
- * Unicode replacement character (U+FFFD) for malformed sequences.
+ * invalid input. The default lenient mode substitutes the Unicode
+ * replacement character (U+FFFD) for malformed sequences.
  *
  * @param {Uint8Array} view
  * @param {BytesToTextOptions} [options]
  * @returns {string}
  */
-export const bytesToText = (view, options = undefined) => {
-  if (options !== undefined && options.fatal) {
-    return fatalTextDecoder.decode(view);
-  }
-  return lenientTextDecoder.decode(view);
-};
+export const bytesToText = (view, options = undefined) =>
+  toUtf8StringFunction(view, options);
 harden(bytesToText);
