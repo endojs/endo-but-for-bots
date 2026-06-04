@@ -171,29 +171,51 @@ instances find the property already defined and call through.
 `Object[Symbol.for('harden')]` is the rendezvous; the ergonomic
 `harden` is the export.
 
-`@endo/bytes` becomes the **spackle front** for three families of
-behavior that this package and its consumers need uniformly
-across realms, regardless of whether the immutable-`ArrayBuffer`
-shim is installed and regardless of whether `lockdown` has run:
+`@endo/bytes` becomes the **spackle front** for the narrow set of
+behaviors that need a single realm-wide rendezvous so that eval
+twins of `@endo/bytes` agree. Per review feedback from the
+maintainer trimming the initial scope (review 4424846301), the
+spackle is kept as small as the use cases demand:
 
-- **Immutable `ArrayBuffer` operations** (`bytesToImmutable`,
-  `bytesFromImmutable`, `concatImmutables`). The spackle install
-  puts the immutable-slice operation at
-  `ArrayBuffer.prototype[Symbol.for('sliceBufferToImmutable')]`
-  and the round-trippable wrapping operations at companion
-  symbols.
-- **Frozen `TypedArray`s backed by immutable `ArrayBuffer`s**.
-  The spackle install puts the freezable `TypedArray`
-  constructor at `Ctor[Symbol.for('freezable')]` for
-  each TypedArray constructor `Ctor`. The result is one
-  freezable constructor per realm; eval twins agree.
-- **Text-codec workarounds for immutable buffers**. The spackle
-  captures `TextEncoder` and `TextDecoder` once at module load
-  and installs codec adapters at registered symbols on
-  `Uint8Array`. The capture-on-intrinsic guarantee is
-  load-bearing: a compartment global endowment that later
-  replaces `TextDecoder` on `globalThis` does not redirect the
-  spackle's behavior.
+- **Immutable `ArrayBuffer` operations on `ArrayBuffer.prototype`**
+  (`sliceToImmutable`, `transferToImmutable`). These match the
+  proposed standard names from
+  proposal-immutable-arraybuffer, so `@endo/bytes`'s install
+  uses the string keys directly. A native engine or the
+  `@endo/immutable-arraybuffer` shim that places the standard
+  method at the same name composes cleanly: the install adopts
+  the existing method via the first-writer-wins rendezvous.
+- **Immutable-to-mutable copy on `Uint8Array`**
+  (`Uint8Array[Symbol.for('fromImmutable')]`). No proposed
+  standard name exists yet, so the spackle uses a registered
+  symbol as a pre-standard rendezvous.
+- **Frozen `TypedArray`s backed by immutable `ArrayBuffer`s**
+  (`Ctor[Symbol.for('freezable')]` on each TypedArray family).
+  The install yields one freezable constructor per realm; eval
+  twins agree. This is the load-bearing one-per-realm install
+  that motivates the whole spackle pattern.
+
+The following behaviors that earlier drafts shipped as spackle
+installs are *not* on the intrinsic in the landed shape, and the
+rationale for each:
+
+- **`concatImmutables` is a pure-JavaScript helper inside
+  `@endo/bytes`.** The operation composes `Uint8Array`
+  construction with `sliceBufferToImmutable`; no shared state
+  is required and there is no proposed standard for the
+  composition. Eval twins of `@endo/bytes` perform the same
+  composition over the same captured `Uint8Array` constructor
+  and the same `sliceBufferToImmutable` pony, so the results
+  are equivalent without a rendezvous.
+- **`bytesFromText` / `bytesToText` capture `TextEncoder` and
+  `TextDecoder` in module-local variables at load time.** The
+  capture is the load-bearing protection against a compartment
+  global endowment overriding `TextEncoder`/`TextDecoder`. A
+  rendezvous on the intrinsic would only be needed if cross-eval-
+  twin agreement on the *encoder/decoder instance* mattered, but
+  the constructors are stateless by spec, so each twin's captured
+  instance produces the same bytes for the same input. No
+  intrinsic install is needed; no permit is needed.
 
 ### Symbol rendezvous shape
 
@@ -202,41 +224,56 @@ sit on the relevant intrinsic rather than on `Object`. The
 intrinsic is the one whose prototype best describes the
 operation: the immutable-slice operation belongs on
 `ArrayBuffer.prototype`; the freezable view construction and
-text-codec operations belong on `Uint8Array` (the constructor
-itself, so the symbol can be installed on the realm's
-`Uint8Array` primordial before any view is materialized).
+the immutable-to-mutable copy operation belong on `Uint8Array`
+(the constructor itself, so the symbol can be installed on the
+realm's `Uint8Array` primordial before any view is
+materialized).
 
 | Rendezvous | Operation |
 |---|---|
-| `ArrayBuffer.prototype[Symbol.for('sliceBufferToImmutable')]` | Immutable-slice |
-| `ArrayBuffer.prototype[Symbol.for('transferBufferToImmutable')]` | Optional immutable-transfer |
-| `ArrayBuffer[Symbol.for('concatImmutables')]` | Concatenate immutables |
-| `Uint8Array[Symbol.for('toUtf8String')]` | UTF-8 decode |
-| `Uint8Array[Symbol.for('fromUtf8String')]` | UTF-8 encode |
-| `Uint8Array[Symbol.for('bytesFromImmutable')]` | Immutable->mutable copy |
+| `ArrayBuffer.prototype.sliceToImmutable` | Immutable-slice (proposed standard name) |
+| `ArrayBuffer.prototype.transferToImmutable` | Optional immutable-transfer (proposed standard name) |
+| `Uint8Array[Symbol.for('fromImmutable')]` | Immutable->mutable copy (no standard name yet) |
 | `Ctor[Symbol.for('freezable')]` | Per-realm freezable `TypedArray` constructor for each TypedArray `Ctor` |
 
-The symbol-on-constructor placement (rather than on a prototype)
-for the codec operations was chosen so a compartment global
-endowment that later replaces `TextDecoder` on `globalThis`
-cannot redirect the install. The spackle captures the primordial
-at load time; the registered symbol on the constructor is the
-lookup path; the endowment of `globalThis.TextDecoder` does not
-reach into the registered symbol on the realm's primordial.
-
-The exact symbol names are subject to coordination with the TC39
-proposal authors and with the upstream `@endo/harden` precedent;
-the symbol-on-intrinsic discipline is the load-bearing decision
-and the names are a follow-up question.
+For the proposed-standard operations on `ArrayBuffer.prototype`,
+the install uses the string key directly. The string-key
+rendezvous composes with native implementations and with the
+`@endo/immutable-arraybuffer` shim's own install of the same
+methods. For operations without a proposed standard name, the
+registered symbol via `Symbol.for(name)` is the pre-standard
+rendezvous.
 
 ### Required changes to `@endo/ses` permits
 
-The registered symbols on `ArrayBuffer.prototype`, on
-`Uint8Array`, and on the other TypedArray constructors must be
+The registered symbol on `Uint8Array` for the
+immutable-to-mutable copy and the registered symbol on every
+TypedArray constructor for the freezable constructor must be
 admitted by SES's permits table. Without the admission,
 lockdown's whitelist-enforcement phase removes them and the
 spackle's post-lockdown behavior diverges from its pre-lockdown
 behavior.
+
+The proposed-standard string-name slots
+`ArrayBuffer.prototype.sliceToImmutable` and
+`ArrayBuffer.prototype.transferToImmutable` are admitted by the
+permits update for proposal-immutable-arraybuffer; the spackle
+install at the same string key does not require a separate
+permit.
+
+### Brand-checking the emulated immutable `ArrayBuffer`
+
+No brand-check spackle is needed on the intrinsic. The freezable
+TypedArray constructor's internal brand check uses the
+`hiddenBuffers` WeakMap shared with `@endo/immutable-arraybuffer`
+via the narrow `private-for-bytes.js` subpath, which is private
+to the two packages. External code that needs to ask "is this
+ArrayBuffer the emulated immutable form?" uses the
+`isBufferImmutable` function exported from
+`@endo/immutable-arraybuffer`, which is a free function (not a
+method on the intrinsic). The `ArrayBuffer.prototype.immutable`
+getter installed by the shim is the standard-track equivalent
+for the same question.
 
 The lockdown-vs-shim discipline:
 
