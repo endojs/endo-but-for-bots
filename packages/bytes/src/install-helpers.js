@@ -54,9 +54,12 @@ export {
 };
 
 /**
- * Install `value` at `intrinsic[symbol]` if no value is already
+ * Install `value` at `intrinsic[key]` if no value is already
  * installed, then return whichever value ends up at the rendezvous.
  * The first-writer wins; subsequent installs adopt the existing one.
+ * The key may be a string or a symbol; the proposed-standard
+ * rendezvous on `ArrayBuffer.prototype` uses string keys, the
+ * freezable-TypedArray rendezvous uses a registered symbol.
  *
  * If the intrinsic is non-extensible (post-`lockdown()` without the
  * install having had a chance to run pre-lockdown), the install step
@@ -65,22 +68,20 @@ export {
  * the contract; the install on the intrinsic is best-effort.
  *
  * @param {object} intrinsic
- * @param {symbol} symbol
+ * @param {string | symbol} key
  * @param {Function} value
  * @returns {Function}
  */
-export const installOrAdopt = (intrinsic, symbol, value) => {
-  const existing = intrinsic[symbol];
+export const installOrAdopt = (intrinsic, key, value) => {
+  const existing = intrinsic[key];
   if (existing !== undefined) {
     if (typeof existing !== 'function') {
-      throw new TypeError(
-        `@endo/bytes: expected callable at ${String(symbol)}`,
-      );
+      throw new TypeError(`@endo/bytes: expected callable at ${String(key)}`);
     }
     return existing;
   }
   try {
-    defineProperty(intrinsic, symbol, {
+    defineProperty(intrinsic, key, {
       value,
       configurable: false,
       writable: false,

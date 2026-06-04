@@ -1450,10 +1450,6 @@ export const permitted = {
     transferToImmutable: fn,
     sliceToImmutable: fn,
     immutable: getter,
-    // @endo/bytes rendezvous on ArrayBuffer.prototype, sharing the
-    // name with the proposed standard methods at the same site.
-    'RegisteredSymbol(sliceToImmutable)': fn,
-    'RegisteredSymbol(transferToImmutable)': fn,
   },
 
   // If this exists, it is purely an artifact of how we currently shim

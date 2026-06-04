@@ -2,14 +2,8 @@
 
 import test from '@endo/ses-ava/test.js';
 
-import {
-  installedSliceToImmutable,
-  symSliceToImmutable,
-} from '../src/install-to-immutable.js';
-import {
-  installedTransferToImmutable,
-  symTransferToImmutable,
-} from '../src/install-transfer-to-immutable.js';
+import { installedSliceToImmutable } from '../src/install-to-immutable.js';
+import { installedTransferToImmutable } from '../src/install-transfer-to-immutable.js';
 import {
   installedFromImmutableValue,
   symFromImmutable,
@@ -28,15 +22,11 @@ import { concatImmutables } from '../src/concat-immutables.js';
 // Widen each rendezvous symbol to `symbol` so `t.is(..., Symbol.for(...))`
 // does not collide with `unique symbol` on the install-side exports.
 const symbols = /** @type {Record<string, symbol>} */ ({
-  sliceToImmutable: symSliceToImmutable,
-  transferToImmutable: symTransferToImmutable,
   fromImmutable: symFromImmutable,
   freezable: symFreezable,
 });
 
 test('install: symbols are registered via Symbol.for', t => {
-  t.is(symbols.sliceToImmutable, Symbol.for('sliceToImmutable'));
-  t.is(symbols.transferToImmutable, Symbol.for('transferToImmutable'));
   t.is(symbols.fromImmutable, Symbol.for('fromImmutable'));
   t.is(symbols.freezable, Symbol.for('freezable'));
 });
@@ -51,13 +41,13 @@ const installable = (() => {
   // Heuristic: if the slot is defined on the intrinsic, the install
   // ran (either ours or an earlier one). Under post-lockdown the slot
   // is absent.
-  return (
-    typeof ArrayBuffer.prototype[Symbol.for('sliceToImmutable')] === 'function'
-  );
+  return typeof ArrayBuffer.prototype.sliceToImmutable === 'function';
 })();
 
-test('install: ArrayBuffer.prototype[Symbol.for("sliceToImmutable")] install or graceful fallback', t => {
-  const slot = ArrayBuffer.prototype[Symbol.for('sliceToImmutable')];
+test('install: ArrayBuffer.prototype.sliceToImmutable install or graceful fallback', t => {
+  const slot = /** @type {Function | undefined} */ (
+    /** @type {unknown} */ (ArrayBuffer.prototype.sliceToImmutable)
+  );
   if (installable) {
     t.is(typeof slot, 'function');
     t.is(slot, installedSliceToImmutable);
@@ -123,7 +113,9 @@ test('install: freezable constructor is installed on every TypedArray family whe
 });
 
 test('install: optional transferToImmutable install when supported', t => {
-  const slot = ArrayBuffer.prototype[Symbol.for('transferToImmutable')];
+  const slot = /** @type {Function | undefined} */ (
+    /** @type {unknown} */ (ArrayBuffer.prototype.transferToImmutable)
+  );
   if (!installable) {
     t.is(slot, undefined);
     return;
@@ -148,29 +140,25 @@ test('install: sliceToImmutable yields immutable buffer with byteArray-passStyle
 });
 
 test('install: subsequent loads adopt the existing install (idempotent shape)', t => {
-  // The install dance writes once at module load; the slot is not
-  // configurable nor writable. Importing the module again would find
-  // the slot already populated and adopt it. Verified here by
-  // re-reading the slot and matching the function reference.
-  const slot1 = ArrayBuffer.prototype[Symbol.for('sliceToImmutable')];
-  const slot2 = ArrayBuffer.prototype[Symbol.for('sliceToImmutable')];
+  // The install dance writes once at module load; importing the
+  // module again would find the slot already populated and adopt it.
+  // Verified here by re-reading the slot and matching the function
+  // reference. When `@endo/immutable-arraybuffer/shim.js` has already
+  // installed `sliceToImmutable` at the string key, `@endo/bytes`'s
+  // install adopts the shim's method; the descriptor it left behind
+  // controls the property attributes.
+  const slot1 = /** @type {Function | undefined} */ (
+    /** @type {unknown} */ (ArrayBuffer.prototype.sliceToImmutable)
+  );
+  const slot2 = /** @type {Function | undefined} */ (
+    /** @type {unknown} */ (ArrayBuffer.prototype.sliceToImmutable)
+  );
   t.is(slot1, slot2);
   if (!installable) {
     // Lockdown ran first; the install was a graceful no-op.
     return;
   }
-  // Cannot re-defineProperty: the descriptor is non-configurable.
-  t.throws(
-    () => {
-      // eslint-disable-next-line no-extend-native
-      Object.defineProperty(
-        ArrayBuffer.prototype,
-        Symbol.for('sliceToImmutable'),
-        { value: () => {}, configurable: true },
-      );
-    },
-    { instanceOf: TypeError },
-  );
+  t.is(slot1, installedSliceToImmutable);
 });
 
 test('codec: encode/decode round-trip via exported callables', t => {

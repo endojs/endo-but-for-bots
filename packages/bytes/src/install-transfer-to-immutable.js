@@ -1,21 +1,21 @@
 // @ts-nocheck
 
 /**
- * Installs `ArrayBuffer.prototype[Symbol.for('transferToImmutable')]`.
+ * Installs `ArrayBuffer.prototype.transferToImmutable`.
  *
  * Optional: depends on platform support for `structuredClone` or
  * `ArrayBuffer.prototype.transfer`. On platforms lacking both, the
  * exported `installedTransferToImmutable` is `undefined`.
  *
- * The rendezvous symbol is the same name as the proposed
- * `ArrayBuffer.prototype.transferToImmutable` method
- * (proposal-immutable-arraybuffer).
+ * The rendezvous key is the proposed standard name
+ * `transferToImmutable` (proposal-immutable-arraybuffer), so a native
+ * implementation or the `@endo/immutable-arraybuffer` shim that
+ * places the standard method at the same name composes cleanly with
+ * this install.
  */
 
 import { optTransferBufferToImmutable } from '@endo/immutable-arraybuffer';
 import { CapturedArrayBuffer, installOrAdopt } from './install-helpers.js';
-
-const symTransferToImmutable = Symbol.for('transferToImmutable');
 
 /** @type {Function | undefined} */
 let transferInstalled;
@@ -30,10 +30,9 @@ if (optTransferBufferToImmutable !== undefined) {
   }
   transferInstalled = installOrAdopt(
     CapturedArrayBuffer.prototype,
-    symTransferToImmutable,
+    'transferToImmutable',
     installedTransfer,
   );
 }
 
 export const installedTransferToImmutable = transferInstalled;
-export { symTransferToImmutable };
