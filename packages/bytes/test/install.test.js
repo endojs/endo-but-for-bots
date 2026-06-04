@@ -19,16 +19,6 @@ import {
   symFromImmutable,
 } from '../src/install-from-immutable.js';
 import {
-  installedToTextValue,
-  installedToStrictTextValue,
-  symToText,
-  symToStrictText,
-} from '../src/install-to-string.js';
-import {
-  installedFromTextValue,
-  symFromText,
-} from '../src/install-from-string.js';
-import {
   getFreezableConstructor,
   symFreezable,
 } from '../src/install-freezable-typedarrays.js';
@@ -46,9 +36,6 @@ const symbols = /** @type {Record<string, symbol>} */ ({
   transferToImmutable: symTransferToImmutable,
   concatImmutables: symConcatImmutables,
   fromImmutable: symFromImmutable,
-  toText: symToText,
-  toStrictText: symToStrictText,
-  fromText: symFromText,
   freezable: symFreezable,
 });
 
@@ -57,9 +44,6 @@ test('install: symbols are registered via Symbol.for', t => {
   t.is(symbols.transferToImmutable, Symbol.for('transferToImmutable'));
   t.is(symbols.concatImmutables, Symbol.for('concatImmutables'));
   t.is(symbols.fromImmutable, Symbol.for('fromImmutable'));
-  t.is(symbols.toText, Symbol.for('toText'));
-  t.is(symbols.toStrictText, Symbol.for('toStrictText'));
-  t.is(symbols.fromText, Symbol.for('fromText'));
   t.is(symbols.freezable, Symbol.for('freezable'));
 });
 
@@ -109,39 +93,6 @@ test('install: Uint8Array[Symbol.for("fromImmutable")] install or graceful fallb
   } else {
     t.is(slot, undefined);
     t.is(typeof installedFromImmutableValue, 'function');
-  }
-});
-
-test('install: Uint8Array[Symbol.for("toText")] install or graceful fallback', t => {
-  const slot = Uint8Array[Symbol.for('toText')];
-  if (installable) {
-    t.is(typeof slot, 'function');
-    t.is(slot, installedToTextValue);
-  } else {
-    t.is(slot, undefined);
-    t.is(typeof installedToTextValue, 'function');
-  }
-});
-
-test('install: Uint8Array[Symbol.for("toStrictText")] install or graceful fallback', t => {
-  const slot = Uint8Array[Symbol.for('toStrictText')];
-  if (installable) {
-    t.is(typeof slot, 'function');
-    t.is(slot, installedToStrictTextValue);
-  } else {
-    t.is(slot, undefined);
-    t.is(typeof installedToStrictTextValue, 'function');
-  }
-});
-
-test('install: Uint8Array[Symbol.for("fromText")] install or graceful fallback', t => {
-  const slot = Uint8Array[Symbol.for('fromText')];
-  if (installable) {
-    t.is(typeof slot, 'function');
-    t.is(slot, installedFromTextValue);
-  } else {
-    t.is(slot, undefined);
-    t.is(typeof installedFromTextValue, 'function');
   }
 });
 
@@ -239,34 +190,24 @@ test('install: subsequent loads adopt the existing install (idempotent shape)', 
   );
 });
 
-test('install: encode/decode round-trip via installed slots', t => {
-  if (!installable) {
-    // Fall back to the install modules' exported references.
-    const bytes = installedFromTextValue('Hello, 世界 \u{1F600}');
-    t.is(installedToTextValue(bytes), 'Hello, 世界 \u{1F600}');
-    return;
-  }
-  const sym1 = Symbol.for('fromText');
-  const sym2 = Symbol.for('toText');
-  const encode = Uint8Array[sym1];
-  const decode = Uint8Array[sym2];
-  const bytes = encode('Hello, 世界 \u{1F600}');
-  t.is(decode(bytes), 'Hello, 世界 \u{1F600}');
+test('codec: encode/decode round-trip via exported callables', t => {
+  const bytes = bytesFromText('Hello, 世界 \u{1F600}');
+  t.is(bytesToText(bytes), 'Hello, 世界 \u{1F600}');
 });
 
-test('install: toStrictText accepts valid UTF-8 and throws on invalid', t => {
+test('codec: bytesToText with { fatal: true } accepts valid UTF-8 and throws on invalid', t => {
   const validBytes = bytesFromText('Hello, world!');
-  t.is(installedToStrictTextValue(validBytes), 'Hello, world!');
+  t.is(bytesToText(validBytes, { fatal: true }), 'Hello, world!');
   // 0xC3 begins a two-byte sequence; 0x28 is not a valid continuation byte.
   const invalid = new Uint8Array([0xc3, 0x28]);
-  t.throws(() => installedToStrictTextValue(invalid), {
+  t.throws(() => bytesToText(invalid, { fatal: true }), {
     instanceOf: TypeError,
   });
 });
 
-test('install: text codec survives globalThis.TextEncoder replacement', t => {
-  // The install captures TextEncoder at module load. Replace the
-  // globalThis binding now; the install must continue to produce the
+test('codec: bytesFromText survives globalThis.TextEncoder replacement', t => {
+  // The module captures TextEncoder at module load. Replace the
+  // globalThis binding now; bytesFromText must continue to produce the
   // correct bytes because it holds the realm's original encoder.
   const originalTE = globalThis.TextEncoder;
   try {
@@ -280,7 +221,7 @@ test('install: text codec survives globalThis.TextEncoder replacement', t => {
   }
 });
 
-test('install: text codec survives globalThis.TextDecoder replacement', t => {
+test('codec: bytesToText survives globalThis.TextDecoder replacement', t => {
   const originalTD = globalThis.TextDecoder;
   try {
     /** @type {any} */ (globalThis).TextDecoder = function BadTextDecoder() {

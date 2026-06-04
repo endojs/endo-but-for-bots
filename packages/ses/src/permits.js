@@ -1272,13 +1272,11 @@ export const permitted = {
     fromBase64: fn,
     // https://github.com/tc39/proposal-arraybuffer-base64
     fromHex: fn,
-    // @endo/bytes rendezvous on Uint8Array. These admit registered
-    // symbols for codec adapters and the immutable-to-mutable copy
-    // helper. The freezable symbol is admitted by the
-    // shared TypedArray() shape above.
-    'RegisteredSymbol(toText)': fn,
-    'RegisteredSymbol(toStrictText)': fn,
-    'RegisteredSymbol(fromText)': fn,
+    // @endo/bytes rendezvous on Uint8Array for the immutable-to-mutable
+    // copy helper. The freezable symbol is admitted by the shared
+    // TypedArray() shape above. Text-codec operations capture the
+    // realm's TextEncoder/TextDecoder at module load inside
+    // `@endo/bytes`; no intrinsic install is needed for those.
     'RegisteredSymbol(fromImmutable)': fn,
   },
 
