@@ -384,6 +384,10 @@ function TypedArray(prototype) {
     '[[Proto]]': '%TypedArray%',
     BYTES_PER_ELEMENT: 'number',
     prototype,
+    // @endo/bytes spackle rendezvous on each TypedArray constructor.
+    // See packages/immutable-arraybuffer/README.md
+    // § Symbol rendezvous shape.
+    'RegisteredSymbol(freezableConstructor)': fn,
   };
 }
 
@@ -1269,6 +1273,15 @@ export const permitted = {
     fromBase64: fn,
     // https://github.com/tc39/proposal-arraybuffer-base64
     fromHex: fn,
+    // @endo/bytes spackle rendezvous on Uint8Array.
+    // See packages/immutable-arraybuffer/README.md
+    // § Symbol rendezvous shape. These admit registered symbols for
+    // codec adapters and the immutable->mutable copy helper. The
+    // freezableConstructor symbol is admitted by the shared
+    // TypedArray() shape above.
+    'RegisteredSymbol(toUtf8String)': fn,
+    'RegisteredSymbol(fromUtf8String)': fn,
+    'RegisteredSymbol(bytesFromImmutable)': fn,
   },
 
   '%BigInt64ArrayPrototype%': TypedArrayPrototype('BigInt64Array'),
@@ -1419,6 +1432,10 @@ export const permitted = {
     fromString: false,
     // See https://github.com/Moddable-OpenSource/moddable/issues/523
     fromBigInt: false,
+    // @endo/bytes spackle rendezvous on ArrayBuffer.
+    // See packages/immutable-arraybuffer/README.md
+    // § Symbol rendezvous shape.
+    'RegisteredSymbol(concatImmutables)': fn,
   },
 
   '%ArrayBufferPrototype%': {
@@ -1441,6 +1458,11 @@ export const permitted = {
     transferToImmutable: fn,
     sliceToImmutable: fn,
     immutable: getter,
+    // @endo/bytes spackle rendezvous on ArrayBuffer.prototype.
+    // See packages/immutable-arraybuffer/README.md
+    // § Symbol rendezvous shape.
+    'RegisteredSymbol(sliceBufferToImmutable)': fn,
+    'RegisteredSymbol(transferBufferToImmutable)': fn,
   },
 
   // If this exists, it is purely an artifact of how we currently shim
