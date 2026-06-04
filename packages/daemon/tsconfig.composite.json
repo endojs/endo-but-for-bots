@@ -21,6 +21,9 @@
       "path": "../errors/tsconfig.composite.json"
     },
     {
+      "path": "../evasive-transform/tsconfig.composite.json"
+    },
+    {
       "path": "../eventual-send/tsconfig.composite.json"
     },
     {
