@@ -65,27 +65,27 @@ const SUGGESTIONS = {
   TextDecoder:
     "use `bytesToText` from '@endo/bytes' (or '@endo/bytes/to-string.js')",
   Uint8Array:
-    "use `bytesFromImmutable` for immutable->mutable copies, `bytesFromText` for string->bytes, or the freezable constructor at `Uint8Array[Symbol.for('freezableConstructor')]` installed by '@endo/bytes'",
+    "use `bytesFromImmutable` for immutable->mutable copies, `bytesFromText` for string->bytes, or the freezable constructor at `Uint8Array[Symbol.for('freezable')]` installed by '@endo/bytes'",
   Uint8ClampedArray:
-    "use the freezable constructor at `Uint8ClampedArray[Symbol.for('freezableConstructor')]` installed by '@endo/bytes'",
+    "use the freezable constructor at `Uint8ClampedArray[Symbol.for('freezable')]` installed by '@endo/bytes'",
   Uint16Array:
-    "use the freezable constructor at `Uint16Array[Symbol.for('freezableConstructor')]` installed by '@endo/bytes'",
+    "use the freezable constructor at `Uint16Array[Symbol.for('freezable')]` installed by '@endo/bytes'",
   Uint32Array:
-    "use the freezable constructor at `Uint32Array[Symbol.for('freezableConstructor')]` installed by '@endo/bytes'",
+    "use the freezable constructor at `Uint32Array[Symbol.for('freezable')]` installed by '@endo/bytes'",
   Int8Array:
-    "use the freezable constructor at `Int8Array[Symbol.for('freezableConstructor')]` installed by '@endo/bytes'",
+    "use the freezable constructor at `Int8Array[Symbol.for('freezable')]` installed by '@endo/bytes'",
   Int16Array:
-    "use the freezable constructor at `Int16Array[Symbol.for('freezableConstructor')]` installed by '@endo/bytes'",
+    "use the freezable constructor at `Int16Array[Symbol.for('freezable')]` installed by '@endo/bytes'",
   Int32Array:
-    "use the freezable constructor at `Int32Array[Symbol.for('freezableConstructor')]` installed by '@endo/bytes'",
+    "use the freezable constructor at `Int32Array[Symbol.for('freezable')]` installed by '@endo/bytes'",
   Float32Array:
-    "use the freezable constructor at `Float32Array[Symbol.for('freezableConstructor')]` installed by '@endo/bytes'",
+    "use the freezable constructor at `Float32Array[Symbol.for('freezable')]` installed by '@endo/bytes'",
   Float64Array:
-    "use the freezable constructor at `Float64Array[Symbol.for('freezableConstructor')]` installed by '@endo/bytes'",
+    "use the freezable constructor at `Float64Array[Symbol.for('freezable')]` installed by '@endo/bytes'",
   BigInt64Array:
-    "use the freezable constructor at `BigInt64Array[Symbol.for('freezableConstructor')]` installed by '@endo/bytes'",
+    "use the freezable constructor at `BigInt64Array[Symbol.for('freezable')]` installed by '@endo/bytes'",
   BigUint64Array:
-    "use the freezable constructor at `BigUint64Array[Symbol.for('freezableConstructor')]` installed by '@endo/bytes'",
+    "use the freezable constructor at `BigUint64Array[Symbol.for('freezable')]` installed by '@endo/bytes'",
   ArrayBuffer:
     "use `bytesToImmutable(bytesFromText(''))` shaping or `bytesToImmutable` on an existing view for immutable buffers; if a writable buffer is required, the `@endo/bytes` capture site is the only authorized direct construction",
 };
@@ -95,7 +95,7 @@ const DEFAULT_ALLOW_FILES = [
   // per-operation install modules.
   'packages/bytes/src/install-helpers.js',
   // The freezable-TypedArray ponyfill, which is the internal
-  // implementation surface for the freezableConstructor install.
+  // implementation surface for the freezable install.
   'packages/bytes/src/freezable-typedarray-pony.js',
   // The immutable-ArrayBuffer ponyfill internal, which @endo/bytes
   // depends on; it captures Uint8Array/ArrayBuffer at module init.

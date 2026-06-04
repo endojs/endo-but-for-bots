@@ -386,7 +386,7 @@ function TypedArray(prototype) {
     prototype,
     // @endo/bytes rendezvous on each TypedArray constructor.
     // See packages/bytes/README.md.
-    'RegisteredSymbol(freezableConstructor)': fn,
+    'RegisteredSymbol(freezable)': fn,
   };
 }
 
@@ -1274,7 +1274,7 @@ export const permitted = {
     fromHex: fn,
     // @endo/bytes rendezvous on Uint8Array. These admit registered
     // symbols for codec adapters and the immutable-to-mutable copy
-    // helper. The freezableConstructor symbol is admitted by the
+    // helper. The freezable symbol is admitted by the
     // shared TypedArray() shape above.
     'RegisteredSymbol(toText)': fn,
     'RegisteredSymbol(toStrictText)': fn,

@@ -30,7 +30,7 @@ import {
 } from '../src/install-from-string.js';
 import {
   getFreezableConstructor,
-  symFreezableConstructor,
+  symFreezable,
 } from '../src/install-freezable-typedarrays.js';
 
 import { bytesFromText } from '../src/from-string.js';
@@ -49,7 +49,7 @@ const symbols = /** @type {Record<string, symbol>} */ ({
   toText: symToText,
   toStrictText: symToStrictText,
   fromText: symFromText,
-  freezableConstructor: symFreezableConstructor,
+  freezable: symFreezable,
 });
 
 test('install: symbols are registered via Symbol.for', t => {
@@ -60,7 +60,7 @@ test('install: symbols are registered via Symbol.for', t => {
   t.is(symbols.toText, Symbol.for('toText'));
   t.is(symbols.toStrictText, Symbol.for('toStrictText'));
   t.is(symbols.fromText, Symbol.for('fromText'));
-  t.is(symbols.freezableConstructor, Symbol.for('freezableConstructor'));
+  t.is(symbols.freezable, Symbol.for('freezable'));
 });
 
 // When the install gets to run before `lockdown()` (the default here,
@@ -145,8 +145,8 @@ test('install: Uint8Array[Symbol.for("fromText")] install or graceful fallback',
   }
 });
 
-test('install: Uint8Array[Symbol.for("freezableConstructor")] install or graceful fallback', t => {
-  const slot = Uint8Array[Symbol.for('freezableConstructor')];
+test('install: Uint8Array[Symbol.for("freezable")] install or graceful fallback', t => {
+  const slot = Uint8Array[Symbol.for('freezable')];
   if (installable) {
     t.is(typeof slot, 'function');
     t.is(slot, getFreezableConstructor(Uint8Array));
@@ -162,7 +162,7 @@ test('install: freezable constructor is installed on every TypedArray family whe
     t.is(typeof getFreezableConstructor(Uint8Array), 'function');
     return;
   }
-  const sym = Symbol.for('freezableConstructor');
+  const sym = Symbol.for('freezable');
   const families = [
     Uint8Array,
     Uint8ClampedArray,

@@ -73,7 +73,7 @@ choice when modifying intrinsics is not desired.
 The recommended path for `TypedArray` views onto immutable
 buffers is through `@endo/bytes`'s spackle, which installs one
 freezable constructor per realm at
-`Uint8Array[Symbol.for('freezableConstructor')]` (and the
+`Uint8Array[Symbol.for('freezable')]` (and the
 corresponding symbol on every other TypedArray constructor):
 
 ```js
@@ -82,7 +82,7 @@ corresponding symbol on every other TypedArray constructor):
 import { bytesToImmutable, bytesFromText } from '@endo/bytes';
 
 const buffer = bytesToImmutable(bytesFromText('hello'));
-const FreezableUint8Array = Uint8Array[Symbol.for('freezableConstructor')];
+const FreezableUint8Array = Uint8Array[Symbol.for('freezable')];
 const view = new FreezableUint8Array(buffer);
 
 // Indexed reads work as expected.

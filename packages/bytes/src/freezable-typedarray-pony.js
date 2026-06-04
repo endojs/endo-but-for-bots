@@ -9,7 +9,7 @@
  * This module is internal to `@endo/bytes`. It is the implementation
  * surface that `install-freezable-typedarrays.js` calls into when it
  * publishes one constructor per TypedArray family at
- * `Ctor[Symbol.for('freezableConstructor')]`. The
+ * `Ctor[Symbol.for('freezable')]`. The
  * `hiddenBuffers` / `reverseHiddenBuffers` WeakMaps and the
  * `FERAL_GET_ARRAY_BUFFER` getter are imported from
  * `@endo/immutable-arraybuffer/private-for-bytes.js`, a deliberately

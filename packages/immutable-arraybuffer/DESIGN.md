@@ -184,7 +184,7 @@ shim is installed and regardless of whether `lockdown` has run:
   symbols.
 - **Frozen `TypedArray`s backed by immutable `ArrayBuffer`s**.
   The spackle install puts the freezable `TypedArray`
-  constructor at `Ctor[Symbol.for('freezableConstructor')]` for
+  constructor at `Ctor[Symbol.for('freezable')]` for
   each TypedArray constructor `Ctor`. The result is one
   freezable constructor per realm; eval twins agree.
 - **Text-codec workarounds for immutable buffers**. The spackle
@@ -214,7 +214,7 @@ itself, so the symbol can be installed on the realm's
 | `Uint8Array[Symbol.for('toUtf8String')]` | UTF-8 decode |
 | `Uint8Array[Symbol.for('fromUtf8String')]` | UTF-8 encode |
 | `Uint8Array[Symbol.for('bytesFromImmutable')]` | Immutable->mutable copy |
-| `Ctor[Symbol.for('freezableConstructor')]` | Per-realm freezable `TypedArray` constructor for each TypedArray `Ctor` |
+| `Ctor[Symbol.for('freezable')]` | Per-realm freezable `TypedArray` constructor for each TypedArray `Ctor` |
 
 The symbol-on-constructor placement (rather than on a prototype)
 for the codec operations was chosen so a compartment global
