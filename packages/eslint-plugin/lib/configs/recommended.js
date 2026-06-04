@@ -74,6 +74,7 @@ module.exports = {
   rules: {
     '@endo/assert-fail-as-throw': 'error',
     '@endo/no-assign-to-exported-let-var-or-function': 'error',
+    '@endo/no-direct-codec-or-typedarray-constructor': 'warn',
     '@endo/no-harden-pattern-maker': 'warn',
     '@endo/no-multi-name-local-export': 'error',
     'guard-for-in': 'error',
