@@ -49,8 +49,7 @@ const spackleInstallable = (() => {
 })();
 
 test('spackle: ArrayBuffer.prototype[Symbol.for("sliceBufferToImmutable")] install or graceful fallback', t => {
-  const slot =
-    ArrayBuffer.prototype[Symbol.for('sliceBufferToImmutable')];
+  const slot = ArrayBuffer.prototype[Symbol.for('sliceBufferToImmutable')];
   if (spackleInstallable) {
     t.is(typeof slot, 'function');
     t.is(slot, sliceFunction);
@@ -149,8 +148,7 @@ test('spackle: freezable constructor is installed on every TypedArray family whe
 });
 
 test('spackle: optional transferBufferToImmutable install when supported', t => {
-  const slot =
-    ArrayBuffer.prototype[Symbol.for('transferBufferToImmutable')];
+  const slot = ArrayBuffer.prototype[Symbol.for('transferBufferToImmutable')];
   if (!spackleInstallable) {
     t.is(slot, undefined);
     return;
@@ -179,10 +177,8 @@ test('spackle: subsequent loads adopt the existing install (idempotent shape)', 
   // configurable nor writable. Importing the module again would find
   // the slot already populated and adopt it. Verified here by
   // re-reading the slot and matching the function reference.
-  const slot1 =
-    ArrayBuffer.prototype[Symbol.for('sliceBufferToImmutable')];
-  const slot2 =
-    ArrayBuffer.prototype[Symbol.for('sliceBufferToImmutable')];
+  const slot1 = ArrayBuffer.prototype[Symbol.for('sliceBufferToImmutable')];
+  const slot2 = ArrayBuffer.prototype[Symbol.for('sliceBufferToImmutable')];
   t.is(slot1, slot2);
   if (!spackleInstallable) {
     // Lockdown ran first; the install was a graceful no-op.

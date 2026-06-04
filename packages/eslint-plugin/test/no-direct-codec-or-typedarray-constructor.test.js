@@ -25,8 +25,7 @@ const valid = [
   // Allowed file: the spackle's capture site.
   {
     code: `const { Uint8Array, TextEncoder } = globalThis; new TextEncoder();`,
-    filename:
-      '/abs/path/to/packages/bytes/src/spackle-install.js',
+    filename: '/abs/path/to/packages/bytes/src/spackle-install.js',
   },
   // Allowed file: freezable-typedarray-pony.
   {
@@ -66,9 +65,7 @@ const invalid = [
   },
   {
     code: `new Uint8ClampedArray(8);`,
-    errors: [
-      { messageId: 'forbiddenNew' },
-    ],
+    errors: [{ messageId: 'forbiddenNew' }],
   },
   {
     code: `new Int8Array(8);`,
@@ -105,23 +102,17 @@ const invalid = [
   // globalThis.<Name> read site
   {
     code: `const x = globalThis.TextEncoder;`,
-    errors: [
-      { messageId: 'forbiddenIdentifier' },
-    ],
+    errors: [{ messageId: 'forbiddenIdentifier' }],
   },
   {
     code: `const x = globalThis.Uint8Array;`,
-    errors: [
-      { messageId: 'forbiddenIdentifier' },
-    ],
+    errors: [{ messageId: 'forbiddenIdentifier' }],
   },
   // A non-allowed file that captures via globalThis.X gets reported.
   {
     code: `const x = globalThis.TextEncoder;`,
     filename: '/abs/path/to/packages/other/src/foo.js',
-    errors: [
-      { messageId: 'forbiddenIdentifier' },
-    ],
+    errors: [{ messageId: 'forbiddenIdentifier' }],
   },
 ];
 
