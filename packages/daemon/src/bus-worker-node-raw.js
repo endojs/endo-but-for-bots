@@ -40,7 +40,10 @@ process.once('SIGINT', () => cancel(new Error('SIGINT')));
 
 const { reader, writer } = powers.connection;
 
-const workerFacet = makeWorkerFacet({ cancel });
+const workerFacet = makeWorkerFacet({
+  cancel,
+  loadArchiveParsers: powers.loadArchiveParsers,
+});
 
 const messageWriter = mapWriter(writer, messageToBytes);
 const messageReader = mapReader(reader, bytesToMessage);

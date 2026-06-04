@@ -91,6 +91,21 @@ export type MignonicPowers = {
     reader: Reader<Uint8Array>;
     writer: Writer<Uint8Array>;
   };
+  /**
+   * Returns the parser-for-language map used by `makeArchive` and
+   * `makeFromTree` to import source-only ZIP archives. The Node-side
+   * powers wires this to the evasive-transform-wrapped parser map in
+   * `worker-archive-parsers.js`, which entrains `@endo/evasive-transform`
+   * (and Babel) only on the Node worker load path. Platforms that have
+   * their own archive-import pipeline (the Rust supervisor) supply a
+   * different loader, so `worker.js` itself stays platform-agnostic and
+   * does not reference `@babel/*`. Lazy on purpose: workers that never
+   * receive `makeArchive` / `makeFromTree` do not pay the Babel load
+   * cost.
+   */
+  loadArchiveParsers: () => Promise<
+    import('@endo/compartment-mapper').ParserForLanguage
+  >;
 };
 
 type IdRecord = {

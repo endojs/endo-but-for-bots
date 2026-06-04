@@ -50,8 +50,16 @@ const normalizeFilePath = path => {
 /**
  * @param {object} args
  * @param {(error: Error) => void} args.cancel
+ * @param {() => Promise<import('@endo/compartment-mapper').ParserForLanguage>} args.loadArchiveParsers
+ *   Lazy loader for the `parserForLanguage` map used by archive imports.
+ *   Injected by the Node-side bootstrap so `worker.js` stays
+ *   platform-agnostic; the Node loader wires in the
+ *   evasive-transform-wrapped parsers from `worker-archive-parsers.js`,
+ *   keeping `@babel/*` out of the platform-agnostic load graph. The Rust
+ *   supervisor reads the same archives untransformed; see
+ *   `worker-archive-parsers.js` for the rationale.
  */
-export const makeWorkerFacet = ({ cancel }) => {
+export const makeWorkerFacet = ({ cancel, loadArchiveParsers }) => {
   return makeExo(
     'EndoWorkerFacetForDaemon',
     WorkerFacetForDaemonInterface,
@@ -122,17 +130,19 @@ export const makeWorkerFacet = ({ cancel }) => {
         // existing parseArchive pipeline.  Keeps tree loading on the
         // worker side without duplicating the archive loader.
         //
-        // The evasive-transform-wrapped parser map applies the SES
+        // The platform-specific bootstrap supplies `loadArchiveParsers`;
+        // on Node it returns the evasive-transform-wrapped parser map
+        // from `worker-archive-parsers.js`, which applies the SES
         // censorship-evasion transform to mjs/cjs source bytes before
-        // parsing, restoring the bundle-time behavior that was lost when
-        // the workflow pivoted to source-only ZIP archives.  The Rust
-        // supervisor reads the same archive untransformed; see
-        // src/worker-archive-parsers.js for the rationale.
-        const [{ parseArchive }, { evasiveParserForLanguage }] =
-          await Promise.all([
-            import('@endo/compartment-mapper'),
-            import('./worker-archive-parsers.js'),
-          ]);
+        // parsing and restores the bundle-time behavior that was lost
+        // when the workflow pivoted to source-only ZIP archives. The
+        // Rust supervisor reads the same archive untransformed and
+        // wires a different loader, keeping `worker.js` itself free of
+        // any `@babel/*` dependency.
+        const [{ parseArchive }, parserForLanguage] = await Promise.all([
+          import('@endo/compartment-mapper'),
+          loadArchiveParsers(),
+        ]);
         const zip = new ZipWriter();
         zip.write('compartment-map.json', bytesFromText(mapText));
 
@@ -162,7 +172,7 @@ export const makeWorkerFacet = ({ cancel }) => {
 
         const archiveBytes = zip.snapshot();
         const application = await parseArchive(archiveBytes, '<tree>', {
-          parserForLanguage: evasiveParserForLanguage,
+          parserForLanguage,
         });
         const { namespace } = await application.import({
           globals: endowments,
@@ -205,22 +215,24 @@ export const makeWorkerFacet = ({ cancel }) => {
 
         // Defer the compartment-mapper imports so workers that never
         // call makeArchive don't pay the babel/parser load cost.
-        // The evasive-transform-wrapped parser map starts from the "all
+        // The platform-specific bootstrap supplies `loadArchiveParsers`;
+        // on Node it returns the evasive-transform-wrapped parser map
+        // from `worker-archive-parsers.js`, which starts from the "all
         // parsers" set so we accept source-form modules (mjs/cjs) but
         // degrade gracefully if a precompiled module format slips
-        // through; it additionally wraps the mjs/cjs parsers to apply
-        // the SES censorship-evasion transform before parsing.  This
+        // through, and additionally wraps the mjs/cjs parsers to apply
+        // the SES censorship-evasion transform before parsing. This
         // restores the bundle-time behavior that was lost when the
-        // workflow pivoted to source-only ZIP archives.  See
-        // src/worker-archive-parsers.js for the rationale; the Rust
-        // supervisor reads the same archive untransformed.
-        const [{ parseArchive }, { evasiveParserForLanguage }] =
-          await Promise.all([
-            import('@endo/compartment-mapper'),
-            import('./worker-archive-parsers.js'),
-          ]);
+        // workflow pivoted to source-only ZIP archives. The Rust
+        // supervisor reads the same archive untransformed and wires a
+        // different loader, keeping `worker.js` itself free of any
+        // `@babel/*` dependency.
+        const [{ parseArchive }, parserForLanguage] = await Promise.all([
+          import('@endo/compartment-mapper'),
+          loadArchiveParsers(),
+        ]);
         const application = await parseArchive(archiveBytes, '<archive>', {
-          parserForLanguage: evasiveParserForLanguage,
+          parserForLanguage,
         });
         const { namespace } = await application.import({
           globals: endowments,
@@ -251,6 +263,7 @@ export const main = async (powers, pid, cancel, cancelled) => {
 
   const workerFacet = makeWorkerFacet({
     cancel,
+    loadArchiveParsers: powers.loadArchiveParsers,
   });
 
   const { closed } = makeNetstringCapTP(
