@@ -348,6 +348,235 @@ export const fn3 = fn;
   t.is(fn(), 'foo', 'fn evaluates');
 });
 
+test('var reassignment publishes through liveVar', t => {
+  // Exercises the AssignmentExpression instrumentation for a top-level
+  // exported `var` binding. The reassignment must update the bundled
+  // live cell (and thereby the test's `liveVar` updater); without the
+  // publish call, the namespace stays stuck at the initial value.
+  const { log, namespace } = initialize(
+    t,
+    `\
+export var x = 'initial';
+x = 'updated';
+`,
+  );
+  t.deepEqual(log, ['x: "initial"', 'x: "updated"']);
+  t.is(namespace.x, 'updated');
+});
+
+test('function reassignment publishes through liveVar', t => {
+  // Exercises the AssignmentExpression instrumentation for a top-level
+  // exported `function` binding (the hoisted/softened path).
+  const { log, namespace } = initialize(
+    t,
+    `\
+export function fn() {
+  return 'initial';
+}
+fn = () => 'updated';
+`,
+  );
+  t.deepEqual(log, ['fn: undefined', 'fn: undefined']);
+  // The values are functions and thus stringify to undefined in the
+  // log; assert the runtime callable surface directly.
+  t.is(namespace.fn(), 'updated');
+});
+
+test('let postfix and compound reassignment publish through liveVar', t => {
+  // Exercises the UpdateExpression and compound-assignment instrumentation.
+  // Verifies that each individual update is observed by the liveVar
+  // updater rather than only a final value.
+  const { log } = initialize(
+    t,
+    `\
+export let n = 0;
+n++;
+++n;
+n += 3;
+n--;
+`,
+  );
+  t.deepEqual(log, ['n: 0', 'n: 1', 'n: 2', 'n: 5', 'n: 4']);
+});
+
+test('postfix UpdateExpression evaluates to the pre-update value', t => {
+  // ECMA-262 §13.4.4.1 (PostfixIncrement) / §13.4.5.1
+  // (PostfixDecrement) require the expression to evaluate to the
+  // pre-update value of the operand. The rewrite must capture that
+  // value into a scratch local before publishing so the
+  // SequenceExpression's value matches the spec.
+  const { log, namespace } = initialize(
+    t,
+    `\
+export let n = 0;
+export const post = n++;
+`,
+  );
+  // The live publish for `n` fires when `n++` runs (n becomes 1).
+  // `post` is initialized to the **pre-update** value of n (0).
+  t.deepEqual(log, ['n: 0', 'n: 1', 'post: 0']);
+  t.is(namespace.post, 0);
+  t.is(namespace.n, 1);
+});
+
+test('prefix UpdateExpression evaluates to the post-update value', t => {
+  // ECMA-262 §13.4.3.1 (PrefixIncrement) / §13.4.4.1
+  // (PrefixDecrement) require the expression to evaluate to the
+  // post-update value. The rewrite preserves the existing
+  // "new value" shape for prefix forms.
+  const { log, namespace } = initialize(
+    t,
+    `\
+export let n = 0;
+export const pre = ++n;
+`,
+  );
+  t.deepEqual(log, ['n: 0', 'n: 1', 'pre: 1']);
+  t.is(namespace.pre, 1);
+  t.is(namespace.n, 1);
+});
+
+test('object-destructuring assignment publishes through liveVar', t => {
+  // `({ X } = obj)` for a top-level live export rebinds X. The
+  // AssignmentExpression visitor must recurse into the ObjectPattern
+  // LHS and emit a publish for each bound identifier that names a
+  // live export. Same class of silent bug as endojs/endo#2982 on a
+  // different surface.
+  const { log, namespace } = initialize(
+    t,
+    `\
+export let x = 'initial';
+export let y = 'initial';
+({ x, y } = { x: 'updated-x', y: 'updated-y' });
+`,
+  );
+  t.deepEqual(log, [
+    'x: "initial"',
+    'y: "initial"',
+    'x: "updated-x"',
+    'y: "updated-y"',
+  ]);
+  t.is(namespace.x, 'updated-x');
+  t.is(namespace.y, 'updated-y');
+});
+
+test('object-destructuring assignment with aliased property publishes through liveVar', t => {
+  // `({ a: X } = obj)` aliases property `a` of `obj` to the
+  // top-level live binding `X`. The LHS identifier whose binding is
+  // rewritten is the aliased local `X`, not the property name `a`.
+  const { log, namespace } = initialize(
+    t,
+    `\
+export let x = 'initial';
+({ a: x } = { a: 'updated' });
+`,
+  );
+  t.deepEqual(log, ['x: "initial"', 'x: "updated"']);
+  t.is(namespace.x, 'updated');
+});
+
+test('array-destructuring assignment publishes through liveVar', t => {
+  // `[X, Y] = arr` rebinds X and Y. Same recursion requirement as the
+  // object-destructuring case.
+  const { log, namespace } = initialize(
+    t,
+    `\
+export let x = 'initial';
+export let y = 'initial';
+[x, y] = ['updated-x', 'updated-y'];
+`,
+  );
+  t.deepEqual(log, [
+    'x: "initial"',
+    'y: "initial"',
+    'x: "updated-x"',
+    'y: "updated-y"',
+  ]);
+  t.is(namespace.x, 'updated-x');
+  t.is(namespace.y, 'updated-y');
+});
+
+test('for-of loop rebind publishes through liveVar', t => {
+  // `for (X of arr) ...` rebinds the top-level live export X on each
+  // iteration. The rebind is the loop's `left` (an Identifier), not
+  // an AssignmentExpression. The ForOfStatement visitor must prepend
+  // a publish to the loop body so each iteration's rebinding
+  // propagates to the bundled live cell.
+  const { log, namespace } = initialize(
+    t,
+    `\
+export let n = 0;
+for (n of [1, 2, 3]) {
+  // body intentionally empty; the rebinding itself is the test.
+}
+`,
+  );
+  t.deepEqual(log, ['n: 0', 'n: 1', 'n: 2', 'n: 3']);
+  t.is(namespace.n, 3);
+});
+
+test('for-in loop rebind publishes through liveVar', t => {
+  // Same shape as for-of; the rebinding happens on `left` rather
+  // than as an AssignmentExpression.
+  const { log, namespace } = initialize(
+    t,
+    `\
+export let key = '';
+for (key in { a: 1, b: 2 }) {
+  // body intentionally empty.
+}
+`,
+  );
+  t.deepEqual(log, ['key: ""', 'key: "a"', 'key: "b"']);
+  t.is(namespace.key, 'b');
+});
+
+test('for-of loop with bodyless statement still publishes', t => {
+  // `for (X of arr) stmt;` (no block body). The instrumentation
+  // wraps the body into a BlockStatement so the publish statement
+  // can be prepended.
+  const { log, namespace } = initialize(
+    t,
+    `\
+export let n = 0;
+let sum = 0;
+for (n of [10, 20, 30]) sum += n;
+export const total = sum;
+`,
+  );
+  t.deepEqual(log, ['n: 0', 'n: 10', 'n: 20', 'n: 30', 'total: 60']);
+  t.is(namespace.total, 60);
+});
+
+test.failing(
+  'class reassignment publishes through liveVar (endojs/endo#2982 follow-up)',
+  t => {
+    // Regression evidence for a gap left by the endojs/endo#2982 fix.
+    // When a top-level exported class declaration is reassigned in the
+    // direct-sibling position (no intervening eagerly-called function,
+    // no later body block), the `liveSoftened` map is populated by the
+    // `ClassDeclaration` visitor that fires *after* the
+    // `AssignmentExpression` visitor, so the reassignment is left
+    // un-instrumented and the bundled `liveVar.X` updater never sees
+    // the new value. The bundle-source `let-export` integration test
+    // happens to drive the reassignment through a deferred function
+    // call, which traverses the function body after the class visitor
+    // has already populated `liveSoftened`, so it does not surface the
+    // direct-reassignment shape this case exercises.
+    const { log, namespace } = initialize(
+      t,
+      `\
+export class X {
+  static v = 'initial';
+}
+X = class { static v = 'updated'; };
+`,
+    );
+    t.deepEqual(log, ['X: undefined', 'X: undefined']);
+    t.is(namespace.X.v, 'updated');
+  },
+);
+
 test('export class and let', t => {
   const { namespace } = initialize(
     t,
