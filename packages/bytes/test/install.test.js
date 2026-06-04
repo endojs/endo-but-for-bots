@@ -38,24 +38,29 @@ test('install: symbols are registered via Symbol.for', t => {
 // the install gracefully fails and the exported function references
 // still work as conventional ponyfills.
 const installable = (() => {
-  // Heuristic: if the slot is defined on the intrinsic, the install
-  // ran (either ours or an earlier one). Under post-lockdown the slot
-  // is absent.
-  return typeof ArrayBuffer.prototype.sliceToImmutable === 'function';
+  // Heuristic: check whether one of the registered-symbol slots that
+  // ONLY the @endo/bytes spackle install would populate is populated.
+  // Cannot use `ArrayBuffer.prototype.sliceToImmutable` for this
+  // check, because the `@endo/immutable-arraybuffer/shim.js` shim
+  // (loaded by `ses`) also installs at the string key pre-lockdown,
+  // so the slot is populated under the lockdown config even though
+  // the spackle's own installs of `fromImmutable` and `freezable`
+  // would have failed.
+  return typeof Uint8Array[Symbol.for('fromImmutable')] === 'function';
 })();
 
-test('install: ArrayBuffer.prototype.sliceToImmutable install or graceful fallback', t => {
+test('install: ArrayBuffer.prototype.sliceToImmutable adopts the shim or installs', t => {
+  // The `@endo/immutable-arraybuffer/shim.js` shim (imported
+  // transitively by `ses`) installs `sliceToImmutable` on
+  // `ArrayBuffer.prototype` at the string key before lockdown runs,
+  // so the slot is present under all configurations the bytes
+  // package tests under. `installOrAdopt` finds the shim's method
+  // and adopts it as `installedSliceToImmutable`.
   const slot = /** @type {Function | undefined} */ (
     /** @type {unknown} */ (ArrayBuffer.prototype.sliceToImmutable)
   );
-  if (installable) {
-    t.is(typeof slot, 'function');
-    t.is(slot, installedSliceToImmutable);
-  } else {
-    t.is(slot, undefined);
-    // Function reference still works.
-    t.is(typeof installedSliceToImmutable, 'function');
-  }
+  t.is(typeof slot, 'function');
+  t.is(slot, installedSliceToImmutable);
 });
 
 test('install: Uint8Array[Symbol.for("fromImmutable")] install or graceful fallback', t => {
@@ -112,14 +117,16 @@ test('install: freezable constructor is installed on every TypedArray family whe
   }
 });
 
-test('install: optional transferToImmutable install when supported', t => {
+test('install: optional transferToImmutable adopts the shim or installs', t => {
+  // Same shape as sliceToImmutable: the shim installs
+  // `transferToImmutable` on `ArrayBuffer.prototype` at the string
+  // key before lockdown runs, and `installOrAdopt` adopts it.
+  // Optional because the shim's install of `transferToImmutable`
+  // depends on platform support for `structuredClone` or
+  // `ArrayBuffer.prototype.transfer`.
   const slot = /** @type {Function | undefined} */ (
     /** @type {unknown} */ (ArrayBuffer.prototype.transferToImmutable)
   );
-  if (!installable) {
-    t.is(slot, undefined);
-    return;
-  }
   if (installedTransferToImmutable === undefined) {
     t.is(slot, undefined);
   } else {
@@ -143,10 +150,9 @@ test('install: subsequent loads adopt the existing install (idempotent shape)', 
   // The install dance writes once at module load; importing the
   // module again would find the slot already populated and adopt it.
   // Verified here by re-reading the slot and matching the function
-  // reference. When `@endo/immutable-arraybuffer/shim.js` has already
-  // installed `sliceToImmutable` at the string key, `@endo/bytes`'s
-  // install adopts the shim's method; the descriptor it left behind
-  // controls the property attributes.
+  // reference. Across all configurations, the shim has installed
+  // `sliceToImmutable` at the string key before `@endo/bytes` loads,
+  // so `@endo/bytes`'s install adopts the shim's method.
   const slot1 = /** @type {Function | undefined} */ (
     /** @type {unknown} */ (ArrayBuffer.prototype.sliceToImmutable)
   );
@@ -154,10 +160,6 @@ test('install: subsequent loads adopt the existing install (idempotent shape)', 
     /** @type {unknown} */ (ArrayBuffer.prototype.sliceToImmutable)
   );
   t.is(slot1, slot2);
-  if (!installable) {
-    // Lockdown ran first; the install was a graceful no-op.
-    return;
-  }
   t.is(slot1, installedSliceToImmutable);
 });
 
