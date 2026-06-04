@@ -233,8 +233,5 @@ test('concatImmutables: pure-JS implementation concatenates immutable buffers', 
     bytesToImmutable(new Uint8Array([5, 6, 7, 8])),
   ];
   const concatenated = concatImmutables(parts);
-  t.deepEqual(
-    [...bytesFromImmutable(concatenated)],
-    [1, 2, 3, 4, 5, 6, 7, 8],
-  );
+  t.deepEqual([...bytesFromImmutable(concatenated)], [1, 2, 3, 4, 5, 6, 7, 8]);
 });
