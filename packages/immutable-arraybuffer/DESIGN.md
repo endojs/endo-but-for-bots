@@ -117,15 +117,21 @@ enforce immutability simply by never modifying it.
 
 ## Freezable TypedArray ponyfill
 
-The package also provides a companion ponyfill for *freezable
-virtual TypedArrays* at
-[`src/freezable-typedarray-pony.js`](./src/freezable-typedarray-pony.js).
+A companion ponyfill for *freezable virtual TypedArrays* lives
+inside `@endo/bytes` at
+[`packages/bytes/src/freezable-typedarray-pony.js`](../bytes/src/freezable-typedarray-pony.js).
 The motivation parallels the immutable `ArrayBuffer`: a
 `TypedArray` view onto an immutable buffer would itself be
 observably immutable, but the language does not yet permit a
 real `TypedArray` exotic object to be frozen. The ponyfill
 provides emulated views that present the proposed observable
 shape on top of an emulated immutable backing store.
+The ponyfill reaches into this package's encapsulated
+`hiddenBuffers` and `reverseHiddenBuffers` WeakMaps via a
+deliberately narrow private subpath
+(`@endo/immutable-arraybuffer/private-for-bytes.js`) so the
+ponyfill can recognize and unwrap emulated immutable buffers
+without exposing the encapsulation to any other consumer.
 
 Two callable exports:
 
@@ -281,9 +287,12 @@ guarantee.
 - Forbids direct use of the codec and TypedArray constructors
   named above (and `ArrayBuffer` used as a `NewExpression`
   callee).
-- Whitelists the spackle's own capture-at-module-init site
-  (`packages/bytes/src/spackle-install.js`) and the internal
-  freezable-typedarray-pony module by path suffix.
+- Whitelists `@endo/bytes`'s shared capture-at-module-init
+  helpers (`packages/bytes/src/install-helpers.js`), the
+  freezable-typedarray-pony module
+  (`packages/bytes/src/freezable-typedarray-pony.js`), and the
+  immutable-ArrayBuffer pony-internal capture site by path
+  suffix.
 - Provides fix-it hints mapping each forbidden identifier to its
   `@endo/bytes` equivalent.
 - Defaults to severity `warn`; downstream packages that consume
@@ -349,15 +358,14 @@ toolchain dependency.
 
 The migration is non-breaking for callers:
 
-1. Land the spackle install code in `@endo/bytes`'s
+1. Land the install code in `@endo/bytes`'s
    immutable-aware modules and in the text-codec modules. The
    exported function names and signatures do not change. The
-   freezable `TypedArray` constructor moves to
-   `@endo/bytes`'s spackle install, with
-   `makePseudoTypedArrayConstructor` as an internal seam
-   consumed by `@endo/bytes` via the
-   `@endo/immutable-arraybuffer/freezable-typedarray-pony.js`
-   subpath export.
+   freezable `TypedArray` constructor lives in `@endo/bytes` at
+   `packages/bytes/src/freezable-typedarray-pony.js`; it consumes
+   `hiddenBuffers`, `reverseHiddenBuffers`, and
+   `FERAL_GET_ARRAY_BUFFER` from the narrow private subpath
+   `@endo/immutable-arraybuffer/private-for-bytes.js`.
 2. Land the SES permits update admitting the registered symbols.
 3. Land the ESLint rule that forbids direct use of
    `TextEncoder`, `TextDecoder`, the `TypedArray` constructors,

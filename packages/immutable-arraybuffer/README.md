@@ -92,12 +92,13 @@ view[0]; // 104 ('h')
 view.set([0]); // TypeError
 ```
 
-The internal-implementation seam is at
-`@endo/immutable-arraybuffer/freezable-typedarray-pony.js`,
-where `makePseudoTypedArrayConstructor(OriginalConstructor)`
-builds the constructor that the spackle then installs. Consumers
-should not import from that path directly; the public surface is
-`@endo/bytes`'s spackle install.
+The internal-implementation seam is in `@endo/bytes` at
+`packages/bytes/src/freezable-typedarray-pony.js`, where
+`makePseudoTypedArrayConstructor(OriginalConstructor)` builds the
+constructor that the install module then publishes at the
+registered symbol. Consumers should not import from that path
+directly; the public surface is the registered symbol on each
+TypedArray constructor.
 
 ## API reference
 

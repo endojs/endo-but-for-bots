@@ -16,22 +16,21 @@ const valid = [
   // Destructuring from globalThis without member access on a forbidden
   // name doesn't trigger the member-expression visitor; the rule
   // tolerates the shape silently. Capture-by-destructuring is the
-  // spackle's own idiom, which is whitelisted by file path. Outside
+  // install-helpers idiom, which is whitelisted by file path. Outside
   // a whitelisted file, destructuring `const { TextEncoder } = globalThis;`
   // is not directly catchable by this rule's surface; the
   // accompanying `new TextEncoder()` later in the program would
   // trigger and prompt the same migration.
   { code: `const { TextEncoder, TextDecoder } = globalThis;` },
-  // Allowed file: the spackle's capture site.
+  // Allowed file: @endo/bytes's shared capture-at-module-init helpers.
   {
     code: `const { Uint8Array, TextEncoder } = globalThis; new TextEncoder();`,
-    filename: '/abs/path/to/packages/bytes/src/spackle-install.js',
+    filename: '/abs/path/to/packages/bytes/src/install-helpers.js',
   },
-  // Allowed file: freezable-typedarray-pony.
+  // Allowed file: freezable-typedarray-pony (now in @endo/bytes).
   {
     code: `new Uint8Array(8);`,
-    filename:
-      '/abs/path/to/packages/immutable-arraybuffer/src/freezable-typedarray-pony.js',
+    filename: '/abs/path/to/packages/bytes/src/freezable-typedarray-pony.js',
   },
   // Allowed file: immutable-arraybuffer pony internal (Uint8Array used in
   // transferBufferToImmutable widening).

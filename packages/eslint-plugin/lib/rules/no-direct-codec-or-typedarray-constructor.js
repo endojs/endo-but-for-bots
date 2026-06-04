@@ -2,13 +2,13 @@
 /**
  * @module Forbid direct use of `TextEncoder`, `TextDecoder`, the
  * `TypedArray` family of constructors, and `new ArrayBuffer(...)` in
- * downstream code. Direct use bypasses the `@endo/bytes` spackle's
- * realm-wide single-source-of-truth and forfeits the lockdown-time
- * guarantee that a compartment global endowment cannot redirect the
- * codec or constructor.
+ * downstream code. Direct use bypasses `@endo/bytes`'s realm-wide
+ * single-source-of-truth and forfeits the lockdown-time guarantee
+ * that a compartment global endowment cannot redirect the codec or
+ * constructor.
  *
  * The rule's shape is described in
- * `packages/immutable-arraybuffer/README.md` § Forbidding direct
+ * `packages/immutable-arraybuffer/README.md` # Forbidding direct
  * use via eslint-plugin.
  *
  * Forbidden identifiers (default list):
@@ -20,9 +20,12 @@
  *   - `ArrayBuffer` (used as a NewExpression callee)
  *
  * Whitelist:
- *   - The spackle's own capture-at-module-init site at
- *     `packages/bytes/src/spackle-install.js` (matched by path
- *     suffix). Configurable via the rule's `allowFiles` option.
+ *   - `@endo/bytes`'s shared capture-at-module-init helpers at
+ *     `packages/bytes/src/install-helpers.js`, the freezable
+ *     TypedArray ponyfill at `packages/bytes/src/freezable-typedarray-pony.js`,
+ *     and `@endo/immutable-arraybuffer`'s pony-internal capture site.
+ *     Matched by path suffix; configurable via the rule's `allowFiles`
+ *     option.
  *
  * Fix-it hints map each forbidden identifier to its `@endo/bytes`
  * equivalent.
@@ -84,17 +87,17 @@ const SUGGESTIONS = {
   BigUint64Array:
     "use the freezable constructor at `BigUint64Array[Symbol.for('freezableConstructor')]` installed by '@endo/bytes'",
   ArrayBuffer:
-    "use `bytesToImmutable(bytesFromText(''))` shaping or `bytesToImmutable` on an existing view for immutable buffers; if a writable buffer is required, the spackle's capture site is the only authorized direct construction",
+    "use `bytesToImmutable(bytesFromText(''))` shaping or `bytesToImmutable` on an existing view for immutable buffers; if a writable buffer is required, the `@endo/bytes` capture site is the only authorized direct construction",
 };
 
 const DEFAULT_ALLOW_FILES = [
-  // The spackle's own capture-at-module-init site.
-  'packages/bytes/src/spackle-install.js',
+  // The shared capture-at-module-init helpers for @endo/bytes's
+  // per-operation install modules.
+  'packages/bytes/src/install-helpers.js',
   // The freezable-TypedArray ponyfill, which is the internal
-  // implementation surface for the spackle's freezableConstructor
-  // install.
-  'packages/immutable-arraybuffer/src/freezable-typedarray-pony.js',
-  // The immutable-ArrayBuffer ponyfill internal, which the spackle
+  // implementation surface for the freezableConstructor install.
+  'packages/bytes/src/freezable-typedarray-pony.js',
+  // The immutable-ArrayBuffer ponyfill internal, which @endo/bytes
   // depends on; it captures Uint8Array/ArrayBuffer at module init.
   'packages/immutable-arraybuffer/src/immutable-arraybuffer-pony-internal.js',
 ];
@@ -121,7 +124,7 @@ module.exports = {
     type: 'suggestion',
     docs: {
       description:
-        'Forbid direct use of TextEncoder, TextDecoder, TypedArray constructors, and new ArrayBuffer(); use @endo/bytes spackle instead.',
+        'Forbid direct use of TextEncoder, TextDecoder, TypedArray constructors, and new ArrayBuffer(); use @endo/bytes installed slots instead.',
       category: 'Best Practices',
       recommended: false,
       url: 'https://github.com/endojs/endo/blob/master/packages/eslint-plugin/lib/rules/no-direct-codec-or-typedarray-constructor.js',
@@ -144,9 +147,9 @@ module.exports = {
     ],
     messages: {
       forbiddenNew:
-        'Do not call `new {{name}}(...)` directly; bypasses the @endo/bytes spackle. Suggestion: {{suggestion}}',
+        'Do not call `new {{name}}(...)` directly; bypasses @endo/bytes. Suggestion: {{suggestion}}',
       forbiddenIdentifier:
-        'Do not reference `{{name}}` directly; bypasses the @endo/bytes spackle. Suggestion: {{suggestion}}',
+        'Do not reference `{{name}}` directly; bypasses @endo/bytes. Suggestion: {{suggestion}}',
     },
   },
   /**

@@ -1,14 +1,44 @@
 /* global globalThis */
 
-import { makeInternalHeir } from './internal-heir.js';
+/**
+ * Builds a per-realm "freezable" TypedArray constructor that accepts an
+ * emulated immutable `ArrayBuffer` as its sole argument and returns a
+ * view whose mutators throw. For non-immutable arguments the
+ * constructor delegates to the original `TypedArray` constructor.
+ *
+ * This module is internal to `@endo/bytes`. It is the implementation
+ * surface that `install-freezable-typedarrays.js` calls into when it
+ * publishes one constructor per TypedArray family at
+ * `Ctor[Symbol.for('freezableConstructor')]`. The
+ * `hiddenBuffers` / `reverseHiddenBuffers` WeakMaps and the
+ * `FERAL_GET_ARRAY_BUFFER` getter are imported from
+ * `@endo/immutable-arraybuffer/private-for-bytes.js`, a deliberately
+ * narrow subpath that exists solely to let this file participate in
+ * the same encapsulation that the immutable-`ArrayBuffer` ponyfill
+ * relies on. No other package may import that subpath.
+ */
+
 import {
+  makeInternalHeir,
   hiddenBuffers,
   reverseHiddenBuffers,
   FERAL_GET_ARRAY_BUFFER,
-} from './immutable-arraybuffer-pony-internal.js';
+} from '@endo/immutable-arraybuffer/private-for-bytes.js';
 
 /**
- * @import {TypedArray} from './immutable-arraybuffer-pony-internal.js';
+ * @typedef {Int8Array
+ *  | Uint8Array
+ *  | Uint8ClampedArray
+ *  | Int16Array
+ *  | Uint16Array
+ *  | Float16Array
+ *  | Int32Array
+ *  | Uint32Array
+ *  | Float32Array
+ *  | Float64Array
+ *  | BigInt64Array
+ *  | BigUint64Array
+ * } TypedArray
  */
 
 const {
@@ -145,9 +175,9 @@ const freezableTypedArrayInternalPrototype = makeInternalHeir(
 );
 
 /**
- * Could be used by the shim to replace all the concrete TypedArray constructors
- * with constructors that also accept an emulated immutable ArrayBuffer
- * argument.
+ * Could be used by the install to replace all the concrete TypedArray
+ * constructors with constructors that also accept an emulated
+ * immutable ArrayBuffer argument.
  *
  * @param {any} OriginalConstructor
  */

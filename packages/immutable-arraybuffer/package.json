@@ -28,7 +28,7 @@
       "types": "./shim.types.d.ts",
       "default": "./shim.js"
     },
-    "./freezable-typedarray-pony.js": "./src/freezable-typedarray-pony.js",
+    "./private-for-bytes.js": "./src/private-for-bytes.js",
     "./package.json": "./package.json"
   },
   "scripts": {

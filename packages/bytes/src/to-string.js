@@ -1,7 +1,10 @@
 // @ts-check
 
 import harden from '@endo/harden';
-import { toUtf8StringFunction } from './spackle-install.js';
+import {
+  installedToTextValue,
+  installedToStrictTextValue,
+} from './install-to-string.js';
 
 /**
  * @typedef {object} BytesToTextOptions
@@ -12,22 +15,30 @@ import { toUtf8StringFunction } from './spackle-install.js';
 /**
  * Decodes UTF-8 bytes to a string.
  *
- * Calls through to the realm's `Uint8Array[Symbol.for('toUtf8String')]`
- * slot installed by the `@endo/bytes` spackle (see
- * `./spackle-install.js`). The spackle captures the realm's original
- * `TextDecoder` once at module load (both lenient and `fatal: true`
- * modes), so a compartment global endowment that later replaces
- * `TextDecoder` on `globalThis` does not redirect the decode
+ * Calls through to one of two realm-wide installed slots on
+ * `Uint8Array`:
+ *
+ * - `Uint8Array[Symbol.for('toText')]`: lenient decoder; substitutes
+ *   the Unicode replacement character (U+FFFD) for malformed UTF-8.
+ * - `Uint8Array[Symbol.for('toStrictText')]`: fatal decoder; throws on
+ *   malformed UTF-8.
+ *
+ * Both slots are installed by `@endo/bytes` (see `./install-to-string.js`).
+ * The install captures the realm's original `TextDecoder` instances
+ * once at module load, so a compartment global endowment that later
+ * replaces `TextDecoder` on `globalThis` does not redirect the decode
  * operation.
  *
- * Pass `{ fatal: true }` for strict UTF-8 decoding that throws on
- * invalid input. The default lenient mode substitutes the Unicode
- * replacement character (U+FFFD) for malformed sequences.
+ * Pass `{ fatal: true }` for strict UTF-8 decoding.
  *
  * @param {Uint8Array} view
  * @param {BytesToTextOptions} [options]
  * @returns {string}
  */
-export const bytesToText = (view, options = undefined) =>
-  toUtf8StringFunction(view, options);
+export const bytesToText = (view, options = undefined) => {
+  if (options !== undefined && options.fatal) {
+    return installedToStrictTextValue(view);
+  }
+  return installedToTextValue(view);
+};
 harden(bytesToText);

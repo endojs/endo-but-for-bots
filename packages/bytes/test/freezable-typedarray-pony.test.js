@@ -1,5 +1,5 @@
 import test from 'ava';
-import { sliceBufferToImmutable } from '../src/immutable-arraybuffer-pony-internal.js';
+import { sliceBufferToImmutable } from '@endo/immutable-arraybuffer';
 import {
   virtualTypedArrayBufferGetter,
   makePseudoTypedArrayConstructor,

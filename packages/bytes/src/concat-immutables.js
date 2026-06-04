@@ -1,15 +1,15 @@
 // @ts-check
 
 import harden from '@endo/harden';
-import { concatImmutablesFunction } from './spackle-install.js';
+import { installedConcatImmutables } from './install-concat-immutables.js';
 
 /**
  * Concatenates a list of immutable `ArrayBuffer` values into a single
  * hardened immutable `ArrayBuffer`.
  *
  * Calls through to the realm's `ArrayBuffer[Symbol.for('concatImmutables')]`
- * slot installed by the `@endo/bytes` spackle (see
- * `./spackle-install.js`). Equivalent in behavior to
+ * slot installed by `@endo/bytes` (see `./install-concat-immutables.js`).
+ * Equivalent in behavior to
  * `bytesToImmutable(concatBytes(buffers.map(bytesFromImmutable)))`,
  * provided as a single-call helper because the composition is common
  * when assembling protocol records from immutable byte fragments.
@@ -18,5 +18,5 @@ import { concatImmutablesFunction } from './spackle-install.js';
  * @returns {ArrayBuffer}
  */
 export const concatImmutables = buffers =>
-  harden(/** @type {ArrayBuffer} */ (concatImmutablesFunction(buffers)));
+  harden(/** @type {ArrayBuffer} */ (installedConcatImmutables(buffers)));
 harden(concatImmutables);
