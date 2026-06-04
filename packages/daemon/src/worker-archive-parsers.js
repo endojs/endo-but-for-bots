@@ -35,6 +35,8 @@
 
 import { evadeCensor } from '@endo/evasive-transform';
 import { defaultParserForLanguage as allParsers } from '@endo/compartment-mapper/import-archive-all-parsers.js';
+import { bytesFromText } from '@endo/bytes/from-string.js';
+import { bytesToText } from '@endo/bytes/to-string.js';
 
 /**
  * @import {
@@ -45,9 +47,6 @@ import { defaultParserForLanguage as allParsers } from '@endo/compartment-mapper
  *   ParserImplementation,
  * } from '@endo/compartment-mapper'
  */
-
-const textDecoder = new TextDecoder();
-const textEncoder = new TextEncoder();
 
 /**
  * Wrap a synchronous source-parser implementation so that module bytes
@@ -72,12 +71,12 @@ const wrapWithEvadeCensor = (inner, sourceType) => {
     packageLocation,
     options = {},
   ) => {
-    const source = textDecoder.decode(bytes);
+    const source = bytesToText(bytes);
     const { code: transformedSource } = await evadeCensor(source, {
       sourceType,
       sourceUrl: moduleLocation,
     });
-    const transformedBytes = textEncoder.encode(transformedSource);
+    const transformedBytes = bytesFromText(transformedSource);
     return /** @type {ParseResult} */ (
       /** @type {ParseFn} */ (inner.parse)(
         transformedBytes,
