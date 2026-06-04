@@ -1428,8 +1428,6 @@ export const permitted = {
     fromString: false,
     // See https://github.com/Moddable-OpenSource/moddable/issues/523
     fromBigInt: false,
-    // @endo/bytes rendezvous on ArrayBuffer.
-    'RegisteredSymbol(concatImmutables)': fn,
   },
 
   '%ArrayBufferPrototype%': {

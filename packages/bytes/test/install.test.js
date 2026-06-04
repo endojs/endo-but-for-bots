@@ -11,10 +11,6 @@ import {
   symTransferToImmutable,
 } from '../src/install-transfer-to-immutable.js';
 import {
-  installedConcatImmutables,
-  symConcatImmutables,
-} from '../src/install-concat-immutables.js';
-import {
   installedFromImmutableValue,
   symFromImmutable,
 } from '../src/install-from-immutable.js';
@@ -34,7 +30,6 @@ import { concatImmutables } from '../src/concat-immutables.js';
 const symbols = /** @type {Record<string, symbol>} */ ({
   sliceToImmutable: symSliceToImmutable,
   transferToImmutable: symTransferToImmutable,
-  concatImmutables: symConcatImmutables,
   fromImmutable: symFromImmutable,
   freezable: symFreezable,
 });
@@ -42,7 +37,6 @@ const symbols = /** @type {Record<string, symbol>} */ ({
 test('install: symbols are registered via Symbol.for', t => {
   t.is(symbols.sliceToImmutable, Symbol.for('sliceToImmutable'));
   t.is(symbols.transferToImmutable, Symbol.for('transferToImmutable'));
-  t.is(symbols.concatImmutables, Symbol.for('concatImmutables'));
   t.is(symbols.fromImmutable, Symbol.for('fromImmutable'));
   t.is(symbols.freezable, Symbol.for('freezable'));
 });
@@ -71,17 +65,6 @@ test('install: ArrayBuffer.prototype[Symbol.for("sliceToImmutable")] install or 
     t.is(slot, undefined);
     // Function reference still works.
     t.is(typeof installedSliceToImmutable, 'function');
-  }
-});
-
-test('install: ArrayBuffer[Symbol.for("concatImmutables")] install or graceful fallback', t => {
-  const slot = ArrayBuffer[Symbol.for('concatImmutables')];
-  if (installable) {
-    t.is(typeof slot, 'function');
-    t.is(slot, installedConcatImmutables);
-  } else {
-    t.is(slot, undefined);
-    t.is(typeof installedConcatImmutables, 'function');
   }
 });
 
@@ -255,20 +238,15 @@ test('install: freezable constructor falls through to OriginalConstructor for no
   t.true(ta instanceof Uint8Array || ta.constructor === FreezableUint8Array);
 });
 
-test('install: concatImmutables via installed slot agrees with direct call', t => {
+test('concatImmutables: pure-JS implementation concatenates immutable buffers', t => {
   const parts = [
     bytesToImmutable(new Uint8Array([1, 2, 3])),
     bytesToImmutable(new Uint8Array([4])),
     bytesToImmutable(new Uint8Array([5, 6, 7, 8])),
   ];
-  const viaInstall = concatImmutables(parts);
-  if (installable) {
-    const directSlot = ArrayBuffer[Symbol.for('concatImmutables')];
-    const viaDirectSlot = directSlot(parts);
-    t.deepEqual(
-      [...bytesFromImmutable(viaInstall)],
-      [...bytesFromImmutable(viaDirectSlot)],
-    );
-  }
-  t.deepEqual([...bytesFromImmutable(viaInstall)], [1, 2, 3, 4, 5, 6, 7, 8]);
+  const concatenated = concatImmutables(parts);
+  t.deepEqual(
+    [...bytesFromImmutable(concatenated)],
+    [1, 2, 3, 4, 5, 6, 7, 8],
+  );
 });
