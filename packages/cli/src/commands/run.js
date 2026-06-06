@@ -9,6 +9,7 @@ import { E, Far } from '@endo/far';
 import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
 import { makeArchive as makeCompartmentArchive } from '@endo/compartment-mapper';
+import { defaultModuleTransforms } from '@endo/compartment-mapper/archive-parsers.js';
 import { makeReadPowers } from '@endo/compartment-mapper/node-powers.js';
 import { defaultParserForLanguage as sourceParserForLanguage } from '@endo/compartment-mapper/import-parsers.js';
 import { makeRefReader } from '@endo/daemon';
@@ -147,7 +148,10 @@ export const run = async ({
         const archiveBytes = await makeCompartmentArchive(
           readPowers,
           moduleLocation,
-          { parserForLanguage: sourceParserForLanguage },
+          {
+            moduleTransforms: defaultModuleTransforms,
+            parserForLanguage: sourceParserForLanguage,
+          },
         );
         await runArchiveBytes(archiveBytes, powersP, args);
       }

@@ -60,6 +60,7 @@
   "dependencies": {
     "@endo/cjs-module-analyzer": "workspace:^",
     "@endo/errors": "workspace:^",
+    "@endo/evasive-transform": "workspace:^",
     "@endo/harden": "workspace:^",
     "@endo/hex": "workspace:^",
     "@endo/module-source": "workspace:^",
@@ -70,7 +71,6 @@
   },
   "devDependencies": {
     "@endo/env-options": "workspace:^",
-    "@endo/evasive-transform": "workspace:^",
     "@endo/eventual-send": "workspace:^",
     "@endo/init": "workspace:^",
     "@endo/ses-ava": "workspace:^",

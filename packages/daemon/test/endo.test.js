@@ -18,6 +18,7 @@ import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
 import { makePromiseKit } from '@endo/promise-kit';
 import { makeArchive as makeCompartmentArchive } from '@endo/compartment-mapper';
+import { defaultModuleTransforms } from '@endo/compartment-mapper/archive-parsers.js';
 import { makeReadPowers } from '@endo/compartment-mapper/node-powers.js';
 import { defaultParserForLanguage as sourceParserForLanguage } from '@endo/compartment-mapper/import-parsers.js';
 import { ZipReader } from '@endo/zip/reader.js';
@@ -340,6 +341,7 @@ const doMakeArchive = async (host, packageDir, callback) => {
     archiveReadPowers,
     moduleLocation,
     {
+      moduleTransforms: defaultModuleTransforms,
       // Source parsers preserve module sources rather than precompiling
       // them, which is the contract makeArchive enforces on the worker.
       parserForLanguage: sourceParserForLanguage,
@@ -375,7 +377,10 @@ const doMakeFromTreeViaMount = async (host, config, packageDir, callback) => {
   const archiveBytes = await makeCompartmentArchive(
     archiveReadPowers,
     moduleLocation,
-    { parserForLanguage: sourceParserForLanguage },
+    {
+      moduleTransforms: defaultModuleTransforms,
+      parserForLanguage: sourceParserForLanguage,
+    },
   );
 
   // Unzip the archive into a fresh directory.
@@ -3287,6 +3292,26 @@ test('makeArchive runs a source-only ZIP and passes env to caplet', async t => {
   t.false(await E(envEcho).hasEnvVar('NOT_SET'));
 });
 
+test('makeArchive supports transitive JSDoc import syntax in dependencies', async t => {
+  const { host } = await prepareHost(t);
+  await E(host).provideWorker(['worker']);
+
+  const archivePath = path.join(
+    dirname,
+    'test',
+    'fixtures',
+    'archive-exo-service',
+  );
+  const exoService = await doMakeArchive(host, archivePath, archiveName =>
+    E(host).makeArchive('worker', archiveName, {
+      powersName: '@none',
+      resultName: 'exo-service',
+    }),
+  );
+
+  t.is(await E(exoService).ping(), 'pong');
+});
+
 test('makeArchive with empty env object', async t => {
   const { host } = await prepareHost(t);
   await E(host).provideWorker(['worker']);
@@ -5302,7 +5327,10 @@ test('Phase 8: stageTree materialises a ReadableTree into a scratch mount', asyn
   const archiveBytes = await makeCompartmentArchive(
     archiveReadPowers,
     moduleLocation,
-    { parserForLanguage: sourceParserForLanguage },
+    {
+      moduleTransforms: defaultModuleTransforms,
+      parserForLanguage: sourceParserForLanguage,
+    },
   );
 
   // Unpack archive into a plain directory, then provide as a mount.
