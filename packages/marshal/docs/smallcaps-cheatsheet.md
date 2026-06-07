@@ -10,7 +10,7 @@ An example-based summary of the Smallcaps encoding of the OCapN [Abstract Syntax
 | bigint           | Integer       | `7n`<br>`-7n`         | `"+7"`<br>`"-7"`     |
 | number           | Float64       | `Infinity`<br>`-Infinity`<br>`NaN`<br>`-0`<br>`7.1` | `"#Infinity"`<br>`"#-Infinity"`<br>`"#NaN"`<br>`"#-0"` // unimplemented<br>`7.1` |
 | string           | String        | `'#foo'`<br>`'foo'`   | `"!#foo"` // special strings<br>`"foo"` // other strings |
-| byteArray        | ByteArray     | `buf.toImmutable()`   | `"*deadbeef"` // after `*`, hex encoding |
+| byteArray        | ByteArray     | `buf.toImmutable()`   | `"*b0b5cafe"` // after `*`, hex encoding |
 | passable symbols | Symbol        | `passableSymbolForName('foo')` | `"%foo"` // in transition |
 | copyArray        | List          | `[a,b]`               | `[<a>,<b>]`          |
 | copyRecord       | Struct        | `{foo:a,'#foo':b}`    | `{"!#foo":<b>,"foo":<a>}` // keys sorted  |
