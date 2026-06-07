@@ -1,12 +1,12 @@
 import test from '@endo/ses-ava/prepare-endo.js';
 
+import { bytesFromText } from '@endo/bytes/from-string.js';
+
 import {
   makeMemoryCasStore,
   sha256Hex,
   makeRetentionLinkSet,
 } from '../src/store.js';
-
-const encoder = new TextEncoder();
 
 test('sha256Hex computes the SHA-256 hex digest of bytes', async t => {
   // Known vector: SHA-256 of empty bytes.
@@ -16,13 +16,13 @@ test('sha256Hex computes the SHA-256 hex digest of bytes', async t => {
     'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
   );
   // Known vector: SHA-256 of "abc".
-  const abc = await sha256Hex(encoder.encode('abc'));
+  const abc = await sha256Hex(bytesFromText('abc'));
   t.is(abc, 'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad');
 });
 
 test('memory CAS round-trips bytes by content hash', async t => {
   const cas = makeMemoryCasStore();
-  const bytes = encoder.encode('package contents');
+  const bytes = bytesFromText('package contents');
   const hash = await cas.write(bytes);
   t.true(await cas.has(hash));
   const read = await cas.read(hash);
@@ -31,9 +31,9 @@ test('memory CAS round-trips bytes by content hash', async t => {
 
 test('memory CAS is content-addressed: identical writes return identical hashes', async t => {
   const cas = makeMemoryCasStore();
-  const bytes = encoder.encode('idempotent');
+  const bytes = bytesFromText('idempotent');
   const h1 = await cas.write(bytes);
-  const h2 = await cas.write(encoder.encode('idempotent'));
+  const h2 = await cas.write(bytesFromText('idempotent'));
   t.is(h1, h2);
   const list = await cas.list();
   // Only one entry despite two writes.
@@ -50,7 +50,7 @@ test('memory CAS read on unknown hash throws', async t => {
 
 test('memory CAS evict drops the entry and reports true', async t => {
   const cas = makeMemoryCasStore();
-  const hash = await cas.write(encoder.encode('evictable'));
+  const hash = await cas.write(bytesFromText('evictable'));
   const evicted = await cas.evict(hash);
   t.true(evicted);
   t.false(await cas.has(hash));
@@ -67,7 +67,7 @@ test('memory CAS evict respects retention pins (hard retention link)', async t =
   // retention: "anything reachable from a captured formula graph
   // holds a hard retention link that prevents eviction".
   const cas = makeMemoryCasStore();
-  const hash = await cas.write(encoder.encode('pinned-by-formula-graph'));
+  const hash = await cas.write(bytesFromText('pinned-by-formula-graph'));
   cas.retentionLinks.pin(hash);
   const evicted = await cas.evict(hash);
   t.false(evicted, 'evict must return false while pinned');
@@ -95,7 +95,7 @@ test('makeMemoryCasStore accepts a caller-supplied retention link set', async t 
   // implementation rather than always allocating its own.
   const links = makeRetentionLinkSet();
   const cas = makeMemoryCasStore({ retentionLinks: links });
-  const hash = await cas.write(encoder.encode('externally-pinned'));
+  const hash = await cas.write(bytesFromText('externally-pinned'));
   // Pin via the externally-held links handle, not via cas.retentionLinks.
   links.pin(hash);
   t.false(await cas.evict(hash));
