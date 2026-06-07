@@ -21,9 +21,16 @@ carry its own scope-naming.
   callers can branch on the failure class without inspecting message
   text.
 - An npm-scoped reference backend (`makeNpmReferenceRegistry`) that wires
-  the capability boundary together. It delegates the actual MVS resolution
-  to an injected `resolveHook` so that layer 2 (`designs/mvs-resolver.md`)
-  can plug in the algorithm without touching the capability surface.
+  the capability boundary together. It accepts a caller-supplied
+  `PackageCacheTable` (sortable by dewey-decimal version) and delegates
+  the actual MVS resolution to an injected `resolveHook` so that layer 2
+  (`designs/mvs-resolver.md`) can plug in the algorithm without touching
+  the capability surface.
+- An in-memory reference `PackageCacheTable`
+  (`makeMemoryPackageCacheTable`) suitable for tests and small in-process
+  consumers. A SQLite-backed implementation projects the same shape over
+  a `(name, major, minor, patch, integrity, treeRef)` relational table
+  sorted by the three integer columns; it is tracked separately.
 
 The CAS-backed store interface (`CasStore` shape, `CasInterface` runtime
 guard, `makeMemoryCasStore`, `sha256HexWebCrypto`, `makeRetentionLinkSet`)
@@ -42,6 +49,8 @@ via the reference backend's `cas` option.
   design's migration policy is named but the wiring is a daemon-side
   change deferred to a follow-up (see the PR body for the open
   question).
+- A SQLite-backed `PackageCacheTable` implementation. The interface is
+  in place; a SQLite projection lands in a follow-up.
 
 ## Status
 

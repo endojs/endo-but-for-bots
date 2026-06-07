@@ -11,4 +11,7 @@ export {
 
 export { EndoRegistryInterface } from './src/interfaces.js';
 
-export { makeNpmReferenceRegistry } from './src/reference-backend.js';
+export {
+  makeNpmReferenceRegistry,
+  makeMemoryPackageCacheTable,
+} from './src/reference-backend.js';

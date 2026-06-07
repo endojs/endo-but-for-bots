@@ -140,6 +140,59 @@ export interface EndoRegistry {
 }
 
 /**
+ * A single row in the npm-registry metadata cache.
+ *
+ * The reference backend's caller supplies a table-shaped object keyed
+ * by package name; the row holds the cached resolution entry sorted by
+ * version (dewey-decimal: major, minor, patch as separate columns
+ * when the table is backed by SQLite). See
+ * `designs/registry-capability.md` § Caching and retention.
+ */
+export interface PackageCacheRow {
+  name: string;
+  version: string;
+  /** Parsed dewey-decimal version columns. */
+  major: number;
+  minor: number;
+  patch: number;
+  /** Readable-tree capability for the cached package contents. */
+  treeRef: EndoReadableTree;
+  /** Upstream registry's `dist.integrity`. */
+  integrity: string;
+}
+
+/**
+ * Caller-supplied table interface for the npm-registry metadata
+ * cache the reference backend reads and writes.
+ *
+ * The interface is intentionally minimal: `get` / `put` / `list` over
+ * a content-addressed-by-name key. A SQLite-backed implementation
+ * projects the same shape over a `(name, major, minor, patch,
+ * integrity, treeRef)` relational table; the in-memory analogue in
+ * `./src/reference-backend.js` projects it over a `Map`.
+ *
+ * Sorting by version is the table's responsibility: `list(name)`
+ * returns rows in dewey-decimal order (ascending by major, then
+ * minor, then patch). A SQLite-backed implementation orders the
+ * `SELECT` by the three integer columns; the in-memory implementation
+ * sorts on each list call.
+ */
+export interface PackageCacheTable {
+  /**
+   * Return all cached rows for `name`, ordered ascending by
+   * (major, minor, patch).
+   */
+  list(name: string): Promise<readonly PackageCacheRow[]>;
+  /**
+   * Return the cached row for the exact `(name, version)` pair, or
+   * undefined if not cached.
+   */
+  get(name: string, version: string): Promise<PackageCacheRow | undefined>;
+  /** Insert or replace a row. */
+  put(row: PackageCacheRow): Promise<void>;
+}
+
+/**
  * Hook signature for layer 2's MVS resolution algorithm.
  *
  * Layer 1's reference backend invokes the hook with the entry
@@ -160,12 +213,15 @@ export type ResolveHook = (
 /**
  * Context the reference backend hands to a `ResolveHook`.
  *
- * Carries the CAS store and the retention-links hook so layer 2 does
- * not have to re-derive the connection to layer 1's CAS plumbing.
+ * Carries the CAS store, the retention-links hook, and the package
+ * cache table so layer 2 does not have to re-derive the connection
+ * to layer 1's plumbing.
  */
 export interface ResolveHookContext {
   cas: import('@endo/mem-cas').CasStore;
   retentionLinks: import('@endo/mem-cas').RetentionLinks;
+  /** Caller-supplied npm-registry metadata cache table. */
+  packages: PackageCacheTable;
 }
 
 /**
