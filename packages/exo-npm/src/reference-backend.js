@@ -20,7 +20,8 @@
  * delegates to the table (re-resolving through the hook on miss),
  * and `resolve` returns the structure the snapshot mapper consumes.
  *
- * @import { EndoRegistry, RegistryResolution, ResolveOptions, ResolveHook, RetentionLinks, EndoReadableTree, CasStore } from '../types.js';
+ * @import { EndoRegistry, RegistryResolution, ResolveOptions, ResolveHook, EndoReadableTree } from '../types.js';
+ * @import { CasStore, RetentionLinks } from '@endo/mem-cas';
  */
 
 import { makeExo } from '@endo/exo';

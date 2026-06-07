@@ -1,17 +1,18 @@
 // @ts-check
 
 /**
- * Method-guard shapes for the EndoRegistry capability and the CAS
- * store interface.
+ * Method-guard shape for the EndoRegistry capability.
  *
- * These guards are what cross the worker boundary, mirroring the
+ * This guard is what crosses the worker boundary, mirroring the
  * `EndoRegistry` interface in `designs/registry-capability.md` §
- * Capability shape and the CAS-backed store in § Caching and
- * retention.
+ * Capability shape.
  *
- * The runtime exo (built by `makeJsReferenceRegistry`) uses
+ * The runtime exo (built by `makeNpmReferenceRegistry`) uses
  * `EndoRegistryInterface`; a future Rust-backed wrapper presents the
  * same guard so callers cannot tell which backend resolved a request.
+ *
+ * The CAS interface guard (`CasInterface`) lives in `@endo/mem-cas`;
+ * see that package's `./src/interfaces.js`.
  */
 
 import { M } from '@endo/patterns';
@@ -19,7 +20,6 @@ import { M } from '@endo/patterns';
 // Shapes shared between guards. The narrow value shapes (resolution
 // records, tree refs, etc.) are documented in `types.d.ts`; the
 // runtime guards check argument call shapes only.
-const HashShape = M.string();
 const NameShape = M.string();
 const VersionShape = M.string();
 
@@ -69,17 +69,4 @@ export const EndoRegistryInterface = M.interface('EndoRegistry', {
   lookup: M.call(NameShape, VersionShape).returns(M.promise()),
   list: M.call().optional(NameShape).returns(M.promise()),
   help: M.call().returns(M.string()),
-});
-
-/**
- * The CAS store interface the registry sits in front of.
- *
- * @see designs/registry-capability.md § Caching and retention
- */
-export const CasStoreInterface = M.interface('CasStore', {
-  has: M.call(HashShape).returns(M.promise()),
-  read: M.call(HashShape).returns(M.promise()),
-  write: M.call(M.any()).returns(M.promise()),
-  evict: M.call(HashShape).returns(M.promise()),
-  list: M.call().returns(M.promise()),
 });

@@ -3,24 +3,24 @@
 /**
  * In-memory CAS store helper.
  *
- * The CAS itself is the underlying eviction surface for registry
- * cache growth per `designs/registry-capability.md` § Bounded growth;
- * the registry sits on top of the CAS via this interface. This
- * module's `makeMemoryCasStore` is the reference implementation
- * suitable for tests. Persistent storage (the daemon-side `store-sha256`
- * tree the `daemon-persistence-powers` module manages) implements the
- * same surface.
+ * The CAS is the underlying eviction surface for content-addressed
+ * cache growth; consumers sit on top of the CAS via the `CasStore`
+ * interface. This module's `makeMemoryCasStore` is the reference
+ * implementation suitable for tests. Persistent storage (the
+ * daemon-side `store-sha256` tree the `daemon-persistence-powers`
+ * module manages) implements the same surface; a future
+ * `@endo/git-cas` implements it on top of git's object store.
  *
- * Retention links are passed in explicitly so the formula graph's
- * pin lifecycle stays the caller's concern; this keeps layer 1
- * agnostic about how layer 3 (snapshot-mapper) wires its captured
- * formulas into the CAS pinning surface.
+ * Retention links are passed in explicitly so the caller's
+ * dependency-tracker (typically a formula graph) keeps the pin
+ * lifecycle as its concern; this keeps the CAS package agnostic about
+ * how its consumers wire pinning.
  *
  * SHA-256 itself is also passed in explicitly: this module does not
  * bind to a platform-specific crypto primitive. Callers wire in a
- * `sha256` power from a companion module (e.g. `sha256HexWebCrypto`
- * from `./store-web-powers.js`), mirroring the daemon's
- * `daemon-node-powers.js` vs `daemon-go-powers.js` split.
+ * `sha256` power from a companion module (for example
+ * `sha256HexWebCrypto` from `./store-web-powers.js`), mirroring the
+ * daemon's `daemon-node-powers.js` vs `daemon-go-powers.js` split.
  *
  * @import { CasStore, RetentionLinks, Sha256Hex } from '../types.js';
  */
@@ -55,11 +55,10 @@ harden(makeRetentionLinkSet);
  * Construct an in-memory CAS store.
  *
  * The store honors retention links: an `evict(hash)` call is a no-op
- * (returning false) when the hash is pinned, mirroring the daemon-
- * side eviction pass's discipline that "anything reachable from a
- * captured formula holds a hard retention link that prevents
- * eviction" per `designs/registry-capability.md` § Caching and
- * retention.
+ * (returning false) when the hash is pinned, mirroring the
+ * daemon-side eviction pass's discipline that anything reachable from
+ * a captured formula holds a hard retention link that prevents
+ * eviction.
  *
  * The `sha256` power is required. Callers in a Web Crypto
  * environment can import `sha256HexWebCrypto` from

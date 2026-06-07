@@ -9,10 +9,6 @@ export {
   registryErrorName,
 } from './src/errors.js';
 
-export { EndoRegistryInterface, CasStoreInterface } from './src/interfaces.js';
-
-export { makeMemoryCasStore, makeRetentionLinkSet } from './src/store.js';
-
-export { sha256HexWebCrypto } from './src/store-web-powers.js';
+export { EndoRegistryInterface } from './src/interfaces.js';
 
 export { makeNpmReferenceRegistry } from './src/reference-backend.js';

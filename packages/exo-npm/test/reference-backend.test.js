@@ -2,9 +2,10 @@ import test from '@endo/ses-ava/prepare-endo.js';
 
 import { Far } from '@endo/far';
 
+import { makeMemoryCasStore } from '@endo/mem-cas/store.js';
+import { sha256HexWebCrypto } from '@endo/mem-cas/store-web-powers.js';
+
 import { makeNpmReferenceRegistry } from '../src/reference-backend.js';
-import { makeMemoryCasStore } from '../src/store.js';
-import { sha256HexWebCrypto } from '../src/store-web-powers.js';
 import { registryErrorName } from '../src/errors.js';
 
 /**

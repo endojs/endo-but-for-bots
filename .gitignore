@@ -117,6 +117,7 @@ api-docs
 !packages/exo-npm/types.d.ts
 !packages/far/src/exports.d.ts
 !packages/lp32/types.d.ts
+!packages/mem-cas/types.d.ts
 !packages/pass-style/src/types.d.ts
 !packages/patterns/types-index.d.ts
 !packages/platform/src/fs/search-types-index.d.ts

@@ -1,22 +1,21 @@
 {
-  "name": "@endo/exo-npm",
+  "name": "@endo/mem-cas",
   "version": "0.1.0",
   "private": true,
-  "description": "EndoRegistry exo capability shape and npm-scoped reference backend scaffolding (layer 1 of the daemon-worker importLocation stack)",
+  "description": "In-memory Content-Address Store (CAS) reference implementation and the common CAS interface other backends (git-cas, the daemon's persistent store) implement",
   "keywords": [
     "endo",
-    "exo",
-    "registry",
-    "npm",
-    "cas"
+    "cas",
+    "content-addressed",
+    "store"
   ],
   "author": "Endo contributors",
   "license": "Apache-2.0",
-  "homepage": "https://github.com/endojs/endo/tree/master/packages/exo-npm#readme",
+  "homepage": "https://github.com/endojs/endo/tree/master/packages/mem-cas#readme",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/endojs/endo.git",
-    "directory": "packages/exo-npm"
+    "directory": "packages/mem-cas"
   },
   "bugs": {
     "url": "https://github.com/endojs/endo/issues"
@@ -30,9 +29,9 @@
       "types": "./types.d.ts",
       "default": "./index.js"
     },
-    "./errors.js": "./src/errors.js",
     "./interfaces.js": "./src/interfaces.js",
-    "./reference-backend.js": "./src/reference-backend.js",
+    "./store.js": "./src/store.js",
+    "./store-web-powers.js": "./src/store-web-powers.js",
     "./package.json": "./package.json"
   },
   "scripts": {
@@ -49,9 +48,6 @@
   },
   "dependencies": {
     "@endo/errors": "workspace:^",
-    "@endo/exo": "workspace:^",
-    "@endo/far": "workspace:^",
-    "@endo/mem-cas": "workspace:^",
     "@endo/patterns": "workspace:^"
   },
   "devDependencies": {

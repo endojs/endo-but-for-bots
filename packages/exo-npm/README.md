@@ -20,21 +20,16 @@ carry its own scope-naming.
   `RegistryOfflineError`) tagged via `@endo/errors`'s `errorName` so
   callers can branch on the failure class without inspecting message
   text.
-- A CAS-backed store interface (`makeMemoryCasStore`) with a Map-based
-  reference implementation suitable for tests; persistent storage is
-  deferred to a follow-up.
-  The store accepts a caller-supplied `sha256` power so the layer-1
-  module does not bind to a particular platform; a Web Crypto
-  implementation (`sha256HexWebCrypto`) ships alongside in
-  `./store-web-powers.js` for browser, Node 19+, and SES-realm use,
-  mirroring the daemon's `daemon-node-powers.js` vs `daemon-go-powers.js`
-  split.
 - An npm-scoped reference backend (`makeNpmReferenceRegistry`) that wires
   the capability boundary together. It delegates the actual MVS resolution
   to an injected `resolveHook` so that layer 2 (`designs/mvs-resolver.md`)
   can plug in the algorithm without touching the capability surface.
-- A retention-link hook (`retentionLinks`) so the formula graph (layer 3,
-  `designs/snapshot-mapper.md`) can pin entries.
+
+The CAS-backed store interface (`CasStore` shape, `CasInterface` runtime
+guard, `makeMemoryCasStore`, `sha256HexWebCrypto`, `makeRetentionLinkSet`)
+lives in [`@endo/mem-cas`](../mem-cas/README.md).
+This package depends on `@endo/mem-cas`; consumers wire the two together
+via the reference backend's `cas` option.
 
 ## What this package does **not** provide
 

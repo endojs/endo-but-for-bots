@@ -10,13 +10,9 @@
   `RegistryMissingPackageError`, `RegistryNetworkError`,
   `RegistryOfflineError`) per `designs/registry-capability.md`'s failure
   surface.
-- Add CAS-backed store interface and Map-based reference implementation
-  (`makeMemoryCasStore`).
-  The store takes a caller-supplied `sha256` power; a Web Crypto
-  implementation (`sha256HexWebCrypto`) ships alongside in
-  `./store-web-powers.js` so the layer-1 module stays portable across
-  XS, browsers, and Node.
 - Add npm-scoped reference backend (`makeNpmReferenceRegistry`) with an
   injected `resolveHook` for layer 2 (MVS resolver) to plug in.
-- Add retention-link hook typedefs for layer 3 (snapshot mapper) to
-  pin CAS entries from captured formulas.
+- CAS-backed store moved to a separate package, `@endo/mem-cas`, so the
+  common CAS interface can grow into a family of backends
+  (`@endo/mem-cas`, a future `@endo/git-cas`, the daemon's persistent
+  `store-sha256` tree).

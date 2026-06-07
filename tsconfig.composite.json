@@ -168,6 +168,9 @@
       "path": "packages/marshal/tsconfig.composite.json"
     },
     {
+      "path": "packages/mem-cas/tsconfig.composite.json"
+    },
+    {
       "path": "packages/memoize/tsconfig.composite.json"
     },
     {

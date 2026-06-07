@@ -4,8 +4,13 @@
 // `designs/registry-capability.md` § Capability shape.
 //
 // This file is the source of truth for cross-package consumers; the
-// runtime module guards (in `src/interfaces.js`) and the JS reference
-// backend (in `src/reference-backend.js`) implement the same shape.
+// runtime module guards (in `src/interfaces.js`) and the npm-scoped
+// reference backend (in `src/reference-backend.js`) implement the
+// same shape.
+//
+// The CAS-related types (`CasStore`, `RetentionLinks`, `Sha256Hex`)
+// live in `@endo/mem-cas` and are imported across the package
+// boundary.
 
 /**
  * Opaque content-addressed handle to a directory tree in the CAS.
@@ -135,67 +140,6 @@ export interface EndoRegistry {
 }
 
 /**
- * The CAS store interface the registry sits in front of.
- *
- * Scope is read/write/has by content hash. The daemon's persistent
- * CAS implements this surface; the in-memory `makeMemoryCasStore` is
- * a reference implementation for tests. See
- * `designs/registry-capability.md` § Caching and retention.
- */
-export interface CasStore {
-  /** Return true if the CAS holds bytes for `hash`. */
-  has(hash: string): Promise<boolean>;
-  /**
-   * Read bytes for `hash`. Throws if the hash is unknown.
-   */
-  read(hash: string): Promise<Uint8Array>;
-  /**
-   * Write bytes; returns their content hash. Idempotent: writing
-   * identical bytes twice returns the same hash.
-   */
-  write(bytes: Uint8Array): Promise<string>;
-  /**
-   * Drop `hash` from the store if no retention link pins it.
-   * Returns true if the entry was evicted, false if it was pinned or
-   * absent. This is the surface the daemon's eviction pass calls.
-   */
-  evict(hash: string): Promise<boolean>;
-  /** Bounded list, for diagnostics. */
-  list(): Promise<string[]>;
-}
-
-/**
- * Compute a SHA-256 hex digest of the bytes.
- *
- * The shape is decoupled from any particular platform's crypto
- * primitive so the in-memory CAS store stays portable; callers wire
- * in `sha256HexWebCrypto` from `./src/store-web-powers.js` (Web
- * Crypto) or a `node:crypto`-backed equivalent. See
- * `src/store.js` § `makeMemoryCasStore`.
- */
-export type Sha256Hex = (bytes: Uint8Array) => Promise<string>;
-
-/**
- * Retention-link hook the formula graph holds to pin CAS entries.
- *
- * The snapshot mapper (`designs/snapshot-mapper.md`) adds a
- * `thisDiesIfThatDies` link from each `(compartmentMap,
- * resolutionHash, entrySnapshotHash)` formula into the CAS trees
- * resolution names. While any captured formula references a given
- * tree, that tree's CAS bytes are pinned and cannot be evicted.
- *
- * Layer 1 defines the typedef; layer 3 implements the wiring.
- */
-export interface RetentionLinks {
-  /** Pin `hash` so future `evict(hash)` returns false. */
-  pin(hash: string): void;
-  /** Release a previously installed pin. */
-  unpin(hash: string): void;
-  /** Test whether `hash` is currently pinned. */
-  isPinned(hash: string): boolean;
-}
-
-/**
  * Hook signature for layer 2's MVS resolution algorithm.
  *
  * Layer 1's reference backend invokes the hook with the entry
@@ -216,13 +160,12 @@ export type ResolveHook = (
 /**
  * Context the reference backend hands to a `ResolveHook`.
  *
- * Carries the CAS store, the retention-links hook, and a convenience
- * `makeTreeRef` factory so layer 2 does not have to re-derive the
- * connection to layer 1's CAS plumbing.
+ * Carries the CAS store and the retention-links hook so layer 2 does
+ * not have to re-derive the connection to layer 1's CAS plumbing.
  */
 export interface ResolveHookContext {
-  cas: CasStore;
-  retentionLinks: RetentionLinks;
+  cas: import('@endo/mem-cas').CasStore;
+  retentionLinks: import('@endo/mem-cas').RetentionLinks;
 }
 
 /**

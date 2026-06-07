@@ -9,15 +9,6 @@
       "path": "../errors/tsconfig.composite.json"
     },
     {
-      "path": "../exo/tsconfig.composite.json"
-    },
-    {
-      "path": "../far/tsconfig.composite.json"
-    },
-    {
-      "path": "../mem-cas/tsconfig.composite.json"
-    },
-    {
       "path": "../patterns/tsconfig.composite.json"
     }
   ]
