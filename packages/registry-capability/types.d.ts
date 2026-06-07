@@ -125,15 +125,10 @@ export interface EndoRegistry {
    * Look up the cached resolution without fetching. Returns undefined
    * if the package is not yet in the table.
    */
-  lookup(
-    name: string,
-    version: string,
-  ): Promise<EndoReadableTree | undefined>;
+  lookup(name: string, version: string): Promise<EndoReadableTree | undefined>;
 
   /** List installed packages (bounded). */
-  list(
-    prefix?: string,
-  ): Promise<Array<{ name: string; version: string }>>;
+  list(prefix?: string): Promise<Array<{ name: string; version: string }>>;
 
   /** Documentation string. */
   help(): string;
@@ -168,6 +163,17 @@ export interface CasStore {
   /** Bounded list, for diagnostics. */
   list(): Promise<string[]>;
 }
+
+/**
+ * Compute a SHA-256 hex digest of the bytes.
+ *
+ * The shape is decoupled from any particular platform's crypto
+ * primitive so the in-memory CAS store stays portable; callers wire
+ * in `sha256HexWebCrypto` from `./src/store-web-powers.js` (Web
+ * Crypto) or a `node:crypto`-backed equivalent. See
+ * `src/store.js` § `makeMemoryCasStore`.
+ */
+export type Sha256Hex = (bytes: Uint8Array) => Promise<string>;
 
 /**
  * Retention-link hook the formula graph holds to pin CAS entries.

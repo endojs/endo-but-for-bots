@@ -16,6 +16,12 @@ This is layer 1 of the daemon-worker `importLocation` stack defined in
 - A CAS-backed store interface (`makeMemoryCasStore`) with a Map-based
   reference implementation suitable for tests; persistent storage is
   deferred to a follow-up.
+  The store accepts a caller-supplied `sha256` power so the layer-1
+  module does not bind to a particular platform; a Web Crypto
+  implementation (`sha256HexWebCrypto`) ships alongside in
+  `./store-web-powers.js` for browser, Node 19+, and SES-realm use,
+  mirroring the daemon's `daemon-node-powers.js` vs `daemon-go-powers.js`
+  split.
 - A JS reference backend (`makeJsReferenceRegistry`) that wires the
   capability boundary together. It delegates the actual MVS resolution
   to an injected `resolveHook` so that layer 2 (`designs/mvs-resolver.md`)

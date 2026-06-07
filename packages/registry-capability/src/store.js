@@ -1,8 +1,7 @@
 // @ts-check
-/* global globalThis */
 
 /**
- * In-memory CAS store and SHA-256 content-addressing helper.
+ * In-memory CAS store helper.
  *
  * The CAS itself is the underlying eviction surface for registry
  * cache growth per `designs/registry-capability.md` § Bounded growth;
@@ -17,7 +16,13 @@
  * agnostic about how layer 3 (snapshot-mapper) wires its captured
  * formulas into the CAS pinning surface.
  *
- * @import { CasStore, RetentionLinks } from '../types.js';
+ * SHA-256 itself is also passed in explicitly: this module does not
+ * bind to a platform-specific crypto primitive. Callers wire in a
+ * `sha256` power from a companion module (e.g. `sha256HexWebCrypto`
+ * from `./store-web-powers.js`), mirroring the daemon's
+ * `daemon-node-powers.js` vs `daemon-go-powers.js` split.
+ *
+ * @import { CasStore, RetentionLinks, Sha256Hex } from '../types.js';
  */
 
 import { makeError, X } from '@endo/errors';
@@ -47,38 +52,6 @@ export const makeRetentionLinkSet = () => {
 harden(makeRetentionLinkSet);
 
 /**
- * Compute a SHA-256 hex digest of the bytes.
- *
- * Uses Web Crypto when available (Node 19+, browsers) so the helper
- * works in both daemon and worker contexts. The hex string is what
- * the CAS uses as the content-address key.
- *
- * @param {Uint8Array} bytes
- * @returns {Promise<string>}
- */
-export const sha256Hex = async bytes => {
-  // eslint-disable-next-line no-restricted-globals
-  const crypto = globalThis.crypto;
-  if (!crypto || !crypto.subtle) {
-    throw makeError(
-      X`sha256Hex requires globalThis.crypto.subtle (Web Crypto)`,
-    );
-  }
-  const digest = await crypto.subtle.digest(
-    'SHA-256',
-    /** @type {BufferSource} */ (/** @type {unknown} */ (bytes)),
-  );
-  const view = new Uint8Array(digest);
-  let hex = '';
-  for (let i = 0; i < view.length; i += 1) {
-    const byte = view[i];
-    hex += byte.toString(16).padStart(2, '0');
-  }
-  return hex;
-};
-harden(sha256Hex);
-
-/**
  * Construct an in-memory CAS store.
  *
  * The store honors retention links: an `evict(hash)` call is a no-op
@@ -88,10 +61,23 @@ harden(sha256Hex);
  * eviction" per `designs/registry-capability.md` § Caching and
  * retention.
  *
- * @param {{ retentionLinks?: RetentionLinks }} [options]
+ * The `sha256` power is required. Callers in a Web Crypto
+ * environment can import `sha256HexWebCrypto` from
+ * `./store-web-powers.js`; daemon-side callers can supply a
+ * `node:crypto`-backed equivalent. Decoupling the digest keeps this
+ * module portable across XS, browsers, and Node without an internal
+ * platform check.
+ *
+ * @param {{ sha256: Sha256Hex, retentionLinks?: RetentionLinks }} options
  * @returns {CasStore & { retentionLinks: RetentionLinks }}
  */
-export const makeMemoryCasStore = (options = {}) => {
+export const makeMemoryCasStore = options => {
+  if (!options || typeof options.sha256 !== 'function') {
+    throw makeError(
+      X`makeMemoryCasStore requires a sha256 power; supply sha256HexWebCrypto from ./store-web-powers.js or a Node-side equivalent`,
+    );
+  }
+  const { sha256 } = options;
   const retentionLinks = options.retentionLinks ?? makeRetentionLinkSet();
   /** @type {Map<string, Uint8Array>} */
   const blobs = new Map();
@@ -117,7 +103,7 @@ export const makeMemoryCasStore = (options = {}) => {
     },
     /** @param {Uint8Array} bytes */
     async write(bytes) {
-      const hash = await sha256Hex(bytes);
+      const hash = await sha256(bytes);
       if (!blobs.has(hash)) {
         blobs.set(hash, bytes);
       }

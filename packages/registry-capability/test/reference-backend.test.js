@@ -4,6 +4,7 @@ import { Far } from '@endo/far';
 
 import { makeJsReferenceRegistry } from '../src/reference-backend.js';
 import { makeMemoryCasStore } from '../src/store.js';
+import { sha256HexWebCrypto } from '../src/store-web-powers.js';
 import { registryErrorName } from '../src/errors.js';
 
 /**
@@ -25,7 +26,7 @@ const makeFakeReadableTree = hash =>
   });
 
 test('default registry has no resolveHook and surfaces RegistryNetworkError', async t => {
-  const cas = makeMemoryCasStore();
+  const cas = makeMemoryCasStore({ sha256: sha256HexWebCrypto });
   const registry = makeJsReferenceRegistry({ cas });
   const error = await t.throwsAsync(() => registry.resolve('{}', {}));
   t.is(
@@ -36,7 +37,7 @@ test('default registry has no resolveHook and surfaces RegistryNetworkError', as
 });
 
 test('reference registry runs the injected resolveHook and populates the table', async t => {
-  const cas = makeMemoryCasStore();
+  const cas = makeMemoryCasStore({ sha256: sha256HexWebCrypto });
   const treeA = makeFakeReadableTree('hash-a');
   const treeB = makeFakeReadableTree('hash-b');
   /** @type {(packageJson: string, options: object, context: object) => Promise<object>} */
@@ -81,13 +82,13 @@ test('reference registry runs the injected resolveHook and populates the table',
 
 test('lookup returns undefined for unfetched packages', async t => {
   await null;
-  const cas = makeMemoryCasStore();
+  const cas = makeMemoryCasStore({ sha256: sha256HexWebCrypto });
   const registry = makeJsReferenceRegistry({ cas });
   t.is(await registry.lookup('lodash', '4.17.21'), undefined);
 });
 
 test('list returns installed packages and respects the prefix filter', async t => {
-  const cas = makeMemoryCasStore();
+  const cas = makeMemoryCasStore({ sha256: sha256HexWebCrypto });
   /** @type {(packageJson: string, options: object, context: object) => Promise<object>} */
   const resolveHook = async () =>
     harden({
@@ -136,7 +137,7 @@ test('major-version coexistence: same name at two versions appears as distinct k
   // From the design's § Capability shape: "Packages with major-version
   // coexistence (allowed by MVS) appear as multiple entries under
   // distinct keys".
-  const cas = makeMemoryCasStore();
+  const cas = makeMemoryCasStore({ sha256: sha256HexWebCrypto });
   const tree1 = makeFakeReadableTree('hash-1');
   const tree2 = makeFakeReadableTree('hash-2');
   /** @type {(packageJson: string, options: object, context: object) => Promise<object>} */
@@ -171,7 +172,7 @@ test('resolveHook receives cas and retentionLinks on its context', async t => {
   // Layer 2's mvs-resolver writes CAS trees through the bus verbs
   // (see § Two backends, one shape). Layer 1's hook contract makes
   // those handles available without further plumbing.
-  const cas = makeMemoryCasStore();
+  const cas = makeMemoryCasStore({ sha256: sha256HexWebCrypto });
   /** @type {{cas?: object, retentionLinks?: object}} */
   const captured = {};
   /** @type {(packageJson: string, options: object, context: object) => Promise<object>} */
@@ -196,7 +197,7 @@ test('resolveHook receives cas and retentionLinks on its context', async t => {
 });
 
 test('help returns a descriptive string', async t => {
-  const cas = makeMemoryCasStore();
+  const cas = makeMemoryCasStore({ sha256: sha256HexWebCrypto });
   const registry = makeJsReferenceRegistry({ cas, label: 'unit-test' });
   const help = registry.help();
   t.regex(help, /EndoRegistry/);
