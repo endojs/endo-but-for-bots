@@ -4,8 +4,18 @@
 /**
  * Web Crypto power for `makeMemoryCasStore`.
  *
+ * The "web" in the filename names the API surface
+ * (`globalThis.crypto.subtle`), not the host platform. Node.js
+ * emulates Web Crypto and is a first-class consumer of this module:
+ * Node 19+ exposes `globalThis.crypto` directly; SES realms that
+ * retain `globalThis.crypto.subtle` work the same way. The filename
+ * stays `store-web-powers.js` because Node.js counts as a Web Crypto
+ * host; a non-Web host (an XS build without crypto shims, an
+ * embedded runtime that lacks `globalThis.crypto`) would bring its
+ * own platform-named companion power without altering this module.
+ *
  * The store deliberately does not bind to a platform: it accepts a
- * caller-supplied `sha256` function as part of its options.  Callers
+ * caller-supplied `sha256` function as part of its options. Callers
  * that have Web Crypto (browsers, Node 19+, SES realms that retain
  * `globalThis.crypto.subtle`) wire in `sha256HexWebCrypto` here; a
  * Node-only host that prefers `node:crypto.createHash` could supply
