@@ -52,18 +52,24 @@ const { iterator: symbolIterator, toStringTag: symbolToStringTag } = Symbol;
 const hiddenTypedArrays = new WeakMap();
 
 /**
- * Gets the genuine TypedArray encapsulated behind the emulated
- * freezable TypedArray. Also a brand check: If `freezableTA` is not an
- * emulated freezable TypedArray, it throws.
+ * Returns the genuine TypedArray amplified from `freezableTA`. If
+ * `freezableTA` is an emulated freezable TypedArray, returns the hidden
+ * genuine TypedArray that the emulated wrapper amplifies. Otherwise
+ * (`freezableTA` is itself a genuine TypedArray that the shim's
+ * pseudo-constructor produced via the non-immutable fall-through path),
+ * returns `freezableTA`.
+ *
+ * The fall-through to `freezableTA` is what lets the shim install the
+ * pseudo-constructor as the global TypedArray ctor without breaking
+ * standard TypedArray use: instances constructed from a non-hidden
+ * first argument flow through `construct(OriginalConstructor, args,
+ * new.target)`, end up with `PseudoTypedArrayPrototype` as their
+ * prototype, and still need every inherited prototype method to work.
  *
  * @param {TypedArray} freezableTA
  */
-const getHiddenTypedArray = freezableTA => {
-  const result = apply(weakMapGet, hiddenTypedArrays, [freezableTA]);
-  if (result) {
-    return result;
-  }
-  throw TypeError(`Not an emulated freezable TypedArray`);
+const amplifyTypedArray = freezableTA => {
+  return apply(weakMapGet, hiddenTypedArrays, [freezableTA]) || freezableTA;
 };
 
 /**
@@ -97,9 +103,17 @@ export const virtualTypedArrayBufferGetter = (() => {
 const freezableTypedArrayInternalPrototype = makeInternalHeir(
   typedArrayPrototype,
   'a freezable TypedArray',
-  getHiddenTypedArray,
+  amplifyTypedArray,
   [
-    // redirected queries
+    // redirected queries (operate on the amplified genuine TypedArray and
+    // return the result; the result is a primitive or a fresh object
+    // distinct from `this`).
+    //
+    // `slice`, `subarray`, `with` and `toReversed`/`toSorted` belong here
+    // too: they return new TypedArrays. When the amplified TypedArray's
+    // backing buffer is in `reverseHiddenBuffers`, the new TypedArray's
+    // `buffer` getter (the virtualTypedArrayBufferGetter installed on
+    // %TypedArrayPrototype%) returns the immutable wrapper.
     'at',
     'byteLength',
     'byteOffset',
@@ -120,11 +134,14 @@ const freezableTypedArrayInternalPrototype = makeInternalHeir(
     'map',
     'reduce',
     'reduceRight',
+    'slice',
     'some',
+    'subarray',
     'toLocaleString',
     'toReversed',
     'toSorted',
     'toString',
+    'with',
     symbolIterator,
   ],
   [
@@ -136,10 +153,9 @@ const freezableTypedArrayInternalPrototype = makeInternalHeir(
     'sort',
   ],
   /** @type {ThisType<TypedArray>} */ ({
-    buffer: undefined, // The big TODO
-    slice: undefined,
-    subarray: undefined,
-    with: undefined,
+    // `buffer` is inherited from %TypedArrayPrototype%; the shim replaces
+    // that getter with the virtualTypedArrayBufferGetter so the same
+    // inherited slot does the right thing for genuine and emulated cases.
     [symbolToStringTag]: 'FreezableTypedArray',
   }),
 );

@@ -100,10 +100,7 @@ test('Standard TypedArray behavior baseline', t => {
   t.is(ta2.byteLength, 0);
 });
 
-// This could have been written as a test.failing as compared to
-// the immutable ArrayBuffer we'll propose. However, I'd rather test what
-// the shim purposely does instead.
-test('TypedArray on Immutable ArrayBuffer shim limitations', t => {
+test('TypedArray ctor on transferred Immutable ArrayBuffer wraps as emulated freezable', t => {
   const ab1 = new ArrayBuffer(2);
   const dv1 = new DataView(ab1);
   t.is(dv1.buffer, ab1);
@@ -114,13 +111,14 @@ test('TypedArray on Immutable ArrayBuffer shim limitations', t => {
   t.is(ta1.byteLength, 2);
 
   const iab = ab1.transferToImmutable();
-  // Unfortunately, unlike the immutable ArrayBuffer to be proposed,
-  // calling a TypedArray constructor with the shim implementation of
-  // an immutable ArrayBuffer as argument treats it as an unrecognized object,
-  // rather than throwing an error or acting as a non-changeable TypedArray.
+  // Under the shim's pseudo-constructor install, calling a TypedArray
+  // constructor with an immutable ArrayBuffer argument wraps the buffer
+  // as an emulated freezable TypedArray whose `buffer` getter routes
+  // back through the immutable wrapper.
   t.is(iab.byteLength, 2);
   const ta3 = new Uint8Array(iab);
-  t.is(ta3.byteLength, 0);
+  t.is(ta3.byteLength, 2);
+  t.is(ta3.buffer, iab);
 });
 
 const testTransfer = t => {
