@@ -1,7 +1,11 @@
 // @ts-check
 
 /**
- * JS reference backend for the EndoRegistry capability.
+ * Npm-scoped reference backend for the EndoRegistry capability.
+ *
+ * The scope is npm-style package resolution against the npm registry's
+ * metadata schema. A different backend (a Rust-backed wrapper, a
+ * workspace-only resolver) carries its own scope-naming.
  *
  * This module is the layer-1 scaffold: it stands up an exo with the
  * `EndoRegistryInterface` shape, an internal package-table
@@ -25,7 +29,7 @@ import { EndoRegistryInterface } from './interfaces.js';
 import { RegistryNetworkError } from './errors.js';
 
 /**
- * Construct a JS reference EndoRegistry backed by an injected
+ * Construct an npm-scoped reference EndoRegistry backed by an injected
  * resolve hook.
  *
  * @param {{
@@ -38,11 +42,16 @@ import { RegistryNetworkError } from './errors.js';
  *   table: ReadonlyMap<string, { name: string, version: string, treeRef: EndoReadableTree }>
  * }}
  */
-export const makeJsReferenceRegistry = options => {
-  const { cas, resolveHook, retentionLinks, label = 'js-reference' } = options;
+export const makeNpmReferenceRegistry = options => {
+  const {
+    cas,
+    resolveHook,
+    retentionLinks,
+    label = 'npm-reference',
+  } = options;
 
   if (!cas) {
-    throw makeError(X`makeJsReferenceRegistry requires a CAS store`);
+    throw makeError(X`makeNpmReferenceRegistry requires a CAS store`);
   }
 
   /**
@@ -77,7 +86,7 @@ export const makeJsReferenceRegistry = options => {
    */
   const packageKey = (name, version) => `${name}@${version}`;
 
-  return makeExo('JsReferenceEndoRegistry', EndoRegistryInterface, {
+  return makeExo('NpmReferenceEndoRegistry', EndoRegistryInterface, {
     /**
      * @param {string} packageJson the package.json source as a UTF-8
      *   string.  The design's capability shape names a `Uint8Array`,
@@ -201,4 +210,4 @@ export const makeJsReferenceRegistry = options => {
     },
   });
 };
-harden(makeJsReferenceRegistry);
+harden(makeNpmReferenceRegistry);

@@ -1,22 +1,22 @@
 {
-  "name": "@endo/registry-capability",
+  "name": "@endo/exo-npm",
   "version": "0.1.0",
   "private": true,
-  "description": "EndoRegistry capability shape and JS reference backend scaffolding (layer 1 of the daemon-worker importLocation stack)",
+  "description": "EndoRegistry exo capability shape and npm-scoped reference backend scaffolding (layer 1 of the daemon-worker importLocation stack)",
   "keywords": [
     "endo",
+    "exo",
     "registry",
-    "capability",
     "npm",
     "cas"
   ],
   "author": "Endo contributors",
   "license": "Apache-2.0",
-  "homepage": "https://github.com/endojs/endo/tree/master/packages/registry-capability#readme",
+  "homepage": "https://github.com/endojs/endo/tree/master/packages/exo-npm#readme",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/endojs/endo.git",
-    "directory": "packages/registry-capability"
+    "directory": "packages/exo-npm"
   },
   "bugs": {
     "url": "https://github.com/endojs/endo/issues"

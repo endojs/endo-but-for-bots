@@ -1,4 +1,4 @@
-# @endo/registry-capability
+# @endo/exo-npm
 
 ## 0.1.0
 
@@ -16,7 +16,7 @@
   implementation (`sha256HexWebCrypto`) ships alongside in
   `./store-web-powers.js` so the layer-1 module stays portable across
   XS, browsers, and Node.
-- Add JS reference backend (`makeJsReferenceRegistry`) with an injected
-  `resolveHook` for layer 2 (MVS resolver) to plug in.
+- Add npm-scoped reference backend (`makeNpmReferenceRegistry`) with an
+  injected `resolveHook` for layer 2 (MVS resolver) to plug in.
 - Add retention-link hook typedefs for layer 3 (snapshot mapper) to
   pin CAS entries from captured formulas.

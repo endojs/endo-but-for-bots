@@ -96,6 +96,9 @@
       "path": "packages/exo-http-client/tsconfig.composite.json"
     },
     {
+      "path": "packages/exo-npm/tsconfig.composite.json"
+    },
+    {
       "path": "packages/exo-package-manager/tsconfig.composite.json"
     },
     {
@@ -208,9 +211,6 @@
     },
     {
       "path": "packages/random/tsconfig.composite.json"
-    },
-    {
-      "path": "packages/registry-capability/tsconfig.composite.json"
     },
     {
       "path": "packages/sandbox/tsconfig.composite.json"

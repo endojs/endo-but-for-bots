@@ -1,8 +1,15 @@
-# @endo/registry-capability
+# @endo/exo-npm
 
-The `EndoRegistry` capability shape and JS reference backend scaffolding.
+The `EndoRegistry` exo capability shape and npm-scoped reference backend
+scaffolding.
 This is layer 1 of the daemon-worker `importLocation` stack defined in
 [`designs/registry-capability.md`](../../designs/registry-capability.md).
+
+The `exo-` prefix indicates that this package imports and exports passable
+interfaces over CapTP; the `npm` suffix names the package's scope (npm-style
+package resolution against the npm registry's metadata schema). A different
+registry backend (a Rust-backed wrapper, a workspace-only resolver) would
+carry its own scope-naming.
 
 ## What this package provides
 
@@ -22,8 +29,8 @@ This is layer 1 of the daemon-worker `importLocation` stack defined in
   `./store-web-powers.js` for browser, Node 19+, and SES-realm use,
   mirroring the daemon's `daemon-node-powers.js` vs `daemon-go-powers.js`
   split.
-- A JS reference backend (`makeJsReferenceRegistry`) that wires the
-  capability boundary together. It delegates the actual MVS resolution
+- An npm-scoped reference backend (`makeNpmReferenceRegistry`) that wires
+  the capability boundary together. It delegates the actual MVS resolution
   to an injected `resolveHook` so that layer 2 (`designs/mvs-resolver.md`)
   can plug in the algorithm without touching the capability surface.
 - A retention-link hook (`retentionLinks`) so the formula graph (layer 3,
@@ -43,5 +50,5 @@ This is layer 1 of the daemon-worker `importLocation` stack defined in
 
 ## Status
 
-Phase 1, scaffolding only. The JS reference backend is wired but the
-`resolveHook` is a stub. See the design document for the phased plan.
+Phase 1, scaffolding only. The npm-scoped reference backend is wired but
+the `resolveHook` is a stub. See the design document for the phased plan.

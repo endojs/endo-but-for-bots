@@ -2,7 +2,7 @@ import test from '@endo/ses-ava/prepare-endo.js';
 
 import { Far } from '@endo/far';
 
-import { makeJsReferenceRegistry } from '../src/reference-backend.js';
+import { makeNpmReferenceRegistry } from '../src/reference-backend.js';
 import { makeMemoryCasStore } from '../src/store.js';
 import { sha256HexWebCrypto } from '../src/store-web-powers.js';
 import { registryErrorName } from '../src/errors.js';
@@ -27,7 +27,7 @@ const makeFakeReadableTree = hash =>
 
 test('default registry has no resolveHook and surfaces RegistryNetworkError', async t => {
   const cas = makeMemoryCasStore({ sha256: sha256HexWebCrypto });
-  const registry = makeJsReferenceRegistry({ cas });
+  const registry = makeNpmReferenceRegistry({ cas });
   const error = await t.throwsAsync(() => registry.resolve('{}', {}));
   t.is(
     registryErrorName(error),
@@ -64,7 +64,7 @@ test('reference registry runs the injected resolveHook and populates the table',
     });
   };
 
-  const registry = makeJsReferenceRegistry({ cas, resolveHook });
+  const registry = makeNpmReferenceRegistry({ cas, resolveHook });
   const resolution = await registry.resolve('{}', {});
   t.is(resolution.resolutionHash, 'fixture-resolution-hash');
   t.deepEqual([...resolution.keys].sort(), [
@@ -83,7 +83,7 @@ test('reference registry runs the injected resolveHook and populates the table',
 test('lookup returns undefined for unfetched packages', async t => {
   await null;
   const cas = makeMemoryCasStore({ sha256: sha256HexWebCrypto });
-  const registry = makeJsReferenceRegistry({ cas });
+  const registry = makeNpmReferenceRegistry({ cas });
   t.is(await registry.lookup('lodash', '4.17.21'), undefined);
 });
 
@@ -116,7 +116,7 @@ test('list returns installed packages and respects the prefix filter', async t =
       resolutionHash: 'fixture',
     });
 
-  const registry = makeJsReferenceRegistry({ cas, resolveHook });
+  const registry = makeNpmReferenceRegistry({ cas, resolveHook });
   await registry.resolve('{}', {});
 
   const all = await registry.list();
@@ -160,7 +160,7 @@ test('major-version coexistence: same name at two versions appears as distinct k
       keys: ['ses@1.0.0', 'ses@2.3.4'],
       resolutionHash: 'fixture',
     });
-  const registry = makeJsReferenceRegistry({ cas, resolveHook });
+  const registry = makeNpmReferenceRegistry({ cas, resolveHook });
   await registry.resolve('{}', {});
   t.is(await registry.lookup('ses', '1.0.0'), tree1);
   t.is(await registry.lookup('ses', '2.3.4'), tree2);
@@ -190,7 +190,7 @@ test('resolveHook receives cas and retentionLinks on its context', async t => {
       resolutionHash: 'empty',
     });
   };
-  const registry = makeJsReferenceRegistry({ cas, resolveHook });
+  const registry = makeNpmReferenceRegistry({ cas, resolveHook });
   await registry.resolve('{}', {});
   t.truthy(captured.cas, 'hook received cas');
   t.truthy(captured.retentionLinks, 'hook received retentionLinks');
@@ -198,16 +198,16 @@ test('resolveHook receives cas and retentionLinks on its context', async t => {
 
 test('help returns a descriptive string', async t => {
   const cas = makeMemoryCasStore({ sha256: sha256HexWebCrypto });
-  const registry = makeJsReferenceRegistry({ cas, label: 'unit-test' });
+  const registry = makeNpmReferenceRegistry({ cas, label: 'unit-test' });
   const help = registry.help();
   t.regex(help, /EndoRegistry/);
   t.regex(help, /unit-test/);
 });
 
-test('makeJsReferenceRegistry requires a CAS store', t => {
+test('makeNpmReferenceRegistry requires a CAS store', t => {
   t.throws(
     // @ts-expect-error intentional misuse
-    () => makeJsReferenceRegistry({}),
+    () => makeNpmReferenceRegistry({}),
     { message: /requires a CAS store/ },
   );
 });
