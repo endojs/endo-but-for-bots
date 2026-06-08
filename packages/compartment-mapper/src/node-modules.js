@@ -16,7 +16,7 @@
 
 import { inferExportsAliasesAndPatterns } from './infer-exports.js';
 import { parseLocatedJson } from './json.js';
-import { join } from './node-module-specifier.js';
+import { join, relativize } from './node-module-specifier.js';
 import {
   assertPolicy,
   ATTENUATORS_COMPARTMENT,
@@ -27,6 +27,8 @@ import { dependencyAllowedByPolicy, makePackagePolicy } from './policy.js';
 import { unpackReadPowers } from './powers.js';
 import { search, searchDescriptor } from './search.js';
 import { GenericGraph, makeShortestPath } from './generic-graph.js';
+import { makePackageDescriptorCache } from './package-descriptor-cache.js';
+import { relative } from './url.js';
 
 /**
  * @import {
@@ -1547,23 +1549,49 @@ export const mapNodeModules = async (
     packageDataHook,
     packageDependenciesHook,
     policy,
+    packageDescriptorCache,
     ...otherOptions
   } = {},
 ) => {
-  const {
-    packageLocation,
-    packageDescriptorText,
-    packageDescriptorLocation,
-    moduleSpecifier,
-  } = await search(readPowers, moduleLocation, { log });
+  /** @type {FileUrlString} */
+  let packageLocation;
+  /** @type {PackageDescriptor} */
+  let packageDescriptor;
+  /** @type {string} */
+  let moduleSpecifier;
 
-  const packageDescriptor = /** @type {typeof parseLocatedJson<unknown>} */ (
-    parseLocatedJson
-  )(packageDescriptorText, packageDescriptorLocation);
+  await null;
+  if (packageDescriptorCache !== undefined) {
+    // Cache-supplied path: walk past intermediate auxiliary descriptors
+    // (`package.json` files without a `name`) to the enclosing named
+    // compartment. The resulting compartment is rooted at the named
+    // ancestor; `moduleSpecifier` is relative to it. See
+    // `designs/compartment-mapper-auxiliary-package-json.md`.
+    const compartmentRoot =
+      await packageDescriptorCache.findEnclosingCompartmentRoot(moduleLocation);
+    packageLocation = compartmentRoot.packageLocation;
+    packageDescriptor = compartmentRoot.packageDescriptor;
+    moduleSpecifier = relativize(relative(packageLocation, moduleLocation));
+  } else {
+    const searchResult = await search(readPowers, moduleLocation, { log });
+    const { packageDescriptorText, packageDescriptorLocation } = searchResult;
+    packageLocation = /** @type {FileUrlString} */ (
+      searchResult.packageLocation
+    );
+    moduleSpecifier = searchResult.moduleSpecifier;
 
-  assertPackageDescriptor(packageDescriptor);
-  assertPackageDescriptorHasName(packageDescriptor, packageDescriptorLocation);
-  assertFileUrlString(packageLocation);
+    const allegedDescriptor = /** @type {typeof parseLocatedJson<unknown>} */ (
+      parseLocatedJson
+    )(packageDescriptorText, packageDescriptorLocation);
+
+    assertPackageDescriptor(allegedDescriptor);
+    assertPackageDescriptorHasName(
+      allegedDescriptor,
+      packageDescriptorLocation,
+    );
+    assertFileUrlString(packageLocation);
+    packageDescriptor = allegedDescriptor;
+  }
 
   return compartmentMapForNodeModules_(
     readPowers,
@@ -1580,6 +1608,41 @@ export const mapNodeModules = async (
       ...otherOptions,
     },
   );
+};
+
+/**
+ * Sibling of {@link mapNodeModules} that constructs a
+ * {@link PackageDescriptorCache} by default and delegates to
+ * {@link mapNodeModules} with the cache pre-injected.
+ *
+ * Casual callers reach the auxiliary-`package.json` behavior without
+ * threading a new capability. Advanced callers that need to share a cache
+ * across multiple `mapNodeModules` calls pass their own
+ * `packageDescriptorCache` to {@link mapNodeModules} directly.
+ *
+ * See `designs/compartment-mapper-auxiliary-package-json.md` for the
+ * design this function implements.
+ *
+ * @param {ReadFn | ReadPowers<FileUrlString> | MaybeReadPowers<FileUrlString>} readPowers
+ * @param {string} moduleLocation
+ * @param {MapNodeModulesOptions} [options]
+ * @returns {Promise<PackageCompartmentMapDescriptor>}
+ */
+export const mapNodeModulesWithAuxiliary = async (
+  readPowers,
+  moduleLocation,
+  options = {},
+) => {
+  if (options.packageDescriptorCache !== undefined) {
+    // Honor an externally supplied cache rather than shadowing it.
+    return mapNodeModules(readPowers, moduleLocation, options);
+  }
+  const { maybeRead } = unpackReadPowers(readPowers);
+  const packageDescriptorCache = makePackageDescriptorCache(maybeRead);
+  return mapNodeModules(readPowers, moduleLocation, {
+    ...options,
+    packageDescriptorCache,
+  });
 };
 
 /**
