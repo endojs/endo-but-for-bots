@@ -1,10 +1,6 @@
 /* global globalThis */
 
-import {
-  isBufferImmutable,
-  sliceBufferToImmutable,
-  optTransferBufferToImmutable as optXferBuf2Immu,
-} from './immutable-arraybuffer-lib.js';
+import { immutableArrayBufferLibProperties } from './immutable-arraybuffer-lib.js';
 
 const {
   ArrayBuffer,
@@ -14,59 +10,29 @@ const {
   // eslint-disable-next-line no-restricted-globals
 } = globalThis;
 
-// Even though the imported one is not exported by the pony as a live binding,
-// TS doesn't know that,
-// so it cannot do its normal flow-based inference. By making and using a local
-// copy, no problem.
-const optTransferBufferToImmutable = optXferBuf2Immu;
-
-const { getOwnPropertyDescriptors, defineProperties, defineProperty } = Object;
+const { getOwnPropertyDescriptors, defineProperties } = Object;
 const { ownKeys } = Reflect;
 const { prototype: arrayBufferPrototype } = ArrayBuffer;
 const { stringify } = JSON;
 
-const arrayBufferMethods = {
-  /**
-   * Creates an immutable slice of the given buffer.
-   *
-   * @this {ArrayBuffer} buffer The original buffer.
-   * @param {number} [start] The start index.
-   * @param {number} [end] The end index.
-   * @returns {ArrayBuffer} The sliced immutable ArrayBuffer.
-   */
-  sliceToImmutable(start = undefined, end = undefined) {
-    return sliceBufferToImmutable(this, start, end);
-  },
-
-  /**
-   * @this {ArrayBuffer}
-   */
-  get immutable() {
-    return isBufferImmutable(this);
-  },
-
-  ...(optTransferBufferToImmutable
-    ? {
-        /**
-         * Transfer the contents to a new immutable ArrayBuffer
-         *
-         * @this {ArrayBuffer} buffer The original buffer.
-         * @param {number} [newLength] The start index.
-         * @returns {ArrayBuffer} The new immutable ArrayBuffer.
-         */
-        transferToImmutable(newLength = undefined) {
-          return optTransferBufferToImmutable(this, newLength);
-        },
-      }
-    : {}),
-};
-
-// Better fidelity emulation of a class prototype
-for (const key of ownKeys(arrayBufferMethods)) {
-  defineProperty(arrayBufferMethods, key, {
-    enumerable: false,
-  });
-}
+// The lib's property record installs methods that intentionally overwrite
+// the genuine `slice`, `resize`, `transfer`, and `transferToFixedLength`
+// methods on `ArrayBuffer.prototype`. The replacements use the
+// amplifier-with-this-fallthrough pattern: they discriminate on brand
+// WeakMap membership, dispatch to the captured genuine method when the
+// receiver is a genuine `ArrayBuffer`, and either throw or do the
+// emulated-immutable thing when the receiver is in the brand WeakMap. The
+// overwrite is load-bearing (the genuine methods do not know about the
+// brand), so the overwrite-warning suppresses these four to keep cold-start
+// logs clean. Any other overwrite (a new genuine accessor that ships in a
+// later browser before the proposal stabilises, or a competing shim) still
+// fires the warning so the shim author can investigate.
+const expectedOverwrites = new Set([
+  'slice',
+  'resize',
+  'transfer',
+  'transferToFixedLength',
+]);
 
 // Modern shim practice frowns on conditional installation, at least for
 // proposals prior to stage 3. This is so changes to the proposal since
@@ -81,8 +47,8 @@ for (const key of ownKeys(arrayBufferMethods)) {
 //
 // Allowing polymorphic calls because these occur during initialization.
 // eslint-disable-next-line @endo/no-polymorphic-call
-const overwrites = ownKeys(arrayBufferMethods).filter(
-  key => key in arrayBufferPrototype,
+const overwrites = ownKeys(immutableArrayBufferLibProperties).filter(
+  key => key in arrayBufferPrototype && !expectedOverwrites.has(key),
 );
 if (overwrites.length > 0) {
   // eslint-disable-next-line @endo/no-polymorphic-call
@@ -93,5 +59,5 @@ if (overwrites.length > 0) {
 
 defineProperties(
   arrayBufferPrototype,
-  getOwnPropertyDescriptors(arrayBufferMethods),
+  getOwnPropertyDescriptors(immutableArrayBufferLibProperties),
 );
