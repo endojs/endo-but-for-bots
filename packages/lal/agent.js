@@ -1128,10 +1128,7 @@ export async function resolveWorkerModel(env) {
     return harden({
       model: resolveRegistryModel(
         'anthropic',
-        resolveLegacyModelDefault(
-          env.LAL_MODEL,
-          'claude-opus-4-5-20251101',
-        ),
+        resolveLegacyModelDefault(env.LAL_MODEL, 'claude-opus-4-5-20251101'),
       ),
       getApiKey: makeApiKeyResolver(authToken, undefined),
     });
