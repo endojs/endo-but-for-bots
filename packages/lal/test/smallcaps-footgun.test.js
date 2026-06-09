@@ -33,76 +33,14 @@
 import test from '@endo/ses-ava/prepare-endo.js';
 
 import { Agent as PiAgent } from '@earendil-works/pi-agent-core';
-import { createAssistantMessageEventStream } from '@earendil-works/pi-ai';
 
 import { toolDefs, makeExecuteTool, toAgentTool } from '../agent.js';
 import { makeMockPowers } from '../tools/mock-powers.js';
-
-/** @type {any} */
-const stubModel = harden({
-  id: 'stub-model',
-  name: 'stub/stub-model',
-  api: 'openai-completions',
-  provider: 'openai',
-  baseUrl: 'http://invalid.example',
-  reasoning: false,
-  input: ['text'],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  contextWindow: 4096,
-  maxTokens: 1024,
-});
-
-/**
- * Build a scripted streamFn that emits each script entry as one assistant
- * message and then stops.
- *
- * @param {Array<{content: any[], stopReason: string}>} script
- */
-const makeScriptedStreamFn = script => {
-  let turn = 0;
-  return (_model, _context, _options) => {
-    const stream = createAssistantMessageEventStream();
-    /** @type {any} */
-    const partial = harden({
-      role: 'assistant',
-      content: [],
-      api: stubModel.api,
-      provider: stubModel.provider,
-      model: stubModel.id,
-      usage: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-      },
-      stopReason: 'stop',
-      timestamp: Date.now(),
-    });
-    const next = script[turn] || {
-      content: [{ type: 'text', text: 'done' }],
-      stopReason: 'stop',
-    };
-    turn += 1;
-    /** @type {any} */
-    const finalMessage = harden({
-      ...partial,
-      content: next.content,
-      stopReason: next.stopReason,
-    });
-    stream.push({ type: 'start', partial });
-    stream.push({
-      type: 'done',
-      reason: /** @type {'toolUse' | 'stop'} */ (
-        next.stopReason === 'toolUse' ? 'toolUse' : 'stop'
-      ),
-      message: finalMessage,
-    });
-    stream.end(finalMessage);
-    return stream;
-  };
-};
+import {
+  stubModel,
+  convertToLlm,
+  makeScriptedStreamFn,
+} from './scripted-pi-agent.js';
 
 /**
  * Build a PiAgent wired to lal's tool surface with a scripted streamFn,
@@ -158,13 +96,7 @@ const buildAgent = script => {
       messages: [],
       thinkingLevel: 'off',
     },
-    convertToLlm: msgs =>
-      msgs.filter(
-        m =>
-          m.role === 'user' ||
-          m.role === 'assistant' ||
-          m.role === 'toolResult',
-      ),
+    convertToLlm,
     toolExecution: 'sequential',
     streamFn: makeScriptedStreamFn(script),
   });
@@ -441,13 +373,7 @@ test('dismiss: powers boundary sees BigInt for "+5" messageNumber', async t => {
       messages: [],
       thinkingLevel: 'off',
     },
-    convertToLlm: msgs =>
-      msgs.filter(
-        m =>
-          m.role === 'user' ||
-          m.role === 'assistant' ||
-          m.role === 'toolResult',
-      ),
+    convertToLlm,
     toolExecution: 'sequential',
     streamFn: makeScriptedStreamFn(
       oneToolCall('dismiss', { messageNumber: '+5' }),
@@ -489,13 +415,7 @@ test('reply: messageNumber "+3" coerces, strings stay literal', async t => {
       messages: [],
       thinkingLevel: 'off',
     },
-    convertToLlm: msgs =>
-      msgs.filter(
-        m =>
-          m.role === 'user' ||
-          m.role === 'assistant' ||
-          m.role === 'toolResult',
-      ),
+    convertToLlm,
     toolExecution: 'sequential',
     streamFn: makeScriptedStreamFn(
       oneToolCall('reply', {

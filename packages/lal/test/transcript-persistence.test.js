@@ -21,111 +21,12 @@
 
 import test from '@endo/ses-ava/prepare-endo.js';
 
-import { Agent as PiAgent } from '@earendil-works/pi-agent-core';
-import { createAssistantMessageEventStream } from '@earendil-works/pi-ai';
-
 import {
   persistTurnDelta,
   loadPersistedTranscript,
-} from '../agent.js';
+} from '../transcript-persistence.js';
 import { makeMockPowers } from '../tools/mock-powers.js';
-
-/** @type {any} */
-const stubModel = harden({
-  id: 'stub-model',
-  name: 'stub/stub-model',
-  api: 'openai-completions',
-  provider: 'openai',
-  baseUrl: 'http://invalid.example',
-  reasoning: false,
-  input: ['text'],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  contextWindow: 4096,
-  maxTokens: 1024,
-});
-
-/**
- * Build a scripted streamFn that yields a fresh stop-only assistant message
- * for each LLM call, recording the conversation context pi-agent-core passes
- * in so a test can assert how many prior messages the next round carries.
- *
- * @param {Array<any[]>} contexts - sink: each call appends the `context`
- *   argument pi-agent-core forwarded (the converted message array).
- * @param {Array<{content: any[], stopReason: string}>} [script]
- */
-const makeScriptedStreamFn = (contexts, script = []) => {
-  let turn = 0;
-  return (_model, context, _options) => {
-    contexts.push(context);
-    const stream = createAssistantMessageEventStream();
-    /** @type {any} */
-    const partial = harden({
-      role: 'assistant',
-      content: [],
-      api: stubModel.api,
-      provider: stubModel.provider,
-      model: stubModel.id,
-      usage: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-      },
-      stopReason: 'stop',
-      timestamp: Date.now(),
-    });
-    const next = script[turn] || {
-      content: [{ type: 'text', text: `reply-${turn}` }],
-      stopReason: 'stop',
-    };
-    turn += 1;
-    /** @type {any} */
-    const finalMessage = harden({
-      ...partial,
-      content: next.content,
-      stopReason: next.stopReason,
-    });
-    stream.push({ type: 'start', partial });
-    stream.push({
-      type: 'done',
-      reason: /** @type {'toolUse' | 'stop'} */ (
-        next.stopReason === 'toolUse' ? 'toolUse' : 'stop'
-      ),
-      message: finalMessage,
-    });
-    stream.end(finalMessage);
-    return stream;
-  };
-};
-
-/**
- * Construct a PiAgent with a scripted streamFn, seeded with `messages`,
- * recording the per-round LLM context into `contexts`.
- *
- * @param {Array<any>} messages
- * @param {Array<any[]>} contexts
- */
-const makeScriptedAgent = (messages, contexts) =>
-  new PiAgent({
-    initialState: {
-      systemPrompt: 'You are a test stub.',
-      model: stubModel,
-      tools: [],
-      messages,
-      thinkingLevel: 'off',
-    },
-    convertToLlm: msgs =>
-      msgs.filter(
-        m =>
-          m.role === 'user' ||
-          m.role === 'assistant' ||
-          m.role === 'toolResult',
-      ),
-    toolExecution: 'sequential',
-    streamFn: makeScriptedStreamFn(contexts),
-  });
+import { makeScriptedAgent } from './scripted-pi-agent.js';
 
 test('persist+rehydrate: restored transcript deep-equals pre-restart messages', async t => {
   const { powers } = makeMockPowers();
@@ -285,7 +186,11 @@ test('integration (spawn-seam restart): post-restart round carries M+1 turns', a
     // eslint-disable-next-line no-await-in-loop
     await beforeAgent.waitForIdle();
     // eslint-disable-next-line no-await-in-loop
-    await persistTurnDelta(powers, BigInt(i), beforeAgent.state.messages.slice(prior));
+    await persistTurnDelta(
+      powers,
+      BigInt(i),
+      beforeAgent.state.messages.slice(prior),
+    );
   }
   const userTurnsBefore = beforeAgent.state.messages.filter(
     m => m.role === 'user',

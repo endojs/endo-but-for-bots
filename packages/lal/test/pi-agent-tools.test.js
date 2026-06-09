@@ -27,84 +27,14 @@
 import test from '@endo/ses-ava/prepare-endo.js';
 
 import { Agent as PiAgent } from '@earendil-works/pi-agent-core';
-import { createAssistantMessageEventStream } from '@earendil-works/pi-ai';
 
 import { toolDefs, makeExecuteTool, toAgentTool } from '../agent.js';
 import { makeMockPowers } from '../tools/mock-powers.js';
-
-/**
- * Minimal pi-ai Model placeholder. The scripted streamFn ignores the model;
- * pi-agent-core only reads `api`, `provider`, and `id` for diagnostic
- * fields on the resulting AssistantMessage.
- */
-/** @type {any} */
-const stubModel = harden({
-  id: 'stub-model',
-  name: 'stub/stub-model',
-  api: 'openai-completions',
-  provider: 'openai',
-  baseUrl: 'http://invalid.example',
-  reasoning: false,
-  input: ['text'],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  contextWindow: 4096,
-  maxTokens: 1024,
-});
-
-/**
- * Build a scripted streamFn that yields a fresh AssistantMessage for each
- * LLM call from a pre-recorded queue. When the queue is exhausted, returns
- * a stop-only assistant message so the agent loop terminates cleanly.
- *
- * @param {Array<{content: any[], stopReason: string}>} script
- */
-const makeScriptedStreamFn = script => {
-  let turn = 0;
-  return (_model, _context, _options) => {
-    const stream = createAssistantMessageEventStream();
-    /** @type {any} */
-    const partial = harden({
-      role: 'assistant',
-      content: [],
-      api: stubModel.api,
-      provider: stubModel.provider,
-      model: stubModel.id,
-      usage: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-      },
-      stopReason: 'stop',
-      timestamp: Date.now(),
-    });
-    const next = script[turn] || {
-      content: [{ type: 'text', text: 'done' }],
-      stopReason: 'stop',
-    };
-    turn += 1;
-    /** @type {any} */
-    const finalMessage = harden({
-      ...partial,
-      content: next.content,
-      stopReason: next.stopReason,
-    });
-    // Per the AssistantMessageEvent contract, emit `start` (so the loop
-    // attaches the partial), then `done` with the final message.
-    stream.push({ type: 'start', partial });
-    stream.push({
-      type: 'done',
-      reason: /** @type {'toolUse' | 'stop'} */ (
-        next.stopReason === 'toolUse' ? 'toolUse' : 'stop'
-      ),
-      message: finalMessage,
-    });
-    stream.end(finalMessage);
-    return stream;
-  };
-};
+import {
+  stubModel,
+  convertToLlm,
+  makeScriptedStreamFn,
+} from './scripted-pi-agent.js';
 
 test('PiAgent + lal tools: normal arg dispatch + validateAndFixupArgs JSON-string retry', async t => {
   // Track which lal-tool dispatches receive what arguments by wrapping the
@@ -193,13 +123,7 @@ test('PiAgent + lal tools: normal arg dispatch + validateAndFixupArgs JSON-strin
     // The reviewer asked specifically for a `convertToLlm` stub; supply the
     // same identity-filter the production `spawnWorkerLoop` installs so the
     // test exercises the same path.
-    convertToLlm: msgs =>
-      msgs.filter(
-        m =>
-          m.role === 'user' ||
-          m.role === 'assistant' ||
-          m.role === 'toolResult',
-      ),
+    convertToLlm,
     toolExecution: 'sequential',
     streamFn,
   });
