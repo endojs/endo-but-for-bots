@@ -1,8 +1,8 @@
 # Drop the pseudo-prototype: collapse the immutable-ArrayBuffer lib onto `ArrayBuffer.prototype`
 
-This design captures the redesign erights proposed in
-[`endojs/endo-but-for-bots#430` comment `4655451705`](https://github.com/endojs/endo-but-for-bots/pull/430#issuecomment-4655451705),
-sometimes referred to as the *drop-the-pony* redesign. The package keeps
+This design captures the *drop-the-pony* redesign erights proposed
+on the experiment branch's predecessor pull request (referenced in
+the comment whose identifier appears in the project log). The package keeps
 its split between a self-contained library layer (today's pony layer)
 and a shim layer that installs immutable-ArrayBuffer support onto the
 genuine `ArrayBuffer.prototype` at load time. The redesign changes what
@@ -67,9 +67,9 @@ discriminate on whether `this` is in the brand-check WeakMap.
 The discriminator is the *amplifier-with-this-fallthrough* pattern: a
 brand-check function that returns the underlying genuine buffer if the
 receiver is in the WeakMap, and returns the receiver itself otherwise.
-The PR #430 experiment branch already uses this pattern for freezable
-TypedArrays (commit `e02ec0d08`) and erights has signaled it as the
-preferred shape for ArrayBuffer too.
+The predecessor experiment branch already uses this pattern for
+freezable TypedArrays (commit `e02ec0d08`) and erights has signaled it
+as the preferred shape for ArrayBuffer too.
 
 ## Design
 
@@ -241,8 +241,8 @@ The package's `index.js` and `package.json` `exports` need a call:
   immutability without forcing the shim to be installed").** This
   keeps the package useful as a library outside of an SES context, at
   the cost of exporting one or two symbols. The premise-2 narrowing
-  (drop the `.` export entirely; see PR #430 commit `a5e31162`) is
-  separated into a follow-up PR.
+  (drop the `.` export entirely; see the predecessor experiment branch's
+  commit `a5e31162`) is separated into a follow-up PR.
 
 The exact public exports after the redesign:
 
@@ -308,7 +308,7 @@ platform; those *do* trigger the warning when present, which is the
 current behaviour on platforms where the resizable-ArrayBuffer
 proposal has shipped).
 
-**Decision: keep master's warn-and-overwrite policy.** The PR #430
+**Decision: keep master's warn-and-overwrite policy.** The predecessor
 experiment branch's `if (!('sliceToImmutable' in arrayBufferPrototype))`
 detect-then-skip is appropriate for the freezable-TypedArray side
 (where the proposal is at stage 1 and platforms diverge widely), but
@@ -443,8 +443,9 @@ new shape.
 
 - **Keep the pseudo-prototype, only do the rename.** Considered and
   rejected. The maintainer's framing in the dispatch and erights's
-  comment on PR #430 are explicit that the pseudo-prototype layer
-  itself is the artifact to remove. A rename-only PR would still leave
+  redesign comment on the predecessor are explicit that the
+  pseudo-prototype layer itself is the artifact to remove. A
+  rename-only PR would still leave
   the `%ImmutableArrayBufferPrototype%` intrinsic, the permits entry,
   and the two-surface README story in place.
 - **Remove the lib layer entirely and inline everything into the
@@ -473,9 +474,10 @@ making a defensible choice.
 
 - **Premise-2 as part of this PR vs as a separate prerequisite.**
   The redesign as written assumes the package still exports `.`
-  (today's shape). PR #430 commit `a5e31162` narrows the package's
-  `exports` to only `./shim.js` (premise-2 from the six-premises
-  framing on `#417`). This design *does not* fold premise-2 in: it
+  (today's shape). The predecessor experiment branch's commit
+  `a5e31162` narrows the package's `exports` to only `./shim.js`
+  (premise-2 from the six-premises framing tracked in the project
+  log). This design *does not* fold premise-2 in: it
   keeps `index.js` and the `.` export, narrowed to `isBufferImmutable`
   only. The argument for folding premise-2 in now is fewer round-trip
   PRs; the argument against is keeping each PR's diff scoped to one
@@ -495,8 +497,8 @@ making a defensible choice.
   time.
 - **TypedArray-side parallel work.** This design's scope is the
   ArrayBuffer side only. The freezable-TypedArray pseudo-prototype
-  drop (the analogous move for `%TypedArrayPrototype%`) is on the PR
-  #430 experiment branch and is structurally similar but not
+  drop (the analogous move for `%TypedArrayPrototype%`) is on the
+  predecessor experiment branch and is structurally similar but not
   identical (TypedArrays have a richer pseudo-constructor story and
   a separate `internal-heir.js` helper). It lands as a separate PR
   with its own DESIGN.md once this ArrayBuffer-side work merges and
@@ -521,9 +523,8 @@ making a defensible choice.
 
 ## References
 
-- [erights's redesign comment on `endojs/endo-but-for-bots#430`](https://github.com/endojs/endo-but-for-bots/pull/430#issuecomment-4655451705) (the framing this document expands).
-- [`endojs/endo-but-for-bots#430` comment `4656037929`](https://github.com/endojs/endo-but-for-bots/pull/430#issuecomment-4656037929) (the maintainer's authorization to author this design master-based, integrated into the package as `DESIGN.md` rather than in `designs/`).
-- `endojs/endo-but-for-bots#417`: the six-premises framing this redesign is part of.
-- `endojs/endo-but-for-bots#430`, branch `experiment/no-spackle-immutable-arraybuffer-417`: the experimental working pattern for the freezable TypedArray side, whose amplifier-with-this-fallthrough discipline this design adopts for the ArrayBuffer side. Translatable commits: `e02ec0d08` (shim install body), `721c68a3` (initial pony scaffolding to translate).
+- erights's redesign comment on the predecessor pull request: the framing this document expands. The exact comment identifier and the maintainer's authorization comment are recorded in the project log alongside this design's authoring dispatch.
+- The six-premises framing pull request: this redesign realises premise 1 (drop the intermediate prototype) and leaves premise 2 (narrow the `exports` surface) for a follow-up PR.
+- The predecessor experiment branch (`experiment/no-spackle-immutable-arraybuffer-417` on the upstream): the experimental working pattern for the freezable TypedArray side, whose amplifier-with-this-fallthrough discipline this design adopts for the ArrayBuffer side. Translatable commits: `e02ec0d08` (shim install body), `721c68a3` (initial pony scaffolding to translate).
 - `packages/module-source/DESIGN.md`: the only other in-package DESIGN.md in the tree; structural precedent for what a package-rooted DESIGN.md looks like.
 - `docs/spackle.md`: the polyfill + ponyfill + race-discipline doc; the "no-spackle" framing in the experiment branch's name signals this redesign's commitment to the simpler discipline.
