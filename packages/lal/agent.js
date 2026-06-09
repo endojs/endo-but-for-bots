@@ -837,15 +837,6 @@ export const spawnWorkerLoop = async (powers, context, workerEnv) => {
     return null;
   };
 
-  // Resolve the model string for pi-ai. lal historically selected a provider
-  // from LAL_HOST and a model from LAL_MODEL. The pi-ai registry takes a
-  // single "provider/modelId" string instead; we keep accepting the legacy
-  // LAL_* variables and translate them.
-  const model = resolveModelString(workerEnv);
-  if (workerEnv.LAL_AUTH_TOKEN) {
-    setProviderApiKey(model, workerEnv.LAL_AUTH_TOKEN);
-  }
-
   // Bind the tool dispatcher to this guest's powers, then build the
   // AgentTool array pi-agent-core consumes directly. We construct the
   // PiAgent in-line rather than via @endo/genie's `makePiAgent` so that
@@ -860,8 +851,11 @@ export const spawnWorkerLoop = async (powers, context, workerEnv) => {
     toAgentTool(name, summary, executeTool),
   );
 
-  const resolvedModel = await resolveModel(model);
-  const isOllama = resolvedModel.name?.startsWith('ollama/');
+  const { model: resolvedModel, getApiKey } =
+    await resolveWorkerModel(workerEnv);
+  if (workerEnv.LAL_AUTH_TOKEN) {
+    setProviderApiKey(resolvedModel.provider, workerEnv.LAL_AUTH_TOKEN);
+  }
 
   const piAgent = new PiAgent({
     initialState: {
@@ -879,7 +873,7 @@ export const spawnWorkerLoop = async (powers, context, workerEnv) => {
           m.role === 'toolResult',
       ),
     toolExecution: 'sequential',
-    ...(isOllama ? { getApiKey: async _provider => getOllamaApiKey() } : {}),
+    ...(getApiKey ? { getApiKey } : {}),
   });
 
   /**
@@ -1047,77 +1041,157 @@ harden(spawnWorkerLoop);
 // Model + Provider Resolution
 // ============================================================================
 //
-// pi-ai expects a single "provider/modelId" string and reads provider API
-// keys from `process.env.<PROVIDER>_API_KEY`. lal's historical configuration
-// passes LAL_HOST + LAL_MODEL + LAL_AUTH_TOKEN. The helpers below translate
-// the legacy LAL_* variables into the pi-ai shape so existing
-// `.env.example` files continue to work.
+// pi-ai's built-in registry models carry their own `baseUrl`, while custom
+// OpenAI-compatible endpoints (local `/v1` servers, remote Ollama, vLLM,
+// llama.cpp, etc.) must be represented by explicit Model objects. lal's
+// historical configuration passes LAL_HOST + LAL_MODEL + LAL_AUTH_TOKEN, so
+// the helpers below preserve the selected endpoint while adapting that legacy
+// shape to pi-agent-core.
+
+/** @typedef {(provider: string) => Promise<string | undefined>} ApiKeyResolver */
 
 /**
- * Translate the legacy LAL_HOST + LAL_MODEL pair into a single
- * "provider/modelId" string suitable for pi-ai's getModel(). Recognized
- * LAL_HOST patterns:
- *
- *   contains "anthropic.com"  -> provider "anthropic"
- *   contains "generativelanguage.googleapis.com" or "gemini" -> "google"
- *   contains "openai.com"     -> provider "openai"
- *   contains "openrouter"     -> provider "openrouter"
- *   contains ":11434"         -> provider "ollama"
- *   otherwise (incl. "/v1" llama.cpp servers) -> provider "openai"
- *     (pi-ai's openai-completions adaptor speaks the same protocol)
- *
- * LAL_MODEL is used as the model id; a sensible default is chosen if
- * LAL_MODEL is empty.
- *
- * @param {{ LAL_HOST?: string, LAL_MODEL?: string }} env
+ * @typedef {object} WorkerModelConfig
+ * @property {Model<'openai-completions'>} model
+ * @property {ApiKeyResolver} [getApiKey]
+ */
+
+const DEFAULT_HOST = 'http://localhost:11434';
+const DEFAULT_LOCAL_MODEL = 'qwen3';
+
+/**
+ * @param {string} value
  * @returns {string}
  */
-function resolveModelString(env) {
-  const host = (env.LAL_HOST || 'http://localhost:11434').toLowerCase();
-  let provider = 'ollama';
-  let defaultModel = 'qwen3';
+const trimTrailingSlashes = value => value.replace(/\/+$/, '');
+
+/**
+ * Convert a caller-supplied OpenAI-compatible base URL into the form the
+ * OpenAI SDK expects. Ollama's native host is conventionally configured
+ * without `/v1`; other OpenAI-compatible hosts are often configured with it
+ * already, so this helper appends it only when absent.
+ *
+ * @param {string} baseURL
+ * @returns {string}
+ */
+const normalizeOpenAIBaseUrl = baseURL => {
+  const trimmed = trimTrailingSlashes(baseURL);
+  return trimmed.match(/\/v1(?:\/.*)?$/) ? trimmed : `${trimmed}/v1`;
+};
+
+/**
+ * Preserve the historical behavior where a blank model, or the old generic
+ * qwen3 form default, upgrades to the provider-specific default for hosted
+ * registry providers. For local/custom endpoints, qwen3 remains the default.
+ *
+ * @param {string | undefined} explicitModel
+ * @param {string} defaultModel
+ * @returns {string}
+ */
+const resolveLegacyModelDefault = (explicitModel, defaultModel) =>
+  !explicitModel || explicitModel === DEFAULT_LOCAL_MODEL
+    ? defaultModel
+    : explicitModel;
+
+/**
+ * @param {string | undefined} fallbackToken
+ * @returns {ApiKeyResolver}
+ */
+const makeApiKeyResolver = fallbackToken => async _provider => fallbackToken;
+
+/**
+ * Resolve the legacy LAL_HOST + LAL_MODEL pair into a concrete pi-ai Model.
+ * Recognized LAL_HOST patterns:
+ *
+ *   contains "anthropic.com"  -> pi-ai registry provider "anthropic"
+ *   contains "generativelanguage.googleapis.com" or "gemini" -> "google"
+ *   contains "openrouter"    -> pi-ai registry provider "openrouter"
+ *   contains "openai.com"    -> pi-ai registry provider "openai"
+ *   contains "/v1"           -> custom OpenAI-compatible endpoint
+ *   otherwise                -> custom Ollama-compatible endpoint
+ *
+ * @param {{ LAL_HOST?: string, LAL_MODEL?: string }} env
+ * @returns {Promise<WorkerModelConfig>}
+ */
+export async function resolveWorkerModel(env) {
+  await Promise.resolve();
+  const rawHost = env.LAL_HOST || DEFAULT_HOST;
+  const host = rawHost.toLowerCase();
+
   if (host.includes('anthropic.com')) {
-    provider = 'anthropic';
-    defaultModel = 'claude-opus-4-5-20251101';
-  } else if (
+    return harden({
+      model: resolveRegistryModel(
+        'anthropic',
+        resolveLegacyModelDefault(
+          env.LAL_MODEL,
+          'claude-opus-4-5-20251101',
+        ),
+      ),
+    });
+  }
+
+  if (
     host.includes('generativelanguage.googleapis.com') ||
     host.includes('gemini')
   ) {
-    // pi-ai exposes Google's Gemini models under the provider name 'google'.
-    provider = 'google';
-    defaultModel = 'gemini-2.0-flash';
-  } else if (host.includes('openrouter')) {
-    provider = 'openrouter';
-    defaultModel = 'openrouter/auto';
-  } else if (host.includes('openai.com')) {
-    provider = 'openai';
-    defaultModel = 'gpt-4o-mini';
-  } else if (host.includes(':11434')) {
-    // Native Ollama port.
-    provider = 'ollama';
-    defaultModel = 'qwen3';
-  } else if (host.includes('/v1')) {
-    // Any OpenAI-compatible local server (llama.cpp, vLLM, tgi).
-    provider = 'openai';
-    defaultModel = 'qwen3';
+    return harden({
+      // pi-ai exposes Google's Gemini models under the provider name 'google'.
+      model: resolveRegistryModel(
+        'google',
+        resolveLegacyModelDefault(env.LAL_MODEL, 'gemini-2.0-flash'),
+      ),
+    });
   }
-  const modelId = env.LAL_MODEL || defaultModel;
-  return `${provider}/${modelId}`;
+
+  if (host.includes('openrouter')) {
+    return harden({
+      model: resolveRegistryModel(
+        'openrouter',
+        env.LAL_MODEL || 'openrouter/auto',
+      ),
+    });
+  }
+
+  if (host.includes('openai.com')) {
+    return harden({
+      model: resolveRegistryModel(
+        'openai',
+        resolveLegacyModelDefault(env.LAL_MODEL, 'gpt-4o-mini'),
+      ),
+    });
+  }
+
+  if (host.includes('/v1')) {
+    return harden({
+      model: buildOpenAICompatibleModel(
+        env.LAL_MODEL || DEFAULT_LOCAL_MODEL,
+        trimTrailingSlashes(rawHost),
+        'openai',
+        'openai-compatible',
+      ),
+      getApiKey: makeApiKeyResolver('ollama'),
+    });
+  }
+
+  return harden({
+    model: buildOllamaModel(env.LAL_MODEL || DEFAULT_LOCAL_MODEL, rawHost),
+    getApiKey: makeApiKeyResolver(getOllamaApiKey()),
+  });
 }
+harden(resolveWorkerModel);
 
 /**
  * Install the caller-supplied API key into the appropriate environment
  * variable so pi-ai's provider adaptor finds it. We avoid clobbering an
  * already-set variable; this is best-effort and explicitly per-worker.
  *
- * @param {string} modelString - "provider/modelId"
+ * @param {string} provider
  * @param {string} authToken
  */
-function setProviderApiKey(modelString, authToken) {
+function setProviderApiKey(provider, authToken) {
   // eslint-disable-next-line no-undef
   const env = globalThis?.process?.env;
   if (!env) return;
-  const [provider] = modelString.split('/');
   const keyName = `${provider.toUpperCase()}_API_KEY`;
   if (!env[keyName] || env[keyName] === 'ollama') {
     env[keyName] = authToken;
@@ -1125,55 +1199,63 @@ function setProviderApiKey(modelString, authToken) {
 }
 
 /**
- * Resolve a "provider/modelId" string into a pi-ai Model object. Mirrors
- * the resolution genie's `makePiAgent` performs internally: known providers
- * go through `getModel(provider, modelId)`; the `ollama/` prefix is treated
- * specially (Ollama is not in pi-ai's built-in registry and exposes an
- * OpenAI-compatible /v1 endpoint).
- *
- * @param {string} modelString
- * @returns {Promise<Model<'openai-completions'>>}
+ * @param {string} provider
+ * @param {string} modelId
+ * @returns {Model<'openai-completions'>}
  */
-async function resolveModel(modelString) {
-  const parts = modelString.split('/');
-  const provider = parts[0];
-  const modelId = parts.slice(1).join('/');
-  if (provider === 'ollama') {
-    return buildOllamaModel(modelId);
-  }
+function resolveRegistryModel(provider, modelId) {
   // pi-ai's KnownProvider overloads of getModel typically resolve the modelId
   // to `never` for the generic call site; we want the runtime registry lookup
   // here, which works for any string the caller passed.
   // @ts-expect-error - permissive runtime lookup against KnownProvider overloads
-  return getModel(provider, modelId);
+  const model = getModel(provider, modelId);
+  if (model === undefined) {
+    throw new Error(`Unknown pi-ai model: ${provider}/${modelId}`);
+  }
+  return model;
 }
 
 /**
- * Build a pi-ai Model object for a local Ollama instance. Ollama exposes
- * an OpenAI-compatible /v1/chat/completions endpoint, so we masquerade as
- * the "openai" provider with a custom baseUrl. Matches the shape genie
- * uses internally.
+ * Build a pi-ai Model object for an OpenAI-compatible endpoint.
  *
- * @param {string} id - The ollama model name (e.g. "qwen3")
- * @returns {Promise<Model<'openai-completions'>>}
+ * @param {string} id
+ * @param {string} baseUrl
+ * @param {string} provider
+ * @param {string} namePrefix
+ * @returns {Model<'openai-completions'>}
  */
-async function buildOllamaModel(id) {
-  await Promise.resolve();
-  // eslint-disable-next-line no-undef
-  const env = globalThis?.process?.env ?? {};
-  const ollamaHost = env.OLLAMA_HOST || 'http://127.0.0.1:11434';
+function buildOpenAICompatibleModel(id, baseUrl, provider, namePrefix) {
   return harden({
     id,
-    name: `ollama/${id}`,
+    name: `${namePrefix}/${id}`,
     api: 'openai-completions',
-    provider: 'openai',
-    baseUrl: `${ollamaHost}/v1`,
+    provider,
+    baseUrl,
     reasoning: false,
     input: ['text'],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: 32_768,
     maxTokens: 8192,
   });
+}
+
+/**
+ * Build a pi-ai Model object for an Ollama-compatible instance. Ollama exposes
+ * an OpenAI-compatible /v1/chat/completions endpoint, so we masquerade as the
+ * "openai" provider with a custom baseUrl. Unlike genie's default helper, lal
+ * takes the endpoint from the worker's submitted LAL_HOST form value.
+ *
+ * @param {string} id - The ollama model name (e.g. "qwen3")
+ * @param {string} host
+ * @returns {Model<'openai-completions'>}
+ */
+function buildOllamaModel(id, host) {
+  return buildOpenAICompatibleModel(
+    id,
+    normalizeOpenAIBaseUrl(host),
+    'openai',
+    'ollama',
+  );
 }
 
 /**
