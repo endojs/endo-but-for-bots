@@ -30,6 +30,11 @@ import { scoreObservedTrace } from './trace-metric.js';
 /**
  * @typedef {import('./trace-metric.js').TraceExample} TraceExample
  * @typedef {import('./trace-metric.js').TraceEvent} TraceEvent
+ * @typedef {import('@ax-llm/ax').AxAIService<
+ *   unknown,
+ *   unknown,
+ *   string
+ * >} AxAIService
  *
  * @typedef {(input: {
  *   example: TraceExample,
@@ -47,8 +52,8 @@ import { scoreObservedTrace } from './trace-metric.js';
  * @typedef {(
  *   env: NodeJS.ProcessEnv,
  *   model: string,
- *   ai: (args: any) => any,
- * ) => any} MakeAxAIFn
+ *   ai: (args: any) => AxAIService,
+ * ) => AxAIService} MakeAxAIFn
  *
  * @typedef {object} OptimizerCliConfig
  * @property {string} examplesPath          Absolute path to the examples JSON.
@@ -88,6 +93,11 @@ const csvValues = value =>
     .split(',')
     .map(item => item.trim())
     .filter(Boolean);
+
+const globals =
+  /** @type {{ harden?: (<T>(value: T) => T) & Record<symbol, boolean> }} */ (
+    /** @type {unknown} */ (globalThis)
+  );
 
 /**
  * Resolve the provider name from the host URL. Mirrors the
@@ -298,11 +308,11 @@ export const runOptimizerCli = async config => {
   // agent transitively (lal's agent.js loads @endo/marshal -> @endo/errors
   // and requires SES). Lazy-import so `--help` / `--score-log` continue
   // to run without SES.
-  if (globalThis.harden?.[hardenShimMarker]) {
+  if (globals.harden?.[hardenShimMarker]) {
     // The optimizer bootstrap installs a shallow harden shim so Ax can load
     // before SES. Remove only that shim before importing @endo/init so Endo's
     // real hardener can deeply harden pattern/interface guard payloads.
-    delete globalThis.harden;
+    delete globals.harden;
   }
   await import('@endo/init');
   if (envPath) {
@@ -425,10 +435,15 @@ export const runOptimizerCli = async config => {
       rounds,
     },
   );
-  const result = await optimizer.compile(program, train, traceMetric, {
-    validationExamples: validation,
-    maxMetricCalls,
-  });
+  const result = await optimizer.compile(
+    program,
+    train,
+    /** @type {import('@ax-llm/ax').AxMetricFn} */ (traceMetric),
+    {
+      validationExamples: validation,
+      maxMetricCalls,
+    },
+  );
   console.log(
     JSON.stringify(
       {

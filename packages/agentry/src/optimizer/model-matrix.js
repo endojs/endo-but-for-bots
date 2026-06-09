@@ -35,6 +35,15 @@ export const DEFAULT_MODEL = KNOWN_MODELS[0];
 harden(DEFAULT_MODEL);
 
 /**
+ * @template {object} E
+ * @param {E} example
+ * @returns {E & Record<string, unknown>}
+ */
+const spreadableExample = example =>
+  /** @type {E & Record<string, unknown>} */ (example);
+harden(spreadableExample);
+
+/**
  * Expand a flat example list into a (model, example) cross product.
  * When `models` is empty, returns the examples unchanged so a single
  * default-model run does not over-iterate.
@@ -46,8 +55,10 @@ harden(DEFAULT_MODEL);
  */
 export const expandExamplesByModel = (examples, models) =>
   models.length > 0
-    ? models.flatMap(model => examples.map(example => ({ ...example, model })))
-    : examples.map(example => ({ ...example }));
+    ? models.flatMap(model =>
+        examples.map(example => ({ ...spreadableExample(example), model })),
+      )
+    : examples.map(example => ({ ...spreadableExample(example) }));
 harden(expandExamplesByModel);
 
 /**

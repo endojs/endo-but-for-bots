@@ -18,6 +18,12 @@ import { scoreObservedTrace } from './trace-metric.js';
 /**
  * @typedef {import('./trace-metric.js').TraceEvent} TraceEvent
  * @typedef {import('./trace-metric.js').TraceExample} TraceExample
+ * @typedef {import('@ax-llm/ax').AxAIService<
+ *   unknown,
+ *   unknown,
+ *   string
+ * >} AxAIService
+ * @typedef {import('@ax-llm/ax').AxMetricFn} AxMetricFn
  *
  * @typedef {object} TrialResult
  * @property {TraceEvent[]} trace
@@ -77,9 +83,10 @@ export class AgentryPromptProgram extends AxGen {
 
 /**
  * @param {'gepa' | 'ace' | 'bootstrap'} kind
- * @param {{ studentAI: unknown, teacherAI?: unknown, rounds?: number }} options
+ * @param {{ studentAI: AxAIService, teacherAI?: AxAIService, rounds?: number }} options
  */
 export const makePromptOptimizer = (kind, options) => {
+  /** @type {{ studentAI: AxAIService, teacherAI?: AxAIService }} */
   const common = harden({
     studentAI: options.studentAI,
     teacherAI: options.teacherAI,
@@ -115,8 +122,11 @@ harden(makePromptOptimizer);
 /**
  * Metric Ax calls with each candidate's prediction + the example.
  *
- * @param {{ prediction: TrialResult, example: TraceExample }} input
+ * @type {AxMetricFn}
  */
 export const traceMetric = ({ prediction, example }) =>
-  scoreObservedTrace(prediction.trace, example).score;
+  scoreObservedTrace(
+    /** @type {TrialResult} */ (prediction).trace,
+    /** @type {TraceExample} */ (example),
+  ).score;
 harden(traceMetric);
