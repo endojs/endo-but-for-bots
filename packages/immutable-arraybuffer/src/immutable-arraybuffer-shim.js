@@ -106,9 +106,9 @@ if (!('sliceToImmutable' in arrayBufferPrototype)) {
   // for every input that is not a hidden (immutable-backed) buffer, and
   // wraps emulated-freezable TypedArrays when the input is one. The
   // shim then replaces `%TypedArrayPrototype%.buffer`'s getter with the
-  // virtual getter so genuine TypedArrays whose backing buffer is an
-  // immutable wrapper return the wrapper rather than leaking the
-  // genuine ArrayBuffer.
+  // virtual getter so that the `buffer` accessor returns the immutable
+  // wrapper rather than leaking the genuine ArrayBuffer it stands in
+  // for.
   const TypedArray = getPrototypeOf(Uint8Array);
   const { prototype: typedArrayPrototype } = TypedArray;
 
