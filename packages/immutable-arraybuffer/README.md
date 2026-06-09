@@ -2,7 +2,7 @@
 
 This `@endo/immutable-arraybuffer` package provides a lib layer and a shim for a proposed new JavaScript feature: *Immutable ArrayBuffers*.
 - The lib layer in `src/lib.js` defines a property record of the methods and accessors the proposal adds to `ArrayBuffer.prototype`, along with the factory that constructs emulated immutable buffers.
-The package exports only `isBufferImmutable` from `index.js`, a brand check usable without forcing the shim to be installed.
+The package re-exports `isBufferImmutable` (a brand check usable without forcing the shim to be installed) and, pending the premise-2 follow-up that narrows the package's `exports`, the `sliceBufferToImmutable` and `optTransferBufferToImmutable` free-function helpers that pre-shim callers still rely on.
 - A shim modifies the existing JavaScript primordials as needed to most closely emulate the feature as proposed.
 The `shim.js` file copies the lib layer's property record onto `ArrayBuffer.prototype`.
 Importing `@endo/immutable-arraybuffer/shim.js` will cause these changes.
@@ -101,14 +101,14 @@ It will require a later manual step to delete the shim, after manual analysis of
 Thus, the objects and function it creates are not hardened by this lib/shim itself.
 Rather, the ses-shim is expected to import these, and then treat the resulting objects as if they were additional primordials, to be hardened during `lockdown`'s harden phase.
 
-## Purposeful Violation (no longer applies)
+## Purposeful Violation
 
-Earlier versions of this package set `[Symbol.toStringTag]` to `'ImmutableArrayBuffer'` on the intermediate prototype of emulated immutable buffers.
-The rationale: Node's [concordance](https://github.com/concordancejs/concordance/blob/791d2a89b40eb13f2c889ac270dd8be190cf8073/lib/describe.js#L36) (used by ava for diagnostic output) sniffs the result of `toString()` to decide whether it can do `Buffer.from` on the object, which only works on genuine `ArrayBuffer` exotic objects.
-The intermediate prototype's `[Symbol.toStringTag]` override prevented concordance from misidentifying an emulated immutable buffer as a genuine `ArrayBuffer`.
+This package sets `[Symbol.toStringTag]` to `'ImmutableArrayBuffer'` on each emulated immutable buffer (as an own property of the instance, not on the shared `ArrayBuffer.prototype`).
+The rationale: Node's [concordance](https://github.com/concordancejs/concordance/blob/791d2a89b40eb13f2c889ac270dd8be190cf8073/lib/describe.js#L36) (used by ava for diagnostic output) sniffs the result of `Object.prototype.toString.call(value)` to decide whether it can do `Buffer.from(value)` on the object.
+`Buffer.from` only works on genuine `ArrayBuffer` exotic objects; passing an emulated immutable buffer to it throws a `TypeError` that concordance does not handle gracefully.
+The own-property `[Symbol.toStringTag] = 'ImmutableArrayBuffer'` slot keeps concordance from routing the value through `Buffer.from` and lets it fall through to the unrenderable-value path.
 
-The redesign that drops the intermediate prototype also retires this violation.
-Emulated immutable buffers now directly inherit from `ArrayBuffer.prototype`, so `Object.prototype.toString.call(immuAB)` returns `'[object ArrayBuffer]'`.
-Concordance will sniff `'ArrayBuffer'` for both genuine and emulated buffers, and will treat both as ones it can `Buffer.from`.
-For genuine buffers this is correct; for emulated immutable buffers it triggers a `TypeError` because they are not actual exotic objects, which concordance handles the same as any other unrenderable value.
-Callers that need to distinguish emulated immutable buffers from genuine ones should use the `immutable` accessor (or `isBufferImmutable` for the pre-shim case), which is the canonical brand check.
+The drop-the-pseudo-prototype redesign removed the intermediate prototype that earlier versions hung this slot on; the slot is now installed per-instance via `defineProperty` in `makeImmutableArrayBufferInternal`.
+Genuine ArrayBuffers continue to inherit `'ArrayBuffer'` from the prototype: `Object.prototype.toString.call(new ArrayBuffer(0))` reads as `'[object ArrayBuffer]'`.
+Only emulated immutable buffers carry the `'ImmutableArrayBuffer'` slot: `Object.prototype.toString.call(new ArrayBuffer(0).sliceToImmutable())` reads as `'[object ImmutableArrayBuffer]'`.
+Callers that need to distinguish emulated immutable buffers from genuine ones programmatically should prefer the `immutable` accessor (or `isBufferImmutable` for the pre-shim case), which is the canonical brand check.

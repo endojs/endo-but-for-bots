@@ -14,16 +14,23 @@ emulated immutable and genuine buffers; the brand check is the new
 `immutable` accessor on `ArrayBuffer.prototype` (or the
 `isBufferImmutable` free function, preserved for pre-shim callers).
 
-`Object.prototype.toString.call(immuAB)` now returns
-`'[object ArrayBuffer]'` instead of `'[object ImmutableArrayBuffer]'`.
-Callers that distinguished emulated immutable buffers by toStringTag
-should switch to the `immutable` accessor.
+The `[Symbol.toStringTag]` slot is preserved as an own property on each
+emulated immutable buffer (not on the shared prototype), so
+`Object.prototype.toString.call(immuAB)` continues to return
+`'[object ImmutableArrayBuffer]'` (as in master) while genuine
+ArrayBuffers continue to read as `'[object ArrayBuffer]'`. This keeps
+`concordance` (and any other downstream consumer that sniffs the
+toStringTag to decide whether the value is a genuine exotic) from
+misrouting an emulated immutable through `Buffer.from`, which throws
+because the emulated immutable is not an exotic object.
 
-The package's public exports narrow to `isBufferImmutable` only.
-The free-function call shape (`sliceBufferToImmutable`,
-`optTransferBufferToImmutable`) is no longer part of the package's
-module-export surface; callers migrate to the shim's method form
-(`buf.sliceToImmutable(...)`, `buf.transferToImmutable(...)`).
+The package's public exports remain `isBufferImmutable`,
+`sliceBufferToImmutable`, and `optTransferBufferToImmutable` from
+`index.js`. Narrowing the exports surface to `isBufferImmutable` only
+(the destination state envisioned in the design) is the premise-2
+follow-up PR and is out of scope here, since the bytes-side consumer
+that still uses the two free functions has not yet migrated to the
+shim's method form.
 
 `ses` drops the `%ImmutableArrayBufferPrototype%` permits entry, which
 no longer has a referent. The three permits lines inside
