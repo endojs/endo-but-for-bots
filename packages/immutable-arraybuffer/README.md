@@ -96,7 +96,6 @@ Even though they implement the full proposed `ArrayBuffer` API, they cannot be p
 Perhaps follow-on shims might modify `DataView` and `TypedArray` to emulate that as well, but that is hard and beyond the ambition of this lib + shim.
 - Unlike genuine `ArrayBuffer` or `SharedArrayBuffer` exotic objects, the shim's emulated immutable buffers cannot be cloned or transfered between JS threads.
 - Even after the *Immutable ArrayBuffer* proposal is implemented by the platform, the current code will still replace it with the shim implementation, in accord with shim best practices.
-See https://github.com/endojs/endo/pull/2311#discussion_r1632607527 .
 It will require a later manual step to delete the shim, after manual analysis of the compat implications.
 - This is a plain *JavaScript* lib + shim, not by itself a *Hardened JavaScript* polyfill/shim.
 Thus, the objects and function it creates are not hardened by this lib/shim itself.
