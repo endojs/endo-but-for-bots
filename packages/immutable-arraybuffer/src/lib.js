@@ -4,6 +4,7 @@ const {
   ArrayBuffer,
   Object,
   Reflect,
+  Symbol,
   TypeError,
   Uint8Array,
   WeakMap,
@@ -300,6 +301,24 @@ const makeImmutableArrayBufferInternal = realBuffer => {
       __proto__: arrayBufferPrototype,
     })
   );
+  // Install `[Symbol.toStringTag] = 'ImmutableArrayBuffer'` as an own
+  // property of each emulated immutable buffer (not on the shared prototype,
+  // which must retain the genuine `'ArrayBuffer'` tag so genuine instances
+  // continue to read as `[object ArrayBuffer]`). This is the minimum
+  // departure from DESIGN.md § Move 2 paragraph 7 needed to keep
+  // `concordance` (and any downstream consumer that sniffs the toStringTag)
+  // from misrouting an emulated immutable through `Buffer.from`, which
+  // throws because the emulated immutable is not a genuine exotic. With the
+  // own-property slot in place, `Object.prototype.toString.call(immuAB)`
+  // returns `'[object ImmutableArrayBuffer]'` and concordance routes the
+  // value through its unrenderable-value path. Genuine ArrayBuffers
+  // continue to inherit `'ArrayBuffer'` from the prototype.
+  defineProperty(result, Symbol.toStringTag, {
+    value: 'ImmutableArrayBuffer',
+    writable: false,
+    enumerable: false,
+    configurable: false,
+  });
   // Safe because this WeakMap owns its set method.
   // eslint-disable-next-line @endo/no-polymorphic-call
   buffers.set(result, realBuffer);

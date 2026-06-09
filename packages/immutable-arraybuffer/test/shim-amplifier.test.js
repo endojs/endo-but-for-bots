@@ -20,12 +20,30 @@ test('emulated immutable inherits directly from ArrayBuffer.prototype', t => {
   t.true(iab.immutable);
 });
 
-test('Object.prototype.toString.call(immuAB) reads as ArrayBuffer', t => {
+test('Object.prototype.toString.call(immuAB) reads as ImmutableArrayBuffer', t => {
   const iab = new ArrayBuffer(2).sliceToImmutable();
-  // After dropping the Symbol.toStringTag purposeful violation, the
-  // emulated immutable buffer's toString tag is whatever ArrayBuffer.prototype
-  // provides (which is 'ArrayBuffer').
-  t.is(Object.prototype.toString.call(iab), '[object ArrayBuffer]');
+  // Per DESIGN.md § Move 2 paragraph 7 (as amended for the design-departure
+  // recorded in the same paragraph), the `[Symbol.toStringTag]` slot is
+  // installed as an own property on each emulated immutable buffer (not on
+  // the shared ArrayBuffer.prototype). Genuine ArrayBuffers continue to
+  // inherit `'ArrayBuffer'` from the prototype; emulated immutables carry
+  // their own `'ImmutableArrayBuffer'` slot so concordance (and any other
+  // downstream consumer that sniffs the toStringTag to decide whether the
+  // value is a genuine exotic) routes them through the unrenderable-value
+  // path rather than into `Buffer.from`, which throws on emulated immutables.
+  t.is(
+    Object.prototype.toString.call(iab),
+    '[object ImmutableArrayBuffer]',
+  );
+});
+
+test('Object.prototype.toString.call(genuineAB) reads as ArrayBuffer', t => {
+  // The toStringTag departure is restricted to emulated immutables (an
+  // own-property slot on each emulated instance). Genuine ArrayBuffers
+  // continue to read as `[object ArrayBuffer]` via the prototype's
+  // unchanged `Symbol.toStringTag`.
+  const ab = new ArrayBuffer(2);
+  t.is(Object.prototype.toString.call(ab), '[object ArrayBuffer]');
 });
 
 test('genuine ArrayBuffer.prototype.slice falls through to genuine behaviour', t => {
