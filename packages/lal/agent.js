@@ -9,12 +9,12 @@ import { makeRefIterator } from '@endo/daemon/ref-reader.js';
 import { NamePathShape, NameOrPathShape } from '@endo/daemon/type-guards.js';
 import { makeLocalTree } from '@endo/platform/fs/node';
 
-import { Agent as PiAgent } from '@mariozechner/pi-agent-core';
-import { registerBuiltInApiProviders, getModel } from '@mariozechner/pi-ai';
+import { Agent as PiAgent } from '@earendil-works/pi-agent-core';
+import { registerBuiltInApiProviders, getModel } from '@earendil-works/pi-ai';
 import { runAgentRound } from '@endo/genie';
 
-/** @import { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core' */
-/** @import { Model } from '@mariozechner/pi-ai' */
+/** @import { AgentTool, AgentToolResult } from '@earendil-works/pi-agent-core' */
+/** @import { Model } from '@earendil-works/pi-ai' */
 
 /** @import { FarRef } from '@endo/eventual-send' */
 /** @import { GuestPowers, ToolCallArgs, InboxMessage, LalContext } from './agent.types.js' */

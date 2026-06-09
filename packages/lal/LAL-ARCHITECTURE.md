@@ -6,8 +6,8 @@ capabilities. Lal runs as an unconfined caplet inside the Endo daemon, where
 it processes messages using tool calls and can evaluate code directly.
 
 > **Note (post-pi-harness adoption).** Lal's agent loop now runs on
-> `@endo/genie`'s pi-based harness (`@mariozechner/pi-agent-core` +
-> `@mariozechner/pi-ai`). The OpenAI-format tool schemas and the
+> `@endo/genie`'s pi-based harness (`@earendil-works/pi-agent-core` +
+> `@earendil-works/pi-ai`). The OpenAI-format tool schemas and the
 > hand-rolled provider abstraction described in earlier revisions have
 > been replaced by a `listTools` / `execTool` pair handed to
 > `makePiAgent`. The Endo capability tool surface (`help`, `list`,

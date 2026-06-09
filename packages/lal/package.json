@@ -35,6 +35,8 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.95.1",
+    "@earendil-works/pi-agent-core": "^0.79.0",
+    "@earendil-works/pi-ai": "^0.79.0",
     "@endo/daemon": "workspace:^",
     "@endo/errors": "workspace:^",
     "@endo/eventual-send": "workspace:^",
@@ -45,8 +47,6 @@
     "@endo/patterns": "workspace:^",
     "@endo/platform": "workspace:^",
     "@endo/promise-kit": "workspace:^",
-    "@mariozechner/pi-agent-core": "^0.73.1",
-    "@mariozechner/pi-ai": "^0.73.1",
     "ollama": "^0.6.3",
     "openai": "^4.77.0"
   },

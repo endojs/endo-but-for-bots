@@ -32,8 +32,8 @@
 
 import test from '@endo/ses-ava/prepare-endo.js';
 
-import { Agent as PiAgent } from '@mariozechner/pi-agent-core';
-import { createAssistantMessageEventStream } from '@mariozechner/pi-ai';
+import { Agent as PiAgent } from '@earendil-works/pi-agent-core';
+import { createAssistantMessageEventStream } from '@earendil-works/pi-ai';
 
 import { toolDefs, makeExecuteTool, toAgentTool } from '../agent.js';
 import { makeMockPowers } from '../tools/mock-powers.js';

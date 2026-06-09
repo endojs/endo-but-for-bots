@@ -14,7 +14,7 @@ The LLM agent uses tool calls to interact with the Endo daemon, enabling it to:
 ## Architecture
 
 Lal's agent harness is built on `@endo/genie`'s pi-based agent loop
-(`@mariozechner/pi-agent-core` + `@mariozechner/pi-ai`). Each worker is a
+(`@earendil-works/pi-agent-core` + `@earendil-works/pi-ai`). Each worker is a
 single `PiAgent` whose internal message history is the durable transcript
 for the worker's lifetime. The Endo capability tool surface (the `help`,
 `list`, `lookup`, `send`, `reply`, `evaluate`, `define`, ... family) is

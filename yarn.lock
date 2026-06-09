@@ -2134,6 +2134,8 @@ __metadata:
   resolution: "@endo/lal@workspace:packages/lal"
   dependencies:
     "@anthropic-ai/sdk": "npm:^0.95.1"
+    "@earendil-works/pi-agent-core": "npm:^0.79.0"
+    "@earendil-works/pi-ai": "npm:^0.79.0"
     "@endo/cli": "workspace:^"
     "@endo/daemon": "workspace:^"
     "@endo/errors": "workspace:^"
@@ -2148,8 +2150,6 @@ __metadata:
     "@endo/platform": "workspace:^"
     "@endo/promise-kit": "workspace:^"
     "@endo/ses-ava": "workspace:^"
-    "@mariozechner/pi-agent-core": "npm:^0.73.1"
-    "@mariozechner/pi-ai": "npm:^0.73.1"
     ava: "catalog:dev"
     c8: "catalog:dev"
     eslint: "catalog:dev"
