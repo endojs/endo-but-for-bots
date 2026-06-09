@@ -74,7 +74,11 @@ export const makeNodeFsBackend = ({ rootPath }) => {
     }
     if (
       resolved !== rootResolved &&
-      !resolved.startsWith(`${rootResolved}${nodePath.sep}`)
+      !resolved.startsWith(
+        rootResolved === nodePath.sep
+          ? rootResolved
+          : `${rootResolved}${nodePath.sep}`,
+      )
     ) {
       throw makeError(X`EACCES: path escapes filesystem root: ${q(absPath)}`);
     }

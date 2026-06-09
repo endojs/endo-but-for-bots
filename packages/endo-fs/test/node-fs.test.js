@@ -168,6 +168,14 @@ test('lookup on missing file is ENOENT, not a different error', async t => {
   await t.throwsAsync(() => E(root).lookup('nope'), { message: /ENOENT/ });
 });
 
+test('filesystem rooted at slash can look up top-level entries', async t => {
+  const fs = makeNodeFilesystem({ rootPath: '/' });
+  const root = await E(fs).root();
+  const tmp = await E(root).lookup('tmp');
+  const qid = await E(tmp).getQid();
+  t.is(qid.type, 'directory');
+});
+
 test('snapshot produces a BlobRef backed by current bytes', async t => {
   const fs = await setupFs(t);
   const root = await E(fs).root();
