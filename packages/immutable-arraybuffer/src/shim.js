@@ -17,21 +17,38 @@ const { stringify } = JSON;
 
 // The lib's property record installs methods that intentionally overwrite
 // the genuine `slice`, `resize`, `transfer`, and `transferToFixedLength`
-// methods on `ArrayBuffer.prototype`. The replacements use the
-// amplifier-with-this-fallthrough pattern: they discriminate on brand
+// methods on `ArrayBuffer.prototype`, plus the four read accessors
+// (`byteLength`, `detached`, `maxByteLength`, `resizable`) that the
+// resizable-ArrayBuffer proposal added on Node >= 19. The replacements use
+// the amplifier-with-this-fallthrough pattern: they discriminate on brand
 // WeakMap membership, dispatch to the captured genuine method when the
 // receiver is a genuine `ArrayBuffer`, and either throw or do the
 // emulated-immutable thing when the receiver is in the brand WeakMap. The
 // overwrite is load-bearing (the genuine methods do not know about the
-// brand), so the overwrite-warning suppresses these four to keep cold-start
-// logs clean. Any other overwrite (a new genuine accessor that ships in a
-// later browser before the proposal stabilises, or a competing shim) still
-// fires the warning so the shim author can investigate.
+// brand), so the overwrite-warning suppresses these eight to keep cold-start
+// logs clean. On Hermes and XS (and Node <= 18) the four read accessors are
+// absent from `ArrayBuffer.prototype`, so they do not surface in the
+// `overwrites` list on those platforms; listing them here is harmless. Any
+// other overwrite (a new genuine accessor that ships in a later browser
+// before the proposal stabilises, or a competing shim) still fires the
+// warning so the shim author can investigate.
+//
+// The console-guard below is the second line of defense: on Hermes and XS
+// the bare interpreter contexts the smoke tests use have no `console`
+// global at all, so an unguarded `console.warn` reference would throw
+// `ReferenceError` even when the `overwrites` list is empty. Both
+// suppressions are needed: the expected-overwrite filter to keep modern
+// Node's cold-start logs clean, and the console-guard to keep the shim
+// loadable on engines that lack `console`.
 const expectedOverwrites = [
   'slice',
   'resize',
   'transfer',
   'transferToFixedLength',
+  'byteLength',
+  'detached',
+  'maxByteLength',
+  'resizable',
 ];
 const isExpectedOverwrite = key => {
   for (let i = 0; i < expectedOverwrites.length; i += 1) {
@@ -56,7 +73,11 @@ const isExpectedOverwrite = key => {
 const overwrites = ownKeys(immutableArrayBufferLibProperties).filter(
   key => key in arrayBufferPrototype && !isExpectedOverwrite(key),
 );
-if (overwrites.length > 0) {
+if (
+  overwrites.length > 0 &&
+  typeof console !== 'undefined' &&
+  typeof console.warn === 'function'
+) {
   // eslint-disable-next-line @endo/no-polymorphic-call
   console.warn(
     `About to overwrite ArrayBuffer.prototype properties ${stringify(overwrites)}`,
