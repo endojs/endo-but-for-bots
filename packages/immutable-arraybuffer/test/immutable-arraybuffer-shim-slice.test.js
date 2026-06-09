@@ -126,12 +126,41 @@ test('TypedArray ctor on Immutable ArrayBuffer wraps as emulated freezable', t =
   const ta3 = new Uint8Array(iab);
   t.is(ta3.byteLength, 2);
   t.is(ta3.buffer, iab);
+  // The amplified `at(i)` reflects the underlying hidden TypedArray's
+  // value; before any attempted mutation, byte 0 of the immutable slice
+  // is 3 (carried over from `ta1[0] = 3` above).
+  t.is(ta3.at(0), 3);
+  // Indexed assignment on the emulated freezable TypedArray is silently
+  // swallowed: it does not throw, and the underlying byte (read via the
+  // amplifying `at` accessor) is unchanged.
+  t.notThrows(() => {
+    ta3[0] = 9;
+  });
+  t.is(ta3.at(0), 3);
+  // `set` is explicitly a complaining mutator and throws.
+  t.throws(() => ta3.set([9]));
+});
+
+test('Emulated freezable TypedArray made non-extensible: indexed assignment fails', t => {
+  const ab1 = new ArrayBuffer(2);
+  const ta1 = new Uint8Array(ab1);
+  ta1[0] = 3;
+  ta1[1] = 4;
+
+  const iab = ab1.sliceToImmutable();
+  const ta3 = new Uint8Array(iab);
+  // The emulated freezable wrapper is an ordinary extensible object;
+  // before `preventExtensions`, the wrapper accepts indexed assignment
+  // as a property set (silently swallowed from the underlying buffer's
+  // perspective; see the preceding test).
+  Object.preventExtensions(ta3);
+  // Once non-extensible, indexed assignment can no longer add the
+  // own property and throws in strict mode.
   t.throws(() => {
     ta3[0] = 9;
-    // The index assignment is silently swallowed on a frozen-style
-    // TypedArray, but `set` is explicitly a complaining mutator.
-    ta3.set([9]);
   });
+  // The underlying byte is still unchanged.
+  t.is(ta3.at(0), 3);
 });
 
 const testTransfer = t => {
