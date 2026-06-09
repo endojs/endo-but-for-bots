@@ -31,7 +31,8 @@ agent loop, which now goes through pi-ai's multi-provider registry.
 
 The agent is configured via environment variables. The legacy
 `LAL_HOST` + `LAL_MODEL` + `LAL_AUTH_TOKEN` triple is translated at
-worker spawn time into a pi-ai `provider/modelId` string:
+worker spawn time into a pi-ai model plus a worker-local API-key
+resolver:
 
 | `LAL_HOST` matches                              | pi-ai provider                               |
 | ----------------------------------------------- | -------------------------------------------- |
@@ -39,11 +40,21 @@ worker spawn time into a pi-ai `provider/modelId` string:
 | `generativelanguage.googleapis.com` or `gemini` | `google`                                     |
 | `openrouter`                                    | `openrouter`                                 |
 | `openai.com`                                    | `openai`                                     |
-| `:11434` (default Ollama port)                  | `ollama` (via @endo/genie's adaptor)         |
-| anything else with `/v1`                        | `openai` (OpenAI-compatible, e.g. llama.cpp) |
+| `:11434` (default Ollama port)                  | custom Ollama-compatible model               |
+| anything else with `/v1`                        | custom OpenAI-compatible model               |
+| anything else                                   | custom Ollama-compatible model               |
 
-`LAL_AUTH_TOKEN` is forwarded into `process.env.<PROVIDER>_API_KEY` so
-pi-ai's adaptor finds it.
+Use `LAL_AUTH_TOKEN` when the credential should belong to one Lal worker. In
+the daemon path, each worker receives its own config object, and that token is
+passed to pi-agent-core through a worker-local API-key resolver. It is not
+copied into `process.env`, so multiple Lal agents can run in one daemon process
+with different providers or API keys.
+
+If `LAL_AUTH_TOKEN` is omitted, pi-ai falls back to its normal process-level
+provider environment variables. Common examples are `OPENAI_API_KEY`,
+`ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`, and `OPENROUTER_API_KEY`. These are
+useful for one-provider local setups, but every worker in the daemon process
+sees the same ambient values.
 
 | Variable         | Description                          | Default                  |
 | ---------------- | ------------------------------------ | ------------------------ |
