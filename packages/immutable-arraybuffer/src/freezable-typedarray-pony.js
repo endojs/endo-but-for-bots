@@ -52,24 +52,24 @@ const { iterator: symbolIterator, toStringTag: symbolToStringTag } = Symbol;
 const hiddenTypedArrays = new WeakMap();
 
 /**
- * Returns the genuine TypedArray amplified from `freezableTA`. If
- * `freezableTA` is an emulated freezable TypedArray, returns the hidden
+ * Returns the genuine TypedArray amplified from `typedArray`. If
+ * `typedArray` is an emulated freezable TypedArray, returns the hidden
  * genuine TypedArray that the emulated wrapper amplifies. Otherwise
- * (`freezableTA` is itself a genuine TypedArray that the shim's
+ * (`typedArray` is itself a genuine TypedArray that the shim's
  * pseudo-constructor produced via the non-immutable fall-through path),
- * returns `freezableTA`.
+ * returns `typedArray`.
  *
- * The fall-through to `freezableTA` is what lets the shim install the
+ * The fall-through to `typedArray` is what lets the shim install the
  * pseudo-constructor as the global TypedArray ctor without breaking
  * standard TypedArray use: instances constructed from a non-hidden
  * first argument flow through `construct(OriginalConstructor, args,
  * new.target)`, end up with `PseudoTypedArrayPrototype` as their
  * prototype, and still need every inherited prototype method to work.
  *
- * @param {TypedArray} freezableTA
+ * @param {TypedArray} typedArray
  */
-const amplifyTypedArray = freezableTA => {
-  return apply(weakMapGet, hiddenTypedArrays, [freezableTA]) || freezableTA;
+const amplifyTypedArray = typedArray => {
+  return apply(weakMapGet, hiddenTypedArrays, [typedArray]) || typedArray;
 };
 
 /**
