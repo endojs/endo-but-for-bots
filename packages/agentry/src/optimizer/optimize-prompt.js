@@ -1,5 +1,5 @@
 // @ts-check
-/* global process */
+/* global globalThis, process */
 /* eslint-disable import/no-extraneous-dependencies */
 /**
  * Generic CLI for the agentry prompt optimizer.
@@ -21,9 +21,9 @@
  * `packages/lal/optimizer/optimize-prompt.js` for the lal wiring.
  */
 
-import './init.js';
-
 import fs from 'node:fs/promises';
+
+import { hardenShimMarker } from './init.js';
 
 import { scoreObservedTrace } from './trace-metric.js';
 
@@ -298,6 +298,12 @@ export const runOptimizerCli = async config => {
   // agent transitively (lal's agent.js loads @endo/marshal -> @endo/errors
   // and requires SES). Lazy-import so `--help` / `--score-log` continue
   // to run without SES.
+  if (globalThis.harden?.[hardenShimMarker]) {
+    // The optimizer bootstrap installs a shallow harden shim so Ax can load
+    // before SES. Remove only that shim before importing @endo/init so Endo's
+    // real hardener can deeply harden pattern/interface guard payloads.
+    delete globalThis.harden;
+  }
   await import('@endo/init');
   if (envPath) {
     await loadEnv(envPath);

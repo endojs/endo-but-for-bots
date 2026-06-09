@@ -38,9 +38,12 @@ import { runInboxLoop } from './inbox-loop.js';
 // Interface Definition
 // ============================================================================
 
-const LalInterface = M.interface('Lal', {
-  help: M.call().optional(M.string()).returns(M.string()),
-});
+const LalInterface = M.interface(
+  'Lal',
+  harden({
+    help: M.call().optional(M.string()).returns(M.string()),
+  }),
+);
 
 // ============================================================================
 // Worker Loop

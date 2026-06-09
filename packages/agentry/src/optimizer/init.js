@@ -20,6 +20,14 @@ const globals =
   /** @type {typeof globalThis & { harden?: <T>(value: T) => T }} */ (
     globalThis
   );
+export const hardenShimMarker = Symbol.for(
+  '@endo/agentry/optimizer/init/hardenShim',
+);
 if (!globals.harden) {
-  globals.harden = value => Object.freeze(value);
+  const shim = value => Object.freeze(value);
+  Object.defineProperty(shim, hardenShimMarker, {
+    configurable: true,
+    value: true,
+  });
+  globals.harden = shim;
 }
