@@ -34,10 +34,7 @@ test('Object.prototype.toString.call(immuAB) reads as ImmutableArrayBuffer', t =
   // downstream consumer that sniffs the toStringTag to decide whether the
   // value is a genuine exotic) routes them through the unrenderable-value
   // path rather than into `Buffer.from`, which throws on emulated immutables.
-  t.is(
-    Object.prototype.toString.call(iab),
-    '[object ImmutableArrayBuffer]',
-  );
+  t.is(Object.prototype.toString.call(iab), '[object ImmutableArrayBuffer]');
 });
 
 test('Object.prototype.toString.call(genuineAB) reads as ArrayBuffer', t => {

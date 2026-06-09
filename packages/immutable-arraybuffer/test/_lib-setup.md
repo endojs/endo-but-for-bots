@@ -10,7 +10,8 @@ import '../src/shim.js';
 This is necessary because the drop-the-pseudo-prototype redesign moved
 the read accessors and prototype methods off the lib's intermediate
 prototype and onto `ArrayBuffer.prototype` (via the shim's
-`defineProperties` call). Tests that used to read `iab.byteLength` or
+`defineProperties` call).
+Tests that used to read `iab.byteLength` or
 `iab.slice(0)` against the intermediate prototype now reach those same
 properties via the shared prototype, which only carries them after the
 shim has run.
