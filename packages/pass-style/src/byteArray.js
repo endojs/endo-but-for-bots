@@ -29,6 +29,18 @@ const immutableGetter =
     immutableDescriptor?.get
   ) || (() => false);
 
+// The single permitted own-property key on an emulated immutable buffer.
+// The @endo/immutable-arraybuffer package installs `[Symbol.toStringTag]
+// = 'ImmutableArrayBuffer'` as an own property on each emulated immutable
+// (not on the shared prototype) so concordance and similar
+// `Object.prototype.toString.call`-sniffing consumers route the value
+// through their unrenderable-value path rather than into `Buffer.from`
+// (which throws on emulated immutables because they are not exotic
+// objects). The byteArray brand check tolerates exactly this one
+// own-property key; anything else still fails.
+/** @type {Set<string | symbol>} */
+const allowedOwnKeys = new Set([Symbol.toStringTag]);
+
 /**
  * @type {PassStyleHelper}
  */
@@ -44,10 +56,12 @@ export const ByteArrayHelper = harden({
       assert.fail(X`Malformed ByteArray ${candidate}`, TypeError);
     apply(immutableGetter, candidate, []) ||
       Fail`Must be an immutable ArrayBuffer: ${candidate}`;
-    ownKeys(candidate).length === 0 ||
-      assert.fail(
-        X`ByteArrays must not have own properties: ${candidate}`,
-        TypeError,
-      );
+    for (const key of ownKeys(candidate)) {
+      allowedOwnKeys.has(key) ||
+        assert.fail(
+          X`ByteArrays must not have own properties: ${candidate}`,
+          TypeError,
+        );
+    }
   },
 });
