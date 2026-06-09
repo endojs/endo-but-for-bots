@@ -202,16 +202,36 @@ The genuine `ArrayBuffer.prototype` already has
 `[toStringTag] = 'ArrayBuffer'`, and overwriting it to
 `'ImmutableArrayBuffer'` would break every genuine ArrayBuffer's
 `Object.prototype.toString` output.
-The purposeful-violation rationale in the current README (work around
-`concordance`'s buffer sniff) no longer applies once emulated immutables
-share `ArrayBuffer.prototype` with genuine ones: concordance will sniff
-`'ArrayBuffer'` either way.
-*This is a substantive behaviour change*: any caller that today does
-`Object.prototype.toString.call(immuAB)` and gets
-`'[object ImmutableArrayBuffer]'` will get `'[object ArrayBuffer]'`
-after the redesign.
-The `immutable` accessor remains the canonical brand check; calling
-code that relies on the toStringTag should switch to it.
+
+**Design departure (recorded post-implementation, barrister panel round 1):**
+The original framing in this paragraph elected to drop the
+`[Symbol.toStringTag]` purposeful violation entirely, on the premise that
+`concordance` (used by ava for diagnostic output) would route through
+`Buffer.from` either way and would handle the resulting `TypeError` as
+unrenderable.
+The premise was empirically wrong: with the tag removed, an emulated
+immutable reads as `[object ArrayBuffer]`, concordance routes into
+`Buffer.from(emulatedImmutable)`, and the resulting `TypeError`
+(`Received an instance of ArrayBuffer`) is not handled gracefully but
+instead kills 13 ocapn codec test cases.
+The implementation restores the
+`[Symbol.toStringTag] = 'ImmutableArrayBuffer'` slot as an own property
+on each emulated immutable buffer (installed via `defineProperty` in
+`makeImmutableArrayBufferInternal`), *not* on the shared prototype.
+Genuine ArrayBuffers continue to inherit `'ArrayBuffer'` from the
+prototype; emulated immutables carry their own
+`'ImmutableArrayBuffer'` slot.
+The design's "no intermediate prototype" property is preserved (the
+emulated immutable still inherits directly from `ArrayBuffer.prototype`);
+the cost is one extra own-property per emulated instance.
+
+The post-departure observable contract:
+`Object.prototype.toString.call(immuAB)` returns
+`'[object ImmutableArrayBuffer]'` (as it did in master);
+`Object.prototype.toString.call(genuineAB)` returns `'[object ArrayBuffer]'`
+(unchanged).
+The `immutable` accessor remains the canonical brand check for callers
+that prefer the explicit accessor over the toStringTag heuristic.
 
 The lib's `sliceBufferToImmutable` and `transferBufferToImmutable`
 free functions still exist internally to support the prototype record:
@@ -305,18 +325,32 @@ The install is still load-bearing (the new methods discriminate on
 brand membership, the genuine ones do not); the warning is suppressed
 for the four because the overwrite is expected and the warning would
 otherwise fire on every cold start.
-The suppression is implemented as a static
-`expectedOverwrites = ['slice', 'resize', 'transfer', 'transferToFixedLength']`
-set with an explanatory comment, and the filter excludes those names
+The suppression is implemented as a static `expectedOverwrites` set
+with an explanatory comment, and the filter excludes those names
 from the `overwrites` list before the `console.warn` check.
 
-The `byteLength`, `maxByteLength`, `detached`, `resizable`, `immutable`
-accessors and the `sliceToImmutable`, `transferToImmutable` methods are
-not on the genuine prototype (except `byteLength`, `maxByteLength`,
-`detached`, `resizable` which are stage-finished accessors that vary by
-platform; those *do* trigger the warning when present, which is the
-current behaviour on platforms where the resizable-ArrayBuffer
-proposal has shipped).
+**Design departure (recorded post-implementation, barrister panel round 1):**
+The four resizable-ArrayBuffer-proposal read accessors (`byteLength`,
+`detached`, `maxByteLength`, `resizable`) were originally left off the
+`expectedOverwrites` list on the premise that their presence-on-platform
+warning was useful diagnostic information.
+The premise broke `test-hermes` and `test-xs`: on Hermes and XS the
+bundled ses interpreter contexts have no `console` global at all, so
+the unguarded `console.warn` reference throws `ReferenceError:
+Property 'console' doesn't exist` whenever the `overwrites` list is
+non-empty.
+On modern Node (>= 19) the four read accessors are always present, so
+the list is always non-empty, and the unguarded reference would also
+fire on every cold start were `console` not a guaranteed global there.
+The implementation expands `expectedOverwrites` to include the four
+read accessors (they are expected on modern Node and absent on Hermes /
+XS / Node <= 18), and adds a `typeof console !== 'undefined' &&
+typeof console.warn === 'function'` guard around the warning call as
+defense-in-depth for any future engine without `console`.
+The remaining `immutable`, `sliceToImmutable`, `transferToImmutable`
+overwrites still surface as warnings on platforms that have
+independently shipped part of the proposal's surface, which is the
+diagnostic case the warning was designed for.
 
 **Decision: keep master's warn-and-overwrite policy.**
 The predecessor experiment branch's
@@ -538,12 +572,13 @@ builder from making a defensible choice.
   Folds into the premise-2 PR, since the bytes-side change is what
   makes the `.` export retirable.
 - Retiring the `concordance` purposeful-violation note in the README.
-  The README rewrite under *Move 1* removes the
-  `[Symbol.toStringTag]` slot from the lib's property record, which
-  by itself retires the purposeful-violation behaviour; the
-  README's *Purposeful Violation* section gets a "no longer applies"
-  note rather than full deletion so the historical rationale stays
-  discoverable.
+  Originally framed as an "out of scope" item on the premise that the
+  README rewrite would retire the behaviour; the design departure
+  recorded in *Move 2* paragraph 7 reverses that premise (the slot
+  remains as an own-property on emulated immutables).
+  The README's *Purposeful Violation* section is restored under
+  *Move 2* and describes the new own-property-only shape rather than
+  the prior intermediate-prototype shape.
 
 ## References
 
