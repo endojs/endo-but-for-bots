@@ -853,9 +853,6 @@ export const spawnWorkerLoop = async (powers, context, workerEnv) => {
 
   const { model: resolvedModel, getApiKey } =
     await resolveWorkerModel(workerEnv);
-  if (workerEnv.LAL_AUTH_TOKEN) {
-    setProviderApiKey(resolvedModel.provider, workerEnv.LAL_AUTH_TOKEN);
-  }
 
   const piAgent = new PiAgent({
     initialState: {
@@ -873,7 +870,7 @@ export const spawnWorkerLoop = async (powers, context, workerEnv) => {
           m.role === 'toolResult',
       ),
     toolExecution: 'sequential',
-    ...(getApiKey ? { getApiKey } : {}),
+    getApiKey,
   });
 
   /**
@@ -1045,15 +1042,15 @@ harden(spawnWorkerLoop);
 // OpenAI-compatible endpoints (local `/v1` servers, remote Ollama, vLLM,
 // llama.cpp, etc.) must be represented by explicit Model objects. lal's
 // historical configuration passes LAL_HOST + LAL_MODEL + LAL_AUTH_TOKEN, so
-// the helpers below preserve the selected endpoint while adapting that legacy
-// shape to pi-agent-core.
+// the helpers below preserve both the selected endpoint and the worker-local
+// auth token while adapting that legacy shape to pi-agent-core.
 
 /** @typedef {(provider: string) => Promise<string | undefined>} ApiKeyResolver */
 
 /**
  * @typedef {object} WorkerModelConfig
  * @property {Model<'openai-completions'>} model
- * @property {ApiKeyResolver} [getApiKey]
+ * @property {ApiKeyResolver} getApiKey
  */
 
 const DEFAULT_HOST = 'http://localhost:11434';
@@ -1094,14 +1091,22 @@ const resolveLegacyModelDefault = (explicitModel, defaultModel) =>
     : explicitModel;
 
 /**
+ * Build an API-key resolver scoped to this worker. Returning undefined lets
+ * pi-ai fall back to its normal environment-variable lookup for registry
+ * providers; local OpenAI-compatible endpoints keep the old harmless `ollama`
+ * sentinel when no token was supplied.
+ *
+ * @param {string | undefined} authToken
  * @param {string | undefined} fallbackToken
  * @returns {ApiKeyResolver}
  */
-const makeApiKeyResolver = fallbackToken => async _provider => fallbackToken;
+const makeApiKeyResolver = (authToken, fallbackToken) => async _provider =>
+  authToken || fallbackToken;
 
 /**
- * Resolve the legacy LAL_HOST + LAL_MODEL pair into a concrete pi-ai Model.
- * Recognized LAL_HOST patterns:
+ * Resolve the legacy LAL_HOST + LAL_MODEL + LAL_AUTH_TOKEN triple into the
+ * concrete pi-ai Model and worker-local API-key resolver. Recognized LAL_HOST
+ * patterns:
  *
  *   contains "anthropic.com"  -> pi-ai registry provider "anthropic"
  *   contains "generativelanguage.googleapis.com" or "gemini" -> "google"
@@ -1110,13 +1115,14 @@ const makeApiKeyResolver = fallbackToken => async _provider => fallbackToken;
  *   contains "/v1"           -> custom OpenAI-compatible endpoint
  *   otherwise                -> custom Ollama-compatible endpoint
  *
- * @param {{ LAL_HOST?: string, LAL_MODEL?: string }} env
+ * @param {{ LAL_HOST?: string, LAL_MODEL?: string, LAL_AUTH_TOKEN?: string }} env
  * @returns {Promise<WorkerModelConfig>}
  */
 export async function resolveWorkerModel(env) {
   await Promise.resolve();
   const rawHost = env.LAL_HOST || DEFAULT_HOST;
   const host = rawHost.toLowerCase();
+  const { LAL_AUTH_TOKEN: authToken } = env;
 
   if (host.includes('anthropic.com')) {
     return harden({
@@ -1127,6 +1133,7 @@ export async function resolveWorkerModel(env) {
           'claude-opus-4-5-20251101',
         ),
       ),
+      getApiKey: makeApiKeyResolver(authToken, undefined),
     });
   }
 
@@ -1140,6 +1147,7 @@ export async function resolveWorkerModel(env) {
         'google',
         resolveLegacyModelDefault(env.LAL_MODEL, 'gemini-2.0-flash'),
       ),
+      getApiKey: makeApiKeyResolver(authToken, undefined),
     });
   }
 
@@ -1149,6 +1157,7 @@ export async function resolveWorkerModel(env) {
         'openrouter',
         env.LAL_MODEL || 'openrouter/auto',
       ),
+      getApiKey: makeApiKeyResolver(authToken, undefined),
     });
   }
 
@@ -1158,6 +1167,7 @@ export async function resolveWorkerModel(env) {
         'openai',
         resolveLegacyModelDefault(env.LAL_MODEL, 'gpt-4o-mini'),
       ),
+      getApiKey: makeApiKeyResolver(authToken, undefined),
     });
   }
 
@@ -1169,34 +1179,16 @@ export async function resolveWorkerModel(env) {
         'openai',
         'openai-compatible',
       ),
-      getApiKey: makeApiKeyResolver('ollama'),
+      getApiKey: makeApiKeyResolver(authToken, 'ollama'),
     });
   }
 
   return harden({
     model: buildOllamaModel(env.LAL_MODEL || DEFAULT_LOCAL_MODEL, rawHost),
-    getApiKey: makeApiKeyResolver(getOllamaApiKey()),
+    getApiKey: makeApiKeyResolver(authToken, getOllamaApiKey()),
   });
 }
 harden(resolveWorkerModel);
-
-/**
- * Install the caller-supplied API key into the appropriate environment
- * variable so pi-ai's provider adaptor finds it. We avoid clobbering an
- * already-set variable; this is best-effort and explicitly per-worker.
- *
- * @param {string} provider
- * @param {string} authToken
- */
-function setProviderApiKey(provider, authToken) {
-  // eslint-disable-next-line no-undef
-  const env = globalThis?.process?.env;
-  if (!env) return;
-  const keyName = `${provider.toUpperCase()}_API_KEY`;
-  if (!env[keyName] || env[keyName] === 'ollama') {
-    env[keyName] = authToken;
-  }
-}
 
 /**
  * @param {string} provider
