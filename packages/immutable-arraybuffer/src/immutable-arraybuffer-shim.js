@@ -47,10 +47,10 @@ const { prototype: arrayBufferPrototype } = ArrayBuffer;
 // installed the immutable-ArrayBuffer surface (the most characteristic of
 // the new methods is `sliceToImmutable`), do nothing. The race here is
 // the simpler form: detect-then-skip. Unlike the harden race
-// (`endo/packages/harden/src/make-selector.js`), we do not pin a chosen
-// implementation through a shared registered Symbol; there is no
-// rendezvous participant, only a unilateral check that yields to a
-// prior installer.
+// (`endo/packages/harden/src/make-selector.js`), this shim does not pin
+// a chosen implementation through a shared registered Symbol; it makes
+// a unilateral check on `arrayBufferPrototype` and yields to any prior
+// installer.
 if (!('sliceToImmutable' in arrayBufferPrototype)) {
   const arrayBufferMethods = {
     /**
