@@ -1,6 +1,6 @@
 // @ts-nocheck
 import test from 'ava';
-import '../src/immutable-arraybuffer-shim.js';
+import '../src/shim.js';
 
 const { isFrozen, getPrototypeOf } = Object;
 

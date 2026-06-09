@@ -5,13 +5,13 @@
 // (`sliceBufferToImmutable`, `optTransferBufferToImmutable`) remain
 // importable from the lib module for tests that want to exercise the
 // free-function call shape directly.
-import '../src/immutable-arraybuffer-shim.js';
+import '../src/shim.js';
 import test from 'ava';
 import {
   optTransferBufferToImmutable,
   isBufferImmutable,
   sliceBufferToImmutable,
-} from '../src/immutable-arraybuffer-lib.js';
+} from '../src/lib.js';
 
 const { isFrozen, getPrototypeOf } = Object;
 

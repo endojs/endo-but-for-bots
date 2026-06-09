@@ -1,6 +1,6 @@
 /* global globalThis */
 
-import { immutableArrayBufferLibProperties } from './immutable-arraybuffer-lib.js';
+import { immutableArrayBufferLibProperties } from './lib.js';
 
 const {
   ArrayBuffer,
@@ -27,12 +27,18 @@ const { stringify } = JSON;
 // logs clean. Any other overwrite (a new genuine accessor that ships in a
 // later browser before the proposal stabilises, or a competing shim) still
 // fires the warning so the shim author can investigate.
-const expectedOverwrites = new Set([
+const expectedOverwrites = [
   'slice',
   'resize',
   'transfer',
   'transferToFixedLength',
-]);
+];
+const isExpectedOverwrite = key => {
+  for (let i = 0; i < expectedOverwrites.length; i += 1) {
+    if (expectedOverwrites[i] === key) return true;
+  }
+  return false;
+};
 
 // Modern shim practice frowns on conditional installation, at least for
 // proposals prior to stage 3. This is so changes to the proposal since
@@ -48,7 +54,7 @@ const expectedOverwrites = new Set([
 // Allowing polymorphic calls because these occur during initialization.
 // eslint-disable-next-line @endo/no-polymorphic-call
 const overwrites = ownKeys(immutableArrayBufferLibProperties).filter(
-  key => key in arrayBufferPrototype && !expectedOverwrites.has(key),
+  key => key in arrayBufferPrototype && !isExpectedOverwrite(key),
 );
 if (overwrites.length > 0) {
   // eslint-disable-next-line @endo/no-polymorphic-call

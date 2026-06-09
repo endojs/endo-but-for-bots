@@ -7,9 +7,9 @@
 // when invoked on a genuine ArrayBuffer (the fallthrough case) and
 // behave as immutable-aware when invoked on an emulated immutable
 // (the brand-WeakMap case).
-import '../src/immutable-arraybuffer-shim.js';
+import '../src/shim.js';
 import test from 'ava';
-import { isBufferImmutable } from '../src/immutable-arraybuffer-lib.js';
+import { isBufferImmutable } from '../src/lib.js';
 
 const { getPrototypeOf } = Object;
 

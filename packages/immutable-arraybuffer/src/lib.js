@@ -35,12 +35,18 @@ const { get: arrayBufferByteLength } = getOwnPropertyDescriptor(
 // brand membership and never reach the captured accessor in that case
 // (an emulated immutable always has `detached === false`, `resizable ===
 // false`, and `maxByteLength === byteLength`).
-const arrayBufferDetached =
-  getOwnPropertyDescriptor(arrayBufferPrototype, 'detached')?.get;
-const arrayBufferResizable =
-  getOwnPropertyDescriptor(arrayBufferPrototype, 'resizable')?.get;
-const arrayBufferMaxByteLength =
-  getOwnPropertyDescriptor(arrayBufferPrototype, 'maxByteLength')?.get;
+const arrayBufferDetached = getOwnPropertyDescriptor(
+  arrayBufferPrototype,
+  'detached',
+)?.get;
+const arrayBufferResizable = getOwnPropertyDescriptor(
+  arrayBufferPrototype,
+  'resizable',
+)?.get;
+const arrayBufferMaxByteLength = getOwnPropertyDescriptor(
+  arrayBufferPrototype,
+  'maxByteLength',
+)?.get;
 
 const typedArrayPrototype = getPrototypeOf(Uint8Array.prototype);
 const { set: uint8ArraySet } = typedArrayPrototype;
@@ -123,6 +129,9 @@ const isEmulatedImmutable = buf => buffers.has(buf);
  * `ArrayBuffer`, while transparently reaching the underlying buffer for the
  * emulated-immutable case. The name aligns with the analogous
  * `amplifyTypedArray` on the freezable-TypedArray experiment branch.
+ *
+ * @param {ArrayBuffer} immuAB
+ * @returns {ArrayBuffer}
  */
 const amplifyArrayBuffer = immuAB => {
   // Safe because this WeakMap owns its get method.

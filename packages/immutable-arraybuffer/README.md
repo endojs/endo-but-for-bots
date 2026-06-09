@@ -1,7 +1,7 @@
 # `@endo/immutable-arraybuffer`
 
 This `@endo/immutable-arraybuffer` package provides a lib layer and a shim for a proposed new JavaScript feature: *Immutable ArrayBuffers*.
-- The lib layer in `src/immutable-arraybuffer-lib.js` defines a property record of the methods and accessors the proposal adds to `ArrayBuffer.prototype`, along with the factory that constructs emulated immutable buffers.
+- The lib layer in `src/lib.js` defines a property record of the methods and accessors the proposal adds to `ArrayBuffer.prototype`, along with the factory that constructs emulated immutable buffers.
 The package exports only `isBufferImmutable` from `index.js`, a brand check usable without forcing the shim to be installed.
 - A shim modifies the existing JavaScript primordials as needed to most closely emulate the feature as proposed.
 The `shim.js` file copies the lib layer's property record onto `ArrayBuffer.prototype`.
@@ -60,7 +60,7 @@ A `DataView` or `TypedArray` using an immutable buffer as its backing store can 
 
 ## The Lib Layer
 
-The lib layer in `src/immutable-arraybuffer-lib.js` does not modify `ArrayBuffer.prototype` directly.
+The lib layer in `src/lib.js` does not modify `ArrayBuffer.prototype` directly.
 Instead, it exports
 - `isBufferImmutable(buffer: ArrayBuffer) :boolean` (via `index.js`) -- a brand check that returns true for emulated immutable buffers and false otherwise.
 - `immutableArrayBufferLibProperties` -- a plain record whose own properties are the methods and accessors the shim installs onto `ArrayBuffer.prototype`.

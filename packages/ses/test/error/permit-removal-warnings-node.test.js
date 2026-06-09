@@ -46,9 +46,7 @@ test('node reporting to stderr with indented group', async t => {
   // before the SES intrinsics-removal group label.
   while (
     stderrLines.length > 0 &&
-    /^About to overwrite ArrayBuffer\.prototype properties/.test(
-      stderrLines[0],
-    )
+    /^About to overwrite ArrayBuffer\.prototype properties/.test(stderrLines[0])
   ) {
     stderrLines.shift();
   }
