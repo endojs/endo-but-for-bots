@@ -2466,6 +2466,7 @@ __metadata:
   resolution: "@endo/notify-xdg@workspace:packages/notify-xdg"
   dependencies:
     "@endo/base64": "workspace:^"
+    "@endo/endo-fs": "workspace:^"
     "@endo/eventual-send": "workspace:^"
     "@endo/exo": "workspace:^"
     "@endo/init": "workspace:^"

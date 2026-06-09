@@ -30,6 +30,7 @@
     ".": "./index.js",
     "./src/dbus-msg.js": "./src/dbus-msg.js",
     "./src/dbus-sock.js": "./src/dbus-sock.js",
+    "./src/file-access-chooser.js": "./src/file-access-chooser.js",
     "./src/filechooser.js": "./src/filechooser.js",
     "./src/notification.js": "./src/notification.js",
     "./package.json": "./package.json"
@@ -54,6 +55,7 @@
     "@endo/patterns": "workspace:^"
   },
   "devDependencies": {
+    "@endo/endo-fs": "workspace:^",
     "@endo/ses-ava": "workspace:^",
     "ava": "catalog:dev",
     "c8": "catalog:dev",
