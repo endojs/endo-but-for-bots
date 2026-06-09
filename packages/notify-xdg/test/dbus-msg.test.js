@@ -47,11 +47,8 @@ test('serialise creates well-formed header with path and interface', t => {
   const pkt = serialise(MESSAGE_TYPE_METHOD_CALL, 1, headers, '', []);
 
   // Header fields start at offset 16 (after: endian,type,flags,proto,bodyLen,serial,fieldsLen)
-  const fieldsLen = new DataView(
-    pkt.buffer,
-    pkt.byteOffset,
-    pkt.byteLength,
-  ).getUint32(12, true);
+  const fieldsLen = new DataView(pkt.buffer, pkt.byteOffset, pkt.byteLength)
+    .getUint32(12, true);
   t.true(fieldsLen > 0, 'header fields must have non-zero length');
 });
 
@@ -100,11 +97,8 @@ test('newMethodCall produces correct structure for Notify signature', t => {
   t.is(pkt[3], 1, 'protocol version');
 
   // Verify the body is present and non-trivial
-  const bodyLen = new DataView(
-    pkt.buffer,
-    pkt.byteOffset,
-    pkt.byteLength,
-  ).getUint32(4, true);
+  const bodyLen = new DataView(pkt.buffer, pkt.byteOffset, pkt.byteLength)
+    .getUint32(4, true);
   t.true(bodyLen > 0, 'Notify payload must have a body');
 });
 
@@ -113,11 +107,8 @@ test('newMethodCall with empty body', t => {
     { objectPath: '/', busName: 'c.d', interface: 'c.d' },
     'Bar',
   );
-  const bodyLen = new DataView(
-    pkt.buffer,
-    pkt.byteOffset,
-    pkt.byteLength,
-  ).getUint32(4, true);
+  const bodyLen = new DataView(pkt.buffer, pkt.byteOffset, pkt.byteLength)
+    .getUint32(4, true);
   t.is(bodyLen, 0, 'no-body method call has zero body length');
 });
 
