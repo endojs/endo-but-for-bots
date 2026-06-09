@@ -4,7 +4,7 @@ import {
   isBufferImmutable,
   sliceBufferToImmutable,
   optTransferBufferToImmutable as optXferBuf2Immu,
-} from './immutable-arraybuffer-pony.js';
+} from './immutable-arraybuffer-lib.js';
 
 const {
   ArrayBuffer,

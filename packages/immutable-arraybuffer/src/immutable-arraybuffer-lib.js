@@ -4,7 +4,6 @@ const {
   ArrayBuffer,
   Object,
   Reflect,
-  Symbol,
   TypeError,
   Uint8Array,
   WeakMap,
@@ -13,10 +12,9 @@ const {
   // eslint-disable-next-line no-restricted-globals
 } = globalThis;
 
-const { freeze, defineProperty, getPrototypeOf, getOwnPropertyDescriptor } =
+const { freeze, defineProperty, getOwnPropertyDescriptor, getPrototypeOf } =
   Object;
 const { apply, ownKeys } = Reflect;
-const { toStringTag } = Symbol;
 
 const { prototype: arrayBufferPrototype } = ArrayBuffer;
 const { slice, transfer: optTransfer } = arrayBufferPrototype;
@@ -104,14 +102,25 @@ const getBuffer = immuAB => {
   throw TypeError('Not an emulated Immutable ArrayBuffer');
 };
 
-// Omits `constructor` so `Array.prototype.constructor` is inherited.
-const ImmutableArrayBufferInternalPrototype = {
-  __proto__: arrayBufferPrototype,
+/**
+ * A plain record of the properties the shim copies onto
+ * `ArrayBuffer.prototype` to install immutable-ArrayBuffer support. This is
+ * not a prototype of any object: emulated immutable buffers directly inherit
+ * from `ArrayBuffer.prototype`, and the methods here become the ones the
+ * (now shared) prototype dispatches to. Move 2 of the redesign extends the
+ * mutator methods to discriminate on brand membership and delegate to the
+ * underlying genuine method on fallthrough; until then, the methods read
+ * the brand WeakMap via `getBuffer` and throw on a non-emulated receiver.
+ *
+ * Omits `constructor` so `ArrayBuffer.prototype.constructor` is inherited.
+ */
+const immutableArrayBufferLibProperties = {
+  __proto__: null,
   get byteLength() {
     return apply(arrayBufferByteLength, getBuffer(this), []);
   },
   get detached() {
-    getBuffer(this); // shim brand check
+    getBuffer(this); // brand check
     return false;
   },
   get maxByteLength() {
@@ -119,11 +128,11 @@ const ImmutableArrayBufferInternalPrototype = {
     return apply(arrayBufferByteLength, getBuffer(this), []);
   },
   get resizable() {
-    getBuffer(this); // shim brand check
+    getBuffer(this); // brand check
     return false;
   },
   get immutable() {
-    getBuffer(this); // shim brand check
+    getBuffer(this); // brand check
     return true;
   },
   slice(start = undefined, end = undefined) {
@@ -134,33 +143,32 @@ const ImmutableArrayBufferInternalPrototype = {
     return sliceBufferToImmutable(getBuffer(this), start, end);
   },
   resize(_newByteLength = undefined) {
-    getBuffer(this); // shim brand check
+    getBuffer(this); // brand check
     throw TypeError('Cannot resize an immutable ArrayBuffer');
   },
   transfer(_newLength = undefined) {
-    getBuffer(this); // shim brand check
+    getBuffer(this); // brand check
     throw TypeError('Cannot detach an immutable ArrayBuffer');
   },
   transferToFixedLength(_newLength = undefined) {
-    getBuffer(this); // shim brand check
+    getBuffer(this); // brand check
     throw TypeError('Cannot detach an immutable ArrayBuffer');
   },
   transferToImmutable(_newLength = undefined) {
-    getBuffer(this); // shim brand check
+    getBuffer(this); // brand check
     throw TypeError('Cannot detach an immutable ArrayBuffer');
   },
-  /**
-   * See https://github.com/endojs/endo/tree/master/packages/immutable-arraybuffer#purposeful-violation
-   */
-  [toStringTag]: 'ImmutableArrayBuffer',
 };
 
-// Better fidelity emulation of a class prototype
-for (const key of ownKeys(ImmutableArrayBufferInternalPrototype)) {
-  defineProperty(ImmutableArrayBufferInternalPrototype, key, {
+// Better fidelity emulation of a class prototype: each property is
+// non-enumerable, matching the shape `ArrayBuffer.prototype` itself uses.
+for (const key of ownKeys(immutableArrayBufferLibProperties)) {
+  defineProperty(immutableArrayBufferLibProperties, key, {
     enumerable: false,
   });
 }
+
+export { immutableArrayBufferLibProperties };
 
 /**
  * Emulates what would have been the encapsulated `ImmutableArrayBufferInternal`
@@ -168,13 +176,18 @@ for (const key of ownKeys(ImmutableArrayBufferInternalPrototype)) {
  * result encapsulates. Security demands that this result has exclusive access
  * to the `realBuffer` it is given, which its callers must ensure.
  *
+ * The emulated immutable buffer directly inherits from `ArrayBuffer.prototype`.
+ * The brand WeakMap is the sole discriminator: `ArrayBuffer.prototype`'s
+ * methods (after the shim installs the lib properties) check brand membership
+ * to decide whether to treat the receiver as immutable.
+ *
  * @param {ArrayBuffer} realBuffer
  * @returns {ArrayBuffer}
  */
 const makeImmutableArrayBufferInternal = realBuffer => {
   const result = /** @type {ArrayBuffer} */ (
     /** @type {unknown} */ ({
-      __proto__: ImmutableArrayBufferInternalPrototype,
+      __proto__: arrayBufferPrototype,
     })
   );
   // Safe because this WeakMap owns its set method.
@@ -194,7 +207,10 @@ freeze(makeImmutableArrayBufferInternal);
 export const isBufferImmutable = buffer => buffers.has(buffer);
 
 /**
- * Creates an immutable slice of the given buffer.
+ * Creates an immutable slice of the given buffer. Internal helper used by
+ * `immutableArrayBufferLibProperties.sliceToImmutable` and by the shim's
+ * own install. Not part of the package's public export surface.
+ *
  * @param {ArrayBuffer} buffer The original buffer.
  * @param {number} [start] The start index.
  * @param {number} [end] The end index.
@@ -219,7 +235,9 @@ export const sliceBufferToImmutable = (
 let transferBufferToImmutable;
 if (optArrayBufferTransfer) {
   /**
-   * Transfer the contents to a new Immutable ArrayBuffer
+   * Transfer the contents to a new Immutable ArrayBuffer. Internal helper
+   * used by `immutableArrayBufferLibProperties.transferToImmutable` and by
+   * the shim's own install. Not part of the package's public export surface.
    *
    * @param {ArrayBuffer} buffer The original buffer.
    * @param {number} [newLength] The start index.
