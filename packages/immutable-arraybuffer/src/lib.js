@@ -158,9 +158,15 @@ const amplifyArrayBuffer = immuAB => {
  */
 const immutableArrayBufferLibProperties = {
   __proto__: null,
+  /**
+   * @this {ArrayBuffer}
+   */
   get byteLength() {
     return apply(arrayBufferByteLength, amplifyArrayBuffer(this), []);
   },
+  /**
+   * @this {ArrayBuffer}
+   */
   get detached() {
     if (isEmulatedImmutable(this)) {
       return false;
@@ -174,6 +180,9 @@ const immutableArrayBufferLibProperties = {
     }
     return apply(arrayBufferDetached, this, []);
   },
+  /**
+   * @this {ArrayBuffer}
+   */
   get maxByteLength() {
     if (isEmulatedImmutable(this)) {
       // For an emulated immutable buffer, maxByteLength is byteLength: it
@@ -185,6 +194,9 @@ const immutableArrayBufferLibProperties = {
     }
     return apply(arrayBufferMaxByteLength, this, []);
   },
+  /**
+   * @this {ArrayBuffer}
+   */
   get resizable() {
     if (isEmulatedImmutable(this)) {
       return false;
@@ -194,34 +206,55 @@ const immutableArrayBufferLibProperties = {
     }
     return apply(arrayBufferResizable, this, []);
   },
+  /**
+   * @this {ArrayBuffer}
+   */
   get immutable() {
     return isEmulatedImmutable(this);
   },
+  /**
+   * @this {ArrayBuffer}
+   */
   slice(start = undefined, end = undefined) {
     return arrayBufferSlice(amplifyArrayBuffer(this), start, end);
   },
+  /**
+   * @this {ArrayBuffer}
+   */
   sliceToImmutable(start = undefined, end = undefined) {
     // eslint-disable-next-line no-use-before-define
     return sliceBufferToImmutable(amplifyArrayBuffer(this), start, end);
   },
+  /**
+   * @this {ArrayBuffer}
+   */
   resize(newByteLength = undefined) {
     if (isEmulatedImmutable(this)) {
       throw TypeError('Cannot resize an immutable ArrayBuffer');
     }
     return apply(optResize, this, [newByteLength]);
   },
+  /**
+   * @this {ArrayBuffer}
+   */
   transfer(newLength = undefined) {
     if (isEmulatedImmutable(this)) {
       throw TypeError('Cannot detach an immutable ArrayBuffer');
     }
     return apply(optTransfer, this, [newLength]);
   },
+  /**
+   * @this {ArrayBuffer}
+   */
   transferToFixedLength(newLength = undefined) {
     if (isEmulatedImmutable(this)) {
       throw TypeError('Cannot detach an immutable ArrayBuffer');
     }
     return apply(optTransferToFixedLength, this, [newLength]);
   },
+  /**
+   * @this {ArrayBuffer}
+   */
   transferToImmutable(newLength = undefined) {
     if (isEmulatedImmutable(this)) {
       throw TypeError('Cannot detach an immutable ArrayBuffer');
