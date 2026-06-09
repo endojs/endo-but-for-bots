@@ -1,7 +1,7 @@
 // @ts-check
 /* global globalThis */
 
-// Replacement for the test deleted by PR #372 (commit 5cf2a20389).
+// Replacement for the test deleted by endojs/endo#372 (commit 5cf2a20389).
 // See https://github.com/endojs/endo/issues/390
 //
 // The point of erights's original test was to verify that the anonymous
