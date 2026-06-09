@@ -215,12 +215,16 @@ const immutableArrayBufferLibProperties = {
   },
   /**
    * @this {ArrayBuffer}
+   * @param {number} [start]
+   * @param {number} [end]
    */
   slice(start = undefined, end = undefined) {
     return arrayBufferSlice(amplifyArrayBuffer(this), start, end);
   },
   /**
    * @this {ArrayBuffer}
+   * @param {number} [start]
+   * @param {number} [end]
    */
   sliceToImmutable(start = undefined, end = undefined) {
     // eslint-disable-next-line no-use-before-define
@@ -228,6 +232,7 @@ const immutableArrayBufferLibProperties = {
   },
   /**
    * @this {ArrayBuffer}
+   * @param {number} [newByteLength]
    */
   resize(newByteLength = undefined) {
     if (isEmulatedImmutable(this)) {
@@ -237,6 +242,7 @@ const immutableArrayBufferLibProperties = {
   },
   /**
    * @this {ArrayBuffer}
+   * @param {number} [newLength]
    */
   transfer(newLength = undefined) {
     if (isEmulatedImmutable(this)) {
@@ -246,6 +252,7 @@ const immutableArrayBufferLibProperties = {
   },
   /**
    * @this {ArrayBuffer}
+   * @param {number} [newLength]
    */
   transferToFixedLength(newLength = undefined) {
     if (isEmulatedImmutable(this)) {
@@ -255,6 +262,7 @@ const immutableArrayBufferLibProperties = {
   },
   /**
    * @this {ArrayBuffer}
+   * @param {number} [newLength]
    */
   transferToImmutable(newLength = undefined) {
     if (isEmulatedImmutable(this)) {
@@ -280,6 +288,14 @@ for (const key of ownKeys(immutableArrayBufferLibProperties)) {
 }
 
 export { immutableArrayBufferLibProperties };
+
+// Internal-test export. The helper itself is load-bearing for every
+// method on `immutableArrayBufferLibProperties`, but the package's
+// public export surface intentionally keeps it private (callers either
+// touch the helper indirectly through `ArrayBuffer.prototype` methods
+// or rely on `isBufferImmutable`). The export exists so the
+// adversarial-tests skill can exercise the helper in isolation.
+export { amplifyArrayBuffer as _amplifyArrayBufferForTests };
 
 /**
  * Emulates what would have been the encapsulated `ImmutableArrayBufferInternal`

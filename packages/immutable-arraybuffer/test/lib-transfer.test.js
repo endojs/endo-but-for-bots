@@ -1,10 +1,6 @@
 // @ts-nocheck
-// Install the shim first so the lib's prototype-record methods are
-// reachable on the shared `ArrayBuffer.prototype` for both genuine and
-// emulated immutable buffers. The lib's free-function helpers
-// (`sliceBufferToImmutable`, `optTransferBufferToImmutable`) remain
-// importable from the lib module for tests that want to exercise the
-// free-function call shape directly.
+// See test/_lib-setup.md for why the shim is installed at module top and
+// why the lib's free-function helpers remain importable from the lib module.
 import '../src/shim.js';
 import test from 'ava';
 import {

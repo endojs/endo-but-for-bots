@@ -9,7 +9,10 @@
 // (the brand-WeakMap case).
 import '../src/shim.js';
 import test from 'ava';
-import { isBufferImmutable } from '../src/lib.js';
+import {
+  isBufferImmutable,
+  _amplifyArrayBufferForTests as amplifyArrayBuffer,
+} from '../src/lib.js';
 
 const { getPrototypeOf } = Object;
 
@@ -117,23 +120,85 @@ test('emulated immutable.transferToFixedLength throws TypeError', t => {
   t.throws(() => iab.transferToFixedLength(), { instanceOf: TypeError });
 });
 
-test('the four mutator overwrites do not fire the shim warning', t => {
-  // The expected-overwrite list filters slice, resize, transfer, and
-  // transferToFixedLength out of the overwrite warning. This is a
-  // regression-prevention assertion: if a future redesign removes the
-  // expectedOverwrites filter, the shim will fire warnings on every
-  // cold start of every SES-using program. The test re-imports the
-  // shim module in a try/catch to demonstrate that no console.warn
-  // mentions those four names in steady state.
-  //
-  // We cannot easily re-trigger the install (it ran once at module
-  // top), so this test asserts the steady-state contract: the four
-  // methods are installed and discriminate on brand membership.
+test('shim installs all four mutator overwrites plus the new proposal surface', t => {
+  // Steady-state contract: the eight shim-installed properties are all
+  // reachable as own properties of ArrayBuffer.prototype after the shim
+  // runs. The expected-overwrite list filter (in src/shim.js) suppresses
+  // the cold-start warning for the four mutator overwrites plus the four
+  // resizable-proposal read accessors; the assertions below check the
+  // post-install observable surface rather than re-running the install
+  // (which cannot be re-triggered after module top).
   t.true('slice' in ArrayBuffer.prototype);
+  t.true('resize' in ArrayBuffer.prototype);
+  t.true('transfer' in ArrayBuffer.prototype);
+  t.true('transferToFixedLength' in ArrayBuffer.prototype);
   t.true('sliceToImmutable' in ArrayBuffer.prototype);
+  t.true('transferToImmutable' in ArrayBuffer.prototype);
   t.true('immutable' in ArrayBuffer.prototype);
-  // The four overwritten methods all behave correctly for both genuine
-  // and emulated receivers (the other tests in this file cover the
-  // round-trip; this test asserts the four are reachable as own
-  // properties of the shared prototype).
+  // Round-trip behavior of all four mutator overwrites is covered by the
+  // dedicated genuine-fallthrough and emulated-immutable tests above.
+});
+
+test('emulated immutable read accessors return immutable-shape values', t => {
+  // The four read accessors (byteLength, detached, resizable, maxByteLength)
+  // dispatch on brand membership and return immutable-shape values for an
+  // emulated immutable buffer: byteLength reflects the underlying genuine
+  // buffer's size, detached is false (an emulated immutable cannot be
+  // detached), resizable is false (an emulated immutable cannot grow), and
+  // maxByteLength equals byteLength (it cannot grow). The `immutable`
+  // brand accessor returns true.
+  const iab = new ArrayBuffer(5).sliceToImmutable();
+  t.is(iab.byteLength, 5);
+  t.false(iab.detached);
+  t.false(iab.resizable);
+  t.is(iab.maxByteLength, 5);
+  t.true(iab.immutable);
+});
+
+test('genuine ArrayBuffer.prototype.immutable returns false', t => {
+  // The `immutable` brand accessor must return false for a genuine
+  // ArrayBuffer (the fallthrough case). The only positive case in the
+  // suite was the emulated immutable; this companion asserts the negative.
+  const ab = new ArrayBuffer(3);
+  t.false(ab.immutable);
+});
+
+test('amplifyArrayBuffer returns underlying genuine buffer for emulated immutables', t => {
+  // The load-bearing discriminator behind every method on the lib's
+  // property record. The internal-test export
+  // (`_amplifyArrayBufferForTests`) exposes the helper so the
+  // adversarial-tests skill can exercise it in isolation rather than
+  // indirectly through prototype dispatch. The three cases below cover
+  // the helper's contract: emulated immutable -> underlying genuine;
+  // genuine -> itself (fallthrough); non-buffer -> itself (fallthrough,
+  // does not throw).
+  const ab = new ArrayBuffer(4);
+  new Uint8Array(ab).set([1, 2, 3, 4]);
+  const iab = ab.sliceToImmutable();
+  const underlying = amplifyArrayBuffer(iab);
+  t.not(underlying, iab);
+  t.true(underlying instanceof ArrayBuffer);
+  t.false(isBufferImmutable(underlying));
+  t.is(underlying.byteLength, 4);
+  // The underlying buffer is the sliced copy made at sliceToImmutable
+  // time, not the source ab; verify the contents match the source.
+  t.deepEqual([...new Uint8Array(underlying)], [1, 2, 3, 4]);
+});
+
+test('amplifyArrayBuffer returns the receiver itself for a genuine ArrayBuffer', t => {
+  const ab = new ArrayBuffer(3);
+  t.is(amplifyArrayBuffer(ab), ab);
+});
+
+test('amplifyArrayBuffer does not throw on a non-ArrayBuffer receiver', t => {
+  // The amplifier's third case: passed a value that is neither an
+  // emulated immutable nor a genuine ArrayBuffer, it returns the value
+  // unchanged rather than throwing. Downstream prototype-dispatched
+  // methods then propagate a normal "method called on incompatible
+  // receiver" TypeError from the captured genuine method, which is the
+  // shape callers expect.
+  const nonBuffer = { byteLength: 7 };
+  t.is(amplifyArrayBuffer(nonBuffer), nonBuffer);
+  t.notThrows(() => amplifyArrayBuffer(null));
+  t.notThrows(() => amplifyArrayBuffer(undefined));
 });
