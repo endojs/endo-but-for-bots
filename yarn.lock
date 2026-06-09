@@ -2461,6 +2461,24 @@ __metadata:
   languageName: unknown
   linkType: soft
 
+"@endo/notify-xdg@workspace:packages/notify-xdg":
+  version: 0.0.0-use.local
+  resolution: "@endo/notify-xdg@workspace:packages/notify-xdg"
+  dependencies:
+    "@endo/base64": "workspace:^"
+    "@endo/eventual-send": "workspace:^"
+    "@endo/exo": "workspace:^"
+    "@endo/init": "workspace:^"
+    "@endo/patterns": "workspace:^"
+    "@endo/ses-ava": "workspace:^"
+    ava: "catalog:dev"
+    c8: "catalog:dev"
+    eslint: "catalog:dev"
+    tsd: "catalog:dev"
+    typescript: "catalog:dev"
+  languageName: unknown
+  linkType: soft
+
 "@endo/ocapn-noise@workspace:packages/ocapn-noise":
   version: 0.0.0-use.local
   resolution: "@endo/ocapn-noise@workspace:packages/ocapn-noise"
