@@ -83,9 +83,20 @@ await build({
 // Must be ESM: the worker import()s caplets as ES modules.
 // The banner polyfills `require` for CJS deps (e.g. node-fetch)
 // that esbuild cannot statically convert to ESM imports.
+//
+// `tsconfigRaw: '{}'` neutralizes the tsconfig esbuild would otherwise
+// discover by walking up from agent.js — packages/lal/tsconfig.json maps
+// `@endo/genie` to the type-only `./src/genie-shim.ts` shim so package-local
+// `tsc` can lint Lal against Genie's public round API without following
+// Genie's checked JS. esbuild honors that `paths` redirect at bundle time
+// too, which would resolve the *runtime* `import { runAgentRound } from
+// '@endo/genie'` to the declaration-only shim ("No matching export …
+// runAgentRound"). Overriding with an empty tsconfig restores normal Node
+// resolution so the runtime import lands on the real `@endo/genie` package.
 await build({
   ...shared,
   format: 'esm',
+  tsconfigRaw: '{}',
   banner: {
     js: 'import { createRequire as __bundleCreateRequire } from "module"; const require = __bundleCreateRequire(import.meta.url);',
   },
