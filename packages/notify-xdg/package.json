@@ -30,6 +30,7 @@
     ".": "./index.js",
     "./src/dbus-msg.js": "./src/dbus-msg.js",
     "./src/dbus-sock.js": "./src/dbus-sock.js",
+    "./src/notification.js": "./src/notification.js",
     "./package.json": "./package.json"
   },
   "scripts": {

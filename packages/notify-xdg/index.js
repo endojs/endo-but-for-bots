@@ -1,3 +1,3 @@
 // @ts-check
 
-export {};
+export { make } from './src/notification.js';
