@@ -28,6 +28,7 @@
   "module": "./index.js",
   "exports": {
     ".": "./index.js",
+    "./src/dbus-msg.js": "./src/dbus-msg.js",
     "./package.json": "./package.json"
   },
   "scripts": {
