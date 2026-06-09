@@ -17,12 +17,30 @@ const { freeze, defineProperty, getOwnPropertyDescriptor, getPrototypeOf } =
 const { apply, ownKeys } = Reflect;
 
 const { prototype: arrayBufferPrototype } = ArrayBuffer;
-const { slice, transfer: optTransfer } = arrayBufferPrototype;
+const {
+  slice,
+  transfer: optTransfer,
+  resize: optResize,
+  transferToFixedLength: optTransferToFixedLength,
+} = arrayBufferPrototype;
 // @ts-expect-error TS doesn't know it'll be there
 const { get: arrayBufferByteLength } = getOwnPropertyDescriptor(
   arrayBufferPrototype,
   'byteLength',
 );
+
+// Capture the resizable-ArrayBuffer proposal's accessors when present. On
+// platforms without that proposal (Node <= 18, Hermes), these are absent;
+// the fallthrough branches in the lib property record short-circuit on
+// brand membership and never reach the captured accessor in that case
+// (an emulated immutable always has `detached === false`, `resizable ===
+// false`, and `maxByteLength === byteLength`).
+const arrayBufferDetached =
+  getOwnPropertyDescriptor(arrayBufferPrototype, 'detached')?.get;
+const arrayBufferResizable =
+  getOwnPropertyDescriptor(arrayBufferPrototype, 'resizable')?.get;
+const arrayBufferMaxByteLength =
+  getOwnPropertyDescriptor(arrayBufferPrototype, 'maxByteLength')?.get;
 
 const typedArrayPrototype = getPrototypeOf(Uint8Array.prototype);
 const { set: uint8ArraySet } = typedArrayPrototype;
@@ -92,14 +110,28 @@ const buffers = new WeakMap();
 for (const methodName of ['get', 'has', 'set']) {
   defineProperty(buffers, methodName, { value: buffers[methodName] });
 }
-const getBuffer = immuAB => {
+// Safe because this WeakMap owns its has, get, and set methods.
+// eslint-disable-next-line @endo/no-polymorphic-call
+const isEmulatedImmutable = buf => buffers.has(buf);
+
+/**
+ * Amplifier-with-this-fallthrough: returns the underlying genuine
+ * `ArrayBuffer` when `immuAB` is an emulated immutable buffer (in the brand
+ * WeakMap), and returns `immuAB` itself otherwise. This lets the methods on
+ * the shared `ArrayBuffer.prototype` (after the shim install) work as
+ * drop-in replacements for the genuine methods when invoked on a genuine
+ * `ArrayBuffer`, while transparently reaching the underlying buffer for the
+ * emulated-immutable case. The name aligns with the analogous
+ * `amplifyTypedArray` on the freezable-TypedArray experiment branch.
+ */
+const amplifyArrayBuffer = immuAB => {
   // Safe because this WeakMap owns its get method.
   // eslint-disable-next-line @endo/no-polymorphic-call
   const result = buffers.get(immuAB);
-  if (result) {
+  if (result !== undefined) {
     return result;
   }
-  throw TypeError('Not an emulated Immutable ArrayBuffer');
+  return immuAB;
 };
 
 /**
@@ -107,56 +139,92 @@ const getBuffer = immuAB => {
  * `ArrayBuffer.prototype` to install immutable-ArrayBuffer support. This is
  * not a prototype of any object: emulated immutable buffers directly inherit
  * from `ArrayBuffer.prototype`, and the methods here become the ones the
- * (now shared) prototype dispatches to. Move 2 of the redesign extends the
- * mutator methods to discriminate on brand membership and delegate to the
- * underlying genuine method on fallthrough; until then, the methods read
- * the brand WeakMap via `getBuffer` and throw on a non-emulated receiver.
+ * (now shared) prototype dispatches to. Each method either calls
+ * `amplifyArrayBuffer(this)` to reach the underlying buffer (read accessors,
+ * `slice`, `sliceToImmutable`) or discriminates on brand WeakMap membership
+ * and delegates to the captured genuine method on fallthrough (the mutators
+ * `resize`, `transfer`, `transferToFixedLength`, `transferToImmutable`).
  *
  * Omits `constructor` so `ArrayBuffer.prototype.constructor` is inherited.
  */
 const immutableArrayBufferLibProperties = {
   __proto__: null,
   get byteLength() {
-    return apply(arrayBufferByteLength, getBuffer(this), []);
+    return apply(arrayBufferByteLength, amplifyArrayBuffer(this), []);
   },
   get detached() {
-    getBuffer(this); // brand check
-    return false;
+    if (isEmulatedImmutable(this)) {
+      return false;
+    }
+    // Genuine `ArrayBuffer.prototype.detached` is a stage-finished accessor
+    // on platforms with the resizable-ArrayBuffer proposal. On older
+    // platforms (Node <= 18, Hermes) it does not exist; the conservative
+    // answer for a non-detached genuine buffer in that case is false.
+    if (arrayBufferDetached === undefined) {
+      return false;
+    }
+    return apply(arrayBufferDetached, this, []);
   },
   get maxByteLength() {
-    // Not underlying maxByteLength, which is irrelevant
-    return apply(arrayBufferByteLength, getBuffer(this), []);
+    if (isEmulatedImmutable(this)) {
+      // For an emulated immutable buffer, maxByteLength is byteLength: it
+      // cannot grow.
+      return apply(arrayBufferByteLength, amplifyArrayBuffer(this), []);
+    }
+    if (arrayBufferMaxByteLength === undefined) {
+      return apply(arrayBufferByteLength, this, []);
+    }
+    return apply(arrayBufferMaxByteLength, this, []);
   },
   get resizable() {
-    getBuffer(this); // brand check
-    return false;
+    if (isEmulatedImmutable(this)) {
+      return false;
+    }
+    if (arrayBufferResizable === undefined) {
+      return false;
+    }
+    return apply(arrayBufferResizable, this, []);
   },
   get immutable() {
-    getBuffer(this); // brand check
-    return true;
+    return isEmulatedImmutable(this);
   },
   slice(start = undefined, end = undefined) {
-    return arrayBufferSlice(getBuffer(this), start, end);
+    return arrayBufferSlice(amplifyArrayBuffer(this), start, end);
   },
   sliceToImmutable(start = undefined, end = undefined) {
     // eslint-disable-next-line no-use-before-define
-    return sliceBufferToImmutable(getBuffer(this), start, end);
+    return sliceBufferToImmutable(amplifyArrayBuffer(this), start, end);
   },
-  resize(_newByteLength = undefined) {
-    getBuffer(this); // brand check
-    throw TypeError('Cannot resize an immutable ArrayBuffer');
+  resize(newByteLength = undefined) {
+    if (isEmulatedImmutable(this)) {
+      throw TypeError('Cannot resize an immutable ArrayBuffer');
+    }
+    return apply(optResize, this, [newByteLength]);
   },
-  transfer(_newLength = undefined) {
-    getBuffer(this); // brand check
-    throw TypeError('Cannot detach an immutable ArrayBuffer');
+  transfer(newLength = undefined) {
+    if (isEmulatedImmutable(this)) {
+      throw TypeError('Cannot detach an immutable ArrayBuffer');
+    }
+    return apply(optTransfer, this, [newLength]);
   },
-  transferToFixedLength(_newLength = undefined) {
-    getBuffer(this); // brand check
-    throw TypeError('Cannot detach an immutable ArrayBuffer');
+  transferToFixedLength(newLength = undefined) {
+    if (isEmulatedImmutable(this)) {
+      throw TypeError('Cannot detach an immutable ArrayBuffer');
+    }
+    return apply(optTransferToFixedLength, this, [newLength]);
   },
-  transferToImmutable(_newLength = undefined) {
-    getBuffer(this); // brand check
-    throw TypeError('Cannot detach an immutable ArrayBuffer');
+  transferToImmutable(newLength = undefined) {
+    if (isEmulatedImmutable(this)) {
+      throw TypeError('Cannot detach an immutable ArrayBuffer');
+    }
+    // eslint-disable-next-line no-use-before-define
+    if (optTransferBufferToImmutable === undefined) {
+      throw TypeError(
+        'Cannot transfer to immutable: underlying platform lacks transfer or structuredClone',
+      );
+    }
+    // eslint-disable-next-line no-use-before-define
+    return optTransferBufferToImmutable(this, newLength);
   },
 };
 
@@ -203,8 +271,7 @@ freeze(makeImmutableArrayBufferInternal);
  * @param {ArrayBuffer} buffer
  * @returns {boolean}
  */
-// eslint-disable-next-line @endo/no-polymorphic-call
-export const isBufferImmutable = buffer => buffers.has(buffer);
+export const isBufferImmutable = buffer => isEmulatedImmutable(buffer);
 
 /**
  * Creates an immutable slice of the given buffer. Internal helper used by
