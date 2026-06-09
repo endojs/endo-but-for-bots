@@ -52,9 +52,10 @@ with different providers or API keys.
 
 If `LAL_AUTH_TOKEN` is omitted, pi-ai falls back to its normal process-level
 provider environment variables. Common examples are `OPENAI_API_KEY`,
-`ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`, and `OPENROUTER_API_KEY`. These are
-useful for one-provider local setups, but every worker in the daemon process
-sees the same ambient values.
+`ANTHROPIC_OAUTH_TOKEN`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`, and
+`OPENROUTER_API_KEY`. For Anthropic, pi-ai checks `ANTHROPIC_OAUTH_TOKEN`
+before `ANTHROPIC_API_KEY`. These are useful for one-provider local setups,
+but every worker in the daemon process sees the same ambient values.
 
 | Variable         | Description                          | Default                  |
 | ---------------- | ------------------------------------ | ------------------------ |
