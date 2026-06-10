@@ -1933,7 +1933,7 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@endo/genie@workspace:^, @endo/genie@workspace:packages/genie":
+"@endo/genie@workspace:packages/genie":
   version: 0.0.0-use.local
   resolution: "@endo/genie@workspace:packages/genie"
   dependencies:
@@ -2141,7 +2141,6 @@ __metadata:
     "@endo/errors": "workspace:^"
     "@endo/eventual-send": "workspace:^"
     "@endo/exo": "workspace:^"
-    "@endo/genie": "workspace:^"
     "@endo/harden": "workspace:^"
     "@endo/init": "workspace:^"
     "@endo/lockdown": "workspace:^"
