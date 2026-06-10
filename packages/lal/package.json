@@ -2,7 +2,7 @@
   "name": "@endo/lal",
   "version": "0.1.0",
   "private": true,
-  "description": "AI agent plugin for Endo, built on the @endo/genie pi-based harness",
+  "description": "AI agent plugin for Endo",
   "keywords": [],
   "author": "Endo contributors",
   "license": "Apache-2.0",
