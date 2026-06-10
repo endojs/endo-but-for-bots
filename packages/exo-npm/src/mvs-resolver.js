@@ -474,8 +474,8 @@ export const makeMvsResolveHook = options => {
       }
 
       // Workspace member preferred even when range is not workspace:.
-      // (workspace-wins regardless of predicate, per
-      // mvs-resolver.md § Workspace resolution).
+      // (workspace-wins regardless of predicate, per the
+      // Workspace resolution section of mvs-resolver.md).
       if (typeof workspaceLookup === 'function') {
         const member = await workspaceLookup(name);
         if (member !== undefined) {
@@ -663,10 +663,10 @@ export const makeMvsResolveHook = options => {
     for (const [name, slot] of resolved) {
       for (const selection of slot.values()) {
         // Workspace members keep the bare name as their key, no
-        // version segment. Per snapshot-mapper.md § Synthesized
-        // layout, this is the encoding the mapper relies on to
-        // distinguish workspace members from registry-resolved
-        // entries.
+        // version segment. Per the Synthesized layout section of
+        // snapshot-mapper.md, this is the encoding the mapper
+        // relies on to distinguish workspace members from
+        // registry-resolved entries.
         const key = selection.isWorkspace
           ? name
           : composeKey(name, selection.version);

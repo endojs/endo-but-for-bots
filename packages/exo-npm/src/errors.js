@@ -3,16 +3,16 @@
 /**
  * Structured error classes for the EndoRegistry capability.
  *
- * The four failure classes come from `designs/registry-capability.md`
- * § Failure surface. They are tagged via `@endo/errors`'s `errorName`
- * option so callers branch on the failure class without inspecting
- * message text, which is fragile across both the JS and the future
- * Rust-backed lanes.
+ * The four failure classes come from the Failure surface section of
+ * `designs/registry-capability.md`. They are tagged via `@endo/errors`'s
+ * `errorName` option so callers branch on the failure class without
+ * inspecting message text, which is fragile across both the JS and the
+ * future Rust-backed lanes.
  *
  * Eviction-driven re-fetch that succeeds is silent; an eviction-driven
  * re-fetch that fails surfaces as `RegistryNetworkError` or
  * `RegistryOfflineError` per the existing classification (see the
- * design's § Failure surface refinements).
+ * design's Failure surface refinements section).
  */
 
 import { makeError, X } from '@endo/errors';

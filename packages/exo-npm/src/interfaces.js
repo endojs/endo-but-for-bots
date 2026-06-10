@@ -4,8 +4,8 @@
  * Method-guard shape for the EndoRegistry capability.
  *
  * This guard is what crosses the worker boundary, mirroring the
- * `EndoRegistry` interface in `designs/registry-capability.md` §
- * Capability shape.
+ * `EndoRegistry` interface in the Capability shape section of
+ * `designs/registry-capability.md`.
  *
  * The runtime exo (built by `makeNpmReferenceRegistry`) uses
  * `EndoRegistryInterface`; a future Rust-backed wrapper presents the
@@ -59,7 +59,7 @@ const PackageJsonShape = M.string();
  * matches any promise regardless of resolved value, mirroring the
  * shape conventions already in use in `@endo/daemon/src/interfaces.js`.
  *
- * @see designs/registry-capability.md § Capability shape
+ * @see designs/registry-capability.md, Capability shape section.
  */
 export const EndoRegistryInterface = M.interface('EndoRegistry', {
   resolve: M.call(PackageJsonShape)
