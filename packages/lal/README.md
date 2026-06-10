@@ -13,15 +13,15 @@ The LLM agent uses tool calls to interact with the Endo daemon, enabling it to:
 
 ## Architecture
 
-Lal's agent harness is built on `@endo/genie`'s pi-based agent loop
-(`@earendil-works/pi-agent-core` + `@earendil-works/pi-ai`). Each worker is a
-single `PiAgent` whose internal message history is the durable transcript
-for the worker's lifetime. The Endo capability tool surface (the `help`,
-`list`, `lookup`, `send`, `reply`, `evaluate`, `define`, ... family) is
-dispatched through a `listTools` / `execTool` pair handed to
-`makePiAgent`; tool arguments are SmallCaps-decoded per call so
-BigInt-shaped strings (`"+5"`) and `"#undefined"` continue to round-trip
-correctly.
+Lal's agent harness is built directly on
+`@earendil-works/pi-agent-core` + `@earendil-works/pi-ai`. Each worker is
+a single `PiAgent` whose internal message history is the durable
+transcript for the worker's lifetime. The Endo capability tool surface
+(the `help`, `list`, `lookup`, `send`, `reply`, `evaluate`, `define`,
+... family) is dispatched through a `listTools` / `execTool` pair
+constructed at worker spawn; tool arguments are SmallCaps-decoded per
+call so BigInt-shaped strings (`"+5"`) and `"#undefined"` continue to
+round-trip correctly.
 
 `packages/lal/providers/` remains in place as a stable surface for
 downstream consumers (jaine, fae). It is no longer used by lal's own

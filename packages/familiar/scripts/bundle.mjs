@@ -81,18 +81,14 @@ await build({
 // makeUnconfined.  lal/setup.js resolves it as
 // new URL('agent.js', import.meta.url).
 // Must be ESM: the worker import()s caplets as ES modules.
-// The banner polyfills `require` for CJS deps (e.g. node-fetch)
-// that esbuild cannot statically convert to ESM imports.
+// The banner polyfills `require` for CJS deps (such as node-fetch) that
+// esbuild cannot statically convert to ESM imports.
 //
 // `tsconfigRaw: '{}'` neutralizes the tsconfig esbuild would otherwise
-// discover by walking up from agent.js — packages/lal/tsconfig.json maps
-// `@endo/genie` to the type-only `./src/genie-shim.ts` shim so package-local
-// `tsc` can lint Lal against Genie's public round API without following
-// Genie's checked JS. esbuild honors that `paths` redirect at bundle time
-// too, which would resolve the *runtime* `import { runAgentRound } from
-// '@endo/genie'` to the declaration-only shim ("No matching export …
-// runAgentRound"). Overriding with an empty tsconfig restores normal Node
-// resolution so the runtime import lands on the real `@endo/genie` package.
+// discover by walking up from agent.js. We pass an empty config so that
+// esbuild does not honor any `paths` redirect a future package-local
+// tsconfig might add (which could rewrite a runtime import target to a
+// type-only declaration shim and break the bundle).
 await build({
   ...shared,
   format: 'esm',

@@ -11,8 +11,8 @@ import { makeLocalTree } from '@endo/platform/fs/node';
 
 import { Agent as PiAgent } from '@earendil-works/pi-agent-core';
 import { registerBuiltInApiProviders, getModel } from '@earendil-works/pi-ai';
-import { runAgentRound } from '@endo/genie';
 
+import { runAgentRound } from './agent-round.js';
 import {
   persistTurnDelta,
   loadPersistedTranscript,
@@ -27,9 +27,9 @@ import {
 // Register pi-ai's built-in API providers (anthropic, openai, google,
 // openrouter, mistral, deepseek, groq, xai, github-copilot, and ~20 others)
 // so getModel(provider, modelId) lookups succeed for any caller-supplied
-// "provider/modelId" string. Ollama is *not* in this registry; @endo/genie's
-// makePiAgent treats "ollama/<id>" specially by constructing a custom
-// Model that points at a local OpenAI-compatible Ollama endpoint.
+// "provider/modelId" string. Ollama is *not* in this registry; lal handles
+// "ollama/<id>" specially in `resolveWorkerModel` below by constructing a
+// custom Model that points at a local OpenAI-compatible Ollama endpoint.
 registerBuiltInApiProviders();
 
 // ============================================================================
@@ -846,11 +846,11 @@ export const spawnWorkerLoop = async (powers, context, workerEnv) => {
 
   // Bind the tool dispatcher to this guest's powers, then build the
   // AgentTool array pi-agent-core consumes directly. We construct the
-  // PiAgent in-line rather than via @endo/genie's `makePiAgent` so that
+  // PiAgent in-line (rather than via a higher-level harness helper) so that
   //   (a) we are free to seed `initialState.messages` from prior
   //       transcripts when cross-restart continuity lands (see PR body),
-  //   (b) we control the system prompt verbatim (no genie claw policy
-  //       suffix or security-notes wrapping is applied), and
+  //   (b) we control the system prompt verbatim (no policy suffix or
+  //       security-notes wrapping is applied), and
   //   (c) the per-tool parameter schema lives at the tool boundary,
   //       which lets `@endo/patterns` validation guard inbound args.
   const executeTool = makeExecuteTool(powers);
@@ -1252,8 +1252,8 @@ function buildOpenAICompatibleModel(id, baseUrl, provider, namePrefix) {
 /**
  * Build a pi-ai Model object for an Ollama-compatible instance. Ollama exposes
  * an OpenAI-compatible /v1/chat/completions endpoint, so we masquerade as the
- * "openai" provider with a custom baseUrl. Unlike genie's default helper, lal
- * takes the endpoint from the worker's submitted LAL_HOST form value.
+ * "openai" provider with a custom baseUrl. The endpoint is taken from the
+ * worker's submitted LAL_HOST form value rather than environment defaults.
  *
  * @param {string} id - The ollama model name (e.g. "qwen3")
  * @param {string} host

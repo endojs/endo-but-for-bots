@@ -1,11 +1,6 @@
 {
   "extends": "../../tsconfig.eslint-base.json",
   "compilerOptions": {
-    "paths": {
-      "@endo/genie": [
-        "./src/genie-shim.ts"
-      ]
-    },
     "skipLibCheck": true
   },
   "include": [
