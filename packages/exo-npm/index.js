@@ -15,3 +15,9 @@ export {
   makeNpmReferenceRegistry,
   makeMemoryPackageCacheTable,
 } from './src/reference-backend.js';
+
+export {
+  makeMvsResolveHook,
+  satisfiesRange,
+  parseRangeMajor,
+} from './src/mvs-resolver.js';
