@@ -1,15 +1,12 @@
 # @endo/exo-npm
 
-The `EndoRegistry` exo capability shape and npm-scoped reference backend
-scaffolding.
-This is layer 1 of the daemon-worker `importLocation` stack defined in
-[`designs/registry-capability.md`](../../designs/registry-capability.md).
+The `EndoRegistry` exo capability shape and an npm-scoped reference backend.
 
 The `exo-` prefix indicates that this package imports and exports passable
-interfaces over CapTP; the `npm` suffix names the package's scope (npm-style
-package resolution against the npm registry's metadata schema). A different
-registry backend (a Rust-backed wrapper, a workspace-only resolver) would
-carry its own scope-naming.
+interfaces over CapTP; the `npm` suffix names the package's scope
+(npm-style package resolution against the npm registry's metadata schema).
+A different registry backend (a Rust-backed wrapper, a workspace-only
+resolver) would carry its own scope-naming.
 
 ## What this package provides
 
@@ -23,9 +20,15 @@ carry its own scope-naming.
 - An npm-scoped reference backend (`makeNpmReferenceRegistry`) that wires
   the capability boundary together. It accepts a caller-supplied
   `PackageCacheTable` (sortable by dewey-decimal version) and delegates
-  the actual MVS resolution to an injected `resolveHook` so that layer 2
-  (`designs/mvs-resolver.md`) can plug in the algorithm without touching
-  the capability surface.
+  the MVS resolution algorithm to an injected `resolveHook`, so a
+  caller can substitute the resolver implementation without touching the
+  capability surface.
+- A reference MVS resolve hook (`makeMvsResolveHook`) that implements
+  Go-like Minimum Version Selection over an npm-shaped dependency graph.
+  The hook takes a caller-supplied `fetch` power (so the package itself
+  does not bind to a particular HTTP client) and walks `dependencies`,
+  `peerDependencies`, and `optionalDependencies` together, observing
+  `workspace:` specifiers when the caller supplies a workspace root.
 - An in-memory reference `PackageCacheTable`
   (`makeMemoryPackageCacheTable`) suitable for tests and small in-process
   consumers. A SQLite-backed implementation projects the same shape over
@@ -38,21 +41,17 @@ lives in [`@endo/mem-cas`](../mem-cas/README.md).
 This package depends on `@endo/mem-cas`; consumers wire the two together
 via the reference backend's `cas` option.
 
-## What this package does **not** provide
+## What this package does not provide
 
-- The MVS resolution algorithm itself (layer 2).
-- The snapshot mapper that consumes a `RegistryResolution` (layer 3).
-- The daemon-worker entry point that calls `makeFromPackage` (layer 4).
-- A Rust-backed `EndoRegistry` wrapping `endor-npm-registry-proxy`
-  (Phase 5 of the design).
-- Wiring of `@registry` into `HostFormula` as a required field. The
-  design's migration policy is named but the wiring is a daemon-side
-  change deferred to a follow-up (see the PR body for the open
-  question).
+- A Rust-backed `EndoRegistry` wrapping `endor-npm-registry-proxy`.
 - A SQLite-backed `PackageCacheTable` implementation. The interface is
-  in place; a SQLite projection lands in a follow-up.
+  in place; a SQLite projection lands separately.
 
 ## Status
 
-Phase 1, scaffolding only. The npm-scoped reference backend is wired but
-the `resolveHook` is a stub. See the design document for the phased plan.
+The npm-scoped reference backend and the JS MVS resolve hook are wired
+together. See [`designs/registry-capability.md`](../../designs/registry-capability.md)
+and [`designs/mvs-resolver.md`](../../designs/mvs-resolver.md) for the
+design rationale.
+</content>
+</invoke>

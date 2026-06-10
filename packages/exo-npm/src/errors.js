@@ -26,37 +26,63 @@ const OFFLINE = 'RegistryOfflineError';
  * The fetched tarball's hash did not match the upstream registry's
  * `dist.integrity`.
  *
- * @param {string} name
- * @param {string} version
- * @param {string} expectedIntegrity
- * @param {string} actualHash
+ * The two-argument shape `RegistryTamperedError(name, version,
+ * expectedIntegrity, actualHash)` and the one-argument shape
+ * `RegistryTamperedError(reason)` both produce an error tagged
+ * `TAMPERED`. Layer 2 callers that surface tampering via the
+ * resolution walk use the reason shape; the integrity-check helper
+ * uses the structured shape.
+ *
+ * @param {string} nameOrReason
+ * @param {string} [version]
+ * @param {string} [expectedIntegrity]
+ * @param {string} [actualHash]
  * @returns {Error}
  */
 export const RegistryTamperedError = (
-  name,
+  nameOrReason,
   version,
   expectedIntegrity,
   actualHash,
-) =>
-  makeError(
-    X`Registry contents for ${name}@${version} failed integrity check (expected ${expectedIntegrity}, got ${actualHash})`,
+) => {
+  if (version === undefined) {
+    return makeError(
+      X`Registry contents tampered: ${nameOrReason}`,
+      undefined,
+      { errorName: TAMPERED },
+    );
+  }
+  return makeError(
+    X`Registry contents for ${nameOrReason}@${version} failed integrity check (expected ${expectedIntegrity}, got ${actualHash})`,
     undefined,
     { errorName: TAMPERED },
   );
+};
 harden(RegistryTamperedError);
 
 /**
  * A `(name, version)` pair in the resolver's transitive closure was
  * not found on the configured registry.
  *
- * @param {string} name
- * @param {string} version
+ * Two shapes: `RegistryMissingPackageError(name, version)` for the
+ * canonical missing-pair case, and `RegistryMissingPackageError(reason)`
+ * for arbitrary missing-package surfaces the MVS walk raises
+ * (unsatisfied range, unmet peer, workspace miss).
+ *
+ * @param {string} nameOrReason
+ * @param {string} [version]
  * @returns {Error}
  */
-export const RegistryMissingPackageError = (name, version) =>
-  makeError(X`Registry has no package ${name}@${version}`, undefined, {
+export const RegistryMissingPackageError = (nameOrReason, version) => {
+  if (version === undefined) {
+    return makeError(X`Registry missing package: ${nameOrReason}`, undefined, {
+      errorName: MISSING,
+    });
+  }
+  return makeError(X`Registry has no package ${nameOrReason}@${version}`, undefined, {
     errorName: MISSING,
   });
+};
 harden(RegistryMissingPackageError);
 
 /**
@@ -81,16 +107,26 @@ harden(RegistryNetworkError);
  * yet in the table. The caller asked the registry to fail rather than
  * reach for the network and the registry honored that ask.
  *
- * @param {string} name
- * @param {string} version
+ * Two shapes: `RegistryOfflineError(name, version)` for the canonical
+ * cache-miss case, and `RegistryOfflineError(reason)` for arbitrary
+ * offline failure surfaces.
+ *
+ * @param {string} nameOrReason
+ * @param {string} [version]
  * @returns {Error}
  */
-export const RegistryOfflineError = (name, version) =>
-  makeError(
-    X`Registry is in offline mode and ${name}@${version} is not cached`,
+export const RegistryOfflineError = (nameOrReason, version) => {
+  if (version === undefined) {
+    return makeError(X`Registry is offline: ${nameOrReason}`, undefined, {
+      errorName: OFFLINE,
+    });
+  }
+  return makeError(
+    X`Registry is in offline mode and ${nameOrReason}@${version} is not cached`,
     undefined,
     { errorName: OFFLINE },
   );
+};
 harden(RegistryOfflineError);
 
 /**
@@ -137,9 +173,12 @@ export const registryErrorName = err => {
   const message = /** @type {{ message?: unknown }} */ (err).message;
   if (typeof message !== 'string') return undefined;
   if (message.startsWith('Registry contents for')) return TAMPERED;
+  if (message.startsWith('Registry contents tampered')) return TAMPERED;
   if (message.startsWith('Registry has no package')) return MISSING;
+  if (message.startsWith('Registry missing package')) return MISSING;
   if (message.startsWith('Registry network error')) return NETWORK;
   if (message.startsWith('Registry is in offline mode')) return OFFLINE;
+  if (message.startsWith('Registry is offline')) return OFFLINE;
   return undefined;
 };
 harden(registryErrorName);
