@@ -34,6 +34,7 @@
     "./interfaces.js": "./src/interfaces.js",
     "./reference-backend.js": "./src/reference-backend.js",
     "./mvs-resolver.js": "./src/mvs-resolver.js",
+    "./snapshot-mapper.js": "./src/snapshot-mapper.js",
     "./package.json": "./package.json"
   },
   "scripts": {

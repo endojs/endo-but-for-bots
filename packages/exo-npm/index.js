@@ -21,3 +21,9 @@ export {
   satisfiesRange,
   parseRangeMajor,
 } from './src/mvs-resolver.js';
+
+export {
+  mapSnapshot,
+  buildCompartmentMap,
+  makeMountReadPowers,
+} from './src/snapshot-mapper.js';
