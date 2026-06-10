@@ -611,6 +611,61 @@ test('cyclic star export with renaming reexport, star reexporter imported first,
   t.deepEqual(namespace.probe, { kind: 'value', value: 42 });
 });
 
+// Companion to the renamer-first + const star-export case above with the
+// star reexport replaced by a named reexport: the upstream module
+// `named-reexporter.js` writes `export { y } from './export-renamer.js'`
+// instead of `export * from './export-renamer.js'`. The cycle has the same
+// shape (the named reexporter and the export renamer reference each
+// other), and the observation of `r.y` through the namespace import lands
+// during the same linked-but-not-yet-bound window when main.js imports the
+// renamer first. Node.js raises ReferenceError for `const y = 42` here,
+// matching the star-reexport case, because the temporal dead zone
+// semantics live with the binding, not with the reexport form. SES's
+// current module-instance machinery returns `undefined` instead, the same
+// gap the star-reexport `test.failing` cells pin. The named-reexport
+// variant confirms the gap is not specific to `export *` (kriskowal
+// follow-up on issue-comment 4675471286).
+test.failing(
+  'cyclic named reexport with renaming reexport, renamer imported first, const binding observes ReferenceError during temporal dead zone',
+  async t => {
+    t.plan(1);
+
+    const makeImportHook = makeNodeImporter({
+      'https://example.com/named-reexporter.js': `
+      import * as r from './export-renamer.js';
+      export { y } from './export-renamer.js';
+      export const probe = (() => {
+        try {
+          return { kind: 'value', value: r.y };
+        } catch (e) {
+          return { kind: 'error', name: e.name };
+        }
+      })();
+    `,
+      'https://example.com/export-renamer.js': `
+      export { y as x } from './named-reexporter.js';
+      export const y = 42;
+    `,
+      'https://example.com/main.js': `
+      import * as r from './export-renamer.js';
+      import * as s from './named-reexporter.js';
+      export const probe = s.probe;
+    `,
+    });
+
+    const compartment = new Compartment({
+      resolveHook: resolveNode,
+      importHook: makeImportHook('https://example.com'),
+      __noNamespaceBox__: true,
+      __options__: true,
+    });
+
+    const namespace = await compartment.import('./main.js');
+
+    t.deepEqual(namespace.probe, { kind: 'error', name: 'ReferenceError' });
+  },
+);
+
 test('export-as with duplicated export name', async t => {
   t.plan(4);
 
