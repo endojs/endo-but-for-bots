@@ -132,10 +132,7 @@ test('resolve walks a transitive dependency graph (MVS pick)', async t => {
     dependencies: { 'lib-a': '^1.0.0' },
   });
   const resolution = await registry.resolve(entry, {});
-  t.deepEqual([...resolution.keys].sort(), [
-    'helper@1.2.5',
-    'lib-a@1.0.0',
-  ]);
+  t.deepEqual([...resolution.keys].sort(), ['helper@1.2.5', 'lib-a@1.0.0']);
   t.is(resolution.packagesByKey['helper@1.2.5'].integrity, 'sha512-h25');
 });
 
@@ -311,9 +308,7 @@ test('resolve treats optionalDependencies as best-effort', async t => {
   // The unmet optional surfaces on the resolution's diagnostic side
   // channel.
   t.truthy(resolution.unmetOptionals);
-  t.true(
-    resolution.unmetOptionals?.some(d => d.name === 'fsevents') ?? false,
-  );
+  t.true(resolution.unmetOptionals?.some(d => d.name === 'fsevents') ?? false);
 });
 
 test('resolve in offline mode rejects on missing cache entry', async t => {

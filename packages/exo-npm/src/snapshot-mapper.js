@@ -152,8 +152,8 @@ export const buildCompartmentMap = options => {
       // Here we record the first matching key as the binding; the
       // map document threads through to the link step for correct
       // per-importer binding.
-      const matchingKey = resolution.keys.find(
-        key => key.startsWith(`${name}@`),
+      const matchingKey = resolution.keys.find(key =>
+        key.startsWith(`${name}@`),
       );
       if (matchingKey !== undefined) {
         entryDependencies[name] = { compartment: matchingKey };

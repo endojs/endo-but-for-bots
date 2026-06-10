@@ -79,9 +79,13 @@ export const RegistryMissingPackageError = (nameOrReason, version) => {
       errorName: MISSING,
     });
   }
-  return makeError(X`Registry has no package ${nameOrReason}@${version}`, undefined, {
-    errorName: MISSING,
-  });
+  return makeError(
+    X`Registry has no package ${nameOrReason}@${version}`,
+    undefined,
+    {
+      errorName: MISSING,
+    },
+  );
 };
 harden(RegistryMissingPackageError);
 

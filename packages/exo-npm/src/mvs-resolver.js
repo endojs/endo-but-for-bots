@@ -305,16 +305,19 @@ harden(hashResolution);
  * @returns {ResolveHook}
  */
 export const makeMvsResolveHook = options => {
-  const { fetcher, makeTreeRef, workspaceLookup, sha256: sha256Power } = options;
+  const {
+    fetcher,
+    makeTreeRef,
+    workspaceLookup,
+    sha256: sha256Power,
+  } = options;
   if (!fetcher || typeof fetcher.getPackument !== 'function') {
     throw makeError(
       X`makeMvsResolveHook requires a fetcher with getPackument and getTarball`,
     );
   }
   if (typeof makeTreeRef !== 'function') {
-    throw makeError(
-      X`makeMvsResolveHook requires a makeTreeRef adapter`,
-    );
+    throw makeError(X`makeMvsResolveHook requires a makeTreeRef adapter`);
   }
 
   /**
@@ -370,343 +373,353 @@ export const makeMvsResolveHook = options => {
     return candidates[candidates.length - 1].raw;
   };
 
-  return /** @type {ResolveHook} */ (async (
-    packageJson,
-    /** @type {ResolveOptions} */ resolveOptions,
-    /** @type {ResolveHookContext} */ context,
-  ) => {
-    await null;
-    const { offline = false } = resolveOptions || {};
-
-    let entry;
-    try {
-      entry = decodePackageJson(packageJson);
-    } catch (err) {
-      throw makeError(
-        X`entry package.json is not valid JSON: ${
-          /** @type {Error} */ (err).message
-        }`,
-      );
-    }
-
-    /** @type {Map<string, Awaited<ReturnType<typeof fetcher.getPackument>>>} */
-    const packumentCache = new Map();
-
-    /**
-     * Resolved selections, keyed by name and per-major slot. The slot
-     * is the canonical major derived from the *requested* range, not
-     * from the selected version, so two requesters that classify
-     * under the same slot share a selection and the resolver picks
-     * the greater of the two.
-     *
-     * @type {Map<string, Map<string, { version: string, integrity: string, treeRef: EndoReadableTree, isWorkspace?: boolean }>>}
-     */
-    const resolved = new Map();
-    /** @type {Array<{ importer: string, name: string, range: string }>} */
-    const peerRequirements = [];
-    /** @type {Array<{ importer: string, name: string, range: string, reason: string }>} */
-    const unmetOptionals = [];
-
-    /**
-     * Enqueue all dependency edges from one package descriptor.
-     *
-     * @param {Array<{ name: string, range: string, source: string, importer: string }>} frontier
-     * @param {Record<string, unknown>} pkg
-     * @param {string} importer
-     */
-    const enqueueAll = (frontier, pkg, importer) => {
-      const sources = /** @type {const} */ ([
-        'dependencies',
-        'peerDependencies',
-        'optionalDependencies',
-      ]);
-      for (const source of sources) {
-        const table =
-          /** @type {Record<string, string> | undefined} */
-          (pkg[source]);
-        if (table) {
-          for (const [name, range] of Object.entries(table)) {
-            frontier.push({ name, range, source, importer });
-          }
-        }
-      }
-    };
-
-    const frontier = [];
-    enqueueAll(frontier, entry, entry.name || '<entry>');
-
-    /**
-     * Process a single frontier edge. Returns nothing; mutates the
-     * outer `resolved`, `peerRequirements`, `unmetOptionals`,
-     * `frontier` accumulators. May throw; the caller's loop wraps the
-     * dispatch.
-     *
-     * @param {{ name: string, range: string, source: string, importer: string }} edge
-     */
-    const processEdge = async edge => {
+  return /** @type {ResolveHook} */ (
+    async (
+      packageJson,
+      /** @type {ResolveOptions} */ resolveOptions,
+      /** @type {ResolveHookContext} */ context,
+    ) => {
       await null;
-      const { name, range, source, importer } = edge;
+      const { offline = false } = resolveOptions || {};
 
-      // Workspace specifier? Prefer workspace lookup over registry.
-      if (isWorkspaceSpecifier(range)) {
-        if (typeof workspaceLookup !== 'function') {
-          throw RegistryMissingPackageError(
-            `${importer} requested workspace:${name} but no workspaceLookup was provided`,
-          );
-        }
-        const member = await workspaceLookup(name);
-        if (member === undefined) {
-          throw RegistryMissingPackageError(
-            `workspace dependency ${q(name)} requested by ${q(importer)} not found in workspace`,
-          );
-        }
-        const memberPkg = decodePackageJson(member.packageJson);
-        const wsSlot = resolved.get(name) ?? new Map();
-        wsSlot.set('workspace', {
-          version: memberPkg.version || '0.0.0',
-          integrity: 'workspace:',
-          treeRef: member.treeRef,
-          isWorkspace: true,
-        });
-        resolved.set(name, wsSlot);
-        enqueueAll(frontier, memberPkg, name);
-        return;
+      let entry;
+      try {
+        entry = decodePackageJson(packageJson);
+      } catch (err) {
+        throw makeError(
+          X`entry package.json is not valid JSON: ${
+            /** @type {Error} */ (err).message
+          }`,
+        );
       }
 
-      // Workspace member preferred even when range is not workspace:.
-      // (workspace-wins regardless of predicate, per the
-      // Workspace resolution section of mvs-resolver.md).
-      if (typeof workspaceLookup === 'function') {
-        const member = await workspaceLookup(name);
-        if (member !== undefined) {
-          const memberPkg = decodePackageJson(member.packageJson);
-          const memberVersion = memberPkg.version || '0.0.0';
-          const wsSlot = resolved.get(name) ?? new Map();
-          if (!wsSlot.has('workspace')) {
-            wsSlot.set('workspace', {
-              version: memberVersion,
-              integrity: 'workspace:',
-              treeRef: member.treeRef,
-              isWorkspace: true,
-            });
-            enqueueAll(frontier, memberPkg, name);
+      /** @type {Map<string, Awaited<ReturnType<typeof fetcher.getPackument>>>} */
+      const packumentCache = new Map();
+
+      /**
+       * Resolved selections, keyed by name and per-major slot. The slot
+       * is the canonical major derived from the *requested* range, not
+       * from the selected version, so two requesters that classify
+       * under the same slot share a selection and the resolver picks
+       * the greater of the two.
+       *
+       * @type {Map<string, Map<string, { version: string, integrity: string, treeRef: EndoReadableTree, isWorkspace?: boolean }>>}
+       */
+      const resolved = new Map();
+      /** @type {Array<{ importer: string, name: string, range: string }>} */
+      const peerRequirements = [];
+      /** @type {Array<{ importer: string, name: string, range: string, reason: string }>} */
+      const unmetOptionals = [];
+
+      /**
+       * Enqueue all dependency edges from one package descriptor.
+       *
+       * @param {Array<{ name: string, range: string, source: string, importer: string }>} frontier
+       * @param {Record<string, unknown>} pkg
+       * @param {string} importer
+       */
+      const enqueueAll = (frontier, pkg, importer) => {
+        const sources = /** @type {const} */ ([
+          'dependencies',
+          'peerDependencies',
+          'optionalDependencies',
+        ]);
+        for (const source of sources) {
+          const table =
+            /** @type {Record<string, string> | undefined} */
+            (pkg[source]);
+          if (table) {
+            for (const [name, range] of Object.entries(table)) {
+              frontier.push({ name, range, source, importer });
+            }
           }
-          // Diagnostic when the workspace member's version does not
-          // satisfy the importer's range; we still resolve to the
-          // workspace member, but the unmet predicate is recorded
-          // on the resolution's diagnostic channel.
-          if (!satisfiesRange(memberVersion, range)) {
+        }
+      };
+
+      const frontier = [];
+      enqueueAll(frontier, entry, entry.name || '<entry>');
+
+      /**
+       * Process a single frontier edge. Returns nothing; mutates the
+       * outer `resolved`, `peerRequirements`, `unmetOptionals`,
+       * `frontier` accumulators. May throw; the caller's loop wraps the
+       * dispatch.
+       *
+       * @param {{ name: string, range: string, source: string, importer: string }} edge
+       */
+      const processEdge = async edge => {
+        await null;
+        const { name, range, source, importer } = edge;
+
+        // Workspace specifier? Prefer workspace lookup over registry.
+        if (isWorkspaceSpecifier(range)) {
+          if (typeof workspaceLookup !== 'function') {
+            throw RegistryMissingPackageError(
+              `${importer} requested workspace:${name} but no workspaceLookup was provided`,
+            );
+          }
+          const member = await workspaceLookup(name);
+          if (member === undefined) {
+            throw RegistryMissingPackageError(
+              `workspace dependency ${q(name)} requested by ${q(importer)} not found in workspace`,
+            );
+          }
+          const memberPkg = decodePackageJson(member.packageJson);
+          const wsSlot = resolved.get(name) ?? new Map();
+          wsSlot.set('workspace', {
+            version: memberPkg.version || '0.0.0',
+            integrity: 'workspace:',
+            treeRef: member.treeRef,
+            isWorkspace: true,
+          });
+          resolved.set(name, wsSlot);
+          enqueueAll(frontier, memberPkg, name);
+          return;
+        }
+
+        // Workspace member preferred even when range is not workspace:.
+        // (workspace-wins regardless of predicate, per the
+        // Workspace resolution section of mvs-resolver.md).
+        if (typeof workspaceLookup === 'function') {
+          const member = await workspaceLookup(name);
+          if (member !== undefined) {
+            const memberPkg = decodePackageJson(member.packageJson);
+            const memberVersion = memberPkg.version || '0.0.0';
+            const wsSlot = resolved.get(name) ?? new Map();
+            if (!wsSlot.has('workspace')) {
+              wsSlot.set('workspace', {
+                version: memberVersion,
+                integrity: 'workspace:',
+                treeRef: member.treeRef,
+                isWorkspace: true,
+              });
+              enqueueAll(frontier, memberPkg, name);
+            }
+            // Diagnostic when the workspace member's version does not
+            // satisfy the importer's range; we still resolve to the
+            // workspace member, but the unmet predicate is recorded
+            // on the resolution's diagnostic channel.
+            if (!satisfiesRange(memberVersion, range)) {
+              unmetOptionals.push({
+                importer,
+                name,
+                range,
+                reason: `workspace member version ${memberVersion} does not satisfy ${range}`,
+              });
+            }
+            if (source === 'peerDependencies') {
+              peerRequirements.push({ importer, name, range });
+            }
+            resolved.set(name, wsSlot);
+            return;
+          }
+        }
+
+        const majorKey = parseRangeMajor(range);
+        const slot = resolved.get(name) ?? new Map();
+        const existing = slot.get(majorKey);
+
+        let document;
+        try {
+          document = await loadPackument(packumentCache, name);
+        } catch (err) {
+          if (source === 'optionalDependencies') {
             unmetOptionals.push({
               importer,
               name,
               range,
-              reason: `workspace member version ${memberVersion} does not satisfy ${range}`,
+              reason: /** @type {Error} */ (err).message,
             });
+            return;
           }
+          if (source === 'peerDependencies') {
+            // Defer the failure: the peer-requirement check at the end
+            // raises `RegistryMissingPackageError` with a fully-formed
+            // message describing the unmet peer. Logging the upstream
+            // load failure here would lose the "unmet peer" framing.
+            peerRequirements.push({ importer, name, range });
+            return;
+          }
+          throw err;
+        }
+
+        let candidateVersion;
+        try {
+          candidateVersion = selectGreatestSatisfying(document, name, range);
+        } catch (err) {
+          if (source === 'optionalDependencies') {
+            unmetOptionals.push({
+              importer,
+              name,
+              range,
+              reason: /** @type {Error} */ (err).message,
+            });
+            return;
+          }
+          throw err;
+        }
+
+        if (
+          existing &&
+          compareVersions(
+            parseVersion(existing.version),
+            parseVersion(candidateVersion),
+          ) >= 0
+        ) {
           if (source === 'peerDependencies') {
             peerRequirements.push({ importer, name, range });
           }
-          resolved.set(name, wsSlot);
           return;
         }
-      }
 
-      const majorKey = parseRangeMajor(range);
-      const slot = resolved.get(name) ?? new Map();
-      const existing = slot.get(majorKey);
-
-      let document;
-      try {
-        document = await loadPackument(packumentCache, name);
-      } catch (err) {
-        if (source === 'optionalDependencies') {
-          unmetOptionals.push({
-            importer,
-            name,
-            range,
-            reason: /** @type {Error} */ (err).message,
+        // Fetch the tarball, write to CAS, mint a treeRef.
+        if (offline) {
+          // In offline mode, only accept entries already present in the
+          // caller-supplied package cache.
+          const cached = await context.packages.get(name, candidateVersion);
+          if (cached === undefined) {
+            throw RegistryOfflineError(
+              `offline: no cached entry for ${name}@${candidateVersion}`,
+            );
+          }
+          slot.set(majorKey, {
+            version: candidateVersion,
+            integrity: cached.integrity,
+            treeRef: cached.treeRef,
           });
+          resolved.set(name, slot);
+          const childPj = '{}';
+          enqueueAll(frontier, decodePackageJson(childPj), name);
+          if (source === 'peerDependencies') {
+            peerRequirements.push({ importer, name, range });
+          }
           return;
         }
-        if (source === 'peerDependencies') {
-          // Defer the failure: the peer-requirement check at the end
-          // raises `RegistryMissingPackageError` with a fully-formed
-          // message describing the unmet peer. Logging the upstream
-          // load failure here would lose the "unmet peer" framing.
-          peerRequirements.push({ importer, name, range });
-          return;
-        }
-        throw err;
-      }
 
-      let candidateVersion;
-      try {
-        candidateVersion = selectGreatestSatisfying(document, name, range);
-      } catch (err) {
-        if (source === 'optionalDependencies') {
-          unmetOptionals.push({
-            importer,
-            name,
-            range,
-            reason: /** @type {Error} */ (err).message,
-          });
-          return;
-        }
-        throw err;
-      }
-
-      if (
-        existing &&
-        compareVersions(parseVersion(existing.version), parseVersion(candidateVersion)) >= 0
-      ) {
-        if (source === 'peerDependencies') {
-          peerRequirements.push({ importer, name, range });
-        }
-        return;
-      }
-
-      // Fetch the tarball, write to CAS, mint a treeRef.
-      if (offline) {
-        // In offline mode, only accept entries already present in the
-        // caller-supplied package cache.
-        const cached = await context.packages.get(name, candidateVersion);
-        if (cached === undefined) {
-          throw RegistryOfflineError(
-            `offline: no cached entry for ${name}@${candidateVersion}`,
+        let tarballBytes;
+        try {
+          tarballBytes = await fetcher.getTarball(name, candidateVersion);
+        } catch (err) {
+          if (source === 'optionalDependencies') {
+            unmetOptionals.push({
+              importer,
+              name,
+              range,
+              reason: `tarball fetch failed: ${/** @type {Error} */ (err).message}`,
+            });
+            return;
+          }
+          throw RegistryNetworkError(
+            `failed to fetch tarball for ${name}@${candidateVersion}: ${/** @type {Error} */ (err).message}`,
           );
         }
+        const hash = await context.cas.write(tarballBytes);
+        const treeRef = await makeTreeRef(hash, name, candidateVersion);
+        context.retentionLinks.pin(hash);
+
+        const integrity =
+          document.versions[candidateVersion]?.dist?.integrity || '';
         slot.set(majorKey, {
           version: candidateVersion,
-          integrity: cached.integrity,
-          treeRef: cached.treeRef,
+          integrity,
+          treeRef,
         });
         resolved.set(name, slot);
-        const childPj = '{}';
-        enqueueAll(frontier, decodePackageJson(childPj), name);
+
         if (source === 'peerDependencies') {
           peerRequirements.push({ importer, name, range });
         }
-        return;
-      }
 
-      let tarballBytes;
-      try {
-        tarballBytes = await fetcher.getTarball(name, candidateVersion);
-      } catch (err) {
-        if (source === 'optionalDependencies') {
-          unmetOptionals.push({
-            importer,
-            name,
-            range,
-            reason: `tarball fetch failed: ${/** @type {Error} */ (err).message}`,
-          });
-          return;
-        }
-        throw RegistryNetworkError(
-          `failed to fetch tarball for ${name}@${candidateVersion}: ${/** @type {Error} */ (err).message}`,
-        );
-      }
-      const hash = await context.cas.write(tarballBytes);
-      const treeRef = await makeTreeRef(hash, name, candidateVersion);
-      context.retentionLinks.pin(hash);
-
-      const integrity =
-        document.versions[candidateVersion]?.dist?.integrity || '';
-      slot.set(majorKey, {
-        version: candidateVersion,
-        integrity,
-        treeRef,
-      });
-      resolved.set(name, slot);
-
-      if (source === 'peerDependencies') {
-        peerRequirements.push({ importer, name, range });
-      }
-
-      // Continue the walk by enqueueing the child's declared deps.
-      // The metadata document carries the child's dependency tables
-      // alongside its dist info, so we walk without a second fetch.
-      const childMeta = document.versions[candidateVersion] || {};
-      enqueueAll(frontier, /** @type {Record<string, unknown>} */ (childMeta), name);
-    };
-
-    while (frontier.length > 0) {
-      const edge = /** @type {{ name: string, range: string, source: string, importer: string }} */ (
-        frontier.shift()
-      );
-      // eslint-disable-next-line no-await-in-loop
-      await processEdge(edge);
-    }
-
-    // Peer-requirement check.
-    for (const peer of peerRequirements) {
-      const slot = resolved.get(peer.name);
-      if (slot === undefined) {
-        throw RegistryMissingPackageError(
-          `${peer.importer} declares unmet peer dependency ${peer.name}@${peer.range}`,
-        );
-      }
-      const satisfied = [...slot.values()].some(candidate =>
-        satisfiesRange(candidate.version, peer.range),
-      );
-      if (!satisfied) {
-        throw RegistryMissingPackageError(
-          `${peer.importer} declares peer dependency ${peer.name}@${peer.range} but resolved closure has no satisfying version`,
-        );
-      }
-    }
-
-    // Flatten the (name, major-slot) -> selection map into the
-    // canonical packagesByKey shape.
-    /** @type {Record<string, RegistryResolutionEntry>} */
-    const packagesByKey = {};
-    for (const [name, slot] of resolved) {
-      for (const selection of slot.values()) {
-        // Workspace members keep the bare name as their key, no
-        // version segment. Per the Synthesized layout section of
-        // snapshot-mapper.md, this is the encoding the mapper
-        // relies on to distinguish workspace members from
-        // registry-resolved entries.
-        const key = selection.isWorkspace
-          ? name
-          : composeKey(name, selection.version);
-        packagesByKey[key] = {
+        // Continue the walk by enqueueing the child's declared deps.
+        // The metadata document carries the child's dependency tables
+        // alongside its dist info, so we walk without a second fetch.
+        const childMeta = document.versions[candidateVersion] || {};
+        enqueueAll(
+          frontier,
+          /** @type {Record<string, unknown>} */ (childMeta),
           name,
-          version: selection.version,
-          treeRef: selection.treeRef,
-          integrity: selection.integrity,
-        };
-      }
-    }
-    const keys = Object.keys(packagesByKey).sort();
-    // Resolution-hash computation. Caller supplies a `sha256` power
-    // separately so the resolution-hash bytes never enter the CAS as
-    // a side effect. When no power was supplied, the resolver falls
-    // back to a length-prefixed concatenation that is deterministic
-    // but not cryptographic; consumers that care about resolution-
-    // hash collision resistance must supply the `sha256` option.
-    const resolutionHashBytes = await hashResolution(
-      keys,
-      packagesByKey,
-      sha256Power ??
-        (async bytes => {
-          const modulus = 2n ** 256n;
-          let acc = 0n;
-          for (const b of bytes) {
-            acc = (acc * 257n + BigInt(b)) % modulus;
-          }
-          return `nohash-${acc.toString(16).padStart(64, '0')}`;
-        }),
-    );
+        );
+      };
 
-    /** @type {RegistryResolution & { unmetOptionals?: unknown }} */
-    const resolution = harden({
-      packagesByKey: harden(packagesByKey),
-      keys: harden(keys),
-      resolutionHash: resolutionHashBytes,
-      unmetOptionals: harden(unmetOptionals),
-    });
-    return resolution;
-  });
+      while (frontier.length > 0) {
+        const edge =
+          /** @type {{ name: string, range: string, source: string, importer: string }} */ (
+            frontier.shift()
+          );
+        // eslint-disable-next-line no-await-in-loop
+        await processEdge(edge);
+      }
+
+      // Peer-requirement check.
+      for (const peer of peerRequirements) {
+        const slot = resolved.get(peer.name);
+        if (slot === undefined) {
+          throw RegistryMissingPackageError(
+            `${peer.importer} declares unmet peer dependency ${peer.name}@${peer.range}`,
+          );
+        }
+        const satisfied = [...slot.values()].some(candidate =>
+          satisfiesRange(candidate.version, peer.range),
+        );
+        if (!satisfied) {
+          throw RegistryMissingPackageError(
+            `${peer.importer} declares peer dependency ${peer.name}@${peer.range} but resolved closure has no satisfying version`,
+          );
+        }
+      }
+
+      // Flatten the (name, major-slot) -> selection map into the
+      // canonical packagesByKey shape.
+      /** @type {Record<string, RegistryResolutionEntry>} */
+      const packagesByKey = {};
+      for (const [name, slot] of resolved) {
+        for (const selection of slot.values()) {
+          // Workspace members keep the bare name as their key, no
+          // version segment. Per the Synthesized layout section of
+          // snapshot-mapper.md, this is the encoding the mapper
+          // relies on to distinguish workspace members from
+          // registry-resolved entries.
+          const key = selection.isWorkspace
+            ? name
+            : composeKey(name, selection.version);
+          packagesByKey[key] = {
+            name,
+            version: selection.version,
+            treeRef: selection.treeRef,
+            integrity: selection.integrity,
+          };
+        }
+      }
+      const keys = Object.keys(packagesByKey).sort();
+      // Resolution-hash computation. Caller supplies a `sha256` power
+      // separately so the resolution-hash bytes never enter the CAS as
+      // a side effect. When no power was supplied, the resolver falls
+      // back to a length-prefixed concatenation that is deterministic
+      // but not cryptographic; consumers that care about resolution-
+      // hash collision resistance must supply the `sha256` option.
+      const resolutionHashBytes = await hashResolution(
+        keys,
+        packagesByKey,
+        sha256Power ??
+          (async bytes => {
+            const modulus = 2n ** 256n;
+            let acc = 0n;
+            for (const b of bytes) {
+              acc = (acc * 257n + BigInt(b)) % modulus;
+            }
+            return `nohash-${acc.toString(16).padStart(64, '0')}`;
+          }),
+      );
+
+      /** @type {RegistryResolution & { unmetOptionals?: unknown }} */
+      const resolution = harden({
+        packagesByKey: harden(packagesByKey),
+        keys: harden(keys),
+        resolutionHash: resolutionHashBytes,
+        unmetOptionals: harden(unmetOptionals),
+      });
+      return resolution;
+    }
+  );
 };
 harden(makeMvsResolveHook);
