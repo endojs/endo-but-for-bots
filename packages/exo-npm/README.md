@@ -18,7 +18,8 @@ resolver) would carry its own scope-naming.
   callers can branch on the failure class without inspecting message
   text.
 - An npm-scoped reference backend (`makeNpmReferenceRegistry`) that wires
-  the capability boundary together. It accepts a caller-supplied
+  the capability boundary together.
+  It accepts a caller-supplied
   `PackageCacheTable` (sortable by dewey-decimal version) and delegates
   the MVS resolution algorithm to an injected `resolveHook`, so a
   caller can substitute the resolver implementation without touching the
@@ -31,7 +32,8 @@ resolver) would carry its own scope-naming.
   `workspace:` specifiers when the caller supplies a workspace root.
 - An in-memory reference `PackageCacheTable`
   (`makeMemoryPackageCacheTable`) suitable for tests and small in-process
-  consumers. A SQLite-backed implementation projects the same shape over
+  consumers.
+  A SQLite-backed implementation projects the same shape over
   a `(name, major, minor, patch, integrity, treeRef)` relational table
   sorted by the three integer columns; it is tracked separately.
 
@@ -44,14 +46,13 @@ via the reference backend's `cas` option.
 ## What this package does not provide
 
 - A Rust-backed `EndoRegistry` wrapping `endor-npm-registry-proxy`.
-- A SQLite-backed `PackageCacheTable` implementation. The interface is
-  in place; a SQLite projection lands separately.
+- A SQLite-backed `PackageCacheTable` implementation.
+  The interface is in place; a SQLite projection lands separately.
 
 ## Status
 
 The npm-scoped reference backend and the JS MVS resolve hook are wired
-together. See [`designs/registry-capability.md`](../../designs/registry-capability.md)
+together.
+See [`designs/registry-capability.md`](../../designs/registry-capability.md)
 and [`designs/mvs-resolver.md`](../../designs/mvs-resolver.md) for the
 design rationale.
-</content>
-</invoke>
