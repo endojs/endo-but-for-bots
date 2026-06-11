@@ -376,6 +376,16 @@ test('cyclic star export with renaming reexport, unused live binding', async t =
 // cross-module namespace access path), while renamer-first plus `var`
 // continues to read `undefined` because the hoisting preamble clears the
 // upstream's TDZ before the downstream observes.
+//
+// Each cell is also exercised through the compartment-mapper scaffold and
+// pinned to Node.js's reference behavior with a shared assertion module.
+// The six star-reexport cells live under
+// packages/compartment-mapper/test/fixtures-cycle-rename-tdz-<binding>-<order>/
+// with sibling tests cycle-rename-tdz-<binding>-<order>.test.js and
+// cycle-rename-tdz-<binding>-<order>-node-parity.test.js for binding in
+// {const, let, var} and order in {renamer-first, star-first}. The named-
+// reexport cell below has its own fixture under
+// fixtures-cycle-named-reexport-tdz-const-renamer-first/ and sibling tests.
 
 test('cyclic star export with renaming reexport, renamer imported first, const binding observes ReferenceError during temporal dead zone', async t => {
   t.plan(1);
