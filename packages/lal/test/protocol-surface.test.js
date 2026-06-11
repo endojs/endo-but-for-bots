@@ -116,6 +116,32 @@ const EXPECTED_CHAT_FACING_METHODS = harden([
   'locate', // @self locator used by setup scripts' form matching
 ]);
 
+/**
+ * Pump microtasks until `predicate()` is true, up to `maxTurns` turns.
+ *
+ * The startup contract we assert is synchronous-on-the-microtask-queue: the
+ * `form('@host', 'Add an agent', ...)` emission is the FIRST `await` in
+ * agent.js's `runManager()`, so it lands within one microtask turn today.
+ * Rather than hard-code that turn count (a fixed `await Promise.resolve()`
+ * tally that a future `await` inserted ahead of the form emission would
+ * silently desync), we poll the recording stub until the form call is
+ * observed. The bounded `maxTurns` keeps the wait deterministic and prevents
+ * a hang if the emission is dropped entirely — the predicate simply never
+ * holds and the caller's assertion fails loudly on the empty recording.
+ *
+ * @param {() => boolean} predicate
+ * @param {number} [maxTurns]
+ */
+const pumpUntil = async (predicate, maxTurns = 16) => {
+  // Leading separator so the loop's await is not the function's first await
+  // (@jessie.js/safe-await-separator); also yields one turn before polling.
+  await null;
+  for (let turn = 0; turn < maxTurns && !predicate(); turn += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    await Promise.resolve();
+  }
+};
+
 const makeRecordingPowers = () => {
   /** @type {string[]} */
   const calls = [];
@@ -177,9 +203,11 @@ test('lal startup emits the "Add an agent" form chat/setup-lal consume', async t
   const exo = make(powers, undefined);
   t.truthy(exo, 'make() returns the Lal exo');
 
-  // Let the manager microtasks run up to the parked lookup('host-agent').
-  await Promise.resolve();
-  await Promise.resolve();
+  // Pump microtasks until the startup form is recorded (the manager then
+  // parks at the lookup('host-agent') await). Polling, rather than a fixed
+  // tick count, keeps the test correct if a future await is inserted ahead
+  // of the form emission.
+  await pumpUntil(() => forms.length > 0);
 
   t.is(forms.length, 1, 'lal emits exactly one startup form');
   const [form] = forms;
@@ -202,8 +230,9 @@ test('lal startup emits the "Add an agent" form chat/setup-lal consume', async t
 test('lal startup drives only the expected chat-facing guest-power methods', async t => {
   const { powers, calls } = makeRecordingPowers();
   make(powers, undefined);
-  await Promise.resolve();
-  await Promise.resolve();
+  // Pump until the manager emits the form (its first guest-power call), by
+  // which point every method it touches before parking at lookup is recorded.
+  await pumpUntil(() => calls.includes('form'));
 
   // Every method the manager touched on the way to the parked lookup must be
   // a member of the expected chat-facing surface. (Subset, not equality:
