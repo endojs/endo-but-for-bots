@@ -1303,6 +1303,7 @@ __metadata:
     "@endo/far": "workspace:^"
     "@endo/init": "workspace:^"
     "@endo/patterns": "workspace:^"
+    "@endo/promise-kit": "workspace:^"
     ajv: "npm:^8.17.1"
     ava: "catalog:dev"
     c8: "catalog:dev"
