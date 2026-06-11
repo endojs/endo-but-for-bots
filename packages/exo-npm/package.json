@@ -2,7 +2,7 @@
   "name": "@endo/exo-npm",
   "version": "0.1.0",
   "private": true,
-  "description": "EndoRegistry exo capability shape and npm-scoped reference backend scaffolding (layer 1 of the daemon-worker importLocation stack)",
+  "description": "EndoRegistry exo capability, MVS resolver, and snapshot-mapper for the daemon-worker importLocation flow",
   "keywords": [
     "endo",
     "exo",
