@@ -25,18 +25,21 @@ export interface ToolPowers {
 }
 
 /**
- * The read- and branch-navigation slice of `EndoGit` the git tool catalog
- * exposes to an LLM.
+ * The read-, branch-navigation, and staging slice of `EndoGit` the git tool
+ * catalog exposes to an LLM.
  *
- * Deliberately omits the destructive and history-rewriting methods of `EndoGit`
- * — `merge`, `rebase`, `restore`, `deleteBranch`, `renameBranch`, the `stash*`
- * family, and the working-tree/detach mutators (`add`, `switch`, `detach`,
- * `worktree`). Those carry authority a tool surface handed to a model should not
- * advertise: they can discard uncommitted work or rewrite shared history.
- * `commit`, `createBranch`, and `switchBranch` are included as the additive,
- * non-destructive write surface. Widening this `Pick` is a deliberate authority
- * decision, not a convenience — add a method only when the tool surface is meant
- * to grant it.
+ * Deliberately omits the history-rewriting and destructive-without-naming
+ * methods of `EndoGit` — `merge`, `rebase`, `deleteBranch`, `renameBranch`, the
+ * `stash*` family, and `switch` / `detach` / `worktree`. Those carry authority a
+ * tool surface handed to a model should not advertise: they can discard
+ * uncommitted work or rewrite shared history. `commit`, `createBranch`, and
+ * `switchBranch` are the additive, non-destructive write surface. `add` and
+ * `restore` are included as the **object-named** write surface: each takes an
+ * `M.arrayOf(M.remotable())` of working-tree entries the LLM names by petname
+ * (resolved against the guest petstore), so the tool can only touch entries the
+ * host already bound — the capref granularity bounds the blast radius. Widening
+ * this `Pick` is a deliberate authority decision, not a convenience — add a
+ * method only when the tool surface is meant to grant it.
  */
 export type GitToolCapability = Pick<
   EndoGit,
@@ -48,6 +51,8 @@ export type GitToolCapability = Pick<
   | 'createBranch'
   | 'switchBranch'
   | 'currentBranch'
+  | 'add'
+  | 'restore'
 >;
 
 export interface ToolSpec {
@@ -130,6 +135,7 @@ export declare function makeTool(spec: ToolSpec): ToolRecord;
 
 export declare function makeGitTool(
   gitCap: ERef<GitToolCapability>,
+  powers?: ERef<ToolPowers>,
 ): ToolRecord[];
 
 export interface MountReadToolOptions {

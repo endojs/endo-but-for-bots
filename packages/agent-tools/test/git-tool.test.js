@@ -21,6 +21,8 @@ const SLICE = [
   'createBranch',
   'switchBranch',
   'currentBranch',
+  'add',
+  'restore',
 ];
 
 /**
@@ -63,11 +65,19 @@ const makeStubGit = calls => {
       calls.push(['currentBranch', ...a]);
       return undefined;
     },
+    add: async (...a) => {
+      calls.push(['add', ...a]);
+      return undefined;
+    },
+    restore: async (...a) => {
+      calls.push(['restore', ...a]);
+      return undefined;
+    },
   };
   return Far('StubGit', stubGit);
 };
 
-test('makeGitTool builds one record per non-remotable-slice method', t => {
+test('makeGitTool builds one record per slice method', t => {
   const tools = makeGitTool(makeStubGit([]));
   t.is(tools.length, SLICE.length);
   const names = tools.map(tool => tool.name).sort();
@@ -80,13 +90,17 @@ test('makeGitTool builds one record per non-remotable-slice method', t => {
   }
 });
 
-test('makeGitTool omits cap-heavy methods', t => {
+test('makeGitTool omits result-cap-bearing methods', t => {
+  // `status` (returns capability-bearing rows) and `filesystemAt` (returns a
+  // live Filesystem) need result serialization and stay deferred; `add` and
+  // `restore` are in the slice because they only *take* caprefs (petnames), they
+  // do not return any.
   const tools = makeGitTool(makeStubGit([]));
   const names = new Set(tools.map(tool => tool.name));
   t.false(names.has('status'));
-  t.false(names.has('add'));
-  t.false(names.has('restore'));
   t.false(names.has('filesystemAt'));
+  t.true(names.has('add'));
+  t.true(names.has('restore'));
 });
 
 test('invoke marshals named args to positional and calls the capability', async t => {

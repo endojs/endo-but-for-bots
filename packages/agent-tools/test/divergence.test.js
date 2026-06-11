@@ -147,7 +147,18 @@ const schemaGuardAgree = test.macro({
   },
 });
 
-for (const tool of gitTools) {
+// The value-typed git tools must have their hand-authored schema and runtime
+// guard agree on every candidate record. The capref-taking tools (`add` /
+// `restore`) are intentionally EXCLUDED here: a capref arg crosses the wire as a
+// petname string whose schema (`{type:'array', items:{type:'string'}}`)
+// deliberately diverges from the resolved-cap guard (`M.arrayOf(M.remotable())`)
+// — that divergence is the capref mechanism, not a bug. Their dedicated
+// agreement test is below (`git add/restore: petname-array schema ⟷
+// arrayOf(remotable) guard agree`).
+const CAPREF_GIT_TOOLS = new Set(['add', 'restore']);
+for (const tool of gitTools.filter(
+  record => !CAPREF_GIT_TOOLS.has(record.name),
+)) {
   test(schemaGuardAgree, tool);
 }
 
@@ -289,6 +300,47 @@ test('arrayOf(remotable) guard ⟷ petname-array schema agree (capref[])', t => 
 
   // A mixed array with a non-string element: the schema rejects it.
   t.false(validate(['endoRepo', 42]));
+});
+
+// The dedicated capref agreement test for the REAL git `add`/`restore` tools.
+// The generic `schemaGuardAgree` macro above skips these because their wire
+// schema deliberately diverges from the resolved-cap guard; this asserts the
+// specific divergence is the *intended* one: each method's `arg0` advertises a
+// petname-string array, while the live `GitInterface` guard for that positional
+// is `M.arrayOf(M.remotable())`. The schema accepts the petname strings an LLM
+// can actually emit; the guard accepts the live caps the petstore resolves them
+// to. (The petname → live-cap round-trip itself is exercised by the round-trip
+// tests below and by `git-add-flow.test.js`.)
+test('git add/restore: petname-array schema ⟷ arrayOf(remotable) guard agree (capref[])', t => {
+  for (const method of ['add', 'restore']) {
+    const tool = gitTools.find(record => record.name === method);
+    if (!tool) throw new Error(`no git tool named ${method}`);
+
+    // The advertised arg0 schema is a petname-string array — the wire form an
+    // LLM can emit — NOT a remotable / object schema.
+    const arg0Schema = /** @type {any} */ (tool.parameters).properties.arg0;
+    t.is(arg0Schema.type, 'array', `${method}.arg0 is an array schema`);
+    t.is(arg0Schema.items.type, 'string', `${method}.arg0 items are strings`);
+    const validate = ajv.compile(arg0Schema);
+    t.true(validate(['entryA', 'entryB']), `${method} accepts a petname array`);
+    t.true(validate([]), `${method} accepts an empty array`);
+    t.false(validate(['entryA', 42]), `${method} rejects a non-string element`);
+    t.false(validate('entryA'), `${method} rejects a bare string`);
+
+    // The live guard for arg0 is `M.arrayOf(M.remotable())`: it accepts an array
+    // of live caps (what the petstore resolves the petnames to) and rejects the
+    // raw petname strings — proving resolution before `mustMatch` is mandatory.
+    const { requiredCount, guards } = guardShapeFor(method);
+    t.is(requiredCount, 1, `${method} requires its leading entry array`);
+    t.true(
+      matches(harden([Far('Entry', {})]), guards[0]),
+      `${method} arg0 guard accepts an array of live caps`,
+    );
+    t.false(
+      matches(harden(['entryA']), guards[0]),
+      `${method} arg0 guard rejects raw petname strings (resolve required)`,
+    );
+  }
 });
 
 test.serial(
