@@ -403,7 +403,7 @@ export const makeMvsResolveHook = options => {
        * under the same slot share a selection and the resolver picks
        * the greater of the two.
        *
-       * @type {Map<string, Map<string, { version: string, integrity: string, treeRef: EndoReadableTree, isWorkspace?: boolean }>>}
+       * @type {Map<string, Map<string, { version: string, integrity: string, treeRef: EndoReadableTree, isWorkspace?: boolean, packageJson?: string }>>}
        */
       const resolved = new Map();
       /** @type {Array<{ importer: string, name: string, range: string }>} */
@@ -465,12 +465,17 @@ export const makeMvsResolveHook = options => {
             );
           }
           const memberPkg = decodePackageJson(member.packageJson);
+          const memberPjString =
+            typeof member.packageJson === 'string'
+              ? member.packageJson
+              : new TextDecoder().decode(member.packageJson);
           const wsSlot = resolved.get(name) ?? new Map();
           wsSlot.set('workspace', {
             version: memberPkg.version || '0.0.0',
             integrity: 'workspace:',
             treeRef: member.treeRef,
             isWorkspace: true,
+            packageJson: memberPjString,
           });
           resolved.set(name, wsSlot);
           enqueueAll(frontier, memberPkg, name);
@@ -484,6 +489,10 @@ export const makeMvsResolveHook = options => {
           const member = await workspaceLookup(name);
           if (member !== undefined) {
             const memberPkg = decodePackageJson(member.packageJson);
+            const memberPjString =
+              typeof member.packageJson === 'string'
+                ? member.packageJson
+                : new TextDecoder().decode(member.packageJson);
             const memberVersion = memberPkg.version || '0.0.0';
             const wsSlot = resolved.get(name) ?? new Map();
             if (!wsSlot.has('workspace')) {
@@ -492,6 +501,7 @@ export const makeMvsResolveHook = options => {
                 integrity: 'workspace:',
                 treeRef: member.treeRef,
                 isWorkspace: true,
+                packageJson: memberPjString,
               });
               enqueueAll(frontier, memberPkg, name);
             }
@@ -586,10 +596,26 @@ export const makeMvsResolveHook = options => {
             version: candidateVersion,
             integrity: cached.integrity,
             treeRef: cached.treeRef,
+            packageJson: cached.packageJson,
           });
           resolved.set(name, slot);
-          const childPj = '{}';
-          enqueueAll(frontier, decodePackageJson(childPj), name);
+          // Walk the cached entry's transitive deps. The cache row's
+          // `packageJson` snapshot carries the declared dependency
+          // tables; without it the closure would be silently incomplete
+          // (any cached entry with declared dependencies would resolve
+          // to an empty edge set). When a caller-supplied row omits the
+          // snapshot, surface the gap on the diagnostic side channel
+          // rather than walking against an empty `{}`.
+          if (typeof cached.packageJson === 'string') {
+            enqueueAll(frontier, decodePackageJson(cached.packageJson), name);
+          } else {
+            unmetOptionals.push({
+              importer,
+              name,
+              range,
+              reason: `offline: cached entry for ${name}@${candidateVersion} has no packageJson snapshot; transitive deps not walked`,
+            });
+          }
           if (source === 'peerDependencies') {
             peerRequirements.push({ importer, name, range });
           }
@@ -619,10 +645,29 @@ export const makeMvsResolveHook = options => {
 
         const integrity =
           document.versions[candidateVersion]?.dist?.integrity || '';
+        // Continue the walk by enqueueing the child's declared deps.
+        // The metadata document carries the child's dependency tables
+        // alongside its dist info, so we walk without a second fetch.
+        const childMeta = document.versions[candidateVersion] || {};
+        // Snapshot the dependency tables into a `packageJson`-shaped
+        // payload the cache row carries forward. A subsequent
+        // offline-mode resolution against the cached entry walks this
+        // snapshot rather than an empty `{}`. Carries only the
+        // dependency tables (the dist/integrity is recorded separately
+        // on the row); a future refinement may carry the full
+        // package.json payload when the resolver fetches the tarball.
+        const packageJsonSnapshot = JSON.stringify({
+          name,
+          version: candidateVersion,
+          dependencies: childMeta.dependencies || {},
+          peerDependencies: childMeta.peerDependencies || {},
+          optionalDependencies: childMeta.optionalDependencies || {},
+        });
         slot.set(majorKey, {
           version: candidateVersion,
           integrity,
           treeRef,
+          packageJson: packageJsonSnapshot,
         });
         resolved.set(name, slot);
 
@@ -630,10 +675,6 @@ export const makeMvsResolveHook = options => {
           peerRequirements.push({ importer, name, range });
         }
 
-        // Continue the walk by enqueueing the child's declared deps.
-        // The metadata document carries the child's dependency tables
-        // alongside its dist info, so we walk without a second fetch.
-        const childMeta = document.versions[candidateVersion] || {};
         enqueueAll(
           frontier,
           /** @type {Record<string, unknown>} */ (childMeta),
@@ -687,6 +728,9 @@ export const makeMvsResolveHook = options => {
             version: selection.version,
             treeRef: selection.treeRef,
             integrity: selection.integrity,
+            ...(selection.packageJson !== undefined
+              ? { packageJson: selection.packageJson }
+              : {}),
           };
         }
       }

@@ -183,7 +183,11 @@ export const makeNpmReferenceRegistry = options => {
    * version columns once at insert time so the table's `list` ordering
    * is dewey-decimal without re-parsing on read.
    *
-   * @param {{ name: string, version: string, treeRef: EndoReadableTree, integrity: string }} entry
+   * Threads the optional `packageJson` snapshot through so the MVS
+   * resolver's offline-mode walk against a cached entry sees the
+   * declared dependency tables rather than an empty `{}`.
+   *
+   * @param {{ name: string, version: string, treeRef: EndoReadableTree, integrity: string, packageJson?: string }} entry
    */
   const cacheEntry = async entry => {
     const { major, minor, patch } = parseVersion(entry.version);
@@ -196,6 +200,9 @@ export const makeNpmReferenceRegistry = options => {
         patch,
         treeRef: entry.treeRef,
         integrity: entry.integrity,
+        ...(entry.packageJson !== undefined
+          ? { packageJson: entry.packageJson }
+          : {}),
       }),
     );
   };

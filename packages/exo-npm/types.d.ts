@@ -72,6 +72,17 @@ export interface RegistryResolutionEntry {
    * `treeRef`; the tree's content-address already proves the bytes.
    */
   integrity: string;
+  /**
+   * The `package.json` snapshot for this resolution entry, encoded as
+   * a UTF-8 JSON string. Carries the declared `dependencies`,
+   * `peerDependencies`, and `optionalDependencies` tables the resolver
+   * needs to walk the transitive closure on a subsequent offline-mode
+   * resolution against a cached entry. Optional so that a
+   * caller-supplied row can omit it (the offline-mode walk reports an
+   * `unmetOptional` for the missing snapshot rather than walking the
+   * cached entry).
+   */
+  packageJson?: string;
 }
 
 /**
@@ -159,6 +170,14 @@ export interface PackageCacheRow {
   treeRef: EndoReadableTree;
   /** Upstream registry's `dist.integrity`. */
   integrity: string;
+  /**
+   * The cached `package.json` snapshot for this row, encoded as a
+   * UTF-8 JSON string. The MVS resolver reads this on an offline-mode
+   * walk to enumerate the cached entry's transitive dependencies
+   * without a packument fetch. Optional so that a SQLite-backed table
+   * that does not yet carry the column degrades gracefully.
+   */
+  packageJson?: string;
 }
 
 /**

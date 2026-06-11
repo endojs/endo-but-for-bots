@@ -8,7 +8,10 @@ import {
 } from '@endo/mem-cas/store.js';
 import { sha256HexWebCrypto } from '@endo/mem-cas/store-web-powers.js';
 
-import { makeNpmReferenceRegistry } from '../src/reference-backend.js';
+import {
+  makeMemoryPackageCacheTable,
+  makeNpmReferenceRegistry,
+} from '../src/reference-backend.js';
 import {
   makeMvsResolveHook,
   satisfiesRange,
@@ -334,6 +337,77 @@ test('resolve in offline mode rejects on missing cache entry', async t => {
     registry.resolve(entry, { offline: true }),
   );
   t.is(registryErrorName(error), 'RegistryOfflineError');
+});
+
+test('resolve in offline mode walks transitive deps of a cached entry', async t => {
+  // Online pass: resolve `parent` whose only declared dep is `child`.
+  // The reference backend's `resolve()` populates the package cache
+  // table with both entries; the cache row carries the snapshot of the
+  // child's declared deps in the row's `packageJson` field. Offline
+  // pass: resolve a different entry that depends on `parent`; the
+  // resolver must walk parent's cached `child` dep rather than treating
+  // the cached entry as having zero transitive deps.
+  const cas = makeMemoryCasStore({ sha256: sha256HexWebCrypto });
+  const fetcher = makeFakeFetcher({
+    packuments: {
+      parent: {
+        versions: {
+          '1.0.0': {
+            dependencies: { child: '^1.0.0' },
+            dist: { integrity: 'sha512-p' },
+          },
+        },
+      },
+      child: {
+        versions: {
+          '1.0.0': { dist: { integrity: 'sha512-c' } },
+        },
+      },
+    },
+  });
+  const resolveHook = makeMvsResolveHook({
+    fetcher,
+    makeTreeRef: makeFakeTreeRef,
+  });
+  // Use an externally-held package cache table so the test can observe
+  // the cached row's `packageJson` snapshot directly.
+  const packages = makeMemoryPackageCacheTable();
+  const registry = makeNpmReferenceRegistry({ cas, resolveHook, packages });
+
+  // Online resolve to populate the package cache.
+  const onlineEntry = JSON.stringify({
+    name: 'app',
+    dependencies: { parent: '^1.0.0' },
+  });
+  const onlineResolution = await registry.resolve(onlineEntry, {});
+  t.true(onlineResolution.keys.includes('parent@1.0.0'));
+  t.true(onlineResolution.keys.includes('child@1.0.0'));
+
+  // Confirm the cache row carries the packageJson snapshot.
+  const parentRow = await packages.get('parent', '1.0.0');
+  t.truthy(parentRow);
+  t.truthy(parentRow?.packageJson, 'cache row carries packageJson snapshot');
+  const parentSnapshot = JSON.parse(parentRow?.packageJson ?? '{}');
+  t.deepEqual(parentSnapshot.dependencies, { child: '^1.0.0' });
+
+  // Offline resolve: the entry depends only on `parent`. The resolver
+  // must walk parent's cached transitive deps (and surface `child` in
+  // the closure) rather than treating parent as a leaf.
+  const offlineEntry = JSON.stringify({
+    name: 'consumer',
+    dependencies: { parent: '^1.0.0' },
+  });
+  const offlineResolution = await registry.resolve(offlineEntry, {
+    offline: true,
+  });
+  t.true(
+    offlineResolution.keys.includes('parent@1.0.0'),
+    'offline resolution includes the directly-declared parent',
+  );
+  t.true(
+    offlineResolution.keys.includes('child@1.0.0'),
+    "offline resolution walks parent's transitive child dep",
+  );
 });
 
 test('workspace specifier resolves through the workspace lookup', async t => {

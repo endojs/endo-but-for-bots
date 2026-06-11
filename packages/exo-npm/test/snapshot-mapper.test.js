@@ -106,6 +106,7 @@ test('buildCompartmentMap binds entry compartment dependency edges as scopes', t
   });
   const entryScopes = map.compartments['.'].scopes;
   t.truthy(entryScopes, 'entry compartment carries scopes');
+  if (entryScopes === undefined) return; // satisfies the type-narrower
   // Registry-resolved dependency maps to the versioned peer-directory.
   t.deepEqual(entryScopes.ses, { compartment: 'ses@1.5.0' });
   // Workspace member maps to the bare-name peer-directory.
