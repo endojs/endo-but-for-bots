@@ -166,7 +166,14 @@ export const buildCompartmentMap = options => {
     name: entryName,
     location: entryLocation,
     modules: harden({}),
-    scopes: harden({}),
+    // The compartment-mapper consumes per-compartment dependency
+    // edges through `scopes`: each entry binds a bare specifier
+    // (the dependency name) to the peer-directory key of the
+    // compartment carrying that dependency. The `compartment` field
+    // on a scope value names the resolved peer-directory key; the
+    // compartment-mapper's link step reads the binding when it walks
+    // the entry's import statements.
+    scopes: harden(entryDependencies),
     parsers: harden({}),
     types: harden({}),
   };

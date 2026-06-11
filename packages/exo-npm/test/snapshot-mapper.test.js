@@ -71,6 +71,47 @@ test('buildCompartmentMap emits one compartment per resolution key', t => {
   t.is(map.entry.compartment, '.');
 });
 
+test('buildCompartmentMap binds entry compartment dependency edges as scopes', t => {
+  // The entry compartment must carry the resolved peer-directory keys
+  // for each declared dependency so the compartment-mapper's link step
+  // can resolve a bare specifier from the entry to the correct peer
+  // compartment. Without these bindings every entry-side `import 'ses'`
+  // would fail to resolve at link time.
+  const entryPj = JSON.stringify({
+    name: 'app',
+    version: '0.0.0',
+    dependencies: { ses: '^1.0.0', 'lib-b': 'workspace:^' },
+  });
+  const resolution = harden({
+    packagesByKey: harden({
+      'ses@1.5.0': {
+        name: 'ses',
+        version: '1.5.0',
+        treeRef: makeFakeTree({}),
+        integrity: 'sha512-s',
+      },
+      'lib-b': {
+        name: 'lib-b',
+        version: '0.0.0',
+        treeRef: makeFakeTree({}),
+        integrity: 'workspace:',
+      },
+    }),
+    keys: harden(['lib-b', 'ses@1.5.0']),
+    resolutionHash: 'h-scopes',
+  });
+  const map = buildCompartmentMap({
+    resolution,
+    entryPackageJson: entryPj,
+  });
+  const entryScopes = map.compartments['.'].scopes;
+  t.truthy(entryScopes, 'entry compartment carries scopes');
+  // Registry-resolved dependency maps to the versioned peer-directory.
+  t.deepEqual(entryScopes.ses, { compartment: 'ses@1.5.0' });
+  // Workspace member maps to the bare-name peer-directory.
+  t.deepEqual(entryScopes['lib-b'], { compartment: 'lib-b' });
+});
+
 test('buildCompartmentMap distinguishes workspace members from registry entries', t => {
   // Workspace members carry no version segment; registry entries do.
   const entryPj = JSON.stringify({
