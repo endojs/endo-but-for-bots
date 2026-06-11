@@ -112,6 +112,18 @@ test('agent.js caplet top-level externals are node builtins + known optionals', 
   // to catch, and a reviewer should confirm any addition is guarded.
   const { builtinModules } = await import('node:module');
   const builtins = new Set(builtinModules.map(n => n.replace(/^node:/, '')));
+  // NOTE: this allow-list is curated BY HAND on purpose, and the test failing
+  // loudly when a new external appears is the feature, not a bug. Each entry
+  // is a non-builtin module the bundle legitimately defers to a runtime
+  // require — an optional native dep marked `external` in scripts/bundle.mjs
+  // (bufferutil, utf-8-validate) or a transitive optional required in a
+  // try/catch (supports-color) or inlined-but-self-requiring (the pi-ai
+  // google-auth-library provider). When a NEW external surfaces here, the
+  // intended action is to REVIEW it first (confirm it is genuinely inlined or
+  // guarded so the worker caplet — which has no node_modules — will not crash
+  // at load), THEN add it deliberately with a one-line justification. Do not
+  // silence the failure by reflexively widening the set; the loud failure is
+  // exactly the regression signal this smoke test exists to raise.
   const KNOWN_OPTIONAL_EXTERNALS = new Set([
     'bufferutil', // optional ws native, marked external in bundle.mjs
     'utf-8-validate', // optional ws native, marked external in bundle.mjs
