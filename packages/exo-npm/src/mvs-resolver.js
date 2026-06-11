@@ -410,6 +410,8 @@ export const makeMvsResolveHook = options => {
       const peerRequirements = [];
       /** @type {Array<{ importer: string, name: string, range: string, reason: string }>} */
       const unmetOptionals = [];
+      /** @type {Array<{ importer: string, name: string, range: string, version: string }>} */
+      const workspaceMismatches = [];
 
       /**
        * Enqueue all dependency edges from one package descriptor.
@@ -508,13 +510,18 @@ export const makeMvsResolveHook = options => {
             // Diagnostic when the workspace member's version does not
             // satisfy the importer's range; we still resolve to the
             // workspace member, but the unmet predicate is recorded
-            // on the resolution's diagnostic channel.
+            // on the resolution's `workspaceMismatches` diagnostic
+            // channel. Kept separate from `unmetOptionals` because
+            // the semantics differ: an unmet optional is a missing
+            // package the resolution simply does not carry, whereas a
+            // workspace mismatch is a present package whose version
+            // disagrees with the importer's range.
             if (!satisfiesRange(memberVersion, range)) {
-              unmetOptionals.push({
+              workspaceMismatches.push({
                 importer,
                 name,
                 range,
-                reason: `workspace member version ${memberVersion} does not satisfy ${range}`,
+                version: memberVersion,
               });
             }
             if (source === 'peerDependencies') {
@@ -755,12 +762,13 @@ export const makeMvsResolveHook = options => {
           }),
       );
 
-      /** @type {RegistryResolution & { unmetOptionals?: unknown }} */
+      /** @type {RegistryResolution & { unmetOptionals?: unknown, workspaceMismatches?: unknown }} */
       const resolution = harden({
         packagesByKey: harden(packagesByKey),
         keys: harden(keys),
         resolutionHash: resolutionHashBytes,
         unmetOptionals: harden(unmetOptionals),
+        workspaceMismatches: harden(workspaceMismatches),
       });
       return resolution;
     }

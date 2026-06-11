@@ -150,6 +150,47 @@ test('buildCompartmentMap distinguishes workspace members from registry entries'
   t.is(map.compartments['helper@1.5.0'].location, 'helper@1.5.0');
 });
 
+test('buildCompartmentMap picks the entry-declared major for multi-major coexistence', t => {
+  // Entry depends on `pkg@^2.0.0`; the resolution carries both pkg@1
+  // and pkg@2 (a transitive importer pulled in the v1 line). The
+  // entry compartment's scope binding for `pkg` must point at the
+  // major that satisfies the entry's declared range, not the first
+  // matching key encountered.
+  const entryPj = JSON.stringify({
+    name: 'entry',
+    version: '0.0.0',
+    dependencies: { pkg: '^2.0.0' },
+  });
+  const resolution = harden({
+    packagesByKey: harden({
+      'pkg@1.0.0': {
+        name: 'pkg',
+        version: '1.0.0',
+        treeRef: makeFakeTree({}),
+        integrity: 'sha512-p1',
+      },
+      'pkg@2.5.0': {
+        name: 'pkg',
+        version: '2.5.0',
+        treeRef: makeFakeTree({}),
+        integrity: 'sha512-p25',
+      },
+    }),
+    // List the v1 line first so a first-match selection would
+    // incorrectly bind to pkg@1.0.0.
+    keys: harden(['pkg@1.0.0', 'pkg@2.5.0']),
+    resolutionHash: 'h-multi',
+  });
+  const map = buildCompartmentMap({
+    resolution,
+    entryPackageJson: entryPj,
+  });
+  const entryScopes = map.compartments['.'].scopes;
+  t.truthy(entryScopes);
+  if (entryScopes === undefined) return;
+  t.deepEqual(entryScopes.pkg, { compartment: 'pkg@2.5.0' });
+});
+
 test('buildCompartmentMap emits multi-major coexistence as distinct compartments', t => {
   const entryPj = JSON.stringify({
     name: 'entry',

@@ -22,6 +22,8 @@
  * @import { RegistryResolution } from '../types.js';
  */
 
+import { satisfiesRange } from './mvs-resolver.js';
+
 const utf8Decoder = new TextDecoder();
 
 /**
@@ -133,28 +135,38 @@ export const buildCompartmentMap = options => {
     ...(entryPkg.peerDependencies || {}),
     ...(entryPkg.optionalDependencies || {}),
   };
-  for (const [name] of Object.entries(allDeps)) {
+  for (const [name, declaredRange] of Object.entries(allDeps)) {
     const wsKey = name;
     const wsEntry = resolution.packagesByKey[wsKey];
     if (wsEntry && wsEntry.version && resolution.keys.includes(wsKey)) {
-      // Workspace key matches the bare name.
+      // Workspace key matches the bare name. Workspace member shadows
+      // any registry version regardless of the declared range.
       entryDependencies[name] = { compartment: wsKey };
-      // eslint-disable-next-line no-continue
     } else {
       // Find the registry-resolved entry whose name matches. When
-      // multiple major versions coexist, the entry's range selection
-      // determines which one; we prefer the entry the resolution
-      // recorded under any `${name}@*` key. Multiple matches are
-      // possible (multi-major coexistence); the entry-importer
-      // semantically resolves against the major that its declared
-      // range pins, which the compartment-mapper's link step
-      // computes by reading the range from the entry package.json.
-      // Here we record the first matching key as the binding; the
-      // map document threads through to the link step for correct
-      // per-importer binding.
-      const matchingKey = resolution.keys.find(key =>
+      // multiple major versions coexist (multi-major), select the one
+      // whose version satisfies the entry's declared range. The
+      // entry's package.json carries the canonical range for each
+      // dependency; we use it here to disambiguate so the binding the
+      // link step reads is the major the entry's source actually
+      // imports. If no candidate satisfies (the resolution carries a
+      // major that does not match the entry's declared range but did
+      // reach the closure through a transitive importer), fall back to
+      // the first matching key so the binding is still populated.
+      const candidates = resolution.keys.filter(key =>
         key.startsWith(`${name}@`),
       );
+      const declaredString =
+        typeof declaredRange === 'string' ? declaredRange : '';
+      const satisfyingKey = candidates.find(key => {
+        const entry = resolution.packagesByKey[key];
+        return (
+          entry &&
+          declaredString !== '' &&
+          satisfiesRange(entry.version, declaredString)
+        );
+      });
+      const matchingKey = satisfyingKey ?? candidates[0];
       if (matchingKey !== undefined) {
         entryDependencies[name] = { compartment: matchingKey };
       }
@@ -185,13 +197,11 @@ export const buildCompartmentMap = options => {
     // the version segment.
     const isWorkspace = key === pkg.name;
     const dirKey = peerDirectoryKey(pkg.name, pkg.version, isWorkspace);
-    if (compartments[dirKey] !== undefined) {
-      // Duplicate keys are silently merged; this can happen when a
-      // workspace member is also referenced by name across versions.
-      // The compartment-mapper does not distinguish multiple entries
-      // here.
-      // eslint-disable-next-line no-continue
-    } else {
+    // Duplicate keys are silently merged; this can happen when a
+    // workspace member is also referenced by name across versions.
+    // The compartment-mapper does not distinguish multiple entries
+    // here.
+    if (compartments[dirKey] === undefined) {
       compartments[dirKey] = {
         label: `${pkg.name}@${pkg.version}`,
         name: pkg.name,

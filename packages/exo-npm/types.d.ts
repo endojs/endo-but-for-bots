@@ -99,9 +99,39 @@ export interface RegistryResolution {
   keys: string[];
   /**
    * Content-addressed hash of the resolution, computed by hashing
-   * `keys` and their `integrity` strings.
+   * `keys` and their `integrity` strings. When the resolver was
+   * constructed without a `sha256` power, this string is prefixed
+   * with `nohash-` so consumers that care about cryptographic
+   * collision-resistance can detect the non-cryptographic fallback.
    */
   resolutionHash: string;
+  /**
+   * Optional diagnostic channel for unmet optional dependencies the
+   * resolver elided from the closure. Each entry names the importer,
+   * the missing dependency, the range that did not resolve, and a
+   * human-readable reason. Distinct from `workspaceMismatches` below:
+   * an unmet optional is a missing package; a workspace mismatch is a
+   * present package whose version disagrees with the importer's range.
+   */
+  unmetOptionals?: ReadonlyArray<{
+    importer: string;
+    name: string;
+    range: string;
+    reason: string;
+  }>;
+  /**
+   * Optional diagnostic channel for workspace members whose version
+   * does not satisfy an importer's declared range. The resolver still
+   * resolves to the workspace member (workspace-wins semantics per
+   * `designs/mvs-resolver.md` § Workspace resolution); the mismatch
+   * is surfaced here so the caller can warn.
+   */
+  workspaceMismatches?: ReadonlyArray<{
+    importer: string;
+    name: string;
+    range: string;
+    version: string;
+  }>;
 }
 
 /**
