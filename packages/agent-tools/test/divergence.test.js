@@ -16,10 +16,12 @@ import {
   getInterfaceGuardPayload,
   getMethodGuardPayload,
 } from '@endo/patterns';
-import { Far } from '@endo/far';
+import { E, Far } from '@endo/far';
 import { GitInterface } from '@endo/exo-git';
 
 import { makeGitTool } from '../src/git-tool.js';
+import { makeTool } from '../src/tool.js';
+import { prepareGuestPowers, bindCap } from './helpers/daemon-petstore.js';
 
 /**
  * Conformance checks for hand-authored JSON Schemas and runtime guards.
@@ -267,4 +269,271 @@ test('{type:integer} schema diverges from a bigint guard', t => {
     divergences >= 1,
     'an {type:integer} schema diverges from a bigint guard',
   );
+});
+
+// --- capref args: remotable guard ⟷ petname-string schema ----------------
+//
+// An LLM cannot put a live object in JSON, so a capref arg crosses the wire as
+// a friendly **petname string** that the invoke layer resolves to the live cap
+// via the guest petstore (`E(powers).lookup`) BEFORE the guard runs. The schema
+// for such an arg is therefore `{type:'string'}` (a petname), and the guard is
+// `M.remotable()`; `M.arrayOf(M.remotable())` ⟷ a petname-string array. The two
+// agree when the strings the schema accepts are exactly the names the petstore
+// resolves to caps the guard accepts. This is the gate that will unblock git
+// `add`/`restore` (#425).
+//
+// The behavioral round-trips bind petnames in a REAL daemon-backed guest
+// petstore and resolve through the live `lookup` — never a hand-rolled `Map`.
+// They fork a daemon per test, so they are `test.serial` with a `t.teardown`.
+
+const PETNAME_SCHEMA = harden({
+  type: 'string',
+  description: 'petname of a capability',
+});
+const PETNAME_ARRAY_SCHEMA = harden({
+  type: 'array',
+  items: {
+    type: 'string',
+    description: 'petname of a capability',
+  },
+});
+
+test('remotable guard ⟷ petname-string schema agree (capref)', t => {
+  const validate = ajv.compile(PETNAME_SCHEMA);
+
+  // A petname is just a friendly string; the schema accepts any string and the
+  // guard accepts the live cap the petstore resolves it to.
+  t.true(validate('gitReadOnly'));
+  t.true(validate('endoRepo'));
+  t.true(matches(Far('SomeCap', {}), M.remotable()));
+
+  // Non-strings can never be a valid wire value for a petname.
+  t.false(validate(42));
+  t.false(validate({}));
+  t.false(validate([]));
+});
+
+test('arrayOf(remotable) guard ⟷ petname-array schema agree (capref[])', t => {
+  const validate = ajv.compile(PETNAME_ARRAY_SCHEMA);
+
+  // An array of petnames: schema-valid, and the resolved caps match
+  // arrayOf(remotable).
+  t.true(validate(['endoRepo', 'gardenRepo']));
+  t.true(
+    matches(harden([Far('A', {}), Far('B', {})]), M.arrayOf(M.remotable())),
+  );
+
+  // Empty array: both accept (an empty arrayOf matches).
+  t.true(validate([]));
+  t.true(matches(harden([]), M.arrayOf(M.remotable())));
+
+  // A mixed array with a non-string element: the schema rejects it.
+  t.false(validate(['endoRepo', 42]));
+});
+
+test.serial(
+  'capref resolution at the makeTool invoke boundary (round-trip)',
+  async t => {
+    t.timeout(120_000);
+    const powers = await prepareGuestPowers(t);
+    // Bind a formula-backed cap under a friendly petname, host-side.
+    const cap = await bindCap(t, powers, 'theCounter');
+
+    /** @type {unknown} */
+    let received;
+    const tool = makeTool({
+      name: 'useCap',
+      description: 'takes a live cap by petname',
+      // `makeTool.invoke` receives a NAMED record (`{ arg0: petname }`), so the
+      // advertised parameters schema is an object schema keyed by `arg0`, with
+      // the petname-string schema as the `arg0` property.
+      parameters: harden({
+        type: 'object',
+        properties: { arg0: PETNAME_SCHEMA },
+        required: ['arg0'],
+        additionalProperties: false,
+      }),
+      argGuards: [M.remotable()],
+      argKinds: ['capref'],
+      powers,
+      execute: async args => {
+        received = args.arg0;
+        return 'ok';
+      },
+    });
+
+    // A bound petname resolves to the live cap before `execute` sees it.
+    t.is(await tool.invoke({ arg0: 'theCounter' }), 'ok');
+    // The resolved value is the live cap: it answers an eventual-send the way
+    // the original does (proving it is the cap, not the petname string).
+    t.is(await E(/** @type {any} */ (received)).incr(), 1);
+    t.is(await E(cap).incr(), 2);
+
+    // An unbound petname fails closed before `execute` runs (the daemon
+    // directory throws on an unknown name).
+    await t.throwsAsync(() => tool.invoke({ arg0: 'neverBound' }), {
+      message: /[Uu]nknown pet name/,
+    });
+  },
+);
+
+test.serial(
+  'capref[] resolution at the makeTool invoke boundary (round-trip)',
+  async t => {
+    t.timeout(120_000);
+    const powers = await prepareGuestPowers(t);
+    const c0 = await bindCap(t, powers, 'first');
+    const c1 = await bindCap(t, powers, 'second');
+
+    /** @type {unknown} */
+    let received;
+    const tool = makeTool({
+      name: 'useCaps',
+      description: 'takes live caps by petname array',
+      parameters: harden({
+        type: 'object',
+        properties: { arg0: PETNAME_ARRAY_SCHEMA },
+        required: ['arg0'],
+        additionalProperties: false,
+      }),
+      argGuards: [M.arrayOf(M.remotable())],
+      argKinds: ['capref[]'],
+      powers,
+      execute: async args => {
+        received = args.arg0;
+        return 'ok';
+      },
+    });
+
+    t.is(await tool.invoke({ arg0: ['first', 'second'] }), 'ok');
+    const receivedArray = /** @type {unknown[]} */ (received);
+    t.is(receivedArray.length, 2);
+    // Each element is the live cap, resolved in order.
+    t.is(await E(/** @type {any} */ (receivedArray[0])).incr(), 1);
+    t.is(await E(/** @type {any} */ (receivedArray[1])).incr(), 1);
+    t.is(await E(c0).incr(), 2);
+    t.is(await E(c1).incr(), 2);
+
+    // One unbound element fails the whole call, before `execute`.
+    await t.throwsAsync(() => tool.invoke({ arg0: ['first', 'neverBound'] }), {
+      message: /[Uu]nknown pet name/,
+    });
+  },
+);
+
+test.serial(
+  'NEGATIVE CONTROL: argKinds resolves caprefs even with NO argGuards',
+  async t => {
+    // `argKinds` is the authority-bearing switch, so a tool that marks a capref
+    // positional but supplies no `argGuards` must STILL receive the resolved
+    // live cap, never the raw petname string. Before the fix, resolution lived
+    // inside the `argGuards !== undefined` branch, so a guard-less capref tool
+    // leaked the petname string straight to `execute`. This is the #1
+    // product-risk regression this gate exists to catch.
+    t.timeout(120_000);
+    const powers = await prepareGuestPowers(t);
+    const cap = await bindCap(t, powers, 'unguarded');
+
+    /** @type {unknown} */
+    let received;
+    const tool = makeTool({
+      name: 'unguardedCap',
+      description: 'a capref arg with no runtime guard',
+      parameters: harden({
+        type: 'object',
+        properties: { arg0: PETNAME_SCHEMA },
+        required: ['arg0'],
+        additionalProperties: false,
+      }),
+      // Deliberately NO argGuards.
+      argKinds: ['capref'],
+      powers,
+      execute: async args => {
+        received = args.arg0;
+        return 'ok';
+      },
+    });
+
+    t.is(await tool.invoke({ arg0: 'unguarded' }), 'ok');
+    // `execute` must see the live cap, NOT the petname string.
+    t.not(received, 'unguarded', 'execute did NOT receive the raw petname');
+    t.is(await E(/** @type {any} */ (received)).incr(), 1);
+    t.is(await E(cap).incr(), 2);
+
+    // An unbound petname still fails closed before `execute` runs, even without
+    // a guard.
+    await t.throwsAsync(() => tool.invoke({ arg0: 'neverBound' }), {
+      message: /[Uu]nknown pet name/,
+    });
+  },
+);
+
+test.serial(
+  'a short argKinds defaults the trailing positional to a plain value',
+  async t => {
+    // A tool like `restore` marks only its leading capref positional; the
+    // trailing options arg is left implicitly a plain value. A missing argKinds
+    // entry must default to 'value' (NOT be misread as a capref), so the plain
+    // value passes through unresolved.
+    t.timeout(120_000);
+    const powers = await prepareGuestPowers(t);
+    const cap = await bindCap(t, powers, 'entry');
+
+    /** @type {unknown} */
+    let received;
+    const tool = makeTool({
+      name: 'restoreLike',
+      description: 'a leading capref[] and a trailing plain options record',
+      parameters: harden({
+        type: 'object',
+        properties: {
+          arg0: PETNAME_ARRAY_SCHEMA,
+          arg1: { type: 'object' },
+        },
+        required: ['arg0'],
+        additionalProperties: false,
+      }),
+      argGuards: [M.arrayOf(M.remotable()), M.recordOf(M.string(), M.any())],
+      // Deliberately short: only the first positional is marked.
+      argKinds: ['capref[]'],
+      powers,
+      execute: async args => {
+        received = [args.arg0, args.arg1];
+        return 'ok';
+      },
+    });
+
+    const options = harden({ staged: true });
+    t.is(await tool.invoke({ arg0: ['entry'], arg1: options }), 'ok');
+    // arg0 resolved to the live cap; arg1 passed through untouched.
+    const pair = /** @type {unknown[]} */ (received);
+    const resolvedCap = /** @type {unknown[]} */ (pair[0])[0];
+    t.is(await E(/** @type {any} */ (resolvedCap)).incr(), 1);
+    t.is(await E(cap).incr(), 2);
+    t.is(pair[1], options);
+  },
+);
+
+test('NEGATIVE CONTROL: a raw petname string is NOT a remotable (resolve is required)', t => {
+  // If an implementation skipped resolution and handed the raw petname string
+  // to the guard, the guard would reject it — a string is not a remotable. This
+  // proves resolution before `mustMatch` is mandatory.
+  const validate = ajv.compile(PETNAME_SCHEMA);
+  t.true(validate('endoRepo'), 'schema accepts the wire petname string');
+  t.false(
+    matches('endoRepo', M.remotable()),
+    'the guard rejects the raw petname string (resolution is mandatory)',
+  );
+});
+
+test('NEGATIVE CONTROL: {type:object} schema DIVERGES from a remotable arg', t => {
+  // A careless author might schema a remotable arg as {type:'object'} ("a
+  // remotable is an object"). But an LLM cannot put a live object in JSON; the
+  // only correct wire form is the petname string. The two schemas diverge: the
+  // object schema accepts a bare {} that the (correct) petname-string schema
+  // rejects.
+  const validateObject = ajv.compile(harden({ type: 'object' }));
+  const validatePetname = ajv.compile(PETNAME_SCHEMA);
+  t.true(validateObject({}), 'object-schema accepts a bare object');
+  t.false(validatePetname({}), 'petname-string schema (correct) rejects it');
 });
