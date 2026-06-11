@@ -614,18 +614,17 @@ test('cyclic star export with renaming reexport, star reexporter imported first,
 // during the same linked-but-not-yet-bound window when main.js imports the
 // renamer first. Node.js raises ReferenceError for `const y = 42` here,
 // matching the star-reexport case, because the temporal dead zone
-// semantics live with the binding, not with the reexport form. SES's
-// current module-instance machinery returns `undefined` instead, the same
-// gap the star-reexport `test.failing` cells pin. The named-reexport
-// variant confirms the gap is not specific to `export *` (kriskowal
-// follow-up on issue-comment 4675471286).
-test.failing(
-  'cyclic named reexport with renaming reexport, renamer imported first, const binding observes ReferenceError during temporal dead zone',
-  async t => {
-    t.plan(1);
+// semantics live with the binding, not with the reexport form. After the
+// fix to `module-instance.js` and `transform-analyze.js`, SES enforces the
+// same TDZ on the namespace path through `wireUpExportNotifier` whether
+// the reexport is reached through `export *` or through `export { y }
+// from`. This case confirms the gap is not specific to `export *`
+// (kriskowal follow-up on issue-comment 4675471286).
+test('cyclic named reexport with renaming reexport, renamer imported first, const binding observes ReferenceError during temporal dead zone', async t => {
+  t.plan(1);
 
-    const makeImportHook = makeNodeImporter({
-      'https://example.com/named-reexporter.js': `
+  const makeImportHook = makeNodeImporter({
+    'https://example.com/named-reexporter.js': `
       import * as r from './export-renamer.js';
       export { y } from './export-renamer.js';
       export const probe = (() => {
@@ -636,29 +635,28 @@ test.failing(
         }
       })();
     `,
-      'https://example.com/export-renamer.js': `
+    'https://example.com/export-renamer.js': `
       export { y as x } from './named-reexporter.js';
       export const y = 42;
     `,
-      'https://example.com/main.js': `
+    'https://example.com/main.js': `
       import * as r from './export-renamer.js';
       import * as s from './named-reexporter.js';
       export const probe = s.probe;
     `,
-    });
+  });
 
-    const compartment = new Compartment({
-      resolveHook: resolveNode,
-      importHook: makeImportHook('https://example.com'),
-      __noNamespaceBox__: true,
-      __options__: true,
-    });
+  const compartment = new Compartment({
+    resolveHook: resolveNode,
+    importHook: makeImportHook('https://example.com'),
+    __noNamespaceBox__: true,
+    __options__: true,
+  });
 
-    const namespace = await compartment.import('./main.js');
+  const namespace = await compartment.import('./main.js');
 
-    t.deepEqual(namespace.probe, { kind: 'error', name: 'ReferenceError' });
-  },
-);
+  t.deepEqual(namespace.probe, { kind: 'error', name: 'ReferenceError' });
+});
 
 test('export-as with duplicated export name', async t => {
   t.plan(4);
