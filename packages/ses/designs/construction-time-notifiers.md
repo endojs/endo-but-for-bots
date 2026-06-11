@@ -268,38 +268,64 @@ referenced lazily today.
 
 ## Will the redesign close the TDZ gap?
 
-The companion observation from this PR is that SES does not enforce
-ECMA-262 temporal dead zone semantics for cross-module reads through a
-namespace import during a cycle.
-The renamer-first plus const, the renamer-first plus let, and now the
-named-reexport plus renamer-first plus const cases all return
-`undefined` rather than raising `ReferenceError` (the 6 plus 1 cells in
+The companion observation from this PR is that SES previously did not
+enforce ECMA-262 temporal dead zone semantics for cross-module reads
+through a namespace import during a cycle.
+The renamer-first plus const, the renamer-first plus let, and the
+named-reexport plus renamer-first plus const cases all returned
+`undefined` rather than raising `ReferenceError` (3 of the 7 cells in
 the [`import-gauntlet.test.js`](../test/import-gauntlet.test.js)
 matrix).
-The reason is that the cross-module read goes through the renamer's
-**exported getter**, not the renamer's local-binding **own getter**.
-The local-binding getter is the only place TDZ is enforced; the
-exported getter installed by `wireUpExportNotifier` simply returns the
-last value the upstream notifier propagated, which starts as
-`undefined`.
 
-The redesign would **not** by itself close this gap.
-The redesign guarantees that every notifier exists at the moment a
-reexport tries to wire, but the exported getter's contract (return the
-last propagated value; default `undefined`) is unchanged.
-Closing the TDZ gap requires a separate change: the exported getter
-for a reexport must consult the upstream's TDZ state (or the
-upstream's own-binding getter directly, which already throws on TDZ)
-rather than caching the propagated value.
+The gap actually had two causes:
 
-That is a strictly separable change from this redesign.
-The redesign is about the notifier-graph topology; closing the TDZ gap
-is about the exported-getter contract.
+- The cross-module read through the namespace import (`*` notifier)
+  propagated the **raw `exportsTarget`** object rather than the
+  `exportsProxy`.
+  `exportsTarget` had **no property defined for the binding** until the
+  late `defineProperty` pass at the end of `imports()`.
+  A missing property reads as `undefined` rather than throwing.
+- Where a property was defined, the `wireUpExportNotifier` helper
+  installed an exported getter that returned the last propagated value
+  (initially `undefined`) with no TDZ tracking.
+  Even after the property landed it would mask the upstream's TDZ
+  state.
+
+The gap is closed by two targeted fixes that do not require the
+construction-time-notifiers redesign:
+
+- `module-instance.js` defines the `exportsTarget` property for each own
+  fixed and live export **at construction time** using the TDZ-aware
+  getter from `localGetNotify`.
+  The late `arrayForEach(arraySort, defineProperty)` pass at the end of
+  `imports()` redefines the same descriptor as a no-op, preserving the
+  ECMA-262 sorted enumeration order without changing the eager
+  TDZ-aware behavior.
+- `wireUpExportNotifier` (which handles both star reexports and
+  `__reexportMap__`-driven named reexports) tracks its own TDZ state.
+  The downstream's exported getter throws `ReferenceError` until the
+  upstream binding propagates a value through the notifier chain.
+  The helper also defines the property on `exportsTarget` eagerly.
+- `module-source/src/transform-analyze.js` reorders the preamble so
+  hoisted declarations (function declarations and `var` initializers)
+  run **before** the imports call.
+  This matches the ECMA-262 model: function/var bindings are created
+  and initialized to undefined during `InitializeEnvironment`, which
+  precedes dependency evaluation in `Module.Evaluate`.
+  Without this reorder, a hoisted `var y` in an upstream module would
+  still be in the live-binding TDZ when a downstream's body read
+  `r.y`, and the eager TDZ-aware getter would throw `ReferenceError`
+  instead of returning `undefined`.
+
+The construction-time-notifiers redesign is orthogonal to the TDZ fix.
+The redesign is about the notifier-graph topology; the TDZ fix is
+about when and how the namespace's exported getter consults the
+upstream's binding state.
 Either change can land independently.
-The redesign makes a TDZ-aware getter easier to write (every reexport
-already has a direct reference to its upstream's notifier object,
-which could carry a TDZ predicate alongside its `notify`), but does
-not require it and does not block it.
+The redesign makes a future TDZ-aware getter easier to compose (every
+reexport already has a direct reference to its upstream's notifier
+object, which could carry a TDZ predicate alongside its `notify`),
+but the present TDZ fix did not require it.
 
 ## Notifier-primitive sharing with `makeVirtualModuleInstance`
 

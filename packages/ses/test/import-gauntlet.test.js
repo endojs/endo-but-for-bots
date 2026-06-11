@@ -367,23 +367,21 @@ test('cyclic star export with renaming reexport, unused live binding', async t =
 // they are recorded as the expected non-observation that completes the
 // matrix.
 //
-// Two cells diverge from Node.js: SES's current module-instance machinery
-// does not enforce the temporal dead zone for cross-module reads through a
-// namespace import during a cycle, so `r.y` reads `undefined` rather than
-// raising ReferenceError for `const` and `let` in the renamer-first orderings.
-// Those two cells are marked `test.failing` so the suite pins the
-// ECMA-262-conformant Node.js reference behavior as the desired outcome and
-// surfaces the SES divergence as a known gap to either accept or close
-// separately. The four converging cells assert SES's current behavior
-// directly because it already matches Node.js for those cells.
+// All six cells now match Node.js after the fix that lands the eager
+// exportsTarget property definitions in `module-instance.js` and reorders
+// the hoisted declarations to run before the imports call in
+// `module-source/src/transform-analyze.js`. The renamer-first plus `const`
+// and renamer-first plus `let` cells raise `ReferenceError` (the
+// fixed-binding and live-binding TDZ-aware getters now run against the
+// cross-module namespace access path), while renamer-first plus `var`
+// continues to read `undefined` because the hoisting preamble clears the
+// upstream's TDZ before the downstream observes.
 
-test.failing(
-  'cyclic star export with renaming reexport, renamer imported first, const binding observes ReferenceError during temporal dead zone',
-  async t => {
-    t.plan(1);
+test('cyclic star export with renaming reexport, renamer imported first, const binding observes ReferenceError during temporal dead zone', async t => {
+  t.plan(1);
 
-    const makeImportHook = makeNodeImporter({
-      'https://example.com/star-reexporter.js': `
+  const makeImportHook = makeNodeImporter({
+    'https://example.com/star-reexporter.js': `
       import * as r from './export-renamer.js';
       export * from './export-renamer.js';
       export const probe = (() => {
@@ -394,37 +392,34 @@ test.failing(
         }
       })();
     `,
-      'https://example.com/export-renamer.js': `
+    'https://example.com/export-renamer.js': `
       export { y as x } from './star-reexporter.js';
       export const y = 42;
     `,
-      'https://example.com/main.js': `
+    'https://example.com/main.js': `
       import * as r from './export-renamer.js';
       import * as s from './star-reexporter.js';
       export const probe = s.probe;
     `,
-    });
+  });
 
-    const compartment = new Compartment({
-      resolveHook: resolveNode,
-      importHook: makeImportHook('https://example.com'),
-      __noNamespaceBox__: true,
-      __options__: true,
-    });
+  const compartment = new Compartment({
+    resolveHook: resolveNode,
+    importHook: makeImportHook('https://example.com'),
+    __noNamespaceBox__: true,
+    __options__: true,
+  });
 
-    const namespace = await compartment.import('./main.js');
+  const namespace = await compartment.import('./main.js');
 
-    t.deepEqual(namespace.probe, { kind: 'error', name: 'ReferenceError' });
-  },
-);
+  t.deepEqual(namespace.probe, { kind: 'error', name: 'ReferenceError' });
+});
 
-test.failing(
-  'cyclic star export with renaming reexport, renamer imported first, let binding observes ReferenceError during temporal dead zone',
-  async t => {
-    t.plan(1);
+test('cyclic star export with renaming reexport, renamer imported first, let binding observes ReferenceError during temporal dead zone', async t => {
+  t.plan(1);
 
-    const makeImportHook = makeNodeImporter({
-      'https://example.com/star-reexporter.js': `
+  const makeImportHook = makeNodeImporter({
+    'https://example.com/star-reexporter.js': `
       import * as r from './export-renamer.js';
       export * from './export-renamer.js';
       export const probe = (() => {
@@ -435,29 +430,28 @@ test.failing(
         }
       })();
     `,
-      'https://example.com/export-renamer.js': `
+    'https://example.com/export-renamer.js': `
       export { y as x } from './star-reexporter.js';
       export let y = 42;
     `,
-      'https://example.com/main.js': `
+    'https://example.com/main.js': `
       import * as r from './export-renamer.js';
       import * as s from './star-reexporter.js';
       export const probe = s.probe;
     `,
-    });
+  });
 
-    const compartment = new Compartment({
-      resolveHook: resolveNode,
-      importHook: makeImportHook('https://example.com'),
-      __noNamespaceBox__: true,
-      __options__: true,
-    });
+  const compartment = new Compartment({
+    resolveHook: resolveNode,
+    importHook: makeImportHook('https://example.com'),
+    __noNamespaceBox__: true,
+    __options__: true,
+  });
 
-    const namespace = await compartment.import('./main.js');
+  const namespace = await compartment.import('./main.js');
 
-    t.deepEqual(namespace.probe, { kind: 'error', name: 'ReferenceError' });
-  },
-);
+  t.deepEqual(namespace.probe, { kind: 'error', name: 'ReferenceError' });
+});
 
 test('cyclic star export with renaming reexport, renamer imported first, var binding observes undefined while hoisted but unassigned', async t => {
   t.plan(1);

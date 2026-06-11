@@ -258,6 +258,17 @@ export const makeModuleInstance = (
       configurable: false,
     };
 
+    // Define on exportsTarget eagerly so cross-module reads through the
+    // namespace import (`'*'` notifier) see the TDZ-aware getter even before
+    // imports() completes its sort-and-define pass. The late pass below
+    // redefines with the identical descriptor as a no-op, preserving the
+    // ECMA-262 sorted enumeration order.
+    defineProperty(
+      exportsTarget,
+      fixedExportName,
+      exportsProps[fixedExportName],
+    );
+
     notifiers[fixedExportName] = fixedGetNotify.notify;
   });
 
@@ -346,6 +357,16 @@ export const makeModuleInstance = (
         configurable: false,
       };
 
+      // Define on exportsTarget eagerly so cross-module reads through the
+      // namespace import see the TDZ-aware getter before imports() completes
+      // its sort-and-define pass. The late pass below redefines with the
+      // identical descriptor as a no-op, preserving sorted enumeration order.
+      defineProperty(
+        exportsTarget,
+        liveExportName,
+        exportsProps[liveExportName],
+      );
+
       notifiers[liveExportName] = liveGetNotify.notify;
     },
   );
@@ -390,18 +411,37 @@ export const makeModuleInstance = (
     }
     notifiers[exportName] = notify;
 
-    // exported live binding state
+    // Re-exported live binding state. The exported getter throws
+    // ReferenceError until the upstream binding propagates a value through
+    // `notify`, mirroring the cross-module TDZ semantics of ECMA-262:
+    // reading a re-export of an upstream `const` or `let` binding during a
+    // cycle's linked-but-not-yet-evaluated window raises a ReferenceError
+    // rather than silently returning the cached `undefined`. An upstream
+    // `var` binding clears its TDZ as part of its hoisting preamble (see
+    // `transform-analyze.js`), so for `var` the updater fires before the
+    // downstream's getter is observed and the getter returns `undefined`.
     let value;
-    const update = newValue => (value = newValue);
+    let tdz = true;
+    const update = newValue => {
+      value = newValue;
+      tdz = false;
+    };
     notify(update);
     exportsProps[exportName] = {
       get() {
+        if (tdz) {
+          throw ReferenceError(`binding ${q(exportName)} not yet initialized`);
+        }
         return value;
       },
       set: undefined,
       enumerable: true,
       configurable: false,
     };
+    // Define on exportsTarget eagerly so cross-module namespace reads see
+    // the TDZ-aware getter before imports() completes; the late pass below
+    // redefines with the identical descriptor as a no-op.
+    defineProperty(exportsTarget, exportName, exportsProps[exportName]);
   };
 
   // Per the calling convention for the moduleFunctor generated from
