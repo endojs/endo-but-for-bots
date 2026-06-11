@@ -36,6 +36,7 @@
     "lint-fix": "yarn lint:eslint --fix && yarn lint:types",
     "lint:eslint": "eslint --ignore-pattern out '**/*.js'",
     "lint:types": "tsc",
+    "test": "node --test 'test/**/*.test.mjs'",
     "generate-icons": "./scripts/generate-icons.sh"
   },
   "dependencies": {
