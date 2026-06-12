@@ -67,6 +67,13 @@ jobs:
       - name: Run yarn lint
         run: yarn lint
 
+      # Unified repo-wide type-check under tsgo (TypeScript 7 native preview).
+      # Maps everything to source via the root tsconfig.json. Complements the
+      # per-package typecheck-packages step (which resolves through
+      # node_modules entrypoints as a consumer would).
+      - name: Run yarn typecheck-all
+        run: yarn typecheck-all
+
       - name: Check composite tsconfig files are up to date
         run: yarn build:types:check
 
