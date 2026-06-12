@@ -56,11 +56,11 @@
     "@earendil-works/pi-agent-core": "^0.79.0",
     "@earendil-works/pi-ai": "^0.79.0",
     "@endo/agent-tools": "workspace:^",
+    "@endo/exo-git": "workspace:^",
     "@endo/far": "workspace:^"
   },
   "devDependencies": {
     "@endo/endo-fs": "workspace:^",
-    "@endo/exo-git": "workspace:^",
     "@endo/exo-stream": "workspace:^",
     "@endo/git": "workspace:^",
     "@endo/init": "workspace:^",
