@@ -449,6 +449,8 @@ Existing regression to preserve:
 - Read-only and writable Git prompt types are selected by config.
 - API tokens are not included in system prompts, tool arguments, or transcript
   messages.
+- GitRemote authority can be supplied only as an explicit named power, and
+  tests cover pet-name lookup for that remote cap.
 - Tests cover the current Git code loop plus config and delegation boundaries.
 - README.md explains to consumer how to access each
 
@@ -468,7 +470,8 @@ Existing regression to preserve:
 - Do not add ambient filesystem, shell, or Git tools to the Pi extension.
 - Keep `execute` as the model-facing code-mode tool.
 - Use live Endo caps inside `execute` for capability-bearing flows.
-- Keep `GitRemote` out of this pass unless the user explicitly expands scope.
+- Treat `GitRemote` as an explicit named power, not part of the default Git
+  power.
 - Do not commit unless the user asks.
 
 ## Implementation Notes
@@ -484,4 +487,5 @@ Implemented in `@endo/agentry`:
 - README coverage for the three access paths and shared config.
 - Tests for Git loop regression, model/token/power config, read-only Git
   declarations, Pi extension registration, Endo service prompt routing,
+  GitRemote named-power lookup,
   programmatic construction, token secrecy, and delegation boundaries.

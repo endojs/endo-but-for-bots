@@ -116,6 +116,21 @@ export const gitWritableCodeModeCapabilityType = `{
 harden(gitWritableCodeModeCapabilityType);
 
 /**
+ * Runtime prompt/type declaration for a policy-gated GitRemote capability.
+ * GitRemote authority is intentionally supplied as an explicit named power,
+ * not as part of the default Git power.
+ *
+ * @type {string}
+ */
+export const gitRemoteCodeModeCapabilityType = `{
+  inspect(): Promise<object>;
+  fetch(options?: { prune?: boolean; tags?: boolean }): Promise<object>;
+  pull(options?: { branch?: string | object; strategy?: 'merge' | 'rebase' | 'ff-only'; prune?: boolean; tags?: boolean }): Promise<object>;
+  push(options?: { source?: string | object; destination?: string | object; setUpstream?: boolean }): Promise<object>;
+}`;
+harden(gitRemoteCodeModeCapabilityType);
+
+/**
  * @typedef {object} CodeModeModelConfig
  * @property {string} [provider]
  * @property {string} [model]

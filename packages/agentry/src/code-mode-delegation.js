@@ -12,6 +12,7 @@ import {
   normalizeCodeModeRuntimeConfig,
 } from './code-mode-runtime.js';
 
+const BINDING_PET_NAME_SCHEMA = harden({ type: 'string' });
 const PET_NAME_SCHEMA = harden({
   anyOf: [
     { type: 'string' },
@@ -36,9 +37,10 @@ const DELEGATE_PARAMETERS = harden({
       required: [],
       additionalProperties: PET_NAME_SCHEMA,
     },
-    model: {
-      type: 'object',
-      description: 'Optional model override for the delegated agent.',
+    modelProfile: {
+      ...PET_NAME_SCHEMA,
+      description:
+        'Pet name for a caller-held model profile to use for the delegated agent.',
     },
   },
   required: ['prompt'],
@@ -57,20 +59,28 @@ const isPetName = value =>
 
 /**
  * @param {unknown} value
- * @returns {value is string | string[]}
+ * @returns {value is string}
  */
-const isPetName = value =>
-  typeof value === 'string' ||
-  (Array.isArray(value) && value.every(part => typeof part === 'string'));
+const isBindingPetName = value => typeof value === 'string';
 
 /**
  * @param {string | string[]} a
  * @param {string | string[]} b
  * @returns {boolean}
  */
-const petNamesEqual = (a, b) =>
-  JSON.stringify(Array.isArray(a) ? a : [a]) ===
-  JSON.stringify(Array.isArray(b) ? b : [b]);
+const petNamesEqual = (a, b) => {
+  if (typeof a === 'string' || typeof b === 'string') {
+    return a === b;
+  }
+  return a.length === b.length && a.every((part, index) => part === b[index]);
+};
+
+/**
+ * @param {CodeModeRuntimeConfig} config
+ * @returns {Map<string, import('./lal-code-mode.js').LalCodeModeGlobal>}
+ */
+const makeNamedPowerCatalog = config =>
+  new Map((config.powers.namedPowers || []).map(power => [power.name, power]));
 
 /**
  * @param {unknown} powers
@@ -95,6 +105,21 @@ const lookupDelegatedPower = async (powers, petName, label) => {
       `delegate ${label} power ${JSON.stringify(petName)} is not resolvable: ${message}`,
     );
   }
+};
+
+/**
+ * @param {unknown} powers
+ * @param {string | string[]} petName
+ * @returns {Promise<CodeModeRuntimeConfig['model']>}
+ */
+const lookupDelegatedModelProfile = async (powers, petName) => {
+  const profile = await lookupDelegatedPower(powers, petName, 'modelProfile');
+  if (!isRecord(profile)) {
+    throw new Error(
+      `delegate modelProfile ${JSON.stringify(petName)} must resolve to a model config record`,
+    );
+  }
+  return /** @type {CodeModeRuntimeConfig['model']} */ (profile);
 };
 
 /**
@@ -163,8 +188,8 @@ const resolveDelegatedNamedPowers = async ({
 /**
  * @param {object} options
  * @param {unknown} options.direct
- * @param {string | string[]} options.callerPetName
- * @param {string | string[] | undefined} options.requestPetName
+ * @param {string} options.callerPetName
+ * @param {unknown} options.requestPetName
  * @param {unknown} options.callerPowers
  * @param {string} options.label
  * @returns {Promise<unknown>}
@@ -176,8 +201,8 @@ const resolveDelegatedPower = async ({
   callerPowers,
   label,
 }) => {
-  if (requestPetName !== undefined && !isPetName(requestPetName)) {
-    throw new Error(`delegate ${label} power must be a string or path`);
+  if (requestPetName !== undefined && !isBindingPetName(requestPetName)) {
+    throw new Error(`delegate ${label} power must be a string`);
   }
   const petName = requestPetName || callerPetName;
   if (direct !== undefined) {
@@ -233,13 +258,15 @@ export const makeCodeModeDelegateTool = ({
       'Call a delegated Endo code-mode Pi agent with caller-held powers.',
     parameters: DELEGATE_PARAMETERS,
     execute: async args => {
-      const { prompt, powers: requestedPowers = {}, model: requestedModel } =
-        args;
+      const { prompt, powers: requestedPowers = {}, modelProfile } = args;
       if (typeof prompt !== 'string') {
         throw new Error('delegateCodeMode.prompt must be a string');
       }
       if (!isRecord(requestedPowers)) {
         throw new Error('delegateCodeMode.powers must be a record');
+      }
+      if (modelProfile !== undefined && !isPetName(modelProfile)) {
+        throw new Error('delegateCodeMode.modelProfile must be a string');
       }
       const requestedGitMode =
         requestedPowers.gitMode === undefined
@@ -257,9 +284,12 @@ export const makeCodeModeDelegateTool = ({
       ) {
         throw new Error('delegated code-mode agent cannot upgrade Git authority');
       }
-      if (requestedGitMode === 'readWrite') {
-        throw new Error(
-          'delegated code-mode agent cannot receive writable Git authority',
+      await null;
+      let delegatedModel = normalizedCallerConfig.model;
+      if (modelProfile !== undefined) {
+        delegatedModel = await lookupDelegatedModelProfile(
+          callerPowers,
+          modelProfile,
         );
       }
       const delegatedNamedPowers = await resolveDelegatedNamedPowers({
@@ -272,30 +302,38 @@ export const makeCodeModeDelegateTool = ({
         direct: normalizedCallerConfig.powers.workspace,
         callerPetName:
           normalizedCallerConfig.powers.workspacePetName || 'workspace',
-        requestPetName: /** @type {string | string[] | undefined} */ (
-          requestedPowers.workspace
-        ),
+        requestPetName: requestedPowers.workspace,
         callerPowers,
         label: 'workspace',
       });
       const git = await resolveDelegatedPower({
         direct: normalizedCallerConfig.powers.git,
         callerPetName: normalizedCallerConfig.powers.gitPetName || 'git',
-        requestPetName: /** @type {string | string[] | undefined} */ (
-          requestedPowers.git
-        ),
+        requestPetName: requestedPowers.git,
         callerPowers,
         label: 'git',
       });
+      const workspacePetName =
+        (isBindingPetName(requestedPowers.workspace)
+          ? requestedPowers.workspace
+          : undefined) ||
+        normalizedCallerConfig.powers.workspacePetName ||
+        'workspace';
+      const gitPetName =
+        (isBindingPetName(requestedPowers.git)
+          ? requestedPowers.git
+          : undefined) ||
+        normalizedCallerConfig.powers.gitPetName ||
+        'git';
 
       const runtime = makeCodeModeRuntime({
         config: harden({
-          model: isRecord(requestedModel)
-            ? /** @type {CodeModeRuntimeConfig['model']} */ (requestedModel)
-            : normalizedCallerConfig.model,
+          model: delegatedModel,
           powers: harden({
             workspace,
+            workspacePetName,
             git,
+            gitPetName,
             gitMode: requestedGitMode,
             namedPowers: delegatedNamedPowers.namedPowers,
           }),
@@ -304,7 +342,11 @@ export const makeCodeModeDelegateTool = ({
             include: harden(['workspace', 'git']),
           }),
         }),
-        endowments,
+        powers: callerPowers,
+        endowments: harden({
+          ...endowments,
+          ...delegatedNamedPowers.endowments,
+        }),
         env,
         model,
         getApiKey,

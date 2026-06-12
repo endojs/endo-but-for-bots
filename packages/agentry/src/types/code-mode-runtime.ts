@@ -61,6 +61,7 @@ export type CodeModeRuntime = {
 export declare const filesystemCapabilityType: string;
 export declare const gitReadOnlyCodeModeCapabilityType: string;
 export declare const gitWritableCodeModeCapabilityType: string;
+export declare const gitRemoteCodeModeCapabilityType: string;
 
 export declare function normalizeCodeModeRuntimeConfig(
   config?: Partial<CodeModeRuntimeConfig>,

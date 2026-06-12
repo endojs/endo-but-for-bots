@@ -23,6 +23,7 @@ import {
   makeLalCodeModeGitLoopGlobals,
 } from '../src/lal-code-mode-git-loop.js';
 import {
+  gitRemoteCodeModeCapabilityType,
   gitReadOnlyCodeModeCapabilityType,
   gitWritableCodeModeCapabilityType,
   makeCodeModeApiKeyResolver,
@@ -163,6 +164,29 @@ const makeStubGit = calls =>
     async currentBranch() {
       calls.push('currentBranch');
       return harden({ name: 'main', kind: 'branch' });
+    },
+  });
+
+/**
+ * @param {string[]} calls
+ */
+const makeStubRemote = calls =>
+  Far('StubGitRemote', {
+    async inspect() {
+      calls.push('inspect');
+      return harden({ name: 'origin', allowedDirections: ['fetch'] });
+    },
+    async fetch(options = {}) {
+      calls.push(`fetch:${JSON.stringify(options)}`);
+      return harden({ updatedRefs: [] });
+    },
+    async pull(options = {}) {
+      calls.push(`pull:${JSON.stringify(options)}`);
+      return harden({ fetch: { updatedRefs: [] }, integration: 'ff-only' });
+    },
+    async push(options = {}) {
+      calls.push(`push:${JSON.stringify(options)}`);
+      return harden({ updatedRefs: [] });
     },
   });
 
@@ -314,6 +338,18 @@ const makeMountOverFilesystem = workspace => {
   });
 };
 
+/**
+ * @param {import('ava').ExecutionContext} t
+ */
+const makeTestGit = async t => {
+  const repoRoot = await provisionGitWorktree(t);
+  const workspace = makeNodeFilesystem({ rootPath: repoRoot });
+  const { mount, lineageOf } = makeMountOverFilesystem(workspace);
+  const backend = makeNativeGitBackend({ repoRoot });
+  const git = makeGit({ mount, backend, lineageOf });
+  return harden({ workspace, git });
+};
+
 /** @type {LalCodeModeGlobal[]} */
 const gitGlobals = harden([
   {
@@ -399,6 +435,38 @@ test('code-mode runtime selects read-only versus writable Git declarations', t =
   t.deepEqual(
     readOnlyRuntime.agent.state.tools.map(tool => tool.name),
     ['execute'],
+  );
+});
+
+test('code-mode runtime requires caller-supplied read-only Git caps', async t => {
+  const { workspace, git } = await makeTestGit(t);
+
+  t.throws(
+    () =>
+      makeCodeModeRuntime({
+        config: {
+          model: {},
+          powers: { workspace, git, gitMode: 'readOnly' },
+        },
+        model: stubModel,
+        execute: async () => 'ok',
+      }),
+    { message: /requires an already read-only Git capability/ },
+  );
+
+  const readOnlyGit = /** @type {{ readOnly: () => unknown }} */ (
+    /** @type {unknown} */ (git)
+  ).readOnly();
+
+  t.notThrows(() =>
+    makeCodeModeRuntime({
+      config: {
+        model: {},
+        powers: { workspace, git: readOnlyGit, gitMode: 'readOnly' },
+      },
+      model: stubModel,
+      execute: async () => 'ok',
+    }),
   );
 });
 
@@ -538,6 +606,112 @@ test('code-mode runtime exposes named powers only when configured', t => {
     ['workspace', 'git', 'helper'],
   );
   t.true(namedPowerRuntime.systemPrompt.includes('declare const helper'));
+});
+
+test('code-mode runtime uses power pet names as lexical globals', async t => {
+  const git = makeStubGit([]);
+  const runtime = makeCodeModeRuntime({
+    config: {
+      model: {},
+      powers: {
+        workspace: harden({}),
+        workspacePetName: 'projectWorkspace',
+        git,
+        gitPetName: 'projectGit',
+        gitMode: 'readOnly',
+      },
+    },
+    model: stubModel,
+  });
+
+  t.deepEqual(
+    runtime.globals.map(global => global.name),
+    ['projectWorkspace', 'projectGit'],
+  );
+  t.true(runtime.systemPrompt.includes('declare const projectWorkspace:'));
+  t.true(runtime.systemPrompt.includes('declare const projectGit:'));
+  t.false(runtime.systemPrompt.includes('declare const workspace:'));
+  t.false(runtime.systemPrompt.includes('declare const git:'));
+  await null;
+  const result = await runtime.execute({
+    source: '(projectWorkspace, projectGit, true)',
+    globals: runtime.globals,
+  });
+  t.true(result);
+});
+
+test('code-mode runtime rejects path pet names for lexical globals', t => {
+  const workspacePetName = /** @type {string} */ (
+    /** @type {unknown} */ (['project', 'workspace'])
+  );
+
+  t.throws(
+    () =>
+      makeCodeModeRuntime({
+        config: {
+          model: {},
+          powers: {
+            workspace: harden({}),
+            workspacePetName,
+            git: makeStubGit([]),
+            gitPetName: 'projectGit',
+          },
+        },
+        model: stubModel,
+        execute: async () => 'ok',
+      }),
+    { message: /workspace petName must be a single JS identifier/ },
+  );
+});
+
+test('code-mode runtime resolves GitRemote named powers by pet name', async t => {
+  const calls = [];
+  const git = makeStubGit([]);
+  const originRemote = makeStubRemote(calls);
+  const powers = Far('RemotePowers', {
+    lookup: async petName => {
+      if (petName === 'workspace') {
+        return harden({});
+      }
+      if (petName === 'git') {
+        return git;
+      }
+      if (petName === 'origin') {
+        return originRemote;
+      }
+      throw new Error(`missing ${String(petName)}`);
+    },
+  });
+  const runtime = makeCodeModeRuntime({
+    config: {
+      model: {},
+      powers: {
+        workspacePetName: 'workspace',
+        gitPetName: 'git',
+        gitMode: 'readOnly',
+        namedPowers: [
+          {
+            name: 'originRemote',
+            petName: 'origin',
+            type: gitRemoteCodeModeCapabilityType,
+            description: 'Policy-gated origin GitRemote capability.',
+          },
+        ],
+      },
+    },
+    powers,
+    model: stubModel,
+  });
+
+  t.true(runtime.systemPrompt.includes('declare const originRemote'));
+  t.true(runtime.systemPrompt.includes('fetch(options?:'));
+  const result = await runtime.execute({
+    source: '(async () => E(originRemote).fetch({ prune: true }))()',
+    globals: runtime.globals,
+  });
+
+  t.deepEqual(calls, ['fetch:{"prune":true}']);
+  t.deepEqual(result, { updatedRefs: [] });
 });
 
 test('lalCodeMode executes code against an injected git global', async t => {
@@ -747,15 +921,20 @@ test('Endo-hosted service prompt routes through shared runtime', async t => {
   );
 });
 
-test('delegation tool calls sub-agent with read-only Git', async t => {
-  const git = makeStubGit([]);
+test('delegation tool calls sub-agent with caller-supplied read-only Git', async t => {
+  const { workspace, git } = await makeTestGit(t);
+  const readOnlyGit = /** @type {{ readOnly: () => unknown }} */ (
+    /** @type {unknown} */ (git)
+  ).readOnly();
   const tool = makeCodeModeDelegateTool({
     callerConfig: {
       model: {},
       powers: {
-        workspace: harden({}),
-        git,
-        gitMode: 'readWrite',
+        workspace,
+        workspacePetName: 'repoWorkspace',
+        git: readOnlyGit,
+        gitPetName: 'repoGit',
+        gitMode: 'readOnly',
       },
     },
     model: stubModel,
@@ -763,10 +942,12 @@ test('delegation tool calls sub-agent with read-only Git', async t => {
       harden({
         prompt,
         gitMode: runtime.config.powers.gitMode,
+        globals: runtime.globals.map(global => global.name),
         hasCommit: runtime.systemPrompt.includes('commit(message: string)'),
         tools: runtime.agent.state.tools.map(agentTool => agentTool.name),
       }),
   });
+  t.false(JSON.stringify(tool.parameters).includes('"model"'));
 
   await null;
   const delegationResult = await tool.invoke({
@@ -778,6 +959,7 @@ test('delegation tool calls sub-agent with read-only Git', async t => {
     {
       prompt: 'Inspect history.',
       gitMode: 'readOnly',
+      globals: ['repoWorkspace', 'repoGit'],
       hasCommit: false,
       tools: ['execute'],
     },
@@ -1029,24 +1211,14 @@ test('delegation tool rejects unresolved powers and Git authority upgrades', asy
     { message: /cannot upgrade Git authority/ },
   );
 
-  const writableCallerTool = makeCodeModeDelegateTool({
-    callerConfig: {
-      model: {},
-      powers: {
-        workspace: harden({}),
-        git: harden({}),
-        gitMode: 'readWrite',
-      },
-    },
-    model: stubModel,
-  });
   await t.throwsAsync(
     () =>
-      writableCallerTool.invoke({
-        prompt: 'Please commit.',
-        powers: { gitMode: 'readWrite' },
+      unresolvedTool.invoke({
+        prompt: 'Try unknown profile.',
+        modelProfile: 'unknown-model',
+        powers: { workspace: 'workspace', git: 'git' },
       }),
-    { message: /cannot receive writable Git authority/ },
+    { message: /modelProfile power "unknown-model" is not resolvable/ },
   );
 });
 
