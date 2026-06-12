@@ -78,6 +78,7 @@
   },
   "devDependencies": {
     "@endo/daemon": "workspace:^",
+    "@endo/git": "workspace:^",
     "@endo/init": "workspace:^",
     "@endo/promise-kit": "workspace:^",
     "ajv": "^8.17.1",
