@@ -1293,7 +1293,7 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@endo/agent-tools@workspace:packages/agent-tools":
+"@endo/agent-tools@workspace:^, @endo/agent-tools@workspace:packages/agent-tools":
   version: 0.0.0-use.local
   resolution: "@endo/agent-tools@workspace:packages/agent-tools"
   dependencies:
@@ -1307,6 +1307,27 @@ __metadata:
     ajv: "npm:^8.17.1"
     ava: "catalog:dev"
     c8: "catalog:dev"
+    eslint: "catalog:dev"
+    typescript: "catalog:dev"
+  languageName: unknown
+  linkType: soft
+
+"@endo/agentry@workspace:packages/agentry":
+  version: 0.0.0-use.local
+  resolution: "@endo/agentry@workspace:packages/agentry"
+  dependencies:
+    "@earendil-works/pi-agent-core": "npm:^0.79.0"
+    "@earendil-works/pi-ai": "npm:^0.79.0"
+    "@endo/agent-tools": "workspace:^"
+    "@endo/endo-fs": "workspace:^"
+    "@endo/exo-git": "workspace:^"
+    "@endo/exo-stream": "workspace:^"
+    "@endo/far": "workspace:^"
+    "@endo/git": "workspace:^"
+    "@endo/init": "workspace:^"
+    "@endo/lockdown": "workspace:^"
+    "@endo/ses-ava": "workspace:^"
+    ava: "catalog:dev"
     eslint: "catalog:dev"
     typescript: "catalog:dev"
   languageName: unknown
