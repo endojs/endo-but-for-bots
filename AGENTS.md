@@ -120,7 +120,8 @@ Never mix `self` and `facets` in the same context type.
 ## Testing
 
 - Runtime tests: `yarn test` (uses `ava`)
-- Type-check: `yarn lint:types` (uses `tsgo` — TypeScript 7 native preview). See "TypeScript Preview (tsgo)" above for the rationale and the division of labor.
+- Type-check: `yarn lint:types` (uses `tsgo`, the TypeScript 7 native preview).
+  See "TypeScript Preview (tsgo)" above for the rationale and the division of labor.
 - Type tests: a few packages have explicit `tsd` tests at `test/types.test-d.ts`; those run alongside `lint:types` rather than in place of it.
 - Lint: `yarn lint` (runs both `lint:types` and `lint:eslint`)
 
