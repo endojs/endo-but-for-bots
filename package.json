@@ -58,6 +58,7 @@
     "lint:prettier": "prettier --check .github packages",
     "lint:sh": "scripts/shellcheck.sh",
     "typecheck-all": "tsgo -p tsconfig.json --tsBuildInfoFile tsconfig.tsgo.tsbuildinfo",
+    "typecheck-packages": "yarn workspaces foreach --all --parallel --verbose run lint:types",
     "release:npm": "scripts/release-npm.mjs",
     "pack:all": "scripts/pack-all.mjs",
     "smoketest:publish": "scripts/smoketest-publishing.sh",

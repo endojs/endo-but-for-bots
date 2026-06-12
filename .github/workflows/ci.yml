@@ -74,6 +74,13 @@ jobs:
       - name: Run yarn typecheck-all
         run: yarn typecheck-all
 
+      # Per-package type-check: each workspace's lint:types (also tsgo)
+      # runs against its own tsconfig, resolving dependencies through
+      # node_modules entrypoints as a consumer would. Complements
+      # typecheck-all, which maps everything to source.
+      - name: Run yarn typecheck-packages
+        run: yarn typecheck-packages
+
       - name: Check composite tsconfig files are up to date
         run: yarn build:types:check
 
