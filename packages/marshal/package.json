@@ -24,7 +24,7 @@
     "pretty-check": "prettier --check '**/*.js'",
     "lint-fix": "yarn lint:eslint --fix && yarn lint:types",
     "lint": "yarn lint:types && yarn lint:eslint",
-    "lint:types": "tsc",
+    "lint:types": "tsgo --tsBuildInfoFile tsconfig.tsgo.tsbuildinfo",
     "lint:eslint": "eslint ."
   },
   "repository": {
@@ -55,6 +55,7 @@
     "@endo/lockdown": "workspace:^",
     "@endo/ses-ava": "workspace:^",
     "@fast-check/ava": "catalog:dev",
+    "@typescript/native-preview": "catalog:dev",
     "ava": "catalog:dev",
     "babel-eslint": "^10.1.0",
     "c8": "catalog:dev",

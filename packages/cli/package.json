@@ -25,7 +25,7 @@
     "lint": "yarn lint:types && yarn lint:eslint",
     "lint-fix": "eslint --fix .",
     "lint:eslint": "eslint .",
-    "lint:types": "tsc",
+    "lint:types": "tsgo --tsBuildInfoFile tsconfig.tsgo.tsbuildinfo",
     "test": "ava"
   },
   "dependencies": {
@@ -50,6 +50,7 @@
   },
   "devDependencies": {
     "@endo/stream": "workspace:^",
+    "@typescript/native-preview": "catalog:dev",
     "ava": "catalog:dev",
     "babel-eslint": "^10.1.0",
     "eslint": "catalog:dev",

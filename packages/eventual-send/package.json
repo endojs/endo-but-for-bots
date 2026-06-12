@@ -12,7 +12,7 @@
     "clean": "git clean -fX -e node_modules/",
     "lint-fix": "yarn lint:eslint --fix && yarn lint:types",
     "lint": "yarn lint:types && yarn lint:eslint",
-    "lint:types": "tsc",
+    "lint:types": "tsgo --tsBuildInfoFile tsconfig.tsgo.tsbuildinfo",
     "lint:eslint": "eslint ."
   },
   "exports": {
@@ -38,6 +38,7 @@
   },
   "devDependencies": {
     "@endo/lockdown": "workspace:^",
+    "@typescript/native-preview": "catalog:dev",
     "ava": "catalog:dev",
     "c8": "catalog:dev",
     "eslint": "catalog:dev",

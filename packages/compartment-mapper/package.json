@@ -53,7 +53,7 @@
     "lint": "yarn lint:types && yarn lint:eslint",
     "lint-fix": "eslint --fix .",
     "lint:eslint": "eslint .",
-    "lint:types": "tsc",
+    "lint:types": "tsgo --tsBuildInfoFile tsconfig.tsgo.tsbuildinfo",
     "prettier-fixtures": "prettier --write --with-node-modules './test/fixtures-*/**/*.*js'",
     "test": "ses-ava"
   },
@@ -74,6 +74,7 @@
     "@endo/eventual-send": "workspace:^",
     "@endo/init": "workspace:^",
     "@endo/ses-ava": "workspace:^",
+    "@typescript/native-preview": "catalog:dev",
     "ava": "catalog:dev",
     "babel-eslint": "^10.1.0",
     "c8": "catalog:dev",
