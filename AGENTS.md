@@ -29,28 +29,38 @@ Our TypeScript conventions accommodate `.js` development (this repo) and `.ts` c
 ### TypeScript Preview (tsgo)
 
 We are mid-transition from TypeScript 6 (`tsc`, the JS-based compiler) to TypeScript 7 (`tsgo`, the Go-native rewrite).
-The `@typescript/native-preview` nightlies are roughly 10x faster than `tsc` and are intentionally stricter about some JSDoc patterns; both properties are useful for the dev loop.
+The `@typescript/native-preview` nightlies are roughly 10x faster than `tsc`.
+They are also intentionally stricter about some JSDoc patterns.
+Both properties are useful for the dev loop.
 
-All type-*checking* (no emit) runs under `tsgo`; `tsc` 6 remains only where something is built or consumed through the compiler API.
+All type-*checking* (no emit) runs under `tsgo`.
+`tsc` 6 remains only where something is built or consumed through the compiler API.
 
 Division of labor during the transition:
 
 | Task | Compiler | Why |
 | --- | --- | --- |
-| `lint:types` (root and per package) | `tsgo` | Fast dev loop. Type-checking emits nothing, so a preview compiler is low-risk here. |
+| `lint:types` (root and per package) | `tsgo` | Fast dev loop.<br>Type-checking emits nothing, so a preview compiler is low-risk here. |
 | `typecheck-all` (CI) | `tsgo` | Repo-wide type-check over `tsconfig.json` (the unified eslint-base scope). |
-| `typecheck-packages` (CI) | `tsgo` | Runs each workspace's `lint:types` against its own tsconfig, resolving dependencies through `node_modules` entrypoints as a consumer would. |
-| `build:types` (`tsc --build tsconfig.composite.json`); per-package `prepack` declaration emit | `tsc` | `tsgo` declaration-emit parity is not complete; emit stays on the stable compiler until 7.0 stable proves parity. This is what keeps source files effectively TS 6-compatible without a dedicated TS 6 type-check gate. |
-| ESLint type-aware rules | TS 6 API | typescript-eslint consumes the `typescript` package's JS API; `tsgo` has no compatible API yet. |
-| `tsd` type tests (`test/types.test-d.ts`) | `tsc` (via `tsd`) | `tsd` is a separate runner that drives `tsc` against `.test-d.ts` files. Where present, runs alongside the `lint:types` `tsgo` check, not in place of it. |
+| `typecheck-packages` (CI) | `tsgo` | Per-workspace check resolving dependencies through `node_modules` entrypoints as a consumer would. |
+| `build:types` (`tsc --build tsconfig.composite.json`); per-package `prepack` declaration emit | `tsc` | `tsgo` declaration-emit parity is not complete.<br>Emit stays on the stable compiler until 7.0 stable proves parity.<br>This is what keeps source files effectively TS 6-compatible without a dedicated TS 6 type-check gate. |
+| ESLint type-aware rules | TS 6 API | typescript-eslint consumes the `typescript` package's JS API.<br>`tsgo` has no compatible API yet. |
+| `tsd` type tests (`test/types.test-d.ts`) | `tsc` (via `tsd`) | `tsd` is a separate runner that drives `tsc` against `.test-d.ts` files.<br>Where present, runs alongside the `lint:types` `tsgo` check, not in place of it. |
 
 Notes:
 
-- `@typescript/native-preview` is deliberately **not pinned** to an exact nightly (its catalog entry is `^7.0.0-dev.0`); it advances on installs and Renovate bumps. If a new nightly surfaces errors, prefer fixing the code (the added strictness is usually correct). For an upstream regression, hold it back with a yarn `resolutions` entry.
-- `tsgo` invocations pass `--tsBuildInfoFile` ending in `.tsgo.tsbuildinfo` because the two compilers' incremental-state formats are incompatible; separate files keep them from clobbering each other's caches. Both match the existing `*.tsbuildinfo` gitignore.
-- The composite TypeScript build (`build:types`, `build:types:watch`) stays on `tsc` and uses its own `*.tsbuildinfo` files per package; tsgo's `tsconfig.tsgo.tsbuildinfo` is independent.
+- `@typescript/native-preview` is deliberately **not pinned** to an exact nightly (its catalog entry is `^7.0.0-dev.0`).
+  It advances on installs and Renovate bumps.
+  If a new nightly surfaces errors, prefer fixing the code (the added strictness is usually correct).
+  For an upstream regression, hold it back with a yarn `resolutions` entry.
+- `tsgo` invocations pass `--tsBuildInfoFile` ending in `.tsgo.tsbuildinfo` because the two compilers' incremental-state formats are incompatible.
+  Separate files keep them from clobbering each other's caches.
+  Both match the existing `*.tsbuildinfo` gitignore.
+- The composite TypeScript build (`build:types`, `build:types:watch`) stays on `tsc` and uses its own `*.tsbuildinfo` files per package.
+  `tsgo`'s `tsconfig.tsgo.tsbuildinfo` is independent.
 - At 7.0 stable: replace the preview package with `typescript@7`, trial declaration emit (diff `.d.ts` output in an emit-heavy package), and retire any remaining tsc-only gates once tooling like typescript-eslint supports TS 7.
-- Reference: [Agoric/agoric-sdk#12721](https://github.com/Agoric/agoric-sdk/pull/12721) walked the same transition in its codebase; the division of labor here mirrors that PR's table.
+- Reference: [Agoric/agoric-sdk#12721](https://github.com/Agoric/agoric-sdk/pull/12721) walked the same transition in its codebase.
+  The division of labor here mirrors that PR's table.
 
 ### No `.ts` in runtime bundles
 
