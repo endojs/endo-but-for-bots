@@ -58,6 +58,39 @@ Not a blocker:
 - The current commit already separates read-only and writable Git prompt types.
   Preserve that direction and thread it through configuration.
 
+## Relationship to the `@endo/agentry` Agent Builder (#416)
+
+This code-mode lane is one of two agent-construction lanes that share the
+`@endo/agentry` package via subpath exports. They compose; they do not collide.
+
+- **Code-mode lane** (this design, `@endo/agentry/code-mode-runtime`): the
+  model-facing tool surface is intentionally one tool, `execute({ source,
+  resultName? })`. Workspace, Git, and any named powers are live Endo
+  capabilities placed in the Compartment's lexical scope. A capability-bearing
+  value such as `git.status()[].entry` stays a live cap inside the executed
+  source and is never serialized across a JSON tool boundary. The agent reasons
+  by writing JavaScript that calls those caps directly.
+- **Builder lane** (#416, design `designs/agentry-agent-builder.md`, exports
+  `defineAgent` / `makeAgent`): the model-facing surface is a set of JSON tools
+  derived from interface guards. Each tool call serializes its arguments and
+  results across the JSON boundary; the model never holds a live cap.
+
+The two lanes deliberately mirror each other's define/make seam. Both expose a
+powerless `define…` stage (config normalization, prompt and tool-schema
+derivation, no powers) and a powered `make…` stage (capability resolution and
+agent construction). This code-mode lane's seam is `defineCodeModeAgent` /
+`makeCodeModeAgent` (see the runtime factory below); #416's builder seam is
+`defineAgent` / `makeAgent`. Naming the seam the same way in both lanes lets a
+caller learn one shape and apply it to either surface.
+
+The subpath layout already leaves room for both. `@endo/agentry` is a small
+shared library whose surfaces are each opt-in via their own subpath export, so
+the builder lane lands as additional subpaths alongside the code-mode subpaths
+without either lane importing the other. A harness picks code mode when it wants
+live caps in lexical scope (capability-bearing flows, repository editing) and
+the builder lane when it wants a guarded JSON tool catalog; a harness may use
+both for different agents.
+
 ## Current Code Context
 
 Relevant code added by the previous pass:

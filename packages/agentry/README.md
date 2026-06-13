@@ -56,6 +56,38 @@ await runtime.agent.prompt('Inspect the current branch.');
 await runtime.agent.waitForIdle();
 ```
 
+Construction runs in two stages. `defineCodeModeAgent(template)` is the
+powerless first stage: it normalizes config and derives the model object,
+lexical globals with their prompt type declarations, the system prompt, and the
+`execute` tool schema, without resolving any capability. `makeCodeModeAgent`
+grants powers to a definition to build the live runtime. `makeCodeModeRuntime`
+is a thin wrapper over the two:
+
+```js
+import {
+  defineCodeModeAgent,
+  makeCodeModeAgent,
+} from '@endo/agentry/code-mode-runtime';
+
+const definition = defineCodeModeAgent({ config });
+// inspect definition.globals / definition.systemPrompt / definition.toolSchema
+const runtime = makeCodeModeAgent(definition, { powers });
+// or: const runtime = definition.make({ powers });
+```
+
+### Code mode versus the agent builder
+
+`@endo/agentry` hosts two agent-construction lanes side by side via subpath
+exports. The **code-mode lane** here keeps live Endo capabilities in the
+Compartment's lexical scope and gives the model one `execute` tool, so a
+capability-bearing value such as `git.status()[].entry` stays a live cap and is
+never serialized across a JSON boundary. The **agent builder lane**
+(`defineAgent` / `makeAgent`, design `designs/agentry-agent-builder.md`) instead
+derives a catalog of JSON tools from interface guards. The two lanes compose
+rather than collide: pick code mode for capability-bearing flows and the builder
+lane for a guarded JSON tool catalog. Both share the same powerless-`define` /
+powered-`make` seam shape.
+
 Pi extension usage:
 
 ```js
