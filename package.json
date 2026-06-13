@@ -88,5 +88,8 @@
     "allowScripts": {
       "@lavamoat/preinstall-always-fail": false
     }
+  },
+  "resolutions": {
+    "@typescript/native-preview": "7.0.0-dev.20260612.1"
   }
 }
