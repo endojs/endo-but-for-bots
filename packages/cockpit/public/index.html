@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Garden Cockpit</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <header>
+      <h1>Garden Cockpit</h1>
+      <nav id="modes">
+        <button data-mode="doer" class="active">Doer</button>
+        <button data-mode="builder">Builder</button>
+        <button data-mode="steward">Steward</button>
+      </nav>
+      <span id="status">connecting…</span>
+    </header>
+
+    <main>
+      <aside id="threads-pane">
+        <h2>Threads</h2>
+        <ul id="thread-list"></ul>
+        <button id="new-thread-btn">+ new thread</button>
+      </aside>
+
+      <section id="center">
+        <h2 id="pane-title">select a thread</h2>
+        <div id="transcript"></div>
+        <form id="steer-form" autocomplete="off">
+          <input id="steer-input" placeholder="message the selected thread…" />
+          <button>send</button>
+        </form>
+      </section>
+
+      <aside id="side-pane">
+        <h2>Capabilities</h2>
+        <div id="caps"></div>
+        <h2>Observability</h2>
+        <div id="o11y"></div>
+      </aside>
+    </main>
+
+    <dialog id="new-thread-dialog">
+      <form method="dialog" id="new-thread-form">
+        <h3>New thread</h3>
+        <label>template <input name="templateName" value="adhoc" /></label>
+        <label>parent (optional) <input name="parentId" placeholder="t1" /></label>
+        <fieldset>
+          <legend>capabilities</legend>
+          <label><input type="checkbox" name="git" checked /> git</label>
+          <select name="gitMode">
+            <option value="readOnly">readOnly</option>
+            <option value="readWrite">readWrite</option>
+          </select>
+          <label><input type="checkbox" name="workspace" /> workspace</label>
+          <select name="workspaceMode">
+            <option value="readOnly">readOnly</option>
+            <option value="readWrite">readWrite</option>
+          </select>
+        </fieldset>
+        <label>task <input name="prompt" placeholder="what branch?" /></label>
+        <menu>
+          <button value="cancel">cancel</button>
+          <button value="create" id="create-thread">create</button>
+        </menu>
+      </form>
+    </dialog>
+
+    <dialog id="builder-dialog">
+      <form method="dialog" id="builder-form">
+        <h3>Builder Mode — author a template</h3>
+        <label>name <input name="name" placeholder="investigator" /></label>
+        <label>prompt <textarea name="prompt" rows="3"></textarea></label>
+        <label>cap shape (name:kind:mode, comma-separated)
+          <input name="capShape" placeholder="git:git:readOnly, workspace:workspace:readOnly" />
+        </label>
+        <label>model <input name="model" value="mock" /></label>
+        <menu>
+          <button value="cancel">cancel</button>
+          <button value="save" id="save-template">save</button>
+        </menu>
+      </form>
+    </dialog>
+
+    <script src="app.js" type="module"></script>
+  </body>
+</html>
