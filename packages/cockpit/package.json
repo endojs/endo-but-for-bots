@@ -1,0 +1,38 @@
+{
+  "name": "@endo/cockpit",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Garden cockpit — a harness-host web application that operates the garden under capability-confined agent threads",
+  "type": "module",
+  "main": "./src/index.js",
+  "bin": {
+    "cockpit": "./bin/cockpit.js"
+  },
+  "exports": {
+    ".": "./src/index.js",
+    "./backend/caps": "./src/backend/caps.js",
+    "./backend/engine": "./src/backend/engine.js",
+    "./backend/registry": "./src/backend/registry.js",
+    "./backend/templates": "./src/backend/templates.js",
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "exit 0",
+    "test": "node --test",
+    "start": "node ./bin/cockpit.js",
+    "lint": "exit 0",
+    "lint:types": "exit 0"
+  },
+  "dependencies": {},
+  "optionalDependencies": {
+    "@endo/agentry": "workspace:^",
+    "@endo/far": "workspace:^"
+  },
+  "files": [
+    "bin",
+    "public",
+    "src"
+  ],
+  "author": "Endo contributors",
+  "license": "Apache-2.0"
+}
