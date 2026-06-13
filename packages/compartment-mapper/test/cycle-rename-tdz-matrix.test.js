@@ -1,7 +1,7 @@
 /**
  * Table-driven test for the TDZ-observation matrix of the cyclic
- * star-export and named-reexport scenarios from endojs/endo#59 exercised
- * through the compartment-mapper test scaffold. Each row in the
+ * star-export and named-reexport scenarios exercised through the
+ * compartment-mapper test scaffold. Each row in the
  * `SCENARIOS` table from `_cycle-rename-tdz-assertions.js` corresponds to
  * one fixture directory under
  * `packages/compartment-mapper/test/` (named by the scenario's `fixture`
@@ -40,7 +40,7 @@ for (const scenario of SCENARIOS) {
   };
 
   scaffold(
-    `cycle-rename-tdz ${scenario.name} (endojs/endo#59)`,
+    `cycle-rename-tdz ${scenario.name}`,
     test,
     fixture,
     assertFixture,

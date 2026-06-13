@@ -1,15 +1,14 @@
 /**
  * Shared assertion logic and scenario table for the TDZ-observation matrix
- * of the cyclic star-export and named-reexport scenarios from
- * endojs/endo#59. Each scenario in the table corresponds to one cell of the
- * matrix and to one fixture directory under
- * `packages/compartment-mapper/test/` (named by the scenario's `fixture`
- * field). Each fixture exports a `probe` value captured by the star-reexporter (or
- * named-reexporter) during its top-level evaluation: the probe reads the
- * renamer's binding `y` through a namespace import (`r.y`) inside a try
- * block and records either the value (when the binding is already
- * initialized) or the error name (when the read raises during the temporal
- * dead zone window).
+ * of the cyclic star-export and named-reexport scenarios. Each scenario in
+ * the table corresponds to one cell of the matrix and to one fixture
+ * directory under `packages/compartment-mapper/test/` (named by the
+ * scenario's `fixture` field). Each fixture exports a `probe` value captured
+ * by the star-reexporter (or named-reexporter) during its top-level
+ * evaluation: the probe reads the renamer's binding `y` through a namespace
+ * import (`r.y`) inside a try block and records either the value (when the
+ * binding is already initialized) or the error name (when the read raises
+ * during the temporal dead zone window).
  *
  * The matrix axes are:
  *
@@ -27,13 +26,11 @@
  *      (the six star-reexport cells) or through `export { y } from` (the
  *      single named-reexport cell).
  *
- * After the TDZ-enforcement fix landed on endojs/endo-but-for-bots#379
- * (commit 94c88465d, plus the named-reexport coverage in 53d8662a7), SES
- * enforces the same TDZ on the cross-module namespace path that Node.js
- * enforces natively. Each scenario's parity test pins the compartment
- * mapper's behavior to Node.js's reference behavior by importing from this
- * module so the expected values live in exactly one place; if both layers
- * pass, parity is verified by construction.
+ * SES enforces the same TDZ on the cross-module namespace path that
+ * Node.js enforces natively. Each scenario's parity test pins the
+ * compartment mapper's behavior to Node.js's reference behavior by
+ * importing from this module so the expected values live in exactly one
+ * place; if both layers pass, parity is verified by construction.
  *
  * The companion in-process scenarios live in
  * `packages/ses/test/import-gauntlet.test.js` as the seven matrix cells

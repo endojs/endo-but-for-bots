@@ -1,6 +1,7 @@
 /**
- * Table-driven Node.js parity test for the TDZ-observation matrix from
- * endojs/endo#59. Each row in the `SCENARIOS` table from
+ * Table-driven Node.js parity test for the TDZ-observation matrix of
+ * the cyclic star-export and named-reexport scenarios. Each row in the
+ * `SCENARIOS` table from
  * `_cycle-rename-tdz-assertions.js` corresponds to one fixture directory
  * under `packages/compartment-mapper/test/` (named by the scenario's
  * `fixture` field). This test runs each fixture's `main.js` under plain
@@ -20,7 +21,7 @@ import {
 } from './_cycle-rename-tdz-assertions.js';
 
 for (const scenario of SCENARIOS) {
-  test(`cycle-rename-tdz ${scenario.name} (endojs/endo#59) - node parity`, async t => {
+  test(`cycle-rename-tdz ${scenario.name} - node parity`, async t => {
     t.plan(1);
     const namespace = await import(
       new URL(`${scenario.fixture}/node_modules/app/main.js`, import.meta.url)
