@@ -11,6 +11,7 @@ import { fileURLToPath } from 'node:url';
 import { extname, normalize } from 'node:path';
 
 import { attachWebSocketServer } from './ws.js';
+import { buildMockCaps } from '../index.js';
 
 const PUBLIC_DIR = fileURLToPath(new URL('../../public/', import.meta.url));
 
@@ -48,6 +49,26 @@ export const makeMessageHandler = (cockpit, send, broadcast) => async raw => {
         const thread = cockpit.registry.get(msg.threadId);
         if (!thread) throw new Error(`unknown thread ${msg.threadId}`);
         await thread.steer(String(msg.text || ''));
+        broadcast(threadsMsg(cockpit));
+        break;
+      }
+      case 'new-thread': {
+        const thread = cockpit.registry.create({
+          templateName: msg.templateName || 'adhoc',
+          caps: buildMockCaps(msg.caps || []),
+        });
+        broadcast(threadsMsg(cockpit));
+        if (msg.prompt) thread.prompt(String(msg.prompt));
+        break;
+      }
+      case 'spawn': {
+        // delegateCodeMode: the registry enforces the subset rule and rejects
+        // any upgrade, so an invalid delegation surfaces as an error here.
+        await cockpit.registry.delegate(msg.parentId, {
+          templateName: msg.templateName || 'delegate',
+          caps: buildMockCaps(msg.caps || []),
+          prompt: msg.prompt ? String(msg.prompt) : undefined,
+        });
         broadcast(threadsMsg(cockpit));
         break;
       }

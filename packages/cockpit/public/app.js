@@ -133,3 +133,41 @@ $('steer-form').onsubmit = e => {
   ws.send(JSON.stringify({ type: 'steer', threadId: selected, text }));
   input.value = '';
 };
+
+// M1: create a root thread.
+$('new-thread-btn').onclick = () => {
+  const task = window.prompt('task for the new thread (git + workspace, read-write):', 'what branch?');
+  if (task === null) return;
+  ws.send(
+    JSON.stringify({
+      type: 'new-thread',
+      templateName: 'adhoc',
+      caps: [
+        { name: 'git', kind: 'git', mode: 'readWrite' },
+        { name: 'workspace', kind: 'workspace', mode: 'readWrite' },
+      ],
+      prompt: task,
+    }),
+  );
+};
+
+// M1: spawn a child thread via delegation, handing it a read-only subset of the
+// selected thread's caps (attenuation by selection; the harness enforces it).
+function spawnChild() {
+  const t = threadsFlat.find(x => x.id === selected);
+  if (!t) return;
+  const task = window.prompt(`spawn a child of ${t.id} (read-only subset of its caps). task:`, 'inspect the repo');
+  if (task === null) return;
+  const caps = t.caps.map(c => ({
+    name: c.name,
+    kind: c.kind,
+    mode: c.mode === 'readWrite' ? 'readOnly' : c.mode,
+  }));
+  ws.send(JSON.stringify({ type: 'spawn', parentId: t.id, templateName: 'delegate', caps, prompt: task }));
+}
+
+const spawnBtn = document.createElement('button');
+spawnBtn.id = 'spawn-btn';
+spawnBtn.textContent = '⑂ spawn child';
+spawnBtn.onclick = spawnChild;
+$('pane-title').after(spawnBtn);
