@@ -9,10 +9,7 @@
 /** @import { LalCodeModeExecute, LalCodeModeGlobal } from './lal-code-mode.js' */
 
 import { E } from '@endo/far';
-import {
-  getModel,
-  registerBuiltInApiProviders,
-} from '@earendil-works/pi-ai';
+import { getModel, registerBuiltInApiProviders } from '@earendil-works/pi-ai';
 import { isGitReadOnly } from '@endo/exo-git';
 
 import {
@@ -597,10 +594,7 @@ const makeCodeModeEndowments = (
  * @param {(value: unknown, resultName: string | string[]) => Promise<void> | void} [options.storeResult]
  * @returns {LalCodeModeExecute}
  */
-export const makeCodeModeCompartmentExecute = ({
-  endowments,
-  storeResult,
-}) => {
+export const makeCodeModeCompartmentExecute = ({ endowments, storeResult }) => {
   const hardenedEndowments = harden({ ...endowments });
   return async ({ source, resultName }) => {
     const compartment = new Compartment(hardenedEndowments);
@@ -619,6 +613,205 @@ export const makeCodeModeCompartmentExecute = ({
 harden(makeCodeModeCompartmentExecute);
 
 /**
+ * The powerless first stage of code-mode agent construction. A definition
+ * carries everything that can be derived from configuration alone — normalized
+ * config, resolved model, lexical globals with their type declarations, the
+ * system prompt, and the model-facing tool schema — and **holds no powers**.
+ * No capability is resolved, no Compartment is endowed, and no agent is
+ * constructed until {@link makeCodeModeAgent} supplies powers. The shape is
+ * `harden`ed so it can be shared, compared, or cached across power grants.
+ *
+ * @typedef {object} CodeModeAgentDefinition
+ * @property {CodeModeRuntimeConfig} config
+ * @property {Model<string>} model
+ * @property {boolean} localOllama
+ * @property {LalCodeModeGlobal[]} globals
+ * @property {string} systemPrompt
+ * @property {{ name: string, description: string, parameters: unknown }} toolSchema
+ * @property {(powers?: CodeModeAgentPowers) => CodeModeRuntime} make
+ */
+
+/**
+ * The powerful second-stage inputs to {@link makeCodeModeAgent}: the live
+ * powers handle plus the per-construction wiring (endowments, execute override,
+ * transcript hook, message history, stream/conversion hooks) that only matter
+ * once an agent is actually built.
+ *
+ * @typedef {object} CodeModeAgentTemplate
+ * @property {Partial<CodeModeRuntimeConfig>} [config]
+ * @property {Model<string>} [model]
+ * @property {LalCodeModeGlobal[]} [globals]
+ * @property {string} [systemPrompt]
+ *
+ * @typedef {object} CodeModeAgentPowers
+ * @property {unknown} [powers]
+ * @property {Record<string, unknown>} [endowments]
+ * @property {Record<string, string | undefined>} [env]
+ * @property {(provider: string) => Promise<string | undefined> | string | undefined} [getApiKey]
+ * @property {LalCodeModeExecute} [execute]
+ * @property {(value: unknown, resultName: string | string[]) => Promise<void> | void} [storeResult]
+ * @property {AgentMessage[]} [messages]
+ * @property {StreamFn} [streamFn]
+ * @property {(messages: AgentMessage[]) => Message[] | Promise<Message[]>} [convertToLlm]
+ * @property {'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh'} [thinkingLevel]
+ */
+
+/**
+ * Define a code-mode agent from configuration alone, with no powers in hand.
+ *
+ * This is the powerless first stage of the define/make seam: it normalizes the
+ * config, resolves the model object, computes the lexical globals and their
+ * prompt type declarations, the system prompt, and the model-facing tool
+ * schema. It never resolves a capability, never endows a Compartment, and never
+ * constructs an agent — those steps need powers and are deferred to
+ * {@link makeCodeModeAgent}. The returned definition's `make` method is a thin
+ * convenience that closes over the definition and forwards to
+ * `makeCodeModeAgent`.
+ *
+ * @param {CodeModeAgentTemplate} [template]
+ * @returns {CodeModeAgentDefinition}
+ */
+export const defineCodeModeAgent = (template = {}) => {
+  const config = normalizeCodeModeRuntimeConfig(template.config);
+  const resolvedModel =
+    template.model === undefined
+      ? resolveCodeModeModelConfig(config.model)
+      : harden({ model: template.model, localOllama: false });
+  const globals =
+    template.globals === undefined
+      ? makeCodeModeGlobals(config)
+      : normalizeLalCodeModeGlobals(template.globals);
+  const systemPrompt =
+    template.systemPrompt || makeLalCodeModeSystemPrompt(globals);
+  // The execute-tool schema (name/description/parameters) is static; only the
+  // tool's invocation closure needs the powered execute, which makeCodeModeAgent
+  // wires up. Derive the schema here from a throwing placeholder so a definition
+  // can advertise its model-facing surface before any power is granted.
+  const schemaTool = makeLalCodeModeExecuteTool(async () => {
+    throw new Error(
+      'code-mode definition is powerless; call make(powers) to obtain an executable tool',
+    );
+  }, globals);
+  const toolSchema = harden({
+    name: schemaTool.name,
+    description: schemaTool.description,
+    parameters: schemaTool.parameters,
+  });
+  /** @type {CodeModeAgentDefinition} */
+  const definition = harden({
+    config,
+    model: resolvedModel.model,
+    localOllama: resolvedModel.localOllama,
+    globals,
+    systemPrompt,
+    toolSchema,
+    make: (powers = {}) => makeCodeModeAgent(definition, powers),
+  });
+  return definition;
+};
+harden(defineCodeModeAgent);
+
+/**
+ * Construct a live code-mode runtime by granting powers to a definition.
+ *
+ * This is the powerful second stage of the define/make seam. It resolves the
+ * configured `workspace`/`git`/named powers (via {@link resolveConfiguredPowers}
+ * and pet-name lookup against the live `powers` handle), builds the Compartment
+ * endowments, the API-key resolver, the powered `execute`, the model-facing
+ * `tool`, and finally the PiAgent. The first argument is a
+ * {@link CodeModeAgentDefinition} from {@link defineCodeModeAgent}, or a bare
+ * template object which is defined on the fly.
+ *
+ * @param {CodeModeAgentDefinition | CodeModeAgentTemplate} definitionOrTemplate
+ * @param {CodeModeAgentPowers} [powerOptions]
+ * @returns {CodeModeRuntime}
+ */
+export const makeCodeModeAgent = (
+  definitionOrTemplate = {},
+  powerOptions = {},
+) => {
+  const definition =
+    definitionOrTemplate !== null &&
+    typeof definitionOrTemplate === 'object' &&
+    'toolSchema' in definitionOrTemplate
+      ? /** @type {CodeModeAgentDefinition} */ (definitionOrTemplate)
+      : defineCodeModeAgent(
+          /** @type {CodeModeAgentTemplate} */ (definitionOrTemplate),
+        );
+  const { config, model, localOllama, globals, systemPrompt } = definition;
+  const getApiKey = makeCodeModeApiKeyResolver({
+    modelConfig: config.model,
+    powers: powerOptions.powers,
+    env: powerOptions.env,
+    getApiKey: powerOptions.getApiKey,
+    localOllama,
+  });
+  const resolvedPowers = resolveConfiguredPowers(config, powerOptions.powers);
+  const execute =
+    powerOptions.execute ||
+    makeCodeModeCompartmentExecute({
+      endowments: makeCodeModeEndowments(
+        config,
+        resolvedPowers,
+        powerOptions.endowments || {},
+        powerOptions.powers,
+      ),
+      storeResult: powerOptions.storeResult,
+    });
+  const tool = makeLalCodeModeExecuteTool(execute, globals);
+  const agent = makeLalCodeModeAgent({
+    model,
+    globals,
+    execute,
+    systemPrompt,
+    messages: powerOptions.messages,
+    streamFn: powerOptions.streamFn,
+    convertToLlm: powerOptions.convertToLlm,
+    getApiKey,
+    thinkingLevel: powerOptions.thinkingLevel,
+  });
+  return {
+    agent,
+    model,
+    getApiKey,
+    globals,
+    execute,
+    systemPrompt,
+    tool,
+    config,
+    describe: () =>
+      harden({
+        model: {
+          provider: model.provider,
+          id: model.id,
+          api: model.api,
+          reasoning: model.reasoning,
+        },
+        tools: harden(agent.state.tools.map(agentTool => agentTool.name)),
+        globals: harden(
+          globals.map(global =>
+            harden({
+              name: global.name,
+              petName: global.petName,
+              type: global.type,
+              description: global.description,
+            }),
+          ),
+        ),
+        gitMode: config.powers.gitMode,
+        transcript: config.transcript,
+      }),
+  };
+};
+harden(makeCodeModeAgent);
+
+/**
+ * Back-compatible single-call wrapper over the define/make seam. Splits the
+ * options bag into the powerless template subset (`config`, `model`, `globals`,
+ * `systemPrompt`) consumed by {@link defineCodeModeAgent} and the powerful
+ * subset (`powers`, `endowments`, `execute`, …) consumed by
+ * {@link makeCodeModeAgent}, then returns the live runtime.
+ *
  * @param {object} options
  * @param {Partial<CodeModeRuntimeConfig>} [options.config]
  * @param {unknown} [options.powers]
@@ -637,87 +830,23 @@ harden(makeCodeModeCompartmentExecute);
  * @returns {CodeModeRuntime}
  */
 export const makeCodeModeRuntime = options => {
-  const config = normalizeCodeModeRuntimeConfig(options.config);
-  const resolvedModel =
-    options.model === undefined
-      ? resolveCodeModeModelConfig(config.model)
-      : harden({ model: options.model, localOllama: false });
-  const getApiKey = makeCodeModeApiKeyResolver({
-    modelConfig: config.model,
+  const definition = defineCodeModeAgent({
+    config: options.config,
+    model: options.model,
+    globals: options.globals,
+    systemPrompt: options.systemPrompt,
+  });
+  return makeCodeModeAgent(definition, {
     powers: options.powers,
+    endowments: options.endowments,
     env: options.env,
     getApiKey: options.getApiKey,
-    localOllama: resolvedModel.localOllama,
-  });
-  const resolvedPowers = resolveConfiguredPowers(config, options.powers);
-  const globals =
-    options.globals === undefined
-      ? makeCodeModeGlobals(config)
-      : normalizeLalCodeModeGlobals(options.globals);
-  const execute =
-    options.execute ||
-    makeCodeModeCompartmentExecute({
-      endowments: makeCodeModeEndowments(
-        config,
-        resolvedPowers,
-        options.endowments || {},
-        options.powers,
-      ),
-      storeResult: options.storeResult,
-    });
-  const systemPrompt =
-    options.systemPrompt || makeLalCodeModeSystemPrompt(globals);
-  const tool = makeLalCodeModeExecuteTool(execute, globals);
-  const agent = makeLalCodeModeAgent({
-    model: resolvedModel.model,
-    globals,
-    execute,
-    systemPrompt,
+    execute: options.execute,
+    storeResult: options.storeResult,
     messages: options.messages,
     streamFn: options.streamFn,
     convertToLlm: options.convertToLlm,
-    getApiKey,
     thinkingLevel: options.thinkingLevel,
   });
-  return {
-    agent,
-    model: resolvedModel.model,
-    getApiKey,
-    globals,
-    execute,
-    systemPrompt,
-    tool,
-    config,
-    describe: () =>
-      harden({
-        model: {
-          provider: resolvedModel.model.provider,
-          id: resolvedModel.model.id,
-          api: resolvedModel.model.api,
-          reasoning: resolvedModel.model.reasoning,
-        },
-        tools: harden(agent.state.tools.map(agentTool => agentTool.name)),
-        globals: harden(
-          globals.map(global =>
-            harden({
-              name: global.name,
-              petName: global.petName,
-              type: global.type,
-              description: global.description,
-            }),
-          ),
-        ),
-        gitMode: config.powers.gitMode,
-        transcript: config.transcript,
-      }),
-  };
 };
 harden(makeCodeModeRuntime);
-
-/**
- * @param {Parameters<typeof makeCodeModeRuntime>[0]} options
- * @returns {import('@earendil-works/pi-agent-core').Agent}
- */
-export const makeCodeModeAgent = options =>
-  makeCodeModeRuntime(options).agent;
-harden(makeCodeModeAgent);

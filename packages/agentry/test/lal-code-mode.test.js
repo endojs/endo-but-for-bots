@@ -23,9 +23,11 @@ import {
   makeLalCodeModeGitLoopGlobals,
 } from '../src/lal-code-mode-git-loop.js';
 import {
+  defineCodeModeAgent,
   gitRemoteCodeModeCapabilityType,
   gitReadOnlyCodeModeCapabilityType,
   gitWritableCodeModeCapabilityType,
+  makeCodeModeAgent,
   makeCodeModeApiKeyResolver,
   makeCodeModeRuntime,
 } from '../src/code-mode-runtime.js';
@@ -91,12 +93,12 @@ const makeScriptedStreamFn = script => {
     const stream = createAssistantMessageEventStream();
     const next = script[turn] || {
       content: [{ type: 'text', text: 'done' }],
-      stopReason:  /** @type {const} */ ('stop'),
+      stopReason: /** @type {const} */ ('stop'),
     };
     turn += 1;
     /** @type {AssistantMessage} */
     const partial = harden({
-      role: /** @type {const} */('assistant'),
+      role: /** @type {const} */ ('assistant'),
       content: [],
       api: stubModel.api,
       provider: stubModel.provider,
@@ -109,7 +111,7 @@ const makeScriptedStreamFn = script => {
         totalTokens: 0,
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
       },
-      stopReason:  /** @type {const} */ ('stop'),
+      stopReason: /** @type {const} */ ('stop'),
       timestamp: Date.now(),
     });
     /** @type {AssistantMessage} */
@@ -194,10 +196,12 @@ const makeStubRemote = calls =>
  * @param {Record<string, unknown>} endowments
  * @returns {LalCodeModeExecute}
  */
-const makeCompartmentExecute = endowments => async ({ source }) => {
-  const compartment = new Compartment(harden({ E, ...endowments }));
-  return compartment.evaluate(source);
-};
+const makeCompartmentExecute =
+  endowments =>
+  async ({ source }) => {
+    const compartment = new Compartment(harden({ E, ...endowments }));
+    return compartment.evaluate(source);
+  };
 
 /**
  * @param {import('ava').ExecutionContext} t
@@ -334,7 +338,9 @@ const makeMountOverFilesystem = workspace => {
   return harden({
     mount,
     lineageOf: value =>
-      value === mount ? rootId : entryRecords.get(/** @type {object} */ (value)),
+      value === mount
+        ? rootId
+        : entryRecords.get(/** @type {object} */ (value)),
   });
 };
 
@@ -361,21 +367,17 @@ const gitGlobals = harden([
 ]);
 
 test('code-mode subpath exports resolve through package exports', async t => {
-  const [
-    runtimeModule,
-    piExtensionModule,
-    nodeModule,
-    delegationModule,
-  ] = await Promise.all([
-    // eslint-disable-next-line import/no-unresolved
-    import('@endo/agentry/code-mode-runtime'),
-    // eslint-disable-next-line import/no-unresolved
-    import('@endo/agentry/pi-extension'),
-    // eslint-disable-next-line import/no-unresolved
-    import('@endo/agentry/code-mode-agent-node'),
-    // eslint-disable-next-line import/no-unresolved
-    import('@endo/agentry/code-mode-delegation'),
-  ]);
+  const [runtimeModule, piExtensionModule, nodeModule, delegationModule] =
+    await Promise.all([
+      // eslint-disable-next-line import/no-unresolved
+      import('@endo/agentry/code-mode-runtime'),
+      // eslint-disable-next-line import/no-unresolved
+      import('@endo/agentry/pi-extension'),
+      // eslint-disable-next-line import/no-unresolved
+      import('@endo/agentry/code-mode-agent-node'),
+      // eslint-disable-next-line import/no-unresolved
+      import('@endo/agentry/code-mode-delegation'),
+    ]);
 
   t.is(typeof runtimeModule.makeCodeModeRuntime, 'function');
   t.is(typeof piExtensionModule.registerEndoCodeModeExtension, 'function');
@@ -436,6 +438,72 @@ test('code-mode runtime selects read-only versus writable Git declarations', t =
     readOnlyRuntime.agent.state.tools.map(tool => tool.name),
     ['execute'],
   );
+});
+
+test('defineCodeModeAgent yields a powerless definition before powers are granted', t => {
+  const definition = defineCodeModeAgent({
+    config: {
+      model: {},
+      powers: { workspace: harden({}), git: harden({}), gitMode: 'readOnly' },
+    },
+    model: stubModel,
+  });
+
+  // The definition advertises its model-facing surface with no powers in hand.
+  t.deepEqual(
+    definition.globals.map(global => global.name),
+    ['workspace', 'git'],
+  );
+  t.is(definition.toolSchema.name, 'execute');
+  t.true(definition.systemPrompt.includes(gitReadOnlyCodeModeCapabilityType));
+  t.is(definition.model, stubModel);
+
+  // makeCodeModeAgent(definition, powers) is the powered second stage, and the
+  // definition's own make() convenience is equivalent.
+  const viaMake = makeCodeModeAgent(definition, {
+    execute: async () => 'ok',
+  });
+  const viaConvenience = definition.make({
+    execute: async () => 'ok',
+  });
+
+  t.is(viaMake.systemPrompt, definition.systemPrompt);
+  t.is(viaConvenience.systemPrompt, definition.systemPrompt);
+  t.deepEqual(
+    viaMake.agent.state.tools.map(tool => tool.name),
+    ['execute'],
+  );
+  t.deepEqual(
+    /** @type {{ gitMode: string }} */ (viaConvenience.describe()).gitMode,
+    'readOnly',
+  );
+});
+
+test('makeCodeModeRuntime is a thin wrapper over define plus make', t => {
+  const runtime = makeCodeModeRuntime({
+    config: {
+      model: {},
+      powers: { workspace: harden({}), git: harden({}), gitMode: 'readWrite' },
+    },
+    model: stubModel,
+    execute: async () => 'ok',
+  });
+  const definition = defineCodeModeAgent({
+    config: {
+      model: {},
+      powers: { workspace: harden({}), git: harden({}), gitMode: 'readWrite' },
+    },
+    model: stubModel,
+  });
+  const staged = definition.make({ execute: async () => 'ok' });
+
+  t.is(runtime.systemPrompt, staged.systemPrompt);
+  t.is(runtime.systemPrompt, definition.systemPrompt);
+  t.deepEqual(
+    runtime.globals.map(global => global.name),
+    staged.globals.map(global => global.name),
+  );
+  t.true(runtime.systemPrompt.includes('commit(message: string)'));
 });
 
 test('code-mode runtime requires caller-supplied read-only Git caps', async t => {
@@ -733,7 +801,7 @@ test('lalCodeMode executes code against an injected git global', async t => {
       {
         content: [
           {
-            type:  /** @type {const} */ ('toolCall'),
+            type: /** @type {const} */ ('toolCall'),
             id: 'call-1-execute',
             name: 'execute',
             arguments: { source },
@@ -954,16 +1022,13 @@ test('delegation tool calls sub-agent with caller-supplied read-only Git', async
     prompt: 'Inspect history.',
     powers: { gitMode: 'readOnly' },
   });
-  t.deepEqual(
-    delegationResult,
-    {
-      prompt: 'Inspect history.',
-      gitMode: 'readOnly',
-      globals: ['repoWorkspace', 'repoGit'],
-      hasCommit: false,
-      tools: ['execute'],
-    },
-  );
+  t.deepEqual(delegationResult, {
+    prompt: 'Inspect history.',
+    gitMode: 'readOnly',
+    globals: ['repoWorkspace', 'repoGit'],
+    hasCommit: false,
+    tools: ['execute'],
+  });
 });
 
 test('delegation tool can call a sub-agent with writable Git', async t => {

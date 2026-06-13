@@ -3,10 +3,10 @@
 
 /* global globalThis */
 
-/** @import { CodeModeRuntime, CodeModeRuntimeConfig } from './code-mode-runtime.js' */
+/** @import { CodeModeRuntime, CodeModeRuntimeConfig, CodeModeAgentTemplate, CodeModeAgentPowers } from './code-mode-runtime.js' */
 
 import {
-  makeCodeModeRuntime,
+  defineCodeModeAgent,
   normalizeCodeModeRuntimeConfig,
 } from './code-mode-runtime.js';
 
@@ -26,11 +26,7 @@ const parseGitMode = value => {
   if (value === undefined || value === '') {
     return undefined;
   }
-  if (
-    value === 'readOnly' ||
-    value === 'readonly' ||
-    value === 'read-only'
-  ) {
+  if (value === 'readOnly' || value === 'readonly' || value === 'read-only') {
     return 'readOnly';
   }
   if (
@@ -133,7 +129,7 @@ harden(makeCodeModeService);
  *
  * @param {unknown} powers
  * @param {unknown} context
- * @param {Omit<Parameters<typeof makeCodeModeRuntime>[0], 'config' | 'powers'> & {
+ * @param {Omit<CodeModeAgentTemplate, 'config'> & Omit<CodeModeAgentPowers, 'powers' | 'env'> & {
  *   config?: Partial<CodeModeRuntimeConfig>,
  *   env?: Record<string, string | undefined>,
  * }} [options]
@@ -143,9 +139,23 @@ export const make = async (powers, context, options = {}) => {
     config: options.config,
     env: options.env,
   });
-  const runtime = makeCodeModeRuntime({
-    ...options,
+  // Powerless first stage: define the agent from config (model, globals,
+  // system prompt, tool schema). Powered second stage: grant `powers` and the
+  // per-construction wiring to obtain the live runtime.
+  const {
+    config: _config,
+    model,
+    globals,
+    systemPrompt,
+    ...powerOptions
+  } = options;
+  const runtime = defineCodeModeAgent({
     config,
+    model,
+    globals,
+    systemPrompt,
+  }).make({
+    ...powerOptions,
     powers,
   });
   return makeCodeModeService({ runtime, context });

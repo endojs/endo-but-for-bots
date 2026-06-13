@@ -8,16 +8,13 @@ import { E } from '@endo/far';
 import { makeTool } from '@endo/agent-tools/tool.js';
 
 import {
-  makeCodeModeRuntime,
+  defineCodeModeAgent,
   normalizeCodeModeRuntimeConfig,
 } from './code-mode-runtime.js';
 
 const BINDING_PET_NAME_SCHEMA = harden({ type: 'string' });
 const PET_NAME_SCHEMA = harden({
-  anyOf: [
-    { type: 'string' },
-    { type: 'array', items: { type: 'string' } },
-  ],
+  anyOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
 });
 
 const DELEGATE_PARAMETERS = harden({
@@ -272,17 +269,16 @@ export const makeCodeModeDelegateTool = ({
         requestedPowers.gitMode === undefined
           ? 'readOnly'
           : requestedPowers.gitMode;
-      if (
-        requestedGitMode !== 'readOnly' &&
-        requestedGitMode !== 'readWrite'
-      ) {
+      if (requestedGitMode !== 'readOnly' && requestedGitMode !== 'readWrite') {
         throw new Error('delegateCodeMode.powers.gitMode is invalid');
       }
       if (
         normalizedCallerConfig.powers.gitMode === 'readOnly' &&
         requestedGitMode === 'readWrite'
       ) {
-        throw new Error('delegated code-mode agent cannot upgrade Git authority');
+        throw new Error(
+          'delegated code-mode agent cannot upgrade Git authority',
+        );
       }
       await null;
       let delegatedModel = normalizedCallerConfig.model;
@@ -326,7 +322,10 @@ export const makeCodeModeDelegateTool = ({
         normalizedCallerConfig.powers.gitPetName ||
         'git';
 
-      const runtime = makeCodeModeRuntime({
+      // Powerless first stage: define the delegated agent from the attenuated
+      // config and the host's model object. Powered second stage: grant the
+      // caller's powers plus the resolved named-power endowments.
+      const runtime = defineCodeModeAgent({
         config: harden({
           model: delegatedModel,
           powers: harden({
@@ -342,13 +341,14 @@ export const makeCodeModeDelegateTool = ({
             include: harden(['workspace', 'git']),
           }),
         }),
+        model,
+      }).make({
         powers: callerPowers,
         endowments: harden({
           ...endowments,
           ...delegatedNamedPowers.endowments,
         }),
         env,
-        model,
         getApiKey,
       });
       return runAgent(runtime, prompt);

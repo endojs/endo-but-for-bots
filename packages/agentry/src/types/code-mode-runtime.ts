@@ -5,10 +5,7 @@ import type {
 } from '@earendil-works/pi-agent-core';
 import type { Message, Model } from '@earendil-works/pi-ai';
 import type { ToolRecord } from '@endo/agent-tools';
-import type {
-  LalCodeModeExecute,
-  LalCodeModeGlobal,
-} from './lal-code-mode.js';
+import type { LalCodeModeExecute, LalCodeModeGlobal } from './lal-code-mode.js';
 
 export type CodeModeModelConfig = {
   provider?: string;
@@ -93,6 +90,50 @@ export declare function makeCodeModeCompartmentExecute(options: {
   ) => Promise<void> | void;
 }): LalCodeModeExecute;
 
+export type CodeModeAgentTemplate = {
+  config?: Partial<CodeModeRuntimeConfig>;
+  model?: Model<string>;
+  globals?: LalCodeModeGlobal[];
+  systemPrompt?: string;
+};
+
+export type CodeModeAgentPowers = {
+  powers?: unknown;
+  endowments?: Record<string, unknown>;
+  env?: Record<string, string | undefined>;
+  getApiKey?: (
+    provider: string,
+  ) => Promise<string | undefined> | string | undefined;
+  execute?: LalCodeModeExecute;
+  storeResult?: (
+    value: unknown,
+    resultName: string | string[],
+  ) => Promise<void> | void;
+  messages?: AgentMessage[];
+  streamFn?: StreamFn;
+  convertToLlm?: (messages: AgentMessage[]) => Message[] | Promise<Message[]>;
+  thinkingLevel?: 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
+};
+
+export type CodeModeAgentDefinition = {
+  config: CodeModeRuntimeConfig;
+  model: Model<string>;
+  localOllama: boolean;
+  globals: LalCodeModeGlobal[];
+  systemPrompt: string;
+  toolSchema: { name: string; description: string; parameters: unknown };
+  make: (powers?: CodeModeAgentPowers) => CodeModeRuntime;
+};
+
+export declare function defineCodeModeAgent(
+  template?: CodeModeAgentTemplate,
+): CodeModeAgentDefinition;
+
+export declare function makeCodeModeAgent(
+  definitionOrTemplate?: CodeModeAgentDefinition | CodeModeAgentTemplate,
+  powerOptions?: CodeModeAgentPowers,
+): CodeModeRuntime;
+
 export declare function makeCodeModeRuntime(options: {
   config?: Partial<CodeModeRuntimeConfig>;
   powers?: unknown;
@@ -114,7 +155,3 @@ export declare function makeCodeModeRuntime(options: {
   convertToLlm?: (messages: AgentMessage[]) => Message[] | Promise<Message[]>;
   thinkingLevel?: 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
 }): CodeModeRuntime;
-
-export declare function makeCodeModeAgent(
-  options: Parameters<typeof makeCodeModeRuntime>[0],
-): Agent;
