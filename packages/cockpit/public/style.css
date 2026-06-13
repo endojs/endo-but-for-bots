@@ -88,3 +88,19 @@ button { cursor: pointer; }
 dialog { background: var(--panel); color: var(--fg); border: 1px solid var(--line); border-radius: 8px; }
 dialog label { display: block; margin: 8px 0; }
 dialog input, dialog textarea, dialog select { background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 4px; padding: 4px; }
+
+/* M1–M3 additions */
+#spawn-btn, #export-btn { background: transparent; color: var(--accent); border: 1px solid var(--line); border-radius: 4px; padding: 3px 8px; margin: 0 4px 8px 0; }
+.grant { display: flex; gap: 4px; margin-top: 8px; }
+.grant select { flex: 1; background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 4px; }
+.grant button { background: #5a6; color: #0b0d11; border: none; border-radius: 4px; padding: 2px 8px; }
+#builder-panel, #steward-panel { flex: 1; overflow: auto; padding: 8px; }
+.tpl-row { display: flex; gap: 8px; align-items: center; padding: 6px 8px; border: 1px solid var(--line); border-radius: 4px; margin-bottom: 6px; }
+.tpl-row b { min-width: 90px; }
+.tpl-row button { margin-left: auto; background: transparent; color: var(--accent); border: 1px solid var(--line); border-radius: 3px; padding: 1px 8px; }
+.tpl-row button + button { margin-left: 4px; color: var(--rw); }
+.feed { padding: 3px 0; color: var(--muted); border-bottom: 1px solid var(--line); }
+#global-o11y { margin-top: 16px; }
+#global-o11y div, #steward-panel div { color: var(--muted); }
+#transcript-dialog { max-width: 80vw; }
+#transcript-dialog pre { max-height: 70vh; overflow: auto; white-space: pre-wrap; }

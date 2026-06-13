@@ -12,6 +12,7 @@ import { extname, normalize } from 'node:path';
 
 import { attachWebSocketServer } from './ws.js';
 import { buildMockCaps, makeMockCap } from '../index.js';
+import { exportTranscript } from './journal.js';
 
 const PUBLIC_DIR = fileURLToPath(new URL('../../public/', import.meta.url));
 
@@ -23,6 +24,9 @@ const MIME = {
 };
 
 const threadsMsg = cockpit => ({ type: 'threads', tree: cockpit.registry.tree() });
+const templatesMsg = cockpit => ({ type: 'templates', list: cockpit.templates.list() });
+const o11yMsg = cockpit => ({ type: 'o11y', summary: cockpit.o11y.summary() });
+const stewardMsg = cockpit => ({ type: 'steward', view: cockpit.steward.view() });
 
 /**
  * Route one parsed client message. `send` replies to the sender; `broadcast`
@@ -40,16 +44,24 @@ export const makeMessageHandler = (cockpit, send, broadcast) => async raw => {
     send({ type: 'error', message: 'invalid json' });
     return;
   }
+  // Any state mutation re-pushes both the thread tree and the o11y aggregates.
+  const pushState = () => {
+    broadcast(threadsMsg(cockpit));
+    broadcast(o11yMsg(cockpit));
+  };
   try {
     switch (msg.type) {
       case 'hello':
         send(threadsMsg(cockpit));
+        send(templatesMsg(cockpit));
+        send(o11yMsg(cockpit));
+        send(stewardMsg(cockpit));
         break;
       case 'steer': {
         const thread = cockpit.registry.get(msg.threadId);
         if (!thread) throw new Error(`unknown thread ${msg.threadId}`);
         await thread.steer(String(msg.text || ''));
-        broadcast(threadsMsg(cockpit));
+        pushState();
         break;
       }
       case 'new-thread': {
@@ -57,7 +69,7 @@ export const makeMessageHandler = (cockpit, send, broadcast) => async raw => {
           templateName: msg.templateName || 'adhoc',
           caps: buildMockCaps(msg.caps || []),
         });
-        broadcast(threadsMsg(cockpit));
+        pushState();
         if (msg.prompt) thread.prompt(String(msg.prompt));
         break;
       }
@@ -69,21 +81,44 @@ export const makeMessageHandler = (cockpit, send, broadcast) => async raw => {
           caps: buildMockCaps(msg.caps || []),
           prompt: msg.prompt ? String(msg.prompt) : undefined,
         });
-        broadcast(threadsMsg(cockpit));
+        pushState();
         break;
       }
       case 'revoke-cap': {
         // The thesis in one gesture: drop a cap and the agent can no longer
         // reach it. Propagates down the delegated lineage.
         cockpit.registry.revokeCap(msg.threadId, msg.capName);
-        broadcast(threadsMsg(cockpit));
+        pushState();
         break;
       }
       case 'grant-cap': {
         const thread = cockpit.registry.get(msg.threadId);
         if (!thread) throw new Error(`unknown thread ${msg.threadId}`);
         cockpit.registry.grantCap(msg.threadId, makeMockCap(msg.cap));
-        broadcast(threadsMsg(cockpit));
+        pushState();
+        break;
+      }
+      case 'list-templates':
+        send(templatesMsg(cockpit));
+        break;
+      case 'define-template':
+        cockpit.templates.define(msg.template || {});
+        broadcast(templatesMsg(cockpit));
+        break;
+      case 'delete-template':
+        cockpit.templates.remove(msg.name);
+        broadcast(templatesMsg(cockpit));
+        break;
+      case 'o11y':
+        send(o11yMsg(cockpit));
+        break;
+      case 'steward':
+        send(stewardMsg(cockpit));
+        break;
+      case 'export-thread': {
+        const thread = cockpit.registry.get(msg.threadId);
+        if (!thread) throw new Error(`unknown thread ${msg.threadId}`);
+        send({ type: 'transcript', threadId: msg.threadId, markdown: exportTranscript(thread) });
         break;
       }
       default:

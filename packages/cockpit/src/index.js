@@ -12,6 +12,9 @@ import {
   makeMockWorkspace,
 } from './backend/engine.js';
 import { makeCap } from './backend/caps.js';
+import { makeTemplateStore } from './backend/templates.js';
+import { makeO11y } from './backend/o11y.js';
+import { makeSteward } from './backend/steward.js';
 
 export { makeCockpit as default };
 
@@ -45,9 +48,15 @@ export const makeCockpit = ({ engineFactory = makeMockEngine } = {}) => {
     for (const fn of listeners) fn(threadId, event);
   };
   const registry = makeRegistry({ engineFactory, onEvent: emit });
+  const templates = makeTemplateStore();
+  const o11y = makeO11y({ registry });
+  const steward = makeSteward({ registry });
 
   return {
     registry,
+    templates,
+    o11y,
+    steward,
     /** @param {(threadId: string, event: import('./backend/engine.js').ThreadEvent) => void} fn */
     onEvent: fn => {
       listeners.add(fn);

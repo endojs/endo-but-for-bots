@@ -6,6 +6,9 @@ const ws = new WebSocket(`ws://${location.host}/ws`);
 
 let threadsFlat = [];
 let selected = null;
+let mode = 'doer';
+let templates = [];
+let o11ySummary = null;
 const transcripts = {}; // threadId -> [events]
 
 ws.onopen = () => {
@@ -26,8 +29,18 @@ function handle(m) {
   } else if (m.type === 'thread-event') {
     (transcripts[m.threadId] ||= []).push(m.event);
     if (m.threadId === selected) appendEvent(m.event);
+  } else if (m.type === 'templates') {
+    templates = m.list;
+    if (mode === 'builder') renderBuilder();
+  } else if (m.type === 'o11y') {
+    o11ySummary = m.summary;
+    renderGlobalO11y();
+  } else if (m.type === 'steward') {
+    if (mode === 'steward') renderSteward(m.view);
+  } else if (m.type === 'transcript') {
+    showTranscript(m.markdown);
   } else if (m.type === 'error') {
-    appendLine(`⚠ ${m.message}`, 'err');
+    appendLine(`⚠ ${m.message}`, 'error');
   }
 }
 
@@ -204,3 +217,132 @@ spawnBtn.id = 'spawn-btn';
 spawnBtn.textContent = '⑂ spawn child';
 spawnBtn.onclick = spawnChild;
 $('pane-title').after(spawnBtn);
+
+// M3: export the selected thread's transcript as a journal entry.
+const exportBtn = document.createElement('button');
+exportBtn.id = 'export-btn';
+exportBtn.textContent = '⇩ export';
+exportBtn.onclick = () =>
+  selected && ws.send(JSON.stringify({ type: 'export-thread', threadId: selected }));
+spawnBtn.after(exportBtn);
+
+// M3: Doer / Builder / Steward planes.
+const builderPanel = document.createElement('div');
+builderPanel.id = 'builder-panel';
+const stewardPanel = document.createElement('div');
+stewardPanel.id = 'steward-panel';
+$('center').append(builderPanel, stewardPanel);
+
+document.querySelectorAll('#modes button').forEach(b => {
+  b.onclick = () => setMode(b.dataset.mode);
+});
+
+function setMode(m) {
+  mode = m;
+  const doer = m === 'doer';
+  document.querySelectorAll('#modes button').forEach(b =>
+    b.classList.toggle('active', b.dataset.mode === m),
+  );
+  for (const el of [$('transcript'), $('steer-form'), spawnBtn, exportBtn]) {
+    el.style.display = doer ? '' : 'none';
+  }
+  builderPanel.style.display = m === 'builder' ? '' : 'none';
+  stewardPanel.style.display = m === 'steward' ? '' : 'none';
+  if (doer) {
+    $('pane-title').textContent = selected || 'select a thread';
+  } else {
+    $('pane-title').textContent = `${m} mode`;
+  }
+  if (m === 'builder') renderBuilder();
+  if (m === 'steward') ws.send(JSON.stringify({ type: 'steward' }));
+}
+
+// Builder Mode (the define plane): author templates.
+function renderBuilder() {
+  builderPanel.innerHTML = '<h2>Templates</h2>';
+  for (const t of templates) {
+    const row = document.createElement('div');
+    row.className = 'tpl-row';
+    const shape = t.capShape.map(c => `${c.name}:${c.mode || '—'}`).join(', ') || 'no caps';
+    row.innerHTML = `<b>${t.name}</b> <span class="muted">${shape}</span> <span class="muted">${t.model}</span>`;
+    const use = document.createElement('button');
+    use.textContent = 'use';
+    use.onclick = () => useTemplate(t);
+    const del = document.createElement('button');
+    del.textContent = 'delete';
+    del.onclick = () => ws.send(JSON.stringify({ type: 'delete-template', name: t.name }));
+    row.append(use, del);
+    builderPanel.appendChild(row);
+  }
+  const add = document.createElement('button');
+  add.textContent = '+ new template';
+  add.onclick = () => $('builder-dialog').showModal();
+  builderPanel.appendChild(add);
+}
+
+function useTemplate(t) {
+  const task = window.prompt(`task for a ${t.name} thread:`, t.prompt);
+  if (task === null) return;
+  ws.send(
+    JSON.stringify({ type: 'new-thread', templateName: t.name, caps: t.capShape, prompt: task }),
+  );
+  setMode('doer');
+}
+
+$('builder-form').addEventListener('submit', e => {
+  if (e.submitter && e.submitter.value === 'cancel') return;
+  const f = e.target;
+  const capShape = (f.capShape.value || '')
+    .split(',')
+    .map(s => s.trim())
+    .filter(Boolean)
+    .map(s => {
+      const [name, kind, mode_] = s.split(':').map(x => x.trim());
+      return { name, kind: kind || name, mode: mode_ };
+    });
+  ws.send(
+    JSON.stringify({
+      type: 'define-template',
+      template: { name: f.name.value, prompt: f.prompt.value, capShape, model: f.model.value },
+    }),
+  );
+});
+
+// Steward Mode: the autonomous-loop projection.
+function renderSteward(v) {
+  const loop = v.autonomousLoop;
+  stewardPanel.innerHTML =
+    '<h2>Autonomous loop</h2>' +
+    `<div>posture: ${loop.posture}</div>` +
+    `<div>status: ${loop.status}</div>` +
+    `<div>running: ${loop.runningThreads} / ${loop.totalThreads}</div>` +
+    '<h2>Feed</h2>' +
+    v.feed.map(line => `<div class="feed">${line}</div>`).join('');
+}
+
+// Global observability.
+const globalO11y = document.createElement('div');
+globalO11y.id = 'global-o11y';
+$('side-pane').appendChild(globalO11y);
+function renderGlobalO11y() {
+  if (!o11ySummary) return;
+  const t = o11ySummary.total;
+  globalO11y.innerHTML =
+    '<h2>Totals</h2>' +
+    `<div>threads: ${t.threads}</div>` +
+    `<div>tokens: ${t.tokens}</div>` +
+    `<div>turns: ${t.turns}</div>`;
+}
+
+function showTranscript(md) {
+  let d = $('transcript-dialog');
+  if (!d) {
+    d = document.createElement('dialog');
+    d.id = 'transcript-dialog';
+    d.innerHTML = '<pre id="transcript-md"></pre><menu><button id="tx-close">close</button></menu>';
+    document.body.appendChild(d);
+    d.querySelector('#tx-close').onclick = () => d.close();
+  }
+  d.querySelector('#transcript-md').textContent = md;
+  d.showModal();
+}
