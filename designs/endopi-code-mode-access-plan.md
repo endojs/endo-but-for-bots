@@ -487,6 +487,70 @@ Existing regression to preserve:
 - Tests cover the current Git code loop plus config and delegation boundaries.
 - README.md explains to consumer how to access each
 
+## Confinement Milestones
+
+Confinement lands in named increments so the deferral is explicit, not a silent
+omission. Today's branch is milestone 1; pi-in-a-Compartment is milestone 2;
+active attenuation is the increment that follows.
+
+### Milestone 1 — confined tool execution (this branch)
+
+The pi loop itself runs **unconfined** in Node. Only the executed tool `source`
+is Compartment-confined: `makeCodeModeCompartmentExecute`
+(`packages/agentry/src/code-mode-runtime.js`) evaluates each `execute({ source })`
+call in a fresh SES `Compartment` whose endowments are exactly `{ E, workspace,
+git, …named powers }`. Repository authority therefore already flows only through
+Endo caps, even though pi and the provider SDKs are ambient. "Unconfined" here is
+a packaging and provider-call concession, not a tool-authority concession.
+
+### Milestone 2 — confine pi itself (deferred)
+
+#416's headline leans on #297 to confine the pi loop itself, loading pi from a
+confined module graph rather than ambient Node:
+
+```js
+import { importLocation } from '@endo/compartment-mapper';
+import { makeReadPowers } from '@endo/compartment-mapper/node-powers.js';
+
+const { namespace } = await importLocation(
+  makeReadPowers({ fs, crypto, url }),
+  piEntry,
+  { globals },
+);
+```
+
+This is **deferred**, deliberately and explicitly. Pi and the provider SDKs need
+their full runtime dependency graph — `fetch`, timers, `crypto`, streams,
+`TextEncoder`/`TextDecoder`, module loading, and any provider transport — audited
+and supplied as explicit endowments before the loop can run inside a Compartment.
+Confining pi without that audit either breaks the provider calls or silently
+re-grants ambient authority through an under-specified endowment set, so the
+audit is a prerequisite, not a footnote.
+
+Path to milestone 2:
+
+1. Enumerate the pi and provider-SDK modules loaded at runtime.
+2. Build or reuse a compartment-mapper module loader for that graph
+   (`importLocation` + `makeReadPowers`), pinning the read powers to the minimum
+   the graph needs.
+3. Replace each ambient Node dependency with an explicit endowment: a fetch or
+   provider cap, `crypto`, timers, streams, `TextEncoder`/`TextDecoder`, and a
+   logger.
+4. Keep model network authority separate from repository authority; the
+   `apiTokenEnvVar` fallback is replaced by an explicit secret/token-provider
+   cap once pi is confined.
+
+### Next increment — active attenuation (after this branch, not implemented now)
+
+Once pi is confined, the next increment narrows the *powers themselves* rather
+than where they run. Today a `readWrite` Git cap is handed to the loop whole.
+Active attenuation would interpose a writable-Git → read-only minter (the
+delegation tool already refuses read-only → writable upgrades; the minter is the
+inverse, handing a strict subset downward) and a read-only workspace where the
+task does not need writes. This is **named here only to mark the increment**;
+attenuation is not implemented in this branch and the delegation lane's existing
+`gitMode` gate is the current attenuation surface.
+
 ## Suggested Implementation Order
 
 1. Add `code-mode-runtime` config normalization and factory.
