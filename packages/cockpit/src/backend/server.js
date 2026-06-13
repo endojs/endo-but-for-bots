@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url';
 import { extname, normalize } from 'node:path';
 
 import { attachWebSocketServer } from './ws.js';
-import { buildMockCaps } from '../index.js';
+import { buildMockCaps, makeMockCap } from '../index.js';
 
 const PUBLIC_DIR = fileURLToPath(new URL('../../public/', import.meta.url));
 
@@ -69,6 +69,20 @@ export const makeMessageHandler = (cockpit, send, broadcast) => async raw => {
           caps: buildMockCaps(msg.caps || []),
           prompt: msg.prompt ? String(msg.prompt) : undefined,
         });
+        broadcast(threadsMsg(cockpit));
+        break;
+      }
+      case 'revoke-cap': {
+        // The thesis in one gesture: drop a cap and the agent can no longer
+        // reach it. Propagates down the delegated lineage.
+        cockpit.registry.revokeCap(msg.threadId, msg.capName);
+        broadcast(threadsMsg(cockpit));
+        break;
+      }
+      case 'grant-cap': {
+        const thread = cockpit.registry.get(msg.threadId);
+        if (!thread) throw new Error(`unknown thread ${msg.threadId}`);
+        cockpit.registry.grantCap(msg.threadId, makeMockCap(msg.cap));
         broadcast(threadsMsg(cockpit));
         break;
       }

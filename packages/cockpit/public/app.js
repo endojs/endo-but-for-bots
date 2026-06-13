@@ -114,11 +114,39 @@ function renderSidebar() {
     o11y.innerHTML = '';
     return;
   }
-  caps.innerHTML = t.caps.length
-    ? t.caps
-        .map(c => `<div class="cap">${c.name} <em>${c.kind}</em> <b>${c.mode || '—'}</b></div>`)
-        .join('')
-    : '<div class="cap muted">no capabilities</div>';
+  caps.innerHTML = '';
+  if (!t.caps.length) {
+    caps.insertAdjacentHTML('beforeend', '<div class="cap muted">no capabilities</div>');
+  }
+  for (const c of t.caps) {
+    const row = document.createElement('div');
+    row.className = 'cap';
+    row.innerHTML = `${c.name} <em>${c.kind}</em> <b>${c.mode || '—'}</b>`;
+    const btn = document.createElement('button');
+    btn.textContent = 'revoke';
+    btn.onclick = () =>
+      ws.send(JSON.stringify({ type: 'revoke-cap', threadId: t.id, capName: c.name }));
+    row.appendChild(btn);
+    caps.appendChild(row);
+  }
+  // M2: grant a fresh cap into the thread's scope.
+  const grant = document.createElement('div');
+  grant.className = 'grant';
+  grant.innerHTML =
+    '<select id="g-kind"><option>git</option><option>workspace</option></select>' +
+    '<select id="g-mode"><option>readWrite</option><option>readOnly</option></select>' +
+    '<button id="g-btn">+ grant</button>';
+  caps.appendChild(grant);
+  $('g-btn').onclick = () => {
+    const kind = $('g-kind').value;
+    ws.send(
+      JSON.stringify({
+        type: 'grant-cap',
+        threadId: t.id,
+        cap: { name: kind, kind, mode: $('g-mode').value },
+      }),
+    );
+  };
   o11y.innerHTML =
     `<div>tokens: ${t.o11y.tokens}</div>` +
     `<div>turns: ${t.o11y.turns}</div>` +
@@ -134,22 +162,27 @@ $('steer-form').onsubmit = e => {
   input.value = '';
 };
 
-// M1: create a root thread.
-$('new-thread-btn').onclick = () => {
-  const task = window.prompt('task for the new thread (git + workspace, read-write):', 'what branch?');
-  if (task === null) return;
+// M2: the new-thread form. With a parent id it spawns via delegation; without,
+// it creates a root thread. Caps are chosen by checkbox + mode.
+$('new-thread-btn').onclick = () => $('new-thread-dialog').showModal();
+$('new-thread-form').addEventListener('submit', e => {
+  if (e.submitter && e.submitter.value === 'cancel') return;
+  const f = e.target;
+  const caps = [];
+  if (f.git.checked) caps.push({ name: 'git', kind: 'git', mode: f.gitMode.value });
+  if (f.workspace.checked)
+    caps.push({ name: 'workspace', kind: 'workspace', mode: f.workspaceMode.value });
+  const parentId = f.parentId.value.trim();
+  const prompt = f.prompt.value;
+  const templateName = f.templateName.value || (parentId ? 'delegate' : 'adhoc');
   ws.send(
-    JSON.stringify({
-      type: 'new-thread',
-      templateName: 'adhoc',
-      caps: [
-        { name: 'git', kind: 'git', mode: 'readWrite' },
-        { name: 'workspace', kind: 'workspace', mode: 'readWrite' },
-      ],
-      prompt: task,
-    }),
+    JSON.stringify(
+      parentId
+        ? { type: 'spawn', parentId, templateName, caps, prompt }
+        : { type: 'new-thread', templateName, caps, prompt },
+    ),
   );
-};
+});
 
 // M1: spawn a child thread via delegation, handing it a read-only subset of the
 // selected thread's caps (attenuation by selection; the harness enforces it).
