@@ -378,14 +378,13 @@ test('cyclic star export with renaming reexport, unused live binding', async t =
 // upstream's TDZ before the downstream observes.
 //
 // Each cell is also exercised through the compartment-mapper scaffold and
-// pinned to Node.js's reference behavior with a shared assertion module.
+// pinned to Node.js's reference behavior side-by-side in the same module.
 // The six star-reexport cells and the named-reexport cell are enumerated
 // in a single SCENARIOS table in
-// packages/compartment-mapper/test/_cycle-rename-tdz-assertions.js and
-// walked by the table-driven test pair
-// cycle-rename-tdz-matrix.test.js (SES under the compartment-mapper
-// scaffold) and cycle-rename-tdz-matrix-node-parity.test.js (plain
-// Node.js). Each scenario's `fixture` field names its directory under
+// packages/compartment-mapper/test/cycle-rename-tdz-matrix.test.js, which
+// registers a SES treatment (through the compartment-mapper scaffold) and
+// a Node.js parity treatment back-to-back for each scenario. Each row's
+// `fixture` field names its directory under
 // packages/compartment-mapper/test/fixtures-cycle-{rename,named-reexport}-tdz-*/.
 
 test('cyclic star export with renaming reexport, renamer imported first, const binding observes ReferenceError during temporal dead zone', async t => {
