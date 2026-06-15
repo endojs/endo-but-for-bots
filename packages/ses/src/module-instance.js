@@ -395,9 +395,10 @@ export const makeModuleInstance = (
       // that name may be wired only later, in its own candidate-all walk,
       // after this module's `imports()` returns. Install a notifier that
       // queues subscribers until the upstream resolves, then forwards them
-      // through. `makeNotifierWithResolver` is the synchronous variant of
-      // `Promise.withResolvers` that captures this pattern; each `notify`
-      // call lazily attempts to resolve against the upstream's notifiers.
+      // through. {@link makeNotifierWithResolver} is the synchronous
+      // variant of `Promise.withResolvers` that captures this pattern; each
+      // `notify` call lazily attempts to resolve against the upstream's
+      // notifiers.
       const { notify: queueOrForward, resolve: resolveUpstream } =
         makeNotifierWithResolver();
       notify = update => {

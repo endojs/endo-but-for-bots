@@ -1,3 +1,11 @@
+/**
+ * @module Synchronous variant of `Promise.withResolvers` for the
+ *   star-export notifier wiring used by `module-instance.js`. Provides a
+ *   `notify` / `resolve` pair where subscribers attached before the
+ *   resolver is settled are queued and replayed once a target notifier is
+ *   supplied.
+ */
+
 import { arrayPush } from './commons.js';
 
 /**
@@ -15,12 +23,6 @@ import { arrayPush } from './commons.js';
  * semantics: a promise settles once.) Callers that need to discover the
  * target lazily may safely call `resolve` again on each `notify`; only the
  * first call has effect.
- *
- * Used by `module-instance.js` `wireUpExportNotifier` to resolve the
- * star-export-cycle case (endojs/endo#59): a re-export may be wired before
- * the upstream module has exposed its notifier for the imported name, and
- * the upstream notifier becomes available only after a second pass of
- * candidate-all wiring elsewhere in the graph.
  *
  * @returns {{
  *   notify: (update: (value: any) => void) => void,
