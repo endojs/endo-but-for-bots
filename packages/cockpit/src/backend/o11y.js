@@ -5,9 +5,9 @@
 // is free; a real provider's price table would slot into COST_PER_MTOK.
 
 /** @type {Record<string, { input: number, output: number }>} */
-const COST_PER_MTOK = {
+const COST_PER_MTOK = harden({
   mock: { input: 0, output: 0 },
-};
+});
 
 const blank = () => ({ tokens: 0, turns: 0, threads: 0, cost: 0 });
 
@@ -36,7 +36,8 @@ export const makeO11y = ({ registry }) => {
         bucket.cost += cost;
       }
     }
-    return { total, byTemplate, byModel };
+    return harden({ total, byTemplate, byModel });
   };
-  return { summary };
+  return harden({ summary });
 };
+harden(makeO11y);

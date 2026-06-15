@@ -33,7 +33,10 @@ import { READ_WRITE } from './caps.js';
 
 const tokenize = s => `${s}`.split(/(\s+)/).filter(Boolean);
 
-/** @param {Record<string, unknown>} scope @param {string} name */
+/**
+ * @param {Record<string, unknown>} scope
+ * @param {string} name
+ */
 const requireCap = (scope, name) => {
   const cap = scope[name];
   if (cap === undefined || cap === null) {
@@ -42,7 +45,11 @@ const requireCap = (scope, name) => {
   return cap;
 };
 
-/** @param {unknown} obj @param {string} method @param {string} capName */
+/**
+ * @param {unknown} obj
+ * @param {string} method
+ * @param {string} capName
+ */
 const requireMethod = (obj, method, capName) => {
   const fn = /** @type {Record<string, unknown>} */ (obj)[method];
   if (typeof fn !== 'function') {
@@ -72,6 +79,7 @@ export const makeMockEngine = ctx => {
       emit({ kind: 'token', token: tok });
     }
     const lc = `${text}`.toLowerCase();
+    await null;
     try {
       let result;
       if (lc.includes('branch')) {
@@ -90,14 +98,19 @@ export const makeMockEngine = ctx => {
         const ws = requireCap(scope, 'workspace');
         emit({ kind: 'tool-call', data: 'E(workspace).write()' });
         result = await requireMethod(ws, 'write', 'workspace')();
-      } else if ((lc.includes('spawn') || lc.includes('delegate')) && delegate) {
+      } else if (
+        (lc.includes('spawn') || lc.includes('delegate')) &&
+        delegate
+      ) {
         emit({ kind: 'tool-call', data: 'delegateCodeMode(...)' });
         result = await delegate({ caps: [], prompt: text });
         emit({ kind: 'spawn', data: result });
       } else {
         result = `(mock) acknowledged: ${text}`;
       }
-      tokens += tokenize(`${typeof result === 'string' ? result : JSON.stringify(result)}`).length;
+      tokens += tokenize(
+        `${typeof result === 'string' ? result : JSON.stringify(result)}`,
+      ).length;
       emit({ kind: 'tool-result', data: result });
       emit({ kind: 'turn-end', data: 'ok' });
       return { status: 'ok', result, tokens };
@@ -109,8 +122,9 @@ export const makeMockEngine = ctx => {
     }
   };
 
-  return { kind: 'mock', prompt };
+  return harden({ kind: 'mock', prompt });
 };
+harden(makeMockEngine);
 
 /**
  * A mock git capability whose read-only flavour literally lacks the mutating
@@ -125,14 +139,18 @@ export const makeMockGit = ({ branch = 'main', mode = READ_WRITE } = {}) => {
     status: async () => [{ path: 'README.md', worktree: 'clean' }],
     log: async () => [{ oid: 'deadbeef', summary: 'initial commit' }],
   };
-  if (mode !== READ_WRITE) return Object.freeze(readOnly);
-  return Object.freeze({
+  if (mode !== READ_WRITE) return harden(readOnly);
+  return harden({
     ...readOnly,
     add: async () => undefined,
-    commit: async message => ({ oid: 'cafef00d', summary: message || 'commit' }),
+    commit: async message => ({
+      oid: 'cafef00d',
+      summary: message || 'commit',
+    }),
     push: async () => ({ pushed: true, branch }),
   });
 };
+harden(makeMockGit);
 
 /**
  * A mock workspace (filesystem) capability.
@@ -144,12 +162,13 @@ export const makeMockWorkspace = ({ mode = READ_WRITE } = {}) => {
     read: async () => 'file contents',
     list: async () => ['README.md'],
   };
-  if (mode !== READ_WRITE) return Object.freeze(readOnly);
-  return Object.freeze({ ...readOnly, write: async () => ({ written: true }) });
+  if (mode !== READ_WRITE) return harden(readOnly);
+  return harden({ ...readOnly, write: async () => ({ written: true }) });
 };
+harden(makeMockWorkspace);
 
 /**
- * Lazily wrap @endo/agentry's real code-mode runtime. Imported only when a
+ * Lazily wrap `@endo/agentry`'s real code-mode runtime. Imported only when a
  * provider is configured; throws a clear error if the monorepo dependency is
  * not installed. Wiring is intentionally thin — the runtime owns the loop, the
  * cockpit owns the thread/stream/concurrency (design option (a)).
@@ -182,5 +201,6 @@ export const makeAgentryEngine = async ctx => {
     const tokens = runtime.agent.state?.messages?.length ?? 0;
     return { status: 'ok', result: 'see transcript', tokens };
   };
-  return { kind: 'agentry', prompt };
+  return harden({ kind: 'agentry', prompt });
 };
+harden(makeAgentryEngine);

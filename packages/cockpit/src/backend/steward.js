@@ -13,7 +13,7 @@ export const makeSteward = ({ registry }) => {
   const view = () => {
     const threads = registry.list();
     const running = threads.filter(t => t.status === 'running');
-    return {
+    return harden({
       autonomousLoop: {
         posture: 'steward',
         status: running.length > 0 ? 'active' : 'idle',
@@ -23,8 +23,12 @@ export const makeSteward = ({ registry }) => {
       feed: threads
         .slice(-12)
         .reverse()
-        .map(t => `${t.id} · ${t.templateName} · ${t.status} · ${t.o11y.turns} turns`),
-    };
+        .map(
+          t =>
+            `${t.id} · ${t.templateName} · ${t.status} · ${t.o11y.turns} turns`,
+        ),
+    });
   };
-  return { view };
+  return harden({ view });
 };
+harden(makeSteward);

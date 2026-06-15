@@ -5,6 +5,9 @@
 // threads≈dispatches, journal≈transcript). Returns markdown; the operator (or
 // a later integration) decides where it lands.
 
+/** @import { ThreadEvent } from './engine.js' */
+
+/** @param {ThreadEvent} ev */
 const renderEvent = ev => {
   const body =
     ev.message !== undefined
@@ -14,14 +17,25 @@ const renderEvent = ev => {
         : '';
   return `- ${ev.kind}${body}`;
 };
+harden(renderEvent);
 
 /**
- * @param {{ toJSON: () => any, transcript: () => any[] }} thread
+ * @param {{
+ *   toJSON: () => {
+ *     id: string,
+ *     templateName: string,
+ *     status: string,
+ *     caps: Array<{ name: string, kind: string, mode?: string }>,
+ *     o11y: { tokens: number, turns: number },
+ *   },
+ *   transcript: () => ThreadEvent[],
+ * }} thread
  * @returns {string}
  */
 export const exportTranscript = thread => {
   const j = thread.toJSON();
-  const caps = j.caps.map(c => `${c.name}:${c.mode || '—'}`).join(', ') || 'none';
+  const caps =
+    j.caps.map(c => `${c.name}:${c.mode || '—'}`).join(', ') || 'none';
   return [
     '---',
     'type: thread-transcript',
@@ -39,3 +53,4 @@ export const exportTranscript = thread => {
     '',
   ].join('\n');
 };
+harden(exportTranscript);

@@ -16,8 +16,6 @@ import { makeTemplateStore } from './backend/templates.js';
 import { makeO11y } from './backend/o11y.js';
 import { makeSteward } from './backend/steward.js';
 
-export { makeCockpit as default };
-
 /**
  * Build a mock-backed capability from a wire spec. The real harness-host
  * resolves live Endo caps via pet-name lookup; the mock builds an in-memory
@@ -30,12 +28,14 @@ export const makeMockCap = ({ name, kind, mode }) => {
   let value;
   if (kind === 'git') value = makeMockGit({ mode });
   else if (kind === 'workspace') value = makeMockWorkspace({ mode });
-  else value = Object.freeze({ describe: async () => `named power ${name}` });
+  else value = harden({ describe: async () => `named power ${name}` });
   return makeCap({ name, kind, mode, value });
 };
+harden(makeMockCap);
 
 /** @param {Array<{ name: string, kind: string, mode?: string }>} specs */
 export const buildMockCaps = (specs = []) => specs.map(makeMockCap);
+harden(buildMockCaps);
 
 /**
  * @param {object} [options]
@@ -52,7 +52,7 @@ export const makeCockpit = ({ engineFactory = makeMockEngine } = {}) => {
   const o11y = makeO11y({ registry });
   const steward = makeSteward({ registry });
 
-  return {
+  return harden({
     registry,
     templates,
     o11y,
@@ -62,5 +62,6 @@ export const makeCockpit = ({ engineFactory = makeMockEngine } = {}) => {
       listeners.add(fn);
       return () => listeners.delete(fn);
     },
-  };
+  });
 };
+harden(makeCockpit);

@@ -9,7 +9,7 @@
 import { capView } from './caps.js';
 
 const TRANSCRIPT_CAP = 500;
-const identity = x => x;
+const identity = harden(x => x);
 
 /**
  * @typedef {import('./caps.js').Cap} Cap
@@ -75,12 +75,14 @@ export const makeThread = ({
     return outcome;
   };
 
-  return {
+  return harden({
     id,
     parentId,
     templateName,
     engineKind: engine.kind,
-    childIds,
+    get childIds() {
+      return harden([...childIds]);
+    },
     get status() {
       return status;
     },
@@ -92,7 +94,10 @@ export const makeThread = ({
       capMap.set(cap.name, cap);
       emit({ kind: 'tool-result', data: `granted cap ${cap.name}` });
     },
-    /** @param {string} name @returns {boolean} whether a cap was removed */
+    /**
+     * @param {string} name
+     * @returns {boolean} whether a cap was removed
+     */
     revokeCap: name => {
       const had = capMap.delete(name);
       if (had) emit({ kind: 'tool-result', data: `revoked cap ${name}` });
@@ -114,5 +119,6 @@ export const makeThread = ({
       o11y: { ...o11y },
       transcriptLength: transcript.length,
     }),
-  };
+  });
 };
+harden(makeThread);

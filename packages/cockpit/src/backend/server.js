@@ -16,17 +16,26 @@ import { exportTranscript } from './journal.js';
 
 const PUBLIC_DIR = fileURLToPath(new URL('../../public/', import.meta.url));
 
-const MIME = {
+const MIME = harden({
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
   '.json': 'application/json; charset=utf-8',
-};
+});
 
-const threadsMsg = cockpit => ({ type: 'threads', tree: cockpit.registry.tree() });
-const templatesMsg = cockpit => ({ type: 'templates', list: cockpit.templates.list() });
+const threadsMsg = cockpit => ({
+  type: 'threads',
+  tree: cockpit.registry.tree(),
+});
+const templatesMsg = cockpit => ({
+  type: 'templates',
+  list: cockpit.templates.list(),
+});
 const o11yMsg = cockpit => ({ type: 'o11y', summary: cockpit.o11y.summary() });
-const stewardMsg = cockpit => ({ type: 'steward', view: cockpit.steward.view() });
+const stewardMsg = cockpit => ({
+  type: 'steward',
+  view: cockpit.steward.view(),
+});
 
 /**
  * Route one parsed client message. `send` replies to the sender; `broadcast`
@@ -49,6 +58,7 @@ export const makeMessageHandler = (cockpit, send, broadcast) => async raw => {
     broadcast(threadsMsg(cockpit));
     broadcast(o11yMsg(cockpit));
   };
+  await null;
   try {
     switch (msg.type) {
       case 'hello':
@@ -118,18 +128,31 @@ export const makeMessageHandler = (cockpit, send, broadcast) => async raw => {
       case 'export-thread': {
         const thread = cockpit.registry.get(msg.threadId);
         if (!thread) throw new Error(`unknown thread ${msg.threadId}`);
-        send({ type: 'transcript', threadId: msg.threadId, markdown: exportTranscript(thread) });
+        send({
+          type: 'transcript',
+          threadId: msg.threadId,
+          markdown: exportTranscript(thread),
+        });
         break;
       }
       default:
         send({ type: 'error', message: `unknown message type: ${msg.type}` });
     }
   } catch (err) {
-    send({ type: 'error', message: err instanceof Error ? err.message : String(err) });
+    send({
+      type: 'error',
+      message: err instanceof Error ? err.message : String(err),
+    });
   }
 };
+harden(makeMessageHandler);
 
-/** @param {import('node:http').ServerResponse} res @param {number} code @param {string} body @param {string} type */
+/**
+ * @param {import('node:http').ServerResponse} res
+ * @param {number} code
+ * @param {string | Uint8Array} body
+ * @param {string} type
+ */
 const respond = (res, code, body, type) => {
   res.writeHead(code, { 'content-type': type });
   res.end(body);
@@ -143,6 +166,7 @@ const serveStatic = async (req, res) => {
     respond(res, 403, 'forbidden', 'text/plain');
     return;
   }
+  await null;
   try {
     const body = await readFile(path);
     respond(res, 200, body, MIME[extname(path)] || 'application/octet-stream');
@@ -200,3 +224,4 @@ export const makeCockpitServer = cockpit => {
 
   return httpServer;
 };
+harden(makeCockpitServer);

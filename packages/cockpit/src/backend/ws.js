@@ -1,4 +1,6 @@
 // @ts-check
+/* global Buffer */
+/* eslint-disable no-bitwise -- RFC 6455 frame framing is intrinsically bitwise */
 //
 // A minimal RFC 6455 websocket server over node:http upgrades. Dependency-free
 // on purpose: the cockpit's frontend stack is a boring, no-build choice
@@ -10,14 +12,18 @@ import { createHash } from 'node:crypto';
 
 const GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
 
-/** Encode a server→client text frame (unmasked). @param {string} str */
+/**
+ * Encode a server→client text frame (unmasked).
+ *
+ * @param {string} str
+ */
 const encodeText = str => {
   const payload = Buffer.from(str, 'utf8');
   const len = payload.length;
   let header;
   if (len < 126) {
     header = Buffer.from([0x81, len]);
-  } else if (len < 65536) {
+  } else if (len < 65_536) {
     header = Buffer.from([0x81, 126, (len >> 8) & 0xff, len & 0xff]);
   } else {
     header = Buffer.alloc(10);
@@ -78,11 +84,15 @@ const parseFrames = buf => {
  * @param {(conn: {
  *   send: (str: string) => void,
  *   close: () => void,
+ *   destroy: () => void,
  *   onMessage: (fn: (str: string) => void) => void,
  *   onClose: (fn: () => void) => void,
  * }) => void} options.onConnection
  */
-export const attachWebSocketServer = (httpServer, { path = '/ws', onConnection }) => {
+export const attachWebSocketServer = (
+  httpServer,
+  { path = '/ws', onConnection },
+) => {
   httpServer.on('upgrade', (req, socket) => {
     if (new URL(req.url || '/', 'http://localhost').pathname !== path) {
       socket.destroy();
@@ -93,7 +103,9 @@ export const attachWebSocketServer = (httpServer, { path = '/ws', onConnection }
       socket.destroy();
       return;
     }
-    const accept = createHash('sha1').update(key + GUID).digest('base64');
+    const accept = createHash('sha1')
+      .update(key + GUID)
+      .digest('base64');
     socket.write(
       'HTTP/1.1 101 Switching Protocols\r\n' +
         'Upgrade: websocket\r\n' +
@@ -105,6 +117,7 @@ export const attachWebSocketServer = (httpServer, { path = '/ws', onConnection }
     const messageHandlers = [];
     /** @type {Array<() => void>} */
     const closeHandlers = [];
+    /** @type {Buffer} */
     let buffer = Buffer.alloc(0);
     let closed = false;
 
@@ -147,12 +160,15 @@ export const attachWebSocketServer = (httpServer, { path = '/ws', onConnection }
     socket.on('close', fireClose);
     socket.on('error', fireClose);
 
-    onConnection({
-      send,
-      close,
-      destroy: () => socket.destroy(),
-      onMessage: fn => messageHandlers.push(fn),
-      onClose: fn => closeHandlers.push(fn),
-    });
+    onConnection(
+      harden({
+        send,
+        close,
+        destroy: () => socket.destroy(),
+        onMessage: fn => messageHandlers.push(fn),
+        onClose: fn => closeHandlers.push(fn),
+      }),
+    );
   });
 };
+harden(attachWebSocketServer);

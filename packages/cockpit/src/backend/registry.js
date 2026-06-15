@@ -43,7 +43,7 @@ export const makeRegistry = ({ engineFactory, onEvent = () => {} }) => {
       caps,
       engineFactory,
       onEvent,
-      delegate: spec => delegate(id, spec),
+      delegate: spec => delegate(id, /** @type {{ caps?: Cap[] }} */ (spec)),
     });
     threads.set(id, thread);
     if (parentId) threads.get(parentId)?.addChild(id);
@@ -58,13 +58,17 @@ export const makeRegistry = ({ engineFactory, onEvent = () => {} }) => {
    * @param {string} parentId
    * @param {{ templateName?: string, caps?: Cap[], prompt?: string }} spec
    */
-  const delegate = async (parentId, { templateName = 'delegate', caps = [], prompt }) => {
+  const delegate = async (
+    parentId,
+    { templateName = 'delegate', caps = [], prompt },
+  ) => {
     const parent = threads.get(parentId);
     if (!parent) throw new Error(`unknown parent thread ${parentId}`);
     const violation = subsetViolation(caps, parent.caps());
     if (violation) throw new Error(`delegation rejected: ${violation}`);
     const child = create({ templateName, caps, parentId });
     let outcome;
+    await null;
     if (prompt) outcome = await child.prompt(prompt);
     return { childId: child.id, caps: child.capViews(), outcome };
   };
@@ -107,7 +111,7 @@ export const makeRegistry = ({ engineFactory, onEvent = () => {} }) => {
     return build(null);
   };
 
-  return {
+  return harden({
     create,
     delegate,
     revokeCap,
@@ -116,5 +120,6 @@ export const makeRegistry = ({ engineFactory, onEvent = () => {} }) => {
     list: () => [...threads.values()].map(t => t.toJSON()),
     tree,
     ids: () => [...threads.keys()],
-  };
+  });
 };
+harden(makeRegistry);

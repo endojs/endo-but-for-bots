@@ -8,9 +8,9 @@
 // upgraded to read-write.
 
 export const READ_ONLY = 'readOnly';
+harden(READ_ONLY);
 export const READ_WRITE = 'readWrite';
-
-const freeze = Object.freeze;
+harden(READ_WRITE);
 
 /**
  * @typedef {object} Cap
@@ -24,7 +24,12 @@ const freeze = Object.freeze;
  * @param {{ name: string, kind: string, mode?: string, value?: unknown }} spec
  * @returns {Cap}
  */
-export const makeCap = ({ name, kind, mode = undefined, value = undefined }) => {
+export const makeCap = ({
+  name,
+  kind,
+  mode = undefined,
+  value = undefined,
+}) => {
   if (typeof name !== 'string' || name.length === 0) {
     throw new Error('cap name must be a non-empty string');
   }
@@ -34,8 +39,9 @@ export const makeCap = ({ name, kind, mode = undefined, value = undefined }) => 
   if (mode !== undefined && mode !== READ_ONLY && mode !== READ_WRITE) {
     throw new Error(`cap mode must be ${READ_ONLY}, ${READ_WRITE}, or absent`);
   }
-  return freeze({ name, kind, mode, value });
+  return harden({ name, kind, mode, value });
 };
+harden(makeCap);
 
 /**
  * The mode lattice: read-only is an attenuation of read-write; a cap with no
@@ -48,6 +54,7 @@ export const modeLeq = (child, parent) => {
   if (child === parent) return true;
   return child === READ_ONLY && parent === READ_WRITE;
 };
+harden(modeLeq);
 
 /**
  * Is `child` an attenuation of (≤) `parent`? Same name and kind, mode ≤.
@@ -59,6 +66,7 @@ export const capLeq = (child, parent) =>
   child.name === parent.name &&
   child.kind === parent.kind &&
   modeLeq(child.mode, parent.mode);
+harden(capLeq);
 
 /**
  * Every child cap must be ≤ some parent cap — the harness-enforced subset rule.
@@ -68,6 +76,7 @@ export const capLeq = (child, parent) =>
  */
 export const capsSubset = (childCaps, parentCaps) =>
   childCaps.every(c => parentCaps.some(p => capLeq(c, p)));
+harden(capsSubset);
 
 /**
  * Explain the first reason `childCaps` is not a subset of `parentCaps`, or
@@ -89,6 +98,7 @@ export const subsetViolation = (childCaps, parentCaps) => {
   }
   return undefined;
 };
+harden(subsetViolation);
 
 /**
  * A serialisable view of a cap (drops the live `value`) for the wire / UI.
@@ -96,4 +106,5 @@ export const subsetViolation = (childCaps, parentCaps) => {
  * @param {Cap} cap
  */
 export const capView = cap =>
-  freeze({ name: cap.name, kind: cap.kind, mode: cap.mode });
+  harden({ name: cap.name, kind: cap.kind, mode: cap.mode });
+harden(capView);

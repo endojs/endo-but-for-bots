@@ -44,27 +44,33 @@ const SEED = [
     compaction: 'none',
   },
 ];
-
-const freeze = Object.freeze;
+harden(SEED);
 
 /**
  * @param {{ name: string, prompt?: string, capShape?: CapShapeEntry[], model?: string, compaction?: string }} spec
  * @returns {Template}
  */
-const normalize = ({ name, prompt = '', capShape = [], model = 'mock', compaction = 'none' }) => {
+const normalize = ({
+  name,
+  prompt = '',
+  capShape = [],
+  model = 'mock',
+  compaction = 'none',
+}) => {
   if (typeof name !== 'string' || name.length === 0) {
     throw new Error('template name required');
   }
-  return freeze({
+  return harden({
     name,
     prompt: String(prompt),
-    capShape: freeze(
-      capShape.map(c => freeze({ name: c.name, kind: c.kind, mode: c.mode })),
+    capShape: harden(
+      capShape.map(c => harden({ name: c.name, kind: c.kind, mode: c.mode })),
     ),
     model: String(model),
     compaction: String(compaction),
   });
 };
+harden(normalize);
 
 export const makeTemplateStore = () => {
   /** @type {Map<string, Template>} */
@@ -76,10 +82,11 @@ export const makeTemplateStore = () => {
     return tpl;
   };
   for (const seed of SEED) define(seed);
-  return {
+  return harden({
     define,
     get: name => templates.get(name),
     list: () => [...templates.values()],
     remove: name => templates.delete(name),
-  };
+  });
 };
+harden(makeTemplateStore);
