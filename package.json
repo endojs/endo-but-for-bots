@@ -27,7 +27,7 @@
     "@typescript-eslint/eslint-plugin": "8.59.2",
     "@typescript-eslint/parser": "8.59.2",
     "ava": "^6.4.1",
-    "eslint": "^8.57.1",
+    "eslint": "^10.4.1",
     "eslint-config-airbnb-base": "^15.0.0",
     "eslint-config-jessie": "^0.0.6",
     "eslint-config-prettier": "^10.1.8",
