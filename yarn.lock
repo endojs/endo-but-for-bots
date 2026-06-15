@@ -1312,7 +1312,7 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@endo/agentry@workspace:packages/agentry":
+"@endo/agentry@workspace:^, @endo/agentry@workspace:packages/agentry":
   version: 0.0.0-use.local
   resolution: "@endo/agentry@workspace:packages/agentry"
   dependencies:
@@ -1567,6 +1567,28 @@ __metadata:
     typescript: "catalog:dev"
   bin:
     endo: ./bin/endo.cjs
+  languageName: unknown
+  linkType: soft
+
+"@endo/cockpit@workspace:packages/cockpit":
+  version: 0.0.0-use.local
+  resolution: "@endo/cockpit@workspace:packages/cockpit"
+  dependencies:
+    "@endo/agentry": "workspace:^"
+    "@endo/far": "workspace:^"
+    "@endo/init": "workspace:^"
+    "@endo/lockdown": "workspace:^"
+    "@endo/ses-ava": "workspace:^"
+    ava: "catalog:dev"
+    eslint: "catalog:dev"
+    typescript: "catalog:dev"
+  dependenciesMeta:
+    "@endo/agentry":
+      optional: true
+    "@endo/far":
+      optional: true
+  bin:
+    cockpit: ./bin/cockpit.js
   languageName: unknown
   linkType: soft
 
