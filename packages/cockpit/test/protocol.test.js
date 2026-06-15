@@ -1,6 +1,5 @@
 // @ts-check
-import test from 'node:test';
-import assert from 'node:assert/strict';
+import test from '@endo/ses-ava/prepare-endo.js';
 
 import { makeCockpit } from '../src/index.js';
 import { makeMessageHandler } from '../src/backend/server.js';
@@ -17,7 +16,7 @@ const setup = () => {
   return { cockpit, sent, bcast, handler };
 };
 
-test('new-thread then spawn builds a tree over the wire', async () => {
+test('new-thread then spawn builds a tree over the wire', async t => {
   const { cockpit, handler } = setup();
   await handler(
     JSON.stringify({
@@ -36,11 +35,11 @@ test('new-thread then spawn builds a tree over the wire', async () => {
     }),
   );
   const tree = cockpit.registry.tree();
-  assert.equal(tree.length, 1);
-  assert.equal(tree[0].children.length, 1);
+  t.is(tree.length, 1);
+  t.is(tree[0].children.length, 1);
 });
 
-test('a spawn that upgrades authority is rejected over the wire', async () => {
+test('a spawn that upgrades authority is rejected over the wire', async t => {
   const { cockpit, sent, handler } = setup();
   await handler(
     JSON.stringify({
@@ -56,11 +55,13 @@ test('a spawn that upgrades authority is rejected over the wire', async () => {
       caps: [{ name: 'git', kind: 'git', mode: 'readWrite' }],
     }),
   );
-  assert.ok(sent.some(m => m.type === 'error' && /cannot upgrade/.test(m.message)));
+  t.true(
+    sent.some(m => m.type === 'error' && /cannot upgrade/.test(m.message)),
+  );
 });
 
-test('invalid json yields an error reply, not a crash', async () => {
+test('invalid json yields an error reply, not a crash', async t => {
   const { sent, handler } = setup();
   await handler('{not json');
-  assert.ok(sent.some(m => m.type === 'error'));
+  t.true(sent.some(m => m.type === 'error'));
 });
