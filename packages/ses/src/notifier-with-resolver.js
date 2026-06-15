@@ -36,22 +36,21 @@ export const makeNotifierWithResolver = () => {
   let resolvedTargetNotify;
 
   const notify = update => {
-    if (resolvedTargetNotify !== undefined) {
+    if (resolvedTargetNotify === undefined) {
+      arrayPush(pendingUpdaters, update);
+    } else {
       resolvedTargetNotify(update);
-      return;
     }
-    arrayPush(pendingUpdaters, update);
   };
 
   const resolve = targetNotify => {
-    if (resolvedTargetNotify !== undefined) {
-      return;
+    if (resolvedTargetNotify === undefined) {
+      resolvedTargetNotify = targetNotify;
+      for (const pending of pendingUpdaters) {
+        targetNotify(pending);
+      }
+      pendingUpdaters.length = 0;
     }
-    resolvedTargetNotify = targetNotify;
-    for (const pending of pendingUpdaters) {
-      targetNotify(pending);
-    }
-    pendingUpdaters.length = 0;
   };
 
   return { notify, resolve };
