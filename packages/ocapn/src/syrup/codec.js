@@ -215,7 +215,7 @@ export const NumberPrefixCodec = makeCodec('NumberPrefix', {
 });
 
 /**
- * @typedef {SyrupCodec | string | function(any): SyrupCodec} ResolvableCodec
+ * @typedef {SyrupCodec | string | ((value: any) => SyrupCodec)} ResolvableCodec
  */
 
 /**
