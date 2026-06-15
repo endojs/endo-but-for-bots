@@ -1,5 +1,5 @@
 /* eslint-disable no-lone-blocks, no-empty-function */
-import { expectAssignable, expectType } from 'tsd';
+import { expectAssignable, expectNotAssignable, expectType } from 'tsd';
 import type { Passable, RemotableObject } from '@endo/pass-style';
 import { M } from '@endo/patterns';
 import type {
@@ -61,14 +61,19 @@ import { makeExo, defineExoClass, defineExoClassKit } from '../index.js';
   });
 }
 
-// .rest() negative: extra positional arg not in guard is caught via rest type
+// .rest() negative: extra positional arg not in guard is caught via rest type.
+// Fn is (n: bigint, ...rest: string[]) => boolean, so a candidate signature
+// whose third positional is `boolean` must not be assignable from Fn (the
+// rest element type is string, not boolean). Expressed via expectNotAssignable
+// rather than expectType + @ts-expect-error to dodge a tsgo (7.0.0-dev)
+// relater panic in compareSignaturesRelated -> getParameterNameAtPosition
+// when comparing a fixed-3-param target against a variadic 2-param source.
 {
   const mg = M.call(M.nat()).rest(M.string()).returns(M.boolean());
   type Fn = TypeFromMethodGuard<typeof mg>;
-  expectType<(n: bigint, goodRest: string, badRest: boolean) => boolean>(
-    // @ts-expect-error -- third positional must be string (from rest), not boolean
-    null as unknown as Fn,
-  );
+  expectNotAssignable<
+    (n: bigint, goodRest: string, badRest: boolean) => boolean
+  >(null as unknown as Fn);
 }
 
 // ===== M.callWhen: async method guards =====
