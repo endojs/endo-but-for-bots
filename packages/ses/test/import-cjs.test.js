@@ -26,6 +26,10 @@ function heuristicAnalysis(moduleSource) {
   };
 }
 
+// TODO(endojs/endo#3220): replace this in-test mock with the AST-based
+// `CjsModuleSource` that endojs/endo#3220 will export from
+// `@endo/module-source`. Until that lands, this heuristic-regex mock is the
+// only synchronous CommonJS module source available to the SES test suite.
 const CjsModuleSource = (moduleSource, moduleLocation) => {
   if (typeof moduleSource !== 'string') {
     throw TypeError(
