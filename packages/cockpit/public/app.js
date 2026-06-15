@@ -72,7 +72,9 @@ function renderThreadList() {
 function select(id) {
   selected = id;
   const t = threadsFlat.find(x => x.id === id);
-  $('pane-title').textContent = t ? `${t.id} · ${t.templateName} · ${t.status}` : id;
+  $('pane-title').textContent = t
+    ? `${t.id} · ${t.templateName} · ${t.status}`
+    : id;
   const box = $('transcript');
   box.innerHTML = '';
   for (const ev of transcripts[id] || []) appendEvent(ev);
@@ -93,16 +95,19 @@ function appendEvent(ev) {
     return;
   }
   streamLine = null;
-  const label = {
-    'turn-start': '» ',
-    'tool-call': '⚙ ',
-    'tool-result': '→ ',
-    spawn: '⑂ ',
-    error: '⚠ ',
-    'turn-end': '─',
-  }[ev.kind] || '';
+  const label =
+    {
+      'turn-start': '» ',
+      'tool-call': '⚙ ',
+      'tool-result': '→ ',
+      spawn: '⑂ ',
+      error: '⚠ ',
+      'turn-end': '─',
+    }[ev.kind] || '';
   if (ev.kind === 'turn-end') return appendLine('─────', 'sep');
-  const text = ev.message || (typeof ev.data === 'string' ? ev.data : JSON.stringify(ev.data));
+  const text =
+    ev.message ||
+    (typeof ev.data === 'string' ? ev.data : JSON.stringify(ev.data));
   appendLine(label + text, ev.kind);
 }
 
@@ -129,7 +134,10 @@ function renderSidebar() {
   }
   caps.innerHTML = '';
   if (!t.caps.length) {
-    caps.insertAdjacentHTML('beforeend', '<div class="cap muted">no capabilities</div>');
+    caps.insertAdjacentHTML(
+      'beforeend',
+      '<div class="cap muted">no capabilities</div>',
+    );
   }
   for (const c of t.caps) {
     const row = document.createElement('div');
@@ -138,7 +146,9 @@ function renderSidebar() {
     const btn = document.createElement('button');
     btn.textContent = 'revoke';
     btn.onclick = () =>
-      ws.send(JSON.stringify({ type: 'revoke-cap', threadId: t.id, capName: c.name }));
+      ws.send(
+        JSON.stringify({ type: 'revoke-cap', threadId: t.id, capName: c.name }),
+      );
     row.appendChild(btn);
     caps.appendChild(row);
   }
@@ -182,12 +192,18 @@ $('new-thread-form').addEventListener('submit', e => {
   if (e.submitter && e.submitter.value === 'cancel') return;
   const f = e.target;
   const caps = [];
-  if (f.git.checked) caps.push({ name: 'git', kind: 'git', mode: f.gitMode.value });
+  if (f.git.checked)
+    caps.push({ name: 'git', kind: 'git', mode: f.gitMode.value });
   if (f.workspace.checked)
-    caps.push({ name: 'workspace', kind: 'workspace', mode: f.workspaceMode.value });
+    caps.push({
+      name: 'workspace',
+      kind: 'workspace',
+      mode: f.workspaceMode.value,
+    });
   const parentId = f.parentId.value.trim();
   const prompt = f.prompt.value;
-  const templateName = f.templateName.value || (parentId ? 'delegate' : 'adhoc');
+  const templateName =
+    f.templateName.value || (parentId ? 'delegate' : 'adhoc');
   ws.send(
     JSON.stringify(
       parentId
@@ -202,14 +218,25 @@ $('new-thread-form').addEventListener('submit', e => {
 function spawnChild() {
   const t = threadsFlat.find(x => x.id === selected);
   if (!t) return;
-  const task = window.prompt(`spawn a child of ${t.id} (read-only subset of its caps). task:`, 'inspect the repo');
+  const task = window.prompt(
+    `spawn a child of ${t.id} (read-only subset of its caps). task:`,
+    'inspect the repo',
+  );
   if (task === null) return;
   const caps = t.caps.map(c => ({
     name: c.name,
     kind: c.kind,
     mode: c.mode === 'readWrite' ? 'readOnly' : c.mode,
   }));
-  ws.send(JSON.stringify({ type: 'spawn', parentId: t.id, templateName: 'delegate', caps, prompt: task }));
+  ws.send(
+    JSON.stringify({
+      type: 'spawn',
+      parentId: t.id,
+      templateName: 'delegate',
+      caps,
+      prompt: task,
+    }),
+  );
 }
 
 const spawnBtn = document.createElement('button');
@@ -223,7 +250,8 @@ const exportBtn = document.createElement('button');
 exportBtn.id = 'export-btn';
 exportBtn.textContent = '⇩ export';
 exportBtn.onclick = () =>
-  selected && ws.send(JSON.stringify({ type: 'export-thread', threadId: selected }));
+  selected &&
+  ws.send(JSON.stringify({ type: 'export-thread', threadId: selected }));
 spawnBtn.after(exportBtn);
 
 // M3: Doer / Builder / Steward planes.
@@ -240,9 +268,9 @@ document.querySelectorAll('#modes button').forEach(b => {
 function setMode(m) {
   mode = m;
   const doer = m === 'doer';
-  document.querySelectorAll('#modes button').forEach(b =>
-    b.classList.toggle('active', b.dataset.mode === m),
-  );
+  document
+    .querySelectorAll('#modes button')
+    .forEach(b => b.classList.toggle('active', b.dataset.mode === m));
   for (const el of [$('transcript'), $('steer-form'), spawnBtn, exportBtn]) {
     el.style.display = doer ? '' : 'none';
   }
@@ -263,14 +291,16 @@ function renderBuilder() {
   for (const t of templates) {
     const row = document.createElement('div');
     row.className = 'tpl-row';
-    const shape = t.capShape.map(c => `${c.name}:${c.mode || '—'}`).join(', ') || 'no caps';
+    const shape =
+      t.capShape.map(c => `${c.name}:${c.mode || '—'}`).join(', ') || 'no caps';
     row.innerHTML = `<b>${t.name}</b> <span class="muted">${shape}</span> <span class="muted">${t.model}</span>`;
     const use = document.createElement('button');
     use.textContent = 'use';
     use.onclick = () => useTemplate(t);
     const del = document.createElement('button');
     del.textContent = 'delete';
-    del.onclick = () => ws.send(JSON.stringify({ type: 'delete-template', name: t.name }));
+    del.onclick = () =>
+      ws.send(JSON.stringify({ type: 'delete-template', name: t.name }));
     row.append(use, del);
     builderPanel.appendChild(row);
   }
@@ -284,7 +314,12 @@ function useTemplate(t) {
   const task = window.prompt(`task for a ${t.name} thread:`, t.prompt);
   if (task === null) return;
   ws.send(
-    JSON.stringify({ type: 'new-thread', templateName: t.name, caps: t.capShape, prompt: task }),
+    JSON.stringify({
+      type: 'new-thread',
+      templateName: t.name,
+      caps: t.capShape,
+      prompt: task,
+    }),
   );
   setMode('doer');
 }
@@ -303,7 +338,12 @@ $('builder-form').addEventListener('submit', e => {
   ws.send(
     JSON.stringify({
       type: 'define-template',
-      template: { name: f.name.value, prompt: f.prompt.value, capShape, model: f.model.value },
+      template: {
+        name: f.name.value,
+        prompt: f.prompt.value,
+        capShape,
+        model: f.model.value,
+      },
     }),
   );
 });
@@ -339,7 +379,8 @@ function showTranscript(md) {
   if (!d) {
     d = document.createElement('dialog');
     d.id = 'transcript-dialog';
-    d.innerHTML = '<pre id="transcript-md"></pre><menu><button id="tx-close">close</button></menu>';
+    d.innerHTML =
+      '<pre id="transcript-md"></pre><menu><button id="tx-close">close</button></menu>';
     document.body.appendChild(d);
     d.querySelector('#tx-close').onclick = () => d.close();
   }

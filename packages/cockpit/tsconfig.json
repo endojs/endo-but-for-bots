@@ -1,13 +1,12 @@
 {
+  "extends": "../../tsconfig.eslint-base.json",
   "compilerOptions": {
-    "target": "ESNext",
-    "module": "NodeNext",
-    "moduleResolution": "NodeNext",
-    "allowJs": true,
-    "checkJs": true,
-    "noEmit": true,
-    "strict": true,
-    "skipLibCheck": true
+    "skipLibCheck": true,
+    "noEmit": true
   },
-  "include": ["src", "bin", "test"]
+  "include": [
+    "src/**/*.js",
+    "bin/**/*.js",
+    "test/**/*.js"
+  ]
 }

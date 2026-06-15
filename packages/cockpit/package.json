@@ -5,9 +5,7 @@
   "description": "Garden cockpit — a harness-host web application that operates the garden under capability-confined agent threads",
   "type": "module",
   "main": "./src/index.js",
-  "bin": {
-    "cockpit": "./bin/cockpit.js"
-  },
+  "bin": "./bin/cockpit.js",
   "exports": {
     ".": "./src/index.js",
     "./backend/caps": "./src/backend/caps.js",
@@ -18,15 +16,26 @@
   },
   "scripts": {
     "build": "exit 0",
-    "test": "node --test",
+    "lint": "yarn lint:types && yarn lint:eslint",
+    "lint-fix": "yarn lint:eslint --fix && yarn lint:types",
+    "lint:eslint": "eslint --ignore-pattern public '**/*.js'",
+    "lint:types": "tsc",
     "start": "node ./bin/cockpit.js",
-    "lint": "exit 0",
-    "lint:types": "exit 0"
+    "test": "ava"
   },
-  "dependencies": {},
+  "dependencies": {
+    "@endo/init": "workspace:^"
+  },
   "optionalDependencies": {
     "@endo/agentry": "workspace:^",
     "@endo/far": "workspace:^"
+  },
+  "devDependencies": {
+    "@endo/lockdown": "workspace:^",
+    "@endo/ses-ava": "workspace:^",
+    "ava": "catalog:dev",
+    "eslint": "catalog:dev",
+    "typescript": "catalog:dev"
   },
   "files": [
     "bin",
@@ -34,5 +43,16 @@
     "src"
   ],
   "author": "Endo contributors",
-  "license": "Apache-2.0"
+  "license": "Apache-2.0",
+  "eslintConfig": {
+    "extends": [
+      "plugin:@endo/internal"
+    ]
+  },
+  "ava": {
+    "files": [
+      "test/**/*.test.*"
+    ],
+    "timeout": "2m"
+  }
 }

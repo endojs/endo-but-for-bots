@@ -1,9 +1,12 @@
 #!/usr/bin/env node
 // @ts-check
+/* global process */
 //
 // Start the garden cockpit harness-host. Defaults to the mock engine, so it
 // runs with no LLM and no monorepo install: open the printed URL and ask the
 // tracer thread "what branch?".
+
+import '@endo/init';
 
 import { makeCockpit, buildMockCaps } from '../src/index.js';
 import { makeCockpitServer } from '../src/backend/server.js';
