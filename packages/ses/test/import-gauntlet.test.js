@@ -248,8 +248,9 @@ test('export name as default', async t => {
 // populated star-reexporter's notifier for `y`. The same fixture shape is
 // also exercised through compartment-mapper's scaffold and pinned to
 // Node.js's reference behavior; see
-// packages/compartment-mapper/test/cycle-rename.test.js and
-// packages/compartment-mapper/test/cycle-rename-node-parity.test.js.
+// packages/compartment-mapper/test/cycle-rename.test.js (one module
+// registering both the SES treatment and the Node.js parity treatment
+// back-to-back).
 test('cyclic star export with renaming reexport (issue #59)', async t => {
   t.plan(3);
 
@@ -295,8 +296,9 @@ test('cyclic star export with renaming reexport (issue #59)', async t => {
 // this shape, which is the parity property the test pins. The same fixture
 // shape is also exercised through compartment-mapper's scaffold and pinned
 // to Node.js's reference behavior with a shared assertion module; see
-// packages/compartment-mapper/test/cycle-rename-unused.test.js and
-// packages/compartment-mapper/test/cycle-rename-unused-node-parity.test.js.
+// packages/compartment-mapper/test/cycle-rename-unused.test.js (one module
+// registering both the SES treatment and the Node.js parity treatment
+// back-to-back).
 test('cyclic star export with renaming reexport, unused live binding', async t => {
   t.plan(3);
 

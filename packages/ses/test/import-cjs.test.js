@@ -685,12 +685,14 @@ test('importNow handles a cycle in CommonJS modules', t => {
 //
 // Node.js rejects this ESM-in-CJS-cycle topology with ERR_REQUIRE_CYCLE_MODULE;
 // the divergence is verified programmatically in
-// packages/compartment-mapper/test/cycle-esm-in-cjs.test.js (SES side)
-// together with packages/compartment-mapper/test/cycle-esm-in-cjs-node-parity.test.js
-// (Node side). For the parity case where Node and SES agree on a
-// pure-CommonJS cyclic reexporter, see
-// packages/compartment-mapper/test/cycle-cjs-reexporter.test.js together with
-// packages/compartment-mapper/test/cycle-cjs-reexporter-node-parity.test.js.
+// packages/compartment-mapper/test/cycle-esm-in-cjs.test.js (one module
+// registering both the SES treatment, where the topology loads, and the
+// Node.js parity treatment, which spawns Node and asserts the
+// ERR_REQUIRE_CYCLE_MODULE rejection). For the parity case where Node and
+// SES agree on a pure-CommonJS cyclic reexporter, see
+// packages/compartment-mapper/test/cycle-cjs-reexporter.test.js (one module
+// registering both the SES treatment and the Node.js parity treatment
+// back-to-back).
 test('cyclic star-export with CommonJS reexporter', async t => {
   t.plan(3);
 

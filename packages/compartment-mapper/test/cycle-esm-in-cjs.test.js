@@ -1,12 +1,11 @@
 /**
- * Cyclic ESM-in-CommonJS divergence scenario exercised through the
- * compartment-mapper test scaffold. SES allows the topology that Node.js
- * rejects with ERR_REQUIRE_CYCLE_MODULE; this test pins SES's actual
- * behavior so the divergence is verified programmatically rather than
- * documented narratively. The companion Node.js parity test in
- * cycle-esm-in-cjs-node-parity.test.js verifies the Node.js side of the
- * divergence by spawning Node on the same fixture and asserting the error
- * code.
+ * Cyclic ESM-in-CommonJS divergence scenario exercised twice in this module,
+ * back-to-back: once through the compartment-mapper test scaffold (the SES
+ * treatment, where the topology loads and `main.bridgeValue` resolves to 42)
+ * and once through plain Node.js (the parity treatment, where Node rejects
+ * the topology with ERR_REQUIRE_CYCLE_MODULE). The paired registration
+ * verifies the divergence programmatically rather than narratively: SES
+ * allows the topology that Node rejects.
  *
  * Topology (under fixtures-cycle-esm-in-cjs/node_modules/app/):
  *
@@ -28,12 +27,16 @@
 
 import 'ses';
 import test from 'ava';
+import process from 'process';
+import { spawnSync } from 'child_process';
+import { fileURLToPath } from 'url';
 import { scaffold } from './scaffold.js';
 
-const fixture = new URL(
+const fixtureUrl = new URL(
   'fixtures-cycle-esm-in-cjs/node_modules/app/main.mjs',
   import.meta.url,
-).toString();
+);
+const fixture = fixtureUrl.toString();
 
 const fixtureAssertionCount = 1;
 
@@ -45,10 +48,36 @@ const assertFixture = (t, { namespace }) => {
   t.is(namespace.bridgeValue, 42);
 };
 
+// SES treatment: load through the compartment-mapper scaffold. SES allows
+// the topology Node rejects and exposes the cycle's snapshot / live-binding
+// shape on the namespace.
 scaffold(
-  'cycle-esm-in-cjs (issue #59 follow-up: divergence)',
+  'cycle-esm-in-cjs divergence (ses)',
   test,
   fixture,
   assertFixture,
   fixtureAssertionCount,
 );
+
+// Node.js parity treatment: spawn a fresh Node process to execute the same
+// fixture. The expected outcome is a non-zero exit with
+// ERR_REQUIRE_CYCLE_MODULE printed on stderr. Spawning isolates the failure
+// from the test runner's own module graph and keeps the rest of the suite
+// running. Together with the SES treatment above, this pins the divergence
+// programmatically: SES allows what Node rejects.
+test('cycle-esm-in-cjs divergence (node parity)', t => {
+  t.plan(2);
+  const result = spawnSync(process.execPath, [fileURLToPath(fixtureUrl)], {
+    encoding: 'utf8',
+  });
+  t.not(
+    result.status,
+    0,
+    `Expected Node to reject ESM-in-CJS-cycle, got exit ${result.status}`,
+  );
+  t.regex(
+    result.stderr,
+    /ERR_REQUIRE_CYCLE_MODULE/,
+    `Expected ERR_REQUIRE_CYCLE_MODULE in stderr, got:\n${result.stderr}`,
+  );
+});

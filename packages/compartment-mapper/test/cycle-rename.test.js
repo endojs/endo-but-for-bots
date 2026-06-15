@@ -1,10 +1,12 @@
 /**
  * Regression for endojs/endo#59 (cyclic star export with renaming reexport)
- * exercised through the compartment-mapper test scaffold. The companion
- * Node.js parity test in cycle-rename-node-parity.test.js imports the same
- * fixture under Node.js and asserts the same expected values; together the
- * two tests tease the linker behavior out of SES and pin it to Node.js's
- * reference behavior.
+ * exercised twice in this module, back-to-back: once through the
+ * compartment-mapper test scaffold (the SES treatment) and once through
+ * plain Node.js (the parity treatment). Both treatments target the same
+ * three-module fixture and assert the same expected values through the
+ * shared assertion module. The paired registration makes the shared
+ * coverage legible at a glance and pins the compartment mapper's linker
+ * behavior to Node.js's reference behavior.
  */
 
 /** @import {ExecutionContext} from 'ava' */
@@ -29,10 +31,21 @@ const assertFixture = (t, { namespace }) => {
   assertCycleRename(t, namespace);
 };
 
+// SES treatment: load through the compartment-mapper scaffold, which
+// exercises loadLocation, importLocation, and the archive paths.
 scaffold(
-  'cycle-rename (issue #59)',
+  'cycle-rename (ses)',
   test,
   fixture,
   assertFixture,
   fixtureAssertionCount,
 );
+
+// Node.js parity treatment: dynamically import the same `main.js` directly
+// under plain Node.js (no SES, no compartment mapper) and assert the same
+// expected values.
+test('cycle-rename (node parity)', async t => {
+  t.plan(3);
+  const namespace = await import(fixture);
+  assertCycleRename(t, namespace);
+});
