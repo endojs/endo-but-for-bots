@@ -9,6 +9,8 @@ let selected = null;
 let mode = 'doer';
 let templates = [];
 let o11ySummary = null;
+let daemonOnline = false;
+let profiles = []; // masked: { name, provider, baseUrl }
 const transcripts = {}; // threadId -> [events]
 
 ws.onopen = () => {
@@ -37,6 +39,14 @@ function handle(m) {
     renderGlobalO11y();
   } else if (m.type === 'steward') {
     if (mode === 'steward') renderSteward(m.view);
+  } else if (m.type === 'daemon') {
+    daemonOnline = !!m.online;
+    renderDaemon(m.sockPath);
+    syncAgentryFields();
+  } else if (m.type === 'profiles') {
+    profiles = m.list || [];
+    renderProfileOptions();
+    if (mode === 'builder') renderBuilder();
   } else if (m.type === 'transcript') {
     showTranscript(m.markdown);
   } else if (m.type === 'error') {
@@ -187,7 +197,10 @@ $('steer-form').onsubmit = e => {
 
 // M2: the new-thread form. With a parent id it spawns via delegation; without,
 // it creates a root thread. Caps are chosen by checkbox + mode.
-$('new-thread-btn').onclick = () => $('new-thread-dialog').showModal();
+$('new-thread-btn').onclick = () => {
+  syncAgentryFields();
+  $('new-thread-dialog').showModal();
+};
 $('new-thread-form').addEventListener('submit', e => {
   if (e.submitter && e.submitter.value === 'cancel') return;
   const f = e.target;
@@ -204,11 +217,23 @@ $('new-thread-form').addEventListener('submit', e => {
   const prompt = f.prompt.value;
   const templateName =
     f.templateName.value || (parentId ? 'delegate' : 'adhoc');
+  // When the daemon is online and a profile is chosen, build a real agentry
+  // thread; otherwise the mock path. The agentry fields are inert offline.
+  const profileName = daemonOnline ? f.profileName.value || '' : '';
+  const agentry = profileName
+    ? {
+        profileName,
+        model: f.model.value || '',
+        workspacePetName: f.workspacePetName.value || undefined,
+        gitPetName: f.gitPetName.value || undefined,
+        gitMode: f.agentryGitMode.value || undefined,
+      }
+    : {};
   ws.send(
     JSON.stringify(
       parentId
-        ? { type: 'spawn', parentId, templateName, caps, prompt }
-        : { type: 'new-thread', templateName, caps, prompt },
+        ? { type: 'spawn', parentId, templateName, caps, prompt, ...agentry }
+        : { type: 'new-thread', templateName, caps, prompt, ...agentry },
     ),
   );
 });
@@ -285,9 +310,102 @@ function setMode(m) {
   if (m === 'steward') ws.send(JSON.stringify({ type: 'steward' }));
 }
 
-// Builder Mode (the define plane): author templates.
+// Header daemon indicator.
+function renderDaemon(sockPath) {
+  const el = $('daemon');
+  if (!el) return;
+  el.className = `daemon ${daemonOnline ? 'online' : 'offline'}`;
+  el.textContent = daemonOnline ? '● online' : '● offline';
+  el.title = daemonOnline
+    ? `daemon online${sockPath ? ` — ${sockPath}` : ''}`
+    : 'no daemon — running on the mock engine (OFFLINE)';
+}
+
+// Enable the agentry new-thread fields only when a daemon is online.
+function syncAgentryFields() {
+  const fs = $('agentry-fields');
+  if (fs) fs.disabled = !daemonOnline;
+}
+
+// Populate the new-thread provider-profile <select> with the masked profiles.
+function renderProfileOptions() {
+  const sel = document.querySelector(
+    '#new-thread-form select[name=profileName]',
+  );
+  if (!sel) return;
+  const current = sel.value;
+  sel.innerHTML = '<option value="">— mock engine —</option>';
+  for (const p of profiles) {
+    const opt = document.createElement('option');
+    opt.value = p.name;
+    opt.textContent = `${p.name} (${p.provider})`;
+    sel.appendChild(opt);
+  }
+  sel.value = current;
+}
+
+// Builder Mode — Provider profiles section. Resets the panel, then lists the
+// MASKED profiles (name / provider / baseUrl only — the apiKey never reaches
+// the UI) and offers an add form. Profiles need a daemon (they live in the
+// petstore), so the add form is gated on daemonOnline.
+function renderProviderProfiles() {
+  builderPanel.innerHTML = '<h2>Provider profiles</h2>';
+  if (!daemonOnline) {
+    builderPanel.insertAdjacentHTML(
+      'beforeend',
+      '<p class="muted">offline — connect a daemon to store provider profiles</p>',
+    );
+    return;
+  }
+  if (!profiles.length) {
+    builderPanel.insertAdjacentHTML(
+      'beforeend',
+      '<p class="muted">no profiles yet</p>',
+    );
+  }
+  for (const p of profiles) {
+    const row = document.createElement('div');
+    row.className = 'tpl-row';
+    row.innerHTML =
+      `<b>${p.name}</b> <span class="muted">${p.provider}</span> ` +
+      `<span class="muted">${p.baseUrl || ''}</span>`;
+    builderPanel.appendChild(row);
+  }
+  const add = document.createElement('div');
+  add.className = 'grant';
+  add.innerHTML =
+    '<input id="pf-name" placeholder="name" />' +
+    '<input id="pf-provider" placeholder="provider" />' +
+    '<input id="pf-apikey" type="password" placeholder="api key" />' +
+    '<input id="pf-baseurl" placeholder="base url (optional)" />' +
+    '<button id="pf-add">+ add profile</button>';
+  builderPanel.appendChild(add);
+  $('pf-add').onclick = () => {
+    const name = $('pf-name').value.trim();
+    const provider = $('pf-provider').value.trim();
+    const apiKey = $('pf-apikey').value;
+    const baseUrl = $('pf-baseurl').value.trim();
+    if (!name || !provider || !apiKey) return;
+    ws.send(
+      JSON.stringify({
+        type: 'define-profile',
+        name,
+        provider,
+        apiKey,
+        baseUrl: baseUrl || undefined,
+      }),
+    );
+    $('pf-name').value = '';
+    $('pf-provider').value = '';
+    $('pf-apikey').value = '';
+    $('pf-baseurl').value = '';
+  };
+}
+
+// Builder Mode (the define plane): author templates + provider profiles.
 function renderBuilder() {
-  builderPanel.innerHTML = '<h2>Templates</h2>';
+  renderProviderProfiles();
+  builderPanel.insertAdjacentHTML('beforeend', '<h2>Templates</h2>');
   for (const t of templates) {
     const row = document.createElement('div');
     row.className = 'tpl-row';

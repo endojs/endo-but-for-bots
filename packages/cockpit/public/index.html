@@ -14,6 +14,7 @@
         <button data-mode="builder">Builder</button>
         <button data-mode="steward">Steward</button>
       </nav>
+      <span id="daemon" class="daemon offline" title="daemon connection status">● offline</span>
       <span id="status">connecting…</span>
     </header>
 
@@ -47,7 +48,7 @@
         <label>template <input name="templateName" value="adhoc" /></label>
         <label>parent (optional) <input name="parentId" placeholder="t1" /></label>
         <fieldset>
-          <legend>capabilities</legend>
+          <legend>capabilities (mock engine)</legend>
           <label><input type="checkbox" name="git" checked /> git</label>
           <select name="gitMode">
             <option value="readOnly">readOnly</option>
@@ -58,6 +59,26 @@
             <option value="readOnly">readOnly</option>
             <option value="readWrite">readWrite</option>
           </select>
+        </fieldset>
+        <fieldset id="agentry-fields" disabled>
+          <legend>agentry engine (daemon online)</legend>
+          <label>provider profile
+            <select name="profileName"><option value="">— mock engine —</option></select>
+          </label>
+          <label>model <input name="model" placeholder="gpt-4o" /></label>
+          <label>workspace pet name <input name="workspacePetName" placeholder="workspace" /></label>
+          <label>git pet name <input name="gitPetName" placeholder="git" /></label>
+          <label>git mode
+            <select name="agentryGitMode">
+              <option value="readWrite">readWrite</option>
+              <option value="readOnly">readOnly</option>
+            </select>
+          </label>
+          <p class="muted" title="live-revoke applies at (re-)creation, not mid-run">
+            Note: caps are bound into the agent Compartment at creation, so a
+            live cap revoke takes effect when the thread is re-created, not
+            mid-run.
+          </p>
         </fieldset>
         <label>task <input name="prompt" placeholder="what branch?" /></label>
         <menu>
