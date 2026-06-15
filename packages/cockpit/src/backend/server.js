@@ -36,6 +36,48 @@ const stewardMsg = cockpit => ({
   type: 'steward',
   view: cockpit.steward.view(),
 });
+const daemonMsg = cockpit => ({
+  type: 'daemon',
+  online: cockpit.daemon.online,
+  sockPath: cockpit.daemon.sockPath,
+});
+
+/**
+ * Build a `profiles` message (MASKED views only — never the apiKey).
+ *
+ * @param {ReturnType<import('../index.js').makeCockpit>} cockpit
+ */
+const profilesMsg = async cockpit => {
+  const list = await cockpit.profiles.list();
+  return { type: 'profiles', list };
+};
+
+/**
+ * Derive the agentry meta from a wire message, or undefined for a mock thread.
+ * A thread is agentry only when the daemon is online AND a profileName is given.
+ *
+ * @param {ReturnType<import('../index.js').makeCockpit>} cockpit
+ * @param {Record<string, unknown>} msg
+ * @returns {import('./thread.js').AgentryMeta | undefined}
+ */
+const agentryMetaFrom = (cockpit, msg) => {
+  if (!cockpit.daemon.online || typeof msg.profileName !== 'string') {
+    return undefined;
+  }
+  return harden({
+    profileName: msg.profileName,
+    model: typeof msg.model === 'string' ? msg.model : '',
+    workspacePetName:
+      typeof msg.workspacePetName === 'string'
+        ? msg.workspacePetName
+        : undefined,
+    gitPetName: typeof msg.gitPetName === 'string' ? msg.gitPetName : undefined,
+    gitMode:
+      msg.gitMode === 'readOnly' || msg.gitMode === 'readWrite'
+        ? msg.gitMode
+        : undefined,
+  });
+};
 
 /**
  * Route one parsed client message. `send` replies to the sender; `broadcast`
@@ -66,6 +108,8 @@ export const makeMessageHandler = (cockpit, send, broadcast) => async raw => {
         send(templatesMsg(cockpit));
         send(o11yMsg(cockpit));
         send(stewardMsg(cockpit));
+        send(daemonMsg(cockpit));
+        send(await profilesMsg(cockpit));
         break;
       case 'steer': {
         const thread = cockpit.registry.get(msg.threadId);
@@ -75,10 +119,19 @@ export const makeMessageHandler = (cockpit, send, broadcast) => async raw => {
         break;
       }
       case 'new-thread': {
-        const thread = cockpit.registry.create({
-          templateName: msg.templateName || 'adhoc',
-          caps: buildMockCaps(msg.caps || []),
-        });
+        // When the daemon is online and the message names a provider profile,
+        // build a real agentry thread; otherwise the mock path (the default).
+        const agentry = agentryMetaFrom(cockpit, msg);
+        const thread = agentry
+          ? await cockpit.registry.createAgentry({
+              templateName: msg.templateName || 'adhoc',
+              caps: buildMockCaps(msg.caps || []),
+              agentry,
+            })
+          : cockpit.registry.create({
+              templateName: msg.templateName || 'adhoc',
+              caps: buildMockCaps(msg.caps || []),
+            });
         pushState();
         if (msg.prompt) thread.prompt(String(msg.prompt));
         break;
@@ -90,10 +143,29 @@ export const makeMessageHandler = (cockpit, send, broadcast) => async raw => {
           templateName: msg.templateName || 'delegate',
           caps: buildMockCaps(msg.caps || []),
           prompt: msg.prompt ? String(msg.prompt) : undefined,
+          agentry: agentryMetaFrom(cockpit, msg),
         });
         pushState();
         break;
       }
+      case 'list-profiles':
+        send(await profilesMsg(cockpit));
+        break;
+      case 'define-profile': {
+        // Stores the (provider, apiKey, baseUrl) tuple in the daemon petstore.
+        // The reply and broadcast carry MASKED views only — never the apiKey.
+        await cockpit.profiles.define({
+          name: String(msg.name || ''),
+          provider: String(msg.provider || ''),
+          apiKey: String(msg.apiKey || ''),
+          baseUrl: msg.baseUrl ? String(msg.baseUrl) : undefined,
+        });
+        broadcast(await profilesMsg(cockpit));
+        break;
+      }
+      case 'daemon':
+        send(daemonMsg(cockpit));
+        break;
       case 'revoke-cap': {
         // The thesis in one gesture: drop a cap and the agent can no longer
         // reach it. Propagates down the delegated lineage.

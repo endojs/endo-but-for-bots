@@ -7,6 +7,7 @@
 // next turn.
 
 import { capView } from './caps.js';
+import { makeAgentryEngineFromRuntime } from './engine.js';
 
 const TRANSCRIPT_CAP = 500;
 const identity = harden(x => x);
@@ -18,14 +19,34 @@ const identity = harden(x => x);
  */
 
 /**
+ * @typedef {object} AgentryMeta
+ * @property {string} profileName    the provider profile this thread resolves
+ * @property {string} model          the model name
+ * @property {string} [workspacePetName]
+ * @property {string} [gitPetName]
+ * @property {'readOnly' | 'readWrite'} [gitMode]
+ */
+
+/**
+ * The engine is supplied either as a synchronous `engineFactory(ctx)` (the mock
+ * path, used by every existing caller and test) or as an already-prepared
+ * `agentryRuntime` (the agentry path, where the registry builds the runtime
+ * asynchronously before constructing the thread; the thread then wraps it with
+ * its own `emit`). Exactly one of the two is required.
+ *
  * @param {object} options
  * @param {string} options.id
  * @param {string | null} options.parentId
  * @param {string} options.templateName
  * @param {Cap[]} options.caps
- * @param {(ctx: EngineContext) => Engine} options.engineFactory
+ * @param {(ctx: EngineContext) => Engine} [options.engineFactory]
+ * @param {import('@endo/agentry/code-mode-runtime').CodeModeRuntime} [options.agentryRuntime]
+ *   a pre-built code-mode runtime (agentry path)
  * @param {(threadId: string, event: import('./engine.js').ThreadEvent) => void} [options.onEvent]
  * @param {EngineContext['delegate']} [options.delegate]
+ * @param {AgentryMeta} [options.agentry]   when present, this is a real
+ *   (agentry) thread; caps are bound into the agent Compartment at make() time,
+ *   so a live cap revoke applies at (re-)creation, not mid-run.
  */
 export const makeThread = ({
   id,
@@ -33,8 +54,10 @@ export const makeThread = ({
   templateName,
   caps,
   engineFactory,
+  agentryRuntime,
   onEvent = () => {},
   delegate,
+  agentry,
 }) => {
   /** @type {Map<string, Cap>} */
   const capMap = new Map(caps.map(c => [c.name, c]));
@@ -66,7 +89,19 @@ export const makeThread = ({
     onEvent(id, event);
   };
 
-  const engine = engineFactory({ getScope, emit, delegate });
+  // The mock path supplies a synchronous factory; the agentry path supplies an
+  // already-prepared runtime that we wrap here with this thread's `emit`.
+  const ctx = { getScope, emit, delegate };
+  let engine;
+  if (agentryRuntime !== undefined) {
+    engine = makeAgentryEngineFromRuntime(agentryRuntime, ctx);
+  } else if (engineFactory !== undefined) {
+    engine = engineFactory(ctx);
+  } else {
+    throw new Error(
+      'makeThread requires either engineFactory or agentryRuntime',
+    );
+  }
 
   /** @param {string} text */
   const prompt = async text => {
@@ -80,6 +115,7 @@ export const makeThread = ({
     parentId,
     templateName,
     engineKind: engine.kind,
+    agentry: agentry ? harden({ ...agentry }) : undefined,
     get childIds() {
       return harden([...childIds]);
     },
@@ -113,6 +149,7 @@ export const makeThread = ({
       parentId,
       templateName,
       engineKind: engine.kind,
+      agentry: agentry ? { ...agentry } : undefined,
       status,
       caps: [...capMap.values()].map(capView),
       childIds: [...childIds],

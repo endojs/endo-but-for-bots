@@ -168,18 +168,126 @@ export const makeMockWorkspace = ({ mode = READ_WRITE } = {}) => {
 harden(makeMockWorkspace);
 
 /**
- * Lazily wrap `@endo/agentry`'s real code-mode runtime. Imported only when a
- * provider is configured; throws a clear error if the monorepo dependency is
- * not installed. Wiring is intentionally thin — the runtime owns the loop, the
- * cockpit owns the thread/stream/concurrency (design option (a)).
+ * @typedef {object} AgentryProfile
+ * @property {string} provider
+ * @property {string} apiKey
+ * @property {string} [baseUrl]
  *
- * @param {EngineContext & { config?: object, powers?: unknown }} ctx
- * @returns {Promise<Engine>}
+ * @typedef {object} AgentryPowerSpec
+ * @property {string} [workspacePetName]
+ * @property {string} [gitPetName]
+ * @property {'readOnly' | 'readWrite'} [gitMode]
+ *
+ * @typedef {object} AgentryConfigMapping
+ * @property {{ provider: string, model: string, baseUrl?: string }} configModel
+ * @property {{ workspacePetName?: string, gitPetName?: string, gitMode?: string }} configPowers
+ * @property {() => string} getApiKey
  */
-export const makeAgentryEngine = async ctx => {
+
+/**
+ * Pure mapping from a provider profile + model name + power pet names to the
+ * pieces an agentry code-mode runtime needs: a `config.model` record
+ * ({ provider, model, baseUrl }), a `config.powers` record (pet names + git
+ * mode), and a `getApiKey` callback. The apiKey is deliberately kept OUT of the
+ * returned `configModel` record — `code-mode-runtime`'s `getApiKey` callback is
+ * the highest-precedence key source, so the secret flows through the callback,
+ * never through the config that ends up in prompts or tool schemas.
+ *
+ * @param {object} args
+ * @param {AgentryProfile} args.profile
+ * @param {string} args.model            model name (e.g. 'gpt-4o', 'qwen3')
+ * @param {AgentryPowerSpec} [args.powers]
+ * @returns {AgentryConfigMapping}
+ */
+export const mapProfileToAgentryConfig = ({ profile, model, powers = {} }) => {
+  if (!profile || typeof profile.provider !== 'string') {
+    throw new Error('agentry config requires a profile with a provider');
+  }
+  if (typeof model !== 'string' || model.length === 0) {
+    throw new Error('agentry config requires a model name');
+  }
+  const { provider, apiKey, baseUrl } = profile;
+  const configModel = harden({
+    provider,
+    model,
+    ...(baseUrl ? { baseUrl } : {}),
+  });
+  const configPowers = harden({
+    workspacePetName: powers.workspacePetName || 'workspace',
+    gitPetName: powers.gitPetName || 'git',
+    gitMode: powers.gitMode || 'readWrite',
+  });
+  return harden({
+    configModel,
+    configPowers,
+    getApiKey: () => apiKey,
+  });
+};
+harden(mapProfileToAgentryConfig);
+
+/**
+ * Best-effort: turn the agent's accumulated transcript messages into cockpit
+ * thread events. The code-mode runtime is non-streaming at this layer, so we
+ * diff `state.messages` after the turn settles and emit a token / tool-call /
+ * tool-result event per new message. This is "non-streaming but real" — the v1
+ * acceptable mode; a future revision can wire pi's stream hook for true deltas.
+ *
+ * @param {ReadonlyArray<unknown>} messages
+ * @param {number} fromIndex
+ * @param {(event: ThreadEvent) => void} emit
+ * @returns {number} a token count derived from message usage
+ */
+const emitTranscriptDelta = (messages, fromIndex, emit) => {
+  let tokens = 0;
+  for (let i = fromIndex; i < messages.length; i += 1) {
+    const msg = /** @type {Record<string, unknown>} */ (messages[i]);
+    const role = msg.role;
+    const usage = /** @type {{ totalTokens?: number }} */ (msg.usage);
+    if (usage && typeof usage.totalTokens === 'number') {
+      tokens += usage.totalTokens;
+    }
+    const content = Array.isArray(msg.content) ? msg.content : [];
+    for (const part of content) {
+      const p = /** @type {Record<string, unknown>} */ (part);
+      if (p.type === 'text' && typeof p.text === 'string') {
+        emit({ kind: 'token', token: p.text });
+      } else if (p.type === 'toolCall') {
+        emit({
+          kind: 'tool-call',
+          data: `${p.name}(${JSON.stringify(p.arguments)})`,
+        });
+      } else if (p.type === 'toolResult') {
+        emit({ kind: 'tool-result', data: p.result ?? p.content });
+      }
+    }
+    if (role === 'tool') {
+      emit({ kind: 'tool-result', data: msg.content });
+    }
+  }
+  return tokens;
+};
+
+/**
+ * Lazily build `@endo/agentry`'s real code-mode runtime — the powerful,
+ * async first half of constructing the cockpit's real engine. Imported only
+ * when a daemon is online and an agentry thread is built; throws a clear error
+ * if the monorepo dependency is missing.
+ *
+ * The runtime is built with `defineCodeModeAgent({ config }).make({ powers,
+ * getApiKey })`. `getApiKey` (the profile's apiKey) is the highest-precedence
+ * key source, so the secret never enters the config.
+ *
+ * @param {object} args
+ * @param {object} args.config   normalized `{ model, powers }` runtime config
+ * @param {unknown} args.powers  live daemon host powers (pet-name lookup root)
+ * @param {(provider: string) => string | Promise<string | undefined> | undefined} [args.getApiKey]
+ * @returns {Promise<import('@endo/agentry/code-mode-runtime').CodeModeRuntime>}
+ */
+export const prepareAgentryRuntime = async ({ config, powers, getApiKey }) => {
   let agentry;
+  await null;
   try {
-    // eslint-disable-next-line
+    // eslint-disable-next-line import/no-extraneous-dependencies
     agentry = await import('@endo/agentry/code-mode-runtime');
   } catch (err) {
     throw new Error(
@@ -187,20 +295,73 @@ export const makeAgentryEngine = async ctx => {
         `provider, or use the mock engine. (${err instanceof Error ? err.message : err})`,
     );
   }
+  return agentry.defineCodeModeAgent({ config }).make({ powers, getApiKey });
+};
+harden(prepareAgentryRuntime);
+
+/**
+ * Wrap an already-built code-mode runtime as a cockpit Engine — the synchronous
+ * second half. Wiring is intentionally thin: the runtime owns the loop, the
+ * cockpit owns the thread/stream/concurrency (design option (a)).
+ *
+ * LIVE-REVOKE LIMITATION: the workspace/git capabilities are resolved by pet
+ * name and bound into the agent's Compartment at the runtime's make() time.
+ * Revoking a cap from a *running* agentry thread therefore cannot retract it
+ * mid-turn — the Compartment already closed over the live object. Selection-time
+ * enforcement still holds (the runtime only resolves the caps the thread was
+ * created with), so live-revoke takes effect at (re-)creation, not mid-run. The
+ * mock engine, which re-reads `getScope()` every turn, does honor mid-run
+ * revoke; that difference is intrinsic to a real Compartment-bound runtime.
+ *
+ * @param {import('@endo/agentry/code-mode-runtime').CodeModeRuntime} runtime
+ * @param {EngineContext} ctx
+ * @returns {Engine}
+ */
+export const makeAgentryEngineFromRuntime = (runtime, ctx) => {
   const { emit } = ctx;
-  const runtime = agentry.makeCodeModeRuntime({
-    config: ctx.config,
-    powers: ctx.powers,
-  });
   /** @type {Engine['prompt']} */
   const prompt = async text => {
     emit({ kind: 'turn-start', data: text });
-    await runtime.agent.prompt(text);
-    await runtime.agent.waitForIdle();
-    emit({ kind: 'turn-end', data: 'ok' });
-    const tokens = runtime.agent.state?.messages?.length ?? 0;
-    return { status: 'ok', result: 'see transcript', tokens };
+    const before = runtime.agent.state?.messages?.length ?? 0;
+    await null;
+    try {
+      await runtime.agent.prompt(text);
+      await runtime.agent.waitForIdle();
+      const messages = runtime.agent.state?.messages ?? [];
+      const tokens = emitTranscriptDelta(messages, before, emit);
+      emit({ kind: 'turn-end', data: 'ok' });
+      return { status: 'ok', result: 'see transcript', tokens };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      emit({ kind: 'error', message });
+      emit({ kind: 'turn-end', data: 'error' });
+      return { status: 'error', error: message, tokens: 0 };
+    }
   };
   return harden({ kind: 'agentry', prompt });
+};
+harden(makeAgentryEngineFromRuntime);
+
+/**
+ * Lazily wrap `@endo/agentry`'s real code-mode runtime in one async call —
+ * convenience over `prepareAgentryRuntime` + `makeAgentryEngineFromRuntime` for
+ * callers that already hold the emit/ctx (e.g. a future synchronous-async
+ * thread factory). The registry prefers the two-stage form so thread
+ * construction stays synchronous on the mock path.
+ *
+ * @param {EngineContext & {
+ *   config?: object,
+ *   powers?: unknown,
+ *   getApiKey?: (provider: string) => string | Promise<string | undefined> | undefined,
+ * }} ctx
+ * @returns {Promise<Engine>}
+ */
+export const makeAgentryEngine = async ctx => {
+  const runtime = await prepareAgentryRuntime({
+    config: /** @type {object} */ (ctx.config),
+    powers: ctx.powers,
+    getApiKey: ctx.getApiKey,
+  });
+  return makeAgentryEngineFromRuntime(runtime, ctx);
 };
 harden(makeAgentryEngine);
