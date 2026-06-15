@@ -70,3 +70,28 @@ test('tree nests children under their parents', async t => {
   t.is(tree.length, 1);
   t.is(tree[0].children.length, 1);
 });
+
+test('createAgentry refuses when the registry has no daemon powers (OFFLINE)', async t => {
+  const r = mk(); // no powers / getProfile → OFFLINE
+  await t.throwsAsync(
+    r.createAgentry({ agentry: { profileName: 'p', model: 'm' } }),
+    { message: /OFFLINE/ },
+  );
+});
+
+test('createAgentry requires a profileName even when online', async t => {
+  const r = makeRegistry({
+    engineFactory: makeMockEngine,
+    powers: harden({}),
+    getProfile: async () => ({ name: 'p', provider: 'openai', apiKey: 'k' }),
+  });
+  await t.throwsAsync(
+    // deliberately missing `profileName` to exercise the guard
+    r.createAgentry({
+      agentry: /** @type {import('../src/backend/thread.js').AgentryMeta} */ (
+        /** @type {unknown} */ ({ model: 'm' })
+      ),
+    }),
+    { message: /profileName/ },
+  );
+});
