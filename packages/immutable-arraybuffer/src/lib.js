@@ -238,6 +238,11 @@ const immutableArrayBufferLibProperties = {
     if (isEmulatedImmutable(this)) {
       throw TypeError('Cannot resize an immutable ArrayBuffer');
     }
+    if (optResize === undefined) {
+      throw TypeError(
+        'Cannot resize ArrayBuffer: underlying platform lacks ArrayBuffer.prototype.resize',
+      );
+    }
     return apply(optResize, this, [newByteLength]);
   },
   /**
@@ -248,6 +253,11 @@ const immutableArrayBufferLibProperties = {
     if (isEmulatedImmutable(this)) {
       throw TypeError('Cannot detach an immutable ArrayBuffer');
     }
+    if (optTransfer === undefined) {
+      throw TypeError(
+        'Cannot transfer ArrayBuffer: underlying platform lacks ArrayBuffer.prototype.transfer',
+      );
+    }
     return apply(optTransfer, this, [newLength]);
   },
   /**
@@ -257,6 +267,11 @@ const immutableArrayBufferLibProperties = {
   transferToFixedLength(newLength = undefined) {
     if (isEmulatedImmutable(this)) {
       throw TypeError('Cannot detach an immutable ArrayBuffer');
+    }
+    if (optTransferToFixedLength === undefined) {
+      throw TypeError(
+        'Cannot transferToFixedLength ArrayBuffer: underlying platform lacks ArrayBuffer.prototype.transferToFixedLength',
+      );
     }
     return apply(optTransferToFixedLength, this, [newLength]);
   },
@@ -345,6 +360,15 @@ const makeImmutableArrayBufferInternal = realBuffer => {
 freeze(makeImmutableArrayBufferInternal);
 
 /**
+ * Internal brand check. Returns `true` when `buffer` is an emulated
+ * immutable buffer (in the lib's brand WeakMap), `false` otherwise. After
+ * the premise-2 fold-in the package no longer exports this from a public
+ * entry point; callers use `buffer.immutable` (the accessor installed by
+ * the shim on `ArrayBuffer.prototype`) or `Object.prototype.toString
+ * .call(buffer) === '[object ImmutableArrayBuffer]'`. The internal export
+ * lets the in-package tests (`test/lib-*.test.js`) reach the helper
+ * directly without round-tripping through the prototype.
+ *
  * @param {ArrayBuffer} buffer
  * @returns {boolean}
  */
@@ -353,7 +377,9 @@ export const isBufferImmutable = buffer => isEmulatedImmutable(buffer);
 /**
  * Creates an immutable slice of the given buffer. Internal helper used by
  * `immutableArrayBufferLibProperties.sliceToImmutable` and by the shim's
- * own install. Not part of the package's public export surface.
+ * own install. After the premise-2 fold-in the package no longer exports
+ * this from a public entry point; the internal export lets the in-package
+ * tests reach it directly.
  *
  * @param {ArrayBuffer} buffer The original buffer.
  * @param {number} [start] The start index.
