@@ -77,10 +77,8 @@ const arrayBufferSlice = (realBuffer, start = undefined, end = undefined) =>
  * On other platforms, we can still emulate
  * `ArrayBuffer.prototoype.sliceToImmutable`, but not
  * `ArrayBuffer.prototype.transferToImmutable`.
- * Currently, these known-deficient platforms are
- * - Hermes
- * - Node.js <= 16
- * - Apparently some versions of JavaScriptCore that are still of concern.
+ * See the package README section "Platform support for `transferToImmutable`"
+ * for the per-engine version thresholds and feature-testing guidance.
  *
  * @param {ArrayBuffer} arrayBuffer
  * @returns {ArrayBuffer}

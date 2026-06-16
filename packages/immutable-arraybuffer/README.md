@@ -68,10 +68,8 @@ The Immutable ArrayBuffer proposal has reached stage 3; at that threshold an ear
 
 The *Immutable ArrayBuffer* shim falls short of the proposal in the following ways
 - The shim relies on the underlying platform having either `structuredClone` or `ArrayBuffer.prototype.transfer`.
-However, Node <= 16 has neither.
-Node 17 introduces `structuredClone` and Node 21 introduces `ArrayBuffer.prototype.transfer`.
+See [Platform support for `transferToImmutable`](#platform-support-for-transfertoimmutable) below for the per-engine version thresholds and the guidance on when feature-testing is necessary.
 Without either, the shim still shims `ArrayBuffer.prototype.sliceToImmutable` but omits `ArrayBuffer.prototype.transferToImmutable`.
-Thus, even after importing the shim, code may want to feature test for `ArrayBuffer.prototype.transferToImmutable`.
 - The shim's emulated immutable buffers are not real `ArrayBuffer` exotic objects.
 If they were, the shim would not be able to protect them from being written.
 Even though they implement the full proposed `ArrayBuffer` API, they cannot be plug-compatible: they cannot be used as the backing stores of `DataView`s or `TypedArray`s.
@@ -80,6 +78,58 @@ Perhaps follow-on shims might modify `DataView` and `TypedArray` to emulate that
 - This is a plain *JavaScript* shim, not by itself a *Hardened JavaScript* polyfill/shim.
 Thus, the objects and function it creates are not hardened by this shim itself.
 Rather, the ses-shim is expected to import this, and then treat the resulting objects as if they were additional primordials, to be hardened during `lockdown`'s harden phase.
+
+## Platform support for `transferToImmutable`
+
+The shim's emulation of `ArrayBuffer.prototype.transferToImmutable` requires the underlying platform to provide either `ArrayBuffer.prototype.transfer` (preferred when present) or the global `structuredClone` (used as a fallback to move the buffer's contents into a new backing store).
+`sliceToImmutable` and the `immutable` accessor work on every platform; only `transferToImmutable` carries this dependency.
+
+The following table records the first engine version that ships at least one of those primitives.
+A cell marked **either** means the platform has both `structuredClone` and `ArrayBuffer.prototype.transfer`; a cell marked **structuredClone only** means the shim uses the structured-clone fallback path.
+"Deficient" means neither primitive is present and `ArrayBuffer.prototype.transferToImmutable` is therefore absent after the shim loads.
+
+### Engines
+
+| Engine | First version with `structuredClone` | First version with `ArrayBuffer.prototype.transfer` | Status as of shipping today |
+| --- | --- | --- | --- |
+| V8 (Chromium) | 9.8 (with Chrome 98, Feb 2022) | 11.4 (with Chrome 114, May 2023) | **either** |
+| SpiderMonkey (Firefox) | shipped with Firefox 94 (Nov 2021) | shipped with Firefox 122 (Jan 2024) | **either** |
+| JavaScriptCore (WebKit) | shipped with Safari 15.4 (Mar 2022) | shipped with Safari 17.4 (Mar 2024) | **either** |
+| Hermes | not implemented | not implemented | **deficient** |
+
+The `structuredClone` global is a Web/HTML platform feature exposed to script through the engine's host environment; the dates above are for the host build that first exposed it.
+`ArrayBuffer.prototype.transfer` is a TC39 language feature (ES2024) implemented in the engine itself.
+
+### Runtimes and browsers
+
+| Runtime / browser | First version with `structuredClone` | First version with `ArrayBuffer.prototype.transfer` | Status as of shipping today |
+| --- | --- | --- | --- |
+| Node.js | 17.0.0 (Oct 2021) | 21.0.0 (Oct 2023) | **either** on Node 21 and later; **structuredClone only** on Node 17 through 20; **deficient** on Node 16 and earlier |
+| Deno | 1.14 (Sep 2021) | 1.33 (May 2023) | **either** on Deno 1.33 and later |
+| Chrome / Edge | 98 (Feb 2022) | 114 (May 2023) | **either** on Chrome 114 and later; **structuredClone only** on Chrome 98 through 113 |
+| Firefox | 94 (Nov 2021) | 122 (Jan 2024) | **either** on Firefox 122 and later; **structuredClone only** on Firefox 94 through 121 |
+| Safari | 15.4 (Mar 2022) | 17.4 (Mar 2024) | **either** on Safari 17.4 and later; **structuredClone only** on Safari 15.4 through 17.3 |
+| React Native (Hermes) | not implemented | not implemented | **deficient** |
+
+Node 22 (active LTS at the time of writing) and Node 24 (current) both have `ArrayBuffer.prototype.transfer` and use the preferred path.
+Node 18 and Node 20 reach the structured-clone fallback path; both are past or near end-of-life under the Node release schedule.
+
+### Feature-testing guidance
+
+Only code that might run on a **deficient** platform needs to feature-test for `ArrayBuffer.prototype.transferToImmutable`:
+
+```js
+import '@endo/immutable-arraybuffer/shim.js';
+
+if (typeof ArrayBuffer.prototype.transferToImmutable === 'function') {
+  // use transferToImmutable
+} else {
+  // fall back to sliceToImmutable (always present once the shim loads)
+}
+```
+
+Code whose deployment targets are all non-deficient (any modern browser, Node.js 17 and later, Deno 1.14 and later) can rely on `transferToImmutable` being present after `import '@endo/immutable-arraybuffer/shim.js'` and skip the feature test.
+React Native on Hermes and pre-Node-17 server environments are the practical cases that still require the test.
 
 ## Purposeful Violation
 
