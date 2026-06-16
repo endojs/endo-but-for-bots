@@ -129,12 +129,17 @@ const getBuffer = immuAB => {
 // After (returns the receiver on fallthrough, so the method becomes
 // a drop-in replacement for the genuine method when invoked on a
 // genuine ArrayBuffer):
-const amplifyArrayBuffer = immuAB => {
-  const result = buffers.get(immuAB);
+const amplifyArrayBuffer = buffer => {
+  const result = buffers.get(buffer);
   if (result !== undefined) return result;
-  return immuAB;
+  return buffer;
 };
 ```
+
+The parameter name changes from `immuAB` to `buffer` to reflect that the
+fallthrough path is no longer an error: the function now accepts either
+an emulated immutable or a genuine `ArrayBuffer` and returns the buffer
+the caller should operate on.
 
 The name change (`getBuffer` to `amplifyArrayBuffer`) aligns with the
 analogous `amplifyTypedArray` on the experiment branch.
@@ -160,6 +165,11 @@ slice(start = undefined, end = undefined) {
 },
 ```
 
+`arrayBufferSlice` is the lib's internal `apply(slice, realBuffer, [start, end])`
+wrapper around the captured genuine `ArrayBuffer.prototype.slice`; it remains in
+`src/lib.js` after this redesign, used by both the `slice` and `sliceToImmutable`
+methods on the prototype record.
+
 The mutators discriminate on brand membership and delegate to the
 genuine method on fallthrough.
 The genuine methods are captured at module load time before any shim
@@ -176,16 +186,35 @@ resize(newByteLength = undefined) {
   if (buffers.has(this)) {
     throw TypeError('Cannot resize an immutable ArrayBuffer');
   }
+  if (optResize === undefined) {
+    throw TypeError(
+      'Cannot resize ArrayBuffer: underlying platform lacks ArrayBuffer.prototype.resize',
+    );
+  }
   return apply(optResize, this, [newByteLength]);
 },
 transfer(newLength = undefined) {
   if (buffers.has(this)) {
     throw TypeError('Cannot detach an immutable ArrayBuffer');
   }
+  if (optTransfer === undefined) {
+    throw TypeError(
+      'Cannot transfer ArrayBuffer: underlying platform lacks ArrayBuffer.prototype.transfer',
+    );
+  }
   return apply(optTransfer, this, [newLength]);
 },
-// transferToFixedLength and transferToImmutable follow the same pattern.
+// transferToFixedLength and transferToImmutable follow the same pattern,
+// each guarding on the corresponding captured genuine method.
 ```
+
+The platform-feature guards (the `optResize === undefined` and
+`optTransfer === undefined` branches) surface a typed diagnostic
+when a method is invoked on a platform that does not implement the
+corresponding native operation (Hermes, Node less than or equal to 18
+for `resize`, and so on).
+Without the guards a missing optional method
+would surface as a generic `Reflect.apply` failure on `undefined`.
 
 The `detached` and `resizable` getters likewise discriminate: they
 return `false`/`false` for emulated immutables (current behaviour) and
@@ -237,9 +266,9 @@ The lib's `sliceBufferToImmutable` and `transferBufferToImmutable`
 free functions still exist internally to support the prototype record:
 `sliceToImmutable` and `transferToImmutable` in the prototype record
 call them.
-They are no longer exported (see *Move 3*).
+They are no longer part of the package's public surface (see *Move 3*).
 
-### Move 3: Pseudo-prototype becomes a property record
+### Move 3: Pseudo-prototype becomes a property record; package becomes side-effect-only
 
 The library layer's `ImmutableArrayBufferInternalPrototype` (today the
 intermediate prototype of every emulated instance) becomes
@@ -260,109 +289,95 @@ The record:
   way they were before, and (additionally) to any method on the
   prototype because the methods discriminate on the WeakMap.
 
-The package's `index.js` and `package.json` `exports` need a call:
-
-- **Decision: keep `index.js` and the `.` export, but rewrite
-  `index.js` to export only the brand-check helpers a caller could
-  legitimately want pre-shim (the typical use case for
-  `isBufferImmutable` is "I am a library that wants to detect
-  immutability without forcing the shim to be installed").**
-  This keeps the package useful as a library outside of an SES context,
-  at the cost of exporting one or two symbols.
-  The premise-2 narrowing (drop the `.` export entirely; see the
-  predecessor experiment branch's commit `a5e31162`) is separated into
-  a follow-up PR.
+The package's `index.js` is removed and the `package.json` `exports` is
+narrowed to `./shim.js` (plus the `./package.json` re-export).
+The package is now side-effect-only: there is no way to import a named
+binding from `@endo/immutable-arraybuffer`.
+Callers detect immutability via the `ArrayBuffer.prototype.immutable`
+accessor (after the shim has loaded) or via
+`Object.prototype.toString.call(buffer) === '[object ImmutableArrayBuffer]'`
+(which works even before the shim loads, because the
+`'ImmutableArrayBuffer'` toStringTag is installed as an own-property of
+each emulated immutable instance).
+Callers convert genuine ArrayBuffers to emulated immutables via
+`buffer.sliceToImmutable(...)` and `buffer.transferToImmutable(...)`
+on `ArrayBuffer.prototype`.
 
 The exact public exports after the redesign:
 
 | Export                                          | Status                                                                                       |
 | ----------------------------------------------- | -------------------------------------------------------------------------------------------- |
-| `isBufferImmutable`                             | Keep. Caller-side brand check that works without the shim having been installed.             |
-| `sliceBufferToImmutable`                        | Remove. The shim makes `ArrayBuffer.prototype.sliceToImmutable` available; the free-function call shape is redundant. |
-| `optTransferBufferToImmutable`                  | Remove. Same reason.                                                                         |
+| `./shim.js`                                     | Keep. Side-effect import that installs the lib property record onto `ArrayBuffer.prototype`. |
+| `./package.json`                                | Keep. Standard package-metadata export.                                                      |
+| `.` (`index.js`)                                | Remove. The file is deleted; the `.` entry in `exports` is removed.                          |
+| `isBufferImmutable`                             | Remove. Callers use `ArrayBuffer.prototype.immutable` (the accessor the shim installs).      |
+| `sliceBufferToImmutable`                        | Remove. Callers use `buffer.sliceToImmutable(...)`.                                          |
+| `optTransferBufferToImmutable`                  | Remove. Callers use `buffer.transferToImmutable(...)`.                                       |
 
 The internal helpers `sliceBufferToImmutable` and
 `transferBufferToImmutable` still exist inside the lib file (the
 prototype-record methods need them); they are simply not part of the
 package's module-export surface.
 
-### Move 4: Shim copies properties onto genuine prototypes
+The previous `@endo/bytes` consumer of `sliceBufferToImmutable` is
+updated under the same PR: `packages/bytes/src/to-immutable.js` now
+imports `@endo/immutable-arraybuffer/shim.js` for its side effect and
+calls `view.buffer.sliceToImmutable(...)` directly on the prototype.
 
-`src/immutable-arraybuffer-shim.js` adapts to the new lib surface.
-The shape stays the same (capture, build, warn, install), but the source
-of the install set is the lib's exported property record rather than
-the shim file's own inline `arrayBufferMethods`:
+### Move 4: Shim copies properties onto genuine prototypes (stage-3 detect-then-skip)
+
+`src/shim.js` adapts to the new lib surface and installs under a
+stage-3 detect-then-skip policy.
+The install set is the lib's exported property record; the install is
+gated on whether `'sliceToImmutable' in ArrayBuffer.prototype` is
+already true.
 
 ```js
-import { immutableArrayBufferLibProperties } from './immutable-arraybuffer-lib.js';
+import { immutableArrayBufferLibProperties } from './lib.js';
 
-// ... captures unchanged ...
+const { prototype: arrayBufferPrototype } = ArrayBuffer;
 
-// Better fidelity emulation of a class prototype: copy with the same
-// non-enumerable shape the lib already establishes. The lib file's
-// own defineProperty-non-enumerable loop has already done this on the
-// record, so getOwnPropertyDescriptors preserves the shape.
-const overwrites = ownKeys(immutableArrayBufferLibProperties).filter(
-  key => key in arrayBufferPrototype,
-);
-if (overwrites.length > 0) {
-  console.warn(
-    `About to overwrite ArrayBuffer.prototype properties ${stringify(overwrites)}`,
+if (!('sliceToImmutable' in arrayBufferPrototype)) {
+  defineProperties(
+    arrayBufferPrototype,
+    getOwnPropertyDescriptors(immutableArrayBufferLibProperties),
   );
 }
-defineProperties(
-  arrayBufferPrototype,
-  getOwnPropertyDescriptors(immutableArrayBufferLibProperties),
-);
 ```
 
-The four properties that overwrite genuine prototype methods (`slice`,
-`resize`, `transfer`, `transferToFixedLength`) will trigger the
-overwrite warning on every load, which is noise.
-**Decision: filter the four genuine-overwrite keys out of the warning's
-overwrites list, not out of the install loop.**
-The install is still load-bearing (the new methods discriminate on
-brand membership, the genuine ones do not); the warning is suppressed
-for the four because the overwrite is expected and the warning would
-otherwise fire on every cold start.
-The suppression is implemented as a static `expectedOverwrites` set
-with an explanatory comment, and the filter excludes those names
-from the `overwrites` list before the `console.warn` check.
+The Immutable ArrayBuffer proposal and the parallel Freezable TypedArray
+proposal are part of the same TC39 proposal, which has reached stage 3.
+The endo project's policy for proposals at stage 3 or above is
+detect-then-skip: an earlier installation wins.
+If the platform ships a native implementation, the native implementation
+wins; if a previously loaded shim already installed the surface, the
+previously loaded shim wins.
+Either way, the second installer steps aside.
 
-**Design departure (recorded post-implementation, barrister panel round 1):**
-The four resizable-ArrayBuffer-proposal read accessors (`byteLength`,
-`detached`, `maxByteLength`, `resizable`) were originally left off the
-`expectedOverwrites` list on the premise that their presence-on-platform
-warning was useful diagnostic information.
-The premise broke `test-hermes` and `test-xs`: on Hermes and XS the
-bundled ses interpreter contexts have no `console` global at all, so
-the unguarded `console.warn` reference throws `ReferenceError:
-Property 'console' doesn't exist` whenever the `overwrites` list is
-non-empty.
-On modern Node (>= 19) the four read accessors are always present, so
-the list is always non-empty, and the unguarded reference would also
-fire on every cold start were `console` not a guaranteed global there.
-The implementation expands `expectedOverwrites` to include the four
-read accessors (they are expected on modern Node and absent on Hermes /
-XS / Node <= 18), and adds a `typeof console !== 'undefined' &&
-typeof console.warn === 'function'` guard around the warning call as
-defense-in-depth for any future engine without `console`.
-The remaining `immutable`, `sliceToImmutable`, `transferToImmutable`
-overwrites still surface as warnings on platforms that have
-independently shipped part of the proposal's surface, which is the
-diagnostic case the warning was designed for.
+`sliceToImmutable` is the load-bearing presence check: the proposal
+adds `sliceToImmutable`, `transferToImmutable`, and the `immutable`
+accessor as a unit, and any installer (native or shim) that provides
+one provides all three.
+Checking only one keeps the detect-then-skip branch deterministic
+without enumerating the full surface on every load.
 
-**Decision: keep master's warn-and-overwrite policy.**
-The predecessor experiment branch's
-`if (!('sliceToImmutable' in arrayBufferPrototype))` detect-then-skip
-is appropriate for the freezable-TypedArray side (where the proposal
-is at stage 1 and platforms diverge widely), but for the
-immutable-ArrayBuffer side it would mean a half-installed shim on
-platforms that ship `sliceToImmutable` natively before the proposal
-stabilises.
-The warn-and-overwrite policy keeps the shim authoritative until the
-proposal reaches stage 4 and the shim is manually retired (per README
-line 66's existing guidance).
+The earlier warn-and-overwrite policy is no longer appropriate at
+stage 3: it presumes the shim is more authoritative than any platform
+or prior install, which is the right call only for pre-stage-3
+proposals where partial or divergent implementations are common.
+At stage 3 we consider the proposal stabilised, and the question is
+whether the implementation is present, not whether it is correct.
+Consequently the prior `expectedOverwrites` machinery (the static set
+that suppressed warnings for `slice`, `resize`, `transfer`,
+`transferToFixedLength`, and the four resizable-ArrayBuffer read
+accessors) is removed alongside the warning itself.
+The `typeof console !== 'undefined'` guard becomes moot since the shim
+no longer reaches for `console`.
+
+For proposals prior to stage 3 the right pattern is generally the full
+spackle rendezvous on symbol pattern rather than a simple
+warn-and-overwrite; either pattern, however, is inappropriate once a
+proposal reaches stage 3.
 
 ### Move 5: Drop the `%ImmutableArrayBufferPrototype%` permits entry and intrinsic sampling
 
@@ -463,8 +478,11 @@ explicitly:
   unchanged`.
 - `emulated immutable.resize throws TypeError` (the brand-check
   discriminates on WeakMap membership).
-- `Object.prototype.toString.call(immuAB) === '[object ArrayBuffer]'`
-  (documents the purposeful-violation removal).
+- `Object.prototype.toString.call(immuAB) === '[object ImmutableArrayBuffer]'`
+  (documents the purposeful-violation: the `[Symbol.toStringTag]` slot
+  is installed as an own-property on each emulated immutable instance,
+  not on the shared prototype, so genuine ArrayBuffers continue to read
+  as `'[object ArrayBuffer]'`).
 
 The package's existing `test/test-shim.js` (or equivalent shim-level
 integration test) extends with the shim-install-onto-genuine-prototype
@@ -472,12 +490,12 @@ assertions:
 
 - After `import './shim.js';`, `'sliceToImmutable' in
   ArrayBuffer.prototype === true`.
-- The four overwrite warnings (`slice`, `resize`, `transfer`,
-  `transferToFixedLength`) do *not* fire (the expected-overwrite
-  suppression list filters them).
-- The `immutable` overwrite warning *does* fire on platforms where the
-  genuine `immutable` accessor has not yet shipped (today: all
-  platforms, because the proposal is pre-stage-4).
+- If `'sliceToImmutable' in ArrayBuffer.prototype` is already true
+  before the shim loads (a prior installation, native or shim), the
+  shim install is a no-op and the prior installation's `sliceToImmutable`,
+  `transferToImmutable`, and `immutable` accessor remain in place.
+  The detect-then-skip gate is keyed on `sliceToImmutable` because the
+  three properties ship as a unit at stage 3.
 
 The ses-side change has its own test plan: the existing
 `packages/ses/test/permits-intrinsics.test.js` (or whichever permits
@@ -509,12 +527,15 @@ new shape.
   break the "library importable without forcing the shim" use case
   that `isBufferImmutable` supports.
   Keep the split; change what crosses the boundary.
-- **Detect-then-skip shim install policy.** Considered and rejected
-  for the reason given in *Move 4*: native `sliceToImmutable` ahead of
-  proposal stage 4 is more likely to be a partial or divergent
-  implementation than a stable one, and warn-and-overwrite keeps the
-  shim authoritative until the manual retirement step that README
-  line 66 anticipates.
+- **Warn-and-overwrite shim install policy.**
+  Considered and rejected in favour of detect-then-skip.
+  At stage 3 the proposal is stabilised; if `sliceToImmutable` is
+  already present on `ArrayBuffer.prototype` (a native implementation
+  or a previously loaded shim), the shim defers to that prior
+  installation rather than overwriting it.
+  The warn-and-overwrite shape is appropriate for proposals prior to
+  stage 3, where partial or divergent platform implementations are
+  common enough that an authoritative shim is the safer default.
 
 ## Open questions
 
@@ -523,19 +544,14 @@ The questions below are framing or scope calls that the maintainer may
 want to revisit before the builder lands, but none of them block the
 builder from making a defensible choice.
 
-- **Premise-2 as part of this PR versus as a separate prerequisite.**
-  The redesign as written assumes the package still exports `.`
-  (today's shape).
-  The predecessor experiment branch's commit `a5e31162` narrows the
-  package's `exports` to only `./shim.js` (premise-2 from the
-  six-premises framing tracked in the project log).
-  This design *does not* fold premise-2 in: it keeps `index.js` and
-  the `.` export, narrowed to `isBufferImmutable` only.
-  The argument for folding premise-2 in now is fewer round-trip PRs;
-  the argument against is keeping each PR's diff scoped to one
-  semantic change.
-  The builder follows this design's choice (premise-2 out of scope)
-  unless the maintainer redirects.
+- **Premise-2 as part of this PR.**
+  The redesign folds premise-2 in: the package's `exports` narrows to
+  only `./shim.js` (plus the `./package.json` re-export), `index.js`
+  is deleted, and the package becomes side-effect-only.
+  The `@endo/bytes` consumer migrates from the lib free function to
+  `buffer.sliceToImmutable(...)` in the same PR.
+  The earlier framing of premise-2 as a follow-up is superseded; the
+  maintainer's review on this design directed the fold-in.
 - **CHANGELOG rewrite scope.**
   This design leaves the historical `CHANGELOG.md:18` entry untouched.
   The conservative-rewrite reading of "rename all occurrences of 'pony'"
@@ -554,8 +570,16 @@ builder from making a defensible choice.
   The freezable-TypedArray pseudo-prototype drop (the analogous move
   for `%TypedArrayPrototype%`) is on the predecessor experiment branch
   and is structurally similar but not identical (TypedArrays have a
-  richer pseudo-constructor story and a separate `internal-heir.js`
-  helper).
+  richer pseudo-constructor story).
+  The two sides shared one `internal-heir.js` helper module on the
+  experiment branch and should continue to share a single helper, but
+  the "heir" naming is no longer appropriate now that emulated
+  immutable buffers and freezable typed arrays no longer hang off an
+  intermediate-prototype heir of the genuine prototype.
+  The shared helper is renamed in the TypedArray-side PR
+  (`internal-amplifier.js` or similar; the rename lands with the
+  TypedArray-side fold-in so the naming is settled when the second
+  consumer arrives).
   It lands as a separate PR with its own DESIGN.md once this
   ArrayBuffer-side work merges and the patterns are validated against
   the genuine `%TypedArrayPrototype%` permits entry.
@@ -565,20 +589,6 @@ builder from making a defensible choice.
 - The TypedArray-side analog (drop `%FreezableTypedArrayPrototype%`
   similarly).
   Separate PR, separate design.
-- The premise-2 narrowing of the package's `exports`.
-  Separate PR.
-- Migrating `packages/bytes/src/to-immutable.js` from the lib free
-  function to the shim'd method.
-  Folds into the premise-2 PR, since the bytes-side change is what
-  makes the `.` export retirable.
-- Retiring the `concordance` purposeful-violation note in the README.
-  Originally framed as an "out of scope" item on the premise that the
-  README rewrite would retire the behaviour; the design departure
-  recorded in *Move 2* paragraph 7 reverses that premise (the slot
-  remains as an own-property on emulated immutables).
-  The README's *Purposeful Violation* section is restored under
-  *Move 2* and describes the new own-property-only shape rather than
-  the prior intermediate-prototype shape.
 
 ## References
 
