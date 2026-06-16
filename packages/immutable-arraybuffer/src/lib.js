@@ -41,15 +41,15 @@ const { get: arrayBufferByteLength } = getOwnPropertyDescriptor(
 // brand membership and never reach the captured accessor in that case
 // (an emulated immutable always has `detached === false`, `resizable ===
 // false`, and `maxByteLength === byteLength`).
-const arrayBufferDetached = getOwnPropertyDescriptor(
+const optArrayBufferDetached = getOwnPropertyDescriptor(
   arrayBufferPrototype,
   'detached',
 )?.get;
-const arrayBufferResizable = getOwnPropertyDescriptor(
+const optArrayBufferResizable = getOwnPropertyDescriptor(
   arrayBufferPrototype,
   'resizable',
 )?.get;
-const arrayBufferMaxByteLength = getOwnPropertyDescriptor(
+const optArrayBufferMaxByteLength = getOwnPropertyDescriptor(
   arrayBufferPrototype,
   'maxByteLength',
 )?.get;
@@ -120,23 +120,23 @@ const isEmulatedImmutable = buf => apply(weakmapHas, buffers, [buf]);
 
 /**
  * Amplifier-with-this-fallthrough: returns the underlying genuine
- * `ArrayBuffer` when `immuAB` is an emulated immutable buffer (in the brand
- * WeakMap), and returns `immuAB` itself otherwise. This lets the methods on
- * the shared `ArrayBuffer.prototype` (after the shim install) work as
- * drop-in replacements for the genuine methods when invoked on a genuine
- * `ArrayBuffer`, while transparently reaching the underlying buffer for the
- * emulated-immutable case. The name aligns with the analogous
+ * `ArrayBuffer` when `arrayBuffer` is an emulated immutable buffer (in the
+ * brand WeakMap), and returns `arrayBuffer` itself otherwise. This lets the
+ * methods on the shared `ArrayBuffer.prototype` (after the shim install)
+ * work as drop-in replacements for the genuine methods when invoked on a
+ * genuine `ArrayBuffer`, while transparently reaching the underlying buffer
+ * for the emulated-immutable case. The name aligns with the analogous
  * `amplifyTypedArray` on the freezable-TypedArray experiment branch.
  *
- * @param {ArrayBuffer} immuAB
+ * @param {ArrayBuffer} arrayBuffer
  * @returns {ArrayBuffer}
  */
-const amplifyArrayBuffer = immuAB => {
-  const result = apply(weakmapGet, buffers, [immuAB]);
+const amplifyArrayBuffer = arrayBuffer => {
+  const result = apply(weakmapGet, buffers, [arrayBuffer]);
   if (result !== undefined) {
     return result;
   }
-  return immuAB;
+  return arrayBuffer;
 };
 
 /**
@@ -150,9 +150,9 @@ const amplifyArrayBuffer = immuAB => {
  * and delegates to the captured genuine method on fallthrough (the mutators
  * `resize`, `transfer`, `transferToFixedLength`, `transferToImmutable`).
  *
- * Omits `constructor` so `ArrayBuffer.prototype.constructor` is inherited.
+ * Omits `constructor` so the original `ArrayBuffer.prototype.constructor` is unchanged.
  */
-const immutableArrayBufferLibProperties = {
+export const immutableArrayBufferLibProperties = {
   __proto__: null,
   /**
    * @this {ArrayBuffer}
@@ -171,10 +171,10 @@ const immutableArrayBufferLibProperties = {
     // on platforms with the resizable-ArrayBuffer proposal. On older
     // platforms (Node <= 18, Hermes) it does not exist; the conservative
     // answer for a non-detached genuine buffer in that case is false.
-    if (arrayBufferDetached === undefined) {
+    if (optArrayBufferDetached === undefined) {
       return false;
     }
-    return apply(arrayBufferDetached, this, []);
+    return apply(optArrayBufferDetached, this, []);
   },
   /**
    * @this {ArrayBuffer}
@@ -185,10 +185,10 @@ const immutableArrayBufferLibProperties = {
       // cannot grow.
       return apply(arrayBufferByteLength, amplifyArrayBuffer(this), []);
     }
-    if (arrayBufferMaxByteLength === undefined) {
+    if (optArrayBufferMaxByteLength === undefined) {
       return apply(arrayBufferByteLength, this, []);
     }
-    return apply(arrayBufferMaxByteLength, this, []);
+    return apply(optArrayBufferMaxByteLength, this, []);
   },
   /**
    * @this {ArrayBuffer}
@@ -197,10 +197,10 @@ const immutableArrayBufferLibProperties = {
     if (isEmulatedImmutable(this)) {
       return false;
     }
-    if (arrayBufferResizable === undefined) {
+    if (optArrayBufferResizable === undefined) {
       return false;
     }
-    return apply(arrayBufferResizable, this, []);
+    return apply(optArrayBufferResizable, this, []);
   },
   /**
    * @this {ArrayBuffer}
@@ -296,8 +296,7 @@ for (const key of ownKeys(immutableArrayBufferLibProperties)) {
     enumerable: false,
   });
 }
-
-export { immutableArrayBufferLibProperties };
+freeze(immutableArrayBufferLibProperties);
 
 // Internal-test export. The helper itself is load-bearing for every
 // method on `immutableArrayBufferLibProperties`, but the package's
