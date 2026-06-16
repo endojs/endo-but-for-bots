@@ -21,8 +21,8 @@ emulated immutable buffer (not on the shared prototype), so
 ArrayBuffers continue to read as `'[object ArrayBuffer]'`. This keeps
 `concordance` (and any other downstream consumer that sniffs the
 toStringTag to decide whether the value is a genuine exotic) from
-misrouting an emulated immutable through `Buffer.from`, which throws
-because the emulated immutable is not an exotic object.
+misrouting an emulated immutable through Node's `Buffer.from`, which
+throws because the emulated immutable is not an exotic object.
 
 `@endo/immutable-arraybuffer` is now a side-effect-only package: its
 sole public export is `./shim.js`. The `index.js` and the package's
