@@ -17,6 +17,11 @@ const { freeze, defineProperty, getOwnPropertyDescriptor, getPrototypeOf } =
   Object;
 const { apply, ownKeys } = Reflect;
 
+// Capture the WeakMap prototype methods up front so we can use them with
+// `apply` below, without exposing the `buffers` WeakMap to post-hoc
+// prototype lookups or polymorphic dispatch.
+const { get: weakmapGet, set: weakmapSet, has: weakmapHas } = WeakMap.prototype;
+
 const { prototype: arrayBufferPrototype } = ArrayBuffer;
 const {
   slice,
@@ -108,16 +113,10 @@ if (optTransfer) {
  * emulate the `this.#buffer` private field, including its use as a brand check.
  * Maps from all and only emulated Immutable ArrayBuffers to real ArrayBuffers.
  *
- * @type {Pick<WeakMap<ArrayBuffer, ArrayBuffer>, 'get' | 'has' | 'set'>}
+ * @type {WeakMap<ArrayBuffer, ArrayBuffer>}
  */
 const buffers = new WeakMap();
-// Avoid post-hoc prototype lookups.
-for (const methodName of ['get', 'has', 'set']) {
-  defineProperty(buffers, methodName, { value: buffers[methodName] });
-}
-// Safe because this WeakMap owns its has, get, and set methods.
-// eslint-disable-next-line @endo/no-polymorphic-call
-const isEmulatedImmutable = buf => buffers.has(buf);
+const isEmulatedImmutable = buf => apply(weakmapHas, buffers, [buf]);
 
 /**
  * Amplifier-with-this-fallthrough: returns the underlying genuine
@@ -133,9 +132,7 @@ const isEmulatedImmutable = buf => buffers.has(buf);
  * @returns {ArrayBuffer}
  */
 const amplifyArrayBuffer = immuAB => {
-  // Safe because this WeakMap owns its get method.
-  // eslint-disable-next-line @endo/no-polymorphic-call
-  const result = buffers.get(immuAB);
+  const result = apply(weakmapGet, buffers, [immuAB]);
   if (result !== undefined) {
     return result;
   }
@@ -348,9 +345,7 @@ const makeImmutableArrayBufferInternal = realBuffer => {
     enumerable: false,
     configurable: false,
   });
-  // Safe because this WeakMap owns its set method.
-  // eslint-disable-next-line @endo/no-polymorphic-call
-  buffers.set(result, realBuffer);
+  apply(weakmapSet, buffers, [result, realBuffer]);
   return result;
 };
 // Since `makeImmutableArrayBufferInternal` MUST not escape,
@@ -389,9 +384,7 @@ export const sliceBufferToImmutable = (
   start = undefined,
   end = undefined,
 ) => {
-  // Safe because this WeakMap owns its get method.
-  // eslint-disable-next-line @endo/no-polymorphic-call
-  let realBuffer = buffers.get(buffer);
+  let realBuffer = apply(weakmapGet, buffers, [buffer]);
   if (realBuffer === undefined) {
     realBuffer = buffer;
   }
