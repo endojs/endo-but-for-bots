@@ -299,7 +299,93 @@ out of scope for the initial transport.
   because it reaches iroh's public relay/discovery network and is therefore
   unsuitable for unattended CI; the pure logic it covers is also unit tested.
 
+### Verifying discovery
+
+The headline property — dialing a peer by its **NodeId alone**, with no
+relay or direct-address hints — depends on iroh's default discovery
+(`discovery_n0`, enabled because the transport leaves `nodeDiscovery`
+unset). This cannot be exercised in a restricted sandbox (which blocks
+iroh's DNS/pkarr endpoints and reports placeholder addresses), so it is
+verified manually on a real network.
+
+`scripts/iroh-discovery-check.mjs` runs two checks in one process and prints
+a verdict: it dials by NodeId only with discovery enabled (expected to
+succeed) and again with the server's discovery disabled (expected to fail
+with "No addressing information for NodeId"). A success-then-failure proves
+discovery is what carried the dial.
+
+```sh
+cd packages/daemon
+node scripts/iroh-discovery-check.mjs
+# slower networks may need a longer publish-propagation wait:
+IROH_DISCOVERY_WAIT_MS=20000 node scripts/iroh-discovery-check.mjs
+```
+
+Requires outbound access to iroh's relay (`*.relay.iroh.network`) and
+discovery (`dns.iroh.link`) plus UDP for QUIC/hole-punching. A FAIL on the
+discovery-enabled check therefore indicates blocked egress (or a publish
+that has not yet propagated — raise `IROH_DISCOVERY_WAIT_MS`), not a
+transport defect.
+
+For a faithful cross-network result (NAT traversal + relay + discovery),
+run two nodes on **different machines/networks**. Server (prints its NodeId
+and stays up):
+
+```js
+import { Iroh, NodeDiscoveryConfig } from '@number0/iroh';
+const ALPN = 'endo/captp/0';
+const enc = new TextEncoder();
+const protocols = {
+  [ALPN]: () => ({
+    accept: async (err, conn) => {
+      if (err) return;
+      const bi = await conn.acceptBi();
+      await bi.recv.readToEnd(64);
+      await bi.send.writeAll(enc.encode('pong'));
+      await bi.send.finish();
+      await conn.closed();
+    },
+  }),
+};
+const node = await Iroh.memory({
+  secretKey: Array.from(crypto.getRandomValues(new Uint8Array(32))),
+  protocols,
+  nodeDiscovery: NodeDiscoveryConfig.Default,
+});
+console.log('Dial me by this NodeId:', await node.net.nodeId());
+await new Promise(() => {}); // keep running
+```
+
+Client on the other machine (`node client.mjs <NodeId>`):
+
+```js
+import { Iroh, NodeDiscoveryConfig } from '@number0/iroh';
+const ALPN = 'endo/captp/0';
+const enc = new TextEncoder();
+const dec = new TextDecoder();
+const client = await Iroh.memory({
+  secretKey: Array.from(crypto.getRandomValues(new Uint8Array(32))),
+  nodeDiscovery: NodeDiscoveryConfig.Default,
+});
+const ep = client.node.endpoint();
+const conn = await ep.connect({ nodeId: process.argv[2] }, enc.encode(ALPN));
+const bi = await conn.openBi();
+await bi.send.writeAll(enc.encode('ping'));
+await bi.send.finish();
+const out = Buffer.alloc(4);
+await bi.recv.readExact(out);
+console.log('SUCCESS:', dec.decode(out), '— dialed by key across networks');
+await client.node.shutdown();
+```
+
+Note: the Endo daemon path does not exercise *pure* discovery by default,
+because invitation locators embed the relay/address hints alongside the key,
+so connections succeed via the hints before discovery is needed. To force
+the discovery path end-to-end, strip an accepted address down to a bare
+`iroh+captp0:///<nodeId>` (no query string) before connecting.
+
 ## Open questions
+
 
 1. Pursue the real-key binding (§ Identity) in this milestone or as a
    follow-up?
