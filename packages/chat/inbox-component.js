@@ -338,15 +338,9 @@ export const inboxComponent = async (
       // Asynchronously apply Monaco syntax highlighting to code fences
       highlight();
 
-      // Create token chips for each insertion point
-      for (
-        let index = 0;
-        index < Math.min(insertionPoints.length, names.length);
-        index += 1
-      ) {
+      const makeToken = (/** @type {number} */ index) => {
         assert.typeof(names[index], 'string');
         const edgeName = names[index];
-        const $slot = insertionPoints[index];
 
         const $token = document.createElement('span');
         $token.className = 'token';
@@ -409,9 +403,21 @@ export const inboxComponent = async (
         });
 
         updateHoverTitle();
+        return $token;
+      };
 
-        // Replace the placeholder slot with the token
-        $slot.replaceWith($token);
+      // Place token chips at their inline slots.
+      const placedTokens = Math.min(insertionPoints.length, names.length);
+      for (let index = 0; index < placedTokens; index += 1) {
+        insertionPoints[index].replaceWith(makeToken(index));
+      }
+
+      // Attachments without an inline placeholder (e.g. one text string and one
+      // attached value) have no slot in the rendered text, so append them at
+      // the end of the body rather than dropping them.
+      for (let index = placedTokens; index < names.length; index += 1) {
+        $body.appendChild(document.createTextNode(' '));
+        $body.appendChild(makeToken(index));
       }
     } else if (message.type === 'definition') {
       const { source, slots } = message;
