@@ -140,7 +140,7 @@ const view = new T(iab);
 | `view.at(0)`, `slice`, `subarray`, etc.   | correct values, delegated to the hidden genuine TypedArray    |
 | `view.set([1])`                           | throws `TypeError` (complaining mutator)                      |
 | `view.fill(0)`, `reverse`, `sort`, `copyWithin` | each throws `TypeError`                                 |
-| `view[0] = 42; view[0]`                   | `42` on a non-frozen wrapper; `undefined` on a frozen wrapper after `Object.freeze(view)` (the underlying buffer is never modified; see *Semantics* for the worked example) |
+| `view[0] = 42; view.at(0)`                | `0` (the underlying buffer is never modified; `view.at(0)` delegates to the hidden genuine TypedArray and reads the actual buffer byte; see *Semantics* for the full worked example) |
 | `Object.freeze(view); Object.isFrozen(view)` | `true`                                                     |
 
 The non-emulated path (construction from a genuine mutable
