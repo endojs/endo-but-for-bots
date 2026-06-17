@@ -318,6 +318,7 @@ const bodyComponent = (
       profilePath,
       onProfileChange,
       activeSpaceInfo.audioPath,
+      activeSpaceInfo.ttsPath,
     );
   }
 
@@ -1799,6 +1800,7 @@ const bodyComponent = (
  * @property {string[]} [channelOrder] - persisted channel display order
  * @property {Array<{key: string, channelPetName: string, label: string}>} [bookmarks] - bookmarked threads
  * @property {string[]} [audioPath] - pet-name path to an audio object (floot mic input)
+ * @property {string[]} [ttsPath] - pet-name path to a text-to-speech object (floot spoken replies)
  */
 
 /**
