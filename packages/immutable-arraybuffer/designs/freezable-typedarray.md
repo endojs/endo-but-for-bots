@@ -5,9 +5,10 @@ that erights asked for in his 2026-06-17T10:55Z comment on PR #435.
 PR #435 is the predecessor that drops the immutable-ArrayBuffer
 pseudo-prototype.
 This is the TypedArray-side analog explicitly named in PR #435's
-`designs/immutable-arraybuffer.md` section *Out of scope* ("The TypedArray-side
-analog (drop `%FreezableTypedArrayPrototype%` similarly). Separate PR,
-separate design.").
+`designs/immutable-arraybuffer.md` section *Out of scope*
+(quoted: "The TypedArray-side analog (drop
+`%FreezableTypedArrayPrototype%` similarly).
+Separate PR, separate design.").
 
 The package keeps its split between a self-contained library layer
 (`src/lib.js`) and a shim layer (`src/shim.js`) that installs
@@ -139,7 +140,7 @@ const view = new T(iab);
 | `view.at(0)`, `slice`, `subarray`, etc.   | correct values, delegated to the hidden genuine TypedArray    |
 | `view.set([1])`                           | throws `TypeError` (complaining mutator)                      |
 | `view.fill(0)`, `reverse`, `sort`, `copyWithin` | each throws `TypeError`                                 |
-| `view[0] = 42; view[0]`                   | `0` (indexed assignment is silently swallowed; see *Semantics*) |
+| `view[0] = 42; view[0]`                   | `42` on a non-frozen wrapper; `undefined` on a frozen wrapper after `Object.freeze(view)` (the underlying buffer is never modified; see *Semantics* for the worked example) |
 | `Object.freeze(view); Object.isFrozen(view)` | `true`                                                     |
 
 The non-emulated path (construction from a genuine mutable
@@ -193,35 +194,93 @@ property record checks brand-WeakMap membership and throws on hit; on
 miss it delegates to the captured genuine method, which preserves
 unchanged behaviour for genuine TypedArrays.
 
-### Indexed assignment is silently swallowed
+### Indexed assignment never modifies the underlying buffer
 
 The proposal does not provide a way to make integer-indexed
 assignment to a TypedArray *throw*.
-Per the ECMAScript specification, an integer-indexed exotic object's
-`[[Set]]` internal operation (the operation JavaScript invokes when
-code writes `view[0] = 42`) returns `true` after a no-op when the
-underlying buffer is not writable; it does not enter the same throw
-path that named-mutator methods do.
-Therefore:
+The emulated wrapper's response to `view[0] = 42` is therefore
+necessarily different from the genuine integer-indexed exotic's
+silent-swallow path; the wrapper is a plain ordinary object whose
+`[[Prototype]]` is `T.prototype`, not an integer-indexed exotic
+object.
+What this design guarantees is the *immutability of the underlying
+buffer*: no path through the emulated wrapper can mutate the bytes
+the immutable `ArrayBuffer` holds.
+What `view[0]` reads back after `view[0] = 42` depends on whether the
+wrapper itself has been frozen, and is independent of the buffer's
+contents.
+
+#### Worked example (non-frozen wrapper)
 
 ```js
-view[0] = 42;
-view[0];      // 0 (assignment was silently swallowed)
+import '@endo/immutable-arraybuffer/shim.js';
+
+const ab = new ArrayBuffer(4);             // [0, 0, 0, 0]
+const iab = ab.sliceToImmutable();
+const view = new Uint8Array(iab);
+
+view[0];                                   // 0  (delegates to the hidden
+                                           //     genuine TypedArray's read
+                                           //     of the immutable buffer's
+                                           //     byte 0)
+view[0] = 42;                              // OrdinarySet on the plain
+                                           //   wrapper; creates an own
+                                           //   data property '0' => 42.
+                                           //   The underlying immutable
+                                           //   buffer is NOT touched.
+view[0];                                   // 42 (now reads the own
+                                           //     property, which shadows
+                                           //     the prototype's indexed
+                                           //     read delegate)
+
+Uint8Array.prototype.at.call(view, 0);     // 0  (the buffer's actual
+                                           //     byte 0 is unchanged)
 ```
 
-The experiment branch carries explicit coverage for this (the
-"strengthened indexed-assignment swallow test" in fixup
-`740259d2`); this design preserves the behaviour and the coverage.
-The emulated wrapper is a plain object whose `__proto__` is
-`T.prototype`, so reads via the integer-indexed exotic path on the
-*hidden* genuine TypedArray do not happen; the wrapper's integer
-indices are plain own-properties whose presence is determined by
-whatever indexed access the lib chooses to expose.
-The lib does not expose them, so the read returns `undefined` or the
-prior value of the slot.
+The own-property creation is a quirk of the plain-object wrapper, not
+a security concern: the immutable buffer's bytes are untouched, and
+any code that observes the bytes via a non-indexed method (`at`,
+`slice`, `subarray`, the DataView accessors, byte enumeration through
+`for ... of`) sees the original buffer contents.
+The discrepancy is only visible to code that reads through the
+wrapper's integer-indexed surface after an integer-indexed write,
+and that surface is exactly the surface the proposal cannot prevent
+the write to.
+
+#### Worked example (frozen wrapper)
+
+```js
+const view = new Uint8Array(iab);
+Object.freeze(view);
+Object.isFrozen(view);                     // true
+
+view[0] = 42;                              // silently swallowed in
+                                           //   non-strict mode; throws
+                                           //   TypeError in strict mode
+                                           //   (own property '0' cannot
+                                           //   be created on a frozen
+                                           //   object)
+view[0];                                   // undefined (no own property;
+                                           //   the prototype has no
+                                           //   integer-indexed slot)
+```
+
+After `Object.freeze(view)`, the wrapper rejects new own-property
+installation per the ordinary frozen-object semantics; the
+integer-indexed write fails to create an own property and the
+subsequent read falls through the prototype chain to find no slot,
+returning `undefined`.
+
+The experiment branch carries coverage for the post-freeze case
+(the "strengthened indexed-assignment swallow test" in fixup
+`740259d2`); this design preserves that coverage and adds the
+non-frozen-wrapper worked example as a new test
+(`shim: indexed assignment creates a wrapper-local own property on a
+non-frozen emulated freezable view; underlying buffer unchanged`).
 
 This is a known proposal-level constraint, not a shim shortcoming.
-The README's *Caveats* section is updated to mention it.
+The README's *Caveats* section is updated to mention both the
+non-frozen and frozen cases.
 
 ### `Object.isFrozen(view)` returns true after `Object.freeze(view)`
 
@@ -288,8 +347,9 @@ through `Buffer.from`).
 
 The reason for the divergence is erights's call on
 [PR #449's open question 3](https://github.com/endojs/endo-but-for-bots/issues/comments/4735477238):
-*"(b) is best. It does have the hazard you mention, but I'm happy not
-to add complexity to avoid it until we find out if it is an actual
+*"(b) is best.
+It does have the hazard you mention, but I'm happy not to add
+complexity to avoid it until we find out if it is an actual
 problem."*
 Adding the own-property tag is reversible if the downstream consumer
 sweep (per *Test plan* section *Cross-package consumer touchpoints*) surfaces
@@ -502,9 +562,13 @@ The implementation must pass three test layers.
 
 Additional tests this PR introduces beyond the experiment branch:
 
-- `shim: indexed assignment is silently swallowed on an emulated
-  freezable view` (covers the proposal-level constraint named in
-  *Semantics* section *Indexed assignment is silently swallowed*).
+- `shim: indexed assignment on a non-frozen emulated freezable view
+  creates a wrapper-local own property; the underlying immutable
+  buffer is unchanged` and `shim: indexed assignment on a frozen
+  emulated freezable view is silently swallowed; the underlying
+  immutable buffer is unchanged` (cover both halves of the
+  proposal-level constraint named in *Semantics* section
+  *Indexed assignment never modifies the underlying buffer*).
 - `shim: Object.freeze(view); Object.isFrozen(view) === true` on an
   emulated freezable view (the proposal's
   TypedArray-can-be-frozen guarantee).
@@ -549,9 +613,14 @@ substituted into the parenthesized positions):
 - Each of the five mutator methods throws `TypeError`:
   `view.copyWithin(0, 1)`, `view.fill(sample)`, `view.reverse()`,
   `view.set([sample])`, `view.sort()`.
-- Indexed assignment is silently swallowed (`view[0] = sample;
-  t.is(view[0], expectedZero)` where `expectedZero` is `0` for
-  non-BigInt flavors and `0n` for BigInt flavors).
+- Indexed assignment does not modify the underlying buffer.
+  On a non-frozen wrapper: `view[0] = sample; t.is(view[0], sample)`
+  reads back the own property; the buffer's byte 0 remains the
+  per-flavor zero (`0` for non-BigInt flavors, `0n` for BigInt
+  flavors), confirmed via `T.prototype.at.call(view, 0)`.
+  On a frozen wrapper: `Object.freeze(view); view[0] = sample;
+  t.is(view[0], undefined)` confirms the silent swallow and the
+  buffer's byte 0 remains the per-flavor zero.
 - `view.byteLength`, `view.byteOffset`, `view.length`, `view.buffer`
   all return correct values.
 - `view.slice(...)`, `view.subarray(...)`, `view.at(0)`,
@@ -608,6 +677,36 @@ The `byteArray.js` revision is **out of scope for this PR** (the
 design's scope is the immutable-arraybuffer package's freezable-
 TypedArray emulation, not pass-style's brand check) and is left to a
 follow-up that the maintainer files separately.
+
+#### Future adapter withdrawal from `@endo/bytes`
+
+Per kriskowal's inline comment on this design
+(discussion `r3431584143`, 2026-06-17T21:29Z):
+*"I believe we will be able to withdraw adapters for frozen Uint8
+arrays backed by frozen immutable ArrayBuffer from `@endo/bytes` as
+the shim presents as sufficiently ergonomic without utility
+functions.
+This does not need to be engaged in the same builder PR."*
+
+The `@endo/bytes` package today carries adapter functions that bridge
+between frozen `Uint8Array` instances backed by frozen immutable
+`ArrayBuffer`s and the broader bytes-handling surface.
+Once this design's shim lands, that adapter shape becomes
+sufficiently ergonomic at the language surface that the bridging
+adapters in `@endo/bytes` can be withdrawn: a consumer that wants a
+frozen `Uint8Array` backed by an immutable `ArrayBuffer` constructs
+it directly via `new Uint8Array(ab.sliceToImmutable())` and freezes
+the wrapper, without reaching for a `@endo/bytes` utility.
+
+This withdrawal is **out of scope for this PR** (the design's scope
+is the freezable-TypedArray emulation in
+`@endo/immutable-arraybuffer`, not the `@endo/bytes` adapter
+surface) and is named here only so a future reader understands the
+expected post-merge follow-up shape.
+The withdrawal lands as a separate PR after this design's
+implementation merges and after the cross-package consumer sweep
+above confirms no regressions in `@endo/pass-style` or
+`@endo/marshal`.
 
 The implementation PR's consumer sweep therefore expects the
 following:
@@ -748,7 +847,7 @@ erights on PR #449
 This section records the resolutions so a future reader does not have
 to reconstruct them from PR thread history.
 
-### 1. "Delayed" means sequencing of PRs (confirmed)
+### Decision 1: "Delayed" means sequencing of PRs (confirmed)
 
 erights confirmed the researcher's hypothesis: the "delayed freezable
 TypedArray emulation" phrasing is a *sequencing* word, not a
@@ -765,7 +864,7 @@ The two alternative readings the researcher ruled out (a lazy
 detect-then-skip framing already decided by PR #435) are accordingly
 out of scope.
 
-### 2. Two design files with parallel naming (confirmed)
+### Decision 2: Two design files with parallel naming (confirmed)
 
 erights confirmed the sibling-files shape and asked for parallel
 naming.
@@ -785,11 +884,12 @@ designs in separate files avoids merge conflicts on future
 amendments and keeps each document within the *Length: aim for 1 to
 3 screens* guideline in `roles/designer/AGENT.md` section *Operating norms*.
 
-### 3. `[Symbol.toStringTag]`: defer to the genuine tag (confirmed)
+### Decision 3: `[Symbol.toStringTag]`: defer to the genuine tag (confirmed)
 
-erights chose option (b): *"(b) is best. It does have the hazard you
-mention, but I'm happy not to add complexity to avoid it until we
-find out if it is an actual problem."*
+erights chose option (b): *"(b) is best.
+It does have the hazard you mention, but I'm happy not to add
+complexity to avoid it until we find out if it is an actual
+problem."*
 
 The shim therefore does **not** install
 `[Symbol.toStringTag] = 'FreezableTypedArray'` on the emulated
@@ -824,9 +924,10 @@ post-#435 translation.
   (renamed from `DESIGN.md` on this PR's branch per *Decisions* section 2):
   the drop-the-pseudo-prototype shape this design adopts on the
   TypedArray side.
-  Specifically section *Out of scope* ("The TypedArray-side analog (drop
-  `%FreezableTypedArrayPrototype%` similarly). Separate PR, separate
-  design.") names the work this PR does.
+  Specifically the section *Out of scope* names the work this PR
+  does (quoting the "TypedArray-side analog (drop
+  `%FreezableTypedArrayPrototype%` similarly), separate PR, separate
+  design" clause).
 - [erights's resolution of open questions 1, 2, 3 on PR #449](https://github.com/endojs/endo-but-for-bots/issues/comments/4735477238)
   (2026-06-17): the comment that pinned the sibling-files shape, the
   parallel-naming convention, and option (b) on the
