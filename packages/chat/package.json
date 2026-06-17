@@ -63,8 +63,8 @@
     "@endo/whylip": "workspace:^",
     "marked": "^17.0.5",
     "monaco-editor": "^0.55.1",
-    "react": "^19.0.0",
-    "react-dom": "^19.0.0",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
     "ses": "workspace:^"
   },
   "devDependencies": {
@@ -72,7 +72,7 @@
     "@endo/init": "workspace:^",
     "@endo/lockdown": "workspace:^",
     "@endo/ses-ava": "workspace:^",
-    "@playwright/test": "^1.40.0",
+    "@playwright/test": "^1.60.0",
     "@vitejs/plugin-react": "^4.0.0",
     "ava": "catalog:dev",
     "c8": "catalog:dev",

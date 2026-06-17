@@ -82,11 +82,11 @@
     "@endo/tar": "workspace:^",
     "@endo/where": "workspace:^",
     "@endo/zip": "workspace:^",
-    "@libp2p/autonat": "^3.0.10",
+    "@libp2p/autonat": "^3.0.21",
     "@libp2p/bootstrap": "^11.0.47",
     "@libp2p/circuit-relay-v2": "^3.2.24",
-    "@libp2p/crypto": "^5.1.8",
-    "@libp2p/dcutr": "^3.0.10",
+    "@libp2p/crypto": "^5.1.19",
+    "@libp2p/dcutr": "^3.0.21",
     "@libp2p/identify": "^3.0.39",
     "@libp2p/kad-dht": "14.2.15",
     "@libp2p/ping": "^2.0.37",
@@ -96,7 +96,7 @@
     "better-sqlite3": "^11.0.0",
     "libp2p": "^2.10.0",
     "ses": "workspace:^",
-    "ws": "^8.13.0"
+    "ws": "^8.21.0"
   },
   "optionalDependencies": {
     "@number0/iroh": "^0.35.0"
