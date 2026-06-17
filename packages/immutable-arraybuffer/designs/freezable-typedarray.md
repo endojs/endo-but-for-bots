@@ -196,6 +196,11 @@ unchanged behaviour for genuine TypedArrays.
 
 ### Indexed assignment never modifies the underlying buffer
 
+A *silent swallow* in this context means the engine accepts an
+assignment expression without throwing but the write has no observable
+effect on the underlying data; the assignment disappears rather than
+persisting or raising an error.
+
 The proposal does not provide a way to make integer-indexed
 assignment to a TypedArray *throw*.
 The emulated wrapper's response to `view[0] = 42` is therefore
@@ -225,7 +230,7 @@ view[0];                                   // 0  (delegates to the hidden
                                            //     byte 0)
 view[0] = 42;                              // OrdinarySet on the plain
                                            //   wrapper; creates an own
-                                           //   data property '0' => 42.
+                                           //   data property '0' with value 42.
                                            //   The underlying immutable
                                            //   buffer is NOT touched.
 view[0];                                   // 42 (now reads the own
@@ -313,6 +318,22 @@ not consulted because freeze operates on the receiver.
 The harden phase of SES `lockdown()` reaches every primordial and
 freezes it transitively; the emulated wrappers participate normally
 in that walk because they are plain objects.
+
+For callers who need strict-mode to throw on an indexed write, the
+recommended pattern is to freeze the wrapper immediately after
+construction:
+
+```js
+const view = Object.freeze(new Uint8Array(iab));
+// In strict mode, view[0] = 42 now throws TypeError.
+// view[0] returns undefined (the frozen wrapper has no own-indexed
+// property and no prototype slot that fills in from below).
+```
+
+Callers who do not need the strict-mode throw (and who are happy with
+the non-frozen-wrapper semantics described in the previous section)
+may omit the `Object.freeze` call; both shapes are legitimate uses of
+the API.
 
 ### `view.buffer` returns the immutable wrapper
 
@@ -410,8 +431,8 @@ installs).
 Because the shim's replacement accessor is itself a getter, the SES
 permits walk does not see a new property kind: the slot was `getter`
 before and remains `getter` after the shim's install.
-No new permit row is required; the existing `buffer: getter` entry
-covers the shim-installed replacement without modification.
+The existing `buffer: getter` entry covers the shim-installed
+replacement without modification; no new permit row is required.
 
 The five mutator methods (`copyWithin`, `fill`, `reverse`, `set`, `sort`)
 already appear as `fn` entries in the same `%TypedArrayPrototype%`
@@ -426,7 +447,10 @@ The EDIT action in the table above is present because the test
 `packages/ses/test/immutable-arraybuffer.test.js` (a sibling edit) will
 exercise the permits walk against the shim-installed slots; if that test
 surfaces an unexpected gap the builder patches the permits entry at that
-time.
+time (this is the expected-no-gap case; the builder verifies the SES
+integration test passes and patches `permits.js` only if a gap surfaces,
+at which point escalation rather than silent absorption is the right
+response).
 The expected outcome is that no gap surfaces: the existing `getter` and
 `fn` entries cover the shim's replacements.
 
@@ -697,6 +721,11 @@ the BigInt distinction in a CI run.
 
 ### Cross-package consumer touchpoints
 
+The anticipated downstream impact of this design's shim landing is
+described in the *Future Adapter Withdrawal from `@endo/bytes`*
+sub-section below; this section focuses on regression signals the
+builder must watch for during CI.
+
 The freezable-TypedArray emulation surfaces an explicit cross-package
 risk against `packages/pass-style/src/byteArray.js`.
 On post-#435 master, `byteArray.js`'s `confirmCanBeValid` requires
@@ -724,7 +753,7 @@ design's scope is the immutable-arraybuffer package's freezable-
 TypedArray emulation, not pass-style's brand check) and is left to a
 follow-up that the maintainer files separately.
 
-#### Future adapter withdrawal from `@endo/bytes`
+#### Future Adapter Withdrawal from `@endo/bytes`
 
 Per kriskowal's inline comment on this design
 (discussion `r3431584143`, 2026-06-17T21:29Z):
@@ -745,6 +774,9 @@ between frozen `Uint8Array` instances backed by frozen immutable
   `Object.freeze(new Uint8Array(ab.sliceToImmutable()))` directly;
   the wrapper is both frozen and backed by an immutable buffer without
   a utility function.
+  Note: the wrapper is not automatically frozen; the caller writes
+  `Object.freeze(new Uint8Array(ab.sliceToImmutable()))` to obtain a
+  frozen view.
 - `bytesFromImmutable(buffer)` (`packages/bytes/src/from-immutable.js`):
   copies an immutable `ArrayBuffer`'s contents into a fresh mutable
   `Uint8Array` so downstream APIs (such as `TextDecoder.decode`) that
@@ -753,12 +785,13 @@ between frozen `Uint8Array` instances backed by frozen immutable
   available via `new Uint8Array(immutableAb.slice(0))`, which is the
   pattern `bytesFromImmutable` wraps today.
 
-Once this design's shim lands, that adapter shape becomes
-sufficiently ergonomic at the language surface that both
-`bytesToImmutable` and `bytesFromImmutable` can be withdrawn: a
-consumer that wants a frozen `Uint8Array` backed by an immutable
-`ArrayBuffer` constructs it directly via
-`new Uint8Array(ab.sliceToImmutable())` and freezes the wrapper,
+Once this design's shim lands, the direct-construction pattern
+(`new Uint8Array(ab.sliceToImmutable())`) becomes sufficiently
+ergonomic at the language surface that both `bytesToImmutable` and
+`bytesFromImmutable` can be withdrawn: a consumer that wants a frozen
+`Uint8Array` backed by an immutable `ArrayBuffer` constructs it
+directly via the direct-construction pattern
+(`new Uint8Array(ab.sliceToImmutable())`) and freezes the wrapper,
 without reaching for a `@endo/bytes` utility.
 
 This withdrawal is **out of scope for this PR** (the design's scope
@@ -791,7 +824,9 @@ expected no-op):
 
 - Any `concordance`-routed `Buffer.from` `TypeError` on an emulated
   freezable `Uint8Array` (the parallel to PR #435's 13 ocapn-codec
-  failures named in *Notes from the field*, 2026-06-09).
+  failures named in *Notes from the field*, 2026-06-09; those 13
+  failures surfaced in the ocapn codec test files under
+  `packages/marshal/test/`).
 - Any pass-style brand-check mis-classification on an emulated
   freezable `Uint8Array` (the check correctly returns "not a
   byteArray"; a different routing is a regression).
@@ -814,7 +849,7 @@ codec tests because `concordance` routed through `Buffer.from` on the
 The parallel risk on the TypedArray side is acknowledged by erights's
 *"It does have the hazard you mention, but I'm happy not to add
 complexity to avoid it until we find out if it is an actual problem"*
-on PR #449's open question 3 (resolution recorded in *Decisions* section 3);
+on PR #449's open question 3 (resolution recorded in *Decisions* Decision 3);
 the builder runs the same downstream consumer sweep before opening
 the implementation PR and, if the sweep surfaces a regression,
 escalates back to the maintainer rather than installing the tag
@@ -984,7 +1019,7 @@ post-#435 translation.
 - [erights's "delayed freezable TypedArray emulation" comment on PR #435](https://github.com/endojs/endo-but-for-bots/pull/435)
   (2026-06-17T10:55Z): the framing this document expands.
 - [PR #435 `designs/immutable-arraybuffer.md`](https://github.com/endojs/endo-but-for-bots/pull/435/files)
-  (renamed from `DESIGN.md` on this PR's branch per *Decisions* section 2):
+  (renamed from `DESIGN.md` on this PR's branch per *Decisions* Decision 2):
   the drop-the-pseudo-prototype shape this design adopts on the
   TypedArray side.
   Specifically the section *Out of scope* names the work this PR

@@ -15,7 +15,7 @@ does with those exports, not the package's split-into-two-layers shape.
 | -------- | ------------------------------------------------------------------------------------------- |
 | Created  | 2026-06-09                                                                                  |
 | Authors  | erights (original framing), kriscendobot (write-up)                                         |
-| Status   | Proposed                                                                                    |
+| Status   | Implemented (merged)                                                                        |
 | Affects  | `packages/immutable-arraybuffer/`, `packages/ses/src/permits.js`, `packages/ses/src/get-anonymous-intrinsics.js` |
 | Replaces | The intermediate `%ImmutableArrayBufferPrototype%` intrinsic introduced by the cycle-201 shim |
 
