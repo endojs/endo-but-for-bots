@@ -1,8 +1,9 @@
 # Freezable TypedArray emulation: drop the pseudo-prototype on the TypedArray side
 
 This design captures the *delayed freezable TypedArray emulation*
-that erights asked for in his 2026-06-17T10:55Z comment on PR #435,
-the predecessor that drops the immutable-ArrayBuffer pseudo-prototype.
+that erights asked for in his 2026-06-17T10:55Z comment on PR #435.
+PR #435 is the predecessor that drops the immutable-ArrayBuffer
+pseudo-prototype.
 This is the TypedArray-side analog explicitly named in PR #435's
 `DESIGN-immutable-arraybuffer.md` § Out of scope ("The TypedArray-side
 analog (drop `%FreezableTypedArrayPrototype%` similarly). Separate PR,
@@ -53,7 +54,7 @@ const view = new Uint8Array(iab);            // ← currently throws or
 ```
 
 Without the freezable-TypedArray emulation, the `new Uint8Array(iab)`
-call falls into one of two unwanted states:
+call would fall into one of two unwanted states:
 
 - **Throws.**
   The native `Uint8Array` constructor expects a real `ArrayBuffer`
@@ -116,10 +117,10 @@ that surface as a given.
 ## API surface
 
 After this PR merges, the following hold for any concrete TypedArray
-constructor `T` in the standard eleven (`Int8Array`, `Int16Array`,
-`Int32Array`, `Uint8Array`, `Uint8ClampedArray`, `Uint16Array`,
-`Uint32Array`, `Float32Array`, `Float64Array`, `BigInt64Array`,
-`BigUint64Array`):
+constructor `T` in the standard library's eleven concrete TypedArray
+constructors (`Int8Array`, `Int16Array`, `Int32Array`, `Uint8Array`,
+`Uint8ClampedArray`, `Uint16Array`, `Uint32Array`, `Float32Array`,
+`Float64Array`, `BigInt64Array`, `BigUint64Array`):
 
 ```js
 import '@endo/immutable-arraybuffer/shim.js';
@@ -158,6 +159,20 @@ a hidden buffer (registered in the lib's `hiddenBuffers` WeakMap);
 every other call shape falls through to the genuine constructor via
 `Reflect.construct(OriginalConstructor, args, new.target)`.
 
+The constructor surface is symmetric (both `new T(iab)` and
+`new T(realAb)` parse and complete without error), but the
+*result-of-construction* surface is asymmetric: the resulting views
+diverge on mutability.
+A reader of a single call site like `new Uint8Array(maybeIab)` cannot
+tell from the syntax whether the produced view will throw on
+`.set(...)` or write through; only the runtime identity of the
+argument decides.
+This is the proposal's central trade: the constructor accepts both
+shapes uniformly so existing TypedArray-construction code at consumer
+sites does not have to branch, and the call site's mutator behavior
+is determined by the argument's immutability rather than by a
+separate constructor name.
+
 ## Semantics
 
 Three semantic choices warrant explicit treatment.
@@ -183,9 +198,10 @@ unchanged behaviour for genuine TypedArrays.
 The proposal does not provide a way to make integer-indexed
 assignment to a TypedArray *throw*.
 Per the ECMAScript specification, an integer-indexed exotic object's
-`[[Set]]` returns `true` after a no-op when the underlying buffer is
-not writable; it does not enter the same throw path that named-mutator
-methods do.
+`[[Set]]` internal operation (the operation JavaScript invokes when
+code writes `view[0] = 42`) returns `true` after a no-op when the
+underlying buffer is not writable; it does not enter the same throw
+path that named-mutator methods do.
 Therefore:
 
 ```js
@@ -219,6 +235,21 @@ For a genuine TypedArray on a mutable buffer, `Object.freeze` throws
 because the integer-indexed slots are non-configurable accessor-like
 slots backed by the buffer; the emulated wrapper has neither of those
 properties, so `freeze` is well-defined.
+
+The spec basis: `Object.freeze` invokes `SetIntegrityLevel` on the
+receiver, which iterates the receiver's *own* property keys (via
+`[[OwnPropertyKeys]]`) and sets each to non-configurable.
+The integer-indexed exotic check that makes genuine TypedArrays
+unfreezable lives on the integer-indexed exotic object's
+`[[OwnPropertyKeys]]` and `[[DefineOwnProperty]]` internal methods,
+which enumerate the integer-indexed slots as own properties.
+The emulated wrapper is a plain ordinary object whose `[[Prototype]]`
+is `T.prototype`; its own `[[OwnPropertyKeys]]` (the ordinary-object
+form) does not enumerate integer-indexed slots because the wrapper
+has none.
+The freeze walk therefore touches only the wrapper's plain own
+properties (none) and completes; the prototype chain's exotic-ness is
+not consulted because freeze operates on the receiver.
 
 The harden phase of SES `lockdown()` reaches every primordial and
 freezes it transitively; the emulated wrappers participate normally
@@ -329,8 +360,28 @@ export const freezableTypedArrayLibProperties = /* property record
   replacement */;
 ```
 
+The `freezableTypedArrayLibProperties` record bundles two
+semantically distinct concerns under one install loop for shim-side
+simplicity, not because they are the same kind of property:
+
+- The mutator-throws descriptors (`copyWithin`, `fill`, `reverse`,
+  `set`, `sort`): discriminate on `hiddenTypedArrays` brand
+  membership and throw on hit; on miss, delegate to the captured
+  genuine method (the *amplifier-with-this-fallthrough* shape).
+- The `buffer` accessor replacement: discriminate on the same brand
+  WeakMap but with a different fallthrough semantic.
+  On hit, return the immutable wrapper via `reverseHiddenBuffers`;
+  on miss, return the genuine buffer the native accessor would have
+  returned.
+
+The two share the brand WeakMap and the install loop but answer
+different questions (throw-versus-delegate for mutators, redirect-
+versus-passthrough for the buffer getter).
+The bundling is an install-loop economy, not a category claim.
+
 The internal `hiddenBuffers` and `reverseHiddenBuffers` WeakMaps
-remain owned by the immutable-ArrayBuffer side of the post-#435 lib;
+(see *Background* above) remain owned by the immutable-ArrayBuffer
+side of the post-#435 lib;
 the freezable-TypedArray code reads them from the lib's existing
 module-internal scope.
 On post-#435 master, the immutable-ArrayBuffer side already lives
