@@ -4,9 +4,9 @@ This design captures the *delayed freezable TypedArray emulation*
 that erights asked for in his 2026-06-17T10:55Z comment on PR #435,
 the predecessor that drops the immutable-ArrayBuffer pseudo-prototype.
 This is the TypedArray-side analog explicitly named in PR #435's
-DESIGN.md § Out of scope ("The TypedArray-side analog (drop
-`%FreezableTypedArrayPrototype%` similarly). Separate PR, separate
-design.").
+`DESIGN-immutable-arraybuffer.md` § Out of scope ("The TypedArray-side
+analog (drop `%FreezableTypedArrayPrototype%` similarly). Separate PR,
+separate design.").
 
 The package keeps its split between a self-contained library layer
 (`src/lib.js`) and a shim layer (`src/shim.js`) that installs
@@ -204,21 +204,34 @@ detect-then-skip gate).
 
 ### `[Symbol.toStringTag]`
 
-The decision parallel to PR #435's post-departure recovery
-(`'ImmutableArrayBuffer'` as an own-property of each emulated
-immutable buffer, not on the shared prototype) is **deferred** to
-*Open questions*.
+The shim **does not install** `[Symbol.toStringTag]` on the emulated
+freezable TypedArray wrapper.
+An emulated freezable view inherits its tag from the genuine
+`T.prototype` chain, so
+`Object.prototype.toString.call(view)` reads as `'[object Uint8Array]'`
+(or the concrete flavor's name) just as it does for a genuine view of
+the same flavor.
+This deliberately diverges from PR #435's ArrayBuffer-side post-departure
+recovery (which installed `'ImmutableArrayBuffer'` as an own-property
+on each emulated immutable buffer to keep `concordance` from misrouting
+through `Buffer.from`).
+
+The reason for the divergence is erights's call on
+[PR #449's open question 3](https://github.com/endojs/endo-but-for-bots/issues/comments/4735477238):
+*"(b) is best. It does have the hazard you mention, but I'm happy not
+to add complexity to avoid it until we find out if it is an actual
+problem."*
+Adding the own-property tag is reversible if the downstream consumer
+sweep (per *Test plan* § Cross-package consumer touchpoints) surfaces
+a concrete regression; until that signal arrives, the simpler shape
+is preferred.
+
 The experiment branch sets `[Symbol.toStringTag] = 'FreezableTypedArray'`
-on the would-be intermediate prototype; under the
-drop-the-pseudo-prototype shape there is no intermediate prototype.
-Whether to (a) install the tag as an own-property on each emulated
-wrapper (matching the ArrayBuffer side's post-departure recovery),
-(b) not install it at all (defer to the genuine TypedArray's tag),
-or (c) install it on `%TypedArrayPrototype%` (which would change the
-tag on every genuine TypedArray too, which is almost certainly wrong)
-is a designer-and-maintainer call that depends on whether any
-downstream tool routes on `'[object FreezableTypedArray]'`.
-See *Open questions* § 3.
+on the would-be intermediate prototype.
+Under the drop-the-pseudo-prototype shape there is no intermediate
+prototype to hang the tag on, and erights's call says do not recover
+it on the wrapper either; the experiment branch's tag install is
+therefore dropped during translation.
 
 ## Implementation outline
 
@@ -285,7 +298,7 @@ module-internal scope.
 The experiment branch's separate `immutable-arraybuffer-pony-internal.js`
 file may collapse into the consolidated `lib.js` PR #435 establishes;
 the choice between collapse and a separate internal file is a builder
-call documented in *Open questions* § 4.
+call documented in *Open question* § 1.
 
 The `internal-heir.js` helper that the experiment branch carries (a
 100+ line "intermediate prototype with redirect + complain semantics"
@@ -293,7 +306,7 @@ builder) does not survive the drop-the-pseudo-prototype shape.
 Its role is taken by the property record copied onto `T.prototype`.
 The helper is therefore deleted (or, if its property-record-building
 shape proves useful as a thin utility, kept as a renamed
-`make-property-record.js`; see *Open questions* § 4).
+`make-property-record.js`; see *Open question* § 1).
 
 ### Shim additions
 
@@ -468,9 +481,14 @@ Per the *Notes from the field* entry in `roles/designer/AGENT.md`
 2026-06-09: PR #435's `[Symbol.toStringTag]` decision killed 13 ocapn
 codec tests because `concordance` routed through `Buffer.from` on the
 `'[object ArrayBuffer]'` tag.
-The parallel risk on the TypedArray side is recorded in *Open
-questions* § 3 (the `[Symbol.toStringTag]` decision); the builder
-runs the same downstream consumer sweep before opening the PR.
+The parallel risk on the TypedArray side is acknowledged by erights's
+*"It does have the hazard you mention, but I'm happy not to add
+complexity to avoid it until we find out if it is an actual problem"*
+on PR #449's open question 3 (resolution recorded in *Decisions* § 3);
+the builder runs the same downstream consumer sweep before opening
+the implementation PR and, if the sweep surfaces a regression,
+escalates back to the maintainer rather than installing the tag
+unilaterally.
 
 ## Scope
 
@@ -553,105 +571,89 @@ project's frozen-base branch is updated.
   The stage-3 detect-then-skip gate ensures this shim steps aside
   when a native implementation is present.
 
-## Open questions
+## Decisions
 
-The design is implementable from this document.
-The four questions below are framing or scope calls that the
-maintainer (or erights) may want to revisit before the builder lands.
-None block the builder from making a defensible choice on its own.
+Three framing questions on the original draft were resolved by
+erights on PR #449
+([issuecomment-4735477238](https://github.com/endojs/endo-but-for-bots/issues/comments/4735477238),
+2026-06-17).
+This section records the resolutions so a future reader does not have
+to reconstruct them from PR thread history.
 
-### 1. Confirm "delayed" = sequencing, not runtime lazy
+### 1. "Delayed" means sequencing of PRs (confirmed)
 
-The researcher's hypothesis (per `journal/entries/2026/06/17/195947Z-result-researcher-fe4754.md`)
-reads erights's "delayed freezable TypedArray emulation" comment as a
-*sequencing* word: a follow-up PR that *follows* PR #435's merge and
-*delays* the TypedArray-side work to its own design and builder
-cycle, with no runtime-lazy semantics.
-Specifically, freezable-TypedArray-ness is *constructor-time-determined
-by the backing buffer's immutability*; there is no `view.freeze()` or
+erights confirmed the researcher's hypothesis: the "delayed freezable
+TypedArray emulation" phrasing is a *sequencing* word, not a
+runtime-lazy semantic.
+A follow-up PR that *follows* PR #435's merge and *delays* the
+TypedArray-side work to its own design and builder cycle is what was
+asked for.
+Freezable-TypedArray-ness is *constructor-time-determined by the
+backing buffer's immutability*; there is no `view.freeze()` or
 `view.toImmutable()` API and no runtime detection that flips the
 view's mode after construction.
+The two alternative readings the researcher ruled out (a lazy
+`view.freeze()` / `view.toImmutable()` API; a "delayed install" /
+detect-then-skip framing already decided by PR #435) are accordingly
+out of scope.
 
-The two alternative readings the researcher ruled out:
+### 2. Two design files with parallel naming (confirmed)
 
-- "Delayed at runtime" (lazy `view.freeze()` or `view.toImmutable()`).
-  The proposal does not spec such an API, and adding one would be a
-  TC39-spec scope expansion outside the package's remit.
-- "Delayed install" (the shim's race-to-install / detect-then-skip
-  policy).
-  PR #435 already decided that axis (stage-3 detect-then-skip);
-  "delayed" here is about PR scheduling, not install behaviour.
+erights confirmed the sibling-files shape and asked for parallel
+naming.
+Both designs now sit at:
 
-If erights's actual reading differs from this hypothesis, the
-designer (or the maintainer routing the design PR review) should
-surface the divergence before the builder fires.
+- `packages/immutable-arraybuffer/DESIGN-immutable-arraybuffer.md`
+  (PR #435's design; renamed from the generic `DESIGN.md` on this
+  PR's branch as part of this resolution).
+- `packages/immutable-arraybuffer/DESIGN-freezable-typedarray.md`
+  (this design).
 
-### 2. DESIGN placement (extend vs sibling)
+The rename uses `git mv` so the immutable-arraybuffer design's file
+history is preserved.
+The alternative shape (extending PR #435's `DESIGN.md` with a
+*"Phase 2: TypedArray-side"* section) is ruled out: keeping the two
+designs in separate files avoids merge conflicts on future
+amendments and keeps each document within the *Length: aim for 1 to
+3 screens* guideline in `roles/designer/AGENT.md` § Operating norms.
 
-This design lives at `packages/immutable-arraybuffer/DESIGN-freezable-typedarray.md`
-as a sibling to PR #435's `DESIGN.md`.
-The sibling shape is the default because (a) the design branch
-descends from pre-#435 master, where `DESIGN.md` does not yet exist
-locally, and (b) keeping the two designs in separate files avoids
-merge conflicts when this PR rebases onto post-#435 master.
+### 3. `[Symbol.toStringTag]`: defer to the genuine tag (confirmed)
 
-The alternative is to extend PR #435's `DESIGN.md` with a
-*"Phase 2: TypedArray-side"* section.
-That shape has the advantage of keeping the package's design history
-in one document; the disadvantage is that the design becomes large
-enough to no longer fit the *Length: aim for 1 to 3 screens*
-guideline in `roles/designer/AGENT.md` § Operating norms.
+erights chose option (b): *"(b) is best. It does have the hazard you
+mention, but I'm happy not to add complexity to avoid it until we
+find out if it is an actual problem."*
 
-The maintainer can redirect the placement in the design PR review;
-the builder will reorganise the file structure to match either way.
+The shim therefore does **not** install
+`[Symbol.toStringTag] = 'FreezableTypedArray'` on the emulated
+wrapper.
+`Object.prototype.toString.call(view)` reads as `'[object Uint8Array]'`
+(or the concrete flavor's name), inherited from `T.prototype`.
+This deliberately diverges from PR #435's ArrayBuffer-side
+post-departure recovery (which installed
+`'ImmutableArrayBuffer'` as an own-property on each emulated
+immutable buffer).
 
-### 3. `[Symbol.toStringTag]` decision parallel to #435
+The risk acknowledged in erights's reply (a downstream consumer like
+`concordance` routing on `'[object Uint8Array]'` and treating it as a
+license to mutate or to call `Buffer.from`) is real but not blocking.
+The builder runs the same cross-package consumer sweep PR #435 used
+(per *Test plan* § Cross-package consumer touchpoints, against
+`@endo/pass-style` and `@endo/marshal`).
+If the sweep surfaces a concrete regression, the builder escalates
+back to the maintainer rather than installing the tag unilaterally;
+adding the own-property tag is a small, reversible follow-up if it
+ever becomes necessary.
 
-PR #435's *Move 2* originally proposed dropping the
-`[Symbol.toStringTag] = 'ImmutableArrayBuffer'` purposeful violation
-entirely (on the premise that `concordance` would handle the
-resulting `TypeError` from `Buffer.from` as unrenderable).
-The premise was empirically wrong: 13 ocapn codec tests broke because
-concordance routes through `Buffer.from` on `'[object ArrayBuffer]'`.
-PR #435 restored the tag as an *own-property of each emulated
-immutable buffer*, not on the shared prototype.
+The experiment branch's original shape installs the tag on the
+would-be intermediate prototype; that install is dropped during the
+post-#435 translation.
 
-The parallel decision on the freezable-TypedArray side has three
-shapes:
+## Open question
 
-- **(a) Match the post-departure recovery: install
-  `[Symbol.toStringTag] = 'FreezableTypedArray'` as an own-property
-  on each emulated wrapper.**
-  Matches PR #435's final shape.
-  Costs one extra own-property per emulated wrapper; observable as
-  `Object.prototype.toString.call(view) === '[object FreezableTypedArray]'`.
-  May or may not interact safely with consumers that route on the
-  tag.
-- **(b) Defer to the genuine TypedArray's tag.**
-  No install; `Object.prototype.toString.call(view)` reads as
-  `'[object Uint8Array]'` (or the concrete flavor's name).
-  Cleaner; aligns with the proposal's "no observable difference at
-  the toStringTag surface" framing.
-  Carries the same risk PR #435 hit if a downstream consumer routes
-  on the tag and treats `'[object Uint8Array]'` as a license to
-  mutate.
-- **(c) Install on `%TypedArrayPrototype%`.**
-  Almost certainly wrong; would change the tag on every genuine
-  TypedArray too.
-  Listed here only to exclude.
+One framing question remains for the builder to decide; it does not
+block the builder from making a defensible choice on its own.
 
-The experiment branch chose shape (a) (sets the tag on the would-be
-intermediate prototype, which under the drop-the-pseudo-prototype
-shape becomes shape (a) as own-property).
-This design's working assumption is shape (a) for parity with PR
-#435's outcome, with a builder-level smoke-test against
-`@endo/pass-style` and `@endo/marshal` to validate the choice does
-not break a downstream consumer.
-
-The maintainer or erights may prefer shape (b) if the consumer sweep
-shows shape (a) breaks something.
-
-### 4. `internal-heir.js` inline versus separate
+### 1. `internal-heir.js` inline versus separate
 
 The experiment branch's `src/internal-heir.js` is a 100+ line helper
 that builds intermediate prototypes with redirect-and-complain
@@ -685,12 +687,18 @@ DataView follow-up materialises before this PR opens.
 
 - [erights's "delayed freezable TypedArray emulation" comment on PR #435](https://github.com/endojs/endo-but-for-bots/pull/435)
   (2026-06-17T10:55Z): the framing this document expands.
-- [PR #435 `DESIGN.md`](https://github.com/endojs/endo-but-for-bots/pull/435/files):
+- [PR #435 `DESIGN-immutable-arraybuffer.md`](https://github.com/endojs/endo-but-for-bots/pull/435/files)
+  (renamed from `DESIGN.md` on this PR's branch per *Decisions* § 2):
   the drop-the-pseudo-prototype shape this design adopts on the
   TypedArray side.
   Specifically § Out of scope ("The TypedArray-side analog (drop
   `%FreezableTypedArrayPrototype%` similarly). Separate PR, separate
   design.") names the work this PR does.
+- [erights's resolution of open questions 1, 2, 3 on PR #449](https://github.com/endojs/endo-but-for-bots/issues/comments/4735477238)
+  (2026-06-17): the comment that pinned the sibling-files shape, the
+  parallel-naming convention, and option (b) on the
+  `[Symbol.toStringTag]` decision.
+  Recorded in *Decisions* above.
 - The experiment branch
   `experiment/no-spackle-immutable-arraybuffer-417`
   (origin remote, head `1ef6c174d` plus four review-response
