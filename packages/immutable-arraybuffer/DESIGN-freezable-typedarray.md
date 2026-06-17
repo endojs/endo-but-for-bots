@@ -74,6 +74,45 @@ The experiment branch `experiment/no-spackle-immutable-arraybuffer-417`
 the ArrayBuffer-side surface this design builds on; this PR brings
 the TypedArray-side surface to parity.
 
+## Background
+
+The freezable-TypedArray design extends the post-#435 lib surface,
+not the experiment branch's earlier shape.
+A reader meeting this document without having read
+`DESIGN-immutable-arraybuffer.md` first needs the following lib-side
+topology before the *Implementation outline* section makes sense.
+
+After PR #435 merges, the lib (`packages/immutable-arraybuffer/src/lib.js`)
+owns two internal WeakMaps that the freezable-TypedArray code extends
+rather than reintroduces:
+
+- `hiddenBuffers` maps each emulated immutable ArrayBuffer wrapper to
+  its backing genuine (mutable) ArrayBuffer.
+  The lib uses the wrapper as the public-facing identity and the
+  genuine buffer as the private storage; methods that need to read
+  bytes (`slice`, `getInt8`, etc.) consult `hiddenBuffers` to recover
+  the genuine buffer.
+- `reverseHiddenBuffers` is the inverse map from genuine backing
+  buffer to the wrapper.
+  Methods that need to *return* a buffer (the `view.buffer` getter,
+  for instance) consult `reverseHiddenBuffers` to hand back the
+  immutable wrapper rather than the genuine buffer.
+
+Both WeakMaps live inside the lib's module scope; they are not
+exported.
+The freezable-TypedArray code adds a third WeakMap (`hiddenTypedArrays`)
+keyed on the emulated TypedArray wrappers and reads the two
+pre-existing WeakMaps for `view.buffer` lookups.
+This is the topology *Implementation outline* § Lib additions extends;
+that section names `hiddenBuffers` and `reverseHiddenBuffers` without
+re-explaining them.
+
+A reader who wants to see the post-#435 lib in detail (the
+amplifier-with-this-fallthrough pattern, the lib-as-property-record
+shape, the brand-WeakMap discrimination) should read
+`DESIGN-immutable-arraybuffer.md` § Move 2 first; this design assumes
+that surface as a given.
+
 ## API surface
 
 After this PR merges, the following hold for any concrete TypedArray
