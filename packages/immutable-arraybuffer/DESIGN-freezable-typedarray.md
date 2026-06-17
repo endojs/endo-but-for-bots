@@ -429,18 +429,44 @@ runs a parameterized matrix over all eleven concrete TypedArray
 constructors (`Int8Array`, `Int16Array`, `Int32Array`, `Uint8Array`,
 `Uint8ClampedArray`, `Uint16Array`, `Uint32Array`, `Float32Array`,
 `Float64Array`, `BigInt64Array`, `BigUint64Array`).
-For each flavor, the matrix asserts:
+
+The matrix carries a per-flavor *sample value* for each row.
+For the nine non-BigInt flavors the sample is `1`; for the two
+BigInt flavors (`BigInt64Array`, `BigUint64Array`) the sample is `1n`.
+The mutator and `with` calls must use the per-flavor sample because
+the native operations throw `TypeError` on a type mismatch *before*
+reaching the brand check, which would mask the test's intent.
+Specifically:
+
+- `view.with(0, sample)` requires `sample === 1n` for the two BigInt
+  flavors and `sample === 1` for the nine non-BigInt flavors.
+  `view.with(0, 1)` on a `BigInt64Array` throws `TypeError`
+  ("Cannot convert a Number value to a BigInt") before the
+  emulation's mutator-throws path is reached.
+- `view.fill(sample)` and `view.set([sample])` carry the same
+  per-flavor constraint.
+  Both are *expected* to throw `TypeError` on the emulated freezable
+  view (the mutator-throws contract), but the test must construct
+  the argument with the flavor-correct type so that the throw the
+  test observes is the brand-check throw and not a type-mismatch
+  throw at the native call site.
+
+For each flavor, the matrix asserts (with the per-flavor sample
+substituted into the parenthesized positions):
 
 - Construction from an immutable buffer succeeds and yields a
   freezable wrapper whose `__proto__` is `T.prototype`.
-- Each of the five mutator methods throws `TypeError`.
-- Indexed assignment is silently swallowed (`view[0] = 42;
-  t.is(view[0], 0)`).
+- Each of the five mutator methods throws `TypeError`:
+  `view.copyWithin(0, 1)`, `view.fill(sample)`, `view.reverse()`,
+  `view.set([sample])`, `view.sort()`.
+- Indexed assignment is silently swallowed (`view[0] = sample;
+  t.is(view[0], expectedZero)` where `expectedZero` is `0` for
+  non-BigInt flavors and `0n` for BigInt flavors).
 - `view.byteLength`, `view.byteOffset`, `view.length`, `view.buffer`
   all return correct values.
 - `view.slice(...)`, `view.subarray(...)`, `view.at(0)`,
-  `view.with(0, 1)`, `view.toReversed()`, `view.toSorted()` return
-  correct values (modulo the BigInt-flavor distinctions for `with`).
+  `view.with(0, sample)`, `view.toReversed()`, `view.toSorted()`
+  return correct values.
 - `Object.freeze(view); Object.isFrozen(view)` returns `true`.
 - The fallthrough constructor (`new T(genuineMutableBuffer)`) still
   produces a genuine writable view.
@@ -448,6 +474,9 @@ For each flavor, the matrix asserts:
 The eleven-flavor table catches regressions that a `Uint8Array`-only
 test suite would miss (the experiment branch covers only
 `Uint8Array`).
+Naming the per-flavor sample shape explicitly here lets the builder
+write the right matrix on the first try rather than rediscovering
+the BigInt distinction in a CI run.
 
 ### ses-side integration
 
