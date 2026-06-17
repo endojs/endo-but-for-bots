@@ -380,9 +380,55 @@ freezable-TypedArray commits (`721c68a3`, `2097641c`, `cfe99f7e`,
 | `packages/immutable-arraybuffer/test/shim-typedarray-per-flavor.test.js` | NEW | per-flavor parameterized coverage across all eleven concrete TypedArray constructors |
 | `packages/immutable-arraybuffer/README.md`                          | EDIT    | new section "The Freezable TypedArray Emulation"; retire the "follow-on shims might modify `DataView` and `TypedArray`" caveat |
 | `packages/immutable-arraybuffer/designs/freezable-typedarray.md`    | NEW     | this file                                                              |
-| `packages/ses/src/permits.js`                                       | EDIT    | extend the `%TypedArrayPrototype%` permits entry to cover the shim-installed slots (`buffer` accessor replacement) |
+| `packages/ses/src/permits.js`                                       | EDIT    | see *permits.js delta* sub-section below                               |
 | `packages/ses/test/immutable-arraybuffer.test.js`                   | EDIT    | extend to cover the freezable-TypedArray case (a `Uint8Array` constructed from an immutable AB is frozen / immutable after lockdown) |
 | `.changeset/freezable-typedarray-emulation.md`                      | NEW     | minor on `@endo/immutable-arraybuffer`; patch on `ses`                  |
+
+#### permits.js delta
+
+The current `%TypedArrayPrototype%` entry in `packages/ses/src/permits.js` (on
+`master` at `4a04d078b`) already contains a `buffer: getter` permit:
+
+```js
+'%TypedArrayPrototype%': {
+  buffer: getter,
+  byteLength: getter,
+  byteOffset: getter,
+  constructor: '%TypedArray%',
+  copyWithin: fn,
+  // ... (fill, filter, find, findIndex, forEach, includes, indexOf,
+  //      join, keys, lastIndexOf, length, map, reduce, reduceRight,
+  //      reverse, set, slice, some, sort, subarray, toLocaleString,
+  //      toString, values, @@iterator, @@toStringTag, at, findLast,
+  //      findLastIndex, toReversed, toSorted, with)
+},
+```
+
+The shim replaces the native `%TypedArrayPrototype%.buffer` accessor with
+`virtualTypedArrayBufferGetter` (the discriminating accessor the lib
+installs).
+Because the shim's replacement accessor is itself a getter, the SES
+permits walk does not see a new property kind: the slot was `getter`
+before and remains `getter` after the shim's install.
+No new permit row is required; the existing `buffer: getter` entry
+covers the shim-installed replacement without modification.
+
+The five mutator methods (`copyWithin`, `fill`, `reverse`, `set`, `sort`)
+already appear as `fn` entries in the same `%TypedArrayPrototype%`
+entry and remain `fn` after the shim installs the amplifier-with-this-
+fallthrough property record.
+Their permit shape does not change.
+
+Therefore the only edit to `permits.js` this design requires is none of
+the kind the critic's question anticipated (no new row, no row type
+change).
+The EDIT action in the table above is present because the test
+`packages/ses/test/immutable-arraybuffer.test.js` (a sibling edit) will
+exercise the permits walk against the shim-installed slots; if that test
+surfaces an unexpected gap the builder patches the permits entry at that
+time.
+The expected outcome is that no gap surfaces: the existing `getter` and
+`fn` entries cover the shim's replacements.
 
 This design does **not** introduce a new ses-side intrinsic.
 Under the drop-the-pseudo-prototype shape the emulated wrappers
@@ -688,15 +734,32 @@ the shim presents as sufficiently ergonomic without utility
 functions.
 This does not need to be engaged in the same builder PR."*
 
-The `@endo/bytes` package today carries adapter functions that bridge
+The `@endo/bytes` package today carries two adapter functions that bridge
 between frozen `Uint8Array` instances backed by frozen immutable
-`ArrayBuffer`s and the broader bytes-handling surface.
+`ArrayBuffer`s and the broader bytes-handling surface:
+
+- `bytesToImmutable(view)` (`packages/bytes/src/to-immutable.js`):
+  wraps a `Uint8Array` view's byte window into a hardened immutable
+  `ArrayBuffer` via `sliceBufferToImmutable`.
+  After this design's shim lands, a caller can instead write
+  `Object.freeze(new Uint8Array(ab.sliceToImmutable()))` directly;
+  the wrapper is both frozen and backed by an immutable buffer without
+  a utility function.
+- `bytesFromImmutable(buffer)` (`packages/bytes/src/from-immutable.js`):
+  copies an immutable `ArrayBuffer`'s contents into a fresh mutable
+  `Uint8Array` so downstream APIs (such as `TextDecoder.decode`) that
+  reject immutable buffers can consume the bytes.
+  After this design's shim lands, the same fresh-copy pattern is
+  available via `new Uint8Array(immutableAb.slice(0))`, which is the
+  pattern `bytesFromImmutable` wraps today.
+
 Once this design's shim lands, that adapter shape becomes
-sufficiently ergonomic at the language surface that the bridging
-adapters in `@endo/bytes` can be withdrawn: a consumer that wants a
-frozen `Uint8Array` backed by an immutable `ArrayBuffer` constructs
-it directly via `new Uint8Array(ab.sliceToImmutable())` and freezes
-the wrapper, without reaching for a `@endo/bytes` utility.
+sufficiently ergonomic at the language surface that both
+`bytesToImmutable` and `bytesFromImmutable` can be withdrawn: a
+consumer that wants a frozen `Uint8Array` backed by an immutable
+`ArrayBuffer` constructs it directly via
+`new Uint8Array(ab.sliceToImmutable())` and freezes the wrapper,
+without reaching for a `@endo/bytes` utility.
 
 This withdrawal is **out of scope for this PR** (the design's scope
 is the freezable-TypedArray emulation in
