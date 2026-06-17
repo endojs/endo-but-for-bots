@@ -463,21 +463,68 @@ test suite would miss (the experiment branch covers only
 
 ### Cross-package consumer touchpoints
 
-The freezable-TypedArray emulation does not directly touch
-`packages/pass-style/src/byteArray.js`, but the byte-array pass-style
-logic now admits `Uint8Array` instances whose backing buffer is
-immutable.
-Two consumer test sweeps verify nothing regresses:
+The freezable-TypedArray emulation surfaces an explicit cross-package
+risk against `packages/pass-style/src/byteArray.js`.
+On post-#435 master, `byteArray.js`'s `confirmCanBeValid` requires
+`candidate instanceof ArrayBuffer && candidate.immutable` and
+`assertRestValid` requires `getPrototypeOf(candidate) === ArrayBuffer.prototype`.
+A `Uint8Array` (genuine or emulated freezable) therefore does **not**
+pass the current byte-array brand check.
+This is a pre-existing condition of the post-#435 lib, not a
+regression this design introduces.
 
-- Run `yarn workspace @endo/pass-style test` after the implementation
-  lands.
-  An emulated freezable `Uint8Array` should be acceptable to
-  `harden(byteArray)` and pass-style's brand checks.
-- Run `yarn workspace @endo/marshal test` after the implementation
-  lands.
-  Marshal depends on byte-array pass-style for OCapN bulk-data
-  wire-format encoding; the freezable-TypedArray emulation should not
-  surface there.
+A separate revision to `byteArray.js` is required for the
+freezable-TypedArray emulation to be useful at the pass-style brand
+boundary.
+Per erights's
+[inline comment on this design](https://github.com/endojs/endo-but-for-bots/pull/449#discussion_r3431570369)
+(2026-06-17T21:26Z):
+*"Also need to revise `packages/pass-style/src/byteArray.js` to use a
+frozen Uint8Array rather than a frozen immutable ArrayBuffer as a
+byteArray."*
+And:
+*"Perhaps packages/bytes need a similar revision."*
+*"I'll leave that to @kriskowal."*
+The `byteArray.js` revision is **out of scope for this PR** (the
+design's scope is the immutable-arraybuffer package's freezable-
+TypedArray emulation, not pass-style's brand check) and is left to a
+follow-up that the maintainer files separately.
+
+The implementation PR's consumer sweep therefore expects the
+following:
+
+- `yarn workspace @endo/pass-style test` after the implementation
+  lands: passes unchanged.
+  An emulated freezable `Uint8Array` does **not** pass the existing
+  brand check; pass-style tests do not exercise the freezable-Uint8Array
+  path and are unaffected.
+- `yarn workspace @endo/marshal test` after the implementation lands:
+  passes unchanged for the same reason.
+  Marshal's byte-array codec routes through pass-style's
+  `byteArray` style; without the `byteArray.js` revision, no marshal
+  test exercises a freezable-Uint8Array round-trip.
+
+The named regression signals the builder watches for (kinds of CI
+failure that would indicate a real regression rather than the
+expected no-op):
+
+- Any `concordance`-routed `Buffer.from` `TypeError` on an emulated
+  freezable `Uint8Array` (the parallel to PR #435's 13 ocapn-codec
+  failures named in *Notes from the field*, 2026-06-09).
+- Any pass-style brand-check mis-classification on an emulated
+  freezable `Uint8Array` (the check correctly returns "not a
+  byteArray"; a different routing is a regression).
+- Any marshal codec test failing on a byte-array encode/decode
+  round-trip whose input is constructed from an emulated freezable
+  `Uint8Array` (this should not happen because no marshal test
+  constructs such an input; if one does, the test should be updated
+  to use the genuine `byteArray` shape rather than the regression
+  being absorbed silently).
+
+If the cross-package sweep surfaces any of these named signals, the
+builder escalates back to the maintainer rather than installing a
+workaround in the freezable-TypedArray PR; the underlying remediation
+is the separate `byteArray.js` revision erights describes.
 
 Per the *Notes from the field* entry in `roles/designer/AGENT.md`
 2026-06-09: PR #435's `[Symbol.toStringTag]` decision killed 13 ocapn
