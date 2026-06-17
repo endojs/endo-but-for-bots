@@ -291,22 +291,24 @@ export const freezableTypedArrayLibProperties = /* property record
 ```
 
 The internal `hiddenBuffers` and `reverseHiddenBuffers` WeakMaps
-remain owned by the immutable-ArrayBuffer side of the lib (per the
-experiment branch's `immutable-arraybuffer-pony-internal.js`);
+remain owned by the immutable-ArrayBuffer side of the post-#435 lib;
 the freezable-TypedArray code reads them from the lib's existing
 module-internal scope.
-The experiment branch's separate `immutable-arraybuffer-pony-internal.js`
-file may collapse into the consolidated `lib.js` PR #435 establishes;
-the choice between collapse and a separate internal file is a builder
-call documented in *Open question* § 1.
+On post-#435 master, the immutable-ArrayBuffer side already lives
+inside the consolidated `lib.js` (the experiment branch's separate
+`immutable-arraybuffer-pony-internal.js` file does not survive the
+merge), so this design extends a single `lib.js` and does not
+reintroduce an internal file split.
 
-The `internal-heir.js` helper that the experiment branch carries (a
-100+ line "intermediate prototype with redirect + complain semantics"
-builder) does not survive the drop-the-pseudo-prototype shape.
-Its role is taken by the property record copied onto `T.prototype`.
-The helper is therefore deleted (or, if its property-record-building
-shape proves useful as a thin utility, kept as a renamed
-`make-property-record.js`; see *Open question* § 1).
+The experiment branch carries an `internal-heir.js` helper (a 100+
+line "intermediate prototype with redirect + complain semantics"
+builder) that does not exist on post-#435 master.
+Under the drop-the-pseudo-prototype shape there is no intermediate
+prototype to build; the helper's role is taken by the property
+record copied onto `T.prototype`.
+The builder therefore does not port the helper; the design needs no
+property-record-building utility beyond what `lib.js` exports
+directly.
 
 ### Shim additions
 
@@ -647,41 +649,6 @@ ever becomes necessary.
 The experiment branch's original shape installs the tag on the
 would-be intermediate prototype; that install is dropped during the
 post-#435 translation.
-
-## Open question
-
-One framing question remains for the builder to decide; it does not
-block the builder from making a defensible choice on its own.
-
-### 1. `internal-heir.js` inline versus separate
-
-The experiment branch's `src/internal-heir.js` is a 100+ line helper
-that builds intermediate prototypes with redirect-and-complain
-semantics.
-Under the drop-the-pseudo-prototype shape there is no intermediate
-prototype; the helper's role collapses to building a property record
-the shim copies onto the genuine prototype.
-
-Three shapes the builder can pick from:
-
-- **Delete the helper.**
-  The property record is small enough that inlining its construction
-  in `lib.js` is clearer than a separate helper file.
-  PR #435 inlined the ArrayBuffer-side property record; this PR can
-  mirror that on the TypedArray side.
-- **Keep as a thin utility, renamed.**
-  If the property-record-building shape proves useful (e.g., the
-  DataView follow-up would also benefit), rename to something like
-  `make-property-record.js` and reuse.
-  The "heir" naming no longer fits since there is no inheritance
-  relationship.
-- **Keep as-is.**
-  Defensible only if a future caller-outside-this-package needs the
-  helper.
-  No such caller exists; not recommended.
-
-The builder's default is **Delete the helper** unless a downstream
-DataView follow-up materialises before this PR opens.
 
 ## References
 
