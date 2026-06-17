@@ -18,8 +18,13 @@ try {
   // (malformed) type declarations.
   const irohSpecifier = '@number0/iroh';
   ({ Iroh } = await import(irohSpecifier));
-} catch {
-  // Native binding not installed on this platform.
+} catch (error) {
+  // The native binding is an optional dependency. Tolerate its absence by
+  // default (the test skips), but when the integration test is explicitly
+  // requested, surface the load failure rather than silently skipping.
+  if (process.env.ENDO_IROH_INTEGRATION === '1') {
+    throw error;
+  }
 }
 
 const ALPN = 'endo/captp/0';

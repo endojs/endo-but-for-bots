@@ -174,8 +174,9 @@ stream arrives.
 `@endo/stream` `Reader<Uint8Array>` / `Writer<Uint8Array>` that
 `makeNetstringCapTP` consumes:
 
-- **Read**: each `reader.next()` does one `recv.read(buf)` into a reusable
-  buffer; a `null` return means EOF (resolve `closed`); otherwise yield the
+- **Read**: each `reader.next()` does one `recv.read(buf)` into a freshly
+  allocated buffer (so the returned view is never overwritten by a later
+  read); a `null` return means EOF (resolve `closed`); otherwise yield the
   filled slice.
   Netstring reframes across read boundaries, so short reads are fine.
 - **Write**: `writer.next(bytes)` → `send.writeAll(bytes)`;
