@@ -25,7 +25,7 @@ test('emulated immutable inherits directly from ArrayBuffer.prototype', t => {
 
 test('Object.prototype.toString.call(immuAB) reads as ImmutableArrayBuffer', t => {
   const iab = new ArrayBuffer(2).sliceToImmutable();
-  // Per DESIGN.md § Move 2 paragraph 7 (as amended for the design-departure
+  // Per designs/immutable-arraybuffer.md section Move 2 paragraph 7 (as amended for the design-departure
   // recorded in the same paragraph), the `[Symbol.toStringTag]` slot is
   // installed as an own property on each emulated immutable buffer (not on
   // the shared ArrayBuffer.prototype). Genuine ArrayBuffers continue to

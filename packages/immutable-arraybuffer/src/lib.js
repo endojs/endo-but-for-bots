@@ -330,7 +330,7 @@ const makeImmutableArrayBufferInternal = realBuffer => {
   // property of each emulated immutable buffer (not on the shared prototype,
   // which must retain the genuine `'ArrayBuffer'` tag so genuine instances
   // continue to read as `[object ArrayBuffer]`). This is the minimum
-  // departure from DESIGN.md Move 2 paragraph 7 needed to keep
+  // departure from designs/immutable-arraybuffer.md Move 2 paragraph 7 needed to keep
   // `concordance` (and any downstream consumer that sniffs the toStringTag)
   // from misrouting an emulated immutable through `Buffer.from`, which
   // throws because the emulated immutable is not a genuine exotic. With the
