@@ -86,6 +86,7 @@ The shim's emulation of `ArrayBuffer.prototype.transferToImmutable` requires the
 
 The following table records the first engine version that ships at least one of those primitives.
 A cell marked **either** means the platform has both `structuredClone` and `ArrayBuffer.prototype.transfer`; a cell marked **structuredClone only** means the shim uses the structured-clone fallback path.
+A cell marked **native `transferToImmutable`** means the engine ships the proposed method itself, so the shim's detect-then-skip policy leaves that implementation in place.
 "Deficient" means neither primitive is present and `ArrayBuffer.prototype.transferToImmutable` is therefore absent after the shim loads.
 
 ### Engines
@@ -95,10 +96,14 @@ A cell marked **either** means the platform has both `structuredClone` and `Arra
 | V8 (Chromium) | 9.8 (with Chrome 98, Feb 2022) | 11.4 (with Chrome 114, May 2023) | **either** |
 | SpiderMonkey (Firefox) | shipped with Firefox 94 (Nov 2021) | shipped with Firefox 122 (Jan 2024) | **either** |
 | JavaScriptCore (WebKit) | shipped with Safari 15.4 (Mar 2022) | shipped with Safari 17.4 (Mar 2024) | **either** |
+| Moddable XS | approximately 2022 | approximately 2023 (at the Immutable ArrayBuffer proposal's Stage 1) | **native `transferToImmutable`** |
 | Hermes | not implemented | not implemented | **deficient** |
 
 The `structuredClone` global is a Web/HTML platform feature exposed to script through the engine's host environment; the dates above are for the host build that first exposed it.
 `ArrayBuffer.prototype.transfer` is a TC39 language feature (ES2024) implemented in the engine itself.
+
+Moddable XS is the only entry in the Engines table that ships the proposed `ArrayBuffer.prototype.transferToImmutable` natively, rather than relying on the shim's `transfer`-or-`structuredClone` fallback.
+The XS dates above are approximate, drawn from the Moddable maintainer's report that `structuredClone` landed roughly four years back and that `transferToImmutable` followed when the Immutable ArrayBuffer proposal reached Stage 1.
 
 ### Runtimes and browsers
 
