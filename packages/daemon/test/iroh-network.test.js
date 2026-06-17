@@ -30,8 +30,7 @@ const ALPN = 'endo/captp/0';
 // ENDO_IROH_INTEGRATION=1 to validate the end-to-end byte path. The pure
 // logic it covers (framing, adapter, key derivation) is also unit tested in
 // iroh-stream-adapter.test.js and iroh-address.test.js.
-const integrationEnabled =
-  Iroh && process.env.ENDO_IROH_INTEGRATION === '1';
+const integrationEnabled = Iroh && process.env.ENDO_IROH_INTEGRATION === '1';
 const itIroh = integrationEnabled ? test.serial : test.serial.skip;
 
 itIroh('CapTP round-trip over two real iroh nodes', async t => {
