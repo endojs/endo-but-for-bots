@@ -200,18 +200,12 @@ export const makeMessageCapTP = (
     isClosed = true;
     abort(reason);
     Promise.all([
-      writer
-        .return(undefined)
-        // .catch(e => {
-        //   // EPIPE errors occur when the peer has already closed the connection.
-        //   // This is expected during graceful shutdown and not an error condition.
-        //   const isPrematureClose =
-        //     e.code === 'EPIPE' || e.code === 'ERR_STREAM_PREMATURE_CLOSE';
-        //   if (!isPrematureClose) {
-        //     throw e;
-        //   }
-        // })
-        .catch(() => {}),
+      // Flush any writes still queued on `writeTail` (notably the
+      // CTP_DISCONNECT that `abort` just enqueued) before closing the
+      // writer, so serialization does not drop the final frame. `writeTail`
+      // always settles — it advances on each write's resolution or
+      // rejection — so this cannot wedge close on a live or dead transport.
+      writeTail.then(() => writer.return(undefined)).catch(() => {}),
       drained.catch(() => {}),
     ]).then(() => {
       resolveClosed(undefined);

@@ -7,7 +7,7 @@ Owner: networking.
 
 Endo daemons connect to one another through a pluggable network transport
 abstraction (`EndoNetwork`).
-Today three real transports exist:
+Before this transport, three real transports existed:
 
 - `tcp-netstring` — direct TCP, requires an open, routable port.
 - `libp2p` — peer-to-peer over the IPFS/Amino DHT with WebRTC, circuit

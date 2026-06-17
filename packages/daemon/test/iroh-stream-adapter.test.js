@@ -61,8 +61,52 @@ test('reader yields chunks then completes at EOF', async t => {
 
   const third = await reader.next();
   t.true(third.done);
+  t.is(third.value, undefined);
 
   // EOF resolves the closed promise.
+  await closed;
+  t.pass();
+});
+
+test('reader yields an empty chunk on a 0-byte read without ending', async t => {
+  const enc = new TextEncoder();
+  // recv returns 0 (no bytes this turn, not EOF), then a real chunk, then EOF.
+  let phase = 0;
+  const recv = {
+    async read(buf) {
+      phase += 1;
+      if (phase === 1) return 0n;
+      if (phase === 2) {
+        buf.set(enc.encode('hi'));
+        return 2n;
+      }
+      return null;
+    },
+  };
+  const { reader } = adaptIrohStream({ send: makeFakeSend(), recv });
+
+  const empty = await reader.next();
+  t.false(empty.done);
+  t.is(empty.value.length, 0);
+
+  const data = await reader.next();
+  t.false(data.done);
+  t.is(new TextDecoder().decode(data.value), 'hi');
+
+  const end = await reader.next();
+  t.true(end.done);
+});
+
+test('reader.next rethrows a recv.read error and resolves closed', async t => {
+  const recv = {
+    async read() {
+      throw new Error('read failed');
+    },
+  };
+  const { reader, closed } = adaptIrohStream({ send: makeFakeSend(), recv });
+
+  await t.throwsAsync(() => reader.next(), { message: /read failed/ });
+  // The error path still settles the closed promise.
   await closed;
   t.pass();
 });
@@ -88,6 +132,20 @@ test('writer.return finishes the send stream and resolves closed', async t => {
 
   await writer.return();
   t.is(send.calls.finished, 1);
+  await closed;
+  t.pass();
+});
+
+test('writer.return swallows a send.finish error and still resolves closed', async t => {
+  const send = makeFakeSend();
+  send.finish = async () => {
+    throw new Error('finish failed');
+  };
+  const { writer, closed } = adaptIrohStream({ send, recv: makeFakeRecv([]) });
+
+  // The error is swallowed: return resolves normally rather than rejecting.
+  const result = await writer.return();
+  t.true(result.done);
   await closed;
   t.pass();
 });

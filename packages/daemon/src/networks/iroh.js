@@ -133,7 +133,13 @@ export const make = async (powers, context) => {
     [ALPN_STRING]: (/** @type {any} */ _err, /** @type {any} */ _endpoint) => ({
       accept: async (/** @type {any} */ err, /** @type {any} */ connection) => {
         if (err) {
-          cancelServer(/** @type {Error} */ (err));
+          // A single failed inbound connection must not tear down the whole
+          // transport; log and ignore it.
+          console.error(
+            `Endo daemon iroh inbound connection error: ${
+              /** @type {Error} */ (err).message
+            }`,
+          );
           return;
         }
         await (async () => {
@@ -204,25 +210,48 @@ export const make = async (powers, context) => {
       `Endo daemon connecting iroh ${connectionNumber} to ${nodeAddr.nodeId} at ${new Date().toISOString()}`,
     );
 
-    const connection = await Promise.race([
-      endpoint.connect(nodeAddr, ALPN_BYTES),
-      connectionCancelled,
-    ]);
-    const bi = await Promise.race([connection.openBi(), connectionCancelled]);
+    /** @type {any} */
+    let connection;
+    let handedOff = false;
+    try {
+      connection = await Promise.race([
+        endpoint.connect(nodeAddr, ALPN_BYTES),
+        connectionCancelled,
+      ]);
+      const bi = await Promise.race([connection.openBi(), connectionCancelled]);
 
-    const capTp = serveStream(bi, connection, connectionNumber, false);
+      const capTp = serveStream(bi, connection, connectionNumber, false);
+      handedOff = true;
 
-    Promise.race([capTp.closed, connectionCancelled]).finally(() => {
-      cancelConnection();
-    });
+      // Cancel the connection context once CapTP closes. Consume the
+      // connectionCancelled rejection so a cancelled connection does not
+      // surface as an unhandled rejection during teardown.
+      Promise.race([capTp.closed, connectionCancelled])
+        .finally(() => {
+          cancelConnection();
+        })
+        .catch(() => {});
 
-    const remoteGreeter = capTp.getBootstrap();
-    return E(remoteGreeter).hello(
-      localNodeId,
-      localGateway,
-      Far('Canceller', cancelConnection),
-      connectionCancelled,
-    );
+      const remoteGreeter = capTp.getBootstrap();
+      return await E(remoteGreeter).hello(
+        localNodeId,
+        localGateway,
+        Far('Canceller', cancelConnection),
+        connectionCancelled,
+      );
+    } catch (error) {
+      // If we opened an iroh connection but failed or were cancelled before
+      // handing it to serveStream (which owns teardown), close it so the
+      // QUIC connection does not leak.
+      if (connection && !handedOff) {
+        try {
+          connection.close(0n, new TextEncoder().encode('cancelled'));
+        } catch {
+          // Best-effort.
+        }
+      }
+      throw error;
+    }
   };
 
   // --- Shutdown ---
