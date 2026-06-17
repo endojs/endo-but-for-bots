@@ -5,7 +5,7 @@ that erights asked for in his 2026-06-17T10:55Z comment on PR #435.
 PR #435 is the predecessor that drops the immutable-ArrayBuffer
 pseudo-prototype.
 This is the TypedArray-side analog explicitly named in PR #435's
-`DESIGN-immutable-arraybuffer.md` § Out of scope ("The TypedArray-side
+`designs/immutable-arraybuffer.md` section *Out of scope* ("The TypedArray-side
 analog (drop `%FreezableTypedArrayPrototype%` similarly). Separate PR,
 separate design.").
 
@@ -48,9 +48,9 @@ import '@endo/immutable-arraybuffer/shim.js';
 
 const ab = new ArrayBuffer(4);
 const iab = ab.sliceToImmutable();          // emulated immutable AB
-const view = new Uint8Array(iab);            // ← currently throws or
-                                             //   silently produces a
-                                             //   wrong-shape view
+const view = new Uint8Array(iab);            // currently throws or
+                                             // silently produces a
+                                             // wrong-shape view
 ```
 
 Without the freezable-TypedArray emulation, the `new Uint8Array(iab)`
@@ -80,7 +80,7 @@ the TypedArray-side surface to parity.
 The freezable-TypedArray design extends the post-#435 lib surface,
 not the experiment branch's earlier shape.
 A reader meeting this document without having read
-`DESIGN-immutable-arraybuffer.md` first needs the following lib-side
+`designs/immutable-arraybuffer.md` first needs the following lib-side
 topology before the *Implementation outline* section makes sense.
 
 After PR #435 merges, the lib (`packages/immutable-arraybuffer/src/lib.js`)
@@ -104,14 +104,14 @@ exported.
 The freezable-TypedArray code adds a third WeakMap (`hiddenTypedArrays`)
 keyed on the emulated TypedArray wrappers and reads the two
 pre-existing WeakMaps for `view.buffer` lookups.
-This is the topology *Implementation outline* § Lib additions extends;
+This is the topology *Implementation outline* section *Lib additions* extends;
 that section names `hiddenBuffers` and `reverseHiddenBuffers` without
 re-explaining them.
 
 A reader who wants to see the post-#435 lib in detail (the
 amplifier-with-this-fallthrough pattern, the lib-as-property-record
 shape, the brand-WeakMap discrimination) should read
-`DESIGN-immutable-arraybuffer.md` § Move 2 first; this design assumes
+`designs/immutable-arraybuffer.md` section *Move 2* first; this design assumes
 that surface as a given.
 
 ## API surface
@@ -292,7 +292,7 @@ The reason for the divergence is erights's call on
 to add complexity to avoid it until we find out if it is an actual
 problem."*
 Adding the own-property tag is reversible if the downstream consumer
-sweep (per *Test plan* § Cross-package consumer touchpoints) surfaces
+sweep (per *Test plan* section *Cross-package consumer touchpoints*) surfaces
 a concrete regression; until that signal arrives, the simpler shape
 is preferred.
 
@@ -319,7 +319,7 @@ freezable-TypedArray commits (`721c68a3`, `2097641c`, `cfe99f7e`,
 | `packages/immutable-arraybuffer/test/shim-typedarray.test.js`       | NEW     | shim-level integration tests (translated from `freezable-typedarray-shim.test.js`) |
 | `packages/immutable-arraybuffer/test/shim-typedarray-per-flavor.test.js` | NEW | per-flavor parameterized coverage across all eleven concrete TypedArray constructors |
 | `packages/immutable-arraybuffer/README.md`                          | EDIT    | new section "The Freezable TypedArray Emulation"; retire the "follow-on shims might modify `DataView` and `TypedArray`" caveat |
-| `packages/immutable-arraybuffer/DESIGN-freezable-typedarray.md`     | NEW     | this file                                                              |
+| `packages/immutable-arraybuffer/designs/freezable-typedarray.md`    | NEW     | this file                                                              |
 | `packages/ses/src/permits.js`                                       | EDIT    | extend the `%TypedArrayPrototype%` permits entry to cover the shim-installed slots (`buffer` accessor replacement) |
 | `packages/ses/test/immutable-arraybuffer.test.js`                   | EDIT    | extend to cover the freezable-TypedArray case (a `Uint8Array` constructed from an immutable AB is frozen / immutable after lockdown) |
 | `.changeset/freezable-typedarray-emulation.md`                      | NEW     | minor on `@endo/immutable-arraybuffer`; patch on `ses`                  |
@@ -504,7 +504,7 @@ Additional tests this PR introduces beyond the experiment branch:
 
 - `shim: indexed assignment is silently swallowed on an emulated
   freezable view` (covers the proposal-level constraint named in
-  *Semantics* § Indexed assignment).
+  *Semantics* section *Indexed assignment is silently swallowed*).
 - `shim: Object.freeze(view); Object.isFrozen(view) === true` on an
   emulated freezable view (the proposal's
   TypedArray-can-be-frozen guarantee).
@@ -652,7 +652,7 @@ codec tests because `concordance` routed through `Buffer.from` on the
 The parallel risk on the TypedArray side is acknowledged by erights's
 *"It does have the hazard you mention, but I'm happy not to add
 complexity to avoid it until we find out if it is an actual problem"*
-on PR #449's open question 3 (resolution recorded in *Decisions* § 3);
+on PR #449's open question 3 (resolution recorded in *Decisions* section 3);
 the builder runs the same downstream consumer sweep before opening
 the implementation PR and, if the sweep surfaces a regression,
 escalates back to the maintainer rather than installing the tag
@@ -771,10 +771,10 @@ erights confirmed the sibling-files shape and asked for parallel
 naming.
 Both designs now sit at:
 
-- `packages/immutable-arraybuffer/DESIGN-immutable-arraybuffer.md`
+- `packages/immutable-arraybuffer/designs/immutable-arraybuffer.md`
   (PR #435's design; renamed from the generic `DESIGN.md` on this
   PR's branch as part of this resolution).
-- `packages/immutable-arraybuffer/DESIGN-freezable-typedarray.md`
+- `packages/immutable-arraybuffer/designs/freezable-typedarray.md`
   (this design).
 
 The rename uses `git mv` so the immutable-arraybuffer design's file
@@ -783,7 +783,7 @@ The alternative shape (extending PR #435's `DESIGN.md` with a
 *"Phase 2: TypedArray-side"* section) is ruled out: keeping the two
 designs in separate files avoids merge conflicts on future
 amendments and keeps each document within the *Length: aim for 1 to
-3 screens* guideline in `roles/designer/AGENT.md` § Operating norms.
+3 screens* guideline in `roles/designer/AGENT.md` section *Operating norms*.
 
 ### 3. `[Symbol.toStringTag]`: defer to the genuine tag (confirmed)
 
@@ -805,7 +805,7 @@ The risk acknowledged in erights's reply (a downstream consumer like
 `concordance` routing on `'[object Uint8Array]'` and treating it as a
 license to mutate or to call `Buffer.from`) is real but not blocking.
 The builder runs the same cross-package consumer sweep PR #435 used
-(per *Test plan* § Cross-package consumer touchpoints, against
+(per *Test plan* section *Cross-package consumer touchpoints*, against
 `@endo/pass-style` and `@endo/marshal`).
 If the sweep surfaces a concrete regression, the builder escalates
 back to the maintainer rather than installing the tag unilaterally;
@@ -820,11 +820,11 @@ post-#435 translation.
 
 - [erights's "delayed freezable TypedArray emulation" comment on PR #435](https://github.com/endojs/endo-but-for-bots/pull/435)
   (2026-06-17T10:55Z): the framing this document expands.
-- [PR #435 `DESIGN-immutable-arraybuffer.md`](https://github.com/endojs/endo-but-for-bots/pull/435/files)
-  (renamed from `DESIGN.md` on this PR's branch per *Decisions* § 2):
+- [PR #435 `designs/immutable-arraybuffer.md`](https://github.com/endojs/endo-but-for-bots/pull/435/files)
+  (renamed from `DESIGN.md` on this PR's branch per *Decisions* section 2):
   the drop-the-pseudo-prototype shape this design adopts on the
   TypedArray side.
-  Specifically § Out of scope ("The TypedArray-side analog (drop
+  Specifically section *Out of scope* ("The TypedArray-side analog (drop
   `%FreezableTypedArrayPrototype%` similarly). Separate PR, separate
   design.") names the work this PR does.
 - [erights's resolution of open questions 1, 2, 3 on PR #449](https://github.com/endojs/endo-but-for-bots/issues/comments/4735477238)
