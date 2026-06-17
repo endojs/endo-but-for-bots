@@ -291,10 +291,12 @@ out of scope for the initial transport.
   - `iroh-stream-adapter.test.js` — read framing, EOF, write/finish/reset,
     and `closed` resolution against a fake stream.
   - key-derivation determinism and 32-byte length.
-- **Integration (requires `@number0/iroh`, guarded so CI stays green when
-  absent):** a `test.serial` two-daemon dial-by-`NodeId` round-trip,
-  following the gateway test harness conventions (per-test daemon fork,
-  `t.teardown` cleanup, explicit timeout).
+- **Integration (opt-in via `ENDO_IROH_INTEGRATION=1`, also requires the
+  native binding):** `iroh-network.test.js` stands up two real iroh nodes and
+  drives a CapTP round-trip through the same stream adapter and
+  netstring/CapTP layering the transport uses. It is gated behind an env var
+  because it reaches iroh's public relay/discovery network and is therefore
+  unsuitable for unattended CI; the pure logic it covers is also unit tested.
 
 ## Open questions
 

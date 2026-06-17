@@ -61,8 +61,11 @@ harden(deriveIrohSecretKey);
 export const make = async (powers, context) => {
   // Imported dynamically: `@number0/iroh` is an optional native binding that
   // may be absent on unsupported platforms. The transport simply fails to
-  // instantiate there rather than breaking module resolution everywhere.
-  const { Iroh } = await import('@number0/iroh');
+  // instantiate there rather than breaking module resolution everywhere. The
+  // specifier is held in a variable so the type checker does not resolve the
+  // package's (malformed) type declarations.
+  const irohSpecifier = '@number0/iroh';
+  const { Iroh } = await import(irohSpecifier);
 
   const cancelled = /** @type {Promise<never>} */ (E(context).whenCancelled());
   const cancelServer = (/** @type {Error} */ error) => E(context).cancel(error);
@@ -95,10 +98,11 @@ export const make = async (powers, context) => {
    * @returns {ReturnType<typeof makeNetstringCapTP>}
    */
   const serveStream = (bi, connection, connectionNumber, inbound) => {
-    const { reader, writer, closed: streamClosed } = adaptIrohStream(
-      bi,
-      connection,
-    );
+    const {
+      reader,
+      writer,
+      closed: streamClosed,
+    } = adaptIrohStream(bi, connection);
     const bootstrap = inbound ? localGreeter : localGateway;
     const capTp = makeNetstringCapTP(
       'Endo',

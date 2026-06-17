@@ -35,18 +35,17 @@ export const adaptIrohStream = (bi, connection = {}) => {
   // Settle `closed` when the underlying connection closes, in addition to
   // EOF on the read side, so teardown is observed even if no read is pending.
   if (typeof connection.closed === 'function') {
-    connection
-      .closed()
-      .then(
-        () => resolveClosed(undefined),
-        () => resolveClosed(undefined),
-      );
+    connection.closed().then(
+      () => resolveClosed(undefined),
+      () => resolveClosed(undefined),
+    );
   }
 
   // --- Read direction ---
   /** @type {Reader<Uint8Array>} */
   const reader = harden({
     async next() {
+      await null;
       try {
         const buf = new Uint8Array(READ_CHUNK_SIZE);
         const n = await recv.read(buf);
@@ -83,10 +82,12 @@ export const adaptIrohStream = (bi, connection = {}) => {
   /** @type {Writer<Uint8Array>} */
   const writer = harden({
     async next(value) {
+      await null;
       await send.writeAll(value);
       return harden({ value: undefined, done: false });
     },
     async return() {
+      await null;
       try {
         await send.finish();
       } catch {
@@ -96,6 +97,7 @@ export const adaptIrohStream = (bi, connection = {}) => {
       return harden({ value: undefined, done: true });
     },
     async throw(error) {
+      await null;
       try {
         await send.reset(0n);
       } catch {
