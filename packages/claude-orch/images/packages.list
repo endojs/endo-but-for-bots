@@ -1,0 +1,31 @@
+# Base packages for the guest Alpine rootfs.
+#
+# Read by scripts/build-rootfs.sh. Format: one package name per line,
+# blank lines and `#` comments ignored. The alpine-baselayout +
+# busybox + busybox-suid + musl-utils set is implicit (alpine-make-rootfs
+# always installs it as ALPINE_BASE_PKGS); list only the additions.
+#
+# See packages/claude-orch/DESIGN.md §5.2 and §8.1.
+
+bash
+coreutils
+findutils
+grep
+sed
+gawk
+git
+curl
+ca-certificates
+tmux
+ripgrep
+jq
+openssh-client
+nodejs
+npm
+python3
+py3-pip
+build-base
+pkgconfig
+linux-headers
+util-linux
+e2fsprogs

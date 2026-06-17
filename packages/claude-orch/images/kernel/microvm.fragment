@@ -1,0 +1,141 @@
+# Kernel config fragment for the claude-orch microVM guest. Apply on top
+# of `make tinyconfig` (or `make defconfig` if tinyconfig is too minimal
+# to merge cleanly). See DESIGN.md §8.2.
+#
+# Usage:
+#   make tinyconfig
+#   ./scripts/kconfig/merge_config.sh -m .config \
+#       packages/claude-orch/images/kernel/microvm.fragment
+#   make olddefconfig
+#   make -j$(nproc) Image  # arm64
+#   make -j$(nproc) bzImage  # x86_64
+
+# Multi-user (setgroups / setuid / setgid). tinyconfig disables this and
+# bootstrap-init can't drop privileges without it.
+CONFIG_MULTIUSER=y
+
+# Console + printk (tinyconfig disables printk; we want kernel logs)
+CONFIG_PRINTK=y
+CONFIG_PRINTK_TIME=y
+CONFIG_EARLY_PRINTK=y
+CONFIG_BINFMT_ELF=y
+CONFIG_BINFMT_SCRIPT=y
+
+# Virtio. VIRTIO_MENU is the parent menuconfig — without it, the
+# tristate options below default to n during olddefconfig.
+CONFIG_VIRTIO_MENU=y
+CONFIG_VIRTIO=y
+CONFIG_VIRTIO_PCI=y
+CONFIG_VIRTIO_PCI_LIB=y
+CONFIG_VIRTIO_MMIO=y
+CONFIG_VIRTIO_MMIO_CMDLINE_DEVICES=y
+CONFIG_VIRTIO_BLK=y
+CONFIG_VIRTIO_NET=y
+CONFIG_VIRTIO_CONSOLE=y
+CONFIG_HW_RANDOM_VIRTIO=y
+
+# Virtio console (`console=hvc0`)
+CONFIG_HVC_DRIVER=y
+
+# pty + tty enough to run claude under exec()
+CONFIG_TTY=y
+CONFIG_VT=y
+CONFIG_UNIX98_PTYS=y
+
+# Standard 8250 serial for `-machine pc -serial stdio` boot debugging.
+CONFIG_SERIAL_8250=y
+CONFIG_SERIAL_8250_CONSOLE=y
+
+# arm64 console + earlycon: the QEMU `virt` machine exposes a PL011
+# at 0x9000000; without these the kernel boots completely silent (no
+# console driver for ttyAMA0, and earlycon=pl011 has no framework
+# either). hvc0 alone is not enough — until virtio-console probes,
+# /dev/console can't open and userland gets "unable to open an
+# initial console" on any boot failure during driver bringup.
+CONFIG_SERIAL_AMBA_PL011=y
+CONFIG_SERIAL_AMBA_PL011_CONSOLE=y
+CONFIG_SERIAL_EARLYCON=y
+CONFIG_SERIAL_OF_PLATFORM=y
+
+# Device tree: arm64 virt machine boots via a DTB the QEMU generates
+# at runtime; without OF_EARLY_FLATTREE the kernel can't parse it.
+CONFIG_OF=y
+CONFIG_OF_EARLY_FLATTREE=y
+CONFIG_OF_FLATTREE=y
+
+# Generic PCIe host controller for the arm64 `virt` machine. Without
+# this, the PCIe root complex (gpex-pcihost) is never registered ->
+# *nothing on the PCI bus probes*: no virtio-blk-pci -> no /dev/vda
+# -> kernel panics mounting root; no virtio-console-pci -> hvc0 has
+# nowhere to print. x86_64 microvm uses VIRTIO_MMIO instead so this
+# is arm64-specific in practice; harmless on x86_64.
+CONFIG_PCI_HOST_GENERIC=y
+
+# Posix / high-res timers — tinyconfig disables these but arm64 virt
+# guests boot expecting them (virtio-rtc-less; userland needs
+# clock_nanosleep et al). Harmless where they were already implied.
+CONFIG_HIGH_RES_TIMERS=y
+CONFIG_POSIX_TIMERS=y
+
+# Block layer + scheduler
+CONFIG_BLOCK=y
+CONFIG_BLK_DEV=y
+
+# x86_64 + smp
+CONFIG_64BIT=y
+CONFIG_SMP=y
+
+# PCI bus + MSI (virtio-blk-pci needs MSI/local APIC to register)
+CONFIG_PCI=y
+CONFIG_PCI_MSI=y
+CONFIG_X86_LOCAL_APIC=y
+CONFIG_X86_IO_APIC=y
+CONFIG_HOTPLUG_PCI=y
+CONFIG_HOTPLUG_PCI_PCIE=y
+CONFIG_PCIEPORTBUS=y
+
+# 9P
+CONFIG_NET_9P=y
+CONFIG_NET_9P_VIRTIO=y
+CONFIG_9P_FS=y
+CONFIG_9P_FS_POSIX_ACL=y
+
+# Filesystems
+CONFIG_EXT4_FS=y
+CONFIG_OVERLAY_FS=y
+CONFIG_TMPFS=y
+CONFIG_TMPFS_POSIX_ACL=y
+CONFIG_DEVTMPFS=y
+CONFIG_DEVTMPFS_MOUNT=y
+CONFIG_PROC_FS=y
+CONFIG_SYSFS=y
+# bootstrap-init mounts /dev/pts for tmux/pty plumbing later
+CONFIG_DEVPTS_FS=y
+
+# Networking baseline
+CONFIG_NET=y
+CONFIG_INET=y
+CONFIG_PACKET=y
+CONFIG_UNIX=y
+CONFIG_IPV6=y
+CONFIG_NETFILTER=y
+
+# Containers / sandboxing primitives used by Claude Code & friends
+CONFIG_NAMESPACES=y
+CONFIG_USER_NS=y
+CONFIG_PID_NS=y
+CONFIG_NET_NS=y
+CONFIG_UTS_NS=y
+CONFIG_CGROUPS=y
+CONFIG_CGROUP_PIDS=y
+CONFIG_MEMCG=y
+CONFIG_SECCOMP=y
+CONFIG_SECCOMP_FILTER=y
+CONFIG_BPF=y
+CONFIG_BPF_SYSCALL=y
+
+# Modules off — DESIGN.md §8.2: everything we need is compiled in.
+# CONFIG_MODULES is not set
+
+# microvm (x86_64) — harmless on arm64 where the option doesn't apply.
+CONFIG_X86_NO_MMCONFIG=y

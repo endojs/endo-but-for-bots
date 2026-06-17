@@ -1,0 +1,98 @@
+#!/usr/bin/env node
+// @ts-check
+
+import '@endo/init';
+import process from 'node:process';
+
+import { makeBroker, loadApiKey } from '../src/broker/main.js';
+import { makeOAuthRefresher } from '../src/broker/oauth.js';
+
+const env = process.env;
+
+const socketPath =
+  env.CLAUDE_ORCH_BROKER_SOCKET || '/run/claude-orch/broker.sock';
+const configPath = env.CLAUDE_ORCH_BROKER_CONFIG;
+
+// Mode selection: presence of the OAuth env vars switches the broker
+// into OAuth mode. Otherwise it serves a static api-key.
+//
+// OAuth mode (RFC 6749 §6 refresh-token grant):
+//   CLAUDE_ORCH_BROKER_OAUTH_TOKEN_URL          token endpoint
+//   CLAUDE_ORCH_BROKER_OAUTH_CLIENT_ID
+//   CLAUDE_ORCH_BROKER_OAUTH_CLIENT_SECRET     optional (PKCE-only clients)
+//   CLAUDE_ORCH_BROKER_OAUTH_REFRESH_TOKEN     the long-lived secret
+//   CLAUDE_ORCH_BROKER_OAUTH_SCOPE             optional space-separated list
+//   CLAUDE_ORCH_BROKER_REFRESH_WINDOW_MS       refresh this many ms before
+//                                              expiresAt. Default 5 min.
+//
+// In OAuth mode the broker:
+//   1. Performs an initial token refresh at startup to seed
+//      `initialCredentials`.
+//   2. Schedules `setTimeout` based on the access token's `expiresAt`.
+//   3. Pushes fresh credentials to every subscribed orchestrator on
+//      each rotation. The long-lived refresh token never leaves
+//      this process.
+let initialCredentials;
+let refresher;
+let refreshWindowMs;
+
+if (env.CLAUDE_ORCH_BROKER_OAUTH_TOKEN_URL) {
+  const tokenUrl = env.CLAUDE_ORCH_BROKER_OAUTH_TOKEN_URL;
+  const clientId = env.CLAUDE_ORCH_BROKER_OAUTH_CLIENT_ID;
+  const refreshToken = env.CLAUDE_ORCH_BROKER_OAUTH_REFRESH_TOKEN;
+  if (!clientId) {
+    console.error(
+      'CLAUDE_ORCH_BROKER_OAUTH_CLIENT_ID is required in OAuth mode',
+    );
+    process.exit(2);
+  }
+  if (!refreshToken) {
+    console.error(
+      'CLAUDE_ORCH_BROKER_OAUTH_REFRESH_TOKEN is required in OAuth mode',
+    );
+    process.exit(2);
+  }
+  const oauth = makeOAuthRefresher({
+    tokenUrl,
+    clientId,
+    clientSecret: env.CLAUDE_ORCH_BROKER_OAUTH_CLIENT_SECRET,
+    refreshToken,
+    scope: env.CLAUDE_ORCH_BROKER_OAUTH_SCOPE?.split(/\s+/u).filter(Boolean),
+    log: (level, msg) => console.error(`[claude-broker oauth ${level}] ${msg}`),
+  });
+  refresher = oauth.refresh;
+  refreshWindowMs = env.CLAUDE_ORCH_BROKER_REFRESH_WINDOW_MS
+    ? Number(env.CLAUDE_ORCH_BROKER_REFRESH_WINDOW_MS)
+    : undefined;
+  // The initial refresh produces the access token that seeds the
+  // broker's state. If this fails the broker won't start — the
+  // alternative is starting in a stale state and refusing every
+  // subscribe, which is worse.
+  initialCredentials = await refresher();
+  console.error(
+    `[claude-broker] OAuth mode: initial token expires at ${initialCredentials.oauthToken?.expiresAt}`,
+  );
+} else {
+  const apiKey = await loadApiKey({ configPath });
+  initialCredentials = { apiKey };
+  console.error('[claude-broker] api-key mode: no rotation');
+}
+
+const broker = makeBroker({
+  socketPath,
+  initialCredentials,
+  refresher,
+  refreshWindowMs,
+  log: (level, msg) => console.error(`[claude-broker ${level}] ${msg}`),
+});
+const server = await broker.listen();
+
+console.error(`[claude-broker] listening on ${socketPath}`);
+
+const shutdown = async (/** @type {NodeJS.Signals} */ signal) => {
+  console.error(`[claude-broker] received ${signal}, shutting down...`);
+  server.close(() => process.exit(0));
+};
+
+process.on('SIGTERM', () => void shutdown('SIGTERM'));
+process.on('SIGINT', () => void shutdown('SIGINT'));

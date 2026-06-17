@@ -1276,7 +1276,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@endo/9p-server@workspace:packages/9p-server":
+"@endo/9p-server@workspace:^, @endo/9p-server@workspace:packages/9p-server":
   version: 0.0.0-use.local
   resolution: "@endo/9p-server@workspace:packages/9p-server"
   dependencies:
@@ -1510,6 +1510,47 @@ __metadata:
     c8: "catalog:dev"
     eslint: "catalog:dev"
     typescript: "catalog:dev"
+  languageName: unknown
+  linkType: soft
+
+"@endo/claude-container@workspace:packages/claude-container":
+  version: 0.0.0-use.local
+  resolution: "@endo/claude-container@workspace:packages/claude-container"
+  dependencies:
+    "@endo/9p-server": "workspace:^"
+    "@endo/claude-orch": "workspace:^"
+    "@endo/cli": "workspace:^"
+    "@endo/daemon": "workspace:^"
+    "@endo/endo-fs": "workspace:^"
+    "@endo/errors": "workspace:^"
+    "@endo/eventual-send": "workspace:^"
+    "@endo/exo": "workspace:^"
+    "@endo/exo-stream": "workspace:^"
+    "@endo/far": "workspace:^"
+    "@endo/init": "workspace:^"
+    "@endo/patterns": "workspace:^"
+    "@endo/promise-kit": "workspace:^"
+    ava: "catalog:dev"
+    eslint: "catalog:dev"
+  languageName: unknown
+  linkType: soft
+
+"@endo/claude-orch@workspace:^, @endo/claude-orch@workspace:packages/claude-orch":
+  version: 0.0.0-use.local
+  resolution: "@endo/claude-orch@workspace:packages/claude-orch"
+  dependencies:
+    "@endo/9p-server": "workspace:^"
+    "@endo/endo-fs": "workspace:^"
+    "@endo/errors": "workspace:^"
+    "@endo/eventual-send": "workspace:^"
+    "@endo/exo-stream": "workspace:^"
+    "@endo/init": "workspace:^"
+    "@endo/promise-kit": "workspace:^"
+    ava: "catalog:dev"
+    eslint: "catalog:dev"
+  bin:
+    claude-broker: ./bin/claude-broker
+    claude-orch: ./bin/claude-orch
   languageName: unknown
   linkType: soft
 
