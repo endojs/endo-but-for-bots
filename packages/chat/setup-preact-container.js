@@ -1,13 +1,14 @@
 // @ts-check
 
-// Chat's local entry point for `@endo/preact-container`.
+// Chat's local entry point for `@endo/preact-container` — a single import
+// surface for the confine/render helpers.
 //
 // `@endo/preact-container` mounts *untrusted* Preact component code (e.g. a
 // guest-supplied widget the host evaluated in a SES `Compartment`) inside an
-// ordinary Preact tree without handing it the live DOM. The package documents
-// a hard precondition: `lockdown()` must run — with `overrideTaming: 'severe'`
-// specifically — before any untrusted component source is evaluated. Two
-// independent reasons (see the package README for detail):
+// ordinary Preact tree without handing it the live DOM. It has a hard
+// precondition: the realm must be locked down with `overrideTaming: 'severe'`
+// before any untrusted component source is evaluated. Two reasons (see the
+// package README for detail):
 //
 //   1. Containment integrity. Without `lockdown()`, every endowment handed to
 //      confined code reaches the host realm's `Function` via `.constructor`
@@ -17,23 +18,14 @@
 //   2. `overrideTaming: 'severe'` is *required for Preact to run at all*.
 //      Preact instantiates function components by assigning
 //      `component.constructor = type`, which hits the SES "override mistake"
-//      under the default lockdown. `'severe'` enables `'%ObjectPrototype%':
+//      under 'min'/'moderate' taming. `'severe'` enables `'%ObjectPrototype%':
 //      '*'`, making `constructor` overridable so the assignment succeeds.
-//      `'min'` and `'moderate'` do not.
 //
-// IMPORTANT: importing this module calls `lockdown()`, which freezes the
-// realm's primordials. The main chat realm deliberately never locks down
-// (Monaco and other dependencies rely on mutable intrinsics — see `main.js`),
-// so this module is intended to run in its own realm/boundary (an iframe or
-// worker) rather than being imported from the main bundle. Keeping the
-// confined-Preact surface and the Monaco surface in separate realms is the
-// path that reconciles the two taming requirements.
-
-import 'ses';
-
-// `lockdown` is installed on `globalThis` by `import 'ses'` above. Specify the
-// taming level `@endo/preact-container` requires.
-lockdown({ overrideTaming: 'severe' });
+// This module does NOT call `lockdown()` itself: the chat entry (main.js, via
+// pre-lockdown.js + `@endo/init`) locks the realm down with severe taming at
+// startup, and `lockdown()` may only be called once. A different host
+// embedding these helpers is responsible for establishing the same taming
+// before importing this module.
 
 export {
   confineComponent,
