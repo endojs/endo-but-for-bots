@@ -57,13 +57,19 @@ const fail = async msg => {
 
 await page.goto('http://localhost:5199/');
 try {
-  await page.waitForFunction(() => globalThis.__ready === true, { timeout: 45000 });
+  await page.waitForFunction(() => globalThis.__ready === true, {
+    timeout: 45000,
+  });
 } catch (e) {
   await fail(`probe never became ready: ${e.message}`);
 }
-loadResult = await page.evaluate(() => globalThis.__monacoResult || { ok: true });
+loadResult = await page.evaluate(
+  () => globalThis.__monacoResult || { ok: true },
+);
 if (!loadResult.ok) {
-  await fail(`monaco threw on load under lockdown: ${loadResult.error}\n${loadResult.stack}`);
+  await fail(
+    `monaco threw on load under lockdown: ${loadResult.error}\n${loadResult.stack}`,
+  );
 }
 
 // ---- RUNTIME INTERACTION PHASE ----
@@ -126,7 +132,11 @@ const programmatic = await page.evaluate(() => {
     ed.getValue();
     return { ok: true };
   } catch (e) {
-    return { ok: false, error: `${e.name}: ${e.message}`, stack: String(e.stack).slice(0, 500) };
+    return {
+      ok: false,
+      error: `${e.name}: ${e.message}`,
+      stack: String(e.stack).slice(0, 500),
+    };
   }
 });
 
@@ -139,16 +149,24 @@ await server.close();
 // ---- ANALYSIS ----
 const allErrors = [...consoleErrors, ...inPageErrors];
 const lockdownErrors = allErrors.filter(isLockdownSmell);
-const otherErrors = allErrors.filter(t => !isExpectedWorkerNoise(t) && !isLockdownSmell(t));
+const otherErrors = allErrors.filter(
+  t => !isExpectedWorkerNoise(t) && !isLockdownSmell(t),
+);
 
 console.log('=== runtime interaction complete ===');
-console.log('final editor value (first 80 chars):', JSON.stringify(String(finalValue).slice(0, 80)));
+console.log(
+  'final editor value (first 80 chars):',
+  JSON.stringify(String(finalValue).slice(0, 80)),
+);
 console.log('programmatic edits:', JSON.stringify(programmatic));
-console.log(`total errors: ${allErrors.length} | lockdown-smell: ${lockdownErrors.length} | other(non-worker): ${otherErrors.length}`);
+console.log(
+  `total errors: ${allErrors.length} | lockdown-smell: ${lockdownErrors.length} | other(non-worker): ${otherErrors.length}`,
+);
 
 if (lockdownErrors.length) {
   console.log('=== LOCKDOWN-RELATED ERRORS ===');
-  for (const e of [...new Set(lockdownErrors)].slice(0, 25)) console.log('  -', e);
+  for (const e of [...new Set(lockdownErrors)].slice(0, 25))
+    console.log('  -', e);
 }
 if (otherErrors.length) {
   console.log('=== OTHER (non-worker) ERRORS ===');
@@ -156,12 +174,16 @@ if (otherErrors.length) {
 }
 
 if (!programmatic.ok) {
-  console.error(`FAIL: programmatic edit threw under lockdown: ${programmatic.error}\n${programmatic.stack}`);
+  console.error(
+    `FAIL: programmatic edit threw under lockdown: ${programmatic.error}\n${programmatic.stack}`,
+  );
   process.exit(1);
 }
 if (lockdownErrors.length) {
   console.error('FAIL: lockdown-related runtime errors detected (see above)');
   process.exit(1);
 }
-console.log('PASS: monaco survives runtime interaction under lockdown({ overrideTaming: "severe" })');
+console.log(
+  'PASS: monaco survives runtime interaction under lockdown({ overrideTaming: "severe" })',
+);
 process.exit(0);
