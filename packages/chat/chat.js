@@ -1085,10 +1085,10 @@ const bodyComponent = (
       }
 
       // In channel mode, the channels sidebar supplies the alternate rendering
-      // (header New/Join, per-channel decoration, bookmarks, reordering).
+      // (per-channel decoration, bookmarks, reordering). Channel creation
+      // lives in the New Space modal, not here.
       const channelSidebar = isChannelMode
         ? makeChannelSidebar({
-            powers: /** @type {ERef<EndoHost>} */ (resolvedPowers),
             onSelectChannel: switchChannel,
             activeChannelPetName: activeSpaceInfo.channelPetName || null,
             channelOrder: activeSpaceInfo.channelOrder,

@@ -1,26 +1,21 @@
 // @ts-check
 /* eslint-disable no-continue */
 
-/** @import { ERef } from '@endo/far' */
-/** @import { EndoHost } from '@endo/daemon' */
-
 import harden from '@endo/harden';
-import { E } from '@endo/far';
 
 import { makeChannelReorder } from './dnd.js';
 
 // The channels sidebar: the channel-mode behavior that used to be woven
 // through inventory.js behind a `channelMode` flag. The inventory module is
 // now a mode-agnostic pet-name tree renderer with hook points; this provides
-// the channel-specific contributions (header New/Join forms, per-channel
-// decoration, bookmarks, reordering) as a `sidebar` config it consumes. Still
+// the channel-specific contributions (per-channel decoration, bookmarks,
+// reordering) as a `sidebar` config it consumes. Channel CREATION lives
+// entirely in the New Space modal (add-space-modal.js) — never here. Still
 // imperative — see designs/preact-confinement-migration.md (its own Preact
 // migration is a later, separate effort).
 
 /**
  * @typedef {object} ChannelSidebarConfig
- * @property {ERef<EndoHost>} powers - Powers for the current profile, used to
- *   create (`makeChannel`) and join (`storeLocator`) channels.
  * @property {(channelPetName: string) => void} [onSelectChannel]
  * @property {string | null} [activeChannelPetName]
  * @property {string[]} [channelOrder]
@@ -57,7 +52,6 @@ import { makeChannelReorder } from './dnd.js';
  */
 export const makeChannelSidebar = config => {
   const {
-    powers,
     onSelectChannel,
     activeChannelPetName,
     channelOrder,
@@ -72,8 +66,9 @@ export const makeChannelSidebar = config => {
   const channelReorder = makeChannelReorder();
 
   /**
-   * Set up the channel-mode header: title, New/Join buttons, and their inline
-   * forms. Called once at the top level.
+   * Set up the channel-mode header: just retitle the panel to "Channels".
+   * Channel creation (New Channel / Connect to Channel) lives in the New Space
+   * modal, not here. Called once at the top level.
    *
    * @param {HTMLElement} $parent
    */
@@ -81,224 +76,6 @@ export const makeChannelSidebar = config => {
     const $title = $parent.querySelector('.inventory-title');
     if ($title) {
       $title.textContent = 'Channels';
-    }
-
-    // Add channel action buttons if not already present
-    const $header = $parent.querySelector('.inventory-header');
-    if ($header && !$header.querySelector('.channel-actions')) {
-      const $actions = document.createElement('span');
-      $actions.className = 'channel-actions';
-
-      const $newBtn = document.createElement('button');
-      $newBtn.className = 'channel-action-btn';
-      $newBtn.textContent = 'New';
-      $newBtn.title = 'Create a new channel';
-
-      const $joinBtn = document.createElement('button');
-      $joinBtn.className = 'channel-action-btn';
-      $joinBtn.textContent = 'Join';
-      $joinBtn.title = 'Join an existing channel';
-
-      $actions.appendChild($newBtn);
-      $actions.appendChild($joinBtn);
-
-      // Insert before the toggle label
-      const $toggle = $header.querySelector('.inventory-toggle');
-      if ($toggle) {
-        $header.insertBefore($actions, $toggle);
-      } else {
-        $header.appendChild($actions);
-      }
-
-      // Inline form container (shared between New and Join)
-      let $inlineForm = $parent.querySelector('.channel-inline-form');
-      if (!$inlineForm) {
-        $inlineForm = document.createElement('div');
-        $inlineForm.className = 'channel-inline-form';
-        // Insert between header and pet-list
-        const $petList = $parent.querySelector('.pet-list');
-        if ($petList) {
-          $parent.insertBefore($inlineForm, $petList);
-        } else {
-          $parent.appendChild($inlineForm);
-        }
-      }
-
-      /**
-       * Show the "New Channel" inline form.
-       */
-      const showNewForm = () => {
-        if (!$inlineForm) return;
-        $inlineForm.innerHTML = '';
-        $inlineForm.classList.add('visible');
-
-        const $form = document.createElement('div');
-        $form.className = 'channel-form';
-
-        const $nameInput = document.createElement('input');
-        $nameInput.type = 'text';
-        $nameInput.placeholder = 'Channel name';
-        $nameInput.className = 'channel-form-input';
-
-        const $displayInput = document.createElement('input');
-        $displayInput.type = 'text';
-        $displayInput.placeholder = 'Your display name';
-        $displayInput.className = 'channel-form-input';
-
-        const $btnRow = document.createElement('div');
-        $btnRow.className = 'channel-form-buttons';
-
-        const $createBtn = document.createElement('button');
-        $createBtn.className = 'channel-form-submit';
-        $createBtn.textContent = 'Create';
-
-        const $cancelBtn = document.createElement('button');
-        $cancelBtn.className = 'channel-form-cancel';
-        $cancelBtn.textContent = 'Cancel';
-
-        $btnRow.appendChild($createBtn);
-        $btnRow.appendChild($cancelBtn);
-
-        $form.appendChild($nameInput);
-        $form.appendChild($displayInput);
-        $form.appendChild($btnRow);
-        $inlineForm.appendChild($form);
-
-        $nameInput.focus();
-
-        $cancelBtn.onclick = () => {
-          $inlineForm.classList.remove('visible');
-          $inlineForm.innerHTML = '';
-        };
-
-        $createBtn.onclick = async () => {
-          const petName = $nameInput.value.trim();
-          const displayName = $displayInput.value.trim();
-          if (!petName || !displayName) return;
-
-          $createBtn.disabled = true;
-          $createBtn.textContent = 'Creating...';
-          try {
-            await E(powers).makeChannel(petName, displayName);
-            $inlineForm.classList.remove('visible');
-            $inlineForm.innerHTML = '';
-            // Auto-select the new channel
-            if (onSelectChannel) {
-              onSelectChannel(petName);
-            }
-          } catch (err) {
-            window.reportError(/** @type {Error} */ (err));
-            $createBtn.disabled = false;
-            $createBtn.textContent = 'Create';
-          }
-        };
-
-        // Submit on Enter in last input
-        $displayInput.addEventListener('keydown', e => {
-          if (e.key === 'Enter') {
-            $createBtn.click();
-          }
-        });
-      };
-
-      /**
-       * Show the "Join Channel" inline form.
-       */
-      const showJoinForm = () => {
-        if (!$inlineForm) return;
-        $inlineForm.innerHTML = '';
-        $inlineForm.classList.add('visible');
-
-        const $form = document.createElement('div');
-        $form.className = 'channel-form';
-
-        const $locatorInput = document.createElement('input');
-        $locatorInput.type = 'text';
-        $locatorInput.placeholder = 'Locator URL';
-        $locatorInput.className = 'channel-form-input';
-
-        const $nameInput = document.createElement('input');
-        $nameInput.type = 'text';
-        $nameInput.placeholder = 'Channel name (local)';
-        $nameInput.className = 'channel-form-input';
-
-        const $btnRow = document.createElement('div');
-        $btnRow.className = 'channel-form-buttons';
-
-        const $joinSubmit = document.createElement('button');
-        $joinSubmit.className = 'channel-form-submit';
-        $joinSubmit.textContent = 'Join';
-
-        const $cancelBtn = document.createElement('button');
-        $cancelBtn.className = 'channel-form-cancel';
-        $cancelBtn.textContent = 'Cancel';
-
-        $btnRow.appendChild($joinSubmit);
-        $btnRow.appendChild($cancelBtn);
-
-        $form.appendChild($locatorInput);
-        $form.appendChild($nameInput);
-        $form.appendChild($btnRow);
-        $inlineForm.appendChild($form);
-
-        $locatorInput.focus();
-
-        $cancelBtn.onclick = () => {
-          $inlineForm.classList.remove('visible');
-          $inlineForm.innerHTML = '';
-        };
-
-        $joinSubmit.onclick = async () => {
-          const locator = $locatorInput.value.trim();
-          const petName = $nameInput.value.trim();
-          if (!locator || !petName) return;
-
-          $joinSubmit.disabled = true;
-          $joinSubmit.textContent = 'Joining...';
-          try {
-            // Validate the locator URL and extract connection hints.
-            const url = new URL(locator);
-            const formulaNumber = url.searchParams.get('id');
-            const nodeNumber = url.hostname;
-            if (!formulaNumber) {
-              throw new Error('Invalid locator: missing formula id');
-            }
-            // Register peer info from connection hints so the daemon
-            // knows how to reach the remote node.
-            const addresses = url.searchParams.getAll('at');
-            if (addresses.length > 0 && nodeNumber) {
-              await E(
-                /** @type {{ addPeerInfo: (info: { node: string, addresses: string[] }) => Promise<void> }} */ (
-                  /** @type {unknown} */ (powers)
-                ),
-              ).addPeerInfo({ node: nodeNumber, addresses });
-            }
-            // Pass the original endo:// locator to storeLocator so the
-            // system can drop bare-identifier support in the future.
-            await E(powers).storeLocator(petName, locator);
-            $inlineForm.classList.remove('visible');
-            $inlineForm.innerHTML = '';
-            // Auto-select the new channel
-            if (onSelectChannel) {
-              onSelectChannel(petName);
-            }
-          } catch (err) {
-            window.reportError(/** @type {Error} */ (err));
-            $joinSubmit.disabled = false;
-            $joinSubmit.textContent = 'Join';
-          }
-        };
-
-        // Submit on Enter in last input
-        $nameInput.addEventListener('keydown', e => {
-          if (e.key === 'Enter') {
-            $joinSubmit.click();
-          }
-        });
-      };
-
-      $newBtn.onclick = showNewForm;
-      $joinBtn.onclick = showJoinForm;
     }
   };
 
