@@ -374,7 +374,10 @@ for (const key of ownKeys(immutableArrayBufferLibProperties)) {
     enumerable: false,
   });
 }
-freeze(immutableArrayBufferLibProperties);
+// Do not freeze: the shim passes these descriptors directly to
+// `defineProperties`, and frozen descriptors (configurable: false,
+// writable: false) would conflict with SES's later tamings. Leave the
+// record unfrozen so descriptors are directly usable.
 
 // Internal-test export. The helper itself is load-bearing for every
 // method on `immutableArrayBufferLibProperties`, but the package's
@@ -1171,7 +1174,11 @@ for (const key of ownKeys(freezableTypedArrayLibProperties)) {
     enumerable: false,
   });
 }
-freeze(freezableTypedArrayLibProperties);
+// Do not freeze: the shim passes these descriptors directly to
+// `defineProperties`, and frozen descriptors (configurable: false,
+// writable: false) would prevent SES's `tameLocaleMethods` from later
+// replacing `toLocaleString`. Leave the record unfrozen so descriptors
+// are directly usable.
 
 /**
  * The eleven concrete TypedArray constructors that share `%TypedArrayPrototype%`.
