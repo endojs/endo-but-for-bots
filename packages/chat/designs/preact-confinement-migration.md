@@ -319,8 +319,13 @@ Steps 1 are Phase-1 refactors (no Preact); steps 2–5 convert markup in place.
    - `DropMenu` (inventory-drop-menu.js). ☑ done — the first Preact `h()`
      component; rendered by inventory-dnd.js's `showDropMenu`, covered by
      `test/inventory-dnd` under severe lockdown.
-   - `ItemLabel`, `ItemActions`, `BookmarkItem`,
-     `NewChannelForm` / `JoinChannelForm`. ☐
+   - `ItemActions` (inventory-item-actions.js). ☑ done — info/cancel/remove
+     buttons; owns the cancel two-click confirm state via hooks; mounts into a
+     `display: contents` sub-host so the imperative channel menu button stays a
+     `.pet-buttons` flex sibling. Covered by `test/inventory-item-actions`
+     (`yarn test:item-actions`) under severe lockdown. The `setup-preact-container.js`
+     barrel now also re-exports the Preact hooks for host components.
+   - `ItemLabel`, `BookmarkItem`, `NewChannelForm` / `JoinChannelForm`. ☐
 3. Migrate `ItemDisclosure` + `BookmarkList` + `ChannelItemMenu`.
 4. Compose `PetItem`, then `ChannelActions`.
 5. Convert `InventoryList` last, once its children are Preact.
