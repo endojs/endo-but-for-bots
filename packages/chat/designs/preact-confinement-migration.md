@@ -51,8 +51,25 @@ seam where a confined guest component could be substituted).
   once a second caller wants it. See `components/README.md` for the format.
 - `inventory/` — the inventory feature: its specific Preact components
   (`drop-menu.js`, `item-actions.js`, …), behavior factories (`dnd.js`,
-  `tree-source.js`), and the migrating module (`inventory.js`, currently
-  `inventory-component.js`'s content; becomes `InventoryList`).
+  `tree-source.js`), the migrating module (`inventory.js`; becomes
+  `InventoryList`), and `channel-sidebar.js` (see below).
+
+### `inventory.js` is the pet-name tree; channels are a separate sidebar
+
+`inventory.js` was overloaded: a `channelMode` flag switched it between the
+pet-name tree and the channels sidebar (New/Join forms, per-channel menu,
+bookmarks, reordering). Those channel concerns are **not** inventory and have
+been split into `inventory/channel-sidebar.js`: `inventory.js` is now a
+mode-agnostic tree renderer that takes an optional `sidebar` of hooks
+(`setupHeader`, `decorateItem`, `setupList`, `prepend`, `itemInitiallyHidden`),
+and `makeChannelSidebar` supplies them. `chat.js` builds the sidebar in channel
+mode.
+
+So **"the whole inventory as Preact" scopes to the pet-name tree**
+(`ItemLabel`, `ItemActions` ✓, `DropMenu` ✓, `ItemDisclosure`, `PetItem`,
+`InventoryList`). The channel sidebar is still imperative; its own Preact
+migration is a separate, later effort (and would yield reusable pieces like a
+`PopupMenu` shared with `DropMenu`, plus the New/Join forms).
 
 Feature-specific components live with their feature; only genuinely reusable
 ones go in `components/`. Both follow the one common component format
@@ -314,9 +331,10 @@ Applying the two-phase rule to the pieces above:
 | `makeItemDragDrop` (row drag source/target, `acceptsDrop`, drop-target paths) | Phase 1 — extract now |
 | `makeChannelReorder` (list reorder + indicator) | Phase 1 — extract now |
 | controller↔row prop/callback boundary | Phase 1 — define now |
-| `ItemLabel`, `ItemActions`, `DropMenu`, `BookmarkItem`, `NewChannelForm`, `JoinChannelForm` | Convert-in-place |
-| `ItemDisclosure`, `BookmarkList`, `ChannelItemMenu` | Convert-in-place |
-| `PetItem`, `ChannelActions`, `InventoryList` shell | Convert-in-place |
+| `ItemLabel`, `ItemActions`, `DropMenu` | Convert-in-place |
+| `ItemDisclosure` | Convert-in-place |
+| `PetItem`, `InventoryList` shell | Convert-in-place |
+| channel sidebar (`NewChannelForm` / `JoinChannelForm`, `BookmarkItem` / `BookmarkList`, `ChannelItemMenu`, reorder) | Split to `channel-sidebar.js`; separate later migration |
 
 ### Migration order for the inventory bar
 
@@ -342,7 +360,12 @@ Steps 1 are Phase-1 refactors (no Preact); steps 2–5 convert markup in place.
      `.pet-buttons` flex sibling. Covered by `test/inventory-item-actions`
      (`yarn test:item-actions`) under severe lockdown. The `setup-preact-container.js`
      barrel now also re-exports the Preact hooks for host components.
-   - `ItemLabel`, `BookmarkItem`, `NewChannelForm` / `JoinChannelForm`. ☐
-3. Migrate `ItemDisclosure` + `BookmarkList` + `ChannelItemMenu`.
-4. Compose `PetItem`, then `ChannelActions`.
-5. Convert `InventoryList` last, once its children are Preact.
+   - `ItemLabel`. ☐
+3. Migrate `ItemDisclosure`. ☐
+4. Compose `PetItem`. ☐
+5. Convert `InventoryList` last, once its children are Preact. ☐
+
+The channel-sidebar pieces (`NewChannelForm` / `JoinChannelForm`, `BookmarkItem`
+/ `BookmarkList`, `ChannelItemMenu`, channel reorder) are **out of scope** for
+the inventory migration — they were split into `inventory/channel-sidebar.js`
+(still imperative) and migrate separately later.
