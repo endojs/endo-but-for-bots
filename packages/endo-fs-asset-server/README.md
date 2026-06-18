@@ -86,11 +86,29 @@ const server = await makeAssetServer({
   URL-safe base64 without padding.
 - Request paths are rejected if they contain `.`/`..` traversal
   segments or NUL bytes, so a request can never escape the mount root.
+  The lookup also walks strictly downward from the Filesystem root, and
+  endo-fs's own `Directory.lookup` independently rejects traversal
+  segments — defense in depth.
+- **The capability lives in the URL path.** URLs leak through proxy and
+  access logs, browser history, and the `Referer` header. Responses are
+  sent with `Referrer-Policy: no-referrer` so a served page does not
+  forward its capability path to third-party origins, but you should
+  still treat the URL itself as a secret and avoid logging it.
+- Responses carry `X-Content-Type-Options: nosniff`, and unknown
+  extensions fall back to `application/octet-stream`. Even so, serving
+  **untrusted** content means that content runs in the server's origin
+  (`http://host:port`) — prefer a dedicated origin per trust domain and
+  consider a reverse proxy that adds a `Content-Security-Policy`.
 - The server binds to loopback by default. Exposing it on other
   interfaces (`ENDO_FS_ASSET_SERVER_HOST=0.0.0.0`) means the capability
   paths are the only thing standing between a client and the served
-  bytes — prefer placing it behind TLS-terminating infrastructure and
-  setting `ENDO_FS_ASSET_SERVER_PUBLIC_BASE` accordingly.
+  bytes. Because the default origin is plaintext `http://`, the token
+  would transit the network in the clear — only expose a non-loopback
+  bind behind TLS-terminating infrastructure, and set
+  `ENDO_FS_ASSET_SERVER_PUBLIC_BASE` to the public `https://` origin.
 - Wrap the Filesystem with `@endo/endo-fs`'s `readOnly` attenuator (or
   mount it with `ENDO_FS_READ_ONLY=1`) so the server cannot be tricked
-  into mutating the backing store.
+  into mutating the backing store. A read-only mount also avoids the
+  `Content-Length`-vs-body race that a file mutated between stat and
+  read would otherwise cause (the server aborts such a response rather
+  than sending a truncated body).

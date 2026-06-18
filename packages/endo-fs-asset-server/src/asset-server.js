@@ -98,12 +98,16 @@ const toBase64Url = bytes => {
  */
 
 /**
- * Drain the file at `fileNode` to the HTTP response. Opens the file
- * read-only, streams its bytes in `iterateBytesReader` frames, and
- * always closes the `OpenFile` even on error.
+ * Drain the file at `fileNode` to the HTTP response and finalize it.
+ * Opens the file read-only, streams its bytes in `iterateBytesReader`
+ * frames, always closes the `OpenFile`, and then either `end()`s the
+ * response or — if the bytes read do not match the advertised
+ * `Content-Length` — `destroy()`s the socket. The caller must have
+ * already committed the `200` headers (including `Content-Length:
+ * size`) and must not touch `res` afterwards.
  *
  * @param {object} fileNode  endo-fs File cap (or eref).
- * @param {bigint} size
+ * @param {bigint} size  the size advertised as `Content-Length`.
  * @param {import('node:http').ServerResponse} res
  */
 const streamFile = async (fileNode, size, res) => {
@@ -114,12 +118,14 @@ const streamFile = async (fileNode, size, res) => {
     100_000,
     Math.ceil((Number(size) * 4) / 3) + 1024,
   );
+  let written = 0n;
   const openFile = await E(fileNode).open({ read: true });
   try {
     const reader = await E(openFile).read(0n, size);
     for await (const chunk of iterateBytesReader(/** @type {any} */ (reader), {
       stringLengthLimit,
     })) {
+      written += BigInt(chunk.length);
       if (!res.write(chunk)) {
         // Respect backpressure: wait for the socket to drain before
         // requesting the next frame.
@@ -131,6 +137,17 @@ const streamFile = async (fileNode, size, res) => {
       .close()
       .catch(() => undefined);
   }
+  if (written !== size) {
+    // The file changed between the `getAttrs` stat and the read (only
+    // possible on a writable backing). The advertised `Content-Length`
+    // can no longer be honoured, so abort the socket — a half-open
+    // response is better than one that hangs the client waiting for
+    // bytes that will never arrive. Use a read-only mount to avoid
+    // this entirely.
+    res.destroy();
+    return;
+  }
+  res.end();
 };
 
 /**
@@ -226,12 +243,13 @@ export const makeAssetServer = async ({
       return;
     }
 
-    // Resolve the request to a File cap, then read it. Resolution
-    // failures (missing path, directory with no index) are 404s;
-    // failures after we have committed headers can only abort the
-    // stream.
+    // Resolve the request to a File cap, then read it. Any resolution
+    // failure (missing path, a directory with no index, or an index
+    // that is itself a directory) is a 404; we never commit a `200`
+    // until the resolved node is confirmed to be a readable file.
     let fileNode;
     let size;
+    let fileName = pathSegments[pathSegments.length - 1] || mount.index;
     try {
       const segments = [...mount.basePath, ...pathSegments];
       // Pipeline the walk: never await between segments so the whole
@@ -243,10 +261,20 @@ export const makeAssetServer = async ({
       // Distinguish File from Directory via CapTP introspection rather
       // than duck-typing (which would emit a failed call per probe).
       // eslint-disable-next-line no-underscore-dangle
-      const methods = await E(node).__getMethodNames__();
+      let methods = await E(node).__getMethodNames__();
       if (!methods.includes('open')) {
-        // Directory (or other non-file): serve its index file.
+        // Directory (or other non-file): serve its index file, and
+        // label the response by the index's name, not the directory's.
         node = E(node).lookup(mount.index);
+        fileName = mount.index;
+        // eslint-disable-next-line no-underscore-dangle
+        methods = await E(node).__getMethodNames__();
+      }
+      if (!methods.includes('open')) {
+        // The resolved node is still not a readable file (e.g. the
+        // index entry is itself a directory). Fall through to 404
+        // rather than committing a 200 we cannot fulfil.
+        throw makeError(X`not a readable file`);
       }
       const attrs = await E(node).getAttrs();
       size = /** @type {bigint} */ (attrs.size);
@@ -257,18 +285,24 @@ export const makeAssetServer = async ({
       return;
     }
 
-    const name = pathSegments[pathSegments.length - 1] || mount.index;
     res.writeHead(200, {
-      'Content-Type': contentTypeForName(name),
+      'Content-Type': contentTypeForName(fileName),
       'Content-Length': String(size),
       'Cache-Control': 'no-cache',
+      // The capability lives in the URL path; never let a served page
+      // forward it to another origin via the Referer header.
+      'Referrer-Policy': 'no-referrer',
+      // Served content may be untrusted; forbid MIME sniffing so the
+      // declared Content-Type is authoritative.
+      'X-Content-Type-Options': 'nosniff',
     });
     if (method === 'HEAD' || size === 0n) {
       res.end();
       return;
     }
+    // streamFile owns finalization: it end()s on success or destroy()s
+    // the socket if the file changed under it (short read).
     await streamFile(fileNode, size, res);
-    res.end();
   };
 
   const server = http.createServer((req, res) => {

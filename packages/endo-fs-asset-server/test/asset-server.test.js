@@ -1,6 +1,6 @@
 // @ts-nocheck
 /* eslint-disable import/order, no-await-in-loop */
-/* global globalThis */
+/* global globalThis, setTimeout */
 
 import '@endo/init/debug.js';
 
@@ -118,11 +118,51 @@ test.serial('serves the index file for directory paths', async t => {
 
   const rootRes = await httpGet(url);
   t.is(rootRes.status, 200);
+  // The index response is labelled by the index file name, not the
+  // directory name, so directories get text/html (not octet-stream).
+  t.is(rootRes.headers['content-type'], 'text/html; charset=utf-8');
   t.is(rootRes.text, '<h1>home</h1>');
 
   const dirRes = await httpGet(`${url}app/`);
   t.is(dirRes.status, 200);
+  t.is(dirRes.headers['content-type'], 'text/html; charset=utf-8');
   t.is(dirRes.text, '<h1>app</h1>');
+});
+
+test.serial('responses carry hardening headers', async t => {
+  const fs = await makeSiteFs();
+  const server = await startServer(t);
+  const { url } = await E(server).serve(fs);
+
+  const res = await httpGet(`${url}style.css`);
+  t.is(res.status, 200);
+  t.is(res.headers['x-content-type-options'], 'nosniff');
+  t.is(res.headers['referrer-policy'], 'no-referrer');
+});
+
+test.serial('deep missing paths 404 without unhandled rejections', async t => {
+  const fs = await makeSiteFs();
+  const server = await startServer(t);
+  const { url } = await E(server).serve(fs);
+
+  // A missing middle segment rejects intermediate pipelined lookups;
+  // under @endo/init/debug an unhandled rejection would fail the run.
+  t.is((await httpGet(`${url}app/missing/deeper/x.txt`)).status, 404);
+  t.is((await httpGet(`${url}missing/a/b/c`)).status, 404);
+  // Let any stray rejection surface before the test ends.
+  await new Promise(resolve => setTimeout(resolve, 200));
+});
+
+test.serial('a directory with no real index file 404s', async t => {
+  const fs = await makeSiteFs();
+  const server = await startServer(t);
+  // `app` has index.html, but a directory whose index entry is itself a
+  // directory must not be served as an empty 200.
+  const root = await E(fs).root();
+  await E(root).materialise(['empty', 'index.html'], {}); // index.html is a dir
+  const { url } = await E(server).serve(fs);
+
+  t.is((await httpGet(`${url}empty/`)).status, 404);
 });
 
 test.serial('subPath rebases the served root', async t => {
