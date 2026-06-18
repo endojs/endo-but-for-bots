@@ -33,7 +33,6 @@ const setupChannels = async (opts = {}) => {
   const selected = [];
 
   const sidebar = makeChannelSidebar({
-    powers: mock.powers,
     onSelectChannel: name => selected.push(name),
     onViewModeChange: () => {},
     viewMode: 'chat',
@@ -52,21 +51,24 @@ const setupChannels = async (opts = {}) => {
   return { $parent, $header, $list, mock, selected };
 };
 
-test.serial('channel mode renders New and Join header buttons', async t => {
+test.serial('channel mode retitles the panel, with no creation UI', async t => {
   const { $header } = await setupChannels({
     mock: {
       names: ['general'],
       locators: new Map([['general', 'endo://?type=channel&number=1']]),
     },
   });
-  const btns = [...$header.querySelectorAll('.channel-action-btn')].map(
-    b => b.textContent,
-  );
-  t.deepEqual(btns, ['New', 'Join'], 'New and Join buttons present');
   t.is(
     $header.querySelector('.inventory-title').textContent,
     'Channels',
     'title set to Channels',
+  );
+  // Channel creation (New Channel / Connect to Channel) lives in the New Space
+  // modal, not the inventory header.
+  t.is(
+    $header.querySelector('.channel-action-btn'),
+    null,
+    'no New/Join buttons in the inventory header',
   );
 });
 
