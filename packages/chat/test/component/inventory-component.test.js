@@ -1,7 +1,6 @@
 // @ts-nocheck - Component test with happy-dom
 
-import 'ses';
-import '@endo/eventual-send/shim.js';
+import '@endo/init/debug.js';
 
 import test from 'ava';
 import harden from '@endo/harden';

@@ -5,6 +5,7 @@
 
 import { Far } from '@endo/far';
 import { makePromiseKit } from '@endo/promise-kit';
+import { readerFromIterator } from '@endo/exo-stream/reader-from-iterator.js';
 
 /**
  * @typedef {object} MockPowersOptions
@@ -239,11 +240,13 @@ export const makeMockPowers = ({
     },
 
     /**
-     * Follow name changes as an async iterator.
-     * @returns {AsyncIterator<{ add: string } | { remove: string }>}
+     * Follow name changes as a PassableReader stream.
+     * Returns a PassableReader wrapping the underlying async iterator so
+     * callers that use iterateReader() from @endo/exo-stream receive the
+     * expected stream protocol (.stream() method).
      */
     followNameChanges() {
-      return makeNameChangesIterator();
+      return readerFromIterator(makeNameChangesIterator());
     },
 
     /**
