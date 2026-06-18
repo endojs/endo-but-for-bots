@@ -86,9 +86,6 @@ if (!('sliceToImmutable' in arrayBufferPrototype)) {
       name,
       {
         value: PseudoCtor,
-        writable: true,
-        enumerable: false,
-        configurable: true,
       },
     );
   }
