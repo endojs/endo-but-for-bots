@@ -193,16 +193,19 @@ const KILL_GRACE_MS = 5000;
  */
 const makeReaderExoFromAsyncIterable = iterable => {
   if (iterable === undefined || iterable === null) {
-    // Empty stream: a single iterator producing no chunks.
+    // Empty stream: yields no chunks.
     /** @returns {AsyncGenerator<Uint8Array>} */
-    const empty = (async function* emptyBytes() {})();
-    return bytesReaderFromIterator(empty);
+    const emptyBytes = async function* emptyBytesGen() {
+      // intentionally empty: this reader produces no data
+    };
+    return bytesReaderFromIterator(emptyBytes());
   }
   // Normalise Buffer chunks to plain Uint8Array views so downstream
   // readers see a stable type irrespective of the driver's allocator.
   const iterator = iterable[Symbol.asyncIterator]();
   /** @returns {AsyncGenerator<Uint8Array>} */
   const normalisedIterator = (async function* normalise() {
+    /* eslint-disable no-await-in-loop */
     for (;;) {
       const r = await iterator.next();
       if (r.done) return;
@@ -211,6 +214,7 @@ const makeReaderExoFromAsyncIterable = iterable => {
         ? new Uint8Array(value.buffer, value.byteOffset, value.byteLength)
         : new Uint8Array(value);
     }
+    /* eslint-enable no-await-in-loop */
   })();
   return bytesReaderFromIterator(normalisedIterator);
 };
