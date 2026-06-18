@@ -144,8 +144,11 @@ test.serial(
     );
     t.truthy($cancel, 'cancel button rendered');
 
-    // First click: enter confirming state, do not send.
+    // First click: enter confirming state, do not send. The confirm state now
+    // lives in a Preact component (ItemActions), so allow its re-render to
+    // settle before asserting on the rendered class.
     $cancel.click();
+    await tick(10);
     t.true($cancel.classList.contains('confirming'), 'confirm state entered');
     const beforeCalls = mock.calls.filter(c => c.method === 'cancel');
     t.is(beforeCalls.length, 0, 'no cancel call on first click');
