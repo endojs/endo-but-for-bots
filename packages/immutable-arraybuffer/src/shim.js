@@ -10,7 +10,6 @@ import {
 const {
   ArrayBuffer,
   Object,
-  Reflect,
   // eslint-disable-next-line no-restricted-globals
 } = globalThis;
 
@@ -20,7 +19,6 @@ const {
   defineProperty,
   getPrototypeOf,
 } = Object;
-const { ownKeys } = Reflect;
 const { prototype: arrayBufferPrototype } = ArrayBuffer;
 
 // Stage-3 install policy: detect-then-skip.
@@ -67,35 +65,14 @@ if (!('sliceToImmutable' in arrayBufferPrototype)) {
 
   // Install the lib property record onto %TypedArrayPrototype%.
   //
-  // We do NOT use `getOwnPropertyDescriptors(freezableTypedArrayLibProperties)`
-  // directly because that frozen record's descriptors carry `configurable: false`
-  // and `writable: false`. Installing non-configurable descriptors would
-  // prevent SES's `tameLocaleMethods` from later replacing `toLocaleString`
-  // with a locale-tamed version (it expects the method to remain configurable).
-  // We therefore reopen each descriptor to `configurable: true` (and
-  // `writable: true` for data descriptors) so the install matches the
-  // shape of the native %TypedArrayPrototype% methods.
-  const libDescs = getOwnPropertyDescriptors(freezableTypedArrayLibProperties);
-  // Use `Reflect.ownKeys` rather than `Object.entries` so that Symbol-keyed
-  // properties (specifically `[Symbol.iterator]`) are included. `Object.entries`
-  // silently skips symbol keys; `ownKeys` covers both string and symbol keys.
-  /** @type {PropertyDescriptorMap} */
-  const configurableDescs = {};
-  for (const key of ownKeys(libDescs)) {
-    // `libDescs` is a `PropertyDescriptorMap`, whose index type is `string`.
-    // `Reflect.ownKeys` returns `(string | symbol)[]`. TypeScript does not
-    // allow direct symbol indexing on `PropertyDescriptorMap`, so we widen
-    // the key with a cast here. The runtime behavior is correct: symbol-keyed
-    // descriptors (e.g. `[Symbol.iterator]`) are real own properties and
-    // `defineProperties` accepts them without complaint.
-    const desc = libDescs[/** @type {string} */ (key)];
-    const reopened = { ...desc, configurable: true };
-    if ('value' in reopened) {
-      reopened.writable = true;
-    }
-    configurableDescs[/** @type {string} */ (key)] = reopened;
-  }
-  defineProperties(typedArrayPrototype, configurableDescs);
+  // `freezableTypedArrayLibProperties` is an unfrozen record whose
+  // descriptors are configurable and writable (matching the shape of the
+  // native %TypedArrayPrototype% methods), so we can pass them directly
+  // to `defineProperties` without reopening.
+  defineProperties(
+    typedArrayPrototype,
+    getOwnPropertyDescriptors(freezableTypedArrayLibProperties),
+  );
 
   // Replace each of the eleven concrete global TypedArray constructors with
   // the pseudo-constructor produced by the lib. The pseudo-constructor
