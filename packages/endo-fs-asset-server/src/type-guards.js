@@ -46,7 +46,13 @@ export const AssetServerInterface = M.interface(
   {
     serve: M.call(M.eref(M.remotable('Filesystem')))
       .optional(M.record())
-      .returns(M.record()),
+      .returns(
+        M.splitRecord({
+          path: M.string(),
+          url: M.string(),
+          revoke: M.remotable('AssetMount'),
+        }),
+      ),
     getAddress: M.call().returns(M.record()),
     stop: M.call().returns(M.promise()),
     help: M.call().optional(M.string()).returns(M.string()),
