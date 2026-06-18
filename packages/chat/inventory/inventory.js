@@ -18,6 +18,7 @@ import {
 } from './tree-source.js';
 import { makeItemDragDrop } from './dnd.js';
 import { ItemActions } from './item-actions.js';
+import { ItemDisclosure } from './item-disclosure.js';
 import { ItemLabel } from './item-label.js';
 import { h, renderConfined, unmount } from '../setup-preact-container.js';
 
@@ -118,12 +119,12 @@ export const inventoryComponent = async (
       itemDnd.attachDragSource($row, absPath);
     }
 
-    // Disclosure triangle
-    const $disclosure = document.createElement('button');
-    $disclosure.className = 'pet-disclosure';
-    $disclosure.textContent = '▶';
-    $disclosure.title = 'Expand';
-    $row.appendChild($disclosure);
+    // Disclosure triangle — rendered (below, once its toggle handler exists)
+    // as a Preact component into this `display: contents` host, kept first in
+    // the row.
+    const $disclosureMount = document.createElement('span');
+    $disclosureMount.style.display = 'contents';
+    $row.appendChild($disclosureMount);
 
     // Inspect: resolve the item's id + value and hand them to the host viewer.
     const inspectItem = () => {
@@ -201,6 +202,143 @@ export const inventoryComponent = async (
     $children.className = 'pet-children';
     $wrapper.appendChild($children);
 
+    /** @type {(() => void) | undefined} */
+    let childCleanup;
+
+    // Disclosure: the triangle view plus expand/collapse behavior (async lookup
+    // of the target's children, then a recursive inventory mount).
+    const disclosureState = { hidden: false, loading: false, expanded: false };
+    const renderDisclosure = () => {
+      renderConfined(
+        // eslint-disable-next-line no-use-before-define
+        h(ItemDisclosure, { ...disclosureState, onToggle }),
+        $disclosureMount,
+      );
+    };
+    /** @param {Partial<typeof disclosureState>} [partial] */
+    const setDisclosure = partial => {
+      if (partial) Object.assign(disclosureState, partial);
+      renderDisclosure();
+    };
+    const onToggle = async () => {
+      if (disclosureState.expanded) {
+        // Collapse
+        setDisclosure({ expanded: false });
+        $children.classList.remove('expanded');
+        if (childCleanup) {
+          childCleanup();
+          childCleanup = undefined;
+        }
+        $children.innerHTML = '';
+        return;
+      }
+      // Expand — try to load children
+      setDisclosure({ loading: true });
+      try {
+        const target =
+          /** @type {ERef<{ __getMethodNames__: () => string[], list?: () => string[], followNameChanges?: () => AsyncIterator<{ add?: string, remove?: string }> }>} */ (
+            await E(powers).lookup(itemPath)
+          );
+        // Use __getMethodNames__ to detect the target's capabilities
+        // without probing methods that may not exist (avoids CapTP noise).
+        // eslint-disable-next-line no-underscore-dangle
+        const methods = await E(target).__getMethodNames__();
+
+        /** @type {ERef<EndoHost> | undefined} */
+        let nestedPowers;
+
+        if (methods.includes('followNameChanges')) {
+          // NameHub (directory, host, guest): use live subscription
+          const changesIterator = E(
+            /** @type {import('@endo/far').ERef<EndoHost>} */ (
+              /** @type {unknown} */ (target)
+            ),
+          ).followNameChanges();
+
+          nestedPowers = /** @type {ERef<EndoHost>} */ (
+            /** @type {unknown} */ ({
+              /** @param {string | string[]} subPathOrName */
+              lookup: subPathOrName => {
+                const subPath =
+                  typeof subPathOrName === 'string'
+                    ? [subPathOrName]
+                    : subPathOrName;
+                return E(powers).lookup([...itemPath, ...subPath]);
+              },
+              /** @param {string[]} subPath */
+              remove: (...subPath) => {
+                const fullPath = [...itemPath, ...subPath];
+                return E(powers).remove(
+                  .../** @type {[string, ...string[]]} */ (fullPath),
+                );
+              },
+              /** @param {string[]} subPath */
+              identify: (...subPath) => {
+                const fullPath = [...itemPath, ...subPath];
+                return E(powers).identify(
+                  .../** @type {[string, ...string[]]} */ (fullPath),
+                );
+              },
+              /** @param {string[]} subPath */
+              locate: (...subPath) => {
+                const fullPath = [...itemPath, ...subPath];
+                return E(powers).locate(
+                  .../** @type {[string, ...string[]]} */ (fullPath),
+                );
+              },
+              followNameChanges: () => changesIterator,
+            })
+          );
+        } else if (methods.includes('list')) {
+          // Static tree (ReadableTree, etc.): populate from list()
+          const names = await E(target).list();
+          nestedPowers = makeStaticTreePowers(target, names);
+        }
+
+        if (nestedPowers) {
+          setDisclosure({ loading: false, expanded: true });
+          $children.classList.add('expanded');
+
+          const wrappedOnSelectConversation = onSelectConversation
+            ? (
+                /** @type {string | string[]} */ leafName,
+                /** @type {string} */ locator,
+              ) => {
+                const leafPath =
+                  typeof leafName === 'string' ? [leafName] : leafName;
+                onSelectConversation([...itemPath, ...leafPath], locator);
+              }
+            : undefined;
+
+          inventoryComponent(
+            $children,
+            null,
+            nestedPowers,
+            {
+              showValue,
+              onSelectConversation: wrappedOnSelectConversation,
+              activeConversationPetName,
+              sidebar,
+            },
+            [], // Reset path since nestedPowers handles the prefix
+            // Drag-and-drop stays in the root's absolute coordinate space so
+            // items can move up out of this directory as well as down into it.
+            rootPowers,
+            absPath,
+          ).catch(() => {
+            // Silently handle errors (e.g., if the item is removed)
+          });
+        } else {
+          // Not expandable (no list or followNameChanges)
+          setDisclosure({ loading: false, hidden: true });
+        }
+      } catch {
+        // Lookup or introspection failed
+        setDisclosure({ loading: false, hidden: true });
+      }
+    };
+    setDisclosure();
+
     // Drop target: dropping onto a hub row offers to link or move the dragged
     // item into that hub. Non-hub (leaf) rows are not drop targets — the event
     // bubbles to the containing directory's list-level drop zone instead.
@@ -242,7 +380,7 @@ export const inventoryComponent = async (
 
         // Hide disclosure triangle for known non-expandable types
         if (type && NON_EXPANDABLE_TYPES.includes(type)) {
-          $disclosure.classList.add('hidden');
+          setDisclosure({ hidden: true });
         }
 
         // Only name hubs can accept a dropped item.
@@ -261,7 +399,7 @@ export const inventoryComponent = async (
             $wrapper,
             $row,
             setLabel,
-            $disclosure,
+            setDisclosure,
             $children,
             $actions,
           });
@@ -290,138 +428,6 @@ export const inventoryComponent = async (
       .catch(() => {
         // Item may have been removed
       });
-
-    // Track expansion state and cleanup
-    let isExpanded = false;
-    /** @type {(() => void) | undefined} */
-    let childCleanup;
-
-    // Disclosure triangle click handler
-    $disclosure.onclick = async () => {
-      if (isExpanded) {
-        // Collapse
-        isExpanded = false;
-        $disclosure.classList.remove('expanded');
-        $disclosure.title = 'Expand';
-        $children.classList.remove('expanded');
-        // Clean up child subscriptions
-        if (childCleanup) {
-          childCleanup();
-          childCleanup = undefined;
-        }
-        $children.innerHTML = '';
-      } else {
-        // Expand - try to load children
-        $disclosure.classList.add('loading');
-        try {
-          const target =
-            /** @type {ERef<{ __getMethodNames__: () => string[], list?: () => string[], followNameChanges?: () => AsyncIterator<{ add?: string, remove?: string }> }>} */ (
-              await E(powers).lookup(itemPath)
-            );
-          // Use __getMethodNames__ to detect the target's capabilities
-          // without probing methods that may not exist (avoids CapTP noise).
-          // eslint-disable-next-line no-underscore-dangle
-          const methods = await E(target).__getMethodNames__();
-
-          /** @type {ERef<EndoHost> | undefined} */
-          let nestedPowers;
-
-          if (methods.includes('followNameChanges')) {
-            // NameHub (directory, host, guest): use live subscription
-            const changesIterator = E(
-              /** @type {import('@endo/far').ERef<EndoHost>} */ (
-                /** @type {unknown} */ (target)
-              ),
-            ).followNameChanges();
-
-            nestedPowers = /** @type {ERef<EndoHost>} */ (
-              /** @type {unknown} */ ({
-                /** @param {string | string[]} subPathOrName */
-                lookup: subPathOrName => {
-                  const subPath =
-                    typeof subPathOrName === 'string'
-                      ? [subPathOrName]
-                      : subPathOrName;
-                  return E(powers).lookup([...itemPath, ...subPath]);
-                },
-                /** @param {string[]} subPath */
-                remove: (...subPath) => {
-                  const fullPath = [...itemPath, ...subPath];
-                  return E(powers).remove(
-                    .../** @type {[string, ...string[]]} */ (fullPath),
-                  );
-                },
-                /** @param {string[]} subPath */
-                identify: (...subPath) => {
-                  const fullPath = [...itemPath, ...subPath];
-                  return E(powers).identify(
-                    .../** @type {[string, ...string[]]} */ (fullPath),
-                  );
-                },
-                /** @param {string[]} subPath */
-                locate: (...subPath) => {
-                  const fullPath = [...itemPath, ...subPath];
-                  return E(powers).locate(
-                    .../** @type {[string, ...string[]]} */ (fullPath),
-                  );
-                },
-                followNameChanges: () => changesIterator,
-              })
-            );
-          } else if (methods.includes('list')) {
-            // Static tree (ReadableTree, etc.): populate from list()
-            const names = await E(target).list();
-            nestedPowers = makeStaticTreePowers(target, names);
-          }
-
-          if (nestedPowers) {
-            isExpanded = true;
-            $disclosure.classList.remove('loading');
-            $disclosure.classList.add('expanded');
-            $disclosure.title = 'Collapse';
-            $children.classList.add('expanded');
-
-            const wrappedOnSelectConversation = onSelectConversation
-              ? (
-                  /** @type {string | string[]} */ leafName,
-                  /** @type {string} */ locator,
-                ) => {
-                  const leafPath =
-                    typeof leafName === 'string' ? [leafName] : leafName;
-                  onSelectConversation([...itemPath, ...leafPath], locator);
-                }
-              : undefined;
-
-            inventoryComponent(
-              $children,
-              null,
-              nestedPowers,
-              {
-                showValue,
-                onSelectConversation: wrappedOnSelectConversation,
-                activeConversationPetName,
-                sidebar,
-              },
-              [], // Reset path since nestedPowers handles the prefix
-              // Drag-and-drop stays in the root's absolute coordinate space so
-              // items can move up out of this directory as well as down into it.
-              rootPowers,
-              absPath,
-            ).catch(() => {
-              // Silently handle errors (e.g., if the item is removed)
-            });
-          } else {
-            // Not expandable (no list or followNameChanges)
-            $disclosure.classList.remove('loading');
-            $disclosure.classList.add('hidden');
-          }
-        } catch {
-          // Lookup or introspection failed
-          $disclosure.classList.remove('loading');
-          $disclosure.classList.add('hidden');
-        }
-      }
-    };
 
     return {
       $wrapper,
