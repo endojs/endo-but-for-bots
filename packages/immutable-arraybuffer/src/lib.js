@@ -565,12 +565,6 @@ export const amplifyTypedArray = typedArray => {
   return typedArray;
 };
 
-// Internal-test export. The helper is load-bearing for every method on
-// `freezableTypedArrayLibProperties`, but the package's public export surface
-// keeps it private. The export exists so the adversarial-tests skill can
-// exercise the helper in isolation.
-export const _amplifyTypedArrayForTests = amplifyTypedArray;
-
 /**
  * Getter that replaces `%TypedArrayPrototype%.buffer`.
  * When `this` is an emulated freezable wrapper (registered in `hiddenTypedArrays`),
@@ -861,7 +855,7 @@ export const freezableTypedArrayLibProperties = {
   },
   /**
    * @this {object}
-   * @param {Function} predicate
+   * @param {Function} [predicate]
    * @param {any} [thisArg]
    * @returns {boolean}
    */
@@ -873,7 +867,7 @@ export const freezableTypedArrayLibProperties = {
   },
   /**
    * @this {object}
-   * @param {Function} predicate
+   * @param {Function} [predicate]
    * @param {any} [thisArg]
    * @returns {object}
    */
@@ -885,7 +879,7 @@ export const freezableTypedArrayLibProperties = {
   },
   /**
    * @this {object}
-   * @param {Function} predicate
+   * @param {Function} [predicate]
    * @param {any} [thisArg]
    * @returns {any}
    */
@@ -894,7 +888,7 @@ export const freezableTypedArrayLibProperties = {
   },
   /**
    * @this {object}
-   * @param {Function} predicate
+   * @param {Function} [predicate]
    * @param {any} [thisArg]
    * @returns {number}
    */
@@ -906,7 +900,7 @@ export const freezableTypedArrayLibProperties = {
   },
   /**
    * @this {object}
-   * @param {Function} predicate
+   * @param {Function} [predicate]
    * @param {any} [thisArg]
    * @returns {any}
    */
@@ -923,7 +917,7 @@ export const freezableTypedArrayLibProperties = {
   },
   /**
    * @this {object}
-   * @param {Function} predicate
+   * @param {Function} [predicate]
    * @param {any} [thisArg]
    * @returns {number}
    */
@@ -940,7 +934,7 @@ export const freezableTypedArrayLibProperties = {
   },
   /**
    * @this {object}
-   * @param {Function} callback
+   * @param {Function} [callback]
    * @param {any} [thisArg]
    * @returns {void}
    */
@@ -1003,7 +997,7 @@ export const freezableTypedArrayLibProperties = {
   },
   /**
    * @this {object}
-   * @param {Function} callback
+   * @param {Function} [callback]
    * @param {any} [thisArg]
    * @returns {object}
    */
@@ -1012,7 +1006,7 @@ export const freezableTypedArrayLibProperties = {
   },
   /**
    * @this {object}
-   * @param {Function} callback
+   * @param {Function} [callback]
    * @param {any} [initialValue]
    * @returns {any}
    */
@@ -1025,7 +1019,7 @@ export const freezableTypedArrayLibProperties = {
   },
   /**
    * @this {object}
-   * @param {Function} callback
+   * @param {Function} [callback]
    * @param {any} [initialValue]
    * @returns {any}
    */
@@ -1047,7 +1041,7 @@ export const freezableTypedArrayLibProperties = {
   },
   /**
    * @this {object}
-   * @param {Function} predicate
+   * @param {Function} [predicate]
    * @param {any} [thisArg]
    * @returns {boolean}
    */
@@ -1112,8 +1106,8 @@ export const freezableTypedArrayLibProperties = {
   },
   /**
    * @this {object}
-   * @param {number} index
-   * @param {any} value
+   * @param {number} [index]
+   * @param {any} [value]
    * @returns {object}
    */
   with(index = undefined, value = undefined) {
