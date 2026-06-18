@@ -18,6 +18,7 @@ import {
 } from './tree-source.js';
 import { makeItemDragDrop } from './dnd.js';
 import { ItemActions } from './item-actions.js';
+import { ItemLabel } from './item-label.js';
 import { h, renderConfined, unmount } from '../setup-preact-container.js';
 
 /**
@@ -124,12 +125,6 @@ export const inventoryComponent = async (
     $disclosure.title = 'Expand';
     $row.appendChild($disclosure);
 
-    const $name = document.createElement('span');
-    $name.className = 'pet-name';
-    $name.textContent = name;
-    $name.title = 'Click to view';
-    $row.appendChild($name);
-
     // Inspect: resolve the item's id + value and hand them to the host viewer.
     const inspectItem = () => {
       const idP = E(powers).identify(
@@ -141,6 +136,26 @@ export const inventoryComponent = async (
         window.reportError,
       );
     };
+
+    // Label (pet name + type badge). Mounts into a `display: contents` host so
+    // the name and badge stay flex children of the row. Click behavior and the
+    // badge resolve after the locate probe below, so `setLabel` re-renders.
+    const $labelMount = document.createElement('span');
+    $labelMount.style.display = 'contents';
+    $row.appendChild($labelMount);
+    /** @type {{ title: string, selectable: boolean, type: string | null, onClick: (() => void) | undefined }} */
+    const labelState = {
+      title: 'Click to view',
+      selectable: false,
+      type: null,
+      onClick: undefined,
+    };
+    /** @param {Partial<typeof labelState>} [partial] */
+    const setLabel = partial => {
+      if (partial) Object.assign(labelState, partial);
+      renderConfined(h(ItemLabel, { name, ...labelState }), $labelMount);
+    };
+    setLabel();
 
     // Action buttons (info / cancel / remove). `.pet-buttons` is an absolutely
     // positioned flex row; ItemActions mounts into a `display: contents`
@@ -216,21 +231,14 @@ export const inventoryComponent = async (
           // Immutable items cannot be relinked or relocated.
           $row.draggable = false;
           // Still allow clicking the name to inspect the value
-          $name.classList.add('selectable');
-          $name.onclick = inspectItem;
+          setLabel({ selectable: true, onClick: inspectItem });
           return;
         }
         const url = new URL(/** @type {string} */ (locator));
         const type = url.searchParams.get('type');
 
-        // Show type badge on the item row.
-        if (type) {
-          const $typeBadge = document.createElement('span');
-          $typeBadge.className = 'pet-type-badge';
-          $typeBadge.textContent = type;
-          $typeBadge.title = `Formula type: ${type}`;
-          $name.after($typeBadge);
-        }
+        // Show the type badge.
+        setLabel({ type });
 
         // Hide disclosure triangle for known non-expandable types
         if (type && NON_EXPANDABLE_TYPES.includes(type)) {
@@ -252,7 +260,7 @@ export const inventoryComponent = async (
             $list,
             $wrapper,
             $row,
-            $name,
+            setLabel,
             $disclosure,
             $children,
             $actions,
@@ -260,10 +268,12 @@ export const inventoryComponent = async (
         } else if (onSelectConversation) {
           if (type && CONVERSABLE_TYPES.includes(type)) {
             $wrapper.classList.add('conversable');
-            $name.title = 'Open conversation';
-            $name.onclick = () => {
-              onSelectConversation(name, /** @type {string} */ (locator));
-            };
+            setLabel({
+              title: 'Open conversation',
+              onClick: () => {
+                onSelectConversation(name, /** @type {string} */ (locator));
+              },
+            });
             if (
               activeConversationPetName &&
               path.length === 0 &&
@@ -273,8 +283,7 @@ export const inventoryComponent = async (
             }
           } else {
             // Non-conversable: clicking the name opens the Show Value modal
-            $name.classList.add('selectable');
-            $name.onclick = inspectItem;
+            setLabel({ selectable: true, onClick: inspectItem });
           }
         }
       })
@@ -417,6 +426,7 @@ export const inventoryComponent = async (
     return {
       $wrapper,
       cleanup: () => {
+        unmount($labelMount);
         unmount($actionsMount);
         childCleanup?.();
       },

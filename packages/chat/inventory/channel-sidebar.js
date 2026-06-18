@@ -42,7 +42,8 @@ import { makeChannelReorder } from './dnd.js';
  * @property {HTMLElement} $list
  * @property {HTMLElement} $wrapper
  * @property {HTMLElement} $row
- * @property {HTMLElement} $name
+ * @property {(partial: { title?: string, selectable?: boolean, onClick?: () => void }) => void} setLabel
+ *   - Update the item's label (name) — title, selectable, click handler.
  * @property {HTMLElement} $disclosure
  * @property {HTMLElement} $children
  * @property {HTMLElement} $actions
@@ -315,7 +316,7 @@ export const makeChannelSidebar = config => {
       $list,
       $wrapper,
       $row,
-      $name,
+      setLabel,
       $disclosure,
       $children,
       $actions,
@@ -325,11 +326,13 @@ export const makeChannelSidebar = config => {
     $wrapper.style.display = '';
     $wrapper.classList.add('channel-item');
     $wrapper.dataset.name = name;
-    $name.title = 'Switch to this channel';
-    $name.classList.add('selectable');
-    $name.onclick = () => {
-      onSelectChannel(name);
-    };
+    setLabel({
+      title: 'Switch to this channel',
+      selectable: true,
+      onClick: () => {
+        onSelectChannel(name);
+      },
+    });
     if (
       activeChannelPetName &&
       path.length === 0 &&
