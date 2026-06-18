@@ -3,14 +3,13 @@
 // pass/fail on globalThis for the Playwright runner. A real DataTransfer +
 // real layout means this exercises the actual behavior, not a mock of it.
 //
-// HandledPromise is needed because makeItemDragDrop's drop menu invokes
-// E(rootPowers).copy/move on click. No lockdown — the dnd behavior does not
-// depend on it.
-
-// `import 'ses'` (without lockdown) installs globalThis.assert, which the
-// eventual-send shim destructures at module load.
-import 'ses';
-import '@endo/eventual-send/shim.js';
+// Locks down exactly as the app does (pre-lockdown.js selects
+// overrideTaming: 'severe'; @endo/init runs lockdown and installs both harden
+// and the HandledPromise the drop menu's E(rootPowers).copy/move need). This
+// also renders the DropMenu Preact component under the same severe taming as
+// production — the level Preact's `component.constructor = type` requires.
+import '../../pre-lockdown.js';
+import '@endo/init';
 
 import { makeChannelReorder, makeItemDragDrop } from '../../inventory-dnd.js';
 
