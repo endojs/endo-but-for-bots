@@ -547,11 +547,7 @@ export const channelComponent = async (
     // Attachments without an inline placeholder (e.g. a message with one text
     // string and one attached value) have no slot in the rendered text, so
     // append them at the end of the body rather than dropping them.
-    for (
-      let index = placedTokens;
-      index < messageNames.length;
-      index += 1
-    ) {
+    for (let index = placedTokens; index < messageNames.length; index += 1) {
       $body.appendChild(document.createTextNode(' '));
       $body.appendChild(makeToken(messageNames[index], index));
     }
