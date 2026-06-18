@@ -16,6 +16,7 @@ import {
   NON_EXPANDABLE_TYPES,
   makeStaticTreePowers,
 } from './inventory-tree-source.js';
+import { makeItemDragDrop } from './inventory-dnd.js';
 
 /**
  * @typedef {object} InventoryOptions
@@ -309,116 +310,9 @@ export const inventoryComponent = async (
   /** @type {HTMLElement | null} */
   let $channelDropIndicator = null;
 
-  /**
-   * Compute the absolute destination path for a drop, or undefined when the
-   * drop is a no-op or would move an item into itself or its own descendant.
-   *
-   * @param {string[]} sourceAbsPath - Absolute path of the dragged item.
-   * @param {string[]} targetDirAbs - Absolute path of the destination directory.
-   * @returns {string[] | undefined}
-   */
-  const dropTargetPath = (sourceAbsPath, targetDirAbs) => {
-    // Reject dropping an item into itself or any of its own descendants:
-    // that is the case where the source path is a prefix of the target dir.
-    const intoSelf =
-      sourceAbsPath.length <= targetDirAbs.length &&
-      sourceAbsPath.every((seg, i) => seg === targetDirAbs[i]);
-    if (intoSelf) return undefined;
-    const sourceLeaf = sourceAbsPath[sourceAbsPath.length - 1];
-    const targetAbsPath = [...targetDirAbs, sourceLeaf];
-    // No-op when the item already lives at exactly this location.
-    if (
-      targetAbsPath.length === sourceAbsPath.length &&
-      targetAbsPath.every((seg, i) => seg === sourceAbsPath[i])
-    ) {
-      return undefined;
-    }
-    return targetAbsPath;
-  };
-
-  /**
-   * Clear any lingering drop-zone highlight from every row and list under the
-   * inventory. Browsers fire `dragleave` on the most-specific element only;
-   * when a drag crosses INTO a hub row that is nested inside a list-level
-   * drop zone (or inside an outer hub row that is itself a drop target), the
-   * outer element keeps its highlight because its `dragleave` listener sees
-   * the move as a descendant transition, not a leave. The inner element's
-   * `drop` handler clears only its own class. Without a sweep here, the
-   * outer highlight survives the drop-menu interaction and never retracts.
-   * Called when the drop menu opens and when the source's `dragend` fires.
-   */
-  const clearAllDropTargets = () => {
-    for (const $el of document.querySelectorAll('.drop-target')) {
-      $el.classList.remove('drop-target');
-    }
-    for (const $el of document.querySelectorAll('.drop-target-list')) {
-      $el.classList.remove('drop-target-list');
-    }
-  };
-
-  /**
-   * Show a small context menu at the cursor to choose whether a drop should
-   * link (alias the capability under a new name) or move (relink, then unbind
-   * the source). Both operate in absolute coordinates against `rootPowers`.
-   *
-   * @param {number} x
-   * @param {number} y
-   * @param {string[]} sourceAbsPath
-   * @param {string[]} targetAbsPath
-   */
-  const showDropMenu = (x, y, sourceAbsPath, targetAbsPath) => {
-    // Sweep any ancestor drop-zone highlight that the browser's per-element
-    // dragleave model left behind when the cursor descended into this drop
-    // target without first leaving the outer one. See clearAllDropTargets.
-    clearAllDropTargets();
-
-    const $existing = document.querySelector('.inventory-drop-menu');
-    if ($existing) $existing.remove();
-
-    const $menu = document.createElement('div');
-    $menu.className = 'inventory-drop-menu';
-
-    /**
-     * @param {string} label
-     * @param {() => void} run
-     */
-    const addItem = (label, run) => {
-      const $item = document.createElement('button');
-      $item.className = 'inventory-drop-menu-item';
-      $item.textContent = label;
-      $item.addEventListener('click', () => {
-        $menu.remove();
-        run();
-      });
-      $menu.appendChild($item);
-    };
-
-    const from = /** @type {[string, ...string[]]} */ (sourceAbsPath);
-    const to = /** @type {[string, ...string[]]} */ (targetAbsPath);
-    addItem('Link here', () =>
-      E(rootPowers)
-        .copy(from, to)
-        .catch(err => console.error('[inventory] Link failed:', err)),
-    );
-    addItem('Move here', () =>
-      E(rootPowers)
-        .move(from, to)
-        .catch(err => console.error('[inventory] Move failed:', err)),
-    );
-
-    $menu.style.position = 'fixed';
-    $menu.style.left = `${x}px`;
-    $menu.style.top = `${y}px`;
-    document.body.appendChild($menu);
-
-    const dismiss = () => {
-      $menu.remove();
-      document.removeEventListener('click', dismiss);
-    };
-    requestAnimationFrame(() => {
-      document.addEventListener('click', dismiss);
-    });
-  };
+  // Item-move drag-and-drop (link/move within the tree). Operates in absolute
+  // coordinates against `rootPowers`. See inventory-dnd.js.
+  const itemDnd = makeItemDragDrop({ rootPowers });
 
   /**
    * Create an inventory item with disclosure triangle.
@@ -446,29 +340,10 @@ export const inventoryComponent = async (
     const $row = document.createElement('div');
     $row.className = 'pet-item-row';
 
-    // Make non-special items draggable.
+    // Make non-special items draggable (carry the absolute path so the item
+    // can be dropped at any level, up or down the tree).
     if (!isSpecialName(name)) {
-      $row.draggable = true;
-      $row.addEventListener('dragstart', e => {
-        if (e.dataTransfer) {
-          // Carry the absolute path so the item can be dropped at any level
-          // (up or down the tree), not just within the level it came from.
-          e.dataTransfer.setData('text/plain', absPath.join('/'));
-          e.dataTransfer.setData(
-            'application/x-endo-petname',
-            JSON.stringify(absPath),
-          );
-          e.dataTransfer.effectAllowed = 'copyMove';
-        }
-        $row.classList.add('dragging');
-      });
-      $row.addEventListener('dragend', () => {
-        $row.classList.remove('dragging');
-        // Sweep any drop-zone highlight left behind by the per-element
-        // dragleave model (the inner drop handler clears only its own
-        // class). Also handles drag-cancel cases where no drop fires.
-        clearAllDropTargets();
-      });
+      itemDnd.attachDragSource($row, absPath);
     }
 
     // Disclosure triangle
@@ -564,48 +439,10 @@ export const inventoryComponent = async (
     // Drop target: dropping onto a hub row offers to link or move the dragged
     // item into that hub. Non-hub (leaf) rows are not drop targets — the event
     // bubbles to the containing directory's list-level drop zone instead.
-    $row.addEventListener('dragover', e => {
-      if (!acceptsDrop) return;
-      if (!e.dataTransfer) return;
-      const hasEndoPetName = e.dataTransfer.types.includes(
-        'application/x-endo-petname',
-      );
-      if (!hasEndoPetName) return;
-      e.preventDefault();
-      // Don't also light up the enclosing list-level drop zone.
-      e.stopPropagation();
-      // The link-vs-move choice is made from the drop menu, so advertise both.
-      e.dataTransfer.dropEffect = 'copy';
-      $row.classList.add('drop-target');
-    });
-    $row.addEventListener('dragleave', () => {
-      $row.classList.remove('drop-target');
-    });
-    $row.addEventListener('drop', e => {
-      if (!acceptsDrop) return;
-      $row.classList.remove('drop-target');
-      if (!e.dataTransfer) return;
-      const raw = e.dataTransfer.getData('application/x-endo-petname');
-      if (!raw) return;
-      e.preventDefault();
-      // Handle here so the enclosing list-level drop zone does not also fire.
-      e.stopPropagation();
-      // Narrow the try to JSON.parse alone; a broad try would mask errors
-      // from dropTargetPath, showDropMenu, or any future addition.
-      let sourceAbsPath;
-      try {
-        sourceAbsPath = JSON.parse(raw);
-      } catch (err) {
-        console.error(
-          `[inventory] Cannot parse drag payload from application/x-endo-petname onto row ${absPath.join('/')}: ${
-            /** @type {Error} */ (err).message
-          }`,
-        );
-        return;
-      }
-      const targetAbsPath = dropTargetPath(sourceAbsPath, absPath);
-      if (!targetAbsPath) return;
-      showDropMenu(e.clientX, e.clientY, sourceAbsPath, targetAbsPath);
+    // `acceptsDrop` is probed asynchronously below, so it is read at event time.
+    itemDnd.attachRowDropTarget($row, {
+      absPath,
+      acceptsDrop: () => acceptsDrop,
     });
 
     if (channelMode) {
@@ -1117,44 +954,7 @@ export const inventoryComponent = async (
     // Dropping onto the background of a directory's list links or moves the
     // dragged item into that directory (`rootPrefix`). At the outermost level
     // `rootPrefix` is empty, so this is how an item is moved *up* to the root.
-    $list.addEventListener('dragover', e => {
-      if (!e.dataTransfer) return;
-      if (!e.dataTransfer.types.includes('application/x-endo-petname')) return;
-      e.preventDefault();
-      e.dataTransfer.dropEffect = 'copy';
-      $list.classList.add('drop-target-list');
-    });
-    $list.addEventListener('dragleave', e => {
-      // Ignore dragleave bubbling up from descendant rows.
-      if (e.target !== $list) return;
-      $list.classList.remove('drop-target-list');
-    });
-    $list.addEventListener('drop', e => {
-      $list.classList.remove('drop-target-list');
-      if (!e.dataTransfer) return;
-      const raw = e.dataTransfer.getData('application/x-endo-petname');
-      if (!raw) return;
-      e.preventDefault();
-      // A row handler already ran if the drop landed on an item.
-      e.stopPropagation();
-      // Narrow the try to JSON.parse alone; a broad try would mask errors
-      // from dropTargetPath, showDropMenu, or any future addition.
-      let sourceAbsPath;
-      try {
-        sourceAbsPath = JSON.parse(raw);
-      } catch (err) {
-        const at = rootPrefix.length === 0 ? '<root>' : rootPrefix.join('/');
-        console.error(
-          `[inventory] Cannot parse drag payload from application/x-endo-petname onto list at ${at}: ${
-            /** @type {Error} */ (err).message
-          }`,
-        );
-        return;
-      }
-      const targetAbsPath = dropTargetPath(sourceAbsPath, rootPrefix);
-      if (!targetAbsPath) return;
-      showDropMenu(e.clientX, e.clientY, sourceAbsPath, targetAbsPath);
-    });
+    itemDnd.attachListDropZone($list, rootPrefix);
   }
 
   for await (const change of iterateReader(E(powers).followNameChanges())) {
