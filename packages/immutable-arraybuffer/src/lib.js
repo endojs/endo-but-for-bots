@@ -574,9 +574,21 @@ const amplifyTypedArray = typedArray => {
  * it delegates to the captured genuine `%TypedArrayPrototype%.buffer` getter.
  *
  * Exported as a `const` (function expression) rather than a `function`
- * declaration so the SES bundle's module-init pattern does not emit a
- * `Object.defineProperty(fn, 'name', ...)` call before the `Object` binding
- * from globalThis is available.
+ * declaration to avoid JavaScript function-declaration hoisting.
+ * In the presence of an import cycle, a hoisted function declaration's value
+ * is available to an importing module before the exporting module finishes
+ * initializing, which can expose uninitialized state.
+ * The JavaScript standard says that a `const` binding in such a cycle would
+ * produce a Temporal Dead Zone (TDZ) error for the early importer instead.
+ * Note: the ses-shim's compiler from JS ESM module code to JS evaluable code
+ * does not implement TDZ correctly, so this cycle hazard may not be caught at
+ * runtime under ses-shim.
+ * XS uses native compartment and module support and does implement TDZ, so the
+ * hazard would be caught there.
+ * This particular PR introduces no such import cycle; the note is for future
+ * maintainers.
+ * See the README section "Function expressions versus declarations" for full
+ * context (erights review comment 3439479281).
  *
  * @type {(this: object) => ArrayBuffer}
  */
