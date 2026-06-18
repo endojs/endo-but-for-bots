@@ -162,7 +162,7 @@ Status: ☐ not started · ◐ in progress · ☑ done
 | Component | Lines | Status | Notes |
 | --- | --- | --- | --- |
 | debugger-panel | 688 | ☐ | On-demand panel |
-| inventory-component | 1267 | ☐ | Graph leaf but heavy |
+| inventory-component | 1267 | ☐ | Monolith — factor first (see below) |
 | token-autocomplete | — | ☐ | Keyboard-stateful |
 | petname-path-autocomplete | — | ☐ | Keyboard-stateful |
 | petname-paths-autocomplete | — | ☐ | Keyboard-stateful |
@@ -180,3 +180,71 @@ leaf dependencies are converted.
 `show`/`hide` API and a single event handler (`onAssignName`).
 It exercises the full path — mount, props, event handler, teardown — on a
 low-risk surface.
+
+## Inventory bar (`inventory-component.js`) decomposition
+
+The inventory bar is recorded above as a single graph leaf, but
+`inventoryComponent` is a ~1267-line monolith that conflates a list
+controller, a recursive tree node, several drag-and-drop systems,
+channel-mode chrome, and a data adapter.
+It must be factored into subcomponents before (or as) it is migrated; a
+direct port would just move the monolith onto Preact.
+Line numbers below are anchors at time of writing, not contracts.
+
+### Current responsibilities (one function does all of this)
+
+| Region | Lines | Responsibility |
+| --- | --- | --- |
+| `makeStaticNameIterator`, `makeStaticTreePowers` | 66, 103 | Adapt a static `ReadableTree.list()` snapshot to the live `followNameChanges()` streaming interface |
+| `CONVERSABLE_TYPES` / `NON_EXPANDABLE_TYPES` / `HUB_TYPES` | 38–60 | Formula-type classification (selectable, expandable, drop-accepting) |
+| `inventoryComponent` shell + `for await` consumer | 142–178, 1252–1266 | Subscribe to name changes, maintain the `$names` map, mount/cleanup rows, recurse into subtrees |
+| Channel-mode header + `showNewForm` / `showJoinForm` | 178–410 | "Channels" title, New-channel and Join-channel inline forms |
+| `dropTargetPath` / `clearAllDropTargets` / `showDropMenu` | 412–518 | Tree drag-and-drop: link/move an item between directories; the "Link here / Move here" menu |
+| `createItem` | 519–1097 | The recursive pet-name **row** — wrapper, disclosure, name, type badge, action buttons, children, row-level drag-and-drop, channel menu, bookmarks |
+| Channel-list reordering | 1099–1250 | List-level drag reorder with a drop indicator; persists via `onChannelReorder` |
+
+### Proposed subcomponents
+
+Visual pieces become Preact components; cross-cutting drag-and-drop and the
+data adapter become hooks/utilities rather than views.
+
+- **InventoryList** (container/controller) — owns the `followNameChanges()`
+  subscription, the `$names` map, and recursion; renders one `PetItem` per
+  name.
+  This is the orchestrator that survives as the top-level component.
+- **PetItem** (recursive node) — the `createItem` shell; composes:
+  - **ItemDisclosure** — the triangle, expand/collapse state, and the
+    recursive child-list mount (the recursion seam back into
+    `InventoryList`).
+  - **ItemLabel** — name (574) + type badge (749).
+  - **ItemActions** — info/inspect (583, 710), cancel-pending (590, 603),
+    and remove (638) buttons.
+  - **ChannelItemMenu** — the per-channel context menu (786–828), only in
+    `channelMode`.
+  - **BookmarkList** / **BookmarkItem** — bookmarked threads rendered under
+    a channel (879–950), plus the remove context menu.
+- **ChannelActions** — the channel-mode header, wrapping **NewChannelForm**
+  (220) and **JoinChannelForm** (297).
+- **DropMenu** — the link/move context menu (461), the one visual piece of
+  the tree drag-and-drop.
+
+### Extract as hooks/utilities (behavior, not views)
+
+- **inventory-tree-source** — `makeStaticNameIterator` +
+  `makeStaticTreePowers`; the static-snapshot-vs-live-stream adapter.
+- **useItemDragDrop** — row-level drag source + drop target (544–676) and
+  the `acceptsDrop` type probe; pairs with `dropTargetPath` /
+  `clearAllDropTargets`.
+- **useChannelReorder** — list-level reorder + drop indicator (1099–1250).
+
+### Migration order for the inventory bar
+
+Bottom-up, mirroring the overall strategy:
+
+1. Extract the non-visual seams first (`inventory-tree-source`,
+   `useItemDragDrop`, `useChannelReorder`) — pure refactors, no Preact yet.
+2. Migrate the leaf views: `ItemLabel`, `ItemActions`, `DropMenu`,
+   `BookmarkItem`, `NewChannelForm` / `JoinChannelForm`.
+3. Migrate `ItemDisclosure` + `BookmarkList` + `ChannelItemMenu`.
+4. Compose `PetItem`, then `ChannelActions`.
+5. Convert `InventoryList` last, once its children are Preact.
