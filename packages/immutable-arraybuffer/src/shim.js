@@ -18,7 +18,6 @@ const {
   defineProperties,
   defineProperty,
   getPrototypeOf,
-  fromEntries,
   entries,
 } = Object;
 const { prototype: arrayBufferPrototype } = ArrayBuffer;
@@ -61,7 +60,6 @@ if (!('sliceToImmutable' in arrayBufferPrototype)) {
   // %TypedArrayPrototype% in a non-strict environment without a dedicated
   // intrinsic name.
   const typedArrayPrototype = getPrototypeOf(
-    // @ts-expect-error globalThis.Uint8Array is not typed
     // eslint-disable-next-line no-restricted-globals
     globalThis.Uint8Array.prototype,
   );
@@ -77,15 +75,15 @@ if (!('sliceToImmutable' in arrayBufferPrototype)) {
   // `writable: true` for data descriptors) so the install matches the
   // shape of the native %TypedArrayPrototype% methods.
   const libDescs = getOwnPropertyDescriptors(freezableTypedArrayLibProperties);
-  const configurableDescs = fromEntries(
-    entries(libDescs).map(([key, desc]) => {
-      const reopened = { ...desc, configurable: true};
-      if ('value' in reopened) {
-        reopened.writable = true;
-      }
-      return [key, reopened];
-    }),
-  );
+  /** @type {PropertyDescriptorMap} */
+  const configurableDescs = {};
+  for (const [key, desc] of entries(libDescs)) {
+    const reopened = { ...desc, configurable: true };
+    if ('value' in reopened) {
+      reopened.writable = true;
+    }
+    configurableDescs[key] = reopened;
+  }
   defineProperties(typedArrayPrototype, configurableDescs);
 
   // Replace each of the eleven concrete global TypedArray constructors with

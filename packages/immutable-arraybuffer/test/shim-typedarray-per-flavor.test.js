@@ -37,14 +37,14 @@ const flavors = [
 ];
 
 for (const { name, Ctor, sample, zero } of flavors) {
-  const t_name = label => `${name}: ${label}`;
+  const tName = label => `${name}: ${label}`;
 
   // -------------------------------------------------------------------------
   // Construction from an immutable buffer
   // -------------------------------------------------------------------------
 
   test(
-    t_name(
+    tName(
       'construction from an immutable buffer succeeds; __proto__ is T.prototype',
     ),
     t => {
@@ -60,31 +60,31 @@ for (const { name, Ctor, sample, zero } of flavors) {
   // Mutator methods throw TypeError on frozen wrappers
   // -------------------------------------------------------------------------
 
-  test(t_name('copyWithin throws TypeError on emulated freezable view'), t => {
+  test(tName('copyWithin throws TypeError on emulated freezable view'), t => {
     const iab = new ArrayBuffer(16).sliceToImmutable();
     const view = new Ctor(iab);
     t.throws(() => view.copyWithin(0, 1), { instanceOf: TypeError });
   });
 
-  test(t_name('fill throws TypeError on emulated freezable view'), t => {
+  test(tName('fill throws TypeError on emulated freezable view'), t => {
     const iab = new ArrayBuffer(16).sliceToImmutable();
     const view = new Ctor(iab);
     t.throws(() => view.fill(sample), { instanceOf: TypeError });
   });
 
-  test(t_name('reverse throws TypeError on emulated freezable view'), t => {
+  test(tName('reverse throws TypeError on emulated freezable view'), t => {
     const iab = new ArrayBuffer(16).sliceToImmutable();
     const view = new Ctor(iab);
     t.throws(() => view.reverse(), { instanceOf: TypeError });
   });
 
-  test(t_name('set throws TypeError on emulated freezable view'), t => {
+  test(tName('set throws TypeError on emulated freezable view'), t => {
     const iab = new ArrayBuffer(16).sliceToImmutable();
     const view = new Ctor(iab);
     t.throws(() => view.set([sample]), { instanceOf: TypeError });
   });
 
-  test(t_name('sort throws TypeError on emulated freezable view'), t => {
+  test(tName('sort throws TypeError on emulated freezable view'), t => {
     const iab = new ArrayBuffer(16).sliceToImmutable();
     const view = new Ctor(iab);
     t.throws(() => view.sort(), { instanceOf: TypeError });
@@ -95,7 +95,7 @@ for (const { name, Ctor, sample, zero } of flavors) {
   // -------------------------------------------------------------------------
 
   test(
-    t_name(
+    tName(
       'indexed assignment on non-frozen wrapper creates own property; buffer unchanged',
     ),
     t => {
@@ -118,7 +118,7 @@ for (const { name, Ctor, sample, zero } of flavors) {
   );
 
   test(
-    t_name(
+    tName(
       'indexed assignment on frozen wrapper throws in strict mode; buffer unchanged',
     ),
     t => {
@@ -147,7 +147,7 @@ for (const { name, Ctor, sample, zero } of flavors) {
   // Read-only surface
   // -------------------------------------------------------------------------
 
-  test(t_name('byteLength, byteOffset, length return correct values'), t => {
+  test(tName('byteLength, byteOffset, length return correct values'), t => {
     const ab = new ArrayBuffer(16);
     const iab = ab.sliceToImmutable();
     const view = new Ctor(iab);
@@ -157,7 +157,7 @@ for (const { name, Ctor, sample, zero } of flavors) {
     t.is(view.buffer, iab);
   });
 
-  test(t_name('at(0) returns correct value'), t => {
+  test(tName('at(0) returns correct value'), t => {
     const ab = new ArrayBuffer(16);
     const iab = ab.sliceToImmutable();
     const view = new Ctor(iab);
@@ -165,7 +165,7 @@ for (const { name, Ctor, sample, zero } of flavors) {
   });
 
   test(
-    t_name('with(0, sample), toReversed, toSorted return correct values'),
+    tName('with(0, sample), toReversed, toSorted return correct values'),
     t => {
       const ab = new ArrayBuffer(16);
       const iab = ab.sliceToImmutable();
@@ -191,7 +191,7 @@ for (const { name, Ctor, sample, zero } of flavors) {
   // Object.freeze
   // -------------------------------------------------------------------------
 
-  test(t_name('Object.freeze(view); Object.isFrozen(view) === true'), t => {
+  test(tName('Object.freeze(view); Object.isFrozen(view) === true'), t => {
     const iab = new ArrayBuffer(16).sliceToImmutable();
     const view = new Ctor(iab);
     freeze(view);
@@ -203,7 +203,7 @@ for (const { name, Ctor, sample, zero } of flavors) {
   // -------------------------------------------------------------------------
 
   test(
-    t_name(
+    tName(
       'fallthrough constructor on genuine mutable buffer produces genuine writable view',
     ),
     t => {

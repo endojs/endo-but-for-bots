@@ -10,7 +10,6 @@ import {
   makePseudoTypedArrayConstructor,
   amplifyTypedArray,
   virtualTypedArrayBufferGetter,
-  _amplifyTypedArrayForTests,
 } from '../src/lib.js';
 
 const { getPrototypeOf } = Object;
@@ -31,7 +30,7 @@ test('makePseudoTypedArrayConstructor wraps an immutable ArrayBuffer', t => {
   t.is(getPrototypeOf(view), Uint8Array.prototype);
 
   // The amplifier returns the hidden genuine TypedArray, not the wrapper itself.
-  const hidden = _amplifyTypedArrayForTests(view);
+  const hidden = amplifyTypedArray(view);
   t.not(hidden, view);
 
   // The buffer getter via `virtualTypedArrayBufferGetter` returns the
@@ -56,7 +55,7 @@ test('makePseudoTypedArrayConstructor forwards a non-immutable first arg', t => 
   t.is(getPrototypeOf(view), Uint8Array.prototype);
 
   // The amplifier returns the view itself (no entry in hiddenTypedArrays).
-  t.is(_amplifyTypedArrayForTests(view), view);
+  t.is(amplifyTypedArray(view), view);
 
   // Mutators work normally on the genuine view.
   view[0] = 99;
@@ -95,7 +94,7 @@ test('virtualTypedArrayBufferGetter redirects to the immutable wrapper when pres
 });
 
 // ---------------------------------------------------------------------------
-// amplifyTypedArray - exported wrapper around _amplifyTypedArrayForTests
+// amplifyTypedArray - brand-WeakMap amplifier
 // ---------------------------------------------------------------------------
 
 test('amplifyTypedArray returns the hidden genuine TypedArray for a wrapper', t => {
