@@ -10,6 +10,7 @@
   ],
   "exclude": [
     "test/monaco-lockdown",
-    "test/inventory-dnd"
+    "test/inventory-dnd",
+    "test/inventory-item-actions"
   ]
 }
