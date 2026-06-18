@@ -16,7 +16,7 @@ import {
   NON_EXPANDABLE_TYPES,
   makeStaticTreePowers,
 } from './inventory-tree-source.js';
-import { makeItemDragDrop } from './inventory-dnd.js';
+import { makeChannelReorder, makeItemDragDrop } from './inventory-dnd.js';
 
 /**
  * @typedef {object} InventoryOptions
@@ -304,15 +304,11 @@ export const inventoryComponent = async (
   /** @type {Map<string, { $wrapper: HTMLElement, cleanup?: () => void }>} */
   const $names = new Map();
 
-  // Drag state for channel list reordering
-  /** @type {HTMLElement | null} */
-  let draggedChannelWrapper = null;
-  /** @type {HTMLElement | null} */
-  let $channelDropIndicator = null;
-
   // Item-move drag-and-drop (link/move within the tree). Operates in absolute
   // coordinates against `rootPowers`. See inventory-dnd.js.
   const itemDnd = makeItemDragDrop({ rootPowers });
+  // Channel-list reordering (channel mode only). See inventory-dnd.js.
+  const channelReorder = makeChannelReorder();
 
   /**
    * Create an inventory item with disclosure triangle.
@@ -603,22 +599,7 @@ export const inventoryComponent = async (
           }
 
           // Make channel items draggable for reordering
-          $row.draggable = true;
-          $row.addEventListener('dragstart', dragE => {
-            if (!dragE.dataTransfer) return;
-            dragE.dataTransfer.effectAllowed = 'move';
-            dragE.dataTransfer.setData('text/plain', name);
-            draggedChannelWrapper = $wrapper;
-            $wrapper.classList.add('channel-dragging');
-          });
-          $row.addEventListener('dragend', () => {
-            $wrapper.classList.remove('channel-dragging');
-            draggedChannelWrapper = null;
-            if ($channelDropIndicator) {
-              $channelDropIndicator.remove();
-              $channelDropIndicator = null;
-            }
-          });
+          channelReorder.attachDragSource($row, $wrapper, name);
 
           // Render bookmarked threads under this channel
           if (bookmarks && bookmarks.length > 0) {
@@ -844,111 +825,7 @@ export const inventoryComponent = async (
   // ---- Channel list drag-and-drop reordering ----
 
   if (channelMode) {
-    $list.style.position = 'relative';
-
-    $list.addEventListener('dragover', e => {
-      if (!draggedChannelWrapper || !e.dataTransfer) return;
-      e.preventDefault();
-      e.dataTransfer.dropEffect = 'move';
-
-      const items = [
-        .../** @type {NodeListOf<HTMLElement>} */ (
-          $list.querySelectorAll('.channel-item:not(.channel-dragging)')
-        ),
-      ];
-      const mouseY = e.clientY;
-      let bestY = 0;
-      let bestDist = Infinity;
-
-      // Gap before first item
-      if (items.length > 0) {
-        const rect = items[0].getBoundingClientRect();
-        const dist = Math.abs(mouseY - rect.top);
-        if (dist < bestDist) {
-          bestDist = dist;
-          bestY = rect.top;
-        }
-      }
-      // Gap after each item
-      for (const item of items) {
-        const rect = item.getBoundingClientRect();
-        const dist = Math.abs(mouseY - rect.bottom);
-        if (dist < bestDist) {
-          bestDist = dist;
-          bestY = rect.bottom;
-        }
-      }
-
-      if (!$channelDropIndicator) {
-        $channelDropIndicator = document.createElement('div');
-        $channelDropIndicator.className = 'channel-drop-indicator';
-        $list.appendChild($channelDropIndicator);
-      }
-      const listRect = $list.getBoundingClientRect();
-      $channelDropIndicator.style.top = `${bestY - listRect.top}px`;
-    });
-
-    $list.addEventListener('dragleave', e => {
-      if (!$list.contains(/** @type {Node | null} */ (e.relatedTarget))) {
-        if ($channelDropIndicator) {
-          $channelDropIndicator.remove();
-          $channelDropIndicator = null;
-        }
-      }
-    });
-
-    $list.addEventListener('drop', e => {
-      e.preventDefault();
-      if (!draggedChannelWrapper) return;
-
-      const items = [
-        .../** @type {NodeListOf<HTMLElement>} */ (
-          $list.querySelectorAll('.channel-item:not(.channel-dragging)')
-        ),
-      ];
-      const mouseY = e.clientY;
-      /** @type {Element | null} */
-      let insertBefore = null;
-
-      for (const item of items) {
-        const rect = item.getBoundingClientRect();
-        const midY = (rect.top + rect.bottom) / 2;
-        if (Number(mouseY) < Number(midY)) {
-          insertBefore = item;
-          break;
-        }
-      }
-
-      if (insertBefore) {
-        $list.insertBefore(draggedChannelWrapper, insertBefore);
-      } else {
-        $list.appendChild(draggedChannelWrapper);
-      }
-
-      draggedChannelWrapper.classList.remove('channel-dragging');
-      draggedChannelWrapper = null;
-      if ($channelDropIndicator) {
-        $channelDropIndicator.remove();
-        $channelDropIndicator = null;
-      }
-
-      // Persist the new channel order
-      if (onChannelReorder) {
-        const orderedNames = [
-          .../** @type {NodeListOf<HTMLElement>} */ (
-            $list.querySelectorAll('.channel-item')
-          ),
-        ]
-          .map(el => el.dataset.name)
-          .filter(
-            /**
-             * @param n
-             * @returns {n is string}
-             */ n => typeof n === 'string',
-          );
-        onChannelReorder(orderedNames);
-      }
-    });
+    channelReorder.attachReorderZone($list, { onReorder: onChannelReorder });
   } else {
     // ---- List-level drop zone for link/move ----
     // Dropping onto the background of a directory's list links or moves the
