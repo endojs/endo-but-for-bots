@@ -194,7 +194,7 @@ test('shim: Object.freeze(view); Object.isFrozen(view) === true', t => {
 });
 
 // ---------------------------------------------------------------------------
-// No intermediate prototype (parallel to PR #435's analogous assertion)
+// No intermediate prototype
 // ---------------------------------------------------------------------------
 
 test('shim: Object.getPrototypeOf(view) === Uint8Array.prototype on an emulated freezable view', t => {
