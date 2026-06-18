@@ -16,25 +16,34 @@ import {
   NON_EXPANDABLE_TYPES,
   makeStaticTreePowers,
 } from './tree-source.js';
-import { makeChannelReorder, makeItemDragDrop } from './dnd.js';
+import { makeItemDragDrop } from './dnd.js';
 import { ItemActions } from './item-actions.js';
 import { h, renderConfined, unmount } from '../setup-preact-container.js';
+
+/**
+ * A `sidebar` plugs alternate rendering into the otherwise pet-name-tree
+ * inventory: the channel sidebar (channel-sidebar.js) supplies one. All of its
+ * hooks are optional.
+ *
+ * @typedef {object} InventorySidebar
+ * @property {boolean} [prepend] - Insert new items at the top of the list.
+ * @property {boolean} [itemInitiallyHidden] - Hide items until `decorateItem`
+ *   chooses to show them.
+ * @property {($parent: HTMLElement) => void} [setupHeader] - Decorate the
+ *   header once, at the top level.
+ * @property {(ctx: import('./channel-sidebar.js').ItemContext) => void} [decorateItem]
+ *   - Decorate each item after its type is probed (replaces the default
+ *   conversation decoration).
+ * @property {($list: HTMLElement) => void} [setupList] - Wire list-level
+ *   behavior (replaces the default link/move drop zone).
+ */
 
 /**
  * @typedef {object} InventoryOptions
  * @property {(value: unknown, id?: string, petNamePath?: string[], messageContext?: { number: bigint, edgeName: string }) => void | Promise<void>} showValue
  * @property {((petName: string | string[], formulaId: string) => void)} [onSelectConversation]
  * @property {string | null} [activeConversationPetName]
- * @property {boolean} [channelMode] - If true, show "Channels" header and channel-specific UI
- * @property {(channelPetName: string) => void} [onSelectChannel] - Called when a channel is selected
- * @property {string | null} [activeChannelPetName] - Currently active channel pet name
- * @property {string[]} [channelOrder] - Persisted channel display order
- * @property {(order: string[]) => void} [onChannelReorder] - Called when channels are reordered via drag
- * @property {Array<{key: string, channelPetName: string, label: string}>} [bookmarks] - Bookmarked threads
- * @property {(channelPetName: string, threadKey: string) => void} [onSelectBookmark] - Navigate to bookmarked thread
- * @property {(bookmark: {key: string, channelPetName: string, label: string}) => void} [onRemoveBookmark] - Remove a bookmark
- * @property {'chat' | 'forum' | 'outliner' | 'microblog'} [viewMode] - Current view mode
- * @property {(mode: 'chat' | 'forum' | 'outliner' | 'microblog') => void} [onViewModeChange] - Change view mode
+ * @property {InventorySidebar} [sidebar] - Alternate rendering (e.g. channels).
  */
 
 /**
@@ -54,21 +63,7 @@ export const inventoryComponent = async (
   $parent,
   _end,
   powers,
-  {
-    showValue,
-    onSelectConversation,
-    activeConversationPetName,
-    channelMode,
-    onSelectChannel,
-    activeChannelPetName,
-    channelOrder,
-    onChannelReorder,
-    bookmarks,
-    onSelectBookmark,
-    onRemoveBookmark,
-    viewMode,
-    onViewModeChange,
-  },
+  { showValue, onSelectConversation, activeConversationPetName, sidebar },
   path = [],
   rootPowers = powers,
   rootPrefix = [],
@@ -77,230 +72,9 @@ export const inventoryComponent = async (
     $parent.querySelector('.pet-list') || $parent
   );
 
-  // Update header text for channel mode
-  if (channelMode && path.length === 0) {
-    const $title = $parent.querySelector('.inventory-title');
-    if ($title) {
-      $title.textContent = 'Channels';
-    }
-
-    // Add channel action buttons if not already present
-    const $header = $parent.querySelector('.inventory-header');
-    if ($header && !$header.querySelector('.channel-actions')) {
-      const $actions = document.createElement('span');
-      $actions.className = 'channel-actions';
-
-      const $newBtn = document.createElement('button');
-      $newBtn.className = 'channel-action-btn';
-      $newBtn.textContent = 'New';
-      $newBtn.title = 'Create a new channel';
-
-      const $joinBtn = document.createElement('button');
-      $joinBtn.className = 'channel-action-btn';
-      $joinBtn.textContent = 'Join';
-      $joinBtn.title = 'Join an existing channel';
-
-      $actions.appendChild($newBtn);
-      $actions.appendChild($joinBtn);
-
-      // Insert before the toggle label
-      const $toggle = $header.querySelector('.inventory-toggle');
-      if ($toggle) {
-        $header.insertBefore($actions, $toggle);
-      } else {
-        $header.appendChild($actions);
-      }
-
-      // Inline form container (shared between New and Join)
-      let $inlineForm = $parent.querySelector('.channel-inline-form');
-      if (!$inlineForm) {
-        $inlineForm = document.createElement('div');
-        $inlineForm.className = 'channel-inline-form';
-        // Insert between header and pet-list
-        const $petList = $parent.querySelector('.pet-list');
-        if ($petList) {
-          $parent.insertBefore($inlineForm, $petList);
-        } else {
-          $parent.appendChild($inlineForm);
-        }
-      }
-
-      /**
-       * Show the "New Channel" inline form.
-       */
-      const showNewForm = () => {
-        if (!$inlineForm) return;
-        $inlineForm.innerHTML = '';
-        $inlineForm.classList.add('visible');
-
-        const $form = document.createElement('div');
-        $form.className = 'channel-form';
-
-        const $nameInput = document.createElement('input');
-        $nameInput.type = 'text';
-        $nameInput.placeholder = 'Channel name';
-        $nameInput.className = 'channel-form-input';
-
-        const $displayInput = document.createElement('input');
-        $displayInput.type = 'text';
-        $displayInput.placeholder = 'Your display name';
-        $displayInput.className = 'channel-form-input';
-
-        const $btnRow = document.createElement('div');
-        $btnRow.className = 'channel-form-buttons';
-
-        const $createBtn = document.createElement('button');
-        $createBtn.className = 'channel-form-submit';
-        $createBtn.textContent = 'Create';
-
-        const $cancelBtn = document.createElement('button');
-        $cancelBtn.className = 'channel-form-cancel';
-        $cancelBtn.textContent = 'Cancel';
-
-        $btnRow.appendChild($createBtn);
-        $btnRow.appendChild($cancelBtn);
-
-        $form.appendChild($nameInput);
-        $form.appendChild($displayInput);
-        $form.appendChild($btnRow);
-        $inlineForm.appendChild($form);
-
-        $nameInput.focus();
-
-        $cancelBtn.onclick = () => {
-          $inlineForm.classList.remove('visible');
-          $inlineForm.innerHTML = '';
-        };
-
-        $createBtn.onclick = async () => {
-          const petName = $nameInput.value.trim();
-          const displayName = $displayInput.value.trim();
-          if (!petName || !displayName) return;
-
-          $createBtn.disabled = true;
-          $createBtn.textContent = 'Creating...';
-          try {
-            await E(powers).makeChannel(petName, displayName);
-            $inlineForm.classList.remove('visible');
-            $inlineForm.innerHTML = '';
-            // Auto-select the new channel
-            if (onSelectChannel) {
-              onSelectChannel(petName);
-            }
-          } catch (err) {
-            window.reportError(/** @type {Error} */ (err));
-            $createBtn.disabled = false;
-            $createBtn.textContent = 'Create';
-          }
-        };
-
-        // Submit on Enter in last input
-        $displayInput.addEventListener('keydown', e => {
-          if (e.key === 'Enter') {
-            $createBtn.click();
-          }
-        });
-      };
-
-      /**
-       * Show the "Join Channel" inline form.
-       */
-      const showJoinForm = () => {
-        if (!$inlineForm) return;
-        $inlineForm.innerHTML = '';
-        $inlineForm.classList.add('visible');
-
-        const $form = document.createElement('div');
-        $form.className = 'channel-form';
-
-        const $locatorInput = document.createElement('input');
-        $locatorInput.type = 'text';
-        $locatorInput.placeholder = 'Locator URL';
-        $locatorInput.className = 'channel-form-input';
-
-        const $nameInput = document.createElement('input');
-        $nameInput.type = 'text';
-        $nameInput.placeholder = 'Channel name (local)';
-        $nameInput.className = 'channel-form-input';
-
-        const $btnRow = document.createElement('div');
-        $btnRow.className = 'channel-form-buttons';
-
-        const $joinSubmit = document.createElement('button');
-        $joinSubmit.className = 'channel-form-submit';
-        $joinSubmit.textContent = 'Join';
-
-        const $cancelBtn = document.createElement('button');
-        $cancelBtn.className = 'channel-form-cancel';
-        $cancelBtn.textContent = 'Cancel';
-
-        $btnRow.appendChild($joinSubmit);
-        $btnRow.appendChild($cancelBtn);
-
-        $form.appendChild($locatorInput);
-        $form.appendChild($nameInput);
-        $form.appendChild($btnRow);
-        $inlineForm.appendChild($form);
-
-        $locatorInput.focus();
-
-        $cancelBtn.onclick = () => {
-          $inlineForm.classList.remove('visible');
-          $inlineForm.innerHTML = '';
-        };
-
-        $joinSubmit.onclick = async () => {
-          const locator = $locatorInput.value.trim();
-          const petName = $nameInput.value.trim();
-          if (!locator || !petName) return;
-
-          $joinSubmit.disabled = true;
-          $joinSubmit.textContent = 'Joining...';
-          try {
-            // Validate the locator URL and extract connection hints.
-            const url = new URL(locator);
-            const formulaNumber = url.searchParams.get('id');
-            const nodeNumber = url.hostname;
-            if (!formulaNumber) {
-              throw new Error('Invalid locator: missing formula id');
-            }
-            // Register peer info from connection hints so the daemon
-            // knows how to reach the remote node.
-            const addresses = url.searchParams.getAll('at');
-            if (addresses.length > 0 && nodeNumber) {
-              await E(
-                /** @type {{ addPeerInfo: (info: { node: string, addresses: string[] }) => Promise<void> }} */ (
-                  /** @type {unknown} */ (powers)
-                ),
-              ).addPeerInfo({ node: nodeNumber, addresses });
-            }
-            // Pass the original endo:// locator to storeLocator so the
-            // system can drop bare-identifier support in the future.
-            await E(powers).storeLocator(petName, locator);
-            $inlineForm.classList.remove('visible');
-            $inlineForm.innerHTML = '';
-            // Auto-select the new channel
-            if (onSelectChannel) {
-              onSelectChannel(petName);
-            }
-          } catch (err) {
-            window.reportError(/** @type {Error} */ (err));
-            $joinSubmit.disabled = false;
-            $joinSubmit.textContent = 'Join';
-          }
-        };
-
-        // Submit on Enter in last input
-        $nameInput.addEventListener('keydown', e => {
-          if (e.key === 'Enter') {
-            $joinSubmit.click();
-          }
-        });
-      };
-
-      $newBtn.onclick = showNewForm;
-      $joinBtn.onclick = showJoinForm;
-    }
+  // Let a sidebar (e.g. channels) decorate the header once at the top level.
+  if (sidebar?.setupHeader && path.length === 0) {
+    sidebar.setupHeader($parent);
   }
 
   /** @type {Map<string, { $wrapper: HTMLElement, cleanup?: () => void }>} */
@@ -309,8 +83,6 @@ export const inventoryComponent = async (
   // Item-move drag-and-drop (link/move within the tree). Operates in absolute
   // coordinates against `rootPowers`. See inventory-dnd.js.
   const itemDnd = makeItemDragDrop({ rootPowers });
-  // Channel-list reordering (channel mode only). See inventory-dnd.js.
-  const channelReorder = makeChannelReorder();
 
   /**
    * Create an inventory item with disclosure triangle.
@@ -330,8 +102,9 @@ export const inventoryComponent = async (
     if (isSpecialName(name)) {
       $wrapper.classList.add('special');
     }
-    // In channel mode, hide items until we confirm they are channels
-    if (channelMode) {
+    // A sidebar may hide items until its decorateItem chooses to show them
+    // (channel mode hides everything until confirmed channels).
+    if (sidebar?.itemInitiallyHidden) {
       $wrapper.style.display = 'none';
     }
 
@@ -422,8 +195,8 @@ export const inventoryComponent = async (
       acceptsDrop: () => acceptsDrop,
     });
 
-    if (channelMode) {
-      // Newest channels at top (reordered after type detection)
+    if (sidebar?.prepend) {
+      // Newest items at top (channels are reordered after type detection)
       $list.prepend($wrapper);
     } else {
       $list.appendChild($wrapper);
@@ -469,164 +242,22 @@ export const inventoryComponent = async (
           acceptsDrop = true;
         }
 
-        // Channel mode: make channel items selectable, hide non-channels
-        if (channelMode && type === 'channel' && onSelectChannel) {
-          $wrapper.style.display = '';
-          $wrapper.classList.add('channel-item');
-          $wrapper.dataset.name = name;
-          $name.title = 'Switch to this channel';
-          $name.classList.add('selectable');
-          $name.onclick = () => {
-            onSelectChannel(name);
-          };
-          if (
-            activeChannelPetName &&
-            path.length === 0 &&
-            name === activeChannelPetName
-          ) {
-            $wrapper.classList.add('active-channel');
-          }
-
-          // Per-channel three-dot menu for view mode switching
-          if (onViewModeChange) {
-            const $menuBtn = document.createElement('button');
-            $menuBtn.className = 'channel-sidebar-menu-btn';
-            $menuBtn.textContent = '\u22EE';
-            $menuBtn.title = 'Channel options';
-            $menuBtn.addEventListener('click', menuE => {
-              menuE.stopPropagation();
-              // Remove any existing sidebar menus
-              const $existing = document.querySelector('.channel-sidebar-menu');
-              if ($existing) $existing.remove();
-
-              const $menu = document.createElement('div');
-              $menu.className = 'channel-sidebar-menu';
-              const modes =
-                /** @type {Array<'chat' | 'forum' | 'outliner' | 'microblog'>} */ ([
-                  'chat',
-                  'forum',
-                  'outliner',
-                  'microblog',
-                ]);
-              for (const mode of modes) {
-                const $item = document.createElement('button');
-                $item.className = 'channel-sidebar-menu-item';
-                if (mode === viewMode) $item.classList.add('active');
-                $item.textContent =
-                  mode.charAt(0).toUpperCase() + mode.slice(1);
-                $item.addEventListener('click', () => {
-                  $menu.remove();
-                  onViewModeChange(mode);
-                });
-                $menu.appendChild($item);
-              }
-
-              // Position relative to button
-              const rect = $menuBtn.getBoundingClientRect();
-              $menu.style.position = 'fixed';
-              $menu.style.left = `${rect.right + 4}px`;
-              $menu.style.top = `${rect.top}px`;
-              document.body.appendChild($menu);
-
-              const dismiss = () => {
-                $menu.remove();
-                document.removeEventListener('click', dismiss);
-              };
-              requestAnimationFrame(() => {
-                document.addEventListener('click', dismiss);
-              });
-            });
-            $actions.insertBefore($menuBtn, $actions.firstChild);
-          }
-
-          // Reorder according to stored channel order
-          if (channelOrder) {
-            const orderIdx = channelOrder.indexOf(name);
-            if (orderIdx >= 0) {
-              const existingItems = /** @type {NodeListOf<HTMLElement>} */ (
-                $list.querySelectorAll('.channel-item[data-name]')
-              );
-              let reinserted = false;
-              for (const item of existingItems) {
-                if (item === $wrapper) continue;
-                const itemIdx = channelOrder.indexOf(
-                  /** @type {string} */ (item.dataset.name),
-                );
-                if (itemIdx < 0 || itemIdx > orderIdx) {
-                  $list.insertBefore($wrapper, item);
-                  reinserted = true;
-                  break;
-                }
-              }
-              if (!reinserted) {
-                $list.appendChild($wrapper);
-              }
-            }
-          }
-
-          // Make channel items draggable for reordering
-          channelReorder.attachDragSource($row, $wrapper, name);
-
-          // Render bookmarked threads under this channel
-          if (bookmarks && bookmarks.length > 0) {
-            const channelBookmarks = bookmarks.filter(
-              b => b.channelPetName === name,
-            );
-            if (channelBookmarks.length > 0) {
-              for (const bm of channelBookmarks) {
-                const $bmItem = document.createElement('div');
-                $bmItem.className = 'bookmarked-thread-item';
-                $bmItem.dataset.key = bm.key;
-                $bmItem.dataset.channel = bm.channelPetName;
-                const $bmLabel = document.createElement('span');
-                $bmLabel.className = 'bookmark-label';
-                $bmLabel.textContent = `\u2605 ${bm.label}`;
-                $bmLabel.title = `Thread #${bm.key} in ${bm.channelPetName}`;
-                $bmItem.appendChild($bmLabel);
-                if (onSelectBookmark) {
-                  $bmItem.style.cursor = 'pointer';
-                  $bmItem.addEventListener('click', () => {
-                    onSelectBookmark(bm.channelPetName, bm.key);
-                  });
-                }
-                if (onRemoveBookmark) {
-                  $bmItem.addEventListener('contextmenu', ctxE => {
-                    ctxE.preventDefault();
-                    const $menu = document.createElement('div');
-                    $menu.className = 'bookmark-context-menu';
-                    const $removeBtn = document.createElement('button');
-                    $removeBtn.textContent = 'Remove bookmark';
-                    $removeBtn.addEventListener('click', () => {
-                      onRemoveBookmark(bm);
-                      $bmItem.remove();
-                      $menu.remove();
-                    });
-                    $menu.appendChild($removeBtn);
-                    $menu.style.position = 'fixed';
-                    $menu.style.left = `${ctxE.clientX}px`;
-                    $menu.style.top = `${ctxE.clientY}px`;
-                    document.body.appendChild($menu);
-                    const dismiss = () => {
-                      $menu.remove();
-                      document.removeEventListener('click', dismiss);
-                    };
-                    requestAnimationFrame(() => {
-                      document.addEventListener('click', dismiss);
-                    });
-                  });
-                }
-                $children.appendChild($bmItem);
-              }
-              // Show the children container and update disclosure
-              $children.style.display = '';
-              $disclosure.textContent = '\u25BC';
-              $disclosure.classList.add('expanded');
-            }
-          }
-        }
-
-        // Non-channel mode: detect conversable items
-        if (!channelMode && onSelectConversation) {
+        // A sidebar (e.g. channels) decorates the item; otherwise apply the
+        // default conversation decoration.
+        if (sidebar?.decorateItem) {
+          sidebar.decorateItem({
+            name,
+            type: type ?? null,
+            path,
+            $list,
+            $wrapper,
+            $row,
+            $name,
+            $disclosure,
+            $children,
+            $actions,
+          });
+        } else if (onSelectConversation) {
           if (type && CONVERSABLE_TYPES.includes(type)) {
             $wrapper.classList.add('conversable');
             $name.title = 'Open conversation';
@@ -760,9 +391,7 @@ export const inventoryComponent = async (
                 showValue,
                 onSelectConversation: wrappedOnSelectConversation,
                 activeConversationPetName,
-                channelMode,
-                onSelectChannel,
-                activeChannelPetName,
+                sidebar,
               },
               [], // Reset path since nestedPowers handles the prefix
               // Drag-and-drop stays in the root's absolute coordinate space so
@@ -794,15 +423,14 @@ export const inventoryComponent = async (
     };
   };
 
-  // ---- Channel list drag-and-drop reordering ----
-
-  if (channelMode) {
-    channelReorder.attachReorderZone($list, { onReorder: onChannelReorder });
+  // List-level behavior: a sidebar wires its own (channels use reordering);
+  // otherwise the default link/move drop zone. Dropping onto the background of
+  // a directory's list links or moves the dragged item into that directory
+  // (`rootPrefix`); at the outermost level `rootPrefix` is empty, so this is
+  // how an item is moved *up* to the root.
+  if (sidebar?.setupList) {
+    sidebar.setupList($list);
   } else {
-    // ---- List-level drop zone for link/move ----
-    // Dropping onto the background of a directory's list links or moves the
-    // dragged item into that directory (`rootPrefix`). At the outermost level
-    // `rootPrefix` is empty, so this is how an item is moved *up* to the root.
     itemDnd.attachListDropZone($list, rootPrefix);
   }
 
