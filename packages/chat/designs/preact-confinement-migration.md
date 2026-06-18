@@ -277,6 +277,12 @@ Line numbers below are anchors at time of writing, not contracts.
 Visual pieces become Preact components; cross-cutting drag-and-drop and the
 data adapter become hooks/utilities rather than views.
 
+The channel-mode pieces have since been split out of the inventory entirely
+(into `inventory/channel-sidebar.js`); they are listed separately below and
+are not part of the inventory migration.
+
+**Pet-name tree (this migration):**
+
 - **InventoryList** (container/controller) — owns the `followNameChanges()`
   subscription, the `$names` map, and recursion; renders one `PetItem` per
   name.
@@ -285,17 +291,21 @@ data adapter become hooks/utilities rather than views.
   - **ItemDisclosure** — the triangle, expand/collapse state, and the
     recursive child-list mount (the recursion seam back into
     `InventoryList`).
-  - **ItemLabel** — name (574) + type badge (749).
-  - **ItemActions** — info/inspect (583, 710), cancel-pending (590, 603),
-    and remove (638) buttons.
-  - **ChannelItemMenu** — the per-channel context menu (786–828), only in
-    `channelMode`.
-  - **BookmarkList** / **BookmarkItem** — bookmarked threads rendered under
-    a channel (879–950), plus the remove context menu.
-- **ChannelActions** — the channel-mode header, wrapping **NewChannelForm**
-  (220) and **JoinChannelForm** (297).
-- **DropMenu** — the link/move context menu (461), the one visual piece of
-  the tree drag-and-drop.
+  - **ItemLabel** — the pet name + type badge.
+  - **ItemActions** ☑ — info/inspect, cancel-pending, and remove buttons
+    (`inventory/item-actions.js`).
+- **DropMenu** ☑ — the link/move context menu, the one visual piece of the
+  tree drag-and-drop (`inventory/drop-menu.js`).
+
+**Channel sidebar (`inventory/channel-sidebar.js`; separate later migration):**
+
+- **NewChannelForm** / **JoinChannelForm** — the channel-mode header forms.
+- **ChannelItemMenu** — the per-channel `⋮` context menu (view-mode switch).
+- **BookmarkList** / **BookmarkItem** — bookmarked threads under a channel,
+  plus the remove context menu.
+- Channel reordering already lives in `inventory/dnd.js` (`makeChannelReorder`).
+- A shared **PopupMenu** in `components/` should fall out of `ChannelItemMenu`
+  + `DropMenu`.
 
 ### Extract as framework-agnostic factories (behavior, not views)
 
