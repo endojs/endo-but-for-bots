@@ -1,3 +1,4 @@
+// CI affected-set scoping experiment (Option A) — trivial leaf-package edit.
 import test from '@endo/ses-ava/test.js';
 
 import harden from '@endo/harden';
