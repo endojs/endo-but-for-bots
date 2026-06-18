@@ -94,6 +94,35 @@ test.serial('renders a type badge once the locate probe resolves', async t => {
   t.truthy($row.querySelector('.pet-type-badge'), 'badge in the same row');
 });
 
+test.serial('disclosure is hidden for non-expandable types', async t => {
+  const { $list } = await setupInventory({
+    names: ['inbox', 'note'],
+    locators: new Map([
+      ['inbox', 'endo://?type=directory&number=1'],
+      ['note', 'endo://?type=readable-blob&number=2'],
+    ]),
+  });
+  await tick(30);
+
+  const disclosureFor = name => {
+    const $wrapper = [
+      .../** @type {NodeListOf<HTMLElement>} */ (
+        $list.querySelectorAll('.pet-item-wrapper')
+      ),
+    ].find(w => w.querySelector('.pet-name')?.textContent === name);
+    return $wrapper.querySelector('.pet-disclosure');
+  };
+
+  t.true(
+    disclosureFor('note').classList.contains('hidden'),
+    'readable-blob disclosure is hidden (not expandable)',
+  );
+  t.false(
+    disclosureFor('inbox').classList.contains('hidden'),
+    'directory disclosure stays visible (expandable)',
+  );
+});
+
 test.serial('hub-typed rows accept drop; leaf-typed rows do not', async t => {
   const locators = new Map([
     ['inbox', 'endo://?type=directory&number=1'],

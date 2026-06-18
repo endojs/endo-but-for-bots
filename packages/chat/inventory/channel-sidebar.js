@@ -44,7 +44,8 @@ import { makeChannelReorder } from './dnd.js';
  * @property {HTMLElement} $row
  * @property {(partial: { title?: string, selectable?: boolean, onClick?: () => void }) => void} setLabel
  *   - Update the item's label (name) — title, selectable, click handler.
- * @property {HTMLElement} $disclosure
+ * @property {(partial: { hidden?: boolean, loading?: boolean, expanded?: boolean }) => void} setDisclosure
+ *   - Update the item's disclosure triangle.
  * @property {HTMLElement} $children
  * @property {HTMLElement} $actions
  */
@@ -317,7 +318,7 @@ export const makeChannelSidebar = config => {
       $wrapper,
       $row,
       setLabel,
-      $disclosure,
+      setDisclosure,
       $children,
       $actions,
     } = ctx;
@@ -468,10 +469,9 @@ export const makeChannelSidebar = config => {
           }
           $children.appendChild($bmItem);
         }
-        // Show the children container and update disclosure
+        // Show the children container and mark the disclosure expanded.
         $children.style.display = '';
-        $disclosure.textContent = '▼';
-        $disclosure.classList.add('expanded');
+        setDisclosure({ expanded: true });
       }
     }
   };

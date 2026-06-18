@@ -288,7 +288,7 @@ are not part of the inventory migration.
   name.
   This is the orchestrator that survives as the top-level component.
 - **PetItem** (recursive node) — the `createItem` shell; composes:
-  - **ItemDisclosure** — the triangle, expand/collapse state, and the
+  - **ItemDisclosure** ☑ — the triangle, expand/collapse state, and the
     recursive child-list mount (the recursion seam back into
     `InventoryList`).
   - **ItemLabel** ☑ — the pet name + type badge (`inventory/item-label.js`).
@@ -374,7 +374,9 @@ Steps 1 are Phase-1 refactors (no Preact); steps 2–5 convert markup in place.
      mounted into a `display: contents` host; all label mutations
      (conversation, immutable, channel) route through `setLabel`, which
      re-renders.
-3. Migrate `ItemDisclosure`. ☐
+3. Migrate `ItemDisclosure` (inventory/item-disclosure.js). ☑ done — the
+   triangle view; the expand/collapse behavior (async lookup + recursive
+   mount) stays host-side and drives it through `setDisclosure`.
 4. Compose `PetItem`. ☐
 5. Convert `InventoryList` last, once its children are Preact. ☐
 
