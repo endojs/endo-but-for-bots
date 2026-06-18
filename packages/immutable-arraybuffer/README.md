@@ -129,6 +129,40 @@ On a frozen wrapper the assignment throws `TypeError` in strict mode (ES module 
 
 This is a known constraint of the TC39 proposal: there is no way to intercept integer-indexed assignments on a plain object via the prototype chain.
 
+## Function expressions versus declarations
+
+Throughout `src/lib.js`, exported bindings that hold function values use `const`
+with a named function expression rather than `function` declarations.
+The reason is JavaScript function-declaration hoisting.
+
+In the presence of an import cycle, a hoisted `function` declaration's value is
+accessible to an importing module before the exporting module finishes
+initializing.
+An early importer that reads the exported name gets the function value already
+present (because hoisting put it there before the module body ran), but any
+other module-level state the function closes over may not yet be initialized,
+creating a subtle hazard.
+
+By using `const` instead, the JavaScript standard specifies that an early
+importer in a cycle that reads the name before the exporting module's
+initializer runs would get a Temporal Dead Zone (TDZ) error, making the hazard
+visible at runtime rather than silent.
+
+Two implementation notes for ses-shim environments:
+
+- The ses-shim's compiler from JS ESM module code to JS evaluable code does not
+  correctly implement TDZ.
+  A cycle hazard of this kind may therefore not be caught at runtime when
+  running under the ses-shim.
+- XS (Moddable's engine) uses native compartment and module support and does
+  implement TDZ correctly, so the same hazard would be caught at runtime on XS.
+
+This file introduces no such import cycle; the convention is documented here
+so future maintainers understand why function declarations are avoided throughout
+`src/lib.js`.
+
+Source: erights review comment 3439479281 on `src/lib.js` line 578.
+
 ## Platform support for `transferToImmutable`
 
 The shim's emulation of `ArrayBuffer.prototype.transferToImmutable` requires the underlying platform to provide either `ArrayBuffer.prototype.transfer` (preferred when present) or the global `structuredClone` (used as a fallback to move the buffer's contents into a new backing store).
