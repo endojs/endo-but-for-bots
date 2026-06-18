@@ -706,6 +706,7 @@ export const makePseudoTypedArrayConstructor = OriginalConstructor => {
   // TypedArray constructors; each concrete constructor carries its own own-
   // property value (8 for BigUint64Array, 4 for Int32Array, etc.).
   defineProperty(PseudoTypedArray, 'BYTES_PER_ELEMENT', {
+    // @ts-expect-error TS2339: BYTES_PER_ELEMENT exists on TypedArray constructors but not on Function
     value: OriginalConstructor.BYTES_PER_ELEMENT,
     writable: false,
     enumerable: false,
