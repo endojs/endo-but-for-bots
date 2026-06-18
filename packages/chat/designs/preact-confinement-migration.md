@@ -41,6 +41,23 @@ seam where a confined guest component could be substituted).
 
 ## Authoring conventions
 
+### File layout
+
+- `setup-preact-container.js` — the app barrel: re-exports
+  `@endo/preact-container` (`h`, `Fragment`, `renderConfined`, `unmount`,
+  `confineComponent`) plus the Preact hooks, under the app's severe lockdown.
+  Every component imports from here, never from `preact` directly.
+- `components/` — reusable, app-wide Preact components. A piece moves here
+  once a second caller wants it. See `components/README.md` for the format.
+- `inventory/` — the inventory feature: its specific Preact components
+  (`drop-menu.js`, `item-actions.js`, …), behavior factories (`dnd.js`,
+  `tree-source.js`), and the migrating module (`inventory.js`, currently
+  `inventory-component.js`'s content; becomes `InventoryList`).
+
+Feature-specific components live with their feature; only genuinely reusable
+ones go in `components/`. Both follow the one common component format
+documented in `components/README.md`.
+
 ### No JSX — `h()` only
 
 Components are plain `.js` authored with the `h` (and `Fragment`) helper
@@ -316,10 +333,10 @@ Steps 1 are Phase-1 refactors (no Preact); steps 2–5 convert markup in place.
    `test/inventory-dnd` (`yarn test:inventory-dnd`).
 2. Migrate the leaf views to `h()` components rendered through
    `renderConfined`:
-   - `DropMenu` (inventory-drop-menu.js). ☑ done — the first Preact `h()`
-     component; rendered by inventory-dnd.js's `showDropMenu`, covered by
+   - `DropMenu` (inventory/drop-menu.js). ☑ done — the first Preact `h()`
+     component; rendered by inventory/dnd.js's `showDropMenu`, covered by
      `test/inventory-dnd` under severe lockdown.
-   - `ItemActions` (inventory-item-actions.js). ☑ done — info/cancel/remove
+   - `ItemActions` (inventory/item-actions.js). ☑ done — info/cancel/remove
      buttons; owns the cancel two-click confirm state via hooks; mounts into a
      `display: contents` sub-host so the imperative channel menu button stays a
      `.pet-buttons` flex sibling. Covered by `test/inventory-item-actions`

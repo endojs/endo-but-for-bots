@@ -11,7 +11,7 @@ import { forumComponent } from './forum-component.js';
 import { outlinerComponent } from './outliner-component.js';
 import { createChannelHeader } from './channel-header.js';
 import { inboxComponent } from './inbox-component.js';
-import { inventoryComponent } from './inventory-component.js';
+import { inventoryComponent } from './inventory/inventory.js';
 import { chatBarComponent } from './chat-bar-component.js';
 import { valueComponent } from './value-component.js';
 import { createSpacesGutter } from './spaces-gutter.js';

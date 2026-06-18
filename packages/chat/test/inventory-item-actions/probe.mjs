@@ -9,7 +9,7 @@ import '../../pre-lockdown.js';
 import '@endo/init';
 
 import { h, renderConfined } from '../../setup-preact-container.js';
-import { ItemActions } from '../../inventory-item-actions.js';
+import { ItemActions } from '../../inventory/item-actions.js';
 
 const results = [];
 const check = (name, cond, detail = '') =>
