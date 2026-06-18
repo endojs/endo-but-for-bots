@@ -82,12 +82,18 @@ if (!('sliceToImmutable' in arrayBufferPrototype)) {
   /** @type {PropertyDescriptorMap} */
   const configurableDescs = {};
   for (const key of ownKeys(libDescs)) {
-    const desc = libDescs[key];
+    // `libDescs` is a `PropertyDescriptorMap`, whose index type is `string`.
+    // `Reflect.ownKeys` returns `(string | symbol)[]`. TypeScript does not
+    // allow direct symbol indexing on `PropertyDescriptorMap`, so we widen
+    // the key with a cast here. The runtime behavior is correct: symbol-keyed
+    // descriptors (e.g. `[Symbol.iterator]`) are real own properties and
+    // `defineProperties` accepts them without complaint.
+    const desc = libDescs[/** @type {string} */ (key)];
     const reopened = { ...desc, configurable: true };
     if ('value' in reopened) {
       reopened.writable = true;
     }
-    configurableDescs[key] = reopened;
+    configurableDescs[/** @type {string} */ (key)] = reopened;
   }
   defineProperties(typedArrayPrototype, configurableDescs);
 
