@@ -524,8 +524,8 @@ export const optTransferBufferToImmutable = transferBufferToImmutable;
 //   - freezableTypedArrayLibProperties (export; property record the shim copies onto
 //                                       %TypedArrayPrototype%)
 //
-// The internal `buffers` (hiddenBuffers) and `reverseHiddenBuffers` WeakMaps
-// from the ArrayBuffer side are reused for `view.buffer` redirections.
+// The internal `buffers` and `reverseBuffers` WeakMaps from the ArrayBuffer
+// side are reused for `view.buffer` redirections.
 
 /**
  * Inverse map: genuine backing ArrayBuffer -> emulated immutable wrapper.
@@ -1055,7 +1055,20 @@ export const freezableTypedArrayLibProperties = {
    * @returns {object}
    */
   subarray(begin = undefined, end = undefined) {
-    return apply(typedArraySubarray, amplifyTypedArray(this), [begin, end]);
+    const genuineTA = apply(weakmapGet, hiddenTypedArrays, [this]);
+    if (genuineTA !== undefined) {
+      // `this` is an emulated freezable wrapper. Delegate to the hidden genuine
+      // TypedArray to get the sub-view genuine TypedArray, then wrap it in a new
+      // emulated freezable wrapper so the safety contract (`sub.buffer === iab`)
+      // holds for sub-views.
+      const genuineSub = apply(typedArraySubarray, genuineTA, [begin, end]);
+      const subWrapper = create(getPrototypeOf(this));
+      apply(weakmapSet, hiddenTypedArrays, [subWrapper, genuineSub]);
+      // `reverseBuffers` already maps the genuine backing buffer to the immutable
+      // wrapper from when the parent wrapper was constructed; no new entry needed.
+      return subWrapper;
+    }
+    return apply(typedArraySubarray, this, [begin, end]);
   },
   /**
    * @this {object}
@@ -1077,6 +1090,21 @@ export const freezableTypedArrayLibProperties = {
    * @returns {Iterator}
    */
   values() {
+    return apply(typedArrayValues, amplifyTypedArray(this), []);
+  },
+  /**
+   * The default iterator for TypedArrays is `%TypedArrayPrototype%.values`.
+   * In the baseline runtime `%TypedArrayPrototype%[Symbol.iterator]` is the
+   * same function object as `%TypedArrayPrototype%.values`. After the shim
+   * installs a new `values` wrapper, `Symbol.iterator` would still point at
+   * the original genuine `values` function unless we re-install it here as
+   * well. Without this entry, `for...of` loops and spread syntax on emulated
+   * freezable wrappers throw `TypeError: this is not a typed array.`
+   *
+   * @this {object}
+   * @returns {Iterator}
+   */
+  [Symbol.iterator]() {
     return apply(typedArrayValues, amplifyTypedArray(this), []);
   },
   /**

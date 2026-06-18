@@ -95,20 +95,73 @@ test('shim: emulated freezable byteLength and at redirect via amplifyTypedArray'
 // `subarray` returns a view whose `buffer` is the immutable wrapper
 // ---------------------------------------------------------------------------
 
-test('shim: emulated freezable subarray returns a view whose buffer is the immutable wrapper', t => {
+test('shim: emulated freezable subarray returns a wrapped view whose buffer is the immutable wrapper', t => {
   const ab = new ArrayBuffer(4);
   new Uint8Array(ab).set([1, 2, 3, 4]);
   const iab = ab.sliceToImmutable();
   const view = new Uint8Array(iab);
 
   const sub = view.subarray(1, 3);
-  // subarray on an emulated wrapper delegates to the hidden genuine TypedArray
-  // (via the amplifier-with-this-fallthrough) so the result is a genuine
-  // TypedArray whose `.buffer` is the genuine (mutable) backing buffer.
-  // This is the expected behavior: the sub-view's buffer is not wrapped.
+  // `subarray` on an emulated wrapper now returns a new emulated wrapper
+  // backed by the sub-view of the hidden genuine TypedArray. The safety
+  // contract (`sub.buffer === iab`) is preserved: the sub-view's `.buffer`
+  // redirects to the same immutable ArrayBuffer wrapper as the parent view.
   t.is(sub.byteLength, 2);
-  t.is(sub[0], 2);
-  t.is(sub[1], 3);
+  // Indexed element access uses `at()` (the amplifier-delegate path) rather
+  // than `sub[0]` (which would read an own property on the plain wrapper object,
+  // returning `undefined` for unset indices, per the wrapper semantics).
+  t.is(sub.at(0), 2);
+  t.is(sub.at(1), 3);
+  // Core safety-contract assertion: the sub-view's buffer is the immutable wrapper.
+  t.is(sub.buffer, iab);
+  t.true(sub.buffer.immutable);
+});
+
+// ---------------------------------------------------------------------------
+// Symbol.iterator: for...of and spread work on emulated freezable wrappers
+// ---------------------------------------------------------------------------
+
+test('shim: for...of loop works on an emulated freezable wrapper', t => {
+  const ab = new ArrayBuffer(4);
+  new Uint8Array(ab).set([10, 20, 30, 40]);
+  const iab = ab.sliceToImmutable();
+  const view = new Uint8Array(iab);
+
+  const collected = [];
+  for (const v of view) {
+    collected.push(v);
+  }
+  t.deepEqual(collected, [10, 20, 30, 40]);
+});
+
+test('shim: spread syntax works on an emulated freezable wrapper', t => {
+  const ab = new ArrayBuffer(3);
+  new Uint8Array(ab).set([7, 8, 9]);
+  const iab = ab.sliceToImmutable();
+  const view = new Uint8Array(iab);
+
+  t.deepEqual([...view], [7, 8, 9]);
+});
+
+test('shim: Symbol.iterator on %TypedArrayPrototype% matches the values wrapper after shim install', t => {
+  // After the shim installs a `values` wrapper on %TypedArrayPrototype%, the
+  // `Symbol.iterator` slot must point at the same (or equivalent) wrapper, not
+  // the original genuine `values` function. This regression test pins the fix:
+  // if `Symbol.iterator` is left pointing at the original genuine function,
+  // `for...of` on a freezable wrapper throws `TypeError: this is not a typed array.`
+  const ab = new ArrayBuffer(2);
+  new Uint8Array(ab).set([1, 2]);
+  const iab = ab.sliceToImmutable();
+  const view = new Uint8Array(iab);
+
+  // Both iteration protocols must work on an emulated freezable wrapper.
+  t.deepEqual([...view.values()], [1, 2]);
+  const iterResult = [];
+  // eslint-disable-next-line guard-for-in
+  for (const v of view) {
+    iterResult.push(v);
+  }
+  t.deepEqual(iterResult, [1, 2]);
 });
 
 // ---------------------------------------------------------------------------
