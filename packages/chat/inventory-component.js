@@ -17,6 +17,8 @@ import {
   makeStaticTreePowers,
 } from './inventory-tree-source.js';
 import { makeChannelReorder, makeItemDragDrop } from './inventory-dnd.js';
+import { ItemActions } from './inventory-item-actions.js';
+import { h, renderConfined, unmount } from './setup-preact-container.js';
 
 /**
  * @typedef {object} InventoryOptions
@@ -355,76 +357,55 @@ export const inventoryComponent = async (
     $name.title = 'Click to view';
     $row.appendChild($name);
 
-    const $buttons = document.createElement('span');
-    $buttons.className = 'pet-buttons';
+    // Inspect: resolve the item's id + value and hand them to the host viewer.
+    const inspectItem = () => {
+      const idP = E(powers).identify(
+        .../** @type {[string, ...string[]]} */ (itemPath),
+      );
+      const valueP = E(powers).lookup(itemPath);
+      Promise.all([idP, valueP]).then(
+        ([id, value]) => showValue(value, id, itemPath, undefined),
+        window.reportError,
+      );
+    };
 
-    const $info = document.createElement('button');
-    $info.className = 'info-button';
-    $info.textContent = 'ℹ';
-    $info.title = 'Inspect';
-    $buttons.appendChild($info);
+    // Action buttons (info / cancel / remove). `.pet-buttons` is an absolutely
+    // positioned flex row; ItemActions mounts into a `display: contents`
+    // sub-host so Preact owns the three buttons while the channel-mode menu
+    // button (still imperative, inserted below) remains a flex sibling and the
+    // layout is unchanged. The remove button's disabled state resolves
+    // asynchronously (special names up front, immutable items after the locate
+    // probe below), so we re-render on change.
+    const $actions = document.createElement('span');
+    $actions.className = 'pet-buttons';
+    $row.appendChild($actions);
+    const $actionsMount = document.createElement('span');
+    $actionsMount.style.display = 'contents';
+    $actions.appendChild($actionsMount);
 
-    // Cancel button (disabled for special names)
-    const $cancel = document.createElement('button');
-    $cancel.className = 'cancel-button';
-    $cancel.textContent = '⊘';
-    if (isSpecialName(name)) {
-      $cancel.disabled = true;
-      $cancel.title = 'Cannot cancel system name';
-    } else {
-      $cancel.title = 'Cancel incarnation';
-    }
-    $buttons.appendChild($cancel);
+    let removeDisabled = isSpecialName(name);
+    let removeTitle = isSpecialName(name)
+      ? 'Cannot remove system name'
+      : 'Remove';
+    const renderActions = () => {
+      renderConfined(
+        h(ItemActions, {
+          cancelDisabled: isSpecialName(name),
+          removeDisabled,
+          removeTitle,
+          onInspect: inspectItem,
+          onCancel: () =>
+            E(powers).cancel(/** @type {[string, ...string[]]} */ (itemPath)),
+          onRemove: () =>
+            E(powers)
+              .remove(.../** @type {[string, ...string[]]} */ (itemPath))
+              .catch(window.reportError),
+        }),
+        $actionsMount,
+      );
+    };
+    renderActions();
 
-    // Cancel confirmation state
-    let cancelConfirmTimer = 0;
-    if (!isSpecialName(name)) {
-      $cancel.addEventListener('click', e => {
-        e.stopPropagation();
-        if ($cancel.classList.contains('confirming')) {
-          // Second click — execute cancel.
-          clearTimeout(cancelConfirmTimer);
-          $cancel.classList.remove('confirming');
-          $cancel.title = 'Cancelling...';
-          $cancel.disabled = true;
-          E(powers)
-            .cancel(/** @type {[string, ...string[]]} */ (itemPath))
-            .then(() => {
-              $cancel.classList.add('cancelled');
-              $cancel.title = 'Cancelled';
-            })
-            .catch(err => {
-              console.error('[inventory] Cancel failed:', err);
-              $cancel.disabled = false;
-              $cancel.title = 'Cancel incarnation';
-            });
-        } else {
-          // First click — enter confirm state.
-          $cancel.classList.add('confirming');
-          $cancel.title = 'Click again to cancel';
-          cancelConfirmTimer = /** @type {any} */ (
-            setTimeout(() => {
-              $cancel.classList.remove('confirming');
-              $cancel.title = 'Cancel incarnation';
-            }, 3000)
-          );
-        }
-      });
-    }
-
-    // Remove button (disabled for special names)
-    const $remove = document.createElement('button');
-    $remove.className = 'remove-button';
-    $remove.textContent = '×';
-    if (isSpecialName(name)) {
-      $remove.disabled = true;
-      $remove.title = 'Cannot remove system name';
-    } else {
-      $remove.title = 'Remove';
-    }
-    $buttons.appendChild($remove);
-
-    $row.appendChild($buttons);
     $wrapper.appendChild($row);
 
     // Children container (initially hidden)
@@ -448,23 +429,6 @@ export const inventoryComponent = async (
       $list.appendChild($wrapper);
     }
 
-    const inspectItem = () => {
-      const idP = E(powers).identify(
-        .../** @type {[string, ...string[]]} */ (itemPath),
-      );
-      const valueP = E(powers).lookup(itemPath);
-      Promise.all([idP, valueP]).then(
-        ([id, value]) => showValue(value, id, itemPath, undefined),
-        window.reportError,
-      );
-    };
-
-    $info.onclick = inspectItem;
-    $remove.onclick = () =>
-      E(powers)
-        .remove(.../** @type {[string, ...string[]]} */ (itemPath))
-        .catch(window.reportError);
-
     // Probe the formula type to detect conversable items and non-expandable types.
     // Items without a locator (e.g. children of an immutable ReadableTree) get
     // their remove button disabled since they cannot be individually removed.
@@ -472,8 +436,10 @@ export const inventoryComponent = async (
       .locate(.../** @type {[string, ...string[]]} */ (itemPath))
       .then(locator => {
         if (!locator) {
-          $remove.disabled = true;
-          $remove.title = 'Cannot remove (immutable)';
+          // Immutable items cannot be individually removed; disable the button.
+          removeDisabled = true;
+          removeTitle = 'Cannot remove (immutable)';
+          renderActions();
           // Immutable items cannot be relinked or relocated.
           $row.draggable = false;
           // Still allow clicking the name to inspect the value
@@ -570,7 +536,7 @@ export const inventoryComponent = async (
                 document.addEventListener('click', dismiss);
               });
             });
-            $buttons.insertBefore($menuBtn, $buttons.firstChild);
+            $actions.insertBefore($menuBtn, $actions.firstChild);
           }
 
           // Reorder according to stored channel order
@@ -819,7 +785,13 @@ export const inventoryComponent = async (
       }
     };
 
-    return { $wrapper, cleanup: () => childCleanup?.() };
+    return {
+      $wrapper,
+      cleanup: () => {
+        unmount($actionsMount);
+        childCleanup?.();
+      },
+    };
   };
 
   // ---- Channel list drag-and-drop reordering ----
