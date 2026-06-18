@@ -503,6 +503,15 @@ const POINTER_PROPS = [
 ];
 const WHEEL_PROPS = ['deltaX', 'deltaY', 'deltaZ', 'deltaMode'];
 
+// Copy a fixed allowlist of properties from a real event onto the SafeEvent.
+// SECURITY: this copies values WITHOUT type-checking them, so every name in
+// the `*_PROPS` arrays below MUST be a property whose value is spec-guaranteed
+// to be a primitive (string/number/boolean). NEVER add a property whose value
+// can be an object, function, or DOM node — e.g. `relatedTarget`, `view`,
+// `target`, `dataTransfer`, `touches`/`targetTouches`, `sourceCapabilities` —
+// it would leak a live capability straight to confined code. Object-valued
+// event data is exposed (if at all) only through a dedicated sanitizing facade
+// (see `safeTargetSnapshot`, `makeSafeDataTransfer`), never through here.
 function copyKnown(src, names, dest) {
   for (let i = 0; i < names.length; i++) {
     const k = names[i];
