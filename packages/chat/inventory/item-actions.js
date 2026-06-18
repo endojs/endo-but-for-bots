@@ -8,7 +8,7 @@ import {
   useEffect,
   useRef,
   useState,
-} from './setup-preact-container.js';
+} from '../setup-preact-container.js';
 
 // Inventory item action buttons (info / cancel / remove), converted in place
 // to a Preact `h()` component (no JSX). Returns a Fragment of the three

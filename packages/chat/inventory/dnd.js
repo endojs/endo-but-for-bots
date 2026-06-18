@@ -6,8 +6,8 @@
 import harden from '@endo/harden';
 import { E } from '@endo/far';
 
-import { DropMenu } from './inventory-drop-menu.js';
-import { h, renderConfined, unmount } from './setup-preact-container.js';
+import { DropMenu } from './drop-menu.js';
+import { h, renderConfined, unmount } from '../setup-preact-container.js';
 
 // Framework-agnostic drag-and-drop behavior for the inventory tree's
 // link/move system. Phase 1 of the Preact migration (see

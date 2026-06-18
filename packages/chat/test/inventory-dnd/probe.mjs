@@ -11,7 +11,7 @@
 import '../../pre-lockdown.js';
 import '@endo/init';
 
-import { makeChannelReorder, makeItemDragDrop } from '../../inventory-dnd.js';
+import { makeChannelReorder, makeItemDragDrop } from '../../inventory/dnd.js';
 
 const PETNAME_MIME = 'application/x-endo-petname';
 
