@@ -515,7 +515,7 @@ export const optTransferBufferToImmutable = transferBufferToImmutable;
 // The design document is at:
 //   packages/immutable-arraybuffer/designs/freezable-typedarray.md
 //
-// This section extends the post-#435 lib surface with four exported bindings:
+// This section extends the immutable-ArrayBuffer lib surface with four exported bindings:
 //   - hiddenTypedArrays  (module-internal WeakMap, not exported)
 //   - amplifyTypedArray  (export; returns the hidden genuine TypedArray or
 //                         the receiver itself on fallthrough)

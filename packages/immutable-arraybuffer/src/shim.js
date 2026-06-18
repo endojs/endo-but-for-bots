@@ -43,13 +43,13 @@ const { prototype: arrayBufferPrototype } = ArrayBuffer;
 // divergent platform implementations. The Immutable ArrayBuffer proposal
 // is past that threshold.
 if (!('sliceToImmutable' in arrayBufferPrototype)) {
-  // ArrayBuffer-side install (from PR #435).
+  // ArrayBuffer-side install (immutable ArrayBuffer shim).
   defineProperties(
     arrayBufferPrototype,
     getOwnPropertyDescriptors(immutableArrayBufferLibProperties),
   );
 
-  // Freezable TypedArray install (this PR).
+  // Freezable TypedArray install.
   //
   // The %TypedArrayPrototype% is the shared abstract superclass prototype
   // that all eleven concrete TypedArray constructors (Int8Array, Uint8Array,
