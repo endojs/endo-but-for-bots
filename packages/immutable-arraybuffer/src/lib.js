@@ -516,14 +516,15 @@ export const optTransferBufferToImmutable = transferBufferToImmutable;
 // The design document is at:
 //   packages/immutable-arraybuffer/designs/freezable-typedarray.md
 //
-// This section extends the immutable-ArrayBuffer lib surface with four exported bindings:
-//   - hiddenTypedArrays  (module-internal WeakMap, not exported)
-//   - amplifyTypedArray  (export; returns the hidden genuine TypedArray or
-//                         the receiver itself on fallthrough)
-//   - virtualTypedArrayBufferGetter  (export; getter for %TypedArrayPrototype%.buffer)
+// This section extends the immutable-ArrayBuffer lib surface with two exported bindings:
 //   - makePseudoTypedArrayConstructor (export; factory for per-flavor pseudo-constructors)
 //   - freezableTypedArrayLibProperties (export; property record the shim copies onto
 //                                       %TypedArrayPrototype%)
+//
+// The following are module-internal:
+//   - hiddenTypedArrays  (brand WeakMap)
+//   - amplifyTypedArray  (returns the hidden genuine TypedArray or the receiver on fallthrough)
+//   - virtualTypedArrayBufferGetter  (getter for %TypedArrayPrototype%.buffer)
 //
 // The internal `buffers` and `reverseBuffers` WeakMaps from the ArrayBuffer
 // side are reused for `view.buffer` redirections.
@@ -558,7 +559,7 @@ const hiddenTypedArrays = new WeakMap();
  * @param {object} typedArray
  * @returns {object}
  */
-export const amplifyTypedArray = typedArray => {
+const amplifyTypedArray = typedArray => {
   const result = apply(weakmapGet, hiddenTypedArrays, [typedArray]);
   if (result !== undefined) {
     return result;
@@ -579,22 +580,21 @@ export const amplifyTypedArray = typedArray => {
  *
  * @type {(this: object) => ArrayBuffer}
  */
-export const virtualTypedArrayBufferGetter =
-  function virtualTypedArrayBufferGetter() {
-    const genuineTA = apply(weakmapGet, hiddenTypedArrays, [this]);
-    if (genuineTA !== undefined) {
-      // The hidden genuine TypedArray's buffer is the genuine backing buffer.
-      const genuineAB = apply(typedArrayBufferGetter, genuineTA, []);
-      // Return the immutable wrapper (reverseBuffers maps genuine -> wrapper).
-      const immutableWrapper = apply(weakmapGet, reverseBuffers, [genuineAB]);
-      if (immutableWrapper !== undefined) {
-        return immutableWrapper;
-      }
-      return genuineAB;
+const virtualTypedArrayBufferGetter = function virtualTypedArrayBufferGetter() {
+  const genuineTA = apply(weakmapGet, hiddenTypedArrays, [this]);
+  if (genuineTA !== undefined) {
+    // The hidden genuine TypedArray's buffer is the genuine backing buffer.
+    const genuineAB = apply(typedArrayBufferGetter, genuineTA, []);
+    // Return the immutable wrapper (reverseBuffers maps genuine -> wrapper).
+    const immutableWrapper = apply(weakmapGet, reverseBuffers, [genuineAB]);
+    if (immutableWrapper !== undefined) {
+      return immutableWrapper;
     }
-    // Fallthrough: delegate to the genuine getter.
-    return apply(typedArrayBufferGetter, this, []);
-  };
+    return genuineAB;
+  }
+  // Fallthrough: delegate to the genuine getter.
+  return apply(typedArrayBufferGetter, this, []);
+};
 
 /**
  * Factory for per-flavor pseudo-constructors. Each pseudo-constructor replaces
