@@ -692,6 +692,23 @@ export const makePseudoTypedArrayConstructor = OriginalConstructor => {
   // function's default `Function.prototype` prototype would fail that check.
   setPrototypeOf(PseudoTypedArray, TypedArray);
 
+  // Copy the `BYTES_PER_ELEMENT` static property from the original constructor.
+  // Callers such as `packages/captp/src/atomics.js` read this constant
+  // directly off the constructor (`BigUint64Array.BYTES_PER_ELEMENT`,
+  // `Int32Array.BYTES_PER_ELEMENT`). The shim replaces the global binding with
+  // `PseudoTypedArray`, so the property must be present on the replacement or
+  // those reads return `undefined`, making arithmetic expressions produce NaN.
+  //
+  // `BYTES_PER_ELEMENT` is not inherited through the prototype chain on
+  // TypedArray constructors; each concrete constructor carries its own own-
+  // property value (8 for BigUint64Array, 4 for Int32Array, etc.).
+  defineProperty(PseudoTypedArray, 'BYTES_PER_ELEMENT', {
+    value: OriginalConstructor.BYTES_PER_ELEMENT,
+    writable: false,
+    enumerable: false,
+    configurable: true,
+  });
+
   // Do NOT freeze here. SES's `hardenIntrinsics` will freeze all
   // primordials (including the pseudo-constructors installed on globalThis)
   // as part of `lockdown()`. Pre-freezing would cause SES's pre-lockdown
