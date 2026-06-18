@@ -39,6 +39,41 @@ Each migration replaces a component's imperative DOM construction with a
 Preact component rendered through `renderConfined` (and eventually exposes a
 seam where a confined guest component could be substituted).
 
+## Authoring conventions
+
+### No JSX — `h()` only
+
+Components are plain `.js` authored with the `h` (and `Fragment`) helper
+imported from [`setup-preact-container.js`](../setup-preact-container.js),
+rendered via `renderConfined`.
+We do not use JSX.
+
+Rationale:
+
+- Avoids a JSX build/transform step and the `@vitejs/plugin-react` pragma
+  juggling; the source runs as-is.
+- Keeps the confined-render path explicit — `h` and `renderConfined` come
+  from the same controlled surface that confined guest code will use.
+- Matches `@endo/preact-container`'s own suite, which dropped JSX in favour
+  of `h()` + plain `.js`.
+
+### Two-phase rule: refactor-then-convert vs convert-in-place
+
+Split each migration by what survives the Preact conversion:
+
+- **Phase 1 — refactor in the current style (do first).** Extract the
+  substrate-agnostic parts — data adapters, drag-and-drop and other
+  behavior, type rules, and the controller↔child prop/callback boundaries —
+  as pure, behavior-preserving refactors with no Preact yet.
+  These are reused unchanged by the Preact version, and a regression here is
+  attributable to the extraction, not the rendering change.
+- **Convert-in-place — rewrite markup directly in `h()`.** Do **not**
+  pre-factor the visual DOM construction into imperative sub-functions
+  (`$container`-passing, manual event wiring, `cleanup()` returns) only to
+  delete that plumbing on conversion.
+  Child composition is exactly what Preact makes cheap, so leaf views go
+  straight from monolith markup to `h()` components.
+
 ## Default Chat view component graph
 
 The default view renders when a space's `viewMode` falls through to
@@ -237,12 +272,30 @@ data adapter become hooks/utilities rather than views.
   `clearAllDropTargets`.
 - **useChannelReorder** — list-level reorder + drop indicator (1099–1250).
 
+### Phase 1 (refactor now) vs convert-in-place
+
+Applying the two-phase rule to the pieces above:
+
+| Piece | Treatment |
+| --- | --- |
+| `inventory-tree-source` (static/live adapter + type rules) | Phase 1 — extract now |
+| `useItemDragDrop` (row drag source/target, `acceptsDrop`, drop-target paths) | Phase 1 — extract now |
+| `useChannelReorder` (list reorder + indicator) | Phase 1 — extract now |
+| controller↔row prop/callback boundary | Phase 1 — define now |
+| `ItemLabel`, `ItemActions`, `DropMenu`, `BookmarkItem`, `NewChannelForm`, `JoinChannelForm` | Convert-in-place |
+| `ItemDisclosure`, `BookmarkList`, `ChannelItemMenu` | Convert-in-place |
+| `PetItem`, `ChannelActions`, `InventoryList` shell | Convert-in-place |
+
 ### Migration order for the inventory bar
 
-Bottom-up, mirroring the overall strategy:
+Bottom-up, mirroring the overall strategy.
+Steps 1 are Phase-1 refactors (no Preact); steps 2–5 convert markup in place.
 
-1. Extract the non-visual seams first (`inventory-tree-source`,
-   `useItemDragDrop`, `useChannelReorder`) — pure refactors, no Preact yet.
+1. Extract the non-visual seams first — pure refactors, no Preact yet:
+   1. `inventory-tree-source` (`makeStaticNameIterator`,
+      `makeStaticTreePowers`, type-classification constants). ☑ done
+   2. `useItemDragDrop` (row drag source + drop target + `acceptsDrop`). ☐
+   3. `useChannelReorder` (list reorder + drop indicator). ☐
 2. Migrate the leaf views: `ItemLabel`, `ItemActions`, `DropMenu`,
    `BookmarkItem`, `NewChannelForm` / `JoinChannelForm`.
 3. Migrate `ItemDisclosure` + `BookmarkList` + `ChannelItemMenu`.
