@@ -1327,9 +1327,7 @@ const makeDaemonCore = async (
           : undefined;
 
         let isFirst = true;
-        for await (const rawDelta of iterateReader(
-          /** @type {any} */ (iter),
-        )) {
+        for await (const rawDelta of iterateReader(/** @type {any} */ (iter))) {
           const delta =
             /** @type {import('./retention-accumulator.js').RetentionDelta} */ (
               /** @type {any} */ (rawDelta)
@@ -5321,9 +5319,7 @@ const makeDaemonCore = async (
           : undefined;
 
         let isFirst = true;
-        for await (const rawDelta of iterateReader(
-          /** @type {any} */ (iter),
-        )) {
+        for await (const rawDelta of iterateReader(/** @type {any} */ (iter))) {
           const delta =
             /** @type {import('./retention-accumulator.js').RetentionDelta} */ (
               /** @type {any} */ (rawDelta)
