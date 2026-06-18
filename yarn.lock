@@ -2015,6 +2015,7 @@ __metadata:
     "@endo/init": "workspace:^"
     "@endo/marshal": "workspace:^"
     "@endo/patterns": "workspace:^"
+    "@endo/platform": "workspace:^"
     "@endo/promise-kit": "workspace:^"
     "@endo/sandbox": "workspace:^"
     "@endo/ses-ava": "workspace:^"
