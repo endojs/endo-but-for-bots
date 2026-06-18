@@ -1920,6 +1920,7 @@ __metadata:
     "@endo/daemon": "workspace:^"
     "@endo/eventual-send": "workspace:^"
     "@endo/exo": "workspace:^"
+    "@endo/exo-stream": "workspace:^"
     "@endo/fae": "workspace:^"
     "@endo/far": "workspace:^"
     "@endo/lal": "workspace:^"
