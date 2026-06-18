@@ -545,7 +545,7 @@ const reverseBuffers = new WeakMap();
  * underlying ArrayBuffer). The genuine TypedArray is the storage delegate;
  * the wrapper is the public-facing object.
  *
- * @type {WeakMap<object, any>}
+ * @type {WeakMap<TypedArray, TypedArray>}
  */
 const hiddenTypedArrays = new WeakMap();
 
@@ -556,8 +556,8 @@ const hiddenTypedArrays = new WeakMap();
  * This lets the methods on `%TypedArrayPrototype%` (after the shim install)
  * work as drop-in replacements for genuine TypedArrays.
  *
- * @param {object} typedArray
- * @returns {object}
+ * @param {TypedArray} typedArray
+ * @returns {TypedArray}
  */
 const amplifyTypedArray = typedArray => {
   const result = apply(weakmapGet, hiddenTypedArrays, [typedArray]);
