@@ -199,7 +199,7 @@ jobs:
       # rebuild all ~83 packages and is therefore omitted.
       - name: Run yarn test (affected set)
         working-directory: ${{ env.WORKDIR }}
-        run: yarn turbo run test --filter='...[origin/llm]'
+        run: yarn turbo run test --filter='...[origin/llm-plus-457]'
 
       - name: Restore working directory
         if: ${{ steps.move-wd.outcome == 'success' }}
@@ -345,7 +345,7 @@ jobs:
       # `^build`, so turbo builds only the affected closure on demand; a
       # separate full `yarn build` step is therefore omitted.
       - name: Run yarn test:c8 (affected set)
-        run: yarn turbo run test:c8 --filter='...[origin/llm]'
+        run: yarn turbo run test:c8 --filter='...[origin/llm-plus-457]'
 
   test262:
     name: test262
