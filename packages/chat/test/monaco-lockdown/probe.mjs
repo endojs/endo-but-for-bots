@@ -20,7 +20,9 @@ window.addEventListener('error', e => {
   globalThis.__monacoErrors.push(`error: ${e.message}`);
 });
 window.addEventListener('unhandledrejection', e => {
-  globalThis.__monacoErrors.push(`unhandledrejection: ${e.reason && e.reason.message ? e.reason.message : String(e.reason)}`);
+  globalThis.__monacoErrors.push(
+    `unhandledrejection: ${e.reason && e.reason.message ? e.reason.message : String(e.reason)}`,
+  );
 });
 
 (async () => {
