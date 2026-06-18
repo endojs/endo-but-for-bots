@@ -291,7 +291,7 @@ are not part of the inventory migration.
   - **ItemDisclosure** — the triangle, expand/collapse state, and the
     recursive child-list mount (the recursion seam back into
     `InventoryList`).
-  - **ItemLabel** — the pet name + type badge.
+  - **ItemLabel** ☑ — the pet name + type badge (`inventory/item-label.js`).
   - **ItemActions** ☑ — info/inspect, cancel-pending, and remove buttons
     (`inventory/item-actions.js`).
 - **DropMenu** ☑ — the link/move context menu, the one visual piece of the
@@ -370,7 +370,10 @@ Steps 1 are Phase-1 refactors (no Preact); steps 2–5 convert markup in place.
      `.pet-buttons` flex sibling. Covered by `test/inventory-item-actions`
      (`yarn test:item-actions`) under severe lockdown. The `setup-preact-container.js`
      barrel now also re-exports the Preact hooks for host components.
-   - `ItemLabel`. ☐
+   - `ItemLabel` (inventory/item-label.js). ☑ done — pet name + type badge,
+     mounted into a `display: contents` host; all label mutations
+     (conversation, immutable, channel) route through `setLabel`, which
+     re-renders.
 3. Migrate `ItemDisclosure`. ☐
 4. Compose `PetItem`. ☐
 5. Convert `InventoryList` last, once its children are Preact. ☐
