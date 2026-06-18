@@ -7,6 +7,7 @@ import path from 'path';
 import crypto from 'crypto';
 import { E } from '@endo/far';
 import { makeArchive as makeCompartmentArchive } from '@endo/compartment-mapper';
+import { defaultModuleTransforms } from '@endo/compartment-mapper/archive-parsers.js';
 import { makeReadPowers } from '@endo/compartment-mapper/node-powers.js';
 import { defaultParserForLanguage as sourceParserForLanguage } from '@endo/compartment-mapper/import-parsers.js';
 import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iterator.js';
@@ -46,6 +47,7 @@ export const archiveCommand = async ({
     moduleLocation,
     {
       ...archiveOptions,
+      moduleTransforms: defaultModuleTransforms,
       parserForLanguage: sourceParserForLanguage,
     },
   );

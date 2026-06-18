@@ -12,6 +12,9 @@
       "path": "../errors/tsconfig.composite.json"
     },
     {
+      "path": "../evasive-transform/tsconfig.composite.json"
+    },
+    {
       "path": "../harden/tsconfig.composite.json"
     },
     {

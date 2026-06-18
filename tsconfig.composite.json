@@ -120,6 +120,9 @@
       "path": "packages/netstring/tsconfig.composite.json"
     },
     {
+      "path": "packages/notify-xdg/tsconfig.composite.json"
+    },
+    {
       "path": "packages/ocapn/tsconfig.composite.json"
     },
     {

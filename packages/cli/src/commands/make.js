@@ -7,6 +7,7 @@ import url from 'url';
 import crypto from 'crypto';
 
 import { makeArchive as makeCompartmentArchive } from '@endo/compartment-mapper';
+import { defaultModuleTransforms } from '@endo/compartment-mapper/archive-parsers.js';
 import { makeReadPowers } from '@endo/compartment-mapper/node-powers.js';
 import { defaultParserForLanguage as sourceParserForLanguage } from '@endo/compartment-mapper/import-parsers.js';
 import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iterator.js';
@@ -64,7 +65,10 @@ export const makeCommand = async ({
     const archiveBytes = await makeCompartmentArchive(
       readPowers,
       moduleLocation,
-      { parserForLanguage: sourceParserForLanguage },
+      {
+        moduleTransforms: defaultModuleTransforms,
+        parserForLanguage: sourceParserForLanguage,
+      },
     );
     archiveReaderRef = bytesReaderFromIterator([archiveBytes]);
   }
