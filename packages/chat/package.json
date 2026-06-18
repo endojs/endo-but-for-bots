@@ -53,6 +53,7 @@
     "@endo/exo-stream": "workspace:^",
     "@endo/far": "workspace:^",
     "@endo/harden": "workspace:^",
+    "@endo/init": "workspace:^",
     "@endo/inventory-graph": "workspace:^",
     "@endo/markmdown": "workspace:^",
     "@endo/pass-style": "workspace:^",
@@ -71,7 +72,6 @@
   },
   "devDependencies": {
     "@endo/cli": "workspace:^",
-    "@endo/init": "workspace:^",
     "@endo/lockdown": "workspace:^",
     "@endo/ses-ava": "workspace:^",
     "@playwright/test": "^1.40.0",
