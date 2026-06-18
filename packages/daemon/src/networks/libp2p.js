@@ -417,8 +417,13 @@ export const make = async (powers, context) => {
     },
   };
 
+  // The @libp2p/crypto bump (5.1.19) introduced a dependency on
+  // @libp2p/interface@^3.2.4, while libp2p@^2.10.0 still expects
+  // @libp2p/interface@^2.x. Both versions are structurally compatible at
+  // runtime; cast to any here to prevent TypeDoc from flagging the dual-version
+  // type conflict.
   const libp2pNode = await createLibp2p({
-    privateKey,
+    privateKey: /** @type {any} */ (privateKey),
     logger: libp2pLogger,
     addresses: {
       listen: ['/webrtc', '/ip4/127.0.0.1/tcp/0/ws', '/p2p-circuit'],
