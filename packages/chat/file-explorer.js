@@ -353,9 +353,32 @@ export const mountFileExplorer = (
     renderStatus();
   };
 
+  /**
+   * Extract a human-readable message from a thrown value. CapTP/cross-peer
+   * rejections can arrive as error-like objects that are NOT `instanceof Error`
+   * in this realm; `String()` on those yields a useless "[object Object]", so
+   * prefer a `.message` field and fall back to a JSON dump before `String()`.
+   *
+   * @param {unknown} error
+   * @returns {string}
+   */
+  const errorMessage = error => {
+    if (error instanceof Error) return error.message;
+    if (error && typeof error === 'object') {
+      const { message } = /** @type {{ message?: unknown }} */ (error);
+      if (typeof message === 'string' && message !== '') return message;
+      try {
+        return JSON.stringify(error);
+      } catch {
+        // Not JSON-serializable (e.g. a presence); fall through to String().
+      }
+    }
+    return String(error);
+  };
+
   /** @param {unknown} error */
   const reportError = error => {
-    setStatus(error instanceof Error ? error.message : String(error), 'error');
+    setStatus(errorMessage(error), 'error');
   };
 
   const beginBusy = () => {
@@ -665,7 +688,7 @@ export const mountFileExplorer = (
         try {
           column.entries = await listDirectory(resolveDir(column.path));
         } catch (error) {
-          column.error = error instanceof Error ? error.message : String(error);
+          column.error = errorMessage(error);
         }
         column.loading = false;
         if (columns === next) renderBrowser();
@@ -808,7 +831,7 @@ export const mountFileExplorer = (
     try {
       column.entries = await listDirectory(resolveDir(path));
     } catch (error) {
-      column.error = error instanceof Error ? error.message : String(error);
+      column.error = errorMessage(error);
     } finally {
       endBusy();
     }
