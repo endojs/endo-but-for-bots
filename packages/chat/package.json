@@ -57,11 +57,13 @@
     "@endo/pass-style": "workspace:^",
     "@endo/patterns": "workspace:^",
     "@endo/platform": "workspace:^",
+    "@endo/preact-container": "workspace:^",
     "@endo/promise-kit": "workspace:^",
     "@endo/where": "workspace:^",
     "@endo/whylip": "workspace:^",
     "marked": "^17.0.5",
     "monaco-editor": "^0.55.1",
+    "preact": "^10.29.2",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "ses": "workspace:^"
