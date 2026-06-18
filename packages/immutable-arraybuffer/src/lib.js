@@ -82,8 +82,6 @@ const { get: typedArrayBufferGetter } = getOwnPropertyDescriptor(
   typedArrayPrototype,
   'buffer',
 );
-// Alias for legacy usage below.
-const uint8ArrayBuffer = typedArrayBufferGetter;
 
 // Capture all %TypedArrayPrototype% methods and accessors before the shim can
 // shadow them. The five mutator methods are used for the brand-check throw /
@@ -499,7 +497,7 @@ if (optArrayBufferTransfer) {
         const oldTA = new Uint8Array(buffer);
         const newTA = new Uint8Array(newLength);
         apply(uint8ArraySet, newTA, [oldTA]);
-        buffer = apply(uint8ArrayBuffer, newTA, []);
+        buffer = apply(typedArrayBufferGetter, newTA, []);
       }
     }
     const result = makeImmutableArrayBufferInternal(buffer);
