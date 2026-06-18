@@ -58,7 +58,7 @@ if (!('sliceToImmutable' in arrayBufferPrototype)) {
   // record once on %TypedArrayPrototype% covers all eleven flavors.
   //
   // `getPrototypeOf(Uint8Array.prototype)` is the standard way to reach
-  // %TypedArrayPrototype% in a non-strict environment without a dedicated
+  // %TypedArrayPrototype% without a dedicated
   // intrinsic name.
   const typedArrayPrototype = getPrototypeOf(
     // eslint-disable-next-line no-restricted-globals
