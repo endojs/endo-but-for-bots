@@ -4,13 +4,12 @@
 // Environment shims that let `@endo/endo-fs` (and its
 // `@endo/exo-stream` dependency) run inside the chat browser bundle.
 //
-// The chat app does not yet call SES `lockdown()` (migration to a
-// locked-down realm is in progress; see setup-preact-container.js), so
-// `globalThis.harden`, which the `@endo/endo-fs` modules reference as a
-// free variable per the HardenedJS convention, is never installed. We install
-// `@endo/harden`'s standalone hardener instead; it freezes own
-// properties without traversing prototypes, which matches the chat
-// app's no-lockdown stance.
+// `@endo/endo-fs` modules reference `globalThis.harden` as a free variable
+// per the HardenedJS convention. The chat entry locks the realm down via
+// `@endo/init` (see main.js / pre-lockdown.js), which installs the SES
+// `harden` global — so this install is normally a no-op fallback. It only
+// takes effect if an `@endo/endo-fs` module is somehow loaded before
+// lockdown, in which case `@endo/harden`'s standalone hardener stands in.
 //
 // `@endo/endo-fs/src/from-mount.js` decodes base64 with Node's
 // `Buffer`; the browser has no `Buffer`, so we provide the minimal

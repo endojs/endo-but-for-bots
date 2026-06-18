@@ -4,15 +4,27 @@
 // Load order mirrors monaco-wrapper.js exactly: `import 'ses'` installs
 // `lockdown`, we freeze the realm, and only THEN dynamic-import monaco, so
 // monaco's module body and editor creation run against frozen primordials.
+//
+// This fixture exposes the editor + monaco on globalThis so the Playwright
+// runner can drive real RUNTIME interaction (typing, undo/redo, find,
+// multi-cursor); first-load compatibility is necessary but not sufficient.
 
 import 'ses';
 
 lockdown({ overrideTaming: 'severe' });
 
+// Record in-page errors too — some monaco failures are swallowed/handled
+// and only surface as unhandledrejection or window 'error'.
+globalThis.__monacoErrors = [];
+window.addEventListener('error', e => {
+  globalThis.__monacoErrors.push(`error: ${e.message}`);
+});
+window.addEventListener('unhandledrejection', e => {
+  globalThis.__monacoErrors.push(`unhandledrejection: ${e.reason && e.reason.message ? e.reason.message : String(e.reason)}`);
+});
+
 (async () => {
   try {
-    // Workers are disabled in chat (getWorker returns null); the resulting
-    // "post message to worker" errors are expected and unrelated to lockdown.
     globalThis.MonacoEnvironment = { getWorker: () => null };
     const monaco = await import('monaco-editor');
     monaco.languages.typescript.javascriptDefaults.setDiagnosticsOptions({
@@ -26,25 +38,22 @@ lockdown({ overrideTaming: 'severe' });
       language: 'javascript',
       automaticLayout: true,
       minimap: { enabled: false },
-    });
-    editor.setValue('const y = 2;');
-    const roundTrip = editor.getValue();
-
-    const colorized = await monaco.editor.colorize('const z = 3;', 'javascript', {
-      tabSize: 2,
+      // exercise auto-closing/auto-indent code paths that mutate model state
+      autoClosingBrackets: 'always',
+      autoClosingQuotes: 'always',
+      autoIndent: 'full',
     });
 
-    globalThis.monacoLockdownResult = {
-      ok: true,
-      roundTrip,
-      colorizedLen: colorized.length,
-      hardenIsFn: typeof globalThis.harden === 'function',
-    };
+    globalThis.__monaco = monaco;
+    globalThis.__editor = editor;
+    globalThis.__ready = true;
   } catch (e) {
-    globalThis.monacoLockdownResult = {
+    globalThis.__monacoResult = {
       ok: false,
+      phase: 'load',
       error: `${e.name}: ${e.message}`,
       stack: String(e.stack).slice(0, 600),
     };
+    globalThis.__ready = true;
   }
 })();
