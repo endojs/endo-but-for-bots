@@ -309,7 +309,7 @@ Steps 1 are Phase-1 refactors (no Preact); steps 2–5 convert markup in place.
 1. Extract the non-visual seams first — pure refactors, no Preact yet:
    1. `inventory-tree-source` (`makeStaticNameIterator`,
       `makeStaticTreePowers`, type-classification constants). ☑ done
-   2. `makeItemDragDrop` (row drag source + drop target + `acceptsDrop`). ☐
+   2. `makeItemDragDrop` (row drag source + drop target + `acceptsDrop`). ☑ done
    3. `makeChannelReorder` (list reorder + drop indicator). ☐
 2. Migrate the leaf views: `ItemLabel`, `ItemActions`, `DropMenu`,
    `BookmarkItem`, `NewChannelForm` / `JoinChannelForm`.
