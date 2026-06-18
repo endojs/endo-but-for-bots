@@ -3,6 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-06-17 |
+| **Updated** | 2026-06-17 |
 | **Author** | Kris Kowal (prompted) |
 | **Status** | Not Started |
 
@@ -155,7 +156,6 @@ Severance is a property of the *binding*, not of the *target*, so the observer b
 - [`designs/daemon-cross-peer-gc.md` § Crash and reconnect semantics](daemon-cross-peer-gc.md#crash-and-reconnect-semantics) — **sister design.**
   Treats reconnect as a fresh snapshot rather than a re-bound old presence.
   This design inherits that posture: a severed presence stays severed; reconnection produces a new presence.
-  See Open questions.
 - [`designs/ocapn-network-transport-separation.md` § Design conceptual model](ocapn-network-transport-separation.md#new-conceptual-model) — **netlayer connection-closed event surface.**
   The netlayer reports connection-closed; the network's session machinery translates that into the captp disconnect path this design hooks.
 - [`designs/daemon-message-streaming.md` § Persistence model](daemon-message-streaming.md#4-persistence) — **graceful-end vs abort distinction.**
@@ -185,21 +185,21 @@ A future Related Work expansion could cross-reference the ocap-kernel implementa
 
 ## Open questions
 
-- **Concept page for severance vs alias of existing.**
-  Recommend a librarian pass after this design merges to lift `concepts/presence-severance.md` with partition / abort / disconnect as cross-references.
-  Drafting the concept page before this design exists would invert the dependency.
-- **Re-binding / reconnection semantics.**
-  Inherits the [`daemon-cross-peer-gc` reconnect-as-fresh-snapshot](daemon-cross-peer-gc.md#crash-and-reconnect-semantics) posture: a severed presence stays severed; reconnection produces a new presence rather than re-binding the old one.
-  Alternative would be to expose a `whenRebound(presence) → Promise<Presence>` shape; that requires the network layer to carry a stable identity across reconnects, which neither captp nor the OCapN spec currently guarantees.
-  Recommend deferring until a concrete use case forces the question.
-- **Debouncing for flaky networks.**
-  If the netlayer flaps (connection drops and reestablishes within seconds), this design fires severance on the first drop.
-  Some consumers (a chat UI showing a "remote gone" banner) would benefit from a short debounce.
-  Recommend leaving debouncing to the consumer: `E.whenSevered(p)` composed with a `setTimeout`-gated wrapper is straightforward; baking debounce into the primitive would force a policy on consumers that do not want it.
+- **Severance is an alias for partition in the corpus.**
+  "Severance" (the holder-facing name introduced in this design) and "partition" (the existing corpus term for the transport sub-case) name the same underlying event.
+  A librarian pass after this design merges should extend the existing `concepts/captp-bounded-transient-pin` concept page to note the alias rather than creating a separate `concepts/presence-severance.md`.
+  No new top-level concept is needed; the alias entry is a cross-reference within the existing page.
+- **Re-binding / reconnection semantics: out of scope.**
+  A severed presence stays severed; reconnection produces a new presence (per [`daemon-cross-peer-gc` reconnect-as-fresh-snapshot](daemon-cross-peer-gc.md#crash-and-reconnect-semantics)).
+  Forgetting a severed presence after partition is a garbage collection feature, not an API surface this design provides.
+- **Session continuity across physical connections.**
+  If the network layer needs to survive physical connection drops without exposing severance to the holder, that concern belongs in the network transport layer rather than in the presence-observer API.
+  The transport layer can prolong the duration of a logical session to straddle multiple physical sessions, or can synthesize a session from a sessionless transport.
+  Once the transport layer provides a stable logical session, this design's severance signal fires only when the logical session ends, not on transient physical interruptions.
+  This design does not address session continuity; that is a transport-layer abstraction.
 - **Cleanup ownership.**
-  When a holder calls `E.whenSevered(p)` and then drops the returned promise without `.catch`, it becomes an unhandled rejection on severance.
-  Recommend the observer return a promise that the holder is responsible for either awaiting or `.catch`-ing; the library does not silently swallow.
-  Alternative would be a callback shape (`E.onSevered(p, cb)`) that auto-detaches on GC; rejected because it requires extra machinery for the GC-detach contract and the `Promise<never>` shape composes better with existing patterns.
+  Returning a promise is sufficient.
+  The holder is responsible for handling the returned `Promise<never>` via `.catch` or `await`; the library does not silently swallow unhandled rejections.
 
 ## Prompt
 
