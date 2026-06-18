@@ -9,6 +9,7 @@
     "test"
   ],
   "exclude": [
-    "test/monaco-lockdown"
+    "test/monaco-lockdown",
+    "test/inventory-dnd"
   ]
 }

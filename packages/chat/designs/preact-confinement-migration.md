@@ -310,7 +310,10 @@ Steps 1 are Phase-1 refactors (no Preact); steps 2–5 convert markup in place.
    1. `inventory-tree-source` (`makeStaticNameIterator`,
       `makeStaticTreePowers`, type-classification constants). ☑ done
    2. `makeItemDragDrop` (row drag source + drop target + `acceptsDrop`). ☑ done
-   3. `makeChannelReorder` (list reorder + drop indicator). ☐
+   3. `makeChannelReorder` (list reorder + drop indicator). ☑ done
+
+   Both dnd factories are behavior-tested in a real browser by
+   `test/inventory-dnd` (`yarn test:inventory-dnd`).
 2. Migrate the leaf views: `ItemLabel`, `ItemActions`, `DropMenu`,
    `BookmarkItem`, `NewChannelForm` / `JoinChannelForm`.
 3. Migrate `ItemDisclosure` + `BookmarkList` + `ChannelItemMenu`.
