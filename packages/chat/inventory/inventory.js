@@ -15,10 +15,10 @@ import {
   HUB_TYPES,
   NON_EXPANDABLE_TYPES,
   makeStaticTreePowers,
-} from './inventory-tree-source.js';
-import { makeChannelReorder, makeItemDragDrop } from './inventory-dnd.js';
-import { ItemActions } from './inventory-item-actions.js';
-import { h, renderConfined, unmount } from './setup-preact-container.js';
+} from './tree-source.js';
+import { makeChannelReorder, makeItemDragDrop } from './dnd.js';
+import { ItemActions } from './item-actions.js';
+import { h, renderConfined, unmount } from '../setup-preact-container.js';
 
 /**
  * @typedef {object} InventoryOptions
