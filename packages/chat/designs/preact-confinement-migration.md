@@ -263,14 +263,29 @@ data adapter become hooks/utilities rather than views.
 - **DropMenu** — the link/move context menu (461), the one visual piece of
   the tree drag-and-drop.
 
-### Extract as hooks/utilities (behavior, not views)
+### Extract as framework-agnostic factories (behavior, not views)
+
+These are **not** Preact hooks.
+A `use*` hook only runs inside a component render, so it could not be called
+from the current imperative `inventoryComponent` — naming them `use*` would
+break the phase-1 premise (refactor with no Preact).
+Each is a `make*` factory (repo idiom) that takes the DOM node(s) plus
+callbacks, wires the listeners imperatively, and returns a `dispose()`.
+That is callable from the current imperative code now, and during
+convert-in-place it is invoked from
+`useEffect(() => makeX(node, opts).dispose, deps)`.
+A thin `useItemDragDrop` wrapper hook may be added at that point, but the
+reusable core is always the agnostic factory.
+Where practical, also split out the genuinely pure decision logic (e.g.
+drop-target path, insertion-index hit-test, `acceptsDrop` type rule) as pure
+functions the factory and any future hook both call.
 
 - **inventory-tree-source** — `makeStaticNameIterator` +
   `makeStaticTreePowers`; the static-snapshot-vs-live-stream adapter.
-- **useItemDragDrop** — row-level drag source + drop target (544–676) and
+- **makeItemDragDrop** — row-level drag source + drop target (544–676) and
   the `acceptsDrop` type probe; pairs with `dropTargetPath` /
   `clearAllDropTargets`.
-- **useChannelReorder** — list-level reorder + drop indicator (1099–1250).
+- **makeChannelReorder** — list-level reorder + drop indicator (1099–1250).
 
 ### Phase 1 (refactor now) vs convert-in-place
 
@@ -279,8 +294,8 @@ Applying the two-phase rule to the pieces above:
 | Piece | Treatment |
 | --- | --- |
 | `inventory-tree-source` (static/live adapter + type rules) | Phase 1 — extract now |
-| `useItemDragDrop` (row drag source/target, `acceptsDrop`, drop-target paths) | Phase 1 — extract now |
-| `useChannelReorder` (list reorder + indicator) | Phase 1 — extract now |
+| `makeItemDragDrop` (row drag source/target, `acceptsDrop`, drop-target paths) | Phase 1 — extract now |
+| `makeChannelReorder` (list reorder + indicator) | Phase 1 — extract now |
 | controller↔row prop/callback boundary | Phase 1 — define now |
 | `ItemLabel`, `ItemActions`, `DropMenu`, `BookmarkItem`, `NewChannelForm`, `JoinChannelForm` | Convert-in-place |
 | `ItemDisclosure`, `BookmarkList`, `ChannelItemMenu` | Convert-in-place |
@@ -294,8 +309,8 @@ Steps 1 are Phase-1 refactors (no Preact); steps 2–5 convert markup in place.
 1. Extract the non-visual seams first — pure refactors, no Preact yet:
    1. `inventory-tree-source` (`makeStaticNameIterator`,
       `makeStaticTreePowers`, type-classification constants). ☑ done
-   2. `useItemDragDrop` (row drag source + drop target + `acceptsDrop`). ☐
-   3. `useChannelReorder` (list reorder + drop indicator). ☐
+   2. `makeItemDragDrop` (row drag source + drop target + `acceptsDrop`). ☐
+   3. `makeChannelReorder` (list reorder + drop indicator). ☐
 2. Migrate the leaf views: `ItemLabel`, `ItemActions`, `DropMenu`,
    `BookmarkItem`, `NewChannelForm` / `JoinChannelForm`.
 3. Migrate `ItemDisclosure` + `BookmarkList` + `ChannelItemMenu`.
