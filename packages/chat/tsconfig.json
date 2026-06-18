@@ -6,6 +6,8 @@
   "include": [
     "*.js",
     "*.ts",
+    "components",
+    "inventory",
     "test"
   ],
   "exclude": [
