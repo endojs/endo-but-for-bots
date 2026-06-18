@@ -2,7 +2,7 @@
 
 import harden from '@endo/harden';
 
-import { h } from './setup-preact-container.js';
+import { h } from '../setup-preact-container.js';
 
 // First inventory leaf view converted to a Preact `h()` component (no JSX),
 // rendered through `renderConfined` by inventory-dnd.js. See
