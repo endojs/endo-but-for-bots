@@ -315,3 +315,189 @@ export const makeItemDragDrop = ({ rootPowers }) => {
   return harden({ attachDragSource, attachRowDropTarget, attachListDropZone });
 };
 harden(makeItemDragDrop);
+
+/**
+ * Create the channel-list reordering behavior. Channel mode lets the user
+ * drag channel rows to reorder them; this owns the shared drag state
+ * (the dragged wrapper and the drop-position indicator) that the per-row
+ * drag source and the list-level reorder zone both touch.
+ *
+ * Returns imperative `attach*` helpers; each wires listeners on the given
+ * element and returns a `dispose()` that removes them again.
+ */
+export const makeChannelReorder = () => {
+  /** @type {HTMLElement | null} */
+  let draggedWrapper = null;
+  /** @type {HTMLElement | null} */
+  let dropIndicator = null;
+
+  const clearIndicator = () => {
+    if (dropIndicator) {
+      dropIndicator.remove();
+      dropIndicator = null;
+    }
+  };
+
+  /**
+   * Make a channel row a reorder drag source. The wrapper (not the row) is
+   * what moves in the list, so it is carried separately.
+   *
+   * @param {HTMLElement} row
+   * @param {HTMLElement} wrapper
+   * @param {string} name
+   * @returns {DragDropBinding}
+   */
+  const attachDragSource = (row, wrapper, name) => {
+    row.draggable = true;
+    /** @param {DragEvent} e */
+    const onDragStart = e => {
+      if (!e.dataTransfer) return;
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/plain', name);
+      draggedWrapper = wrapper;
+      wrapper.classList.add('channel-dragging');
+    };
+    const onDragEnd = () => {
+      wrapper.classList.remove('channel-dragging');
+      draggedWrapper = null;
+      clearIndicator();
+    };
+    row.addEventListener('dragstart', onDragStart);
+    row.addEventListener('dragend', onDragEnd);
+    return harden({
+      dispose: () => {
+        row.removeEventListener('dragstart', onDragStart);
+        row.removeEventListener('dragend', onDragEnd);
+      },
+    });
+  };
+
+  /**
+   * Make the channel list a reorder drop zone: shows a position indicator
+   * while dragging, moves the dragged wrapper on drop, and reports the new
+   * order via `onReorder`.
+   *
+   * @param {HTMLElement} list
+   * @param {object} opts
+   * @param {(order: string[]) => void} [opts.onReorder]
+   * @returns {DragDropBinding}
+   */
+  const attachReorderZone = (list, { onReorder }) => {
+    list.style.position = 'relative';
+
+    /** @param {DragEvent} e */
+    const onDragOver = e => {
+      if (!draggedWrapper || !e.dataTransfer) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+
+      const items = [
+        .../** @type {NodeListOf<HTMLElement>} */ (
+          list.querySelectorAll('.channel-item:not(.channel-dragging)')
+        ),
+      ];
+      const mouseY = e.clientY;
+      let bestY = 0;
+      let bestDist = Infinity;
+
+      // Gap before first item
+      if (items.length > 0) {
+        const rect = items[0].getBoundingClientRect();
+        const dist = Math.abs(mouseY - rect.top);
+        if (dist < bestDist) {
+          bestDist = dist;
+          bestY = rect.top;
+        }
+      }
+      // Gap after each item
+      for (const item of items) {
+        const rect = item.getBoundingClientRect();
+        const dist = Math.abs(mouseY - rect.bottom);
+        if (dist < bestDist) {
+          bestDist = dist;
+          bestY = rect.bottom;
+        }
+      }
+
+      if (!dropIndicator) {
+        dropIndicator = document.createElement('div');
+        dropIndicator.className = 'channel-drop-indicator';
+        list.appendChild(dropIndicator);
+      }
+      const listRect = list.getBoundingClientRect();
+      dropIndicator.style.top = `${bestY - listRect.top}px`;
+    };
+
+    /** @param {DragEvent} e */
+    const onDragLeave = e => {
+      if (!list.contains(/** @type {Node | null} */ (e.relatedTarget))) {
+        clearIndicator();
+      }
+    };
+
+    /** @param {DragEvent} e */
+    const onDrop = e => {
+      e.preventDefault();
+      if (!draggedWrapper) return;
+
+      const items = [
+        .../** @type {NodeListOf<HTMLElement>} */ (
+          list.querySelectorAll('.channel-item:not(.channel-dragging)')
+        ),
+      ];
+      const mouseY = e.clientY;
+      /** @type {Element | null} */
+      let insertBefore = null;
+
+      for (const item of items) {
+        const rect = item.getBoundingClientRect();
+        const midY = (rect.top + rect.bottom) / 2;
+        if (Number(mouseY) < Number(midY)) {
+          insertBefore = item;
+          break;
+        }
+      }
+
+      if (insertBefore) {
+        list.insertBefore(draggedWrapper, insertBefore);
+      } else {
+        list.appendChild(draggedWrapper);
+      }
+
+      draggedWrapper.classList.remove('channel-dragging');
+      draggedWrapper = null;
+      clearIndicator();
+
+      // Persist the new channel order
+      if (onReorder) {
+        const orderedNames = [
+          .../** @type {NodeListOf<HTMLElement>} */ (
+            list.querySelectorAll('.channel-item')
+          ),
+        ]
+          .map(el => el.dataset.name)
+          .filter(
+            /**
+             * @param n
+             * @returns {n is string}
+             */ n => typeof n === 'string',
+          );
+        onReorder(orderedNames);
+      }
+    };
+
+    list.addEventListener('dragover', onDragOver);
+    list.addEventListener('dragleave', onDragLeave);
+    list.addEventListener('drop', onDrop);
+    return harden({
+      dispose: () => {
+        list.removeEventListener('dragover', onDragOver);
+        list.removeEventListener('dragleave', onDragLeave);
+        list.removeEventListener('drop', onDrop);
+      },
+    });
+  };
+
+  return harden({ attachDragSource, attachReorderZone });
+};
+harden(makeChannelReorder);
