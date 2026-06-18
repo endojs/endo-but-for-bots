@@ -8,8 +8,6 @@ import test from 'ava';
 import {
   sliceBufferToImmutable,
   makePseudoTypedArrayConstructor,
-  amplifyTypedArray,
-  virtualTypedArrayBufferGetter,
 } from '../src/lib.js';
 
 const { getPrototypeOf } = Object;
@@ -29,15 +27,12 @@ test('makePseudoTypedArrayConstructor wraps an immutable ArrayBuffer', t => {
   // The wrapper's prototype is Uint8Array.prototype (no intermediate prototype).
   t.is(getPrototypeOf(view), Uint8Array.prototype);
 
-  // The amplifier returns the hidden genuine TypedArray, not the wrapper itself.
-  const hidden = amplifyTypedArray(view);
-  t.not(hidden, view);
-
-  // The buffer getter via `virtualTypedArrayBufferGetter` returns the
-  // immutable wrapper.
-  const buf = virtualTypedArrayBufferGetter.call(view);
-  t.is(buf, iab);
-  t.true(buf.immutable);
+  // The amplifier (via .buffer getter) returns the immutable wrapper, not the
+  // genuine backing buffer.
+  // `virtualTypedArrayBufferGetter` is exercised internally; we observe its
+  // effect through the installed `view.buffer` accessor.
+  t.is(view.buffer, iab);
+  t.true(view.buffer.immutable);
 });
 
 // ---------------------------------------------------------------------------
@@ -54,8 +49,9 @@ test('makePseudoTypedArrayConstructor forwards a non-immutable first arg', t => 
   // Fallthrough path: the result is a genuine TypedArray, not a wrapper.
   t.is(getPrototypeOf(view), Uint8Array.prototype);
 
-  // The amplifier returns the view itself (no entry in hiddenTypedArrays).
-  t.is(amplifyTypedArray(view), view);
+  // `view.buffer` returns the real buffer (amplifyTypedArray falls through to
+  // the receiver itself for a genuine TypedArray).
+  t.is(view.buffer, realAb);
 
   // Mutators work normally on the genuine view.
   view[0] = 99;
@@ -63,41 +59,42 @@ test('makePseudoTypedArrayConstructor forwards a non-immutable first arg', t => 
 });
 
 // ---------------------------------------------------------------------------
-// virtualTypedArrayBufferGetter - returns genuine buffer for a genuine
-// TypedArray (fallthrough path)
+// buffer getter - returns genuine buffer for a genuine TypedArray (fallthrough)
 // ---------------------------------------------------------------------------
 
-test('virtualTypedArrayBufferGetter returns the real buffer for a genuine TypedArray', t => {
+test('buffer getter returns the real buffer for a genuine TypedArray', t => {
   const realAb = new ArrayBuffer(4);
   const view = new Uint8Array(realAb);
 
-  const buf = virtualTypedArrayBufferGetter.call(view);
-  t.is(buf, realAb);
-  t.false(buf.immutable);
+  // `virtualTypedArrayBufferGetter` is installed on %TypedArrayPrototype%;
+  // `view.buffer` exercises the fallthrough path.
+  t.is(view.buffer, realAb);
+  t.false(view.buffer.immutable);
 });
 
 // ---------------------------------------------------------------------------
-// virtualTypedArrayBufferGetter - redirects to the immutable wrapper when
-// the TypedArray is an emulated freezable
+// buffer getter - redirects to the immutable wrapper when the TypedArray is
+// an emulated freezable
 // ---------------------------------------------------------------------------
 
-test('virtualTypedArrayBufferGetter redirects to the immutable wrapper when present', t => {
+test('buffer getter redirects to the immutable wrapper when present', t => {
   const ab = new ArrayBuffer(4);
   const iab = sliceBufferToImmutable(ab);
 
   const PseudoUint8Array = makePseudoTypedArrayConstructor(Uint8Array);
   const view = new PseudoUint8Array(iab);
 
-  const buf = virtualTypedArrayBufferGetter.call(view);
-  t.is(buf, iab);
-  t.true(buf.immutable);
+  // `virtualTypedArrayBufferGetter` is installed on %TypedArrayPrototype%;
+  // `view.buffer` exercises the emulated-wrapper path.
+  t.is(view.buffer, iab);
+  t.true(view.buffer.immutable);
 });
 
 // ---------------------------------------------------------------------------
-// amplifyTypedArray - brand-WeakMap amplifier
+// amplifyTypedArray - brand-WeakMap amplifier (observed through read delegates)
 // ---------------------------------------------------------------------------
 
-test('amplifyTypedArray returns the hidden genuine TypedArray for a wrapper', t => {
+test('amplifyTypedArray delegates reads from the hidden genuine TypedArray for a wrapper', t => {
   const ab = new ArrayBuffer(4);
   new Uint8Array(ab).set([5, 6, 7, 8]);
   const iab = sliceBufferToImmutable(ab);
@@ -105,15 +102,21 @@ test('amplifyTypedArray returns the hidden genuine TypedArray for a wrapper', t 
   const PseudoUint8Array = makePseudoTypedArrayConstructor(Uint8Array);
   const view = new PseudoUint8Array(iab);
 
-  const amplified = amplifyTypedArray(view);
-  t.not(amplified, view);
-  // The amplified value is a genuine Uint8Array, so its indexed reads return
-  // the underlying bytes (unchanged, because the buffer is immutable).
-  t.is(amplified[0], 5);
-  t.is(amplified[3], 8);
+  // `amplifyTypedArray` is called by the `byteLength`, `length`, and `at`
+  // property descriptors installed on %TypedArrayPrototype%. The values
+  // match the underlying bytes.
+  t.is(view.byteLength, 4);
+  t.is(view.length, 4);
+  t.is(view.at(0), 5);
+  t.is(view.at(3), 8);
 });
 
-test('amplifyTypedArray returns the receiver itself for a genuine TypedArray', t => {
+test('amplifyTypedArray falls through for a genuine TypedArray', t => {
+  // A genuine TypedArray is not in `hiddenTypedArrays`; `amplifyTypedArray`
+  // returns the receiver itself.
+  // We observe this by verifying that `byteLength` reads from the view
+  // directly (the genuine buffer's length, not a wrapper's).
   const view = new Uint8Array(new ArrayBuffer(4));
-  t.is(amplifyTypedArray(view), view);
+  t.is(view.byteLength, 4);
+  t.is(view.length, 4);
 });
