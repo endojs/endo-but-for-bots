@@ -77,6 +77,23 @@ test.serial('renders rows for each name from followNameChanges', async t => {
   t.deepEqual(labels.sort(), ['alice', 'bob']);
 });
 
+test.serial('renders a type badge once the locate probe resolves', async t => {
+  const { $list } = await setupInventory({
+    names: ['inbox'],
+    locators: new Map([['inbox', 'endo://?type=directory&number=1']]),
+  });
+  await tick(30);
+
+  const $badge = $list.querySelector('.pet-type-badge');
+  t.truthy($badge, 'type badge rendered');
+  t.is($badge.textContent, 'directory', 'badge shows the formula type');
+  // The badge is a sibling of the name in the row (display:contents host is
+  // invisible to layout).
+  const $row = $list.querySelector('.pet-item-row');
+  t.truthy($row.querySelector('.pet-name'), 'name still present');
+  t.truthy($row.querySelector('.pet-type-badge'), 'badge in the same row');
+});
+
 test.serial('hub-typed rows accept drop; leaf-typed rows do not', async t => {
   const locators = new Map([
     ['inbox', 'endo://?type=directory&number=1'],
