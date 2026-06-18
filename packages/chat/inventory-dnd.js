@@ -6,6 +6,9 @@
 import harden from '@endo/harden';
 import { E } from '@endo/far';
 
+import { DropMenu } from './inventory-drop-menu.js';
+import { h, renderConfined, unmount } from './setup-preact-container.js';
+
 // Framework-agnostic drag-and-drop behavior for the inventory tree's
 // link/move system. Phase 1 of the Preact migration (see
 // designs/preact-confinement-migration.md): `makeItemDragDrop` attaches DOM
@@ -96,51 +99,54 @@ export const makeItemDragDrop = ({ rootPowers }) => {
     // target without first leaving the outer one. See clearAllDropTargets.
     clearAllDropTargets();
 
-    const $existing = document.querySelector('.inventory-drop-menu');
-    if ($existing) $existing.remove();
-
-    const $menu = document.createElement('div');
-    $menu.className = 'inventory-drop-menu';
-
-    /**
-     * @param {string} label
-     * @param {() => void} run
-     */
-    const addItem = (label, run) => {
-      const $item = document.createElement('button');
-      $item.className = 'inventory-drop-menu-item';
-      $item.textContent = label;
-      $item.addEventListener('click', () => {
-        $menu.remove();
-        run();
-      });
-      $menu.appendChild($item);
-    };
+    // Tear down any menu already open, then mount a fresh one into a host
+    // element. The DropMenu view renders the fixed-position `.inventory-drop-menu`
+    // inside the host, so the host itself needs no styling.
+    const $existingHost = document.querySelector('.inventory-drop-menu-host');
+    if ($existingHost) {
+      unmount($existingHost);
+      $existingHost.remove();
+    }
+    const host = document.createElement('div');
+    host.className = 'inventory-drop-menu-host';
+    document.body.appendChild(host);
 
     const from = /** @type {[string, ...string[]]} */ (sourceAbsPath);
     const to = /** @type {[string, ...string[]]} */ (targetAbsPath);
-    addItem('Link here', () =>
-      E(rootPowers)
-        .copy(from, to)
-        .catch(err => console.error('[inventory] Link failed:', err)),
-    );
-    addItem('Move here', () =>
-      E(rootPowers)
-        .move(from, to)
-        .catch(err => console.error('[inventory] Move failed:', err)),
-    );
 
-    $menu.style.position = 'fixed';
-    $menu.style.left = `${x}px`;
-    $menu.style.top = `${y}px`;
-    document.body.appendChild($menu);
-
-    const dismiss = () => {
-      $menu.remove();
-      document.removeEventListener('click', dismiss);
+    let closed = false;
+    const close = () => {
+      if (closed) return;
+      closed = true;
+      unmount(host);
+      host.remove();
+      document.removeEventListener('click', close);
     };
+
+    renderConfined(
+      h(DropMenu, {
+        x,
+        y,
+        onLink: () => {
+          close();
+          E(rootPowers)
+            .copy(from, to)
+            .catch(err => console.error('[inventory] Link failed:', err));
+        },
+        onMove: () => {
+          close();
+          E(rootPowers)
+            .move(from, to)
+            .catch(err => console.error('[inventory] Move failed:', err));
+        },
+      }),
+      host,
+    );
+
+    // Defer the dismiss-on-click listener past the current event so the
+    // interaction that opened the menu does not immediately close it.
     requestAnimationFrame(() => {
-      document.addEventListener('click', dismiss);
+      document.addEventListener('click', close);
     });
   };
 
