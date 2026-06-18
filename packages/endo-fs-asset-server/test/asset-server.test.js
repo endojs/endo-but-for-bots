@@ -1,6 +1,6 @@
 // @ts-nocheck
 /* eslint-disable import/order, no-await-in-loop */
-/* global globalThis, fetch */
+/* global globalThis */
 
 import '@endo/init/debug.js';
 
@@ -17,6 +17,31 @@ import { contentTypeForName, normalizeSegments } from '../src/index.js';
 const utf8 = s => new TextEncoder().encode(s);
 
 const getRandomValues = bytes => globalThis.crypto.getRandomValues(bytes);
+
+// A node:http GET client with keep-alive disabled (`agent: false`).
+// Using the global `fetch` (undici) here pools keep-alive sockets
+// against the test server; closing the server in teardown then rejects
+// those sockets with a `ClientDestroyedError`, which SES surfaces as a
+// fatal unhandled rejection on Node 24. A no-keep-alive client closes
+// each socket as soon as the body is read, so `server.close()` is clean.
+const httpGet = url =>
+  new Promise((resolve, reject) => {
+    const req = http.get(url, { agent: false }, res => {
+      let body = '';
+      res.setEncoding('utf-8');
+      res.on('data', chunk => {
+        body += chunk;
+      });
+      res.on('end', () =>
+        resolve({
+          status: res.statusCode,
+          headers: res.headers,
+          text: body,
+        }),
+      );
+    });
+    req.on('error', reject);
+  });
 
 const writeBytes = async (writerRef, bytes) => {
   const writer = iterateBytesWriter(writerRef);
@@ -75,15 +100,15 @@ test.serial('serves a file at a generated capability path', async t => {
   t.regex(path, /^\/[\w-]+\/$/);
   t.is(await E(revoke).getUrl(), url);
 
-  const res = await fetch(`${url}style.css`);
+  const res = await httpGet(`${url}style.css`);
   t.is(res.status, 200);
-  t.is(res.headers.get('content-type'), 'text/css; charset=utf-8');
-  t.is(await res.text(), 'body { color: red }');
+  t.is(res.headers['content-type'], 'text/css; charset=utf-8');
+  t.is(res.text, 'body { color: red }');
 
-  const nested = await fetch(`${url}app/main.js`);
+  const nested = await httpGet(`${url}app/main.js`);
   t.is(nested.status, 200);
-  t.is(nested.headers.get('content-type'), 'text/javascript; charset=utf-8');
-  t.is(await nested.text(), 'export const x = 1;');
+  t.is(nested.headers['content-type'], 'text/javascript; charset=utf-8');
+  t.is(nested.text, 'export const x = 1;');
 });
 
 test.serial('serves the index file for directory paths', async t => {
@@ -91,13 +116,13 @@ test.serial('serves the index file for directory paths', async t => {
   const server = await startServer(t);
   const { url } = await E(server).serve(fs);
 
-  const rootRes = await fetch(url);
+  const rootRes = await httpGet(url);
   t.is(rootRes.status, 200);
-  t.is(await rootRes.text(), '<h1>home</h1>');
+  t.is(rootRes.text, '<h1>home</h1>');
 
-  const dirRes = await fetch(`${url}app/`);
+  const dirRes = await httpGet(`${url}app/`);
   t.is(dirRes.status, 200);
-  t.is(await dirRes.text(), '<h1>app</h1>');
+  t.is(dirRes.text, '<h1>app</h1>');
 });
 
 test.serial('subPath rebases the served root', async t => {
@@ -105,9 +130,9 @@ test.serial('subPath rebases the served root', async t => {
   const server = await startServer(t);
   const { url } = await E(server).serve(fs, { subPath: 'app' });
 
-  const res = await fetch(`${url}main.js`);
+  const res = await httpGet(`${url}main.js`);
   t.is(res.status, 200);
-  t.is(await res.text(), 'export const x = 1;');
+  t.is(res.text, 'export const x = 1;');
 });
 
 test.serial('missing files 404', async t => {
@@ -115,7 +140,7 @@ test.serial('missing files 404', async t => {
   const server = await startServer(t);
   const { url } = await E(server).serve(fs);
 
-  const res = await fetch(`${url}nope.txt`);
+  const res = await httpGet(`${url}nope.txt`);
   t.is(res.status, 404);
 });
 
@@ -124,16 +149,16 @@ test.serial('unknown / revoked tokens 404', async t => {
   const server = await startServer(t);
   const { origin } = await E(server).getAddress();
 
-  const unknown = await fetch(`${origin}/not-a-real-token/index.html`);
+  const unknown = await httpGet(`${origin}/not-a-real-token/index.html`);
   t.is(unknown.status, 404);
 
   const { url, revoke } = await E(server).serve(fs);
   t.is(await E(revoke).isRevoked(), false);
-  t.is((await fetch(url)).status, 200);
+  t.is((await httpGet(url)).status, 200);
 
   await E(revoke).revoke();
   t.is(await E(revoke).isRevoked(), true);
-  t.is((await fetch(url)).status, 404);
+  t.is((await httpGet(url)).status, 404);
 });
 
 test.serial('persists across many requests until revoked', async t => {
@@ -142,10 +167,10 @@ test.serial('persists across many requests until revoked', async t => {
   const { url, revoke } = await E(server).serve(fs);
 
   for (let i = 0; i < 5; i += 1) {
-    t.is((await fetch(`${url}style.css`)).status, 200);
+    t.is((await httpGet(`${url}style.css`)).status, 200);
   }
   await E(revoke).revoke();
-  t.is((await fetch(`${url}style.css`)).status, 404);
+  t.is((await httpGet(`${url}style.css`)).status, 404);
 });
 
 test.serial(
@@ -159,19 +184,18 @@ test.serial(
     t.not(a.path, b.path);
 
     await E(a.revoke).revoke();
-    t.is((await fetch(a.url)).status, 404);
-    t.is((await fetch(b.url)).status, 200);
+    t.is((await httpGet(a.url)).status, 404);
+    t.is((await httpGet(b.url)).status, 200);
   },
 );
 
 test.serial('rejects path traversal in the request', async t => {
   const fs = await makeSiteFs();
   const server = await startServer(t);
-  const { origin, ...rest } = await E(server).getAddress();
+  const { origin } = await E(server).getAddress();
   const { path } = await E(server).serve(fs);
 
   // Encoded traversal should not escape the mount root.
-  const res = await fetch(`${origin}${path}..%2f..%2fetc`);
+  const res = await httpGet(`${origin}${path}..%2f..%2fetc`);
   t.true(res.status === 400 || res.status === 404);
-  t.truthy(rest);
 });
