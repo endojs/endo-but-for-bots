@@ -107,6 +107,7 @@ test('shim: emulated freezable subarray returns a wrapped view whose buffer is t
   // contract (`sub.buffer === iab`) is preserved: the sub-view's `.buffer`
   // redirects to the same immutable ArrayBuffer wrapper as the parent view.
   t.is(sub.byteLength, 2);
+  t.is(sub.byteOffset, 1);
   // Indexed element access uses `at()` (the amplifier-delegate path) rather
   // than `sub[0]` (which would read an own property on the plain wrapper object,
   // returning `undefined` for unset indices, per the wrapper semantics).
@@ -115,6 +116,8 @@ test('shim: emulated freezable subarray returns a wrapped view whose buffer is t
   // Core safety-contract assertion: the sub-view's buffer is the immutable wrapper.
   t.is(sub.buffer, iab);
   t.true(sub.buffer.immutable);
+  // Chained subarray must also preserve the immutable buffer reference.
+  t.is(view.subarray(0, 2).subarray(0, 1).buffer, iab);
 });
 
 // ---------------------------------------------------------------------------
@@ -157,7 +160,6 @@ test('shim: Symbol.iterator on %TypedArrayPrototype% matches the values wrapper 
   // Both iteration protocols must work on an emulated freezable wrapper.
   t.deepEqual([...view.values()], [1, 2]);
   const iterResult = [];
-  // eslint-disable-next-line guard-for-in
   for (const v of view) {
     iterResult.push(v);
   }
