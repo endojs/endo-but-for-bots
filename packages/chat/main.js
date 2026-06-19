@@ -24,6 +24,12 @@ import { make } from './chat.js';
 // eslint-disable-next-line import/no-unresolved
 import '@endo/whylip/whylip.css';
 
+// The peers view (`@endo/chat-network-view`) likewise does no rendering and
+// ships its stylesheet via the `./peers.css` package export; the host bundles
+// it here. Vite-only — no test loads `main.js`.
+// eslint-disable-next-line import/no-unresolved
+import '@endo/chat-network-view/peers.css';
+
 const RECONNECT_INTERVAL_MS = 5000;
 
 // Detect whether we are running inside the Familiar Electron shell.
