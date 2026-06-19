@@ -18,6 +18,9 @@ import {
 } from './setup-preact-container.js';
 
 import { playChime } from './chime.js';
+import { idFromLocator } from './locator.js';
+import { prepareTextWithPlaceholders } from './markdown-render.js';
+import { markdownToVnodes } from './markdown-vnodes.js';
 import {
   dateFormatter,
   timeFormatter,
@@ -290,32 +293,186 @@ const RequestBody = ({ message, powers, setError }) => {
 harden(RequestBody);
 
 /**
- * Package message body. STAGE 1: render the message as PLAIN TEXT by
- * concatenating `strings` with the `names` inline as `@name` text. No markdown
- * parsing, no token chips, no Monaco — those land in later stages.
+ * An interactive token / pet-name chip inside a package message body. Replaces
+ * one markdown placeholder. Clicking (or Enter / Space) looks the referenced
+ * value up by its locator and opens it via `showValue`; hovering shows the
+ * value's current pet names (resolved async via `reverseLocate`).
+ *
+ * Replicates the original imperative `$token` behavior: a `<span class="token"
+ * role="button" tabindex="0">` wrapping `<b>@{edgeName}</b>`, default title
+ * "Open value" upgraded to the comma-joined pet names once resolved.
+ *
+ * @param {object} props
+ * @param {string} props.edgeName - The `@name` to display.
+ * @param {string | undefined} props.locator - The value's `endo://` locator
+ *   (from `message.ids[index]`), or undefined when not available.
+ * @param {bigint} props.number - The message number, passed to `showValue`.
+ * @param {ERef<EndoHost>} props.powers
+ * @param {(value: unknown, id?: string, petNamePath?: string[], messageContext?: { number: bigint, edgeName: string }) => void | Promise<void>} props.showValue
+ * @param {(text: string) => void} props.setError
+ */
+const TokenChip = ({
+  edgeName,
+  locator,
+  number,
+  powers,
+  showValue,
+  setError,
+}) => {
+  const [title, setTitle] = useState('Open value');
+
+  useEffect(() => {
+    let disposed = false;
+    if (!locator) return undefined;
+    E(powers)
+      .reverseLocate(locator)
+      .then(
+        petNames => {
+          if (disposed) return;
+          if (Array.isArray(petNames) && petNames.length > 0) {
+            setTitle(petNames.join(', '));
+          }
+        },
+        () => {
+          // Keep the default title on failure.
+        },
+      );
+    return () => {
+      disposed = true;
+    };
+  }, [powers, locator]);
+
+  const openValue = () => {
+    if (!locator) {
+      setError(' Value not available');
+      return;
+    }
+    // `message.ids` are delivered as endo:// locators, not bare ids.
+    E(powers)
+      .lookupByLocator(locator)
+      .then(
+        value => {
+          // showValue's id arg feeds reverseIdentify, which expects a bare
+          // formula id; derive it from the locator for name display.
+          let valueId = locator;
+          try {
+            valueId = idFromLocator(locator);
+          } catch {
+            // Leave as the locator if it can't be parsed.
+          }
+          showValue(value, valueId, undefined, { number, edgeName });
+        },
+        (/** @type {Error} */ error) => {
+          setError(` ${error.message}`);
+        },
+      );
+  };
+
+  return h(
+    'span',
+    {
+      class: 'token',
+      role: 'button',
+      tabindex: 0,
+      title,
+      onClick: openValue,
+      /** @param {{ repeat?: boolean, metaKey?: boolean, key: string, preventDefault: () => void }} event */
+      onKeyDown: event => {
+        if (event.repeat || event.metaKey) return;
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          openValue();
+        }
+      },
+    },
+    h('b', null, `@${edgeName}`),
+  );
+};
+harden(TokenChip);
+
+/**
+ * Package message body. STAGE 2: parse the message body as markdown into a
+ * Preact vnode tree (NO dangerouslySetInnerHTML — the confined renderer strips
+ * it) and substitute an interactive {@link TokenChip} at each `@name`
+ * placeholder. The sender chip is injected into the first paragraph / heading,
+ * or prepended as a fresh `<p class="md-paragraph">` when the first block is a
+ * code fence or list (matching the original imperative renderer).
  *
  * @param {object} props
  * @param {InboxMessage} props.message
+ * @param {ERef<EndoHost>} props.powers
+ * @param {(value: unknown, id?: string, petNamePath?: string[], messageContext?: { number: bigint, edgeName: string }) => void | Promise<void>} props.showValue
+ * @param {(text: string) => void} props.setError
  */
-const PackageBody = ({ message }) => {
-  const { senderChip } = message;
-  const { strings, names } = /** @type {any} */ (message.raw);
+const PackageBody = ({ message, powers, showValue, setError }) => {
+  const { number, senderChip } = message;
+  const { strings, names, ids } = /** @type {any} */ (message.raw);
   const stringParts = Array.isArray(strings) ? strings : [];
   const nameParts = Array.isArray(names) ? names : [];
+  const idParts = Array.isArray(ids) ? ids : [];
 
-  // TODO(inbox stage 2): render markdown -> vnodes and replace the inline
-  // `@name` text with interactive token / pet-name chips (openValue, hover
-  // title via reverseLocate).
-  // TODO(inbox stage 3): Monaco `colorize` of code fences within the markdown.
-  let text = '';
-  for (let i = 0; i < stringParts.length; i += 1) {
-    text += String(stringParts[i]);
-    if (i < nameParts.length) {
-      text += `@${nameParts[i]}`;
+  // TODO(inbox stage 3): Monaco `colorize` of code fences within the markdown
+  // (markdown-vnodes emits fences as plain `<pre class="md-code-fence">` text).
+  const textWithPlaceholders = prepareTextWithPlaceholders(
+    stringParts.map(String),
+  );
+
+  /** @type {import('./markdown-vnodes.js').RenderToken} */
+  const renderToken = index => {
+    const edgeName = String(nameParts[index]);
+    const locator =
+      idParts[index] !== undefined ? String(idParts[index]) : undefined;
+    return h(TokenChip, {
+      key: String(index),
+      edgeName,
+      locator,
+      number,
+      powers,
+      showValue,
+      setError,
+    });
+  };
+
+  const { nodes, firstBlockKind } = markdownToVnodes(textWithPlaceholders, {
+    renderToken,
+  });
+
+  // Inject the sender chip into the first paragraph / heading; otherwise (code
+  // fence or list first) prepend a dedicated paragraph for it.
+  let body = nodes;
+  if (senderChip) {
+    if (
+      (firstBlockKind === 'paragraph' || firstBlockKind === 'heading') &&
+      nodes.length > 0 &&
+      nodes[0]
+    ) {
+      const $first = /** @type {import('preact').VNode} */ (nodes[0]);
+      const { children: existingChildren, ...firstProps } = /** @type {any} */ (
+        $first.props
+      );
+      const childArray = Array.isArray(existingChildren)
+        ? existingChildren
+        : existingChildren === undefined
+          ? []
+          : [existingChildren];
+      const $withChip = h(
+        /** @type {any} */ ($first.type),
+        firstProps,
+        h(SenderChip, { chip: senderChip }),
+        ...childArray,
+      );
+      body = [$withChip, ...nodes.slice(1)];
+    } else {
+      const $chipPara = h(
+        'p',
+        { class: 'md-paragraph', key: 'sender-chip' },
+        h(SenderChip, { chip: senderChip }),
+      );
+      body = [$chipPara, ...nodes];
     }
   }
 
-  return h('span', null, h(SenderChip, { chip: senderChip }), text);
+  return h(Fragment, null, ...body);
 };
 harden(PackageBody);
 
@@ -702,7 +859,7 @@ const MessageContent = ({
     case 'request':
       return h(RequestBody, { message, powers, setError });
     case 'package':
-      return h(PackageBody, { message });
+      return h(PackageBody, { message, powers, showValue, setError });
     case 'definition':
       return h(DefinitionBody, { message, powers, setError });
     case 'form':
