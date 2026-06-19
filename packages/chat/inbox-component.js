@@ -21,6 +21,7 @@ import { playChime } from './chime.js';
 import { idFromLocator } from './locator.js';
 import { prepareTextWithPlaceholders } from './markdown-render.js';
 import { markdownToVnodes } from './markdown-vnodes.js';
+import { valueToVnodes } from './value-vnodes.js';
 import {
   dateFormatter,
   timeFormatter,
@@ -42,10 +43,9 @@ import {
 // in the entry closure and after each list mutation — `$parent` is NEVER put
 // into the confined vnode tree (refs are stripped there).
 //
-// DEFERRED to later stages (see inline TODOs):
-//   - markdown -> vnode rendering and token / pet-name chips (package type)
-//   - Monaco `colorize` of source (definition / package types)
-//   - `renderValue` for the value type
+// DEFERRED (see inline TODOs):
+//   - Monaco `colorize` of source (definition / package types) — code fences
+//     still render as plain `<pre>` text.
 
 /**
  * Compare two locator URLs by identity (node + id), ignoring address
@@ -742,9 +742,10 @@ const FormBody = ({ message, powers, setError }) => {
 harden(FormBody);
 
 /**
- * Value message body. STAGE 1: render a simple text readout of the looked-up
- * value rather than the rich `renderValue` output, plus the "Show Value"
- * inspect button.
+ * Value message body. STAGE 3: render the looked-up value as a real Preact
+ * vnode tree via {@link valueToVnodes} (mirroring `value-render.js`'s pass-style
+ * cases and `.number` / `.string` / `.entries` / etc. class names — NO
+ * dangerouslySetInnerHTML), plus the "Show Value" inspect button.
  *
  * @param {object} props
  * @param {InboxMessage} props.message
@@ -769,33 +770,43 @@ const ValueBody = ({
       ? `responded to form: ${JSON.stringify(formTitle)}`
       : 'responded to form';
 
-  const [readout, setReadout] = useState('');
+  // `loaded` distinguishes "still looking up" (render nothing) from a resolved
+  // value (which may legitimately be `undefined`/`null`). On lookup failure we
+  // fall back to a plain error string.
+  const [state, setState] = useState(
+    /** @type {{ loaded: boolean, value: unknown, error: string | null }} */ ({
+      loaded: false,
+      value: undefined,
+      error: null,
+    }),
+  );
 
   useEffect(() => {
     let disposed = false;
-    // TODO(inbox stage 3): replace this plain text readout with `renderValue`
-    // (and secret-field masking) for the inline value display.
     E(powers)
       .lookupById(valueId)
       .then(
         value => {
           if (disposed) return;
-          let text;
-          try {
-            text = typeof value === 'string' ? value : JSON.stringify(value);
-          } catch {
-            text = String(value);
-          }
-          setReadout(text === undefined ? String(value) : text);
+          setState({ loaded: true, value, error: null });
         },
         (/** @type {Error} */ err) => {
-          if (!disposed) setReadout(`Error: ${err.message}`);
+          if (!disposed) {
+            setState({ loaded: true, value: undefined, error: err.message });
+          }
         },
       );
     return () => {
       disposed = true;
     };
   }, [powers, valueId]);
+
+  let inlineValue = null;
+  if (state.error !== null) {
+    inlineValue = h('span', { class: 'error' }, `Error: ${state.error}`);
+  } else if (state.loaded) {
+    inlineValue = valueToVnodes(state.value);
+  }
 
   return h(
     'div',
@@ -806,7 +817,7 @@ const ValueBody = ({
       h(SenderChip, { chip: senderChip }),
       responseText,
     ),
-    h('div', { class: 'form-request-inline-value' }, readout),
+    h('div', { class: 'form-request-inline-value' }, inlineValue),
     h(
       'div',
       { class: 'form-request-actions' },
