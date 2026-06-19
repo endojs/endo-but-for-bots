@@ -2804,8 +2804,7 @@ __metadata:
     "@endo/conversation-tree": "workspace:^"
     "@endo/far": "workspace:^"
     eslint: "catalog:dev"
-    react: "npm:^19.0.0"
-    react-dom: "npm:^19.0.0"
+    preact: "npm:^10.29.2"
   languageName: unknown
   linkType: soft
 
