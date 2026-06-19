@@ -585,3 +585,33 @@ inventory migration. Rather than a later `channel-sidebar.js` migration, channel
 were lifted out of the inventory entirely into the standalone
 [`channel-list.js`](../channel-list.js) Preact component, and the New/Join forms
 moved to the New Space modal. See the Status section.
+
+## Test stability — fixed-tick follow-ups (deferred)
+
+The component tests under [`test/component`](../test/component) wait for
+confined renders to settle with `await tick(ms)`, where
+[`tick`](../test/helpers/dom-setup.js) is a fixed `setTimeout`. A fixed delay
+races the render on a loaded CI runner: the macOS job has intermittently failed
+because the assertion ran before the async render/strip it depended on
+completed.
+
+Fixed so far (the flakes actually observed in CI):
+
+- `inline-eval.test.js` — the leading-`@` strip is asserted only after polling
+  for the stripped value, not on the tick that mounts the code-name sub-mount.
+- `inline-command-form.test.js` — the 19 tests were serialized; they shared
+  `document.body` with a global `afterEach` wipe, so parallel runs let one
+  test's teardown clear another's DOM mid-assertion.
+
+Deferred: a sweep of the remaining fixed-tick waits (~277 `await tick(ms)` calls
+across ~42 component test files). This is preventive — those tests are not
+currently failing — and a blanket conversion is wide, risky churn, so it is held
+until a focused pass.
+
+When that pass happens, **wait on the actual settled condition by polling, not
+by a fixed-duration timeout.** Replace `await tick(ms)` with a predicate poll
+that resolves as soon as the DOM/render condition holds (e.g. the element
+exists, the input value changed). Do **not** introduce a timeout ceiling on the
+poll — let AVA's global per-test timeout be the only bound, so the wait is as
+short as the machine allows and a genuine hang still fails the test with a clear
+timeout rather than passing on a guessed delay.
