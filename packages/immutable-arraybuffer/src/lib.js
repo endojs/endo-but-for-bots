@@ -1109,6 +1109,34 @@ export const freezableTypedArrayLibProperties = {
       // emulated freezable wrapper so the safety contract (`sub.buffer === iab`)
       // holds for sub-views.
       const genuineSub = apply(typedArraySubarray, genuineTA, [begin, end]);
+      // `create(getPrototypeOf(this))` is sufficient rather than calling the
+      // pseudo-constructor because the sub-view wrapper needs exactly three
+      // things the parent wrapper already provides:
+      //
+      // 1. The right prototype. `getPrototypeOf(this)` is
+      //    `OriginalConstructor.prototype`, the same prototype the
+      //    pseudo-constructor would set via `create(OriginalConstructor.prototype)`.
+      //    The shim's freezable behaviors live on that prototype (installed onto
+      //    `%TypedArrayPrototype%`), so they are already inherited.
+      //
+      // 2. A `hiddenTypedArrays` registration. The line below registers
+      //    `subWrapper -> genuineSub` in the brand WeakMap, which is what
+      //    `amplifyTypedArray` and every method that discriminates on brand
+      //    membership require. No other per-instance state is needed.
+      //
+      // 3. A `reverseBuffers` entry for `view.buffer` redirection. A sub-array
+      //    shares its backing buffer with the parent; `typedArraySubarray` does
+      //    not allocate a new buffer. The pseudo-constructor's `reverseBuffers`
+      //    registration maps the genuine backing buffer to the immutable wrapper,
+      //    and that entry was already written when the parent was constructed.
+      //    The sub-view's genuine buffer is the same genuine buffer, so no new
+      //    `reverseBuffers` entry is needed.
+      //
+      // Static properties (`BYTES_PER_ELEMENT`) live on
+      // `OriginalConstructor.prototype.constructor`, not on the instance, so
+      // they are also already present via the prototype chain. There is no
+      // instance state that the pseudo-constructor would add that `create` does
+      // not already provide.
       const subWrapper = create(getPrototypeOf(this));
       apply(weakmapSet, hiddenTypedArrays, [subWrapper, genuineSub]);
       // `reverseBuffers` already maps the genuine backing buffer to the immutable
