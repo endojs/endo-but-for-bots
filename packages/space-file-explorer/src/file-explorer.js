@@ -15,7 +15,7 @@ import harden from '@endo/harden';
 import { E } from '@endo/far';
 
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
-import { colorize } from './monaco-wrapper.js';
+import { colorize } from '@endo/monaco-wrapper';
 import { buildUnifiedDiffSection } from './layer-diff.js';
 import {
   applyLayer,

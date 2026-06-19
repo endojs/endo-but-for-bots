@@ -5,7 +5,7 @@
 /** @import { EndoHost } from '@endo/daemon' */
 /** @import { PetNamePathAutocompleteAPI } from './petname-path-autocomplete.js' */
 
-import { createMonacoEditor } from './monaco-wrapper.js';
+import { createMonacoEditor } from '@endo/monaco-wrapper';
 import { petNamePathAutocomplete } from './petname-path-autocomplete.js';
 import { keyCombo, modKey } from './platform-keys.js';
 

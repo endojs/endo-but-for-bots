@@ -44,7 +44,7 @@ register(
 );
 
 // Dynamically imported AFTER the loader is registered so eval-form's
-// `import { createMonacoEditor } from './monaco-wrapper.js'` resolves to the
+// `import { createMonacoEditor } from '@endo/monaco-wrapper'` resolves to the
 // stub.
 const { createEvalForm } = await import('../../eval-form.js');
 
