@@ -685,7 +685,8 @@ export function useFileExplorer(powers, profilePath = []) {
   const openFile = useCallback(
     async (parentPath, name) => {
       editorBufferRef.current = null;
-      update({
+      /** @type {Partial<FileExplorerState>} */
+      const open = {
         viewerCollapsed: false,
         viewerLoading: true,
         selectedFile: null,
@@ -693,7 +694,17 @@ export function useFileExplorer(powers, profilePath = []) {
         // Selecting a file pops out of the layer-diff view.
         viewerMode: 'file',
         layerDiff: null,
-      });
+      };
+      // In columns mode, opening a file collapses any columns drilled to its
+      // right and resets the drill path to the file's parent column — matching
+      // the imperative file-click in `file-explorer.js` (L2356–2360). A file in
+      // `parentPath` lives in column `parentPath.length`, whose path is exactly
+      // `parentPath`, so we keep columns `0..parentPath.length`.
+      if (stateRef.current.viewMode === 'columns') {
+        open.activePath = parentPath;
+        open.columns = stateRef.current.columns.slice(0, parentPath.length + 1);
+      }
+      update(open);
       try {
         const fileCap = lookupChild(resolveDir(parentPath), name);
         const { bytes, size, truncated } = await readFile(fileCap);
