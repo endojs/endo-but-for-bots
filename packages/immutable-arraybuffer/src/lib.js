@@ -598,10 +598,9 @@ const amplifyTypedArray = typedArray => {
  * maintainers.
  * See the README section "Function expressions versus declarations" for full
  * context (erights review comments 3439479281, 3439500526).
- *
- * @type {(this: object) => ArrayBuffer}
  */
 const taGetters = {
+  /** @type {(this: object) => ArrayBuffer} */
   get buffer() {
     const genuineTA = apply(weakmapGet, hiddenTypedArrays, [this]);
     if (genuineTA !== undefined) {
@@ -619,10 +618,13 @@ const taGetters = {
   },
 };
 
-const { get: virtualTypedArrayBufferGetter } = getOwnPropertyDescriptor(
-  taGetters,
-  'buffer',
-);
+// `getOwnPropertyDescriptor` returns `PropertyDescriptor | undefined`, but
+// the `buffer` accessor was just defined on `taGetters` so the descriptor is
+// always present. The `PropertyDescriptor` cast informs TypeScript of this.
+const { get: virtualTypedArrayBufferGetter } =
+  /** @type {PropertyDescriptor} */ (
+    getOwnPropertyDescriptor(taGetters, 'buffer')
+  );
 
 /**
  * Factory for per-flavor pseudo-constructors. Each pseudo-constructor replaces
