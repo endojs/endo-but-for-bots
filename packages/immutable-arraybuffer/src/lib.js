@@ -618,13 +618,15 @@ const taGetters = {
   },
 };
 
-// `getOwnPropertyDescriptor` returns `PropertyDescriptor | undefined`, but
-// the `buffer` accessor was just defined on `taGetters` so the descriptor is
-// always present. The `PropertyDescriptor` cast informs TypeScript of this.
-const { get: virtualTypedArrayBufferGetter } =
-  /** @type {PropertyDescriptor} */ (
-    getOwnPropertyDescriptor(taGetters, 'buffer')
-  );
+// `getOwnPropertyDescriptor` returns `PropertyDescriptor | undefined`, and
+// `PropertyDescriptor.get` is typed `(() => any) | undefined` because a
+// descriptor can be a data descriptor. We know `taGetters.buffer` is an
+// accessor we just defined, so both the descriptor and its `get` are present.
+// @ts-expect-error TS doesn't know it'll be there
+const { get: virtualTypedArrayBufferGetter } = getOwnPropertyDescriptor(
+  taGetters,
+  'buffer',
+);
 
 /**
  * Factory for per-flavor pseudo-constructors. Each pseudo-constructor replaces
