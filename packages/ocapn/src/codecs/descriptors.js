@@ -50,7 +50,7 @@ import { getSturdyRefDetails } from '../client/sturdyrefs.js';
  * @property {OcapnLocation} exporterLocation
  * @property {SessionId} exporterSessionId
  * @property {PublicKeyId} gifterSideId
- * @property {ArrayBufferLike} giftId
+ * @property {ArrayBufferView | ArrayBufferLike} giftId
  */
 
 /**
@@ -387,7 +387,7 @@ const makeSigEnvelope = (object, signature) => {
  * @param {OcapnLocation} exporterLocation
  * @param {SessionId} exporterSessionId
  * @param {PublicKeyId} gifterSideId
- * @param {ArrayBufferLike} giftId
+ * @param {ArrayBufferView | ArrayBufferLike} giftId
  * @returns {HandoffGive}
  */
 export const makeHandoffGiveDescriptor = (
@@ -409,7 +409,7 @@ export const makeHandoffGiveDescriptor = (
 
 /**
  * @param {HandoffGive} handoffGive
- * @returns {ArrayBufferLike}
+ * @returns {Uint8Array}
  */
 export const serializeHandoffGive = handoffGive => {
   const syrupWriter = makeSyrupWriter();
@@ -461,7 +461,7 @@ export const makeHandoffReceiveSigEnvelope = (handoffReceive, signature) => {
 
 /**
  * @param {HandoffReceive} handoffReceive
- * @returns {ArrayBufferLike}
+ * @returns {Uint8Array}
  */
 export const serializeHandoffReceive = handoffReceive => {
   const syrupWriter = makeSyrupWriter();

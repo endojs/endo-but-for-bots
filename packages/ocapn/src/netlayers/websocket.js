@@ -50,7 +50,7 @@ const BASE32_DECODE_TABLE = new Map(
 /**
  * @typedef {object} InitPeerAuth
  * @property {'init:peer-auth'} type
- * @property {ArrayBufferLike} payload
+ * @property {ArrayBufferView | ArrayBufferLike} payload
  */
 
 /**

@@ -10,7 +10,7 @@ import { bytesToImmutable } from '@endo/bytes/to-immutable.js';
 import { encodeHex } from '@endo/hex';
 
 /**
- * @param {ArrayBufferLike} value
+ * @param {ArrayBufferView | ArrayBufferLike} value
  * @returns {string}
  */
 export const toHex = value => {
@@ -52,7 +52,7 @@ const swissnumDecoder = new TextDecoder('ascii', { fatal: true });
 const swissnumEncoder = new TextEncoder();
 
 /**
- * @param {ArrayBufferLike} value
+ * @param {ArrayBufferView | ArrayBufferLike} value
  * @returns {string}
  */
 export const decodeSwissnum = value => {

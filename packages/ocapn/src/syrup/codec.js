@@ -18,7 +18,7 @@ import { ocapnPassStyleOf } from '../codecs/ocapn-pass-style.js';
 const labelTextDecoder = new TextDecoder('utf-8', { fatal: true });
 
 /**
- * @param {ArrayBufferLike} buffer
+ * @param {ArrayBufferView | ArrayBufferLike} buffer
  * @returns {string}
  */
 const decodeBytestringLabel = buffer =>

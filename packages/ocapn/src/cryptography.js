@@ -35,15 +35,15 @@ const sessionIdHashPrefixBytes = textEncoder.encode('prot0');
 /**
  * @typedef {object} OcapnPublicKey
  * @property {PublicKeyId} id
- * @property {ArrayBufferLike} bytes
+ * @property {ArrayBufferView | ArrayBufferLike} bytes
  * @property {OcapnPublicKeyDescriptor} descriptor
- * @property {(msg: ArrayBufferLike, sig: OcapnSignature) => void} assertSignatureValid - Throws if signature is invalid
+ * @property {(msg: ArrayBufferView | ArrayBufferLike, sig: OcapnSignature) => void} assertSignatureValid - Throws if signature is invalid
  */
 
 /**
  * @typedef {object} OcapnKeyPair
  * @property {OcapnPublicKey} publicKey
- * @property {(msg: ArrayBufferLike) => OcapnSignature} sign
+ * @property {(msg: ArrayBufferView | ArrayBufferLike) => OcapnSignature} sign
  */
 
 /**
@@ -57,7 +57,7 @@ const ocapNSignatureToBytes = sig => {
 };
 
 /**
- * @param {ArrayBufferLike} publicKeyBytes
+ * @param {ArrayBufferView | ArrayBufferLike} publicKeyBytes
  * @returns {OcapnPublicKeyDescriptor}
  */
 const makePublicKeyDescriptor = publicKeyBytes => {
@@ -84,7 +84,7 @@ const makePublicKeyIdFromDescriptor = publicKeyDescriptor => {
 };
 
 /**
- * @param {ArrayBufferLike} publicKeyBytes
+ * @param {ArrayBufferView | ArrayBufferLike} publicKeyBytes
  * @returns {OcapnPublicKey}
  */
 export const makeOcapnPublicKey = publicKeyBytes => {
@@ -95,7 +95,7 @@ export const makeOcapnPublicKey = publicKeyBytes => {
     descriptor: publicKeyDescriptor,
     /**
      * Asserts that the signature is valid for the given message.
-     * @param {ArrayBufferLike} msgBytes
+     * @param {ArrayBufferView | ArrayBufferLike} msgBytes
      * @param {OcapnSignature} ocapnSig
      * @throws {Error} If the signature is invalid
      */
@@ -165,8 +165,8 @@ export const publicKeyDescriptorToPublicKey = publicKeyDescriptor => {
 };
 
 /**
- * @param {ArrayBufferLike} peerIdOne
- * @param {ArrayBufferLike} peerIdTwo
+ * @param {ArrayBufferView | ArrayBufferLike} peerIdOne
+ * @param {ArrayBufferView | ArrayBufferLike} peerIdTwo
  * @returns {SessionId}
  */
 export const makeSessionId = (peerIdOne, peerIdTwo) => {
@@ -192,7 +192,7 @@ export const makeSessionId = (peerIdOne, peerIdTwo) => {
 
 /**
  * @param {OcapnLocation} location
- * @returns {ArrayBufferLike}
+ * @returns {Uint8Array}
  */
 const getLocationBytesForSignature = location => {
   const myLocationBytes = serializeOcapnMyLocation({
@@ -243,7 +243,7 @@ export const signHandoffGive = (handoffGive, keyPair) => {
  * @param {OcapnLocation} exporterLocation
  * @param {SessionId} gifterExporterSessionId
  * @param {PublicKeyId} gifterSideId
- * @param {ArrayBufferLike} giftId
+ * @param {ArrayBufferView | ArrayBufferLike} giftId
  * @param {OcapnKeyPair} gifterKeyForExporter
  * @returns {HandoffGiveSigEnvelope}
  */
@@ -309,7 +309,7 @@ export const assertHandoffReceiveSignatureValid = (
 };
 
 /**
- * @returns {ArrayBufferLike}
+ * @returns {Uint8Array}
  */
 export const randomGiftId = () => {
   return bytesToImmutable(randomBytes(16));

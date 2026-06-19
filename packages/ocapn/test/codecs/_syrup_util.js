@@ -15,7 +15,7 @@ const textEncoder = new TextEncoder();
 
 /**
  * @param {string} s
- * @returns {ArrayBuffer}
+ * @returns {Uint8Array}
  */
 const selectorSyrup = s => {
   const b = textEncoder.encode(s);
@@ -26,7 +26,7 @@ const selectorSyrup = s => {
 
 /**
  * @param {number} i
- * @returns {ArrayBuffer}
+ * @returns {Uint8Array}
  */
 export const intSyrup = i =>
   bytesToImmutable(
@@ -35,8 +35,8 @@ export const intSyrup = i =>
 
 /**
  * @param {string} label
- * @param {Array<ArrayBuffer>} items
- * @returns {ArrayBuffer}
+ * @param {Array<Uint8Array>} items
+ * @returns {Uint8Array}
  */
 export const recordSyrup = (label, ...items) =>
   concatImmutables([
