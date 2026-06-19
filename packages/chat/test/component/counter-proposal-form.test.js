@@ -35,7 +35,7 @@ register(
     `data:text/javascript,${encodeURIComponent(`
       const stubUrl = ${JSON.stringify(stubUrl)};
       export async function resolve(specifier, context, nextResolve) {
-        if (specifier.endsWith('/monaco-wrapper.js') || specifier === './monaco-wrapper.js') {
+        if (specifier === '@endo/monaco-wrapper' || specifier.endsWith('/monaco-wrapper.js') || specifier === './monaco-wrapper.js') {
           return { url: stubUrl, shortCircuit: true };
         }
         return nextResolve(specifier, context);
