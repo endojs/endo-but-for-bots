@@ -172,8 +172,8 @@ export const makeExpectedLengthBytestringCodec = (codecName, length) => {
       return bytestring;
     },
     write: (value, syrupWriter) => {
-      if (!(value instanceof ArrayBuffer)) {
-        throw Error(`Expected ArrayBuffer, got ${typeof value}`);
+      if (!(value instanceof Uint8Array || value instanceof ArrayBuffer)) {
+        throw Error(`Expected Uint8Array or ArrayBuffer, got ${typeof value}`);
       }
       if (value.byteLength !== length) {
         throw Error(`Expected length ${length}, got ${value.byteLength}`);
@@ -202,7 +202,9 @@ export const NumberPrefixCodec = makeCodec('NumberPrefix', {
   write: (value, syrupWriter) => {
     if (typeof value === 'string') {
       syrupWriter.writeString(value);
-    } else if (value instanceof ArrayBuffer) {
+    } else if (value instanceof Uint8Array || value instanceof ArrayBuffer) {
+      // The byteArray pass style is now a Uint8Array; older callers may
+      // still hand off a raw ArrayBuffer, accepted for cross-version use.
       syrupWriter.writeBytestring(value);
     } else if (typeof value === 'bigint') {
       syrupWriter.writeInteger(value);

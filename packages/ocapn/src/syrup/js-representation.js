@@ -90,7 +90,9 @@ export const NumberPrefixCodecWithSelectorAsSymbol = {
     } else if (typeof value === 'symbol') {
       const selectorString = getSyrupSelectorName(value);
       syrupWriter.writeSelectorFromString(selectorString);
-    } else if (value instanceof ArrayBuffer) {
+    } else if (value instanceof Uint8Array || value instanceof ArrayBuffer) {
+      // The byteArray pass style is now a Uint8Array; older callers may
+      // still hand off a raw ArrayBuffer, accepted for cross-version use.
       syrupWriter.writeBytestring(value);
     } else if (typeof value === 'bigint') {
       syrupWriter.writeInteger(value);
@@ -131,7 +133,9 @@ export const AnyCodec = makeTypeHintUnionCodec(
       } else if (value instanceof Set) {
         // eslint-disable-next-line no-use-before-define
         return SetCodec;
-      } else if (value instanceof ArrayBuffer) {
+      } else if (value instanceof Uint8Array || value instanceof ArrayBuffer) {
+        // byteArray dispatch: a Uint8Array is the current shape; a raw
+        // ArrayBuffer is the legacy shape, retained for cross-version use.
         return BytestringCodec;
       } else if (typeof value === 'object' && value !== null) {
         if (value[Symbol.toStringTag] === 'Record') {

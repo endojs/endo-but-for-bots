@@ -86,9 +86,12 @@ export function compareUint8Arrays(
 }
 
 /**
- * Compare two immutable ArrayBuffers
- * @param {ArrayBufferLike} left
- * @param {ArrayBufferLike} right
+ * Compare two byteArray-passable values (frozen `Uint8Array` backed by
+ * an immutable `ArrayBuffer`). A bare `ArrayBufferLike` is also accepted
+ * for cross-version use during the byteArray-shape transition.
+ *
+ * @param {ArrayBufferView | ArrayBufferLike} left
+ * @param {ArrayBufferView | ArrayBufferLike} right
  * @returns {number}
  */
 export const compareImmutableArrayBuffers = (left, right) => {
