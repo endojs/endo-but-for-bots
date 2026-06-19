@@ -33,9 +33,11 @@ bytesToText(greeting); // 'Hello, world!'
 
 bytesEqual(bytesFromText('abc'), bytesFromText('abc')); // true
 
-// Wrap a Uint8Array in a passable, immutable ArrayBuffer.
+// Wrap a Uint8Array as a passable, frozen Uint8Array backed by an
+// immutable ArrayBuffer.
 const passable = bytesToImmutable(greeting);
-// Recover a working Uint8Array from an immutable buffer received over a vat boundary.
+// Recover a working mutable Uint8Array from a passable received over a
+// vat boundary.
 bytesToText(bytesFromImmutable(passable)); // 'Hello, world!'
 ```
 
@@ -63,11 +65,13 @@ Encodes a string as UTF-8 bytes.
 
 Decodes UTF-8 bytes to a string.
 
-### `bytesToImmutable(view) -> ArrayBuffer`
+### `bytesToImmutable(view) -> Uint8Array`
 
-Wraps a `Uint8Array` view's contents in an immutable `ArrayBuffer` via
-the `ArrayBuffer.prototype.sliceToImmutable` shim
-(proposal-immutable-arraybuffer).
+Wraps a `Uint8Array` view's contents in a hardened frozen `Uint8Array`
+backed by an immutable `ArrayBuffer`, via the
+`ArrayBuffer.prototype.sliceToImmutable` shim
+(proposal-immutable-arraybuffer) plus the freezable-TypedArray
+amplifier from `@endo/immutable-arraybuffer/shim.js`.
 The result carries the `'byteArray'` passStyle and is hardened, so it
 is safe to share across vat boundaries.
 The view's `byteOffset` and `byteLength` are honored, so `subarray`
@@ -75,12 +79,12 @@ windows copy only the addressed bytes.
 
 ### `bytesFromImmutable(buffer) -> Uint8Array`
 
-Copies the contents of an immutable `ArrayBuffer` into a fresh,
-mutable `Uint8Array`.
-Immutable `ArrayBuffer` instances cannot back a `Uint8Array` view
-directly and APIs such as `TextDecoder.decode` reject them; this
-helper produces a working `Uint8Array` copy that callers can pass to
-those APIs.
+Copies the contents of a frozen `Uint8Array` (or any `ArrayBufferView`
+or `ArrayBufferLike`) into a fresh, mutable `Uint8Array`.
+The frozen `Uint8Array` produced by `bytesToImmutable` cannot itself
+be written through, and APIs such as `TextDecoder.decode` reject views
+over immutable buffers; this helper produces a working mutable
+`Uint8Array` copy that callers can pass to those APIs.
 
 ## Out of scope
 

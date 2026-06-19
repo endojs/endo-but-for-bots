@@ -7,16 +7,21 @@ import { bytesToImmutable } from './to-immutable.js';
 import { concatBytes } from './concat.js';
 
 /**
- * Concatenates a list of immutable `ArrayBuffer` values into a single
- * hardened immutable `ArrayBuffer`.
+ * Concatenates a list of byteArray-passable values into a single hardened
+ * frozen `Uint8Array` backed by an immutable `ArrayBuffer`.
  *
  * Equivalent to
  * `bytesToImmutable(concatBytes(buffers.map(bytesFromImmutable)))`,
  * provided as a single-call helper because the composition is common
  * when assembling protocol records from immutable byte fragments.
  *
- * @param {ReadonlyArray<ArrayBufferLike>} buffers
- * @returns {ArrayBuffer}
+ * The input element type is `ArrayBufferView | ArrayBufferLike` so the
+ * helper accepts both the current byteArray shape (frozen `Uint8Array`)
+ * and the prior raw-immutable-`ArrayBuffer` shape, easing the
+ * cross-version transition.
+ *
+ * @param {ReadonlyArray<ArrayBufferView | ArrayBufferLike>} buffers
+ * @returns {Uint8Array}
  */
 export const concatImmutables = buffers =>
   bytesToImmutable(concatBytes(buffers.map(bytesFromImmutable)));
