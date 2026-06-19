@@ -26,11 +26,11 @@ import {
 // keeps only `type === 'channel'` ones, and renders them with their own
 // independent CSS classes (`.channel-list-*`, not `.pet-item-*`).
 //
-// Reorder is reimplemented in idiomatic Preact (a `dragOverIndex` in state plus
-// a rendered drop-indicator element) rather than reusing the imperative
-// `makeChannelReorder` from inventory/dnd.js, so the list owns no detached DOM.
-// The drag still carries string-only data (`text/plain` = the channel name)
-// through the sanitizing `SafeDataTransfer` facade, which is all reorder needs.
+// Reorder is idiomatic Preact (a `dragOverIndex` in state plus a rendered
+// drop-indicator element) rather than imperative DOM measurement, so the list
+// owns no detached DOM. The drag carries string-only data (`text/plain` = the
+// channel name) through the sanitizing `SafeDataTransfer` facade, which is all
+// reorder needs.
 
 /**
  * @typedef {'chat' | 'forum' | 'outliner' | 'microblog'} ChannelViewMode
