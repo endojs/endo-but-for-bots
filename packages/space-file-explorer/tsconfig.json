@@ -3,5 +3,5 @@
   "compilerOptions": {
     "skipLibCheck": true
   },
-  "include": ["*.js", "*.ts", "src"]
+  "include": ["*.js", "*.ts", "src", "test"]
 }
