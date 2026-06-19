@@ -520,20 +520,20 @@ export const channelComponent = async (
               class: 'message-action-btn',
               title: 'Reply',
               onClick: () => {
+                // Synchronous, matching the original: the member info is
+                // already cached (the message loop resolves it before render),
+                // so onReply fires immediately rather than after an await.
                 const preview = message.strings.join('').substring(0, 60);
-                getMemberInfo(message.memberId)
-                  .then(info => {
-                    const authorName = info
-                      ? info.proposedName
-                      : message.memberId;
-                    onReply({
-                      number: message.number,
-                      memberId: message.memberId,
-                      authorName,
-                      preview,
-                    });
-                  })
-                  .catch(() => {});
+                const cached = memberCache.get(message.memberId);
+                const authorName = cached
+                  ? cached.proposedName
+                  : message.memberId;
+                onReply({
+                  number: message.number,
+                  memberId: message.memberId,
+                  authorName,
+                  preview,
+                });
               },
             },
             '↩',
