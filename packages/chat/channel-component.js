@@ -293,8 +293,8 @@ export const channelComponent = async (
     const continuePoints = [];
 
     /**
-     * @param {string} key @param {number} depth
-     * @param depth
+     * @param {string} key
+     * @param {number} depth
      */
     const walk = (key, depth) => {
       const data = messageIndex.get(key);
