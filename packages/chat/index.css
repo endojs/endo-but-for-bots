@@ -2187,6 +2187,66 @@ body.resizing * {
   background: var(--success);
 }
 
+/* Confined message-picker overlay */
+.message-picker-overlay {
+  position: fixed;
+  right: 16px;
+  bottom: 80px;
+  z-index: 1000;
+}
+
+.message-picker {
+  max-width: 360px;
+  max-height: 50vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--tooltip-bg);
+  color: var(--tooltip-fg);
+  border-radius: 6px;
+  box-shadow: var(--shadow-md);
+  overflow: hidden;
+}
+
+.message-picker-header {
+  padding: 6px 10px;
+  font-size: 12px;
+  opacity: 0.8;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.message-picker-list {
+  overflow-y: auto;
+}
+
+.message-picker-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  cursor: pointer;
+}
+
+.message-picker-item:hover,
+.message-picker-item.highlighted {
+  background: var(--accent-light);
+  color: var(--accent-primary);
+}
+
+.message-picker-item .message-num-badge {
+  display: block;
+  position: static;
+  top: auto;
+  left: auto;
+  flex: 0 0 auto;
+}
+
+.message-picker-item-text {
+  flex: 1 1 auto;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /*
  * Message bubble color scheme.
  *
