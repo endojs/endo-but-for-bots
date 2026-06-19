@@ -497,13 +497,33 @@ export const channelComponent = async (
     $msg.appendChild(document.createTextNode(' '));
 
     // Message body — use 'names' (new format) with fallback to 'edgeNames' (old format)
-    const messageNames =
+    const messageNames = /** @type {string[]} */ (
       /** @type {any} */ (message).names ||
-      /** @type {any} */ (message).edgeNames ||
-      [];
+        /** @type {any} */ (message).edgeNames ||
+        []
+    );
     const $body = document.createElement('span');
     $body.className = 'message-body';
 
+    const makeToken = (
+      /** @type {string} */ edgeName,
+      /** @type {number} */ index,
+    ) => {
+      const $token = document.createElement('span');
+      $token.className = 'token';
+      $token.tabIndex = 0;
+      $token.setAttribute('role', 'button');
+      $token.title = 'Open value';
+      $token.textContent = `@${edgeName}`;
+      $token.addEventListener('click', () => {
+        if (message.ids && message.ids[index]) {
+          showValue(undefined, message.ids[index], [edgeName]);
+        }
+      });
+      return $token;
+    };
+
+    let placedTokens = 0;
     if (message.strings && message.strings.length > 0) {
       const textWithPlaceholders = prepareTextWithPlaceholders(message.strings);
       const { fragment, insertionPoints, highlight } = renderMarkdown(
@@ -515,29 +535,21 @@ export const channelComponent = async (
       // Asynchronously apply Monaco syntax highlighting to code fences
       highlight();
 
-      // Create token chips for names
-      for (
-        let index = 0;
-        index < Math.min(insertionPoints.length, messageNames.length);
-        index += 1
-      ) {
-        const edgeName = messageNames[index];
-        const $slot = insertionPoints[index];
-
-        const $token = document.createElement('span');
-        $token.className = 'token';
-        $token.tabIndex = 0;
-        $token.setAttribute('role', 'button');
-        $token.title = 'Open value';
-        $token.textContent = `@${edgeName}`;
-        $token.addEventListener('click', () => {
-          if (message.ids && message.ids[index]) {
-            showValue(undefined, message.ids[index], [edgeName]);
-          }
-        });
-
-        $slot.replaceWith($token);
+      // Place token chips at their inline slots.
+      placedTokens = Math.min(insertionPoints.length, messageNames.length);
+      for (let index = 0; index < placedTokens; index += 1) {
+        insertionPoints[index].replaceWith(
+          makeToken(messageNames[index], index),
+        );
       }
+    }
+
+    // Attachments without an inline placeholder (e.g. a message with one text
+    // string and one attached value) have no slot in the rendered text, so
+    // append them at the end of the body rather than dropping them.
+    for (let index = placedTokens; index < messageNames.length; index += 1) {
+      $body.appendChild(document.createTextNode(' '));
+      $body.appendChild(makeToken(messageNames[index], index));
     }
 
     $msg.appendChild($body);
