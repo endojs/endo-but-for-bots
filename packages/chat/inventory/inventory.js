@@ -23,29 +23,10 @@ import { ItemLabel } from './item-label.js';
 import { h, renderConfined, unmount } from '../setup-preact-container.js';
 
 /**
- * A `sidebar` plugs alternate rendering into the otherwise pet-name-tree
- * inventory: the channel sidebar (channel-sidebar.js) supplies one. All of its
- * hooks are optional.
- *
- * @typedef {object} InventorySidebar
- * @property {boolean} [prepend] - Insert new items at the top of the list.
- * @property {boolean} [itemInitiallyHidden] - Hide items until `decorateItem`
- *   chooses to show them.
- * @property {($parent: HTMLElement) => void} [setupHeader] - Decorate the
- *   header once, at the top level.
- * @property {(ctx: import('./channel-sidebar.js').ItemContext) => void} [decorateItem]
- *   - Decorate each item after its type is probed (replaces the default
- *   conversation decoration).
- * @property {($list: HTMLElement) => void} [setupList] - Wire list-level
- *   behavior (replaces the default link/move drop zone).
- */
-
-/**
  * @typedef {object} InventoryOptions
  * @property {(value: unknown, id?: string, petNamePath?: string[], messageContext?: { number: bigint, edgeName: string }) => void | Promise<void>} showValue
  * @property {((petName: string | string[], formulaId: string) => void)} [onSelectConversation]
  * @property {string | null} [activeConversationPetName]
- * @property {InventorySidebar} [sidebar] - Alternate rendering (e.g. channels).
  */
 
 /**
@@ -65,7 +46,7 @@ export const inventoryComponent = async (
   $parent,
   _end,
   powers,
-  { showValue, onSelectConversation, activeConversationPetName, sidebar },
+  { showValue, onSelectConversation, activeConversationPetName },
   path = [],
   rootPowers = powers,
   rootPrefix = [],
@@ -73,11 +54,6 @@ export const inventoryComponent = async (
   const $list = /** @type {HTMLElement} */ (
     $parent.querySelector('.pet-list') || $parent
   );
-
-  // Let a sidebar (e.g. channels) decorate the header once at the top level.
-  if (sidebar?.setupHeader && path.length === 0) {
-    sidebar.setupHeader($parent);
-  }
 
   /** @type {Map<string, { $wrapper: HTMLElement, cleanup?: () => void }>} */
   const $names = new Map();
@@ -103,11 +79,6 @@ export const inventoryComponent = async (
     $wrapper.className = 'pet-item-wrapper';
     if (isSpecialName(name)) {
       $wrapper.classList.add('special');
-    }
-    // A sidebar may hide items until its decorateItem chooses to show them
-    // (channel mode hides everything until confirmed channels).
-    if (sidebar?.itemInitiallyHidden) {
-      $wrapper.style.display = 'none';
     }
 
     const $row = document.createElement('div');
@@ -318,7 +289,6 @@ export const inventoryComponent = async (
               showValue,
               onSelectConversation: wrappedOnSelectConversation,
               activeConversationPetName,
-              sidebar,
             },
             [], // Reset path since nestedPowers handles the prefix
             // Drag-and-drop stays in the root's absolute coordinate space so
@@ -348,12 +318,7 @@ export const inventoryComponent = async (
       acceptsDrop: () => acceptsDrop,
     });
 
-    if (sidebar?.prepend) {
-      // Newest items at top (channels are reordered after type detection)
-      $list.prepend($wrapper);
-    } else {
-      $list.appendChild($wrapper);
-    }
+    $list.appendChild($wrapper);
 
     // Probe the formula type to detect conversable items and non-expandable types.
     // Items without a locator (e.g. children of an immutable ReadableTree) get
@@ -388,22 +353,8 @@ export const inventoryComponent = async (
           acceptsDrop = true;
         }
 
-        // A sidebar (e.g. channels) decorates the item; otherwise apply the
-        // default conversation decoration.
-        if (sidebar?.decorateItem) {
-          sidebar.decorateItem({
-            name,
-            type: type ?? null,
-            path,
-            $list,
-            $wrapper,
-            $row,
-            setLabel,
-            setDisclosure,
-            $children,
-            $actions,
-          });
-        } else if (onSelectConversation) {
+        // Conversable items open a conversation on click; others inspect.
+        if (onSelectConversation) {
           if (type && CONVERSABLE_TYPES.includes(type)) {
             $wrapper.classList.add('conversable');
             setLabel({
@@ -439,16 +390,11 @@ export const inventoryComponent = async (
     };
   };
 
-  // List-level behavior: a sidebar wires its own (channels use reordering);
-  // otherwise the default link/move drop zone. Dropping onto the background of
-  // a directory's list links or moves the dragged item into that directory
-  // (`rootPrefix`); at the outermost level `rootPrefix` is empty, so this is
-  // how an item is moved *up* to the root.
-  if (sidebar?.setupList) {
-    sidebar.setupList($list);
-  } else {
-    itemDnd.attachListDropZone($list, rootPrefix);
-  }
+  // List-level drop zone: dropping onto the background of a directory's list
+  // links or moves the dragged item into that directory (`rootPrefix`); at the
+  // outermost level `rootPrefix` is empty, so this is how an item is moved *up*
+  // to the root.
+  itemDnd.attachListDropZone($list, rootPrefix);
 
   for await (const change of iterateReader(E(powers).followNameChanges())) {
     if ('add' in change) {

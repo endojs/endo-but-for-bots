@@ -379,12 +379,27 @@ harden(channelsReducer);
  * @param {object} props
  * @param {ERef<EndoHost>} props.powers
  * @param {ChannelListOptions} props.options
+ * @param {{ setActive?: (name: string | null) => void }} props.controller
+ *   - Mutable handle the host uses to update the active highlight live (e.g.
+ *   when the user switches channels) without re-mounting the list.
  */
-const ChannelList = ({ powers, options }) => {
+const ChannelList = ({ powers, options, controller }) => {
   const [channels, dispatch] = useReducer(
     channelsReducer,
     /** @type {string[]} */ ([]),
   );
+  // Active channel, initialized from the option and thereafter controllable
+  // from outside via `controller.setActive`, so a channel switch updates the
+  // highlight without a full re-mount.
+  const [active, setActive] = useState(
+    /** @type {string | null} */ (options.activeChannelPetName ?? null),
+  );
+  useEffect(() => {
+    controller.setActive = setActive;
+    return () => {
+      if (controller.setActive === setActive) delete controller.setActive;
+    };
+  }, [controller]);
   // Reorder drag state: which row is the source and where the indicator sits.
   const [drag, setDrag] = useState(
     /** @type {{ from: number, over: number } | null} */ (null),
@@ -442,8 +457,7 @@ const ChannelList = ({ powers, options }) => {
     };
   }, [powers]);
 
-  const { channelOrder, bookmarks, activeChannelPetName, onChannelReorder } =
-    options;
+  const { channelOrder, bookmarks, onChannelReorder } = options;
 
   const ordered = orderChannels(channels, channelOrder);
 
@@ -493,7 +507,7 @@ const ChannelList = ({ powers, options }) => {
         key: name,
         name,
         index,
-        active: activeChannelPetName != null && name === activeChannelPetName,
+        active: active != null && name === active,
         dragging: drag != null && drag.from === index,
         dropBefore: drag != null && drag.over === index && drag.from !== index,
         bookmarks: bookmarksByChannel.get(name) || [],
@@ -510,22 +524,31 @@ harden(ChannelList);
 
 /**
  * Mount the standalone channel list into `$container`, independent of the
- * inventory. Returns a `cleanup()` that stops the subscription (via the root
- * component's `useEffect` teardown when the tree unmounts) and unmounts the
- * Preact tree.
+ * inventory. Returns `cleanup()` (stops the subscription via the root
+ * component's `useEffect` teardown and unmounts the Preact tree) and
+ * `setActiveChannel(name)` to update the active highlight live.
  *
  * @param {HTMLElement} $container - The `.pet-list` (or any) host element.
  * @param {ERef<EndoHost>} powers - Powers for the current channel-space profile.
  * @param {ChannelListOptions} [options]
- * @returns {{ cleanup: () => void }}
+ * @returns {{ cleanup: () => void, setActiveChannel: (name: string | null) => void }}
  */
 export const channelListComponent = ($container, powers, options = {}) => {
-  renderConfined(h(ChannelList, { powers, options }), $container);
+  // Mutable bridge to the root component's active-channel setter (populated by
+  // the component's effect). Intentionally NOT hardened — the component writes
+  // its setter onto it.
+  /** @type {{ setActive?: (name: string | null) => void }} */
+  const controller = {};
+  renderConfined(h(ChannelList, { powers, options, controller }), $container);
   return harden({
     cleanup: () => {
       // Unmount runs the root component's useEffect teardown, which sets the
       // disposed flag and aborts the followNameChanges subscription.
       unmount($container);
+    },
+    /** @param {string | null} name */
+    setActiveChannel: name => {
+      if (controller.setActive) controller.setActive(name);
     },
   });
 };
