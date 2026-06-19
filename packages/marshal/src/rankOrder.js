@@ -294,15 +294,14 @@ export const makeComparatorKit = (compareRemotables = (_x, _y) => NaN) => {
           return 1;
         }
 
-        // Account for gaps in the @endo/immutable-arraybuffer shim.
-        const leftArray =
-          Object.getPrototypeOf(left) === ArrayBuffer.prototype
-            ? new Uint8Array(left)
-            : new Uint8Array(left.slice(0));
-        const rightArray =
-          Object.getPrototypeOf(right) === ArrayBuffer.prototype
-            ? new Uint8Array(right)
-            : new Uint8Array(right.slice(0));
+        // The byteArray pass style is a frozen Uint8Array backed by an
+        // immutable ArrayBuffer; the values arrive here already in that
+        // shape and can be read directly via the integer-indexed
+        // protocol (the prototype-chain amplifier on the emulated path,
+        // the integer-indexed exotic on the native path). No copy is
+        // required.
+        const leftArray = /** @type {Uint8Array} */ (left);
+        const rightArray = /** @type {Uint8Array} */ (right);
         for (let i = 0; i < leftLen; i += 1) {
           const leftByte = leftArray[i];
           const rightByte = rightArray[i];
