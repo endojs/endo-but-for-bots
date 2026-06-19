@@ -19,7 +19,7 @@ import { createSpacesGutter } from './spaces-gutter.js';
 import { inventoryGraphComponent } from './inventory-graph-component.js';
 import { whylipComponent } from './whylip-component.js';
 import { peersComponent } from './peers-component.js';
-import { fileExplorerComponent } from './file-explorer-component.js';
+import { fileExplorerComponent } from '@endo/space-file-explorer';
 import { createShareModal } from './share-modal.js';
 import { microblogComponent } from './microblog-component.js';
 import { idFromLocator } from './locator.js';
