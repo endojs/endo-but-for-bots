@@ -156,7 +156,13 @@ test.serial(
       '.inline-eval-codename-wrapper .inline-eval-codename',
     );
     t.truthy($codeName, 'confined code-name input in sub-mount');
-    // The @ is stripped from the source.
+    // The @ is stripped from the source. The strip runs on a separate async
+    // tick from the code-name sub-mount, so wait for it rather than asserting
+    // synchronously (otherwise the assertion races the strip on slow CI).
+    await waitFor(
+      () => $container.querySelector('.inline-eval-input').value === '',
+      { timeout: 500 },
+    );
     t.is(
       $container.querySelector('.inline-eval-input').value,
       '',
