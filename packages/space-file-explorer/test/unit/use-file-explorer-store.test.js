@@ -245,3 +245,37 @@ test.serial('setViewMode flips between columns and tree', async t => {
     ['sub'],
   );
 });
+
+test.serial(
+  'opening a file in columns mode collapses deeper columns and resets the drill path',
+  async t => {
+    const fs = makeMemoryFilesystem();
+    const root = await E(fs).root();
+    await E(root).mkdir('a', {});
+    await E(await E(root).lookup('a')).mkdir('b', {});
+    await createFile(root, 'note.txt');
+    await writeFileText(await E(root).lookup('note.txt'), 'hi\n');
+
+    const host = makeMockHost({ scratch: fs });
+    const handle = mountStore(host);
+    t.teardown(handle.teardown);
+
+    await waitFor(() => handle.store);
+    handle.store.actions.openFsCap('scratch', fs, 'filesystem', 'scratch');
+    await waitFor(() => handle.store.activeSource);
+    await waitFor(() => handle.store.state.columns[0].entries.length === 2);
+
+    // Drill into `a` — a second column appears and the drill path advances.
+    handle.store.actions.openDirInColumn(0, 'a');
+    await waitFor(() => handle.store.state.columns.length === 2);
+    t.deepEqual(handle.store.state.activePath, ['a']);
+
+    // Open the root-level file `note.txt` (parent column 0). The deeper `a`
+    // column must collapse and the drill path reset to the file's column.
+    handle.store.actions.openFile([], 'note.txt');
+    await waitFor(() => handle.store.state.selectedFile);
+    t.is(handle.store.state.columns.length, 1, 'deeper column collapsed');
+    t.deepEqual(handle.store.state.activePath, [], 'drill path reset');
+    t.is(handle.store.state.selectedFile.name, 'note.txt');
+  },
+);
