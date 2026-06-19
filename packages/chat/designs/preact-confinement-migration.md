@@ -300,13 +300,22 @@ Status: ☐ not started · ◐ in progress · ☑ done
 | help-modal | ☑ | Done — confined Preact leaf modal |
 | share-modal | ☑ | Done — confined Preact leaf modal |
 | scheme-picker | ☑ | Done — confined; keeps the `#scheme-picker-slot` embedding contract |
-| inline-eval / endow-modal / form-builder | ◐ | In progress — non-Monaco forms whose only child (`petname-path-autocomplete`) is done |
+| inline-eval | ☑ | Done — confined; endowment rows compose autocomplete as host-node controllers |
+| endow-modal | ☑ | Done — confined; definition-slot autocompletes host-embedded |
+| form-builder | ☑ | Done — confined; recipient autocomplete host-embedded |
+| inline-command-form | ◐ | In progress — composite; all children now converted |
+| define-form | ◐ | In progress — first Monaco-embedding form (establishes the host-node editor pattern) |
 | add-space-modal | ☐ | Batch B stage 2 — ~2000 lines; switch to `IconSelector`, then drop string `renderIconSelector` |
-| inline-command-form | ☐ | Unblocks once `inline-eval` lands |
-| chat-bar-component | ☐ | Blocked — composes many unconverted forms/modals |
+| chat-bar-component | ☐ | Blocked — still composes unconverted `eval-form`, `blob-viewer`, `command-executor` |
 | channel-component | ☐ | Dan's multiuser channel view; stays imperative DOM for now |
 | spaces-gutter / channel-header | ☐ | Larger composites, later |
-| Monaco-embedding forms | ☐ | `eval-form`, `define-form`, `blob-viewer`, `counter-proposal-form` — need host-node editor embedding (a live Monaco editor can't enter a confined tree) |
+| other Monaco forms | ☐ | `eval-form`, `blob-viewer`, `counter-proposal-form` — follow `define-form`'s host-node editor embedding once it lands |
+
+### Whylip Space (separate `@endo/whylip` package)
+
+| Component | Status | Notes |
+| --- | --- | --- |
+| whylip package | ◐ | In progress — porting React 19 + JSX → Preact `h()` (no JSX). New architecture: the package emits pure components (`WhylipApp`, no rendering), and chat's `whylip-component.js` mounts it through the **confined** renderer, so `SceneCanvas`'s untrusted model HTML is sanitized by `renderConfined`. |
 
 ## Recommended next migration
 
