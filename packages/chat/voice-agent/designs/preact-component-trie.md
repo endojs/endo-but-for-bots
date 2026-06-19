@@ -142,9 +142,14 @@ Implications that change the phases below:
   **component-as-project tree** scaffold (one mount point that renders a
   confined component, swappable at runtime); **port one real slice** of the
   current DOM app to prove the path end-to-end. No agent/sharing/trust yet.
-- **Phase 2 — component = git object.** Back each component-project with an
-  `exo-git` object (fork = branch/clone of a tree-oid; revert = checkout
-  lineage); runtime-swap a component by re-rendering a different tree.
+- **Phase 2 — the grain layer (DONE) + component = git object (next).** ✅ The
+  cell/propagator substrate (`client/propagator.js`) and the **TMS grain**
+  (`makeTmsCell`: provenance-tagged facts, believe/retract/forget worldviews,
+  `provenance`/`ledger`, non-destructive try-on + atomic accept/reject) are built
+  and proven (15/15). Remaining: back each component-project with an `exo-git`
+  object (fork = branch/clone of a tree-oid; revert = checkout lineage) and bind a
+  component's persisted data to grains, so a runtime swap re-renders a different
+  propagator-source tree while the grains persist.
 - **Phase 3 — alt-click micro-agent.** Selection overlay (Alt/Option hover +
   outline + select), per-component chat → a delegate confined to that
   component-project's git object + dev ring; fork → adversarial dev flow → diff

@@ -89,3 +89,75 @@ export const react = (inputs, effect) => {
   run();
   return () => disposers.forEach(d => d());
 };
+
+// ── makeTmsCell — a provenance-carrying data grain (Truth Maintenance) ───────────────────────────
+// A plain cell forgets WHO told it what. A TMS grain keeps every supported fact tagged with the
+// PREMISE that supplied it (a provenance tag: 'self', 'inviter:alice', 'invitee:bob', …). The believed
+// value is the most-recent fact whose premise is currently believed (in the "worldview"). This is what
+// lets a shared change be TRIED ON non-destructively and accepted/rejected ATOMICALLY:
+//   • a contribution arrives as a fact you do NOT yet believe → the displayed value is unchanged;
+//   • believe(premise)  → try it on (the grain now shows their value); a wired propagator re-paints;
+//   • retract(premise)  → reject — atomically revert to what you believed before (the fact is kept,
+//                         just disbelieved, so you can try it on again later);
+//   • forget(premise)   → drop the contribution entirely.
+// It satisfies the cell interface (read/hasContent/addContent/subscribe), so propagators wire to it
+// transparently — they just see the believed value. `provenance()`/`ledger()` expose WHO supplied the
+// believed value and the full audit trail — the accountability the social-collateral trust gate needs.
+export const SELF = 'self';
+export const makeTmsCell = (initiallyBelieved = [SELF]) => {
+  let facts = []; // [{ value, premise, seq }]
+  let seq = 0;
+  const believed = new Set(initiallyBelieved.map(String));
+  const subscribers = new Set();
+  let current = NOTHING;
+
+  const recompute = () => {
+    let best = NOTHING;
+    let bestSeq = -1;
+    for (const f of facts) if (believed.has(f.premise) && f.seq > bestSeq) { best = f.value; bestSeq = f.seq; }
+    return best;
+  };
+  const refresh = () => {
+    const next = recompute();
+    if (Object.is(next, current)) return;
+    current = next;
+    for (const fn of [...subscribers]) { try { fn(current); } catch { /* a bad neighbour can't wedge the net */ } }
+  };
+
+  const cell = {
+    // cell interface — propagators see only the believed value
+    read: () => current,
+    hasContent: () => current !== NOTHING,
+    addContent: value => cell.addFact(value, SELF, { believe: true }),
+    subscribe: fn => {
+      subscribers.add(fn);
+      if (current !== NOTHING) { try { fn(current); } catch { /* ignore */ } }
+      return () => subscribers.delete(fn);
+    },
+    // TMS / provenance
+    addFact: (value, premise = SELF, { believe = true } = {}) => {
+      seq += 1;
+      const p = String(premise);
+      facts.push({ value, premise: p, seq });
+      if (believe) believed.add(p);
+      refresh();
+      return { premise: p, seq };
+    },
+    believe: premise => { const p = String(premise); if (!believed.has(p)) { believed.add(p); refresh(); } }, // try-on / accept
+    retract: premise => { if (believed.delete(String(premise))) refresh(); },                                  // reject (fact kept, disbelieved)
+    forget: premise => { const p = String(premise); facts = facts.filter(f => f.premise !== p); believed.delete(p); refresh(); },
+    worldview: () => new Set(believed),
+    setWorldview: premises => { believed.clear(); for (const p of premises) believed.add(String(p)); refresh(); },
+    // who supplies the believed value; un-believed contributions awaiting try-on; the full audit trail
+    provenance: () => { let best = null; let bestSeq = -1; for (const f of facts) if (believed.has(f.premise) && f.seq > bestSeq) { best = f; bestSeq = f.seq; } return best ? best.premise : null; },
+    proposals: () => facts.filter(f => !believed.has(f.premise)).map(f => ({ premise: f.premise, value: f.value })),
+    ledger: () => facts.map(f => ({ value: f.value, premise: f.premise, seq: f.seq, believed: believed.has(f.premise) })),
+    // flag when distinct believed premises disagree on a value, so the UI can surface a real conflict
+    contradiction: () => {
+      const top = {};
+      for (const f of facts) if (believed.has(f.premise)) top[f.premise] = f.value;
+      return new Set(Object.values(top)).size > 1;
+    },
+  };
+  return cell;
+};

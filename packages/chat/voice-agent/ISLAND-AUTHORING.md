@@ -42,6 +42,27 @@ a.addContent(10);                            // sum re-computes → 14   (re-del
 react([sum], v => console.log('sum is', v)); // a side-effecting propagator (e.g. a render)
 ```
 
+## Shared / proposed data → use a TMS grain (provenance)
+
+For any data another participant can contribute to (a shared page, a proposed edit), use a **TMS grain**
+`makeTmsCell()` instead of a plain cell. It tags every fact with the **premise** that supplied it (who),
+so a contribution can be **tried on as a worldview** and **accepted/rejected atomically** — non-destructively.
+
+```js
+import { makeTmsCell } from './propagator.js';
+const title = makeTmsCell();                              // believes ['self'] by default
+title.addContent('my title');                            // self fact → believed
+title.addFact("Bob's title", 'invitee:bob', { believe:false }); // recorded, NOT shown yet
+title.proposals();        // → [{ premise:'invitee:bob', value:"Bob's title" }]  (awaiting try-on)
+title.believe('invitee:bob');  // TRY ON → read() is now Bob's; wired propagators re-paint
+title.retract('invitee:bob');  // REJECT → atomically reverts; the fact is kept (re-tryable)
+title.provenance();       // who supplies the believed value;  title.ledger() = full audit trail
+```
+
+`read`/`subscribe` see only the **believed** value, so propagators wire to a TMS grain unchanged.
+`provenance()`/`ledger()` are the accountability the social-collateral distribution gate needs (who
+supplied what). `contradiction()` flags when two believed premises disagree.
+
 ## Rendering — always confined, never the live DOM
 
 Render only through `renderConfined(vnode, el)` from `@endo/preact-container/renderer` (re-render by
