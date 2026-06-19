@@ -238,7 +238,7 @@ const confirmCanBeByteArray = candidate => {
     return /** @type {boolean} */ (apply(immutableGetter, candidate, []));
   }
   if (candidate instanceof Uint8Array) {
-    const buffer = candidate.buffer;
+    const { buffer } = candidate;
     return (
       buffer instanceof ArrayBuffer &&
       /** @type {boolean} */ (apply(immutableGetter, buffer, []))
