@@ -615,3 +615,35 @@ exists, the input value changed). Do **not** introduce a timeout ceiling on the
 poll — let AVA's global per-test timeout be the only bound, so the wait is as
 short as the machine allows and a genuine hang still fails the test with a clear
 timeout rather than passing on a guessed delay.
+
+## Review follow-ups from the readiness pass (deferred)
+
+The PR readiness review (kumavis UA comment plus the subagent/kriscendobot
+panel) surfaced items beyond the confinement migration itself. The ones fixed in
+this PR: the edit-space modal container collision, the cold-cache author names
+in the channel and forum bodies, the own-peer border, the dead DOM-era fields,
+and the two-tags-per-line JSDoc. The remainder are deferred and tracked here.
+
+- **UA #3 — buffered streaming of inventory/messages.** Render incrementally
+  from a bounded buffer rather than awaiting the full backlog. A perf/UX
+  enhancement orthogonal to confinement; needs its own design for backpressure
+  and ordering.
+- **UA #4 — per-mailbox streaming.** Stream each mailbox independently instead
+  of one combined feed. Depends on the #3 buffering model.
+- **UA #5 — file-explorer git-tree column continuation.** Selecting a git tree
+  object (`openGitEntry`) opens it as a new source and resets the Miller columns
+  to the top instead of continuing the nested column chain. A git entry is a
+  distinct filesystem (a worktree mount), so `buildColumns` — which walks one
+  source filesystem by repeated `lookup` along `activePath` — cannot currently
+  span the source boundary. Continuing the chain requires the column model to
+  carry a per-column filesystem (or a source-stitching path segment) so a column
+  can switch filesystems mid-path. This is an architectural change to the
+  source/column model, not a contained fix, and the current behavior predates
+  the confinement migration. Defer until the column model is reworked.
+- **UA #6 — always-present Spaces bar + removing the back buttons.** A layout
+  change to `chat.js`/`spaces-gutter`, both frozen for the incoming imperative
+  -Space PR. Resume after that PR lands (see "Deferred — frozen" above).
+- **Review MEDIUMs.** Watcher churn (the inventory/space watchers re-subscribe
+  more than necessary) and code-fence placeholder counting in the markdown
+  -to-vnodes path (placeholders inside fenced code can be miscounted). Both are
+  correctness-adjacent polish, not migration blockers.
