@@ -88,11 +88,7 @@ export const classifyCapability = async cap => {
     return 'layer';
   }
   // An `@endo/exo-git` cap — browsable through its writable worktree.
-  if (
-    names.has('worktree') &&
-    names.has('status') &&
-    names.has('commit')
-  ) {
+  if (names.has('worktree') && names.has('status') && names.has('commit')) {
     return 'git';
   }
   if (names.has('root') && names.has('statfs')) {
@@ -291,11 +287,7 @@ const probeMountChildType = async cap => {
     const names = new Set(methods);
     if (names.has('lookup')) return 'directory';
     if (names.has('text') || names.has('streamBase64')) return 'file';
-    if (
-      names.has('worktree') &&
-      names.has('status') &&
-      names.has('commit')
-    ) {
+    if (names.has('worktree') && names.has('status') && names.has('commit')) {
       return 'git';
     }
   } catch {
