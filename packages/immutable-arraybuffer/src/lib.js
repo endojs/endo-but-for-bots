@@ -573,13 +573,22 @@ const amplifyTypedArray = typedArray => {
  * it returns the immutable ArrayBuffer wrapper via `reverseBuffers`. Otherwise
  * it delegates to the captured genuine `%TypedArrayPrototype%.buffer` getter.
  *
- * Exported as a `const` (function expression) rather than a `function`
- * declaration to avoid JavaScript function-declaration hoisting.
- * In the presence of an import cycle, a hoisted function declaration's value
- * is available to an importing module before the exporting module finishes
- * initializing, which can expose uninitialized state.
- * The JavaScript standard says that a `const` binding in such a cycle would
- * produce a Temporal Dead Zone (TDZ) error for the early importer instead.
+ * Declared via concise method syntax (inside a temporary object literal) rather
+ * than a `function` declaration or `function`-keyword expression. A
+ * `function`-keyword function has both `[[Construct]]` and `[[Call]]` behaviors
+ * (callable with `new`) and an irrelevant `prototype` property pointing at an
+ * extra object, so `freeze` of such a function is not equivalent to `harden`
+ * and leaves behind hazardous mutability. An arrow function cannot be used
+ * here because this getter must be `this`-sensitive. Concise method syntax
+ * avoids both problems: the method has only `[[Call]]`, no `prototype`
+ * property, and no `[[Construct]]`.
+ *
+ * The surrounding `const` binding avoids JavaScript function-declaration
+ * hoisting. In the presence of an import cycle a hoisted function
+ * declaration's value is available to an importing module before the exporting
+ * module finishes initializing, which can expose uninitialized state. A `const`
+ * binding produces a Temporal Dead Zone (TDZ) error for the early importer
+ * instead.
  * Note: the ses-shim's compiler from JS ESM module code to JS evaluable code
  * does not implement TDZ correctly, so this cycle hazard may not be caught at
  * runtime under ses-shim.
@@ -588,25 +597,32 @@ const amplifyTypedArray = typedArray => {
  * This particular PR introduces no such import cycle; the note is for future
  * maintainers.
  * See the README section "Function expressions versus declarations" for full
- * context (erights review comment 3439479281).
+ * context (erights review comments 3439479281, 3439500526).
  *
  * @type {(this: object) => ArrayBuffer}
  */
-const virtualTypedArrayBufferGetter = function virtualTypedArrayBufferGetter() {
-  const genuineTA = apply(weakmapGet, hiddenTypedArrays, [this]);
-  if (genuineTA !== undefined) {
-    // The hidden genuine TypedArray's buffer is the genuine backing buffer.
-    const genuineAB = apply(typedArrayBufferGetter, genuineTA, []);
-    // Return the immutable wrapper (reverseBuffers maps genuine -> wrapper).
-    const immutableWrapper = apply(weakmapGet, reverseBuffers, [genuineAB]);
-    if (immutableWrapper !== undefined) {
-      return immutableWrapper;
+const taGetters = {
+  get buffer() {
+    const genuineTA = apply(weakmapGet, hiddenTypedArrays, [this]);
+    if (genuineTA !== undefined) {
+      // The hidden genuine TypedArray's buffer is the genuine backing buffer.
+      const genuineAB = apply(typedArrayBufferGetter, genuineTA, []);
+      // Return the immutable wrapper (reverseBuffers maps genuine -> wrapper).
+      const immutableWrapper = apply(weakmapGet, reverseBuffers, [genuineAB]);
+      if (immutableWrapper !== undefined) {
+        return immutableWrapper;
+      }
+      return genuineAB;
     }
-    return genuineAB;
-  }
-  // Fallthrough: delegate to the genuine getter.
-  return apply(typedArrayBufferGetter, this, []);
+    // Fallthrough: delegate to the genuine getter.
+    return apply(typedArrayBufferGetter, this, []);
+  },
 };
+
+const { get: virtualTypedArrayBufferGetter } = getOwnPropertyDescriptor(
+  taGetters,
+  'buffer',
+);
 
 /**
  * Factory for per-flavor pseudo-constructors. Each pseudo-constructor replaces
