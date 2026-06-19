@@ -257,3 +257,27 @@ test('shim: Object.getPrototypeOf(view) === Uint8Array.prototype on an emulated 
   const view = new Uint8Array(iab);
   t.is(getPrototypeOf(view), Uint8Array.prototype);
 });
+
+// ---------------------------------------------------------------------------
+// Subclassing limitation (Out of scope per design)
+// ---------------------------------------------------------------------------
+
+test('shim: subclassing an emulated freezable TypedArray is not supported; new MyArr(iab) instanceof MyArr === false', t => {
+  // Per designs/freezable-typedarray.md § Out of scope: "Subclass support.
+  // The pseudo-constructor throws if new.target !== PseudoTypedArray on the
+  // emulated-immutable branch; subclassing an emulated freezable TypedArray
+  // is not supported."
+  // This test pins the subclassing limitation so future refactors cannot
+  // accidentally extend support without deliberate intent.
+  class MyArr extends Uint8Array {}
+  const iab = new ArrayBuffer(4).sliceToImmutable();
+
+  // Constructing a subclass from an immutable ArrayBuffer falls through to
+  // the genuine Uint8Array constructor (new.target !== PseudoTypedArray),
+  // which produces an ordinary TypedArray view whose prototype is
+  // MyArr.prototype — not an emulated freezable wrapper.
+  // The result is therefore NOT instanceof MyArr as a freezable wrapper;
+  // the subclass story for emulated freezable views is explicitly unsupported.
+  const result = new MyArr(iab);
+  t.false(result instanceof MyArr);
+});
