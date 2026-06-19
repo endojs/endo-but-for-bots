@@ -944,10 +944,7 @@ export const forumComponent = async (
 
     // Record the message in the index. The forum re-renders the full tree on
     // each update, so we just need the data in messageIndex.
-    messageIndex.set(msgKey, {
-      message: typedMessage,
-      $element: document.createElement('div'),
-    });
+    messageIndex.set(msgKey, { message: typedMessage });
 
     // Track reacts
     reactSystem.processReactMessage(typedMessage, msgKey);
