@@ -9432,7 +9432,8 @@ button.btn-spinner::after {
   color: #fff;
 }
 
-.fx-source-select {
+.fx-source-select,
+.fx-git-ref {
   font: inherit;
   font-size: 12px;
   padding: 5px 8px;
