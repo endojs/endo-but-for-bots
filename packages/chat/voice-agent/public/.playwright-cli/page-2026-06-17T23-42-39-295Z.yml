@@ -1,0 +1,25 @@
+- generic [active] [ref=e1]:
+  - complementary [ref=e2]:
+    - generic [ref=e3]:
+      - generic [ref=e4]: Chats
+      - generic [ref=e5]:
+        - button "+ New" [ref=e6] [cursor=pointer]
+        - button "✕" [ref=e7] [cursor=pointer]
+  - generic [ref=e10]:
+    - banner [ref=e11]:
+      - button "☰" [ref=e12] [cursor=pointer]
+      - button "✏️" [ref=e13] [cursor=pointer]
+      - heading "🗣️ Agent C" [level=1] [ref=e14]
+      - generic [ref=e15]: no link
+      - button "Talk" [ref=e16] [cursor=pointer]
+      - button "Shares" [ref=e17] [cursor=pointer]
+      - button "🔔" [ref=e18] [cursor=pointer]
+      - button "🕐" [ref=e19] [cursor=pointer]
+      - button "🔗" [ref=e20] [cursor=pointer]
+      - button "🪝" [ref=e21] [cursor=pointer]
+      - button "🧊" [ref=e22] [cursor=pointer]
+    - main [ref=e23]:
+      - generic [ref=e24]:
+        - text: No capability in this link. Open the app with your
+        - code [ref=e25]: "#cap=…"
+        - text: link — your root link, or a share someone sent you. Without a cap the agent has no powers.

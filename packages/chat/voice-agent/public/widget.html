@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="color-scheme" content="dark" />
+<title>Capability Widget</title>
+<!--
+  AI AGENT? This is a stateless embeddable SPWA. A host page embeds it in an <iframe> and hands it a
+  capability over a postMessage cap-channel (see /cap-channel.js serveCapBootstrap). The widget reaches
+  ONLY the bootstrap methods it was handed — that IS its authority. No swissnum is ever in this page.
+-->
+<script type="application/json" id="agent-manifest">
+{
+  "kind": "endo-spwa-widget",
+  "service": "A dual-purpose capability widget. STANDALONE: open with a cap in the URL (#cap=… preferred, ?cap=… also accepted) and it drives /chat /skill /rpc itself. EMBEDDED: a host <iframe>'s it and hands it a cap over CapTP-over-postMessage. Either way it holds exactly the granted powers.",
+  "transport": "Standalone: read cap from location.hash (#cap=) or query (?cap=), strip it from the bar, call the relay. Embedded: listen for a parent postMessage {t:'__capport'} carrying a MessagePort; makeCapChannel(port) → a `remote` proxy. The port IS the authority; no ambient parent access.",
+  "bootstrap": { "skill()": "→ {kind,powers,methods,wire} — the endowment you were granted", "ask(text)": "→ {answer,toolsUsed} — converse with the agent under this grant", "rpc(method,args)": "→ delegate/introspect the cap" }
+}
+</script>
+<style>
+  :root { --bg:#0d1117; --panel:#161b22; --edge:#30363d; --ink:#e6edf3; --mut:#8b949e; --acc:#7c5cff; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; padding:14px; }
+  h1 { font-size:15px; margin:0 0 2px; }
+  .dim { color:var(--mut); }
+  #status { font-size:12px; color:var(--mut); margin-bottom:8px; }
+  #powers { display:flex; flex-wrap:wrap; gap:5px; margin-bottom:12px; }
+  .chip { font-size:11px; border:1px solid var(--edge); background:var(--panel); color:var(--ink); border-radius:6px; padding:2px 7px; }
+  .row { display:flex; gap:6px; }
+  input { flex:1; background:var(--panel); border:1px solid var(--edge); color:var(--ink); border-radius:7px; padding:8px; font:inherit; }
+  button { background:var(--acc); border:1px solid var(--acc); color:#fff; border-radius:7px; padding:8px 12px; cursor:pointer; font:inherit; }
+  #out { white-space:pre-wrap; margin-top:10px; background:var(--panel); border:1px solid var(--edge); border-radius:8px; padding:10px; min-height:32px; }
+</style>
+</head>
+<body>
+  <h1>🧩 Capability widget</h1>
+  <div id="status">connecting…</div>
+  <div class="dim" style="font-size:11px;margin-bottom:4px">granted powers (from skill()):</div>
+  <div id="powers"></div>
+  <div class="row"><input id="q" placeholder="ask the agent (uses only the granted powers)…" /><button id="send">Ask</button></div>
+  <div id="out"></div>
+  <script src="/widget.js" type="module"></script>
+</body>
+</html>

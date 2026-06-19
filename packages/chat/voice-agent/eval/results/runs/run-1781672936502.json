@@ -1,0 +1,94 @@
+{
+  "id": "run-1781672936502",
+  "arch": "arch-0000",
+  "model": "default",
+  "at": "2026-06-17T05:08:56.502Z",
+  "passRate": 1,
+  "cells": [
+    {
+      "obstacle": "07-capability-attenuation",
+      "arch": "arch-0000",
+      "model": "default",
+      "repeats": 3,
+      "passes": 3,
+      "passRate": 1,
+      "passed": true,
+      "wallMs": 21,
+      "detail": {
+        "passed": true,
+        "checks": [
+          {
+            "name": "root holds a broad power set",
+            "pass": true,
+            "detail": "25 powers"
+          },
+          {
+            "name": "share() resolves to a child node",
+            "pass": true,
+            "detail": ""
+          },
+          {
+            "name": "child attenuated to exactly [reference]",
+            "pass": true,
+            "detail": "[\"reference\"]"
+          },
+          {
+            "name": "child lacks editNote (a destructive power the root holds)",
+            "pass": true,
+            "detail": ""
+          },
+          {
+            "name": "revoke() reports revoked:true",
+            "pass": true,
+            "detail": ""
+          },
+          {
+            "name": "revoked swissnum no longer resolves (cap is dead)",
+            "pass": true,
+            "detail": ""
+          },
+          {
+            "name": "read-only facet: get works",
+            "pass": true,
+            "detail": ""
+          },
+          {
+            "name": "read-only facet: put throws + state unchanged",
+            "pass": true,
+            "detail": ""
+          }
+        ]
+      }
+    },
+    {
+      "obstacle": "08-orchestration-coverage",
+      "arch": "arch-0000",
+      "model": "default",
+      "repeats": 3,
+      "passes": 3,
+      "passRate": 1,
+      "passed": true,
+      "wallMs": 1,
+      "detail": {
+        "passed": true,
+        "checks": [
+          {
+            "name": "tool-ring grants 'reference' (needed for a cited reference lookup)",
+            "pass": true,
+            "detail": "reference,web,notes,images,feed,delegate,timers,phone"
+          },
+          {
+            "name": "tool-ring grants 'web' (needed for a cited reference lookup)",
+            "pass": true,
+            "detail": "reference,web,notes,images,feed,delegate,timers,phone"
+          },
+          {
+            "name": "a role capable of the task is available",
+            "pass": true,
+            "detail": "\"all\""
+          }
+        ]
+      }
+    }
+  ]
+}

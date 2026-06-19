@@ -1,0 +1,94 @@
+{
+  "id": "run-arch-min-ref-90d91738d4ec",
+  "arch": "arch-min-ref",
+  "model": "gemma-altseed",
+  "at": "2026-06-17T05:10:25.810Z",
+  "passRate": 0.5,
+  "cells": [
+    {
+      "obstacle": "07-capability-attenuation",
+      "arch": "arch-min-ref",
+      "model": "gemma-altseed",
+      "repeats": 3,
+      "passes": 3,
+      "passRate": 1,
+      "passed": true,
+      "wallMs": 9,
+      "detail": {
+        "passed": true,
+        "checks": [
+          {
+            "name": "root holds a broad power set",
+            "pass": true,
+            "detail": "25 powers"
+          },
+          {
+            "name": "share() resolves to a child node",
+            "pass": true,
+            "detail": ""
+          },
+          {
+            "name": "child attenuated to exactly [reference]",
+            "pass": true,
+            "detail": "[\"reference\"]"
+          },
+          {
+            "name": "child lacks editNote (a destructive power the root holds)",
+            "pass": true,
+            "detail": ""
+          },
+          {
+            "name": "revoke() reports revoked:true",
+            "pass": true,
+            "detail": ""
+          },
+          {
+            "name": "revoked swissnum no longer resolves (cap is dead)",
+            "pass": true,
+            "detail": ""
+          },
+          {
+            "name": "read-only facet: get works",
+            "pass": true,
+            "detail": ""
+          },
+          {
+            "name": "read-only facet: put throws + state unchanged",
+            "pass": true,
+            "detail": ""
+          }
+        ]
+      }
+    },
+    {
+      "obstacle": "08-orchestration-coverage",
+      "arch": "arch-min-ref",
+      "model": "gemma-altseed",
+      "repeats": 3,
+      "passes": 0,
+      "passRate": 0,
+      "passed": false,
+      "wallMs": 1,
+      "detail": {
+        "passed": false,
+        "checks": [
+          {
+            "name": "tool-ring grants 'reference' (needed for a cited reference lookup)",
+            "pass": true,
+            "detail": "reference,notes"
+          },
+          {
+            "name": "tool-ring grants 'web' (needed for a cited reference lookup)",
+            "pass": false,
+            "detail": "reference,notes"
+          },
+          {
+            "name": "a role capable of the task is available",
+            "pass": true,
+            "detail": "[\"orchestrator\",\"reference\"]"
+          }
+        ]
+      }
+    }
+  ]
+}

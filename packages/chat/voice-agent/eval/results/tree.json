@@ -1,0 +1,120 @@
+{
+  "archs": {
+    "arch-0000": {
+      "id": "arch-0000",
+      "label": "baseline (shipped harness)",
+      "config": {
+        "rolesAvailable": "all",
+        "toolRing": "full",
+        "promptVariant": "default",
+        "maxSteps": 12,
+        "model": "per-chat"
+      },
+      "digest": "3261393a6089",
+      "parent": null,
+      "createdAt": "2026-06-17T04:05:17.125Z",
+      "runs": [
+        {
+          "id": "run-1781669117232",
+          "model": "default",
+          "passRate": 0,
+          "at": "2026-06-17T04:05:17.232Z"
+        },
+        {
+          "id": "run-1781669171595",
+          "model": "default",
+          "passRate": 1,
+          "at": "2026-06-17T04:06:11.595Z"
+        },
+        {
+          "id": "run-1781672075519",
+          "model": "default",
+          "passRate": 1,
+          "at": "2026-06-17T04:54:35.520Z"
+        },
+        {
+          "id": "run-arch-0000-3261393a6089",
+          "model": "default",
+          "passRate": 1,
+          "at": "2026-06-17T05:08:56.173Z"
+        },
+        {
+          "id": "run-1781672936502",
+          "model": "default",
+          "passRate": 1,
+          "at": "2026-06-17T05:08:56.502Z"
+        },
+        {
+          "id": "run-arch-0000-3261393a6089",
+          "model": "default",
+          "passRate": 1,
+          "at": "2026-06-17T05:10:25.777Z"
+        },
+        {
+          "id": "run-arch-0000-3261393a6089",
+          "model": "gemma",
+          "passRate": 1,
+          "at": "2026-06-17T05:10:25.777Z"
+        },
+        {
+          "id": "run-arch-0000-3261393a6089",
+          "model": "gemma-altseed",
+          "passRate": 1,
+          "at": "2026-06-17T05:10:25.819Z"
+        },
+        {
+          "id": "run-1781676571854",
+          "model": "vibethinker-3b",
+          "passRate": 1,
+          "at": "2026-06-17T06:09:31.854Z"
+        }
+      ]
+    },
+    "arch-min-ref": {
+      "id": "arch-min-ref",
+      "label": "arch-min-ref (terse/reference+notes)",
+      "config": {
+        "rolesAvailable": [
+          "orchestrator",
+          "reference"
+        ],
+        "toolRing": [
+          "reference",
+          "notes"
+        ],
+        "promptVariant": "terse",
+        "maxSteps": 12,
+        "model": "per-chat"
+      },
+      "digest": "90d91738d4ec",
+      "parent": "arch-0000",
+      "createdAt": "2026-06-17T05:08:56.174Z",
+      "runs": [
+        {
+          "id": "run-arch-min-ref-90d91738d4ec",
+          "model": "default",
+          "passRate": 0.5,
+          "at": "2026-06-17T05:08:56.185Z"
+        },
+        {
+          "id": "run-arch-min-ref-90d91738d4ec",
+          "model": "default",
+          "passRate": 0.5,
+          "at": "2026-06-17T05:10:25.798Z"
+        },
+        {
+          "id": "run-arch-min-ref-90d91738d4ec",
+          "model": "gemma",
+          "passRate": 0.5,
+          "at": "2026-06-17T05:10:25.799Z"
+        },
+        {
+          "id": "run-arch-min-ref-90d91738d4ec",
+          "model": "gemma-altseed",
+          "passRate": 0.5,
+          "at": "2026-06-17T05:10:25.810Z"
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "at": "2026-06-17T05:10:25.799Z",
+  "model": "default",
+  "scored": [
+    {
+      "archId": "arch-0000",
+      "digest": "3261393a6089",
+      "passRate": 1
+    },
+    {
+      "archId": "arch-min-ref",
+      "digest": "90d91738d4ec",
+      "passRate": 0.5
+    }
+  ]
+}

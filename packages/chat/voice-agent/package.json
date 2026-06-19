@@ -1,0 +1,18 @@
+{
+  "name": "@endo/field-voice-agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Field agent (Agent C) — voice/text Endo-capability chat platform. Server is plain node ESM; the client is incrementally migrating to confined-Preact islands (see designs/preact-component-trie.md).",
+  "scripts": {
+    "build:islands": "vite build --config vite.islands.config.js"
+  },
+  "dependencies": {
+    "@endo/preact-container": "workspace:^",
+    "preact": "^10.29.2",
+    "ses": "workspace:^"
+  },
+  "devDependencies": {
+    "vite": "^6.0.0"
+  }
+}

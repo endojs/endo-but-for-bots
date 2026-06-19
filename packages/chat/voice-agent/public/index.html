@@ -1,0 +1,500 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content" />
+<meta name="theme-color" content="#0d1117" />
+<meta name="color-scheme" content="dark" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="Agent C" />
+<title>Agent C</title>
+<!--
+  AI AGENT? You were handed a capability invite link to this voice/text agent. The hex after
+  '#cap=' in your URL is the entire credential — holding it is the permission. You can talk to
+  the agent over /chat and manage delegations over /rpc headlessly (no browser); see the
+  machine-readable manifest in <script id="agent-manifest"> below. The server never sees the
+  URL fragment, so read the swissnum from your own link and send it on every call.
+-->
+<script type="application/json" id="agent-manifest">
+{
+  "kind": "endo-spwa-capability",
+  "service": "Agent C — a voice/text agent whose authority is a bundle of object capabilities (read personal notes, consult library+Wikipedia, fetch a web page, generate images, post to the daily feed, push a phone notification, delegate a task to a larger Opus agent). Each power is attenuable + revocable.",
+  "forAgents": "If you hold an invite link to this page, you can converse with the agent and mint/revoke sub-delegations headlessly via the RPC below.",
+  "capabilityModel": {
+    "summary": "Object-capability (ocap). The unguessable token after '#cap=' in your invite URL is the credential. No accounts. The bundle you reach is exactly the powers your cap holds — a 'root' cap holds all; a 'share' cap holds ONE power.",
+    "swissnumLocation": "The hex string after '#cap=' in your invite URL. The server never receives the fragment, so parse it yourself and pass it as 'cap' (to /chat) or 'swissnum' (to /rpc).",
+    "confinement": "Correct by lexical construction: the agent (and any Opus sub-agent it delegates to) can ONLY invoke the tools in the bundle its cap resolves to. There is no name reachable for a power not granted.",
+    "attenuation": "share(power, name) mints a NEW cap holding ONLY that one power, independently revocable. A share cap can re-share only the single power it holds (monotonic delegation)."
+  },
+  "talk": {
+    "endpoint": "POST {origin}/chat",
+    "requestBody": { "sessionId": "<your stable id>", "text": "<what you say>", "cap": "<hex from your #cap=>", "attachments (optional)": [{ "kind": "image|text|file", "name": "<filename>", "mediaType": "image/jpeg", "url": "data:<mime>;base64,… (for kind=image or kind=file)", "text": "<inline text, for kind=text>" }] },
+    "attachments": "Attach images/files to a turn. Images are sent to the (multimodal) agent as inline vision input — it SEES them directly; no tool needed; echoed back as web-key'd /uploads/<hex> URLs. kind='file' (any type) + kind='text' are dropped into the agent's own home folder (its project's shared folder if the chat is filed under one) — the agent can fileList/fileRead/fileWrite/move them as its own files.",
+    "successResponse": { "answer": "<spoken reply>", "toolsUsed": ["<tool names>"], "images": ["data:image/png;base64,…"], "attachments": [{ "kind": "image", "url": "/uploads/<hex>.jpg" }] },
+    "noCap": "Omitting/!cap → 403: the agent runs with NO powers. The cap IS the authority."
+  },
+  "rpc": {
+    "endpoint": "POST {origin}/rpc",
+    "requestBody": { "swissnum": "<hex from your #cap=>", "method": "<methodName>", "args": ["<positional args>"] },
+    "successResponse": { "ok": true, "result": "<json>" },
+    "introspection": "On your cap call method 'describe' (→ {kind, powers, canMint}) or 'help'."
+  },
+  "methods": {
+    "any cap": {
+      "describe()": "→ {kind:'root'|'share', label, powers:[{name,label}], canMint:[power…]}",
+      "share(power, name)": "DELEGATE — mint a named, revocable invite link granting ONE power you hold → {power, label, swiss, url}. result.url is the new invite link to hand to another agent.",
+      "listShares()": "→ [{swiss, power, label, createdAt, url}]",
+      "revoke(swiss)": "→ {revoked:boolean} — kills a delegated sub-cap immediately",
+      "help()": "→ string"
+    }
+  },
+  "tools (over /chat, gated by the powers your cap holds)": {
+    "searchNotes/readNote": "read dan's personal Obsidian vault (read-only)",
+    "consult": "ask the little-free-library (Project Gutenberg) + local Wikipedia (read-only)",
+    "fetchUrl": "fetch + summarize one public web page (SSRF-guarded, read-only)",
+    "transcribeYoutube": "fetch a YouTube video's transcript/captions (read-only, YouTube hosts only)",
+    "generateImage": "generate an image on the GPU (abortable)",
+    "pushFeed": "post an item to dan's daily dashboard feed",
+    "pushPhone": "push a notification to dan's phone",
+    "scheduleWakeup/repeatEvery/cancelTimer/listTimers": "schedule durable wake-ups/reminders + intervals (fire as a phone push; cannot run shell commands)",
+    "delegateTask": "hand a task to a larger Opus agent, granting it ONLY a named subset of your powers",
+    "createInvite": "mint a named share link for one of your powers (shown only in the Shares panel, never spoken)"
+  },
+  "delegateHeadlessly": "POST /rpc share('name-for-recipient', '<power>') → take result.url and give it to another agent as their invite link; revoke(result.swiss) any time.",
+  "thisEndowment": "POST {origin}/skill {cap}  (or {token} from a #chatshare link) → your EXACT powers + the callable method catalog ([{name,args,description}]) + the wire to call them. CALL THIS FIRST: this specific chat's endowment may be a confined SUBSET, not all powers — /skill is how you learn the skill you've actually been granted.",
+  "sharedChat": "A '#chatshare=<token>' URL is a LIVE shared room (the token after #chatshare= is the access). POST {origin}/share/open {token} → {title, tx, len, mode, endowment:{powers, methods, write}}. If mode==='write', POST {origin}/share/post {token, text} to drive the agent — it runs with the chat's confined powers (metered by any attached allowance). It is one canonical transcript (pass-by-reference): every holder + the owner post to + read the SAME rec.tx. POLL for others' turns with POST /share/open {token, since:<len you last saw>} → {tx:[only newer turns], len}. No account/cap needed; the link IS the access.",
+  "attenuatedSubChat": "POST {origin}/subchat {cap, powers:[…], title} → mint a CHILD chat-cap holding only a SUBSET of the powers you hold (monotonic — you can't grant what you lack). result.scopedCap is the child's cap; hand it on or open {origin}/#cap=<scopedCap>.",
+  "humanAffordances": "The mic, the Shares panel, copy/QR buttons, and rendered images are for humans; agents use /chat, /rpc, /skill, /share, /subchat directly."
+}
+</script>
+<style>
+  :root { --bg:#0d1117; --panel:#161b22; --edge:#30363d; --ink:#e6edf3; --mut:#8b949e; --acc:#7c5cff; --acc2:#2ea043; --bad:#f85149; --you:#1f6feb; }
+  * { box-sizing:border-box; }
+  /* full-bleed on notched phones: viewport-fit=cover lets content reach the edges; the
+     background behind the safe-area insets is the dark bg, and the fixed chrome (header/composer)
+     pads itself out of the notch + home-indicator via env(safe-area-inset-*). */
+  html { background:var(--bg); }
+  body { margin:0; background:var(--bg); color:var(--ink); font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; }
+  header { position:sticky; top:0; z-index:30; background:var(--bg); padding:max(16px,env(safe-area-inset-top)) max(20px,env(safe-area-inset-right)) 16px max(20px,env(safe-area-inset-left)); border-bottom:1px solid var(--edge); display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+  h1 { font-size:19px; margin:0; }
+  .sub { color:var(--mut); font-size:13px; flex:1; min-width:120px; }
+  button.tab { padding:6px 12px; border-radius:8px; border:1px solid var(--edge); background:transparent; color:var(--mut); cursor:pointer; font-size:13px; }
+  button.tab.on { background:var(--acc); border-color:var(--acc); color:#fff; }
+  .hdr-sel { background:var(--panel); border:1px solid var(--edge); color:var(--ink); border-radius:7px; padding:4px 7px; font-size:12px; max-width:140px; cursor:pointer; }
+  /* prepaid inference budget chip (toll-bridge): this conversation's remaining allowance */
+  .budget-chip { background:var(--panel); border:1px solid var(--edge); color:var(--mut); border-radius:7px; padding:4px 8px; font-size:12px; cursor:pointer; white-space:nowrap; }
+  .budget-chip:hover { color:var(--ink); border-color:var(--acc); }
+  .budget-chip.low { color:var(--bad); border-color:#5a2a2a; }
+  main { max-width:960px; margin:0 auto; padding:18px max(18px,env(safe-area-inset-right)) 18px max(18px,env(safe-area-inset-left)); }
+  #log { display:flex; flex-direction:column; gap:10px; margin-bottom:calc(96px + env(safe-area-inset-bottom)); }
+  .msg { background:var(--panel); border:1px solid var(--edge); border-radius:12px; padding:10px 13px; max-width:88%; align-self:flex-start; }
+  .msg.user { align-self:flex-end; background:#11243f; border-color:#1f3b63; }
+  .who { font-size:11px; color:var(--mut); text-transform:uppercase; letter-spacing:.4px; margin-bottom:3px; }
+  .body img { max-width:100%; border-radius:8px; margin-top:8px; border:1px solid var(--edge); }
+  .body a, .dev-thread-msg a { color:var(--acc); text-decoration:underline; text-underline-offset:2px; word-break:break-word; }
+  .body a:hover, .dev-thread-msg a:hover { color:var(--ink); }
+  .tools { font-size:12px; color:var(--acc); margin-top:6px; }
+  /* E6: persistent per-response trace strip — full-width neon flow of the turn's tool calls */
+  .trace-strip { width:100%; align-self:stretch; max-width:100%; display:flex; flex-wrap:wrap; gap:6px; align-items:center; padding:6px 2px 2px; margin:2px 0 -2px; cursor:pointer; }
+  .trace-strip .ts-label { font-size:10px; color:var(--mut); letter-spacing:.5px; text-transform:uppercase; margin-right:2px; }
+  .trace-strip .tn { font-size:11px; color:var(--acc); border:1px solid #7c5cff55; background:#7c5cff14; border-radius:7px; padding:2px 8px; white-space:nowrap; box-shadow:0 0 6px #7c5cff22; font-family:ui-monospace,Menlo,monospace; }
+  .trace-strip .tn.bad { color:var(--bad); border-color:#f8514955; background:#f8514914; box-shadow:0 0 6px #f8514922; }
+  .trace-strip:hover .tn { box-shadow:0 0 10px #7c5cff44; }
+  /* hamburger + chats drawer */
+  .iconbtn { background:transparent; border:none; color:var(--ink); font-size:20px; cursor:pointer; padding:2px 6px; line-height:1; }
+  /* collapsible sidebar that SHARES space (pushes content) rather than overlaying */
+  .drawer { position:fixed; top:0; left:0; bottom:0; width:264px; background:var(--panel); border-right:1px solid var(--edge); z-index:41; display:flex; flex-direction:column; transform:translateX(-100%); transition:transform .18s ease; }
+  body.sidebar-open .drawer { transform:translateX(0); }
+  #content { transition:margin-left .18s ease; }
+  body.sidebar-open #content { margin-left:264px; }
+  body.sidebar-open .composer { left:264px; }
+  #scrim { display:none; position:fixed; inset:0; z-index:40; background:rgba(0,0,0,.5); }
+  @media (max-width:640px) { body.sidebar-open #content { margin-left:0; } body.sidebar-open .composer { left:0; } .drawer { box-shadow:2px 0 16px rgba(0,0,0,.5); } body.sidebar-open #scrim { display:block; } }
+  /* desktop hover-peek: with the sidebar closed, a thin left-edge hot-zone slides the
+     drawer in as a temporary OVERLAY (no content shift); leaving it collapses it. Touch
+     devices (no hover) never see the hot-zone — they use the ☰ hamburger. */
+  #sidebar-hot { display:none; }
+  @media (hover:hover) and (pointer:fine) {
+    #sidebar-hot { display:block; position:fixed; top:0; left:0; bottom:0; width:12px; z-index:39; }
+    body.sidebar-open #sidebar-hot { display:none; }
+    body.sidebar-peek .drawer { transform:translateX(0); box-shadow:2px 0 18px rgba(0,0,0,.55); }
+  }
+  .drawer-head { display:flex; align-items:center; justify-content:space-between; padding:16px 14px; border-bottom:1px solid var(--edge); }
+  .drawer-head b { font-size:15px; }
+  #chat-list { overflow-y:auto; padding:8px; flex:1; }
+  .chat-item { display:flex; align-items:center; justify-content:space-between; gap:6px; padding:9px 10px; border-radius:8px; cursor:pointer; font-size:14px; }
+  .chat-item:hover { background:#1c2433; }
+  .chat-item.on { background:#1f6feb22; border:1px solid #1f3b63; }
+  .ci-title { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  /* red dot: this chat is requesting user interaction (an unanswered ask) */
+  .ci-dot { display:inline-block; width:7px; height:7px; margin-right:6px; border-radius:50%; background:var(--bad); box-shadow:0 0 5px var(--bad); vertical-align:middle; }
+  .ci-section { color:var(--mut); font-size:10px; text-transform:uppercase; letter-spacing:.5px; padding:12px 10px 4px; border-top:1px solid var(--edge); margin-top:8px; }
+  /* per-chat top bar: comment-to-dev + memo version scrubber */
+  .chat-bar { display:flex; align-items:center; gap:10px; padding:8px 4px 10px; border-bottom:1px solid var(--edge); margin-bottom:10px; font-size:13px; flex-wrap:wrap; }
+  .chat-bar .cb-title { font-weight:600; }
+  .chat-bar .cb-scrub { display:flex; align-items:center; gap:6px; color:var(--mut); }
+  .chat-bar .cb-right { font-size:11px; padding:2px 9px; border-radius:8px; white-space:nowrap; }
+  .chat-bar .cb-right.ro { color:var(--bad); border:1px solid #5a2a2a; background:rgba(248,81,73,.08); }
+  .chat-bar .cb-right.write { color:var(--acc2); border:1px solid #1f4a2a; background:rgba(46,160,67,.08); }
+  /* the granted-powers banner at the top of a handed-off (scoped) chat — its opening context */
+  .powers-banner { display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin:0 0 14px; padding:9px 11px; border:1px dashed var(--edge); border-radius:10px; background:rgba(124,92,255,.06); }
+  .powers-banner .pb-label { font-size:12px; color:var(--mut); margin-right:2px; }
+  .powers-banner .chip { font-size:11px; border:1px solid var(--edge); background:var(--panel); color:var(--ink); border-radius:7px; padding:2px 8px; }
+  .powers-banner .chip-x { background:none; border:none; color:var(--mut); cursor:pointer; padding:0 0 0 5px; font-size:13px; line-height:1; vertical-align:middle; }
+  .powers-banner .chip-x:hover { color:var(--bad); }
+  .powers-banner .chip-add { cursor:pointer; color:var(--acc); border-style:dashed; }
+  .chat-bar .mini { background:transparent; border:1px solid var(--edge); color:var(--mut); padding:4px 10px; border-radius:7px; cursor:pointer; font-size:12px; }
+  .chat-bar .mini:hover { color:var(--ink); border-color:var(--acc); }
+  .chat-bar .mini:disabled { opacity:.35; cursor:default; }
+  #qrmodal textarea { background:#fff; color:#111; border:1px solid #bbb; border-radius:8px; padding:8px; font:inherit; }
+  .ci-del { color:var(--mut); border-color:transparent !important; padding:2px 7px; }
+  .ci-del:hover { color:var(--bad); }
+  /* inline action-proposal cards (destructive actions awaiting confirmation) */
+  .prop { background:#0f1830; border:1px solid #2a3a5e; border-radius:12px; padding:12px 14px; align-self:stretch; max-width:100%; }
+  .prop .ptitle { font-weight:600; display:flex; gap:8px; align-items:center; }
+  .prop .pmeta { color:var(--mut); font-size:12px; margin:2px 0 8px; }
+  .prop .kv { font-size:13px; line-height:1.7; } .prop .kv b { color:var(--mut); font-weight:600; margin-right:4px; }
+  .prop .pbtns { display:flex; gap:8px; margin-top:11px; align-items:center; }
+  .prop button.confirm { background:var(--acc2); border:none; color:#fff; padding:7px 15px; border-radius:8px; cursor:pointer; font-size:13px; }
+  .prop button.reject { background:transparent; border:1px solid #5a2a2a; color:var(--bad); padding:7px 15px; border-radius:8px; cursor:pointer; font-size:13px; }
+  .prop button:disabled { opacity:.5; cursor:default; }
+  .prop .warn { color:#d29922; font-size:12px; margin-top:8px; }
+  .prop .pbtns label.dontask { font-size:12px; color:var(--mut); display:flex; align-items:center; gap:5px; cursor:pointer; margin-left:auto; }
+  .prop .pbtns label.dontask input { width:auto; }
+  .autofired { font-size:12px; color:var(--acc2); margin-top:6px; }
+  /* inline feedback loop: a TYPED, answerable question (chat-inline or in the 🔔 inbox) */
+  .ask { background:#0f2018; border:1px solid #1f4d39; border-radius:12px; padding:12px 14px; align-self:stretch; max-width:100%; }
+  .ask-title { font-weight:600; display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  .ask-body { color:var(--mut); font-size:13px; margin:4px 0 8px; }
+  .ask-q { margin:11px 0; }
+  .ask-qtext { font-size:13px; margin-bottom:6px; }
+  .ask-ctrl { display:flex; flex-direction:column; gap:6px; }
+  .ask-opt { font-size:13px; display:flex; align-items:center; gap:8px; cursor:pointer; }
+  .ask-opt input { width:auto; }
+  .ask-in { width:100%; background:#0d1117; border:1px solid var(--edge); color:var(--ink); border-radius:8px; padding:8px 10px; font:inherit; }
+  .ask-btns { display:flex; gap:10px; align-items:center; margin-top:12px; flex-wrap:wrap; }
+  .ask-submit { background:var(--acc2); border:none; color:#fff; padding:7px 16px; border-radius:8px; cursor:pointer; font-size:13px; }
+  .ask-submit:disabled { opacity:.5; cursor:default; }
+  .ask-origin { text-decoration:none; }
+  /* reply-in-thread: dip into a sub-agent (dev) thread without leaving the chat */
+  .dev-thread-toggle { background:transparent; border:none; cursor:pointer; font-size:12px; padding:7px 0 0; }
+  .dev-thread-body { margin-top:8px; border-left:2px solid var(--edge); padding-left:10px; display:flex; flex-direction:column; gap:6px; }
+  .dev-thread-msg { font-size:13px; line-height:1.5; }
+  .dev-thread-row { display:flex; gap:6px; margin-top:4px; }
+  .dev-thread-row .ask-in { flex:1; }
+  /* 🔔 notification bell + inbox */
+  .badge { position:absolute; top:-2px; right:-2px; background:var(--bad); color:#fff; font-size:10px; min-width:15px; height:15px; border-radius:8px; padding:0 3px; line-height:15px; text-align:center; font-weight:700; }
+  .inbox-section { margin-top:10px; }
+  .inbox-head { cursor:pointer; font-weight:600; font-size:14px; padding:7px 0; border-top:1px solid var(--edge); user-select:none; display:flex; align-items:center; gap:6px; }
+  .inbox-head .caret { color:var(--mut); display:inline-block; width:12px; }
+  .inbox-list .notif { border:1px solid var(--edge); border-radius:10px; padding:10px 12px; margin:8px 0; background:var(--panel); }
+  .notif .ntitle { font-weight:600; display:flex; gap:8px; align-items:baseline; justify-content:space-between; }
+  .notif .ntime { color:var(--mut); font-size:11px; white-space:nowrap; flex:none; }
+  .notif .nbody { color:var(--ink); font-size:13px; margin-top:4px; opacity:.9; }
+  .notif .nmeta { color:var(--mut); font-size:12px; margin-top:6px; display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  .notif .nmeta a.nlink { color:var(--acc); text-decoration:underline; text-underline-offset:2px; word-break:break-word; }
+  .notif .nmeta a.nlink:hover { color:var(--ink); }
+  .notif.att { border-color:#5a4a1e; }
+  .notif .ndone { background:transparent; border:1px solid var(--edge); color:var(--mut); padding:3px 11px; border-radius:6px; cursor:pointer; font-size:12px; }
+  .notif .ndone:hover { color:var(--acc2); border-color:var(--acc2); }
+  .diff { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12px; background:#0a0f1e; border:1px solid var(--edge); border-radius:8px; padding:8px 10px; overflow:auto; max-height:300px; white-space:pre-wrap; margin-top:4px; }
+  .diff .add { color:#3fb950; } .diff .del { color:#f85149; } .diff .ctx { color:#8b949e; }
+  /* 3D conversation-trace overlay */
+  #trace-overlay { position:fixed; inset:0; z-index:60; background:#0a0f1e; }
+  body.sidebar-open #trace-overlay { left:264px; } /* don't cover the open chats sidebar */
+  @media (max-width:640px) { body.sidebar-open #trace-overlay { left:0; } } /* phone: drawer overlays instead */
+  #trace-app-overlay { position:fixed; inset:0; z-index:62; background:#0a0f1e; }
+  body.sidebar-open #trace-app-overlay { left:264px; }
+  @media (max-width:640px) { body.sidebar-open #trace-app-overlay { left:0; } }
+  #trace-app-frame { width:100%; height:100%; border:0; display:block; }
+  #trace-app-overlay .mini { position:absolute; top:max(10px,env(safe-area-inset-top)); right:max(12px,env(safe-area-inset-right)); z-index:2; background:#161b22; }
+  #widget-overlay { position:fixed; inset:0; z-index:62; background:#0a0f1e; }
+  body.sidebar-open #widget-overlay { left:264px; }
+  @media (max-width:640px) { body.sidebar-open #widget-overlay { left:0; } }
+  #widget-frame { width:100%; height:100%; border:0; display:block; }
+  #widget-overlay .mini { position:absolute; top:max(10px,env(safe-area-inset-top)); right:max(12px,env(safe-area-inset-right)); z-index:2; background:#161b22; }
+  .msg.widget { align-self:stretch; max-width:100%; }
+  .inwidget { border:1px solid var(--edge); border-radius:12px; overflow:hidden; background:var(--panel); }
+  .inwidget-bar { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:6px 10px; font-size:12px; color:var(--mut); border-bottom:1px solid var(--edge); }
+  .inwidget-bar .mini { padding:2px 8px; }
+  .inwidget-frame { width:100%; height:340px; border:0; display:block; background:#0d1117; }
+  #trace-canvas { width:100%; height:100%; display:block; touch-action:none; }
+  .trace-bar { position:absolute; top:0; left:0; right:0; display:flex; align-items:center; gap:8px; padding:max(10px,env(safe-area-inset-top)) max(14px,env(safe-area-inset-right)) 10px max(14px,env(safe-area-inset-left)); background:linear-gradient(#0a0f1eee,transparent); flex-wrap:wrap; }
+  .trace-title { color:var(--mut); font-size:12px; }
+  .trace-vers { display:flex; align-items:center; gap:6px; color:var(--ink); font-size:12px; }
+  .trace-vers .mini { padding:3px 9px; }
+  .trace-vers .pill { color:var(--mut); }
+  .trace-note { flex-basis:100%; color:var(--mut); font-size:11px; margin-top:5px; line-height:1.4; }
+  /* inline real-time 3D "pendant": hangs under the latest prompt, animates the live fan-out */
+  #pendant-wrap { position:absolute; z-index:25; cursor:default; user-select:none; -webkit-user-select:none; transition:opacity .25s ease; }
+  #pendant-wrap.hide { display:none; }
+  #pendant-canvas { width:100%; height:160px; display:block; }
+  .pendant-cap { font-size:10px; color:var(--mut); text-align:right; margin-top:-3px; letter-spacing:.4px; opacity:.85; }
+  /* D4: the pendant IS the one trace — 🧊 expands it fullscreen (folding in the retired ice-cube's best bit) */
+  #pendant-wrap.fs { position:fixed !important; inset:0 !important; left:0 !important; width:100vw !important; max-width:none !important; z-index:61; background:#0a0f1e; padding:0; }
+  body.sidebar-open #pendant-wrap.fs { left:264px !important; width:calc(100vw - 264px) !important; }
+  @media (max-width:640px) { body.sidebar-open #pendant-wrap.fs { left:0 !important; width:100vw !important; } }
+  #pendant-wrap.fs #pendant-canvas { height:100vh !important; }
+  #pendant-wrap.fs .pendant-cap { display:none; }
+  .composer { position:fixed; bottom:0; left:0; right:0; background:linear-gradient(transparent,#0d1117 22%); padding:10px max(14px,env(safe-area-inset-right)) max(14px,env(safe-area-inset-bottom)) max(14px,env(safe-area-inset-left)); }
+  #status { color:var(--mut); font-size:12px; min-height:15px; text-align:center; margin-bottom:6px; }
+  .inputrow { max-width:960px; margin:0 auto; display:flex; gap:8px; align-items:flex-end; }
+  /* field-sizing:content auto-grows the composer with its content, so a long message is ALWAYS
+     fully legible (no scrolling inside a fixed-height box). min-height keeps the at-rest one-line
+     pill; max-height caps growth then scrolls. The same #text serves the New screen + chat bottom. */
+  #text { flex:1; background:var(--panel); border:1px solid var(--edge); color:var(--ink); border-radius:22px; padding:11px 16px; font:inherit; font-size:16px; line-height:1.4; resize:none; field-sizing:content; min-height:22px; max-height:40vh; overflow-y:auto; } /* >=16px so iOS doesn't zoom on focus */
+  #text:focus { outline:none; border-color:var(--acc); }
+  .inputrow button { width:44px; height:44px; border-radius:50%; border:none; cursor:pointer; font-size:18px; flex:none; display:flex; align-items:center; justify-content:center; }
+  #send { background:var(--acc); color:#fff; }
+  #send:disabled { opacity:.4; cursor:default; }
+  #mic { background:transparent; border:1px solid var(--edge) !important; color:var(--mut); }
+  #mic.listening { background:var(--you); color:#fff; border-color:var(--you) !important; animation:pulse 1.6s infinite; }
+  #mic.thinking { background:var(--acc); color:#fff; border-color:var(--acc) !important; }
+  #attach { background:transparent; border:1px solid var(--edge) !important; color:var(--mut); }
+  #attach:hover { color:var(--ink); border-color:var(--acc) !important; }
+  @keyframes pulse { 0%,100%{box-shadow:0 0 0 0 rgba(31,111,235,.5)} 50%{box-shadow:0 0 0 12px rgba(31,111,235,0)} }
+  /* Google-style landing: before the first message the composer floats in the screen's
+     vertical centre with a tagline; sending the first message drops it back to the bottom
+     (transform-animated) while the typed message pops in at the top as a chat bubble. */
+  .composer { transition:transform .55s cubic-bezier(.22,1,.36,1); }
+  body.landing .composer { transform:translateY(-42vh); background:none; }
+  body.landing #composer-tagline { display:block; }
+  #composer-tagline { display:none; max-width:960px; margin:0 auto 16px; text-align:center; color:var(--mut); font-size:21px; font-weight:500; letter-spacing:.2px; }
+  @keyframes bubblePop { 0%{ transform:translateY(34px) scale(.55); opacity:0; } 62%{ transform:translateY(0) scale(1.04); opacity:1; } 100%{ transform:none; } }
+  .msg.pop { animation:bubblePop .5s cubic-bezier(.22,1,.36,1); }
+  /* voice 'Siri orb': a big octagon that hovers right over the text input while the mic is
+     listening, pulsing bigger + brighter with the LIVE input volume. JS positions it over
+     #text and sets --orb-lvl (0..1) from the mic RMS at <=10Hz; the .1s transitions
+     interpolate, so the pulse frequency maxes ~1/10s. Purely decorative (no pointer). */
+  #siri-orb { position:fixed; left:50%; top:46%; width:168px; height:168px; z-index:35; pointer-events:none; display:none;
+    --orb-lvl:0; transform-origin:50% 50%; transform:translate(-50%,-50%) scale(calc(1 + .5 * var(--orb-lvl)));
+    transition:transform .1s ease-out, left .15s ease-out, top .15s ease-out; }
+  body.voice-live #siri-orb { display:block; }
+  #siri-orb .orb { width:100%; height:100%; clip-path:polygon(30% 0,70% 0,100% 30%,100% 70%,70% 100%,30% 100%,0 70%,0 30%);
+    background:radial-gradient(circle at 50% 38%, #c4baff, #4b3bd6 58%, #1f6feb);
+    filter:brightness(calc(1 + .6 * var(--orb-lvl)));
+    box-shadow:0 0 calc(26px + 64px * var(--orb-lvl)) calc(5px + 16px * var(--orb-lvl)) rgba(124,92,255, calc(.4 + .5 * var(--orb-lvl))), inset 0 0 calc(22px + 16px * var(--orb-lvl)) rgba(255,255,255, calc(.24 + .2 * var(--orb-lvl)));
+    transition:filter .1s ease-out, box-shadow .1s ease-out; animation:orbVibrate .18s linear infinite; }
+  @keyframes orbVibrate { 0%{transform:translate(0,0) rotate(0)} 25%{transform:translate(1.3px,-1px) rotate(.5deg)} 50%{transform:translate(-1px,1.3px) rotate(-.4deg)} 75%{transform:translate(.9px,1px) rotate(.4deg)} 100%{transform:translate(0,0) rotate(0)} }
+  /* pending-attachment strip above the input row */
+  .attachrow { max-width:960px; margin:0 auto 8px; display:flex; gap:8px; flex-wrap:wrap; }
+  .attach-chip { position:relative; border:1px solid var(--edge); border-radius:8px; background:var(--panel); padding:4px 6px; display:flex; align-items:center; gap:6px; }
+  .attach-chip img { width:46px; height:46px; object-fit:cover; border-radius:5px; display:block; }
+  .attach-chip .fname { font-size:12px; color:var(--mut); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:130px; }
+  .attach-chip .rm { position:absolute; top:-7px; right:-7px; background:var(--bad); color:#fff; border:none; border-radius:50%; width:18px; height:18px; font-size:12px; line-height:1; cursor:pointer; padding:0; }
+  /* images/files the user attached to a message bubble */
+  .msg .att { margin-top:8px; display:flex; gap:6px; flex-wrap:wrap; align-items:center; }
+  .msg .att img { max-width:180px; max-height:180px; border-radius:8px; border:1px solid var(--edge); cursor:pointer; }
+  .msg .att .fname { font-size:12px; color:var(--mut); }
+  .card { background:var(--panel); border:1px solid var(--edge); border-radius:12px; padding:16px; margin-bottom:96px; }
+  label { display:block; font-size:11px; color:var(--mut); margin:10px 0 4px; text-transform:uppercase; letter-spacing:.4px; }
+  input, select { width:100%; background:#0d1117; border:1px solid var(--edge); color:var(--ink); border-radius:8px; padding:9px 11px; font:inherit; }
+  .row { display:flex; gap:12px; flex-wrap:wrap; } .row > div { flex:1; min-width:140px; }
+  button.go { margin-top:12px; background:var(--acc); border:none; color:#fff; padding:10px 16px; border-radius:8px; font-size:14px; cursor:pointer; }
+  button.mini { background:transparent; border:1px solid var(--edge); color:var(--mut); padding:4px 10px; border-radius:6px; cursor:pointer; font-size:12px; }
+  button.mini.bad { color:var(--bad); border-color:#5a2a2a; }
+  .share { display:flex; justify-content:space-between; align-items:center; gap:10px; padding:9px 0; border-top:1px solid var(--edge); font-size:13px; }
+  .pill { font-size:11px; color:var(--mut); } .err { color:var(--bad); font-size:13px; margin-top:8px; }
+  .hide { display:none !important; }
+  .qrmodal { position:fixed; inset:0; background:rgba(0,0,0,.72); display:flex; align-items:center; justify-content:center; z-index:50; }
+  .qrcard { background:#fff; padding:18px 18px 14px; border-radius:14px; text-align:center; max-width:92vw; }
+  .qrcard img { width:264px; height:auto; image-rendering:pixelated; border-radius:4px; }
+  .qrlabel { color:#111; font-size:14px; font-weight:600; margin-bottom:10px; }
+  .qrwarn { color:#a15; font-size:11px; display:block; margin:8px 0 6px; }
+  .qrcard .mini { color:#333; border-color:#bbb; }
+  /* dark content modals (scope / projects / share / sub-chat / hooks): readable on the dark panel —
+     overrides the white-card .mini color above so buttons aren't dark-grey-on-dark-grey. */
+  .qrcard .dkm { background:var(--panel); color:var(--ink); }
+  .qrcard .dkm .mini { color:var(--ink); border-color:var(--edge); background:transparent; }
+  .qrcard .dkm .mini.go { background:var(--acc); border-color:var(--acc); color:#fff; }
+  .qrcard .dkm code { color:var(--ink); background:#010409; padding:1px 4px; border-radius:4px; }
+  .qrcard .reveal-in { width:340px; max-width:82vw; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12px; margin:4px 0 2px; }
+  /* OAuth-style consent card (the "Powers this chat needs" prompt). Rendered straight into the
+     #qrmodal backdrop — NOT wrapped in the white .qrcard — so it's a clean dark consent sheet. */
+  .consent { background:var(--panel); border:1px solid var(--edge); border-radius:16px; width:440px; max-width:92vw; max-height:84vh; overflow:hidden; display:flex; flex-direction:column; text-align:left; box-shadow:0 24px 64px rgba(0,0,0,.55); }
+  .consent-head { display:flex; gap:12px; align-items:center; padding:18px 18px 10px; }
+  .consent-badge { width:44px; height:44px; flex:none; border-radius:13px; background:linear-gradient(135deg,var(--acc),#b69bff); display:flex; align-items:center; justify-content:center; font-size:22px; box-shadow:0 4px 14px rgba(124,92,255,.4); }
+  .consent-title { font-size:16px; font-weight:650; color:var(--ink); line-height:1.25; }
+  .consent-sub { font-size:13px; color:var(--mut); margin-top:2px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .consent-note { padding:0 18px 14px; font-size:12.5px; color:var(--mut); line-height:1.5; }
+  .consent-note b { color:var(--ink); font-weight:600; }
+  .consent-scopes { overflow:auto; padding:6px 10px; border-top:1px solid var(--edge); }
+  .scope { display:flex; gap:11px; align-items:center; padding:10px 8px; border-radius:11px; cursor:pointer; margin:0; text-transform:none; letter-spacing:normal; } /* reset the global label { uppercase } */
+  .scope:hover { background:rgba(255,255,255,.035); }
+  .scope + .scope, #sc-rest .scope:first-child { border-top:1px solid rgba(255,255,255,.05); }
+  .scope-ic { width:32px; height:32px; flex:none; border-radius:9px; background:#0d1117; border:1px solid var(--edge); display:flex; align-items:center; justify-content:center; font-size:16px; }
+  .scope-txt { flex:1; min-width:0; }
+  .scope-name { display:block; font-size:13.5px; font-weight:600; color:var(--ink); }
+  .scope-desc { display:block; font-size:12px; color:var(--mut); line-height:1.4; margin-top:1px; }
+  .scope-chk { flex:none; width:18px; height:18px; accent-color:var(--acc); cursor:pointer; }
+  .consent-empty { padding:14px 16px; font-size:13px; color:var(--mut); }
+  .consent-more { background:none; border:none; color:var(--acc); font-size:13px; font-weight:500; cursor:pointer; padding:10px 18px; text-align:left; border-top:1px solid var(--edge); }
+  .consent-more:hover { background:rgba(124,92,255,.08); }
+  .consent-actions { display:flex; gap:10px; padding:14px 18px; border-top:1px solid var(--edge); }
+  .consent-btn { padding:11px 16px; border-radius:10px; font-size:14px; font-weight:600; cursor:pointer; border:1px solid var(--edge); transition:filter .12s,border-color .12s; }
+  .consent-btn.ghost { background:transparent; color:var(--mut); flex:1; }
+  .consent-btn.ghost:hover { color:var(--ink); border-color:var(--mut); }
+  .consent-btn.primary { background:var(--acc); border-color:var(--acc); color:#fff; flex:1.5; }
+  .consent-btn.primary:hover { filter:brightness(1.1); }
+  .consent-btn:disabled { opacity:.5; cursor:default; }
+</style>
+</head>
+<body>
+<aside id="drawer" class="drawer">
+  <div class="drawer-head"><b>Chats</b><span style="display:flex;gap:6px;align-items:center"><button class="mini" id="new-chat">+ New</button><button class="iconbtn" id="drawer-close" title="Close" style="font-size:18px;padding:0 4px">✕</button></span></div>
+  <div id="chat-list"></div>
+</aside>
+<div id="scrim"></div>
+<div id="sidebar-hot"></div>
+<div id="content">
+<header>
+  <button class="iconbtn" id="hamburger" title="Chats">☰</button>
+  <button class="iconbtn" id="new-chat-top" title="New chat (Ctrl/⌘+Shift+O)">✏️</button>
+  <h1>🗣️ Agent C</h1>
+  <span class="sub" id="scope">connecting…</span>
+  <button id="budget" class="budget-chip hide" title="This conversation's inference allowance — tap to top up"></button>
+  <select id="agent-sel" class="hdr-sel hide" title="Top-level agent for this chat"></select>
+  <select id="model-sel" class="hdr-sel hide" title="Model-provider acting as this agent (remembered per agent)"></select>
+  <button class="tab on" id="tab-talk">Talk</button>
+  <button class="tab" id="tab-shares">Powers</button>
+  <button class="iconbtn" id="bell-btn" title="Needs your attention" style="position:relative">🔔<span id="bell-badge" class="badge hide"></span></button>
+  <button class="iconbtn" id="projects-btn" title="Projects &amp; scheduled agents">🕐</button>
+  <button class="iconbtn" id="chatshare-btn" title="Share this chat (link / QR)">📤</button>
+  <button class="iconbtn" id="hooks-btn" title="Hooks — push custom media to your agent">🪝</button>
+</header>
+
+<div id="trace-overlay" class="hide">
+  <canvas id="trace-canvas"></canvas>
+  <div class="trace-bar">
+    <span class="trace-title">⊿ trace — drag orbit · scroll zoom · shift-drag pan</span>
+    <span id="trace-vers" class="trace-vers hide"></span>
+    <span style="flex:1"></span>
+    <button class="mini" id="trace-appbtn" title="Open the trace as a stateless iframe app (the chat is passed as a capability)">⧉ app</button>
+    <button class="mini" id="trace-vr">Enter VR</button>
+    <button class="mini" id="trace-close">close</button>
+    <div id="trace-note" class="trace-note hide"></div>
+  </div>
+</div>
+
+<!-- the trace AS A STANDALONE IFRAME APP: receives the chat as a capability over a
+     postMessage MessagePort. Opt-in (⧉ app); the inline 🧊 trace stays the default. -->
+<div id="trace-app-overlay" class="hide">
+  <iframe id="trace-app-frame" title="Trace app" referrerpolicy="no-referrer"></iframe>
+  <button class="mini" id="trace-app-close">close</button>
+</div>
+<div id="widget-overlay" class="hide">
+  <iframe id="widget-frame" title="Capability widget" referrerpolicy="no-referrer"></iframe>
+  <button class="mini" id="widget-close">close</button>
+</div>
+
+<main>
+  <div id="nocap" class="card hide">
+    No capability in this link. Open the app with your <code>#cap=…</code> link — your root link,
+    or a share someone sent you. Without a cap the agent has <b>no powers</b>.
+  </div>
+
+  <div id="talk">
+    <div id="chat-bar" class="chat-bar hide"></div>
+    <div id="log"></div>
+  </div>
+
+  <div id="shares-view" class="card hide">
+    <div class="sub" style="margin-bottom:12px;padding-bottom:10px;border-bottom:1px solid var(--edge)">🔑 <b>Powers.</b> This agent <b>reads</b> everything it holds and can only <b>propose</b> changes — every destructive action waits for your confirmation (or a "don't ask again" rule). Read-only = read + propose; writable powers can perform destructive actions (still confirmed). Grant one to someone else below.</div>
+    <div id="invite-box" class="hide" style="margin-bottom:14px;padding-bottom:12px;border-bottom:1px solid var(--edge)">
+      <div style="font-size:15px;margin-bottom:4px"><b>👤 Invite a new user</b></div>
+      <div class="sub" style="margin-bottom:8px">Mint a starter invite — a confined link with a few functional/read-only tools plus a way to <b>message you</b>. They can <b>request more</b> (you approve). When their granted allowance runs out, they're prompted to add credit.</div>
+      <input id="inv-label" class="hdr-sel" style="max-width:none;width:100%;margin-bottom:6px" placeholder="who is this for? (e.g. Alex)">
+      <div class="sub" style="margin:2px 0 4px">Starter tools (adjustable):</div>
+      <div id="inv-powers" style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:8px"></div>
+      <button class="go" id="inv-make">Create invite link</button>
+      <div id="inv-out" style="margin-top:8px"></div>
+    </div>
+    <div id="connectors-box" class="hide" style="margin-bottom:14px;padding-bottom:12px;border-bottom:1px solid var(--edge)">
+      <div style="font-size:15px;margin-bottom:4px"><b>🔌 Connect an API service</b></div>
+      <div class="sub" style="margin-bottom:8px">Wire up any HTTP API as a tool. The key is stored in your vault and injected <b>server-side</b> — the agent never sees it. Grant the <code>connectors</code> power to let chats/invitees use them.</div>
+      <div id="conn-list" style="margin-bottom:8px"></div>
+      <details><summary class="mini" style="display:inline-block">+ add a connector</summary>
+        <div style="display:flex;flex-direction:column;gap:6px;margin-top:8px">
+          <input id="conn-name" class="hdr-sel" style="max-width:none" placeholder="name (e.g. OpenWeather)">
+          <input id="conn-url" class="hdr-sel" style="max-width:none" placeholder="base URL (e.g. https://api.openweathermap.org)">
+          <input id="conn-header" class="hdr-sel" style="max-width:none" placeholder="auth header (default: Authorization)">
+          <input id="conn-tmpl" class="hdr-sel" style="max-width:none" placeholder="value template (default: Bearer {{secret}})">
+          <input id="conn-secname" class="hdr-sel" style="max-width:none" placeholder="secret name (vault key, e.g. openweather-key)">
+          <input id="conn-secval" class="hdr-sel" type="password" style="max-width:none" placeholder="API key — stored in your vault, never shown again">
+          <div style="display:flex;gap:6px;align-items:center"><input id="conn-cost" class="hdr-sel" type="number" min="0" step="0.0001" style="flex:1;max-width:none" placeholder="market $ per call (0 = free)"><input id="conn-comm" class="hdr-sel" type="number" min="0" step="0.5" value="1" style="width:90px;max-width:none" placeholder="% comm"></div>
+          <select id="conn-resale" class="hdr-sel" style="max-width:none"><option value="unknown">resale ToS: unknown</option><option value="ok">resale OK (resell at market+commission)</option><option value="byo">BYO-key only (charge commission only)</option><option value="prohibited">resale prohibited</option></select>
+          <label style="font-size:12px;color:var(--mut)"><input type="checkbox" id="conn-ro" checked> read-only (GET only)</label>
+          <button class="mini" id="conn-add">Add connector</button><div id="conn-out" style="font-size:12px;color:var(--acc)"></div>
+        </div>
+      </details>
+    </div>
+    <div style="font-size:15px;margin-bottom:6px"><b>Share a power</b></div>
+    <div class="sub" style="margin-bottom:10px">Mint a named, revocable invite link granting <b>one</b> of this agent's powers to someone else. They get only that power; your link is unchanged. The link is never shown on the agent's screen — copy or QR it here.</div>
+    <div class="row">
+      <div style="flex:2"><label>Power</label><select id="sh-power"></select></div>
+      <div style="flex:2"><label>Name (so you can revoke it)</label><input id="sh-label" placeholder="e.g. for Bob"></div>
+    </div>
+    <button class="go" id="mint">Mint invite link</button>
+    <div id="minted"></div>
+
+    <div id="obj-browser" class="hide" style="margin-top:18px;border-top:1px solid var(--edge);padding-top:14px">
+      <div style="font-size:14px;margin-bottom:4px"><b>📂 Share an object</b></div>
+      <div class="sub" style="margin-bottom:8px">Browse your devices &amp; agents like a file system — the browser <b>back</b> button works. Share any node (read-only or full); the share is the <b>object itself</b> (a web-key), not a name.</div>
+      <input id="obj-filter" placeholder="filter this folder…" autocomplete="off" style="margin-bottom:8px" />
+      <div id="obj-crumbs" class="pmeta" style="margin-bottom:6px"></div>
+      <div id="obj-node"></div>
+      <div id="obj-list" style="margin-top:6px"></div>
+    </div>
+
+    <div id="shares" style="margin-top:16px"></div>
+
+    <div id="autorules-wrap" class="hide" style="margin-top:18px;border-top:1px solid var(--edge);padding-top:14px">
+      <div style="font-size:14px;margin-bottom:4px"><b>🔓 Auto-confirm rules</b></div>
+      <div class="sub" style="margin-bottom:8px">Actions this agent may take <b>without asking</b> (you ticked “don’t ask again”). Revoke any to require a confirmation again. HomeAssistant always confirms.</div>
+      <div id="autorules"></div>
+    </div>
+
+    <div id="specialists-wrap" class="hide" style="margin-top:18px;border-top:1px solid var(--edge);padding-top:14px">
+      <div style="font-size:14px;margin-bottom:4px"><b>🧑‍🔬 Specialists</b></div>
+      <div class="sub" style="margin-bottom:8px">Persistent sub-agents you’ve spawned. Each runs with its own confined powers + standing instructions. “auto:” shows what it may do without asking. Retire to remove.</div>
+      <div id="specialists-list"></div>
+    </div>
+  </div>
+  <div id="inbox-view" class="card hide">
+    <div style="font-size:15px;margin-bottom:6px"><b>🔔 Notifications</b></div>
+    <div class="sub" style="margin-bottom:6px">Action items your agents raised, plus recent activity — reused from your dashboard feed.</div>
+    <div class="inbox-section">
+      <div class="inbox-head" id="att-head"><span class="caret">▾</span> ⚡ Needs your attention <span class="pill" id="att-count"></span></div>
+      <div id="att-list" class="inbox-list"></div>
+    </div>
+    <div class="inbox-section">
+      <div class="inbox-head" id="rec-head"><span class="caret">▸</span> Recent activity</div>
+      <div id="rec-list" class="inbox-list hide"></div>
+    </div>
+  </div>
+  <div id="qrmodal" class="qrmodal hide"></div>
+</main>
+<div id="siri-orb"><div class="orb"></div></div>
+<div class="composer" id="composer">
+  <div id="composer-tagline">What can Agent C do for you?</div>
+  <div id="status"></div>
+  <div id="attachrow" class="attachrow hide"></div>
+  <div class="inputrow">
+    <button id="attach" title="Attach a photo or file">📎</button>
+    <input id="file" type="file" multiple accept="image/*,.txt,.md,.markdown,.csv,.json,text/*" class="hide" />
+    <textarea id="text" rows="1" placeholder="Message Agent C…" autocomplete="off" enterkeyhint="send"></textarea>
+    <button id="send" title="Send">➤</button>
+    <button id="mic" title="Voice mode — tap to talk">🎤</button>
+    <button id="meeting-btn" title="Record a multi-speaker meeting (diarized, transcribed locally on tinix)">👥</button>
+  </div>
+</div>
+</div>
+<script src="/qrcode.js"></script>
+<!-- confined-Preact ISLANDS bundle (preact + @endo/preact-container); sets globalThis.__fieldIslands
+     before app.js runs. Built by `yarn build:islands`. The DOM app falls back gracefully if absent. -->
+<script src="/islands/islands.js" type="module"></script>
+<script src="/app.js?v=20260619a" type="module"></script>
+</body>
+</html>

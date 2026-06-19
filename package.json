@@ -2,7 +2,8 @@
   "private": true,
   "useWorkspaces": true,
   "workspaces": [
-    "packages/*"
+    "packages/*",
+    "packages/chat/voice-agent"
   ],
   "engines": {
     "node": ">=16"

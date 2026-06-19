@@ -1,0 +1,68 @@
+{
+  "propose_only": true,
+  "note": "Proposal store — does NOT change the live default orchestration. Operator reviews.",
+  "models": {
+    "gemma": {
+      "bestConfig": {
+        "archId": "arch-0000",
+        "digest": "3261393a6089",
+        "config": {
+          "rolesAvailable": "all",
+          "toolRing": "full",
+          "promptVariant": "default",
+          "maxSteps": 12,
+          "model": "per-chat"
+        }
+      },
+      "score": 1,
+      "lineage": [
+        {
+          "at": "2026-06-17T05:10:25.778Z",
+          "event": "seed",
+          "archId": "arch-0000",
+          "digest": "3261393a6089",
+          "score": 1
+        },
+        {
+          "at": "2026-06-17T05:10:25.799Z",
+          "event": "rejected",
+          "archId": "arch-min-ref",
+          "digest": "90d91738d4ec",
+          "score": 0.5,
+          "vsChampion": 1
+        }
+      ]
+    },
+    "gemma-altseed": {
+      "bestConfig": {
+        "archId": "arch-0000",
+        "digest": "3261393a6089",
+        "config": {
+          "rolesAvailable": "all",
+          "toolRing": "full",
+          "promptVariant": "default",
+          "maxSteps": 12,
+          "model": "per-chat"
+        }
+      },
+      "score": 1,
+      "lineage": [
+        {
+          "at": "2026-06-17T05:10:25.810Z",
+          "event": "seed",
+          "archId": "arch-min-ref",
+          "digest": "90d91738d4ec",
+          "score": 0.5
+        },
+        {
+          "at": "2026-06-17T05:10:25.820Z",
+          "event": "promoted",
+          "archId": "arch-0000",
+          "digest": "3261393a6089",
+          "score": 1,
+          "vsChampion": 0.5
+        }
+      ]
+    }
+  }
+}

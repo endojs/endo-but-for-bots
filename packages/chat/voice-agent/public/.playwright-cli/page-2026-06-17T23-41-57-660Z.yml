@@ -1,0 +1,11 @@
+- iframe [ref=e2]:
+  - generic [active] [ref=f1e1]:
+    - heading "🧩 Capability widget" [level=1] [ref=f1e2]
+    - generic [ref=f1e3]: connected
+    - generic [ref=f1e4]: "granted powers (from skill()):"
+    - generic [ref=f1e5]:
+      - generic [ref=f1e6]: notes
+      - generic [ref=f1e7]: images
+    - generic [ref=f1e8]:
+      - textbox "ask the agent (uses only the granted powers)…" [ref=f1e9]
+      - button "Ask" [ref=f1e10] [cursor=pointer]
