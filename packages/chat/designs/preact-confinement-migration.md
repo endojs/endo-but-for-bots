@@ -278,11 +278,11 @@ Status: ☐ not started · ◐ in progress · ☑ done
 
 | Component | Lines | Status | Notes |
 | --- | --- | --- | --- |
-| debugger-panel | 688 | ◐ | On-demand panel — in progress |
+| debugger-panel | 688 | ☑ | Done — confined Preact, on-demand panel |
 | inventory-component | 1267 | ☑ | Done — `InventoryList` + `InventoryItem`; see below |
-| token-autocomplete | — | ◐ | Keyboard-stateful — in progress |
-| petname-path-autocomplete | — | ◐ | Keyboard-stateful — in progress |
-| petname-paths-autocomplete | — | ◐ | Keyboard-stateful — in progress |
+| token-autocomplete | — | ☑ | Done — confined dropdown |
+| petname-path-autocomplete | — | ☑ | Done — confined dropdown (pendingState bridge) |
+| petname-paths-autocomplete | — | ☑ | Done — confined dropdown (pendingState bridge) |
 
 ### Channel list (left the inventory)
 
@@ -295,11 +295,15 @@ Status: ☐ not started · ◐ in progress · ☑ done
 | Component | Status | Notes |
 | --- | --- | --- |
 | inbox-component | ☑ | Done — the 1:1 recipient-filtered view; confined Preact in three stages (shell + 5 message types, markdown-vnodes + token chips, value-vnodes). Monaco colorize of code fences deferred. |
+| edit-space-modal | ☑ | Done — confined Preact + reusable `IconSelector` (Batch B stage 1); scheme picker still host-embedded |
+| send-form | ◐ | In progress — composes heat-bar ☑ + token-autocomplete ☑ |
+| help-modal / share-modal / scheme-picker | ◐ | In progress — standalone leaf modals |
+| add-space-modal | ☐ | Batch B stage 2 — ~2000 lines; switch to `IconSelector`, then drop string `renderIconSelector` |
+| inline-command-form | ☐ | Blocked on `inline-eval` |
+| chat-bar-component | ☐ | Blocked — composes many unconverted forms/modals |
 | channel-component | ☐ | Dan's multiuser channel view; stays imperative DOM for now |
-| chat-bar-component | ☐ | Composes message-picker + command-selector (both ☑) |
-| spaces-gutter | ☐ | |
-| channel-header | ☐ | |
-| forms / modals | ☐ | `send-form` (composes heat-bar ☑), `inline-command-form` (composes inline-define ☑), the space modals (+ `icon-selector`), etc. |
+| spaces-gutter / channel-header | ☐ | Larger composites, later |
+| other forms | ☐ | `inline-eval`, `eval-form`, `define-form`, `endow-modal`, `form-builder`, `blob-viewer`, `counter-proposal-form` — the Monaco-embedding ones need host-node editor embedding |
 
 ## Recommended next migration
 
