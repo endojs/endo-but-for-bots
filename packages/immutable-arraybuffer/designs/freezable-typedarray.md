@@ -198,6 +198,15 @@ unchanged behaviour for genuine TypedArrays.
 
 The proposal does not provide a way to make integer-indexed
 assignment to a TypedArray *throw*.
+The fundamental reason is that genuine `TypedArray` instances are
+*Integer-Indexed Exotic Objects* (ECMA-262 section 10.4.2): their
+`[[DefineOwnProperty]]` and `[[Set]]` internal methods intercept
+integer-keyed property operations and route them through the backing
+buffer.
+The emulated wrapper is a plain ordinary object, not an integer-indexed
+exotic, so none of those exotic-object interception points are available
+to the shim; there is no way to intercept integer-indexed assignments on
+a plain object via the prototype chain.
 The emulated wrapper's response to `view[0] = 42` is therefore
 necessarily different from the genuine integer-indexed exotic's
 silent-swallow path; the wrapper is a plain ordinary object whose
