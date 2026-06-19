@@ -299,7 +299,7 @@ export const microblogComponent = async (
       return h(
         'span',
         {
-          key: String(index),
+          key: `chip-${index}`,
           class: 'token',
           tabindex: 0,
           role: 'button',
@@ -726,7 +726,10 @@ export const microblogComponent = async (
 
   consumeMessages().catch(window.reportError);
 
-  return harden({
+  const channelAPI = harden({
+    // Microblog has no thread sub-view; closeThread is a no-op for parity with
+    // the channelComponent API that chat.js's switchChannel calls.
+    closeThread: () => false,
     /** Tear down the confined tree and detach host nodes. */
     dispose: () => {
       if (renderTimer) {
@@ -737,5 +740,10 @@ export const microblogComponent = async (
       $mount.remove();
     },
   });
+  // chat.js's switchChannel reads `$parent.channelAPI` (the fire-and-forget
+  // mount's return value is ignored), so teardown only runs if the API is hung
+  // there — matching forum-component / channel-component.
+  /** @type {any} */ ($parent).channelAPI = channelAPI;
+  return channelAPI;
 };
 harden(microblogComponent);
