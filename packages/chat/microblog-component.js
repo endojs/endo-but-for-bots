@@ -704,10 +704,7 @@ export const microblogComponent = async (
       const msg = /** @type {ChannelMessage} */ (message);
       const key = String(msg.number);
 
-      messageIndex.set(key, {
-        message: msg,
-        $element: document.createElement('div'),
-      });
+      messageIndex.set(key, { message: msg });
 
       // Track reacts
       reactSystem.processReactMessage(msg, key);

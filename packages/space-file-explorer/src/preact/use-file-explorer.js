@@ -234,9 +234,6 @@ export function useFileExplorer(powers, profilePath = []) {
   /** @type {{ current: Map<string, Cap> }} */
   const dirCapCacheRef = useRef(new Map());
   const busyCountRef = useRef(0);
-  // Editor buffer pushed by the Viewer; falls back to the selected file's text.
-  /** @type {{ current: string | null }} */
-  const editorBufferRef = useRef(null);
 
   // ---- small helpers ----------------------------------------------------
 
@@ -557,7 +554,6 @@ export function useFileExplorer(powers, profilePath = []) {
   const selectSource = useCallback(
     async id => {
       dirCapCacheRef.current = new Map();
-      editorBufferRef.current = null;
       update({
         activeSourceId: id,
         activePath: [],
@@ -684,7 +680,6 @@ export function useFileExplorer(powers, profilePath = []) {
    */
   const openFile = useCallback(
     async (parentPath, name) => {
-      editorBufferRef.current = null;
       /** @type {Partial<FileExplorerState>} */
       const open = {
         viewerCollapsed: false,
@@ -1706,16 +1701,10 @@ export function useFileExplorer(powers, profilePath = []) {
     async text => {
       const file = stateRef.current.selectedFile;
       if (!file) return;
-      const buffer =
-        text !== undefined
-          ? text
-          : editorBufferRef.current !== null
-            ? editorBufferRef.current
-            : file.text;
+      const buffer = text !== undefined ? text : file.text;
       beginBusy();
       try {
         await writeFileText(file.cap, buffer);
-        editorBufferRef.current = null;
         update({
           selectedFile: {
             ...file,
@@ -1748,7 +1737,6 @@ export function useFileExplorer(powers, profilePath = []) {
   /** @param {boolean} editingNext */
   const setEditing = useCallback(
     editingNext => {
-      if (!editingNext) editorBufferRef.current = null;
       update({ editing: editingNext });
     },
     [update],
