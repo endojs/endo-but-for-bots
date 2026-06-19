@@ -23,7 +23,14 @@ export {};
  * explorer never inspects these structurally — it only passes them to the
  * `file-explorer-fs.js` helpers, which know how to drive them.
  *
- * @typedef {unknown} Cap
+ * Typed `any` (not `unknown`) to match the original `file-explorer.js`: the
+ * remote interfaces have no static CapTP types here, so `E(cap).lookup()`,
+ * `.makeUnconfined()`, `.filesystemAt()`, etc. must be callable without a cast
+ * at every site. Authority is still confined at runtime to the store (see the
+ * capability-discipline note above) — `any` only relaxes the *type*, not the
+ * object graph.
+ *
+ * @typedef {any} Cap
  */
 
 /**
@@ -121,7 +128,7 @@ export {};
  * @typedef {object} InvItem
  * @property {string} name
  * @property {'classifying' | 'ready' | 'disabled'} status
- * @property {DirEntry['type'] | 'filesystem' | 'layer' | 'mount'} [kind] Resolved cap kind.
+ * @property {'filesystem' | 'layer' | 'mount' | 'git'} [kind] Resolved cap kind; set only on `'ready'` items (matches `openFsCap`).
  * @property {Cap} [cap] Present once `status === 'ready'`.
  * @property {string} title Tooltip text.
  */
@@ -197,7 +204,7 @@ export {};
  * @property {(parentPath: string[], name: string, type: 'directory' | 'file') => void} renameEntryAction
  * @property {(parentPath: string[], name: string, type: 'directory' | 'file') => void} deleteEntryAction
  * @property {(fromParent: string[], name: string, toParent: string[], type?: 'directory' | 'file') => void} moveEntry
- * @property {() => void} saveSelectedFile Write the editor buffer back to disk.
+ * @property {(text?: string) => void} saveSelectedFile Write the editor buffer back to disk. The Viewer passes its controlled draft text; the store falls back to its own buffer / the file's current text.
  * Sources & inventory
  * @property {() => void} addMemoryFilesystem Mint an in-memory fs and open it.
  * @property {() => void} openByPetName Open a source by inventory pet-name path.
