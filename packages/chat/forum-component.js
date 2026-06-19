@@ -391,7 +391,7 @@ export const forumComponent = async (
       return h(
         'span',
         {
-          key: String(index),
+          key: `chip-${index}`,
           class: 'token',
           tabindex: 0,
           role: 'button',
