@@ -9453,6 +9453,19 @@ button.btn-spinner::after {
   color: #fff;
 }
 
+/* Non-fs children (e.g. a git workspace) surfaced by raw-Mount
+   enumeration: shown for awareness but not browsable, mirroring the
+   inventory's disabled rows. */
+.fx-entry.unknown {
+  cursor: default;
+  color: var(--text-muted);
+  opacity: 0.55;
+}
+
+.fx-entry.unknown:hover {
+  background: none;
+}
+
 .fx-entry.fx-drop-target {
   outline: 2px solid var(--accent-primary);
   outline-offset: -2px;

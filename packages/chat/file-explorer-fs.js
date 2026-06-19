@@ -37,7 +37,11 @@ import { withCachedReads } from '@endo/platform/fs/extended/cached-fs.js';
 /**
  * @typedef {object} DirEntry
  * @property {string} name
- * @property {'directory' | 'file'} type
+ * @property {'directory' | 'file' | 'unknown'} type - `'unknown'`
+ *   marks a child that is neither a sub-directory nor a file (e.g. a
+ *   git workspace or other non-fs cap living in a Mount). The base
+ *   endo-fs filesystem surface drops these (it is tree-only), so the
+ *   explorer only sees them via raw-Mount enumeration.
  */
 
 // Read/write in bounded chunks so a single `@endo/exo-stream`
@@ -239,6 +243,68 @@ export const listDirectory = async directory => {
   return harden(entries);
 };
 harden(listDirectory);
+
+/**
+ * Classify a child cap of a Mount the same way `@endo/endo-fs`'s
+ * from-mount backend does: a `lookup` method means a sub-directory
+ * (sub-Mount), `text`/`streamBase64` means a file. Anything else is
+ * a non-fs cap (e.g. a git workspace) which the tree-only filesystem
+ * surface would silently drop — we surface it as `'unknown'` so the
+ * explorer can show it greyed-out instead of hiding it.
+ *
+ * @param {Cap} cap
+ * @returns {Promise<'directory' | 'file' | 'unknown'>}
+ */
+const probeMountChildType = async cap => {
+  await null;
+  try {
+    const methods = await E(cap).__getMethodNames__();
+    const names = new Set(methods);
+    if (names.has('lookup')) return 'directory';
+    if (names.has('text') || names.has('streamBase64')) return 'file';
+  } catch {
+    // A child whose introspection rejects is treated as unsupported
+    // rather than crashing the whole listing.
+  }
+  return 'unknown';
+};
+
+/**
+ * List a Mount's children by enumerating the raw Mount directly
+ * (rather than the wrapped, tree-only `Filesystem` surface), so that
+ * non-fs children surface as `'unknown'` entries instead of being
+ * dropped. Ordering mirrors {@link listDirectory}: directories
+ * first, then files, then unsupported entries, each group sorted by
+ * name.
+ *
+ * `mountRoot` is the Mount cap; `pathSegments` is the directory path
+ * relative to it (`[]` for the root). Nested lookups pipeline onto
+ * the root in a single round trip.
+ *
+ * @param {Cap} mountRoot
+ * @param {string[]} pathSegments
+ * @returns {Promise<DirEntry[]>}
+ */
+export const listMountDirectory = async (mountRoot, pathSegments) => {
+  await null;
+  const dir =
+    pathSegments.length === 0 ? mountRoot : E(mountRoot).lookup(pathSegments);
+  const names = /** @type {string[]} */ (await E(dir).list());
+  /** @type {DirEntry[]} */
+  const entries = await Promise.all(
+    names.map(async name => {
+      const type = await probeMountChildType(E(dir).lookup(name));
+      return { name: String(name), type };
+    }),
+  );
+  const rank = { directory: 0, file: 1, unknown: 2 };
+  entries.sort((a, b) => {
+    if (a.type !== b.type) return rank[a.type] - rank[b.type];
+    return a.name.localeCompare(b.name);
+  });
+  return harden(entries);
+};
+harden(listMountDirectory);
 
 /**
  * Read a file's bytes, capped at the preview limit. `getAttrs`
