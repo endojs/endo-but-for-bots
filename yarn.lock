@@ -1474,6 +1474,7 @@ __metadata:
     "@endo/far": "workspace:^"
     "@endo/harden": "workspace:^"
     eslint: "catalog:dev"
+    preact: "npm:^10.29.2"
   languageName: unknown
   linkType: soft
 
