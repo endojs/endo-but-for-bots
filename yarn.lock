@@ -1414,12 +1414,14 @@ __metadata:
     "@endo/inventory-graph": "workspace:^"
     "@endo/lockdown": "workspace:^"
     "@endo/markmdown": "workspace:^"
+    "@endo/monaco-wrapper": "workspace:^"
     "@endo/pass-style": "workspace:^"
     "@endo/patterns": "workspace:^"
     "@endo/platform": "workspace:^"
     "@endo/preact-container": "workspace:^"
     "@endo/promise-kit": "workspace:^"
     "@endo/ses-ava": "workspace:^"
+    "@endo/space-file-explorer": "workspace:^"
     "@endo/where": "workspace:^"
     "@endo/whylip": "workspace:^"
     "@playwright/test": "npm:^1.40.0"
@@ -2246,6 +2248,16 @@ __metadata:
   languageName: unknown
   linkType: soft
 
+"@endo/monaco-wrapper@workspace:^, @endo/monaco-wrapper@workspace:packages/monaco-wrapper":
+  version: 0.0.0-use.local
+  resolution: "@endo/monaco-wrapper@workspace:packages/monaco-wrapper"
+  dependencies:
+    "@endo/harden": "workspace:^"
+    eslint: "catalog:dev"
+    monaco-editor: "npm:^0.55.1"
+  languageName: unknown
+  linkType: soft
+
 "@endo/nat@workspace:^, @endo/nat@workspace:packages/nat":
   version: 0.0.0-use.local
   resolution: "@endo/nat@workspace:packages/nat"
@@ -2570,6 +2582,19 @@ __metadata:
     eslint: "catalog:dev"
     tsd: "catalog:dev"
     typescript: "catalog:dev"
+  languageName: unknown
+  linkType: soft
+
+"@endo/space-file-explorer@workspace:^, @endo/space-file-explorer@workspace:packages/space-file-explorer":
+  version: 0.0.0-use.local
+  resolution: "@endo/space-file-explorer@workspace:packages/space-file-explorer"
+  dependencies:
+    "@endo/exo-stream": "workspace:^"
+    "@endo/far": "workspace:^"
+    "@endo/harden": "workspace:^"
+    "@endo/monaco-wrapper": "workspace:^"
+    "@endo/platform": "workspace:^"
+    eslint: "catalog:dev"
   languageName: unknown
   linkType: soft
 
