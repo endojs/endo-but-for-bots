@@ -125,22 +125,25 @@ const assertRestValidImmutableArrayBuffer = candidate => {
 
 /**
  * Validates that the candidate is a "plain frozen `Uint8Array` backed by a
- * plain frozen immutable `ArrayBuffer`". The unifying definition tolerates
- * both the emulated-wrapper shape (a plain ordinary object whose
- * `[[Prototype]]` is `Uint8Array.prototype` with no own integer-indexed
- * own properties) and the future native shape (an integer-indexed exotic
- * with `length`-many own enumerable indexed data properties), which is
- * the shape the spec mandates once a TC39-spec-following engine ships the
- * Immutable ArrayBuffer proposal alongside a freezable-TypedArray path.
+ * plain frozen immutable `ArrayBuffer`". The unifying definition accepts
+ * exactly two well-formed shapes, distinguished by their own-key count:
  *
- * "Plain" rules out post-construction tampering: any own key other than
- * the canonical integer indices `[0, length)` is rejected, and each
- * indexed own property must be an enumerable data property whose value
- * equals the byte the wrapper would read through the integer-indexed
- * protocol. The latter equality rules out the emulated case where a
- * caller wrote `view[i] = x` before freezing (creating an own
- * shadowing data property whose value differs from the underlying
- * buffer's byte at offset `i`).
+ * - **Emulated-wrapper shape** (produced by `@endo/immutable-arraybuffer`):
+ *   a plain ordinary object whose `[[Prototype]]` is `Uint8Array.prototype`
+ *   with **no own integer-indexed own properties**, regardless of `length`.
+ *   The shim exposes data through the prototype-chain amplifier; there are
+ *   never any own indexed slots on the wrapper itself.
+ *
+ * - **Native shape** (produced by a TC39-spec-following engine once the
+ *   Immutable ArrayBuffer proposal ships): an integer-indexed exotic with
+ *   exactly `length`-many own enumerable indexed data properties, each
+ *   matching the underlying buffer byte at that offset.
+ *
+ * Any other own-key count (between 0 and `length`, exclusive, or above
+ * `length`) is post-construction tampering and is rejected. Non-index own
+ * properties are rejected in both shapes. Indexed own properties that are
+ * present on a native-shape wrapper but whose value disagrees with the
+ * underlying buffer byte are also rejected.
  *
  * Assumes the candidate has already passed the `isFrozen` gate that
  * `passStyleOf` applies before reaching any helper.
@@ -168,6 +171,12 @@ const assertRestValidPlainFrozenUint8Array = candidate => {
   // delegates to the hidden genuine TypedArray and on the native path
   // reads the integer-indexed exotic's `[[ArrayLength]]` slot.
   const length = candidate.length;
+  // Collect and validate own keys in one pass, counting indexed keys as we go.
+  // On the emulated path the count must be 0 (no own indexed properties at
+  // all, regardless of length). On the native path the count must be exactly
+  // `length`. Any other count indicates tampering and is rejected after the
+  // loop.
+  let ownIndexCount = 0;
   for (const key of ownKeys(candidate)) {
     if (!isCanonicalIndexKey(key)) {
       assert.fail(
@@ -186,9 +195,7 @@ const assertRestValidPlainFrozenUint8Array = candidate => {
     // `ownKeys(candidate)`. Integer-indexed own properties on a frozen
     // `Uint8Array` are enumerable data properties per spec (after freeze:
     // non-writable, non-configurable). On the native exotic path the
-    // shape is forced by the integer-indexed-exotic internal methods. On
-    // a tampered emulated wrapper that shadows an index with a data
-    // property, the shape must match the same constraints to be accepted.
+    // shape is forced by the integer-indexed-exotic internal methods.
     const value =
       descriptor && 'value' in descriptor ? descriptor.value : undefined;
     (descriptor !== undefined &&
@@ -202,18 +209,29 @@ const assertRestValidPlainFrozenUint8Array = candidate => {
     // The own data property's value must match the byte the wrapper
     // reads through the integer-indexed protocol. On the native exotic
     // path the equality is structural (the own property *is* the
-    // integer-indexed read). On the emulated path, where the wrapper is
-    // an ordinary object, the captured `typedArrayAt` resolves through
-    // the lib-installed amplifier to the hidden genuine TypedArray and
-    // reads from the underlying immutable buffer; a shadowing write that
-    // disagrees with the buffer's byte at that offset is rejected.
+    // integer-indexed read). The captured `typedArrayAt` bypasses any
+    // own data property on the wrapper and reads through the prototype
+    // chain, ensuring the comparison is against the underlying buffer byte.
     const byteFromBuffer = apply(typedArrayAt, candidate, [index]);
     value === byteFromBuffer ||
       assert.fail(
         X`Plain frozen Uint8Array byteArray own index ${key} value ${value} must equal underlying byte ${byteFromBuffer}: ${candidate}`,
         TypeError,
       );
+    ownIndexCount += 1;
   }
+  // Accept only the two well-formed shapes:
+  //   - Emulated path: 0 own indexed properties (plain object, any length).
+  //   - Native path: exactly `length`-many own indexed properties.
+  // Any other count (e.g., a single shadowing write on an emulated wrapper
+  // before freeze) is rejected as post-construction tampering, even if the
+  // written value matches the underlying buffer byte.
+  ownIndexCount === 0 ||
+    ownIndexCount === length ||
+    assert.fail(
+      X`Plain frozen Uint8Array byteArray must have either no own indexed properties (emulated) or exactly length ${length} own indexed properties (native), not ${ownIndexCount}: ${candidate}`,
+      TypeError,
+    );
 };
 
 /**
