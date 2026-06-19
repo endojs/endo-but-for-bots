@@ -26,6 +26,7 @@ import {
   decodeText,
   getRoot,
   listDirectory,
+  listMountDirectory,
   lookupChild,
   makeCachedFilesystem,
   readFile,
@@ -60,6 +61,10 @@ import {
  *   whenever `useCache` flips so the next browse remints it
  * @property {Cap} [layer] - layer cap when `kind === 'layer'`, so
  *   the Apply/Changes/Revert actions can operate on it
+ * @property {Cap} [mount] - raw Mount cap when `kind === 'mount'`.
+ *   Directory listings enumerate this directly (not the wrapped,
+ *   tree-only Filesystem) so non-fs children surface as `'unknown'`
+ *   entries instead of being dropped.
  * @property {string} [backingSourceId]
  */
 
@@ -439,6 +444,24 @@ export const mountFileExplorer = (
     return promise;
   };
 
+  /**
+   * List a directory for the browser. Mount-backed sources enumerate
+   * the raw Mount so non-fs children (e.g. a git workspace) surface
+   * as greyed-out `'unknown'` entries instead of being dropped by the
+   * tree-only Filesystem surface; every other source reads through
+   * the wrapped Filesystem as before.
+   *
+   * @param {string[]} path
+   * @returns {Promise<import('./file-explorer-fs.js').DirEntry[]>}
+   */
+  const listEntries = path => {
+    const source = activeSource();
+    if (source && source.mount) {
+      return listMountDirectory(source.mount, path);
+    }
+    return listDirectory(resolveDir(path));
+  };
+
   // ---- live-view watchers -----------------------------------------
 
   const clearWatchers = () => {
@@ -686,7 +709,7 @@ export const mountFileExplorer = (
     await Promise.all(
       next.map(async column => {
         try {
-          column.entries = await listDirectory(resolveDir(column.path));
+          column.entries = await listEntries(column.path);
         } catch (error) {
           column.error = errorMessage(error);
         }
@@ -716,7 +739,7 @@ export const mountFileExplorer = (
           renderBrowser();
         }
         try {
-          treeChildren.set(key, await listDirectory(resolveDir(path)));
+          treeChildren.set(key, await listEntries(path));
         } catch {
           // Leave any previous listing in place.
         }
@@ -829,7 +852,7 @@ export const mountFileExplorer = (
     renderToolbar();
     beginBusy();
     try {
-      column.entries = await listDirectory(resolveDir(path));
+      column.entries = await listEntries(path);
     } catch (error) {
       column.error = errorMessage(error);
     } finally {
@@ -860,7 +883,7 @@ export const mountFileExplorer = (
       renderBrowser();
       beginBusy();
       try {
-        treeChildren.set(key, await listDirectory(resolveDir(path)));
+        treeChildren.set(key, await listEntries(path));
       } catch (error) {
         reportError(error);
       } finally {
@@ -1219,6 +1242,7 @@ export const mountFileExplorer = (
       readOnly: false,
     };
     if (petName) spec.petName = petName;
+    if (kind === 'mount') spec.mount = cap;
     if (kind === 'layer') {
       // Remember the Layer cap on the source so the layer-specific
       // actions (Apply, Changes, Revert) light up — opening from
@@ -1950,24 +1974,35 @@ export const mountFileExplorer = (
    * @returns {string}
    */
   const entryRowHtml = (entry, parentPath, flags) => {
-    const icon = entry.type === 'directory' ? '\u{1F4C1}' : '\u{1F4C4}';
+    const unsupported = entry.type === 'unknown';
+    const icon = unsupported
+      ? '\u{2754}'
+      : entry.type === 'directory'
+        ? '\u{1F4C1}'
+        : '\u{1F4C4}';
     const indent =
       flags.depth !== undefined
         ? ` style="padding-left:${8 + flags.depth * 16}px"`
         : '';
-    const actions = flags.readOnly
-      ? ''
-      : `<span class="fx-entry-actions">
+    // Unsupported entries are not real fs nodes (no rename/delete/drag),
+    // so they get no row actions and aren't draggable.
+    const actions =
+      flags.readOnly || unsupported
+        ? ''
+        : `<span class="fx-entry-actions">
            <button type="button" class="fx-mini fx-entry-rename"
              title="Rename" draggable="false">✎</button>
            <button type="button" class="fx-mini fx-entry-delete"
              title="Delete" draggable="false">✕</button>
          </span>`;
+    const titleAttr = unsupported
+      ? ' title="Not an endo-fs Filesystem, Layer, or Mount"'
+      : '';
     return `
       <div class="fx-entry ${entry.type} ${
         flags.selected ? 'fx-selected' : ''
-      }"${indent}
-        draggable="${flags.readOnly ? 'false' : 'true'}"
+      }"${indent}${titleAttr}
+        draggable="${flags.readOnly || unsupported ? 'false' : 'true'}"
         data-name="${esc(entry.name)}"
         data-type="${entry.type}"
         data-parent="${esc(JSON.stringify(parentPath))}">
@@ -2040,7 +2075,7 @@ export const mountFileExplorer = (
    */
   const renderTreeNode = (path, entry, depth, readOnly) => {
     const selfPath = [...path, entry.name];
-    if (entry.type === 'file') {
+    if (entry.type !== 'directory') {
       const selected =
         !!selectedFile &&
         pathKey(selectedFile.parentPath) === pathKey(path) &&
@@ -2109,13 +2144,17 @@ export const mountFileExplorer = (
     for (const $entry of $browser.querySelectorAll('.fx-entry')) {
       const el = /** @type {HTMLElement} */ ($entry);
       const name = el.dataset.name || '';
-      const type = el.dataset.type === 'directory' ? 'directory' : 'file';
+      const rawType = el.dataset.type || 'file';
+      const type = rawType === 'directory' ? 'directory' : 'file';
+      const unsupported = rawType === 'unknown';
       /** @type {string[]} */
       const parentPath = JSON.parse(el.dataset.parent || '[]');
 
       el.addEventListener('click', event => {
         const target = /** @type {HTMLElement} */ (event.target);
         if (target.closest('.fx-entry-actions')) return;
+        // Unsupported (non-fs) entries are display-only.
+        if (unsupported) return;
         if (viewMode === 'columns') {
           const $column = el.closest('.fx-column');
           const columnIndex = $column
