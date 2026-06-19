@@ -6,7 +6,7 @@
 /** @import { VNode } from 'preact' */
 
 import { E } from '@endo/far';
-import { createMonacoEditor, detectTheme } from './monaco-wrapper.js';
+import { createMonacoEditor, detectTheme } from '@endo/monaco-wrapper';
 import { inferLanguage } from './language-detect.js';
 import { isMarkdown } from './markdown-preview.js';
 import { MarkdownFragment } from './markdown-vnodes.js';

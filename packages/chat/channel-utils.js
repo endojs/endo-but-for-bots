@@ -6,7 +6,7 @@ import {
   prepareTextWithPlaceholders,
   renderMarkdown,
 } from './markdown-render.js';
-import { colorize } from './monaco-wrapper.js';
+import { colorize } from '@endo/monaco-wrapper';
 import { timeFormatter, relativeTime } from './time-formatters.js';
 import { createProfilePopup } from './profile-popup.js';
 
