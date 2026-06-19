@@ -14,17 +14,23 @@
 // The second section covers the freezable-Uint8Array arm of the brand
 // check: a plain frozen `Uint8Array` whose backing buffer is a plain
 // frozen immutable `ArrayBuffer` is accepted as a `byteArray`. The
-// "plain" definition rejects any wrapper-side own property that is not a
-// canonical integer index in `[0, length)` mapping to the buffer's
-// underlying byte, ruling out post-construction tampering on both the
-// emulated path (where the wrapper is a plain ordinary object) and the
-// future native path (where the wrapper is an integer-indexed exotic).
+// "plain" definition accepts exactly two well-formed shapes:
+//   - Emulated path: no own indexed properties at all, regardless of
+//     length. The `@endo/immutable-arraybuffer` shim produces this shape;
+//     any own indexed property is post-construction tampering and is
+//     rejected even when the value agrees with the underlying buffer byte.
+//   - Native path: exactly `length`-many own indexed properties, each an
+//     enumerable data property whose value matches the underlying buffer
+//     byte. This is the shape a spec-conformant engine will produce once
+//     the Immutable ArrayBuffer proposal ships natively.
+// Non-index own properties are rejected on both paths.
 import test from '@endo/ses-ava/test.js';
 
 import harden from '@endo/harden';
 import { passStyleOf } from '../src/passStyleOf.js';
 
 const { defineProperty, freeze, getOwnPropertyDescriptor } = Object;
+const { ownKeys } = Reflect;
 
 test('byteArray accepts an emulated immutable ArrayBuffer with the standard toStringTag slot', t => {
   const iab = harden(new ArrayBuffer(0).sliceToImmutable());
@@ -118,9 +124,28 @@ test('byteArray accepts a plain frozen Uint8Array backed by an immutable ArrayBu
   t.is(passStyleOf(view), 'byteArray');
 });
 
-test('byteArray accepts a plain frozen empty Uint8Array on an empty immutable ArrayBuffer', t => {
+test('byteArray accepts a plain frozen Uint8Array on a zero-length immutable ArrayBuffer (emulated, no own indexed properties)', t => {
   const iab = new ArrayBuffer(0).sliceToImmutable();
   const view = new Uint8Array(iab);
+  harden(view);
+  t.is(passStyleOf(view), 'byteArray');
+});
+
+test('byteArray accepts a plain frozen non-empty emulated Uint8Array with no own indexed properties', t => {
+  // The emulated freezable-TypedArray wrapper is a plain ordinary object
+  // with no own integer-indexed properties regardless of length. Data is
+  // accessible through the prototype-chain amplifier that resolves to the
+  // hidden genuine TypedArray. This test confirms the acceptance criterion
+  // is "no own indexed properties" rather than "zero length".
+  const ab = new ArrayBuffer(8);
+  new Uint8Array(ab).set([10, 20, 30, 40, 50, 60, 70, 80]);
+  const iab = ab.sliceToImmutable();
+  const view = new Uint8Array(iab);
+  // Verify the emulated wrapper has no own indexed properties.
+  t.deepEqual(
+    ownKeys(view).filter(k => typeof k === 'string' && /^\d+$/.test(k)),
+    [],
+  );
   harden(view);
   t.is(passStyleOf(view), 'byteArray');
 });
@@ -157,6 +182,25 @@ test('byteArray rejects a Uint8Array on an immutable ArrayBuffer with a shadowin
   harden(view);
   t.throws(() => passStyleOf(view), {
     message: /must equal underlying byte/,
+  });
+});
+
+test('byteArray rejects an emulated Uint8Array whose own indexed property matches the buffer byte', t => {
+  // On the emulated path the wrapper is a plain ordinary object with no own
+  // indexed properties; any own indexed property is post-construction
+  // tampering. The brand check rejects the wrapper even when the own
+  // property's value happens to agree with the underlying buffer byte,
+  // because an emulated wrapper must have zero own indexed properties (not
+  // one, not length-many: zero).
+  const ab = new ArrayBuffer(4);
+  new Uint8Array(ab).set([10, 20, 30, 40]);
+  const iab = ab.sliceToImmutable();
+  const view = new Uint8Array(iab);
+  // Write the same value the buffer already holds at index 0.
+  view[0] = 10;
+  harden(view);
+  t.throws(() => passStyleOf(view), {
+    message: /must have either no own indexed properties.*or exactly length/,
   });
 });
 
