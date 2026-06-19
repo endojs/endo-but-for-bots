@@ -31,9 +31,9 @@ const immutableGetter =
     immutableDescriptor?.get
   ) || (() => false);
 
-// Capture the `%TypedArrayPrototype%.at` getter-of-sorts so we can read a
-// byte through the genuine integer-indexed protocol without going through
-// the wrapper's own (possibly shadowing) data property. On the emulated
+// Capture the `%TypedArrayPrototype%.at` method so we can read a byte
+// through the genuine integer-indexed protocol without going through the
+// wrapper's own (possibly shadowing) data property. On the emulated
 // freezable-TypedArray path installed by `@endo/immutable-arraybuffer`,
 // this captured reference points at the shim-installed amplifier, which
 // resolves the wrapper to its hidden genuine TypedArray and reads from
@@ -43,7 +43,7 @@ const immutableGetter =
 // property on the wrapper.
 const { prototype: uint8ArrayPrototype } = Uint8Array;
 const typedArrayPrototype = getPrototypeOf(uint8ArrayPrototype);
-const typedArrayAt = typedArrayPrototype.at;
+const { at: typedArrayAt } = typedArrayPrototype;
 
 // The permitted own-property keys on an emulated immutable buffer, paired
 // with the `typeof` of the data-property value the key must carry. The
