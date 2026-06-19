@@ -61,7 +61,7 @@ The single import surface for the confine/render helpers is
   `blob-viewer` also moved its markdown preview to `markdownToVnodes`), and
   `icon-selector` (the reusable `IconSelector`, no longer deferred).
 - **The Whylip Space is fully ported** to confined Preact in the separate
-  `@endo/whylip` package (`WhylipApp` + children authored in `h()`), mounted
+  `@endo/space-whylip` package (`WhylipApp` + children authored in `h()`), mounted
   through the confined renderer by `whylip-component.js`.
 - **The File Explorer Space is fully migrated** to confined Preact in its own
   `@endo/space-file-explorer` package (`FileExplorerApp` + store hook + view
@@ -86,7 +86,7 @@ been converted to confined Preact:
 | outliner-component | 3003 | `outliner` viewMode body — held for the decompose-into-contract approach |
 | spaces-gutter | 971 | left space gutter — **⊘ deferred** (the floot imperative-Space PR edits it, +41/-5) |
 | heat-simulation | 225 | heat animation; still imperative but host-node-bridged by the converted `channel-header` (not a primary target) |
-| inventory-graph (pkg) | ~ | `@endo/inventory-graph/src/graph.js` SVG view — needs the renderer's `allowedTags`/`allowedAttrs` SVG extension first |
+| inventory-graph (pkg) | ~ | `@endo/space-inventory-graph/src/graph.js` SVG view — needs the renderer's `allowedTags`/`allowedAttrs` SVG extension first |
 
 Newly **done** (confined Preact, verified + tests, mount signatures unchanged so
 `chat.js` was untouched): **forum**, **value-component**, **channel-component**
@@ -95,7 +95,7 @@ bridges the imperative heat-simulation), and **chat-bar-component** (its two
 `.innerHTML` view regions — the modeline and command popover — are confined;
 the rest is irreducible imperative orchestration over the shared `#messages`
 DOM).
-| inventory-graph (pkg) | ~ | `@endo/inventory-graph/src/graph.js` SVG view (see below) |
+| inventory-graph (pkg) | ~ | `@endo/space-inventory-graph/src/graph.js` SVG view (see below) |
 
 ### Deferred — frozen for an incoming imperative-Space PR
 
@@ -117,9 +117,9 @@ conflicting with that PR. Resume `chat.js` / `add-space-modal` after it lands.
 Two of the special-space views live in separate packages reached through a thin
 chat wrapper; they are **in scope**, just tracked in their own package:
 
-- `peers-component` → `@endo/chat-network-view/src/peers.js` — **done** (already
+- `peers-component` → `@endo/space-peers/src/peers.js` — **done** (already
   confined Preact); the chat wrapper is a thin confined mount.
-- `inventory-graph-component` → `@endo/inventory-graph/src/graph.js` —
+- `inventory-graph-component` → `@endo/space-inventory-graph/src/graph.js` —
   **still DOM** (~28 `createElement`/SVG calls); a remaining migration target in
   that package. The chat wrapper just resolves powers and delegates.
 
@@ -332,7 +332,7 @@ instead), `value-render`, `time-formatters`, `language-detect`,
 DOM), `command-executor` (command orchestration, no DOM), and `monaco-wrapper`
 (the external-editor seam).
 `peers-component` and `inventory-graph-component` are thin chat wrappers that
-delegate to the separate `@endo/chat-network-view` and `@endo/inventory-graph`
+delegate to the separate `@endo/space-peers` and `@endo/space-inventory-graph`
 packages; the real views live there and are **in scope** (tracked in those
 packages). `chat-network-view`'s `peers.js` is already confined Preact (done);
 `inventory-graph`'s `graph.js` is still on the DOM API (remaining).
@@ -396,7 +396,7 @@ for the incoming imperative-Space PR — see "Deferred" above)
 | add-space-modal | ⊘ | **Deferred** — frozen imperative for the incoming imperative-Space PR (space-type registration); resume after it lands |
 | chat.js (root orchestrator) | ⊘ | **Deferred** — frozen imperative for the incoming imperative-Space PR (space-mode dispatch); stays the trusted root that calls `renderConfined` |
 
-### Whylip Space (separate `@endo/whylip` package)
+### Whylip Space (separate `@endo/space-whylip` package)
 
 | Component | Status | Notes |
 | --- | --- | --- |
@@ -428,7 +428,7 @@ Continuing bottom-up, lowest-risk first:
   `spaces-gutter` (~971).
 - `chat-bar-component` (~1735) — fully unblocked: every form/picker child it
   composes is converted, so its own chrome can convert in place.
-- `@endo/inventory-graph`'s `graph.js` (~28 SVG `createElement`s) — pending a
+- `@endo/space-inventory-graph`'s `graph.js` (~28 SVG `createElement`s) — pending a
   check that the confined renderer admits SVG tags/attributes.
 - `outliner` (~3003) — the largest body; decompose into a contract + parallel
   agents (the file-explorer approach), not a one-shot.
