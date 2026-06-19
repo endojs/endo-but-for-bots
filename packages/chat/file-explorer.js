@@ -25,6 +25,7 @@ import {
   createFile,
   decodeText,
   getRoot,
+  gitWorktreeMount,
   listDirectory,
   listMountDirectory,
   lookupChild,
@@ -1218,21 +1219,30 @@ export const mountFileExplorer = (
    *
    * @param {string} label
    * @param {Cap} cap
-   * @param {'filesystem' | 'layer' | 'mount'} kind
+   * @param {'filesystem' | 'layer' | 'mount' | 'git'} kind
    * @param {string} [petName]  inventory pet name (or
    *   slash/dot-separated path) for this cap, when known. Lets
    *   downstream "Save read-only view" / "Save layer" actions
    *   address the cap on the daemon side.
    */
   const openFsCap = async (label, cap, kind, petName) => {
+    // A git cap is browsed through its writable worktree Mount; from
+    // here on it behaves exactly like a mount source (so its raw
+    // children, including nested non-fs caps, are surfaced too).
+    let mountCap = cap;
+    let effectiveKind = kind;
+    if (kind === 'git') {
+      mountCap = await gitWorktreeMount(cap);
+      effectiveKind = 'mount';
+    }
     // `toFilesystem` may return a Promise (layer case) — await
     // uniformly so the caller always gets a concrete Filesystem
     // cap to hand to the source list.
-    const filesystem = await toFilesystem(cap, kind);
+    const filesystem = await toFilesystem(mountCap, effectiveKind);
     /** @type {Source['kind']} */
     let sourceKind;
-    if (kind === 'mount') sourceKind = 'mount';
-    else if (kind === 'layer') sourceKind = 'layer';
+    if (effectiveKind === 'mount') sourceKind = 'mount';
+    else if (effectiveKind === 'layer') sourceKind = 'layer';
     else sourceKind = 'lookup';
     /** @type {Omit<Source, 'id' | 'useCache'> & { useCache?: boolean }} */
     const spec = {
@@ -1242,8 +1252,8 @@ export const mountFileExplorer = (
       readOnly: false,
     };
     if (petName) spec.petName = petName;
-    if (kind === 'mount') spec.mount = cap;
-    if (kind === 'layer') {
+    if (effectiveKind === 'mount') spec.mount = mountCap;
+    if (effectiveKind === 'layer') {
       // Remember the Layer cap on the source so the layer-specific
       // actions (Apply, Changes, Revert) light up — opening from
       // the inventory should restore them just like creating the
@@ -1251,7 +1261,9 @@ export const mountFileExplorer = (
       spec.layer = cap;
     }
     const source = addSource(spec);
-    if (kind === 'mount') {
+    if (kind === 'git') {
+      setStatus(`Opened git worktree "${source.label}"`);
+    } else if (kind === 'mount') {
       setStatus(`Opened Mount "${source.label}" via endo-fs from-mount`);
     } else if (kind === 'layer') {
       setStatus(`Opened layer "${source.label}" (composed view)`);
@@ -1259,6 +1271,32 @@ export const mountFileExplorer = (
       setStatus(`Opened filesystem "${source.label}"`);
     }
     await selectSource(source.id);
+  };
+
+  /**
+   * Open a git workspace child (surfaced by raw-Mount enumeration)
+   * as its own explorer source, browsing its writable worktree.
+   *
+   * @param {string[]} parentPath
+   * @param {string} name
+   * @returns {Promise<void>}
+   */
+  const openGitEntry = async (parentPath, name) => {
+    const source = activeSource();
+    if (!source || !source.mount) return;
+    const segments = [...parentPath, name];
+    beginBusy();
+    try {
+      const gitCap = await E(source.mount).lookup(segments);
+      const petName = source.petName
+        ? `${source.petName}.${segments.join('.')}`
+        : undefined;
+      await openFsCap(name, gitCap, 'git', petName);
+    } catch (error) {
+      reportError(error);
+    } finally {
+      endBusy();
+    }
   };
 
   const openByPetName = async () => {
@@ -1975,19 +2013,21 @@ export const mountFileExplorer = (
    */
   const entryRowHtml = (entry, parentPath, flags) => {
     const unsupported = entry.type === 'unknown';
-    const icon = unsupported
-      ? '\u{2754}'
-      : entry.type === 'directory'
-        ? '\u{1F4C1}'
-        : '\u{1F4C4}';
+    const isGit = entry.type === 'git';
+    // Cap entries (git workspaces, unsupported caps) aren't plain fs
+    // nodes: no rename/delete/drag, even though git ones are clickable.
+    const capEntry = unsupported || isGit;
+    let icon;
+    if (isGit) icon = '\u{1F33F}';
+    else if (unsupported) icon = '\u{2754}';
+    else if (entry.type === 'directory') icon = '\u{1F4C1}';
+    else icon = '\u{1F4C4}';
     const indent =
       flags.depth !== undefined
         ? ` style="padding-left:${8 + flags.depth * 16}px"`
         : '';
-    // Unsupported entries are not real fs nodes (no rename/delete/drag),
-    // so they get no row actions and aren't draggable.
     const actions =
-      flags.readOnly || unsupported
+      flags.readOnly || capEntry
         ? ''
         : `<span class="fx-entry-actions">
            <button type="button" class="fx-mini fx-entry-rename"
@@ -1995,14 +2035,17 @@ export const mountFileExplorer = (
            <button type="button" class="fx-mini fx-entry-delete"
              title="Delete" draggable="false">✕</button>
          </span>`;
-    const titleAttr = unsupported
-      ? ' title="Not an endo-fs Filesystem, Layer, or Mount"'
-      : '';
+    let titleAttr = '';
+    if (unsupported) {
+      titleAttr = ' title="Not an endo-fs Filesystem, Layer, or Mount"';
+    } else if (isGit) {
+      titleAttr = ' title="Git repository — click to open its worktree"';
+    }
     return `
       <div class="fx-entry ${entry.type} ${
         flags.selected ? 'fx-selected' : ''
       }"${indent}${titleAttr}
-        draggable="${flags.readOnly || unsupported ? 'false' : 'true'}"
+        draggable="${flags.readOnly || capEntry ? 'false' : 'true'}"
         data-name="${esc(entry.name)}"
         data-type="${entry.type}"
         data-parent="${esc(JSON.stringify(parentPath))}">
@@ -2147,6 +2190,7 @@ export const mountFileExplorer = (
       const rawType = el.dataset.type || 'file';
       const type = rawType === 'directory' ? 'directory' : 'file';
       const unsupported = rawType === 'unknown';
+      const isGit = rawType === 'git';
       /** @type {string[]} */
       const parentPath = JSON.parse(el.dataset.parent || '[]');
 
@@ -2155,6 +2199,11 @@ export const mountFileExplorer = (
         if (target.closest('.fx-entry-actions')) return;
         // Unsupported (non-fs) entries are display-only.
         if (unsupported) return;
+        // A git workspace opens as its own source (its worktree).
+        if (isGit) {
+          openGitEntry(parentPath, name).catch(reportError);
+          return;
+        }
         if (viewMode === 'columns') {
           const $column = el.closest('.fx-column');
           const columnIndex = $column
@@ -2551,6 +2600,8 @@ export const mountFileExplorer = (
         $row.classList.remove('fx-inv-disabled');
         if (kind === 'mount') {
           $row.title = `Open Mount "${name}"`;
+        } else if (kind === 'git') {
+          $row.title = `Open git worktree "${name}"`;
         } else if (kind === 'layer') {
           $row.title = `Open layer "${name}" (composed view + layer actions)`;
         } else {
