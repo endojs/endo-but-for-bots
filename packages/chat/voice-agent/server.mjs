@@ -461,6 +461,9 @@ const handler = async (req, res) => {
     if (u.pathname === '/cap-channel.js') return serveFile(res, 'cap-channel.js', 'text/javascript; charset=utf-8');
     if (u.pathname === '/trace-app.js') return serveFile(res, 'trace-app.js', 'text/javascript; charset=utf-8');
     if (u.pathname === '/widget.js') return serveFile(res, 'widget.js', 'text/javascript; charset=utf-8');
+    // confined-Preact islands bundle (built by `yarn build:islands`) + its sourcemap
+    if (u.pathname === '/islands/islands.js') return serveFile(res, 'islands/islands.js', 'text/javascript; charset=utf-8');
+    if (u.pathname === '/islands/islands.js.map') return serveFile(res, 'islands/islands.js.map', 'application/json; charset=utf-8');
     // standalone iframe apps — framed SAME-ORIGIN by the SPA (override XFO:DENY)
     if (u.pathname === '/trace-app.html' || u.pathname === '/widget.html') {
       const f = u.pathname.slice(1);

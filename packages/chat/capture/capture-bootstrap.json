@@ -1,0 +1,84 @@
+{
+  "name": "capture-bootstrap",
+  "description": "Capability set for the reactive capture agent. The agent gets READ-ONLY access to the bootstrap corpus (including the arrived object it is processing) for context + cross-referencing, and WRITE access ONLY to a derived output note (under outputRoot) that REFERENCES the arrived object. It must NEVER mutate the arrived file. Anything beyond that is requested via ProposeCode / ProposeEndowment and granted only when the operator approves it on the dashboard.",
+  "readOnlyRoots": [
+    "/home/dan/obsidian/vault",
+    "/home/dan/.local/state/field-capture/audio",
+    "/home/dan/.local/state/field-capture/media"
+  ],
+  "outputRoot": "/home/dan/obsidian/vault/the field/TADA/captures",
+  "linkIndexRoot": "/home/dan/obsidian/vault",
+  "endowments": {
+    "ReadObject": {
+      "desc": "Read-only access to the single arrived object being processed (the clipping/voice/image). The agent must NEVER write to it."
+    },
+    "WriteOutput": {
+      "desc": "Read-write to a NEW derived output note under outputRoot that references the arrived object (carries the tags/author/links/labels). The only thing the agent may write."
+    },
+    "FetchLink": {
+      "desc": "Read-only outbound HTTP(S) GET to fetch links/images referenced INSIDE a processed object (cache + summarize them). SSRF-guarded: https/http only, private/loopback/link-local/metadata IPs blocked, size + time capped. Cache: ~/.local/state/field-capture/linkcache."
+    },
+    "ProposeCode": {
+      "lang": "js",
+      "desc": "Emit a proposed JS snippet onto the capture queue for the operator to review + approve on the dashboard. NOT executed automatically."
+    },
+    "ProposeEndowment": {
+      "desc": "Request a NEW capability (e.g. write access to another root, network, a tool). Surfaces as a pending proposal on the dashboard; on operator approval the agent receives that object."
+    },
+    "MuddleChannel": {
+      "node": "automerge:3EHzCTCo2WhnV1WLJ2RqG1DEZGaH",
+      "access": "read-write",
+      "desc": "the agent's Muddle root note / channel to dan (under the Archua root). Post notes/findings/proposals here; dan replies in-thread. A dan-facing channel \u2014 not outside-world."
+    },
+    "Scratchpad": {
+      "dir": "/home/dan/obsidian/vault/the field/agents/capture-agent/scratch",
+      "access": "read-write, scoped to this folder ONLY",
+      "desc": "the agent's own writable scratch (drafts/notes-to-self). Sub-agents get nested scratch at agents/capture-agent/<sub>/scratch/. Module: scratchpad.mjs"
+    },
+    "AgentSpawner": {
+      "access": "PROPOSE-ONLY (operator approves on the dashboard; cannot spawn directly)",
+      "desc": "propose a least-privileged sub-agent for any sub-task that does NOT need dan's private knowledge; propose name+task+objects-needed+external prereqs (API docs/creds); pass context via messages[...]. Module: agent-spawn.mjs; docs: agents/capture-agent/README.md"
+    },
+    "Timers": {
+      "access": "schedule durable timers/intervals",
+      "module": "timers.mjs (+ timer-runner.service)",
+      "desc": "after(ms,action)/at(iso,action)/every(ms,action)/cancel/list; action=notify|command; survives restarts"
+    },
+    "Calendar": {
+      "access": "read-write events on the 'agent' NextCloud calendar",
+      "module": "calendar.mjs",
+      "config": "~/.config/field-calendar/config.json (uses dan's app password for now; dedicated agent NC user is the future)",
+      "desc": "createEvent/removeEvent/listEvents on dan's 'agent' calendar via CalDAV"
+    }
+  },
+  "gemma": {
+    "url": "http://192.168.50.226:8003/v1/chat/completions",
+    "model": "default"
+  },
+  "referenceSources": {
+    "library": {
+      "type": "ssh-fs",
+      "host": "root@192.168.50.74",
+      "root": "/mnt/user/little-free-library",
+      "access": "read-only via ssh + unzip, no mount (see library.mjs)",
+      "index": "~/.local/state/field-capture/library-index.json",
+      "desc": "dan's little-free-library (epub books) on friky; consult.mjs answers questions from it"
+    },
+    "wikipedia": {
+      "type": "kiwix",
+      "url": "(ZIM downloading)",
+      "env": "FIELD_KIWIX_URL",
+      "desc": "local Wikipedia mirror on friky via Kiwix; consult.mjs queries it once a ZIM is serving"
+    },
+    "personal-notes": {
+      "type": "endo-object",
+      "object": "obsidian-graph.mjs \u2192 makeObsidianGraph() \u2192 Far('ObsidianGraph')",
+      "root": "/home/dan/obsidian/vault (excludes 'the field/' workspace)",
+      "permits": "READ-ALL. Object exposes ONLY read methods (search/read/stats) \u2014 no send/write. Findings may be communicated ONLY back to dan (push); NO outside-world contact.",
+      "desc": "dan's Obsidian personal-notes graph (~17k notes); consulted FIRST for personal questions"
+    }
+  },
+  "writableRoots": [
+    "/home/dan/obsidian/vault/the field/agents/capture-agent/scratch"
+  ]
+}
