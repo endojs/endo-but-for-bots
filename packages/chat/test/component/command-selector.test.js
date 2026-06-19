@@ -106,11 +106,7 @@ test.serial('filter with no matches shows the empty state', async t => {
   selector.filter('zzzznotacommand');
   await tick(20);
 
-  t.is(
-    $menu.querySelectorAll('.token-menu-item').length,
-    0,
-    'no command rows',
-  );
+  t.is($menu.querySelectorAll('.token-menu-item').length, 0, 'no command rows');
   const $empty = $menu.querySelector('.token-menu-empty');
   t.truthy($empty, 'empty-state rendered');
   t.is($empty.textContent, 'No matching commands', 'matching empty label');
@@ -203,7 +199,11 @@ test.serial(
     selector.confirmSelection();
     await tick(20);
 
-    t.deepEqual(selected, [expected], 'onSelect fired with the highlighted name');
+    t.deepEqual(
+      selected,
+      [expected],
+      'onSelect fired with the highlighted name',
+    );
     t.false(selector.isVisible(), 'selector hidden after confirm');
     t.false(
       $menu.classList.contains('visible'),
