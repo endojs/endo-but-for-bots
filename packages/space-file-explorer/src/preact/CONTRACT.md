@@ -1,9 +1,11 @@
 # File Explorer → Preact: frozen contract
 
-This directory (`src/preact/`) holds the **Preact rewrite** of the imperative
-`../file-explorer.js`. The rewrite is built and validated alongside the old
-code; `../file-explorer.js` and `../file-explorer-component.js` stay **untouched**
-until the whole tree is validated and swapped in at the end.
+This directory (`src/preact/`) holds the **Preact rewrite** of the file explorer.
+It is now the live implementation: `../file-explorer-component.js` mounts
+`FileExplorerApp` through the confined renderer, and the former imperative
+`../file-explorer.js` has been removed (see git history for the original). This
+document is retained as the architecture reference and as the contract the view
+components and the store hook are written against.
 
 Goal: a **closely equivalent** reimplementation — same behavior, same DOM
 structure, same `fx-*` CSS classes (already defined in `chat/index.css`, reused
