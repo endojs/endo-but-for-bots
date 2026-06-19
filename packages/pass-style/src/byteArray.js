@@ -224,7 +224,7 @@ const assertRestValidPlainFrozenUint8Array = candidate => {
  * 2. A `Uint8Array` whose backing buffer is an immutable `ArrayBuffer`
  *    (the shape produced by `new Uint8Array(iab)` where `iab` is an
  *    immutable buffer; per the freezable-TypedArray proposal the wrapper
- *    can be frozen and is therefore eligible to pass).
+ *    is frozen and is therefore eligible to pass).
  *
  * The check is fast and conservative: it confirms the shape's
  * top-level brand without recursing into the buffer. `assertRestValid`
