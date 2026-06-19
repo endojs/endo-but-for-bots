@@ -296,14 +296,17 @@ Status: ☐ not started · ◐ in progress · ☑ done
 | --- | --- | --- |
 | inbox-component | ☑ | Done — the 1:1 recipient-filtered view; confined Preact in three stages (shell + 5 message types, markdown-vnodes + token chips, value-vnodes). Monaco colorize of code fences deferred. |
 | edit-space-modal | ☑ | Done — confined Preact + reusable `IconSelector` (Batch B stage 1); scheme picker still host-embedded |
-| send-form | ◐ | In progress — composes heat-bar ☑ + token-autocomplete ☑ |
-| help-modal / share-modal / scheme-picker | ◐ | In progress — standalone leaf modals |
+| send-form | ☑ | Done — reply-context bar confined; composes heat-bar ☑ + token-autocomplete ☑ as host-node controllers |
+| help-modal | ☑ | Done — confined Preact leaf modal |
+| share-modal | ☑ | Done — confined Preact leaf modal |
+| scheme-picker | ☑ | Done — confined; keeps the `#scheme-picker-slot` embedding contract |
+| inline-eval / endow-modal / form-builder | ◐ | In progress — non-Monaco forms whose only child (`petname-path-autocomplete`) is done |
 | add-space-modal | ☐ | Batch B stage 2 — ~2000 lines; switch to `IconSelector`, then drop string `renderIconSelector` |
-| inline-command-form | ☐ | Blocked on `inline-eval` |
+| inline-command-form | ☐ | Unblocks once `inline-eval` lands |
 | chat-bar-component | ☐ | Blocked — composes many unconverted forms/modals |
 | channel-component | ☐ | Dan's multiuser channel view; stays imperative DOM for now |
 | spaces-gutter / channel-header | ☐ | Larger composites, later |
-| other forms | ☐ | `inline-eval`, `eval-form`, `define-form`, `endow-modal`, `form-builder`, `blob-viewer`, `counter-proposal-form` — the Monaco-embedding ones need host-node editor embedding |
+| Monaco-embedding forms | ☐ | `eval-form`, `define-form`, `blob-viewer`, `counter-proposal-form` — need host-node editor embedding (a live Monaco editor can't enter a confined tree) |
 
 ## Recommended next migration
 
