@@ -1910,6 +1910,17 @@ __metadata:
   languageName: unknown
   linkType: soft
 
+"@endo/field-voice-agent@workspace:packages/chat/voice-agent":
+  version: 0.0.0-use.local
+  resolution: "@endo/field-voice-agent@workspace:packages/chat/voice-agent"
+  dependencies:
+    "@endo/preact-container": "workspace:^"
+    preact: "npm:^10.29.2"
+    ses: "workspace:^"
+    vite: "npm:^6.0.0"
+  languageName: unknown
+  linkType: soft
+
 "@endo/genie@workspace:packages/genie":
   version: 0.0.0-use.local
   resolution: "@endo/genie@workspace:packages/genie"
@@ -2438,7 +2449,7 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@endo/preact-container@workspace:packages/preact-container":
+"@endo/preact-container@workspace:^, @endo/preact-container@workspace:packages/preact-container":
   version: 0.0.0-use.local
   resolution: "@endo/preact-container@workspace:packages/preact-container"
   dependencies:
