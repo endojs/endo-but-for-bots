@@ -246,7 +246,7 @@ export const channelComponent = async (
   // --- Thread tracking ---
   /**
    * Index of rendered messages by their number (as string).
-   * @type {Map<string, { message: ChannelMessage, $element: HTMLElement }>}
+   * @type {Map<string, { message: ChannelMessage }>}
    */
   const messageIndex = new Map();
 
@@ -1155,10 +1155,7 @@ export const channelComponent = async (
       typedMessage.replyType === 'move' ||
       typedMessage.replyType === 'deletion'
     ) {
-      messageIndex.set(msgKey, {
-        message: typedMessage,
-        $element: document.createElement('div'),
-      });
+      messageIndex.set(msgKey, { message: typedMessage });
       continue; // eslint-disable-line no-continue
     }
 
@@ -1168,10 +1165,7 @@ export const channelComponent = async (
       typedMessage.replyType === 'redact-react'
     ) {
       // Index the react message so getRootMessageKey can follow its chain.
-      messageIndex.set(msgKey, {
-        message: typedMessage,
-        $element: document.createElement('div'),
-      });
+      messageIndex.set(msgKey, { message: typedMessage });
       const rootKey = reactSystem.processReactMessage(typedMessage, msgKey);
       if (rootKey) {
         // Re-bridge the target's pills (and the rest) from current state.
@@ -1181,10 +1175,7 @@ export const channelComponent = async (
     }
 
     // Register in the message index. The view re-renders from messageIndex.
-    messageIndex.set(msgKey, {
-      message: typedMessage,
-      $element: document.createElement('div'),
-    });
+    messageIndex.set(msgKey, { message: typedMessage });
 
     // Track reply relationships
     if (typedMessage.replyTo) {
