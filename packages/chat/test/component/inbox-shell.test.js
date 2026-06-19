@@ -99,6 +99,22 @@ const createInboxDOM = () => {
   return { $parent, $end };
 };
 
+/**
+ * Poll until `predicate()` is true (or a timeout elapses, in which case the
+ * caller's assertion reports the real difference). The message subscription
+ * processes messages one at a time (per-message requestAnimationFrame +
+ * reverseLocate awaits + Preact effect flushes), so a fixed delay races on
+ * slower CI runners; polling the actual condition is robust.
+ */
+const waitFor = async (predicate, { timeout = 3000, step = 20 } = {}) => {
+  const start = Date.now();
+  while (!predicate()) {
+    if (Date.now() - start > timeout) return;
+    // eslint-disable-next-line no-await-in-loop
+    await tick(step);
+  }
+};
+
 const HOST = 'endo://localhost/?id=host-handle-id&type=handle';
 const GUEST = 'endo://localhost/?id=guest-handle-id&type=handle';
 
@@ -140,7 +156,9 @@ test.serial(
     });
 
     inboxComponent($parent, $end, powers, { showValue: () => {} });
-    await tick(50);
+    await waitFor(
+      () => $parent.querySelectorAll('.message-envelope').length >= 2,
+    );
 
     const envelopes = $parent.querySelectorAll('.message-envelope');
     t.is(envelopes.length, 2, 'both envelopes render');
@@ -201,6 +219,11 @@ test.serial(
       conversationId: GUEST,
       conversationPetName: null,
     });
+    // Wait for the in-conversation message, then settle so the filtered-out
+    // message has its chance to (wrongly) render before we assert exactly one.
+    await waitFor(
+      () => $parent.querySelectorAll('.message-envelope').length >= 1,
+    );
     await tick(50);
 
     const envelopes = $parent.querySelectorAll('.message-envelope');
@@ -235,7 +258,11 @@ test.serial(
     });
 
     inboxComponent($parent, $end, powers, { showValue: () => {} });
-    await tick(50);
+    await waitFor(() =>
+      [...$parent.querySelectorAll('button')].some(
+        b => b.textContent === 'resolve',
+      ),
+    );
 
     const buttons = [...$parent.querySelectorAll('button')];
     const $resolve = buttons.find(b => b.textContent === 'resolve');
@@ -280,13 +307,17 @@ test.serial('dismiss removes the envelope', async t => {
   const { powers } = makeStreamPowers({ selfId: 'host-handle-id', messages });
 
   inboxComponent($parent, $end, powers, { showValue: () => {} });
-  await tick(50);
+  await waitFor(
+    () => $parent.querySelectorAll('.message-envelope').length >= 1,
+  );
 
   t.is($parent.querySelectorAll('.message-envelope').length, 1);
 
   // Resolve the dismissed promise; the envelope should be removed.
   dismissedKit.resolve();
-  await tick(50);
+  await waitFor(
+    () => $parent.querySelectorAll('.message-envelope').length === 0,
+  );
 
   t.is(
     $parent.querySelectorAll('.message-envelope').length,
