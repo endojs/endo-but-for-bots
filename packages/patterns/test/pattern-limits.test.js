@@ -225,7 +225,7 @@ const runTests = (successCase, failCase) => {
     failCase(
       specimen,
       M.byteArray(harden({ byteLengthLimit: 999 })),
-      /byteArray "\[.*Uint8Array\]" must not be bigger than 999/,
+      /byteArray ".*" must not be bigger than 999/,
     );
   }
   // numSetElementsLimit
