@@ -230,7 +230,10 @@ test.serial('dispose removes the bar and clears button classes', async t => {
     lastUpdateTime: Date.now(),
   });
   await tick(20);
-  t.true($sendButton.classList.contains('heat-locked'), 'locked before dispose');
+  t.true(
+    $sendButton.classList.contains('heat-locked'),
+    'locked before dispose',
+  );
 
   bar.dispose();
   await tick(20);
