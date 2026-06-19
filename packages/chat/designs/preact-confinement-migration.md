@@ -84,16 +84,31 @@ been converted to confined Preact:
 | Module | Lines | Role |
 | --- | --- | --- |
 | outliner-component | 3003 | `outliner` viewMode body |
-| add-space-modal | 1979 | New Space modal (now unblocked: `IconSelector` is done) |
-| chat.js | 1846 | root orchestrator / mount dispatcher |
 | chat-bar-component | 1735 | command bar composite (now unblocked: all its form children landed) |
 | channel-component | 981 | default multiuser channel body (Dan's) |
 | spaces-gutter | 971 | left space gutter |
-| microblog-component | 773 | `microblog` viewMode body |
 | channel-header | 694 | channel header chrome |
-| forum-component | 617 | `forum` viewMode body |
+| forum-component | 617 | `forum` viewMode body (a first conversion attempt was reverted; not yet done) |
 | value-component | 512 | standalone value viewer (composes the DOM `value-render`) |
 | heat-simulation | 225 | heat animation under the channel header |
+| inventory-graph (pkg) | ~ | `@endo/inventory-graph/src/graph.js` SVG view (see below) |
+
+### Deferred — frozen for an incoming imperative-Space PR
+
+A separate PR adds a new Space defined the **legacy imperative way via a
+package**, and will rebase on top of this work. To let it land without being
+forced to convert to Preact during the rebase, two files are **deliberately left
+imperative** until that PR lands — they are the only conflict surface for an
+"add an imperative Space" change:
+
+| Module | Lines | Why frozen |
+| --- | --- | --- |
+| chat.js | 1846 | the space-mode dispatch (`if (mode === 'x') return xComponent(...)`); stays the imperative trusted root that calls `renderConfined` on the Preact bodies |
+| add-space-modal | 1979 | the creatable-space-type registration (scheme-picker entry) |
+
+Converting a body/chrome view **in place** never edits these (same mount
+signature in, same API out), so all other conversions can proceed without
+conflicting with that PR. Resume `chat.js` / `add-space-modal` after it lands.
 
 Two of the special-space views live in separate packages reached through a thin
 chat wrapper; they are **in scope**, just tracked in their own package:
@@ -320,7 +335,8 @@ packages). `chat-network-view`'s `peers.js` is already confined Preact (done);
 
 ## Migration tracker
 
-Status: ☐ not started · ◐ in progress · ☑ done
+Status: ☐ not started · ◐ in progress · ☑ done · ⊘ deferred (frozen imperative
+for the incoming imperative-Space PR — see "Deferred" above)
 
 ### Tier 1 — leaf views, pure DOM, no `E()`/powers (do first)
 
@@ -365,13 +381,15 @@ Status: ☐ not started · ◐ in progress · ☑ done
 | inline-command-form | ☑ | Done — composite; confines its chrome, composes its converted children as host-node controllers |
 | define-form | ☑ | Done — first Monaco-embedding form; established the host-node editor pattern + the Monaco test stub |
 | eval-form / blob-viewer / counter-proposal-form | ☑ | Done — Monaco forms on define-form's host-node editor pattern; blob-viewer moved its markdown preview to `markdownToVnodes` |
+| microblog | ☑ | Done — `microblog` viewMode body; confined Preact via `renderConfined`, `markdownToVnodes` bodies, host-node-bridged author/react chips |
 | value-component | ☐ | ~512 lines — standalone value viewer; composes the DOM `value-render` (migrate to `value-vnodes`) |
-| add-space-modal | ☐ | Batch B stage 2 — ~1979 lines; now unblocked (`IconSelector` done) — switch to it, then drop string `renderIconSelector` |
 | chat-bar-component | ☐ | ~1735 lines — now unblocked (all its form children landed); its other "children" `command-executor` / `browser-tree` are non-view utils |
-| channel-component | ☐ | ~981 lines — Dan's multiuser channel view; stays imperative DOM for now |
+| channel-component | ☐ | ~981 lines — Dan's multiuser channel view; host-node-controller pattern for `react-utils`/`channel-utils` |
 | spaces-gutter / channel-header | ☐ | ~971 / ~694 lines — larger composites (channel-header also drives `heat-simulation`), later |
-| forum / microblog / outliner | ☐ | Large peer-content views (617 / 773 / 3003 lines) — stage carefully later |
-| chat.js (root orchestrator) | ☐ | ~1846 lines — the top-level mount dispatcher; convert last, after its children |
+| forum | ☐ | ~617 lines — `forum` viewMode body; a first conversion attempt was reverted (only a test landed, never the component), still to do |
+| outliner | ☐ | ~3003 lines — largest body; needs the file-explorer-style decompose-into-contract approach, not a one-shot |
+| add-space-modal | ⊘ | **Deferred** — frozen imperative for the incoming imperative-Space PR (space-type registration); resume after it lands |
+| chat.js (root orchestrator) | ⊘ | **Deferred** — frozen imperative for the incoming imperative-Space PR (space-mode dispatch); stays the trusted root that calls `renderConfined` |
 
 ### Whylip Space (separate `@endo/whylip` package)
 
@@ -387,28 +405,30 @@ Status: ☐ not started · ◐ in progress · ☑ done
 
 ## Recommended next migration
 
-Every leaf and near-leaf is now converted (Tier 1 + Tier 2 leaves, the
-autocompletes, `icon-selector`, all the Monaco forms), along with the 1:1 inbox,
-the inventory tree, the channel list, and the Whylip + File Explorer spaces. What
-is left is the **large composites and alternate bodies** (see "Still on the DOM
-API"). Continuing bottom-up, lowest-risk first:
+Every leaf and near-leaf is converted (Tier 1 + Tier 2 leaves, the autocompletes,
+`icon-selector`, all the Monaco forms), along with the 1:1 inbox, the inventory
+tree, the channel list, the Whylip + File Explorer spaces, and now the
+**microblog** body. What is left is the **large composites and the other
+alternate bodies** (see "Still on the DOM API"), excluding the two **deferred**
+files (`chat.js`, `add-space-modal`) frozen for the incoming imperative-Space PR.
+Continuing bottom-up, lowest-risk first:
 
 - `value-component` (~512 lines) — a self-contained value viewer whose only
   remaining DOM is the string-returning `value-render`; swap it to `value-vnodes`
   (which already exists for the inbox).
-- `chat-bar-component` (~1735) — now fully unblocked: every form/picker child it
-  composes is converted, so its own chrome can convert in place.
-- `add-space-modal` (~1979) — unblocked now that `IconSelector` is done; switch
-  to it and drop the string `renderIconSelector`. `edit-space-modal` is the
-  template (already converted).
+- `forum` (~617) — redo the reverted attempt; mirror the just-landed `microblog`
+  conversion (same `renderConfined` + host-node-bridge shape).
 - `channel-header` (~694) + `heat-simulation` (~225), then `channel-component`
-  (~981) and `spaces-gutter` (~971).
-- `@endo/inventory-graph`'s `graph.js` (~28 SVG `createElement`s) — the last
-  special-space view still on the DOM API.
-- the three alternate `viewMode` bodies — `forum` (617), `microblog` (773),
-  `outliner` (3003) — staged carefully.
-- `chat.js` (~1846) root orchestrator — convert last, once its children are
-  Preact.
+  (~981, the host-node-controller pattern for `react-utils`/`channel-utils`) and
+  `spaces-gutter` (~971).
+- `chat-bar-component` (~1735) — fully unblocked: every form/picker child it
+  composes is converted, so its own chrome can convert in place.
+- `@endo/inventory-graph`'s `graph.js` (~28 SVG `createElement`s) — pending a
+  check that the confined renderer admits SVG tags/attributes.
+- `outliner` (~3003) — the largest body; decompose into a contract + parallel
+  agents (the file-explorer approach), not a one-shot.
+- **deferred until the imperative-Space PR lands:** `add-space-modal` (~1979)
+  then `chat.js` (~1846).
 - a standing follow-up: render Monaco-colorized code fences as vnodes
   (tokenization rather than the `colorize` HTML string) in the inbox and
   definition bodies.
