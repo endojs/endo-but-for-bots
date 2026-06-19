@@ -159,7 +159,7 @@ Two implementation notes for ses-shim environments:
 
 This file introduces no such import cycle; the convention is documented here
 so future maintainers understand why function declarations are avoided throughout
-`src/lib.js`.
+endo.
 
 Source: erights review comment 3439479281 on `src/lib.js` line 578.
 
