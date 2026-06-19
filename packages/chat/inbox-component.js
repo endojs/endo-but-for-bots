@@ -423,7 +423,7 @@ const PackageBody = ({ message, powers, showValue, setError }) => {
     const locator =
       idParts[index] !== undefined ? String(idParts[index]) : undefined;
     return h(TokenChip, {
-      key: String(index),
+      key: `chip-${index}`,
       edgeName,
       locator,
       number,
