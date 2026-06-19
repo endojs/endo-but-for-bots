@@ -1,7 +1,7 @@
 // @ts-check
 /* eslint-disable no-use-before-define */
 
-import { createMonacoEditor } from './monaco-wrapper.js';
+import { createMonacoEditor } from '@endo/monaco-wrapper';
 import { keyCombo, modKey } from './platform-keys.js';
 
 import { h, renderConfined, unmount } from './setup-preact-container.js';

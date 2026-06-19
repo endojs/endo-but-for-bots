@@ -8,7 +8,7 @@ import { passStyleOf } from '@endo/pass-style';
 import { render, inferType, toClipboardText } from './value-render.js';
 import { inferLanguage } from './language-detect.js';
 import { isMarkdown, renderMarkdownToHtml } from './markdown-preview.js';
-import { colorize } from './monaco-wrapper.js';
+import { colorize } from '@endo/monaco-wrapper';
 
 /**
  * @param {HTMLElement} $container
