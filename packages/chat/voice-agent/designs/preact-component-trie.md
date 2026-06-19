@@ -43,6 +43,54 @@ iframes**; confinement is the SES compartment + the sanitizing renderer, not an
 iframe boundary. Because each node is a git object, a node can be **forked and
 swapped at runtime** (check out a different tree-oid → re-render) per user.
 
+## Two distinct kinds of component: data GRAINS vs functional PROPAGATORS
+
+(dan, 2026-06-19, refining the above — and correcting an earlier conflation of
+the UI component with the grain.) Do **not** make the UI component a capability
+grain. Split the system into two kinds of thing, after Radul & Sussman's
+*Propagation Networks* (MIT-CSAIL-TR-2009-053) and Caputi:
+
+- **Data grains = propagator CELLS.** A grain is a reference-gated capability
+  (Caputi: `read/write/subscribe/lock`) that, in propagator terms, *accumulates
+  information about a value* rather than storing a value: writes **merge**
+  monotonically (never blind-overwrite), the cell **never forgets**, and it
+  **notifies its neighbors** on new content (that is `subscribe`). State lives
+  ONLY in grains. `lock` is the exclusive-erights / Train-&-Hotel atomicity for
+  multi-party edits; Caputi's *paid lock durations / uniform-price auction* is
+  the same shape as our GpuLease/agora tolling.
+- **Functional components = PROPAGATORS.** Asynchronous, autonomous, **stateless,
+  memoryless** machines wired to the grains they neighbor; they hold no state of
+  their own — they read input grains, run logic, and write output grains, re-firing
+  when a neighbor changes, until the network is **quiescent**. A UI component is
+  just one kind of propagator (a *render* propagator: grains → DOM via
+  `renderConfined`); most logic propagators are headless. Confinement is then
+  precise and structural: **a propagator's authority IS the set of grains it is
+  wired to** — nothing else is in lexical scope.
+
+Why this split is the right substrate (the paper's central claim): *"accumulating
+partial information is a module boundary."* It separates the core of propagation
+from the things propagated, so independent pieces compose **additively** — you add
+a propagator (or a grain) to the network **without modifying** the existing ones,
+and it just interoperates. That is exactly the component-trie's sharing model: a
+user/agent **forks or adds a functional component that re-wires existing data
+grains without touching them** — additive, confined, reviewable. Networks are also
+**multidirectional** (the same wiring runs a constraint both ways — the thesis's
+Fahrenheit⇄Celsius converter), and cells carry **provenance via truth-maintenance
+(TMS)** — which lets us non-destructively "try on" a friend's change as a *worldview*,
+accept/reject it atomically, and know *who supplied what* (the accountability the
+social-collateral distribution gate needs).
+
+Implications that change the phases below:
+- **Git-object versioning attaches to PROPAGATOR SOURCE** (the functional/UI
+  component code), not to live state. **State lives in grains** (cells). So
+  "swap a component at runtime" is clean: propagators are stateless → hot-swappable;
+  the grains they were wired to persist across the swap.
+- **Reactivity is not bolted on** — it falls out: a grain merges new info →
+  notifies neighbor propagators → they re-run → the render propagator re-paints.
+- The Phase-1 islands API (`renderConfined` + props) is already a *stateless render
+  propagator* substrate — keep it stateless. What's still missing is the **grain
+  layer** (mergeable, subscribable, provenance-carrying cells) the propagators wire.
+
 ## Interaction model (later phases, but design now)
 
 1. **Alt/Option-select.** Hold Alt/Option → hover draws an outline around the

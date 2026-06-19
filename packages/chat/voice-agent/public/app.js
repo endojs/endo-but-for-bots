@@ -808,13 +808,13 @@ const shareTag = s => (s.ha ? `${s.ha.kind.replace('ha-', '')}: ${s.ha.name}${s.
 const refreshShares = async () => {
   try { sharesCache = await rpc('listShares'); } catch { return; }
   const el = $('shares');
-  // FIRST confined-Preact ISLAND. The component is handed ONLY render-safe data (label + tag) and
-  // index-based callbacks — never the swissnum (it stays here in sharesCache, used only inside the
-  // callbacks). renderConfined strips refs/dangerous attrs and hands handlers a frozen SafeEvent.
+  // FIRST confined-Preact ISLAND, built propagator-style: we push render-safe rows (label + tag) into
+  // the island's data CELL; its stateless render propagator re-paints SharesPanel. The swissnum never
+  // leaves here (sharesCache) — handlers index back into it. renderConfined strips refs/dangerous
+  // attrs and hands handlers a frozen SafeEvent.
   if (window.__fieldIslands) {
     const items = sharesCache.map(s => ({ label: s.label, tag: shareTag(s) }));
-    window.__fieldIslands.mountShares(el, {
-      items,
+    window.__fieldIslands.renderShares(el, items, {
       onCopy: i => copyLink(sharesCache[i], null),
       onQr: i => showQr(sharesCache[i]),
       onRevoke: async i => { await rpc('revoke', [sharesCache[i].swiss]); refreshShares(); },

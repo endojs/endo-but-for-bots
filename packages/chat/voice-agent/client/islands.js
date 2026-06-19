@@ -1,21 +1,38 @@
 // Entry for the confined-Preact ISLANDS bundle (built by vite.islands.config.js → public/islands/islands.js).
 //
-// The existing DOM app (app.js) calls the functions hung on `globalThis.__fieldIslands` to render a
-// migrated slice through the SANITIZING renderer. Each island gets a host mount node + plain data +
-// callbacks; the component renders confined (refs stripped, dangerous tags/attrs removed, SafeEvent
-// facade — no live DOM). We migrate one slice at a time; until a slice is wired, app.js keeps its DOM
-// path, so the app always works (incremental islands — see designs/preact-component-trie.md).
-import 'ses'; // installs the `assert` shim that endo library code destructures at load; does NOT lockdown
+// DEFAULT ARCHITECTURE = PROPAGATION NETWORKS (see client/propagator.js + designs/preact-component-trie.md).
+// An island is a STATELESS render PROPAGATOR wired to one or more CELLS (data grains) that hold the
+// state. The host app (app.js) does not re-render imperatively; it pushes new facts into a cell with
+// `addContent`, and the render propagator re-paints through the SANITIZING renderer (renderConfined:
+// refs stripped, dangerous tags/attrs removed, frozen SafeEvent — no live DOM). Cap-hygiene holds by
+// construction: a cell is only ever given render-safe data (labels/tags), never a swissnum.
+import 'ses'; // installs the `assert` shim endo library code destructures at load; does NOT lockdown
 import { h } from 'preact';
 import { renderConfined } from '@endo/preact-container/renderer';
 
+import { makeCell, react } from './propagator.js';
 import { SharesPanel } from './shares-panel.js';
 
+// A render propagator: re-paints `view(...values)` into `el` whenever any wired cell changes.
+// This is the one kind of propagator whose effect is the DOM; logic propagators stay headless.
+const renderPropagator = (el, cells, view) =>
+  react(cells, (...values) => renderConfined(view(...values), el));
+
+// ── Shares island ───────────────────────────────────────────────────────────────────────────────
+// One cell (the data grain) holds the render-safe rows; the render propagator wires it to SharesPanel.
+const sharesCell = makeCell();
+let sharesWired = false;
+
 const islands = {
-  // Render the Shares panel into `el`. `props` = { items:[{label,tag}], onCopy(i), onQr(i), onRevoke(i) }.
-  // Re-render (after a revoke) by calling again with the same `el`.
-  mountShares(el, props) {
-    renderConfined(h(SharesPanel, props), el);
+  // Idempotent: wires the render propagator once (cell → SharesPanel), then feeds the latest rows in.
+  // `handlers` = { onCopy(i), onQr(i), onRevoke(i) } — stable; they index back into app.js's state
+  // (where the swissnum lives). `items` = [{ label, tag }] — render-safe only.
+  renderShares(el, items, handlers) {
+    if (!sharesWired) {
+      renderPropagator(el, [sharesCell], rows => h(SharesPanel, { items: rows, ...handlers }));
+      sharesWired = true;
+    }
+    sharesCell.addContent(items);
   },
 };
 
