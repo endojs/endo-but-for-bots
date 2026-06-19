@@ -598,10 +598,9 @@ const amplifyTypedArray = typedArray => {
  * maintainers.
  * See the README section "Function expressions versus declarations" for full
  * context (erights review comments 3439479281, 3439500526).
- *
- * @type {(this: object) => ArrayBuffer}
  */
 const taGetters = {
+  /** @type {(this: object) => ArrayBuffer} */
   get buffer() {
     const genuineTA = apply(weakmapGet, hiddenTypedArrays, [this]);
     if (genuineTA !== undefined) {
@@ -619,6 +618,11 @@ const taGetters = {
   },
 };
 
+// `getOwnPropertyDescriptor` returns `PropertyDescriptor | undefined`, and
+// `PropertyDescriptor.get` is typed `(() => any) | undefined` because a
+// descriptor can be a data descriptor. We know `taGetters.buffer` is an
+// accessor we just defined, so both the descriptor and its `get` are present.
+// @ts-expect-error TS doesn't know it'll be there
 const { get: virtualTypedArrayBufferGetter } = getOwnPropertyDescriptor(
   taGetters,
   'buffer',
