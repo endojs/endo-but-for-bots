@@ -216,14 +216,16 @@ const runTests = (successCase, failCase) => {
   }
   // byteLengthLimit
   {
-    const specimen = new ArrayBuffer(1000).transferToImmutable();
+    const specimen = new Uint8Array(
+      new ArrayBuffer(1000).transferToImmutable(),
+    );
     successCase(specimen, M.byteArray());
     successCase(specimen, M.byteArray(harden({ byteLengthLimit: 1001 })));
     successCase(specimen, M.byteArray(harden({ byteLengthLimit: 1000 })));
     failCase(
       specimen,
       M.byteArray(harden({ byteLengthLimit: 999 })),
-      /byteArray "\[.*ArrayBuffer\]" must not be bigger than 999/,
+      /byteArray "\[.*Uint8Array\]" must not be bigger than 999/,
     );
   }
   // numSetElementsLimit

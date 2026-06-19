@@ -83,7 +83,7 @@ type TFTuple<T extends readonly any[]> = T extends readonly [
  */
 type TFLeafMap<Payload> = {
   any: Passable;
-  byteArray: ArrayBuffer;
+  byteArray: Uint8Array;
   string: Payload;
   number: Payload;
   bigint: Payload;
@@ -126,7 +126,7 @@ type TFKindMap = {
   bigint: bigint;
   string: string;
   symbol: symbol;
-  byteArray: ArrayBuffer; // TODO: update to Uint8Array when @endo/pass-style changes the byteArray type
+  byteArray: Uint8Array;
   copyRecord: CopyRecord;
   copyArray: CopyArray;
   copySet: CopySet;

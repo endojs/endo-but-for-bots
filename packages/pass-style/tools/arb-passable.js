@@ -42,9 +42,13 @@ export const makeArbitraries = (fc, exclusions = []) => {
     // because we may go through a phase where only `sliceToImmutable` is
     // provided when the shim is run on Hermes.
     // See https://github.com/endojs/endo/pull/2785
-    ...[fc.uint8Array().map(arr => arr.buffer.sliceToImmutable())].filter(
-      () => !exclusions.includes('byteArray'),
-    ),
+    //
+    // The byteArray pass style is now a plain frozen `Uint8Array` backed
+    // by a plain frozen immutable `ArrayBuffer`. Wrap the IAB in
+    // `new Uint8Array(...)` before harden so it satisfies the brand check.
+    ...[
+      fc.uint8Array().map(arr => new Uint8Array(arr.buffer.sliceToImmutable())),
+    ].filter(() => !exclusions.includes('byteArray')),
     fc.constantFrom(-0, NaN, Infinity, -Infinity),
     // `noNullPrototype` keeps fast-check 4 from generating `{__proto__:null}`
     // objects, which are not valid copyRecords (they must inherit from

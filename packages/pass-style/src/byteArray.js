@@ -45,18 +45,19 @@ const { prototype: uint8ArrayPrototype } = Uint8Array;
 const typedArrayPrototype = getPrototypeOf(uint8ArrayPrototype);
 const { at: typedArrayAt } = typedArrayPrototype;
 
-// The permitted own-property keys on an emulated immutable buffer, paired
-// with the `typeof` of the data-property value the key must carry. The
+// The permitted own-property keys on the immutable `ArrayBuffer` backing
+// a `byteArray` Uint8Array wrapper, paired with the `typeof` of the
+// data-property value the key must carry. The
 // `@endo/immutable-arraybuffer` package installs `[Symbol.toStringTag] =
 // 'ImmutableArrayBuffer'` as an own property on each emulated immutable
 // (not on the shared prototype) so `concordance` and similar
 // `Object.prototype.toString.call`-sniffing consumers route the value
 // through their unrenderable-value path rather than into `Buffer.from`
 // (which throws on emulated immutables because they are not exotic
-// objects). The byteArray brand check tolerates exactly the keys named
-// here; for each, it verifies that the key carries a non-enumerable data
-// property whose value's `typeof` matches the entry. Anything else still
-// fails.
+// objects). The backing-buffer sub-check tolerates exactly the keys
+// named here; for each, it verifies that the key carries a
+// non-enumerable data property whose value's `typeof` matches the
+// entry. Anything else still fails.
 /** @type {Map<string | symbol, string>} */
 const allowedOwnDataProperties = new Map([[Symbol.toStringTag, 'string']]);
 
@@ -84,11 +85,14 @@ const isCanonicalIndexKey = key => {
 };
 
 /**
- * Validates the well-formedness of a candidate already known to be a frozen
- * `ArrayBuffer` that claims `immutable === true` and has the expected
- * prototype. Used directly for the raw-immutable-buffer arm of the
- * `byteArray` brand check, and indirectly as a sub-check on the buffer
- * underlying a `Uint8Array` wrapper.
+ * Sub-check on the backing immutable `ArrayBuffer` of a `Uint8Array`
+ * wrapper. Validates that the buffer is a plain frozen immutable
+ * `ArrayBuffer` with the expected prototype, the `immutable` accessor
+ * returning true, and at most the canonical `[Symbol.toStringTag]`
+ * own slot installed by `@endo/immutable-arraybuffer`. Raw immutable
+ * `ArrayBuffer` values themselves are no longer accepted as the
+ * `byteArray` pass style; this helper is only reached as a sub-check
+ * on a `Uint8Array` wrapper's `.buffer`.
  *
  * @param {ArrayBuffer} candidate
  */
@@ -159,10 +163,7 @@ const assertRestValidPlainFrozenUint8Array = candidate => {
   // that the buffer is an `ArrayBuffer` whose `immutable` accessor
   // returned true, so the narrowing is safe at runtime.
   const buffer = /** @type {ArrayBuffer} */ (candidate.buffer);
-  // The buffer must itself satisfy the immutable-ArrayBuffer arm of the
-  // brand check: a plain frozen immutable `ArrayBuffer`. Reusing the
-  // same sub-check guarantees the two arms agree on what counts as a
-  // valid backing buffer.
+  // The buffer must itself be a plain frozen immutable `ArrayBuffer`.
   apply(immutableGetter, buffer, []) ||
     Fail`Uint8Array byteArray must be backed by an immutable ArrayBuffer: ${candidate}`;
   assertRestValidImmutableArrayBuffer(buffer);
@@ -235,14 +236,11 @@ const assertRestValidPlainFrozenUint8Array = candidate => {
 };
 
 /**
- * Discriminates the two accepted shapes for the `byteArray` pass style:
- *
- * 1. An immutable `ArrayBuffer` (the original shape that the brand check
- *    accepted before the freezable-TypedArray emulation landed).
- * 2. A `Uint8Array` whose backing buffer is an immutable `ArrayBuffer`
- *    (the shape produced by `new Uint8Array(iab)` where `iab` is an
- *    immutable buffer; per the freezable-TypedArray proposal the wrapper
- *    is frozen and is therefore eligible to pass).
+ * Discriminates the single accepted shape for the `byteArray` pass style:
+ * a plain frozen `Uint8Array` whose backing buffer is a plain frozen
+ * immutable `ArrayBuffer`. Raw immutable `ArrayBuffer` values, previously
+ * accepted, are no longer recognised as `byteArray`; producers must wrap
+ * them in `new Uint8Array(iab)` and harden the result.
  *
  * The check is fast and conservative: it confirms the shape's
  * top-level brand without recursing into the buffer. `assertRestValid`
@@ -252,9 +250,6 @@ const assertRestValidPlainFrozenUint8Array = candidate => {
  * @returns {boolean}
  */
 const confirmCanBeByteArray = candidate => {
-  if (candidate instanceof ArrayBuffer) {
-    return /** @type {boolean} */ (apply(immutableGetter, candidate, []));
-  }
   if (candidate instanceof Uint8Array) {
     const { buffer } = candidate;
     return (
@@ -274,13 +269,9 @@ export const ByteArrayHelper = harden({
   confirmCanBeValid: (candidate, reject) =>
     confirmCanBeByteArray(candidate) ||
     (reject &&
-      reject`Immutable ArrayBuffer or Uint8Array on immutable ArrayBuffer expected: ${candidate}`),
+      reject`Uint8Array on immutable ArrayBuffer expected: ${candidate}`),
 
   assertRestValid: (candidate, _passStyleOfRecur) => {
-    if (candidate instanceof Uint8Array) {
-      assertRestValidPlainFrozenUint8Array(candidate);
-    } else {
-      assertRestValidImmutableArrayBuffer(candidate);
-    }
+    assertRestValidPlainFrozenUint8Array(candidate);
   },
 });

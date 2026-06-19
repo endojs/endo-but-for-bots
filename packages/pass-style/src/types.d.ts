@@ -213,9 +213,10 @@ export type PassableCap =
 export type CopyArray<T extends Passable = any> = readonly T[];
 
 /**
- * A hardened immutable ArrayBuffer.
+ * A hardened frozen `Uint8Array` whose backing buffer is a hardened
+ * immutable `ArrayBuffer`.
  */
-export type ByteArray = ArrayBuffer;
+export type ByteArray = Uint8Array;
 
 /**
  * A Passable dictionary in which each key is a string and each value is Passable.
