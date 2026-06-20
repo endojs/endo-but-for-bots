@@ -1847,7 +1847,22 @@ const refreshComponents = async () => {
       return `<div class="comp"><div class="comp-head"><b>${esc(t.name)}</b> <span class="pill${sevClass}">by ${esc(t.proposedBy || '?')} · panel: ${esc(sev)}</span> <button class="mini" data-admit="${esc(t.id)}" data-name="${esc(t.name)}" data-worst="${esc(rv ? rv.worst : '')}">admit</button> <button class="mini bad" data-reject="${esc(t.id)}" data-name="${esc(t.name)}">reject</button></div><div class="sub" style="margin:4px 0 0 6px">${findings}</div><details style="margin:5px 0 0 6px"><summary class="mini" style="display:inline-block">view code</summary><pre class="codeview">${esc(code)}</pre></details></div>`;
     }).join('');
   }
-  if (!tools.length) { list.innerHTML = html || '<div class="pill">no admitted components yet</div>'; wireComponentActions(); return; }
+  // ISLANDS (confined-Preact UI components — their source is a client file, rebuilt on edit).
+  let islandsHtml = '';
+  try {
+    const ir = await (await fetch('/components/islands', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap }) })).json();
+    const islands = ir.islands || [];
+    if (islands.length) {
+      const ih = {};
+      await Promise.all(islands.map(async i => { try { const h = await (await fetch('/components/history', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, id: i.id }) })).json(); ih[i.id] = h.versions || []; } catch { ih[i.id] = []; } }));
+      islandsHtml = `<div class="shares-sec">Islands (live UI · rebuilt on edit)</div>` + islands.map(i => {
+        const vs = ih[i.id] || []; const cur = vs[0];
+        const rows = vs.map((v, k) => `<div class="cver"><span class="vmono">${esc(String(v.version).slice(0, 8))}</span> <span class="sub">${esc(v.summary || '')}</span>${k === 0 ? ' <span class="pill">current</span>' : ` <button class="mini" data-revert="${esc(i.id)}" data-ver="${esc(v.version)}">revert</button>`}</div>`).join('');
+        return `<div class="comp" data-component-id="${esc(i.id)}" data-component-name="${esc(i.name)}"><div class="comp-head"><b>${esc(i.name)}</b> <span class="pill">island${cur ? ` · v ${esc(String(cur.version).slice(0, 8))}` : ''}</span> <button class="mini" data-edit="${esc(i.id)}" data-name="${esc(i.name)}">✎ edit</button></div><div class="cvers">${rows || '<span class="sub">no versions yet</span>'}</div></div>`;
+      }).join('');
+    }
+  } catch { /* ignore */ }
+  if (!tools.length) { list.innerHTML = (html + islandsHtml) || '<div class="pill">no components yet</div>'; wireComponentActions(); return; }
   const hists = {}; const grains = {};
   await Promise.all(tools.map(async t => { try { const h = await (await fetch('/components/history', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, id: t.id }) })).json(); hists[t.id] = h.versions || []; grains[t.id] = h.grains || {}; } catch { hists[t.id] = []; grains[t.id] = {}; } }));
   if (pending.length) html += `<div class="shares-sec">Admitted</div>`;
@@ -1858,7 +1873,7 @@ const refreshComponents = async () => {
     const gview = gks.length ? `<div class="cgrains sub">🌱 data: ${gks.map(k => `${esc(k)}=${esc(JSON.stringify(grains[t.id][k]))}`).join(' · ')} <span style="opacity:.6">(survives edits/reverts)</span></div>` : '';
     return `<div class="comp" data-component-id="${esc(t.id)}" data-component-name="${esc(t.name)}"><div class="comp-head"><b>${esc(t.name)}</b> <span class="pill">${esc(t.kind || 'instance')}${cur ? ` · v ${esc(String(cur.version).slice(0, 8))}` : ''}</span> <button class="mini" data-edit="${esc(t.id)}" data-name="${esc(t.name)}">✎ edit</button> <button class="mini" data-fork="${esc(t.id)}" data-name="${esc(t.name)}">fork</button></div>${gview}<div class="cvers">${rows || '<span class="sub">no versions recorded yet</span>'}</div></div>`;
   }).join('');
-  list.innerHTML = html;
+  list.innerHTML = html + islandsHtml;
   wireComponentActions();
 };
 // admit / reject the pending proposals + the admitted-component actions

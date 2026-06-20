@@ -1,0 +1,55 @@
+// island-source.mjs — the confined-Preact ISLANDS as versioned COMPONENTS. An island's source is a
+// client file (e.g. client/shares-panel.js), so editing it = rewrite the file + rebuild the islands
+// bundle (vite). We version it through the same component-git, so islands get history/revert like any
+// component; applying an edit is build-gated and rolls back on failure (the live bundle is never left
+// broken). This is what makes the Alt/Option-click overlay light up on the live UI: the rendered island
+// carries `data-component-id`, and selecting → edit goes through here.
+
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import fs from 'node:fs';
+import path from 'node:path';
+
+const execFileP = promisify(execFile);
+
+// The registered islands (seeded; grows as more UI is componentised). Each: { id, name, files:[client-relative] }.
+const ISLANDS = [
+  { id: 'island-shares-panel', name: 'Shares panel', file: 'client/shares-panel.js' },
+];
+
+export const makeIslandSource = ({ here, componentGit }) => {
+  const env = { ...process.env, PATH: `${process.env.HOME || '/home/dan'}/.local/bin:${process.env.PATH || ''}` }; // corepack lives in the user prefix
+  const get = id => ISLANDS.find(i => i.id === String(id)) || null;
+  const isIsland = id => !!get(id);
+  const list = () => ISLANDS.map(i => ({ id: i.id, name: i.name, kind: 'island' }));
+  const readSource = isl => { try { return fs.readFileSync(path.join(here, isl.file), 'utf8'); } catch { return ''; } };
+  const filesOf = isl => ({ [isl.file]: readSource(isl) });
+
+  // Seed the island's git lineage from the current client source, once.
+  const ensure = async isl => { if (!componentGit.exists(isl.id)) await componentGit.commit(isl.id, filesOf(isl), `seed: ${isl.name}`); };
+
+  const history = async id => { const isl = get(id); if (!isl) return []; await ensure(isl); return componentGit.history(id); };
+  const readAt = async (id, ref) => { const isl = get(id); if (!isl) return null; await ensure(isl); return componentGit.readAt(id, ref); };
+  const readSourceText = async (id, ref = 'HEAD') => { const snap = await readAt(id, ref); return snap ? (snap.files[get(id).file] ?? '') : null; };
+
+  const rebuild = async () => { try { await execFileP('corepack', ['yarn', 'build:islands'], { cwd: here, env, timeout: 120000, maxBuffer: 8 * 1024 * 1024 }); return { ok: true }; } catch (e) { return { ok: false, error: String((e && e.message) || e).slice(0, 300) }; } };
+
+  // Replace the island's source, REBUILD, and version it. If the build fails, restore the old file +
+  // report — the live bundle (only overwritten by a successful build) is never left broken.
+  const applySource = async (id, newSource, message) => {
+    const isl = get(id); if (!isl) return { ok: false, error: 'unknown island' };
+    await ensure(isl);
+    const backup = readSource(isl); const abs = path.join(here, isl.file);
+    try {
+      fs.writeFileSync(abs, String(newSource ?? ''));
+      const b = await rebuild();
+      if (!b.ok) { fs.writeFileSync(abs, backup); return { ok: false, error: `build failed (reverted, live unchanged): ${b.error}` }; }
+      const rec = await componentGit.commit(id, filesOf(isl), message || 'edit');
+      return { ok: true, version: rec.version, note: 'Edited + rebuilt the island. Reload the page to see it. Revert from the Components tab if needed.' };
+    } catch (e) { try { fs.writeFileSync(abs, backup); } catch { /* ignore */ } return { ok: false, error: (e && e.message) || String(e) }; }
+  };
+  const revert = async (id, ref) => { const src = await readSourceText(id, ref); if (src === null) return { ok: false, error: 'unknown version' }; return applySource(id, src, `revert to ${String(ref).slice(0, 12)}`); };
+
+  return { isIsland, get, list, history, readAt, readSourceText, applySource, revert, fileOf: id => get(id)?.file };
+};
+harden(makeIslandSource);

@@ -30,6 +30,10 @@ const islands = {
   // the secrets live: { onCopy(i), onQr(i), onRevoke(i), onCopyComp(i), onRevokeComp(i) }.
   renderShares(el, data, handlers) {
     if (!sharesWired) {
+      // Tag the mount with this island's COMPONENT id so the Alt/Option-click overlay can select it +
+      // edit its source (the island is a versioned component, like any other).
+      el.setAttribute('data-component-id', 'island-shares-panel');
+      el.setAttribute('data-component-name', 'Shares panel');
       renderPropagator(el, [sharesCell], d => h(SharesPanel, { ...d, ...handlers }));
       sharesWired = true;
     }

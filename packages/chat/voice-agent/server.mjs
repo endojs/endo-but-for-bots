@@ -29,6 +29,7 @@ import { makeConnectors } from './connectors.mjs';
 import { makeCustomTools } from './custom-tools.mjs';
 import { makeToolShares } from './tool-shares.mjs';
 import { makeComponentGit } from './component-git.mjs';
+import { makeIslandSource } from './island-source.mjs';
 import { STARTER_RING } from './system-map.mjs';
 const connectors = makeConnectors({ getSecret }); // owner-side registry (same connectors.json the agent calls)
 const customTools = makeCustomTools(); // owner-side review/admit (same custom-tools.json the agent reads)
@@ -58,6 +59,7 @@ const STT_MODEL = process.env.STT_MODEL || 'deepdml/faster-whisper-large-v3-turb
 const OUT = process.env.OUT_DIR || `${HOME}/.local/state/voice-agent/out`;
 const toolShares = makeToolShares({ dir: `${HOME}/.local/state/voice-agent/tool-shares` }); // share-as-factory/instance + meter + charge
 const componentGit = makeComponentGit({ baseDir: `${HOME}/.local/state/voice-agent/component-git` }); // each component's SOURCE as a git-as-Endo object (version / fork / revert)
+const islandSource = makeIslandSource({ here: HERE, componentGit }); // confined-Preact ISLANDS as versioned components (edit = rewrite client file + rebuild)
 // A tool's source as a {relpath: content} file map for the component-git store (single-file → tool.js).
 const sourceFilesOf = t => (t.files && typeof t.files === 'object' && Object.keys(t.files).length ? t.files : { 'tool.js': String(t.code || '') });
 // Propose a tool FROM a {path:content} files map — single-file ({tool.js}) → code; else a multi-file class.
@@ -88,6 +90,18 @@ const editComponentSource = async (ct, id, prompt) => {
   const rec = await componentGit.commit(id, newFiles, `edit: ${String(prompt).slice(0, 60)}`);
   ct.setSource(id, newFiles); // apply live (the owner triggered it; revert from the Studio if unwanted)
   return { ok: true, version: rec.version, review, note: 'Edited — committed as a new version + applied to the live component. Revert from the Components tab if you don\'t like it.' };
+};
+
+// Editing a confined-Preact ISLAND (its source is a client file → rewrite + rebuild, not make(powers)).
+const ISLAND_EDIT_SYS = 'You are editing a confined-Preact ISLAND — a UI component rendered through @endo/preact-container `renderConfined`. The source is a JS module built with `h(tag, props, children)` hyperscript (NO JSX), pure + stateless (state lives in cells passed via props; render-safe data only — never a swissnum/secret). Apply the user\'s requested change, keep it valid h-based confined Preact, keep the SAME exports and imports (add none), and use no DOM/network/fs/ambient access. Reply with ONLY the complete updated file as a single ```js fenced code block — no prose.';
+const editIslandSource = async (id, prompt) => {
+  if (!String(prompt || '').trim()) return { ok: false, error: 'describe the change you want' };
+  const cur = await islandSource.readSourceText(id, 'HEAD'); if (cur === null) return { ok: false, error: 'unknown island' };
+  let out = '';
+  try { out = String((await opusComplete({ system: ISLAND_EDIT_SYS, prompt: `Current source (${islandSource.fileOf(id)}):\n\`\`\`js\n${cur}\n\`\`\`\n\nRequested change: ${String(prompt)}`, maxTokens: 4000 })) || ''); }
+  catch (e) { return { ok: false, error: `edit agent failed: ${(e && e.message) || e}` }; }
+  const code = extractJs(out); if (!code.trim()) return { ok: false, error: 'the edit agent returned nothing (model unavailable?)' };
+  return islandSource.applySource(id, code, `edit: ${String(prompt).slice(0, 60)}`);
 };
 
 // Fork a component into a NEW pending tool: clone its git source lineage at `ref` + COPY its grain data.
@@ -1250,12 +1264,15 @@ const handler = async (req, res) => {
       if (u.pathname === '/tools/reject') return json(res, 200, customTools.reject(String(body.id || '')));
       if (u.pathname === '/tools/pending-count') return json(res, 200, { count: customTools.listAll().filter(t => t.status === 'pending').length }); // cheap (no panel) — for the tab badge
       // COMPONENT = git-as-Endo object: version history / read-at-version / non-destructive revert.
-      if (u.pathname === '/components/history') return json(res, 200, { ok: true, versions: await componentGit.history(String(body.id || '')), grains: customTools.grainData(String(body.id || '')) });
-      if (u.pathname === '/components/read') { const s = await componentGit.readAt(String(body.id || ''), String(body.version || 'HEAD')); return json(res, 200, s ? { ok: true, ...s } : { ok: false, error: 'unknown component/version' }); }
-      if (u.pathname === '/components/fork') return json(res, 200, await forkComponentTo(customTools, String(body.id || ''), String(body.name || ''), String(body.version || 'HEAD'), 'owner'));
-      if (u.pathname === '/components/edit') return json(res, 200, await editComponentSource(customTools, String(body.id || ''), String(body.prompt || '')));
+      // ISLAND components (confined-Preact UI, id "island-…") route to islandSource (rewrite client file + rebuild).
+      if (u.pathname === '/components/islands') return json(res, 200, { ok: true, islands: islandSource.list() });
+      if (u.pathname === '/components/history') { const id = String(body.id || ''); return islandSource.isIsland(id) ? json(res, 200, { ok: true, versions: await islandSource.history(id) }) : json(res, 200, { ok: true, versions: await componentGit.history(id), grains: customTools.grainData(id) }); }
+      if (u.pathname === '/components/read') { const id = String(body.id || ''); const s = await (islandSource.isIsland(id) ? islandSource.readAt(id, String(body.version || 'HEAD')) : componentGit.readAt(id, String(body.version || 'HEAD'))); return json(res, 200, s ? { ok: true, ...s } : { ok: false, error: 'unknown component/version' }); }
+      if (u.pathname === '/components/fork') { const id = String(body.id || ''); if (islandSource.isIsland(id)) return json(res, 200, { ok: false, error: 'forking an island component isn\'t supported yet — edit or revert it' }); return json(res, 200, await forkComponentTo(customTools, id, String(body.name || ''), String(body.version || 'HEAD'), 'owner')); }
+      if (u.pathname === '/components/edit') { const id = String(body.id || ''); return json(res, 200, islandSource.isIsland(id) ? await editIslandSource(id, String(body.prompt || '')) : await editComponentSource(customTools, id, String(body.prompt || ''))); }
       if (u.pathname === '/components/revert') {
         const id = String(body.id || ''); const version = String(body.version || '');
+        if (islandSource.isIsland(id)) return json(res, 200, await islandSource.revert(id, version));
         const snap = await componentGit.readAt(id, version); if (!snap) return json(res, 200, { ok: false, error: 'unknown component/version' });
         const rv = await componentGit.revert(id, version); // new commit restoring the old tree (history kept)
         const upd = customTools.setSource(id, snap.files); // point the LIVE tool at the reverted source + drop its cached instance
