@@ -993,6 +993,24 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
     } });
     manifest.push({ name: 'revertComponent', reversible: false, args: { tool: 'string — an admitted tool name/id', version: 'string — a version id from componentHistory' },
       description: 'Revert a component to an earlier VERSION of its source (non-destructive — a new version; history preserved; the live tool then runs it). Owner-only.' });
+    toolbox.forkComponent = harden({ run: async ({ tool, name, version } = {}) => {
+      const src = customToolsObj.list().find(x => x.name === String(tool || '') || x.id === String(tool || ''));
+      if (!src) return { ok: false, error: `no admitted tool "${tool}"` };
+      const newName = String(name || '').trim(); if (!newName) return { ok: false, error: 'give your fork a name' };
+      const ref = String(version || 'HEAD');
+      const snap = await componentGitObj.readAt(src.id, ref); const files = (snap && snap.files);
+      if (!files) return { ok: false, error: 'could not read the source version (see componentHistory)' };
+      const keys = Object.keys(files);
+      const p = (keys.length === 1 && keys[0] === 'tool.js')
+        ? customToolsObj.propose({ name: newName, description: `[fork of ${src.name}] ${src.description || ''}`, code: files['tool.js'], kind: 'instance', proposedBy: node.id, now: new Date().toISOString() })
+        : customToolsObj.propose({ name: newName, description: `[fork of ${src.name}] ${src.description || ''}`, files, entry: 'tool.js', kind: 'class', proposedBy: node.id, now: new Date().toISOString() });
+      if (!p.ok) return p;
+      try { await componentGitObj.fork(src.id, p.id, ref); } catch { try { await componentGitObj.commit(p.id, files, `fork of ${src.name}`); } catch { /* ignore */ } }
+      customToolsObj.copyGrains(src.id, p.id);
+      return { ok: true, fork: newName, note: `Forked "${src.name}" → "${newName}" with its own version lineage + a COPY of the data. It's queued for the owner to review + admit. The original is untouched.` };
+    } });
+    manifest.push({ name: 'forkComponent', reversible: false, args: { tool: 'string — an admitted tool name/id', name: 'string — a name for your fork', version: 'string — OPTIONAL version to fork from (default latest; see componentHistory)' },
+      description: 'FORK a component into a NEW one — its own git source lineage (forkable/revertable independently) + a COPY of the source\'s grain data. Enters review; admit to host it. The original is untouched.' });
     // requestAccess is ALSO always available — the escalation primitive. A confined cap CANNOT grant
     // itself powers; it ASKS the owner (dan), who approves from his inbox / the chat's powers banner.
     // This is the read-only-by-default + progressive-trust path: don't give up when you lack a power.

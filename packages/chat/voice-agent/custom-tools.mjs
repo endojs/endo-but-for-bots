@@ -106,6 +106,8 @@ export const makeCustomTools = () => {
     save(ts); instances.delete(t.id); built.delete(t.id);
     return { ok: true };
   };
+  // Copy one component's grain DATA to another id — used when a fork should start from the source's data.
+  const copyGrains = (fromId, toId) => { grainStore.copy(String(fromId), String(toId)); return { ok: true }; };
   const list = () => load().filter(t => t.status === 'admitted').map(t => ({ id: t.id, name: t.name, description: t.description, args: t.args, kind: t.kind || 'instance' }));
   const admit = id => { const ts = load(); const t = ts.find(x => x.id === String(id)); if (!t) return { ok: false, error: 'no such proposal' }; t.status = 'admitted'; save(ts); instances.delete(t.id); built.delete(t.id); return { ok: true, id: t.id, name: t.name }; };
   const reject = id => { instances.delete(String(id)); built.delete(String(id)); save(load().filter(t => t.id !== String(id))); return { ok: true, id: String(id) }; };
@@ -124,5 +126,5 @@ export const makeCustomTools = () => {
     } catch (e) { return harden({ ok: false, error: (e && e.message) || String(e) }); }
   };
 
-  return { propose, pendingBy, get, list, listAll, setReview, setSource, admit, reject, call, methodsOf, getInstance, exportClass, importClass };
+  return { propose, pendingBy, get, list, listAll, setReview, setSource, copyGrains, admit, reject, call, methodsOf, getInstance, exportClass, importClass };
 };

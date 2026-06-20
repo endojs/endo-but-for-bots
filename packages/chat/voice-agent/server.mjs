@@ -60,6 +60,23 @@ const toolShares = makeToolShares({ dir: `${HOME}/.local/state/voice-agent/tool-
 const componentGit = makeComponentGit({ baseDir: `${HOME}/.local/state/voice-agent/component-git` }); // each component's SOURCE as a git-as-Endo object (version / fork / revert)
 // A tool's source as a {relpath: content} file map for the component-git store (single-file → tool.js).
 const sourceFilesOf = t => (t.files && typeof t.files === 'object' && Object.keys(t.files).length ? t.files : { 'tool.js': String(t.code || '') });
+// Propose a tool FROM a {path:content} files map — single-file ({tool.js}) → code; else a multi-file class.
+const proposeFromFiles = (ct, { name, description, files, proposedBy }) => {
+  const keys = Object.keys(files || {});
+  if (keys.length === 1 && keys[0] === 'tool.js') return ct.propose({ name, description, code: files['tool.js'], kind: 'instance', proposedBy, now: new Date().toISOString() });
+  return ct.propose({ name, description, files, entry: 'tool.js', kind: 'class', proposedBy, now: new Date().toISOString() });
+};
+// Fork a component into a NEW pending tool: clone its git source lineage at `ref` + COPY its grain data.
+const forkComponentTo = async (ct, srcId, newName, ref = 'HEAD', proposedBy = 'owner') => {
+  const src = ct.get(srcId); if (!src) return { ok: false, error: 'no such component' };
+  if (!String(newName || '').trim()) return { ok: false, error: 'name the fork' };
+  const snap = await componentGit.readAt(srcId, ref); const files = (snap && snap.files) || sourceFilesOf(src);
+  const p = proposeFromFiles(ct, { name: newName, description: `[fork of ${src.name}] ${src.description || ''}`, files, proposedBy });
+  if (!p.ok) return p;
+  try { await componentGit.fork(srcId, p.id, ref); } catch { try { await componentGit.commit(p.id, files, `fork of ${src.name}`); } catch (e) { log('fork commit', e.message); } }
+  ct.copyGrains(srcId, p.id); // the fork starts from the source's DATA
+  return { ok: true, forkId: p.id, name: newName, note: 'Forked — its own source lineage + a copy of the data. It enters review; admit it to host your fork. The original is untouched.' };
+};
 const UPLOADS = `${OUT}/uploads`; // user-attached photos/files (served under web-key'd /uploads/<hex>.<ext>)
 const SEED_FILE = process.env.SEED_FILE || `${HOME}/.config/field-agent/root.swiss`;
 const CHATS_DIR = `${HOME}/.local/state/voice-agent/chats`; // per-cap chat list + transcripts (cross-device sync)
@@ -1190,6 +1207,7 @@ const handler = async (req, res) => {
       // COMPONENT = git-as-Endo object: version history / read-at-version / non-destructive revert.
       if (u.pathname === '/components/history') return json(res, 200, { ok: true, versions: await componentGit.history(String(body.id || '')) });
       if (u.pathname === '/components/read') { const s = await componentGit.readAt(String(body.id || ''), String(body.version || 'HEAD')); return json(res, 200, s ? { ok: true, ...s } : { ok: false, error: 'unknown component/version' }); }
+      if (u.pathname === '/components/fork') return json(res, 200, await forkComponentTo(customTools, String(body.id || ''), String(body.name || ''), String(body.version || 'HEAD'), 'owner'));
       if (u.pathname === '/components/revert') {
         const id = String(body.id || ''); const version = String(body.version || '');
         const snap = await componentGit.readAt(id, version); if (!snap) return json(res, 200, { ok: false, error: 'unknown component/version' });
