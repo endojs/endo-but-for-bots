@@ -812,6 +812,26 @@ function popAllowed() {
     safeAttrsStack.length > 0 ? safeAttrsStack.pop() : DEFAULT_SAFE_ATTRS;
 }
 
+// TEMP DIAGNOSTIC (CI Node-24 hang root-cause): detect a runaway re-render
+// loop (setState-in-effect feedback, which Preact's 25-iteration render cap
+// does NOT bound) and fail fast naming the component, instead of wedging the
+// worker for hours. Remove once the platform render difference is diagnosed.
+const __renderStormCounts = new Map();
+const __renderStormGuard = vnode => {
+  const type = vnode && vnode.type;
+  if (typeof type !== 'function') return;
+  const name = type.displayName || type.name || '<anonymous>';
+  const n = (__renderStormCounts.get(name) || 0) + 1;
+  __renderStormCounts.set(name, n);
+  if (n === 10000) {
+    // eslint-disable-next-line no-console
+    console.error(`[render-storm] ${name} rendered ${n} times`);
+    throw Error(
+      `[render-storm] runaway re-render loop in confined component ${name}`,
+    );
+  }
+};
+
 function install() {
   if (installed) return;
   installed = true;
@@ -858,6 +878,7 @@ function install() {
   };
 
   options[OPT_RENDER] = vnode => {
+    __renderStormGuard(vnode);
     // Top-level idempotency guard: if THIS vnode already entered
     // ANY of our brackets in a prior `_render` call, never enter
     // another one. Preact's diff fires `_render` once per render

@@ -22,7 +22,10 @@ const nodeMajor = Number(
       '0',
   ).split('.')[0],
 );
-const evalTest = nodeMajor >= 24 ? test.skip : test.serial;
+// TEMP (CI Node-24 root-cause experiment): force-run on Node 24 with render
+// diagnostics in inline-eval.js to capture the runaway-render evidence.
+void nodeMajor;
+const evalTest = test.serial;
 
 // Confined-conversion coverage for inline-eval: the source expression input and
 // each endowment row's code-name input now render through `renderConfined`,
