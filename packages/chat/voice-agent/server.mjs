@@ -1229,7 +1229,7 @@ const handler = async (req, res) => {
       }
       if (u.pathname === '/tools/reject') return json(res, 200, customTools.reject(String(body.id || '')));
       // COMPONENT = git-as-Endo object: version history / read-at-version / non-destructive revert.
-      if (u.pathname === '/components/history') return json(res, 200, { ok: true, versions: await componentGit.history(String(body.id || '')) });
+      if (u.pathname === '/components/history') return json(res, 200, { ok: true, versions: await componentGit.history(String(body.id || '')), grains: customTools.grainData(String(body.id || '')) });
       if (u.pathname === '/components/read') { const s = await componentGit.readAt(String(body.id || ''), String(body.version || 'HEAD')); return json(res, 200, s ? { ok: true, ...s } : { ok: false, error: 'unknown component/version' }); }
       if (u.pathname === '/components/fork') return json(res, 200, await forkComponentTo(customTools, String(body.id || ''), String(body.name || ''), String(body.version || 'HEAD'), 'owner'));
       if (u.pathname === '/components/edit') return json(res, 200, await editComponentSource(customTools, String(body.id || ''), String(body.prompt || '')));
