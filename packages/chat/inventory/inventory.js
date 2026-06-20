@@ -578,19 +578,6 @@ const InventoryList = ({ powers, options, path, rootPowers, rootPrefix }) => {
     };
   }, [powers]);
 
-  // Dismiss the drop menu on outside click while it is open.
-  useEffect(() => {
-    if (!menu) return undefined;
-    const close = () => setMenu(null);
-    const raf = requestAnimationFrame(() => {
-      document.addEventListener('click', close);
-    });
-    return () => {
-      cancelAnimationFrame(raf);
-      document.removeEventListener('click', close);
-    };
-  }, [menu]);
-
   /**
    * @param {number} x
    * @param {number} y
@@ -676,24 +663,34 @@ const InventoryList = ({ powers, options, path, rootPowers, rootPrefix }) => {
       }),
     ),
     menu
-      ? h(DropMenu, {
-          x: menu.x,
-          y: menu.y,
-          onLink: () => {
-            const { from, to } = menu;
-            setMenu(null);
-            E(rootPowers)
-              .copy(from, to)
-              .catch(err => console.error('[inventory] Link failed:', err));
+      ? // A full-screen backdrop dismisses the menu on an outside click,
+        // declaratively, instead of a `document`-level click listener. The
+        // fixed-position DropMenu renders above it.
+        h(
+          'div',
+          {
+            class: 'inventory-drop-menu-backdrop',
+            onClick: () => setMenu(null),
           },
-          onMove: () => {
-            const { from, to } = menu;
-            setMenu(null);
-            E(rootPowers)
-              .move(from, to)
-              .catch(err => console.error('[inventory] Move failed:', err));
-          },
-        })
+          h(DropMenu, {
+            x: menu.x,
+            y: menu.y,
+            onLink: () => {
+              const { from, to } = menu;
+              setMenu(null);
+              E(rootPowers)
+                .copy(from, to)
+                .catch(err => console.error('[inventory] Link failed:', err));
+            },
+            onMove: () => {
+              const { from, to } = menu;
+              setMenu(null);
+              E(rootPowers)
+                .move(from, to)
+                .catch(err => console.error('[inventory] Move failed:', err));
+            },
+          }),
+        )
       : null,
   );
 };
