@@ -605,7 +605,19 @@ const sendChat = async (text, { spoken = false, audio = null, attachments = [], 
     if ((r.toolsUsed || []).includes('retitleChat')) { loadMemos(); loadSeedChats(); syncLoad(); } // the agent renamed conversations → pull the new titles now (before the debounced save reverts them)
     if (spoken && !stale()) await speak(r.answer || '');
     ok = true;
-  } catch (e) { if (!stale()) setStatus('error: ' + e.message); ok = false; }
+  } catch (e) {
+    // The /chat request failed mid-turn — most often the connection dropped because the server
+    // restarted. Render a PERSISTENT, legible bubble (not just a transient status) so the run never
+    // stalls silently; the user's message is already saved, so a re-send retries it.
+    if (!stale()) {
+      const dropped = /Failed to fetch|NetworkError|load failed|aborted/i.test(e.message || '');
+      const msg = dropped
+        ? '⚠️ The run was interrupted — the connection dropped (the server may have restarted). Your message is saved; send again to retry.'
+        : ('⚠️ Something went wrong: ' + e.message);
+      setStatus(''); try { renderAgentResponse({ answer: msg }); } catch {} pushTx('agent', msg, {}); try { pendantEnd([]); } catch {}
+    }
+    ok = false;
+  }
   finally {
     busy = false; if (sendBtn) sendBtn.disabled = false;        // ALWAYS release — the bug was leaving this wedged on a stale turn
     if (myTurn === turn) { setStatus(on ? 'listening…' : ''); setMic(on ? 'listening' : ''); }

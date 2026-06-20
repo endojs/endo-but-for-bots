@@ -699,7 +699,10 @@ const handler = async (req, res) => {
       // prepaid inference toll-bridge: meter THIS chat's purse; show the agent its budget in-context.
       const perProvider = {};
       const meteredLLM = makeMeteredLLM({ callLLM, purse, perProvider });
-      const r = await AGENT_RUNNER({
+      const TURN_DEADLINE_MS = Number(process.env.TURN_DEADLINE_MS) || 360000; // hard per-turn limit → a LEGIBLE timeout, never a silent stall (the crowdsupply hang)
+      let deadlineHit = false; let deadlineT = null;
+      const r = await Promise.race([
+        AGENT_RUNNER({
         toolbox, manifest, userText: t, history, attachments: agentAttachments, signal: ac.signal, persona: runPersona, model: String(model || 'default'),
         llm: meteredLLM, budgetLine: budgetLine(purse.balance(), String(model || 'default')),
         onStep: s => {
@@ -737,9 +740,22 @@ const handler = async (req, res) => {
           steps.push(step);
           emitStep(sid, { t: 'done', name: step.name, ok: step.ok, detail: step.detail, children: step.children, call: callText, result: resultText, granted: step.granted }); // the node settles live (research's live subtree already streamed via rnode)
         },
-      });
+        }).then(x => { if (deadlineT) clearTimeout(deadlineT); return x; }),
+        new Promise(resolve => { deadlineT = setTimeout(() => { deadlineHit = true; try { ac.abort(); } catch { /* */ } resolve({ cancelled: true, toolsUsed: [], answer: '' }); }, TURN_DEADLINE_MS); }),
+      ]);
       emitStep(sid, { t: 'end' });
       if (runs.get(sid) === ac) runs.delete(sid);
+      // WATCHDOG: the turn blew the deadline (or never returned). Surface a LEGIBLE summary instead of a
+      // silent cancel — name the steps it ran + the last one (the likely stall), so failures are visible.
+      if (deadlineHit || r.timedOut) {
+        const names = steps.map(s => s.name).filter(Boolean);
+        const last = names[names.length - 1];
+        const mins = Math.round(TURN_DEADLINE_MS / 60000);
+        const answer = `⚠️ I stopped this run after ${mins} min (the turn time limit). ` + (names.length
+          ? `It ran ${names.length} step(s): ${names.join(' → ')}. The last one (${last}) didn't return in time — that's the likely stall.`
+          : `It produced no steps — it stalled before the first action (a tool likely hung).`) + ` Tell me to retry, or narrow it to the part that matters.`;
+        return json(res, 200, { answer, steps, toolsUsed: names.map(n => ({ name: n })), agentId: runNode.id, timedOut: true, remaining: purse.balance(), allowance: purse.granted() });
+      }
       if (r.cancelled) return json(res, 200, { cancelled: true });
       // prepaid allowance spent mid-turn → return a DETERMINISTIC exhausted signal (no model
       // call was made to produce it). The client renders a static Top-up / Abandon card.
@@ -1556,6 +1572,6 @@ const main = async () => {
 };
 
 // flush durable balances on a clean shutdown (systemd restart sends SIGTERM) so the last debits persist.
-for (const sig of ['SIGTERM', 'SIGINT']) process.on(sig, () => { try { purseStore.flushNow(); } catch { /* best-effort */ } process.exit(0); });
+for (const sig of ['SIGTERM', 'SIGINT']) process.on(sig, () => { for (const ac of runs.values()) { try { ac.abort(); } catch { /* */ } } try { purseStore.flushNow(); } catch { /* best-effort */ } process.exit(0); });
 
 main().catch(e => { log('FATAL', e && e.stack || e); process.exit(1); });

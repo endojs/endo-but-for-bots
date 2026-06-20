@@ -295,8 +295,12 @@ export const getRole = name => {
 harden(getRole);
 
 // the slim, prompt-free catalog view for listRoles() + the manifest (keeps prompts out of context).
-export const roleList = () => harden(Object.keys(ROLE_CATALOG).map(role => {
-  const s = ROLE_CATALOG[role];
-  return { role, label: s.label, tier: s.tier, via: s.via, writes: s.writes, powers: [...s.powers], blurb: s.blurb };
-}));
+export const roleList = () => harden(Object.keys(ROLE_CATALOG)
+  // Skip the string ALIAS entries (e.g. ocap → 'ocapReviewer'); only real role objects are listable.
+  // (Treating an alias as a role did `[...string.powers]` → a hard crash that broke every roles-power turn.)
+  .filter(role => ROLE_CATALOG[role] && typeof ROLE_CATALOG[role] === 'object')
+  .map(role => {
+    const s = ROLE_CATALOG[role];
+    return { role, label: s.label, tier: s.tier, via: s.via, writes: s.writes, powers: [...(Array.isArray(s.powers) ? s.powers : [])], blurb: s.blurb };
+  }));
 harden(roleList);
