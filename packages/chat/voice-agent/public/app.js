@@ -1131,9 +1131,18 @@ const renderChatBar = () => {
       const pj = projectList.find(x => x.id === c.projectId);
       projChip = `<button class="mini cb-proj" data-openproj="${esc(c.projectId)}" title="open this project's shared files">📂 ${esc((pj && pj.name) || 'project')}</button>`;
     }
-    bar.innerHTML = `<span class="cb-title">${esc(c.title || 'chat')}</span>${projChip}<span style="flex:1"></span>${badge}`;
+    let parentChip = '';
+    if (c.parentId) { // a delegate / attenuated sub-chat → link back to the chat it was created from
+      const par = chats.find(x => x.id === c.parentId);
+      parentChip = par
+        ? `<button class="mini cb-parent" data-openparent="${esc(c.parentId)}" title="open the chat this was created from">↑ from: ${esc(par.title || 'parent chat')}</button>`
+        : `<span class="mini" style="opacity:.6" title="the originating chat is no longer available">↑ from: ${esc(c.parentTitle || 'parent chat')}</span>`;
+    }
+    bar.innerHTML = `<span class="cb-title">${esc(c.title || 'chat')}</span>${parentChip}${projChip}<span style="flex:1"></span>${badge}`;
     const pb = bar.querySelector('[data-openproj]');
     if (pb) pb.onclick = () => { openProjectId = pb.dataset.openproj; renderProjects(); };
+    const pp = bar.querySelector('[data-openparent]');
+    if (pp) pp.onclick = () => switchChat(pp.dataset.openparent);
   }
   applyShareMode();
 };
@@ -2107,7 +2116,7 @@ const newSubChat = () => {
     if (!r || r.error || !r.scopedCap) { alert((r && r.error) || 'failed'); $('sub-make').disabled = false; return; }
     closeModal();
     const id = 'chat-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
-    chats.unshift({ id, title: '✂️ ' + title, ts: Date.now(), scopedCap: r.scopedCap, attenuated: true }); saveChats();
+    chats.unshift({ id, title: '✂️ ' + title, ts: Date.now(), scopedCap: r.scopedCap, attenuated: true, parentId: sessionId, parentTitle: (chats.find(x => x.id === sessionId) || {}).title || 'parent chat' }); saveChats();
     switchChat(id);
     setStatus('sub-chat created · powers: ' + (r.powers || []).join(', '));
   };
