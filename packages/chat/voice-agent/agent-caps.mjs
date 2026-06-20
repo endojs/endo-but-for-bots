@@ -772,8 +772,10 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
           const subNode = makeAgentNode({ powers: [...granted], labelOf: nick || `delegate-${dkey}`, haBinding: node.haBinding, agBinding: node.agBinding, id: nick ? `${nick}-${dkey}` : `delegate-${newSwiss()}` });
           const sub = subNode.toolbox(ctx); // inherit the originating chat so delegated pushes deep-link too
           const ac = new AbortController(); activeDelegate = ac;
+          // Carry the ORIGINATING request into the delegate so its own record shows what led to it.
+          const lead = ctx.userText ? `The user's original request that led to this delegation (context — keep it in mind):\n"${String(ctx.userText).slice(0, 1200)}"\n\nYour task:\n` : '';
           try {
-            const r = await runOpusDelegate({ prompt: String(prompt || ''), toolbox: sub.toolbox, manifest: sub.manifest, grantedPowers: [...granted], signal: ac.signal });
+            const r = await runOpusDelegate({ prompt: lead + String(prompt || ''), toolbox: sub.toolbox, manifest: sub.manifest, grantedPowers: [...granted], signal: ac.signal });
             // If the delegate BUILT + proposed any tools, RETURN them to the caller as data (not
             // injected into scope). They're pending dan's review; the caller learns one was made.
             const proposedTools = customToolsObj.pendingBy(subNode.id);
@@ -976,14 +978,14 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
       // so it PROPOSES (you confirm the grant). A specialist runs with its OWN confined
       // bundle + instructions + id; its actions still surface for confirmation unless
       // you granted it autonomy ("don't ask again", scoped to that specialist).
-      toolbox.listSpecialists = harden({ run: async () => ({ ok: true, specialists: specialists.map(s => ({ id: s.id, name: s.name, domain: s.domain, powers: s.powers, autonomy: listAutoRules(s.id).map(r => r.kind) })) }) });
+      toolbox.listSpecialists = harden({ run: async () => ({ ok: true, specialists: specialists.map(s => ({ id: s.id, name: s.name, domain: s.domain, powers: s.powers, autonomy: listAutoRules(s.id).map(r => r.kind), spawnedFrom: s.spawnedFrom || null })) }) });
       toolbox.proposeSpawnSpecialist = harden({ run: async ({ name, domain, powers: want = [], instructions } = {}) => {
         const granted = [...new Set((Array.isArray(want) ? want : []).filter(p => node.powers.has(p) && !META_POWERS.has(p)))];
         return np({ type: 'spawn-specialist', power: 'specialists', title: `Spawn specialist: ${String(name || 'specialist')}`, summary: `${String(domain || '')}${granted.length ? ' · ' + granted.join(', ') : ' · (no powers)'}`,
           detail: { name: String(name || ''), domain: String(domain || ''), powers: granted, instructions: String(instructions || '').slice(0, 4000) },
-          commit: () => spawnSpecialist({ name, domain, powers: granted, instructions }) });
+          commit: () => spawnSpecialist({ name, domain, powers: granted, instructions, spawnedFromChatId: ctx.chatId }) });
       } });
-      toolbox.askSpecialist = harden(makeAskSpecialist());
+      toolbox.askSpecialist = harden(makeAskSpecialist(ctx.userText));
       manifest.push(
         { name: 'listSpecialists', reversible: false, args: {}, description: 'List your specialist sub-agents (name, domain, powers, and what each may do autonomously).' },
         { name: 'proposeSpawnSpecialist', reversible: false, args: { name: 'string', domain: 'string — the kind of requests it handles', powers: 'array — a subset of YOUR powers to grant it (meta-powers excluded)', instructions: 'string — its standing instructions / persona' }, description: 'PROPOSE spawning a persistent specialist sub-agent into your inventory. Does NOT spawn — you confirm the grant first.' },
@@ -1399,7 +1401,7 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
       listAutoConfirm: () => harden(listAutoRules(node.id)),
       revokeAutoConfirm: kind => harden({ revoked: removeAutoRule(node.id, String(kind || '')), kind: String(kind || '') }),
       // the entry agent's specialist roster (inventory) — list + retire
-      listSpecialists: () => harden((node.isRoot || powerSet.has('specialists')) ? specialists.map(s => ({ id: s.id, name: s.name, domain: s.domain, powers: s.powers, autonomy: listAutoRules(s.id).map(r => r.kind) })) : []),
+      listSpecialists: () => harden((node.isRoot || powerSet.has('specialists')) ? specialists.map(s => ({ id: s.id, name: s.name, domain: s.domain, powers: s.powers, autonomy: listAutoRules(s.id).map(r => r.kind), spawnedFrom: s.spawnedFrom || null })) : []),
       removeSpecialist: ref => { if (!node.isRoot && !powerSet.has('specialists')) throw new Error("you don't hold specialists"); return harden(removeSpecialist(ref)); },
     });
 
@@ -1420,12 +1422,12 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
     return node;
   };
   const getSpecNode = spec => specNodes.get(spec.id) || registerSpecialist(spec);
-  const spawnSpecialist = ({ name, domain, powers, instructions }) => {
+  const spawnSpecialist = ({ name, domain, powers, instructions, spawnedFromChatId }) => {
     const id = specSlug(name);
     const granted = [...new Set((Array.isArray(powers) ? powers : []).filter(p => ALL_POWERS.includes(p) && !META_POWERS.has(p)))];
     const existing = specialists.find(s => s.id === id);
     const swiss = existing?.swiss || newSwiss();
-    const spec = { id, name: String(name || id), domain: String(domain || ''), powers: granted, instructions: String(instructions || ''), swiss, createdAt: existing?.createdAt || new Date().toISOString() };
+    const spec = { id, name: String(name || id), domain: String(domain || ''), powers: granted, instructions: String(instructions || ''), swiss, createdAt: existing?.createdAt || new Date().toISOString(), spawnedFrom: existing?.spawnedFrom || (spawnedFromChatId ? String(spawnedFromChatId) : null) };
     specialists = specialists.filter(s => s.id !== id).concat(spec);
     saveSpecialists();
     registerSpecialist(spec);
@@ -1442,7 +1444,7 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
   };
   // Run a specialist (gemma) with ITS confined bundle + ITS instructions. Its proposals
   // / auto-fires are scoped to its id and bubble up to the caller's turn (server merges).
-  const makeAskSpecialist = () => {
+  const makeAskSpecialist = (origin = '') => {
     let active = null;
     return {
       run: async ({ name, request } = {}) => {
@@ -1451,8 +1453,10 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
         const sub = getSpecNode(spec).toolbox();
         const proposalIds = []; const autoFired = []; const toolsUsed = [];
         const ac = new AbortController(); active = ac;
+        // Carry the originating request so the specialist's record shows what led to it.
+        const lead = origin ? `The user's original request that led to this (context):\n"${String(origin).slice(0, 1200)}"\n\nWhat I'm asking you to do:\n` : '';
         try {
-          const r = await AGENT_RUNNER({ toolbox: sub.toolbox, manifest: sub.manifest, userText: String(request || ''), persona: spec.instructions, signal: ac.signal,
+          const r = await AGENT_RUNNER({ toolbox: sub.toolbox, manifest: sub.manifest, userText: lead + String(request || ''), persona: spec.instructions, signal: ac.signal,
             onStep: s => {
               if (s.kind !== 'tool' || !s.result) return;
               if (s.result.proposed && s.result.id) proposalIds.push(s.result.id);

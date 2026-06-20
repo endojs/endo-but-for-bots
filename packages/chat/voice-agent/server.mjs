@@ -682,7 +682,7 @@ const handler = async (req, res) => {
       // the turn's purse + a `charge` that paid connectors (Phase 4) debit market-rate+commission from.
       const purse = purseFor(cap, sid);
       const charge = uusd => { const amt = Math.max(0, Math.round(Number(uusd) || 0)); if (!amt) return true; if (!purse.canAfford(amt)) return false; purse.debit(amt); return true; };
-      const { toolbox, manifest } = runNode.toolbox({ chatId: sid, emit: ev => emitStep(sid, ev), app: boundApp, homeSubkey: chatProject ? chatProject.homeSubkey : null, charge }); // chatId → deep-links; emit → pendant stream; app → root state; homeSubkey → project folder; charge → paid-connector billing
+      const { toolbox, manifest } = runNode.toolbox({ chatId: sid, userText: t, emit: ev => emitStep(sid, ev), app: boundApp, homeSubkey: chatProject ? chatProject.homeSubkey : null, charge }); // chatId → deep-links; userText → delegates/specialists carry the originating request; emit → pendant stream; app → root state; homeSubkey → project folder; charge → paid-connector billing
       // Conversation memory: PREFER the client's durable transcript (it survives this service being
       // restarted — the in-memory `sessions` map is volatile and capped, which made the agent forget
       // earlier turns after every deploy). Fall back to the in-process map only if the client sent none.

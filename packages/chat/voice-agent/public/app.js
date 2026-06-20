@@ -559,6 +559,10 @@ const sendChat = async (text, { spoken = false, audio = null, attachments = [], 
       if (Array.isArray(pendingScopePowers)) { chat.scopedPowers = pendingScopePowers; pendingScopePowers = null; } // the granted powers → shown at the top of the chat
       if (pendingAgent[sessionId]) { chat.agent = pendingAgent[sessionId]; delete pendingAgent[sessionId]; } // carry the chosen entrypoint agent onto the committed chat
       else if (asSpecialist) chat.agent = entryAgent;
+      if (chat.agent && specialistSpawnedFrom[chat.agent]) { // a specialist chat → link back to the chat that spawned the specialist
+        chat.parentId = specialistSpawnedFrom[chat.agent];
+        chat.parentTitle = (chats.find(x => x.id === chat.parentId) || {}).title || 'where it was spawned';
+      }
       if (pid) chat.projectId = pid;
       chats.unshift(chat); saveChats();
       setChatUrl(); // the chat is now committed (known) → reflect it in the bookmarkable URL
@@ -1038,6 +1042,7 @@ const rememberModel = (agent, model) => { try { const m = rememberedModels(); m[
 const curChatObj = () => chats.find(c => c.id === sessionId) || null;
 // id → powers[] for each entrypoint specialist (so a chat can show its agent's ring up front).
 let specialistPowers = {};
+let specialistSpawnedFrom = {}; // specialist id → the chatId it was spawned from (for the "↑ from" link)
 // sessionId → selected entrypoint agent for an EPHEMERAL chat (not yet committed to chats[]).
 const pendingAgent = {};
 const chatAgent = () => (curChatObj() || {}).agent || pendingAgent[sessionId] || 'field-agent';
@@ -1068,8 +1073,8 @@ const syncSelectors = () => {
 };
 const loadModels = async () => { if (!cap) return; try { const r = await (await fetch('/models', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap }) })).json(); const local = (r.models && r.models.length) ? r.models : [LOCAL_DEFAULT]; modelList = [...local, ...OPENROUTER_MODELS]; populateModelSel(); syncSelectors(); } catch {} };
 const loadAgentList = async () => {
-  agentList = ['field-agent']; specialistPowers = {};
-  if (heldPowers.has('specialists')) { try { const specs = await rpc('listSpecialists'); for (const s of (specs || [])) if (s && s.id) { agentList.push(s.id); specialistPowers[s.id] = Array.isArray(s.powers) ? s.powers : []; } } catch {} }
+  agentList = ['field-agent']; specialistPowers = {}; specialistSpawnedFrom = {};
+  if (heldPowers.has('specialists')) { try { const specs = await rpc('listSpecialists'); for (const s of (specs || [])) if (s && s.id) { agentList.push(s.id); specialistPowers[s.id] = Array.isArray(s.powers) ? s.powers : []; if (s.spawnedFrom) specialistSpawnedFrom[s.id] = s.spawnedFrom; } } catch {} }
   populateAgentSel(); syncSelectors();
 };
 // Defined projects feed the agent menu's "New chat in project…" group. /projects/list is
