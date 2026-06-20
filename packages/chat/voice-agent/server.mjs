@@ -257,6 +257,16 @@ const meetingScribe = makeMeetingScribe();
 const MEETINGS_DIR = `${HOME}/.local/state/voice-agent/meetings`;
 const SHARED_DIR = `${HOME}/.local/state/voice-agent/shared-chats`; // Feature B: token → shared chat
 const sharePurses = new Map(); // share token → allowance purse (bounds a write-recipient's spend)
+// Durable share-allowance purses: persisted via purseStore under a `share:` namespace (token is hashed,
+// never on disk), so a funded share survives a restart instead of resetting.
+const SHARE_KEY = tok => `share:${tok}`;
+const fundSharePurse = (tok, uusd) => { const p = makePurse(Math.round(uusd) || 0, { onChange: (b, g) => purseStore.set(SHARE_KEY(tok), b, g) }); purseStore.set(SHARE_KEY(tok), p.balance(), p.granted()); sharePurses.set(tok, p); return p; };
+const unfundSharePurse = tok => { sharePurses.delete(tok); purseStore.remove(SHARE_KEY(tok)); };
+const sharePurseFor = tok => {
+  let p = sharePurses.get(tok);
+  if (!p) { const saved = purseStore.get(SHARE_KEY(tok)); if (saved) { p = makePurse(saved.balance, { granted: saved.granted, onChange: (b, g) => purseStore.set(SHARE_KEY(tok), b, g) }); sharePurses.set(tok, p); } }
+  return p || null;
+};
 const capHash = c => crypto.createHash('sha256').update(String(c || '')).digest('hex').slice(0, 16);
 
 const FEED_DIR = path.dirname(FEED_FILE);
@@ -1211,7 +1221,7 @@ const handler = async (req, res) => {
       };
       await fs.promises.mkdir(SHARED_DIR, { recursive: true });
       await fs.promises.writeFile(path.join(SHARED_DIR, `${token}.json`), JSON.stringify(rec, null, 2));
-      if (rec.allowanceUsd > 0) sharePurses.set(token, makePurse(Math.round(rec.allowanceUsd * 1e6))); // µUSD
+      if (rec.allowanceUsd > 0) fundSharePurse(token, Math.round(rec.allowanceUsd * 1e6)); // µUSD (durable)
       return json(res, 200, { token, name: rec.name, mode: rec.mode, allowanceUsd: rec.allowanceUsd });
     }
     // list the named share links the owner created for a chat (root only; tx/scopedCap NOT exposed).
@@ -1239,7 +1249,7 @@ const handler = async (req, res) => {
       if (name !== undefined) rec.name = String(name || '').slice(0, 80);
       if (allowanceUsd !== undefined) {
         rec.allowanceUsd = Math.max(0, Number(allowanceUsd) || 0);
-        if (rec.allowanceUsd > 0) sharePurses.set(tok, makePurse(Math.round(rec.allowanceUsd * 1e6))); else sharePurses.delete(tok);
+        if (rec.allowanceUsd > 0) fundSharePurse(tok, Math.round(rec.allowanceUsd * 1e6)); else unfundSharePurse(tok);
       }
       await fs.promises.writeFile(path.join(SHARED_DIR, `${tok}.json`), JSON.stringify(rec, null, 2));
       return json(res, 200, { token: tok, name: rec.name, mode: rec.mode, allowanceUsd: rec.allowanceUsd });
@@ -1250,7 +1260,7 @@ const handler = async (req, res) => {
       if (!nodeFor(cap)?.isRoot) return json(res, 403, { error: 'revoking a share needs your root capability' });
       const tok = String(token || '').replace(/[^0-9a-f]/g, '');
       try { await fs.promises.unlink(path.join(SHARED_DIR, `${tok}.json`)); } catch { /* already gone */ }
-      sharePurses.delete(tok);
+      unfundSharePurse(tok);
       return json(res, 200, { revoked: true });
     }
     if (req.method === 'POST' && u.pathname === '/share/open') {
@@ -1265,7 +1275,7 @@ const handler = async (req, res) => {
       // how to drive it — so a generic agent effectively gains the skill to use it, not just read it.
       const node = nodeFor(rec.scopedCap); let powers = [], methods = [];
       if (node) { powers = node.isRoot ? ALL_POWERS : [...node.powers]; try { methods = node.toolbox({ chatId: 'share' }).manifest; } catch {} }
-      return json(res, 200, { chatId: rec.chatId, title: rec.title, tx: rec.tx, len, mode: rec.mode, hasAllowance: !!(sharePurses.get(rec.token)),
+      return json(res, 200, { chatId: rec.chatId, title: rec.title, tx: rec.tx, len, mode: rec.mode, hasAllowance: !!sharePurseFor(rec.token),
         endowment: { powers, methods, write: rec.mode === 'write' ? `POST {origin}/share/post {token:"${rec.token}", text} to drive the agent (it runs with these powers)` : 'read-only — no /share/post' } });
     }
     if (req.method === 'POST' && u.pathname === '/share/post') {
@@ -1276,7 +1286,7 @@ const handler = async (req, res) => {
       const node = nodeFor(rec.scopedCap);
       if (!node) return json(res, 410, { error: 'the shared chat\'s capability was revoked' });
       const t = String(text || '').trim(); if (!t) return json(res, 400, { error: 'empty' });
-      const purse = sharePurses.get(tok); // allowance purse (if the owner funded one) — bounds the recipient's spend
+      const purse = sharePurseFor(tok); // allowance purse (if the owner funded one) — bounds the recipient's spend (durable across restarts)
       const perProvider = {};
       const llm = purse ? makeMeteredLLM({ callLLM, purse, perProvider }) : undefined;
       const { toolbox, manifest } = node.toolbox({ chatId: `share-${tok.slice(0, 8)}` });

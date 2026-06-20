@@ -29,6 +29,7 @@ export const makePurseStore = ({ file, debounceMs = 800 }) => {
     // returns { balance, granted } for a key's HASH, or undefined if never persisted
     get: key => data[hashKey(key)],
     set: (key, balance, granted) => { data[hashKey(key)] = { balance: Math.round(balance) || 0, granted: Math.round(granted) || 0 }; schedule(); },
+    remove: key => { const h = hashKey(key); if (h in data) { delete data[h]; schedule(); } },
     // write immediately (used on shutdown so the last debits aren't lost)
     flushNow: () => { if (pending || timer) { clearTimeout(timer); flush(); } },
   };
