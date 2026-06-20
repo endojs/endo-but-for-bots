@@ -550,6 +550,9 @@ const InventoryList = ({ powers, options, path, rootPowers, rootPrefix }) => {
         /** @type {Parameters<typeof iterateReader>[0]} */ (
           /** @type {unknown} */ (E(powers).followNameChanges())
         ),
+        // Prefetch a window of values so the initial name backlog streams
+        // without a round-trip acknowledgement per name.
+        { buffer: 64 },
       );
       for await (const rawChange of nameChanges) {
         if (disposed) break;

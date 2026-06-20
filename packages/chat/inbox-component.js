@@ -1106,6 +1106,9 @@ const InboxRoot = ({
         /** @type {Parameters<typeof iterateReader>[0]} */ (
           /** @type {unknown} */ (E(powers).followMessages())
         ),
+        // Prefetch a window of messages so the backlog streams without a
+        // round-trip acknowledgement per message.
+        { buffer: 64 },
       )) {
         if (disposed()) break;
 
