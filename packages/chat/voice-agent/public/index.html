@@ -299,6 +299,11 @@
   .pill { font-size:11px; color:var(--mut); } .err { color:var(--bad); font-size:13px; margin-top:8px; }
   .shares-sec { margin-top:14px; padding-top:10px; font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:var(--mut); border-top:1px solid var(--edge); }
   .share .sub { font-size:11px; color:var(--mut); }
+  .comp { padding:11px 0; border-top:1px solid var(--edge); }
+  .comp-head { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+  .cvers { margin:7px 0 0 6px; display:flex; flex-direction:column; gap:4px; }
+  .cver { display:flex; align-items:center; gap:7px; font-size:12px; }
+  .vmono { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; color:var(--acc); font-size:11px; }
   .hide { display:none !important; }
   .qrmodal { position:fixed; inset:0; background:rgba(0,0,0,.72); display:flex; align-items:center; justify-content:center; z-index:50; }
   .qrcard { background:#fff; padding:18px 18px 14px; border-radius:14px; text-align:center; max-width:92vw; }
@@ -361,6 +366,7 @@
   <select id="model-sel" class="hdr-sel hide" title="Model-provider acting as this agent (remembered per agent)"></select>
   <button class="tab on" id="tab-talk">Talk</button>
   <button class="tab" id="tab-shares">Powers</button>
+  <button class="tab hide" id="tab-components">Components</button>
   <button class="iconbtn" id="bell-btn" title="Needs your attention" style="position:relative">🔔<span id="bell-badge" class="badge hide"></span></button>
   <button class="iconbtn" id="projects-btn" title="Projects &amp; scheduled agents">🕐</button>
   <button class="iconbtn" id="chatshare-btn" title="Share this chat (link / QR)">📤</button>
@@ -475,6 +481,11 @@
       <div class="inbox-head" id="rec-head"><span class="caret">▸</span> Recent activity</div>
       <div id="rec-list" class="inbox-list hide"></div>
     </div>
+  </div>
+  <div id="components-view" class="card hide">
+    <div style="font-size:15px;margin-bottom:6px"><b>🧩 Components</b></div>
+    <div class="sub" style="margin-bottom:10px">Your admitted library components. Each one's <b>source</b> is a git-as-Endo object (versioned): view its history, <b>revert</b> to an earlier version (non-destructive), or <b>fork</b> it into your own (its own lineage + a copy of its data). Reverting changes what the live tool runs.</div>
+    <div id="components-list"></div>
   </div>
   <div id="qrmodal" class="qrmodal hide"></div>
 </main>

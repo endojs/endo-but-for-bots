@@ -1778,13 +1778,34 @@ if ($('bell-btn')) $('bell-btn').onclick = () => showTab('inbox');
 if ($('att-head')) $('att-head').onclick = () => toggleSection('att-head', 'att-list');
 if ($('rec-head')) $('rec-head').onclick = () => toggleSection('rec-head', 'rec-list');
 
+// ── 🧩 Components studio (root): each component's source is a git-as-Endo object — view history,
+//    revert to a version (non-destructive), or fork it (own lineage + a copy of its data). ─────────
+const refreshComponents = async () => {
+  const list = $('components-list'); if (!list) return;
+  let tools = [];
+  try { const r = await (await fetch('/tools/review', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap }) })).json(); tools = (r.tools || []).filter(t => t.status === 'admitted'); }
+  catch { list.innerHTML = '<div class="pill">could not load components</div>'; return; }
+  if (!tools.length) { list.innerHTML = '<div class="pill">no admitted components yet — build one in chat (the agent can proposeTool) and admit it</div>'; return; }
+  const hists = {};
+  await Promise.all(tools.map(async t => { try { const h = await (await fetch('/components/history', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, id: t.id }) })).json(); hists[t.id] = h.versions || []; } catch { hists[t.id] = []; } }));
+  list.innerHTML = tools.map(t => {
+    const vs = hists[t.id] || []; const cur = vs[0];
+    const rows = vs.map((v, i) => `<div class="cver"><span class="vmono">${esc(String(v.version).slice(0, 8))}</span> <span class="sub">${esc(v.summary || '')}</span>${i === 0 ? ' <span class="pill">current</span>' : ` <button class="mini" data-revert="${esc(t.id)}" data-ver="${esc(v.version)}">revert</button>`}</div>`).join('');
+    return `<div class="comp"><div class="comp-head"><b>${esc(t.name)}</b> <span class="pill">${esc(t.kind || 'instance')}${cur ? ` · v ${esc(String(cur.version).slice(0, 8))}` : ''}</span> <button class="mini" data-fork="${esc(t.id)}" data-name="${esc(t.name)}">fork</button></div><div class="cvers">${rows || '<span class="sub">no versions recorded yet</span>'}</div></div>`;
+  }).join('');
+  list.querySelectorAll('[data-revert]').forEach(b => { b.onclick = async () => { if (!window.confirm('Revert the LIVE component to this version? Non-destructive — it makes a new version; the live tool then runs it.')) return; b.disabled = true; await fetch('/components/revert', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, id: b.dataset.revert, version: b.dataset.ver }) }); refreshComponents(); }; });
+  list.querySelectorAll('[data-fork]').forEach(b => { b.onclick = async () => { const name = window.prompt(`Fork "${b.dataset.name}" — name your fork:`, `${b.dataset.name}-fork`); if (!name) return; b.disabled = true; const r = await (await fetch('/components/fork', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, id: b.dataset.fork, name }) })).json(); setStatus(r.ok ? `Forked → "${name}" — queued for review; admit it in chat to host it.` : `fork: ${r.error || 'failed'}`); refreshComponents(); }; });
+};
+
 // ── tabs + boot ─────────────────────────────────────────────────────────────
 const showTab = which => {
   $('tab-talk').classList.toggle('on', which === 'talk');
   $('tab-shares').classList.toggle('on', which === 'shares');
+  $('tab-components').classList.toggle('on', which === 'components');
   $('talk').classList.toggle('hide', which !== 'talk');
   $('composer').classList.toggle('hide', which !== 'talk');
   $('shares-view').classList.toggle('hide', which !== 'shares');
+  $('components-view').classList.toggle('hide', which !== 'components');
   $('inbox-view').classList.toggle('hide', which !== 'inbox');
   curTab = which;
   // the live 3D pendant is position:absolute (z-index 25); without this it floats OVER the
@@ -1795,6 +1816,7 @@ const showTab = which => {
   renderChatBar(); // per-chat top bar shows only in the talk view
   syncSelectors(); // agent + model dropdowns show only in the talk view
   if (which === 'inbox') renderInbox();
+  if (which === 'components') refreshComponents();
   if (which === 'shares') {
     refreshShares();
     refreshAutoRules();
@@ -1815,6 +1837,7 @@ window.addEventListener('popstate', e => {
 });
 $('tab-talk').onclick = () => showTab('talk');
 $('tab-shares').onclick = () => showTab('shares');
+$('tab-components').onclick = () => showTab('components');
 $('mint').onclick = mint;
 // 👤 Invite a new user (Phase 1): mint a confined STARTER cap + hand over the link (copy/QR only).
 const INVITE_STARTER = new Set(['reference', 'research', 'images', 'contact']);
@@ -2051,6 +2074,7 @@ const boot = async () => {
   // populate the power dropdown with exactly what this cap can mint
   $('sh-power').innerHTML = (d.canMint || []).map(p => `<option value="${esc(p)}">${esc(p)}</option>`).join('');
   if (!(d.canMint || []).length) { $('tab-shares').classList.add('hide'); }
+  if (isRoot) { $('tab-components').classList.remove('hide'); } // component version/fork/revert is owner-managed
   fillInviteBox(); // 👤 owner-only "Invite a new user" box (starter-power picker)
   fillConnectorsBox(); // 🔌 owner-only "Connect an API service" box
   greetingText = d.kind === 'root'
