@@ -9,8 +9,10 @@ import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 
 import {
   Fragment,
+  createContext,
   h,
   renderConfined,
+  useContext,
   useEffect,
   useReducer,
   useRef,
@@ -126,6 +128,17 @@ const messagesReducer = (state, action) => {
 harden(messagesReducer);
 
 /**
+ * Clipboard capability, injected via context so the deep leaf copy controls
+ * (`TimestampLine`, `FormFieldRow`) never reach the ambient `navigator`.
+ * Defaults to the platform clipboard; a host can override it with a Provider.
+ *
+ * @type {import('preact').Context<(text: string) => Promise<void>>}
+ */
+const ClipboardContext = createContext(text =>
+  navigator.clipboard.writeText(text),
+);
+
+/**
  * The collapsible timestamp tooltip: message number, dismiss button, and the
  * copyable time lines. Class names match the original imperative markup so the
  * existing CSS continues to apply.
@@ -187,13 +200,14 @@ harden(Timestamp);
  * @param {string} props.line
  */
 const TimestampLine = ({ line }) => {
+  const copy = useContext(ClipboardContext);
   const [copied, setCopied] = useState(false);
   return h(
     'div',
     {
       class: 'timestamp-line',
       onClick: () => {
-        navigator.clipboard.writeText(line).then(() => {
+        copy(line).then(() => {
           setCopied(true);
           setTimeout(() => setCopied(false), 1000);
         });
@@ -612,6 +626,7 @@ harden(DefinitionBody);
  * @param {(value: string) => void} props.onChange
  */
 const FormFieldRow = ({ field, value, onChange }) => {
+  const copy = useContext(ClipboardContext);
   const [shown, setShown] = useState(false);
   const [copied, setCopied] = useState(false);
 
@@ -655,7 +670,9 @@ const FormFieldRow = ({ field, value, onChange }) => {
               type: 'button',
               class: 'form-field-copy',
               onClick: () => {
-                navigator.clipboard.writeText(value);
+                copy(value).catch(error =>
+                  console.error('Failed to copy:', error),
+                );
                 setCopied(true);
                 setTimeout(() => setCopied(false), 1500);
               },
