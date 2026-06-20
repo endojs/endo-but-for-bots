@@ -1781,6 +1781,51 @@ if ($('rec-head')) $('rec-head').onclick = () => toggleSection('rec-head', 'rec-
 // ── 🧩 Components studio (root): each component's source is a git-as-Endo object — view history,
 //    revert to a version (non-destructive), or fork it (own lineage + a copy of its data). ─────────
 const updateComponentsBadge = n => { const t = $('tab-components'); if (t) t.textContent = n > 0 ? `Components (${n})` : 'Components'; };
+// Shared component actions (used by both the Studio buttons and the Alt-click overlay).
+const editComponent = async (id, name) => {
+  const change = window.prompt(`✎ Edit "${name}" — describe the change. A focused agent edits JUST this component's source, commits a new version (revertable), and applies it live:`);
+  if (!change) return;
+  setStatus(`✎ editing "${name}"…`);
+  const r = await (await fetch('/components/edit', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, id, prompt: change }) })).json();
+  setStatus(r.ok ? `Edited "${name}" → new version${r.review && r.review.worst !== 'none' ? ` (panel: ${r.review.worst})` : ''}. Revert in the Components tab if needed.` : `edit: ${r.error || 'failed'}`);
+  if (curTab === 'components') refreshComponents();
+};
+const forkComponentAct = async (id, name) => {
+  const fname = window.prompt(`Fork "${name}" — name your fork:`, `${name}-fork`); if (!fname) return;
+  const r = await (await fetch('/components/fork', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, id, name: fname }) })).json();
+  setStatus(r.ok ? `Forked → "${fname}" — queued for review; admit it in the Components tab.` : `fork: ${r.error || 'failed'}`);
+  if (curTab === 'components') refreshComponents();
+};
+
+// ── ⌥ Alt/Option-click to SELECT a component + edit it with its agent ───────────────────────────────
+// Hold Alt/Option → hovering outlines the lowest-level element tagged with its component id; click →
+// a chip offers ✎ edit (a focused agent for THAT component) / 🍴 fork. Works on any [data-component-id]
+// element, so it lights up wherever a component is rendered (the Components tab today; mounted UI
+// component-projects as the trie grows). Owner-only.
+const componentSelect = () => {
+  let altHeld = false, hoverEl = null;
+  const outline = document.createElement('div');
+  outline.style.cssText = 'position:fixed;z-index:9000;pointer-events:none;border:2px solid #39d3ff;border-radius:8px;box-shadow:0 0 16px #39d3ff66;display:none;transition:all .05s ease;';
+  const label = document.createElement('div');
+  label.style.cssText = 'position:absolute;top:-21px;left:-2px;background:#39d3ff;color:#021018;font:600 11px -apple-system,Segoe UI,sans-serif;padding:1px 7px;border-radius:6px;white-space:nowrap;';
+  outline.appendChild(label);
+  const hint = document.createElement('div');
+  hint.style.cssText = 'position:fixed;bottom:16px;left:50%;transform:translateX(-50%);z-index:9001;background:#0d1117f2;border:1px solid #39d3ff;color:#e6edf3;font:12px -apple-system,sans-serif;padding:6px 13px;border-radius:20px;display:none;pointer-events:none;';
+  hint.textContent = '⌥ Alt-click a component to edit it with its agent';
+  const chip = document.createElement('div');
+  chip.style.cssText = 'position:fixed;z-index:9002;display:none;gap:6px;background:#0d1117f7;border:1px solid #39d3ff;border-radius:10px;padding:6px 7px;box-shadow:0 10px 34px rgba(0,0,0,.6);font:12px -apple-system,sans-serif;align-items:center;';
+  document.body.append(outline, hint, chip);
+  const tagOf = el => (el && el.closest ? el.closest('[data-component-id]') : null);
+  const place = el => { if (!el) { outline.style.display = 'none'; return; } const r = el.getBoundingClientRect(); outline.style.display = 'block'; outline.style.left = `${r.left - 3}px`; outline.style.top = `${r.top - 3}px`; outline.style.width = `${r.width + 2}px`; outline.style.height = `${r.height + 2}px`; label.textContent = `🧩 ${el.getAttribute('data-component-name') || 'component'}`; };
+  const clearChip = () => { chip.style.display = 'none'; outline.style.display = 'none'; };
+  addEventListener('keydown', e => { if ((e.key === 'Alt' || e.altKey) && isRoot) { altHeld = true; hint.style.display = 'block'; } });
+  addEventListener('keyup', e => { if (e.key === 'Alt' || !e.altKey) { altHeld = false; hint.style.display = 'none'; if (!chip.style.display || chip.style.display === 'none') outline.style.display = 'none'; } });
+  addEventListener('mousemove', e => { if (!altHeld) return; const el = tagOf(e.target); if (el !== hoverEl) { hoverEl = el; place(el); } else if (el) place(el); });
+  addEventListener('click', e => { if (!altHeld) return; const el = tagOf(e.target); if (!el) return; e.preventDefault(); e.stopPropagation(); const id = el.getAttribute('data-component-id'), name = el.getAttribute('data-component-name') || 'component'; const r = el.getBoundingClientRect(); chip.innerHTML = `<span style="color:var(--mut)">🧩 ${name}</span> <button class="mini" data-act="edit">✎ edit</button> <button class="mini" data-act="fork">🍴 fork</button> <button class="mini" data-act="x">✕</button>`; chip.style.display = 'flex'; chip.style.left = `${Math.min(r.left, innerWidth - 220)}px`; chip.style.top = `${Math.min(r.bottom + 6, innerHeight - 44)}px`; place(el); chip.querySelector('[data-act=edit]').onclick = () => { clearChip(); editComponent(id, name); }; chip.querySelector('[data-act=fork]').onclick = () => { clearChip(); forkComponentAct(id, name); }; chip.querySelector('[data-act=x]').onclick = clearChip; }, true);
+  addEventListener('keydown', e => { if (e.key === 'Escape') clearChip(); });
+  addEventListener('scroll', () => { if (chip.style.display === 'flex') clearChip(); }, true);
+};
+componentSelect();
 const refreshComponents = async () => {
   const list = $('components-list'); if (!list) return;
   let all = [];
@@ -1811,7 +1856,7 @@ const refreshComponents = async () => {
     const rows = vs.map((v, i) => `<div class="cver"><span class="vmono">${esc(String(v.version).slice(0, 8))}</span> <span class="sub">${esc(v.summary || '')}</span>${i === 0 ? ' <span class="pill">current</span>' : ` <button class="mini" data-revert="${esc(t.id)}" data-ver="${esc(v.version)}">revert</button>`}</div>`).join('');
     const gks = Object.keys(grains[t.id] || {});
     const gview = gks.length ? `<div class="cgrains sub">🌱 data: ${gks.map(k => `${esc(k)}=${esc(JSON.stringify(grains[t.id][k]))}`).join(' · ')} <span style="opacity:.6">(survives edits/reverts)</span></div>` : '';
-    return `<div class="comp"><div class="comp-head"><b>${esc(t.name)}</b> <span class="pill">${esc(t.kind || 'instance')}${cur ? ` · v ${esc(String(cur.version).slice(0, 8))}` : ''}</span> <button class="mini" data-edit="${esc(t.id)}" data-name="${esc(t.name)}">✎ edit</button> <button class="mini" data-fork="${esc(t.id)}" data-name="${esc(t.name)}">fork</button></div>${gview}<div class="cvers">${rows || '<span class="sub">no versions recorded yet</span>'}</div></div>`;
+    return `<div class="comp" data-component-id="${esc(t.id)}" data-component-name="${esc(t.name)}"><div class="comp-head"><b>${esc(t.name)}</b> <span class="pill">${esc(t.kind || 'instance')}${cur ? ` · v ${esc(String(cur.version).slice(0, 8))}` : ''}</span> <button class="mini" data-edit="${esc(t.id)}" data-name="${esc(t.name)}">✎ edit</button> <button class="mini" data-fork="${esc(t.id)}" data-name="${esc(t.name)}">fork</button></div>${gview}<div class="cvers">${rows || '<span class="sub">no versions recorded yet</span>'}</div></div>`;
   }).join('');
   list.innerHTML = html;
   wireComponentActions();
@@ -1821,9 +1866,9 @@ const wireComponentActions = () => {
   const list = $('components-list'); if (!list) return;
   list.querySelectorAll('[data-admit]').forEach(b => { b.onclick = async () => { b.disabled = true; let r = await (await fetch('/tools/admit', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, id: b.dataset.admit }) })).json(); if (r.blocked === 'critical' && !window.confirm(`The review panel flagged a CRITICAL issue in "${b.dataset.name}". Admit anyway?`)) { b.disabled = false; return; } if (r.blocked === 'critical') { r = await (await fetch('/tools/admit', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, id: b.dataset.admit, override: true }) })).json(); } setStatus(r.ok ? `Admitted "${b.dataset.name}" — it's now a live component.` : `admit: ${r.error || 'failed'}`); refreshComponents(); }; });
   list.querySelectorAll('[data-reject]').forEach(b => { b.onclick = async () => { if (!window.confirm(`Reject "${b.dataset.name}"? It's discarded.`)) return; b.disabled = true; await fetch('/tools/reject', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, id: b.dataset.reject }) }); refreshComponents(); }; });
-  list.querySelectorAll('[data-edit]').forEach(b => { b.onclick = async () => { const change = window.prompt(`✎ Edit "${b.dataset.name}" — describe the change (a focused agent edits just this component, commits a new version you can revert):`); if (!change) return; b.disabled = true; setStatus(`✎ editing "${b.dataset.name}"…`); const r = await (await fetch('/components/edit', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, id: b.dataset.edit, prompt: change }) })).json(); setStatus(r.ok ? `Edited "${b.dataset.name}" → new version${r.review && r.review.worst !== 'none' ? ` (panel: ${r.review.worst})` : ''}. Revert here if needed.` : `edit: ${r.error || 'failed'}`); refreshComponents(); }; });
+  list.querySelectorAll('[data-edit]').forEach(b => { b.onclick = () => editComponent(b.dataset.edit, b.dataset.name); });
   list.querySelectorAll('[data-revert]').forEach(b => { b.onclick = async () => { if (!window.confirm('Revert the LIVE component to this version? Non-destructive — it makes a new version; the live tool then runs it.')) return; b.disabled = true; await fetch('/components/revert', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, id: b.dataset.revert, version: b.dataset.ver }) }); refreshComponents(); }; });
-  list.querySelectorAll('[data-fork]').forEach(b => { b.onclick = async () => { const name = window.prompt(`Fork "${b.dataset.name}" — name your fork:`, `${b.dataset.name}-fork`); if (!name) return; b.disabled = true; const r = await (await fetch('/components/fork', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, id: b.dataset.fork, name }) })).json(); setStatus(r.ok ? `Forked → "${name}" — queued for review; admit it in chat to host it.` : `fork: ${r.error || 'failed'}`); refreshComponents(); }; });
+  list.querySelectorAll('[data-fork]').forEach(b => { b.onclick = () => forkComponentAct(b.dataset.fork, b.dataset.name); });
 };
 
 // ── tabs + boot ─────────────────────────────────────────────────────────────
