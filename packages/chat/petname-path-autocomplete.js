@@ -169,7 +169,12 @@ const PathAutocompleteRoot = ({ controller }) => {
     return () => {
       if (controller.setState === setState) delete controller.setState;
     };
-  }, [controller]);
+    // Mount-only: `controller` is a stable per-instance bridge. Keying on it
+    // re-runs this effect every render under confinement (the sanitizer
+    // reissues the prop identity), and re-applying `setState(pendingState)`
+    // — itself reissued — defeats Preact's Object.is bail into a slow
+    // render/effect feedback loop that never settles on a slow runner.
+  }, []);
 
   if (!state) {
     return null;
