@@ -155,10 +155,17 @@ Implications that change the phases below:
   `customTools.setSource`. Remaining for later: the full `makeGit` exo wrapper (a
   remotable, attenuable EndoGit cap for the trie, needs a daemon mount) and binding a
   component's persisted DATA to grains so a runtime source-swap keeps the grains.
-- **Phase 3 — alt-click micro-agent.** Selection overlay (Alt/Option hover +
-  outline + select), per-component chat → a delegate confined to that
-  component-project's git object + dev ring; fork → adversarial dev flow → diff
-  review → revert flag.
+- **Phase 3 — per-component edit agent (CORE DONE) + alt-click selection (remaining).**
+  ✅ The Component Studio (root "Components" tab): every admitted component shows its
+  source version history + live grain data, with **✎ edit** (a confined agent edits
+  ONLY that component's source → a new version, applied live), **fork**, and **revert**.
+  The edit agent is `editComponentSource` (`/components/edit`); it's scoped to the one
+  component's `make(powers)` source and its output runs the discipline panel. A seeded
+  `demo-counter` makes it tryable out of the box. REMAINING: the **Alt/Option-click
+  selection overlay** on *live rendered* UI — that needs UI components to BE mounted
+  registry component-projects (the full mounted trie), so an element carries its
+  component id; until UI islands are registry-backed, selection has nothing to target.
+  That (and binding the dev flow to fork→adversarial-review→diff) is the next trie step.
 - **Phase 4 — sharing & upgrades.** Invite-carries-inbox; atomic accept/reject/
   auto upgrades; non-destructive try-on review; upstream/downstream element
   sharing; trust flags in invites → notifications feed.
