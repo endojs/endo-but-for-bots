@@ -710,10 +710,16 @@ deferred and recorded here.
 
 4. **Uncontrolled inputs read back via `document.querySelector`** instead of a
    controlled `onInput -> setState` value.
-   - `space-file-explorer/src/preact/Dialog.js:55-75` (reads `.fx-dialog-input`
-     value and the `:checked` radio from the DOM; the same package's
-     `Viewer.js` textarea already uses the controlled pattern — an internal
-     inconsistency).
+   - `space-file-explorer/src/preact/Dialog.js` — **done.** The text input and
+     radios are now controlled; the value/radio queries are gone (only the
+     forced focus query remains). This surfaced a confined-component gotcha
+     worth recording: **an object prop cannot be a `useEffect` dependency in a
+     confined component** — the sanitizing renderer reissues object props a
+     fresh identity on every render, so an effect keyed on one re-runs every
+     render. The reset-on-open is instead handled by keying the component on a
+     monotonic request id so it remounts per request (and `useState` re-seeds);
+     the focus effect is mount-only. Key confined-component effects on
+     primitives, never object references.
 
 5. **Timer/listener leaks (no cleanup).** `setTimeout` "wait for render" focus
    hacks (unnecessary — `renderConfined` is synchronous) and `document` click
