@@ -37,6 +37,7 @@ import { makeObsidianGraph } from '../capture/obsidian-graph.mjs';
 import { consultReferences } from '../capture/consult.mjs';
 import { notify } from '../capture/notify.mjs';
 import { addTimer, cancelTimer, listTimers } from '../capture/timers.mjs';
+import { createProject, listProjects, addScheduledAgent, updateScheduledAgent, removeScheduledAgent, computeNextAt, projectForChat } from './projects.mjs';
 import { proposeSpawn } from '../capture/agent-spawn.mjs';
 import { runOpusDelegate } from './delegate.mjs';
 import { runAgent } from '../../ocapn-noise/tool-bridge.mjs';
@@ -199,7 +200,9 @@ const makeAffordances = ({ outDir }) => {
         const outp = path.join(outDir, 'uploads', fname);
         fs.mkdirSync(path.dirname(outp), { recursive: true });
         const r = await runBrowser(['shot', u, outp]);
-        return harden(r.ok ? { ok: true, savedTo: `/uploads/${fname}`, title: r.title, url: r.url } : r);
+        // savedTo MUST be the filesystem path (the server reads/copies it for inline render + a durable
+        // /uploads copy); webPath is the served URL. Returning a web path as savedTo broke both (imgcopy ENOENT).
+        return harden(r.ok ? { ok: true, savedTo: outp, webPath: `/uploads/${fname}`, title: r.title, url: r.url } : r);
       },
     }),
     images: Far('Images', {
@@ -355,7 +358,8 @@ export const POWERS = harden({
   connectors: { label: 'Call connected API services (tools the owner wired up; keys injected server-side)', verbs: ['listConnectors', 'callConnector'] },
   customtools: { label: 'Use admitted library tools (agent-built, owner-reviewed; sandboxed)', verbs: ['listCustomTools', 'callCustomTool'] },
   phone: { label: 'Push a notification to your phone', verbs: ['pushPhone'] },
-  timers: { label: 'Schedule wake-ups / reminders', verbs: ['scheduleWakeup', 'repeatEvery', 'cancelTimer', 'listTimers'] },
+  timers: { label: 'Schedule wake-ups / reminders that PING dan (for things a human must do)', verbs: ['scheduleWakeup', 'repeatEvery', 'cancelTimer', 'listTimers'] },
+  schedule: { label: 'Create + edit SCHEDULED TASKS — recurring autonomous runs that DO the work themselves on a cadence (use this, not a reminder, when the agent can do the task)', verbs: ['scheduleTask', 'listScheduledTasks', 'editScheduledTask', 'cancelScheduledTask'] },
   browser: { label: 'Browse the web in a real headless browser (render JS, read pages, screenshot)', verbs: ['browseWeb', 'screenshotWeb'] },
   home: { label: 'A private home folder you can read/write and publish sites from', verbs: ['fileList', 'fileRead', 'fileWrite', 'publishSite'] },
   vm: { label: 'Full terminal in the agent-code dev VM (coarse: root over that sandbox)', verbs: ['vmExec'] },
@@ -596,6 +600,43 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
       run: async ({ id }, agent, ctx = {}) => (ctx.timers || aff.timers).cancel(id) },
     listTimers: { reversible: false, args: {}, description: 'List your scheduled timers and intervals.',
       run: async (a, agent, ctx = {}) => ({ ok: true, timers: await (ctx.timers || aff.timers).list() }) },
+    // ── SCHEDULED TASKS: recurring autonomous runs that DO the work (vs timers, which just ping a human).
+    //    The created task runs `prompt` with a tool ring ⊆ the creator's own powers (no escalation), so a
+    //    request like "check X daily and notify me" becomes a self-running job, not a "remind me" reminder. ──
+    scheduleTask: {
+      reversible: false,
+      args: { name: 'string — short label', prompt: 'string — the INSTRUCTIONS the run executes, written as a task to DO (e.g. "Visit <url>; if the sale is live, notify me once"). NOT "remind dan to…".', tools: 'array — power names the run may use, a subset of YOUR powers (e.g. ["browser","feed","phone"])', cadence: 'object — {kind:"daily",at:"HH:MM"} | {kind:"weekly",day:0-6,at:"HH:MM"} | {kind:"interval",everyMs:N}' },
+      description: 'Create a recurring SCHEDULED TASK: a future autonomous run that DOES the work itself on a cadence and can notify you of the result — NOT a reminder that pings dan to do it. Use for "check X daily", "every morning do Y". (For a one-off nudge a human must act on, use a reminder via scheduleWakeup instead.)',
+      run: async ({ name, prompt, tools, cadence }, agent, ctx = {}) => {
+        if (!String(prompt || '').trim()) return { ok: false, error: 'a scheduled task needs a prompt — the instructions it will run' };
+        if (!cadence || !cadence.kind) return { ok: false, error: 'a scheduled task needs a cadence, e.g. {kind:"daily",at:"08:00"}' };
+        const own = new Set(ctx.ownPowers || []);
+        const want = Array.isArray(tools) ? tools : [];
+        const granted = want.filter(t => own.has(t) && !META_POWERS.has(t)); // never escalate past the creator
+        const proj = (ctx.chatId && projectForChat(ctx.chatId)) || listProjects().find(p => p.name === 'Scheduled tasks') || createProject('Scheduled tasks');
+        const sa = addScheduledAgent(proj.id, { name: String(name || prompt).slice(0, 60), prompt: String(prompt), tools: granted, schedule: cadence, model: 'default', enabled: true });
+        const nextAt = computeNextAt(cadence, Date.now());
+        updateScheduledAgent(proj.id, sa.id, { nextAt });
+        const dropped = want.filter(t => !granted.includes(t));
+        return { ok: true, taskId: sa.id, project: proj.name, tools: granted, nextAt, note: `Scheduled — it will run itself ${cadence.kind === 'interval' ? `every ${Math.round((cadence.everyMs || 0) / 60000)}m` : `${cadence.kind} at ${cadence.at || ''}`}.${dropped.length ? ` (Dropped tools you don't hold: ${dropped.join(', ')}.)` : ''}` };
+      } },
+    listScheduledTasks: { reversible: false, args: {}, description: 'List all scheduled tasks (recurring autonomous runs): their prompt, tools, cadence, last run + next run time. Use to find a taskId to edit/cancel.',
+      run: async () => ({ ok: true, tasks: listProjects().flatMap(p => (p.scheduledAgents || []).map(a => ({ taskId: a.id, project: p.name, name: a.name, prompt: a.prompt, tools: a.tools, schedule: a.schedule, enabled: a.enabled, lastRun: a.lastRun, nextAt: a.nextAt }))) }) },
+    editScheduledTask: { reversible: false, args: { taskId: 'string — from listScheduledTasks', prompt: 'string (optional) — new instructions', cadence: 'object (optional) — new schedule', tools: 'array (optional) — new tool ring (subset of your powers)', enabled: 'boolean (optional) — false to pause, true to resume' },
+      description: 'Edit an existing scheduled task: change its prompt, cadence, tool ring, or pause/resume it (enabled). Find ids via listScheduledTasks.',
+      run: async ({ taskId, prompt, cadence, tools, enabled }, agent, ctx = {}) => {
+        const proj = listProjects().find(p => (p.scheduledAgents || []).some(a => a.id === taskId));
+        if (!proj) return { ok: false, error: 'no such scheduled task — list them with listScheduledTasks' };
+        const patch = {};
+        if (prompt != null) patch.prompt = String(prompt);
+        if (enabled != null) patch.enabled = !!enabled;
+        if (Array.isArray(tools)) { const own = new Set(ctx.ownPowers || []); patch.tools = tools.filter(t => own.has(t) && !META_POWERS.has(t)); }
+        if (cadence && cadence.kind) { patch.schedule = cadence; patch.nextAt = computeNextAt(cadence, Date.now()); }
+        const a = updateScheduledAgent(proj.id, taskId, patch);
+        return { ok: true, taskId, updated: Object.keys(patch), enabled: a.enabled, nextAt: a.nextAt };
+      } },
+    cancelScheduledTask: { reversible: false, args: { taskId: 'string — from listScheduledTasks' }, description: 'Delete a scheduled task by id.',
+      run: async ({ taskId }) => { const proj = listProjects().find(p => (p.scheduledAgents || []).some(a => a.id === taskId)); if (!proj) return { ok: false, error: 'no such scheduled task' }; removeScheduledAgent(proj.id, taskId); return { ok: true, taskId, deleted: true }; } },
     // ── DESTRUCTIVE: these only PROPOSE. The user confirms before anything happens. ──
     proposeNoteEdit: { reversible: false, args: { path: 'string — vault-relative .md path', content: 'string — new content (or text to append)', mode: 'string — "overwrite" (default) or "append"' },
       description: 'PROPOSE an edit to a note. Does NOT write — the user must confirm the diff first. Say you have proposed it.',
@@ -698,7 +739,7 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
     // Route the timer/notes verbs through THIS cap's binding (a granular share is scoped to one
     // timer / a vault subtree); the root/full cap has no binding → falls back to the full
     // aff.timers / aff.notes (unchanged).
-    ctx = { ...ctx, timers: (node.timersBinding && node.timersBinding()) || aff.timers, notes: (node.notesBinding && node.notesBinding()) || aff.notes };
+    ctx = { ...ctx, timers: (node.timersBinding && node.timersBinding()) || aff.timers, notes: (node.notesBinding && node.notesBinding()) || aff.notes, ownPowers: [...(node.powers || powers)] };
     // node-bound propose: tags every proposal with WHO created it, so "don't ask
     // again" rules are scoped to this agent (root, share, or specialist).
     const np = spec => propose({ ...spec, agent: node.id });
