@@ -270,7 +270,17 @@ const SCOPE_RESEARCH_SYS = 'You PLAN a task before its agent is granted powers. 
 // Two-stage: (1) a confined PRIVATE-domain agent researches the task (real round-trips), then
 // (2) a deterministic extraction turns task + research into the minimal power list. The research
 // genuinely informs the proposal; stage 2 guarantees a parseable JSON array.
+const SCOPE_READ_SAFE = new Set(['homeassistant', 'notes', 'reference', 'research', 'web', 'youtube', 'app']);
 const scopePowers = async (task, emit = null) => {
+  // CHEAP FIRST PASS (no research agent): one gemma call. If it lands a small, entirely READ-SAFE
+  // scope, we're done — skip the heavy private-research pre-step entirely. This is what makes a
+  // trivial read ("is the front door open?") fast: no dodecahedron grind, no consent click.
+  try {
+    const r0 = await callLLM([{ role: 'system', content: SCOPE_SYS }, { role: 'user', content: scopeUser(task) }], 'default');
+    const p0 = withOutputPowers(parsePowers(r0.text), task);
+    if (p0.length && p0.length <= 2 && p0.every(p => SCOPE_READ_SAFE.has(p))) return { proposed: p0, by: 'gemma-fast', fast: true };
+  } catch (e) { log('scope fast', e.message); }
+  // Otherwise: the careful two-stage path — private research round-trips THEN extraction.
   let research = '';
   try { const r = await runScheduledAgent({ powers: SCOPE_RESEARCH_RING, prompt: String(task), persona: SCOPE_RESEARCH_SYS, model: 'default', emit }); research = String(r.answer || '').slice(0, 1500); } catch (e) { log('scope research', e.message); }
   const userMsg = scopeUser(task) + (research ? `\n\nPrivate research on this task found:\n${research}` : '');
