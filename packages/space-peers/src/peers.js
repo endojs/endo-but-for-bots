@@ -335,6 +335,12 @@ export const PeersView = ({ powers, onProfileChange }) => {
     // re-load on each change, nor the subscription loop dispatches into a
     // detached tree after teardown.
     let disposed = false;
+    /**
+     * The peer-change stream iterator, held so cleanup can close the remote
+     * stream eagerly instead of waiting for the next change to notice teardown.
+     * @type {ReturnType<typeof iterateReader> | null}
+     */
+    let changesIter = null;
 
     const loadPeers = async () => {
       if (disposed) return;
@@ -362,13 +368,14 @@ export const PeersView = ({ powers, onProfileChange }) => {
     const watchPeers = async () => {
       await null;
       try {
-        // The change payload itself is unused; any change triggers a reload.
-        // eslint-disable-next-line no-unused-vars
-        for await (const change of iterateReader(
+        changesIter = iterateReader(
           /** @type {Parameters<typeof iterateReader>[0]} */ (
             /** @type {unknown} */ (E(host).followPeerChanges())
           ),
-        )) {
+        );
+        // The change payload itself is unused; any change triggers a reload.
+        // eslint-disable-next-line no-unused-vars
+        for await (const change of changesIter) {
           if (disposed) break;
           loadPeers().catch(window.reportError);
         }
@@ -383,6 +390,12 @@ export const PeersView = ({ powers, onProfileChange }) => {
 
     return () => {
       disposed = true;
+      // Close the remote peer-change stream so the daemon subscription is
+      // released promptly instead of lingering until the next change.
+      if (changesIter) {
+        changesIter.return().catch(() => {});
+        changesIter = null;
+      }
     };
   }, [host, reloadToken]);
 
