@@ -66,6 +66,30 @@ const proposeFromFiles = (ct, { name, description, files, proposedBy }) => {
   if (keys.length === 1 && keys[0] === 'tool.js') return ct.propose({ name, description, code: files['tool.js'], kind: 'instance', proposedBy, now: new Date().toISOString() });
   return ct.propose({ name, description, files, entry: 'tool.js', kind: 'class', proposedBy, now: new Date().toISOString() });
 };
+// PER-COMPONENT EDIT AGENT (Phase 3): a confined agent that sees ONLY one component's source + the
+// edit request, and returns the complete updated source. The change is committed as a new version
+// (revertable) and applied live. Single-file components (the common case) for now.
+const EDIT_SYS = 'You are a focused engineer editing ONE confined library component. Its source is the BODY of `make(powers)` (Endo unconfined-guest convention) returning a STATEFUL object whose methods close over private state. `powers` gives ONLY: `state` (durable kv: get/set/delete/all), `grains` (durable mergeable cells: `powers.grains.cell(name,{merge}).read()/addContent(v)/subscribe(fn)`; merges lastWriteWins|max|min|sum|append|union — the component DATA, which survives source edits), and `console`. It is SES-confined: NO fs, network, import, or ambient globals. Apply the user\'s requested change faithfully, keep it working, and keep using powers.state/grains for persistence. Reply with ONLY the complete updated make-body as a single ```js fenced code block — no prose, no commentary.';
+const extractJs = s => { const m = /```(?:js|javascript)?\s*\n([\s\S]*?)```/i.exec(String(s || '')); return m ? m[1].trim() : String(s || '').trim(); };
+const editComponentSource = async (ct, id, prompt) => {
+  const t = ct.get(id); if (!t) return { ok: false, error: 'no such component' };
+  if (!String(prompt || '').trim()) return { ok: false, error: 'describe the change you want' };
+  const snap = await componentGit.readAt(id, 'HEAD'); const files = (snap && snap.files) || sourceFilesOf(t);
+  const keys = Object.keys(files);
+  if (!(keys.length === 1 && keys[0] === 'tool.js')) return { ok: false, error: 'the edit agent handles single-file components for now — edit a multi-file class in chat' };
+  let out = '';
+  // NB: opusComplete returns the completion STRING (or null), not an object.
+  try { out = String((await opusComplete({ system: EDIT_SYS, prompt: `Current source:\n\`\`\`js\n${files['tool.js']}\n\`\`\`\n\nRequested change: ${String(prompt)}`, maxTokens: 4000 })) || ''); }
+  catch (e) { return { ok: false, error: `edit agent failed: ${(e && e.message) || e}` }; }
+  if (!out.trim()) return { ok: false, error: 'the edit agent returned nothing (model unavailable?)' };
+  const code = extractJs(out); if (!code) return { ok: false, error: 'the edit agent returned no code' };
+  const newFiles = { 'tool.js': code };
+  let review = null; try { review = await runReviewPanel({ name: t.name, description: t.description, code, kind: t.kind }, { callLLM, ranAt: new Date().toISOString() }); } catch { /* advisory */ }
+  const rec = await componentGit.commit(id, newFiles, `edit: ${String(prompt).slice(0, 60)}`);
+  ct.setSource(id, newFiles); // apply live (the owner triggered it; revert from the Studio if unwanted)
+  return { ok: true, version: rec.version, review, note: 'Edited — committed as a new version + applied to the live component. Revert from the Components tab if you don\'t like it.' };
+};
+
 // Fork a component into a NEW pending tool: clone its git source lineage at `ref` + COPY its grain data.
 const forkComponentTo = async (ct, srcId, newName, ref = 'HEAD', proposedBy = 'owner') => {
   const src = ct.get(srcId); if (!src) return { ok: false, error: 'no such component' };
@@ -232,7 +256,7 @@ const scopePowers = async (task, emit = null) => {
   try { const r = await runScheduledAgent({ powers: SCOPE_RESEARCH_RING, prompt: String(task), persona: SCOPE_RESEARCH_SYS, model: 'default', emit }); research = String(r.answer || '').slice(0, 1500); } catch (e) { log('scope research', e.message); }
   const userMsg = scopeUser(task) + (research ? `\n\nPrivate research on this task found:\n${research}` : '');
   try { const r = await callLLM([{ role: 'system', content: SCOPE_SYS }, { role: 'user', content: userMsg }], 'default'); const p = parsePowers(r.text); if (p.length) return { proposed: withOutputPowers(p, task), by: research ? 'research+gemma' : 'gemma' }; } catch (e) { log('scope gemma', e.message); }
-  try { const r = await opusComplete({ system: SCOPE_SYS, prompt: userMsg, maxTokens: 300 }); const p = parsePowers(r.text || r.answer || ''); return { proposed: withOutputPowers(p, task), by: research ? 'research+claude' : 'claude' }; } catch (e) { log('scope claude', e.message); }
+  try { const r = await opusComplete({ system: SCOPE_SYS, prompt: userMsg, maxTokens: 300 }); const p = parsePowers(String(r || '')); return { proposed: withOutputPowers(p, task), by: research ? 'research+claude' : 'claude' }; } catch (e) { log('scope claude', e.message); }
   return { proposed: withOutputPowers([], task), by: 'none' };
 };
 
@@ -243,7 +267,7 @@ const INGEST_PERSONA = 'You received a VOICE NOTE transcript. You take NO action
 const ingestPropose = async transcript => {
   let proposals = '';
   try { const r = await callLLM([{ role: 'system', content: INGEST_PERSONA }, { role: 'user', content: transcript }], 'default'); proposals = String(r.text || '').trim(); } catch (e) { log('ingest gemma', e.message); }
-  if (!proposals) { try { const r = await opusComplete({ system: INGEST_PERSONA, prompt: transcript, maxTokens: 700 }); proposals = String(r.text || r.answer || '').trim(); } catch (e) { log('ingest claude', e.message); } }
+  if (!proposals) { try { proposals = String((await opusComplete({ system: INGEST_PERSONA, prompt: transcript, maxTokens: 700 })) || '').trim(); } catch (e) { log('ingest claude', e.message); } }
   const { proposed } = await scopePowers(transcript);
   return { proposals: proposals || '(could not analyze the note)', powers: proposed };
 };
@@ -1208,6 +1232,7 @@ const handler = async (req, res) => {
       if (u.pathname === '/components/history') return json(res, 200, { ok: true, versions: await componentGit.history(String(body.id || '')) });
       if (u.pathname === '/components/read') { const s = await componentGit.readAt(String(body.id || ''), String(body.version || 'HEAD')); return json(res, 200, s ? { ok: true, ...s } : { ok: false, error: 'unknown component/version' }); }
       if (u.pathname === '/components/fork') return json(res, 200, await forkComponentTo(customTools, String(body.id || ''), String(body.name || ''), String(body.version || 'HEAD'), 'owner'));
+      if (u.pathname === '/components/edit') return json(res, 200, await editComponentSource(customTools, String(body.id || ''), String(body.prompt || '')));
       if (u.pathname === '/components/revert') {
         const id = String(body.id || ''); const version = String(body.version || '');
         const snap = await componentGit.readAt(id, version); if (!snap) return json(res, 200, { ok: false, error: 'unknown component/version' });
