@@ -466,7 +466,7 @@ const scopeChat = async prompt => {
     await ensurePendant();
     scoping = true; pendantWrap.classList.remove('hide'); pendant.setVisible(true); pendant.scopeBegin('permissioning'); schedulePendantPosition();
     scopeES = new EventSource('/chat/steps?sid=' + encodeURIComponent(sessionId));
-    scopeES.onmessage = e => { try { const m = JSON.parse(e.data); if (m.t === 'start') pendant.toolStart(m.name, m.detail); else if (m.t === 'done') pendant.toolDone(m.name, m.ok); else if (m.t === 'end') { try { scopeES.close(); } catch {} } } catch {} };
+    scopeES.onmessage = e => { try { const m = JSON.parse(e.data); if (m.t === 'start') pendant.toolStart(m.name, m.detail, m.call); else if (m.t === 'done') pendant.toolDone(m.name, m.ok, m.detail, m.children, m.call, m.result, m.granted); else if (m.t === 'end') { try { scopeES.close(); } catch {} } } catch {} };
     scopeES.onerror = () => {};
   } catch { /* pendant is enhancement-only */ }
   const endScopeTrace = () => { scoping = false; try { scopeES && scopeES.close(); } catch {} try { pendant && pendant.finish(); } catch {} };

@@ -1498,8 +1498,16 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
       toolbox: sub.toolbox, manifest: sub.manifest, userText: String(prompt || '') + soulPreamble,
       persona: String(personaOverride || persona || ''), model, signal,
       onStep: s => {
-        if (s.kind === 'tool-start' && emit) emit({ t: 'start', name: s.name, detail: (s.args && (s.args.query || s.args.question || s.args.path || s.args.name)) || '' });
-        if (s.kind === 'tool' && s.result) { if (s.name) toolsUsed.push(s.name); if (s.result.proposed && s.result.id) proposalIds.push(s.result.id); if (emit) emit({ t: 'done', name: s.name, ok: s.result.ok !== false }); }
+        const detailOf = a => (a && (a.query || a.question || a.path || a.name)) || '';
+        const sx = v => { try { return typeof v === 'string' ? v.slice(0, 16000) : JSON.stringify(v).slice(0, 16000); } catch { return String(v).slice(0, 2000); } };
+        if (s.kind === 'tool-start') { if (emit) emit({ t: 'start', name: s.name, detail: detailOf(s.args), call: sx(s.args) }); return; }
+        if (s.kind !== 'tool') return;
+        // Do NOT bail on a falsy result (void/null verbs are legit) — settle the node + carry call+result
+        // so the scoper's trace shows return values, not just params (matches the main-turn onStep).
+        const rv = (s.result && typeof s.result === 'object') ? s.result : {};
+        if (s.name) toolsUsed.push(s.name);
+        if (rv.proposed && rv.id) proposalIds.push(rv.id);
+        if (emit) emit({ t: 'done', name: s.name, ok: rv.ok !== false, detail: detailOf(s.args), call: sx(s.args), result: sx(s.result) });
       },
     });
     // persist the updated SOUL (harness-side, so it works regardless of the agent's tool ring) + strip
