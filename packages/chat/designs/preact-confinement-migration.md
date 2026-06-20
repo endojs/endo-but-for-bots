@@ -653,3 +653,95 @@ and the two-tags-per-line JSDoc. The remainder are deferred and tracked here.
   counted, keeping later chips aligned). Watcher churn (the inventory/space
   watchers re-subscribe more than necessary) remains deferred — correctness
   -adjacent polish, not a migration blocker.
+
+## Cross-package Preact-pattern review (deferred follow-ups)
+
+A read-only audit of every Preact-consuming package (`@endo/chat`,
+`@endo/space-file-explorer`, `@endo/space-peers`, `@endo/space-whylip`) for
+pattern violations and non-idiomatic imperative code.
+No HIGH-severity violations exist in the migrated confined views — no
+Rules-of-Hooks breakage, no hook-bearing function called as a plain function,
+no ref misuse (refs are stripped by `renderConfined`), no state mutated outside
+`setState`, and no capability leaks into leaf components.
+The findings cluster into recurring patterns plus two standouts; all are
+deferred and recorded here.
+
+### Recurring patterns (fix as a class)
+
+1. **Host node pushed into a hook-using component + imperative scroll.**
+   A confined component takes a host DOM node as a prop and drives scroll
+   geometry inside its own `useEffect`, instead of leaving that to the trusted
+   controller.
+   - `inbox-component.js:1070-1180` (`InboxRoot`) — takes `$parent`, and at
+     `:1119-1127` measures scroll stickiness **per message** with
+     `await requestAnimationFrame` instead of a `scroll`-listener flag.
+   - `debugger-panel.js:354-361` (`DebuggerRoot`) — takes `$container`, then
+     `querySelector('.debugger-console-output')` + writes `scrollTop` in an
+     effect.
+   - Fix: follow the `channel`/`forum`/`microblog` reference — keep `$parent`
+     and scroll in the imperative controller with one `scroll` listener
+     maintaining an `isNearBottom` flag; the confined component stays
+     authority-free. Reading the host node is forced (refs stripped); doing it
+     inside the component is the avoidable part.
+
+2. **Subscription `for await` loops that only flip a disposed flag, never
+   `.return()` the remote iterator.** The loop notices teardown on the next
+   emission only, so an idle stream leaks until something arrives.
+   - `space-whylip/src/hooks/useConversation.js:243-384` (HIGH; also hand-rolls
+     a `Symbol.asyncIterator` wrapper at `:294-307` with no `return()`).
+   - `space-peers/src/peers.js:367-374` (MED).
+   - Reference fix: `channel-component.js` calls `activeIterator.return()` on
+     dispose.
+
+3. **Reaching outside the component's own subtree with document-wide DOM ops**
+   where local Preact state already exists.
+   - `inventory/inventory.js:78-86` (`clearAllDropTargets` sweeps
+     `document.querySelectorAll('.drop-target')` from an event handler; drop
+     state is already Preact state).
+   - `petname-path-autocomplete.js:291-302` (document-wide focusable scan to
+     advance focus).
+
+4. **Uncontrolled inputs read back via `document.querySelector`** instead of a
+   controlled `onInput -> setState` value.
+   - `space-file-explorer/src/preact/Dialog.js:55-75` (reads `.fx-dialog-input`
+     value and the `:checked` radio from the DOM; the same package's
+     `Viewer.js` textarea already uses the controlled pattern — an internal
+     inconsistency).
+
+5. **Timer/listener leaks (no cleanup).** `setTimeout` "wait for render" focus
+   hacks (unnecessary — `renderConfined` is synchronous) and `document` click
+   listeners never removed: `inline-command-form.js`, `endow-modal.js`,
+   `command-selector.js:381`, `token-autocomplete.js:1003`,
+   `space-peers/src/peers.js:126` (copy-flash timer).
+
+### Standouts
+
+- **`add-space-modal.js` (HIGH, but the unmigrated baseline).** It does NOT use
+  `renderConfined`; it renders via `$container.innerHTML = html` with
+  **unescaped interpolation of user-typed values** (e.g. `value="${handleName}"`
+  near line 707), an injection surface that bypasses the sanitizer, plus a
+  per-render keydown-listener leak. `icon-selector.js`'s legacy
+  `renderIconSelector` string path (8 call sites here) shares the unescaped
+  -interpolation issue and cannot be deleted until add-space-modal is migrated.
+  Both are frozen for the incoming imperative-Space PR; this is the clear next
+  migration target once that lands.
+- **`space-whylip/src/hooks/useConversation.js`** is the one store hook with
+  real lifecycle problems: the un-cancellable stream (above) plus a single
+  mega-effect doing `locate('@self')` + backlog replay + live subscription,
+  keyed on `[powers, refreshNodes]` so a `refreshNodes` identity change restarts
+  the whole thing. Split backfill from the live subscription and key init on
+  `[powers]` alone.
+
+### Severity roll-up
+
+| Package | HIGH | MED | LOW |
+| --- | --- | --- | --- |
+| chat | 1 (add-space-modal, unmigrated) | 6 | ~10 |
+| space-file-explorer | 0 | 3 | 4 |
+| space-peers | 0 | 2 | 3 |
+| space-whylip | 1 (stream cancel) | 3 | 4 |
+
+Suggested fix order when picked up: (1) the subscription-cancellation class
+across whylip/peers (correctness); (2) the inbox + debugger-panel
+scroll-into-controller refactor; (3) the Dialog controlled-input and inventory
+drop-target cleanups.
