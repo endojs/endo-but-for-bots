@@ -27,6 +27,7 @@ const AGENT_RUNNER = process.env.AGENT_CODEMODE === '0' ? runAgent : runAgentCod
 import { readAsks, getAsk, answerAsk, setAskStatus, formatAnswers, getSecret, storeNamedSecret } from './asks-store.mjs';
 import { makeConnectors } from './connectors.mjs';
 import { makeCustomTools } from './custom-tools.mjs';
+import { makeToolShares } from './tool-shares.mjs';
 import { STARTER_RING } from './system-map.mjs';
 const connectors = makeConnectors({ getSecret }); // owner-side registry (same connectors.json the agent calls)
 const customTools = makeCustomTools(); // owner-side review/admit (same custom-tools.json the agent reads)
@@ -53,6 +54,7 @@ const BASE_URL = process.env.PUBLIC_BASE_URL || `http://100.83.80.102:${PORT}`;
 const WHISPER = process.env.STT_URL || 'http://192.168.50.226:8000/v1/audio/transcriptions';
 const STT_MODEL = process.env.STT_MODEL || 'deepdml/faster-whisper-large-v3-turbo-ct2';
 const OUT = process.env.OUT_DIR || `${HOME}/.local/state/voice-agent/out`;
+const toolShares = makeToolShares({ dir: `${HOME}/.local/state/voice-agent/tool-shares` }); // share-as-factory/instance + meter + charge
 const UPLOADS = `${OUT}/uploads`; // user-attached photos/files (served under web-key'd /uploads/<hex>.<ext>)
 const SEED_FILE = process.env.SEED_FILE || `${HOME}/.config/field-agent/root.swiss`;
 const CHATS_DIR = `${HOME}/.local/state/voice-agent/chats`; // per-cap chat list + transcripts (cross-device sync)
@@ -1086,6 +1088,44 @@ const handler = async (req, res) => {
       return json(res, 404, { error: 'unknown connectors route' });
     }
     // CUSTOM TOOLS (agent-proposed code tools): owner reviews the code + admits/rejects. Admitting is the
+    // ── CONSUMING a shared component (token-gated; the token IS the access, no root needed). Charged
+    //    the standard way: the consumer's own purse is debited, the sharer is credited. ─────────────
+    if (req.method === 'POST' && u.pathname.startsWith('/tools/shared/')) {
+      const body = await jsonBody(req);
+      const token = String(body.token || '');
+      const desc = toolShares.describe(token);
+      if (u.pathname === '/tools/shared/describe') return desc ? json(res, 200, { ok: true, ...desc }) : json(res, 404, { ok: false, error: 'unknown or revoked share' });
+      if (!desc) return json(res, 404, { ok: false, error: 'unknown or revoked share' });
+      const sid = String(body.sessionId || '').slice(0, 64);
+      // standard enforcement: debit the consumer's allowance purse by the price; credit the sharer.
+      const charge = () => {
+        if (!desc.priceUsd) return { ok: true, remaining: null };
+        if (!nodeFor(body.cap)) return { ok: false, error: 'this is a PAID share — open it with your capability so your allowance can be charged' };
+        const purse = purseFor(body.cap, sid);
+        if (!purse.canAfford(desc.priceUsd)) return { ok: false, exhausted: true, price: desc.priceUsd, remaining: purse.balance() };
+        purse.debit(desc.priceUsd); toolShares.credit(desc.sharer, desc.priceUsd);
+        return { ok: true, remaining: purse.balance() };
+      };
+      if (u.pathname === '/tools/shared/call') { // INSTANCE: invoke the sharer's hosted instance, attenuated + metered + paid-per-use
+        if (desc.mode !== 'instance') return json(res, 400, { ok: false, error: 'this is a factory share — use /tools/shared/import' });
+        const method = body.method ? String(body.method) : undefined;
+        const gate = toolShares.check(token, method); if (!gate.ok) return json(res, 200, { ok: false, error: gate.error });
+        const pay = charge(); if (!pay.ok) return json(res, 200, pay);
+        toolShares.count(token);
+        const r = await customTools.call(gate.rec.toolId, { method, args: body.args || {} });
+        return json(res, 200, { ...r, remaining: pay.remaining });
+      }
+      if (u.pathname === '/tools/shared/import') { // FACTORY: pay-once, get the class bundle → host your OWN instance (enters review)
+        if (desc.mode !== 'factory') return json(res, 400, { ok: false, error: 'this is an instance share — use /tools/shared/call' });
+        const gate = toolShares.check(token); if (!gate.ok) return json(res, 200, { ok: false, error: gate.error });
+        const exported = await customTools.exportClass(gate.rec.toolId); if (!exported.ok) return json(res, 200, exported);
+        const pay = charge(); if (!pay.ok) return json(res, 200, pay);
+        toolShares.count(token);
+        return json(res, 200, { ok: true, bundle: exported.bundle, remaining: pay.remaining, note: 'POST this bundle to /tools/import to host your own instance (it enters review).' });
+      }
+      return json(res, 404, { ok: false, error: 'unknown shared-tool route' });
+    }
+
     // ONLY way a proposed tool becomes callable — never auto-injected.
     if (req.method === 'POST' && u.pathname.startsWith('/tools')) {
       const body = await jsonBody(req);
@@ -1113,6 +1153,17 @@ const handler = async (req, res) => {
         return json(res, 200, customTools.admit(String(body.id || '')));
       }
       if (u.pathname === '/tools/reject') return json(res, 200, customTools.reject(String(body.id || '')));
+      // SHARE a tool — as a factory (others host their own) or an attenuated, metered, priced instance.
+      if (u.pathname === '/tools/share') {
+        const tool = customTools.listAll().find(t => t.id === String(body.id || '') || t.name === String(body.id || ''));
+        if (!tool) return json(res, 200, { ok: false, error: 'no such tool' });
+        if (tool.status !== 'admitted') return json(res, 200, { ok: false, error: 'only an admitted tool can be shared' });
+        const rec = toolShares.create({ toolId: tool.id, toolName: tool.name, mode: body.mode, methods: body.methods, ratePerMin: body.ratePerMin, quota: body.quota, ttlMs: body.ttlMs, priceUsd: body.priceUsd, sharer: String(body.sharer || 'owner'), now: new Date().toISOString() });
+        const verb = rec.mode === 'factory' ? 'import' : 'call';
+        return json(res, 200, { ok: true, token: rec.token, mode: rec.mode, priceUsd: rec.priceUsd, attenuation: rec.attenuation, url: `${BASE_URL}/tools/shared/${verb}#token=${rec.token}` });
+      }
+      if (u.pathname === '/tools/share/revoke') return json(res, 200, toolShares.revoke(String(body.token || '')));
+      if (u.pathname === '/tools/shares') return json(res, 200, { shares: toolShares.list(), earnings: toolShares.earnings(String(body.sharer || 'owner')) });
       if (u.pathname === '/tools/export') return json(res, 200, await customTools.exportClass(String(body.id || ''))); // a CLASS as a shareable, real multi-module Endo bundle
       if (u.pathname === '/tools/import') return json(res, 200, customTools.importClass({ bundle: body.bundle, proposedBy: 'import', now: new Date().toISOString() })); // someone else's class → PENDING review
       return json(res, 404, { error: 'unknown tools route' });
