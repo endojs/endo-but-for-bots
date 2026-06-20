@@ -10,6 +10,7 @@ import {
   Fragment,
   h,
   renderConfined,
+  unmount,
   useEffect,
   useState,
 } from './setup-preact-container.js';
@@ -215,6 +216,23 @@ export const petNamePathAutocomplete = ($input, $menu, { E, powers }) => {
   /** @type {PathMenuController} */
   const controller = {};
 
+  // Track deferred timers so `dispose` can cancel any that are still pending.
+  // A timer that fires after teardown runs against a torn-down row, and the
+  // uncancelled timers accumulate across a test file until the runner stalls.
+  /** @type {Set<ReturnType<typeof setTimeout>>} */
+  const pendingTimers = new Set();
+  /**
+   * @param {() => void} fn
+   * @param {number} ms
+   */
+  const later = (fn, ms) => {
+    const id = setTimeout(() => {
+      pendingTimers.delete(id);
+      fn();
+    }, ms);
+    pendingTimers.add(id);
+  };
+
   /**
    * Parse the input value into path prefix and current partial name.
    * @param {string} value
@@ -330,7 +348,7 @@ export const petNamePathAutocomplete = ($input, $menu, { E, powers }) => {
     if (advanceFocus) {
       const nextElement = findNextFocusable();
       if (nextElement) {
-        setTimeout(() => nextElement.focus(), 0);
+        later(() => nextElement.focus(), 0);
       }
     }
   };
@@ -397,7 +415,7 @@ export const petNamePathAutocomplete = ($input, $menu, { E, powers }) => {
 
   // Handle blur to hide menu (with delay for click handling)
   $input.addEventListener('blur', () => {
-    setTimeout(() => {
+    later(() => {
       hideMenu();
     }, 150);
   });
@@ -514,7 +532,7 @@ export const petNamePathAutocomplete = ($input, $menu, { E, powers }) => {
           );
           if (exactMatch) {
             // Let the slash be typed, then refresh
-            setTimeout(() => updateSuggestions(), 0);
+            later(() => updateSuggestions(), 0);
           }
         }
         break;
@@ -537,6 +555,13 @@ export const petNamePathAutocomplete = ($input, $menu, { E, powers }) => {
     isMenuVisible: () => isVisible,
     dispose: () => {
       hideMenu();
+      for (const id of pendingTimers) {
+        clearTimeout(id);
+      }
+      pendingTimers.clear();
+      // Tear down the confined dropdown tree mounted at the bottom of this
+      // factory. Without this every torn-down row leaks a live Preact root.
+      unmount($menu);
     },
   });
 };
