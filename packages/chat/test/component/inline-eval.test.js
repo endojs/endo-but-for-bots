@@ -28,8 +28,7 @@ const nodeMajor = Number(
       '0',
   ).split('.')[0],
 );
-const isMac =
-  !!globalThis.process && globalThis.process.platform === 'darwin';
+const isMac = !!globalThis.process && globalThis.process.platform === 'darwin';
 const evalTest = nodeMajor >= 24 || isMac ? test.skip : test.serial;
 
 // Confined-conversion coverage for inline-eval: the source expression input and
