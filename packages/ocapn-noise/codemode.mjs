@@ -57,7 +57,7 @@ export const runAgentCode = async ({ toolbox, manifest, userText, history = [], 
   const wrapCall = (label, fn) => harden(async (args = {}) => {
     if (signal?.aborted) throw new Error('aborted');
     onStep({ kind: 'tool-start', name: label, args });
-    try { const r = await fn(args || {}); used.push({ name: label, args }); onStep({ kind: 'tool', name: label, args, result: r }); return r; }
+    try { const r = await fn(args || {}); used.push({ name: label, args, result: r }); onStep({ kind: 'tool', name: label, args, result: r }); return r; }
     catch (e) { onStep({ kind: 'tool-error', name: label, error: (e && e.message) || String(e) }); return harden({ ok: false, error: (e && e.message) || String(e) }); }
   });
   const argSig = a => Object.keys(a || {}).length ? 'args' : '';

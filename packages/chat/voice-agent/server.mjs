@@ -224,7 +224,7 @@ const traceRun = async (node, transcript, persona, chatId) => {
   const purse = makePurse(defaultAllowance);
   const llm = makeMeteredLLM({ callLLM, purse, perProvider: {} });
   const r = await AGENT_RUNNER({ toolbox, manifest, userText: transcript, persona, llm, budgetLine: budgetLine(purse.balance(), 'default'),
-    onStep: s => { if (s.kind !== 'tool' || !s.result) return; const step = { name: s.name, ok: s.result.ok !== false }; if ((s.name === 'delegateTask' || s.name === 'askSpecialist' || s.name === 'research' || s.name === 'employ') && Array.isArray(s.result.toolsUsed)) step.children = s.result.toolsUsed.map(x => ({ name: x.name || String(x) })); steps.push(step); } });
+    onStep: s => { if (s.kind !== 'tool' || !s.result) return; const step = { name: s.name, ok: s.result.ok !== false }; if ((s.name === 'delegateTask' || s.name === 'askSpecialist' || s.name === 'research' || s.name === 'employ') && Array.isArray(s.result.toolsUsed)) step.children = s.result.toolsUsed.map(x => ({ name: x.name || String(x), detail: x.args ? detailFromArgs(x.args) : '', call: x.args ? safeText(x.args, 4000) : '', result: x.result !== undefined ? safeText(x.result, 4000) : '' })); steps.push(step); } });
   return { answer: r.answer || '', toolsUsed: (r.toolsUsed || []).map(x => x.name), steps };
 };
 
@@ -710,7 +710,7 @@ const handler = async (req, res) => {
           if (callText) step.call = callText.slice(0, 4000); // persisted (bounded so the chat store stays small); the live SSE carries the fuller text
           if (resultText) step.result = resultText.slice(0, 4000);
           if (s.name === 'research' && Array.isArray(rv.findings)) step.children = researchTree(rv); // rich subtree (sub-questions + searches + summaries) for persistence + inspection
-          else if ((s.name === 'delegateTask' || s.name === 'askSpecialist' || s.name === 'employ') && Array.isArray(rv.toolsUsed)) step.children = rv.toolsUsed.map(x => ({ name: x.name || String(x), detail: x.args ? detailFromArgs(x.args) : '' }));
+          else if ((s.name === 'delegateTask' || s.name === 'askSpecialist' || s.name === 'employ') && Array.isArray(rv.toolsUsed)) step.children = rv.toolsUsed.map(x => ({ name: x.name || String(x), detail: x.args ? detailFromArgs(x.args) : '', call: x.args ? safeText(x.args, 4000) : '', result: x.result !== undefined ? safeText(x.result, 4000) : '' })); // carry the sub-agent's exact call + RESULT so a child (e.g. agentExec) shows its content, not just its name
           // Granovetter edge: the powers this delegation GRANTED to the sub-agent (from the call's
           // `powers`/`tools` arg or the result's grantedPowers) → the trace draws them as edge icons.
           const granted = (s.args && (Array.isArray(s.args.powers) ? s.args.powers : Array.isArray(s.args.tools) ? s.args.tools : null)) || (Array.isArray(rv.grantedPowers) ? rv.grantedPowers : null);
