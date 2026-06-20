@@ -808,16 +808,32 @@ const shareTag = s => (s.ha ? `${s.ha.kind.replace('ha-', '')}: ${s.ha.name}${s.
 const refreshShares = async () => {
   try { sharesCache = await rpc('listShares'); } catch { return; }
   const el = $('shares');
-  // FIRST confined-Preact ISLAND, built propagator-style: we push render-safe rows (label + tag) into
-  // the island's data CELL; its stateless render propagator re-paints SharesPanel. The swissnum never
-  // leaves here (sharesCache) — handlers index back into it. renderConfined strips refs/dangerous
-  // attrs and hands handlers a frozen SafeEvent.
+  // Also fetch shared COMPONENTS (custom tools shared as factory/instance), root only. The token stays
+  // here in compCache (for copy/revoke) and is NEVER passed into the island — render-safe rows only.
+  let compCache = [];
+  if (isRoot) {
+    try {
+      const cr = await (await fetch('/tools/shares', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap }) })).json();
+      compCache = (cr.shares || []).filter(s => !s.revoked);
+      window.__toolEarned = cr.earnings || 0;
+    } catch { compCache = []; }
+  }
+  const attenSummary = a => { if (!a) return ''; const p = []; if (a.methods) p.push(a.methods.join('/')); if (a.ratePerMin) p.push(`${a.ratePerMin}/min`); if (a.quota) p.push(`quota ${a.quota}`); if (a.expiresAt) p.push('expires'); return p.join(', '); };
+  const priceStr = u => (u ? `${(u / 1e6).toFixed(u >= 10000 ? 2 : 6)} USD/${'use'}` : '');
+
+  // Confined-Preact ISLAND, propagator-style: push render-safe rows into the island's data CELL; its
+  // stateless render propagator re-paints SharesPanel. Secrets (swissnum, share token) never leave here
+  // (sharesCache / compCache) — handlers index back into them. renderConfined hands a frozen SafeEvent.
   if (window.__fieldIslands) {
     const items = sharesCache.map(s => ({ label: s.label, tag: shareTag(s) }));
-    window.__fieldIslands.renderShares(el, items, {
+    const components = compCache.map(c => ({ toolName: c.toolName, mode: c.mode, price: priceStr(c.priceUsd), used: c.used, atten: attenSummary(c.attenuation), revoked: c.revoked }));
+    const earned = window.__toolEarned ? `${(window.__toolEarned / 1e6).toFixed(2)} USD` : '';
+    window.__fieldIslands.renderShares(el, { items, components, earned }, {
       onCopy: i => copyLink(sharesCache[i], null),
       onQr: i => showQr(sharesCache[i]),
       onRevoke: async i => { await rpc('revoke', [sharesCache[i].swiss]); refreshShares(); },
+      onCopyComp: i => copyLink({ url: `${location.origin}/tools/shared/${compCache[i].mode === 'factory' ? 'import' : 'call'}#token=${compCache[i].token}`, label: compCache[i].toolName }, null),
+      onRevokeComp: async i => { await fetch('/tools/share/revoke', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, token: compCache[i].id }) }); refreshShares(); },
     });
     return;
   }

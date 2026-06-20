@@ -24,15 +24,16 @@ const sharesCell = makeCell();
 let sharesWired = false;
 
 const islands = {
-  // Idempotent: wires the render propagator once (cell → SharesPanel), then feeds the latest rows in.
-  // `handlers` = { onCopy(i), onQr(i), onRevoke(i) } — stable; they index back into app.js's state
-  // (where the swissnum lives). `items` = [{ label, tag }] — render-safe only.
-  renderShares(el, items, handlers) {
+  // Idempotent: wires the render propagator once (cell → SharesPanel), then feeds the latest data in.
+  // `data` = { items:[{label,tag}], components:[{toolName,mode,price,used,atten,revoked}], earned } —
+  // render-safe only (no swissnum, no share token). `handlers` index back into app.js's state, where
+  // the secrets live: { onCopy(i), onQr(i), onRevoke(i), onCopyComp(i), onRevokeComp(i) }.
+  renderShares(el, data, handlers) {
     if (!sharesWired) {
-      renderPropagator(el, [sharesCell], rows => h(SharesPanel, { items: rows, ...handlers }));
+      renderPropagator(el, [sharesCell], d => h(SharesPanel, { ...d, ...handlers }));
       sharesWired = true;
     }
-    sharesCell.addContent(items);
+    sharesCell.addContent(data);
   },
 };
 

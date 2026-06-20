@@ -26,9 +26,11 @@ export const makeToolShares = ({ dir }) => {
 
   // Create a share of a tool. `mode`: 'factory' | 'instance'. Attenuation narrows an instance share.
   const create = ({ toolId, toolName, mode, methods, ratePerMin, quota, ttlMs, priceUsd, sharer, now }) => {
-    const token = crypto.randomBytes(24).toString('hex');
+    const token = crypto.randomBytes(24).toString('hex'); // the web-key — IS the access (secret)
+    const id = crypto.randomBytes(4).toString('hex'); // a render-safe management handle (NOT secret) — used to revoke without ever exposing the token
     const rec = {
       token,
+      id,
       toolId: String(toolId),
       toolName: String(toolName || ''),
       mode: mode === 'factory' ? 'factory' : 'instance',
@@ -86,10 +88,12 @@ export const makeToolShares = ({ dir }) => {
     save(all);
   };
 
-  const revoke = token => { const all = load(); const r = all[String(token || '')]; if (!r) return { ok: false, error: 'unknown share' }; r.revoked = true; save(all); return { ok: true, token: r.token }; };
+  // Revoke by the render-safe id OR the token (so the agent can revoke without ever holding the token).
+  const revoke = key => { const all = load(); const k = String(key || ''); const r = all[k] || Object.values(all).find(x => x.id === k); if (!r) return { ok: false, error: 'unknown share' }; r.revoked = true; save(all); return { ok: true, id: r.id }; };
 
-  // Management list (root): includes the token so the owner can copy/revoke (Shares-panel only).
-  const list = () => Object.values(load()).map(r => ({ token: r.token, toolName: r.toolName, mode: r.mode, priceUsd: r.priceUsd, attenuation: r.attenuation, revoked: r.revoked, used: r.used, sharer: r.sharer, createdAt: r.createdAt }));
+  // Management list (root): includes the token so the owner's Shares panel can build the copy-link
+  // (held in JS, never rendered) + the render-safe id for display/revoke.
+  const list = () => Object.values(load()).map(r => ({ id: r.id, token: r.token, toolName: r.toolName, mode: r.mode, priceUsd: r.priceUsd, attenuation: r.attenuation, revoked: r.revoked, used: r.used, sharer: r.sharer, createdAt: r.createdAt }));
   const listForSharer = sharer => list().filter(r => r.sharer === String(sharer));
 
   // Earnings ledger — the sharer's take (credited when a consumer pays to use/import their share).

@@ -47,6 +47,7 @@ const AGENT_RUNNER = process.env.AGENT_CODEMODE === '0' ? runAgent : runAgentCod
 import { addAsk, getSecret } from './asks-store.mjs';
 import { makeConnectors } from './connectors.mjs';
 import { makeCustomTools } from './custom-tools.mjs';
+import { makeToolShares } from './tool-shares.mjs';
 import { buildSystemMap } from './system-map.mjs';
 import { braveSearch } from './brave-search.mjs';
 import { runResearch } from './research.mjs';
@@ -391,6 +392,7 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
   let contactsObj = null; // dan's NextCloud address book (CardDAV), built at boot
   const connectorsObj = makeConnectors({ getSecret, ssrfOk }); // owner-configured API-service tools (key injected server-side)
   const customToolsObj = makeCustomTools(); // agent-PROPOSED, human-reviewed code tools (admitted → callable, SES-sandboxed)
+  const toolSharesObj = makeToolShares({ dir: '/home/dan/.local/state/voice-agent/tool-shares' }); // same store the server consumer-routes read
   let kazAdmin = null; // admin object for dan's own Kazputer (kid-phone), built at boot — searchable + actionable
 
   // ── virtual home folders + static site publishing ──────────────────────────
@@ -952,6 +954,23 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
     manifest.push({ name: 'createInvite', reversible: false,
       args: { power: `string — one of [${[...node.powers].join(', ')}]`, name: 'string — a label so you can recognize it to revoke later' },
       description: 'Create a NAMED, revocable invite link granting ONE of your powers to someone else. The link is shown only in the Shares panel, never spoken.' });
+    // shareTool — share an admitted library component, as a factory or an attenuated/metered/priced
+    // instance. Mirrors createInvite's cap-hygiene: never speak the link (Shares panel only); revoke
+    // by the render-safe id, never the secret token.
+    toolbox.shareTool = harden({ run: async ({ tool, mode, methods, ratePerMin, quota, ttlMs, priceUsd } = {}) => {
+      const t = customToolsObj.list().find(x => x.name === String(tool || '') || x.id === String(tool || ''));
+      if (!t) return { ok: false, error: `no admitted tool "${tool}" — only admitted library tools can be shared (see listCustomTools)` };
+      const rec = toolSharesObj.create({ toolId: t.id, toolName: t.name, mode, methods, ratePerMin, quota, ttlMs, priceUsd, sharer: node.id, now: new Date().toISOString() });
+      const per = rec.mode === 'factory' ? 'import' : 'use';
+      const price = rec.priceUsd ? `${(rec.priceUsd / 1e6).toFixed(rec.priceUsd >= 10000 ? 2 : 6)} USD per ${per}` : 'free';
+      return { ok: true, id: rec.id, mode: rec.mode, toolName: t.name, price, attenuation: rec.attenuation, note: `Shared "${t.name}" as a ${rec.mode} (${price}). Open the Shares panel to copy the link or show a QR — the link itself is intentionally NOT shown here. Revoke later with revokeToolShare({ id: "${rec.id}" }).` };
+    } });
+    manifest.push({ name: 'shareTool', reversible: false,
+      args: { tool: 'string — an admitted tool name/id (listCustomTools)', mode: "string — 'factory' (recipient hosts their OWN instance) or 'instance' (an attenuated, metered reference to YOUR hosted instance)", methods: 'string[] — (instance) restrict to these method names; omit for all', ratePerMin: 'number — (instance) max calls per minute; omit = unlimited', quota: 'number — max total uses/imports; omit = unlimited', ttlMs: 'number — expiry in ms from now; omit = no expiry', priceUsd: 'number — µUSD charged to the consumer per use (instance) / per import (factory); omit/0 = free' },
+      description: 'SHARE an admitted library component with others — as a FACTORY (they host their own instance) or an attenuated, metered, REVOCABLE INSTANCE (a reference to your hosted one). Chargeable in the usual allowance currency; payment is enforced on the consumer the standard way. The link appears only in the Shares panel, never spoken. Revoke with revokeToolShare.' });
+    toolbox.revokeToolShare = harden({ run: async ({ id } = {}) => { const r = toolSharesObj.revoke(String(id || '')); return r.ok ? { ok: true, note: 'Share revoked — future uses/imports are refused immediately.' } : { ok: false, error: r.error || 'unknown share' }; } });
+    manifest.push({ name: 'revokeToolShare', reversible: false, args: { id: 'string — the render-safe share id (from shareTool or the Shares panel)' },
+      description: 'Revoke a component share you created (the caretaker). Identify it by its render-safe id — never the secret token.' });
     // requestAccess is ALSO always available — the escalation primitive. A confined cap CANNOT grant
     // itself powers; it ASKS the owner (dan), who approves from his inbox / the chat's powers banner.
     // This is the read-only-by-default + progressive-trust path: don't give up when you lack a power.
