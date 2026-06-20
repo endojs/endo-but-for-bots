@@ -289,6 +289,15 @@ const scopePowers = async (task, emit = null) => {
   return { proposed: withOutputPowers([], task), by: 'none' };
 };
 
+// Per-turn structural guard: a SIMPLE turn (a question/lookup/status check / a few-tool task) should not
+// be able to delegate or spawn sub-agents even in a full-power chat. One cheap gemma call classifies the
+// turn; if simple, the orchestration verbs are stripped from THIS turn's toolbox. Fail-open (keep them on
+// any error) — never block a real task on a flaky classifier.
+const ORCH_POWERS = ['delegate', 'roles', 'subagent', 'specialists'];
+const ORCH_VERBS = new Set(['delegateTask', 'employ', 'listRoles', 'proposeSpawnSpecialist', 'askSpecialist', 'listSpecialists', 'proposeSubAgent']);
+const TURN_CLASS_SYS = 'Classify the user request for an agent. Reply with ONLY one word: "simple" or "complex". simple = a question, lookup, status check, read, or a task one agent finishes in a few tool calls (e.g. "is the front door open?", search my notes, a quick edit). complex = genuinely multi-stage / large-scope work, builds or publishes a lot, or that clearly needs several specialized sub-agents working together.';
+const isSimpleTurn = async text => { try { const r = await callLLM([{ role: 'system', content: TURN_CLASS_SYS }, { role: 'user', content: String(text || '').slice(0, 600) }], 'default'); return /\bsimple\b/i.test(r.text || '') && !/\bcomplex\b/i.test(r.text || ''); } catch { return false; } };
+
 // Voice-note ingest is PROPOSE-ONLY: the agent takes NO actions, it produces proposed action items
 // (and, via the scoper, names the capabilities an attenuated agent would need to carry them out).
 // A pure completion (no toolbox) → it literally cannot act. gemma → Claude fallback.
@@ -692,7 +701,15 @@ const handler = async (req, res) => {
       // the turn's purse + a `charge` that paid connectors (Phase 4) debit market-rate+commission from.
       const purse = purseFor(cap, sid);
       const charge = uusd => { const amt = Math.max(0, Math.round(Number(uusd) || 0)); if (!amt) return true; if (!purse.canAfford(amt)) return false; purse.debit(amt); return true; };
-      const { toolbox, manifest } = runNode.toolbox({ chatId: sid, userText: t, emit: ev => emitStep(sid, ev), app: boundApp, homeSubkey: chatProject ? chatProject.homeSubkey : null, charge }); // chatId → deep-links; userText → delegates/specialists carry the originating request; emit → pendant stream; app → root state; homeSubkey → project folder; charge → paid-connector billing
+      let { toolbox, manifest } = runNode.toolbox({ chatId: sid, userText: t, emit: ev => emitStep(sid, ev), app: boundApp, homeSubkey: chatProject ? chatProject.homeSubkey : null, charge }); // chatId → deep-links; userText → delegates/specialists carry the originating request; emit → pendant stream; app → root state; homeSubkey → project folder; charge → paid-connector billing
+      // STRUCTURAL no-delegate-for-simple-reads guard: only matters when this chat actually holds
+      // orchestration powers (a scoped read chat has none → skip the classifier entirely). If the turn
+      // classifies as simple, remove the delegate/employ/spawn verbs so the model CANNOT delegate a read.
+      if (t && ORCH_POWERS.some(p => runNode.powers.has(p)) && await isSimpleTurn(t)) {
+        toolbox = harden(Object.fromEntries(Object.entries(toolbox).filter(([k]) => !ORCH_VERBS.has(k))));
+        manifest = manifest.filter(m => !ORCH_VERBS.has(m.name));
+        log('turn:', 'simple → stripped orchestration verbs (no delegate/employ/spawn this turn)');
+      }
       // Conversation memory: PREFER the client's durable transcript (it survives this service being
       // restarted — the in-memory `sessions` map is volatile and capped, which made the agent forget
       // earlier turns after every deploy). Fall back to the in-process map only if the client sent none.
