@@ -33,6 +33,7 @@ const connectors = makeConnectors({ getSecret }); // owner-side registry (same c
 const customTools = makeCustomTools(); // owner-side review/admit (same custom-tools.json the agent reads)
 import { makeAppStore } from './app-state.mjs';
 import { makePurse } from './purse.mjs';
+import { makePurseStore } from './purse-store.mjs';
 import { makeMeteredLLM } from './meter.mjs';
 import { loadStripeCfg, stripeConfigured, recordPending, checkoutForm, verifyWebhook, settleEvent } from './pay.mjs';
 import { gatorConfigured, recordDelegation, redeemDelegation } from './delegation-pay.mjs';
@@ -155,10 +156,19 @@ const appStore = makeAppStore({ chatStorePath, readMemoRuns, writeMemoRuns, read
 const DEFAULT_ALLOWANCE = Number(process.env.DEFAULT_ALLOWANCE_UUSD) || 1_000_000; // µUSD ($1.00)
 let defaultAllowance = DEFAULT_ALLOWANCE;
 const chatPurses = new Map(); // `${cap}:${sid}` → purse
+// Durable balances: a purse's mutations persist (hashed key → {balance,granted}); on boot a chat's purse
+// rehydrates from disk instead of resetting to the default allowance. (Increment 6 swaps this for agora's
+// journaled bank behind the same shape.)
+const purseStore = makePurseStore({ file: `${HOME}/.local/state/voice-agent/purses.json` });
 const purseFor = (cap, sid) => {
   const k = `${cap}:${sid}`;
   let p = chatPurses.get(k);
-  if (!p) { p = makePurse(defaultAllowance); chatPurses.set(k, p); }
+  if (!p) {
+    const saved = purseStore.get(k); // {balance, granted} if this purse was ever persisted
+    p = makePurse(saved ? saved.balance : defaultAllowance, { granted: saved ? saved.granted : undefined, onChange: (b, g) => purseStore.set(k, b, g) });
+    if (!saved) purseStore.set(k, p.balance(), p.granted()); // record the initial grant so a restart before any spend still restores it
+    chatPurses.set(k, p);
+  }
   return p;
 };
 // run the entry agent on a transcript, capturing the step trace. Bounded by the ALLOWANCE METER
@@ -1413,5 +1423,8 @@ const main = async () => {
   log(`ROOT CAP LINK (full bundle): ${BASE_URL}/#cap=${rootSwiss}`);
   log(`STT ${WHISPER}; LLM gemma tinix:8003; delegate ${process.env.DELEGATE_MODEL || 'claude-opus-4-8'}`);
 };
+
+// flush durable balances on a clean shutdown (systemd restart sends SIGTERM) so the last debits persist.
+for (const sig of ['SIGTERM', 'SIGINT']) process.on(sig, () => { try { purseStore.flushNow(); } catch { /* best-effort */ } process.exit(0); });
 
 main().catch(e => { log('FATAL', e && e.stack || e); process.exit(1); });
