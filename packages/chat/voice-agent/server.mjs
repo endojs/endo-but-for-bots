@@ -679,19 +679,24 @@ const handler = async (req, res) => {
     //    allowance. Amounts are µUSD integers. Any valid cap manages its OWN chats'
     //    purses; only root may move the global default-allowance for new chats. ──
     if (req.method === 'POST' && u.pathname === '/budget') {
-      const { cap, sessionId } = await jsonBody(req);
+      const { cap, purseCap, sessionId } = await jsonBody(req);
       if (!nodeFor(cap)) return json(res, 403, { error: 'no capability' });
-      const p = purseFor(cap, String(sessionId || 'anon').slice(0, 64));
+      // The turn's purse is keyed by the CHAT's (possibly scoped) cap, so read THAT purse — else the
+      // chip shows a different purse than the one inference actually spends.
+      const key = nodeFor(purseCap) ? purseCap : cap;
+      const p = purseFor(key, String(sessionId || 'anon').slice(0, 64));
       return json(res, 200, { remaining: p.balance(), allowance: p.granted(), defaultAllowance });
     }
     if (req.method === 'POST' && (u.pathname === '/budget/topup' || u.pathname === '/budget/set')) {
-      const { cap, sessionId, amount } = await jsonBody(req);
-      // FREE top-up / set is the OWNER's comp — root only. A non-root invitee adds credit by PAYING
-      // (/pay/checkout), so they can't grant themselves free inference. (The owner's own chats run on
-      // his root cap, so this doesn't change his top-up flow.)
+      const { cap, purseCap, sessionId, amount } = await jsonBody(req);
+      // FREE top-up / set is the OWNER's comp — root only (a non-root invitee adds credit by PAYING,
+      // so they can't grant themselves free inference). The root `cap` AUTHORIZES; we credit the CHAT's
+      // purse, which is keyed by its (often SCOPED) cap — passed as `purseCap`. (Without this, a scoped
+      // chat's top-up credited the root purse, not the one the turn spends → "top-up did nothing".)
       if (!nodeFor(cap)?.isRoot) return json(res, 403, { error: 'free credit is the owner\'s to grant — add credit via payment (/pay/checkout)' });
       const amt = Math.max(0, Math.round(Number(amount) || 0));
-      const p = purseFor(cap, String(sessionId || 'anon').slice(0, 64));
+      const key = nodeFor(purseCap) ? purseCap : cap;
+      const p = purseFor(key, String(sessionId || 'anon').slice(0, 64));
       if (u.pathname === '/budget/set') p.set(amt); else p.credit(amt); // set = this chat's allowance; topup = add
       return json(res, 200, { remaining: p.balance(), allowance: p.granted() });
     }

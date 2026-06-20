@@ -353,14 +353,14 @@ const updateBudgetChip = (remaining, allowance) => {
 };
 const refreshBudget = async () => {
   if (!cap || !budgetChip) return;
-  try { const b = await (await fetch('/budget', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, sessionId }) })).json(); if (b && !b.error) updateBudgetChip(b.remaining, b.allowance); } catch {}
+  try { const b = await (await fetch('/budget', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, purseCap: chatCap(), sessionId }) })).json(); if (b && !b.error) updateBudgetChip(b.remaining, b.allowance); } catch {}
 };
 if (budgetChip) budgetChip.onclick = async () => {
   const v = window.prompt('Top up this conversation by how many dollars?', '1.00');
   if (v == null) return;
   const amount = Math.round(parseFloat(v) * 1e6);
   if (!(amount > 0)) return;
-  try { const b = await (await fetch('/budget/topup', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, sessionId, amount }) })).json(); if (b && !b.error) updateBudgetChip(b.remaining, b.allowance); } catch {}
+  try { const b = await (await fetch('/budget/topup', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, purseCap: chatCap(), sessionId, amount }) })).json(); if (b && !b.error) updateBudgetChip(b.remaining, b.allowance); } catch {}
 };
 // retry the SAME turn after a top-up (no new user bubble — the user's message is already shown)
 const retryTurn = async (payload, spoken) => {
@@ -392,7 +392,7 @@ const renderExhausted = (payload, spoken) => {
     top.disabled = aband.disabled = true;
     try {
       if (isRoot) { // owner comp: free top-up
-        const b = await (await fetch('/budget/topup', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, sessionId, amount: 500000 }) })).json();
+        const b = await (await fetch('/budget/topup', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, purseCap: chatCap(), sessionId, amount: 500000 }) })).json();
         if (b.error) throw new Error(b.error);
         updateBudgetChip(b.remaining, b.allowance); card.remove(); await retryTurn(payload, spoken);
       } else { // invitee: pay via Stripe Checkout (purse is credited on the webhook, then reload to continue)
