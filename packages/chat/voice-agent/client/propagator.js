@@ -91,30 +91,43 @@ export const react = (inputs, effect) => {
 };
 
 // ── makeTmsCell — a provenance-carrying data grain (Truth Maintenance) ───────────────────────────
-// A plain cell forgets WHO told it what. A TMS grain keeps every supported fact tagged with the
-// PREMISE that supplied it (a provenance tag: 'self', 'inviter:alice', 'invitee:bob', …). The believed
-// value is the most-recent fact whose premise is currently believed (in the "worldview"). This is what
-// lets a shared change be TRIED ON non-destructively and accepted/rejected ATOMICALLY:
-//   • a contribution arrives as a fact you do NOT yet believe → the displayed value is unchanged;
-//   • believe(premise)  → try it on (the grain now shows their value); a wired propagator re-paints;
-//   • retract(premise)  → reject — atomically revert to what you believed before (the fact is kept,
+// A plain cell forgets WHO told it what. A TMS grain keeps every supported fact tagged with the PEER
+// that supplied it. Crucially, a peer is designated by an unforgeable OBJECT REFERENCE, never a string
+// name (ocap discipline: a string is forgeable ambient authority — anyone who guesses "invitee:bob"
+// could attribute or believe a fact "from Bob"). The premise IS the peer's reference; holding that
+// reference IS the right to attribute to, try on, or retract that peer's contribution. Identity is by
+// reference (===), so you cannot cite a peer you do not hold.
+//
+// The believed value is the most-recent fact whose peer-reference is currently believed (the
+// "worldview"). This lets a shared change be TRIED ON non-destructively and accepted/rejected ATOMICALLY:
+//   • a contribution arrives as a fact whose peer you do NOT yet believe → the displayed value is unchanged;
+//   • believe(peerRef)  → try it on (the grain now shows their value); a wired propagator re-paints;
+//   • retract(peerRef)  → reject — atomically revert to what you believed before (the fact is kept,
 //                         just disbelieved, so you can try it on again later);
-//   • forget(premise)   → drop the contribution entirely.
+//   • forget(peerRef)   → drop that peer's contributions entirely.
 // It satisfies the cell interface (read/hasContent/addContent/subscribe), so propagators wire to it
-// transparently — they just see the believed value. `provenance()`/`ledger()` expose WHO supplied the
-// believed value and the full audit trail — the accountability the social-collateral trust gate needs.
-export const SELF = 'self';
-export const makeTmsCell = (initiallyBelieved = [SELF]) => {
-  let facts = []; // [{ value, premise, seq }]
+// transparently. `provenance()` returns the believed value's PEER REFERENCE; `ledger()`/`proposals()`
+// return references (the accountability the social-collateral trust gate needs). For DISPLAY, the host
+// maps a reference to a render-safe petname (`labelOf`) — the reference itself, being authority, is
+// never rendered.
+
+// The holder's own reference — a distinct object identity, NOT the string 'self'.
+export const SELF = (typeof harden === 'function' ? harden : Object.freeze)({ self: true });
+// A render-safe label for a peer reference, for ledger/proposals display. Reads an optional `petname`
+// the host attached to the reference; the reference itself (authority) is never put in the DOM.
+export const labelOf = ref => (ref === SELF ? 'you' : (ref && (ref.petname || ref.label)) || 'a peer');
+
+export const makeTmsCell = (selfRef = SELF) => {
+  let facts = []; // [{ value, peer (object reference), seq }]
   let seq = 0;
-  const believed = new Set(initiallyBelieved.map(String));
+  const believed = new Set([selfRef]); // a Set of peer REFERENCES — membership is by identity (===)
   const subscribers = new Set();
   let current = NOTHING;
 
   const recompute = () => {
     let best = NOTHING;
     let bestSeq = -1;
-    for (const f of facts) if (believed.has(f.premise) && f.seq > bestSeq) { best = f.value; bestSeq = f.seq; }
+    for (const f of facts) if (believed.has(f.peer) && f.seq > bestSeq) { best = f.value; bestSeq = f.seq; }
     return best;
   };
   const refresh = () => {
@@ -123,40 +136,41 @@ export const makeTmsCell = (initiallyBelieved = [SELF]) => {
     current = next;
     for (const fn of [...subscribers]) { try { fn(current); } catch { /* a bad neighbour can't wedge the net */ } }
   };
+  const requireRef = peer => { if (peer === null || typeof peer !== 'object' && typeof peer !== 'function') throw new Error('a peer must be designated by reference, not a name/string'); return peer; };
 
   const cell = {
     // cell interface — propagators see only the believed value
     read: () => current,
     hasContent: () => current !== NOTHING,
-    addContent: value => cell.addFact(value, SELF, { believe: true }),
+    addContent: value => cell.addFact(value, selfRef, { believe: true }),
     subscribe: fn => {
       subscribers.add(fn);
       if (current !== NOTHING) { try { fn(current); } catch { /* ignore */ } }
       return () => subscribers.delete(fn);
     },
-    // TMS / provenance
-    addFact: (value, premise = SELF, { believe = true } = {}) => {
+    // TMS / provenance — `peer` is the contributor's REFERENCE (you must hold it to cite them)
+    addFact: (value, peer = selfRef, { believe = true } = {}) => {
+      requireRef(peer);
       seq += 1;
-      const p = String(premise);
-      facts.push({ value, premise: p, seq });
-      if (believe) believed.add(p);
+      facts.push({ value, peer, seq });
+      if (believe) believed.add(peer);
       refresh();
-      return { premise: p, seq };
+      return { peer, seq };
     },
-    believe: premise => { const p = String(premise); if (!believed.has(p)) { believed.add(p); refresh(); } }, // try-on / accept
-    retract: premise => { if (believed.delete(String(premise))) refresh(); },                                  // reject (fact kept, disbelieved)
-    forget: premise => { const p = String(premise); facts = facts.filter(f => f.premise !== p); believed.delete(p); refresh(); },
+    believe: peer => { requireRef(peer); if (!believed.has(peer)) { believed.add(peer); refresh(); } }, // try-on / accept
+    retract: peer => { if (believed.delete(requireRef(peer))) refresh(); },                              // reject (fact kept, disbelieved)
+    forget: peer => { requireRef(peer); facts = facts.filter(f => f.peer !== peer); believed.delete(peer); refresh(); },
     worldview: () => new Set(believed),
-    setWorldview: premises => { believed.clear(); for (const p of premises) believed.add(String(p)); refresh(); },
-    // who supplies the believed value; un-believed contributions awaiting try-on; the full audit trail
-    provenance: () => { let best = null; let bestSeq = -1; for (const f of facts) if (believed.has(f.premise) && f.seq > bestSeq) { best = f; bestSeq = f.seq; } return best ? best.premise : null; },
-    proposals: () => facts.filter(f => !believed.has(f.premise)).map(f => ({ premise: f.premise, value: f.value })),
-    ledger: () => facts.map(f => ({ value: f.value, premise: f.premise, seq: f.seq, believed: believed.has(f.premise) })),
-    // flag when distinct believed premises disagree on a value, so the UI can surface a real conflict
+    setWorldview: peers => { believed.clear(); for (const p of peers) believed.add(requireRef(p)); refresh(); },
+    // the believed value's PEER REFERENCE; un-believed contributions awaiting try-on; the full audit trail
+    provenance: () => { let best = null; let bestSeq = -1; for (const f of facts) if (believed.has(f.peer) && f.seq > bestSeq) { best = f; bestSeq = f.seq; } return best ? best.peer : null; },
+    proposals: () => facts.filter(f => !believed.has(f.peer)).map(f => ({ peer: f.peer, value: f.value })),
+    ledger: () => facts.map(f => ({ value: f.value, peer: f.peer, seq: f.seq, believed: believed.has(f.peer) })),
+    // flag when distinct believed peers disagree on a value, so the UI can surface a real conflict
     contradiction: () => {
-      const top = {};
-      for (const f of facts) if (believed.has(f.premise)) top[f.premise] = f.value;
-      return new Set(Object.values(top)).size > 1;
+      const byPeer = new Map();
+      for (const f of facts) if (believed.has(f.peer)) byPeer.set(f.peer, f.value);
+      return new Set(byPeer.values()).size > 1;
     },
   };
   return cell;

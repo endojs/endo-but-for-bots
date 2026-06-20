@@ -45,23 +45,31 @@ react([sum], v => console.log('sum is', v)); // a side-effecting propagator (e.g
 ## Shared / proposed data → use a TMS grain (provenance)
 
 For any data another participant can contribute to (a shared page, a proposed edit), use a **TMS grain**
-`makeTmsCell()` instead of a plain cell. It tags every fact with the **premise** that supplied it (who),
-so a contribution can be **tried on as a worldview** and **accepted/rejected atomically** — non-destructively.
+`makeTmsCell()` instead of a plain cell. It tags every fact with the **peer** that supplied it — and a
+peer is designated by an **unforgeable object reference** (the capability you hold for them), **never a
+string name**. Holding the reference *is* the right to attribute to, try on, or retract that peer's
+contribution (ocap discipline — a string name is forgeable ambient authority). A contribution can then
+be **tried on as a worldview** and **accepted/rejected atomically**, non-destructively.
 
 ```js
-import { makeTmsCell } from './propagator.js';
-const title = makeTmsCell();                              // believes ['self'] by default
+import { makeTmsCell, labelOf, SELF } from './propagator.js';
+const bob = /* the peer REFERENCE you hold (a cap), with an optional render-safe `petname` */;
+
+const title = makeTmsCell();                              // believes [SELF] by default
 title.addContent('my title');                            // self fact → believed
-title.addFact("Bob's title", 'invitee:bob', { believe:false }); // recorded, NOT shown yet
-title.proposals();        // → [{ premise:'invitee:bob', value:"Bob's title" }]  (awaiting try-on)
-title.believe('invitee:bob');  // TRY ON → read() is now Bob's; wired propagators re-paint
-title.retract('invitee:bob');  // REJECT → atomically reverts; the fact is kept (re-tryable)
-title.provenance();       // who supplies the believed value;  title.ledger() = full audit trail
+title.addFact("Bob's title", bob, { believe:false });    // recorded against Bob's REFERENCE, not shown
+title.proposals();        // → [{ peer: bob, value:"Bob's title" }]   (awaiting try-on)
+title.believe(bob);       // TRY ON → read() is now Bob's; wired propagators re-paint   (a STRING throws)
+title.retract(bob);       // REJECT → atomically reverts; the fact is kept (re-tryable)
+title.provenance();       // → the believed value's peer REFERENCE;   labelOf(ref) → render-safe petname
 ```
 
-`read`/`subscribe` see only the **believed** value, so propagators wire to a TMS grain unchanged.
-`provenance()`/`ledger()` are the accountability the social-collateral distribution gate needs (who
-supplied what). `contradiction()` flags when two believed premises disagree.
+Designation is by **reference identity (`===`)**: a forged string, or a different reference that merely
+*shares a petname*, will NOT believe Bob's fact — only the actual reference you hold. `read`/`subscribe`
+see only the **believed** value, so propagators wire to a TMS grain unchanged. `provenance()`/`ledger()`
+return references — the accountability the social-collateral gate needs; render them only via
+`labelOf` (the reference itself is authority and never goes in the DOM). `contradiction()` flags when
+two believed peers disagree.
 
 ## Rendering — always confined, never the live DOM
 
