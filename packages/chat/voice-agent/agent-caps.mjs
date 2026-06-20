@@ -786,7 +786,7 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
       });
       manifest.push({ name: 'delegateTask', reversible: true,
         args: { prompt: 'string — the task', powers: `array — subset of [${[...node.powers].filter(p => !META_POWERS.has(p)).join(', ')}] to grant the sub-agent`, nickname: 'string — OPTIONAL but encouraged: a short readable name for this delegate (e.g. "flights-builder"), shown in the trace + as the proposer of anything it builds. You may delegate MANY in one turn.' },
-        description: 'Break a task off to a larger (Opus) agent, granting it ONLY the listed powers. Give it a nickname. You may call this MULTIPLE times in one response to run several delegates.' });
+        description: 'Break a task off to a larger (Opus) agent, granting it ONLY the listed powers. Use this ONLY when (a) the scope is too big for one agent (genuinely multi-stage / parallelizable / needs a bigger brain), OR (b) it involves potentially destructive actions best done by a confined least-authority sub-agent. Do NOT delegate a read, lookup, or single-tool action you can just do yourself. Give it a nickname; you may call this MULTIPLE times in one response for several delegates.' });
     }
     if (powers.has('roles')) {
       // EMPLOY A ROLE — the doc's "roles are configurations, not classes." Each role
