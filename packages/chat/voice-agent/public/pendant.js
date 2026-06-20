@@ -82,6 +82,7 @@ export const makePendant = canvas => {
   const camTarget = new THREE.Vector3(0, 0.3, 0);
   let camDist = 5; const desiredCenter = new THREE.Vector3(0, 0.3, 0); let desiredDist = 5;
   let userZoom = 1, panX = 0, panY = 0; // wheel/pinch zoom + drag-pan, layered on top of the auto-fit framing
+  let autoAz = 0; // the spiral's continuous slow turn — the camera orbits the helix gently over time
 
   const tween = (dur, ease, apply) => { if (buildInstant) { apply(1); return; } tweens.push({ t0: now(), dur, ease, apply }); };
 
@@ -202,18 +203,21 @@ export const makePendant = canvas => {
     return nd;
   };
 
-  // VERTICAL TIMELINE: top-level steps are stacked straight down in the order they HAPPENED — the
-  // root (prompt) at the top, the first tool just below it, each later step lower, the most recent at
-  // the BOTTOM. The connector of each step chains to the PREVIOUS step (not back to the root), so the
-  // lines form one continuous vertical spine = the arrow of time. Fixed spacing → existing steps stay
-  // put as new ones append at the bottom (the timeline grows downward, it doesn't reshuffle).
-  const STEP_GAP = 1.12;
+  // DESCENDING SPIRAL (helix): top-level steps wind down a gentle spiral in the order they HAPPENED —
+  // the root (prompt) at the top, each later step turned a little further around the axis and dropped a
+  // little (so it descends FAR less per step than a straight stack → compact). The connector of each
+  // step chains to the PREVIOUS step, so the line itself spirals = the arrow of time. Fixed params →
+  // existing steps stay put as new ones wind on below. The camera also turns slowly (see the loop).
+  const SPIRAL_R = 1.05;     // helix radius around the vertical axis below the root
+  const SPIRAL_TURN = 0.7;   // radians turned per step (the continuous spiral)
+  const SPIRAL_DROP = 0.5;   // vertical descent per step — ~half a straight stack, so it's compact
   const relayoutLevel1 = () => {
     const n = level1.length; if (!n) return;
-    const x = root.group.position.x;
+    const cx = root.group.position.x;
     level1.forEach((nd, j) => {
-      nd.lineFrom = j === 0 ? root : level1[j - 1]; // chain connectors into a single vertical spine
-      tweenPos(nd, new THREE.Vector3(x, ROOT_Y - 0.95 - j * STEP_GAP, 0));
+      nd.lineFrom = j === 0 ? root : level1[j - 1]; // chain connectors → one spiralling spine
+      const a = j * SPIRAL_TURN;
+      tweenPos(nd, new THREE.Vector3(cx + SPIRAL_R * Math.sin(a), ROOT_Y - 0.95 - j * SPIRAL_DROP, SPIRAL_R * Math.cos(a)));
     });
   };
   const relayoutChildren = parent => {
@@ -513,8 +517,10 @@ export const makePendant = canvas => {
     }
     camTarget.lerp(desiredCenter, 1 - Math.pow(0.0008, dt));
     camDist += (desiredDist * userZoom - camDist) * (1 - Math.pow(0.0008, dt));
+    autoAz += dt * 0.14; // continuous slow turn (~one gentle revolution every ~45s)
     const tx = camTarget.x + panX, ty = camTarget.y + panY;
-    camera.position.set(tx + camDist * 0.16, ty + camDist * 0.06, camTarget.z + camDist * 0.985);
+    const ox = camDist * 0.16, oz = camDist * 0.985; // the base camera offset, rotated around the axis by autoAz
+    camera.position.set(tx + ox * Math.cos(autoAz) - oz * Math.sin(autoAz), ty + camDist * 0.06, camTarget.z + ox * Math.sin(autoAz) + oz * Math.cos(autoAz));
     camera.lookAt(tx, ty, camTarget.z);
     renderer.render(scene, camera);
   });
