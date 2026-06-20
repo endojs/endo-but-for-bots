@@ -15,6 +15,8 @@ import { promisify } from 'node:util';
 import fs from 'node:fs';
 import path from 'node:path';
 
+import { E } from '@endo/far';
+
 import { makeNativeGitBackend } from '@endo/git';
 
 const execFileP = promisify(execFile);
@@ -117,6 +119,52 @@ export const makeComponentGit = ({ baseDir }) => {
 
   const exists = id => fs.existsSync(path.join(repoDir(id), '.git'));
 
-  return { commit, readAt, history, fork, revert, exists };
+  // ── the makeGit EXO wrapper ──────────────────────────────────────────────────────────────────────
+  // gitObject(id) vends the REMOTABLE, ATTENUABLE EndoGit capability for a component (the full @endo/exo-git
+  // exo over a daemon-style mount), so a component-project is a real git OBJECT that composes into the
+  // trie + can be shared. Through it: E(git).filesystemAt(ref) → a read-only Filesystem (the FILE-OBJECT
+  // API — traverse/read a version as a folder); E(git).worktree() → an EndoMount, a WRITABLE file-object to
+  // author by writing files + E(git).add([entry]) + E(git).commit(msg); E(git).readOnly() → an attenuated
+  // read-only cap (mutations throw). The heavy daemon mount/filePowers machinery is imported LAZILY (only
+  // when an exo is first requested) + the filePowers is built once, so the common backend ops stay light.
+  let exoBits = null;
+  const ensureExoBits = async () => {
+    if (!exoBits) {
+      const [{ makeGit }, { makeMount, lineageOf }, { makeFilePowers }] = await Promise.all([
+        import('@endo/exo-git'),
+        import('@endo/daemon/src/mount.js'),
+        import('@endo/daemon/src/daemon-node-powers.js'),
+      ]);
+      exoBits = { makeGit, makeMount, lineageOf, filePowers: makeFilePowers({ fs, path }) };
+    }
+    return exoBits;
+  };
+  const exoCache = new Map(); // `${id}:${readOnly}` → EndoGit exo
+  const gitObject = async (id, { readOnly = false } = {}) => {
+    const { dir, backend } = await ensureRepo(id);
+    const key = `${id}:${readOnly ? 'ro' : 'rw'}`;
+    if (!exoCache.has(key)) {
+      const { makeGit, makeMount, lineageOf, filePowers } = await ensureExoBits();
+      const mount = makeMount({ rootPath: dir, readOnly, filePowers });
+      exoCache.set(key, makeGit({ mount, backend, lineageOf, readOnly }));
+    }
+    return exoCache.get(key);
+  };
+
+  // Author ONE file through the writable file-object (the mount), then stage + commit → a new version.
+  // The file-granular counterpart to commit() — edit/add a single file without resending the whole tree.
+  const writeFile = async (id, relpath, content, message = 'edit') => {
+    const rel = String(relpath).replace(/^[/\\]+/, '');
+    if (!rel || rel.includes('..')) throw new Error('bad path');
+    const git = await gitObject(id);
+    const mount = await E(git).worktree();
+    await E(mount).writeText([rel], String(content ?? ''));
+    const entry = await E(mount).entry([rel]);
+    await E(git).add([entry]);
+    const c = await E(git).commit(String(message || 'edit'));
+    return { version: c.oid, files: (await readAt(id, 'HEAD')).files };
+  };
+
+  return { commit, readAt, history, fork, revert, exists, gitObject, writeFile };
 };
 harden(makeComponentGit);

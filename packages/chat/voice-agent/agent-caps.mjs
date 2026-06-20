@@ -1016,6 +1016,29 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
     } });
     manifest.push({ name: 'forkComponent', reversible: false, args: { tool: 'string — an admitted tool name/id', name: 'string — a name for your fork', version: 'string — OPTIONAL version to fork from (default latest; see componentHistory)' },
       description: 'FORK a component into a NEW one — its own git source lineage (forkable/revertable independently) + a COPY of the source\'s grain data. Enters review; admit to host it. The original is untouched.' });
+    // componentReadFile / componentWriteFile — author a component through its FILE-OBJECT (the @endo/exo-git
+    // mount): read or edit ONE file of its source tree, not the whole module. A write commits a new version
+    // AND updates the live tool. Owner-only for writes (it changes a shared component).
+    toolbox.componentReadFile = harden({ run: async ({ tool, path: rel, version } = {}) => {
+      const t = customToolsObj.list().find(x => x.name === String(tool || '') || x.id === String(tool || ''));
+      if (!t) return { ok: false, error: `no admitted tool "${tool}"` };
+      const snap = await componentGitObj.readAt(t.id, String(version || 'HEAD')); if (!snap) return { ok: false, error: 'unknown version' };
+      if (rel) { const c = snap.files[String(rel)]; return c === undefined ? { ok: false, error: `no file "${rel}" (files: ${Object.keys(snap.files).join(', ')})` } : { ok: true, path: String(rel), content: c }; }
+      return { ok: true, files: Object.keys(snap.files) };
+    } });
+    manifest.push({ name: 'componentReadFile', reversible: false, args: { tool: 'string — an admitted tool name/id', path: 'string — OPTIONAL file path (omit to LIST the files)', version: 'string — OPTIONAL version (default HEAD)' },
+      description: 'Read a component\'s source through its FILE-OBJECT: a single file\'s content (path) or the file list (omit path), at any version. Read-only.' });
+    toolbox.componentWriteFile = harden({ run: async ({ tool, path: rel, content, message } = {}) => {
+      if (!node.isRoot) return { ok: false, error: 'editing a shared component\'s files is the owner\'s call.' };
+      const t = customToolsObj.list().find(x => x.name === String(tool || '') || x.id === String(tool || ''));
+      if (!t) return { ok: false, error: `no admitted tool "${tool}"` };
+      if (!String(rel || '').trim()) return { ok: false, error: 'name the file path to write' };
+      let r; try { r = await componentGitObj.writeFile(t.id, String(rel), String(content ?? ''), String(message || `edit ${rel}`)); } catch (e) { return { ok: false, error: `write failed: ${(e && e.message) || e}` }; }
+      customToolsObj.setSource(t.id, r.files); // sync the new git HEAD → the live tool
+      return { ok: true, tool: t.name, path: String(rel), version: String(r.version).slice(0, 12), note: 'Wrote the file through the component\'s file-object, committed a new version, and updated the live tool. Revert from the Components tab if needed.' };
+    } });
+    manifest.push({ name: 'componentWriteFile', reversible: false, args: { tool: 'string — an admitted tool name/id', path: 'string — the file path to write (e.g. tool.js, helper.js)', content: 'string — the new file contents', message: 'string — OPTIONAL commit message' },
+      description: 'Author a component through its FILE-OBJECT: write/replace ONE file of its source tree (not the whole module), commit a new version, and update the live tool. Owner-only.' });
     // requestAccess is ALSO always available — the escalation primitive. A confined cap CANNOT grant
     // itself powers; it ASKS the owner (dan), who approves from his inbox / the chat's powers banner.
     // This is the read-only-by-default + progressive-trust path: don't give up when you lack a power.
