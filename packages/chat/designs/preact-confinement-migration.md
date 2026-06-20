@@ -624,26 +624,32 @@ this PR: the edit-space modal container collision, the cold-cache author names
 in the channel and forum bodies, the own-peer border, the dead DOM-era fields,
 and the two-tags-per-line JSDoc. The remainder are deferred and tracked here.
 
-- **UA #3 — buffered streaming of inventory/messages.** Render incrementally
-  from a bounded buffer rather than awaiting the full backlog. A perf/UX
-  enhancement orthogonal to confinement; needs its own design for backpressure
-  and ordering.
-- **UA #4 — per-mailbox streaming.** Stream each mailbox independently instead
-  of one combined feed. Depends on the #3 buffering model.
-- **UA #5 — file-explorer git-tree column continuation.** Selecting a git tree
-  object (`openGitEntry`) opens it as a new source and resets the Miller columns
-  to the top instead of continuing the nested column chain. A git entry is a
-  distinct filesystem (a worktree mount), so `buildColumns` — which walks one
-  source filesystem by repeated `lookup` along `activePath` — cannot currently
-  span the source boundary. Continuing the chain requires the column model to
-  carry a per-column filesystem (or a source-stitching path segment) so a column
-  can switch filesystems mid-path. This is an architectural change to the
-  source/column model, not a contained fix, and the current behavior predates
-  the confinement migration. Defer until the column model is reworked.
+- **UA #3 — buffered streaming of inventory/messages.** _Done._ The inventory
+  subscription now buffers the daemon's name backlog and flushes it as one
+  batched reducer action (one render and one round of per-item resolution
+  instead of one per name); the inbox message loop reads the scroll position
+  synchronously instead of awaiting an animation frame per message, so the
+  initial message backlog no longer serializes at one message per frame.
+- **UA #4 — per-mailbox streaming.** _Blocked on the daemon._ `followMessages()`
+  takes no filter argument (`interfaces.js`) and each agent exposes a single
+  aggregate mailbox that is the complete conversation log (sent **and**
+  received). There is no server-side per-conversation/per-sender stream to
+  subscribe to. Following the conversation party's own agent mailbox instead
+  would only carry one direction of the conversation, so it cannot replace the
+  client-side filter without losing messages. Server-side per-mailbox streaming
+  needs a new daemon API (a filtered `followMessages({ from })` or a
+  per-conversation mailbox cap); deferred until that exists.
+- **UA #5 — file-explorer git-tree column continuation.** _Done._ Selecting a
+  git workspace child in columns mode now mounts its worktree and continues the
+  Miller columns from where the entry sits, rather than reopening it as a new
+  source at the top. A per-source git-mount registry redirects path resolution
+  (listing, the dir-cap cache, file reads) under the mount point through the
+  worktree; see `openGitEntryInColumn` in `@endo/space-file-explorer`.
 - **UA #6 — always-present Spaces bar + removing the back buttons.** A layout
   change to `chat.js`/`spaces-gutter`, both frozen for the incoming imperative
   -Space PR. Resume after that PR lands (see "Deferred — frozen" above).
-- **Review MEDIUMs.** Watcher churn (the inventory/space watchers re-subscribe
-  more than necessary) and code-fence placeholder counting in the markdown
-  -to-vnodes path (placeholders inside fenced code can be miscounted). Both are
-  correctness-adjacent polish, not migration blockers.
+- **Review MEDIUMs.** Code-fence placeholder counting in the markdown-to-vnodes
+  path is now fixed (chip placeholders inside fenced code are substituted and
+  counted, keeping later chips aligned). Watcher churn (the inventory/space
+  watchers re-subscribe more than necessary) remains deferred — correctness
+  -adjacent polish, not a migration blocker.
