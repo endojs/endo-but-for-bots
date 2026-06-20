@@ -1914,6 +1914,8 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@endo/field-voice-agent@workspace:packages/chat/voice-agent"
   dependencies:
+    "@endo/exo-git": "workspace:^"
+    "@endo/git": "workspace:^"
     "@endo/preact-container": "workspace:^"
     preact: "npm:^10.29.2"
     ses: "workspace:^"
