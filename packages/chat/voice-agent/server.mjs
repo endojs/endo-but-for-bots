@@ -39,6 +39,7 @@ import { budgetLine } from './costModel.mjs';
 import * as projects from './projects.mjs';
 import { makeMeetingScribe } from './meeting-scribe.mjs';
 import { opusComplete } from './delegate.mjs';
+import { runReviewPanel } from './review-panel.mjs';
 import { notify } from '../capture/notify.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -1089,8 +1090,28 @@ const handler = async (req, res) => {
     if (req.method === 'POST' && u.pathname.startsWith('/tools')) {
       const body = await jsonBody(req);
       if (!nodeFor(body.cap)?.isRoot) return json(res, 403, { error: 'reviewing tools needs your root capability' });
-      if (u.pathname === '/tools/review') return json(res, 200, { tools: customTools.listAll() }); // includes code, for review
-      if (u.pathname === '/tools/admit') return json(res, 200, customTools.admit(String(body.id || '')));
+      if (u.pathname === '/tools/review') {
+        // Run the discipline-review PANEL (ocap / propagator / cap-hygiene / sharing) over each pending
+        // tool that hasn't been reviewed yet, cache the findings on the record, and return them with the
+        // code — so the human (social-collateral) admission gate decides INFORMED by every discipline.
+        const all = customTools.listAll();
+        const todo = all.filter(t => t.status === 'pending' && (!t.review || body.force));
+        if (todo.length) {
+          await Promise.all(todo.map(async t => {
+            try { const review = await runReviewPanel(t, { callLLM, ranAt: new Date().toISOString() }); customTools.setReview(t.id, review); } catch (e) { log('review-panel', e.message); }
+          }));
+        }
+        return json(res, 200, { tools: customTools.listAll() });
+      }
+      if (u.pathname === '/tools/admit') {
+        // Critical findings from the panel require a deliberate override — the human stays the gate, but
+        // admitting a Critically-flagged tool is an explicit act, not an accident.
+        const t = customTools.listAll().find(x => x.id === String(body.id || ''));
+        if (t && t.review && t.review.worst === 'critical' && !body.override) {
+          return json(res, 200, { ok: false, blocked: 'critical', worst: t.review.worst, findings: t.review.findings, note: 'The review panel flagged a CRITICAL issue. Re-submit admit with override:true to admit anyway (deliberate act), or reject/fix it.' });
+        }
+        return json(res, 200, customTools.admit(String(body.id || '')));
+      }
       if (u.pathname === '/tools/reject') return json(res, 200, customTools.reject(String(body.id || '')));
       if (u.pathname === '/tools/export') return json(res, 200, await customTools.exportClass(String(body.id || ''))); // a CLASS as a shareable, real multi-module Endo bundle
       if (u.pathname === '/tools/import') return json(res, 200, customTools.importClass({ bundle: body.bundle, proposedBy: 'import', now: new Date().toISOString() })); // someone else's class → PENDING review
