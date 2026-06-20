@@ -44,6 +44,9 @@ import { runAgentCode } from '../../ocapn-noise/codemode.mjs';
 // Sub-agents (scheduled, specialists, employed roles) run the composable-code harness (CEO-Bench: it
 // beats per-tool calls + specialized harnesses) by default. AGENT_CODEMODE=0 reverts to the classic loop.
 const AGENT_RUNNER = process.env.AGENT_CODEMODE === '0' ? runAgent : runAgentCode;
+// A delegator-supplied NICKNAME → a readable, url-safe sub-agent id stem (or '' if none). A short
+// unique suffix is appended at the call site, so the same nickname can name many concurrent delegates.
+const nickId = s => String(s || '').trim().toLowerCase().replace(/[^\w-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40);
 import { addAsk, getSecret } from './asks-store.mjs';
 import { makeConnectors } from './connectors.mjs';
 import { makeCustomTools } from './custom-tools.mjs';
@@ -717,14 +720,15 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
       // runTool calls abort() when the user talks over an in-flight delegation.
       let activeDelegate = null;
       toolbox.delegateTask = harden({
-        run: async ({ prompt, powers: want = [] }) => {
+        run: async ({ prompt, powers: want = [], nickname }) => {
           const granted = new Set([...(Array.isArray(want) ? want : [])].filter(p => node.powers.has(p) && !META_POWERS.has(p)));
           // The sub-agent is its OWN node: its own (fresh) home folder + c-list,
           // inheriting this node's HA binding for any HA authority granted. So a
           // delegate asked to "build a site" gets its own home to write + publish
           // from, and only the powers passed.
           const dkey = crypto.randomBytes(3).toString('hex');
-          const subNode = makeAgentNode({ powers: [...granted], labelOf: `delegate-${dkey}`, haBinding: node.haBinding, agBinding: node.agBinding, id: `delegate-${newSwiss()}` });
+          const nick = nickId(nickname); // delegator-supplied readable name (e.g. "flights-builder") → its id/label
+          const subNode = makeAgentNode({ powers: [...granted], labelOf: nick || `delegate-${dkey}`, haBinding: node.haBinding, agBinding: node.agBinding, id: nick ? `${nick}-${dkey}` : `delegate-${newSwiss()}` });
           const sub = subNode.toolbox(ctx); // inherit the originating chat so delegated pushes deep-link too
           const ac = new AbortController(); activeDelegate = ac;
           try {
@@ -738,8 +742,8 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
         abort: () => { try { activeDelegate?.abort(); } catch {} },
       });
       manifest.push({ name: 'delegateTask', reversible: true,
-        args: { prompt: 'string — the task', powers: `array — subset of [${[...node.powers].filter(p => !META_POWERS.has(p)).join(', ')}] to grant the sub-agent` },
-        description: 'Break a big task off to a larger (Opus) agent, granting it ONLY the listed powers.' });
+        args: { prompt: 'string — the task', powers: `array — subset of [${[...node.powers].filter(p => !META_POWERS.has(p)).join(', ')}] to grant the sub-agent`, nickname: 'string — OPTIONAL but encouraged: a short readable name for this delegate (e.g. "flights-builder"), shown in the trace + as the proposer of anything it builds. You may delegate MANY in one turn.' },
+        description: 'Break a task off to a larger (Opus) agent, granting it ONLY the listed powers. Give it a nickname. You may call this MULTIPLE times in one response to run several delegates.' });
     }
     if (powers.has('roles')) {
       // EMPLOY A ROLE — the doc's "roles are configurations, not classes." Each role
@@ -752,7 +756,7 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
       // in-flight employ is barge-in-cancellable.
       let activeEmploy = null;
       toolbox.employ = harden({
-        run: async ({ role, task, powers: want, model } = {}) => {
+        run: async ({ role, task, powers: want, model, nickname } = {}) => {
           const spec = getRole(role);
           if (!spec) return { ok: false, error: `unknown role "${String(role || '')}". Employable roles: ${roleList().map(r => r.role).join(', ')}. Call listRoles for details.` };
           const taskS = String(task || '').trim();
@@ -767,7 +771,8 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
           const ring = new Set([...spec.powers].filter(p => node.powers.has(p) && !META_POWERS.has(p)));
           if (Array.isArray(want) && want.length) { const keep = new Set(want); for (const p of [...ring]) if (!keep.has(p)) ring.delete(p); } // optional caller-narrowing only SUBTRACTS
           const rkey = crypto.randomBytes(3).toString('hex');
-          const subNode = makeAgentNode({ powers: [...ring], labelOf: `role-${spec.role}-${rkey}`, haBinding: node.haBinding, agBinding: node.agBinding, id: `role-${spec.role}-${newSwiss()}` });
+          const nick = nickId(nickname);
+          const subNode = makeAgentNode({ powers: [...ring], labelOf: nick || `role-${spec.role}-${rkey}`, haBinding: node.haBinding, agBinding: node.agBinding, id: nick ? `${nick}-${rkey}` : `role-${spec.role}-${newSwiss()}` });
           const sub = subNode.toolbox(ctx); // inherit the originating chat (deep-links)
           const proposalIds = []; const autoFired = []; const toolsUsed = [];
           const ac = new AbortController(); activeEmploy = ac;
@@ -796,7 +801,7 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
         roles: roleList() }) });
       manifest.push(
         { name: 'employ', reversible: true,
-          args: { role: `string — one of [${roleList().map(r => r.role).join(', ')}]`, task: 'string — the focused task/question for that role', powers: 'array — OPTIONAL: narrow the role\'s tool ring to this subset', model: 'string — OPTIONAL: "opus" to force the bigger brain, "gemma" to force local, or a local model id' },
+          args: { role: `string — one of [${roleList().map(r => r.role).join(', ')}]`, task: 'string — the focused task/question for that role', powers: 'array — OPTIONAL: narrow the role\'s tool ring to this subset', model: 'string — OPTIONAL: "opus" to force the bigger brain, "gemma" to force local, or a local model id', nickname: 'string — OPTIONAL but encouraged: a short readable name for this employed sub-agent (shown in the trace). You may employ MANY in one turn.' },
           description: 'Employ a SPECIALIZED ROLE sub-agent (a pre-configured tool ring + role system prompt + model tier) to do focused work in its OWN isolated context; only its distilled result returns. You are the orchestrator — COMPOSE roles for big tasks instead of doing everything in one context. Code/write roles route to the single-threaded Blacksmith. See listRoles for the menu.' },
         { name: 'listRoles', reversible: false, args: {}, description: 'List the specialized roles you can employ() — each with its tool ring, model tier, and what it returns.' },
       );
