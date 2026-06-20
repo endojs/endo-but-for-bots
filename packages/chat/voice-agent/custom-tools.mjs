@@ -13,6 +13,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { bundleMakeBody, bundleFiles, instantiateBundle } from './tool-bundle.mjs';
+import { makeGrainStore } from './grain-store.mjs';
 
 const HOME = process.env.HOME || '/home/dan';
 const STORE = process.env.CUSTOM_TOOLS_STORE || `${HOME}/.config/field-agent/custom-tools.json`;
@@ -41,8 +42,11 @@ export const makeCustomTools = () => {
   const instances = new Map(); // toolId → live instance (kept alive → in-process state persists)
   const built = new Map(); // toolId → built bundle for a multi-file class (bundle the dir once)
   const bundleFor = async tool => { if (!built.has(tool.id)) built.set(tool.id, await bundleFiles(tool.files, tool.entry || 'tool.js')); return built.get(tool.id); };
+  // DURABLE GRAINS — the component's DATA as mergeable, subscribable cells, keyed by component id and
+  // stored SEPARATELY from its git source, so the data SURVIVES a source swap (revert/fork/edit).
+  const grainStore = makeGrainStore({ dir: process.env.COMPONENT_GRAINS || `${HOME}/.local/state/field-agent/component-grains` });
   const instantiate = async tool => {
-    const powers = harden({ state: makeState(tool.id), console: harden({ log: () => {}, error: () => {} }) });
+    const powers = harden({ state: makeState(tool.id), grains: grainStore.grainsFor(tool.id), console: harden({ log: () => {}, error: () => {} }) });
     if (tool.bundle) return instantiateBundle(tool.bundle, powers); // imported class — a real Endo bundle
     if (tool.files) return instantiateBundle(await bundleFor(tool), powers); // multi-file class — bundle the dir, instantiate
     // single-file tool: code is the body of make(powers), returning the tool (fn or {methods}).
