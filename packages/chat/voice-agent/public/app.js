@@ -1780,21 +1780,47 @@ if ($('rec-head')) $('rec-head').onclick = () => toggleSection('rec-head', 'rec-
 
 // ── 🧩 Components studio (root): each component's source is a git-as-Endo object — view history,
 //    revert to a version (non-destructive), or fork it (own lineage + a copy of its data). ─────────
+const updateComponentsBadge = n => { const t = $('tab-components'); if (t) t.textContent = n > 0 ? `Components (${n})` : 'Components'; };
 const refreshComponents = async () => {
   const list = $('components-list'); if (!list) return;
-  let tools = [];
-  try { const r = await (await fetch('/tools/review', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap }) })).json(); tools = (r.tools || []).filter(t => t.status === 'admitted'); }
+  let all = [];
+  try { const r = await (await fetch('/tools/review', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap }) })).json(); all = r.tools || []; }
   catch { list.innerHTML = '<div class="pill">could not load components</div>'; return; }
-  if (!tools.length) { list.innerHTML = '<div class="pill">no admitted components yet — build one in chat (the agent can proposeTool) and admit it</div>'; return; }
+  const pending = all.filter(t => t.status === 'pending');
+  const tools = all.filter(t => t.status === 'admitted');
+  updateComponentsBadge(pending.length);
+  if (!pending.length && !tools.length) { list.innerHTML = '<div class="pill">no components yet — ask the agent in chat to build a tool (proposeTool); it shows up here to review + admit</div>'; return; }
+  // 🆕 PENDING REVIEW — agent-proposed tools awaiting your admit (the discipline panel ran on each).
+  let html = '';
+  if (pending.length) {
+    html += `<div class="shares-sec">🆕 Pending review (${pending.length})</div>`;
+    html += pending.map(t => {
+      const rv = t.review; const sev = rv ? rv.worst : 'reviewing…';
+      const findings = rv ? rv.findings.map(f => `${esc(f.discipline)}: ${esc(f.severity)}`).join(' · ') : 'running the discipline panel…';
+      const code = t.code || (t.files ? Object.entries(t.files).map(([k, v]) => `// ${k}\n${v}`).join('\n\n') : '');
+      const sevClass = sev === 'critical' ? ' bad' : '';
+      return `<div class="comp"><div class="comp-head"><b>${esc(t.name)}</b> <span class="pill${sevClass}">by ${esc(t.proposedBy || '?')} · panel: ${esc(sev)}</span> <button class="mini" data-admit="${esc(t.id)}" data-name="${esc(t.name)}" data-worst="${esc(rv ? rv.worst : '')}">admit</button> <button class="mini bad" data-reject="${esc(t.id)}" data-name="${esc(t.name)}">reject</button></div><div class="sub" style="margin:4px 0 0 6px">${findings}</div><details style="margin:5px 0 0 6px"><summary class="mini" style="display:inline-block">view code</summary><pre class="codeview">${esc(code)}</pre></details></div>`;
+    }).join('');
+  }
+  if (!tools.length) { list.innerHTML = html || '<div class="pill">no admitted components yet</div>'; wireComponentActions(); return; }
   const hists = {}; const grains = {};
   await Promise.all(tools.map(async t => { try { const h = await (await fetch('/components/history', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, id: t.id }) })).json(); hists[t.id] = h.versions || []; grains[t.id] = h.grains || {}; } catch { hists[t.id] = []; grains[t.id] = {}; } }));
-  list.innerHTML = tools.map(t => {
+  if (pending.length) html += `<div class="shares-sec">Admitted</div>`;
+  html += tools.map(t => {
     const vs = hists[t.id] || []; const cur = vs[0];
     const rows = vs.map((v, i) => `<div class="cver"><span class="vmono">${esc(String(v.version).slice(0, 8))}</span> <span class="sub">${esc(v.summary || '')}</span>${i === 0 ? ' <span class="pill">current</span>' : ` <button class="mini" data-revert="${esc(t.id)}" data-ver="${esc(v.version)}">revert</button>`}</div>`).join('');
     const gks = Object.keys(grains[t.id] || {});
     const gview = gks.length ? `<div class="cgrains sub">🌱 data: ${gks.map(k => `${esc(k)}=${esc(JSON.stringify(grains[t.id][k]))}`).join(' · ')} <span style="opacity:.6">(survives edits/reverts)</span></div>` : '';
     return `<div class="comp"><div class="comp-head"><b>${esc(t.name)}</b> <span class="pill">${esc(t.kind || 'instance')}${cur ? ` · v ${esc(String(cur.version).slice(0, 8))}` : ''}</span> <button class="mini" data-edit="${esc(t.id)}" data-name="${esc(t.name)}">✎ edit</button> <button class="mini" data-fork="${esc(t.id)}" data-name="${esc(t.name)}">fork</button></div>${gview}<div class="cvers">${rows || '<span class="sub">no versions recorded yet</span>'}</div></div>`;
   }).join('');
+  list.innerHTML = html;
+  wireComponentActions();
+};
+// admit / reject the pending proposals + the admitted-component actions
+const wireComponentActions = () => {
+  const list = $('components-list'); if (!list) return;
+  list.querySelectorAll('[data-admit]').forEach(b => { b.onclick = async () => { b.disabled = true; let r = await (await fetch('/tools/admit', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, id: b.dataset.admit }) })).json(); if (r.blocked === 'critical' && !window.confirm(`The review panel flagged a CRITICAL issue in "${b.dataset.name}". Admit anyway?`)) { b.disabled = false; return; } if (r.blocked === 'critical') { r = await (await fetch('/tools/admit', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, id: b.dataset.admit, override: true }) })).json(); } setStatus(r.ok ? `Admitted "${b.dataset.name}" — it's now a live component.` : `admit: ${r.error || 'failed'}`); refreshComponents(); }; });
+  list.querySelectorAll('[data-reject]').forEach(b => { b.onclick = async () => { if (!window.confirm(`Reject "${b.dataset.name}"? It's discarded.`)) return; b.disabled = true; await fetch('/tools/reject', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, id: b.dataset.reject }) }); refreshComponents(); }; });
   list.querySelectorAll('[data-edit]').forEach(b => { b.onclick = async () => { const change = window.prompt(`✎ Edit "${b.dataset.name}" — describe the change (a focused agent edits just this component, commits a new version you can revert):`); if (!change) return; b.disabled = true; setStatus(`✎ editing "${b.dataset.name}"…`); const r = await (await fetch('/components/edit', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, id: b.dataset.edit, prompt: change }) })).json(); setStatus(r.ok ? `Edited "${b.dataset.name}" → new version${r.review && r.review.worst !== 'none' ? ` (panel: ${r.review.worst})` : ''}. Revert here if needed.` : `edit: ${r.error || 'failed'}`); refreshComponents(); }; });
   list.querySelectorAll('[data-revert]').forEach(b => { b.onclick = async () => { if (!window.confirm('Revert the LIVE component to this version? Non-destructive — it makes a new version; the live tool then runs it.')) return; b.disabled = true; await fetch('/components/revert', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, id: b.dataset.revert, version: b.dataset.ver }) }); refreshComponents(); }; });
   list.querySelectorAll('[data-fork]').forEach(b => { b.onclick = async () => { const name = window.prompt(`Fork "${b.dataset.name}" — name your fork:`, `${b.dataset.name}-fork`); if (!name) return; b.disabled = true; const r = await (await fetch('/components/fork', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, id: b.dataset.fork, name }) })).json(); setStatus(r.ok ? `Forked → "${name}" — queued for review; admit it in chat to host it.` : `fork: ${r.error || 'failed'}`); refreshComponents(); }; });
@@ -2077,7 +2103,8 @@ const boot = async () => {
   // populate the power dropdown with exactly what this cap can mint
   $('sh-power').innerHTML = (d.canMint || []).map(p => `<option value="${esc(p)}">${esc(p)}</option>`).join('');
   if (!(d.canMint || []).length) { $('tab-shares').classList.add('hide'); }
-  if (isRoot) { $('tab-components').classList.remove('hide'); } // component version/fork/revert is owner-managed
+  if (isRoot) { $('tab-components').classList.remove('hide'); // component version/fork/revert is owner-managed
+    try { const pc = await (await fetch('/tools/pending-count', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap }) })).json(); updateComponentsBadge(pc.count || 0); } catch {} } // badge proposed-but-unreviewed tools
   fillInviteBox(); // 👤 owner-only "Invite a new user" box (starter-power picker)
   fillConnectorsBox(); // 🔌 owner-only "Connect an API service" box
   greetingText = d.kind === 'root'

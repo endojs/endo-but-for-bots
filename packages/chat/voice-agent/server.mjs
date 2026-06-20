@@ -1228,6 +1228,7 @@ const handler = async (req, res) => {
         return json(res, 200, r);
       }
       if (u.pathname === '/tools/reject') return json(res, 200, customTools.reject(String(body.id || '')));
+      if (u.pathname === '/tools/pending-count') return json(res, 200, { count: customTools.listAll().filter(t => t.status === 'pending').length }); // cheap (no panel) — for the tab badge
       // COMPONENT = git-as-Endo object: version history / read-at-version / non-destructive revert.
       if (u.pathname === '/components/history') return json(res, 200, { ok: true, versions: await componentGit.history(String(body.id || '')), grains: customTools.grainData(String(body.id || '')) });
       if (u.pathname === '/components/read') { const s = await componentGit.readAt(String(body.id || ''), String(body.version || 'HEAD')); return json(res, 200, s ? { ok: true, ...s } : { ok: false, error: 'unknown component/version' }); }
