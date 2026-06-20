@@ -475,6 +475,15 @@ const scopeChat = async prompt => {
   catch { setStatus(''); endScopeTrace(); hidePendant(); return cap; } // scoper unreachable → don't block; fall back to root
   setStatus(''); endScopeTrace();
   if (!sc || sc.error || !Array.isArray(sc.catalog)) { hidePendant(); return cap; }
+  // FAST-PATH: a trivial read-only scope (server said autoApprove) skips the consent sheet — mint the
+  // confined cap straight away and run. The granted powers still render at the top of the chat (and root
+  // can re-scope), so it stays visible; we just don't make you click for "is the front door open?".
+  if (sc.autoApprove && Array.isArray(sc.proposed) && sc.proposed.length) {
+    pendingScopePowers = sc.proposed;
+    let mm; try { mm = await (await fetch('/scope/mint', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, powers: sc.proposed, label: String(prompt).slice(0, 32) }) })).json(); } catch { /* fall through to root */ }
+    hidePendant();
+    return (mm && mm.scopedCap) || cap;
+  }
   const proposed = sc.proposed || [];
   const pset = new Set(proposed);
   const labelOf = {}; for (const c of sc.catalog) labelOf[c.power] = c.label;

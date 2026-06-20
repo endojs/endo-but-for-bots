@@ -1135,7 +1135,13 @@ const handler = async (req, res) => {
       const sid = String(sessionId || '').slice(0, 64); // stream the scoper's private round-trips to this chat's pendant
       const { proposed, by } = await scopePowers(String(prompt || ''), sid ? ev => emitStep(sid, ev) : null);
       if (sid) emitStep(sid, { t: 'end' });
-      return json(res, 200, { proposed, by, catalog: POWER_CATALOG });
+      // Fast-path: a TRIVIAL read needs no consent click. If the proposed set is small and entirely
+      // READ-SAFE (powers whose only effects are reads, or destructive verbs that still propose→confirm),
+      // tell the client to auto-approve + run. The granted powers still show at the top of the chat
+      // (and root can re-scope), so it stays auditable — we just skip the modal for "is the door open?".
+      const READ_SAFE = new Set(['homeassistant', 'notes', 'reference', 'research', 'web', 'youtube', 'app']);
+      const autoApprove = proposed.length > 0 && proposed.length <= 2 && proposed.every(p => READ_SAFE.has(p));
+      return json(res, 200, { proposed, by, catalog: POWER_CATALOG, autoApprove });
     }
     // ntfy phone-setup info for the notifications tab (root-gated — the topic is dan's push channel).
     if (req.method === 'POST' && u.pathname === '/notify/info') {
