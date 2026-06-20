@@ -826,13 +826,13 @@ const refreshShares = async () => {
   // (sharesCache / compCache) — handlers index back into them. renderConfined hands a frozen SafeEvent.
   if (window.__fieldIslands) {
     const items = sharesCache.map(s => ({ label: s.label, tag: shareTag(s) }));
-    const components = compCache.map(c => ({ toolName: c.toolName, mode: c.mode, price: priceStr(c.priceUsd), used: c.used, atten: attenSummary(c.attenuation), revoked: c.revoked }));
+    const components = compCache.map(c => ({ toolName: c.toolName, mode: c.mode === 'git' ? `git (${c.access || 'read'})` : c.mode, price: priceStr(c.priceUsd), used: c.used, atten: attenSummary(c.attenuation), revoked: c.revoked }));
     const earned = window.__toolEarned ? `${(window.__toolEarned / 1e6).toFixed(2)} USD` : '';
     window.__fieldIslands.renderShares(el, { items, components, earned }, {
       onCopy: i => copyLink(sharesCache[i], null),
       onQr: i => showQr(sharesCache[i]),
       onRevoke: async i => { await rpc('revoke', [sharesCache[i].swiss]); refreshShares(); },
-      onCopyComp: i => copyLink({ url: `${location.origin}/tools/shared/${compCache[i].mode === 'factory' ? 'import' : 'call'}#token=${compCache[i].token}`, label: compCache[i].toolName }, null),
+      onCopyComp: i => copyLink({ url: `${location.origin}/tools/shared/${compCache[i].mode === 'factory' ? 'import' : compCache[i].mode === 'git' ? 'git' : 'call'}#token=${compCache[i].token}`, label: compCache[i].toolName }, null),
       onRevokeComp: async i => { await fetch('/tools/share/revoke', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, token: compCache[i].id }) }); refreshShares(); },
     });
     return;

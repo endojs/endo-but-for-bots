@@ -1193,6 +1193,26 @@ const handler = async (req, res) => {
         toolShares.count(token);
         return json(res, 200, { ok: true, bundle: exported.bundle, remaining: pay.remaining, note: 'POST this bundle to /tools/import to host your own instance (it enters review).' });
       }
+      if (u.pathname === '/tools/shared/git') { // GIT: the component shared AS its EndoGit object (read, or read-write collaborator)
+        if (desc.mode !== 'git') return json(res, 400, { ok: false, error: `this is a ${desc.mode} share, not a git share` });
+        const id = desc.toolId; const op = String(body.op || 'history'); const ref = String(body.ref || 'HEAD');
+        const gate = toolShares.check(token); if (!gate.ok) return json(res, 200, { ok: false, error: gate.error });
+        const pay = charge(); if (!pay.ok) return json(res, 200, pay);
+        toolShares.count(token);
+        // READ ops (any git share) read the immutable git tree as a folder/file-object.
+        if (op === 'history') return json(res, 200, { ok: true, access: desc.access, versions: await componentGit.history(id), remaining: pay.remaining });
+        if (op === 'files') { const s = await componentGit.readAt(id, ref); return json(res, 200, s ? { ok: true, files: Object.keys(s.files), remaining: pay.remaining } : { ok: false, error: 'unknown version' }); }
+        if (op === 'read') { const s = await componentGit.readAt(id, ref); if (!s) return json(res, 200, { ok: false, error: 'unknown version' }); const c = s.files[String(body.path || '')]; return json(res, 200, c === undefined ? { ok: false, error: `no file "${body.path}"` } : { ok: true, path: String(body.path), content: c, remaining: pay.remaining }); }
+        // WRITE op needs a read-WRITE git share. A collaborator's write commits a NEW VERSION (the owner
+        // reviews/promotes it from the Components tab) — it does NOT auto-replace the sharer's live tool.
+        if (op === 'write') {
+          if (desc.access !== 'write') return json(res, 200, { ok: false, error: 'this is a READ-ONLY git share — you cannot write' });
+          if (!String(body.path || '').trim()) return json(res, 200, { ok: false, error: 'name the file path to write' });
+          let r; try { r = await componentGit.writeFile(id, String(body.path), String(body.content ?? ''), String(body.message || `collab edit ${body.path}`)); } catch (e) { return json(res, 200, { ok: false, error: `write failed: ${(e && e.message) || e}` }); }
+          return json(res, 200, { ok: true, version: String(r.version).slice(0, 12), remaining: pay.remaining, note: 'Committed a new version on the component (the owner reviews/promotes it in the Components tab).' });
+        }
+        return json(res, 200, { ok: false, error: `unknown git op "${op}" (history | files | read | write)` });
+      }
       return json(res, 404, { ok: false, error: 'unknown shared-tool route' });
     }
 
@@ -1246,9 +1266,9 @@ const handler = async (req, res) => {
         const tool = customTools.listAll().find(t => t.id === String(body.id || '') || t.name === String(body.id || ''));
         if (!tool) return json(res, 200, { ok: false, error: 'no such tool' });
         if (tool.status !== 'admitted') return json(res, 200, { ok: false, error: 'only an admitted tool can be shared' });
-        const rec = toolShares.create({ toolId: tool.id, toolName: tool.name, mode: body.mode, methods: body.methods, ratePerMin: body.ratePerMin, quota: body.quota, ttlMs: body.ttlMs, priceUsd: body.priceUsd, sharer: String(body.sharer || 'owner'), now: new Date().toISOString() });
-        const verb = rec.mode === 'factory' ? 'import' : 'call';
-        return json(res, 200, { ok: true, token: rec.token, mode: rec.mode, priceUsd: rec.priceUsd, attenuation: rec.attenuation, url: `${BASE_URL}/tools/shared/${verb}#token=${rec.token}` });
+        const rec = toolShares.create({ toolId: tool.id, toolName: tool.name, mode: body.mode, access: body.access, methods: body.methods, ratePerMin: body.ratePerMin, quota: body.quota, ttlMs: body.ttlMs, priceUsd: body.priceUsd, sharer: String(body.sharer || 'owner'), now: new Date().toISOString() });
+        const verb = rec.mode === 'factory' ? 'import' : rec.mode === 'git' ? 'git' : 'call';
+        return json(res, 200, { ok: true, token: rec.token, mode: rec.mode, access: rec.access, priceUsd: rec.priceUsd, attenuation: rec.attenuation, url: `${BASE_URL}/tools/shared/${verb}#token=${rec.token}` });
       }
       if (u.pathname === '/tools/share/revoke') return json(res, 200, toolShares.revoke(String(body.token || '')));
       if (u.pathname === '/tools/shares') return json(res, 200, { shares: toolShares.list(), earnings: toolShares.earnings(String(body.sharer || 'owner')) });

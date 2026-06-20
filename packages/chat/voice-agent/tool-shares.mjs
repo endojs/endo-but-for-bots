@@ -24,8 +24,9 @@ export const makeToolShares = ({ dir }) => {
   const load = () => readJson(FILE, {});
   const save = o => writeJson(FILE, o);
 
-  // Create a share of a tool. `mode`: 'factory' | 'instance'. Attenuation narrows an instance share.
-  const create = ({ toolId, toolName, mode, methods, ratePerMin, quota, ttlMs, priceUsd, sharer, now }) => {
+  // Create a share of a tool. `mode`: 'factory' | 'instance' | 'git'. A 'git' share vends the component
+  // AS its EndoGit object (read or read-write `access`); attenuation narrows an instance share.
+  const create = ({ toolId, toolName, mode, access, methods, ratePerMin, quota, ttlMs, priceUsd, sharer, now }) => {
     const token = crypto.randomBytes(24).toString('hex'); // the web-key — IS the access (secret)
     const id = crypto.randomBytes(4).toString('hex'); // a render-safe management handle (NOT secret) — used to revoke without ever exposing the token
     const rec = {
@@ -33,7 +34,8 @@ export const makeToolShares = ({ dir }) => {
       id,
       toolId: String(toolId),
       toolName: String(toolName || ''),
-      mode: mode === 'factory' ? 'factory' : 'instance',
+      mode: ['factory', 'git'].includes(mode) ? mode : 'instance',
+      access: mode === 'git' ? (access === 'write' ? 'write' : 'read') : undefined, // git share: read-only vs collaborator
       attenuation: {
         methods: Array.isArray(methods) && methods.length ? methods.map(String) : null, // null = all admitted methods
         ratePerMin: Number(ratePerMin) > 0 ? Math.round(Number(ratePerMin)) : 0, // 0 = unlimited
@@ -59,7 +61,7 @@ export const makeToolShares = ({ dir }) => {
   const describe = token => {
     const r = get(token);
     if (!r || r.revoked) return null;
-    return { mode: r.mode, toolName: r.toolName, priceUsd: r.priceUsd, attenuation: r.attenuation, sharer: r.sharer };
+    return { mode: r.mode, access: r.access, toolName: r.toolName, toolId: r.toolId, priceUsd: r.priceUsd, attenuation: r.attenuation, sharer: r.sharer };
   };
 
   // Validate attenuation WITHOUT mutating (revoked / expired / method / quota / rate). The server does
@@ -93,7 +95,7 @@ export const makeToolShares = ({ dir }) => {
 
   // Management list (root): includes the token so the owner's Shares panel can build the copy-link
   // (held in JS, never rendered) + the render-safe id for display/revoke.
-  const list = () => Object.values(load()).map(r => ({ id: r.id, token: r.token, toolName: r.toolName, mode: r.mode, priceUsd: r.priceUsd, attenuation: r.attenuation, revoked: r.revoked, used: r.used, sharer: r.sharer, createdAt: r.createdAt }));
+  const list = () => Object.values(load()).map(r => ({ id: r.id, token: r.token, toolName: r.toolName, mode: r.mode, access: r.access, priceUsd: r.priceUsd, attenuation: r.attenuation, revoked: r.revoked, used: r.used, sharer: r.sharer, createdAt: r.createdAt }));
   const listForSharer = sharer => list().filter(r => r.sharer === String(sharer));
 
   // Earnings ledger — the sharer's take (credited when a consumer pays to use/import their share).
