@@ -624,12 +624,12 @@ this PR: the edit-space modal container collision, the cold-cache author names
 in the channel and forum bodies, the own-peer border, the dead DOM-era fields,
 and the two-tags-per-line JSDoc. The remainder are deferred and tracked here.
 
-- **UA #3 — buffered streaming of inventory/messages.** _Done._ The inventory
-  subscription now buffers the daemon's name backlog and flushes it as one
-  batched reducer action (one render and one round of per-item resolution
-  instead of one per name); the inbox message loop reads the scroll position
-  synchronously instead of awaiting an animation frame per message, so the
-  initial message backlog no longer serializes at one message per frame.
+- **UA #3 — buffered streaming of inventory/messages.** _Done._ The inventory,
+  channel-list, inbox, and channel/forum/microblog subscriptions pass
+  `{ buffer: 64 }` to `iterateReader`, raising the exo-stream prefetch window
+  above the default 0 (fully synchronized) so up to 64 values flow before
+  waiting on acknowledgements — the initial backlog streams in without a
+  round-trip ack per value.
 - **UA #4 — per-mailbox streaming.** _Blocked on the daemon._ `followMessages()`
   takes no filter argument (`interfaces.js`) and each agent exposes a single
   aggregate mailbox that is the complete conversation log (sent **and**
