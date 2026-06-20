@@ -470,19 +470,23 @@ const scopeChat = async prompt => {
     scopeES.onerror = () => {};
   } catch { /* pendant is enhancement-only */ }
   const endScopeTrace = () => { scoping = false; try { scopeES && scopeES.close(); } catch {} try { pendant && pendant.finish(); } catch {} };
+  // Mint a confined cap for `powers`; returns null only if minting is unavailable. A scoped chat must
+  // NEVER silently fall back to the full root cap (that would hand it delegate/write/etc.) — when scoping
+  // can't complete we fall back to a READ-ONLY scope so a read still works but can't delegate or act.
+  const mintScope = async powers => { pendingScopePowers = powers; try { const mm = await (await fetch('/scope/mint', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, powers, label: String(prompt).slice(0, 32) }) })).json(); return (mm && mm.scopedCap) || null; } catch { return null; } };
+  const SAFE_FALLBACK = ['homeassistant', 'notes', 'reference', 'web', 'app']; // read-only — no delegate/write/act
   let sc;
   try { sc = await (await fetch('/scope', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, prompt, sessionId }) })).json(); }
-  catch { setStatus(''); endScopeTrace(); hidePendant(); return cap; } // scoper unreachable → don't block; fall back to root
+  catch { setStatus(''); endScopeTrace(); const s = await mintScope(SAFE_FALLBACK); hidePendant(); return s || cap; } // scoper unreachable → read-only scope, not root
   setStatus(''); endScopeTrace();
-  if (!sc || sc.error || !Array.isArray(sc.catalog)) { hidePendant(); return cap; }
+  if (!sc || sc.error || !Array.isArray(sc.catalog)) { const s = await mintScope(SAFE_FALLBACK); hidePendant(); return s || cap; }
   // FAST-PATH: a trivial read-only scope (server said autoApprove) skips the consent sheet — mint the
   // confined cap straight away and run. The granted powers still render at the top of the chat (and root
   // can re-scope), so it stays visible; we just don't make you click for "is the front door open?".
   if (sc.autoApprove && Array.isArray(sc.proposed) && sc.proposed.length) {
-    pendingScopePowers = sc.proposed;
-    let mm; try { mm = await (await fetch('/scope/mint', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, powers: sc.proposed, label: String(prompt).slice(0, 32) }) })).json(); } catch { /* fall through to root */ }
+    const s = await mintScope(sc.proposed);
     hidePendant();
-    return (mm && mm.scopedCap) || cap;
+    return s || cap;
   }
   const proposed = sc.proposed || [];
   const pset = new Set(proposed);
@@ -512,10 +516,9 @@ const scopeChat = async prompt => {
     $('sc-cancel').onclick = () => fin(null);
     $('sc-go').onclick = async () => {
       const powers = [...m.querySelectorAll('input.scope-chk:checked')].map(x => x.value);
-      pendingScopePowers = powers; // remember the approved grant so the chat can show it at the top
       $('sc-go').disabled = true;
-      let mm; try { mm = await (await fetch('/scope/mint', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, powers, label: String(prompt).slice(0, 32) }) })).json(); } catch { /* fall through to root */ }
-      fin((mm && mm.scopedCap) || cap);
+      const s = await mintScope(powers); // mints + remembers the approved grant (never silent root)
+      fin(s || cap);
     };
   });
 };
