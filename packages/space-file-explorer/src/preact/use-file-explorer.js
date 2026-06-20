@@ -437,7 +437,9 @@ export function useFileExplorer(powers, profilePath = []) {
           // A monotonic id lets the view key the <Dialog> per request so it
           // remounts (and re-seeds its controlled inputs) on each open.
           dialogCounterRef.current += 1;
-          update({ dialog: { id: dialogCounterRef.current, options, resolve } });
+          update({
+            dialog: { id: dialogCounterRef.current, options, resolve },
+          });
         })
       ),
     [update],
