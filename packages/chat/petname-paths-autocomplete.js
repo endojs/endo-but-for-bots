@@ -185,7 +185,9 @@ const PathsAutocompleteRoot = ({ controller }) => {
     return () => {
       if (controller.setState === setState) delete controller.setState;
     };
-  }, [controller]);
+    // Mount-only: see petname-path-autocomplete — a `[controller]` dep spins a
+    // slow render/effect feedback loop under confinement on slow runners.
+  }, []);
 
   if (!state) {
     return null;
