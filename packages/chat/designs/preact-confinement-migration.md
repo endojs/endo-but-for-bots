@@ -685,13 +685,20 @@ deferred and recorded here.
      inside the component is the avoidable part.
 
 2. **Subscription `for await` loops that only flip a disposed flag, never
-   `.return()` the remote iterator.** The loop notices teardown on the next
-   emission only, so an idle stream leaks until something arrives.
-   - `space-whylip/src/hooks/useConversation.js:243-384` (HIGH; also hand-rolls
-     a `Symbol.asyncIterator` wrapper at `:294-307` with no `return()`).
-   - `space-peers/src/peers.js:367-374` (MED).
-   - Reference fix: `channel-component.js` calls `activeIterator.return()` on
-     dispose.
+   `.return()` the remote iterator.** _Done._ The loop noticed teardown on the
+   next emission only, so an idle stream leaked until something arrived.
+   - `space-whylip/src/hooks/useConversation.js` — **fixed, and was worse than a
+     leak.** The hand-rolled async-iterator wrapper called `E(reader).next()`,
+     but `followMessages()` returns an exo-stream PassableReader whose interface
+     exposes only `stream()`, not `next()` — so the live loop threw on its first
+     pull and was swallowed by the init try/catch: only the `listMessages()`
+     backlog rendered and no new agent responses streamed in. Now consumed via
+     `iterateReader`, with the iterator held and `return()`-ed on cleanup.
+   - `space-peers/src/peers.js` — fixed; the iterator is held and `return()`-ed
+     on cleanup (it already consumed via `iterateReader`).
+   - Reference: `channel-component.js` calls `activeIterator.return()` on
+     dispose. `iterateReader`'s `return()` is idempotent, so a loop break plus a
+     cleanup `return()` is safe.
 
 3. **Reaching outside the component's own subtree with document-wide DOM ops**
    where local Preact state already exists.
