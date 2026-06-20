@@ -15,6 +15,9 @@ const execFileP = promisify(execFile);
 // The registered islands (seeded; grows as more UI is componentised). Each: { id, name, files:[client-relative] }.
 const ISLANDS = [
   { id: 'island-shares-panel', name: 'Shares panel', file: 'client/shares-panel.js' },
+  // The 3D conversation-trace view. It's a standalone served script (public/pendant.js), NOT part of
+  // the vite islands bundle, so it's `plain`: editing rewrites the file directly (no rebuild).
+  { id: 'island-trace', name: 'Trace view (3D)', file: 'public/pendant.js', plain: true },
 ];
 
 export const makeIslandSource = ({ here, componentGit }) => {
@@ -42,10 +45,10 @@ export const makeIslandSource = ({ here, componentGit }) => {
     const backup = readSource(isl); const abs = path.join(here, isl.file);
     try {
       fs.writeFileSync(abs, String(newSource ?? ''));
-      const b = await rebuild();
+      const b = isl.plain ? { ok: true } : await rebuild(); // plain islands are served directly — no vite rebuild
       if (!b.ok) { fs.writeFileSync(abs, backup); return { ok: false, error: `build failed (reverted, live unchanged): ${b.error}` }; }
       const rec = await componentGit.commit(id, filesOf(isl), message || 'edit');
-      return { ok: true, version: rec.version, note: 'Edited + rebuilt the island. Reload the page to see it. Revert from the Components tab if needed.' };
+      return { ok: true, version: rec.version, note: `Edited${isl.plain ? '' : ' + rebuilt'} the island. Reload the page to see it. Revert from the Components tab if needed.` };
     } catch (e) { try { fs.writeFileSync(abs, backup); } catch { /* ignore */ } return { ok: false, error: (e && e.message) || String(e) }; }
   };
   const revert = async (id, ref) => { const src = await readSourceText(id, ref); if (src === null) return { ok: false, error: 'unknown version' }; return applySource(id, src, `revert to ${String(ref).slice(0, 12)}`); };

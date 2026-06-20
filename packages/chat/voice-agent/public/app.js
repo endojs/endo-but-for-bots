@@ -309,7 +309,7 @@ const bargeIn = () => {
 //    calls, shown ABOVE each agent response; click → the full 3D trace. (roadmap §7 E6) ──
 const STEP_ICON = { research: '🔎', delegateTask: '🤝', employ: '🧑‍🔬', askSpecialist: '🧑‍🔬', generateImage: '🎨', searchNotes: '📓', readNote: '📓', fetchUrl: '🌐', browse: '🌐', consult: '📚', pushFeed: '📣', pushPhone: '📱', transcribeYoutube: '📺' };
 const traceStrip = steps => {
-  const wrap = document.createElement('div'); wrap.className = 'trace-strip'; wrap.title = 'Open the 3D trace';
+  const wrap = document.createElement('div'); wrap.className = 'trace-strip'; wrap.title = 'Open the 3D trace'; wrap.setAttribute('data-component-id', 'island-trace'); wrap.setAttribute('data-component-name', 'Trace view (3D)');
   const lbl = document.createElement('span'); lbl.className = 'ts-label'; lbl.textContent = `⊿ trace · ${steps.length}`; wrap.appendChild(lbl);
   for (const s of steps) {
     const n = document.createElement('span'); n.className = 'tn' + (s.ok === false ? ' bad' : '');
