@@ -39,7 +39,8 @@ import { makePurseStore } from './purse-store.mjs';
 import { makeMeteredLLM } from './meter.mjs';
 import { loadStripeCfg, stripeConfigured, recordPending, checkoutForm, verifyWebhook, settleEvent } from './pay.mjs';
 import { gatorConfigured, recordDelegation, redeemDelegation } from './delegation-pay.mjs';
-import { budgetLine } from './costModel.mjs';
+import { budgetLine, costOf } from './costModel.mjs';
+import { makeTollBridge } from './toll-bridge.mjs';
 import * as projects from './projects.mjs';
 import { makeMeetingScribe } from './meeting-scribe.mjs';
 import { opusComplete } from './delegate.mjs';
@@ -230,6 +231,10 @@ const purseFor = (cap, sid) => {
   }
   return p;
 };
+// Central toll-bridge for EDIT (AI-credit spend) + SAVE/HOST (storage×time) rights, used by the SPWA
+// self-editors. Same µUSD purse ledger as inference, in a separate `toll:<account>` namespace.
+const tollBridge = makeTollBridge({ purseStore, makePurse, costOf, ledgerFile: `${HOME}/.local/state/voice-agent/hosting-ledger.json` });
+setInterval(() => { try { tollBridge.accrue(); } catch { /* best-effort hourly rent */ } }, 3_600_000).unref?.();
 // run the entry agent on a transcript, capturing the step trace. Bounded by the ALLOWANCE METER
 // (a fresh default-allowance purse per run) — there is no step limit; spend is the budget.
 const traceRun = async (node, transcript, persona, chatId) => {
@@ -757,6 +762,22 @@ const handler = async (req, res) => {
     // ── prepaid inference budget (Increment 1): read + adjust a conversation's µUSD
     //    allowance. Amounts are µUSD integers. Any valid cap manages its OWN chats'
     //    purses; only root may move the global default-allowance for new chats. ──
+    // ── TOLL-BRIDGE: the SPWA self-editors report EDIT spend (AI credits) + SAVE/HOST rent
+    //    (storage×time) here, so both land in the central µUSD ledger. The `account` is a
+    //    host-side secret (never in a browser); check/edit/save only DECREASE a balance.
+    //    fund is the only credit op and is ROOT-gated — that's how "publishing rights come out
+    //    of the allowance you grant when sharing" (fund the sharee's account from their grant). ──
+    if (req.method === 'GET' && u.pathname === '/toll/quote') return json(res, 200, { ok: true, ...tollBridge.quote() });
+    if (req.method === 'POST' && u.pathname === '/toll/check') { const { account } = await jsonBody(req); return json(res, 200, tollBridge.check(String(account || ''))); }
+    if (req.method === 'POST' && u.pathname === '/toll/edit') { const { account, model, usage } = await jsonBody(req); return json(res, 200, tollBridge.chargeEdit({ account: String(account || ''), model, usage })); }
+    if (req.method === 'POST' && u.pathname === '/toll/save') { const { account, key, bytes, appName } = await jsonBody(req); return json(res, 200, tollBridge.chargeSave({ account: String(account || ''), key: String(key || ''), bytes: Number(bytes) || 0, appName })); }
+    if (req.method === 'POST' && u.pathname === '/toll/unpublish') { const { account, key } = await jsonBody(req); return json(res, 200, tollBridge.unregister(String(account || ''), String(key || ''))); }
+    if (req.method === 'POST' && u.pathname === '/toll/account') { const { account } = await jsonBody(req); return json(res, 200, tollBridge.accountStatus(String(account || ''))); }
+    if (req.method === 'POST' && u.pathname === '/toll/fund') {
+      const { cap, account, amount } = await jsonBody(req);
+      if (!nodeFor(cap)?.isRoot) return json(res, 403, { error: 'funding an account is the owner\'s grant — root cap required' });
+      return json(res, 200, tollBridge.fund({ account: String(account || ''), uusd: Number(amount) || 0 }));
+    }
     if (req.method === 'POST' && u.pathname === '/budget') {
       const { cap, purseCap, sessionId } = await jsonBody(req);
       if (!nodeFor(cap)) return json(res, 403, { error: 'no capability' });
