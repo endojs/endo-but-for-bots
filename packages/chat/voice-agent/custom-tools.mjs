@@ -94,6 +94,14 @@ export const makeCustomTools = () => {
   const listAll = () => load().map(t => ({ id: t.id, name: t.name, description: t.description, status: t.status, kind: t.kind || 'instance', proposedBy: t.proposedBy, code: t.code, files: t.files, entry: t.entry, hasBundle: !!t.bundle, review: t.review || null }));
   // Persist the discipline-review panel's findings on a pending tool so the admission gate sees them.
   const setReview = (id, review) => { const ts = load(); const t = ts.find(x => x.id === String(id)); if (!t) return { ok: false, error: 'no such proposal' }; t.review = review; save(ts); return { ok: true }; };
+  // Replace a tool's SOURCE (e.g. after reverting its git-as-Endo component to an earlier version) and
+  // drop its cached instance/bundle so the next call re-instantiates from the new source.
+  const setSource = (id, files) => {
+    const ts = load(); const t = ts.find(x => x.id === String(id)); if (!t) return { ok: false, error: 'no such tool' };
+    if (t.files) t.files = files; else t.code = String((files && (files['tool.js'] ?? Object.values(files)[0])) || '');
+    save(ts); instances.delete(t.id); built.delete(t.id);
+    return { ok: true };
+  };
   const list = () => load().filter(t => t.status === 'admitted').map(t => ({ id: t.id, name: t.name, description: t.description, args: t.args, kind: t.kind || 'instance' }));
   const admit = id => { const ts = load(); const t = ts.find(x => x.id === String(id)); if (!t) return { ok: false, error: 'no such proposal' }; t.status = 'admitted'; save(ts); instances.delete(t.id); built.delete(t.id); return { ok: true, id: t.id, name: t.name }; };
   const reject = id => { instances.delete(String(id)); built.delete(String(id)); save(load().filter(t => t.id !== String(id))); return { ok: true, id: String(id) }; };
@@ -112,5 +120,5 @@ export const makeCustomTools = () => {
     } catch (e) { return harden({ ok: false, error: (e && e.message) || String(e) }); }
   };
 
-  return { propose, pendingBy, get, list, listAll, setReview, admit, reject, call, methodsOf, getInstance, exportClass, importClass };
+  return { propose, pendingBy, get, list, listAll, setReview, setSource, admit, reject, call, methodsOf, getInstance, exportClass, importClass };
 };

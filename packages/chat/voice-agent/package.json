@@ -8,6 +8,8 @@
     "build:islands": "vite build --config vite.islands.config.js"
   },
   "dependencies": {
+    "@endo/exo-git": "workspace:^",
+    "@endo/git": "workspace:^",
     "@endo/preact-container": "workspace:^",
     "preact": "^10.29.2",
     "ses": "workspace:^"

@@ -28,6 +28,7 @@ import { readAsks, getAsk, answerAsk, setAskStatus, formatAnswers, getSecret, st
 import { makeConnectors } from './connectors.mjs';
 import { makeCustomTools } from './custom-tools.mjs';
 import { makeToolShares } from './tool-shares.mjs';
+import { makeComponentGit } from './component-git.mjs';
 import { STARTER_RING } from './system-map.mjs';
 const connectors = makeConnectors({ getSecret }); // owner-side registry (same connectors.json the agent calls)
 const customTools = makeCustomTools(); // owner-side review/admit (same custom-tools.json the agent reads)
@@ -56,6 +57,9 @@ const WHISPER = process.env.STT_URL || 'http://192.168.50.226:8000/v1/audio/tran
 const STT_MODEL = process.env.STT_MODEL || 'deepdml/faster-whisper-large-v3-turbo-ct2';
 const OUT = process.env.OUT_DIR || `${HOME}/.local/state/voice-agent/out`;
 const toolShares = makeToolShares({ dir: `${HOME}/.local/state/voice-agent/tool-shares` }); // share-as-factory/instance + meter + charge
+const componentGit = makeComponentGit({ baseDir: `${HOME}/.local/state/voice-agent/component-git` }); // each component's SOURCE as a git-as-Endo object (version / fork / revert)
+// A tool's source as a {relpath: content} file map for the component-git store (single-file → tool.js).
+const sourceFilesOf = t => (t.files && typeof t.files === 'object' && Object.keys(t.files).length ? t.files : { 'tool.js': String(t.code || '') });
 const UPLOADS = `${OUT}/uploads`; // user-attached photos/files (served under web-key'd /uploads/<hex>.<ext>)
 const SEED_FILE = process.env.SEED_FILE || `${HOME}/.config/field-agent/root.swiss`;
 const CHATS_DIR = `${HOME}/.local/state/voice-agent/chats`; // per-cap chat list + transcripts (cross-device sync)
@@ -1151,10 +1155,11 @@ const handler = async (req, res) => {
       return json(res, 404, { ok: false, error: 'unknown shared-tool route' });
     }
 
-    // ONLY way a proposed tool becomes callable — never auto-injected.
-    if (req.method === 'POST' && u.pathname.startsWith('/tools')) {
+    // ONLY way a proposed tool becomes callable — never auto-injected. (Also the root-gated component
+    // version ops, /components/* — review/admit/share/version all need the owner's root cap.)
+    if (req.method === 'POST' && (u.pathname.startsWith('/tools') || u.pathname.startsWith('/components/'))) {
       const body = await jsonBody(req);
-      if (!nodeFor(body.cap)?.isRoot) return json(res, 403, { error: 'reviewing tools needs your root capability' });
+      if (!nodeFor(body.cap)?.isRoot) return json(res, 403, { error: 'managing tools/components needs your root capability' });
       if (u.pathname === '/tools/review') {
         // Run the discipline-review PANEL (ocap / propagator / cap-hygiene / sharing) over each pending
         // tool that hasn't been reviewed yet, cache the findings on the record, and return them with the
@@ -1175,9 +1180,23 @@ const handler = async (req, res) => {
         if (t && t.review && t.review.worst === 'critical' && !body.override) {
           return json(res, 200, { ok: false, blocked: 'critical', worst: t.review.worst, findings: t.review.findings, note: 'The review panel flagged a CRITICAL issue. Re-submit admit with override:true to admit anyway (deliberate act), or reject/fix it.' });
         }
-        return json(res, 200, customTools.admit(String(body.id || '')));
+        const r = customTools.admit(String(body.id || ''));
+        // On admit, commit the component's SOURCE as a version into its git-as-Endo object (the start
+        // of its lineage; later edits add versions, enabling fork + revert).
+        if (r.ok && t) { try { await componentGit.commit(t.id, sourceFilesOf(t), `admit: ${t.name}`); } catch (e) { log('component-git admit', e.message); } }
+        return json(res, 200, r);
       }
       if (u.pathname === '/tools/reject') return json(res, 200, customTools.reject(String(body.id || '')));
+      // COMPONENT = git-as-Endo object: version history / read-at-version / non-destructive revert.
+      if (u.pathname === '/components/history') return json(res, 200, { ok: true, versions: await componentGit.history(String(body.id || '')) });
+      if (u.pathname === '/components/read') { const s = await componentGit.readAt(String(body.id || ''), String(body.version || 'HEAD')); return json(res, 200, s ? { ok: true, ...s } : { ok: false, error: 'unknown component/version' }); }
+      if (u.pathname === '/components/revert') {
+        const id = String(body.id || ''); const version = String(body.version || '');
+        const snap = await componentGit.readAt(id, version); if (!snap) return json(res, 200, { ok: false, error: 'unknown component/version' });
+        const rv = await componentGit.revert(id, version); // new commit restoring the old tree (history kept)
+        const upd = customTools.setSource(id, snap.files); // point the LIVE tool at the reverted source + drop its cached instance
+        return json(res, 200, { ok: upd.ok !== false, version: rv.version, note: 'Reverted the component to the chosen version (a new version; history preserved). The live tool now runs the reverted source.' });
+      }
       // SHARE a tool — as a factory (others host their own) or an attenuated, metered, priced instance.
       if (u.pathname === '/tools/share') {
         const tool = customTools.listAll().find(t => t.id === String(body.id || '') || t.name === String(body.id || ''));

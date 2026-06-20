@@ -142,14 +142,19 @@ Implications that change the phases below:
   **component-as-project tree** scaffold (one mount point that renders a
   confined component, swappable at runtime); **port one real slice** of the
   current DOM app to prove the path end-to-end. No agent/sharing/trust yet.
-- **Phase 2 — the grain layer (DONE) + component = git object (next).** ✅ The
+- **Phase 2 — the grain layer + component = git object (DONE).** ✅ The
   cell/propagator substrate (`client/propagator.js`) and the **TMS grain**
-  (`makeTmsCell`: provenance-tagged facts, believe/retract/forget worldviews,
-  `provenance`/`ledger`, non-destructive try-on + atomic accept/reject) are built
-  and proven (15/15). Remaining: back each component-project with an `exo-git`
-  object (fork = branch/clone of a tree-oid; revert = checkout lineage) and bind a
-  component's persisted data to grains, so a runtime swap re-renders a different
-  propagator-source tree while the grains persist.
+  (`makeTmsCell`) — proven 15/15. ✅ **component = git-as-Endo object**
+  (`component-git.mjs`, on the real `@endo/git` `makeNativeGitBackend` — one git
+  repo per component): a component's SOURCE is versioned (each edit = a commit oid),
+  read-at-version (immutable git tree → file map), **fork** (independent clone that
+  diverges while the original is untouched), **non-destructive revert** (re-commit
+  an earlier tree; history preserved) — proven 11/11. Wired into the tool lifecycle:
+  a version is committed on admit; `/components/{history,read,revert}` (root) +
+  `componentHistory`/`revertComponent` agent verbs; revert updates the live tool via
+  `customTools.setSource`. Remaining for later: the full `makeGit` exo wrapper (a
+  remotable, attenuable EndoGit cap for the trie, needs a daemon mount) and binding a
+  component's persisted DATA to grains so a runtime source-swap keeps the grains.
 - **Phase 3 — alt-click micro-agent.** Selection overlay (Alt/Option hover +
   outline + select), per-component chat → a delegate confined to that
   component-project's git object + dev ring; fork → adversarial dev flow → diff

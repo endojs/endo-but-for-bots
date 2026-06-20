@@ -48,6 +48,7 @@ import { addAsk, getSecret } from './asks-store.mjs';
 import { makeConnectors } from './connectors.mjs';
 import { makeCustomTools } from './custom-tools.mjs';
 import { makeToolShares } from './tool-shares.mjs';
+import { makeComponentGit } from './component-git.mjs';
 import { buildSystemMap } from './system-map.mjs';
 import { braveSearch } from './brave-search.mjs';
 import { runResearch } from './research.mjs';
@@ -393,6 +394,7 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
   const connectorsObj = makeConnectors({ getSecret, ssrfOk }); // owner-configured API-service tools (key injected server-side)
   const customToolsObj = makeCustomTools(); // agent-PROPOSED, human-reviewed code tools (admitted → callable, SES-sandboxed)
   const toolSharesObj = makeToolShares({ dir: '/home/dan/.local/state/voice-agent/tool-shares' }); // same store the server consumer-routes read
+  const componentGitObj = makeComponentGit({ baseDir: '/home/dan/.local/state/voice-agent/component-git' }); // a component's source as a git-as-Endo object (version/fork/revert)
   let kazAdmin = null; // admin object for dan's own Kazputer (kid-phone), built at boot — searchable + actionable
 
   // ── virtual home folders + static site publishing ──────────────────────────
@@ -971,6 +973,26 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
     toolbox.revokeToolShare = harden({ run: async ({ id } = {}) => { const r = toolSharesObj.revoke(String(id || '')); return r.ok ? { ok: true, note: 'Share revoked — future uses/imports are refused immediately.' } : { ok: false, error: r.error || 'unknown share' }; } });
     manifest.push({ name: 'revokeToolShare', reversible: false, args: { id: 'string — the render-safe share id (from shareTool or the Shares panel)' },
       description: 'Revoke a component share you created (the caretaker). Identify it by its render-safe id — never the secret token.' });
+    // componentHistory / revertComponent — a component's SOURCE is a git-as-Endo object (version history,
+    // fork, non-destructive revert). History is read-only; reverting the live shared component is the owner's call.
+    toolbox.componentHistory = harden({ run: async ({ tool } = {}) => {
+      const t = customToolsObj.list().find(x => x.name === String(tool || '') || x.id === String(tool || ''));
+      if (!t) return { ok: false, error: `no admitted tool "${tool}"` };
+      const versions = (await componentGitObj.history(t.id)).map(v => ({ version: String(v.version).slice(0, 12), summary: v.summary, at: v.at }));
+      return { ok: true, tool: t.name, versions };
+    } });
+    manifest.push({ name: 'componentHistory', reversible: false, args: { tool: 'string — an admitted tool name/id' },
+      description: 'List the VERSION history of a component (its source is a git-as-Endo object): each {version, summary, at}, newest first. Read-only.' });
+    toolbox.revertComponent = harden({ run: async ({ tool, version } = {}) => {
+      if (!node.isRoot) return { ok: false, error: 'reverting a shared component is the owner\'s call — ask the owner (requestAccess) or propose it.' };
+      const t = customToolsObj.list().find(x => x.name === String(tool || '') || x.id === String(tool || ''));
+      if (!t) return { ok: false, error: `no admitted tool "${tool}"` };
+      const snap = await componentGitObj.readAt(t.id, String(version || '')); if (!snap) return { ok: false, error: 'unknown version (see componentHistory)' };
+      const rv = await componentGitObj.revert(t.id, String(version || '')); customToolsObj.setSource(t.id, snap.files);
+      return { ok: true, tool: t.name, version: String(rv.version).slice(0, 12), note: 'Reverted to the chosen version (a new version; history preserved). The live tool now runs the reverted source.' };
+    } });
+    manifest.push({ name: 'revertComponent', reversible: false, args: { tool: 'string — an admitted tool name/id', version: 'string — a version id from componentHistory' },
+      description: 'Revert a component to an earlier VERSION of its source (non-destructive — a new version; history preserved; the live tool then runs it). Owner-only.' });
     // requestAccess is ALSO always available — the escalation primitive. A confined cap CANNOT grant
     // itself powers; it ASKS the owner (dan), who approves from his inbox / the chat's powers banner.
     // This is the read-only-by-default + progressive-trust path: don't give up when you lack a power.
