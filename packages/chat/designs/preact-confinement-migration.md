@@ -608,6 +608,18 @@ across ~42 component test files). This is preventive — those tests are not
 currently failing — and a blanket conversion is wide, risky churn, so it is held
 until a focused pass.
 
+### `inline-eval.test.js` skipped on Node 24 (needs diagnosis)
+
+`inline-eval.test.js` is gated off on Node major >= 24: under Node 24 the
+endowment-row confined sub-mount renders never complete, so a `waitFor` poll
+never resolves and the file times out (leaving its sibling tests "pending"). It
+passes on Node 22 (all platforms) and on Node 24 the rows simply never render —
+`addEndowmentRow` is synchronous, so this is a genuine Node-24-specific render
+difference in `renderConfined`/the confined sub-mount, not a flake or a fixed
+-tick race. The skip keeps CI green; the underlying Node-24 render difference
+needs hands-on diagnosis on that platform (likely a Node-24 repro plus
+`@endo/preact-container` render-scheduling instrumentation).
+
 When that pass happens, **wait on the actual settled condition by polling, not
 by a fixed-duration timeout.** Replace `await tick(ms)` with a predicate poll
 that resolves as soon as the DOM/render condition holds (e.g. the element
