@@ -739,6 +739,42 @@ deferred and recorded here.
    `command-selector.js:381`, `token-autocomplete.js:1003`,
    `space-peers/src/peers.js:126` (copy-flash timer).
 
+### Removing ambient DOM/host APIs from confined components
+
+A focused pass to get DOM/host-API calls out of the confined Preact
+_components_ themselves (the imperative controllers are out of scope — they are
+the sanctioned host-node bridge). Note these components are not sandboxed from
+ambient globals: `renderConfined` is a vnode/DOM trust boundary, not an
+execution sandbox, so host-authored components run in the app realm where
+`navigator`/`document`/`window` are reachable. This is a capability-discipline
+cleanup (authority-free leaves), not a sandbox fix. Two classes, both **done**:
+
+- **`navigator.clipboard` in leaf `CopyButton`s.** The capability is now
+  injected. `value-component` threads a `copy` callback from the trusted
+  controller (one hop). `peers` reaches its CopyButton through ~7 components, so
+  it uses a `ClipboardContext` (verified to propagate through `renderConfined`)
+  defaulting to the platform clipboard at module scope; the component consumes
+  it via `useContext`. The peers effect's `window.reportError` sinks became
+  `console.error`. (The inbox CopyButtons — `TimestampLine`/`FormFieldRow` —
+  remain, deferred with the inbox.)
+- **`document` click/keydown dismiss listeners.** Replaced with declarative,
+  in-tree dismissal: a full-screen backdrop element (`onClick` closes) for
+  outside-click, made focusable (`tabindex`/`autofocus`, both sanitizer
+  -permitted) with an `onKeyDown` for Escape; the profile popup uses a
+  `display: contents` wrapper carrying the Escape handler (the key bubbles from
+  its autofocused input). Covers `inventory` drop-menu, the two `channel-list`
+  menus, and `profile-popup`. No component touches `document` anymore.
+
+Useful facts established for future confined work: Preact **context propagates
+through `renderConfined`**; `tabindex`/`autofocus`/`onKeyDown` are permitted by
+the sanitizer; and (from the Dialog fix) **object props can't be effect deps**
+in a confined component.
+
+Still **forced-by-renderer** (need a `@endo/preact-container` "narrow ref"
+affordance, not a rewrite): scroll geometry in `inbox`/`debugger-panel`, the
+Dialog focus query, the `Viewer` splitter pointer-drag, and the inventory
+drag-highlight sweep.
+
 ### Standouts
 
 - **`add-space-modal.js` (HIGH, but the unmigrated baseline).** It does NOT use
