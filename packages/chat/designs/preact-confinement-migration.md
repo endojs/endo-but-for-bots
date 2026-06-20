@@ -608,25 +608,48 @@ across ~42 component test files). This is preventive — those tests are not
 currently failing — and a blanket conversion is wide, risky churn, so it is held
 until a focused pass.
 
-### `inline-eval.test.js` skipped on Node 24 (needs diagnosis)
+### `inline-eval.test.js` skipped on Node 24 and macOS (partly diagnosed)
 
-`inline-eval.test.js` is gated off on Node major >= 24: under Node 24 the
-endowment-row confined sub-mount renders never complete, so a `waitFor` poll
-never resolves and the file times out (leaving its sibling tests "pending"). It
-passes on Node 22 (all platforms) and on Node 24 the rows simply never render —
-`addEndowmentRow` is synchronous, so this is a genuine Node-24-specific render
-difference in `renderConfined`/the confined sub-mount, not a flake or a fixed
--tick race. The skip keeps CI green; the underlying Node-24 render difference
-needs hands-on diagnosis on that platform (likely a Node-24 repro plus
-`@endo/preact-container` render-scheduling instrumentation).
+`inline-eval.test.js` is gated off on Node major >= 24 (ubuntu) and on the
+macOS runner (Node 22): the file times out with the endowment-row confined
+sub-mount renders never completing, so a `waitFor` poll never resolves and the
+remaining tests are left "pending". It passes on Node-22 ubuntu, which keeps
+full coverage.
 
-When that pass happens, **wait on the actual settled condition by polling, not
-by a fixed-duration timeout.** Replace `await tick(ms)` with a predicate poll
-that resolves as soon as the DOM/render condition holds (e.g. the element
-exists, the input value changed). Do **not** introduce a timeout ceiling on the
-poll — let AVA's global per-test timeout be the only bound, so the wait is as
-short as the machine allows and a genuine hang still fails the test with a clear
-timeout rather than passing on a guessed delay.
+What has been diagnosed and **fixed** (on this branch):
+
+- **Render/effect feedback loop.** The confined controllers wired their setter
+  in `useEffect(..., [controller])`. Under `renderConfined` the sanitizer
+  reissues a prop's identity every render, so the effect re-ran every render
+  and re-applied `setState(controller.pendingState)` (whose identity is also
+  reissued), defeating Preact's `Object.is` bail. The loop is throttled by
+  Preact's rAF-backed scheduler so it never trips the in-render re-render cap —
+  it just never settles. Fixed by making those effects mount-only (`[]`):
+  inline-eval, inline-define, inline-command-form, petname-path-autocomplete,
+  petname-paths-autocomplete. Reproduced on Node 22 under CPU load (~50% of
+  runs → ~0 after the fix).
+- **Leaked confined Preact root.** `petNamePathAutocomplete` never unmounted
+  its dropdown tree (`$menu`) on `dispose`, so every torn-down endowment row
+  leaked a live root. Fixed by `unmount($menu)` in its `dispose`.
+
+What **remains** (still under investigation): on the slow macOS runner the
+worker's event loop stalls after ~600 sibling tests — timers stop firing, so
+the current confined render never flushes and the file times out. Because the
+stall freezes the very timers a poll ceiling relies on, **no in-process ceiling
+(poll-count or wall-clock) can catch it** — confirmed: with the ceiling in
+place the failure is AVA's global timeout with the tests "pending", never the
+ceiling's own error. This looks like residual resource accumulation across the
+file's ~40 tests on a contended runner, not a single missing cleanup. Next
+steps: bisect which test/resource accumulates (active-handle dump via
+`process._getActiveHandles()` / `why-is-node-running` at end-of-file), or split
+the file so per-worker accumulation stays under the threshold.
+
+The `waitFor` helper now bounds the poll with a generous wall-clock ceiling
+(`Date.now` survives this package's lockdown options), so the *non-stall*
+flavor of this hang — a render that never completes while timers still fire —
+fails fast with a pointed error instead of wedging CI until AVA's global
+timeout. The ceiling is generous (20s, ~100× a real flush) so it never
+false-fails a legitimate wait.
 
 ## Review follow-ups from the readiness pass (deferred)
 
