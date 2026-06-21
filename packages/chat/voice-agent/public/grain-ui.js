@@ -143,12 +143,15 @@ const renderChoices = (spec, ctx) => {
 //    else. The PARENT holds the cap and brokers each subscription through the same /cells/subscribe stream —
 //    the cap NEVER crosses into the iframe; the iframe only names cell ids the agent declared (which the
 //    server re-validates). So the agent writes free-form UI without gaining any authority. ──
+const hashStr = s => { let h = 0; const t = String(s || ''); for (let i = 0; i < t.length; i++) { h = (h * 31 + t.charCodeAt(i)) | 0; } return `a${(h >>> 0).toString(36)}`; };
 const renderComponent = (spec, ctx) => {
   const wrap = document.createElement('div'); wrap.className = 'gw gw-component'; wrap.style.cssText = `${STYLE};margin:8px 0;border:1px solid #30363d;border-radius:12px;overflow:hidden;background:#0d1117`;
-  // a slim header bar: BREAK OUT (save as a standalone, versioned module) + SHARE (a least-authority link).
-  if (ctx && (typeof ctx.onBreakOut === 'function' || typeof ctx.onShareOut === 'function')) {
-    const bar = document.createElement('div'); bar.style.cssText = 'display:flex;justify-content:flex-end;gap:6px;padding:4px 6px;border-bottom:1px solid #21262d;background:#0b0e14';
-    const mk = (label, title, fn) => { const b = document.createElement('button'); b.textContent = label; b.title = title; b.style.cssText = 'all:unset;cursor:pointer;color:#7c5cff;font-size:11px;font-weight:600;padding:2px 8px;border:1px solid #3a2f6a;border-radius:6px'; b.onclick = () => fn(spec); return b; };
+  wrap.dataset.appletKey = hashStr(spec.source); // stable per-source key so an expanded applet can be re-found on re-render (retained view-state)
+  // a slim header bar: EXPAND (fill the chat area) + BREAK OUT (versioned module) + SHARE (least-authority link).
+  if (ctx && (typeof ctx.onExpand === 'function' || typeof ctx.onBreakOut === 'function' || typeof ctx.onShareOut === 'function')) {
+    const bar = document.createElement('div'); bar.className = 'gw-bar'; bar.style.cssText = 'display:flex;justify-content:flex-end;gap:6px;padding:4px 6px;border-bottom:1px solid #21262d;background:#0b0e14';
+    const mk = (label, title, fn) => { const b = document.createElement('button'); b.textContent = label; b.title = title; b.style.cssText = 'all:unset;cursor:pointer;color:#7c5cff;font-size:11px;font-weight:600;padding:2px 8px;border:1px solid #3a2f6a;border-radius:6px'; b.onclick = () => fn(spec, wrap); return b; };
+    if (typeof ctx.onExpand === 'function') { const eb = mk('⤢ expand', 'Fill the chat area with this app (minimize to return to the conversation)', ctx.onExpand); eb.className = 'gw-expand'; bar.appendChild(eb); }
     if (typeof ctx.onBreakOut === 'function') bar.appendChild(mk('⤴ break out', 'Save this as a standalone, versioned module', ctx.onBreakOut));
     if (typeof ctx.onShareOut === 'function') bar.appendChild(mk('🔗 share', 'Copy a link that grants someone live, read-only access to ONLY this component’s data', ctx.onShareOut));
     wrap.appendChild(bar);

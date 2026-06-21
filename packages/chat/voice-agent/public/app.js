@@ -364,12 +364,61 @@ const copyToClipboard = async t => {
   try { if (navigator.clipboard && location.protocol === 'https:') { await navigator.clipboard.writeText(t); return true; } } catch { /* */ }
   try { const ta = document.createElement('textarea'); ta.value = t; ta.style.cssText = 'position:fixed;left:-9999px;opacity:0'; document.body.appendChild(ta); ta.select(); const ok = document.execCommand('copy'); ta.remove(); return ok; } catch { return false; }
 };
+// ── APPLET WINDOW-MANAGER (W1): the field UI as an OS. An interactive component can EXPAND to fill the
+//    chat area (replacing the transcript) and MINIMIZE back to its inline widget — the minimize IS the
+//    re-entry to the conversation. FLIP animation (no iframe reparent → no reload → in-app state preserved);
+//    a placeholder holds the inline slot; the expanded state is RETAINED per chat (re-applied on return).
+let expandedApplet = {}; // sessionId → appletKey (the component currently filling this chat's area)
+const chatAreaRect = () => {
+  const header = document.querySelector('header'), composer = $('composer'), lg = $('log');
+  const top = (header ? header.getBoundingClientRect().bottom : 0) + 6;
+  const bottom = composer ? composer.getBoundingClientRect().top : innerHeight;
+  const lr = lg.getBoundingClientRect();
+  return { left: lr.left, top, width: lr.width, height: Math.max(180, bottom - top - 6) };
+};
+const setExpandBtn = (wrap, expanded) => { const b = wrap.querySelector('.gw-expand'); if (!b) return; b.textContent = expanded ? '⤡ minimize' : '⤢ expand'; b.title = expanded ? 'Minimize back into the conversation' : 'Fill the chat area with this app'; };
+const expandApplet = (wrap, opts = {}) => {
+  if (!wrap || wrap.classList.contains('applet-expanded')) return;
+  const first = wrap.getBoundingClientRect();
+  const ph = document.createElement('div'); ph.className = 'applet-ph'; ph.style.cssText = `height:${first.height}px;margin:8px 0`; wrap._ph = ph; wrap.parentNode.insertBefore(ph, wrap);
+  const t = chatAreaRect();
+  wrap.classList.add('applet-expanded');
+  Object.assign(wrap.style, { position: 'fixed', zIndex: '8000', margin: '0', left: `${t.left}px`, top: `${t.top}px`, width: `${t.width}px`, height: `${t.height}px`, display: 'flex', flexDirection: 'column' });
+  const iframe = wrap.querySelector('iframe'); if (iframe) { iframe.dataset.h0 = iframe.style.height; iframe.style.flex = '1'; iframe.style.height = 'auto'; }
+  setExpandBtn(wrap, true); expandedApplet[sessionId] = wrap.dataset.appletKey;
+  if (opts.instant) return;
+  wrap.style.transformOrigin = 'top left';
+  wrap.style.transform = `translate(${first.left - t.left}px,${first.top - t.top}px) scale(${first.width / t.width},${first.height / t.height})`;
+  wrap.getBoundingClientRect(); // reflow
+  requestAnimationFrame(() => { wrap.style.transition = 'transform .3s cubic-bezier(.22,1,.36,1)'; wrap.style.transform = 'none'; });
+  const done = () => { wrap.removeEventListener('transitionend', done); wrap.style.transition = ''; }; wrap.addEventListener('transitionend', done); setTimeout(done, 360);
+};
+const minimizeApplet = wrap => {
+  if (!wrap || !wrap.classList.contains('applet-expanded')) return;
+  const ph = wrap._ph; const back = ph ? ph.getBoundingClientRect() : wrap.getBoundingClientRect(); const cur = wrap.getBoundingClientRect();
+  delete expandedApplet[sessionId];
+  wrap.style.transformOrigin = 'top left'; wrap.style.transition = 'transform .3s cubic-bezier(.22,1,.36,1)';
+  requestAnimationFrame(() => { wrap.style.transform = `translate(${back.left - cur.left}px,${back.top - cur.top}px) scale(${back.width / cur.width},${back.height / cur.height})`; });
+  const restore = () => {
+    wrap.removeEventListener('transitionend', restore);
+    wrap.classList.remove('applet-expanded');
+    for (const p of ['position', 'zIndex', 'margin', 'left', 'top', 'width', 'height', 'display', 'flexDirection', 'transform', 'transition', 'transformOrigin']) wrap.style[p] = '';
+    const iframe = wrap.querySelector('iframe'); if (iframe) { iframe.style.flex = ''; iframe.style.height = iframe.dataset.h0 || ''; }
+    if (ph) ph.remove(); wrap._ph = null; setExpandBtn(wrap, false);
+  };
+  wrap.addEventListener('transitionend', restore); setTimeout(restore, 360);
+};
+const toggleApplet = (spec, wrap) => { if (wrap.classList.contains('applet-expanded')) minimizeApplet(wrap); else expandApplet(wrap); };
+// after a transcript (re)render: re-apply this chat's retained expanded applet (instantly, no animation).
+const reapplyExpanded = () => { const key = expandedApplet[sessionId]; if (!key) return; const wrap = log.querySelector(`.gw-component[data-applet-key="${key}"]`); if (wrap && !wrap.classList.contains('applet-expanded')) expandApplet(wrap, { instant: true }); };
+addEventListener('keydown', e => { if (e.key === 'Escape') { const w = log.querySelector('.gw-component.applet-expanded'); if (w) minimizeApplet(w); } }); // Esc minimizes
+
 const renderAgentResponse = r => {
   if (Array.isArray(r.steps) && r.steps.length) log.appendChild(traceStrip(r.steps)); // E6: trace strip above the response
   const body = bubble('agent', r.answer || '…', r.agentId);
   if (r.toolsUsed?.length) { const e = document.createElement('div'); e.className = 'tools'; e.textContent = '⚙ ' + r.toolsUsed.join(', '); body.parentNode.appendChild(e); }
   ((r.images && r.images.length ? r.images : (r.imageUrls || [])) || []).forEach(src => { const im = document.createElement('img'); im.src = src; body.appendChild(im); }); // data-URLs in the moment; durable /uploads urls as fallback (e.g. the share-post path)
-  if (Array.isArray(r.ui) && r.ui.length) renderWidgets(body, r.ui, { cap: chatCap(), onChoice: t => sendChat(t), onBreakOut: breakOutComponent, onShareOut: shareOutComponent }); // live/interactive widgets (countdowns, live status, choices, custom components)
+  if (Array.isArray(r.ui) && r.ui.length) renderWidgets(body, r.ui, { cap: chatCap(), onChoice: t => sendChat(t), onBreakOut: breakOutComponent, onShareOut: shareOutComponent, onExpand: toggleApplet }); // live/interactive widgets (countdowns, live status, choices, custom components)
   (r.autoFired || []).forEach(a => { const e = document.createElement('div'); e.className = 'autofired'; e.textContent = `✓ auto-confirmed: ${a.title}${a.ok === false ? ' (failed)' : ''}`; body.parentNode.appendChild(e); }); // fired via a "don't ask again" rule
   (r.proposals || []).forEach(renderProposal); // destructive actions show as confirmable cards
   (r.asks || []).forEach(a => { openAsks.unshift(a); renderAskCard(a); }); // typed questions → answerable cards
@@ -1350,7 +1399,7 @@ const renderTx = () => {
       if (m.who === 'you' && !m.text) b.textContent = '';
       if (m.who === 'you') appendAtt(b, asArr(m.attachUrls).length ? asArr(m.attachUrls) : asArr(m.attachImgs), asArr(m.attachFiles));
       else { const imgs = asArr(m.imageUrls).length ? asArr(m.imageUrls) : asArr(m.images).filter(s => typeof s === 'string' && s.startsWith('data:')); imgs.forEach(src => { const im = document.createElement('img'); im.src = src; b.appendChild(im); }); } // durable /uploads urls survive reload (data-URLs as fallback)
-      if (m.who !== 'you' && asArr(m.ui).length) renderWidgets(b, asArr(m.ui), { cap: chatCap(), onChoice: t => sendChat(t), onBreakOut: breakOutComponent, onShareOut: shareOutComponent }); // re-hydrate live widgets: a door re-subscribes (live again), a countdown re-ticks
+      if (m.who !== 'you' && asArr(m.ui).length) renderWidgets(b, asArr(m.ui), { cap: chatCap(), onChoice: t => sendChat(t), onBreakOut: breakOutComponent, onShareOut: shareOutComponent, onExpand: toggleApplet }); // re-hydrate live widgets: a door re-subscribes (live again), a countdown re-ticks
       if (asArr(m.tools).length) { const e = document.createElement('div'); e.className = 'tools'; e.textContent = '⚙ ' + asArr(m.tools).join(', '); b.parentNode.appendChild(e); }
     } catch (e) { console.error('renderTx message', e); }
   }
@@ -1359,6 +1408,7 @@ const renderTx = () => {
   // dev (Blacksmith) tasks routed from THIS chat — visible, dev-framed, pending→done
   devTasks.filter(t => t.chatId === sessionId).forEach(devCard);
   schedulePendantPosition(); // re-anchor the live pendant after the log was rebuilt
+  reapplyExpanded(); // an applet expanded in this chat stays expanded when you return to it (retained view-state)
 };
 
 const SIDEBAR_KEY = 'field-agent-sidebar';
