@@ -2183,6 +2183,35 @@ const componentSelect = () => {
   addEventListener('scroll', () => { if (chip.style.display === 'flex') clearChip(); }, true);
 };
 componentSelect();
+// ── 🖼 the component GALLERY — every UI component rendered live with DUMMY sample data, in a grid, so you
+//    (and agents) can see the framework's vocabulary at a glance. It reflects the active theme (the same
+//    propagator feeds these previews), so it doubles as a live style reference. Self-contained samples
+//    (ui.local / local time) — no real cap or live data needed. ──
+const GALLERY_COUNTER = "(ui) => { const n = ui.local(0); const box = ui.create('div').style({padding:'10px',font:'14px sans-serif',color:'var(--ink)'}); const out = ui.create('div').style({fontSize:'26px',fontWeight:'700',marginBottom:'8px'}).follow(n, v => 'count: ' + v); const btn = ui.create('button').text('+1').style({background:'var(--acc)',color:'#fff',border:'0',borderRadius:'8px',padding:'5px 13px',cursor:'pointer'}).on('click', () => n.set(n.get() + 1)); return box.push([out, btn]); }";
+const GALLERY_STATUS = "(ui) => { const open = ui.local(true); const box = ui.create('div').style({padding:'10px',font:'14px sans-serif',color:'var(--ink)',display:'flex',alignItems:'center',gap:'8px'}); const dot = ui.create('div').style({fontSize:'14px'}).follow(open, v => v ? '🟢' : '⚪'); const lbl = ui.create('div').follow(open, v => v ? 'Front door: OPEN' : 'Front door: closed'); const btn = ui.create('button').text('toggle').style({marginLeft:'auto',background:'var(--panel)',color:'var(--mut)',border:'1px solid var(--edge)',borderRadius:'7px',padding:'3px 9px',cursor:'pointer'}).on('click', () => open.set(!open.get())); box.push([dot, lbl, btn]); return box; }";
+const GALLERY_SEPIA = { '--bg': '#1c160f', '--panel': '#2a2014', '--edge': '#473826', '--ink': '#f0e6d2', '--mut': '#b0a085', '--acc': '#c98a3a', '--acc2': '#8a9a4a', '--bad': '#cf6a4a', '--you': '#5a7a9a' };
+const gallerySamples = () => [
+  { title: '⏲ Countdown', sub: 'a live timer ticking toward a due time', spec: { type: 'countdowns', timers: [{ label: 'Pasta', dueAt: new Date(Date.now() + 8 * 60000).toISOString() }] } },
+  { title: '☑ Choices', sub: 'tappable options sent back as the next message', spec: { type: 'choices', prompt: 'Pick a side', options: ['Fries', 'Salad', 'Rice'] } },
+  { title: '🟢 Live status', sub: 'a status widget (here: a sample door)', spec: { type: 'component', cells: [], height: 64, source: GALLERY_STATUS } },
+  { title: '🧩 Confined component', sub: 'arbitrary agent-authored UI, sandboxed', spec: { type: 'component', cells: [], height: 96, source: GALLERY_COUNTER } },
+  { title: '🎨 Theme preview', sub: 'before/after a proposed theme, with accept', spec: { type: 'theme-preview', name: 'Sepia', mode: 'dark', vars: GALLERY_SEPIA } },
+];
+const renderGallery = () => {
+  const host = $('component-gallery'); if (!host) return;
+  host.innerHTML = ''; // fresh each time the tab is opened (showTab fires once per navigation)
+  const grid = document.createElement('div'); grid.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fill,minmax(232px,1fr));gap:12px';
+  for (const s of gallerySamples()) {
+    const card = document.createElement('div'); card.style.cssText = 'border:1px solid var(--edge);border-radius:12px;padding:10px;background:var(--bg);overflow:hidden';
+    const h = document.createElement('div'); h.style.cssText = 'font-size:12px;font-weight:600'; h.textContent = s.title;
+    const sub = document.createElement('div'); sub.className = 'sub'; sub.style.cssText = 'font-size:11px;margin:1px 0 8px'; sub.textContent = s.sub;
+    const slot = document.createElement('div');
+    card.append(h, sub, slot); grid.appendChild(card);
+    try { renderWidgets(slot, [s.spec], { cap, onChoice: t => setStatus(`(gallery sample) you'd choose: ${t}`) }); } catch { slot.textContent = 'preview unavailable'; }
+  }
+  host.appendChild(grid);
+};
+
 const refreshComponents = async () => {
   const list = $('components-list'); if (!list) return;
   let all = [];
@@ -2273,7 +2302,7 @@ const showTab = which => {
   renderChatBar(); // per-chat top bar shows only in the talk view
   syncSelectors(); // agent + model dropdowns show only in the talk view
   if (which === 'inbox') renderInbox();
-  if (which === 'components') refreshComponents();
+  if (which === 'components') { renderGallery(); refreshComponents(); }
   if (which === 'shares') {
     refreshShares();
     refreshAutoRules();
