@@ -34,8 +34,8 @@
   "dependencies": {
     "@endo/conversation-tree": "workspace:^",
     "@endo/far": "workspace:^",
-    "react": "^19.0.0",
-    "react-dom": "^19.0.0"
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7"
   },
   "devDependencies": {
     "eslint": "catalog:dev"
