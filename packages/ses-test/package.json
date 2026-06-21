@@ -38,14 +38,14 @@
     "ses": "workspace:^"
   },
   "devDependencies": {
-    "@babel/generator": "^7.28.3",
-    "@babel/parser": "~7.29.3",
-    "@babel/traverse": "~7.29.0",
-    "@babel/types": "~7.29.0",
+    "@babel/generator": "^7.29.7",
+    "@babel/parser": "~7.29.7",
+    "@babel/traverse": "~7.29.7",
+    "@babel/types": "~7.29.7",
     "ava": "catalog:dev",
     "c8": "catalog:dev",
     "eslint": "catalog:dev",
-    "terser": "^5.16.6",
+    "terser": "^5.48.0",
     "typescript": "catalog:dev"
   },
   "publishConfig": {
