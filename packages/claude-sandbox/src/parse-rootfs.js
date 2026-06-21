@@ -60,14 +60,15 @@ export const DEFAULT_CLAUDE_IMAGE = 'docker.io/library/node:22-bookworm-slim';
  * @param {string} [options.defaultImage]
  * @returns {ParsedRootfs}
  */
-export const parseRootfs = (value, { defaultImage = DEFAULT_CLAUDE_IMAGE } = {}) => {
+export const parseRootfs = (
+  value,
+  { defaultImage = DEFAULT_CLAUDE_IMAGE } = {},
+) => {
   if (value === undefined || value === '') {
     return harden({ kind: 'oci', ref: defaultImage });
   }
   if (typeof value !== 'string') {
-    throw makeError(
-      X`rootfs value must be a string; got ${q(typeof value)}`,
-    );
+    throw makeError(X`rootfs value must be a string; got ${q(typeof value)}`);
   }
   if (value === 'host-bind') {
     return harden({ kind: 'host-bind' });

@@ -109,7 +109,8 @@ const FORM_FIELDS = harden([
   },
   {
     name: 'rootfs',
-    label: 'Container rootfs (OCI image with node + claude, or host-bind/minimal)',
+    label:
+      'Container rootfs (OCI image with node + claude, or host-bind/minimal)',
     default: '',
     example: 'Examples: oci:docker.io/myorg/claude:latest, host-bind',
   },
