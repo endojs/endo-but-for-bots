@@ -74,16 +74,21 @@ const probePodman = async () => {
       reason: `podman --version exit ${version.code}`,
     };
   }
+  // We accept either rootless or rootful podman: this test validates
+  // backend-agnostic slice/bind-mount/stdout plumbing, not the rootless
+  // posture (which @endo/sandbox's own podman.test.js covers). Recording
+  // it is enough.
   const rootless = await podmanRun([
     'info',
     '--format',
     '{{.Host.Security.Rootless}}',
   ]);
-  if (rootless.code !== 0 || rootless.stdout.trim() !== 'true') {
-    return { available: false, reason: 'podman not rootless' };
-  }
   const imageExists = await podmanRun(['image', 'exists', ALPINE_REF]);
-  return { available: true, imagePresent: imageExists.code === 0 };
+  return {
+    available: true,
+    rootless: rootless.stdout.trim() === 'true',
+    imagePresent: imageExists.code === 0,
+  };
 };
 
 /** @type {{ available: boolean, imagePresent?: boolean, reason?: string }} */
