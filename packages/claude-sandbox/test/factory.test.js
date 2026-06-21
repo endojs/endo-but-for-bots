@@ -129,27 +129,43 @@ const makeMockHostAgent = ({ filesystems = {}, credentials = {} } = {}) => {
 
 const makeMockSandboxFactory = () => {
   const makeCalls = [];
+  const disposed = [];
   return {
     factory: {
       async make(opts) {
         makeCalls.push(opts);
-        return { kind: 'fake-slice', async dispose() {} };
+        const slice = {
+          kind: 'fake-slice',
+          async dispose() {
+            disposed.push(slice);
+          },
+        };
+        return slice;
       },
     },
     makeCalls,
+    disposed,
   };
 };
 
 const makeMockFsMounter = () => {
   const mountCalls = [];
+  const unmounted = [];
   return {
     mounter: {
       async mount(fs, mountPoint, opts) {
         mountCalls.push({ fs, mountPoint, opts });
-        return { kind: 'mount-handle', async unmount() {} };
+        const handle = {
+          kind: 'mount-handle',
+          async unmount() {
+            unmounted.push(handle);
+          },
+        };
+        return handle;
       },
     },
     mountCalls,
+    unmounted,
   };
 };
 
@@ -306,6 +322,86 @@ test('submission injects ANTHROPIC_API_KEY from a credentials cap', async t => {
   await waitFor(() => sandbox.makeCalls.length > 0);
   t.is(issuedTag, 'creds-claude');
   t.is(sandbox.makeCalls[0].env.ANTHROPIC_API_KEY, 'sk-ant-secret');
+});
+
+test('submission injects CLAUDE_CODE_OAUTH_TOKEN for an oauthToken credential', async t => {
+  const fsCap = { kind: 'fake-fs' };
+  const credCap = {
+    // eslint-disable-next-line no-underscore-dangle
+    async __getMethodNames__() {
+      return ['kind', 'issue', 'revoke', 'rotate', 'help'];
+    },
+    async kind() {
+      return 'oauthToken';
+    },
+    async issue() {
+      return {
+        async materialise() {
+          return 'sk-ant-oat-token';
+        },
+      };
+    },
+  };
+  const mock = makeMockPowers();
+  const host = makeMockHostAgent({
+    filesystems: { 'my-fs': fsCap },
+    credentials: { 'oauth-creds': credCap },
+  });
+  const sandbox = makeMockSandboxFactory();
+  const fsm = makeMockFsMounter();
+
+  make(
+    mock.powers,
+    undefined,
+    wireDeps(mock, host, sandbox, fsm, ({ sessionId }) => ({ sessionId })),
+  );
+
+  await waitFor(() => mock.formCalls.length > 0);
+  mock.simulateSubmission({
+    name: 'oauth-claude',
+    filesystem: 'my-fs',
+    credentials: 'oauth-creds',
+  });
+
+  await waitFor(() => sandbox.makeCalls.length > 0);
+  const { env } = sandbox.makeCalls[0];
+  t.is(env.CLAUDE_CODE_OAUTH_TOKEN, 'sk-ant-oat-token');
+  t.is(env.ANTHROPIC_API_KEY, undefined);
+});
+
+test('a failure after the slice is created tears down the slice and mount', async t => {
+  const fsCap = { kind: 'fake-fs' };
+  const mock = makeMockPowers();
+  const host = makeMockHostAgent({ filesystems: { 'my-fs': fsCap } });
+  // storeValue throws, mirroring the real daemon's formula-identity
+  // rejection for a worker-local exo — the failure path under test.
+  host.hostAgent.storeValue = async () => {
+    throw new Error(
+      'No corresponding formula for Object [Alleged: ClaudeClient]',
+    );
+  };
+  const sandbox = makeMockSandboxFactory();
+  const fsm = makeMockFsMounter();
+
+  make(
+    mock.powers,
+    undefined,
+    wireDeps(mock, host, sandbox, fsm, ({ sessionId }) => ({ sessionId })),
+  );
+
+  await waitFor(() => mock.formCalls.length > 0);
+  mock.simulateSubmission({
+    name: 'leaky',
+    filesystem: 'my-fs',
+    network: 'private',
+  });
+
+  await waitFor(() => mock.replies.length > 0);
+  t.regex(mock.replies[0].body.join('\n'), /Error creating sandbox/);
+  // The slice was disposed and the 9P workspace unmounted rather than
+  // left running.
+  t.is(sandbox.disposed.length, 1);
+  t.is(fsm.unmounted.length, 1);
 });
 
 test('submission with an unknown filesystem replies with an error', async t => {

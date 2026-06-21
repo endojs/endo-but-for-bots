@@ -32,11 +32,19 @@ const IssuedCredentialInterface = M.interface('IssuedCredential', {
 });
 
 const CredentialsInterface = M.interface('ClaudeCredentials', {
+  kind: M.call().returns(M.string()),
   issue: M.call(M.string()).returns(M.promise()),
   revoke: M.call(M.string()).returns(M.promise()),
   rotate: M.call(M.string()).returns(M.promise()),
   help: M.call().optional(M.string()).returns(M.string()),
 });
+
+/**
+ * Credential kinds and the Claude Code env var each lands in. `apiKey`
+ * is a raw Anthropic API key; `oauthToken` is the short-lived OAuth
+ * access token Claude Code accepts headlessly (`claude setup-token`).
+ */
+const CREDENTIAL_KINDS = harden(['apiKey', 'oauthToken']);
 
 /**
  * @param {unknown} _powers
@@ -50,6 +58,14 @@ export const make = (_powers, _context, contextWrapper = {}) => {
   if (typeof credentialsFile !== 'string' || credentialsFile.length === 0) {
     throw makeError(
       X`claude-credentials-module: CREDENTIALS_FILE required (path to a 0600 sidecar holding the API key)`,
+    );
+  }
+  const credentialKind = env.CREDENTIALS_KIND ?? 'apiKey';
+  if (!CREDENTIAL_KINDS.includes(credentialKind)) {
+    throw makeError(
+      X`claude-credentials-module: CREDENTIALS_KIND ${q(credentialKind)} must be one of ${q(
+        CREDENTIAL_KINDS.join(', '),
+      )}`,
     );
   }
   let apiKey;
@@ -120,6 +136,9 @@ export const make = (_powers, _context, contextWrapper = {}) => {
   };
 
   return makeExo('ClaudeCredentials', CredentialsInterface, {
+    kind() {
+      return credentialKind;
+    },
     async issue(sessionTag) {
       return issueCap(sessionTag);
     },
@@ -150,9 +169,10 @@ export const make = (_powers, _context, contextWrapper = {}) => {
         return [
           'ClaudeCredentials.',
           '',
-          '  issue(sessionTag) → IssuedCredential   (call .materialise())',
-          "  revoke(sessionTag) → ()                close a session's grants",
-          '  rotate(newApiKey) → ()                 replace the stored key',
+          '  kind()             → "apiKey" | "oauthToken"',
+          '  issue(sessionTag)  → IssuedCredential   (call .materialise())',
+          "  revoke(sessionTag) → ()                 close a session's grants",
+          '  rotate(newApiKey)  → ()                 replace the stored key',
         ].join('\n');
       }
       return `No documentation for method ${q(method)}.`;
