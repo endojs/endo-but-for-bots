@@ -1508,6 +1508,13 @@ const handler = async (req, res) => {
       // COMPONENT = git-as-Endo object: version history / read-at-version / non-destructive revert.
       // ISLAND components (confined-Preact UI, id "island-…") route to islandSource (rewrite client file + rebuild).
       if (u.pathname === '/components/islands') return json(res, 200, { ok: true, islands: islandSource.list() });
+      if (u.pathname === '/components/list-ui') { // every broken-out UI component (source + declared cells) — for the gallery
+        const out = [];
+        for (const id of componentGit.list().filter(x => x.startsWith('uicomp-'))) {
+          try { const snap = await componentGit.readAt(id, 'HEAD'); if (!snap || !snap.files['component.js']) continue; let meta = {}; try { meta = JSON.parse(snap.files['manifest.json'] || '{}'); } catch { /* */ } out.push({ id, name: meta.name || id, cells: Array.isArray(meta.cells) ? meta.cells : [], source: snap.files['component.js'] }); } catch { /* skip unreadable */ }
+        }
+        return json(res, 200, { ok: true, components: out });
+      }
       // BREAK OUT a chat-message component into a standalone, VERSIONED git-object module (Tier 2). The
       // source + its declared cells are committed to component-git, so it gets history/fork/revert like any
       // component and a standalone home at /c/<id>. (Cross-user share with a scoped cap is the next step.)

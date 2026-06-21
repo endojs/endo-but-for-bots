@@ -145,6 +145,12 @@ const renderChoices = (spec, ctx) => {
 //    the cap NEVER crosses into the iframe; the iframe only names cell ids the agent declared (which the
 //    server re-validates). So the agent writes free-form UI without gaining any authority. ──
 const hashStr = s => { let h = 0; const t = String(s || ''); for (let i = 0; i < t.length; i++) { h = (h * 31 + t.charCodeAt(i)) | 0; } return `a${(h >>> 0).toString(36)}`; };
+// a plausible DUMMY value for any declared cell, so a library component previews live without real data.
+// Rich on purpose: whatever field the component reads (.state / .value / .label / …) gets something.
+const dummyForCell = id => /^ha:/.test(String(id))
+  ? { state: 'open', last_changed: new Date().toISOString(), attributes: { friendly_name: 'Demo entity' } }
+  : { state: 'sample', value: 42, label: 'sample', on: true, name: 'Demo', text: 'sample data', count: 3 };
+
 const renderComponent = (spec, ctx) => {
   const wrap = document.createElement('div'); wrap.className = 'gw gw-component'; wrap.style.cssText = `${STYLE};margin:8px 0;border:1px solid #30363d;border-radius:12px;overflow:hidden;background:#0d1117`;
   wrap.dataset.appletKey = hashStr(spec.source); // stable per-source key so an expanded applet can be re-found on re-render (retained view-state)
@@ -172,8 +178,10 @@ const renderComponent = (spec, ctx) => {
     if (m.type === 'height') { const px = Math.min(2000, Math.max(40, Number(m.px) || 120)); if (iframe.style.height !== `${px}px`) iframe.style.height = `${px}px`; }
     else if (m.type === 'subscribe') {
       const id = String(m.cell || '');
-      if (!auth || !allowedCells.has(id) || subscribed.has(id)) return; // undeclared / no credential / already wired → ignore
+      if (subscribed.has(id)) return;
       subscribed.add(id);
+      if (ctx && ctx.sample) { try { port && port.postMessage({ __cu: 1, type: 'cell', id, value: dummyForCell(id) }); } catch { /* */ } return; } // GALLERY preview: feed generated dummy data — no server cell, no cap
+      if (!auth || !allowedCells.has(id)) return; // undeclared / no credential → ignore
       const { grain, release } = acquireCell(auth, id); releases.push(release);
       follow(grain, value => { try { port && port.postMessage({ __cu: 1, type: 'cell', id, value }); } catch { /* */ } }); // pipe live values IN (cap stays here)
     }

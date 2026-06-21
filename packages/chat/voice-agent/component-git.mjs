@@ -118,6 +118,8 @@ export const makeComponentGit = ({ baseDir }) => {
   };
 
   const exists = id => fs.existsSync(path.join(repoDir(id), '.git'));
+  // every component id with a repo (the dir name reverses repoDir's encoding). For listing the library.
+  const list = () => { try { return fs.readdirSync(baseDir).filter(d => { try { return fs.existsSync(path.join(baseDir, d, '.git')); } catch { return false; } }).map(d => { try { return decodeURIComponent(d.replace(/_/g, '%')); } catch { return d; } }); } catch { return []; } };
 
   // ── the makeGit EXO wrapper ──────────────────────────────────────────────────────────────────────
   // gitObject(id) vends the REMOTABLE, ATTENUABLE EndoGit capability for a component (the full @endo/exo-git
@@ -165,6 +167,6 @@ export const makeComponentGit = ({ baseDir }) => {
     return { version: c.oid, files: (await readAt(id, 'HEAD')).files };
   };
 
-  return { commit, readAt, history, fork, revert, exists, gitObject, writeFile };
+  return { commit, readAt, history, fork, revert, exists, list, gitObject, writeFile };
 };
 harden(makeComponentGit);

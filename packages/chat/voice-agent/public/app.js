@@ -2197,19 +2197,33 @@ const gallerySamples = () => [
   { title: '🧩 Confined component', sub: 'arbitrary agent-authored UI, sandboxed', spec: { type: 'component', cells: [], height: 96, source: GALLERY_COUNTER } },
   { title: '🎨 Theme preview', sub: 'before/after a proposed theme, with accept', spec: { type: 'theme-preview', name: 'Sepia', mode: 'dark', vars: GALLERY_SEPIA } },
 ];
+const GALLERY_GRID = 'display:grid;grid-template-columns:repeat(auto-fill,minmax(232px,1fr));gap:12px';
+const galleryCard = (title, subtext, render) => {
+  const card = document.createElement('div'); card.style.cssText = 'border:1px solid var(--edge);border-radius:12px;padding:10px;background:var(--bg);overflow:hidden';
+  const h = document.createElement('div'); h.style.cssText = 'font-size:12px;font-weight:600'; h.textContent = title;
+  const sub = document.createElement('div'); sub.className = 'sub'; sub.style.cssText = 'font-size:11px;margin:1px 0 8px'; sub.textContent = subtext;
+  const slot = document.createElement('div'); card.append(h, sub, slot);
+  try { render(slot); } catch { slot.textContent = 'preview unavailable'; }
+  return card;
+};
 const renderGallery = () => {
   const host = $('component-gallery'); if (!host) return;
   host.innerHTML = ''; // fresh each time the tab is opened (showTab fires once per navigation)
-  const grid = document.createElement('div'); grid.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fill,minmax(232px,1fr));gap:12px';
-  for (const s of gallerySamples()) {
-    const card = document.createElement('div'); card.style.cssText = 'border:1px solid var(--edge);border-radius:12px;padding:10px;background:var(--bg);overflow:hidden';
-    const h = document.createElement('div'); h.style.cssText = 'font-size:12px;font-weight:600'; h.textContent = s.title;
-    const sub = document.createElement('div'); sub.className = 'sub'; sub.style.cssText = 'font-size:11px;margin:1px 0 8px'; sub.textContent = s.sub;
-    const slot = document.createElement('div');
-    card.append(h, sub, slot); grid.appendChild(card);
-    try { renderWidgets(slot, [s.spec], { cap, onChoice: t => setStatus(`(gallery sample) you'd choose: ${t}`) }); } catch { slot.textContent = 'preview unavailable'; }
-  }
+  // 1) the built-in component VOCABULARY (self-contained samples).
+  const grid = document.createElement('div'); grid.style.cssText = GALLERY_GRID;
+  for (const s of gallerySamples()) grid.appendChild(galleryCard(s.title, s.sub, slot => renderWidgets(slot, [s.spec], { cap, onChoice: t => setStatus(`(gallery sample) you'd choose: ${t}`) })));
   host.appendChild(grid);
+  // 2) YOUR library's broken-out components, each rendered live with GENERATED dummy data.
+  (async () => {
+    let comps = [];
+    try { comps = ((await (await fetch('/components/list-ui', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap }) })).json()).components) || []; } catch { /* */ }
+    if (!comps.length || !$('component-gallery')) return;
+    const hd = document.createElement('div'); hd.className = 'shares-sec'; hd.style.cssText = 'margin:16px 0 8px'; hd.textContent = `Your components (${comps.length}) · sample data`;
+    host.appendChild(hd);
+    const g2 = document.createElement('div'); g2.style.cssText = GALLERY_GRID;
+    for (const c of comps) g2.appendChild(galleryCard(c.name, c.cells && c.cells.length ? `cells: ${c.cells.join(', ')}` : 'no live cells', slot => renderWidgets(slot, [{ type: 'component', source: c.source, cells: c.cells || [], height: 120 }], { cap, sample: true })));
+    host.appendChild(g2);
+  })();
 };
 
 const refreshComponents = async () => {
