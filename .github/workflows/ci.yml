@@ -301,6 +301,15 @@ jobs:
           CLAUDE_SANDBOX_REQUIRE_INTEGRATION: '1'
         run: yarn workspace @endo/claude-sandbox run test:integration
 
+      # Boots a real Endo daemon and exercises the first-class
+      # `claude-client` formula end-to-end: `createSession` returns a
+      # ClaudeClient cap with a real daemon identity (status() works across
+      # CapTP), and the @host form path stores and removes it under a pet
+      # name. Needs no podman/9p — `status()`/`terminate()` do not provision
+      # a container — so it runs anywhere the daemon boots.
+      - name: Run claude-sandbox live-daemon test
+        run: yarn workspace @endo/claude-sandbox run test:live
+
   test-async-hooks:
     name: test-async-hooks
 
