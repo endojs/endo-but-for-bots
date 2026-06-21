@@ -38,14 +38,16 @@ flag matches its class.
 
 | Class | Meaning | Gate | Verbs |
 | --- | --- | --- | --- |
-| `read` | Observe only, no side effect | none (free) | `searchNotes` `readNote` `consult` `fetchUrl` `haFind` `haTree` `haState` `agentsList` `agentStatus` `fileList` `fileRead` `listTimers` `contactsSearch` `contactsGet` `listSpecialists` |
+| `read` | Observe only, no side effect | none (free) | `searchNotes` `readNote` `consult` `fetchUrl` `haFind` `haTree` `haState` `agentsList` `agentStatus` `fileList` `fileRead` `listTimers` `contactsSearch` `contactsGet` `listSpecialists` `listConnectors` `listCustomTools` `listScheduledTasks` |
 | `reversible` | Speculative; abortable mid-flight (barge-in retracts) | none (free, `reversible:true`) | `generateImage` |
-| `scoped-write` | Write confined to the agent's **own** home folder (sandboxed) | none (immediate, but can't escape its dir) | `fileWrite` `publishSite` |
-| `notify` | Low-blast-radius outward ping / scheduling | none (immediate) | `pushFeed` `pushPhone` `scheduleWakeup` `repeatEvery` `cancelTimer` |
-| `propose` | **Destructive.** Agent only proposes; a human confirms | **confirmable proposal** (auto-confirmable via "don't ask again", except HA) | `proposeNoteEdit` `proposeEmail` `proposeSubAgent` `proposeSystemPrompt` `haAct` `proposeAddContact` `proposeEditContact` `proposeSpawnSpecialist` |
-| `coarse` | The **grant is the authorization** — root over a *kernel-isolated sandbox* that can't reach the host or home LAN | grant-time only (no per-action confirm, *by design*) | `vmExec` `agentExec` |
+| `scoped-write` | Write confined to the agent's **own** sandboxed storage — its home folder, or its own component-source git objects (history-preserving) | none (immediate, but can't escape its dir / its own objects) | `fileWrite` `publishSite` `componentWriteFile` `forkComponent` `revertComponent` |
+| `render` | Emit an **ephemeral** UI widget/spec into the agent's *own* response — no persistence, no authority, no external effect; the live data a widget shows flows **separately** + cap-gated, so it's safe even from a confined cap | none (immediate; pure output) | `showEntityStatus` `showCountdowns` `showChoices` `showComponent` |
+| `add` | **Non-destructive write** — only ever *adds* (a new note, or appends); cannot overwrite or delete, so the worst case is recoverable clutter, never data loss | none (immediate, additive-only) — *this is the whole point of self-hosting the entry agent: it can record **sensitive** notes that never leave the network* | `addNote` |
+| `notify` | Low-blast-radius outward ping / scheduling. Scheduling a recurring task is `notify`; its *runs* are separately gated by the task's tool ring (⊆ the creator's powers) | none (immediate) | `pushFeed` `pushPhone` `messageOwner` `scheduleWakeup` `repeatEvery` `cancelTimer` `scheduleTask` `editScheduledTask` `cancelScheduledTask` `requestAccess` |
+| `propose` | **Destructive.** Agent only proposes; a human confirms (incl. admitting agent-authored CODE) | **confirmable proposal** (auto-confirmable via "don't ask again", except HA) | `proposeNoteEdit` `proposeEmail` `proposeSubAgent` `proposeSystemPrompt` `haAct` `proposeAddContact` `proposeEditContact` `proposeSpawnSpecialist` `proposeTool` |
+| `coarse` | The **grant is the authorization** (no per-action confirm, *by design*) — root over a *kernel-isolated sandbox* (`vmExec`/`agentExec`), the operator's own **host shell** (`hostExec` — holding `host` means you *are* the operator), or an owner-**wired**/owner-**admitted** external tool whose wiring/review step *was* the authorization (`callConnector` injects keys server-side + is SSRF-guarded; `callCustomTool` is SES-sandboxed) | grant-time only | `vmExec` `agentExec` `hostExec` `callConnector` `callCustomTool` |
 | `delegate` | Hand an **attenuated** sub-bundle to a larger (Opus) agent or a **confined specialist** | none — the sub-agent is itself confined to the granted subset | `delegateTask` `askSpecialist` |
-| `share` | Re-grant **one** power you hold as a named, **revocable** invite (monotonic delegation) | none — you may always re-share what you hold; revoke any time | `createInvite` |
+| `share` | Re-grant **one** power/tool you hold as a named, **revocable** invite (monotonic delegation) | none — you may always re-share what you hold; revoke any time | `createInvite` `shareTool` `revokeToolShare` |
 
 ### Why `coarse` exists (and is safe)
 
@@ -96,7 +98,8 @@ is the authorization) and how a spawned **specialist** earns domain autonomy.
 1. Add the power to `POWERS` in `agent-caps.mjs` with its verbs.
 2. Implement each verb. If it changes the world, it must return a `propose(...)`
    result (not perform the action) — unless it is genuinely `scoped-write`,
-   `notify`, or `coarse`, in which case say so deliberately.
+   `add` (additive-only — only ever creates/appends, never overwrites or
+   deletes), `notify`, or `coarse`, in which case say so deliberately.
 3. Add each verb to the `POLICY` map in `endowments.test.mjs`.
 4. `node --test endowments.test.mjs` — green means every endowment is accounted
    for and the destructive ones are proven to only propose.

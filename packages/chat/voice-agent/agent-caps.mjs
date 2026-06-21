@@ -270,9 +270,14 @@ const makeAffordances = ({ outDir }) => {
     // commit() runs only after the operator confirms (root-cap-gated). So the
     // agent can DESCRIBE a destructive act but cannot PERFORM one.
     editNote: Far('EditNoteExec', {
-      help: () => 'Read/overwrite a vault .md note. The agent reaches this ONLY via a confirmed proposal.',
+      help: () => 'Read/overwrite a vault .md note. OVERWRITE (write) is reached ONLY via a confirmed proposal. createNew/appendTo are NON-DESTRUCTIVE (only ever ADD) so the agent may call them directly.',
       read: async rel => { try { return fs.readFileSync(vaultWritePath(rel), 'utf8'); } catch { return ''; } },
       write: async (rel, content) => { const p = vaultWritePath(rel); fs.mkdirSync(path.dirname(p), { recursive: true }); fs.writeFileSync(p, String(content ?? '')); return harden({ ok: true, savedTo: p, bytes: Buffer.byteLength(String(content ?? '')) }); },
+      // NON-DESTRUCTIVE create: atomic 'wx' write — fails with EEXIST rather than ever clobbering an
+      // existing note. The caller uniquifies the name on EEXIST, so this can NEVER lose data.
+      createNew: async (rel, content) => { const p = vaultWritePath(rel); fs.mkdirSync(path.dirname(p), { recursive: true }); fs.writeFileSync(p, String(content ?? ''), { flag: 'wx' }); return harden({ ok: true, savedTo: p, bytes: Buffer.byteLength(String(content ?? '')) }); },
+      // NON-DESTRUCTIVE append: only ever ADDS to the end (creates the file if missing). Never removes.
+      appendTo: async (rel, content) => { const p = vaultWritePath(rel); fs.mkdirSync(path.dirname(p), { recursive: true }); const sep = fs.existsSync(p) ? '\n' : ''; fs.appendFileSync(p, `${sep}${String(content ?? '')}`); return harden({ ok: true, savedTo: p, appended: true, bytes: Buffer.byteLength(String(content ?? '')) }); },
     }),
     // NOTE: HomeAssistant is NOT a flat executor here. It is a full OBJECT TRIE
     // built by makeHaTrie() (see buildHomeAssistant below). The agent designates
@@ -348,6 +353,7 @@ const makeAffordances = ({ outDir }) => {
 // ── power metadata: name → label + the toolbox verbs it contributes ───────────
 export const POWERS = harden({
   notes: { label: 'Read your personal notes', verbs: ['searchNotes', 'readNote'] },
+  jotNote: { label: 'Jot NEW notes straight into your private vault (non-destructive — only ever ADDS; never overwrites or deletes; no confirmation)', verbs: ['addNote'] },
   reference: { label: 'Consult your library + Wikipedia', verbs: ['consult'] },
   web: { label: 'Search the web (Brave) + fetch & summarize a page', verbs: ['fetchUrl', 'webSearch'] },
   research: { label: 'Employ a research team (plan → parallel search/read/distill → cited synthesis)', verbs: ['research'] },
@@ -513,6 +519,36 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
       run: async ({ query }, agent, ctx = {}) => (ctx.notes || aff.notes).search(String(query || ''), { limit: 6 }) },
     readNote: { reversible: false, args: { path: 'string — vault-relative path' }, description: 'Read one personal note by path.',
       run: async ({ path: rel }, agent, ctx = {}) => ({ ok: true, content: String(await (ctx.notes || aff.notes).read(String(rel || ''))).slice(0, 6000) }) },
+    // NON-DESTRUCTIVE note CREATION — fires directly, no proposal. Creating a new note (or appending to
+    // one) only ever ADDS; it cannot overwrite or delete, so it needs no confirmation. This is the
+    // self-hosted private notepad: the entry agent can record SENSITIVE things that never leave the
+    // network. To CHANGE/replace existing note content (destructive), the agent must use proposeNoteEdit.
+    addNote: { reversible: false,
+      args: {
+        title: 'string — the note title (becomes its filename + H1)',
+        content: 'string — the note body, in markdown',
+        folder: 'string — OPTIONAL vault-relative folder to file it under (default "inbox")',
+        append: 'boolean — OPTIONAL: if a note with this title already exists in the folder, ADD to the end of it instead of creating a new uniquely-named one (still never overwrites)',
+      },
+      description: 'CREATE a new note in your private vault — NON-DESTRUCTIVE (only ever ADDS a note, or appends to one; never overwrites or deletes), so it fires IMMEDIATELY with no confirmation. This is your self-hosted private notepad: jot things straight down, including SENSITIVE notes that must never leave the network. It auto-picks a unique filename so an existing note is never clobbered (or pass append:true to add to a same-titled one). To CHANGE or replace an existing note\'s content, use proposeNoteEdit instead (that one is gated by your confirmation).',
+      run: async ({ title, content, folder, append }, agent) => {
+        const t = String(title || '').trim() || 'note';
+        const slug = nickId(t) || 'note';
+        const dir = String(folder || 'inbox').replace(/^\/+|\/+$/g, '') || 'inbox';
+        const stamp = new Date().toISOString();
+        if (append) {
+          const rel = `${dir}/${slug}.md`;
+          const r = await aff.editNote.appendTo(rel, `\n---\n*added ${stamp}*\n\n${String(content ?? '')}\n`);
+          return harden({ ok: true, created: false, appended: true, path: r.savedTo, note: `Appended to ${rel} (stays on the network).` });
+        }
+        const body = `---\ncreated: ${stamp}\nsource: agent-c\ntags: [agent-note]\n---\n\n# ${t}\n\n${String(content ?? '')}\n`;
+        let rel = `${dir}/${slug}.md`;
+        for (let i = 2; i <= 99; i += 1) {
+          try { const r = await aff.editNote.createNew(rel, body); return harden({ ok: true, created: true, path: r.savedTo, note: `Saved a new private note at ${rel} — it stays on the network.` }); }
+          catch (e) { if (String(e && e.code) !== 'EEXIST') throw e; rel = `${dir}/${slug}-${i}.md`; }
+        }
+        return harden({ ok: false, error: 'could not find a free filename for this note' });
+      } },
     consult: { reversible: false, args: { question: 'string' }, description: 'Ask your library (Gutenberg) + Wikipedia a question.',
       run: async ({ question }) => aff.reference.ask(String(question || '')) },
     fetchUrl: { reversible: false, args: { url: 'string' }, description: 'Fetch + summarize one public web page (SSRF-guarded).',
