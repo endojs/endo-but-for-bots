@@ -1,4 +1,5 @@
 // @ts-nocheck
+/* global setTimeout */
 /* eslint-disable import/order, no-empty-function */
 
 import '@endo/init';
@@ -249,6 +250,52 @@ test('terminate() after provisioning disposes the slice and unmounts', async t =
   t.true(host.isUnmounted());
   const status = await client.status();
   t.true(status.terminated);
+});
+
+const waitFor = async (pred, deadlineMs = 2000) => {
+  const start = Date.now();
+  while (!pred()) {
+    if (Date.now() - start > deadlineMs) throw new Error('waitFor timeout');
+    // eslint-disable-next-line no-await-in-loop
+    await new Promise(r => setTimeout(r, 10));
+  }
+};
+
+test('cancellation tears down the provisioned session', async t => {
+  const host = makeMockHost();
+  let cancel;
+  const cancelled = new Promise((_resolve, reject) => {
+    cancel = reject;
+  });
+  // `whenCancelled()` rejects with the cancellation reason.
+  const context = { whenCancelled: () => cancelled };
+  const client = make(host.hostAgent, context, { env: baseEnv() });
+
+  await client.send('hello'); // provision the slice + mount
+  t.is(host.sliceFactoryCalls.length, 1);
+
+  cancel(new Error('Cancelled')); // daemon cancels/collects the formula
+
+  await waitFor(() => host.isDisposed() && host.isUnmounted());
+  t.true(host.isDisposed());
+  t.true(host.isUnmounted());
+});
+
+test('cancellation before any use disposes nothing', async t => {
+  const host = makeMockHost();
+  let cancel;
+  const cancelled = new Promise((_resolve, reject) => {
+    cancel = reject;
+  });
+  const context = { whenCancelled: () => cancelled };
+  make(host.hostAgent, context, { env: baseEnv() });
+
+  cancel(new Error('Cancelled'));
+  // Give the teardown a chance to (not) run.
+  await new Promise(r => setTimeout(r, 50));
+  t.is(host.sliceFactoryCalls.length, 0);
+  t.is(host.mountCalls.length, 0);
+  t.false(host.isUnmounted());
 });
 
 test('terminate() before any use creates nothing', async t => {

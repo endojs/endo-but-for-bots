@@ -92,6 +92,7 @@ const clientModuleSpecifier = new URL(
  */
 
 const FactoryInterface = M.interface('ClaudeSandboxFactory', {
+  createSession: M.call(M.record()).returns(M.promise()),
   help: M.call().optional(M.string()).returns(M.string()),
 });
 
@@ -202,12 +203,109 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
 
   const iterateMessages = deps.iterateMessages ?? iterateReader;
 
+  /** @type {Promise<any> | undefined} */
+  let hostAgentP;
+  const getHostAgent = () => {
+    if (hostAgentP === undefined) {
+      hostAgentP = E(powers).lookup('host-agent');
+    }
+    return hostAgentP;
+  };
+
+  /**
+   * Validate a session config and formulate the `claude-client`
+   * caplet.
+   *
+   * With `resultName`, the client is stored under that pet name in
+   * `@host`'s petstore — a host-side GC root (the operator/form path).
+   * Without it, the client is formulated **un-named** and returned, so
+   * the *caller's* retention is its only GC root: dropping the returned
+   * cap collects the session, and its `whenCancelled` teardown disposes
+   * the container and unmounts the workspace. See DESIGN.md § Lifecycle.
+   *
+   * The credential is passed by pet name and re-materialised inside the
+   * client at spawn time, so no secret ever enters the formula `env`.
+   *
+   * @param {SandboxFormSubmission} config
+   * @param {{ resultName?: string }} [opts]
+   * @returns {Promise<{ client: any, sessionId: string, hostMountPoint: string, rootfsLabel: string }>}
+   */
+  const formulateSession = async (config, { resultName } = {}) => {
+    const {
+      name,
+      filesystem: fsName,
+      rootfs: rootfsValue = '',
+      network = 'private',
+      model = '',
+      credentials: credsName = '',
+      initialPrompt = '',
+    } = config;
+
+    if (!name) throw new Error('Missing "name".');
+    if (!fsName) throw new Error('Missing "filesystem" pet name.');
+    if (!ALLOWED_NETWORKS.includes(network)) {
+      throw new Error(
+        `Unknown network profile "${network}"; expected one of ${ALLOWED_NETWORKS.join(', ')}.`,
+      );
+    }
+
+    const hostAgent = await getHostAgent();
+    // Validate the filesystem exists and the rootfs parses now, for a
+    // friendly error; the client formula re-resolves both from its env.
+    const fs = await E(hostAgent).lookup(fsName);
+    if (!fs) throw new Error(`Unknown filesystem: "${fsName}".`);
+    const parsedRootfs = parseRootfs(rootfsValue, { defaultImage });
+
+    const slug = slugify(name);
+    const sessionId = `${slug}-${Date.now().toString(36)}`;
+    const hostMountPoint = nodePath.join(
+      mountBaseDir,
+      `claude-sandbox-${sessionId}`,
+    );
+    const workspacePetName = `claude-${sessionId}-workspace`;
+
+    /** @type {Record<string, any>} */
+    const options = {
+      powersName: '@agent',
+      env: harden({
+        SESSION_ID: sessionId,
+        CREATED_AT: new Date().toISOString(),
+        FILESYSTEM_NAME: fsName,
+        SANDBOX_FACTORY_NAME: sandboxFactoryName,
+        FS_MOUNTER_NAME: fsMounterName,
+        WORKSPACE_MOUNT_POINT: hostMountPoint,
+        WORKSPACE_PET_NAME: workspacePetName,
+        WORKSPACE_PATH: SANDBOX_WORKSPACE_PATH,
+        BACKEND: backend,
+        NETWORK: network,
+        CLAUDE_ROOTFS: rootfsValue,
+        DEFAULT_IMAGE: defaultImage ?? '',
+        MODEL: model,
+        CREDENTIALS_NAME: credsName,
+        INITIAL_PROMPT: initialPrompt,
+      }),
+    };
+    if (resultName !== undefined) {
+      options.resultName = resultName;
+    }
+    const client = await E(hostAgent).makeUnconfined(
+      '@main',
+      clientModuleSpecifier,
+      harden(options),
+    );
+    return harden({
+      client,
+      sessionId,
+      hostMountPoint,
+      rootfsLabel: rootfsLabel(parsedRootfs),
+    });
+  };
+
   const seenFormReplies = new Set();
 
   const runFactory = async () => {
     await E(powers).form('@host', FORM_DESCRIPTION, FORM_FIELDS);
 
-    const hostAgent = await E(powers).lookup('host-agent');
     const selfId = await E(powers).locate('@self');
 
     /** @type {string | undefined} */
@@ -245,79 +343,26 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
           const submission = /** @type {SandboxFormSubmission} */ (
             await E(powers).lookupById(msg.valueId)
           );
+          // Operator/form path: store under the chosen pet name (a
+          // host-side root) so it lands in @host's petstore.
           const {
-            name,
-            filesystem: fsName,
-            rootfs: rootfsValue = '',
-            network = 'private',
-            model = '',
-            credentials: credsName = '',
-            initialPrompt = '',
-          } = submission;
-
-          if (!name) throw new Error('Missing "name".');
-          if (!fsName) throw new Error('Missing "filesystem" pet name.');
-          if (!ALLOWED_NETWORKS.includes(network)) {
-            throw new Error(
-              `Unknown network profile "${network}"; expected one of ${ALLOWED_NETWORKS.join(', ')}.`,
-            );
-          }
-
-          // Validate the filesystem exists and the rootfs parses now,
-          // for a friendly inbox error; the client formula re-resolves
-          // both from its env when it provisions.
-          const fs = await E(hostAgent).lookup(fsName);
-          if (!fs) throw new Error(`Unknown filesystem: "${fsName}".`);
-          const parsedRootfs = parseRootfs(rootfsValue, { defaultImage });
-
-          const slug = slugify(name);
-          const sessionId = `${slug}-${Date.now().toString(36)}`;
-          const hostMountPoint = nodePath.join(
-            mountBaseDir,
-            `claude-sandbox-${sessionId}`,
-          );
-          const workspacePetName = `claude-${sessionId}-workspace`;
-
-          // Formulate the session as a first-class `claude-client`
-          // caplet. It owns its slice + 9P mount — an @endo/sandbox
-          // slice and the mount handle are worker-local and cannot be
-          // passed across a formula boundary — provisioning them lazily
-          // from this env, so the stored ClaudeClient has a real daemon
-          // identity and reincarnates across restarts. The credential
-          // is passed by pet name and re-materialised inside the client
-          // at spawn time, so no secret ever enters the formula env.
-          await E(hostAgent).makeUnconfined('@main', clientModuleSpecifier, {
-            powersName: '@agent',
-            resultName: name,
-            env: harden({
-              SESSION_ID: sessionId,
-              CREATED_AT: new Date().toISOString(),
-              FILESYSTEM_NAME: fsName,
-              SANDBOX_FACTORY_NAME: sandboxFactoryName,
-              FS_MOUNTER_NAME: fsMounterName,
-              WORKSPACE_MOUNT_POINT: hostMountPoint,
-              WORKSPACE_PET_NAME: workspacePetName,
-              WORKSPACE_PATH: SANDBOX_WORKSPACE_PATH,
-              BACKEND: backend,
-              NETWORK: network,
-              CLAUDE_ROOTFS: rootfsValue,
-              DEFAULT_IMAGE: defaultImage ?? '',
-              MODEL: model,
-              CREDENTIALS_NAME: credsName,
-              INITIAL_PROMPT: initialPrompt,
-            }),
+            sessionId,
+            hostMountPoint,
+            rootfsLabel: rfLabel,
+          } = await formulateSession(submission, {
+            resultName: submission.name,
           });
 
           await E(powers).reply(
             msg.number,
             [
-              `ClaudeClient "${name}" created.`,
+              `ClaudeClient "${submission.name}" created.`,
               `  session:    ${sessionId}`,
-              `  filesystem: ${fsName}`,
+              `  filesystem: ${submission.filesystem}`,
               `  workspace:  ${hostMountPoint} -> ${SANDBOX_WORKSPACE_PATH}`,
-              `  rootfs:     ${rootfsLabel(parsedRootfs)}`,
+              `  rootfs:     ${rfLabel}`,
               `  backend:    ${backend}`,
-              `  network:    ${network}`,
+              `  network:    ${submission.network ?? 'private'}`,
             ],
             [],
             [],
@@ -349,6 +394,29 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
 
   return makeExo('ClaudeSandboxFactory', FactoryInterface, {
     /**
+     * Peer-callable: formulate a Claude session and **return** its
+     * `ClaudeClient` cap. The session is *not* stored under a host pet
+     * name, so the calling peer's retention is its only GC root —
+     * dropping the returned cap collects the session, and the client's
+     * `whenCancelled` teardown disposes the container and unmounts the
+     * workspace. See DESIGN.md § Lifecycle.
+     *
+     * `config` mirrors the form fields: `{ name, filesystem, rootfs?,
+     * network?, model?, credentials?, initialPrompt? }`, where
+     * `filesystem` and `credentials` are pet names resolvable in
+     * `@host`'s namespace.
+     *
+     * @param {Record<string, any>} config
+     * @returns {Promise<any>}
+     */
+    async createSession(config) {
+      const { client } = await formulateSession(
+        /** @type {SandboxFormSubmission} */ (config),
+      );
+      return client;
+    },
+
+    /**
      * @param {string} [methodName]
      * @returns {string}
      */
@@ -357,7 +425,11 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
         return [
           'ClaudeSandboxFactory.',
           '',
-          'Submit the "Create Claude Sandbox" form on @host with:',
+          'createSession(config) → ClaudeClient cap (peer-callable; the',
+          '  caller holds the only reference, so dropping it destroys the',
+          '  session). config mirrors the form fields below.',
+          '',
+          'Or submit the "Create Claude Sandbox" form on @host with:',
           '  name        — pet name for the resulting ClaudeClient',
           '  filesystem  — pet name of an existing Filesystem capability',
           '  rootfs      — OCI image (oci:<ref> or bare ref) or host-bind/minimal',

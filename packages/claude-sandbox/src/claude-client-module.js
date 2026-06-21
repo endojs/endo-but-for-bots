@@ -72,16 +72,43 @@ const CREDENTIAL_ENV_VARS = harden({
 });
 
 /**
+ * Capture the caplet's cancellation promise from whatever shape the
+ * daemon hands us as `context`: a context presence exposes
+ * `whenCancelled()`; an in-process context exposes a `cancelled`
+ * promise; `null`/absent means "no teardown signal".
+ *
+ * Note: we return the promise *captured into a local*, not via an
+ * `async` return — an `async` return would adopt (flatten) the
+ * cancellation promise, so the caller would hang until cancellation
+ * instead of receiving the still-pending promise to subscribe to.
+ *
+ * @param {any} resolvedContext
+ * @returns {Promise<never> | null}
+ */
+const cancellationPromiseOf = resolvedContext => {
+  if (!resolvedContext) return null;
+  if (typeof resolvedContext.whenCancelled === 'function') {
+    return E(resolvedContext).whenCancelled();
+  }
+  if (resolvedContext.cancelled) {
+    return resolvedContext.cancelled;
+  }
+  return null;
+};
+
+/**
  * Per-session ClaudeClient caplet entry point.
  *
  * @param {import('@endo/eventual-send').FarRef<object>} powers - The
  *   `@agent` host authority. Tests pass a mock host agent exposing
  *   `lookup` and `provideMount`.
- * @param {Promise<object> | object | undefined} _context
+ * @param {Promise<object> | object | undefined} context - The daemon
+ *   cancellation context. When the formula is cancelled or collected,
+ *   the session is torn down (container disposed, workspace unmounted).
  * @param {{ env?: Record<string, string> }} [contextWrapper]
  * @returns {object}
  */
-export const make = (powers, _context, contextWrapper = {}) => {
+export const make = (powers, context, contextWrapper = {}) => {
   /** @type {any} */
   const hostAgent = powers;
   const env = contextWrapper.env ?? process.env;
@@ -204,7 +231,7 @@ export const make = (powers, _context, contextWrapper = {}) => {
     }
   };
 
-  return makeClaudeClient({
+  const client = makeClaudeClient({
     sessionId,
     createdAt,
     provision,
@@ -215,5 +242,28 @@ export const make = (powers, _context, contextWrapper = {}) => {
     model,
     initialPrompt,
   });
+
+  // Tear down on cancellation/collection. `cancel` is transient (the
+  // formula persists and reincarnates after a daemon restart, then
+  // re-provisions on the next send); `remove`/GC additionally deletes
+  // the formula. Either way the container and 9P mount must be released
+  // — `terminate()` does exactly that and is a no-op when nothing was
+  // provisioned, so a never-used session cancels for free.
+  const armTeardown = async () => {
+    const resolvedContext = context ? await context : null;
+    const cancelled = cancellationPromiseOf(resolvedContext);
+    if (!cancelled) return;
+    // The cancellation promise settles (resolves, or rejects with the
+    // cancel reason) when the formula is cancelled or collected.
+    // Normalize both settlements to a resolution, then tear down.
+    await cancelled.then(
+      () => {},
+      () => {},
+    );
+    await client.terminate();
+  };
+  armTeardown().catch(() => {});
+
+  return client;
 };
 harden(make);
