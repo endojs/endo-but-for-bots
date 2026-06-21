@@ -70,6 +70,10 @@ const POLICY = {
   // are SES-sandboxed)
   vmExec: 'coarse', agentExec: 'coarse', hostExec: 'coarse',
   callConnector: 'coarse', callCustomTool: 'coarse',
+  // autonomous self-improvement: the grant (selfImprove, implement-mode only) + the SELF_IMPROVE_AUTOMERGE
+  // flag ARE the authorization; the per-action gate is the independent verify + post-merge re-verify + the
+  // deliberate restart (merge≠deploy), not a confirm dialog. Grant-time authorization → coarse.
+  improveSystem: 'coarse',
   // delegate — attenuated sub-bundle to a larger agent / a confined specialist / a role sub-agent
   delegateTask: 'delegate', askSpecialist: 'delegate', employ: 'delegate',
   // share — re-grant ONE held power as a named, revocable invite (monotonic delegation); revoke any time

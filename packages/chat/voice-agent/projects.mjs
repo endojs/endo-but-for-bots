@@ -49,11 +49,13 @@ export const detachChat = (pid, chatId) => mutate(pid, p => { p.chatIds = p.chat
 // EVENT (a propagator — fires the moment something happens, not on a clock; W4 "propagator-first").
 // schedule: { kind:'interval', everyMs } | { kind:'daily', at:'HH:MM' } | { kind:'weekly', day:0-6, at:'HH:MM' }
 // trigger:  { kind:'event', source:'clippings'|'inbox' }  — runs when a doc lands in that vault folder.
-export const addScheduledAgent = (pid, { name, prompt, tools = [], schedule, trigger, model = 'default', enabled = true }) => {
+export const addScheduledAgent = (pid, { name, prompt, tools = [], schedule, trigger, model = 'default', mode = 'recommend', enabled = true }) => {
   if (!prompt) throw new Error('scheduled agent needs a prompt');
   if (!(schedule && schedule.kind) && !(trigger && trigger.kind)) throw new Error('a scheduled agent needs a schedule {kind,…} OR a trigger {kind:"event", source}');
   return mutate(pid, p => {
-    const agent = { id: id('sched'), name: String(name || 'agent'), prompt: String(prompt), tools: [...tools], schedule: (schedule && schedule.kind) ? schedule : null, trigger: (trigger && trigger.kind) ? trigger : null, model, enabled: !!enabled, createdAt: nowIso(), lastRun: null, nextAt: null };
+    // mode:'implement' lets the task autonomously implement→verify→(flag-gated)auto-merge (it gets the
+    // selfImprove power); 'recommend' (default + every legacy task) can only propose. (dan re-vets a flip.)
+    const agent = { id: id('sched'), name: String(name || 'agent'), prompt: String(prompt), tools: [...tools], schedule: (schedule && schedule.kind) ? schedule : null, trigger: (trigger && trigger.kind) ? trigger : null, model, mode: mode === 'implement' ? 'implement' : 'recommend', enabled: !!enabled, createdAt: nowIso(), lastRun: null, nextAt: null };
     p.scheduledAgents.push(agent);
     return agent;
   });

@@ -54,7 +54,8 @@ export const makeSelfImprover = ({ host, repo, baseBranch = 'HEAD', verifyDir, l
   // merge `branch` into the live baseBranch — SAFE: refuse on a dirty tree, abort on conflict.
   const mergeBranch = async (branch, goal, now) => {
     const dirty = await host.exec(`git -C ${shq(repo)} status --porcelain`, { timeoutMs: 30000 });
-    if (dirty.ok && String(dirty.stdout || '').trim()) return { merged: false, reason: 'the live checkout has uncommitted changes — refusing to auto-merge (would risk clobbering work)', branch };
+    if (!dirty.ok) return { merged: false, reason: 'could not read the live tree status — refusing to auto-merge (fail closed)', branch };
+    if (String(dirty.stdout || '').trim()) return { merged: false, reason: 'the live checkout has uncommitted changes — refusing to auto-merge (would risk clobbering work)', branch };
     const before = (await host.exec(`git -C ${shq(repo)} rev-parse HEAD`, { timeoutMs: 15000 })).stdout.trim();
     const m = await host.exec(`git -C ${shq(repo)} merge --no-ff --no-edit -m ${shq(`self-improve: ${String(goal).slice(0, 90)}`)} ${shq(branch)}`, { timeoutMs: 120000 });
     if (!m.ok) {
@@ -72,7 +73,7 @@ export const makeSelfImprover = ({ host, repo, baseBranch = 'HEAD', verifyDir, l
   // THE LOOP. employExecutor({ goal }) → { branch } (the branch holding the implemented change), or null.
   // autoMerge=false → fork + implement + VERIFY, then STOP with a verified branch ready for review (the
   // safe default for a fresh deployment; flip it on once the loop has been watched + rollback is exposed).
-  const improve = async ({ goal, successCommand, employExecutor, autoMerge = true, now } = {}) => {
+  const improve = async ({ goal, successCommand, employExecutor, autoMerge = false, now } = {}) => {
     const g = String(goal || '').trim();
     if (!g) return { ok: false, merged: false, reason: 'a goal is required' };
     if (typeof employExecutor !== 'function') return { ok: false, merged: false, reason: 'no implementer wired' };
@@ -86,7 +87,16 @@ export const makeSelfImprover = ({ host, repo, baseBranch = 'HEAD', verifyDir, l
     // 3. MERGE (safe) — only a verified-green, conflict-free change lands. Gated by autoMerge.
     if (!autoMerge) return { ok: true, merged: false, attempted: true, verified: true, branch, goal: g, readyToReview: true, reason: 'verified green — branch is ready for you to review + merge (auto-merge is off)' };
     const r = await mergeBranch(branch, g, now);
-    return { ok: true, ...r, attempted: true, verified: true, goal: g };
+    if (!r.merged) return { ok: true, ...r, attempted: true, verified: true, goal: g };
+    // 4. POST-MERGE RE-VERIFY the MERGED live tree with the FULL default suite (NOT a weaker per-call
+    //    command) — a change green IN ISOLATION can still break once merged (interaction with HEAD).
+    const pv = await verifyBranch(baseBranch, String(defaultTest), now);
+    if (pv.ok) return { ok: true, ...r, attempted: true, verified: true, postVerified: true, goal: g };
+    // RED post-merge → AUTO-REVERT. If the revert ALSO fails, the broken merge is STILL LIVE — surface that
+    // LOUDLY (ok:false) with manual-revert instructions; never mask a broken merge as handled.
+    const rb = await rollback({ id: r.id, now });
+    if (!rb.ok) return { ok: false, merged: true, attempted: true, verified: true, postVerifyFailed: true, rolledBack: false, brokenMergeLive: true, branch, mergeCommit: r.mergeCommit, goal: g, reason: `CRITICAL: post-merge re-verify FAILED and the auto-revert ALSO FAILED (${rb.error || 'unknown'}) — the broken merge ${String(r.mergeCommit).slice(0, 8)} is STILL on ${baseBranch}. Revert manually: git -C <repo> revert -m 1 ${r.mergeCommit}`, testTail: pv.testTail };
+    return { ok: true, attempted: true, verified: true, merged: false, revertedAfterMerge: true, rolledBack: true, branch, mergeCommit: r.mergeCommit, goal: g, reason: 'the MERGED tree failed post-merge re-verification — auto-reverted the merge', testTail: pv.testTail };
   };
 
   // ROLLBACK — revert an auto-merge by its ledger id (revert the merge commit; history preserved).
@@ -95,7 +105,8 @@ export const makeSelfImprover = ({ host, repo, baseBranch = 'HEAD', verifyDir, l
     if (!e) return { ok: false, error: `no merge ${id} in the ledger` };
     if (e.rolledBack) return { ok: true, alreadyRolledBack: true, id };
     const dirty = await host.exec(`git -C ${shq(repo)} status --porcelain`, { timeoutMs: 30000 });
-    if (dirty.ok && String(dirty.stdout || '').trim()) return { ok: false, error: 'live checkout dirty — commit/stash before rollback' };
+    if (!dirty.ok) return { ok: false, error: 'could not read live tree status — refusing rollback (fail closed)' };
+    if (String(dirty.stdout || '').trim()) return { ok: false, error: 'live checkout dirty — commit/stash before rollback' };
     const rev = await host.exec(`git -C ${shq(repo)} revert --no-edit -m 1 ${shq(e.mergeCommit)}`, { timeoutMs: 60000 });
     if (!rev.ok) { await host.exec(`git -C ${shq(repo)} revert --abort 2>/dev/null`, { timeoutMs: 20000 }); return { ok: false, error: `revert failed (conflict): ${tail(rev, 300)}` }; }
     e.rolledBack = true; e.rolledBackAt = String(now || ''); saveLedger(l);

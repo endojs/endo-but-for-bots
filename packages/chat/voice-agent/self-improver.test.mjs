@@ -39,7 +39,7 @@ const implementer = (branch, content) => async () => {
 };
 
 test('an IMPROVEMENT (verifies green) is auto-merged into the live branch + recorded for rollback', async () => {
-  const r = await si.improve({ goal: 'make value GOOD', successCommand: 'sh check.sh', employExecutor: implementer('agentwt/imp1', 'GOOD'), now: 't1' });
+  const r = await si.improve({ goal: 'make value GOOD', successCommand: 'sh check.sh', employExecutor: implementer('agentwt/imp1', 'GOOD'), autoMerge: true, now: 't1' });
   assert.equal(r.merged, true, 'a verified-green change merges');
   assert.equal(r.verified, true);
   assert.match(read(path.join(repo, 'value.txt')), /GOOD/, 'the live working tree now has the change');
@@ -49,7 +49,7 @@ test('an IMPROVEMENT (verifies green) is auto-merged into the live branch + reco
 
 test('a REGRESSION (verifies red) is REFUSED — not merged, the branch kept for inspection', async () => {
   const before = read(path.join(repo, 'value.txt'));
-  const r = await si.improve({ goal: 'set value BAD', successCommand: 'sh check.sh', employExecutor: implementer('agentwt/bad1', 'BAD'), now: 't2' });
+  const r = await si.improve({ goal: 'set value BAD', successCommand: 'sh check.sh', employExecutor: implementer('agentwt/bad1', 'BAD'), autoMerge: true, now: 't2' });
   assert.equal(r.merged, false, 'a failing change does NOT merge');
   assert.match(r.reason, /improvement|verification|pass/i);
   assert.equal(read(path.join(repo, 'value.txt')), before, 'the live tree is unchanged');
@@ -66,10 +66,30 @@ test('ROLLBACK reverts an auto-merge by its ledger id (history-preserving)', asy
 
 test('a dirty LIVE tree REFUSES the merge (never clobbers uncommitted work)', async () => {
   fs.writeFileSync(path.join(repo, 'uncommitted.txt'), 'WIP');
-  const r = await si.improve({ goal: 'good change but base is dirty', successCommand: 'sh check.sh', employExecutor: implementer('agentwt/imp2', 'GOOD'), now: 't4' });
+  const r = await si.improve({ goal: 'good change but base is dirty', successCommand: 'sh check.sh', employExecutor: implementer('agentwt/imp2', 'GOOD'), autoMerge: true, now: 't4' });
   assert.equal(r.merged, false, 'refuses to merge into a dirty tree');
   assert.match(r.reason, /uncommitted|dirty/i);
   fs.rmSync(path.join(repo, 'uncommitted.txt'));
+});
+
+test('POST-MERGE re-verify (always the full default suite) catches a merge that breaks the live tree → AUTO-REVERTS', async () => {
+  const before = read(path.join(repo, 'value.txt'));
+  // an improver whose DEFAULT (post-merge) verify always fails: the branch passes its own successCommand so
+  // it MERGES, but the post-merge re-verify (defaultTest) fails → auto-revert. Proves post-merge uses the
+  // default suite, not the weaker per-call command.
+  const siR = makeSelfImprover({ host, repo, baseBranch: 'main', verifyDir: path.join(tmp, 'verifyR'), ledgerFile: path.join(tmp, 'ledgerR.json'), defaultTest: 'exit 1' });
+  const r = await siR.improve({ goal: 'passes its own check, fails the suite once merged', successCommand: 'sh check.sh', employExecutor: implementer('agentwt/pm1', 'GOOD'), autoMerge: true, now: 'tpm' });
+  assert.equal(r.merged, false, 'the merge did not stand');
+  assert.equal(r.revertedAfterMerge, true, 'it auto-reverted after the post-merge re-verify failed');
+  assert.equal(r.rolledBack, true);
+  assert.equal(read(path.join(repo, 'value.txt')), before, 'the live tree was restored (the merged change reverted out)');
+});
+
+test('POST-MERGE re-verify passing → the merge STANDS (postVerified)', async () => {
+  const r = await si.improve({ goal: 'good change that also passes merged', successCommand: 'sh check.sh', employExecutor: implementer('agentwt/pm2', 'GOOD'), autoMerge: true, now: 'tpm2' });
+  assert.equal(r.merged, true);
+  assert.equal(r.postVerified, true, 'the merged tree was independently re-verified');
+  assert.match(read(path.join(repo, 'value.txt')), /GOOD/);
 });
 
 test('autoMerge:false verifies but does NOT merge — a reviewable green branch (safe default)', async () => {

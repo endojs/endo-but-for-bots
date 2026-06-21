@@ -433,7 +433,7 @@ const runProjectAgent = async (project, agent) => {
   log('scheduled-agent:', project.name, '›', agent.name, '| tools:', (agent.tools || []).join(','));
   let out;
   try {
-    out = await runScheduledAgent({ powers: agent.tools || [], homeSubkey: project.homeSubkey, prompt: agent.prompt, persona: getPersona(), model: agent.model || 'default' });
+    out = await runScheduledAgent({ powers: agent.tools || [], homeSubkey: project.homeSubkey, prompt: agent.prompt, persona: getPersona(), model: agent.model || 'default', mode: agent.mode || 'recommend' });
   } catch (e) { out = { ok: false, error: e.message }; }
   const nProp = (out.proposalIds || []).length;
   const now = new Date().toISOString();

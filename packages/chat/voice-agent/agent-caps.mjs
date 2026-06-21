@@ -40,6 +40,7 @@ import { addTimer, cancelTimer, listTimers } from '../capture/timers.mjs';
 import { createProject, listProjects, addScheduledAgent, updateScheduledAgent, removeScheduledAgent, computeNextAt, projectForChat } from './projects.mjs';
 import { proposeSpawn } from '../capture/agent-spawn.mjs';
 import { runOpusDelegate } from './delegate.mjs';
+import { makeSelfImprover } from './self-improver.mjs';
 import { runAgent } from '../../ocapn-noise/tool-bridge.mjs';
 import { runAgentCode } from '../../ocapn-noise/codemode.mjs';
 // Sub-agents (scheduled, specialists, employed roles) run the composable-code harness (CEO-Bench: it
@@ -483,6 +484,7 @@ export const POWERS = harden({
   kazputer: { label: 'Manage Kazputers — give someone a new one (email invite), and administer your own (settings/coins; you confirm)', verbs: ['proposeGiveKazputer', 'kazputerStatus', 'proposeKazputerSetting', 'proposeKazputerCoins'] },
   dietician: { label: "Drive the dietician's restaurant pipeline — scan an area, evaluate spots for Alexa's diet, refresh + publish the food guides (publishing you confirm)", verbs: ['dietScanArea', 'dietEvaluateArea', 'dietBuildMap', 'dietStatus', 'dietRefreshSite'] },
   app: { label: 'Introspect + manage your own app state — list/read/retitle every conversation (chats, voice memos, voice notes) and see an overview of asks/feed/proposals', verbs: ['listChats', 'readChat', 'retitleChat', 'appState'] },
+  selfImprove: { label: '⚠️ Autonomously IMPLEMENT a system improvement on an isolated worktree → independently verify → (flag-gated) auto-merge to the live branch with post-merge re-verify + auto-revert', verbs: ['improveSystem'] },
 });
 export const ALL_POWERS = harden(Object.keys(POWERS));
 harden(POWERS);
@@ -494,6 +496,41 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
   const aff = makeAffordances({ outDir });
   // worktree manager for write-capable role sub-agents (runs on the UNCONFINED host shell).
   const worktrees = makeWorktrees({ host: aff.host });
+  // ── the self-improvement loop: implement on an isolated worktree → INDEPENDENTLY verify → (flag-gated)
+  //    auto-merge to the live branch with a post-merge re-verify + auto-revert. SELF_IMPROVE_AUTOMERGE=1
+  //    enables the actual merge; default OFF = verify-and-stage a reviewable green branch (fail-safe). ──
+  const SELF_IMPROVE_AUTOMERGE = process.env.SELF_IMPROVE_AUTOMERGE === '1';
+  // verification command: a worktree checkout has no node_modules (gitignored + yarn-workspace links), so
+  // symlink the live repo's node_modules levels into the checkout, then run the FULL voice-agent suite
+  // against the worktree's CODE. Override with SELF_IMPROVE_VERIFY or a per-call successCommand.
+  const DEFAULT_VERIFY = process.env.SELF_IMPROVE_VERIFY
+    // `set -e` makes a failed symlink fatal (no silent run-without-deps); the test-file floor refuses a
+    // change that deleted/stripped the very tests that gate it (else `node --test <glob>` matches 0 → exit 0).
+    || `set -e; for d in node_modules packages/chat/node_modules packages/chat/voice-agent/node_modules packages/ocapn-noise/node_modules; do if [ -d ${WORKTREE_REPO}/$d ]; then ln -sfn ${WORKTREE_REPO}/$d ./$d; fi; done; n=$(ls packages/chat/voice-agent/*.test.mjs 2>/dev/null | wc -l); [ "$n" -ge 8 ] || { echo "self-improve verify: only $n test files — refusing (the suite must not be stripped)"; exit 1; }; node --test packages/chat/voice-agent/*.test.mjs`;
+  const selfImprover = makeSelfImprover({ host: aff.host, repo: WORKTREE_REPO, baseBranch: process.env.FIELD_AGENT_BASE_BRANCH || 'field-preact', verifyDir: `${WORKTREE_DIR}/_verify`, ledgerFile: '/home/dan/.local/state/field-agent/auto-merge-ledger.json', defaultTest: DEFAULT_VERIFY, timeoutMs: 600000 });
+  let selfImproveInFlight = false; // single-flight: at most one self-improvement at a time
+  // SELF-CONTAINED executor runner (does NOT require the `roles` power): fork a worktree, run the confined
+  // executor (Opus) jailed to it, commit its working tree to a branch on teardown, return { branch }.
+  const runWorktreeExecutor = async ({ goal, successCommand, signal } = {}) => {
+    const spec = getRole('executor');
+    const ring = [...new Set((spec.powers || []).filter(p => ALL_POWERS.includes(p) && !META_POWERS.has(p)))]; // host/home/web/research
+    const wtId = `improve-${newSwiss().slice(0, 10)}`;
+    let wt = null;
+    try { wt = await worktrees.create(wtId); } catch (e) { return { branch: null, error: `worktree setup failed: ${String((e && e.message) || e)}` }; }
+    let answer = ''; let branch = wt.branch;
+    try {
+      const subNode = makeAgentNode({ powers: ring, labelOf: `improve-exec-${wtId}`, haBinding: () => haTrie?.root || null, agBinding: () => agentRoster?.root || null, cwdBinding: () => wt.dir, id: `improve-exec-${wtId}` });
+      const sub = subNode.toolbox({ chatId: wtId });
+      const verify = successCommand ? String(successCommand) : 'the full voice-agent test suite';
+      const prompt = `${spec.prompt}\n\nYou are in a FRESH GIT WORKTREE checked out at the repo root — your hostExec runs there. TASK:\n${String(goal)}\n\nMANDATORY: ship a NEW or UPDATED TEST that encodes this change's claim, and keep ${verify} GREEN — the change is re-verified independently and merged ONLY if green. Keep the change minimal + focused. Do NOT commit; the harness commits your working tree to a branch when you finish.`;
+      const r = await runOpusDelegate({ prompt, toolbox: sub.toolbox, manifest: sub.manifest, grantedPowers: ring, signal });
+      answer = (r && r.answer) || '';
+    } catch (e) { answer = `executor error: ${String((e && e.message) || e)}`; } // ANY failure → still tear down (no worktree leak)
+    finally {
+      try { const t = await worktrees.teardown(wtId, { commitMessage: `self-improve: ${String(goal).slice(0, 72)}` }); branch = (t && t.branch) || branch; } catch { /* keep wt.branch */ }
+    }
+    return { branch, answer };
+  };
   // locator: swissnum → { node }  (every entry is an agent-node; the root and
   // every shared sub-bundle are nodes, so any holder can manage what it holds).
   const locator = new Map();
@@ -592,7 +629,7 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
   //    confirmable proposal (the grant is the authorization). Persisted so a
   //    specialist + its accrued context survive restarts. ─────────────────────────
   const SPECIALISTS_FILE = specialistsFile || '/home/dan/.config/field-agent/specialists.json';
-  const META_POWERS = new Set(['delegate', 'subagent', 'specialists', 'roles', 'app']); // orchestration + self-state powers — not delegable downward (sub-agents one level deep; `app` is root-only — its memo/seed/feed stores are global)
+  const META_POWERS = new Set(['delegate', 'subagent', 'specialists', 'roles', 'app', 'selfImprove']); // orchestration + self-state powers — not delegable/shareable downward (one level deep; `app` is root-only; `selfImprove` is implement-mode-scheduled-only — never a sub-bundle or share)
   let specialists = [];
   try { specialists = JSON.parse(fs.readFileSync(SPECIALISTS_FILE, 'utf8')).specialists || []; } catch { specialists = []; }
   const saveSpecialists = () => { try { fs.mkdirSync(path.dirname(SPECIALISTS_FILE), { recursive: true }); fs.writeFileSync(SPECIALISTS_FILE, JSON.stringify({ specialists }, null, 2), { mode: 0o600 }); } catch (e) { /* best effort */ } };
@@ -617,6 +654,18 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
   const baseVerb = harden({
     searchNotes: { reversible: false, args: { query: 'string' }, description: 'Search your personal notes; returns matches.',
       run: async ({ query }, agent, ctx = {}) => (ctx.notes || aff.notes).search(String(query || ''), { limit: 6 }) },
+    // ⚠️ self-improvement: implement on an isolated worktree → independently verify → (flag-gated) auto-merge.
+    improveSystem: { reversible: false, args: { goal: 'string — the concrete system improvement to implement', successCommand: 'string — OPTIONAL: the command that must pass to prove it (defaults to the full voice-agent test suite)' },
+      description: 'Autonomously IMPLEMENT a system improvement: a confined executor builds it on a FRESH git worktree + ships a test; the harness INDEPENDENTLY re-verifies, and (only if SELF_IMPROVE_AUTOMERGE is enabled) merges to the live branch with a post-merge re-verify + auto-revert on failure. One at a time. With auto-merge off it stops at a verified, ready-to-review branch (the safe default).',
+      run: async ({ goal, successCommand }, agent) => {
+        const g = String(goal || '').trim();
+        if (!g) return harden({ ok: false, error: 'a goal is required' });
+        if (selfImproveInFlight) return harden({ ok: false, busy: true, error: 'a self-improvement is already in flight — one at a time' });
+        selfImproveInFlight = true;
+        try {
+          return harden(await selfImprover.improve({ goal: g, successCommand: successCommand ? String(successCommand) : undefined, employExecutor: ({ goal: gg }) => runWorktreeExecutor({ goal: gg, successCommand }), autoMerge: SELF_IMPROVE_AUTOMERGE, now: new Date().toISOString() }));
+        } finally { selfImproveInFlight = false; }
+      } },
     readNote: { reversible: false, args: { path: 'string — vault-relative path' }, description: 'Read one personal note by path.',
       run: async ({ path: rel }, agent, ctx = {}) => ({ ok: true, content: String(await (ctx.notes || aff.notes).read(String(rel || ''))).slice(0, 6000) }) },
     // NON-DESTRUCTIVE note CREATION — fires directly, no proposal. Creating a new note (or appending to
@@ -1705,8 +1754,11 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
   // ring, ⊆ ALL_POWERS minus META), bound to the PROJECT's shared home folder via homeSubkey
   // (so every chat + scheduled agent in a Project read/write the same folder). Returns the
   // answer + any PROPOSALS it raised (it proposes; destructive actions still need confirm).
-  const runScheduledAgent = async ({ powers = [], homeSubkey = null, prompt = '', persona: personaOverride = '', model = 'default', signal, emit = null } = {}) => {
-    const granted = [...new Set((Array.isArray(powers) ? powers : []).filter(p => ALL_POWERS.includes(p) && !META_POWERS.has(p)))];
+  const runScheduledAgent = async ({ powers = [], homeSubkey = null, prompt = '', persona: personaOverride = '', model = 'default', mode = 'recommend', signal, emit = null } = {}) => {
+    // `selfImprove` (autonomous implement→verify→auto-merge) is granted ONLY to IMPLEMENT-mode tasks; every
+    // legacy/recommend-mode task has it stripped exactly like a META power, so they can only propose.
+    // strip META as usual, EXCEPT grant `selfImprove` to IMPLEMENT-mode tasks (the one controlled exception).
+    const granted = [...new Set((Array.isArray(powers) ? powers : []).filter(p => ALL_POWERS.includes(p) && (!META_POWERS.has(p) || (p === 'selfImprove' && mode === 'implement'))))];
     const node = makeAgentNode({
       powers: granted, labelOf: `scheduled-${homeSubkey || 'global'}`,
       haBinding: () => haTrie?.root || null, agBinding: () => agentRoster?.root || null,
