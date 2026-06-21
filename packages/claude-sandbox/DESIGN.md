@@ -198,6 +198,131 @@ rather than patching `inFlight` ad hoc. `makeBufferedReader` is ~100 self
 package, factor it into a small shared package both depend on, or wait for floot
 to land.
 
+## LLM backend layer — one Session interface over container _or_ API
+
+The longer-term goal is a backend-agnostic **Session**: the same capability
+surface whether a session is powered by the **container** (this package — the
+`claude` CLI in a podman slice over a workspace) or by the **API** (a direct
+Anthropic-API agent, as in `packages/floot`). A consumer holds a `Session` cap
+and never learns which backend is underneath.
+
+### The key structural fact: the backends sit at different levels
+
+This is why "where to layer" is subtle — the two are _not_ the same kind of
+object:
+
+- **API backend = agent-over-provider.** Floot owns the agent loop
+  (conversation tree, tool discovery/execution, `turnChain`) and calls a dumb,
+  swappable **`StreamingProvider`** (`providers/index.js`:
+  `chat(messages, tools)` / `chatStream(messages, tools, onToken?, signal?)`).
+  The provider is the LLM completion; the agent is floot. Floot already has two
+  providers behind this seam (streaming Anthropic, and `@endo/lal` adapted).
+- **Container backend = the agent _is_ claude-code.** claude-code owns its loop,
+  its memory (its own session files in the workspace), and its tools (file edit,
+  bash, MCP) inside the container. This package only spawns `claude -p` and
+  streams stdout. There is no "provider" seam to swap — the whole agent is the
+  backend.
+
+So you **cannot** unify them at the provider level (claude-code is not a
+completion provider; it is an entire agent). The only common seam is the
+**Session**.
+
+### The common Session interface
+
+Synthesised from floot's `FlootSession` (`converse(input) → replyReader`,
+`getHistory`, `getUsage`, `getInfo`) and this package's `ClaudeClient`
+(`send`/`interrupt`/`terminate`/`status`):
+
+```
+Session:
+  send(input) → ReplyReader      // input: string | streaming reader
+  interrupt()                    // and/or: closing the ReplyReader aborts the turn
+  history() → Message[]          // replay the conversation
+  status() → { id, model, backend, createdAt, usage, ... }
+  terminate()
+  help()
+```
+
+The stream uses floot's normalized **`ReplyEvent`** vocabulary
+(`phase | delta | final | tool_call | tool_result | usage | end | abort`,
+`src/stream.js`) over the shared `makeBufferedReader`, with the floot turn model
+([Turn model](#turn-model--current-vs-the-floot-session-target)): one buffered
+reply reader per turn, `turnChain` serialization, and reader-close ⇒ abort.
+
+### Two backend adapters under that interface
+
+- **`makeApiSession({ provider, store, tools })`** — floot's agent, generalised:
+  runs the loop over a `StreamingProvider`, owns the conversation tree + Endo
+  capability tools, emits `ReplyEvent`. Interrupt = `AbortController` signal. No
+  `Filesystem` required.
+- **`makeContainerSession({ slice, workspacePath, model })`** — this package's
+  `ClaudeClient`, refactored to **normalise stream-json → `ReplyEvent`** and
+  surface the same interface. claude-code owns memory (the workspace) and tools.
+  Interrupt = `E(proc).kill()`.
+
+Stream-json → `ReplyEvent` normalisation:
+
+| claude-code `stream-json`     | `ReplyEvent`              |
+| ----------------------------- | ------------------------- |
+| `system`/`init`               | `phase` + status metadata |
+| `assistant` (text)            | `delta`                   |
+| `assistant` final / `result`  | `final`                   |
+| `tool_use`                    | `tool_call`               |
+| `tool_result`                 | `tool_result`             |
+| `result` (usage)              | `usage`                   |
+| process exit 0                | `end`                     |
+| error / non-zero / killed     | `abort`                   |
+
+### Impedance mismatches the interface must paper over (or expose honestly)
+
+- **Memory & `history()`.** Container = an _opaque_ claude-code session in the
+  workspace fs (`--continue` resumes; the interface can replay but not edit or
+  branch it). API = an explicit, editable conversation tree. Expose the
+  lowest-common-denominator (read-only replay) on `Session`; tree editing is an
+  API-only extension.
+- **Tools / authority.** Same interface, very different _powers_: container =
+  claude-code's built-in tools bounded by the slice + workspace + network
+  profile; API = Endo-capability tools. A consumer cannot assume a given tool
+  exists — only that it can converse.
+- **Interrupt cleanliness.** API aborts a fetch mid-token; container kills
+  `claude -p`, so partial tool side-effects already written to the workspace
+  persist (a "dirtier" stop).
+- **Streaming granularity.** API yields true token deltas; claude-code yields
+  coarser structured-event deltas. Both map onto `delta`/`tool_call`.
+- **Auth.** Both take a `ClaudeCredentials` cap. Container injects it as env
+  (`CLAUDE_CODE_OAUTH_TOKEN` / `ANTHROPIC_API_KEY`); API threads it into the
+  provider. Uniform at the cap boundary.
+- **Cost/latency envelope.** Container pays per-turn container boot + claude/node
+  start; API pays just the HTTP round-trip. Same interface, different
+  performance.
+
+### Recommended layering
+
+```
+            Session  (uniform cap: send / interrupt / history / status / terminate)
+              ▲                              ▲
+   makeContainerSession(slice)      makeApiSession(provider, store, tools)
+              │                              │
+        claude-code agent            StreamingProvider  ← { anthropic, lal, … }
+        (claude -p in slice)
+```
+
+- A shared module owns `makeBufferedReader` + the `ReplyEvent` writer + the
+  `Session` contract (port from floot, or a small shared package both depend on).
+- The API backend keeps its sub-seam (`StreamingProvider`, swappable across
+  hosts); the container backend has none (claude-code is monolithic) — note the
+  asymmetry rather than forcing a fake provider around the CLI.
+- A `backend` selector (mirroring floot's `createStreamingProvider`) returns a
+  `Session` from config: container (needs a slice + `Filesystem` + credential) or
+  API (needs provider config + credential, no fs). The composition point is
+  exactly the bring-your-own-{filesystem, auth} boundary this package already
+  has — the API backend simply drops the `Filesystem` input.
+
+Open questions: whether the shared Session/stream primitives live in a new
+package or are ported per-consumer; how much of floot's agent is extracted vs.
+left in `packages/floot`; and whether `history()`/tools differences are smoothed
+into one interface or exposed as backend-tagged capabilities.
+
 ## Verified status
 
 Validated in a privileged Docker container (`node:22-bookworm`, Docker Desktop
