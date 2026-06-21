@@ -81,6 +81,11 @@ export const makeSelfImprover = ({ host, repo, baseBranch = 'HEAD', verifyDir, l
     let emp; try { emp = await employExecutor({ goal: g }); } catch (e) { return { ok: false, merged: false, attempted: true, reason: `implementer failed: ${String((e && e.message) || e)}` }; }
     const branch = emp && emp.branch;
     if (!branch) return { ok: true, merged: false, attempted: true, reason: 'the implementer produced no branch (nothing was changed)', detail: emp && emp.answer };
+    // GUARD: an EMPTY branch (no diff vs the base) means nothing was actually implemented — never verify +
+    //   stage/merge a no-op as a "verified improvement" (an executor that only NARRATES a change leaves the
+    //   worktree clean → the branch equals the base → the unchanged code trivially passes the suite).
+    const diff = await host.exec(`git -C ${shq(repo)} diff --quiet ${shq(baseBranch)}..${shq(branch)}`, { timeoutMs: 30000 });
+    if (diff.ok) return { ok: true, merged: false, attempted: true, branch, empty: true, reason: 'the implementer produced an EMPTY branch (no change vs the base) — nothing was actually implemented', detail: emp && emp.answer };
     // 2. VERIFY INDEPENDENTLY — re-run the suite ourselves on the branch.
     const v = await verifyBranch(branch, String(successCommand || defaultTest), now);
     if (!v.ok) return { ok: true, merged: false, attempted: true, branch, verified: false, reason: v.reason || 'the change did not pass verification (not shown to be an improvement)', testTail: v.testTail };

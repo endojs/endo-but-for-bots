@@ -94,12 +94,23 @@ test('POST-MERGE re-verify passing → the merge STANDS (postVerified)', async (
 
 test('autoMerge:false verifies but does NOT merge — a reviewable green branch (safe default)', async () => {
   const before = read(path.join(repo, 'value.txt'));
-  const r = await si.improve({ goal: 'good change, review-only mode', successCommand: 'sh check.sh', employExecutor: implementer('agentwt/review1', 'GOOD'), autoMerge: false, now: 't6' });
+  const r = await si.improve({ goal: 'good change, review-only mode', successCommand: 'sh check.sh', employExecutor: implementer('agentwt/review1', 'GOOD-review'), autoMerge: false, now: 't6' });
   assert.equal(r.verified, true, 'still verifies the change');
   assert.equal(r.merged, false, 'but does NOT merge when auto-merge is off');
   assert.equal(r.readyToReview, true);
   assert.equal(read(path.join(repo, 'value.txt')), before, 'live tree untouched');
   assert.match((await sh(`git -C ${q(repo)} branch --list agentwt/review1`)).stdout, /agentwt\/review1/, 'the verified branch is kept for review');
+});
+
+test('an EMPTY branch (executor only narrated, made no real change) is reported as a no-op, never staged/merged as verified', async () => {
+  // a fake implementer that hands back a branch IDENTICAL to base (no diff) — what an executor that
+  // narrates a change without editing files leaves behind.
+  await sh(`git -C ${q(repo)} branch -f agentwt/empty1 main`);
+  const r = await si.improve({ goal: 'a change that was only described', successCommand: 'sh check.sh', employExecutor: async () => ({ branch: 'agentwt/empty1' }), autoMerge: true, now: 'tempty' });
+  assert.equal(r.empty, true, 'detected the empty (no-diff) branch');
+  assert.equal(r.merged, false, 'a no-op is never merged');
+  assert.equal(r.verified, undefined, 'short-circuited BEFORE verify — an unchanged tree must not count as verified');
+  await sh(`git -C ${q(repo)} branch -D agentwt/empty1`);
 });
 
 test('"nothing implemented" is a safe no-op (no merge, attempted=true)', async () => {

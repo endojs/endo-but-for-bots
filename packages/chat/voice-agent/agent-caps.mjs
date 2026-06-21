@@ -517,19 +517,20 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
     const wtId = `improve-${newSwiss().slice(0, 10)}`;
     let wt = null;
     try { wt = await worktrees.create(wtId); } catch (e) { return { branch: null, error: `worktree setup failed: ${String((e && e.message) || e)}` }; }
-    let answer = ''; let branch = wt.branch;
+    let answer = ''; let branch = wt.branch; let committed = false;
     try {
       const subNode = makeAgentNode({ powers: ring, labelOf: `improve-exec-${wtId}`, haBinding: () => haTrie?.root || null, agBinding: () => agentRoster?.root || null, cwdBinding: () => wt.dir, id: `improve-exec-${wtId}` });
       const sub = subNode.toolbox({ chatId: wtId });
       const verify = successCommand ? String(successCommand) : 'the full voice-agent test suite';
-      const prompt = `${spec.prompt}\n\nYou are in a FRESH GIT WORKTREE checked out at the repo root — your hostExec runs there. TASK:\n${String(goal)}\n\nMANDATORY: ship a NEW or UPDATED TEST that encodes this change's claim, and keep ${verify} GREEN — the change is re-verified independently and merged ONLY if green. Keep the change minimal + focused. Do NOT commit; the harness commits your working tree to a branch when you finish.`;
+      const prompt = `${spec.prompt}\n\nYou are in a FRESH GIT WORKTREE checked out at the repo root — your hostExec runs there. Actually EDIT files with hostExec (do not just describe the change). TASK:\n${String(goal)}\n\nMANDATORY: make the real code change AND ship a NEW or UPDATED TEST that encodes its claim, and keep ${verify} GREEN — the change is re-verified independently and merged ONLY if green. Keep it minimal + focused. Do NOT commit; the harness commits your working tree to a branch when you finish.`;
       const r = await runOpusDelegate({ prompt, toolbox: sub.toolbox, manifest: sub.manifest, grantedPowers: ring, signal });
       answer = (r && r.answer) || '';
     } catch (e) { answer = `executor error: ${String((e && e.message) || e)}`; } // ANY failure → still tear down (no worktree leak)
     finally {
-      try { const t = await worktrees.teardown(wtId, { commitMessage: `self-improve: ${String(goal).slice(0, 72)}` }); branch = (t && t.branch) || branch; } catch { /* keep wt.branch */ }
+      try { const t = await worktrees.teardown(wtId, { commitMessage: `self-improve: ${String(goal).slice(0, 72)}` }); branch = (t && t.branch) || branch; committed = !!(t && t.committed); } catch { /* keep wt.branch */ }
     }
-    return { branch, answer };
+    // if the executor made NO change, the teardown committed nothing → report no branch (honest no-op).
+    return { branch: committed ? branch : null, answer, committed };
   };
   // locator: swissnum → { node }  (every entry is an agent-node; the root and
   // every shared sub-bundle are nodes, so any holder can manage what it holds).
