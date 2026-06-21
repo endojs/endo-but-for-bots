@@ -252,6 +252,51 @@ jobs:
       - name: Run sandbox driver tests
         run: yarn workspace @endo/sandbox run test:drivers
 
+  claude-sandbox-integration:
+    name: claude-sandbox-integration
+
+    # begin macro
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      # without this, setup-node errors on mismatched yarn versions
+      - run: corepack enable
+
+      - name: Use Node.js 22.x
+        uses: actions/setup-node@6044e13b5dc448c55e2357c09f80417699197238 # v6.2.0
+        with:
+          node-version: 22.x
+          cache: yarn
+
+      - name: Install dependencies
+        run: yarn install --immutable
+
+      # end macro
+
+      - name: Run yarn build
+        run: yarn build
+
+      # Pre-pull the OCI image used by the @endo/claude-sandbox podman
+      # integration test (`ALPINE_REF`) so the first run does not pay the
+      # registry round-trip. Keep in sync with `ALPINE_REF` in
+      # packages/claude-sandbox/test/integration.test.js.
+      - name: Pre-pull alpine OCI image
+        run: podman pull docker.io/library/alpine:3.19
+
+      # Exercises a real @endo/sandbox podman slice, a real bind-mounted
+      # workspace, and a real process's stdout over the @endo/exo-stream
+      # wire protocol into the stream-json parser. The 9P-mount and
+      # real-`claude` cases self-skip when their prerequisites
+      # (9p kernel module, CLAUDE_SANDBOX_TEST_IMAGE) are absent.
+      - name: Run claude-sandbox integration test
+        run: yarn workspace @endo/claude-sandbox run test:integration
+
   test-async-hooks:
     name: test-async-hooks
 
