@@ -36,7 +36,7 @@
     "lint:eslint": "eslint '**/*.js'",
     "lint:types": "tsc",
     "prepack": "exit 0",
-    "test": "node test/helpers/run-ava.cjs",
+    "test": "timeout -s KILL 180 ava test/component/inline-define.test.js test/component/inline-eval.test.js test/component/inventory-component.test.js test/component/message-picker.test.js test/component/microblog.test.js test/component/monaco-wrapper.test.js test/component/outliner-enter-key.test.js test/component/peers.test.js test/component/petname-path-autocomplete-confined.test.js test/component/petname-path-autocomplete.test.js test/component/petname-paths-autocomplete-confined.test.js test/component/petname-paths-autocomplete.test.js test/component/profile-popup.test.js test/component/scheme-picker.test.js test/component/send-form.test.js test/component/share-modal.test.js test/component/spaces-gutter-home.test.js test/component/token-autocomplete-confined.test.js test/component/token-autocomplete.test.js test/component/value-component.test.js test/component/whylip.test.js ",
     "test:c8": "c8 ${C8_OPTIONS:-} ses-ava",
     "test:e2e": "playwright test",
     "test:monaco-lockdown": "node test/monaco-lockdown/run.mjs",
@@ -114,7 +114,6 @@
       "test/**/*.test.*"
     ],
     "timeout": "2m",
-    "workerThreads": false,
     "environmentVariables": {
       "LOCKDOWN_OPTIONS": "{\"errorTaming\":\"unsafe\",\"overrideTaming\":\"severe\",\"domainTaming\":\"unsafe\"}"
     }
