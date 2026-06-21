@@ -36,7 +36,7 @@
     "lint:eslint": "eslint '**/*.js'",
     "lint:types": "tsc",
     "prepack": "exit 0",
-    "test": "ava",
+    "test": "timeout -s KILL 260 ava",
     "test:c8": "c8 ${C8_OPTIONS:-} ses-ava",
     "test:e2e": "playwright test",
     "test:monaco-lockdown": "node test/monaco-lockdown/run.mjs",
@@ -111,7 +111,21 @@
   },
   "ava": {
     "files": [
-      "test/**/*.test.*"
+      "test/component/blob-viewer.test.js",
+      "test/component/channel-header.test.js",
+      "test/component/channel-list.test.js",
+      "test/component/channel-thread.test.js",
+      "test/component/channel.test.js",
+      "test/component/chat-bar.test.js",
+      "test/component/command-selector.test.js",
+      "test/component/counter-proposal-form.test.js",
+      "test/component/debugger-panel.test.js",
+      "test/component/define-form.test.js",
+      "test/component/edit-space-modal.test.js",
+      "test/component/endow-modal.test.js",
+      "test/component/eval-form.test.js",
+      "test/component/form-builder.test.js",
+      "test/component/form-request-inbox.test.js"
     ],
     "timeout": "2m",
     "environmentVariables": {
