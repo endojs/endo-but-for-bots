@@ -68,16 +68,19 @@ A single Claude Code session bound to one slice.
 
 | method | behavior |
 |--------|----------|
-| `send(prompt, opts?)` | spawn `claude -p <prompt> --output-format stream-json` in the slice; resolves to a reader of parsed stream-json events (consume with `makeRefIterator`) |
-| `interrupt()` | kill the in-flight `claude` process; the slice survives |
-| `terminate()` | dispose the slice and unmount the host 9P workspace |
+| `send(prompt, opts?)` | run `claude -p <prompt> --output-format stream-json` in the slice; returns a buffered reply reader (consume with `makeRefIterator`) that yields the parsed stream-json events then a terminal `{type:'end'}` or `{type:'abort',reason}`. Closing the reader aborts the turn. |
+| `interrupt()` | close the current reader — kills the in-flight `claude` process; the slice survives |
+| `terminate()` | dispose the slice, unmount the host 9P workspace, and revoke the credential grant |
 | `status()` | `{ sessionId, createdAt, workspaceMountPoint, backend, rootfs, conversationStarted, terminated }` |
 | `help()` | usage string |
 
-**Turn model.**
-Each `send()` is one-shot: a fresh `claude -p` process per call.
+**Turn model (floot-shaped).**
+Each `send()` is one `claude -p` process; turns **queue** (a `turnChain`
+serializes them, so two processes never race the same workspace conversation).
 Continuity is preserved by passing `--continue` on every turn after the first,
-which resumes the conversation persisted in the workspace.
+which resumes the conversation persisted in the workspace. The reply reader is
+the ported `makeBufferedReader`; closing it (or `interrupt()`) kills the
+in-flight process. See [DESIGN.md § Turn model](./DESIGN.md#turn-model--the-floot-session-shape).
 
 ### `ClaudeCredentials`
 

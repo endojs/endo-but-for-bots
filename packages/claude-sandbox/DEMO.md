@@ -193,9 +193,10 @@ yarn exec endo eval --UNCONFINED \
 ```
 
 Each line is one stream-json event (`{"type":"system",…}`,
-`{"type":"assistant",…}`, `{"type":"result",…}`).
-Subsequent `send()` calls pass `--continue`, so the conversation builds up in
-the workspace.
+`{"type":"assistant",…}`, `{"type":"result",…}`), followed by a terminal
+`{"type":"end"}` (or `{"type":"abort","reason":…}` on error). Closing the reader
+early aborts the turn (kills the `claude` process). Subsequent `send()` calls
+queue and pass `--continue`, so the conversation builds up in the workspace.
 
 Check status or interrupt a long turn:
 
