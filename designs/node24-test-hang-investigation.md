@@ -1,8 +1,29 @@
 # Node-24 CI Test Hang Investigation
 
-Status: **root cause strongly localized, confirmation experiment pending**
+| | |
+|---|---|
+| **Created** | 2026-06-21 |
+| **Updated** | 2026-06-21 |
+| **Author** | kumavis (prompted) |
+| **Status** | **Complete** (root cause confirmed, fix landed on PR #471) |
+
+## Status
+
+**Resolved.** The hang is upstream Playwright bug
+[microsoft/playwright#41000](https://github.com/microsoft/playwright/issues/41000):
+`playwright install chromium` hangs during Chromium extraction on **Node
+24.16.0** (an `extract-zip`/`yauzl` regression,
+[nodejs/node#63487](https://github.com/nodejs/node)). It surfaced because PR
+#471's diff pulls `@endo/preact-container` — whose test is
+`playwright install chromium && vitest run` (vitest browser mode) — into
+turbo's affected set, and its pinned `playwright@1.56.1` is in the broken
+range. Fix: bump `playwright` to `^1.60.0` (resolved to `1.61.0`) in
+`packages/preact-container/package.json`. Verified in isolation on Node
+24.16.0: `1.56.1` hangs (killed at 240s); `1.61.0` installs Chromium and runs
+all 147 browser tests in ~2s. Landed on `claude/chat-preact-setup-r95thr`
+(PR #471). See "Resolution" at the end for the confirming evidence.
+
 Branch under repair: `claude/chat-preact-setup-r95thr` (PR #471)
-Last updated: 2026-06-21
 
 ## Symptom
 
@@ -154,34 +175,47 @@ This hypothesis explains **every** observation:
   `process.getActiveResourcesInfo()` is the authoritative "still holding the
   loop" signal.
 
-## Next experiment (to confirm)
+## Confirmation experiment
 
-Run **only** `@endo/preact-container`'s real test in isolation on
-`24.x, ubuntu-latest`, via an exploratory PR that edits `.github/workflows/ci.yml`,
-and after `vitest` exits, enumerate leftover processes:
+An isolated `hang-probe` workflow (off `llm`) ran **only**
+`@endo/preact-container`'s real test on Node 22 vs 24, bounding it with
+`timeout` and redirecting vitest output to a file (so a stuck process can't
+wedge the step), then dumping the exit code and any leftover browser:
 
 ```bash
-timeout -s KILL 240 yarn workspace @endo/preact-container run test
-echo "vitest exit=$?"
-ps -eo pid,ppid,etimes,comm,args | grep -iE 'chrom|vitest|headless|node' | grep -v grep
+timeout -s KILL 240 yarn workspace @endo/preact-container run test >/tmp/v.out 2>&1
+echo "exit=$?"; tail -40 /tmp/v.out
+ps -eo pid,ppid,etimes,comm,args | grep -iE 'chrom|headless|vitest|playwright' | grep -v grep
 ```
 
-Expected if the hypothesis holds: `vitest` reports its results, but the step
-does **not** terminate (or `ps` shows a surviving `chrome`/`headless_shell`
-process). Compare the same on `22.x` (expected: clean exit).
+This is **not** a vitest/browser-teardown leak as first suspected — the hang
+is in `playwright install chromium`, *before* vitest ever prints `RUN`.
 
-## Candidate fixes (once confirmed)
+## Resolution
 
-1. **Ensure the browser/vitest server is force-closed after the run** — e.g.
-   wrap the CI invocation so leftover Chromium is killed, or configure vitest
-   to not leave a server (`--no-watch` is already implied by `run`; investigate
-   `browser.api`/teardown and `pool`/`isolate` settings under Node 24).
-2. **Pin/upgrade `vitest` + `@vitest/browser-playwright`** to a version whose
-   Node-24 subprocess teardown is fixed.
-3. **Gate the browser suite** behind a job that doesn't share the turbo
-   `test` pipe, or give it an explicit `timeout` + cleanup step in CI so a
-   leaked browser cannot wedge the matrix.
+Confirmed on `24.x, ubuntu-latest` (`node v24.16.0`), changing only the
+Playwright version:
 
-Prefer a real teardown fix over masking; only fall back to a CI-level
-`timeout`/kill wrapper if the leak proves to be inside vitest/Playwright and
-not in our config.
+| | `playwright@1.56.1` | `playwright@1.61.0` |
+|---|---|---|
+| Node 24.16.0 | download `100% of 173.9 MiB`, then **hang** → killed at 240s (`exit=137`); vitest never starts | ✅ Chromium installs, **`147 passed` in ~2s**, no leftover process, clean exit |
+| Node 22.x | ✅ `147 passed`, 2.78s | ✅ `147 passed` |
+
+**Root cause:** [microsoft/playwright#41000](https://github.com/microsoft/playwright/issues/41000)
+(dup of #40998) — a Node 24.16.0 `extract-zip`/`yauzl` regression
+([nodejs/node#63487](https://github.com/nodejs/node)) hangs Chromium
+extraction. `playwright<=1.57` is affected; **1.60.0+ fixes it**. The runner's
+`24.x` resolves to 24.16.0, and the `&&` in `playwright install chromium &&
+vitest run` means a stuck install wedges the whole `test (24.x)` job (both
+ubuntu and macos) for hours, taking the turbo run — and therefore PR #471's
+CI — down with it.
+
+**Fix (landed on PR #471):** bump `playwright` `1.56.1` → `^1.60.0`
+(resolved `1.61.0`) in `packages/preact-container/package.json`, with the
+lockfile update in its own commit.
+
+This was not a chat / SES / AVA / worker-thread issue at all; the long detour
+through chat came from the turbo affected set mixing `@endo/chat`,
+`@endo/space-file-explorer`, and `@endo/preact-container` into one `test` job,
+so chat's (passing) AVA output was the last thing visible before the
+(unrelated) preact-container task wedged the run.
