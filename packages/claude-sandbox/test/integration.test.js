@@ -163,7 +163,14 @@ test.serial(
   'a real podman slice streams a workspace file as stream-json into the parser',
   async t => {
     if (!podman.available || !podman.imagePresent) {
-      t.pass(`podman or alpine image not available: ${podman.reason ?? ''}`);
+      const why = `podman or alpine image not available: ${podman.reason ?? 'image absent'}`;
+      // In CI the job pre-pulls the image and sets this, so "cannot run"
+      // is a real failure rather than a silent green.
+      if (process.env.CLAUDE_SANDBOX_REQUIRE_INTEGRATION) {
+        t.fail(why);
+      } else {
+        t.pass(why);
+      }
       return;
     }
 

@@ -295,6 +295,10 @@ jobs:
       # real-`claude` cases self-skip when their prerequisites
       # (9p kernel module, CLAUDE_SANDBOX_TEST_IMAGE) are absent.
       - name: Run claude-sandbox integration test
+        # The image is pre-pulled above, so require the slice case to actually
+        # run rather than self-skip to green.
+        env:
+          CLAUDE_SANDBOX_REQUIRE_INTEGRATION: '1'
         run: yarn workspace @endo/claude-sandbox run test:integration
 
   test-async-hooks:

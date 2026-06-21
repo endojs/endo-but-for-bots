@@ -5,35 +5,39 @@
  * `ClaudeClient` — a single Claude Code session running inside an
  * `@endo/sandbox` slice (rootless podman, by default).
  *
- * Turn model (v1): each `send(prompt)` spawns a fresh
+ * Turn model: each `send(prompt)` runs one
  * `claude -p <prompt> --output-format stream-json` process inside the
- * slice. Conversation continuity across turns is preserved by passing
- * `--continue` on every send after the first, which resumes the most
- * recent conversation persisted in the workspace. This keeps the
- * lifecycle simple (no long-lived stdin plumbing) while still letting
- * a sequence of `send()` calls build on each other.
+ * slice. Turns **queue** on an internal chain so two processes never
+ * race the same workspace conversation; `--continue` on every turn
+ * after the first resumes the conversation persisted in the workspace,
+ * letting a sequence of `send()` calls build on each other (no
+ * long-lived stdin plumbing).
  *
- * The process's stdout carries newline-delimited JSON — the
- * `claude -p --output-format stream-json` contract Anthropic ships.
- * `send()` resolves to a Far iterator of the parsed events; callers
- * consume it with `makeRefIterator` from `@endo/daemon/ref-reader.js`,
- * the same pattern used elsewhere for message followers.
+ * `send()` returns a **buffered reply reader** immediately (consume it
+ * with `makeRefIterator`): it yields the parsed stream-json events, then
+ * a terminal `{ type: 'end' }` on clean completion or
+ * `{ type: 'abort', reason }` on a spawn/stream error. **Closing the
+ * reader aborts the turn** — it kills the in-flight `claude` process (or
+ * makes a still-queued turn bail). This mirrors the floot session's
+ * reply channel; `interrupt()` is the same thing applied to the current
+ * turn. See `DESIGN.md` § "Turn model".
  *
- * The slice handle and the host-side 9P mount handle are *live*
- * references held in the factory worker; this exo is therefore not a
- * pure-env formula and does not reincarnate across daemon restarts
- * (see `README.md` § "Lifecycle"). `terminate()` disposes the slice
- * and unmounts the workspace.
+ * The slice and 9P mount are provisioned lazily (see the `provision`
+ * thunk and `claude-client-module.js`), so the exo can be a pure-`env`
+ * formula that reincarnates across daemon restarts. `terminate()`
+ * disposes the slice, unmounts the workspace, and revokes the
+ * credential grant.
  *
  * @module
  */
 
 import { E } from '@endo/eventual-send';
-import { Far } from '@endo/far';
 import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
 import { makeError, q, X } from '@endo/errors';
 import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
+
+import { makeBufferedReader } from './buffered-channel.js';
 
 /** @import { SandboxHandle, ProcessHandle } from '@endo/sandbox/types.js' */
 
@@ -124,13 +128,15 @@ const defaultStdoutIterable = proc =>
  * @property {{ unmount: () => Promise<void> }} [mountHandle] - Host-side
  *   9P mount handle for the workspace. Unmounted on `terminate()`.
  *   Omitted when the workspace was bound by some other means (tests).
- * @property {() => Promise<{ slice: SandboxHandle, mountHandle?: { unmount: () => Promise<void> } }>} [provision]
+ * @property {() => Promise<{ slice: SandboxHandle, mountHandle?: { unmount: () => Promise<void> }, revoke?: () => Promise<void> }>} [provision]
  *   - Lazy workspace provisioner. When present, `slice` / `mountHandle`
  *   are ignored and the slice + mount are created on first use (the
  *   first `send()` or `initialPrompt`), memoized thereafter. This is
  *   what lets the client be a pure-`env` formula: it constructs
  *   instantly and re-mounts / re-mints its container on demand, so
- *   daemon boot is never blocked on a container start.
+ *   daemon boot is never blocked on a container start. May also return a
+ *   `revoke` thunk, called on `terminate()` to release the credential
+ *   grant it issued.
  * @property {string} workspaceMountPoint - Host path the workspace 9P
  *   mount lives at (diagnostic; surfaced in `status()`).
  * @property {string} [workspacePath] - Slice-internal workspace path
@@ -171,19 +177,27 @@ export const makeClaudeClient = ({
   makeStdoutIterable = defaultStdoutIterable,
 }) => {
   let terminated = false;
-  // `--continue` resumes the most recent conversation; the first send
+  // `--continue` resumes the most recent conversation; the first turn
   // has nothing to resume, so it is omitted until one prompt has been
   // dispatched.
   let conversationStarted = false;
   /** @type {ProcessHandle | null} */
   let inFlight = null;
+  // The reply reader of the most recent turn. `interrupt()` closes it —
+  // the floot model where closing the reader *is* the interrupt.
+  /** @type {{ return: () => Promise<any> } | null} */
+  let currentReader = null;
+  // Serialize turns so two `claude -p` processes never race the same
+  // workspace conversation: each `send()` queues behind the previous turn.
+  /** @type {Promise<void>} */
+  let turnChain = Promise.resolve();
 
   // Workspace provisioning. Direct `slice` / `mountHandle` are treated
   // as already provisioned (eager); a `provision` thunk is run once on
   // first use (lazy) and memoized. `provisioned` stays `undefined`
   // until a lazy provision starts, so `terminate()` before any use is
   // a no-op rather than spinning up a container just to tear it down.
-  /** @type {Promise<{ slice: SandboxHandle, mountHandle?: { unmount: () => Promise<void> } }> | undefined} */
+  /** @type {Promise<{ slice: SandboxHandle, mountHandle?: { unmount: () => Promise<void> }, revoke?: () => Promise<void> }> | undefined} */
   let provisioned = provision
     ? undefined
     : Promise.resolve(
@@ -196,9 +210,20 @@ export const makeClaudeClient = ({
       );
   const ensureProvisioned = () => {
     if (provisioned === undefined) {
-      provisioned = Promise.resolve(
+      const pending = Promise.resolve(
         /** @type {NonNullable<typeof provision>} */ (provision)(),
       );
+      provisioned = pending;
+      // A transient provisioning failure (image pull, 9P mount EPERM,
+      // slice mint) must not permanently brick the session: drop the
+      // memoized rejection so a later turn can retry. `provision()`
+      // re-issues the credential on retry, and its own catch already
+      // unmounts/revokes the failed attempt.
+      pending.catch(() => {
+        if (provisioned === pending) {
+          provisioned = undefined;
+        }
+      });
     }
     return provisioned;
   };
@@ -250,109 +275,139 @@ export const makeClaudeClient = ({
   };
 
   /**
-   * Wrap a `ProcessHandle`'s stdout as a Far iterator of parsed
-   * stream-json events. Clears `inFlight` when the stream ends so a
-   * later `interrupt()` does not target a finished process.
+   * Run one turn: queue behind any in-flight turn (`turnChain`), spawn
+   * `claude -p`, stream its parsed stream-json stdout into a buffered
+   * reply reader, and return that reader immediately. The reader yields
+   * the raw stream-json events, then a terminal `{ type: 'end' }` on
+   * clean completion or `{ type: 'abort', reason }` on a spawn/stream
+   * error.
    *
-   * @param {ProcessHandle} proc
+   * Closing the reader (consumer stop) kills the in-flight process — the
+   * floot `onClose → abort`, here `onClose → kill`. A turn that is still
+   * queued when closed bails before it spawns.
+   *
+   * @param {string} prompt
+   * @param {{ model?: string }} [opts]
+   * @returns {object} reply reader
    */
-  const makeEventReader = proc => {
-    const gen = parseStreamJsonLines(makeStdoutIterable(proc));
-    const onDone = () => {
-      if (inFlight === proc) {
-        inFlight = null;
+  const runTurn = (prompt, opts = {}) => {
+    /** @type {ProcessHandle | null} */
+    let proc = null;
+    let closed = false;
+    const { push, reader, setOnClose } =
+      makeBufferedReader('ClaudeReplyReader');
+    setOnClose(() => {
+      closed = true;
+      if (proc) {
+        E(proc)
+          .kill()
+          .catch(() => {});
       }
-    };
-    // A lightweight one-off remotable iterator, consumed by
-    // `makeRefIterator`. `Far` (rather than `makeExo`) is the
-    // idiomatic shape here — see `@endo/daemon/ref-reader.js`.
-    return Far('ClaudeEventReader', {
-      async next() {
-        const result = await gen.next();
-        if (result.done) {
-          onDone();
-        }
-        return harden({ done: result.done, value: result.value });
-      },
-      /** @param {any} [value] */
-      async return(value) {
-        onDone();
-        if (gen.return) {
-          const r = await gen.return(value);
-          return harden({ done: true, value: r.value });
-        }
-        return harden({ done: true, value });
-      },
-      /** @param {any} err */
-      async throw(err) {
-        onDone();
-        if (gen.throw) {
-          return gen.throw(err);
-        }
-        throw err;
-      },
     });
+    currentReader = reader;
+
+    const turn = turnChain.then(async () => {
+      if (closed || terminated) return;
+      try {
+        proc = await spawnClaude(prompt, opts);
+      } catch (error) {
+        push({
+          type: 'abort',
+          reason: error instanceof Error ? error.message : String(error),
+        });
+        return;
+      }
+      if (closed || terminated) {
+        await E(proc)
+          .kill()
+          .catch(() => {});
+        return;
+      }
+      inFlight = proc;
+      try {
+        for await (const event of parseStreamJsonLines(
+          makeStdoutIterable(proc),
+        )) {
+          push(event);
+        }
+        push({ type: 'end' });
+      } catch (error) {
+        push({
+          type: 'abort',
+          reason: error instanceof Error ? error.message : String(error),
+        });
+      } finally {
+        if (inFlight === proc) {
+          inFlight = null;
+        }
+      }
+    });
+    // Keep the chain alive even if a turn rejects (errors are surfaced as
+    // `abort` events, but be defensive).
+    turnChain = turn.catch(() => {});
+    return reader;
   };
 
-  // Fire-and-forget the initial prompt: drain it in the background so
-  // the stdout fd does not leak when the caller never calls send().
-  // Ordering with the first explicit send() is preserved by awaiting
-  // `sentInitial` there.
-  const sentInitial = initialPrompt
-    ? (async () => {
-        const proc = await spawnClaude(initialPrompt);
-        inFlight = proc;
-        const reader = makeEventReader(proc);
-        // eslint-disable-next-line no-constant-condition
-        for (;;) {
-          const { done } = await reader.next();
-          if (done) break;
-        }
-      })()
-    : null;
-  if (sentInitial) {
-    sentInitial.catch(() => {});
+  // Fire-and-forget the initial prompt: queue it as the first turn and
+  // drain it in the background so the buffer does not grow unbounded if
+  // the caller never pulls. Explicit `send()`s queue after it.
+  if (initialPrompt) {
+    const initReader = runTurn(initialPrompt);
+    (async () => {
+      for (;;) {
+        const { done } = await initReader.next();
+        if (done) break;
+      }
+    })().catch(() => {});
   }
 
   return makeExo('ClaudeClient', ClaudeClientInterface, {
     /**
+     * Start a turn and return its reply reader immediately. The turn
+     * queues behind any in-flight turn; the reader yields the parsed
+     * stream-json events followed by a terminal `{ type: 'end' }` (or
+     * `{ type: 'abort', reason }`). Closing the reader aborts the turn.
+     *
      * @param {string} prompt
      * @param {object} [opts]
      */
     async send(prompt, opts = {}) {
       guardLive();
-      if (sentInitial) {
-        await sentInitial;
-      }
-      const proc = await spawnClaude(prompt, opts);
-      inFlight = proc;
-      return makeEventReader(proc);
+      return runTurn(prompt, opts);
     },
 
     /**
-     * Kill the in-flight `claude` process (if any) without tearing
-     * down the slice. The next `send()` starts a fresh process.
+     * Interrupt the current turn by closing its reply reader: closing
+     * kills the in-flight `claude` process (or makes a still-queued turn
+     * bail before it spawns). The slice survives; the next `send()`
+     * starts a fresh process.
      */
     async interrupt() {
       guardLive();
-      if (!inFlight) {
+      if (!currentReader) {
         throw makeError(
           X`ClaudeClient(${q(sessionId)}): no in-flight prompt to interrupt.`,
         );
       }
-      const proc = inFlight;
-      inFlight = null;
-      await E(proc).kill();
+      await currentReader.return();
     },
 
     /**
-     * Tear down the session: kill any in-flight process, dispose the
-     * slice (which kills every process and releases the container),
-     * then unmount the host-side 9P workspace mount.
+     * Tear down the session: abort the in-flight turn, dispose the slice
+     * (which kills every process and releases the container), unmount the
+     * host-side 9P workspace mount, and revoke the credential grant.
      */
     async terminate() {
       if (terminated) return;
       terminated = true;
+      // Abort the in-flight turn's reader (kills the process if running).
+      if (currentReader) {
+        try {
+          await currentReader.return();
+        } catch {
+          // best-effort
+        }
+      }
       if (inFlight) {
         const proc = inFlight;
         inFlight = null;
@@ -368,7 +423,7 @@ export const makeClaudeClient = ({
       if (provisioned === undefined) {
         return;
       }
-      /** @type {{ slice: SandboxHandle, mountHandle?: { unmount: () => Promise<void> } } | undefined} */
+      /** @type {{ slice: SandboxHandle, mountHandle?: { unmount: () => Promise<void> }, revoke?: () => Promise<void> } | undefined} */
       let resolved;
       try {
         resolved = await provisioned;
@@ -386,6 +441,13 @@ export const makeClaudeClient = ({
           await E(resolved.mountHandle).unmount();
         } catch {
           // best-effort; the mount caplet also unmounts on teardown
+        }
+      }
+      if (resolved.revoke) {
+        try {
+          await resolved.revoke();
+        } catch {
+          // best-effort; the credential cap may already be gone
         }
       }
     },
@@ -409,10 +471,13 @@ export const makeClaudeClient = ({
       if (methodName === undefined) {
         return [
           'ClaudeClient: a single Claude Code session in a sandbox slice.',
-          '  send(prompt, opts?) → reader of stream-json events',
-          '                        (consume with makeRefIterator)',
-          '  interrupt()         → kill the in-flight prompt (slice survives)',
-          '  terminate()         → dispose the slice + unmount the workspace',
+          '  send(prompt, opts?) → reply reader of stream-json events,',
+          '                        terminated by {type:"end"} or',
+          '                        {type:"abort",reason} (consume with',
+          '                        makeRefIterator). Turns queue.',
+          '  interrupt()         → close the current reader (kills the',
+          '                        in-flight prompt; slice survives)',
+          '  terminate()         → dispose the slice + unmount + revoke creds',
           '  status()            → { sessionId, createdAt, workspaceMountPoint,',
           '                          backend, rootfs, conversationStarted,',
           '                          terminated }',

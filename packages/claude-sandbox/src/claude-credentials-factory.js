@@ -343,6 +343,7 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
       const isOurForm = msg.from === selfId && msg.type === 'form';
       const isFormReply =
         msg.type === 'value' &&
+        formMessageId !== undefined &&
         msg.replyTo === formMessageId &&
         !seenFormReplies.has(msg.number);
 

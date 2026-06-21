@@ -158,48 +158,63 @@ export const make = (powers, context, contextWrapper = {}) => {
       throw makeError(X`Unknown filesystem: ${q(filesystemName)}`);
     }
 
-    // Materialise the credential immediately before it flows into the
-    // slice env. The cap may live on a remote peer; the host only ever
-    // receives the short-lived secret it mints here.
-    /** @type {Record<string, string>} */
-    const credentialEnv = {};
+    // Resolve the credentials cap up front so a failure (or terminate)
+    // can revoke the per-session grant rather than leak it in the
+    // credentials cap's outstanding set.
+    /** @type {any} */
+    let credCap = null;
     if (credentialsName) {
-      const credCap = await E(hostAgent).lookup(credentialsName);
+      credCap = await E(hostAgent).lookup(credentialsName);
       if (!credCap) {
         throw makeError(X`Unknown credentials: ${q(credentialsName)}`);
       }
-      let kind = 'apiKey';
-      try {
-        // eslint-disable-next-line no-underscore-dangle
-        const methodNames = await E(credCap).__getMethodNames__();
-        if (methodNames.includes('kind')) {
-          kind = await E(credCap).kind();
-        }
-      } catch {
-        // No introspection surface; treat as an API key.
-      }
-      const envVar = CREDENTIAL_ENV_VARS[kind];
-      if (!envVar) {
-        throw makeError(
-          X`Unknown credential kind ${q(kind)}; expected one of ${q(
-            Object.keys(CREDENTIAL_ENV_VARS).join(', '),
-          )}`,
-        );
-      }
-      const issuedCred = await E(credCap).issue(sessionId);
-      credentialEnv[envVar] = await E(issuedCred).materialise();
     }
+    const revokeCredential = async () => {
+      if (credCap) {
+        await E(credCap).revoke(sessionId);
+      }
+    };
 
-    // Mount the FS over 9P on the host, register the mountpoint as a
-    // daemon Mount cap, then mint the slice with it bound at the
-    // workspace path. On any failure after the mount, release it
-    // rather than leak a mounted filesystem.
-    const mountHandle = await E(fsMounter).mount(
-      fs,
-      workspaceMountPoint,
-      harden({ lazyUnmount: true }),
-    );
+    // Materialise the credential, mount the FS over 9P, register the
+    // mountpoint as a daemon Mount cap, then mint the slice. On any
+    // failure release whatever was created — unmount the 9P mount and
+    // revoke the issued credential grant — rather than leak it.
+    /** @type {any} */
+    let mountHandle = null;
     try {
+      // Materialise the credential immediately before it flows into the
+      // slice env. The cap may live on a remote peer; the host only ever
+      // receives the short-lived secret it mints here.
+      /** @type {Record<string, string>} */
+      const credentialEnv = {};
+      if (credCap) {
+        let kind = 'apiKey';
+        try {
+          // eslint-disable-next-line no-underscore-dangle
+          const methodNames = await E(credCap).__getMethodNames__();
+          if (methodNames.includes('kind')) {
+            kind = await E(credCap).kind();
+          }
+        } catch {
+          // No introspection surface; treat as an API key.
+        }
+        const envVar = CREDENTIAL_ENV_VARS[kind];
+        if (!envVar) {
+          throw makeError(
+            X`Unknown credential kind ${q(kind)}; expected one of ${q(
+              Object.keys(CREDENTIAL_ENV_VARS).join(', '),
+            )}`,
+          );
+        }
+        const issuedCred = await E(credCap).issue(sessionId);
+        credentialEnv[envVar] = await E(issuedCred).materialise();
+      }
+
+      mountHandle = await E(fsMounter).mount(
+        fs,
+        workspaceMountPoint,
+        harden({ lazyUnmount: true }),
+      );
       const workspaceCap = await E(hostAgent).provideMount(
         workspaceMountPoint,
         workspacePetName,
@@ -220,12 +235,19 @@ export const make = (powers, context, contextWrapper = {}) => {
           backend,
         }),
       );
-      return harden({ slice, mountHandle });
+      return harden({ slice, mountHandle, revoke: revokeCredential });
     } catch (error) {
+      if (mountHandle) {
+        try {
+          await E(mountHandle).unmount();
+        } catch {
+          // best-effort
+        }
+      }
       try {
-        await E(mountHandle).unmount();
+        await revokeCredential();
       } catch {
-        // best-effort
+        // best-effort; the credential cap may be gone
       }
       throw error;
     }

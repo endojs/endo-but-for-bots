@@ -203,6 +203,11 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
 
   const iterateMessages = deps.iterateMessages ?? iterateReader;
 
+  // Monotonic per-worker counter so two sessions formulated in the same
+  // millisecond get distinct ids (and hence distinct mountpoints + workspace
+  // pet names). `Date.now()` alone collides for same-name same-ms requests.
+  let sessionCounter = 0;
+
   /** @type {Promise<any> | undefined} */
   let hostAgentP;
   const getHostAgent = () => {
@@ -257,7 +262,8 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
     const parsedRootfs = parseRootfs(rootfsValue, { defaultImage });
 
     const slug = slugify(name);
-    const sessionId = `${slug}-${Date.now().toString(36)}`;
+    sessionCounter += 1;
+    const sessionId = `${slug}-${Date.now().toString(36)}-${sessionCounter.toString(36)}`;
     const hostMountPoint = nodePath.join(
       mountBaseDir,
       `claude-sandbox-${sessionId}`,
@@ -332,6 +338,7 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
       const isOurForm = msg.from === selfId && msg.type === 'form';
       const isFormReply =
         msg.type === 'value' &&
+        formMessageId !== undefined &&
         msg.replyTo === formMessageId &&
         !seenFormReplies.has(msg.number);
 
