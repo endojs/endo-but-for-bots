@@ -134,12 +134,21 @@ Configuration env (threaded into the factory formula by `setup.js` /
 
 ## Lifecycle
 
-A `ClaudeClient` holds **live** references — the podman slice handle and the
-host 9P mount handle — in the factory worker.
-It is therefore not a pure-env formula and does **not** reincarnate across
-daemon restarts: a restart drops live sessions and the podman driver sweeps
-`endo-sandbox-*` orphan containers at boot.
-This matches the `@endo/sandbox` plugin's non-goal of persistence.
+Each `ClaudeClient` is a **first-class `claude-client` formula**
+([`src/claude-client-module.js`](./src/claude-client-module.js)), formulated by
+the factory via `makeUnconfined` and parameterised entirely by `env`. It does
+**not** hold the slice or mount as construction state: it provisions them lazily
+on first use (mount the workspace over 9P, register the Mount cap, mint the
+podman slice) and memoizes the result.
+
+Because the formula is a pure value of its `env`, it **reincarnates across
+daemon restarts**: a restart re-provisions on the next `send()` — re-mounting
+the workspace and minting a fresh container (the podman driver sweeps
+`endo-sandbox-*` orphans at boot). The workspace and the conversation persist in
+the `Filesystem` cap, and the credential is re-materialised from its (possibly
+peer-hosted) cap at spawn time, so no secret is stored in the formula. The
+container itself is ephemeral, matching the `@endo/sandbox` plugin's non-goal of
+container persistence.
 
 ## Caveats
 

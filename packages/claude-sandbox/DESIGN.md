@@ -10,8 +10,9 @@ It complements [`README.md`](./README.md) (usage) and [`DEMO.md`](./DEMO.md)
 > The provisioning, credentials, and host-9P-mount paths are verified live on
 > Linux.
 > Claude Code has been run inside a rootless podman slice (without an API key).
-> The form-driven `storeValue` path has a known blocker — see
-> [Known issues](#known-issues--future-work).
+> Each session is now a first-class `claude-client` formula, so the form-driven
+> store path works and survives daemon restarts; the end-to-end form path still
+> wants a live-daemon test — see [Known issues](#known-issues--future-work).
 
 ## Goal
 
@@ -132,68 +133,71 @@ LinuxKit kernel 6.12, aarch64) — see [DEMO.md](./DEMO.md).
 
 ## Known issues & future work
 
-### 1. `storeValue` cannot persist the `ClaudeClient` (blocker for the form path)
+### 1. `storeValue` could not persist the `ClaudeClient` — FIXED
 
-The form path creates the slice and 9P mount correctly, but
-`E(hostAgent).storeValue(client, name)` throws
+Originally the form path built the `ClaudeClient` as a `makeExo` inside the
+factory worker and called `E(hostAgent).storeValue(client, name)`, which threw
 `No corresponding formula for Object [Alleged: ClaudeClient]`
-(`packages/daemon/src/host.js`).
-A `makeExo` built inside the factory worker — and the slice / mount handles it
-wraps — are worker-local remotables with no daemon **formula** identity, so
-`formulateMarshalValue` cannot store a reference; the pet name ends up pointing
-at a non-existent formula.
+(`packages/daemon/src/host.js`): a worker-local exo — and the slice / mount
+handles it wrapped — have no daemon **formula** identity, so
+`formulateMarshalValue` cannot store a reference and the pet name pointed at a
+non-existent formula.
 The dependency-injected unit tests masked this because the mock `storeValue`
-just records the object.
+just recorded the object.
 
-**Chosen direction: a first-class `claude-client` formula.**
-Formulate each session as its own caplet so it has a real daemon identity
-(`storeValue` works, and it reincarnates across daemon restarts), mirroring
-`@endo/claude-container`'s per-session `ClaudeClient` formula.
+**Fixed: each session is now a first-class `claude-client` formula.**
+The factory formulates the session via
+`E(hostAgent).makeUnconfined('@main', claude-client-module.js, { resultName,
+powersName: '@agent', env })`, so the stored `ClaudeClient` has a real daemon
+identity and reincarnates across restarts.
 
-Feasibility note (verified against `@endo/sandbox`):
-`E(sandboxFactory).make()` returns a `makeExo('SandboxHandle', …)` minted
-**inside the sandbox-factory's worker** (`packages/sandbox/src/factory.js`),
-and the 9P mount handle is likewise worker-local — neither has a formula
-identity, so a *separate* client formula cannot receive them across a formula
-boundary.
-The client formula must therefore **own its slice and mount**: a
-`claude-client-module.js` loaded by `makeUnconfined`, parameterised by `env`
-(the workspace `Filesystem` pet name, `sandbox-factory` / `fs-mounter` pet
-names, network, rootfs, model, and the `ClaudeCredentials` pet name), that
-mounts the workspace and mints the slice in its own worker.
+Because an `@endo/sandbox` slice (`makeExo('SandboxHandle', …)` minted inside
+the sandbox-factory's worker, `packages/sandbox/src/factory.js`) and the 9P
+mount handle are worker-local and cannot cross a formula boundary, the client
+formula **owns its slice and mount**:
+[`src/claude-client-module.js`](./src/claude-client-module.js) provisions them
+lazily from its `env` on first use — looking up the `sandbox-factory` /
+`fs-mounter` / `Filesystem` / `ClaudeCredentials` caps by pet name, mounting the
+workspace, registering the Mount cap, and minting the slice.
 On reincarnation it re-mounts and re-mints a fresh container; the workspace and
-the conversation persist in the `Filesystem` cap, and the short-lived
-credential is re-materialised from the (possibly peer-hosted) credential cap at
-spawn time — keeping the secret out of the formula `env` entirely.
+the conversation persist in the `Filesystem` cap, and the (possibly
+peer-hosted) credential is re-materialised at spawn time — so no secret ever
+enters the formula `env`.
 
-This refactor changes the factory's trust/authority wiring (the per-session
-client worker needs `host-agent` access to look up those caps) and can only be
-validated against a **live daemon** — which is exactly the integration-test gap
-in issue #3 below.
-It is therefore staged behind that test rather than landed against the
-mock-only suite (the same mock blind spot that masked this bug originally).
+The per-session client worker currently runs with `@agent` (full host
+authority) so it can call the privileged `provideMount` and look up those caps.
+Scoping that to a per-session guest profile that introduces only the needed caps
+(mirroring `@endo/claude-container`'s `provideGuest` pattern) is tracked in
+follow-ups below.
 
-### 2. Factory error path leaks the slice and the 9P mount — FIXED
+### 2. Factory error path leaks the slice and the 9P mount — FIXED (structurally)
 
-On any failure after the mount / slice were created, the `catch` block only
-replied with the error message; it did not dispose the slice or unmount the
-workspace, so the failed `storeValue` left a running `endo-sandbox-*` container
-and a mounted 9P filesystem behind.
+Originally, on any failure after the mount / slice were created the factory's
+`catch` only replied with the error message, leaving a running `endo-sandbox-*`
+container and a mounted 9P filesystem behind.
 
 **Fixed.**
-The submission handler now tracks `mountHandle` and `slice` in the submission
-scope and, on error, best-effort `E(slice).dispose()` (first, since the
-container holds the bind mount) then `E(mountHandle).unmount()` before
-replying.
-Covered by the `a failure after the slice is created tears down the slice and
-mount` test in `test/factory.test.js`.
+With issue #1's refactor the factory no longer mounts or mints anything — the
+client formula owns that lifecycle — so the factory cannot leak.
+The client module provisions atomically: if the slice mint fails after the
+mount, it unmounts the workspace before rejecting (covered by the
+`a slice-mint failure unmounts the workspace` test in
+`test/claude-client-module.test.js`), and `terminate()` disposes the slice and
+unmounts.
 
-### 3. Integration-test gap
+### 3. Integration-test gap — ADDRESSED
 
 The pure mocks could not catch the formula-identity constraint in #1.
-Add a podman-gated integration test (skipped when podman/rootless is
-unavailable) that exercises mount → `provideMount` → `make` → store → `send`
-against a tiny image, so the storage contract is covered.
+[`test/integration.test.js`](./test/integration.test.js) is a podman-gated test
+(skips when podman/rootless or the image is unavailable) that exercises a real
+`@endo/sandbox` podman slice, a real bind-mounted workspace, and a real
+process's stdout flowing over the `@endo/exo-stream` wire protocol into
+`parseStreamJsonLines` — the layer the unit mocks fake.
+A second case (gated on `CLAUDE_SANDBOX_TEST_IMAGE`) drives a real `claude`
+through `ClaudeClient.send`.
+Still open: a full **live-daemon** test that drives the form → `makeUnconfined`
+→ stored `ClaudeClient` path end to end (the `@agent` powers wiring is only
+exercised against a real daemon).
 
 ### 4. Other follow-ups
 
@@ -212,6 +216,14 @@ against a tiny image, so the storage contract is covered.
   `slirp4netns`/`pasta` reachable from the daemon's user). Note Claude Code must
   reach `api.anthropic.com`, so a usable session needs an egress-capable profile
   — `none` blocks the API entirely; the default is `private`.
+- **Least authority for the per-session client worker.** The `claude-client`
+  formula runs with `@agent` (full host authority) so it can call `provideMount`
+  and look up caps by pet name. Scope this to a per-session guest profile that
+  introduces only the `sandbox-factory`, `fs-mounter`, the workspace
+  `Filesystem`, and the credential — mirroring the `provideGuest` pattern
+  `@endo/claude-container` uses for its bridge — and confirm `provideMount` can
+  be reached (or pre-resolve the Mount cap in the factory and pass it by pet
+  name) under that reduced authority.
 - Reconcile the form's `rootfs` help with the podman driver: either drop
   `host-bind`/`minimal` from the advertised options under the podman backend or
   document that they require `bwrap`.
