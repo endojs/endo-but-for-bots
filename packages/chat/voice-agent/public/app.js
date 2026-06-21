@@ -1887,9 +1887,9 @@ const forkComponentAct = async (id, name) => {
 const componentSelect = () => {
   let altHeld = false, hoverEl = null;
   const outline = document.createElement('div');
-  outline.style.cssText = 'position:fixed;z-index:9000;pointer-events:none;border:2px solid #39d3ff;border-radius:8px;box-shadow:0 0 16px #39d3ff66;display:none;transition:all .05s ease;';
+  outline.style.cssText = 'position:fixed;z-index:9000;pointer-events:none;border:1px solid #ff2d2d;box-shadow:0 0 6px #ff2d2d66;display:none;transition:all .05s ease;';
   const label = document.createElement('div');
-  label.style.cssText = 'position:absolute;top:-21px;left:-2px;background:#39d3ff;color:#021018;font:600 11px -apple-system,Segoe UI,sans-serif;padding:1px 7px;border-radius:6px;white-space:nowrap;';
+  label.style.cssText = 'position:absolute;top:0;left:0;color:#ff2d2d;background:rgba(0,0,0,.55);font:600 11px ui-monospace,Menlo,Consolas,monospace;padding:1px 5px;white-space:nowrap;';
   outline.appendChild(label);
   const hint = document.createElement('div');
   hint.style.cssText = 'position:fixed;bottom:16px;left:50%;transform:translateX(-50%);z-index:9001;background:#0d1117f2;border:1px solid #39d3ff;color:#e6edf3;font:12px -apple-system,sans-serif;padding:6px 13px;border-radius:20px;display:none;pointer-events:none;';
@@ -1898,7 +1898,7 @@ const componentSelect = () => {
   chip.style.cssText = 'position:fixed;z-index:9002;display:none;gap:6px;background:#0d1117f7;border:1px solid #39d3ff;border-radius:10px;padding:6px 7px;box-shadow:0 10px 34px rgba(0,0,0,.6);font:12px -apple-system,sans-serif;align-items:center;';
   document.body.append(outline, hint, chip);
   const tagOf = el => (el && el.closest ? el.closest('[data-component-id]') : null);
-  const place = el => { if (!el) { outline.style.display = 'none'; return; } const r = el.getBoundingClientRect(); outline.style.display = 'block'; outline.style.left = `${r.left - 3}px`; outline.style.top = `${r.top - 3}px`; outline.style.width = `${r.width + 2}px`; outline.style.height = `${r.height + 2}px`; label.textContent = `🧩 ${el.getAttribute('data-component-name') || 'component'}`; };
+  const place = el => { if (!el) { outline.style.display = 'none'; return; } const r = el.getBoundingClientRect(); outline.style.display = 'block'; outline.style.left = `${r.left - 1}px`; outline.style.top = `${r.top - 1}px`; outline.style.width = `${r.width}px`; outline.style.height = `${r.height}px`; label.textContent = el.getAttribute('data-component-name') || el.getAttribute('data-component-id') || 'component'; }; // formal name, red monospace, top-left
   const clearChip = () => { chip.style.display = 'none'; outline.style.display = 'none'; };
   addEventListener('keydown', e => { if ((e.key === 'Alt' || e.altKey) && isRoot) { altHeld = true; hint.style.display = 'block'; } });
   addEventListener('keyup', e => { if (e.key === 'Alt' || !e.altKey) { altHeld = false; hint.style.display = 'none'; if (!chip.style.display || chip.style.display === 'none') outline.style.display = 'none'; } });
