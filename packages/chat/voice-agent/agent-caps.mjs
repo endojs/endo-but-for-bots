@@ -465,7 +465,7 @@ export const POWERS = harden({
   timers: { label: 'Schedule wake-ups / reminders that PING dan (for things a human must do)', verbs: ['scheduleWakeup', 'repeatEvery', 'cancelTimer', 'listTimers'] },
   schedule: { label: 'Create + edit SCHEDULED TASKS — recurring autonomous runs that DO the work themselves on a cadence (use this, not a reminder, when the agent can do the task)', verbs: ['scheduleTask', 'listScheduledTasks', 'editScheduledTask', 'cancelScheduledTask'] },
   browser: { label: 'Browse the web in a real headless browser (render JS, read pages, screenshot)', verbs: ['browseWeb', 'screenshotWeb'] },
-  home: { label: 'A private home folder you can read/write and publish sites from', verbs: ['fileList', 'fileRead', 'fileWrite', 'publishSite'] },
+  home: { label: 'A private scratch/workspace folder of ITS OWN to read/write + publish sites from (a sandboxed folder created for the agent — NOT your home directory or vault)', verbs: ['fileList', 'fileRead', 'fileWrite', 'publishSite'] },
   vm: { label: 'Full terminal in the agent-code dev VM (coarse: root over that sandbox)', verbs: ['vmExec'] },
   host: { label: '⚠️ Full shell over THIS host (archua) as the operator — the dev/dogfood harness; coarse ambient host-root, like claude-code', verbs: ['hostExec'] },
   agents: { label: 'The roster of agent personas + code sessions (read status; exec is coarse; route tasks to a dev session)', verbs: ['agentsList', 'agentStatus', 'agentExec', 'routeToDev'] },

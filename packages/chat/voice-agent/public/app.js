@@ -2191,6 +2191,10 @@ const refreshComponents = async () => {
       const sevClass = sev === 'critical' ? ' bad' : '';
       return `<div class="comp"><div class="comp-head"><b>${esc(t.name)}</b> <span class="pill${sevClass}">by ${esc(t.proposedBy || '?')} · panel: ${esc(sev)}</span> <button class="mini" data-admit="${esc(t.id)}" data-name="${esc(t.name)}" data-worst="${esc(rv ? rv.worst : '')}">admit</button> <button class="mini bad" data-reject="${esc(t.id)}" data-name="${esc(t.name)}">reject</button></div><div class="sub" style="margin:4px 0 0 6px">${findings}</div><details style="margin:5px 0 0 6px"><summary class="mini" style="display:inline-block">view code</summary><pre class="codeview">${esc(code)}</pre></details></div>`;
     }).join('');
+    // PAINT THE PENDING NOW — don't make the badge's count diverge from an empty list while the slower
+    // islands + per-tool history fetches below run (the "Components (7) but nothing listed" bug). The
+    // final innerHTML at the end replaces this with everything (pending + admitted + islands).
+    list.innerHTML = html; wireComponentActions();
   }
   // ISLANDS (confined-Preact UI components — their source is a client file, rebuilt on edit).
   let islandsHtml = '';
