@@ -11,8 +11,10 @@ It complements [`README.md`](./README.md) (usage) and [`DEMO.md`](./DEMO.md)
 > Linux.
 > Claude Code has been run inside a rootless podman slice (without an API key).
 > Each session is now a first-class `claude-client` formula, so the form-driven
-> store path works and survives daemon restarts; the end-to-end form path still
-> wants a live-daemon test — see [Known issues](#known-issues--future-work).
+> store path works and survives daemon restarts; both it and the peer-callable
+> `createSession` path are covered against a real daemon by
+> [`test/live-daemon.test.js`](./test/live-daemon.test.js) — see
+> [Known issues](#known-issues--future-work).
 
 ## Goal
 
@@ -444,9 +446,30 @@ process's stdout flowing over the `@endo/exo-stream` wire protocol into
 `parseStreamJsonLines` — the layer the unit mocks fake.
 A second case (gated on `CLAUDE_SANDBOX_TEST_IMAGE`) drives a real `claude`
 through `ClaudeClient.send`.
-Still open: a full **live-daemon** test that drives the form → `makeUnconfined`
-→ stored `ClaudeClient` path end to end (the `@agent` powers wiring is only
-exercised against a real daemon).
+
+The formula-identity constraint itself is now covered against a real daemon by
+[`test/live-daemon.test.js`](./test/live-daemon.test.js) (`yarn test:live`, run
+in CI in the `claude-sandbox-integration` job). It boots an Endo daemon via
+`@endo/daemon`'s `start`/`makeEndoClient`, mints a real Node-backed
+`Filesystem` cap, provisions the factory on `@host`, and validates both session
+paths end to end:
+
+- **`createSession`** (peer-callable) returns a `ClaudeClient` with a real
+  daemon identity — `status()` resolves across CapTP, the method surface
+  matches the interface guard, and the client is *not* named on the host (the
+  caller's retention is its only GC root). This is the direct end-to-end proof
+  of #1: a worker-local remotable could not survive the formula boundary.
+- **The `@host` form path** drives `form → submit → makeUnconfined → stored
+  ClaudeClient` and then `remove`, exercising the `@agent` powers wiring that
+  only runs against a real daemon.
+
+These cases stop short of `send()` so they need no podman/9p (`status()` and a
+never-used `terminate()` do not provision a container). Still not runnable in a
+single-node, no-9p CI: the **9P provision** itself (needs a `CONFIG_9P_FS`
+kernel + mount privilege; covered manually per [DEMO.md](./DEMO.md)) and
+**two-node peer-retention GC** (a second daemon holding the `createSession` cap,
+then dropping it). The lifecycle teardown is unit-tested via the cancellation
+context in `test/claude-client-module.test.js`.
 
 ### 4. Other follow-ups
 
