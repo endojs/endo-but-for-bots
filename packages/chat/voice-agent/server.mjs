@@ -1233,11 +1233,23 @@ const handler = async (req, res) => {
       const { cap, data } = await jsonBody(req);
       if (!nodeFor(cap)) return json(res, 403, { error: 'no capability' });
       try {
-        const s = JSON.stringify(data || {});
-        if (s.length > 6 * 1024 * 1024) return json(res, 413, { error: 'too large' });
+        const d = (data && typeof data === 'object') ? data : {};
+        const LIMIT = 6 * 1024 * 1024;
+        let s = JSON.stringify(d);
+        let trimmed = 0;
+        // NEVER reject the bundle wholesale: that froze the server copy at its last under-limit state, so
+        // every chat created afterward silently failed to sync and vanished when another device adopted the
+        // stale copy. The chat LIST is tiny + must never be lost; only TRANSCRIPTS bloat. On oversize, drop
+        // the OLDEST chats' transcripts (d.chats[0] is newest) until it fits — the full list always saves.
+        if (s.length > LIMIT && d.tx && typeof d.tx === 'object') {
+          const order = Array.isArray(d.chats) ? d.chats.map(c => c && c.id).filter(Boolean) : Object.keys(d.tx);
+          for (let i = order.length - 1; i >= 0 && s.length > LIMIT; i -= 1) { if (d.tx[order[i]]) { delete d.tx[order[i]]; trimmed += 1; s = JSON.stringify(d); } }
+          if (s.length > LIMIT) { d.tx = {}; s = JSON.stringify(d); } // pathological huge list → keep the list, drop all tx
+        }
+        if (s.length > LIMIT) return json(res, 413, { error: 'chat list itself exceeds the size limit' }); // metadata-only is tiny; should never happen
         await fs.promises.mkdir(CHATS_DIR, { recursive: true });
         await withChatLock(cap, () => fs.promises.writeFile(chatStorePath(cap), s)); // serialize vs the agent's retitle
-        return json(res, 200, { ok: true });
+        return json(res, 200, { ok: true, trimmed });
       } catch (e) { return json(res, 500, { error: e.message }); }
     }
 

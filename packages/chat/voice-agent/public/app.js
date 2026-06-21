@@ -1189,6 +1189,15 @@ const mint = async () => {
 const CHATS_KEY = 'field-agent-chats', ACTIVE_KEY = 'field-agent-active';
 const txKey = id => `field-agent-tx-${id}`;
 let chats = [];
+// Deletion tombstones — the sync MERGES (never drops a local chat) to prevent the "chats vanished"
+// data loss; tombstones let a delete still propagate across devices instead of resurrecting.
+const DELETED_KEY = 'field-agent-deleted';
+let deletedIds = (() => { try { return new Set(JSON.parse(localStorage.getItem(DELETED_KEY)) || []); } catch { return new Set(); } })();
+const saveDeleted = () => { try { localStorage.setItem(DELETED_KEY, JSON.stringify([...deletedIds].slice(-2000))); } catch {} };
+// Chat-list overflow: filter + paginate so a long history is searchable, never hidden/lost.
+let chatFilter = '';
+const CHAT_PAGE = 40;
+let chatShowN = CHAT_PAGE;
 let memoRuns = []; // server-owned traceable runs, one per incoming voice memo (versioned)
 let seedChats = []; // ingested voice-note chats (full objects incl. versions) — the harness applies here too
 let memoVersion = 0; // which version of the active run (memo OR seed-chat) is shown
@@ -1394,7 +1403,15 @@ const saveTx = () => { try { localStorage.setItem(txKey(sessionId), JSON.stringi
 //    is the fast/offline cache; the server is the shared source of truth. ──────────
 const UPD_KEY = 'field-agent-updated';
 let syncTimer = null;
-function bundleAll(updated) { return { chats, active: sessionId, updated, tx: Object.fromEntries(chats.map(c => [c.id, stripImg(loadTx(c.id)).slice(-200)])) }; }
+function bundleAll(updated) {
+  const b = { chats, active: sessionId, updated, deleted: [...deletedIds].slice(-2000),
+    tx: Object.fromEntries(chats.map(c => [c.id, stripImg(loadTx(c.id)).slice(-200)])) };
+  // Keep the payload under the server limit by trimming the OLDEST chats' transcripts first (chats[0] is
+  // newest). The LIST — which must never be lost — always rides; only old transcripts drop from the sync.
+  const order = chats.map(c => c.id);
+  for (let i = order.length - 1; i >= 0 && JSON.stringify(b).length > 5 * 1024 * 1024; i -= 1) delete b.tx[order[i]];
+  return b;
+}
 function scheduleSync() {
   if (!cap) return;
   const now = Date.now(); try { localStorage.setItem(UPD_KEY, String(now)); } catch {} // mark local as freshest
@@ -1402,16 +1419,34 @@ function scheduleSync() {
   syncTimer = setTimeout(() => { fetch('/chats/save', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, data: bundleAll(now) }) }).catch(() => {}); }, 1500);
 }
 function adoptBundle(b, { keepActive = false } = {}) {
-  if (!b || !Array.isArray(b.chats) || !b.chats.length) return false;
-  chats = b.chats; try { localStorage.setItem(CHATS_KEY, JSON.stringify(chats)); } catch {}
-  for (const [id, tx] of Object.entries(b.tx || {})) { try { localStorage.setItem(txKey(id), JSON.stringify(tx)); } catch {} }
+  if (!b || !Array.isArray(b.chats)) return false;
+  // MERGE, never replace — a stale/partial server bundle (e.g. one frozen because transcript bloat once
+  // exceeded the save limit) must NEVER delete a local chat. Union by id; tombstoned ids stay deleted.
+  for (const id of (Array.isArray(b.deleted) ? b.deleted : [])) deletedIds.add(id);
+  const byId = new Map(chats.map(c => [c.id, c]));
+  for (const sc of b.chats) {
+    if (!sc || !sc.id) continue;
+    const ex = byId.get(sc.id);
+    if (!ex) { byId.set(sc.id, sc); continue; }
+    const merged = { ...ex, ...sc, ts: Math.max(ex.ts || 0, sc.ts || 0) };
+    if (ex.title && ex.title !== 'New chat' && (!sc.title || sc.title === 'New chat')) merged.title = ex.title; // keep a real title over a placeholder
+    byId.set(sc.id, merged);
+  }
+  chats = [...byId.values()].filter(c => !deletedIds.has(c.id)).sort((a, c) => (c.ts || 0) - (a.ts || 0));
+  saveDeleted();
+  try { localStorage.setItem(CHATS_KEY, JSON.stringify(chats)); } catch {}
+  // tx: only adopt a server transcript if it's non-empty AND we don't already hold a longer local one —
+  // never clobber a richer local transcript with a trimmed/empty server copy.
+  for (const [id, tx] of Object.entries(b.tx || {})) {
+    if (!Array.isArray(tx) || !tx.length || deletedIds.has(id)) continue;
+    if (loadTx(id).length <= tx.length) { try { localStorage.setItem(txKey(id), JSON.stringify(tx)); } catch {} }
+  }
   try { localStorage.setItem(UPD_KEY, String(b.updated || 0)); } catch {}
   // keepActive: adopt the shared chat LIST but stay on the current (blank boot) chat, so
   // the cross-device load never yanks focus to the most-recent chat on page load.
   if (!keepActive) {
-    const active = (b.active && chats.find(c => c.id === b.active)) ? b.active : chats[0].id;
-    sessionId = active; try { localStorage.setItem(ACTIVE_KEY, active); } catch {}
-    activeTx = loadTx(active);
+    const active = (b.active && chats.find(c => c.id === b.active)) ? b.active : (chats[0] || {}).id;
+    if (active) { sessionId = active; try { localStorage.setItem(ACTIVE_KEY, active); } catch {} activeTx = loadTx(active); }
   }
   return true;
 }
@@ -1566,25 +1601,53 @@ const openDrawer = () => setSidebar(true);
 const closeDrawer = () => setSidebar(false);
 const toggleDrawer = () => setSidebar(!document.body.classList.contains('sidebar-open'));
 const renderChatList = () => {
-  // ONE recency-sorted list. Voice memos (and any future intake channel) are not a
-  // category — just conversations to keep surfaced + moving forward. A subtle 🎙 marks
-  // voice origin (provenance, not a section). Every item is openable + deletable.
-  const items = [
+  const host = $('chat-list'); if (!host) return;
+  // a PERSISTENT search box (created once so typing keeps focus) above a re-rendered items container,
+  // so a long history is searchable + paginated — never silently dropped.
+  if (!host.querySelector('#chat-search')) {
+    host.innerHTML = '<input id="chat-search" placeholder="search chats…" autocomplete="off" style="width:100%;box-sizing:border-box;margin:0 0 6px;padding:5px 8px;font:inherit;background:#11141f;border:1px solid #262c3d;border-radius:7px;color:inherit"><div id="chat-items"></div>';
+    const si = host.querySelector('#chat-search'); si.value = chatFilter;
+    si.oninput = () => { chatFilter = si.value; chatShowN = CHAT_PAGE; renderChatItems(); };
+  }
+  renderChatItems();
+};
+// ONE recency-sorted list (voice memos are provenance, marked 🎙, not a category). Filtered by the
+// search box + paginated to chatShowN with a "show more" — so nothing is ever hidden permanently.
+const renderChatItems = () => {
+  const box = $('chat-items'); if (!box) return;
+  const all = [
     ...chats.map(c => ({ id: c.id, title: c.title || 'New chat', ts: c.ts || 0, voice: false, shared: !!(c.shared && c.shareToken), shareMode: c.shareMode })),
     ...memoRuns.map(r => ({ id: r.id, title: r.title || 'voice note', ts: Date.parse(r.date) || 0, voice: true })),
   ].sort((a, b) => b.ts - a.ts);
-  $('chat-list').innerHTML = items.length
-    ? items.map(it => {
-        // a chat is "requesting user interaction" when it has an unanswered ask of its own
+  const f = chatFilter.trim().toLowerCase();
+  const items = f ? all.filter(it => (it.title || '').toLowerCase().includes(f)) : all;
+  const shown = items.slice(0, chatShowN);
+  box.innerHTML = items.length
+    ? shown.map(it => {
         const needs = openAsks.some(a => a.origin && a.origin.kind === 'chat' && a.origin.chatId === it.id);
-        // a shared-link entry shows its permission level so it's distinct from your own (root) chat
-        // and from another link to the same chat at a different level (each link = its own entry).
         const perm = it.shared ? (it.shareMode === 'write' ? '<span class="ci-perm" title="shared link · you can post">✍️ </span>' : '<span class="ci-perm" title="shared link · read-only">🔒 </span>') : '';
-        return `<div class="chat-item ${it.id === sessionId ? 'on' : ''}" data-id="${esc(it.id)}"><span class="ci-title">${needs ? '<span class="ci-dot" title="awaiting your reply"></span>' : ''}${perm}${it.voice ? '🎙 ' : ''}${esc(it.title)}</span><button class="ci-del mini" data-del="${esc(it.id)}" title="delete">×</button></div>`;
-      }).join('')
-    : '<div class="pill">no chats</div>';
-  document.querySelectorAll('.chat-item .ci-title').forEach(s => { s.onclick = () => switchChat(s.parentElement.dataset.id); });
-  document.querySelectorAll('[data-del]').forEach(b => { b.onclick = e => { e.stopPropagation(); deleteChat(b.dataset.del); }; });
+        return `<div class="chat-item ${it.id === sessionId ? 'on' : ''}" data-id="${esc(it.id)}"><span class="ci-title"${it.voice ? '' : ' title="double-click to rename"'}>${needs ? '<span class="ci-dot" title="awaiting your reply"></span>' : ''}${perm}${it.voice ? '🎙 ' : ''}${esc(it.title)}</span><button class="ci-del mini" data-del="${esc(it.id)}" title="delete">×</button></div>`;
+      }).join('') + (items.length > shown.length ? `<button class="ci-more mini" style="width:100%;margin-top:4px;opacity:.85">show ${items.length - shown.length} more</button>` : '')
+    : `<div class="pill">${f ? 'no matches' : 'no chats'}</div>`;
+  box.querySelectorAll('.chat-item .ci-title').forEach(s => {
+    s.onclick = () => switchChat(s.parentElement.dataset.id);
+    s.ondblclick = e => { e.stopPropagation(); startRename(s); };
+  });
+  box.querySelectorAll('[data-del]').forEach(b => { b.onclick = e => { e.stopPropagation(); deleteChat(b.dataset.del); }; });
+  const more = box.querySelector('.ci-more'); if (more) more.onclick = () => { chatShowN += CHAT_PAGE; renderChatItems(); };
+};
+// double-click a chat title → inline editable input; Enter commits, Esc/blur cancels-commit.
+const startRename = span => {
+  const id = span.parentElement.dataset.id;
+  const c = chats.find(x => x.id === id);
+  if (!c) return; // only your own chats rename here (voice memos are retitled by the agent)
+  const inp = document.createElement('input'); inp.type = 'text'; inp.value = c.title && c.title !== 'New chat' ? c.title : '';
+  inp.style.cssText = 'width:100%;box-sizing:border-box;font:inherit;background:#0a0c14;border:1px solid #7c5cff;border-radius:5px;color:inherit;padding:1px 5px';
+  span.replaceWith(inp); inp.focus(); inp.select();
+  let done = false;
+  const commit = save => { if (done) return; done = true; if (save) { const v = inp.value.trim(); if (v) { c.title = v.slice(0, 80); saveChats(); } } renderChatItems(); };
+  inp.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); commit(true); } else if (e.key === 'Escape') { e.preventDefault(); commit(false); } };
+  inp.onblur = () => commit(true);
 };
 // A scoped (handed-off) chat created before the powers-banner feature has no cached powers — fetch its
 // endowment via /skill and show it. Root-cap chats + shared chats are skipped (they're not sub-agents).
@@ -1650,7 +1713,7 @@ const deleteChat = id => {
     memoRuns = memoRuns.filter(r => r.id !== id);
     fetch('/memos/delete', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, id }) }).catch(() => {});
   }
-  chats = chats.filter(c => c.id !== id); saveChats(); try { localStorage.removeItem(txKey(id)); } catch {}
+  chats = chats.filter(c => c.id !== id); deletedIds.add(id); saveDeleted(); saveChats(); try { localStorage.removeItem(txKey(id)); } catch {}
   if (id === sessionId) { const rest = [...chats, ...memoRuns]; if (!rest.length) newChat(); else switchChat(rest[0].id); } else renderChatList();
 };
 const initChats = () => {
