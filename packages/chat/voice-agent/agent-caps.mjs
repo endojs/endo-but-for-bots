@@ -528,6 +528,8 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
     } catch (e) { answer = `executor error: ${String((e && e.message) || e)}`; } // ANY failure → still tear down (no worktree leak)
     finally {
       try { const t = await worktrees.teardown(wtId, { commitMessage: `self-improve: ${String(goal).slice(0, 72)}` }); branch = (t && t.branch) || branch; committed = !!(t && t.committed); } catch { /* keep wt.branch */ }
+      // no empty leftover: if nothing was committed, delete the (base-pointing) branch the worktree created.
+      if (!committed && branch) { try { await aff.host.exec(`git -C ${shq(WORKTREE_REPO)} branch -D ${shq(branch)} 2>/dev/null`, { timeoutMs: 15000 }); } catch { /* best effort */ } }
     }
     // if the executor made NO change, the teardown committed nothing → report no branch (honest no-op).
     return { branch: committed ? branch : null, answer, committed };
