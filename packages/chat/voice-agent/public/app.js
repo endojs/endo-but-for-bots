@@ -387,18 +387,36 @@ const breakOutComponent = async spec => {
 // SHARE a component with someone else: save it (get an id), mint a LEAST-AUTHORITY token (subscribe-only to
 // its declared cells, read-only — not a cap), and COPY the recipient link. cap-hygiene: the token rides in
 // the link's fragment; we copy it (never render it to the page).
+const schemeLabel = (s, c) => s === 'expires' ? `${c.hours}h time-boxed` : s === 'allowance' ? `$${(c.total / 1e6).toFixed(2)} allowance` : 'free';
 const shareOutComponent = async spec => {
   if (!spec || spec.type !== 'component') return;
-  const name = (window.prompt('Name this component to share it (recipient gets live, read-only access to ONLY its data):', '') || '').trim();
-  if (!name) return;
-  setStatus('preparing share…');
-  let bo; try { bo = await (await fetch('/components/break-out', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, name, source: spec.source, cells: spec.cells || [] }) })).json(); } catch (e) { setStatus('share: ' + e.message); return; }
-  if (!bo || !bo.ok) { setStatus('share: ' + ((bo && bo.error) || 'failed')); return; }
-  let sh; try { sh = await (await fetch('/components/share', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, id: bo.id }) })).json(); } catch (e) { setStatus('share: ' + e.message); return; }
-  if (!sh || !sh.ok) { setStatus('share: ' + ((sh && sh.error) || 'failed')); return; }
-  const link = location.origin + sh.url; // /c/<id>#k=<token>
-  const ok = await copyToClipboard(link);
-  setStatus(ok ? `🔗 Share link copied — grants live, read-only access to ONLY: ${(sh.cells || []).join(', ') || 'this component'} (revocable)` : 'minted the share, but could not copy — check clipboard permission');
+  const inp = 'background:#0a0c16;color:#e6edf3;border:1px solid #2b3350;border-radius:6px;padding:4px 6px;font:inherit';
+  showModal(`<div style="text-align:left;min-width:300px">
+    <b>🔗 Share this component</b>
+    <div style="font-size:12px;color:var(--mut);margin:6px 0">The link grants live, read-only access to ONLY this component’s declared data — it isn’t a cap (can’t open a chat or reach anything else), and it’s revocable.</div>
+    <input id="shr-name" placeholder="name (e.g. Front door)" style="width:100%;margin:6px 0;${inp}">
+    <div style="margin:10px 0 4px;font-weight:600;font-size:12px">Access / charge</div>
+    <label style="display:block;font-size:13px;margin:3px 0"><input type="radio" name="shr-scheme" value="free" checked> Free — anyone with the link</label>
+    <label style="display:block;font-size:13px;margin:3px 0"><input type="radio" name="shr-scheme" value="expires"> Time-boxed — expires after <input id="shr-hours" type="number" value="24" min="1" style="width:54px;${inp}"> hours</label>
+    <label style="display:block;font-size:13px;margin:3px 0"><input type="radio" name="shr-scheme" value="allowance"> Allowance — $<input id="shr-total" type="number" value="1.00" step="0.10" min="0.01" style="width:62px;${inp}"> total, $<input id="shr-per" type="number" value="0.01" step="0.01" min="0.001" style="width:62px;${inp}"> per open</label>
+    <button class="mini" id="shr-go" style="margin-top:10px">Create share link</button>
+    <div id="shr-msg" style="font-size:12px;color:var(--mut);margin-top:6px"></div>
+  </div>`);
+  $('shr-go').onclick = async () => {
+    const name = ($('shr-name').value || '').trim(); const msg = $('shr-msg'); if (!name) { msg.textContent = 'name it first'; return; }
+    const scheme = (document.querySelector('input[name=shr-scheme]:checked') || {}).value || 'free';
+    const charge = { scheme };
+    if (scheme === 'expires') charge.hours = Math.max(1, Number($('shr-hours').value) || 24);
+    if (scheme === 'allowance') { charge.total = Math.max(10000, Math.round((Number($('shr-total').value) || 1) * 1e6)); charge.perOpen = Math.max(1000, Math.round((Number($('shr-per').value) || 0.01) * 1e6)); }
+    $('shr-go').disabled = true; msg.textContent = 'creating…';
+    let bo; try { bo = await (await fetch('/components/break-out', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, name, source: spec.source, cells: spec.cells || [] }) })).json(); } catch (e) { msg.textContent = 'error: ' + e.message; $('shr-go').disabled = false; return; }
+    if (!bo || !bo.ok) { msg.textContent = (bo && bo.error) || 'failed'; $('shr-go').disabled = false; return; }
+    let sh; try { sh = await (await fetch('/components/share', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, id: bo.id, charge }) })).json(); } catch (e) { msg.textContent = 'error: ' + e.message; $('shr-go').disabled = false; return; }
+    if (!sh || !sh.ok) { msg.textContent = (sh && sh.error) || 'failed'; $('shr-go').disabled = false; return; }
+    const ok = await copyToClipboard(location.origin + sh.url); // cap-hygiene: copy the link (token in fragment), never render it
+    closeModal();
+    setStatus(ok ? `🔗 ${schemeLabel(scheme, charge)} share link copied — live, read-only, revocable` : 'minted the share, but copy failed (check clipboard permission)');
+  };
 };
 // copy without rendering the secret to the DOM (works on insecure-context http via an off-screen textarea).
 const copyToClipboard = async t => {

@@ -259,7 +259,7 @@ const newSwissRe = /^[0-9a-f]{32}$/;
 const { rootNode, registerRoot, nodeFor, getProposal, commitProposal, rejectProposal, buildHomeAssistant, buildAgents, buildContacts, buildKazputer, siteDir, getPersona, runScheduledAgent, mintScopedCap, rescopeCap, specialistFor, haResolveReadOnly } = makeFieldAgent({ outDir: OUT, baseUrl: BASE_URL });
 liveCells = makeLiveCells({ nodeFor }); // browser-subscribable live grains (cap-gated)
 // Least-authority cross-user share tokens for a broken-out component: subscribe-only to its frozen cells.
-const componentShares = makeComponentShares({ file: `${HOME}/.local/state/voice-agent/component-shares.json` });
+const componentShares = makeComponentShares({ file: `${HOME}/.local/state/voice-agent/component-shares.json`, makePurse, purseStore });
 // build a read-only cell source for a shared cell (re-resolved each time from the live HA trie).
 const shareCellReader = handle => () => { const ro = haResolveReadOnly(handle); return ro && ro.state ? ro.state() : { state: '(unavailable)' }; };
 
@@ -723,9 +723,10 @@ const handler = async (req, res) => {
     if (req.method === 'POST' && u.pathname === '/c/ui') {
       const { cap, shareToken, id } = await jsonBody(req);
       const cid = String(id || '');
-      const share = shareToken ? componentShares.get(shareToken) : null;
+      const share = shareToken ? componentShares.get(shareToken) : null; // null if expired/revoked/unknown
       const allowed = (share && share.componentId === cid) || nodeFor(cap)?.isRoot;
-      if (!allowed) return json(res, 403, { ok: false, error: 'no access to this component' });
+      if (!allowed) return json(res, 403, { ok: false, error: shareToken ? 'this share link is no longer valid (expired or revoked)' : 'no access to this component' });
+      if (share && !nodeFor(cap)?.isRoot) { const ch = componentShares.chargeOpen(shareToken); if (!ch.ok) return json(res, 200, { ok: false, error: ch.error }); } // W3: meter the open (allowance scheme)
       const snap = await componentGit.readAt(cid, 'HEAD');
       if (!snap || !snap.files['component.js']) return json(res, 200, { ok: false, error: 'unknown component' });
       let meta = {}; try { meta = JSON.parse(snap.files['manifest.json'] || '{}'); } catch { /* */ }
@@ -1467,8 +1468,8 @@ const handler = async (req, res) => {
           if (reach && reach.state) resolved.push({ id: String(id2), handle: m[1] }); else unreachable.push(String(id2));
         }
         if (unreachable.length) return json(res, 200, { ok: false, error: `you can't share cells you can't reach: ${unreachable.join(', ')} — open them (haFind) first` });
-        const token = componentShares.create({ componentId: id, cells: resolved, readOnly: true });
-        return json(res, 200, { ok: true, id, name: meta.name || id, url: `/c/${id}#k=${token}`, cells: resolved.map(c => c.id) }); // url carries the token in the fragment (copy, don't render)
+        const token = componentShares.create({ componentId: id, cells: resolved, readOnly: true, charge: body.charge || {} }); // charge: {scheme:free|expires|allowance, hours?, total?, perOpen?}
+        return json(res, 200, { ok: true, id, name: meta.name || id, url: `/c/${id}#k=${token}`, cells: resolved.map(c => c.id), scheme: (body.charge && body.charge.scheme) || 'free' }); // url carries the token in the fragment (copy, don't render)
       }
       if (u.pathname === '/components/share/revoke') return json(res, 200, { ok: componentShares.revoke(String(body.token || '')) });
       if (u.pathname === '/components/shares') return json(res, 200, { ok: true, shares: componentShares.listFor(String(body.id || '')) }); // redacted (no tokens)
