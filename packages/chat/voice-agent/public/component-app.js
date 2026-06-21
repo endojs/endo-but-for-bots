@@ -1,28 +1,35 @@
-// component-app.js — the standalone home of a broken-out component (served at /c/<id>). Reads its cap
-// the SPWA way (a #cap fragment if present, else the origin-scoped localStorage cap the owner already
-// has), strips it from the address bar (cap-hygiene), fetches the saved source from /components/ui, and
-// renders it CONFINED + live via the same grain-ui machinery the chat uses. cap stays in JS — never in
-// the visible DOM/URL.
+// component-app.js — the standalone home of a broken-out component (served at /c/<id>). Two ways in:
+//   • the OWNER, on this origin, already has a cap in localStorage (or a #cap= fragment).
+//   • a RECIPIENT opens a shared link /c/<id>#k=<token> — a LEAST-AUTHORITY component-share token that can
+//     ONLY subscribe to this component's declared cells (read-only). It is NOT a cap: it can't open a chat,
+//     hold a power, or reach any other data.
+// The credential is lifted out of the address bar immediately (cap-hygiene) and kept in JS only; it never
+// re-enters the visible DOM/URL. The component renders CONFINED + live via the same grain-ui machinery.
 import { renderWidgets } from '/grain-ui.js';
 
 const CAP_KEY = 'field-agent-cap';
-const cap = (() => {
-  try { const fromHash = new URLSearchParams(location.hash.slice(1)).get('cap'); if (fromHash) { try { localStorage.setItem(CAP_KEY, fromHash); } catch { /* */ } return fromHash; } } catch { /* */ }
-  try { return localStorage.getItem(CAP_KEY); } catch { return null; }
-})();
-if (location.hash) { try { history.replaceState(null, '', location.pathname); } catch { /* */ } } // lift the cap out of the address bar
+const hp = (() => { try { return new URLSearchParams(location.hash.slice(1)); } catch { return new URLSearchParams(); } })();
+const shareToken = hp.get('k') || null; // a component-share token (recipient)
+let cap = null;
+if (!shareToken) {
+  cap = hp.get('cap') || (() => { try { return localStorage.getItem(CAP_KEY); } catch { return null; } })();
+  if (hp.get('cap')) { try { localStorage.setItem(CAP_KEY, hp.get('cap')); } catch { /* */ } }
+}
+if (location.hash) { try { history.replaceState(null, '', location.pathname); } catch { /* */ } } // lift the credential out of the address bar
 
 const id = decodeURIComponent((location.pathname.split('/').filter(Boolean).pop()) || '');
 const app = document.getElementById('app');
 
 (async () => {
-  if (!cap) { app.textContent = 'Open this from your agent (no capability in this browser).'; return; }
+  if (!cap && !shareToken) { app.textContent = 'Open this from your agent, or use a share link.'; return; }
   let r;
-  try { r = await (await fetch('/components/ui', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, id }) })).json(); }
+  try { r = await (await fetch('/c/ui', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, shareToken, id }) })).json(); }
   catch (e) { app.textContent = 'could not load: ' + e.message; return; }
   if (!r || !r.ok) { app.textContent = (r && r.error) || 'component not found'; return; }
   document.title = `${r.name} — component`;
   const t = document.getElementById('title'); if (t) t.textContent = r.name;
+  const sub = document.querySelector('.sub'); if (sub && shareToken) sub.textContent = 'Shared with you — live, read-only, limited to this component’s data.';
   app.textContent = '';
-  renderWidgets(app, [{ type: 'component', source: r.source, cells: r.cells || [], height: 600 }], { cap, onChoice: () => {} });
+  // pass the credential through as a cap OR a least-authority shareToken; the broker uses whichever is set.
+  renderWidgets(app, [{ type: 'component', source: r.source, cells: r.cells || [], height: 600 }], { cap, shareToken, onChoice: () => {} });
 })();

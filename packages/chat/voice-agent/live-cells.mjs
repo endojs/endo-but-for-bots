@@ -46,6 +46,15 @@ const makeCell = ({ source, refreshMs = 6000 }) => {
 export const makeLiveCells = ({ nodeFor }) => {
   const cells = new Map(); // id → shared cell (same entity = one source for all subscribers)
 
+  // get/create the shared cell for an id, sourced by readerFn. Reading an entity is cap-independent, so
+  // an owner cap and a share token that both reach the same entity share ONE cell + ONE source loop.
+  const cellForReader = (id, readerFn) => {
+    let cell = cells.get(id);
+    if (!cell) { cell = makeCell({ source: readerFn, refreshMs: 6000 }); cells.set(id, cell); }
+    return cell;
+  };
+
+  // CAP path: a normal cap subscribes to cells it holds the power + c-list reach for.
   const cellFor = (cap, id) => {
     const node = nodeFor(cap);
     if (!node) return { error: 'no capability' };
@@ -58,13 +67,11 @@ export const makeLiveCells = ({ nodeFor }) => {
       if (!node.powers.has('homeassistant')) return { error: 'this chat does not hold Home Assistant access' };
       const reach = node.haReach(arg); // c-list gated: refuses a handle this cap can't drill to
       if (!reach || !reach.state) return { error: 'that entity is not reachable by this chat (search for it first)' };
-      let cell = cells.get(s);
-      if (!cell) { cell = makeCell({ source: () => reach.state(), refreshMs: 6000 }); cells.set(s, cell); }
-      return { cell };
+      return { cell: cellForReader(s, () => reach.state()) };
     }
     return { error: `unknown cell kind: ${kind}` };
   };
 
-  return { cellFor };
+  return { cellFor, cellForReader };
 };
 harden(makeLiveCells);

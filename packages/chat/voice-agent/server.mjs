@@ -42,6 +42,7 @@ import { gatorConfigured, recordDelegation, redeemDelegation } from './delegatio
 import { budgetLine, costOf } from './costModel.mjs';
 import { makeTollBridge } from './toll-bridge.mjs';
 import { makeLiveCells } from './live-cells.mjs';
+import { makeComponentShares } from './component-shares.mjs';
 import * as projects from './projects.mjs';
 import { makeMeetingScribe } from './meeting-scribe.mjs';
 import { opusComplete } from './delegate.mjs';
@@ -255,8 +256,12 @@ const traceRun = async (node, transcript, persona, chatId) => {
 const log = (...a) => process.stderr.write(`[${new Date().toISOString()}] ${a.join(' ')}\n`);
 const newSwissRe = /^[0-9a-f]{32}$/;
 
-const { rootNode, registerRoot, nodeFor, getProposal, commitProposal, rejectProposal, buildHomeAssistant, buildAgents, buildContacts, buildKazputer, siteDir, getPersona, runScheduledAgent, mintScopedCap, rescopeCap, specialistFor } = makeFieldAgent({ outDir: OUT, baseUrl: BASE_URL });
+const { rootNode, registerRoot, nodeFor, getProposal, commitProposal, rejectProposal, buildHomeAssistant, buildAgents, buildContacts, buildKazputer, siteDir, getPersona, runScheduledAgent, mintScopedCap, rescopeCap, specialistFor, haResolveReadOnly } = makeFieldAgent({ outDir: OUT, baseUrl: BASE_URL });
 liveCells = makeLiveCells({ nodeFor }); // browser-subscribable live grains (cap-gated)
+// Least-authority cross-user share tokens for a broken-out component: subscribe-only to its frozen cells.
+const componentShares = makeComponentShares({ file: `${HOME}/.local/state/voice-agent/component-shares.json` });
+// build a read-only cell source for a shared cell (re-resolved each time from the live HA trie).
+const shareCellReader = handle => () => { const ro = haResolveReadOnly(handle); return ro && ro.state ? ro.state() : { state: '(unavailable)' }; };
 
 // ── plan-then-confine (Feature A): a scoping agent proposes the MINIMAL powers a prompt needs;
 // the user approves; we mint a per-chat cap holding exactly those, and the chat runs under it
@@ -704,26 +709,47 @@ const handler = async (req, res) => {
     // ── LIVE GRAINS: a widget SUBSCRIBES to named server cells and gets pushed updates (no polling).
     //    POST so the cap rides in the body (cap-hygiene — never a URL/query); the response is a kept-open
     //    SSE stream. Each cell is cap-gated (e.g. ha:<handle> needs the homeassistant power + reach). ──
+    // PUBLIC read of a broken-out component for its standalone /c/<id> page: the OWNER (root cap) OR a
+    // holder of a valid component-share token bound to THIS id. Returns source + declared cells + name only.
+    if (req.method === 'POST' && u.pathname === '/c/ui') {
+      const { cap, shareToken, id } = await jsonBody(req);
+      const cid = String(id || '');
+      const share = shareToken ? componentShares.get(shareToken) : null;
+      const allowed = (share && share.componentId === cid) || nodeFor(cap)?.isRoot;
+      if (!allowed) return json(res, 403, { ok: false, error: 'no access to this component' });
+      const snap = await componentGit.readAt(cid, 'HEAD');
+      if (!snap || !snap.files['component.js']) return json(res, 200, { ok: false, error: 'unknown component' });
+      let meta = {}; try { meta = JSON.parse(snap.files['manifest.json'] || '{}'); } catch { /* */ }
+      return json(res, 200, { ok: true, id: cid, source: snap.files['component.js'], cells: meta.cells || [], name: meta.name || cid });
+    }
     if (req.method === 'POST' && u.pathname === '/cells/subscribe') {
-      const { cap, cells: ids } = await jsonBody(req);
-      if (!nodeFor(cap)) return json(res, 403, { error: 'no capability' });
+      const { cap, shareToken, cells: ids } = await jsonBody(req);
+      // A subscriber is EITHER a normal cap OR a least-authority component-share token. The token grants
+      // ONLY its frozen cell list (read-only) — it cannot reach any other cell, hold a power, or open a chat.
+      const share = shareToken ? componentShares.get(shareToken) : null; // null if unknown/revoked
+      if (!share && !nodeFor(cap)) return json(res, 403, { error: 'no capability' });
+      const shareCells = share ? new Set(share.cells.map(c => c.id)) : null;
+      const resolve = id => share
+        ? (shareCells.has(id) ? { cell: liveCells.cellForReader(id, shareCellReader(share.cells.find(c => c.id === id).handle)) } : { error: 'not in this share' })
+        : liveCells.cellFor(cap, id);
       const list = (Array.isArray(ids) ? ids : []).slice(0, 16).map(String);
       res.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-cache, no-transform', connection: 'keep-alive', 'x-accel-buffering': 'no', ...SEC });
       res.write(': ok\n\n');
       const send = obj => { try { res.write(`data: ${JSON.stringify(obj)}\n\n`); } catch { /* closed */ } };
       const unsubs = [];
       for (const id of list) {
-        const { cell, error } = liveCells.cellFor(cap, id);
+        const { cell, error } = resolve(id);
         if (error || !cell) { send({ id, error: error || 'unavailable' }); continue; }
         unsubs.push(cell.subscribe(value => send({ id, value }))); // pushes the current value immediately + on every change
       }
       let done = false;
       const teardown = () => { if (done) return; done = true; clearInterval(hb); for (const u2 of unsubs) { try { u2(); } catch { /* */ } } try { res.end(); } catch { /* */ } };
-      // Heartbeat ALSO re-validates: live entity state (doors/locks) must stop the moment the cap is revoked
-      // or rescoped out of reach — a long-lived push stream can't keep leaking after revocation. A failed
-      // write (half-open/dead socket) also ends it.
+      // Heartbeat ALSO re-validates: live entity state (doors/locks) must stop the moment the cap is revoked,
+      // rescoped out of reach, OR the share token is revoked — a long-lived push stream can't keep leaking
+      // after revocation. A failed write (half-open/dead socket) also ends it.
       const hb = setInterval(() => {
-        if (!nodeFor(cap) || list.some(id => liveCells.cellFor(cap, id).error)) return teardown(); // revoked / lost reach
+        const gone = share ? !componentShares.get(shareToken) : (!nodeFor(cap) || list.some(id => liveCells.cellFor(cap, id).error));
+        if (gone) return teardown();
         try { if (res.write(': hb\n\n') === false) { /* backpressure ok */ } } catch { teardown(); }
       }, 15000);
       req.on('close', teardown); res.on('close', teardown); res.on('error', teardown);
@@ -1418,6 +1444,25 @@ const handler = async (req, res) => {
         let meta = {}; try { meta = JSON.parse(snap.files['manifest.json'] || '{}'); } catch { /* */ }
         return json(res, 200, { ok: true, id, source: snap.files['component.js'], cells: meta.cells || [], name: meta.name || id });
       }
+      // SHARE a broken-out component with someone else: mint a LEAST-AUTHORITY token (subscribe-only to its
+      // declared cells, read-only) — NOT a chat-capable cap. Reach-VERIFY each ha:* cell against the owner's
+      // cap at mint, so you can't share access to an entity you can't reach. Returns the recipient link.
+      if (u.pathname === '/components/share') {
+        const id = String(body.id || ''); const snap = await componentGit.readAt(id, 'HEAD');
+        if (!snap || !snap.files['component.js']) return json(res, 200, { ok: false, error: 'unknown component' });
+        let meta = {}; try { meta = JSON.parse(snap.files['manifest.json'] || '{}'); } catch { /* */ }
+        const node = nodeFor(body.cap); const resolved = []; const unreachable = [];
+        for (const id2 of (meta.cells || [])) {
+          const m = /^ha:(.+)$/.exec(String(id2)); if (!m) { resolved.push({ id: String(id2), handle: '' }); continue; }
+          const reach = node && node.haReach ? node.haReach(m[1]) : null;
+          if (reach && reach.state) resolved.push({ id: String(id2), handle: m[1] }); else unreachable.push(String(id2));
+        }
+        if (unreachable.length) return json(res, 200, { ok: false, error: `you can't share cells you can't reach: ${unreachable.join(', ')} — open them (haFind) first` });
+        const token = componentShares.create({ componentId: id, cells: resolved, readOnly: true });
+        return json(res, 200, { ok: true, id, name: meta.name || id, url: `/c/${id}#k=${token}`, cells: resolved.map(c => c.id) }); // url carries the token in the fragment (copy, don't render)
+      }
+      if (u.pathname === '/components/share/revoke') return json(res, 200, { ok: componentShares.revoke(String(body.token || '')) });
+      if (u.pathname === '/components/shares') return json(res, 200, { ok: true, shares: componentShares.listFor(String(body.id || '')) }); // redacted (no tokens)
       if (u.pathname === '/components/history') { const id = String(body.id || ''); return islandSource.isIsland(id) ? json(res, 200, { ok: true, versions: await islandSource.history(id) }) : json(res, 200, { ok: true, versions: await componentGit.history(id), grains: customTools.grainData(id) }); }
       if (u.pathname === '/components/read') { const id = String(body.id || ''); const s = await (islandSource.isIsland(id) ? islandSource.readAt(id, String(body.version || 'HEAD')) : componentGit.readAt(id, String(body.version || 'HEAD'))); return json(res, 200, s ? { ok: true, ...s } : { ok: false, error: 'unknown component/version' }); }
       if (u.pathname === '/components/fork') { const id = String(body.id || ''); if (islandSource.isIsland(id)) return json(res, 200, { ok: false, error: 'forking an island component isn\'t supported yet — edit or revert it' }); return json(res, 200, await forkComponentTo(customTools, id, String(body.name || ''), String(body.version || 'HEAD'), 'owner')); }

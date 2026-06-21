@@ -23,13 +23,15 @@ const follow = (grain, render) => grain.subscribe(render);
 const MAX_WIDGETS = 12;     // cap widgets rendered per call (a flood of specs can't open unbounded streams)
 const MAX_LIVE_STREAMS = 24; // global ceiling on concurrent /cells/subscribe streams in this view
 
-// ── over-the-wire grain: open ONE SSE stream for a cell. cap goes in the POST body (cap-hygiene —
-//    never a URL). Returns an abort fn. The server pushes the current value + every change (no polling). ──
-const openCellStream = (cap, id, onMsg) => {
+// ── over-the-wire grain: open ONE SSE stream for a cell. The credential (a cap OR a least-authority
+//    component-share token) goes in the POST body (cap-hygiene — never a URL). Returns an abort fn. The
+//    server pushes the current value + every change (no polling). ──
+const authBody = auth => (typeof auth === 'string' ? { cap: auth } : { cap: auth && auth.cap, shareToken: auth && auth.shareToken });
+const openCellStream = (auth, id, onMsg) => {
   const ctrl = new AbortController();
   (async () => {
     try {
-      const res = await fetch('/cells/subscribe', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, cells: [id] }), signal: ctrl.signal });
+      const res = await fetch('/cells/subscribe', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ...authBody(auth), cells: [id] }), signal: ctrl.signal });
       if (!res.ok || !res.body) { onMsg({ id, error: `subscribe failed (${res.status})` }); return; }
       const reader = res.body.getReader(); const dec = new TextDecoder(); let buf = '';
       for (;;) {
@@ -51,12 +53,12 @@ const openCellStream = (cap, id, onMsg) => {
 // closes the stream at zero. This is what stops the "one stream per persisted widget" + "streams accumulate
 // every turn" leaks. cap is constant within a view (a chat-switch triggers disposeAllWidgets, clearing this).
 const liveCells = new Map(); // id → { grain, refs, abort }
-const acquireCell = (cap, id) => {
+const acquireCell = (auth, id) => {
   let s = liveCells.get(id);
   if (!s) {
     if (liveCells.size >= MAX_LIVE_STREAMS) return { grain: makeGrain({ error: 'too many live widgets open' }), release: () => {} }; // ceiling: refuse new streams
     const grain = makeGrain(undefined);
-    const abort = openCellStream(cap, id, msg => { if (msg && msg.id === id) grain.set(msg.value !== undefined ? msg.value : msg); });
+    const abort = openCellStream(auth, id, msg => { if (msg && msg.id === id) grain.set(msg.value !== undefined ? msg.value : msg); });
     s = { grain, refs: 0, abort }; liveCells.set(id, s);
   }
   s.refs += 1;
@@ -115,8 +117,8 @@ const renderEntityStatus = (spec, ctx) => {
     const view = stateView(v && v.state); ic.textContent = view.icon; tx.textContent = view.text; tx.style.color = view.color;
     dot.style.background = '#2ea043'; dot.style.boxShadow = '0 0 6px #2ea043';
   });
-  const cap = ctx && ctx.cap; const id = spec.cell || `ha:${spec.handle}`;
-  if (cap && spec.handle) { const { grain: g, release } = acquireCell(cap, id); follow(g, v => grain.set(v)); track(release); } // share ONE stream per entity
+  const auth = ctx && (ctx.shareToken ? { shareToken: ctx.shareToken } : ctx.cap); const id = spec.cell || `ha:${spec.handle}`;
+  if (auth && spec.handle) { const { grain: g, release } = acquireCell(auth, id); follow(g, v => grain.set(v)); track(release); } // share ONE stream per entity
   else { tx.textContent = 'open this chat to see live status'; }
   return box;
 };
@@ -143,13 +145,13 @@ const renderChoices = (spec, ctx) => {
 //    server re-validates). So the agent writes free-form UI without gaining any authority. ──
 const renderComponent = (spec, ctx) => {
   const wrap = document.createElement('div'); wrap.className = 'gw gw-component'; wrap.style.cssText = `${STYLE};margin:8px 0;border:1px solid #30363d;border-radius:12px;overflow:hidden;background:#0d1117`;
-  // a slim header bar with the BREAK-OUT action: save this component as a standalone, versioned module.
-  if (ctx && typeof ctx.onBreakOut === 'function') {
-    const bar = document.createElement('div'); bar.style.cssText = 'display:flex;justify-content:flex-end;padding:4px 6px;border-bottom:1px solid #21262d;background:#0b0e14';
-    const b = document.createElement('button'); b.textContent = '⤴ break out'; b.title = 'Save this as a standalone, shareable component';
-    b.style.cssText = 'all:unset;cursor:pointer;color:#7c5cff;font-size:11px;font-weight:600;padding:2px 8px;border:1px solid #3a2f6a;border-radius:6px';
-    b.onclick = () => ctx.onBreakOut(spec);
-    bar.appendChild(b); wrap.appendChild(bar);
+  // a slim header bar: BREAK OUT (save as a standalone, versioned module) + SHARE (a least-authority link).
+  if (ctx && (typeof ctx.onBreakOut === 'function' || typeof ctx.onShareOut === 'function')) {
+    const bar = document.createElement('div'); bar.style.cssText = 'display:flex;justify-content:flex-end;gap:6px;padding:4px 6px;border-bottom:1px solid #21262d;background:#0b0e14';
+    const mk = (label, title, fn) => { const b = document.createElement('button'); b.textContent = label; b.title = title; b.style.cssText = 'all:unset;cursor:pointer;color:#7c5cff;font-size:11px;font-weight:600;padding:2px 8px;border:1px solid #3a2f6a;border-radius:6px'; b.onclick = () => fn(spec); return b; };
+    if (typeof ctx.onBreakOut === 'function') bar.appendChild(mk('⤴ break out', 'Save this as a standalone, versioned module', ctx.onBreakOut));
+    if (typeof ctx.onShareOut === 'function') bar.appendChild(mk('🔗 share', 'Copy a link that grants someone live, read-only access to ONLY this component’s data', ctx.onShareOut));
+    wrap.appendChild(bar);
   }
   const iframe = document.createElement('iframe');
   iframe.setAttribute('sandbox', 'allow-scripts'); // opaque origin: no allow-same-origin, no forms, no parent reach
@@ -157,7 +159,7 @@ const renderComponent = (spec, ctx) => {
   iframe.style.cssText = `width:100%;height:${Math.min(2000, Math.max(40, Number(spec.height) || 120))}px;border:0;display:block`;
   wrap.appendChild(iframe);
   const allowedCells = new Set((Array.isArray(spec.cells) ? spec.cells : []).map(String)); // only cells the agent DECLARED
-  const cap = ctx && ctx.cap;
+  const cap = ctx && ctx.cap; const shareToken = ctx && ctx.shareToken; const auth = shareToken ? { shareToken } : cap;
   const releases = []; const subscribed = new Set(); // dedup: one stream per declared cell, no matter how often it asks
   let port = null;
   // After the handshake, ALL traffic is over a private MessagePort (no shared/accumulating window listener).
@@ -166,9 +168,9 @@ const renderComponent = (spec, ctx) => {
     if (m.type === 'height') { const px = Math.min(2000, Math.max(40, Number(m.px) || 120)); if (iframe.style.height !== `${px}px`) iframe.style.height = `${px}px`; }
     else if (m.type === 'subscribe') {
       const id = String(m.cell || '');
-      if (!cap || !allowedCells.has(id) || subscribed.has(id)) return; // undeclared / no cap / already wired → ignore
+      if (!auth || !allowedCells.has(id) || subscribed.has(id)) return; // undeclared / no credential / already wired → ignore
       subscribed.add(id);
-      const { grain, release } = acquireCell(cap, id); releases.push(release);
+      const { grain, release } = acquireCell(auth, id); releases.push(release);
       follow(grain, value => { try { port && port.postMessage({ __cu: 1, type: 'cell', id, value }); } catch { /* */ } }); // pipe live values IN (cap stays here)
     }
   };

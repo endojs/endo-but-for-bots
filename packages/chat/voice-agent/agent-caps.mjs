@@ -1628,6 +1628,10 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
     specialistFor: ref => { const spec = findSpecialist(ref); return spec ? harden({ id: spec.id, name: spec.name, node: getSpecNode(spec), persona: spec.instructions || '', powers: [...spec.powers] }) : null; },
     // resolve a published-site token → its directory (for the /sites/ host)
     siteDir: token => sites.get(String(token || '')) || null,
+    // Resolve an HA entity handle → a READ-ONLY entity node (or null), WITHOUT a cap. ONLY for the server's
+    // component-share path: the authorization is the persisted, owner-minted, reach-verified share record
+    // (the owner already proved their cap reached this handle at mint); this just reads its live state.
+    haResolveReadOnly: handle => { try { const n = haTrie?.nodeByHandle(String(handle || '')); return n && n.readOnly ? n.readOnly() : (n || null); } catch { return null; } },
     // proposal lifecycle (server gates confirm/reject on the ROOT cap):
     getProposal,
     commitProposal,

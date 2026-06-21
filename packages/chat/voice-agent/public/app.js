@@ -343,12 +343,33 @@ const breakOutComponent = async spec => {
   setStatus(`🧩 “${r.name}” saved as a component — opening its own page`);
   try { window.open(r.url, '_blank', 'noopener'); } catch { /* */ } // its standalone home (reads your cap from this origin)
 };
+// SHARE a component with someone else: save it (get an id), mint a LEAST-AUTHORITY token (subscribe-only to
+// its declared cells, read-only — not a cap), and COPY the recipient link. cap-hygiene: the token rides in
+// the link's fragment; we copy it (never render it to the page).
+const shareOutComponent = async spec => {
+  if (!spec || spec.type !== 'component') return;
+  const name = (window.prompt('Name this component to share it (recipient gets live, read-only access to ONLY its data):', '') || '').trim();
+  if (!name) return;
+  setStatus('preparing share…');
+  let bo; try { bo = await (await fetch('/components/break-out', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, name, source: spec.source, cells: spec.cells || [] }) })).json(); } catch (e) { setStatus('share: ' + e.message); return; }
+  if (!bo || !bo.ok) { setStatus('share: ' + ((bo && bo.error) || 'failed')); return; }
+  let sh; try { sh = await (await fetch('/components/share', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, id: bo.id }) })).json(); } catch (e) { setStatus('share: ' + e.message); return; }
+  if (!sh || !sh.ok) { setStatus('share: ' + ((sh && sh.error) || 'failed')); return; }
+  const link = location.origin + sh.url; // /c/<id>#k=<token>
+  const ok = await copyToClipboard(link);
+  setStatus(ok ? `🔗 Share link copied — grants live, read-only access to ONLY: ${(sh.cells || []).join(', ') || 'this component'} (revocable)` : 'minted the share, but could not copy — check clipboard permission');
+};
+// copy without rendering the secret to the DOM (works on insecure-context http via an off-screen textarea).
+const copyToClipboard = async t => {
+  try { if (navigator.clipboard && location.protocol === 'https:') { await navigator.clipboard.writeText(t); return true; } } catch { /* */ }
+  try { const ta = document.createElement('textarea'); ta.value = t; ta.style.cssText = 'position:fixed;left:-9999px;opacity:0'; document.body.appendChild(ta); ta.select(); const ok = document.execCommand('copy'); ta.remove(); return ok; } catch { return false; }
+};
 const renderAgentResponse = r => {
   if (Array.isArray(r.steps) && r.steps.length) log.appendChild(traceStrip(r.steps)); // E6: trace strip above the response
   const body = bubble('agent', r.answer || '…', r.agentId);
   if (r.toolsUsed?.length) { const e = document.createElement('div'); e.className = 'tools'; e.textContent = '⚙ ' + r.toolsUsed.join(', '); body.parentNode.appendChild(e); }
   ((r.images && r.images.length ? r.images : (r.imageUrls || [])) || []).forEach(src => { const im = document.createElement('img'); im.src = src; body.appendChild(im); }); // data-URLs in the moment; durable /uploads urls as fallback (e.g. the share-post path)
-  if (Array.isArray(r.ui) && r.ui.length) renderWidgets(body, r.ui, { cap: chatCap(), onChoice: t => sendChat(t), onBreakOut: breakOutComponent }); // live/interactive widgets (countdowns, live status, choices, custom components)
+  if (Array.isArray(r.ui) && r.ui.length) renderWidgets(body, r.ui, { cap: chatCap(), onChoice: t => sendChat(t), onBreakOut: breakOutComponent, onShareOut: shareOutComponent }); // live/interactive widgets (countdowns, live status, choices, custom components)
   (r.autoFired || []).forEach(a => { const e = document.createElement('div'); e.className = 'autofired'; e.textContent = `✓ auto-confirmed: ${a.title}${a.ok === false ? ' (failed)' : ''}`; body.parentNode.appendChild(e); }); // fired via a "don't ask again" rule
   (r.proposals || []).forEach(renderProposal); // destructive actions show as confirmable cards
   (r.asks || []).forEach(a => { openAsks.unshift(a); renderAskCard(a); }); // typed questions → answerable cards
@@ -1329,7 +1350,7 @@ const renderTx = () => {
       if (m.who === 'you' && !m.text) b.textContent = '';
       if (m.who === 'you') appendAtt(b, asArr(m.attachUrls).length ? asArr(m.attachUrls) : asArr(m.attachImgs), asArr(m.attachFiles));
       else { const imgs = asArr(m.imageUrls).length ? asArr(m.imageUrls) : asArr(m.images).filter(s => typeof s === 'string' && s.startsWith('data:')); imgs.forEach(src => { const im = document.createElement('img'); im.src = src; b.appendChild(im); }); } // durable /uploads urls survive reload (data-URLs as fallback)
-      if (m.who !== 'you' && asArr(m.ui).length) renderWidgets(b, asArr(m.ui), { cap: chatCap(), onChoice: t => sendChat(t), onBreakOut: breakOutComponent }); // re-hydrate live widgets: a door re-subscribes (live again), a countdown re-ticks
+      if (m.who !== 'you' && asArr(m.ui).length) renderWidgets(b, asArr(m.ui), { cap: chatCap(), onChoice: t => sendChat(t), onBreakOut: breakOutComponent, onShareOut: shareOutComponent }); // re-hydrate live widgets: a door re-subscribes (live again), a countdown re-ticks
       if (asArr(m.tools).length) { const e = document.createElement('div'); e.className = 'tools'; e.textContent = '⚙ ' + asArr(m.tools).join(', '); b.parentNode.appendChild(e); }
     } catch (e) { console.error('renderTx message', e); }
   }
