@@ -5,8 +5,10 @@
 import '@endo/init/debug.js';
 import test from 'ava';
 
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { randomBytes } from 'node:crypto';
 import { rmSync, mkdirSync } from 'node:fs';
 
 import { E } from '@endo/far';
@@ -35,7 +37,15 @@ const makeConfig = name => ({
   statePath: path.join(dirname, 'tmp', name, 'state'),
   ephemeralStatePath: path.join(dirname, 'tmp', name, 'run'),
   cachePath: path.join(dirname, 'tmp', name, 'cache'),
-  sockPath: path.join(dirname, 'tmp', name, 'endo.sock'),
+  // The daemon's Unix domain socket path must stay under the ~108-char
+  // sun_path limit. Under the repo checkout the per-test path
+  // (…/packages/claude-sandbox/test/tmp/<name>/endo.sock) overruns it on
+  // CI's long runner path for longer <name>s, so anchor the socket in the
+  // OS temp dir with a short random name instead.
+  sockPath: path.join(
+    os.tmpdir(),
+    `endo-cs-${randomBytes(6).toString('hex')}.sock`,
+  ),
   address: '127.0.0.1:0',
   pets: new Map(),
   values: new Map(),
