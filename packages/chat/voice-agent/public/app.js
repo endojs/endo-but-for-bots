@@ -1762,6 +1762,7 @@ const pendantBegin = async promptText => {
     const p = await ensurePendant();
     pendantWrap.classList.remove('hide'); p.setVisible(true);
     positionPendant(); p.reset(promptText);
+    try { const ps = chatBannerPowers(); p.setRootPowers(Array.isArray(ps) && ps.length ? ps : [...heldPowers]); } catch {} // the agent's power CROWN
     try { pendantES && pendantES.close(); } catch {}
     pendantES = new EventSource('/chat/steps?sid=' + encodeURIComponent(sessionId)); // tool NAMES + queries/urls only — never the cap (cap-hygiene)
     pendantES.onmessage = e => { try { const m = JSON.parse(e.data); if (m.t === 'start') p.toolStart(m.name, m.detail, m.call); else if (m.t === 'done') p.toolDone(m.name, m.ok, m.detail, m.children, m.call, m.result, m.granted); else if (m.t === 'rnode') p.rnode(m); else if (m.t === 'child-done') p.childDone(m.parent, m.name, m.ok); else if (m.t === 'end') { try { pendantES.close(); } catch {} } } catch {} };

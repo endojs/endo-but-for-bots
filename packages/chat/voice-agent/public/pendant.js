@@ -107,6 +107,7 @@ export const makePendant = canvas => {
     group.add(pick);
     const axis = new THREE.Vector3(Math.random() * 2 - 1, 1, Math.random() * 2 - 1).normalize();
     const rec = { group, wire, glow, wireMat, glowMat, geo, pick, label: null, labelText: name, line: null, lineMat: null, lineGeo: null,
+      backLine: null, backLineMat: null, backLineGeo: null, tCall: now(), tDone: 0, crown: [], lifeline: null,
       name, type, axis, spin: 0.45 + Math.random() * 0.6, pending: false, settled: false, parent: null, children: [], target: new THREE.Vector3(), key: null, detail: '', info: '', callText: '', resultText: '', sats: [], granted: null, powerIcons: [] };
     pick.userData.nd = rec;
     return rec;
@@ -122,7 +123,19 @@ export const makePendant = canvas => {
     const lineMat = new THREE.ShaderMaterial({ uniforms: { uColor: { value: new THREE.Color(color) }, uIntensity: { value: 0.4 } }, vertexShader: WIRE_V, fragmentShader: WIRE_F, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false });
     return { line: new THREE.Line(lineGeo, lineMat), lineGeo, lineMat };
   };
-  const updateLine = nd => { const from = nd.lineFrom || nd.parent; if (!nd.line || !from) return; nd.lineGeo.setFromPoints([from.group.position, nd.group.position]); nd.lineGeo.attributes.position.needsUpdate = true; positionPowerIcons(nd); };
+  // the point on a PARENT agent's lifeline at time t (root's lifeline = the vertical time axis; a delegate's
+  // = its own column). Tools edge to this point, so the connection lands at the right moment on the timeline.
+  const _v = new THREE.Vector3();
+  const axisAt = (parent, t) => parent === root ? _v.set(parent.group.position.x, yOf(t), parent.group.position.z) : parent.group.position;
+  const updateLine = nd => {
+    const par = nd.parent; if (!par) return;
+    if (nd.line) { nd.lineGeo.setFromPoints([axisAt(par, nd.tCall).clone(), nd.group.position]); nd.lineGeo.attributes.position.needsUpdate = true; } // OUT: message went out at call-time
+    if (nd.backLine) { // BACK: message returned at done-time (only once settled)
+      if (nd.tDone) { nd.backLine.visible = true; nd.backLineGeo.setFromPoints([nd.group.position, axisAt(par, nd.tDone).clone()]); nd.backLineGeo.attributes.position.needsUpdate = true; }
+      else nd.backLine.visible = false;
+    }
+    positionPowerIcons(nd);
+  };
 
   // the EXACT call (LLM tool invocation) and EXACT result, resolved per node — falling back to the
   // research subtree's existing query(detail)/summary(info) fields so research leaves get them for free.
@@ -175,6 +188,35 @@ export const makePendant = canvas => {
     positionPowerIcons(nd);
   };
 
+  // ── a hovering "CROWN" of an agent's powers above it — clickable/inspectable (reuses the power modal).
+  //    The root's crown = the chat's powers (app sets them via setRootPowers); a delegate's = its granted set.
+  const positionCrown = nd => {
+    if (!nd.crown || !nd.crown.length) return;
+    const n = nd.crown.length, R = 0.5 + n * 0.035, cy = nd.group.position.y + 0.9;
+    nd.crown.forEach((c, i) => { const a = (i / n) * Math.PI * 2; c.g.position.set(nd.group.position.x + R * Math.cos(a), cy, nd.group.position.z + R * Math.sin(a)); });
+  };
+  const buildCrown = (nd, powers) => {
+    if (!nd || !Array.isArray(powers) || !powers.length || (nd.crown && nd.crown.length)) return;
+    nd.crown = [];
+    powers.slice(0, 14).filter(p => typeof p === 'string').forEach(power => {
+      const sprite = makeLabel(powerIcon(power), '#ffd479'); sprite.scale.multiplyScalar(0.66);
+      const pick = new THREE.Mesh(new THREE.SphereGeometry(0.14, 8, 6), new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: false }));
+      pick.userData.nd = nd; pick.userData.power = power; // hover/click → inspect the power
+      const grp = new THREE.Group(); grp.add(sprite); grp.add(pick);
+      sceneGroup.add(grp); pickables.push(pick); nd.crown.push({ g: grp, power });
+      if (buildInstant) grp.scale.setScalar(1); else { grp.scale.setScalar(0.001); tween(0.4, easeOutBack, e => grp.scale.setScalar(Math.max(0.001, e))); }
+    });
+    positionCrown(nd);
+  };
+  // the lifeline (the agent's time-extruded body) grows down to the latest step + spins gently.
+  const updateLifeline = dt => {
+    if (!root || !root.lifeline) return;
+    const top = ROOT_Y - 0.5;
+    const bottom = level1.length ? Math.min(top - 0.3, Math.min(...level1.map(n => n.group.position.y)) - 0.35) : top - 0.3;
+    const h = Math.max(0.1, top - bottom), m = root.lifeline.mesh;
+    m.scale.y = h; m.position.set(root.group.position.x, top - h / 2, root.group.position.z); m.rotation.y += dt * 0.3;
+  };
+
   const grow = nd => { if (buildInstant) { nd.group.scale.setScalar(1); return; } nd.group.scale.setScalar(0.001); tween(0.44, easeOutBack, e => nd.group.scale.setScalar(Math.max(0.001, e))); };
   const tweenPos = (nd, target, dur = 0.5) => {
     nd.target.copy(target);
@@ -194,12 +236,13 @@ export const makePendant = canvas => {
     nd.parent = parent;
     nd.group.position.copy(parent.group.position); // grow OUT of its parent
     sceneGroup.add(nd.group);
-    const lk = makeLine(color); nd.line = lk.line; nd.lineGeo = lk.lineGeo; nd.lineMat = lk.lineMat;
-    sceneGroup.add(nd.line); updateLine(nd);
+    const lk = makeLine(SEQ_OUT); nd.line = lk.line; nd.lineGeo = lk.lineGeo; nd.lineMat = lk.lineMat; // OUT edge (call)
+    const bk = makeLine(SEQ_BACK); nd.backLine = bk.line; nd.backLineGeo = bk.lineGeo; nd.backLineMat = bk.lineMat; nd.backLine.visible = false; // BACK edge (return)
+    sceneGroup.add(nd.line); sceneGroup.add(nd.backLine); updateLine(nd);
     const labelText = opts.label || (arr === level1 ? '⚙ ' + name : '');
     if (labelText && (opts.persistLabel || arr === level1)) setLabel(nd, labelText);
     nodes.push(nd); pickables.push(nd.pick); arr.push(nd); grow(nd);
-    ensureSats(nd); ensurePowerIcons(nd);
+    ensurePowerIcons(nd); if (nd.granted) buildCrown(nd, nd.granted); // a sub-agent wears a CROWN of the powers it was granted
     return nd;
   };
 
@@ -211,13 +254,23 @@ export const makePendant = canvas => {
   const SPIRAL_R = 1.05;     // helix radius around the vertical axis below the root
   const SPIRAL_TURN = 0.7;   // radians turned per step (the continuous spiral)
   const SPIRAL_DROP = 0.5;   // vertical descent per step — ~half a straight stack, so it's compact
+  // ── 3D SEQUENCE DIAGRAM: the agent is a vertical TIME LIFELINE (a 4D octahedron — its rotating head +
+  //    its body extruded down the time axis). Each tool use connects to the lifeline at the Y of WHEN the
+  //    message went OUT (call) and WHEN it came BACK (return) — two coloured edges = a sequence diagram. ──
+  const TIME_SCALE = 0.085;  // vertical world-units per SECOND of elapsed time (the time-scale of the axis)
+  const SEQ_OUT = 0x39c5cf;  // call edge — the message OUT to the tool (teal)
+  const SEQ_BACK = 0xd29922; // return edge — the message BACK to the agent (amber)
+  let t0 = 0;                // the turn's start time (set in makeRoot); the lifeline's origin
+  const yOf = t => ROOT_Y - 0.6 - Math.max(0, (Number(t) || t0) - t0) * TIME_SCALE; // a time → its Y on the lifeline
   const relayoutLevel1 = () => {
     const n = level1.length; if (!n) return;
     const cx = root.group.position.x;
+    // Each step spirals around the agent's lifeline, positioned at the Y of ITS time (mid of call→return),
+    // so the spiral now reads on the time-scale axis. Its two edges connect to the lifeline at call/return Y.
     level1.forEach((nd, j) => {
-      nd.lineFrom = j === 0 ? root : level1[j - 1]; // chain connectors → one spiralling spine
       const a = j * SPIRAL_TURN;
-      tweenPos(nd, new THREE.Vector3(cx + SPIRAL_R * Math.sin(a), ROOT_Y - 0.95 - j * SPIRAL_DROP, SPIRAL_R * Math.cos(a)));
+      const midT = nd.tDone ? (nd.tCall + nd.tDone) / 2 : nd.tCall;
+      tweenPos(nd, new THREE.Vector3(cx + SPIRAL_R * Math.sin(a), yOf(midT), SPIRAL_R * Math.cos(a)));
     });
   };
   const relayoutChildren = parent => {
@@ -248,7 +301,7 @@ export const makePendant = canvas => {
   };
 
   const settle = (nd, ok) => {
-    nd.settled = true; nd.pending = false;
+    nd.settled = true; nd.pending = false; nd.tDone = now(); updateLine(nd); // record the RETURN time → the back-edge lands on the lifeline
     if (ok === false) { setColor(nd, COL.bad); return; }
     // Developer → published view: a step that published an embedded view glows as a distinct 📺 node
     // (edged from whoever published it), so the trace shows the lineage from the developer to the view.
@@ -269,7 +322,14 @@ export const makePendant = canvas => {
   // ---- public API ----
   const makeRoot = (descend, promptText, color = COL.root) => {
     root = makeNodeRecord('root', color, 'prompt'); root.labelText = 'prompt'; root.detail = String(promptText || '');
+    t0 = now(); // the lifeline's time origin
     sceneGroup.add(root.group); nodes.push(root); pickables.push(root.pick);
+    // the agent's LIFELINE — its body extruded down the time axis (the 4D octahedron: the rotating head
+    // above + this vertical column). Grows downward as the turn unfolds; tool edges land on it by time.
+    const llGeo = new THREE.CylinderGeometry(0.12, 0.12, 1, 6, 1, true);
+    const llMat = new THREE.ShaderMaterial({ uniforms: { uColor: { value: new THREE.Color(color) }, uIntensity: { value: 0.5 } }, vertexShader: WIRE_V, fragmentShader: WIRE_F, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false });
+    const llMesh = new THREE.LineSegments(new THREE.EdgesGeometry(llGeo), llMat);
+    sceneGroup.add(llMesh); root.lifeline = { mesh: llMesh, mat: llMat };
     if (descend && !buildInstant) {
       root.group.position.set(0, ROOT_Y + 2.1, 0); const from = root.group.position.clone(), to = new THREE.Vector3(0, ROOT_Y, 0);
       tween(0.62, easeInOut, e => root.group.position.lerpVectors(from, to, e));
@@ -302,9 +362,9 @@ export const makePendant = canvas => {
     if (detail && !nd.detail) nd.detail = detail;
     if (call && !nd.callText) nd.callText = call;
     if (result) nd.resultText = result;
-    if (Array.isArray(granted) && granted.length) nd.granted = granted;
+    if (Array.isArray(granted) && granted.length) { nd.granted = granted; buildCrown(nd, granted); }
     settle(nd, ok);
-    ensureSats(nd); ensurePowerIcons(nd); // unfurl the exact call/result + the granted-power edge icons
+    ensurePowerIcons(nd); // (moons removed — clicking the node opens the call/result modal)
     if (children && children.length && !nd.children.length) buildChildren(children, nd); // only if live didn't already stream them
     relayoutLevel1(); fit();
   };
@@ -325,7 +385,7 @@ export const makePendant = canvas => {
     if (ev.state === 'done') settle(nd, true);
     else if (ev.state === 'fail') settle(nd, false);
     else if (ev.state === 'pending') nd.pending = true;
-    ensureSats(nd); ensurePowerIcons(nd); // a search/fetch's query + summary become its call/result satellites
+    ensurePowerIcons(nd);
     fit();
   };
   // legacy flat child (kept for safety; research now uses rnode)
@@ -344,7 +404,7 @@ export const makePendant = canvas => {
       if (st.result && !nd.resultText) nd.resultText = st.result;
       if (Array.isArray(st.granted) && st.granted.length) nd.granted = st.granted;
       if (!nd.settled) settle(nd, st.ok);
-      ensureSats(nd); ensurePowerIcons(nd);
+      ensurePowerIcons(nd);
       if (st.children && st.children.length && !nd.children.length) buildChildren(st.children, nd);
     });
     pendingQ.slice().forEach(nd => { if (!nd.settled) settle(nd, true); });
@@ -506,15 +566,12 @@ export const makePendant = canvas => {
       }
       const cur = nd.wireMat.uniforms.uIntensity.value + (target - nd.wireMat.uniforms.uIntensity.value) * Math.min(1, dt * 9);
       nd.wireMat.uniforms.uIntensity.value = cur; nd.glowMat.uniforms.uIntensity.value = cur;
-      if (nd.lineMat) nd.lineMat.uniforms.uIntensity.value = 0.3 + cur * 0.3;
-      for (const s of nd.sats) { // call/result satellites: follow the node, gently spin, brighten on hover
-        s.g.position.copy(nd.group.position).add(s.offset); s.g.rotateOnAxis(s.axis, dt * 0.9);
-        const sh = !!(hovered && hovered.nd === nd && hovered.sat === s.which);
-        const sc = s.wireMat.uniforms.uIntensity.value + ((sh ? 1.9 : 0.7) - s.wireMat.uniforms.uIntensity.value) * Math.min(1, dt * 9);
-        s.wireMat.uniforms.uIntensity.value = sc; s.glowMat.uniforms.uIntensity.value = sc;
-      }
-      if (nd.powerIcons.length) positionPowerIcons(nd); // granted-power icons ride the edge
+      if (nd.lineMat) nd.lineMat.uniforms.uIntensity.value = 0.3 + cur * 0.3; // OUT edge
+      if (nd.backLineMat) nd.backLineMat.uniforms.uIntensity.value = 0.25 + cur * 0.25; // BACK edge
+      if (nd.powerIcons.length) positionPowerIcons(nd); // granted-power icons ride the delegation edge
+      if (nd.crown.length) positionCrown(nd); // the power crown rides above the agent
     }
+    updateLifeline(dt); // the agent's time-extruded body grows to the latest step + spins
     camTarget.lerp(desiredCenter, 1 - Math.pow(0.0008, dt));
     camDist += (desiredDist * userZoom - camDist) * (1 - Math.pow(0.0008, dt));
     autoAz += dt * 0.14; // continuous slow turn (~one gentle revolution every ~45s)
@@ -528,7 +585,9 @@ export const makePendant = canvas => {
   // Voice-listening: lvl≥0 makes the root octahedron pulse with the mic level (creating it if the
   // scene is empty); lvl<0 stops listening and restores the root to rest. Used INSTEAD of a separate orb.
   const setListen = lvl => { const v = (typeof lvl === 'number') ? lvl : -1; if (v >= 0 && !root) reset(''); listenLvl = v; if (v < 0 && root) root.group.scale.setScalar(1); };
+  // the chat's powers → the ROOT agent's crown (the powers it holds, hovering above it, inspectable).
+  const setRootPowers = powers => { if (root && Array.isArray(powers) && powers.length) buildCrown(root, powers); };
 
-  return { reset, scopeBegin, toolStart, toolDone, rnode, childDone, applyFinal, finish, showSteps, resize, setVisible, setListen,
+  return { reset, scopeBegin, toolStart, toolDone, rnode, childDone, applyFinal, finish, showSteps, resize, setVisible, setListen, setRootPowers,
     dispose: () => { renderer.setAnimationLoop(null); document.removeEventListener('pointerdown', onDocPtr); clearScene(); if (tip) tip.remove(); if (modal) modal.remove(); renderer.dispose(); } };
 };
