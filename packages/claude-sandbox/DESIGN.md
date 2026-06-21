@@ -148,6 +148,56 @@ Caveats worth knowing:
 - **Stop without destroying:** `E(client).terminate()` disposes the container +
   unmounts but leaves the formula (it will re-provision on the next `send`).
 
+## Turn model — current vs. the floot session (target)
+
+A _session_ is one `ClaudeClient`; a _turn_ is one `claude -p … --output-format
+stream-json` process spawned in the slice, whose parsed stdout is returned to
+the caller as a Far event reader. The current turn model is deliberately thin
+and has known gaps (see [Known issues](#known-issues--future-work) §5); the
+intended model mirrors the **floot session** (`packages/floot` on the
+`llm-kumavis-floot` branch).
+
+### How floot does it (three layers)
+
+1. **Buffered reply channel** (`floot/src/buffered-channel.js` → `makeBufferedReader`):
+   a `Far` reader (`next`/`return`/`throw`) fed by an imperative `push`/`writer`,
+   buffering so a producer can run ahead of a slow consumer. When the **consumer
+   stops pulling** (`return`/`throw`), `finalize()` fires an **`onClose`** hook.
+2. **Turn runner + abort** (`floot/agent.js` `converse`/`runTurn`): each turn
+   gets an `AbortController`; the reply channel's `onClose` calls
+   `controller.abort()`, and the turn threads `signal` into the provider and
+   bails on `signal.aborted`. So **closing the reply reader aborts the in-flight
+   turn** — there is no separate `interrupt()`; closing the reader _is_ the
+   interrupt (UI "Stop" / barge-in).
+3. **Turn serialization** (`turnChain`): `converse` chains each turn after the
+   previous (`turnChain.then(() => runTurn(...))`), so concurrent calls **queue**
+   and run one at a time over the shared conversation rather than racing.
+
+"Queued messages, submitted as an interrupt" = `turnChain` queues turns, and a
+new submission closes the current reply reader (abort/barge-in) before
+enqueuing, so it preempts the in-flight turn cleanly.
+
+### Mapping onto this package
+
+The analogy is exact; only the _abort action_ differs (floot aborts a fetch
+stream; here we **kill the `claude -p` OS process** in the slice):
+
+| floot | claude-sandbox |
+| --- | --- |
+| `converse(input) → replyReader` | `send(prompt) → eventReader` |
+| a turn = provider HTTP stream | a turn = `claude -p` process |
+| abort = `controller.abort()` (signal) | abort = `E(proc).kill()` |
+| `turnChain` serializes turns | **missing** (see §5: `send()`s race) |
+| reply channel `onClose → abort` | **missing** (see §5: reader close ≠ kill) |
+
+Adopting the floot shape — a buffered event reader whose close kills the
+`claude` process (subsuming the manual `interrupt()`), plus a `turnChain` that
+serializes `send()`s — fixes review findings §5 (1)–(2) at the right altitude
+rather than patching `inFlight` ad hoc. `makeBufferedReader` is ~100 self
+-contained, harden-clean lines; the open choice is whether to port it into this
+package, factor it into a small shared package both depend on, or wait for floot
+to land.
+
 ## Verified status
 
 Validated in a privileged Docker container (`node:22-bookworm`, Docker Desktop
@@ -302,5 +352,55 @@ exercised against a real daemon).
   `host-bind`/`minimal` from the advertised options under the podman backend or
   document that they require `bwrap`.
 - Redirect `claude -p` stdin from `/dev/null` to drop the stdin warning.
-- Decide and document session lifecycle across daemon restarts (the client is
-  intentionally non-persistent today; the podman driver sweeps orphans at boot).
+
+### 5. Turn-lifecycle defects (from code review) — OPEN
+
+These are symptoms of the missing floot layers (see
+[Turn model](#turn-model--current-vs-the-floot-session-target)); the floot
+refactor is the intended fix.
+
+1. **Closing a reader does not kill the turn** (`src/claude-client.js`,
+   `makeEventReader`'s `return`/`throw`). On early consumer stop the
+   `parseStreamJsonLines` generator stops pulling stdout and `inFlight` is
+   cleared, but `E(proc).kill()` is never called: the `claude -p` process keeps
+   running (and a later `interrupt()` can no longer target it; it may even block
+   on a full stdout pipe). Floot's `onClose → abort` is the fix — here
+   `onClose → E(proc).kill()`.
+2. **Overlapping `send()`s race** (`src/claude-client.js`, `send` sets
+   `inFlight = proc`). A second `send()` before the first drains overwrites
+   `inFlight`, orphaning the first process; both run with `--continue` and write
+   the same workspace conversation concurrently, which can corrupt it. Floot's
+   `turnChain` (serialize/queue) is the fix; decide queue vs. barge-in for an
+   in-flight `send()`.
+3. **Provision rejection is memoized with no retry** (`src/claude-client.js`,
+   `ensureProvisioned`). `provisioned = Promise.resolve(provision())`; if
+   `provision()` rejects (image pull, 9P mount EPERM, `make` error) the rejected
+   promise is cached, so every later `send()` re-rejects until the formula
+   reincarnates. The post-mount `catch` unmounts the 9P mount, but the issued
+   credential grant is **not** revoked, so it lingers in the credentials exo's
+   `outstanding` set. Fix: reset `provisioned = undefined` on rejection (enable
+   retry; `issue()` re-mints fine) **and** best-effort `revoke(sessionId)`.
+
+### 6. Smaller defects (from code review) — OPEN
+
+- **Loose form-reply guard** (`src/claude-sandbox-factory.js` and
+  `src/claude-credentials-factory.js`): `msg.replyTo === formMessageId` matches
+  `undefined === undefined` when the factory's own form has not been observed
+  yet, so a stray `value` message with no `replyTo` is treated as a submission.
+  Require `formMessageId !== undefined`.
+- **`sessionId` collision** (`src/claude-sandbox-factory.js`): `slug +
+  Date.now().toString(36)` collides for same-name requests in the same
+  millisecond, clashing the mountpoint and the workspace pet name. Add a random
+  suffix.
+- **Credential trailing-newline strip** (`src/claude-credentials-module.js`):
+  `/\n$/` removes only a single `LF`, not a `CRLF` or a doubled newline, leaving
+  stray bytes in the materialised secret. Trim all trailing `CR`/`LF`.
+- **Integration test self-skips green** (`test/integration.test.js`): when the
+  alpine image is absent the case `t.pass()`es, so a host where the slice path
+  is actually broken can report passing rather than a visible skip.
+
+### 7. Other follow-ups
+
+- Decide and document session lifecycle across daemon restarts. The client is a
+  pure-`env` formula that **reincarnates** (re-provisioning a fresh container on
+  the next `send()`); the podman driver sweeps `endo-sandbox-*` orphans at boot.
