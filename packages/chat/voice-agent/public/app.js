@@ -10,6 +10,18 @@
 // hygiene), but persist it to origin-scoped localStorage so a reload doesn't drop
 // the session. A fresh #cap link overwrites the stored one; otherwise we restore.
 import { renderWidgets, disposeAllWidgets } from './grain-ui.js'; // live/interactive response widgets (grain-native)
+import { theme, cycleTheme, initTheme } from './theme.js'; // the user's global style as a read-only propagator (dark/light MVP)
+initTheme(); // restore the saved theme + start applying it to :root as CSS vars
+(() => { // a header toggle for light/dark (the first control of the userspace-extensible style framework)
+  try {
+    const hdr = document.querySelector('header'); if (!hdr) return;
+    const b = document.createElement('button'); b.id = 'theme-toggle'; b.className = 'hdr-sel'; b.style.cssText = 'cursor:pointer;max-width:none;width:auto'; b.title = 'Switch light / dark theme';
+    theme.subscribe(t => { b.textContent = t.mode === 'light' ? '☀️' : '🌙'; });
+    b.onclick = () => cycleTheme();
+    const anchor = document.getElementById('budget');
+    if (anchor && anchor.parentNode === hdr) hdr.insertBefore(b, anchor); else hdr.appendChild(b);
+  } catch { /* enhancement-only */ }
+})();
 const CAP_KEY = 'field-agent-cap';
 const _hashParams = new URLSearchParams(location.hash.slice(1));
 let cap = _hashParams.get('cap');

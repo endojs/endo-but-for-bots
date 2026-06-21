@@ -97,12 +97,15 @@ const mount = (source) => {
 let reportPending = false, lastH = -1;
 report = () => { if (reportPending) return; reportPending = true; setTimeout(() => { reportPending = false; const px = Math.min(2000, Math.max(40, document.body.scrollHeight + 6)); if (px !== lastH) { lastH = px; send({ type: 'height', px }); } }, 50); };
 
+// the global THEME propagates IN as plain CSS-variable data (never a cap) → confined widgets match the user's style.
+const applyTheme = (vars) => { if (!vars) return; try { const r = document.documentElement; for (const k in vars) r.style.setProperty(k, vars[k]); document.body.style.background = vars['--bg'] || ''; document.body.style.color = vars['--ink'] || ''; } catch (e) {} };
 // The parent transfers a private MessagePort on 'mount'; after that, all traffic is over that port.
 window.addEventListener('message', (e) => {
   if (e.source !== parent) return; // only the parent's mount handshake comes over the window
   const m = e.data; if (!m || m.__cu !== 1 || m.type !== 'mount') return;
   const port = e.ports && e.ports[0];
-  if (port) { CU_PORT = port; port.onmessage = (pe) => { const pm = pe.data; if (pm && pm.__cu === 1 && pm.type === 'cell') { const g = cellGrains.get(String(pm.id)); if (g) g.set(pm.value); } }; try { port.start(); } catch (e2) {} }
+  if (port) { CU_PORT = port; port.onmessage = (pe) => { const pm = pe.data; if (!pm || pm.__cu !== 1) return; if (pm.type === 'cell') { const g = cellGrains.get(String(pm.id)); if (g) g.set(pm.value); } else if (pm.type === 'theme') applyTheme(pm.vars); }; try { port.start(); } catch (e2) {} }
+  if (m.theme) applyTheme(m.theme);
   mount(m.source);
 });
 try { parent.postMessage({ __cu: 1, type: 'ready' }, '*'); } catch (e) {}

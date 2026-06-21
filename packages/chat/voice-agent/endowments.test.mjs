@@ -43,6 +43,7 @@ const POLICY = {
   // render — emit an EPHEMERAL UI widget/spec into the agent's own response. No persistence, no authority,
   // no external effect; the live data a widget shows flows separately + cap-gated. Safe even from a confined cap.
   showEntityStatus: 'render', showCountdowns: 'render', showChoices: 'render', showComponent: 'render',
+  showThemePreview: 'render', // propose a global theme (a before/after preview the user accepts) — pure style data, no authority
   // notify — immediate, low blast radius (incl. enqueuing a task to a human-supervised code session)
   pushFeed: 'notify', pushPhone: 'notify', notify: 'notify', routeToDev: 'notify', askOperator: 'notify',
   scheduleWakeup: 'notify', repeatEvery: 'notify', cancelTimer: 'notify',

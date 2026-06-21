@@ -1,5 +1,6 @@
 // grain-ui.js — LIVE, INTERACTIVE chat widgets, grain-native.
 //
+import { theme, applyTheme } from './theme.js'; // the user's global style propagator — pushed down into confined widgets
 // A response can carry `ui: [widgetSpec...]` (the agent emits these via showEntityStatus / showCountdowns
 // / showChoices). We render each into the chat bubble. The pattern follows danfinlay/confinable-ui: data
 // is a GRAIN (a tiny { get, subscribe } observable that PUSHES on change); a component just FOLLOWS the
@@ -182,7 +183,10 @@ const renderComponent = (spec, ctx) => {
     if (e.source !== iframe.contentWindow) return; const m = e.data; if (!m || m.__cu !== 1 || m.type !== 'ready') return;
     window.removeEventListener('message', onReady);
     const ch = new MessageChannel(); port = ch.port1; port.onmessage = onPort; try { port.start(); } catch { /* */ }
-    try { iframe.contentWindow.postMessage({ __cu: 1, type: 'mount', source: String(spec.source || '') }, '*', [ch.port2]); } catch { /* */ }
+    try { iframe.contentWindow.postMessage({ __cu: 1, type: 'mount', source: String(spec.source || ''), theme: theme.get().vars }, '*', [ch.port2]); } catch { /* */ }
+    // PROPAGATE the user's global theme DOWN into the confined widget (read-only style data, never a cap),
+    // so it always matches the user's chosen style and re-themes live when they switch.
+    releases.push(theme.subscribe(t => { try { port && port.postMessage({ __cu: 1, type: 'theme', vars: t.vars }); } catch { /* */ } }));
   };
   window.addEventListener('message', onReady);
   track(() => { window.removeEventListener('message', onReady); try { port && port.close(); } catch { /* */ } for (const r of releases) { try { r(); } catch { /* */ } } });
@@ -190,7 +194,36 @@ const renderComponent = (spec, ctx) => {
   return wrap;
 };
 
-const RENDERERS = { countdowns: renderCountdowns, 'entity-status': renderEntityStatus, choices: renderChoices, component: renderComponent };
+// theme-preview — a BEFORE/AFTER preview of a proposed theme with Accept/Reject. Accept makes it the
+// user's live global theme everywhere (it persists). The mini-mockups render with each theme's own vars
+// scoped to the box, so you see the new style without changing the page until you accept.
+const renderThemePreview = (spec) => {
+  const wrap = document.createElement('div'); wrap.className = 'gw'; wrap.style.cssText = 'margin:8px 0;border:1px solid var(--edge);border-radius:12px;padding:11px 13px;background:var(--panel)';
+  const title = document.createElement('div'); title.style.cssText = 'font-size:13px;font-weight:600;margin-bottom:8px'; title.textContent = `🎨 New theme: ${spec.name || 'custom'}`; wrap.appendChild(title);
+  const mock = (vars, label) => {
+    const box = document.createElement('div');
+    box.style.cssText = Object.entries(vars || {}).map(([k, v]) => `${k}:${v}`).join(';') + ';flex:1;min-width:0;border:1px solid var(--edge);border-radius:9px;padding:9px;background:var(--bg);color:var(--ink)';
+    const mk = (tag, css, text) => { const e = document.createElement(tag); e.style.cssText = css; if (text) e.textContent = text; box.appendChild(e); return e; };
+    mk('div', 'font-size:9px;color:var(--mut);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px', label);
+    mk('div', 'background:var(--panel);border:1px solid var(--edge);border-radius:8px;padding:6px 8px;font-size:11px;margin-bottom:6px', 'A sample message');
+    mk('span', 'display:inline-block;background:var(--acc);color:#fff;border-radius:6px;padding:2px 8px;font-size:10px;margin-right:5px', 'Button');
+    mk('span', 'display:inline-block;background:var(--panel);border:1px solid var(--edge);color:var(--mut);border-radius:6px;padding:2px 8px;font-size:10px', 'chip');
+    return box;
+  };
+  const cur = theme.get();
+  const row = document.createElement('div'); row.style.cssText = 'display:flex;gap:8px;margin-bottom:9px';
+  row.append(mock(cur.vars, 'current · ' + (cur.name || 'theme')), mock(spec.vars, 'new · ' + (spec.name || 'theme')));
+  wrap.appendChild(row);
+  const btns = document.createElement('div'); btns.style.cssText = 'display:flex;gap:6px';
+  const accept = document.createElement('button'); accept.textContent = '✓ Use this theme'; accept.style.cssText = 'all:unset;cursor:pointer;background:var(--acc);color:#fff;border-radius:7px;padding:4px 11px;font-size:12px;font-weight:600';
+  const reject = document.createElement('button'); reject.textContent = 'Keep current'; reject.style.cssText = 'all:unset;cursor:pointer;color:var(--mut);border:1px solid var(--edge);border-radius:7px;padding:4px 11px;font-size:12px';
+  accept.onclick = () => { applyTheme({ name: spec.name || 'custom', mode: spec.mode, vars: spec.vars }); title.textContent = `🎨 Applied: ${spec.name || 'custom'}`; btns.remove(); };
+  reject.onclick = () => wrap.remove();
+  btns.append(accept, reject); wrap.appendChild(btns);
+  return wrap;
+};
+
+const RENDERERS = { countdowns: renderCountdowns, 'entity-status': renderEntityStatus, choices: renderChoices, component: renderComponent, 'theme-preview': renderThemePreview };
 
 // renderWidgets(container, specs, ctx): append each widget; ctx = { cap, onChoice }. Pure data in, DOM out.
 export const renderWidgets = (container, specs, ctx) => {
