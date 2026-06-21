@@ -9,6 +9,7 @@
 // The cap (#cap=…) is the credential. We keep it OUT of the address bar (cap
 // hygiene), but persist it to origin-scoped localStorage so a reload doesn't drop
 // the session. A fresh #cap link overwrites the stored one; otherwise we restore.
+import { renderWidgets, disposeAllWidgets } from './grain-ui.js'; // live/interactive response widgets (grain-native)
 const CAP_KEY = 'field-agent-cap';
 const _hashParams = new URLSearchParams(location.hash.slice(1));
 let cap = _hashParams.get('cap');
@@ -328,6 +329,7 @@ const renderAgentResponse = r => {
   const body = bubble('agent', r.answer || '…', r.agentId);
   if (r.toolsUsed?.length) { const e = document.createElement('div'); e.className = 'tools'; e.textContent = '⚙ ' + r.toolsUsed.join(', '); body.parentNode.appendChild(e); }
   ((r.images && r.images.length ? r.images : (r.imageUrls || [])) || []).forEach(src => { const im = document.createElement('img'); im.src = src; body.appendChild(im); }); // data-URLs in the moment; durable /uploads urls as fallback (e.g. the share-post path)
+  if (Array.isArray(r.ui) && r.ui.length) renderWidgets(body, r.ui, { cap: chatCap(), onChoice: t => sendChat(t) }); // live/interactive widgets (countdowns, live status, choices)
   (r.autoFired || []).forEach(a => { const e = document.createElement('div'); e.className = 'autofired'; e.textContent = `✓ auto-confirmed: ${a.title}${a.ok === false ? ' (failed)' : ''}`; body.parentNode.appendChild(e); }); // fired via a "don't ask again" rule
   (r.proposals || []).forEach(renderProposal); // destructive actions show as confirmable cards
   (r.asks || []).forEach(a => { openAsks.unshift(a); renderAskCard(a); }); // typed questions → answerable cards
@@ -609,7 +611,7 @@ const sendChat = async (text, { spoken = false, audio = null, attachments = [], 
     // durable server URLs for the attached images → persist these (survive reload + cross-device sync)
     const urls = (r.attachments || []).filter(a => a.kind === 'image' && a.url).map(a => a.url);
     if (urls.length) { tx.attachUrls = urls; saveTx(); }
-    renderAgentResponse(r); pushTx('agent', r.answer || '', { tools: r.toolsUsed || [], images: r.images || [], imageUrls: r.imageUrls || [], steps: r.steps || [], agent: r.agentId }); // imageUrls = durable /uploads copies (data-URL `images` are stripped on persist) so generated images survive a chat reload
+    renderAgentResponse(r); pushTx('agent', r.answer || '', { tools: r.toolsUsed || [], images: r.images || [], imageUrls: r.imageUrls || [], steps: r.steps || [], agent: r.agentId, ui: r.ui || [] }); // ui = live widget specs (pure data, no cap) → re-hydrate live on reopen; imageUrls survive reload
     pendantEnd(r.steps || []); // settle the pendant + reconcile any steps the live stream missed
     updateBudgetChip(r.remaining, r.allowance); // toll-bridge: reflect this turn's spend in the budget chip
     refreshBadge(); // the turn may have posted a notification
@@ -1282,6 +1284,7 @@ function wirePowerBanner(b, cc, ps) {
 }
 const renderTx = () => {
   syncLanding();
+  disposeAllWidgets(); // tear down any live widget streams/intervals from the previous render before rebuilding
   log.innerHTML = '';
   // Powers banner at the TOP of the chat — shown even before the first message: a handed-off chat's
   // granted ring, or (for a non-Agent-C entrypoint agent) that agent's powers. Agent C itself (the
@@ -1307,6 +1310,7 @@ const renderTx = () => {
       if (m.who === 'you' && !m.text) b.textContent = '';
       if (m.who === 'you') appendAtt(b, asArr(m.attachUrls).length ? asArr(m.attachUrls) : asArr(m.attachImgs), asArr(m.attachFiles));
       else { const imgs = asArr(m.imageUrls).length ? asArr(m.imageUrls) : asArr(m.images).filter(s => typeof s === 'string' && s.startsWith('data:')); imgs.forEach(src => { const im = document.createElement('img'); im.src = src; b.appendChild(im); }); } // durable /uploads urls survive reload (data-URLs as fallback)
+      if (m.who !== 'you' && asArr(m.ui).length) renderWidgets(b, asArr(m.ui), { cap: chatCap(), onChoice: t => sendChat(t) }); // re-hydrate live widgets: a door re-subscribes (live again), a countdown re-ticks
       if (asArr(m.tools).length) { const e = document.createElement('div'); e.className = 'tools'; e.textContent = '⚙ ' + asArr(m.tools).join(', '); b.parentNode.appendChild(e); }
     } catch (e) { console.error('renderTx message', e); }
   }

@@ -1097,6 +1097,32 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
     manifest.push({ name: 'requestAccess', reversible: false,
       args: { power: 'string — the capability you need (e.g. notes, web, images, research)', why: 'string — why you need it (helps the owner decide)' },
       description: 'REQUEST a power you do NOT currently hold from the owner. You cannot grant yourself powers — this asks the owner, who approves or declines. Use this instead of giving up when a task needs a capability you lack.' });
+    // ── WIDGETS — ALWAYS available. Emit a LIVE / INTERACTIVE widget into the chat bubble (vs plain text).
+    //    These return a display SPEC only — they grant NO authority (the spec is pure data: labels, an
+    //    entity handle, timer dueAts, choice strings). The live DATA flows separately + cap-gated: a door
+    //    widget SUBSCRIBES to the ha:<handle> grain over /cells/subscribe, which only pushes if THIS chat
+    //    holds the homeassistant power. So emitting a widget is safe even from a confined cap; it just
+    //    won't show live data the cap isn't entitled to. Prefer these for status / timers / choices. ──
+    toolbox.showEntityStatus = harden({ run: async ({ handle, label } = {}) => {
+      const h = String(handle || '');
+      if (!h) return { ok: false, error: 'need the entity handle — find it with haFind/search first' };
+      return { ok: true, widget: { type: 'entity-status', handle: h, label: String(label || 'status').slice(0, 60), cell: `ha:${h}` }, note: 'Rendered a LIVE status widget; it stays current in the chat (subscribes to the entity).' };
+    } });
+    toolbox.showCountdowns = harden({ run: async ({ timers } = {}) => {
+      const items = (Array.isArray(timers) ? timers : []).map(t => ({ label: String((t && t.label) || 'timer').slice(0, 60), dueAt: String((t && (t.dueAt || t.dueAtISO || t.endTimeISO)) || '') })).filter(t => t.dueAt).slice(0, 12);
+      if (!items.length) return { ok: false, error: 'need timers: [{label, dueAt(ISO)}] — e.g. from listTimers (use the once-timer dueAt)' };
+      return { ok: true, widget: { type: 'countdowns', items }, note: 'Rendered live countdown timers; each ticks down on screen.' };
+    } });
+    toolbox.showChoices = harden({ run: async ({ prompt, options } = {}) => {
+      const opts = (Array.isArray(options) ? options : []).map(o => String(o).slice(0, 80)).filter(Boolean).slice(0, 8);
+      if (!opts.length) return { ok: false, error: 'need options: an array of choice strings' };
+      return { ok: true, widget: { type: 'choices', prompt: String(prompt || '').slice(0, 160), options: opts }, note: 'Rendered tappable choices; tapping one sends it back as the next message.' };
+    } });
+    manifest.push(
+      { name: 'showEntityStatus', reversible: false, args: { handle: 'string — an entity handle from haFind/search', label: 'string — a short title (e.g. "Front door")' }, description: 'Show a LIVE status WIDGET for a Home Assistant entity (door/lock/sensor/light). It stays current — when reopened later it re-subscribes and shows the latest state, no refresh needed. Prefer this over a text answer for any "is X open / on / locked?" question. Get the handle from haFind first.' },
+      { name: 'showCountdowns', reversible: false, args: { timers: 'array — [{label, dueAt}] where dueAt is an absolute ISO time (use the dueAt from a "once" timer in listTimers)' }, description: 'Show LIVE COUNTDOWN widgets that tick down on screen toward each dueAt (great for cooking steps / timers you just set). Pass each timer\'s label + absolute dueAt.' },
+      { name: 'showChoices', reversible: false, args: { prompt: 'string — the question', options: 'array — choice strings' }, description: 'Show tappable CHOICE buttons; when the user taps one it is sent back as their next message. Use for "pick one" / "which would you like?" answers instead of listing options as text.' },
+    );
     // proposeTool — ALWAYS available. Build a new tool (a pure JS function of `args`) and propose it to
     // the library. It is NOT injected into anyone's scope or made callable; it queues PENDING for dan to
     // REVIEW the code, then admit. (A delegate's proposals are also RETURNED by delegateTask as data.)

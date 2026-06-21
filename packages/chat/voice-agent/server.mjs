@@ -41,6 +41,7 @@ import { loadStripeCfg, stripeConfigured, recordPending, checkoutForm, verifyWeb
 import { gatorConfigured, recordDelegation, redeemDelegation } from './delegation-pay.mjs';
 import { budgetLine, costOf } from './costModel.mjs';
 import { makeTollBridge } from './toll-bridge.mjs';
+import { makeLiveCells } from './live-cells.mjs';
 import * as projects from './projects.mjs';
 import { makeMeetingScribe } from './meeting-scribe.mjs';
 import { opusComplete } from './delegate.mjs';
@@ -234,6 +235,10 @@ const purseFor = (cap, sid) => {
 // Central toll-bridge for EDIT (AI-credit spend) + SAVE/HOST (storage×time) rights, used by the SPWA
 // self-editors. Same µUSD purse ledger as inference, in a separate `toll:<account>` namespace.
 const tollBridge = makeTollBridge({ purseStore, makePurse, costOf, ledgerFile: `${HOME}/.local/state/voice-agent/hosting-ledger.json` });
+// Live grain transport for chat widgets: a browser subscribes to named server cells (e.g. ha:<handle>)
+// over a streamed response and gets PUSHED updates — no polling. Cap-gated per cell. (Defined after
+// nodeFor below via a late binding; see the /cells/subscribe route.)
+let liveCells = null;
 setInterval(() => { try { tollBridge.accrue(); } catch { /* best-effort hourly rent */ } }, 3_600_000).unref?.();
 // run the entry agent on a transcript, capturing the step trace. Bounded by the ALLOWANCE METER
 // (a fresh default-allowance purse per run) — there is no step limit; spend is the budget.
@@ -251,6 +256,7 @@ const log = (...a) => process.stderr.write(`[${new Date().toISOString()}] ${a.jo
 const newSwissRe = /^[0-9a-f]{32}$/;
 
 const { rootNode, registerRoot, nodeFor, getProposal, commitProposal, rejectProposal, buildHomeAssistant, buildAgents, buildContacts, buildKazputer, siteDir, getPersona, runScheduledAgent, mintScopedCap, rescopeCap, specialistFor } = makeFieldAgent({ outDir: OUT, baseUrl: BASE_URL });
+liveCells = makeLiveCells({ nodeFor }); // browser-subscribable live grains (cap-gated)
 
 // ── plan-then-confine (Feature A): a scoping agent proposes the MINIMAL powers a prompt needs;
 // the user approves; we mint a per-chat cap holding exactly those, and the chat runs under it
@@ -295,8 +301,19 @@ const scopePowers = async (task, emit = null) => {
 // any error) — never block a real task on a flaky classifier.
 const ORCH_POWERS = ['delegate', 'roles', 'subagent', 'specialists'];
 const ORCH_VERBS = new Set(['delegateTask', 'employ', 'listRoles', 'proposeSpawnSpecialist', 'askSpecialist', 'listSpecialists', 'proposeSubAgent']);
-const TURN_CLASS_SYS = 'Classify the user request for an agent. Reply with ONLY one word: "simple" or "complex". simple = a question, lookup, status check, read, or a task one agent finishes in a few tool calls (e.g. "is the front door open?", search my notes, a quick edit). complex = genuinely multi-stage / large-scope work, builds or publishes a lot, or that clearly needs several specialized sub-agents working together.';
-const isSimpleTurn = async text => { try { const r = await callLLM([{ role: 'system', content: TURN_CLASS_SYS }, { role: 'user', content: String(text || '').slice(0, 600) }], 'default'); return /\bsimple\b/i.test(r.text || '') && !/\bcomplex\b/i.test(r.text || ''); } catch { return false; } };
+// ONE cheap classifier, TWO axes (dan: "have that same pass do the categorization"):
+//   SCOPE  = simple|complex → a simple turn can't delegate/spawn (orchestration verbs stripped).
+//   FORMAT = rich|text      → a rich turn is nudged to answer with a live/interactive WIDGET.
+const TURN_CLASS_SYS = 'Classify a user request to an assistant on TWO axes. Reply with EXACTLY two lowercase words separated by a space: first the SCOPE, then the FORMAT.\nSCOPE = "simple" (a question, lookup, status check, read, or a task one agent finishes in a few tool calls) or "complex" (genuinely multi-stage / large-scope, builds or publishes a lot, or needs several specialized sub-agents).\nFORMAT = "rich" if the answer is best shown as a LIVE or INTERACTIVE widget — anything involving a countdown/timer, a device or entity STATUS, a value that changes over time, a metric, or a set of choices to pick from — else "text".\nExamples: "is the front door open?" => "simple rich"; "set 3 cooking timers" => "simple rich"; "what is the capital of France" => "simple text"; "pick a restaurant for tonight" => "simple rich"; "research X across sources and build a comparison page" => "complex rich".';
+const classifyTurn = async text => {
+  try {
+    const r = await callLLM([{ role: 'system', content: TURN_CLASS_SYS }, { role: 'user', content: String(text || '').slice(0, 600) }], 'default');
+    const w = String(r.text || '').toLowerCase();
+    return { simple: /\bsimple\b/.test(w) && !/\bcomplex\b/.test(w), rich: /\brich\b/.test(w) && !/\btext\b/.test(w) };
+  } catch { return { simple: false, rich: false }; } // fail-open: keep orchestration verbs, no widget nudge
+};
+// What a rich-format turn appends to the agent's persona so it reaches for a live widget.
+const RICH_DIRECTIVE = '\n\nFORMAT HINT: this answer is best shown as a LIVE or INTERACTIVE widget, not just text. PREFER the widget verbs when they fit — showEntityStatus for a device/door/sensor status (it stays LIVE), showCountdowns for timers/cooking steps (each counts down on screen), showChoices for "pick one" answers. Still give a one-line text answer too, but lead with the widget.';
 
 // Voice-note ingest is PROPOSE-ONLY: the agent takes NO actions, it produces proposed action items
 // (and, via the scoper, names the capabilities an attenuated agent would need to carry them out).
@@ -567,6 +584,7 @@ const handler = async (req, res) => {
     if (u.pathname === '/cap-channel.js') return serveFile(res, 'cap-channel.js', 'text/javascript; charset=utf-8');
     if (u.pathname === '/trace-app.js') return serveFile(res, 'trace-app.js', 'text/javascript; charset=utf-8');
     if (u.pathname === '/widget.js') return serveFile(res, 'widget.js', 'text/javascript; charset=utf-8');
+    if (u.pathname === '/grain-ui.js') return serveFile(res, 'grain-ui.js', 'text/javascript; charset=utf-8');
     // confined-Preact islands bundle (built by `yarn build:islands`) + its sourcemap
     if (u.pathname === '/islands/islands.js') return serveFile(res, 'islands/islands.js', 'text/javascript; charset=utf-8');
     if (u.pathname === '/islands/islands.js.map') return serveFile(res, 'islands/islands.js.map', 'application/json; charset=utf-8');
@@ -671,6 +689,27 @@ const handler = async (req, res) => {
       return undefined; // keep the connection open
     }
 
+    // ── LIVE GRAINS: a widget SUBSCRIBES to named server cells and gets pushed updates (no polling).
+    //    POST so the cap rides in the body (cap-hygiene — never a URL/query); the response is a kept-open
+    //    SSE stream. Each cell is cap-gated (e.g. ha:<handle> needs the homeassistant power + reach). ──
+    if (req.method === 'POST' && u.pathname === '/cells/subscribe') {
+      const { cap, cells: ids } = await jsonBody(req);
+      if (!nodeFor(cap)) return json(res, 403, { error: 'no capability' });
+      const list = (Array.isArray(ids) ? ids : []).slice(0, 16).map(String);
+      res.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-cache, no-transform', connection: 'keep-alive', 'x-accel-buffering': 'no', ...SEC });
+      res.write(': ok\n\n');
+      const send = obj => { try { res.write(`data: ${JSON.stringify(obj)}\n\n`); } catch { /* closed */ } };
+      const unsubs = [];
+      for (const id of list) {
+        const { cell, error } = liveCells.cellFor(cap, id);
+        if (error || !cell) { send({ id, error: error || 'unavailable' }); continue; }
+        unsubs.push(cell.subscribe(value => send({ id, value }))); // pushes the current value immediately + on every change
+      }
+      const hb = setInterval(() => { try { res.write(': hb\n\n'); } catch { /* closed */ } }, 15000);
+      req.on('close', () => { clearInterval(hb); for (const u2 of unsubs) { try { u2(); } catch { /* */ } } });
+      return undefined; // keep open
+    }
+
     // ── voice/text turn: the cap decides the agent's reach. No cap → no powers. ──
     if (req.method === 'POST' && u.pathname === '/chat') {
       const { sessionId, text, cap, attachments, model, history: clientHistory, agent } = await jsonBody(req);
@@ -702,14 +741,16 @@ const handler = async (req, res) => {
       const purse = purseFor(cap, sid);
       const charge = uusd => { const amt = Math.max(0, Math.round(Number(uusd) || 0)); if (!amt) return true; if (!purse.canAfford(amt)) return false; purse.debit(amt); return true; };
       let { toolbox, manifest } = runNode.toolbox({ chatId: sid, userText: t, emit: ev => emitStep(sid, ev), app: boundApp, homeSubkey: chatProject ? chatProject.homeSubkey : null, charge }); // chatId → deep-links; userText → delegates/specialists carry the originating request; emit → pendant stream; app → root state; homeSubkey → project folder; charge → paid-connector billing
-      // STRUCTURAL no-delegate-for-simple-reads guard: only matters when this chat actually holds
-      // orchestration powers (a scoped read chat has none → skip the classifier entirely). If the turn
-      // classifies as simple, remove the delegate/employ/spawn verbs so the model CANNOT delegate a read.
-      if (t && ORCH_POWERS.some(p => runNode.powers.has(p)) && await isSimpleTurn(t)) {
+      // ONE classifier pass (dan), TWO axes: scope (simple→can't delegate) + format (rich→prefer a widget).
+      const cls = t ? await classifyTurn(t) : { simple: false, rich: false };
+      // STRUCTURAL no-delegate-for-simple-reads guard: a simple turn can't delegate/spawn even at full power.
+      if (cls.simple && ORCH_POWERS.some(p => runNode.powers.has(p))) {
         toolbox = harden(Object.fromEntries(Object.entries(toolbox).filter(([k]) => !ORCH_VERBS.has(k))));
         manifest = manifest.filter(m => !ORCH_VERBS.has(m.name));
         log('turn:', 'simple → stripped orchestration verbs (no delegate/employ/spawn this turn)');
       }
+      // RICH format: nudge the agent to answer with a live/interactive widget (the verbs are always available).
+      if (cls.rich) { runPersona = `${runPersona || ''}${RICH_DIRECTIVE}`; log('turn:', 'rich → nudged to a live widget'); }
       // Conversation memory: PREFER the client's durable transcript (it survives this service being
       // restarted — the in-memory `sessions` map is volatile and capped, which made the agent forget
       // earlier turns after every deploy). Fall back to the in-process map only if the client sent none.
@@ -719,6 +760,7 @@ const handler = async (req, res) => {
       const images = [];      // data-URLs for live render + this-session 3D trace (stripped before persist)
       const imageUrls = [];    // durable /uploads copies of the SAME images → survive a chat reload
       const proposalIds = [];
+      const uiWidgets = []; // live/interactive widget specs the agent emitted (showEntityStatus/showCountdowns/showChoices) → r.ui
       const autoFired = []; // destructive actions that auto-confirmed via a "don't ask again" rule
       const askIds = []; // structured typed questions the agent raised this turn (rendered inline)
       const steps = []; // ordered tool calls this turn; delegateTask nests its sub-agent's tools (sub-branch trees)
@@ -747,6 +789,7 @@ const handler = async (req, res) => {
             try { const fname = `${crypto.randomBytes(16).toString('hex')}.png`; fs.copyFileSync(rv.savedTo, path.join(UPLOADS, fname)); imageUrls.push(`/uploads/${fname}`); } catch (e) { log('imgcopy', e.message); }
           }
           if (rv.proposed && rv.id) proposalIds.push(rv.id); // a destructive action was PROPOSED, not done
+          if (rv.widget && typeof rv.widget === 'object') uiWidgets.push(rv.widget); // a live/interactive widget to render in the bubble
           if (rv.autoConfirmed) autoFired.push({ title: rv.title, type: rv.type, ok: rv.fired !== false }); // "don't ask again" fired it
           if (rv.asked && rv.askId) askIds.push(rv.askId); // the agent raised a typed question → render it inline
           if (Array.isArray(rv.proposalIds)) proposalIds.push(...rv.proposalIds); // nested (specialist) proposals bubble up
@@ -792,7 +835,7 @@ const handler = async (req, res) => {
       sessions.set(sid, next);
       const proposals = proposalIds.map(getProposal).filter(Boolean);
       const asks = askIds.map(getAsk).filter(Boolean); // typed questions raised this turn → rendered inline
-      return json(res, 200, { answer: r.answer, images, imageUrls, toolsUsed: r.toolsUsed.map(x => x.name), steps, proposals, autoFired, asks, agentId: runNode.id, attachments: savedRefs, remaining: purse.balance(), allowance: purse.granted(), spent: Object.values(perProvider).reduce((a, b) => a + b, 0), perProvider });
+      return json(res, 200, { answer: r.answer, images, imageUrls, ui: uiWidgets, toolsUsed: r.toolsUsed.map(x => x.name), steps, proposals, autoFired, asks, agentId: runNode.id, attachments: savedRefs, remaining: purse.balance(), allowance: purse.granted(), spent: Object.values(perProvider).reduce((a, b) => a + b, 0), perProvider });
     }
 
     if (req.method === 'POST' && u.pathname === '/cancel') {
