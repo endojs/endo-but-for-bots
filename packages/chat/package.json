@@ -113,6 +113,7 @@
     "files": [
       "test/**/*.test.*"
     ],
+    "workerThreads": false,
     "timeout": "2m",
     "environmentVariables": {
       "LOCKDOWN_OPTIONS": "{\"errorTaming\":\"unsafe\",\"overrideTaming\":\"severe\"}"
