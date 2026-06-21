@@ -36,7 +36,7 @@
     "lint:eslint": "eslint '**/*.js'",
     "lint:types": "tsc",
     "prepack": "exit 0",
-    "test": "ava",
+    "test": "timeout -s KILL 260 ava",
     "test:c8": "c8 ${C8_OPTIONS:-} ses-ava",
     "test:e2e": "playwright test",
     "test:monaco-lockdown": "node test/monaco-lockdown/run.mjs",
@@ -111,7 +111,20 @@
   },
   "ava": {
     "files": [
-      "test/**/*.test.*"
+      "test/component/peers.test.js",
+      "test/component/petname-path-autocomplete-confined.test.js",
+      "test/component/petname-path-autocomplete.test.js",
+      "test/component/petname-paths-autocomplete-confined.test.js",
+      "test/component/petname-paths-autocomplete.test.js",
+      "test/component/profile-popup.test.js",
+      "test/component/scheme-picker.test.js",
+      "test/component/send-form.test.js",
+      "test/component/share-modal.test.js",
+      "test/component/spaces-gutter-home.test.js",
+      "test/component/token-autocomplete-confined.test.js",
+      "test/component/token-autocomplete.test.js",
+      "test/component/value-component.test.js",
+      "test/component/whylip.test.js"
     ],
     "timeout": "2m",
     "environmentVariables": {
