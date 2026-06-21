@@ -1404,7 +1404,7 @@ const handler = async (req, res) => {
       // source + its declared cells are committed to component-git, so it gets history/fork/revert like any
       // component and a standalone home at /c/<id>. (Cross-user share with a scoped cap is the next step.)
       if (u.pathname === '/components/break-out') {
-        const src = String(body.source || ''); if (!src.includes('=>') || src.length > 8000) return json(res, 200, { ok: false, error: 'invalid component source' });
+        const src = String(body.source || ''); if (!/^\s*\(?\s*[a-zA-Z_$]/.test(src) || !src.includes('=>') || src.length > 8000) return json(res, 200, { ok: false, error: 'invalid component source (must be a function (ui) => …)' });
         const cells = (Array.isArray(body.cells) ? body.cells : []).map(String).slice(0, 8);
         const name = String(body.name || 'component').slice(0, 60);
         const id = `uicomp-${crypto.randomBytes(5).toString('hex')}`;
@@ -1682,7 +1682,10 @@ const main = async () => {
   log('scheduled-agent tick armed (30s)');
 
   for (const ip of BIND) { const s = http.createServer(handler); s.on('error', e => log('bind', ip, e.message)); s.listen(PORT, ip, () => log(`field agent on http://${ip}:${PORT}`)); }
-  log(`ROOT CAP LINK (full bundle): ${BASE_URL}/#cap=${rootSwiss}`);
+  // cap-hygiene: don't print the all-powers root #cap link to the log on a normal boot. Show only a
+  // fingerprint; the operator gets the full link by setting PRINT_ROOT_CAP=1 (first-run bootstrap only).
+  if (process.env.PRINT_ROOT_CAP === '1') log(`ROOT CAP LINK (full bundle): ${BASE_URL}/#cap=${rootSwiss}`);
+  else log(`ROOT CAP ready (fp ${rootSwiss.slice(0, 6)}…; set PRINT_ROOT_CAP=1 to print the full link)`);
   log(`STT ${WHISPER}; LLM gemma tinix:8003; delegate ${process.env.DELEGATE_MODEL || 'claude-opus-4-8'}`);
 };
 

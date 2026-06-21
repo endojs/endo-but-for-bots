@@ -57,12 +57,17 @@ const create = (tag) => {
   return w;
 };
 
+// All parent↔iframe traffic after mount goes over a private MessagePort the parent transfers on mount
+// (scoped, no shared window listener). `send` uses the port once it exists; 'ready' is the only pre-port msg.
+let CU_PORT = null;
+const send = (m) => { try { const msg = { __cu: 1, ...m }; if (CU_PORT) CU_PORT.postMessage(msg); else parent.postMessage(msg, '*'); } catch (e) {} }; // __cu tag on BOTH paths (the port path dropped it before)
+
 // ── the live-grain bridge: ui.grain(cellId) is a server cell the PARENT feeds us; ui.local(v) is client state. ──
 const cellGrains = new Map();
 const requestedCells = new Set();
 const apiGrain = (cellId) => {
   const id = String(cellId || '');
-  if (!cellGrains.has(id)) { cellGrains.set(id, grain(undefined)); if (!requestedCells.has(id)) { requestedCells.add(id); try { parent.postMessage({ __cu: 1, type: 'subscribe', cell: id }, '*'); } catch (e) {} } }
+  if (!cellGrains.has(id)) { cellGrains.set(id, grain(undefined)); if (!requestedCells.has(id)) { requestedCells.add(id); send({ type: 'subscribe', cell: id }); } } // once per cell — the parent also dedups
   return cellGrains.get(id);
 };
 
@@ -88,16 +93,17 @@ const mount = (source) => {
   report();
 };
 
-// report content height so the parent can size the iframe to its content.
-report = () => { try { parent.postMessage({ __cu: 1, type: 'height', px: Math.min(2000, Math.max(40, document.body.scrollHeight + 6)) }, '*'); } catch (e) {} };
+// report content height — DEBOUNCED + only when it actually changed (a rapidly-pushing cell can't flood the parent).
+let reportPending = false, lastH = -1;
+report = () => { if (reportPending) return; reportPending = true; setTimeout(() => { reportPending = false; const px = Math.min(2000, Math.max(40, document.body.scrollHeight + 6)); if (px !== lastH) { lastH = px; send({ type: 'height', px }); } }, 50); };
 
+// The parent transfers a private MessagePort on 'mount'; after that, all traffic is over that port.
 window.addEventListener('message', (e) => {
-  // Only the parent talks to us; ignore everything else. (We never trust message CONTENT for authority —
-  // it only delivers our own source + the cell values the parent chose to push.)
-  if (e.source !== parent) return;
-  const m = e.data; if (!m || m.__cu !== 1) return;
-  if (m.type === 'mount') mount(m.source);
-  else if (m.type === 'cell') { const g = cellGrains.get(String(m.id)); if (g) g.set(m.value); }
+  if (e.source !== parent) return; // only the parent's mount handshake comes over the window
+  const m = e.data; if (!m || m.__cu !== 1 || m.type !== 'mount') return;
+  const port = e.ports && e.ports[0];
+  if (port) { CU_PORT = port; port.onmessage = (pe) => { const pm = pe.data; if (pm && pm.__cu === 1 && pm.type === 'cell') { const g = cellGrains.get(String(pm.id)); if (g) g.set(pm.value); } }; try { port.start(); } catch (e2) {} }
+  mount(m.source);
 });
 try { parent.postMessage({ __cu: 1, type: 'ready' }, '*'); } catch (e) {}
 </script>

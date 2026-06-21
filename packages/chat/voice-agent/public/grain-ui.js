@@ -158,23 +158,30 @@ const renderComponent = (spec, ctx) => {
   wrap.appendChild(iframe);
   const allowedCells = new Set((Array.isArray(spec.cells) ? spec.cells : []).map(String)); // only cells the agent DECLARED
   const cap = ctx && ctx.cap;
-  const releases = [];
-  const post = m => { try { iframe.contentWindow && iframe.contentWindow.postMessage({ __cu: 1, ...m }, '*'); } catch { /* */ } };
-  const onMsg = e => {
-    if (e.source !== iframe.contentWindow) return; // only OUR iframe
+  const releases = []; const subscribed = new Set(); // dedup: one stream per declared cell, no matter how often it asks
+  let port = null;
+  // After the handshake, ALL traffic is over a private MessagePort (no shared/accumulating window listener).
+  const onPort = e => {
     const m = e.data; if (!m || m.__cu !== 1) return;
-    if (m.type === 'ready') post({ type: 'mount', source: String(spec.source || '') });
-    else if (m.type === 'height') { const px = Math.min(2000, Math.max(40, Number(m.px) || 120)); iframe.style.height = `${px}px`; }
+    if (m.type === 'height') { const px = Math.min(2000, Math.max(40, Number(m.px) || 120)); if (iframe.style.height !== `${px}px`) iframe.style.height = `${px}px`; }
     else if (m.type === 'subscribe') {
       const id = String(m.cell || '');
-      if (!cap || !allowedCells.has(id)) return; // undeclared cell or no cap → ignore (no authority leak)
+      if (!cap || !allowedCells.has(id) || subscribed.has(id)) return; // undeclared / no cap / already wired → ignore
+      subscribed.add(id);
       const { grain, release } = acquireCell(cap, id); releases.push(release);
-      follow(grain, value => post({ type: 'cell', id, value })); // pipe live values IN (cap stays here)
+      follow(grain, value => { try { port && port.postMessage({ __cu: 1, type: 'cell', id, value }); } catch { /* */ } }); // pipe live values IN (cap stays here)
     }
   };
-  window.addEventListener('message', onMsg);
-  track(() => { window.removeEventListener('message', onMsg); for (const r of releases) { try { r(); } catch { /* */ } } });
-  iframe.src = '/confined.html'; // the trusted runtime (own no-network CSP); the agent source arrives via postMessage on 'ready'
+  // one-shot window listener JUST for the 'ready' handshake — removed the instant it fires (no accumulation).
+  const onReady = e => {
+    if (e.source !== iframe.contentWindow) return; const m = e.data; if (!m || m.__cu !== 1 || m.type !== 'ready') return;
+    window.removeEventListener('message', onReady);
+    const ch = new MessageChannel(); port = ch.port1; port.onmessage = onPort; try { port.start(); } catch { /* */ }
+    try { iframe.contentWindow.postMessage({ __cu: 1, type: 'mount', source: String(spec.source || '') }, '*', [ch.port2]); } catch { /* */ }
+  };
+  window.addEventListener('message', onReady);
+  track(() => { window.removeEventListener('message', onReady); try { port && port.close(); } catch { /* */ } for (const r of releases) { try { r(); } catch { /* */ } } });
+  iframe.src = '/confined.html'; // the trusted runtime (own no-network CSP); source + a private port arrive on the 'ready' handshake
   return wrap;
 };
 
