@@ -19,6 +19,17 @@ Run Claude Code inside an [`@endo/sandbox`](../sandbox/README.md) rootless
 **podman** slice, projecting the agent's workspace from an Endo `Filesystem`
 capability and exposing the session to other Endo agents as a `ClaudeClient`.
 
+The intended deployment is a **host daemon on a Linux machine** that lets
+**remote peers** bring two capabilities of their own — a `Filesystem` (their
+project files) and a `ClaudeCredentials` (their Claude auth) — and run Claude
+Code against them in a container on the host.
+The peer's long-lived auth stays on the peer's machine; the host receives only
+the short-lived per-session secret the credential cap mints (see
+`ClaudeCredentials` above).
+The sibling [`@endo/claude-container`](../claude-container) (PR #328) explores
+the same goal with a heavier QEMU-microVM substrate; this package is the
+lighter rootless-podman path with the same capability shape.
+
 ## Architecture
 
 Four pieces, all unconfined caplets minted by [`setup.js`](./setup.js):
@@ -29,9 +40,18 @@ Four pieces, all unconfined caplets minted by [`setup.js`](./setup.js):
 - **`ClaudeClient`** (`src/claude-client.js`) — one Claude Code session bound to
   one slice; `send()` spawns a fresh `claude -p … --output-format stream-json`
   per turn and parses the newline-delimited JSON.
-- **`ClaudeCredentials`** (`src/claude-credentials-*.js`) — single-shot API-key
-  wrapper backed by a `0600` sidecar file; the key never enters the formula
-  store.
+- **`ClaudeCredentials`** (`src/claude-credentials-*.js`) — single-shot
+  credential wrapper backed by a `0600` sidecar file; the secret never enters
+  the formula store.
+  It advertises a `kind()` — `apiKey` or `oauthToken` — so the factory injects
+  the materialised secret as `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN`
+  respectively.
+  Because `issue()` / `materialise()` are eventual-sends, the cap can live on a
+  remote **peer**: the peer holds the long-lived auth (e.g. an OAuth refresh
+  token) and mints a short-lived `oauthToken` per session, so the host daemon
+  only ever sees the short-lived bytes.
+  This mirrors the R3 `ClaudeCredentials` contract in `@endo/claude-container`
+  (PR #328).
 - **`parse-rootfs.js`** — maps the `rootfs` form field to a `RootfsSpec`.
 
 It leans on two upstream caplets: the `@endo/sandbox` podman driver and the
@@ -125,26 +145,48 @@ at a non-existent formula.
 The dependency-injected unit tests masked this because the mock `storeValue`
 just records the object.
 
-**Proposed fix.**
-Stop `storeValue`-ing a worker-local exo as a top-level pet name.
-Instead have the factory **own its sessions in memory** and expose them through
-its own (formula-backed) interface — e.g. `list()`, `get(name)`,
-`send(name, …)`, `terminate(name)` — mirroring how genie manages sessions
-through its controller.
-Alternatively, formulate the client as a first-class formula (e.g. a dedicated
-`claude-client` caplet) so it has a real identity.
+**Chosen direction: a first-class `claude-client` formula.**
+Formulate each session as its own caplet so it has a real daemon identity
+(`storeValue` works, and it reincarnates across daemon restarts), mirroring
+`@endo/claude-container`'s per-session `ClaudeClient` formula.
 
-### 2. Factory error path leaks the slice and the 9P mount
+Feasibility note (verified against `@endo/sandbox`):
+`E(sandboxFactory).make()` returns a `makeExo('SandboxHandle', …)` minted
+**inside the sandbox-factory's worker** (`packages/sandbox/src/factory.js`),
+and the 9P mount handle is likewise worker-local — neither has a formula
+identity, so a *separate* client formula cannot receive them across a formula
+boundary.
+The client formula must therefore **own its slice and mount**: a
+`claude-client-module.js` loaded by `makeUnconfined`, parameterised by `env`
+(the workspace `Filesystem` pet name, `sandbox-factory` / `fs-mounter` pet
+names, network, rootfs, model, and the `ClaudeCredentials` pet name), that
+mounts the workspace and mints the slice in its own worker.
+On reincarnation it re-mounts and re-mints a fresh container; the workspace and
+the conversation persist in the `Filesystem` cap, and the short-lived
+credential is re-materialised from the (possibly peer-hosted) credential cap at
+spawn time — keeping the secret out of the formula `env` entirely.
 
-On any failure after the mount / slice are created, the `catch` block only
-replies with the error message; it does not dispose the slice or unmount the
-workspace.
-The failed `storeValue` above left a running `endo-sandbox-*` container and a
-mounted 9P filesystem behind.
+This refactor changes the factory's trust/authority wiring (the per-session
+client worker needs `host-agent` access to look up those caps) and can only be
+validated against a **live daemon** — which is exactly the integration-test gap
+in issue #3 below.
+It is therefore staged behind that test rather than landed against the
+mock-only suite (the same mock blind spot that masked this bug originally).
 
-**Proposed fix.**
-Track the `mountHandle` and `slice` in the submission scope and, on error,
-best-effort `E(slice).dispose()` + `E(mountHandle).unmount()` before replying.
+### 2. Factory error path leaks the slice and the 9P mount — FIXED
+
+On any failure after the mount / slice were created, the `catch` block only
+replied with the error message; it did not dispose the slice or unmount the
+workspace, so the failed `storeValue` left a running `endo-sandbox-*` container
+and a mounted 9P filesystem behind.
+
+**Fixed.**
+The submission handler now tracks `mountHandle` and `slice` in the submission
+scope and, on error, best-effort `E(slice).dispose()` (first, since the
+container holds the bind mount) then `E(mountHandle).unmount()` before
+replying.
+Covered by the `a failure after the slice is created tears down the slice and
+mount` test in `test/factory.test.js`.
 
 ### 3. Integration-test gap
 
@@ -155,10 +197,21 @@ against a tiny image, so the storage contract is covered.
 
 ### 4. Other follow-ups
 
-- Exercise the **live path with a real `ANTHROPIC_API_KEY`** (only the no-key
-  path is validated so far).
+- Exercise the **live path with a real credential** — both an
+  `ANTHROPIC_API_KEY` and an `oauthToken` (`CLAUDE_CODE_OAUTH_TOKEN` from
+  `claude setup-token`). Only the no-credential path is validated live so far;
+  the credential-kind → env-var wiring is unit-tested but not yet run against a
+  real `claude`.
+- Token refresh for long-lived sessions: a short-lived `oauthToken` is injected
+  into the slice env at creation, but each `send()` spawns a fresh `claude`
+  reading that fixed env, so the token is not refreshed mid-session. For
+  long-running sessions, re-materialise the credential per `send()` (per-spawn
+  env) or push a rotated token in, mirroring `@endo/claude-container`'s
+  `RotateCreds`.
 - Validate `network` profiles beyond `none` (`private` etc. need
-  `slirp4netns`/`pasta` reachable from the daemon's user).
+  `slirp4netns`/`pasta` reachable from the daemon's user). Note Claude Code must
+  reach `api.anthropic.com`, so a usable session needs an egress-capable profile
+  — `none` blocks the API entirely; the default is `private`.
 - Reconcile the form's `rootfs` help with the podman driver: either drop
   `host-bind`/`minimal` from the advertised options under the podman backend or
   document that they require `bwrap`.
