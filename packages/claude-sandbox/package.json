@@ -28,6 +28,7 @@
     "test": "ava",
     "test:integration": "ava test/integration.test.js --timeout=180s",
     "test:live": "ava test/live-daemon.test.js --timeout=180s",
+    "test:ninep": "ava test/ninep-flow.test.js --timeout=180s",
     "setup": "endo run --UNCONFINED setup.js --powers @agent",
     "factory": "endo run --UNCONFINED factory.js --powers @agent",
     "credentials": "endo run --UNCONFINED credentials.js --powers @agent",
@@ -55,7 +56,8 @@
   "ava": {
     "files": [
       "test/**/*.test.js",
-      "!test/live-daemon.test.js"
+      "!test/live-daemon.test.js",
+      "!test/ninep-flow.test.js"
     ],
     "timeout": "60s"
   },

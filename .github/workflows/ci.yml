@@ -1,341 +1,50 @@
-name: CI
+name: 9p-sandbox-probe
 
-# run CI on pushes to master, and on all PRs (even the ones that target other
-# branches)
+# EXPERIMENTAL PROBE BRANCH — DO NOT MERGE.
+#
+# This file deliberately *replaces* the full Endo CI (the other workflow
+# files were removed on this branch) with a single matrix job that answers
+# one question: does the host-side 9P mount + podman bind — the "plan B"
+# workspace projection that @endo/claude-sandbox relies on — actually work
+# on GitHub-hosted runners? The matrix probes a few Ubuntu images because
+# the variable is the runner kernel: whether it ships CONFIG_9P_FS and lets
+# an unprivileged user mount(2) via sudo.
+#
+# See packages/claude-sandbox/test/ninep-flow.test.js for the probe itself.
 
 on:
   push:
-    branches: [master]
   pull_request:
-    # `paths-ignore` causes this workflow not to run at all when every
-    # changed path matches one of these patterns. The sister workflow
-    # `ci-docs.yml` mirrors this list under `paths` (the inverse) so
-    # that doc-only PRs still produce checks named `test` and `lint`,
-    # satisfying any future branch-protection rule that names those
-    # checks as required. Keep the two lists in sync.
-    paths-ignore:
-      - '**/*.md'
-      - 'docs/**'
+  workflow_dispatch:
 
-# Minimal permissions for workflows and jobs. `actions/cache` and
-# `setup-node`'s `cache: yarn` use the runner's built-in cache service,
-# which is authenticated independently of the `actions:` permission;
-# `contents: read` is sufficient for every job below.
 permissions:
   contents: read
 
-# Defense in depth against npm lifecycle scripts running implicitly at install.
-# .yarnrc.yml sets `enableScripts: false` at rest; these env vars ensure the
-# posture survives a branch that drops the repo-level config, an invocation of
-# npm where yarn was intended, or a workflow that unsets the yarn config.
-# See designs/ci-no-npm-lifecycle.md.
+# Match the upstream CI posture: never let an npm/yarn lifecycle script run
+# implicitly at install.
 env:
   YARN_ENABLE_SCRIPTS: 'false'
   npm_config_ignore_scripts: 'true'
 
-# Cancel in-progress runs for the same branch when a new run is started
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-# This file has necessary redundancies since of github actions aren't supporting:
-# - the definition of macros, which could be called from each job.
-# - reporting the status of steps in the PR (only jobs and workflows are reported).
-# Steps between "begin" and "end" should be the same in every job.
-
 jobs:
-  lint:
-    name: lint
+  ninep-sandbox-probe:
+    name: ninep-sandbox-probe (${{ matrix.runner }})
 
-    # begin macro
+    runs-on: ${{ matrix.runner }}
 
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          persist-credentials: false
-
-      # without this, setup-node errors on mismatched yarn versions
-      - run: corepack enable
-
-      - name: Use Node.js
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
-        with:
-          node-version-file: .node-version
-          cache: yarn
-
-      - name: Install dependencies
-        run: yarn install --immutable
-
-      # end macro
-
-      - name: Run yarn build
-        run: yarn build
-
-      # shellcheck ships preinstalled on ubuntu-latest runners. Print
-      # the version so a regression in the image surfaces here rather
-      # than as an unexplained gate flap. `yarn lint` runs `lint:sh`
-      # against the same binary; this step is the install-presence
-      # check.
-      - name: Show shellcheck version
-        run: shellcheck --version
-
-      - name: Run yarn lint
-        run: yarn lint
-
-      - name: Check SECURITY.md uniformity
-        run: bash scripts/check-security-md.sh
-
-      - name: Check composite tsconfig files are up to date
-        run: yarn build:types:check
-
-      - name: Check package uniformity
-        run: node scripts/check-package-uniformity.mjs
-
-      # build the API docs to verify it works
-      - name: build API docs
-        run: yarn docs
-
-  familiar-bundle:
-    name: familiar-bundle
-
-    # The Familiar Electron shell bundles a handful of CLI / daemon /
-    # worker / agent entry points with esbuild before it can be packaged.
-    # The `step:bundle` script is build-only — it produces .cjs / .js
-    # files under packages/familiar/bundles/ and does NOT launch
-    # Electron or otherwise need a display, so we can run it in CI
-    # without xvfb. A separate concern (familiar-release.yml) handles
-    # the runtime packaging on tag push.
-    #
-    # Without this job a regression in any module reachable from one of
-    # the bundle entry points (notably packages/daemon/src/daemon-node.js
-    # and packages/daemon/src/worker-node.js) is invisible until release
-    # time. See the d0ce26b327 SQLite migration for an example: it added
-    # top-level await to daemon-node.js, which esbuild's `cjs` output
-    # format rejects, and the bundle build silently broke for months.
-
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-        with:
-          persist-credentials: false
-
-      # without this, setup-node errors on mismatched yarn versions
-      - run: corepack enable
-
-      - name: Use Node.js
-        uses: actions/setup-node@6044e13b5dc448c55e2357c09f80417699197238 # v6.2.0
-        with:
-          node-version: 22.x
-          cache: yarn
-
-      - name: Install dependencies
-        run: yarn install --immutable
-
-      - name: Bundle Familiar entry points
-        run: yarn workspace @endo/familiar step:bundle
-
-  test:
-    name: test
-
-    # begin macro
-
-    runs-on: ${{ matrix.platform }}
     strategy:
+      # Report every row independently — the point is the per-runner verdict.
       fail-fast: false
       matrix:
-        node-version: [22.x, 24.x]
-        platform: [ubuntu-latest, macos-15]
-        # windows-latest exhibited flakey tests that are not yet worth the
-        # trouble to investigate, and blocked us from upgrading yarn from 1 to
-        # 4.
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          # Fetch full history so turbo can compute the affected set against
-          # `origin/llm` for the `--filter='...[origin/llm]'` invocation below.
-          fetch-depth: 0
-          persist-credentials: false
-
-      # without this, setup-node errors on mismatched yarn versions
-      - run: corepack enable
-
-      - name: Use Node.js ${{ matrix.node-version }}
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
-        with:
-          node-version: ${{ matrix.node-version }}
-          cache: yarn
-
-      # Some tests (e.g., in package "daemon") create Unix domain sockets, and
-      # their full absolute paths MUST remain short.
-      - name: Move working directory
-        id: move-wd
-        run: |
-          ORIGINAL_WORKDIR="$(pwd)"
-          echo "ORIGINAL_WORKDIR=$ORIGINAL_WORKDIR" >> $GITHUB_ENV
-          cd "$RUNNER_TEMP"
-          WORKDIR="$(mktemp --tmpdir="$(pwd)" --dry-run checkout-XXXXXX)"
-          mv -fv "$ORIGINAL_WORKDIR" "$WORKDIR"
-          echo "WORKDIR=$WORKDIR" >> $GITHUB_ENV
-
-      - name: Install dependencies
-        working-directory: ${{ env.WORKDIR }}
-        run: yarn install --immutable
-
-      # end macro
-
-      # Use turbo's `--filter='...[origin/llm]'` to test only the packages
-      # affected by this PR and their dependents (the leading `...` selects the
-      # changed set plus everything that depends on it), rather than the full
-      # matrix. The base `origin/llm` is the repo's default branch on this fork.
-      # The `test` task `dependsOn` `build` and `^build`, so turbo builds only
-      # the affected closure on demand; a separate full `yarn build` step would
-      # rebuild all ~83 packages and is therefore omitted.
-      - name: Run yarn test (affected set)
-        working-directory: ${{ env.WORKDIR }}
-        run: yarn turbo run test --filter='...[origin/llm]'
-
-      - name: Restore working directory
-        if: ${{ steps.move-wd.outcome == 'success' }}
-        working-directory: ${{ runner.temp }}
-        run: mv -fv "$WORKDIR" "$ORIGINAL_WORKDIR"
-
-  sandbox-drivers:
-    name: sandbox-drivers
-
-    # begin macro
-
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          persist-credentials: false
-
-      # without this, setup-node errors on mismatched yarn versions
-      - run: corepack enable
-
-      - name: Use Node.js 22.x
-        uses: actions/setup-node@6044e13b5dc448c55e2357c09f80417699197238 # v6.2.0
-        with:
-          node-version: 22.x
-          cache: yarn
-
-      - name: Install dependencies
-        run: yarn install --immutable
-
-      # end macro
-
-      - name: Install bubblewrap
-        run: sudo apt-get update && sudo apt-get install -y bubblewrap
-
-      - name: Run yarn build
-        run: yarn build
-
-      # Pre-pull the OCI image used by packages/sandbox/test/podman.test.js
-      # (`ALPINE_REF`) so the first podman test does not pay the registry
-      # round-trip and so docker.io flakes surface as a single visible
-      # job-setup failure rather than an obscure mid-test timeout.
-      # Keep this ref in sync with `ALPINE_REF` in
-      # packages/sandbox/test/podman.test.js and the references in
-      # packages/sandbox/README.md.
-      - name: Pre-pull alpine OCI image
-        run: podman pull docker.io/library/alpine:3.19
-
-      - name: Run sandbox driver tests
-        run: yarn workspace @endo/sandbox run test:drivers
-
-  claude-sandbox-integration:
-    name: claude-sandbox-integration
-
-    # begin macro
-
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          persist-credentials: false
-
-      # without this, setup-node errors on mismatched yarn versions
-      - run: corepack enable
-
-      - name: Use Node.js 22.x
-        uses: actions/setup-node@6044e13b5dc448c55e2357c09f80417699197238 # v6.2.0
-        with:
-          node-version: 22.x
-          cache: yarn
-
-      - name: Install dependencies
-        run: yarn install --immutable
-
-      # end macro
-
-      - name: Run yarn build
-        run: yarn build
-
-      # Pre-pull the OCI image used by the @endo/claude-sandbox podman
-      # integration test (`ALPINE_REF`) so the first run does not pay the
-      # registry round-trip. Keep in sync with `ALPINE_REF` in
-      # packages/claude-sandbox/test/integration.test.js.
-      - name: Pre-pull alpine OCI image
-        run: podman pull docker.io/library/alpine:3.19
-
-      # Exercises a real @endo/sandbox podman slice, a real bind-mounted
-      # workspace, and a real process's stdout over the @endo/exo-stream
-      # wire protocol into the stream-json parser. The 9P-mount and
-      # real-`claude` cases self-skip when their prerequisites
-      # (9p kernel module, CLAUDE_SANDBOX_TEST_IMAGE) are absent.
-      - name: Run claude-sandbox integration test
-        # The image is pre-pulled above, so require the slice case to actually
-        # run rather than self-skip to green.
-        env:
-          CLAUDE_SANDBOX_REQUIRE_INTEGRATION: '1'
-        run: yarn workspace @endo/claude-sandbox run test:integration
-
-      # Boots a real Endo daemon and exercises the first-class
-      # `claude-client` formula end-to-end: `createSession` returns a
-      # ClaudeClient cap with a real daemon identity (status() works across
-      # CapTP), and the @host form path stores and removes it under a pet
-      # name. Needs no podman/9p — `status()`/`terminate()` do not provision
-      # a container — so it runs anywhere the daemon boots.
-      - name: Run claude-sandbox live-daemon test
-        run: yarn workspace @endo/claude-sandbox run test:live
-
-  test-async-hooks:
-    name: test-async-hooks
-
-    runs-on: ${{ matrix.platform }}
-    strategy:
-      fail-fast: false
-      matrix:
-        node-version:
-          # Historical record of Node patch-version compatibility for the
-          # SES-viable promise-hook surface (entries removed as their Node
-          # major lines reached EOL or left CI):
-          # '16.1' last version before some significant promise hooks changes
-          # '16.5' last version before unconditional promise fast-path
-          # '16.6' first version after unconditional promise fast-path
-          # '20.3' to '20.6' not viable due to https://github.com/nodejs/node/pull/49211
-          # '20.6' not viable due to https://github.com/nodejs/node/issues/49497
-          # '20.7' first SES-viable version of Node 20
-          # '20.9' first LTS of Node 20
-          # '22' is the post-promise-fast-path lane on a current LTS
-          # (the SES-viable promise-hook lane the Node-20 entry was guarding).
-          - '22'
-        platform:
+        runner:
+          - ubuntu-22.04
+          - ubuntu-24.04
           - ubuntu-latest
 
-    # begin macro
-
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -345,13 +54,11 @@ jobs:
       # without this, setup-node errors on mismatched yarn versions
       - run: corepack enable
 
-      - name: Use Node.js ${{ matrix.node-version }}
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+      - name: Use Node.js 22.x
+        uses: actions/setup-node@6044e13b5dc448c55e2357c09f80417699197238 # v6.2.0
         with:
-          node-version: ${{ matrix.node-version }}
+          node-version: 22.x
           cache: yarn
-
-      # end macro
 
       - name: Install dependencies
         run: yarn install --immutable
@@ -359,419 +66,35 @@ jobs:
       - name: Run yarn build
         run: yarn build
 
-      - name: Run yarn test (@endo/init)
-        working-directory: packages/init
-        run: yarn test
-
-  cover:
-    name: cover
-
-    # begin macro
-
-    runs-on: ${{ matrix.platform }}
-    strategy:
-      fail-fast: false
-      matrix:
-        node-version: [22.x, 24.x]
-        platform: [ubuntu-latest]
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          # Fetch full history so turbo can compute the affected set against
-          # `origin/llm` for the `--filter='...[origin/llm]'` invocation below.
-          fetch-depth: 0
-          persist-credentials: false
-
-      # without this, setup-node errors on mismatched yarn versions
-      - run: corepack enable
-
-      - name: Use Node.js ${{ matrix.node-version }}
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
-        with:
-          node-version: ${{ matrix.node-version }}
-          cache: yarn
-
-      - name: Install dependencies
-        run: yarn install --immutable
-
-      # end macro
-
-      # As with the `test` job, scope coverage to the affected packages and
-      # their dependents. The `test:c8` turbo task `dependsOn` `build` and
-      # `^build`, so turbo builds only the affected closure on demand; a
-      # separate full `yarn build` step is therefore omitted.
-      - name: Run yarn test:c8 (affected set)
-        run: yarn turbo run test:c8 --filter='...[origin/llm]'
-
-  test262:
-    name: test262
-
-    # begin macro
-
-    runs-on: ${{ matrix.platform }}
-    strategy:
-      fail-fast: false
-      matrix:
-        node-version: [22.x, 24.x]
-        platform: [ubuntu-latest]
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          persist-credentials: false
-
-      # without this, setup-node errors on mismatched yarn versions
-      - run: corepack enable
-
-      - name: Use Node.js ${{ matrix.node-version }}
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
-        with:
-          node-version: ${{ matrix.node-version }}
-          cache: yarn
-
-      - name: Install dependencies
-        run: yarn install --immutable
-
-      # end macro
-
-      - name: Run yarn build
-        run: yarn build
-
-      - name: Run yarn test262
-        run: exit 0 # TODO remove test262 from required tests for CI
-
-  test-hermes:
-    name: test-hermes
-
-    # begin macro
-
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          persist-credentials: false
-
-      # without this, setup-node errors on mismatched yarn versions
-      - run: corepack enable
-
-      - name: Use Node.js
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
-        with:
-          node-version-file: .node-version
-          cache: yarn
-
-      - name: Install dependencies
-        run: yarn install --immutable
-
-      # end macro
-
-      - name: Run yarn build
-        run: yarn build
-
-      - name: Run SES/Hermes smoke test
-        run: yarn test:hermes
-
-  check-action-pins:
-    name: check-action-pins
-
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          persist-credentials: false
-
-      # without this, setup-node errors on mismatched yarn versions
-      - run: corepack enable
-
-      - name: Use Node.js
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
-        with:
-          node-version-file: .node-version
-          cache: yarn
-
-      - name: Install dependencies
-        run: yarn install --immutable
-
-      - name: Detect workflow changes
-        id: paths
-        uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d # v4.0.1
-        with:
-          filters: |
-            workflows:
-              - '.github/workflows/**'
-
-      - name: Verify action pins
-        if: ${{ github.event_name != 'pull_request' || steps.paths.outputs.workflows == 'true' }}
-        run: node scripts/update-action-pins.mjs --check-pins
-
-  viable-release:
-    name: viable-release
-
-    # begin macro
-
-    runs-on: ${{ matrix.platform }}
-    strategy:
-      fail-fast: false
-      matrix:
-        node-version: [22.x, 24.x]
-        platform: [ubuntu-latest]
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          persist-credentials: false
-
-      # without this, setup-node errors on mismatched yarn versions
-      - run: corepack enable
-
-      - name: Use Node.js ${{ matrix.node-version }}
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
-        with:
-          node-version: ${{ matrix.node-version }}
-          cache: yarn
-
-      - name: Install dependencies
-        run: yarn install --immutable
-
-      # end macro
-
-      - name: build
-        run: yarn run build
-
-      # Smoke-test the publish flow end to end. Boots a disposable
-      # Verdaccio registry, runs `yarn release:npm` against it, then
-      # installs a representative subset of the published tarballs into
-      # a fresh consumer and exercises them under SES lockdown. This
-      # replaces the previous `yarn workspaces foreach exec npm pack`
-      # step (which could not have worked after the ts-node-pack
-      # refactor because the .ts-using packages no longer have prepack
-      # hooks to turn their sources into publishable JS) and also
-      # subsumes the "Prepack packages" type-resolution check: the
-      # consumer imports under SES prove that declarations resolve
-      # cross-package from their published tarball state, not from
-      # whatever source tree happens to be on disk.
-      - name: Smoke-test publish
-        run: yarn smoketest:publish
-
-  test-xs:
-    name: test-xs
-
-    # begin macro
-
-    runs-on: ubuntu-latest
-
-    # may include release tags and hashes
-    env:
-      MODDABLE_VERSION: 5.0.0
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          path: endo
-          persist-credentials: false
-
-      # without this, setup-node errors on mismatched yarn versions
-      - run: corepack enable
-        working-directory: endo
-
-      # The tests run on the XS engine; Node is just driving the harness.
-      - name: Use Node.js
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
-        with:
-          node-version-file: endo/.node-version
-          cache: yarn
-          cache-dependency-path: endo/yarn.lock
-
-      - name: Install dependencies
-        working-directory: endo
-        run: yarn install --immutable
-
-      - name: Install engines
-        working-directory: endo
-        run: yarn workspace @endo/benchmark run install-engines
-
-      # end macro
-
-      - name: Run yarn build
-        working-directory: endo
-        run: yarn build
-
-      - name: Restore XS binary cache
-        id: restore-xs
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
-        with:
-          path: bin/xst
-          key: xst-lin64-${{ env.MODDABLE_VERSION }}
-
-      - name: Choose XS download or build
-        if: steps.restore-xs.outputs.cache-hit != 'true'
-        id: check-release
+      # Self-documenting matrix row: dump the host's 9P + privilege + podman
+      # posture before the test so a green/red result is interpretable from
+      # the log alone. `continue-on-error` is not set — these commands are
+      # all best-effort (`|| echo ...`) so the step never fails the job.
+      - name: Probe host capabilities
         run: |
-          if curl -f -s -o /dev/null -I -L "https://api.github.com/repos/Moddable-OpenSource/moddable/releases/tags/${MODDABLE_VERSION}"
-          then
-            echo release=download
-          else
-            echo release=build
-          fi >> $GITHUB_OUTPUT
+          set -x
+          uname -a
+          head -2 /etc/os-release || true
+          sudo modprobe 9p 9pnet 9pnet_virtio 2>&1 \
+            || echo "modprobe failed (may be built-in, or unprivileged)"
+          grep -w 9p /proc/filesystems || echo "9p NOT in /proc/filesystems"
+          command -v mount umount podman || true
+          podman --version || true
+          sudo -n true && echo "passwordless sudo: yes" \
+            || echo "passwordless sudo: no"
 
-      - name: Download XS
-        if: steps.check-release.outputs.release == 'download'
-        run: |
-          wget "https://github.com/Moddable-OpenSource/moddable/releases/download/${MODDABLE_VERSION}/xst-lin64.zip"
-          unzip xst-lin64.zip -d bin
-          mkdir -p bin
-          chmod 755 bin/xst
+      # Pre-pull the OCI image the sandbox stage binds the 9P mount into, so
+      # a registry flake surfaces as a visible setup failure, not a mid-test
+      # timeout. Keep in sync with ALPINE_REF in the probe test.
+      - name: Pre-pull alpine OCI image
+        run: podman pull docker.io/library/alpine:3.19
 
-      - name: Checkout XS
-        if: steps.check-release.outputs.release == 'build'
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          repository: moddable-OpenSource/moddable
-          ref: ${{ env.MODDABLE_VERSION }}
-          path: moddable
-          persist-credentials: false
-
-      - name: Build XS
-        if: steps.check-release.outputs.release == 'build'
-        working-directory: moddable/xs/makefiles/lin
-        run: |
-          make debug MODDABLE=$GITHUB_WORKSPACE/moddable CC='cc "-D__has_builtin(x)=1"' # give the syntax highlighter a hand: '
-          mkdir -p $GITHUB_WORKSPACE/bin
-          cp $GITHUB_WORKSPACE/moddable/build/bin/lin/debug/xst $GITHUB_WORKSPACE/bin/xst
-
-      - name: Run XS tests
-        working-directory: endo
-        run: |
-          PATH=$PATH:$GITHUB_WORKSPACE/bin
-          yarn test:xs
-
-  test-ocapn-python:
-    name: test-ocapn-python
-
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout Endo
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          path: endo
-          persist-credentials: false
-
-      - name: Checkout OCapN Test Suite
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          # https://github.com/ocapn/ocapn-test-suite/ (main branch)
-          repository: ocapn/ocapn-test-suite
-          ref: 74db78f08a40efba1e2b975d809374ff0e7acf60
-          path: ocapn-test-suite
-          persist-credentials: false
-
-      - run: corepack enable
-        working-directory: endo
-
-      - name: Use Node.js
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
-        with:
-          node-version-file: endo/.node-version
-          cache: yarn
-          cache-dependency-path: endo/yarn.lock
-
-      - name: Set up Python 3.10
-        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
-        with:
-          python-version: '3.10'
-
-      - name: Install Node dependencies
-        working-directory: endo
-        run: yarn install --immutable
-
-      - name: Build Endo
-        working-directory: endo
-        run: yarn build
-
-      - name: Set up Python virtual environment
-        working-directory: ocapn-test-suite
-        run: |
-          python -m venv venv
-          source ./venv/bin/activate
-          pip install stem cryptography
-
-      - name: Start OCapN test server
-        working-directory: endo
-        run: |
-          yarn workspace @endo/ocapn run test:python > /tmp/ocapn-server.log 2>&1 &
-          echo $! > /tmp/ocapn-server.pid
-          # Wait for server to be ready
-          sleep 5
-          # Show initial server output
-          cat /tmp/ocapn-server.log
-
-      - name: Run Python test suite
-        working-directory: ocapn-test-suite
-        run: |
-          source ./venv/bin/activate
-          python ./test_runner.py 'ocapn://test.tcp-testing-only?host=127.0.0.1&port=22046'
-
-      - name: Show OCapN server logs on failure
-        if: failure()
-        run: |
-          echo "=== OCapN Server Logs ==="
-          cat /tmp/ocapn-server.log || echo "No log file found"
-
-      - name: Stop OCapN test server
-        if: always()
-        run: |
-          if [ -f /tmp/ocapn-server.pid ]; then
-            kill $(cat /tmp/ocapn-server.pid) || true
-          fi
-
-  build-wasm:
-    name: build-wasm
-
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          persist-credentials: false
-
-      - name: Cache Cargo + target
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          # Bust the cache when sources or the pinned toolchain change.
-          key: ${{ runner.os }}-wasm-${{ hashFiles('rust/ocapn_noise/**', 'Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-wasm-
-
-      - name: Install rust target
-        run: |
-          # ubuntu-latest images ship with rustup + stable; this just
-          # adds the wasm32 target.  The pinned channel from
-          # rust/ocapn_noise/rust-toolchain.toml takes effect on the
-          # first cargo invocation under that subdirectory.
-          rustup target add wasm32-unknown-unknown
-
-      - name: Build wasm
-        run: bash rust/ocapn_noise/build.sh
-
-      - name: Verify committed wasm matches source
-        run: |
-          # The artifact is committed for JS-only contributors.  CI
-          # regenerates it from source and asserts the committed copy
-          # is identical.  Drift indicates somebody changed Rust source
-          # without re-running build.sh.
-          git diff --exit-code packages/ocapn-noise/gen/ocapn-noise.wasm
+      # NINEP_REQUIRE=1 turns "9P/podman unavailable" into a hard failure, so
+      # a runner that cannot do the flow shows as a red matrix row rather than
+      # a silent green. NINEP_SUDO=1 routes the privileged mount(2)/umount(2)
+      # through sudo (GitHub runners grant passwordless sudo).
+      - name: Run 9P sandbox flow probe
+        env:
+          NINEP_REQUIRE: '1'
+          NINEP_SUDO: '1'
+        run: yarn workspace @endo/claude-sandbox run test:ninep
