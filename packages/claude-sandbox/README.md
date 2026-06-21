@@ -150,6 +150,21 @@ peer-hosted) cap at spawn time, so no secret is stored in the formula. The
 container itself is ephemeral, matching the `@endo/sandbox` plugin's non-goal of
 container persistence.
 
+### Creating and destroying a session
+
+- **Peer-callable:** `E(factory).createSession(config)` returns the
+  `ClaudeClient` cap **without** naming it on the host, so the caller's retention
+  is the session's only root. Dropping the cap collects the formula and tears the
+  session down (container disposed, workspace unmounted).
+- **Operator:** submitting the `@host` form stores the client under a pet name;
+  destroy it with `E(host).remove(name)`.
+- **Stop without destroying:** `E(client).terminate()` disposes the container and
+  unmounts, but the formula survives and re-provisions on the next `send()`.
+
+Teardown is wired to the daemon's cancellation context, so `cancel`, `remove`,
+GC collection, and daemon shutdown all release the container and mount. See
+[DESIGN.md § Session lifecycle, teardown & GC](./DESIGN.md#session-lifecycle-teardown--gc).
+
 ## Caveats
 
 - **Privilege.**

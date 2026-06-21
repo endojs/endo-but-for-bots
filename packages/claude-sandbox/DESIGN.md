@@ -74,6 +74,80 @@ This reconciles two opposing privilege models: the daemon runs as a **non-root**
 user so the podman probe reports rootless, and the privileged `mount(2)` is
 delegated through `sudo` via `NINEP_SUDO=1`.
 
+## Session lifecycle, teardown & GC
+
+Each session is a first-class `claude-client` formula. Two things govern its
+lifetime: **who roots it** (whether it is collected) and **the cancellation
+context** (how it tears down).
+
+### Two create paths — who roots the session
+
+- **`E(factory).createSession(config)`** (peer-callable) formulates the client
+  **without** a pet name and **returns the cap**. The session is therefore
+  rooted only by the **caller's retention**: when a remote peer holds the
+  returned cap, the host records a retention edge under that peer; when the peer
+  drops it, the edge is removed and — if nothing else roots it — the formula is
+  collected. This is the intended remote-peer shape: _the peer owns the
+  session's lifetime._
+- **The "Create Claude Sandbox" form on `@host`** stores the client under a pet
+  name (`resultName`) — a **host-side** root. This is the operator path; the
+  host owns the lifetime and must `E(host).remove(name)` to destroy it.
+
+Delivery dictates rooting: a form **reply** (and `send`) can only attach a cap
+**by pet name** (`Mail.reply(number, strings, edgeNames, petNamesOrPaths)`), so
+handing a session to a peer *without* a host root requires the direct CapTP
+return that `createSession` provides.
+
+### Teardown — the cancellation context
+
+The client module wires `context.whenCancelled()` (the pattern `@endo/9p-server`
+and genie use). When the formula is cancelled or collected, the session tears
+down: dispose the slice (kills the container) then unmount the 9P workspace.
+`terminate()` does the same and is a no-op when nothing was provisioned, so a
+never-used session cancels for free.
+
+- **`cancel`** (explicit `E(host).cancel(name)`, **and every daemon shutdown**)
+  is _transient_: the formula stays on disk and **reincarnates**, re-provisioning
+  a fresh container on the next `send()` (the workspace and conversation persist
+  in the `Filesystem` cap; `claude --continue` resumes).
+- **`remove`/collection** additionally **deletes** the formula. Because teardown
+  is wired to the same `whenCancelled` signal, removal is a clean delete with no
+  leftover container or mount — _"remove == delete, no further cleanup."_
+
+### Distributed GC (validated against the daemon source)
+
+Collection is reachability mark-and-sweep from roots = **pet-name edges** +
+**pins** + **retention edges** (a remote peer holding a cap). The peer-drop →
+collection chain, verified end-to-end:
+
+1. the peer's retention-set `remove` delta → `formulaGraph.removeRetention(...)`
+   (`daemon.js`),
+2. → `removeGroupEdge` decrements the refcount; at zero → `maybeCollect`
+   (`graph.js`),
+3. → if refcount 0 **and not a root**, collect → `onCollect`,
+4. → `deleteFormula` **and** `controller.context.cancel(...)` — which fires our
+   `whenCancelled` teardown.
+
+Caveats worth knowing:
+
+- GC is on by default (`gcEnabled = true`) but can be disabled.
+- "Not otherwise rooted" is load-bearing: a host pet name (the form path) keeps
+  the refcount above zero, so a peer dropping its copy will **not** collect a
+  form-created session — only a `createSession` (peer-rooted) one.
+- A _transient disconnect_ does **not** drop a known peer's retention; retentions
+  are durable (SQLite) and reconciled only when the peer **reconnects** without
+  the reference. So "offline" ≠ "collected"; an explicit drop (or host `remove`)
+  is what destroys the session.
+
+### Destroying a session
+
+- **Peer-rooted** (`createSession`): the peer drops the returned cap → GC
+  collects it → teardown. No explicit host call needed.
+- **Host-rooted** (form): `E(host).remove(name)` — cancellation fires teardown
+  and the formula is deleted.
+- **Stop without destroying:** `E(client).terminate()` disposes the container +
+  unmounts but leaves the formula (it will re-provision on the next `send`).
+
 ## Verified status
 
 Validated in a privileged Docker container (`node:22-bookworm`, Docker Desktop
