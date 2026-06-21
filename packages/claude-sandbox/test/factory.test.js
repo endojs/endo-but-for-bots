@@ -217,12 +217,12 @@ test('submission mounts 9P, provisions a slice, and stores a ClaudeClient', asyn
       sandbox,
       fsm,
       ({ sessionId, slice, mountHandle, workspaceMountPoint }) => ({
-      sessionId,
-      slice,
-      mountHandle,
-      workspaceMountPoint,
-      kind: 'mock-client',
-    }),
+        sessionId,
+        slice,
+        mountHandle,
+        workspaceMountPoint,
+        kind: 'mock-client',
+      }),
     ),
   );
 
