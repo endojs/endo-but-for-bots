@@ -1121,10 +1121,31 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
       if (!opts.length) return { ok: false, error: 'need options: an array of choice strings' };
       return { ok: true, widget: { type: 'choices', prompt: String(prompt || '').slice(0, 160), options: opts }, note: 'Rendered tappable choices; tapping one sends it back as the next message.' };
     } });
+    // showComponent — render an ARBITRARY custom component you write, CONFINED in a sandboxed iframe and fed
+    // by live grains. Use ONLY when a typed widget (status/countdown/choices) doesn't fit. The source is a
+    // function `(ui) => ui.create('div')…` — ui gives you create(tag) [.text/.attr/.class/.style/.on/.push/
+    // .follow(grain,fn)], grain(cellId) [a LIVE server cell — e.g. "ha:<handle>"], and local(initial) [client
+    // state]. NO DOM, NO network, NO authority: you can only render + follow declared cells. Declare every
+    // server cell you use in `cells` (they're cap-gated; an unreachable one is dropped here).
+    toolbox.showComponent = harden({ run: async ({ source, cells, height } = {}) => {
+      const src = String(source || '');
+      if (!/^\s*\(?\s*[a-zA-Z_$]/.test(src) || !src.includes('=>')) return { ok: false, error: 'source must be a function: (ui) => ui.create(...)' };
+      if (src.length > 8000) return { ok: false, error: 'component source too long (keep it under 8000 chars)' };
+      let declared = (Array.isArray(cells) ? cells : []).map(String).slice(0, 8);
+      const dropped = [];
+      // gate declared ha:<handle> cells at designation time (same c-list rule as showEntityStatus)
+      declared = declared.filter(c => {
+        const m = /^ha:(.+)$/.exec(c); if (!m) return true;
+        if (powers.has('homeassistant') && node.haReach && !node.haReach(m[1])) { dropped.push(c); return false; }
+        return true;
+      });
+      return { ok: true, widget: { type: 'component', source: src, cells: declared, height: Math.min(2000, Math.max(40, Number(height) || 140)) }, note: `Rendered a custom confined component${dropped.length ? ` (dropped unreachable cells: ${dropped.join(', ')} — haFind them first)` : ''}.` };
+    } });
     manifest.push(
       { name: 'showEntityStatus', reversible: false, args: { handle: 'string — an entity handle from haFind/search', label: 'string — a short title (e.g. "Front door")' }, description: 'Show a LIVE status WIDGET for a Home Assistant entity (door/lock/sensor/light). It stays current — when reopened later it re-subscribes and shows the latest state, no refresh needed. Prefer this over a text answer for any "is X open / on / locked?" question. Get the handle from haFind first.' },
       { name: 'showCountdowns', reversible: false, args: { timers: 'array — [{label, dueAt}] where dueAt is an absolute ISO time (use the dueAt from a "once" timer in listTimers)' }, description: 'Show LIVE COUNTDOWN widgets that tick down on screen toward each dueAt (great for cooking steps / timers you just set). Pass each timer\'s label + absolute dueAt.' },
       { name: 'showChoices', reversible: false, args: { prompt: 'string — the question', options: 'array — choice strings' }, description: 'Show tappable CHOICE buttons; when the user taps one it is sent back as their next message. Use for "pick one" / "which would you like?" answers instead of listing options as text.' },
+      { name: 'showComponent', reversible: false, args: { source: 'string — a function (ui) => ui.create(...). ui.create(tag) → element with .text(s)/.attr(k,v)/.class(c)/.style({...})/.on(event,fn)/.push(children)/.follow(grain, v=>text). ui.grain(cellId) → a LIVE server cell (e.g. "ha:<handle>" — follow it). ui.local(initial) → client state.', cells: 'array — the server cell ids your component will follow (e.g. ["ha:<handle>"]); declare them so the live data is brokered + cap-gated', height: 'number — initial px height (it auto-grows)' }, description: 'Render a CUSTOM, arbitrary component you write — confined + safe (sandboxed; no DOM/network/authority). Use ONLY when status/countdown/choices don\'t fit (a bespoke live dashboard, a composed view). It can FOLLOW live grains so it updates in real time, and can be broken out + shared as a module.' },
     );
     // proposeTool — ALWAYS available. Build a new tool (a pure JS function of `args`) and propose it to
     // the library. It is NOT injected into anyone's scope or made callable; it queues PENDING for dan to

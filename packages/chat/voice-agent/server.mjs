@@ -585,6 +585,7 @@ const handler = async (req, res) => {
     if (u.pathname === '/trace-app.js') return serveFile(res, 'trace-app.js', 'text/javascript; charset=utf-8');
     if (u.pathname === '/widget.js') return serveFile(res, 'widget.js', 'text/javascript; charset=utf-8');
     if (u.pathname === '/grain-ui.js') return serveFile(res, 'grain-ui.js', 'text/javascript; charset=utf-8');
+    if (u.pathname === '/confined.html') return serveFile(res, 'confined.html', 'text/html; charset=utf-8'); // the sandboxed component runtime (fetched + used as srcdoc)
     // Public descriptive catalog (power → what it does) for UI tooltips. No authority, no secrets.
     if (u.pathname === '/powers') return json(res, 200, { powers: POWER_CATALOG });
     // confined-Preact islands bundle (built by `yarn build:islands`) + its sourcemap

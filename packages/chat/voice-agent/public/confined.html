@@ -1,0 +1,105 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<!-- The hard boundary: this document runs at a UNIQUE OPAQUE ORIGIN (the iframe is sandbox="allow-scripts"
+     with NO allow-same-origin), so it cannot touch the parent DOM, parent cookies/localStorage, or the cap.
+     This CSP additionally blocks ALL network — the agent's code can render + postMessage to the parent and
+     nothing else (no fetch, no img/script exfil). The parent holds the cap and brokers live data IN. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:">
+<style>
+  html,body { margin:0; padding:0; background:transparent; color:#e6edf3; font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; }
+  body { padding:2px; }
+  * { box-sizing:border-box; }
+  .cu-err { color:#ff9e9e; font-size:12px; padding:8px; border:1px solid #5a2b2b; border-radius:8px; background:#2a1414; }
+</style>
+</head>
+<body>
+<script>
+'use strict';
+// ── confinable UI runtime (after danfinlay/confinable-ui) ──────────────────────────────────────────
+// The agent's component is a function (ui) => element. `ui` hands it create()/grain()/local() — never the
+// DOM, never the network. A GRAIN is { get, set, subscribe }; an element .follow(grain) subscribes + paints
+// on every push (no polling). Live grains are fed by the PARENT over postMessage (it holds the cap).
+
+const grain = (initial) => {
+  let value = initial; const subs = new Set();
+  return {
+    get: () => value,
+    set: (v) => { value = v; for (const fn of [...subs]) { try { fn(v); } catch (e) {} } },
+    subscribe: (fn) => { subs.add(fn); if (value !== undefined) { try { fn(value); } catch (e) {} } return () => subs.delete(fn); },
+  };
+};
+
+// element factory — a whitelisted, chainable wrapper. Defense-in-depth (the sandbox is the real boundary).
+const TAGS = new Set(['div','span','p','a','b','i','em','strong','small','h1','h2','h3','h4','ul','ol','li','img','button','input','label','br','hr','code','pre','table','thead','tbody','tr','td','th','section','header','footer','progress','meter']);
+const ATTRS = new Set(['class','id','type','placeholder','value','alt','width','height','title','min','max','step','for','colspan','rowspan']);
+const STYLE_OK = /^[a-zA-Z-]+$/;
+const safeUrl = (u) => { u = String(u || ''); return /^(https?:\/\/|#|data:image\/)/.test(u) ? u : '#'; };
+let report = () => {};
+
+const create = (tag) => {
+  const t = String(tag || 'div').toLowerCase();
+  const el = document.createElement(TAGS.has(t) ? t : 'div');
+  const w = {
+    el,
+    text: (s) => { el.textContent = String(s == null ? '' : s); return w; },
+    attr: (k, v) => { k = String(k); if (ATTRS.has(k)) el.setAttribute(k, String(v)); else if (k === 'href') el.setAttribute('href', safeUrl(v)); else if (k === 'src') el.setAttribute('src', safeUrl(v)); else if (/^(data|aria)-/.test(k)) el.setAttribute(k, String(v)); return w; },
+    class: (c) => { el.className = String(c || ''); return w; },
+    style: (obj) => { if (obj && typeof obj === 'object') for (const k in obj) { if (STYLE_OK.test(k)) try { el.style[k] = String(obj[k]); } catch (e) {} } return w; },
+    on: (event, fn) => { const ev = String(event); if (['click','input','change','keydown'].includes(ev) && typeof fn === 'function') el.addEventListener(ev, (e) => { try { fn({ value: el.value, key: e.key, preventDefault: () => e.preventDefault() }); report(); } catch (err) {} }); return w; },
+    push: (childOrChildren) => { const arr = Array.isArray(childOrChildren) ? childOrChildren : [childOrChildren]; for (const c of arr) { if (!c) continue; const node = c && c.el ? c.el : (typeof c === 'string' ? document.createTextNode(c) : null); if (node) el.appendChild(node); } return w; },
+    // FOLLOW a grain: paint render(value) now + on every push. The "lazily written component" seam.
+    follow: (g, render) => { if (g && typeof g.subscribe === 'function') g.subscribe((v) => { try { el.textContent = render ? String(render(v)) : (v && typeof v === 'object' ? JSON.stringify(v) : String(v == null ? '' : v)); report(); } catch (e) {} }); return w; },
+    // follow but the render fn returns a {style}/text patch instead of just text (for richer live UI)
+    followWith: (g, fn) => { if (g && typeof g.subscribe === 'function') g.subscribe((v) => { try { fn(v, w); report(); } catch (e) {} }); return w; },
+  };
+  return w;
+};
+
+// ── the live-grain bridge: ui.grain(cellId) is a server cell the PARENT feeds us; ui.local(v) is client state. ──
+const cellGrains = new Map();
+const requestedCells = new Set();
+const apiGrain = (cellId) => {
+  const id = String(cellId || '');
+  if (!cellGrains.has(id)) { cellGrains.set(id, grain(undefined)); if (!requestedCells.has(id)) { requestedCells.add(id); try { parent.postMessage({ __cu: 1, type: 'subscribe', cell: id }, '*'); } catch (e) {} } }
+  return cellGrains.get(id);
+};
+
+const UI = { create, grain: apiGrain, local: grain, h: create };
+
+const fail = (msg) => { const d = document.createElement('div'); d.className = 'cu-err'; d.textContent = '⚠️ ' + msg; document.body.innerHTML = ''; document.body.appendChild(d); report(); };
+
+window.addEventListener('error', (e) => { /* swallow source parse/runtime errors so they don't escape; mount reports legibly */ try { e.preventDefault(); } catch (_) {} });
+const mount = (source) => {
+  document.body.innerHTML = '';
+  // Execute the agent source by INJECTING it as an inline <script> (allowed by CSP script-src 'unsafe-inline')
+  // rather than eval() (which would need 'unsafe-eval'). Keeps the CSP tight. The sandboxed null-origin +
+  // no-network frame is the real boundary; this just satisfies CSP cleanly.
+  window.__cu_component = null;
+  try { const s = document.createElement('script'); s.textContent = 'window.__cu_component = (' + String(source) + ');'; document.head.appendChild(s); s.remove(); } catch (e) {}
+  const fn = window.__cu_component; window.__cu_component = null;
+  if (typeof fn !== 'function') return fail('component source must be a function (ui) => element (or it failed to parse)');
+  let rootEl;
+  try { rootEl = fn(UI); } catch (e) { return fail('component threw while building: ' + e.message); }
+  const node = rootEl && rootEl.el ? rootEl.el : (rootEl instanceof Node ? rootEl : null);
+  if (!node) return fail('component must return ui.create(...) (an element)');
+  document.body.appendChild(node);
+  report();
+};
+
+// report content height so the parent can size the iframe to its content.
+report = () => { try { parent.postMessage({ __cu: 1, type: 'height', px: Math.min(2000, Math.max(40, document.body.scrollHeight + 6)) }, '*'); } catch (e) {} };
+
+window.addEventListener('message', (e) => {
+  // Only the parent talks to us; ignore everything else. (We never trust message CONTENT for authority —
+  // it only delivers our own source + the cell values the parent chose to push.)
+  if (e.source !== parent) return;
+  const m = e.data; if (!m || m.__cu !== 1) return;
+  if (m.type === 'mount') mount(m.source);
+  else if (m.type === 'cell') { const g = cellGrains.get(String(m.id)); if (g) g.set(m.value); }
+});
+try { parent.postMessage({ __cu: 1, type: 'ready' }, '*'); } catch (e) {}
+</script>
+</body>
+</html>

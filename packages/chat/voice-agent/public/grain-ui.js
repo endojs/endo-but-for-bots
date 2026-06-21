@@ -135,7 +135,44 @@ const renderChoices = (spec, ctx) => {
   box.appendChild(row); return box;
 };
 
-const RENDERERS = { countdowns: renderCountdowns, 'entity-status': renderEntityStatus, choices: renderChoices };
+// ── TIER 2: an ARBITRARY agent-authored component, rendered CONFINED in a sandboxed null-origin iframe
+//    (confined.html runtime), fed by the SAME server grains over postMessage. The iframe is the hard
+//    boundary (opaque origin + CSP no-network): it can render + ask to subscribe to DECLARED cells, nothing
+//    else. The PARENT holds the cap and brokers each subscription through the same /cells/subscribe stream —
+//    the cap NEVER crosses into the iframe; the iframe only names cell ids the agent declared (which the
+//    server re-validates). So the agent writes free-form UI without gaining any authority. ──
+let _runtimeHtml = null;
+const runtimeHtml = async () => { if (_runtimeHtml == null) { try { _runtimeHtml = await (await fetch('/confined.html')).text(); } catch { _runtimeHtml = '<!doctype html><body>confined runtime unavailable'; } } return _runtimeHtml; };
+const renderComponent = (spec, ctx) => {
+  const wrap = document.createElement('div'); wrap.className = 'gw gw-component'; wrap.style.cssText = `${STYLE};margin:8px 0;border:1px solid #30363d;border-radius:12px;overflow:hidden;background:#0d1117`;
+  const iframe = document.createElement('iframe');
+  iframe.setAttribute('sandbox', 'allow-scripts'); // opaque origin: no allow-same-origin, no forms, no parent reach
+  iframe.setAttribute('referrerpolicy', 'no-referrer');
+  iframe.style.cssText = `width:100%;height:${Math.min(2000, Math.max(40, Number(spec.height) || 120))}px;border:0;display:block`;
+  wrap.appendChild(iframe);
+  const allowedCells = new Set((Array.isArray(spec.cells) ? spec.cells : []).map(String)); // only cells the agent DECLARED
+  const cap = ctx && ctx.cap;
+  const releases = [];
+  const post = m => { try { iframe.contentWindow && iframe.contentWindow.postMessage({ __cu: 1, ...m }, '*'); } catch { /* */ } };
+  const onMsg = e => {
+    if (e.source !== iframe.contentWindow) return; // only OUR iframe
+    const m = e.data; if (!m || m.__cu !== 1) return;
+    if (m.type === 'ready') post({ type: 'mount', source: String(spec.source || '') });
+    else if (m.type === 'height') { const px = Math.min(2000, Math.max(40, Number(m.px) || 120)); iframe.style.height = `${px}px`; }
+    else if (m.type === 'subscribe') {
+      const id = String(m.cell || '');
+      if (!cap || !allowedCells.has(id)) return; // undeclared cell or no cap → ignore (no authority leak)
+      const { grain, release } = acquireCell(cap, id); releases.push(release);
+      follow(grain, value => post({ type: 'cell', id, value })); // pipe live values IN (cap stays here)
+    }
+  };
+  window.addEventListener('message', onMsg);
+  track(() => { window.removeEventListener('message', onMsg); for (const r of releases) { try { r(); } catch { /* */ } } });
+  iframe.srcdoc = ''; runtimeHtml().then(html => { iframe.srcdoc = html; }); // load the trusted runtime; source arrives via postMessage on 'ready'
+  return wrap;
+};
+
+const RENDERERS = { countdowns: renderCountdowns, 'entity-status': renderEntityStatus, choices: renderChoices, component: renderComponent };
 
 // renderWidgets(container, specs, ctx): append each widget; ctx = { cap, onChoice }. Pure data in, DOM out.
 export const renderWidgets = (container, specs, ctx) => {
