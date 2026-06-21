@@ -44,10 +44,11 @@ const makeFakeSlice = () => {
  * exercise the partial-failure cleanup path.
  */
 const makeMockHost = ({
-  fsName = 'my-fs',
-  credName,
-  credCap,
+  credCap = null,
   sliceBehavior = 'ok',
+  // Override the Filesystem cap the powers hands back; `null` simulates a
+  // session whose filesystem could not be resolved.
+  filesystem,
 } = {}) => {
   const mountCalls = [];
   const provideMountCalls = [];
@@ -55,7 +56,7 @@ const makeMockHost = ({
   let unmounted = false;
   const fake = makeFakeSlice();
 
-  const fsCap = { kind: 'fake-fs' };
+  const fsCap = filesystem === undefined ? { kind: 'fake-fs' } : filesystem;
   const mountHandle = {
     async unmount() {
       unmounted = true;
@@ -77,16 +78,20 @@ const makeMockHost = ({
     },
   };
 
-  const registry = {
-    'sandbox-factory': sandboxFactory,
-    'fs-mounter': fsMounter,
-    [fsName]: fsCap,
-  };
-  if (credName) registry[credName] = credCap;
-
-  const hostAgent = {
-    async lookup(name) {
-      return registry[name];
+  // The per-session powers cap: the four caps by reference + a bounded
+  // provideMount. No `lookup` — the client cannot resolve names.
+  const powers = {
+    async sandboxFactory() {
+      return sandboxFactory;
+    },
+    async fsMounter() {
+      return fsMounter;
+    },
+    async filesystem() {
+      return fsCap;
+    },
+    async credentials() {
+      return credCap;
     },
     async provideMount(path, petName) {
       const cap = { kind: 'workspace-mount', path, petName };
@@ -96,7 +101,7 @@ const makeMockHost = ({
   };
 
   return {
-    hostAgent,
+    powers,
     fsCap,
     mountCalls,
     provideMountCalls,
@@ -109,7 +114,6 @@ const makeMockHost = ({
 const baseEnv = (extra = {}) => ({
   SESSION_ID: 'my-claude-abc',
   CREATED_AT: '2026-01-01T00:00:00.000Z',
-  FILESYSTEM_NAME: 'my-fs',
   WORKSPACE_MOUNT_POINT: '/tmp/claude-sandbox-my-claude-abc',
   WORKSPACE_PATH: '/workspace',
   BACKEND: 'podman',
@@ -118,27 +122,21 @@ const baseEnv = (extra = {}) => ({
   ...extra,
 });
 
-test('make() requires SESSION_ID, FILESYSTEM_NAME, WORKSPACE_MOUNT_POINT', t => {
+test('make() requires SESSION_ID and WORKSPACE_MOUNT_POINT', t => {
   const host = makeMockHost();
-  t.throws(() => make(host.hostAgent, undefined, { env: {} }), {
+  t.throws(() => make(host.powers, undefined, { env: {} }), {
     message: /SESSION_ID required/,
   });
-  t.throws(
-    () => make(host.hostAgent, undefined, { env: { SESSION_ID: 's' } }),
-    { message: /FILESYSTEM_NAME required/ },
-  );
-  t.throws(
-    () =>
-      make(host.hostAgent, undefined, {
-        env: { SESSION_ID: 's', FILESYSTEM_NAME: 'f' },
-      }),
-    { message: /WORKSPACE_MOUNT_POINT required/ },
-  );
+  // No FILESYSTEM_NAME requirement any more — the filesystem cap is passed
+  // by reference through powers, not by env pet name.
+  t.throws(() => make(host.powers, undefined, { env: { SESSION_ID: 's' } }), {
+    message: /WORKSPACE_MOUNT_POINT required/,
+  });
 });
 
 test('first send() mounts the workspace, registers a Mount cap, and mints the slice', async t => {
   const host = makeMockHost();
-  const client = make(host.hostAgent, undefined, { env: baseEnv() });
+  const client = make(host.powers, undefined, { env: baseEnv() });
 
   // Draining the turn runs provisioning (the thing under test).
   await drain(await client.send('hello'));
@@ -164,7 +162,7 @@ test('first send() mounts the workspace, registers a Mount cap, and mints the sl
 
 test('provisioning is memoized across sends', async t => {
   const host = makeMockHost();
-  const client = make(host.hostAgent, undefined, { env: baseEnv() });
+  const client = make(host.powers, undefined, { env: baseEnv() });
   await drain(await client.send('one'));
   await drain(await client.send('two'));
   t.is(host.mountCalls.length, 1);
@@ -181,10 +179,8 @@ test('an apiKey credential lands in ANTHROPIC_API_KEY', async t => {
       };
     },
   };
-  const host = makeMockHost({ credName: 'my-creds', credCap });
-  const client = make(host.hostAgent, undefined, {
-    env: baseEnv({ CREDENTIALS_NAME: 'my-creds' }),
-  });
+  const host = makeMockHost({ credCap });
+  const client = make(host.powers, undefined, { env: baseEnv() });
   await drain(await client.send('hello'));
   t.is(host.sliceFactoryCalls[0].env.ANTHROPIC_API_KEY, 'sk-ant-secret');
 });
@@ -208,10 +204,8 @@ test('an oauthToken credential lands in CLAUDE_CODE_OAUTH_TOKEN', async t => {
       };
     },
   };
-  const host = makeMockHost({ credName: 'oauth-creds', credCap });
-  const client = make(host.hostAgent, undefined, {
-    env: baseEnv({ CREDENTIALS_NAME: 'oauth-creds' }),
-  });
+  const host = makeMockHost({ credCap });
+  const client = make(host.powers, undefined, { env: baseEnv() });
   await drain(await client.send('hello'));
   t.is(issuedTag, 'my-claude-abc');
   const { env } = host.sliceFactoryCalls[0];
@@ -221,7 +215,7 @@ test('an oauthToken credential lands in CLAUDE_CODE_OAUTH_TOKEN', async t => {
 
 test('a slice-mint failure unmounts the workspace and aborts the turn', async t => {
   const host = makeMockHost({ sliceBehavior: 'throw' });
-  const client = make(host.hostAgent, undefined, { env: baseEnv() });
+  const client = make(host.powers, undefined, { env: baseEnv() });
   // Provisioning failures surface as an `abort` event on the reader, not a
   // rejection of send() (the floot turn model).
   const events = await drain(await client.send('hello'));
@@ -233,20 +227,19 @@ test('a slice-mint failure unmounts the workspace and aborts the turn', async t 
   t.true(host.isUnmounted());
 });
 
-test('an unknown filesystem aborts the turn', async t => {
-  const host = makeMockHost();
-  const client = make(host.hostAgent, undefined, {
-    env: baseEnv({ FILESYSTEM_NAME: 'nope' }),
-  });
+test('a missing filesystem cap aborts the turn', async t => {
+  // powers.filesystem() resolves to null — the session has no workspace cap.
+  const host = makeMockHost({ filesystem: null });
+  const client = make(host.powers, undefined, { env: baseEnv() });
   const events = await drain(await client.send('hello'));
   const last = events[events.length - 1];
   t.is(last.type, 'abort');
-  t.regex(last.reason, /Unknown filesystem/);
+  t.regex(last.reason, /no Filesystem cap/);
 });
 
 test('terminate() after provisioning disposes the slice and unmounts', async t => {
   const host = makeMockHost();
-  const client = make(host.hostAgent, undefined, { env: baseEnv() });
+  const client = make(host.powers, undefined, { env: baseEnv() });
   await drain(await client.send('hello'));
   await client.terminate();
   t.true(host.isDisposed());
@@ -287,7 +280,7 @@ test('cancellation tears down the provisioned session', async t => {
   });
   // `whenCancelled()` rejects with the cancellation reason.
   const context = { whenCancelled: () => cancelled };
-  const client = make(host.hostAgent, context, { env: baseEnv() });
+  const client = make(host.powers, context, { env: baseEnv() });
 
   await drain(await client.send('hello')); // provision the slice + mount
   t.is(host.sliceFactoryCalls.length, 1);
@@ -306,7 +299,7 @@ test('cancellation before any use disposes nothing', async t => {
     cancel = reject;
   });
   const context = { whenCancelled: () => cancelled };
-  make(host.hostAgent, context, { env: baseEnv() });
+  make(host.powers, context, { env: baseEnv() });
 
   cancel(new Error('Cancelled'));
   // Give the teardown a chance to (not) run.
@@ -318,7 +311,7 @@ test('cancellation before any use disposes nothing', async t => {
 
 test('terminate() before any use creates nothing', async t => {
   const host = makeMockHost();
-  const client = make(host.hostAgent, undefined, { env: baseEnv() });
+  const client = make(host.powers, undefined, { env: baseEnv() });
   await client.terminate();
   t.is(host.mountCalls.length, 0);
   t.is(host.sliceFactoryCalls.length, 0);

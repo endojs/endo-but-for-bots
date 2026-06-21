@@ -19,9 +19,9 @@
 //   3. `claude-credentials-factory` — form-mintable Anthropic API key
 //                           wrapper.
 //   4. `claude-sandbox-factory`     — the "Create Claude Sandbox" form.
-//      Provisioning this also mints `sandbox-powers`, the attenuated
-//      powers cap (lookup + mount-dir-bounded provideMount) each
-//      per-session client runs as instead of `@agent`.
+//      Each session's client runs as a per-session attenuated powers cap
+//      the factory builds (caps-by-reference + a mountpoint-bounded
+//      provideMount, no lookup), not `@agent`.
 //
 // After running, submit the two forms (`endo inbox`, `endo submit`).
 

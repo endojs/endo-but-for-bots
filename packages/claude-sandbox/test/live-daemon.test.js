@@ -33,6 +33,24 @@ const nodeFsModuleHref = pathToFileURL(
   ),
 ).href;
 
+// The per-session powers `evaluate` resolves `sandbox-factory` / `fs-mounter`
+// by pet name eagerly (caps-by-reference), so they must exist before a
+// session is created. The real flow mints them in setup.js; here we mint
+// trivial stubs (status()/the unname path never call them).
+const mintStub = (host, name) =>
+  E(host).evaluate(
+    '@main',
+    `Far(${JSON.stringify(name)}, { help: () => 'stub' })`,
+    harden([]),
+    harden([]),
+    name,
+  );
+
+const provisionSandboxDeps = async host => {
+  await mintStub(host, 'sandbox-factory');
+  await mintStub(host, 'fs-mounter');
+};
+
 const makeConfig = name => ({
   statePath: path.join(dirname, 'tmp', name, 'state'),
   ephemeralStatePath: path.join(dirname, 'tmp', name, 'run'),
@@ -110,6 +128,7 @@ test.serial(
     // Provision the factory on @host (mints the guest profile + the
     // `controller-for-claude-sandbox-factory` exo).
     await provisionFactory(host);
+    await provisionSandboxDeps(host);
     const factory = await E(host).lookup(
       'controller-for-claude-sandbox-factory',
     );
@@ -168,6 +187,7 @@ test.serial(
     });
 
     await provisionFactory(host);
+    await provisionSandboxDeps(host);
 
     // Drive the form the way the operator does: the factory posts a "Create
     // Claude Sandbox" form into @host's inbox; submitting it formulates the
@@ -230,61 +250,108 @@ test.serial(
 );
 
 test.serial(
-  'the sandbox-powers attenuator is minted, bounds provideMount, and delegates lookup',
+  'createSession builds per-session powers, unnames it, and leaves no residue',
   async t => {
-    t.timeout(60_000);
+    t.timeout(120_000);
     const { host } = await prepareHost(t, 'powers');
 
-    // Provisioning the factory mints the shared attenuated client powers.
-    await provisionFactory(host);
-    t.true(
-      await E(host).has('sandbox-powers'),
-      'provisionFactory mints sandbox-powers',
-    );
-
-    const powers = await E(host).lookup('sandbox-powers');
-    // help() resolving proves the `evaluate` formula constructed — i.e. the
-    // `@agent` endowment resolved and the attenuator exo was built.
-    t.regex(await E(powers).help(), /provideMount/);
-
-    // The surface is exactly the attenuated methods: lookup + provideMount
-    // (+ help and the exo meta-methods), and crucially NONE of the
-    // privileged host methods the client must not reach.
-    // eslint-disable-next-line no-underscore-dangle
-    const methods = await E(powers).__getMethodNames__();
-    for (const name of ['lookup', 'provideMount', 'help']) {
-      t.true(methods.includes(name), `attenuator exposes ${name}`);
-    }
-    for (const forbidden of [
-      'makeUnconfined',
-      'provideHostPath',
-      'provideGuest',
-      'remove',
-      'evaluate',
-      'storeValue',
-    ]) {
-      t.false(
-        methods.includes(forbidden),
-        `attenuator does NOT expose ${forbidden}`,
-      );
-    }
-
-    // lookup delegates straight to the host: it resolves a real host pet name.
     const workspaceDir = path.join(dirname, 'tmp', 'powers', 'workspace');
     mkdirSync(workspaceDir, { recursive: true });
     await E(host).makeUnconfined('@main', nodeFsModuleHref, {
       resultName: 'project-fs',
       env: harden({ ENDO_FS_ROOT: workspaceDir }),
     });
-    const viaPowers = await E(powers).lookup('project-fs');
-    t.truthy(viaPowers, 'attenuator.lookup resolves a host pet name');
+    await provisionFactory(host);
+    await provisionSandboxDeps(host);
+    const factory = await E(host).lookup(
+      'controller-for-claude-sandbox-factory',
+    );
 
-    // provideMount is bounded to the sandbox mount dir: an out-of-dir path
-    // is rejected before it ever reaches the host's provideMount. This is
-    // the least-authority guarantee — a client cannot recover arbitrary
-    // host paths through a slice.
-    await t.throwsAsync(() => E(powers).provideMount('/etc', 'evil'), {
-      message: /restricted to the sandbox mount dir/,
+    const client = await E(factory).createSession(
+      harden({
+        name: 'live-1',
+        filesystem: 'project-fs',
+        rootfs: 'oci:docker.io/library/alpine:3.19',
+        network: 'private',
+      }),
+    );
+
+    // The client is alive — `status()` resolves across CapTP — even though
+    // its per-session powers cap was unnamed immediately after
+    // `makeUnconfined`. That proves the make-unconfined `powers` dependency
+    // edge keeps the powers formula reachable for the client's lifetime
+    // (otherwise the unname would have collected powers and cancelled the
+    // client via thisDiesIfThatDies).
+    const status = await E(client).status();
+    t.is(status.terminated, false);
+
+    // No per-session `*-powers` pet name lingers in the host petstore, and no
+    // shared `sandbox-powers` exists (that earlier design was replaced). So
+    // the peer-rooted session adds zero host-petstore residue.
+    const names = await E(host).list();
+    t.false(
+      names.some(n => n.endsWith('-powers')),
+      `no per-session powers residue; saw: ${names.join(', ')}`,
+    );
+    t.false(await E(host).has('sandbox-powers'));
+  },
+);
+
+test.serial(
+  'concurrent createSession calls each get distinct powers and leave no residue',
+  async t => {
+    t.timeout(120_000);
+    const { host } = await prepareHost(t, 'concurrent');
+
+    const workspaceDir = path.join(dirname, 'tmp', 'concurrent', 'workspace');
+    mkdirSync(workspaceDir, { recursive: true });
+    await E(host).makeUnconfined('@main', nodeFsModuleHref, {
+      resultName: 'project-fs',
+      env: harden({ ENDO_FS_ROOT: workspaceDir }),
     });
+    await provisionFactory(host);
+    await provisionSandboxDeps(host);
+    const factory = await E(host).lookup(
+      'controller-for-claude-sandbox-factory',
+    );
+
+    // Two sessions formulated concurrently. Each builds its own per-session
+    // powers (unique name from the monotonic counter), names it, references
+    // it from its client, then unnames it — all interleaved. If the unname
+    // raced (shared name, or remove before the client edge), one client
+    // would be dead or a `*-powers` name would survive.
+    const [a, b] = await Promise.all([
+      E(factory).createSession(
+        harden({
+          name: 'conc-a',
+          filesystem: 'project-fs',
+          rootfs: 'oci:docker.io/library/alpine:3.19',
+          network: 'private',
+        }),
+      ),
+      E(factory).createSession(
+        harden({
+          name: 'conc-b',
+          filesystem: 'project-fs',
+          rootfs: 'oci:docker.io/library/alpine:3.19',
+          network: 'private',
+        }),
+      ),
+    ]);
+
+    // Both clients are alive with distinct session ids.
+    const [sa, sb] = await Promise.all([E(a).status(), E(b).status()]);
+    t.regex(sa.sessionId, /^conc-a-/);
+    t.regex(sb.sessionId, /^conc-b-/);
+    t.not(sa.sessionId, sb.sessionId);
+    t.is(sa.terminated, false);
+    t.is(sb.terminated, false);
+
+    // Neither concurrent unname left a residue.
+    const names = await E(host).list();
+    t.false(
+      names.some(n => n.endsWith('-powers')),
+      `no per-session powers residue after concurrent creates; saw: ${names.join(', ')}`,
+    );
   },
 );

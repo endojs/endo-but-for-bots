@@ -113,17 +113,32 @@ const makeMockPowers = () => {
 
 const makeMockHostAgent = ({ filesystems = {} } = {}) => {
   const unconfinedCalls = [];
+  const evaluateCalls = [];
+  const removeCalls = [];
   const hostAgent = {
     async lookup(name) {
       if (name in filesystems) return filesystems[name];
       return undefined;
     },
+    async evaluate(workerName, source, codeNames, petNames, resultName) {
+      evaluateCalls.push({
+        workerName,
+        source,
+        codeNames,
+        petNames,
+        resultName,
+      });
+      return harden({ kind: 'fake-powers', name: resultName });
+    },
     async makeUnconfined(powersName, specifier, opts) {
       unconfinedCalls.push({ powersName, specifier, opts });
       return harden({ kind: 'fake-client', name: opts.resultName });
     },
+    async remove(name) {
+      removeCalls.push(name);
+    },
   };
-  return { hostAgent, unconfinedCalls };
+  return { hostAgent, unconfinedCalls, evaluateCalls, removeCalls };
 };
 
 const waitFor = async (pred, deadlineMs = 2000) => {
@@ -183,19 +198,46 @@ test('submission formulates a claude-client caplet with the right env', async t 
   t.is(call.powersName, '@main');
   t.regex(call.specifier, /claude-client-module\.js$/);
   t.is(call.opts.resultName, 'my-claude');
-  // Least authority: the client runs as the attenuated powers cap, not @agent.
-  t.is(call.opts.powersName, 'sandbox-powers');
+  // Least authority: the client runs as a per-session powers cap, not @agent
+  // and not a shared cap. The name is per-session (`claude-<sessionId>-powers`).
+  t.regex(call.opts.powersName, /^claude-my-claude-.*-powers$/);
+
+  // The per-session powers was built by `evaluate`, endowing exactly the
+  // caps the client needs by pet name (incl. the credential, since the form
+  // named one), and `@agent` for the bounded provideMount.
+  t.is(host.evaluateCalls.length, 1);
+  const evalCall = host.evaluateCalls[0];
+  t.is(evalCall.resultName, call.opts.powersName);
+  t.deepEqual(evalCall.petNames, [
+    '@agent',
+    'sandbox-factory',
+    'fs-mounter',
+    'my-fs',
+    'my-creds',
+  ]);
+  t.deepEqual(evalCall.codeNames, [
+    'agent',
+    'sandboxFactory',
+    'fsMounter',
+    'filesystem',
+    'credentials',
+  ]);
+  // …and the per-session powers name was removed after makeUnconfined, so it
+  // leaves no host-petstore residue (collected with the client).
+  t.deepEqual(host.removeCalls, [call.opts.powersName]);
 
   const { env } = call.opts;
-  t.is(env.FILESYSTEM_NAME, 'my-fs');
+  // Caps are passed by reference through powers — no cap-name env vars.
+  t.is(env.FILESYSTEM_NAME, undefined);
+  t.is(env.CREDENTIALS_NAME, undefined);
+  t.is(env.SANDBOX_FACTORY_NAME, undefined);
   t.is(env.NETWORK, 'private');
-  t.is(env.CREDENTIALS_NAME, 'my-creds');
   t.is(env.MODEL, 'claude-sonnet-4-6');
   t.is(env.BACKEND, 'podman');
   t.is(env.WORKSPACE_PATH, '/workspace');
   t.regex(env.SESSION_ID, /^my-claude-/);
   t.regex(env.WORKSPACE_MOUNT_POINT, /claude-sandbox-my-claude-/);
-  // No secret is threaded through the formula env — only the pet name.
+  // No secret is threaded through the formula env.
   t.is(env.ANTHROPIC_API_KEY, undefined);
   t.is(env.CLAUDE_CODE_OAUTH_TOKEN, undefined);
 
@@ -224,9 +266,20 @@ test('createSession() formulates an un-named client and returns the cap', async 
   t.regex(call.specifier, /claude-client-module\.js$/);
   // Peer-rooted: NOT stored under a host pet name.
   t.is(call.opts.resultName, undefined);
-  t.is(call.opts.powersName, 'sandbox-powers');
-  t.is(call.opts.env.FILESYSTEM_NAME, 'my-fs');
-  t.is(call.opts.env.CREDENTIALS_NAME, 'peer-creds');
+  t.regex(call.opts.powersName, /^claude-peer-claude-.*-powers$/);
+  // Caps by reference: the credential pet name is endowed into the powers
+  // (not threaded through env).
+  t.deepEqual(host.evaluateCalls[0].petNames, [
+    '@agent',
+    'sandbox-factory',
+    'fs-mounter',
+    'my-fs',
+    'peer-creds',
+  ]);
+  t.is(call.opts.env.FILESYSTEM_NAME, undefined);
+  t.is(call.opts.env.CREDENTIALS_NAME, undefined);
+  // Per-session powers name removed (no residue), even on the peer path.
+  t.deepEqual(host.removeCalls, [call.opts.powersName]);
   // The cap is returned to the caller, not stored.
   t.is(client.kind, 'fake-client');
 });

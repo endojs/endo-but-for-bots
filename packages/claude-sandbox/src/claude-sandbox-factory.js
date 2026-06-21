@@ -55,6 +55,51 @@ const clientModuleSpecifier = new URL(
 ).href;
 
 /**
+ * Source for a **per-session powers** cap, built by the factory via
+ * `E(hostAgent).evaluate(...)`. It is a total attenuation of the host: it
+ * closes over the four caps the client needs (resolved once, by reference,
+ * from the endowed pet names) and `@agent`, and exposes **only** four
+ * accessors plus a `provideMount` bounded to *this session's* workspace
+ * mountpoint. There is no `lookup`, so the client cannot reach any host
+ * name beyond its own caps.
+ *
+ * Endowed in the eval compartment (see `packages/daemon/src/worker.js`):
+ * `makeExo`, `M`, `E`, plus `agent` / `sandboxFactory` / `fsMounter` /
+ * `filesystem` / `credentials` (the last omitted when the session has no
+ * credential — the accessor is then a baked `null`).
+ *
+ * @param {string} mountPoint - the session's host 9P mountpoint; the only
+ *   path `provideMount` will accept.
+ * @param {boolean} hasCredentials
+ * @returns {string}
+ */
+const buildSessionPowersSource = (mountPoint, hasCredentials) => `makeExo(
+  'ClaudeSessionPowers',
+  M.interface('ClaudeSessionPowers', {
+    sandboxFactory: M.call().returns(M.any()),
+    fsMounter: M.call().returns(M.any()),
+    filesystem: M.call().returns(M.any()),
+    credentials: M.call().returns(M.any()),
+    provideMount: M.call(M.string(), M.string()).returns(M.promise()),
+    help: M.call().returns(M.string()),
+  }),
+  {
+    sandboxFactory: () => sandboxFactory,
+    fsMounter: () => fsMounter,
+    filesystem: () => filesystem,
+    credentials: () => ${hasCredentials ? 'credentials' : 'null'},
+    provideMount: (path, name) => {
+      if (path !== ${JSON.stringify(mountPoint)}) {
+        throw Error('claude-sandbox session powers: provideMount restricted to this session workspace mountpoint');
+      }
+      return E(agent).provideMount(path, name);
+    },
+    help: () =>
+      'Per-session claude-sandbox powers: sandboxFactory/fsMounter/filesystem/credentials accessors + provideMount bounded to this session mountpoint. No lookup.',
+  },
+)`;
+
+/**
  * Subset of the inbox message shape this caplet reads. The `@host`
  * inbox API is dynamically typed at the Endo boundary; we narrow at
  * the read site.
@@ -200,17 +245,6 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
     env.CLAUDE_SANDBOX_MOUNT_DIR ||
     process.env.CLAUDE_SANDBOX_MOUNT_DIR ||
     os.tmpdir();
-  // Pet name of the attenuated powers cap each per-session client formula
-  // runs as instead of `@agent` (minted by factory.js's
-  // `provisionClientPowers`). It exposes only `lookup` + a
-  // mount-dir-bounded `provideMount`, so the client worker holds far less
-  // than full host authority. Keep in sync with `CLIENT_POWERS_NAME` in
-  // factory.js.
-  const clientPowersName =
-    env.SANDBOX_POWERS_NAME ||
-    process.env.SANDBOX_POWERS_NAME ||
-    'sandbox-powers';
-
   const iterateMessages = deps.iterateMessages ?? iterateReader;
 
   // Monotonic per-worker counter so two sessions formulated in the same
@@ -280,17 +314,34 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
     );
     const workspacePetName = `claude-${sessionId}-workspace`;
 
+    // Least authority: the client runs as a **per-session powers** cap that
+    // bundles its four caps by reference and a `provideMount` bounded to
+    // this session's mountpoint — no `lookup`, no other host reach. The
+    // caps are endowed by pet name (resolved once, here); the credential is
+    // optional. `makeUnconfined` is Host-only and resolves `powersName`
+    // against the host petstore, so the cap must be host-named — but we
+    // remove the name immediately after `makeUnconfined` below.
+    const powersName = `claude-${sessionId}-powers`;
+    const codeNames = ['agent', 'sandboxFactory', 'fsMounter', 'filesystem'];
+    const petNames = ['@agent', sandboxFactoryName, fsMounterName, fsName];
+    if (credsName) {
+      codeNames.push('credentials');
+      petNames.push(credsName);
+    }
+    await E(hostAgent).evaluate(
+      '@main',
+      buildSessionPowersSource(hostMountPoint, Boolean(credsName)),
+      harden(codeNames),
+      harden(petNames),
+      powersName,
+    );
+
     /** @type {Record<string, any>} */
     const options = {
-      // Least authority: the client runs as the attenuated `sandbox-powers`
-      // cap (lookup + mount-dir-bounded provideMount), not `@agent`.
-      powersName: clientPowersName,
+      powersName,
       env: harden({
         SESSION_ID: sessionId,
         CREATED_AT: new Date().toISOString(),
-        FILESYSTEM_NAME: fsName,
-        SANDBOX_FACTORY_NAME: sandboxFactoryName,
-        FS_MOUNTER_NAME: fsMounterName,
         WORKSPACE_MOUNT_POINT: hostMountPoint,
         WORKSPACE_PET_NAME: workspacePetName,
         WORKSPACE_PATH: SANDBOX_WORKSPACE_PATH,
@@ -299,7 +350,6 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
         CLAUDE_ROOTFS: rootfsValue,
         DEFAULT_IMAGE: defaultImage ?? '',
         MODEL: model,
-        CREDENTIALS_NAME: credsName,
         INITIAL_PROMPT: initialPrompt,
       }),
     };
@@ -311,6 +361,14 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
       clientModuleSpecifier,
       harden(options),
     );
+
+    // Unname the per-session powers. The make-unconfined formula's `powers`
+    // dependency edge (daemon graph) keeps it reachable for exactly the
+    // client's lifetime, so dropping its pet name leaves no host-petstore
+    // residue and lets it be collected *with* the client — keeping the
+    // peer-rooted `createSession` GC clean (no per-session leak).
+    await E(hostAgent).remove(powersName);
+
     return harden({
       client,
       sessionId,

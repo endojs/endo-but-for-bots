@@ -558,56 +558,65 @@ errors surface as `abort` events, not `send()` rejections.
 
 ### 8. Least authority for the client worker — FIXED
 
-The per-session `claude-client` formula no longer runs with `@agent`. It runs as
-**`sandbox-powers`**, a shared **attenuated powers cap** minted once by
-`factory.js`'s `provisionClientPowers` via an `evaluate` formula that closes over
-`@agent` and re-exports exactly two methods:
+**Caps as arguments.**
+The per-session `claude-client` formula does not run with `@agent`. The factory
+builds a **per-session powers** cap for each session (via `E(hostAgent).evaluate`,
+`buildSessionPowersSource` in `claude-sandbox-factory.js`) that is a **total
+attenuation**: it closes over the four caps the client needs — resolved once, by
+reference, from the endowed pet names — and `@agent`, and exposes only
 
-- `lookup(name)` — delegated straight to the host (so the client can resolve the
-  `sandbox-factory` / `fs-mounter` / `Filesystem` / `ClaudeCredentials` caps by
-  pet name);
-- `provideMount(path, name)` — **bounded** to paths under the sandbox mount dir
-  (`<CLAUDE_SANDBOX_MOUNT_DIR>/claude-sandbox-…`), so a compromised client cannot
-  `provideMount('/etc', …)` and recover arbitrary host paths through a slice.
+- `sandboxFactory()` / `fsMounter()` / `filesystem()` / `credentials()` —
+  accessors returning the bundled caps (no name lookup; `credentials()` is a
+  baked `null` when the session has none);
+- `provideMount(path, name)` — bounded to **exactly this session's** workspace
+  mountpoint, so a client cannot `provideMount('/etc', …)` (or any other path)
+  and recover host paths through a slice.
 
-Everything else on the host surface — `makeUnconfined`, `provideHostPath`,
-`provideGuest`, `remove`, `store`, `evaluate` — is now **unreachable** from a
-client worker. The client module needed **no functional change**: it only ever
-called `lookup` + `provideMount` on its powers, which is exactly what the
-attenuator exposes; only the authority behind `powers` shrank.
-`test/live-daemon.test.js` asserts the attenuator is minted, exposes only those
-methods (not the privileged ones), bounds `provideMount`, and delegates `lookup`.
+There is **no `lookup`** and nothing else of the host surface, so a client worker
+cannot resolve any host name beyond its own four caps, nor reach `makeUnconfined`
+/ `provideHostPath` / `provideGuest` / `remove` / `store` / `evaluate`. This is
+the "caps as arguments" shape: the client receives its authority as object
+references, not as names it resolves.
 
-Why this shape (the design choices behind it):
+The client module's call sites changed from `E(powers).lookup(name)` to the
+accessors; the cap-name env vars (`FILESYSTEM_NAME`, `SANDBOX_FACTORY_NAME`,
+`FS_MOUNTER_NAME`, `CREDENTIALS_NAME`) are gone — the caps ride through `powers`,
+not `env`.
 
-- **The powers cap must be host-named, but it is a single shared cap.**
-  `makeUnconfined` is **Host-only** (the `EndoGuest` interface has `evaluate` /
-  `lookup` / `storeValue` but **not** `makeUnconfined` / `provideMount`), and it
-  resolves `powersName` against the **host** petstore. So the cap can't live in a
-  factory-private petstore — but it collapses to **one** well-known host name
-  (`sandbox-powers`) alongside `sandbox-factory` / `fs-mounter`, **not**
-  per-session, so it adds no per-session host-petstore footprint and keeps the
-  peer-rooted-`createSession` GC clean (clients stay un-named).
-- **A per-session guest was rejected.** Because `makeUnconfined` needs a *named*
-  powers formula, a per-session guest/powers would be a host GC root that
-  **lingers** after a peer drops the session (the container + mount are still
-  torn down by `whenCancelled`, but an empty powers formula would leak per
-  session). The shared attenuator avoids that entirely. The cost is that
-  `lookup` is unrestricted (a client could resolve any host pet name *by
-  guessing* — there is no `list`), which is a far smaller over-grant than
-  `@agent`.
-- **The factory stays the trust root, by necessity.** The factory is the
-  irreducible TCB: its job is to `makeUnconfined` the client workers, and
-  `makeUnconfined` *is* the authority to run unconfined Node (arbitrary code), so
-  it cannot be attenuated below that while it is the thing spawning workers. The
-  attenuator is a strict subset of the factory's `host-agent`, but it only lets
-  us scope the **client** — not the factory. Treat the factory's source as part
-  of the trusted compute base (as before).
+**Leak-free, even though the powers must be host-named.** `makeUnconfined` is
+**Host-only** (the `EndoGuest` interface has `evaluate` / `lookup` / `storeValue`
+but **not** `makeUnconfined` / `provideMount`) and resolves `powersName` against
+the **host** petstore, so the per-session powers must be named to be used. The
+factory therefore **unnames it immediately after `makeUnconfined`**: the
+`make-unconfined` formula declares `['powers', …]` as a dependency
+(`daemon.js`), which `onFormulaAdded` turns into a group **reachability** edge
+client→powers (`graph.js`). So once the client references it, dropping the pet
+name leaves the powers rooted **only** by that edge — it stays alive for exactly
+the client's lifetime and is collected **with** the client. No per-session
+host-petstore residue; the peer-rooted-`createSession` GC stays clean.
+`test/live-daemon.test.js` proves this end to end: after `createSession` the
+client's `status()` still resolves (so the unname did not collect its powers) yet
+**no `*-powers` pet name survives**; a concurrent-creation test confirms two
+sessions interleave without colliding names or leaking residue.
 
-Residual / future work: bound `lookup` to an explicit per-session allowlist
-(would need the session's caps threaded in by reference, which `makeUnconfined`'s
-string-only `env` can't carry — a `provideGuest`-with-`introducedNames` client
-could, at the cost of the per-session-root leak above); and pass the peer's
-`Filesystem` / `ClaudeCredentials` as **arguments** rather than host pet names
-(the "caps-as-arguments" follow-up), which would also let `lookup` be dropped
-from the attenuator entirely.
+Why per-session and not a shared cap: a shared powers would have to expose a
+generic `lookup` (it cannot know each session's `Filesystem` / credential names),
+which re-grants "resolve any host name". Per-session powers bind the exact caps,
+so even that over-grant is gone — at no GC cost, thanks to the unname.
+
+**The factory stays the trust root, by necessity.** The factory is the
+irreducible TCB: its job is to `makeUnconfined` the client workers, and
+`makeUnconfined` *is* the authority to run unconfined Node (arbitrary code), so
+it cannot be attenuated below that while it is the thing spawning workers. The
+per-session powers is a strict subset of the factory's `host-agent`, but it only
+scopes the **client**, not the factory. Treat the factory's source as part of the
+trusted compute base.
+
+Residual / future work: the four caps are still endowed into the powers **by host
+pet name** (`sandbox-factory` / `fs-mounter` / the `Filesystem` / the credential),
+resolved once at session creation. Passing the peer's `Filesystem` /
+`ClaudeCredentials` to `createSession` as **cap arguments** (rather than the peer
+naming them on the host first) would remove even that — the factory would endow
+the caps it was handed directly. That is the bring-your-own-caps boundary the
+package already targets; wiring `createSession(config, { filesystem, credentials })`
+through to the `evaluate` endowments is the natural next step.

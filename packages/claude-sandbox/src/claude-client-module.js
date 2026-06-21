@@ -22,17 +22,14 @@
  * credential is re-materialised at spawn time, so no secret ever lands
  * in the formula `env`.
  *
- * Expected env (set by the factory; all strings):
+ * Expected env (set by the factory; all strings). The caps the client
+ * needs are passed by reference through `powers`, **not** by pet name, so
+ * no cap-name env vars appear here:
  *   SESSION_ID            Stable session id (the mount path + pet names
  *                         derive from it, so it must survive restarts).
  *   CREATED_AT            ISO timestamp (diagnostic).
- *   FILESYSTEM_NAME       Pet name of the workspace `Filesystem` cap in
- *                         @host's petstore.
- *   SANDBOX_FACTORY_NAME  Pet name of the `@endo/sandbox` factory
- *                         (default `sandbox-factory`).
- *   FS_MOUNTER_NAME       Pet name of the `@endo/9p-server` mounter
- *                         (default `fs-mounter`).
- *   WORKSPACE_MOUNT_POINT Host path the workspace 9P mount lives at.
+ *   WORKSPACE_MOUNT_POINT Host path the workspace 9P mount lives at (also
+ *                         the only path `provideMount` will accept).
  *   WORKSPACE_PET_NAME    Pet name to register the workspace Mount cap
  *                         under.
  *   WORKSPACE_PATH        Slice-internal workspace path (default
@@ -42,21 +39,17 @@
  *   CLAUDE_ROOTFS         Raw `rootfs` form value (may be empty).
  *   DEFAULT_IMAGE         Default OCI image when CLAUDE_ROOTFS is blank.
  *   MODEL                 Optional claude model id.
- *   CREDENTIALS_NAME      Optional pet name of a `ClaudeCredentials`
- *                         cap.
  *   INITIAL_PROMPT        Optional one-shot prompt fired on creation.
  *
- * This caplet does **not** run with `@agent`. The factory provisions it
- * as the attenuated `sandbox-powers` cap (factory.js
- * `provisionClientPowers`), which exposes only the two host methods this
- * module uses: `lookup(name)` — to resolve the factory / mounter /
- * filesystem / credential caps by pet name — and `provideMount(path,
- * name)`, bounded to the sandbox mount dir. So `powers` here is that
- * narrow cap, not full host authority; the client worker cannot reach
- * `makeUnconfined`, `remove`, `provideHostPath`, `provideGuest`, etc. The
- * call sites are unchanged (`E(powers).lookup` / `E(powers).provideMount`)
- * — only the authority behind `powers` shrank. See DESIGN.md § Known
- * issues #2.
+ * This caplet does **not** run with `@agent`. The factory builds a
+ * **per-session powers** cap (factory.js, via `evaluate`) that is a total
+ * attenuation: it bundles the four caps the client needs **by reference**
+ * and exposes only `sandboxFactory()` / `fsMounter()` / `filesystem()` /
+ * `credentials()` accessors plus a `provideMount(path, name)` bounded to
+ * *this session's* workspace mountpoint. There is **no `lookup`**, so the
+ * client cannot resolve any host name beyond its own four caps, and cannot
+ * reach `makeUnconfined`, `remove`, `provideHostPath`, `provideGuest`,
+ * etc. See DESIGN.md § Known issue #8.
  *
  * @module
  */
@@ -115,17 +108,19 @@ const cancellationPromiseOf = resolvedContext => {
  * @returns {object}
  */
 export const make = (powers, context, contextWrapper = {}) => {
+  // The per-session powers cap (factory.js builds it via `evaluate`): a
+  // total attenuation that exposes only `sandboxFactory()` / `fsMounter()`
+  // / `filesystem()` / `credentials()` accessors (the caps bundled by
+  // reference at creation) and a `provideMount(path, name)` bounded to
+  // *this session's* workspace mountpoint. There is no `lookup`, so the
+  // client cannot reach any host name beyond its four caps.
   /** @type {any} */
-  const hostAgent = powers;
+  const sessionPowers = powers;
   const env = contextWrapper.env ?? process.env;
 
   const sessionId = env.SESSION_ID;
   if (!sessionId) {
     throw makeError(X`claude-client-module: SESSION_ID required`);
-  }
-  const filesystemName = env.FILESYSTEM_NAME;
-  if (!filesystemName) {
-    throw makeError(X`claude-client-module: FILESYSTEM_NAME required`);
   }
   const workspaceMountPoint = env.WORKSPACE_MOUNT_POINT;
   if (!workspaceMountPoint) {
@@ -133,15 +128,12 @@ export const make = (powers, context, contextWrapper = {}) => {
   }
 
   const createdAt = env.CREATED_AT || new Date().toISOString();
-  const sandboxFactoryName = env.SANDBOX_FACTORY_NAME || 'sandbox-factory';
-  const fsMounterName = env.FS_MOUNTER_NAME || 'fs-mounter';
   const workspacePetName =
     env.WORKSPACE_PET_NAME || `claude-${sessionId}-workspace`;
   const workspacePath = env.WORKSPACE_PATH || '/workspace';
   const backend = env.BACKEND || 'podman';
   const network = env.NETWORK || 'private';
   const model = env.MODEL || undefined;
-  const credentialsName = env.CREDENTIALS_NAME || undefined;
   const initialPrompt = env.INITIAL_PROMPT || undefined;
 
   // Parse (and validate) the rootfs synchronously so a bad value fails
@@ -157,24 +149,21 @@ export const make = (powers, context, contextWrapper = {}) => {
    * @returns {Promise<{ slice: any, mountHandle: { unmount: () => Promise<void> } }>}
    */
   const provision = async () => {
-    const sandboxFactory = await E(hostAgent).lookup(sandboxFactoryName);
-    const fsMounter = await E(hostAgent).lookup(fsMounterName);
-    const fs = await E(hostAgent).lookup(filesystemName);
+    // Pull the caps from the per-session powers by reference (no name
+    // lookup). The factory bundled exactly these four when it built the
+    // powers cap.
+    const sandboxFactory = await E(sessionPowers).sandboxFactory();
+    const fsMounter = await E(sessionPowers).fsMounter();
+    const fs = await E(sessionPowers).filesystem();
     if (!fs) {
-      throw makeError(X`Unknown filesystem: ${q(filesystemName)}`);
+      throw makeError(X`claude-sandbox: no Filesystem cap was provided`);
     }
 
-    // Resolve the credentials cap up front so a failure (or terminate)
-    // can revoke the per-session grant rather than leak it in the
-    // credentials cap's outstanding set.
+    // The credentials cap (or null when the session has none). Resolved up
+    // front so a failure (or terminate) can revoke the per-session grant
+    // rather than leak it in the credentials cap's outstanding set.
     /** @type {any} */
-    let credCap = null;
-    if (credentialsName) {
-      credCap = await E(hostAgent).lookup(credentialsName);
-      if (!credCap) {
-        throw makeError(X`Unknown credentials: ${q(credentialsName)}`);
-      }
-    }
+    const credCap = (await E(sessionPowers).credentials()) || null;
     const revokeCredential = async () => {
       if (credCap) {
         await E(credCap).revoke(sessionId);
@@ -221,7 +210,7 @@ export const make = (powers, context, contextWrapper = {}) => {
         workspaceMountPoint,
         harden({ lazyUnmount: true }),
       );
-      const workspaceCap = await E(hostAgent).provideMount(
+      const workspaceCap = await E(sessionPowers).provideMount(
         workspaceMountPoint,
         workspacePetName,
       );
