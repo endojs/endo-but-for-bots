@@ -11,7 +11,7 @@ import fsp from 'node:fs/promises';
 
 const API = 'https://api.anthropic.com/v1/messages';
 const MODEL = process.env.DELEGATE_MODEL || 'claude-opus-4-8';
-const MAX_STEPS = 8;
+const MAX_STEPS = 8; // default tool-use budget; an editing executor (read→implement→write-test→run-test→fix) needs more — see maxSteps param.
 
 // Load ANTHROPIC_API_KEY from the env, falling back to ~/.env (the service runs
 // with the key exported, but tests / one-offs may not).
@@ -41,7 +41,7 @@ const toAnthropicTools = manifest => manifest.map(t => ({
 
 // runOpusDelegate({ prompt, toolbox, manifest, grantedPowers, signal }) →
 //   { answer, toolsUsed, model, granted }  (or { error } on failure)
-export const runOpusDelegate = async ({ prompt, toolbox, manifest, grantedPowers = [], signal } = {}) => {
+export const runOpusDelegate = async ({ prompt, toolbox, manifest, grantedPowers = [], signal, maxTokens = 8192, maxSteps = MAX_STEPS } = {}) => {
   const key = await apiKey();
   if (!key) return { error: 'no ANTHROPIC_API_KEY available' };
   const tools = toAnthropicTools(manifest);
@@ -58,14 +58,14 @@ export const runOpusDelegate = async ({ prompt, toolbox, manifest, grantedPowers
   // it is already adaptive-thinking-compatible on claude-opus-4-8 — no 400 risk here.)
   const usage = { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
 
-  for (let step = 0; step < MAX_STEPS; step += 1) {
+  for (let step = 0; step < maxSteps; step += 1) {
     if (signal?.aborted) return { answer: '(delegation cancelled)', toolsUsed, cancelled: true };
     let res;
     try {
       res = await fetch(API, {
         method: 'POST',
         headers: { 'content-type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01' },
-        body: JSON.stringify({ model: MODEL, max_tokens: 2048, system, tools, messages }),
+        body: JSON.stringify({ model: MODEL, max_tokens: maxTokens, system, tools, messages }),
         signal,
       });
     } catch (e) { if (signal?.aborted) return { answer: '(delegation cancelled)', toolsUsed, cancelled: true }; return { error: `anthropic fetch: ${e.message}` }; }

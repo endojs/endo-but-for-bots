@@ -41,6 +41,7 @@ import { createProject, listProjects, addScheduledAgent, updateScheduledAgent, r
 import { proposeSpawn } from '../capture/agent-spawn.mjs';
 import { runOpusDelegate } from './delegate.mjs';
 import { makeSelfImprover } from './self-improver.mjs';
+import { listBacklog, addBacklog, nextOpen, recordOutcome } from './improvement-backlog.mjs';
 import { runAgent } from '../../ocapn-noise/tool-bridge.mjs';
 import { runAgentCode } from '../../ocapn-noise/codemode.mjs';
 // Sub-agents (scheduled, specialists, employed roles) run the composable-code harness (CEO-Bench: it
@@ -510,7 +511,7 @@ export const POWERS = harden({
   kazputer: { label: 'Manage Kazputers — give someone a new one (email invite), and administer your own (settings/coins; you confirm)', verbs: ['proposeGiveKazputer', 'kazputerStatus', 'proposeKazputerSetting', 'proposeKazputerCoins'] },
   dietician: { label: "Drive the dietician's restaurant pipeline — scan an area, evaluate spots for Alexa's diet, refresh + publish the food guides (publishing you confirm)", verbs: ['dietScanArea', 'dietEvaluateArea', 'dietBuildMap', 'dietStatus', 'dietRefreshSite'] },
   app: { label: 'Introspect + manage your own app state — list/read/retitle every conversation (chats, voice memos, voice notes) and see an overview of asks/feed/proposals', verbs: ['listChats', 'readChat', 'retitleChat', 'appState'] },
-  selfImprove: { label: '⚠️ Autonomously IMPLEMENT a system improvement on an isolated worktree → independently verify → (flag-gated) auto-merge to the live branch with post-merge re-verify + auto-revert', verbs: ['improveSystem'] },
+  selfImprove: { label: '⚠️ Autonomously IMPLEMENT system improvements (FAPO-style: propose precise targets to a backlog → drain one → implement on an isolated worktree → independently verify → flag-gated auto-merge with post-merge re-verify + auto-revert)', verbs: ['improveSystem', 'proposeImprovement', 'listImprovements', 'runNextImprovement'] },
 });
 export const ALL_POWERS = harden(Object.keys(POWERS));
 harden(POWERS);
@@ -548,9 +549,16 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
       const subNode = makeAgentNode({ powers: ring, labelOf: `improve-exec-${wtId}`, haBinding: () => haTrie?.root || null, agBinding: () => agentRoster?.root || null, cwdBinding: () => wt.dir, id: `improve-exec-${wtId}` });
       const sub = subNode.toolbox({ chatId: wtId });
       const verify = successCommand ? String(successCommand) : 'the full voice-agent test suite';
-      const prompt = `${spec.prompt}\n\nYou are in a FRESH GIT WORKTREE checked out at the repo root — your hostExec runs there. Actually EDIT files with hostExec (do not just describe the change). TASK:\n${String(goal)}\n\nMANDATORY: make the real code change AND ship a NEW or UPDATED TEST that encodes its claim, and keep ${verify} GREEN — the change is re-verified independently and merged ONLY if green. Keep it minimal + focused. Do NOT commit; the harness commits your working tree to a branch when you finish.`;
-      const r = await runOpusDelegate({ prompt, toolbox: sub.toolbox, manifest: sub.manifest, grantedPowers: ring, signal });
+      const base = `${spec.prompt}\n\nYou are in a FRESH GIT WORKTREE checked out at the repo root — your hostExec runs THERE (relative paths land in the worktree). TASK:\n${String(goal)}\n\nHOW (do these with hostExec, do NOT just describe): (1) \`cat <the file>\` to read its CURRENT contents — reuse the existing exports/helpers; do NOT invent a parallel API or rewrite working code; (2) WRITE the edited file to disk with a heredoc, e.g. \`cat > <path> <<'EOF'\\n…full new contents…\\nEOF\`; (3) ALSO write a NEW or UPDATED test that encodes the claim; (4) RUN the verification yourself — \`${verify}\` — and READ the output; if it is RED, fix the code/test and re-run until it is GREEN (do not finish red); (5) run \`git -C . diff --stat\` and confirm a NON-EMPTY diff. The change is merged ONLY if \`${verify}\` is green (re-verified independently). Do NOT commit — the harness commits your working tree. Keep it minimal + focused; finish only once your own verification passed.`;
+      const dirtyNow = async () => { const d = await aff.host.exec(`git -C ${shq(wt.dir)} status --porcelain`, { timeoutMs: 30000 }); return !!(d.ok && String(d.stdout || '').trim()); };
+      let r = await runOpusDelegate({ prompt: base, toolbox: sub.toolbox, manifest: sub.manifest, grantedPowers: ring, signal, maxSteps: 22 });
+      if (process.env.DEBUG_EXECUTOR) console.error('[exec dbg] r=', JSON.stringify({ error: r?.error, answer: String(r?.answer || '').slice(0, 200), toolsUsed: (r?.toolsUsed || []).map(t => t.name), wtDir: wt?.dir }));
       answer = (r && r.answer) || '';
+      // FAPO iterate-with-feedback: if NOTHING changed on disk, push back ONCE and retry — narrating ≠ editing.
+      if (!(await dirtyNow())) {
+        r = await runOpusDelegate({ prompt: `${base}\n\n⚠️ RETRY — you changed NO files on disk last attempt; describing the change is not enough. Use hostExec NOW to actually write the file(s) and the test (cat the file, then write the edited contents back with a heredoc), then confirm a non-empty \`git -C . diff --stat\`.`, toolbox: sub.toolbox, manifest: sub.manifest, grantedPowers: ring, signal, maxSteps: 22 });
+        answer = `${answer}\n[retry] ${(r && r.answer) || ''}`.slice(0, 8000);
+      }
     } catch (e) { answer = `executor error: ${String((e && e.message) || e)}`; } // ANY failure → still tear down (no worktree leak)
     finally {
       try { const t = await worktrees.teardown(wtId, { commitMessage: `self-improve: ${String(goal).slice(0, 72)}` }); branch = (t && t.branch) || branch; committed = !!(t && t.committed); } catch { /* keep wt.branch */ }
@@ -693,6 +701,27 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
         selfImproveInFlight = true;
         try {
           return harden(await selfImprover.improve({ goal: g, successCommand: successCommand ? String(successCommand) : undefined, employExecutor: ({ goal: gg }) => runWorktreeExecutor({ goal: gg, successCommand }), autoMerge: SELF_IMPROVE_AUTOMERGE, now: new Date().toISOString() }));
+        } finally { selfImproveInFlight = false; }
+      } },
+    // ── FAPO-style backlog: research PROPOSES precise targets; the loop DRAINS the top one + records the outcome. ──
+    proposeImprovement: { reversible: false, args: { goal: 'string — a PRECISE, FILE-SCOPED improvement: name the EXACT file + the EXACT change + how to verify. e.g. "In packages/chat/ocapn-noise/codemode.mjs, add a single-retry around recoverable tool errors in the run loop, and a test in a *.test.mjs asserting one retry happens" — NOT "improve orchestration"', successCommand: 'string — OPTIONAL: the command that proves it (defaults to the full suite)', rationale: 'string — OPTIONAL: the research that motivated it' },
+      description: 'Add a concrete improvement TARGET to the backlog (the dataset the self-improvement loop drains). The goal MUST name a specific file + a specific change + a test — vague goals are rejected and never implement. Use this to turn research into implementable targets.',
+      run: async ({ goal, successCommand, rationale }, agent) => harden(addBacklog({ goal, successCommand, rationale, by: agent || '' })) },
+    listImprovements: { reversible: false, args: { status: 'string — OPTIONAL filter: open | staged | merged' },
+      description: 'List the improvement backlog — the concrete targets + their recorded outcomes (so you see what is queued, staged for review, merged, or repeatedly failing).',
+      run: async ({ status }) => harden({ ok: true, items: listBacklog({ status: status || undefined }) }) },
+    runNextImprovement: { reversible: false, args: {},
+      description: 'DRAIN the backlog: take the top OPEN target, implement it on an isolated worktree, INDEPENDENTLY verify, (flag-gated) auto-merge, and RECORD the outcome (attribution: merged / staged-for-review / failed+why). One at a time. This is how the loop makes real progress — precise targets, deterministically implemented + verified.',
+      run: async (a, agent) => {
+        if (selfImproveInFlight) return harden({ ok: false, busy: true, error: 'a self-improvement is already in flight — one at a time' });
+        const item = nextOpen();
+        if (!item) return harden({ ok: true, empty: true, note: 'the improvement backlog has no open target — proposeImprovement some precise, file-scoped ones first' });
+        selfImproveInFlight = true;
+        try {
+          const r = await selfImprover.improve({ goal: item.goal, successCommand: item.successCommand || undefined, employExecutor: ({ goal: gg }) => runWorktreeExecutor({ goal: gg, successCommand: item.successCommand }), autoMerge: SELF_IMPROVE_AUTOMERGE, now: new Date().toISOString() });
+          const status = r.merged ? 'merged' : r.readyToReview ? 'staged' : 'failed';
+          recordOutcome(item.id, { status, branch: r.branch, reason: r.reason });
+          return harden({ ok: true, target: item.goal, targetId: item.id, outcome: status, ...r });
         } finally { selfImproveInFlight = false; }
       } },
     readNote: { reversible: false, args: { path: 'string — vault-relative path' }, description: 'Read one personal note by path.',
