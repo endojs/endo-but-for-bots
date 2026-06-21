@@ -44,4 +44,13 @@ export const recordOutcome = (id, { status, branch, reason } = {}) => {
   return { ok: true, status: it.status, attempts: it.attempts };
 };
 
+// summarize the backlog by status — counts items in each lifecycle bucket. REUSES load().
+export const backlogStats = () => {
+  const stats = { open: 0, staged: 0, merged: 0, failed: 0 };
+  for (const i of load().items) {
+    if (Object.prototype.hasOwnProperty.call(stats, i.status)) stats[i.status] += 1;
+  }
+  return stats;
+};
+
 export const backlogFile = file;
