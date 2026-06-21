@@ -707,8 +707,17 @@ const handler = async (req, res) => {
         if (error || !cell) { send({ id, error: error || 'unavailable' }); continue; }
         unsubs.push(cell.subscribe(value => send({ id, value }))); // pushes the current value immediately + on every change
       }
-      const hb = setInterval(() => { try { res.write(': hb\n\n'); } catch { /* closed */ } }, 15000);
-      req.on('close', () => { clearInterval(hb); for (const u2 of unsubs) { try { u2(); } catch { /* */ } } });
+      let done = false;
+      const teardown = () => { if (done) return; done = true; clearInterval(hb); for (const u2 of unsubs) { try { u2(); } catch { /* */ } } try { res.end(); } catch { /* */ } };
+      // Heartbeat ALSO re-validates: live entity state (doors/locks) must stop the moment the cap is revoked
+      // or rescoped out of reach — a long-lived push stream can't keep leaking after revocation. A failed
+      // write (half-open/dead socket) also ends it.
+      const hb = setInterval(() => {
+        if (!nodeFor(cap) || list.some(id => liveCells.cellFor(cap, id).error)) return teardown(); // revoked / lost reach
+        try { if (res.write(': hb\n\n') === false) { /* backpressure ok */ } } catch { teardown(); }
+      }, 15000);
+      req.on('close', teardown); res.on('close', teardown); res.on('error', teardown);
+      try { req.socket.setTimeout(120000, teardown); } catch { /* */ } // half-open guard: no traffic in 2m → drop
       return undefined; // keep open
     }
 
@@ -791,7 +800,7 @@ const handler = async (req, res) => {
             try { const fname = `${crypto.randomBytes(16).toString('hex')}.png`; fs.copyFileSync(rv.savedTo, path.join(UPLOADS, fname)); imageUrls.push(`/uploads/${fname}`); } catch (e) { log('imgcopy', e.message); }
           }
           if (rv.proposed && rv.id) proposalIds.push(rv.id); // a destructive action was PROPOSED, not done
-          if (rv.widget && typeof rv.widget === 'object') uiWidgets.push(rv.widget); // a live/interactive widget to render in the bubble
+          if (rv.widget && typeof rv.widget === 'object' && uiWidgets.length < 8) { const k = JSON.stringify(rv.widget); if (!uiWidgets.some(w => JSON.stringify(w) === k)) uiWidgets.push(rv.widget); } // a live/interactive widget — bounded + de-duped (one entity = one stream, no flood)
           if (rv.autoConfirmed) autoFired.push({ title: rv.title, type: rv.type, ok: rv.fired !== false }); // "don't ask again" fired it
           if (rv.asked && rv.askId) askIds.push(rv.askId); // the agent raised a typed question → render it inline
           if (Array.isArray(rv.proposalIds)) proposalIds.push(...rv.proposalIds); // nested (specialist) proposals bubble up

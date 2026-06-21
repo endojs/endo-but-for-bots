@@ -1106,6 +1106,9 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
     toolbox.showEntityStatus = harden({ run: async ({ handle, label } = {}) => {
       const h = String(handle || '');
       if (!h) return { ok: false, error: 'need the entity handle — find it with haFind/search first' };
+      // Verify reachability at DESIGNATION time (same c-list rule as haState/haAct) so a hallucinated /
+      // out-of-reach handle fails legibly here instead of minting a broken "not reachable" widget.
+      if (powers.has('homeassistant') && node.haReach && !node.haReach(h)) return { ok: false, error: 'that entity is not in your reach — find it with haFind first' };
       return { ok: true, widget: { type: 'entity-status', handle: h, label: String(label || 'status').slice(0, 60), cell: `ha:${h}` }, note: 'Rendered a LIVE status widget; it stays current in the chat (subscribes to the entity).' };
     } });
     toolbox.showCountdowns = harden({ run: async ({ timers } = {}) => {

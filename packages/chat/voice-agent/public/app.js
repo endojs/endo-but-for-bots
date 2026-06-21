@@ -379,7 +379,7 @@ const retryTurn = async (payload, spoken) => {
     if (r.error) { setStatus('chat: ' + r.error); return; }
     if (r.exhausted) { updateBudgetChip(r.remaining, r.allowance); renderExhausted(payload, spoken); return; }
     renderAgentResponse(r);
-    pushTx('agent', r.answer || '', { tools: r.toolsUsed || [], images: r.images || [], imageUrls: r.imageUrls || [], steps: r.steps || [], agent: r.agentId });
+    pushTx('agent', r.answer || '', { tools: r.toolsUsed || [], images: r.images || [], imageUrls: r.imageUrls || [], steps: r.steps || [], agent: r.agentId, ui: r.ui || [] });
     pendantEnd(r.steps || []);
     updateBudgetChip(r.remaining, r.allowance);
     if (spoken) await speak(r.answer || '');
@@ -549,7 +549,7 @@ const sendChat = async (text, { spoken = false, audio = null, attachments = [], 
       if (stale()) return true;
       if (r.error) { setStatus('share: ' + r.error); return false; }
       if (r.exhausted) { renderAgentResponse({ answer: 'The shared spend allowance for this chat is used up.' }); pushTx('agent', '(allowance spent)'); setStatus(''); ok = true; return true; }
-      renderAgentResponse(r); pushTx('agent', r.answer || '', { tools: r.toolsUsed || [], images: r.images || [], imageUrls: r.imageUrls || [] }); setStatus(''); ok = true;
+      renderAgentResponse(r); pushTx('agent', r.answer || '', { tools: r.toolsUsed || [], images: r.images || [], imageUrls: r.imageUrls || [], ui: r.ui || [] }); setStatus(''); ok = true;
       if (typeof r.len === 'number') shareCursor[sessionId] = r.len; // we already rendered our 2 turns → advance the live-poll cursor past them
       return true; // keep imageUrls so a recipient-generated image survives reload
     }
