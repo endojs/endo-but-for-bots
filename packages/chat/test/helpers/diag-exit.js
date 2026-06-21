@@ -1,3 +1,5 @@
+/* global process */
+
 // Diagnostic preload (wired via ava `nodeArguments: --import`).
 //
 // The `test (24.x)` CI job wedges because a test worker process never exits
