@@ -93,6 +93,24 @@ const newSwiss = () => crypto.randomBytes(16).toString('hex');
 const WORKTREE_DIR = process.env.FIELD_AGENT_WORKTREE_DIR || '/home/dan/.local/state/field-agent/worktrees';
 const WORKTREE_REPO = process.env.FIELD_AGENT_WORKTREE_REPO || '/home/dan/endo-bfb-llm'; // self-improvement default; override per-deployment
 const WORKTREE_BASE_REF = process.env.FIELD_AGENT_WORKTREE_BASE || 'HEAD';
+// ── KERNEL confinement for worktree sub-agents (bubblewrap). A worktree-jailed hostExec (the self-improve
+//    executor + isolation:'worktree' roles) runs inside a bwrap sandbox that BINDS ONLY its worktree
+//    (writable) + a read-only toolchain/repo, and DENIES the rest of the host: no ~/.ssh, no ~/.env, no
+//    write outside the worktree, no network. This upgrades the worktree from race-isolation to a REAL
+//    boundary, so a misaligned/adversarial executor goal can't read secrets or escape. Falls back to the
+//    cwd-jail if bwrap is absent (WORKTREE_BWRAP=0 forces the fallback). ──
+export const BWRAP_BIN = ['/usr/bin/bwrap', '/bin/bwrap', '/usr/local/bin/bwrap'].find(p => { try { return fs.existsSync(p); } catch { return false; } }) || null;
+export const WORKTREE_BWRAP = !!BWRAP_BIN && process.env.WORKTREE_BWRAP !== '0';
+const REPO_GIT_COMMON = process.env.FIELD_AGENT_GIT_COMMON || '/home/dan/endo-bfb'; // the shared .git common dir for the field-preact worktree
+const roBindIf = p => { try { return fs.existsSync(p) ? ['--ro-bind', p, p] : []; } catch { return []; } };
+// the static (per-process) bind set: a minimal read-only system + the live repo (deps/git/code, READ-only).
+export const BWRAP_BASE = WORKTREE_BWRAP ? [
+  ...roBindIf('/usr'), ...roBindIf('/etc'), ...roBindIf('/lib'), ...roBindIf('/lib64'),
+  ...roBindIf('/bin'), ...roBindIf('/sbin'), ...roBindIf('/opt'),
+  '--proc', '/proc', '--dev', '/dev', '--tmpfs', '/tmp',
+  ...roBindIf(WORKTREE_REPO), ...roBindIf(REPO_GIT_COMMON),
+  '--unshare-all', '--die-with-parent',
+] : [];
 const shq = s => `'${String(s).replace(/'/g, `'\\''`)}'`; // POSIX single-quote a value for shell interpolation
 const wtSlug = s => String(s).replace(/[^\w.-]+/g, '_').slice(0, 60) || 'wt';
 
@@ -428,10 +446,13 @@ const makeAffordances = ({ outDir }) => {
     host: Far('HostShell', {
       help: () => 'Full shell over THIS host (archua) as the operator. exec(cmd,{cwd}) runs immediately (the grant is the authorization). Coarse ambient host-root — clone/build/test/edit on the host. Equivalent to the operator\'s claude-code.',
       describe: () => harden({ kind: 'host-shell', host: 'archua (local)' }),
-      // `jail` (optional) confines this shell to a worktree dir: execFile STARTS there and an
-      // agent-supplied `cwd` is resolved-relative + refused if it escapes. Absent jail = byte-for-byte
-      // the prior behavior (start in HOME). NOTE: not a kernel sandbox — see the worktree-isolation note.
+      // `jail` (optional) confines this shell to a worktree dir. When bwrap is available (WORKTREE_BWRAP)
+      // the jail is a KERNEL boundary: only the worktree is bound rw, a read-only toolchain/repo is bound,
+      // and the rest of the host (secrets, other state, write-elsewhere, network) is DENIED. Without bwrap
+      // it degrades to a cwd-jail (race-isolation, escapable). Absent jail = unconfined host (trusted harness).
       exec: async (cmd, { cwd, timeoutMs = 300000, jail } = {}) => new Promise(resolve => {
+        const done = (err, so, se) => resolve(harden({ ok: !err, code: err?.code ?? 0, killed: !!err?.killed, stdout: String(so || '').slice(0, 40000), stderr: String(se || '').slice(0, 12000) }));
+        const tmo = Math.min(Number(timeoutMs) || 300000, 600000);
         let startDir = process.env.HOME || '/home/dan';
         let effectiveCwd = cwd;
         if (jail) {
@@ -439,9 +460,14 @@ const makeAffordances = ({ outDir }) => {
           const j = resolveJailedCwd(jail, cwd);
           if (!j.ok) { resolve(harden({ ok: false, code: 1, killed: false, stdout: '', stderr: j.error })); return; }
           effectiveCwd = j.cwd === jail ? null : j.cwd; // null → run in the jail dir itself
+          if (WORKTREE_BWRAP) {
+            const args = [...BWRAP_BASE, '--bind', jail, jail, '--chdir', String(effectiveCwd || jail), '--', 'bash', '-lc', String(cmd || '')];
+            execFile(BWRAP_BIN, args, { timeout: tmo, maxBuffer: 8 * 1024 * 1024 }, done);
+            return;
+          }
         }
         const full = effectiveCwd ? `cd ${JSON.stringify(String(effectiveCwd))} && ${String(cmd || '')}` : String(cmd || '');
-        execFile('bash', ['-lc', full], { timeout: Math.min(Number(timeoutMs) || 300000, 600000), maxBuffer: 8 * 1024 * 1024, cwd: startDir }, (err, so, se) => resolve(harden({ ok: !err, code: err?.code ?? 0, killed: !!err?.killed, stdout: String(so || '').slice(0, 40000), stderr: String(se || '').slice(0, 12000) })));
+        execFile('bash', ['-lc', full], { timeout: tmo, maxBuffer: 8 * 1024 * 1024, cwd: startDir }, done);
       }),
     }),
     // `delegate` is wired per-node (it needs the node's own sub-bundle builder),
