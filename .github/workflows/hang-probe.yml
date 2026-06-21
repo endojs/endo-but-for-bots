@@ -1,0 +1,61 @@
+name: hang-probe
+
+# Throwaway diagnostic for the Node-24 CI test hang (see
+# designs/node24-test-hang-investigation.md). Runs ONLY
+# @endo/preact-container's real test (vitest browser mode + Playwright
+# Chromium) in isolation on Node 22 vs 24, bounded by `timeout`, and dumps any
+# leftover browser/vitest process. vitest output is redirected to a file so a
+# leaked Chromium holds THAT fd (harmless) rather than the step's stdout pipe —
+# otherwise the step itself would hang and we could never read the result.
+# Not for merge.
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  preact-container-isolated:
+    name: preact-container-isolated
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: [22.x, 24.x]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - run: corepack enable
+
+      - name: Use Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: yarn
+
+      - name: Install dependencies
+        run: yarn install --immutable
+
+      - name: Run preact-container test in isolation; detect leaked browser
+        run: |
+          set +e
+          echo "node: $(node --version)"
+          start=$(date +%s)
+          # Redirect vitest output to a file: a leaked Chromium then holds the
+          # file fd, not this step's stdout, so the step can still conclude.
+          timeout -s KILL 240 yarn workspace @endo/preact-container run test \
+            >/tmp/v.out 2>&1
+          code=$?
+          echo "=== preact-container test exit=$code  wall=$(( $(date +%s) - start ))s ==="
+          echo "    (124/137 => vitest itself did not exit = HANG reproduced)"
+          echo "=== last 40 lines of vitest output ==="
+          tail -40 /tmp/v.out || true
+          echo "=== leftover browser / vitest / playwright processes (leak if any) ==="
+          ps -eo pid,ppid,etimes,comm,args \
+            | grep -iE 'chrom|headless|vitest|playwright' \
+            | grep -v grep || echo "  none"
+          echo "=== probe done (step concludes regardless of leak) ==="
