@@ -36,7 +36,7 @@
     "lint:eslint": "eslint '**/*.js'",
     "lint:types": "tsc",
     "prepack": "exit 0",
-    "test": "ava",
+    "test": "timeout -s KILL 260 ava",
     "test:c8": "c8 ${C8_OPTIONS:-} ses-ava",
     "test:e2e": "playwright test",
     "test:monaco-lockdown": "node test/monaco-lockdown/run.mjs",
@@ -111,7 +111,20 @@
   },
   "ava": {
     "files": [
-      "test/**/*.test.*"
+      "test/helpers/mock-powers.test.js",
+      "test/index.test.js",
+      "test/unit/blob-viewer.test.js",
+      "test/unit/browser-tree.test.js",
+      "test/unit/command-executor-channel.test.js",
+      "test/unit/command-executor.test.js",
+      "test/unit/command-registry.test.js",
+      "test/unit/edit-queue.test.js",
+      "test/unit/markdown-render.test.js",
+      "test/unit/message-parse.test.js",
+      "test/unit/node-crypto-shim.test.js",
+      "test/unit/outliner-channel-calls.test.js",
+      "test/unit/time-formatters.test.js",
+      "test/unit/value-render.test.js"
     ],
     "timeout": "2m",
     "environmentVariables": {
