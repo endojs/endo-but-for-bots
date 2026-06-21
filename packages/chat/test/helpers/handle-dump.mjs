@@ -1,13 +1,14 @@
 // Diagnostic preload (loaded into every ava worker via `--import`).
 //
-// The Node-24 chat worker leak shows up as: all tests pass, then the worker's
-// libuv loop never empties, so the worker never exits and CI hangs. This
-// watchdog arms an UNREF'd timer: if the worker finishes cleanly the loop
-// drains and the worker exits before the timer fires (an unref'd timer cannot
-// keep the loop alive on its own). But if some other handle is holding the
-// loop open past test completion, the timer DOES fire — at which point we dump
-// the surviving libuv resources/handles (with the offending test file name)
-// and force-exit so CI does not wedge.
+// The Node-24 chat worker hang shows up as: a worker's libuv loop never
+// empties, so the worker never exits and CI wedges. This watchdog arms an
+// UNREF'd timer with a GENEROUS threshold (well above any legitimate per-file
+// runtime — AVA's per-test timeout is 120s, and the slowest chat file runs in
+// ~12s locally, so a healthy file always finishes first). An unref'd timer
+// cannot keep the loop alive on its own, so a healthy worker exits before it
+// fires. If the worker is STILL alive at the threshold, a real handle is
+// holding the loop open: we dump the surviving resources/handles (with the
+// offending test file) and force-exit so CI does not hang for hours.
 //
 // Runs before `@endo/init` lockdown, so `setTimeout`/`fs` are captured raw.
 
@@ -15,6 +16,7 @@ import fs from 'node:fs';
 
 const LOG = '/tmp/handle-dump.log';
 const file = process.env.PROBE_FILE || '<unknown>';
+const THRESHOLD_MS = 170000;
 
 const dumpTimer = setTimeout(() => {
   let out = `[handle-dump] FILE=${file} pid=${process.pid}\n`;
@@ -27,10 +29,10 @@ const dumpTimer = setTimeout(() => {
     // eslint-disable-next-line no-underscore-dangle
     const handles = process._getActiveHandles().map(h => {
       const name = h && h.constructor ? h.constructor.name : typeof h;
-      // For Timeout handles, the idle delay pinpoints which setTimeout leaked.
       const delay =
         h && h._idleTimeout !== undefined ? ` delay=${h._idleTimeout}` : '';
-      return `${name}${delay}`;
+      const fd = h && h.fd !== undefined ? ` fd=${h.fd}` : '';
+      return `${name}${delay}${fd}`;
     });
     out += `  handles: ${JSON.stringify(handles)}\n`;
   } catch (e) {
@@ -53,5 +55,5 @@ const dumpTimer = setTimeout(() => {
     process._rawDebug(out);
   }
   process.exit(0);
-}, 8000);
+}, THRESHOLD_MS);
 dumpTimer.unref();
