@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0d1117">
+<title>The Field — Use cases</title>
+<style>
+  :root { color-scheme: dark; --bg:#0a0c14; --panel:#11141f; --edge:#262c3d; --ink:#e6edf3; --mut:#8b949e; --acc:#7c5cff; --acc2:#39d3ff; }
+  * { box-sizing:border-box; }
+  html,body { margin:0; background:var(--bg); color:var(--ink); font:15px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; }
+  .wrap { max-width:1000px; margin:0 auto; padding:0 18px 80px; }
+  .hero { position:relative; height:230px; margin:0 -18px 8px; overflow:hidden; border-bottom:1px solid var(--edge); }
+  #flick { width:100%; height:100%; display:block; filter:saturate(1.15) blur(0.4px); }
+  .hero .cap { position:absolute; inset:0; display:flex; flex-direction:column; justify-content:center; padding:0 26px; background:linear-gradient(90deg,#0a0c14ee 0%,#0a0c1488 45%,transparent 85%); }
+  .hero h1 { font-size:30px; margin:0; letter-spacing:.3px; }
+  .hero h1 .glyph { color:var(--acc); }
+  .hero p { color:var(--mut); margin:6px 0 0; max-width:560px; font-size:14px; }
+  .lead { color:var(--mut); margin:18px 0 22px; font-size:14px; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(280px,1fr)); gap:14px; }
+  .card { background:var(--panel); border:1px solid var(--edge); border-radius:14px; padding:15px 16px; }
+  .card h3 { margin:0 0 4px; font-size:15px; }
+  .card .em { font-size:22px; }
+  .card p { margin:5px 0 0; color:var(--mut); font-size:13px; }
+  .card .tag { display:inline-block; margin-top:9px; font-size:11px; color:var(--acc2); border:1px solid #235a7a; border-radius:20px; padding:1px 9px; }
+  .card a { color:var(--acc2); text-decoration:none; border-bottom:1px dotted #39d3ff66; }
+  footer { color:#5a6270; font-size:12px; margin-top:30px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="hero">
+    <canvas id="flick"></canvas>
+    <div class="cap">
+      <h1><span class="glyph">⊿</span> The Field — what's shipped</h1>
+      <p>An object-capability nervous system you talk to. Every card below is live — built, reviewed, and running. The banner flickers and never quite repeats.</p>
+    </div>
+  </div>
+  <div class="lead">Use cases &amp; shipped capabilities of <b>archua-agentc</b> (Agent&nbsp;C). Tailnet-only for now — public exposure is a deliberate per-instance call.</div>
+  <div class="grid" id="cards"></div>
+  <footer>The field builds the field — transparently, behind the gates. ⊿</footer>
+</div>
+<script>
+// ── hero: a flickering field that never repeats. A coarse procedural grid driven by sines at
+//    INCOMMENSURATE (irrational-ratio) frequencies, so the combined pattern has no finite period;
+//    plus a sparse flicker gate from the product of two incommensurate sines (the bright sparks never align). ──
+(() => {
+  const c = document.getElementById('flick'), g = c.getContext('2d'); const dpr = Math.min(devicePixelRatio || 1, 2);
+  const SQ2 = Math.SQRT2, PHI = 1.6180339887, PI = Math.PI;
+  const fit = () => { c.width = Math.max(2, c.clientWidth * dpr); c.height = Math.max(2, c.clientHeight * dpr); };
+  fit(); addEventListener('resize', fit);
+  let raf;
+  const frame = nowMs => {
+    const t = nowMs * 0.001, cols = 72, rows = 16, cw = c.width / cols, ch = c.height / rows;
+    for (let y = 0; y < rows; y++) for (let x = 0; x < cols; x++) {
+      const v = 0.5 + 0.5 * Math.sin(x * 0.42 + t * 1.27) * Math.sin(y * 0.66 + t * 0.91 * SQ2) * Math.sin((x + y) * 0.3 + t * PHI * 0.5);
+      const spark = (Math.sin(t * 6.91 + x * 1.7) * Math.sin(t * PI + y * 0.9)) > 0.86 ? 1 : 0; // never aligns → non-repeating flicker
+      const b = Math.max(0, Math.min(1, v * 0.62 + spark * 0.55));
+      const r = Math.round(34 + b * 92), gg = Math.round(26 + b * 150), bb = Math.round(72 + b * 196);
+      g.fillStyle = 'rgb(' + r + ',' + gg + ',' + bb + ')'; g.fillRect(x * cw, y * ch, cw + 1, ch + 1);
+    }
+    raf = requestAnimationFrame(frame);
+  };
+  raf = requestAnimationFrame(frame);
+})();
+
+const CARDS = [
+  ['🎛️', 'Live response widgets', 'The agent answers with grain-native widgets — countdown timers, a live door/lock status, tappable choices. Subscribe, never poll; they re-hydrate live when you reopen the chat.', 'agentc.chu'],
+  ['🧩', 'Confined components', 'The agent writes arbitrary custom UI, rendered in a sandboxed null-origin iframe (no DOM/network/cap reach), fed by the same live grains. Safe by construction.', 'agentc.chu'],
+  ['⤴', 'Break out → a module', 'Pop any component into its own standalone, versioned page at /c/&lt;id&gt; — a real git-object module you can fork, revert, and share.', '/c/…'],
+  ['🔗', 'Least-authority sharing + charge', 'Share a component as a link that grants live read-only access to ONLY its declared data — not a cap. Free, time-boxed (lease), or a prepaid allowance. Revocable.', 'agentc.chu'],
+  ['🪟', 'The field UI as an OS', 'A component can expand to fill the chat (retained per chat) and minimize back to a widget — the minimize IS the re-entry to the agent. A window-manager over confined apps.', 'agentc.chu'],
+  ['⊿', '3D sequence-diagram trace', 'The agent is a time lifeline; each tool use connects to it at call-out and return time — a live 3D sequence diagram, with a clickable power crown over each agent.', 'agentc.chu'],
+  ['↻', 'Prompt fork / retry', 'Retry any message with different model+params (forks travel with their params), edit + re-run, play back the original voice audio, and grow an inline reasoning signature.', 'agentc.chu'],
+  ['⚡', 'Event-triggered propagators', 'A scheduled agent can fire the MOMENT a doc lands in a folder, not on a clock — work wrapped in responsive propagators.', 'agentc.chu'],
+  ['🔌', 'Capability-vending over Noise', 'Real resources vended as time-boxed, rate-limited, revocable Endo capabilities over an ocapn-noise wire — GPU image-gen (GpuLease), the media library, a dialable root.', 'tailnet'],
+  ['🚀', 'The SPWA fleet', 'Stateless cap-in-URL apps, each self-describing + self-editable: a rover observer, GPU Studio, an image-gen site, a Kazputer for kids, an Obsidian share, the System Playground.', '/…'],
+  ['✎', 'Self-editing in place', 'Alt/Option-click any component → a focused agent rewrites its source live (apply, or preview as a variant). Metered through the toll-bridge.', 'agentc.chu'],
+  ['🎙️', 'Voice capture → the vault', 'An iPhone voice note lands in the vault inbox, transcribed + classified, and the agent acts on it — the unified-capture front door.', 'tailnet'],
+];
+const wrap = document.getElementById('cards');
+for (const [em, title, body, tag] of CARDS) {
+  const d = document.createElement('div'); d.className = 'card';
+  const h = document.createElement('h3'); const e = document.createElement('span'); e.className = 'em'; e.textContent = em + ' '; h.appendChild(e); h.appendChild(document.createTextNode(title));
+  const p = document.createElement('p'); p.innerHTML = body; // CARDS is trusted in-page content
+  const t = document.createElement('span'); t.className = 'tag'; t.textContent = tag;
+  d.append(h, p, t); wrap.appendChild(d);
+}
+</script>
+</body>
+</html>

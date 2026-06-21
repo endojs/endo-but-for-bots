@@ -611,6 +611,11 @@ const handler = async (req, res) => {
     if (u.pathname.startsWith('/c/') && req.method === 'GET') return serveFile(res, 'component-app.html', 'text/html; charset=utf-8'); // standalone home of a broken-out component (reads its id from the path)
     // Public descriptive catalog (power → what it does) for UI tooltips. No authority, no secrets.
     if (u.pathname === '/powers') return json(res, 200, { powers: POWER_CATALOG });
+    if (u.pathname === '/successes' || u.pathname === '/usecases') { // W6 "Use cases" showcase (tailnet; public bind = operator's call). Own CSP so its inline hero/card script runs.
+      try { res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-cache', 'x-content-type-options': 'nosniff', 'content-security-policy': "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; base-uri 'none'" }); res.end(await fs.promises.readFile(path.join(HERE, 'public', 'successes.html'))); }
+      catch { res.writeHead(404, SEC); res.end('not found'); }
+      return undefined;
+    }
     // confined-Preact islands bundle (built by `yarn build:islands`) + its sourcemap
     if (u.pathname === '/islands/islands.js') return serveFile(res, 'islands/islands.js', 'text/javascript; charset=utf-8');
     if (u.pathname === '/islands/islands.js.map') return serveFile(res, 'islands/islands.js.map', 'application/json; charset=utf-8');
