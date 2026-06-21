@@ -315,21 +315,56 @@ const bargeIn = () => {
 // ── persistent per-response trace strip (E6): a full-width neon row of THIS turn's tool
 //    calls, shown ABOVE each agent response; click → the full 3D trace. (roadmap §7 E6) ──
 const STEP_ICON = { research: '🔎', delegateTask: '🤝', employ: '🧑‍🔬', askSpecialist: '🧑‍🔬', generateImage: '🎨', searchNotes: '📓', readNote: '📓', fetchUrl: '🌐', browse: '🌐', consult: '📚', pushFeed: '📣', pushPhone: '📱', transcribeYoutube: '📺' };
+// one step in the expanded "reasoning signature" — name + (failed?) + ▸ call / ◂ result, children indented.
+// All step data is set via textContent (never innerHTML) — the call/result is agent/tool output (untrusted).
+const SIG_MAX = 500;
+const stepRow = (s, depth) => {
+  const row = document.createElement('div'); row.style.cssText = `margin:3px 0;padding-left:${depth * 14}px`;
+  const head = document.createElement('div'); head.style.cssText = `font:600 12px ui-monospace,Menlo,Consolas,monospace;color:${s.ok === false ? '#ff9e9e' : '#8fd0a8'}`;
+  head.textContent = `${STEP_ICON[s.name] || '⚙'} ${s.name}${s.ok === false ? '  ✗ failed' : ''}`;
+  row.appendChild(head);
+  const call = s.call || s.detail || '';
+  if (call) { const d = document.createElement('div'); d.style.cssText = 'font-size:11px;color:#9fb0c9;white-space:pre-wrap;word-break:break-word;margin:1px 0 0 16px;max-height:64px;overflow:auto'; d.textContent = '▸ ' + String(call).slice(0, SIG_MAX); row.appendChild(d); }
+  if (s.result) { const r = document.createElement('div'); r.style.cssText = 'font-size:11px;color:#c9a96e;white-space:pre-wrap;word-break:break-word;margin:1px 0 0 16px;max-height:64px;overflow:auto'; r.textContent = '◂ ' + String(s.result).slice(0, SIG_MAX); row.appendChild(r); }
+  (Array.isArray(s.children) ? s.children : []).forEach(c => row.appendChild(stepRow(c, depth + 1)));
+  return row;
+};
+// the per-message trace. Collapsed = a compact glyph strip (with a tiny symbol KEY on hover). Clicking it
+// (or its message — see wireMsgTrace) GROWS it inline into the full reasoning SIGNATURE above the answer.
 const traceStrip = steps => {
-  const wrap = document.createElement('div'); wrap.className = 'trace-strip'; wrap.title = 'Open the 3D trace'; wrap.setAttribute('data-component-id', 'island-trace'); wrap.setAttribute('data-component-name', 'Trace view (3D)');
-  const lbl = document.createElement('span'); lbl.className = 'ts-label'; lbl.textContent = `⊿ trace · ${steps.length}`;
-  // a very small symbol KEY on the far left (hover/tap) — what each glyph means + the per-row reasoning signature.
-  lbl.title = 'Reasoning signature for this answer. Symbols: ' + [...new Set(steps.map(s => `${STEP_ICON[s.name] || '⚙'} ${s.name}`))].slice(0, 12).join(' · ') + '\n(click → open the 3D trace)';
-  lbl.style.cursor = 'help'; wrap.appendChild(lbl);
-  for (const s of steps) {
-    const n = document.createElement('span'); n.className = 'tn' + (s.ok === false ? ' bad' : '');
-    const kids = Array.isArray(s.children) && s.children.length ? ` ·${s.children.length}` : '';
-    n.textContent = `${STEP_ICON[s.name] || '⚙'} ${s.name}${kids}`;
-    n.title = `${s.name}${s.ok === false ? ' (failed)' : ''}${s.detail ? ' — ' + String(s.detail).slice(0, 200) : ''}`; // each glyph names its tool
-    wrap.appendChild(n);
-  }
-  wrap.onclick = () => togglePendantFs();
+  const wrap = document.createElement('div'); wrap.className = 'trace-strip'; wrap.setAttribute('data-component-id', 'island-trace'); wrap.setAttribute('data-component-name', 'Trace view (3D)');
+  let expanded = false;
+  const legend = 'Symbols: ' + [...new Set(steps.map(s => `${STEP_ICON[s.name] || '⚙'} ${s.name}`))].slice(0, 12).join(' · ');
+  const draw = () => {
+    wrap.replaceChildren();
+    const lbl = document.createElement('span'); lbl.className = 'ts-label'; lbl.style.cursor = 'pointer';
+    lbl.textContent = `⊿ trace · ${steps.length} ${expanded ? '▾' : '▸'}`;
+    lbl.title = `Reasoning signature for this answer. ${legend}\n(click to ${expanded ? 'collapse' : 'grow it inline'}; ⊿3D opens the 3D trace)`;
+    lbl.onclick = e => { e.stopPropagation(); toggle(); };
+    wrap.appendChild(lbl);
+    const d3 = document.createElement('span'); d3.className = 'tn'; d3.textContent = '⊿3D'; d3.title = 'Open the 3D trace'; d3.style.cursor = 'pointer'; d3.onclick = e => { e.stopPropagation(); togglePendantFs(); };
+    wrap.appendChild(d3);
+    if (!expanded) {
+      for (const s of steps) { const n = document.createElement('span'); n.className = 'tn' + (s.ok === false ? ' bad' : ''); const kids = Array.isArray(s.children) && s.children.length ? ` ·${s.children.length}` : ''; n.textContent = `${STEP_ICON[s.name] || '⚙'} ${s.name}${kids}`; n.title = `${s.name}${s.ok === false ? ' (failed)' : ''}${s.detail ? ' — ' + String(s.detail).slice(0, 200) : ''}`; wrap.appendChild(n); }
+    } else {
+      const sig = document.createElement('div'); sig.className = 'trace-sig'; sig.style.cssText = 'flex-basis:100%;width:100%;margin-top:6px;padding:8px 10px;background:#0b0e14;border:1px solid #21262d;border-radius:8px;max-height:44vh;overflow:auto';
+      steps.forEach(s => sig.appendChild(stepRow(s, 0)));
+      wrap.appendChild(sig);
+    }
+  };
+  const toggle = () => { expanded = !expanded; draw(); };
+  wrap.toggleSig = toggle;
+  draw();
   return wrap;
+};
+// clicking an agent MESSAGE grows its reasoning signature (without clobbering links/controls/text-selection).
+const wireMsgTrace = (b, trace) => {
+  if (!b || !trace) return; b.style.cursor = 'pointer'; if (!b.title) b.title = 'Click to grow the reasoning signature';
+  b.addEventListener('click', e => {
+    if (e.target.closest && e.target.closest('a,button,img,input,textarea,select,label,.gw,iframe')) return; // don't clobber interactive content
+    try { if (window.getSelection && String(window.getSelection()).trim()) return; } catch { /* */ } // don't clobber a text selection
+    trace.toggleSig();
+  });
 };
 
 // render an agent reply (answer + tools + images + proposal cards)
@@ -417,8 +452,10 @@ const reapplyExpanded = () => { const key = expandedApplet[sessionId]; if (!key)
 addEventListener('keydown', e => { if (e.key === 'Escape') { const w = log.querySelector('.gw-component.applet-expanded'); if (w) minimizeApplet(w); } }); // Esc minimizes
 
 const renderAgentResponse = r => {
-  if (Array.isArray(r.steps) && r.steps.length) log.appendChild(traceStrip(r.steps)); // E6: trace strip above the response
+  let trace = null;
+  if (Array.isArray(r.steps) && r.steps.length) { trace = traceStrip(r.steps); log.appendChild(trace); } // E6: trace strip above the response
   const body = bubble('agent', r.answer || '…', r.agentId);
+  wireMsgTrace(body, trace); // click the message → grow its reasoning signature
   if (r.toolsUsed?.length) { const e = document.createElement('div'); e.className = 'tools'; e.textContent = '⚙ ' + r.toolsUsed.join(', '); body.parentNode.appendChild(e); }
   ((r.images && r.images.length ? r.images : (r.imageUrls || [])) || []).forEach(src => { const im = document.createElement('img'); im.src = src; body.appendChild(im); }); // data-URLs in the moment; durable /uploads urls as fallback (e.g. the share-post path)
   if (Array.isArray(r.ui) && r.ui.length) renderWidgets(body, r.ui, { cap: chatCap(), onChoice: t => sendChat(t), onBreakOut: breakOutComponent, onShareOut: shareOutComponent, onExpand: toggleApplet }); // live/interactive widgets (countdowns, live status, choices, custom components)
@@ -1442,8 +1479,10 @@ const renderTx = () => {
       if (m.who === 'widget' && m.site) { log.appendChild(makeInlineWidget(m.site, m.id)); continue; } // a pasted site, rendered inline as a live widget
       if (m.who === 'agent') { // render the ACTIVE fork (model/param variant) of this answer
         const v = activeVariant(m);
-        if (_arr(v.steps).length) log.appendChild(traceStrip(_arr(v.steps))); // persistent trace above the response
+        let trace = null;
+        if (_arr(v.steps).length) { trace = traceStrip(_arr(v.steps)); log.appendChild(trace); } // persistent trace above the response
         const b = bubble('agent', v.answer, v.agentId || m.agent);
+        wireMsgTrace(b, trace); // click the message → grow its reasoning signature inline
         const imgs = asArr(m.imageUrls).length ? asArr(m.imageUrls) : asArr(m.images).filter(s => typeof s === 'string' && s.startsWith('data:')); imgs.forEach(src => { const im = document.createElement('img'); im.src = src; b.appendChild(im); });
         if (_arr(v.ui).length) renderWidgets(b, _arr(v.ui), { cap: chatCap(), onChoice: t => sendChat(t), onBreakOut: breakOutComponent, onShareOut: shareOutComponent, onExpand: toggleApplet }); // re-hydrate live widgets
         if (_arr(v.tools).length) { const e = document.createElement('div'); e.className = 'tools'; e.textContent = '⚙ ' + _arr(v.tools).join(', '); b.parentNode.appendChild(e); }
