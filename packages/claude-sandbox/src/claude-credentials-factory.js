@@ -80,6 +80,7 @@ import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
  * @typedef {object} CredentialsFormSubmission
  * @property {string} name
  * @property {string} apiKey
+ * @property {string} [kind] - `apiKey` (default) or `oauthToken`.
  */
 
 /**
@@ -107,11 +108,20 @@ const IssuedCredentialInterface = M.interface('IssuedCredential', {
 });
 
 const CredentialsInterface = M.interface('ClaudeCredentials', {
+  kind: M.call().returns(M.string()),
   issue: M.call(M.string()).returns(M.promise()),
   revoke: M.call(M.string()).returns(M.promise()),
   rotate: M.call(M.string()).returns(M.promise()),
   help: M.call().optional(M.string()).returns(M.string()),
 });
+
+/**
+ * Credential kinds. `apiKey` is a raw Anthropic API key
+ * (`ANTHROPIC_API_KEY`); `oauthToken` is the short-lived OAuth access
+ * token Claude Code accepts headlessly (`CLAUDE_CODE_OAUTH_TOKEN`, as
+ * minted by `claude setup-token`).
+ */
+const CREDENTIAL_KINDS = harden(['apiKey', 'oauthToken']);
 
 const FORM_DESCRIPTION = 'Create Claude Credentials';
 
@@ -122,9 +132,15 @@ const FORM_FIELDS = harden([
     default: 'claude-credentials',
   },
   {
+    name: 'kind',
+    label: 'Credential kind',
+    default: 'apiKey',
+    example: 'apiKey | oauthToken',
+  },
+  {
     name: 'apiKey',
-    label: 'Anthropic API key (sk-ant-...)',
-    example: 'sk-ant-...',
+    label: 'Anthropic API key (sk-ant-...) or OAuth token (claude setup-token)',
+    example: 'sk-ant-... | sk-ant-oat...',
     secret: true,
   },
 ]);
@@ -178,8 +194,14 @@ const persistKeyToSidecar = async (name, apiKey) => {
  * which reads the key from a sidecar file rather than the formula env.
  *
  * @param {string} initialKey
+ * @param {string} [kind] - `apiKey` (default) or `oauthToken`.
  */
-export const makeCredentialsExo = initialKey => {
+export const makeCredentialsExo = (initialKey, kind = 'apiKey') => {
+  if (!CREDENTIAL_KINDS.includes(kind)) {
+    throw makeError(
+      X`credential kind ${q(kind)} must be one of ${q(CREDENTIAL_KINDS.join(', '))}`,
+    );
+  }
   let apiKey = initialKey;
   /** @type {Set<{ invalidate: () => void, tag: string }>} */
   const outstanding = new Set();
@@ -231,6 +253,9 @@ export const makeCredentialsExo = initialKey => {
   };
 
   return makeExo('ClaudeCredentials', CredentialsInterface, {
+    kind() {
+      return kind;
+    },
     async issue(sessionTag) {
       return issueCap(sessionTag);
     },
@@ -329,16 +354,21 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
           const submission = /** @type {CredentialsFormSubmission} */ (
             await E(powers).lookupById(msg.valueId)
           );
-          const { name, apiKey } = submission;
+          const { name, apiKey, kind = 'apiKey' } = submission;
           if (!name) throw new Error('Missing "name".');
           if (!apiKey || typeof apiKey !== 'string') {
             throw new Error('Missing "apiKey".');
+          }
+          if (!CREDENTIAL_KINDS.includes(kind)) {
+            throw new Error(
+              `Unknown credential kind "${kind}"; expected one of ${CREDENTIAL_KINDS.join(', ')}.`,
+            );
           }
           assertSafeCredentialName(name);
           if (deps.inProcessFactory) {
             // Test path: bypass daemon-formulated minting and the
             // sidecar file. The exo holds the bytes in memory only.
-            const credentials = makeCredentialsExo(apiKey);
+            const credentials = makeCredentialsExo(apiKey, kind);
             await E(hostAgent).storeValue(credentials, name);
           } else {
             // Production path: write key bytes to a 0600 sidecar
@@ -352,7 +382,10 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
               {
                 powersName: '@none',
                 resultName: name,
-                env: harden({ CREDENTIALS_FILE: credentialsFile }),
+                env: harden({
+                  CREDENTIALS_FILE: credentialsFile,
+                  CREDENTIALS_KIND: kind,
+                }),
               },
             );
           }
@@ -395,7 +428,8 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
           '',
           'Submit the "Create Claude Credentials" form on @host with:',
           '  name   — pet name for the resulting ClaudeCredentials',
-          '  apiKey — Anthropic API key',
+          '  kind   — apiKey (default) or oauthToken',
+          '  apiKey — Anthropic API key, or an OAuth token (claude setup-token)',
           '',
           'The key is persisted to a 0600 sidecar file under',
           '`$CLAUDE_CREDENTIALS_DIR` (default `~/.endo-claude-credentials`).',

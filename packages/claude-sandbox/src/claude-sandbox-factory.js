@@ -150,6 +150,22 @@ const ALLOWED_NETWORKS = harden([
 ]);
 
 /**
+ * Map a credential kind to the environment variable Claude Code reads
+ * it from inside the slice. An `apiKey` is a raw Anthropic API key
+ * (`ANTHROPIC_API_KEY`); an `oauthToken` is the short-lived OAuth
+ * access token Claude Code accepts headlessly (`CLAUDE_CODE_OAUTH_TOKEN`,
+ * as minted by `claude setup-token`). A peer can host the
+ * `ClaudeCredentials` cap on their own machine and mint a short-lived
+ * `oauthToken` per session, so the host daemon never sees the peer's
+ * long-lived OAuth refresh token — only the short-lived bytes it
+ * injects here.
+ */
+const CREDENTIAL_ENV_VARS = harden({
+  apiKey: 'ANTHROPIC_API_KEY',
+  oauthToken: 'CLAUDE_CODE_OAUTH_TOKEN',
+});
+
+/**
  * Slugify a pet name into a filesystem- and pet-name-safe token used
  * for the per-session mountpoint and workspace pet name. Pet names are
  * already lowercase/alnum/hyphen; this is belt-and-suspenders so an
@@ -248,6 +264,14 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
         formMessageId = msg.messageId;
       } else if (isFormReply) {
         seenFormReplies.add(msg.number);
+        // Tracked in the submission scope (not the `try`) so the
+        // `catch` can tear them down: a failure after the mount/slice
+        // are created must not leak a running container or a mounted
+        // 9P filesystem.
+        /** @type {{ unmount: () => Promise<void> } | undefined} */
+        let mountHandle;
+        /** @type {{ dispose: () => Promise<void> } | undefined} */
+        let slice;
         try {
           const submission = /** @type {SandboxFormSubmission} */ (
             await E(powers).lookupById(msg.valueId)
@@ -275,19 +299,45 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
 
           const parsedRootfs = parseRootfs(rootfsValue, { defaultImage });
 
-          // Materialise the API key (if a credentials cap was named)
-          // immediately before it flows into the slice env. `issue`
-          // returns an IssuedCredential *capability*; the bytes only
-          // cross CapTP at `materialise()` time.
-          /** @type {string | undefined} */
-          let apiKey;
+          // Materialise the credential (if a credentials cap was
+          // named) immediately before it flows into the slice env.
+          // `issue` returns an IssuedCredential *capability*; the
+          // secret bytes only cross CapTP at `materialise()` time. The
+          // credentials cap may live on a remote peer — the host only
+          // ever receives the short-lived secret it mints.
+          /** @type {Record<string, string>} */
+          const credentialEnv = {};
           if (typeof credsName === 'string' && credsName.length > 0) {
             const credCap = await E(hostAgent).lookup(credsName);
             if (!credCap) {
               throw new Error(`Unknown credentials: "${credsName}".`);
             }
+            // A credential advertises its `kind` so an OAuth grant
+            // lands in CLAUDE_CODE_OAUTH_TOKEN and a raw Anthropic key
+            // in ANTHROPIC_API_KEY. Probe via the CapTP introspection
+            // surface; caps that predate `kind()` (or foreign caps
+            // without introspection) are treated as API keys, matching
+            // the @endo/claude-container R3 ClaudeCredentials contract.
+            let kind = 'apiKey';
+            try {
+              // eslint-disable-next-line no-underscore-dangle
+              const methodNames = await E(credCap).__getMethodNames__();
+              if (methodNames.includes('kind')) {
+                kind = await E(credCap).kind();
+              }
+            } catch {
+              // No introspection surface; treat as an API key.
+            }
+            const envVar = CREDENTIAL_ENV_VARS[kind];
+            if (!envVar) {
+              throw new Error(
+                `Unknown credential kind "${kind}"; expected one of ${Object.keys(
+                  CREDENTIAL_ENV_VARS,
+                ).join(', ')}.`,
+              );
+            }
             const issuedCred = await E(credCap).issue(name);
-            apiKey = await E(issuedCred).materialise();
+            credentialEnv[envVar] = await E(issuedCred).materialise();
           }
 
           const slug = slugify(name);
@@ -302,7 +352,7 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
           //    mount caplet stands up the bridge UDS, creates the
           //    mountpoint, and runs `mount -t 9p`. `lazyUnmount` lets
           //    teardown release a busy mount.
-          const mountHandle = await E(fsMounter).mount(
+          mountHandle = await E(fsMounter).mount(
             fs,
             hostMountPoint,
             harden({ lazyUnmount: true }),
@@ -317,13 +367,8 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
           );
 
           // 3. Mint the slice with the workspace bound at /workspace
-          //    and the API key (if any) in its env.
-          /** @type {Record<string, string>} */
-          const sliceEnv = {};
-          if (apiKey) {
-            sliceEnv.ANTHROPIC_API_KEY = apiKey;
-          }
-          const slice = await E(sandboxFactory).make(
+          //    and the credential (if any) in its env.
+          slice = await E(sandboxFactory).make(
             harden({
               rootfs: parsedRootfs,
               mounts: [
@@ -334,7 +379,7 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
                 },
               ],
               network,
-              env: sliceEnv,
+              env: credentialEnv,
               cwd: SANDBOX_WORKSPACE_PATH,
               backend,
             }),
@@ -374,6 +419,24 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
             error instanceof Error ? error.message : String(error);
           // eslint-disable-next-line no-console
           console.error('[claude-sandbox-factory]', errorMessage);
+          // Best-effort teardown of anything created before the
+          // failure. Dispose the slice first (it holds the container
+          // that is using the bind mount), then unmount the 9P
+          // workspace.
+          if (slice !== undefined) {
+            try {
+              await E(slice).dispose();
+            } catch {
+              // best-effort
+            }
+          }
+          if (mountHandle !== undefined) {
+            try {
+              await E(mountHandle).unmount();
+            } catch {
+              // best-effort
+            }
+          }
           try {
             await E(powers).reply(
               msg.number,

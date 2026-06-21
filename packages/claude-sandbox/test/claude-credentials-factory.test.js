@@ -17,6 +17,24 @@ test('makeCredentialsExo.issue returns a single-shot IssuedCredential', async t 
   });
 });
 
+test('makeCredentialsExo defaults to the apiKey kind', async t => {
+  const creds = makeCredentialsExo('sk-ant-key');
+  t.is(await creds.kind(), 'apiKey');
+});
+
+test('makeCredentialsExo carries the oauthToken kind', async t => {
+  const creds = makeCredentialsExo('sk-ant-oat-token', 'oauthToken');
+  t.is(await creds.kind(), 'oauthToken');
+  const issued = await creds.issue('session-oauth');
+  t.is(await issued.materialise(), 'sk-ant-oat-token');
+});
+
+test('makeCredentialsExo rejects an unknown kind', t => {
+  t.throws(() => makeCredentialsExo('sk-ant-key', 'bogus'), {
+    message: /must be one of/,
+  });
+});
+
 test('revoke(tag) invalidates outstanding grants for that tag', async t => {
   const creds = makeCredentialsExo('sk-ant-key');
   const issued = await creds.issue('session-b');
