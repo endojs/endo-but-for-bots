@@ -318,14 +318,17 @@ const STEP_ICON = { research: '🔎', delegateTask: '🤝', employ: '🧑‍🔬
 // one step in the expanded "reasoning signature" — name + (failed?) + ▸ call / ◂ result, children indented.
 // All step data is set via textContent (never innerHTML) — the call/result is agent/tool output (untrusted).
 const SIG_MAX = 500;
+// defense-in-depth cap scrub at render (the server safeText-scrubs the main path, but the scoper trace
+// stringifies separately — never render a #cap / share token / bare swissnum that slipped through).
+const scrubCap = s => String(s == null ? '' : s).replace(/#cap=[0-9a-fA-F]{16,}/g, '#cap=«redacted»').replace(/#k=[\w-]{16,}/g, '#k=«redacted»').replace(/#agent=[\w-]{8,}/g, '#agent=«redacted»').replace(/\b[0-9a-f]{32}\b/g, '«swissnum»');
 const stepRow = (s, depth) => {
   const row = document.createElement('div'); row.style.cssText = `margin:3px 0;padding-left:${depth * 14}px`;
   const head = document.createElement('div'); head.style.cssText = `font:600 12px ui-monospace,Menlo,Consolas,monospace;color:${s.ok === false ? '#ff9e9e' : '#8fd0a8'}`;
   head.textContent = `${STEP_ICON[s.name] || '⚙'} ${s.name}${s.ok === false ? '  ✗ failed' : ''}`;
   row.appendChild(head);
   const call = s.call || s.detail || '';
-  if (call) { const d = document.createElement('div'); d.style.cssText = 'font-size:11px;color:#9fb0c9;white-space:pre-wrap;word-break:break-word;margin:1px 0 0 16px;max-height:64px;overflow:auto'; d.textContent = '▸ ' + String(call).slice(0, SIG_MAX); row.appendChild(d); }
-  if (s.result) { const r = document.createElement('div'); r.style.cssText = 'font-size:11px;color:#c9a96e;white-space:pre-wrap;word-break:break-word;margin:1px 0 0 16px;max-height:64px;overflow:auto'; r.textContent = '◂ ' + String(s.result).slice(0, SIG_MAX); row.appendChild(r); }
+  if (call) { const d = document.createElement('div'); d.style.cssText = 'font-size:11px;color:#9fb0c9;white-space:pre-wrap;word-break:break-word;margin:1px 0 0 16px;max-height:64px;overflow:auto'; d.textContent = '▸ ' + scrubCap(call).slice(0, SIG_MAX); row.appendChild(d); }
+  if (s.result) { const r = document.createElement('div'); r.style.cssText = 'font-size:11px;color:#c9a96e;white-space:pre-wrap;word-break:break-word;margin:1px 0 0 16px;max-height:64px;overflow:auto'; r.textContent = '◂ ' + scrubCap(s.result).slice(0, SIG_MAX); row.appendChild(r); }
   (Array.isArray(s.children) ? s.children : []).forEach(c => row.appendChild(stepRow(c, depth + 1)));
   return row;
 };
@@ -345,7 +348,7 @@ const traceStrip = steps => {
     const d3 = document.createElement('span'); d3.className = 'tn'; d3.textContent = '⊿3D'; d3.title = 'Open the 3D trace'; d3.style.cursor = 'pointer'; d3.onclick = e => { e.stopPropagation(); togglePendantFs(); };
     wrap.appendChild(d3);
     if (!expanded) {
-      for (const s of steps) { const n = document.createElement('span'); n.className = 'tn' + (s.ok === false ? ' bad' : ''); const kids = Array.isArray(s.children) && s.children.length ? ` ·${s.children.length}` : ''; n.textContent = `${STEP_ICON[s.name] || '⚙'} ${s.name}${kids}`; n.title = `${s.name}${s.ok === false ? ' (failed)' : ''}${s.detail ? ' — ' + String(s.detail).slice(0, 200) : ''}`; wrap.appendChild(n); }
+      for (const s of steps) { const n = document.createElement('span'); n.className = 'tn' + (s.ok === false ? ' bad' : ''); const kids = Array.isArray(s.children) && s.children.length ? ` ·${s.children.length}` : ''; n.textContent = `${STEP_ICON[s.name] || '⚙'} ${s.name}${kids}`; n.title = `${s.name}${s.ok === false ? ' (failed)' : ''}${s.detail ? ' — ' + scrubCap(s.detail).slice(0, 200) : ''}`; wrap.appendChild(n); }
     } else {
       const sig = document.createElement('div'); sig.className = 'trace-sig'; sig.style.cssText = 'flex-basis:100%;width:100%;margin-top:6px;padding:8px 10px;background:#0b0e14;border:1px solid #21262d;border-radius:8px;max-height:44vh;overflow:auto';
       steps.forEach(s => sig.appendChild(stepRow(s, 0)));
@@ -1420,23 +1423,31 @@ const _arr = v => (Array.isArray(v) ? v : (v ? [v] : []));
 const baseVariant = am => ({ answer: am.text || '', steps: _arr(am.steps), ui: _arr(am.ui), tools: _arr(am.tools), agentId: am.agent, model: am.vmodel || 'default', agent: am.vagent || 'field-agent', prompt: null, ts: am.ts || 0 });
 const variantsOf = am => { if (!am.variants || !am.variants.length) { am.variants = [baseVariant(am)]; am.varIx = 0; } if (typeof am.varIx !== 'number' || am.varIx < 0 || am.varIx >= am.variants.length) am.varIx = am.variants.length - 1; return am.variants; };
 const activeVariant = am => (am && am.variants && am.variants.length) ? am.variants[Math.max(0, Math.min(am.varIx || 0, am.variants.length - 1))] : baseVariant(am);
-const answerOf = i => { const n = activeTx[i + 1]; return (n && n.who === 'agent') ? n : null; };
+// the agent answer for the user turn at i — scan forward past non-conversational entries (a pasted widget,
+// etc.) to the first 'agent' BEFORE the next 'you'. (Don't assume positional adjacency: the tx isn't strictly paired.)
+const answerOf = i => { for (let j = i + 1; j < activeTx.length; j++) { const n = activeTx[j]; if (!n) continue; if (n.who === 'you') return null; if (n.who === 'agent') return n; } return null; };
 const histUpTo = uIx => activeTx.slice(0, uIx).filter(m => m && m.who).map(m => ({ role: m.who === 'you' ? 'user' : 'assistant', content: String(m.who === 'you' ? (m.text || '') : (activeVariant(m).answer || '')) })).filter(x => x.content.trim()).slice(-24);
 const runRetry = async (uIx, prompt) => {
+  if (busy) { setStatus('finish the current turn first'); return; } // share the live-turn interlock — no mid-flight retry
   if (!activeTx[uIx]) return; const am = answerOf(uIx); const model = chatModel(), agent = chatAgent();
-  setStatus('retrying…');
-  let r; try { r = await (await fetch('/chat', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ sessionId, text: prompt, cap: chatCap(), model, agent, history: histUpTo(uIx) }) })).json(); }
-  catch (e) { setStatus('retry: ' + e.message); return; }
-  if (r.error) { setStatus('retry: ' + r.error); return; }
-  if (r.exhausted) { updateBudgetChip(r.remaining, r.allowance); setStatus('allowance used up — top up to retry'); return; }
-  const v = { answer: r.answer || '', steps: r.steps || [], ui: r.ui || [], tools: (r.toolsUsed || []), agentId: r.agentId, model, agent, prompt, ts: Date.now() };
-  if (am) { variantsOf(am); am.variants.push(v); am.varIx = am.variants.length - 1; }
-  else activeTx.splice(uIx + 1, 0, { who: 'agent', text: v.answer, steps: v.steps, ui: v.ui, tools: v.tools, agent: v.agentId, vmodel: model, vagent: agent, variants: [v], varIx: 0 });
-  updateBudgetChip(r.remaining, r.allowance); saveTx(); renderTx(); setStatus('');
+  busy = true; if (sendBtn) sendBtn.disabled = true; setStatus('retrying…');
+  try {
+    let r; try { r = await (await fetch('/chat', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ sessionId, text: prompt, cap: chatCap(), model, agent, history: histUpTo(uIx) }) })).json(); }
+    catch (e) { setStatus('retry: ' + e.message); return; }
+    if (r.error) { setStatus('retry: ' + r.error); return; }
+    if (r.exhausted) { updateBudgetChip(r.remaining, r.allowance); setStatus('allowance used up — top up to retry'); return; }
+    const v = { answer: r.answer || '', steps: r.steps || [], ui: r.ui || [], tools: (r.toolsUsed || []), agentId: r.agentId, model, agent, prompt, ts: Date.now() };
+    const am2 = answerOf(uIx); // re-resolve after the await (the live tx may have shifted)
+    if (am2) { variantsOf(am2); am2.variants.push(v); am2.varIx = am2.variants.length - 1; }
+    else { let j = uIx + 1; while (j < activeTx.length && activeTx[j] && activeTx[j].who !== 'you') j++; activeTx.splice(j, 0, { who: 'agent', text: v.answer, steps: v.steps, ui: v.ui, tools: v.tools, agent: v.agentId, vmodel: model, vagent: agent, variants: [v], varIx: 0 }); }
+    updateBudgetChip(r.remaining, r.allowance); saveTx(); renderTx(); setStatus('');
+  } finally { busy = false; if (sendBtn) sendBtn.disabled = false; }
 };
-const restoreParams = v => { try { const c = curChatObj(); if (c && v.model) { c.model = v.model; rememberModel(c.agent || v.agent || 'field-agent', v.model); } const ms = $('model-sel'); if (ms && v.model) ms.value = v.model; const as = $('agent-sel'); if (as && v.agent) as.value = v.agent; saveChats(); } catch { /* */ } };
+const restoreParams = v => { try { const c = curChatObj(); if (c) { if (v.agent) c.agent = v.agent; if (v.model) { c.model = v.model; rememberModel(c.agent || 'field-agent', v.model); } } const as = $('agent-sel'); if (as && v.agent) as.value = v.agent; const ms = $('model-sel'); if (ms && v.model) ms.value = v.model; saveChats(); } catch { /* */ } };
 const pageFork = (uIx, delta) => { const am = answerOf(uIx); if (!am) return; variantsOf(am); am.varIx = Math.max(0, Math.min(am.variants.length - 1, am.varIx + delta)); restoreParams(am.variants[am.varIx]); saveTx(); renderTx(); };
-const editPrompt = uIx => { const um = activeTx[uIx]; if (!um) return; const am = answerOf(uIx); const cur = (am && activeVariant(am).prompt) || um.text || ''; const edited = window.prompt('Edit the message, then retry (a new fork):', cur); if (edited == null || !edited.trim()) return; um.text = edited.trim(); runRetry(uIx, edited.trim()); };
+// edit + retry. We do NOT mutate the original user text — the edited prompt rides on the new fork (renderTx
+// renders activeVariant(am).prompt), so the base message + every fork's prompt stay recoverable.
+const editPrompt = uIx => { if (busy) { setStatus('finish the current turn first'); return; } const um = activeTx[uIx]; if (!um) return; const am = answerOf(uIx); const cur = (am && activeVariant(am).prompt) || um.text || ''; const edited = window.prompt('Edit the message, then retry (a new fork):', cur); if (edited == null || !edited.trim()) return; runRetry(uIx, edited.trim()); };
 const messageControls = (uIx, um) => {
   const am = answerOf(uIx);
   const row = document.createElement('div'); row.className = 'msg-ctrl'; row.style.cssText = 'display:flex;gap:6px;align-items:center;margin:-4px 2px 6px;font-size:12px';

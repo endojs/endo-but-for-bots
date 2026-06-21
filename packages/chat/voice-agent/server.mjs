@@ -427,6 +427,14 @@ const detailFromArgs = (a) => { if (!a || typeof a !== 'object') return ''; cons
 // Full-but-bounded text of a tool invocation / result, for the trace's inspectable modal.
 // CAP-HYGIENE: never leak a swissnum/secret into the trace, and never ship a base64 blob (e.g. a PNG).
 const SECRET_KEY = /swiss|secret|token|password|authorization|api[_-]?key|cookie|\bcap\b/i;
+// VALUE-level cap scrub: elide cap-bearing substrings even when they appear in free text (a tool result
+// that echoed a #cap link, share token, or a bare 32-hex swissnum). Targets the app's cap SHAPES only, so
+// it won't redact 16-hex HA handles or 64-hex hashes. Used by safeText (covers the trace stream + persistence).
+const scrubCaps = s => String(s == null ? '' : s)
+  .replace(/#cap=[0-9a-fA-F]{16,}/g, '#cap=«redacted»')
+  .replace(/#k=[\w-]{16,}/g, '#k=«redacted»')
+  .replace(/#agent=[\w-]{8,}/g, '#agent=«redacted»')
+  .replace(/\b[0-9a-f]{32}\b/g, '«swissnum»');
 const safeText = (v, cap) => {
   const seen = new WeakSet(); let s;
   try {
@@ -439,6 +447,7 @@ const safeText = (v, cap) => {
   } catch { try { s = String(v); } catch { s = ''; } }
   if (s === undefined || s === null) return '';
   s = String(s).replace(/data:[^;,\s]+;base64,[A-Za-z0-9+/=]+/g, '«base64 data elided»');
+  s = scrubCaps(s); // VALUE-level cap-hygiene: a tool whose result echoes a cap must not leak it into the trace/render
   return s.length > cap ? `${s.slice(0, cap)}\n… (truncated, ${s.length} chars total)` : s;
 };
 // build the rich, persisted research subtree (sub-questions → their search/fetches; summary as inspectable info)
