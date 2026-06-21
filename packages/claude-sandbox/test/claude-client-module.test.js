@@ -140,9 +140,8 @@ test('first send() mounts the workspace, registers a Mount cap, and mints the sl
   const host = makeMockHost();
   const client = make(host.hostAgent, undefined, { env: baseEnv() });
 
-  // Trigger lazy provisioning; we do not drain the reader (stdout is
-  // never iterated).
-  await client.send('hello');
+  // Draining the turn runs provisioning (the thing under test).
+  await drain(await client.send('hello'));
 
   t.is(host.mountCalls.length, 1);
   t.is(host.mountCalls[0].fs, host.fsCap);
@@ -166,8 +165,8 @@ test('first send() mounts the workspace, registers a Mount cap, and mints the sl
 test('provisioning is memoized across sends', async t => {
   const host = makeMockHost();
   const client = make(host.hostAgent, undefined, { env: baseEnv() });
-  await client.send('one');
-  await client.send('two');
+  await drain(await client.send('one'));
+  await drain(await client.send('two'));
   t.is(host.mountCalls.length, 1);
   t.is(host.sliceFactoryCalls.length, 1);
 });
@@ -186,7 +185,7 @@ test('an apiKey credential lands in ANTHROPIC_API_KEY', async t => {
   const client = make(host.hostAgent, undefined, {
     env: baseEnv({ CREDENTIALS_NAME: 'my-creds' }),
   });
-  await client.send('hello');
+  await drain(await client.send('hello'));
   t.is(host.sliceFactoryCalls[0].env.ANTHROPIC_API_KEY, 'sk-ant-secret');
 });
 
@@ -213,38 +212,42 @@ test('an oauthToken credential lands in CLAUDE_CODE_OAUTH_TOKEN', async t => {
   const client = make(host.hostAgent, undefined, {
     env: baseEnv({ CREDENTIALS_NAME: 'oauth-creds' }),
   });
-  await client.send('hello');
+  await drain(await client.send('hello'));
   t.is(issuedTag, 'my-claude-abc');
   const { env } = host.sliceFactoryCalls[0];
   t.is(env.CLAUDE_CODE_OAUTH_TOKEN, 'sk-ant-oat-token');
   t.is(env.ANTHROPIC_API_KEY, undefined);
 });
 
-test('a slice-mint failure unmounts the workspace and rejects the send', async t => {
+test('a slice-mint failure unmounts the workspace and aborts the turn', async t => {
   const host = makeMockHost({ sliceBehavior: 'throw' });
   const client = make(host.hostAgent, undefined, { env: baseEnv() });
-  await t.throwsAsync(() => client.send('hello'), {
-    message: /slice mint failed/,
-  });
+  // Provisioning failures surface as an `abort` event on the reader, not a
+  // rejection of send() (the floot turn model).
+  const events = await drain(await client.send('hello'));
+  const last = events[events.length - 1];
+  t.is(last.type, 'abort');
+  t.regex(last.reason, /slice mint failed/);
   // The 9P mount was released rather than leaked.
   t.is(host.mountCalls.length, 1);
   t.true(host.isUnmounted());
 });
 
-test('an unknown filesystem rejects the send', async t => {
+test('an unknown filesystem aborts the turn', async t => {
   const host = makeMockHost();
   const client = make(host.hostAgent, undefined, {
     env: baseEnv({ FILESYSTEM_NAME: 'nope' }),
   });
-  await t.throwsAsync(() => client.send('hello'), {
-    message: /Unknown filesystem/,
-  });
+  const events = await drain(await client.send('hello'));
+  const last = events[events.length - 1];
+  t.is(last.type, 'abort');
+  t.regex(last.reason, /Unknown filesystem/);
 });
 
 test('terminate() after provisioning disposes the slice and unmounts', async t => {
   const host = makeMockHost();
   const client = make(host.hostAgent, undefined, { env: baseEnv() });
-  await client.send('hello');
+  await drain(await client.send('hello'));
   await client.terminate();
   t.true(host.isDisposed());
   t.true(host.isUnmounted());
@@ -261,6 +264,21 @@ const waitFor = async (pred, deadlineMs = 2000) => {
   }
 };
 
+// Drain a turn's reply reader to completion. The fake slice's stdout is not a
+// real @endo/exo-stream reader, so the producer's stdout read errors and the
+// turn ends with an `abort` event — which is fine: by then provisioning (the
+// thing under test) has already happened. Returns the collected events.
+const drain = async reader => {
+  const events = [];
+  for (;;) {
+    // eslint-disable-next-line no-await-in-loop
+    const { done, value } = await reader.next();
+    if (done) break;
+    events.push(value);
+  }
+  return events;
+};
+
 test('cancellation tears down the provisioned session', async t => {
   const host = makeMockHost();
   let cancel;
@@ -271,7 +289,7 @@ test('cancellation tears down the provisioned session', async t => {
   const context = { whenCancelled: () => cancelled };
   const client = make(host.hostAgent, context, { env: baseEnv() });
 
-  await client.send('hello'); // provision the slice + mount
+  await drain(await client.send('hello')); // provision the slice + mount
   t.is(host.sliceFactoryCalls.length, 1);
 
   cancel(new Error('Cancelled')); // daemon cancels/collects the formula

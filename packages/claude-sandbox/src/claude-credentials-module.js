@@ -73,7 +73,7 @@ export const make = (_powers, _context, contextWrapper = {}) => {
     // Strip a single trailing newline that the factory writes for
     // operator-friendliness (cat/shred), but keep any internal
     // whitespace verbatim.
-    apiKey = fs.readFileSync(credentialsFile, 'utf8').replace(/\n$/, '');
+    apiKey = fs.readFileSync(credentialsFile, 'utf8').replace(/[\r\n]+$/, '');
   } catch (e) {
     throw makeError(
       X`claude-credentials-module: failed to read CREDENTIALS_FILE ${q(credentialsFile)}: ${q(

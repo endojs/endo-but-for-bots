@@ -156,7 +156,13 @@ test('send() spawns claude -p with stream-json and yields parsed events', async 
   const reader = await client.send('do a thing');
   const events = await drain(reader);
 
-  t.deepEqual(events, [{ type: 'system' }, { type: 'result' }]);
+  // The reader yields the parsed stream-json events, then a terminal
+  // `{ type: 'end' }`.
+  t.deepEqual(events, [
+    { type: 'system' },
+    { type: 'result' },
+    { type: 'end' },
+  ]);
   t.is(fake.spawned.length, 1);
   const { argv, opts } = fake.spawned[0];
   t.is(argv[0], 'claude');
@@ -187,17 +193,70 @@ test('send() adds --continue after the first turn and forwards --model', async t
   }
 });
 
-test('interrupt() kills the in-flight process and throws when there is none', async t => {
-  const fake = makeFakeSlice([[enc.encode('{"type":"system"}\n')]]);
+test('overlapping sends queue and run in order (serialized)', async t => {
+  const fake = makeFakeSlice([[], []]);
   const client = makeClaudeClient(baseArgs(fake, makeFakeMount()));
 
-  await t.throwsAsync(() => client.interrupt(), {
+  // Fire both sends before draining the first; they must serialize, not race.
+  const r1 = await client.send('first');
+  const r2 = await client.send('second');
+  await drain(r1);
+  await drain(r2);
+
+  t.is(fake.spawned.length, 2);
+  t.is(fake.spawned[0].argv[2], 'first');
+  t.is(fake.spawned[1].argv[2], 'second');
+  // The second turn ran strictly after the first, so it resumes with
+  // --continue. A concurrent race would not guarantee this.
+  t.false(fake.spawned[0].argv.includes('--continue'));
+  t.true(fake.spawned[1].argv.includes('--continue'));
+});
+
+test('a stream error surfaces as an abort terminal event', async t => {
+  const fake = makeFakeSlice([[enc.encode('not json\n')]]);
+  const client = makeClaudeClient(baseArgs(fake, makeFakeMount()));
+
+  const events = await drain(await client.send('x'));
+  const last = events[events.length - 1];
+  t.is(last.type, 'abort');
+  t.regex(last.reason, /malformed stream-json line/);
+});
+
+test('interrupt() throws when idle and closes-and-kills the in-flight turn', async t => {
+  // Before any send there is nothing to interrupt.
+  const idle = makeClaudeClient(baseArgs(makeFakeSlice(), makeFakeMount()));
+  await t.throwsAsync(() => idle.interrupt(), {
     message: /no in-flight prompt to interrupt/,
   });
 
-  await client.send('work');
+  // A turn whose stdout yields one event then blocks, so the turn stays
+  // in-flight long enough to interrupt it.
+  let unblock;
+  const blocked = new Promise(resolve => {
+    unblock = resolve;
+  });
+  const blockingStdout = harden({
+    async *[Symbol.asyncIterator]() {
+      yield enc.encode('{"type":"system"}\n');
+      await blocked;
+    },
+  });
+  const fake = makeFakeSlice();
+  const client = makeClaudeClient(
+    baseArgs(fake, makeFakeMount(), {
+      makeStdoutIterable: () => blockingStdout,
+    }),
+  );
+
+  const reader = await client.send('work');
+  // Pulling the first event proves the turn spawned and is producing.
+  const first = await reader.next();
+  t.is(first.value.type, 'system');
+
   await client.interrupt();
   t.true(procKilled.get(fake.spawned[0]));
+
+  unblock(); // let the (now-orphaned) producer task drain and exit
 });
 
 test('terminate() disposes the slice, unmounts, and rejects subsequent send', async t => {
