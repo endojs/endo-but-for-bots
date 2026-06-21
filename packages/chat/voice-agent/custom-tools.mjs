@@ -95,9 +95,12 @@ export const makeCustomTools = () => {
   };
   const pendingBy = agentId => load().filter(t => t.status === 'pending' && t.proposedBy === String(agentId)).map(t => ({ id: t.id, name: t.name, description: t.description }));
   const get = idOrName => load().find(t => t.id === String(idOrName) || t.name === String(idOrName)) || null;
-  const listAll = () => load().map(t => ({ id: t.id, name: t.name, description: t.description, status: t.status, kind: t.kind || 'instance', proposedBy: t.proposedBy, code: t.code, files: t.files, entry: t.entry, hasBundle: !!t.bundle, review: t.review || null }));
+  const listAll = () => load().map(t => ({ id: t.id, name: t.name, description: t.description, status: t.status, kind: t.kind || 'instance', proposedBy: t.proposedBy, code: t.code, files: t.files, entry: t.entry, hasBundle: !!t.bundle, review: t.review || null, reviseLog: t.reviseLog || null }));
   // Persist the discipline-review panel's findings on a pending tool so the admission gate sees them.
   const setReview = (id, review) => { const ts = load(); const t = ts.find(x => x.id === String(id)); if (!t) return { ok: false, error: 'no such proposal' }; t.review = review; save(ts); return { ok: true }; };
+  // Persist the review→revise dialogue (the developer's resolutions per round) so the human sees how the
+  // panel's criticisms were integrated/noted/unified before admitting an already-improved component.
+  const setReviseLog = (id, reviseLog) => { const ts = load(); const t = ts.find(x => x.id === String(id)); if (!t) return { ok: false, error: 'no such proposal' }; t.reviseLog = reviseLog; save(ts); return { ok: true }; };
   // Replace a tool's SOURCE (e.g. after reverting its git-as-Endo component to an earlier version) and
   // drop its cached instance/bundle so the next call re-instantiates from the new source.
   const setSource = (id, files) => {
@@ -128,5 +131,5 @@ export const makeCustomTools = () => {
     } catch (e) { return harden({ ok: false, error: (e && e.message) || String(e) }); }
   };
 
-  return { propose, pendingBy, get, list, listAll, setReview, setSource, copyGrains, grainData, admit, reject, call, methodsOf, getInstance, exportClass, importClass };
+  return { propose, pendingBy, get, list, listAll, setReview, setReviseLog, setSource, copyGrains, grainData, admit, reject, call, methodsOf, getInstance, exportClass, importClass };
 };

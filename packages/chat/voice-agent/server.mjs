@@ -47,6 +47,7 @@ import * as projects from './projects.mjs';
 import { makeMeetingScribe } from './meeting-scribe.mjs';
 import { opusComplete } from './delegate.mjs';
 import { runReviewPanel } from './review-panel.mjs';
+import { reviseToConverge } from './revise-loop.mjs';
 import { notify } from '../capture/notify.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -93,6 +94,51 @@ const editComponentSource = async (ct, id, prompt) => {
   const rec = await componentGit.commit(id, newFiles, `edit: ${String(prompt).slice(0, 60)}`);
   ct.setSource(id, newFiles); // apply live (the owner triggered it; revert from the Studio if unwanted)
   return { ok: true, version: rec.version, review, note: 'Edited — committed as a new version + applied to the live component. Revert from the Components tab if you don\'t like it.' };
+};
+
+// ── review→revise: feed the panel's findings BACK to the developer to INTEGRATE / NOTE / UNIFY, then
+//    re-review — so a flagged component CONVERGES toward an elegant solution instead of dead-ending at
+//    admit/reject. The dialogue (each round's resolutions) is surfaced so admission is informed. ──
+const REVISE_SYS = 'You are the DEVELOPER revising a proposed confined library component to address the review panel\'s findings. The source is the BODY of make(powers) (Endo unconfined-guest convention) — SES-confined: NO fs, network, import, or ambient globals; persist via powers.state / powers.grains. For EACH finding do ONE of: INTEGRATE (change the code so the finding no longer applies), NOTE (it is a false positive or an acceptable trade-off — keep the code, explain briefly), or UNIFY (several findings share one root cause — solve them together with ONE elegant change). Prefer unifying related findings into a clean solution over piecemeal patches. Keep the component\'s purpose + its exports/imports intact. Reply with EXACTLY: a single ```js fenced code block containing the COMPLETE revised make-body, then a line "RESOLUTIONS:" followed by one bullet per finding formatted "- <discipline> (<severity>): <integrate|note|unify> — <how>". No other prose.';
+const reviseComponentSource = async ({ source, findings, name, description }) => {
+  const ftext = (findings || []).map(f => `- [${f.severity}] ${f.discipline}: ${String(f.report || '').slice(0, 900)}`).join('\n') || '(no specific findings)';
+  const out = String((await opusComplete({ system: REVISE_SYS, prompt: `Component "${name}" — ${description}\n\nCurrent source:\n\`\`\`js\n${String(source).slice(0, 16000)}\n\`\`\`\n\nReview panel findings to address:\n${ftext}`, maxTokens: 4000 })) || '');
+  const code = extractJs(out) || String(source);
+  const resBlock = out.split(/RESOLUTIONS:/i)[1] || '';
+  const resolutions = resBlock.split('\n').map(l => l.replace(/^[\s>*-]+/, '').trim()).filter(Boolean).slice(0, 20)
+    .map(l => { const m = l.match(/^(.+?)\s*\(([^)]+)\)\s*:\s*(\w+)\s*[—–-]\s*(.*)$/); return m ? { finding: `${m[1].trim()} (${m[2].trim()})`, action: m[3].toLowerCase(), how: m[4].trim() } : { finding: l.slice(0, 140), action: '', how: '' }; });
+  return { source: code, resolutions };
+};
+// run the loop on ONE pending tool; persist the converged source (+ a git version) + the dialogue + the final review.
+const reviseTool = async (t) => {
+  const code = t.code || (t.files && t.files['tool.js']) || '';
+  if (!code.trim()) return { ok: false, error: 'the revise loop handles single-file components for now' };
+  const out = await reviseToConverge({
+    record: { name: t.name, description: t.description, kind: t.kind, code, review: t.review },
+    revise: reviseComponentSource,
+    runPanel: r => runReviewPanel({ name: r.name, description: r.description, kind: r.kind, code: r.code }, { callLLM, ranAt: new Date().toISOString() }),
+    maxRounds: 3,
+  });
+  if (out.rounds > 0 && out.source && out.source !== code) {
+    customTools.setSource(t.id, { 'tool.js': out.source });
+    customTools.setReview(t.id, out.review);
+    try { await componentGit.commit(t.id, { 'tool.js': out.source }, `revise: addressed review (${out.rounds} round(s), worst→${out.review.worst})`); } catch { /* git best-effort */ }
+  }
+  customTools.setReviseLog(t.id, { rounds: out.rounds, converged: out.converged, worst: out.review.worst, log: out.reviseLog, at: new Date().toISOString() });
+  return { ok: true, converged: out.converged, rounds: out.rounds, worst: out.review.worst, reviseLog: out.reviseLog };
+};
+// AUTONOMOUS but BOUNDED: at most one revise loop at a time; each /tools/review poll kicks the worst
+// un-revised high/critical pending tool in the background, so the backlog self-improves without a stampede
+// of Opus calls. AUTO_REVISE=0 disables; the manual ✨ Revise button calls reviseTool directly.
+const revising = new Set();
+const AUTO_REVISE = process.env.AUTO_REVISE !== '0';
+const maybeAutoRevise = () => {
+  if (!AUTO_REVISE || revising.size) return;
+  const cand = customTools.listAll().filter(t => t.status === 'pending' && !t.reviseLog && t.review && (t.review.worst === 'high' || t.review.worst === 'critical'))
+    .sort((a, b) => (b.review.worst === 'critical' ? 1 : 0) - (a.review.worst === 'critical' ? 1 : 0))[0];
+  if (!cand) return;
+  revising.add(cand.id);
+  reviseTool(cand).then(r => log('auto-revise', cand.name, `→ ${r.rounds || 0} round(s), worst ${r.worst || '?'}, converged ${r.converged}`)).catch(e => log('auto-revise', cand.name || '?', 'failed', e.message)).finally(() => revising.delete(cand.id));
 };
 
 // Editing a confined-Preact ISLAND (its source is a client file → rewrite + rebuild, not make(powers)).
@@ -1434,7 +1480,15 @@ const handler = async (req, res) => {
             try { const review = await runReviewPanel(t, { callLLM, ranAt: new Date().toISOString() }); customTools.setReview(t.id, review); } catch (e) { log('review-panel', e.message); }
           }));
         }
+        maybeAutoRevise(); // autonomously kick the worst un-revised high/critical pending tool (bounded: one at a time)
         return json(res, 200, { tools: customTools.listAll() });
+      }
+      if (u.pathname === '/tools/revise') {
+        // MANUAL trigger of the review→revise loop on one pending component (the ✨ Revise button).
+        const t = customTools.listAll().find(x => x.id === String(body.id || '') && x.status === 'pending');
+        if (!t) return json(res, 200, { ok: false, error: 'no such pending component' });
+        if (!t.review) { try { const rv = await runReviewPanel(t, { callLLM, ranAt: new Date().toISOString() }); customTools.setReview(t.id, rv); t.review = rv; } catch { /* advisory */ } }
+        return json(res, 200, await reviseTool(t));
       }
       if (u.pathname === '/tools/admit') {
         // Critical findings from the panel require a deliberate override — the human stays the gate, but
