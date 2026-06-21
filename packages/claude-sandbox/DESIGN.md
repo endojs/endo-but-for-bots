@@ -381,6 +381,14 @@ LinuxKit kernel 6.12, aarch64) — see [DEMO.md](./DEMO.md).
   The podman driver only accepts `rootfs: { kind: 'oci', ref }`; `host-bind` and
   `minimal` are bwrap-only and throw at `make()` — even though the form help
   still advertises them (see future work).
+- **Unix socket path length on CI.**
+  A daemon's Unix domain socket path must stay under the ~108-char `sun_path`
+  limit. Under a deep CI checkout path
+  (`/home/runner/work/endo-but-for-bots/endo-but-for-bots/…`) the live-daemon
+  test's per-test socket path overran it for the longer test names, so
+  [`test/live-daemon.test.js`](./test/live-daemon.test.js) anchors the socket in
+  the OS temp dir with a short random name rather than under the package's
+  `test/tmp/<name>/`.
 
 ## Known issues & future work
 
@@ -454,13 +462,13 @@ end-to-end by [`test/ninep-flow.test.js`](./test/ninep-flow.test.js)
 `NINEP_REQUIRE=1 NINEP_SUDO=1`). It mounts a `node-fs` `Filesystem` cap over
 real kernel 9P via the unmodified `mount-caplet`, reads it back through the
 mountpoint, then bind-mounts that 9P mountpoint into an `@endo/sandbox` podman
-slice and reads the file from inside the container as stream-json. A matrix
-probe (PR exploring `ubuntu-22.04`/`24.04`/`latest`) confirmed GitHub-hosted
-runner kernels ship `CONFIG_9P_FS` and grant passwordless `sudo mount -t 9p`,
-so this runs on stock CI rather than needing a self-hosted runner. (One footgun
-it surfaced: a **synchronous** read of a 9P mount served by an **in-process**
-bridge deadlocks the event loop — the read must be async so libuv services the
-bridge concurrently.)
+slice and reads the file from inside the container as stream-json. A throwaway
+matrix probe across `ubuntu-22.04`/`24.04`/`latest` confirmed (all three green)
+that GitHub-hosted runner kernels ship `CONFIG_9P_FS` and grant passwordless
+`sudo mount -t 9p`, so this runs on stock CI rather than needing a self-hosted
+runner. (One footgun it surfaced: a **synchronous** read of a 9P mount served by
+an **in-process** bridge deadlocks the event loop — the read must be async so
+libuv services the bridge concurrently.)
 
 The formula-identity constraint itself is now covered against a real daemon by
 [`test/live-daemon.test.js`](./test/live-daemon.test.js) (`yarn test:live`, run
