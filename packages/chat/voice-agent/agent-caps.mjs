@@ -1151,6 +1151,17 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
     toolbox.search = harden({ run: async ({ query } = {}) => {
       const q = String(query || ''); const results = [];
       const push = (source, arr) => { for (const x of (arr || [])) results.push({ source, ...x }); };
+      // FIRST, search your own TOOLS — this is the agent's search engine, so the most useful hit for
+      // "how do I X?" is usually a VERB you already hold. Token-overlap rank over name + description.
+      const toks = q.toLowerCase().split(/[^a-z0-9]+/).filter(w => w.length > 2);
+      if (toks.length) {
+        const scored = manifest.map(m => {
+          const hay = `${m.name} ${m.description || ''} ${Object.values(m.args || {}).join(' ')}`.toLowerCase();
+          let score = 0; for (const w of toks) { if (m.name.toLowerCase().includes(w)) score += 3; else if (hay.includes(w)) score += 1; }
+          return { m, score };
+        }).filter(x => x.score > 0).sort((a, b) => b.score - a.score).slice(0, 6);
+        push('tools', scored.map(x => ({ name: x.m.name, description: x.m.description, args: x.m.args })));
+      }
       try { if (powers.has('notes')) push('notes', (await aff.notes.search(q, { limit: 5 })).map(n => ({ name: n.title, path: n.path }))); } catch { /* skip */ }
       try { if (powers.has('contacts') && contactsObj) push('contacts', await contactsObj.search(q)); } catch { /* skip */ }
       try { if (powers.has('homeassistant')) { const s = node.haStart(); if (s && s.search) push('homeassistant', await s.search(q)); } } catch { /* skip */ }
@@ -1158,7 +1169,7 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
       try { if (powers.has('kazputer') && kazAdmin) push('kazputer', await kazAdmin.search(q)); } catch { /* skip */ }
       return { ok: true, query: q, results: results.slice(0, 40) };
     } });
-    manifest.push({ name: 'search', reversible: false, args: { query: 'string — what to find' }, description: 'Search ACROSS everything you hold in ONE call — your notes, contacts, Home Assistant, agent roster, and your Kazputer. Returns matches tagged by source. Use this to FIND something before acting; do NOT assume a thing lives in Home Assistant.' });
+    manifest.push({ name: 'search', reversible: false, args: { query: 'string — what to find, or a capability you need ("set a timer", "push to my phone")' }, description: 'Your SEARCH ENGINE: search ACROSS everything in ONE call — FIRST your own available TOOLS/verbs (so "how do I X?" surfaces the right verb to call), then your notes, contacts, Home Assistant, agent roster, and Kazputer. Returns matches tagged by source (source:"tools" = a verb you can call right now). Use this to find the RIGHT TOOL or a thing before acting — don\'t assume where something lives.' });
     return { toolbox: harden(toolbox), manifest: harden(manifest) };
   };
 

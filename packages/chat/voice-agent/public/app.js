@@ -118,6 +118,12 @@ const ICON = { 'note-edit': '📝', 'home-assistant': '🏠', email: '✉️', s
 // per-power glyphs for the consent (scope-approval) card; 🔑 is the generic fallback.
 const POWER_ICON = { notes: '📓', reference: '📚', web: '🌐', research: '🔎', youtube: '📺', images: '🎨', feed: '📣', phone: '📱', timers: '⏰', browser: '🧭', home: '🏠', vm: '🖥️', host: '🖥️', agents: '🛰️', delegate: '🤝', roles: '🧑‍🔬', homeassistant: '🏠', email: '✉️', subagent: '🤖', contacts: '👥', contact: '📨', specialists: '🧑‍🔬', kazputer: '📱', dietician: '🥗', app: '🧩' };
 const powerIcon = p => POWER_ICON[p] || '🔑';
+// power → human description, for hover tooltips on every power chip/checkbox. Loaded once from /powers
+// (the server POWERS catalog = single source of truth); falls back to the bare name until loaded.
+let powerLabels = {};
+const loadPowerLabels = async () => { try { const r = await (await fetch('/powers')).json(); for (const c of (r.powers || [])) powerLabels[c.power] = c.label; } catch { /* tooltips fall back to the name */ } };
+loadPowerLabels();
+const powerTip = p => `${p} — ${powerLabels[p] || 'capability'}`;
 // minimal LCS line-diff for note edits
 const renderDiff = (a, b) => {
   const A = String(a).split('\n'), B = String(b).split('\n'), n = A.length, m = B.length;
@@ -1277,7 +1283,7 @@ function wirePowerBanner(b, cc, ps) {
     if (!avail.length) { alert('this chat already holds every power you can grant'); return; }
     showModal(`<div class="dkm" style="text-align:left;max-width:420px;margin:-18px -18px 8px;padding:16px;border-radius:12px 12px 0 0"><b>+ Add a power to this chat</b>
       <div style="font-size:13px;color:var(--mut);margin:6px 0">Grant the agent in THIS chat another ability. Revocable any time (×).</div>
-      <div id="ap-list" style="display:flex;flex-direction:column;gap:5px;max-height:42vh;overflow:auto">${avail.map(p => `<label style="font-size:13px;cursor:pointer"><input type="checkbox" value="${esc(p)}"> ${powerIcon(p)} ${esc(p)}</label>`).join('')}</div>
+      <div id="ap-list" style="display:flex;flex-direction:column;gap:5px;max-height:42vh;overflow:auto">${avail.map(p => `<label title="${esc(powerTip(p))}" style="font-size:13px;cursor:pointer"><input type="checkbox" value="${esc(p)}"> ${powerIcon(p)} ${esc(p)}</label>`).join('')}</div>
       <button class="mini" id="ap-go" style="margin-top:10px">Grant</button></div>`);
     $('ap-go').onclick = async () => { const add2 = [...document.querySelectorAll('#ap-list input:checked')].map(x => x.value); if (!add2.length) return; closeModal(); await rescopeChat(cc, [...ps, ...add2]); };
   };
@@ -1295,7 +1301,7 @@ const renderTx = () => {
     const xbtn = p => manageable ? ` <button class="chip-x" data-revoke="${esc(p)}" title="revoke ${esc(p)}">×</button>` : '';
     const b = document.createElement('div'); b.className = 'powers-banner'; let show = true;
     if (Array.isArray(ps) && ps.length) {
-      b.innerHTML = `<span class="pb-label">🔑 this chat can</span>${ps.map(p => `<span class="chip">${powerIcon(p)} ${esc(p)}${xbtn(p)}</span>`).join('')}${manageable ? '<button class="chip chip-add" data-addpower title="grant another power">+ Add</button>' : ''}`;
+      b.innerHTML = `<span class="pb-label">🔑 this chat can</span>${ps.map(p => `<span class="chip" title="${esc(powerTip(p))}">${powerIcon(p)} ${esc(p)}${xbtn(p)}</span>`).join('')}${manageable ? '<button class="chip chip-add" data-addpower title="grant another power">+ Add</button>' : ''}`;
     } else if (isRoot && chatAgent() === 'field-agent' && !cc.shareToken) {
       b.innerHTML = '<span class="pb-label">🔑 Agent C can</span><span class="chip">📖 read everything</span><span class="chip">🧑‍🔬 only propose new agents</span>';
     } else { show = false; }
@@ -1978,7 +1984,7 @@ const fillInviteBox = () => {
   if (!isRoot) { box.classList.add('hide'); return; } // only the owner issues invites
   box.classList.remove('hide');
   const grantable = [...(heldPowers || [])].filter(p => !INVITE_HIDE.has(p));
-  $('inv-powers').innerHTML = grantable.map(p => `<label style="font-size:12px;border:1px solid var(--edge);border-radius:6px;padding:2px 7px;cursor:pointer"><input type="checkbox" value="${esc(p)}"${INVITE_STARTER.has(p) ? ' checked' : ''}> ${powerIcon(p)} ${esc(p)}</label>`).join('');
+  $('inv-powers').innerHTML = grantable.map(p => `<label title="${esc(powerTip(p))}" style="font-size:12px;border:1px solid var(--edge);border-radius:6px;padding:2px 7px;cursor:pointer"><input type="checkbox" value="${esc(p)}"${INVITE_STARTER.has(p) ? ' checked' : ''}> ${powerIcon(p)} ${esc(p)}</label>`).join('');
 };
 // 🔌 Connectors (Phase 3 Lane A) — owner wires up API-service tools; key → vault, injected server-side.
 const fillConnectorsBox = async () => {
@@ -2291,7 +2297,7 @@ const renderProjects = async () => {
             <input class="hdr-sel" style="max-width:none" data-ename="${p.id}|${a.id}" value="${esc(a.name)}">
             <textarea data-eprompt="${p.id}|${a.id}" style="background:var(--panel);border:1px solid var(--edge);color:var(--ink);border-radius:7px;padding:6px;min-height:90px">${esc(a.prompt || '')}</textarea>
             <div style="display:flex;align-items:center;gap:8px"><div style="font-size:11px;color:var(--mut)">tools (its ring):</div><button class="mini" data-epropose="${p.id}|${a.id}">✨ propose from prompt</button></div>
-            <div style="display:flex;flex-wrap:wrap;gap:4px" data-etools="${p.id}|${a.id}">${powers.map(pw => `<label style="font-size:11px;border:1px solid var(--edge);border-radius:6px;padding:2px 6px;cursor:pointer"><input type="checkbox" value="${esc(pw)}"${(a.tools || []).includes(pw) ? ' checked' : ''}> ${esc(pw)}</label>`).join('')}</div>
+            <div style="display:flex;flex-wrap:wrap;gap:4px" data-etools="${p.id}|${a.id}">${powers.map(pw => `<label title="${esc(powerTip(pw))}" style="font-size:11px;border:1px solid var(--edge);border-radius:6px;padding:2px 6px;cursor:pointer"><input type="checkbox" value="${esc(pw)}"${(a.tools || []).includes(pw) ? ' checked' : ''}> ${esc(pw)}</label>`).join('')}</div>
             <div><button class="mini" data-saveagent="${p.id}|${a.id}">Save changes</button></div>
           </div></details>
         <div data-out="${p.id}|${a.id}" style="font-size:12px;color:var(--acc);margin-top:4px"></div>
@@ -2311,7 +2317,7 @@ const renderProjects = async () => {
         <input class="hdr-sel" style="max-width:none" data-naname="${p.id}" placeholder="name (e.g. garden-scan)">
         <textarea data-naprompt="${p.id}" placeholder="what this recurring agent should do" style="background:var(--panel);border:1px solid var(--edge);color:var(--ink);border-radius:7px;padding:6px;min-height:54px"></textarea>
         <div style="display:flex;align-items:center;gap:8px"><div style="font-size:11px;color:var(--mut)">tools (its ring):</div><button class="mini" data-napropose="${p.id}">✨ propose from prompt</button></div>
-        <div style="display:flex;flex-wrap:wrap;gap:4px" data-natools="${p.id}">${powers.map(pw => `<label style="font-size:11px;border:1px solid var(--edge);border-radius:6px;padding:2px 6px;cursor:pointer"><input type="checkbox" value="${esc(pw)}"> ${esc(pw)}</label>`).join('')}</div>
+        <div style="display:flex;flex-wrap:wrap;gap:4px" data-natools="${p.id}">${powers.map(pw => `<label title="${esc(powerTip(pw))}" style="font-size:11px;border:1px solid var(--edge);border-radius:6px;padding:2px 6px;cursor:pointer"><input type="checkbox" value="${esc(pw)}"> ${esc(pw)}</label>`).join('')}</div>
         <select class="hdr-sel" style="max-width:none" data-nacad="${p.id}">${CADENCES.map((c, i) => `<option value="${i}">${esc(c.label)}</option>`).join('')}</select>
         <div><button class="mini" data-addagent="${p.id}">Add</button> <button class="mini" data-template="${p.id}">↳ prefill: overnight garden-scan</button></div>
       </div></details>

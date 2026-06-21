@@ -585,6 +585,8 @@ const handler = async (req, res) => {
     if (u.pathname === '/trace-app.js') return serveFile(res, 'trace-app.js', 'text/javascript; charset=utf-8');
     if (u.pathname === '/widget.js') return serveFile(res, 'widget.js', 'text/javascript; charset=utf-8');
     if (u.pathname === '/grain-ui.js') return serveFile(res, 'grain-ui.js', 'text/javascript; charset=utf-8');
+    // Public descriptive catalog (power → what it does) for UI tooltips. No authority, no secrets.
+    if (u.pathname === '/powers') return json(res, 200, { powers: POWER_CATALOG });
     // confined-Preact islands bundle (built by `yarn build:islands`) + its sourcemap
     if (u.pathname === '/islands/islands.js') return serveFile(res, 'islands/islands.js', 'text/javascript; charset=utf-8');
     if (u.pathname === '/islands/islands.js.map') return serveFile(res, 'islands/islands.js.map', 'application/json; charset=utf-8');
