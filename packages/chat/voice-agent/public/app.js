@@ -512,7 +512,11 @@ if (budgetChip) budgetChip.onclick = async () => {
   if (v == null) return;
   const amount = Math.round(parseFloat(v) * 1e6);
   if (!(amount > 0)) return;
-  try { const b = await (await fetch('/budget/topup', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, purseCap: chatCap(), sessionId, amount }) })).json(); if (b && !b.error) updateBudgetChip(b.remaining, b.allowance); } catch {}
+  try {
+    const b = await (await fetch('/budget/topup', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, purseCap: chatCap(), sessionId, amount }) })).json();
+    if (b && !b.error) { updateBudgetChip(b.remaining, b.allowance); await resumeIfPending(sessionId); } // top up AND resume a stalled turn
+    else if (b && b.error) setStatus('top-up: ' + b.error);
+  } catch (e) { setStatus('top-up failed: ' + e.message); }
 };
 // retry the SAME turn after a top-up (no new user bubble — the user's message is already shown)
 const retryTurn = async (payload, spoken) => {
@@ -530,9 +534,32 @@ const retryTurn = async (payload, spoken) => {
   } catch (e) { setStatus('error: ' + e.message); }
   finally { try { pendantES && pendantES.close(); } catch {} pendantLive = false; if (pendant) pendant.finish(); setStatus(on ? 'listening…' : ''); }
 };
+// A chat that ran out of allowance retains its UNANSWERED turn so that ANY top-up path — the
+// exhausted card, the 🪙 chip, or a payment — RESUMES it (not just the card button). Keyed by the
+// turn's own sessionId so switching chats can't resume the wrong one. If nothing is retained in
+// memory (e.g. after a page reload) but the visible chat's last entry is an unanswered user message,
+// we reconstruct the turn from the transcript — so a chat stalled in a PRIOR session also resumes.
+const pendingResume = {}; // sessionId → { payload, spoken }
+const stalledTurnFromTx = () => {
+  const i = activeTx.length - 1; const m = activeTx[i];
+  if (!(m && m.who === 'you' && (m.text || '').trim())) return null; // last entry isn't an unanswered user message
+  const history = activeTx.slice(0, i).filter(x => x && (x.text || '').trim()).map(x => ({ role: x.who === 'you' ? 'user' : 'assistant', content: String(x.text) })).slice(-24);
+  return { payload: { sessionId, text: (m.text || '').trim(), cap: chatCap(), model: chatModel(), agent: chatAgent(), history }, spoken: false };
+};
+const resumeIfPending = async sid => {
+  let pend = pendingResume[sid];
+  if (!pend && sid === sessionId) pend = stalledTurnFromTx(); // reload case: rebuild the stalled turn from the transcript
+  if (!pend) return false;
+  if (sid !== sessionId) { pendingResume[sid] = pend; return false; } // not the chat in view — keep it for when it is
+  delete pendingResume[sid];
+  [...document.querySelectorAll('.exhausted-card')].forEach(c => { if (c.dataset.sid === sid) c.remove(); }); // clear the stale card
+  await retryTurn(pend.payload, pend.spoken);
+  return true;
+};
 // deterministic exhaustion card — NO model produced this; the user tops up or abandons.
 const renderExhausted = (payload, spoken) => {
-  const card = document.createElement('div'); card.className = 'prop msg';
+  pendingResume[payload.sessionId] = { payload, spoken }; // retain the stalled turn so ANY top-up resumes it
+  const card = document.createElement('div'); card.className = 'prop msg exhausted-card'; card.dataset.sid = payload.sessionId;
   // OWNER (root) comps credit for free; a non-root invitee PAYS to add credit (Phase 2 billing).
   const blurb = isRoot ? 'This conversation has used up its budget. Top it up to keep going, or abandon the thread.'
     : 'You\'ve used up the credit you were given. Add more to keep going — or abandon the thread.';
@@ -546,7 +573,7 @@ const renderExhausted = (payload, spoken) => {
       if (isRoot) { // owner comp: free top-up
         const b = await (await fetch('/budget/topup', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, purseCap: chatCap(), sessionId, amount: 500000 }) })).json();
         if (b.error) throw new Error(b.error);
-        updateBudgetChip(b.remaining, b.allowance); card.remove(); await retryTurn(payload, spoken);
+        updateBudgetChip(b.remaining, b.allowance); await resumeIfPending(payload.sessionId);
       } else { // invitee: pay via Stripe Checkout (purse is credited on the webhook, then reload to continue)
         const r = await (await fetch('/pay/checkout', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap: chatCap(), sessionId, amountUsd: 5 }) })).json();
         if (r.url) { window.open(r.url, '_blank'); btns.insertAdjacentHTML('beforeend', '<span style="color:var(--mut);font-size:12px">Opening secure checkout… your credit is added once payment completes — then send your message again.</span>'); }
@@ -571,7 +598,7 @@ const renderExhausted = (payload, spoken) => {
         const grant = await eth.request({ method: 'wallet_grantPermissions', params: [{ expiry: Math.floor(Date.now() / 1000) + 86400, permissions: [{ type: 'native-token-stream', data: { amount: '0x2386f26fc10000' } }] }] }).catch(e => { throw new Error('Your wallet declined or lacks ERC-7715 advanced permissions (MetaMask Flask). ' + (e.message || '')); });
         await fetch('/pay/delegation/grant', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap: chatCap(), sessionId, delegation: grant }) });
         const r = await (await fetch('/pay/delegation/redeem', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap: chatCap(), sessionId, amountUsd: 5 }) })).json();
-        if (r.ok) { updateBudgetChip(r.remaining, r.allowance); card.remove(); await retryTurn(payload, spoken); }
+        if (r.ok) { updateBudgetChip(r.remaining, r.allowance); await resumeIfPending(payload.sessionId); }
         else throw new Error(r.error || 'on-chain settlement failed');
       } catch (e) { mm.disabled = false; btns.insertAdjacentHTML('beforeend', `<span style="color:var(--bad);font-size:12px">${esc(e.message)}</span>`); }
     };
