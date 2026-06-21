@@ -46,11 +46,17 @@
  *                         cap.
  *   INITIAL_PROMPT        Optional one-shot prompt fired on creation.
  *
- * This caplet runs with `@agent` (full host authority): it looks up the
- * factory / mounter / filesystem / credential caps by pet name, mounts
- * the workspace, and calls the privileged `provideMount`. Scoping that
- * down to a per-session guest profile that introduces only those caps
- * is tracked as future work (DESIGN.md).
+ * This caplet does **not** run with `@agent`. The factory provisions it
+ * as the attenuated `sandbox-powers` cap (factory.js
+ * `provisionClientPowers`), which exposes only the two host methods this
+ * module uses: `lookup(name)` — to resolve the factory / mounter /
+ * filesystem / credential caps by pet name — and `provideMount(path,
+ * name)`, bounded to the sandbox mount dir. So `powers` here is that
+ * narrow cap, not full host authority; the client worker cannot reach
+ * `makeUnconfined`, `remove`, `provideHostPath`, `provideGuest`, etc. The
+ * call sites are unchanged (`E(powers).lookup` / `E(powers).provideMount`)
+ * — only the authority behind `powers` shrank. See DESIGN.md § Known
+ * issues #2.
  *
  * @module
  */

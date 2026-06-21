@@ -144,6 +144,12 @@ the factory via `makeUnconfined` and parameterised entirely by `env`. It does
 on first use (mount the workspace over 9P, register the Mount cap, mint the
 podman slice) and memoizes the result.
 
+The client worker runs with **least authority**: not `@agent`, but a shared
+attenuated `sandbox-powers` cap (minted by `setup.js`) exposing only
+`lookup(name)` and a `provideMount(path, name)` bounded to the sandbox mount dir,
+so a client cannot reach `makeUnconfined` / `provideHostPath` / `remove` / etc.
+See [DESIGN.md § Known issue #8](./DESIGN.md#8-least-authority-for-the-client-worker--fixed).
+
 Because the formula is a pure value of its `env`, it **reincarnates across
 daemon restarts**: a restart re-provisions on the next `send()` — re-mounting
 the workspace and minting a fresh container (the podman driver sweeps

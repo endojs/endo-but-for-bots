@@ -228,3 +228,63 @@ test.serial(
     t.false(await E(host).has('form-client'), 'remove deletes the formula');
   },
 );
+
+test.serial(
+  'the sandbox-powers attenuator is minted, bounds provideMount, and delegates lookup',
+  async t => {
+    t.timeout(60_000);
+    const { host } = await prepareHost(t, 'powers');
+
+    // Provisioning the factory mints the shared attenuated client powers.
+    await provisionFactory(host);
+    t.true(
+      await E(host).has('sandbox-powers'),
+      'provisionFactory mints sandbox-powers',
+    );
+
+    const powers = await E(host).lookup('sandbox-powers');
+    // help() resolving proves the `evaluate` formula constructed — i.e. the
+    // `@agent` endowment resolved and the attenuator exo was built.
+    t.regex(await E(powers).help(), /provideMount/);
+
+    // The surface is exactly the attenuated methods: lookup + provideMount
+    // (+ help and the exo meta-methods), and crucially NONE of the
+    // privileged host methods the client must not reach.
+    // eslint-disable-next-line no-underscore-dangle
+    const methods = await E(powers).__getMethodNames__();
+    for (const name of ['lookup', 'provideMount', 'help']) {
+      t.true(methods.includes(name), `attenuator exposes ${name}`);
+    }
+    for (const forbidden of [
+      'makeUnconfined',
+      'provideHostPath',
+      'provideGuest',
+      'remove',
+      'evaluate',
+      'storeValue',
+    ]) {
+      t.false(
+        methods.includes(forbidden),
+        `attenuator does NOT expose ${forbidden}`,
+      );
+    }
+
+    // lookup delegates straight to the host: it resolves a real host pet name.
+    const workspaceDir = path.join(dirname, 'tmp', 'powers', 'workspace');
+    mkdirSync(workspaceDir, { recursive: true });
+    await E(host).makeUnconfined('@main', nodeFsModuleHref, {
+      resultName: 'project-fs',
+      env: harden({ ENDO_FS_ROOT: workspaceDir }),
+    });
+    const viaPowers = await E(powers).lookup('project-fs');
+    t.truthy(viaPowers, 'attenuator.lookup resolves a host pet name');
+
+    // provideMount is bounded to the sandbox mount dir: an out-of-dir path
+    // is rejected before it ever reaches the host's provideMount. This is
+    // the least-authority guarantee — a client cannot recover arbitrary
+    // host paths through a slice.
+    await t.throwsAsync(() => E(powers).provideMount('/etc', 'evil'), {
+      message: /restricted to the sandbox mount dir/,
+    });
+  },
+);

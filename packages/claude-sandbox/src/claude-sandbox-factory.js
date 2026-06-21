@@ -200,6 +200,16 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
     env.CLAUDE_SANDBOX_MOUNT_DIR ||
     process.env.CLAUDE_SANDBOX_MOUNT_DIR ||
     os.tmpdir();
+  // Pet name of the attenuated powers cap each per-session client formula
+  // runs as instead of `@agent` (minted by factory.js's
+  // `provisionClientPowers`). It exposes only `lookup` + a
+  // mount-dir-bounded `provideMount`, so the client worker holds far less
+  // than full host authority. Keep in sync with `CLIENT_POWERS_NAME` in
+  // factory.js.
+  const clientPowersName =
+    env.SANDBOX_POWERS_NAME ||
+    process.env.SANDBOX_POWERS_NAME ||
+    'sandbox-powers';
 
   const iterateMessages = deps.iterateMessages ?? iterateReader;
 
@@ -272,7 +282,9 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
 
     /** @type {Record<string, any>} */
     const options = {
-      powersName: '@agent',
+      // Least authority: the client runs as the attenuated `sandbox-powers`
+      // cap (lookup + mount-dir-bounded provideMount), not `@agent`.
+      powersName: clientPowersName,
       env: harden({
         SESSION_ID: sessionId,
         CREATED_AT: new Date().toISOString(),

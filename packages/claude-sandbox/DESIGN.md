@@ -423,11 +423,8 @@ the conversation persist in the `Filesystem` cap, and the (possibly
 peer-hosted) credential is re-materialised at spawn time — so no secret ever
 enters the formula `env`.
 
-The per-session client worker currently runs with `@agent` (full host
-authority) so it can call the privileged `provideMount` and look up those caps.
-Scoping that to a per-session guest profile that introduces only the needed caps
-(mirroring `@endo/claude-container`'s `provideGuest` pattern) is tracked in
-follow-ups below.
+The per-session client worker runs as the attenuated `sandbox-powers` cap, not
+`@agent` — see [§8 Least authority for the client worker](#8-least-authority-for-the-client-worker--fixed).
 
 ### 2. Factory error path leaks the slice and the 9P mount — FIXED (structurally)
 
@@ -511,14 +508,6 @@ provision, previously listed here as not-runnable, is now covered by
   `slirp4netns`/`pasta` reachable from the daemon's user). Note Claude Code must
   reach `api.anthropic.com`, so a usable session needs an egress-capable profile
   — `none` blocks the API entirely; the default is `private`.
-- **Least authority for the per-session client worker.** The `claude-client`
-  formula runs with `@agent` (full host authority) so it can call `provideMount`
-  and look up caps by pet name. Scope this to a per-session guest profile that
-  introduces only the `sandbox-factory`, `fs-mounter`, the workspace
-  `Filesystem`, and the credential — mirroring the `provideGuest` pattern
-  `@endo/claude-container` uses for its bridge — and confirm `provideMount` can
-  be reached (or pre-resolve the Mount cap in the factory and pass it by pet
-  name) under that reduced authority.
 - Reconcile the form's `rootfs` help with the podman driver: either drop
   `host-bind`/`minimal` from the advertised options under the podman backend or
   document that they require `bwrap`.
@@ -566,3 +555,59 @@ errors surface as `abort` events, not `send()` rejections.
 - Decide and document session lifecycle across daemon restarts. The client is a
   pure-`env` formula that **reincarnates** (re-provisioning a fresh container on
   the next `send()`); the podman driver sweeps `endo-sandbox-*` orphans at boot.
+
+### 8. Least authority for the client worker — FIXED
+
+The per-session `claude-client` formula no longer runs with `@agent`. It runs as
+**`sandbox-powers`**, a shared **attenuated powers cap** minted once by
+`factory.js`'s `provisionClientPowers` via an `evaluate` formula that closes over
+`@agent` and re-exports exactly two methods:
+
+- `lookup(name)` — delegated straight to the host (so the client can resolve the
+  `sandbox-factory` / `fs-mounter` / `Filesystem` / `ClaudeCredentials` caps by
+  pet name);
+- `provideMount(path, name)` — **bounded** to paths under the sandbox mount dir
+  (`<CLAUDE_SANDBOX_MOUNT_DIR>/claude-sandbox-…`), so a compromised client cannot
+  `provideMount('/etc', …)` and recover arbitrary host paths through a slice.
+
+Everything else on the host surface — `makeUnconfined`, `provideHostPath`,
+`provideGuest`, `remove`, `store`, `evaluate` — is now **unreachable** from a
+client worker. The client module needed **no functional change**: it only ever
+called `lookup` + `provideMount` on its powers, which is exactly what the
+attenuator exposes; only the authority behind `powers` shrank.
+`test/live-daemon.test.js` asserts the attenuator is minted, exposes only those
+methods (not the privileged ones), bounds `provideMount`, and delegates `lookup`.
+
+Why this shape (the design choices behind it):
+
+- **The powers cap must be host-named, but it is a single shared cap.**
+  `makeUnconfined` is **Host-only** (the `EndoGuest` interface has `evaluate` /
+  `lookup` / `storeValue` but **not** `makeUnconfined` / `provideMount`), and it
+  resolves `powersName` against the **host** petstore. So the cap can't live in a
+  factory-private petstore — but it collapses to **one** well-known host name
+  (`sandbox-powers`) alongside `sandbox-factory` / `fs-mounter`, **not**
+  per-session, so it adds no per-session host-petstore footprint and keeps the
+  peer-rooted-`createSession` GC clean (clients stay un-named).
+- **A per-session guest was rejected.** Because `makeUnconfined` needs a *named*
+  powers formula, a per-session guest/powers would be a host GC root that
+  **lingers** after a peer drops the session (the container + mount are still
+  torn down by `whenCancelled`, but an empty powers formula would leak per
+  session). The shared attenuator avoids that entirely. The cost is that
+  `lookup` is unrestricted (a client could resolve any host pet name *by
+  guessing* — there is no `list`), which is a far smaller over-grant than
+  `@agent`.
+- **The factory stays the trust root, by necessity.** The factory is the
+  irreducible TCB: its job is to `makeUnconfined` the client workers, and
+  `makeUnconfined` *is* the authority to run unconfined Node (arbitrary code), so
+  it cannot be attenuated below that while it is the thing spawning workers. The
+  attenuator is a strict subset of the factory's `host-agent`, but it only lets
+  us scope the **client** — not the factory. Treat the factory's source as part
+  of the trusted compute base (as before).
+
+Residual / future work: bound `lookup` to an explicit per-session allowlist
+(would need the session's caps threaded in by reference, which `makeUnconfined`'s
+string-only `env` can't carry — a `provideGuest`-with-`introducedNames` client
+could, at the cost of the per-session-root leak above); and pass the peer's
+`Filesystem` / `ClaudeCredentials` as **arguments** rather than host pet names
+(the "caps-as-arguments" follow-up), which would also let `lookup` be dropped
+from the attenuator entirely.

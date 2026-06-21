@@ -183,7 +183,8 @@ test('submission formulates a claude-client caplet with the right env', async t 
   t.is(call.powersName, '@main');
   t.regex(call.specifier, /claude-client-module\.js$/);
   t.is(call.opts.resultName, 'my-claude');
-  t.is(call.opts.powersName, '@agent');
+  // Least authority: the client runs as the attenuated powers cap, not @agent.
+  t.is(call.opts.powersName, 'sandbox-powers');
 
   const { env } = call.opts;
   t.is(env.FILESYSTEM_NAME, 'my-fs');
@@ -223,7 +224,7 @@ test('createSession() formulates an un-named client and returns the cap', async 
   t.regex(call.specifier, /claude-client-module\.js$/);
   // Peer-rooted: NOT stored under a host pet name.
   t.is(call.opts.resultName, undefined);
-  t.is(call.opts.powersName, '@agent');
+  t.is(call.opts.powersName, 'sandbox-powers');
   t.is(call.opts.env.FILESYSTEM_NAME, 'my-fs');
   t.is(call.opts.env.CREDENTIALS_NAME, 'peer-creds');
   // The cap is returned to the caller, not stored.
