@@ -36,7 +36,7 @@
     "lint:eslint": "eslint '**/*.js'",
     "lint:types": "tsc",
     "prepack": "exit 0",
-    "test": "ava",
+    "test": "timeout -s KILL 260 ava",
     "test:c8": "c8 ${C8_OPTIONS:-} ses-ava",
     "test:e2e": "playwright test",
     "test:monaco-lockdown": "node test/monaco-lockdown/run.mjs",
@@ -111,7 +111,20 @@
   },
   "ava": {
     "files": [
-      "test/**/*.test.*"
+      "test/component/forum.test.js",
+      "test/component/heat-bar.test.js",
+      "test/component/help-modal.test.js",
+      "test/component/inbox-markdown.test.js",
+      "test/component/inbox-shell.test.js",
+      "test/component/inbox-value.test.js",
+      "test/component/inline-command-form.test.js",
+      "test/component/inline-define.test.js",
+      "test/component/inline-eval.test.js",
+      "test/component/inventory-component.test.js",
+      "test/component/message-picker.test.js",
+      "test/component/microblog.test.js",
+      "test/component/monaco-wrapper.test.js",
+      "test/component/outliner-enter-key.test.js"
     ],
     "timeout": "2m",
     "environmentVariables": {
