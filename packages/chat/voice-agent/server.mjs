@@ -411,7 +411,7 @@ const runProjectAgent = async (project, agent) => {
     status: nProp ? `needs your input · ${nProp} proposal(s)` : 'ran', note: `tools: ${(out.grantedPowers || agent.tools || []).join(', ')}`,
     chatId: id, click: `${BASE_URL}/#chat=${id}`, // tapping the notification opens the run
   });
-  projects.recordAgentRun(project.id, agent.id, { nextAt: projects.computeNextAt(agent.schedule, Date.now()), lastRun: Date.now(), lastRunChatId: id });
+  projects.recordAgentRun(project.id, agent.id, { nextAt: agent.schedule ? projects.computeNextAt(agent.schedule, Date.now()) : null, lastRun: Date.now(), lastRunChatId: id }); // event-only agents have no nextAt
   return { ...out, chatId: id };
 };
 
@@ -1631,8 +1631,8 @@ const handler = async (req, res) => {
         if (u.pathname === '/projects/attach') return json(res, 200, { project: projects.attachChat(body.id, body.chatId) });
         if (u.pathname === '/projects/detach') return json(res, 200, { project: projects.detachChat(body.id, body.chatId) });
         if (u.pathname === '/projects/agents/add') {
-          const agent = projects.addScheduledAgent(body.id, { name: body.name, prompt: body.prompt, tools: body.tools, schedule: body.schedule, model: body.model });
-          projects.updateScheduledAgent(body.id, agent.id, { nextAt: projects.computeNextAt(agent.schedule, Date.now()) });
+          const agent = projects.addScheduledAgent(body.id, { name: body.name, prompt: body.prompt, tools: body.tools, schedule: body.schedule, trigger: body.trigger, model: body.model });
+          if (agent.schedule) projects.updateScheduledAgent(body.id, agent.id, { nextAt: projects.computeNextAt(agent.schedule, Date.now()) }); // event-only agents have no nextAt
           return json(res, 200, { agent: projects.listScheduledAgents(body.id).find(a => a.id === agent.id) });
         }
         if (u.pathname === '/projects/agents/update') return json(res, 200, { agent: projects.updateScheduledAgent(body.id, body.agentId, body.patch || {}) });
@@ -1726,7 +1726,7 @@ const main = async () => {
     try {
       const t0 = Date.now();
       for (const p of projects.listProjects()) for (const a of (p.scheduledAgents || [])) {
-        if (!a.enabled) continue;
+        if (!a.enabled || !a.schedule) continue; // event-only agents (no schedule) aren't clock-fired — the watcher fires them
         const due = a.nextAt ? new Date(a.nextAt).getTime() : NaN;
         if (Number.isNaN(due)) { projects.updateScheduledAgent(p.id, a.id, { nextAt: projects.computeNextAt(a.schedule, t0) }); continue; }
         if (due <= t0) { try { await runProjectAgent(p, a); } catch (e) { log('schedTick run', e.message); } }
@@ -1734,6 +1734,28 @@ const main = async () => {
     } catch (e) { log('schedTick', e.message); } finally { ticking = false; }
   };
   setInterval(() => { schedTick().catch(e => log('schedTick', e && e.message)); }, 30000);
+
+  // ── W4 PROPAGATOR-FIRST: a scheduled agent can be EVENT-triggered (trigger:{kind:'event',source}) — it
+  //    fires the moment a doc lands in the watched vault folder, not on a clock. (dan: "wrap things into
+  //    responsive propagators … kick the review the moment the document was added to the clippings folder.")
+  let evFiring = false; const evDebounce = new Map(); // source → timer
+  const fireEventAgents = async source => {
+    if (evFiring) return; const list = projects.eventAgents(source); if (!list.length) return;
+    evFiring = true;
+    try { for (const { project, agent } of list) { try { log('event-agent:', `${source} → ${project.name} › ${agent.name}`); await runProjectAgent(project, agent); } catch (e) { log('event-agent run', e.message); } } }
+    finally { evFiring = false; }
+  };
+  const watchFolder = (source, dir) => {
+    try {
+      fs.watch(dir, (_evt, fname) => {
+        if (!fname || !String(fname).endsWith('.md')) return; // a note landed
+        clearTimeout(evDebounce.get(source)); evDebounce.set(source, setTimeout(() => fireEventAgents(source).catch(e => log('fireEventAgents', e && e.message)), 4000)); // debounce a burst of writes
+      });
+      log('watching', `${source} (${dir}) for event-triggered agents`);
+    } catch (e) { log('watch', `${source}: ${e.message}`); }
+  };
+  watchFolder('clippings', path.join(VAULT_DIR, 'Clippings'));
+  watchFolder('inbox', path.join(VAULT_DIR, 'inbox'));
   log('scheduled-agent tick armed (30s)');
 
   for (const ip of BIND) { const s = http.createServer(handler); s.on('error', e => log('bind', ip, e.message)); s.listen(PORT, ip, () => log(`field agent on http://${ip}:${PORT}`)); }

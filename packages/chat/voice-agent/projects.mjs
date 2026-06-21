@@ -45,17 +45,21 @@ export const renameProject = (pid, name) => mutate(pid, p => { p.name = String(n
 export const attachChat = (pid, chatId) => mutate(pid, p => { if (!p.chatIds.includes(chatId)) p.chatIds.push(chatId); });
 export const detachChat = (pid, chatId) => mutate(pid, p => { p.chatIds = p.chatIds.filter(c => c !== chatId); });
 
-// A scheduled agent = a recurring prompt run with a TOOL RING (subset of powers) on a cadence.
+// A scheduled agent = a prompt run with a TOOL RING (subset of powers), fired either on a CADENCE or by an
+// EVENT (a propagator — fires the moment something happens, not on a clock; W4 "propagator-first").
 // schedule: { kind:'interval', everyMs } | { kind:'daily', at:'HH:MM' } | { kind:'weekly', day:0-6, at:'HH:MM' }
-export const addScheduledAgent = (pid, { name, prompt, tools = [], schedule, model = 'default', enabled = true }) => {
+// trigger:  { kind:'event', source:'clippings'|'inbox' }  — runs when a doc lands in that vault folder.
+export const addScheduledAgent = (pid, { name, prompt, tools = [], schedule, trigger, model = 'default', enabled = true }) => {
   if (!prompt) throw new Error('scheduled agent needs a prompt');
-  if (!schedule || !schedule.kind) throw new Error('scheduled agent needs a schedule {kind,...}');
+  if (!(schedule && schedule.kind) && !(trigger && trigger.kind)) throw new Error('a scheduled agent needs a schedule {kind,…} OR a trigger {kind:"event", source}');
   return mutate(pid, p => {
-    const agent = { id: id('sched'), name: String(name || 'agent'), prompt: String(prompt), tools: [...tools], schedule, model, enabled: !!enabled, createdAt: nowIso(), lastRun: null, nextAt: null };
+    const agent = { id: id('sched'), name: String(name || 'agent'), prompt: String(prompt), tools: [...tools], schedule: (schedule && schedule.kind) ? schedule : null, trigger: (trigger && trigger.kind) ? trigger : null, model, enabled: !!enabled, createdAt: nowIso(), lastRun: null, nextAt: null };
     p.scheduledAgents.push(agent);
     return agent;
   });
 };
+// every event-triggered agent across all projects subscribed to `source` (e.g. 'clippings').
+export const eventAgents = source => listProjects().flatMap(p => (p.scheduledAgents || []).filter(a => a.enabled && a.trigger && a.trigger.kind === 'event' && a.trigger.source === String(source)).map(a => ({ project: p, agent: a })));
 export const listScheduledAgents = pid => (getProject(pid)?.scheduledAgents) || [];
 export const updateScheduledAgent = (pid, agentId, patch) => mutate(pid, p => {
   const a = p.scheduledAgents.find(x => x.id === agentId);
