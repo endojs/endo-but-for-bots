@@ -330,12 +330,25 @@ const traceStrip = steps => {
 };
 
 // render an agent reply (answer + tools + images + proposal cards)
+// BREAK OUT a custom component into a standalone, versioned module: save its source + declared cells to
+// component-git, then open its own page (/c/<id>). "Sharing converts a message into a module."
+const breakOutComponent = async spec => {
+  if (!spec || spec.type !== 'component') return;
+  const name = (window.prompt('Name this component (it becomes a versioned, standalone module):', '') || '').trim();
+  if (!name) return;
+  setStatus('saving component…');
+  let r; try { r = await (await fetch('/components/break-out', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, name, source: spec.source, cells: spec.cells || [] }) })).json(); }
+  catch (e) { setStatus('break out: ' + e.message); return; }
+  if (!r || !r.ok) { setStatus('break out: ' + ((r && r.error) || 'failed')); return; }
+  setStatus(`🧩 “${r.name}” saved as a component — opening its own page`);
+  try { window.open(r.url, '_blank', 'noopener'); } catch { /* */ } // its standalone home (reads your cap from this origin)
+};
 const renderAgentResponse = r => {
   if (Array.isArray(r.steps) && r.steps.length) log.appendChild(traceStrip(r.steps)); // E6: trace strip above the response
   const body = bubble('agent', r.answer || '…', r.agentId);
   if (r.toolsUsed?.length) { const e = document.createElement('div'); e.className = 'tools'; e.textContent = '⚙ ' + r.toolsUsed.join(', '); body.parentNode.appendChild(e); }
   ((r.images && r.images.length ? r.images : (r.imageUrls || [])) || []).forEach(src => { const im = document.createElement('img'); im.src = src; body.appendChild(im); }); // data-URLs in the moment; durable /uploads urls as fallback (e.g. the share-post path)
-  if (Array.isArray(r.ui) && r.ui.length) renderWidgets(body, r.ui, { cap: chatCap(), onChoice: t => sendChat(t) }); // live/interactive widgets (countdowns, live status, choices)
+  if (Array.isArray(r.ui) && r.ui.length) renderWidgets(body, r.ui, { cap: chatCap(), onChoice: t => sendChat(t), onBreakOut: breakOutComponent }); // live/interactive widgets (countdowns, live status, choices, custom components)
   (r.autoFired || []).forEach(a => { const e = document.createElement('div'); e.className = 'autofired'; e.textContent = `✓ auto-confirmed: ${a.title}${a.ok === false ? ' (failed)' : ''}`; body.parentNode.appendChild(e); }); // fired via a "don't ask again" rule
   (r.proposals || []).forEach(renderProposal); // destructive actions show as confirmable cards
   (r.asks || []).forEach(a => { openAsks.unshift(a); renderAskCard(a); }); // typed questions → answerable cards
@@ -1316,7 +1329,7 @@ const renderTx = () => {
       if (m.who === 'you' && !m.text) b.textContent = '';
       if (m.who === 'you') appendAtt(b, asArr(m.attachUrls).length ? asArr(m.attachUrls) : asArr(m.attachImgs), asArr(m.attachFiles));
       else { const imgs = asArr(m.imageUrls).length ? asArr(m.imageUrls) : asArr(m.images).filter(s => typeof s === 'string' && s.startsWith('data:')); imgs.forEach(src => { const im = document.createElement('img'); im.src = src; b.appendChild(im); }); } // durable /uploads urls survive reload (data-URLs as fallback)
-      if (m.who !== 'you' && asArr(m.ui).length) renderWidgets(b, asArr(m.ui), { cap: chatCap(), onChoice: t => sendChat(t) }); // re-hydrate live widgets: a door re-subscribes (live again), a countdown re-ticks
+      if (m.who !== 'you' && asArr(m.ui).length) renderWidgets(b, asArr(m.ui), { cap: chatCap(), onChoice: t => sendChat(t), onBreakOut: breakOutComponent }); // re-hydrate live widgets: a door re-subscribes (live again), a countdown re-ticks
       if (asArr(m.tools).length) { const e = document.createElement('div'); e.className = 'tools'; e.textContent = '⚙ ' + asArr(m.tools).join(', '); b.parentNode.appendChild(e); }
     } catch (e) { console.error('renderTx message', e); }
   }

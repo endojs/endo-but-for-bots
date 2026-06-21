@@ -585,7 +585,16 @@ const handler = async (req, res) => {
     if (u.pathname === '/trace-app.js') return serveFile(res, 'trace-app.js', 'text/javascript; charset=utf-8');
     if (u.pathname === '/widget.js') return serveFile(res, 'widget.js', 'text/javascript; charset=utf-8');
     if (u.pathname === '/grain-ui.js') return serveFile(res, 'grain-ui.js', 'text/javascript; charset=utf-8');
-    if (u.pathname === '/confined.html') return serveFile(res, 'confined.html', 'text/html; charset=utf-8'); // the sandboxed component runtime (fetched + used as srcdoc)
+    // the sandboxed component runtime. Served with its OWN no-network CSP (a src= iframe uses its response
+    // CSP, NOT the parent's — so the inline runtime runs while all network stays blocked). Loaded with
+    // sandbox="allow-scripts" (opaque origin) so it still can't reach the parent DOM/cap.
+    if (u.pathname === '/confined.html') {
+      try { res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-cache', 'x-content-type-options': 'nosniff', 'content-security-policy': "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; frame-ancestors 'self'" }); res.end(await fs.promises.readFile(path.join(HERE, 'public', 'confined.html'))); }
+      catch { res.writeHead(404, SEC); res.end('not found'); }
+      return undefined;
+    }
+    if (u.pathname === '/component-app.js') return serveFile(res, 'component-app.js', 'text/javascript; charset=utf-8');
+    if (u.pathname.startsWith('/c/') && req.method === 'GET') return serveFile(res, 'component-app.html', 'text/html; charset=utf-8'); // standalone home of a broken-out component (reads its id from the path)
     // Public descriptive catalog (power → what it does) for UI tooltips. No authority, no secrets.
     if (u.pathname === '/powers') return json(res, 200, { powers: POWER_CATALOG });
     // confined-Preact islands bundle (built by `yarn build:islands`) + its sourcemap
@@ -1391,6 +1400,24 @@ const handler = async (req, res) => {
       // COMPONENT = git-as-Endo object: version history / read-at-version / non-destructive revert.
       // ISLAND components (confined-Preact UI, id "island-…") route to islandSource (rewrite client file + rebuild).
       if (u.pathname === '/components/islands') return json(res, 200, { ok: true, islands: islandSource.list() });
+      // BREAK OUT a chat-message component into a standalone, VERSIONED git-object module (Tier 2). The
+      // source + its declared cells are committed to component-git, so it gets history/fork/revert like any
+      // component and a standalone home at /c/<id>. (Cross-user share with a scoped cap is the next step.)
+      if (u.pathname === '/components/break-out') {
+        const src = String(body.source || ''); if (!src.includes('=>') || src.length > 8000) return json(res, 200, { ok: false, error: 'invalid component source' });
+        const cells = (Array.isArray(body.cells) ? body.cells : []).map(String).slice(0, 8);
+        const name = String(body.name || 'component').slice(0, 60);
+        const id = `uicomp-${crypto.randomBytes(5).toString('hex')}`;
+        const files = { 'component.js': src, 'manifest.json': JSON.stringify({ name, cells, kind: 'ui-component', createdAt: new Date().toISOString() }, null, 2) };
+        try { await componentGit.commit(id, files, `break out: ${name}`); } catch (e) { return json(res, 200, { ok: false, error: `could not save: ${(e && e.message) || e}` }); }
+        return json(res, 200, { ok: true, id, name, url: `/c/${id}` });
+      }
+      if (u.pathname === '/components/ui') { // read a broken-out component back (for the standalone render)
+        const id = String(body.id || ''); const snap = await componentGit.readAt(id, String(body.version || 'HEAD'));
+        if (!snap || !snap.files['component.js']) return json(res, 200, { ok: false, error: 'unknown component' });
+        let meta = {}; try { meta = JSON.parse(snap.files['manifest.json'] || '{}'); } catch { /* */ }
+        return json(res, 200, { ok: true, id, source: snap.files['component.js'], cells: meta.cells || [], name: meta.name || id });
+      }
       if (u.pathname === '/components/history') { const id = String(body.id || ''); return islandSource.isIsland(id) ? json(res, 200, { ok: true, versions: await islandSource.history(id) }) : json(res, 200, { ok: true, versions: await componentGit.history(id), grains: customTools.grainData(id) }); }
       if (u.pathname === '/components/read') { const id = String(body.id || ''); const s = await (islandSource.isIsland(id) ? islandSource.readAt(id, String(body.version || 'HEAD')) : componentGit.readAt(id, String(body.version || 'HEAD'))); return json(res, 200, s ? { ok: true, ...s } : { ok: false, error: 'unknown component/version' }); }
       if (u.pathname === '/components/fork') { const id = String(body.id || ''); if (islandSource.isIsland(id)) return json(res, 200, { ok: false, error: 'forking an island component isn\'t supported yet — edit or revert it' }); return json(res, 200, await forkComponentTo(customTools, id, String(body.name || ''), String(body.version || 'HEAD'), 'owner')); }

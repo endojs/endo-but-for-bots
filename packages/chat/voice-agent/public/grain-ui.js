@@ -141,10 +141,16 @@ const renderChoices = (spec, ctx) => {
 //    else. The PARENT holds the cap and brokers each subscription through the same /cells/subscribe stream —
 //    the cap NEVER crosses into the iframe; the iframe only names cell ids the agent declared (which the
 //    server re-validates). So the agent writes free-form UI without gaining any authority. ──
-let _runtimeHtml = null;
-const runtimeHtml = async () => { if (_runtimeHtml == null) { try { _runtimeHtml = await (await fetch('/confined.html')).text(); } catch { _runtimeHtml = '<!doctype html><body>confined runtime unavailable'; } } return _runtimeHtml; };
 const renderComponent = (spec, ctx) => {
   const wrap = document.createElement('div'); wrap.className = 'gw gw-component'; wrap.style.cssText = `${STYLE};margin:8px 0;border:1px solid #30363d;border-radius:12px;overflow:hidden;background:#0d1117`;
+  // a slim header bar with the BREAK-OUT action: save this component as a standalone, versioned module.
+  if (ctx && typeof ctx.onBreakOut === 'function') {
+    const bar = document.createElement('div'); bar.style.cssText = 'display:flex;justify-content:flex-end;padding:4px 6px;border-bottom:1px solid #21262d;background:#0b0e14';
+    const b = document.createElement('button'); b.textContent = '⤴ break out'; b.title = 'Save this as a standalone, shareable component';
+    b.style.cssText = 'all:unset;cursor:pointer;color:#7c5cff;font-size:11px;font-weight:600;padding:2px 8px;border:1px solid #3a2f6a;border-radius:6px';
+    b.onclick = () => ctx.onBreakOut(spec);
+    bar.appendChild(b); wrap.appendChild(bar);
+  }
   const iframe = document.createElement('iframe');
   iframe.setAttribute('sandbox', 'allow-scripts'); // opaque origin: no allow-same-origin, no forms, no parent reach
   iframe.setAttribute('referrerpolicy', 'no-referrer');
@@ -168,7 +174,7 @@ const renderComponent = (spec, ctx) => {
   };
   window.addEventListener('message', onMsg);
   track(() => { window.removeEventListener('message', onMsg); for (const r of releases) { try { r(); } catch { /* */ } } });
-  iframe.srcdoc = ''; runtimeHtml().then(html => { iframe.srcdoc = html; }); // load the trusted runtime; source arrives via postMessage on 'ready'
+  iframe.src = '/confined.html'; // the trusted runtime (own no-network CSP); the agent source arrives via postMessage on 'ready'
   return wrap;
 };
 
