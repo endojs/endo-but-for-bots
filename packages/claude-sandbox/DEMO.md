@@ -9,7 +9,8 @@ capability via a host-side 9P mount ("plan B" — see
 > The commands are accurate against the caplets on this branch but are not wired
 > into CI (same posture as the [9P server DEMO](../9p-server/DEMO.md)).
 > The dependency-injected unit tests (`yarn test`) cover the logic without
-> podman or root.
+> podman or root; a podman-gated `yarn test:integration` exercises a real slice +
+> bind mount + stdout in CI (`claude-sandbox-integration`).
 
 ## Prerequisites
 
@@ -34,7 +35,9 @@ Build one once and reference it from the form's `rootfs` field (or set
 # Containerfile
 FROM docker.io/library/node:22-bookworm-slim
 RUN npm install -g @anthropic-ai/claude-code
-# Claude reads ANTHROPIC_API_KEY from the environment; the factory injects it.
+# Claude reads its credential from the environment; the session injects
+# ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN depending on the
+# credential's kind (see step 4).
 WORKDIR /workspace
 ```
 
@@ -95,20 +98,63 @@ yarn exec endo run --UNCONFINED \
 youruser ALL=(root) NOPASSWD: /usr/bin/mount, /usr/bin/umount
 ```
 
-## 4. Store your Anthropic API key as a `ClaudeCredentials` cap
+## 4. Store your Claude auth as a `ClaudeCredentials` cap
+
+A credential has a `kind`: `apiKey` (a raw Anthropic API key, injected as
+`ANTHROPIC_API_KEY`) or `oauthToken` (a long-lived OAuth token from
+`claude setup-token`, injected as `CLAUDE_CODE_OAUTH_TOKEN`).
+
+**OAuth (subscription login) — recommended for the bring-your-own-auth flow.**
+Mint a headless OAuth token on the machine that owns the Claude login, then
+store it as a credential:
 
 ```bash
-yarn exec endo inbox            # find the "Create Claude Credentials" form, note its number
+claude setup-token            # prints an OAuth token (sk-ant-oat...)
+
+yarn exec endo inbox          # find the "Create Claude Credentials" form, note its number
 yarn exec endo submit <n> \
   name: claude-creds \
-  apiKey: sk-ant-...
+  kind: oauthToken \
+  apiKey: sk-ant-oat...
 # -> 'ClaudeCredentials "claude-creds" created.'
 ```
 
-The key is written to `~/.endo-claude-credentials/claude-creds.key` (mode
-`0600`); the formula store only sees that path.
+**API key:**
+
+```bash
+yarn exec endo submit <n> \
+  name: claude-creds \
+  kind: apiKey \
+  apiKey: sk-ant-...
+```
+
+The secret is written to `~/.endo-claude-credentials/claude-creds.key` (mode
+`0600`); the formula store only sees that path. Because `issue()`/`materialise()`
+are eventual-sends, this cap can live on a **remote peer** that mints a
+short-lived token per session — the host then only ever sees the short-lived
+secret. `E(claude-creds).kind()` reports the kind the session uses to pick the
+env var.
 
 ## 5. Create the sandbox session
+
+There are two ways to create a session from the workspace `Filesystem`.
+
+**A. `createSession` (peer-callable, returns the cap).**
+Call the factory directly; it returns a `ClaudeClient` that is **not** stored
+under a host pet name, so the caller's reference is the session's only root —
+dropping it destroys the session (see step 7). Name the returned cap so you can
+talk to it:
+
+```bash
+yarn exec endo eval --UNCONFINED \
+  'E(f).createSession({ name: "claude-1", filesystem: "project-fs", rootfs: "oci:localhost/claude-code:latest", network: "private", model: "claude-sonnet-4-6", credentials: "claude-creds" })' \
+  f:claude-sandbox-factory \
+  --name claude-1
+```
+
+**B. The `@host` form (operator path, host-rooted).**
+Submission stores the `ClaudeClient` under the chosen pet name in `@host`'s
+petstore:
 
 ```bash
 yarn exec endo inbox            # find the "Create Claude Sandbox" form, note its number
@@ -122,16 +168,19 @@ yarn exec endo submit <n> \
   initialPrompt:
 ```
 
-The factory replies with the session id, the host mountpoint, and the resolved
-backend.
-Under the hood it:
+Either way the session is a first-class `claude-client` formula that provisions
+lazily on the first `send()`:
 
 1. `E(fs-mounter).mount(project-fs, <tmp>/claude-sandbox-claude-1-<id>)` — stands
    up the 9P bridge and runs `mount -t 9p`,
 2. `E(@host).provideMount(<mountpoint>, claude-claude-1-<id>-workspace)`,
-3. `E(sandbox-factory).make({ rootfs, mounts:[{cap → /workspace, mode:'rw'}],
-   network, env:{ ANTHROPIC_API_KEY }, cwd:'/workspace', backend:'podman' })`,
-4. stores a `ClaudeClient` under `claude-1`.
+3. materialise the credential and pick its env var by `kind`
+   (`ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN`),
+4. `E(sandbox-factory).make({ rootfs, mounts:[{cap → /workspace, mode:'rw'}],
+   network, env:{ <credentialVar> }, cwd:'/workspace', backend:'podman' })`.
+
+The credential is referenced by pet name and materialised inside the session at
+spawn time, so no secret enters the formula `env`.
 
 ## 6. Talk to Claude
 
@@ -157,11 +206,26 @@ yarn exec endo eval 'E(c).interrupt()' c:claude-1   # kills the in-flight claude
 
 ## 7. Tear down
 
+`terminate()` stops the session but **leaves the formula**, which re-provisions
+a fresh container on the next `send()`:
+
 ```bash
-yarn exec endo eval 'E(c).terminate()' c:claude-1   # dispose slice + unmount workspace
-# or release everything the mounter created:
-yarn exec endo cancel fs-mounter
+yarn exec endo eval 'E(c).terminate()' c:claude-1   # dispose slice + unmount; formula survives
 ```
+
+To **destroy** the session permanently — dispose the container, unmount the
+workspace, and delete the formula — the teardown is wired to the daemon's
+cancellation, so any of these does the full cleanup:
+
+```bash
+# Form/host-rooted session: remove its pet name.
+yarn exec endo remove claude-1
+# (equivalently: yarn exec endo cancel claude-1)
+```
+
+For a **`createSession`** (peer-rooted) session, just **drop the cap**: when no
+peer retains it, the daemon collects the formula and the same teardown fires.
+See [DESIGN.md § Session lifecycle, teardown & GC](./DESIGN.md#session-lifecycle-teardown--gc).
 
 ## Troubleshooting
 
@@ -176,8 +240,9 @@ yarn exec endo cancel fs-mounter
 - **`podman` pull/permission errors** — verify rootless podman works standalone
   (`podman run --rm localhost/claude-code:latest claude --version`) before
   blaming the slice.
-- **Session vanished after `endo restart`** — expected; `ClaudeClient` holds a
-  live slice and does not reincarnate (see [`README.md`](./README.md) §
-  "Lifecycle").
-  Re-create with step 5.
-```
+- **Container gone after `endo restart`, but the session still answers** —
+  expected: the `ClaudeClient` is a pure-`env` formula that reincarnates, and the
+  next `send()` re-mounts the workspace and mints a fresh container (the podman
+  driver sweeps `endo-sandbox-*` orphans at boot). The workspace and conversation
+  persist in the `Filesystem` cap; `claude --continue` resumes. See
+  [`README.md`](./README.md) § "Lifecycle".
