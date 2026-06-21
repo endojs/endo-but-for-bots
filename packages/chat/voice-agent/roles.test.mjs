@@ -22,16 +22,24 @@ test('catalog shape: every role is a complete config tuple', () => {
     assert.ok(TIERS.has(r.tier), `${r.role}: tier "${r.tier}" must be strong|mid|cheap`);
     assert.ok(VIAS.has(r.via), `${r.role}: via "${r.via}" must be subagent|dev`);
     assert.equal(typeof r.writes, 'boolean', `${r.role}: writes is boolean`);
+    assert.ok(r.isolation === null || r.isolation === 'worktree', `${r.role}: isolation is null or 'worktree'`);
     assert.ok(Array.isArray(r.powers), `${r.role}: powers is an array`);
     const spec = ROLE_CATALOG[r.role];
     assert.ok(spec.prompt && spec.output, `${r.role}: has a system prompt + an I/O contract`);
   }
 });
 
-test('THE WRITE RULE: every write-capable role is single-threaded (via the executor); every fan-out role is read-only', () => {
+test('THE WRITE RULE: every write-capable role is isolated — single-threaded executor OR its own git worktree', () => {
   for (const r of roleList()) {
-    if (r.writes) assert.equal(r.via, 'dev', `write-capable role "${r.role}" MUST route to the single-threaded executor (via:'dev'), not run as a parallel writer`);
-    if (r.via === 'subagent') assert.equal(r.writes, false, `fan-out role "${r.role}" (via:'subagent') must be read-only (writes:false)`);
+    // The single-threaded rule is RETIRED. A writer is race-safe iff it is EITHER routed to the
+    // single-threaded executor (via:'dev') OR confined to its own git worktree (isolation:'worktree')
+    // — so parallel write-capable sub-agents edit disjoint checkouts and cannot stomp each other.
+    if (r.writes) assert.ok(r.via === 'dev' || r.isolation === 'worktree',
+      `write-capable role "${r.role}" MUST be isolated: via:'dev' (single-threaded) or isolation:'worktree' (its own checkout), never a free parallel writer`);
+    // isolation, when present, must be the one known value
+    if (r.isolation != null) assert.equal(r.isolation, 'worktree', `role "${r.role}": isolation must be 'worktree' or unset (got ${JSON.stringify(r.isolation)})`);
+    // a read-only fan-out role carries no worktree (nothing to isolate)
+    if (r.via === 'subagent' && !r.writes) assert.equal(r.isolation, null, `read-only fan-out role "${r.role}" needs no worktree isolation`);
   }
 });
 

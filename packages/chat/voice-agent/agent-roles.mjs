@@ -137,16 +137,18 @@ const ANALYSIS_ROLES = {
   },
 };
 
-// the code/write roles — kept SINGLE-THREADED on the executor (the Blacksmith).
-// They route to a registered code session; the dev is the one active writer and
-// runs its own read-only sub-agents / worktree isolation.
+// the code/write roles. DEV roles run IN-FRAMEWORK (via:'subagent') — confined CodeMode sub-agents
+// granted a dev ring (host shell + home folder + web/research), NOT routed to an opaque Blacksmith.
+// Their every step shows in the trace graph (as employ-children), so the developer's work is
+// dissectable + debuggable. They can also proposeTool (always available) to build reviewed tools.
+//
+// THE WRITE RULE (roles.test.mjs): writes are no longer single-threaded — instead, every
+// write-capable fan-out role declares `isolation: 'worktree'`. employ() then runs its host shell
+// in a fresh git worktree for the duration of the run, so PARALLEL writers edit DISJOINT checkouts
+// and cannot race. (A worktree is race-isolation + a recoverable diff, not a kernel sandbox.)
 const CODE_ROLES = {
-  // DEV roles now run IN-FRAMEWORK (via:'subagent') — confined CodeMode sub-agents granted a dev ring
-  // (host shell + home folder + web/research), NOT routed to an opaque Blacksmith. Their every step
-  // shows in the trace graph (as employ-children), so the developer's work is dissectable + debuggable.
-  // They can also proposeTool (always available) to build reusable, reviewed library tools.
   executor: {
-    label: 'Executor / coder', tier: 'strong', via: 'subagent', writes: true, powers: ['host', 'home', 'web', 'research'],
+    label: 'Executor / coder', tier: 'strong', via: 'subagent', writes: true, isolation: 'worktree', powers: ['host', 'home', 'web', 'research'],
     blurb: 'Implements the change end-to-end in-framework (read+write+run on the host) until tests pass — visible in the trace.',
     prompt: 'You are the EXECUTOR (coder). Implement the change end-to-end IN THIS FRAMEWORK: use hostExec to read/edit/run on the host, your home folder for scratch, and iterate until it works and tests pass. You own the diff. Your steps are traced — work transparently. If a reusable tool emerges, proposeTool it.',
     output: 'the implemented change (diff/patch) and the test/run results proving it works.',
@@ -158,13 +160,13 @@ const CODE_ROLES = {
     output: 'a findings list — each {file, line, severity, issue, suggested fix} — empty if clean.',
   },
   testRunner: {
-    label: 'Test-runner / TDD', tier: 'mid', via: 'subagent', writes: true, powers: ['host', 'home'],
+    label: 'Test-runner / TDD', tier: 'mid', via: 'subagent', writes: true, isolation: 'worktree', powers: ['host', 'home'],
     blurb: 'Red-green-refactor in-framework: failing test first, minimal code to pass, then clean up.',
     prompt: 'You are a TDD agent. Enforce red-green-refactor via hostExec: FIRST write a failing test (Red), THEN the minimal code to make it pass (Green), THEN refactor while green. Do not write implementation before the test exists.',
     output: 'the new test(s), the implementation, and the red→green run output.',
   },
   debugger: {
-    label: 'Debugger', tier: 'strong', via: 'subagent', writes: true, powers: ['host', 'home', 'web', 'research'],
+    label: 'Debugger', tier: 'strong', via: 'subagent', writes: true, isolation: 'worktree', powers: ['host', 'home', 'web', 'research'],
     blurb: 'Reproduce → localize → hypothesize → fix → verify in-framework, ideally from a failing test.',
     prompt: 'You are a DEBUGGER. Via hostExec: reproduce the bug (write a failing test from the report if you can), localize the root cause, form a hypothesis, apply the smallest fix, and VERIFY the test now passes. Explain the root cause, not just the symptom.',
     output: 'root cause, the fix (diff), and the verifying test going from failing to passing.',
@@ -301,6 +303,6 @@ export const roleList = () => harden(Object.keys(ROLE_CATALOG)
   .filter(role => ROLE_CATALOG[role] && typeof ROLE_CATALOG[role] === 'object')
   .map(role => {
     const s = ROLE_CATALOG[role];
-    return { role, label: s.label, tier: s.tier, via: s.via, writes: s.writes, powers: [...(Array.isArray(s.powers) ? s.powers : [])], blurb: s.blurb };
+    return { role, label: s.label, tier: s.tier, via: s.via, writes: s.writes, isolation: s.isolation || null, powers: [...(Array.isArray(s.powers) ? s.powers : [])], blurb: s.blurb };
   }));
 harden(roleList);

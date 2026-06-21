@@ -79,6 +79,93 @@ const HA_URL = (process.env.HOMEASSISTANT_URL || 'http://192.168.50.11:8123').re
 const VM_HOST = process.env.VM_HOST || 'agent@10.89.0.3'; // the agent-code dev persona
 const newSwiss = () => crypto.randomBytes(16).toString('hex');
 
+// ── per-sub-agent git WORKTREE isolation ─────────────────────────────────────
+// A write-capable role/dev sub-agent (executor/tester/debugger) runs its host shell
+// in its OWN git worktree for the duration of its work, so parallel writers edit
+// DISJOINT checkouts and cannot race. This is the mechanism that retires the old
+// "writes are single-threaded" rule (roles.test.mjs THE WRITE RULE).
+//   IMPORTANT — a worktree is RACE-ISOLATION + a recoverable diff, NOT a security
+//   sandbox. `host` is ambient host-root by construction (a shell command can still
+//   `cd` elsewhere or use absolute paths); the worktree only sets the DEFAULT working
+//   dir + guards the cwd PARAMETER. True escape-confinement is the @endo/sandbox
+//   (bwrap/podman) layer — tracked separately (see endo_sandbox_genie memory).
+const WORKTREE_DIR = process.env.FIELD_AGENT_WORKTREE_DIR || '/home/dan/.local/state/field-agent/worktrees';
+const WORKTREE_REPO = process.env.FIELD_AGENT_WORKTREE_REPO || '/home/dan/endo-bfb-llm'; // self-improvement default; override per-deployment
+const WORKTREE_BASE_REF = process.env.FIELD_AGENT_WORKTREE_BASE || 'HEAD';
+const shq = s => `'${String(s).replace(/'/g, `'\\''`)}'`; // POSIX single-quote a value for shell interpolation
+const wtSlug = s => String(s).replace(/[^\w.-]+/g, '_').slice(0, 60) || 'wt';
+
+// Resolve an agent-supplied cwd against a worktree JAIL dir; refuse to escape it.
+// Exported so the escape logic — the security-critical part — is unit-testable offline.
+export const resolveJailedCwd = (jail, cwd) => {
+  if (!cwd) return harden({ ok: true, cwd: jail });
+  const resolved = path.resolve(jail, String(cwd).replace(/^\/+/, '')); // treat as relative-to-jail
+  if (resolved !== jail && !resolved.startsWith(jail + path.sep)) return harden({ ok: false, error: `cwd escapes your worktree (${jail})` });
+  // Symlink defense: the syntactic check above is fooled by a symlink INSIDE the worktree that points
+  // out (the agent could `ln -s /etc esc` then cwd:'esc'; `cd` follows it). Resolve symlinks on the jail
+  // and the deepest existing ancestor of the target, then re-check containment. (Best-effort: in a unit
+  // context where the jail dir doesn't exist, realpath throws → the syntactic guard stands.)
+  try {
+    const realJail = fs.realpathSync(jail);
+    let probe = resolved;
+    while (!fs.existsSync(probe) && path.dirname(probe) !== probe) probe = path.dirname(probe);
+    const realProbe = fs.realpathSync(probe);
+    if (realProbe !== realJail && !realProbe.startsWith(realJail + path.sep)) return harden({ ok: false, error: 'cwd resolves (via a symlink) outside your worktree' });
+  } catch { /* realpath unavailable (e.g. jail missing in a unit test) → keep the syntactic result */ }
+  return harden({ ok: true, cwd: resolved });
+};
+harden(resolveJailedCwd);
+
+// The worktree manager runs on the UNCONFINED host shell (it IS trusted harness, not
+// the sub-agent). create() spins a fresh worktree+branch off WORKTREE_BASE_REF;
+// teardown() COMMITS any dirty work to the branch FIRST (never lose a sub-agent's
+// diff), then removes the dir — and on commit failure it REFUSES to remove (leaves
+// the work on disk). The branch is never auto-merged or deleted: promotion is the
+// operator's gated call (matches the dev-spawner / blacksmith merge-back discipline).
+export const makeWorktrees = ({ host, repo = WORKTREE_REPO, dir: baseDir = WORKTREE_DIR, baseRef = WORKTREE_BASE_REF }) => {
+  const dirFor = id => path.join(baseDir, wtSlug(id));
+  const branchFor = id => `agentwt/${wtSlug(id)}`;
+  const create = async id => {
+    const dir = dirFor(id); const branch = branchFor(id);
+    await host.exec(`mkdir -p ${shq(baseDir)}`, { timeoutMs: 15000 });
+    const add = () => host.exec(`git -C ${shq(repo)} worktree add --quiet -b ${shq(branch)} ${shq(dir)} ${shq(baseRef)}`, { timeoutMs: 180000 });
+    let r = await add();
+    if (!r.ok) {
+      // SAFE reclaim: `git worktree prune` ONLY garbage-collects worktree REGISTRATIONS whose dirs are
+      // already gone — it never deletes a branch or removes any work. We deliberately do NOT force-delete
+      // the branch or rm the dir: ids are unique per spawn, so a real collision is astronomically unlikely,
+      // and force-reclaiming could destroy un-merged work on a leaked branch. On persistent failure we
+      // REFUSE (throw) rather than destroy anything.
+      await host.exec(`git -C ${shq(repo)} worktree prune`, { timeoutMs: 30000 });
+      r = await add();
+      if (!r.ok) throw new Error(`git worktree add failed (refusing to force-reclaim an existing branch/dir so no un-merged work is lost): ${String(r.stderr || r.stdout || '').slice(0, 200)}`);
+    }
+    return harden({ id: String(id), dir, branch, repo });
+  };
+  const teardown = async (id, { commitMessage = 'agent worktree' } = {}) => {
+    const dir = dirFor(id); const branch = branchFor(id);
+    const st = await host.exec(`git -C ${shq(dir)} status --porcelain`, { timeoutMs: 30000 });
+    const dirty = !!(st.ok && String(st.stdout || '').trim());
+    let committed = false;
+    if (dirty) {
+      // `add -A` captures all tracked + untracked NON-ignored changes (the sub-agent's actual source
+      // work). Gitignored content (node_modules, build output, *.o) is regenerable and intentionally NOT
+      // preserved — committing it would bloat the shared repo and is the wrong semantics. The committed
+      // branch is exactly the reviewable diff.
+      const c = await host.exec(`git -C ${shq(dir)} add -A && git -C ${shq(dir)} -c user.name=${shq('Agent C worktree')} -c user.email=${shq('agent-c@archua.local')} commit --quiet -m ${shq(commitMessage)}`, { timeoutMs: 60000 });
+      committed = c.ok;
+      // SAFE TEARDOWN: commit failed → do NOT remove; leave the work on disk + surface it. A leaked
+      // worktree is recoverable; lost work is not. (next create() with this id prunes the stale dir.)
+      if (!committed) return harden({ removed: false, committed: false, dirty: true, branch, dir, note: 'commit failed — worktree LEFT IN PLACE so no work is lost' });
+    }
+    const rm = await host.exec(`git -C ${shq(repo)} worktree remove --force ${shq(dir)} && git -C ${shq(repo)} worktree prune`, { timeoutMs: 30000 });
+    return harden({ removed: rm.ok, committed, dirty, branch, dir,
+      note: rm.ok ? (dirty ? `work committed to ${branch}` : 'clean — nothing to keep') : `remove failed — ${branch} + dir preserved` });
+  };
+  return harden({ create, teardown, dir: baseDir, repo, baseRef });
+};
+harden(makeWorktrees);
+
 // Read a secret from the process env, falling back to ~/.env (the systemd unit
 // doesn't source ~/.env; the long-lived HA token lives there as HOMEASSISTANT=).
 let dotenvCache;
@@ -340,9 +427,20 @@ const makeAffordances = ({ outDir }) => {
     host: Far('HostShell', {
       help: () => 'Full shell over THIS host (archua) as the operator. exec(cmd,{cwd}) runs immediately (the grant is the authorization). Coarse ambient host-root — clone/build/test/edit on the host. Equivalent to the operator\'s claude-code.',
       describe: () => harden({ kind: 'host-shell', host: 'archua (local)' }),
-      exec: async (cmd, { cwd, timeoutMs = 300000 } = {}) => new Promise(resolve => {
-        const full = cwd ? `cd ${JSON.stringify(String(cwd))} && ${String(cmd || '')}` : String(cmd || '');
-        execFile('bash', ['-lc', full], { timeout: Math.min(Number(timeoutMs) || 300000, 600000), maxBuffer: 8 * 1024 * 1024, cwd: process.env.HOME || '/home/dan' }, (err, so, se) => resolve(harden({ ok: !err, code: err?.code ?? 0, killed: !!err?.killed, stdout: String(so || '').slice(0, 40000), stderr: String(se || '').slice(0, 12000) })));
+      // `jail` (optional) confines this shell to a worktree dir: execFile STARTS there and an
+      // agent-supplied `cwd` is resolved-relative + refused if it escapes. Absent jail = byte-for-byte
+      // the prior behavior (start in HOME). NOTE: not a kernel sandbox — see the worktree-isolation note.
+      exec: async (cmd, { cwd, timeoutMs = 300000, jail } = {}) => new Promise(resolve => {
+        let startDir = process.env.HOME || '/home/dan';
+        let effectiveCwd = cwd;
+        if (jail) {
+          startDir = jail;
+          const j = resolveJailedCwd(jail, cwd);
+          if (!j.ok) { resolve(harden({ ok: false, code: 1, killed: false, stdout: '', stderr: j.error })); return; }
+          effectiveCwd = j.cwd === jail ? null : j.cwd; // null → run in the jail dir itself
+        }
+        const full = effectiveCwd ? `cd ${JSON.stringify(String(effectiveCwd))} && ${String(cmd || '')}` : String(cmd || '');
+        execFile('bash', ['-lc', full], { timeout: Math.min(Number(timeoutMs) || 300000, 600000), maxBuffer: 8 * 1024 * 1024, cwd: startDir }, (err, so, se) => resolve(harden({ ok: !err, code: err?.code ?? 0, killed: !!err?.killed, stdout: String(so || '').slice(0, 40000), stderr: String(se || '').slice(0, 12000) })));
       }),
     }),
     // `delegate` is wired per-node (it needs the node's own sub-bundle builder),
@@ -394,6 +492,8 @@ harden(POWERS);
 //   { locator, register, rootNode, rootSwiss(set later), toolboxFor, manifestFor }
 export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFile } = {}) => {
   const aff = makeAffordances({ outDir });
+  // worktree manager for write-capable role sub-agents (runs on the UNCONFINED host shell).
+  const worktrees = makeWorktrees({ host: aff.host });
   // locator: swissnum → { node }  (every entry is an agent-node; the root and
   // every shared sub-bundle are nodes, so any holder can manage what it holds).
   const locator = new Map();
@@ -699,7 +799,7 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
       run: async ({ cmd, cwd }) => aff.vm.exec(String(cmd || ''), { cwd }) },
     hostExec: { reversible: false, args: { cmd: 'string — shell command, runs on the archua host as the operator', cwd: 'string — optional working directory (default ~)' },
       description: 'Run a shell command on THIS host (archua) as the operator — the dev/dogfood harness. Immediate (the grant is the authorization). COARSE host-root authority: clone repos, run builds/tests/evals, edit files — equivalent to the operator\'s own shell. Returns stdout/stderr/exit code. You have this only if you hold the `host` power.',
-      run: async ({ cmd, cwd }) => aff.host.exec(String(cmd || ''), { cwd }) },
+      run: async ({ cmd, cwd }, agent, ctx = {}) => aff.host.exec(String(cmd || ''), { cwd, jail: (ctx && ctx.wtDir) || undefined }) },
     proposeSystemPrompt: { reversible: false, args: { prompt: 'string — the new instructions block (replaces your current editable system-prompt section)' },
       description: 'PROPOSE a change to your OWN system prompt (the editable instructions block). Does NOT apply — the user confirms the diff first.',
       run: async ({ prompt }, agent) => propose({ type: 'system-prompt', power: 'selfPrompt', agent, title: 'Modify system prompt', summary: 'edit the agent\'s own instructions',
@@ -775,7 +875,7 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
     // Route the timer/notes verbs through THIS cap's binding (a granular share is scoped to one
     // timer / a vault subtree); the root/full cap has no binding → falls back to the full
     // aff.timers / aff.notes (unchanged).
-    ctx = { ...ctx, timers: (node.timersBinding && node.timersBinding()) || aff.timers, notes: (node.notesBinding && node.notesBinding()) || aff.notes, ownPowers: [...(node.powers || powers)] };
+    ctx = { ...ctx, timers: (node.timersBinding && node.timersBinding()) || aff.timers, notes: (node.notesBinding && node.notesBinding()) || aff.notes, wtDir: (node.cwdBinding && node.cwdBinding()) || null, ownPowers: [...(node.powers || powers)] };
     // node-bound propose: tags every proposal with WHO created it, so "don't ask
     // again" rules are scoped to this agent (root, share, or specialist).
     const np = spec => propose({ ...spec, agent: node.id });
@@ -830,9 +930,10 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
       // tier, I/O contract }. The entry agent is the ORCHESTRATOR; employ() runs a role
       // in an ISOLATED context and returns ONLY its distilled result (narrow return
       // contract). Read/analysis roles → a FRESH confined sub-node (parallelizable).
-      // Code/WRITE roles → the SINGLE-THREADED executor (the Blacksmith) — writes stay
-      // single-threaded (the multi-agent-for-coding synthesis). Like delegateTask, an
-      // in-flight employ is barge-in-cancellable.
+      // Code/WRITE roles (isolation:'worktree') → a fresh sub-node whose host shell is
+      // confined to its OWN git worktree, so parallel writers edit disjoint checkouts and
+      // can't race (this RETIRES the old single-threaded-writes rule). Like delegateTask,
+      // an in-flight employ is barge-in-cancellable.
       let activeEmploy = null;
       toolbox.employ = harden({
         run: async ({ role, task, powers: want, model, nickname } = {}) => {
@@ -851,10 +952,23 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
           if (Array.isArray(want) && want.length) { const keep = new Set(want); for (const p of [...ring]) if (!keep.has(p)) ring.delete(p); } // optional caller-narrowing only SUBTRACTS
           const rkey = crypto.randomBytes(3).toString('hex');
           const nick = nickId(nickname);
-          const subNode = makeAgentNode({ powers: [...ring], labelOf: nick || `role-${spec.role}-${rkey}`, haBinding: node.haBinding, agBinding: node.agBinding, id: nick ? `${nick}-${rkey}` : `role-${spec.role}-${newSwiss()}` });
+          const wtId = nick ? `${nick}-${rkey}` : `${spec.role}-${rkey}`;
+          // A WRITE-CAPABLE role (isolation:'worktree') that holds the host shell gets its OWN git
+          // worktree for the duration of the run, so PARALLEL writers edit disjoint checkouts and
+          // cannot race. (home/fileWrite are already per-node isolated; hostExec was the one shared
+          // write seam.) The worktree confines hostExec's default dir + guards its cwd arg — it is
+          // race-isolation + a recoverable diff, NOT a kernel sandbox (host stays ambient root).
+          let wt = null;
+          let wtInfo = null;
+          if (spec.isolation === 'worktree' && ring.has('host')) {
+            try { wt = await worktrees.create(wtId); }
+            catch (e) { return harden({ ok: false, role: spec.role, error: `worktree setup failed: ${String((e && e.message) || e)}` }); }
+          }
+          const subNode = makeAgentNode({ powers: [...ring], labelOf: nick || `role-${spec.role}-${rkey}`, haBinding: node.haBinding, agBinding: node.agBinding, cwdBinding: wt ? () => wt.dir : null, id: nick ? `${nick}-${rkey}` : `role-${spec.role}-${newSwiss()}` });
           const sub = subNode.toolbox(ctx); // inherit the originating chat (deep-links)
           const proposalIds = []; const autoFired = []; const toolsUsed = [];
           const ac = new AbortController(); activeEmploy = ac;
+          let out = null;
           try {
             const wantOpus = model === 'opus' || model === 'strong';
             const wantLocal = model === 'gemma' || model === 'default' || model === 'local';
@@ -862,16 +976,24 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
             if (wantOpus || (spec.tier === 'strong' && !wantLocal)) {
               const prompt = `${spec.prompt}\n\nTASK:\n${taskS}\n\nReturn: ${spec.output}`;
               const r = await runOpusDelegate({ prompt, toolbox: sub.toolbox, manifest: sub.manifest, grantedPowers: [...ring], signal: ac.signal });
-              if (!r.error) return harden({ ok: true, role: spec.role, via: 'opus', tier: spec.tier, answer: r.answer, toolsUsed: r.toolsUsed || [], granted: [...ring] });
+              if (!r.error) out = harden({ ok: true, role: spec.role, via: 'opus', tier: spec.tier, answer: r.answer, toolsUsed: r.toolsUsed || [], granted: [...ring] });
               // else fall through to local gemma (e.g. no ANTHROPIC_API_KEY)
             }
-            const r = await AGENT_RUNNER({ toolbox: sub.toolbox, manifest: sub.manifest, userText: `TASK:\n${taskS}\n\nReturn: ${spec.output}`, persona: spec.prompt, signal: ac.signal,
-              // a REAL caller model id wins; the "gemma"/"local"/"default" sentinels (wantLocal) and
-              // the tier fall through to localModelFor (the role's local model, 'default' today).
-              model: (model && !wantOpus && !wantLocal) ? String(model) : localModelFor(spec.tier),
-              onStep: s => { if (s.kind !== 'tool' || !s.result) return; if (s.result.proposed && s.result.id) proposalIds.push(s.result.id); if (s.result.autoConfirmed) autoFired.push({ title: s.result.title, type: s.result.type, ok: s.result.fired !== false }); if (s.name) toolsUsed.push({ name: s.name }); } });
-            return harden({ ok: true, role: spec.role, via: 'local', tier: spec.tier, answer: r.answer, toolsUsed: toolsUsed.length ? toolsUsed : (r.toolsUsed || []), proposalIds, autoFired, granted: [...ring] });
-          } finally { if (activeEmploy === ac) activeEmploy = null; }
+            if (!out) {
+              const r = await AGENT_RUNNER({ toolbox: sub.toolbox, manifest: sub.manifest, userText: `TASK:\n${taskS}\n\nReturn: ${spec.output}`, persona: spec.prompt, signal: ac.signal,
+                // a REAL caller model id wins; the "gemma"/"local"/"default" sentinels (wantLocal) and
+                // the tier fall through to localModelFor (the role's local model, 'default' today).
+                model: (model && !wantOpus && !wantLocal) ? String(model) : localModelFor(spec.tier),
+                onStep: s => { if (s.kind !== 'tool' || !s.result) return; if (s.result.proposed && s.result.id) proposalIds.push(s.result.id); if (s.result.autoConfirmed) autoFired.push({ title: s.result.title, type: s.result.type, ok: s.result.fired !== false }); if (s.name) toolsUsed.push({ name: s.name }); } });
+              out = harden({ ok: true, role: spec.role, via: 'local', tier: spec.tier, answer: r.answer, toolsUsed: toolsUsed.length ? toolsUsed : (r.toolsUsed || []), proposalIds, autoFired, granted: [...ring] });
+            }
+          } finally {
+            if (activeEmploy === ac) activeEmploy = null;
+            // Tear down the worktree LAST (cancel-safe): commit any diff to its branch, then remove.
+            if (wt) { try { wtInfo = await worktrees.teardown(wtId, { commitMessage: `${spec.role}: ${taskS.slice(0, 72)}` }); } catch (e) { wtInfo = harden({ removed: false, error: String((e && e.message) || e), branch: wt.branch }); } }
+          }
+          const result = out || harden({ ok: false, role: spec.role, error: 'the role produced no result' });
+          return wtInfo ? harden({ ...result, worktree: wtInfo }) : result;
         },
         abort: () => { try { activeEmploy?.abort(); } catch { /* best effort */ } },
       });
@@ -1235,12 +1357,12 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
 
   // A node = a holder of a SUBSET of powers, with the right to use + re-share
   // them. The root holds ALL_POWERS. share() mints a child node (single power).
-  const makeAgentNode = ({ powers, labelOf = 'agent', isRoot = false, haBinding = null, agBinding = null, contactsBinding = null, homeBinding = null, timersBinding = null, notesBinding = null, id = null }) => {
+  const makeAgentNode = ({ powers, labelOf = 'agent', isRoot = false, haBinding = null, agBinding = null, contactsBinding = null, homeBinding = null, timersBinding = null, notesBinding = null, cwdBinding = null, id = null }) => {
     const powerSet = new Set(powers);
     const shares = new Map(); // swiss → { power, label, createdAt, url, ha? }
     // homeBinding = () → this cap's home folder object (its own sub-dir).
     const home = homeBinding || (() => makeHome(isRoot ? 'root' : `cap-${labelOf}`.replace(/[^\w-]/g, '_').slice(0, 40)));
-    const node = { powers: powerSet, isRoot, haBinding, agBinding, contactsBinding, homeBinding: home, timersBinding, notesBinding };
+    const node = { powers: powerSet, isRoot, haBinding, agBinding, contactsBinding, homeBinding: home, timersBinding, notesBinding, cwdBinding };
     // Stable agent identity for auto-confirm rules. Must be UNIQUE per cap — shares
     // pass their swissnum as `id` so two same-LABEL shares don't collide (and thus
     // can't leak one's "don't ask again" rule onto the other). Specialists pass no
