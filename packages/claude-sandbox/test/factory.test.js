@@ -202,6 +202,46 @@ test('submission formulates a claude-client caplet with the right env', async t 
   t.regex(mock.replies[0].body.join('\n'), /ClaudeClient "my-claude" created/);
 });
 
+test('createSession() formulates an un-named client and returns the cap', async t => {
+  const fsCap = { kind: 'fake-fs' };
+  const mock = makeMockPowers();
+  const host = makeMockHostAgent({ filesystems: { 'my-fs': fsCap } });
+
+  const factory = make(mock.powers, undefined, wireDeps(mock, host));
+
+  const client = await factory.createSession(
+    harden({
+      name: 'peer-claude',
+      filesystem: 'my-fs',
+      network: 'private',
+      credentials: 'peer-creds',
+    }),
+  );
+
+  t.is(host.unconfinedCalls.length, 1);
+  const call = host.unconfinedCalls[0];
+  t.regex(call.specifier, /claude-client-module\.js$/);
+  // Peer-rooted: NOT stored under a host pet name.
+  t.is(call.opts.resultName, undefined);
+  t.is(call.opts.powersName, '@agent');
+  t.is(call.opts.env.FILESYSTEM_NAME, 'my-fs');
+  t.is(call.opts.env.CREDENTIALS_NAME, 'peer-creds');
+  // The cap is returned to the caller, not stored.
+  t.is(client.kind, 'fake-client');
+});
+
+test('createSession() rejects an unknown filesystem', async t => {
+  const mock = makeMockPowers();
+  const host = makeMockHostAgent({ filesystems: {} });
+  const factory = make(mock.powers, undefined, wireDeps(mock, host));
+
+  await t.throwsAsync(
+    () => factory.createSession(harden({ name: 'x', filesystem: 'missing' })),
+    { message: /Unknown filesystem/ },
+  );
+  t.is(host.unconfinedCalls.length, 0);
+});
+
 test('submission with an unknown filesystem replies with an error', async t => {
   const mock = makeMockPowers();
   const host = makeMockHostAgent({ filesystems: {} });
