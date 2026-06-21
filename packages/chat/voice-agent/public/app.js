@@ -2213,17 +2213,43 @@ const renderGallery = () => {
   const grid = document.createElement('div'); grid.style.cssText = GALLERY_GRID;
   for (const s of gallerySamples()) grid.appendChild(galleryCard(s.title, s.sub, slot => renderWidgets(slot, [s.spec], { cap, onChoice: t => setStatus(`(gallery sample) you'd choose: ${t}`) })));
   host.appendChild(grid);
-  // 2) YOUR library's broken-out components, each rendered live with GENERATED dummy data.
   (async () => {
+    // 2) YOUR library's broken-out components, each rendered live with GENERATED dummy data.
     let comps = [];
     try { comps = ((await (await fetch('/components/list-ui', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap }) })).json()).components) || []; } catch { /* */ }
-    if (!comps.length || !$('component-gallery')) return;
-    const hd = document.createElement('div'); hd.className = 'shares-sec'; hd.style.cssText = 'margin:16px 0 8px'; hd.textContent = `Your components (${comps.length}) · sample data`;
-    host.appendChild(hd);
-    const g2 = document.createElement('div'); g2.style.cssText = GALLERY_GRID;
-    for (const c of comps) g2.appendChild(galleryCard(c.name, c.cells && c.cells.length ? `cells: ${c.cells.join(', ')}` : 'no live cells', slot => renderWidgets(slot, [{ type: 'component', source: c.source, cells: c.cells || [], height: 120 }], { cap, sample: true })));
-    host.appendChild(g2);
+    if (comps.length && $('component-gallery')) {
+      const hd = document.createElement('div'); hd.className = 'shares-sec'; hd.style.cssText = 'margin:16px 0 8px'; hd.textContent = `Your components (${comps.length}) · sample data`;
+      host.appendChild(hd);
+      const g2 = document.createElement('div'); g2.style.cssText = GALLERY_GRID;
+      for (const c of comps) g2.appendChild(galleryCard(c.name, c.cells && c.cells.length ? `cells: ${c.cells.join(', ')}` : 'no live cells', slot => renderWidgets(slot, [{ type: 'component', source: c.source, cells: c.cells || [], height: 120 }], { cap, sample: true })));
+      host.appendChild(g2);
+    }
+    // 3) ISLANDS — the framework's own confined-Preact chrome, rendered through the real islands bundle
+    //    (renderConfined) with dummy data. New islands self-register here as they ship a preview shape.
+    let islands = [];
+    try { islands = ((await (await fetch('/components/islands', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap }) })).json()).islands) || []; } catch { /* */ }
+    if (islands.length && $('component-gallery')) {
+      const hd = document.createElement('div'); hd.className = 'shares-sec'; hd.style.cssText = 'margin:16px 0 8px'; hd.textContent = `Islands · framework chrome (sample data)`;
+      host.appendChild(hd);
+      const g3 = document.createElement('div'); g3.style.cssText = GALLERY_GRID;
+      for (const isl of islands) g3.appendChild(galleryCard(isl.name, 'confined-Preact island', slot => {
+        const prev = ISLAND_PREVIEW[isl.id];
+        if (prev && window.__fieldIslands) { prev(slot); return; }
+        slot.className = 'sub'; slot.style.cssText = 'font-size:11px;padding:6px 2px';
+        slot.textContent = isl.id === 'island-trace' ? '🧊 3D conversation trace — appears live under each agent response' : 'no sample preview yet';
+      }));
+      host.appendChild(g3);
+    }
   })();
+};
+// each island previews with its OWN dummy data through the real islands bundle (renderConfined). Keyed by
+// island id so a new island just adds an entry (toward islands shipping their own sample data in-bundle).
+const ISLAND_PREVIEW = {
+  'island-shares-panel': slot => window.__fieldIslands.renderShares(slot, {
+    items: [{ label: 'Front door', tag: 'ha-lock: Front door · read-only' }, { label: 'Research team', tag: 'web' }],
+    components: [{ toolName: 'GPU image-gen', mode: 'instance', price: '0.05 USD/use', used: 3, atten: 'rate 10/min', revoked: false }],
+    earned: '1.20 USD',
+  }, { onCopy() {}, onQr() {}, onRevoke() {}, onCopyComp() {}, onRevokeComp() {} }),
 };
 
 const refreshComponents = async () => {
