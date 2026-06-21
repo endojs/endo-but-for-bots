@@ -30,6 +30,13 @@ import {
 // podman slice, a real bind-mounted workspace, and a real process's
 // stdout flowing over the @endo/exo-stream wire protocol into
 // `parseStreamJsonLines` / `ClaudeClient`.
+//
+// The workspace here is a plain host tmpdir bound straight into the slice,
+// which deliberately skips the host-side 9P projection. The *real* "plan B"
+// path — a Filesystem cap mounted over real kernel 9P, then bind-mounted
+// into the slice — is covered end-to-end by `ninep-flow.test.js`
+// (`yarn test:ninep`), which additionally needs a 9P-capable kernel and
+// mount privilege.
 
 const ALPINE_REF = 'docker.io/library/alpine:3.19';
 

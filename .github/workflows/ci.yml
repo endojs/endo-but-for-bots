@@ -310,6 +310,22 @@ jobs:
       - name: Run claude-sandbox live-daemon test
         run: yarn workspace @endo/claude-sandbox run test:live
 
+      # The only automated coverage of the real "plan B" workspace
+      # projection: a Filesystem cap mounted over real kernel 9P on the
+      # host, bind-mounted into a podman slice, and read from inside the
+      # container. mount-caplet.test.js fakes mount(2) and the integration
+      # test above bind-mounts a plain tmpdir, so neither exercises 9P.
+      # Verified working on ubuntu-22.04/24.04/latest (GitHub runner kernels
+      # ship CONFIG_9P_FS and grant passwordless sudo). NINEP_REQUIRE=1 makes
+      # a runner that loses that capability a red result rather than a silent
+      # green; NINEP_SUDO=1 routes the privileged mount(2)/umount(2) through
+      # sudo.
+      - name: Run claude-sandbox 9P sandbox-flow test
+        env:
+          NINEP_REQUIRE: '1'
+          NINEP_SUDO: '1'
+        run: yarn workspace @endo/claude-sandbox run test:ninep
+
   test-async-hooks:
     name: test-async-hooks
 

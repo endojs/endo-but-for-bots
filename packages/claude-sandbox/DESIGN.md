@@ -447,6 +447,21 @@ process's stdout flowing over the `@endo/exo-stream` wire protocol into
 A second case (gated on `CLAUDE_SANDBOX_TEST_IMAGE`) drives a real `claude`
 through `ClaudeClient.send`.
 
+The real **host-side 9P projection** — the "plan B" path the integration test
+above deliberately skips by bind-mounting a plain tmpdir — is now covered
+end-to-end by [`test/ninep-flow.test.js`](./test/ninep-flow.test.js)
+(`yarn test:ninep`, run in CI in the `claude-sandbox-integration` job with
+`NINEP_REQUIRE=1 NINEP_SUDO=1`). It mounts a `node-fs` `Filesystem` cap over
+real kernel 9P via the unmodified `mount-caplet`, reads it back through the
+mountpoint, then bind-mounts that 9P mountpoint into an `@endo/sandbox` podman
+slice and reads the file from inside the container as stream-json. A matrix
+probe (PR exploring `ubuntu-22.04`/`24.04`/`latest`) confirmed GitHub-hosted
+runner kernels ship `CONFIG_9P_FS` and grant passwordless `sudo mount -t 9p`,
+so this runs on stock CI rather than needing a self-hosted runner. (One footgun
+it surfaced: a **synchronous** read of a 9P mount served by an **in-process**
+bridge deadlocks the event loop — the read must be async so libuv services the
+bridge concurrently.)
+
 The formula-identity constraint itself is now covered against a real daemon by
 [`test/live-daemon.test.js`](./test/live-daemon.test.js) (`yarn test:live`, run
 in CI in the `claude-sandbox-integration` job). It boots an Endo daemon via
@@ -465,11 +480,11 @@ paths end to end:
 
 These cases stop short of `send()` so they need no podman/9p (`status()` and a
 never-used `terminate()` do not provision a container). Still not runnable in a
-single-node, no-9p CI: the **9P provision** itself (needs a `CONFIG_9P_FS`
-kernel + mount privilege; covered manually per [DEMO.md](./DEMO.md)) and
-**two-node peer-retention GC** (a second daemon holding the `createSession` cap,
-then dropping it). The lifecycle teardown is unit-tested via the cancellation
-context in `test/claude-client-module.test.js`.
+single-node CI: **two-node peer-retention GC** (a second daemon holding the
+`createSession` cap, then dropping it). The lifecycle teardown is unit-tested
+via the cancellation context in `test/claude-client-module.test.js`. (The 9P
+provision, previously listed here as not-runnable, is now covered by
+`ninep-flow.test.js` above.)
 
 ### 4. Other follow-ups
 
