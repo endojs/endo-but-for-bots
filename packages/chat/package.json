@@ -36,7 +36,7 @@
     "lint:eslint": "eslint '**/*.js'",
     "lint:types": "tsc",
     "prepack": "exit 0",
-    "test": "ava",
+    "test": "bash test/helpers/probe-files.sh",
     "test:c8": "c8 ${C8_OPTIONS:-} ses-ava",
     "test:e2e": "playwright test",
     "test:monaco-lockdown": "node test/monaco-lockdown/run.mjs",
