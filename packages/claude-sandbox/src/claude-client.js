@@ -117,11 +117,20 @@ const defaultStdoutIterable = proc =>
  * @typedef {object} ClaudeClientArgs
  * @property {string} sessionId
  * @property {string} createdAt - ISO timestamp.
- * @property {SandboxHandle} slice - Live sandbox slice handle. `spawn`
+ * @property {SandboxHandle} [slice] - Live sandbox slice handle. `spawn`
  *   runs `claude` inside it; `dispose` tears it down on terminate.
+ *   Provide this (with `mountHandle`) for an eagerly-provisioned client;
+ *   omit both and pass `provision` for a lazily-provisioned one.
  * @property {{ unmount: () => Promise<void> }} [mountHandle] - Host-side
  *   9P mount handle for the workspace. Unmounted on `terminate()`.
  *   Omitted when the workspace was bound by some other means (tests).
+ * @property {() => Promise<{ slice: SandboxHandle, mountHandle?: { unmount: () => Promise<void> } }>} [provision]
+ *   - Lazy workspace provisioner. When present, `slice` / `mountHandle`
+ *   are ignored and the slice + mount are created on first use (the
+ *   first `send()` or `initialPrompt`), memoized thereafter. This is
+ *   what lets the client be a pure-`env` formula: it constructs
+ *   instantly and re-mounts / re-mints its container on demand, so
+ *   daemon boot is never blocked on a container start.
  * @property {string} workspaceMountPoint - Host path the workspace 9P
  *   mount lives at (diagnostic; surfaced in `status()`).
  * @property {string} [workspacePath] - Slice-internal workspace path
@@ -133,7 +142,7 @@ const defaultStdoutIterable = proc =>
  * @property {string} [model] - Default `--model` for every send.
  * @property {Record<string, string>} [env] - Extra per-spawn env
  *   merged on top of the slice's env. The slice's env already carries
- *   `ANTHROPIC_API_KEY`, so this is normally empty.
+ *   the credential, so this is normally empty.
  * @property {string} [initialPrompt] - Optional one-shot prompt fired
  *   (and drained) at construction.
  * @property {(proc: ProcessHandle) => AsyncIterable<Uint8Array>} [makeStdoutIterable]
@@ -151,6 +160,7 @@ export const makeClaudeClient = ({
   createdAt,
   slice,
   mountHandle,
+  provision,
   workspaceMountPoint,
   workspacePath = '/workspace',
   backend,
@@ -168,6 +178,31 @@ export const makeClaudeClient = ({
   /** @type {ProcessHandle | null} */
   let inFlight = null;
 
+  // Workspace provisioning. Direct `slice` / `mountHandle` are treated
+  // as already provisioned (eager); a `provision` thunk is run once on
+  // first use (lazy) and memoized. `provisioned` stays `undefined`
+  // until a lazy provision starts, so `terminate()` before any use is
+  // a no-op rather than spinning up a container just to tear it down.
+  /** @type {Promise<{ slice: SandboxHandle, mountHandle?: { unmount: () => Promise<void> } }> | undefined} */
+  let provisioned = provision
+    ? undefined
+    : Promise.resolve(
+        harden(
+          /** @type {{ slice: SandboxHandle, mountHandle?: { unmount: () => Promise<void> } }} */ ({
+            slice,
+            mountHandle,
+          }),
+        ),
+      );
+  const ensureProvisioned = () => {
+    if (provisioned === undefined) {
+      provisioned = Promise.resolve(
+        /** @type {NonNullable<typeof provision>} */ (provision)(),
+      );
+    }
+    return provisioned;
+  };
+
   const guardLive = () => {
     if (terminated) {
       throw makeError(X`ClaudeClient(${q(sessionId)}) is terminated.`);
@@ -183,6 +218,7 @@ export const makeClaudeClient = ({
    * @returns {Promise<ProcessHandle>}
    */
   const spawnClaude = async (prompt, opts = {}) => {
+    const { slice: activeSlice } = await ensureProvisioned();
     const argv = [
       'claude',
       '-p',
@@ -200,7 +236,7 @@ export const makeClaudeClient = ({
     if (conversationStarted) {
       argv.push('--continue');
     }
-    const proc = await E(slice).spawn(
+    const proc = await E(activeSlice).spawn(
       harden(argv),
       harden({
         cwd: workspacePath,
@@ -326,14 +362,28 @@ export const makeClaudeClient = ({
           // best-effort
         }
       }
+      // Only tear down what was actually provisioned. If the workspace
+      // was never provisioned (lazy client that never ran), there is
+      // no container or mount to release.
+      if (provisioned === undefined) {
+        return;
+      }
+      /** @type {{ slice: SandboxHandle, mountHandle?: { unmount: () => Promise<void> } } | undefined} */
+      let resolved;
       try {
-        await E(slice).dispose();
+        resolved = await provisioned;
+      } catch {
+        // Provisioning failed; nothing was created to tear down.
+        return;
+      }
+      try {
+        await E(resolved.slice).dispose();
       } catch {
         // best-effort; dispose may already have run on cancellation
       }
-      if (mountHandle) {
+      if (resolved.mountHandle) {
         try {
-          await E(mountHandle).unmount();
+          await E(resolved.mountHandle).unmount();
         } catch {
           // best-effort; the mount caplet also unmounts on teardown
         }

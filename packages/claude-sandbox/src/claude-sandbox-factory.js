@@ -6,21 +6,22 @@
  * ClaudeSandbox factory caplet.
  *
  * Presents a "Create Claude Sandbox" form on `@host`'s inbox. Each
- * submission:
+ * submission validates the inputs (the `Filesystem` pet name exists,
+ * the network profile and rootfs parse), then formulates the session
+ * as a first-class `claude-client` caplet via `makeUnconfined`,
+ * parameterised by `env`, and stores it under the chosen pet name.
  *
- *   1. resolves a `Filesystem` capability by pet name,
- *   2. mounts it into the host kernel over 9P at a per-session host
- *      path via the `@endo/9p-server` mount caplet (`fs-mounter`),
- *   3. registers that host path as a daemon `Mount` cap
- *      (`provideMount`),
- *   4. mints an `@endo/sandbox` podman slice with the workspace bound
- *      at `/workspace` (the factory's `provideHostPath` resolves the
- *      Mount cap back to the 9P mountpoint, which podman bind-mounts
- *      into the container),
- *   5. optionally materialises an `ANTHROPIC_API_KEY` from a
- *      `ClaudeCredentials` cap and injects it into the slice's env,
- *   6. builds a `ClaudeClient` exo wrapping the slice + mount handle
- *      and stores it under the chosen pet name.
+ * The heavy lifting — mounting the `Filesystem` over 9P, registering
+ * the mountpoint as a daemon `Mount` cap (`provideMount`), minting the
+ * `@endo/sandbox` podman slice, and materialising the credential —
+ * lives in [`claude-client-module.js`](./claude-client-module.js),
+ * which the client formula runs lazily on first use. The factory does
+ * *not* hold those live handles, because an `@endo/sandbox` slice and a
+ * 9P mount handle are worker-local remotables with no formula identity:
+ * a separately-formulated client cannot receive them across a formula
+ * boundary, so the client re-creates them itself from its `env`. This
+ * is what gives the stored `ClaudeClient` a real daemon identity (so
+ * `storeValue` works) and lets it reincarnate across daemon restarts.
  *
  * This is "plan B" workspace projection: the 9P mount happens on the
  * host (which needs `CAP_SYS_ADMIN` or passwordless `sudo` for
@@ -30,8 +31,10 @@
  * not performed inside the container.
  *
  * The factory is unconfined and trusted: it holds full host authority
- * via `host-agent` (the `@agent` cap) and the per-session API key
- * bytes. Treat its source as part of the trusted compute base.
+ * via `host-agent` (the `@agent` cap). The credential secret never
+ * passes through the factory — only the credential's pet name does, in
+ * the client formula's `env`. Treat its source as part of the trusted
+ * compute base.
  *
  * @module
  */
@@ -44,8 +47,12 @@ import { M } from '@endo/patterns';
 import { E } from '@endo/eventual-send';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 
-import { makeClaudeClient } from './claude-client.js';
 import { parseRootfs, rootfsLabel } from './parse-rootfs.js';
+
+const clientModuleSpecifier = new URL(
+  './claude-client-module.js',
+  import.meta.url,
+).href;
 
 /**
  * Subset of the inbox message shape this caplet reads. The `@host`
@@ -79,12 +86,6 @@ import { parseRootfs, rootfsLabel } from './parse-rootfs.js';
  *
  * @typedef {object} ContextOrDeps
  * @property {Record<string, string>} [env]
- * @property {any} [sandboxFactory] - Inject a `SandboxFactory` directly
- *   (tests) instead of looking one up by pet name.
- * @property {any} [fsMounter] - Inject the 9P `fs-mounter` directly
- *   (tests) instead of looking one up by pet name.
- * @property {(args: any) => any} [clientFactory] - Build the stored
- *   client value (tests); defaults to {@link makeClaudeClient}.
  * @property {(readerRef: any) => AsyncIterator<any>} [iterateMessages] -
  *   Adapt the `@host` message reader into an async iterator (tests);
  *   defaults to `@endo/exo-stream`'s `iterateReader`.
@@ -150,22 +151,6 @@ const ALLOWED_NETWORKS = harden([
 ]);
 
 /**
- * Map a credential kind to the environment variable Claude Code reads
- * it from inside the slice. An `apiKey` is a raw Anthropic API key
- * (`ANTHROPIC_API_KEY`); an `oauthToken` is the short-lived OAuth
- * access token Claude Code accepts headlessly (`CLAUDE_CODE_OAUTH_TOKEN`,
- * as minted by `claude setup-token`). A peer can host the
- * `ClaudeCredentials` cap on their own machine and mint a short-lived
- * `oauthToken` per session, so the host daemon never sees the peer's
- * long-lived OAuth refresh token — only the short-lived bytes it
- * injects here.
- */
-const CREDENTIAL_ENV_VARS = harden({
-  apiKey: 'ANTHROPIC_API_KEY',
-  oauthToken: 'CLAUDE_CODE_OAUTH_TOKEN',
-});
-
-/**
  * Slugify a pet name into a filesystem- and pet-name-safe token used
  * for the per-session mountpoint and workspace pet name. Pet names are
  * already lowercase/alnum/hyphen; this is belt-and-suspenders so an
@@ -184,8 +169,8 @@ const slugify = name =>
  * Factory caplet entry point.
  *
  * The third argument is overloaded: Endo's `makeUnconfined` worker
- * path passes the frozen `{ env }` wrapper; tests pass injectable deps
- * (`sandboxFactory`, `fsMounter`, `clientFactory`).
+ * path passes the frozen `{ env }` wrapper; tests pass an
+ * `iterateMessages` adapter to drive the inbox loop synchronously.
  *
  * @param {import('@endo/eventual-send').FarRef<object>} guestPowers
  * @param {Promise<object> | object | undefined} _context
@@ -215,7 +200,6 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
     process.env.CLAUDE_SANDBOX_MOUNT_DIR ||
     os.tmpdir();
 
-  const buildClient = deps.clientFactory ?? makeClaudeClient;
   const iterateMessages = deps.iterateMessages ?? iterateReader;
 
   const seenFormReplies = new Set();
@@ -225,13 +209,6 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
 
     const hostAgent = await E(powers).lookup('host-agent');
     const selfId = await E(powers).locate('@self');
-
-    // Resolve the shared host-side caps once. Injected deps (tests)
-    // win over a pet-name lookup.
-    const sandboxFactory =
-      deps.sandboxFactory ?? (await E(hostAgent).lookup(sandboxFactoryName));
-    const fsMounter =
-      deps.fsMounter ?? (await E(hostAgent).lookup(fsMounterName));
 
     /** @type {string | undefined} */
     let formMessageId;
@@ -264,14 +241,6 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
         formMessageId = msg.messageId;
       } else if (isFormReply) {
         seenFormReplies.add(msg.number);
-        // Tracked in the submission scope (not the `try`) so the
-        // `catch` can tear them down: a failure after the mount/slice
-        // are created must not leak a running container or a mounted
-        // 9P filesystem.
-        /** @type {{ unmount: () => Promise<void> } | undefined} */
-        let mountHandle;
-        /** @type {{ dispose: () => Promise<void> } | undefined} */
-        let slice;
         try {
           const submission = /** @type {SandboxFormSubmission} */ (
             await E(powers).lookupById(msg.valueId)
@@ -279,11 +248,11 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
           const {
             name,
             filesystem: fsName,
-            rootfs: rootfsValue,
+            rootfs: rootfsValue = '',
             network = 'private',
-            model,
-            credentials: credsName,
-            initialPrompt,
+            model = '',
+            credentials: credsName = '',
+            initialPrompt = '',
           } = submission;
 
           if (!name) throw new Error('Missing "name".');
@@ -294,51 +263,12 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
             );
           }
 
+          // Validate the filesystem exists and the rootfs parses now,
+          // for a friendly inbox error; the client formula re-resolves
+          // both from its env when it provisions.
           const fs = await E(hostAgent).lookup(fsName);
           if (!fs) throw new Error(`Unknown filesystem: "${fsName}".`);
-
           const parsedRootfs = parseRootfs(rootfsValue, { defaultImage });
-
-          // Materialise the credential (if a credentials cap was
-          // named) immediately before it flows into the slice env.
-          // `issue` returns an IssuedCredential *capability*; the
-          // secret bytes only cross CapTP at `materialise()` time. The
-          // credentials cap may live on a remote peer — the host only
-          // ever receives the short-lived secret it mints.
-          /** @type {Record<string, string>} */
-          const credentialEnv = {};
-          if (typeof credsName === 'string' && credsName.length > 0) {
-            const credCap = await E(hostAgent).lookup(credsName);
-            if (!credCap) {
-              throw new Error(`Unknown credentials: "${credsName}".`);
-            }
-            // A credential advertises its `kind` so an OAuth grant
-            // lands in CLAUDE_CODE_OAUTH_TOKEN and a raw Anthropic key
-            // in ANTHROPIC_API_KEY. Probe via the CapTP introspection
-            // surface; caps that predate `kind()` (or foreign caps
-            // without introspection) are treated as API keys, matching
-            // the @endo/claude-container R3 ClaudeCredentials contract.
-            let kind = 'apiKey';
-            try {
-              // eslint-disable-next-line no-underscore-dangle
-              const methodNames = await E(credCap).__getMethodNames__();
-              if (methodNames.includes('kind')) {
-                kind = await E(credCap).kind();
-              }
-            } catch {
-              // No introspection surface; treat as an API key.
-            }
-            const envVar = CREDENTIAL_ENV_VARS[kind];
-            if (!envVar) {
-              throw new Error(
-                `Unknown credential kind "${kind}"; expected one of ${Object.keys(
-                  CREDENTIAL_ENV_VARS,
-                ).join(', ')}.`,
-              );
-            }
-            const issuedCred = await E(credCap).issue(name);
-            credentialEnv[envVar] = await E(issuedCred).materialise();
-          }
 
           const slug = slugify(name);
           const sessionId = `${slug}-${Date.now().toString(36)}`;
@@ -348,57 +278,35 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
           );
           const workspacePetName = `claude-${sessionId}-workspace`;
 
-          // 1. Mount the FS cap into the host kernel over 9P. The
-          //    mount caplet stands up the bridge UDS, creates the
-          //    mountpoint, and runs `mount -t 9p`. `lazyUnmount` lets
-          //    teardown release a busy mount.
-          mountHandle = await E(fsMounter).mount(
-            fs,
-            hostMountPoint,
-            harden({ lazyUnmount: true }),
-          );
-
-          // 2. Register the 9P mountpoint as a daemon Mount cap so the
-          //    sandbox factory's `provideHostPath` can resolve it back
-          //    to the host path it bind-mounts into the container.
-          const workspaceCap = await E(hostAgent).provideMount(
-            hostMountPoint,
-            workspacePetName,
-          );
-
-          // 3. Mint the slice with the workspace bound at /workspace
-          //    and the credential (if any) in its env.
-          slice = await E(sandboxFactory).make(
-            harden({
-              rootfs: parsedRootfs,
-              mounts: [
-                {
-                  cap: workspaceCap,
-                  innerPath: SANDBOX_WORKSPACE_PATH,
-                  mode: 'rw',
-                },
-              ],
-              network,
-              env: credentialEnv,
-              cwd: SANDBOX_WORKSPACE_PATH,
-              backend,
+          // Formulate the session as a first-class `claude-client`
+          // caplet. It owns its slice + 9P mount — an @endo/sandbox
+          // slice and the mount handle are worker-local and cannot be
+          // passed across a formula boundary — provisioning them lazily
+          // from this env, so the stored ClaudeClient has a real daemon
+          // identity and reincarnates across restarts. The credential
+          // is passed by pet name and re-materialised inside the client
+          // at spawn time, so no secret ever enters the formula env.
+          await E(hostAgent).makeUnconfined('@main', clientModuleSpecifier, {
+            powersName: '@agent',
+            resultName: name,
+            env: harden({
+              SESSION_ID: sessionId,
+              CREATED_AT: new Date().toISOString(),
+              FILESYSTEM_NAME: fsName,
+              SANDBOX_FACTORY_NAME: sandboxFactoryName,
+              FS_MOUNTER_NAME: fsMounterName,
+              WORKSPACE_MOUNT_POINT: hostMountPoint,
+              WORKSPACE_PET_NAME: workspacePetName,
+              WORKSPACE_PATH: SANDBOX_WORKSPACE_PATH,
+              BACKEND: backend,
+              NETWORK: network,
+              CLAUDE_ROOTFS: rootfsValue,
+              DEFAULT_IMAGE: defaultImage ?? '',
+              MODEL: model,
+              CREDENTIALS_NAME: credsName,
+              INITIAL_PROMPT: initialPrompt,
             }),
-          );
-
-          // 4. Build and store the ClaudeClient.
-          const client = buildClient({
-            sessionId,
-            createdAt: new Date().toISOString(),
-            slice,
-            mountHandle,
-            workspaceMountPoint: hostMountPoint,
-            workspacePath: SANDBOX_WORKSPACE_PATH,
-            backend,
-            rootfsLabel: rootfsLabel(parsedRootfs),
-            model,
-            initialPrompt,
           });
-          await E(hostAgent).storeValue(client, name);
 
           await E(powers).reply(
             msg.number,
@@ -419,24 +327,6 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
             error instanceof Error ? error.message : String(error);
           // eslint-disable-next-line no-console
           console.error('[claude-sandbox-factory]', errorMessage);
-          // Best-effort teardown of anything created before the
-          // failure. Dispose the slice first (it holds the container
-          // that is using the bind mount), then unmount the 9P
-          // workspace.
-          if (slice !== undefined) {
-            try {
-              await E(slice).dispose();
-            } catch {
-              // best-effort
-            }
-          }
-          if (mountHandle !== undefined) {
-            try {
-              await E(mountHandle).unmount();
-            } catch {
-              // best-effort
-            }
-          }
           try {
             await E(powers).reply(
               msg.number,

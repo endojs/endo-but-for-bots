@@ -214,6 +214,52 @@ test('terminate() disposes the slice, unmounts, and rejects subsequent send', as
   await t.throwsAsync(() => client.send('nope'), { message: /is terminated/ });
 });
 
+test('a lazy provision thunk runs once on first send and is reused', async t => {
+  const fake = makeFakeSlice([[], []]);
+  const mount = makeFakeMount();
+  let provisionCount = 0;
+  const client = makeClaudeClient({
+    sessionId: 'sess-lazy',
+    createdAt: '2026-01-01T00:00:00.000Z',
+    workspaceMountPoint: '/tmp/claude-sandbox-sess-lazy',
+    backend: 'podman',
+    makeStdoutIterable,
+    provision: async () => {
+      provisionCount += 1;
+      return { slice: fake.slice, mountHandle: mount.handle };
+    },
+  });
+
+  // Not provisioned until first use.
+  t.is(provisionCount, 0);
+  await drain(await client.send('one'));
+  await drain(await client.send('two'));
+  t.is(provisionCount, 1);
+  t.is(fake.spawned.length, 2);
+
+  // terminate tears down what the thunk provisioned.
+  await client.terminate();
+  t.true(fake.isDisposed());
+  t.true(mount.isUnmounted());
+});
+
+test('terminate() before any lazy provision creates nothing', async t => {
+  let provisionCount = 0;
+  const client = makeClaudeClient({
+    sessionId: 'sess-noop',
+    createdAt: '2026-01-01T00:00:00.000Z',
+    workspaceMountPoint: '/tmp/claude-sandbox-sess-noop',
+    backend: 'podman',
+    makeStdoutIterable,
+    provision: async () => {
+      provisionCount += 1;
+      return { slice: makeFakeSlice().slice };
+    },
+  });
+  await client.terminate();
+  t.is(provisionCount, 0);
+});
+
 test('status() reports session metadata', async t => {
   const fake = makeFakeSlice();
   const client = makeClaudeClient(baseArgs(fake, makeFakeMount()));

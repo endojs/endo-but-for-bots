@@ -6,13 +6,18 @@ import '@endo/init';
 import test from 'ava';
 
 import { make } from '../src/claude-sandbox-factory.js';
-import { DEFAULT_CLAUDE_IMAGE } from '../src/parse-rootfs.js';
 
 // `E(target)` deep-hardens its target. Recording arrays therefore stay
 // in closures (returned via a separate wrapper) rather than as
 // properties on the objects the factory drives through `E()`. `Map`
 // instances survive `harden` (their data lives in internal slots, not
-// frozen own-properties), so `storedValues` can be a property.
+// frozen own-properties), so recorders can be Maps/arrays in closures.
+//
+// Post-refactor the factory no longer mounts / mints slices itself: it
+// validates the submission and formulates a first-class `claude-client`
+// caplet via `hostAgent.makeUnconfined`. These tests assert that
+// formulation (the specifier + env); the mount/slice/credential
+// behaviour is covered by `claude-client-module.test.js`.
 
 /**
  * Mock guest powers. The factory consumes the message stream via the
@@ -106,67 +111,19 @@ const makeMockPowers = () => {
   };
 };
 
-const makeMockHostAgent = ({ filesystems = {}, credentials = {} } = {}) => {
-  const stored = new Map();
-  const provideMountCalls = [];
+const makeMockHostAgent = ({ filesystems = {} } = {}) => {
+  const unconfinedCalls = [];
   const hostAgent = {
     async lookup(name) {
       if (name in filesystems) return filesystems[name];
-      if (name in credentials) return credentials[name];
       return undefined;
     },
-    async storeValue(value, name) {
-      stored.set(name, value);
-    },
-    async provideMount(path, petName) {
-      const cap = { kind: 'workspace-mount', path, petName };
-      provideMountCalls.push({ path, petName, cap });
-      return cap;
+    async makeUnconfined(powersName, specifier, opts) {
+      unconfinedCalls.push({ powersName, specifier, opts });
+      return harden({ kind: 'fake-client', name: opts.resultName });
     },
   };
-  return { hostAgent, storedValues: stored, provideMountCalls };
-};
-
-const makeMockSandboxFactory = () => {
-  const makeCalls = [];
-  const disposed = [];
-  return {
-    factory: {
-      async make(opts) {
-        makeCalls.push(opts);
-        const slice = {
-          kind: 'fake-slice',
-          async dispose() {
-            disposed.push(slice);
-          },
-        };
-        return slice;
-      },
-    },
-    makeCalls,
-    disposed,
-  };
-};
-
-const makeMockFsMounter = () => {
-  const mountCalls = [];
-  const unmounted = [];
-  return {
-    mounter: {
-      async mount(fs, mountPoint, opts) {
-        mountCalls.push({ fs, mountPoint, opts });
-        const handle = {
-          kind: 'mount-handle',
-          async unmount() {
-            unmounted.push(handle);
-          },
-        };
-        return handle;
-      },
-    },
-    mountCalls,
-    unmounted,
-  };
+  return { hostAgent, unconfinedCalls };
 };
 
 const waitFor = async (pred, deadlineMs = 2000) => {
@@ -178,30 +135,16 @@ const waitFor = async (pred, deadlineMs = 2000) => {
   }
 };
 
-const wireDeps = (mock, host, sandbox, fsm, clientFactory) => {
+const wireDeps = (mock, host) => {
   mock.setHostAgent(host.hostAgent);
-  return {
-    sandboxFactory: sandbox.factory,
-    fsMounter: fsm.mounter,
-    iterateMessages: mock.iterateMessages,
-    clientFactory,
-  };
+  return { iterateMessages: mock.iterateMessages };
 };
 
 test('factory presents the Create Claude Sandbox form to @host', async t => {
   const mock = makeMockPowers();
   const host = makeMockHostAgent();
-  const sandbox = makeMockSandboxFactory();
-  const fsm = makeMockFsMounter();
 
-  const exo = make(
-    mock.powers,
-    undefined,
-    wireDeps(mock, host, sandbox, fsm, ({ sessionId }) => ({
-      sessionId,
-      kind: 'mock-client',
-    })),
-  );
+  const exo = make(mock.powers, undefined, wireDeps(mock, host));
 
   t.regex(exo.help(), /ClaudeSandboxFactory/);
   await waitFor(() => mock.formCalls.length > 0);
@@ -217,212 +160,60 @@ test('factory presents the Create Claude Sandbox form to @host', async t => {
   ]);
 });
 
-test('submission mounts 9P, provisions a slice, and stores a ClaudeClient', async t => {
+test('submission formulates a claude-client caplet with the right env', async t => {
   const fsCap = { kind: 'fake-fs' };
   const mock = makeMockPowers();
   const host = makeMockHostAgent({ filesystems: { 'my-fs': fsCap } });
-  const sandbox = makeMockSandboxFactory();
-  const fsm = makeMockFsMounter();
 
-  make(
-    mock.powers,
-    undefined,
-    wireDeps(
-      mock,
-      host,
-      sandbox,
-      fsm,
-      ({ sessionId, slice, mountHandle, workspaceMountPoint }) => ({
-        sessionId,
-        slice,
-        mountHandle,
-        workspaceMountPoint,
-        kind: 'mock-client',
-      }),
-    ),
-  );
+  make(mock.powers, undefined, wireDeps(mock, host));
 
   await waitFor(() => mock.formCalls.length > 0);
   mock.simulateSubmission({
     name: 'my-claude',
     filesystem: 'my-fs',
     network: 'private',
+    credentials: 'my-creds',
+    model: 'claude-sonnet-4-6',
   });
 
-  await waitFor(() => host.storedValues.size > 0);
+  await waitFor(() => host.unconfinedCalls.length > 0);
+  const call = host.unconfinedCalls[0];
 
-  // 9P mount of the resolved FS cap onto a per-session host path.
-  t.is(fsm.mountCalls.length, 1);
-  t.is(fsm.mountCalls[0].fs, fsCap);
-  t.regex(fsm.mountCalls[0].mountPoint, /claude-sandbox-my-claude-/);
+  // First-class formulation, stored under the chosen pet name.
+  t.is(call.powersName, '@main');
+  t.regex(call.specifier, /claude-client-module\.js$/);
+  t.is(call.opts.resultName, 'my-claude');
+  t.is(call.opts.powersName, '@agent');
 
-  // The mountpoint was registered as a daemon Mount cap.
-  t.is(host.provideMountCalls.length, 1);
-  t.is(host.provideMountCalls[0].path, fsm.mountCalls[0].mountPoint);
-
-  // The slice was minted with the workspace bound at /workspace and a
-  // default OCI rootfs.
-  t.is(sandbox.makeCalls.length, 1);
-  const makeOpts = sandbox.makeCalls[0];
-  t.deepEqual(makeOpts.rootfs, { kind: 'oci', ref: DEFAULT_CLAUDE_IMAGE });
-  t.is(makeOpts.backend, 'podman');
-  t.is(makeOpts.network, 'private');
-  t.is(makeOpts.cwd, '/workspace');
-  t.is(makeOpts.mounts.length, 1);
-  t.is(makeOpts.mounts[0].innerPath, '/workspace');
-  t.is(makeOpts.mounts[0].mode, 'rw');
-  t.is(makeOpts.mounts[0].cap, host.provideMountCalls[0].cap);
-
-  // The client was stored under the chosen pet name, holding the live
-  // slice and the 9P mount handle.
-  t.true(host.storedValues.has('my-claude'));
-  const stored = host.storedValues.get('my-claude');
-  t.is(stored.slice.kind, 'fake-slice');
-  t.is(stored.mountHandle.kind, 'mount-handle');
-  t.is(stored.workspaceMountPoint, fsm.mountCalls[0].mountPoint);
+  const { env } = call.opts;
+  t.is(env.FILESYSTEM_NAME, 'my-fs');
+  t.is(env.NETWORK, 'private');
+  t.is(env.CREDENTIALS_NAME, 'my-creds');
+  t.is(env.MODEL, 'claude-sonnet-4-6');
+  t.is(env.BACKEND, 'podman');
+  t.is(env.WORKSPACE_PATH, '/workspace');
+  t.regex(env.SESSION_ID, /^my-claude-/);
+  t.regex(env.WORKSPACE_MOUNT_POINT, /claude-sandbox-my-claude-/);
+  // No secret is threaded through the formula env — only the pet name.
+  t.is(env.ANTHROPIC_API_KEY, undefined);
+  t.is(env.CLAUDE_CODE_OAUTH_TOKEN, undefined);
 
   await waitFor(() => mock.replies.length > 0);
   t.regex(mock.replies[0].body.join('\n'), /ClaudeClient "my-claude" created/);
 });
 
-test('submission injects ANTHROPIC_API_KEY from a credentials cap', async t => {
-  const fsCap = { kind: 'fake-fs' };
-  let issuedTag;
-  const credCap = {
-    async issue(tag) {
-      issuedTag = tag;
-      return {
-        async materialise() {
-          return 'sk-ant-secret';
-        },
-      };
-    },
-  };
-  const mock = makeMockPowers();
-  const host = makeMockHostAgent({
-    filesystems: { 'my-fs': fsCap },
-    credentials: { 'my-creds': credCap },
-  });
-  const sandbox = makeMockSandboxFactory();
-  const fsm = makeMockFsMounter();
-
-  make(
-    mock.powers,
-    undefined,
-    wireDeps(mock, host, sandbox, fsm, ({ sessionId }) => ({ sessionId })),
-  );
-
-  await waitFor(() => mock.formCalls.length > 0);
-  mock.simulateSubmission({
-    name: 'creds-claude',
-    filesystem: 'my-fs',
-    credentials: 'my-creds',
-  });
-
-  await waitFor(() => sandbox.makeCalls.length > 0);
-  t.is(issuedTag, 'creds-claude');
-  t.is(sandbox.makeCalls[0].env.ANTHROPIC_API_KEY, 'sk-ant-secret');
-});
-
-test('submission injects CLAUDE_CODE_OAUTH_TOKEN for an oauthToken credential', async t => {
-  const fsCap = { kind: 'fake-fs' };
-  const credCap = {
-    // eslint-disable-next-line no-underscore-dangle
-    async __getMethodNames__() {
-      return ['kind', 'issue', 'revoke', 'rotate', 'help'];
-    },
-    async kind() {
-      return 'oauthToken';
-    },
-    async issue() {
-      return {
-        async materialise() {
-          return 'sk-ant-oat-token';
-        },
-      };
-    },
-  };
-  const mock = makeMockPowers();
-  const host = makeMockHostAgent({
-    filesystems: { 'my-fs': fsCap },
-    credentials: { 'oauth-creds': credCap },
-  });
-  const sandbox = makeMockSandboxFactory();
-  const fsm = makeMockFsMounter();
-
-  make(
-    mock.powers,
-    undefined,
-    wireDeps(mock, host, sandbox, fsm, ({ sessionId }) => ({ sessionId })),
-  );
-
-  await waitFor(() => mock.formCalls.length > 0);
-  mock.simulateSubmission({
-    name: 'oauth-claude',
-    filesystem: 'my-fs',
-    credentials: 'oauth-creds',
-  });
-
-  await waitFor(() => sandbox.makeCalls.length > 0);
-  const { env } = sandbox.makeCalls[0];
-  t.is(env.CLAUDE_CODE_OAUTH_TOKEN, 'sk-ant-oat-token');
-  t.is(env.ANTHROPIC_API_KEY, undefined);
-});
-
-test('a failure after the slice is created tears down the slice and mount', async t => {
-  const fsCap = { kind: 'fake-fs' };
-  const mock = makeMockPowers();
-  const host = makeMockHostAgent({ filesystems: { 'my-fs': fsCap } });
-  // storeValue throws, mirroring the real daemon's formula-identity
-  // rejection for a worker-local exo — the failure path under test.
-  host.hostAgent.storeValue = async () => {
-    throw new Error(
-      'No corresponding formula for Object [Alleged: ClaudeClient]',
-    );
-  };
-  const sandbox = makeMockSandboxFactory();
-  const fsm = makeMockFsMounter();
-
-  make(
-    mock.powers,
-    undefined,
-    wireDeps(mock, host, sandbox, fsm, ({ sessionId }) => ({ sessionId })),
-  );
-
-  await waitFor(() => mock.formCalls.length > 0);
-  mock.simulateSubmission({
-    name: 'leaky',
-    filesystem: 'my-fs',
-    network: 'private',
-  });
-
-  await waitFor(() => mock.replies.length > 0);
-  t.regex(mock.replies[0].body.join('\n'), /Error creating sandbox/);
-  // The slice was disposed and the 9P workspace unmounted rather than
-  // left running.
-  t.is(sandbox.disposed.length, 1);
-  t.is(fsm.unmounted.length, 1);
-});
-
 test('submission with an unknown filesystem replies with an error', async t => {
   const mock = makeMockPowers();
   const host = makeMockHostAgent({ filesystems: {} });
-  const sandbox = makeMockSandboxFactory();
-  const fsm = makeMockFsMounter();
 
-  make(
-    mock.powers,
-    undefined,
-    wireDeps(mock, host, sandbox, fsm, () => ({})),
-  );
+  make(mock.powers, undefined, wireDeps(mock, host));
 
   await waitFor(() => mock.formCalls.length > 0);
   mock.simulateSubmission({ name: 'x', filesystem: 'missing-fs' });
 
   await waitFor(() => mock.replies.length > 0);
   t.regex(mock.replies[0].body.join('\n'), /Error creating sandbox/);
-  t.is(host.storedValues.size, 0);
-  t.is(sandbox.makeCalls.length, 0);
+  t.is(host.unconfinedCalls.length, 0);
 });
 
 test('submission with an unknown network profile is rejected', async t => {
@@ -430,14 +221,8 @@ test('submission with an unknown network profile is rejected', async t => {
   const host = makeMockHostAgent({
     filesystems: { 'my-fs': { kind: 'fake-fs' } },
   });
-  const sandbox = makeMockSandboxFactory();
-  const fsm = makeMockFsMounter();
 
-  make(
-    mock.powers,
-    undefined,
-    wireDeps(mock, host, sandbox, fsm, () => ({})),
-  );
+  make(mock.powers, undefined, wireDeps(mock, host));
 
   await waitFor(() => mock.formCalls.length > 0);
   mock.simulateSubmission({
@@ -448,7 +233,7 @@ test('submission with an unknown network profile is rejected', async t => {
 
   await waitFor(() => mock.replies.length > 0);
   t.regex(mock.replies[0].body.join('\n'), /Unknown network profile/);
-  t.is(sandbox.makeCalls.length, 0);
+  t.is(host.unconfinedCalls.length, 0);
 });
 
 test('duplicate form replies are ignored (replay guard)', async t => {
@@ -456,20 +241,14 @@ test('duplicate form replies are ignored (replay guard)', async t => {
   const host = makeMockHostAgent({
     filesystems: { 'my-fs': { kind: 'fake-fs' } },
   });
-  const sandbox = makeMockSandboxFactory();
-  const fsm = makeMockFsMounter();
 
-  make(
-    mock.powers,
-    undefined,
-    wireDeps(mock, host, sandbox, fsm, ({ sessionId }) => ({ sessionId })),
-  );
+  make(mock.powers, undefined, wireDeps(mock, host));
 
   await waitFor(() => mock.formCalls.length > 0);
   const payload = { name: 'replay', filesystem: 'my-fs', network: 'private' };
   mock.simulateSubmission(payload, { number: 99, replyTo: 'form-1' });
-  await waitFor(() => sandbox.makeCalls.length >= 1);
+  await waitFor(() => host.unconfinedCalls.length >= 1);
   mock.simulateSubmission(payload, { number: 99, replyTo: 'form-1' });
   await new Promise(r => setTimeout(r, 100));
-  t.is(sandbox.makeCalls.length, 1);
+  t.is(host.unconfinedCalls.length, 1);
 });
