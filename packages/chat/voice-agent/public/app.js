@@ -317,12 +317,15 @@ const bargeIn = () => {
 const STEP_ICON = { research: '🔎', delegateTask: '🤝', employ: '🧑‍🔬', askSpecialist: '🧑‍🔬', generateImage: '🎨', searchNotes: '📓', readNote: '📓', fetchUrl: '🌐', browse: '🌐', consult: '📚', pushFeed: '📣', pushPhone: '📱', transcribeYoutube: '📺' };
 const traceStrip = steps => {
   const wrap = document.createElement('div'); wrap.className = 'trace-strip'; wrap.title = 'Open the 3D trace'; wrap.setAttribute('data-component-id', 'island-trace'); wrap.setAttribute('data-component-name', 'Trace view (3D)');
-  const lbl = document.createElement('span'); lbl.className = 'ts-label'; lbl.textContent = `⊿ trace · ${steps.length}`; wrap.appendChild(lbl);
+  const lbl = document.createElement('span'); lbl.className = 'ts-label'; lbl.textContent = `⊿ trace · ${steps.length}`;
+  // a very small symbol KEY on the far left (hover/tap) — what each glyph means + the per-row reasoning signature.
+  lbl.title = 'Reasoning signature for this answer. Symbols: ' + [...new Set(steps.map(s => `${STEP_ICON[s.name] || '⚙'} ${s.name}`))].slice(0, 12).join(' · ') + '\n(click → open the 3D trace)';
+  lbl.style.cursor = 'help'; wrap.appendChild(lbl);
   for (const s of steps) {
     const n = document.createElement('span'); n.className = 'tn' + (s.ok === false ? ' bad' : '');
     const kids = Array.isArray(s.children) && s.children.length ? ` ·${s.children.length}` : '';
     n.textContent = `${STEP_ICON[s.name] || '⚙'} ${s.name}${kids}`;
-    if (s.detail) n.title = String(s.detail).slice(0, 200);
+    n.title = `${s.name}${s.ok === false ? ' (failed)' : ''}${s.detail ? ' — ' + String(s.detail).slice(0, 200) : ''}`; // each glyph names its tool
     wrap.appendChild(n);
   }
   wrap.onclick = () => togglePendantFs();
@@ -682,6 +685,7 @@ const sendChat = async (text, { spoken = false, audio = null, attachments = [], 
     if (imgAtts.length) tx.attachImgs = imgAtts.map(a => a.dataUrl);           // session-only (stripped before persist)
     if (fileAtts.length) tx.attachFiles = fileAtts.map(a => a.name);
     activeTx.push(tx); saveTx();
+    try { log.appendChild(messageControls(activeTx.length - 1, tx)); } catch { /* control row: ↻ retry / ✎ edit / 🔊 audio — appears live under the message */ }
     titleFrom(t || (attachments[0] && attachments[0].name) || 'photo'); setStatus('thinking…'); if (spoken) setMic('thinking');
     await pendantBegin(t); // descend the live 3D pendant + open the step stream BEFORE the turn starts
     const payload = { sessionId, text: t, cap: chatCap(), model: model || chatModel(), agent: chatAgent() }; // chatCap() = this chat's CONFINED cap (Feature A); agent = run AS this entrypoint specialist (server confines)
@@ -700,7 +704,7 @@ const sendChat = async (text, { spoken = false, audio = null, attachments = [], 
     // durable server URLs for the attached images → persist these (survive reload + cross-device sync)
     const urls = (r.attachments || []).filter(a => a.kind === 'image' && a.url).map(a => a.url);
     if (urls.length) { tx.attachUrls = urls; saveTx(); }
-    renderAgentResponse(r); pushTx('agent', r.answer || '', { tools: r.toolsUsed || [], images: r.images || [], imageUrls: r.imageUrls || [], steps: r.steps || [], agent: r.agentId, ui: r.ui || [] }); // ui = live widget specs (pure data, no cap) → re-hydrate live on reopen; imageUrls survive reload
+    renderAgentResponse(r); pushTx('agent', r.answer || '', { tools: r.toolsUsed || [], images: r.images || [], imageUrls: r.imageUrls || [], steps: r.steps || [], agent: r.agentId, ui: r.ui || [], vmodel: payload.model, vagent: payload.agent }); // ui = widget specs; vmodel/vagent = the params of this attempt (fork 0) for W2 fork/retry
     pendantEnd(r.steps || []); // settle the pendant + reconcile any steps the live stream missed
     updateBudgetChip(r.remaining, r.allowance); // toll-bridge: reflect this turn's spend in the budget chip
     refreshBadge(); // the turn may have posted a notification
@@ -1371,6 +1375,47 @@ function wirePowerBanner(b, cc, ps) {
     $('ap-go').onclick = async () => { const add2 = [...document.querySelectorAll('#ap-list input:checked')].map(x => x.value); if (!add2.length) return; closeModal(); await rescopeChat(cc, [...ps, ...add2]); };
   };
 }
+// ── W2: PROMPT FORK / RETRY — each user turn's answer can hold model/param VARIANTS (forks). A ↻ retry
+//    re-runs the prompt with the CURRENT model+params (appends a fork); ◀/▶ pages forks + restores their
+//    params; ✎ edits the prompt and retries; 🔊 plays a voice message's original audio. Variants live on
+//    the agent tx entry, so the flat (you, agent) transcript model is preserved. ──
+const _arr = v => (Array.isArray(v) ? v : (v ? [v] : []));
+const baseVariant = am => ({ answer: am.text || '', steps: _arr(am.steps), ui: _arr(am.ui), tools: _arr(am.tools), agentId: am.agent, model: am.vmodel || 'default', agent: am.vagent || 'field-agent', prompt: null, ts: am.ts || 0 });
+const variantsOf = am => { if (!am.variants || !am.variants.length) { am.variants = [baseVariant(am)]; am.varIx = 0; } if (typeof am.varIx !== 'number' || am.varIx < 0 || am.varIx >= am.variants.length) am.varIx = am.variants.length - 1; return am.variants; };
+const activeVariant = am => (am && am.variants && am.variants.length) ? am.variants[Math.max(0, Math.min(am.varIx || 0, am.variants.length - 1))] : baseVariant(am);
+const answerOf = i => { const n = activeTx[i + 1]; return (n && n.who === 'agent') ? n : null; };
+const histUpTo = uIx => activeTx.slice(0, uIx).filter(m => m && m.who).map(m => ({ role: m.who === 'you' ? 'user' : 'assistant', content: String(m.who === 'you' ? (m.text || '') : (activeVariant(m).answer || '')) })).filter(x => x.content.trim()).slice(-24);
+const runRetry = async (uIx, prompt) => {
+  if (!activeTx[uIx]) return; const am = answerOf(uIx); const model = chatModel(), agent = chatAgent();
+  setStatus('retrying…');
+  let r; try { r = await (await fetch('/chat', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ sessionId, text: prompt, cap: chatCap(), model, agent, history: histUpTo(uIx) }) })).json(); }
+  catch (e) { setStatus('retry: ' + e.message); return; }
+  if (r.error) { setStatus('retry: ' + r.error); return; }
+  if (r.exhausted) { updateBudgetChip(r.remaining, r.allowance); setStatus('allowance used up — top up to retry'); return; }
+  const v = { answer: r.answer || '', steps: r.steps || [], ui: r.ui || [], tools: (r.toolsUsed || []), agentId: r.agentId, model, agent, prompt, ts: Date.now() };
+  if (am) { variantsOf(am); am.variants.push(v); am.varIx = am.variants.length - 1; }
+  else activeTx.splice(uIx + 1, 0, { who: 'agent', text: v.answer, steps: v.steps, ui: v.ui, tools: v.tools, agent: v.agentId, vmodel: model, vagent: agent, variants: [v], varIx: 0 });
+  updateBudgetChip(r.remaining, r.allowance); saveTx(); renderTx(); setStatus('');
+};
+const restoreParams = v => { try { const c = curChatObj(); if (c && v.model) { c.model = v.model; rememberModel(c.agent || v.agent || 'field-agent', v.model); } const ms = $('model-sel'); if (ms && v.model) ms.value = v.model; const as = $('agent-sel'); if (as && v.agent) as.value = v.agent; saveChats(); } catch { /* */ } };
+const pageFork = (uIx, delta) => { const am = answerOf(uIx); if (!am) return; variantsOf(am); am.varIx = Math.max(0, Math.min(am.variants.length - 1, am.varIx + delta)); restoreParams(am.variants[am.varIx]); saveTx(); renderTx(); };
+const editPrompt = uIx => { const um = activeTx[uIx]; if (!um) return; const am = answerOf(uIx); const cur = (am && activeVariant(am).prompt) || um.text || ''; const edited = window.prompt('Edit the message, then retry (a new fork):', cur); if (edited == null || !edited.trim()) return; um.text = edited.trim(); runRetry(uIx, edited.trim()); };
+const messageControls = (uIx, um) => {
+  const am = answerOf(uIx);
+  const row = document.createElement('div'); row.className = 'msg-ctrl'; row.style.cssText = 'display:flex;gap:6px;align-items:center;margin:-4px 2px 6px;font-size:12px';
+  const mk = (label, title, fn) => { const b = document.createElement('button'); b.textContent = label; b.title = title; b.style.cssText = 'all:unset;cursor:pointer;color:#8b949e;padding:1px 6px;border-radius:5px'; b.onmouseenter = () => { b.style.color = '#cfe2ff'; }; b.onmouseleave = () => { b.style.color = '#8b949e'; }; b.onclick = fn; return b; };
+  row.appendChild(mk('↻', 'Retry with the current model + parameters (creates a fork)', () => runRetry(uIx, (am && activeVariant(am).prompt) || um.text || '')));
+  row.appendChild(mk('✎', 'Edit this message and retry', () => editPrompt(uIx)));
+  if (um.audio) row.appendChild(mk('🔊', 'Play the original audio', () => { try { new Audio(um.audio).play(); } catch { /* */ } }));
+  if (am && am.variants && am.variants.length > 1) {
+    const nav = document.createElement('span'); nav.style.cssText = 'display:inline-flex;gap:4px;align-items:center;margin-left:auto;color:#8b949e';
+    nav.appendChild(mk('◀', 'Previous fork (restores its model + params)', () => pageFork(uIx, -1)));
+    const c = document.createElement('span'); c.textContent = `${am.varIx + 1}/${am.variants.length}`; c.style.cssText = 'font-variant-numeric:tabular-nums;font-size:11px;color:#7c5cff'; nav.appendChild(c);
+    nav.appendChild(mk('▶', 'Next fork', () => pageFork(uIx, 1)));
+    row.appendChild(nav);
+  }
+  return row;
+};
 const renderTx = () => {
   syncLanding();
   disposeAllWidgets(); // tear down any live widget streams/intervals from the previous render before rebuilding
@@ -1391,16 +1436,25 @@ const renderTx = () => {
     if (show) { log.appendChild(b); if (manageable) wirePowerBanner(b, cc, ps); } }
   if (!activeTx.length) return; // a new chat starts empty — no agent greeting (the banner above still shows)
   const asArr = v => (Array.isArray(v) ? v : (v ? [v] : [])); // coerce: a malformed (non-array) field must never throw + abort the whole render
-  for (const m of activeTx) {
+  for (let i = 0; i < activeTx.length; i++) {
+    const m = activeTx[i];
     try { // one bad message must not stop the rest of the transcript from rendering
       if (m.who === 'widget' && m.site) { log.appendChild(makeInlineWidget(m.site, m.id)); continue; } // a pasted site, rendered inline as a live widget
-      if (m.who === 'agent' && Array.isArray(m.steps) && m.steps.length) log.appendChild(traceStrip(m.steps)); // E6: persistent trace above each response
-      const b = bubble(m.who === 'you' ? 'you' : 'agent', m.text, m.agent);
-      if (m.who === 'you' && !m.text) b.textContent = '';
-      if (m.who === 'you') appendAtt(b, asArr(m.attachUrls).length ? asArr(m.attachUrls) : asArr(m.attachImgs), asArr(m.attachFiles));
-      else { const imgs = asArr(m.imageUrls).length ? asArr(m.imageUrls) : asArr(m.images).filter(s => typeof s === 'string' && s.startsWith('data:')); imgs.forEach(src => { const im = document.createElement('img'); im.src = src; b.appendChild(im); }); } // durable /uploads urls survive reload (data-URLs as fallback)
-      if (m.who !== 'you' && asArr(m.ui).length) renderWidgets(b, asArr(m.ui), { cap: chatCap(), onChoice: t => sendChat(t), onBreakOut: breakOutComponent, onShareOut: shareOutComponent, onExpand: toggleApplet }); // re-hydrate live widgets: a door re-subscribes (live again), a countdown re-ticks
-      if (asArr(m.tools).length) { const e = document.createElement('div'); e.className = 'tools'; e.textContent = '⚙ ' + asArr(m.tools).join(', '); b.parentNode.appendChild(e); }
+      if (m.who === 'agent') { // render the ACTIVE fork (model/param variant) of this answer
+        const v = activeVariant(m);
+        if (_arr(v.steps).length) log.appendChild(traceStrip(_arr(v.steps))); // persistent trace above the response
+        const b = bubble('agent', v.answer, v.agentId || m.agent);
+        const imgs = asArr(m.imageUrls).length ? asArr(m.imageUrls) : asArr(m.images).filter(s => typeof s === 'string' && s.startsWith('data:')); imgs.forEach(src => { const im = document.createElement('img'); im.src = src; b.appendChild(im); });
+        if (_arr(v.ui).length) renderWidgets(b, _arr(v.ui), { cap: chatCap(), onChoice: t => sendChat(t), onBreakOut: breakOutComponent, onShareOut: shareOutComponent, onExpand: toggleApplet }); // re-hydrate live widgets
+        if (_arr(v.tools).length) { const e = document.createElement('div'); e.className = 'tools'; e.textContent = '⚙ ' + _arr(v.tools).join(', '); b.parentNode.appendChild(e); }
+        continue;
+      }
+      // a user message → its (possibly edited) prompt + the fork/retry/edit/voice control row
+      const am = answerOf(i); const promptText = (am && activeVariant(am).prompt) || m.text;
+      const b = bubble('you', promptText, m.agent);
+      if (!promptText) b.textContent = '';
+      appendAtt(b, asArr(m.attachUrls).length ? asArr(m.attachUrls) : asArr(m.attachImgs), asArr(m.attachFiles));
+      if (m.text || am) log.appendChild(messageControls(i, m)); // ↻ retry · ✎ edit · 🔊 audio · ◀ k/n ▶ forks
     } catch (e) { console.error('renderTx message', e); }
   }
   // re-show any still-open typed asks the agent raised in THIS chat (persist across reloads)
