@@ -7,19 +7,21 @@
 // ~12s locally, so a healthy file always finishes first). An unref'd timer
 // cannot keep the loop alive on its own, so a healthy worker exits before it
 // fires. If the worker is STILL alive at the threshold, a real handle is
-// holding the loop open: we dump the surviving resources/handles (with the
-// offending test file) and force-exit so CI does not hang for hours.
+// holding the loop open: we dump the surviving resources/handles and
+// force-exit so CI does not hang for hours.
 //
 // Runs before `@endo/init` lockdown, so `setTimeout`/`fs` are captured raw.
 
 import fs from 'node:fs';
+import { threadId } from 'node:worker_threads';
 
 const LOG = '/tmp/handle-dump.log';
 const file = process.env.PROBE_FILE || '<unknown>';
-const THRESHOLD_MS = 170000;
+const THRESHOLD_MS = 120000;
 
 const dumpTimer = setTimeout(() => {
-  let out = `[handle-dump] FILE=${file} pid=${process.pid}\n`;
+  let out = `[handle-dump] FILE=${file} pid=${process.pid} threadId=${threadId}\n`;
+  out += `  argv: ${JSON.stringify(process.argv.slice(1))}\n`;
   try {
     out += `  resources: ${JSON.stringify(process.getActiveResourcesInfo())}\n`;
   } catch (e) {
@@ -50,10 +52,11 @@ const dumpTimer = setTimeout(() => {
   try {
     fs.appendFileSync(LOG, out);
   } catch (e) {
-    // last resort: bypass any worker stdio piping
-    // eslint-disable-next-line no-underscore-dangle
-    process._rawDebug(out);
+    // ignore
   }
+  // Also emit to stderr so it survives even without the shared log file.
+  // eslint-disable-next-line no-underscore-dangle
+  process._rawDebug(out);
   process.exit(0);
 }, THRESHOLD_MS);
 dumpTimer.unref();
