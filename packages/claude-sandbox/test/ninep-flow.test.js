@@ -203,7 +203,14 @@ test.serial(
 
     // The real verdict: a read of the mountpoint path round-trips through
     // the kernel's v9fs client to the bridge serving the Filesystem cap.
-    const readBack = nodeFs.readFileSync(
+    //
+    // MUST be async. The bridge serving this mount runs in *this* Node
+    // process's event loop; a synchronous `readFileSync` would block that
+    // loop on the kernel's Tread, the bridge could never answer, and the
+    // read would deadlock. `fs.promises.readFile` runs the blocking read(2)
+    // on the libuv threadpool, leaving the main loop free to service the
+    // bridge.
+    const readBack = await nodeFs.promises.readFile(
       nodePath.join(mountPoint, WORKSPACE_FILE),
       'utf8',
     );
