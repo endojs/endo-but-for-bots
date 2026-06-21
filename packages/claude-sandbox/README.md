@@ -82,16 +82,28 @@ which resumes the conversation persisted in the workspace.
 ### `ClaudeCredentials`
 
 Ported from `@endo/claude-container`.
-The factory writes the submitted Anthropic API key to a `0600` sidecar file
-under `$CLAUDE_CREDENTIALS_DIR` (default `~/.endo-claude-credentials`) and the
-formula references only the file path — the key never enters the Endo formula
-store.
+The factory writes the submitted secret to a `0600` sidecar file under
+`$CLAUDE_CREDENTIALS_DIR` (default `~/.endo-claude-credentials`) and the formula
+references only the file path — the secret never enters the Endo formula store.
+
+A credential has a `kind`:
+
+- `apiKey` — a raw Anthropic API key, injected into the slice as
+  `ANTHROPIC_API_KEY`.
+- `oauthToken` — the short-lived OAuth access token Claude Code accepts
+  headlessly (`claude setup-token`), injected as `CLAUDE_CODE_OAUTH_TOKEN`.
+
+Because `issue()` / `materialise()` are eventual-sends, the cap can live on a
+remote **peer** that holds the long-lived auth and mints a short-lived
+`oauthToken` per session, so the host daemon only ever sees the short-lived
+secret.
 
 | method | behavior |
 |--------|----------|
-| `issue(sessionTag)` | returns an `IssuedCredential`; call `.materialise()` once to get the key |
+| `kind()` | `"apiKey"` or `"oauthToken"` |
+| `issue(sessionTag)` | returns an `IssuedCredential`; call `.materialise()` once to get the secret |
 | `revoke(sessionTag)` | invalidate grants for that tag |
-| `rotate(newApiKey)` | replace the key and invalidate all outstanding grants |
+| `rotate(newSecret)` | replace the secret and invalidate all outstanding grants |
 
 The factory materialises the key just before injecting it as
 `ANTHROPIC_API_KEY` into the slice's env.
