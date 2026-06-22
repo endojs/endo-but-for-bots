@@ -501,7 +501,7 @@ export const POWERS = harden({
   timers: { label: 'Schedule wake-ups / reminders that PING dan (for things a human must do)', verbs: ['scheduleWakeup', 'repeatEvery', 'cancelTimer', 'listTimers'] },
   schedule: { label: 'Create + edit SCHEDULED TASKS — recurring autonomous runs that DO the work themselves on a cadence (use this, not a reminder, when the agent can do the task)', verbs: ['scheduleTask', 'listScheduledTasks', 'editScheduledTask', 'cancelScheduledTask'] },
   browser: { label: 'Browse the web in a real headless browser (render JS, read pages, screenshot)', verbs: ['browseWeb', 'screenshotWeb'] },
-  home: { label: 'A private scratch/workspace folder of ITS OWN to read/write + publish sites from (a sandboxed folder created for the agent — NOT your home directory or vault)', verbs: ['fileList', 'fileRead', 'fileWrite', 'publishSite'] },
+  home: { label: 'A private scratch/workspace folder of ITS OWN to read/write + publish sites + mint download links from (a sandboxed folder created for the agent — NOT your home directory or vault)', verbs: ['fileList', 'fileRead', 'fileWrite', 'publishSite', 'createDownloadLinkFor'] },
   vm: { label: 'Full terminal in the agent-code dev VM (coarse: root over that sandbox)', verbs: ['vmExec'] },
   host: { label: '⚠️ Full shell over THIS host (archua) as the operator — the dev/dogfood harness; coarse ambient host-root, like claude-code', verbs: ['hostExec'] },
   agents: { label: 'The roster of agent personas + code sessions (read status; exec is coarse; route tasks to a dev session)', verbs: ['agentsList', 'agentStatus', 'agentExec', 'routeToDev'] },
@@ -606,8 +606,14 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
   // /sites/<token>/ (an unguessable web-key path) and returns the URL.
   const sites = new Map(); // token → absolute dir
   const publish = async (dir, name) => { const token = crypto.randomBytes(8).toString('hex'); sites.set(token, dir); return { name: String(name || 'site'), url: `${baseUrl}/sites/${token}/`, token }; };
+  // download web-keys: token → { path (canonical, inside an agent home), name }. The token IS the credential
+  // (like /sites, /uploads). 36-hex so it dodges the bare-32-hex trace scrub — a download link is a legit
+  // render (it serves ONE file as an attachment), not a cap to the agent's authority. In-memory, like sites.
+  const downloads = new Map();
+  const download = async (absFile, name) => { const token = crypto.randomBytes(18).toString('hex'); const nm = String(name || 'download').slice(0, 200); downloads.set(token, { path: absFile, name: nm }); return { name: nm, url: `/dl/${token}`, token }; };
+  const downloadFor = token => downloads.get(String(token || '')) || null;
   const homeCache = new Map(); // subkey → home object (stable per agent)
-  const makeHome = subkey => { if (!homeCache.has(subkey)) homeCache.set(subkey, makeHomeFolder({ root: `${HOME_BASE}/${subkey}`, label: subkey, publish })); return homeCache.get(subkey); };
+  const makeHome = subkey => { if (!homeCache.has(subkey)) homeCache.set(subkey, makeHomeFolder({ root: `${HOME_BASE}/${subkey}`, label: subkey, publish, download })); return homeCache.get(subkey); };
 
   // The agent's editable system-prompt block (persisted; injected into runAgent).
   // Changes are operator-confirmed proposals — the agent can PROPOSE but not apply.
@@ -1258,11 +1264,16 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
       toolbox.fileRead = harden({ run: async ({ path: rel }) => { const h = home(); return h ? h.read(rel) : { ok: false, error: 'no home folder' }; } });
       toolbox.fileWrite = harden({ run: async ({ path: rel, content }) => { const h = home(); if (!h?.write) return { ok: false, error: 'read-only home' }; return h.write(rel, content); } });
       toolbox.publishSite = harden({ run: async ({ path: rel, name }) => { const h = home(); if (!h?.publishSite) return { ok: false, error: 'read-only home' }; try { return await h.publishSite(rel || '', name); } catch (e) { return { ok: false, error: e.message }; } } });
+      // createDownloadLinkFor(path) → a working DOWNLOAD link for a file in your home, to hand the user in a
+      // reply. Returns { url:'/dl/<token>' } — embed it as a markdown link. The url is relative to this app's
+      // origin (so it works whether the user is on the tailnet or the public address).
+      toolbox.createDownloadLinkFor = harden({ run: async ({ path: rel, name }) => { const h = home(); if (!h?.downloadLink) return { ok: false, error: 'no home folder' }; try { return await h.downloadLink(String(rel || ''), name); } catch (e) { return { ok: false, error: e.message }; } } });
       manifest.push(
         { name: 'fileList', reversible: false, args: { path: 'string — sub-path inside your home (optional)' }, description: 'List files in your home folder.' },
         { name: 'fileRead', reversible: false, args: { path: 'string — file path inside your home' }, description: 'Read a file from your home folder.' },
         { name: 'fileWrite', reversible: false, args: { path: 'string — file path inside your home', content: 'string' }, description: 'Write a file in your home folder (creates dirs). Self-scoped — no confirmation needed.' },
         { name: 'publishSite', reversible: false, args: { path: 'string — a folder in your home holding index.html', name: 'string — a label' }, description: 'Publish a folder from your home as a static site; returns its URL.' },
+        { name: 'createDownloadLinkFor', reversible: false, args: { path: 'string — a file in your home folder', name: 'string — optional download filename' }, description: 'Mint a working DOWNLOAD link for a file in your home folder, so you can give the user a clickable download in your reply. Returns { url } — put it in your reply as a markdown link.' },
       );
     }
     if (powers.has('contacts')) {
@@ -2009,6 +2020,7 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
     specialistFor: ref => { const spec = findSpecialist(ref); return spec ? harden({ id: spec.id, name: spec.name, node: getSpecNode(spec), persona: spec.instructions || '', powers: [...spec.powers] }) : null; },
     // resolve a published-site token → its directory (for the /sites/ host)
     siteDir: token => sites.get(String(token || '')) || null,
+    downloadFor,
     // Resolve an HA entity handle → a READ-ONLY entity node (or null), WITHOUT a cap. ONLY for the server's
     // component-share path: the authorization is the persisted, owner-minted, reach-verified share record
     // (the owner already proved their cap reached this handle at mint); this just reads its live state.

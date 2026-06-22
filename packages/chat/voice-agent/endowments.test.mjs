@@ -36,7 +36,7 @@ const POLICY = {
   // reversible — speculative, abortable
   generateImage: 'reversible',
   // scoped-write — confined to the agent's own sandboxed storage (home folder, or its own component-source git)
-  fileWrite: 'scoped-write', publishSite: 'scoped-write',
+  fileWrite: 'scoped-write', publishSite: 'scoped-write', createDownloadLinkFor: 'scoped-write',
   componentWriteFile: 'scoped-write', forkComponent: 'scoped-write', revertComponent: 'scoped-write',
   // add — non-destructive additive write: only ever creates/appends a note, never overwrites or deletes
   // (the self-hosted private notepad; sensitive notes that never leave the network)

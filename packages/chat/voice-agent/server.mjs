@@ -304,7 +304,7 @@ const traceRun = async (node, transcript, persona, chatId) => {
 const log = (...a) => process.stderr.write(`[${new Date().toISOString()}] ${a.join(' ')}\n`);
 const newSwissRe = /^[0-9a-f]{32}$/;
 
-const { rootNode, registerRoot, nodeFor, getProposal, commitProposal, rejectProposal, buildHomeAssistant, buildAgents, buildContacts, buildKazputer, siteDir, getPersona, runScheduledAgent, mintScopedCap, rescopeCap, specialistFor, haResolveReadOnly, changelog } = makeFieldAgent({ outDir: OUT, baseUrl: BASE_URL });
+const { rootNode, registerRoot, nodeFor, getProposal, commitProposal, rejectProposal, buildHomeAssistant, buildAgents, buildContacts, buildKazputer, siteDir, downloadFor, getPersona, runScheduledAgent, mintScopedCap, rescopeCap, specialistFor, haResolveReadOnly, changelog } = makeFieldAgent({ outDir: OUT, baseUrl: BASE_URL });
 liveCells = makeLiveCells({ nodeFor }); // browser-subscribable live grains (cap-gated)
 // Least-authority cross-user share tokens for a broken-out component: subscribe-only to its frozen cells.
 const componentShares = makeComponentShares({ file: `${HOME}/.local/state/voice-agent/component-shares.json`, makePurse, purseStore });
@@ -736,6 +736,24 @@ const handler = async (req, res) => {
         const buf = await fs.promises.readFile(abs);
         res.writeHead(200, { 'content-type': mimeFor(abs), 'cache-control': 'no-cache', 'x-content-type-options': 'nosniff', 'content-security-policy': "default-src 'none'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; font-src 'self' data:; media-src 'self' data:; base-uri 'none'; form-action 'none'" });
         res.end(buf);
+      } catch { res.writeHead(404, SEC); res.end('not found'); }
+      return;
+    }
+
+    // ── agent download links: /dl/<token> streams a file an agent exposed from its OWN home folder via
+    //    createDownloadLinkFor(). The token (a 36-hex web-key) IS the credential — like /sites, /uploads. The
+    //    target path was jailed + symlink-checked to the agent home at mint time. Served as an ATTACHMENT
+    //    under a locked-down CSP, so it can only ever be downloaded, never interpreted as active content. ─
+    if (u.pathname.startsWith('/dl/')) {
+      const m = /^\/dl\/([0-9a-f]{24,})$/.exec(u.pathname);
+      const rec = m && downloadFor(m[1]);
+      if (!rec) { res.writeHead(404, SEC); res.end('unknown or expired download'); return; }
+      try {
+        const st = await fs.promises.stat(rec.path);
+        if (!st.isFile()) throw new Error('not a file');
+        const safeName = String(rec.name || 'download').replace(/[^\w.\- ]+/g, '_').slice(0, 120) || 'download';
+        res.writeHead(200, { 'content-type': 'application/octet-stream', 'content-length': st.size, 'content-disposition': `attachment; filename="${safeName}"`, 'cache-control': 'private, no-store', 'x-content-type-options': 'nosniff', 'content-security-policy': "default-src 'none'; sandbox" });
+        fs.createReadStream(rec.path).pipe(res);
       } catch { res.writeHead(404, SEC); res.end('not found'); }
       return;
     }
