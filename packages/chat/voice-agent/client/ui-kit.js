@@ -210,6 +210,27 @@ export const Table = ({ columns = [], rows = [] } = {}) =>
     ...rows.map((r, ri) => h('div', { class: 'tr', key: ri }, columns.map((c, ci) => h('div', { class: 'td', key: ci }, str(r[c.key]))))),
   ]);
 
+// Drawer — a side panel over a backdrop. open in props (stateless); onClose(). Null when closed.
+export const Drawer = ({ open = false, title, children, onClose } = {}) => {
+  if (!open) return null;
+  return h('div', null, [
+    h('div', { class: 'kit-drawer-bg', onClick: () => onClose && onClose() }),
+    h('div', { class: 'kit-drawer' }, [
+      (title != null || onClose) ? h('div', { class: 'kit-modal-title' }, [h('span', null, str(title)), onClose ? h('button', { class: 'kit-modal-x', title: 'close', onClick: () => onClose() }, '×') : null]) : null,
+      h('div', null, children),
+    ]),
+  ]);
+};
+
+// Stepper — a horizontal step indicator. steps:[{label}]|[string], active index (0-based).
+export const Stepper = ({ steps = [], active = 0 } = {}) =>
+  h('div', { class: 'kit-stepper' }, (steps || []).flatMap((s, i) => {
+    const cls = i < active ? 'kit-step done' : i === active ? 'kit-step on' : 'kit-step';
+    const label = s && typeof s === 'object' ? s.label : s;
+    const step = h('span', { class: cls, key: `s${i}` }, [h('span', { class: 'dot' }, i < active ? '✓' : String(i + 1)), h('span', null, str(label))]);
+    return i === 0 ? [step] : [h('span', { class: 'kit-step-sep', key: `sep${i}` }), step];
+  }));
+
 // List — items:[{label, sub?, icon?}], onSelect?(index).
 export const List = ({ items = [], onSelect } = {}) =>
   h('div', { class: 'kit-list' }, (items || []).map((it, i) =>

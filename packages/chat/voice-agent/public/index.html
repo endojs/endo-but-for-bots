@@ -359,6 +359,13 @@
   .kit-list { display:flex; flex-direction:column; }
   .kit-list-item { display:flex; gap:8px; align-items:center; padding:8px 0; border-bottom:1px solid var(--edge); }
   .kit-list-item.click { cursor:pointer; } .kit-list-item.click:hover { background:var(--panel); }
+  .kit-drawer-bg { position:fixed; inset:0; background:rgba(0,0,0,.45); z-index:60; }
+  .kit-drawer { position:fixed; top:0; right:0; bottom:0; width:min(360px,85vw); background:var(--panel); border-left:1px solid var(--edge); z-index:61; padding:16px; overflow:auto; box-shadow:-8px 0 24px rgba(0,0,0,.4); }
+  .kit-stepper { display:flex; align-items:center; gap:6px; font-size:12px; }
+  .kit-step { display:flex; align-items:center; gap:6px; color:var(--mut); }
+  .kit-step .dot { width:20px; height:20px; border-radius:50%; border:1px solid var(--edge); display:inline-flex; align-items:center; justify-content:center; font-size:11px; flex:none; }
+  .kit-step.done .dot, .kit-step.on .dot { background:var(--acc); border-color:var(--acc); color:#fff; } .kit-step.on { color:var(--ink); }
+  .kit-step-sep { flex:1; height:1px; background:var(--edge); min-width:16px; }
   .share { display:flex; justify-content:space-between; align-items:center; gap:10px; padding:9px 0; border-top:1px solid var(--edge); font-size:13px; }
   .pill { font-size:11px; color:var(--mut); } .err { color:var(--bad); font-size:13px; margin-top:8px; }
   .shares-sec { margin-top:14px; padding-top:10px; font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:var(--mut); border-top:1px solid var(--edge); }

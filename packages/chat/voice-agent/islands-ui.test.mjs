@@ -15,6 +15,8 @@ import { AskCard } from './client/ask-card.js';
 import { ProposalCard } from './client/proposal-card.js';
 import { ChatList } from './client/chat-list.js';
 import { MessageControls } from './client/message-controls.js';
+import { ChatMetaBar } from './client/chat-meta-bar.js';
+import { Drawer, Stepper } from './client/ui-kit.js';
 
 // Walk a preact vnode tree → collect text, classes, clickable buttons, and inputs (with their handlers).
 const collect = v => {
@@ -222,6 +224,30 @@ test('MessageControls: retry/edit fire; 🔊 only with audio; fork nav (◀ k/n 
   assert.equal(bare.buttons.filter(b => b.label === '🔊' || b.label === '◀' || b.label === '▶').length, 0);
 });
 
+test('ChatMetaBar: chat mode (title + parent/project chips + share badge) and memo mode (version scrubber + rerun)', () => {
+  let opened = []; const chat = collect(ChatMetaBar({ mode: 'chat', title: 'Berlin', shareMode: 'write', metered: true,
+    parent: { id: 'p0', title: 'Research', available: true }, project: { id: 'pr0', name: 'Europe' },
+    onOpenParent: id => opened.push(['parent', id]), onOpenProject: id => opened.push(['proj', id]) }));
+  assert.match(allText(chat), /Berlin/); assert.match(allText(chat), /you can post/, 'write share badge');
+  chat.buttons.find(b => b.cls.includes('cb-parent')).onClick(); chat.buttons.find(b => b.cls.includes('cb-proj')).onClick();
+  assert.deepEqual(opened, [['parent', 'p0'], ['proj', 'pr0']]);
+  let v = []; const memo = collect(ChatMetaBar({ mode: 'memo', title: 'voice note', versionLabel: 're-run 1', varIx: 1, varCount: 3, onVersionPrev: () => v.push('prev'), onVersionNext: () => v.push('next'), onRerun: () => v.push('rerun') }));
+  assert.match(allText(memo), /🎙/); assert.match(allText(memo), /2\/3/, 'version k/n');
+  memo.buttons.find(b => b.label === '◀').onClick(); memo.buttons.find(b => /Re-run/.test(b.label)).onClick();
+  assert.deepEqual(v, ['prev', 'rerun']);
+});
+
+test('kit Drawer (open/close) + Stepper (done/active/upcoming dots)', () => {
+  assert.equal(Drawer({ open: false }), null, 'closed Drawer renders nothing');
+  let dc = 0; const d = collect(Drawer({ open: true, title: 'Panel', children: 'inside', onClose: () => { dc += 1; } }));
+  assert.ok(d.classes.some(c => c.includes('kit-drawer')), 'open Drawer renders'); assert.match(allText(d), /inside/);
+  d.buttons.find(b => b.cls.includes('kit-modal-x')).onClick(); assert.equal(dc, 1, 'Drawer close');
+  const st = collect(Stepper({ steps: [{ label: 'A' }, { label: 'B' }, { label: 'C' }], active: 1 }));
+  assert.ok(st.classes.some(c => c.includes('kit-step') && c.includes('done')), 'a completed step');
+  assert.ok(st.classes.some(c => c.includes('kit-step') && c.includes('on')), 'the active step');
+  assert.match(allText(st), /✓/, 'done step shows a check');
+});
+
 test('kit data primitives: Menu open/select, Toast close, Pagination, Table cells, List select, Tooltip', () => {
   let picked = null; const mn = collect(Menu({ label: '⋯', open: true, items: [{ label: 'Rename', value: 'rn' }, { label: 'Delete', value: 'del' }], onSelect: v => { picked = v; } }));
   mn.buttons.find(b => b.label === 'Delete').onClick(); assert.equal(picked, 'del', 'Menu onSelect(value)');
@@ -239,7 +265,7 @@ test('kit data primitives: Menu open/select, Toast close, Pagination, Table cell
 test('KitSampler renders every primitive without error (the design-system smoke test)', () => {
   const acc = collect(KitSampler());
   // a broad spread of the kit classes must all appear → all primitives composed + rendered
-  for (const cls of ['kit-in', 'kit-toggle', 'kit-tab', 'kit-banner', 'kit-progress', 'kit-badge', 'kit-spinner', 'kit-avatar', 'kit-divider', 'ncard', 'kit-seg', 'kit-slider', 'kit-skel', 'kit-disc', 'kit-crumbs', 'kit-menu', 'kit-toast', 'kit-page', 'kit-table', 'kit-list', 'kit-tip']) {
+  for (const cls of ['kit-in', 'kit-toggle', 'kit-tab', 'kit-banner', 'kit-progress', 'kit-badge', 'kit-spinner', 'kit-avatar', 'kit-divider', 'ncard', 'kit-seg', 'kit-slider', 'kit-skel', 'kit-disc', 'kit-crumbs', 'kit-menu', 'kit-toast', 'kit-page', 'kit-table', 'kit-list', 'kit-tip', 'kit-stepper']) {
     assert.ok(acc.classes.some(c => String(c).split(/\s+/).includes(cls)), `sampler renders ${cls}`);
   }
 });

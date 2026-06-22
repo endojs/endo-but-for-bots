@@ -20,6 +20,7 @@ import { AskCard } from './ask-card.js';
 import { ProposalCard } from './proposal-card.js';
 import { ChatList } from './chat-list.js';
 import { MessageControls } from './message-controls.js';
+import { ChatMetaBar } from './chat-meta-bar.js';
 
 // A render propagator: re-paints `view(...values)` into `el` whenever any wired cell changes.
 // This is the one kind of propagator whose effect is the DOM; logic propagators stay headless.
@@ -46,6 +47,8 @@ const chatListCell = makeCell();
 let chatListWired = false;
 const msgCtrlCell = makeCell();
 let msgCtrlWired = false;
+const metaBarCell = makeCell();
+let metaBarWired = false;
 
 const islands = {
   // Idempotent: wires the render propagator once (cell → SharesPanel), then feeds the latest data in.
@@ -172,6 +175,19 @@ const islands = {
       msgCtrlWired = true;
     }
     msgCtrlCell.addContent(data);
+  },
+
+  // ── ChatMetaBar island ────────────────────────────────────────────────────────────────────────
+  // `data` = { mode, title, ...memo-or-chat fields }. `handlers` = { onVersionPrev, onVersionNext,
+  // onRerun, onOpenParent(id), onOpenProject(id) }.
+  renderChatMetaBar(el, data, handlers) {
+    if (!metaBarWired) {
+      el.setAttribute('data-component-id', 'island-chat-meta-bar');
+      el.setAttribute('data-component-name', 'Chat meta bar');
+      renderPropagator(el, [metaBarCell], d => h(ChatMetaBar, { ...d, ...handlers }));
+      metaBarWired = true;
+    }
+    metaBarCell.addContent(data);
   },
 };
 

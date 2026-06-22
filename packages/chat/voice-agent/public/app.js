@@ -2404,6 +2404,10 @@ const ISLAND_PREVIEW = {
     more: 3,
   }, { onSelect() {}, onDelete() {}, onMore() {}, onRenameStart() {}, onRenameChange() {}, onRenameCommit() {} }),
   'island-message-controls': slot => window.__fieldIslands.renderMessageControls(slot, { hasAudio: true, varIx: 1, varCount: 3 }, { onRetry() {}, onEdit() {}, onPlayAudio() {}, onFork() {} }),
+  'island-chat-meta-bar': slot => window.__fieldIslands.renderChatMetaBar(slot, {
+    mode: 'chat', title: 'Berlin trip planning', shareMode: 'write', metered: true,
+    parent: { id: 'p0', title: 'Travel research', available: true }, project: { id: 'pr0', name: 'Europe 2026' },
+  }, { onVersionPrev() {}, onVersionNext() {}, onRerun() {}, onOpenParent() {}, onOpenProject() {} }),
 };
 
 const refreshComponents = async () => {
