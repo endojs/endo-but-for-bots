@@ -483,14 +483,19 @@ const prepareNetworkedHost = async (t, name) => {
 // down how a peer's cap can cross to the host so the factory can endow it
 // into a per-session powers formula.
 //
-// Finding (this test is the evidence): a cap passed as a bare CapTP argument
-// arrives on the host as a *presence* with no local formula id, so
-// `storeValue`/marshal cannot capture it ("No corresponding formula"). The
-// mechanism that DOES work is to give the remote cap an id the host can
-// resolve — a **locator** internalized via `storeLocator` — and then endow it
-// *by name* into the eval worker (a remote formula id is a valid endowment).
+// Findings (this test is the evidence):
+//  - A cap passed as a bare CapTP argument arrives on the host as a presence
+//    with no local formula id, so `storeValue`/marshal cannot capture it
+//    ("No corresponding formula").
+//  - `storeLocator` names a remote id but does NOT mark it as a tracked
+//    import (no `thisDiesIfThatDies`) and discards the peer's addresses, so
+//    it is not a safe way to bring a peer's cap across.
+//  - The correct path is `send`/`adopt`: the peer sends its cap in a package;
+//    the host adopts it by edge name, which runs `thisDiesIfThatDies` to
+//    mark it as an import, and yields a name the host can endow *by name*
+//    into the eval worker (a remote formula id is a valid endowment).
 test.serial(
-  'a remote peer cap reaches the host via a locator and is endowable by name',
+  'a remote peer cap reaches the host via send/adopt and is endowable by name',
   async t => {
     t.timeout(120_000);
     const { host } = await prepareNetworkedHost(t, 'xpeer-host');
@@ -508,18 +513,6 @@ test.serial(
       env: harden({ ENDO_FS_ROOT: peerWorkspace }),
     });
 
-    // Provision the factory on the host and share its `controller` to the
-    // peer (the documented "delegate only the controller" step).
-    await provisionFactory(host);
-    await provisionSandboxDeps(host);
-    const controllerLocator = await E(host).locate(
-      'claude-sandbox',
-      'controller',
-    );
-    await E(peer).storeLocator(['sandbox-controller'], controllerLocator);
-    const controller = await E(peer).lookup(['sandbox-controller']);
-    t.truthy(controller, 'peer resolved the remote controller over the mesh');
-
     // A bare remote presence cannot be marshalled into a new formula: the
     // host has no formula id for a cap it only received as a CapTP argument.
     const fsPresence = await E(peer).lookup('project-fs');
@@ -529,21 +522,40 @@ test.serial(
       'storeValue cannot capture a bare remote presence',
     );
 
-    // The working path: the peer locates its own cap; the host internalizes
-    // the locator (minting a resolvable remote id) and endows it *by name*
-    // into an eval worker, which invokes a method on it across the mesh.
-    const fsLoc = await E(peer).locate('project-fs');
-    await E(host).storeLocator(['remote-fs-by-locator'], fsLoc);
+    // Establish a mailbox relationship: the sender (peer) invites, the
+    // recipient (host) accepts. Now the peer can `send` packages to the host.
+    const invitation = await E(peer).invite('sandbox-host');
+    const invitationLocator = await E(invitation).locate();
+    await E(host).accept(invitationLocator, 'remote-peer');
+
+    // The peer sends its own Filesystem cap as a package (named in the peer's
+    // namespace). The host adopts it by edge name, which marks it as a
+    // tracked import (`thisDiesIfThatDies`) under a host name.
+    await E(peer).send(
+      'sandbox-host',
+      ['here is my workspace'],
+      ['filesystem'],
+      ['project-fs'],
+    );
+    const messages = /** @type {any[]} */ (await E(host).listMessages());
+    const pkg = messages.find(
+      m => m.type === 'package' && m.strings?.[0] === 'here is my workspace',
+    );
+    t.truthy(pkg, 'host received the package from the peer');
+    await E(host).adopt(pkg.number, 'filesystem', ['remote-fs']);
+
+    // The adopted cap is endowable *by name* into an eval worker, which
+    // invokes a method on it across the mesh.
     const reachedRemoteCap = await E(host).evaluate(
       '@main',
       'E(fs).__getMethodNames__().then(ns => Array.isArray(ns) && ns.length > 0)',
       harden(['fs']),
-      harden(['remote-fs-by-locator']),
+      harden(['remote-fs']),
       'probe-result',
     );
     t.true(
       reachedRemoteCap,
-      'host endowed and invoked the remote fs cap by name (via locator)',
+      'host endowed and invoked the adopted remote fs cap by name',
     );
   },
 );
