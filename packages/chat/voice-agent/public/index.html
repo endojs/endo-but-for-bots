@@ -295,6 +295,38 @@
   button.go { margin-top:12px; background:var(--acc); border:none; color:#fff; padding:10px 16px; border-radius:8px; font-size:14px; cursor:pointer; }
   button.mini { background:transparent; border:1px solid var(--edge); color:var(--mut); padding:4px 10px; border-radius:6px; cursor:pointer; font-size:12px; }
   button.mini.bad { color:var(--bad); border-color:#5a2a2a; }
+  button.mini.primary { background:var(--acc); border-color:var(--acc); color:#fff; }
+  /* ── ui-kit: the confined-Preact design system (themed via the vars above; one consistent look for every island + app-within-an-app) ── */
+  .kit-in { width:100%; box-sizing:border-box; background:#0d1117; border:1px solid var(--edge); color:var(--ink); border-radius:8px; padding:8px 10px; font:inherit; }
+  .kit-in:focus { outline:none; border-color:var(--acc); }
+  .kit-field { display:flex; flex-direction:column; gap:4px; }
+  .kit-label { font-size:12px; color:var(--mut); }
+  .kit-check { display:inline-flex; align-items:center; gap:6px; font-size:13px; cursor:pointer; }
+  .kit-toggle { display:inline-flex; align-items:center; gap:8px; cursor:pointer; font-size:13px; }
+  .kit-toggle input { position:absolute; opacity:0; width:0; height:0; }
+  .kit-toggle-track { width:34px; height:18px; border-radius:10px; background:var(--edge); position:relative; transition:background .15s; flex:none; }
+  .kit-toggle input:checked + .kit-toggle-track { background:var(--acc); }
+  .kit-toggle-thumb { position:absolute; top:2px; left:2px; width:14px; height:14px; border-radius:50%; background:#fff; transition:transform .15s; }
+  .kit-toggle input:checked + .kit-toggle-track .kit-toggle-thumb { transform:translateX(16px); }
+  .kit-spinner { display:inline-block; width:16px; height:16px; border:2px solid var(--edge); border-top-color:var(--acc); border-radius:50%; animation:kit-spin .7s linear infinite; vertical-align:middle; }
+  @keyframes kit-spin { to { transform:rotate(360deg); } }
+  .kit-avatar { display:inline-flex; align-items:center; justify-content:center; width:28px; height:28px; border-radius:50%; background:var(--panel); border:1px solid var(--edge); font-size:13px; flex:none; }
+  .kit-progress { width:100%; height:6px; background:var(--panel); border-radius:4px; overflow:hidden; }
+  .kit-progress > span { display:block; height:100%; background:var(--acc); transition:width .2s; }
+  .kit-badge { display:inline-block; font-size:10px; font-weight:600; padding:1px 6px; border-radius:9px; background:var(--acc); color:#fff; }
+  .kit-badge.bad { background:var(--bad); } .kit-badge.mut { background:var(--edge); color:var(--ink); }
+  .kit-banner { border:1px solid var(--edge); border-radius:8px; padding:8px 10px; font-size:13px; display:flex; gap:8px; align-items:flex-start; }
+  .kit-banner.info { border-color:var(--you); } .kit-banner.warn { border-color:#7a5a1a; }
+  .kit-banner.error { border-color:#5a2a2a; color:var(--bad); } .kit-banner.success { border-color:#2a5a2a; }
+  .kit-divider { border:none; border-top:1px solid var(--edge); margin:8px 0; }
+  .kit-tabs { display:flex; gap:4px; border-bottom:1px solid var(--edge); }
+  .kit-tab { padding:6px 12px; border:none; background:transparent; color:var(--mut); cursor:pointer; font-size:13px; border-bottom:2px solid transparent; }
+  .kit-tab.on { color:var(--ink); border-bottom-color:var(--acc); }
+  .kit-stack { display:flex; flex-direction:column; gap:8px; }
+  .kit-rowx { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+  .kit-iconbtn { background:transparent; border:1px solid var(--edge); color:var(--mut); border-radius:6px; cursor:pointer; padding:3px 7px; font-size:13px; line-height:1; }
+  .kit-iconbtn:hover { color:var(--ink); border-color:var(--acc); }
+  .kit-sampler h4 { margin:14px 0 6px; font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:var(--mut); }
   .share { display:flex; justify-content:space-between; align-items:center; gap:10px; padding:9px 0; border-top:1px solid var(--edge); font-size:13px; }
   .pill { font-size:11px; color:var(--mut); } .err { color:var(--bad); font-size:13px; margin-top:8px; }
   .shares-sec { margin-top:14px; padding-top:10px; font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:var(--mut); border-top:1px solid var(--edge); }

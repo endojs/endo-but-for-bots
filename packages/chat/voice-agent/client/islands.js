@@ -15,6 +15,7 @@ import { SharesPanel } from './shares-panel.js';
 import { NotificationCard } from './notification-card.js';
 import { ChangelogList } from './changelog-list.js';
 import { PowersBanner } from './powers-banner.js';
+import { KitSampler } from './kit-sampler.js';
 
 // A render propagator: re-paints `view(...values)` into `el` whenever any wired cell changes.
 // This is the one kind of propagator whose effect is the DOM; logic propagators stay headless.
@@ -31,6 +32,8 @@ const changelogCell = makeCell();
 let changelogWired = false;
 const powersCell = makeCell();
 let powersWired = false;
+const kitCell = makeCell();
+let kitWired = false;
 
 const islands = {
   // Idempotent: wires the render propagator once (cell → SharesPanel), then feeds the latest data in.
@@ -87,12 +90,25 @@ const islands = {
   // { onRevoke(power), onAddPowers() }.
   renderPowersBanner(el, data, handlers) {
     if (!powersWired) {
+      el.classList.add('powers-banner'); // the .chip styles are scoped under .powers-banner
       el.setAttribute('data-component-id', 'island-powers-banner');
       el.setAttribute('data-component-name', 'Powers banner');
       renderPropagator(el, [powersCell], d => h(PowersBanner, { ...d, ...handlers }));
       powersWired = true;
     }
     powersCell.addContent(data);
+  },
+
+  // ── UI-kit sampler island ─────────────────────────────────────────────────────────────────────
+  // A living style guide: one of every kit primitive, rendered through the real bundle. No data/handlers.
+  renderKitSampler(el) {
+    if (!kitWired) {
+      el.setAttribute('data-component-id', 'island-ui-kit');
+      el.setAttribute('data-component-name', 'UI kit (primitives)');
+      renderPropagator(el, [kitCell], () => h(KitSampler));
+      kitWired = true;
+    }
+    kitCell.addContent({ render: true });
   },
 };
 

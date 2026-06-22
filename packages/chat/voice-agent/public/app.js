@@ -2381,6 +2381,7 @@ const ISLAND_PREVIEW = {
     ],
     manageable: true,
   }, { onRevoke() {}, onAddPowers() {} }),
+  'island-ui-kit': slot => window.__fieldIslands.renderKitSampler(slot), // a living style guide of every primitive
 };
 
 const refreshComponents = async () => {

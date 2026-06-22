@@ -6,22 +6,25 @@
 //   node --test packages/chat/voice-agent/islands-ui.test.mjs
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { Chip, Btn, EmptyState, Card } from './client/ui-kit.js';
+import { Chip, Btn, EmptyState, Card, TextField, Textarea, Select, Checkbox, Toggle, RadioGroup, Tabs, ProgressBar, Banner, Badge, Spinner, Avatar } from './client/ui-kit.js';
 import { NotificationCard } from './client/notification-card.js';
 import { ChangelogList } from './client/changelog-list.js';
 import { PowersBanner } from './client/powers-banner.js';
+import { KitSampler } from './client/kit-sampler.js';
 
-// Walk a preact vnode tree → collect text, classes, and clickable buttons (label + handler).
+// Walk a preact vnode tree → collect text, classes, clickable buttons, and inputs (with their handlers).
 const collect = v => {
-  const acc = { text: [], classes: [], buttons: [] };
-  const textOf = node => { const a = { text: [], classes: [], buttons: [] }; walk(node, a); return a.text.join(''); };
+  const acc = { text: [], classes: [], buttons: [], inputs: [], styles: [] };
+  const textOf = node => { const a = { text: [], classes: [], buttons: [], inputs: [], styles: [] }; walk(node, a); return a.text.join(''); };
   function walk(n, a) {
     if (n == null || n === false || n === true) return;
     if (Array.isArray(n)) { for (const c of n) walk(c, a); return; }
     if (typeof n === 'string' || typeof n === 'number') { a.text.push(String(n)); return; }
     const p = (n && n.props) || {};
     if (p.class) a.classes.push(p.class);
+    if (p.style) a.styles.push(p.style);
     if (typeof p.onClick === 'function') a.buttons.push({ label: textOf(p.children), cls: p.class || '', onClick: p.onClick });
+    if (typeof p.onInput === 'function' || typeof p.onChange === 'function') a.inputs.push({ type: p.type || (n.type || ''), cls: p.class || '', onInput: p.onInput, onChange: p.onChange });
     walk(p.children, a);
   }
   walk(v, acc);
@@ -101,4 +104,34 @@ test('PowersBanner: chips render with icon+name; manageable → × per chip → 
   // not manageable → no × and no Add (read-only view)
   const ro = collect(PowersBanner({ items: [{ power: 'notes', icon: '📓' }], manageable: false }));
   assert.equal(ro.buttons.filter(b => b.cls.includes('chip-x') || b.cls.includes('chip-add')).length, 0, 'read-only: no revoke/add');
+});
+
+test('kit form inputs are CONTROLLED: value renders, and the right handler fires with the value', () => {
+  let txt = null; const tf = collect(TextField({ value: 'hi', onInput: v => { txt = v; } }));
+  tf.inputs[0].onInput({ target: { value: 'there' } }); assert.equal(txt, 'there', 'TextField onInput(value)');
+  let ta = null; collect(Textarea({ value: 'x', onInput: v => { ta = v; } })).inputs[0].onInput({ target: { value: 'y' } }); assert.equal(ta, 'y');
+  let sel = null; collect(Select({ value: 'a', options: [{ value: 'a', label: 'A' }, { value: 'b', label: 'B' }], onChange: v => { sel = v; } })).inputs[0].onChange({ target: { value: 'b' } }); assert.equal(sel, 'b');
+  let chk = null; collect(Checkbox({ label: 'x', checked: false, onChange: v => { chk = v; } })).inputs[0].onChange({ target: { checked: true } }); assert.equal(chk, true);
+  let tog = null; collect(Toggle({ label: 'dark', checked: false, onChange: v => { tog = v; } })).inputs[0].onChange({ target: { checked: true } }); assert.equal(tog, true);
+  let rg = null; const rgi = collect(RadioGroup({ name: 'g', value: 'one', options: [{ value: 'one', label: 'One' }, { value: 'two', label: 'Two' }], onChange: v => { rg = v; } }));
+  rgi.inputs[1].onChange(); assert.equal(rg, 'two', 'RadioGroup onChange(value)');
+});
+
+test('kit display primitives render their semantics (Tabs active, ProgressBar width, Banner kind, Badge, Spinner, Avatar)', () => {
+  let tab = null; const tabs = collect(Tabs({ tabs: [{ id: 'a', label: 'A' }, { id: 'b', label: 'B' }], active: 'a', onSelect: id => { tab = id; } }));
+  assert.ok(tabs.classes.some(c => c.includes('kit-tab') && c.includes('on')), 'active tab has .on');
+  tabs.buttons.find(b => b.label === 'B').onClick(); assert.equal(tab, 'b', 'Tabs onSelect(id)');
+  assert.ok(collect(ProgressBar({ value: 0.6 })).styles.some(s => /width:\s*60/.test(s)), 'ProgressBar width reflects value');
+  assert.ok(collect(Banner({ kind: 'error', children: 'x' })).classes.some(c => c.includes('kit-banner') && c.includes('error')), 'Banner kind → class');
+  assert.match(collect(Badge({ label: '3' })).classes.join(' '), /kit-badge/);
+  assert.match(collect(Spinner({})).classes.join(' '), /kit-spinner/);
+  assert.match(collect(Avatar({ label: '🤖' })).text.join(''), /🤖/);
+});
+
+test('KitSampler renders every primitive without error (the design-system smoke test)', () => {
+  const acc = collect(KitSampler());
+  // a broad spread of the kit classes must all appear → all primitives composed + rendered
+  for (const cls of ['kit-in', 'kit-toggle', 'kit-tab', 'kit-banner', 'kit-progress', 'kit-badge', 'kit-spinner', 'kit-avatar', 'kit-divider', 'ncard']) {
+    assert.ok(acc.classes.some(c => String(c).split(/\s+/).includes(cls)), `sampler renders ${cls}`);
+  }
 });
