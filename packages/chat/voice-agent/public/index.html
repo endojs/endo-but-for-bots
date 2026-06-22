@@ -327,6 +327,20 @@
   .kit-iconbtn { background:transparent; border:1px solid var(--edge); color:var(--mut); border-radius:6px; cursor:pointer; padding:3px 7px; font-size:13px; line-height:1; }
   .kit-iconbtn:hover { color:var(--ink); border-color:var(--acc); }
   .kit-sampler h4 { margin:14px 0 6px; font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:var(--mut); }
+  .kit-modal-bg { position:fixed; inset:0; background:rgba(0,0,0,.55); display:flex; align-items:center; justify-content:center; z-index:60; padding:16px; }
+  .kit-modal { background:var(--panel); border:1px solid var(--edge); border-radius:12px; padding:16px; max-width:480px; width:100%; max-height:85vh; overflow:auto; }
+  .kit-modal-title { font-size:15px; font-weight:600; margin-bottom:8px; display:flex; justify-content:space-between; align-items:center; gap:8px; }
+  .kit-modal-x { background:none; border:none; color:var(--mut); cursor:pointer; font-size:18px; line-height:1; }
+  .kit-seg { display:inline-flex; border:1px solid var(--edge); border-radius:8px; overflow:hidden; }
+  .kit-seg button { background:transparent; border:none; color:var(--mut); padding:5px 12px; cursor:pointer; font-size:13px; border-right:1px solid var(--edge); }
+  .kit-seg button:last-child { border-right:none; } .kit-seg button.on { background:var(--acc); color:#fff; }
+  .kit-slider { width:100%; accent-color:var(--acc); }
+  .kit-skel { background:linear-gradient(90deg,var(--panel) 25%,var(--edge) 50%,var(--panel) 75%); background-size:200% 100%; animation:kit-shimmer 1.3s infinite; border-radius:6px; display:inline-block; }
+  @keyframes kit-shimmer { to { background-position:-200% 0; } }
+  .kit-disc-head { cursor:pointer; font-size:13px; padding:6px 0; user-select:none; color:var(--ink); }
+  .kit-disc-head .caret { color:var(--mut); display:inline-block; width:1em; }
+  .kit-crumbs { display:flex; gap:4px; align-items:center; font-size:13px; flex-wrap:wrap; }
+  .kit-crumbs a { color:var(--acc); cursor:pointer; } .kit-crumbs .sep { color:var(--mut); }
   .share { display:flex; justify-content:space-between; align-items:center; gap:10px; padding:9px 0; border-top:1px solid var(--edge); font-size:13px; }
   .pill { font-size:11px; color:var(--mut); } .err { color:var(--bad); font-size:13px; margin-top:8px; }
   .shares-sec { margin-top:14px; padding-top:10px; font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:var(--mut); border-top:1px solid var(--edge); }

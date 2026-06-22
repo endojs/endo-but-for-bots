@@ -2,6 +2,7 @@ import { h } from 'preact';
 import {
   Btn, Chip, Badge, Card, EmptyState, IconBtn, Spinner, Avatar, ProgressBar,
   Banner, Divider, Toggle, Checkbox, RadioGroup, Select, TextField, Textarea, Tabs, Field,
+  SegmentedControl, Slider, Skeleton, Disclosure, Breadcrumb,
 } from './ui-kit.js';
 
 // ── KitSampler — a LIVING STYLE GUIDE: one of every confined-Preact ui-kit primitive, rendered through
@@ -21,7 +22,12 @@ export const KitSampler = () => h('div', { class: 'kit-sampler' }, [
   sec('Choices', Checkbox({ label: 'Remember me', checked: true }), Toggle({ label: 'Dark mode', checked: true })),
   RadioGroup({ name: 'demo', value: 'two', inline: true, options: [{ value: 'one', label: 'One' }, { value: 'two', label: 'Two' }, { value: 'three', label: 'Three' }] }),
   Divider(),
-  h('h4', null, 'Tabs'), Tabs({ tabs: [{ id: 't1', label: 'First' }, { id: 't2', label: 'Second' }], active: 't1' }),
+  h('h4', null, 'Tabs & segmented'), Tabs({ tabs: [{ id: 't1', label: 'First' }, { id: 't2', label: 'Second' }], active: 't1' }),
+  h('div', { style: 'margin-top:6px' }, SegmentedControl({ value: 'm', options: [{ value: 'd', label: 'Day' }, { value: 'm', label: 'Month' }, { value: 'y', label: 'Year' }] })),
+  h('h4', null, 'Slider'), Slider({ value: 40, min: 0, max: 100 }),
+  h('h4', null, 'Breadcrumb'), Breadcrumb({ items: [{ label: 'Home', onClick() {} }, { label: 'Rooms', onClick() {} }, { label: 'Kitchen' }] }),
+  h('h4', null, 'Disclosure'), Disclosure({ summary: 'Advanced options', open: true, children: h('div', { class: 'sub' }, 'Hidden details revealed when open.') }),
+  h('h4', null, 'Skeleton (loading)'), h('div', { class: 'kit-stack' }, [Skeleton({ width: '70%' }), Skeleton({ width: '90%' }), Skeleton({ width: '50%' })]),
   h('h4', null, 'Banners'),
   h('div', { class: 'kit-stack' }, [
     Banner({ kind: 'info', icon: 'ℹ️', children: 'Informational message.' }),

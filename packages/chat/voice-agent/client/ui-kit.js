@@ -134,3 +134,46 @@ export const Toggle = ({ label = '', checked = false, onChange, disabled = false
 export const Tabs = ({ tabs = [], active, onSelect } = {}) =>
   h('div', { class: 'kit-tabs' }, (tabs || []).map((t, i) =>
     h('button', { class: `kit-tab${String(t.id) === String(active) ? ' on' : ''}`, key: t.id || i, onClick: () => onSelect && onSelect(t.id) }, str(t.label))));
+
+// SegmentedControl — a pill-style single-choice. options:[{value,label}]|[string], value, onChange(value).
+export const SegmentedControl = ({ value, options = [], onChange } = {}) =>
+  h('div', { class: 'kit-seg' }, (options || []).map((o, i) => {
+    const val = o && typeof o === 'object' ? o.value : o;
+    const label = o && typeof o === 'object' ? o.label : o;
+    return h('button', { class: String(val) === String(value) ? 'on' : '', key: i, onClick: () => onChange && onChange(val) }, str(label));
+  }));
+
+// Slider — a range input. value/min/max/step; onInput(number).
+export const Slider = ({ value = 0, min = 0, max = 100, step = 1, onInput, disabled = false } = {}) =>
+  h('input', { class: 'kit-slider', type: 'range', value, min, max, step, disabled: disabled || undefined, onInput: e => onInput && onInput(Number(e.target.value)) });
+
+// Skeleton — a shimmering loading placeholder.
+export const Skeleton = ({ width = '100%', height = 14 } = {}) =>
+  h('span', { class: 'kit-skel', style: `width:${typeof width === 'number' ? `${width}px` : width};height:${typeof height === 'number' ? `${height}px` : height}` });
+
+// Disclosure — a collapsible section. open in props (stateless); onToggle().
+export const Disclosure = ({ summary, open = false, children, onToggle } = {}) =>
+  h('div', { class: 'kit-disc' }, [
+    h('div', { class: 'kit-disc-head', onClick: () => onToggle && onToggle() }, [h('span', { class: 'caret' }, open ? '▾' : '▸'), str(summary)]),
+    open ? h('div', null, children) : null,
+  ]);
+
+// Breadcrumb — a path of crumbs. items:[{label, onClick?}]; the last is the current (not a link).
+export const Breadcrumb = ({ items = [] } = {}) =>
+  h('div', { class: 'kit-crumbs' }, (items || []).flatMap((it, i) => {
+    const last = i === items.length - 1;
+    const crumb = (last || !it.onClick)
+      ? h('span', { key: `c${i}` }, str(it.label))
+      : h('a', { key: `c${i}`, onClick: () => it.onClick() }, str(it.label));
+    return i === 0 ? [crumb] : [h('span', { class: 'sep', key: `s${i}` }, '›'), crumb];
+  }));
+
+// Modal — a centered dialog over a backdrop. open in props (stateless); onClose(). Renders null when closed.
+export const Modal = ({ open = false, title, children, onClose } = {}) => {
+  if (!open) return null;
+  return h('div', { class: 'kit-modal-bg' },
+    h('div', { class: 'kit-modal' }, [
+      (title != null || onClose) ? h('div', { class: 'kit-modal-title' }, [h('span', null, str(title)), onClose ? h('button', { class: 'kit-modal-x', title: 'close', onClick: () => onClose() }, '×') : null]) : null,
+      h('div', null, children),
+    ]));
+};

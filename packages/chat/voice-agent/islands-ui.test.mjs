@@ -6,7 +6,7 @@
 //   node --test packages/chat/voice-agent/islands-ui.test.mjs
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { Chip, Btn, EmptyState, Card, TextField, Textarea, Select, Checkbox, Toggle, RadioGroup, Tabs, ProgressBar, Banner, Badge, Spinner, Avatar } from './client/ui-kit.js';
+import { Chip, Btn, EmptyState, Card, TextField, Textarea, Select, Checkbox, Toggle, RadioGroup, Tabs, ProgressBar, Banner, Badge, Spinner, Avatar, SegmentedControl, Slider, Skeleton, Disclosure, Breadcrumb, Modal } from './client/ui-kit.js';
 import { NotificationCard } from './client/notification-card.js';
 import { ChangelogList } from './client/changelog-list.js';
 import { PowersBanner } from './client/powers-banner.js';
@@ -191,10 +191,29 @@ test('ChatList: select / delete / show-more by id; empty state; the editing row 
   assert.ok(ed.inputs.some(i => i.cls.includes('kit-in')), 'the edited row renders a kit input');
 });
 
+test('kit overlays + extra primitives: Modal open/closed + onClose; Segmented/Slider/Disclosure/Breadcrumb/Skeleton', () => {
+  assert.equal(Modal({ open: false }), null, 'closed Modal renders nothing');
+  let closed = 0; const m = collect(Modal({ open: true, title: 'Hi', children: 'body', onClose: () => { closed += 1; } }));
+  assert.ok(m.classes.some(c => c.includes('kit-modal')), 'open Modal renders a dialog');
+  assert.match(allText(m), /Hi/); assert.match(allText(m), /body/);
+  m.buttons.find(b => b.cls.includes('kit-modal-x')).onClick(); assert.equal(closed, 1, 'Modal close fires');
+  let seg = null; const sc = collect(SegmentedControl({ value: 'a', options: [{ value: 'a', label: 'A' }, { value: 'b', label: 'B' }], onChange: v => { seg = v; } }));
+  assert.ok(sc.classes.some(c => c === 'on'), 'segmented marks the active option');
+  sc.buttons.find(b => b.label === 'B').onClick(); assert.equal(seg, 'b');
+  let sl = null; collect(Slider({ value: 5, onInput: v => { sl = v; } })).inputs[0].onInput({ target: { value: '42' } }); assert.equal(sl, 42, 'Slider onInput(number)');
+  let tog = 0; const dc = collect(Disclosure({ summary: 'More', open: true, children: 'shown', onToggle: () => { tog += 1; } }));
+  assert.match(allText(dc), /shown/, 'open Disclosure shows children');
+  dc.buttons[0] && dc.buttons[0].onClick(); assert.equal(tog, 1, 'Disclosure onToggle');
+  assert.equal(allText(collect(Disclosure({ summary: 'More', open: false, children: 'hidden' }))).includes('hidden'), false, 'closed Disclosure hides children');
+  let crumb = null; const bc = collect(Breadcrumb({ items: [{ label: 'Home', onClick: () => { crumb = 'home'; } }, { label: 'Here' }] }));
+  bc.buttons[0] && bc.buttons[0].onClick(); assert.equal(crumb, 'home', 'breadcrumb link click');
+  assert.match(collect(Skeleton({ width: '50%' })).classes.join(' '), /kit-skel/);
+});
+
 test('KitSampler renders every primitive without error (the design-system smoke test)', () => {
   const acc = collect(KitSampler());
   // a broad spread of the kit classes must all appear → all primitives composed + rendered
-  for (const cls of ['kit-in', 'kit-toggle', 'kit-tab', 'kit-banner', 'kit-progress', 'kit-badge', 'kit-spinner', 'kit-avatar', 'kit-divider', 'ncard']) {
+  for (const cls of ['kit-in', 'kit-toggle', 'kit-tab', 'kit-banner', 'kit-progress', 'kit-badge', 'kit-spinner', 'kit-avatar', 'kit-divider', 'ncard', 'kit-seg', 'kit-slider', 'kit-skel', 'kit-disc', 'kit-crumbs']) {
     assert.ok(acc.classes.some(c => String(c).split(/\s+/).includes(cls)), `sampler renders ${cls}`);
   }
 });
