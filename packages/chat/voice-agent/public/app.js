@@ -2382,6 +2382,14 @@ const ISLAND_PREVIEW = {
     manageable: true,
   }, { onRevoke() {}, onAddPowers() {} }),
   'island-ui-kit': slot => window.__fieldIslands.renderKitSampler(slot), // a living style guide of every primitive
+  'island-ask-card': slot => window.__fieldIslands.renderAskCard(slot, {
+    ask: { id: 'a1', title: 'Confirm the Berlin trip dates', body: 'I found two viable windows.', requestedBy: 'travel-agent', questions: [
+      { id: 'q1', q: 'Which window?', type: 'choice', options: ['Jun 3–7', 'Jun 10–14'] },
+      { id: 'q2', q: 'Add a Potsdam day trip?', type: 'bool' },
+      { id: 'q3', q: 'Anything to note?', type: 'text' },
+    ] },
+    answers: { q1: 'Jun 3–7', q2: 'yes' }, status: '',
+  }, { onChange() {}, onSubmit() {}, onOpenOrigin() {} }),
 };
 
 const refreshComponents = async () => {

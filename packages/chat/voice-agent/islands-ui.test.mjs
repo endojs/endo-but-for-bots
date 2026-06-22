@@ -11,6 +11,7 @@ import { NotificationCard } from './client/notification-card.js';
 import { ChangelogList } from './client/changelog-list.js';
 import { PowersBanner } from './client/powers-banner.js';
 import { KitSampler } from './client/kit-sampler.js';
+import { AskCard } from './client/ask-card.js';
 
 // Walk a preact vnode tree → collect text, classes, clickable buttons, and inputs (with their handlers).
 const collect = v => {
@@ -126,6 +127,30 @@ test('kit display primitives render their semantics (Tabs active, ProgressBar wi
   assert.match(collect(Badge({ label: '3' })).classes.join(' '), /kit-badge/);
   assert.match(collect(Spinner({})).classes.join(' '), /kit-spinner/);
   assert.match(collect(Avatar({ label: '🤖' })).text.join(''), /🤖/);
+});
+
+test('AskCard: typed controls render + onChange(qid,value); Submit → onSubmit(id); answered → no inputs; secret masked', () => {
+  const ask = { id: 'a1', title: 'Pick', requestedBy: 'agent', questions: [
+    { id: 'choice', q: 'one?', type: 'choice', options: ['x', 'y'] },
+    { id: 'ms', q: 'many?', type: 'multiselect', options: ['p', 'q'] },
+    { id: 'num', q: 'how many?', type: 'number' },
+    { id: 'pw', q: 'secret?', type: 'secret' },
+    { id: 'free', q: 'notes?', type: 'text' },
+  ] };
+  const changes = []; let submitted = null;
+  const acc = collect(AskCard({ ask, answers: { choice: 'x', ms: ['p'] }, status: '', onChange: (qid, v) => changes.push([qid, v]), onSubmit: id => { submitted = id; } }));
+  assert.match(allText(acc), /Pick/); assert.match(allText(acc), /agent/, 'requestedBy chip');
+  // a radio choice fires onChange(qid, value)
+  acc.inputs.find(i => i.type === 'radio').onChange(); assert.equal(changes[0][0], 'choice', 'choice → onChange(qid,..)');
+  // the secret field is a password input (masked), present while unanswered
+  assert.ok(acc.inputs.some(i => i.type === 'password'), 'secret rendered as password');
+  // Submit fires onSubmit(askId)
+  acc.buttons.find(b => /Submit/.test(b.label)).onClick(); assert.equal(submitted, 'a1');
+  // once answered → "✓ answered", no Submit button, and the secret is a chip (never re-shown)
+  const done = collect(AskCard({ ask, answers: {}, status: 'answered', onChange() {}, onSubmit() {} }));
+  assert.match(allText(done), /✓ answered/);
+  assert.equal(done.buttons.filter(b => /Submit/.test(b.label)).length, 0, 'no Submit once answered');
+  assert.equal(done.inputs.filter(i => i.type === 'password').length, 0, 'secret input gone once answered (stored-securely chip)');
 });
 
 test('KitSampler renders every primitive without error (the design-system smoke test)', () => {

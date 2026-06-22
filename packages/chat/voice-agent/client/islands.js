@@ -16,6 +16,7 @@ import { NotificationCard } from './notification-card.js';
 import { ChangelogList } from './changelog-list.js';
 import { PowersBanner } from './powers-banner.js';
 import { KitSampler } from './kit-sampler.js';
+import { AskCard } from './ask-card.js';
 
 // A render propagator: re-paints `view(...values)` into `el` whenever any wired cell changes.
 // This is the one kind of propagator whose effect is the DOM; logic propagators stay headless.
@@ -34,6 +35,8 @@ const powersCell = makeCell();
 let powersWired = false;
 const kitCell = makeCell();
 let kitWired = false;
+const askCell = makeCell();
+let askWired = false;
 
 const islands = {
   // Idempotent: wires the render propagator once (cell → SharesPanel), then feeds the latest data in.
@@ -109,6 +112,19 @@ const islands = {
       kitWired = true;
     }
     kitCell.addContent({ render: true });
+  },
+
+  // ── AskCard island ────────────────────────────────────────────────────────────────────────────
+  // `data` = { ask, answers:{qid:value}, status } (render-safe). `handlers` =
+  // { onChange(qid,value), onSubmit(askId), onOpenOrigin() }. The host owns the answers + submits.
+  renderAskCard(el, data, handlers) {
+    if (!askWired) {
+      el.setAttribute('data-component-id', 'island-ask-card');
+      el.setAttribute('data-component-name', 'Ask card');
+      renderPropagator(el, [askCell], d => h(AskCard, { ...d, ...handlers }));
+      askWired = true;
+    }
+    askCell.addContent(data);
   },
 };
 
