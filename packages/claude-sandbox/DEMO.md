@@ -70,9 +70,13 @@ yarn exec endo make --UNCONFINED \
 
 ## 3. Provision the Claude sandbox stack
 
-`setup.js` idempotently mints, on `@host`: `sandbox-factory` (the
-`@endo/sandbox` plugin), `fs-mounter` (the 9P mount caplet),
-`claude-credentials-factory`, and `claude-sandbox-factory`.
+`setup.js` idempotently mints, on `@host`, nested under directories so the
+host root stays clean: `claude-sandbox/{sandbox-factory, fs-mounter,
+controller, profile, handle}` (the `@endo/sandbox` plugin, the 9P mount
+caplet, and the sandbox factory's exo + guest) and
+`claude-credentials/{controller, profile, handle}` (the credentials factory,
+normally run on a separate peer machine). The "Create Claude Sandbox" form is
+posted by `claude-sandbox/controller`.
 
 **Privileged / root daemon** (e.g. a `--privileged` container or dev VM) — no
 `NINEP_SUDO`:
@@ -148,7 +152,7 @@ talk to it:
 ```bash
 yarn exec endo eval --UNCONFINED \
   'E(f).createSession({ name: "claude-1", filesystem: "project-fs", rootfs: "oci:localhost/claude-code:latest", network: "private", model: "claude-sonnet-4-6", credentials: "claude-creds" })' \
-  f:claude-sandbox-factory \
+  f:claude-sandbox/controller \
   --name claude-1
 ```
 

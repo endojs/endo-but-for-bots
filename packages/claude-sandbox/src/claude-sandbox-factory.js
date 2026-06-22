@@ -235,6 +235,15 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
     'sandbox-factory';
   const fsMounterName =
     env.FS_MOUNTER_NAME || process.env.FS_MOUNTER_NAME || 'fs-mounter';
+  // Directory the host-side infra caplets (`sandbox-factory`, `fs-mounter`)
+  // live under, so the per-session powers can endow them by path. Empty
+  // means they sit at the host root (the bare names). Set by the
+  // provisioner (factory.js) to the factory's own directory.
+  const sandboxNamespace =
+    env.SANDBOX_NAMESPACE || process.env.SANDBOX_NAMESPACE || '';
+  /** @param {string} name @returns {string | string[]} */
+  const underNamespace = name =>
+    sandboxNamespace ? [sandboxNamespace, name] : name;
   const backend =
     env.CLAUDE_SANDBOX_BACKEND ||
     process.env.CLAUDE_SANDBOX_BACKEND ||
@@ -323,7 +332,14 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
     // remove the name immediately after `makeUnconfined` below.
     const powersName = `claude-${sessionId}-powers`;
     const codeNames = ['agent', 'sandboxFactory', 'fsMounter', 'filesystem'];
-    const petNames = ['@agent', sandboxFactoryName, fsMounterName, fsName];
+    // The infra caps resolve under the factory's directory (if any); the
+    // filesystem and credential are the peer's/operator's own top-level caps.
+    const petNames = [
+      '@agent',
+      underNamespace(sandboxFactoryName),
+      underNamespace(fsMounterName),
+      fsName,
+    ];
     if (credsName) {
       codeNames.push('credentials');
       petNames.push(credsName);

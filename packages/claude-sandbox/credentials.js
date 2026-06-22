@@ -9,10 +9,15 @@
 // That cap is what the ClaudeSandbox factory's `credentials` form
 // field references when minting a session.
 //
-// Defaults:
-//   <factoryName>   claude-credentials-factory
+// The credentials factory normally runs on the *peer* machine (the one that
+// owns the Anthropic key), not the sandbox host — keeping the long-lived
+// secret on the peer. Its objects live under a directory so they don't
+// pollute the host root: `<dir>/controller`, `<dir>/profile`, `<dir>/handle`.
 //
-// Idempotent: re-running with the same name is a no-op.
+// Defaults:
+//   <dirName>   claude-credentials
+//
+// Idempotent: re-running is a no-op once `<dir>/controller` exists.
 
 import { E } from '@endo/eventual-send';
 
@@ -21,32 +26,49 @@ const factoryCapletSpecifier = new URL(
   import.meta.url,
 ).href;
 
-const DEFAULT_FACTORY_NAME = 'claude-credentials-factory';
+const DEFAULT_FACTORY_NAME = 'claude-credentials';
 
 /**
  * @param {import('@endo/eventual-send').ERef<object>} agent
- * @param {string} [factoryName]
+ * @param {string} [dirName]
  */
-export const main = async (agent, factoryName = DEFAULT_FACTORY_NAME) => {
-  const controllerName = `controller-for-${factoryName}`;
-  if (await E(agent).has(controllerName)) {
-    console.log(`${controllerName} already provisioned — skipping`);
+export const main = async (agent, dirName = DEFAULT_FACTORY_NAME) => {
+  // Guard the directory's existence first — `has(dir, 'controller')` throws
+  // ("Unknown pet name") when the directory itself is absent.
+  if (
+    (await E(agent).has(dirName)) &&
+    (await E(agent).has(dirName, 'controller'))
+  ) {
+    console.log(`${dirName}/controller already provisioned — skipping`);
     return;
   }
 
-  const agentName = `profile-for-${factoryName}`;
-  if (!(await E(agent).has(factoryName))) {
-    await E(agent).provideGuest(factoryName, {
+  if (!(await E(agent).has(dirName))) {
+    await E(agent).makeDirectory([dirName]);
+  }
+
+  // provideGuest / powersName take a single name only, so the guest is born
+  // top-level and moved into the directory after makeUnconfined.
+  const guestTmp = `${dirName}-guest`;
+  const agentTmp = `${dirName}-agent`;
+  if (
+    !(await E(agent).has(guestTmp)) &&
+    !(await E(agent).has(dirName, 'handle'))
+  ) {
+    await E(agent).provideGuest(guestTmp, {
       introducedNames: harden({ '@agent': 'host-agent' }),
-      agentName,
+      agentName: agentTmp,
     });
   }
 
   await E(agent).makeUnconfined('@main', factoryCapletSpecifier, {
-    powersName: agentName,
-    resultName: controllerName,
+    powersName: agentTmp,
+    resultName: [dirName, 'controller'],
   });
 
-  console.log(`Factory ${factoryName} provisioned`);
+  await E(agent).move([guestTmp], [dirName, 'handle']);
+  await E(agent).move([agentTmp], [dirName, 'profile']);
+
+  console.log(`Factory provisioned under ${dirName}/`);
 };
 harden(main);

@@ -34,21 +34,24 @@ const nodeFsModuleHref = pathToFileURL(
 ).href;
 
 // The per-session powers `evaluate` resolves `sandbox-factory` / `fs-mounter`
-// by pet name eagerly (caps-by-reference), so they must exist before a
-// session is created. The real flow mints them in setup.js; here we mint
-// trivial stubs (status()/the unname path never call them).
-const mintStub = (host, name) =>
+// eagerly (caps-by-reference) under the factory's directory, so they must
+// exist before a session is created. The real flow mints them in setup.js;
+// here we mint trivial stubs (status()/the unname path never call them).
+const mintStub = (host, resultPath) =>
   E(host).evaluate(
     '@main',
-    `Far(${JSON.stringify(name)}, { help: () => 'stub' })`,
+    `Far('stub', { help: () => 'stub' })`,
     harden([]),
     harden([]),
-    name,
+    resultPath,
   );
 
+// provisionFactory creates the `claude-sandbox/` directory; the factory caplet
+// runs with SANDBOX_NAMESPACE='claude-sandbox', so the infra it endows lives at
+// claude-sandbox/{sandbox-factory,fs-mounter}.
 const provisionSandboxDeps = async host => {
-  await mintStub(host, 'sandbox-factory');
-  await mintStub(host, 'fs-mounter');
+  await mintStub(host, ['claude-sandbox', 'sandbox-factory']);
+  await mintStub(host, ['claude-sandbox', 'fs-mounter']);
 };
 
 const makeConfig = name => ({
@@ -125,13 +128,11 @@ test.serial(
     });
     t.true(await E(host).has('project-fs'), 'filesystem cap is stored');
 
-    // Provision the factory on @host (mints the guest profile + the
-    // `controller-for-claude-sandbox-factory` exo).
+    // Provision the factory on @host (creates the `claude-sandbox/` dir with
+    // its controller + guest profile/handle).
     await provisionFactory(host);
     await provisionSandboxDeps(host);
-    const factory = await E(host).lookup(
-      'controller-for-claude-sandbox-factory',
-    );
+    const factory = await E(host).lookup(['claude-sandbox', 'controller']);
     t.truthy(factory, 'factory controller resolves');
 
     // Peer-callable path: returns the ClaudeClient cap without naming it on
@@ -263,9 +264,7 @@ test.serial(
     });
     await provisionFactory(host);
     await provisionSandboxDeps(host);
-    const factory = await E(host).lookup(
-      'controller-for-claude-sandbox-factory',
-    );
+    const factory = await E(host).lookup(['claude-sandbox', 'controller']);
 
     const client = await E(factory).createSession(
       harden({
@@ -311,9 +310,7 @@ test.serial(
     });
     await provisionFactory(host);
     await provisionSandboxDeps(host);
-    const factory = await E(host).lookup(
-      'controller-for-claude-sandbox-factory',
-    );
+    const factory = await E(host).lookup(['claude-sandbox', 'controller']);
 
     // Two sessions formulated concurrently. Each builds its own per-session
     // powers (unique name from the monotonic counter), names it, references

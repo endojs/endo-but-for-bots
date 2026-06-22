@@ -245,6 +245,35 @@ test('submission formulates a claude-client caplet with the right env', async t 
   t.regex(mock.replies[0].body.join('\n'), /ClaudeClient "my-claude" created/);
 });
 
+test('SANDBOX_NAMESPACE endows the infra caps under the factory directory', async t => {
+  const fsCap = { kind: 'fake-fs' };
+  const mock = makeMockPowers();
+  const host = makeMockHostAgent({ filesystems: { 'my-fs': fsCap } });
+
+  // The provisioner sets SANDBOX_NAMESPACE so the per-session powers endows
+  // `claude-sandbox/sandbox-factory` and `claude-sandbox/fs-mounter` by path,
+  // rather than the bare top-level names.
+  make(mock.powers, undefined, {
+    ...wireDeps(mock, host),
+    env: { SANDBOX_NAMESPACE: 'claude-sandbox' },
+  });
+
+  await waitFor(() => mock.formCalls.length > 0);
+  mock.simulateSubmission({
+    name: 'ns-claude',
+    filesystem: 'my-fs',
+    network: 'private',
+  });
+
+  await waitFor(() => host.evaluateCalls.length > 0);
+  t.deepEqual(host.evaluateCalls[0].petNames, [
+    '@agent',
+    ['claude-sandbox', 'sandbox-factory'],
+    ['claude-sandbox', 'fs-mounter'],
+    'my-fs',
+  ]);
+});
+
 test('createSession() formulates an un-named client and returns the cap', async t => {
   const fsCap = { kind: 'fake-fs' };
   const mock = makeMockPowers();

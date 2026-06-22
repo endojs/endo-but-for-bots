@@ -332,8 +332,10 @@ LinuxKit kernel 6.12, aarch64) — see [DEMO.md](./DEMO.md).
 
 ### Phase 1 — provisioning, credentials, host 9P mount (root daemon)
 
-- `setup.js` mints `sandbox-factory`, `fs-mounter`, `claude-credentials-factory`
-  and `claude-sandbox-factory`, and both forms land in `@host`'s inbox.
+- `setup.js` mints everything nested under host directories — `claude-sandbox/`
+  (`sandbox-factory`, `fs-mounter`, `controller`, `profile`, `handle`) and
+  `claude-credentials/` (`controller`, `profile`, `handle`) — so the host root
+  stays uncluttered; both forms land in `@host`'s inbox.
 - Credentials form → `0600` sidecar in a `0700` dir;
   `E(c).issue(tag)` then `.materialise()` round-trips the key through the daemon.
 - `fs-mounter` performs a real kernel 9P mount

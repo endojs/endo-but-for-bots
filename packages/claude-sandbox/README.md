@@ -130,8 +130,9 @@ Configuration env (threaded into the factory formula by `setup.js` /
 | `CLAUDE_SANDBOX_IMAGE` | `docker.io/library/node:22-bookworm-slim` | default OCI image when the `rootfs` field is blank |
 | `CLAUDE_SANDBOX_BACKEND` | `podman` | sandbox backend |
 | `CLAUDE_SANDBOX_MOUNT_DIR` | OS temp dir | base dir for per-session 9P mountpoints |
-| `SANDBOX_FACTORY_NAME` | `sandbox-factory` | pet name of the sandbox factory |
-| `FS_MOUNTER_NAME` | `fs-mounter` | pet name of the 9P mounter |
+| `SANDBOX_NAMESPACE` | `claude-sandbox` (set by the provisioner) | host directory the infra caplets live under; the per-session powers endows `<ns>/sandbox-factory` and `<ns>/fs-mounter`. Empty means the host root. |
+| `SANDBOX_FACTORY_NAME` | `sandbox-factory` | name of the sandbox factory caplet within the namespace |
+| `FS_MOUNTER_NAME` | `fs-mounter` | name of the 9P mounter caplet within the namespace |
 | `CLAUDE_CREDENTIALS_DIR` | `~/.endo-claude-credentials` | sidecar dir for API keys |
 | `NINEP_SUDO` | unset | `1` routes host `mount`/`umount` through `sudo` |
 
