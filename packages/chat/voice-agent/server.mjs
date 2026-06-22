@@ -904,6 +904,7 @@ const handler = async (req, res) => {
       const uiWidgets = []; // live/interactive widget specs the agent emitted (showEntityStatus/showCountdowns/showChoices) → r.ui
       const autoFired = []; // destructive actions that auto-confirmed via a "don't ask again" rule
       const askIds = []; // structured typed questions the agent raised this turn (rendered inline)
+      const accessRequests = []; // requestAccess(power) calls → an ACTIONABLE Grant card client-side
       const steps = []; // ordered tool calls this turn; delegateTask nests its sub-agent's tools (sub-branch trees)
       log('chat:', JSON.stringify(t).slice(0, 80), '| powers:', [...runNode.powers].join(','), agent && agent !== 'field-agent' ? `| as:${agent}` : '', agentAttachments.length ? `| +${agentAttachments.length} attachment(s)` : '');
       // prepaid inference toll-bridge: meter THIS chat's purse; show the agent its budget in-context.
@@ -933,6 +934,7 @@ const handler = async (req, res) => {
           if (rv.widget && typeof rv.widget === 'object' && uiWidgets.length < 8) { const k = JSON.stringify(rv.widget); if (!uiWidgets.some(w => JSON.stringify(w) === k)) uiWidgets.push(rv.widget); } // a live/interactive widget — bounded + de-duped (one entity = one stream, no flood)
           if (rv.autoConfirmed) autoFired.push({ title: rv.title, type: rv.type, ok: rv.fired !== false }); // "don't ask again" fired it
           if (rv.asked && rv.askId) askIds.push(rv.askId); // the agent raised a typed question → render it inline
+          if (rv.accessRequest && rv.accessRequest.power) accessRequests.push(rv.accessRequest); // requestAccess → actionable Grant card
           if (Array.isArray(rv.proposalIds)) proposalIds.push(...rv.proposalIds); // nested (specialist) proposals bubble up
           if (Array.isArray(rv.autoFired)) autoFired.push(...rv.autoFired);
           const step = { name: s.name, ok: rv.ok !== false };
@@ -978,7 +980,7 @@ const handler = async (req, res) => {
       sessions.set(sid, next);
       const proposals = proposalIds.map(getProposal).filter(Boolean);
       const asks = askIds.map(getAsk).filter(Boolean); // typed questions raised this turn → rendered inline
-      const donePayload = { answer: r.answer, images, imageUrls, ui: uiWidgets, toolsUsed: r.toolsUsed.map(x => x.name), steps, proposals, autoFired, asks, agentId: runNode.id, attachments: savedRefs, remaining: purse.balance(), allowance: purse.granted(), spent: Object.values(perProvider).reduce((a, b) => a + b, 0), perProvider };
+      const donePayload = { answer: r.answer, images, imageUrls, ui: uiWidgets, toolsUsed: r.toolsUsed.map(x => x.name), steps, proposals, autoFired, asks, accessRequests, agentId: runNode.id, attachments: savedRefs, remaining: purse.balance(), allowance: purse.granted(), spent: Object.values(perProvider).reduce((a, b) => a + b, 0), perProvider };
       // PERSIST the finished turn so it survives a closed tab — the client re-attaches on reopen.
       setRunResult(sid, { state: 'done', node: runNode, text: t, result: donePayload, startedAt, doneAt: Date.now() });
       // Tab-friendly: ping the user when a SUBSTANTIAL run finishes (long, or it raised questions/actions),

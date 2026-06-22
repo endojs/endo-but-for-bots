@@ -162,8 +162,21 @@ export const runAgentCode = async ({ toolbox, manifest, userText, history = [], 
     if (r.logs.length) parts.push(`logs:\n${clip(r.logs.join('\n'), 8000)}`);
     if (r.ok) { parts.push(`returned: ${clip(safeJson(r.value), 12000)}`); repeatErr = 0; lastError = ''; }
     else {
-      parts.push(`threw: ${r.error}`);
-      repeatErr = r.error === lastError ? repeatErr + 1 : 0; lastError = r.error;
+      // USEFUL ERROR when the agent INVENTS a tool: a bare "X is not defined" becomes a clear message —
+      // what tools actually exist, and how to ask for a real capability you lack (requestAccess) — so the
+      // model stops re-calling a hallucinated name. (Only the program scope `endow` knows what's real.)
+      let err = String(r.error || '');
+      const undef = /^(?:Uncaught )?ReferenceError: (\w[\w$]*) is not defined|^(\w[\w$]*) is not defined/.exec(err);
+      const bad = undef && (undef[1] || undef[2]);
+      if (bad) {
+        const helpers = new Set(['methodsOf', 'myPersona', 'mySystemPrompt', 'requestAccess', 'console']);
+        const real = Object.keys(endow).filter(k => !helpers.has(k)).sort();
+        err = `no tool named "${bad}" — you invented it; it is not in scope. Your ACTUAL tools are: ${real.join(', ') || '(none)'}. `
+          + `If "${bad}" is a real capability you need but don't have, call requestAccess({ power: "${bad}", why: "…" }) ONCE — do not keep calling "${bad}". `
+          + `(Also always in scope: methodsOf, myPersona, mySystemPrompt, requestAccess.)`;
+      }
+      parts.push(`threw: ${err}`);
+      repeatErr = err === lastError ? repeatErr + 1 : 0; lastError = err;
       // Wedged: the same error 3× running and still no answer → stop burning allowance, REPORT the failure.
       if (repeatErr >= 2) { const answer = stallMessage(lastError); onStep({ kind: 'answer', text: answer }); return harden({ answer, toolsUsed: used, stalled: true }); }
     }

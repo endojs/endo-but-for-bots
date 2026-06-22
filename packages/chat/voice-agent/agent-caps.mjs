@@ -522,6 +522,11 @@ export const POWERS = harden({
 });
 export const ALL_POWERS = harden(Object.keys(POWERS));
 harden(POWERS);
+// A requested capability name may be a POWER ("selfPrompt") or a VERB ("proposeSystemPrompt") — the agent
+// naturally asks for the verb it needs. Map either to the grantable POWER so requestAccess + the Grant UI
+// name something the operator can actually grant (the #1 reason a power request wasn't surfaceable).
+const VERB_TO_POWER = (() => { const m = {}; for (const [pw, def] of Object.entries(POWERS)) for (const v of (def.verbs || [])) m[v] = pw; return harden(m); })();
+export const resolvePower = name => { const n = String(name || ''); return POWERS[n] ? n : (VERB_TO_POWER[n] || n); };
 
 // ── build the agent. Returns the locator + a root node holding ALL powers. ────
 // makeFieldAgent({ outDir, baseUrl }) →
@@ -1370,12 +1375,17 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
     // itself powers; it ASKS the owner (dan), who approves from his inbox / the chat's powers banner.
     // This is the read-only-by-default + progressive-trust path: don't give up when you lack a power.
     toolbox.requestAccess = harden({ run: async ({ power, why } = {}) => {
-      const p = String(power || '').slice(0, 40); const reason = String(why || '').slice(0, 1000);
-      if (!p) return { ok: false, error: 'name the power you need' };
+      const raw = String(power || '').slice(0, 40); const reason = String(why || '').slice(0, 1000);
+      if (!raw) return { ok: false, error: 'name the power you need' };
+      const p = resolvePower(raw); // a verb name (e.g. proposeSystemPrompt) → its grantable POWER (selfPrompt)
       if (powers.has(p)) return { ok: true, alreadyHeld: true, note: `you already hold "${p}".` };
+      const label = (POWERS[p] && POWERS[p].label) || p;
       await aff.feed.notify({ title: `🔓 ${node.id} requests the "${p}" power`, body: reason || '(no reason given)', agent: node.id, link: chatLink(ctx) });
       try { await aff.phone.push({ title: `🔓 power request: ${p}`, message: `${node.id}: ${reason}`.slice(0, 150), click: chatLink(ctx) || '' }); } catch { /* best-effort */ }
-      return { ok: true, requested: p, note: 'Asked the owner to grant this power. He approves from his inbox or the chat\'s powers banner (+ Add). You\'ll have it once he does.' };
+      // accessRequest → the server surfaces an ACTIONABLE Grant card in the chat (one-click grant, not just
+      // a passive notification): the owner grants "p" to this chat in place. Returns the resolved power so
+      // the agent reports the right name.
+      return { ok: true, requested: p, accessRequest: { power: p, label, why: reason }, note: `Asked the owner to grant "${p}". A Grant prompt now appears in this chat — once approved, ask me again and I'll continue.` };
     } });
     manifest.push({ name: 'requestAccess', reversible: false,
       args: { power: 'string — the capability you need (e.g. notes, web, images, research)', why: 'string — why you need it (helps the owner decide)' },

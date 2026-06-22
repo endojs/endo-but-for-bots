@@ -195,6 +195,34 @@ const renderProposal = p => {
   log.appendChild(card); window.scrollTo(0, document.body.scrollHeight);
 };
 
+// requestAccess → an ACTIONABLE Grant card. The agent asked for a capability it lacks; the owner grants
+// it to THIS chat in place (rescope, same swiss) with one click — replacing the old passive "I asked the
+// owner" notification that had nothing to act on. Server already resolved a verb name → its grantable power.
+const renderAccessRequest = a => {
+  const cc = curChatObj() || {};
+  const card = document.createElement('div'); card.className = 'prop msg';
+  card.innerHTML = `<div class="ptitle">🔓 <span>Grant the “${esc(a.power)}” capability to this chat?</span></div><div class="pmeta">${esc(a.label || a.power)}${a.why ? ' — ' + esc(a.why) : ''}</div><div class="pbtns"></div>`;
+  const btns = card.querySelector('.pbtns');
+  if (!isRoot || !cc.scopedCap) { btns.innerHTML = '<span class="pmeta">only the owner can grant powers (open this chat with your root link)</span>'; }
+  else {
+    const g = document.createElement('button'); g.className = 'confirm'; g.textContent = 'Grant';
+    const d = document.createElement('button'); d.className = 'reject'; d.textContent = 'Not now';
+    g.onclick = async () => {
+      g.disabled = d.disabled = true;
+      const cur = cc.scopedPowers || [];
+      await rescopeChat(cc, [...new Set([...cur, a.power])]);
+      const granted = (cc.scopedPowers || []).includes(a.power);
+      btns.innerHTML = granted
+        ? `<span style="color:var(--acc2);font-size:13px">✓ granted “${esc(a.power)}” — ask me again and I’ll continue</span>`
+        : '<span style="color:var(--bad);font-size:12px">grant failed — try the powers banner (+ Add)</span>';
+      if (granted) renderChatBar();
+    };
+    d.onclick = () => { card.remove(); };
+    btns.append(g, d);
+  }
+  log.appendChild(card); window.scrollTo(0, document.body.scrollHeight);
+};
+
 // ── ASKS: the inline feedback loop. A STRUCTURED, TYPED question an agent raised,
 //    answered with type-appropriate controls right here — chat-inline or in the 🔔
 //    inbox. Answering a chat-origin ask continues that chat; an off-app ask stages
@@ -494,6 +522,7 @@ const renderAgentResponse = r => {
   if (Array.isArray(r.ui) && r.ui.length) renderWidgets(body, r.ui, { cap: chatCap(), onChoice: t => sendChat(t), onBreakOut: breakOutComponent, onShareOut: shareOutComponent, onExpand: toggleApplet }); // live/interactive widgets (countdowns, live status, choices, custom components)
   (r.autoFired || []).forEach(a => { const e = document.createElement('div'); e.className = 'autofired'; e.textContent = `✓ auto-confirmed: ${a.title}${a.ok === false ? ' (failed)' : ''}`; body.parentNode.appendChild(e); }); // fired via a "don't ask again" rule
   (r.proposals || []).forEach(renderProposal); // destructive actions show as confirmable cards
+  (r.accessRequests || []).forEach(renderAccessRequest); // requestAccess → an actionable Grant card
   (r.asks || []).forEach(a => { openAsks.unshift(a); renderAskCard(a); }); // typed questions → answerable cards
   if (r.asks?.length) refreshBadge();
   refreshTraceApp(); // push the new turn to the iframe trace app if it's open
