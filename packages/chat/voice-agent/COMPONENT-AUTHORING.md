@@ -43,6 +43,12 @@ Every colour is a CSS var that flips with the theme (`--bg --panel --ink --mut -
 that is the bug class the tests below exist to catch. When you add a theme var, add it to **both**
 palettes in `theme.js` **and** the `:root` block in `index.html`.
 
+**Accent is two tokens** (so accent-as-text and accent-as-button-fill don't fight): `var(--acc)` /
+`var(--you)` for accent **text/borders/glyphs**, and `var(--acc-fill)` / `var(--you-fill)` for a solid
+accent **background with white text** (white clears WCAG AA on the `-fill` tokens; the text tokens are
+tuned for contrast on the panel and are *not* safe as a white-text fill). Reaching for the kit `Btn`
+(`variant:'primary'`) gets this right for free — another reason to reuse.
+
 ## 4. The two-layer review gate
 
 **a) Deterministic — run on every change (`yarn test` + `yarn test:theme`):**
