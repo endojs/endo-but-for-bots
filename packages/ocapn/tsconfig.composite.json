@@ -37,6 +37,9 @@
     },
     {
       "path": "../syrup-frame/tsconfig.composite.json"
+    },
+    {
+      "path": "../utf8/tsconfig.composite.json"
     }
   ]
 }

@@ -1,20 +1,17 @@
-// @ts-check
-
 import harden from '@endo/harden';
 
-// Capture both `TextDecoder` modes once at module load.
-// The default UTF-8 decoder substitutes U+FFFD for malformed sequences;
-// the `fatal: true` decoder throws on the same input.
+// Capture a lenient `TextDecoder` at module load.
+// The default UTF-8 decoder substitutes U+FFFD for malformed sequences.
 // Capturing once at module init avoids per-call allocation and avoids
 // any post-lockdown mutation of the global from redirecting calls.
 const lenientTextDecoder = new TextDecoder();
-const fatalTextDecoder = new TextDecoder('utf-8', { fatal: true });
 
 const { isView } = ArrayBuffer;
 
 /**
  * Return a `Uint8Array` view or value that `TextDecoder.decode` will
- * accept.  `TextDecoder.decode` rejects views backed by an immutable
+ * accept.
+ * `TextDecoder.decode` rejects views backed by an immutable
  * `ArrayBuffer` (as produced by the `@endo/immutable-arraybuffer` shim
  * or a native stage-3 implementation), so we copy into a mutable buffer
  * only when necessary.
@@ -29,7 +26,6 @@ const { isView } = ArrayBuffer;
  * @returns {Uint8Array | ArrayBuffer}
  */
 const toDecodable = input => {
-  // Determine the underlying ArrayBuffer and the byte range.
   let buf;
   let byteOffset;
   let byteLength;
@@ -61,34 +57,20 @@ const toDecodable = input => {
 };
 
 /**
- * @typedef {object} BytesToTextOptions
- * @property {boolean} [fatal] When `true`, malformed UTF-8 throws instead of
- *   substituting U+FFFD.
- */
-
-/**
- * Decodes UTF-8 bytes to a string.
+ * Decodes UTF-8 bytes to a string, substituting U+FFFD for any
+ * malformed sequences.
  *
  * Accepts a frozen `Uint8Array` backed by an immutable `ArrayBuffer`
  * (the byteArray passable form), any other `ArrayBufferView`, or a bare
- * `ArrayBufferLike` — callers do not need to produce a mutable copy
- * before calling this function.  The copy, when required because
- * `TextDecoder.decode` rejects immutable backing buffers, is done
- * internally.
- *
- * Pass `{ fatal: true }` for strict UTF-8 decoding that throws on
- * invalid input. The default lenient mode substitutes the
- * Unicode replacement character (U+FFFD) for malformed sequences.
+ * `ArrayBufferLike`.
+ * Callers do not need to produce a mutable copy before calling this
+ * function.
+ * The copy, when required because `TextDecoder.decode` rejects immutable
+ * backing buffers, is done internally.
  *
  * @param {ArrayBufferView | ArrayBufferLike} input
- * @param {BytesToTextOptions} [options]
  * @returns {string}
  */
-export const bytesToText = (input, options = undefined) => {
-  const decodable = toDecodable(input);
-  if (options !== undefined && options.fatal) {
-    return fatalTextDecoder.decode(decodable);
-  }
-  return lenientTextDecoder.decode(decodable);
-};
-harden(bytesToText);
+export const decodeUtf8 = input =>
+  lenientTextDecoder.decode(toDecodable(input));
+harden(decodeUtf8);

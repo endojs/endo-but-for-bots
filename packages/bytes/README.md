@@ -19,27 +19,20 @@ npm install @endo/bytes
 ## Usage
 
 ```js
-import { bytesFromText } from '@endo/bytes/from-string.js';
-import { bytesToText } from '@endo/bytes/to-string.js';
 import { concatBytes } from '@endo/bytes/concat.js';
 import { bytesEqual } from '@endo/bytes/equals.js';
-import { bytesToImmutable } from '@endo/bytes/to-immutable.js';
-import { bytesFromImmutable } from '@endo/bytes/from-immutable.js';
+import { compareBytes } from '@endo/bytes/compare.js';
 
-const a = bytesFromText('Hello, ');
-const b = bytesFromText('world!');
-const greeting = concatBytes([a, b]);
-bytesToText(greeting); // 'Hello, world!'
-
-bytesEqual(bytesFromText('abc'), bytesFromText('abc')); // true
-
-// Wrap a Uint8Array as a passable, frozen Uint8Array backed by an
-// immutable ArrayBuffer.
-const passable = bytesToImmutable(greeting);
-// Recover a working mutable Uint8Array from a passable received over a
-// vat boundary.
-bytesToText(bytesFromImmutable(passable)); // 'Hello, world!'
+const a = new Uint8Array([1, 2, 3]);
+const b = new Uint8Array([4, 5, 6]);
+const combined = concatBytes([a, b]);
+bytesEqual(combined, new Uint8Array([1, 2, 3, 4, 5, 6])); // true
+compareBytes(a, b); // negative (a < b)
 ```
+
+For UTF-8 transcoding, use `@endo/utf8`.
+For hex encoding and decoding, use `@endo/hex`.
+For base64 encoding and decoding, use `@endo/base64`.
 
 The package is exported as per-symbol subpath modules so that callers
 import qualified names without needing a namespace import.
@@ -51,58 +44,34 @@ import qualified names without needing a namespace import.
 Concatenates a list of `Uint8Array` chunks into a single contiguous
 `Uint8Array`.
 Empty input yields an empty `Uint8Array`.
+Accepts `ArrayBufferView | ArrayBufferLike` elements including frozen
+`Uint8Array` values backed by an immutable `ArrayBuffer` (the byteArray
+passable form).
 
 ### `bytesEqual(a, b) -> boolean`
 
 Compares two `Uint8Array` values byte-for-byte.
 Returns `true` when the two arrays have equal length and equal contents.
 
-### `bytesFromText(s) -> Uint8Array`
+### `compareBytes(left, right) -> number`
 
-Encodes a string as UTF-8 bytes.
-
-### `bytesToText(view) -> string`
-
-Decodes UTF-8 bytes to a string.
-
-### `bytesToImmutable(view) -> Uint8Array`
-
-Wraps a `Uint8Array` view's contents in a hardened frozen `Uint8Array`
-backed by an immutable `ArrayBuffer`, via the
-`ArrayBuffer.prototype.sliceToImmutable` shim
-(proposal-immutable-arraybuffer) plus the freezable-TypedArray
-amplifier from `@endo/immutable-arraybuffer/shim.js`.
-The result carries the `'byteArray'` passStyle and is hardened, so it
-is safe to share across vat boundaries.
-The view's `byteOffset` and `byteLength` are honored, so `subarray`
-windows copy only the addressed bytes.
-
-### `bytesFromImmutable(buffer) -> Uint8Array`
-
-Copies the contents of a frozen `Uint8Array` (or any `ArrayBufferView`
-or `ArrayBufferLike`) into a fresh, mutable `Uint8Array`.
-The frozen `Uint8Array` produced by `bytesToImmutable` cannot itself
-be written through, and APIs such as `TextDecoder.decode` reject views
-over immutable buffers; this helper produces a working mutable
-`Uint8Array` copy that callers can pass to those APIs.
+Compares two byte sequences lexicographically.
+Returns a negative number when `left` sorts before `right`, `0` when
+equal, and a positive number when `left` sorts after `right`.
+Accepts `ArrayBufferView | ArrayBufferLike` including the byteArray
+passable form.
 
 ## Out of scope
 
-For other byte operations, prefer existing packages or built-in
-methods.
-
-- Slicing: use `Uint8Array.prototype.subarray` (no copy) or
-  `Uint8Array.prototype.slice` (copy).
+- UTF-8 transcoding: use `@endo/utf8`.
 - Hex encoding and decoding: use `@endo/hex`.
 - Base64 encoding and decoding: use `@endo/base64`.
-- Streaming concatenation: compose `concatBytes` with a `for await`
-  loop; see `@endo/stream` and `@endo/stream-node` for stream primitives.
+- Passable byteArray wrapping and unwrapping: use
+  `@endo/pass-style/to-bytes.js` and `@endo/pass-style/from-bytes.js`.
+- Slicing: use `Uint8Array.prototype.subarray` (no copy) or
+  `Uint8Array.prototype.slice` (copy).
 
 ## Hardened JavaScript
 
 Every export is hardened.
-The `TextEncoder` and `TextDecoder` instances backing `bytesFromText`
-and `bytesToText` are captured once at module load, so post-lockdown
-mutation of the corresponding globals cannot redirect the dispatched
-calls.
-The modules have no other mutable state.
+The modules have no mutable state.

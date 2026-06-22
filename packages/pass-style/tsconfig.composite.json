@@ -28,6 +28,9 @@
     },
     {
       "path": "../promise-kit/tsconfig.composite.json"
+    },
+    {
+      "path": "../utf8/tsconfig.composite.json"
     }
   ]
 }

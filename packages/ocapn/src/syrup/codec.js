@@ -5,23 +5,23 @@
  */
 
 import harden from '@endo/harden';
-import { bytesFromText } from '@endo/bytes/from-string.js';
-import { bytesToText } from '@endo/bytes/to-string.js';
+import { encodeUtf8 } from '@endo/utf8/encode.js';
+import { strictDecodeUtf8 } from '@endo/utf8/strict-decode.js';
 import { toBytes } from '@endo/pass-style/to-bytes.js';
 
 import { ocapnPassStyleOf } from '../codecs/ocapn-pass-style.js';
 
 /**
  * Decode a bytestring label from the wire as a strict UTF-8 string.
- * Uses `bytesToText` with `{ fatal: true }` so malformed sequences
- * throw rather than substituting U+FFFD.  `bytesToText` accepts the
- * byteArray passable form (frozen Uint8Array over immutable ArrayBuffer)
- * directly, performing the mutable copy internally only when needed.
+ * Malformed sequences throw a `TypeError` rather than substituting U+FFFD.
+ * Accepts the byteArray passable form (frozen Uint8Array over immutable
+ * ArrayBuffer) directly, performing the mutable copy internally only when
+ * `TextDecoder.decode` requires it.
  *
  * @param {ArrayBufferView | ArrayBufferLike} buffer
  * @returns {string}
  */
-const decodeBytestringLabel = buffer => bytesToText(buffer, { fatal: true });
+const decodeBytestringLabel = buffer => strictDecodeUtf8(buffer);
 /**
  * @typedef {object} SyrupCodec
  * @property {function(SyrupReader): any} read
@@ -408,7 +408,7 @@ export const makeRecordCodec = (
     } else if (labelType === 'string') {
       syrupWriter.writeString(label);
     } else if (labelType === 'bytestring') {
-      syrupWriter.writeBytestring(toBytes(bytesFromText(label)));
+      syrupWriter.writeBytestring(toBytes(encodeUtf8(label)));
     }
     writeBody(value, syrupWriter);
     syrupWriter.exitRecord();

@@ -1,6 +1,6 @@
 // @ts-check
 
-import { bytesFromText } from '@endo/bytes/from-string.js';
+import { encodeUtf8 } from '@endo/utf8/encode.js';
 import { toBytes } from '@endo/pass-style/to-bytes.js';
 import { concatBytes } from '@endo/pass-style/concat-bytes.js';
 
@@ -19,7 +19,7 @@ const textEncoder = new TextEncoder();
  */
 const selectorSyrup = s => {
   const b = textEncoder.encode(s);
-  return toBytes(bytesFromText(`${b.length}'${String.fromCharCode(...b)}`));
+  return toBytes(encodeUtf8(`${b.length}'${String.fromCharCode(...b)}`));
 };
 
 /**
@@ -27,7 +27,7 @@ const selectorSyrup = s => {
  * @returns {Uint8Array}
  */
 export const intSyrup = i =>
-  toBytes(bytesFromText(`${Math.floor(Math.abs(i))}${i < 0 ? '-' : '+'}`));
+  toBytes(encodeUtf8(`${Math.floor(Math.abs(i))}${i < 0 ? '-' : '+'}`));
 
 /**
  * @param {string} label
@@ -36,8 +36,8 @@ export const intSyrup = i =>
  */
 export const recordSyrup = (label, ...items) =>
   concatBytes([
-    toBytes(bytesFromText('<')),
+    toBytes(encodeUtf8('<')),
     selectorSyrup(label),
     ...items,
-    toBytes(bytesFromText('>')),
+    toBytes(encodeUtf8('>')),
   ]);

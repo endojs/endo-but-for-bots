@@ -8,7 +8,7 @@ import harden from '@endo/harden';
 
 import test from '@endo/ses-ava/test.js';
 import { toBytes } from '@endo/pass-style/to-bytes.js';
-import { bytesFromText } from '@endo/bytes/from-string.js';
+import { encodeUtf8 } from '@endo/utf8/encode.js';
 import { decodeHex } from '@endo/hex';
 
 import { makeSelector } from '../../src/selector.js';
@@ -104,14 +104,14 @@ export const table = [
     makeValue: testKit => ({
       type: 'op:deliver',
       to: testKit.referenceKit.provideRemoteObjectValue(0n),
-      args: [makeSelector('fetch'), toBytes(bytesFromText('swiss-number'))],
+      args: [makeSelector('fetch'), toBytes(encodeUtf8('swiss-number'))],
       answerPosition: 3n,
       resolveMeDesc: testKit.makeLocalObject(5n),
     }),
     makeExpectedValue: testKit => ({
       type: 'op:deliver',
       to: testKit.makeLocalObject(0n),
-      args: [makeSelector('fetch'), toBytes(bytesFromText('swiss-number'))],
+      args: [makeSelector('fetch'), toBytes(encodeUtf8('swiss-number'))],
       answerPosition: 3n,
       resolveMeDesc: testKit.referenceKit.provideRemoteObjectValue(5n),
     }),

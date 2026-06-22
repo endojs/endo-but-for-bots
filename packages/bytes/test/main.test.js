@@ -1,8 +1,6 @@
 import test from '@endo/ses-ava/test.js';
 
 import { bytesEqual } from '../src/equals.js';
-import { bytesFromText } from '../src/from-string.js';
-import { bytesToText } from '../src/to-string.js';
 import { concatBytes } from '../src/concat.js';
 
 test('concatBytes: empty input yields empty Uint8Array', t => {
@@ -99,71 +97,4 @@ test('bytesEqual: differs at first byte', t => {
   const a = new Uint8Array([0, 1, 2]);
   const b = new Uint8Array([1, 1, 2]);
   t.false(bytesEqual(a, b));
-});
-
-test('bytesFromText / bytesToText: empty string round-trip', t => {
-  const bytes = bytesFromText('');
-  t.is(bytes.length, 0);
-  t.is(bytesToText(bytes), '');
-});
-
-test('bytesFromText / bytesToText: ASCII round-trip', t => {
-  const original = 'Hello, world!';
-  const bytes = bytesFromText(original);
-  t.is(bytes.length, original.length);
-  t.is(bytesToText(bytes), original);
-});
-
-test('bytesFromText: BMP multi-byte UTF-8', t => {
-  // U+00E9 (eacute) encodes to two bytes; U+4E2D (Chinese 'middle')
-  // encodes to three bytes.
-  const bytes = bytesFromText('é中');
-  t.deepEqual([...bytes], [0xc3, 0xa9, 0xe4, 0xb8, 0xad]);
-  t.is(bytesToText(bytes), 'é中');
-});
-
-test('bytesFromText: non-BMP UTF-8 (surrogate pair)', t => {
-  // U+1F600 (grinning face) requires a surrogate pair in UTF-16
-  // and encodes to four bytes in UTF-8.
-  const bytes = bytesFromText('\u{1F600}');
-  t.deepEqual([...bytes], [0xf0, 0x9f, 0x98, 0x80]);
-  t.is(bytesToText(bytes), '\u{1F600}');
-});
-
-test('bytesFromText and concatBytes compose: round-trip', t => {
-  const parts = ['Hello, ', 'world', '!'];
-  const chunks = parts.map(s => bytesFromText(s));
-  const combined = concatBytes(chunks);
-  t.is(bytesToText(combined), 'Hello, world!');
-});
-
-test('bytesEqual on bytesFromText output: same input compares equal', t => {
-  t.true(bytesEqual(bytesFromText('abc'), bytesFromText('abc')));
-  t.false(bytesEqual(bytesFromText('abc'), bytesFromText('abd')));
-});
-
-test('bytesToText: { fatal: true } accepts valid UTF-8', t => {
-  const bytes = bytesFromText('Hello, 你好 \u{1F600}');
-  t.is(bytesToText(bytes, { fatal: true }), 'Hello, 你好 \u{1F600}');
-});
-
-test('bytesToText: { fatal: true } throws on invalid UTF-8', t => {
-  // 0xC3 begins a two-byte sequence; 0x28 is not a valid continuation byte.
-  const invalid = new Uint8Array([0xc3, 0x28]);
-  t.throws(() => bytesToText(invalid, { fatal: true }), {
-    instanceOf: TypeError,
-  });
-});
-
-test('bytesToText: default mode substitutes U+FFFD on invalid UTF-8', t => {
-  const invalid = new Uint8Array([0xc3, 0x28]);
-  // The default lenient decoder must not throw and emits U+FFFD for the
-  // malformed lead byte.
-  const result = bytesToText(invalid);
-  t.true(result.includes('�'));
-});
-
-test('bytesToText: { fatal: false } also accepts valid UTF-8', t => {
-  const bytes = bytesFromText('plain ASCII');
-  t.is(bytesToText(bytes, { fatal: false }), 'plain ASCII');
 });

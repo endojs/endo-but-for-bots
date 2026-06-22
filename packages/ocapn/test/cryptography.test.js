@@ -3,7 +3,7 @@
 import test from '@endo/ses-ava/test.js';
 
 import { toBytes } from '@endo/pass-style/to-bytes.js';
-import { bytesFromText } from '@endo/bytes/from-string.js';
+import { encodeUtf8 } from '@endo/utf8/encode.js';
 import {
   makeOcapnKeyPair,
   makeSessionId,
@@ -54,7 +54,7 @@ test('makeWithdrawGiftDescriptor', t => {
     },
     gifterExporterSessionId,
     gifterKey.publicKey.id,
-    toBytes(bytesFromText('gift-id')),
+    toBytes(encodeUtf8('gift-id')),
   );
   const handoffGiveSignature = signHandoffGive(
     handoffGiveDescriptor,

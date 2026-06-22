@@ -2,7 +2,7 @@
 
 import test from '@endo/ses-ava/test.js';
 import { toBytes } from '@endo/pass-style/to-bytes.js';
-import { bytesFromText } from '@endo/bytes/from-string.js';
+import { encodeUtf8 } from '@endo/utf8/encode.js';
 
 import {
   compareImmutableArrayBuffers,
@@ -28,29 +28,29 @@ test('right longer', t => {
 });
 
 test('compareImmutableArrayBuffers - equal buffers', t => {
-  const buffer1 = toBytes(bytesFromText('hello'));
-  const buffer2 = toBytes(bytesFromText('hello'));
+  const buffer1 = toBytes(encodeUtf8('hello'));
+  const buffer2 = toBytes(encodeUtf8('hello'));
 
   t.is(compareImmutableArrayBuffers(buffer1, buffer2), 0);
 });
 
 test('compareImmutableArrayBuffers - left less than right', t => {
-  const buffer1 = toBytes(bytesFromText('abc'));
-  const buffer2 = toBytes(bytesFromText('xyz'));
+  const buffer1 = toBytes(encodeUtf8('abc'));
+  const buffer2 = toBytes(encodeUtf8('xyz'));
 
   t.is(compareImmutableArrayBuffers(buffer1, buffer2), -1);
 });
 
 test('compareImmutableArrayBuffers - left greater than right', t => {
-  const buffer1 = toBytes(bytesFromText('xyz'));
-  const buffer2 = toBytes(bytesFromText('abc'));
+  const buffer1 = toBytes(encodeUtf8('xyz'));
+  const buffer2 = toBytes(encodeUtf8('abc'));
 
   t.is(compareImmutableArrayBuffers(buffer1, buffer2), 1);
 });
 
 test('compareImmutableArrayBuffers - left is prefix of right', t => {
-  const buffer1 = toBytes(bytesFromText('hello'));
-  const buffer2 = toBytes(bytesFromText('helloworld'));
+  const buffer1 = toBytes(encodeUtf8('hello'));
+  const buffer2 = toBytes(encodeUtf8('helloworld'));
 
   const result = compareImmutableArrayBuffers(buffer1, buffer2);
   t.true(result < 0, 'left should be less than right');
@@ -58,23 +58,23 @@ test('compareImmutableArrayBuffers - left is prefix of right', t => {
 });
 
 test('compareImmutableArrayBuffers - right is prefix of left', t => {
-  const buffer1 = toBytes(bytesFromText('helloworld'));
-  const buffer2 = toBytes(bytesFromText('hello'));
+  const buffer1 = toBytes(encodeUtf8('helloworld'));
+  const buffer2 = toBytes(encodeUtf8('hello'));
 
   const result = compareImmutableArrayBuffers(buffer1, buffer2);
   t.true(result > 0, 'left should be greater than right');
 });
 
 test('compareImmutableArrayBuffers - empty buffers', t => {
-  const buffer1 = toBytes(bytesFromText(''));
-  const buffer2 = toBytes(bytesFromText(''));
+  const buffer1 = toBytes(encodeUtf8(''));
+  const buffer2 = toBytes(encodeUtf8(''));
 
   t.is(compareImmutableArrayBuffers(buffer1, buffer2), 0);
 });
 
 test('compareImmutableArrayBuffers - empty vs non-empty', t => {
-  const buffer1 = toBytes(bytesFromText(''));
-  const buffer2 = toBytes(bytesFromText('a'));
+  const buffer1 = toBytes(encodeUtf8(''));
+  const buffer2 = toBytes(encodeUtf8('a'));
 
   t.is(compareImmutableArrayBuffers(buffer1, buffer2), -1);
   t.is(compareImmutableArrayBuffers(buffer2, buffer1), 1);

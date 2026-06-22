@@ -5,8 +5,8 @@ import path from 'path';
 import fs from 'fs';
 import { toBytes } from '@endo/pass-style/to-bytes.js';
 import { fromBytes } from '@endo/pass-style/from-bytes.js';
-import { bytesFromText } from '@endo/bytes/from-string.js';
-import { bytesToText } from '@endo/bytes/to-string.js';
+import { encodeUtf8 } from '@endo/utf8/encode.js';
+import { strictDecodeUtf8 } from '@endo/utf8/strict-decode.js';
 import { makeSyrupReader } from '../../src/syrup/decode.js';
 import { makeSyrupWriter } from '../../src/syrup/encode.js';
 import {
@@ -97,9 +97,7 @@ test('zoo.bin', t => {
       syrupReader.enterSet();
       while (!syrupReader.peekSetEnd()) {
         result.eats.push(
-          bytesToText(fromBytes(syrupReader.readBytestring()), {
-            fatal: true,
-          }),
+          strictDecodeUtf8(fromBytes(syrupReader.readBytestring())),
         );
       }
       syrupReader.exitSet();
@@ -110,9 +108,9 @@ test('zoo.bin', t => {
       t.is(syrupReader.readSelectorAsString(), 'weight');
       result.weight = syrupReader.readFloat64();
       t.is(syrupReader.readSelectorAsString(), 'species');
-      result.species = bytesToText(fromBytes(syrupReader.readBytestring()), {
-        fatal: true,
-      });
+      result.species = strictDecodeUtf8(
+        fromBytes(syrupReader.readBytestring()),
+      );
       syrupReader.exitDictionary();
       return result;
     },
@@ -123,7 +121,7 @@ test('zoo.bin', t => {
       syrupWriter.writeSelectorFromString('eats');
       syrupWriter.enterSet();
       for (const eat of value.eats) {
-        syrupWriter.writeBytestring(toBytes(bytesFromText(eat)));
+        syrupWriter.writeBytestring(toBytes(encodeUtf8(eat)));
       }
       syrupWriter.exitSet();
       syrupWriter.writeSelectorFromString('name');
@@ -133,7 +131,7 @@ test('zoo.bin', t => {
       syrupWriter.writeSelectorFromString('weight');
       syrupWriter.writeFloat64(value.weight);
       syrupWriter.writeSelectorFromString('species');
-      syrupWriter.writeBytestring(toBytes(bytesFromText(value.species)));
+      syrupWriter.writeBytestring(toBytes(encodeUtf8(value.species)));
       syrupWriter.exitDictionary();
     },
   };

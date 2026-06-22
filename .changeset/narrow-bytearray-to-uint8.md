@@ -2,12 +2,13 @@
 '@endo/pass-style': major
 '@endo/bytes': major
 '@endo/hex': minor
+'@endo/utf8': major
 '@endo/patterns': patch
 '@endo/marshal': patch
 '@endo/ocapn': patch
 ---
 
-Narrow the `byteArray` pass style to plain frozen `Uint8Array` only; move immutable byte-array utilities to `@endo/pass-style`.
+Narrow the `byteArray` pass style to plain frozen `Uint8Array` only; move immutable byte-array utilities to `@endo/pass-style`; extract UTF-8 transcoding to new `@endo/utf8` package.
 
 The `byteArray` pass-style brand check previously accepted both raw
 immutable `ArrayBuffer` values and plain frozen `Uint8Array` values
@@ -37,10 +38,34 @@ passable byte arrays:
 `@endo/bytes` removes its three immutable-related modules
 (`to-immutable.js`, `from-immutable.js`, `concat-immutables.js`) and
 the corresponding exports from `package.json`.
-`@endo/bytes` now concerns only mutable `Uint8Array` helpers
-(`concat.js`, `equals.js`, `from-string.js`, `to-string.js`).
+`@endo/bytes` also removes `from-string.js` (`bytesFromText`) and
+`to-string.js` (`bytesToText`); UTF-8 transcoding moves to the new
+`@endo/utf8` package.
+`@endo/bytes` now concerns only mutable `Uint8Array` helpers that are
+not format-specific: `concat.js`, `equals.js`, and `compare.js`.
 The `@endo/immutable-arraybuffer` dependency is also removed from
 `@endo/bytes` as it was only required by `to-immutable.js`.
+
+`@endo/utf8` is a new package providing UTF-8 transcoding via the web
+`TextEncoder` and `TextDecoder` APIs, captured once at module load for
+SES hardening.
+It mirrors the shape of `@endo/hex` and `@endo/base64` with three
+focused sub-path exports:
+`encodeUtf8` (string to `Uint8Array`), `decodeUtf8` (bytes to string,
+lenient), and `strictDecodeUtf8` (bytes to string, fatal on malformed
+sequences).
+
+`@endo/pass-style` gains three additional sub-path exports for UTF-8
+transcoding that are aware of the byteArray passable form:
+- `@endo/pass-style/encode-utf8.js` exports `encodeUtf8(s)`: encodes a
+  string as a passable `byteArray` (frozen `Uint8Array` over immutable
+  `ArrayBuffer`).
+- `@endo/pass-style/decode-utf8.js` exports `decodeUtf8(input)`:
+  decodes a byteArray passable or any `ArrayBufferView` to a string,
+  substituting U+FFFD for malformed sequences.
+- `@endo/pass-style/strict-decode-utf8.js` exports
+  `strictDecodeUtf8(input)`: decodes a byteArray passable or any
+  `ArrayBufferView` to a string, throwing on malformed sequences.
 
 `@endo/marshal`: the byteArray rank-compare's `ArrayBuffer.prototype`
 dispatch arm becomes dead code and is removed; values arrive as
@@ -66,24 +91,37 @@ plain mutable `Uint8Array` values, without expensive intermediate copies:
   access and works on immutable buffers without a copy.
 
 - `@endo/bytes`: `concatBytes` now accepts
-  `ReadonlyArray<ArrayBufferView | ArrayBufferLike>`.  `bytesToText` now
-  accepts `ArrayBufferView | ArrayBufferLike`, detects immutable backing
-  buffers via the `ArrayBuffer.prototype.immutable` accessor, and copies
-  only when `TextDecoder.decode` would otherwise reject the input.  A
-  new `@endo/bytes/compare.js` module exports `compareBytes`, which
+  `ReadonlyArray<ArrayBufferView | ArrayBufferLike>`.
+  A `@endo/bytes/compare.js` module exports `compareBytes`, which
   compares any two byte inputs lexicographically without a copy.
+  `bytesFromText` and `bytesToText` move to `@endo/utf8` (see below).
+
+- `@endo/utf8`: new package.
+  `encodeUtf8` (formerly `bytesFromText`) encodes a string as UTF-8
+  bytes.
+  `decodeUtf8` (formerly `bytesToText` without options) decodes bytes to
+  a string, substituting U+FFFD for malformed sequences.
+  `strictDecodeUtf8` (formerly `bytesToText({ fatal: true })`) decodes
+  bytes to a string, throwing on malformed sequences.
+  All three accept `ArrayBufferView | ArrayBufferLike`; the two decode
+  variants handle immutable-backed `Uint8Array` values by detecting
+  `ArrayBuffer.prototype.immutable` and copying to a mutable buffer only
+  when `TextDecoder.decode` requires it.
 
 - `@endo/pass-style/concat-bytes.js`: `concatBytes` now delegates the
   accumulation loop to `@endo/bytes/concat.js`; `@endo/bytes` is added
-  as a runtime dependency of `@endo/pass-style`.  No dependency cycle
-  exists: `@endo/bytes` carries `@endo/pass-style` only as a
-  devDependency (test-only).
+  as a runtime dependency of `@endo/pass-style`.
+  No dependency cycle exists: `@endo/bytes` carries `@endo/pass-style`
+  only as a devDependency (test-only).
 
 - `@endo/ocapn`: removed `fromBytes` casts in `compareImmutableArrayBuffers`
   (now delegates to `@endo/bytes/compare.js`), `toHex` (now calls
   `encodeHex` directly), `decodeBytestringLabel` (now uses
-  `bytesToText`), `ocapNSignatureToBytes` (concatBytes accepts both
-  forms), `makeSessionId` (compareBytes + concatBytes accept both forms),
-  and `base32Encode` (for-of iteration works on immutable views).
+  `strictDecodeUtf8` from `@endo/utf8`), `ocapNSignatureToBytes`
+  (concatBytes accepts both forms), `makeSessionId` (compareBytes +
+  concatBytes accept both forms), and `base32Encode` (for-of iteration
+  works on immutable views).
   The `giftId` type in `HandoffGive` and `deposit-gift` is narrowed
   from `ArrayBufferView | ArrayBufferLike` to `Uint8Array`.
+  All callers of `bytesFromText` / `bytesToText` updated to use
+  `encodeUtf8` / `strictDecodeUtf8` from `@endo/utf8`.

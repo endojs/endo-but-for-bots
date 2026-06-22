@@ -5,7 +5,7 @@ import os from 'os';
 import { makeNodeReader } from '@endo/stream-node';
 import { makeReaderRef } from '@endo/daemon';
 import { concatBytes } from '@endo/bytes/concat.js';
-import { bytesToText } from '@endo/bytes/to-string.js';
+import { decodeUtf8 } from '@endo/utf8/decode.js';
 import { E } from '@endo/far';
 
 import { withEndoAgent } from '../context.js';
@@ -67,12 +67,12 @@ export const store = async ({
     } else if (storeTextStdin !== undefined) {
       const reader = makeNodeReader(process.stdin);
       const bytes = await asyncConcat(reader);
-      const text = bytesToText(bytes);
+      const text = decodeUtf8(bytes);
       await E(agent).storeValue(text, parsedName);
     } else if (storeJsonStdin !== undefined) {
       const reader = makeNodeReader(process.stdin);
       const bytes = await asyncConcat(reader);
-      const text = bytesToText(bytes);
+      const text = decodeUtf8(bytes);
       await E(agent).storeValue(JSON.parse(text), parsedName);
     } else if (storeStdin !== undefined) {
       const reader = makeNodeReader(process.stdin);

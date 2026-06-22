@@ -8,7 +8,7 @@ import test from '@endo/ses-ava/test.js';
 
 import { fromBytes } from '@endo/pass-style/from-bytes.js';
 import { toBytes } from '@endo/pass-style/to-bytes.js';
-import { bytesFromText } from '@endo/bytes/from-string.js';
+import { encodeUtf8 } from '@endo/utf8/encode.js';
 import { throws } from '../_util.js';
 import {
   makeCodecTestKit,
@@ -56,8 +56,8 @@ const table = [
       type: 'desc:sig-envelope',
       object: {
         type: 'desc:handoff-receive',
-        receivingSession: toBytes(bytesFromText('123')),
-        receivingSide: toBytes(bytesFromText('456')),
+        receivingSession: toBytes(encodeUtf8('123')),
+        receivingSide: toBytes(encodeUtf8('456')),
         handoffCount: 1n,
         signedGive: {
           type: 'desc:sig-envelope',
@@ -76,9 +76,9 @@ const table = [
               designator: '1234',
               hints: { host: '127.0.0.1', port: '54822' },
             },
-            exporterSessionId: toBytes(bytesFromText('exporter-session-id')),
-            gifterSideId: toBytes(bytesFromText('gifter-side-id')),
-            giftId: toBytes(bytesFromText('gift-id')),
+            exporterSessionId: toBytes(encodeUtf8('exporter-session-id')),
+            gifterSideId: toBytes(encodeUtf8('gifter-side-id')),
+            giftId: toBytes(encodeUtf8('gift-id')),
           },
           signature: {
             type: 'sig-val',

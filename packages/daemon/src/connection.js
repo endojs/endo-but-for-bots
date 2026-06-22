@@ -3,8 +3,8 @@
 import { makeCapTP } from '@endo/captp';
 import { mapWriter, mapReader } from '@endo/stream';
 import { makeNetstringReader, makeNetstringWriter } from '@endo/netstring';
-import { bytesFromText } from '@endo/bytes/from-string.js';
-import { bytesToText } from '@endo/bytes/to-string.js';
+import { encodeUtf8 } from '@endo/utf8/encode.js';
+import { decodeUtf8 } from '@endo/utf8/decode.js';
 
 /** @import { Stream, Reader, Writer } from '@endo/stream' */
 
@@ -51,13 +51,13 @@ export const makeMessageCapTP = (
 export const messageToBytes = message => {
   const text = JSON.stringify(message);
   // console.log('->', text);
-  const bytes = bytesFromText(text);
+  const bytes = encodeUtf8(text);
   return bytes;
 };
 
 /** @param {Uint8Array} bytes */
 export const bytesToMessage = bytes => {
-  const text = bytesToText(bytes);
+  const text = decodeUtf8(bytes);
   // console.log('<-', text);
   const message = JSON.parse(text);
   return message;

@@ -44,6 +44,7 @@
     "@endo/patterns": "workspace:^",
     "@endo/promise-kit": "workspace:^",
     "@endo/stream-node": "workspace:^",
+    "@endo/utf8": "workspace:^",
     "@endo/where": "workspace:^",
     "commander": "^5.0.0",
     "open": "^9.1.0"

@@ -3,7 +3,7 @@ import test from '@endo/ses-ava/test.js';
 import * as fs from 'fs';
 import path from 'path';
 import { fromBytes } from '@endo/pass-style/from-bytes.js';
-import { bytesToText } from '@endo/bytes/to-string.js';
+import { strictDecodeUtf8 } from '@endo/utf8/strict-decode.js';
 import { makeSyrupReader } from '../../src/syrup/decode.js';
 
 // zoo.bin from https://github.com/ocapn/syrup/tree/2214cbb7c0ee081699fdef64edbc2444af2bb1d2/test-data
@@ -18,7 +18,7 @@ const zooBin = Uint8Array.from(zooBinRaw);
  * @param {ArrayBufferView | ArrayBufferLike} bytes
  * @returns {string}
  */
-const toUtf8 = bytes => bytesToText(fromBytes(bytes), { fatal: true });
+const toUtf8 = bytes => strictDecodeUtf8(fromBytes(bytes));
 
 test('exciting a dictionary without entering it', t => {
   const syrup = '}';

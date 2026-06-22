@@ -3,7 +3,7 @@
 
 import harden from '@endo/harden';
 import { encodeHex } from '@endo/hex';
-import { bytesFromText } from '@endo/bytes/from-string.js';
+import { encodeUtf8 } from '@endo/utf8/encode.js';
 import { makePromiseKit } from '@endo/promise-kit';
 import { makePipe } from '@endo/stream';
 import { makeNodeReader, makeNodeWriter } from '@endo/stream-node';
@@ -281,7 +281,7 @@ export const makeCryptoPowers = crypto => {
     const digester = crypto.createHash('sha512');
     return harden({
       update: chunk => digester.update(chunk),
-      updateText: chunk => digester.update(bytesFromText(chunk)),
+      updateText: chunk => digester.update(encodeUtf8(chunk)),
       digestHex: () => encodeHex(digester.digest()),
     });
   };
