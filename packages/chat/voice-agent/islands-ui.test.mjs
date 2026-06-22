@@ -16,6 +16,7 @@ import { ProposalCard } from './client/proposal-card.js';
 import { ChatList } from './client/chat-list.js';
 import { MessageControls } from './client/message-controls.js';
 import { ChatMetaBar } from './client/chat-meta-bar.js';
+import { DevTaskCard } from './client/dev-task-card.js';
 import { Drawer, Stepper } from './client/ui-kit.js';
 
 // Walk a preact vnode tree → collect text, classes, clickable buttons, and inputs (with their handlers).
@@ -235,6 +236,19 @@ test('ChatMetaBar: chat mode (title + parent/project chips + share badge) and me
   assert.match(allText(memo), /🎙/); assert.match(allText(memo), /2\/3/, 'version k/n');
   memo.buttons.find(b => b.label === '◀').onClick(); memo.buttons.find(b => /Re-run/.test(b.label)).onClick();
   assert.deepEqual(v, ['prev', 'rerun']);
+});
+
+test('DevTaskCard: status + task/result, collapsed vs expanded thread, reply input + Send', () => {
+  const task = { id: 'd1', to: 'blacksmith', status: 'done', task: 'do X', result: 'did X', thread: [{ role: 'you', text: 'hi' }, { role: 'blacksmith', text: 'done' }] };
+  const collapsed = collect(DevTaskCard({ task, expanded: false, onToggle() {} }));
+  assert.match(allText(collapsed), /✓ done/); assert.match(allText(collapsed), /did X/, 'result rendered');
+  assert.match(allText(collapsed), /reply in thread \(2\)/, 'toggle shows thread count');
+  assert.equal(collapsed.inputs.length, 0, 'collapsed → no reply input');
+  let sent = 0; let typed = null;
+  const open = collect(DevTaskCard({ task, expanded: true, draft: 'my reply', onToggle() {}, onReplyChange: v => { typed = v; }, onReplySend: () => { sent += 1; } }));
+  assert.match(allText(open), /hi/); assert.match(allText(open), /done/, 'thread messages shown');
+  open.inputs[0].onInput({ target: { value: 'r2' } }); assert.equal(typed, 'r2', 'reply onChange');
+  open.buttons.find(b => b.label === 'Send').onClick(); assert.equal(sent, 1, 'Send → onReplySend');
 });
 
 test('kit Drawer (open/close) + Stepper (done/active/upcoming dots)', () => {

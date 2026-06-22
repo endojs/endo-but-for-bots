@@ -2408,6 +2408,10 @@ const ISLAND_PREVIEW = {
     mode: 'chat', title: 'Berlin trip planning', shareMode: 'write', metered: true,
     parent: { id: 'p0', title: 'Travel research', available: true }, project: { id: 'pr0', name: 'Europe 2026' },
   }, { onVersionPrev() {}, onVersionNext() {}, onRerun() {}, onOpenParent() {}, onOpenProject() {} }),
+  'island-dev-task-card': slot => window.__fieldIslands.renderDevTaskCard(slot, {
+    task: { id: 'd1', to: 'blacksmith', status: 'working', task: 'Add a CSV export button to the rover dashboard', thread: [{ role: 'you', text: 'use the existing toolbar styles' }, { role: 'blacksmith', text: 'on it — wiring the export now' }] },
+    accent: '#2ea043', expanded: true, draft: '',
+  }, { onToggle() {}, onReplyChange() {}, onReplySend() {} }),
 };
 
 const refreshComponents = async () => {

@@ -21,6 +21,7 @@ import { ProposalCard } from './proposal-card.js';
 import { ChatList } from './chat-list.js';
 import { MessageControls } from './message-controls.js';
 import { ChatMetaBar } from './chat-meta-bar.js';
+import { DevTaskCard } from './dev-task-card.js';
 
 // A render propagator: re-paints `view(...values)` into `el` whenever any wired cell changes.
 // This is the one kind of propagator whose effect is the DOM; logic propagators stay headless.
@@ -49,6 +50,8 @@ const msgCtrlCell = makeCell();
 let msgCtrlWired = false;
 const metaBarCell = makeCell();
 let metaBarWired = false;
+const devTaskCell = makeCell();
+let devTaskWired = false;
 
 const islands = {
   // Idempotent: wires the render propagator once (cell → SharesPanel), then feeds the latest data in.
@@ -188,6 +191,18 @@ const islands = {
       metaBarWired = true;
     }
     metaBarCell.addContent(data);
+  },
+
+  // ── DevTaskCard island ────────────────────────────────────────────────────────────────────────
+  // `data` = { task, accent, who, expanded, draft }. `handlers` = { onToggle, onReplyChange, onReplySend }.
+  renderDevTaskCard(el, data, handlers) {
+    if (!devTaskWired) {
+      el.setAttribute('data-component-id', 'island-dev-task-card');
+      el.setAttribute('data-component-name', 'Dev task card');
+      renderPropagator(el, [devTaskCell], d => h(DevTaskCard, { ...d, ...handlers }));
+      devTaskWired = true;
+    }
+    devTaskCell.addContent(data);
   },
 };
 
