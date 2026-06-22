@@ -24,6 +24,8 @@ import { ChatMetaBar } from './chat-meta-bar.js';
 import { DevTaskCard } from './dev-task-card.js';
 import { ExhaustedCard } from './exhausted-card.js';
 import { TraceSignature } from './trace-signature.js';
+import { ObjectBrowser } from './object-browser.js';
+import { ShareLinkManager } from './share-link-manager.js';
 
 // A render propagator: re-paints `view(...values)` into `el` whenever any wired cell changes.
 // This is the one kind of propagator whose effect is the DOM; logic propagators stay headless.
@@ -58,6 +60,10 @@ const exhaustedCell = makeCell();
 let exhaustedWired = false;
 const traceSigCell = makeCell();
 let traceSigWired = false;
+const objBrowserCell = makeCell();
+let objBrowserWired = false;
+const shareMgrCell = makeCell();
+let shareMgrWired = false;
 
 const islands = {
   // Idempotent: wires the render propagator once (cell → SharesPanel), then feeds the latest data in.
@@ -233,6 +239,31 @@ const islands = {
       traceSigWired = true;
     }
     traceSigCell.addContent(data);
+  },
+
+  // ── ObjectBrowser island (the capability navigator) ─────────────────────────────────────────────
+  // `data` = { crumbs, items, roOnly, emptyText }. `handlers` = { onCrumb, onDrill, onShareRO, onShareFull }.
+  renderObjectBrowser(el, data, handlers) {
+    if (!objBrowserWired) {
+      el.setAttribute('data-component-id', 'island-object-browser');
+      el.setAttribute('data-component-name', 'Object browser');
+      renderPropagator(el, [objBrowserCell], d => h(ObjectBrowser, { ...d, ...handlers }));
+      objBrowserWired = true;
+    }
+    objBrowserCell.addContent(data);
+  },
+
+  // ── ShareLinkManager island ─────────────────────────────────────────────────────────────────────
+  // `data` = { title, links, newName, newMode, newAllow }. `handlers` = { onCopy, onQr, onAdjustToggle,
+  // onAdjustField, onSave, onRevoke, onNewField, onCreate }.
+  renderShareLinkManager(el, data, handlers) {
+    if (!shareMgrWired) {
+      el.setAttribute('data-component-id', 'island-share-link-manager');
+      el.setAttribute('data-component-name', 'Share link manager');
+      renderPropagator(el, [shareMgrCell], d => h(ShareLinkManager, { ...d, ...handlers }));
+      shareMgrWired = true;
+    }
+    shareMgrCell.addContent(data);
   },
 };
 

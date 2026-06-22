@@ -2420,6 +2420,20 @@ const ISLAND_PREVIEW = {
       { name: 'generateImage', icon: '🎨', ok: false, detail: 'GPU busy' },
     ], expanded: true, legend: 'Symbols: 🔎 research · 🤝 delegateTask · 🎨 generateImage',
   }, { onToggle() {}, onOpen3D() {} }),
+  'island-object-browser': slot => window.__fieldIslands.renderObjectBrowser(slot, {
+    crumbs: [{ label: 'Home Assistant' }, { label: 'Kitchen' }],
+    items: [
+      { label: 'Lights', sub: '4 entities' }, { label: 'Front door', sub: 'lock.front', leaf: true },
+      { label: 'Thermostat', sub: 'climate.main', leaf: true },
+    ], roOnly: false,
+  }, { onCrumb() {}, onDrill() {}, onShareRO() {}, onShareFull() {} }),
+  'island-share-link-manager': slot => window.__fieldIslands.renderShareLinkManager(slot, {
+    title: 'Berlin trip planning',
+    links: [
+      { token: 't1', name: 'kumavis · read-only', mode: 'read' },
+      { token: 't2', name: 'team room', mode: 'write', allowanceUsd: 5, adjusting: true, draftName: 'team room', draftMode: 'write', draftAllow: 5 },
+    ], newName: '', newMode: 'read', newAllow: '',
+  }, { onCopy() {}, onQr() {}, onAdjustToggle() {}, onAdjustField() {}, onSave() {}, onRevoke() {}, onNewField() {}, onCreate() {} }),
 };
 
 const refreshComponents = async () => {

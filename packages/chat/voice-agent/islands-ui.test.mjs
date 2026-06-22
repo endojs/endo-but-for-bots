@@ -19,6 +19,8 @@ import { ChatMetaBar } from './client/chat-meta-bar.js';
 import { DevTaskCard } from './client/dev-task-card.js';
 import { ExhaustedCard } from './client/exhausted-card.js';
 import { TraceSignature } from './client/trace-signature.js';
+import { ObjectBrowser } from './client/object-browser.js';
+import { ShareLinkManager } from './client/share-link-manager.js';
 import { Drawer, Stepper } from './client/ui-kit.js';
 
 // Walk a preact vnode tree → collect text, classes, clickable buttons, and inputs (with their handlers).
@@ -238,6 +240,38 @@ test('ChatMetaBar: chat mode (title + parent/project chips + share badge) and me
   assert.match(allText(memo), /🎙/); assert.match(allText(memo), /2\/3/, 'version k/n');
   memo.buttons.find(b => b.label === '◀').onClick(); memo.buttons.find(b => /Re-run/.test(b.label)).onClick();
   assert.deepEqual(v, ['prev', 'rerun']);
+});
+
+test('ObjectBrowser: crumbs nav, folder drill / leaf no-drill, RO+full share (or single 🔗 when roOnly)', () => {
+  let acts = [];
+  const acc = collect(ObjectBrowser({
+    crumbs: [{ label: 'HA' }], roOnly: false,
+    items: [{ label: 'Lights', sub: '4 entities' }, { label: 'Front door', sub: 'lock.front', leaf: true }],
+    onCrumb: i => acts.push(['crumb', i]), onDrill: i => acts.push(['drill', i]), onShareRO: i => acts.push(['ro', i]), onShareFull: i => acts.push(['full', i]),
+  }));
+  assert.match(allText(acc), /Lights/); assert.match(allText(acc), /4 entities/);
+  acc.buttons.find(b => b.label === 'open').onClick(); assert.deepEqual(acts.at(-1), ['drill', 0], 'folder drills');
+  acc.buttons.filter(b => b.label === 'RO')[0].onClick(); acc.buttons.find(b => b.label === 'full').onClick();
+  assert.ok(acts.some(a => a[0] === 'ro') && acts.some(a => a[0] === 'full'), 'RO + full share');
+  // roOnly → a single 🔗 share button, no RO/full
+  const ro = collect(ObjectBrowser({ items: [{ label: 'Contact', leaf: true }], roOnly: true, onShareRO() {} }));
+  assert.ok(ro.buttons.some(b => /share/.test(b.label)) && !ro.buttons.some(b => b.label === 'full'), 'granule → single share');
+});
+
+test('ShareLinkManager: link rows (badges, copy/QR/adjust/revoke), inline adjust form, create form', () => {
+  let acts = [];
+  const acc = collect(ShareLinkManager({
+    title: 'Trip', links: [{ token: 't1', name: 'kumavis', mode: 'read' }, { token: 't2', name: 'team', mode: 'write', allowanceUsd: 5, adjusting: true }],
+    newName: 'x', newMode: 'read',
+    onCopy: t => acts.push(['copy', t]), onRevoke: t => acts.push(['rev', t]), onAdjustToggle: t => acts.push(['adj', t]),
+    onAdjustField() {}, onSave: t => acts.push(['save', t]), onNewField() {}, onCreate: () => acts.push(['create']),
+  }));
+  assert.match(allText(acc), /kumavis/); assert.match(allText(acc), /✍️ write/, 'write badge'); assert.match(allText(acc), /\$5/, 'allowance chip');
+  acc.buttons.find(b => b.label === 'copy').onClick(); assert.deepEqual(acts.at(-1), ['copy', 't1']);
+  acc.buttons.find(b => b.label === 'revoke').onClick(); assert.ok(acts.some(a => a[0] === 'rev'));
+  // the adjusting row (t2) shows a save button + inline inputs
+  assert.ok(acc.buttons.some(b => b.label === 'save'), 'inline adjust form present'); assert.ok(acc.inputs.length >= 2, 'adjust + create inputs');
+  acc.buttons.find(b => /Create link/.test(b.label)).onClick(); assert.ok(acts.some(a => a[0] === 'create'));
 });
 
 test('TraceSignature: collapsed glyph row (toggle + ⊿3D); expanded shows the nested signature + failed marker', () => {
