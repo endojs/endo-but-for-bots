@@ -70,7 +70,7 @@
 }
 </script>
 <style>
-  :root { --bg:#0d1117; --panel:#161b22; --edge:#30363d; --ink:#e6edf3; --mut:#8b949e; --acc:#7c5cff; --acc2:#2ea043; --bad:#f85149; --you:#1f6feb; --you-bg:#11243f; --you-edge:#1f3b63; --trace-bg:#0b0e14; --trace-edge:#21262d; --trace-ink:#9aa4b2; --trace-ok:#8fd0a8; --trace-bad:#ff9e9e; --trace-call:#9fb0c9; --trace-result:#c9a96e; --warn:#d29922; }
+  :root { --bg:#0d1117; --panel:#161b22; --edge:#30363d; --ink:#e6edf3; --mut:#8b949e; --acc:#7c5cff; --acc-fill:#6b3fd6; --acc2:#2ea043; --bad:#f85149; --you:#479cff; --you-fill:#1f6feb; --you-bg:#11243f; --you-edge:#1f3b63; --trace-bg:#0b0e14; --trace-edge:#21262d; --trace-ink:#9aa4b2; --trace-ok:#8fd0a8; --trace-bad:#ff9e9e; --trace-call:#9fb0c9; --trace-result:#c9a96e; --warn:#d29922; }
   * { box-sizing:border-box; }
   /* full-bleed on notched phones: viewport-fit=cover lets content reach the edges; the
      background behind the safe-area insets is the dark bg, and the fixed chrome (header/composer)
@@ -81,7 +81,7 @@
   h1 { font-size:19px; margin:0; }
   .sub { color:var(--mut); font-size:13px; flex:1; min-width:120px; }
   button.tab { padding:6px 12px; border-radius:8px; border:1px solid var(--edge); background:transparent; color:var(--mut); cursor:pointer; font-size:13px; }
-  button.tab.on { background:var(--acc); border-color:var(--acc); color:#fff; }
+  button.tab.on { background:var(--acc-fill); border-color:var(--acc); color:#fff; }
   .hdr-sel { background:var(--panel); border:1px solid var(--edge); color:var(--ink); border-radius:7px; padding:4px 7px; font-size:12px; max-width:140px; cursor:pointer; }
   /* prepaid inference budget chip (toll-bridge): this conversation's remaining allowance */
   .budget-chip { background:var(--panel); border:1px solid var(--edge); color:var(--mut); border-radius:7px; padding:4px 8px; font-size:12px; cursor:pointer; white-space:nowrap; }
@@ -256,11 +256,11 @@
   #text { flex:1; background:var(--panel); border:1px solid var(--edge); color:var(--ink); border-radius:22px; padding:11px 16px; font:inherit; font-size:16px; line-height:1.4; resize:none; field-sizing:content; min-height:22px; max-height:40vh; overflow-y:auto; } /* >=16px so iOS doesn't zoom on focus */
   #text:focus { outline:none; border-color:var(--acc); }
   .inputrow button { width:44px; height:44px; border-radius:50%; border:none; cursor:pointer; font-size:18px; flex:none; display:flex; align-items:center; justify-content:center; }
-  #send { background:var(--acc); color:#fff; }
+  #send { background:var(--acc-fill); color:#fff; }
   #send:disabled { opacity:.4; cursor:default; }
   #mic { background:transparent; border:1px solid var(--edge) !important; color:var(--mut); }
-  #mic.listening { background:var(--you); color:#fff; border-color:var(--you) !important; animation:pulse 1.6s infinite; }
-  #mic.thinking { background:var(--acc); color:#fff; border-color:var(--acc) !important; }
+  #mic.listening { background:var(--you-fill); color:#fff; border-color:var(--you) !important; animation:pulse 1.6s infinite; }
+  #mic.thinking { background:var(--acc-fill); color:#fff; border-color:var(--acc) !important; }
   #attach { background:transparent; border:1px solid var(--edge) !important; color:var(--mut); }
   #attach:hover { color:var(--ink); border-color:var(--acc) !important; }
   @keyframes pulse { 0%,100%{box-shadow:0 0 0 0 rgba(31,111,235,.5)} 50%{box-shadow:0 0 0 12px rgba(31,111,235,0)} }
@@ -303,10 +303,10 @@
   label { display:block; font-size:11px; color:var(--mut); margin:10px 0 4px; text-transform:uppercase; letter-spacing:.4px; }
   input, select { width:100%; background:var(--bg); border:1px solid var(--edge); color:var(--ink); border-radius:8px; padding:9px 11px; font:inherit; }
   .row { display:flex; gap:12px; flex-wrap:wrap; } .row > div { flex:1; min-width:140px; }
-  button.go { margin-top:12px; background:var(--acc); border:none; color:#fff; padding:10px 16px; border-radius:8px; font-size:14px; cursor:pointer; }
+  button.go { margin-top:12px; background:var(--acc-fill); border:none; color:#fff; padding:10px 16px; border-radius:8px; font-size:14px; cursor:pointer; }
   button.mini { background:transparent; border:1px solid var(--edge); color:var(--mut); padding:4px 10px; border-radius:6px; cursor:pointer; font-size:12px; }
   button.mini.bad { color:var(--bad); border-color:#5a2a2a; }
-  button.mini.primary { background:var(--acc); border-color:var(--acc); color:#fff; }
+  button.mini.primary { background:var(--acc-fill); border-color:var(--acc); color:#fff; }
   button.mini:hover { color:var(--ink); border-color:var(--acc); } /* hover feedback everywhere, not only in .chat-bar */
   /* a keyboard-visible focus ring for controls whose house style is outline:none (inputs keep their border-swap) */
   button:focus-visible, a:focus-visible, [tabindex]:focus-visible, [role="button"]:focus-visible, .dev-thread-toggle:focus-visible, .mc-btn:focus-visible { outline:2px solid var(--acc); outline-offset:2px; }
@@ -319,15 +319,15 @@
   .kit-toggle { display:inline-flex; align-items:center; gap:8px; cursor:pointer; font-size:13px; }
   .kit-toggle input { position:absolute; opacity:0; width:0; height:0; }
   .kit-toggle-track { width:34px; height:18px; border-radius:10px; background:var(--edge); position:relative; transition:background .15s; flex:none; }
-  .kit-toggle input:checked + .kit-toggle-track { background:var(--acc); }
+  .kit-toggle input:checked + .kit-toggle-track { background:var(--acc-fill); }
   .kit-toggle-thumb { position:absolute; top:2px; left:2px; width:14px; height:14px; border-radius:50%; background:#fff; transition:transform .15s; }
   .kit-toggle input:checked + .kit-toggle-track .kit-toggle-thumb { transform:translateX(16px); }
   .kit-spinner { display:inline-block; width:16px; height:16px; border:2px solid var(--edge); border-top-color:var(--acc); border-radius:50%; animation:kit-spin .7s linear infinite; vertical-align:middle; }
   @keyframes kit-spin { to { transform:rotate(360deg); } }
   .kit-avatar { display:inline-flex; align-items:center; justify-content:center; width:28px; height:28px; border-radius:50%; background:var(--panel); border:1px solid var(--edge); font-size:13px; flex:none; }
   .kit-progress { width:100%; height:6px; background:var(--panel); border-radius:4px; overflow:hidden; }
-  .kit-progress > span { display:block; height:100%; background:var(--acc); transition:width .2s; }
-  .kit-badge { display:inline-block; font-size:10px; font-weight:600; padding:1px 6px; border-radius:9px; background:var(--acc); color:#fff; }
+  .kit-progress > span { display:block; height:100%; background:var(--acc-fill); transition:width .2s; }
+  .kit-badge { display:inline-block; font-size:10px; font-weight:600; padding:1px 6px; border-radius:9px; background:var(--acc-fill); color:#fff; }
   .kit-badge.bad { background:var(--bad); } .kit-badge.mut { background:var(--edge); color:var(--ink); }
   .kit-banner { border:1px solid var(--edge); border-radius:8px; padding:8px 10px; font-size:13px; display:flex; gap:8px; align-items:flex-start; }
   .kit-banner.info { border-color:var(--you); } .kit-banner.warn { border-color:#7a5a1a; }
@@ -347,8 +347,8 @@
   .kit-modal-x { background:none; border:none; color:var(--mut); cursor:pointer; font-size:18px; line-height:1; }
   .kit-seg { display:inline-flex; border:1px solid var(--edge); border-radius:8px; overflow:hidden; }
   .kit-seg button { background:transparent; border:none; color:var(--mut); padding:5px 12px; cursor:pointer; font-size:13px; border-right:1px solid var(--edge); }
-  .kit-seg button:last-child { border-right:none; } .kit-seg button.on { background:var(--acc); color:#fff; }
-  .kit-slider { width:100%; accent-color:var(--acc); }
+  .kit-seg button:last-child { border-right:none; } .kit-seg button.on { background:var(--acc-fill); color:#fff; }
+  .kit-slider { width:100%; accent-color:var(--acc-fill); }
   .kit-skel { background:linear-gradient(90deg,var(--panel) 25%,var(--edge) 50%,var(--panel) 75%); background-size:200% 100%; animation:kit-shimmer 1.3s infinite; border-radius:6px; display:inline-block; }
   @keyframes kit-shimmer { to { background-position:-200% 0; } }
   .kit-disc-head { cursor:pointer; font-size:13px; padding:6px 0; user-select:none; color:var(--ink); }
@@ -366,7 +366,7 @@
   .kit-toast.error { border-left-color:var(--bad); } .kit-toast.success { border-left-color:var(--acc2); }
   .kit-page { display:flex; gap:4px; align-items:center; font-size:13px; }
   .kit-page button { background:transparent; border:1px solid var(--edge); color:var(--mut); border-radius:6px; padding:3px 8px; cursor:pointer; min-width:28px; }
-  .kit-page button.on { background:var(--acc); border-color:var(--acc); color:#fff; } .kit-page button:disabled { opacity:.4; cursor:default; }
+  .kit-page button.on { background:var(--acc-fill); border-color:var(--acc); color:#fff; } .kit-page button:disabled { opacity:.4; cursor:default; }
   .kit-table { display:table; width:100%; font-size:13px; }
   .kit-table .tr { display:table-row; } .kit-table .th, .kit-table .td { display:table-cell; text-align:left; padding:6px 8px; border-bottom:1px solid var(--edge); }
   .kit-table .th { color:var(--mut); font-weight:600; }
@@ -378,7 +378,7 @@
   .kit-stepper { display:flex; align-items:center; gap:6px; font-size:12px; }
   .kit-step { display:flex; align-items:center; gap:6px; color:var(--mut); }
   .kit-step .dot { width:20px; height:20px; border-radius:50%; border:1px solid var(--edge); display:inline-flex; align-items:center; justify-content:center; font-size:11px; flex:none; }
-  .kit-step.done .dot, .kit-step.on .dot { background:var(--acc); border-color:var(--acc); color:#fff; } .kit-step.on { color:var(--ink); }
+  .kit-step.done .dot, .kit-step.on .dot { background:var(--acc-fill); border-color:var(--acc); color:#fff; } .kit-step.on { color:var(--ink); }
   .kit-step-sep { flex:1; height:1px; background:var(--edge); min-width:16px; }
   .share { display:flex; justify-content:space-between; align-items:center; gap:10px; padding:9px 0; border-top:1px solid var(--edge); font-size:13px; }
   .pill { font-size:11px; color:var(--mut); } .err { color:var(--bad); font-size:13px; margin-top:8px; }
@@ -403,7 +403,7 @@
      overrides the white-card .mini color above so buttons aren't dark-grey-on-dark-grey. */
   .qrcard .dkm { background:var(--panel); color:var(--ink); }
   .qrcard .dkm .mini { color:var(--ink); border-color:var(--edge); background:transparent; }
-  .qrcard .dkm .mini.go { background:var(--acc); border-color:var(--acc); color:#fff; }
+  .qrcard .dkm .mini.go { background:var(--acc-fill); border-color:var(--acc); color:#fff; }
   .qrcard .dkm code { color:var(--ink); background:var(--bg); padding:1px 4px; border-radius:4px; } /* themed: the .dkm sheet flips to var(--panel), so the code chip must flip too */
   .qrcard .reveal-in { width:340px; max-width:82vw; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12px; margin:4px 0 2px; }
   /* OAuth-style consent card (the "Powers this chat needs" prompt). Rendered straight into the
@@ -423,7 +423,7 @@
   .scope-txt { flex:1; min-width:0; }
   .scope-name { display:block; font-size:13.5px; font-weight:600; color:var(--ink); }
   .scope-desc { display:block; font-size:12px; color:var(--mut); line-height:1.4; margin-top:1px; }
-  .scope-chk { flex:none; width:18px; height:18px; accent-color:var(--acc); cursor:pointer; }
+  .scope-chk { flex:none; width:18px; height:18px; accent-color:var(--acc-fill); cursor:pointer; }
   .consent-empty { padding:14px 16px; font-size:13px; color:var(--mut); }
   .consent-more { background:none; border:none; color:var(--acc); font-size:13px; font-weight:500; cursor:pointer; padding:10px 18px; text-align:left; border-top:1px solid var(--edge); }
   .consent-more:hover { background:rgba(124,92,255,.08); }
@@ -431,7 +431,7 @@
   .consent-btn { padding:11px 16px; border-radius:10px; font-size:14px; font-weight:600; cursor:pointer; border:1px solid var(--edge); transition:filter .12s,border-color .12s; }
   .consent-btn.ghost { background:transparent; color:var(--mut); flex:1; }
   .consent-btn.ghost:hover { color:var(--ink); border-color:var(--mut); }
-  .consent-btn.primary { background:var(--acc); border-color:var(--acc); color:#fff; flex:1.5; }
+  .consent-btn.primary { background:var(--acc-fill); border-color:var(--acc); color:#fff; flex:1.5; }
   .consent-btn.primary:hover { filter:brightness(1.1); }
   .consent-btn:disabled { opacity:.5; cursor:default; }
 </style>
