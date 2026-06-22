@@ -390,7 +390,11 @@ const deriveTitle = async transcript => {
   return '';
 };
 // A passed-in title is descriptive only if it ISN'T a capture/clip filename, a bare timestamp, or a hex id.
-const isFilenameTitle = t => { const s = String(t || '').trim(); return !s || /^(capture|clip|memo|voice|rec|recording|audio|note|new ?chat)[-_ .]?\d|^\d{4}[-_]?\d\d|^[0-9a-f]{8,}(-[0-9a-f]+)*$|\.(m4a|mp3|wav|txt|md|json)$/i.test(s); };
+// Treat a title as a non-descriptive filename/id ONLY when it really looks machine-generated: a known
+// prefix joined by - or _ to a 3+ digit run ("capture-20260621…", "memo_3a4b"), a bare date/timestamp, a
+// long hex id, or a media extension. A SPACE separator or a short number ("Note 3 ideas", "Audio 5.1
+// setup") is a real human title and is KEPT (the old `[-_ .]?\d` dropped those).
+const isFilenameTitle = t => { const s = String(t || '').trim(); return !s || /^(capture|clip|memo|voice|rec|recording|audio|note|new ?chat)[-_]\d{3,}|^\d{4}[-_]?\d\d|^[0-9a-f]{8,}(-[0-9a-f]+)*$|\.(m4a|mp3|wav|txt|md|json)$/i.test(s); };
 const parsePowers = text => {
   const m = String(text || '').match(/\[[^\]]*\]/);
   let arr = []; try { arr = JSON.parse(m ? m[0] : '[]'); } catch { arr = []; }

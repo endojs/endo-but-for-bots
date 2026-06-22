@@ -32,19 +32,36 @@ const tail = (r, n = 1600) => String((r && (r.stderr || r.stdout)) || '').slice(
 //   defaultTest — the verification command run IN the branch's worktree (a task may override per-run).
 export const makeSelfImprover = ({ host, repo, baseBranch = 'HEAD', verifyDir, ledgerFile, defaultTest = 'echo no-test-configured && false', timeoutMs = 600000 } = {}) => {
   const vbase = verifyDir || path.join(repo, '..', '.self-improve-verify');
-  const loadLedger = () => { try { return JSON.parse(fs.readFileSync(ledgerFile, 'utf8')); } catch { return { merges: [] }; } };
-  const saveLedger = l => { try { fs.mkdirSync(path.dirname(ledgerFile), { recursive: true }); fs.writeFileSync(ledgerFile, `${JSON.stringify(l, null, 2)}\n`); } catch { /* best effort */ } };
+  // The ledger is the ONLY record that makes an auto-merge revertible from the UI, so its read/write is
+  // authoritative — NOT best-effort. Missing file → fresh ledger; a present-but-CORRUPT file THROWS rather
+  // than silently returning empty (which would hide every prior merge and let the next write overwrite it).
+  const loadLedger = () => {
+    let raw;
+    try { raw = fs.readFileSync(ledgerFile, 'utf8'); } catch (e) { if (e && e.code === 'ENOENT') return { merges: [] }; throw new Error(`ledger unreadable: ${(e && e.message) || e}`); }
+    try { const l = JSON.parse(raw); return l && Array.isArray(l.merges) ? l : { merges: [] }; } catch { throw new Error('ledger file is corrupt — refusing to read (back it up + repair so merge history is not lost)'); }
+  };
+  // atomic (temp + rename on the same fs) so a crash mid-write can't truncate the ledger; THROWS on failure.
+  const saveLedger = l => {
+    fs.mkdirSync(path.dirname(ledgerFile), { recursive: true });
+    const tmp = `${ledgerFile}.tmp-${process.pid}`;
+    fs.writeFileSync(tmp, `${JSON.stringify(l, null, 2)}\n`);
+    fs.renameSync(tmp, ledgerFile);
+  };
 
   // run `command` against an isolated checkout of `branch` — the INDEPENDENT verification.
   const verifyBranch = async (branch, command, now) => {
     const dir = path.join(vbase, slug(branch) + '-' + slug(String(now || 'v')));
     await host.exec(`mkdir -p ${shq(vbase)}`, { timeoutMs: 15000 });
     const add = await host.exec(`git -C ${shq(repo)} worktree add --quiet --detach ${shq(dir)} ${shq(branch)}`, { timeoutMs: 120000 });
-    if (!add.ok) return { ok: false, reason: `could not check out ${branch} to verify: ${tail(add, 200)}` };
+    // TRI-STATE: `ran` distinguishes "the tests RAN and were red" (a real regression → revert) from
+    // "we could not even RUN them" (infra: checkout/runner failure → do NOT revert a good merge).
+    if (!add.ok) return { ok: false, ran: false, reason: `could not check out ${branch} to verify: ${tail(add, 200)}` };
     let result;
     try {
       const run = await host.exec(`cd ${shq(dir)} && ${command}`, { timeoutMs });
-      result = { ok: run.ok, code: run.code, testTail: tail(run) };
+      result = { ok: run.ok, ran: true, code: run.code, testTail: tail(run) };
+    } catch (e) {
+      result = { ok: false, ran: false, reason: `verification could not run: ${String((e && e.message) || e)}` };
     } finally {
       await host.exec(`git -C ${shq(repo)} worktree remove --force ${shq(dir)} ; git -C ${shq(repo)} worktree prune`, { timeoutMs: 30000 });
     }
@@ -56,6 +73,9 @@ export const makeSelfImprover = ({ host, repo, baseBranch = 'HEAD', verifyDir, l
     const dirty = await host.exec(`git -C ${shq(repo)} status --porcelain`, { timeoutMs: 30000 });
     if (!dirty.ok) return { merged: false, reason: 'could not read the live tree status — refusing to auto-merge (fail closed)', branch };
     if (String(dirty.stdout || '').trim()) return { merged: false, reason: 'the live checkout has uncommitted changes — refusing to auto-merge (would risk clobbering work)', branch };
+    // FAIL CLOSED on an unrecordable ledger: load it BEFORE merging so a corrupt/unwritable changelog blocks
+    // the merge (never ship a change we cannot record for revert). A throw here = no merge happened.
+    let l; try { l = loadLedger(); } catch (e) { return { merged: false, reason: `refusing to auto-merge — ${(e && e.message) || e} (a change we can't record in the changelog must not ship)`, branch }; }
     const before = (await host.exec(`git -C ${shq(repo)} rev-parse HEAD`, { timeoutMs: 15000 })).stdout.trim();
     const m = await host.exec(`git -C ${shq(repo)} merge --no-ff --no-edit -m ${shq(`self-improve: ${String(goal).slice(0, 90)}`)} ${shq(branch)}`, { timeoutMs: 120000 });
     if (!m.ok) {
@@ -63,10 +83,11 @@ export const makeSelfImprover = ({ host, repo, baseBranch = 'HEAD', verifyDir, l
       return { merged: false, reason: `merge conflict — left ${branch} for manual review`, branch, baseBefore: before, conflict: true };
     }
     const mergeCommit = (await host.exec(`git -C ${shq(repo)} rev-parse HEAD`, { timeoutMs: 15000 })).stdout.trim();
-    const l = loadLedger();
     const id = `m-${slug(String(now || mergeCommit)).slice(0, 8)}-${mergeCommit.slice(0, 8)}`;
     l.merges.push({ id, goal: String(goal).slice(0, 200), branch, mergeCommit, baseBefore: before, baseBranch, mergedAt: String(now || ''), rolledBack: false });
-    saveLedger(l);
+    // Surface a failed ledger write LOUDLY — the merge is live but the UI can't see/revert it. The merge
+    // commit message ("self-improve: <goal>") is the fallback recovery handle (git log --grep self-improve:).
+    try { saveLedger(l); } catch (e) { return { merged: true, branch, mergeCommit, baseBefore: before, id, ledgerRecorded: false, reason: `MERGED but the changelog write FAILED (${(e && e.message) || e}) — it won't appear in the 🔧 changelog. Find it: git -C ${repo} log --grep "self-improve:"; revert: git -C ${repo} revert -m 1 ${mergeCommit}` }; }
     return { merged: true, branch, mergeCommit, baseBefore: before, id };
   };
 
@@ -97,8 +118,11 @@ export const makeSelfImprover = ({ host, repo, baseBranch = 'HEAD', verifyDir, l
     //    command) — a change green IN ISOLATION can still break once merged (interaction with HEAD).
     const pv = await verifyBranch(baseBranch, String(defaultTest), now);
     if (pv.ok) return { ok: true, ...r, attempted: true, verified: true, postVerified: true, goal: g };
-    // RED post-merge → AUTO-REVERT. If the revert ALSO fails, the broken merge is STILL LIVE — surface that
-    // LOUDLY (ok:false) with manual-revert instructions; never mask a broken merge as handled.
+    // INFRA failure (couldn't check out / runner died) is NOT a regression — do NOT revert a merge that
+    // already passed isolated verify on the strength of a transient infra hiccup. Leave it live + surface it.
+    if (!pv.ran) return { ok: false, ...r, attempted: true, verified: true, postVerifyInconclusive: true, goal: g, reason: `post-merge re-verify could NOT RUN (${pv.reason}); merge ${String(r.mergeCommit).slice(0, 8)} passed isolated verify and is LEFT LIVE (not reverted). Re-verify, or revert from the 🔧 changelog if needed.` };
+    // RED post-merge (tests RAN and FAILED) → AUTO-REVERT. If the revert ALSO fails, the broken merge is
+    // STILL LIVE — surface that LOUDLY (ok:false) with manual-revert instructions; never mask it as handled.
     const rb = await rollback({ id: r.id, now });
     if (!rb.ok) return { ok: false, merged: true, attempted: true, verified: true, postVerifyFailed: true, rolledBack: false, brokenMergeLive: true, branch, mergeCommit: r.mergeCommit, goal: g, reason: `CRITICAL: post-merge re-verify FAILED and the auto-revert ALSO FAILED (${rb.error || 'unknown'}) — the broken merge ${String(r.mergeCommit).slice(0, 8)} is STILL on ${baseBranch}. Revert manually: git -C <repo> revert -m 1 ${r.mergeCommit}`, testTail: pv.testTail };
     return { ok: true, attempted: true, verified: true, merged: false, revertedAfterMerge: true, rolledBack: true, branch, mergeCommit: r.mergeCommit, goal: g, reason: 'the MERGED tree failed post-merge re-verification — auto-reverted the merge', testTail: pv.testTail };
@@ -106,7 +130,8 @@ export const makeSelfImprover = ({ host, repo, baseBranch = 'HEAD', verifyDir, l
 
   // ROLLBACK — revert an auto-merge by its ledger id (revert the merge commit; history preserved).
   const rollback = async ({ id, now } = {}) => {
-    const l = loadLedger(); const e = l.merges.find(x => x.id === id);
+    let l; try { l = loadLedger(); } catch (e) { return { ok: false, error: `cannot read the changelog to revert — ${(e && e.message) || e}` }; }
+    const e = l.merges.find(x => x.id === id);
     if (!e) return { ok: false, error: `no merge ${id} in the ledger` };
     if (e.rolledBack) return { ok: true, alreadyRolledBack: true, id };
     const dirty = await host.exec(`git -C ${shq(repo)} status --porcelain`, { timeoutMs: 30000 });
@@ -114,7 +139,9 @@ export const makeSelfImprover = ({ host, repo, baseBranch = 'HEAD', verifyDir, l
     if (String(dirty.stdout || '').trim()) return { ok: false, error: 'live checkout dirty — commit/stash before rollback' };
     const rev = await host.exec(`git -C ${shq(repo)} revert --no-edit -m 1 ${shq(e.mergeCommit)}`, { timeoutMs: 60000 });
     if (!rev.ok) { await host.exec(`git -C ${shq(repo)} revert --abort 2>/dev/null`, { timeoutMs: 20000 }); return { ok: false, error: `revert failed (conflict): ${tail(rev, 300)}` }; }
-    e.rolledBack = true; e.rolledBackAt = String(now || ''); saveLedger(l);
+    // the revert COMMIT already landed — if marking the ledger fails, say so (don't claim a clean undo).
+    e.rolledBack = true; e.rolledBackAt = String(now || '');
+    try { saveLedger(l); } catch (err) { return { ok: true, id, revertedMerge: e.mergeCommit, goal: e.goal, ledgerUpdateFailed: true, warning: `reverted on disk, but the changelog could not be updated (${(err && err.message) || err}) — it may still show as revertable` }; }
     return { ok: true, id, revertedMerge: e.mergeCommit, goal: e.goal };
   };
 

@@ -119,3 +119,34 @@ test('"nothing implemented" is a safe no-op (no merge, attempted=true)', async (
   assert.equal(r.attempted, true);
   assert.match(r.reason, /no branch|nothing/i);
 });
+
+test('verifyBranch is TRI-STATE: infra failure (bad branch) is ran:false; a real RED is ran:true — so a good merge is never reverted on a transient checkout hiccup', async () => {
+  const infra = await si.verifyBranch('no-such-branch-xyz', 'true', 'tv1');
+  assert.equal(infra.ok, false); assert.equal(infra.ran, false, 'could-not-check-out → ran:false (infra, NOT a regression)');
+  const red = await si.verifyBranch('main', 'exit 3', 'tv2');
+  assert.equal(red.ok, false); assert.equal(red.ran, true, 'tests RAN and failed → ran:true (a real regression)');
+  const green = await si.verifyBranch('main', 'true', 'tv3');
+  assert.equal(green.ok, true); assert.equal(green.ran, true);
+});
+
+test('a CORRUPT changelog/ledger FAILS CLOSED — a change that cannot be RECORDED for revert is NOT merged', async () => {
+  const ledgerC = path.join(tmp, 'ledger-corrupt.json');
+  fs.writeFileSync(ledgerC, '{ this is not valid json');
+  const siC = makeSelfImprover({ host, repo, baseBranch: 'main', verifyDir: path.join(tmp, 'verifyC'), ledgerFile: ledgerC, defaultTest: 'sh check.sh' });
+  const before = read(path.join(repo, 'value.txt'));
+  // GOOD-containing (so it PASSES check.sh) but distinct from main (so it's a real, non-empty diff).
+  const r = await siC.improve({ goal: 'good change but the changelog is corrupt', successCommand: 'sh check.sh', employExecutor: implementer('agentwt/corrupt1', 'GOOD-corrupt-tc'), autoMerge: true, now: 'tc' });
+  assert.equal(r.merged, false, 'refuses to ship a change it cannot record for revert');
+  assert.match(r.reason, /corrupt|record|refus/i);
+  assert.equal(read(path.join(repo, 'value.txt')), before, 'the live tree is unchanged (no untrackable merge)');
+});
+
+test('the ledger is written ATOMICALLY (temp + rename) and survives a re-read', async () => {
+  // a normal merge writes the ledger; reading it back must parse (no truncation/corruption window).
+  const siA = makeSelfImprover({ host, repo, baseBranch: 'main', verifyDir: path.join(tmp, 'verifyA'), ledgerFile: path.join(tmp, 'ledgerA.json'), defaultTest: 'sh check.sh' });
+  const r = await siA.improve({ goal: 'atomic ledger write', successCommand: 'sh check.sh', employExecutor: implementer('agentwt/atom1', 'GOOD-atom-ta'), autoMerge: true, now: 'ta' });
+  assert.equal(r.merged, true);
+  const onDisk = JSON.parse(read(path.join(tmp, 'ledgerA.json')));
+  assert.ok(onDisk.merges.some(m => m.id === r.id), 'the merge is durably recorded (parseable on re-read)');
+  assert.equal(fs.existsSync(path.join(tmp, `ledgerA.json.tmp-${process.pid}`)), false, 'no temp file left behind');
+});

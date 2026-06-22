@@ -540,7 +540,10 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
   const DEFAULT_VERIFY = process.env.SELF_IMPROVE_VERIFY
     // `set -e` makes a failed symlink fatal (no silent run-without-deps); the test-file floor refuses a
     // change that deleted/stripped the very tests that gate it (else `node --test <glob>` matches 0 → exit 0).
-    || `set -e; for d in node_modules packages/chat/node_modules packages/chat/voice-agent/node_modules packages/ocapn-noise/node_modules; do if [ -d ${WORKTREE_REPO}/$d ]; then ln -sfn ${WORKTREE_REPO}/$d ./$d; fi; done; n=$(ls packages/chat/voice-agent/*.test.mjs 2>/dev/null | wc -l); [ "$n" -ge 8 ] || { echo "self-improve verify: only $n test files — refusing (the suite must not be stripped)"; exit 1; }; node --test packages/chat/voice-agent/*.test.mjs`;
+    // BOOT SMOKE: `node --check` every top-level source .mjs (incl. server.mjs, which NO test imports) so a
+    // syntax/parse error a merge would introduce can NEVER be recorded as verified + then brick the next
+    // restart (the service is Restart=always — a broken boot = crash-loop that also kills the Revert UI).
+    || `set -e; for d in node_modules packages/chat/node_modules packages/chat/voice-agent/node_modules packages/ocapn-noise/node_modules; do if [ -d ${WORKTREE_REPO}/$d ]; then ln -sfn ${WORKTREE_REPO}/$d ./$d; fi; done; n=$(ls packages/chat/voice-agent/*.test.mjs 2>/dev/null | wc -l); [ "$n" -ge 8 ] || { echo "self-improve verify: only $n test files — refusing (the suite must not be stripped)"; exit 1; }; for f in packages/chat/voice-agent/*.mjs packages/ocapn-noise/*.mjs; do node --check "$f" || { echo "self-improve verify: SYNTAX ERROR in $f — refusing to merge a change that won't load"; exit 1; }; done; node --test packages/chat/voice-agent/*.test.mjs`;
   const selfImprover = makeSelfImprover({ host: aff.host, repo: WORKTREE_REPO, baseBranch: process.env.FIELD_AGENT_BASE_BRANCH || 'field-preact', verifyDir: `${WORKTREE_DIR}/_verify`, ledgerFile: '/home/dan/.local/state/field-agent/auto-merge-ledger.json', defaultTest: DEFAULT_VERIFY, timeoutMs: 600000 });
   let selfImproveInFlight = false; // single-flight: at most one self-improvement at a time
   // SELF-CONTAINED executor runner (does NOT require the `roles` power): fork a worktree, run the confined
