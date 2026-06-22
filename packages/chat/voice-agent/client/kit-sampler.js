@@ -3,6 +3,7 @@ import {
   Btn, Chip, Badge, Card, EmptyState, IconBtn, Spinner, Avatar, ProgressBar,
   Banner, Divider, Toggle, Checkbox, RadioGroup, Select, TextField, Textarea, Tabs, Field,
   SegmentedControl, Slider, Skeleton, Disclosure, Breadcrumb,
+  Tooltip, Menu, Toast, Pagination, Table, List,
 } from './ui-kit.js';
 
 // ── KitSampler — a LIVING STYLE GUIDE: one of every confined-Preact ui-kit primitive, rendered through
@@ -35,6 +36,11 @@ export const KitSampler = () => h('div', { class: 'kit-sampler' }, [
     Banner({ kind: 'warn', icon: '⚠️', children: 'Careful.' }),
     Banner({ kind: 'error', icon: '⛔', children: 'Something failed.' }),
   ]),
+  sec('Tooltip & menu', Tooltip({ tip: 'a helpful hint', children: 'hover me' }), Menu({ label: '⋯ Actions', open: true, items: [{ label: 'Rename' }, { label: 'Delete' }] })),
+  h('h4', null, 'Toasts'), h('div', { class: 'kit-stack' }, [Toast({ icon: 'ℹ️', message: 'Saved.' }), Toast({ kind: 'success', icon: '✅', message: 'Done.', onClose() {} }), Toast({ kind: 'error', icon: '⛔', message: 'Failed.' })]),
+  h('h4', null, 'Pagination'), Pagination({ page: 2, pages: 5 }),
+  h('h4', null, 'Table'), Table({ columns: [{ key: 'name', label: 'Name' }, { key: 'role', label: 'Role' }], rows: [{ name: 'Agent C', role: 'orchestrator' }, { name: 'Researcher', role: 'read-only' }] }),
+  h('h4', null, 'List'), List({ items: [{ icon: '📓', label: 'Notes', sub: 'read/append your vault' }, { icon: '🌐', label: 'Web', sub: 'fetch a page' }] }),
   h('h4', null, 'Card'), Card({ title: 'A card', time: '2m', body: 'Card body text.', footer: h('span', { class: 'sub' }, 'footer meta') }),
   h('h4', null, 'Empty state'), EmptyState({ text: 'nothing here yet' }),
 ]);

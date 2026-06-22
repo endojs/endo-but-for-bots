@@ -177,3 +177,43 @@ export const Modal = ({ open = false, title, children, onClose } = {}) => {
       h('div', null, children),
     ]));
 };
+
+// Tooltip — a hover tooltip (CSS-driven) wrapping its children.
+export const Tooltip = ({ tip, children } = {}) => h('span', { class: 'kit-tip' }, [children, h('span', { class: 'kit-tip-pop' }, str(tip))]);
+
+// Menu — a dropdown. label, open (stateless), items:[{label,value}], onToggle(), onSelect(value).
+export const Menu = ({ label = '⋯', open = false, items = [], onToggle, onSelect } = {}) =>
+  h('span', { class: 'kit-menu' }, [
+    h('button', { class: 'mini', onClick: () => onToggle && onToggle() }, str(label)),
+    open ? h('div', { class: 'kit-menu-pop' }, (items || []).map((it, i) =>
+      h('button', { class: 'kit-menu-item', key: i, onClick: () => onSelect && onSelect(it && it.value != null ? it.value : (it && it.label != null ? it.label : it)) }, str(it && it.label != null ? it.label : it)))) : null,
+  ]);
+
+// Toast — a transient notification. kind: ''|'error'|'success'; icon, message, onClose?.
+export const Toast = ({ kind = '', icon, message, onClose } = {}) =>
+  h('div', { class: `kit-toast${kind ? ` ${kind}` : ''}` }, [icon ? h('span', null, str(icon)) : null, h('span', null, str(message)), onClose ? h('button', { class: 'kit-iconbtn', onClick: () => onClose() }, '×') : null]);
+
+// Pagination — 1-based page nav. page, pages (total), onPage(n).
+export const Pagination = ({ page = 1, pages = 1, onPage } = {}) => {
+  const nums = []; for (let i = 1; i <= pages; i += 1) nums.push(i);
+  return h('div', { class: 'kit-page' }, [
+    h('button', { disabled: page <= 1 || undefined, onClick: () => page > 1 && onPage && onPage(page - 1) }, '‹'),
+    ...nums.map(n => h('button', { key: n, class: n === page ? 'on' : '', onClick: () => onPage && onPage(n) }, String(n))),
+    h('button', { disabled: page >= pages || undefined, onClick: () => page < pages && onPage && onPage(page + 1) }, '›'),
+  ]);
+};
+
+// Table — columns:[{key,label}], rows:[{...}] (div-based, render-safe cells).
+export const Table = ({ columns = [], rows = [] } = {}) =>
+  h('div', { class: 'kit-table' }, [
+    h('div', { class: 'tr' }, columns.map((c, i) => h('div', { class: 'th', key: i }, str(c.label != null ? c.label : c.key)))),
+    ...rows.map((r, ri) => h('div', { class: 'tr', key: ri }, columns.map((c, ci) => h('div', { class: 'td', key: ci }, str(r[c.key]))))),
+  ]);
+
+// List — items:[{label, sub?, icon?}], onSelect?(index).
+export const List = ({ items = [], onSelect } = {}) =>
+  h('div', { class: 'kit-list' }, (items || []).map((it, i) =>
+    h('div', { class: `kit-list-item${onSelect ? ' click' : ''}`, key: i, onClick: onSelect ? () => onSelect(i) : undefined }, [
+      it.icon ? h('span', null, str(it.icon)) : null,
+      h('div', { style: 'flex:1;min-width:0' }, [h('div', null, str(it.label)), it.sub ? h('div', { class: 'sub', style: 'font-size:11px' }, str(it.sub)) : null]),
+    ])));

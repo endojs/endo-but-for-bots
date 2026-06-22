@@ -6,7 +6,7 @@
 //   node --test packages/chat/voice-agent/islands-ui.test.mjs
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { Chip, Btn, EmptyState, Card, TextField, Textarea, Select, Checkbox, Toggle, RadioGroup, Tabs, ProgressBar, Banner, Badge, Spinner, Avatar, SegmentedControl, Slider, Skeleton, Disclosure, Breadcrumb, Modal } from './client/ui-kit.js';
+import { Chip, Btn, EmptyState, Card, TextField, Textarea, Select, Checkbox, Toggle, RadioGroup, Tabs, ProgressBar, Banner, Badge, Spinner, Avatar, SegmentedControl, Slider, Skeleton, Disclosure, Breadcrumb, Modal, Tooltip, Menu, Toast, Pagination, Table, List } from './client/ui-kit.js';
 import { NotificationCard } from './client/notification-card.js';
 import { ChangelogList } from './client/changelog-list.js';
 import { PowersBanner } from './client/powers-banner.js';
@@ -210,10 +210,24 @@ test('kit overlays + extra primitives: Modal open/closed + onClose; Segmented/Sl
   assert.match(collect(Skeleton({ width: '50%' })).classes.join(' '), /kit-skel/);
 });
 
+test('kit data primitives: Menu open/select, Toast close, Pagination, Table cells, List select, Tooltip', () => {
+  let picked = null; const mn = collect(Menu({ label: '⋯', open: true, items: [{ label: 'Rename', value: 'rn' }, { label: 'Delete', value: 'del' }], onSelect: v => { picked = v; } }));
+  mn.buttons.find(b => b.label === 'Delete').onClick(); assert.equal(picked, 'del', 'Menu onSelect(value)');
+  assert.equal(collect(Menu({ open: false, items: [{ label: 'x' }] })).buttons.filter(b => b.cls.includes('kit-menu-item')).length, 0, 'closed menu has no items');
+  let tc = 0; collect(Toast({ message: 'hi', onClose: () => { tc += 1; } })).buttons[0].onClick(); assert.equal(tc, 1, 'Toast close');
+  let pg = null; const pa = collect(Pagination({ page: 2, pages: 4, onPage: n => { pg = n; } }));
+  assert.ok(pa.classes.some(c => c === 'on'), 'current page marked'); pa.buttons.find(b => b.label === '3').onClick(); assert.equal(pg, 3, 'Pagination onPage(n)');
+  const tb = collect(Table({ columns: [{ key: 'a', label: 'A' }, { key: 'b', label: 'B' }], rows: [{ a: 'x1', b: 'y1' }] }));
+  assert.match(allText(tb), /A/); assert.match(allText(tb), /x1/, 'Table renders header + cells');
+  let li = null; collect(List({ items: [{ label: 'One' }, { label: 'Two' }], onSelect: i => { li = i; } })).buttons.length; // List items are divs w/ onClick → buttons
+  const lc = collect(List({ items: [{ label: 'One' }, { label: 'Two' }], onSelect: i => { li = i; } })); lc.buttons[1].onClick(); assert.equal(li, 1, 'List onSelect(index)');
+  assert.match(allText(collect(Tooltip({ tip: 'hint', children: 'word' }))).replace(/\s+/g, ''), /wordhint|hintword|word/, 'Tooltip renders child + tip');
+});
+
 test('KitSampler renders every primitive without error (the design-system smoke test)', () => {
   const acc = collect(KitSampler());
   // a broad spread of the kit classes must all appear → all primitives composed + rendered
-  for (const cls of ['kit-in', 'kit-toggle', 'kit-tab', 'kit-banner', 'kit-progress', 'kit-badge', 'kit-spinner', 'kit-avatar', 'kit-divider', 'ncard', 'kit-seg', 'kit-slider', 'kit-skel', 'kit-disc', 'kit-crumbs']) {
+  for (const cls of ['kit-in', 'kit-toggle', 'kit-tab', 'kit-banner', 'kit-progress', 'kit-badge', 'kit-spinner', 'kit-avatar', 'kit-divider', 'ncard', 'kit-seg', 'kit-slider', 'kit-skel', 'kit-disc', 'kit-crumbs', 'kit-menu', 'kit-toast', 'kit-page', 'kit-table', 'kit-list', 'kit-tip']) {
     assert.ok(acc.classes.some(c => String(c).split(/\s+/).includes(cls)), `sampler renders ${cls}`);
   }
 });
