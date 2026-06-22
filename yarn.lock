@@ -504,7 +504,6 @@ __metadata:
   dependencies:
     "@endo/eventual-send": "workspace:^"
     "@endo/harden": "workspace:^"
-    "@endo/immutable-arraybuffer": "workspace:^"
     "@endo/init": "workspace:^"
     "@endo/pass-style": "workspace:^"
     "@endo/ses-ava": "workspace:^"
@@ -1179,6 +1178,7 @@ __metadata:
     "@endo/errors": "workspace:^"
     "@endo/eventual-send": "workspace:^"
     "@endo/harden": "workspace:^"
+    "@endo/immutable-arraybuffer": "workspace:^"
     "@endo/init": "workspace:^"
     "@endo/promise-kit": "workspace:^"
     "@endo/ses-ava": "workspace:^"
