@@ -2412,6 +2412,7 @@ const ISLAND_PREVIEW = {
     task: { id: 'd1', to: 'blacksmith', status: 'working', task: 'Add a CSV export button to the rover dashboard', thread: [{ role: 'you', text: 'use the existing toolbar styles' }, { role: 'blacksmith', text: 'on it — wiring the export now' }] },
     accent: '#2ea043', expanded: true, draft: '',
   }, { onToggle() {}, onReplyChange() {}, onReplySend() {} }),
+  'island-exhausted-card': slot => window.__fieldIslands.renderExhaustedCard(slot, { isRoot: true }, { onTopUp() {}, onAbandon() {} }),
 };
 
 const refreshComponents = async () => {

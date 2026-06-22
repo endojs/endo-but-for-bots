@@ -24,6 +24,7 @@ const ISLANDS = [
   { id: 'island-message-controls', name: 'Message controls', file: 'client/message-controls.js' },
   { id: 'island-chat-meta-bar', name: 'Chat meta bar', file: 'client/chat-meta-bar.js' },
   { id: 'island-dev-task-card', name: 'Dev task card', file: 'client/dev-task-card.js' },
+  { id: 'island-exhausted-card', name: 'Out-of-allowance card', file: 'client/exhausted-card.js' },
   // The shared confined-Preact UI kit every island builds on (Card/Chip/Btn/EmptyState/Meta).
   { id: 'island-ui-kit', name: 'UI kit (primitives)', file: 'client/ui-kit.js' },
   // The 3D conversation-trace view. It's a standalone served script (public/pendant.js), NOT part of

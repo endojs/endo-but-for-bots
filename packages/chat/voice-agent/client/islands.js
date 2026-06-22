@@ -22,6 +22,7 @@ import { ChatList } from './chat-list.js';
 import { MessageControls } from './message-controls.js';
 import { ChatMetaBar } from './chat-meta-bar.js';
 import { DevTaskCard } from './dev-task-card.js';
+import { ExhaustedCard } from './exhausted-card.js';
 
 // A render propagator: re-paints `view(...values)` into `el` whenever any wired cell changes.
 // This is the one kind of propagator whose effect is the DOM; logic propagators stay headless.
@@ -52,6 +53,8 @@ const metaBarCell = makeCell();
 let metaBarWired = false;
 const devTaskCell = makeCell();
 let devTaskWired = false;
+const exhaustedCell = makeCell();
+let exhaustedWired = false;
 
 const islands = {
   // Idempotent: wires the render propagator once (cell → SharesPanel), then feeds the latest data in.
@@ -203,6 +206,18 @@ const islands = {
       devTaskWired = true;
     }
     devTaskCell.addContent(data);
+  },
+
+  // ── ExhaustedCard island ──────────────────────────────────────────────────────────────────────
+  // `data` = { isRoot, note }. `handlers` = { onTopUp(), onAbandon() }.
+  renderExhaustedCard(el, data, handlers) {
+    if (!exhaustedWired) {
+      el.setAttribute('data-component-id', 'island-exhausted-card');
+      el.setAttribute('data-component-name', 'Out-of-allowance card');
+      renderPropagator(el, [exhaustedCell], d => h(ExhaustedCard, { ...d, ...handlers }));
+      exhaustedWired = true;
+    }
+    exhaustedCell.addContent(data);
   },
 };
 

@@ -17,6 +17,7 @@ import { ChatList } from './client/chat-list.js';
 import { MessageControls } from './client/message-controls.js';
 import { ChatMetaBar } from './client/chat-meta-bar.js';
 import { DevTaskCard } from './client/dev-task-card.js';
+import { ExhaustedCard } from './client/exhausted-card.js';
 import { Drawer, Stepper } from './client/ui-kit.js';
 
 // Walk a preact vnode tree → collect text, classes, clickable buttons, and inputs (with their handlers).
@@ -236,6 +237,16 @@ test('ChatMetaBar: chat mode (title + parent/project chips + share badge) and me
   assert.match(allText(memo), /🎙/); assert.match(allText(memo), /2\/3/, 'version k/n');
   memo.buttons.find(b => b.label === '◀').onClick(); memo.buttons.find(b => /Re-run/.test(b.label)).onClick();
   assert.deepEqual(v, ['prev', 'rerun']);
+});
+
+test('ExhaustedCard: root vs invitee blurb + Top-up/Abandon handlers', () => {
+  let acts = [];
+  const root = collect(ExhaustedCard({ isRoot: true, onTopUp: () => acts.push('top'), onAbandon: () => acts.push('aband') }));
+  assert.match(allText(root), /used up its budget/); assert.match(root.buttons.map(b => b.label).join(' '), /Top up/);
+  root.buttons.find(b => b.cls === 'confirm').onClick(); root.buttons.find(b => b.cls === 'reject').onClick();
+  assert.deepEqual(acts, ['top', 'aband']);
+  const invitee = collect(ExhaustedCard({ isRoot: false, onTopUp() {}, onAbandon() {} }));
+  assert.match(allText(invitee), /credit you were given/); assert.match(invitee.buttons.map(b => b.label).join(' '), /Add \$5/);
 });
 
 test('DevTaskCard: status + task/result, collapsed vs expanded thread, reply input + Send', () => {
