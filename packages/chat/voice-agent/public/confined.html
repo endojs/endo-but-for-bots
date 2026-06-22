@@ -15,13 +15,15 @@
   /* ui.island — the curated in-frame kit (themed via the CSS vars the parent pushes in; falls back if absent) */
   .cu-card { border:1px solid var(--edge,#30363d); border-radius:10px; padding:10px 12px; background:var(--panel,#161b22); margin:4px 0; }
   .cu-title { font-weight:600; margin-bottom:6px; }
-  .cu-btn { cursor:pointer; display:inline-flex; align-items:center; justify-content:center; min-height:32px; padding:5px 12px; border:1px solid var(--edge,#30363d); border-radius:7px; background:transparent; color:var(--mut,#8b949e); font:inherit; font-size:13px; }
+  .cu-btn { cursor:pointer; display:inline-flex; align-items:center; justify-content:center; min-height:34px; padding:6px 12px; border:1px solid var(--edge,#30363d); border-radius:7px; background:transparent; color:var(--mut,#8b949e); font:inherit; font-size:13px; transition:background .12s,border-color .12s,color .12s; }
+  .cu-btn:hover { color:var(--ink,#e6edf3); border-color:var(--acc,#7c5cff); } /* hover feedback */
+  .cu-btn:focus-visible, .cu-in:focus-visible { outline:2px solid var(--acc,#7c5cff); outline-offset:2px; } /* keyboard focus ring (was UA-default only) */
   .cu-btn.primary { background:var(--acc-fill,#6b3fd6); border-color:var(--acc-fill,#6b3fd6); color:#fff; font-weight:600; }
-  .cu-btn.danger { color:var(--bad,#f85149); border-color:var(--bad,#f85149); }
-  .cu-chip { display:inline-block; font-size:11px; padding:2px 8px; border-radius:999px; background:rgba(127,127,127,.16); color:var(--mut,#8b949e); }
+  .cu-btn.danger { color:var(--bad,#f85149); border-color:var(--bad,#f85149); font-weight:600; background:rgba(248,81,73,.1); } /* destructive reads distinct from a benign peer without relying on hue alone */
+  .cu-chip { display:inline-block; font-size:11px; padding:2px 8px; border-radius:999px; background:rgba(127,127,127,.2); color:var(--ink,#e6edf3); } /* --ink text so the chip clears AA in both themes (was muted-on-grey = 4.45 in light) */
   .cu-badge { display:inline-block; font-size:10px; font-weight:600; padding:1px 6px; border-radius:9px; background:var(--acc-fill,#6b3fd6); color:#fff; }
   .cu-banner { padding:8px 10px; border-radius:8px; border:1px solid var(--edge,#30363d); font-size:13px; margin:4px 0; }
-  .cu-banner.warn { border-color:#7a5a1a; } .cu-banner.error { border-color:var(--bad,#f85149); } .cu-banner.ok { border-color:var(--acc2,#2ea043); }
+  .cu-banner.warn { border-color:var(--warn,#d29922); } .cu-banner.error { border-color:var(--bad,#f85149); } .cu-banner.ok { border-color:var(--acc2,#2ea043); } /* warn now themes like its siblings (was dark-only #7a5a1a) */
   .cu-meta { font-size:12px; color:var(--mut,#8b949e); }
   .cu-stack { display:flex; flex-direction:column; gap:8px; } .cu-row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
   .cu-divider { border:none; border-top:1px solid var(--edge,#30363d); margin:6px 0; }

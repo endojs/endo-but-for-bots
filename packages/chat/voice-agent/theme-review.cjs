@@ -40,7 +40,31 @@ const SAMPLE = {
 };
 
 const styleBlock = (fs.readFileSync(path.join(PUB, 'index.html'), 'utf8').match(/<style>([\s\S]*?)<\/style>/) || [, ''])[1];
-const HARNESS = `<!doctype html><html><head><meta charset="utf-8"><style>
+// 'frame-kit' target = the in-frame ui.island kit (the .cu-* components in confined.html, used by reply widgets).
+// Its CSS IS the source of truth; render its sampler DOM + theme it like any other surface.
+const confinedStyle = (fs.readFileSync(path.join(PUB, 'confined.html'), 'utf8').match(/<style>([\s\S]*?)<\/style>/) || [, ''])[1];
+const FRAME_KIT_STAGE = `<div id="stage">
+  <div class="cu-card"><div class="cu-title">A reused card (ui.island Card)</div>
+    <div class="cu-row"><button class="cu-btn primary">Confirm</button><button class="cu-btn">Cancel</button><button class="cu-btn danger">Delete</button></div>
+    <div class="cu-meta">agent · just now · v2</div></div>
+  <div class="cu-row"><span class="cu-chip">beta</span><span class="cu-badge">3</span></div>
+  <div class="cu-banner info">ℹ an info banner</div><div class="cu-banner warn">⚠ a warning</div>
+  <div class="cu-banner error">✗ an error</div><div class="cu-banner ok">✓ all good</div>
+  <div class="cu-empty">nothing here yet</div>
+  <div class="cu-prog"><span style="width:60%"></span></div>
+  <label class="cu-field"><span class="cu-label">Your name</span><input class="cu-in" value="typed text" placeholder="name"></label>
+  <hr class="cu-divider"><div class="cu-stack"><div class="cu-meta">a stacked meta line</div></div></div>`;
+const HARNESS = NAME === 'frame-kit'
+  ? `<!doctype html><html><head><meta charset="utf-8"><style>
+  html,body{margin:0;} #stage{padding:18px;max-width:720px;background:var(--bg);color:var(--ink)}
+${confinedStyle}
+</style></head><body>${FRAME_KIT_STAGE}
+<script type="module">
+  import { applyTheme, applyVars, BUILTINS, theme } from '/theme.js';
+  theme.subscribe(t => { applyVars(document.documentElement, t.vars); try { document.documentElement.style.colorScheme = t.mode || 'dark'; } catch {} });
+  window.__applyTheme = applyTheme; window.__BUILTINS = BUILTINS; window.__renderError = null; window.__ready = true;
+</script></body></html>`
+  : `<!doctype html><html><head><meta charset="utf-8"><style>
   html,body{margin:0;background:var(--bg)} #stage{padding:18px;max-width:720px}
 ${styleBlock}
 </style></head><body><div id="stage"></div>
@@ -119,10 +143,11 @@ const PROBE = () => {
 
   // document-level interaction signals from the component's SOURCE + its CSS (regex; informs the a11y/motion lenses).
   const kebab = NAME.replace(/([a-z0-9])([A-Z])/g, '$1-$2').toLowerCase();
-  let src = ''; try { src = fs.readFileSync(path.join(HERE, 'client', `${kebab}.js`), 'utf8'); } catch {}
-  const css = styleBlock;
+  const srcRel = NAME === 'frame-kit' ? 'public/confined.html' : `client/${kebab}.js`; // the in-frame kit lives in confined.html
+  let src = ''; try { src = fs.readFileSync(path.join(HERE, srcRel), 'utf8'); } catch {}
+  const css = NAME === 'frame-kit' ? confinedStyle : styleBlock;
   report.signals = {
-    sourceFile: `client/${kebab}.js`, sourceFound: !!src,
+    sourceFile: srcRel, sourceFound: !!src,
     usesAria: /\baria-[a-z]+|role\s*[:=]/.test(src), usesFocusVisible: /:focus-visible/.test(css),
     definesHover: new RegExp(`\\.(${(SAMPLE[NAME] ? '' : '')}[a-z-]*)?:hover`).test(css) && /:hover/.test(css),
     definesTransition: /transition\s*:/.test(src) || /transition\s*:/.test(css), definesAnimation: /@keyframes|animation\s*:/.test(css),
