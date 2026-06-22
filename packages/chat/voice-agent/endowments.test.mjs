@@ -31,6 +31,7 @@ const POLICY = {
   webSearch: 'read', // Brave web search — find pages (read-only)
   research: 'read', // research team: plan → parallel search/read/distill → cited synthesis (read-only)
   componentHistory: 'read', componentReadFile: 'read', // a component's source git: version list + read a file
+  listComponents: 'read', readComponent: 'read', // the broken-out UI component library: list + read source (render-safe, scrubbed)
   systemMap: 'read', // the whole system's shape (powers/roles/specialists) — read-only introspection
   // reversible — speculative, abortable
   generateImage: 'reversible',

@@ -74,10 +74,15 @@ export const WIDGETS = [
   ['showChoices', 'a "pick one" choice set the user taps'],
 ];
 
+// The curated subset of the kit re-expressed PURELY in-frame (over ui.create) + reachable as ui.island(name,…)
+// inside a confined showComponent reply widget — see public/confined.html. Distinct from the main-origin
+// island bundle (which can't load in the no-network sandbox): this is a render-only, no-authority look.
+export const KIT_IN_FRAME = ['Card', 'Btn', 'Chip', 'Badge', 'Banner', 'Meta', 'Stack', 'Row', 'Divider', 'EmptyState', 'ProgressBar', 'Field', 'TextField'];
+
 const fmt = rows => rows.map(([n, d]) => `  - ${n}: ${d}`).join('\n');
 
 // the human/agent-facing catalog text.
-export const catalogText = () => `KIT PRIMITIVES (compose these):\n${fmt(KIT)}\n\nISLANDS (reuse whole):\n${fmt(ISLANDS)}\n\nLIVE WIDGET VERBS (in a reply):\n${fmt(WIDGETS)}`;
+export const catalogText = () => `KIT PRIMITIVES (compose these):\n${fmt(KIT)}\n\nISLANDS (reuse whole):\n${fmt(ISLANDS)}\n\nLIVE WIDGET VERBS (in a reply):\n${fmt(WIDGETS)}\n\nKIT INSIDE A REPLY WIDGET — reachable as ui.island(name, props, children) within a confined showComponent (render-only, themed):\n  ${KIT_IN_FRAME.join(', ')}`;
 
 // the reuse-first directive prepended to component-authoring system prompts.
 export const reuseFirstPreamble = () =>
