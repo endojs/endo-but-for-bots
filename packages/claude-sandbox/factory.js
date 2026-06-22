@@ -36,51 +36,29 @@
 //
 // Idempotent: re-running is a no-op once `<dirName>/controller` exists.
 
+import { readFileSync } from 'node:fs';
+
 import { E } from '@endo/eventual-send';
+import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iterator.js';
 
 const factoryCapletSpecifier = new URL(
   'src/claude-sandbox-factory.js',
   import.meta.url,
 ).href;
 
+// On-disk markdown describing the directory's objects, copied into a
+// `<dir>/readme.md` blob at provision time. Kept on disk (not inlined) so it
+// is easy to edit; the `.md` name lets the chat UI render it as markdown.
+const readmeUrl = new URL(
+  './docs/claude-sandbox-directory.md',
+  import.meta.url,
+);
+
 // The host-side directory this factory's objects live under, so they don't
 // pollute the host root: `<dir>/controller` (the form/exo), `<dir>/profile`
 // (the factory guest's agent), `<dir>/handle` (the guest), plus the infra
 // caplets `<dir>/sandbox-factory` and `<dir>/fs-mounter` (minted by setup-host.js).
 const DEFAULT_FACTORY_NAME = 'claude-sandbox';
-
-// Stored as `<dir>/readme` so `endo show <dir>/readme` documents what each
-// object in the directory is and what authority sharing it confers.
-const README = `claude-sandbox/ — Claude Sandbox factory (HOST side)
-
-This runs on the machine that hosts the containers (Linux + podman). What
-sharing each object in this directory grants:
-
-  controller       The "Create Claude Sandbox" factory exo. DELEGATABLE — the
-                   one object meant to be shared. A peer holding it can call
-                   createSession(...) to run Claude in a container on THIS
-                   host against a Filesystem cap they supply. It cannot reach
-                   anything else in this directory.
-
-  profile          The factory's guest AGENT. Holds host-agent = FULL
-                   authority over this host's Endo daemon. NEVER share —
-                   handing it out is equivalent to giving away the host.
-
-  handle           The factory guest's mailbox handle. Low direct authority;
-                   host-internal, do not share casually.
-
-  sandbox-factory  The @endo/sandbox plugin; runs with @agent (provideHostPath
-                   / mint containers with host bind-mounts). HIGH authority —
-                   host trusted compute base, never share off-host.
-
-  fs-mounter       The @endo/9p-server mounter; ambient host mount/umount
-                   (often via sudo). HIGH authority over the host kernel —
-                   host TCB, never share off-host.
-
-Rule of thumb: delegate only \`controller\`; everything else is host TCB. The
-credentials factory lives on the PEER, not here (its own claude-credentials/
-directory). The peer passes a Filesystem cap and a ClaudeCredentials cap into
-createSession; the host only ever sees a short-lived materialised secret.`;
 
 const CAPLET_ENV_KEYS = [
   'SANDBOX_FACTORY_NAME',
@@ -119,9 +97,13 @@ export const main = async (agent, dirName = DEFAULT_FACTORY_NAME) => {
     await E(agent).makeDirectory([dirName]);
   }
 
-  // Document the directory's objects (backfilled on re-runs).
-  if (!(await E(agent).has(dirName, 'readme'))) {
-    await E(agent).storeValue(README, [dirName, 'readme']);
+  // Document the directory's objects as a markdown blob (backfilled on
+  // re-runs). The `.md` name lets the chat UI render it; `endo cat
+  // <dir>/readme.md` dumps it.
+  if (!(await E(agent).has(dirName, 'readme.md'))) {
+    const md = readFileSync(readmeUrl, 'utf8');
+    const reader = bytesReaderFromIterator([new TextEncoder().encode(md)]);
+    await E(agent).storeBlob(reader, [dirName, 'readme.md']);
   }
 
   // Fully provisioned? `<dir>/profile` is the *last* artifact created (after

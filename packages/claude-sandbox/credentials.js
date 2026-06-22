@@ -19,7 +19,18 @@
 //
 // Idempotent: re-running is a no-op once `<dir>/controller` exists.
 
+import { readFileSync } from 'node:fs';
+
 import { E } from '@endo/eventual-send';
+import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iterator.js';
+
+// On-disk markdown describing the directory's objects, copied into a
+// `<dir>/readme.md` blob at provision time (easy to edit; `.md` lets the chat
+// UI render it).
+const readmeUrl = new URL(
+  './docs/claude-credentials-directory.md',
+  import.meta.url,
+);
 
 const factoryCapletSpecifier = new URL(
   'src/claude-credentials-factory.js',
@@ -27,28 +38,6 @@ const factoryCapletSpecifier = new URL(
 ).href;
 
 const DEFAULT_FACTORY_NAME = 'claude-credentials';
-
-// Stored as `<dir>/readme` (`endo show <dir>/readme`).
-const README = `claude-credentials/ — Claude Credentials factory (PEER side)
-
-This normally runs on the machine that owns the Anthropic account, NOT the
-sandbox host. The long-lived API key/token never leaves this peer. What
-sharing each object in this directory grants:
-
-  controller   The "Create Claude Credentials" factory exo. It mints a
-               ClaudeCredentials cap from a key you submit on its form. The
-               sensitive object is the *minted credential*, not this exo.
-
-  profile      The factory's guest AGENT. Holds host-agent = FULL authority
-               over THIS (peer) machine. NEVER share.
-
-  handle       The guest's mailbox handle. Low authority; do not share
-               casually.
-
-What you DO share off-machine: the minted ClaudeCredentials cap (named when
-you submit the form), handed to the sandbox host's createSession. The host
-only ever receives a short-lived materialised secret at container-spawn time —
-never the long-lived key, which stays on this peer.`;
 
 /**
  * @param {import('@endo/eventual-send').ERef<object>} agent
@@ -61,9 +50,12 @@ export const main = async (agent, dirName = DEFAULT_FACTORY_NAME) => {
     await E(agent).makeDirectory([dirName]);
   }
 
-  // Document the directory's objects (backfilled on re-runs).
-  if (!(await E(agent).has(dirName, 'readme'))) {
-    await E(agent).storeValue(README, [dirName, 'readme']);
+  // Document the directory's objects as a markdown blob (backfilled on
+  // re-runs); `endo cat <dir>/readme.md` dumps it.
+  if (!(await E(agent).has(dirName, 'readme.md'))) {
+    const md = readFileSync(readmeUrl, 'utf8');
+    const reader = bytesReaderFromIterator([new TextEncoder().encode(md)]);
+    await E(agent).storeBlob(reader, [dirName, 'readme.md']);
   }
 
   // `<dir>/profile` is the last artifact created, so it is the completion

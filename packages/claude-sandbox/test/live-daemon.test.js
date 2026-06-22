@@ -9,7 +9,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { randomBytes } from 'node:crypto';
-import { rmSync, mkdirSync } from 'node:fs';
+import { rmSync, mkdirSync, readFileSync } from 'node:fs';
 
 import { E } from '@endo/far';
 import { start, stop, purge, makeEndoClient } from '@endo/daemon';
@@ -134,11 +134,16 @@ test.serial(
     }
     t.true(root.includes('claude-sandbox'), 'the directory itself is at root');
 
-    // A readme value documents the directory's objects + sharing security.
-    const readme = await E(host).lookup(['claude-sandbox', 'readme']);
-    t.is(typeof readme, 'string');
-    t.regex(readme, /controller/);
-    t.regex(readme, /NEVER share/);
+    // A markdown blob documents the directory's objects + sharing security.
+    // It is a verbatim copy of the on-disk source markdown.
+    const readme = await E(host).lookup(['claude-sandbox', 'readme.md']);
+    const readmeText = await E(readme).text();
+    const readmeSource = readFileSync(
+      new URL('../docs/claude-sandbox-directory.md', import.meta.url),
+      'utf8',
+    );
+    t.true(readmeSource.length > 0, 'the source markdown is not empty');
+    t.is(readmeText, readmeSource, 'the blob is a copy of the source markdown');
 
     // Idempotent: a second run is a no-op (no throw, same controller, no dup).
     const c1 = await E(host).lookup(['claude-sandbox', 'controller']);
@@ -158,8 +163,17 @@ test.serial(
       root2.includes('claude-credentials-guest'),
       'no credentials temp residue at root',
     );
-    const credReadme = await E(host).lookup(['claude-credentials', 'readme']);
-    t.regex(credReadme, /never leaves this peer/i);
+    const credReadme = await E(host).lookup([
+      'claude-credentials',
+      'readme.md',
+    ]);
+    const credText = await E(credReadme).text();
+    const credSource = readFileSync(
+      new URL('../docs/claude-credentials-directory.md', import.meta.url),
+      'utf8',
+    );
+    t.true(credSource.length > 0, 'the source markdown is not empty');
+    t.is(credText, credSource, 'the blob is a copy of the source markdown');
   },
 );
 
