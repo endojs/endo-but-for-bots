@@ -35,6 +35,10 @@ const pendingShare = _hashParams.get('chatshare') || null; // Feature B: opened 
 if (cap) { try { localStorage.setItem(CAP_KEY, cap); } catch {} }
 if (location.hash) { try { history.replaceState(null, '', location.pathname + location.search); } catch {} } // strip the fragment (cap and/or chat)
 if (!cap) { try { cap = localStorage.getItem(CAP_KEY) || null; } catch {} }
+// A confined component (or other surface) failed to render → route the error to the self-improvement loop
+// so the developer agent fixes it automatically (server de-dupes + files a backlog item). Cap-gated; the
+// source snippet is render-safe (a widget's (ui)=>element body, never a swissnum).
+window.__fieldReportError = (error, source) => { try { if (!cap || !error) return; fetch('/error/flag', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, kind: 'component-render', error: String(error).slice(0, 300), source: String(source || '').slice(0, 500) }) }).catch(() => {}); } catch { /* */ } };
 const $ = id => document.getElementById(id);
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const newId = () => (crypto.randomUUID ? crypto.randomUUID() : String(Math.random())).slice(0, 36);

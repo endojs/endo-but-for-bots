@@ -31,6 +31,7 @@ import { makeToolShares } from './tool-shares.mjs';
 import { makeComponentGit } from './component-git.mjs';
 import { makeIslandSource } from './island-source.mjs';
 import { reuseFirstPreamble } from './component-catalog.mjs';
+import { addBacklog } from './improvement-backlog.mjs';
 import { STARTER_RING } from './system-map.mjs';
 const connectors = makeConnectors({ getSecret }); // owner-side registry (same connectors.json the agent calls)
 const customTools = makeCustomTools(); // owner-side review/admit (same custom-tools.json the agent reads)
@@ -447,6 +448,20 @@ const postFeed = async entry => {
     feed.entries = [{ id: `sched-${crypto.randomBytes(6).toString('hex')}`, date: new Date().toISOString(), kind: 'notification', ...entry }, ...(feed.entries || [])].slice(0, 400);
     await fs.promises.writeFile(FEED_FILE, JSON.stringify(feed, null, 2));
   } catch (e) { log('postFeed', e.message); }
+};
+// Route a live runtime error to the self-improvement loop so the developer agent fixes it automatically
+// (e.g. "component source must be a function (ui) => element"). De-duped per process by signature; the
+// backlog itself also de-dupes identical goals, so a recurring error files ONE fix task + one feed notice.
+const _flaggedErr = new Set();
+const flagErrorForFix = async (kind, error, context = '') => {
+  try {
+    const sig = `${kind}:${String(error).replace(/\s+/g, ' ').slice(0, 90)}`;
+    if (_flaggedErr.has(sig)) return false; _flaggedErr.add(sig);
+    const goal = `Auto-filed from a live runtime error (${kind}): "${String(error).slice(0, 200)}".${context ? ` ${context}` : ''} Diagnose the root cause in the voice-agent and fix it so this error stops happening; add a test that proves the fix. The suite is the gate.`;
+    let r = {}; try { r = addBacklog({ goal, by: 'auto-error-flag', rationale: `Surfaced automatically when this error occurred in the running app (${kind}).` }) || {}; } catch (e) { log('flagErrorForFix addBacklog', e.message); }
+    if (r.ok && !r.deduped) await postFeed({ title: '🔧 Error flagged for auto-fix', body: `A "${kind}" error was routed to the self-improvement loop to be fixed automatically:\n\n${String(error).slice(0, 240)}`, status: '🛠️ queued for the developer agent' });
+    return true;
+  } catch (e) { log('flagErrorForFix', e.message); return false; }
 };
 const runProjectAgent = async (project, agent) => {
   log('scheduled-agent:', project.name, '›', agent.name, '| tools:', (agent.tools || []).join(','));
@@ -1322,6 +1337,14 @@ const handler = async (req, res) => {
     }
     // ── notification inbox (🔔): read the shared feed (data endowment) + per-cap
     //    dismissed-state. Agents post via the `notify`/`pushFeed` powers → feed.json. ──
+    if (req.method === 'POST' && u.pathname === '/error/flag') {
+      const { cap, kind, error, source } = await jsonBody(req);
+      if (!nodeFor(cap)) return json(res, 403, { error: 'no capability' });
+      if (!error) return json(res, 200, { ok: false });
+      const ctx = source ? `The failing component source began: ${String(source).slice(0, 300).replace(/\s+/g, ' ')}` : '';
+      const filed = await flagErrorForFix(String(kind || 'runtime'), String(error), ctx);
+      return json(res, 200, { ok: true, filed });
+    }
     if (req.method === 'POST' && u.pathname === '/feed/load') {
       const { cap } = await jsonBody(req);
       if (!nodeFor(cap)) return json(res, 403, { error: 'no capability' });
@@ -1605,7 +1628,7 @@ const handler = async (req, res) => {
       // source + its declared cells are committed to component-git, so it gets history/fork/revert like any
       // component and a standalone home at /c/<id>. (Cross-user share with a scoped cap is the next step.)
       if (u.pathname === '/components/break-out') {
-        const src = String(body.source || ''); if (!/^\s*\(?\s*[a-zA-Z_$]/.test(src) || !src.includes('=>') || src.length > 8000) return json(res, 200, { ok: false, error: 'invalid component source (must be a function (ui) => …)' });
+        const src = String(body.source || ''); if (!/^\s*\(?\s*[a-zA-Z_$]/.test(src) || !src.includes('=>') || src.length > 8000) { const e = 'invalid component source (must be a function (ui) => …)'; flagErrorForFix('component-source-parse', e, `A broken-out component's source failed (ui)=>element validation. It began: ${src.slice(0, 200).replace(/\s+/g, ' ')}`).catch(() => {}); return json(res, 200, { ok: false, error: e }); }
         const cells = (Array.isArray(body.cells) ? body.cells : []).map(String).slice(0, 8);
         const name = String(body.name || 'component').slice(0, 60);
         const id = `uicomp-${crypto.randomBytes(5).toString('hex')}`;

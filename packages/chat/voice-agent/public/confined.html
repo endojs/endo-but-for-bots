@@ -73,7 +73,7 @@ const apiGrain = (cellId) => {
 
 const UI = { create, grain: apiGrain, local: grain, h: create };
 
-const fail = (msg) => { const d = document.createElement('div'); d.className = 'cu-err'; d.textContent = '⚠️ ' + msg; document.body.innerHTML = ''; document.body.appendChild(d); report(); };
+const fail = (msg) => { try { send({ type: 'error', error: String(msg) }); } catch (e) {} const d = document.createElement('div'); d.className = 'cu-err'; d.textContent = '⚠️ ' + msg; document.body.innerHTML = ''; document.body.appendChild(d); report(); }; // also REPORT the render failure to the host → auto-fix loop
 
 window.addEventListener('error', (e) => { /* swallow source parse/runtime errors so they don't escape; mount reports legibly */ try { e.preventDefault(); } catch (_) {} });
 const mount = (source) => {

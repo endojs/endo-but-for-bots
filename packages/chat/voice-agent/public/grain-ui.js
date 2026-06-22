@@ -185,6 +185,7 @@ const renderComponent = (spec, ctx) => {
       const { grain, release } = acquireCell(auth, id); releases.push(release);
       follow(grain, value => { try { port && port.postMessage({ __cu: 1, type: 'cell', id, value }); } catch { /* */ } }); // pipe live values IN (cap stays here)
     }
+    else if (m.type === 'error') { try { (window.__fieldReportError || (() => {}))(String(m.error || 'render failed'), String(m.source || '')); } catch { /* */ } } // a confined component failed → route to the auto-fix loop
   };
   // one-shot window listener JUST for the 'ready' handshake — removed the instant it fires (no accumulation).
   const onReady = e => {
