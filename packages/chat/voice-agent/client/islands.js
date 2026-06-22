@@ -18,6 +18,7 @@ import { PowersBanner } from './powers-banner.js';
 import { KitSampler } from './kit-sampler.js';
 import { AskCard } from './ask-card.js';
 import { ProposalCard } from './proposal-card.js';
+import { ChatList } from './chat-list.js';
 
 // A render propagator: re-paints `view(...values)` into `el` whenever any wired cell changes.
 // This is the one kind of propagator whose effect is the DOM; logic propagators stay headless.
@@ -40,6 +41,8 @@ const askCell = makeCell();
 let askWired = false;
 const propCell = makeCell();
 let propWired = false;
+const chatListCell = makeCell();
+let chatListWired = false;
 
 const islands = {
   // Idempotent: wires the render propagator once (cell → SharesPanel), then feeds the latest data in.
@@ -141,6 +144,19 @@ const islands = {
       propWired = true;
     }
     propCell.addContent(data);
+  },
+
+  // ── ChatList island ───────────────────────────────────────────────────────────────────────────
+  // `data` = { items, more, editingId, draft, emptyText } (render-safe). `handlers` =
+  // { onSelect(id), onDelete(id), onMore(), onRenameStart(id), onRenameChange(v), onRenameCommit(save) }.
+  renderChatList(el, data, handlers) {
+    if (!chatListWired) {
+      el.setAttribute('data-component-id', 'island-chat-list');
+      el.setAttribute('data-component-name', 'Chat list');
+      renderPropagator(el, [chatListCell], d => h(ChatList, { ...d, ...handlers }));
+      chatListWired = true;
+    }
+    chatListCell.addContent(data);
   },
 };
 

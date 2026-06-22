@@ -13,6 +13,7 @@ import { PowersBanner } from './client/powers-banner.js';
 import { KitSampler } from './client/kit-sampler.js';
 import { AskCard } from './client/ask-card.js';
 import { ProposalCard } from './client/proposal-card.js';
+import { ChatList } from './client/chat-list.js';
 
 // Walk a preact vnode tree → collect text, classes, clickable buttons, and inputs (with their handlers).
 const collect = v => {
@@ -173,6 +174,21 @@ test('ProposalCard: type-specific body, Confirm→onConfirm(id,dontAsk), Reject�
   // home-assistant + spawn-specialist NEVER offer "don't ask again"
   const ha = collect(ProposalCard({ proposal: { id: 'p3', type: 'home-assistant', title: 'unlock', detail: { entity_id: 'lock.front', service: 'unlock' } }, mayConfirm: true }));
   assert.equal(ha.inputs.filter(i => i.type === 'checkbox').length, 0, 'HA: no don\'t-ask checkbox');
+});
+
+test('ChatList: select / delete / show-more by id; empty state; the editing row renders an input (inline rename)', () => {
+  let selected = null; let deleted = null; let moreClicked = 0;
+  const items = [{ id: 'c1', title: 'Berlin trip', active: true, needs: true }, { id: 'c2', title: 'voice memo', voice: true, perm: 'read' }];
+  const acc = collect(ChatList({ items, more: 3, onSelect: id => { selected = id; }, onDelete: id => { deleted = id; }, onMore: () => { moreClicked += 1; } }));
+  assert.match(allText(acc), /Berlin trip/); assert.match(allText(acc), /🎙/, 'voice badge');
+  acc.buttons.find(b => b.cls.includes('ci-title')).onClick(); assert.equal(selected, 'c1', 'title click → onSelect(id)');
+  acc.buttons.find(b => b.cls.includes('ci-del')).onClick(); assert.equal(deleted, 'c1', '× → onDelete(id)');
+  acc.buttons.find(b => b.cls.includes('ci-more')).onClick(); assert.equal(moreClicked, 1, 'show more');
+  // empty state
+  assert.match(allText(collect(ChatList({ items: [], emptyText: 'no chats' }))), /no chats/);
+  // editing row → an input (stateless inline rename, host holds editingId + draft)
+  const ed = collect(ChatList({ items, editingId: 'c1', draft: 'New name', onRenameChange() {}, onRenameCommit() {} }));
+  assert.ok(ed.inputs.some(i => i.cls.includes('kit-in')), 'the edited row renders a kit input');
 });
 
 test('KitSampler renders every primitive without error (the design-system smoke test)', () => {

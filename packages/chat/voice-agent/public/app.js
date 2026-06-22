@@ -2394,6 +2394,15 @@ const ISLAND_PREVIEW = {
     proposal: { id: 'p1', type: 'email', title: 'Send the follow-up email', detail: { to: 'alex@example.com', subject: 'Re: Berlin dates', body: 'Booked Jun 3–7. Hotel near Mitte.' } },
     icon: '✉️', accent: '#7c5cff', mayConfirm: true, dontAsk: false,
   }, { onConfirm() {}, onReject() {}, onToggleDontAsk() {} }),
+  'island-chat-list': slot => window.__fieldIslands.renderChatList(slot, {
+    items: [
+      { id: 'c1', title: 'Berlin trip planning', active: true, needs: true },
+      { id: 'c2', title: 'GPU studio session', perm: 'write' },
+      { id: 'c3', title: 'voice note — groceries', voice: true },
+      { id: 'c4', title: 'Shared: rover telemetry', perm: 'read' },
+    ],
+    more: 3,
+  }, { onSelect() {}, onDelete() {}, onMore() {}, onRenameStart() {}, onRenameChange() {}, onRenameCommit() {} }),
 };
 
 const refreshComponents = async () => {
