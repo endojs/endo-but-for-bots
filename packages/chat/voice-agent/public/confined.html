@@ -113,13 +113,27 @@ const island = (name, props, kids) => {
   if (typeof f !== 'function') return create('span').class('cu-chip').text('[unknown component: ' + name + ']');
   try { return f(p, k); } catch (e) { return create('div').class('cu-err').text('⚠️ ' + name + ': ' + (e && e.message)); }
 };
-const UI = { create, grain: apiGrain, local: grain, h: create, island, kit: Object.keys(KIT) };
+// ── ui.use(alias): render a PRIOR broken-out component the agent referenced. The parent resolved the agent's
+//    alias → that component's (render-safe, scrubbed) source SERVER-SIDE and shipped it in `refs` on mount; the
+//    frame only ever sees an agent-chosen alias + source text — never a raw uicomp id, never a cap. The ref runs
+//    in THIS same sandbox (no new authority); its declared cells were re-gated under the running cap server-side.
+//    One level deep: a ref's own ui.use(other) only resolves top-level aliases (not injected → labelled fallback).
+const __cuRefs = {};
+const use = (alias) => {
+  const fn = __cuRefs[String(alias)];
+  if (typeof fn !== 'function') return create('span').class('cu-chip').text('[unavailable: ' + alias + ']');
+  try { const r = fn(UI); return (r && r.el) ? r : create('div').text('[empty: ' + alias + ']'); } catch (e) { return create('div').class('cu-err').text('⚠️ ' + alias + ': ' + (e && e.message)); }
+};
+const UI = { create, grain: apiGrain, local: grain, h: create, island, use, kit: Object.keys(KIT) };
 
 const fail = (msg) => { try { send({ type: 'error', error: String(msg) }); } catch (e) {} const d = document.createElement('div'); d.className = 'cu-err'; d.textContent = '⚠️ ' + msg; document.body.innerHTML = ''; document.body.appendChild(d); report(); }; // also REPORT the render failure to the host → auto-fix loop
 
 window.addEventListener('error', (e) => { /* swallow source parse/runtime errors so they don't escape; mount reports legibly */ try { e.preventDefault(); } catch (_) {} });
-const mount = (source) => {
+const mount = (source, refs) => {
   document.body.innerHTML = '';
+  // Inject each REFERENCED component's source (agent-declared aliases the parent resolved server-side) as a
+  // function ui.use(alias) calls — same inline-script seam + same sandbox as the primary source (no new authority).
+  if (refs && typeof refs === 'object') { for (const alias in refs) { try { const rs = String((refs[alias] && refs[alias].source) || ''); if (!rs) continue; const rsc = document.createElement('script'); rsc.textContent = 'window.__cu_ref_tmp = (' + rs + ');'; document.head.appendChild(rsc); rsc.remove(); if (typeof window.__cu_ref_tmp === 'function') __cuRefs[String(alias)] = window.__cu_ref_tmp; window.__cu_ref_tmp = null; } catch (e) {} } }
   // Execute the agent source by INJECTING it as an inline <script> (allowed by CSP script-src 'unsafe-inline')
   // rather than eval() (which would need 'unsafe-eval'). Keeps the CSP tight. The sandboxed null-origin +
   // no-network frame is the real boundary; this just satisfies CSP cleanly.
@@ -148,7 +162,7 @@ window.addEventListener('message', (e) => {
   const port = e.ports && e.ports[0];
   if (port) { CU_PORT = port; port.onmessage = (pe) => { const pm = pe.data; if (!pm || pm.__cu !== 1) return; if (pm.type === 'cell') { const g = cellGrains.get(String(pm.id)); if (g) g.set(pm.value); } else if (pm.type === 'theme') applyTheme(pm.vars); }; try { port.start(); } catch (e2) {} }
   if (m.theme) applyTheme(m.theme);
-  mount(m.source);
+  mount(m.source, m.refs);
 });
 try { parent.postMessage({ __cu: 1, type: 'ready' }, '*'); } catch (e) {}
 </script>

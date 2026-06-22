@@ -192,7 +192,7 @@ const renderComponent = (spec, ctx) => {
     if (e.source !== iframe.contentWindow) return; const m = e.data; if (!m || m.__cu !== 1 || m.type !== 'ready') return;
     window.removeEventListener('message', onReady);
     const ch = new MessageChannel(); port = ch.port1; port.onmessage = onPort; try { port.start(); } catch { /* */ }
-    try { iframe.contentWindow.postMessage({ __cu: 1, type: 'mount', source: String(spec.source || ''), theme: theme.get().vars }, '*', [ch.port2]); } catch { /* */ }
+    try { iframe.contentWindow.postMessage({ __cu: 1, type: 'mount', source: String(spec.source || ''), theme: theme.get().vars, refs: (spec.refs && typeof spec.refs === 'object') ? spec.refs : undefined }, '*', [ch.port2]); } catch { /* */ }
     // PROPAGATE the user's global theme DOWN into the confined widget (read-only style data, never a cap),
     // so it always matches the user's chosen style and re-themes live when they switch.
     releases.push(theme.subscribe(t => { try { port && port.postMessage({ __cu: 1, type: 'theme', vars: t.vars }); } catch { /* */ } }));

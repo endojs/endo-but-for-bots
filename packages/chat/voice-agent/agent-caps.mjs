@@ -1420,19 +1420,34 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
     // .follow(grain,fn)], grain(cellId) [a LIVE server cell — e.g. "ha:<handle>"], and local(initial) [client
     // state]. NO DOM, NO network, NO authority: you can only render + follow declared cells. Declare every
     // server cell you use in `cells` (they're cap-gated; an unreachable one is dropped here).
-    toolbox.showComponent = harden({ run: async ({ source, cells, height } = {}) => {
+    toolbox.showComponent = harden({ run: async ({ source, cells, height, uses } = {}) => {
       const src = String(source || '');
       if (!/^\s*\(?\s*[a-zA-Z_$]/.test(src) || !src.includes('=>')) return { ok: false, error: 'source must be a function: (ui) => ui.create(...)' };
       if (src.length > 8000) return { ok: false, error: 'component source too long (keep it under 8000 chars)' };
-      let declared = (Array.isArray(cells) ? cells : []).map(String).slice(0, 8);
       const dropped = [];
-      // gate declared ha:<handle> cells at designation time (same c-list rule as showEntityStatus)
-      declared = declared.filter(c => {
-        const m = /^ha:(.+)$/.exec(c); if (!m) return true;
-        if (powers.has('homeassistant') && node.haReach && !node.haReach(m[1])) { dropped.push(c); return false; }
-        return true;
-      });
-      return { ok: true, widget: { type: 'component', source: src, cells: declared, height: Math.min(2000, Math.max(40, Number(height) || 140)) }, note: `Rendered a custom confined component${dropped.length ? ` (dropped unreachable cells: ${dropped.join(', ')} — haFind them first)` : ''}.` };
+      // gate ha:<handle> cells at designation time (same c-list rule as showEntityStatus)
+      const gateHa = c => { const m = /^ha:(.+)$/.exec(c); if (!m) return true; if (powers.has('homeassistant') && node.haReach && !node.haReach(m[1])) { dropped.push(c); return false; } return true; };
+      let declared = (Array.isArray(cells) ? cells : []).map(String).slice(0, 8).filter(gateHa);
+      // ui.use: REUSE prior broken-out components by AGENT-DECLARED ALIAS. Resolve each alias→uicomp source HERE
+      // (server-side; the raw id NEVER reaches the client/frame), scrub it (render-safe), and fold the referenced
+      // component's REACHABLE ha: cells into the brokered set so they re-pass the SAME gate under THIS cap — and
+      // the server /cells/subscribe re-validates per-cap every heartbeat (the load-bearing data gate). One level deep.
+      const usesMap = (uses && typeof uses === 'object' && !Array.isArray(uses)) ? uses : {};
+      const scrub = s => String(s || '').replace(/#cap=[0-9a-fA-F]{16,}/g, '#cap=«redacted»').replace(/\b[0-9a-f]{32}\b/g, '«swissnum»');
+      const refs = {};
+      for (const alias of Object.keys(usesMap).slice(0, 4)) {
+        const id = String(usesMap[alias] || ''); if (!id.startsWith('uicomp-')) continue;
+        let snap = null; try { snap = await componentGitObj.readAt(id, 'HEAD'); } catch { /* */ }
+        if (!snap || !snap.files || !snap.files['component.js'] || snap.files['component.js'].length > 8000) continue; // bound the injected ref source (defense-in-depth; matches the break-out cap)
+        let meta = {}; try { meta = JSON.parse(snap.files['manifest.json'] || '{}'); } catch { /* */ }
+        const refCells = (Array.isArray(meta.cells) ? meta.cells : []).map(String).filter(c => /^ha:/.test(c) && gateHa(c)); // ONLY reachable ha: cells fold in
+        for (const c of refCells) if (!declared.includes(c)) declared.push(c);
+        refs[String(alias)] = { source: scrub(snap.files['component.js']), cells: refCells };
+      }
+      const widget = { type: 'component', source: src, cells: declared.slice(0, 16), height: Math.min(2000, Math.max(40, Number(height) || 140)) };
+      if (Object.keys(refs).length) widget.refs = refs; // {alias:{source,cells}} — NO raw id; source is render-safe + scrubbed
+      const reused = Object.keys(refs).length;
+      return { ok: true, widget, note: `Rendered a custom confined component${reused ? ` (reused ${reused} saved component(s) via ui.use)` : ''}${dropped.length ? ` (dropped unreachable cells: ${dropped.join(', ')} — haFind them first)` : ''}.` };
     } });
     // showThemePreview — propose a NEW global THEME (the user's style). Renders a before/after preview with
     // accept/reject; the vars are pure style data (CSS custom properties), never authority.
@@ -1448,7 +1463,7 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
       { name: 'showEntityStatus', reversible: false, args: { handle: 'string — an entity handle from haFind/search', label: 'string — a short title (e.g. "Front door")' }, description: 'Show a LIVE status WIDGET for a Home Assistant entity (door/lock/sensor/light). It stays current — when reopened later it re-subscribes and shows the latest state, no refresh needed. Prefer this over a text answer for any "is X open / on / locked?" question. Get the handle from haFind first.' },
       { name: 'showCountdowns', reversible: false, args: { timers: 'array — [{label, dueAt}] where dueAt is an absolute ISO time (use the dueAt from a "once" timer in listTimers)' }, description: 'Show LIVE COUNTDOWN widgets that tick down on screen toward each dueAt (great for cooking steps / timers you just set). Pass each timer\'s label + absolute dueAt.' },
       { name: 'showChoices', reversible: false, args: { prompt: 'string — the question', options: 'array — choice strings' }, description: 'Show tappable CHOICE buttons; when the user taps one it is sent back as their next message. Use for "pick one" / "which would you like?" answers instead of listing options as text.' },
-      { name: 'showComponent', reversible: false, args: { source: 'string — a function (ui) => ui.create(...). ui.create(tag) → element with .text(s)/.attr(k,v)/.class(c)/.style({...})/.on(event,fn)/.push(children)/.follow(grain, v=>text). ui.island(name, props, children) → a THEMED design-system primitive so it matches the app — name ∈ [Card, Btn, Chip, Badge, Banner, Meta, Stack, Row, Divider, EmptyState, ProgressBar, Field, TextField]; PREFER these over raw create() for a consistent look. ui.grain(cellId) → a LIVE server cell (e.g. "ha:<handle>" — follow it). ui.local(initial) → client state.', cells: 'array — the server cell ids your component will follow (e.g. ["ha:<handle>"]); declare them so the live data is brokered + cap-gated', height: 'number — initial px height (it auto-grows)' }, description: 'Render a CUSTOM component you write — confined + safe (sandboxed; no DOM/network/authority) and ALWAYS available regardless of your powers (building UI is a free right; only the DATA it draws via ui.grain is gated by what you hold). Compose the themed kit with ui.island for a consistent look, and REUSE an existing component when one fits (listComponents → readComponent). Use when status/countdown/choices don\'t fit. It can FOLLOW live grains and be broken out + shared.' },
+      { name: 'showComponent', reversible: false, args: { source: 'string — a function (ui) => ui.create(...). ui.create(tag) → element with .text(s)/.attr(k,v)/.class(c)/.style({...})/.on(event,fn)/.push(children)/.follow(grain, v=>text). ui.island(name, props, children) → a THEMED design-system primitive so it matches the app — name ∈ [Card, Btn, Chip, Badge, Banner, Meta, Stack, Row, Divider, EmptyState, ProgressBar, Field, TextField]; PREFER these over raw create() for a consistent look. ui.use(alias) → render a PRIOR saved component you referenced in `uses` (e.g. ui.use("door")). ui.grain(cellId) → a LIVE server cell (e.g. "ha:<handle>" — follow it). ui.local(initial) → client state.', cells: 'array — the server cell ids your component will follow (e.g. ["ha:<handle>"]); declare them so the live data is brokered + cap-gated', uses: 'object — OPTIONAL {alias: componentId} map (ids from listComponents) to REUSE saved components live; call ui.use(alias) in your source. Up to 4. Their data still re-gates by what you hold.', height: 'number — initial px height (it auto-grows)' }, description: 'Render a CUSTOM component you write — confined + safe (sandboxed; no DOM/network/authority) and ALWAYS available regardless of your powers (building UI is a free right; only the DATA it draws via ui.grain is gated by what you hold). Compose the themed kit with ui.island, and REUSE a saved component live with `uses` + ui.use(alias) (listComponents to find ids). Use when status/countdown/choices don\'t fit. It can FOLLOW live grains and be broken out + shared.' },
     );
     // listComponents / readComponent — the LIBRARY of prior broken-out UI components, so you REUSE instead of
     // reinventing (reuse-first). ALWAYS available (incl. delegates): a uicomp id carries NO authority and the
