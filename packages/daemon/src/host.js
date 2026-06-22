@@ -712,7 +712,8 @@ export const makeHostMaker = ({
      */
     const prepareMakeCaplet = (workerName, options = {}) => {
       const {
-        powersName = '@none',
+        powersName,
+        powers,
         resultName,
         env = {},
         workerTrustedShims,
@@ -720,7 +721,11 @@ export const makeHostMaker = ({
       if (workerName !== undefined) {
         assertName(workerName);
       }
-      assertPowersName(powersName);
+      if (powers !== undefined && powersName !== undefined) {
+        throw makeError(
+          X`Specify either "powers" (by capability reference) or "powersName", not both`,
+        );
+      }
 
       /** @type {DeferredTasks<MakeCapletDeferredTaskParams>} */
       const tasks = makeDeferredTasks();
@@ -730,15 +735,38 @@ export const makeHostMaker = ({
         tasks.push,
       );
 
-      const powersId = /** @type {FormulaIdentifier | undefined} */ (
-        petStore.identifyLocal(/** @type {Name} */ (powersName))
-      );
-      if (powersId === undefined) {
-        assertPetName(powersName);
-        const powersPetName = powersName;
-        tasks.push(identifiers => {
-          return petStore.storeIdentifier(powersPetName, identifiers.powersId);
-        });
+      /** @type {FormulaIdentifier | undefined} */
+      let powersId;
+      if (powers !== undefined) {
+        // Powers supplied by reference: resolve the capability to the
+        // formula id it was minted from (the same identity map
+        // `provideHostPath` uses). The caplet formula then depends on that
+        // id directly, so the powers needs no pet name — it stays reachable
+        // for exactly the caplet's lifetime and is collected with it. This
+        // mirrors how the daemon already accepts a *named* powers id, only
+        // the id comes from the cap's identity rather than the pet store.
+        powersId = getIdForRef(powers);
+        if (powersId === undefined) {
+          throw makeError(
+            X`"powers" must be a capability minted by this daemon`,
+          );
+        }
+      } else {
+        const resolvedPowersName = powersName ?? '@none';
+        assertPowersName(resolvedPowersName);
+        powersId = /** @type {FormulaIdentifier | undefined} */ (
+          petStore.identifyLocal(/** @type {Name} */ (resolvedPowersName))
+        );
+        if (powersId === undefined) {
+          assertPetName(resolvedPowersName);
+          const powersPetName = resolvedPowersName;
+          tasks.push(identifiers => {
+            return petStore.storeIdentifier(
+              powersPetName,
+              identifiers.powersId,
+            );
+          });
+        }
       }
 
       if (resultName !== undefined) {

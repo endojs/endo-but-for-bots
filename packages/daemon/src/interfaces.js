@@ -43,6 +43,12 @@ const MakeCapletOptionsShape = M.splitRecord(
   {},
   {
     powersName: NameShape,
+    // Alternative to `powersName`: supply the powers by capability
+    // reference. The daemon resolves the cap to its formula id, so the
+    // caller need never give it a pet name (and the resulting caplet keeps
+    // it reachable for its own lifetime). Mutually exclusive with
+    // `powersName`.
+    powers: M.remotable('Powers'),
     resultName: NameOrPathShape,
     env: EnvShape,
     workerTrustedShims: M.arrayOf(M.string()),

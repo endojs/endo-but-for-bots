@@ -1256,6 +1256,14 @@ export type MakeHostOrGuestOptions = {
 
 export type MakeCapletOptions = {
   powersName?: string;
+  /**
+   * Powers supplied by capability reference instead of by pet name. The
+   * daemon resolves the cap to its formula id; mutually exclusive with
+   * `powersName`. Lets a caller compose a caplet over an un-named powers
+   * cap (e.g. an `evaluate` result), which is then rooted only by the
+   * caplet that depends on it.
+   */
+  powers?: unknown;
   resultName?: string | string[];
   env?: Record<string, string>;
   workerTrustedShims?: string[];

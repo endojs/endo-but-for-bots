@@ -900,6 +900,74 @@ testNeedsNodeWorker(
   },
 );
 
+const pingablePath = path.join(dirname, 'test', 'pingable.js');
+const powersPingPath = path.join(dirname, 'test', 'powers-ping.js');
+
+testNeedsNodeWorker(
+  'makeUnconfined accepts powers by capability reference (un-named)',
+  async t => {
+    const { host } = await prepareHost(t);
+
+    // Mint a powers cap WITHOUT naming it. An un-named make-unconfined
+    // result is durable and retained by the caller's reference (unlike an
+    // un-named `evaluate`, which is ephemeral — see the README note).
+    const powers = await E(host).makeUnconfined('@main', pingablePath, {
+      powersName: '@none',
+    });
+
+    // Compose a caplet over that cap *by reference* — no pet name involved.
+    const caplet = await E(host).makeUnconfined('@main', powersPingPath, {
+      powers,
+      resultName: 'ping-caplet',
+    });
+
+    // The caplet received exactly that powers cap (it echoed ping()).
+    t.is(await E(caplet).pong(), 'pong-42');
+
+    // The powers cap was never named: the only host pet name created is the
+    // caplet's. (A by-name powers would have added a second entry that the
+    // caller would then have to remove — the "unname trick" this avoids.)
+    const names = await E(host).list();
+    t.deepEqual(
+      names.filter(n => !n.startsWith('@') && n !== 'ping-caplet'),
+      [],
+      `only the caplet is named; saw: ${names.join(', ')}`,
+    );
+  },
+);
+
+testNeedsNodeWorker(
+  'makeUnconfined rejects powers that is not a daemon capability',
+  async t => {
+    const { host } = await prepareHost(t);
+
+    // A remotable the daemon never minted has no formula id.
+    await t.throwsAsync(
+      E(host).makeUnconfined('@main', powersPingPath, {
+        powers: Far('NotADaemonCap', { ping: () => 'nope' }),
+      }),
+      { message: /minted by this daemon/ },
+    );
+  },
+);
+
+testNeedsNodeWorker(
+  'makeUnconfined rejects supplying both powers and powersName',
+  async t => {
+    const { host } = await prepareHost(t);
+    const powers = await E(host).makeUnconfined('@main', pingablePath, {
+      powersName: '@none',
+    });
+    await t.throwsAsync(
+      E(host).makeUnconfined('@main', powersPingPath, {
+        powers,
+        powersName: '@none',
+      }),
+      { message: /either "powers".*or "powersName"/ },
+    );
+  },
+);
+
 testNeedsNodeWorker(
   'move moves value, between different caplet name hubs',
   async t => {
