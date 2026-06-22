@@ -25,6 +25,10 @@ const COL = { root: 0x7c5cff, tool: 0x2ea043, delegate: 0xe3b341, subq: 0x58a6ff
 const publishedViewUrl = nd => { try { if (!nd) return ''; const m = /(https?:\/\/[^\s"')]+?\/sites\/[^\s"')]+|\/sites\/[\w./-]+|https?:\/\/[^\s"')]+?\.html\b)/.exec(String(nd.resultText || '')); if (m) return m[1]; if (String(nd.name) === 'publishSite') return '(published)'; return ''; } catch { return ''; } };
 const DELEGATE = new Set(['delegateTask', 'askSpecialist', 'research', 'employ']); // these fan out further
 const ROOT_Y = 1.35;
+const ROOT_R = 0.6;   // the head octahedron's radius (matches geoFor('root'))
+const TAIL_R = 0.42;  // the "now" octahedron at the live frontier — slightly smaller, so the body reads as a comet toward the present
+// the 6 canonical octahedron vertices at radius r (±x, ±y, ±z) — used to wire the head→"now" extrusion cage
+const OCTA_LOCAL = r => [new THREE.Vector3(r, 0, 0), new THREE.Vector3(-r, 0, 0), new THREE.Vector3(0, r, 0), new THREE.Vector3(0, -r, 0), new THREE.Vector3(0, 0, r), new THREE.Vector3(0, 0, -r)];
 // inspectable satellites: every node "unfurls" the EXACT call (cyan) + EXACT result (amber)
 // as two small shapes that orbit it; click one → a scrollable modal with the full text.
 const SAT = { call: 0x39c5cf, result: 0xd29922 };
@@ -208,13 +212,31 @@ export const makePendant = canvas => {
     });
     positionCrown(nd);
   };
-  // the lifeline (the agent's time-extruded body) grows down to the latest step + spins gently.
+  // the BODY: glide the "now" octahedron down to the live frontier of the timeline, give it the head's
+  // orientation (rigid extrusion), and redraw the 6 matching-vertex edges in world space. World vertices are
+  // computed directly from each group's position/quaternion/scale (sceneGroup is identity) — no matrixWorld
+  // ordering dance. The cage brightens with the head (so it pulses with the voice level too).
+  const _wt = new THREE.Vector3(), _wb = new THREE.Vector3();
+  const octWorld = (group, localV, out) => out.copy(localV).multiplyScalar(group.scale.x || 1).applyQuaternion(group.quaternion).add(group.position);
   const updateLifeline = dt => {
-    if (!root || !root.lifeline) return;
-    const top = ROOT_Y - 0.5;
-    const bottom = level1.length ? Math.min(top - 0.3, Math.min(...level1.map(n => n.group.position.y)) - 0.35) : top - 0.3;
-    const h = Math.max(0.1, top - bottom), m = root.lifeline.mesh;
-    m.scale.y = h; m.position.set(root.group.position.x, top - h / 2, root.group.position.z); m.rotation.y += dt * 0.3;
+    if (!root || !root.lifeline || !root.lifeline.tailGroup) return;
+    const lf = root.lifeline, tg = lf.tailGroup;
+    const restY = ROOT_Y - 0.9;
+    const bottom = level1.length ? Math.min(restY, Math.min(...level1.map(n => n.group.position.y)) - 0.4) : restY;
+    const k = Math.min(1, dt * 6);
+    tg.position.x += (root.group.position.x - tg.position.x) * k;
+    tg.position.z += (root.group.position.z - tg.position.z) * k;
+    tg.position.y += (bottom - tg.position.y) * k;
+    tg.quaternion.copy(root.group.quaternion); // share the head's spin → the extrusion is one rigid body
+    const inten = root.wireMat ? root.wireMat.uniforms.uIntensity.value : 1;
+    lf.tWireMat.uniforms.uIntensity.value = lf.tGlowMat.uniforms.uIntensity.value = 0.6 + inten * 0.4;
+    for (let i = 0; i < 6; i += 1) {
+      octWorld(root.group, lf.topV[i], _wt);
+      octWorld(tg, lf.botV[i], _wb);
+      const lk = lf.edges[i];
+      lk.lineGeo.setFromPoints([_wt.clone(), _wb.clone()]); lk.lineGeo.attributes.position.needsUpdate = true;
+      lk.lineMat.uniforms.uIntensity.value = 0.35 + inten * 0.4;
+    }
   };
 
   const grow = nd => { if (buildInstant) { nd.group.scale.setScalar(1); return; } nd.group.scale.setScalar(0.001); tween(0.44, easeOutBack, e => nd.group.scale.setScalar(Math.max(0.001, e))); };
@@ -291,6 +313,7 @@ export const makePendant = canvas => {
   const fit = () => {
     if (!root) return; const box = new THREE.Box3(); box.expandByPoint(new THREE.Vector3(0, ROOT_Y, 0));
     nodes.forEach(nd => box.expandByPoint(nd.target.lengthSq() ? nd.target : nd.group.position));
+    if (root.lifeline && root.lifeline.tailGroup) box.expandByPoint(root.lifeline.tailGroup.position.clone().setY(root.lifeline.tailGroup.position.y - TAIL_R)); // include the "now" octahedron's tip
     box.expandByScalar(0.8);
     const c = box.getCenter(new THREE.Vector3()), size = box.getSize(new THREE.Vector3());
     const aspect = (canvas.clientWidth / Math.max(1, canvas.clientHeight)) || 1.4;
@@ -324,12 +347,24 @@ export const makePendant = canvas => {
     root = makeNodeRecord('root', color, 'prompt'); root.labelText = 'prompt'; root.detail = String(promptText || '');
     t0 = now(); // the lifeline's time origin
     sceneGroup.add(root.group); nodes.push(root); pickables.push(root.pick);
-    // the agent's LIFELINE — its body extruded down the time axis (the 4D octahedron: the rotating head
-    // above + this vertical column). Grows downward as the turn unfolds; tool edges land on it by time.
-    const llGeo = new THREE.CylinderGeometry(0.12, 0.12, 1, 6, 1, true);
-    const llMat = new THREE.ShaderMaterial({ uniforms: { uColor: { value: new THREE.Color(color) }, uIntensity: { value: 0.5 } }, vertexShader: WIRE_V, fragmentShader: WIRE_F, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false });
-    const llMesh = new THREE.LineSegments(new THREE.EdgesGeometry(llGeo), llMat);
-    sceneGroup.add(llMesh); root.lifeline = { mesh: llMesh, mat: llMat };
+    // the agent's BODY is an EXTRUDED OCTAHEDRON: the rotating head (root, above) + a TWIN "now" octahedron
+    // at the live frontier of the timeline (the current action), with all 6 MATCHING vertices joined by
+    // glowing edges. The twin shares the head's orientation each frame, so the cage is a rigid extrusion that
+    // spins as one. Tool edges land on the CENTRE SPINE between the two octahedrons (axisAt → yOf). Replaces
+    // the old cylinder column.
+    const tcol = new THREE.Color(color);
+    const tGeo = new THREE.OctahedronGeometry(TAIL_R);
+    const tWireMat = new THREE.ShaderMaterial({ uniforms: { uColor: { value: tcol.clone() }, uIntensity: { value: 0.9 } }, vertexShader: WIRE_V, fragmentShader: WIRE_F, transparent: true });
+    const tGlowMat = new THREE.ShaderMaterial({ uniforms: { uColor: { value: tcol.clone() }, uIntensity: { value: 0.9 } }, vertexShader: GLOW_V, fragmentShader: GLOW_F, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.BackSide });
+    const tWire = new THREE.LineSegments(new THREE.EdgesGeometry(tGeo), tWireMat);
+    const tGlow = new THREE.Mesh(tGeo, tGlowMat); tGlow.scale.setScalar(1.25);
+    const tailGroup = new THREE.Group(); tailGroup.add(tGlow); tailGroup.add(tWire);
+    tailGroup.position.set(0, ROOT_Y - 0.9, 0);
+    sceneGroup.add(tailGroup);
+    // 6 glowing edges, one per matching vertex pair (head vertex i → "now" vertex i) = the extrusion cage
+    const edges = [];
+    for (let i = 0; i < 6; i += 1) { const lk = makeLine(color); lk.lineMat.uniforms.uIntensity.value = 0.6; sceneGroup.add(lk.line); edges.push(lk); }
+    root.lifeline = { tailGroup, tWireMat, tGlowMat, tGeo, edges, topV: OCTA_LOCAL(ROOT_R), botV: OCTA_LOCAL(TAIL_R) };
     if (descend && !buildInstant) {
       root.group.position.set(0, ROOT_Y + 2.1, 0); const from = root.group.position.clone(), to = new THREE.Vector3(0, ROOT_Y, 0);
       tween(0.62, easeInOut, e => root.group.position.lerpVectors(from, to, e));
