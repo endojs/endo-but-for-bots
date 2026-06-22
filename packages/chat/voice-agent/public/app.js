@@ -573,11 +573,14 @@ if (budgetChip) budgetChip.onclick = async () => {
   } catch (e) { setStatus('top-up failed: ' + e.message); }
 };
 // retry the SAME turn after a top-up (no new user bubble — the user's message is already shown)
-const retryTurn = async (payload, spoken) => {
-  setStatus('thinking…');
+const retryTurn = async (payload, spoken, opts = {}) => {
+  setStatus(opts.resume ? 'resuming…' : 'thinking…');
   try {
     await pendantBegin(payload.text || '');
-    const r = await (await fetch('/chat', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) })).json();
+    // resume:true → the server CONTINUES the topped-up turn from its saved in-flight transcript (it does NOT
+    // re-run the reasoning/tool-use already done); if the server no longer has it, it transparently full-reruns.
+    const body = opts.resume ? { ...payload, resume: true } : payload;
+    const r = await (await fetch('/chat', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })).json();
     if (r.error) { if (r.retryable || r.llmError) renderRetryableError(r.error, payload, spoken); else setStatus('chat: ' + r.error); return; } // provider error → transient retry card, not a stuck status
     if (r.exhausted) { updateBudgetChip(r.remaining, r.allowance); renderExhausted(payload, spoken); return; }
     renderAgentResponse(r);
@@ -610,7 +613,7 @@ const resumeIfPending = async sid => {
   if (sid !== sessionId) { pendingResume[sid] = pend; return false; } // not the chat in view — keep it for when it is
   delete pendingResume[sid];
   [...document.querySelectorAll('.exhausted-card')].forEach(c => { if (c.dataset.sid === sid) c.remove(); }); // clear the stale card
-  await retryTurn(pend.payload, pend.spoken);
+  await retryTurn(pend.payload, pend.spoken, { resume: true }); // CONTINUE the stalled turn server-side (falls back to a full run if the transcript is gone)
   return true;
 };
 // RE-ATTACH to a run that's happening (or already finished) SERVER-SIDE. The agent run does NOT depend on

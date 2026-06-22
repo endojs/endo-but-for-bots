@@ -508,6 +508,18 @@ const setRunResult = (sid, v) => {
   runResults.set(sid, { ...v, at: Date.now() });
   if (runResults.size > 300) for (const [k, r] of runResults) if (Date.now() - (r.at || 0) > RUN_RESULT_TTL) runResults.delete(k);
 };
+// SEAMLESS TOP-UP RESUME: when a turn runs out of allowance mid-flight, the reasoning loop hands back its
+// in-flight transcript (prior reasoning + tool OUTPUTs). We stash it here keyed by session; a `resume:true`
+// /chat after the top-up replays it so the agent CONTINUES from where it stopped instead of re-running every
+// step. In-memory + one-shot + TTL-pruned (a restart loses it → the resume cleanly falls back to a full run).
+const pendingResumes = new Map(); // sessionId → { transcript:[{role,content}], at }
+const RESUME_TTL = 60 * 60 * 1000;
+const saveResume = (sid, transcript) => {
+  if (!Array.isArray(transcript) || !transcript.length) { pendingResumes.delete(sid); return; }
+  pendingResumes.set(sid, { transcript, at: Date.now() });
+  if (pendingResumes.size > 200) for (const [k, r] of pendingResumes) if (Date.now() - (r.at || 0) > RESUME_TTL) pendingResumes.delete(k);
+};
+const consumeResume = sid => { const r = pendingResumes.get(sid); if (!r) return null; pendingResumes.delete(sid); return (Date.now() - (r.at || 0) > RESUME_TTL) ? null : r.transcript; }; // one-shot
 // ── live step stream (the inline 3D "pendant"): per-session SSE writers. Carries ONLY
 //    tool NAMES + ok/children (no cap, no payload) so the chat can animate the fan-out in
 //    real time. Keyed by sessionId; cap-hygiene preserved (the swissnum never rides this URL). ──
@@ -886,7 +898,7 @@ const handler = async (req, res) => {
 
     // ── voice/text turn: the cap decides the agent's reach. No cap → no powers. ──
     if (req.method === 'POST' && u.pathname === '/chat') {
-      const { sessionId, text, cap, attachments, model, history: clientHistory, agent } = await jsonBody(req);
+      const { sessionId, text, cap, attachments, model, history: clientHistory, agent, resume } = await jsonBody(req);
       const t = String(text || '').trim();
       const node = nodeFor(cap);
       if (!node) return json(res, 403, { error: 'no capability — open this app with your #cap= link to grant the agent powers' });
@@ -905,6 +917,10 @@ const handler = async (req, res) => {
       const { agentAttachments, savedRefs } = await processAttachments(attachments, chatHomeSubkey);
       if (!t && !agentAttachments.length) return json(res, 400, { error: 'empty' });
       const sid = sid0;
+      // RESUME a topped-up turn from its saved in-flight transcript (one-shot). Missing (e.g. after a service
+      // restart) → null → the runner rebuilds from text+history = a normal full run. So `resume:true` is always
+      // safe: it continues the in-flight run when it can, and cleanly re-runs from scratch when it can't.
+      const resumeMessages = (resume === true) ? consumeResume(sid) : null;
       runs.get(sid)?.abort();
       const ac = new AbortController(); runs.set(sid, ac);
       const startedAt = Date.now();
@@ -950,7 +966,7 @@ const handler = async (req, res) => {
       let deadlineHit = false; let deadlineT = null;
       const r = await Promise.race([
         AGENT_RUNNER({
-        toolbox, manifest, userText: t, history, attachments: agentAttachments, signal: ac.signal, persona: runPersona, model: String(model || 'default'),
+        toolbox, manifest, userText: t, history, resumeMessages, attachments: agentAttachments, signal: ac.signal, persona: runPersona, model: String(model || 'default'),
         llm: meteredLLM, budgetLine: budgetLine(purse.balance(), String(model || 'default')),
         onStep: s => {
           if (s.kind === 'tool-start') { emitStep(sid, { t: 'start', name: s.name, detail: detailFromArgs(s.args), call: safeText(s.args, 16000) }); return; } // the pendant grows a node (with its exact call) the instant a tool is invoked
@@ -1013,10 +1029,11 @@ const handler = async (req, res) => {
       if (r.llmError) { setRunResult(sid, { state: 'error', node: runNode, text: t, startedAt, doneAt: Date.now() }); return json(res, 200, { error: r.llmError, llmError: true, retryable: true }); }
       // prepaid allowance spent mid-turn → return a DETERMINISTIC exhausted signal (no model
       // call was made to produce it). The client renders a static Top-up / Abandon card.
-      if (r.exhausted) { const exPayload = { exhausted: true, answer: r.answer || '', remaining: purse.balance(), allowance: purse.granted() }; setRunResult(sid, { state: 'exhausted', node: runNode, text: t, result: exPayload, startedAt, doneAt: Date.now() }); return json(res, 200, exPayload); }
+      if (r.exhausted) { saveResume(sid, r.resumeFrom); const exPayload = { exhausted: true, answer: r.answer || '', remaining: purse.balance(), allowance: purse.granted() }; setRunResult(sid, { state: 'exhausted', node: runNode, text: t, result: exPayload, startedAt, doneAt: Date.now() }); return json(res, 200, exPayload); }
       // history keeps the multimodal user content so a follow-up can still refer to the attached image.
       const next = [...history, { role: 'user', content: buildUserContent(t, agentAttachments) }, { role: 'assistant', content: r.answer }].slice(-12);
       sessions.set(sid, next);
+      pendingResumes.delete(sid); // a completed turn supersedes any stale saved resume for this session
       const proposals = proposalIds.map(getProposal).filter(Boolean);
       const asks = askIds.map(getAsk).filter(Boolean); // typed questions raised this turn → rendered inline
       const donePayload = { answer: r.answer, images, imageUrls, ui: uiWidgets, toolsUsed: r.toolsUsed.map(x => x.name), steps, proposals, autoFired, asks, accessRequests, agentId: runNode.id, attachments: savedRefs, remaining: purse.balance(), allowance: purse.granted(), spent: Object.values(perProvider).reduce((a, b) => a + b, 0), perProvider };

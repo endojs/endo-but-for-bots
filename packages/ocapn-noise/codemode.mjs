@@ -48,7 +48,7 @@ const extractCode = reply => {
   return open ? open[1].trim() : null;
 };
 
-export const runAgentCode = async ({ toolbox, manifest, userText, history = [], onStep = () => {}, signal, persona = '', attachments = [], model = 'default', llm, budgetLine = '', callLLM = defaultCallLLM, buildUserContent = defaultBuildUserContent } = {}) => {
+export const runAgentCode = async ({ toolbox, manifest, userText, history = [], onStep = () => {}, signal, persona = '', attachments = [], model = 'default', llm, budgetLine = '', resumeMessages = null, callLLM = defaultCallLLM, buildUserContent = defaultBuildUserContent } = {}) => {
   const invoke = llm || callLLM;
   const used = [];
   // Wrap every toolbox verb as an async fn the program can call: `await name(args)`. Each emits the
@@ -122,7 +122,13 @@ export const runAgentCode = async ({ toolbox, manifest, userText, history = [], 
   endow.mySystemPrompt = harden(sys);
 
   const uc = buildUserContent ? buildUserContent(userText, attachments) : String(userText || '');
-  const messages = [{ role: 'system', content: sys }, ...history, { role: 'user', content: uc }];
+  // RESUME: if a saved in-flight transcript is handed in (after a top-up), CONTINUE from it — re-using all the
+  // prior reasoning + tool OUTPUTs — instead of rebuilding the turn from scratch and re-running everything. The
+  // system prompt is rebuilt fresh (so the budget line shows the topped-up balance); after it sits the saved
+  // transcript, which already ends on a user/OUTPUT turn, so the next invoke() just carries on.
+  const messages = (Array.isArray(resumeMessages) && resumeMessages.length)
+    ? [{ role: 'system', content: sys }, ...resumeMessages]
+    : [{ role: 'system', content: sys }, ...history, { role: 'user', content: uc }];
   const cancelled = () => { onStep({ kind: 'cancelled' }); return harden({ answer: '', toolsUsed: used, cancelled: true }); };
 
   // FAILURES MUST BE LEGIBLE: an agent that gets stuck (no value, a missing capability, a repeating
@@ -144,7 +150,9 @@ export const runAgentCode = async ({ toolbox, manifest, userText, history = [], 
     if (signal?.aborted) return cancelled();
     const out = await invoke(messages, model);
     // Even out-of-allowance is legible: hand back a clear note (the server still flags `exhausted`).
-    if (out && out.exhausted) return harden({ answer: stallMessage(lastError) + ' (The prepaid allowance for this chat is also used up.)', toolsUsed: used, exhausted: true, remaining: out.remaining });
+    // Hand back the in-flight transcript (minus the system prompt) so a top-up can RESUME exactly here —
+    // continuing the reasoning rather than re-running every prior step.
+    if (out && out.exhausted) return harden({ answer: stallMessage(lastError) + ' (The prepaid allowance for this chat is also used up.)', toolsUsed: used, exhausted: true, remaining: out.remaining, resumeFrom: messages.slice(1) });
     // PROVIDER ERROR (e.g. a 429/overload/unreachable) → a RETRYABLE failure, NOT an answer. Returning it
     // as `llmError` keeps it from being persisted as the agent's reply (the bug where an Opus 429 string
     // became a permanent chat bubble that retrying couldn't clear). The client shows a transient retry card.
