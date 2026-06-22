@@ -70,31 +70,48 @@ yarn exec endo make --UNCONFINED \
 
 ## 3. Provision the Claude sandbox stack
 
-`setup.js` idempotently mints, on `@host`, nested under directories so the
-host root stays clean: `claude-sandbox/{sandbox-factory, fs-mounter,
-controller, profile, handle}` (the `@endo/sandbox` plugin, the 9P mount
-caplet, and the sandbox factory's exo + guest) and
-`claude-credentials/{controller, profile, handle}` (the credentials factory,
-normally run on a separate peer machine). The "Create Claude Sandbox" form is
-posted by `claude-sandbox/controller`.
+Provisioning is split by machine role, and everything nests under host
+directories so the root inventory stays clean:
 
-**Privileged / root daemon** (e.g. a `--privileged` container or dev VM) — no
-`NINEP_SUDO`:
+- **`setup-host.js`** (run on the container host) mints, under
+  `claude-sandbox/`: `sandbox-factory` (the `@endo/sandbox` plugin),
+  `fs-mounter` (the 9P mount caplet), `controller` (the "Create Claude
+  Sandbox" form/exo), `profile` + `handle` (the factory guest), and a
+  `readme`.
+- **`setup-peer.js`** (run on the machine that owns the Anthropic account)
+  mints, under `claude-credentials/`: `controller`, `profile`, `handle`, and
+  a `readme`. The long-lived key never leaves the peer.
+
+For a **single-machine** demo, run both on the same daemon. Each directory
+carries a `readme` describing its objects and the security of sharing each —
+read it with `endo show claude-sandbox/readme` (or list a directory with
+`endo list claude-sandbox`).
+
+**Host setup — privileged / root daemon** (e.g. a `--privileged` container or
+dev VM), no `NINEP_SUDO`:
 
 ```bash
 yarn exec endo run --UNCONFINED \
-  packages/claude-sandbox/setup.js --powers @agent \
+  packages/claude-sandbox/setup-host.js --powers @agent \
   -E CLAUDE_SANDBOX_IMAGE=localhost/claude-code:latest
 ```
 
-**Unprivileged daemon** (typical workstation) — route mount/umount through
-`sudo`:
+**Host setup — unprivileged daemon** (typical workstation) — route
+mount/umount through `sudo`:
 
 ```bash
 yarn exec endo run --UNCONFINED \
-  packages/claude-sandbox/setup.js --powers @agent \
+  packages/claude-sandbox/setup-host.js --powers @agent \
   -E NINEP_SUDO=1 \
   -E CLAUDE_SANDBOX_IMAGE=localhost/claude-code:latest
+```
+
+**Peer setup — the credential holder's machine** (also run here for a
+single-box demo):
+
+```bash
+yarn exec endo run --UNCONFINED \
+  packages/claude-sandbox/setup-peer.js --powers @agent
 ```
 
 ```

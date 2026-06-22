@@ -13,7 +13,7 @@
 // stays clean: `<dirName>/{controller, profile, handle}` plus the infra
 // caplets `<dirName>/{sandbox-factory, fs-mounter}`.
 //
-// Prerequisites (mint them first, or use setup.js which does everything):
+// Prerequisites (mint them first, or use setup-host.js which does everything):
 //   - a sandbox factory at `<dirName>/sandbox-factory`
 //     (from `@endo/sandbox`'s agent.js), and
 //   - a 9P mounter at `<dirName>/fs-mounter`
@@ -46,8 +46,41 @@ const factoryCapletSpecifier = new URL(
 // The host-side directory this factory's objects live under, so they don't
 // pollute the host root: `<dir>/controller` (the form/exo), `<dir>/profile`
 // (the factory guest's agent), `<dir>/handle` (the guest), plus the infra
-// caplets `<dir>/sandbox-factory` and `<dir>/fs-mounter` (minted by setup.js).
+// caplets `<dir>/sandbox-factory` and `<dir>/fs-mounter` (minted by setup-host.js).
 const DEFAULT_FACTORY_NAME = 'claude-sandbox';
+
+// Stored as `<dir>/readme` so `endo show <dir>/readme` documents what each
+// object in the directory is and what authority sharing it confers.
+const README = `claude-sandbox/ — Claude Sandbox factory (HOST side)
+
+This runs on the machine that hosts the containers (Linux + podman). What
+sharing each object in this directory grants:
+
+  controller       The "Create Claude Sandbox" factory exo. DELEGATABLE — the
+                   one object meant to be shared. A peer holding it can call
+                   createSession(...) to run Claude in a container on THIS
+                   host against a Filesystem cap they supply. It cannot reach
+                   anything else in this directory.
+
+  profile          The factory's guest AGENT. Holds host-agent = FULL
+                   authority over this host's Endo daemon. NEVER share —
+                   handing it out is equivalent to giving away the host.
+
+  handle           The factory guest's mailbox handle. Low direct authority;
+                   host-internal, do not share casually.
+
+  sandbox-factory  The @endo/sandbox plugin; runs with @agent (provideHostPath
+                   / mint containers with host bind-mounts). HIGH authority —
+                   host trusted compute base, never share off-host.
+
+  fs-mounter       The @endo/9p-server mounter; ambient host mount/umount
+                   (often via sudo). HIGH authority over the host kernel —
+                   host TCB, never share off-host.
+
+Rule of thumb: delegate only \`controller\`; everything else is host TCB. The
+credentials factory lives on the PEER, not here (its own claude-credentials/
+directory). The peer passes a Filesystem cap and a ClaudeCredentials cap into
+createSession; the host only ever sees a short-lived materialised secret.`;
 
 const CAPLET_ENV_KEYS = [
   'SANDBOX_FACTORY_NAME',
@@ -84,6 +117,11 @@ export const main = async (agent, dirName = DEFAULT_FACTORY_NAME) => {
   // throws "Unknown pet name" when the directory itself is absent).
   if (!(await E(agent).has(dirName))) {
     await E(agent).makeDirectory([dirName]);
+  }
+
+  // Document the directory's objects (backfilled on re-runs).
+  if (!(await E(agent).has(dirName, 'readme'))) {
+    await E(agent).storeValue(README, [dirName, 'readme']);
   }
 
   // Fully provisioned? `<dir>/profile` is the *last* artifact created (after

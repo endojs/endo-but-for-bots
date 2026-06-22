@@ -28,6 +28,28 @@ const factoryCapletSpecifier = new URL(
 
 const DEFAULT_FACTORY_NAME = 'claude-credentials';
 
+// Stored as `<dir>/readme` (`endo show <dir>/readme`).
+const README = `claude-credentials/ — Claude Credentials factory (PEER side)
+
+This normally runs on the machine that owns the Anthropic account, NOT the
+sandbox host. The long-lived API key/token never leaves this peer. What
+sharing each object in this directory grants:
+
+  controller   The "Create Claude Credentials" factory exo. It mints a
+               ClaudeCredentials cap from a key you submit on its form. The
+               sensitive object is the *minted credential*, not this exo.
+
+  profile      The factory's guest AGENT. Holds host-agent = FULL authority
+               over THIS (peer) machine. NEVER share.
+
+  handle       The guest's mailbox handle. Low authority; do not share
+               casually.
+
+What you DO share off-machine: the minted ClaudeCredentials cap (named when
+you submit the form), handed to the sandbox host's createSession. The host
+only ever receives a short-lived materialised secret at container-spawn time —
+never the long-lived key, which stays on this peer.`;
+
 /**
  * @param {import('@endo/eventual-send').ERef<object>} agent
  * @param {string} [dirName]
@@ -37,6 +59,11 @@ export const main = async (agent, dirName = DEFAULT_FACTORY_NAME) => {
   // throws "Unknown pet name" when the directory itself is absent).
   if (!(await E(agent).has(dirName))) {
     await E(agent).makeDirectory([dirName]);
+  }
+
+  // Document the directory's objects (backfilled on re-runs).
+  if (!(await E(agent).has(dirName, 'readme'))) {
+    await E(agent).storeValue(README, [dirName, 'readme']);
   }
 
   // `<dir>/profile` is the last artifact created, so it is the completion

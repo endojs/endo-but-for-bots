@@ -113,16 +113,27 @@ The factory materialises the key just before injecting it as
 
 ## Setup
 
+Provisioning is split by machine role; everything nests under host
+directories (`claude-sandbox/`, `claude-credentials/`), each carrying a
+`readme` (`endo show claude-sandbox/readme`) that documents its objects and
+the security of sharing each.
+
 ```sh
-# Mints sandbox-factory, fs-mounter, and the two factories on @host.
-endo run --UNCONFINED packages/claude-sandbox/setup.js --powers @agent \
+# HOST (container machine): mints claude-sandbox/{sandbox-factory, fs-mounter,
+# controller, profile, handle}.
+endo run --UNCONFINED packages/claude-sandbox/setup-host.js --powers @agent \
   -E NINEP_SUDO=1                      # if the daemon is unprivileged
-# then submit the two forms (see DEMO.md):
+
+# PEER (credential holder; also run here for a single-box demo):
+# mints claude-credentials/{controller, profile, handle}.
+endo run --UNCONFINED packages/claude-sandbox/setup-peer.js --powers @agent
+
+# then submit the forms (see DEMO.md):
 endo inbox
 endo submit <n> ...
 ```
 
-Configuration env (threaded into the factory formula by `setup.js` /
+Configuration env (threaded into the factory formula by `setup-host.js` /
 `factory.js`):
 
 | var | default | meaning |

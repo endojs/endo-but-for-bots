@@ -35,7 +35,9 @@ lighter rootless-podman path with the same capability shape.
 
 ## Architecture
 
-Four pieces, all unconfined caplets minted by [`setup.js`](./setup.js):
+Four pieces, all unconfined caplets minted by [`setup-host.js`](./setup-host.js)
+(sandbox factory + infra) and [`setup-peer.js`](./setup-peer.js) (credentials
+factory):
 
 - **`ClaudeSandboxFactory`** (`src/claude-sandbox-factory.js`) — presents the
   "Create Claude Sandbox" form on `@host`; on submission it projects the
@@ -332,10 +334,12 @@ LinuxKit kernel 6.12, aarch64) — see [DEMO.md](./DEMO.md).
 
 ### Phase 1 — provisioning, credentials, host 9P mount (root daemon)
 
-- `setup.js` mints everything nested under host directories — `claude-sandbox/`
-  (`sandbox-factory`, `fs-mounter`, `controller`, `profile`, `handle`) and
-  `claude-credentials/` (`controller`, `profile`, `handle`) — so the host root
-  stays uncluttered; both forms land in `@host`'s inbox.
+- `setup-host.js` mints `claude-sandbox/` (`sandbox-factory`, `fs-mounter`,
+  `controller`, `profile`, `handle`, `readme`) on the container host;
+  `setup-peer.js` mints `claude-credentials/` (`controller`, `profile`,
+  `handle`, `readme`) on the credential holder's machine — so the host root
+  stays uncluttered and each directory's `readme` documents its objects + the
+  security of sharing each. Both forms land in `@host`'s inbox.
 - Credentials form → `0600` sidecar in a `0700` dir;
   `E(c).issue(tag)` then `.materialise()` round-trips the key through the daemon.
 - `fs-mounter` performs a real kernel 9P mount

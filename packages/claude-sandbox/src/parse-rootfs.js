@@ -28,7 +28,7 @@ import { makeError, q, X } from '@endo/errors';
  * `claude` CLI.  Operators who want a turnkey image should build one
  * that bundles `@anthropic-ai/claude-code` (see `DEMO.md` §
  * "Build a Claude image") and pass its reference as the `rootfs`
- * field, or set `CLAUDE_SANDBOX_IMAGE` in `setup.js`'s env so the
+ * field, or set `CLAUDE_SANDBOX_IMAGE` in `setup-host.js`'s env so the
  * form is pre-filled.  The default is intentionally a well-known
  * public image so a misconfigured sandbox fails with "claude: not
  * found" inside the slice rather than an opaque pull error.

@@ -36,8 +36,9 @@ const nodeFsModuleHref = pathToFileURL(
 
 // The per-session powers `evaluate` resolves `sandbox-factory` / `fs-mounter`
 // eagerly (caps-by-reference) under the factory's directory, so they must
-// exist before a session is created. The real flow mints them in setup.js;
-// here we mint trivial stubs (status()/the unname path never call them).
+// exist before a session is created. The real flow mints them in setup-host.js;
+// here we mint trivial stubs (setup-host.js mints the real ones; status()/the
+// unname path never call them).
 const mintStub = (host, resultPath) =>
   E(host).evaluate(
     '@main',
@@ -133,6 +134,12 @@ test.serial(
     }
     t.true(root.includes('claude-sandbox'), 'the directory itself is at root');
 
+    // A readme value documents the directory's objects + sharing security.
+    const readme = await E(host).lookup(['claude-sandbox', 'readme']);
+    t.is(typeof readme, 'string');
+    t.regex(readme, /controller/);
+    t.regex(readme, /NEVER share/);
+
     // Idempotent: a second run is a no-op (no throw, same controller, no dup).
     const c1 = await E(host).lookup(['claude-sandbox', 'controller']);
     await t.notThrowsAsync(() => provisionFactory(host));
@@ -151,6 +158,8 @@ test.serial(
       root2.includes('claude-credentials-guest'),
       'no credentials temp residue at root',
     );
+    const credReadme = await E(host).lookup(['claude-credentials', 'readme']);
+    t.regex(credReadme, /never leaves this peer/i);
   },
 );
 
