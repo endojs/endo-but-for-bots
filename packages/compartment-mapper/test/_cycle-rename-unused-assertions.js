@@ -1,13 +1,13 @@
 /**
  * Shared assertion logic for the unused-live-binding shape of the cyclic
- * star-export with renaming reexport regression (endojs/endo#59). This is
- * the companion to the populated shape exercised by
- * `_cycle-rename-assertions.js`; the only difference is that the renamer's
- * `export var y` here has no initializer, so the live binding is declared
- * but never updated. Every projection of the cycle therefore reads
- * `undefined`. Both the Node.js parity test and the Compartment Mapper test
- * import from this module so the expected values live in exactly one place;
- * if both tests pass, parity with Node.js is verified by construction.
+ * star-export with renaming reexport regression. This is the companion to
+ * the populated shape exercised by `_cycle-rename-assertions.js`; the only
+ * difference is that the renamer's `export var y` here has no initializer,
+ * so the live binding is declared but never updated. Every projection of the
+ * cycle therefore reads `undefined`. Both the Node.js parity test and the
+ * Compartment Mapper test import from this module so the expected values
+ * live in exactly one place; if both tests pass, parity with Node.js is
+ * verified by construction.
  *
  * The fixture under fixtures-cycle-rename-unused/node_modules/app/ exercises
  * this arrangement:
@@ -22,9 +22,9 @@
  *                       export const namespace1 = { x: ns1.x, y: ns1.y };
  *                       export const namespace2 = { x: ns2.x, y: ns2.y };
  *
- * The deferring closure introduced by the issue #59 fix queues subscribers
- * until the upstream notifier resolves, then forwards them. With no
- * initializer the upstream's value never updates, so every read is
+ * The deferring closure introduced by the cyclic-star-export fix queues
+ * subscribers until the upstream notifier resolves, then forwards them.
+ * With no initializer the upstream's value never updates, so every read is
  * `undefined`. Node.js exhibits the same shape, so the parity test pins
  * both layers to a single expected projection.
  *
