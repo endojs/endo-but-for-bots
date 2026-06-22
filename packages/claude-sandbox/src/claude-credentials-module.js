@@ -116,6 +116,11 @@ export const make = (_powers, _context, contextWrapper = {}) => {
           );
         }
         materialised = true;
+        // A fired single-shot grant can never be used again; drop it from
+        // `outstanding` so the set doesn't accumulate dead handles across
+        // sessions (a later revoke/rotate of it is already a no-op). Matches
+        // the in-process path in claude-credentials-factory.js.
+        outstanding.delete(handle);
         return apiKey;
       },
       sessionTag() {

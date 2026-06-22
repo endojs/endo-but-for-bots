@@ -183,15 +183,16 @@ export const make = (powers, context, contextWrapper = {}) => {
       /** @type {Record<string, string>} */
       const credentialEnv = {};
       if (credCap) {
+        // `kind()` is interface-guaranteed on ClaudeCredentials, so call it
+        // directly rather than probing `__getMethodNames__`: probing could
+        // miss an oauthToken cap that doesn't surface introspection and
+        // silently mis-route its token into ANTHROPIC_API_KEY. A cap with no
+        // `kind()` at all degrades to a raw API key.
         let kind = 'apiKey';
         try {
-          // eslint-disable-next-line no-underscore-dangle
-          const methodNames = await E(credCap).__getMethodNames__();
-          if (methodNames.includes('kind')) {
-            kind = await E(credCap).kind();
-          }
+          kind = await E(credCap).kind();
         } catch {
-          // No introspection surface; treat as an API key.
+          // No kind() method — treat as a raw API key.
         }
         const envVar = CREDENTIAL_ENV_VARS[kind];
         if (!envVar) {

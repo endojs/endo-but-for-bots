@@ -154,7 +154,7 @@ const FORM_FIELDS = harden([
  */
 const assertSafeCredentialName = name => {
   if (typeof name !== 'string' || !/^[a-z0-9][a-z0-9-]{0,127}$/.test(name)) {
-    throw new Error(`Invalid credential name: ${JSON.stringify(name)}`);
+    throw makeError(X`Invalid credential name: ${q(name)}`);
   }
 };
 

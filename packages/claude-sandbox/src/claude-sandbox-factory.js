@@ -157,7 +157,7 @@ const FORM_FIELDS = harden([
   {
     name: 'rootfs',
     label:
-      'Container rootfs (OCI image with node + claude, or host-bind/minimal)',
+      'Container rootfs — an OCI image with BOTH node and the claude CLI (or host-bind/minimal). Leaving this blank uses the built-in default node image, which does NOT include claude: the session then fails with "claude: not found". Set CLAUDE_SANDBOX_IMAGE on the daemon or supply an image here.',
     default: '',
     example: 'Examples: oci:docker.io/myorg/claude:latest, host-bind',
   },

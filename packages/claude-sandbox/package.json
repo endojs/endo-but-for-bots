@@ -16,11 +16,10 @@
   },
   "type": "module",
   "exports": {
-    ".": "./src/claude-sandbox-factory.js",
+    ".": "./factory.js",
     "./setup.js": "./setup.js",
     "./factory.js": "./factory.js",
     "./credentials.js": "./credentials.js",
-    "./src/claude-client.js": "./src/claude-client.js",
     "./package.json": "./package.json"
   },
   "scripts": {
