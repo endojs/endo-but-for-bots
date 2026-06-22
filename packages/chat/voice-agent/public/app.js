@@ -379,6 +379,39 @@ const traceStrip = steps => {
   draw();
   return wrap;
 };
+// A compact, per-message TRACE GEOMETRY: the reasoning trace as a neon node-constellation (the agent root
+// octahedron + each tool call radiating out, coloured by success; research children fan off their tool),
+// mirroring the live 3D pendant's structure in lightweight SVG (no per-message WebGL). Click → the full 3D
+// trace for THIS message. Shown under EVERY agent message, not just the live one at the bottom.
+const NS_SVG = 'http://www.w3.org/2000/svg';
+const svgEl = (tag, attrs) => { const e = document.createElementNS(NS_SVG, tag); for (const k in attrs) if (attrs[k] != null) e.setAttribute(k, attrs[k]); return e; };
+const traceGeometry = steps => {
+  const arr = _arr(steps).slice(0, 18);
+  const cv = (n, d) => (getComputedStyle(document.documentElement).getPropertyValue(n).trim() || d);
+  const acc = cv('--acc', '#7c5cff'), ok = cv('--trace-ok', '#8fd0a8'), bad = cv('--trace-bad', '#ff9e9e'), edge = cv('--edge', '#30363d');
+  const W = 360, H = Math.max(60, Math.min(150, 28 + arr.length * 15));
+  const uid = 'tg' + Math.random().toString(36).slice(2, 8);
+  const svg = svgEl('svg', { viewBox: `0 0 ${W} ${H}`, class: 'trace-geo', preserveAspectRatio: 'xMidYMid meet', width: '100%' });
+  svg.style.maxHeight = `${H}px`;
+  const ttl = svgEl('title', {}); ttl.textContent = `Reasoning trace — ${arr.length} step(s). Tap for the 3D trace.`; svg.appendChild(ttl);
+  const defs = svgEl('defs', {}); const f = svgEl('filter', { id: uid, x: '-60%', y: '-60%', width: '220%', height: '220%' });
+  f.appendChild(svgEl('feGaussianBlur', { stdDeviation: '1.6', result: 'b' }));
+  const mg = svgEl('feMerge', {}); mg.appendChild(svgEl('feMergeNode', { in: 'b' })); mg.appendChild(svgEl('feMergeNode', { in: 'SourceGraphic' })); f.appendChild(mg);
+  defs.appendChild(f); svg.appendChild(defs);
+  const diamond = (cx, cy, r, col, glow) => svgEl('polygon', { points: `${cx},${cy - r} ${cx + r},${cy} ${cx},${cy + r} ${cx - r},${cy}`, fill: 'none', stroke: col, 'stroke-width': glow ? 1.6 : 1.1, filter: glow ? `url(#${uid})` : null });
+  const rx = 36, ry = H / 2, tx = W - 70;
+  arr.forEach((s, i) => {
+    const ty = arr.length === 1 ? ry : 14 + (H - 28) * (i / (arr.length - 1));
+    const col = s.ok === false ? bad : (_arr(s.children).length ? acc : ok);
+    svg.appendChild(svgEl('line', { x1: rx, y1: ry, x2: tx, y2: ty, stroke: edge, 'stroke-width': 0.9, opacity: 0.7 }));
+    svg.appendChild(diamond(tx, ty, 5.5, col, true));
+    _arr(s.children).slice(0, 6).forEach((c, j) => { const cxx = tx + 13 + j * 9; svg.appendChild(svgEl('line', { x1: tx, y1: ty, x2: cxx, y2: ty, stroke: edge, 'stroke-width': 0.6, opacity: 0.5 })); svg.appendChild(svgEl('circle', { cx: cxx, cy: ty, r: 2, fill: c.ok === false ? bad : ok, opacity: 0.9 })); });
+  });
+  svg.appendChild(diamond(rx, ry, 13, acc, true)); // the agent root (octahedron) — drawn on top
+  svg.appendChild(diamond(rx, ry, 6, acc, false));
+  svg.onclick = () => { ensurePendant().then(p => { try { pendantWrap.classList.remove('hide'); p.setVisible(true); p.showSteps(arr); if (!pendantFs) togglePendantFs(); } catch { /* */ } }).catch(() => {}); };
+  return svg;
+};
 // clicking an agent MESSAGE grows its reasoning signature (without clobbering links/controls/text-selection).
 const wireMsgTrace = (b, trace) => {
   if (!b || !trace) return; b.style.cursor = 'pointer'; if (!b.title) b.title = 'Click to grow the reasoning signature';
@@ -504,6 +537,7 @@ const renderAgentResponse = r => {
   (r.accessRequests || []).forEach(renderAccessRequest); // requestAccess → an actionable Grant card
   (r.asks || []).forEach(a => { openAsks.unshift(a); renderAskCard(a); }); // typed questions → answerable cards
   if (r.asks?.length) refreshBadge();
+  if (_arr(r.steps).length) log.appendChild(traceGeometry(r.steps)); // a trace geometry UNDER this message (not only the live pendant)
   refreshTraceApp(); // push the new turn to the iframe trace app if it's open
   window.scrollTo(0, document.body.scrollHeight);
   schedulePendantPosition(); // the answer bubble shifted layout — re-anchor the pendant
@@ -1676,6 +1710,7 @@ const renderTx = () => {
         const imgs = asArr(m.imageUrls).length ? asArr(m.imageUrls) : asArr(m.images).filter(s => typeof s === 'string' && s.startsWith('data:')); imgs.forEach(src => { const im = document.createElement('img'); im.src = src; b.appendChild(im); });
         if (_arr(v.ui).length) renderWidgets(b, _arr(v.ui), { cap: chatCap(), onChoice: t => sendChat(t), onBreakOut: breakOutComponent, onShareOut: shareOutComponent, onExpand: toggleApplet }); // re-hydrate live widgets
         if (_arr(v.tools).length) { const e = document.createElement('div'); e.className = 'tools'; e.textContent = '⚙ ' + _arr(v.tools).join(', '); b.parentNode.appendChild(e); }
+        if (_arr(v.steps).length) log.appendChild(traceGeometry(v.steps)); // a persistent trace geometry under EVERY agent message
         continue;
       }
       // a user message → its (active fork's) prompt, with the ↻/✎/🔊 + fork-pager controls INSIDE the bubble

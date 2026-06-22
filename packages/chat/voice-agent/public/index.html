@@ -118,6 +118,9 @@
   .trace-strip .tn { font-size:11px; color:var(--acc); border:1px solid #7c5cff55; background:#7c5cff14; border-radius:7px; padding:2px 8px; white-space:nowrap; box-shadow:0 0 6px #7c5cff22; font-family:ui-monospace,Menlo,monospace; }
   .trace-strip .tn.bad { color:var(--bad); border-color:#f8514955; background:#f8514914; box-shadow:0 0 6px #f8514922; }
   .trace-strip:hover .tn { box-shadow:0 0 10px #7c5cff44; }
+  /* per-message trace geometry — a lightweight neon constellation of the turn's trace, under each agent message */
+  .trace-geo { display:block; align-self:flex-start; width:100%; max-width:420px; margin:0 0 8px; cursor:pointer; }
+  .trace-geo:hover { opacity:.82; }
   /* hamburger + chats drawer */
   .iconbtn { background:transparent; border:none; color:var(--ink); font-size:20px; cursor:pointer; padding:2px 6px; line-height:1; }
   /* collapsible sidebar that SHARES space (pushes content) rather than overlaying */
