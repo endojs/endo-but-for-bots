@@ -639,6 +639,22 @@ const reattachRun = async sid => {
   return resumeIfPending(sid);                                         // cancelled with no payload → re-run
 };
 // deterministic exhaustion card — NO model produced this; the user tops up or abandons.
+// A provider error (429/overload/unreachable) → a TRANSIENT retry card. It is NOT pushed into the
+// transcript, so it disappears on the next turn or reload (the Opus-429 string no longer sticks as a
+// permanent bubble). The user's message stays; ↻ Retry re-runs with the CURRENT model — so switching the
+// model dropdown then retrying actually uses the new model.
+const renderRetryableError = (msg, payload, spoken) => {
+  setStatus('');
+  const card = document.createElement('div'); card.className = 'prop msg';
+  card.innerHTML = `<div class="ptitle">⚠️ <span>Model unavailable — not applied</span></div><div class="pmeta">${esc(msg)}</div><div class="sub" style="font-size:12px;margin:2px 0 6px">Your message is kept. Switch the model in the header if you like, then retry.</div><div class="pbtns"></div>`;
+  const btns = card.querySelector('.pbtns');
+  const retry = document.createElement('button'); retry.className = 'confirm'; retry.textContent = '↻ Retry';
+  const dismiss = document.createElement('button'); dismiss.className = 'reject'; dismiss.textContent = 'Dismiss';
+  retry.onclick = () => { card.remove(); retryTurn({ ...payload, model: chatModel() }, spoken); };
+  dismiss.onclick = () => card.remove();
+  btns.append(retry, dismiss);
+  log.appendChild(card); window.scrollTo(0, document.body.scrollHeight);
+};
 const renderExhausted = (payload, spoken) => {
   pendingResume[payload.sessionId] = { payload, spoken }; // retain the stalled turn so ANY top-up resumes it
   const card = document.createElement('div'); card.className = 'prop msg exhausted-card'; card.dataset.sid = payload.sessionId;
@@ -865,7 +881,9 @@ const sendChat = async (text, { spoken = false, audio = null, attachments = [], 
     if (stale()) return true;        // superseded by a newer turn — composer already moved on
     const r = await cr.json();
     if (stale() || r.cancelled) return true;
-    if (r.error) { setStatus('chat: ' + r.error); return false; }
+    // PROVIDER ERROR (429/overload/unreachable): a TRANSIENT retry card, NOT a persisted answer — so it
+    // clears on the next turn/reload (fixes the Opus-429 string that used to stick as a permanent bubble).
+    if (r.error) { if (r.retryable || r.llmError) { renderRetryableError(r.error, payload, spoken); ok = true; return true; } setStatus('chat: ' + r.error); return false; }
     // prepaid allowance spent — server refused WITHOUT a model call. Static Top-up/Abandon card.
     if (r.exhausted) { updateBudgetChip(r.remaining, r.allowance); renderExhausted(payload, spoken); ok = true; return true; }
     // durable server URLs for the attached images → persist these (survive reload + cross-device sync)

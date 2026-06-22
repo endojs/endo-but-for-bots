@@ -72,19 +72,22 @@ export const callLLM = async (messages, model = 'default', { maxTokens = 4096 } 
   if (String(model).startsWith('openrouter:')) {
     const slug = String(model).slice('openrouter:'.length);
     const key = openrouterKey();
-    if (!key) return harden({ text: `I can't reach ${slug} yet — no OpenRouter API key is configured. Add OPENROUTER_API_KEY to ~/.env (or store the field-agent secret "openrouter-api-key"), then pick this model again.`, usage: null });
+    if (!key) return harden({ text: '', usage: null, error: `${slug}: no OpenRouter API key configured — add OPENROUTER_API_KEY to ~/.env (or the field-agent secret), then pick this model again.` });
     try {
       const r = await fetch(OPENROUTER, { method: 'POST', signal: AbortSignal.timeout(90000),
         headers: { 'content-type': 'application/json', authorization: `Bearer ${key}`, 'HTTP-Referer': 'https://archua.taildd002.ts.net', 'X-Title': 'field-agent' },
         body: JSON.stringify({ model: slug, messages, max_tokens: maxTokens, temperature: 0.2, usage: { include: true } }) }); // usage.include → authoritative cost back
-      if (!r.ok) return harden({ text: `(${slug} via OpenRouter returned ${r.status}: ${(await r.text()).slice(0, 200)})`, usage: null });
+      if (!r.ok) return harden({ text: '', usage: null, status: r.status, error: `${slug} via OpenRouter returned ${r.status}${r.status === 429 ? ' (rate-limited upstream)' : ''}: ${(await r.text()).slice(0, 160)}` });
       const j = await r.json();
       return harden({ text: j.choices?.[0]?.message?.content || '', usage: j.usage || null });
-    } catch (e) { return harden({ text: `(${slug} via OpenRouter unreachable: ${e.message})`, usage: null }); }
+    } catch (e) { return harden({ text: '', usage: null, error: `${slug} via OpenRouter unreachable: ${e.message}` }); }
   }
-  const r = await fetch(LLM, { method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ model: model || 'default', messages, max_tokens: maxTokens, temperature: 0.2 }) });
-  const j = await r.json();
+  let r;
+  try { r = await fetch(LLM, { method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ model: model || 'default', messages, max_tokens: maxTokens, temperature: 0.2 }) }); }
+  catch (e) { return harden({ text: '', usage: null, error: `model "${model || 'default'}" unreachable: ${e.message}` }); }
+  if (!r.ok) return harden({ text: '', usage: null, status: r.status, error: `model "${model || 'default'}" returned ${r.status}: ${(await r.text().catch(() => '')).slice(0, 160)}` });
+  const j = await r.json().catch(() => ({}));
   return harden({ text: j.choices?.[0]?.message?.content || '', usage: j.usage || null });
 };
 harden(callLLM);

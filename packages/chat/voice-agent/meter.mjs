@@ -17,7 +17,8 @@ import { costOf, providerOf } from './costModel.mjs';
 export const makeMeteredLLM = ({ callLLM, purse, perProvider = {} }) => {
   const llm = async (messages, model = 'default') => {
     if (!purse.canAfford(1)) return harden({ exhausted: true, remaining: purse.balance(), text: '' });
-    const out = await callLLM(messages, model); // { text, usage }
+    const out = await callLLM(messages, model); // { text, usage } | { error }
+    if (out && out.error) return harden({ error: out.error, status: out.status, text: '', remaining: purse.balance() }); // provider error → surface it, don't charge
     const cost = costOf(model, out && out.usage);
     purse.debit(cost);
     const provider = providerOf(model);

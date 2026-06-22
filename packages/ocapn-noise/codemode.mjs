@@ -145,6 +145,10 @@ export const runAgentCode = async ({ toolbox, manifest, userText, history = [], 
     const out = await invoke(messages, model);
     // Even out-of-allowance is legible: hand back a clear note (the server still flags `exhausted`).
     if (out && out.exhausted) return harden({ answer: stallMessage(lastError) + ' (The prepaid allowance for this chat is also used up.)', toolsUsed: used, exhausted: true, remaining: out.remaining });
+    // PROVIDER ERROR (e.g. a 429/overload/unreachable) → a RETRYABLE failure, NOT an answer. Returning it
+    // as `llmError` keeps it from being persisted as the agent's reply (the bug where an Opus 429 string
+    // became a permanent chat bubble that retrying couldn't clear). The client shows a transient retry card.
+    if (out && out.error) { onStep({ kind: 'tool-error', name: 'model', error: out.error }); return harden({ answer: '', toolsUsed: used, llmError: out.error }); }
     if (signal?.aborted) return cancelled();
     const reply = (out && out.text) || '';
     const code = extractCode(reply);

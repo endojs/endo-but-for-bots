@@ -972,6 +972,9 @@ const handler = async (req, res) => {
         return json(res, 200, toPayload);
       }
       if (r.cancelled) { setRunResult(sid, { state: 'cancelled', node: runNode, text: t, startedAt }); return json(res, 200, { cancelled: true }); }
+      // PROVIDER ERROR (429/overload/unreachable) → a RETRYABLE failure, surfaced as `error` (NOT persisted
+      // as the answer). The user's message stays; changing the model + retrying produces a clean answer.
+      if (r.llmError) { setRunResult(sid, { state: 'error', node: runNode, text: t, startedAt, doneAt: Date.now() }); return json(res, 200, { error: r.llmError, llmError: true, retryable: true }); }
       // prepaid allowance spent mid-turn → return a DETERMINISTIC exhausted signal (no model
       // call was made to produce it). The client renders a static Top-up / Abandon card.
       if (r.exhausted) { const exPayload = { exhausted: true, answer: r.answer || '', remaining: purse.balance(), allowance: purse.granted() }; setRunResult(sid, { state: 'exhausted', node: runNode, text: t, result: exPayload, startedAt, doneAt: Date.now() }); return json(res, 200, exPayload); }
