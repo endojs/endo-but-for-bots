@@ -21,6 +21,7 @@
   },
   "type": "module",
   "exports": {
+    "./compare.js": "./compare.js",
     "./equals.js": "./equals.js",
     "./from-string.js": "./from-string.js",
     "./to-string.js": "./to-string.js",
