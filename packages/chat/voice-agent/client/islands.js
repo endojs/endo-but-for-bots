@@ -17,6 +17,7 @@ import { ChangelogList } from './changelog-list.js';
 import { PowersBanner } from './powers-banner.js';
 import { KitSampler } from './kit-sampler.js';
 import { AskCard } from './ask-card.js';
+import { ProposalCard } from './proposal-card.js';
 
 // A render propagator: re-paints `view(...values)` into `el` whenever any wired cell changes.
 // This is the one kind of propagator whose effect is the DOM; logic propagators stay headless.
@@ -37,6 +38,8 @@ const kitCell = makeCell();
 let kitWired = false;
 const askCell = makeCell();
 let askWired = false;
+const propCell = makeCell();
+let propWired = false;
 
 const islands = {
   // Idempotent: wires the render propagator once (cell → SharesPanel), then feeds the latest data in.
@@ -125,6 +128,19 @@ const islands = {
       askWired = true;
     }
     askCell.addContent(data);
+  },
+
+  // ── ProposalCard island ───────────────────────────────────────────────────────────────────────
+  // `data` = { proposal, icon, accent, mayConfirm, dontAsk } (render-safe). `handlers` =
+  // { onConfirm(id, dontAskAgain), onReject(id), onToggleDontAsk(checked) }.
+  renderProposalCard(el, data, handlers) {
+    if (!propWired) {
+      el.setAttribute('data-component-id', 'island-proposal-card');
+      el.setAttribute('data-component-name', 'Proposal card');
+      renderPropagator(el, [propCell], d => h(ProposalCard, { ...d, ...handlers }));
+      propWired = true;
+    }
+    propCell.addContent(data);
   },
 };
 

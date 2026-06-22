@@ -2390,6 +2390,10 @@ const ISLAND_PREVIEW = {
     ] },
     answers: { q1: 'Jun 3–7', q2: 'yes' }, status: '',
   }, { onChange() {}, onSubmit() {}, onOpenOrigin() {} }),
+  'island-proposal-card': slot => window.__fieldIslands.renderProposalCard(slot, {
+    proposal: { id: 'p1', type: 'email', title: 'Send the follow-up email', detail: { to: 'alex@example.com', subject: 'Re: Berlin dates', body: 'Booked Jun 3–7. Hotel near Mitte.' } },
+    icon: '✉️', accent: '#7c5cff', mayConfirm: true, dontAsk: false,
+  }, { onConfirm() {}, onReject() {}, onToggleDontAsk() {} }),
 };
 
 const refreshComponents = async () => {

@@ -12,6 +12,7 @@ import { ChangelogList } from './client/changelog-list.js';
 import { PowersBanner } from './client/powers-banner.js';
 import { KitSampler } from './client/kit-sampler.js';
 import { AskCard } from './client/ask-card.js';
+import { ProposalCard } from './client/proposal-card.js';
 
 // Walk a preact vnode tree → collect text, classes, clickable buttons, and inputs (with their handlers).
 const collect = v => {
@@ -151,6 +152,27 @@ test('AskCard: typed controls render + onChange(qid,value); Submit → onSubmit(
   assert.match(allText(done), /✓ answered/);
   assert.equal(done.buttons.filter(b => /Submit/.test(b.label)).length, 0, 'no Submit once answered');
   assert.equal(done.inputs.filter(i => i.type === 'password').length, 0, 'secret input gone once answered (stored-securely chip)');
+});
+
+test('ProposalCard: type-specific body, Confirm→onConfirm(id,dontAsk), Reject→onReject; non-confirmable shows awaiting; HA/specialist get no dont-ask', () => {
+  let confirmed = null; let rejected = null; let toggled = null;
+  const acc = collect(ProposalCard({
+    proposal: { id: 'p1', type: 'email', title: 'Send email', detail: { to: 'a@b.c', subject: 'Hi', body: 'yo' } },
+    icon: '✉️', accent: '#7c5cff', mayConfirm: true, dontAsk: true,
+    onConfirm: (id, da) => { confirmed = [id, da]; }, onReject: id => { rejected = id; }, onToggleDontAsk: v => { toggled = v; },
+  }));
+  const t = allText(acc);
+  assert.match(t, /Send email/); assert.match(t, /a@b\.c/); assert.match(t, /Hi/, 'email body fields render');
+  acc.buttons.find(b => b.cls === 'confirm').onClick(); assert.deepEqual(confirmed, ['p1', true], 'Confirm passes id + dontAsk');
+  acc.buttons.find(b => b.cls === 'reject').onClick(); assert.equal(rejected, 'p1');
+  acc.inputs.find(i => i.type === 'checkbox').onChange({ target: { checked: false } }); assert.equal(toggled, false, 'dont-ask toggle');
+  // not confirmable → awaiting message, no buttons
+  const await_ = collect(ProposalCard({ proposal: { id: 'p2', type: 'email', title: 'x', detail: {} }, mayConfirm: false }));
+  assert.match(allText(await_), /awaiting the operator/);
+  assert.equal(await_.buttons.filter(b => b.cls === 'confirm').length, 0);
+  // home-assistant + spawn-specialist NEVER offer "don't ask again"
+  const ha = collect(ProposalCard({ proposal: { id: 'p3', type: 'home-assistant', title: 'unlock', detail: { entity_id: 'lock.front', service: 'unlock' } }, mayConfirm: true }));
+  assert.equal(ha.inputs.filter(i => i.type === 'checkbox').length, 0, 'HA: no don\'t-ask checkbox');
 });
 
 test('KitSampler renders every primitive without error (the design-system smoke test)', () => {
