@@ -191,6 +191,8 @@
   .dev-thread-msg { font-size:13px; line-height:1.5; }
   .dev-thread-row { display:flex; gap:6px; margin-top:4px; }
   .dev-thread-row .ask-in, .dev-thread-row .kit-in { flex:1; }
+  .dev-thread-row .mini { min-height:36px; } /* the reply Send matches the input height + clears the tap floor (not just 24px) */
+  .dev-thread-toggle:hover { background:rgba(127,127,127,.12); } /* hover feedback (background tint works despite the inline per-agent accent colour) */
   /* 🔔 notification bell + inbox */
   .badge { position:absolute; top:-2px; right:-2px; background:var(--bad); color:#fff; font-size:10px; min-width:15px; height:15px; border-radius:8px; padding:0 3px; line-height:15px; text-align:center; font-weight:700; }
   .inbox-section { margin-top:10px; }
