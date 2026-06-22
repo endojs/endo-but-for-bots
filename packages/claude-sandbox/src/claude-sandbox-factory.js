@@ -272,7 +272,16 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
 
   /**
    * Validate a session config and formulate the `claude-client`
-   * caplet.
+   * caplet from **caps supplied by reference** (a `Filesystem` and an
+   * optional `ClaudeCredentials`), never host pet-name strings.
+   *
+   * This is the least-authority boundary for the peer-callable path: a
+   * peer holding the factory exo passes the caps it actually owns, so the
+   * factory never resolves peer-controlled names against the host
+   * petstore (which would be a confused deputy — a peer could name any
+   * host cap by guessing its pet name). Pet-name resolution happens only
+   * on the form path, where the submitter *is* the host operator; that
+   * path resolves the names to caps before calling here.
    *
    * With `resultName`, the client is stored under that pet name in
    * `@host`'s petstore — a host-side GC root (the operator/form path).
@@ -281,38 +290,43 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
    * cap collects the session, and its `whenCancelled` teardown disposes
    * the container and unmounts the workspace. See DESIGN.md § Lifecycle.
    *
-   * The credential is passed by pet name and re-materialised inside the
+   * The credential is passed by reference and re-materialised inside the
    * client at spawn time, so no secret ever enters the formula `env`.
    *
-   * @param {SandboxFormSubmission} config
+   * @param {object} config
+   * @param {string} config.name
+   * @param {unknown} config.filesystem - a `Filesystem` cap (by reference).
+   * @param {string} [config.rootfs]
+   * @param {string} [config.network]
+   * @param {string} [config.model]
+   * @param {unknown} [config.credentials] - a `ClaudeCredentials` cap.
+   * @param {string} [config.initialPrompt]
    * @param {{ resultName?: string }} [opts]
    * @returns {Promise<{ client: any, sessionId: string, hostMountPoint: string, rootfsLabel: string }>}
    */
-  const formulateSession = async (config, { resultName } = {}) => {
+  const formulateSessionFromCaps = async (config, { resultName } = {}) => {
     const {
       name,
-      filesystem: fsName,
+      filesystem: fsCap,
       rootfs: rootfsValue = '',
       network = 'private',
       model = '',
-      credentials: credsName = '',
+      credentials: credCap = null,
       initialPrompt = '',
     } = config;
 
     if (!name) throw new Error('Missing "name".');
-    if (!fsName) throw new Error('Missing "filesystem" pet name.');
+    if (!fsCap) throw new Error('Missing filesystem capability.');
     if (!ALLOWED_NETWORKS.includes(network)) {
       throw new Error(
         `Unknown network profile "${network}"; expected one of ${ALLOWED_NETWORKS.join(', ')}.`,
       );
     }
+    // Parse the rootfs now (before any host write) so a bad value fails
+    // without orphaning the temp cap names below.
+    const parsedRootfs = parseRootfs(rootfsValue, { defaultImage });
 
     const hostAgent = await getHostAgent();
-    // Validate the filesystem exists and the rootfs parses now, for a
-    // friendly error; the client formula re-resolves both from its env.
-    const fs = await E(hostAgent).lookup(fsName);
-    if (!fs) throw new Error(`Unknown filesystem: "${fsName}".`);
-    const parsedRootfs = parseRootfs(rootfsValue, { defaultImage });
 
     const slug = slugify(name);
     sessionCounter += 1;
@@ -325,28 +339,40 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
 
     // Least authority: the client runs as a **per-session powers** cap that
     // bundles its four caps by reference and a `provideMount` bounded to
-    // this session's mountpoint — no `lookup`, no other host reach. The
-    // caps are endowed by pet name (resolved once, here); the credential is
-    // optional. `makeUnconfined` is Host-only and resolves `powersName`
-    // against the host petstore, so the cap must be host-named — but we
-    // remove the name immediately after `makeUnconfined` below.
+    // this session's mountpoint — no `lookup`, no other host reach.
+    //
+    // `evaluate` endows by name, but the peer-supplied `filesystem` /
+    // `credentials` are caps (not host names), so we give each a *temporary*
+    // host name via `storeValue` purely so `evaluate` can endow it by
+    // reference. This is not a confused deputy: the factory only ever names
+    // the exact caps it was handed — there is no name-resolution of
+    // peer-controlled input. The infra caps (`@agent`, `sandbox-factory`,
+    // `fs-mounter`) are the host's own, resolved under the factory's
+    // directory. All temp names (and `powersName`) are removed right after
+    // `makeUnconfined`; the formulas stay reachable for the client's
+    // lifetime via the powers→endowment and client→powers dependency edges.
     const powersName = `claude-${sessionId}-powers`;
+    const fsTmp = `claude-${sessionId}-fscap`;
+    await E(hostAgent).storeValue(fsCap, fsTmp);
+    /** @type {string[]} */
+    const tempNames = [fsTmp];
     const codeNames = ['agent', 'sandboxFactory', 'fsMounter', 'filesystem'];
-    // The infra caps resolve under the factory's directory (if any); the
-    // filesystem and credential are the peer's/operator's own top-level caps.
     const petNames = [
       '@agent',
       underNamespace(sandboxFactoryName),
       underNamespace(fsMounterName),
-      fsName,
+      fsTmp,
     ];
-    if (credsName) {
+    if (credCap) {
+      const credTmp = `claude-${sessionId}-credcap`;
+      await E(hostAgent).storeValue(credCap, credTmp);
+      tempNames.push(credTmp);
       codeNames.push('credentials');
-      petNames.push(credsName);
+      petNames.push(credTmp);
     }
     await E(hostAgent).evaluate(
       '@main',
-      buildSessionPowersSource(hostMountPoint, Boolean(credsName)),
+      buildSessionPowersSource(hostMountPoint, Boolean(credCap)),
       harden(codeNames),
       harden(petNames),
       powersName,
@@ -378,12 +404,13 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
       harden(options),
     );
 
-    // Unname the per-session powers. The make-unconfined formula's `powers`
-    // dependency edge (daemon graph) keeps it reachable for exactly the
-    // client's lifetime, so dropping its pet name leaves no host-petstore
-    // residue and lets it be collected *with* the client — keeping the
-    // peer-rooted `createSession` GC clean (no per-session leak).
+    // Unname the per-session powers and the temp cap names. Each formula's
+    // dependency edge (make-unconfined→powers, powers→endowment) keeps it
+    // reachable for exactly the client's lifetime, so dropping the names
+    // leaves no host-petstore residue and lets them be collected *with* the
+    // client — keeping the peer-rooted `createSession` GC clean (no leak).
     await E(hostAgent).remove(powersName);
+    await Promise.all(tempNames.map(n => E(hostAgent).remove(n)));
 
     return harden({
       client,
@@ -436,15 +463,28 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
           const submission = /** @type {SandboxFormSubmission} */ (
             await E(powers).lookupById(msg.valueId)
           );
-          // Operator/form path: store under the chosen pet name (a
-          // host-side root) so it lands in @host's petstore.
+          // Operator/form path: the submitter *is* the host operator, so
+          // resolving the form's `filesystem` / `credentials` pet names
+          // against the host petstore is legitimate (not a confused deputy).
+          // Resolve them to caps here, then hand the caps to the shared core
+          // exactly as the peer-callable path does. Store the result under
+          // the chosen pet name (a host-side GC root).
+          const hostAgent = await getHostAgent();
+          const fsCap = await E(hostAgent).lookup(submission.filesystem);
+          if (!fsCap) {
+            throw new Error(`Unknown filesystem: "${submission.filesystem}".`);
+          }
+          const credCap = submission.credentials
+            ? await E(hostAgent).lookup(submission.credentials)
+            : null;
           const {
             sessionId,
             hostMountPoint,
             rootfsLabel: rfLabel,
-          } = await formulateSession(submission, {
-            resultName: submission.name,
-          });
+          } = await formulateSessionFromCaps(
+            { ...submission, filesystem: fsCap, credentials: credCap },
+            { resultName: submission.name },
+          );
 
           await E(powers).reply(
             msg.number,
@@ -494,17 +534,19 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
      * `whenCancelled` teardown disposes the container and unmounts the
      * workspace. See DESIGN.md § Lifecycle.
      *
-     * `config` mirrors the form fields: `{ name, filesystem, rootfs?,
-     * network?, model?, credentials?, initialPrompt? }`, where
-     * `filesystem` and `credentials` are pet names resolvable in
-     * `@host`'s namespace.
+     * `config` is `{ name, filesystem, rootfs?, network?, model?,
+     * credentials?, initialPrompt? }`. Unlike the form, `filesystem` and
+     * `credentials` are **capabilities passed by reference** — the caps the
+     * peer actually holds — *not* host pet names. The factory never
+     * resolves a peer-supplied name against the host petstore, so a peer
+     * cannot reach a host cap it was not granted (no confused deputy).
      *
      * @param {Record<string, any>} config
      * @returns {Promise<any>}
      */
     async createSession(config) {
-      const { client } = await formulateSession(
-        /** @type {SandboxFormSubmission} */ (config),
+      const { client } = await formulateSessionFromCaps(
+        /** @type {{ name: string, filesystem: unknown }} */ (config),
       );
       return client;
     },
@@ -520,9 +562,13 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
           '',
           'createSession(config) → ClaudeClient cap (peer-callable; the',
           '  caller holds the only reference, so dropping it destroys the',
-          '  session). config mirrors the form fields below.',
+          '  session). config = { name, filesystem, rootfs?, network?,',
+          '  model?, credentials?, initialPrompt? } where filesystem and',
+          '  credentials are CAPABILITIES passed by reference (not pet',
+          '  names) — the caps the peer holds.',
           '',
-          'Or submit the "Create Claude Sandbox" form on @host with:',
+          'Or submit the "Create Claude Sandbox" form on @host with',
+          'pet names (resolved with the operator own host authority):',
           '  name        — pet name for the resulting ClaudeClient',
           '  filesystem  — pet name of an existing Filesystem capability',
           '  rootfs      — OCI image (oci:<ref> or bare ref) or host-bind/minimal',

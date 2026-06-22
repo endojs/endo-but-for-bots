@@ -212,13 +212,15 @@ test.serial(
     const factory = await E(host).lookup(['claude-sandbox', 'controller']);
     t.truthy(factory, 'factory controller resolves');
 
-    // Peer-callable path: returns the ClaudeClient cap without naming it on
-    // the host. Validates the #1 formula-identity fix end-to-end — the
-    // client is a real formulated cap, not a worker-local remotable.
+    // Peer-callable path: the caller passes the Filesystem cap *by reference*
+    // (not a host pet name), and gets back the ClaudeClient cap without it
+    // being named on the host. Validates both the formula-identity fix and
+    // the caps-by-reference contract end-to-end.
+    const fsCap = await E(host).lookup('project-fs');
     const client = await E(factory).createSession(
       harden({
         name: 'live-1',
-        filesystem: 'project-fs',
+        filesystem: fsCap,
         rootfs: 'oci:docker.io/library/alpine:3.19',
         network: 'private',
       }),
@@ -343,10 +345,11 @@ test.serial(
     await provisionSandboxDeps(host);
     const factory = await E(host).lookup(['claude-sandbox', 'controller']);
 
+    const fsCap = await E(host).lookup('project-fs');
     const client = await E(factory).createSession(
       harden({
         name: 'live-1',
-        filesystem: 'project-fs',
+        filesystem: fsCap,
         rootfs: 'oci:docker.io/library/alpine:3.19',
         network: 'private',
       }),
@@ -366,8 +369,13 @@ test.serial(
     // the peer-rooted session adds zero host-petstore residue.
     const names = await E(host).list();
     t.false(
-      names.some(n => n.endsWith('-powers')),
-      `no per-session powers residue; saw: ${names.join(', ')}`,
+      names.some(
+        n =>
+          n.endsWith('-powers') ||
+          n.endsWith('-fscap') ||
+          n.endsWith('-credcap'),
+      ),
+      `no per-session powers/cap residue; saw: ${names.join(', ')}`,
     );
     t.false(await E(host).has('sandbox-powers'));
   },
@@ -394,11 +402,12 @@ test.serial(
     // it from its client, then unnames it — all interleaved. If the unname
     // raced (shared name, or remove before the client edge), one client
     // would be dead or a `*-powers` name would survive.
+    const fsCap = await E(host).lookup('project-fs');
     const [a, b] = await Promise.all([
       E(factory).createSession(
         harden({
           name: 'conc-a',
-          filesystem: 'project-fs',
+          filesystem: fsCap,
           rootfs: 'oci:docker.io/library/alpine:3.19',
           network: 'private',
         }),
@@ -406,7 +415,7 @@ test.serial(
       E(factory).createSession(
         harden({
           name: 'conc-b',
-          filesystem: 'project-fs',
+          filesystem: fsCap,
           rootfs: 'oci:docker.io/library/alpine:3.19',
           network: 'private',
         }),
@@ -421,11 +430,16 @@ test.serial(
     t.is(sa.terminated, false);
     t.is(sb.terminated, false);
 
-    // Neither concurrent unname left a residue.
+    // Neither concurrent unname left a residue (powers or temp cap names).
     const names = await E(host).list();
     t.false(
-      names.some(n => n.endsWith('-powers')),
-      `no per-session powers residue after concurrent creates; saw: ${names.join(', ')}`,
+      names.some(
+        n =>
+          n.endsWith('-powers') ||
+          n.endsWith('-fscap') ||
+          n.endsWith('-credcap'),
+      ),
+      `no per-session powers/cap residue after concurrent creates; saw: ${names.join(', ')}`,
     );
   },
 );
