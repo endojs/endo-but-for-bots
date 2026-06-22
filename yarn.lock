@@ -505,7 +505,6 @@ __metadata:
     "@endo/eventual-send": "workspace:^"
     "@endo/harden": "workspace:^"
     "@endo/init": "workspace:^"
-    "@endo/pass-style": "workspace:^"
     "@endo/ses-ava": "workspace:^"
     ava: "catalog:dev"
     babel-eslint: "npm:^10.1.0"
@@ -646,6 +645,7 @@ __metadata:
     "@endo/promise-kit": "workspace:^"
     "@endo/stream": "workspace:^"
     "@endo/stream-node": "workspace:^"
+    "@endo/utf8": "workspace:^"
     "@endo/where": "workspace:^"
     ava: "catalog:dev"
     babel-eslint: "npm:^10.1.0"
@@ -738,6 +738,7 @@ __metadata:
     "@endo/ses-ava": "workspace:^"
     "@endo/stream": "workspace:^"
     "@endo/stream-node": "workspace:^"
+    "@endo/utf8": "workspace:^"
     "@endo/where": "workspace:^"
     ava: "catalog:dev"
     c8: "catalog:dev"
@@ -1144,6 +1145,7 @@ __metadata:
     "@endo/ses-ava": "workspace:^"
     "@endo/stream": "workspace:^"
     "@endo/syrup-frame": "workspace:^"
+    "@endo/utf8": "workspace:^"
     "@noble/curves": "npm:^1.9.0"
     "@noble/hashes": "npm:^1.8.0"
     "@types/ws": "npm:^8"
@@ -1183,6 +1185,7 @@ __metadata:
     "@endo/init": "workspace:^"
     "@endo/promise-kit": "workspace:^"
     "@endo/ses-ava": "workspace:^"
+    "@endo/utf8": "workspace:^"
     "@fast-check/ava": "catalog:dev"
     ava: "catalog:dev"
     babel-eslint: "npm:^10.1.0"
@@ -1385,6 +1388,24 @@ __metadata:
     eslint: "catalog:dev"
     tsd: "catalog:dev"
     typescript: "npm:~5.9.2"
+  languageName: unknown
+  linkType: soft
+
+"@endo/utf8@workspace:^, @endo/utf8@workspace:packages/utf8":
+  version: 0.0.0-use.local
+  resolution: "@endo/utf8@workspace:packages/utf8"
+  dependencies:
+    "@endo/eventual-send": "workspace:^"
+    "@endo/harden": "workspace:^"
+    "@endo/init": "workspace:^"
+    "@endo/ses-ava": "workspace:^"
+    ava: "catalog:dev"
+    babel-eslint: "npm:^10.1.0"
+    c8: "catalog:dev"
+    eslint: "catalog:dev"
+    prettier: "npm:^3.5.3"
+    ses: "workspace:^"
+    typescript: "catalog:dev"
   languageName: unknown
   linkType: soft
 
