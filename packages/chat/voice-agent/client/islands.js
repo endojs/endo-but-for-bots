@@ -14,6 +14,7 @@ import { makeCell, react } from './propagator.js';
 import { SharesPanel } from './shares-panel.js';
 import { NotificationCard } from './notification-card.js';
 import { ChangelogList } from './changelog-list.js';
+import { PowersBanner } from './powers-banner.js';
 
 // A render propagator: re-paints `view(...values)` into `el` whenever any wired cell changes.
 // This is the one kind of propagator whose effect is the DOM; logic propagators stay headless.
@@ -28,6 +29,8 @@ const notifCell = makeCell();
 let notifWired = false;
 const changelogCell = makeCell();
 let changelogWired = false;
+const powersCell = makeCell();
+let powersWired = false;
 
 const islands = {
   // Idempotent: wires the render propagator once (cell → SharesPanel), then feeds the latest data in.
@@ -77,6 +80,19 @@ const islands = {
       changelogWired = true;
     }
     changelogCell.addContent(data);
+  },
+
+  // ── Powers banner island ──────────────────────────────────────────────────────────────────────
+  // `data` = { items:[{power,icon,tip}], manageable, label } (render-safe). `handlers` =
+  // { onRevoke(power), onAddPowers() }.
+  renderPowersBanner(el, data, handlers) {
+    if (!powersWired) {
+      el.setAttribute('data-component-id', 'island-powers-banner');
+      el.setAttribute('data-component-name', 'Powers banner');
+      renderPropagator(el, [powersCell], d => h(PowersBanner, { ...d, ...handlers }));
+      powersWired = true;
+    }
+    powersCell.addContent(data);
   },
 };
 

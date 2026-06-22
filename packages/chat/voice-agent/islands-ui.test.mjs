@@ -9,6 +9,7 @@ import assert from 'node:assert/strict';
 import { Chip, Btn, EmptyState, Card } from './client/ui-kit.js';
 import { NotificationCard } from './client/notification-card.js';
 import { ChangelogList } from './client/changelog-list.js';
+import { PowersBanner } from './client/powers-banner.js';
 
 // Walk a preact vnode tree → collect text, classes, and clickable buttons (label + handler).
 const collect = v => {
@@ -83,4 +84,21 @@ test('ChangelogList: empty state; a live row shows Revert → onRevert(id); a re
   assert.equal(revertBtns.length, 1, 'only the LIVE row has a Revert button (the reverted one shows a pill)');
   revertBtns[0].onClick();
   assert.equal(reverted, 'm1', 'onRevert called with the live merge id');
+});
+
+test('PowersBanner: chips render with icon+name; manageable → × per chip → onRevoke(power) + an Add button → onAddPowers', () => {
+  let revoked = null; let added = 0;
+  const acc = collect(PowersBanner({
+    items: [{ power: 'notes', icon: '📓', tip: 'notes — vault' }, { power: 'web', icon: '🌐' }],
+    manageable: true, onRevoke: p => { revoked = p; }, onAddPowers: () => { added += 1; },
+  }));
+  const t = allText(acc);
+  assert.match(t, /notes/); assert.match(t, /web/); assert.match(t, /📓/);
+  const xs = acc.buttons.filter(b => b.cls.includes('chip-x')); assert.equal(xs.length, 2, 'a × per chip when manageable');
+  xs[0].onClick(); assert.equal(revoked, 'notes', 'onRevoke called with the power');
+  const add = acc.buttons.find(b => b.cls.includes('chip-add')); assert.ok(add, 'an Add button'); add.onClick();
+  assert.equal(added, 1, 'onAddPowers fires');
+  // not manageable → no × and no Add (read-only view)
+  const ro = collect(PowersBanner({ items: [{ power: 'notes', icon: '📓' }], manageable: false }));
+  assert.equal(ro.buttons.filter(b => b.cls.includes('chip-x') || b.cls.includes('chip-add')).length, 0, 'read-only: no revoke/add');
 });

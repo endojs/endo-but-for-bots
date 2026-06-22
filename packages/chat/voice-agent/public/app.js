@@ -2127,6 +2127,18 @@ const notifCard = (it, withDone) => {
   })].filter(Boolean).join(' · ');
   return `<div class="notif ${it.attention ? 'att' : ''}"><div class="ntitle"><span>${esc(it.title)}</span><span class="ntime">${esc(fmtAgo(it.date))}</span></div>${it.body ? `<div class="nbody">${esc(it.body)}</div>` : ''}<div class="nmeta"><span>${meta}</span>${withDone ? `<button class="ndone" data-done="${esc(it.id)}">Done</button>` : ''}</div></div>`;
 };
+// A feed link → a render-safe { label } + an `open` closure that holds the real href/cap (never the DOM).
+// Used by the NotificationCard island (rec-list): the island shows the label, onOpenLink calls `open`.
+let recLinkResolvers = []; // [itemIdx][linkIdx] → () => open
+const notifLinkInfo = l => {
+  const raw = (l && (l.url || l.href)) || '';
+  const chatId = chatIdFromLink(l && l.href);
+  if (chatId) return { label: '💬 open chat', open: () => switchChat(chatId) };
+  const cap = isCapLink(raw) || isCapLink(l && l.href);
+  const label = '📎 ' + ((l && l.label) || (cap ? 'Open link' : raw));
+  const href = l && l.href;
+  return { label, open: href ? () => window.open(href, '_blank', 'noopener,noreferrer') : null };
+};
 const loadFeed = async () => { try { return await (await fetch('/feed/load', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap }) })).json(); } catch { return null; } };
 const refreshBadge = async () => { if (!cap) return; await loadAsks(); const d = await loadFeed(); const attN = d ? (d.items || []).filter(i => i.attention && !i.dismissed).length : 0; setBellBadge(openAsks.length + attN); };
 const renderInbox = async () => {
@@ -2163,7 +2175,22 @@ const renderInbox = async () => {
   openAsks.forEach(a => attList.appendChild(buildAskCard(a)));
   if (att.length) attList.insertAdjacentHTML('beforeend', att.map(i => notifCard(i, true)).join(''));
   if (!openAsks.length && !att.length && !pendingFlushAsks.length) attList.innerHTML = '<div class="pill">nothing needs your attention 🎉</div>';
-  $('rec-list').innerHTML = rec.length ? rec.map(i => notifCard(i, false)).join('') : '<div class="pill">no recent activity</div>';
+  // FACTORED: render Recent activity through the NotificationCard island. Links carry only a LABEL; their
+  // real href/cap stays in `recLinkResolvers` (a host closure) — onOpenLink(itemIdx, linkIdx) resolves it,
+  // so a swissnum never enters the DOM. (att-list keeps its imperative path — it interleaves asks + ntfy.)
+  const recList = $('rec-list');
+  if (!rec.length) { recList.innerHTML = '<div class="pill">no recent activity</div>'; recLinkResolvers = []; }
+  else if (window.__fieldIslands && window.__fieldIslands.renderNotifications) {
+    const prepared = rec.map(it => {
+      const infos = (it.links || []).map(notifLinkInfo);
+      return { item: { id: it.id, title: it.title, time: fmtAgo(it.date), body: it.body || '', agent: it.agent || '', avatar: it.avatar || '', status: it.status || '', links: infos.map(x => ({ label: x.label })), attention: false }, resolvers: infos.map(x => x.open) };
+    });
+    recLinkResolvers = prepared.map(p => p.resolvers);
+    window.__fieldIslands.renderNotifications(recList, { items: prepared.map(p => p.item), withDone: false }, {
+      onDone() {},
+      onOpenLink: (ii, li) => { const r = recLinkResolvers[ii] && recLinkResolvers[ii][li]; if (r) r(); },
+    });
+  } else recList.innerHTML = rec.map(i => notifCard(i, false)).join('');
   $('att-count').textContent = (openAsks.length + att.length) ? String(openAsks.length + att.length) : '';
   setBellBadge(openAsks.length + att.length);
   document.querySelectorAll('#att-list [data-done]').forEach(b => { b.onclick = async () => { b.disabled = true; await fetch('/feed/dismiss', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, id: b.dataset.done }) }); renderInbox(); }; });
@@ -2346,6 +2373,14 @@ const ISLAND_PREVIEW = {
       { id: 'm2', goal: 'add backlogStats() observability helper', when: 'yesterday', sha: '9f8e7d6c', rolledBack: true, revertedWhen: 'today' },
     ],
   }, { onRevert() {} }),
+  'island-powers-banner': slot => window.__fieldIslands.renderPowersBanner(slot, {
+    items: [
+      { power: 'notes', icon: '📓', tip: 'notes — read/append your vault' },
+      { power: 'web', icon: '🌐', tip: 'web — fetch a page' },
+      { power: 'images', icon: '🎨', tip: 'images — generate an image' },
+    ],
+    manageable: true,
+  }, { onRevoke() {}, onAddPowers() {} }),
 };
 
 const refreshComponents = async () => {
