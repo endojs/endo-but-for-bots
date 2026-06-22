@@ -481,6 +481,17 @@ const runProjectAgent = async (project, agent) => {
 
 const sessions = new Map(); // sessionId → [{role,content}...]
 const runs = new Map();     // sessionId → AbortController (barge-in cancel)
+// sessionId → { state:'running'|'done'|'timedOut'|'exhausted'|'cancelled', node, text, result?, startedAt, at }.
+// The agent run lives SERVER-SIDE, decoupled from the request: closing the tab drops the HTTP response but
+// NOT the run. We keep its outcome here so a reopened client can RE-ATTACH — render the finished answer, or
+// poll until a still-running research completes — instead of losing it. (Cap-hygienic: we store the node
+// object, never the swissnum; /chat/result gates reads on that node.) TTL-pruned.
+const runResults = new Map();
+const RUN_RESULT_TTL = 60 * 60 * 1000; // keep a finished run readable for an hour
+const setRunResult = (sid, v) => {
+  runResults.set(sid, { ...v, at: Date.now() });
+  if (runResults.size > 300) for (const [k, r] of runResults) if (Date.now() - (r.at || 0) > RUN_RESULT_TTL) runResults.delete(k);
+};
 // ── live step stream (the inline 3D "pendant"): per-session SSE writers. Carries ONLY
 //    tool NAMES + ok/children (no cap, no payload) so the chat can animate the fan-out in
 //    real time. Keyed by sessionId; cap-hygiene preserved (the swissnum never rides this URL). ──
@@ -860,6 +871,9 @@ const handler = async (req, res) => {
       const sid = sid0;
       runs.get(sid)?.abort();
       const ac = new AbortController(); runs.set(sid, ac);
+      const startedAt = Date.now();
+      // mark this session as RUNNING server-side so a reopened tab can re-attach (vs. losing the run).
+      setRunResult(sid, { state: 'running', node: runNode, text: t, startedAt });
       // bind the app-state accessor to THIS cap + close over it (the swissnum never enters ctx — cap-hygiene).
       // ROOT-ONLY: the memo/seed/asks/feed stores are GLOBAL, so only the full root agent gets app-state —
       // a shared/sub-agent cap (which holds a confined subset) would otherwise see/mutate everything.
@@ -951,18 +965,31 @@ const handler = async (req, res) => {
         const answer = `⚠️ I stopped this run after ${mins} min (the turn time limit). ` + (names.length
           ? `It ran ${names.length} step(s): ${names.join(' → ')}. The last one (${last}) didn't return in time — that's the likely stall.`
           : `It produced no steps — it stalled before the first action (a tool likely hung).`) + ` Tell me to retry, or narrow it to the part that matters.`;
-        return json(res, 200, { answer, steps, toolsUsed: names.map(n => ({ name: n })), agentId: runNode.id, timedOut: true, remaining: purse.balance(), allowance: purse.granted() });
+        const toPayload = { answer, steps, toolsUsed: names.map(n => ({ name: n })), agentId: runNode.id, timedOut: true, remaining: purse.balance(), allowance: purse.granted() };
+        setRunResult(sid, { state: 'timedOut', node: runNode, text: t, result: toPayload, startedAt, doneAt: Date.now() });
+        return json(res, 200, toPayload);
       }
-      if (r.cancelled) return json(res, 200, { cancelled: true });
+      if (r.cancelled) { setRunResult(sid, { state: 'cancelled', node: runNode, text: t, startedAt }); return json(res, 200, { cancelled: true }); }
       // prepaid allowance spent mid-turn → return a DETERMINISTIC exhausted signal (no model
       // call was made to produce it). The client renders a static Top-up / Abandon card.
-      if (r.exhausted) return json(res, 200, { exhausted: true, answer: r.answer || '', remaining: purse.balance(), allowance: purse.granted() });
+      if (r.exhausted) { const exPayload = { exhausted: true, answer: r.answer || '', remaining: purse.balance(), allowance: purse.granted() }; setRunResult(sid, { state: 'exhausted', node: runNode, text: t, result: exPayload, startedAt, doneAt: Date.now() }); return json(res, 200, exPayload); }
       // history keeps the multimodal user content so a follow-up can still refer to the attached image.
       const next = [...history, { role: 'user', content: buildUserContent(t, agentAttachments) }, { role: 'assistant', content: r.answer }].slice(-12);
       sessions.set(sid, next);
       const proposals = proposalIds.map(getProposal).filter(Boolean);
       const asks = askIds.map(getAsk).filter(Boolean); // typed questions raised this turn → rendered inline
-      return json(res, 200, { answer: r.answer, images, imageUrls, ui: uiWidgets, toolsUsed: r.toolsUsed.map(x => x.name), steps, proposals, autoFired, asks, agentId: runNode.id, attachments: savedRefs, remaining: purse.balance(), allowance: purse.granted(), spent: Object.values(perProvider).reduce((a, b) => a + b, 0), perProvider });
+      const donePayload = { answer: r.answer, images, imageUrls, ui: uiWidgets, toolsUsed: r.toolsUsed.map(x => x.name), steps, proposals, autoFired, asks, agentId: runNode.id, attachments: savedRefs, remaining: purse.balance(), allowance: purse.granted(), spent: Object.values(perProvider).reduce((a, b) => a + b, 0), perProvider };
+      // PERSIST the finished turn so it survives a closed tab — the client re-attaches on reopen.
+      setRunResult(sid, { state: 'done', node: runNode, text: t, result: donePayload, startedAt, doneAt: Date.now() });
+      // Tab-friendly: ping the user when a SUBSTANTIAL run finishes (long, or it raised questions/actions),
+      // so they can ask-and-close and get pulled back. Quick replies don't push (no spam).
+      try {
+        if (Date.now() - startedAt > 45000 || asks.length || proposals.length) {
+          const summary = asks.length ? `${asks.length} question(s) need you` : proposals.length ? `${proposals.length} action(s) to confirm` : 'finished';
+          notify({ title: `✅ ${JSON.stringify(t).slice(1, 41)}… — ${summary}`, message: String(r.answer || '').slice(0, 160), click: `${BASE_URL}/#chat=${sid}`, tags: ['chat'] }).catch(() => {});
+        }
+      } catch { /* push is best-effort */ }
+      return json(res, 200, donePayload);
     }
 
     if (req.method === 'POST' && u.pathname === '/cancel') {
@@ -970,6 +997,20 @@ const handler = async (req, res) => {
       const sid = String(sessionId || 'anon').slice(0, 64);
       runs.get(sid)?.abort(); runs.delete(sid);
       return json(res, 200, { cancelled: true });
+    }
+    // RE-ATTACH: a reopened tab asks "what happened (or is happening) on the server for this session?".
+    // Lets you ask a question, close the tab, and pick the answer back up — the run never depended on the
+    // browser staying open. Cap-gated on the node that ran it (or root); no swissnum is ever stored/returned.
+    if (req.method === 'POST' && u.pathname === '/chat/result') {
+      const { sessionId, cap } = await jsonBody(req);
+      const sid = String(sessionId || 'anon').slice(0, 64);
+      const node = nodeFor(cap);
+      if (!node) return json(res, 403, { error: 'no capability' });
+      const rr = runResults.get(sid);
+      if (!rr) return json(res, 200, { state: 'none' });
+      if (!(node.isRoot || node === rr.node)) return json(res, 403, { error: 'not your run' });
+      const running = rr.state === 'running' && runs.has(sid); // still actually in flight?
+      return json(res, 200, { state: running ? 'running' : rr.state, text: rr.text, startedAt: rr.startedAt, ...(rr.result ? { result: rr.result } : {}) });
     }
 
     // ── prepaid inference budget (Increment 1): read + adjust a conversation's µUSD

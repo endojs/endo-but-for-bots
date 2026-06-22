@@ -568,6 +568,47 @@ const resumeIfPending = async sid => {
   await retryTurn(pend.payload, pend.spoken);
   return true;
 };
+// RE-ATTACH to a run that's happening (or already finished) SERVER-SIDE. The agent run does NOT depend on
+// the tab staying open — so if you ask a question then close the tab, on reopen we render its result, or
+// wait for a still-running research to finish, instead of losing it or wastefully re-running it. We only
+// fall back to a re-run when the server has no record (e.g. it restarted). Hooked into switchChat.
+let reattaching = '';
+const fetchRunResult = async sid => {
+  try { return await (await fetch('/chat/result', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ sessionId: sid, cap: chatCap() }) })).json(); }
+  catch { return null; }
+};
+const renderReattached = (r, sid) => {
+  if (sid !== sessionId || !r) return;
+  if (r.exhausted) { const p = stalledTurnFromTx(); if (p) renderExhausted(p.payload, false); return; }
+  renderAgentResponse(r);
+  pushTx('agent', r.answer || '', { tools: r.toolsUsed || [], images: r.images || [], imageUrls: r.imageUrls || [], steps: r.steps || [], agent: r.agentId, ui: r.ui || [] });
+  try { pendantEnd(r.steps || []); } catch {}
+  if (r.remaining != null) updateBudgetChip(r.remaining, r.allowance);
+  refreshBadge();
+};
+const reattachRun = async sid => {
+  if (busy || reattaching === sid || sid !== sessionId) return false; // a live send (or another re-attach) owns rendering
+  if (!stalledTurnFromTx()) return false;                              // last entry isn't an unanswered question → nothing pending
+  const rr = await fetchRunResult(sid);
+  if (sid !== sessionId) return false;
+  if (!rr || rr.state === 'none') return resumeIfPending(sid);         // server has no record (it restarted) → re-run
+  if (rr.state === 'running') {
+    reattaching = sid; busy = true; if (sendBtn) sendBtn.disabled = true;
+    setStatus('🔎 still working on this on the server — safe to leave; the answer will be here when you return');
+    try {
+      for (;;) {
+        await new Promise(res => setTimeout(res, 3000));
+        if (sid !== sessionId) return false;                          // navigated away — stop polling; pick it up next time
+        const cur = await fetchRunResult(sid);
+        if (!cur || cur.state === 'running') continue;
+        if (cur.result) renderReattached(cur.result, sid); else await resumeIfPending(sid);
+        return true;
+      }
+    } finally { busy = false; if (sendBtn) sendBtn.disabled = false; setStatus(''); reattaching = ''; }
+  }
+  if (rr.result) { renderReattached(rr.result, sid); return true; }   // finished while the tab was gone
+  return resumeIfPending(sid);                                         // cancelled with no payload → re-run
+};
 // deterministic exhaustion card — NO model produced this; the user tops up or abandons.
 const renderExhausted = (payload, spoken) => {
   pendingResume[payload.sessionId] = { payload, spoken }; // retain the stalled turn so ANY top-up resumes it
@@ -1695,6 +1736,7 @@ const switchChat = id => {
   { const sc = chats.find(x => x.id === id); // LIVE ROOM: poll a shared chat for others' turns
     if (sc && sc.shareToken) { if (typeof shareCursor[id] !== 'number') shareCursor[id] = activeTx.length; startSharePoll(id, sc.shareToken); } else stopSharePoll(); }
   setChatUrl(); // bookmarkable: put a NON-secret #chat=<id> hint in the URL (cap stays in localStorage)
+  reattachRun(id); // if this chat's last turn is unanswered, re-attach to its SERVER-SIDE run (render it / wait) — asking then closing the tab is safe
 };
 // Keep a NON-secret chat hint in the address bar so reload/bookmark returns to THIS chat. Never the
 // cap (that stays in localStorage — a screenshot/bookmark must not leak authority). Ephemeral landing
