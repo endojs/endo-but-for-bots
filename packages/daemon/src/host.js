@@ -36,6 +36,7 @@ import { toHex, fromHex } from './hex.js';
 import { makePetSitter } from './pet-sitter.js';
 
 import { makeDeferredTasks } from './deferred-tasks.js';
+import { makeRetainUnnamed } from './retain-unnamed.js';
 
 import { HostInterface } from './interfaces.js';
 import { hostHelp, makeHelp } from './help-text.js';
@@ -623,12 +624,15 @@ export const makeHostMaker = ({
      * @param {(string | string[])[]} petNamePaths
      * @param {NameOrPath | undefined} resultName
      */
+    const retainUnnamed = makeRetainUnnamed(unpinTransient);
+
     const evaluate = async (
       workerName,
       source,
       codeNames,
       petNamePaths,
       resultName,
+      retainUntil,
     ) => {
       if (workerName !== undefined) {
         assertName(workerName);
@@ -692,15 +696,9 @@ export const makeHostMaker = ({
         workerLabel,
       );
       if (resultName === undefined) {
-        // Ephemeral eval: the formula was pinned inside formulateEval
-        // (inside the lock) so concurrent collection can't reclaim it.
-        // Unpin after the value resolves and drain any resulting
-        // collection cleanup (worker termination, etc.).
-        try {
-          return await value;
-        } finally {
-          await unpinTransient(id);
-        }
+        // The formula was pinned inside formulateEval (inside the lock) so
+        // concurrent collection can't reclaim it.
+        return retainUnnamed(id, value, retainUntil);
       }
       return value;
     };

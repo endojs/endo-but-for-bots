@@ -14,6 +14,7 @@ import {
 } from './pet-name.js';
 import { makeDeferredTasks } from './deferred-tasks.js';
 import { idFromLocator } from './locator.js';
+import { makeRetainUnnamed } from './retain-unnamed.js';
 
 /** @import { Context, DaemonCore, DeferredTasks, EndoGuest, EvalDeferredTaskParams, FormulaIdentifier, MakeDirectoryNode, MakeMailbox, MarshalDeferredTaskParams, Name, NameOrPath, NamePath, NodeNumber, NamesOrPaths, Provide, ReadableBlobDeferredTaskParams, WorkerDeferredTaskParams } from './types.js' */
 import { GuestInterface } from './interfaces.js';
@@ -206,12 +207,15 @@ export const makeGuestMaker = ({
      * @param {NameOrPath} [resultName]
      * @returns {Promise<unknown>}
      */
+    const retainUnnamed = makeRetainUnnamed(unpinTransient);
+
     const evaluate = async (
       workerName,
       source,
       codeNames,
       petNamesOrPaths,
       resultName,
+      retainUntil,
     ) => {
       if (workerName !== undefined) {
         assertName(workerName);
@@ -268,11 +272,7 @@ export const makeGuestMaker = ({
         resultName === undefined ? pinTransient : undefined,
       );
       if (resultName === undefined) {
-        try {
-          return await value;
-        } finally {
-          await unpinTransient(id);
-        }
+        return retainUnnamed(id, value, retainUntil);
       }
       return value;
     };

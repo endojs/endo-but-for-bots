@@ -969,6 +969,61 @@ testNeedsNodeWorker(
 );
 
 testNeedsNodeWorker(
+  'evaluate retainUntil keeps an un-named result composable by reference',
+  async t => {
+    const { host } = await prepareHost(t);
+    const release = makePromiseKit();
+
+    // The @endo/claude-sandbox factory's shape: build a powers cap from
+    // inline source + endowments, keep it alive un-named via retainUntil,
+    // hand it to makeUnconfined by reference, then release once the
+    // caplet's dependency edge roots it. No pet name is ever involved.
+    const powers = await E(host).evaluate(
+      '@main',
+      `Far('Pingable', { ping: () => 'pong-eval' })`,
+      [],
+      [],
+      undefined, // resultName — un-named
+      release.promise, // retainUntil
+    );
+    const caplet = await E(host).makeUnconfined('@main', powersPingPath, {
+      powers,
+      resultName: 'ping-caplet',
+    });
+    t.is(await E(caplet).pong(), 'pong-eval');
+
+    // Drop the transient pin; the caplet's ['powers', id] edge now roots it.
+    release.resolve();
+
+    const names = await E(host).list();
+    t.deepEqual(
+      names.filter(n => !n.startsWith('@') && n !== 'ping-caplet'),
+      [],
+      `only the caplet is named; saw: ${names.join(', ')}`,
+    );
+  },
+);
+
+testNeedsNodeWorker(
+  'without retainUntil an un-named evaluate result is ephemeral (not composable)',
+  async t => {
+    const { host } = await prepareHost(t);
+    // Default eval: the un-named result is collected as soon as it resolves
+    // (its transient pin is dropped), so it cannot be passed by reference.
+    const powers = await E(host).evaluate(
+      '@main',
+      `Far('Pingable', { ping: () => 'pong' })`,
+      [],
+      [],
+    );
+    await t.throwsAsync(
+      E(host).makeUnconfined('@main', powersPingPath, { powers }),
+      { message: /minted by this daemon/ },
+    );
+  },
+);
+
+testNeedsNodeWorker(
   'move moves value, between different caplet name hubs',
   async t => {
     const { host } = await prepareHost(t);
