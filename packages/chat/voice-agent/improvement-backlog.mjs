@@ -53,4 +53,15 @@ export const backlogStats = () => {
   return stats;
 };
 
+// prune RESOLVED targets — remove every item whose status is 'merged' or 'staged' (verified work that
+// no longer needs to be tracked) and return the number removed. REUSES load()/save().
+export const clearResolved = () => {
+  const s = load();
+  const before = s.items.length;
+  s.items = s.items.filter(i => i.status !== 'merged' && i.status !== 'staged');
+  const removed = before - s.items.length;
+  save(s);
+  return removed;
+};
+
 export const backlogFile = file;
