@@ -1,6 +1,5 @@
 // improvement-backlog.test.mjs — the FAPO-style improvement backlog the self-improvement loop drains.
 //   node --test packages/chat/voice-agent/improvement-backlog.test.mjs
-import '@endo/init';
 import os from 'node:os';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -9,7 +8,7 @@ const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'backlog-test-'));
 process.env.IMPROVEMENT_BACKLOG = path.join(tmp, 'backlog.json');
 import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
-const { addBacklog, listBacklog, nextOpen, recordOutcome } = await import('./improvement-backlog.mjs');
+const { addBacklog, listBacklog, nextOpen, recordOutcome, clearResolved } = await import('./improvement-backlog.mjs');
 after(() => { try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* */ } });
 
 test('a precise target is added; a VAGUE one is rejected (precision is what makes the executor succeed)', () => {
@@ -45,4 +44,19 @@ test('de-dupe: re-proposing an identical OPEN goal does not duplicate it', () =>
   const a = addBacklog({ goal: g }); const b = addBacklog({ goal: g });
   assert.equal(a.ok, true); assert.equal(b.deduped, true);
   assert.equal(listBacklog().filter(i => i.goal === g).length, 1);
+});
+
+test('clearResolved removes merged + staged items and leaves OPEN ones, returning the count removed', () => {
+  process.env.IMPROVEMENT_BACKLOG = path.join(tmp, 'clear-resolved.json');
+  const m = addBacklog({ goal: 'In clear/file.mjs, add a merged-bound change M plus a test asserting M.' });
+  const s = addBacklog({ goal: 'In clear/file.mjs, add a staged-bound change S plus a test asserting S.' });
+  const o = addBacklog({ goal: 'In clear/file.mjs, add an open change O plus a test asserting O, left untouched.' });
+  recordOutcome(m.id, { status: 'merged' });
+  recordOutcome(s.id, { status: 'staged' });
+  const removed = clearResolved();
+  assert.equal(removed, 2, 'the merged + staged items are removed');
+  const remaining = listBacklog();
+  assert.equal(remaining.length, 1, 'only the open item remains');
+  assert.equal(remaining[0].id, o.id, 'the remaining item is the open one');
+  assert.equal(remaining[0].status, 'open');
 });
