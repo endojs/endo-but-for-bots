@@ -70,7 +70,7 @@
 }
 </script>
 <style>
-  :root { --bg:#0d1117; --panel:#161b22; --edge:#30363d; --ink:#e6edf3; --mut:#8b949e; --acc:#7c5cff; --acc2:#2ea043; --bad:#f85149; --you:#1f6feb; }
+  :root { --bg:#0d1117; --panel:#161b22; --edge:#30363d; --ink:#e6edf3; --mut:#8b949e; --acc:#7c5cff; --acc2:#2ea043; --bad:#f85149; --you:#1f6feb; --you-bg:#11243f; --you-edge:#1f3b63; --trace-bg:#0b0e14; --trace-edge:#21262d; --trace-ink:#9aa4b2; --trace-ok:#8fd0a8; --trace-bad:#ff9e9e; --trace-call:#9fb0c9; --trace-result:#c9a96e; }
   * { box-sizing:border-box; }
   /* full-bleed on notched phones: viewport-fit=cover lets content reach the edges; the
      background behind the safe-area insets is the dark bg, and the fixed chrome (header/composer)
@@ -90,8 +90,14 @@
   main { max-width:960px; margin:0 auto; padding:18px max(18px,env(safe-area-inset-right)) 18px max(18px,env(safe-area-inset-left)); }
   #log { display:flex; flex-direction:column; gap:10px; margin-bottom:calc(96px + env(safe-area-inset-bottom)); }
   .msg { background:var(--panel); border:1px solid var(--edge); border-radius:12px; padding:10px 13px; max-width:88%; align-self:flex-start; }
-  .msg.user { align-self:flex-end; background:#11243f; border-color:#1f3b63; }
+  .msg.user { align-self:flex-end; background:var(--you-bg); border-color:var(--you-edge); color:var(--ink); }
   .who { font-size:11px; color:var(--mut); text-transform:uppercase; letter-spacing:.4px; margin-bottom:3px; }
+  /* ↻ retry · ✎ edit · 🔊 audio · ◀ k/n ▶ fork-pager — rendered INSIDE the user prompt bubble (theme-aware) */
+  .msg-ctrl { display:flex; gap:6px; align-items:center; margin-top:8px; padding-top:6px; border-top:1px solid var(--you-edge); font-size:12px; }
+  .msg-ctrl .mc-btn { all:unset; cursor:pointer; color:var(--mut); padding:1px 6px; border-radius:5px; line-height:1.4; }
+  .msg-ctrl .mc-btn:hover { color:var(--ink); background:rgba(127,127,127,.18); }
+  .msg-ctrl .mc-nav { display:inline-flex; gap:4px; align-items:center; margin-left:auto; }
+  .msg-ctrl .mc-count { font-variant-numeric:tabular-nums; font-size:11px; color:var(--acc); }
   .body img { max-width:100%; border-radius:8px; margin-top:8px; border:1px solid var(--edge); }
   .body a, .dev-thread-msg a { color:var(--acc); text-decoration:underline; text-underline-offset:2px; word-break:break-word; }
   .body a:hover, .dev-thread-msg a:hover { color:var(--ink); }

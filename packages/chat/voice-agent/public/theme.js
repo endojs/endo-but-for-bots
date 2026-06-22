@@ -18,8 +18,10 @@ const mkGrain = initial => {
 };
 
 // MVP presets — dark (current default) + light. The full set of vars the app already themes off.
-const DARK = { name: 'dark', mode: 'dark', vars: { '--bg': '#0d1117', '--panel': '#161b22', '--edge': '#30363d', '--ink': '#e6edf3', '--mut': '#8b949e', '--acc': '#7c5cff', '--acc2': '#2ea043', '--bad': '#f85149', '--you': '#1f6feb' } };
-const LIGHT = { name: 'light', mode: 'light', vars: { '--bg': '#ffffff', '--panel': '#f3f5f8', '--edge': '#d0d7de', '--ink': '#1f2328', '--mut': '#636c76', '--acc': '#7c5cff', '--acc2': '#1a7f37', '--bad': '#cf222e', '--you': '#0969da' } };
+// --you-bg / --you-edge = the user-prompt bubble fill + border; --trace-bg / --trace-ink = the reasoning-trace
+// strip. Both MUST flip with the mode (a hardcoded dark fill left the user bubble + trace unreadable in light).
+const DARK = { name: 'dark', mode: 'dark', vars: { '--bg': '#0d1117', '--panel': '#161b22', '--edge': '#30363d', '--ink': '#e6edf3', '--mut': '#8b949e', '--acc': '#7c5cff', '--acc2': '#2ea043', '--bad': '#f85149', '--you': '#1f6feb', '--you-bg': '#11243f', '--you-edge': '#1f3b63', '--trace-bg': '#0b0e14', '--trace-edge': '#21262d', '--trace-ink': '#9aa4b2', '--trace-ok': '#8fd0a8', '--trace-bad': '#ff9e9e', '--trace-call': '#9fb0c9', '--trace-result': '#c9a96e' } };
+const LIGHT = { name: 'light', mode: 'light', vars: { '--bg': '#ffffff', '--panel': '#f3f5f8', '--edge': '#d0d7de', '--ink': '#1f2328', '--mut': '#636c76', '--acc': '#7c5cff', '--acc2': '#1a7f37', '--bad': '#cf222e', '--you': '#0969da', '--you-bg': '#dbeafe', '--you-edge': '#9ec5fe', '--trace-bg': '#eef1f5', '--trace-edge': '#d0d7de', '--trace-ink': '#57606a', '--trace-ok': '#1a7f37', '--trace-bad': '#cf222e', '--trace-call': '#4b5563', '--trace-result': '#8a6d3b' } };
 export const BUILTINS = { dark: DARK, light: LIGHT };
 export const theme = mkGrain(DARK); // THE propagator — read-only to components.
 const KEY = 'field-agent-theme';

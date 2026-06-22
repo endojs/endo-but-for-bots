@@ -11,6 +11,7 @@
 // the session. A fresh #cap link overwrites the stored one; otherwise we restore.
 import { renderWidgets, disposeAllWidgets } from './grain-ui.js'; // live/interactive response widgets (grain-native)
 import { theme, cycleTheme, initTheme } from './theme.js'; // the user's global style as a read-only propagator (dark/light MVP)
+import { forkRetry, forkPage, forkCount, forkIndex } from './fork-model.js'; // retry-as-fork data-model (pure, unit-tested)
 initTheme(); // restore the saved theme + start applying it to :root as CSS vars
 (() => { // a header toggle for light/dark (the first control of the userspace-extensible style framework)
   try {
@@ -334,12 +335,12 @@ const SIG_MAX = 500;
 const scrubCap = s => String(s == null ? '' : s).replace(/#cap=[0-9a-fA-F]{16,}/g, '#cap=«redacted»').replace(/#k=[\w-]{16,}/g, '#k=«redacted»').replace(/#agent=[\w-]{8,}/g, '#agent=«redacted»').replace(/\b[0-9a-f]{32}\b/g, '«swissnum»');
 const stepRow = (s, depth) => {
   const row = document.createElement('div'); row.style.cssText = `margin:3px 0;padding-left:${depth * 14}px`;
-  const head = document.createElement('div'); head.style.cssText = `font:600 12px ui-monospace,Menlo,Consolas,monospace;color:${s.ok === false ? '#ff9e9e' : '#8fd0a8'}`;
+  const head = document.createElement('div'); head.style.cssText = `font:600 12px ui-monospace,Menlo,Consolas,monospace;color:${s.ok === false ? 'var(--trace-bad)' : 'var(--trace-ok)'}`;
   head.textContent = `${STEP_ICON[s.name] || '⚙'} ${s.name}${s.ok === false ? '  ✗ failed' : ''}`;
   row.appendChild(head);
   const call = s.call || s.detail || '';
-  if (call) { const d = document.createElement('div'); d.style.cssText = 'font-size:11px;color:#9fb0c9;white-space:pre-wrap;word-break:break-word;margin:1px 0 0 16px;max-height:64px;overflow:auto'; d.textContent = '▸ ' + scrubCap(call).slice(0, SIG_MAX); row.appendChild(d); }
-  if (s.result) { const r = document.createElement('div'); r.style.cssText = 'font-size:11px;color:#c9a96e;white-space:pre-wrap;word-break:break-word;margin:1px 0 0 16px;max-height:64px;overflow:auto'; r.textContent = '◂ ' + scrubCap(s.result).slice(0, SIG_MAX); row.appendChild(r); }
+  if (call) { const d = document.createElement('div'); d.style.cssText = 'font-size:11px;color:var(--trace-call);white-space:pre-wrap;word-break:break-word;margin:1px 0 0 16px;max-height:64px;overflow:auto'; d.textContent = '▸ ' + scrubCap(call).slice(0, SIG_MAX); row.appendChild(d); }
+  if (s.result) { const r = document.createElement('div'); r.style.cssText = 'font-size:11px;color:var(--trace-result);white-space:pre-wrap;word-break:break-word;margin:1px 0 0 16px;max-height:64px;overflow:auto'; r.textContent = '◂ ' + scrubCap(s.result).slice(0, SIG_MAX); row.appendChild(r); }
   (Array.isArray(s.children) ? s.children : []).forEach(c => row.appendChild(stepRow(c, depth + 1)));
   return row;
 };
@@ -361,7 +362,7 @@ const traceStrip = steps => {
     if (!expanded) {
       for (const s of steps) { const n = document.createElement('span'); n.className = 'tn' + (s.ok === false ? ' bad' : ''); const kids = Array.isArray(s.children) && s.children.length ? ` ·${s.children.length}` : ''; n.textContent = `${STEP_ICON[s.name] || '⚙'} ${s.name}${kids}`; n.title = `${s.name}${s.ok === false ? ' (failed)' : ''}${s.detail ? ' — ' + scrubCap(s.detail).slice(0, 200) : ''}`; wrap.appendChild(n); }
     } else {
-      const sig = document.createElement('div'); sig.className = 'trace-sig'; sig.style.cssText = 'flex-basis:100%;width:100%;margin-top:6px;padding:8px 10px;background:#0b0e14;border:1px solid #21262d;border-radius:8px;max-height:44vh;overflow:auto';
+      const sig = document.createElement('div'); sig.className = 'trace-sig'; sig.style.cssText = 'flex-basis:100%;width:100%;margin-top:6px;padding:8px 10px;background:var(--trace-bg);border:1px solid var(--trace-edge);border-radius:8px;max-height:44vh;overflow:auto';
       steps.forEach(s => sig.appendChild(stepRow(s, 0)));
       wrap.appendChild(sig);
     }
@@ -536,7 +537,7 @@ const retryTurn = async (payload, spoken) => {
   try {
     await pendantBegin(payload.text || '');
     const r = await (await fetch('/chat', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) })).json();
-    if (r.error) { setStatus('chat: ' + r.error); return; }
+    if (r.error) { if (r.retryable || r.llmError) renderRetryableError(r.error, payload, spoken); else setStatus('chat: ' + r.error); return; } // provider error → transient retry card, not a stuck status
     if (r.exhausted) { updateBudgetChip(r.remaining, r.allowance); renderExhausted(payload, spoken); return; }
     renderAgentResponse(r);
     pushTx('agent', r.answer || '', { tools: r.toolsUsed || [], images: r.images || [], imageUrls: r.imageUrls || [], steps: r.steps || [], agent: r.agentId, ui: r.ui || [] });
@@ -839,7 +840,7 @@ const sendChat = async (text, { spoken = false, audio = null, attachments = [], 
     if (imgAtts.length) tx.attachImgs = imgAtts.map(a => a.dataUrl);           // session-only (stripped before persist)
     if (fileAtts.length) tx.attachFiles = fileAtts.map(a => a.name);
     activeTx.push(tx); saveTx();
-    try { log.appendChild(messageControls(activeTx.length - 1, tx)); } catch { /* control row: ↻ retry / ✎ edit / 🔊 audio — appears live under the message */ }
+    try { userBubbleControls(activeTx.length - 1, tx, ub); } catch { /* control row: ↻ retry / ✎ edit / 🔊 audio — appears live INSIDE the bubble */ }
     titleFrom(t || (attachments[0] && attachments[0].name) || 'photo'); setStatus('thinking…'); if (spoken) setMic('thinking');
     await pendantBegin(t); // descend the live 3D pendant + open the step stream BEFORE the turn starts
     const payload = { sessionId, text: t, cap: chatCap(), model: model || chatModel(), agent: chatAgent() }; // chatCap() = this chat's CONFINED cap (Feature A); agent = run AS this entrypoint specialist (server confines)
@@ -1464,7 +1465,11 @@ const saveChats = () => { try { localStorage.setItem(CHATS_KEY, JSON.stringify(c
 const loadTx = id => { try { return JSON.parse(localStorage.getItem(txKey(id))) || []; } catch { return []; } };
 // drop heavy/ephemeral media (image data-URLs, audio blob-URLs) before persisting;
 // they live only in the in-memory activeTx so the 3D trace can show/play them this session.
-const stripImg = tx => tx.map(m => (m.images || m.audio || m.attachImgs) ? { ...m, images: undefined, audio: undefined, attachImgs: undefined } : m);
+const stripImg = tx => tx.map(m => {
+  let n = (m.images || m.audio || m.attachImgs) ? { ...m, images: undefined, audio: undefined, attachImgs: undefined } : m;
+  if (m.forks) n = { ...n, forks: m.forks.map(f => (f && f.tail) ? { ...f, tail: stripImg(f.tail) } : f) }; // strip stashed-fork tails too (no data-URL bloat in inactive branches)
+  return n;
+});
 // persist transcript WITHOUT image data URLs (they'd blow the localStorage quota);
 // images stay in the in-memory activeTx so the 3D trace can render them this session.
 const saveTx = () => { try { localStorage.setItem(txKey(sessionId), JSON.stringify(stripImg(activeTx).slice(-120))); } catch {} scheduleSync(); };
@@ -1567,53 +1572,49 @@ function wirePowerBanner(b, cc, ps) {
   };
 }
 // ── W2: PROMPT FORK / RETRY — each user turn's answer can hold model/param VARIANTS (forks). A ↻ retry
-//    re-runs the prompt with the CURRENT model+params (appends a fork); ◀/▶ pages forks + restores their
-//    params; ✎ edits the prompt and retries; 🔊 plays a voice message's original audio. Variants live on
-//    the agent tx entry, so the flat (you, agent) transcript model is preserved. ──
+//    ↻ re-runs the prompt (clears everything below + forks a new branch from that point); ◀/▶ pages this
+//    user turn's forks (each a {prompt, tail} continuation); ✎ edits the prompt + retries; 🔊 plays a voice
+//    message's original audio. Forks live on the USER tx entry (m.forks/m.forkIx) — see runRetry/pageFork. ──
 const _arr = v => (Array.isArray(v) ? v : (v ? [v] : []));
+// activeVariant keeps backward-compat with OLD answer-variant data: a plain agent entry reads as its own
+// base variant; an entry that still carries .variants (pre-fork-redesign chats) renders the active one.
 const baseVariant = am => ({ answer: am.text || '', steps: _arr(am.steps), ui: _arr(am.ui), tools: _arr(am.tools), agentId: am.agent, model: am.vmodel || 'default', agent: am.vagent || 'field-agent', prompt: null, ts: am.ts || 0 });
-const variantsOf = am => { if (!am.variants || !am.variants.length) { am.variants = [baseVariant(am)]; am.varIx = 0; } if (typeof am.varIx !== 'number' || am.varIx < 0 || am.varIx >= am.variants.length) am.varIx = am.variants.length - 1; return am.variants; };
 const activeVariant = am => (am && am.variants && am.variants.length) ? am.variants[Math.max(0, Math.min(am.varIx || 0, am.variants.length - 1))] : baseVariant(am);
-// the agent answer for the user turn at i — scan forward past non-conversational entries (a pasted widget,
-// etc.) to the first 'agent' BEFORE the next 'you'. (Don't assume positional adjacency: the tx isn't strictly paired.)
-const answerOf = i => { for (let j = i + 1; j < activeTx.length; j++) { const n = activeTx[j]; if (!n) continue; if (n.who === 'you') return null; if (n.who === 'agent') return n; } return null; };
 const histUpTo = uIx => activeTx.slice(0, uIx).filter(m => m && m.who).map(m => ({ role: m.who === 'you' ? 'user' : 'assistant', content: String(m.who === 'you' ? (m.text || '') : (activeVariant(m).answer || '')) })).filter(x => x.content.trim()).slice(-24);
+// Retry FORKS the conversation at this user turn: stash the current branch (its prompt + everything below
+// it), then start a fresh empty branch carrying the (maybe edited) prompt and re-run from here. Retrying
+// CLEARS everything below the bubble. Each fork keeps its own continuation (tail), pageable from the bubble.
 const runRetry = async (uIx, prompt) => {
   if (busy) { setStatus('finish the current turn first'); return; } // share the live-turn interlock — no mid-flight retry
-  if (!activeTx[uIx]) return; const am = answerOf(uIx); const model = chatModel(), agent = chatAgent();
-  busy = true; if (sendBtn) sendBtn.disabled = true; setStatus('retrying…');
-  try {
-    let r; try { r = await (await fetch('/chat', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ sessionId, text: prompt, cap: chatCap(), model, agent, history: histUpTo(uIx) }) })).json(); }
-    catch (e) { setStatus('retry: ' + e.message); return; }
-    if (r.error) { setStatus('retry: ' + r.error); return; }
-    if (r.exhausted) { updateBudgetChip(r.remaining, r.allowance); setStatus('allowance used up — top up to retry'); return; }
-    const v = { answer: r.answer || '', steps: r.steps || [], ui: r.ui || [], tools: (r.toolsUsed || []), agentId: r.agentId, model, agent, prompt, ts: Date.now() };
-    const am2 = answerOf(uIx); // re-resolve after the await (the live tx may have shifted)
-    if (am2) { variantsOf(am2); am2.variants.push(v); am2.varIx = am2.variants.length - 1; }
-    else { let j = uIx + 1; while (j < activeTx.length && activeTx[j] && activeTx[j].who !== 'you') j++; activeTx.splice(j, 0, { who: 'agent', text: v.answer, steps: v.steps, ui: v.ui, tools: v.tools, agent: v.agentId, vmodel: model, vagent: agent, variants: [v], varIx: 0 }); }
-    updateBudgetChip(r.remaining, r.allowance); saveTx(); renderTx(); setStatus('');
-  } finally { busy = false; if (sendBtn) sendBtn.disabled = false; }
+  if (!forkRetry(activeTx, uIx, prompt)) return; // stash the live branch, start a fresh one, clear below
+  saveTx(); renderTx(); // show the cleared transcript + the new prompt before the answer streams in
+  busy = true; if (sendBtn) sendBtn.disabled = true;
+  try { await retryTurn({ sessionId, text: prompt, cap: chatCap(), model: chatModel(), agent: chatAgent(), history: histUpTo(uIx) }, false); }
+  finally { busy = false; if (sendBtn) sendBtn.disabled = false; }
 };
-const restoreParams = v => { try { const c = curChatObj(); if (c) { if (v.agent) c.agent = v.agent; if (v.model) { c.model = v.model; rememberModel(c.agent || 'field-agent', v.model); } } const as = $('agent-sel'); if (as && v.agent) as.value = v.agent; const ms = $('model-sel'); if (ms && v.model) ms.value = v.model; saveChats(); } catch { /* */ } };
-const pageFork = (uIx, delta) => { const am = answerOf(uIx); if (!am) return; variantsOf(am); am.varIx = Math.max(0, Math.min(am.variants.length - 1, am.varIx + delta)); restoreParams(am.variants[am.varIx]); saveTx(); renderTx(); };
-// edit + retry. We do NOT mutate the original user text — the edited prompt rides on the new fork (renderTx
-// renders activeVariant(am).prompt), so the base message + every fork's prompt stay recoverable.
-const editPrompt = uIx => { if (busy) { setStatus('finish the current turn first'); return; } const um = activeTx[uIx]; if (!um) return; const am = answerOf(uIx); const cur = (am && activeVariant(am).prompt) || um.text || ''; const edited = window.prompt('Edit the message, then retry (a new fork):', cur); if (edited == null || !edited.trim()) return; runRetry(uIx, edited.trim()); };
-const messageControls = (uIx, um) => {
-  const am = answerOf(uIx);
-  const row = document.createElement('div'); row.className = 'msg-ctrl'; row.style.cssText = 'display:flex;gap:6px;align-items:center;margin:-4px 2px 6px;font-size:12px';
-  const mk = (label, title, fn) => { const b = document.createElement('button'); b.textContent = label; b.title = title; b.style.cssText = 'all:unset;cursor:pointer;color:#8b949e;padding:1px 6px;border-radius:5px'; b.onmouseenter = () => { b.style.color = '#cfe2ff'; }; b.onmouseleave = () => { b.style.color = '#8b949e'; }; b.onclick = fn; return b; };
-  row.appendChild(mk('↻', 'Retry with the current model + parameters (creates a fork)', () => runRetry(uIx, (am && activeVariant(am).prompt) || um.text || '')));
-  row.appendChild(mk('✎', 'Edit this message and retry', () => editPrompt(uIx)));
-  if (um.audio) row.appendChild(mk('🔊', 'Play the original audio', () => { try { new Audio(um.audio).play(); } catch { /* */ } }));
-  if (am && am.variants && am.variants.length > 1) {
-    const nav = document.createElement('span'); nav.style.cssText = 'display:inline-flex;gap:4px;align-items:center;margin-left:auto;color:#8b949e';
-    nav.appendChild(mk('◀', 'Previous fork (restores its model + params)', () => pageFork(uIx, -1)));
-    const c = document.createElement('span'); c.textContent = `${am.varIx + 1}/${am.variants.length}`; c.style.cssText = 'font-variant-numeric:tabular-nums;font-size:11px;color:#7c5cff'; nav.appendChild(c);
-    nav.appendChild(mk('▶', 'Next fork', () => pageFork(uIx, 1)));
+// page between this user turn's forks: swap in the chosen branch's prompt + its whole continuation (tail).
+const pageFork = (uIx, delta) => {
+  if (busy) { setStatus('finish the current turn first'); return; }
+  if (forkPage(activeTx, uIx, delta)) { saveTx(); renderTx(); }
+};
+// edit + retry: the edited prompt rides on a NEW fork (the base prompt + every fork stays recoverable).
+const editPrompt = uIx => { if (busy) { setStatus('finish the current turn first'); return; } const m = activeTx[uIx]; if (!m) return; const edited = window.prompt('Edit the message, then retry (forks the conversation from here):', m.text || ''); if (edited == null || !edited.trim()) return; runRetry(uIx, edited.trim()); };
+// the retry / edit / audio + fork-pager controls, rendered INSIDE the user prompt bubble they act on.
+const userBubbleControls = (uIx, m, bodyEl) => {
+  const fc = forkCount(m), fi = forkIndex(m);
+  const row = document.createElement('div'); row.className = 'msg-ctrl';
+  const mk = (label, title, fn) => { const b = document.createElement('button'); b.className = 'mc-btn'; b.textContent = label; b.title = title; b.onclick = fn; return b; };
+  row.appendChild(mk('↻', 'Retry this prompt — clears everything below + forks a new branch from here', () => runRetry(uIx, m.text || '')));
+  row.appendChild(mk('✎', 'Edit + retry this prompt (forks from here)', () => editPrompt(uIx)));
+  if (m.audio) row.appendChild(mk('🔊', 'Play the original audio', () => { try { new Audio(m.audio).play(); } catch { /* */ } }));
+  if (fc > 1) {
+    const nav = document.createElement('span'); nav.className = 'mc-nav';
+    nav.appendChild(mk('◀', 'Previous fork of this prompt', () => pageFork(uIx, -1)));
+    const c = document.createElement('span'); c.className = 'mc-count'; c.textContent = `${fi + 1}/${fc}`; nav.appendChild(c);
+    nav.appendChild(mk('▶', 'Next fork of this prompt', () => pageFork(uIx, 1)));
     row.appendChild(nav);
   }
-  return row;
+  bodyEl.appendChild(row); // INSIDE the bubble — the controls visibly belong to the prompt they fork
 };
 const renderTx = () => {
   syncLanding();
@@ -1650,12 +1651,11 @@ const renderTx = () => {
         if (_arr(v.tools).length) { const e = document.createElement('div'); e.className = 'tools'; e.textContent = '⚙ ' + _arr(v.tools).join(', '); b.parentNode.appendChild(e); }
         continue;
       }
-      // a user message → its (possibly edited) prompt + the fork/retry/edit/voice control row
-      const am = answerOf(i); const promptText = (am && activeVariant(am).prompt) || m.text;
-      const b = bubble('you', promptText, m.agent);
-      if (!promptText) b.textContent = '';
+      // a user message → its (active fork's) prompt, with the ↻/✎/🔊 + fork-pager controls INSIDE the bubble
+      const b = bubble('you', m.text, m.agent);
+      if (!m.text) b.textContent = '';
       appendAtt(b, asArr(m.attachUrls).length ? asArr(m.attachUrls) : asArr(m.attachImgs), asArr(m.attachFiles));
-      if (m.text || am) log.appendChild(messageControls(i, m)); // ↻ retry · ✎ edit · 🔊 audio · ◀ k/n ▶ forks
+      userBubbleControls(i, m, b); // ↻ retry · ✎ edit · 🔊 audio · ◀ k/n ▶ forks — all inside the prompt bubble
     } catch (e) { console.error('renderTx message', e); }
   }
   // re-show any still-open typed asks the agent raised in THIS chat (persist across reloads)

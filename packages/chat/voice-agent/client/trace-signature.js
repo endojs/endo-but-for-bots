@@ -6,8 +6,8 @@ import { h } from 'preact';
 //
 // Props: { steps:[{name,icon,ok,childCount,detail,children}], expanded, legend } + { onToggle(), onOpen3D() }
 const stepRow = (s, depth, key) => h('div', { class: 'trace-sig-row', style: `padding-left:${depth * 14}px`, key }, [
-  h('span', { class: s.ok === false ? 'bad' : '' }, `${s.icon || '⚙'} ${s.name}${s.ok === false ? '  ✗ failed' : ''}`),
-  s.detail ? h('span', { class: 'sub', style: 'font-size:11px;margin-left:6px' }, String(s.detail).slice(0, 200)) : null,
+  h('span', { class: s.ok === false ? 'bad' : '', style: `font:600 12px ui-monospace,Menlo,monospace;color:${s.ok === false ? 'var(--trace-bad)' : 'var(--trace-ok)'}` }, `${s.icon || '⚙'} ${s.name}${s.ok === false ? '  ✗ failed' : ''}`),
+  s.detail ? h('span', { class: 'sub', style: 'font-size:11px;margin-left:6px;color:var(--trace-call)' }, String(s.detail).slice(0, 200)) : null,
   ...(Array.isArray(s.children) ? s.children.map((c, i) => stepRow(c, depth + 1, `${key}-${i}`)) : []),
 ]);
 
@@ -26,7 +26,7 @@ export const TraceSignature = (props = {}) => {
   }
   return h('div', { class: 'trace-strip kit-rowx' }, [
     ...head,
-    h('div', { class: 'trace-sig', style: 'flex-basis:100%;width:100%;margin-top:6px;padding:8px 10px;background:#0b0e14;border:1px solid #21262d;border-radius:8px;max-height:44vh;overflow:auto' },
+    h('div', { class: 'trace-sig', style: 'flex-basis:100%;width:100%;margin-top:6px;padding:8px 10px;background:var(--trace-bg);border:1px solid var(--trace-edge);border-radius:8px;max-height:44vh;overflow:auto' },
       steps.map((s, i) => stepRow(s, 0, `s${i}`))),
   ]);
 };
