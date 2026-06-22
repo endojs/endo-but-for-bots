@@ -504,7 +504,7 @@ export const POWERS = harden({
   home: { label: 'A private scratch/workspace folder of ITS OWN to read/write + publish sites + mint download links from (a sandboxed folder created for the agent — NOT your home directory or vault)', verbs: ['fileList', 'fileRead', 'fileWrite', 'publishSite', 'createDownloadLinkFor'] },
   vm: { label: 'Full terminal in the agent-code dev VM (coarse: root over that sandbox)', verbs: ['vmExec'] },
   host: { label: '⚠️ Full shell over THIS host (archua) as the operator — the dev/dogfood harness; coarse ambient host-root, like claude-code', verbs: ['hostExec'] },
-  agents: { label: 'The roster of agent personas + code sessions (read status; exec is coarse; route tasks to a dev session)', verbs: ['agentsList', 'agentStatus', 'agentExec', 'routeToDev'] },
+  agents: { label: 'The roster of agent personas, machines + code sessions (read status; exec is coarse; full-VM machines also have a config checkout; route tasks to a dev session)', verbs: ['agentsList', 'agentStatus', 'agentExec', 'machineRepoStatus', 'machineRepoExec', 'routeToDev'] },
   selfPrompt: { label: 'Propose changes to your own system prompt (you confirm)', verbs: ['proposeSystemPrompt'] },
   delegate: { label: 'Delegate a task to a larger (Opus) agent', verbs: ['delegateTask'] },
   roles: { label: 'Employ a specialized role sub-agent (planner, retriever, synthesizer, critic, reviewer, …) with a least-privilege tool ring + model tier', verbs: ['listRoles', 'employ'] },
@@ -1229,6 +1229,19 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
         if (!n.exec) return { ok: false, error: 'this persona is read-only' };
         return n.exec(String(cmd || ''), { cwd });
       } });
+      // A FULL-VM machine (e.g. tinix) also carries a LOCAL config CHECKOUT — repoStatus reads its HEAD; repoExec
+      // runs a command IN it (edit config + ./deploy-models.sh, which ssh-pushes to the box). The remote shell
+      // over the box stays on agentExec. (See the /tinix skill.)
+      toolbox.machineRepoStatus = harden({ run: async ({ handle }) => {
+        const n = node.agReach(handle); if (!n) return { ok: false, error: 'handle not in your reach' };
+        if (!n.repoStatus) return { ok: false, error: 'this machine has no config checkout (no git repo configured)' };
+        return n.repoStatus();
+      } });
+      toolbox.machineRepoExec = harden({ run: async ({ handle, cmd, cwd }) => {
+        const n = node.agReach(handle); if (!n) return { ok: false, error: 'handle not in your reach' };
+        if (!n.repoExec) return { ok: false, error: 'this machine has no writable config checkout (read-only, or no git repo configured)' };
+        return n.repoExec(String(cmd || ''), { cwd });
+      } });
       // Route a task to a registered CODE SESSION (the Blacksmith dev agent) — for
       // building tools/connectors you can't do yourself. Enqueues to the dev-queue the
       // field-agent-chats skill polls; the session reviews + reports back.
@@ -1250,7 +1263,9 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
       manifest.push(
         { name: 'agentsList', reversible: false, args: {}, description: 'List the agents on this machine — personas (name, ip, role) you can status/exec on, AND registered code sessions (kind: dev-session) you can routeToDev. Returns handles.' },
         { name: 'agentStatus', reversible: false, args: { handle: 'string — a handle from agentsList' }, description: "Read an agent's status (a persona's up?/uptime/PID1, or a code session's registration)." },
-        { name: 'agentExec', reversible: false, args: { handle: 'string — persona handle', cmd: 'string — shell command', cwd: 'string — optional working dir' }, description: 'Run a shell command in an agent persona (immediate; coarse authority — root over that sandbox).' },
+        { name: 'agentExec', reversible: false, args: { handle: 'string — persona/machine handle', cmd: 'string — shell command', cwd: 'string — optional working dir' }, description: 'Run a shell command in an agent persona OR over a machine (e.g. ssh to the tinix box — nvidia-smi/docker ps). Immediate; coarse authority.' },
+        { name: 'machineRepoStatus', reversible: false, args: { handle: 'string — a machine handle from agentsList' }, description: "Read a full-VM machine's LOCAL config checkout — the repo whose HEAD is its source-of-truth config (e.g. ~/tinix): current HEAD/branch/subject + dirty files." },
+        { name: 'machineRepoExec', reversible: false, args: { handle: 'string — a machine handle', cmd: 'string — shell command run IN the checkout (git ops, generate-compose.py, ./deploy-models.sh)', cwd: 'string — optional working dir (defaults to the repo root)' }, description: 'Run a command in a full-VM machine\'s LOCAL config checkout — e.g. edit ~/tinix/deployments.yaml then ./deploy-models.sh, which ssh-pushes the new compose to the box. Coarse authority over that repo. (See the /tinix skill.)' },
         { name: 'routeToDev', reversible: false, args: { handle: 'string — OPTIONAL: a code-session handle from agentsList, a name/id, or "blacksmith"; omit to use the default dev session', task: 'string — the tool-build / code task to hand off' }, description: 'Route a task to a registered code session (the Blacksmith) IF one is connected, when you need a tool/connector built or code run you cannot do yourself. It may be unavailable (none registered) — if routeToDev says so, do not keep retrying; instead consider proposeTool (build the tool yourself) or tell dan what is needed.' },
       );
     }

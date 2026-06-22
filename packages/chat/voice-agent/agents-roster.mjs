@@ -72,8 +72,8 @@ const sshExec = (ip, cmd, cwd, timeoutMs = 60000) => new Promise(resolve => {
 // local shell), tinix (the GPU box, ssh), rovie (the rover, ssh). Config: ~/.config/field-agent/
 // machines.json [{name, ssh|local, role}]. Same shell-node shape as a persona: status()=read,
 // exec(cmd,{cwd})=the coarse terminal, readOnly() attenuates.
-const MACHINES_FILE = '/home/dan/.config/field-agent/machines.json';
-const readMachines = () => { try { const m = JSON.parse(fs.readFileSync(MACHINES_FILE, 'utf8')); return Array.isArray(m) ? m : []; } catch { return []; } };
+const MACHINES_FILE = () => process.env.MACHINES_FILE || '/home/dan/.config/field-agent/machines.json'; // env-overridable for staging/tests
+const readMachines = () => { try { const m = JSON.parse(fs.readFileSync(MACHINES_FILE(), 'utf8')); return Array.isArray(m) ? m : []; } catch { return []; } };
 const localExec = (cmd, cwd, timeoutMs = 60000) => new Promise(resolve => {
   const full = cwd ? `cd ${JSON.stringify(String(cwd))} && ${String(cmd || '')}` : String(cmd || '');
   execFile('bash', ['-lc', full], { timeout: timeoutMs, maxBuffer: 4 * 1024 * 1024 },
@@ -131,19 +131,37 @@ export const makeAgentRoster = async () => {
     return reg(key, Far(`DevSession(${s.id})${ro ? '·ro' : ''}`, base), handle);
   };
   // A MACHINE node — a shell over a host (archua=local, tinix/rovie=ssh). Same shape as a persona.
+  // FULL-VM machines (m.git set) ALSO carry a LOCAL git checkout — the repo on THIS host whose HEAD is the
+  // machine's source-of-truth config (e.g. ~/tinix, whose ./deploy-models.sh then ssh-pushes to the box). So
+  // the object grants BOTH a checkout (repoStatus/repoExec, run locally where the repo lives) and the remote
+  // shell over the box (exec). readOnly() keeps repoStatus (a read) but drops exec + repoExec.
   const makeMachine = (m, ro) => {
     const key = `machine:${m.name}:${ro ? 'ro' : 'rw'}`;
     if (memo.has(key)) return memo.get(key);
     const handle = newHandle();
     const target = m.ssh || m.host || m.name;
     const exec = (cmd, opts = {}) => (m.local ? localExec(cmd, opts.cwd, opts.timeoutMs || 60000) : sshTo(target, cmd, opts.cwd, opts.timeoutMs || 60000));
+    const repoPath = m.git ? String(m.git).replace(/^~(?=\/|$)/, '/home/dan') : '';
+    const repoStatus = async () => {
+      const q = JSON.stringify(repoPath);
+      const r = await localExec(`cd ${q} && echo "HEAD:$(git rev-parse --short HEAD 2>/dev/null)" && echo "BRANCH:$(git rev-parse --abbrev-ref HEAD 2>/dev/null)" && echo "SUBJECT:$(git log -1 --format=%s 2>/dev/null)" && echo "DIRTY-START" && git status --porcelain 2>/dev/null`, null, 15000);
+      const lines = String(r.stdout || '').split('\n');
+      const pick = pfx => { const l = lines.find(x => x.startsWith(pfx)); return l ? l.slice(pfx.length) : ''; };
+      const di = lines.indexOf('DIRTY-START');
+      const dirty = di >= 0 ? lines.slice(di + 1).filter(Boolean) : [];
+      return harden({ ok: r.ok, repo: repoPath, head: pick('HEAD:'), branch: pick('BRANCH:'), subject: pick('SUBJECT:'), dirty: dirty.length, changed: dirty.slice(0, 40) });
+    };
     const base = {
-      help: () => `Machine "${m.name}" — ${m.local ? 'this host (local shell)' : 'ssh ' + target}.${ro ? ' READ-ONLY.' : ' status() is read; exec(cmd,{cwd}) is a shell over the machine.'}`,
-      describe: () => harden({ kind: 'machine', handle, name: m.name, host: m.local ? 'local' : target, role: m.role || '', readOnly: !!ro }),
+      help: () => `Machine "${m.name}" — ${m.local ? 'this host (local shell)' : 'ssh ' + target}.${repoPath ? ` Config checkout at ${repoPath} (repoStatus/repoExec).` : ''}${ro ? ' READ-ONLY.' : ' status() is read; exec(cmd,{cwd}) is a shell over the machine.'}`,
+      describe: () => harden({ kind: 'machine', handle, name: m.name, host: m.local ? 'local' : target, role: m.role || '', git: repoPath || undefined, readOnly: !!ro }),
       status: async () => { const r = await exec('uptime 2>/dev/null || true', { timeoutMs: 8000 }); return harden({ name: m.name, host: m.local ? 'local' : target, up: r.ok, info: ((r.stdout || '').trim() || (r.stderr || '').trim()).slice(0, 200) }); },
       readOnly: () => makeMachine(m, true),
     };
-    if (!ro) base.exec = exec;
+    if (repoPath) base.repoStatus = repoStatus; // reading the checkout's HEAD is a read authority (kept even read-only)
+    if (!ro) {
+      base.exec = exec;
+      if (repoPath) base.repoExec = (cmd, opts = {}) => localExec(String(cmd || ''), opts.cwd || repoPath, opts.timeoutMs || 300000); // runs IN the checkout (git ops, generate-compose, ./deploy-models.sh); deploys can be slow → 5m
+    }
     return reg(key, Far(`Machine(${m.name})${ro ? '·ro' : ''}`, base), handle);
   };
 

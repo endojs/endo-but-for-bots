@@ -19,7 +19,7 @@ const POLICY = {
   // read — observe only, free
   searchNotes: 'read', readNote: 'read', consult: 'read', fetchUrl: 'read', transcribeYoutube: 'read',
   haFind: 'read', haTree: 'read', haState: 'read',
-  agentsList: 'read', agentStatus: 'read',
+  agentsList: 'read', agentStatus: 'read', machineRepoStatus: 'read',
   fileList: 'read', fileRead: 'read', listTimers: 'read',
   contactsSearch: 'read', contactsGet: 'read',
   listSpecialists: 'read', listNotifications: 'read', kazputerStatus: 'read', search: 'read',
@@ -70,7 +70,7 @@ const POLICY = {
   // `host` ⇒ you ARE the operator), or an owner-wired/owner-admitted external tool (the wiring/review
   // step WAS the authorization; connectors inject keys server-side + are SSRF-guarded; custom tools
   // are SES-sandboxed)
-  vmExec: 'coarse', agentExec: 'coarse', hostExec: 'coarse',
+  vmExec: 'coarse', agentExec: 'coarse', machineRepoExec: 'coarse', hostExec: 'coarse',
   callConnector: 'coarse', callCustomTool: 'coarse', callObject: 'coarse', // call a held inventory object (accepted Endo cap) over /rpc
   listObjects: 'read', // list the accepted-invite objects in the inventory (no swissnum surfaced)
   // autonomous self-improvement: the grant (selfImprove, implement-mode only) + the SELF_IMPROVE_AUTOMERGE
