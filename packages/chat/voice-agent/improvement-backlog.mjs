@@ -1,8 +1,9 @@
-// improvement-backlog.mjs — a concrete, FILE-SCOPED dataset of improvement targets the self-improvement
-// loop optimizes against (applying FAPO's principle: drive a closed loop with a concrete dataset, not
-// open-ended research). Research PROPOSES precise targets into the backlog; the loop DRAINS the top one,
-// implements + independently verifies it, and RECORDS the outcome (FAPO's failure attribution). A precise,
-// file-scoped goal is what makes the executor succeed — vague goals produce empty branches.
+// improvement-backlog.mjs — a concrete dataset of improvement targets the self-improvement loop optimizes
+// against (applying FAPO's principle: drive a closed loop with a concrete dataset, not open-ended research).
+// Research PROPOSES targets into the backlog; the loop DRAINS the top one, implements + INDEPENDENTLY
+// verifies it, and RECORDS the outcome (FAPO's failure attribution). Targets need NOT be file-scoped — a
+// larger ARCHITECTURAL change is fine; the GATE is the suite (the loop merges only if it stays green +
+// re-verifies post-merge). A precise goal still implements more reliably, but breadth is allowed now.
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -15,11 +16,12 @@ const save = s => { try { fs.mkdirSync(path.dirname(file()), { recursive: true }
 
 export const listBacklog = ({ status } = {}) => load().items.filter(i => !status || i.status === status).map(i => ({ id: i.id, goal: i.goal, status: i.status, priority: i.priority, attempts: i.attempts, by: i.by, lastOutcome: i.lastOutcome || null }));
 
-// add a precise, file-scoped target. de-dupes against an existing OPEN item with the same goal.
+// add an improvement target (precise file-scoped OR a larger architectural change). de-dupes against an
+// existing OPEN item with the same goal. The suite — not file-scoping — is what gates a target landing.
 export const addBacklog = ({ goal, successCommand, rationale, by, priority } = {}) => {
   const g = String(goal || '').trim();
   if (!g) return { ok: false, error: 'a goal is required' };
-  if (g.length < 25) return { ok: false, error: 'goal too vague — name the EXACT file + the EXACT change (a one-liner will not implement)' };
+  if (g.length < 12) return { ok: false, error: 'goal too short — describe the change + how the suite verifies it (a few words will not implement)' };
   const s = load();
   if (s.items.some(i => i.status === 'open' && i.goal === g)) return { ok: true, deduped: true };
   const item = { id: `imp-${crypto.randomBytes(4).toString('hex')}`, goal: g, successCommand: successCommand ? String(successCommand) : null, rationale: String(rationale || '').slice(0, 600), priority: Number(priority) || 0, status: 'open', by: String(by || ''), addedAt: now(), attempts: 0 };

@@ -11,11 +11,15 @@ import assert from 'node:assert/strict';
 const { addBacklog, listBacklog, nextOpen, recordOutcome, clearResolved } = await import('./improvement-backlog.mjs');
 after(() => { try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* */ } });
 
-test('a precise target is added; a VAGUE one is rejected (precision is what makes the executor succeed)', () => {
+test('a precise target is added; a larger architectural goal is ALSO allowed (suite is the gate); only too-SHORT is refused', () => {
   const ok = addBacklog({ goal: 'In packages/chat/voice-agent/improvement-backlog.mjs, add an exported foo() returning 1, and a test asserting foo()===1.', priority: 5 });
   assert.equal(ok.ok, true); assert.ok(ok.id);
-  const vague = addBacklog({ goal: 'improve orchestration' });
-  assert.equal(vague.ok, false, 'a one-liner vague goal is refused');
+  // file-scoping is no longer required — a broader architectural goal is accepted (it lands only if the suite stays green)
+  const arch = addBacklog({ goal: 'refactor the orchestration layer to share one tool-ring resolver across delegate/employ/specialists' });
+  assert.equal(arch.ok, true, 'a larger architectural goal is allowed');
+  // only a too-short goal (< 12 chars) is refused
+  const tiny = addBacklog({ goal: 'fix it' });
+  assert.equal(tiny.ok, false, 'a too-short goal is refused');
 });
 
 test('nextOpen returns the highest-priority OPEN target; recordOutcome staged/merged removes it from open', () => {
