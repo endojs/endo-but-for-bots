@@ -496,6 +496,7 @@ export const POWERS = harden({
   contact: { label: 'Message the owner — your back-channel to reach dan (inbox + phone)', verbs: ['messageOwner'] },
   connectors: { label: 'Call connected API services (tools the owner wired up; keys injected server-side)', verbs: ['listConnectors', 'callConnector'] },
   customtools: { label: 'Use admitted library tools (agent-built, owner-reviewed; sandboxed)', verbs: ['listCustomTools', 'callCustomTool'] },
+  objects: { label: 'Accept Endo invite links into your inventory + call held objects (each accept is owner-confirmed)', verbs: ['proposeAcceptInvite', 'listObjects', 'callObject'] },
   phone: { label: 'Push a notification to your phone', verbs: ['pushPhone'] },
   timers: { label: 'Schedule wake-ups / reminders that PING dan (for things a human must do)', verbs: ['scheduleWakeup', 'repeatEvery', 'cancelTimer', 'listTimers'] },
   schedule: { label: 'Create + edit SCHEDULED TASKS — recurring autonomous runs that DO the work themselves on a cadence (use this, not a reminder, when the agent can do the task)', verbs: ['scheduleTask', 'listScheduledTasks', 'editScheduledTask', 'cancelScheduledTask'] },
@@ -664,7 +665,7 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
   //    HomeAssistant is EXCLUDED — physical-world actions (locks!) always confirm;
   //    per-entity HA autonomy is future work needing per-cap attribution. ──────────
   const AUTOCONFIRM_FILE = autoConfirmFile || '/home/dan/.config/field-agent/auto-confirm.json';
-  const NEVER_AUTO = new Set(['home-assistant', 'spawn-specialist']); // physical-world + authority-granting actions ALWAYS confirm
+  const NEVER_AUTO = new Set(['home-assistant', 'spawn-specialist', 'accept-invite']); // physical-world + authority-granting actions ALWAYS confirm
   let autoRules = [];
   try { autoRules = JSON.parse(fs.readFileSync(AUTOCONFIRM_FILE, 'utf8')).rules || []; } catch { autoRules = []; }
   const saveAutoRules = () => { try { fs.mkdirSync(path.dirname(AUTOCONFIRM_FILE), { recursive: true }); fs.writeFileSync(AUTOCONFIRM_FILE, JSON.stringify({ rules: autoRules }, null, 2), { mode: 0o600 }); } catch (e) { /* best effort */ } };
@@ -692,6 +693,15 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
   let scopedCaps = [];
   try { scopedCaps = JSON.parse(fs.readFileSync(SCOPED_FILE, 'utf8')).caps || []; } catch { scopedCaps = []; }
   const saveScoped = () => { try { fs.mkdirSync(path.dirname(SCOPED_FILE), { recursive: true }); fs.writeFileSync(SCOPED_FILE, JSON.stringify({ caps: scopedCaps }, null, 2), { mode: 0o600 }); } catch (e) { /* best effort */ } };
+  // ── INVENTORY: external Endo capabilities the agent ACCEPTED (each via an owner-confirmed proposal) — the
+  //    inbound counterpart to createInvite. The swissnum is held host-side (mode 0600), NEVER spoken/rendered;
+  //    the object is called over the standard /rpc {swissnum, method, args} seam (the same one createInvite shares).
+  const OBJECTS_FILE = '/home/dan/.config/field-agent/accepted-objects.json';
+  let acceptedObjects = [];
+  try { acceptedObjects = JSON.parse(fs.readFileSync(OBJECTS_FILE, 'utf8')).objects || []; } catch { acceptedObjects = []; }
+  const saveAcceptedObjects = () => { try { fs.mkdirSync(path.dirname(OBJECTS_FILE), { recursive: true }); fs.writeFileSync(OBJECTS_FILE, JSON.stringify({ objects: acceptedObjects }, null, 2), { mode: 0o600 }); } catch (e) { /* best effort */ } };
+  const parseInvite = link => { const s = String(link || '').trim(); const m = /#(?:cap|agent)=([0-9a-fA-F]{16,})/.exec(s) || /(?:^|[^0-9a-f])([0-9a-f]{32,128})(?:[^0-9a-f]|$)/.exec(s); if (!m) return null; let origin = ''; try { origin = new URL(s.split('#')[0]).origin; } catch { /* same-instance / relative link */ } return { origin, swissnum: m[1] }; };
+  const rpcCall = async (origin, swissnum, method, args) => { const base = origin || baseUrl; try { return await (await fetch(`${base}/rpc`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ swissnum, method: String(method || 'describe'), args: Array.isArray(args) ? args : (args == null ? [] : [args]) }) })).json(); } catch (e) { return { error: e.message }; } };
   const specSlug = name => `spec-${String(name || 'x').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 32) || 'x'}`;
   const findSpecialist = ref => { const r = String(ref || ''); return specialists.find(s => s.id === r || s.id === specSlug(r) || s.name.toLowerCase() === r.toLowerCase()); };
   const specNodes = new Map(); // id → its agent-node (built lazily / at boot)
@@ -706,6 +716,28 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
   const baseVerb = harden({
     searchNotes: { reversible: false, args: { query: 'string' }, description: 'Search your personal notes; returns matches.',
       run: async ({ query }, agent, ctx = {}) => (ctx.notes || aff.notes).search(String(query || ''), { limit: 6 }) },
+    // ── INVENTORY (the `objects` power): accept an Endo invite link → a named object you can call. The
+    //    inbound counterpart to createInvite. Accepting external authority ALWAYS confirms (NEVER_AUTO).
+    proposeAcceptInvite: { reversible: false, args: { link: 'string — the Endo invite / #cap= link to accept', name: 'string — what to CALL this object in your inventory (if the user has not named it, ASK them first)', description: 'string — what the object is / does' },
+      description: 'ACCEPT an Endo invite link and add the capability it grants as a NAMED object in your inventory. Does NOT add it yet — it PROPOSES it for the owner to confirm (they can rename it); accepting external authority always confirms. Once accepted, discover + call it with callObject (method "describe" lists its methods). The link/swissnum is held securely host-side, never shown.',
+      run: async ({ link, name, description }, agent) => {
+        const parsed = parseInvite(link); if (!parsed) return { ok: false, error: 'that does not look like an Endo invite / #cap= link' };
+        const nm = String(name || '').trim() || 'new object';
+        return propose({ type: 'accept-invite', power: 'objects', agent, title: `Accept invite → "${nm}"`, summary: `from ${parsed.origin || 'this instance'}`,
+          detail: { name: nm, origin: parsed.origin || '(this instance)', description: String(description || '') }, // cap-hygiene: NO swissnum in the detail shown to the LLM/DOM
+          commit: async () => {
+            const d = await rpcCall(parsed.origin, parsed.swissnum, 'describe', []);
+            const methods = (d && Array.isArray(d.methods)) ? d.methods : (Array.isArray(d) ? d : []);
+            acceptedObjects = acceptedObjects.filter(x => x.name !== nm).concat([{ name: nm, origin: parsed.origin, swissnum: parsed.swissnum, description: String(description || ''), methods, addedAt: new Date().toISOString(), by: agent }]);
+            saveAcceptedObjects();
+            return { ok: true, name: nm, methods };
+          } });
+      } },
+    listObjects: { reversible: false, args: {}, description: 'List the objects in your inventory (accepted Endo invites): name, where each is from, what it does, and its methods. Call one with callObject.',
+      run: async () => ({ ok: true, objects: acceptedObjects.map(o => ({ name: o.name, origin: o.origin || '(this instance)', description: o.description || '', methods: o.methods || [] })) }) },
+    callObject: { reversible: false, args: { name: 'string — an object name from listObjects', method: 'string — the method to call (use "describe" to discover its methods)', args: 'array — arguments' },
+      description: 'Call a method on an object in your inventory (an accepted Endo capability). The held swissnum is used host-side; never shown.',
+      run: async ({ name, method, args } = {}) => { const o = acceptedObjects.find(x => x.name === String(name || '')); if (!o) return { ok: false, error: `no object named "${name}" — see listObjects` }; return { ok: true, value: await rpcCall(o.origin, o.swissnum, method, args) }; } },
     // ⚠️ self-improvement: implement on an isolated worktree → independently verify → (flag-gated) auto-merge.
     improveSystem: { reversible: false, args: { goal: 'string — the concrete system improvement to implement', successCommand: 'string — OPTIONAL: the command that must pass to prove it (defaults to the full voice-agent test suite)' },
       description: 'Autonomously IMPLEMENT a system improvement: a confined executor builds it on a FRESH git worktree + ships a test; the harness INDEPENDENTLY re-verifies, and (only if SELF_IMPROVE_AUTOMERGE is enabled) merges to the live branch with a post-merge re-verify + auto-revert on failure. One at a time. With auto-merge off it stops at a verified, ready-to-review branch (the safe default).',

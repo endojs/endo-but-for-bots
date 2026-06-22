@@ -64,13 +64,15 @@ const POLICY = {
   proposeKazputerSetting: 'propose', proposeKazputerCoins: 'propose',
   dietRefreshSite: 'propose', // publishing a food guide is outward → confirm-gated
   proposeTool: 'propose', // admitting agent-authored CODE is security-sensitive → owner reviews + admits
+  proposeAcceptInvite: 'propose', // accepting an external Endo capability into the inventory → owner confirms
   // coarse — the grant IS the authorization, no per-action confirm (by design): root over a
   // kernel-isolated sandbox (vmExec/agentExec), the operator's own host shell (hostExec — you hold
   // `host` ⇒ you ARE the operator), or an owner-wired/owner-admitted external tool (the wiring/review
   // step WAS the authorization; connectors inject keys server-side + are SSRF-guarded; custom tools
   // are SES-sandboxed)
   vmExec: 'coarse', agentExec: 'coarse', hostExec: 'coarse',
-  callConnector: 'coarse', callCustomTool: 'coarse',
+  callConnector: 'coarse', callCustomTool: 'coarse', callObject: 'coarse', // call a held inventory object (accepted Endo cap) over /rpc
+  listObjects: 'read', // list the accepted-invite objects in the inventory (no swissnum surfaced)
   // autonomous self-improvement: the grant (selfImprove, implement-mode only) + the SELF_IMPROVE_AUTOMERGE
   // flag ARE the authorization; the per-action gate is the independent verify + post-merge re-verify + the
   // deliberate restart (merge≠deploy), not a confirm dialog. Grant-time authorization → coarse.

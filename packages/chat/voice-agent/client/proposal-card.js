@@ -29,6 +29,7 @@ const proposalBody = p => {
     case 'give-kazputer': return h('div', null, [kv([['for', d.name], ['email', d.email]]), warn('Confirming creates a new Kazputer and emails the invite link.')]);
     case 'kazputer-setting': return kv([['setting', d.setting], ['value', String(d.value)]]);
     case 'kazputer-coins': return kv([['coins', `${Number(d.coins) >= 0 ? '+' : ''}${d.coins}`]]);
+    case 'accept-invite': return h('div', null, [kv([['name', d.name], ['from', d.origin]]), d.description ? h('div', { class: 'diff' }, d.description) : null, warn('Confirming adds this external Endo capability to the agent\'s inventory — it can then call it. Only accept invites from sources you trust.')]);
     default: return h('div', { class: 'kv' }, p.summary || '');
   }
 };

@@ -134,7 +134,7 @@ const bubble = (who, text, agent) => {
 //    real (operator-held) action; the agent never could. ────────────────────────
 let isRoot = false;
 let heldPowers = new Set(); // the powers this cap holds — gates who may confirm a proposal
-const ICON = { 'note-edit': '📝', 'home-assistant': '🏠', email: '✉️', subagent: '🤖', 'system-prompt': '🧠', 'contact-add': '👤', 'contact-edit': '👤', 'spawn-specialist': '🧑‍🔬', 'give-kazputer': '📱', 'kazputer-setting': '📱', 'kazputer-coins': '🪙' };
+const ICON = { 'note-edit': '📝', 'home-assistant': '🏠', email: '✉️', subagent: '🤖', 'system-prompt': '🧠', 'contact-add': '👤', 'contact-edit': '👤', 'spawn-specialist': '🧑‍🔬', 'give-kazputer': '📱', 'kazputer-setting': '📱', 'kazputer-coins': '🪙', 'accept-invite': '🎟️' };
 // per-power glyphs for the consent (scope-approval) card; 🔑 is the generic fallback.
 const POWER_ICON = { notes: '📓', reference: '📚', web: '🌐', research: '🔎', youtube: '📺', images: '🎨', feed: '📣', phone: '📱', timers: '⏰', browser: '🧭', home: '🏠', vm: '🖥️', host: '🖥️', agents: '🛰️', delegate: '🤝', roles: '🧑‍🔬', homeassistant: '🏠', email: '✉️', subagent: '🤖', contacts: '👥', contact: '📨', specialists: '🧑‍🔬', kazputer: '📱', dietician: '🥗', app: '🧩' };
 const powerIcon = p => POWER_ICON[p] || '🔑';
