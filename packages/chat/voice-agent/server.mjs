@@ -677,6 +677,7 @@ const handler = async (req, res) => {
     if (u.pathname === '/grain-ui.js') return serveFile(res, 'grain-ui.js', 'text/javascript; charset=utf-8');
     if (u.pathname === '/theme.js') return serveFile(res, 'theme.js', 'text/javascript; charset=utf-8');
     if (u.pathname === '/fork-model.js') return serveFile(res, 'fork-model.js', 'text/javascript; charset=utf-8');
+    if (u.pathname === '/md.js') return serveFile(res, 'md.js', 'text/javascript; charset=utf-8');
     // the sandboxed component runtime. Served with its OWN no-network CSP (a src= iframe uses its response
     // CSP, NOT the parent's — so the inline runtime runs while all network stays blocked). Loaded with
     // sandbox="allow-scripts" (opaque origin) so it still can't reach the parent DOM/cap.

@@ -36,10 +36,11 @@ export const Meta = ({ parts = [], right = null } = {}) =>
 // Card — the standard island card shell: title (+ optional time), body, footer. attention adds .att;
 // accent draws a left border (e.g. a per-agent security frame). cls overrides the shell class so the
 // same structure can wear .notif (feed) or .ncard (generic) and stay visually consistent.
-export const Card = ({ title, time, body, footer, attention = false, accent = '', cls = 'ncard' } = {}) =>
+export const Card = ({ title, time, body, footer, attention = false, accent = '', cls = 'ncard', onClick } = {}) =>
   h('div', {
-    class: `${cls}${attention ? ' att' : ''}`,
+    class: `${cls}${attention ? ' att' : ''}${onClick ? ' card-open' : ''}`,
     style: accent ? `border-left:3px solid ${accent}` : undefined,
+    onClick: onClick || undefined,
   }, [
     (title != null || (time != null && time !== '')) ? h('div', { class: 'ntitle' }, [
       h('span', null, str(title)),

@@ -102,6 +102,15 @@
   .body img { max-width:100%; border-radius:8px; margin-top:8px; border:1px solid var(--edge); }
   .body a, .dev-thread-msg a { color:var(--acc); text-decoration:underline; text-underline-offset:2px; word-break:break-word; }
   .body a:hover, .dev-thread-msg a:hover { color:var(--ink); }
+  /* rendered Markdown inside agent replies + the notification modal (themed; scoped to .md so nothing bleeds) */
+  .md h3, .md h4, .md h5 { margin:.6em 0 .3em; line-height:1.25; } .md h3 { font-size:1.15em; } .md h4 { font-size:1.05em; } .md h5 { font-size:1em; }
+  .md p { margin:.5em 0; white-space:normal; } .md > :first-child { margin-top:0; } .md > :last-child { margin-bottom:0; }
+  .md ul, .md ol { margin:.4em 0; padding-left:1.4em; } .md li { margin:.15em 0; white-space:normal; }
+  .md code { font-family:ui-monospace,Menlo,monospace; font-size:.92em; background:rgba(127,127,127,.16); padding:1px 5px; border-radius:5px; }
+  .md pre { background:var(--trace-bg); border:1px solid var(--trace-edge); border-radius:8px; padding:9px 11px; overflow:auto; margin:.5em 0; }
+  .md pre code { background:none; padding:0; font-size:.88em; }
+  .md blockquote { margin:.5em 0; padding:.1em 0 .1em .8em; border-left:3px solid var(--edge); color:var(--mut); }
+  .md hr { border:none; border-top:1px solid var(--edge); margin:.7em 0; } .md strong { font-weight:600; }
   .tools { font-size:12px; color:var(--acc); margin-top:6px; }
   /* E6: persistent per-response trace strip — full-width neon flow of the turn's tool calls */
   .trace-strip { width:100%; align-self:stretch; max-width:100%; display:flex; flex-wrap:wrap; gap:6px; align-items:center; padding:6px 2px 2px; margin:2px 0 -2px; cursor:pointer; }
@@ -207,6 +216,14 @@
   .notif.att { border-color:#5a4a1e; }
   .notif .ndone { background:transparent; border:1px solid var(--edge); color:var(--mut); padding:3px 11px; border-radius:6px; cursor:pointer; font-size:12px; }
   .notif .ndone:hover { color:var(--acc2); border-color:var(--acc2); }
+  .notif.card-open { cursor:pointer; } .notif.card-open:hover { border-color:var(--acc); }
+  /* full-text notification modal (click a notification → read it all, Markdown-rendered, + open its source chat) */
+  .nmodal-back { position:fixed; inset:0; z-index:80; background:rgba(0,0,0,.5); display:flex; align-items:center; justify-content:center; padding:max(16px,env(safe-area-inset-top)) 16px; }
+  .nmodal { background:var(--panel); color:var(--ink); border:1px solid var(--edge); border-radius:14px; max-width:680px; width:100%; max-height:82vh; display:flex; flex-direction:column; box-shadow:0 12px 40px rgba(0,0,0,.45); }
+  .nmodal-head { display:flex; align-items:center; gap:10px; padding:13px 16px; border-bottom:1px solid var(--edge); }
+  .nmodal-title { font-weight:600; font-size:15px; flex:1; }
+  .nmodal-body { padding:14px 16px; overflow:auto; }
+  .nmodal-acts { display:flex; gap:8px; padding:12px 16px; border-top:1px solid var(--edge); flex-wrap:wrap; }
   .diff { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12px; background:var(--trace-bg); border:1px solid var(--trace-edge); border-radius:8px; padding:8px 10px; overflow:auto; max-height:300px; white-space:pre-wrap; margin-top:4px; } /* themed: the proposal/email body rendered here must be readable in light too (was hardcoded #0a0f1e = 1.21:1 in light) */
   .diff .add { color:var(--acc2); } .diff .del { color:var(--bad); } .diff .ctx { color:var(--mut); }
   /* 3D conversation-trace overlay */

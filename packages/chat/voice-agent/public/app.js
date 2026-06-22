@@ -12,6 +12,7 @@
 import { renderWidgets, disposeAllWidgets } from './grain-ui.js'; // live/interactive response widgets (grain-native)
 import { theme, cycleTheme, initTheme } from './theme.js'; // the user's global style as a read-only propagator (dark/light MVP)
 import { forkRetry, forkPage, forkCount, forkIndex } from './fork-model.js'; // retry-as-fork data-model (pure, unit-tested)
+import { renderMarkdown } from './md.js'; // safe Markdown→DOM for agent replies + the notification modal
 initTheme(); // restore the saved theme + start applying it to :root as CSS vars
 (() => { // a header toggle for light/dark (the first control of the userspace-extensible style framework)
   try {
@@ -117,7 +118,9 @@ const bubble = (who, text, agent) => {
   const label = who === 'you' ? 'you' : (named ? id : 'agent');
   d.innerHTML = `<div class="who"></div><div class="body"></div>`;
   const w = d.querySelector('.who'); w.textContent = label; if (named) w.style.color = col;
-  linkify(d.querySelector('.body'), text || '…');
+  // agent replies are Markdown (agents format even unprompted) → render it; user text stays literal (linkify only)
+  const bodyEl = d.querySelector('.body');
+  if (who === 'you') { linkify(bodyEl, text || '…'); } else { bodyEl.classList.add('md'); renderMarkdown(bodyEl, text || '…'); }
   log.appendChild(d); window.scrollTo(0, document.body.scrollHeight);
   return d.querySelector('.body');
 };
@@ -2157,7 +2160,7 @@ const notifCard = (it, withDone) => {
     if (cap) { const id = 'cl' + capLinkReg.size; capLinkReg.set(id, l.href); return `<a class="nlink" href="#" data-capopen="${id}">${label}</a>`; }
     return `<a class="nlink" href="${esc(l.href)}" target="_blank" rel="noopener noreferrer">${label}</a>`;
   })].filter(Boolean).join(' · ');
-  return `<div class="notif ${it.attention ? 'att' : ''}"><div class="ntitle"><span>${esc(it.title)}</span><span class="ntime">${esc(fmtAgo(it.date))}</span></div>${it.body ? `<div class="nbody">${esc(it.body)}</div>` : ''}<div class="nmeta"><span>${meta}</span>${withDone ? `<button class="ndone" data-done="${esc(it.id)}">Done</button>` : ''}</div></div>`;
+  return `<div class="notif card-open ${it.attention ? 'att' : ''}" data-nopen="${esc(it.id)}"><div class="ntitle"><span>${esc(it.title)}</span><span class="ntime">${esc(fmtAgo(it.date))}</span></div>${it.body ? `<div class="nbody">${esc(it.body)}</div>` : ''}<div class="nmeta"><span>${meta}</span>${withDone ? `<button class="ndone" data-done="${esc(it.id)}">Done</button>` : ''}</div></div>`;
 };
 // A feed link → a render-safe { label } + an `open` closure that holds the real href/cap (never the DOM).
 // Used by the NotificationCard island (rec-list): the island shows the label, onOpenLink calls `open`.
@@ -2171,6 +2174,29 @@ const notifLinkInfo = l => {
   const href = l && l.href;
   return { label, open: href ? () => window.open(href, '_blank', 'noopener,noreferrer') : null };
 };
+// Click a notification → a big modal with the FULL text (Markdown-rendered, since the card truncates) and,
+// when the notification came from a chat, a button to OPEN THAT CHAT and resume the conversation there.
+let notifById = {};
+const showNotifModal = it => {
+  if (!it) return;
+  const back = document.createElement('div'); back.className = 'nmodal-back';
+  const onKey = e => { if (e.key === 'Escape') close(); };
+  const close = () => { back.remove(); document.removeEventListener('keydown', onKey); };
+  back.onclick = e => { if (e.target === back) close(); };
+  const card = document.createElement('div'); card.className = 'nmodal';
+  const head = document.createElement('div'); head.className = 'nmodal-head';
+  const ttl = document.createElement('div'); ttl.className = 'nmodal-title'; ttl.textContent = it.title || 'Notification';
+  const xb = document.createElement('button'); xb.className = 'mini'; xb.textContent = '✕'; xb.title = 'Close'; xb.onclick = close;
+  head.append(ttl, xb);
+  const body = document.createElement('div'); body.className = 'body md nmodal-body'; renderMarkdown(body, it.body || it.title || '');
+  const acts = document.createElement('div'); acts.className = 'nmodal-acts';
+  const chatId = (it.links || []).map(l => chatIdFromLink(l && l.href)).find(Boolean); // the source chat, if any
+  if (chatId) { const b = document.createElement('button'); b.className = 'mini primary'; b.textContent = '💬 Open chat & resume'; b.onclick = () => { close(); showTab('talk'); switchChat(chatId); }; acts.appendChild(b); }
+  (it.links || []).forEach(l => { if (chatIdFromLink(l && l.href)) return; const info = notifLinkInfo(l); if (info.open) { const b = document.createElement('button'); b.className = 'mini'; b.textContent = info.label; b.onclick = () => info.open(); acts.appendChild(b); } });
+  const cl = document.createElement('button'); cl.className = 'mini'; cl.textContent = 'Close'; cl.onclick = close; acts.appendChild(cl);
+  card.append(head, body, acts); back.appendChild(card); document.body.appendChild(back);
+  document.addEventListener('keydown', onKey);
+};
 const loadFeed = async () => { try { return await (await fetch('/feed/load', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap }) })).json(); } catch { return null; } };
 const refreshBadge = async () => { if (!cap) return; await loadAsks(); const d = await loadFeed(); const attN = d ? (d.items || []).filter(i => i.attention && !i.dismissed).length : 0; setBellBadge(openAsks.length + attN); };
 const renderInbox = async () => {
@@ -2178,9 +2204,12 @@ const renderInbox = async () => {
   const d = await loadFeed(); if (!d) return;
   capLinkReg.clear();
   const items = d.items || [];
+  notifById = {}; items.forEach(it => { if (it && it.id) notifById[it.id] = it; }); // for the click-to-expand modal
   const att = items.filter(i => i.attention && !i.dismissed);
   const rec = items.filter(i => !(i.attention && !i.dismissed)).slice(0, 40);
   const attList = $('att-list'); attList.innerHTML = '';
+  // click a notification (not its inner Done/link) → full-text modal. One delegated listener (survives re-renders).
+  if (!attList.__nopenWired) { attList.addEventListener('click', e => { const c = e.target.closest && e.target.closest('.notif[data-nopen]'); if (c && !e.target.closest('button,a')) showNotifModal(notifById[c.dataset.nopen]); }); attList.__nopenWired = true; }
   // 0) how to receive these on your phone (ntfy) — collapsible setup instructions
   try {
     const ni = await (await fetch('/notify/info', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap }) })).json();
@@ -2221,6 +2250,7 @@ const renderInbox = async () => {
     window.__fieldIslands.renderNotifications(recList, { items: prepared.map(p => p.item), withDone: false }, {
       onDone() {},
       onOpenLink: (ii, li) => { const r = recLinkResolvers[ii] && recLinkResolvers[ii][li]; if (r) r(); },
+      onOpen: id => showNotifModal(notifById[id]),
     });
   } else recList.innerHTML = rec.map(i => notifCard(i, false)).join('');
   $('att-count').textContent = (openAsks.length + att.length) ? String(openAsks.length + att.length) : '';

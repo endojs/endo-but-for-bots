@@ -16,7 +16,7 @@ import { Card, Btn, joinDot } from './ui-kit.js';
 export const NotificationCard = (props = {}) => {
   const {
     id, title = '', time = '', body = '', agent = '', avatar = '', status = '',
-    links = [], attention = false, withDone = false, onDone, onOpenLink,
+    links = [], attention = false, withDone = false, onDone, onOpenLink, onOpen,
   } = props;
   const metaBits = [
     agent ? `${avatar ? `${avatar} ` : ''}${agent}` : '',
@@ -29,5 +29,7 @@ export const NotificationCard = (props = {}) => {
     h('span', null, joinDot(metaBits)),
     withDone ? h('button', { class: 'ndone', onClick: () => onDone && onDone(id) }, 'Done') : null,
   ];
-  return Card({ cls: 'notif', title, time, body, attention, footer });
+  // clicking the card (but not its inner links/Done button) opens the full-text modal → onOpen(id)
+  const onClick = onOpen ? (e) => { if (e && e.target && e.target.closest && e.target.closest('button,a')) return; onOpen(id); } : undefined;
+  return Card({ cls: 'notif', title, time, body, attention, footer, onClick });
 };

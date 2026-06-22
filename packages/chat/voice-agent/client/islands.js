@@ -103,6 +103,7 @@ const islands = {
           ...it, withDone: d.withDone, key: it.id || idx,
           onDone: handlers.onDone,
           onOpenLink: li => handlers.onOpenLink && handlers.onOpenLink(idx, li),
+          onOpen: id => handlers.onOpen && handlers.onOpen(id),
         }))));
       notifWired = true;
     }
