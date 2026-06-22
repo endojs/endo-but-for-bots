@@ -2199,8 +2199,11 @@ const showNotifModal = it => {
   const xb = document.createElement('button'); xb.className = 'mini'; xb.textContent = '✕'; xb.title = 'Close'; xb.onclick = close;
   head.append(ttl, xb);
   const body = document.createElement('div'); body.className = 'body md nmodal-body'; renderMarkdown(body, it.body || it.title || '');
+  // the list /feed/load truncates body for the card — fetch the FULL text on open + re-render so the modal isn't cut off
+  (async () => { try { const r = await (await fetch('/feed/item', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, id: it.id }) })).json(); if (r && r.ok && r.item && String(r.item.body || '').length > String(it.body || '').length) renderMarkdown(body, r.item.body); } catch { /* keep the cached preview */ } })();
   const acts = document.createElement('div'); acts.className = 'nmodal-acts';
-  const chatId = (it.links || []).map(l => chatIdFromLink(l && l.href)).find(Boolean); // the source chat, if any
+  // the source chat: notifications carry it as chatId (run notifications) OR an in-app chat link
+  const chatId = it.chatId || (it.links || []).map(l => chatIdFromLink(l && l.href)).find(Boolean);
   if (chatId) { const b = document.createElement('button'); b.className = 'mini primary'; b.textContent = '💬 Open chat & resume'; b.onclick = () => { close(); showTab('talk'); switchChat(chatId); }; acts.appendChild(b); }
   (it.links || []).forEach(l => { if (chatIdFromLink(l && l.href)) return; const info = notifLinkInfo(l); if (info.open) { const b = document.createElement('button'); b.className = 'mini'; b.textContent = info.label; b.onclick = () => info.open(); acts.appendChild(b); } });
   const cl = document.createElement('button'); cl.className = 'mini'; cl.textContent = 'Close'; cl.onclick = close; acts.appendChild(cl);

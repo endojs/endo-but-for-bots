@@ -487,7 +487,7 @@ const runProjectAgent = async (project, agent) => {
   } catch (e) { log('sched seed-chat', e.message); }
   await postFeed({
     agent: agent.name, avatar: '⏰', title: `${project.name} › ${agent.name}`,
-    body: answer.slice(0, 400),
+    body: answer.slice(0, 8000), // store the full run summary so the click-to-expand modal isn't truncated (the card still shows a 400-char preview)
     status: nProp ? `needs your input · ${nProp} proposal(s)` : 'ran', note: `tools: ${(out.grantedPowers || agent.tools || []).join(', ')}`,
     chatId: id, click: `${BASE_URL}/#chat=${id}`, // tapping the notification opens the run
   });
@@ -1352,11 +1352,20 @@ const handler = async (req, res) => {
       let dismissed = []; try { dismissed = (JSON.parse(await fs.promises.readFile(notifStorePath(cap), 'utf8')).dismissed) || []; } catch {}
       const ds = new Set(dismissed);
       const items = entries.slice(0, 80).map(e => ({
-        id: e.id, date: e.date, agent: e.agent || '', avatar: e.avatar || '', title: e.title,
+        id: e.id, date: e.date, agent: e.agent || '', avatar: e.avatar || '', title: e.title, chatId: e.chatId || null,
         body: String(e.body || '').slice(0, 400), status: e.status || '', note: e.note || '', links: (e.links || []).map(feedLinkHref),
         attention: ATTENTION_RE.test(String(e.status || '')) || e.kind === 'notification', dismissed: ds.has(e.id),
       }));
       return json(res, 200, { items, attentionCount: items.filter(i => i.attention && !i.dismissed).length });
+    }
+    // FULL text of one notification for the click-to-expand modal (the list /feed/load truncates body for the card).
+    if (req.method === 'POST' && u.pathname === '/feed/item') {
+      const { cap, id } = await jsonBody(req);
+      if (!nodeFor(cap)) return json(res, 403, { error: 'no capability' });
+      let entries = []; try { entries = (JSON.parse(await fs.promises.readFile(FEED_FILE, 'utf8')).entries) || []; } catch {}
+      const e = entries.find(x => x && x.id === String(id || ''));
+      if (!e) return json(res, 200, { ok: false });
+      return json(res, 200, { ok: true, item: { id: e.id, title: e.title || '', body: String(e.body || ''), status: e.status || '', note: e.note || '', agent: e.agent || '', date: e.date, chatId: e.chatId || null, links: (e.links || []).map(feedLinkHref) } });
     }
     if (req.method === 'POST' && u.pathname === '/feed/dismiss') {
       const { cap, id } = await jsonBody(req);
