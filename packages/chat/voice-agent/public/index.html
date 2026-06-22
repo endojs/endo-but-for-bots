@@ -98,6 +98,7 @@
   .msg-ctrl .mc-btn:hover { color:var(--ink); background:rgba(127,127,127,.18); }
   .msg-ctrl .mc-nav { display:inline-flex; gap:4px; align-items:center; margin-left:auto; }
   .msg-ctrl .mc-count { font-variant-numeric:tabular-nums; font-size:11px; color:var(--acc); }
+  .body { white-space:pre-wrap; word-break:break-word; } /* preserve agent line breaks (a \n-joined body must not collapse to one line) */
   .body img { max-width:100%; border-radius:8px; margin-top:8px; border:1px solid var(--edge); }
   .body a, .dev-thread-msg a { color:var(--acc); text-decoration:underline; text-underline-offset:2px; word-break:break-word; }
   .body a:hover, .dev-thread-msg a:hover { color:var(--ink); }
@@ -185,11 +186,11 @@
   .ask-submit:disabled { opacity:.5; cursor:default; }
   .ask-origin { text-decoration:none; }
   /* reply-in-thread: dip into a sub-agent (dev) thread without leaving the chat */
-  .dev-thread-toggle { background:transparent; border:none; cursor:pointer; font-size:12px; padding:7px 0 0; color:var(--acc); } /* default to themed accent (the island overrides with the per-agent color); never UA-default black */
+  .dev-thread-toggle { background:transparent; border:none; cursor:pointer; font-size:12px; padding:6px 8px; margin-top:1px; min-height:30px; display:inline-flex; align-items:center; border-radius:6px; color:var(--acc); } /* themed accent (the island overrides per-agent); symmetric padding + min-height clears the 24px tap-target floor */
   .dev-thread-body { margin-top:8px; border-left:2px solid var(--edge); padding-left:10px; display:flex; flex-direction:column; gap:6px; }
   .dev-thread-msg { font-size:13px; line-height:1.5; }
   .dev-thread-row { display:flex; gap:6px; margin-top:4px; }
-  .dev-thread-row .ask-in { flex:1; }
+  .dev-thread-row .ask-in, .dev-thread-row .kit-in { flex:1; }
   /* 🔔 notification bell + inbox */
   .badge { position:absolute; top:-2px; right:-2px; background:var(--bad); color:#fff; font-size:10px; min-width:15px; height:15px; border-radius:8px; padding:0 3px; line-height:15px; text-align:center; font-weight:700; }
   .inbox-section { margin-top:10px; }
@@ -270,6 +271,8 @@
   #composer-tagline { display:none; max-width:960px; margin:0 auto 16px; text-align:center; color:var(--mut); font-size:21px; font-weight:500; letter-spacing:.2px; }
   @keyframes bubblePop { 0%{ transform:translateY(34px) scale(.55); opacity:0; } 62%{ transform:translateY(0) scale(1.04); opacity:1; } 100%{ transform:none; } }
   .msg.pop { animation:bubblePop .5s cubic-bezier(.22,1,.36,1); }
+  /* honor reduced-motion: neutralize decorative CSS animation + transitions for users who ask for it */
+  @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration:.001ms !important; animation-iteration-count:1 !important; transition-duration:.001ms !important; } }
   /* voice 'Siri orb': a big octagon that hovers right over the text input while the mic is
      listening, pulsing bigger + brighter with the LIVE input volume. JS positions it over
      #text and sets --orb-lvl (0..1) from the mic RMS at <=10Hz; the .1s transitions
@@ -302,6 +305,9 @@
   button.mini { background:transparent; border:1px solid var(--edge); color:var(--mut); padding:4px 10px; border-radius:6px; cursor:pointer; font-size:12px; }
   button.mini.bad { color:var(--bad); border-color:#5a2a2a; }
   button.mini.primary { background:var(--acc); border-color:var(--acc); color:#fff; }
+  button.mini:hover { color:var(--ink); border-color:var(--acc); } /* hover feedback everywhere, not only in .chat-bar */
+  /* a keyboard-visible focus ring for controls whose house style is outline:none (inputs keep their border-swap) */
+  button:focus-visible, a:focus-visible, [tabindex]:focus-visible, [role="button"]:focus-visible, .dev-thread-toggle:focus-visible, .mc-btn:focus-visible { outline:2px solid var(--acc); outline-offset:2px; }
   /* ── ui-kit: the confined-Preact design system (themed via the vars above; one consistent look for every island + app-within-an-app) ── */
   .kit-in { width:100%; box-sizing:border-box; background:var(--bg); border:1px solid var(--edge); color:var(--ink); border-radius:8px; padding:8px 10px; font:inherit; }
   .kit-in:focus { outline:none; border-color:var(--acc); }

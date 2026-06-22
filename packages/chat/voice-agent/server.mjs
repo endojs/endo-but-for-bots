@@ -30,6 +30,7 @@ import { makeCustomTools } from './custom-tools.mjs';
 import { makeToolShares } from './tool-shares.mjs';
 import { makeComponentGit } from './component-git.mjs';
 import { makeIslandSource } from './island-source.mjs';
+import { reuseFirstPreamble } from './component-catalog.mjs';
 import { STARTER_RING } from './system-map.mjs';
 const connectors = makeConnectors({ getSecret }); // owner-side registry (same connectors.json the agent calls)
 const customTools = makeCustomTools(); // owner-side review/admit (same custom-tools.json the agent reads)
@@ -142,7 +143,7 @@ const maybeAutoRevise = () => {
 };
 
 // Editing a confined-Preact ISLAND (its source is a client file → rewrite + rebuild, not make(powers)).
-const ISLAND_EDIT_SYS = 'You are editing a confined-Preact ISLAND — a UI component rendered through @endo/preact-container `renderConfined`. The source is a JS module built with `h(tag, props, children)` hyperscript (NO JSX), pure + stateless (state lives in cells passed via props; render-safe data only — never a swissnum/secret). Apply the user\'s requested change, keep it valid h-based confined Preact, keep the SAME exports and imports (add none), and use no DOM/network/fs/ambient access. Reply with ONLY the complete updated file as a single ```js fenced code block — no prose.';
+const ISLAND_EDIT_SYS = reuseFirstPreamble() + '\n\nYou are editing a confined-Preact ISLAND — a UI component rendered through @endo/preact-container `renderConfined`. The source is a JS module built with `h(tag, props, children)` hyperscript (NO JSX), pure + stateless (state lives in cells passed via props; render-safe data only — never a swissnum/secret). When the change ADDS UI, compose the kit primitives above (import from ./ui-kit.js) rather than hand-rolling raw `h(\'button\'/\'input\'/…)`; only write new markup when no primitive fits. Apply the user\'s requested change, keep it valid h-based confined Preact, keep the SAME exports and imports (add ONLY from ./ui-kit.js if you adopt a primitive not yet imported), use theme vars not hardcoded colours, and use no DOM/network/fs/ambient access. Reply with ONLY the complete updated file as a single ```js fenced code block — no prose.';
 const editIslandSource = async (id, prompt) => {
   if (!String(prompt || '').trim()) return { ok: false, error: 'describe the change you want' };
   const cur = await islandSource.readSourceText(id, 'HEAD'); if (cur === null) return { ok: false, error: 'unknown island' };
