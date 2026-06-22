@@ -6,23 +6,22 @@
 
 import harden from '@endo/harden';
 import { bytesFromText } from '@endo/bytes/from-string.js';
-import { fromBytes } from '@endo/pass-style/from-bytes.js';
+import { bytesToText } from '@endo/bytes/to-string.js';
 import { toBytes } from '@endo/pass-style/to-bytes.js';
 
 import { ocapnPassStyleOf } from '../codecs/ocapn-pass-style.js';
 
-// Strict UTF-8 decoder used for record labels carried as bytestrings on
-// the wire.  `fatal: true` rejects malformed sequences rather than
-// silently substituting U+FFFD, matching the historical behavior of
-// the displaced `buffer-utils` helper.
-const labelTextDecoder = new TextDecoder('utf-8', { fatal: true });
-
 /**
+ * Decode a bytestring label from the wire as a strict UTF-8 string.
+ * Uses `bytesToText` with `{ fatal: true }` so malformed sequences
+ * throw rather than substituting U+FFFD.  `bytesToText` accepts the
+ * byteArray passable form (frozen Uint8Array over immutable ArrayBuffer)
+ * directly, performing the mutable copy internally only when needed.
+ *
  * @param {ArrayBufferView | ArrayBufferLike} buffer
  * @returns {string}
  */
-const decodeBytestringLabel = buffer =>
-  labelTextDecoder.decode(fromBytes(buffer));
+const decodeBytestringLabel = buffer => bytesToText(buffer, { fatal: true });
 /**
  * @typedef {object} SyrupCodec
  * @property {function(SyrupReader): any} read

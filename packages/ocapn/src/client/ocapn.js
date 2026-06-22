@@ -1,7 +1,7 @@
 // @ts-check
 
 /**
- * @import { RemoteKit, Settler } from '@endo/eventual-send'
+ * @import { RemoteKit, Settler, HandledExecutor } from '@endo/eventual-send'
  * @import { Slot } from '../captp/types.js'
  * @import { ReferenceKit, TakeNextRemoteAnswer, RemoteKitHandler } from './ref-kit.js'
  * @import { OcapnTable } from '../captp/ocapn-tables.js'
@@ -261,7 +261,7 @@ const makeMakeRemoteKitForHandler = ({ logger, quietReject }) => {
     /** @type {Settler | undefined} */
     let settler;
 
-    /** @type {import('@endo/eventual-send').HandledExecutor} */
+    /** @type {HandledExecutor} */
     const executor = (resolve, reject, resolveWithPresence) => {
       const s = Far('settler', {
         resolve: value => {
@@ -524,7 +524,7 @@ const makeBootstrapObject = (
       return object;
     },
     /**
-     * @param {ArrayBufferView | ArrayBufferLike} giftId
+     * @param {Uint8Array} giftId
      * @param {any} gift
      */
     'deposit-gift': (giftId, gift) => {

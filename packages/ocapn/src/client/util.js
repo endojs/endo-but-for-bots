@@ -5,7 +5,6 @@
  * @import { LocationId, SwissNum } from './types.js'
  */
 
-import { fromBytes } from '@endo/pass-style/from-bytes.js';
 import { toBytes } from '@endo/pass-style/to-bytes.js';
 import { encodeHex } from '@endo/hex';
 
@@ -14,7 +13,7 @@ import { encodeHex } from '@endo/hex';
  * @returns {string}
  */
 export const toHex = value => {
-  return encodeHex(fromBytes(value));
+  return encodeHex(value);
 };
 
 /**
@@ -48,15 +47,22 @@ export const locationToLocationId = location => {
   return uri;
 };
 
+// Capture the ASCII TextDecoder once at module load.  ASCII decoding is
+// used for swissnum values, which are constrained to the printable ASCII
+// alphabet.  Fatal mode ensures any non-ASCII byte causes an immediate
+// throw rather than silent substitution.
 const swissnumDecoder = new TextDecoder('ascii', { fatal: true });
 const swissnumEncoder = new TextEncoder();
 
 /**
- * @param {ArrayBufferView | ArrayBufferLike} value
+ * @param {Uint8Array} value
  * @returns {string}
  */
 export const decodeSwissnum = value => {
-  return swissnumDecoder.decode(fromBytes(value));
+  // TextDecoder.decode rejects views backed by an immutable ArrayBuffer
+  // (the byteArray passable form).  Copying via the typed-array copy
+  // constructor produces a plain mutable Uint8Array with the same bytes.
+  return swissnumDecoder.decode(new Uint8Array(value));
 };
 
 /**
@@ -104,5 +110,5 @@ export const swissnumFromBytes = bytes => {
  * @returns {Uint8Array}
  */
 export const swissnumToBytes = swissNum => {
-  return fromBytes(swissNum);
+  return new Uint8Array(swissNum);
 };

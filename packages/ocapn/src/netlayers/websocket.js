@@ -3,7 +3,6 @@
 import { randomBytes } from 'node:crypto';
 import { WebSocket, WebSocketServer } from 'ws';
 import harden from '@endo/harden';
-import { fromBytes } from '@endo/pass-style/from-bytes.js';
 import { toBytes } from '@endo/pass-style/to-bytes.js';
 
 import { makeOcapnKeyPair, makeOcapnPublicKey } from '../cryptography.js';
@@ -15,7 +14,7 @@ import { makeOcapnRecordCodecFromDefinition } from '../codecs/util.js';
 
 /**
  * @import { RawData } from 'ws'
- * @import { Connection, NetLayer, NetlayerHandlers, SocketOperations } from '../client/types.js'
+ * @import { Connection, Logger, NetLayer, NetlayerHandlers, SocketOperations } from '../client/types.js'
  * @import { OcapnLocation, OcapnSignature } from '../codecs/components.js'
  */
 
@@ -268,7 +267,7 @@ const makeIncomingSocketOperations = ws => {
 /**
  * @param {object} options
  * @param {NetlayerHandlers} options.handlers
- * @param {import('../client/types.js').Logger} options.logger
+ * @param {Logger} options.logger
  * @param {number} [options.specifiedPort]
  * @param {string} [options.specifiedHostname]
  * @param {string} [options.specifiedUrl]
@@ -282,7 +281,12 @@ export const makeWebSocketNetLayer = async ({
   specifiedUrl,
 }) => {
   const designatorKeyPair = makeOcapnKeyPair();
-  const designatorPublicKey = fromBytes(designatorKeyPair.publicKey.bytes);
+  // publicKey.bytes is always a Uint8Array at runtime (produced by toBytes()).
+  // base32Encode iterates via for-of, which works on frozen Uint8Array values
+  // backed by immutable ArrayBuffers without a mutable copy.
+  const designatorPublicKey = /** @type {Uint8Array} */ (
+    designatorKeyPair.publicKey.bytes
+  );
   const designator = base32Encode(designatorPublicKey);
 
   const server = new WebSocketServer({

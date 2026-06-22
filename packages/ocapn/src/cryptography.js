@@ -5,6 +5,7 @@ import harden from '@endo/harden';
 import { toBytes } from '@endo/pass-style/to-bytes.js';
 import { fromBytes } from '@endo/pass-style/from-bytes.js';
 import { concatBytes } from '@endo/bytes/concat.js';
+import { compareBytes } from '@endo/bytes/compare.js';
 import { ed25519 } from '@noble/curves/ed25519';
 import { sha256 } from '@noble/hashes/sha2.js';
 
@@ -12,7 +13,6 @@ import {
   serializeOcapnMyLocation,
   serializeOcapnPublicKeyDescriptor,
 } from './codecs/components.js';
-import { compareUint8Arrays } from './syrup/compare.js';
 import {
   makeHandoffGiveDescriptor,
   makeHandoffGiveSigEnvelope,
@@ -51,9 +51,9 @@ const sessionIdHashPrefixBytes = textEncoder.encode('prot0');
  * @returns {Uint8Array}
  */
 const ocapNSignatureToBytes = sig => {
-  const rBytes = fromBytes(sig.r);
-  const sBytes = fromBytes(sig.s);
-  return concatBytes([rBytes, sBytes]);
+  // concatBytes from @endo/bytes accepts the byteArray passable form
+  // (frozen Uint8Array over immutable ArrayBuffer) directly — no copy needed.
+  return concatBytes([sig.r, sig.s]);
 };
 
 /**
@@ -170,18 +170,14 @@ export const publicKeyDescriptorToPublicKey = publicKeyDescriptor => {
  * @returns {SessionId}
  */
 export const makeSessionId = (peerIdOne, peerIdTwo) => {
-  // Convert to Uint8Array for comparison
-  const peerIdOneBytes = fromBytes(peerIdOne);
-  const peerIdTwoBytes = fromBytes(peerIdTwo);
-
-  // Sort both IDs based on the resulting octets
-  const result = compareUint8Arrays(peerIdOneBytes, peerIdTwoBytes);
-  const peerIds =
-    result < 0
-      ? [peerIdOneBytes, peerIdTwoBytes]
-      : [peerIdTwoBytes, peerIdOneBytes];
-  // Concatinating them in the order from number 3
-  // Append the string "prot0" to the beginning
+  // Sort both IDs based on their octets.  compareBytes accepts the byteArray
+  // passable form (frozen Uint8Array over immutable ArrayBuffer) directly —
+  // no intermediate mutable copy needed.
+  const result = compareBytes(peerIdOne, peerIdTwo);
+  const peerIds = result < 0 ? [peerIdOne, peerIdTwo] : [peerIdTwo, peerIdOne];
+  // Concatenate them in the sorted order, prepend the "prot0" protocol tag.
+  // concatBytes from @endo/bytes accepts both the byteArray passable form and
+  // plain mutable Uint8Arrays without an intermediate copy per chunk.
   const sessionIdBytes = concatBytes([sessionIdHashPrefixBytes, ...peerIds]);
   // Double SHA256 hash the resulting string
   const hash1 = sha256(sessionIdBytes);
@@ -243,7 +239,7 @@ export const signHandoffGive = (handoffGive, keyPair) => {
  * @param {OcapnLocation} exporterLocation
  * @param {SessionId} gifterExporterSessionId
  * @param {PublicKeyId} gifterSideId
- * @param {ArrayBufferView | ArrayBufferLike} giftId
+ * @param {Uint8Array} giftId
  * @param {OcapnKeyPair} gifterKeyForExporter
  * @returns {HandoffGiveSigEnvelope}
  */

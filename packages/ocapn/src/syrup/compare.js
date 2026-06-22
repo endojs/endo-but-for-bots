@@ -1,14 +1,18 @@
 // @ts-check
 
-import { fromBytes } from '@endo/pass-style/from-bytes.js';
+export { compareBytes as compareImmutableArrayBuffers } from '@endo/bytes/compare.js';
 
 /**
+ * Compare two `Uint8Array` values lexicographically, with optional
+ * start/end slicing.  Used by the Syrup ordering module for in-place
+ * subrange comparisons without extra allocations.
+ *
  * @param {Uint8Array} left
  * @param {Uint8Array} right
- * @param {number} leftStart
- * @param {number} leftEnd
- * @param {number} rightStart
- * @param {number} rightEnd
+ * @param {number} [leftStart]
+ * @param {number} [leftEnd]
+ * @param {number} [rightStart]
+ * @param {number} [rightEnd]
  * @returns {number}
  * Returns 0 if the ByteArrays are equal,
  * negative if the left byteArray is "less" than the right byteArray,
@@ -84,16 +88,3 @@ export function compareUint8Arrays(
     rightIndex += 1;
   }
 }
-
-/**
- * Compare two byteArray-passable values (frozen `Uint8Array` backed by
- * an immutable `ArrayBuffer`). A bare `ArrayBufferLike` is also accepted
- * for cross-version use during the byteArray-shape transition.
- *
- * @param {ArrayBufferView | ArrayBufferLike} left
- * @param {ArrayBufferView | ArrayBufferLike} right
- * @returns {number}
- */
-export const compareImmutableArrayBuffers = (left, right) => {
-  return compareUint8Arrays(fromBytes(left), fromBytes(right));
-};
