@@ -569,7 +569,16 @@ reference, from the endowed pet names — and `@agent`, and exposes only
 
 - `sandboxFactory()` / `fsMounter()` / `filesystem()` / `credentials()` —
   accessors returning the bundled caps (no name lookup; `credentials()` is a
-  baked `null` when the session has none);
+  baked `null` when the session has none). Note: the `filesystem` and
+  `credentials` endowments are single host names, so they are pinned to a
+  formula id at `evaluate` time. The infra endowments (`sandbox-factory` /
+  `fs-mounter`) are now **path** endowments (under the factory's
+  `SANDBOX_NAMESPACE` directory), which the daemon resolves with a `lookup`
+  formula against the **live** host directory on each incarnation — so a
+  reincarnated session re-resolves the current infra caps rather than stale
+  ids. This is benign (rebinding `<ns>/sandbox-factory` requires full host
+  authority, above the factory in the TCB) but is a deliberate asymmetry with
+  the eagerly-pinned `filesystem` / `credentials`;
 - `provideMount(path, name)` — bounded to **exactly this session's** workspace
   mountpoint, so a client cannot `provideMount('/etc', …)` (or any other path)
   and recover host paths through a slice.

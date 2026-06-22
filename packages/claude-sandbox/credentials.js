@@ -33,18 +33,21 @@ const DEFAULT_FACTORY_NAME = 'claude-credentials';
  * @param {string} [dirName]
  */
 export const main = async (agent, dirName = DEFAULT_FACTORY_NAME) => {
-  // Guard the directory's existence first — `has(dir, 'controller')` throws
-  // ("Unknown pet name") when the directory itself is absent.
-  if (
-    (await E(agent).has(dirName)) &&
-    (await E(agent).has(dirName, 'controller'))
-  ) {
-    console.log(`${dirName}/controller already provisioned — skipping`);
-    return;
-  }
-
+  // The directory must exist before any path-form `has`/`move` (a path `has`
+  // throws "Unknown pet name" when the directory itself is absent).
   if (!(await E(agent).has(dirName))) {
     await E(agent).makeDirectory([dirName]);
+  }
+
+  // `<dir>/profile` is the last artifact created, so it is the completion
+  // sentinel — every step below is individually guarded so a re-run after a
+  // partial failure reconciles rather than leaking the temp top-level names.
+  if (
+    (await E(agent).has(dirName, 'controller')) &&
+    (await E(agent).has(dirName, 'profile'))
+  ) {
+    console.log(`${dirName}/ already provisioned — skipping`);
+    return;
   }
 
   // provideGuest / powersName take a single name only, so the guest is born
@@ -61,13 +64,19 @@ export const main = async (agent, dirName = DEFAULT_FACTORY_NAME) => {
     });
   }
 
-  await E(agent).makeUnconfined('@main', factoryCapletSpecifier, {
-    powersName: agentTmp,
-    resultName: [dirName, 'controller'],
-  });
+  if (!(await E(agent).has(dirName, 'controller'))) {
+    await E(agent).makeUnconfined('@main', factoryCapletSpecifier, {
+      powersName: agentTmp,
+      resultName: [dirName, 'controller'],
+    });
+  }
 
-  await E(agent).move([guestTmp], [dirName, 'handle']);
-  await E(agent).move([agentTmp], [dirName, 'profile']);
+  if (await E(agent).has(guestTmp)) {
+    await E(agent).move([guestTmp], [dirName, 'handle']);
+  }
+  if (await E(agent).has(agentTmp)) {
+    await E(agent).move([agentTmp], [dirName, 'profile']);
+  }
 
   console.log(`Factory provisioned under ${dirName}/`);
 };

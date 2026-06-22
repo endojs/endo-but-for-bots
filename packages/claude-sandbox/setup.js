@@ -96,8 +96,9 @@ export const main = async hostAgent => {
   await provisionCredentialsFactory(hostAgent);
 
   // 4. Claude sandbox factory (reads sandbox-factory / fs-mounter from its
-  //    `claude-sandbox/` dir at form-submission time).
-  await provisionSandboxFactory(hostAgent);
+  //    `claude-sandbox/` dir at form-submission time). Pass SANDBOX_DIR
+  //    explicitly so setup and the factory agree on the directory name.
+  await provisionSandboxFactory(hostAgent, SANDBOX_DIR);
 
   console.log('Claude sandbox setup complete.');
   console.log(

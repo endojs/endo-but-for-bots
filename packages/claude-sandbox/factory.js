@@ -80,25 +80,29 @@ const collectCapletEnv = () => {
  * @param {string} [dirName]
  */
 export const main = async (agent, dirName = DEFAULT_FACTORY_NAME) => {
-  // Fully provisioned already? `<dir>/controller` is the last thing created.
-  // Guard the directory's existence first — `has(dir, 'controller')` throws
-  // ("Unknown pet name") when the directory itself is absent.
-  if (
-    (await E(agent).has(dirName)) &&
-    (await E(agent).has(dirName, 'controller'))
-  ) {
-    console.log(`${dirName}/controller already provisioned — skipping`);
-    return;
-  }
-
-  // The factory's directory. `provideGuest` and `powersName` only accept a
-  // single (non-path) name, so the guest is born under temporary top-level
-  // names and `move`d into the directory after `makeUnconfined` (the caplet
-  // holds its powers by formula id, so the rename is transparent).
+  // The directory must exist before any path-form `has`/`move` (a path `has`
+  // throws "Unknown pet name" when the directory itself is absent).
   if (!(await E(agent).has(dirName))) {
     await E(agent).makeDirectory([dirName]);
   }
 
+  // Fully provisioned? `<dir>/profile` is the *last* artifact created (after
+  // the controller and the handle move), so it is the completion sentinel —
+  // keying on `controller` would skip a re-run that still needs to finish the
+  // moves, orphaning the temp top-level names.
+  if (
+    (await E(agent).has(dirName, 'controller')) &&
+    (await E(agent).has(dirName, 'profile'))
+  ) {
+    console.log(`${dirName}/ already provisioned — skipping`);
+    return;
+  }
+
+  // `provideGuest` / `powersName` take a single (non-path) name, so the guest
+  // is born under temporary top-level names and `move`d into the directory
+  // (the caplet holds its powers by formula id, so the rename is transparent).
+  // Every step below is individually guarded so a re-run after a partial
+  // failure reconciles the state rather than leaking the temp names.
   const guestTmp = `${dirName}-guest`;
   const agentTmp = `${dirName}-agent`;
   if (
@@ -111,16 +115,22 @@ export const main = async (agent, dirName = DEFAULT_FACTORY_NAME) => {
     });
   }
 
-  await E(agent).makeUnconfined('@main', factoryCapletSpecifier, {
-    powersName: agentTmp,
-    resultName: [dirName, 'controller'],
-    // Tell the caplet where its infra caplets live so the per-session powers
-    // endows `<dir>/sandbox-factory` and `<dir>/fs-mounter` by path.
-    env: harden({ ...collectCapletEnv(), SANDBOX_NAMESPACE: dirName }),
-  });
+  if (!(await E(agent).has(dirName, 'controller'))) {
+    await E(agent).makeUnconfined('@main', factoryCapletSpecifier, {
+      powersName: agentTmp,
+      resultName: [dirName, 'controller'],
+      // Tell the caplet where its infra caplets live so the per-session powers
+      // endows `<dir>/sandbox-factory` and `<dir>/fs-mounter` by path.
+      env: harden({ ...collectCapletEnv(), SANDBOX_NAMESPACE: dirName }),
+    });
+  }
 
-  await E(agent).move([guestTmp], [dirName, 'handle']);
-  await E(agent).move([agentTmp], [dirName, 'profile']);
+  if (await E(agent).has(guestTmp)) {
+    await E(agent).move([guestTmp], [dirName, 'handle']);
+  }
+  if (await E(agent).has(agentTmp)) {
+    await E(agent).move([agentTmp], [dirName, 'profile']);
+  }
 
   console.log(`Factory provisioned under ${dirName}/`);
 };

@@ -15,6 +15,7 @@ import { E } from '@endo/far';
 import { start, stop, purge, makeEndoClient } from '@endo/daemon';
 
 import { main as provisionFactory } from '../factory.js';
+import { main as provisionCredentials } from '../credentials.js';
 
 const dirname = fileURLToPath(new URL('.', import.meta.url));
 
@@ -99,6 +100,59 @@ const prepareHost = async (t, name) => {
   const host = E(bootstrap).host();
   return { host, config, cancelled };
 };
+
+test.serial(
+  'provisioning nests under directories, keeps the host root clean, and is idempotent',
+  async t => {
+    t.timeout(120_000);
+    const { host } = await prepareHost(t, 'nesting');
+
+    await provisionFactory(host);
+
+    // The factory's objects (controller + guest agent/handle) landed inside
+    // the directory — proving the post-makeUnconfined `move`s ran.
+    for (const name of ['controller', 'profile', 'handle']) {
+      // eslint-disable-next-line no-await-in-loop
+      const present = await E(host).has('claude-sandbox', name);
+      t.true(present, `claude-sandbox/${name} exists`);
+    }
+
+    // The host root is clean: no temp names left over from the move dance,
+    // and none of the pre-nesting top-level names.
+    const root = await E(host).list();
+    for (const n of [
+      'claude-sandbox-guest',
+      'claude-sandbox-agent',
+      'controller-for-claude-sandbox-factory',
+      'profile-for-claude-sandbox-factory',
+    ]) {
+      t.false(
+        root.includes(n),
+        `host root polluted with ${n}: ${root.join(', ')}`,
+      );
+    }
+    t.true(root.includes('claude-sandbox'), 'the directory itself is at root');
+
+    // Idempotent: a second run is a no-op (no throw, same controller, no dup).
+    const c1 = await E(host).lookup(['claude-sandbox', 'controller']);
+    await t.notThrowsAsync(() => provisionFactory(host));
+    const c2 = await E(host).lookup(['claude-sandbox', 'controller']);
+    t.is(c1, c2, 'no duplicate controller on re-run');
+
+    // The credentials provisioner nests into its own directory the same way.
+    await provisionCredentials(host);
+    for (const name of ['controller', 'profile', 'handle']) {
+      // eslint-disable-next-line no-await-in-loop
+      const present = await E(host).has('claude-credentials', name);
+      t.true(present, `claude-credentials/${name} exists`);
+    }
+    const root2 = await E(host).list();
+    t.false(
+      root2.includes('claude-credentials-guest'),
+      'no credentials temp residue at root',
+    );
+  },
+);
 
 test.serial('daemon boots and the host responds', async t => {
   t.timeout(60_000);
