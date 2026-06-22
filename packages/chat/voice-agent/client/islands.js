@@ -23,6 +23,7 @@ import { MessageControls } from './message-controls.js';
 import { ChatMetaBar } from './chat-meta-bar.js';
 import { DevTaskCard } from './dev-task-card.js';
 import { ExhaustedCard } from './exhausted-card.js';
+import { TraceSignature } from './trace-signature.js';
 
 // A render propagator: re-paints `view(...values)` into `el` whenever any wired cell changes.
 // This is the one kind of propagator whose effect is the DOM; logic propagators stay headless.
@@ -55,6 +56,8 @@ const devTaskCell = makeCell();
 let devTaskWired = false;
 const exhaustedCell = makeCell();
 let exhaustedWired = false;
+const traceSigCell = makeCell();
+let traceSigWired = false;
 
 const islands = {
   // Idempotent: wires the render propagator once (cell → SharesPanel), then feeds the latest data in.
@@ -218,6 +221,18 @@ const islands = {
       exhaustedWired = true;
     }
     exhaustedCell.addContent(data);
+  },
+
+  // ── TraceSignature island (the inline glyph strip; the 3D pendant is the separate island-trace) ──
+  // `data` = { steps, expanded, legend }. `handlers` = { onToggle(), onOpen3D() }.
+  renderTraceSignature(el, data, handlers) {
+    if (!traceSigWired) {
+      el.setAttribute('data-component-id', 'island-trace-signature');
+      el.setAttribute('data-component-name', 'Trace signature');
+      renderPropagator(el, [traceSigCell], d => h(TraceSignature, { ...d, ...handlers }));
+      traceSigWired = true;
+    }
+    traceSigCell.addContent(data);
   },
 };
 

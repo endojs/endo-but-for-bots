@@ -18,6 +18,7 @@ import { MessageControls } from './client/message-controls.js';
 import { ChatMetaBar } from './client/chat-meta-bar.js';
 import { DevTaskCard } from './client/dev-task-card.js';
 import { ExhaustedCard } from './client/exhausted-card.js';
+import { TraceSignature } from './client/trace-signature.js';
 import { Drawer, Stepper } from './client/ui-kit.js';
 
 // Walk a preact vnode tree → collect text, classes, clickable buttons, and inputs (with their handlers).
@@ -237,6 +238,18 @@ test('ChatMetaBar: chat mode (title + parent/project chips + share badge) and me
   assert.match(allText(memo), /🎙/); assert.match(allText(memo), /2\/3/, 'version k/n');
   memo.buttons.find(b => b.label === '◀').onClick(); memo.buttons.find(b => /Re-run/.test(b.label)).onClick();
   assert.deepEqual(v, ['prev', 'rerun']);
+});
+
+test('TraceSignature: collapsed glyph row (toggle + ⊿3D); expanded shows the nested signature + failed marker', () => {
+  const steps = [{ name: 'research', icon: '🔎', childCount: 3 }, { name: 'generateImage', icon: '🎨', ok: false, detail: 'GPU busy', children: [{ name: 'sub', icon: '⚙' }] }];
+  let acts = [];
+  const c = collect(TraceSignature({ steps, expanded: false, onToggle: () => acts.push('toggle'), onOpen3D: () => acts.push('3d') }));
+  assert.match(allText(c), /⊿ trace · 2/); assert.match(allText(c), /🔎 research/); assert.match(allText(c), /·3/, 'child count chip');
+  c.buttons.find(b => b.cls.includes('ts-label')).onClick(); c.buttons.find(b => /⊿3D/.test(b.label)).onClick();
+  assert.deepEqual(acts, ['toggle', '3d']);
+  const ex = collect(TraceSignature({ steps, expanded: true, onToggle() {}, onOpen3D() {} }));
+  assert.ok(ex.classes.some(cl => cl.includes('trace-sig')), 'expanded renders the signature block');
+  assert.match(allText(ex), /✗ failed/, 'a failed step is marked'); assert.match(allText(ex), /GPU busy/, 'detail shown');
 });
 
 test('ExhaustedCard: root vs invitee blurb + Top-up/Abandon handlers', () => {

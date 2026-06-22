@@ -2413,6 +2413,13 @@ const ISLAND_PREVIEW = {
     accent: '#2ea043', expanded: true, draft: '',
   }, { onToggle() {}, onReplyChange() {}, onReplySend() {} }),
   'island-exhausted-card': slot => window.__fieldIslands.renderExhaustedCard(slot, { isRoot: true }, { onTopUp() {}, onAbandon() {} }),
+  'island-trace-signature': slot => window.__fieldIslands.renderTraceSignature(slot, {
+    steps: [
+      { name: 'research', icon: '🔎', childCount: 3 },
+      { name: 'delegateTask', icon: '🤝', childCount: 2, children: [{ name: 'fetchUrl', icon: '🌐' }, { name: 'searchNotes', icon: '📓' }] },
+      { name: 'generateImage', icon: '🎨', ok: false, detail: 'GPU busy' },
+    ], expanded: true, legend: 'Symbols: 🔎 research · 🤝 delegateTask · 🎨 generateImage',
+  }, { onToggle() {}, onOpen3D() {} }),
 };
 
 const refreshComponents = async () => {
