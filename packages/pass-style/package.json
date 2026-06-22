@@ -36,6 +36,7 @@
     "test:c8": "c8 ${C8_OPTIONS:-} ses-ava"
   },
   "dependencies": {
+    "@endo/bytes": "workspace:^",
     "@endo/common": "workspace:^",
     "@endo/env-options": "workspace:^",
     "@endo/errors": "workspace:^",
