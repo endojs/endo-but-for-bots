@@ -302,7 +302,7 @@ const traceRun = async (node, transcript, persona, chatId) => {
 const log = (...a) => process.stderr.write(`[${new Date().toISOString()}] ${a.join(' ')}\n`);
 const newSwissRe = /^[0-9a-f]{32}$/;
 
-const { rootNode, registerRoot, nodeFor, getProposal, commitProposal, rejectProposal, buildHomeAssistant, buildAgents, buildContacts, buildKazputer, siteDir, getPersona, runScheduledAgent, mintScopedCap, rescopeCap, specialistFor, haResolveReadOnly } = makeFieldAgent({ outDir: OUT, baseUrl: BASE_URL });
+const { rootNode, registerRoot, nodeFor, getProposal, commitProposal, rejectProposal, buildHomeAssistant, buildAgents, buildContacts, buildKazputer, siteDir, getPersona, runScheduledAgent, mintScopedCap, rescopeCap, specialistFor, haResolveReadOnly, changelog } = makeFieldAgent({ outDir: OUT, baseUrl: BASE_URL });
 liveCells = makeLiveCells({ nodeFor }); // browser-subscribable live grains (cap-gated)
 // Least-authority cross-user share tokens for a broken-out component: subscribe-only to its frozen cells.
 const componentShares = makeComponentShares({ file: `${HOME}/.local/state/voice-agent/component-shares.json`, makePurse, purseStore });
@@ -373,10 +373,24 @@ const INGEST_PERSONA = 'You received a VOICE NOTE transcript. You take NO action
 const ingestPropose = async transcript => {
   let proposals = '';
   try { const r = await callLLM([{ role: 'system', content: INGEST_PERSONA }, { role: 'user', content: transcript }], 'default'); proposals = String(r.text || '').trim(); } catch (e) { log('ingest gemma', e.message); }
-  if (!proposals) { try { proposals = String((await opusComplete({ system: INGEST_PERSONA, prompt: transcript, maxTokens: 700 })) || '').trim(); } catch (e) { log('ingest claude', e.message); } }
+  if (!proposals) { try { proposals = String((await opusComplete({ system: INGEST_PERSONA, prompt: transcript, maxTokens: 2000 })) || '').trim(); } catch (e) { log('ingest claude', e.message); } }
   const { proposed } = await scopePowers(transcript);
   return { proposals: proposals || '(could not analyze the note)', powers: proposed };
 };
+// Derive a SHORT, descriptive title from a transcript so voice notes/memos are BROWSABLE in the sidebar
+// (instead of a "capture-20260621T…" filename or a raw transcript slice). The entry agent labels the note.
+// gemma → Claude fallback; returns '' if it can't (callers keep their own fallback).
+const TITLE_SYS = 'Write a SHORT, specific title (4 to 8 words, Title Case, no surrounding quotes, no trailing punctuation) that captures what this voice note is about. Output ONLY the title, nothing else.';
+const cleanTitle = s => String(s || '').replace(/^["'\s]+/, '').replace(/["'\s.]+$/, '').replace(/\s+/g, ' ').split('\n')[0].slice(0, 72).trim();
+const deriveTitle = async transcript => {
+  const body = String(transcript || '').slice(0, 4000);
+  if (!body.trim()) return '';
+  try { const r = await callLLM([{ role: 'system', content: TITLE_SYS }, { role: 'user', content: body }], 'default'); const t = cleanTitle(r.text); if (t) return t; } catch (e) { log('title gemma', e.message); }
+  try { const t = cleanTitle(await opusComplete({ system: TITLE_SYS, prompt: body, maxTokens: 40 })); if (t) return t; } catch (e) { log('title claude', e.message); }
+  return '';
+};
+// A passed-in title is descriptive only if it ISN'T a capture/clip filename, a bare timestamp, or a hex id.
+const isFilenameTitle = t => { const s = String(t || '').trim(); return !s || /^(capture|clip|memo|voice|rec|recording|audio|note|new ?chat)[-_ .]?\d|^\d{4}[-_]?\d\d|^[0-9a-f]{8,}(-[0-9a-f]+)*$|\.(m4a|mp3|wav|txt|md|json)$/i.test(s); };
 const parsePowers = text => {
   const m = String(text || '').match(/\[[^\]]*\]/);
   let arr = []; try { arr = JSON.parse(m ? m[0] : '[]'); } catch { arr = []; }
@@ -1083,7 +1097,9 @@ const handler = async (req, res) => {
       const persona = getPersona();
       const id = `memo-${crypto.randomBytes(5).toString('hex')}`;
       const tr = await traceRun(node, t, persona, id);
-      const run = { id, title: String(title || t.slice(0, 40)) || 'voice memo', transcript: t, source: String(source || 'memo'), date: new Date().toISOString(),
+      // descriptive title: derive one from the transcript unless the caller gave a real (non-filename) title.
+      const memoTitle = (isFilenameTitle(title) ? (await deriveTitle(t)) : String(title).trim()) || String(title || '').trim() || t.slice(0, 40) || 'voice memo';
+      const run = { id, title: memoTitle, transcript: t, source: String(source || 'memo'), date: new Date().toISOString(),
         versions: [{ v: 0, label: 'original', env: { persona: persona || '' }, ...tr, at: new Date().toISOString() }] };
       const runs = await readMemoRuns(); runs.unshift(run); await writeMemoRuns(runs);
       return json(res, 200, { ok: true, id: run.id });
@@ -1116,12 +1132,14 @@ const handler = async (req, res) => {
       log('ingest (propose-only):', id, JSON.stringify(t).slice(0, 80));
       // PROPOSE-ONLY: no tools, no actions — just proposed action items + the capabilities an
       // attenuated agent would need (the scoper). Then push the proposals to dan's phone.
-      const { proposals, powers } = await ingestPropose(t);
+      // analyze the note AND derive a descriptive title concurrently (the entry agent labels the note so
+      // it's browsable — not "capture-20260621T…"); keep the caller's title only if it's a real one.
+      const [{ proposals, powers }, derivedTitle] = await Promise.all([ ingestPropose(t), isFilenameTitle(title) ? deriveTitle(t) : Promise.resolve(String(title).trim()) ]);
       const agentMsg = proposals + (powers.length ? `\n\n— To act on this, I can spin up an attenuated agent with: ${powers.join(', ')}. Approve it from this chat.` : '');
       const tr = { answer: agentMsg, toolsUsed: [], steps: [], proposedPowers: powers };
       notify({ title: '🎙 Voice note → proposed actions', message: proposals.slice(0, 180), click: `${BASE_URL}/#chat=${id}`, tags: ['memo'] }).catch(e => log('ingest push', e.message));
       const now = new Date().toISOString();
-      const seed = { id, title: (String(title || '').trim() || t.slice(0, 48)) || 'voice note', ts: Date.now(), source: String(source || 'voice'), transcript: t, proposeOnly: true, proposedPowers: powers,
+      const seed = { id, title: derivedTitle || String(title || '').trim() || t.slice(0, 48) || 'voice note', ts: Date.now(), source: String(source || 'voice'), transcript: t, proposeOnly: true, proposedPowers: powers,
         tx: [{ who: 'you', text: t }, { who: 'agent', text: agentMsg, tools: [], steps: [] }],
         versions: [{ v: 0, label: 'original', env: { persona: 'ingest:propose-only' }, ...tr, at: now }] };
       const seeds = await readSeedChats(); seeds.unshift(seed); await writeSeedChats(seeds);
@@ -1275,6 +1293,21 @@ const handler = async (req, res) => {
         return json(res, 200, { ok: true });
       } catch (e) { return json(res, 500, { error: e.message }); }
     }
+    // ── CHANGELOG: the human-visible log of self-applied (auto-merged) improvements + one-click revert. ──
+    // Root-gated: it exposes what the self-improvement loop shipped to the live branch, and revert is a
+    // history-preserving `git revert -m 1` of the recorded merge commit (the safety net for auto-merge).
+    if (req.method === 'POST' && u.pathname === '/changelog/load') {
+      const { cap } = await jsonBody(req);
+      if (!nodeFor(cap)?.isRoot) return json(res, 403, { error: 'the changelog needs your root capability' });
+      let merges = []; try { merges = changelog.list({ limit: 100 }); } catch (e) { log('changelog load', e.message); }
+      return json(res, 200, { ok: true, merges });
+    }
+    if (req.method === 'POST' && u.pathname === '/changelog/revert') {
+      const { cap, id } = await jsonBody(req);
+      if (!nodeFor(cap)?.isRoot) return json(res, 403, { error: 'reverting a change needs your root capability' });
+      try { const r = await changelog.revert({ id: String(id || '') }); return json(res, r.ok ? 200 : 400, r); }
+      catch (e) { return json(res, 500, { ok: false, error: e.message }); }
+    }
 
     if (req.method === 'POST' && u.pathname === '/chats/save') {
       const { cap, data } = await jsonBody(req);
@@ -1372,13 +1405,13 @@ const handler = async (req, res) => {
       const held = node.isRoot ? ALL_POWERS : [...node.powers]; // monotonic: subset of what the caller holds
       const granted = (Array.isArray(powers) ? powers : []).filter(p => held.includes(p));
       const out = mintScopedCap({ powers: granted, label: title || 'subchat' });
-      return json(res, 200, { scopedCap: out.swiss, powers: out.powers });
+      return json(res, 200, { scopedCap: out.swiss, powers: out.powers, name: out.name });
     }
     if (req.method === 'POST' && u.pathname === '/scope/mint') {
       const { cap, powers, label } = await jsonBody(req);
       if (!nodeFor(cap)?.isRoot) return json(res, 403, { error: 'minting a scoped cap needs your root capability' });
       const out = mintScopedCap({ powers: Array.isArray(powers) ? powers : [], label });
-      return json(res, 200, { scopedCap: out.swiss, powers: out.powers });
+      return json(res, 200, { scopedCap: out.swiss, powers: out.powers, name: out.name });
     }
     // INVITE a new user (Phase 1): mint a persisted, confined starter cap. Default ring = least-privilege
     // stateless/read-only tools + the `contact` back-channel; the invitee can `requestAccess` for more.

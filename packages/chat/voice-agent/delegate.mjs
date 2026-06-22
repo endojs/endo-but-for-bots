@@ -41,7 +41,7 @@ const toAnthropicTools = manifest => manifest.map(t => ({
 
 // runOpusDelegate({ prompt, toolbox, manifest, grantedPowers, signal }) →
 //   { answer, toolsUsed, model, granted }  (or { error } on failure)
-export const runOpusDelegate = async ({ prompt, toolbox, manifest, grantedPowers = [], signal, maxTokens = 8192, maxSteps = MAX_STEPS } = {}) => {
+export const runOpusDelegate = async ({ prompt, toolbox, manifest, grantedPowers = [], signal, maxTokens = 16000, maxSteps = MAX_STEPS } = {}) => {
   const key = await apiKey();
   if (!key) return { error: 'no ANTHROPIC_API_KEY available' };
   const tools = toAnthropicTools(manifest);

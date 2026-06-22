@@ -50,6 +50,13 @@ const AGENT_RUNNER = process.env.AGENT_CODEMODE === '0' ? runAgent : runAgentCod
 // A delegator-supplied NICKNAME → a readable, url-safe sub-agent id stem (or '' if none). A short
 // unique suffix is appended at the call site, so the same nickname can name many concurrent delegates.
 const nickId = s => String(s || '').trim().toLowerCase().replace(/[^\w-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40);
+// A whimsical, HUMAN-READABLE pet name for a delegated/scoped agent — so the chat shows "Cobalt Otter",
+// never an ugly id like "scoped-a0a6c7a3". The entry agent SHOULD propose its own (nickname arg); this
+// is the friendly fallback when it doesn't. crypto-seeded for a unique-ish pick (Math.random is
+// non-deterministic + discouraged under SES; the rest of the file uses crypto.randomBytes too).
+const PET_ADJ = harden(['Amber', 'Brisk', 'Cobalt', 'Crimson', 'Dapper', 'Electric', 'Frosty', 'Gilded', 'Hazel', 'Indigo', 'Jolly', 'Keen', 'Lunar', 'Mellow', 'Nimble', 'Opal', 'Plucky', 'Quartz', 'Russet', 'Sable', 'Teal', 'Umber', 'Velvet', 'Wandering', 'Zesty', 'Azure', 'Bramble', 'Clever', 'Drifting', 'Ember', 'Golden', 'Silver']);
+const PET_NOUN = harden(['Falcon', 'Otter', 'Comet', 'Heron', 'Lynx', 'Marmot', 'Nimbus', 'Osprey', 'Puffin', 'Quokka', 'Raven', 'Stoat', 'Tapir', 'Vireo', 'Walrus', 'Yak', 'Badger', 'Civet', 'Dingo', 'Ferret', 'Gannet', 'Ibis', 'Jackal', 'Kestrel', 'Lemur', 'Meerkat', 'Narwhal', 'Pangolin', 'Sparrow', 'Wren']);
+const genPetName = () => { const b = crypto.randomBytes(2); return `${PET_ADJ[b[0] % PET_ADJ.length]} ${PET_NOUN[b[1] % PET_NOUN.length]}`; };
 import { addAsk, getSecret } from './asks-store.mjs';
 import { makeConnectors } from './connectors.mjs';
 import { makeCustomTools } from './custom-tools.mjs';
@@ -511,7 +518,7 @@ export const POWERS = harden({
   kazputer: { label: 'Manage Kazputers — give someone a new one (email invite), and administer your own (settings/coins; you confirm)', verbs: ['proposeGiveKazputer', 'kazputerStatus', 'proposeKazputerSetting', 'proposeKazputerCoins'] },
   dietician: { label: "Drive the dietician's restaurant pipeline — scan an area, evaluate spots for Alexa's diet, refresh + publish the food guides (publishing you confirm)", verbs: ['dietScanArea', 'dietEvaluateArea', 'dietBuildMap', 'dietStatus', 'dietRefreshSite'] },
   app: { label: 'Introspect + manage your own app state — list/read/retitle every conversation (chats, voice memos, voice notes) and see an overview of asks/feed/proposals', verbs: ['listChats', 'readChat', 'retitleChat', 'appState'] },
-  selfImprove: { label: '⚠️ Autonomously IMPLEMENT system improvements (FAPO-style: propose precise targets to a backlog → drain one → implement on an isolated worktree → independently verify → flag-gated auto-merge with post-merge re-verify + auto-revert)', verbs: ['improveSystem', 'proposeImprovement', 'listImprovements', 'runNextImprovement'] },
+  selfImprove: { label: '⚠️ Autonomously IMPLEMENT system improvements (FAPO-style: propose precise targets to a backlog → drain one → implement on an isolated worktree → independently verify → flag-gated auto-merge with post-merge re-verify + auto-revert)', verbs: ['improveSystem', 'proposeImprovement', 'listImprovements', 'runNextImprovement', 'listChangelog', 'revertChange'] },
 });
 export const ALL_POWERS = harden(Object.keys(POWERS));
 harden(POWERS);
@@ -724,6 +731,12 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
           return harden({ ok: true, target: item.goal, targetId: item.id, outcome: status, ...r });
         } finally { selfImproveInFlight = false; }
       } },
+    listChangelog: { reversible: false, args: { limit: 'number — OPTIONAL: how many recent entries (default 50)' },
+      description: 'The CHANGELOG of self-applied (auto-merged) improvements: each {id, goal, mergeCommit, mergedAt, rolledBack}. This is what was actually shipped to the live branch by the loop.',
+      run: async ({ limit } = {}) => harden({ ok: true, merges: selfImprover.listMerges({ limit: Number(limit) || 50 }) }) },
+    revertChange: { reversible: false, args: { id: 'string — the changelog entry id to undo (from listChangelog)' },
+      description: 'REVERT a self-applied change by its changelog id — git revert -m 1 of the recorded merge commit (history-preserving). Use if a shipped change is causing problems.',
+      run: async ({ id } = {}) => harden(await selfImprover.rollback({ id: String(id || ''), now: new Date().toISOString() })) },
     readNote: { reversible: false, args: { path: 'string — vault-relative path' }, description: 'Read one personal note by path.',
       run: async ({ path: rel }, agent, ctx = {}) => ({ ok: true, content: String(await (ctx.notes || aff.notes).read(String(rel || ''))).slice(0, 6000) }) },
     // NON-DESTRUCTIVE note CREATION — fires directly, no proposal. Creating a new note (or appending to
@@ -1011,8 +1024,9 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
           // delegate asked to "build a site" gets its own home to write + publish
           // from, and only the powers passed.
           const dkey = crypto.randomBytes(3).toString('hex');
-          const nick = nickId(nickname); // delegator-supplied readable name (e.g. "flights-builder") → its id/label
-          const subNode = makeAgentNode({ powers: [...granted], labelOf: nick || `delegate-${dkey}`, haBinding: node.haBinding, agBinding: node.agBinding, id: nick ? `${nick}-${dkey}` : `delegate-${newSwiss()}` });
+          const petName = String(nickname || '').trim() || genPetName(); // agent-proposed readable name, else a friendly pet name (NEVER an ugly id)
+          const nick = nickId(petName); // url-safe id/label stem
+          const subNode = makeAgentNode({ powers: [...granted], labelOf: nick, haBinding: node.haBinding, agBinding: node.agBinding, id: `${nick}-${dkey}` });
           const sub = subNode.toolbox(ctx); // inherit the originating chat so delegated pushes deep-link too
           const ac = new AbortController(); activeDelegate = ac;
           // Carry the ORIGINATING request into the delegate so its own record shows what led to it.
@@ -1022,7 +1036,7 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
             // If the delegate BUILT + proposed any tools, RETURN them to the caller as data (not
             // injected into scope). They're pending dan's review; the caller learns one was made.
             const proposedTools = customToolsObj.pendingBy(subNode.id);
-            return proposedTools.length ? harden({ ...r, proposedTools }) : r;
+            return harden({ ...r, agentName: petName, ...(proposedTools.length ? { proposedTools } : {}) });
           } finally { if (activeDelegate === ac) activeDelegate = null; }
         },
         abort: () => { try { activeDelegate?.abort(); } catch {} },
@@ -1058,8 +1072,9 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
           const ring = new Set([...spec.powers].filter(p => node.powers.has(p) && !META_POWERS.has(p)));
           if (Array.isArray(want) && want.length) { const keep = new Set(want); for (const p of [...ring]) if (!keep.has(p)) ring.delete(p); } // optional caller-narrowing only SUBTRACTS
           const rkey = crypto.randomBytes(3).toString('hex');
-          const nick = nickId(nickname);
-          const wtId = nick ? `${nick}-${rkey}` : `${spec.role}-${rkey}`;
+          const petName = String(nickname || '').trim() || genPetName(); // agent-proposed name, else a friendly pet name
+          const nick = nickId(petName);
+          const wtId = `${nick}-${rkey}`;
           // A WRITE-CAPABLE role (isolation:'worktree') that holds the host shell gets its OWN git
           // worktree for the duration of the run, so PARALLEL writers edit disjoint checkouts and
           // cannot race. (home/fileWrite are already per-node isolated; hostExec was the one shared
@@ -1071,7 +1086,7 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
             try { wt = await worktrees.create(wtId); }
             catch (e) { return harden({ ok: false, role: spec.role, error: `worktree setup failed: ${String((e && e.message) || e)}` }); }
           }
-          const subNode = makeAgentNode({ powers: [...ring], labelOf: nick || `role-${spec.role}-${rkey}`, haBinding: node.haBinding, agBinding: node.agBinding, cwdBinding: wt ? () => wt.dir : null, id: nick ? `${nick}-${rkey}` : `role-${spec.role}-${newSwiss()}` });
+          const subNode = makeAgentNode({ powers: [...ring], labelOf: nick, haBinding: node.haBinding, agBinding: node.agBinding, cwdBinding: wt ? () => wt.dir : null, id: `${nick}-${rkey}` });
           const sub = subNode.toolbox(ctx); // inherit the originating chat (deep-links)
           const proposalIds = []; const autoFired = []; const toolsUsed = [];
           const ac = new AbortController(); activeEmploy = ac;
@@ -1100,7 +1115,7 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
             if (wt) { try { wtInfo = await worktrees.teardown(wtId, { commitMessage: `${spec.role}: ${taskS.slice(0, 72)}` }); } catch (e) { wtInfo = harden({ removed: false, error: String((e && e.message) || e), branch: wt.branch }); } }
           }
           const result = out || harden({ ok: false, role: spec.role, error: 'the role produced no result' });
-          return wtInfo ? harden({ ...result, worktree: wtInfo }) : result;
+          return harden({ ...result, agentName: petName, ...(wtInfo ? { worktree: wtInfo } : {}) });
         },
         abort: () => { try { activeEmploy?.abort(); } catch { /* best effort */ } },
       });
@@ -1872,12 +1887,14 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
     locator.set(swiss, { node });
     return node;
   };
-  const mintScopedCap = ({ powers = [], label = 'chat' } = {}) => {
+  const mintScopedCap = ({ powers = [], label = '' } = {}) => {
     const granted = [...new Set((Array.isArray(powers) ? powers : []).filter(p => ALL_POWERS.includes(p)))];
     const swiss = newSwiss();
-    registerScoped({ swiss, powers: granted, label });
-    scopedCaps = scopedCaps.concat({ swiss, powers: granted, label: String(label || 'chat').slice(0, 80) }); saveScoped(); // survive restarts
-    return harden({ ok: true, swiss, powers: granted, url: `${baseUrl}/#cap=${swiss}` });
+    // a human-readable name so the scoped chat reads "Cobalt Otter", not "scoped-a0a6c7a3" (the bare id).
+    const name = (String(label || '').trim() && !/^(chat|subchat)$/i.test(String(label).trim())) ? String(label).trim().slice(0, 80) : genPetName();
+    registerScoped({ swiss, powers: granted, label: name });
+    scopedCaps = scopedCaps.concat({ swiss, powers: granted, label: name }); saveScoped(); // survive restarts
+    return harden({ ok: true, swiss, powers: granted, name, url: `${baseUrl}/#cap=${swiss}` });
   };
   // Re-scope an EXISTING chat cap to a new power set (add/revoke powers): re-register the SAME swiss
   // with the new ring + persist. The cap stays the same (the chat link doesn't change), its authority
@@ -1894,6 +1911,12 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
   return harden({
     runScheduledAgent,
     mintScopedCap,
+    // human-visible CHANGELOG of self-applied (auto-merged) improvements + one-click revert. The server
+    // gates both on the ROOT cap. revert = git revert -m 1 of the recorded merge commit (history-preserving).
+    changelog: harden({
+      list: ({ limit = 50 } = {}) => selfImprover.listMerges({ limit }),
+      revert: ({ id } = {}) => selfImprover.rollback({ id: String(id || ''), now: new Date().toISOString() }),
+    }),
     rescopeCap, // re-grant/revoke a chat cap's powers in place (same swiss) — root-gated by the server
     locator,
     rootNode,

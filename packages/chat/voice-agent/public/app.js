@@ -2129,11 +2129,47 @@ const renderInbox = async () => {
   document.querySelectorAll('#att-list [data-capopen], #rec-list [data-capopen]').forEach(a => { a.onclick = e => { e.preventDefault(); const u = capLinkReg.get(a.dataset.capopen); if (u) window.open(u, '_blank', 'noopener,noreferrer'); }; });
   // chat deep-links route IN-APP to the specific chat id (not a fresh tab that re-resolves to the most recent chat).
   document.querySelectorAll('#att-list .nlink[data-openchat], #rec-list .nlink[data-openchat]').forEach(a => { a.onclick = e => { e.preventDefault(); switchChat(a.dataset.openchat); }; });
+  renderChangelog();
+};
+// 🔧 the CHANGELOG of self-applied (auto-merged) improvements, each with a one-click Revert. Root-only;
+// the section hides itself for non-root caps or when nothing has been auto-applied yet.
+const renderChangelog = async () => {
+  const section = $('chg-section'), list = $('chg-list'), count = $('chg-count');
+  if (!section || !list) return;
+  let merges = [];
+  try { const r = await (await fetch('/changelog/load', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap }) })).json(); merges = (r && r.merges) || []; } catch { /* not root / unavailable */ }
+  if (!merges.length) { section.classList.add('hide'); return; }
+  section.classList.remove('hide');
+  const live = merges.filter(m => !m.rolledBack).length;
+  count.textContent = live ? String(live) : '';
+  list.innerHTML = merges.map(m => {
+    const when = m.mergedAt ? new Date(m.mergedAt).toLocaleString() : '';
+    const sha = String(m.mergeCommit || '').slice(0, 8);
+    const action = m.rolledBack
+      ? '<span class="pill">↩ reverted</span>'
+      : `<button class="mini chg-revert" data-revert="${esc(m.id)}">↩ Revert</button>`;
+    return `<div class="ncard" style="display:flex;gap:8px;align-items:flex-start">
+      <div style="flex:1;min-width:0">
+        <div style="font-size:13px">${esc(String(m.goal || '(improvement)').slice(0, 160))}</div>
+        <div class="sub" style="font-size:11px;color:var(--mut)">${esc(when)}${sha ? ` · ${esc(sha)}` : ''}${m.rolledBack && m.rolledBackAt ? ` · reverted ${esc(new Date(m.rolledBackAt).toLocaleString())}` : ''}</div>
+      </div>${action}</div>`;
+  }).join('');
+  list.querySelectorAll('[data-revert]').forEach(b => { b.onclick = async () => {
+    if (!confirm('Revert this self-applied change? This runs a history-preserving git revert on the live branch. Restart the service afterward to load the reverted code.')) return;
+    b.disabled = true; b.textContent = '…reverting';
+    try {
+      const r = await (await fetch('/changelog/revert', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, id: b.dataset.revert }) })).json();
+      if (!r.ok) { alert('Revert failed: ' + (r.error || 'unknown') + (r.brokenMergeLive ? ' — the broken merge is still live; revert manually.' : '')); b.disabled = false; b.textContent = '↩ Revert'; return; }
+      alert('Reverted. Restart the voice-agent service to run the reverted code.');
+    } catch (e) { alert('Revert error: ' + e.message); b.disabled = false; b.textContent = '↩ Revert'; return; }
+    renderChangelog();
+  }; });
 };
 const toggleSection = (headId, listId) => { const list = $(listId), head = $(headId); list.classList.toggle('hide'); head.querySelector('.caret').textContent = list.classList.contains('hide') ? '▸' : '▾'; };
 if ($('bell-btn')) $('bell-btn').onclick = () => showTab('inbox');
 if ($('att-head')) $('att-head').onclick = () => toggleSection('att-head', 'att-list');
 if ($('rec-head')) $('rec-head').onclick = () => toggleSection('rec-head', 'rec-list');
+if ($('chg-head')) $('chg-head').onclick = () => toggleSection('chg-head', 'chg-list');
 
 // ── 🧩 Components studio (root): each component's source is a git-as-Endo object — view history,
 //    revert to a version (non-destructive), or fork it (own lineage + a copy of its data). ─────────

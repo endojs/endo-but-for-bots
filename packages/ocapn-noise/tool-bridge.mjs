@@ -65,7 +65,10 @@ const openrouterKey = () => {
 // accounting (OpenAI/gemma {prompt_tokens,…} or OpenRouter, or null when a call
 // short-circuits to an error string). Increment 0 of the toll-bridge: we used to drop
 // usage; the metered seam (meter.mjs) needs it to price each call.
-export const callLLM = async (messages, model = 'default') => {
+// maxTokens is the OUTPUT ceiling per call (NOT input) — it only ALLOWS longer replies, it does not
+// force them, so a higher default is safe for the short classifier calls and gives the main reasoning
+// loop room for sprawling programs/answers (the old 700 throttled long voice-note replies).
+export const callLLM = async (messages, model = 'default', { maxTokens = 4096 } = {}) => {
   if (String(model).startsWith('openrouter:')) {
     const slug = String(model).slice('openrouter:'.length);
     const key = openrouterKey();
@@ -73,14 +76,14 @@ export const callLLM = async (messages, model = 'default') => {
     try {
       const r = await fetch(OPENROUTER, { method: 'POST', signal: AbortSignal.timeout(90000),
         headers: { 'content-type': 'application/json', authorization: `Bearer ${key}`, 'HTTP-Referer': 'https://archua.taildd002.ts.net', 'X-Title': 'field-agent' },
-        body: JSON.stringify({ model: slug, messages, max_tokens: 1024, temperature: 0.2, usage: { include: true } }) }); // usage.include → authoritative cost back
+        body: JSON.stringify({ model: slug, messages, max_tokens: maxTokens, temperature: 0.2, usage: { include: true } }) }); // usage.include → authoritative cost back
       if (!r.ok) return harden({ text: `(${slug} via OpenRouter returned ${r.status}: ${(await r.text()).slice(0, 200)})`, usage: null });
       const j = await r.json();
       return harden({ text: j.choices?.[0]?.message?.content || '', usage: j.usage || null });
     } catch (e) { return harden({ text: `(${slug} via OpenRouter unreachable: ${e.message})`, usage: null }); }
   }
   const r = await fetch(LLM, { method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ model: model || 'default', messages, max_tokens: 700, temperature: 0.2 }) });
+    body: JSON.stringify({ model: model || 'default', messages, max_tokens: maxTokens, temperature: 0.2 }) });
   const j = await r.json();
   return harden({ text: j.choices?.[0]?.message?.content || '', usage: j.usage || null });
 };
