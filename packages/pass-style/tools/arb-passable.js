@@ -1,4 +1,10 @@
 // @ts-check
+
+/**
+ * @import { fc } from '@fast-check/ava'
+ * @import { Passable } from '../src/types.js'
+ */
+
 import harden from '@endo/harden';
 import '../src/types.js';
 import { Far } from '../src/make-far.js';
@@ -14,7 +20,7 @@ export const exampleBob = Far('bob', {});
 export const exampleCarol = Far('carol', {});
 
 /**
- * @param {typeof import('@fast-check/ava').fc} fc
+ * @param {typeof fc} fc
  * @param {Array<'byteArray'>} [exclusions]
  */
 export const makeArbitraries = (fc, exclusions = []) => {
@@ -147,9 +153,7 @@ export const makeArbitraries = (fc, exclusions = []) => {
             }),
           )
           .map(({ type, payload }) => {
-            const passable = /** @type {import('../src/types.js').Passable} */ (
-              payload
-            );
+            const passable = /** @type {Passable} */ (payload);
             return makeTagged(type, passable);
           }),
       ),

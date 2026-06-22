@@ -6,8 +6,9 @@
  * @import { OcapnLocation } from '../../src/codecs/components.js'
  * @import { HandoffGiveSigEnvelope, HandoffReceiveSigEnvelope } from '../../src/codecs/descriptors.js'
  * @import { SyrupCodec } from '../../src/syrup/codec.js'
- * @import { Settler } from '@endo/eventual-send'
+ * @import { HandledExecutor, Settler } from '@endo/eventual-send'
  * @import { PublicKeyId, SessionId, SwissNum } from '../../src/client/types.js'
+ * @import { SturdyRefTracker } from '../../src/client/sturdyrefs.js'
  */
 
 import harden from '@endo/harden';
@@ -109,7 +110,7 @@ export const exampleReceiverSideId = /** @type {PublicKeyId} */ (
 /**
  * @typedef {object} CodecTestKit
  * @property {ReferenceKit} referenceKit
- * @property {import('../../src/client/sturdyrefs.js').SturdyRefTracker} sturdyRefTracker
+ * @property {SturdyRefTracker} sturdyRefTracker
  * @property {(position: bigint) => object} makeLocalObject
  * @property {(position: bigint) => Promise<unknown>} makeLocalPromise
  * @property {(position: bigint) => Promise<unknown>} makeRemoteAnswer
@@ -151,7 +152,7 @@ export const makeCodecTestKit = (
     };
     /** @type {Settler | undefined} */
     let settler;
-    /** @type {import('@endo/eventual-send').HandledExecutor} */
+    /** @type {HandledExecutor} */
     const executor = (resolve, reject, resolveWithPresence) => {
       settler = Far('settler', {
         resolve,

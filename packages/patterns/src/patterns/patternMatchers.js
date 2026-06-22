@@ -49,8 +49,8 @@ import { generateCollectionPairEntries } from '../keys/keycollection-operators.j
 
 /**
  * @import {Rejector} from '@endo/errors/rejector.js';
- * @import {CopyArray, CopyRecord, CopyTagged, Passable} from '@endo/pass-style';
- * @import {CopySet, CopyBag, ArgGuard, AwaitArgGuard, ConfirmPattern, GetRankCover, InterfaceGuard, MatcherNamespace, MethodGuard, MethodGuardMaker, Pattern, RawGuard, SyncValueGuard, Kind, Limits, AllLimits, Key, DefaultGuardType} from '../types.js';
+ * @import {CopyArray, CopyRecord, CopyTagged, Passable, PassStyle} from '@endo/pass-style';
+ * @import {CopyMap, CopySet, CopyBag, ArgGuard, AwaitArgGuard, ConfirmPattern, GetRankCover, InterfaceGuard, MatcherNamespace, MethodGuard, MethodGuardMaker, Pattern, RawGuard, SyncValueGuard, Kind, Limits, AllLimits, Key, DefaultGuardType} from '../types.js';
  * @import {MatchHelper, PatternKit} from './types.js';
  */
 
@@ -573,7 +573,7 @@ const makePatternKit = () => {
           );
         }
         const pattMap =
-          /** @type {import('../types.js').CopyMap<Key, Pattern>} */ (patt);
+          /** @type {CopyMap<Key, Pattern>} */ (patt);
         // Compare keys as copySets
         const pattKeySet = copyMapKeySet(pattMap);
         const specimenKeySet = copyMapKeySet(specimen);
@@ -933,7 +933,7 @@ const makePatternKit = () => {
         reject`match:kind: payload: ${allegedKeyKind} - A kind name must be a string`),
 
     getRankCover: (kind, _encodePassable) => {
-      /** @type {import('@endo/pass-style').PassStyle} */
+      /** @type {PassStyle} */
       let style;
       switch (kind) {
         case 'copySet':
@@ -942,7 +942,7 @@ const makePatternKit = () => {
           break;
         }
         default: {
-          style = /** @type {import('@endo/pass-style').PassStyle} */ (kind);
+          style = /** @type {PassStyle} */ (kind);
           break;
         }
       }
@@ -1332,9 +1332,7 @@ const makePatternKit = () => {
   const matchSetOfHelper = Far('match:setOf helper', {
     confirmMatches: (specimen, [keyPatt, limits = undefined], reject) => {
       const { numSetElementsLimit } = limit(limits);
-      const specimenSet = /** @type {import('../types.js').CopySet} */ (
-        specimen
-      );
+      const specimenSet = /** @type {CopySet} */ (specimen);
       return (
         ((confirmKind(specimen, 'copySet', reject) &&
           specimenSet.payload.length < numSetElementsLimit) ||
@@ -1370,9 +1368,7 @@ const makePatternKit = () => {
       reject,
     ) => {
       const { numUniqueBagElementsLimit, decimalDigitsLimit } = limit(limits);
-      const specimenBag = /** @type {import('../types.js').CopyBag} */ (
-        specimen
-      );
+      const specimenBag = /** @type {CopyBag} */ (specimen);
       return (
         ((confirmKind(specimen, 'copyBag', reject) &&
           specimenBag.payload.length <= numUniqueBagElementsLimit) ||
@@ -1544,7 +1540,7 @@ const makePatternKit = () => {
       case 'copySet': {
         return (
           confirmElementsHasSplit(
-            /** @type {import('../types.js').CopySet} */ (specimen).payload,
+            /** @type {CopySet} */ (specimen).payload,
             elementPatt,
             bound,
             reject,
@@ -1561,7 +1557,7 @@ const makePatternKit = () => {
       case 'copyBag': {
         return (
           pairsHasSplit(
-            /** @type {import('../types.js').CopyBag} */ (specimen).payload,
+            /** @type {CopyBag} */ (specimen).payload,
             elementPatt,
             bound,
             reject,
@@ -1619,9 +1615,7 @@ const makePatternKit = () => {
       reject,
     ) => {
       const { numMapEntriesLimit } = limit(limits);
-      const specimenMap = /** @type {import('../types.js').CopyMap} */ (
-        specimen
-      );
+      const specimenMap = /** @type {CopyMap} */ (specimen);
       return (
         confirmKind(specimen, 'copyMap', reject) &&
         // eslint-disable-next-line @endo/restrict-comparison-operands

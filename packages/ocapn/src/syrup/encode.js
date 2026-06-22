@@ -37,7 +37,7 @@ const FLOAT64 = 'D'.charCodeAt(0);
 const NAN64 = new Uint8Array([0x7f, 0xf8, 0, 0, 0, 0, 0, 0]);
 
 /**
- * @param {import('./buffer-writer.js').BufferWriter} bufferWriter
+ * @param {BufferWriter} bufferWriter
  * @param {Uint8Array} bytes
  * @param {string} typeChar
  */
@@ -51,7 +51,7 @@ function writeStringlike(bufferWriter, bytes, typeChar) {
 }
 
 /**
- * @param {import('./buffer-writer.js').BufferWriter} bufferWriter
+ * @param {BufferWriter} bufferWriter
  * @param {string} value
  */
 function writeString(bufferWriter, value) {
@@ -74,7 +74,7 @@ function writeString(bufferWriter, value) {
 }
 
 /**
- * @param {import('./buffer-writer.js').BufferWriter} bufferWriter
+ * @param {BufferWriter} bufferWriter
  * @param {string} value
  */
 function writeSelectorFromString(bufferWriter, value) {
@@ -83,7 +83,7 @@ function writeSelectorFromString(bufferWriter, value) {
 }
 
 /**
- * @param {import('./buffer-writer.js').BufferWriter} bufferWriter
+ * @param {BufferWriter} bufferWriter
  * @param {ArrayBufferView | ArrayBufferLike} value
  */
 function writeBytestring(bufferWriter, value) {
@@ -107,7 +107,7 @@ function writeBytestring(bufferWriter, value) {
 }
 
 /**
- * @param {import('./buffer-writer.js').BufferWriter} bufferWriter
+ * @param {BufferWriter} bufferWriter
  * @param {number} value
  */
 function writeFloat64(bufferWriter, value) {
@@ -124,7 +124,7 @@ function writeFloat64(bufferWriter, value) {
 }
 
 /**
- * @param {import('./buffer-writer.js').BufferWriter} bufferWriter
+ * @param {BufferWriter} bufferWriter
  * @param {bigint} value
  */
 function writeInteger(bufferWriter, value) {
@@ -136,7 +136,7 @@ function writeInteger(bufferWriter, value) {
 }
 
 /**
- * @param {import('./buffer-writer.js').BufferWriter} bufferWriter
+ * @param {BufferWriter} bufferWriter
  * @param {boolean} value
  */
 function writeBoolean(bufferWriter, value) {
