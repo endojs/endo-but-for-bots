@@ -269,13 +269,18 @@ export const makeGuestMaker = ({
         endowmentFormulaIdsOrPaths,
         tasks,
         workerId,
-        resultName === undefined ? pinTransient : undefined,
+        // Pin the result whenever it is un-named or whenever the caller
+        // supplied `retainUntil` (an explicit request to hold it); a named
+        // result is otherwise durably rooted by its pet-name edge.
+        resultName === undefined || retainUntil !== undefined
+          ? pinTransient
+          : undefined,
       );
-      if (resultName === undefined) {
+      if (resultName === undefined || retainUntil !== undefined) {
+        // `retainUnnamed` drops the pin once `retainUntil` settles, or
+        // immediately when there is no `retainUntil` (the ephemeral case).
         return retainUnnamed(id, value, retainUntil);
       }
-      // A named result is durably rooted by its pet-name edge, so any
-      // `retainUntil` is redundant and intentionally ignored on this branch.
       return value;
     };
 

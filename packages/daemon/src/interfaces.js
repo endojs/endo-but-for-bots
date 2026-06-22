@@ -58,9 +58,9 @@ const MakeCapletOptionsShape = M.splitRecord(
 // Shared method guard for evaluate (used by both Host and Guest)
 // Both execute directly in a worker, differing only in namespace.
 // Trailing optionals: `resultName` (durably roots the result by pet name)
-// and `retainUntil` (a promise that keeps an *un-named* result alive — a
-// transient root — until it settles; the ephemeral-root sibling of
-// `resultName`).
+// and `retainUntil` (a promise that keeps the result alive — a transient
+// root — until it settles; the ephemeral-root sibling of `resultName`,
+// honored even alongside it, and most useful for an un-named result).
 const EvaluateMethodGuard = M.call(
   M.or(NameShape, M.undefined()),
   M.string(),

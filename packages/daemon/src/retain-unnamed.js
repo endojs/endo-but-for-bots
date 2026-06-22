@@ -1,22 +1,27 @@
 // @ts-check
 
 /**
- * Retention policy for an un-named formula returned by `evaluate` (the
- * formula is already pinned as a transient root inside `formulateEval`).
+ * Retention policy for a formula returned by `evaluate` that has been pinned
+ * as a transient root inside `formulateEval`.
  *
  * Without `retainUntil` the result is **ephemeral**: the transient pin is
  * released as soon as the value resolves, which triggers collection (an
  * un-named result with no other root is reclaimed immediately). This keeps
  * one-shot evaluations (e.g. `endo eval expr`) from leaking a formula.
+ * (`evaluate` only pins, and so only routes through this policy, an un-named
+ * result in the no-`retainUntil` case.)
  *
  * With `retainUntil` the transient pin is **held until the caller's promise
  * settles** (resolve or reject) — the ephemeral-root sibling of
- * `resultName`. This lets a caller hold an un-named result long enough to
- * compose it by reference (e.g. pass an eval'd powers exo as `powers` to
+ * `resultName`. This lets a caller hold a result long enough to compose it
+ * by reference (e.g. pass an eval'd powers exo as `powers` to
  * `makeUnconfined`), after which a durable dependency edge roots it and the
- * caller settles the promise to drop the transient pin. The retention is
- * in-memory, so it is lost on daemon restart — which is harmless, because
- * by then any durable edge that captured the result has been persisted.
+ * caller settles the promise to drop the transient pin. `retainUntil` is
+ * honored regardless of `resultName`: a named result is already durably
+ * rooted by its pet-name edge, but an explicit `retainUntil` is still held
+ * as requested rather than ignored. The retention is in-memory, so it is
+ * lost on daemon restart — which is harmless, because by then any durable
+ * edge that captured the result has been persisted.
  *
  * @param {(id: import('./types.js').FormulaIdentifier) => void} unpinTransient
  * @returns {(

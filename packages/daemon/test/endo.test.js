@@ -1073,6 +1073,46 @@ testNeedsNodeWorker(
 );
 
 testNeedsNodeWorker(
+  'retainUntil is honored alongside resultName (held until the promise settles)',
+  async t => {
+    const { host } = await prepareHost(t);
+    const release = makePromiseKit();
+
+    // Both a pet name and retainUntil: the pet-name edge roots the result,
+    // but retainUntil is still honored (not ignored) as a transient pin. We
+    // observe this by removing the name while retainUntil is pending — the
+    // transient pin keeps the result composable by reference until release.
+    const powers = await E(host).evaluate(
+      '@main',
+      `Far('Pingable', { ping: () => 'pong-eval' })`,
+      [],
+      [],
+      'retained-powers', // resultName — named
+      release.promise, // retainUntil — still honored
+    );
+    await E(host).remove('retained-powers');
+
+    // The name is gone, but the transient pin from retainUntil keeps the
+    // result alive and daemon-minted, so it composes by reference.
+    const caplet = await E(host).makeUnconfined('@main', powersPingPath, {
+      powers,
+      resultName: 'ping-caplet',
+    });
+    t.is(await E(caplet).pong(), 'pong-eval');
+
+    // Drop the transient pin; the caplet's ['powers', id] edge now roots it.
+    release.resolve();
+
+    const names = await E(host).list();
+    t.deepEqual(
+      names.filter(n => !n.startsWith('@') && n !== 'ping-caplet'),
+      [],
+      `only the caplet is named; saw: ${names.join(', ')}`,
+    );
+  },
+);
+
+testNeedsNodeWorker(
   'guest evaluate threads retainUntil and keeps an un-named result alive',
   async t => {
     const { host } = await prepareHost(t);

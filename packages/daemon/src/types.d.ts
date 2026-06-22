@@ -1346,10 +1346,12 @@ export interface EndoGuest extends EndoAgent {
     petNamesOrPaths: Array<string | string[]>,
     resultNameOrPath?: string | string[],
     /**
-     * When `resultNameOrPath` is omitted, keep the un-named result alive
-     * (as a transient root) until this promise settles, so it can be
-     * composed by reference before collection. The ephemeral-root sibling
-     * of `resultNameOrPath`; in-memory only (lost on daemon restart).
+     * Keep the result alive (as a transient root) until this promise
+     * settles, so it can be composed by reference before collection. The
+     * ephemeral-root sibling of `resultNameOrPath`, and honored even when
+     * `resultNameOrPath` is also supplied; in-memory only (lost on daemon
+     * restart). Most useful for an un-named result, which is otherwise
+     * collected as soon as it resolves.
      */
     retainUntil?: Promise<unknown>,
   ): Promise<unknown>;
@@ -1490,9 +1492,11 @@ export interface EndoHost extends EndoAgent {
     petNamesOrPaths: Array<string | string[]>,
     resultName?: string | string[],
     /**
-     * When `resultName` is omitted, keep the un-named result alive (as a
-     * transient root) until this promise settles, so it can be composed by
-     * reference before collection. In-memory only (lost on daemon restart).
+     * Keep the result alive (as a transient root) until this promise
+     * settles, so it can be composed by reference before collection.
+     * Honored even when `resultName` is also supplied; in-memory only (lost
+     * on daemon restart). Most useful for an un-named result, which is
+     * otherwise collected as soon as it resolves.
      */
     retainUntil?: Promise<unknown>,
   ): Promise<unknown>;

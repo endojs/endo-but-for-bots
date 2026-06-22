@@ -685,6 +685,11 @@ export const makeHostMaker = ({
         );
       }
 
+      // Pin the result as a transient root whenever it is un-named (so it
+      // survives formulation against concurrent collection) or whenever the
+      // caller supplied `retainUntil` (an explicit request to hold it). A
+      // named result is otherwise durably rooted by its pet-name edge.
+      const pinResult = resultName === undefined || retainUntil !== undefined;
       const { id, value } = await formulateEval(
         hostId,
         source,
@@ -692,16 +697,16 @@ export const makeHostMaker = ({
         endowmentFormulaIdsOrPaths,
         tasks,
         workerId,
-        resultName === undefined ? pinTransient : undefined,
+        pinResult ? pinTransient : undefined,
         workerLabel,
       );
-      if (resultName === undefined) {
+      if (pinResult) {
         // The formula was pinned inside formulateEval (inside the lock) so
-        // concurrent collection can't reclaim it.
+        // concurrent collection can't reclaim it. `retainUnnamed` drops the
+        // pin once `retainUntil` settles, or immediately when there is no
+        // `retainUntil` (the ephemeral un-named case).
         return retainUnnamed(id, value, retainUntil);
       }
-      // A named result is durably rooted by its pet-name edge, so any
-      // `retainUntil` is redundant and intentionally ignored on this branch.
       return value;
     };
 
