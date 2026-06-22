@@ -259,6 +259,60 @@ test('interrupt() throws when idle and closes-and-kills the in-flight turn', asy
   unblock(); // let the (now-orphaned) producer task drain and exit
 });
 
+test('interrupt() with a queued turn kills the in-flight turn, not the queued one', async t => {
+  let unblock;
+  const blocked = new Promise(resolve => {
+    unblock = resolve;
+  });
+  const blockingStdout = harden({
+    async *[Symbol.asyncIterator]() {
+      yield enc.encode('{"type":"system"}\n');
+      await blocked;
+    },
+  });
+  const fake = makeFakeSlice();
+  const client = makeClaudeClient(
+    baseArgs(fake, makeFakeMount(), {
+      makeStdoutIterable: () => blockingStdout,
+    }),
+  );
+
+  const rA = await client.send('A'); // becomes in-flight
+  await client.send('B'); // queues behind A (does not spawn yet)
+  const first = await rA.next();
+  t.is(first.value.type, 'system'); // A is producing
+  t.is(fake.spawned.length, 1, 'only the in-flight turn has spawned');
+
+  await client.interrupt();
+  // interrupt targeted the in-flight A (killing its process), not the
+  // still-queued B — which would previously have been closed instead.
+  t.true(procKilled.get(fake.spawned[0]));
+
+  unblock();
+});
+
+test('a stream-error abort folds claude stderr into the reason', async t => {
+  // stdout emits a malformed line (→ abort); stderr carries the real
+  // diagnostic, which must surface in the abort reason.
+  const fake = makeFakeSlice([[enc.encode('not json\n')]]);
+  const client = makeClaudeClient(
+    baseArgs(fake, makeFakeMount(), {
+      makeStderrIterable: () =>
+        bytesIterable([
+          enc.encode('claude: authentication_error: invalid api key\n'),
+        ]),
+    }),
+  );
+
+  const events = await drain(await client.send('x'));
+  const last = events[events.length - 1];
+  t.is(last.type, 'abort');
+  t.regex(last.reason, /malformed stream-json line/);
+  t.regex(last.reason, /authentication_error: invalid api key/);
+  // The process is killed before stderr is read (so the captured stream EOFs).
+  t.true(procKilled.get(fake.spawned[0]));
+});
+
 test('terminate() disposes the slice, unmounts, and rejects subsequent send', async t => {
   const fake = makeFakeSlice([[]]);
   const mount = makeFakeMount();

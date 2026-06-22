@@ -118,6 +118,20 @@ const defaultStdoutIterable = proc =>
   });
 
 /**
+ * Default adapter from a slice `ProcessHandle` to its stderr byte stream.
+ *
+ * @param {ProcessHandle} proc
+ * @returns {AsyncIterable<Uint8Array>}
+ */
+const defaultStderrIterable = proc =>
+  harden({
+    async *[Symbol.asyncIterator]() {
+      const stderrRef = await E(proc).stderr();
+      yield* iterateBytesReader(/** @type {any} */ (stderrRef));
+    },
+  });
+
+/**
  * @typedef {object} ClaudeClientArgs
  * @property {string} sessionId
  * @property {string} createdAt - ISO timestamp.
@@ -154,6 +168,10 @@ const defaultStdoutIterable = proc =>
  * @property {(proc: ProcessHandle) => AsyncIterable<Uint8Array>} [makeStdoutIterable]
  *   - Adapter from a `ProcessHandle` to its stdout byte stream.
  *   Injectable for tests; defaults to the `@endo/exo-stream` reader.
+ * @property {(proc: ProcessHandle) => AsyncIterable<Uint8Array>} [makeStderrIterable]
+ *   - Adapter from a `ProcessHandle` to its stderr byte stream, read
+ *   best-effort to enrich an `abort` reason. Injectable for tests;
+ *   defaults to the `@endo/exo-stream` reader.
  */
 
 /**
@@ -175,7 +193,32 @@ export const makeClaudeClient = ({
   env = {},
   initialPrompt,
   makeStdoutIterable = defaultStdoutIterable,
+  makeStderrIterable = defaultStderrIterable,
 }) => {
+  /**
+   * Best-effort read of a process's captured stderr, bounded so a chatty
+   * or never-closing stream can't stall teardown. The caller kills the
+   * process first so the captured stream EOFs. Returns the trailing slice
+   * (where the actual error usually is), or '' on any failure (e.g. a
+   * proc with no stderr surface).
+   *
+   * @param {ProcessHandle} proc
+   * @returns {Promise<string>}
+   */
+  const readStderrBrief = async proc => {
+    try {
+      const decoder = new TextDecoder();
+      let text = '';
+      for await (const chunk of makeStderrIterable(proc)) {
+        text += decoder.decode(chunk, { stream: true });
+        if (text.length >= 16_384) break;
+      }
+      text += decoder.decode();
+      return text.trim().slice(-2000);
+    } catch {
+      return '';
+    }
+  };
   let terminated = false;
   // `--continue` resumes the most recent conversation; the first turn
   // has nothing to resume, so it is omitted until one prompt has been
@@ -183,10 +226,15 @@ export const makeClaudeClient = ({
   let conversationStarted = false;
   /** @type {ProcessHandle | null} */
   let inFlight = null;
-  // The reply reader of the most recent turn. `interrupt()` closes it —
-  // the floot model where closing the reader *is* the interrupt.
+  // The reply reader of the most recent turn (queued or running).
   /** @type {{ return: () => Promise<any> } | null} */
   let currentReader = null;
+  // The reply reader of the turn that is *actually executing* (spawned,
+  // streaming). `interrupt()` prefers this over `currentReader` so that,
+  // with a turn already in flight and another queued behind it, interrupt
+  // kills the running `claude` process rather than bailing the queued turn.
+  /** @type {{ return: () => Promise<any> } | null} */
+  let inFlightReader = null;
   // Serialize turns so two `claude -p` processes never race the same
   // workspace conversation: each `send()` queues behind the previous turn.
   /** @type {Promise<void>} */
@@ -324,6 +372,7 @@ export const makeClaudeClient = ({
         return;
       }
       inFlight = proc;
+      inFlightReader = reader;
       try {
         for await (const event of parseStreamJsonLines(
           makeStdoutIterable(proc),
@@ -332,13 +381,23 @@ export const makeClaudeClient = ({
         }
         push({ type: 'end' });
       } catch (error) {
+        const base = error instanceof Error ? error.message : String(error);
+        // Kill first so the captured stderr stream EOFs, then fold any
+        // diagnostic claude wrote to stderr into the abort reason — without
+        // it, a claude-side failure surfaces only as an opaque stream/parse
+        // error.
+        await E(proc)
+          .kill()
+          .catch(() => {});
+        const stderrText = await readStderrBrief(proc);
         push({
           type: 'abort',
-          reason: error instanceof Error ? error.message : String(error),
+          reason: stderrText ? `${base}\n--- stderr ---\n${stderrText}` : base,
         });
       } finally {
         if (inFlight === proc) {
           inFlight = null;
+          inFlightReader = null;
         }
       }
     });
@@ -384,12 +443,15 @@ export const makeClaudeClient = ({
      */
     async interrupt() {
       guardLive();
-      if (!currentReader) {
+      // Prefer the executing turn (kills its `claude` process); fall back
+      // to the most-recent queued turn (which bails before it spawns).
+      const target = inFlightReader || currentReader;
+      if (!target) {
         throw makeError(
           X`ClaudeClient(${q(sessionId)}): no in-flight prompt to interrupt.`,
         );
       }
-      await currentReader.return();
+      await target.return();
     },
 
     /**

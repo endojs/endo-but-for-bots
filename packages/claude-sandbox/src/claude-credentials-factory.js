@@ -232,6 +232,12 @@ export const makeCredentialsExo = (initialKey, kind = 'apiKey') => {
           );
         }
         materialised = true;
+        // A single-shot grant that has fired can never be used again, so
+        // drop it from `outstanding` (a later revoke/rotate of it is a
+        // no-op anyway). This bounds `outstanding` to grants that have not
+        // yet materialised, rather than leaking a handle per issued grant
+        // whose session never calls revoke.
+        outstanding.delete(handle);
         return apiKey;
       },
       sessionTag() {
