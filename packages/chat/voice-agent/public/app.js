@@ -2381,24 +2381,55 @@ const forkComponentAct = async (id, name) => {
 // component-projects as the trie grows). Owner-only.
 const componentSelect = () => {
   let altHeld = false, hoverEl = null;
+  // While Alt is held, drop pointer-events on confined-component iframes so the PARENT receives the hover
+  // and click (a sandboxed iframe otherwise swallows them — the reason in-chat components were unselectable).
+  // pointer-events:none grants the frame nothing: the sandbox/CSP boundary is untouched; it only routes the
+  // OWNER's pointer to the wrapper while Alt is down, and restores normal interaction the instant Alt lifts.
+  const sstyle = document.createElement('style'); sstyle.textContent = '.comp-select .gw-component iframe{pointer-events:none!important}.comp-select .gw-component{cursor:pointer}'; document.head.appendChild(sstyle);
   const outline = document.createElement('div');
-  outline.style.cssText = 'position:fixed;z-index:9000;pointer-events:none;border:1px solid #ff2d2d;box-shadow:0 0 6px #ff2d2d66;display:none;transition:all .05s ease;';
+  outline.style.cssText = 'position:fixed;z-index:9000;pointer-events:none;border:1px solid var(--bad,#f85149);box-shadow:0 0 7px var(--bad,#f85149);display:none;transition:all .05s ease;'; // 1px impact-colour line (themes via --bad)
   const label = document.createElement('div');
-  label.style.cssText = 'position:absolute;top:0;left:0;color:#ff2d2d;background:rgba(0,0,0,.55);font:600 11px ui-monospace,Menlo,Consolas,monospace;padding:1px 5px;white-space:nowrap;';
+  label.style.cssText = 'position:absolute;top:0;left:0;color:var(--bad,#f85149);background:rgba(0,0,0,.6);font:600 11px ui-monospace,Menlo,Consolas,monospace;padding:1px 5px;white-space:nowrap;';
   outline.appendChild(label);
   const hint = document.createElement('div');
-  hint.style.cssText = 'position:fixed;bottom:16px;left:50%;transform:translateX(-50%);z-index:9001;background:#0d1117f2;border:1px solid #39d3ff;color:#e6edf3;font:12px -apple-system,sans-serif;padding:6px 13px;border-radius:20px;display:none;pointer-events:none;';
+  hint.style.cssText = 'position:fixed;bottom:16px;left:50%;transform:translateX(-50%);z-index:9001;background:#0d1117f2;border:1px solid var(--acc,#39d3ff);color:#e6edf3;font:12px -apple-system,sans-serif;padding:6px 13px;border-radius:20px;display:none;pointer-events:none;';
   hint.textContent = '⌥ Alt-click a component to edit it with its agent';
   const chip = document.createElement('div');
-  chip.style.cssText = 'position:fixed;z-index:9002;display:none;gap:6px;background:#0d1117f7;border:1px solid #39d3ff;border-radius:10px;padding:6px 7px;box-shadow:0 10px 34px rgba(0,0,0,.6);font:12px -apple-system,sans-serif;align-items:center;';
+  chip.style.cssText = 'position:fixed;z-index:9002;display:none;gap:6px;background:#0d1117f7;border:1px solid var(--acc,#39d3ff);border-radius:10px;padding:6px 7px;box-shadow:0 10px 34px rgba(0,0,0,.6);font:12px -apple-system,sans-serif;align-items:center;';
   document.body.append(outline, hint, chip);
-  const tagOf = el => (el && el.closest ? el.closest('[data-component-id]') : null);
-  const place = el => { if (!el) { outline.style.display = 'none'; return; } const r = el.getBoundingClientRect(); outline.style.display = 'block'; outline.style.left = `${r.left - 1}px`; outline.style.top = `${r.top - 1}px`; outline.style.width = `${r.width}px`; outline.style.height = `${r.height}px`; label.textContent = el.getAttribute('data-component-name') || el.getAttribute('data-component-id') || 'component'; }; // formal name, red monospace, top-left
+  // a "component" = any element carrying its project id (the Studio) OR a live in-chat confined component.
+  const tagOf = el => (el && el.closest ? el.closest('[data-component-id], .gw-component') : null);
+  const setAlt = on => { altHeld = on; hint.style.display = on ? 'block' : 'none'; document.documentElement.classList.toggle('comp-select', on); if (!on && (!chip.style.display || chip.style.display === 'none')) { outline.style.display = 'none'; hoverEl = null; } };
+  const place = el => { if (!el) { outline.style.display = 'none'; return; } const r = el.getBoundingClientRect(); outline.style.display = 'block'; outline.style.left = `${r.left - 1}px`; outline.style.top = `${r.top - 1}px`; outline.style.width = `${r.width}px`; outline.style.height = `${r.height}px`; label.textContent = el.getAttribute('data-component-name') || el.getAttribute('data-component-id') || 'component'; }; // formal name, impact-colour monospace, top-left
   const clearChip = () => { chip.style.display = 'none'; outline.style.display = 'none'; };
-  addEventListener('keydown', e => { if ((e.key === 'Alt' || e.altKey) && isRoot) { altHeld = true; hint.style.display = 'block'; } });
-  addEventListener('keyup', e => { if (e.key === 'Alt' || !e.altKey) { altHeld = false; hint.style.display = 'none'; if (!chip.style.display || chip.style.display === 'none') outline.style.display = 'none'; } });
+  // Break out an id-less inline component into a project object, then edit it — so click-to-edit works on
+  // freshly-generated chat components too (breaking out IS minting the editable, versioned project).
+  const breakOutThenEdit = async (spec, name) => {
+    if (!spec || !spec.source) { setStatus('this component has no editable source'); return; }
+    const nm = (name && name !== 'component') ? name : (window.prompt('Name this component to make it editable:', '') || '').trim();
+    if (!nm) return;
+    setStatus(`saving “${nm}” as an editable component…`);
+    let r; try { r = await (await fetch('/components/break-out', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, name: nm, source: spec.source, cells: spec.cells || [] }) })).json(); }
+    catch (e) { setStatus('break out: ' + e.message); return; }
+    if (!r || !r.ok || !r.id) { setStatus('break out: ' + ((r && r.error) || 'failed')); return; }
+    editComponent(r.id, r.name || nm); // now it's a project object → edit it with its focused agent
+  };
+  addEventListener('keydown', e => { if ((e.key === 'Alt' || e.altKey) && isRoot) setAlt(true); });
+  addEventListener('keyup', e => { if (e.key === 'Alt' || !e.altKey) setAlt(false); });
+  addEventListener('blur', () => setAlt(false)); // alt-tab / focus loss → never leave iframes disabled
   addEventListener('mousemove', e => { if (!altHeld) return; const el = tagOf(e.target); if (el !== hoverEl) { hoverEl = el; place(el); } else if (el) place(el); });
-  addEventListener('click', e => { if (!altHeld) return; const el = tagOf(e.target); if (!el) return; e.preventDefault(); e.stopPropagation(); const id = el.getAttribute('data-component-id'), name = el.getAttribute('data-component-name') || 'component'; const r = el.getBoundingClientRect(); chip.innerHTML = `<span style="color:var(--mut)">🧩 ${name}</span> <button class="mini" data-act="edit">✎ edit</button> <button class="mini" data-act="fork">🍴 fork</button> <button class="mini" data-act="x">✕</button>`; chip.style.display = 'flex'; chip.style.left = `${Math.min(r.left, innerWidth - 220)}px`; chip.style.top = `${Math.min(r.bottom + 6, innerHeight - 44)}px`; place(el); chip.querySelector('[data-act=edit]').onclick = () => { clearChip(); editComponent(id, name); }; chip.querySelector('[data-act=fork]').onclick = () => { clearChip(); forkComponentAct(id, name); }; chip.querySelector('[data-act=x]').onclick = clearChip; }, true);
+  addEventListener('click', e => {
+    if (!altHeld) return; const el = tagOf(e.target); if (!el) return;
+    e.preventDefault(); e.stopPropagation();
+    const id = el.getAttribute('data-component-id'); const name = el.getAttribute('data-component-name') || 'component'; const spec = el.__componentSpec;
+    const r = el.getBoundingClientRect();
+    const editLabel = id ? '✎ edit' : '⤴ edit (break out)';
+    chip.innerHTML = `<span style="color:var(--mut)">🧩 ${esc(name)}</span> <button class="mini" data-act="edit">${editLabel}</button> ${id ? '<button class="mini" data-act="fork">🍴 fork</button>' : ''} <button class="mini" data-act="x">✕</button>`;
+    chip.style.display = 'flex'; chip.style.left = `${Math.min(r.left, innerWidth - 240)}px`; chip.style.top = `${Math.min(r.bottom + 6, innerHeight - 44)}px`; place(el);
+    chip.querySelector('[data-act=edit]').onclick = () => { clearChip(); if (id) editComponent(id, name); else breakOutThenEdit(spec, name); };
+    const fk = chip.querySelector('[data-act=fork]'); if (fk) fk.onclick = () => { clearChip(); forkComponentAct(id, name); };
+    chip.querySelector('[data-act=x]').onclick = clearChip;
+  }, true);
   addEventListener('keydown', e => { if (e.key === 'Escape') clearChip(); });
   addEventListener('scroll', () => { if (chip.style.display === 'flex') clearChip(); }, true);
 };

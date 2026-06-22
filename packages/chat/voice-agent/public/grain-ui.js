@@ -154,6 +154,13 @@ const dummyForCell = id => /^ha:/.test(String(id))
 const renderComponent = (spec, ctx) => {
   const wrap = document.createElement('div'); wrap.className = 'gw gw-component'; wrap.style.cssText = `${STYLE};margin:8px 0;border:1px solid #30363d;border-radius:12px;overflow:hidden;background:#0d1117`;
   wrap.dataset.appletKey = hashStr(spec.source); // stable per-source key so an expanded applet can be re-found on re-render (retained view-state)
+  // SELECTABLE for ⌥ Alt-click edit: tag the wrapper with the component's name (+ its project id when it is
+  // already a saved component) and stash the full spec as a JS prop (NOT an attribute) so an Alt-click on an
+  // id-less inline component can break it out into a project object and edit it. No cap/swissnum here — the
+  // source is render-safe and a component id carries no authority.
+  wrap.dataset.componentName = String(spec.name || spec.title || 'component').slice(0, 60);
+  if (spec.componentId || spec.id) wrap.dataset.componentId = String(spec.componentId || spec.id);
+  try { wrap.__componentSpec = spec; } catch { /* */ }
   // a slim header bar: EXPAND (fill the chat area) + BREAK OUT (versioned module) + SHARE (least-authority link).
   if (ctx && (typeof ctx.onExpand === 'function' || typeof ctx.onBreakOut === 'function' || typeof ctx.onShareOut === 'function')) {
     const bar = document.createElement('div'); bar.className = 'gw-bar'; bar.style.cssText = 'display:flex;justify-content:flex-end;gap:6px;padding:4px 6px;border-bottom:1px solid #21262d;background:#0b0e14';
