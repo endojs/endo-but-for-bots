@@ -553,9 +553,12 @@ const retryTurn = async (payload, spoken) => {
 // memory (e.g. after a page reload) but the visible chat's last entry is an unanswered user message,
 // we reconstruct the turn from the transcript — so a chat stalled in a PRIOR session also resumes.
 const pendingResume = {}; // sessionId → { payload, spoken }
+const INTERRUPT_RE = /^⚠️ The run was interrupted/; // a drop left this marker as the (agent) tail — the user turn beneath it still needs answering
 const stalledTurnFromTx = () => {
-  const i = activeTx.length - 1; const m = activeTx[i];
-  if (!(m && m.who === 'you' && (m.text || '').trim())) return null; // last entry isn't an unanswered user message
+  let i = activeTx.length - 1;
+  if (activeTx[i] && activeTx[i].who === 'agent' && INTERRUPT_RE.test(activeTx[i].text || '')) i -= 1; // look PAST a dead interrupt marker to the unanswered user turn it buried
+  const m = activeTx[i];
+  if (!(m && m.who === 'you' && (m.text || '').trim())) return null; // nothing pending
   const history = activeTx.slice(0, i).filter(x => x && (x.text || '').trim()).map(x => ({ role: x.who === 'you' ? 'user' : 'assistant', content: String(x.text) })).slice(-24);
   return { payload: { sessionId, text: (m.text || '').trim(), cap: chatCap(), model: chatModel(), agent: chatAgent(), history }, spoken: false };
 };
@@ -590,6 +593,10 @@ const renderReattached = (r, sid) => {
 const reattachRun = async sid => {
   if (busy || reattaching === sid || sid !== sessionId) return false; // a live send (or another re-attach) owns rendering
   if (!stalledTurnFromTx()) return false;                              // last entry isn't an unanswered question → nothing pending
+  // a prior drop may have persisted a dead "interrupted" marker as the tail — strip it so it doesn't linger,
+  // then resume the buried user turn (this auto-heals chats stuck on the old "send again to retry" bubble).
+  const last = activeTx[activeTx.length - 1];
+  if (last && last.who === 'agent' && INTERRUPT_RE.test(last.text || '')) { activeTx.pop(); saveTx(); renderTx(); }
   const rr = await fetchRunResult(sid);
   if (sid !== sessionId) return false;
   if (!rr || rr.state === 'none') return resumeIfPending(sid);         // server has no record (it restarted) → re-run
@@ -875,10 +882,17 @@ const sendChat = async (text, { spoken = false, audio = null, attachments = [], 
     // stalls silently; the user's message is already saved, so a re-send retries it.
     if (!stale()) {
       const dropped = /Failed to fetch|NetworkError|load failed|aborted/i.test(e.message || '');
-      const msg = dropped
-        ? '⚠️ The run was interrupted — the connection dropped (the server may have restarted). Your message is saved; send again to retry.'
-        : ('⚠️ Something went wrong: ' + e.message);
-      setStatus(''); try { renderAgentResponse({ answer: msg }); } catch {} pushTx('agent', msg, {}); try { pendantEnd([]); } catch {}
+      if (dropped) {
+        // The connection dropped mid-run (usually a server restart). Do NOT persist a dead agent turn —
+        // that would bury the user turn and block auto-resume. Leave the user turn unanswered, show a
+        // transient status, and auto-retry shortly; reattachRun also re-runs it the next time the chat opens.
+        setStatus('⚠️ interrupted (the server may have restarted) — resuming…'); try { pendantEnd([]); } catch {}
+        const sidAtDrop = sessionId;
+        setTimeout(() => { if (!busy && sessionId === sidAtDrop) resumeIfPending(sidAtDrop).catch(() => {}); }, 2200);
+      } else {
+        const msg = '⚠️ Something went wrong: ' + e.message;
+        setStatus(''); try { renderAgentResponse({ answer: msg }); } catch {} pushTx('agent', msg, {}); try { pendantEnd([]); } catch {}
+      }
     }
     ok = false;
   }
