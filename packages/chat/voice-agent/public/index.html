@@ -131,7 +131,7 @@
   .drawer-head b { font-size:15px; }
   #chat-list { overflow-y:auto; padding:8px; flex:1; }
   .chat-item { display:flex; align-items:center; justify-content:space-between; gap:6px; padding:9px 10px; border-radius:8px; cursor:pointer; font-size:14px; }
-  .chat-item:hover { background:#1c2433; }
+  .chat-item:hover { background:rgba(127,127,127,.14); } /* neutral translucent — reads on both light + dark sidebars */
   .chat-item.on { background:#1f6feb22; border:1px solid #1f3b63; }
   .ci-title { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   /* red dot: this chat is requesting user interaction (an unanswered ask) */
@@ -158,7 +158,7 @@
   .ci-del { color:var(--mut); border-color:transparent !important; padding:2px 7px; }
   .ci-del:hover { color:var(--bad); }
   /* inline action-proposal cards (destructive actions awaiting confirmation) */
-  .prop { background:#0f1830; border:1px solid #2a3a5e; border-radius:12px; padding:12px 14px; align-self:stretch; max-width:100%; }
+  .prop { background:var(--panel); border:1px solid var(--edge); border-radius:12px; padding:12px 14px; align-self:stretch; max-width:100%; } /* themed surface; the island adds a per-agent accent left-border */
   .prop .ptitle { font-weight:600; display:flex; gap:8px; align-items:center; }
   .prop .pmeta { color:var(--mut); font-size:12px; margin:2px 0 8px; }
   .prop .kv { font-size:13px; line-height:1.7; } .prop .kv b { color:var(--mut); font-weight:600; margin-right:4px; }
@@ -171,7 +171,7 @@
   .prop .pbtns label.dontask input { width:auto; }
   .autofired { font-size:12px; color:var(--acc2); margin-top:6px; }
   /* inline feedback loop: a TYPED, answerable question (chat-inline or in the 🔔 inbox) */
-  .ask { background:#0f2018; border:1px solid #1f4d39; border-radius:12px; padding:12px 14px; align-self:stretch; max-width:100%; }
+  .ask { background:var(--panel); border:1px solid var(--edge); border-radius:12px; padding:12px 14px; align-self:stretch; max-width:100%; } /* themed surface; the island adds a per-agent accent left-border */
   .ask-title { font-weight:600; display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
   .ask-body { color:var(--mut); font-size:13px; margin:4px 0 8px; }
   .ask-q { margin:11px 0; }
@@ -179,7 +179,7 @@
   .ask-ctrl { display:flex; flex-direction:column; gap:6px; }
   .ask-opt { font-size:13px; display:flex; align-items:center; gap:8px; cursor:pointer; }
   .ask-opt input { width:auto; }
-  .ask-in { width:100%; background:#0d1117; border:1px solid var(--edge); color:var(--ink); border-radius:8px; padding:8px 10px; font:inherit; }
+  .ask-in { width:100%; background:var(--bg); border:1px solid var(--edge); color:var(--ink); border-radius:8px; padding:8px 10px; font:inherit; }
   .ask-btns { display:flex; gap:10px; align-items:center; margin-top:12px; flex-wrap:wrap; }
   .ask-submit { background:var(--acc2); border:none; color:#fff; padding:7px 16px; border-radius:8px; cursor:pointer; font-size:13px; }
   .ask-submit:disabled { opacity:.5; cursor:default; }
@@ -244,7 +244,7 @@
   @media (max-width:640px) { body.sidebar-open #pendant-wrap.fs { left:0 !important; width:100vw !important; } }
   #pendant-wrap.fs #pendant-canvas { height:100vh !important; }
   #pendant-wrap.fs .pendant-cap { display:none; }
-  .composer { position:fixed; bottom:0; left:0; right:0; background:linear-gradient(transparent,#0d1117 22%); padding:10px max(14px,env(safe-area-inset-right)) max(14px,env(safe-area-inset-bottom)) max(14px,env(safe-area-inset-left)); }
+  .composer { position:fixed; bottom:0; left:0; right:0; background:linear-gradient(transparent,var(--bg) 22%); padding:10px max(14px,env(safe-area-inset-right)) max(14px,env(safe-area-inset-bottom)) max(14px,env(safe-area-inset-left)); }
   #status { color:var(--mut); font-size:12px; min-height:15px; text-align:center; margin-bottom:6px; }
   .inputrow { max-width:960px; margin:0 auto; display:flex; gap:8px; align-items:flex-end; }
   /* field-sizing:content auto-grows the composer with its content, so a long message is ALWAYS
@@ -296,14 +296,14 @@
   .msg .att .fname { font-size:12px; color:var(--mut); }
   .card { background:var(--panel); border:1px solid var(--edge); border-radius:12px; padding:16px; margin-bottom:96px; }
   label { display:block; font-size:11px; color:var(--mut); margin:10px 0 4px; text-transform:uppercase; letter-spacing:.4px; }
-  input, select { width:100%; background:#0d1117; border:1px solid var(--edge); color:var(--ink); border-radius:8px; padding:9px 11px; font:inherit; }
+  input, select { width:100%; background:var(--bg); border:1px solid var(--edge); color:var(--ink); border-radius:8px; padding:9px 11px; font:inherit; }
   .row { display:flex; gap:12px; flex-wrap:wrap; } .row > div { flex:1; min-width:140px; }
   button.go { margin-top:12px; background:var(--acc); border:none; color:#fff; padding:10px 16px; border-radius:8px; font-size:14px; cursor:pointer; }
   button.mini { background:transparent; border:1px solid var(--edge); color:var(--mut); padding:4px 10px; border-radius:6px; cursor:pointer; font-size:12px; }
   button.mini.bad { color:var(--bad); border-color:#5a2a2a; }
   button.mini.primary { background:var(--acc); border-color:var(--acc); color:#fff; }
   /* ── ui-kit: the confined-Preact design system (themed via the vars above; one consistent look for every island + app-within-an-app) ── */
-  .kit-in { width:100%; box-sizing:border-box; background:#0d1117; border:1px solid var(--edge); color:var(--ink); border-radius:8px; padding:8px 10px; font:inherit; }
+  .kit-in { width:100%; box-sizing:border-box; background:var(--bg); border:1px solid var(--edge); color:var(--ink); border-radius:8px; padding:8px 10px; font:inherit; }
   .kit-in:focus { outline:none; border-color:var(--acc); }
   .kit-field { display:flex; flex-direction:column; gap:4px; }
   .kit-label { font-size:12px; color:var(--mut); }
@@ -396,7 +396,7 @@
   .qrcard .dkm { background:var(--panel); color:var(--ink); }
   .qrcard .dkm .mini { color:var(--ink); border-color:var(--edge); background:transparent; }
   .qrcard .dkm .mini.go { background:var(--acc); border-color:var(--acc); color:#fff; }
-  .qrcard .dkm code { color:var(--ink); background:#010409; padding:1px 4px; border-radius:4px; }
+  .qrcard .dkm code { color:var(--ink); background:var(--bg); padding:1px 4px; border-radius:4px; } /* themed: the .dkm sheet flips to var(--panel), so the code chip must flip too */
   .qrcard .reveal-in { width:340px; max-width:82vw; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12px; margin:4px 0 2px; }
   /* OAuth-style consent card (the "Powers this chat needs" prompt). Rendered straight into the
      #qrmodal backdrop — NOT wrapped in the white .qrcard — so it's a clean dark consent sheet. */
@@ -411,7 +411,7 @@
   .scope { display:flex; gap:11px; align-items:center; padding:10px 8px; border-radius:11px; cursor:pointer; margin:0; text-transform:none; letter-spacing:normal; } /* reset the global label { uppercase } */
   .scope:hover { background:rgba(255,255,255,.035); }
   .scope + .scope, #sc-rest .scope:first-child { border-top:1px solid rgba(255,255,255,.05); }
-  .scope-ic { width:32px; height:32px; flex:none; border-radius:9px; background:#0d1117; border:1px solid var(--edge); display:flex; align-items:center; justify-content:center; font-size:16px; }
+  .scope-ic { width:32px; height:32px; flex:none; border-radius:9px; background:var(--bg); border:1px solid var(--edge); display:flex; align-items:center; justify-content:center; font-size:16px; }
   .scope-txt { flex:1; min-width:0; }
   .scope-name { display:block; font-size:13.5px; font-weight:600; color:var(--ink); }
   .scope-desc { display:block; font-size:12px; color:var(--mut); line-height:1.4; margin-top:1px; }

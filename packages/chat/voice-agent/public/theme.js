@@ -31,7 +31,15 @@ export const applyVars = (root, vars) => { if (!root || !vars) return; for (cons
 export const inferMode = vars => { const c = String((vars && vars['--bg']) || '#000').replace('#', ''); const n = c.length >= 6 ? c : '000000'; const lum = (parseInt(n.slice(0, 2), 16) + parseInt(n.slice(2, 4), 16) + parseInt(n.slice(4, 6), 16)) / 3; return lum > 140 ? 'light' : 'dark'; };
 
 // apply ANY theme object (built-in or agent-authored) globally + persist the FULL object so a custom theme survives reload.
-export const applyTheme = t => { const obj = (t && t.vars) ? { name: t.name || 'custom', mode: t.mode || inferMode(t.vars), vars: t.vars } : DARK; theme.set(obj); try { localStorage.setItem(KEY, JSON.stringify(obj)); } catch { /* */ } return obj; };
+// BACKFILL: merge the same-mode built-in UNDER the theme's own vars, so a theme saved BEFORE a new var existed
+// (e.g. --you-bg / --trace-* added later) can't leave that surface unstyled — it'd fall back to the dark :root
+// default and render dark-on-dark in light mode. The theme's explicit vars still win; only missing keys are filled.
+export const applyTheme = t => {
+  if (!(t && t.vars)) { theme.set(DARK); try { localStorage.setItem(KEY, JSON.stringify(DARK)); } catch { /* */ } return DARK; }
+  const mode = t.mode || inferMode(t.vars);
+  const obj = { name: t.name || 'custom', mode, vars: { ...((BUILTINS[mode] || DARK).vars), ...t.vars } };
+  theme.set(obj); try { localStorage.setItem(KEY, JSON.stringify(obj)); } catch { /* */ } return obj;
+};
 export const setTheme = name => applyTheme(BUILTINS[name] || DARK);
 export const cycleTheme = () => applyTheme(theme.get().mode === 'light' ? DARK : LIGHT);
 
@@ -39,5 +47,6 @@ export const cycleTheme = () => applyTheme(theme.get().mode === 'light' ? DARK :
 export const initTheme = () => {
   theme.subscribe(t => { applyVars(document.documentElement, t.vars); try { document.documentElement.style.colorScheme = t.mode || 'dark'; } catch { /* */ } });
   let saved = null; try { saved = JSON.parse(localStorage.getItem(KEY) || 'null'); } catch { /* */ }
+  if (saved && saved.name && BUILTINS[saved.name]) saved = BUILTINS[saved.name]; // re-resolve a saved built-in so it picks up any vars added since it was saved
   applyTheme(saved && saved.vars ? saved : DARK);
 };
