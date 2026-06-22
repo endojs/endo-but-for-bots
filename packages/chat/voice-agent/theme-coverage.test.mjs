@@ -65,7 +65,6 @@ const ALLOW = [
   ['.qrcard', 'QR codes require a white quiet-zone; the card is intentionally white in both modes'],
   ['#qrmodal textarea', 'deliberately-white reveal field on the dark consent sheet (self-consistent #fff/#111)'],
   ['.codeview', 'fixed-palette code/terminal block (light text on near-black, readable in both modes)'],
-  ['.diff', 'fixed-palette diff/code block (its .add/.del/.ctx text is hardcoded to match)'],
   ['#trace-overlay', 'fullscreen 3D trace scene — intentionally dark canvas backdrop'],
   ['#trace-app-overlay', 'fullscreen 3D trace-app scene — intentionally dark canvas backdrop'],
   ['#widget-overlay', 'fullscreen widget overlay — intentionally dark canvas backdrop'],
