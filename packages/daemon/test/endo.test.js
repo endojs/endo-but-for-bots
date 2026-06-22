@@ -1024,6 +1024,79 @@ testNeedsNodeWorker(
 );
 
 testNeedsNodeWorker(
+  'an already-settled retainUntil releases the pin (result not composable)',
+  async t => {
+    const { host } = await prepareHost(t);
+    // retainUntil resolved before the call returns: the unpin fires on the
+    // next microtask, so by the time the (CapTP-round-tripped) result is in
+    // hand the formula has already been collected — i.e. equivalent to no
+    // retainUntil. Pins the pre-settled boundary.
+    const powers = await E(host).evaluate(
+      '@main',
+      `Far('Pingable', { ping: () => 'pong' })`,
+      [],
+      [],
+      undefined,
+      Promise.resolve('done'),
+    );
+    await t.throwsAsync(
+      E(host).makeUnconfined('@main', powersPingPath, { powers }),
+      { message: /minted by this daemon/ },
+    );
+  },
+);
+
+testNeedsNodeWorker(
+  'a rejected retainUntil resolves evaluate normally and releases the pin',
+  async t => {
+    const { host } = await prepareHost(t);
+    // A rejected retention promise must not reject `evaluate` (the rejection
+    // only drives the unpin) and must still release the pin (no leak).
+    const rejected = Promise.reject(new Error('retention aborted'));
+    rejected.catch(() => {}); // we hand the rejection to the daemon, not Node
+    const powers = await E(host).evaluate(
+      '@main',
+      `Far('Pingable', { ping: () => 'pong' })`,
+      [],
+      [],
+      undefined,
+      rejected,
+    );
+    // evaluate resolved to the value despite the rejected retainUntil...
+    t.truthy(powers);
+    // ...and the pin was released, so the result is no longer composable.
+    await t.throwsAsync(
+      E(host).makeUnconfined('@main', powersPingPath, { powers }),
+      { message: /minted by this daemon/ },
+    );
+  },
+);
+
+testNeedsNodeWorker(
+  'guest evaluate threads retainUntil and keeps an un-named result alive',
+  async t => {
+    const { host } = await prepareHost(t);
+    const guest = await E(host).provideGuest('guest');
+    await E(host).provideWorker(['worker']);
+
+    const release = makePromiseKit();
+    // Guest path (guest.js) routes through the same makeRetainUnnamed policy.
+    const result = await E(guest).evaluate(
+      'worker',
+      `Far('Pingable', { ping: () => 'guest-pong' })`,
+      [],
+      [],
+      undefined,
+      release.promise,
+    );
+    // Retained while the promise is pending: the un-named result is still
+    // live, so a method call on it resolves.
+    t.is(await E(result).ping(), 'guest-pong');
+    release.resolve();
+  },
+);
+
+testNeedsNodeWorker(
   'move moves value, between different caplet name hubs',
   async t => {
     const { host } = await prepareHost(t);

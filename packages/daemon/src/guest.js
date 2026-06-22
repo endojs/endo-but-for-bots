@@ -274,6 +274,8 @@ export const makeGuestMaker = ({
       if (resultName === undefined) {
         return retainUnnamed(id, value, retainUntil);
       }
+      // A named result is durably rooted by its pet-name edge, so any
+      // `retainUntil` is redundant and intentionally ignored on this branch.
       return value;
     };
 
