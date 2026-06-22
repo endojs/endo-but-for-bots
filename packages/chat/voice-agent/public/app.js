@@ -2142,28 +2142,33 @@ const renderChangelog = async () => {
   section.classList.remove('hide');
   const live = merges.filter(m => !m.rolledBack).length;
   count.textContent = live ? String(live) : '';
-  list.innerHTML = merges.map(m => {
-    const when = m.mergedAt ? new Date(m.mergedAt).toLocaleString() : '';
-    const sha = String(m.mergeCommit || '').slice(0, 8);
-    const action = m.rolledBack
-      ? '<span class="pill">↩ reverted</span>'
-      : `<button class="mini chg-revert" data-revert="${esc(m.id)}">↩ Revert</button>`;
-    return `<div class="ncard" style="display:flex;gap:8px;align-items:flex-start">
-      <div style="flex:1;min-width:0">
-        <div style="font-size:13px">${esc(String(m.goal || '(improvement)').slice(0, 160))}</div>
-        <div class="sub" style="font-size:11px;color:var(--mut)">${esc(when)}${sha ? ` · ${esc(sha)}` : ''}${m.rolledBack && m.rolledBackAt ? ` · reverted ${esc(new Date(m.rolledBackAt).toLocaleString())}` : ''}</div>
-      </div>${action}</div>`;
-  }).join('');
-  list.querySelectorAll('[data-revert]').forEach(b => { b.onclick = async () => {
+  // render-safe rows for the ChangelogList island — labels + a SHORT sha only, never a commit object/cap.
+  const rows = merges.map(m => ({
+    id: m.id,
+    goal: String(m.goal || '(improvement)').slice(0, 160),
+    when: m.mergedAt ? new Date(m.mergedAt).toLocaleString() : '',
+    sha: String(m.mergeCommit || '').slice(0, 8),
+    rolledBack: !!m.rolledBack,
+    revertedWhen: m.rolledBack && m.rolledBackAt ? new Date(m.rolledBackAt).toLocaleString() : '',
+  }));
+  const onRevert = async id => {
     if (!confirm('Revert this self-applied change? This runs a history-preserving git revert on the live branch. Restart the service afterward to load the reverted code.')) return;
-    b.disabled = true; b.textContent = '…reverting';
     try {
-      const r = await (await fetch('/changelog/revert', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, id: b.dataset.revert }) })).json();
-      if (!r.ok) { alert('Revert failed: ' + (r.error || 'unknown') + (r.brokenMergeLive ? ' — the broken merge is still live; revert manually.' : '')); b.disabled = false; b.textContent = '↩ Revert'; return; }
+      const r = await (await fetch('/changelog/revert', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, id }) })).json();
+      if (!r.ok) { alert(`Revert failed: ${r.error || 'unknown'}${r.brokenMergeLive ? ' — the broken merge is still live; revert manually.' : ''}`); return; }
       alert('Reverted. Restart the voice-agent service to run the reverted code.');
-    } catch (e) { alert('Revert error: ' + e.message); b.disabled = false; b.textContent = '↩ Revert'; return; }
+    } catch (e) { alert(`Revert error: ${e.message}`); return; }
     renderChangelog();
-  }; });
+  };
+  // FACTORED: render through the ChangelogList island (consistent + tested). Fall back to plain DOM only
+  // if the islands bundle isn't loaded.
+  if (window.__fieldIslands && window.__fieldIslands.renderChangelogList) {
+    window.__fieldIslands.renderChangelogList(list, { merges: rows }, { onRevert });
+    return;
+  }
+  list.innerHTML = rows.map(m =>
+    `<div class="ncard" style="display:flex;gap:8px;align-items:flex-start"><div style="flex:1;min-width:0"><div style="font-size:13px">${esc(m.goal)}</div><div class="sub" style="font-size:11px;color:var(--mut)">${esc(m.when)}${m.sha ? ` · ${esc(m.sha)}` : ''}${m.rolledBack && m.revertedWhen ? ` · reverted ${esc(m.revertedWhen)}` : ''}</div></div>${m.rolledBack ? '<span class="pill">↩ reverted</span>' : `<button class="mini chg-revert" data-revert="${esc(m.id)}">↩ Revert</button>`}</div>`).join('');
+  list.querySelectorAll('[data-revert]').forEach(b => { b.onclick = () => onRevert(b.dataset.revert); });
 };
 const toggleSection = (headId, listId) => { const list = $(listId), head = $(headId); list.classList.toggle('hide'); head.querySelector('.caret').textContent = list.classList.contains('hide') ? '▸' : '▾'; };
 if ($('bell-btn')) $('bell-btn').onclick = () => showTab('inbox');
@@ -2286,6 +2291,19 @@ const ISLAND_PREVIEW = {
     components: [{ toolName: 'GPU image-gen', mode: 'instance', price: '0.05 USD/use', used: 3, atten: 'rate 10/min', revoked: false }],
     earned: '1.20 USD',
   }, { onCopy() {}, onQr() {}, onRevoke() {}, onCopyComp() {}, onRevokeComp() {} }),
+  'island-notifications': slot => window.__fieldIslands.renderNotifications(slot, {
+    items: [
+      { id: 'n1', title: '🎙 Voice note → proposed actions', time: '2m', body: 'Book Lufthansa to Berlin; find a hotel near Mitte.', agent: '🤖 capture', status: 'needs your input', links: [{ label: '💬 open chat' }], attention: true },
+      { id: 'n2', title: 'GPU render complete', time: '1h', body: 'Stylized 4 images.', agent: '🎨 studio', status: 'done', links: [{ label: '📎 gallery' }] },
+    ],
+    withDone: true,
+  }, { onDone() {}, onOpenLink() {} }),
+  'island-changelog': slot => window.__fieldIslands.renderChangelogList(slot, {
+    merges: [
+      { id: 'm1', goal: 'add clearResolved() to prune merged/staged backlog items', when: 'today', sha: 'a1b2c3d4', rolledBack: false },
+      { id: 'm2', goal: 'add backlogStats() observability helper', when: 'yesterday', sha: '9f8e7d6c', rolledBack: true, revertedWhen: 'today' },
+    ],
+  }, { onRevert() {} }),
 };
 
 const refreshComponents = async () => {

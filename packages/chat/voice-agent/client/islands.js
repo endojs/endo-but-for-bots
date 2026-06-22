@@ -12,6 +12,8 @@ import { renderConfined } from '@endo/preact-container/renderer';
 
 import { makeCell, react } from './propagator.js';
 import { SharesPanel } from './shares-panel.js';
+import { NotificationCard } from './notification-card.js';
+import { ChangelogList } from './changelog-list.js';
 
 // A render propagator: re-paints `view(...values)` into `el` whenever any wired cell changes.
 // This is the one kind of propagator whose effect is the DOM; logic propagators stay headless.
@@ -22,6 +24,10 @@ const renderPropagator = (el, cells, view) =>
 // One cell (the data grain) holds the render-safe rows; the render propagator wires it to SharesPanel.
 const sharesCell = makeCell();
 let sharesWired = false;
+const notifCell = makeCell();
+let notifWired = false;
+const changelogCell = makeCell();
+let changelogWired = false;
 
 const islands = {
   // Idempotent: wires the render propagator once (cell → SharesPanel), then feeds the latest data in.
@@ -38,6 +44,39 @@ const islands = {
       sharesWired = true;
     }
     sharesCell.addContent(data);
+  },
+
+  // ── Notifications island ──────────────────────────────────────────────────────────────────────
+  // Renders a LIST of NotificationCard. `data` = { items:[{id,title,time,body,agent,avatar,status,
+  // links:[{label}],attention}], withDone } — render-safe (links carry only a label, never a URL/cap).
+  // `handlers` = { onDone(id), onOpenLink(itemIndex, linkIndex) } index back into app.js, where the
+  // real href/cap lives.
+  renderNotifications(el, data, handlers) {
+    if (!notifWired) {
+      el.setAttribute('data-component-id', 'island-notifications');
+      el.setAttribute('data-component-name', 'Notifications');
+      renderPropagator(el, [notifCell], d => h('div', null, (d.items || []).map((it, idx) =>
+        h(NotificationCard, {
+          ...it, withDone: d.withDone, key: it.id || idx,
+          onDone: handlers.onDone,
+          onOpenLink: li => handlers.onOpenLink && handlers.onOpenLink(idx, li),
+        }))));
+      notifWired = true;
+    }
+    notifCell.addContent(data);
+  },
+
+  // ── Changelog island ──────────────────────────────────────────────────────────────────────────
+  // `data` = { merges:[{id,goal,when,sha,rolledBack,revertedWhen}] } (render-safe). `handlers` =
+  // { onRevert(id) } runs the host-side revert.
+  renderChangelogList(el, data, handlers) {
+    if (!changelogWired) {
+      el.setAttribute('data-component-id', 'island-changelog');
+      el.setAttribute('data-component-name', 'Changelog');
+      renderPropagator(el, [changelogCell], d => h(ChangelogList, { merges: d.merges || [], onRevert: handlers.onRevert }));
+      changelogWired = true;
+    }
+    changelogCell.addContent(data);
   },
 };
 
