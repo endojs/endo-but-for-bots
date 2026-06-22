@@ -443,3 +443,107 @@ test.serial(
     );
   },
 );
+
+// The daemon's loopback-TCP test transport, loaded the same way the daemon's
+// own multi-daemon tests do (`prepareHostWithTestNetwork` in
+// packages/daemon/test/endo.test.js). It lets two in-process daemons reach
+// each other over a real CapTP mesh connection.
+const daemonNetworkHref = pathToFileURL(
+  path.join(
+    dirname,
+    '..',
+    '..',
+    'daemon',
+    'src',
+    'networks',
+    'tcp-netstring.js',
+  ),
+).href;
+
+// Install the loopback-TCP network on a host so it can be introduced to peers
+// (mirrors the daemon test's `prepareHostWithTestNetwork`).
+const installTestNetwork = async host => {
+  await E(host).storeValue('127.0.0.1:0', 'tcp-listen-addr');
+  const network = await E(host).makeUnconfined('@main', daemonNetworkHref, {
+    powersName: '@agent',
+    resultName: 'test-network',
+  });
+  await network;
+  await E(host).move(['test-network'], ['@nets', 'tcp']);
+};
+
+const prepareNetworkedHost = async (t, name) => {
+  const prepared = await prepareHost(t, name);
+  await installTestNetwork(prepared.host);
+  return prepared;
+};
+
+// This is the real deployment topology (DEMO.md): the host runs the
+// containers and the factory; a *separate* peer owns the workspace. It pins
+// down how a peer's cap can cross to the host so the factory can endow it
+// into a per-session powers formula.
+//
+// Finding (this test is the evidence): a cap passed as a bare CapTP argument
+// arrives on the host as a *presence* with no local formula id, so
+// `storeValue`/marshal cannot capture it ("No corresponding formula"). The
+// mechanism that DOES work is to give the remote cap an id the host can
+// resolve — a **locator** internalized via `storeLocator` — and then endow it
+// *by name* into the eval worker (a remote formula id is a valid endowment).
+test.serial(
+  'a remote peer cap reaches the host via a locator and is endowable by name',
+  async t => {
+    t.timeout(120_000);
+    const { host } = await prepareNetworkedHost(t, 'xpeer-host');
+    const { host: peer } = await prepareNetworkedHost(t, 'xpeer-peer');
+
+    // Introduce the daemons in both directions over the mesh.
+    await E(host).addPeerInfo(await E(peer).getPeerInfo());
+    await E(peer).addPeerInfo(await E(host).getPeerInfo());
+
+    // The Filesystem cap lives on the PEER — remote to the host.
+    const peerWorkspace = path.join(dirname, 'tmp', 'xpeer-peer', 'workspace');
+    mkdirSync(peerWorkspace, { recursive: true });
+    await E(peer).makeUnconfined('@main', nodeFsModuleHref, {
+      resultName: 'project-fs',
+      env: harden({ ENDO_FS_ROOT: peerWorkspace }),
+    });
+
+    // Provision the factory on the host and share its `controller` to the
+    // peer (the documented "delegate only the controller" step).
+    await provisionFactory(host);
+    await provisionSandboxDeps(host);
+    const controllerLocator = await E(host).locate(
+      'claude-sandbox',
+      'controller',
+    );
+    await E(peer).storeLocator(['sandbox-controller'], controllerLocator);
+    const controller = await E(peer).lookup(['sandbox-controller']);
+    t.truthy(controller, 'peer resolved the remote controller over the mesh');
+
+    // A bare remote presence cannot be marshalled into a new formula: the
+    // host has no formula id for a cap it only received as a CapTP argument.
+    const fsPresence = await E(peer).lookup('project-fs');
+    await t.throwsAsync(
+      () => E(host).storeValue(fsPresence, 'remote-fs-by-value'),
+      { message: /No corresponding formula/ },
+      'storeValue cannot capture a bare remote presence',
+    );
+
+    // The working path: the peer locates its own cap; the host internalizes
+    // the locator (minting a resolvable remote id) and endows it *by name*
+    // into an eval worker, which invokes a method on it across the mesh.
+    const fsLoc = await E(peer).locate('project-fs');
+    await E(host).storeLocator(['remote-fs-by-locator'], fsLoc);
+    const reachedRemoteCap = await E(host).evaluate(
+      '@main',
+      'E(fs).__getMethodNames__().then(ns => Array.isArray(ns) && ns.length > 0)',
+      harden(['fs']),
+      harden(['remote-fs-by-locator']),
+      'probe-result',
+    );
+    t.true(
+      reachedRemoteCap,
+      'host endowed and invoked the remote fs cap by name (via locator)',
+    );
+  },
+);
