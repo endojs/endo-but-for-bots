@@ -1,6 +1,7 @@
 ---
 '@endo/pass-style': major
 '@endo/bytes': major
+'@endo/hex': minor
 '@endo/patterns': patch
 '@endo/marshal': patch
 '@endo/ocapn': patch
@@ -50,3 +51,39 @@ dispatch arm becomes dead code and is removed; values arrive as
 
 `@endo/ocapn`: updated all callers of the moved functions to import
 from `@endo/pass-style` under the new names.
+
+In a follow-up round (CHANGES_REQUESTED review 4542047082), read-only
+byte-array operations in `@endo/bytes`, `@endo/hex`, `@endo/pass-style`,
+and `@endo/ocapn` were generalized to accept both the frozen
+`Uint8Array`-over-immutable-`ArrayBuffer` byteArray passable form and
+plain mutable `Uint8Array` values, without expensive intermediate copies:
+
+- `@endo/hex`: `encodeHex` and `jsEncodeHex` now accept
+  `ArrayBufferView | ArrayBufferLike` directly.  The native
+  `toHex`-dispatch path is used only for plain `Uint8Array` inputs to
+  avoid feeding shim-proxy wrappers to native C++ code; all other
+  inputs fall through to the JS polyfill, which reads via indexed
+  access and works on immutable buffers without a copy.
+
+- `@endo/bytes`: `concatBytes` now accepts
+  `ReadonlyArray<ArrayBufferView | ArrayBufferLike>`.  `bytesToText` now
+  accepts `ArrayBufferView | ArrayBufferLike`, detects immutable backing
+  buffers via the `ArrayBuffer.prototype.immutable` accessor, and copies
+  only when `TextDecoder.decode` would otherwise reject the input.  A
+  new `@endo/bytes/compare.js` module exports `compareBytes`, which
+  compares any two byte inputs lexicographically without a copy.
+
+- `@endo/pass-style/concat-bytes.js`: `concatBytes` now delegates the
+  accumulation loop to `@endo/bytes/concat.js`; `@endo/bytes` is added
+  as a runtime dependency of `@endo/pass-style`.  No dependency cycle
+  exists: `@endo/bytes` carries `@endo/pass-style` only as a
+  devDependency (test-only).
+
+- `@endo/ocapn`: removed `fromBytes` casts in `compareImmutableArrayBuffers`
+  (now delegates to `@endo/bytes/compare.js`), `toHex` (now calls
+  `encodeHex` directly), `decodeBytestringLabel` (now uses
+  `bytesToText`), `ocapNSignatureToBytes` (concatBytes accepts both
+  forms), `makeSessionId` (compareBytes + concatBytes accept both forms),
+  and `base32Encode` (for-of iteration works on immutable views).
+  The `giftId` type in `HandoffGive` and `deposit-gift` is narrowed
+  from `ArrayBufferView | ArrayBufferLike` to `Uint8Array`.
