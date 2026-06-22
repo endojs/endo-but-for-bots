@@ -572,8 +572,7 @@ const makePatternKit = () => {
             )}`
           );
         }
-        const pattMap =
-          /** @type {CopyMap<Key, Pattern>} */ (patt);
+        const pattMap = /** @type {CopyMap<Key, Pattern>} */ (patt);
         // Compare keys as copySets
         const pattKeySet = copyMapKeySet(pattMap);
         const specimenKeySet = copyMapKeySet(specimen);
