@@ -1,7 +1,7 @@
 // @ts-check
 
 import test from '@endo/ses-ava/test.js';
-import { bytesToImmutable } from '@endo/bytes/to-immutable.js';
+import { toBytes } from '@endo/pass-style/to-bytes.js';
 import { bytesFromText } from '@endo/bytes/from-string.js';
 
 import {
@@ -28,29 +28,29 @@ test('right longer', t => {
 });
 
 test('compareImmutableArrayBuffers - equal buffers', t => {
-  const buffer1 = bytesToImmutable(bytesFromText('hello'));
-  const buffer2 = bytesToImmutable(bytesFromText('hello'));
+  const buffer1 = toBytes(bytesFromText('hello'));
+  const buffer2 = toBytes(bytesFromText('hello'));
 
   t.is(compareImmutableArrayBuffers(buffer1, buffer2), 0);
 });
 
 test('compareImmutableArrayBuffers - left less than right', t => {
-  const buffer1 = bytesToImmutable(bytesFromText('abc'));
-  const buffer2 = bytesToImmutable(bytesFromText('xyz'));
+  const buffer1 = toBytes(bytesFromText('abc'));
+  const buffer2 = toBytes(bytesFromText('xyz'));
 
   t.is(compareImmutableArrayBuffers(buffer1, buffer2), -1);
 });
 
 test('compareImmutableArrayBuffers - left greater than right', t => {
-  const buffer1 = bytesToImmutable(bytesFromText('xyz'));
-  const buffer2 = bytesToImmutable(bytesFromText('abc'));
+  const buffer1 = toBytes(bytesFromText('xyz'));
+  const buffer2 = toBytes(bytesFromText('abc'));
 
   t.is(compareImmutableArrayBuffers(buffer1, buffer2), 1);
 });
 
 test('compareImmutableArrayBuffers - left is prefix of right', t => {
-  const buffer1 = bytesToImmutable(bytesFromText('hello'));
-  const buffer2 = bytesToImmutable(bytesFromText('helloworld'));
+  const buffer1 = toBytes(bytesFromText('hello'));
+  const buffer2 = toBytes(bytesFromText('helloworld'));
 
   const result = compareImmutableArrayBuffers(buffer1, buffer2);
   t.true(result < 0, 'left should be less than right');
@@ -58,31 +58,31 @@ test('compareImmutableArrayBuffers - left is prefix of right', t => {
 });
 
 test('compareImmutableArrayBuffers - right is prefix of left', t => {
-  const buffer1 = bytesToImmutable(bytesFromText('helloworld'));
-  const buffer2 = bytesToImmutable(bytesFromText('hello'));
+  const buffer1 = toBytes(bytesFromText('helloworld'));
+  const buffer2 = toBytes(bytesFromText('hello'));
 
   const result = compareImmutableArrayBuffers(buffer1, buffer2);
   t.true(result > 0, 'left should be greater than right');
 });
 
 test('compareImmutableArrayBuffers - empty buffers', t => {
-  const buffer1 = bytesToImmutable(bytesFromText(''));
-  const buffer2 = bytesToImmutable(bytesFromText(''));
+  const buffer1 = toBytes(bytesFromText(''));
+  const buffer2 = toBytes(bytesFromText(''));
 
   t.is(compareImmutableArrayBuffers(buffer1, buffer2), 0);
 });
 
 test('compareImmutableArrayBuffers - empty vs non-empty', t => {
-  const buffer1 = bytesToImmutable(bytesFromText(''));
-  const buffer2 = bytesToImmutable(bytesFromText('a'));
+  const buffer1 = toBytes(bytesFromText(''));
+  const buffer2 = toBytes(bytesFromText('a'));
 
   t.is(compareImmutableArrayBuffers(buffer1, buffer2), -1);
   t.is(compareImmutableArrayBuffers(buffer2, buffer1), 1);
 });
 
 test('compareImmutableArrayBuffers - binary data', t => {
-  const buffer1 = bytesToImmutable(new Uint8Array([0x00, 0x01, 0x02]));
-  const buffer2 = bytesToImmutable(new Uint8Array([0x00, 0x01, 0x03]));
+  const buffer1 = toBytes(new Uint8Array([0x00, 0x01, 0x02]));
+  const buffer2 = toBytes(new Uint8Array([0x00, 0x01, 0x03]));
 
   t.is(compareImmutableArrayBuffers(buffer1, buffer2), -1);
   t.is(compareImmutableArrayBuffers(buffer2, buffer1), 1);
@@ -90,8 +90,8 @@ test('compareImmutableArrayBuffers - binary data', t => {
 
 test('compareImmutableArrayBuffers - bytewise comparison', t => {
   // Test that comparison is bytewise, not lexicographic
-  const buffer1 = bytesToImmutable(new Uint8Array([0xff]));
-  const buffer2 = bytesToImmutable(new Uint8Array([0x00, 0x00]));
+  const buffer1 = toBytes(new Uint8Array([0xff]));
+  const buffer2 = toBytes(new Uint8Array([0x00, 0x00]));
 
   // 0xff > 0x00, so buffer1 > buffer2 despite being shorter
   t.is(compareImmutableArrayBuffers(buffer1, buffer2), 1);

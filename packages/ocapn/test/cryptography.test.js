@@ -2,7 +2,7 @@
 
 import test from '@endo/ses-ava/test.js';
 
-import { bytesToImmutable } from '@endo/bytes/to-immutable.js';
+import { toBytes } from '@endo/pass-style/to-bytes.js';
 import { bytesFromText } from '@endo/bytes/from-string.js';
 import {
   makeOcapnKeyPair,
@@ -54,7 +54,7 @@ test('makeWithdrawGiftDescriptor', t => {
     },
     gifterExporterSessionId,
     gifterKey.publicKey.id,
-    bytesToImmutable(bytesFromText('gift-id')),
+    toBytes(bytesFromText('gift-id')),
   );
   const handoffGiveSignature = signHandoffGive(
     handoffGiveDescriptor,

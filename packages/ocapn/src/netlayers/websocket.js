@@ -3,8 +3,8 @@
 import { randomBytes } from 'node:crypto';
 import { WebSocket, WebSocketServer } from 'ws';
 import harden from '@endo/harden';
-import { bytesFromImmutable } from '@endo/bytes/from-immutable.js';
-import { bytesToImmutable } from '@endo/bytes/to-immutable.js';
+import { fromBytes } from '@endo/pass-style/from-bytes.js';
+import { toBytes } from '@endo/pass-style/to-bytes.js';
 
 import { makeOcapnKeyPair, makeOcapnPublicKey } from '../cryptography.js';
 import { locationToLocationId } from '../client/util.js';
@@ -172,7 +172,7 @@ const encodeInitPeerAuth = payload => {
   InitPeerAuthCodec.write(
     {
       type: 'init:peer-auth',
-      payload: bytesToImmutable(payload),
+      payload: toBytes(payload),
     },
     syrupWriter,
   );
@@ -282,9 +282,7 @@ export const makeWebSocketNetLayer = async ({
   specifiedUrl,
 }) => {
   const designatorKeyPair = makeOcapnKeyPair();
-  const designatorPublicKey = bytesFromImmutable(
-    designatorKeyPair.publicKey.bytes,
-  );
+  const designatorPublicKey = fromBytes(designatorKeyPair.publicKey.bytes);
   const designator = base32Encode(designatorPublicKey);
 
   const server = new WebSocketServer({
@@ -356,9 +354,7 @@ export const makeWebSocketNetLayer = async ({
         `Expected websocket designator to decode to ${DESIGNATOR_PUBLIC_KEY_BYTES} bytes, got ${remotePublicKeyBytes.byteLength}`,
       );
     }
-    const remotePublicKey = makeOcapnPublicKey(
-      bytesToImmutable(remotePublicKeyBytes),
-    );
+    const remotePublicKey = makeOcapnPublicKey(toBytes(remotePublicKeyBytes));
 
     logger.info('Connecting to websocket', { wsUrl });
     const ws = new WebSocket(wsUrl);
@@ -389,7 +385,7 @@ export const makeWebSocketNetLayer = async ({
         try {
           const envelope = decodeInitPeerAuthSigEnvelope(messageBytes);
           remotePublicKey.assertSignatureValid(
-            bytesToImmutable(challengeMessage),
+            toBytes(challengeMessage),
             envelope.signature,
           );
           socketState.authenticated = true;
@@ -458,9 +454,7 @@ export const makeWebSocketNetLayer = async ({
           const initPeerAuth = decodeInitPeerAuth(messageBytes);
           // Sign the received bytes verbatim. The wrapping `init:peer-auth`
           // record prevents this from being used as a generic signing oracle.
-          const signature = designatorKeyPair.sign(
-            bytesToImmutable(messageBytes),
-          );
+          const signature = designatorKeyPair.sign(toBytes(messageBytes));
           const responseBytes = encodeInitPeerAuthSigEnvelope(
             initPeerAuth,
             signature,

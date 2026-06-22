@@ -11,7 +11,7 @@
  */
 
 import harden from '@endo/harden';
-import { bytesToImmutable } from '@endo/bytes/to-immutable.js';
+import { toBytes } from '@endo/pass-style/to-bytes.js';
 import { encodeHex } from '@endo/hex';
 import { Far } from '@endo/marshal';
 import { HandledPromise } from '@endo/eventual-send';
@@ -64,10 +64,10 @@ export const gifterLocation = harden({
   hints: { host: '127.0.0.1', port: '54824' },
 });
 
-export const exampleSigParamBytes = bytesToImmutable(
+export const exampleSigParamBytes = toBytes(
   Uint8Array.from({ length: 32 }, (_, i) => i),
 );
-export const examplePubKeyQBytes = bytesToImmutable(
+export const examplePubKeyQBytes = toBytes(
   Uint8Array.from({ length: 32 }, (_, i) => i * 2),
 );
 
@@ -91,19 +91,19 @@ export const receiverKeyForExporter = makeOcapnKeyPairFromPrivateKey(
 );
 
 export const exampleExporterSessionId = /** @type {SessionId} */ (
-  bytesToImmutable(Uint8Array.from({ length: 32 }, (_, i) => i * 7))
+  toBytes(Uint8Array.from({ length: 32 }, (_, i) => i * 7))
 );
 export const exampleGifterSideId = /** @type {PublicKeyId} */ (
-  bytesToImmutable(Uint8Array.from({ length: 32 }, (_, i) => i * 8))
+  toBytes(Uint8Array.from({ length: 32 }, (_, i) => i * 8))
 );
-export const exampleGiftId = bytesToImmutable(
+export const exampleGiftId = toBytes(
   Uint8Array.from({ length: 32 }, (_, i) => i * 9),
 );
 export const exampleReceiverSessionId = /** @type {SessionId} */ (
-  bytesToImmutable(Uint8Array.from({ length: 32 }, (_, i) => i * 10))
+  toBytes(Uint8Array.from({ length: 32 }, (_, i) => i * 10))
 );
 export const exampleReceiverSideId = /** @type {PublicKeyId} */ (
-  bytesToImmutable(Uint8Array.from({ length: 32 }, (_, i) => i * 11))
+  toBytes(Uint8Array.from({ length: 32 }, (_, i) => i * 11))
 );
 
 /**

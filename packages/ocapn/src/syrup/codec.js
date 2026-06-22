@@ -6,8 +6,8 @@
 
 import harden from '@endo/harden';
 import { bytesFromText } from '@endo/bytes/from-string.js';
-import { bytesFromImmutable } from '@endo/bytes/from-immutable.js';
-import { bytesToImmutable } from '@endo/bytes/to-immutable.js';
+import { fromBytes } from '@endo/pass-style/from-bytes.js';
+import { toBytes } from '@endo/pass-style/to-bytes.js';
 
 import { ocapnPassStyleOf } from '../codecs/ocapn-pass-style.js';
 
@@ -22,7 +22,7 @@ const labelTextDecoder = new TextDecoder('utf-8', { fatal: true });
  * @returns {string}
  */
 const decodeBytestringLabel = buffer =>
-  labelTextDecoder.decode(bytesFromImmutable(buffer));
+  labelTextDecoder.decode(fromBytes(buffer));
 /**
  * @typedef {object} SyrupCodec
  * @property {function(SyrupReader): any} read
@@ -409,7 +409,7 @@ export const makeRecordCodec = (
     } else if (labelType === 'string') {
       syrupWriter.writeString(label);
     } else if (labelType === 'bytestring') {
-      syrupWriter.writeBytestring(bytesToImmutable(bytesFromText(label)));
+      syrupWriter.writeBytestring(toBytes(bytesFromText(label)));
     }
     writeBody(value, syrupWriter);
     syrupWriter.exitRecord();

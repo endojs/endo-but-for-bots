@@ -7,7 +7,7 @@ import harden from '@endo/harden';
  */
 
 import test from '@endo/ses-ava/test.js';
-import { bytesToImmutable } from '@endo/bytes/to-immutable.js';
+import { toBytes } from '@endo/pass-style/to-bytes.js';
 import { bytesFromText } from '@endo/bytes/from-string.js';
 import { decodeHex } from '@endo/hex';
 
@@ -24,7 +24,7 @@ import { makeSyrupWriter } from '../../src/syrup/encode.js';
  * @param {string} hex
  * @returns {Uint8Array}
  */
-const hexToImmutableBuffer = hex => bytesToImmutable(decodeHex(hex));
+const hexToImmutableBuffer = hex => toBytes(decodeHex(hex));
 
 /** @type {CodecTestEntry[]} */
 export const table = [
@@ -104,20 +104,14 @@ export const table = [
     makeValue: testKit => ({
       type: 'op:deliver',
       to: testKit.referenceKit.provideRemoteObjectValue(0n),
-      args: [
-        makeSelector('fetch'),
-        bytesToImmutable(bytesFromText('swiss-number')),
-      ],
+      args: [makeSelector('fetch'), toBytes(bytesFromText('swiss-number'))],
       answerPosition: 3n,
       resolveMeDesc: testKit.makeLocalObject(5n),
     }),
     makeExpectedValue: testKit => ({
       type: 'op:deliver',
       to: testKit.makeLocalObject(0n),
-      args: [
-        makeSelector('fetch'),
-        bytesToImmutable(bytesFromText('swiss-number')),
-      ],
+      args: [makeSelector('fetch'), toBytes(bytesFromText('swiss-number'))],
       answerPosition: 3n,
       resolveMeDesc: testKit.referenceKit.provideRemoteObjectValue(5n),
     }),
@@ -274,7 +268,7 @@ export const table = [
         makeSelector('foo'),
         1n,
         false,
-        bytesToImmutable(Uint8Array.from([0x62, 0x61, 0x72])),
+        toBytes(Uint8Array.from([0x62, 0x61, 0x72])),
         ['baz'],
       ]),
       answerPosition: false,
@@ -287,7 +281,7 @@ export const table = [
         makeSelector('foo'),
         1n,
         false,
-        bytesToImmutable(Uint8Array.from([0x62, 0x61, 0x72])),
+        toBytes(Uint8Array.from([0x62, 0x61, 0x72])),
         ['baz'],
       ],
       answerPosition: false,

@@ -1,6 +1,6 @@
 // @ts-check
 
-import { bytesToImmutable } from '@endo/bytes/to-immutable.js';
+import { toBytes } from '@endo/pass-style/to-bytes.js';
 
 import { BufferReader } from './buffer-reader.js';
 
@@ -134,7 +134,7 @@ function readTypeAndMaybeValue(bufferReader, name) {
     const number = Number.parseInt(numberString, 10);
     const valueBytes = bufferReader.read(number);
     // Convert Uint8Array to ArrayBuffer
-    const arrayBuffer = bytesToImmutable(valueBytes);
+    const arrayBuffer = toBytes(valueBytes);
     return { type: 'bytestring', value: arrayBuffer };
   }
   if (typeByte === STRING_START) {

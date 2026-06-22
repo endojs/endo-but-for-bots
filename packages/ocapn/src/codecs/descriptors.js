@@ -11,7 +11,7 @@
  */
 
 import harden from '@endo/harden';
-import { bytesToImmutable } from '@endo/bytes/to-immutable.js';
+import { toBytes } from '@endo/pass-style/to-bytes.js';
 
 import { makeCodec, makeRecordUnionCodec } from '../syrup/codec.js';
 import {
@@ -414,7 +414,7 @@ export const makeHandoffGiveDescriptor = (
 export const serializeHandoffGive = handoffGive => {
   const syrupWriter = makeSyrupWriter();
   DescHandoffGiveCodec.write(handoffGive, syrupWriter);
-  return bytesToImmutable(syrupWriter.getBytes());
+  return toBytes(syrupWriter.getBytes());
 };
 
 /**
@@ -466,5 +466,5 @@ export const makeHandoffReceiveSigEnvelope = (handoffReceive, signature) => {
 export const serializeHandoffReceive = handoffReceive => {
   const syrupWriter = makeSyrupWriter();
   DescHandoffReceiveCodec.write(handoffReceive, syrupWriter);
-  return bytesToImmutable(syrupWriter.getBytes());
+  return toBytes(syrupWriter.getBytes());
 };

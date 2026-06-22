@@ -3,8 +3,8 @@
 import test from '@endo/ses-ava/test.js';
 import path from 'path';
 import fs from 'fs';
-import { bytesToImmutable } from '@endo/bytes/to-immutable.js';
-import { bytesFromImmutable } from '@endo/bytes/from-immutable.js';
+import { toBytes } from '@endo/pass-style/to-bytes.js';
+import { fromBytes } from '@endo/pass-style/from-bytes.js';
 import { bytesFromText } from '@endo/bytes/from-string.js';
 import { bytesToText } from '@endo/bytes/to-string.js';
 import { makeSyrupReader } from '../../src/syrup/decode.js';
@@ -97,7 +97,7 @@ test('zoo.bin', t => {
       syrupReader.enterSet();
       while (!syrupReader.peekSetEnd()) {
         result.eats.push(
-          bytesToText(bytesFromImmutable(syrupReader.readBytestring()), {
+          bytesToText(fromBytes(syrupReader.readBytestring()), {
             fatal: true,
           }),
         );
@@ -110,10 +110,9 @@ test('zoo.bin', t => {
       t.is(syrupReader.readSelectorAsString(), 'weight');
       result.weight = syrupReader.readFloat64();
       t.is(syrupReader.readSelectorAsString(), 'species');
-      result.species = bytesToText(
-        bytesFromImmutable(syrupReader.readBytestring()),
-        { fatal: true },
-      );
+      result.species = bytesToText(fromBytes(syrupReader.readBytestring()), {
+        fatal: true,
+      });
       syrupReader.exitDictionary();
       return result;
     },
@@ -124,7 +123,7 @@ test('zoo.bin', t => {
       syrupWriter.writeSelectorFromString('eats');
       syrupWriter.enterSet();
       for (const eat of value.eats) {
-        syrupWriter.writeBytestring(bytesToImmutable(bytesFromText(eat)));
+        syrupWriter.writeBytestring(toBytes(bytesFromText(eat)));
       }
       syrupWriter.exitSet();
       syrupWriter.writeSelectorFromString('name');
@@ -134,9 +133,7 @@ test('zoo.bin', t => {
       syrupWriter.writeSelectorFromString('weight');
       syrupWriter.writeFloat64(value.weight);
       syrupWriter.writeSelectorFromString('species');
-      syrupWriter.writeBytestring(
-        bytesToImmutable(bytesFromText(value.species)),
-      );
+      syrupWriter.writeBytestring(toBytes(bytesFromText(value.species)));
       syrupWriter.exitDictionary();
     },
   };

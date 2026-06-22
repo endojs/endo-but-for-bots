@@ -1,8 +1,8 @@
 // @ts-check
 
 import { bytesFromText } from '@endo/bytes/from-string.js';
-import { bytesToImmutable } from '@endo/bytes/to-immutable.js';
-import { concatImmutables } from '@endo/bytes/concat-immutables.js';
+import { toBytes } from '@endo/pass-style/to-bytes.js';
+import { concatBytes } from '@endo/pass-style/concat-bytes.js';
 
 const textEncoder = new TextEncoder();
 
@@ -19,9 +19,7 @@ const textEncoder = new TextEncoder();
  */
 const selectorSyrup = s => {
   const b = textEncoder.encode(s);
-  return bytesToImmutable(
-    bytesFromText(`${b.length}'${String.fromCharCode(...b)}`),
-  );
+  return toBytes(bytesFromText(`${b.length}'${String.fromCharCode(...b)}`));
 };
 
 /**
@@ -29,9 +27,7 @@ const selectorSyrup = s => {
  * @returns {Uint8Array}
  */
 export const intSyrup = i =>
-  bytesToImmutable(
-    bytesFromText(`${Math.floor(Math.abs(i))}${i < 0 ? '-' : '+'}`),
-  );
+  toBytes(bytesFromText(`${Math.floor(Math.abs(i))}${i < 0 ? '-' : '+'}`));
 
 /**
  * @param {string} label
@@ -39,9 +35,9 @@ export const intSyrup = i =>
  * @returns {Uint8Array}
  */
 export const recordSyrup = (label, ...items) =>
-  concatImmutables([
-    bytesToImmutable(bytesFromText('<')),
+  concatBytes([
+    toBytes(bytesFromText('<')),
     selectorSyrup(label),
     ...items,
-    bytesToImmutable(bytesFromText('>')),
+    toBytes(bytesFromText('>')),
   ]);

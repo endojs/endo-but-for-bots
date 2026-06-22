@@ -6,8 +6,8 @@
 
 import test from '@endo/ses-ava/test.js';
 
-import { bytesFromImmutable } from '@endo/bytes/from-immutable.js';
-import { bytesToImmutable } from '@endo/bytes/to-immutable.js';
+import { fromBytes } from '@endo/pass-style/from-bytes.js';
+import { toBytes } from '@endo/pass-style/to-bytes.js';
 import { bytesFromText } from '@endo/bytes/from-string.js';
 import { throws } from '../_util.js';
 import {
@@ -56,8 +56,8 @@ const table = [
       type: 'desc:sig-envelope',
       object: {
         type: 'desc:handoff-receive',
-        receivingSession: bytesToImmutable(bytesFromText('123')),
-        receivingSide: bytesToImmutable(bytesFromText('456')),
+        receivingSession: toBytes(bytesFromText('123')),
+        receivingSide: toBytes(bytesFromText('456')),
         handoffCount: 1n,
         signedGive: {
           type: 'desc:sig-envelope',
@@ -76,11 +76,9 @@ const table = [
               designator: '1234',
               hints: { host: '127.0.0.1', port: '54822' },
             },
-            exporterSessionId: bytesToImmutable(
-              bytesFromText('exporter-session-id'),
-            ),
-            gifterSideId: bytesToImmutable(bytesFromText('gifter-side-id')),
-            giftId: bytesToImmutable(bytesFromText('gift-id')),
+            exporterSessionId: toBytes(bytesFromText('exporter-session-id')),
+            gifterSideId: toBytes(bytesFromText('gifter-side-id')),
+            giftId: toBytes(bytesFromText('gift-id')),
           },
           signature: {
             type: 'sig-val',
@@ -106,7 +104,7 @@ test('descriptor fails with negative integer', t => {
   const testKit = makeCodecTestKit();
   const codec = testKit.DescImportObjectCodec;
   const syrup = recordSyrup('desc:import-object', intSyrup(-1));
-  const syrupBytes = bytesFromImmutable(syrup);
+  const syrupBytes = fromBytes(syrup);
   const syrupReader = makeSyrupReader(syrupBytes, {
     name: 'import-object with negative integer',
   });

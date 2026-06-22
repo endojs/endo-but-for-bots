@@ -2,7 +2,7 @@
 import test from '@endo/ses-ava/test.js';
 import * as fs from 'fs';
 import path from 'path';
-import { bytesFromImmutable } from '@endo/bytes/from-immutable.js';
+import { fromBytes } from '@endo/pass-style/from-bytes.js';
 import { bytesToText } from '@endo/bytes/to-string.js';
 import { makeSyrupReader } from '../../src/syrup/decode.js';
 
@@ -18,7 +18,7 @@ const zooBin = Uint8Array.from(zooBinRaw);
  * @param {ArrayBufferView | ArrayBufferLike} bytes
  * @returns {string}
  */
-const toUtf8 = bytes => bytesToText(bytesFromImmutable(bytes), { fatal: true });
+const toUtf8 = bytes => bytesToText(fromBytes(bytes), { fatal: true });
 
 test('exciting a dictionary without entering it', t => {
   const syrup = '}';
