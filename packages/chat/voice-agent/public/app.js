@@ -1509,8 +1509,13 @@ function bundleAll(updated) {
   for (let i = order.length - 1; i >= 0 && JSON.stringify(b).length > 5 * 1024 * 1024; i -= 1) delete b.tx[order[i]];
   return b;
 }
+let initialSyncDone = false; // true once the first syncLoad has talked to the server
 function scheduleSync() {
   if (!cap) return;
+  // SAFETY: a fresh/empty client must NOT push (nor stamp itself "freshest") before it has loaded the
+  // server's bundle — that race let an empty profile overwrite a populated server bundle (chats lost).
+  // Once we've synced at least once, an empty list IS legitimate (e.g. the user deleted all their chats).
+  if (!chats.length && !initialSyncDone) return;
   const now = Date.now(); try { localStorage.setItem(UPD_KEY, String(now)); } catch {} // mark local as freshest
   clearTimeout(syncTimer);
   syncTimer = setTimeout(() => { fetch('/chats/save', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, data: bundleAll(now) }) }).catch(() => {}); }, 1500);
@@ -1552,6 +1557,7 @@ async function syncLoad({ keepActive = false } = {}) {
   try {
     const r = await fetch('/chats/load', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap }) });
     const { data } = await r.json();
+    initialSyncDone = true; // we've now seen the server's bundle — pushes (incl. a legit empty list) are safe from here
     const localUpdated = +(localStorage.getItem(UPD_KEY) || 0);
     // adopt the server's chats only if they're at least as fresh as our last local edit
     if (data && Array.isArray(data.chats) && data.chats.length && (data.updated || 0) >= localUpdated) {
