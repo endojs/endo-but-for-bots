@@ -1385,23 +1385,11 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@endo/chat-network-view@workspace:^, @endo/chat-network-view@workspace:packages/chat-network-view":
-  version: 0.0.0-use.local
-  resolution: "@endo/chat-network-view@workspace:packages/chat-network-view"
-  dependencies:
-    "@endo/exo-stream": "workspace:^"
-    "@endo/far": "workspace:^"
-    "@endo/harden": "workspace:^"
-    eslint: "catalog:dev"
-  languageName: unknown
-  linkType: soft
-
 "@endo/chat@workspace:packages/chat":
   version: 0.0.0-use.local
   resolution: "@endo/chat@workspace:packages/chat"
   dependencies:
     "@endo/captp": "workspace:^"
-    "@endo/chat-network-view": "workspace:^"
     "@endo/cli": "workspace:^"
     "@endo/daemon": "workspace:^"
     "@endo/eventual-send": "workspace:^"
@@ -1410,16 +1398,20 @@ __metadata:
     "@endo/far": "workspace:^"
     "@endo/harden": "workspace:^"
     "@endo/init": "workspace:^"
-    "@endo/inventory-graph": "workspace:^"
     "@endo/lockdown": "workspace:^"
     "@endo/markmdown": "workspace:^"
+    "@endo/monaco-wrapper": "workspace:^"
     "@endo/pass-style": "workspace:^"
     "@endo/patterns": "workspace:^"
     "@endo/platform": "workspace:^"
+    "@endo/preact-container": "workspace:^"
     "@endo/promise-kit": "workspace:^"
     "@endo/ses-ava": "workspace:^"
+    "@endo/space-file-explorer": "workspace:^"
+    "@endo/space-inventory-graph": "workspace:^"
+    "@endo/space-peers": "workspace:^"
+    "@endo/space-whylip": "workspace:^"
     "@endo/where": "workspace:^"
-    "@endo/whylip": "workspace:^"
     "@playwright/test": "npm:^1.40.0"
     "@vitejs/plugin-react": "npm:^4.0.0"
     ava: "catalog:dev"
@@ -1428,6 +1420,7 @@ __metadata:
     happy-dom: "npm:^15.0.0"
     marked: "npm:^17.0.5"
     monaco-editor: "npm:^0.55.1"
+    preact: "npm:^10.29.2"
     react: "npm:^19.0.0"
     react-dom: "npm:^19.0.0"
     ses: "workspace:^"
@@ -2096,16 +2089,6 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@endo/inventory-graph@workspace:^, @endo/inventory-graph@workspace:packages/inventory-graph":
-  version: 0.0.0-use.local
-  resolution: "@endo/inventory-graph@workspace:packages/inventory-graph"
-  dependencies:
-    "@endo/far": "workspace:^"
-    "@endo/harden": "workspace:^"
-    eslint: "catalog:dev"
-  languageName: unknown
-  linkType: soft
-
 "@endo/jaine@workspace:packages/jaine":
   version: 0.0.0-use.local
   resolution: "@endo/jaine@workspace:packages/jaine"
@@ -2253,6 +2236,16 @@ __metadata:
     eslint: "catalog:dev"
     ses: "workspace:^"
     typescript: "catalog:dev"
+  languageName: unknown
+  linkType: soft
+
+"@endo/monaco-wrapper@workspace:^, @endo/monaco-wrapper@workspace:packages/monaco-wrapper":
+  version: 0.0.0-use.local
+  resolution: "@endo/monaco-wrapper@workspace:packages/monaco-wrapper"
+  dependencies:
+    "@endo/harden": "workspace:^"
+    eslint: "catalog:dev"
+    monaco-editor: "npm:^0.55.1"
   languageName: unknown
   linkType: soft
 
@@ -2459,7 +2452,7 @@ __metadata:
     "@vitest/browser": "npm:^4.1.9"
     "@vitest/browser-playwright": "npm:^4.1.9"
     eslint: "catalog:dev"
-    playwright: "npm:1.56.1"
+    playwright: "npm:^1.60.0"
     preact: "npm:^10.29.2"
     ses: "workspace:^"
     vite: "npm:^8.0.16"
@@ -2583,6 +2576,61 @@ __metadata:
   languageName: unknown
   linkType: soft
 
+"@endo/space-file-explorer@workspace:^, @endo/space-file-explorer@workspace:packages/space-file-explorer":
+  version: 0.0.0-use.local
+  resolution: "@endo/space-file-explorer@workspace:packages/space-file-explorer"
+  dependencies:
+    "@endo/exo-stream": "workspace:^"
+    "@endo/far": "workspace:^"
+    "@endo/harden": "workspace:^"
+    "@endo/init": "workspace:^"
+    "@endo/lockdown": "workspace:^"
+    "@endo/monaco-wrapper": "workspace:^"
+    "@endo/platform": "workspace:^"
+    "@endo/preact-container": "workspace:^"
+    "@endo/ses-ava": "workspace:^"
+    ava: "catalog:dev"
+    c8: "catalog:dev"
+    eslint: "catalog:dev"
+    happy-dom: "npm:^15.0.0"
+    preact: "npm:^10.29.2"
+  languageName: unknown
+  linkType: soft
+
+"@endo/space-inventory-graph@workspace:^, @endo/space-inventory-graph@workspace:packages/space-inventory-graph":
+  version: 0.0.0-use.local
+  resolution: "@endo/space-inventory-graph@workspace:packages/space-inventory-graph"
+  dependencies:
+    "@endo/far": "workspace:^"
+    "@endo/harden": "workspace:^"
+    eslint: "catalog:dev"
+  languageName: unknown
+  linkType: soft
+
+"@endo/space-peers@workspace:^, @endo/space-peers@workspace:packages/space-peers":
+  version: 0.0.0-use.local
+  resolution: "@endo/space-peers@workspace:packages/space-peers"
+  dependencies:
+    "@endo/exo-stream": "workspace:^"
+    "@endo/far": "workspace:^"
+    "@endo/harden": "workspace:^"
+    eslint: "catalog:dev"
+    preact: "npm:^10.29.2"
+  languageName: unknown
+  linkType: soft
+
+"@endo/space-whylip@workspace:^, @endo/space-whylip@workspace:packages/space-whylip":
+  version: 0.0.0-use.local
+  resolution: "@endo/space-whylip@workspace:packages/space-whylip"
+  dependencies:
+    "@endo/conversation-tree": "workspace:^"
+    "@endo/exo-stream": "workspace:^"
+    "@endo/far": "workspace:^"
+    eslint: "catalog:dev"
+    preact: "npm:^10.29.2"
+  languageName: unknown
+  linkType: soft
+
 "@endo/stream-node@workspace:^, @endo/stream-node@workspace:packages/stream-node":
   version: 0.0.0-use.local
   resolution: "@endo/stream-node@workspace:packages/stream-node"
@@ -2693,18 +2741,6 @@ __metadata:
     c8: "catalog:dev"
     eslint: "catalog:dev"
     typescript: "catalog:dev"
-  languageName: unknown
-  linkType: soft
-
-"@endo/whylip@workspace:^, @endo/whylip@workspace:packages/whylip":
-  version: 0.0.0-use.local
-  resolution: "@endo/whylip@workspace:packages/whylip"
-  dependencies:
-    "@endo/conversation-tree": "workspace:^"
-    "@endo/far": "workspace:^"
-    eslint: "catalog:dev"
-    react: "npm:^19.0.0"
-    react-dom: "npm:^19.0.0"
   languageName: unknown
   linkType: soft
 
@@ -14690,15 +14726,6 @@ __metadata:
   languageName: node
   linkType: hard
 
-"playwright-core@npm:1.56.1":
-  version: 1.56.1
-  resolution: "playwright-core@npm:1.56.1"
-  bin:
-    playwright-core: cli.js
-  checksum: 10c0/ffd40142b99c68678b387445d5b42f1fee4ab0b65d983058c37f342e5629f9cdbdac0506ea80a0dfd41a8f9f13345bad54e9a8c35826ef66dc765f4eb3db8da7
-  languageName: node
-  linkType: hard
-
 "playwright-core@npm:1.59.1":
   version: 1.59.1
   resolution: "playwright-core@npm:1.59.1"
@@ -14708,18 +14735,12 @@ __metadata:
   languageName: node
   linkType: hard
 
-"playwright@npm:1.56.1":
-  version: 1.56.1
-  resolution: "playwright@npm:1.56.1"
-  dependencies:
-    fsevents: "npm:2.3.2"
-    playwright-core: "npm:1.56.1"
-  dependenciesMeta:
-    fsevents:
-      optional: true
+"playwright-core@npm:1.61.0":
+  version: 1.61.0
+  resolution: "playwright-core@npm:1.61.0"
   bin:
-    playwright: cli.js
-  checksum: 10c0/8e9965aede86df0f4722063385748498977b219630a40a10d1b82b8bd8d4d4e9b6b65ecbfa024331a30800163161aca292fb6dd7446c531a1ad25f4155625ab4
+    playwright-core: cli.js
+  checksum: 10c0/64cbf5e9f4ad81cbb005d59417e96435e324a6e3801f1c79b36850ad99f6bb90853c4b569a32c49b9eca1e07925bbb2a5a864babdba2178c3c395e0c589d5941
   languageName: node
   linkType: hard
 
@@ -14735,6 +14756,21 @@ __metadata:
   bin:
     playwright: cli.js
   checksum: 10c0/dfe38396e616e5c4f98825ce90037bb96e477c5a2bd9258a24854f8ce72a8a41427b19098863866f85aa0216e70287dd537c4438d761aca93995e31ae099c533
+  languageName: node
+  linkType: hard
+
+"playwright@npm:^1.60.0":
+  version: 1.61.0
+  resolution: "playwright@npm:1.61.0"
+  dependencies:
+    fsevents: "npm:2.3.2"
+    playwright-core: "npm:1.61.0"
+  dependenciesMeta:
+    fsevents:
+      optional: true
+  bin:
+    playwright: cli.js
+  checksum: 10c0/079dceebe8b745fa6062a3af928024d0c508177fbf15d61dba09ba173f277465ad3746fdc1b31788ade65428f4d3f92fc8083b44c07381b088721eaa2ea06513
   languageName: node
   linkType: hard
 
