@@ -70,7 +70,7 @@
 }
 </script>
 <style>
-  :root { --bg:#0d1117; --panel:#161b22; --edge:#30363d; --ink:#e6edf3; --mut:#8b949e; --acc:#7c5cff; --acc2:#2ea043; --bad:#f85149; --you:#1f6feb; --you-bg:#11243f; --you-edge:#1f3b63; --trace-bg:#0b0e14; --trace-edge:#21262d; --trace-ink:#9aa4b2; --trace-ok:#8fd0a8; --trace-bad:#ff9e9e; --trace-call:#9fb0c9; --trace-result:#c9a96e; }
+  :root { --bg:#0d1117; --panel:#161b22; --edge:#30363d; --ink:#e6edf3; --mut:#8b949e; --acc:#7c5cff; --acc2:#2ea043; --bad:#f85149; --you:#1f6feb; --you-bg:#11243f; --you-edge:#1f3b63; --trace-bg:#0b0e14; --trace-edge:#21262d; --trace-ink:#9aa4b2; --trace-ok:#8fd0a8; --trace-bad:#ff9e9e; --trace-call:#9fb0c9; --trace-result:#c9a96e; --warn:#d29922; }
   * { box-sizing:border-box; }
   /* full-bleed on notched phones: viewport-fit=cover lets content reach the edges; the
      background behind the safe-area insets is the dark bg, and the fixed chrome (header/composer)
@@ -166,7 +166,7 @@
   .prop button.confirm { background:var(--acc2); border:none; color:#fff; padding:7px 15px; border-radius:8px; cursor:pointer; font-size:13px; }
   .prop button.reject { background:transparent; border:1px solid #5a2a2a; color:var(--bad); padding:7px 15px; border-radius:8px; cursor:pointer; font-size:13px; }
   .prop button:disabled { opacity:.5; cursor:default; }
-  .prop .warn { color:#d29922; font-size:12px; margin-top:8px; }
+  .prop .warn { color:var(--warn); font-size:12px; margin-top:8px; }
   .prop .pbtns label.dontask { font-size:12px; color:var(--mut); display:flex; align-items:center; gap:5px; cursor:pointer; margin-left:auto; }
   .prop .pbtns label.dontask input { width:auto; }
   .autofired { font-size:12px; color:var(--acc2); margin-top:6px; }
@@ -185,7 +185,7 @@
   .ask-submit:disabled { opacity:.5; cursor:default; }
   .ask-origin { text-decoration:none; }
   /* reply-in-thread: dip into a sub-agent (dev) thread without leaving the chat */
-  .dev-thread-toggle { background:transparent; border:none; cursor:pointer; font-size:12px; padding:7px 0 0; }
+  .dev-thread-toggle { background:transparent; border:none; cursor:pointer; font-size:12px; padding:7px 0 0; color:var(--acc); } /* default to themed accent (the island overrides with the per-agent color); never UA-default black */
   .dev-thread-body { margin-top:8px; border-left:2px solid var(--edge); padding-left:10px; display:flex; flex-direction:column; gap:6px; }
   .dev-thread-msg { font-size:13px; line-height:1.5; }
   .dev-thread-row { display:flex; gap:6px; margin-top:4px; }
@@ -225,7 +225,7 @@
   .inwidget { border:1px solid var(--edge); border-radius:12px; overflow:hidden; background:var(--panel); }
   .inwidget-bar { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:6px 10px; font-size:12px; color:var(--mut); border-bottom:1px solid var(--edge); }
   .inwidget-bar .mini { padding:2px 8px; }
-  .inwidget-frame { width:100%; height:340px; border:0; display:block; background:#0d1117; }
+  .inwidget-frame { width:100%; height:340px; border:0; display:block; background:var(--bg); }
   #trace-canvas { width:100%; height:100%; display:block; touch-action:none; }
   .trace-bar { position:absolute; top:0; left:0; right:0; display:flex; align-items:center; gap:8px; padding:max(10px,env(safe-area-inset-top)) max(14px,env(safe-area-inset-right)) 10px max(14px,env(safe-area-inset-left)); background:linear-gradient(#0a0f1eee,transparent); flex-wrap:wrap; }
   .trace-title { color:var(--mut); font-size:12px; }
