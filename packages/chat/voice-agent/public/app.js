@@ -2403,6 +2403,7 @@ const ISLAND_PREVIEW = {
     ],
     more: 3,
   }, { onSelect() {}, onDelete() {}, onMore() {}, onRenameStart() {}, onRenameChange() {}, onRenameCommit() {} }),
+  'island-message-controls': slot => window.__fieldIslands.renderMessageControls(slot, { hasAudio: true, varIx: 1, varCount: 3 }, { onRetry() {}, onEdit() {}, onPlayAudio() {}, onFork() {} }),
 };
 
 const refreshComponents = async () => {

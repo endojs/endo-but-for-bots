@@ -14,6 +14,7 @@ import { KitSampler } from './client/kit-sampler.js';
 import { AskCard } from './client/ask-card.js';
 import { ProposalCard } from './client/proposal-card.js';
 import { ChatList } from './client/chat-list.js';
+import { MessageControls } from './client/message-controls.js';
 
 // Walk a preact vnode tree → collect text, classes, clickable buttons, and inputs (with their handlers).
 const collect = v => {
@@ -208,6 +209,17 @@ test('kit overlays + extra primitives: Modal open/closed + onClose; Segmented/Sl
   let crumb = null; const bc = collect(Breadcrumb({ items: [{ label: 'Home', onClick: () => { crumb = 'home'; } }, { label: 'Here' }] }));
   bc.buttons[0] && bc.buttons[0].onClick(); assert.equal(crumb, 'home', 'breadcrumb link click');
   assert.match(collect(Skeleton({ width: '50%' })).classes.join(' '), /kit-skel/);
+});
+
+test('MessageControls: retry/edit fire; 🔊 only with audio; fork nav (◀ k/n ▶) only with variants', () => {
+  let acts = []; const full = collect(MessageControls({ hasAudio: true, varIx: 1, varCount: 3, onRetry: () => acts.push('retry'), onEdit: () => acts.push('edit'), onPlayAudio: () => acts.push('audio'), onFork: d => acts.push(`fork${d}`) }));
+  full.buttons.find(b => b.label === '↻').onClick(); full.buttons.find(b => b.label === '✎').onClick(); full.buttons.find(b => b.label === '🔊').onClick();
+  full.buttons.find(b => b.label === '◀').onClick(); full.buttons.find(b => b.label === '▶').onClick();
+  assert.deepEqual(acts, ['retry', 'edit', 'audio', 'fork-1', 'fork1']);
+  assert.match(allText(full), /2\/3/, 'fork counter k/n');
+  // no audio + single variant → no 🔊 and no fork nav
+  const bare = collect(MessageControls({ hasAudio: false, varCount: 1, onRetry() {}, onEdit() {} }));
+  assert.equal(bare.buttons.filter(b => b.label === '🔊' || b.label === '◀' || b.label === '▶').length, 0);
 });
 
 test('kit data primitives: Menu open/select, Toast close, Pagination, Table cells, List select, Tooltip', () => {

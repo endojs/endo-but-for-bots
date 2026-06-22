@@ -19,6 +19,7 @@ import { KitSampler } from './kit-sampler.js';
 import { AskCard } from './ask-card.js';
 import { ProposalCard } from './proposal-card.js';
 import { ChatList } from './chat-list.js';
+import { MessageControls } from './message-controls.js';
 
 // A render propagator: re-paints `view(...values)` into `el` whenever any wired cell changes.
 // This is the one kind of propagator whose effect is the DOM; logic propagators stay headless.
@@ -43,6 +44,8 @@ const propCell = makeCell();
 let propWired = false;
 const chatListCell = makeCell();
 let chatListWired = false;
+const msgCtrlCell = makeCell();
+let msgCtrlWired = false;
 
 const islands = {
   // Idempotent: wires the render propagator once (cell → SharesPanel), then feeds the latest data in.
@@ -157,6 +160,18 @@ const islands = {
       chatListWired = true;
     }
     chatListCell.addContent(data);
+  },
+
+  // ── MessageControls island ────────────────────────────────────────────────────────────────────
+  // `data` = { hasAudio, varIx, varCount }. `handlers` = { onRetry, onEdit, onPlayAudio, onFork(delta) }.
+  renderMessageControls(el, data, handlers) {
+    if (!msgCtrlWired) {
+      el.setAttribute('data-component-id', 'island-message-controls');
+      el.setAttribute('data-component-name', 'Message controls');
+      renderPropagator(el, [msgCtrlCell], d => h(MessageControls, { ...d, ...handlers }));
+      msgCtrlWired = true;
+    }
+    msgCtrlCell.addContent(data);
   },
 };
 
