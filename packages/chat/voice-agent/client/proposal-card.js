@@ -34,15 +34,19 @@ const proposalBody = p => {
 };
 
 export const ProposalCard = (props = {}) => {
-  const { proposal = {}, icon = '⚠️', accent = '', mayConfirm = false, dontAsk = false, onConfirm, onReject, onToggleDontAsk } = props;
+  const { proposal = {}, icon = '⚠️', accent = '', mayConfirm = false, dontAsk = false, resolved = '', onConfirm, onReject, onToggleDontAsk } = props;
   const noDontAsk = ['home-assistant', 'spawn-specialist'].includes(proposal.type);
-  return h('div', { class: 'prop msg', style: accent ? `border-left:3px solid ${accent}` : undefined }, [
-    h('div', { class: 'ptitle' }, [`${icon} `, h('span', null, proposal.title || 'Proposed action')]),
-    proposalBody(proposal),
-    h('div', { class: 'pbtns' }, mayConfirm ? [
+  // resolved → the outcome text once the operator has confirmed/rejected (or an error); replaces the buttons.
+  const footer = resolved
+    ? [h('span', { style: 'color:var(--acc2);font-size:13px' }, resolved)]
+    : mayConfirm ? [
       h('button', { class: 'confirm', onClick: () => onConfirm && onConfirm(proposal.id, !noDontAsk && !!dontAsk) }, 'Confirm'),
       h('button', { class: 'reject', onClick: () => onReject && onReject(proposal.id) }, 'Reject'),
       noDontAsk ? null : Checkbox({ label: `don't ask again for ${proposal.type}`, checked: dontAsk, onChange: v => onToggleDontAsk && onToggleDontAsk(v) }),
-    ] : [h('span', { class: 'pmeta' }, "awaiting the operator's confirmation")]),
+    ] : [h('span', { class: 'pmeta' }, "awaiting the operator's confirmation")];
+  return h('div', { class: 'prop msg', style: accent ? `border-left:3px solid ${accent}` : undefined }, [
+    h('div', { class: 'ptitle' }, [`${icon} `, h('span', null, proposal.title || 'Proposed action')]),
+    proposalBody(proposal),
+    h('div', { class: 'pbtns' }, footer),
   ]);
 };

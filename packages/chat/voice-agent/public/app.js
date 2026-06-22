@@ -147,52 +147,37 @@ const renderDiff = (a, b) => {
   const sym = { add: '+', del: '-', ctx: ' ' };
   return `<div class="diff">${out.map(([k, l]) => `<span class="${k}">${sym[k]} ${esc(l)}</span>`).join('\n')}</div>`;
 };
-const proposalBody = p => {
-  const d = p.detail || {};
-  if (p.type === 'note-edit') return `<div class="pmeta">${esc(d.path)} · ${esc(d.mode)}</div>${renderDiff(d.oldContent || '', d.newContent || '')}`;
-  if (p.type === 'system-prompt') return `<div class="pmeta">the agent's own system-prompt block</div>${renderDiff(d.oldContent || '', d.newContent || '')}`;
-  if (p.type === 'home-assistant') return `<div class="kv"><div><b>entity</b>${esc(d.entity_id)}</div><div><b>service</b>${esc(d.service)}</div>${d.data && Object.keys(d.data).length ? `<div><b>data</b>${esc(JSON.stringify(d.data))}</div>` : ''}</div>`;
-  if (p.type === 'email') return `<div class="kv"><div><b>to</b>${esc(d.to)}</div><div><b>subject</b>${esc(d.subject)}</div></div><div class="diff">${esc(d.body || '')}</div><div class="warn">Confirming sends this via your SMTP relay (or saves a reviewed draft if no relay creds are set).</div>`;
-  if (p.type === 'subagent') return `<div class="kv"><div><b>name</b>${esc(d.name)}</div><div><b>task</b>${esc(d.task)}</div><div><b>powers</b>${esc((d.powers || []).join(', ') || '(none)')}</div></div><div class="warn">Confirming queues it to the dashboard for a second approval before anything with system access runs.</div>`;
-  if (p.type === 'contact-add' || p.type === 'contact-edit') return `<div class="pmeta">${p.type === 'contact-edit' ? 'edit ' + esc(d.handle) : 'new contact'}</div><div class="kv">${d.name ? `<div><b>name</b>${esc(d.name)}</div>` : ''}${d.email ? `<div><b>email</b>${esc(d.email)}</div>` : ''}${d.phone ? `<div><b>phone</b>${esc(d.phone)}</div>` : ''}${d.org ? `<div><b>org</b>${esc(d.org)}</div>` : ''}${d.note ? `<div><b>note</b>${esc(d.note)}</div>` : ''}</div>${p.type === 'contact-edit' ? '<div class="warn">Only the fields shown will change; others are preserved.</div>' : ''}`;
-  if (p.type === 'spawn-specialist') return `<div class="pmeta">${esc(d.domain || 'specialist')}</div><div class="kv"><div><b>name</b>${esc(d.name)}</div><div><b>powers</b>${esc((d.powers || []).join(', ') || '(none)')}</div></div>${d.instructions ? `<div class="diff">${esc(d.instructions)}</div>` : ''}<div class="warn">Confirming creates a persistent specialist with these powers. You'll still confirm each of its destructive actions until you grant it autonomy via "don't ask again".</div>`;
-  if (p.type === 'give-kazputer') return `<div class="kv"><div><b>for</b>${esc(d.name)}</div><div><b>email</b>${esc(d.email)}</div></div><div class="warn">Confirming creates a new Kazputer (kid-phone) and emails the invite link. The link works off-tailnet only once the kazputer-phone is bound public (your call).</div>`;
-  if (p.type === 'kazputer-setting') return `<div class="kv"><div><b>setting</b>${esc(d.setting)}</div><div><b>value</b>${esc(String(d.value))}</div></div>`;
-  if (p.type === 'kazputer-coins') return `<div class="kv"><div><b>coins</b>${Number(d.coins) >= 0 ? '+' : ''}${esc(String(d.coins))}</div></div>`;
-  return `<div class="kv">${esc(p.summary || '')}</div>`;
-};
+// FACTORED: a proposal renders through the ProposalCard island (per-type body + security frame + the
+// don't-ask toggle live in the island). The HOST owns the per-card state (dontAsk, resolved) + the
+// confirm/reject fetch flow, re-rendering via renderInto on each change. mayConfirm gates the buttons.
 const renderProposal = p => {
-  const card = document.createElement('div'); card.className = 'prop msg';
-  card.innerHTML = `<div class="ptitle">${ICON[p.type] || '⚠️'} <span>${esc(p.title || 'Proposed action')}</span></div>${proposalBody(p)}<div class="pbtns"></div>`;
-  card.style.borderLeft = `3px solid ${frameColor(p.agent)}`; // security-frame: which agent proposed it
-  const btns = card.querySelector('.pbtns');
-  // You may confirm only if you hold the authority this action needs (root holds
-  // all). Confirmation is required even on a shared cap — it's the typo guard.
-  const mayConfirm = isRoot || heldPowers.has(p.power);
-  if (!mayConfirm) { btns.innerHTML = '<span class="pmeta">awaiting the operator’s confirmation</span>'; }
-  else {
-    const cb = document.createElement('button'); cb.className = 'confirm'; cb.textContent = 'Confirm';
-    const rb = document.createElement('button'); rb.className = 'reject'; rb.textContent = 'Reject';
-    // "don't ask again for this kind" — records a revocable auto-confirm rule. Never for
-    // HomeAssistant (physical-world) or spawning a specialist (authority-granting).
-    let dontAsk = null;
-    if (!['home-assistant', 'spawn-specialist'].includes(p.type)) {
-      const lbl = document.createElement('label'); lbl.className = 'dontask';
-      lbl.innerHTML = `<input type="checkbox"> don't ask again for ${esc(p.type)}`;
-      dontAsk = lbl.querySelector('input'); dontAsk._label = lbl;
-    }
-    const resolve = async path => {
-      cb.disabled = rb.disabled = true;
-      const body = { cap, id: p.id };
-      if (path === '/confirm' && dontAsk?.checked) body.dontAskAgain = true;
-      const r = await fetch(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }).then(x => x.json()).catch(e => ({ ok: false, error: e.message }));
-      if (r.ok) { const extra = r.result?.savedTo ? ' · ' + esc(String(r.result.savedTo).split('/').pop()) : (r.result?.drafted ? ' · drafted' : ''); const rem = r.remembered ? ' · won’t ask again for this' : ''; btns.innerHTML = `<span style="color:var(--acc2);font-size:13px">✓ ${path === '/confirm' ? 'confirmed' : 'rejected'}${extra}${rem}</span>`; if (path === '/confirm') speak('Done.'); }
-      else { cb.disabled = rb.disabled = false; btns.insertAdjacentHTML('beforeend', `<span style="color:var(--bad);font-size:12px">${esc(r.error || 'failed')}</span>`); }
-    };
-    cb.onclick = () => resolve('/confirm'); rb.onclick = () => resolve('/reject');
-    btns.append(cb, rb); if (dontAsk) btns.append(dontAsk._label);
-  }
-  log.appendChild(card); window.scrollTo(0, document.body.scrollHeight);
+  const card = document.createElement('div'); log.appendChild(card);
+  const mayConfirm = isRoot || heldPowers.has(p.power); // confirm only what you hold authority for (typo guard)
+  let dontAsk = false; let resolved = '';
+  const draw = () => {
+    if (window.__fieldIslands && window.__fieldIslands.renderInto) {
+      window.__fieldIslands.renderInto('ProposalCard', card, {
+        proposal: { id: p.id, type: p.type, title: p.title, detail: p.detail, summary: p.summary },
+        icon: ICON[p.type] || '⚠️', accent: frameColor(p.agent), mayConfirm, dontAsk, resolved,
+        onConfirm: (id, da) => resolve('/confirm', da),
+        onReject: () => resolve('/reject', false),
+        onToggleDontAsk: v => { dontAsk = v; draw(); },
+      });
+    } else { card.className = 'prop msg'; card.innerHTML = `<div class="ptitle">${ICON[p.type] || '⚠️'} <span>${esc(p.title || 'Proposed action')}</span></div><div class="kv">${esc(p.summary || '')}</div>`; }
+  };
+  const resolve = async (path, da) => {
+    resolved = '…'; draw();
+    const body = { cap, id: p.id }; if (path === '/confirm' && da) body.dontAskAgain = true;
+    const r = await fetch(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }).then(x => x.json()).catch(e => ({ ok: false, error: e.message }));
+    if (r.ok) {
+      const extra = r.result?.savedTo ? ' · ' + String(r.result.savedTo).split('/').pop() : (r.result?.drafted ? ' · drafted' : '');
+      const rem = r.remembered ? " · won't ask again for this" : '';
+      resolved = `✓ ${path === '/confirm' ? 'confirmed' : 'rejected'}${extra}${rem}`;
+      if (path === '/confirm') speak('Done.');
+    } else { resolved = ''; setStatus('proposal: ' + (r.error || 'failed')); }
+    draw();
+  };
+  draw(); window.scrollTo(0, document.body.scrollHeight);
 };
 
 // requestAccess → an ACTIONABLE Grant card. The agent asked for a capability it lacks; the owner grants
@@ -238,59 +223,45 @@ const loadAsks = async () => {
     if (curTab === 'talk' && openAsks.some(a => a.origin && a.origin.kind === 'chat' && a.origin.chatId === sessionId)) renderTx();
   } catch {}
 };
-const askControl = (ask, q) => {
-  const nm = `${esc(ask.id)}-${esc(q.id)}`;
-  if (q.type === 'choice') return (q.options || []).map(o => `<label class="ask-opt"><input type="radio" name="${nm}" value="${esc(o)}"> ${esc(o)}</label>`).join('');
-  if (q.type === 'multiselect') return (q.options || []).map(o => `<label class="ask-opt"><input type="checkbox" data-ms="${esc(q.id)}" value="${esc(o)}"> ${esc(o)}</label>`).join('');
-  if (q.type === 'bool') return `<label class="ask-opt"><input type="radio" name="${nm}" value="yes"> Yes</label><label class="ask-opt"><input type="radio" name="${nm}" value="no"> No</label>`;
-  if (q.type === 'number') return `<input type="number" class="ask-in" data-num="${esc(q.id)}" placeholder="number">`;
-  if (q.type === 'approve-reject') return `<label class="ask-opt"><input type="radio" name="${nm}" value="approve"> ✅ Approve</label><label class="ask-opt"><input type="radio" name="${nm}" value="reject"> ❌ Reject</label>`;
-  if (q.type === 'secret') return `<input type="password" class="ask-in ask-secret" data-secret="${esc(q.id)}" autocomplete="off" placeholder="🔒 stored securely — never shown or logged">`;
-  return `<textarea class="ask-in" data-text="${esc(q.id)}" rows="2" placeholder="your answer"></textarea>`;
-};
+// FACTORED: an ask renders through the AskCard island (typed controls + secret hygiene live in the island).
+// The HOST owns the in-progress answers (per ask id) + the answered status, re-rendering via renderInto on
+// each change. On submit it POSTs, drops secrets, marks answered, and continues the chat (or stages the
+// off-app flush) — exactly as before. The secret answer lives only in askAnswers (JS) + the island's
+// masked, uncontrolled password field; on submit it's POSTed then cleared, and the field becomes a chip.
+const askAnswers = {}; // askId → { qid: value } (host-owned; secrets cleared on submit)
 const buildAskCard = ask => {
-  const card = document.createElement('div'); card.className = 'ask msg'; card.dataset.ask = ask.id;
-  const qHtml = (ask.questions || []).map(q => `<div class="ask-q"><div class="ask-qtext">${esc(q.q)}</div><div class="ask-ctrl">${askControl(ask, q)}</div></div>`).join('');
-  const o = ask.origin || {}; let link = '';
-  if (o.kind === 'chat' && o.chatId && o.chatId !== sessionId) link = `<button class="mini ask-origin" data-openchat="${esc(o.chatId)}">→ open conversation</button>`;
-  else if (o.doc) link = `<a class="mini ask-origin" href="obsidian://open?path=${encodeURIComponent(o.doc)}">→ open note</a>`;
-  card.innerHTML = `<div class="ask-title">❓ <span>${esc(ask.title)}</span>${ask.requestedBy ? ` <span class="pill">${esc(ask.requestedBy)}</span>` : ''}</div>${ask.body ? `<div class="ask-body">${esc(ask.body)}</div>` : ''}${qHtml}<div class="ask-btns"><button class="ask-submit">Submit</button>${link}<span class="ask-status pill"></span></div>`;
-  card.style.borderLeft = `3px solid ${frameColor(ask.requestedBy)}`; // security-frame: who raised it
-  card.querySelector('.ask-submit').onclick = () => submitAsk(ask, card);
-  const oc = card.querySelector('[data-openchat]'); if (oc) oc.onclick = () => switchChat(oc.dataset.openchat);
-  return card;
-};
-const collectAnswers = (ask, card) => {
-  const a = {};
-  for (const q of (ask.questions || [])) {
-    const k = CSS.escape(q.id);
-    if (q.type === 'multiselect') a[q.id] = [...card.querySelectorAll(`[data-ms="${k}"]:checked`)].map(c => c.value);
-    else if (q.type === 'number') { const el = card.querySelector(`[data-num="${k}"]`); a[q.id] = el && el.value !== '' ? Number(el.value) : null; }
-    else if (q.type === 'secret') { const el = card.querySelector(`[data-secret="${k}"]`); a[q.id] = el ? el.value : ''; } // sent over the tailnet POST; server diverts to the 0600 store
-    else if (q.type === 'text') { const el = card.querySelector(`[data-text="${k}"]`); a[q.id] = el ? el.value.trim() : ''; }
-    else { const sel = card.querySelector(`input[name="${CSS.escape(ask.id + '-' + q.id)}"]:checked`); a[q.id] = sel ? sel.value : ''; }
-  }
-  return a;
-};
-const submitAsk = async (ask, card) => {
-  const btn = card.querySelector('.ask-submit'); btn.disabled = true;
-  const st = card.querySelector('.ask-status');
-  const answers = collectAnswers(ask, card);
-  const r = await fetch('/asks/answer', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, id: ask.id, answers }) }).then(x => x.json()).catch(e => ({ ok: false, error: e.message }));
-  if (!r.ok) { st.textContent = 'error: ' + (r.error || ''); btn.disabled = false; return; }
-  // SECRET HYGIENE: wipe each secret field's value from the DOM immediately and replace the
-  // input with a static marker, so the secret is never shown or re-rendered after entry.
-  card.querySelectorAll('.ask-secret, input[type="password"]').forEach(el => { try { el.value = ''; } catch {} const tag = document.createElement('span'); tag.className = 'pill'; tag.textContent = '🔒 stored securely — never shown again'; el.replaceWith(tag); });
-  st.textContent = '✓ answered'; card.querySelectorAll('input,textarea,.ask-submit').forEach(el => { el.disabled = true; });
-  openAsks = openAsks.filter(x => x.id !== ask.id);
-  for (const k of Object.keys(answers)) { const q = (ask.questions || []).find(x => x.id === k); if (q && q.type === 'secret') answers[k] = ''; } // drop the secret from the in-memory answers object too
+  const card = document.createElement('div');
+  if (!askAnswers[ask.id]) askAnswers[ask.id] = {};
+  let status = '';
   const o = ask.origin || {};
-  // chat-origin ask answered while in that chat → continue the conversation with the answer
-  if (o.kind === 'chat' && o.chatId === sessionId) {
-    const summary = (ask.questions || []).map(q => `${q.q} → ${q.type === 'secret' ? '(secret provided)' : (Array.isArray(answers[q.id]) ? answers[q.id].join(', ') : (answers[q.id] ?? ''))}`).join('; ');
-    sendChat(`Answering your question — ${summary}`);
-  } else { await loadAsks(); } // off-app ask staged for the "Done" flush
-  refreshBadge();
+  const hasOrigin = (o.kind === 'chat' && o.chatId && o.chatId !== sessionId) || !!o.doc;
+  const openOrigin = () => { if (o.kind === 'chat' && o.chatId) switchChat(o.chatId); else if (o.doc) window.open(`obsidian://open?path=${encodeURIComponent(o.doc)}`, '_blank', 'noopener'); };
+  const submit = async () => {
+    const answers = { ...askAnswers[ask.id] };
+    const r = await fetch('/asks/answer', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, id: ask.id, answers }) }).then(x => x.json()).catch(e => ({ ok: false, error: e.message }));
+    if (!r.ok) { setStatus('ask: ' + (r.error || 'failed')); return; }
+    for (const q of (ask.questions || [])) if (q.type === 'secret') askAnswers[ask.id][q.id] = ''; // drop secrets from the host map
+    status = 'answered'; draw(); // re-render → controls disabled, each secret becomes a "stored securely" chip
+    openAsks = openAsks.filter(x => x.id !== ask.id);
+    if (o.kind === 'chat' && o.chatId === sessionId) {
+      const summary = (ask.questions || []).map(q => `${q.q} → ${q.type === 'secret' ? '(secret provided)' : (Array.isArray(answers[q.id]) ? answers[q.id].join(', ') : (answers[q.id] ?? ''))}`).join('; ');
+      sendChat(`Answering your question — ${summary}`);
+    } else { await loadAsks(); } // off-app ask staged for the "Done" flush
+    refreshBadge();
+  };
+  const draw = () => {
+    if (window.__fieldIslands && window.__fieldIslands.renderInto) {
+      window.__fieldIslands.renderInto('AskCard', card, {
+        ask: { id: ask.id, title: ask.title, body: ask.body, requestedBy: ask.requestedBy, questions: ask.questions },
+        answers: askAnswers[ask.id], status, accent: frameColor(ask.requestedBy),
+        onChange: (qid, v) => { askAnswers[ask.id][qid] = v; draw(); },
+        onSubmit: submit,
+        onOpenOrigin: hasOrigin ? openOrigin : undefined,
+      });
+    } else { card.className = 'ask msg'; card.innerHTML = `<div class="ask-title">❓ <span>${esc(ask.title || '')}</span></div>`; }
+  };
+  draw();
+  return card;
 };
 const renderAskCard = ask => { log.appendChild(buildAskCard(ask)); window.scrollTo(0, document.body.scrollHeight); };
 

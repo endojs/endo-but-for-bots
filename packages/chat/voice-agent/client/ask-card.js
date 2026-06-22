@@ -34,9 +34,9 @@ const control = (ask, q, answers, status, onChange) => {
 };
 
 export const AskCard = (props = {}) => {
-  const { ask = {}, answers = {}, status = '', onChange, onSubmit, onOpenOrigin } = props;
+  const { ask = {}, answers = {}, status = '', accent = '', onChange, onSubmit, onOpenOrigin } = props;
   const fn = onChange || (() => {});
-  return h('div', { class: 'ask' }, [
+  return h('div', { class: 'ask', style: accent ? `border-left:3px solid ${accent}` : undefined }, [
     h('div', { class: 'ask-title' }, ['❓ ', h('span', null, ask.title || ''), ask.requestedBy ? h('span', null, [' ', Chip({ label: ask.requestedBy })]) : null]),
     ask.body ? h('div', { class: 'ask-body' }, ask.body) : null,
     ...(ask.questions || []).map((q, i) => h('div', { class: 'ask-q', key: i }, [

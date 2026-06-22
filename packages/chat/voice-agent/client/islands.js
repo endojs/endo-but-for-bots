@@ -32,6 +32,13 @@ import { ShareLinkManager } from './share-link-manager.js';
 const renderPropagator = (el, cells, view) =>
   react(cells, (...values) => renderConfined(view(...values), el));
 
+// Every island component, by name — for renderInto (one-shot per-mount rendering of a card whose state
+// the HOST owns + re-renders, e.g. the ask/proposal cards appended individually into the chat log).
+const COMPONENTS = {
+  SharesPanel, NotificationCard, ChangelogList, PowersBanner, KitSampler, AskCard, ProposalCard,
+  ChatList, MessageControls, ChatMetaBar, DevTaskCard, ExhaustedCard, TraceSignature, ObjectBrowser, ShareLinkManager,
+};
+
 // ── Shares island ───────────────────────────────────────────────────────────────────────────────
 // One cell (the data grain) holds the render-safe rows; the render propagator wires it to SharesPanel.
 const sharesCell = makeCell();
@@ -264,6 +271,19 @@ const islands = {
       shareMgrWired = true;
     }
     shareMgrCell.addContent(data);
+  },
+
+  // ── One-shot render of any island component into `el` (renderConfined diffs → input focus survives a
+  // re-render). For per-card surfaces where the HOST owns the state + calls this again on each change —
+  // e.g. the ask/proposal cards appended individually into the chat log (live wiring). Returns false if
+  // the name is unknown.
+  renderInto(name, el, props) {
+    const C = COMPONENTS[name];
+    if (!C || !el) return false;
+    el.setAttribute('data-component-id', `island-${name}`);
+    el.setAttribute('data-component-name', name);
+    renderConfined(h(C, props || {}), el);
+    return true;
   },
 };
 
