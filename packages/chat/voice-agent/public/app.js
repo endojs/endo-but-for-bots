@@ -1880,7 +1880,9 @@ const setChatUrl = () => {
 const tryOpenPendingChat = () => {
   if (!pendingChat) return;
   const id = pendingChat;
-  const exists = chats.some(c => c.id === id) || (String(id).startsWith('memo-') && memoRuns.some(r => r.id === id));
+  // Also match seedChats: scheduled-agent runs aren't adopted into the sidebar `chats` (kept out as noise),
+  // but switchChat renders them via runFor()/versions — so a project/feed deep-link to a run must open here.
+  const exists = chats.some(c => c.id === id) || seedChats.some(r => r.id === id) || (String(id).startsWith('memo-') && memoRuns.some(r => r.id === id));
   if (exists) { pendingChat = null; switchChat(id); }
 };
 // Open a fresh, EPHEMERAL chat = the empty "landing" screen. It is NOT added to the
@@ -3120,7 +3122,10 @@ const renderProjects = async () => {
   // ── DETAIL mode: one project's chats + scheduled agents ──
   const p = projects.find(x => x.id === openProjectId);
   if (!p) { openProjectId = null; return renderProjects(); }
-  const agents = (p.scheduledAgents || []).map(a => `
+  await loadSeedChats(); // refresh so each timer agent's runs folder reflects the latest scheduled runs
+  // a timer agent's runs = the scheduled seed-chats filed under it (kept out of the sidebar; here is their home)
+  const agentRuns = ag => seedChats.filter(s => s && s.source === 'scheduled' && s.scheduled && s.scheduled.agent === ag.name && s.scheduled.project === p.name).sort((x, y) => (y.ts || 0) - (x.ts || 0));
+  const agents = (p.scheduledAgents || []).map(a => { const runs = agentRuns(a); return `
       <div style="border:1px solid var(--edge);border-radius:8px;padding:8px;margin:6px 0">
         <div style="display:flex;justify-content:space-between;gap:8px;align-items:center"><b>⏰ ${esc(a.name)}</b>
           <span><button class="mini" data-run="${p.id}|${a.id}">Run now</button> <button class="mini" data-delagent="${p.id}|${a.id}">×</button></span></div>
@@ -3134,8 +3139,11 @@ const renderProjects = async () => {
             <div style="display:flex;flex-wrap:wrap;gap:4px" data-etools="${p.id}|${a.id}">${powers.map(pw => `<label title="${esc(powerTip(pw))}" style="font-size:11px;border:1px solid var(--edge);border-radius:6px;padding:2px 6px;cursor:pointer"><input type="checkbox" value="${esc(pw)}"${(a.tools || []).includes(pw) ? ' checked' : ''}> ${esc(pw)}</label>`).join('')}</div>
             <div><button class="mini" data-saveagent="${p.id}|${a.id}">Save changes</button></div>
           </div></details>
+        <details style="margin-top:6px"${runs.length ? '' : ''}><summary class="mini" style="display:inline-block">📁 runs (${runs.length})</summary>
+          <div style="margin-top:6px;display:flex;flex-direction:column;gap:4px">${runs.length ? runs.map(r => `<div class="share" style="padding:5px 7px"><div style="font-size:12px">${esc(new Date(r.ts || 0).toLocaleString())}</div><div><button class="mini" data-openrun="${esc(r.id)}">open</button> <button class="mini" data-delrun="${esc(r.id)}" title="throw away this run">🗑</button></div></div>`).join('') : '<div style="color:var(--mut);font-size:12px">no runs yet — scheduled runs land here and GC after a week</div>'}</div>
+        </details>
         <div data-out="${p.id}|${a.id}" style="font-size:12px;color:var(--acc);margin-top:4px"></div>
-      </div>`).join('');
+      </div>`; }).join('');
   const projChats = (p.chatIds || []).map(cid => { const c = chats.find(x => x.id === cid) || {}; return `<div class="share"><div>💬 ${esc(c.title || cid)}</div><div><button class="mini" data-openchat="${esc(cid)}">open</button></div></div>`; }).join('');
   showModal(`<div class="dkm" style="text-align:left;width:560px;max-width:86vw;margin:-18px -18px 8px;padding:16px;border-radius:12px 12px 0 0;max-height:72vh;overflow-y:auto">
     <div style="display:flex;align-items:center;gap:8px"><button class="mini" id="pj-back">‹ Projects</button><b>📁 ${esc(p.name)}</b><span style="flex:1"></span><span style="color:var(--mut);font-size:11px">shared home</span></div>
@@ -3202,6 +3210,7 @@ const renderProjects = async () => {
     renderProjects();
   });
   m.querySelectorAll('[data-openrun]').forEach(b => b.onclick = async e => { e.preventDefault(); const cid = b.dataset.openrun; if (!cid) return; closeModal(); pendingChat = cid; await loadSeedChats(); tryOpenPendingChat(); }); // open a past scheduled run from the Projects view
+  m.querySelectorAll('[data-delrun]').forEach(b => b.onclick = async () => { const id = b.dataset.delrun; if (!id || !window.confirm('Throw away this run?')) return; seedChats = seedChats.filter(s => s.id !== id); try { localStorage.removeItem(txKey(id)); } catch {} await pf('/seed-chats/delete', { id }); renderProjects(); }); // throw away one scheduled run
   m.querySelectorAll('[data-delagent]').forEach(b => b.onclick = async () => { const [pid, aid] = b.dataset.delagent.split('|'); await pf('/projects/agents/remove', { id: pid, agentId: aid }); renderProjects(); });
   m.querySelectorAll('[data-run]').forEach(b => b.onclick = async () => {
     const [pid, aid] = b.dataset.run.split('|'); const out = m.querySelector(`[data-out="${pid}|${aid}"]`);

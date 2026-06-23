@@ -1317,6 +1317,15 @@ const handler = async (req, res) => {
       if (!node || !node.isRoot) return json(res, 403, { error: 'no capability' });
       return json(res, 200, { chats: await readSeedChats() });
     }
+    // Throw away a single seed-chat (a scheduled-agent run, viewed from its timer agent's runs folder).
+    if (req.method === 'POST' && u.pathname === '/seed-chats/delete') {
+      const { cap, id } = await jsonBody(req);
+      const node = nodeFor(cap);
+      if (!node || !node.isRoot) return json(res, 403, { error: 'no capability' });
+      const seeds = await readSeedChats();
+      await writeSeedChats(seeds.filter(s => s && s.id !== String(id || '')));
+      return json(res, 200, { ok: true });
+    }
     // re-run an ingested chat's transcript under a CHANGED environment (system-prompt
     // override) → a new version (the trace-versioning harness, for regular chats).
     if (req.method === 'POST' && u.pathname === '/chat/rerun') {
