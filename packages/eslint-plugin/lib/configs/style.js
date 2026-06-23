@@ -16,7 +16,7 @@ module.exports = {
     'comma-dangle': ['error', 'always-multiline'],
 
     'consistent-return': 'error', // TS covers the intent; enforce consistently
-    'no-fallthrough': 'warn', // doesn't detect throws
+    'no-fallthrough': 'error', // promote: intentional fallthrough should use // falls through comment
 
     'arrow-body-style': 0,
     'prefer-arrow-callback': 0,
