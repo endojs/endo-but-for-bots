@@ -96,8 +96,9 @@ const declaredVerbs = () => {
 
 const mkRoot = () => {
   const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fa-endow-'));
-  // isolate auto-confirm: a fresh empty rules file, so destructive verbs ALWAYS
-  // propose during the test regardless of any "don't ask again" rules on the host.
+  // isolate auto-confirm AND the accepted-object inventory (OBJECTS_FILE leaks across the suite via process.env;
+  // a stray inventory object would otherwise add a live-presence manifest entry + fail the verb classification).
+  process.env.OBJECTS_FILE = path.join(outDir, 'objects.json');
   return makeFieldAgent({ outDir, baseUrl: 'http://test.invalid', autoConfirmFile: path.join(outDir, 'auto-confirm.json'), specialistsFile: path.join(outDir, 'specialists.json') });
 };
 const OUTBOX = '/home/dan/obsidian/vault/the field/TADA/outbox';

@@ -90,19 +90,10 @@ export const runAgentCode = async ({ toolbox, manifest, userText, history = [], 
   endow.myPersona = harden(String(persona || ''));
   apiLines.push('  const myPersona = <string: your operator-confirmed instructions>; const mySystemPrompt = <string: your FULL system prompt>. Read-only. Reference them, or pass a slice as context to a delegate — e.g. delegateTask({ prompt: `${myPersona.slice(0, 600)}\\n\\n<sub-task>`, ... }).');
   const api = apiLines.join('\n');
-  // ONE LAYER DEEP: document the agent's accepted-object INVENTORY in-prompt so it doesn't burn turns calling
-  // listObjects + describe just to learn what it already holds (the static tool API above is already inlined;
-  // the inventory was the missing piece). Best-effort + cheap (an in-memory read); never blocks the turn.
-  let inventoryDoc = '';
-  try {
-    if (toolbox.listObjects && typeof toolbox.listObjects.run === 'function') {
-      const inv = await toolbox.listObjects.run({});
-      const objs = (inv && Array.isArray(inv.objects)) ? inv.objects : [];
-      if (objs.length) inventoryDoc = 'YOUR INVENTORY — Endo objects you have ACCEPTED (invoke with `callObject(name, method, args)`):\n'
-        + objs.map(o => { const ms = (Array.isArray(o.methods) ? o.methods : []).map(m => typeof m === 'string' ? m : (m && m.name)).filter(Boolean); return `  • ${o.name} [${o.transport || 'http'}${o.callable === false ? ', not reachable' : ''}]${o.description ? ` — ${o.description}` : ''} · ${ms.length ? `methods: ${ms.join(', ')}` : 'methods unknown — callObject(name,"describe") to learn them'}`; }).join('\n')
-        + '\nThese are pre-documented one layer deep — call the listed methods directly; only callObject(name,"describe") when an object\'s methods are unknown.';
-    }
-  } catch { /* inventory docs are best-effort — never block the turn */ }
+  // Accepted INVENTORY objects are now FIRST-CLASS live in-scope objects in `api` above: the toolbox builds a
+  // manifest entry with methods[] for each callable accepted object, so the methods[] branch renders it as
+  // `const Name = <live object>; await Name.method(args)` — exactly like any other held Endo object. There is
+  // no separate "use callObject" inventory blurb; callObject survives only as the introspection escape hatch.
   const sys = [
     'You are a capable assistant operating in CODE MODE. You act by WRITING A JAVASCRIPT PROGRAM, not by naming a single tool.',
     `The current date and time is ${new Date().toLocaleString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZoneName: 'short' })}. Use it directly.`,
@@ -114,8 +105,7 @@ export const runAgentCode = async ({ toolbox, manifest, userText, history = [], 
     api,
     '',
     'These ARE tools. If you hold a reference to an object (a peer, a device, a contact, a service), it is live — call its methods directly. Unsure what an object offers? `methodsOf(obj)` returns its callable method names. Never say you "cannot" use something that is in scope — call it and read the result.',
-    'NEW / UNFAMILIAR OBJECTS ARE SELF-DOCUMENTING. If you have ACCEPTED an Endo object into your inventory (the `objects` power: listObjects shows them, callObject(name, method, args) invokes them) and you do not recognise it or do not know its methods, do NOT guess — FIRST call `callObject(name, "describe")` (or "help"), read the methods it reports, THEN call them. Every Endo object answers describe()/help(). The same goes for any live in-scope object via `methodsOf(obj)`. Introspect before deciding an object is unusable. BUT introspection has a definite end: if a call FAILS — the object is unreachable, or callObject returns an error (e.g. "FINAL", an unreachable peer, or an invite type not yet supported) — that IS the answer. Report it to the user plainly (what you tried, what it said) and move on. NEVER retry the same failing call, and NEVER re-accept the same invite, in a loop — a failed introspection is a result, not a reason to try again.',
-    inventoryDoc,
+    'OBJECTS YOU HOLD ARE LIVE — CALL THEM DIRECTLY. Every Endo object you have accepted appears ABOVE as a live in-scope object; invoke its methods by PROPERTY ACCESS, never by a method-name string: `await Kumavis.send("hi")`, `await Kumavis.inbox()`. Do NOT write `callObject("Kumavis", "send", ...)` for an object that is already in scope, and do NOT guess a bare global like `kumavis(...)` (that is not how you call it). The only time you reach for callObject(name, "describe") is to introspect a NEWLY accepted object whose methods are not yet listed — once described it becomes a live in-scope object too. methodsOf(obj) lists any held reference\'s methods. If a call FAILS (unreachable peer, an error result) that IS the answer: report what you tried + what it said and move on — never retry the same failing call or re-accept the same invite in a loop.',
     '',
     'ANSWER DIRECTLY WHEN YOU CAN — if the user asks a QUESTION you can answer from your own knowledge, and it needs no live/private data, no action, and nothing destructive, just reply on one line with `ANSWER: <your reply>` immediately. Do NOT write a program, call a tool, or delegate/spawn a sub-agent merely to answer something you already know — that adds a wasted cycle and spends credits. Reach for tools or delegation only when you genuinely need to ACT, to fetch data you do not have, or to do work that truly belongs elsewhere. Prefer answering over delegating.',
     'DO YOUR OWN TOOL WORK — do NOT delegate it. If a task is within YOUR tools, just call them and answer (e.g. "is the front door open?" = haFind/haState, then reply). Delegate or employ a sub-agent ONLY when (a) the scope is genuinely too big for one agent (multi-stage work better split across sub-agents or needing a bigger model), OR (b) it involves potentially destructive actions you want carried out by a confined, least-authority sub-agent. A simple read, lookup, or single-tool action is NEVER a reason to delegate.',

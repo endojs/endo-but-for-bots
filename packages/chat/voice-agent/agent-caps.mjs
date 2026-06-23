@@ -764,6 +764,39 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
   const isIrohCallable = o => o.transport === 'iroh' && /^iroh:\/\//i.test(String(o.address || ''));
   // A redeemed Endo peer (an accepted endo://…?type=invitation) is reachable as a mailbox via the peer-daemon.
   const isPeerCallable = o => o.transport === 'endo-peer' || o.peer === true;
+  // ── NATIVE-ENDO inventory: an accepted object is exposed to the agent as a LIVE in-scope object whose methods
+  //    it calls directly (await Kumavis.send('hi')) — NOT via callObject(name,'method',args) string dispatch.
+  //    routeObjectCall is the ONE internal router (the method string lives HERE, never in agent-authored code);
+  //    presenceFor wraps it into a real object; methodsOfObject documents the one-layer method set. callObject
+  //    remains only as the introspection/bootstrap escape hatch for objects whose methods aren't known yet. ──
+  const sanitizeIdent = s => { let n = String(s || '').replace(/[^A-Za-z0-9_$]/g, '_').replace(/^_+|_+$/g, ''); if (!n) n = 'obj'; if (/^[0-9]/.test(n)) n = `o_${n}`; return n.slice(0, 40); };
+  const methodsOfObject = o => {
+    if (o.transport === 'endo-peer' || o.peer) return [
+      { name: 'send', args: { text: 'string — your message' }, description: 'message this peer' },
+      { name: 'inbox', args: {}, description: 'read messages/replies they have sent you' },
+      { name: 'describe', args: {}, description: 'what this object is + its methods' }];
+    const ms = (Array.isArray(o.methods) ? o.methods : []).map(x => typeof x === 'string' ? x : (x && x.name)).filter(Boolean);
+    return (ms.length ? ms : ['describe']).map(n => ({ name: n, args: {}, description: '' }));
+  };
+  // Route one method call on an accepted object to its transport. Returns { ok, value } | { ok:false, error, terminal? }.
+  const routeObjectCall = async (o, method, argList) => {
+    const m = String(method || 'describe');
+    const args = Array.isArray(argList) ? argList : (argList == null ? [] : [argList]);
+    if (o.transport === 'endo-peer' || o.peer) {
+      const lm = m.toLowerCase();
+      if (lm === 'describe' || lm === 'help') return { ok: true, value: { kind: 'endo-peer', name: o.name, summary: 'A live Endo PEER (a mailbox): send(text) to message them; inbox() to read their replies.', methods: { send: 'send(text)', inbox: 'inbox()', describe: 'this' } } };
+      if (lm === 'send' || lm === 'message' || lm === 'tell') { const a = args[0]; const text = typeof a === 'string' ? a : (a && (a.text || a.message)) || ''; if (!text) return { ok: false, error: 'send needs a message string' }; try { await peerBridge.sendToPeer(o.name, String(text)); return { ok: true, value: `message sent to "${o.name}"` }; } catch (e) { return { ok: false, error: `couldn't message "${o.name}" over iroh: ${e.message}` }; } }
+      if (lm === 'inbox' || lm === 'messages' || lm === 'read' || lm === 'listmessages') { try { const r = await peerBridge.peerInbox({}); return { ok: true, value: r.messages }; } catch (e) { return { ok: false, error: `couldn't read the inbox for "${o.name}": ${e.message}` }; } }
+      return { ok: false, error: `"${o.name}" is a live peer (a mailbox): use send / inbox / describe.` };
+    }
+    if (isIrohCallable(o)) { const r = await dialIrohObject({ address: o.address, swissnum: o.swissnum, method: m, args }); return r.ok ? { ok: true, value: r.value } : { ok: false, error: `couldn't reach "${o.name}" over iroh: ${r.error}` }; }
+    if (/^endo:\/\//i.test(String(o.address || '')) || /type=invitation/i.test(String(o.address || ''))) return { ok: false, terminal: true, error: `"${o.name}" is an Endo daemon invitation stored before redemption support — ask the user to re-accept it to redeem it as a live peer. FINAL: report it, don't retry.` };
+    if (!isHttpCallable(o)) return { ok: false, terminal: true, error: `"${o.name}" is not callable (transport=${o.transport || 'none'}). FINAL — report it, don't retry.` };
+    try { return { ok: true, value: await rpcCall(o.origin, o.swissnum, m, args) }; } catch (e) { return { ok: false, error: e.message }; }
+  };
+  // A real in-scope object for an accepted inventory entry: each known method calls routeObjectCall. The method
+  // name is captured in the closure (here), so the agent writes `await Name.method(args)` with NO method string.
+  const presenceFor = o => { const obj = {}; for (const m of methodsOfObject(o)) obj[m.name] = harden(async (a) => { const r = await routeObjectCall(o, m.name, a === undefined ? [] : [a]); if (!r || r.ok === false) throw new Error((r && r.error) || 'call failed'); return r.value; }); return harden(obj); };
   const specSlug = name => `spec-${String(name || 'x').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 32) || 'x'}`;
   const findSpecialist = ref => { const r = String(ref || ''); return specialists.find(s => s.id === r || s.id === specSlug(r) || s.name.toLowerCase() === r.toLowerCase()); };
   const specNodes = new Map(); // id → its agent-node (built lazily / at boot)
@@ -833,38 +866,9 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
       run: async ({ name, method, args } = {}) => {
         const o = acceptedObjects.find(x => x.name === String(name || ''));
         if (!o) return { ok: false, error: `no object named "${name}" — see listObjects` };
-        // A REDEEMED Endo PEER (an accepted endo://…?type=invitation, dialed over iroh+captp0). This is a
-        // MAILBOX relationship, not a synchronous API: route to the peer-daemon sidecar (send/inbox).
-        if (o.transport === 'endo-peer' || o.peer) {
-          const m = String(method || 'describe').toLowerCase();
-          const argList = Array.isArray(args) ? args : (args == null ? [] : [args]);
-          if (m === 'describe' || m === 'help') {
-            return { ok: true, value: { kind: 'endo-peer', name: o.name, summary: `A live Endo PEER reached over iroh+captp0 (a redeemed invitation). This is a MAILBOX relationship — you message them and read their replies; it is NOT a synchronous method API.`, methods: { send: 'send(text) — message the peer', inbox: 'inbox() — read messages/replies they have sent you', describe: 'this' } } };
-          }
-          if (m === 'send' || m === 'message' || m === 'tell') {
-            if (!argList.length) return { ok: false, error: 'send needs a message string as its first argument' };
-            try { await peerBridge.sendToPeer(o.name, String(argList[0])); return { ok: true, value: `message sent to "${o.name}"` }; }
-            catch (e) { return { ok: false, error: `couldn't message "${o.name}" over iroh: ${e.message}` }; }
-          }
-          if (m === 'inbox' || m === 'messages' || m === 'read' || m === 'listmessages') {
-            try { const r = await peerBridge.peerInbox({}); return { ok: true, value: r.messages }; }
-            catch (e) { return { ok: false, error: `couldn't read the inbox for "${o.name}": ${e.message}` }; }
-          }
-          return { ok: false, error: `"${o.name}" is a live PEER (a mailbox), not a method API. Use callObject("${o.name}", "send", ["…"]) to message them, "inbox" to read replies, or "describe".` };
-        }
-        // iroh (dial-by-pubkey) ref → dial over the iroh QUIC transport.
-        if (isIrohCallable(o)) {
-          const r = await dialIrohObject({ address: o.address, swissnum: o.swissnum, method: String(method || 'describe'), args: Array.isArray(args) ? args : (args == null ? [] : [args]) });
-          return r.ok ? { ok: true, value: r.value } : { ok: false, error: `couldn't reach "${o.name}" over iroh: ${r.error}` };
-        }
-        // A stored endo://…?type=invitation that was accepted BEFORE redemption support (transport 'endo', never
-        // redeemed). Redemption IS supported now — but re-accepting is a user-confirmed action, so report it as a
-        // FINAL outcome (the agent must not loop): ask the user to re-accept it so it's redeemed as a live peer.
-        if (/^endo:\/\//i.test(String(o.address || '')) || /type=invitation/i.test(String(o.address || ''))) {
-          return { ok: false, terminal: true, error: `"${o.name}" is an Endo daemon invitation that was stored before redemption was wired in (so it isn't connected). Redeeming endo://…?type=invitation over iroh+captp0 IS supported now — ask the user to re-accept this invite (proposeAcceptInvite) and it will be redeemed as a live peer you can message. This is FINAL: report it and stop; do not retry callObject in a loop.` };
-        }
-        if (!isHttpCallable(o)) return { ok: false, terminal: true, error: `"${o.name}" is not callable (transport=${o.transport || 'none'}; no HTTP origin or dialable iroh:// address). This is FINAL — do NOT retry or re-accept it; report it to the user instead.` };
-        return { ok: true, value: await rpcCall(o.origin, o.swissnum, method, args) };
+        // Route to the object's transport. The method string lives in routeObjectCall (the ONE router) — NOT
+        // in agent code: a known object is normally a LIVE in-scope presence the agent calls as Name.method().
+        return routeObjectCall(o, method, args);
       } },
     // ⚠️ self-improvement: implement on an isolated worktree → independently verify → (flag-gated) auto-merge.
     improveSystem: { reversible: false, args: { goal: 'string — the concrete system improvement to implement', successCommand: 'string — OPTIONAL: the command that must pass to prove it (defaults to the full voice-agent test suite)' },
@@ -1175,6 +1179,20 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
         // chatId, so notify/push verbs can deep-link the originating chat)
         toolbox[v] = harden(b.abort ? { run: a => b.run(a, node.id, ctx), abort: b.abort } : { run: a => b.run(a, node.id, ctx) });
         manifest.push({ name: v, description: b.description, args: b.args, reversible: !!b.abort });
+      }
+    }
+    // NATIVE-ENDO inventory: bind each CALLABLE accepted object as a LIVE in-scope object, so the agent calls
+    // its methods directly (`await Kumavis.send('hi')`) instead of callObject(name,'method',args) string
+    // dispatch. codemode's methods[] branch renders it as `const Kumavis = <live object>; await Kumavis.send()`.
+    // Gated on the `objects` power; never shadows a verb name. (callObject remains as the introspection escape
+    // hatch for not-yet-described objects.)
+    if (powers.has('objects')) {
+      for (const o of acceptedObjects) {
+        if (!(isHttpCallable(o) || isIrohCallable(o) || isPeerCallable(o))) continue;
+        const nm = sanitizeIdent(o.name);
+        if (!nm || toolbox[nm]) continue; // never shadow a verb / collide
+        toolbox[nm] = presenceFor(o);
+        manifest.push({ name: nm, description: `${o.description || 'an accepted Endo object'}${(o.transport === 'endo-peer' || o.peer) ? ' — a live PEER you message' : ' — a live object you hold'}`, methods: methodsOfObject(o) });
       }
     }
     if (powers.has('delegate')) {
