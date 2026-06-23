@@ -28,20 +28,18 @@ The AWS deployment topology (VPC, ALB, Auto Scaling Group, Terraform IaC) lives 
 The MCP termination surface lives in [endo-gateway-mcp](endo-gateway-mcp.md).
 What this design adds is the **publishing path**: the calendar-aware sequence that composes those substrates into a marketplace listing, the irreversible commitments that listing pins, and the open questions the maintainer must close before the first submission.
 
-This design's primary research base is the scout reconnaissance `journal/entries/2026/06/17/203500Z-result-scout-6224bd.md` and the scholar shelf at `journal/library/sources/web--{aws,azure,gcp}-marketplace-*.md`, both dispatched 2026-06-17.
-
 ## Background
 
 Five prior pieces of work frame the proposal.
 
 **Strategy.**
-v11 §3.2 names the MVP shape: "a buyer deploys to their own cloud account; we are the publisher; the user is the operator."
+The MVP shape is operator-deployed to the operator's own cloud account, with the project as publisher and the operator as the running party.
 The self-custodial framing rules out the SaaS product type for O1; it ratifies the AMI / VHD / GCE-image shape on each cloud.
-v11 §3.2 also names the demonstrative service adapters (Gmail, Slack, generic OAuth-2, GitHub) and OAuth as the operator-identity bonding mechanism.
-The MCP+OAuth bridge is what the strategy names "the brief window" before a platform vendor builds capability attenuation into MCP or a competitor claims the category.
+The demonstrative service adapters are Gmail, Slack, generic OAuth-2, and GitHub, with OAuth as the operator-identity bonding mechanism.
+The MCP+OAuth bridge is the brief opening before a platform vendor builds capability attenuation into MCP or a competitor claims the category.
 
 **Resequencing.**
-The 2026-06-11 resequencing draft (`journal/projects/endo/drafts/resequencing-2026-06.md`) re-derived the O1 critical path against the actual dependency graph and named twelve design gaps that block O1.
+The O1 critical path, re-derived against the actual dependency graph, surfaces twelve design gaps that block O1.
 Three of those gaps are decisive for marketplace publishing: **G-tls-firstboot** (the gateway refuses TLS by design, so a marketplace appliance must bundle a reverse proxy and obtain a certificate autonomously at first boot), **G-firstboot** (AWS forbids hardcoded secrets, so the operator's initial bearer must be generated at first boot and delivered out-of-band), and **G-resource-classes** (AWS MeterUsage dimension names are locked after publication, so the metering taxonomy must be authored and panel-reviewed before the first listing).
 
 **Gateway substrate.**
@@ -54,9 +52,11 @@ These three PRs compose into "an operator can install and run the gateway as a s
 The `design/gateway-packaging-aws-stack` branch (PR #356) carries three Proposed designs: [gateway-packaging-ci](gateway-packaging-ci.md) (build + sign + host the OS packages from CI), [gateway-aws-deployment](gateway-aws-deployment.md) (the VPC + ALB + ASG topology for a multi-AZ HA deployment), and `gateway-aws-attuned` (AWS-native options for S3 CAS, Nitro Enclaves, DynamoDB state).
 These are stacked siblings of PR #343 (gateway-package); they cover the *deployment* layer one level above what the OS packages provide.
 
-**Reconnaissance.**
-The scout report (`journal/entries/2026/06/17/203500Z-result-scout-6224bd.md`) maps the four AWS Marketplace product shapes (Single AMI, AMI+CFT, Container, SaaS) against the Capability Bridge's architecture and recommends single-AMI for O1 launch, AMI+CFT as a graduation step, container as a second listing, SaaS only for O2 (the Hub).
-The scholar shelf (`journal/entries/2026/06/17/204534Z-result-scholar-302d34.md`) shelves canonical Azure and GCP marketplace material plus the AWS fee table (20% server fee, 3% SaaS fee; CPPO +0.5% uplift; South Korea +1% regional uplift) and the SaaS identity-bonding APIs.
+**Marketplace product shapes.**
+AWS Marketplace offers four product shapes (Single AMI, AMI+CFT, Container, SaaS).
+Against the Capability Bridge's architecture, single-AMI fits O1 launch, AMI+CFT fits a graduation step, container is a natural second listing, and SaaS is reserved for O2 (the Hub).
+Azure and GCP offer functionally analogous shapes.
+AWS marketplace fees are 20% server fee on AMI/AMI+CFT revenue and 3% on SaaS revenue, with a +0.5% CPPO uplift on Channel Partner Private Offers and a +1% South Korea regional uplift (effective 2025-04-01); Azure and GCP have their own metering and SaaS identity-bonding APIs covered later in this design.
 
 ## Architectural Shape
 
@@ -148,7 +148,7 @@ Steps within a phase parallelize where the dependency graph allows; the phase-le
 **Locked (irreversible decisions at submission):**
 
 - **MeterUsage dimension names**, 15-character alphanumeric + underscore each, up to 24 dimensions, cannot be renamed or removed after publication.
-  Recommended starting set per the four resource classes the resequencing draft §3.1 names: `computrons` (compute), `cogitrons` (inference), `bytes_stored` (storage), `bytes_network` (network).
+  Recommended starting set, drawn from the four natural resource classes the gateway already accounts for: `computrons` (compute), `cogitrons` (inference), `bytes_stored` (storage), `bytes_network` (network).
   All four fit the 15-character cap (max length 12).
   `gateway-resource-classes` is the design that ratifies or revises these names; this design recommends them as a starting point.
 - **Custom Metering as the AWS billing model**.
@@ -182,7 +182,7 @@ Steps within a phase parallelize where the dependency graph allows; the phase-le
 - `packaging/gcp-gce/`: a Packer build emitting a GCE image with the Compute Engine license attachment, that installs the same `.deb` and wires the GCP Service Control adapter.
 - New design files:
   - `designs/gateway-state-custody.md` (G-state-custody).
-    Now critical for the multi-cloud "credible exit" claim per v11 §4.3.
+    Critical for the multi-cloud "credible exit" claim: an operator who moves between clouds must be able to take their state with them.
   - `designs/gateway-operator-observability.md` (G-observability).
     Operator-facing metrics that are structurally incapable of being member surveillance.
 
@@ -223,7 +223,7 @@ Rotation is a TUF-defined ceremony; not "irreversible" in the marketplace sense,
 **Goal:** the Hub is listed as a SaaS product on each cloud, alongside the per-cloud Bridge image listings.
 The Hub is a federated, multi-tenant variant of the Gateway; the Bridge listings continue serving self-custodial operators in parallel.
 
-**Built:** the resequencing draft's M7 (proposed) milestone in full, including `endo-gateway` Open Question 2 (the virtual-users mode), G-hub-invitation, G-multitenancy, G-hub-economics, G-abuse-moderation, G-operator-liability.
+**Built:** the Hub milestone (M7) in full, including `endo-gateway` Open Question 2 (the virtual-users mode), G-hub-invitation, G-multitenancy, G-hub-economics, G-abuse-moderation, G-operator-liability.
 
 **Reviewed:** per-cloud SaaS Fulfillment API integrations.
 
@@ -288,7 +288,7 @@ The recommended pattern is **vendor-delegated subdomain with pre-provisioned CNA
 4. Caddy renews the certificate every 60 days (Let's Encrypt's recommended renewal window); the provisioning API stays reachable for the lifetime of every deployed node.
 5. The operator's marketplace listing page surfaces the `<node-id>.nodes.endo.example.com` URL post-launch.
 
-**The non-custodian-spirit contradiction** named in the scout report §7 Open Question 5: vendor-delegated DNS requires the publisher to run a DNS provisioning service for every issued node for that node's lifetime, which contradicts v11's "we are not the custodian" framing.
+**The non-custodian-spirit contradiction**: vendor-delegated DNS requires the publisher to run a DNS provisioning service for every issued node for that node's lifetime, which contradicts the project's "we are not the custodian" posture.
 This design's stance is to **accept the contradiction** (see *Decision 5* below) because the alternative TOFU / bring-your-own-domain patterns degrade the "click deploy and get a running node" UX to a point that undermines the strategy's MVP positioning.
 G-tls-firstboot's design dispatch should surface a bring-your-own-domain mode as an opt-in alternative for operators who want to avoid the vendor's DNS commitment; the maintainer's call is whether the opt-in alternative is required for first listing or a v1.1 fast-follow.
 
@@ -303,7 +303,7 @@ A working sequence the publisher follows once the AMI is built and the gap PRs a
 2. **APN (AWS Partner Network) enrollment** (prerequisite for some private offer features and CPPO).
    Free for the Public tier; required if any commercial pricing variant is used.
 3. **AMI hardening verification.**
-   The Packer template's hardening steps, named per the scout report §1.1, all pass:
+   The Packer template's hardening steps all pass:
    - HVM virtualization, x86-64 or ARM64, EBS-backed, unencrypted EBS snapshots, source AMI in `us-east-1`, no per-region variants in the source.
    - No hardcoded secrets, no pre-seeded SSH keys, no system / service passwords (even hashed), no private keys, no credentials.
    - `sshd_config` sets `PasswordAuthentication no`.
@@ -316,14 +316,14 @@ A working sequence the publisher follows once the AMI is built and the gap PRs a
    Pricing per dimension is set at this step; future price changes require 90-day notice.
 6. **Submission via Build tab.**
    Initial publication is 7-10 business days when no errors are surfaced.
-   Calendar tax is 2-4 weeks for the first listing per the scout report §1.1.
+   Calendar tax is 2-4 weeks for the first listing.
 7. **Limited state.**
    Visible only to the publisher and an optional allow-listed test set.
    This design recommends a 7-day limited-state validation pass before requesting public publication.
 8. **Public publication.**
    "Request Update Visibility"; AWS Seller Operations reviews and clones the AMI per-region.
 
-**Fees applicable to the AMI shape** (per the scholar's fee-table source):
+**Fees applicable to the AMI shape:**
 
 - 20% AWS server fee on AMI revenue (highest of the three product-type fee rates; SaaS is 3%, Data Exchange is 3%).
 - 0.5% CPPO uplift on Channel Partner Private Offers; not applicable to public listings.
@@ -337,7 +337,7 @@ A working sequence the publisher follows once the AMI is built and the gap PRs a
 3. Buyer clicks "Launch via CloudFormation" or "Launch with EC2 Console"; an EC2 instance launches from the cloned-to-buyer-region AMI.
 4. Instance boots; `endo-firstboot.service` runs once.
 5. First-boot ceremony generates the operator's root bearer, writes it to the AWS instance console output (per G-firstboot's delivery channel decision), and provisions the Caddy TLS certificate via the vendor-delegated DNS API.
-6. Buyer retrieves the bearer from the AWS console output, navigates to `https://<node-id>.nodes.endo.example.com`, authenticates with the bearer in the Chat UI, performs the OAuth bond (deferred to v1.1 per the resequencing draft §1.4), creates a Lal agent, retrieves the MCP configuration block per [endo-gateway-mcp](endo-gateway-mcp.md) § Affordance 2, and pastes the block into their MCP client.
+6. Buyer retrieves the bearer from the AWS console output, navigates to `https://<node-id>.nodes.endo.example.com`, authenticates with the bearer in the Chat UI, performs the OAuth bond (deferred to v1.1), creates a Lal agent, retrieves the MCP configuration block per [endo-gateway-mcp](endo-gateway-mcp.md) § Affordance 2, and pastes the block into their MCP client.
 7. The MCP client (Claude Desktop, Cursor, etc.) connects to the Bridge over HTTPS; the agent runs against the GitHub OAuth adapter and demonstrates the capability-attenuation value proposition.
 
 ## Cross-design coordination
@@ -346,18 +346,18 @@ The four named design gaps from PR #400 (the grooming pass that introduced them)
 
 | Gap | Blocker for AWS submission? | This design's stance |
 |-----|------------------------------|----------------------|
-| `gateway-oauth-bonding` | **No.** | Ship MVP on bearer-token auth per the resequencing draft §1.4; OAuth bonding is a v1.1 follow-up. The Chat-side affordance from [endo-gateway-mcp](endo-gateway-mcp.md) gives the operator the bearer; OAuth bonding makes the future-bearer-retrieval-after-loss flow tractable but is not a launch requirement. |
+| `gateway-oauth-bonding` | **No.** | Ship MVP on bearer-token auth; OAuth bonding is a v1.1 follow-up. The Chat-side affordance from [endo-gateway-mcp](endo-gateway-mcp.md) gives the operator the bearer; OAuth bonding makes the future-bearer-retrieval-after-loss flow tractable but is not a launch requirement. |
 | `gateway-key-recovery` | **No.** | Recovery depends on OAuth bonding being implemented; both ship in v1.1. For O1.a, key loss means the operator launches a fresh instance and re-bonds; this is acceptable for an MVP because state custody (G-state-custody) is itself a v1.1 deliverable. |
 | `gateway-stripe-adapter` | **No (different billing channel).** | The AWS AMI bills via MeterUsage, not Stripe. Stripe is the self-host billing channel and is independent of the marketplace listing. The Stripe adapter can ship on any schedule that suits the self-host customer base. |
 | `gateway-resource-classes` | **Yes (irreversible decision).** | The MeterUsage dimension names are locked at publication. `gateway-resource-classes` must be authored, panel-reviewed, and merged to `llm` before the AWS submission. This design recommends the four-class starting set (`computrons`, `cogitrons`, `bytes_stored`, `bytes_network`); the gap design ratifies or revises. |
 
-The three resequencing-draft gaps that are also marketplace blockers, added to the table above:
+The three additional gaps from the resequenced O1 critical path that are also marketplace blockers, added to the table above:
 
 | Gap | Blocker for AWS submission? | This design's stance |
 |-----|------------------------------|----------------------|
 | `gateway-first-boot-ceremony` (G-firstboot) | **Yes.** | AWS forbids hardcoded secrets; the operator's initial bearer must be generated at first boot and delivered out-of-band. The design must specify the delivery channel (instance console output / serial console / one-time token via instance tags). |
-| `gateway-bundled-tls` (G-tls-firstboot) | **Yes.** | The gateway refuses TLS by design; a marketplace AMI must terminate TLS inside the image. Pattern 1 (vendor-delegated CNAME) is recommended per the resequencing draft; see *Decision 5* below. |
-| `gateway-marketplace-listing` (G-marketplace) | **Yes (this design subsumes it).** | This design *is* the marketplace-listing design for AWS. G-marketplace as named in the resequencing draft was a placeholder for "what does an AWS submission require"; this design fills that placeholder for AWS specifically. Azure and GCP marketplace-listing designs are O1.b siblings. |
+| `gateway-bundled-tls` (G-tls-firstboot) | **Yes.** | The gateway refuses TLS by design; a marketplace AMI must terminate TLS inside the image. Pattern 1 (vendor-delegated CNAME) is recommended; see *Decision 5* below. |
+| `gateway-marketplace-listing` (G-marketplace) | **Yes (this design subsumes it).** | This design *is* the marketplace-listing design for AWS. G-marketplace was originally a placeholder for "what does an AWS submission require"; this design fills that placeholder for AWS specifically. Azure and GCP marketplace-listing designs are O1.b siblings. |
 
 ## Decision Points
 
@@ -365,11 +365,10 @@ The five decisions this design takes a stance on; the maintainer ratifies or vet
 
 ### Decision 1: Single-AMI at launch, AMI+CFT as graduation
 
-**Stance:** ratify the scout's recommendation.
-The first listing is a Single-AMI product (one EC2 instance per buyer subscription, no surrounding AWS resources).
+**Stance:** the first listing is a Single-AMI product (one EC2 instance per buyer subscription, no surrounding AWS resources).
 [gateway-aws-deployment](gateway-aws-deployment.md)'s ALB + ASG + Terraform topology pulls into the listing as an AMI+CFT graduation in O1.b or later, not at launch.
 
-**Reasoning:** the single-AMI shape is the simplest review pipeline, has the lowest buyer-side prerequisites, and maps directly onto v11's "click 'deploy' and receive a running Endo agent sandbox in their own cloud account."
+**Reasoning:** the single-AMI shape is the simplest review pipeline, has the lowest buyer-side prerequisites, and maps directly onto the buyer experience the strategy targets: click "deploy" and receive a running Endo agent sandbox in their own cloud account.
 The AMI+CFT shape becomes attractive once the Bridge wants ALB / IAM / S3 / DynamoDB provisioned alongside, which is post-MVP scope.
 
 ### Decision 2: Custom Metering at launch, not Paid Hourly
@@ -377,7 +376,7 @@ The AMI+CFT shape becomes attractive once the Bridge wants ALB / IAM / S3 / Dyna
 **Stance:** ratify Custom Metering with the four resource-class dimensions named above.
 The publisher commits to the dimension-name lock at first publication.
 
-**Reasoning:** Paid Hourly is simpler and reversible but does not allow per-cogitron or per-byte-network billing, which is the v11 §3.2 inference-aware billing posture.
+**Reasoning:** Paid Hourly is simpler and reversible but does not allow per-cogitron or per-byte-network billing, and the strategy's inference-aware billing posture treats those dimensions as first-class.
 Shipping on Paid Hourly first and adding Custom Metering as a follow-up listing means publishing the product twice through the 2-4 week review pipeline; shipping Custom Metering from day one with conservative dimensions means one review pipeline and a billing model that matches the strategic posture.
 The 15-character alphanumeric dimension-name limit is the binding constraint; all four recommended dimensions fit (max 12 characters).
 `gateway-resource-classes` is the design that finalizes the names.
@@ -387,11 +386,10 @@ Reason: doubles the listing-review calendar tax and ships a billing model out of
 
 ### Decision 3: GitHub as the first service adapter
 
-**Stance:** ratify the scout's recommendation.
-The first MVP service adapter is GitHub OAuth, bundled in the AMI.
+**Stance:** the first MVP service adapter is GitHub OAuth, bundled in the AMI.
 
-**Reasoning:** v11 §3.2 names GitHub as "attractive because, despite having fine-grained tokens, it still lacks sufficiently narrow roles."
-That framing pre-positions the marketing narrative: the Capability Bridge gives an agent narrower-than-GitHub-tokens authority over a specific GitHub repository.
+**Reasoning:** GitHub is an attractive demo because, despite having fine-grained tokens, it still lacks sufficiently narrow roles for an agent acting on a single repository.
+That gap pre-positions the marketing narrative: the Capability Bridge gives an agent narrower-than-GitHub-tokens authority over a specific GitHub repository.
 Gmail and Slack are more familiar to a general audience but require Google / Slack OAuth client registration that adds a calendar-tax to the MVP submission.
 GitHub OAuth client registration is one form and one approval; Gmail and Slack ship as v1.1 second-and-third adapters.
 
@@ -412,7 +410,7 @@ Reason: combines personal liability with commercial transactions in a way that i
 
 ### Decision 5: Accept the non-custodian-spirit contradiction for vendor-delegated DNS
 
-**Stance:** the publisher commits to running a DNS provisioning service for every issued node for that node's lifetime, accepting that this contradicts v11's "we are not the custodian" framing in spirit.
+**Stance:** the publisher commits to running a DNS provisioning service for every issued node for that node's lifetime, accepting that this contradicts the project's "we are not the custodian" framing in spirit.
 G-tls-firstboot's design dispatch should surface a bring-your-own-domain mode as an opt-in alternative for operators who want to avoid the vendor's DNS commitment.
 
 **Reasoning:** the alternative patterns (TOFU self-signed, operator-brings-domain DNS-01) degrade the "click deploy and get a running node" UX:
@@ -421,44 +419,39 @@ G-tls-firstboot's design dispatch should surface a bring-your-own-domain mode as
 - Operator-brings-domain DNS-01 requires the operator to own a domain and configure DNS provider credentials at first boot, which is a 30-minute commitment incompatible with the MVP positioning.
 
 The custodian-spirit contradiction is narrow: the publisher does not custody the *user's data or capabilities* (the gateway's state, formula store, CAS, bearer, OAuth bondings are all in the operator's AWS account).
-The publisher custodies *DNS certificate issuance* for the node's vendor-delegated subdomain, which is a narrower commitment than v11's "self-custodial" framing precludes.
+The publisher custodies *DNS certificate issuance* for the node's vendor-delegated subdomain, which is a narrower commitment than the project's "self-custodial" framing precludes.
 
 A future enhancement is *operator-portable nodes*: the operator brings their own domain post-launch and the node transitions from `<node-id>.nodes.endo.example.com` to `<operator-domain>`.
 This is out of scope for the first listing and is a v1.1+ design.
 
 **Considered and rejected:** bring-your-own-domain as the only first-listing TLS pattern.
-Reason: degrades the MVP positioning to operators who already own a domain and know how to configure DNS-01 ACME, which is a small fraction of the v11 §3.1 target audience.
+Reason: degrades the MVP positioning to operators who already own a domain and know how to configure DNS-01 ACME, which is a small fraction of the target audience.
 
 ## Open Questions for the maintainer
 
-The seven open questions from the scout report §7 carry forward as is, with this design's recommended answers attached.
+The open questions surveyed during drafting carry forward, with this design's recommended answers attached.
 The maintainer's call on each is recorded under the question, or "defer to G-X" when the answer flows from a sibling design dispatch.
 
-1. **Companion scholar gap (resolved).** The scholar dispatch `302d34` did return after the scout finished its report and shelved the Azure + GCP material; this design treats both sections of the scout report as scholar-grounded for the purposes of the sequencing claims.
-   No maintainer action.
-2. **SaaS vs AMI as the MVP shape.** This design recommends AMI; v11 §3.2 and the resequencing draft align.
-3. **Single-AMI vs AMI+CFT at launch.** See *Decision 1* above; recommends single-AMI, with AMI+CFT as O1.b graduation.
-4. **MeterUsage dimensions: lock now or defer Custom Metering?** See *Decision 2* above; recommends Custom Metering with four conservative dimensions.
-5. **Vendor-delegated DNS for TLS first-boot: operational commitment.** See *Decision 5* above; recommends accept-the-contradiction with a future bring-your-own-domain opt-in.
-6. **Marketplace listing as the "vendor" identity.** See *Decision 4* above; recommends commercial entity, distinct from the maintainer's personal identity.
-7. **Service-adapter choice for MVP demo clarity.** See *Decision 3* above; recommends GitHub for first adapter.
-
-Additional open questions surfaced during drafting:
-
-8. **First-boot bearer delivery channel.** AWS instance console output is the most operator-accessible channel (the buyer can read it from the AWS Console without SSH access).
+1. **SaaS vs AMI as the MVP shape.** This design recommends AMI; the strategy and the resequenced O1 critical path both rule out SaaS for O1.
+2. **Single-AMI vs AMI+CFT at launch.** See *Decision 1* above; recommends single-AMI, with AMI+CFT as O1.b graduation.
+3. **MeterUsage dimensions: lock now or defer Custom Metering?** See *Decision 2* above; recommends Custom Metering with four conservative dimensions.
+4. **Vendor-delegated DNS for TLS first-boot: operational commitment.** See *Decision 5* above; recommends accept-the-contradiction with a future bring-your-own-domain opt-in.
+5. **Marketplace listing as the "vendor" identity.** See *Decision 4* above; recommends commercial entity, distinct from the maintainer's personal identity.
+6. **Service-adapter choice for MVP demo clarity.** See *Decision 3* above; recommends GitHub for first adapter.
+7. **First-boot bearer delivery channel.** AWS instance console output is the most operator-accessible channel (the buyer can read it from the AWS Console without SSH access).
    Serial console requires SSH key configuration that contradicts AMI hardening.
    One-time token via instance tags requires the buyer to read tags from the EC2 console.
    This design recommends *AWS instance console output* as the default channel; G-firstboot's design dispatch ratifies or revises and specifies the exact write mechanism (`logger -p user.info "...token..." > /dev/console` vs. `echo "..." > /dev/ttyS0`).
-9. **Limited-state validation duration.** The 7-day limited-state validation pass named in the submission checklist above is a recommendation, not an AWS-imposed minimum.
+8. **Limited-state validation duration.** The 7-day limited-state validation pass named in the submission checklist above is a recommendation, not an AWS-imposed minimum.
    A shorter validation (24-48 hours) is acceptable if the publisher is confident; a longer validation reduces the risk of post-publication issues.
    Maintainer's call.
-10. **Continuous-compliance threshold.** AMIs older than 2 years are disallowed in new subscriptions.
-    Until G-upgrade ships, the publisher must re-submit the AMI through the 2-4 week review pipeline before the AMI hits 2 years.
-    A 12-month cadence (recommended in the *Phase O1.a* deferred-items list) gives a 12-month safety margin.
-    Maintainer's call on cadence.
-11. **APN enrollment timing.** APN enrollment is a prerequisite for some private offer features and for CPPO; the first public AMI listing does not require it.
+9. **Continuous-compliance threshold.** AMIs older than 2 years are disallowed in new subscriptions.
+   Until G-upgrade ships, the publisher must re-submit the AMI through the 2-4 week review pipeline before the AMI hits 2 years.
+   A 12-month cadence (recommended in the *Phase O1.a* deferred-items list) gives a 12-month safety margin.
+   Maintainer's call on cadence.
+10. **APN enrollment timing.** APN enrollment is a prerequisite for some private offer features and for CPPO; the first public AMI listing does not require it.
     Recommend enrolling in APN during O1.a regardless (free, opens future commercial options), but flagging in case the commercial-entity registration timeline pushes APN enrollment to O1.b.
-12. **AMI architecture: ARM64 only or x86-64 + ARM64?** [gateway-aws-deployment](gateway-aws-deployment.md) names `c7g.large` (ARM Graviton) as the first cut.
+11. **AMI architecture: ARM64 only or x86-64 + ARM64?** [gateway-aws-deployment](gateway-aws-deployment.md) names `c7g.large` (ARM Graviton) as the first cut.
     Marketplace listings can support multiple architectures.
     Shipping ARM64 only constrains the buyer audience (some buyers are AWS-x86-only environments).
     Shipping both architectures doubles the Packer build and AMI scanner pass per submission.
@@ -468,8 +461,8 @@ Additional open questions surfaced during drafting:
 
 | Design | Relationship |
 |--------|--------------|
-| [endo-gateway-mcp](endo-gateway-mcp.md) | The MCP termination surface that is the first user-facing value proposition of the AMI. P1 in the resequencing draft. |
-| [gateway-aws-deployment](gateway-aws-deployment.md) | The deployment topology that graduates the single-AMI listing into AMI+CFT in O1.b or later. Lives on PR #356's branch; this design treats it as Proposed-on-branch and recommends merging to `llm` per the resequencing draft §5 open decision 7. |
+| [endo-gateway-mcp](endo-gateway-mcp.md) | The MCP termination surface that is the first user-facing value proposition of the AMI. First priority on the O1 critical path. |
+| [gateway-aws-deployment](gateway-aws-deployment.md) | The deployment topology that graduates the single-AMI listing into AMI+CFT in O1.b or later. Lives on PR #356's branch; this design treats it as Proposed-on-branch and recommends merging to `llm` as a precondition for the graduation step. |
 | [gateway-packaging-ci](gateway-packaging-ci.md) | The CI workflow that builds the `.deb` the AMI installs. Lives on PR #356's branch; same merge-to-`llm` open decision. |
 | [gateway-bearer-token-auth](gateway-bearer-token-auth.md) | The bearer-token model the MVP ships on; OAuth bonding is a v1.1 follow-up. |
 | `gateway-first-boot-ceremony` (G-firstboot, to be authored) | The first-boot bearer-delivery design; a blocker for AWS submission. |
@@ -487,7 +480,7 @@ Additional open questions surfaced during drafting:
 | [endo-gateway-mcp](endo-gateway-mcp.md) | Updates the MCP endpoint to bind on `127.0.0.1:3469` behind the bundled Caddy proxy on `:443`; no design text change required (the design already names the reverse-proxy assumption). |
 | [gateway-bearer-token-auth](gateway-bearer-token-auth.md) | The MVP ships on this auth model; OAuth bonding is a v1.1 layer on top. No structural change. |
 | [daemon-docker-selfhost](daemon-docker-selfhost.md) | The container product type is the natural second listing (post-AMI); the self-host shape this design produces also supports the container listing in O1.b or later. |
-| [familiar-release](familiar-release.md) | The desktop release flow is orthogonal to the marketplace listing; mentioning for completeness because the resequencing draft §discrepancy 3 named it as absent-from-`llm`. |
+| [familiar-release](familiar-release.md) | The desktop release flow is orthogonal to the marketplace listing; mentioning for completeness because it is one of the absent-from-`llm` designs the publishing path does not depend on. |
 
 ## Prompt
 
