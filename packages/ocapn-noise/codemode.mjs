@@ -151,6 +151,7 @@ export const runAgentCode = async ({ toolbox, manifest, userText, history = [], 
   // legitimate long tasks are never cut off by an arbitrary count; spend is the real budget.
   let lastError = '';
   let repeatErr = 0; // consecutive identical throws → the agent is wedged; break out and REPORT it
+  let emptyRetries = 0; // the model returned NOTHING (no program, no answer) → nudge it to act, then report honestly
   for (;;) {
     if (signal?.aborted) return cancelled();
     const out = await invoke(messages, model);
@@ -165,9 +166,22 @@ export const runAgentCode = async ({ toolbox, manifest, userText, history = [], 
     if (signal?.aborted) return cancelled();
     const reply = (out && out.text) || '';
     const code = extractCode(reply);
-    if (!code) { // no program → treat as the final answer; if it's empty, explain the stall instead of going silent
+    if (!code) { // no program → treat as the final answer; if it's empty, the MODEL produced nothing
       let answer = reply.replace(/^ANSWER:\s*/i, '').trim();
-      if (!answer) answer = stallMessage(lastError);
+      if (!answer) {
+        // The model returned NOTHING — no program, no answer. This is a MODEL stall (common with the local
+        // default on a multi-step action / follow-up), NOT the user being unclear. NUDGE it to use the
+        // conversation context + act (or ask a SPECIFIC question), retrying a couple of times; only then
+        // report — honestly (a model issue + the stronger-model lever), never the misleading "tell me more".
+        if (emptyRetries < 2 && !signal?.aborted) {
+          emptyRetries += 1;
+          onStep({ kind: 'tool-error', name: 'model', error: 'empty response — nudging to use context + act' });
+          messages.push({ role: 'user', content: 'You returned an empty response. Use the conversation ABOVE for context (e.g. a device/object/peer already identified earlier in this chat — refer to it directly). Then either WRITE a ```js program that uses your tools to DO the task, or ask ONE specific clarifying question, or reply `ANSWER: <text>`. Do not return nothing.' });
+          continue;
+        }
+        answer = lastError ? stallMessage(lastError)
+          : 'The model returned an empty response for this — that usually means the current model (the local default) stalled on a multi-step request, not that anything is unclear. Try again, or switch to a stronger model (the Claude options in the header) for this kind of follow-up action.';
+      }
       onStep({ kind: 'answer', text: answer });
       return harden({ answer, toolsUsed: used });
     }
