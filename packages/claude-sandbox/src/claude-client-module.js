@@ -73,13 +73,37 @@ const CREDENTIAL_ENV_VARS = harden({
 });
 
 /**
- * Capture the caplet's cancellation promise from whatever shape the
- * daemon hands us as `context`: a context presence exposes
- * `whenCancelled()`; an in-process context exposes a `cancelled`
- * promise; `null`/absent means "no teardown signal".
+ * Create a cancellation context kit: an in-process passable context and
+ * a `cancel` function that triggers it. The context exposes
+ * `whenCancelled()` — the same method the daemon's live context presence
+ * exposes — so tests and callers can use one consistent shape.
  *
- * Note: we return the promise *captured into a local*, not via an
- * `async` return — an `async` return would adopt (flatten) the
+ * @returns {{ context: { whenCancelled: () => Promise<never> }, cancel: (reason?: Error) => void }}
+ */
+export const makeCancellationKit = () => {
+  /** @type {(reason: Error) => void} */
+  let rejectCancelled;
+  const cancelled = /** @type {Promise<never>} */ (
+    new Promise((_resolve, reject) => {
+      rejectCancelled = reject;
+    })
+  );
+  // Suppress unhandled-rejection noise: the promise is meant to stay pending
+  // until cancel() is called, after which callers drain it.
+  cancelled.catch(() => {});
+  const cancel = (reason = new Error('Cancelled')) => rejectCancelled(reason);
+  const context = harden({ whenCancelled: () => cancelled });
+  return harden({ context, cancel });
+};
+harden(makeCancellationKit);
+
+/**
+ * Capture the caplet's cancellation promise from the daemon-context
+ * passable shape. A context presence exposes `whenCancelled()`.
+ * `null`/absent means no teardown signal.
+ *
+ * Note: we return the promise captured into a local, not via an
+ * `async` return. An `async` return would adopt (flatten) the
  * cancellation promise, so the caller would hang until cancellation
  * instead of receiving the still-pending promise to subscribe to.
  *
@@ -90,9 +114,6 @@ const cancellationPromiseOf = resolvedContext => {
   if (!resolvedContext) return null;
   if (typeof resolvedContext.whenCancelled === 'function') {
     return E(resolvedContext).whenCancelled();
-  }
-  if (resolvedContext.cancelled) {
-    return resolvedContext.cancelled;
   }
   return null;
 };

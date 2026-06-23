@@ -5,7 +5,7 @@
 import '@endo/init';
 import test from 'ava';
 
-import { make } from '../src/claude-client-module.js';
+import { make, makeCancellationKit } from '../src/claude-client-module.js';
 
 // The module's `make(powers, _context, { env })` runs with `powers`
 // being the `@agent` host authority. Provisioning (mount → provideMount
@@ -42,6 +42,10 @@ const makeFakeSlice = () => {
  * Build a mock host agent (`@agent`) plus the caps it resolves by pet
  * name. `sliceBehavior` lets a test make `sandboxFactory.make` throw to
  * exercise the partial-failure cleanup path.
+ * @param root0
+ * @param root0.credCap
+ * @param root0.sliceBehavior
+ * @param root0.filesystem
  */
 const makeMockHost = ({
   credCap = null,
@@ -274,12 +278,7 @@ const drain = async reader => {
 
 test('cancellation tears down the provisioned session', async t => {
   const host = makeMockHost();
-  let cancel;
-  const cancelled = new Promise((_resolve, reject) => {
-    cancel = reject;
-  });
-  // `whenCancelled()` rejects with the cancellation reason.
-  const context = { whenCancelled: () => cancelled };
+  const { context, cancel } = makeCancellationKit();
   const client = make(host.powers, context, { env: baseEnv() });
 
   await drain(await client.send('hello')); // provision the slice + mount
@@ -294,11 +293,7 @@ test('cancellation tears down the provisioned session', async t => {
 
 test('cancellation before any use disposes nothing', async t => {
   const host = makeMockHost();
-  let cancel;
-  const cancelled = new Promise((_resolve, reject) => {
-    cancel = reject;
-  });
-  const context = { whenCancelled: () => cancelled };
+  const { context, cancel } = makeCancellationKit();
   make(host.powers, context, { env: baseEnv() });
 
   cancel(new Error('Cancelled'));
