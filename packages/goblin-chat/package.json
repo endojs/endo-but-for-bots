@@ -55,8 +55,8 @@
     "@endo/marshal": "workspace:^",
     "@endo/ocapn": "workspace:^",
     "@endo/patterns": "workspace:^",
-    "ink": "^7.0.1",
-    "react": "^19.2.0"
+    "ink": "^7.0.6",
+    "react": "^19.2.7"
   },
   "devDependencies": {
     "@endo/lockdown": "workspace:^",
