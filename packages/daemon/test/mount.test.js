@@ -16,7 +16,7 @@ import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
 import { checkinTree } from '@endo/platform/fs/lite';
 
 import { makeFilePowers } from '../src/daemon-node-powers.js';
-import { makeMount } from '../src/mount.js';
+import { makeMount, childEntry } from '../src/mount.js';
 import { makeMemoryStore } from './_mount-test-helpers.js';
 
 /**
@@ -315,32 +315,37 @@ test('entry() default of root has displayPath "."', async t => {
   const rootPath = makeTempRoot(t);
   const mount = makeMount({ rootPath, readOnly: false, filePowers });
   const rootEntry = await E(mount).entry([]);
-  t.is(await E(rootEntry).displayPath(), '.');
-  t.deepEqual(await E(rootEntry).segments(), []);
+  // Entries are passable records; `segments` / `displayPath` are plain
+  // fields, not methods.
+  t.is(rootEntry.displayPath, '.');
+  t.deepEqual(rootEntry.segments, []);
 });
 
 test('entry() with array path mints a nested entry with matching segments', async t => {
   const rootPath = makeTempRoot(t);
   const mount = makeMount({ rootPath, readOnly: false, filePowers });
   const entry = await E(mount).entry(['a', 'b']);
-  t.deepEqual(await E(entry).segments(), ['a', 'b']);
-  t.is(await E(entry).displayPath(), 'a/b');
+  t.deepEqual(entry.segments, ['a', 'b']);
+  t.is(entry.displayPath, 'a/b');
 });
 
-test('entry().child() extends the entry by one segment', async t => {
+test('childEntry() extends the entry by one segment', async t => {
   const rootPath = makeTempRoot(t);
   const mount = makeMount({ rootPath, readOnly: false, filePowers });
   const e = await E(mount).entry(['a']);
-  const c = await E(e).child('b');
-  t.deepEqual(await E(c).segments(), ['a', 'b']);
+  const c = childEntry(e, 'b');
+  t.deepEqual(c.segments, ['a', 'b']);
+  // The child carries the same mount grant as its parent, so its lineage
+  // (and confinement) is identical.
+  t.is(c.mountGrant, e.mountGrant);
 });
 
-test('entry().child() rejects an invalid name segment', async t => {
+test('childEntry() rejects an invalid name segment', async t => {
   const rootPath = makeTempRoot(t);
   const mount = makeMount({ rootPath, readOnly: false, filePowers });
   const e = await E(mount).entry(['a']);
-  await t.throwsAsync(() => E(e).child(''), { message: /must not be empty/ });
-  await t.throwsAsync(() => E(e).child('x/y'), { message: /must not contain/ });
+  t.throws(() => childEntry(e, ''), { message: /must not be empty/ });
+  t.throws(() => childEntry(e, 'x/y'), { message: /must not contain/ });
 });
 
 test('entry() rejects a non-string, non-array argument', async t => {

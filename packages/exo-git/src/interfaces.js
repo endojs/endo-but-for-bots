@@ -26,9 +26,24 @@ const GitWorktreeStatusShape = M.or(
   'conflicted',
 );
 
+// A status row's `entry` is a mount-entry **value** — a passable record
+// `{ mountGrant, segments, displayPath }` whose only capability slot is the
+// formula-backed `mountGrant`.  Modeling it as a record (not an
+// `M.remotable('EndoMountEntry')`) is what lets a status row's entry be bound
+// under a petname via `storeValue`, so an agent can name it in a later
+// `add` / `restore` call.
+const MountEntryValueShape = M.splitRecord(
+  {
+    mountGrant: M.remotable('EndoMount'),
+    segments: M.arrayOf(M.string()),
+    displayPath: M.string(),
+  },
+  {},
+);
+
 const GitStatusEntryShape = M.splitRecord(
   {
-    entry: M.remotable('EndoMountEntry'),
+    entry: MountEntryValueShape,
     path: M.string(),
     index: GitIndexStatusShape,
     worktree: GitWorktreeStatusShape,
@@ -79,8 +94,8 @@ export const GitInterface = M.interface('Git', {
     .returns(M.arrayOf(GitCommitShape)),
   show: M.callWhen(RefArgShape).returns(M.string()),
   revParse: M.callWhen(RefArgShape).returns(GitRefShape),
-  add: M.callWhen(M.arrayOf(M.remotable())).returns(M.undefined()),
-  restore: M.callWhen(M.arrayOf(M.remotable()))
+  add: M.callWhen(M.arrayOf(MountEntryValueShape)).returns(M.undefined()),
+  restore: M.callWhen(M.arrayOf(MountEntryValueShape))
     .optional(M.recordOf(M.string(), M.any()))
     .returns(M.undefined()),
   commit: M.callWhen(M.string()).returns(GitCommitShape),

@@ -526,7 +526,21 @@ export const BlobInterface = M.interface('EndoBlob', {
 });
 
 const PathSegmentsShape = M.arrayOf(M.string());
-const MountEntryShape = M.remotable('EndoMountEntry');
+// A mount entry is a passable **value**, not a capability: a hardened
+// record whose only capability slot is the formula-backed `mountGrant`
+// (the minting `EndoMount`), plus normalized mount-root-relative
+// `segments` and a presentation `displayPath`.  Modeling the entry as a
+// record (rather than an `M.remotable('EndoMountEntry')` exo) is what lets
+// `storeValue(entry, petname)` marshal it: the marshaller resolves the
+// single `mountGrant` slot to its formula id and copies the plain data.
+const MountEntryShape = M.splitRecord(
+  {
+    mountGrant: M.remotable('EndoMount'),
+    segments: PathSegmentsShape,
+    displayPath: M.string(),
+  },
+  {},
+);
 const PathArgShape = M.or(M.string(), PathSegmentsShape, MountEntryShape);
 
 // `EndoMount` extends `Directory` from `@endo/platform/fs`.  Method
@@ -621,13 +635,6 @@ export const MountFileInterface = M.interface('EndoMountFile', {
 // `./interfaces.js` can reach the platform shapes without a second
 // import line.
 export { PlatformDirectoryInterface, PlatformFileInterface };
-
-export const MountEntryInterface = M.interface('EndoMountEntry', {
-  segments: M.call().returns(PathSegmentsShape),
-  displayPath: M.call().returns(M.string()),
-  child: M.call(M.string()).returns(MountEntryShape),
-  help: M.call().optional(M.string()).returns(M.string()),
-});
 
 // The git-only interface guards and shape constants moved into
 // `@endo/exo-git/src/interfaces.js`.  Re-exported here for daemon-

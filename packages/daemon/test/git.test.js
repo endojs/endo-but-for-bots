@@ -545,11 +545,18 @@ test('Git scaffold methods all surface a clear "not yet implemented"', async t =
   // backend never sees a path because the public exo refuses before
   // dispatching.  ("not yet implemented" reaches the backend's own
   // methods that the public exo dispatches to directly, like status.)
-  // The fake intentionally lacks `displayPath` / `child`; cast through
-  // the EndoMountEntry shape so the boundary type is satisfied at
-  // call-site even though the runtime guard is what fires.
+  // The fake is a well-shaped mount-entry record (so it passes the `add`
+  // argument guard) but carries a `mountGrant` minted outside the daemon,
+  // so the lineage check (`lineageOf(entry.mountGrant)` is undefined) is
+  // what fires.
   const fakeEntry = /** @type {import('../src/types.js').EndoMountEntry} */ (
-    /** @type {unknown} */ (Far('FakeEntry', { segments: () => ['foo.txt'] }))
+    /** @type {unknown} */ (
+      harden({
+        mountGrant: Far('FakeMount', {}),
+        segments: ['foo.txt'],
+        displayPath: 'foo.txt',
+      })
+    )
   );
   await t.throwsAsync(E(git).add([fakeEntry]), {
     message: /not an EndoMountEntry/,
@@ -1863,7 +1870,7 @@ test('Git.status reports merge conflicts with mount entries', async t => {
   }
   t.is(row.index, 'conflicted');
   t.is(row.worktree, 'conflicted');
-  t.deepEqual(await E(row.entry).segments(), ['conflict.txt']);
+  t.deepEqual(row.entry.segments, ['conflict.txt']);
   // The conflicted entry is a file, so its live node exposes `text()`.
   const node = /** @type {import('../src/types.js').EndoMountFile} */ (
     row.node
@@ -1896,9 +1903,10 @@ test('Git.status wraps backend rows into GitStatusEntry with mount entries', asy
   t.is(row.path, 'src/new.js');
   t.is(row.index, 'clean');
   t.is(row.worktree, 'untracked');
-  // The entry is an EndoMountEntry minted on the bound mount.  Its
-  // segments reflect the repo-relative path split by `/`.
-  t.deepEqual(await E(row.entry).segments(), ['src', 'new.js']);
+  // The entry is an EndoMountEntry value minted on the bound mount.  Its
+  // segments (a plain field on the record) reflect the repo-relative path
+  // split by `/`.
+  t.deepEqual(row.entry.segments, ['src', 'new.js']);
   t.true(await E(mount).has(row.entry));
   // `src/new.js` resolves to an EndoMountFile.
   const node = /** @type {import('../src/types.js').EndoMountFile} */ (

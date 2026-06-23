@@ -19,13 +19,8 @@ import { makeReaderPump } from '@endo/exo-stream/reader-pump.js';
 
 import { fromHex } from './hex.js';
 import { mountHelp, mountFileHelp, makeHelp } from './help-text.js';
-import {
-  MountEntryInterface,
-  MountFileInterface,
-  MountInterface,
-} from './interfaces.js';
+import { MountFileInterface, MountInterface } from './interfaces.js';
 
-const mountEntryRecords = new WeakMap();
 const mountRecords = new WeakMap();
 
 /**
@@ -86,16 +81,38 @@ const reserveScratchPath = async (target, filePowers) => {
 harden(reserveScratchPath);
 
 /**
- * Returns the daemon-private lineage sentinel for a mount or mount entry.
+ * Returns the daemon-private lineage sentinel for a mount.
+ *
+ * Mount entries are passable records (`{ mountGrant, segments, displayPath }`)
+ * rather than capabilities, so an entry's lineage is the lineage of its
+ * `mountGrant` slot; callers that hold an entry pass `entry.mountGrant` here.
  *
  * @param {unknown} value
  * @returns {object | undefined}
  */
 export const lineageOf = value => {
   const key = /** @type {object} */ (value);
-  return mountEntryRecords.get(key)?.rootId || mountRecords.get(key)?.rootId;
+  return mountRecords.get(key)?.rootId;
 };
 harden(lineageOf);
+
+/**
+ * Type-guard for a daemon-minted mount-entry record.  Entries are pure
+ * passable records whose only capability slot is the formula-backed
+ * `mountGrant`; their provenance is verified by checking `mountGrant`'s
+ * lineage (`lineageOf(entry.mountGrant)`), never by object identity of the
+ * record itself (a marshalled round-trip produces a fresh record).
+ *
+ * @param {unknown} value
+ * @returns {value is { mountGrant: object, segments: string[], displayPath: string }}
+ */
+export const isMountEntry = value =>
+  typeof value === 'object' &&
+  value !== null &&
+  lineageOf(/** @type {{ mountGrant?: unknown }} */ (value).mountGrant) !==
+    undefined &&
+  Array.isArray(/** @type {{ segments?: unknown }} */ (value).segments);
+harden(isMountEntry);
 
 /**
  * Host-private accessor for daemon-minted physical mount backing.
@@ -116,16 +133,6 @@ export const getMountBacking = mount => {
   });
 };
 harden(getMountBacking);
-
-/**
- * Host-private accessor for daemon-minted mount entry paths.
- *
- * @param {unknown} entry
- * @returns {string | undefined}
- */
-export const getEntryPhysicalPath = entry =>
-  mountEntryRecords.get(/** @type {object} */ (entry))?.physicalPath;
-harden(getEntryPhysicalPath);
 
 /**
  * Validate a single path segment.
@@ -449,14 +456,27 @@ const makeMountExo = ctx => {
       return normalizeSegments(currentSegments, pathArg);
     }
     if (typeof pathArg === 'object' && pathArg !== null) {
-      const record = mountEntryRecords.get(pathArg);
-      if (record === undefined) {
+      // A mount entry is a passable record `{ mountGrant, segments, … }`.
+      // Its provenance is its `mountGrant`'s lineage, not the identity of
+      // the record (a marshalled round-trip produces a fresh record).
+      const grant =
+        /** @type {{ mountGrant?: unknown, segments?: unknown }} */ (pathArg)
+          .mountGrant;
+      const grantLineage = lineageOf(grant);
+      if (grantLineage === undefined) {
         throw new Error('Path argument is not a daemon-minted mount entry');
       }
-      if (record.rootId !== rootId) {
+      if (grantLineage !== rootId) {
         throw new Error('Mount entry belongs to a different mount root');
       }
-      return record.segments;
+      const entrySegments = /** @type {{ segments?: unknown }} */ (pathArg)
+        .segments;
+      if (!Array.isArray(entrySegments)) {
+        throw new Error('Mount entry is missing its segments');
+      }
+      // The entry's segments are already mount-root-relative and
+      // normalized; resolve them from the root, not the current dir.
+      return normalizeSegments(harden([]), entrySegments);
     }
     if (typeof pathArg !== 'string') {
       throw new Error(`Path must be a string, array, or mount entry`);
@@ -548,28 +568,29 @@ const makeMountExo = ctx => {
   };
 
   /**
-   * @param {string[]} segments
+   * Mint a mount-entry **value**: a hardened passable record carrying its
+   * minting mount as `mountGrant` plus normalized, mount-root-relative
+   * `segments` and a presentation-friendly `displayPath`.  The entry is a
+   * pure value (no observational or handle-minting authority of its own);
+   * a method that accepts it verifies provenance by `mountGrant`'s lineage.
+   * Because the only capability slot is the formula-backed `mountGrant`,
+   * the record marshals through the daemon — `storeValue(entry, petname)`
+   * binds it, the inverse of the `lookup(petname)` that resolves it back.
+   *
+   * @param {string[]} segments  mount-root-relative, already normalized
+   * @returns {{ mountGrant: object, segments: string[], displayPath: string }}
    */
-  const makeEntryRecord = segments =>
+  const makeEntry = segments =>
     harden({
-      rootId,
-      segments,
-      physicalPath: resolveFromRoot(segments),
+      mountGrant: selfMount,
+      segments: harden([...segments]),
+      displayPath: segments.length === 0 ? '.' : segments.join('/'),
     });
-
-  /**
-   * @param {string[]} segments
-   */
-  const makeEntry = segments => {
-    const entry = makeMountEntryExo({
-      ...ctx,
-      entrySegments: segments,
-    });
-    mountEntryRecords.set(entry, makeEntryRecord(segments));
-    return entry;
-  };
 
   const help = makeHelp(mountHelp);
+
+  /** @type {object} */
+  let selfMount;
 
   const exo = makeExo('EndoMount', MountInterface, {
     help,
@@ -907,6 +928,7 @@ const makeMountExo = ctx => {
     },
   });
 
+  selfMount = exo;
   mountRecords.set(
     exo,
     harden({ rootId, currentDir, confinementRoot, readOnly }),
@@ -961,52 +983,36 @@ const makeReadableTreeView = readOnlyMount => {
 harden(makeReadableTreeView);
 
 /**
- * Create a mount-scoped logical entry descriptor.  Entries are values
- * with no observational authority and no handle-minting authority of
- * their own — those operations live on `EndoMount` and accept the
- * entry as the path-bearing argument.
+ * Free helper that narrows a mount-entry **value** to a child entry by one
+ * segment, without granting any access outside the mount.  Entries are pure
+ * passable records (`{ mountGrant, segments, displayPath }`) so the
+ * `child()` ergonomic the design's interface sketched as a method is a free
+ * helper over the value: it validates the name segment, appends it to the
+ * entry's `segments`, and re-derives `displayPath`.  The child carries the
+ * same `mountGrant` as its parent, so its provenance (and confinement) is
+ * identical and any mount method that accepts it re-checks lineage.
  *
- * @param {MountContext & { entrySegments: string[] }} ctx
- * @returns {object}
+ * @param {{ mountGrant: object, segments: string[], displayPath?: string }} entry
+ * @param {string} name
+ * @returns {{ mountGrant: object, segments: string[], displayPath: string }}
  */
-const makeMountEntryExo = ctx => {
-  const { entrySegments, rootId } = ctx;
-
-  const help = makeHelp({});
-
-  return makeExo('EndoMountEntry', MountEntryInterface, {
-    help,
-    segments() {
-      return harden([...entrySegments]);
-    },
-    displayPath() {
-      return entrySegments.length === 0 ? '.' : entrySegments.join('/');
-    },
-    child(name) {
-      assertValidSegment(name);
-      const childSegments = [...entrySegments, name];
-      const child = makeMountEntryExo({
-        ...ctx,
-        entrySegments: childSegments,
-      });
-      mountEntryRecords.set(
-        child,
-        harden({
-          rootId,
-          segments: childSegments,
-          physicalPath: resolveSegments(
-            ctx.confinementRoot,
-            ctx.confinementRoot,
-            childSegments,
-            ctx.filePowers,
-          ),
-        }),
-      );
-      return child;
-    },
+export const childEntry = (entry, name) => {
+  assertValidSegment(name);
+  if (
+    typeof entry !== 'object' ||
+    entry === null ||
+    !Array.isArray(entry.segments)
+  ) {
+    throw new Error('childEntry requires a mount entry value');
+  }
+  const childSegments = harden([...entry.segments, name]);
+  return harden({
+    mountGrant: entry.mountGrant,
+    segments: childSegments,
+    displayPath: childSegments.join('/'),
   });
 };
-harden(makeMountEntryExo);
+harden(childEntry);
 
 /**
  * Create a transient file exo for a file within a mount.

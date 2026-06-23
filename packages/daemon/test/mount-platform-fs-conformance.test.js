@@ -274,8 +274,8 @@ test('EndoMount.makeDirectory returns a sub-mount (Directory.makeDirectory shape
 test('EndoMount.entry accepts slash-joined string selectors', async t => {
   const { mount } = makeConfiguredMount(t);
   const entry = await E(mount).entry('a/b/../c.txt');
-  t.deepEqual(await E(entry).segments(), ['a', 'c.txt']);
-  t.is(await E(entry).displayPath(), 'a/c.txt');
+  t.deepEqual(entry.segments, ['a', 'c.txt']);
+  t.is(entry.displayPath, 'a/c.txt');
 
   await E(mount).writeText(entry, 'via-entry');
   t.is(await E(mount).readText(['a', 'c.txt']), 'via-entry');

@@ -34,6 +34,7 @@ import {
   addressesFromLocator,
   idFromLocator,
 } from '../src/locator.js';
+import { childEntry } from '../src/mount.js';
 
 /**
  * @import {EReturn} from '@endo/eventual-send';
@@ -5351,8 +5352,10 @@ test('mount entry descriptors support has, lookup, stat, makeFile, and provenanc
   const otherMount = await E(host).lookup(['test-mount-entry-other']);
 
   const createdEntry = await E(mount).entry(['src', 'created.txt']);
-  t.is(await E(createdEntry).displayPath(), 'src/created.txt');
-  t.deepEqual(await E(createdEntry).segments(), ['src', 'created.txt']);
+  // Entries are passable records: `displayPath` / `segments` are plain
+  // fields that survive the CapTP round-trip from the daemon.
+  t.is(createdEntry.displayPath, 'src/created.txt');
+  t.deepEqual(createdEntry.segments, ['src', 'created.txt']);
   t.false(await E(mount).has(createdEntry));
   t.is(await E(mount).stat(createdEntry), undefined);
 
@@ -5372,8 +5375,8 @@ test('mount entry descriptors support has, lookup, stat, makeFile, and provenanc
   const srcDir = await E(mount).lookup(srcEntry);
   t.deepEqual(await E(srcDir).list(), ['created.txt', 'existing.txt']);
 
-  const childEntry = await E(srcEntry).child('created.txt');
-  const openedFile = await E(mount).lookup(childEntry);
+  const createdChildEntry = childEntry(srcEntry, 'created.txt');
+  const openedFile = await E(mount).lookup(createdChildEntry);
   t.is(await E(openedFile).text(), 'created and appended');
 
   await t.throwsAsync(() => E(otherMount).readText(createdEntry), {

@@ -254,15 +254,19 @@ export const makeGit = ({ mount, backend, readOnly = false, lineageOf }) => {
   };
 
   /**
-   * Translate an array of EndoMountEntry caps into the repo-relative
-   * path strings that the backend (and the underlying git binary)
-   * accept.  Entries from a different mount lineage are rejected
-   * before any path is exposed to git.
+   * Translate an array of `EndoMountEntry` **values** into the repo-relative
+   * path strings that the backend (and the underlying git binary) accept.
+   * An entry is a passable record `{ mountGrant, segments, displayPath }`;
+   * its provenance is the lineage of its `mountGrant` slot (the minting
+   * mount), checked against this Git's bound mount so an entry from a
+   * different mount lineage is rejected before any path is exposed to git.
+   * The `segments` are plain data on the record — no eventual-send needed.
    *
    * @param {readonly object[]} entries
    * @returns {Promise<string[]>}
    */
   const entriesToRepoPaths = async entries => {
+    await null;
     if (!Array.isArray(entries) || entries.length === 0) {
       throw new Error(
         'entries must be a non-empty array of EndoMountEntry values',
@@ -270,7 +274,10 @@ export const makeGit = ({ mount, backend, readOnly = false, lineageOf }) => {
     }
     const paths = [];
     for (const entry of entries) {
-      const otherLineage = lineageOf(/** @type {object} */ (entry));
+      const grant =
+        /** @type {{ mountGrant?: unknown, segments?: unknown }} */ (entry)
+          ?.mountGrant;
+      const otherLineage = lineageOf(/** @type {object} */ (grant));
       if (otherLineage === undefined) {
         throw new Error('entry is not an EndoMountEntry minted by this daemon');
       }
@@ -279,8 +286,10 @@ export const makeGit = ({ mount, backend, readOnly = false, lineageOf }) => {
           'entry was minted by a different mount lineage and cannot be used here',
         );
       }
-      // eslint-disable-next-line no-await-in-loop
-      const segments = await E(entry).segments();
+      const segments = /** @type {{ segments?: unknown }} */ (entry).segments;
+      if (!Array.isArray(segments)) {
+        throw new Error('entry is not an EndoMountEntry minted by this daemon');
+      }
       paths.push(segments.join('/'));
     }
     return paths;

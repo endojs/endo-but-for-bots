@@ -1134,11 +1134,24 @@ export type EndoMountStat = {
   atime: bigint;
 };
 
+/**
+ * An `EndoMountEntry` is a mount-scoped logical path **value**, not a
+ * capability.  It is a hardened passable record carrying its minting mount
+ * as `mountGrant`, the normalized mount-root-relative `segments`, and a
+ * presentation-friendly `displayPath`.  It holds no observational authority
+ * and no handle-minting authority of its own; mount methods accept it as the
+ * path-bearing argument and verify provenance by `mountGrant`'s lineage.
+ *
+ * Because its only capability slot is the formula-backed `mountGrant`, the
+ * record marshals through the daemon — `storeValue(entry, petname)` binds it,
+ * the inverse of the `lookup(petname)` that resolves it back.  The `child()`
+ * narrowing the design sketched as a method is the free helper `childEntry`
+ * in `src/mount.js`.
+ */
 export interface EndoMountEntry {
-  segments(): string[];
-  displayPath(): string;
-  child(name: string): EndoMountEntry;
-  help(method?: string): string;
+  mountGrant: EndoMount;
+  segments: string[];
+  displayPath: string;
 }
 
 /**
