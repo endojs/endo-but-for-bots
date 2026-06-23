@@ -15,7 +15,7 @@ module.exports = {
     ],
     'comma-dangle': ['error', 'always-multiline'],
 
-    'consistent-return': 'warn', // some bugs. TS covers.
+    'consistent-return': 'error', // TS covers the intent; enforce consistently
     'no-fallthrough': 'warn', // doesn't detect throws
 
     'arrow-body-style': 0,
