@@ -7,8 +7,11 @@
  * LAL ADAPTATION (vs. fae's daemon-trial.js + daemon-runner.js): lal's
  * agent is exercised directly with `makeMockPowers` (in-memory
  * GuestPowers) and a real LLM provider via `pi-agent-core`. Nothing
- * forks a daemon; nothing reads a `worker.log`. The trace is captured
- * via lal's `Hooks` API.
+ * forks a daemon; nothing reads a `worker.log`. The trace is captured by
+ * subscribing to pi-agent-core's native event stream — lal forwards a
+ * subscriber to `piAgent.subscribe` via `spawnWorkerLoop`'s optional
+ * `onEvent` parameter, and this runner maps each `AgentEvent` to the
+ * `TraceEvent` shape `@endo/agentry/optimizer/trace-metric` expects.
  *
  * Inputs the trial runner accepts:
  *   - `example.prompt`     -- string or string[] (multi-prompt rounds)
@@ -164,88 +167,116 @@ const stableRawArgs = args => {
 };
 
 /**
- * Build a `Hooks` implementation that records the LLM's per-event
- * stream into a `TraceEvent[]`. The trace shape is documented at the
- * top of `@endo/agentry/optimizer/trace-metric`.
+ * Best-effort extraction of an assistant message's text from a
+ * pi-agent-core `message_end` payload. The message's `content` is either a
+ * string or an array of content parts; only the `text` parts contribute.
  *
- * The pi-agent-core event union widens slightly between versions; we
- * read only the fields lal's `round-runner.js` exposes today, so this
- * implementation does not regress when pi-agent-core adds new event
- * variants.
- *
- * @returns {{ hooks: import('../hooks/index.js').Hooks, trace: TraceEvent[] }}
+ * @param {unknown} content
+ * @returns {string}
  */
-const makeTraceHooks = () => {
+const assistantText = content => {
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) {
+    return content
+      .filter(c => c && typeof c === 'object' && c.type === 'text')
+      .map(c => c.text)
+      .join('');
+  }
+  return '';
+};
+
+/**
+ * Build a subscriber for pi-agent-core's native event stream that records
+ * the agent's per-event activity into a `TraceEvent[]`. lal forwards this
+ * to `piAgent.subscribe` (via `spawnWorkerLoop`'s optional `onEvent` param),
+ * which is pi's built-in observability surface — there is no custom `Hooks`
+ * seam threaded through round-runner anymore.
+ *
+ * The trace shape is documented at the top of
+ * `@endo/agentry/optimizer/trace-metric`. We read only the pi event variants
+ * lal's `round-runner.js` already consumes, so this recorder does not
+ * regress when pi-agent-core adds new event variants (the `default` branch
+ * ignores them).
+ *
+ * @returns {{ onEvent: (event: any) => void, trace: TraceEvent[] }}
+ */
+export const makeTraceRecorder = () => {
   /** @type {TraceEvent[]} */
   const trace = [];
 
   /**
-   * pi-agent-core emits ToolCallStart + ToolCallEnd in pairs. We attach
-   * the result/error from the matching End to the start record so the
-   * scorer sees one `tool-call` event per call (ok/error included).
+   * pi-agent-core emits `tool_execution_start` + `tool_execution_end` in
+   * pairs. We attach the result/error from the matching end to the start
+   * record so the scorer sees one `tool-call` event per call (ok/error
+   * included).
    *
    * @type {Array<{ index: number, name: string }>}
    */
   const pendingCalls = [];
 
-  const hooks = harden({
-    onEvent: _evt => {},
-    /**
-     * @param {{ toolName: string, args?: unknown }} event
-     */
-    onToolCallStart: event => {
-      const rawArgs = stableRawArgs(event.args);
-      /** @type {TraceEvent} */
-      const record = {
-        kind: 'tool-call',
-        name: event.toolName,
-        args: /** @type {Record<string, unknown> | undefined} */ (
-          event.args && typeof event.args === 'object'
-            ? /** @type {any} */ (event.args)
-            : undefined
-        ),
-        rawArgs,
-        ok: true,
-      };
-      pendingCalls.push({ index: trace.length, name: event.toolName });
-      trace.push(record);
-    },
-    /**
-     * @param {{ toolName: string, result?: unknown, error?: { message: string } }} event
-     */
-    onToolCallEnd: event => {
-      const pendingIndex = pendingCalls
-        .map((c, i) => ({ c, i }))
-        .reverse()
-        .find(({ c }) => c.name === event.toolName);
-      if (!pendingIndex) {
-        return;
+  /** @param {any} event */
+  const onEvent = event => {
+    switch (event?.type) {
+      case 'tool_execution_start': {
+        const rawArgs = stableRawArgs(event.args);
+        /** @type {TraceEvent} */
+        const record = {
+          kind: 'tool-call',
+          name: event.toolName,
+          args: /** @type {Record<string, unknown> | undefined} */ (
+            event.args && typeof event.args === 'object'
+              ? /** @type {any} */ (event.args)
+              : undefined
+          ),
+          rawArgs,
+          ok: true,
+        };
+        pendingCalls.push({ index: trace.length, name: event.toolName });
+        trace.push(record);
+        break;
       }
-      pendingCalls.splice(pendingIndex.i, 1);
-      const slot = trace[pendingIndex.c.index];
-      if (slot.kind !== 'tool-call') return;
-      const error = event.error;
-      const updated = /** @type {TraceEvent} */ ({
-        ...slot,
-        ok: !error,
-        result: error ? undefined : event.result,
-        error: error ? error.message : undefined,
-      });
-      trace[pendingIndex.c.index] = updated;
-    },
-    /**
-     * @param {{ role: string, content?: string }} event
-     */
-    onMessage: event => {
-      trace.push({
-        kind: 'message',
-        role: event.role,
-        content: event.content,
-      });
-    },
-  });
-  return { hooks, trace };
+      case 'tool_execution_end': {
+        const pendingIndex = pendingCalls
+          .map((c, i) => ({ c, i }))
+          .reverse()
+          .find(({ c }) => c.name === event.toolName);
+        if (!pendingIndex) {
+          break;
+        }
+        pendingCalls.splice(pendingIndex.i, 1);
+        const slot = trace[pendingIndex.c.index];
+        if (slot.kind !== 'tool-call') break;
+        const isError = event.isError === true;
+        const updated = /** @type {TraceEvent} */ ({
+          ...slot,
+          ok: !isError,
+          result: isError ? undefined : event.result,
+          error: isError ? String(event.result) : undefined,
+        });
+        trace[pendingIndex.c.index] = updated;
+        break;
+      }
+      case 'message_end': {
+        const message = event.message;
+        if (message?.role === 'assistant') {
+          const content = assistantText(message.content);
+          if (content) {
+            trace.push({ kind: 'message', role: 'assistant', content });
+          }
+        }
+        break;
+      }
+      default:
+        // Lifecycle and streaming-delta events (agent_start/_end,
+        // turn_start/_end, message_start, message_update, …) carry nothing
+        // the scorer reads; ignore them.
+        break;
+    }
+  };
+
+  return { onEvent, trace };
 };
+harden(makeTraceRecorder);
 
 /**
  * Run one trial. Spins up `makeMockPowers`, seeds attachments, drives
@@ -310,15 +341,16 @@ export const runTrial = async ({
     LAL_AUTH_TOKEN: env.LAL_AUTH_TOKEN,
   };
 
-  const { hooks, trace } = makeTraceHooks();
+  const { onEvent, trace } = makeTraceRecorder();
 
   // Spawn the worker loop; let any error propagate into the trial
-  // result rather than throwing through the runner.
+  // result rather than throwing through the runner. The `onEvent`
+  // subscriber records pi's native event stream into `trace`.
   const workerPromise = spawnWorkerLoop(
     mock.powers,
     null,
     /** @type {any} */ (workerEnv),
-    hooks,
+    onEvent,
   ).catch(error => {
     trace.push({
       kind: 'error',

@@ -56,12 +56,22 @@ const LalInterface = M.interface(
  * conversation continuity is intentionally not preserved by this migration
  * (see the PR body's *Memory migration* section).
  *
+ * An optional `onEvent` subscriber observes pi-agent-core's native event
+ * stream without altering the loop's behavior: lal forwards it once via
+ * `piAgent.subscribe(onEvent)` after constructing the PiAgent. Every
+ * `AgentEvent` pi emits (tool-call start/end, message start/end, agent and
+ * turn lifecycle) is delivered verbatim. The eval harness uses this to
+ * record a trace; production callers leave it undefined. This is pi's
+ * built-in observability surface — lal does not re-implement event dispatch.
+ *
  * @param {any} powers - Guest powers (manager's own or a sub-guest's)
  * @param {Promise<object> | object | null | undefined} context
  * @param {{ LAL_HOST?: string, LAL_MODEL?: string, LAL_AUTH_TOKEN?: string }} workerEnv
+ * @param {(event: any) => void} [onEvent] - Optional subscriber forwarded
+ *   once to `piAgent.subscribe`; receives every pi-agent-core `AgentEvent`.
  * @returns {Promise<void>}
  */
-export const spawnWorkerLoop = async (powers, context, workerEnv) => {
+export const spawnWorkerLoop = async (powers, context, workerEnv, onEvent) => {
   const getCancelled = async () => {
     if (!context) return null;
     const resolvedContext = await context;
@@ -119,6 +129,14 @@ export const spawnWorkerLoop = async (powers, context, workerEnv) => {
     tools: agentTools,
     getApiKey,
   });
+
+  // Forward pi's native event stream to the optional observer. This is the
+  // only observation seam: round-runner.js consumes the same stream for
+  // console diagnostics via its own `runAgentRound` subscription, and the
+  // eval harness records a trace through this one.
+  if (onEvent) {
+    piAgent.subscribe(onEvent);
+  }
 
   /**
    * Run one chat round on the PiAgent, forwarding tool-call activity to
