@@ -1674,7 +1674,7 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
     toolbox.proposeTool = harden({ run: async ({ name: tname, description, code, args, kind, files, entry } = {}) => {
       const multi = files && typeof files === 'object' && Object.keys(files).length;
       if (!multi && !String(code || '').trim()) return { ok: false, error: 'A tool IS a component. PREFER `files` — a file-tree {"tool.js":"export const make = async (powers) => {…}", "helper.js":"…"} (the entry exports make + may import siblings) — over a single `code` blob; the source becomes a VERSIONED git object (fork/revert in the Components tab). Persist DATA in powers.grains (durable, mergeable, subscribable cells that SURVIVE source edits/reverts — the propagator data model), not ad-hoc state. Confined: no fs/network/import.' };
-      const r = customToolsObj.propose({ name: tname, description, code, args, kind, files, entry, proposedBy: node.id, now: new Date().toISOString() });
+      const r = customToolsObj.propose({ name: tname, description, code, args, kind, files, entry, proposedBy: node.id, proposedByName: node.name, now: new Date().toISOString() });
       // A tool IS a component: version its SOURCE as a git-as-Endo object from the moment it's proposed
       // (not just on admit), so it's forkable/revertable from birth — matching the component API.
       if (r.ok !== false && r.id) { try { await componentGitObj.commit(r.id, multi ? files : { 'tool.js': String(code || '') }, `propose: ${r.name}`); } catch { /* git-versioning is best-effort here; admit re-commits */ } }
@@ -1682,7 +1682,7 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
       // and the review panel (not a manual click) is the gate — a non-critical tool is auto-admitted to the
       // library, with Agent C naming/organizing it. The disposition is logged to the "internal messages" chat
       // (Settings → Internal messages), so the owner can watch what the fleet builds without being interrupted.
-      try { postInternal({ from: node.id || 'agent', kind: 'tool-proposed', title: `proposed a ${r.kind} tool: "${r.name}"`, body: String(description || '').slice(0, 400), toolId: r.id, by: node.id, status: 'entering review' }); } catch { /* best-effort */ }
+      try { postInternal({ from: node.name || 'agent', kind: 'tool-proposed', title: `proposed a ${r.kind} tool: "${r.name}"`, body: String(description || '').slice(0, 400), toolId: r.id, by: node.name, status: 'entering review' }); } catch { /* best-effort */ }
       return { ok: true, proposed: true, id: r.id, name: r.name, kind: r.kind, multifile: r.multifile, note: 'Saved + sent up to Agent C\'s review pipeline. The review panel is the gate: a non-critical tool is AUTO-ADMITTED to the library (Agent C names/organizes it) — no owner click needed. Watch its disposition in Settings → Internal messages.' };
     } });
     manifest.push({ name: 'proposeTool', reversible: false,
@@ -1724,7 +1724,7 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
 
   // A node = a holder of a SUBSET of powers, with the right to use + re-share
   // them. The root holds ALL_POWERS. share() mints a child node (single power).
-  const makeAgentNode = ({ powers, labelOf = 'agent', isRoot = false, haBinding = null, agBinding = null, contactsBinding = null, homeBinding = null, timersBinding = null, notesBinding = null, cwdBinding = null, id = null }) => {
+  const makeAgentNode = ({ powers, labelOf = 'agent', name = '', isRoot = false, haBinding = null, agBinding = null, contactsBinding = null, homeBinding = null, timersBinding = null, notesBinding = null, cwdBinding = null, id = null }) => {
     const powerSet = new Set(powers);
     const shares = new Map(); // swiss → { power, label, createdAt, url, ha? }
     // homeBinding = () → this cap's home folder object (its own sub-dir).
@@ -1735,6 +1735,10 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
     // can't leak one's "don't ask again" rule onto the other). Specialists pass no
     // `id`, so they keep their persisted unique slug (labelOf); root is 'root'.
     node.id = isRoot ? 'root' : (id || labelOf);
+    // A human DISPLAY name distinct from the stable id — so attributions (feed, internal messages, trace) read
+    // descriptively instead of "scoped-9786c66e". Derived without an LLM: an explicit name, else a humanized
+    // labelOf, else the id. Callers (mintScopedCap, delegates, specialists) pass a context-derived name.
+    node.name = isRoot ? 'Agent C' : (String(name || '').trim() || String(labelOf || '').replace(/^(chat|improve-exec)-/, '').replace(/[_-]+/g, ' ').trim() || node.id);
 
     // ── C-LIST: the set of HA handles this cap may name. Seeded with the held
     //    node; grows ONLY by navigating down from it. Enforces that authority is
@@ -2118,15 +2122,18 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
   // (re)build + register the node for a persisted scoped cap. Bindings are lazy thunks, so this is
   // safe to call at boot before/after the HA/contacts tries are built.
   const registerScoped = ({ swiss, powers, label }) => {
-    const node = makeAgentNode({ powers, labelOf: `chat-${String(label || 'chat').replace(/[^\w-]/g, '_').slice(0, 32)}`, haBinding: () => haTrie?.root || null, agBinding: () => agentRoster?.root || null, contactsBinding: () => contactsObj, id: `scoped-${String(swiss).slice(0, 8)}` });
+    const node = makeAgentNode({ powers, labelOf: `chat-${String(label || 'chat').replace(/[^\w-]/g, '_').slice(0, 32)}`, name: String(label || '').trim(), haBinding: () => haTrie?.root || null, agBinding: () => agentRoster?.root || null, contactsBinding: () => contactsObj, id: `scoped-${String(swiss).slice(0, 8)}` });
     locator.set(swiss, { node });
     return node;
   };
   const mintScopedCap = ({ powers = [], label = '' } = {}) => {
     const granted = [...new Set((Array.isArray(powers) ? powers : []).filter(p => ALL_POWERS.includes(p)))];
     const swiss = newSwiss();
-    // a human-readable name so the scoped chat reads "Cobalt Otter", not "scoped-a0a6c7a3" (the bare id).
-    const name = (String(label || '').trim() && !/^(chat|subchat)$/i.test(String(label).trim())) ? String(label).trim().slice(0, 80) : genPetName();
+    // a DESCRIPTIVE name (no LLM round trip) so the agent reads "notes + web agent" / its given label, not the
+    // bare id "scoped-a0a6c7a3": a meaningful label if provided, else a powers-derived description, else a
+    // friendly pet name as the last resort.
+    const labelOk = String(label || '').trim() && !/^(chat|subchat|new chat)$/i.test(String(label).trim());
+    const name = labelOk ? String(label).trim().slice(0, 80) : (granted.length ? `${granted.slice(0, 3).join(' + ')} agent` : genPetName());
     registerScoped({ swiss, powers: granted, label: name });
     scopedCaps = scopedCaps.concat({ swiss, powers: granted, label: name }); saveScoped(); // survive restarts
     return harden({ ok: true, swiss, powers: granted, name, url: `${baseUrl}/#cap=${swiss}` });

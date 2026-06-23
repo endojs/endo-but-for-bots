@@ -66,12 +66,12 @@ export const makeCustomTools = () => {
     for (const [k, v] of Object.entries(files)) { if (++n > 40) break; const rel = String(k).replace(/^[/\\]+/, '').slice(0, 120); if (rel && !rel.includes('..')) out[rel] = String(v ?? '').slice(0, 40000); }
     return out[entry] ? out : null;
   };
-  const propose = ({ name, description, code, args, kind, bundle, files, entry, proposedBy, now }) => {
+  const propose = ({ name, description, code, args, kind, bundle, files, entry, proposedBy, proposedByName, now }) => {
     const id = `tool-${crypto.randomBytes(5).toString('hex')}`;
     const ent = String(entry || 'tool.js');
     const cleaned = files ? cleanFiles(files, ent) : null;
     const k = (kind === 'class' || cleaned) ? 'class' : 'instance'; // multi-file ⇒ class
-    const rec = { id, name: safeName(name), description: clip(description, 300), args: (args && typeof args === 'object') ? args : {}, kind: k, proposedBy: String(proposedBy || ''), status: 'pending', createdAt: now || '' };
+    const rec = { id, name: safeName(name), description: clip(description, 300), args: (args && typeof args === 'object') ? args : {}, kind: k, proposedBy: String(proposedBy || ''), proposedByName: String(proposedByName || ''), status: 'pending', createdAt: now || '' };
     if (cleaned) { rec.files = cleaned; rec.entry = ent; } // multi-file class
     else if (bundle) rec.bundle = String(bundle).slice(0, 400000); // imported real bundle
     else rec.code = String(code || '').slice(0, 40000); // single-file
@@ -95,7 +95,7 @@ export const makeCustomTools = () => {
   };
   const pendingBy = agentId => load().filter(t => t.status === 'pending' && t.proposedBy === String(agentId)).map(t => ({ id: t.id, name: t.name, description: t.description }));
   const get = idOrName => load().find(t => t.id === String(idOrName) || t.name === String(idOrName)) || null;
-  const listAll = () => load().map(t => ({ id: t.id, name: t.name, description: t.description, status: t.status, kind: t.kind || 'instance', proposedBy: t.proposedBy, code: t.code, files: t.files, entry: t.entry, hasBundle: !!t.bundle, review: t.review || null, reviseLog: t.reviseLog || null }));
+  const listAll = () => load().map(t => ({ id: t.id, name: t.name, description: t.description, status: t.status, kind: t.kind || 'instance', proposedBy: t.proposedBy, proposedByName: t.proposedByName || '', code: t.code, files: t.files, entry: t.entry, hasBundle: !!t.bundle, review: t.review || null, reviseLog: t.reviseLog || null }));
   // Persist the discipline-review panel's findings on a pending tool so the admission gate sees them.
   const setReview = (id, review) => { const ts = load(); const t = ts.find(x => x.id === String(id)); if (!t) return { ok: false, error: 'no such proposal' }; t.review = review; save(ts); return { ok: true }; };
   // Persist the review→revise dialogue (the developer's resolutions per round) so the human sees how the

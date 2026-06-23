@@ -156,7 +156,7 @@ const triageTick = async () => {
     const pend = customTools.listAll().filter(t => t.status === 'pending');
     // 1) review any pending tool that has no review yet (the legacy ones predate the panel)
     const unreviewed = pend.find(t => !t.review);
-    if (unreviewed) { try { const rv = await runReviewPanel(unreviewed, { callLLM, ranAt: new Date().toISOString() }); customTools.setReview(unreviewed.id, rv); log('auto-review', unreviewed.name, '→ worst', rv.worst); postInternal({ from: 'agent-c', kind: 'tool-reviewed', title: `reviewed "${unreviewed.name}" — worst: ${rv.worst}`, body: (rv.findings || []).slice(0, 3).map(f => `[${f.severity}] ${f.discipline}`).join(' · ') || 'no findings', toolId: unreviewed.id, by: unreviewed.proposedBy, status: rv.worst }); } catch (e) { log('auto-review', unreviewed.name || '?', e.message); } return; }
+    if (unreviewed) { try { const rv = await runReviewPanel(unreviewed, { callLLM, ranAt: new Date().toISOString() }); customTools.setReview(unreviewed.id, rv); log('auto-review', unreviewed.name, '→ worst', rv.worst); postInternal({ from: 'agent-c', kind: 'tool-reviewed', title: `reviewed "${unreviewed.name}" — worst: ${rv.worst}`, body: (rv.findings || []).slice(0, 3).map(f => `[${f.severity}] ${f.discipline}`).join(' · ') || 'no findings', toolId: unreviewed.id, by: unreviewed.proposedByName || unreviewed.proposedBy, status: rv.worst }); } catch (e) { log('auto-review', unreviewed.name || '?', e.message); } return; }
     // 2) revise the worst un-revised high/critical (existing bounded loop)
     maybeAutoRevise();
     if (revising.size) return;
@@ -173,8 +173,8 @@ const triageTick = async () => {
         if (r.ok) {
           try { await componentGit.commit(ready.id, sourceFilesOf(ready), `admit: ${ready.name}`); } catch (e) { log('auto-admit commit', e.message); }
           log('auto-admit', ready.name, `→ library (review worst: ${ready.review.worst}${org.category ? `, category: ${org.category}` : ''})`);
-          postInternal({ from: 'agent-c', kind: 'tool-admitted', title: `admitted "${ready.name}" to the library${org.category ? ` · ${org.category}` : ''}`, body: org.note || String(ready.description || '').slice(0, 300), toolId: ready.id, by: ready.proposedBy, status: `review worst: ${ready.review.worst}` });
-          try { await postFeed({ avatar: '🧩', title: `Added "${ready.name}" to your component library`, body: (org.note || String(ready.description || '')).slice(0, 400), status: `auto-admitted${org.category ? ` · ${org.category}` : ''} · review worst: ${ready.review.worst}`, note: ready.proposedBy ? `proposed by ${ready.proposedBy}` : '' }); } catch { /* feed best-effort */ }
+          postInternal({ from: 'agent-c', kind: 'tool-admitted', title: `admitted "${ready.name}" to the library${org.category ? ` · ${org.category}` : ''}`, body: org.note || String(ready.description || '').slice(0, 300), toolId: ready.id, by: ready.proposedByName || ready.proposedBy, status: `review worst: ${ready.review.worst}` });
+          try { await postFeed({ avatar: '🧩', title: `Added "${ready.name}" to your component library`, body: (org.note || String(ready.description || '')).slice(0, 400), status: `auto-admitted${org.category ? ` · ${org.category}` : ''} · review worst: ${ready.review.worst}`, note: ready.proposedBy ? `proposed by ${ready.proposedByName || ready.proposedBy}` : '' }); } catch { /* feed best-effort */ }
         }
       }
     }
