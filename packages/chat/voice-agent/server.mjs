@@ -143,6 +143,38 @@ const maybeAutoRevise = () => {
   revising.add(cand.id);
   reviseTool(cand).then(r => log('auto-revise', cand.name, `→ ${r.rounds || 0} round(s), worst ${r.worst || '?'}, converged ${r.converged}`)).catch(e => log('auto-revise', cand.name || '?', 'failed', e.message)).finally(() => revising.delete(cand.id));
 };
+// AUTONOMOUS TRIAGE: push every PENDING tool through the review panel → (auto-revise high/critical) →
+// AUTO-ADMIT to the library when it's non-critical — so a proposed tool lands in the library on its own merit
+// (the panel is the gate, not a manual owner click), and the LEGACY pending tools that predate the panel get
+// the same treatment. Bounded (one op per tick) so it can't stampede Opus. AUTO_ADMIT=0 keeps admission manual.
+const AUTO_ADMIT = process.env.AUTO_ADMIT !== '0';
+let triaging = false;
+const triageTick = async () => {
+  if (triaging) return; triaging = true;
+  try {
+    const pend = customTools.listAll().filter(t => t.status === 'pending');
+    // 1) review any pending tool that has no review yet (the legacy ones predate the panel)
+    const unreviewed = pend.find(t => !t.review);
+    if (unreviewed) { try { const rv = await runReviewPanel(unreviewed, { callLLM, ranAt: new Date().toISOString() }); customTools.setReview(unreviewed.id, rv); log('auto-review', unreviewed.name, '→ worst', rv.worst); } catch (e) { log('auto-review', unreviewed.name || '?', e.message); } return; }
+    // 2) revise the worst un-revised high/critical (existing bounded loop)
+    maybeAutoRevise();
+    if (revising.size) return;
+    // 3) AUTO-ADMIT a reviewed, NON-critical tool (high ones only after they've been through the revise loop,
+    //    so they get the feedback first). Mirrors /tools/admit: commit the source as the start of its lineage.
+    if (AUTO_ADMIT) {
+      const ready = pend.find(t => t.review && t.review.worst !== 'critical' && (t.review.worst !== 'high' || t.reviseLog));
+      if (ready) {
+        const r = customTools.admit(ready.id);
+        if (r.ok) {
+          try { await componentGit.commit(ready.id, sourceFilesOf(ready), `admit: ${ready.name}`); } catch (e) { log('auto-admit commit', e.message); }
+          log('auto-admit', ready.name, `→ library (review worst: ${ready.review.worst})`);
+          try { await postFeed({ avatar: '🧩', title: `Added "${ready.name}" to your component library`, body: String(ready.description || '').slice(0, 400), status: `auto-admitted · review worst: ${ready.review.worst}`, note: ready.proposedBy ? `proposed by ${ready.proposedBy}` : '' }); } catch { /* feed best-effort */ }
+        }
+      }
+    }
+  } catch (e) { log('triage', e && e.message); } finally { triaging = false; }
+};
+if (AUTO_ADMIT) setInterval(() => { triageTick().catch(e => log('triage', e && e.message)); }, 45000).unref?.();
 
 // Editing a confined-Preact ISLAND (its source is a client file → rewrite + rebuild, not make(powers)).
 const ISLAND_EDIT_SYS = reuseFirstPreamble() + '\n\nYou are editing a confined-Preact ISLAND — a UI component rendered through @endo/preact-container `renderConfined`. The source is a JS module built with `h(tag, props, children)` hyperscript (NO JSX), pure + stateless (state lives in cells passed via props; render-safe data only — never a swissnum/secret). When the change ADDS UI, compose the kit primitives above (import from ./ui-kit.js) rather than hand-rolling raw `h(\'button\'/\'input\'/…)`; only write new markup when no primitive fits. Apply the user\'s requested change, keep it valid h-based confined Preact, keep the SAME exports and imports (add ONLY from ./ui-kit.js if you adopt a primitive not yet imported), use theme vars not hardcoded colours, and use no DOM/network/fs/ambient access. Reply with ONLY the complete updated file as a single ```js fenced code block — no prose.';
