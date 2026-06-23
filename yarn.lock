@@ -418,6 +418,22 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@ax-llm/ax@npm:^21.0.0":
+  version: 21.0.14
+  resolution: "@ax-llm/ax@npm:21.0.14"
+  dependencies:
+    "@opentelemetry/api": "npm:^1.9.0"
+  peerDependencies:
+    zod: ^3.24.0 || ^4.0.0
+  peerDependenciesMeta:
+    zod:
+      optional: true
+  bin:
+    ax: cli/index.mjs
+  checksum: 10c0/45f244d3febdb59fd7ab9a6f30eec07da1b659f0be1ddde17b4a63dd45633e66e734062192bec53c84f62006bff72330e15b0fd4d7dcc53fe44cf70c675af2d1
+  languageName: node
+  linkType: hard
+
 "@babel/code-frame@npm:^7.0.0, @babel/code-frame@npm:^7.27.1":
   version: 7.27.1
   resolution: "@babel/code-frame@npm:7.27.1"
@@ -1253,6 +1269,7 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@endo/agentry@workspace:packages/agentry"
   dependencies:
+    "@ax-llm/ax": "npm:^21.0.0"
     "@earendil-works/pi-agent-core": "npm:^0.79.0"
     "@earendil-works/pi-ai": "npm:^0.79.0"
     "@endo/agent-tools": "workspace:^"
@@ -4523,6 +4540,13 @@ __metadata:
   version: 1.9.0
   resolution: "@opentelemetry/api@npm:1.9.0"
   checksum: 10c0/9aae2fe6e8a3a3eeb6c1fdef78e1939cf05a0f37f8a4fae4d6bf2e09eb1e06f966ece85805626e01ba5fab48072b94f19b835449e58b6d26720ee19a58298add
+  languageName: node
+  linkType: hard
+
+"@opentelemetry/api@npm:^1.9.0":
+  version: 1.9.1
+  resolution: "@opentelemetry/api@npm:1.9.1"
+  checksum: 10c0/c608485fc8b5a91e1f7e05e843b45b509307456b31cd2ad365933d90813e40ebfedf179f1451c762037e82d7c76aa8500e95d2da3609f640a1206cde5322cd14
   languageName: node
   linkType: hard
 
