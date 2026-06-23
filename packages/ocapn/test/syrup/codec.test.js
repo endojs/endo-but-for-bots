@@ -3,7 +3,6 @@
 import test from '@endo/ses-ava/test.js';
 import path from 'path';
 import fs from 'fs';
-import { toBytes } from '@endo/pass-style/to-bytes.js';
 import { fromBytes } from '@endo/pass-style/from-bytes.js';
 import { encodeUtf8 } from '@endo/utf8/encode.js';
 import { strictDecodeUtf8 } from '@endo/utf8/strict-decode.js';
@@ -121,7 +120,7 @@ test('zoo.bin', t => {
       syrupWriter.writeSelectorFromString('eats');
       syrupWriter.enterSet();
       for (const eat of value.eats) {
-        syrupWriter.writeBytestring(toBytes(encodeUtf8(eat)));
+        syrupWriter.writeBytestring(encodeUtf8(eat));
       }
       syrupWriter.exitSet();
       syrupWriter.writeSelectorFromString('name');
@@ -131,7 +130,7 @@ test('zoo.bin', t => {
       syrupWriter.writeSelectorFromString('weight');
       syrupWriter.writeFloat64(value.weight);
       syrupWriter.writeSelectorFromString('species');
-      syrupWriter.writeBytestring(toBytes(encodeUtf8(value.species)));
+      syrupWriter.writeBytestring(encodeUtf8(value.species));
       syrupWriter.exitDictionary();
     },
   };

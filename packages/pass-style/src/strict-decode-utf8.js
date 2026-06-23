@@ -14,10 +14,10 @@ import { strictDecodeUtf8 as strictDecodeFromBytes } from '@endo/utf8/strict-dec
  * accessor and copying to a mutable buffer only when `TextDecoder.decode`
  * requires it.
  *
- * Also accepts plain mutable `Uint8Array` values, any other `ArrayBufferView`,
- * or a bare `ArrayBufferLike`, for composability with non-passable inputs.
+ * Also accepts plain mutable `Uint8Array` values for composability with
+ * non-passable inputs.
  *
- * @param {ArrayBufferView | ArrayBufferLike} input
+ * @param {Uint8Array} input
  * @returns {string}
  */
 export const strictDecodeUtf8 = input => strictDecodeFromBytes(input);

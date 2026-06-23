@@ -109,7 +109,7 @@ export const OcapnSignatureCodec = makeOcapnListComponentCodec(
  * @property {'ecc'} scheme
  * @property {'Ed25519'} curve
  * @property {'eddsa'} flags
- * @property {ArrayBufferView | ArrayBufferLike} q
+ * @property {Uint8Array} q
  */
 
 const OcapnPublicKeyEccCodec = exactList('OcapnPublicKeyEcc', [

@@ -23,12 +23,11 @@ import { toBytes } from './to-bytes.js';
  * Concatenates a list of byteArray-passable values into a single hardened
  * frozen `Uint8Array` backed by an immutable `ArrayBuffer`.
  *
- * The input element type is `ArrayBufferView | ArrayBufferLike` so the
- * helper accepts both the current byteArray shape (frozen `Uint8Array`)
- * and the prior raw-immutable-`ArrayBuffer` shape, easing the
- * cross-version transition.
+ * Accepts a mix of plain mutable `Uint8Array` values and frozen
+ * `Uint8Array` values backed by an immutable `ArrayBuffer` (the byteArray
+ * passable form).
  *
- * @param {ReadonlyArray<ArrayBufferView | ArrayBufferLike>} buffers
+ * @param {ReadonlyArray<Uint8Array>} buffers
  * @returns {Uint8Array}
  */
 export const concatBytes = buffers => {

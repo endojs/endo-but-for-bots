@@ -84,25 +84,17 @@ function writeSelectorFromString(bufferWriter, value) {
 
 /**
  * @param {BufferWriter} bufferWriter
- * @param {ArrayBufferView | ArrayBufferLike} value
+ * @param {Uint8Array} value
  */
 function writeBytestring(bufferWriter, value) {
   // Convert to a fresh mutable Uint8Array for internal operations.
   // The byteArray pass style is a frozen Uint8Array backed by an
-  // immutable ArrayBuffer; calling `value.slice()` on the view returns
+  // immutable ArrayBuffer; calling `slice` on the backing buffer returns
   // a fresh mutable Uint8Array of the right window, which is exactly
-  // what `writeStringlike` needs. Raw ArrayBufferLike inputs (the
-  // previous byteArray shape, still tolerated for cross-version
-  // callers) are also sliced into a fresh mutable buffer and wrapped.
-  if (ArrayBuffer.isView(value)) {
-    const bytes = new Uint8Array(
-      value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength),
-    );
-    writeStringlike(bufferWriter, bytes, ':');
-    return;
-  }
-  const mutableBuffer = value.slice();
-  const bytes = new Uint8Array(mutableBuffer);
+  // what `writeStringlike` needs.
+  const bytes = new Uint8Array(
+    value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength),
+  );
   writeStringlike(bufferWriter, bytes, ':');
 }
 
@@ -177,7 +169,7 @@ export class SyrupWriter {
   }
 
   /**
-   * @param {ArrayBufferView | ArrayBufferLike} value
+   * @param {Uint8Array} value
    */
   writeBytestring(value) {
     writeBytestring(this.#bufferWriter, value);

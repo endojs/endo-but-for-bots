@@ -35,15 +35,15 @@ const sessionIdHashPrefixBytes = textEncoder.encode('prot0');
 /**
  * @typedef {object} OcapnPublicKey
  * @property {PublicKeyId} id
- * @property {ArrayBufferView | ArrayBufferLike} bytes
+ * @property {Uint8Array} bytes
  * @property {OcapnPublicKeyDescriptor} descriptor
- * @property {(msg: ArrayBufferView | ArrayBufferLike, sig: OcapnSignature) => void} assertSignatureValid - Throws if signature is invalid
+ * @property {(msg: Uint8Array, sig: OcapnSignature) => void} assertSignatureValid - Throws if signature is invalid
  */
 
 /**
  * @typedef {object} OcapnKeyPair
  * @property {OcapnPublicKey} publicKey
- * @property {(msg: ArrayBufferView | ArrayBufferLike) => OcapnSignature} sign
+ * @property {(msg: Uint8Array) => OcapnSignature} sign
  */
 
 /**
@@ -57,7 +57,7 @@ const ocapNSignatureToBytes = sig => {
 };
 
 /**
- * @param {ArrayBufferView | ArrayBufferLike} publicKeyBytes
+ * @param {Uint8Array} publicKeyBytes
  * @returns {OcapnPublicKeyDescriptor}
  */
 const makePublicKeyDescriptor = publicKeyBytes => {
@@ -79,12 +79,12 @@ const makePublicKeyIdFromDescriptor = publicKeyDescriptor => {
     serializeOcapnPublicKeyDescriptor(publicKeyDescriptor);
   const hash1 = sha256(publicKeyDescriptorBytes);
   const hash2 = sha256(hash1);
-  // @ts-expect-error - Branded type: PublicKeyId is ArrayBufferLike at runtime
+  // @ts-expect-error - Branded type: PublicKeyId is Uint8Array at runtime
   return toBytes(hash2);
 };
 
 /**
- * @param {ArrayBufferView | ArrayBufferLike} publicKeyBytes
+ * @param {Uint8Array} publicKeyBytes
  * @returns {OcapnPublicKey}
  */
 export const makeOcapnPublicKey = publicKeyBytes => {
@@ -95,7 +95,7 @@ export const makeOcapnPublicKey = publicKeyBytes => {
     descriptor: publicKeyDescriptor,
     /**
      * Asserts that the signature is valid for the given message.
-     * @param {ArrayBufferView | ArrayBufferLike} msgBytes
+     * @param {Uint8Array} msgBytes
      * @param {OcapnSignature} ocapnSig
      * @throws {Error} If the signature is invalid
      */
@@ -165,8 +165,8 @@ export const publicKeyDescriptorToPublicKey = publicKeyDescriptor => {
 };
 
 /**
- * @param {ArrayBufferView | ArrayBufferLike} peerIdOne
- * @param {ArrayBufferView | ArrayBufferLike} peerIdTwo
+ * @param {Uint8Array} peerIdOne
+ * @param {Uint8Array} peerIdTwo
  * @returns {SessionId}
  */
 export const makeSessionId = (peerIdOne, peerIdTwo) => {
@@ -182,7 +182,7 @@ export const makeSessionId = (peerIdOne, peerIdTwo) => {
   // Double SHA256 hash the resulting string
   const hash1 = sha256(sessionIdBytes);
   const hash2 = sha256(hash1);
-  // @ts-expect-error - Branded type: SessionId is ArrayBufferLike at runtime
+  // @ts-expect-error - Branded type: SessionId is Uint8Array at runtime
   return toBytes(hash2);
 };
 
@@ -191,11 +191,10 @@ export const makeSessionId = (peerIdOne, peerIdTwo) => {
  * @returns {Uint8Array}
  */
 const getLocationBytesForSignature = location => {
-  const myLocationBytes = serializeOcapnMyLocation({
+  return serializeOcapnMyLocation({
     type: 'my-location',
     location,
   });
-  return toBytes(myLocationBytes);
 };
 
 /**

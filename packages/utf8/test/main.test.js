@@ -57,8 +57,3 @@ test('encodeUtf8 returns a plain mutable Uint8Array', t => {
   bytes[0] = 0xff;
   t.is(bytes[0], 0xff);
 });
-
-test('decodeUtf8 accepts a bare ArrayBuffer', t => {
-  const buf = encodeUtf8('hi').buffer;
-  t.is(decodeUtf8(buf), 'hi');
-});

@@ -51,7 +51,7 @@ export const decodeSwissnum = value => strictDecodeAscii(new Uint8Array(value));
  * @returns {SwissNum}
  */
 export const encodeSwissnum = value => {
-  // @ts-expect-error - Branded type: SwissNum is ArrayBufferLike at runtime
+  // @ts-expect-error - Branded type: SwissNum is Uint8Array at runtime
   return toBytes(encodeAscii(value));
 };
 
@@ -69,7 +69,7 @@ export const encodeSwissnum = value => {
  * @returns {SwissNum}
  */
 export const swissnumFromBytes = bytes => {
-  // @ts-expect-error - Branded type: SwissNum is ArrayBufferLike at runtime
+  // @ts-expect-error - Branded type: SwissNum is Uint8Array at runtime
   return toBytes(bytes);
 };
 

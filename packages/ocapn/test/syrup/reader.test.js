@@ -15,7 +15,7 @@ const zooBin = Uint8Array.from(zooBinRaw);
 
 /**
  *
- * @param {ArrayBufferView | ArrayBufferLike} bytes
+ * @param {Uint8Array} bytes
  * @returns {string}
  */
 const toUtf8 = bytes => strictDecodeUtf8(fromBytes(bytes));

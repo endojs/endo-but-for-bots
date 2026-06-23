@@ -17,7 +17,7 @@ import { ocapnPassStyleOf } from '../codecs/ocapn-pass-style.js';
  * ArrayBuffer) directly, performing the mutable copy internally only when
  * `TextDecoder.decode` requires it.
  *
- * @param {ArrayBufferView | ArrayBufferLike} buffer
+ * @param {Uint8Array} buffer
  * @returns {string}
  */
 const decodeBytestringLabel = buffer => strictDecodeUtf8(buffer);
@@ -170,8 +170,8 @@ export const makeExpectedLengthBytestringCodec = (codecName, length) => {
       return bytestring;
     },
     write: (value, syrupWriter) => {
-      if (!(value instanceof Uint8Array || value instanceof ArrayBuffer)) {
-        throw Error(`Expected Uint8Array or ArrayBuffer, got ${typeof value}`);
+      if (!(value instanceof Uint8Array)) {
+        throw Error(`Expected Uint8Array, got ${typeof value}`);
       }
       if (value.byteLength !== length) {
         throw Error(`Expected length ${length}, got ${value.byteLength}`);

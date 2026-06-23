@@ -7,8 +7,6 @@ import harden from '@endo/harden';
 // any post-lockdown mutation of the global from redirecting calls.
 const fatalTextDecoder = new TextDecoder('utf-8', { fatal: true });
 
-const { isView } = ArrayBuffer;
-
 /**
  * Return a `Uint8Array` view or value that `TextDecoder.decode` will
  * accept.
@@ -17,24 +15,12 @@ const { isView } = ArrayBuffer;
  * or a native stage-3 implementation), so we copy into a mutable buffer
  * only when necessary.
  *
- * @param {ArrayBufferView | ArrayBufferLike} input
+ * @param {Uint8Array} input
  * @returns {Uint8Array | ArrayBuffer}
  */
 const toDecodable = input => {
-  let buf;
-  let byteOffset;
-  let byteLength;
-  if (isView(input)) {
-    buf = /** @type {ArrayBuffer} */ (
-      /** @type {ArrayBufferView} */ (input).buffer
-    );
-    byteOffset = /** @type {ArrayBufferView} */ (input).byteOffset;
-    byteLength = /** @type {ArrayBufferView} */ (input).byteLength;
-  } else {
-    buf = /** @type {ArrayBuffer} */ (input);
-    byteOffset = 0;
-    byteLength = buf.byteLength;
-  }
+  const buf = /** @type {ArrayBuffer} */ (input.buffer);
+  const { byteOffset, byteLength } = input;
 
   if (/** @type {any} */ (buf).immutable === true) {
     return new Uint8Array(buf.slice(byteOffset, byteOffset + byteLength));
@@ -52,14 +38,13 @@ const toDecodable = input => {
  * substituting U+FFFD.
  *
  * Accepts a frozen `Uint8Array` backed by an immutable `ArrayBuffer`
- * (the byteArray passable form), any other `ArrayBufferView`, or a bare
- * `ArrayBufferLike`.
+ * (the byteArray passable form) or a plain mutable `Uint8Array`.
  * Callers do not need to produce a mutable copy before calling this
  * function.
  * The copy, when required because `TextDecoder.decode` rejects immutable
  * backing buffers, is done internally.
  *
- * @param {ArrayBufferView | ArrayBufferLike} input
+ * @param {Uint8Array} input
  * @returns {string}
  */
 export const strictDecodeUtf8 = input =>

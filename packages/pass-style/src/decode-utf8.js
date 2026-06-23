@@ -15,10 +15,10 @@ import { decodeUtf8 as decodeFromBytes } from '@endo/utf8/decode.js';
  * The copy is from the immutable backing buffer to a fresh mutable buffer;
  * the caller's `Uint8Array` wrapper is not modified.
  *
- * Also accepts plain mutable `Uint8Array` values, any other `ArrayBufferView`,
- * or a bare `ArrayBufferLike`, for composability with non-passable inputs.
+ * Also accepts plain mutable `Uint8Array` values for composability with
+ * non-passable inputs.
  *
- * @param {ArrayBufferView | ArrayBufferLike} input
+ * @param {Uint8Array} input
  * @returns {string}
  */
 export const decodeUtf8 = input => decodeFromBytes(input);

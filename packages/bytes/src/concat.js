@@ -1,10 +1,8 @@
 import harden from '@endo/harden';
 
-const { isView } = ArrayBuffer;
-
 /**
- * Normalize an `ArrayBufferView | ArrayBufferLike` to a mutable `Uint8Array`
- * that `Uint8Array.prototype.set` will accept.
+ * Normalize a `Uint8Array` to a mutable `Uint8Array` that
+ * `Uint8Array.prototype.set` will accept.
  *
  * `Uint8Array.prototype.set` uses a native fast path for TypedArray sources
  * that reads through the internal buffer representation, bypassing any proxy
@@ -16,24 +14,12 @@ const { isView } = ArrayBuffer;
  * `ArrayBuffer.prototype.immutable` accessor (installed by the shim) and copy
  * to a fresh mutable `Uint8Array` only when necessary.
  *
- * @param {ArrayBufferView | ArrayBufferLike} input
+ * @param {Uint8Array} input
  * @returns {Uint8Array}
  */
 const toMutableChunk = input => {
-  let buf;
-  let byteOffset;
-  let byteLength;
-  if (isView(input)) {
-    buf = /** @type {ArrayBuffer} */ (
-      /** @type {ArrayBufferView} */ (input).buffer
-    );
-    byteOffset = /** @type {ArrayBufferView} */ (input).byteOffset;
-    byteLength = /** @type {ArrayBufferView} */ (input).byteLength;
-  } else {
-    buf = /** @type {ArrayBuffer} */ (input);
-    byteOffset = 0;
-    byteLength = buf.byteLength;
-  }
+  const buf = /** @type {ArrayBuffer} */ (input.buffer);
+  const { byteOffset, byteLength } = input;
 
   // When the backing buffer is immutable (shim or native stage-3), copy to
   // a fresh mutable Uint8Array so `result.set(chunk, offset)` works.
@@ -50,15 +36,14 @@ const toMutableChunk = input => {
  *
  * Accepts a mix of plain mutable `Uint8Array` chunks and frozen
  * `Uint8Array` chunks backed by an immutable `ArrayBuffer` (the
- * byteArray passable form), plus any other `ArrayBufferView` or bare
- * `ArrayBufferLike`.  For mutable inputs, no per-chunk copy is made.
+ * byteArray passable form).  For mutable inputs, no per-chunk copy is made.
  * For immutable inputs, a single copy per chunk is made to satisfy
  * `Uint8Array.prototype.set`'s native fast path.  Only the output
  * allocation is new for mutable inputs.
  *
  * Empty input yields an empty `Uint8Array`.
  *
- * @param {ReadonlyArray<ArrayBufferView | ArrayBufferLike>} inputs
+ * @param {ReadonlyArray<Uint8Array>} inputs
  * @returns {Uint8Array}
  */
 export const concatBytes = inputs => {

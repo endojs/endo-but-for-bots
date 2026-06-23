@@ -131,9 +131,7 @@ export const AnyCodec = makeTypeHintUnionCodec(
       } else if (value instanceof Set) {
         // eslint-disable-next-line no-use-before-define
         return SetCodec;
-      } else if (value instanceof Uint8Array || value instanceof ArrayBuffer) {
-        // byteArray dispatch: a Uint8Array is the current shape; a raw
-        // ArrayBuffer is the legacy shape, retained for cross-version use.
+      } else if (value instanceof Uint8Array) {
         return BytestringCodec;
       } else if (typeof value === 'object' && value !== null) {
         if (value[Symbol.toStringTag] === 'Record') {

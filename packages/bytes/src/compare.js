@@ -2,11 +2,9 @@
 
 import harden from '@endo/harden';
 
-const { isView } = ArrayBuffer;
-
 /**
- * Normalize an `ArrayBufferView | ArrayBufferLike` to a mutable `Uint8Array`
- * that supports integer-indexed access (`bytes[i]`).
+ * Normalize a `Uint8Array` to a mutable `Uint8Array` that supports
+ * integer-indexed access (`bytes[i]`).
  *
  * Frozen `Uint8Array` values backed by an immutable `ArrayBuffer` (the
  * byteArray passable form, produced by the `@endo/immutable-arraybuffer` shim)
@@ -16,24 +14,12 @@ const { isView } = ArrayBuffer;
  * via the `ArrayBuffer.prototype.immutable` accessor and copy to a mutable
  * `Uint8Array` only when necessary.  Plain mutable inputs get a view (no copy).
  *
- * @param {ArrayBufferView | ArrayBufferLike} input
+ * @param {Uint8Array} input
  * @returns {Uint8Array}
  */
 const toIndexableUint8 = input => {
-  let buf;
-  let byteOffset;
-  let byteLength;
-  if (isView(input)) {
-    buf = /** @type {ArrayBuffer} */ (
-      /** @type {ArrayBufferView} */ (input).buffer
-    );
-    byteOffset = /** @type {ArrayBufferView} */ (input).byteOffset;
-    byteLength = /** @type {ArrayBufferView} */ (input).byteLength;
-  } else {
-    buf = /** @type {ArrayBuffer} */ (input);
-    byteOffset = 0;
-    byteLength = buf.byteLength;
-  }
+  const buf = /** @type {ArrayBuffer} */ (input.buffer);
+  const { byteOffset, byteLength } = input;
 
   if (/** @type {any} */ (buf).immutable === true) {
     // Copy to a genuine mutable Uint8Array so integer-indexed access works.
@@ -47,9 +33,9 @@ const toIndexableUint8 = input => {
  * Compare two byte sequences lexicographically.
  *
  * Accepts a frozen `Uint8Array` backed by an immutable `ArrayBuffer`
- * (the byteArray passable form), any other `ArrayBufferView`, or a bare
- * `ArrayBufferLike`.  Immutable inputs are copied to a mutable
- * `Uint8Array` so that integer-indexed comparison works correctly; the
+ * (the byteArray passable form) or a plain mutable `Uint8Array`.
+ * Immutable inputs are copied to a mutable `Uint8Array` so that
+ * integer-indexed comparison works correctly; the
  * `@endo/immutable-arraybuffer` shim's frozen wrappers do not support
  * `bytes[i]` directly.
  *
@@ -59,8 +45,8 @@ const toIndexableUint8 = input => {
  * shorter is a prefix of the longer, returns the length difference
  * (`leftLength - rightLength`).
  *
- * @param {ArrayBufferView | ArrayBufferLike} left
- * @param {ArrayBufferView | ArrayBufferLike} right
+ * @param {Uint8Array} left
+ * @param {Uint8Array} right
  * @returns {number}
  */
 export const compareBytes = (left, right) => {
