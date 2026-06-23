@@ -797,6 +797,23 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
   // A real in-scope object for an accepted inventory entry: each known method calls routeObjectCall. The method
   // name is captured in the closure (here), so the agent writes `await Name.method(args)` with NO method string.
   const presenceFor = o => { const obj = {}; for (const m of methodsOfObject(o)) obj[m.name] = harden(async (a) => { const r = await routeObjectCall(o, m.name, a === undefined ? [] : [a]); if (!r || r.ok === false) throw new Error((r && r.error) || 'call failed'); return r.value; }); return harden(obj); };
+  // ── PER-CHAT "located objects" working set: the HA devices the agent has found/read/acted on THIS chat.
+  //    Carried across turns + bound next turn as a LIVE in-scope object, so a follow-up ("have it go clean")
+  //    acts on the SAME device by name (await Roborock.act({action:'start'})) without re-discovering it. The
+  //    node's c-list already persists the AUTHORITY for the handle; this carries the agent's KNOWLEDGE of it. ──
+  const locatedByChat = new Map(); // chatId → Map(handle → { handle, name, state })
+  const recordLocated = (chatId, ent) => {
+    if (!chatId || !ent || !ent.handle) return;
+    let m = locatedByChat.get(chatId); if (!m) { m = new Map(); locatedByChat.set(chatId, m); }
+    const prev = m.get(ent.handle) || {}; m.delete(ent.handle); // re-insert → most-recent
+    m.set(ent.handle, { handle: ent.handle, name: ent.name || prev.name || ent.handle, state: ent.state || prev.state || '' });
+    while (m.size > 12) m.delete(m.keys().next().value); // cap to the 12 most-recently-touched
+  };
+  // a live in-scope object for a located HA entity: state() reads (free), act() PROPOSES (operator confirms).
+  const haEntityPresence = (nd, e) => harden({
+    state: harden(async () => { const n = nd.haReach(e.handle); if (!n || !n.state) return { ok: false, error: `"${e.name}" is no longer in reach — haFind it again` }; return { ok: true, ...(await n.state()) }; }),
+    act: harden(async (a = {}) => { const n = nd.haReach(e.handle); if (!n || !n.act) return { ok: false, error: `"${e.name}" is not actuable / not in reach — haFind it again` }; try { return n.act(String((a && a.action) || ''), (a && a.data) || {}); } catch (err) { return { ok: false, error: err.message }; } }),
+  });
   const specSlug = name => `spec-${String(name || 'x').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 32) || 'x'}`;
   const findSpecialist = ref => { const r = String(ref || ''); return specialists.find(s => s.id === r || s.id === specSlug(r) || s.name.toLowerCase() === r.toLowerCase()); };
   const specNodes = new Map(); // id → its agent-node (built lazily / at boot)
@@ -1195,6 +1212,20 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
         manifest.push({ name: nm, description: `${o.description || 'an accepted Endo object'}${(o.transport === 'endo-peer' || o.peer) ? ' — a live PEER you message' : ' — a live object you hold'}`, methods: methodsOfObject(o) });
       }
     }
+    // CARRY LOCATED DEVICES across turns: bind the HA entities the agent engaged with earlier in THIS chat as
+    // live in-scope objects (e.g. Roborock_Q5.state() / Roborock_Q5.act({action:'start'})), so a follow-up acts
+    // on the SAME device by name without re-running haFind. (Reads free; act() still PROPOSES — operator confirms.)
+    if (powers.has('homeassistant')) {
+      const loc = locatedByChat.get((ctx && ctx.chatId) || '');
+      if (loc) for (const e of [...loc.values()].slice(-8)) {
+        const nm = sanitizeIdent(e.name);
+        if (!nm || toolbox[nm]) continue; // never shadow a verb / inventory object
+        toolbox[nm] = haEntityPresence(node, e);
+        manifest.push({ name: nm, description: `${e.name} — a Home Assistant device you located earlier in this chat${e.state ? ` (last seen: ${e.state})` : ''}`, methods: [
+          { name: 'state', args: {}, description: 'read its live state (free)' },
+          { name: 'act', args: { action: 'string — e.g. start, turn_on, lock, set_temperature', data: 'object — optional service data' }, description: 'PROPOSE an action on it (the operator confirms)' }] });
+      }
+    }
     if (powers.has('delegate')) {
       // delegateTask: hand the prompt to Opus with an ATTENUATED sub-bundle
       // (intersection of this node's powers and the requested powers). The
@@ -1329,6 +1360,7 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
         if (!start?.search) return { ok: false, error: 'search not available on your binding — use haTree to navigate' };
         const matches = start.search(String(query || ''));
         matches.forEach(m => node.haCList.add(m.handle)); // learn handles so haState/haAct work
+        if (matches.length <= 8) matches.forEach(m => recordLocated(ctx.chatId, { handle: m.handle, name: m.name || m.label || m.friendly_name })); // a TARGETED find → carry these devices across turns
         return { ok: true, count: matches.length, matches };
       } });
       toolbox.haTree = harden({ run: async ({ handle } = {}) => {
@@ -1338,11 +1370,14 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
       } });
       toolbox.haState = harden({ run: async ({ handle }) => {
         const n = node.haReach(handle); if (!n?.state) return { ok: false, error: 'handle not in your reach, or not an entity' };
-        return { ok: true, ...(await n.state()) };
+        const st = await n.state();
+        recordLocated(ctx.chatId, { handle, name: st.name || st.friendly_name || (st.attributes && st.attributes.friendly_name), state: st.state }); // carry this device across turns
+        return { ok: true, ...st };
       } });
       toolbox.haAct = harden({ run: async ({ handle, action, data }) => {
         const n = node.haReach(handle); if (!n) return { ok: false, error: 'handle not in your reach' };
         if (!n.act) return { ok: false, error: 'this node is read-only or not an actuable entity' };
+        recordLocated(ctx.chatId, { handle }); // the device the agent is acting on — carry it across turns
         try { return n.act(String(action || ''), data || {}); } catch (e) { return { ok: false, error: e.message }; }
       } });
       manifest.push(
