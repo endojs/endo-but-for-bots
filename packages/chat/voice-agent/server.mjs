@@ -524,7 +524,19 @@ const consumeResume = sid => { const r = pendingResumes.get(sid); if (!r) return
 //    tool NAMES + ok/children (no cap, no payload) so the chat can animate the fan-out in
 //    real time. Keyed by sessionId; cap-hygiene preserved (the swissnum never rides this URL). ──
 const stepStreams = new Map(); // sessionId → Set<res>
-const emitStep = (sid, obj) => { const set = stepStreams.get(sid); if (!set || !set.size) return; const line = `data: ${JSON.stringify(obj)}\n\n`; for (const r of set) { try { r.write(line); } catch { /* dropped */ } } };
+// Per-run step BUFFER so a client that JOINS mid-run (reload / open the chat while it's working) can replay
+// the trace SO FAR, then stream new steps live — instead of a blank pendant. Bounded; reset at turn start,
+// cleared when the run ends (post-run reattach uses the persisted steps via /chat/result).
+const stepBuffers = new Map(); // sessionId → [obj]
+const STEP_BUF_MAX = 600;
+const resetStepBuffer = sid => { stepBuffers.set(sid, []); };
+const emitStep = (sid, obj) => {
+  let buf = stepBuffers.get(sid); if (!buf) { buf = []; stepBuffers.set(sid, buf); }
+  buf.push(obj); if (buf.length > STEP_BUF_MAX) buf.splice(0, buf.length - STEP_BUF_MAX);
+  const set = stepStreams.get(sid); if (!set || !set.size) return;
+  const line = `data: ${JSON.stringify(obj)}\n\n`;
+  for (const r of set) { try { r.write(line); } catch { /* dropped */ } }
+};
 // a short "what did this action do" string for inspection — the query/url/path/prompt (no contents, no cap).
 const detailFromArgs = (a) => { if (!a || typeof a !== 'object') return ''; const v = a.query || a.url || a.path || a.q || a.prompt || a.task || a.cmd || a.message || a.title || ''; return String(v || '').slice(0, 200); };
 // Full-but-bounded text of a tool invocation / result, for the trace's inspectable modal.
@@ -838,6 +850,9 @@ const handler = async (req, res) => {
       const sid = String(u.searchParams.get('sid') || 'anon').slice(0, 64);
       res.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-cache, no-transform', connection: 'keep-alive', 'x-accel-buffering': 'no', ...SEC });
       res.write(': ok\n\n');
+      // REPLAY the in-flight trace so far (synchronously, before live wiring → no gap/dup) so a client that
+      // joined mid-run sees the whole fan-out, not just steps after it connected.
+      const buf = stepBuffers.get(sid); if (buf && buf.length) { for (const obj of buf) { try { res.write(`data: ${JSON.stringify(obj)}\n\n`); } catch { /* */ } } }
       let set = stepStreams.get(sid); if (!set) { set = new Set(); stepStreams.set(sid, set); } set.add(res);
       const hb = setInterval(() => { try { res.write(': hb\n\n'); } catch { /* closed */ } }, 15000);
       req.on('close', () => { clearInterval(hb); set.delete(res); if (!set.size) stepStreams.delete(sid); });
@@ -926,6 +941,7 @@ const handler = async (req, res) => {
       const startedAt = Date.now();
       // mark this session as RUNNING server-side so a reopened tab can re-attach (vs. losing the run).
       setRunResult(sid, { state: 'running', node: runNode, text: t, startedAt });
+      if (!resumeMessages) resetStepBuffer(sid); // fresh turn → fresh live-trace buffer (a resume keeps building the same trace)
       // bind the app-state accessor to THIS cap + close over it (the swissnum never enters ctx — cap-hygiene).
       // ROOT-ONLY: the memo/seed/asks/feed stores are GLOBAL, so only the full root agent gets app-state —
       // a shared/sub-agent cap (which holds a confined subset) would otherwise see/mutate everything.
@@ -1010,6 +1026,7 @@ const handler = async (req, res) => {
       ]);
       emitStep(sid, { t: 'end' });
       if (runs.get(sid) === ac) runs.delete(sid);
+      stepBuffers.delete(sid); // run done → drop the live-trace buffer (a post-run reattach uses the persisted steps via /chat/result)
       // WATCHDOG: the turn blew the deadline (or never returned). Surface a LEGIBLE summary instead of a
       // silent cancel — name the steps it ran + the last one (the likely stall), so failures are visible.
       if (deadlineHit || r.timedOut) {

@@ -646,14 +646,17 @@ const reattachRun = async sid => {
   if (!rr || rr.state === 'none') return resumeIfPending(sid);         // server has no record (it restarted) → re-run
   if (rr.state === 'running') {
     reattaching = sid; busy = true; if (sendBtn) sendBtn.disabled = true;
-    setStatus('🔎 still working on this on the server — safe to leave; the answer will be here when you return');
+    setStatus('🔎 still working on this on the server — watch it live; safe to leave, the answer will be here when you return');
+    // JUMP INTO the running trace: open the live pendant on this session. The server replays the steps so
+    // far over the SSE stream, then streams new ones — so you see the fan-out IN ACTION, not a blank pendant.
+    try { await pendantBegin(rr.text || (stalledTurnFromTx() || {}).payload?.text || '', sid); } catch { /* pendant is enhancement-only */ }
     try {
       for (;;) {
         await new Promise(res => setTimeout(res, 3000));
-        if (sid !== sessionId) return false;                          // navigated away — stop polling; pick it up next time
+        if (sid !== sessionId) { try { pendantES && pendantES.close(); } catch {} pendantLive = false; return false; } // navigated away — stop the live trace; pick it up next time
         const cur = await fetchRunResult(sid);
         if (!cur || cur.state === 'running') continue;
-        if (cur.result) renderReattached(cur.result, sid); else await resumeIfPending(sid);
+        if (cur.result) renderReattached(cur.result, sid); else { try { pendantEnd([]); } catch {} await resumeIfPending(sid); } // renderReattached calls pendantEnd → reconciles the full trace
         return true;
       }
     } finally { busy = false; if (sendBtn) sendBtn.disabled = false; setStatus(''); reattaching = ''; }
@@ -2105,15 +2108,14 @@ const positionPendant = () => {
 };
 const schedulePendantPosition = () => { if (pendantRaf) return; pendantRaf = requestAnimationFrame(() => { pendantRaf = 0; positionPendant(); }); };
 const hidePendant = () => { if (pendantWrap) pendantWrap.classList.add('hide'); if (pendant) pendant.setVisible(false); log.querySelectorAll('.msg.user').forEach(el => { el.style.marginBottom = ''; }); try { pendantES && pendantES.close(); } catch {} };
-const pendantBegin = async promptText => {
-  pendantLive = true; liveChatId = sessionId;
+const pendantBegin = async (promptText, sid = sessionId) => {
+  pendantLive = true; liveChatId = sid;
   try {
     const p = await ensurePendant();
     pendantWrap.classList.remove('hide'); p.setVisible(true);
     positionPendant(); p.reset(promptText);
-    try { const ps = chatBannerPowers(); p.setRootPowers(Array.isArray(ps) && ps.length ? ps : [...heldPowers]); } catch {} // the agent's power CROWN
     try { pendantES && pendantES.close(); } catch {}
-    pendantES = new EventSource('/chat/steps?sid=' + encodeURIComponent(sessionId)); // tool NAMES + queries/urls only — never the cap (cap-hygiene)
+    pendantES = new EventSource('/chat/steps?sid=' + encodeURIComponent(sid)); // tool NAMES + queries/urls only — never the cap (cap-hygiene). The server replays the trace so far → joining mid-run shows it live.
     pendantES.onmessage = e => { try { const m = JSON.parse(e.data); if (m.t === 'start') p.toolStart(m.name, m.detail, m.call); else if (m.t === 'done') p.toolDone(m.name, m.ok, m.detail, m.children, m.call, m.result, m.granted); else if (m.t === 'rnode') p.rnode(m); else if (m.t === 'child-done') p.childDone(m.parent, m.name, m.ok); else if (m.t === 'end') { try { pendantES.close(); } catch {} } } catch {} };
     pendantES.onerror = () => {}; // degrade silently — applyFinal reconciles from the final steps[]
   } catch { /* pendant is enhancement-only; never block the turn */ }
