@@ -45,6 +45,9 @@ import { listBacklog, addBacklog, nextOpen, recordOutcome } from './improvement-
 import { runAgent } from '../../ocapn-noise/tool-bridge.mjs';
 import { runAgentCode } from '../../ocapn-noise/codemode.mjs';
 import { dialIrohObject } from './iroh-objects.mjs';
+// Boot-safe: this module only static-imports node builtins; it lazy-loads @endo/daemon on first USE (when an
+// agent actually redeems an Endo invitation), so importing it can never crash voice-agent boot.
+import * as endoPeer from './endo-peer-bridge.mjs';
 // Sub-agents (scheduled, specialists, employed roles) run the composable-code harness (CEO-Bench: it
 // beats per-tool calls + specialized harnesses) by default. AGENT_CODEMODE=0 reverts to the classic loop.
 const AGENT_RUNNER = process.env.AGENT_CODEMODE === '0' ? runAgent : runAgentCode;
@@ -533,7 +536,7 @@ export const resolvePower = name => { const n = String(name || ''); return POWER
 // ── build the agent. Returns the locator + a root node holding ALL powers. ────
 // makeFieldAgent({ outDir, baseUrl }) →
 //   { locator, register, rootNode, rootSwiss(set later), toolboxFor, manifestFor }
-export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFile } = {}) => {
+export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFile, peerBridge = endoPeer } = {}) => {
   const aff = makeAffordances({ outDir });
   // worktree manager for write-capable role sub-agents (runs on the UNCONFINED host shell).
   const worktrees = makeWorktrees({ host: aff.host });
@@ -756,6 +759,8 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
   // An iroh ref is dialable iff it carries an iroh transport AND a real iroh://… address. (A LEGACY
   // origin:"null" record with no transport/address is NOT a real iroh ref — it stays not-callable.)
   const isIrohCallable = o => o.transport === 'iroh' && /^iroh:\/\//i.test(String(o.address || ''));
+  // A redeemed Endo peer (an accepted endo://…?type=invitation) is reachable as a mailbox via the peer-daemon.
+  const isPeerCallable = o => o.transport === 'endo-peer' || o.peer === true;
   const specSlug = name => `spec-${String(name || 'x').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 32) || 'x'}`;
   const findSpecialist = ref => { const r = String(ref || ''); return specialists.find(s => s.id === r || s.id === specSlug(r) || s.name.toLowerCase() === r.toLowerCase()); };
   const specNodes = new Map(); // id → its agent-node (built lazily / at boot)
@@ -773,7 +778,7 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
     // ── INVENTORY (the `objects` power): accept an Endo invite link → a named object you can call. The
     //    inbound counterpart to createInvite. Accepting external authority ALWAYS confirms (NEVER_AUTO).
     proposeAcceptInvite: { reversible: false, args: { link: 'string — the Endo invite / #cap= link to accept', name: 'string — what to CALL this object in your inventory (if the user has not named it, ASK them first)', description: 'string — what the object is / does' },
-      description: 'ACCEPT an Endo invite link and add the capability it grants as a NAMED object in your inventory. Does NOT add it yet — it PROPOSES it for the owner to confirm (they can rename it); accepting external authority always confirms. Once accepted, discover + call it with callObject (method "describe" lists its methods). The link/swissnum is held securely host-side, never shown.',
+      description: 'ACCEPT an Endo invite link and add the capability it grants as a NAMED object in your inventory. Handles three link kinds: an http /rpc object, an iroh:// dial-by-pubkey object, and a full Endo daemon INVITATION (endo://…?type=invitation) — the last is REDEEMED over iroh+captp0 into a live PEER (a mailbox relationship: callObject "send" to message them, "inbox" to read replies). Does NOT add it yet — it PROPOSES it for the owner to confirm (they can rename it); accepting external authority always confirms. Once accepted, discover + call it with callObject (method "describe" lists its methods). The link/swissnum is held securely host-side, never shown.',
       run: async ({ link, name, description }, agent) => {
         const parsed = parseInvite(link); if (!parsed) return { ok: false, error: 'that does not look like an Endo invite / #cap= link' };
         const nm = String(name || '').trim() || 'new object';
@@ -781,6 +786,18 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
         return propose({ type: 'accept-invite', power: 'objects', agent, title: `Accept invite → "${nm}"`, summary: `from ${whence}`,
           detail: { name: nm, origin: whence, description: String(description || '') }, // cap-hygiene: NO swissnum in the detail shown to the LLM/DOM
           commit: async () => {
+            // A full ENDO DAEMON INVITATION (endo://…?type=invitation, dialed over iroh+captp0) is a
+            // daemon-to-daemon protocol, not a swissnum fetch: REDEEM it via the peer-daemon sidecar
+            // (E(host).accept over iroh). On success we hold a live PEER (a mailbox relationship), filed as
+            // transport 'endo-peer' and called with send/inbox via callObject.
+            if (/type=invitation/i.test(String(link))) {
+              let acc;
+              try { acc = await peerBridge.acceptInvitation(link, nm); } catch (e) { throw new Error(`could not reach "${nm}" to redeem the invitation over iroh: ${e.message}`); }
+              if (!acc || !acc.ok) throw new Error(`could not reach "${nm}" to redeem the invitation over iroh`);
+              acceptedObjects = acceptedObjects.filter(x => x.name !== nm).concat([{ name: nm, origin: '', transport: 'endo-peer', address: String(link), swissnum: parsed.swissnum, description: String(description || ''), methods: ['send', 'inbox', 'describe'], peer: true, addedAt: new Date().toISOString(), by: agent }]);
+              saveAcceptedObjects();
+              return { ok: true, name: nm, transport: 'endo-peer', peer: true, methods: ['send', 'inbox', 'describe'] };
+            }
             // Discover methods at accept-time. iroh refs dial over the iroh
             // transport; HTTP refs use /rpc. (An iroh ref has origin:'' — it
             // must NOT fall through to rpcCall, which would hit our OWN /rpc
@@ -800,23 +817,41 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
           } });
       } },
     listObjects: { reversible: false, args: {}, description: 'List the objects in your inventory (accepted Endo invites): name, where each is from, what it does, its methods, and its transport (http and iroh are both callable; iroh = dial-by-pubkey over QUIC). Each is SELF-DOCUMENTING — if an object\'s methods are unknown/empty, callObject(name, "describe") or "help" reveals them. Call one with callObject.',
-      run: async () => ({ ok: true, objects: acceptedObjects.map(o => { const tp = isHttpCallable(o) ? 'http' : (o.transport || (o.origin && o.origin !== 'null' ? 'http' : 'iroh')); return { name: o.name, origin: o.origin && o.origin !== 'null' ? o.origin : '(this instance)', transport: tp, callable: isHttpCallable(o) || isIrohCallable(o), description: o.description || '', methods: o.methods || [] }; }) }) },
+      run: async () => ({ ok: true, objects: acceptedObjects.map(o => { const tp = isPeerCallable(o) ? 'endo-peer' : (isHttpCallable(o) ? 'http' : (o.transport || (o.origin && o.origin !== 'null' ? 'http' : 'iroh'))); return { name: o.name, origin: isPeerCallable(o) ? '(live peer, via iroh)' : (o.origin && o.origin !== 'null' ? o.origin : '(this instance)'), transport: tp, callable: isHttpCallable(o) || isIrohCallable(o) || isPeerCallable(o), description: o.description || '', methods: o.methods || [] }; }) }) },
     callObject: { reversible: false, args: { name: 'string — an object name from listObjects', method: 'string — the method to call (use "describe" to discover its methods)', args: 'array — arguments' },
-      description: 'Call a method on an object in your inventory (an accepted Endo capability). Endo objects are SELF-DOCUMENTING: if you do not recognise an object or do not know its methods, FIRST call method "describe" (or "help") to discover what it offers, THEN call those methods — never abandon an inventory object as "unusable" without introspecting it this way. The held swissnum is used host-side; never shown. HTTP-origin objects are called over /rpc; endo-iroh (dial-by-pubkey) references are dialed over the iroh QUIC transport under the same CapTP/ocap layer.',
+      description: 'Call a method on an object in your inventory (an accepted Endo capability). Endo objects are SELF-DOCUMENTING: if you do not recognise an object or do not know its methods, FIRST call method "describe" (or "help") to discover what it offers, THEN call those methods — never abandon an inventory object as "unusable" without introspecting it this way. The held swissnum is used host-side; never shown. HTTP-origin objects are called over /rpc; endo-iroh (dial-by-pubkey) references are dialed over the iroh QUIC transport under the same CapTP/ocap layer. A redeemed PEER (transport "endo-peer", from an accepted invitation) is a MAILBOX, not a synchronous API — use method "send" (message them) and "inbox" (read their replies), not arbitrary method names.',
       run: async ({ name, method, args } = {}) => {
         const o = acceptedObjects.find(x => x.name === String(name || ''));
         if (!o) return { ok: false, error: `no object named "${name}" — see listObjects` };
+        // A REDEEMED Endo PEER (an accepted endo://…?type=invitation, dialed over iroh+captp0). This is a
+        // MAILBOX relationship, not a synchronous API: route to the peer-daemon sidecar (send/inbox).
+        if (o.transport === 'endo-peer' || o.peer) {
+          const m = String(method || 'describe').toLowerCase();
+          const argList = Array.isArray(args) ? args : (args == null ? [] : [args]);
+          if (m === 'describe' || m === 'help') {
+            return { ok: true, value: { kind: 'endo-peer', name: o.name, summary: `A live Endo PEER reached over iroh+captp0 (a redeemed invitation). This is a MAILBOX relationship — you message them and read their replies; it is NOT a synchronous method API.`, methods: { send: 'send(text) — message the peer', inbox: 'inbox() — read messages/replies they have sent you', describe: 'this' } } };
+          }
+          if (m === 'send' || m === 'message' || m === 'tell') {
+            if (!argList.length) return { ok: false, error: 'send needs a message string as its first argument' };
+            try { await peerBridge.sendToPeer(o.name, String(argList[0])); return { ok: true, value: `message sent to "${o.name}"` }; }
+            catch (e) { return { ok: false, error: `couldn't message "${o.name}" over iroh: ${e.message}` }; }
+          }
+          if (m === 'inbox' || m === 'messages' || m === 'read' || m === 'listmessages') {
+            try { const r = await peerBridge.peerInbox({}); return { ok: true, value: r.messages }; }
+            catch (e) { return { ok: false, error: `couldn't read the inbox for "${o.name}": ${e.message}` }; }
+          }
+          return { ok: false, error: `"${o.name}" is a live PEER (a mailbox), not a method API. Use callObject("${o.name}", "send", ["…"]) to message them, "inbox" to read replies, or "describe".` };
+        }
         // iroh (dial-by-pubkey) ref → dial over the iroh QUIC transport.
         if (isIrohCallable(o)) {
           const r = await dialIrohObject({ address: o.address, swissnum: o.swissnum, method: String(method || 'describe'), args: Array.isArray(args) ? args : (args == null ? [] : [args]) });
           return r.ok ? { ok: true, value: r.value } : { ok: false, error: `couldn't reach "${o.name}" over iroh: ${r.error}` };
         }
-        // Not callable over a transport we implement. Give a FINAL, non-retryable reason — and NEVER suggest
-        // "re-accept" (that hint + the "don't give up" guidance caused an accept→fail→re-accept LOOP). Recognise
-        // the full Endo daemon invitation (endo://…?type=invitation, dialed over iroh+captp0): redeeming it needs
-        // the Endo invitation-redemption flow, which the objects power does NOT implement yet.
+        // A stored endo://…?type=invitation that was accepted BEFORE redemption support (transport 'endo', never
+        // redeemed). Redemption IS supported now — but re-accepting is a user-confirmed action, so report it as a
+        // FINAL outcome (the agent must not loop): ask the user to re-accept it so it's redeemed as a live peer.
         if (/^endo:\/\//i.test(String(o.address || '')) || /type=invitation/i.test(String(o.address || ''))) {
-          return { ok: false, terminal: true, error: `"${o.name}" is an ENDO DAEMON INVITATION (endo://…?type=invitation, dialed over iroh+captp0). Redeeming it needs the Endo invitation-redemption flow, which the objects power does NOT implement yet — I cannot reach "${o.name}" this way. This is FINAL: do NOT re-accept or retry; tell the user this invite type isn't wired in yet.` };
+          return { ok: false, terminal: true, error: `"${o.name}" is an Endo daemon invitation that was stored before redemption was wired in (so it isn't connected). Redeeming endo://…?type=invitation over iroh+captp0 IS supported now — ask the user to re-accept this invite (proposeAcceptInvite) and it will be redeemed as a live peer you can message. This is FINAL: report it and stop; do not retry callObject in a loop.` };
         }
         if (!isHttpCallable(o)) return { ok: false, terminal: true, error: `"${o.name}" is not callable (transport=${o.transport || 'none'}; no HTTP origin or dialable iroh:// address). This is FINAL — do NOT retry or re-accept it; report it to the user instead.` };
         return { ok: true, value: await rpcCall(o.origin, o.swissnum, method, args) };

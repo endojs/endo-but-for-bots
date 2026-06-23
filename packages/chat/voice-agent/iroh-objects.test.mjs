@@ -15,27 +15,76 @@ import { makeFieldAgent } from './agent-caps.mjs';
 
 const SWISS = 'a'.repeat(32);
 
-const mkAgent = objectsSeed => {
+// A FAKE peer-bridge so the unit suite never spawns a real @endo/daemon (the real redemption is proven
+// separately in endo-peer-redemption.test.mjs, gated behind ENDO_PEER_E2E=1).
+const fakeBridge = ({ accept = true } = {}) => {
+  const sent = [];
+  return {
+    sent,
+    acceptInvitation: async (link, name) => (accept ? { ok: true, name } : (() => { throw new Error('iroh stream closed'); })()),
+    sendToPeer: async (name, text) => { sent.push({ name, text }); return { ok: true }; },
+    peerInbox: async () => ({ ok: true, messages: [{ from: 'kumavis', strings: ['hi from kumavis'] }] }),
+    ensurePeerDaemon: async () => ({ ok: true, irohReady: true }),
+    mintInvite: async () => ({ ok: true, locator: 'endo://self?id=x&type=invitation' }),
+  };
+};
+
+const mkAgent = (objectsSeed, opts = {}) => {
   const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fa-iroh-'));
   const objFile = path.join(outDir, 'objects.json');
   if (objectsSeed) fs.writeFileSync(objFile, JSON.stringify({ objects: objectsSeed }));
   process.env.OBJECTS_FILE = objFile;
-  return makeFieldAgent({ outDir, baseUrl: 'http://test.invalid' });
+  return makeFieldAgent({ outDir, baseUrl: 'http://test.invalid', ...opts });
 };
 
-test('a full Endo daemon invitation (endo://…?type=invitation) fails TERMINALLY without an accept→fail→re-accept loop', async () => {
-  const fa = mkAgent();
+// The real Kumavis-style link: an Endo daemon invitation dialed over iroh+captp0 (not a plain iroh:// ref).
+const INVITE = 'endo://e11a342b7bedbe16fdd5edeee8af58de2a68d15ca4662b6b72d64a0b818ff19b?id=a0a9623a36e3a5e4d1bb9a0d4bdb2b04ed2ae5cac7d7bdf1cb429e6f5b66f84d&type=invitation&from=b1091b64&at=iroh%2Bcaptp0%3A%2F%2F%2F67f477e0%3Frelay%3Dhttps%3A%2F%2Fr.iroh%2F%26addr%3D66.75.110.30%3A51137';
+
+test('a full Endo daemon invitation is REDEEMED into a live peer (mailbox: send/inbox/describe)', async () => {
+  const bridge = fakeBridge({ accept: true });
+  const fa = mkAgent(null, { peerBridge: bridge });
   const { toolbox } = fa.rootNode.toolbox();
-  // the real Kumavis-style link: an Endo invitation dialed over iroh+captp0 (not a plain iroh:// ref).
-  const link = 'endo://e11a342b7bedbe16fdd5edeee8af58de2a68d15ca4662b6b72d64a0b818ff19b?id=a0a9623a36e3a5e4d1bb9a0d4bdb2b04ed2ae5cac7d7bdf1cb429e6f5b66f84d&type=invitation&from=b1091b64&at=iroh%2Bcaptp0%3A%2F%2F%2F67f477e0%3Frelay%3Dhttps%3A%2F%2Fr.iroh%2F%26addr%3D66.75.110.30%3A51137';
-  const p = await toolbox.proposeAcceptInvite.run({ link, name: 'Kumavis', description: 'permission mgmt' });
-  await fa.commitProposal(p.id);
-  const r = await toolbox.callObject.run({ name: 'Kumavis', method: 'describe', args: [] });
-  assert.equal(r.ok, false, 'an Endo invitation is not callable yet');
-  assert.equal(r.terminal, true, 'marked TERMINAL so the agent stops (no retry loop)');
-  assert.match(r.error, /invitation/i, 'identifies it as an Endo daemon invitation');
-  assert.match(r.error, /do NOT re-accept|don't re-accept|FINAL/i, 'tells the agent NOT to re-accept/retry (breaks the loop)');
-  assert.doesNotMatch(r.error, /re-accept the invite so|dial address is captured/i, 'the OLD loop-trigger instruction is gone');
+  const p = await toolbox.proposeAcceptInvite.run({ link: INVITE, name: 'Kumavis', description: 'permission mgmt' });
+  await fa.commitProposal(p.id); // owner confirms → redeem over iroh
+
+  const k = (await toolbox.listObjects.run({})).objects.find(o => o.name === 'Kumavis');
+  assert.ok(k, 'Kumavis is in the inventory');
+  assert.equal(k.transport, 'endo-peer', 'stored as a redeemed peer');
+  assert.equal(k.callable, true, 'a redeemed peer is callable');
+
+  const d = await toolbox.callObject.run({ name: 'Kumavis', method: 'describe', args: [] });
+  assert.equal(d.ok, true);
+  assert.equal(d.value.kind, 'endo-peer', 'describe explains it is a peer mailbox');
+
+  const s = await toolbox.callObject.run({ name: 'Kumavis', method: 'send', args: ['hello kumavis'] });
+  assert.equal(s.ok, true, 'send routes to the peer');
+  assert.deepEqual(bridge.sent, [{ name: 'Kumavis', text: 'hello kumavis' }], 'the message reached the bridge');
+
+  const inbox = await toolbox.callObject.run({ name: 'Kumavis', method: 'inbox', args: [] });
+  assert.equal(inbox.ok, true);
+  assert.ok(inbox.value.some(m => (m.strings || []).includes('hi from kumavis')), 'inbox returns peer messages');
+});
+
+test('a failed redemption (unreachable peer) does NOT store a broken object and surfaces a clear error — no loop', async () => {
+  const bridge = fakeBridge({ accept: false }); // simulates an unreachable inviter (iroh stream closed)
+  const fa = mkAgent(null, { peerBridge: bridge });
+  const { toolbox } = fa.rootNode.toolbox();
+  const p = await toolbox.proposeAcceptInvite.run({ link: INVITE, name: 'Kumavis', description: 'x' });
+  const committed = await fa.commitProposal(p.id);
+  assert.equal(committed.ok, false, 'a failed redemption does not confirm the accept (rather than storing a dead peer)');
+  assert.match(committed.error, /reach|redeem|invitation/i, 'with a clear reason');
+  const k = (await toolbox.listObjects.run({})).objects.find(o => o.name === 'Kumavis');
+  assert.equal(k, undefined, 'no broken Kumavis object is left in the inventory');
+});
+
+test('a STALE endo invitation accepted before redemption support fails TERMINALLY (no re-accept loop)', async () => {
+  // Seed a pre-redemption record (transport 'endo', never redeemed).
+  const fa = mkAgent([{ name: 'OldKumavis', origin: '', transport: 'endo', address: INVITE, swissnum: 'a'.repeat(32), methods: [] }]);
+  const { toolbox } = fa.rootNode.toolbox();
+  const r = await toolbox.callObject.run({ name: 'OldKumavis', method: 'describe', args: [] });
+  assert.equal(r.ok, false);
+  assert.equal(r.terminal, true, 'TERMINAL so the agent stops');
+  assert.match(r.error, /re-accept|redeem/i, 'tells the user the path (re-accept to redeem) without looping');
   assert.doesNotMatch(r.error, /null\/rpc/i, 'never the cryptic null/rpc');
 });
 
