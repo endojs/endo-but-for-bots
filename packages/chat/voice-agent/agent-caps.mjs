@@ -1765,10 +1765,12 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
         push('tools', scored.map(x => ({ name: x.m.name, description: x.m.description, args: x.m.args })));
       }
       try { if (powers.has('notes')) push('notes', (await aff.notes.search(q, { limit: 8 })).map(n => ({ name: n.title, path: n.path }))); } catch (e) { results.push({ source: 'notes', error: `notes search failed (${(e && e.message) || e}) — your notes were NOT searched this time; retry`, name: '' }); } // surface, don't silently drop notes (the "search returned []" bug)
-      try { if (powers.has('contacts') && contactsObj) push('contacts', await contactsObj.search(q)); } catch { /* skip */ }
-      try { if (powers.has('homeassistant')) { const s = node.haStart(); if (s && s.search) push('homeassistant', await s.search(q)); } } catch { /* skip */ }
-      try { if (powers.has('agents')) { const s = node.agStart(); if (s && s.search) push('agents', await s.search(q)); } } catch { /* skip */ }
-      try { if (powers.has('kazputer') && kazAdmin) push('kazputer', await kazAdmin.search(q)); } catch { /* skip */ }
+      // SURFACE failures (don't silently drop a source — same principle as the notes "search returned []" fix):
+      // a silently-skipped source LOOKS like "it isn't searched", which is exactly the HA-in-search confusion.
+      try { if (powers.has('contacts') && contactsObj) push('contacts', await contactsObj.search(q)); } catch (e) { results.push({ source: 'contacts', error: `contacts search failed (${(e && e.message) || e}) — retry`, name: '' }); }
+      try { if (powers.has('homeassistant')) { const s = node.haStart(); if (s && s.search) push('homeassistant', await s.search(q)); else results.push({ source: 'homeassistant', error: 'Home Assistant isn’t ready yet (the device trie is still building at boot, or HA is unconfigured) — your devices were NOT searched; retry in a moment', name: '' }); } } catch (e) { results.push({ source: 'homeassistant', error: `Home Assistant search failed (${(e && e.message) || e}) — your devices were NOT searched this time; retry`, name: '' }); }
+      try { if (powers.has('agents')) { const s = node.agStart(); if (s && s.search) push('agents', await s.search(q)); } } catch (e) { results.push({ source: 'agents', error: `agents search failed (${(e && e.message) || e})`, name: '' }); }
+      try { if (powers.has('kazputer') && kazAdmin) push('kazputer', await kazAdmin.search(q)); } catch (e) { results.push({ source: 'kazputer', error: `kazputer search failed (${(e && e.message) || e})`, name: '' }); }
       return { ok: true, query: q, results: results.slice(0, 40) };
     } });
     manifest.push({ name: 'search', reversible: false, args: { query: 'string — what to find, or a capability you need ("set a timer", "push to my phone")' }, description: 'Your SEARCH ENGINE: search ACROSS everything in ONE call — FIRST your own available TOOLS/verbs (so "how do I X?" surfaces the right verb to call), then your notes, contacts, Home Assistant, agent roster, and Kazputer. Returns matches tagged by source (source:"tools" = a verb you can call right now). Use this to find the RIGHT TOOL or a thing before acting — don\'t assume where something lives.' });
