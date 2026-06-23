@@ -719,12 +719,35 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
   // ── INVENTORY: external Endo capabilities the agent ACCEPTED (each via an owner-confirmed proposal) — the
   //    inbound counterpart to createInvite. The swissnum is held host-side (mode 0600), NEVER spoken/rendered;
   //    the object is called over the standard /rpc {swissnum, method, args} seam (the same one createInvite shares).
-  const OBJECTS_FILE = '/home/dan/.config/field-agent/accepted-objects.json';
+  const OBJECTS_FILE = process.env.OBJECTS_FILE || '/home/dan/.config/field-agent/accepted-objects.json'; // env-overridable for tests
   let acceptedObjects = [];
   try { acceptedObjects = JSON.parse(fs.readFileSync(OBJECTS_FILE, 'utf8')).objects || []; } catch { acceptedObjects = []; }
   const saveAcceptedObjects = () => { try { fs.mkdirSync(path.dirname(OBJECTS_FILE), { recursive: true }); fs.writeFileSync(OBJECTS_FILE, JSON.stringify({ objects: acceptedObjects }, null, 2), { mode: 0o600 }); } catch (e) { /* best effort */ } };
-  const parseInvite = link => { const s = String(link || '').trim(); const m = /#(?:cap|agent)=([0-9a-fA-F]{16,})/.exec(s) || /(?:^|[^0-9a-f])([0-9a-f]{32,128})(?:[^0-9a-f]|$)/.exec(s); if (!m) return null; let origin = ''; try { origin = new URL(s.split('#')[0]).origin; } catch { /* same-instance / relative link */ } return { origin, swissnum: m[1] }; };
-  const rpcCall = async (origin, swissnum, method, args) => { const base = origin || baseUrl; try { return await (await fetch(`${base}/rpc`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ swissnum, method: String(method || 'describe'), args: Array.isArray(args) ? args : (args == null ? [] : [args]) }) })).json(); } catch (e) { return { error: e.message }; } };
+  // Parse an invite into { origin (HTTP only), swissnum, transport, address }. A non-HTTP scheme (iroh://,
+  // ocapn://) has no HTTP origin — `new URL(...).origin` returns the STRING "null", which used to be stored
+  // and then dialed as `fetch("null/rpc")` (the "Failed to parse URL from null/rpc" bug). We now keep origin
+  // EMPTY for those and record the real transport + address, so callObject can fail legibly instead.
+  const parseInvite = link => {
+    const s = String(link || '').trim();
+    const m = /#(?:cap|agent)=([0-9a-fA-F]{16,})/.exec(s) || /(?:^|[^0-9a-f])([0-9a-f]{32,128})(?:[^0-9a-f]|$)/.exec(s);
+    if (!m) return null;
+    let origin = '', transport = '', address = '';
+    try { const u = new URL(s.split('#')[0]); if (/^https?:$/.test(u.protocol)) origin = u.origin; else { transport = u.protocol.replace(/:$/, ''); address = s.split('#')[0]; } }
+    catch { /* relative / same-instance link → origin stays '' (falls back to THIS instance) */ }
+    return { origin, swissnum: m[1], transport, address };
+  };
+  // Call an accepted object's /rpc. HTTP origin → that origin; empty origin → THIS instance (a same-instance
+  // invite). A truthy-but-non-HTTP origin (legacy "null", or an iroh/ocapn ref) is NOT HTTP-reachable → return
+  // a legible error rather than fetching a garbage URL or silently hitting our own /rpc with a foreign swissnum.
+  const rpcCall = async (origin, swissnum, method, args) => {
+    let base;
+    if (origin && /^https?:\/\//.test(origin)) base = origin;
+    else if (!origin) base = baseUrl;
+    else return { error: `cannot reach this object over HTTP — its origin "${origin}" is not an HTTP endpoint (it's an endo-iroh/ocapn reference; that dial-by-pubkey transport is not wired into this app yet). Re-accept the invite once the Iroh transport lands.` };
+    try { return await (await fetch(`${base}/rpc`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ swissnum, method: String(method || 'describe'), args: Array.isArray(args) ? args : (args == null ? [] : [args]) }) })).json(); } catch (e) { return { error: e.message }; } };
+  // An accepted object is HTTP-callable iff it has no non-HTTP transport AND its origin is same-instance ('')
+  // or a real http(s) origin (NOT the legacy stored string "null"). iroh/ocapn refs are held but not callable.
+  const isHttpCallable = o => (!o.transport || o.transport === 'http') && (!o.origin || o.origin === '(this instance)' || /^https?:\/\//.test(String(o.origin)));
   const specSlug = name => `spec-${String(name || 'x').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 32) || 'x'}`;
   const findSpecialist = ref => { const r = String(ref || ''); return specialists.find(s => s.id === r || s.id === specSlug(r) || s.name.toLowerCase() === r.toLowerCase()); };
   const specNodes = new Map(); // id → its agent-node (built lazily / at boot)
@@ -746,21 +769,27 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
       run: async ({ link, name, description }, agent) => {
         const parsed = parseInvite(link); if (!parsed) return { ok: false, error: 'that does not look like an Endo invite / #cap= link' };
         const nm = String(name || '').trim() || 'new object';
-        return propose({ type: 'accept-invite', power: 'objects', agent, title: `Accept invite → "${nm}"`, summary: `from ${parsed.origin || 'this instance'}`,
-          detail: { name: nm, origin: parsed.origin || '(this instance)', description: String(description || '') }, // cap-hygiene: NO swissnum in the detail shown to the LLM/DOM
+        const whence = parsed.origin || (parsed.transport ? `${parsed.transport} (${parsed.address})` : 'this instance');
+        return propose({ type: 'accept-invite', power: 'objects', agent, title: `Accept invite → "${nm}"`, summary: `from ${whence}`,
+          detail: { name: nm, origin: whence, description: String(description || '') }, // cap-hygiene: NO swissnum in the detail shown to the LLM/DOM
           commit: async () => {
-            const d = await rpcCall(parsed.origin, parsed.swissnum, 'describe', []);
+            const d = await rpcCall(parsed.origin, parsed.swissnum, 'describe', []); // (no-op for a non-HTTP ref — returns a legible error; methods stay [])
             const methods = (d && Array.isArray(d.methods)) ? d.methods : (Array.isArray(d) ? d : []);
-            acceptedObjects = acceptedObjects.filter(x => x.name !== nm).concat([{ name: nm, origin: parsed.origin, swissnum: parsed.swissnum, description: String(description || ''), methods, addedAt: new Date().toISOString(), by: agent }]);
+            acceptedObjects = acceptedObjects.filter(x => x.name !== nm).concat([{ name: nm, origin: parsed.origin, transport: parsed.transport || '', address: parsed.address || '', swissnum: parsed.swissnum, description: String(description || ''), methods, addedAt: new Date().toISOString(), by: agent }]);
             saveAcceptedObjects();
-            return { ok: true, name: nm, methods };
+            return { ok: true, name: nm, methods, transport: parsed.transport || 'http' };
           } });
       } },
-    listObjects: { reversible: false, args: {}, description: 'List the objects in your inventory (accepted Endo invites): name, where each is from, what it does, and its methods. Call one with callObject.',
-      run: async () => ({ ok: true, objects: acceptedObjects.map(o => ({ name: o.name, origin: o.origin || '(this instance)', description: o.description || '', methods: o.methods || [] })) }) },
+    listObjects: { reversible: false, args: {}, description: 'List the objects in your inventory (accepted Endo invites): name, where each is from, what it does, its methods, and its transport (http = callable now; iroh/ocapn = held but not yet callable). Call one with callObject.',
+      run: async () => ({ ok: true, objects: acceptedObjects.map(o => { const tp = isHttpCallable(o) ? 'http' : (o.transport || (o.origin && o.origin !== 'null' ? 'http' : 'iroh')); return { name: o.name, origin: o.origin && o.origin !== 'null' ? o.origin : '(this instance)', transport: tp, callable: tp === 'http', description: o.description || '', methods: o.methods || [] }; }) }) },
     callObject: { reversible: false, args: { name: 'string — an object name from listObjects', method: 'string — the method to call (use "describe" to discover its methods)', args: 'array — arguments' },
-      description: 'Call a method on an object in your inventory (an accepted Endo capability). The held swissnum is used host-side; never shown.',
-      run: async ({ name, method, args } = {}) => { const o = acceptedObjects.find(x => x.name === String(name || '')); if (!o) return { ok: false, error: `no object named "${name}" — see listObjects` }; return { ok: true, value: await rpcCall(o.origin, o.swissnum, method, args) }; } },
+      description: 'Call a method on an object in your inventory (an accepted Endo capability). The held swissnum is used host-side; never shown. Note: iroh/ocapn (dial-by-pubkey) references are NOT callable yet — that transport is not wired in.',
+      run: async ({ name, method, args } = {}) => {
+        const o = acceptedObjects.find(x => x.name === String(name || ''));
+        if (!o) return { ok: false, error: `no object named "${name}" — see listObjects` };
+        if (!isHttpCallable(o)) return { ok: false, error: `"${o.name}" is an endo-${o.transport || 'iroh'} reference (dial-by-pubkey). It's in your inventory, but the objects power can only CALL HTTP-origin Endo objects via /rpc today — the ${o.transport || 'iroh'} transport isn't wired into this app yet, so I can't reach it. Once the Iroh transport lands it'll work (you may need to re-accept the invite so its dial address is captured).` };
+        return { ok: true, value: await rpcCall(o.origin, o.swissnum, method, args) };
+      } },
     // ⚠️ self-improvement: implement on an isolated worktree → independently verify → (flag-gated) auto-merge.
     improveSystem: { reversible: false, args: { goal: 'string — the concrete system improvement to implement', successCommand: 'string — OPTIONAL: the command that must pass to prove it (defaults to the full voice-agent test suite)' },
       description: 'Autonomously IMPLEMENT a system improvement: a confined executor builds it on a FRESH git worktree + ships a test; the harness INDEPENDENTLY re-verifies, and (only if SELF_IMPROVE_AUTOMERGE is enabled) merges to the live branch with a post-merge re-verify + auto-revert on failure. One at a time. With auto-merge off it stops at a verified, ready-to-review branch (the safe default).',
