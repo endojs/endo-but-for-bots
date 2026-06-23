@@ -12,6 +12,20 @@ import path from 'node:path';
 import '@endo/init';
 import { makeFieldAgent } from './agent-caps.mjs';
 
+test('download links survive a restart (the registry is persisted, not in-memory only)', async () => {
+  const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fa-dl-persist-'));
+  const fa1 = makeFieldAgent({ outDir, baseUrl: 'http://test.invalid' });
+  const { toolbox } = fa1.rootNode.toolbox();
+  await toolbox.fileWrite.run({ path: 'doc.txt', content: 'PERSISTED-DOC' });
+  const r = await toolbox.createDownloadLinkFor.run({ path: 'doc.txt', name: 'doc.txt' });
+  assert.match(r.url, /^\/dl\/[0-9a-f]{36}$/);
+  // a FRESH agent (== a service restart) over the SAME outDir must still resolve the token
+  const fa2 = makeFieldAgent({ outDir, baseUrl: 'http://test.invalid' });
+  const rec = fa2.downloadFor(r.token);
+  assert.ok(rec && rec.path, 'the link still resolves after a restart');
+  assert.equal(fs.readFileSync(rec.path, 'utf8'), 'PERSISTED-DOC', 'and still serves the file');
+});
+
 const mkRoot = () => {
   const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fa-dl-'));
   return makeFieldAgent({ outDir, baseUrl: 'http://test.invalid', autoConfirmFile: path.join(outDir, 'auto-confirm.json'), specialistsFile: path.join(outDir, 'specialists.json') });

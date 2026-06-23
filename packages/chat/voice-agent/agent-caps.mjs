@@ -609,8 +609,19 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
   // download web-keys: token → { path (canonical, inside an agent home), name }. The token IS the credential
   // (like /sites, /uploads). 36-hex so it dodges the bare-32-hex trace scrub — a download link is a legit
   // render (it serves ONE file as an attachment), not a cap to the agent's authority. In-memory, like sites.
+  // PERSISTED so a download link handed to the user keeps working across a service restart (in-memory-only
+  // meant every restart silently 404'd every prior link). Tokens are web-keys → file mode 0600. Bounded.
+  const DOWNLOADS_FILE = `${outDir}/download-refs.json`;
   const downloads = new Map();
-  const download = async (absFile, name) => { const token = crypto.randomBytes(18).toString('hex'); const nm = String(name || 'download').slice(0, 200); downloads.set(token, { path: absFile, name: nm }); return { name: nm, url: `/dl/${token}`, token }; };
+  try { const d = JSON.parse(fs.readFileSync(DOWNLOADS_FILE, 'utf8')); if (d && typeof d === 'object') for (const [k, v] of Object.entries(d)) downloads.set(k, v); } catch { /* none yet */ }
+  const saveDownloads = () => { try { fs.mkdirSync(outDir, { recursive: true }); fs.writeFileSync(DOWNLOADS_FILE, JSON.stringify(Object.fromEntries(downloads)), { mode: 0o600 }); } catch { /* best-effort */ } };
+  const download = async (absFile, name) => {
+    const token = crypto.randomBytes(18).toString('hex'); const nm = String(name || 'download').slice(0, 200);
+    downloads.set(token, { path: absFile, name: nm });
+    if (downloads.size > 2000) downloads.delete(downloads.keys().next().value); // bound the store (oldest out)
+    saveDownloads();
+    return { name: nm, url: `/dl/${token}`, token };
+  };
   const downloadFor = token => downloads.get(String(token || '')) || null;
   const homeCache = new Map(); // subkey → home object (stable per agent)
   const makeHome = subkey => { if (!homeCache.has(subkey)) homeCache.set(subkey, makeHomeFolder({ root: `${HOME_BASE}/${subkey}`, label: subkey, publish, download })); return homeCache.get(subkey); };
