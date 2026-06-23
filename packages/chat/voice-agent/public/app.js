@@ -389,7 +389,7 @@ const traceGeometry = steps => {
   const arr = _arr(steps).slice(0, 18);
   const cv = (n, d) => (getComputedStyle(document.documentElement).getPropertyValue(n).trim() || d);
   const acc = cv('--acc', '#7c5cff'), ok = cv('--trace-ok', '#8fd0a8'), bad = cv('--trace-bad', '#ff9e9e'), edge = cv('--edge', '#30363d');
-  const W = 360, H = Math.max(60, Math.min(150, 28 + arr.length * 15));
+  const W = 420, H = Math.max(64, Math.min(190, 26 + arr.length * 17));
   const uid = 'tg' + Math.random().toString(36).slice(2, 8);
   const svg = svgEl('svg', { viewBox: `0 0 ${W} ${H}`, class: 'trace-geo', preserveAspectRatio: 'xMidYMid meet', width: '100%' });
   svg.style.maxHeight = `${H}px`;
@@ -399,16 +399,21 @@ const traceGeometry = steps => {
   const mg = svgEl('feMerge', {}); mg.appendChild(svgEl('feMergeNode', { in: 'b' })); mg.appendChild(svgEl('feMergeNode', { in: 'SourceGraphic' })); f.appendChild(mg);
   defs.appendChild(f); svg.appendChild(defs);
   const diamond = (cx, cy, r, col, glow) => svgEl('polygon', { points: `${cx},${cy - r} ${cx + r},${cy} ${cx},${cy + r} ${cx - r},${cy}`, fill: 'none', stroke: col, 'stroke-width': glow ? 1.6 : 1.1, filter: glow ? `url(#${uid})` : null });
-  const rx = 36, ry = H / 2, tx = W - 70;
+  const clip = (s, n) => { s = String(s || ''); return s.length > n ? `${s.slice(0, n - 1)}…` : s; };
+  const rx = 30, ry = H / 2, tx = 92; // tools sit near the root; the right ~75% is for their LABELS
   arr.forEach((s, i) => {
-    const ty = arr.length === 1 ? ry : 14 + (H - 28) * (i / (arr.length - 1));
-    const col = s.ok === false ? bad : (_arr(s.children).length ? acc : ok);
+    const ty = arr.length === 1 ? ry : 13 + (H - 26) * (i / (arr.length - 1));
+    const kids = _arr(s.children);
+    const col = s.ok === false ? bad : (kids.length ? acc : ok);
     svg.appendChild(svgEl('line', { x1: rx, y1: ry, x2: tx, y2: ty, stroke: edge, 'stroke-width': 0.9, opacity: 0.7 }));
-    svg.appendChild(diamond(tx, ty, 5.5, col, true));
-    _arr(s.children).slice(0, 6).forEach((c, j) => { const cxx = tx + 13 + j * 9; svg.appendChild(svgEl('line', { x1: tx, y1: ty, x2: cxx, y2: ty, stroke: edge, 'stroke-width': 0.6, opacity: 0.5 })); svg.appendChild(svgEl('circle', { cx: cxx, cy: ty, r: 2, fill: c.ok === false ? bad : ok, opacity: 0.9 })); });
+    svg.appendChild(diamond(tx, ty, 5, col, true));
+    const tl = svgEl('text', { x: tx + 10, y: ty + 3.3, 'font-size': 10, fill: col, 'font-family': 'ui-monospace,Menlo,Consolas,monospace' });
+    tl.textContent = clip(s.name, 34); svg.appendChild(tl); // LABEL the tool (the user asked for labeled tools)
+    // research/delegate children → small dots, right-aligned so they never collide with the label
+    kids.slice(0, 6).forEach((c, j) => { const n = Math.min(6, kids.length); const cxx = W - 8 - (n - 1 - j) * 9; svg.appendChild(svgEl('circle', { cx: cxx, cy: ty, r: 2, fill: c.ok === false ? bad : ok, opacity: 0.9 })); });
   });
-  svg.appendChild(diamond(rx, ry, 13, acc, true)); // the agent root (octahedron) — drawn on top
-  svg.appendChild(diamond(rx, ry, 6, acc, false));
+  svg.appendChild(diamond(rx, ry, 12, acc, true)); // the agent root (octahedron) — drawn on top
+  svg.appendChild(diamond(rx, ry, 5.5, acc, false));
   svg.onclick = () => { ensurePendant().then(p => { try { pendantWrap.classList.remove('hide'); p.setVisible(true); p.showSteps(arr); if (!pendantFs) togglePendantFs(); } catch { /* */ } }).catch(() => {}); };
   return svg;
 };
