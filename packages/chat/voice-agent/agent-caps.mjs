@@ -604,8 +604,14 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
   // Every agent that holds the `home` power gets a home folder object bound to
   // its own sub-dir. publish() registers a folder as a static site under
   // /sites/<token>/ (an unguessable web-key path) and returns the URL.
-  const sites = new Map(); // token → absolute dir
-  const publish = async (dir, name) => { const token = crypto.randomBytes(8).toString('hex'); sites.set(token, dir); return { name: String(name || 'site'), url: `${baseUrl}/sites/${token}/`, token }; };
+  // PERSISTED (token → absolute dir) so a published-site link keeps working across a restart — the site's
+  // content lives under HOME_BASE (durable); only this mapping was volatile, which 404'd every prior /sites
+  // link on each restart ("unknown or revoked site"). Tokens are web-keys → file mode 0600.
+  const SITES_FILE = `${outDir}/site-refs.json`;
+  const sites = new Map();
+  try { const d = JSON.parse(fs.readFileSync(SITES_FILE, 'utf8')); if (d && typeof d === 'object') for (const [k, v] of Object.entries(d)) sites.set(k, v); } catch { /* none yet */ }
+  const saveSites = () => { try { fs.mkdirSync(outDir, { recursive: true }); fs.writeFileSync(SITES_FILE, JSON.stringify(Object.fromEntries(sites)), { mode: 0o600 }); } catch { /* best-effort */ } };
+  const publish = async (dir, name) => { const token = crypto.randomBytes(8).toString('hex'); sites.set(token, dir); saveSites(); return { name: String(name || 'site'), url: `${baseUrl}/sites/${token}/`, token }; };
   // download web-keys: token → { path (canonical, inside an agent home), name }. The token IS the credential
   // (like /sites, /uploads). 36-hex so it dodges the bare-32-hex trace scrub — a download link is a legit
   // render (it serves ONE file as an attachment), not a cap to the agent's authority. In-memory, like sites.
