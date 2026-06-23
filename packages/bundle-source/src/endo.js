@@ -22,7 +22,12 @@ const textDecoder = new TextDecoder();
  */
 export const makeBundlingKit = (
   io,
-  { cacheSourceMaps, elideComments, noTransforms, commonDependencies: _commonDependencies },
+  {
+    cacheSourceMaps,
+    elideComments,
+    noTransforms,
+    commonDependencies: _commonDependencies,
+  },
 ) => {
   const { pathResolve, userInfo, computeSha512, platform, env } = io;
   if (noTransforms && elideComments) {

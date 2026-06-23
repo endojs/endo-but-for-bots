@@ -604,7 +604,10 @@ test('mapNodeModules - packageDependenciesHook receives expected canonical names
   const receivedCanonicalNames = new Set();
 
   /** @type {PackageDependenciesHook} */
-  const packageDependenciesHook = ({ canonicalName, dependencies: _dependencies }) => {
+  const packageDependenciesHook = ({
+    canonicalName,
+    dependencies: _dependencies,
+  }) => {
     receivedCanonicalNames.add(canonicalName);
 
     return undefined;

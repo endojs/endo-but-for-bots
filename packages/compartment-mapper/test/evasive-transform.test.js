@@ -65,7 +65,13 @@ test('moduleTransforms - evasive transforms handle HTML comments when applied', 
   await t.notThrowsAsync(async () => {
     await importLocation(fakeRead, fixture, {
       moduleTransforms: {
-        async mjs(sourceBytes, _specifier, location, _packageLocation, _options) {
+        async mjs(
+          sourceBytes,
+          _specifier,
+          location,
+          _packageLocation,
+          _options,
+        ) {
           const source = new TextDecoder().decode(sourceBytes);
           // Apply evasive transforms to handle the HTML comment
           const { code } = await evadeCensor(source, {
