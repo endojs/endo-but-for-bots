@@ -179,12 +179,15 @@ container persistence.
 
 ### Creating and destroying a session
 
-- **Peer-callable:** `E(factory).createSession(config)` returns the
-  `ClaudeClient` cap **without** naming it on the host, so the caller's retention
-  is the session's only root. Dropping the cap collects the formula and tears the
-  session down (container disposed, workspace unmounted).
-- **Operator:** submitting the `@host` form stores the client under a pet name;
-  destroy it with `E(host).remove(name)`.
+- **Remote peer:** the peer `send`s a session-request package (a `filesystem`
+  (+ optional `credentials`) edge and a JSON config marked
+  `kind: "claude-sandbox-session"`); the factory `adopt`s the caps and replies
+  with a `client` edge the peer adopts. Host-rooted under the factory directory.
+- **Operator:** submitting the `@host` form (host pet names) stores the client
+  under a pet name.
+- Both are host-rooted; destroy with `E(host).remove(name)`. A capability cannot
+  be passed as a method argument across a daemon boundary (it would arrive as an
+  unadoptable presence), so there is no `createSession` cap-argument method.
 - **Stop without destroying:** `E(client).terminate()` disposes the container and
   unmounts, but the formula survives and re-provisions on the next `send()`.
 

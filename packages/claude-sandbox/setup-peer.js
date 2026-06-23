@@ -12,8 +12,9 @@
 //
 // The long-lived API key/token never leaves this peer: the minted
 // ClaudeCredentials cap materialises only a short-lived secret to the sandbox
-// host at container-spawn time. Hand that minted credential cap (not these
-// factory objects) to the host's createSession to authorize a session.
+// host at container-spawn time. Send that minted credential cap (not these
+// factory objects) to the host in a session-request package to authorize a
+// session.
 //
 // The sandbox factory + container infra belong on the HOST machine — see
 // setup-host.js. For single-machine dev, run both.

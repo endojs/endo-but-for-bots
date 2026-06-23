@@ -115,21 +115,14 @@ const makeMockHostAgent = ({ filesystems = {}, evaluateThrows } = {}) => {
   const unconfinedCalls = [];
   const evaluateCalls = [];
   const removeCalls = [];
-  const storeValueCalls = [];
   const adoptCalls = [];
   const replyCalls = [];
   const dismissCalls = [];
   const hostAgent = {
-    // Only the form path resolves names with host authority. The
-    // peer-callable `createSession` passes caps by reference, never names.
-    async lookup(name) {
-      if (name in filesystems) return filesystems[name];
-      return undefined;
-    },
-    // The factory temp-names a peer-supplied cap so `evaluate` can endow it
-    // by reference; removed right after `makeUnconfined`.
-    async storeValue(value, petName) {
-      storeValueCalls.push({ value, petName });
+    // The form path validates that the operator's pet names exist (then endows
+    // them by name); `filesystems` doubles as the existence map.
+    async has(name) {
+      return name in filesystems;
     },
     // The peer-package path adopts the caps from the host mailbox.
     async adopt(number, edge, petName) {
@@ -168,7 +161,6 @@ const makeMockHostAgent = ({ filesystems = {}, evaluateThrows } = {}) => {
     unconfinedCalls,
     evaluateCalls,
     removeCalls,
-    storeValueCalls,
     adoptCalls,
     replyCalls,
     dismissCalls,
@@ -276,21 +268,19 @@ test('submission formulates a claude-client caplet with the right env', async t 
   // and not a shared cap. The name is per-session (`claude-<sessionId>-powers`).
   t.regex(call.opts.powersName, /^claude-my-claude-.*-powers$/);
 
-  // The per-session powers was built by `evaluate`, endowing the infra caps
-  // by host name and the resolved filesystem/credential caps by *temporary*
-  // names (so `evaluate` can endow them by reference), plus `@agent` for the
-  // bounded provideMount.
+  // The per-session powers was built by `evaluate`, endowing the operator's
+  // own pet names **directly** (the form path does not storeValue — the names
+  // already exist in the host petstore), plus `@agent` for provideMount.
   t.is(host.evaluateCalls.length, 1);
   const evalCall = host.evaluateCalls[0];
   t.is(evalCall.resultName, call.opts.powersName);
-  t.is(evalCall.petNames.length, 5);
-  t.deepEqual(evalCall.petNames.slice(0, 3), [
+  t.deepEqual(evalCall.petNames, [
     '@agent',
     'sandbox-factory',
     'fs-mounter',
+    'my-fs',
+    'my-creds',
   ]);
-  t.regex(evalCall.petNames[3], /^claude-my-claude-.*-fscap$/);
-  t.regex(evalCall.petNames[4], /^claude-my-claude-.*-credcap$/);
   t.deepEqual(evalCall.codeNames, [
     'agent',
     'sandboxFactory',
@@ -298,19 +288,9 @@ test('submission formulates a claude-client caplet with the right env', async t 
     'filesystem',
     'credentials',
   ]);
-  // The resolved caps were temp-named via storeValue (by reference, not name).
-  t.is(host.storeValueCalls.length, 2);
-  t.is(host.storeValueCalls[0].value, fsCap);
-  t.is(host.storeValueCalls[0].petName, evalCall.petNames[3]);
-  t.is(host.storeValueCalls[1].value, credCap);
-  t.is(host.storeValueCalls[1].petName, evalCall.petNames[4]);
-  // …and the per-session powers name *and* the temp cap names were removed
-  // after makeUnconfined, so the session leaves no host-petstore residue
-  // (collected with the client via the dependency edges).
-  t.deepEqual(
-    host.removeCalls.slice().sort(),
-    [call.opts.powersName, evalCall.petNames[3], evalCall.petNames[4]].sort(),
-  );
+  // Only the per-session powers name is removed — the operator's `my-fs` /
+  // `my-creds` names are durable and must NOT be removed.
+  t.deepEqual(host.removeCalls, [call.opts.powersName]);
 
   const { env } = call.opts;
   // Caps are passed by reference through powers — no cap-name env vars.
@@ -352,77 +332,12 @@ test('SANDBOX_NAMESPACE endows the infra caps under the factory directory', asyn
   });
 
   await waitFor(() => host.evaluateCalls.length > 0);
-  const { petNames } = host.evaluateCalls[0];
-  t.is(petNames.length, 4);
-  t.deepEqual(petNames.slice(0, 3), [
+  t.deepEqual(host.evaluateCalls[0].petNames, [
     '@agent',
     ['claude-sandbox', 'sandbox-factory'],
     ['claude-sandbox', 'fs-mounter'],
+    'my-fs',
   ]);
-  t.regex(petNames[3], /^claude-ns-claude-.*-fscap$/);
-});
-
-test('createSession() formulates an un-named client and returns the cap', async t => {
-  // Peer path: the caller passes the caps it holds *by reference*, never
-  // host pet names. The factory must not resolve any name against the host.
-  const fsCap = harden({ kind: 'fake-fs' });
-  const credCap = harden({ kind: 'fake-creds' });
-  const mock = makeMockPowers();
-  const host = makeMockHostAgent({ filesystems: {} });
-
-  const factory = make(mock.powers, undefined, wireDeps(mock, host));
-
-  const client = await factory.createSession(
-    harden({
-      name: 'peer-claude',
-      filesystem: fsCap,
-      network: 'private',
-      credentials: credCap,
-    }),
-  );
-
-  t.is(host.unconfinedCalls.length, 1);
-  const call = host.unconfinedCalls[0];
-  t.regex(call.specifier, /claude-client-module\.js$/);
-  // Peer-rooted: NOT stored under a host pet name.
-  t.is(call.opts.resultName, undefined);
-  t.regex(call.opts.powersName, /^claude-peer-claude-.*-powers$/);
-  // Caps by reference: the peer's filesystem/credential caps were temp-named
-  // via storeValue and endowed into the powers (never resolved by name).
-  const evalCall = host.evaluateCalls[0];
-  t.is(evalCall.petNames.length, 5);
-  t.deepEqual(evalCall.petNames.slice(0, 3), [
-    '@agent',
-    'sandbox-factory',
-    'fs-mounter',
-  ]);
-  t.regex(evalCall.petNames[3], /-fscap$/);
-  t.regex(evalCall.petNames[4], /-credcap$/);
-  t.is(host.storeValueCalls[0].value, fsCap);
-  t.is(host.storeValueCalls[1].value, credCap);
-  t.is(call.opts.env.FILESYSTEM_NAME, undefined);
-  t.is(call.opts.env.CREDENTIALS_NAME, undefined);
-  // Per-session powers name and temp cap names all removed (no residue).
-  t.deepEqual(
-    host.removeCalls.slice().sort(),
-    [call.opts.powersName, evalCall.petNames[3], evalCall.petNames[4]].sort(),
-  );
-  // The cap is returned to the caller, not stored.
-  t.is(client.kind, 'fake-client');
-});
-
-test('createSession() rejects a missing filesystem cap', async t => {
-  // The peer path takes caps, not names; omitting the filesystem cap is the
-  // failure mode (an "unknown name" is impossible — no name is resolved).
-  const mock = makeMockPowers();
-  const host = makeMockHostAgent({ filesystems: {} });
-  const factory = make(mock.powers, undefined, wireDeps(mock, host));
-
-  await t.throwsAsync(() => factory.createSession(harden({ name: 'x' })), {
-    message: /filesystem capability/,
-  });
-  t.is(host.unconfinedCalls.length, 0);
-  t.is(host.storeValueCalls.length, 0);
 });
 
 test('submission with an unknown filesystem replies with an error', async t => {

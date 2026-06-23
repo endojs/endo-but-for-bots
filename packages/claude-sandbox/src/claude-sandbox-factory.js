@@ -143,7 +143,6 @@ const buildSessionPowersSource = (mountPoint, hasCredentials) => `makeExo(
  */
 
 const FactoryInterface = M.interface('ClaudeSandboxFactory', {
-  createSession: M.call(M.record()).returns(M.promise()),
   help: M.call().optional(M.string()).returns(M.string()),
 });
 
@@ -275,8 +274,8 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
   // millisecond get distinct ids (and hence distinct mountpoints + workspace
   // pet names). `Date.now()` alone collides for same-name same-ms requests.
   let sessionCounter = 0;
-  // Distinct counter for the temporary endowment names minted before a
-  // session id exists (storeValue / adopt happen before the core runs).
+  // Distinct counter for the temporary adopt names minted before a session id
+  // exists (the `adopt` happens before the core runs).
   let tempCounter = 0;
 
   /** @type {Promise<any> | undefined} */
@@ -292,21 +291,23 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
    * Core: formulate the per-session powers cap + `claude-client` from caps
    * that already carry a host **pet name** (or path). The powers `evaluate`
    * endows its caps **by name**, so the caller must have given each cap a host
-   * name first — by `storeValue` (host-local caps; `formulateSessionFromCaps`)
-   * or by `adopt` (a remote peer's caps; the mailbox session-request path).
-   * A bare CapTP presence has no formula id and cannot be endowed, which is
-   * why a cap is never wired in directly.
+   * name first — an existing operator pet name (the form path) or an `adopt`ed
+   * name (a remote peer's caps; the mailbox session-request path). A bare CapTP
+   * presence has no formula id and cannot be endowed, which is why a cap is
+   * never wired in directly and there is no cap-argument entry point.
    *
-   * `removeNames` are the temporary endowment names the caller minted; the core
-   * removes them (with `powersName`) after `makeUnconfined`. Each stays
-   * reachable for the client's lifetime via the powers→endowment and
-   * client→powers dependency edges (adopted caps additionally via the host's
-   * `thisDiesIfThatDies` import edge), so dropping the names leaves no residue.
+   * `removeNames` are the *temporary* endowment names the caller minted (the
+   * adopt path's `*-fscap`/`*-credcap`); the core removes them (with
+   * `powersName`) after `makeUnconfined`. Each stays reachable for the client's
+   * lifetime via the powers→endowment and client→powers dependency edges
+   * (adopted caps additionally via the host's `thisDiesIfThatDies` import
+   * edge), so dropping the names leaves no residue. The form path passes no
+   * `removeNames` — its endowment names are the operator's own durable names.
    *
-   * With `resultName` the client is stored under that pet name (a host-side GC
-   * root — the form / mailbox paths). Without it the client is formulated
-   * **un-named** and returned, so the caller's retention is its only root
-   * (the host-local `createSession` convenience). See DESIGN.md § Lifecycle.
+   * `resultName` stores the client under that pet name — a host-side GC root.
+   * Both create paths are host-rooted (mailbox delivery attaches the client by
+   * name); destroy a session with `E(host).remove(name)`. See DESIGN.md
+   * § Lifecycle.
    *
    * @param {object} spec
    * @param {string} spec.name
@@ -336,7 +337,7 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
     const hostAgent = await getHostAgent();
 
     // Best-effort cleanup of every temporary name this formulation touches
-    // (the caller's storeValue/adopt names plus the per-session powers) so a
+    // (the caller's adopt names plus the per-session powers) so a
     // failure at *any* step — validation, evaluate, makeUnconfined — strands
     // nothing on the host. Names not (yet) present are ignored.
     /** @type {Array<string | string[]>} */
@@ -365,9 +366,9 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
       // session's mountpoint — no `lookup`, no other host reach. `evaluate`
       // endows them **by name**: the infra caps (`@agent`, `sandbox-factory`,
       // `fs-mounter`) are the host's own (under the factory's directory), and
-      // the `filesystem` / `credentials` names were minted by the caller (a
-      // host-local `storeValue`, or an `adopt` of the peer's package). The
-      // powers name is removed right after `makeUnconfined`; it stays reachable
+      // the `filesystem` / `credentials` names are an existing operator name
+      // (the form path) or an `adopt`ed name (the peer's package). The powers
+      // name is removed right after `makeUnconfined`; it stays reachable
       // for the client's lifetime via the make-unconfined→powers edge.
       const powersName = `claude-${sessionId}-powers`;
       toCleanup = [powersName, ...removeNames];
@@ -432,67 +433,6 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
       await Promise.allSettled(toCleanup.map(n => E(hostAgent).remove(n)));
       throw error;
     }
-  };
-
-  /**
-   * Host-local convenience: formulate a session from caps held on **this**
-   * host, passed by reference. Each cap is temp-named via `storeValue` (which
-   * can only capture a host-local cap — a remote presence has no formula id)
-   * so the core can endow it by name, then removed. A **remote peer** cannot
-   * use this path (its cap would arrive as a bare presence); it sends a
-   * session-request package instead, which `adopt`s the caps first — see
-   * `handleSessionRequest`.
-   *
-   * @param {object} config
-   * @param {string} config.name
-   * @param {unknown} config.filesystem - a host-local `Filesystem` cap.
-   * @param {string} [config.rootfs]
-   * @param {string} [config.network]
-   * @param {string} [config.model]
-   * @param {unknown} [config.credentials] - a host-local `ClaudeCredentials` cap.
-   * @param {string} [config.initialPrompt]
-   * @param {{ resultName?: string }} [opts]
-   * @returns {Promise<{ client: any, sessionId: string, hostMountPoint: string, rootfsLabel: string }>}
-   */
-  const formulateSessionFromCaps = async (config, { resultName } = {}) => {
-    const {
-      name,
-      filesystem: fsCap,
-      credentials: credCap = null,
-      rootfs = '',
-      network = 'private',
-      model = '',
-      initialPrompt = '',
-    } = config;
-    if (!name) throw new Error('Missing "name".');
-    if (!fsCap) throw new Error('Missing filesystem capability.');
-
-    const hostAgent = await getHostAgent();
-    tempCounter += 1;
-    const tag = `claude-${slugify(name)}-${Date.now().toString(36)}-${tempCounter.toString(36)}`;
-    const fsTmp = `${tag}-fscap`;
-    await E(hostAgent).storeValue(fsCap, fsTmp);
-    /** @type {string[]} */
-    const removeNames = [fsTmp];
-    let credentialsName = null;
-    if (credCap) {
-      const credTmp = `${tag}-credcap`;
-      await E(hostAgent).storeValue(credCap, credTmp);
-      removeNames.push(credTmp);
-      credentialsName = credTmp;
-    }
-    return formulateSessionFromPetNames(
-      {
-        name,
-        filesystemName: fsTmp,
-        credentialsName,
-        rootfs,
-        network,
-        model,
-        initialPrompt,
-      },
-      { resultName, removeNames },
-    );
   };
 
   /**
@@ -711,26 +651,39 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
           const submission = /** @type {SandboxFormSubmission} */ (
             await E(powers).lookupById(msg.valueId)
           );
-          // Operator/form path: the submitter *is* the host operator, so
-          // resolving the form's `filesystem` / `credentials` pet names
-          // against the host petstore is legitimate (not a confused deputy).
-          // Resolve them to caps here, then hand the caps to the shared core
-          // exactly as the peer-callable path does. Store the result under
-          // the chosen pet name (a host-side GC root).
+          // Operator/form path: the submitter *is* the host operator, so the
+          // form's `filesystem` / `credentials` are existing **host pet names**
+          // (resolving them with host authority is legitimate — not a confused
+          // deputy). Endow those names directly into the per-session powers
+          // (no `storeValue`, no temp names — they are durable operator names,
+          // so `removeNames` is empty). Store the client under the chosen pet
+          // name, a host-side GC root.
           const hostAgent = await getHostAgent();
-          const fsCap = await E(hostAgent).lookup(submission.filesystem);
-          if (!fsCap) {
+          if (!(await E(hostAgent).has(submission.filesystem))) {
             throw new Error(`Unknown filesystem: "${submission.filesystem}".`);
           }
-          const credCap = submission.credentials
-            ? await E(hostAgent).lookup(submission.credentials)
-            : null;
+          if (
+            submission.credentials &&
+            !(await E(hostAgent).has(submission.credentials))
+          ) {
+            throw new Error(
+              `Unknown credentials: "${submission.credentials}".`,
+            );
+          }
           const {
             sessionId,
             hostMountPoint,
             rootfsLabel: rfLabel,
-          } = await formulateSessionFromCaps(
-            { ...submission, filesystem: fsCap, credentials: credCap },
+          } = await formulateSessionFromPetNames(
+            {
+              name: submission.name,
+              filesystemName: submission.filesystem,
+              credentialsName: submission.credentials || null,
+              rootfs: submission.rootfs,
+              network: submission.network,
+              model: submission.model,
+              initialPrompt: submission.initialPrompt,
+            },
             { resultName: submission.name },
           );
 
@@ -783,53 +736,24 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
 
   return makeExo('ClaudeSandboxFactory', FactoryInterface, {
     /**
-     * **Same-host** convenience: formulate a Claude session from caps held on
-     * this host (passed by reference) and **return** the `ClaudeClient` cap,
-     * un-named — so the caller's retention is its only GC root (dropping it
-     * collects the session and fires the `whenCancelled` teardown). See
-     * DESIGN.md § Lifecycle.
-     *
-     * `config` is `{ name, filesystem, rootfs?, network?, model?,
-     * credentials?, initialPrompt? }`, where `filesystem` / `credentials` are
-     * **host-local capabilities passed by reference**. A *remote* peer cannot
-     * use this method — its cap would arrive as an unadoptable CapTP presence
-     * (see `storeValue` in `formulateSessionFromCaps`). A remote peer instead
-     * **sends a session-request package** to the host (handled by
-     * `handleSessionRequest`), which `adopt`s the caps first.
-     *
-     * @param {Record<string, any>} config
-     * @returns {Promise<any>}
-     */
-    async createSession(config) {
-      const { client } = await formulateSessionFromCaps(
-        /** @type {{ name: string, filesystem: unknown }} */ (config),
-      );
-      return client;
-    },
-
-    /**
      * @param {string} [methodName]
      * @returns {string}
      */
     help(methodName) {
       if (methodName === undefined) {
         return [
-          'ClaudeSandboxFactory. Three ways to create a session:',
+          'ClaudeSandboxFactory. Two ways to create a session (both via the',
+          'mailbox — a capability can only cross a daemon boundary by',
+          'send/adopt, so there is no cap-argument method):',
           '',
-          '1. createSession(config) → ClaudeClient cap. SAME-HOST only; the',
-          '   caller holds the only reference (dropping it destroys the',
-          '   session). config = { name, filesystem, rootfs?, network?,',
-          '   model?, credentials?, initialPrompt? } where filesystem and',
-          '   credentials are HOST-LOCAL caps by reference.',
+          '1. Remote peer (or any agent): SEND a package to the host with a',
+          '   `filesystem` (+ optional `credentials`) edge and strings[0] =',
+          '   JSON config { kind: "claude-sandbox-session", name, rootfs?,',
+          '   network?, model?, initialPrompt? }. The factory adopts the caps',
+          '   and REPLIES with a `client` edge to adopt. Host-rooted under the',
+          '   factory directory.',
           '',
-          '2. Remote peer: SEND a package to the host with a `filesystem`',
-          '   (+ optional `credentials`) edge and strings[0] = JSON config',
-          '   { kind: "claude-sandbox-session", name, rootfs?, network?,',
-          '   model?, initialPrompt? }. The factory adopts the caps and',
-          '   REPLIES with a `client` edge to adopt. The session is host-rooted',
-          '   under the factory directory.',
-          '',
-          '3. Submit the "Create Claude Sandbox" form on @host with',
+          '2. Operator: submit the "Create Claude Sandbox" form on @host with',
           '   pet names (resolved with the operator’s own host authority):',
           '  name        — pet name for the resulting ClaudeClient',
           '  filesystem  — pet name of an existing Filesystem capability',
@@ -839,6 +763,7 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
           '  credentials — optional ClaudeCredentials pet name',
           '  initialPrompt — optional first message',
           '',
+          'Both sessions are host-rooted; destroy with E(host).remove(name).',
           'The workspace Filesystem is mounted on the host over 9P and',
           'bind-mounted into the podman slice at /workspace.',
         ].join('\n');

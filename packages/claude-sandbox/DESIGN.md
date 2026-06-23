@@ -11,8 +11,9 @@ It complements [`README.md`](./README.md) (usage) and [`DEMO.md`](./DEMO.md)
 > Linux.
 > Claude Code has been run inside a rootless podman slice (without an API key).
 > Each session is now a first-class `claude-client` formula, so the form-driven
-> store path works and survives daemon restarts; both it and the peer-callable
-> `createSession` path are covered against a real daemon by
+> store path works and survives daemon restarts; both it and the remote-peer
+> send/adopt session-request path are covered against a real daemon (including a
+> two-daemon mesh test) by
 > [`test/live-daemon.test.js`](./test/live-daemon.test.js) — see
 > [Known issues](#known-issues--future-work).
 
@@ -84,45 +85,43 @@ Each session is a first-class `claude-client` formula. Two things govern its
 lifetime: **who roots it** (whether it is collected) and **the cancellation
 context** (how it tears down).
 
-### Three create paths — who supplies the caps, who roots the session
+### Two create paths — who supplies the caps
 
 The caps a session needs (`Filesystem`, `ClaudeCredentials`) must be endowed
 into the per-session powers **by name**, because `evaluate` endows by name and a
 remote formula id is a valid endowment. The constraint is how a caller's cap
-acquires a host name:
+acquires a host name — and a cap **cannot** be passed as a method argument
+across a daemon boundary (it arrives as a bare CapTP presence with no formula
+id: `No corresponding formula`), so there is no cap-argument entry point. Both
+create paths are therefore mailbox-based and **host-rooted**:
 
-- **`E(factory).createSession(config)`** — **same-host** callers only. The caps
-  are passed by reference and `storeValue`'d into temporary host names. The
-  client is formulated **without** a pet name and **returned**, so the caller's
-  retention is its only root (drop it → collect). _The caller owns the
-  lifetime._ A *remote* peer cannot use this: `storeValue` can only capture a
-  host-local cap — a cap received as a bare CapTP argument is a presence with no
-  formula id (`No corresponding formula`).
-- **A remote peer `send`s a session-request package** to the host: a `package`
-  message with a `filesystem` (+ optional `credentials`) edge and a JSON config
-  in `strings[0]` marked `kind: "claude-sandbox-session"` (the marker keeps the
-  loop from hijacking unrelated `filesystem`-edged host traffic). The factory's
-  host-mailbox loop (`handleSessionRequest`) **`adopt`s** the caps into the host
-  namespace — which both gives them a name the powers can endow *and* marks them
-  as tracked imports (`thisDiesIfThatDies`; `storeLocator` would do neither) —
-  formulates the session under the factory directory, and **replies** with a
-  `client` edge the peer `adopt`s, then **`dismiss`es** the request so a daemon
-  restart's `followMessages` replay does not re-create the session. The session
-  is **host-rooted** under a factory-minted, `Date.now()`-bearing leaf
-  (`<dir>/session-<slug>-<ts>-<n>`, never the peer's raw name, which could
-  otherwise clobber a host name); the operator GCs it with `remove`. A failure
-  at any step cleans up the adopted temp names, leaving no host residue.
+- **A remote peer (or any agent) `send`s a session-request package** to the
+  host: a `package` message with a `filesystem` (+ optional `credentials`) edge
+  and a JSON config in `strings[0]` marked `kind: "claude-sandbox-session"` (the
+  marker keeps the loop from hijacking unrelated `filesystem`-edged host
+  traffic). The factory's host-mailbox loop (`handleSessionRequest`) **`adopt`s**
+  the caps into the host namespace — which both gives them a name the powers can
+  endow *and* marks them as tracked imports (`thisDiesIfThatDies`; `storeLocator`
+  would do neither) — formulates the session under the factory directory, and
+  **replies** with a `client` edge the peer `adopt`s, then **`dismiss`es** the
+  request so a daemon restart's `followMessages` replay does not re-create the
+  session. The session is host-rooted under a factory-minted, `Date.now()`-
+  bearing leaf (`<dir>/session-<slug>-<ts>-<n>`, never the peer's raw name,
+  which could otherwise clobber a host name). A failure at any step cleans up
+  the adopted temp names, leaving no host residue.
 - **The "Create Claude Sandbox" form on `@host`** — the operator path. Fields
-  are host pet-name strings, resolved with the operator's own authority and
-  `storeValue`'d like `createSession`. The client is stored under `resultName`
-  (a host root).
+  are existing host pet-name strings, resolved with the operator's own authority
+  and endowed **directly by name** (no `storeValue`, no temp names — the
+  operator's names are durable). The client is stored under `resultName`.
 
 Delivery dictates rooting: a `reply` / `send` can only attach a cap **by pet
 name** (`Mail.reply(number, strings, edgeNames, petNamesOrPaths)`), so a session
-handed back through the mailbox (the peer-package path) is necessarily
-host-rooted; only the direct CapTP return of `createSession` can hand back an
-un-named, caller-rooted session. A peer-initiated `remove` (so a peer can drop
-its own host-rooted session) is future work.
+handed back through the mailbox is necessarily host-rooted — there is no
+caller-held cap to drop. Destroy a session with `E(host).remove(name)`. A
+peer-initiated destroy message — so a peer can tear down its own session without
+operator action (e.g. by `send`ing a "remove" request, or by unnaming the
+client after the peer adopts so the peer's retention becomes the only root) — is
+the natural follow-up to restore peer-controlled lifetime.
 
 ### Teardown — the cancellation context
 
@@ -157,20 +156,20 @@ collection chain, verified end-to-end:
 Caveats worth knowing:
 
 - GC is on by default (`gcEnabled = true`) but can be disabled.
-- "Not otherwise rooted" is load-bearing: a host pet name (the form path) keeps
-  the refcount above zero, so a peer dropping its copy will **not** collect a
-  form-created session — only a `createSession` (peer-rooted) one.
+- "Not otherwise rooted" is load-bearing: both create paths store the client
+  under a host pet name, so a session stays rooted until the operator `remove`s
+  that name — a peer dropping its adopted copy of the `client` cap does **not**
+  collect it. (A peer-initiated destroy that unroots the host name is the
+  follow-up that would restore peer-controlled collection.)
 - A _transient disconnect_ does **not** drop a known peer's retention; retentions
   are durable (SQLite) and reconciled only when the peer **reconnects** without
-  the reference. So "offline" ≠ "collected"; an explicit drop (or host `remove`)
-  is what destroys the session.
+  the reference. So "offline" ≠ "collected"; an explicit `remove` is what
+  destroys the session.
 
 ### Destroying a session
 
-- **Peer-rooted** (`createSession`): the peer drops the returned cap → GC
-  collects it → teardown. No explicit host call needed.
-- **Host-rooted** (form): `E(host).remove(name)` — cancellation fires teardown
-  and the formula is deleted.
+- Both create paths are **host-rooted**: `E(host).remove(name)` — cancellation
+  fires the `whenCancelled` teardown and the formula is deleted.
 - **Stop without destroying:** `E(client).terminate()` disposes the container +
   unmounts but leaves the formula (it will re-provision on the next `send`).
 
@@ -502,20 +501,21 @@ in CI in the `claude-sandbox-integration` job). It boots an Endo daemon via
 `Filesystem` cap, provisions the factory on `@host`, and validates both session
 paths end to end:
 
-- **`createSession`** (peer-callable) returns a `ClaudeClient` with a real
-  daemon identity — `status()` resolves across CapTP, the method surface
-  matches the interface guard, and the client is *not* named on the host (the
-  caller's retention is its only GC root). This is the direct end-to-end proof
-  of #1: a worker-local remotable could not survive the formula boundary.
+- **The remote-peer send/adopt path** — a real **two-daemon** mesh test (over
+  the daemon's loopback-TCP transport): a peer mints its own `Filesystem`, sends
+  a session-request package to the host, the factory `adopt`s the cap and
+  formulates a `claude-client` with a real daemon identity that the peer reaches
+  by `adopt`ing the reply's `client` edge (`status()` resolves across the mesh).
+  This is the direct end-to-end proof of #1 (a worker-local remotable could not
+  survive the formula boundary) *and* of the cross-peer cap-passing.
 - **The `@host` form path** drives `form → submit → makeUnconfined → stored
-  ClaudeClient` and then `remove`, exercising the `@agent` powers wiring that
-  only runs against a real daemon.
+  ClaudeClient`, exercising the `@agent` powers wiring that only runs against a
+  real daemon.
 
 These cases stop short of `send()` so they need no podman/9p (`status()` and a
-never-used `terminate()` do not provision a container). Still not runnable in a
-single-node CI: **two-node peer-retention GC** (a second daemon holding the
-`createSession` cap, then dropping it). The lifecycle teardown is unit-tested
-via the cancellation context in `test/claude-client-module.test.js`. (The 9P
+never-used `terminate()` do not provision a container). The lifecycle teardown is
+unit-tested via the cancellation context in `test/claude-client-module.test.js`.
+(The 9P
 provision, previously listed here as not-runnable, is now covered by
 `ninep-flow.test.js` above.)
 
@@ -630,11 +630,10 @@ factory therefore **unnames it immediately after `makeUnconfined`**: the
 client→powers (`graph.js`). So once the client references it, dropping the pet
 name leaves the powers rooted **only** by that edge — it stays alive for exactly
 the client's lifetime and is collected **with** the client. No per-session
-host-petstore residue; the peer-rooted-`createSession` GC stays clean.
-`test/live-daemon.test.js` proves this end to end: after `createSession` the
-client's `status()` still resolves (so the unname did not collect its powers) yet
-**no `*-powers` pet name survives**; a concurrent-creation test confirms two
-sessions interleave without colliding names or leaking residue.
+host-petstore residue. `test/live-daemon.test.js` proves this end to end: after a
+session is formulated the client's `status()` still resolves (so the unname did
+not collect its powers) yet **no `*-powers` (or adopted `*-fscap`/`*-credcap`)
+pet name survives**.
 
 Why per-session and not a shared cap: a shared powers would have to expose a
 generic `lookup` (it cannot know each session's `Filesystem` / credential names),
@@ -651,13 +650,13 @@ trusted compute base.
 
 Bring-your-own-caps, resolved. The peer no longer names its `Filesystem` /
 `ClaudeCredentials` on the host: it `send`s them to the host as a session-request
-package and the factory `adopt`s them (see § "Three create paths — who supplies
-the caps, who roots the session").
-A cap cannot be passed as a plain `createSession` argument across a daemon
-boundary — it would arrive as an unadoptable presence — so `send`/`adopt` (which
-also marks the cap as a tracked import via `thisDiesIfThatDies`) is the
-mechanism, not cap-arguments. The infra caps (`sandbox-factory` / `fs-mounter`)
-remain host-named by construction (they are the host's own).
+package and the factory `adopt`s them (see § "Two create paths — who supplies
+the caps").
+A cap cannot be passed as a plain method argument across a daemon boundary — it
+would arrive as an unadoptable presence — so `send`/`adopt` (which also marks the
+cap as a tracked import via `thisDiesIfThatDies`) is the mechanism, not
+cap-arguments. The infra caps (`sandbox-factory` / `fs-mounter`) remain
+host-named by construction (they are the host's own).
 
 ### 9. Credential exposure through the sandbox environment
 

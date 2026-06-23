@@ -158,28 +158,14 @@ env var.
 
 ## 5. Create the sandbox session
 
-There are three ways to create a session, differing in who supplies the caps.
+There are two ways to create a session. Both are **mailbox**-based and leave the
+session **host-rooted** (destroy with `endo remove <name>`): a capability can
+only cross a daemon boundary by `send`/`adopt`, so there is no cap-argument
+method.
 
-**A. `createSession` (same-host, returns the cap).**
-Call the factory directly with caps held **on this host** (resolved here by
-pet name with `c:`/`f:`). It returns a `ClaudeClient` that is **not** stored
-under a host pet name, so the caller's reference is the session's only root —
-dropping it destroys the session (see step 7):
-
-```bash
-yarn exec endo eval --UNCONFINED \
-  'E(f).createSession({ name: "claude-1", filesystem: fs, credentials: creds, rootfs: "oci:localhost/claude-code:latest", network: "private", model: "claude-sonnet-4-6" })' \
-  f:claude-sandbox/controller fs:project-fs creds:claude-creds \
-  --name claude-1
-```
-
-Note `filesystem` / `credentials` are **caps**, not name strings — a remote
-peer's cap cannot be passed this way (it would arrive as an unadoptable
-presence), which is why a remote peer uses path C.
-
-**B. The `@host` form (operator path, host-rooted).**
-Submission stores the `ClaudeClient` under the chosen pet name in `@host`'s
-petstore:
+**A. The `@host` form (operator path).**
+The operator submits the form with **host pet names** (resolved with the
+operator's own authority); the `ClaudeClient` is stored under the chosen name:
 
 ```bash
 yarn exec endo inbox            # find the "Create Claude Sandbox" form, note its number
@@ -193,7 +179,7 @@ yarn exec endo submit <n> \
   initialPrompt:
 ```
 
-**C. Remote peer — `send` a session-request package (host-rooted).**
+**B. Remote peer — `send` a session-request package.**
 The peer brings its own caps without naming them on the host: it `send`s the
 host a package whose `filesystem` (+ optional `credentials`) edge carries the
 caps and whose first string is the JSON config. The config must be marked
@@ -270,8 +256,10 @@ yarn exec endo remove claude-1
 # (equivalently: yarn exec endo cancel claude-1)
 ```
 
-For a **`createSession`** (peer-rooted) session, just **drop the cap**: when no
-peer retains it, the daemon collects the formula and the same teardown fires.
+Both create paths are host-rooted (mailbox delivery attaches the client by
+name), so removing the pet name is how you destroy a session — there is no
+caller-held cap to drop. A peer-initiated destroy (so a peer can tear down its
+own session without operator action) is future work.
 See [DESIGN.md § Session lifecycle, teardown & GC](./DESIGN.md#session-lifecycle-teardown--gc).
 
 ## Troubleshooting

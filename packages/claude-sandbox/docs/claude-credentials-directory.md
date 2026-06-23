@@ -16,7 +16,7 @@ peer. Below is each object and **what authority sharing it grants**.
 
 ## What you share off-machine
 
-The **minted `ClaudeCredentials` cap** (named when you submit the form), handed
-to the sandbox host's `createSession`. The host only ever receives a short-lived
-**materialised** secret at container-spawn time — never the long-lived key,
-which stays on this peer.
+The **minted `ClaudeCredentials` cap** (named when you submit the form), `send`d
+to the sandbox host in a session-request package (the host `adopt`s it). The host
+only ever receives a short-lived **materialised** secret at container-spawn time
+— never the long-lived key, which stays on this peer.

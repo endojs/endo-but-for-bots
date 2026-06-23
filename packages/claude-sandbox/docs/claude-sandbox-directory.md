@@ -5,10 +5,11 @@ Below is each object and **what authority sharing it grants**.
 
 ## Objects
 
-- **`controller`** — the "Create Claude Sandbox" form/exo. **Delegatable**: the
-  one object meant to be shared. A peer holding it can call `createSession(...)`
-  to run Claude in a container on this host against a `Filesystem` cap they
-  supply. It cannot reach anything else in this directory.
+- **`controller`** — the factory's `help`/discovery exo (it also presents the
+  "Create Claude Sandbox" form on `@host`). It exposes no session-creation
+  method — sessions are created over the **mailbox** (a session-request package
+  to `@host`, or the form), so holding `controller` grants nothing but
+  documentation. Low authority.
 - **`profile`** — the factory's guest **agent**. Holds `host-agent` = **full
   authority** over this host's Endo daemon. **Never share** — handing it out is
   equivalent to giving away the host.
@@ -23,11 +24,13 @@ Below is each object and **what authority sharing it grants**.
 
 ## Guiding principle
 
-Delegate only **`controller`**. Everything else is host trusted compute base.
+Everything here is host trusted compute base; none of it should be shared
+off-host. A peer creates a session not by holding one of these objects but by
+being an **accepted mailbox peer of `@host`** and `send`ing a session-request
+package (a `Filesystem` + optional `ClaudeCredentials` cap, by `adopt`); the
+host only ever sees a short-lived materialised secret, never a long-lived key.
 The credentials factory lives on the **peer**, not here (its own
-`claude-credentials/` directory). The peer passes a `Filesystem` cap and a
-`ClaudeCredentials` cap into `createSession`; the host only ever sees a
-short-lived materialised secret, never a long-lived key.
+`claude-credentials/` directory).
 
 ## Credential exposure
 
