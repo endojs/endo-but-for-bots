@@ -144,6 +144,77 @@ let powerLabels = {};
 const loadPowerLabels = async () => { try { const r = await (await fetch('/powers')).json(); for (const c of (r.powers || [])) powerLabels[c.power] = c.label; } catch { /* tooltips fall back to the name */ } };
 loadPowerLabels();
 const powerTip = p => `${p} — ${powerLabels[p] || 'capability'}`;
+// FOLDER-like powers: ones that hold a navigable list of sub-items (the same trees the object-navigator
+// browses — see TREE_RPC below). In a powers picker these can be granted WHOLE, or drilled into to SEE
+// what's inside; `contacts` additionally lets you mint a single-item read-only share (shareContacts) so
+// you can hand off just one contact instead of the whole address book. (`homeassistant`→the `ha` tree.)
+const FOLDER_TREE = { contacts: 'contacts', home: 'home', agents: 'agents', timers: 'timers', notes: 'notes', homeassistant: 'ha' };
+const isFolderPower = p => Object.hasOwn(FOLDER_TREE, p);
+// ── renderPowersPicker — the ONE powers chooser used by every grant surface (chat-add, invite, sub-chat,
+// scheduled-agent ring). Default view = only the GRANTED powers as removable chips; "+ Add more" reveals a
+// searchable picker of the rest. Folder powers (Contacts, Files, …) are marked 📂 and can be drilled into.
+// Reads/writes through a hidden checkbox per power kept in the host (value=power, checked⇔granted) so the
+// existing read-sites — querySelectorAll('input:checked'), the ✨ propose-into, the template prefill — all
+// keep working unchanged. Cap-hygiene: deals in power NAMES + item handles only; never a swissnum.
+//   host: the container element. opts.all: string[] of grantable power names. opts.granted: string[] (or a
+//   Set) currently-on. opts.onChange?(grantedNames): called after any add/remove. opts.lockGranted?: keep a
+//   power from being removed (true ⇒ no × on chips). opts.itemShare?: true ⇒ offer per-item share when drilling.
+const renderPowersPicker = (host, opts) => {
+  const all = (opts.all || []).filter((p, i, a) => a.indexOf(p) === i);
+  const grantedSet = new Set(opts.granted instanceof Set ? [...opts.granted] : (opts.granted || []));
+  const lock = !!opts.lockGranted;
+  const fire = () => { if (opts.onChange) try { opts.onChange([...host.querySelectorAll('input[type=checkbox]:checked')].map(x => x.value)); } catch {} };
+  // hidden source-of-truth checkboxes (one per power) — what every read-site queries
+  let store = host.querySelector('.pp-store');
+  host.innerHTML = `<div class="pp-store" style="display:none">${all.map(p => `<input type="checkbox" value="${esc(p)}"${grantedSet.has(p) ? ' checked' : ''}>`).join('')}</div>
+    <div class="pp-chips" style="display:flex;flex-wrap:wrap;gap:5px;align-items:center"></div>
+    <div class="pp-add" style="display:none;margin-top:7px;border:1px solid var(--edge);border-radius:9px;padding:8px"></div>`;
+  store = host.querySelector('.pp-store');
+  const chk = p => host.querySelector(`.pp-store input[value="${CSS.escape(p)}"]`);
+  const grantedNow = () => all.filter(p => { const c = chk(p); return c && c.checked; });
+  const setGranted = (p, on) => { const c = chk(p); if (c) c.checked = on; };
+  const chips = host.querySelector('.pp-chips');
+  const add = host.querySelector('.pp-add');
+  const renderChips = () => {
+    const g = grantedNow();
+    chips.innerHTML = (g.length ? g.map(p => `<span class="pp-chip" title="${esc(powerTip(p))}">${powerIcon(p)} ${esc(p)}${isFolderPower(p) ? ' 📂' : ''}${lock ? '' : `<button type="button" class="pp-x" data-pprm="${esc(p)}" title="remove ${esc(p)}">×</button>`}</span>`).join('')
+      : `<span style="font-size:11px;color:var(--mut)">no powers yet — add some →</span>`)
+      + `<button type="button" class="pp-more" title="grant another power">+ Add more</button>`;
+    chips.querySelectorAll('[data-pprm]').forEach(b => b.onclick = () => { setGranted(b.dataset.pprm, false); renderChips(); fire(); });
+    chips.querySelector('.pp-more').onclick = () => { const open = add.style.display !== 'none'; add.style.display = open ? 'none' : 'block'; if (!open) renderAdd(''); };
+  };
+  // the "+ Add more" picker: a filter box + the remaining (not-yet-granted) powers, folders flagged + drillable.
+  const renderAdd = (q) => {
+    const remaining = all.filter(p => !chk(p).checked);
+    const f = (q || '').toLowerCase();
+    const matches = remaining.filter(p => !f || p.toLowerCase().includes(f) || (powerLabels[p] || '').toLowerCase().includes(f));
+    add.innerHTML = `<input class="hdr-sel pp-search" style="max-width:none;width:100%;margin-bottom:7px" placeholder="search powers…" value="${esc(q || '')}">
+      <div class="pp-pick" style="display:flex;flex-direction:column;gap:3px;max-height:34vh;overflow:auto">${matches.length ? matches.map(p => `<div class="pp-opt" style="display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:13px;border:1px solid var(--edge);border-radius:7px;padding:4px 8px"><span title="${esc(powerTip(p))}">${powerIcon(p)} ${esc(p)}${isFolderPower(p) ? ' <span style="color:var(--mut);font-size:11px">📂 folder</span>' : ''}</span><span style="white-space:nowrap"><button type="button" class="mini" data-ppadd="${esc(p)}">+ grant</button>${isFolderPower(p) ? ` <button type="button" class="mini" data-ppdrill="${esc(p)}">open ›</button>` : ''}</span></div>`).join('') : `<div style="font-size:12px;color:var(--mut)">${remaining.length ? 'no match' : 'every power is already granted'}</div>`}</div>`;
+    const s = add.querySelector('.pp-search'); if (s) { s.oninput = () => renderAdd(s.value); if (q !== undefined && q !== '') { s.focus(); s.setSelectionRange(q.length, q.length); } }
+    add.querySelectorAll('[data-ppadd]').forEach(b => b.onclick = () => { setGranted(b.dataset.ppadd, true); renderChips(); fire(); renderAdd(s ? s.value : ''); });
+    add.querySelectorAll('[data-ppdrill]').forEach(b => b.onclick = () => drillFolder(b.dataset.ppdrill));
+  };
+  // drill INTO a folder power: list its items (the same tree the object-navigator uses). The user can grant
+  // the WHOLE power, or — for contacts — mint a single-item read-only share. (Other folders are grant-whole
+  // here: the scoped-cap/ring data model is power-name-granular, and only contacts has a per-item share verb.)
+  const drillFolder = async (p) => {
+    add.innerHTML = `<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px"><button type="button" class="mini pp-back">‹ back</button><b>${powerIcon(p)} ${esc(p)}</b><span style="flex:1"></span><button type="button" class="mini go" data-ppwhole="${esc(p)}">+ grant whole ${esc(p)}</button></div>
+      <div class="pp-items" style="font-size:12px;color:var(--mut)">loading…</div>`;
+    add.querySelector('.pp-back').onclick = () => renderAdd('');
+    add.querySelector('[data-ppwhole]').onclick = () => { setGranted(p, true); renderChips(); fire(); renderAdd(''); };
+    const itemsEl = add.querySelector('.pp-items');
+    let n; try { n = await treeRpc(FOLDER_TREE[p]); } catch (e) { itemsEl.innerHTML = `<div class="err">${esc(e.message || 'could not list items')}</div>`; return; }
+    const kids = (n && (n.children || n.agents || n.entities || n.rooms || n.types)) || [];
+    const canShareItem = opts.itemShare && p === 'contacts'; // only contacts has a single-item share verb today
+    itemsEl.innerHTML = `<div style="margin-bottom:6px">${kids.length ? `${kids.length} item(s)${canShareItem ? ' — “share one” mints a read-only link to just that contact' : ' inside (grant the whole power above to include them)'}` : 'nothing here'}</div>`
+      + `<div style="display:flex;flex-direction:column;gap:3px;max-height:30vh;overflow:auto">${kids.slice(0, 200).map((k, i) => `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;border:1px solid var(--edge);border-radius:7px;padding:3px 8px;color:var(--ink)"><span>${esc(k.label || k.name || k.handle || 'item')}</span>${canShareItem ? `<button type="button" class="mini" data-ppshare="${i}">share one</button>` : ''}</div>`).join('')}</div>`;
+    if (canShareItem) itemsEl.querySelectorAll('[data-ppshare]').forEach(b => b.onclick = () => { const k = kids[+b.dataset.ppshare]; mintNode('contacts', k.handle, k.label || k.name || 'contact', true); });
+  };
+  // external code (the ✨ propose-from-prompt, the garden-scan template prefill) sets .checked on the hidden
+  // store inputs directly, then calls this to re-sync the visible chips. Returns the now-granted names.
+  host._ppRefresh = () => { renderChips(); return grantedNow(); };
+  renderChips();
+};
 // minimal LCS line-diff for note edits
 const renderDiff = (a, b) => {
   const A = String(a).split('\n'), B = String(b).split('\n'), n = A.length, m = B.length;
@@ -1674,8 +1745,9 @@ function wirePowerBanner(b, cc, ps) {
     if (!avail.length) { alert('this chat already holds every power you can grant'); return; }
     showModal(`<div class="dkm" style="text-align:left;max-width:420px;margin:-18px -18px 8px;padding:16px;border-radius:12px 12px 0 0"><b>+ Add a power to this chat</b>
       <div style="font-size:13px;color:var(--mut);margin:6px 0">Grant the agent in THIS chat another ability. Revocable any time (×).</div>
-      <div id="ap-list" style="display:flex;flex-direction:column;gap:5px;max-height:42vh;overflow:auto">${avail.map(p => `<label title="${esc(powerTip(p))}" style="font-size:13px;cursor:pointer"><input type="checkbox" value="${esc(p)}"> ${powerIcon(p)} ${esc(p)}</label>`).join('')}</div>
+      <div id="ap-list"></div>
       <button class="mini" id="ap-go" style="margin-top:10px">Grant</button></div>`);
+    renderPowersPicker($('ap-list'), { all: avail, granted: [] }); // add-only: the chat's current ring is shown (with ×) in the banner above
     $('ap-go').onclick = async () => { const add2 = [...document.querySelectorAll('#ap-list input:checked')].map(x => x.value); if (!add2.length) return; closeModal(); await rescopeChat(cc, [...ps, ...add2]); };
   };
 }
@@ -2790,7 +2862,8 @@ const fillInviteBox = () => {
   if (!isRoot) { box.classList.add('hide'); return; } // only the owner issues invites
   box.classList.remove('hide');
   const grantable = [...(heldPowers || [])].filter(p => !INVITE_HIDE.has(p));
-  $('inv-powers').innerHTML = grantable.map(p => `<label title="${esc(powerTip(p))}" style="font-size:12px;border:1px solid var(--edge);border-radius:6px;padding:2px 7px;cursor:pointer"><input type="checkbox" value="${esc(p)}"${INVITE_STARTER.has(p) ? ' checked' : ''}> ${powerIcon(p)} ${esc(p)}</label>`).join('');
+  // default view = just the least-privilege STARTER ring as chips; "+ Add more" grants the rest of grantable.
+  renderPowersPicker($('inv-powers'), { all: grantable, granted: grantable.filter(p => INVITE_STARTER.has(p)), itemShare: true });
 };
 // 🔌 Connectors (Phase 3 Lane A) — owner wires up API-service tools; key → vault, injected server-side.
 const fillConnectorsBox = async () => {
@@ -2950,8 +3023,9 @@ const newSubChat = () => {
   showModal(`<div class="dkm" style="text-align:left;max-width:440px;margin:-18px -18px 8px;padding:16px;border-radius:12px 12px 0 0"><b>✂️ Create an attenuated sub-chat</b>
     <div style="font-size:13px;color:var(--mut);margin:8px 0">A fresh chat granted only the powers you tick — usable now, shareable via 🔗. It can't act outside them.</div>
     <input class="hdr-sel" style="max-width:none;width:100%;margin-bottom:8px" id="sub-title" placeholder="name (e.g. camera control)">
-    <div id="sub-powers" style="display:flex;flex-direction:column;gap:5px;max-height:38vh;overflow:auto">${avail.map(p => `<label style="font-size:13px;cursor:pointer"><input type="checkbox" value="${esc(p)}"> ${esc(p)}</label>`).join('')}</div>
+    <div id="sub-powers"></div>
     <button class="mini" id="sub-make" style="margin-top:10px">Create sub-chat</button></div>`);
+  renderPowersPicker($('sub-powers'), { all: avail, granted: [], itemShare: true }); // start empty — tick only the subset to delegate
   $('sub-make').onclick = async () => {
     const powers = [...document.querySelectorAll('#sub-powers input:checked')].map(x => x.value);
     const title = $('sub-title').value.trim() || 'sub-chat';
@@ -3183,7 +3257,7 @@ const renderProjects = async () => {
             <input class="hdr-sel" style="max-width:none" data-ename="${p.id}|${a.id}" value="${esc(a.name)}">
             <textarea data-eprompt="${p.id}|${a.id}" style="background:var(--panel);border:1px solid var(--edge);color:var(--ink);border-radius:7px;padding:6px;min-height:90px">${esc(a.prompt || '')}</textarea>
             <div style="display:flex;align-items:center;gap:8px"><div style="font-size:11px;color:var(--mut)">tools (its ring):</div><button class="mini" data-epropose="${p.id}|${a.id}">✨ propose from prompt</button></div>
-            <div style="display:flex;flex-wrap:wrap;gap:4px" data-etools="${p.id}|${a.id}">${powers.map(pw => `<label title="${esc(powerTip(pw))}" style="font-size:11px;border:1px solid var(--edge);border-radius:6px;padding:2px 6px;cursor:pointer"><input type="checkbox" value="${esc(pw)}"${(a.tools || []).includes(pw) ? ' checked' : ''}> ${esc(pw)}</label>`).join('')}</div>
+            <div data-etools="${p.id}|${a.id}"></div>
             <div><button class="mini" data-saveagent="${p.id}|${a.id}">Save changes</button></div>
           </div></details>
         <details style="margin-top:6px"${runs.length ? '' : ''}><summary class="mini" style="display:inline-block">📁 runs (${runs.length})</summary>
@@ -3206,13 +3280,16 @@ const renderProjects = async () => {
         <input class="hdr-sel" style="max-width:none" data-naname="${p.id}" placeholder="name (e.g. garden-scan)">
         <textarea data-naprompt="${p.id}" placeholder="what this recurring agent should do" style="background:var(--panel);border:1px solid var(--edge);color:var(--ink);border-radius:7px;padding:6px;min-height:54px"></textarea>
         <div style="display:flex;align-items:center;gap:8px"><div style="font-size:11px;color:var(--mut)">tools (its ring):</div><button class="mini" data-napropose="${p.id}">✨ propose from prompt</button></div>
-        <div style="display:flex;flex-wrap:wrap;gap:4px" data-natools="${p.id}">${powers.map(pw => `<label title="${esc(powerTip(pw))}" style="font-size:11px;border:1px solid var(--edge);border-radius:6px;padding:2px 6px;cursor:pointer"><input type="checkbox" value="${esc(pw)}"> ${esc(pw)}</label>`).join('')}</div>
+        <div data-natools="${p.id}"></div>
         <select class="hdr-sel" style="max-width:none" data-nacad="${p.id}">${CADENCES.map((c, i) => `<option value="${i}">${esc(c.label)}</option>`).join('')}</select>
         <div><button class="mini" data-addagent="${p.id}">Add</button> <button class="mini" data-template="${p.id}">↳ prefill: overnight garden-scan</button></div>
       </div></details>
   </div>`);
   const m = $('qrmodal');
   $('pj-back').onclick = () => { openProjectId = null; renderProjects(); };
+  // mount the shared powers-picker into every scheduled-agent ring (edit = pre-granted with a.tools; add = empty)
+  m.querySelectorAll('[data-etools]').forEach(el => { const [, aid] = el.dataset.etools.split('|'); const ag = (p.scheduledAgents || []).find(x => x.id === aid) || {}; renderPowersPicker(el, { all: powers, granted: ag.tools || [], itemShare: true }); });
+  m.querySelectorAll('[data-natools]').forEach(el => renderPowersPicker(el, { all: powers, granted: [], itemShare: true }));
   renderProjectFiles(p.id); // populate the home-folder file list
   { const up = $('pj-upload'); if (up) up.onchange = () => { if (up.files.length) uploadProjectFiles(p.id, [...up.files]); up.value = ''; }; }
   { const dz = $('pj-drop'); if (dz) { ['dragover', 'dragenter'].forEach(ev => dz.addEventListener(ev, e => { e.preventDefault(); dz.style.borderColor = 'var(--acc)'; })); ['dragleave', 'drop'].forEach(ev => dz.addEventListener(ev, e => { e.preventDefault(); dz.style.borderColor = 'var(--edge)'; })); dz.addEventListener('drop', e => { const fl = e.dataTransfer && e.dataTransfer.files; if (fl && fl.length) uploadProjectFiles(p.id, [...fl]); }); } }
@@ -3221,7 +3298,7 @@ const renderProjects = async () => {
     const pid = b.dataset.template;
     m.querySelector(`[data-naname="${pid}"]`).value = 'garden-scan';
     m.querySelector(`[data-naprompt="${pid}"]`).value = "Review my notes and the tools I haven't connected yet. Suggest 1–3 concrete optimizations I could get by wiring the right tools/capabilities together. Be specific and brief; propose, don't act.";
-    m.querySelectorAll(`[data-natools="${pid}"] input`).forEach(x => { x.checked = ['notes', 'reference'].includes(x.value); });
+    const tc = m.querySelector(`[data-natools="${pid}"]`); tc.querySelectorAll('input').forEach(x => { x.checked = ['notes', 'reference'].includes(x.value); }); if (tc._ppRefresh) tc._ppRefresh();
   });
   m.querySelectorAll('[data-addagent]').forEach(b => b.onclick = async () => {
     const pid = b.dataset.addagent;
@@ -3241,6 +3318,7 @@ const renderProjects = async () => {
     const r = await pf('/scope', { prompt: promptText });
     const proposed = (r && r.proposed) || [];
     container.querySelectorAll('input').forEach(x => { x.checked = proposed.includes(x.value); });
+    if (container._ppRefresh) container._ppRefresh(); // re-sync the visible chips with the proposed ring
     btn.textContent = old; btn.disabled = false;
     setStatus(proposed.length ? `proposed: ${proposed.join(', ')} — adjust if needed` : 'no powers auto-detected — pick the ring manually');
   };

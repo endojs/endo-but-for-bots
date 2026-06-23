@@ -196,6 +196,12 @@
   .powers-banner .chip-x { background:none; border:none; color:var(--mut); cursor:pointer; padding:0 0 0 5px; font-size:13px; line-height:1; vertical-align:middle; }
   .powers-banner .chip-x:hover { color:var(--bad); }
   .powers-banner .chip-add { cursor:pointer; color:var(--acc); border-style:dashed; }
+  /* renderPowersPicker — the shared "show granted, + Add more" powers chooser (chat-add, invite, sub-chat, scheduled-agent ring) */
+  .pp-chip { font-size:12px; border:1px solid var(--edge); background:var(--panel); color:var(--ink); border-radius:7px; padding:2px 8px; display:inline-flex; align-items:center; }
+  .pp-chip .pp-x { background:none; border:none; color:var(--mut); cursor:pointer; padding:0 0 0 5px; font-size:14px; line-height:1; }
+  .pp-chip .pp-x:hover { color:var(--bad); }
+  .pp-more { font-size:12px; border:1px dashed var(--edge); background:transparent; color:var(--acc); border-radius:7px; padding:2px 8px; cursor:pointer; }
+  .pp-more:hover { border-color:var(--acc); }
   .chat-bar .mini { background:transparent; border:1px solid var(--edge); color:var(--mut); padding:4px 10px; border-radius:7px; cursor:pointer; font-size:12px; }
   .chat-bar .mini:hover { color:var(--ink); border-color:var(--acc); }
   .chat-bar .mini:disabled { opacity:.35; cursor:default; }
