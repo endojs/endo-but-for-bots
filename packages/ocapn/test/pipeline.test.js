@@ -82,7 +82,7 @@ const deepPartialMatch = (actual, expected) => {
 const formatEntry = entry => {
   const msgStr = JSON.stringify(
     entry.message,
-    (key, value) => {
+    (_key, value) => {
       if (typeof value === 'bigint') return `${value}n`;
       if (typeof value === 'function') return '[Function]';
       if (value instanceof Promise) return '[Promise]';

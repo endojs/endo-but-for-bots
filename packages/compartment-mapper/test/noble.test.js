@@ -12,7 +12,7 @@ const fixture = new URL('fixtures-noble/index.js', import.meta.url).toString();
 /**
  * @type {FixtureAssertionFn<unknown>}
  */
-const assertFixture = (t, { namespace }) => {
+const assertFixture = (t, { namespace: _namespace }) => {
   t.pass();
 };
 

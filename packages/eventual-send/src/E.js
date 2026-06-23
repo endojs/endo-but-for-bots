@@ -327,7 +327,7 @@ export default makeE;
  *     ? T                                                    // Propagate the any type through the result
  *     : T extends RemotableBrand<infer L, infer P>           // If we have a Remotable
  *       ? (P | RemotableBrand<L, P>)                         // map it to its "maybe remote" form (primary behavior or remotable presence)
- *       : T extends PromiseLike<infer U>                     // If T is a promise
+ *       : T extends PromiseLike<infer _U>                     // If T is a promise
  *         ? Promise<EAwaitedResult<Awaited<T>>>              // map its resolution
  *         : T extends (null | undefined | string | number | boolean | symbol | bigint | Callable) // Intersections of these types with objects are not mapped
  *           ? T                                              // primitives and non-remotable functions are passed-through
@@ -358,7 +358,7 @@ export default makeE;
  *
  * @template {Callable} T
  * @typedef {(
- *    ReturnType<T> extends PromiseLike<infer U>                  // Check if callable returns a promise
+ *    ReturnType<T> extends PromiseLike<infer _U>                  // Check if callable returns a promise
  *      ? T                                                       // Bypass mapping to maintain any generic
  *      : (...args: Parameters<T>) => Promise<ECallableReturn<T>> // Map it anyway to ensure promise return type
  * )} ECallable
@@ -376,7 +376,7 @@ export default makeE;
 /**
  * @template T
  * @typedef {{
- *   readonly [P in keyof T]: T[P] extends PromiseLike<infer U>
+ *   readonly [P in keyof T]: T[P] extends PromiseLike<infer _U>
  *     ? T[P]
  *     : Promise<Awaited<T[P]>>;
  * }} EGetters
@@ -454,7 +454,7 @@ export default makeE;
  * @typedef {(
  *   0 extends (1 & T)                            // if T is any
  *     ? any                                      // propagate any (avoid distributive collapse to Pick<any,string>)
- *     : T extends RemotableBrand<infer L, infer R>   // if a given T is some remote interface R
+ *     : T extends RemotableBrand<infer _L, infer R>   // if a given T is some remote interface R
  *       ? PickCallable<R>                        // then return the callable properties of R
  *       : T extends PromiseLike<infer U>         // otherwise, if T is a promise
  *         ? RemoteFunctions<U>                   // recurse on the resolved value of T
@@ -465,7 +465,7 @@ export default makeE;
 /**
  * @template T
  * @typedef {(
- *   T extends RemotableBrand<infer L, infer R>
+ *   T extends RemotableBrand<infer L, infer _R>
  *     ? L
  *     : T extends PromiseLike<infer U>
  *     ? LocalRecord<U>

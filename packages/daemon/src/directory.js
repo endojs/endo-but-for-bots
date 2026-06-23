@@ -293,7 +293,7 @@ export const makeDirectoryMaker = ({
    * @param {FormulaIdentifier} args.petStoreId
    * @param {Context} args.context
    */
-  const makeIdentifiedDirectory = async ({ petStoreId, context }) => {
+  const makeIdentifiedDirectory = async ({ petStoreId, context: _context }) => {
     // TODO thread context
 
     const petStore = await provide(petStoreId, 'pet-store');

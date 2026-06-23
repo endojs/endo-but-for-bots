@@ -12,7 +12,7 @@ expectType<AtomStyle>('str');
 
 type KCap = RemotableObject & { getKref: () => string; iface: () => string };
 const valToSlot = (s: KCap) => s.getKref();
-const slotToVal = (s: string) => null as unknown as KCap;
+const slotToVal = (_s: string) => null as unknown as KCap;
 const marshal = makeMarshal(valToSlot, slotToVal);
 const cycled = marshal.fromCapData(marshal.toCapData(null as unknown as KCap));
 expectType<unknown>(cycled);

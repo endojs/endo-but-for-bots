@@ -122,7 +122,7 @@ const { quote: q } = assert;
  * @param {BundleExit} source
  * @returns {BundlerKit}
  */
-const makeCjsExitBundlerKit = ({ exit, index }) => ({
+const makeCjsExitBundlerKit = ({ exit, index: _index }) => ({
   getFunctor: () => `\
 null,
 `,

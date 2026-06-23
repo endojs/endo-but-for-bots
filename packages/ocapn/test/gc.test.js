@@ -437,7 +437,7 @@ test("object can be re-exported after being GC'd", async t => {
     'Receiver',
     Far('receiver', {
       // Just receives, doesn't echo back
-      receive: obj => {
+      receive: _obj => {
         // Just accept the object, don't return it
         return 'received';
       },

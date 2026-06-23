@@ -1228,7 +1228,7 @@ export const makeOcapn = (
           logger.error(
             JSON.stringify(
               syrupMessage,
-              (key, value) => (typeof value === 'bigint' ? `${value}n` : value),
+              (_key, value) => (typeof value === 'bigint' ? `${value}n` : value),
               2,
             ),
           );

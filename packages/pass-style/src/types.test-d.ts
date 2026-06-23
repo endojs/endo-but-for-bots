@@ -50,7 +50,7 @@ expectType<'copyRecord'>(passStyleOf({ [PASS_STYLE]: 'arbitrary' } as const));
 expectType<'remotable'>(passStyleOf(remotable));
 expectType<PassStyle>(passStyleOf(someUnknown));
 
-const expectPassable = (val: Passable) => {};
+const expectPassable = (_val: Passable) => {};
 
 const fn = () => {};
 
@@ -77,4 +77,4 @@ expectPassable(Promise.resolve(remotable));
 expectPassable({ a: Promise.resolve(remotable) });
 expectPassable({ a: Promise.resolve(fn) });
 
-expectAssignable<Checker>((cond: boolean, details?: unknown) => cond);
+expectAssignable<Checker>((cond: boolean, _details?: unknown) => cond);

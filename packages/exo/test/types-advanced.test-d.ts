@@ -57,7 +57,7 @@ import { makeExo, defineExoClass, defineExoClassKit } from '../index.js';
   });
   // @ts-expect-error -- rest args must be string[], not number[]
   makeExo('Foo', FooI, {
-    gather(...items: number[]) {},
+    gather(..._items: number[]) {},
   });
 }
 

@@ -35,9 +35,9 @@ Object.defineProperty(AsyncLocalStorage.prototype, 'kResourceStore', {
  * @this {AsyncLocalStorage & AsyncLocalStorageInternal}
  * @param {object} resource
  * @param {object} triggerResource
- * @param {string} [type]
+ * @param {string} [_type]
  */
-function _propagate(resource, triggerResource, type) {
+function _propagate(resource, triggerResource, _type) {
   if (!this.enabled) return;
 
   const storeMap = getStoreMap(this);

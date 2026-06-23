@@ -122,12 +122,12 @@ export const exampleReceiverSideId = /** @type {PublicKeyId} */ (
  */
 
 /**
- * @param {OcapnLocation} [ownLocation]
+ * @param {OcapnLocation} [_ownLocation]
  * @param {OcapnLocation} peerLocation
  * @returns {CodecTestKit}
  */
 export const makeCodecTestKit = (
-  ownLocation = exporterLocation,
+  _ownLocation = exporterLocation,
   peerLocation = receiverLocation,
 ) => {
   const verbose = false;
@@ -137,15 +137,15 @@ export const makeCodecTestKit = (
     info: (...args) => verbose && console.info(...args),
   });
 
-  const makeRemoteKit = (targetSlot, mode = 'deliver') => {
+  const makeRemoteKit = (_targetSlot, _mode = 'deliver') => {
     const handler = {
-      get(_o, prop) {
+      get(_o, _prop) {
         throw Error('OCapN GET: Not implemented for test');
       },
-      applyFunction(_o, args) {
+      applyFunction(_o, _args) {
         throw Error('OCapN APPLY FUNCTION: Not implemented for test');
       },
-      applyMethod(_o, prop, args) {
+      applyMethod(_o, _prop, _args) {
         throw Error('OCapN APPLY METHOD: Not implemented for test');
       },
     };
@@ -204,7 +204,7 @@ export const makeCodecTestKit = (
     onSlotCollected: slotCollectedHook,
   });
 
-  const sendHandoff = signedGive => {
+  const sendHandoff = _signedGive => {
     throw Error('sendHandoff is not implemented for test');
   };
 
