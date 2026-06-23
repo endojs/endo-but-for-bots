@@ -51,9 +51,7 @@ const sessionIdHashPrefixBytes = textEncoder.encode('prot0');
  * @returns {Uint8Array}
  */
 const ocapNSignatureToBytes = sig => {
-  // concatBytes from @endo/bytes accepts the byteArray passable form
-  // (frozen Uint8Array over immutable ArrayBuffer) directly — no copy needed.
-  return concatBytes([sig.r, sig.s]);
+  return concatBytes([fromBytes(sig.r), fromBytes(sig.s)]);
 };
 
 /**
@@ -170,15 +168,17 @@ export const publicKeyDescriptorToPublicKey = publicKeyDescriptor => {
  * @returns {SessionId}
  */
 export const makeSessionId = (peerIdOne, peerIdTwo) => {
-  // Sort both IDs based on their octets.  compareBytes accepts the byteArray
-  // passable form (frozen Uint8Array over immutable ArrayBuffer) directly —
-  // no intermediate mutable copy needed.
+  // Sort both IDs based on their octets.
   const result = compareBytes(peerIdOne, peerIdTwo);
   const peerIds = result < 0 ? [peerIdOne, peerIdTwo] : [peerIdTwo, peerIdOne];
   // Concatenate them in the sorted order, prepend the "prot0" protocol tag.
-  // concatBytes from @endo/bytes accepts both the byteArray passable form and
-  // plain mutable Uint8Arrays without an intermediate copy per chunk.
-  const sessionIdBytes = concatBytes([sessionIdHashPrefixBytes, ...peerIds]);
+  // Extract mutable Uint8Arrays from the passable byteArray form before
+  // passing to @endo/bytes/concat.js which deals exclusively in mutable
+  // Uint8Array.
+  const sessionIdBytes = concatBytes([
+    sessionIdHashPrefixBytes,
+    ...peerIds.map(fromBytes),
+  ]);
   // Double SHA256 hash the resulting string
   const hash1 = sha256(sessionIdBytes);
   const hash2 = sha256(hash1);
