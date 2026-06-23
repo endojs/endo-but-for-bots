@@ -130,6 +130,20 @@ export const makePendant = canvas => {
     const lineMat = new THREE.ShaderMaterial({ uniforms: { uColor: { value: new THREE.Color(color) }, uIntensity: { value: 0.4 } }, vertexShader: WIRE_V, fragmentShader: WIRE_F, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false });
     return { line: new THREE.Line(lineGeo, lineMat), lineGeo, lineMat };
   };
+  // A glowing FILLED strut for the extrusion's "hyper" edges — built like the main shapes (a bright WIRE_F
+  // core + an additive GLOW_F fresnel shell) so the connectors glow/fill the same way the head/tail do
+  // (not the thin flat lines they used to be). A unit-height cylinder; updateLifeline scales+orients it per frame.
+  const STRUT_UP = new THREE.Vector3(0, 1, 0);
+  const makeStrut = color => {
+    const col = new THREE.Color(color);
+    const geo = new THREE.CylinderGeometry(0.022, 0.022, 1, 6, 1, true); // fresh geo per strut (clearScene disposes it)
+    const wireMat = new THREE.ShaderMaterial({ uniforms: { uColor: { value: col.clone() }, uIntensity: { value: 1 } }, vertexShader: WIRE_V, fragmentShader: WIRE_F, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false });
+    const glowMat = new THREE.ShaderMaterial({ uniforms: { uColor: { value: col.clone() }, uIntensity: { value: 1 } }, vertexShader: GLOW_V, fragmentShader: GLOW_F, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.BackSide });
+    const core = new THREE.Mesh(geo, wireMat);
+    const glow = new THREE.Mesh(geo, glowMat); glow.scale.set(1.7, 1, 1.7); // radial halo (like the shapes' 1.25 glow shell)
+    const g = new THREE.Group(); g.add(glow); g.add(core);
+    return { g, wireMat, glowMat };
+  };
   // the point on a PARENT agent's lifeline at time t (root's lifeline = the vertical time axis; a delegate's
   // = its own column). Tools edge to this point, so the connection lands at the right moment on the timeline.
   const _v = new THREE.Vector3();
@@ -219,7 +233,7 @@ export const makePendant = canvas => {
   // orientation (rigid extrusion), and redraw the 6 matching-vertex edges in world space. World vertices are
   // computed directly from each group's position/quaternion/scale (sceneGroup is identity) — no matrixWorld
   // ordering dance. The cage brightens with the head (so it pulses with the voice level too).
-  const _wt = new THREE.Vector3(), _wb = new THREE.Vector3();
+  const _wt = new THREE.Vector3(), _wb = new THREE.Vector3(), _dir = new THREE.Vector3();
   const octWorld = (group, localV, out) => out.copy(localV).multiplyScalar(group.scale.x || 1).applyQuaternion(group.quaternion).add(group.position);
   const updateLifeline = dt => {
     if (!root || !root.lifeline || !root.lifeline.tailGroup) return;
@@ -238,12 +252,15 @@ export const makePendant = canvas => {
       lf.thread.scale.y = hh; lf.thread.position.set(root.group.position.x, top - hh / 2, root.group.position.z);
       lf.thrMat.uniforms.uIntensity.value = 0.9 + inten * 0.5;
     }
-    for (let i = 0; i < lf.edges.length; i += 1) {
+    for (let i = 0; i < lf.struts.length; i += 1) {
       octWorld(root.group, lf.topV[i], _wt);
       octWorld(tg, lf.botV[i], _wb);
-      const lk = lf.edges[i];
-      lk.lineGeo.setFromPoints([_wt.clone(), _wb.clone()]); lk.lineGeo.attributes.position.needsUpdate = true;
-      lk.lineMat.uniforms.uIntensity.value = 0.35 + inten * 0.4;
+      const st = lf.struts[i];
+      _dir.copy(_wb).sub(_wt); const len = Math.max(0.001, _dir.length());
+      st.g.position.copy(_wt).add(_wb).multiplyScalar(0.5);          // midpoint of the matching-vertex pair
+      st.g.quaternion.setFromUnitVectors(STRUT_UP, _dir.multiplyScalar(1 / len)); // orient the cylinder along the edge
+      st.g.scale.set(1, len, 1);                                     // stretch to the gap; radius stays thin
+      st.wireMat.uniforms.uIntensity.value = st.glowMat.uniforms.uIntensity.value = inten; // glow with the head, like the shapes
     }
   };
 
@@ -374,15 +391,15 @@ export const makePendant = canvas => {
     // matching-vertex cage edges (octahedron = 6 edges, dodecahedron = 20). Same topology head↔tail → i ↔ i.
     const topV = isDodeca ? uniqueVerts(new THREE.DodecahedronGeometry(headR)) : OCTA_LOCAL(headR);
     const botV = isDodeca ? uniqueVerts(new THREE.DodecahedronGeometry(tailR)) : OCTA_LOCAL(tailR);
-    const edges = [];
-    for (let i = 0; i < topV.length; i += 1) { const lk = makeLine(color); lk.lineMat.uniforms.uIntensity.value = 0.6; sceneGroup.add(lk.line); edges.push(lk); }
+    const struts = [];
+    for (let i = 0; i < topV.length; i += 1) { const st = makeStrut(color); sceneGroup.add(st.g); struts.push(st); }
     // the glowing THREAD down the centre of the extrusion — a DISTINCT colour from the body (cyan vs the
     // violet head) — the spine that every tool call's edges draw from. A thin additive cylinder = a luminous
     // fibre the body rotates around; tool OUT/BACK edges land on it at the time of the call/return.
     const thrMat = new THREE.ShaderMaterial({ uniforms: { uColor: { value: new THREE.Color(COL.thread) }, uIntensity: { value: 1.1 } }, vertexShader: WIRE_V, fragmentShader: WIRE_F, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false });
     const thread = new THREE.Mesh(new THREE.CylinderGeometry(0.028, 0.028, 1, 8, 1, true), thrMat);
     sceneGroup.add(thread);
-    root.lifeline = { tailGroup, tWireMat, tGlowMat, tGeo, edges, thread, thrMat, topV, botV };
+    root.lifeline = { tailGroup, tWireMat, tGlowMat, tGeo, struts, thread, thrMat, topV, botV };
     if (descend && !buildInstant) {
       root.group.position.set(0, ROOT_Y + 2.1, 0); const from = root.group.position.clone(), to = new THREE.Vector3(0, ROOT_Y, 0);
       tween(0.62, easeInOut, e => root.group.position.lerpVectors(from, to, e));
