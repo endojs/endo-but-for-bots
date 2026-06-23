@@ -162,7 +162,7 @@ LLM-agent stack).*
 | [endo-fs-from-git](endo-fs-from-git.md) | 2026-05-28 | 2026-05-28 | In Progress |
 | [daemon-message-streaming](daemon-message-streaming.md) | 2026-03-26 | 2026-05-19 | In Progress (PR #287) |
 | [daemon-mount](daemon-mount.md) | 2026-03-20 | 2026-05-27 | In Progress |
-| [daemon-mount-capabilities](daemon-mount-capabilities.md) | 2026-05-18 | 2026-05-27 | **Complete** |
+| [daemon-mount-capabilities](daemon-mount-capabilities.md) | 2026-05-18 | 2026-06-23 | **Complete** |
 | [daemon-worker-import-from-mount](daemon-worker-import-from-mount.md) | 2026-05-22 | 2026-06-02 | Proposed |
 | [registry-capability](registry-capability.md) | 2026-06-02 | 2026-06-02 | Proposed |
 | [mvs-resolver](mvs-resolver.md) | 2026-06-02 | 2026-06-02 | Proposed |

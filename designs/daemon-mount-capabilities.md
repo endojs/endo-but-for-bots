@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-05-18 |
-| **Updated** | 2026-05-27 |
+| **Updated** | 2026-06-23 |
 | **Author** | 0xPatrick (prompted) |
 | **Status** | **Complete** |
 
@@ -274,7 +274,22 @@ An entry:
 - does not claim inode stability;
 - can carry enough relative presentation data for user interfaces and status reports without leaking host absolute paths.
 
-The implementation can model an entry as `{ mountGrant, normalizedSegments }` inside an Exo (or as a passable record under SES `harden`), with `mountGrant` checked by identity when another capability accepts the entry.
+The implementation models an entry as an inert `EndoMountEntry` exo whose
+authority is established by **object identity**, never by a field it exposes.
+The daemon holds a private table — a `WeakMap` keyed by the entry exo —
+binding each entry to its `{ rootId, normalizedSegments }`.
+A mount method that accepts an entry recovers the segments from that private
+table and checks the `rootId` against its own mount, so neither the path nor
+the provenance is ever read from a caller-supplied field.
+
+Do **not** model the entry as a passable record that carries the mount grant
+(for example `{ mountGrant, normalizedSegments }`).
+Putting a live mount cap in a slot makes the entry a handle that can recover
+mount authority — even a read-only mount leaks whole-worktree observation — and
+trusting a caller-authored `segments` field after only a `lineageOf(mountGrant)`
+check makes the path forgeable.
+An entry carries no live cap and no caller-trusted authority data; a value an
+agent passes around freely must be inert.
 
 #### Alternative Considered: Entries as Mini-Capabilities
 
@@ -314,6 +329,41 @@ Rejected for these reasons:
 The chosen shape — entries hold neither observational authority nor handle-minting authority — is the strict ocap version.
 The trade-off is a small ergonomic loss (`mount.lookup(entry)` and `mount.has(entry)` are one extra noun per call vs. `entry.openFile()` and `entry.exists()`) for a substantial authority-reasoning gain.
 If a real use case surfaces where the value shape is awkward enough to warrant revisiting, the implementation can re-add either axis to the entry as a sugar layer over the mount's authority; that addition would not break the mount-is-authority discipline as long as the entries continue to delegate to the mount rather than holding authority directly.
+
+#### Alternative Considered (and rejected): Passable entry carrying the grant
+
+A shape that makes the entry a hardened passable record carrying the mount
+grant and its path was considered and rejected:
+
+```ts
+// Considered and rejected:
+type EndoMountEntry = {
+  mountGrant: EndoMount; // the live minting mount
+  segments: string[];    // caller-visible path
+  displayPath: string;
+};
+```
+
+Its appeal was marshallability: because the record's only capability slot is
+the formula-backed `mountGrant`, `storeValue(entry, petname)` resolves that
+slot to a formula id and persists the entry, so an agent could name a returned
+entry and reuse it later.
+
+Rejected because it breaks the "entry is a value, not a handle" invariant on
+two fronts:
+
+- **The grant slot makes the entry a handle.** A live `mountGrant` lets any
+  holder recover the mount's authority; even a `readOnly()` mount leaks
+  whole-worktree observation. The entry stops being inert.
+- **Caller-authored segments make the path forgeable.** Verifying provenance
+  with `lineageOf(mountGrant)` and then trusting the record's own `segments`
+  lets a caller pair a legitimately-held grant with arbitrary segments.
+
+The need that motivated it — a workspace location surviving across agent turns
+— does not require a passable entry. Persist the mount as a petname and the
+path as plain data, and reconstruct with `mount.entry(path)`, where the mount
+re-normalizes the path against its own root. The location's authority stays on
+the mount; the entry stays an inert, identity-authenticated value.
 
 ### `EndoMount.lookup()` semantics on missing nodes
 
