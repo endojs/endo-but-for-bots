@@ -385,6 +385,22 @@ const traceStrip = steps => {
 // trace for THIS message. Shown under EVERY agent message, not just the live one at the bottom.
 const NS_SVG = 'http://www.w3.org/2000/svg';
 const svgEl = (tag, attrs) => { const e = document.createElementNS(NS_SVG, tag); for (const k in attrs) if (attrs[k] != null) e.setAttribute(k, attrs[k]); return e; };
+// REUSABLE tool-call content viz: name + the EXACT call (cyan) and result (amber) — the same two facets the 3D
+// renderer unfurls as satellites (SAT.call/SAT.result), but as a DOM modal. Clicking one tool in the SVG trace
+// opens this for THAT step (no longer all-or-nothing into the WebGL view).
+const fmtTrace = v => { if (v == null || v === '') return ''; if (typeof v === 'string') { try { return JSON.stringify(JSON.parse(v), null, 2); } catch { return v; } } try { return JSON.stringify(v, null, 2); } catch { return String(v); } };
+const toolCallDetailHtml = s => {
+  const call = fmtTrace(s.call != null ? s.call : s.detail);
+  const result = fmtTrace(s.result != null ? s.result : (s.resultText != null ? s.resultText : s.info));
+  const kids = _arr(s.children);
+  const pre = (txt, col) => `<pre style="white-space:pre-wrap;word-break:break-word;max-height:38vh;overflow:auto;background:rgba(0,0,0,.25);border:1px solid var(--edge);border-left:3px solid ${col};border-radius:7px;padding:8px 10px;margin:4px 0 10px;font:12px ui-monospace,Menlo,Consolas,monospace;color:var(--ink)">${esc(txt)}</pre>`;
+  return `<div style="text-align:left;width:520px;max-width:88vw">
+    <div style="font-weight:600;font-size:14px;margin-bottom:8px;font-family:ui-monospace,Menlo,Consolas,monospace;color:${s.ok === false ? 'var(--bad,#ff9e9e)' : 'var(--acc,#7c5cff)'}">${s.ok === false ? '⚠️' : '⚙'} ${esc(s.name || 'tool')}${s.ok === false ? ' · failed' : ''}</div>
+    <div style="font-size:11px;color:#39c5cf;letter-spacing:.04em">CALL</div>${call ? pre(call, '#39c5cf') : '<div class="pmeta" style="margin-bottom:8px">no call args recorded</div>'}
+    <div style="font-size:11px;color:#d29922;letter-spacing:.04em">RESULT</div>${result ? pre(result, '#d29922') : '<div class="pmeta" style="margin-bottom:8px">no result recorded</div>'}
+    ${kids.length ? `<div style="font-size:11px;color:var(--mut);letter-spacing:.04em">SUB-CALLS (${kids.length})</div><div style="font-size:12px;margin-top:3px">${kids.map(c => `• ${esc(c.name || 'call')}${c.ok === false ? ' ⚠️' : ''}`).join('<br>')}</div>` : ''}</div>`;
+};
+const openToolModal = s => { try { showModal(toolCallDetailHtml(s)); } catch { /* */ } };
 const traceGeometry = steps => {
   const arr = _arr(steps).slice(0, 18);
   const cv = (n, d) => (getComputedStyle(document.documentElement).getPropertyValue(n).trim() || d);
@@ -393,7 +409,7 @@ const traceGeometry = steps => {
   const uid = 'tg' + Math.random().toString(36).slice(2, 8);
   const svg = svgEl('svg', { viewBox: `0 0 ${W} ${H}`, class: 'trace-geo', preserveAspectRatio: 'xMidYMid meet', width: '100%' });
   svg.style.maxHeight = `${H}px`;
-  const ttl = svgEl('title', {}); ttl.textContent = `Reasoning trace — ${arr.length} step(s). Tap for the 3D trace.`; svg.appendChild(ttl);
+  const ttl = svgEl('title', {}); ttl.textContent = `Reasoning trace — ${arr.length} step(s). Tap a tool for its call & result; tap the core for the 3D trace.`; svg.appendChild(ttl);
   const defs = svgEl('defs', {}); const f = svgEl('filter', { id: uid, x: '-60%', y: '-60%', width: '220%', height: '220%' });
   f.appendChild(svgEl('feGaussianBlur', { stdDeviation: '1.6', result: 'b' }));
   const mg = svgEl('feMerge', {}); mg.appendChild(svgEl('feMergeNode', { in: 'b' })); mg.appendChild(svgEl('feMergeNode', { in: 'SourceGraphic' })); f.appendChild(mg);
@@ -405,16 +421,27 @@ const traceGeometry = steps => {
     const ty = arr.length === 1 ? ry : 13 + (H - 26) * (i / (arr.length - 1));
     const kids = _arr(s.children);
     const col = s.ok === false ? bad : (kids.length ? acc : ok);
-    svg.appendChild(svgEl('line', { x1: rx, y1: ry, x2: tx, y2: ty, stroke: edge, 'stroke-width': 0.9, opacity: 0.7 }));
-    svg.appendChild(diamond(tx, ty, 5, col, true));
+    // each tool is its OWN clickable group → a modal with THAT tool's call + result (not all-or-nothing into 3D)
+    const g = svgEl('g', { class: 'tg-tool', style: 'cursor:pointer' });
+    const gt = svgEl('title', {}); gt.textContent = `${s.name || 'tool'} — tap for its call & result`; g.appendChild(gt);
+    g.appendChild(svgEl('line', { x1: rx, y1: ry, x2: tx, y2: ty, stroke: edge, 'stroke-width': 0.9, opacity: 0.7 }));
+    // a wide, invisible hit-target along the row so the whole label line is comfortably tappable
+    g.appendChild(svgEl('rect', { x: tx - 7, y: ty - 8, width: W - tx, height: 16, fill: 'transparent' }));
+    g.appendChild(diamond(tx, ty, 5, col, true));
     const tl = svgEl('text', { x: tx + 10, y: ty + 3.3, 'font-size': 10, fill: col, 'font-family': 'ui-monospace,Menlo,Consolas,monospace' });
-    tl.textContent = clip(s.name, 34); svg.appendChild(tl); // LABEL the tool (the user asked for labeled tools)
+    tl.textContent = clip(s.name, 34); g.appendChild(tl); // LABEL the tool (the user asked for labeled tools)
     // research/delegate children → small dots, right-aligned so they never collide with the label
-    kids.slice(0, 6).forEach((c, j) => { const n = Math.min(6, kids.length); const cxx = W - 8 - (n - 1 - j) * 9; svg.appendChild(svgEl('circle', { cx: cxx, cy: ty, r: 2, fill: c.ok === false ? bad : ok, opacity: 0.9 })); });
+    kids.slice(0, 6).forEach((c, j) => { const n = Math.min(6, kids.length); const cxx = W - 8 - (n - 1 - j) * 9; g.appendChild(svgEl('circle', { cx: cxx, cy: ty, r: 2, fill: c.ok === false ? bad : ok, opacity: 0.9 })); });
+    g.addEventListener('click', e => { e.stopPropagation(); openToolModal(s); });
+    svg.appendChild(g);
   });
-  svg.appendChild(diamond(rx, ry, 12, acc, true)); // the agent root (octahedron) — drawn on top
-  svg.appendChild(diamond(rx, ry, 5.5, acc, false));
-  svg.onclick = () => { ensurePendant().then(p => { try { pendantWrap.classList.remove('hide'); p.setVisible(true); p.showSteps(arr); if (!pendantFs) togglePendantFs(); } catch { /* */ } }).catch(() => {}); };
+  // the agent root (octahedron) — drawn on top; tapping the CORE opens the full 3D trace
+  const rootG = svgEl('g', { style: 'cursor:pointer' });
+  const rgt = svgEl('title', {}); rgt.textContent = 'Open the full 3D trace'; rootG.appendChild(rgt);
+  rootG.appendChild(diamond(rx, ry, 12, acc, true));
+  rootG.appendChild(diamond(rx, ry, 5.5, acc, false));
+  rootG.addEventListener('click', e => { e.stopPropagation(); ensurePendant().then(p => { try { pendantWrap.classList.remove('hide'); p.setVisible(true); p.showSteps(arr); if (!pendantFs) togglePendantFs(); } catch { /* */ } }).catch(() => {}); });
+  svg.appendChild(rootG);
   return svg;
 };
 // clicking an agent MESSAGE grows its reasoning signature (without clobbering links/controls/text-selection).
