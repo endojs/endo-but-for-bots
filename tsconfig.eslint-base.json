@@ -11,6 +11,7 @@
     "moduleResolution": "NodeNext",
     "noFallthroughCasesInSwitch": true,
     "noImplicitReturns": true,
+    "strictNullChecks": true,
     "noImplicitAny": false,
     "types": ["node"],
   },
