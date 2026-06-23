@@ -47,6 +47,8 @@ import { M } from '@endo/patterns';
 import { E } from '@endo/eventual-send';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 
+/** @import { FarRef } from '@endo/eventual-send' */
+
 import { parseRootfs, rootfsLabel } from './parse-rootfs.js';
 
 const clientModuleSpecifier = new URL(
@@ -218,7 +220,7 @@ const slugify = name =>
  * path passes the frozen `{ env }` wrapper; tests pass an
  * `iterateMessages` adapter to drive the inbox loop synchronously.
  *
- * @param {import('@endo/eventual-send').FarRef<object>} guestPowers
+ * @param {FarRef<object>} guestPowers
  * @param {Promise<object> | object | undefined} _context
  * @param {ContextOrDeps} [contextOrDeps]
  * @returns {object}

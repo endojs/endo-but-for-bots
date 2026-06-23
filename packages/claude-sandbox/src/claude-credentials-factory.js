@@ -60,6 +60,8 @@ import { E } from '@endo/eventual-send';
 import { makeError, X, q } from '@endo/errors';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 
+/** @import { FarRef } from '@endo/eventual-send' */
+
 /**
  * Subset of the inbox message shape this caplet cares about. The
  * `@host` inbox API is dynamically typed at the Endo boundary; we
@@ -302,7 +304,7 @@ harden(makeCredentialsExo);
 /**
  * Factory caplet for `ClaudeCredentials`.
  *
- * @param {import('@endo/eventual-send').FarRef<object>} guestPowers
+ * @param {FarRef<object>} guestPowers
  * @param {Promise<object> | object | undefined} _context
  * @param {CredsContextOrDeps} [contextOrDeps]
  * @returns {object}
