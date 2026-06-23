@@ -136,11 +136,17 @@ export const makePendant = canvas => {
   const STRUT_UP = new THREE.Vector3(0, 1, 0);
   const makeStrut = color => {
     const col = new THREE.Color(color);
-    const geo = new THREE.CylinderGeometry(0.022, 0.022, 1, 6, 1, true); // fresh geo per strut (clearScene disposes it)
+    // CORE: a 1px THREE.Line with the SAME material as the normal tool lines (makeLine), so a hyper strut reads
+    // at exactly the normal line weight — screen-space 1px, distance-independent. A unit segment along Y; the
+    // group transform (position/quaternion/scale.y=len) stretches it between the two matching vertices.
+    const lineGeo = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, -0.5, 0), new THREE.Vector3(0, 0.5, 0)]);
     const wireMat = new THREE.ShaderMaterial({ uniforms: { uColor: { value: col.clone() }, uIntensity: { value: 1 } }, vertexShader: WIRE_V, fragmentShader: WIRE_F, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false });
+    const core = new THREE.Line(lineGeo, wireMat);
+    // GLOW: a slim fresnel shell so the strut still glows/fills like the shapes — this is glow, not line weight,
+    // so it doesn't make the strut read as "thicker" than the normal lines.
+    const geo = new THREE.CylinderGeometry(0.012, 0.012, 1, 6, 1, true); // fresh geo per strut (clearScene disposes it)
     const glowMat = new THREE.ShaderMaterial({ uniforms: { uColor: { value: col.clone() }, uIntensity: { value: 1 } }, vertexShader: GLOW_V, fragmentShader: GLOW_F, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.BackSide });
-    const core = new THREE.Mesh(geo, wireMat);
-    const glow = new THREE.Mesh(geo, glowMat); glow.scale.set(1.7, 1, 1.7); // radial halo (like the shapes' 1.25 glow shell)
+    const glow = new THREE.Mesh(geo, glowMat); glow.scale.set(1.5, 1, 1.5); // tight radial halo
     const g = new THREE.Group(); g.add(glow); g.add(core);
     return { g, wireMat, glowMat };
   };
