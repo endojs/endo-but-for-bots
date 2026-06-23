@@ -61,6 +61,22 @@ const openrouterKey = () => {
   return orKeyCache;
 };
 
+// Anthropic routing: a model id of `anthropic:<id>` (the Claude entries in the provider menu) goes DIRECT to
+// the Anthropic Messages API with the operator's ANTHROPIC_API_KEY — NOT through OpenRouter. Key precedence
+// matches OpenRouter: env, then the field-agent secret vault, then ~/.env.
+const ANTHROPIC = 'https://api.anthropic.com/v1/messages';
+let anKeyCache;
+const anthropicKey = () => {
+  if (anKeyCache !== undefined) return anKeyCache;
+  if (process.env.ANTHROPIC_API_KEY) { anKeyCache = process.env.ANTHROPIC_API_KEY.trim(); return anKeyCache; }
+  try { const s = fs.readFileSync('/home/dan/.config/field-agent/secrets/anthropic-api-key', 'utf8').trim(); if (s) { anKeyCache = s; return anKeyCache; } } catch { /* none */ }
+  try { const env = fs.readFileSync('/home/dan/.env', 'utf8'); const m = env.match(/^\s*ANTHROPIC_API_KEY\s*=\s*(.+)\s*$/m); anKeyCache = m ? m[1].trim().replace(/^["']|["']$/g, '') : null; } catch { anKeyCache = null; }
+  return anKeyCache;
+};
+// OpenAI-style chat messages → Anthropic Messages format: `system` is a top-level field; user/assistant turns
+// carry text (CodeMode is text-in/text-out, so multimodal blocks degrade to their text parts).
+const toAnthropicText = c => typeof c === 'string' ? c : (Array.isArray(c) ? c.map(p => (p && p.type === 'text') ? p.text : (typeof p === 'string' ? p : '')).join('') : String(c == null ? '' : c));
+
 // callLLM(messages, model) → { text, usage } where `usage` is the provider's token
 // accounting (OpenAI/gemma {prompt_tokens,…} or OpenRouter, or null when a call
 // short-circuits to an error string). Increment 0 of the toll-bridge: we used to drop
@@ -69,6 +85,22 @@ const openrouterKey = () => {
 // force them, so a higher default is safe for the short classifier calls and gives the main reasoning
 // loop room for sprawling programs/answers (the old 700 throttled long voice-note replies).
 export const callLLM = async (messages, model = 'default', { maxTokens = 4096 } = {}) => {
+  if (String(model).startsWith('anthropic:')) {
+    const id = String(model).slice('anthropic:'.length);
+    const key = anthropicKey();
+    if (!key) return harden({ text: '', usage: null, error: `${id}: no ANTHROPIC_API_KEY configured — add ANTHROPIC_API_KEY to ~/.env (or the field-agent secret), then pick this model again.` });
+    const system = messages.filter(m => m.role === 'system').map(m => toAnthropicText(m.content)).join('\n\n');
+    const msgs = messages.filter(m => m.role !== 'system').map(m => ({ role: m.role === 'assistant' ? 'assistant' : 'user', content: toAnthropicText(m.content) }));
+    try {
+      const r = await fetch(ANTHROPIC, { method: 'POST', signal: AbortSignal.timeout(120000),
+        headers: { 'content-type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01' },
+        body: JSON.stringify({ model: id, max_tokens: maxTokens, temperature: 0.2, ...(system ? { system } : {}), messages: msgs }) });
+      if (!r.ok) return harden({ text: '', usage: null, status: r.status, error: `${id} via Anthropic returned ${r.status}${r.status === 429 ? ' (rate-limited)' : ''}: ${(await r.text().catch(() => '')).slice(0, 160)}` });
+      const j = await r.json();
+      // Return the RAW Anthropic usage ({input_tokens, output_tokens, cache_*}) — costModel prices it natively.
+      return harden({ text: Array.isArray(j.content) ? j.content.filter(c => c.type === 'text').map(c => c.text).join('') : '', usage: j.usage || null });
+    } catch (e) { return harden({ text: '', usage: null, error: `${id} via Anthropic unreachable: ${e.message}` }); }
+  }
   if (String(model).startsWith('openrouter:')) {
     const slug = String(model).slice('openrouter:'.length);
     const key = openrouterKey();

@@ -1377,15 +1377,20 @@ const OPENROUTER_MODELS = [
   { slug: 'google/gemini-2.0-flash-001',       name: 'Gemini Flash',   cost: '$',   size: 'M',  speed: '⚡⚡⚡' },
   { slug: 'meta-llama/llama-3.3-70b-instruct', name: 'Llama 3.3 70B',  cost: '$',   size: 'L',  speed: '⚡⚡' },
   { slug: 'deepseek/deepseek-chat',            name: 'DeepSeek V3',    cost: '$',   size: 'L',  speed: '⚡⚡' },
-  { slug: 'anthropic/claude-3.7-sonnet',       name: 'Claude Sonnet',  cost: '$$',  size: 'L',  speed: '⚡⚡' },
   { slug: 'openai/gpt-4o',                     name: 'GPT-4o',         cost: '$$',  size: 'L',  speed: '⚡⚡' },
   { slug: 'moonshotai/kimi-k2.7-code',         name: 'Kimi K2.7 Code', cost: '$$',  size: 'XL', speed: '⚡⚡' },
-  { slug: 'anthropic/claude-opus-4',           name: 'Claude Opus',    cost: '$$$', size: 'XL', speed: '⚡' },
 ].map(m => ({ id: `openrouter:${m.slug}`, name: m.name, size: m.size, label: `${m.name} · ${m.cost} · ${m.size} · ${m.speed}` }));
+// Anthropic models go DIRECT to the Anthropic API (ANTHROPIC_API_KEY from ~/.env), NOT OpenRouter — id
+// `anthropic:<model-id>`, which tool-bridge callLLM dispatches to api.anthropic.com and costModel prices.
+const ANTHROPIC_MODELS = [
+  { id: 'anthropic:claude-haiku-4-5',  name: 'Claude Haiku',  cost: '$',   size: 'M',  speed: '⚡⚡⚡' },
+  { id: 'anthropic:claude-sonnet-4-6', name: 'Claude Sonnet', cost: '$$',  size: 'L',  speed: '⚡⚡' },
+  { id: 'anthropic:claude-opus-4-8',   name: 'Claude Opus',   cost: '$$$', size: 'XL', speed: '⚡' },
+].map(m => ({ id: m.id, name: m.name, size: m.size, label: `${m.name} · ${m.cost} · ${m.size} · ${m.speed}` }));
 const LOCAL_DEFAULT = { id: 'default', name: 'Gemma (local)', size: 'M', label: 'Gemma · local · free · ⚡⚡⚡' };
 // size→big ladder for "hold the send button to escalate to the next biggest model"
-const MODEL_LADDER = [LOCAL_DEFAULT, ...OPENROUTER_MODELS];
-let modelList = [LOCAL_DEFAULT, ...OPENROUTER_MODELS];
+const MODEL_LADDER = [LOCAL_DEFAULT, ...OPENROUTER_MODELS, ...ANTHROPIC_MODELS];
+let modelList = [LOCAL_DEFAULT, ...OPENROUTER_MODELS, ...ANTHROPIC_MODELS];
 let agentList = ['field-agent'];
 let projectList = []; // defined projects, surfaced in the agent menu so a project-scoped chat is one tap away
 const pendingProjectId = {}; // sessionId → projectId for an ephemeral chat not yet committed to a project
@@ -1424,7 +1429,7 @@ const syncSelectors = () => {
   as.classList.toggle('hide', !show); ms.classList.toggle('hide', !show);
   as.value = chatAgent(); ms.value = chatModel();
 };
-const loadModels = async () => { if (!cap) return; try { const r = await (await fetch('/models', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap }) })).json(); const local = (r.models && r.models.length) ? r.models : [LOCAL_DEFAULT]; modelList = [...local, ...OPENROUTER_MODELS]; populateModelSel(); syncSelectors(); } catch {} };
+const loadModels = async () => { if (!cap) return; try { const r = await (await fetch('/models', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap }) })).json(); const local = (r.models && r.models.length) ? r.models : [LOCAL_DEFAULT]; modelList = [...local, ...OPENROUTER_MODELS, ...ANTHROPIC_MODELS]; populateModelSel(); syncSelectors(); } catch {} };
 const loadAgentList = async () => {
   agentList = ['field-agent']; specialistPowers = {}; specialistSpawnedFrom = {};
   if (heldPowers.has('specialists')) { try { const specs = await rpc('listSpecialists'); for (const s of (specs || [])) if (s && s.id) { agentList.push(s.id); specialistPowers[s.id] = Array.isArray(s.powers) ? s.powers : []; if (s.spawnedFrom) specialistSpawnedFrom[s.id] = s.spawnedFrom; } } catch {} }
