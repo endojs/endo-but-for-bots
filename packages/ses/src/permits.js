@@ -88,6 +88,13 @@ export const universalPropertyNames = {
   // https://github.com/endojs/endo/issues/550
   AggregateError: 'AggregateError',
 
+  // WHATWG Encoding Standard text codecs.
+  // Pure transformations between `string` and `Uint8Array` with no static
+  // side channels and no ambient authority; safe as universal intrinsics.
+  // https://github.com/endojs/endo/issues/2635
+  TextEncoder: 'TextEncoder',
+  TextDecoder: 'TextDecoder',
+
   // https://github.com/tc39/proposal-explicit-resource-management
   // TODO DisposableStack, AsyncDisposableStack
   // DisposableStack: 'DisposableStack',
@@ -1456,6 +1463,44 @@ export const permitted = {
 
   // Atomics
   Atomics: false, // UNSAFE and suppressed.
+
+  // WHATWG Encoding Standard
+  // https://encoding.spec.whatwg.org/
+  // Pure transformations between `string` and `Uint8Array`; no static
+  // ambient-authority methods and no exposed iterator prototype.
+  // https://github.com/endojs/endo/issues/2635
+  TextEncoder: {
+    // Properties of the TextEncoder Constructor
+    '[[Proto]]': '%FunctionPrototype%',
+    prototype: '%TextEncoderPrototype%',
+  },
+
+  '%TextEncoderPrototype%': {
+    constructor: 'TextEncoder',
+    encode: fn,
+    encodeInto: fn,
+    encoding: getter,
+    '@@toStringTag': 'string',
+    // Node adds a custom inspection method; known and safe to remove.
+    'RegisteredSymbol(nodejs.util.inspect.custom)': false,
+  },
+
+  TextDecoder: {
+    // Properties of the TextDecoder Constructor
+    '[[Proto]]': '%FunctionPrototype%',
+    prototype: '%TextDecoderPrototype%',
+  },
+
+  '%TextDecoderPrototype%': {
+    constructor: 'TextDecoder',
+    decode: fn,
+    encoding: getter,
+    fatal: getter,
+    ignoreBOM: getter,
+    '@@toStringTag': 'string',
+    // Node adds a custom inspection method; known and safe to remove.
+    'RegisteredSymbol(nodejs.util.inspect.custom)': false,
+  },
 
   JSON: {
     parse: fn,

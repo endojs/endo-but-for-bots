@@ -3,8 +3,33 @@
 | | |
 |---|---|
 | **Created** | 2026-05-04 |
+| **Updated** | 2026-06-23 |
 | **Author** | Kris Kowal (prompted) |
-| **Status** | Not Started |
+| **Status** | **Complete** |
+
+## Status
+
+Implemented in `packages/ses`:
+
+- `packages/ses/src/permits.js` lists `TextEncoder` and `TextDecoder` on
+  `universalPropertyNames` and adds the `TextEncoder` / `TextDecoder`
+  constructor entries plus the `%TextEncoderPrototype%` /
+  `%TextDecoderPrototype%` permits (`encode`, `encodeInto`, `encoding`
+  on the encoder; `decode`, `encoding`, `fatal`, `ignoreBOM` on the
+  decoder).
+- No other SES source changed: the existing sampling, whitelist, and
+  harden passes pick the new permits up automatically, and the
+  missing-property tolerance in `sampleGlobals` covers hosts (XS) that
+  do not provide the codecs.
+- Tests: `packages/ses/test/text-codecs.test.js` (presence, single
+  cross-compartment identity, frozen, UTF-8 round-trip, retained
+  prototype members) and `packages/ses/test/text-codecs-absent.test.js`
+  (degradation when the host lacks the codecs).
+- A `ses` minor changeset accompanies the change.
+
+Phase 3 (downstream `Buffer` audit) is not part of this change; it remains
+available as a follow-up per the project's "prefer Uint8Array +
+TextEncoder/TextDecoder over Buffer" convention.
 
 ## What is the Problem Being Solved?
 
