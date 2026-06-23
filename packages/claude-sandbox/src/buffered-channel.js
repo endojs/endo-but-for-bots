@@ -1,5 +1,5 @@
 // @ts-check
-// Buffered Far StreamReader paired with an imperative `push`. A producer pushes
+// Buffered StreamReader exo paired with an imperative `push`. A producer pushes
 // events as they occur; the caller pulls them over CapTP via `next()`. The
 // buffer lets the producer run ahead of a slow consumer, and `next()` parks on a
 // promise when caught up.
@@ -12,13 +12,23 @@
 // session's reply wire) so the two sessions can later share one primitive and
 // one interface guard. Keep it byte-identical to floot's copy.
 
-import { Far } from '@endo/far';
+import { makeExo } from '@endo/exo';
+import { M } from '@endo/patterns';
 
-/** Terminal events close the stream; they match across all wires. */
+const BufferedReaderInterface = M.interface('BufferedReader', {
+  next: M.call().returns(M.promise()),
+  return: M.call().returns(M.promise()),
+  throw: M.call(M.error()).returns(M.promise()),
+});
+
+/**
+ * Terminal events close the stream; they match across all wires.
+ * @param event
+ */
 const isTerminal = event => event.type === 'end' || event.type === 'abort';
 
 /**
- * @param {string} name Far interface name for the reader.
+ * @param {string} name Exo interface name for the reader.
  * @param {{ onClose?: (() => void) | null }} [opts]
  * @returns {{
  *   push: (event: object) => void,
@@ -62,7 +72,7 @@ export const makeBufferedReader = (name, { onClose = null } = {}) => {
     if (!wasFinished && closeHook) closeHook();
   };
 
-  const reader = Far(name, {
+  const reader = makeExo(name, BufferedReaderInterface, {
     next: async () => {
       for (;;) {
         if (cursor < buffer.length) {
