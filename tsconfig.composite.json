@@ -3,6 +3,9 @@
   "files": [],
   "references": [
     {
+      "path": "packages/ascii/tsconfig.composite.json"
+    },
+    {
       "path": "packages/base64/tsconfig.composite.json"
     },
     {

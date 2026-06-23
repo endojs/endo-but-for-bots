@@ -6,6 +6,9 @@
   },
   "references": [
     {
+      "path": "../ascii/tsconfig.composite.json"
+    },
+    {
       "path": "../bytes/tsconfig.composite.json"
     },
     {
