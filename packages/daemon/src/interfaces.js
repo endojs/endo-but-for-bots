@@ -45,6 +45,12 @@ const MakeCapletOptionsShape = M.splitRecord(
   {},
   {
     powersName: NameShape,
+    // Alternative to `powersName`: supply the powers by capability
+    // reference. The daemon resolves the cap to its formula id, so the
+    // caller need never give it a pet name (and the resulting caplet keeps
+    // it reachable for its own lifetime). Mutually exclusive with
+    // `powersName`.
+    powers: M.remotable('Powers'),
     resultName: NameOrPathShape,
     env: EnvShape,
     workerTrustedShims: M.arrayOf(M.string()),
@@ -52,14 +58,18 @@ const MakeCapletOptionsShape = M.splitRecord(
 );
 
 // Shared method guard for evaluate (used by both Host and Guest)
-// Both execute directly in a worker, differing only in namespace
+// Both execute directly in a worker, differing only in namespace.
+// Trailing optionals: `resultName` (durably roots the result by pet name)
+// and `retainUntil` (a promise that keeps the result alive — a transient
+// root — until it settles; the ephemeral-root sibling of `resultName`,
+// honored even alongside it, and most useful for an un-named result).
 const EvaluateMethodGuard = M.call(
   M.or(NameShape, M.undefined()),
   M.string(),
   M.arrayOf(M.string()),
   NamesOrPathsShape,
 )
-  .optional(NameOrPathShape)
+  .optional(M.or(NameOrPathShape, M.undefined()), M.promise())
   .returns(M.promise());
 
 // #region Interfaces

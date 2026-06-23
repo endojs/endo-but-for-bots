@@ -900,6 +900,242 @@ testNeedsNodeWorker(
   },
 );
 
+const pingablePath = path.join(dirname, 'test', 'pingable.js');
+const powersPingPath = path.join(dirname, 'test', 'powers-ping.js');
+
+testNeedsNodeWorker(
+  'makeUnconfined accepts powers by capability reference (un-named)',
+  async t => {
+    const { host } = await prepareHost(t);
+
+    // Mint a powers cap WITHOUT naming it. An un-named make-unconfined
+    // result is durable and retained by the caller's reference (unlike an
+    // un-named `evaluate`, which is ephemeral — see the README note).
+    const powers = await E(host).makeUnconfined('@main', pingablePath, {
+      powersName: '@none',
+    });
+
+    // Compose a caplet over that cap *by reference* — no pet name involved.
+    const caplet = await E(host).makeUnconfined('@main', powersPingPath, {
+      powers,
+      resultName: 'ping-caplet',
+    });
+
+    // The caplet received exactly that powers cap (it echoed ping()).
+    t.is(await E(caplet).pong(), 'pong-42');
+
+    // The powers cap was never named: the only host pet name created is the
+    // caplet's. (A by-name powers would have added a second entry that the
+    // caller would then have to remove — the "unname trick" this avoids.)
+    const names = await E(host).list();
+    t.deepEqual(
+      names.filter(n => !n.startsWith('@') && n !== 'ping-caplet'),
+      [],
+      `only the caplet is named; saw: ${names.join(', ')}`,
+    );
+  },
+);
+
+testNeedsNodeWorker(
+  'makeUnconfined rejects powers that is not a daemon capability',
+  async t => {
+    const { host } = await prepareHost(t);
+
+    // A remotable the daemon never minted has no formula id.
+    await t.throwsAsync(
+      E(host).makeUnconfined('@main', powersPingPath, {
+        powers: Far('NotADaemonCap', { ping: () => 'nope' }),
+      }),
+      { message: /minted by this daemon/ },
+    );
+  },
+);
+
+testNeedsNodeWorker(
+  'makeUnconfined rejects supplying both powers and powersName',
+  async t => {
+    const { host } = await prepareHost(t);
+    const powers = await E(host).makeUnconfined('@main', pingablePath, {
+      powersName: '@none',
+    });
+    await t.throwsAsync(
+      E(host).makeUnconfined('@main', powersPingPath, {
+        powers,
+        powersName: '@none',
+      }),
+      { message: /either "powers".*or "powersName"/ },
+    );
+  },
+);
+
+testNeedsNodeWorker(
+  'evaluate retainUntil keeps an un-named result composable by reference',
+  async t => {
+    const { host } = await prepareHost(t);
+    const release = makePromiseKit();
+
+    // The @endo/claude-sandbox factory's shape: build a powers cap from
+    // inline source + endowments, keep it alive un-named via retainUntil,
+    // hand it to makeUnconfined by reference, then release once the
+    // caplet's dependency edge roots it. No pet name is ever involved.
+    const powers = await E(host).evaluate(
+      '@main',
+      `Far('Pingable', { ping: () => 'pong-eval' })`,
+      [],
+      [],
+      undefined, // resultName — un-named
+      release.promise, // retainUntil
+    );
+    const caplet = await E(host).makeUnconfined('@main', powersPingPath, {
+      powers,
+      resultName: 'ping-caplet',
+    });
+    t.is(await E(caplet).pong(), 'pong-eval');
+
+    // Drop the transient pin; the caplet's ['powers', id] edge now roots it.
+    release.resolve();
+
+    const names = await E(host).list();
+    t.deepEqual(
+      names.filter(n => !n.startsWith('@') && n !== 'ping-caplet'),
+      [],
+      `only the caplet is named; saw: ${names.join(', ')}`,
+    );
+  },
+);
+
+testNeedsNodeWorker(
+  'without retainUntil an un-named evaluate result is ephemeral (not composable)',
+  async t => {
+    const { host } = await prepareHost(t);
+    // Default eval: the un-named result is collected as soon as it resolves
+    // (its transient pin is dropped), so it cannot be passed by reference.
+    const powers = await E(host).evaluate(
+      '@main',
+      `Far('Pingable', { ping: () => 'pong' })`,
+      [],
+      [],
+    );
+    await t.throwsAsync(
+      E(host).makeUnconfined('@main', powersPingPath, { powers }),
+      { message: /minted by this daemon/ },
+    );
+  },
+);
+
+testNeedsNodeWorker(
+  'an already-settled retainUntil releases the pin (result not composable)',
+  async t => {
+    const { host } = await prepareHost(t);
+    // retainUntil resolved before the call returns: the unpin fires on the
+    // next microtask, so by the time the (CapTP-round-tripped) result is in
+    // hand the formula has already been collected — i.e. equivalent to no
+    // retainUntil. Pins the pre-settled boundary.
+    const powers = await E(host).evaluate(
+      '@main',
+      `Far('Pingable', { ping: () => 'pong' })`,
+      [],
+      [],
+      undefined,
+      Promise.resolve('done'),
+    );
+    await t.throwsAsync(
+      E(host).makeUnconfined('@main', powersPingPath, { powers }),
+      { message: /minted by this daemon/ },
+    );
+  },
+);
+
+testNeedsNodeWorker(
+  'a rejected retainUntil resolves evaluate normally and releases the pin',
+  async t => {
+    const { host } = await prepareHost(t);
+    // A rejected retention promise must not reject `evaluate` (the rejection
+    // only drives the unpin) and must still release the pin (no leak).
+    const rejected = Promise.reject(new Error('retention aborted'));
+    rejected.catch(() => {}); // we hand the rejection to the daemon, not Node
+    const powers = await E(host).evaluate(
+      '@main',
+      `Far('Pingable', { ping: () => 'pong' })`,
+      [],
+      [],
+      undefined,
+      rejected,
+    );
+    // evaluate resolved to the value despite the rejected retainUntil...
+    t.truthy(powers);
+    // ...and the pin was released, so the result is no longer composable.
+    await t.throwsAsync(
+      E(host).makeUnconfined('@main', powersPingPath, { powers }),
+      { message: /minted by this daemon/ },
+    );
+  },
+);
+
+testNeedsNodeWorker(
+  'retainUntil is honored alongside resultName (held until the promise settles)',
+  async t => {
+    const { host } = await prepareHost(t);
+    const release = makePromiseKit();
+
+    // Both a pet name and retainUntil: the pet-name edge roots the result,
+    // but retainUntil is still honored (not ignored) as a transient pin. We
+    // observe this by removing the name while retainUntil is pending — the
+    // transient pin keeps the result composable by reference until release.
+    const powers = await E(host).evaluate(
+      '@main',
+      `Far('Pingable', { ping: () => 'pong-eval' })`,
+      [],
+      [],
+      'retained-powers', // resultName — named
+      release.promise, // retainUntil — still honored
+    );
+    await E(host).remove('retained-powers');
+
+    // The name is gone, but the transient pin from retainUntil keeps the
+    // result alive and daemon-minted, so it composes by reference.
+    const caplet = await E(host).makeUnconfined('@main', powersPingPath, {
+      powers,
+      resultName: 'ping-caplet',
+    });
+    t.is(await E(caplet).pong(), 'pong-eval');
+
+    // Drop the transient pin; the caplet's ['powers', id] edge now roots it.
+    release.resolve();
+
+    const names = await E(host).list();
+    t.deepEqual(
+      names.filter(n => !n.startsWith('@') && n !== 'ping-caplet'),
+      [],
+      `only the caplet is named; saw: ${names.join(', ')}`,
+    );
+  },
+);
+
+testNeedsNodeWorker(
+  'guest evaluate threads retainUntil and keeps an un-named result alive',
+  async t => {
+    const { host } = await prepareHost(t);
+    const guest = await E(host).provideGuest('guest');
+    await E(host).provideWorker(['worker']);
+
+    const release = makePromiseKit();
+    // Guest path (guest.js) routes through the same makeRetainUnnamed policy.
+    const result = await E(guest).evaluate(
+      'worker',
+      `Far('Pingable', { ping: () => 'guest-pong' })`,
+      [],
+      [],
+      undefined,
+      release.promise,
+    );
+    // Retained while the promise is pending: the un-named result is still
+    // live, so a method call on it resolves.
+    t.is(await E(result).ping(), 'guest-pong');
+    release.resolve();
+  },
+);
+
 testNeedsNodeWorker(
   'move moves value, between different caplet name hubs',
   async t => {

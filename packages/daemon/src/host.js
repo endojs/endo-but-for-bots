@@ -36,6 +36,7 @@ import { toHex, fromHex } from './hex.js';
 import { makePetSitter } from './pet-sitter.js';
 
 import { makeDeferredTasks } from './deferred-tasks.js';
+import { makeRetainUnnamed } from './retain-unnamed.js';
 
 import { HostInterface } from './interfaces.js';
 import { hostHelp, makeHelp } from './help-text.js';
@@ -623,12 +624,15 @@ export const makeHostMaker = ({
      * @param {(string | string[])[]} petNamePaths
      * @param {NameOrPath | undefined} resultName
      */
+    const retainUnnamed = makeRetainUnnamed(unpinTransient);
+
     const evaluate = async (
       workerName,
       source,
       codeNames,
       petNamePaths,
       resultName,
+      retainUntil,
     ) => {
       if (workerName !== undefined) {
         assertName(workerName);
@@ -681,6 +685,11 @@ export const makeHostMaker = ({
         );
       }
 
+      // Pin the result as a transient root whenever it is un-named (so it
+      // survives formulation against concurrent collection) or whenever the
+      // caller supplied `retainUntil` (an explicit request to hold it). A
+      // named result is otherwise durably rooted by its pet-name edge.
+      const pinResult = resultName === undefined || retainUntil !== undefined;
       const { id, value } = await formulateEval(
         hostId,
         source,
@@ -688,19 +697,15 @@ export const makeHostMaker = ({
         endowmentFormulaIdsOrPaths,
         tasks,
         workerId,
-        resultName === undefined ? pinTransient : undefined,
+        pinResult ? pinTransient : undefined,
         workerLabel,
       );
-      if (resultName === undefined) {
-        // Ephemeral eval: the formula was pinned inside formulateEval
-        // (inside the lock) so concurrent collection can't reclaim it.
-        // Unpin after the value resolves and drain any resulting
-        // collection cleanup (worker termination, etc.).
-        try {
-          return await value;
-        } finally {
-          await unpinTransient(id);
-        }
+      if (pinResult) {
+        // The formula was pinned inside formulateEval (inside the lock) so
+        // concurrent collection can't reclaim it. `retainUnnamed` drops the
+        // pin once `retainUntil` settles, or immediately when there is no
+        // `retainUntil` (the ephemeral un-named case).
+        return retainUnnamed(id, value, retainUntil);
       }
       return value;
     };
@@ -712,7 +717,8 @@ export const makeHostMaker = ({
      */
     const prepareMakeCaplet = (workerName, options = {}) => {
       const {
-        powersName = '@none',
+        powersName,
+        powers,
         resultName,
         env = {},
         workerTrustedShims,
@@ -720,7 +726,11 @@ export const makeHostMaker = ({
       if (workerName !== undefined) {
         assertName(workerName);
       }
-      assertPowersName(powersName);
+      if (powers !== undefined && powersName !== undefined) {
+        throw makeError(
+          X`Specify either "powers" (by capability reference) or "powersName", not both`,
+        );
+      }
 
       /** @type {DeferredTasks<MakeCapletDeferredTaskParams>} */
       const tasks = makeDeferredTasks();
@@ -730,15 +740,38 @@ export const makeHostMaker = ({
         tasks.push,
       );
 
-      const powersId = /** @type {FormulaIdentifier | undefined} */ (
-        petStore.identifyLocal(/** @type {Name} */ (powersName))
-      );
-      if (powersId === undefined) {
-        assertPetName(powersName);
-        const powersPetName = powersName;
-        tasks.push(identifiers => {
-          return petStore.storeIdentifier(powersPetName, identifiers.powersId);
-        });
+      /** @type {FormulaIdentifier | undefined} */
+      let powersId;
+      if (powers !== undefined) {
+        // Powers supplied by reference: resolve the capability to the
+        // formula id it was minted from (the same identity map
+        // `provideHostPath` uses). The caplet formula then depends on that
+        // id directly, so the powers needs no pet name — it stays reachable
+        // for exactly the caplet's lifetime and is collected with it. This
+        // mirrors how the daemon already accepts a *named* powers id, only
+        // the id comes from the cap's identity rather than the pet store.
+        powersId = getIdForRef(powers);
+        if (powersId === undefined) {
+          throw makeError(
+            X`"powers" must be a capability minted by this daemon`,
+          );
+        }
+      } else {
+        const resolvedPowersName = powersName ?? '@none';
+        assertPowersName(resolvedPowersName);
+        powersId = /** @type {FormulaIdentifier | undefined} */ (
+          petStore.identifyLocal(/** @type {Name} */ (resolvedPowersName))
+        );
+        if (powersId === undefined) {
+          assertPetName(resolvedPowersName);
+          const powersPetName = resolvedPowersName;
+          tasks.push(identifiers => {
+            return petStore.storeIdentifier(
+              powersPetName,
+              identifiers.powersId,
+            );
+          });
+        }
       }
 
       if (resultName !== undefined) {
