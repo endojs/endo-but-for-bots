@@ -28,3 +28,15 @@ The credentials factory lives on the **peer**, not here (its own
 `claude-credentials/` directory). The peer passes a `Filesystem` cap and a
 `ClaudeCredentials` cap into `createSession`; the host only ever sees a
 short-lived materialised secret, never a long-lived key.
+
+## Credential exposure
+
+The short-lived secret the host receives is injected as a process environment
+variable into the container at spawn time.
+Any code the agent runs inside the slice — tool subprocesses, MCP servers, hooks
+— inherits the parent environment and can therefore read the secret.
+Claude Code does not strip the credential variable from tool subprocesses.
+The containment boundary is the sandbox (network egress control + short-lived
+revocable secret), not in-container masking.
+See `DESIGN.md` § "9. Credential exposure through the sandbox environment" for
+the full threat model and mitigations.

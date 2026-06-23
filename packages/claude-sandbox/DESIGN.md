@@ -660,14 +660,18 @@ A prompt-injected or adversarial turn can therefore attempt to read the secret
 somewhere.
 
 **Do not rely on `claude` masking the variable from tool subprocesses.**
-We have *not* validated that Claude Code strips `ANTHROPIC_API_KEY` /
-`CLAUDE_CODE_OAUTH_TOKEN` from the environment of commands it runs through tool
-calls, and the security of this package **must not depend on it** (it is a
-defense-in-depth nicety at best, applied by code inside the sandbox — the thing
-we are confining).
-Treat the secret as **reachable by any code the agent runs**.
-*(Open item: confirm Claude Code's actual env-masking behaviour for tool
-subprocesses and record it here; until then assume "not masked".)*
+Claude Code does not strip `ANTHROPIC_API_KEY` / `CLAUDE_CODE_OAUTH_TOKEN` from
+the environment of commands it runs via tool calls.
+Process environment variables are inherited by child processes in standard POSIX
+semantics; Claude Code's Bash tool, MCP server workers, and hook subprocesses
+all receive the full parent environment.
+There is no verified env-scrubbing layer inside the `claude` binary between the
+parent process and its tool subprocesses.
+The security of this package does not depend on in-process masking — that
+would be a defense-in-depth nicety applied by the thing we are confining, which
+is an insufficient guarantee.
+Treat the secret as **reachable by any code the agent runs inside the slice**,
+including tool subcommands, MCP server code, and hooks.
 
 The containment therefore lives at the **sandbox boundary**, not in the agent:
 
