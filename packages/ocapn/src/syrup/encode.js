@@ -87,15 +87,7 @@ function writeSelectorFromString(bufferWriter, value) {
  * @param {Uint8Array} value
  */
 function writeBytestring(bufferWriter, value) {
-  // Convert to a fresh mutable Uint8Array for internal operations.
-  // The byteArray pass style is a frozen Uint8Array backed by an
-  // immutable ArrayBuffer; calling `slice` on the backing buffer returns
-  // a fresh mutable Uint8Array of the right window, which is exactly
-  // what `writeStringlike` needs.
-  const bytes = new Uint8Array(
-    value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength),
-  );
-  writeStringlike(bufferWriter, bytes, ':');
+  writeStringlike(bufferWriter, value, ':');
 }
 
 /**

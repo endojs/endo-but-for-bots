@@ -22,7 +22,9 @@
     "url": "https://github.com/endojs/endo/issues"
   },
   "type": "module",
-  "exports": {},
+  "exports": {
+    "./package.json": "./package.json"
+  },
   "scripts": {
     "build": "exit 0",
     "lint": "yarn lint:types && yarn lint:eslint",

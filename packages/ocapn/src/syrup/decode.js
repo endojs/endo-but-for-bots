@@ -1,7 +1,5 @@
 // @ts-check
 
-import { toBytes } from '@endo/pass-style/to-bytes.js';
-
 import { BufferReader } from './buffer-reader.js';
 
 const MINUS = '-'.charCodeAt(0);
@@ -133,9 +131,9 @@ function readTypeAndMaybeValue(bufferReader, name) {
   if (typeByte === BYTES_START) {
     const number = Number.parseInt(numberString, 10);
     const valueBytes = bufferReader.read(number);
-    // Convert Uint8Array to ArrayBuffer
-    const arrayBuffer = toBytes(valueBytes);
-    return { type: 'bytestring', value: arrayBuffer };
+    // Return a plain mutable Uint8Array; callers that need a passable
+    // byteArray should apply toBytes() at their own layer.
+    return { type: 'bytestring', value: new Uint8Array(valueBytes) };
   }
   if (typeByte === STRING_START) {
     const number = Number.parseInt(numberString, 10);

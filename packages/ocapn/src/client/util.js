@@ -5,7 +5,6 @@
  * @import { LocationId, SwissNum } from './types.js'
  */
 
-import { toBytes } from '@endo/pass-style/to-bytes.js';
 import { encodeAscii } from '@endo/ascii/encode.js';
 import { strictDecodeAscii } from '@endo/ascii/strict-decode.js';
 
@@ -44,7 +43,7 @@ export const locationToLocationId = location => {
  * @param {Uint8Array} value
  * @returns {string}
  */
-export const decodeSwissnum = value => strictDecodeAscii(new Uint8Array(value));
+export const decodeSwissnum = value => strictDecodeAscii(value);
 
 /**
  * @param {string} value
@@ -52,11 +51,11 @@ export const decodeSwissnum = value => strictDecodeAscii(new Uint8Array(value));
  */
 export const encodeSwissnum = value => {
   // @ts-expect-error - Branded type: SwissNum is Uint8Array at runtime
-  return toBytes(encodeAscii(value));
+  return encodeAscii(value);
 };
 
 /**
- * Wrap raw swissnum bytes as a hardened immutable `SwissNum`. Use this
+ * Wrap raw swissnum bytes as a `SwissNum`. Use this
  * when the bytes already came from a wire-format source (e.g. the
  * base64url-decoded `/s/<…>` segment of a sturdyref URI) and only the
  * branded type wrapping is missing.
@@ -70,17 +69,15 @@ export const encodeSwissnum = value => {
  */
 export const swissnumFromBytes = bytes => {
   // @ts-expect-error - Branded type: SwissNum is Uint8Array at runtime
-  return toBytes(bytes);
+  return bytes;
 };
 
 /**
- * View the raw bytes of a swissnum. Returns a freshly allocated
- * (mutable) `Uint8Array` over a copy, so the caller may safely write
- * into it without disturbing the underlying immutable `SwissNum`.
+ * View the raw bytes of a swissnum.
  *
  * @param {SwissNum} swissNum
  * @returns {Uint8Array}
  */
 export const swissnumToBytes = swissNum => {
-  return new Uint8Array(swissNum);
+  return swissNum;
 };

@@ -12,9 +12,9 @@
  * @param {number} [rightStart]
  * @param {number} [rightEnd]
  * @returns {number}
- * Returns 0 if the ByteArrays are equal,
- * negative if the left byteArray is "less" than the right byteArray,
- * positive if the left byteArray is "greater" than the right byteArray.
+ * Returns 0 if the byte arrays are equal,
+ * negative if the left byte array is "less" than the right byte array,
+ * positive if the left byte array is "greater" than the right byte array.
  */
 export function compareUint8Arrays(
   left,

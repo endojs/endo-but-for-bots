@@ -10,6 +10,11 @@ and SES-locked compartments
 This package is the canonical home for the `Uint8Array` helpers that
 those realms share.
 
+This package deals exclusively with plain mutable `Uint8Array` values.
+Callers that work with passable byte arrays (frozen `Uint8Array` values
+backed by an immutable `ArrayBuffer`) should use `@endo/pass-style/to-bytes.js`,
+`@endo/pass-style/from-bytes.js`, and `@endo/pass-style/concat-bytes.js`.
+
 ## Install
 
 ```sh
@@ -31,6 +36,7 @@ compareBytes(a, b); // negative (a < b)
 ```
 
 For UTF-8 transcoding, use `@endo/utf8`.
+For ASCII transcoding, use `@endo/ascii`.
 For hex encoding and decoding, use `@endo/hex`.
 For base64 encoding and decoding, use `@endo/base64`.
 
@@ -41,12 +47,9 @@ import qualified names without needing a namespace import.
 
 ### `concatBytes(chunks) -> Uint8Array`
 
-Concatenates a list of `Uint8Array` chunks into a single contiguous
+Concatenates a list of mutable `Uint8Array` chunks into a single contiguous
 `Uint8Array`.
 Empty input yields an empty `Uint8Array`.
-Accepts `ArrayBufferView | ArrayBufferLike` elements including frozen
-`Uint8Array` values backed by an immutable `ArrayBuffer` (the byteArray
-passable form).
 
 ### `bytesEqual(a, b) -> boolean`
 
@@ -55,21 +58,18 @@ Returns `true` when the two arrays have equal length and equal contents.
 
 ### `compareBytes(left, right) -> number`
 
-Compares two byte sequences lexicographically.
+Compares two `Uint8Array` values lexicographically.
 Returns a negative number when `left` sorts before `right`, `0` when
 equal, and a positive number when `left` sorts after `right`.
-Accepts `ArrayBufferView | ArrayBufferLike` including the byteArray
-passable form.
 
 ## Out of scope
 
 - UTF-8 transcoding: use `@endo/utf8`.
+- ASCII transcoding: use `@endo/ascii`.
 - Hex encoding and decoding: use `@endo/hex`.
 - Base64 encoding and decoding: use `@endo/base64`.
 - Passable byteArray wrapping and unwrapping: use
   `@endo/pass-style/to-bytes.js` and `@endo/pass-style/from-bytes.js`.
-- Slicing: use `Uint8Array.prototype.subarray` (no copy) or
-  `Uint8Array.prototype.slice` (copy).
 
 ## Hardened JavaScript
 

@@ -43,10 +43,6 @@ const nativeToHex =
  * available (stage-4 TC39 proposal-arraybuffer-base64), and falls
  * through to the pure-JavaScript polyfill otherwise.
  *
- * Callers that hold a passable byteArray (frozen `Uint8Array` over an
- * immutable `ArrayBuffer`) must extract the mutable backing bytes via
- * `@endo/pass-style/from-bytes.js` before calling this function.
- *
  * @param {Uint8Array} bytes
  * @returns {string}
  */
