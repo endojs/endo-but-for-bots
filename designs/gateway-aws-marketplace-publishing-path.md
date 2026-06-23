@@ -3,13 +3,14 @@
 | | |
 |---|---|
 | **Created** | 2026-06-18 |
+| **Updated** | 2026-06-22 |
 | **Author** | Kris Kowal (prompted) |
 | **Status** | Not Started |
 
 ## What is the Problem Being Solved?
 
-The v11 strategy document (*Limited Scope Product Strategy: The Capability Bridge and the Capability Hub*, 2026-06-09) names the MVP as "a turnkey Capability Bridge deployable from cloud marketplaces: AWS Marketplace, GCP Marketplace, Azure Marketplace, ...
-We are the publisher; the user is the operator."
+The MVP is a turnkey Capability Bridge that operators deploy from cloud marketplaces (AWS, GCP, Azure).
+The project publishes the artifact; the operator runs it in their own cloud account.
 The maintainer's directive that scopes this design narrows the question to a concrete deliverable:
 
 > Please dispatch a designer to research and propose a path with concrete steps toward publishing an artifact for use in the Amazon Marketplace, based on the Endo Gateway.
