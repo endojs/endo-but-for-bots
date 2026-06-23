@@ -733,8 +733,12 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
     const m = /#(?:cap|agent)=([0-9a-fA-F]{16,})/.exec(s) || /(?:^|[^0-9a-f])([0-9a-f]{32,128})(?:[^0-9a-f]|$)/.exec(s);
     if (!m) return null;
     let origin = '', transport = '', address = '';
-    try { const u = new URL(s.split('#')[0]); if (/^https?:$/.test(u.protocol)) origin = u.origin; else { transport = u.protocol.replace(/:$/, ''); address = s.split('#')[0]; } }
-    catch { /* relative / same-instance link → origin stays '' (falls back to THIS instance) */ }
+    // Detect the scheme by REGEX (not new URL — a complex endo://…?at=iroh+captp0://… invitation makes new URL
+    // throw, which used to drop the scheme and mis-treat it as a same-instance link). http(s) → an origin;
+    // any other scheme (iroh / endo / ocapn) → keep the raw link as the dialable address; no scheme → relative.
+    const scheme = (/^([a-z][a-z0-9+.-]*):/i.exec(s) || [])[1] || '';
+    if (/^https?$/i.test(scheme)) { try { origin = new URL(s.split('#')[0]).origin; } catch { /* */ } }
+    else if (scheme) { transport = scheme.toLowerCase(); address = s.split('#')[0]; }
     return { origin, swissnum: m[1], transport, address };
   };
   // Call an accepted object's /rpc. HTTP origin → that origin; empty origin → THIS instance (a same-instance
@@ -807,7 +811,14 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
           const r = await dialIrohObject({ address: o.address, swissnum: o.swissnum, method: String(method || 'describe'), args: Array.isArray(args) ? args : (args == null ? [] : [args]) });
           return r.ok ? { ok: true, value: r.value } : { ok: false, error: `couldn't reach "${o.name}" over iroh: ${r.error}` };
         }
-        if (!isHttpCallable(o)) return { ok: false, error: `"${o.name}" is not callable: it has no HTTP origin and no dialable iroh:// address (transport=${o.transport || 'none'}). Re-accept the invite so its dial address is captured.` };
+        // Not callable over a transport we implement. Give a FINAL, non-retryable reason — and NEVER suggest
+        // "re-accept" (that hint + the "don't give up" guidance caused an accept→fail→re-accept LOOP). Recognise
+        // the full Endo daemon invitation (endo://…?type=invitation, dialed over iroh+captp0): redeeming it needs
+        // the Endo invitation-redemption flow, which the objects power does NOT implement yet.
+        if (/^endo:\/\//i.test(String(o.address || '')) || /type=invitation/i.test(String(o.address || ''))) {
+          return { ok: false, terminal: true, error: `"${o.name}" is an ENDO DAEMON INVITATION (endo://…?type=invitation, dialed over iroh+captp0). Redeeming it needs the Endo invitation-redemption flow, which the objects power does NOT implement yet — I cannot reach "${o.name}" this way. This is FINAL: do NOT re-accept or retry; tell the user this invite type isn't wired in yet.` };
+        }
+        if (!isHttpCallable(o)) return { ok: false, terminal: true, error: `"${o.name}" is not callable (transport=${o.transport || 'none'}; no HTTP origin or dialable iroh:// address). This is FINAL — do NOT retry or re-accept it; report it to the user instead.` };
         return { ok: true, value: await rpcCall(o.origin, o.swissnum, method, args) };
       } },
     // ⚠️ self-improvement: implement on an isolated worktree → independently verify → (flag-gated) auto-merge.

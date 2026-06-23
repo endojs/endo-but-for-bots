@@ -23,6 +23,22 @@ const mkAgent = objectsSeed => {
   return makeFieldAgent({ outDir, baseUrl: 'http://test.invalid' });
 };
 
+test('a full Endo daemon invitation (endo://…?type=invitation) fails TERMINALLY without an accept→fail→re-accept loop', async () => {
+  const fa = mkAgent();
+  const { toolbox } = fa.rootNode.toolbox();
+  // the real Kumavis-style link: an Endo invitation dialed over iroh+captp0 (not a plain iroh:// ref).
+  const link = 'endo://e11a342b7bedbe16fdd5edeee8af58de2a68d15ca4662b6b72d64a0b818ff19b?id=a0a9623a36e3a5e4d1bb9a0d4bdb2b04ed2ae5cac7d7bdf1cb429e6f5b66f84d&type=invitation&from=b1091b64&at=iroh%2Bcaptp0%3A%2F%2F%2F67f477e0%3Frelay%3Dhttps%3A%2F%2Fr.iroh%2F%26addr%3D66.75.110.30%3A51137';
+  const p = await toolbox.proposeAcceptInvite.run({ link, name: 'Kumavis', description: 'permission mgmt' });
+  await fa.commitProposal(p.id);
+  const r = await toolbox.callObject.run({ name: 'Kumavis', method: 'describe', args: [] });
+  assert.equal(r.ok, false, 'an Endo invitation is not callable yet');
+  assert.equal(r.terminal, true, 'marked TERMINAL so the agent stops (no retry loop)');
+  assert.match(r.error, /invitation/i, 'identifies it as an Endo daemon invitation');
+  assert.match(r.error, /do NOT re-accept|don't re-accept|FINAL/i, 'tells the agent NOT to re-accept/retry (breaks the loop)');
+  assert.doesNotMatch(r.error, /re-accept the invite so|dial address is captured/i, 'the OLD loop-trigger instruction is gone');
+  assert.doesNotMatch(r.error, /null\/rpc/i, 'never the cryptic null/rpc');
+});
+
 test('accepting an endo-iroh invite holds it AND marks it callable; callObject dials it (legible failure if unreachable, never null/rpc)', async () => {
   const fa = mkAgent();
   const { toolbox } = fa.rootNode.toolbox();
