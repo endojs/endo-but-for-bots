@@ -264,7 +264,10 @@ const appStore = makeAppStore({ chatStorePath, readMemoRuns, writeMemoRuns, read
 //    default} adjust it. IN-MEMORY for now → resets on restart; Increment 6 persists per-chat
 //    balances + migrates the ledger to agora's makeBank. Keyed per (cap, chat). ──
 const DEFAULT_ALLOWANCE = Number(process.env.DEFAULT_ALLOWANCE_UUSD) || 1_000_000; // µUSD ($1.00)
+const DEFAULT_ALLOWANCE_FILE = `${OUT}/default-allowance.json`; // the owner's Settings value, persisted across restarts
 let defaultAllowance = DEFAULT_ALLOWANCE;
+try { const v = JSON.parse(fs.readFileSync(DEFAULT_ALLOWANCE_FILE, 'utf8')); if (Number.isFinite(v && v.uusd)) defaultAllowance = Math.max(0, Math.round(v.uusd)); } catch { /* default */ }
+const saveDefaultAllowance = () => { try { fs.mkdirSync(OUT, { recursive: true }); fs.writeFileSync(DEFAULT_ALLOWANCE_FILE, JSON.stringify({ uusd: defaultAllowance })); } catch { /* best-effort */ } };
 const chatPurses = new Map(); // `${cap}:${sid}` → purse
 // Durable balances: a purse's mutations persist (hashed key → {balance,granted}); on boot a chat's purse
 // rehydrates from disk instead of resetting to the default allowance. (Increment 6 swaps this for agora's
@@ -1193,7 +1196,7 @@ const handler = async (req, res) => {
       if (!node) return json(res, 403, { error: 'no capability' });
       if (!node.isRoot) return json(res, 403, { error: 'only the root cap may set the default allowance' });
       const amt = Math.max(0, Math.round(Number(amount) || 0));
-      if (amt) defaultAllowance = amt;
+      if (amt) { defaultAllowance = amt; saveDefaultAllowance(); } // persist the Settings value across restarts
       return json(res, 200, { defaultAllowance });
     }
 

@@ -2908,6 +2908,47 @@ const showHooks = () => {
 };
 { const h = $('hooks-btn'); if (h) h.onclick = showHooks; }
 
+// ── ⚙ Global Settings — the sidebar-footer foothold (owner-only). Per-chat things live in the header; THIS
+//    is for GLOBAL config: the default allowance for NEW conversations, a spend leaderboard, model providers,
+//    and (next) a gallery of the agents you've built as 3D Granovetter diagrams. A foothold to grow into.
+const fmtUsd = u => '$' + (Math.max(0, Number(u) || 0) / 1e6).toFixed(2);
+const openSettings = async () => {
+  if (!isRoot) { setStatus('settings are owner-only — open with your root link'); return; }
+  showModal(`<div style="text-align:left;min-width:300px;max-width:460px">
+    <b style="font-size:16px">⚙ Settings</b>
+    <div class="set-sec">
+      <div class="set-h">Default allowance for new conversations</div>
+      <div class="set-row">$ <input id="set-allow" type="number" step="0.10" min="0" style="width:88px"> <button class="mini" id="set-allow-save">Save</button> <span id="set-allow-msg" class="pmeta"></span></div>
+      <div class="pmeta">Every new chat starts prepaid with this much inference budget.</div>
+    </div>
+    <div class="set-sec">
+      <div class="set-h">💸 Most expensive conversations</div>
+      <div id="set-costs" class="pmeta">measuring…</div>
+    </div>
+    <div class="set-sec">
+      <div class="set-h">🧠 Model providers</div>
+      <div class="pmeta">Pick a per-chat model from the header selector. Add a provider key by asking the agent (it stores it in the key vault). A dedicated provider-management form is coming next.</div>
+    </div>
+    <div class="set-sec">
+      <div class="set-h">🕸️ Your agents</div>
+      <div class="pmeta">A gallery of the agents you've built — each rendered as a 3D Granovetter diagram (an octahedron with lines fanning out to its tools, each unfurlable) — is coming next.</div>
+    </div>
+  </div>`);
+  try { const b = await (await fetch('/budget', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, purseCap: chatCap(), sessionId }) })).json(); if (b && b.defaultAllowance != null && $('set-allow')) $('set-allow').value = (b.defaultAllowance / 1e6).toFixed(2); } catch { /* */ }
+  const sv = $('set-allow-save'); if (sv) sv.onclick = async () => { const msg = $('set-allow-msg'); const amt = Math.round((Number($('set-allow').value) || 0) * 1e6); msg.textContent = 'saving…'; try { const r = await (await fetch('/budget/default', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, amount: amt }) })).json(); msg.textContent = r.error ? r.error : `saved · ${fmtUsd(r.defaultAllowance)} / new chat`; } catch (e) { msg.textContent = e.message; } };
+  // spend leaderboard — each chat's purse (granted − remaining = spent), ranked. Tap a row to open that chat.
+  (async () => {
+    const rows = [];
+    for (const c of chats.slice(0, 50)) { try { const b = await (await fetch('/budget', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, purseCap: c.scopedCap || cap, sessionId: c.id }) })).json(); if (b && b.allowance != null) { const spent = Math.max(0, (b.allowance || 0) - (b.remaining || 0)); if (spent > 0) rows.push({ title: c.title || 'chat', spent, id: c.id }); } } catch { /* */ } }
+    rows.sort((a, b) => b.spent - a.spent);
+    const el = $('set-costs'); if (!el) return;
+    if (!rows.length) { el.textContent = 'no measurable spend yet.'; return; }
+    el.innerHTML = rows.slice(0, 7).map((r, i) => `<div class="set-cost-row" data-id="${esc(r.id)}"><span class="set-rank">${i + 1}</span><span class="set-cost-t">${esc(r.title)}</span><span class="set-cost-v">${fmtUsd(r.spent)}</span></div>`).join('');
+    el.querySelectorAll('.set-cost-row').forEach(row => { row.style.cursor = 'pointer'; row.onclick = () => { const id = row.getAttribute('data-id'); closeModal(); if (chats.some(c => c.id === id)) switchChat(id); }; });
+  })();
+};
+{ const f = $('drawer-foot'); if (f) f.onclick = openSettings; }
+
 const boot = async () => {
   if (pendingShare) { try { await openSharedChat(pendingShare); } catch {} }
   if (!cap) {

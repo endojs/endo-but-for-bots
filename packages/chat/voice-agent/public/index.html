@@ -143,6 +143,24 @@
   .drawer-head { display:flex; align-items:center; justify-content:space-between; padding:16px 14px; border-bottom:1px solid var(--edge); }
   .drawer-head b { font-size:15px; }
   #chat-list { overflow-y:auto; padding:8px; flex:1; }
+  /* sidebar FOOTER — the account/global-settings foothold (bottom-left, à la Claude). Owner's global controls. */
+  .drawer-foot { display:flex; align-items:center; gap:10px; width:100%; padding:11px 13px; border:none; border-top:1px solid var(--edge); background:transparent; color:var(--ink); cursor:pointer; font:inherit; text-align:left; flex:0 0 auto; }
+  .drawer-foot:hover { background:rgba(127,127,127,.12); }
+  .drawer-foot .df-ic { font-size:17px; line-height:1; }
+  .drawer-foot .df-main { display:flex; flex-direction:column; flex:1; min-width:0; }
+  .drawer-foot .df-title { font-weight:600; font-size:13px; }
+  .drawer-foot .df-sub { font-size:11px; color:var(--mut); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .drawer-foot .df-chev { color:var(--mut); font-size:18px; }
+  /* global Settings panel (rendered inside the shared modal) */
+  .set-sec { margin-top:14px; padding-top:12px; border-top:1px solid var(--edge); }
+  .set-sec:first-of-type { border-top:none; }
+  .set-h { font-weight:600; font-size:13px; margin-bottom:7px; }
+  .set-row { display:flex; align-items:center; gap:7px; margin-bottom:5px; }
+  .set-row input { background:var(--bg); color:var(--ink); border:1px solid var(--edge); border-radius:6px; padding:4px 7px; font:inherit; }
+  .set-cost-row { display:flex; align-items:center; gap:8px; padding:3px 0; }
+  .set-cost-row .set-rank { width:18px; color:var(--mut); font-size:11px; text-align:right; }
+  .set-cost-row .set-cost-t { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--ink); font-size:13px; }
+  .set-cost-row .set-cost-v { font-variant-numeric:tabular-nums; font-weight:600; color:var(--acc); font-size:12px; }
   .chat-item { display:flex; align-items:center; justify-content:space-between; gap:6px; padding:9px 10px; border-radius:8px; cursor:pointer; font-size:14px; }
   .chat-item:hover { background:rgba(127,127,127,.14); } /* neutral translucent — reads on both light + dark sidebars */
   .chat-item.on { background:#1f6feb22; border:1px solid #1f3b63; }
@@ -462,6 +480,7 @@
 <aside id="drawer" class="drawer">
   <div class="drawer-head"><b>Chats</b><span style="display:flex;gap:6px;align-items:center"><button class="mini" id="new-chat">+ New</button><button class="iconbtn" id="drawer-close" title="Close" style="font-size:18px;padding:0 4px">✕</button></span></div>
   <div id="chat-list"></div>
+  <button id="drawer-foot" class="drawer-foot" title="Global settings"><span class="df-ic">⚙</span><span class="df-main"><span class="df-title">Settings</span><span class="df-sub" id="df-sub">Agent C</span></span><span class="df-chev">›</span></button>
 </aside>
 <div id="scrim"></div>
 <div id="sidebar-hot"></div>
