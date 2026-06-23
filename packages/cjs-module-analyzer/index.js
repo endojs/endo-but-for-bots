@@ -1353,10 +1353,6 @@ function throwIfImportStatement() {
     case 46 /* . */:
       throw Error('Unexpected import.meta in CJS module.');
 
-    default:
-      // no space after "import" -> not an import keyword
-      if (pos === startPos + 6) break;
-    // eslint-disable-next-line no-fallthrough
     case 34 /* " */:
     case 39 /* ' */:
     case 123 /* { */:
@@ -1367,6 +1363,15 @@ function throwIfImportStatement() {
         return;
       }
       // import statements are a syntax error in CommonJS
+      throw Error('Unexpected import statement in CJS module.');
+    default:
+      // no space after "import" -> not an import keyword
+      if (pos === startPos + 6) break;
+      // space after "import" with unrecognized next char -> treat as import statement
+      if (openTokenDepth !== 0) {
+        pos--;
+        return;
+      }
       throw Error('Unexpected import statement in CJS module.');
   }
 }
