@@ -530,10 +530,8 @@ const reapplyExpanded = () => { const key = expandedApplet[sessionId]; if (!key)
 addEventListener('keydown', e => { if (e.key === 'Escape') { const w = log.querySelector('.gw-component.applet-expanded'); if (w) minimizeApplet(w); } }); // Esc minimizes
 
 const renderAgentResponse = r => {
-  let trace = null;
-  if (Array.isArray(r.steps) && r.steps.length) { trace = traceStrip(r.steps); log.appendChild(trace); } // E6: trace strip above the response
+  if (_arr(r.steps).length) log.appendChild(traceGeometry(r.steps)); // the SVG trace sits ABOVE the message (tap it for the 3D); the 3D pendant is reserved for the live "working" animation
   const body = bubble('agent', r.answer || '…', r.agentId);
-  wireMsgTrace(body, trace); // click the message → grow its reasoning signature
   if (r.toolsUsed?.length) { const e = document.createElement('div'); e.className = 'tools'; e.textContent = '⚙ ' + r.toolsUsed.join(', '); body.parentNode.appendChild(e); }
   ((r.images && r.images.length ? r.images : (r.imageUrls || [])) || []).forEach(src => { const im = document.createElement('img'); im.src = src; body.appendChild(im); }); // data-URLs in the moment; durable /uploads urls as fallback (e.g. the share-post path)
   if (Array.isArray(r.ui) && r.ui.length) renderWidgets(body, r.ui, { cap: chatCap(), onChoice: t => sendChat(t), onBreakOut: breakOutComponent, onShareOut: shareOutComponent, onExpand: toggleApplet }); // live/interactive widgets (countdowns, live status, choices, custom components)
@@ -542,7 +540,6 @@ const renderAgentResponse = r => {
   (r.accessRequests || []).forEach(renderAccessRequest); // requestAccess → an actionable Grant card
   (r.asks || []).forEach(a => { openAsks.unshift(a); renderAskCard(a); }); // typed questions → answerable cards
   if (r.asks?.length) refreshBadge();
-  if (_arr(r.steps).length) log.appendChild(traceGeometry(r.steps)); // a trace geometry UNDER this message (not only the live pendant)
   refreshTraceApp(); // push the new turn to the iframe trace app if it's open
   window.scrollTo(0, document.body.scrollHeight);
   schedulePendantPosition(); // the answer bubble shifted layout — re-anchor the pendant
@@ -1714,14 +1711,11 @@ const renderTx = () => {
       if (m.who === 'widget' && m.site) { log.appendChild(makeInlineWidget(m.site, m.id)); continue; } // a pasted site, rendered inline as a live widget
       if (m.who === 'agent') { // render the ACTIVE fork (model/param variant) of this answer
         const v = activeVariant(m);
-        let trace = null;
-        if (_arr(v.steps).length) { trace = traceStrip(_arr(v.steps)); log.appendChild(trace); } // persistent trace above the response
+        if (_arr(v.steps).length) log.appendChild(traceGeometry(_arr(v.steps))); // the SVG trace sits ABOVE the message (tap it for the 3D)
         const b = bubble('agent', v.answer, v.agentId || m.agent);
-        wireMsgTrace(b, trace); // click the message → grow its reasoning signature inline
         const imgs = asArr(m.imageUrls).length ? asArr(m.imageUrls) : asArr(m.images).filter(s => typeof s === 'string' && s.startsWith('data:')); imgs.forEach(src => { const im = document.createElement('img'); im.src = src; b.appendChild(im); });
         if (_arr(v.ui).length) renderWidgets(b, _arr(v.ui), { cap: chatCap(), onChoice: t => sendChat(t), onBreakOut: breakOutComponent, onShareOut: shareOutComponent, onExpand: toggleApplet }); // re-hydrate live widgets
         if (_arr(v.tools).length) { const e = document.createElement('div'); e.className = 'tools'; e.textContent = '⚙ ' + _arr(v.tools).join(', '); b.parentNode.appendChild(e); }
-        if (_arr(v.steps).length) log.appendChild(traceGeometry(v.steps)); // a persistent trace geometry under EVERY agent message
         continue;
       }
       // a user message → its (active fork's) prompt, with the ↻/✎/🔊 + fork-pager controls INSIDE the bubble
@@ -2125,10 +2119,12 @@ const pendantBegin = async (promptText, sid = sessionId) => {
     pendantES.onerror = () => {}; // degrade silently — applyFinal reconciles from the final steps[]
   } catch { /* pendant is enhancement-only; never block the turn */ }
 };
-const pendantEnd = steps => { try { pendantES && pendantES.close(); } catch {} pendantLive = false; if (pendant) { pendant.finish(); pendant.applyFinal(steps || []); } schedulePendantPosition(); };
+const pendantEnd = steps => { try { pendantES && pendantES.close(); } catch {} pendantLive = false; if (pendant) { pendant.finish(); pendant.applyFinal(steps || []); } hidePendant(); }; // done WORKING → hide the live 3D animation; the per-message SVG trace (above the message) becomes the record. Tap an SVG to reopen the 3D on demand.
 // re-render the latest turn's SAVED trace when opening/returning to a chat (persistence across navigation)
 const pendantShowFor = async id => {
-  if (pendantLive && id === liveChatId) { schedulePendantPosition(); return; } // a turn is mid-stream here — leave it
+  if (pendantLive && id === liveChatId) { schedulePendantPosition(); return; } // a turn is mid-stream here — leave the live animation
+  if (!pendantFs) { hidePendant(); return; } // completed chat + 3D not opened on demand → no persistent 3D; the per-message SVG traces ARE the record (tap one to open the 3D)
+  // the 3D is open on demand (fullscreen) → keep it rendering the latest saved trace across navigation/resize
   let withSteps = null;
   for (let i = activeTx.length - 1; i >= 0; i -= 1) { const m = activeTx[i]; if (m && m.who === 'agent' && Array.isArray(m.steps) && m.steps.length) { withSteps = m; break; } }
   if (!withSteps) { hidePendant(); return; }
