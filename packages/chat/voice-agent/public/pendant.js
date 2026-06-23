@@ -29,6 +29,9 @@ const ROOT_R = 0.6;   // the head octahedron's radius (matches geoFor('root'))
 const TAIL_R = 0.42;  // the "now" octahedron at the live frontier — slightly smaller, so the body reads as a comet toward the present
 // the 6 canonical octahedron vertices at radius r (±x, ±y, ±z) — used to wire the head→"now" extrusion cage
 const OCTA_LOCAL = r => [new THREE.Vector3(r, 0, 0), new THREE.Vector3(-r, 0, 0), new THREE.Vector3(0, r, 0), new THREE.Vector3(0, -r, 0), new THREE.Vector3(0, 0, r), new THREE.Vector3(0, 0, -r)];
+// the UNIQUE vertices of a geometry (its position buffer dedup'd). Used for the dodecahedron cage during the
+// permissioning phase: head & tail dodecahedra of the same topology → vertex i ↔ vertex i (20 matching edges).
+const uniqueVerts = geo => { const pos = geo.attributes.position, seen = new Set(), out = []; for (let i = 0; i < pos.count; i += 1) { const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i); const k = `${x.toFixed(2)},${y.toFixed(2)},${z.toFixed(2)}`; if (!seen.has(k)) { seen.add(k); out.push(new THREE.Vector3(x, y, z)); } } return out; };
 // inspectable satellites: every node "unfurls" the EXACT call (cyan) + EXACT result (amber)
 // as two small shapes that orbit it; click one → a scrollable modal with the full text.
 const SAT = { call: 0x39c5cf, result: 0xd29922 };
@@ -235,7 +238,7 @@ export const makePendant = canvas => {
       lf.thread.scale.y = hh; lf.thread.position.set(root.group.position.x, top - hh / 2, root.group.position.z);
       lf.thrMat.uniforms.uIntensity.value = 0.9 + inten * 0.5;
     }
-    for (let i = 0; i < 6; i += 1) {
+    for (let i = 0; i < lf.edges.length; i += 1) {
       octWorld(root.group, lf.topV[i], _wt);
       octWorld(tg, lf.botV[i], _wb);
       const lk = lf.edges[i];
@@ -352,13 +355,15 @@ export const makePendant = canvas => {
     root = makeNodeRecord('root', color, 'prompt'); root.labelText = 'prompt'; root.detail = String(promptText || '');
     t0 = now(); // the lifeline's time origin
     sceneGroup.add(root.group); nodes.push(root); pickables.push(root.pick);
-    // the agent's BODY is an EXTRUDED OCTAHEDRON: the rotating head (root, above) + a TWIN "now" octahedron
-    // at the live frontier of the timeline (the current action), with all 6 MATCHING vertices joined by
-    // glowing edges. The twin shares the head's orientation each frame, so the cage is a rigid extrusion that
-    // spins as one. Tool edges land on the CENTRE SPINE between the two octahedrons (axisAt → yOf). Replaces
-    // the old cylinder column.
+    // the agent's BODY is an EXTRUDED polyhedron: the rotating head (root, above) + a TWIN "now" shape at the
+    // live frontier of the timeline, with all MATCHING vertices joined by glowing edges (the twin shares the
+    // head's orientation each frame → a rigid extrusion). The SHAPE follows the head: a DODECAHEDRON during the
+    // permissioning phase (Agent C scoping), an OCTAHEDRON once delegated to a working agent. Tool edges land
+    // on the CENTRE SPINE between the two (axisAt → yOf). Replaces the old cylinder column.
     const tcol = new THREE.Color(color);
-    const tGeo = new THREE.OctahedronGeometry(TAIL_R);
+    const isDodeca = rootShape === 'dodecahedron';
+    const headR = isDodeca ? 0.62 : ROOT_R, tailR = isDodeca ? 0.44 : TAIL_R; // headR matches geoFor('root')
+    const tGeo = isDodeca ? new THREE.DodecahedronGeometry(tailR) : new THREE.OctahedronGeometry(tailR);
     const tWireMat = new THREE.ShaderMaterial({ uniforms: { uColor: { value: tcol.clone() }, uIntensity: { value: 0.9 } }, vertexShader: WIRE_V, fragmentShader: WIRE_F, transparent: true });
     const tGlowMat = new THREE.ShaderMaterial({ uniforms: { uColor: { value: tcol.clone() }, uIntensity: { value: 0.9 } }, vertexShader: GLOW_V, fragmentShader: GLOW_F, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.BackSide });
     const tWire = new THREE.LineSegments(new THREE.EdgesGeometry(tGeo), tWireMat);
@@ -366,16 +371,18 @@ export const makePendant = canvas => {
     const tailGroup = new THREE.Group(); tailGroup.add(tGlow); tailGroup.add(tWire);
     tailGroup.position.set(0, ROOT_Y - 0.9, 0);
     sceneGroup.add(tailGroup);
-    // 6 glowing edges, one per matching vertex pair (head vertex i → "now" vertex i) = the extrusion cage
+    // matching-vertex cage edges (octahedron = 6 edges, dodecahedron = 20). Same topology head↔tail → i ↔ i.
+    const topV = isDodeca ? uniqueVerts(new THREE.DodecahedronGeometry(headR)) : OCTA_LOCAL(headR);
+    const botV = isDodeca ? uniqueVerts(new THREE.DodecahedronGeometry(tailR)) : OCTA_LOCAL(tailR);
     const edges = [];
-    for (let i = 0; i < 6; i += 1) { const lk = makeLine(color); lk.lineMat.uniforms.uIntensity.value = 0.6; sceneGroup.add(lk.line); edges.push(lk); }
+    for (let i = 0; i < topV.length; i += 1) { const lk = makeLine(color); lk.lineMat.uniforms.uIntensity.value = 0.6; sceneGroup.add(lk.line); edges.push(lk); }
     // the glowing THREAD down the centre of the extrusion — a DISTINCT colour from the body (cyan vs the
     // violet head) — the spine that every tool call's edges draw from. A thin additive cylinder = a luminous
     // fibre the body rotates around; tool OUT/BACK edges land on it at the time of the call/return.
     const thrMat = new THREE.ShaderMaterial({ uniforms: { uColor: { value: new THREE.Color(COL.thread) }, uIntensity: { value: 1.1 } }, vertexShader: WIRE_V, fragmentShader: WIRE_F, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false });
     const thread = new THREE.Mesh(new THREE.CylinderGeometry(0.028, 0.028, 1, 8, 1, true), thrMat);
     sceneGroup.add(thread);
-    root.lifeline = { tailGroup, tWireMat, tGlowMat, tGeo, edges, thread, thrMat, topV: OCTA_LOCAL(ROOT_R), botV: OCTA_LOCAL(TAIL_R) };
+    root.lifeline = { tailGroup, tWireMat, tGlowMat, tGeo, edges, thread, thrMat, topV, botV };
     if (descend && !buildInstant) {
       root.group.position.set(0, ROOT_Y + 2.1, 0); const from = root.group.position.clone(), to = new THREE.Vector3(0, ROOT_Y, 0);
       tween(0.62, easeInOut, e => root.group.position.lerpVectors(from, to, e));
