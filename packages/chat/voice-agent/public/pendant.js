@@ -632,7 +632,10 @@ export const makePendant = canvas => {
   // scene is empty); lvl<0 stops listening and restores the root to rest. Used INSTEAD of a separate orb.
   const setListen = lvl => { const v = (typeof lvl === 'number') ? lvl : -1; if (v >= 0 && !root) reset(''); listenLvl = v; if (v < 0 && root) root.group.scale.setScalar(1); };
   // the chat's powers → the ROOT agent's crown (the powers it holds, hovering above it, inspectable).
-  const setRootPowers = powers => { if (root && Array.isArray(powers) && powers.length) buildCrown(root, powers); };
+  // The ORIGIN octahedron's power "halo" (a crown of power icons) was removed per dan — it cluttered the
+  // core. setRootPowers is now a no-op (kept so the caller stays simple); delegates still wear their granted
+  // crown along the delegation edge (that's the Granovetter authority, not a halo on the root).
+  const setRootPowers = () => {};
 
   return { reset, scopeBegin, toolStart, toolDone, rnode, childDone, applyFinal, finish, showSteps, resize, setVisible, setListen, setRootPowers,
     dispose: () => { renderer.setAnimationLoop(null); document.removeEventListener('pointerdown', onDocPtr); clearScene(); if (tip) tip.remove(); if (modal) modal.remove(); renderer.dispose(); } };
