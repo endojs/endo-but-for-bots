@@ -158,20 +158,24 @@ env var.
 
 ## 5. Create the sandbox session
 
-There are two ways to create a session from the workspace `Filesystem`.
+There are three ways to create a session, differing in who supplies the caps.
 
-**A. `createSession` (peer-callable, returns the cap).**
-Call the factory directly; it returns a `ClaudeClient` that is **not** stored
+**A. `createSession` (same-host, returns the cap).**
+Call the factory directly with caps held **on this host** (resolved here by
+pet name with `c:`/`f:`). It returns a `ClaudeClient` that is **not** stored
 under a host pet name, so the caller's reference is the session's only root —
-dropping it destroys the session (see step 7). Name the returned cap so you can
-talk to it:
+dropping it destroys the session (see step 7):
 
 ```bash
 yarn exec endo eval --UNCONFINED \
-  'E(f).createSession({ name: "claude-1", filesystem: "project-fs", rootfs: "oci:localhost/claude-code:latest", network: "private", model: "claude-sonnet-4-6", credentials: "claude-creds" })' \
-  f:claude-sandbox/controller \
+  'E(f).createSession({ name: "claude-1", filesystem: fs, credentials: creds, rootfs: "oci:localhost/claude-code:latest", network: "private", model: "claude-sonnet-4-6" })' \
+  f:claude-sandbox/controller fs:project-fs creds:claude-creds \
   --name claude-1
 ```
+
+Note `filesystem` / `credentials` are **caps**, not name strings — a remote
+peer's cap cannot be passed this way (it would arrive as an unadoptable
+presence), which is why a remote peer uses path C.
 
 **B. The `@host` form (operator path, host-rooted).**
 Submission stores the `ClaudeClient` under the chosen pet name in `@host`'s
@@ -187,6 +191,25 @@ yarn exec endo submit <n> \
   model: claude-sonnet-4-6 \
   credentials: claude-creds \
   initialPrompt:
+```
+
+**C. Remote peer — `send` a session-request package (host-rooted).**
+The peer brings its own caps without naming them on the host: it `send`s the
+host a package whose `filesystem` (+ optional `credentials`) edge carries the
+caps and whose first string is the JSON config. The factory `adopt`s the caps
+and replies with a `client` edge to adopt. (Establish the mailbox first with
+`endo invite` / `endo accept`.)
+
+Caps ride as inline `@edge:petName` refs; the text before the first ref is
+`strings[0]`, the JSON config:
+
+```bash
+# On the peer (which holds `project-fs`, `claude-creds`, and a `host` handle):
+yarn exec endo send host \
+  '{"name":"claude-1","rootfs":"oci:localhost/claude-code:latest","network":"private"} @filesystem:project-fs @credentials:claude-creds'
+# …then adopt the factory's reply:
+yarn exec endo inbox                 # note the reply message number <r>
+yarn exec endo adopt <r> client --name claude-1
 ```
 
 Either way the session is a first-class `claude-client` formula that provisions

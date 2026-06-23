@@ -84,23 +84,41 @@ Each session is a first-class `claude-client` formula. Two things govern its
 lifetime: **who roots it** (whether it is collected) and **the cancellation
 context** (how it tears down).
 
-### Two create paths — who roots the session
+### Three create paths — who supplies the caps, who roots the session
 
-- **`E(factory).createSession(config)`** (peer-callable) formulates the client
-  **without** a pet name and **returns the cap**. The session is therefore
-  rooted only by the **caller's retention**: when a remote peer holds the
-  returned cap, the host records a retention edge under that peer; when the peer
-  drops it, the edge is removed and — if nothing else roots it — the formula is
-  collected. This is the intended remote-peer shape: _the peer owns the
-  session's lifetime._
-- **The "Create Claude Sandbox" form on `@host`** stores the client under a pet
-  name (`resultName`) — a **host-side** root. This is the operator path; the
-  host owns the lifetime and must `E(host).remove(name)` to destroy it.
+The caps a session needs (`Filesystem`, `ClaudeCredentials`) must be endowed
+into the per-session powers **by name**, because `evaluate` endows by name and a
+remote formula id is a valid endowment. The constraint is how a caller's cap
+acquires a host name:
 
-Delivery dictates rooting: a form **reply** (and `send`) can only attach a cap
-**by pet name** (`Mail.reply(number, strings, edgeNames, petNamesOrPaths)`), so
-handing a session to a peer *without* a host root requires the direct CapTP
-return that `createSession` provides.
+- **`E(factory).createSession(config)`** — **same-host** callers only. The caps
+  are passed by reference and `storeValue`'d into temporary host names. The
+  client is formulated **without** a pet name and **returned**, so the caller's
+  retention is its only root (drop it → collect). _The caller owns the
+  lifetime._ A *remote* peer cannot use this: `storeValue` can only capture a
+  host-local cap — a cap received as a bare CapTP argument is a presence with no
+  formula id (`No corresponding formula`).
+- **A remote peer `send`s a session-request package** to the host: a `package`
+  message with a `filesystem` (+ optional `credentials`) edge and a JSON config
+  in `strings[0]`. The factory's host-mailbox loop (`handleSessionRequest`)
+  **`adopt`s** the caps into the host namespace — which both gives them a name
+  the powers can endow *and* marks them as tracked imports (`thisDiesIfThatDies`;
+  `storeLocator` would do neither) — formulates the session under the factory
+  directory, and **replies** with a `client` edge the peer `adopt`s. The session
+  is **host-rooted** under a factory-minted leaf (`<dir>/session-<name>-<n>`,
+  never the peer's raw name, which could otherwise clobber a host name); the
+  operator GCs it with `remove`.
+- **The "Create Claude Sandbox" form on `@host`** — the operator path. Fields
+  are host pet-name strings, resolved with the operator's own authority and
+  `storeValue`'d like `createSession`. The client is stored under `resultName`
+  (a host root).
+
+Delivery dictates rooting: a `reply` / `send` can only attach a cap **by pet
+name** (`Mail.reply(number, strings, edgeNames, petNamesOrPaths)`), so a session
+handed back through the mailbox (the peer-package path) is necessarily
+host-rooted; only the direct CapTP return of `createSession` can hand back an
+un-named, caller-rooted session. A peer-initiated `remove` (so a peer can drop
+its own host-rooted session) is future work.
 
 ### Teardown — the cancellation context
 
@@ -627,14 +645,15 @@ per-session powers is a strict subset of the factory's `host-agent`, but it only
 scopes the **client**, not the factory. Treat the factory's source as part of the
 trusted compute base.
 
-Residual / future work: the four caps are still endowed into the powers **by host
-pet name** (`sandbox-factory` / `fs-mounter` / the `Filesystem` / the credential),
-resolved once at session creation. Passing the peer's `Filesystem` /
-`ClaudeCredentials` to `createSession` as **cap arguments** (rather than the peer
-naming them on the host first) would remove even that — the factory would endow
-the caps it was handed directly. That is the bring-your-own-caps boundary the
-package already targets; wiring `createSession(config, { filesystem, credentials })`
-through to the `evaluate` endowments is the natural next step.
+Bring-your-own-caps, resolved. The peer no longer names its `Filesystem` /
+`ClaudeCredentials` on the host: it `send`s them to the host as a session-request
+package and the factory `adopt`s them (see § "Three create paths — who supplies
+the caps, who roots the session").
+A cap cannot be passed as a plain `createSession` argument across a daemon
+boundary — it would arrive as an unadoptable presence — so `send`/`adopt` (which
+also marks the cap as a tracked import via `thisDiesIfThatDies`) is the
+mechanism, not cap-arguments. The infra caps (`sandbox-factory` / `fs-mounter`)
+remain host-named by construction (they are the host's own).
 
 ### 9. Credential exposure through the sandbox environment
 
