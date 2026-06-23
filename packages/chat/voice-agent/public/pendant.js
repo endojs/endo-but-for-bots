@@ -18,7 +18,7 @@
 import * as THREE from './three.module.js';
 
 // palette mirrors trace.js: tools = green, delegate-ish = gold, sub-question = blue, root = violet, fail = red
-const COL = { root: 0x7c5cff, tool: 0x2ea043, delegate: 0xe3b341, subq: 0x58a6ff, bad: 0xf85149, line: 0x6b7a99, view: 0x39d3ff };
+const COL = { root: 0x7c5cff, tool: 0x2ea043, delegate: 0xe3b341, subq: 0x58a6ff, bad: 0xf85149, line: 0x6b7a99, view: 0x39d3ff, thread: 0x4fd6ff };
 // A step that PUBLISHED an embedded VIEW (a developer/agent publishing a site/widget). The result
 // carries a /sites/ (or .html) URL — we surface it as a distinct 📺 node so the trace shows the
 // developer → published-view lineage. Returns the view URL, or '' if this step published nothing.
@@ -230,6 +230,11 @@ export const makePendant = canvas => {
     tg.quaternion.copy(root.group.quaternion); // share the head's spin → the extrusion is one rigid body
     const inten = root.wireMat ? root.wireMat.uniforms.uIntensity.value : 1;
     lf.tWireMat.uniforms.uIntensity.value = lf.tGlowMat.uniforms.uIntensity.value = 0.6 + inten * 0.4;
+    if (lf.thread) { // the glowing central thread spans the head centre → the "now" centre (the spine tools draw from)
+      const top = root.group.position.y, hh = Math.max(0.05, top - tg.position.y);
+      lf.thread.scale.y = hh; lf.thread.position.set(root.group.position.x, top - hh / 2, root.group.position.z);
+      lf.thrMat.uniforms.uIntensity.value = 0.9 + inten * 0.5;
+    }
     for (let i = 0; i < 6; i += 1) {
       octWorld(root.group, lf.topV[i], _wt);
       octWorld(tg, lf.botV[i], _wb);
@@ -364,7 +369,13 @@ export const makePendant = canvas => {
     // 6 glowing edges, one per matching vertex pair (head vertex i → "now" vertex i) = the extrusion cage
     const edges = [];
     for (let i = 0; i < 6; i += 1) { const lk = makeLine(color); lk.lineMat.uniforms.uIntensity.value = 0.6; sceneGroup.add(lk.line); edges.push(lk); }
-    root.lifeline = { tailGroup, tWireMat, tGlowMat, tGeo, edges, topV: OCTA_LOCAL(ROOT_R), botV: OCTA_LOCAL(TAIL_R) };
+    // the glowing THREAD down the centre of the extrusion — a DISTINCT colour from the body (cyan vs the
+    // violet head) — the spine that every tool call's edges draw from. A thin additive cylinder = a luminous
+    // fibre the body rotates around; tool OUT/BACK edges land on it at the time of the call/return.
+    const thrMat = new THREE.ShaderMaterial({ uniforms: { uColor: { value: new THREE.Color(COL.thread) }, uIntensity: { value: 1.1 } }, vertexShader: WIRE_V, fragmentShader: WIRE_F, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false });
+    const thread = new THREE.Mesh(new THREE.CylinderGeometry(0.028, 0.028, 1, 8, 1, true), thrMat);
+    sceneGroup.add(thread);
+    root.lifeline = { tailGroup, tWireMat, tGlowMat, tGeo, edges, thread, thrMat, topV: OCTA_LOCAL(ROOT_R), botV: OCTA_LOCAL(TAIL_R) };
     if (descend && !buildInstant) {
       root.group.position.set(0, ROOT_Y + 2.1, 0); const from = root.group.position.clone(), to = new THREE.Vector3(0, ROOT_Y, 0);
       tween(0.62, easeInOut, e => root.group.position.lerpVectors(from, to, e));
@@ -601,8 +612,8 @@ export const makePendant = canvas => {
       }
       const cur = nd.wireMat.uniforms.uIntensity.value + (target - nd.wireMat.uniforms.uIntensity.value) * Math.min(1, dt * 9);
       nd.wireMat.uniforms.uIntensity.value = cur; nd.glowMat.uniforms.uIntensity.value = cur;
-      if (nd.lineMat) nd.lineMat.uniforms.uIntensity.value = 0.3 + cur * 0.3; // OUT edge
-      if (nd.backLineMat) nd.backLineMat.uniforms.uIntensity.value = 0.25 + cur * 0.25; // BACK edge
+      if (nd.lineMat) nd.lineMat.uniforms.uIntensity.value = 0.4 + cur * 0.35; // OUT edge (the call message)
+      if (nd.backLineMat) nd.backLineMat.uniforms.uIntensity.value = 0.38 + cur * 0.32; // BACK edge (the return message) — both directions clearly drawn
       if (nd.powerIcons.length) positionPowerIcons(nd); // granted-power icons ride the delegation edge
       if (nd.crown.length) positionCrown(nd); // the power crown rides above the agent
     }
