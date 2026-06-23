@@ -7,6 +7,12 @@
   "references": [
     {
       "path": "../compartment-mapper/tsconfig.composite.json"
+    },
+    {
+      "path": "../pass-style/tsconfig.composite.json"
+    },
+    {
+      "path": "../utf8/tsconfig.composite.json"
     }
   ]
 }

@@ -34,6 +34,8 @@
   },
   "dependencies": {
     "@endo/compartment-mapper": "workspace:^",
+    "@endo/pass-style": "workspace:^",
+    "@endo/utf8": "workspace:^",
     "ses": "workspace:^",
     "test262-harness": "^10.0.0"
   },

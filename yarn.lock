@@ -1372,6 +1372,8 @@ __metadata:
   resolution: "@endo/test262-runner@workspace:packages/test262-runner"
   dependencies:
     "@endo/compartment-mapper": "workspace:^"
+    "@endo/pass-style": "workspace:^"
+    "@endo/utf8": "workspace:^"
     eslint: "catalog:dev"
     ses: "workspace:^"
     test262-harness: "npm:^10.0.0"
