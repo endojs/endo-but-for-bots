@@ -40,6 +40,11 @@ const classifyModuleFormat = moduleFormat =>
   moduleFormat === 'endoZipBase64' ? 'zip' : 'script';
 
 /**
+ * Creates a profiler instance for one bundle invocation.
+ * The returned object is internal-only and is not exposed to compartments.
+ * Callers are {@link bundleZipBase64} and {@link bundleScript}; no other
+ * code should hold a reference across compartment boundaries.
+ *
  * @param {object} options
  * @param {string} options.moduleFormat
  * @param {string} options.startFilename

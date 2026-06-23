@@ -11,8 +11,20 @@ import { ModuleSource } from '@endo/module-source';
 
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
+// Module-scope cache shared across all callers in this process.
+// Cache keys are (sourceUrl, source, sourceMapKey); values are frozen
+// ParseFn results.
+// One process's parser output is reused across all bundleSource invocations in
+// that process; this is an intentional tenant-isolation trade-off in exchange
+// for the cross-bundle speedup.
+// Eviction is FIFO by first insertion of a sourceUrl: the Map preserves
+// insertion order, so the oldest entry is always first.
 /** @type {Map<string, Map<string, Map<string | undefined, ReturnType<ParseFn>>>>} */
 const parseArchiveMjsCache = new Map();
+// Heuristic cap: agoric-sdk bundling crosses roughly 12 000 parses per
+// workspace; 20 000 allows two simultaneous workspaces in cache before FIFO
+// eviction kicks in.
+// Tune with profiling data if the working set grows.
 const MAX_PARSE_ARCHIVE_MJS_CACHE_ENTRIES = 20_000;
 let parseArchiveMjsCacheEntries = 0;
 

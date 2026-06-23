@@ -167,10 +167,19 @@ export async function bundleScript(
       error instanceof Error ? `${error.name}: ${error.message}` : `${error}`;
     throw error;
   } finally {
-    await profiler.flush(
-      phaseError
-        ? { status: phaseStatus, error: phaseError }
-        : { status: phaseStatus },
-    );
+    try {
+      await profiler.flush(
+        phaseError
+          ? { status: phaseStatus, error: phaseError }
+          : { status: phaseStatus },
+      );
+    } catch (flushError) {
+      // A flush failure (for example, disk full when writing the trace JSON)
+      // must not mask the original bundling error.
+      // Log to stderr and continue so the caller receives the real error.
+      process.stderr.write(
+        `bundle-source: profiler flush failed: ${flushError}\n`,
+      );
+    }
   }
 }

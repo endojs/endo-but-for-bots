@@ -134,8 +134,8 @@ ENDO_BUNDLE_SOURCE_PROFILE_DIR=/tmp/bs-profiles \
 yarn bundle-source app.js > /tmp/app-bundle.json
 ```
 
-Each bundle call writes one `*.trace.json` file. Open these in Chrome tracing
-tools or convert for Speedscope.
+Each bundle call writes one `*.trace.json` file.
+Open these in Chrome tracing tools or convert for Speedscope.
 
 You can also control profiling in code:
 
@@ -154,6 +154,9 @@ Environment variables:
 - `ENDO_BUNDLE_SOURCE_PROFILE_DIR`: output directory for generated trace files
 - `ENDO_BUNDLE_SOURCE_PROFILE_FILE`: explicit output file for a single run
 - `ENDO_BUNDLE_SOURCE_PROFILE_STDERR`: if truthy, prints each generated trace path to stderr
+- `ENDO_BUNDLE_SOURCE_READ_CACHE_MAX_BYTES`: maximum bytes to hold in the per-process read cache (default 64 MiB).
+  Set to `0` to disable read caching.
+  Read at module load time; changes after the first `import` of `zip-base64.js` have no effect.
 
 Merge and summarize Chrome trace files:
 
