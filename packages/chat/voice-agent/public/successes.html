@@ -33,7 +33,7 @@
     <canvas id="flick"></canvas>
     <div class="cap">
       <h1><span class="glyph">⊿</span> The Field — what's shipped</h1>
-      <p>An object-capability nervous system you talk to. Every card below is live — built, reviewed, and running. The banner flickers and never quite repeats.</p>
+      <p>An object-capability nervous system you talk to. Every card below is live — built, reviewed, and running behind the gates.</p>
     </div>
   </div>
   <div class="lead">Use cases &amp; shipped capabilities of <b>archua-agentc</b> (Agent&nbsp;C). Tailnet-only for now — public exposure is a deliberate per-instance call.</div>
@@ -73,7 +73,12 @@ const CARDS = [
   ['⊿', '3D sequence-diagram trace', 'The agent is a time lifeline; each tool use connects to it at call-out and return time — a live 3D sequence diagram, with a clickable power crown over each agent.', 'agentc.chu'],
   ['↻', 'Prompt fork / retry', 'Retry any message with different model+params (forks travel with their params), edit + re-run, play back the original voice audio, and grow an inline reasoning signature.', 'agentc.chu'],
   ['⚡', 'Event-triggered propagators', 'A scheduled agent can fire the MOMENT a doc lands in a folder, not on a clock — work wrapped in responsive propagators.', 'agentc.chu'],
-  ['🔌', 'Capability-vending over Noise', 'Real resources vended as time-boxed, rate-limited, revocable Endo capabilities over an ocapn-noise wire — GPU image-gen (GpuLease), the media library, a dialable root.', 'tailnet'],
+  ['🔌', 'Capability-vending over CapTP', 'Real resources vended as time-boxed, rate-limited, revocable Endo capabilities — GPU image-gen (GpuLease), the media library, a dialable root. The transport moved off open TCP ports onto Iroh (next card).', 'tailnet'],
+  ['🛰️', 'Dial-by-pubkey transport (Iroh)', 'Fleet services moved off open LAN/localhost ports onto Iroh — dialed by node public key over QUIC, NAT-traversing via relays, with no listening port to expose. The same CapTP/ocap layer rides on top; a netlayer fix (in-order framing) made multi-round-trip sessions reliable.', 'tailnet'],
+  ['🎟️', 'Redeem a peer + message them', 'Accept another Endo daemon\'s invitation (endo://…?type=invitation, dialed over iroh+captp0) and it becomes a live peer in your inventory — message it and read its replies, all designation-by-reference ocap.', 'agentc.chu'],
+  ['🏝️', 'Confined-Preact islands', 'The app\'s own chrome — proposal cards, the object browser, the share panel, the trace, the UI kit — is rendered as versioned confined-Preact islands, so each can be iterated individually (and in parallel) like any other component.', 'agentc.chu'],
+  ['📇', 'An inventory of Endo objects', 'Accept an Endo invite and the capability it grants joins your inventory — self-documenting (ask it what it can do), and pre-described one layer deep right in the agent\'s context so it acts without fishing.', 'agentc.chu'],
+  ['🛡️', 'Autonomous review → library', 'A proposed tool runs a discipline review panel, auto-revises high/critical findings, and — if non-critical — is auto-admitted to the library. Agent C names/organizes it; the whole pipeline is logged to an internal-messages channel in Settings.', 'agentc.chu'],
   ['🚀', 'The SPWA fleet', 'Stateless cap-in-URL apps, each self-describing + self-editable: a rover observer, GPU Studio, an image-gen site, a Kazputer for kids, an Obsidian share, the System Playground.', '/…'],
   ['✎', 'Self-editing in place', 'Alt/Option-click any component → a focused agent rewrites its source live (apply, or preview as a variant). Metered through the toll-bridge.', 'agentc.chu'],
   ['🎙️', 'Voice capture → the vault', 'An iPhone voice note lands in the vault inbox, transcribed + classified, and the agent acts on it — the unified-capture front door.', 'tailnet'],
