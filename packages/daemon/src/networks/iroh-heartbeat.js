@@ -90,9 +90,14 @@ export const makeIrohHeartbeat = (
     log = () => {},
   } = {},
 ) => {
-  const { sendDatagram, readDatagram } = connection;
+  // `sendDatagram` / `readDatagram` are instance methods on the native iroh
+  // `Connection` (napi class). They must be invoked with the connection as
+  // their receiver: destructuring them detaches `this` and the binding throws
+  // `Illegal invocation` on the first call, which silently disables the
+  // heartbeat (and, with it, idle-timeout protection). Call them as methods.
   const datagramsSupported =
-    typeof sendDatagram === 'function' && typeof readDatagram === 'function';
+    typeof connection.sendDatagram === 'function' &&
+    typeof connection.readDatagram === 'function';
 
   let stopped = false;
   /** @type {ReturnType<typeof setInterval> | undefined} */
@@ -142,8 +147,9 @@ export const makeIrohHeartbeat = (
       // A one-byte payload suffices to generate traffic; the content is
       // ignored. The binding's `sendDatagram` takes a plain `Array<number>`
       // (napi marshals `Vec<u8>` from a JS Array, not a TypedArray), and a
-      // fresh array avoids handing native code a shared view.
-      sendDatagram([0]);
+      // fresh array avoids handing native code a shared view. Invoked as a
+      // method so the native binding receives the connection as `this`.
+      connection.sendDatagram([0]);
     } catch (error) {
       // A full send buffer or transient datagram error is not fatal: the next
       // beat retries and the peer's watchdog tolerates a single miss.
@@ -161,7 +167,9 @@ export const makeIrohHeartbeat = (
       return;
     }
     try {
-      Promise.resolve(readDatagram()).then(
+      // Invoked as a method so the native binding receives the connection as
+      // `this` (see the destructuring note above).
+      Promise.resolve(connection.readDatagram()).then(
         () => {
           touch();
           pump();
