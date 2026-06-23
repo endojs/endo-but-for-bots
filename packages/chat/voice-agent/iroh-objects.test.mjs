@@ -42,7 +42,7 @@ const INVITE = 'endo://e11a342b7bedbe16fdd5edeee8af58de2a68d15ca4662b6b72d64a0b8
 
 test('a full Endo daemon invitation is REDEEMED into a live peer (mailbox: send/inbox/describe)', async () => {
   const bridge = fakeBridge({ accept: true });
-  const fa = mkAgent(null, { peerBridge: bridge });
+  const fa = mkAgent(null, { peerBridge: bridge, peerRedemption: true });
   const { toolbox } = fa.rootNode.toolbox();
   const p = await toolbox.proposeAcceptInvite.run({ link: INVITE, name: 'Kumavis', description: 'permission mgmt' });
   await fa.commitProposal(p.id); // owner confirms → redeem over iroh
@@ -67,7 +67,7 @@ test('a full Endo daemon invitation is REDEEMED into a live peer (mailbox: send/
 
 test('a failed redemption (unreachable peer) does NOT store a broken object and surfaces a clear error — no loop', async () => {
   const bridge = fakeBridge({ accept: false }); // simulates an unreachable inviter (iroh stream closed)
-  const fa = mkAgent(null, { peerBridge: bridge });
+  const fa = mkAgent(null, { peerBridge: bridge, peerRedemption: true });
   const { toolbox } = fa.rootNode.toolbox();
   const p = await toolbox.proposeAcceptInvite.run({ link: INVITE, name: 'Kumavis', description: 'x' });
   const committed = await fa.commitProposal(p.id);

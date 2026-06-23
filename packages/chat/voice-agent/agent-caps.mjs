@@ -536,7 +536,7 @@ export const resolvePower = name => { const n = String(name || ''); return POWER
 // ── build the agent. Returns the locator + a root node holding ALL powers. ────
 // makeFieldAgent({ outDir, baseUrl }) →
 //   { locator, register, rootNode, rootSwiss(set later), toolboxFor, manifestFor }
-export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFile, peerBridge = endoPeer } = {}) => {
+export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFile, peerBridge = endoPeer, peerRedemption = process.env.FIELD_AGENT_PEER_REDEMPTION === '1' } = {}) => {
   const aff = makeAffordances({ outDir });
   // worktree manager for write-capable role sub-agents (runs on the UNCONFINED host shell).
   const worktrees = makeWorktrees({ host: aff.host });
@@ -553,7 +553,9 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
     // BOOT SMOKE: `node --check` every top-level source .mjs (incl. server.mjs, which NO test imports) so a
     // syntax/parse error a merge would introduce can NEVER be recorded as verified + then brick the next
     // restart (the service is Restart=always — a broken boot = crash-loop that also kills the Revert UI).
-    || `set -e; for d in node_modules packages/chat/node_modules packages/chat/voice-agent/node_modules packages/ocapn-noise/node_modules; do if [ -d ${WORKTREE_REPO}/$d ]; then ln -sfn ${WORKTREE_REPO}/$d ./$d; fi; done; n=$(ls packages/chat/voice-agent/*.test.mjs 2>/dev/null | wc -l); [ "$n" -ge 8 ] || { echo "self-improve verify: only $n test files — refusing (the suite must not be stripped)"; exit 1; }; for f in packages/chat/voice-agent/*.mjs packages/ocapn-noise/*.mjs; do node --check "$f" || { echo "self-improve verify: SYNTAX ERROR in $f — refusing to merge a change that won't load"; exit 1; }; done; node --test packages/chat/voice-agent/*.test.mjs`;
+    // PATH: ~/.local/bin holds yarn 4 (corepack); the systemd --user default PATH omits it, so without this
+    // any yarn/corepack step in the implemented change (or a per-call successCommand) hits "command not found".
+    || `export PATH="$HOME/.local/bin:$PATH"; set -e; for d in node_modules packages/chat/node_modules packages/chat/voice-agent/node_modules packages/ocapn-noise/node_modules; do if [ -d ${WORKTREE_REPO}/$d ]; then ln -sfn ${WORKTREE_REPO}/$d ./$d; fi; done; n=$(ls packages/chat/voice-agent/*.test.mjs 2>/dev/null | wc -l); [ "$n" -ge 8 ] || { echo "self-improve verify: only $n test files — refusing (the suite must not be stripped)"; exit 1; }; for f in packages/chat/voice-agent/*.mjs packages/ocapn-noise/*.mjs; do node --check "$f" || { echo "self-improve verify: SYNTAX ERROR in $f — refusing to merge a change that won't load"; exit 1; }; done; node --test packages/chat/voice-agent/*.test.mjs`;
   const selfImprover = makeSelfImprover({ host: aff.host, repo: WORKTREE_REPO, baseBranch: process.env.FIELD_AGENT_BASE_BRANCH || 'field-preact', verifyDir: `${WORKTREE_DIR}/_verify`, ledgerFile: '/home/dan/.local/state/field-agent/auto-merge-ledger.json', defaultTest: DEFAULT_VERIFY, timeoutMs: 600000 });
   let selfImproveInFlight = false; // single-flight: at most one self-improvement at a time
   // SELF-CONTAINED executor runner (does NOT require the `roles` power): fork a worktree, run the confined
@@ -781,6 +783,10 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
       description: 'ACCEPT an Endo invite link and add the capability it grants as a NAMED object in your inventory. Handles three link kinds: an http /rpc object, an iroh:// dial-by-pubkey object, and a full Endo daemon INVITATION (endo://…?type=invitation) — the last is REDEEMED over iroh+captp0 into a live PEER (a mailbox relationship: callObject "send" to message them, "inbox" to read replies). Does NOT add it yet — it PROPOSES it for the owner to confirm (they can rename it); accepting external authority always confirms. Once accepted, discover + call it with callObject (method "describe" lists its methods). The link/swissnum is held securely host-side, never shown.',
       run: async ({ link, name, description }, agent) => {
         const parsed = parseInvite(link); if (!parsed) return { ok: false, error: 'that does not look like an Endo invite / #cap= link' };
+        // Endo daemon invitation redemption (over iroh+captp0) is gated until the iroh netlayer's connection
+        // lifecycle is proven reliable — flip FIELD_AGENT_PEER_REDEMPTION=1 once the gated e2e is green. Until
+        // then a type=invitation link reports cleanly (terminal, no daemon spawn, no loop) instead of flaking.
+        if (/type=invitation/i.test(String(link)) && !peerRedemption) return { ok: false, terminal: true, error: `"${String(name || 'this').trim()}" is an Endo daemon invitation. Redeeming it over iroh+captp0 is implemented but not yet ENABLED on this instance (a final iroh-netlayer reliability fix is landing). I can't connect to this peer yet — I'll be able to shortly. This is FINAL: report it and stop, don't retry.` };
         const nm = String(name || '').trim() || 'new object';
         const whence = parsed.origin || (parsed.transport ? `${parsed.transport} (${parsed.address})` : 'this instance');
         return propose({ type: 'accept-invite', power: 'objects', agent, title: `Accept invite → "${nm}"`, summary: `from ${whence}`,
