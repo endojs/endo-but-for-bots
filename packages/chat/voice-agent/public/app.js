@@ -2995,7 +2995,7 @@ const showHooks = () => {
 //    and (next) a gallery of the agents you've built as 3D Granovetter diagrams. A foothold to grow into.
 const fmtUsd = u => '$' + (Math.max(0, Number(u) || 0) / 1e6).toFixed(2);
 const fmtEvery = ms => { const n = Number(ms) || 0; const h = n / 3600000; if (h >= 24 && Number.isInteger(h / 24)) return `${h / 24}d`; if (h >= 1) return `${Math.round(h)}h`; return `${Math.round(n / 60000)}m`; };
-const SETTINGS_SECTIONS = [{ key: 'usage', label: '📊 Usage' }, { key: 'providers', label: '🧠 Providers' }, { key: 'agents', label: '🕸️ Agents' }, { key: 'timers', label: '⏰ Timers' }];
+const SETTINGS_SECTIONS = [{ key: 'usage', label: '📊 Usage' }, { key: 'providers', label: '🧠 Providers' }, { key: 'agents', label: '🕸️ Agents' }, { key: 'timers', label: '⏰ Timers' }, { key: 'internal', label: '📨 Internal' }];
 let settingsSection = 'usage';
 const openSettings = async () => {
   if (!isRoot) { setStatus('settings are owner-only — open with your root link'); return; }
@@ -3008,7 +3008,23 @@ const renderSettingsSection = () => {
   if (settingsSection === 'providers') { body.innerHTML = '<div class="set-h">🧠 Model providers</div><div class="pmeta">Pick a per-chat model from the header selector. Add a provider key by asking the agent (it stores it in the key vault). A dedicated provider-management form is coming next.</div>'; return; }
   if (settingsSection === 'agents') { body.innerHTML = '<div class="set-h">🕸️ Your agents</div><div class="pmeta">A gallery of the agents you\'ve built — each rendered as a 3D Granovetter diagram (an octahedron with lines fanning out to its tools, each unfurlable) — is coming next.</div>'; return; }
   if (settingsSection === 'timers') return renderSettingsTimers(body);
+  if (settingsSection === 'internal') return renderSettingsInternal(body);
   return renderSettingsUsage(body);
+};
+// The agent↔Agent C "internal messages" chat: what the fleet is building + how Agent C organizes it
+// (tools proposed → reviewed → admitted to the library), so dan can watch without a proposal card per tool.
+const IM_KIND = { 'tool-proposed': '🧩', 'tool-reviewed': '🔎', 'tool-admitted': '✅' };
+const renderSettingsInternal = async body => {
+  body.innerHTML = '<div class="set-h">📨 Internal messages</div><div class="pmeta" style="margin-bottom:9px">Agent C\'s back-channel: tools your agents build flow through here (proposed → reviewed → organized → admitted to the library), so you can see what\'s happening without being interrupted by a proposal for each one.</div><div id="im-list" class="pmeta">loading…</div>';
+  let msgs = [];
+  try { msgs = ((await (await fetch('/internal-messages/load', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap }) })).json()).messages) || []; } catch { /* */ }
+  const list = $('im-list'); if (!list) return;
+  if (!msgs.length) { list.innerHTML = '<div class="pill">no internal messages yet — they appear as agents build tools</div>'; return; }
+  list.innerHTML = msgs.slice().reverse().map(m => `<div class="share" style="display:block;padding:7px 9px;margin:4px 0">
+      <div style="font-size:13px">${IM_KIND[m.kind] || '•'} ${esc(m.title || m.kind || 'note')}</div>
+      ${m.body ? `<div style="color:var(--mut);font-size:12px;margin-top:2px;white-space:pre-wrap">${esc(String(m.body).slice(0, 300))}</div>` : ''}
+      <div style="color:var(--mut);font-size:11px;margin-top:3px">${m.by ? `from ${esc(String(m.by).slice(0, 24))} · ` : ''}${esc(new Date(m.ts || 0).toLocaleString())}${m.status ? ` · ${esc(m.status)}` : ''}</div>
+    </div>`).join('');
 };
 const renderSettingsUsage = async body => {
   body.innerHTML = `<div class="set-sec"><div class="set-h">Default allowance for new conversations</div>

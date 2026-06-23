@@ -48,6 +48,7 @@ import { dialIrohObject } from './iroh-objects.mjs';
 // Boot-safe: this module only static-imports node builtins; it lazy-loads @endo/daemon on first USE (when an
 // agent actually redeems an Endo invitation), so importing it can never crash voice-agent boot.
 import * as endoPeer from './endo-peer-bridge.mjs';
+import { postInternal } from './internal-messages.mjs'; // the agent↔Agent C "internal messages" chat (tool pipeline)
 // Sub-agents (scheduled, specialists, employed roles) run the composable-code harness (CEO-Bench: it
 // beats per-tool calls + specialized harnesses) by default. AGENT_CODEMODE=0 reverts to the classic loop.
 const AGENT_RUNNER = process.env.AGENT_CODEMODE === '0' ? runAgent : runAgentCode;
@@ -1677,8 +1678,12 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
       // A tool IS a component: version its SOURCE as a git-as-Endo object from the moment it's proposed
       // (not just on admit), so it's forkable/revertable from birth — matching the component API.
       if (r.ok !== false && r.id) { try { await componentGitObj.commit(r.id, multi ? files : { 'tool.js': String(code || '') }, `propose: ${r.name}`); } catch { /* git-versioning is best-effort here; admit re-commits */ } }
-      await aff.feed.notify({ title: `🧩 New ${r.kind} component proposed for review: "${r.name}"${r.multifile ? ' (multi-file)' : ''}`, body: `${String(description || '').slice(0, 200)}\n\nReview the code + the discipline-panel findings, then admit it in the Components tab (top-right). NOT callable until you admit it.`, agent: node.id, link: chatLink(ctx) });
-      return { ok: true, proposed: true, id: r.id, name: r.name, kind: r.kind, multifile: r.multifile, note: 'Proposed for the owner\'s review in the Components tab. NOT callable until he admits it.' };
+      // The tool goes UP to Agent C's pipeline, not a proposal card at the owner: it enters autonomous review,
+      // and the review panel (not a manual click) is the gate — a non-critical tool is auto-admitted to the
+      // library, with Agent C naming/organizing it. The disposition is logged to the "internal messages" chat
+      // (Settings → Internal messages), so the owner can watch what the fleet builds without being interrupted.
+      try { postInternal({ from: node.id || 'agent', kind: 'tool-proposed', title: `proposed a ${r.kind} tool: "${r.name}"`, body: String(description || '').slice(0, 400), toolId: r.id, by: node.id, status: 'entering review' }); } catch { /* best-effort */ }
+      return { ok: true, proposed: true, id: r.id, name: r.name, kind: r.kind, multifile: r.multifile, note: 'Saved + sent up to Agent C\'s review pipeline. The review panel is the gate: a non-critical tool is AUTO-ADMITTED to the library (Agent C names/organizes it) — no owner click needed. Watch its disposition in Settings → Internal messages.' };
     } });
     manifest.push({ name: 'proposeTool', reversible: false,
       args: { name: 'string — tool name', description: 'string — what it does', kind: 'string — "instance" (one stateful object hosted here) or "class" (shareable; others instantiate locally)', code: 'string — for a single-file tool: a `make(powers)` BODY returning your tool (fn or {methods})', files: 'object — for a MULTI-FILE class: {"tool.js":"export const make = async (powers) => {…}", "helper.js":"export const …"} — the entry exports make + may import siblings', entry: 'string — entry file for files (default tool.js)', args: 'object — its arg/method schema' },

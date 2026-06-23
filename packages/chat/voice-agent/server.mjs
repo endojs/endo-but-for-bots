@@ -50,6 +50,7 @@ import * as projects from './projects.mjs';
 import { makeMeetingScribe } from './meeting-scribe.mjs';
 import { opusComplete } from './delegate.mjs';
 import { runReviewPanel } from './review-panel.mjs';
+import { postInternal, listInternal } from './internal-messages.mjs';
 import { reviseToConverge } from './revise-loop.mjs';
 import { notify } from '../capture/notify.mjs';
 
@@ -155,7 +156,7 @@ const triageTick = async () => {
     const pend = customTools.listAll().filter(t => t.status === 'pending');
     // 1) review any pending tool that has no review yet (the legacy ones predate the panel)
     const unreviewed = pend.find(t => !t.review);
-    if (unreviewed) { try { const rv = await runReviewPanel(unreviewed, { callLLM, ranAt: new Date().toISOString() }); customTools.setReview(unreviewed.id, rv); log('auto-review', unreviewed.name, '→ worst', rv.worst); } catch (e) { log('auto-review', unreviewed.name || '?', e.message); } return; }
+    if (unreviewed) { try { const rv = await runReviewPanel(unreviewed, { callLLM, ranAt: new Date().toISOString() }); customTools.setReview(unreviewed.id, rv); log('auto-review', unreviewed.name, '→ worst', rv.worst); postInternal({ from: 'agent-c', kind: 'tool-reviewed', title: `reviewed "${unreviewed.name}" — worst: ${rv.worst}`, body: (rv.findings || []).slice(0, 3).map(f => `[${f.severity}] ${f.discipline}`).join(' · ') || 'no findings', toolId: unreviewed.id, by: unreviewed.proposedBy, status: rv.worst }); } catch (e) { log('auto-review', unreviewed.name || '?', e.message); } return; }
     // 2) revise the worst un-revised high/critical (existing bounded loop)
     maybeAutoRevise();
     if (revising.size) return;
@@ -164,11 +165,16 @@ const triageTick = async () => {
     if (AUTO_ADMIT) {
       const ready = pend.find(t => t.review && t.review.worst !== 'critical' && (t.review.worst !== 'high' || t.reviseLog));
       if (ready) {
+        // Agent C NAMES/ORGANIZES it (the entry agent decides where it fits in the library) — a cheap local
+        // call, best-effort; on failure we just admit with no category.
+        let org = {};
+        try { const o = await callLLM([{ role: 'system', content: 'You are Agent C, organizing your own component library. Given a tool name + description, reply with ONLY compact JSON {"category":"<1-3 word category>","note":"<one short sentence on where it fits / what it is good for>"}. No prose.' }, { role: 'user', content: `${ready.name}: ${String(ready.description || '')}`.slice(0, 800) }], 'default'); const m = /\{[\s\S]*\}/.exec(String(o && o.text || '')); if (m) org = JSON.parse(m[0]); } catch { /* organize is best-effort */ }
         const r = customTools.admit(ready.id);
         if (r.ok) {
           try { await componentGit.commit(ready.id, sourceFilesOf(ready), `admit: ${ready.name}`); } catch (e) { log('auto-admit commit', e.message); }
-          log('auto-admit', ready.name, `→ library (review worst: ${ready.review.worst})`);
-          try { await postFeed({ avatar: '🧩', title: `Added "${ready.name}" to your component library`, body: String(ready.description || '').slice(0, 400), status: `auto-admitted · review worst: ${ready.review.worst}`, note: ready.proposedBy ? `proposed by ${ready.proposedBy}` : '' }); } catch { /* feed best-effort */ }
+          log('auto-admit', ready.name, `→ library (review worst: ${ready.review.worst}${org.category ? `, category: ${org.category}` : ''})`);
+          postInternal({ from: 'agent-c', kind: 'tool-admitted', title: `admitted "${ready.name}" to the library${org.category ? ` · ${org.category}` : ''}`, body: org.note || String(ready.description || '').slice(0, 300), toolId: ready.id, by: ready.proposedBy, status: `review worst: ${ready.review.worst}` });
+          try { await postFeed({ avatar: '🧩', title: `Added "${ready.name}" to your component library`, body: (org.note || String(ready.description || '')).slice(0, 400), status: `auto-admitted${org.category ? ` · ${org.category}` : ''} · review worst: ${ready.review.worst}`, note: ready.proposedBy ? `proposed by ${ready.proposedBy}` : '' }); } catch { /* feed best-effort */ }
         }
       }
     }
@@ -1762,6 +1768,8 @@ const handler = async (req, res) => {
       }
       if (u.pathname === '/tools/reject') return json(res, 200, customTools.reject(String(body.id || '')));
       if (u.pathname === '/tools/pending-count') return json(res, 200, { count: customTools.listAll().filter(t => t.status === 'pending').length }); // cheap (no panel) — for the tab badge
+      // the agent↔Agent C "internal messages" chat (tool pipeline: proposed → reviewed → organized → admitted)
+      if (u.pathname === '/internal-messages/load') return json(res, 200, listInternal({ limit: 250 }));
       // COMPONENT = git-as-Endo object: version history / read-at-version / non-destructive revert.
       // ISLAND components (confined-Preact UI, id "island-…") route to islandSource (rewrite client file + rebuild).
       if (u.pathname === '/components/islands') return json(res, 200, { ok: true, islands: islandSource.list() });
