@@ -1278,7 +1278,10 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
       toolbox.fileList = harden({ run: async ({ path: rel } = {}) => { const h = home(); return h ? h.list(rel || '') : { ok: false, error: 'no home folder' }; } });
       toolbox.fileRead = harden({ run: async ({ path: rel }) => { const h = home(); return h ? h.read(rel) : { ok: false, error: 'no home folder' }; } });
       toolbox.fileWrite = harden({ run: async ({ path: rel, content }) => { const h = home(); if (!h?.write) return { ok: false, error: 'read-only home' }; return h.write(rel, content); } });
-      toolbox.publishSite = harden({ run: async ({ path: rel, name }) => { const h = home(); if (!h?.publishSite) return { ok: false, error: 'read-only home' }; try { return await h.publishSite(rel || '', name); } catch (e) { return { ok: false, error: e.message }; } } });
+      // publishSite → also emit a `site-preview` WIDGET so the published site renders as a nice inline
+      // link-preview card (live thumbnail + Open) in the chat, not just a bare URL. (rv.widget is forwarded
+      // to r.ui by the server; the /sites token is a web-key that's meant to be opened, so rendering it is fine.)
+      toolbox.publishSite = harden({ run: async ({ path: rel, name }) => { const h = home(); if (!h?.publishSite) return { ok: false, error: 'read-only home' }; try { const r = await h.publishSite(rel || '', name); return (r && r.url) ? { ok: true, ...r, widget: { type: 'site-preview', url: r.url, name: r.name } } : r; } catch (e) { return { ok: false, error: e.message }; } } });
       // createDownloadLinkFor(path) → a working DOWNLOAD link for a file in your home, to hand the user in a
       // reply. Returns { url:'/dl/<token>' } — embed it as a markdown link. The url is relative to this app's
       // origin (so it works whether the user is on the tailnet or the public address).

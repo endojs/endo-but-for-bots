@@ -239,7 +239,34 @@ const renderThemePreview = (spec) => {
   return wrap;
 };
 
-const RENDERERS = { countdowns: renderCountdowns, 'entity-status': renderEntityStatus, choices: renderChoices, component: renderComponent, 'theme-preview': renderThemePreview };
+// ── site-preview: a "link preview" card for a site the agent just publishSite'd. Shows the title, its
+//    address, an Open action, AND a LIVE thumbnail of the actual page (a sandboxed, non-interactive iframe
+//    — the same opaque-origin boundary as a confined component, so the preview can't reach the chat's cap).
+const hostLabel = url => { try { const u = new URL(url, location.origin); return (u.host || location.host) + (u.pathname && u.pathname !== '/' ? u.pathname.replace(/\/$/, '') : ''); } catch { return String(url || '').replace(/^https?:\/\//, '').slice(0, 60); } };
+const renderSitePreview = spec => {
+  const url = String(spec.url || ''); const name = String(spec.name || spec.title || 'Published site');
+  const wrap = document.createElement('div'); wrap.className = 'gw gw-site'; wrap.style.cssText = `${STYLE};margin:8px 0;border:1px solid var(--edge,#30363d);border-radius:12px;overflow:hidden;background:var(--panel,#161b22);cursor:pointer`;
+  const head = document.createElement('div'); head.style.cssText = 'display:flex;align-items:center;gap:9px;padding:9px 12px';
+  const ic = document.createElement('span'); ic.textContent = '🌐'; ic.style.fontSize = '16px';
+  const meta = document.createElement('div'); meta.style.cssText = 'flex:1;min-width:0';
+  const t = document.createElement('div'); t.textContent = name; t.style.cssText = 'font-weight:600;color:var(--ink,#e6edf3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap'; // textContent — agent string never becomes HTML
+  const u = document.createElement('div'); u.textContent = hostLabel(url); u.style.cssText = 'font-size:11px;color:var(--mut,#8b949e);overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+  meta.append(t, u);
+  const open = document.createElement('button'); open.textContent = 'Open ↗'; open.style.cssText = 'all:unset;cursor:pointer;color:var(--acc,#7c5cff);font-size:12px;font-weight:600;border:1px solid var(--edge,#30363d);border-radius:7px;padding:3px 10px';
+  head.append(ic, meta, open); wrap.appendChild(head);
+  if (url) {
+    const prev = document.createElement('div'); prev.style.cssText = 'height:148px;border-top:1px solid var(--edge,#21262d);overflow:hidden;position:relative;background:#fff';
+    const ifr = document.createElement('iframe'); ifr.setAttribute('sandbox', 'allow-scripts'); ifr.setAttribute('referrerpolicy', 'no-referrer'); ifr.setAttribute('loading', 'lazy');
+    // render at 2× then scale to 0.5 → a crisp thumbnail of the real page; non-interactive (clicks open it).
+    ifr.style.cssText = 'width:200%;height:296px;border:0;transform:scale(.5);transform-origin:top left;pointer-events:none';
+    ifr.src = url; prev.appendChild(ifr); wrap.appendChild(prev);
+  }
+  const go = () => { try { window.open(url, '_blank', 'noopener'); } catch { /* */ } };
+  open.addEventListener('click', e => { e.stopPropagation(); go(); }); wrap.addEventListener('click', go);
+  return wrap;
+};
+
+const RENDERERS = { countdowns: renderCountdowns, 'entity-status': renderEntityStatus, choices: renderChoices, component: renderComponent, 'theme-preview': renderThemePreview, 'site-preview': renderSitePreview };
 
 // renderWidgets(container, specs, ctx): append each widget; ctx = { cap, onChoice }. Pure data in, DOM out.
 export const renderWidgets = (container, specs, ctx) => {
