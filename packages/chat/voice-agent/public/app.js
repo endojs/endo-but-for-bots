@@ -2908,40 +2908,60 @@ const showHooks = () => {
 //    is for GLOBAL config: the default allowance for NEW conversations, a spend leaderboard, model providers,
 //    and (next) a gallery of the agents you've built as 3D Granovetter diagrams. A foothold to grow into.
 const fmtUsd = u => '$' + (Math.max(0, Number(u) || 0) / 1e6).toFixed(2);
+const fmtEvery = ms => { const n = Number(ms) || 0; const h = n / 3600000; if (h >= 24 && Number.isInteger(h / 24)) return `${h / 24}d`; if (h >= 1) return `${Math.round(h)}h`; return `${Math.round(n / 60000)}m`; };
+const SETTINGS_SECTIONS = [{ key: 'usage', label: '📊 Usage' }, { key: 'providers', label: '🧠 Providers' }, { key: 'agents', label: '🕸️ Agents' }, { key: 'timers', label: '⏰ Timers' }];
+let settingsSection = 'usage';
 const openSettings = async () => {
   if (!isRoot) { setStatus('settings are owner-only — open with your root link'); return; }
-  showModal(`<div style="text-align:left;min-width:300px;max-width:460px">
-    <b style="font-size:16px">⚙ Settings</b>
-    <div class="set-sec">
-      <div class="set-h">Default allowance for new conversations</div>
-      <div class="set-row">$ <input id="set-allow" type="number" step="0.10" min="0" style="width:88px"> <button class="mini" id="set-allow-save">Save</button> <span id="set-allow-msg" class="pmeta"></span></div>
-      <div class="pmeta">Every new chat starts prepaid with this much inference budget.</div>
-    </div>
-    <div class="set-sec">
-      <div class="set-h">💸 Most expensive conversations</div>
-      <div id="set-costs" class="pmeta">measuring…</div>
-    </div>
-    <div class="set-sec">
-      <div class="set-h">🧠 Model providers</div>
-      <div class="pmeta">Pick a per-chat model from the header selector. Add a provider key by asking the agent (it stores it in the key vault). A dedicated provider-management form is coming next.</div>
-    </div>
-    <div class="set-sec">
-      <div class="set-h">🕸️ Your agents</div>
-      <div class="pmeta">A gallery of the agents you've built — each rendered as a 3D Granovetter diagram (an octahedron with lines fanning out to its tools, each unfurlable) — is coming next.</div>
-    </div>
-  </div>`);
+  showModal(`<div class="setwrap"><div class="setnav">${SETTINGS_SECTIONS.map(s => `<button class="setnav-item${s.key === settingsSection ? ' on' : ''}" data-sec="${s.key}">${s.label}</button>`).join('')}</div><div class="setbody" id="setbody"></div></div>`);
+  document.querySelectorAll('.setnav-item').forEach(btn => { btn.onclick = () => { settingsSection = btn.getAttribute('data-sec'); document.querySelectorAll('.setnav-item').forEach(b => b.classList.toggle('on', b === btn)); renderSettingsSection(); }; });
+  renderSettingsSection();
+};
+const renderSettingsSection = () => {
+  const body = $('setbody'); if (!body) return;
+  if (settingsSection === 'providers') { body.innerHTML = '<div class="set-h">🧠 Model providers</div><div class="pmeta">Pick a per-chat model from the header selector. Add a provider key by asking the agent (it stores it in the key vault). A dedicated provider-management form is coming next.</div>'; return; }
+  if (settingsSection === 'agents') { body.innerHTML = '<div class="set-h">🕸️ Your agents</div><div class="pmeta">A gallery of the agents you\'ve built — each rendered as a 3D Granovetter diagram (an octahedron with lines fanning out to its tools, each unfurlable) — is coming next.</div>'; return; }
+  if (settingsSection === 'timers') return renderSettingsTimers(body);
+  return renderSettingsUsage(body);
+};
+const renderSettingsUsage = async body => {
+  body.innerHTML = `<div class="set-sec"><div class="set-h">Default allowance for new conversations</div>
+    <div class="set-row">$ <input id="set-allow" type="number" step="0.10" min="0" style="width:88px"> <button class="mini" id="set-allow-save">Save</button> <span id="set-allow-msg" class="pmeta"></span></div>
+    <div class="pmeta">Every new chat starts prepaid with this much inference budget.</div></div>
+    <div class="set-sec"><div class="set-h">💸 Most expensive conversations <span class="pmeta">· by allowance used</span></div><div id="set-costs" class="pmeta">loading…</div></div>`;
   try { const b = await (await fetch('/budget', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, purseCap: chatCap(), sessionId }) })).json(); if (b && b.defaultAllowance != null && $('set-allow')) $('set-allow').value = (b.defaultAllowance / 1e6).toFixed(2); } catch { /* */ }
   const sv = $('set-allow-save'); if (sv) sv.onclick = async () => { const msg = $('set-allow-msg'); const amt = Math.round((Number($('set-allow').value) || 0) * 1e6); msg.textContent = 'saving…'; try { const r = await (await fetch('/budget/default', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, amount: amt }) })).json(); msg.textContent = r.error ? r.error : `saved · ${fmtUsd(r.defaultAllowance)} / new chat`; } catch (e) { msg.textContent = e.message; } };
-  // spend leaderboard — each chat's purse (granted − remaining = spent), ranked. Tap a row to open that chat.
-  (async () => {
-    const rows = [];
-    for (const c of chats.slice(0, 50)) { try { const b = await (await fetch('/budget', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, purseCap: c.scopedCap || cap, sessionId: c.id }) })).json(); if (b && b.allowance != null) { const spent = Math.max(0, (b.allowance || 0) - (b.remaining || 0)); if (spent > 0) rows.push({ title: c.title || 'chat', spent, id: c.id }); } } catch { /* */ } }
-    rows.sort((a, b) => b.spent - a.spent);
+  // the leaderboard reads the server-cached spend LEDGER (allowance USED per chat, cumulative — one call, not N).
+  try {
+    const r = await (await fetch('/budget/ledger', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap }) })).json();
     const el = $('set-costs'); if (!el) return;
+    const rows = _arr(r.ledger).filter(x => x.spent > 0);
     if (!rows.length) { el.textContent = 'no measurable spend yet.'; return; }
-    el.innerHTML = rows.slice(0, 7).map((r, i) => `<div class="set-cost-row" data-id="${esc(r.id)}"><span class="set-rank">${i + 1}</span><span class="set-cost-t">${esc(r.title)}</span><span class="set-cost-v">${fmtUsd(r.spent)}</span></div>`).join('');
-    el.querySelectorAll('.set-cost-row').forEach(row => { row.style.cursor = 'pointer'; row.onclick = () => { const id = row.getAttribute('data-id'); closeModal(); if (chats.some(c => c.id === id)) switchChat(id); }; });
-  })();
+    el.innerHTML = rows.slice(0, 8).map((x, i) => { const c = chats.find(ch => ch.id === x.sessionId); return `<div class="set-cost-row" data-id="${esc(x.sessionId)}"><span class="set-rank">${i + 1}</span><span class="set-cost-t">${esc((c && c.title) || '(untitled / past chat)')}</span><span class="set-cost-v">${fmtUsd(x.spent)}</span></div>`; }).join('');
+    el.querySelectorAll('.set-cost-row').forEach(row => { const id = row.getAttribute('data-id'); if (chats.some(c => c.id === id)) { row.style.cursor = 'pointer'; row.onclick = () => { closeModal(); switchChat(id); }; } });
+  } catch { const el = $('set-costs'); if (el) el.textContent = '(could not load usage)'; }
+};
+const renderSettingsTimers = async body => {
+  body.innerHTML = '<div class="set-h">⏰ Scheduled jobs</div><div class="pmeta" style="margin-bottom:9px">Jobs your <b>agents</b> have scheduled — durable reminders + recurring checks (distinct from scheduled <i>agents</i> that do work). Cancel any that have outlived their use.</div><div id="set-timers" class="pmeta">loading…</div>';
+  try {
+    const r = await (await fetch('/timers/list', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap }) })).json();
+    const el = $('set-timers'); if (!el) return;
+    const ts = _arr(r.timers);
+    if (!ts.length) { el.textContent = 'no scheduled jobs.'; return; }
+    el.innerHTML = '';
+    for (const t of ts) {
+      const row = document.createElement('div'); row.className = 'tmr-row';
+      const main = document.createElement('div'); main.className = 'tmr-main';
+      const title = document.createElement('div'); title.className = 'tmr-title'; title.textContent = t.label || '(unnamed job)';
+      const sub = document.createElement('div'); sub.className = 'tmr-sub'; sub.textContent = `${t.actionType === 'command' ? '⚙ runs' : '🔔 notifies'} · ${t.summary || ''}`;
+      main.append(title, sub);
+      const right = document.createElement('div'); right.style.cssText = 'display:flex;flex-direction:column;align-items:flex-end;gap:5px;flex:0 0 auto';
+      const when = document.createElement('div'); when.className = 'tmr-when'; when.textContent = t.kind === 'interval' ? `every ${fmtEvery(t.everyMs)}` : 'once';
+      const cancel = document.createElement('button'); cancel.className = 'mini bad'; cancel.textContent = 'Cancel';
+      cancel.onclick = async () => { cancel.disabled = true; cancel.textContent = 'cancelling…'; try { const c = await (await fetch('/timers/cancel', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, id: t.id }) })).json(); if (c && c.ok) row.remove(); else { cancel.disabled = false; cancel.textContent = 'Cancel'; } } catch { cancel.disabled = false; cancel.textContent = 'Cancel'; } };
+      right.append(when, cancel); row.append(main, right); el.appendChild(row);
+    }
+  } catch { const el = $('set-timers'); if (el) el.textContent = '(could not load timers)'; }
 };
 { const f = $('drawer-foot'); if (f) f.onclick = openSettings; }
 

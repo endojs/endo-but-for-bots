@@ -39,6 +39,7 @@ import { makeAppStore } from './app-state.mjs';
 import { makePurse } from './purse.mjs';
 import { makePurseStore } from './purse-store.mjs';
 import { makeMeteredLLM } from './meter.mjs';
+import { listTimers, cancelTimer } from '../capture/timers.mjs';
 import { loadStripeCfg, stripeConfigured, recordPending, checkoutForm, verifyWebhook, settleEvent } from './pay.mjs';
 import { gatorConfigured, recordDelegation, redeemDelegation } from './delegation-pay.mjs';
 import { budgetLine, costOf } from './costModel.mjs';
@@ -268,6 +269,15 @@ const DEFAULT_ALLOWANCE_FILE = `${OUT}/default-allowance.json`; // the owner's S
 let defaultAllowance = DEFAULT_ALLOWANCE;
 try { const v = JSON.parse(fs.readFileSync(DEFAULT_ALLOWANCE_FILE, 'utf8')); if (Number.isFinite(v && v.uusd)) defaultAllowance = Math.max(0, Math.round(v.uusd)); } catch { /* default */ }
 const saveDefaultAllowance = () => { try { fs.mkdirSync(OUT, { recursive: true }); fs.writeFileSync(DEFAULT_ALLOWANCE_FILE, JSON.stringify({ uusd: defaultAllowance })); } catch { /* best-effort */ } };
+// SPEND LEDGER — cumulative allowance USED per chat (µUSD), accumulated each turn + persisted, so the
+// Settings "most expensive conversations" leaderboard is instant + accurate (used, not granted) and survives
+// restarts, instead of N per-chat budget probes on every open. Keyed by sessionId (the chat id, not a cap).
+const SPEND_LEDGER_FILE = `${OUT}/spend-ledger.json`;
+const spendLedger = new Map();
+try { const d = JSON.parse(fs.readFileSync(SPEND_LEDGER_FILE, 'utf8')); if (d && typeof d === 'object') for (const [k, v] of Object.entries(d)) spendLedger.set(k, Number(v) || 0); } catch { /* none yet */ }
+let spendSaveT = null;
+const saveSpendLedger = () => { if (spendSaveT) return; spendSaveT = setTimeout(() => { spendSaveT = null; try { fs.mkdirSync(OUT, { recursive: true }); fs.writeFileSync(SPEND_LEDGER_FILE, JSON.stringify(Object.fromEntries(spendLedger))); } catch { /* */ } }, 2000); };
+const addSpend = (sid, uusd) => { const a = Math.max(0, Math.round(Number(uusd) || 0)); if (!a) return; spendLedger.set(String(sid), (spendLedger.get(String(sid)) || 0) + a); saveSpendLedger(); };
 const chatPurses = new Map(); // `${cap}:${sid}` → purse
 // Durable balances: a purse's mutations persist (hashed key → {balance,granted}); on boot a chat's purse
 // rehydrates from disk instead of resetting to the default allowance. (Increment 6 swaps this for agora's
@@ -1030,6 +1040,7 @@ const handler = async (req, res) => {
       emitStep(sid, { t: 'end' });
       if (runs.get(sid) === ac) runs.delete(sid);
       stepBuffers.delete(sid); // run done → drop the live-trace buffer (a post-run reattach uses the persisted steps via /chat/result)
+      addSpend(sid, Object.values(perProvider).reduce((a, b) => a + b, 0)); // tally this turn's USED allowance into the leaderboard (covers done/exhausted/timeout — perProvider accrues regardless)
       // WATCHDOG: the turn blew the deadline (or never returned). Surface a LEGIBLE summary instead of a
       // silent cancel — name the steps it ran + the last one (the likely stall), so failures are visible.
       if (deadlineHit || r.timedOut) {
@@ -1198,6 +1209,35 @@ const handler = async (req, res) => {
       const amt = Math.max(0, Math.round(Number(amount) || 0));
       if (amt) { defaultAllowance = amt; saveDefaultAllowance(); } // persist the Settings value across restarts
       return json(res, 200, { defaultAllowance });
+    }
+    // Settings → Usage: the spend leaderboard (allowance USED per chat, cumulative). Cached server-side.
+    if (req.method === 'POST' && u.pathname === '/budget/ledger') {
+      const { cap } = await jsonBody(req);
+      const node = nodeFor(cap);
+      if (!node) return json(res, 403, { error: 'no capability' });
+      if (!node.isRoot) return json(res, 403, { error: 'owner only' });
+      const ledger = [...spendLedger.entries()].map(([sessionId, spent]) => ({ sessionId, spent })).filter(x => x.spent > 0).sort((a, b) => b.spent - a.spent).slice(0, 20);
+      return json(res, 200, { ok: true, ledger });
+    }
+    // Settings → Timers: jobs AGENTS scheduled (durable timers/intervals via timers.mjs), NOT scheduled agents.
+    if (req.method === 'POST' && u.pathname === '/timers/list') {
+      const { cap } = await jsonBody(req);
+      const node = nodeFor(cap);
+      if (!node) return json(res, 403, { error: 'no capability' });
+      if (!node.isRoot) return json(res, 403, { error: 'owner only' });
+      const timers = (await listTimers()).filter(t => t && t.status === 'active').map(t => ({
+        id: t.id, kind: t.kind, label: t.label || '', actionType: (t.action && t.action.type) || '',
+        summary: (t.action && t.action.cmd) ? `$ ${String(t.action.cmd).slice(0, 140)}` : String((t.action && (t.action.message || t.action.title)) || '').slice(0, 180),
+        everyMs: t.everyMs || 0, nextAt: t.nextAt || t.dueAt || '', created: t.created || '',
+      }));
+      return json(res, 200, { ok: true, timers });
+    }
+    if (req.method === 'POST' && u.pathname === '/timers/cancel') {
+      const { cap, id } = await jsonBody(req);
+      const node = nodeFor(cap);
+      if (!node) return json(res, 403, { error: 'no capability' });
+      if (!node.isRoot) return json(res, 403, { error: 'owner only' });
+      return json(res, 200, await cancelTimer(String(id || '')));
     }
 
     // ── cross-device chat sync: the chat list + transcripts, stored server-side
