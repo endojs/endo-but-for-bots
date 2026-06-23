@@ -2076,6 +2076,7 @@ let pendant = null, pendantWrap = null, pendantCanvas = null, pendantES = null, 
 let pendantLive = false, liveChatId = ''; // a turn is mid-stream → don't clobber it with a saved-trace re-render
 let scoping = false; // the permissioning (scope) agent is researching → show its dodecahedron trace
 let pendantFs = false; // 🧊 expands the pendant fullscreen (the retired ice-cube's best bit, folded in)
+let pendantShapeMode = false; // the pendant is showing an AGENT SHAPE (from Settings), not a chat trace — guards pendantShowFor from reclaiming it
 // D4: the pendant is the ONE trace. 🧊 / tapping the trace expands it fullscreen instead of opening the
 // separate ice-cube viewer (trace.js / #trace-overlay), which is now retired.
 async function togglePendantFs() { // hoisted — wired eagerly by trace-btn before this line executes
@@ -2084,6 +2085,7 @@ async function togglePendantFs() { // hoisted — wired eagerly by trace-btn bef
   pendantWrap.classList.toggle('fs', pendantFs);
   const fsx = $('pendant-fsx'); if (fsx) fsx.classList.toggle('hide', !pendantFs);
   if (pendantFs) { pendantWrap.classList.remove('hide'); pendant.setVisible(true); if (!pendantLive && !scoping) pendantShowFor(sessionId); }
+  else if (pendantShapeMode) { pendantShapeMode = false; hidePendant(); } // exiting a Settings agent-shape view → just put it away
   else { schedulePendantPosition(); }
   setTimeout(() => { try { pendant.resize(); } catch {} }, 40);
 }
@@ -2254,7 +2256,7 @@ const positionPendant = () => {
 const schedulePendantPosition = () => { if (pendantRaf) return; pendantRaf = requestAnimationFrame(() => { pendantRaf = 0; positionPendant(); }); };
 const hidePendant = () => { if (pendantWrap) pendantWrap.classList.add('hide'); if (pendant) pendant.setVisible(false); log.querySelectorAll('.msg.user').forEach(el => { el.style.marginBottom = ''; }); try { pendantES && pendantES.close(); } catch {} };
 const pendantBegin = async (promptText, sid = sessionId) => {
-  pendantLive = true; liveChatId = sid;
+  pendantLive = true; liveChatId = sid; pendantShapeMode = false; // a real turn reclaims the pendant from any Settings shape view
   try {
     const p = await ensurePendant();
     pendantWrap.classList.remove('hide'); p.setVisible(true);
@@ -2268,6 +2270,7 @@ const pendantBegin = async (promptText, sid = sessionId) => {
 const pendantEnd = steps => { try { pendantES && pendantES.close(); } catch {} pendantLive = false; if (pendant) { pendant.finish(); pendant.applyFinal(steps || []); } hidePendant(); }; // done WORKING → hide the live 3D animation; the per-message SVG trace (above the message) becomes the record. Tap an SVG to reopen the 3D on demand.
 // re-render the latest turn's SAVED trace when opening/returning to a chat (persistence across navigation)
 const pendantShowFor = async id => {
+  if (pendantShapeMode) return; // a Settings agent-shape graph is up — don't reclaim the pendant with a chat trace
   if (pendantLive && id === liveChatId) { schedulePendantPosition(); return; } // a turn is mid-stream here — leave the live animation
   if (!pendantFs) { hidePendant(); return; } // completed chat + 3D not opened on demand → no persistent 3D; the per-message SVG traces ARE the record (tap one to open the 3D)
   // the 3D is open on demand (fullscreen) → keep it rendering the latest saved trace across navigation/resize
@@ -3080,7 +3083,7 @@ const openSettings = async () => {
 const renderSettingsSection = () => {
   const body = $('setbody'); if (!body) return;
   if (settingsSection === 'providers') { body.innerHTML = '<div class="set-h">🧠 Model providers</div><div class="pmeta">Pick a per-chat model from the header selector. Add a provider key by asking the agent (it stores it in the key vault). A dedicated provider-management form is coming next.</div>'; return; }
-  if (settingsSection === 'agents') { body.innerHTML = '<div class="set-h">🕸️ Your agents</div><div class="pmeta">A gallery of the agents you\'ve built — each rendered as a 3D Granovetter diagram (an octahedron with lines fanning out to its tools, each unfurlable) — is coming next.</div>'; return; }
+  if (settingsSection === 'agents') return renderSettingsShape(body);
   if (settingsSection === 'timers') return renderSettingsTimers(body);
   if (settingsSection === 'internal') return renderSettingsInternal(body);
   return renderSettingsUsage(body);
@@ -3138,6 +3141,64 @@ const renderSettingsTimers = async body => {
       right.append(when, cancel); row.append(main, right); el.appendChild(row);
     }
   } catch { const el = $('set-timers'); if (el) el.textContent = '(could not load timers)'; }
+};
+// 🕸️ Agent shape — the STATIC structural graph of what an agent HOLDS (its authority), the long-promised
+// Granovetter diagram: powers (each fanning to the verbs it can call) + specialist sub-agents (crowned with
+// their granted powers) + employable roles (latent authority). What the agent IS, vs the trace = what it DID.
+// Map the /agent/shape payload → the SAME pendant node schema ({name,ok,detail,granted,children}) so the 3D
+// renders it for free. Roles stay in the list (the pendant has no "latent/ghost" idiom). Names/labels only.
+const shapeToSteps = shape => {
+  const powers = _arr(shape && shape.powers).map(p => ({
+    name: p.name, ok: true, detail: scrubCap(p.label || p.name),
+    children: _arr(p.verbs).map(v => ({ name: v, ok: true })),
+  }));
+  const specialists = _arr(shape && shape.specialists).map(s => ({
+    name: s.name || s.id, ok: true, detail: scrubCap('specialist · ' + (s.domain || '')),
+    granted: _arr(s.powers), children: _arr(s.powers).map(pn => ({ name: pn, ok: true })),
+  }));
+  return [...powers, ...specialists];
+};
+// drive the chat pendant SINGLETON fullscreen with the held-authority graph (reusing the exact path
+// traceGeometry's core-tap uses — pendantShapeMode guards pendantShowFor from reclaiming it for a chat trace).
+const openShapePendant = async steps => {
+  if (!steps.length) { setStatus('no structural nodes to show'); return; }
+  try {
+    const p = await ensurePendant();
+    pendantShapeMode = true; pendantFs = true;
+    pendantWrap.classList.remove('hide'); pendantWrap.classList.add('fs');
+    const fsx = $('pendant-fsx'); if (fsx) fsx.classList.remove('hide');
+    p.setVisible(true); p.showSteps(steps);
+    setTimeout(() => { try { p.resize(); } catch {} }, 40);
+  } catch { /* enhancement-only */ }
+};
+let lastShape = {};
+const AGENT_LABEL = id => (id === 'field-agent' ? 'Agent C' : id);
+const renderSettingsShape = async body => {
+  const opts = ['field-agent', ...Object.keys(specialistPowers || {})];
+  body.innerHTML = `<div class="set-h">🕸️ Agent shape</div>
+    <div class="pmeta" style="margin-bottom:9px">The structural graph of what an agent <b>holds</b> — its powers (each fanning to the tools it can call), its specialist sub-agents, and the roles it could employ. What the agent <i>is</i> (distinct from the per-message trace, which is what it <i>did</i>).</div>
+    <div class="set-row" style="margin-bottom:9px;gap:8px">${opts.length > 1 ? `<select id="shape-agent" class="mini">${opts.map(o => `<option value="${esc(o)}">${esc(AGENT_LABEL(o))}</option>`).join('')}</select>` : ''}<button class="mini" id="shape-3d">🧊 Open 3D diagram</button></div>
+    <div id="shape-body" class="pmeta">loading…</div>`;
+  const chips = arr => _arr(arr).map(x => `<span class="pill" style="margin:1px 3px 1px 0">${esc(String(x))}</span>`).join('');
+  const load = async () => {
+    const who = ($('shape-agent') && $('shape-agent').value) || 'field-agent';
+    const host = $('shape-body'); if (host) host.textContent = 'loading…';
+    let shape = {};
+    try { shape = await (await fetch('/agent/shape', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap, agent: who }) })).json(); } catch (e) { shape = { error: e.message }; }
+    lastShape = shape; if (!host) return;
+    if (!shape || shape.error) { host.textContent = shape && shape.error ? `(${shape.error})` : '(could not load)'; return; }
+    const powers = _arr(shape.powers), specs = _arr(shape.specialists), roles = _arr(shape.roles).filter(r => _arr(r.powers).length);
+    host.innerHTML = `
+      <div class="set-sec"><div class="set-h">🔑 Powers <span class="pmeta">· ${powers.length}</span></div>
+        ${powers.map(p => `<div class="share" style="display:block;padding:6px 9px;margin:4px 0"><div style="font-size:13px">${esc(scrubCap(p.label || p.name))} <span class="pmeta">(${esc(p.name)})</span></div><div style="margin-top:3px">${chips(p.verbs)}</div></div>`).join('') || '<div class="pill">none</div>'}</div>
+      <div class="set-sec"><div class="set-h">🧑‍🚀 Specialists <span class="pmeta">· ${specs.length}</span></div>
+        ${specs.length ? specs.map(s => `<div class="share" style="display:block;padding:6px 9px;margin:4px 0"><div style="font-size:13px">${esc(s.name || s.id)}${s.domain ? ` <span class="pmeta">· ${esc(scrubCap(s.domain))}</span>` : ''}</div><div style="margin-top:3px">${chips(s.powers)}</div>${_arr(s.autonomy).length ? `<div class="pmeta" style="margin-top:2px">may autonomously: ${esc(_arr(s.autonomy).join(', '))}</div>` : ''}</div>`).join('') : '<div class="pill">no persistent specialists yet</div>'}</div>
+      <div class="set-sec"><div class="set-h">🎭 Employable roles <span class="pmeta">· latent authority (a subset of held powers)</span></div>
+        ${roles.length ? roles.map(r => `<div class="share" style="display:block;padding:6px 9px;margin:4px 0;opacity:.85"><div style="font-size:13px">${esc(r.label || r.role)} <span class="pmeta">(${esc(r.role)} · ${r.writes ? 'writes' : 'read-only'})</span></div>${r.blurb ? `<div class="pmeta" style="margin-top:1px">${esc(scrubCap(r.blurb))}</div>` : ''}<div style="margin-top:3px">${chips(r.powers)}</div></div>`).join('') : `<div class="pill">no roles employable with this agent's powers</div>`}</div>`;
+  };
+  const sel = $('shape-agent'); if (sel) sel.onchange = load;
+  const btn = $('shape-3d'); if (btn) btn.onclick = () => openShapePendant(shapeToSteps(lastShape));
+  load();
 };
 { const f = $('drawer-foot'); if (f) f.onclick = openSettings; }
 

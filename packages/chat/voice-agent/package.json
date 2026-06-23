@@ -9,7 +9,8 @@
     "test": "node --test",
     "test:theme": "node theme-matrix.staging.test.cjs",
     "test:confinement": "node confinement.staging.test.cjs",
-    "test:component-select": "node component-select.staging.test.cjs"
+    "test:component-select": "node component-select.staging.test.cjs",
+    "test:shape": "node shape-graph.staging.test.cjs"
   },
   "dependencies": {
     "@endo/exo-git": "workspace:^",

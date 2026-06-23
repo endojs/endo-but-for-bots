@@ -18,6 +18,7 @@ import { execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { E } from '@endo/eventual-send';
 import { makeFieldAgent, ALL_POWERS, POWERS, HOME_BASE } from './agent-caps.mjs';
+import { roleList } from './agent-roles.mjs';
 import { runAgent, buildUserContent, callLLM } from '../../ocapn-noise/tool-bridge.mjs';
 import { runAgentCode } from '../../ocapn-noise/codemode.mjs';
 // CodeMode (default ON): the agent acts by writing ONE composable JS program per turn, run in a
@@ -857,6 +858,39 @@ const handler = async (req, res) => {
       if (!node) return json(res, 404, { ok: false, error: 'unknown or revoked capability' });
       try { const result = await E(node.cap)[method](...(Array.isArray(args) ? args : [])); return json(res, 200, { ok: true, result }); }
       catch (e) { return json(res, 400, { ok: false, error: String(e && e.message || e) }); }
+    }
+
+    // ── agent SHAPE: the STATIC structural graph of what an agent HOLDS — its powers (each fanning to the
+    //    verbs it can call), its persistent specialist sub-agents, and the roles it could employ. This is what
+    //    the agent IS (distinct from /chat/steps, which is what it DID). Owner-only; feeds the Settings 🕸️
+    //    Agents Granovetter diagram. Names + labels ONLY — never a swissnum/address (cap-hygiene). ──
+    if (req.method === 'POST' && u.pathname === '/agent/shape') {
+      const { cap, agent } = await jsonBody(req);
+      const node = nodeFor(cap);
+      if (!node) return json(res, 403, { error: 'no capability — open this app with your #cap= link' });
+      if (!node.isRoot) return json(res, 403, { error: 'agent shape is owner-only' });
+      const withVerbs = names => (names || []).map(name => ({ name, label: (POWERS[name] && POWERS[name].label) || name, verbs: (POWERS[name] && POWERS[name].verbs) || [] }));
+      const rolesFor = held => roleList().map(r => ({ role: r.role, label: r.label, tier: r.tier, writes: r.writes, isolation: r.isolation, blurb: r.blurb, powers: (r.powers || []).filter(p => held.includes(p)) }));
+      try {
+        const d = await E(node.cap).describe();
+        const specialists = (await E(node.cap).listSpecialists()) || [];
+        let shape;
+        if (agent && agent !== 'field-agent') {
+          const s = specialists.find(x => x.id === agent || x.name === agent);
+          if (!s) return json(res, 404, { error: 'unknown specialist' });
+          shape = { ok: true, kind: 'specialist', label: s.name || s.id, powers: withVerbs(s.powers || []), specialists: [], roles: rolesFor(s.powers || []) };
+        } else {
+          const held = (d.powers || []).map(p => p.name);
+          shape = { ok: true, kind: d.kind, label: d.label, powers: withVerbs(held),
+            specialists: specialists.map(s => ({ id: s.id, name: s.name, domain: s.domain || '', powers: s.powers || [], autonomy: s.autonomy || [], spawnedFrom: s.spawnedFrom || null })),
+            roles: rolesFor(held) };
+        }
+        // cap-hygiene guard (defense-in-depth): a shape is names/labels only — refuse if an actual capability
+        // LINK value leaked in (a #cap=/#k=/#agent= followed by a hex secret). Matches values, not prose:
+        // role blurbs legitimately mention "swissnum"/"#cap" as words, which must NOT trip this.
+        if (/#(?:cap|k|agent)=[0-9a-f]{16,}/i.test(JSON.stringify(shape))) return json(res, 500, { error: 'shape contained a capability link — refusing' });
+        return json(res, 200, shape);
+      } catch (e) { return json(res, 500, { error: String(e && e.message || e) }); }
     }
 
     if (req.method === 'POST' && u.pathname === '/stt') {
