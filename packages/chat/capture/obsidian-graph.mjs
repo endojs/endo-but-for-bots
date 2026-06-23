@@ -16,7 +16,7 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 
-const VAULT = path.join(os.homedir(), 'obsidian/vault');
+const VAULT = process.env.OBSIDIAN_VAULT || path.join(os.homedir(), 'obsidian/vault'); // env-overridable for tests
 const EXCLUDE_DIR = 'the field';
 const STOP = new Set(['the', 'and', 'for', 'that', 'this', 'with', 'from', 'have', 'what', 'whats',
   'when', 'where', 'which', 'who', 'whose', 'why', 'how', 'does', 'did', 'are', 'was', 'were',
@@ -36,24 +36,45 @@ const withinVault = rel => {
   return full;
 };
 
+// Prefer ripgrep — parallel, much faster + load-resilient over an ~18k-note vault than `grep -r` + a
+// per-file read loop (which, under a busy box, blew the 25s timeout and silently returned NO notes — the
+// "search returned [] though my notes are full of it" bug). rg -c gives per-file match counts directly, so
+// scoring needs no content reads at all. Falls back to grep + read where rg isn't installed.
+let _haveRg = null;
+const haveRg = async () => { if (_haveRg !== null) return _haveRg; const { err } = await run('rg', ['--version']); _haveRg = !err; return _haveRg; };
+const scoreOf = (ts, f, bodyCount) => { const base = path.basename(f, '.md').toLowerCase(); const inTitle = ts.filter(t => base.includes(t)).length; return bodyCount + inTitle * 3; }; // title matches weigh more
+
 // Plain core (also exported for non-endo callers / tests).
 export const searchNotes = async (query, { limit = 8 } = {}) => {
   const ts = terms(query);
   if (!ts.length) return [];
-  const args = ['-rilZ', '--include=*.md', `--exclude-dir=${EXCLUDE_DIR}`];
-  for (const t of ts) { args.push('-e', t); }
-  args.push(VAULT);
-  const { so } = await run('grep', args);
-  const files = so.split('\0').filter(Boolean).slice(0, 500);
   const scored = [];
-  for (const f of files) {
-    let content = '';
-    try { content = (await fsp.readFile(f, 'utf8')).toLowerCase(); } catch { continue; }
-    const base = path.basename(f, '.md').toLowerCase();
-    const inTitle = ts.filter(t => base.includes(t)).length;
-    const inBody = ts.filter(t => content.includes(t)).length;
-    const score = inBody + inTitle * 2; // title matches weigh more
-    if (score > 0) scored.push({ path: path.relative(VAULT, f), title: path.basename(f, '.md'), score });
+  if (await haveRg()) {
+    // rg -c → "<path>:<matchCount>" per file; multiple -e = OR. No content reads → fast even under load.
+    const args = ['-c', '-i', '--no-messages', '--no-heading', '-g', `!${EXCLUDE_DIR}/**`, '-g', '*.md'];
+    for (const t of ts) { args.push('-e', t); }
+    args.push(VAULT);
+    const { so } = await run('rg', args);
+    for (const ln of so.split('\n')) {
+      const i = ln.lastIndexOf(':'); if (i < 0) continue;
+      const f = ln.slice(0, i); if (!f) continue;
+      const cnt = Number(ln.slice(i + 1)) || 1;
+      scored.push({ path: path.relative(VAULT, f), title: path.basename(f, '.md'), score: scoreOf(ts, f, cnt) });
+    }
+  } else {
+    // grep fallback: -rilZ for the candidate files, then read + count term hits.
+    const args = ['-rilZ', '--include=*.md', `--exclude-dir=${EXCLUDE_DIR}`];
+    for (const t of ts) { args.push('-e', t); }
+    args.push(VAULT);
+    const { so } = await run('grep', args);
+    const files = so.split('\0').filter(Boolean).slice(0, 500);
+    for (const f of files) {
+      let content = '';
+      try { content = (await fsp.readFile(f, 'utf8')).toLowerCase(); } catch { continue; }
+      const bodyCount = ts.filter(t => content.includes(t)).length;
+      const base = path.basename(f, '.md').toLowerCase();
+      if (bodyCount > 0 || ts.some(t => base.includes(t))) scored.push({ path: path.relative(VAULT, f), title: path.basename(f, '.md'), score: scoreOf(ts, f, bodyCount) });
+    }
   }
   scored.sort((a, b) => b.score - a.score);
   return scored.slice(0, limit);

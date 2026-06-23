@@ -1582,7 +1582,7 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
         }).filter(x => x.score > 0).sort((a, b) => b.score - a.score).slice(0, 6);
         push('tools', scored.map(x => ({ name: x.m.name, description: x.m.description, args: x.m.args })));
       }
-      try { if (powers.has('notes')) push('notes', (await aff.notes.search(q, { limit: 5 })).map(n => ({ name: n.title, path: n.path }))); } catch { /* skip */ }
+      try { if (powers.has('notes')) push('notes', (await aff.notes.search(q, { limit: 8 })).map(n => ({ name: n.title, path: n.path }))); } catch (e) { results.push({ source: 'notes', error: `notes search failed (${(e && e.message) || e}) — your notes were NOT searched this time; retry`, name: '' }); } // surface, don't silently drop notes (the "search returned []" bug)
       try { if (powers.has('contacts') && contactsObj) push('contacts', await contactsObj.search(q)); } catch { /* skip */ }
       try { if (powers.has('homeassistant')) { const s = node.haStart(); if (s && s.search) push('homeassistant', await s.search(q)); } } catch { /* skip */ }
       try { if (powers.has('agents')) { const s = node.agStart(); if (s && s.search) push('agents', await s.search(q)); } } catch { /* skip */ }
