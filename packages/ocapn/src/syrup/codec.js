@@ -7,7 +7,6 @@
 import harden from '@endo/harden';
 import { encodeUtf8 } from '@endo/utf8/encode.js';
 import { strictDecodeUtf8 } from '@endo/utf8/strict-decode.js';
-import { toBytes } from '@endo/pass-style/to-bytes.js';
 
 import { ocapnPassStyleOf } from '../codecs/ocapn-pass-style.js';
 
@@ -201,9 +200,7 @@ export const NumberPrefixCodec = makeCodec('NumberPrefix', {
   write: (value, syrupWriter) => {
     if (typeof value === 'string') {
       syrupWriter.writeString(value);
-    } else if (value instanceof Uint8Array || value instanceof ArrayBuffer) {
-      // The byteArray pass style is now a Uint8Array; older callers may
-      // still hand off a raw ArrayBuffer, accepted for cross-version use.
+    } else if (value instanceof Uint8Array) {
       syrupWriter.writeBytestring(value);
     } else if (typeof value === 'bigint') {
       syrupWriter.writeInteger(value);
@@ -408,7 +405,7 @@ export const makeRecordCodec = (
     } else if (labelType === 'string') {
       syrupWriter.writeString(label);
     } else if (labelType === 'bytestring') {
-      syrupWriter.writeBytestring(toBytes(encodeUtf8(label)));
+      syrupWriter.writeBytestring(encodeUtf8(label));
     }
     writeBody(value, syrupWriter);
     syrupWriter.exitRecord();

@@ -8,12 +8,13 @@
  */
 
 import harden from '@endo/harden';
+import { encodeHex } from '@endo/hex';
 import { makePromiseKit } from '@endo/promise-kit';
 import { writeOcapnHandshakeMessage } from '../codecs/operations.js';
 import { makeOcapnKeyPair, signLocation } from '../cryptography.js';
 import { makeGrantTracker } from './grant-tracker.js';
 import { makeSturdyRefTracker, enlivenSturdyRef } from './sturdyrefs.js';
-import { locationToLocationId, toHex } from './util.js';
+import { locationToLocationId } from './util.js';
 import { handleHandshakeMessageData, sendHandshake } from './handshake.js';
 import { makeOcapn } from './ocapn.js';
 
@@ -111,7 +112,10 @@ const makeSessionManager = () => {
       }
       activeSessions.set(locationId, session);
       connectionToSession.set(connection, session);
-      sessionIdToPeerPublicKey.set(toHex(session.id), session.peer.publicKey);
+      sessionIdToPeerPublicKey.set(
+        encodeHex(session.id),
+        session.peer.publicKey,
+      );
       const pendingSession = pendingSessions.get(locationId);
       if (pendingSession !== undefined) {
         pendingSession.resolve(session);
@@ -162,7 +166,7 @@ const makeSessionManager = () => {
       return pendingSession;
     },
     getPeerPublicKeyForSessionId: sessionId => {
-      return sessionIdToPeerPublicKey.get(toHex(sessionId));
+      return sessionIdToPeerPublicKey.get(encodeHex(sessionId));
     },
   });
 };

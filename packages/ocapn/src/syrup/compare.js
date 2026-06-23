@@ -1,7 +1,5 @@
 // @ts-check
 
-export { compareBytes as compareImmutableArrayBuffers } from '@endo/bytes/compare.js';
-
 /**
  * Compare two `Uint8Array` values lexicographically, with optional
  * start/end slicing.  Used by the Syrup ordering module for in-place

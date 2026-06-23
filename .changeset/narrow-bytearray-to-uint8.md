@@ -3,6 +3,7 @@
 '@endo/bytes': major
 '@endo/hex': minor
 '@endo/utf8': major
+'@endo/ascii': major
 '@endo/patterns': patch
 '@endo/marshal': patch
 '@endo/ocapn': patch

@@ -18,7 +18,7 @@ import {
   makeSessionId,
   assertLocationSignatureValid,
 } from '../cryptography.js';
-import { compareImmutableArrayBuffers } from '../syrup/compare.js';
+import { compareUint8Arrays } from '../syrup/compare.js';
 import { makeSyrupReader } from '../syrup/decode.js';
 import { decodeSyrup } from '../syrup/js-representation.js';
 import { locationToLocationId } from './util.js';
@@ -58,7 +58,7 @@ const compareSessionKeysForCrossedHellos = (
     getSelfIdentityForConnection(outgoingConnection).keyPair.publicKey;
   const outgoingId = outgoingPublicKey.id;
   const incommingId = incommingPublicKey.id;
-  const result = compareImmutableArrayBuffers(outgoingId, incommingId);
+  const result = compareUint8Arrays(outgoingId, incommingId);
   const [preferredConnection, connectionToClose] =
     result > 0
       ? [outgoingConnection, incommingConnection]

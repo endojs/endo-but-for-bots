@@ -82,8 +82,8 @@ const OcapnSignatureEddsaCodec = exactList('OcapnSignatureEddsa', [
  * @typedef {object} OcapnSignature
  * @property {'sig-val'} type
  * @property {'eddsa'} scheme
- * @property {ArrayBufferView | ArrayBufferLike} r
- * @property {ArrayBufferView | ArrayBufferLike} s
+ * @property {Uint8Array} r
+ * @property {Uint8Array} s
  */
 
 // ['sig-val ['eddsa ['r r_value] ['s s_value]]]

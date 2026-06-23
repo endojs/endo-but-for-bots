@@ -90,9 +90,7 @@ export const NumberPrefixCodecWithSelectorAsSymbol = {
     } else if (typeof value === 'symbol') {
       const selectorString = getSyrupSelectorName(value);
       syrupWriter.writeSelectorFromString(selectorString);
-    } else if (value instanceof Uint8Array || value instanceof ArrayBuffer) {
-      // The byteArray pass style is now a Uint8Array; older callers may
-      // still hand off a raw ArrayBuffer, accepted for cross-version use.
+    } else if (value instanceof Uint8Array) {
       syrupWriter.writeBytestring(value);
     } else if (typeof value === 'bigint') {
       syrupWriter.writeInteger(value);

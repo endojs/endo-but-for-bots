@@ -15,9 +15,10 @@
  */
 
 import harden from '@endo/harden';
-import { ZERO_N } from '@endo/nat';
 import { E, HandledPromise } from '@endo/eventual-send';
+import { encodeHex } from '@endo/hex';
 import { Far } from '@endo/marshal';
+import { ZERO_N } from '@endo/nat';
 import { makePromiseKit } from '@endo/promise-kit';
 import {
   makeDescCodecs,
@@ -29,7 +30,7 @@ import { makePassableCodecs } from '../codecs/passable.js';
 import { makeOcapnOperationsCodecs } from '../codecs/operations.js';
 import { getSelectorName, makeSelector } from '../selector.js';
 import { decodeSyrup } from '../syrup/js-representation.js';
-import { decodeSwissnum, locationToLocationId, toHex } from './util.js';
+import { decodeSwissnum, locationToLocationId } from './util.js';
 import {
   publicKeyDescriptorToPublicKey,
   randomGiftId,
@@ -38,7 +39,7 @@ import {
   signHandoffReceive,
   makeSignedHandoffGive,
 } from '../cryptography.js';
-import { compareImmutableArrayBuffers } from '../syrup/compare.js';
+import { compareUint8Arrays } from '../syrup/compare.js';
 import { ocapnPassStyleOf } from '../codecs/ocapn-pass-style.js';
 import { makeOcapnTable } from '../captp/ocapn-tables.js';
 import { makeSlot, parseSlot } from '../captp/pairwise.js';
@@ -536,7 +537,7 @@ const makeBootstrapObject = (
       if (!isLocal) {
         throw Error(`${label}: Bootstrap deposit-gift: Gift must be local`);
       }
-      const giftKey = `${toHex(sessionId)}:${toHex(giftId)}`;
+      const giftKey = `${encodeHex(sessionId)}:${encodeHex(giftId)}`;
       logger.info('deposit-gift', { giftKey, gift });
       const pendingGiftKey = `pending:${giftKey}`;
       const promiseKit = giftTable.get(pendingGiftKey);
@@ -579,21 +580,18 @@ const makeBootstrapObject = (
       const peerPublicKey = getPeerPublicKeyForSessionId(sessionId);
       if (!peerPublicKey) {
         throw Error(
-          `${label}: Bootstrap withdraw-gift: No peer public key for session id: ${toHex(sessionId)}. This should never happen.`,
+          `${label}: Bootstrap withdraw-gift: No peer public key for session id: ${encodeHex(sessionId)}. This should never happen.`,
         );
       }
       const peerIdFromSession = peerPublicKey.id;
       if (
-        compareImmutableArrayBuffers(
-          peerIdFromSession,
-          peerIdFromHandoffReceive,
-        ) !== 0
+        compareUint8Arrays(peerIdFromSession, peerIdFromHandoffReceive) !== 0
       ) {
         throw Error(
-          `${label}: Bootstrap withdraw-gift: Receiver key mismatch for session ${toHex(sessionId)}.\n  peerIdFromSession: ${toHex(peerIdFromSession)}\n  peerIdFromHandoffReceive: ${toHex(peerIdFromHandoffReceive)}`,
+          `${label}: Bootstrap withdraw-gift: Receiver key mismatch for session ${encodeHex(sessionId)}.\n  peerIdFromSession: ${encodeHex(peerIdFromSession)}\n  peerIdFromHandoffReceive: ${encodeHex(peerIdFromHandoffReceive)}`,
         );
       }
-      if (compareImmutableArrayBuffers(sessionId, receivingSession) !== 0) {
+      if (compareUint8Arrays(sessionId, receivingSession) !== 0) {
         throw Error(`${label}: Bootstrap withdraw-gift: Session id mismatch.`);
       }
 
@@ -603,7 +601,7 @@ const makeBootstrapObject = (
       );
       if (!gifterKeyForExporter) {
         throw Error(
-          `${label}: Bootstrap withdraw-gift: No session with id: ${toHex(gifterExporterSessionId)}`,
+          `${label}: Bootstrap withdraw-gift: No session with id: ${encodeHex(gifterExporterSessionId)}`,
         );
       }
       try {
@@ -643,7 +641,7 @@ const makeBootstrapObject = (
       }
 
       // Return the gift or a promise that resolves to the gift.
-      const giftKey = `${toHex(gifterExporterSessionId)}:${toHex(giftId)}`;
+      const giftKey = `${encodeHex(gifterExporterSessionId)}:${encodeHex(giftId)}`;
       const gift = giftTable.get(giftKey);
       logger.info('withdraw-gift', { giftKey, gift, handoffCount });
       if (gift) {

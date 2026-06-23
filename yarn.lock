@@ -441,6 +441,23 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@endo/ascii@workspace:^, @endo/ascii@workspace:packages/ascii":
+  version: 0.0.0-use.local
+  resolution: "@endo/ascii@workspace:packages/ascii"
+  dependencies:
+    "@endo/eventual-send": "workspace:^"
+    "@endo/harden": "workspace:^"
+    "@endo/init": "workspace:^"
+    "@endo/ses-ava": "workspace:^"
+    ava: "catalog:dev"
+    c8: "catalog:dev"
+    eslint: "catalog:dev"
+    prettier: "npm:^3.5.3"
+    ses: "workspace:^"
+    typescript: "catalog:dev"
+  languageName: unknown
+  linkType: soft
+
 "@endo/base64@workspace:^, @endo/base64@workspace:packages/base64":
   version: 0.0.0-use.local
   resolution: "@endo/base64@workspace:packages/base64"
@@ -1130,6 +1147,7 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@endo/ocapn@workspace:packages/ocapn"
   dependencies:
+    "@endo/ascii": "workspace:^"
     "@endo/bytes": "workspace:^"
     "@endo/chacha12": "workspace:^"
     "@endo/eventual-send": "workspace:^"
