@@ -65,7 +65,7 @@ const WHISPER = process.env.STT_URL || 'http://192.168.50.226:8000/v1/audio/tran
 const STT_MODEL = process.env.STT_MODEL || 'deepdml/faster-whisper-large-v3-turbo-ct2';
 const OUT = process.env.OUT_DIR || `${HOME}/.local/state/voice-agent/out`;
 const toolShares = makeToolShares({ dir: `${HOME}/.local/state/voice-agent/tool-shares` }); // share-as-factory/instance + meter + charge
-const componentGit = makeComponentGit({ baseDir: `${HOME}/.local/state/voice-agent/component-git` }); // each component's SOURCE as a git-as-Endo object (version / fork / revert)
+const componentGit = makeComponentGit({ baseDir: process.env.COMPONENT_GIT_DIR || `${HOME}/.local/state/voice-agent/component-git` }); // each component's SOURCE as a git-as-Endo object (version / fork / revert). Env-overridable so a staging/test instance does NOT write broken-out components into the live gallery (the reason it filled with probes).
 const islandSource = makeIslandSource({ here: HERE, componentGit }); // confined-Preact ISLANDS as versioned components (edit = rewrite client file + rebuild)
 // A tool's source as a {relpath: content} file map for the component-git store (single-file → tool.js).
 const sourceFilesOf = t => (t.files && typeof t.files === 'object' && Object.keys(t.files).length ? t.files : { 'tool.js': String(t.code || '') });
@@ -1740,6 +1740,9 @@ const handler = async (req, res) => {
         }
         return json(res, 200, { ok: true, components: out });
       }
+      // Throw a broken-out (uicomp-) component out of the gallery — permanent. Closes the gap that let
+      // dev/test artifacts accumulate with no way to remove them.
+      if (u.pathname === '/components/delete-ui') { const id = String(body.id || ''); if (!/^uicomp-/.test(id)) return json(res, 200, { ok: false, error: 'only broken-out uicomp- components can be deleted here' }); return json(res, 200, { ok: componentGit.remove(id), id }); }
       // BREAK OUT a chat-message component into a standalone, VERSIONED git-object module (Tier 2). The
       // source + its declared cells are committed to component-git, so it gets history/fork/revert like any
       // component and a standalone home at /c/<id>. (Cross-user share with a scoped cap is the next step.)

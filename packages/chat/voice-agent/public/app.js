@@ -2533,7 +2533,11 @@ const renderGallery = () => {
       const hd = document.createElement('div'); hd.className = 'shares-sec'; hd.style.cssText = 'margin:16px 0 8px'; hd.textContent = `Your components (${comps.length}) · sample data`;
       host.appendChild(hd);
       const g2 = document.createElement('div'); g2.style.cssText = GALLERY_GRID;
-      for (const c of comps) g2.appendChild(galleryCard(c.name, c.cells && c.cells.length ? `cells: ${c.cells.join(', ')}` : 'no live cells', slot => renderWidgets(slot, [{ type: 'component', source: c.source, cells: c.cells || [], height: 120 }], { cap, sample: true })));
+      for (const c of comps) {
+        const card = galleryCard(c.name, c.cells && c.cells.length ? `cells: ${c.cells.join(', ')}` : 'no live cells', slot => renderWidgets(slot, [{ type: 'component', source: c.source, cells: c.cells || [], height: 120 }], { cap, sample: true }));
+        if (isRoot) { const del = document.createElement('button'); del.className = 'mini'; del.textContent = '🗑'; del.title = 'Delete this component from the gallery'; del.style.cssText = 'position:absolute;top:6px;right:6px;z-index:2'; del.onclick = async e => { e.stopPropagation(); if (!window.confirm(`Delete "${c.name}" from the gallery?`)) return; await pf('/components/delete-ui', { id: c.id }); renderGallery(); }; card.style.position = 'relative'; card.appendChild(del); }
+        g2.appendChild(card);
+      }
       host.appendChild(g2);
     }
     // 3) ISLANDS — the framework's own confined-Preact chrome, rendered through the real islands bundle

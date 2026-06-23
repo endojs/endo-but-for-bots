@@ -83,6 +83,8 @@ const cleanup = () => { try { srv && srv.kill('SIGKILL'); } catch {} try { fs.rm
       const body = frame ? await frame.locator('body').textContent() : '';
       ok(/PROBE-OK/.test(body) && !/use strict/.test(body), 'the confined component actually rendered (boundary does not break the feature)');
     } finally { await browser.close(); }
+    // Clean up the probe so it never pollutes the gallery (with COMPONENT_GIT_DIR isolation this is belt-and-suspenders).
+    try { await fetch(`${BASE}/components/delete-ui`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap: rootCap, id: bo.id }) }); } catch { /* best-effort */ }
   }
 
   console.log(`\n${pass} passed, ${fail} failed`);

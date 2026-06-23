@@ -118,6 +118,9 @@ export const makeComponentGit = ({ baseDir }) => {
   };
 
   const exists = id => fs.existsSync(path.join(repoDir(id), '.git'));
+  // Permanently remove a component's repo (e.g. throwing a broken-out component out of the gallery, or a
+  // staging test cleaning up after itself). Best-effort; returns whether anything was there.
+  const remove = id => { try { const d = repoDir(id); const had = fs.existsSync(d); fs.rmSync(d, { recursive: true, force: true }); return had; } catch { return false; } };
   // every component id with a repo (the dir name reverses repoDir's encoding). For listing the library.
   const list = () => { try { return fs.readdirSync(baseDir).filter(d => { try { return fs.existsSync(path.join(baseDir, d, '.git')); } catch { return false; } }).map(d => { try { return decodeURIComponent(d.replace(/_/g, '%')); } catch { return d; } }); } catch { return []; } };
 
@@ -167,6 +170,6 @@ export const makeComponentGit = ({ baseDir }) => {
     return { version: c.oid, files: (await readAt(id, 'HEAD')).files };
   };
 
-  return { commit, readAt, history, fork, revert, exists, list, gitObject, writeFile };
+  return { commit, readAt, history, fork, revert, exists, list, gitObject, writeFile, remove };
 };
 harden(makeComponentGit);
