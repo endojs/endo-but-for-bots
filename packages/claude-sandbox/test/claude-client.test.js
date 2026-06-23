@@ -19,7 +19,10 @@ const procKilled = new WeakMap(); // proc -> boolean
 
 const enc = new TextEncoder();
 
-/** Build an AsyncIterable<Uint8Array> from a list of byte chunks. */
+/**
+ * Build an AsyncIterable<Uint8Array> from a list of byte chunks.
+ * @param chunks
+ */
 const bytesIterable = chunks =>
   harden({
     async *[Symbol.asyncIterator]() {
@@ -33,6 +36,7 @@ const bytesIterable = chunks =>
  * Fake sandbox slice. `outputs[i]` is the list of stdout byte chunks
  * the i-th spawned process emits. The returned wrapper exposes
  * recorders that are *not* reachable from the slice/proc objects.
+ * @param outputs
  */
 const makeFakeSlice = (outputs = []) => {
   const spawned = [];

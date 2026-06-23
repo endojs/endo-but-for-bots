@@ -45,7 +45,10 @@ const StubMountInterface = M.interface('Mount', {
   hostPath: M.call().returns(M.string()),
 });
 
-/** Run a host-side podman command and capture its stdio. */
+/**
+ * Run a host-side podman command and capture its stdio.
+ * @param args
+ */
 const podmanRun = async args => {
   await null;
   return new Promise(resolve => {
@@ -157,7 +160,10 @@ const makeWorkspaceDir = () => {
   return dir;
 };
 
-/** Adapt a slice ProcessHandle's stdout into an AsyncIterable<Uint8Array>. */
+/**
+ * Adapt a slice ProcessHandle's stdout into an AsyncIterable<Uint8Array>.
+ * @param proc
+ */
 const procStdout = proc =>
   harden({
     async *[Symbol.asyncIterator]() {

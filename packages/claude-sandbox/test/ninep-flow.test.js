@@ -47,7 +47,11 @@ const StubMountInterface = M.interface('Mount', {
   hostPath: M.call().returns(M.string()),
 });
 
-/** Run a host program and capture its stdio (never rejects). */
+/**
+ * Run a host program and capture its stdio (never rejects).
+ * @param file
+ * @param args
+ */
 const run = async (file, args) => {
   await null;
   return new Promise(resolve => {
