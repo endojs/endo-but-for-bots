@@ -172,6 +172,11 @@ const defaultStderrIterable = proc =>
  *   - Adapter from a `ProcessHandle` to its stderr byte stream, read
  *   best-effort to enrich an `abort` reason. Injectable for tests;
  *   defaults to the `@endo/exo-stream` reader.
+ * @property {number} [stderrReadLimit] - Maximum bytes to read from the
+ *   captured stderr stream before stopping. Defaults to 16384.
+ * @property {number} [stderrTailLength] - Maximum byte length of the
+ *   trailing stderr excerpt included in the `abort` reason. Defaults
+ *   to 2000.
  */
 
 /**
@@ -194,13 +199,15 @@ export const makeClaudeClient = ({
   initialPrompt,
   makeStdoutIterable = defaultStdoutIterable,
   makeStderrIterable = defaultStderrIterable,
+  stderrReadLimit = 16_384,
+  stderrTailLength = 2000,
 }) => {
   /**
    * Best-effort read of a process's captured stderr, bounded so a chatty
    * or never-closing stream can't stall teardown. The caller kills the
    * process first so the captured stream EOFs. Returns the trailing slice
-   * (where the actual error usually is), or '' on any failure (e.g. a
-   * proc with no stderr surface).
+   * (where the actual error usually is), or '' on any failure (for example,
+   * a proc with no stderr surface).
    *
    * @param {ProcessHandle} proc
    * @returns {Promise<string>}
@@ -211,10 +218,10 @@ export const makeClaudeClient = ({
       let text = '';
       for await (const chunk of makeStderrIterable(proc)) {
         text += decoder.decode(chunk, { stream: true });
-        if (text.length >= 16_384) break;
+        if (text.length >= stderrReadLimit) break;
       }
       text += decoder.decode();
-      return text.trim().slice(-2000);
+      return text.trim().slice(-stderrTailLength);
     } catch {
       return '';
     }
