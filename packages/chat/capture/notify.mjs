@@ -10,6 +10,11 @@
 // CLI:      node notify.mjs --title T --message M [--priority high] [--tags a,b] [--click URL]
 
 import fsp from 'node:fs/promises';
+import crypto from 'node:crypto';
+
+// A stable, UNGUESSABLE private topic for a per-user key (a node id / cap). On a public ntfy server the topic
+// name IS the capability (a swissnum-shaped secret), so each user gets their own feed without server auth.
+export const topicForKey = key => `field-${crypto.createHash('sha256').update(String(key || '')).digest('hex').slice(0, 24)}`;
 import os from 'node:os';
 import path from 'node:path';
 
@@ -44,10 +49,11 @@ const recordToFeed = async ({ title, message, click, note = '', audio = '' }) =>
   } catch { /* feed mirroring is best-effort; never block the push */ }
 };
 
-export const notify = async ({ title, message = '', priority = 'default', tags = [], click = '', note = '', audio = '', feed = true } = {}) => {
+export const notify = async ({ title, message = '', priority = 'default', tags = [], click = '', note = '', audio = '', feed = true, topic = '' } = {}) => {
   let cfg;
   try { cfg = JSON.parse(await fsp.readFile(CFG, 'utf8')); } catch { return { ok: false, error: 'no field-notify config' }; }
-  if (!cfg.server || !cfg.topic) return { ok: false, error: 'config missing server/topic' };
+  const dest = String(topic || cfg.topic || ''); // route to an explicit per-user topic when given, else the default
+  if (!cfg.server || !dest) return { ok: false, error: 'config missing server/topic' };
   const headers = { 'content-type': 'text/plain' };
   if (title) headers.Title = title;
   if (priority) headers.Priority = priority;
@@ -57,7 +63,7 @@ export const notify = async ({ title, message = '', priority = 'default', tags =
   // ntfy push itself fails. Operational pings (feed:false) skip this.
   if (feed) await recordToFeed({ title, message, click, note, audio });
   try {
-    const res = await fetch(`${cfg.server}/${cfg.topic}`, {
+    const res = await fetch(`${cfg.server}/${dest}`, {
       method: 'POST', headers, body: message, signal: AbortSignal.timeout(8000),
     });
     return { ok: res.ok, status: res.status };

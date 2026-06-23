@@ -52,7 +52,7 @@ import { opusComplete } from './delegate.mjs';
 import { runReviewPanel } from './review-panel.mjs';
 import { postInternal, listInternal } from './internal-messages.mjs';
 import { reviseToConverge } from './revise-loop.mjs';
-import { notify } from '../capture/notify.mjs';
+import { notify, topicForKey } from '../capture/notify.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const HOME = '/home/dan';
@@ -1599,9 +1599,13 @@ const handler = async (req, res) => {
     }
     // ntfy phone-setup info for the notifications tab (root-gated — the topic is dan's push channel).
     if (req.method === 'POST' && u.pathname === '/notify/info') {
-      if (!nodeFor((await jsonBody(req)).cap)?.isRoot) return json(res, 403, { error: 'no capability' });
+      // Any capability (not just root) gets subscribe info — each invited user sees THEIR OWN private topic,
+      // and everyone gets the PUBLIC server (publicServer) so they can subscribe off the home network.
+      const node = nodeFor((await jsonBody(req)).cap);
+      if (!node) return json(res, 403, { error: 'no capability' });
       let cfg = {}; try { cfg = JSON.parse(await fs.promises.readFile(`${HOME}/.config/field-notify/config.json`, 'utf8')); } catch {}
-      return json(res, 200, { server: cfg.server || '', topic: cfg.topic || '' });
+      const topic = node.isRoot ? (cfg.topic || '') : topicForKey(node.id); // root keeps its topic; each guest gets its own
+      return json(res, 200, { server: cfg.publicServer || cfg.server || '', topic });
     }
     // ── SKILL descriptor (self-describing endowment): any cap (or a share token) → its EXACT powers
     //    + the callable method catalog + the wire to call them. A generic agent that fetches this has

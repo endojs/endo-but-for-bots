@@ -2346,9 +2346,9 @@ const renderInbox = async () => {
       d.innerHTML = `<summary style="cursor:pointer;font-size:13px">📱 Get these notifications on your phone</summary>
         <ol style="font-size:12px;color:var(--mut);margin:8px 0 0;padding-left:18px;line-height:1.7">
           <li>Install the <b>ntfy</b> app (iOS App Store · Android Play/F-Droid).</li>
-          <li>App <b>Settings → Default server</b> → <code style="user-select:all">${esc(ni.server)}</code> (be on the tailnet/LAN to reach it).</li>
-          <li>Tap <b>＋ → Subscribe to topic</b>, enter <code style="user-select:all">${esc(ni.topic)}</code></li>
-          <li>Done — your agent's pushes now arrive on your phone.</li>
+          <li>App <b>Settings → Default server</b> → <code style="user-select:all">${esc(ni.server)}</code></li>
+          <li>Tap <b>＋ → Subscribe to topic</b>, enter <code style="user-select:all">${esc(ni.topic)}</code> (your own private feed).</li>
+          <li>Allow notifications. Done — your agent's pushes arrive on your phone, even off your home network.</li>
         </ol>`;
       attList.appendChild(d);
     }
