@@ -265,8 +265,8 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
   // caps there as a package; see `handleSessionRequest`). In production it
   // defaults to `iterateReader`; unit tests that only inject `iterateMessages`
   // (the guest form loop) leave it off so it does not compete for the mock
-  // iterator — the package path is covered by the live two-daemon test and a
-  // direct `handleSessionRequest` unit test.
+  // iterator. The package path is covered by the live two-daemon test and by
+  // unit tests that opt in via `iterateHostMessages` (see factory.test.js).
   const iterateHostMessages =
     deps.iterateHostMessages ??
     (deps.iterateMessages ? undefined : iterateReader);
@@ -333,94 +333,105 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
       initialPrompt = '',
     } = spec;
 
-    if (!name) throw new Error('Missing "name".');
-    if (!filesystemName) throw new Error('Missing filesystem.');
-    if (!ALLOWED_NETWORKS.includes(network)) {
-      throw new Error(
-        `Unknown network profile "${network}"; expected one of ${ALLOWED_NETWORKS.join(', ')}.`,
-      );
-    }
-    const parsedRootfs = parseRootfs(rootfsValue, { defaultImage });
-
     const hostAgent = await getHostAgent();
 
-    const slug = slugify(name);
-    sessionCounter += 1;
-    const sessionId = `${slug}-${Date.now().toString(36)}-${sessionCounter.toString(36)}`;
-    const hostMountPoint = nodePath.join(
-      mountBaseDir,
-      `claude-sandbox-${sessionId}`,
-    );
-    const workspacePetName = `claude-${sessionId}-workspace`;
+    // Best-effort cleanup of every temporary name this formulation touches
+    // (the caller's storeValue/adopt names plus the per-session powers) so a
+    // failure at *any* step — validation, evaluate, makeUnconfined — strands
+    // nothing on the host. Names not (yet) present are ignored.
+    /** @type {Array<string | string[]>} */
+    let toCleanup = [...removeNames];
+    try {
+      if (!name) throw new Error('Missing "name".');
+      if (!filesystemName) throw new Error('Missing filesystem.');
+      if (!ALLOWED_NETWORKS.includes(network)) {
+        throw new Error(
+          `Unknown network profile "${network}"; expected one of ${ALLOWED_NETWORKS.join(', ')}.`,
+        );
+      }
+      const parsedRootfs = parseRootfs(rootfsValue, { defaultImage });
 
-    // Least authority: the client runs as a **per-session powers** cap that
-    // bundles its four caps by reference and a `provideMount` bounded to this
-    // session's mountpoint — no `lookup`, no other host reach. `evaluate`
-    // endows them **by name**: the infra caps (`@agent`, `sandbox-factory`,
-    // `fs-mounter`) are the host's own (under the factory's directory), and
-    // the `filesystem` / `credentials` names were minted by the caller (a
-    // host-local `storeValue`, or an `adopt` of the peer's package). The
-    // powers name is removed right after `makeUnconfined`; it stays reachable
-    // for the client's lifetime via the make-unconfined→powers edge.
-    const powersName = `claude-${sessionId}-powers`;
-    const codeNames = ['agent', 'sandboxFactory', 'fsMounter', 'filesystem'];
-    const petNames = [
-      '@agent',
-      underNamespace(sandboxFactoryName),
-      underNamespace(fsMounterName),
-      filesystemName,
-    ];
-    if (credentialsName) {
-      codeNames.push('credentials');
-      petNames.push(credentialsName);
+      const slug = slugify(name);
+      sessionCounter += 1;
+      const sessionId = `${slug}-${Date.now().toString(36)}-${sessionCounter.toString(36)}`;
+      const hostMountPoint = nodePath.join(
+        mountBaseDir,
+        `claude-sandbox-${sessionId}`,
+      );
+      const workspacePetName = `claude-${sessionId}-workspace`;
+
+      // Least authority: the client runs as a **per-session powers** cap that
+      // bundles its four caps by reference and a `provideMount` bounded to this
+      // session's mountpoint — no `lookup`, no other host reach. `evaluate`
+      // endows them **by name**: the infra caps (`@agent`, `sandbox-factory`,
+      // `fs-mounter`) are the host's own (under the factory's directory), and
+      // the `filesystem` / `credentials` names were minted by the caller (a
+      // host-local `storeValue`, or an `adopt` of the peer's package). The
+      // powers name is removed right after `makeUnconfined`; it stays reachable
+      // for the client's lifetime via the make-unconfined→powers edge.
+      const powersName = `claude-${sessionId}-powers`;
+      toCleanup = [powersName, ...removeNames];
+      const codeNames = ['agent', 'sandboxFactory', 'fsMounter', 'filesystem'];
+      const petNames = [
+        '@agent',
+        underNamespace(sandboxFactoryName),
+        underNamespace(fsMounterName),
+        filesystemName,
+      ];
+      if (credentialsName) {
+        codeNames.push('credentials');
+        petNames.push(credentialsName);
+      }
+      await E(hostAgent).evaluate(
+        '@main',
+        buildSessionPowersSource(hostMountPoint, Boolean(credentialsName)),
+        harden(codeNames),
+        harden(petNames),
+        powersName,
+      );
+
+      /** @type {Record<string, any>} */
+      const options = {
+        powersName,
+        env: harden({
+          SESSION_ID: sessionId,
+          CREATED_AT: new Date().toISOString(),
+          WORKSPACE_MOUNT_POINT: hostMountPoint,
+          WORKSPACE_PET_NAME: workspacePetName,
+          WORKSPACE_PATH: SANDBOX_WORKSPACE_PATH,
+          BACKEND: backend,
+          NETWORK: network,
+          CLAUDE_ROOTFS: rootfsValue,
+          DEFAULT_IMAGE: defaultImage ?? '',
+          MODEL: model,
+          INITIAL_PROMPT: initialPrompt,
+        }),
+      };
+      if (resultName !== undefined) {
+        options.resultName = resultName;
+      }
+      const client = await E(hostAgent).makeUnconfined(
+        '@main',
+        clientModuleSpecifier,
+        harden(options),
+      );
+
+      // Unname the per-session powers and any temporary endowment names. Each
+      // formula's dependency edge (make-unconfined→powers, powers→endowment)
+      // keeps it reachable for exactly the client's lifetime, so dropping the
+      // names leaves no host-petstore residue.
+      await Promise.all(toCleanup.map(n => E(hostAgent).remove(n)));
+
+      return harden({
+        client,
+        sessionId,
+        hostMountPoint,
+        rootfsLabel: rootfsLabel(parsedRootfs),
+      });
+    } catch (error) {
+      await Promise.allSettled(toCleanup.map(n => E(hostAgent).remove(n)));
+      throw error;
     }
-    await E(hostAgent).evaluate(
-      '@main',
-      buildSessionPowersSource(hostMountPoint, Boolean(credentialsName)),
-      harden(codeNames),
-      harden(petNames),
-      powersName,
-    );
-
-    /** @type {Record<string, any>} */
-    const options = {
-      powersName,
-      env: harden({
-        SESSION_ID: sessionId,
-        CREATED_AT: new Date().toISOString(),
-        WORKSPACE_MOUNT_POINT: hostMountPoint,
-        WORKSPACE_PET_NAME: workspacePetName,
-        WORKSPACE_PATH: SANDBOX_WORKSPACE_PATH,
-        BACKEND: backend,
-        NETWORK: network,
-        CLAUDE_ROOTFS: rootfsValue,
-        DEFAULT_IMAGE: defaultImage ?? '',
-        MODEL: model,
-        INITIAL_PROMPT: initialPrompt,
-      }),
-    };
-    if (resultName !== undefined) {
-      options.resultName = resultName;
-    }
-    const client = await E(hostAgent).makeUnconfined(
-      '@main',
-      clientModuleSpecifier,
-      harden(options),
-    );
-
-    // Unname the per-session powers and any temporary endowment names. Each
-    // formula's dependency edge (make-unconfined→powers, powers→endowment)
-    // keeps it reachable for exactly the client's lifetime, so dropping the
-    // names leaves no host-petstore residue.
-    await E(hostAgent).remove(powersName);
-    await Promise.all(removeNames.map(n => E(hostAgent).remove(n)));
-
-    return harden({
-      client,
-      sessionId,
-      hostMountPoint,
-      rootfsLabel: rootfsLabel(parsedRootfs),
-    });
   };
 
   /**
@@ -500,74 +511,115 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
    *
    * @param {any} hostAgent
    * @param {any} msg - a host-mailbox `package` message.
+   * @param {Record<string, any>} config - the parsed, marker-validated config.
    */
-  const handleSessionRequest = async (hostAgent, msg) => {
-    /** @type {Record<string, any>} */
+  const handleSessionRequest = async (hostAgent, msg, config) => {
+    const { name } = config;
+    tempCounter += 1;
+    // The suffix carries `Date.now()`, so the host-rooted leaf and the temp
+    // names survive a daemon restart (which resets `tempCounter`) without
+    // colliding with / clobbering a prior session of the same name.
+    const suffix = `${slugify(name)}-${Date.now().toString(36)}-${tempCounter.toString(36)}`;
+    const tag = `claude-${suffix}`;
+    const fsTmp = `${tag}-fscap`;
+    /** @type {string[]} */
+    const removeNames = [];
+    try {
+      // adopt = thisDiesIfThatDies import edge + a host name the powers endow.
+      await E(hostAgent).adopt(msg.number, 'filesystem', fsTmp);
+      removeNames.push(fsTmp);
+      let credentialsName = null;
+      if (Array.isArray(msg.names) && msg.names.includes('credentials')) {
+        const credTmp = `${tag}-credcap`;
+        await E(hostAgent).adopt(msg.number, 'credentials', credTmp);
+        removeNames.push(credTmp);
+        credentialsName = credTmp;
+      }
+
+      const clientName = underNamespace(`session-${suffix}`);
+      const {
+        sessionId,
+        hostMountPoint,
+        rootfsLabel: rfLabel,
+      } = await formulateSessionFromPetNames(
+        {
+          name,
+          filesystemName: fsTmp,
+          credentialsName,
+          rootfs: config.rootfs,
+          network: config.network,
+          model: config.model,
+          initialPrompt: config.initialPrompt,
+        },
+        { resultName: clientName, removeNames },
+      );
+
+      await E(hostAgent).reply(
+        msg.number,
+        [
+          `ClaudeClient "${name}" created.`,
+          `  session:   ${sessionId}`,
+          `  workspace: ${hostMountPoint} -> ${SANDBOX_WORKSPACE_PATH}`,
+          `  rootfs:    ${rfLabel}`,
+        ],
+        ['client'],
+        [clientName],
+      );
+    } catch (error) {
+      // Clean any adopt names minted before the core could remove them, so a
+      // mid-formulation failure strands nothing on the host.
+      await Promise.allSettled(removeNames.map(n => E(hostAgent).remove(n)));
+      throw error;
+    }
+  };
+
+  // Marker that distinguishes a session-request package from unrelated host
+  // traffic that merely carries a `filesystem` edge.
+  const SESSION_REQUEST_KIND = 'claude-sandbox-session';
+
+  /**
+   * Recognise a peer session-request package: a `package` carrying a
+   * `filesystem` edge whose `strings[0]` is a JSON config marked
+   * `kind: 'claude-sandbox-session'` with a string `name`. The explicit marker
+   * keeps the loop from hijacking unrelated host packages. Returns the parsed
+   * config, or `null` if the message is not a session request.
+   *
+   * @param {any} msg
+   * @returns {Record<string, any> | null}
+   */
+  const asSessionRequest = msg => {
+    if (
+      msg.type !== 'package' ||
+      !Array.isArray(msg.names) ||
+      !msg.names.includes('filesystem')
+    ) {
+      return null;
+    }
     let config;
     try {
       config = JSON.parse(msg.strings?.[0] ?? '{}');
     } catch {
-      throw new Error('session-request: strings[0] must be a JSON config');
+      return null;
     }
-    const { name } = config;
-    if (!name || typeof name !== 'string') {
-      throw new Error('session-request: config.name is required');
+    if (
+      !config ||
+      typeof config !== 'object' ||
+      config.kind !== SESSION_REQUEST_KIND ||
+      typeof config.name !== 'string' ||
+      !config.name
+    ) {
+      return null;
     }
-
-    tempCounter += 1;
-    const tag = `claude-${slugify(name)}-${Date.now().toString(36)}-${tempCounter.toString(36)}`;
-    const fsTmp = `${tag}-fscap`;
-    // adopt = thisDiesIfThatDies import edge + a host name the powers can endow.
-    await E(hostAgent).adopt(msg.number, 'filesystem', fsTmp);
-    /** @type {string[]} */
-    const removeNames = [fsTmp];
-    let credentialsName = null;
-    if (Array.isArray(msg.names) && msg.names.includes('credentials')) {
-      const credTmp = `${tag}-credcap`;
-      await E(hostAgent).adopt(msg.number, 'credentials', credTmp);
-      removeNames.push(credTmp);
-      credentialsName = credTmp;
-    }
-
-    const clientName = underNamespace(
-      `session-${slugify(name)}-${tempCounter}`,
-    );
-    const {
-      sessionId,
-      hostMountPoint,
-      rootfsLabel: rfLabel,
-    } = await formulateSessionFromPetNames(
-      {
-        name,
-        filesystemName: fsTmp,
-        credentialsName,
-        rootfs: config.rootfs,
-        network: config.network,
-        model: config.model,
-        initialPrompt: config.initialPrompt,
-      },
-      { resultName: clientName, removeNames },
-    );
-
-    await E(hostAgent).reply(
-      msg.number,
-      [
-        `ClaudeClient "${name}" created.`,
-        `  session:   ${sessionId}`,
-        `  workspace: ${hostMountPoint} -> ${SANDBOX_WORKSPACE_PATH}`,
-        `  rootfs:    ${rfLabel}`,
-      ],
-      ['client'],
-      [clientName],
-    );
+    return config;
   };
 
   const seenSessionRequests = new Set();
 
   /**
-   * Watch the host mailbox for session-request packages (a `package` message
-   * carrying a `filesystem` edge) and dispatch each to `handleSessionRequest`.
-   * Forms and other message types are ignored.
+   * Watch the host mailbox for peer session-request packages and dispatch each
+   * to `handleSessionRequest`. Non-request messages (forms, other packages)
+   * are ignored. A handled request is `dismiss`ed so a daemon restart's
+   * `followMessages` replay does not re-create the session.
    */
   const runSessionRequestLoop = async () => {
     if (iterateHostMessages === undefined) return;
@@ -575,43 +627,42 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
     const iterator = iterateHostMessages(E(hostAgent).followMessages());
     let exhausted = false;
     while (!exhausted) {
-      // eslint-disable-next-line no-await-in-loop
       const { value: message, done } = await iterator.next();
       if (done) {
         exhausted = true;
         break;
       }
-      const msg = /** @type {InboxMessage & { names?: string[] } } */ (message);
-      const isSessionRequest =
-        msg.type === 'package' &&
-        Array.isArray(msg.names) &&
-        msg.names.includes('filesystem') &&
-        !seenSessionRequests.has(msg.number);
-      if (!isSessionRequest) {
-        continue; // eslint-disable-line no-continue
-      }
-      seenSessionRequests.add(msg.number);
-      try {
-        // eslint-disable-next-line no-await-in-loop
-        await handleSessionRequest(hostAgent, msg);
-      } catch (error) {
-        const errorMessage =
-          error instanceof Error ? error.message : String(error);
-        // eslint-disable-next-line no-console
-        console.error(
-          '[claude-sandbox-factory] session-request:',
-          errorMessage,
-        );
+      const msg = /** @type {InboxMessage & { names?: string[] }} */ (message);
+      const config = asSessionRequest(msg);
+      if (config !== null && !seenSessionRequests.has(msg.number)) {
+        seenSessionRequests.add(msg.number);
         try {
-          // eslint-disable-next-line no-await-in-loop
-          await E(hostAgent).reply(
-            msg.number,
-            [`Error creating sandbox: ${errorMessage}`],
-            [],
-            [],
+          await handleSessionRequest(hostAgent, msg, config);
+        } catch (error) {
+          const errorMessage =
+            error instanceof Error ? error.message : String(error);
+          // eslint-disable-next-line no-console
+          console.error(
+            '[claude-sandbox-factory] session-request:',
+            errorMessage,
           );
+          try {
+            await E(hostAgent).reply(
+              msg.number,
+              [`Error creating sandbox: ${errorMessage}`],
+              [],
+              [],
+            );
+          } catch {
+            // best-effort error reply
+          }
+        }
+        // Durable de-dup: drop the consumed request (success or handled error)
+        // so a restart's mailbox replay does not reprocess it.
+        try {
+          await E(hostAgent).dismiss(msg.number);
         } catch {
-          // best-effort error reply
+          // best-effort
         }
       }
     }
@@ -773,9 +824,10 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
           '',
           '2. Remote peer: SEND a package to the host with a `filesystem`',
           '   (+ optional `credentials`) edge and strings[0] = JSON config',
-          '   { name, rootfs?, network?, model?, initialPrompt? }. The factory',
-          '   adopts the caps and REPLIES with a `client` edge to adopt. The',
-          '   session is host-rooted under the factory directory.',
+          '   { kind: "claude-sandbox-session", name, rootfs?, network?,',
+          '   model?, initialPrompt? }. The factory adopts the caps and',
+          '   REPLIES with a `client` edge to adopt. The session is host-rooted',
+          '   under the factory directory.',
           '',
           '3. Submit the "Create Claude Sandbox" form on @host with',
           '   pet names (resolved with the operator’s own host authority):',

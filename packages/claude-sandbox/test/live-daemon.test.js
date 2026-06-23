@@ -595,11 +595,14 @@ test.serial(
     const invitationLocator = await E(invitation).locate();
     await E(host).accept(invitationLocator, 'remote-peer');
 
-    // The peer sends its Filesystem cap + a JSON config as a package.
+    // The peer sends its Filesystem cap + a JSON config as a package. The
+    // config is marked `kind: 'claude-sandbox-session'` so the factory's host
+    // loop recognises it (and ignores unrelated filesystem-edged traffic).
     await E(peer).send(
       'sandbox-host',
       [
         JSON.stringify({
+          kind: 'claude-sandbox-session',
           name: 'pkg-1',
           rootfs: 'oci:docker.io/library/alpine:3.19',
           network: 'private',

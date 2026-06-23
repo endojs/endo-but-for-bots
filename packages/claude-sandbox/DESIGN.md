@@ -100,14 +100,18 @@ acquires a host name:
   formula id (`No corresponding formula`).
 - **A remote peer `send`s a session-request package** to the host: a `package`
   message with a `filesystem` (+ optional `credentials`) edge and a JSON config
-  in `strings[0]`. The factory's host-mailbox loop (`handleSessionRequest`)
-  **`adopt`s** the caps into the host namespace — which both gives them a name
-  the powers can endow *and* marks them as tracked imports (`thisDiesIfThatDies`;
-  `storeLocator` would do neither) — formulates the session under the factory
-  directory, and **replies** with a `client` edge the peer `adopt`s. The session
-  is **host-rooted** under a factory-minted leaf (`<dir>/session-<name>-<n>`,
-  never the peer's raw name, which could otherwise clobber a host name); the
-  operator GCs it with `remove`.
+  in `strings[0]` marked `kind: "claude-sandbox-session"` (the marker keeps the
+  loop from hijacking unrelated `filesystem`-edged host traffic). The factory's
+  host-mailbox loop (`handleSessionRequest`) **`adopt`s** the caps into the host
+  namespace — which both gives them a name the powers can endow *and* marks them
+  as tracked imports (`thisDiesIfThatDies`; `storeLocator` would do neither) —
+  formulates the session under the factory directory, and **replies** with a
+  `client` edge the peer `adopt`s, then **`dismiss`es** the request so a daemon
+  restart's `followMessages` replay does not re-create the session. The session
+  is **host-rooted** under a factory-minted, `Date.now()`-bearing leaf
+  (`<dir>/session-<slug>-<ts>-<n>`, never the peer's raw name, which could
+  otherwise clobber a host name); the operator GCs it with `remove`. A failure
+  at any step cleans up the adopted temp names, leaving no host residue.
 - **The "Create Claude Sandbox" form on `@host`** — the operator path. Fields
   are host pet-name strings, resolved with the operator's own authority and
   `storeValue`'d like `createSession`. The client is stored under `resultName`

@@ -111,11 +111,14 @@ const makeMockPowers = () => {
   };
 };
 
-const makeMockHostAgent = ({ filesystems = {} } = {}) => {
+const makeMockHostAgent = ({ filesystems = {}, evaluateThrows } = {}) => {
   const unconfinedCalls = [];
   const evaluateCalls = [];
   const removeCalls = [];
   const storeValueCalls = [];
+  const adoptCalls = [];
+  const replyCalls = [];
+  const dismissCalls = [];
   const hostAgent = {
     // Only the form path resolves names with host authority. The
     // peer-callable `createSession` passes caps by reference, never names.
@@ -128,6 +131,10 @@ const makeMockHostAgent = ({ filesystems = {} } = {}) => {
     async storeValue(value, petName) {
       storeValueCalls.push({ value, petName });
     },
+    // The peer-package path adopts the caps from the host mailbox.
+    async adopt(number, edge, petName) {
+      adoptCalls.push({ number, edge, petName });
+    },
     async evaluate(workerName, source, codeNames, petNames, resultName) {
       evaluateCalls.push({
         workerName,
@@ -136,6 +143,7 @@ const makeMockHostAgent = ({ filesystems = {} } = {}) => {
         petNames,
         resultName,
       });
+      if (evaluateThrows) throw new Error(evaluateThrows);
       return harden({ kind: 'fake-powers', name: resultName });
     },
     async makeUnconfined(powersName, specifier, opts) {
@@ -145,6 +153,15 @@ const makeMockHostAgent = ({ filesystems = {} } = {}) => {
     async remove(name) {
       removeCalls.push(name);
     },
+    async reply(number, strings, edgeNames, petNames) {
+      replyCalls.push({ number, strings, edgeNames, petNames });
+    },
+    async dismiss(number) {
+      dismissCalls.push(number);
+    },
+    followMessages() {
+      return harden({ kind: 'fake-host-reader' });
+    },
   };
   return {
     hostAgent,
@@ -152,8 +169,46 @@ const makeMockHostAgent = ({ filesystems = {} } = {}) => {
     evaluateCalls,
     removeCalls,
     storeValueCalls,
+    adoptCalls,
+    replyCalls,
+    dismissCalls,
   };
 };
+
+// A controllable host-message stream injected as `iterateHostMessages` to
+// drive the factory's session-request loop in unit tests.
+const makeHostMessageStream = () => {
+  const pending = [];
+  let waiter = null;
+  const push = msg => {
+    if (waiter) {
+      const w = waiter;
+      waiter = null;
+      w({ value: msg, done: false });
+    } else {
+      pending.push(msg);
+    }
+  };
+  const iterator = {
+    async next() {
+      if (pending.length > 0) {
+        return { value: pending.shift(), done: false };
+      }
+      return new Promise(resolve => {
+        waiter = resolve;
+      });
+    },
+  };
+  return { push, iterateHostMessages: () => iterator };
+};
+
+const sessionRequestPackage = (number, config, names = ['filesystem']) =>
+  harden({
+    type: 'package',
+    number,
+    names,
+    strings: [JSON.stringify(config)],
+  });
 
 const waitFor = async (pred, deadlineMs = 2000) => {
   const start = Date.now();
@@ -419,4 +474,127 @@ test('duplicate form replies are ignored (replay guard)', async t => {
   mock.simulateSubmission(payload, { number: 99, replyTo: 'form-1' });
   await new Promise(r => setTimeout(r, 100));
   t.is(host.unconfinedCalls.length, 1);
+});
+
+// --- Peer session-request package path (handleSessionRequest / loop) ---
+
+test('a session-request package adopts the cap, formulates, replies, and dismisses', async t => {
+  const mock = makeMockPowers();
+  const host = makeMockHostAgent();
+  const stream = makeHostMessageStream();
+  make(mock.powers, undefined, {
+    ...wireDeps(mock, host),
+    iterateHostMessages: stream.iterateHostMessages,
+  });
+
+  stream.push(
+    sessionRequestPackage(7, {
+      kind: 'claude-sandbox-session',
+      name: 'peer-1',
+      network: 'private',
+    }),
+  );
+  await waitFor(() => host.replyCalls.length > 0);
+
+  // Adopted the filesystem edge into a temp host name and endowed THAT name.
+  t.is(host.adoptCalls.length, 1);
+  t.like(host.adoptCalls[0], { number: 7, edge: 'filesystem' });
+  t.regex(host.adoptCalls[0].petName, /^claude-peer-1-.*-fscap$/);
+  t.is(host.evaluateCalls[0].petNames[3], host.adoptCalls[0].petName);
+
+  // Host-rooted under a Date.now()-bearing leaf (restart-collision-safe).
+  const { resultName } = host.unconfinedCalls[0].opts;
+  t.regex(resultName, /^session-peer-1-/);
+
+  // Replied with a `client` edge naming the session, then dismissed the request.
+  t.deepEqual(host.replyCalls[0].edgeNames, ['client']);
+  t.is(host.replyCalls[0].petNames[0], resultName);
+  t.deepEqual(host.dismissCalls, [7]);
+
+  // No residue: the adopted temp name and powers were removed.
+  t.true(host.removeCalls.includes(host.adoptCalls[0].petName));
+});
+
+test('a session-request package with a credentials edge adopts both caps', async t => {
+  const mock = makeMockPowers();
+  const host = makeMockHostAgent();
+  const stream = makeHostMessageStream();
+  make(mock.powers, undefined, {
+    ...wireDeps(mock, host),
+    iterateHostMessages: stream.iterateHostMessages,
+  });
+
+  stream.push(
+    sessionRequestPackage(
+      8,
+      { kind: 'claude-sandbox-session', name: 'peer-2', network: 'private' },
+      ['filesystem', 'credentials'],
+    ),
+  );
+  await waitFor(() => host.replyCalls.length > 0);
+
+  t.is(host.adoptCalls.length, 2);
+  t.deepEqual(
+    host.adoptCalls.map(c => c.edge),
+    ['filesystem', 'credentials'],
+  );
+  const evalCall = host.evaluateCalls[0];
+  t.is(evalCall.petNames.length, 5);
+  t.regex(evalCall.petNames[3], /-fscap$/);
+  t.regex(evalCall.petNames[4], /-credcap$/);
+  t.true(evalCall.codeNames.includes('credentials'));
+});
+
+test('a package without the kind marker is ignored (no hijack of host traffic)', async t => {
+  const mock = makeMockPowers();
+  const host = makeMockHostAgent();
+  const stream = makeHostMessageStream();
+  make(mock.powers, undefined, {
+    ...wireDeps(mock, host),
+    iterateHostMessages: stream.iterateHostMessages,
+  });
+
+  // An unrelated filesystem-edged package (no marker) followed by a real one.
+  stream.push(sessionRequestPackage(10, { name: 'not-a-session' }));
+  stream.push(
+    sessionRequestPackage(11, {
+      kind: 'claude-sandbox-session',
+      name: 'peer-3',
+      network: 'private',
+    }),
+  );
+  await waitFor(() => host.replyCalls.length > 0);
+
+  // Only the marked request (11) was handled; the unmarked one was skipped
+  // (not adopted, not replied, not dismissed).
+  t.is(host.adoptCalls.length, 1);
+  t.is(host.replyCalls.length, 1);
+  t.deepEqual(host.dismissCalls, [11]);
+});
+
+test('a session-request that fails formulation replies an error, cleans up, and dismisses', async t => {
+  const mock = makeMockPowers();
+  const host = makeMockHostAgent({ evaluateThrows: 'boom' });
+  const stream = makeHostMessageStream();
+  make(mock.powers, undefined, {
+    ...wireDeps(mock, host),
+    iterateHostMessages: stream.iterateHostMessages,
+  });
+
+  stream.push(
+    sessionRequestPackage(12, {
+      kind: 'claude-sandbox-session',
+      name: 'peer-4',
+      network: 'private',
+    }),
+  );
+  await waitFor(() => host.replyCalls.length > 0);
+
+  // No client formulated; error replied; request still dismissed.
+  t.is(host.unconfinedCalls.length, 0);
+  t.regex(host.replyCalls[0].strings.join('\n'), /Error creating sandbox/);
+  t.deepEqual(host.replyCalls[0].edgeNames, []);
+  t.deepEqual(host.dismissCalls, [12]);
+  // The adopted temp name was cleaned up despite the failure (no orphan).
+  t.true(host.removeCalls.includes(host.adoptCalls[0].petName));
 });

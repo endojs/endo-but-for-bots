@@ -196,9 +196,11 @@ yarn exec endo submit <n> \
 **C. Remote peer — `send` a session-request package (host-rooted).**
 The peer brings its own caps without naming them on the host: it `send`s the
 host a package whose `filesystem` (+ optional `credentials`) edge carries the
-caps and whose first string is the JSON config. The factory `adopt`s the caps
-and replies with a `client` edge to adopt. (Establish the mailbox first with
-`endo invite` / `endo accept`.)
+caps and whose first string is the JSON config. The config must be marked
+`"kind":"claude-sandbox-session"` so the factory recognises it (and ignores
+unrelated `filesystem`-edged traffic). The factory `adopt`s the caps and replies
+with a `client` edge to adopt. (Establish the mailbox first with `endo invite` /
+`endo accept`.)
 
 Caps ride as inline `@edge:petName` refs; the text before the first ref is
 `strings[0]`, the JSON config:
@@ -206,7 +208,7 @@ Caps ride as inline `@edge:petName` refs; the text before the first ref is
 ```bash
 # On the peer (which holds `project-fs`, `claude-creds`, and a `host` handle):
 yarn exec endo send host \
-  '{"name":"claude-1","rootfs":"oci:localhost/claude-code:latest","network":"private"} @filesystem:project-fs @credentials:claude-creds'
+  '{"kind":"claude-sandbox-session","name":"claude-1","rootfs":"oci:localhost/claude-code:latest","network":"private"} @filesystem:project-fs @credentials:claude-creds'
 # …then adopt the factory's reply:
 yarn exec endo inbox                 # note the reply message number <r>
 yarn exec endo adopt <r> client --name claude-1
