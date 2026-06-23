@@ -608,9 +608,14 @@ const stalledTurnFromTx = () => {
   const history = activeTx.slice(0, i).filter(x => x && (x.text || '').trim()).map(x => ({ role: x.who === 'you' ? 'user' : 'assistant', content: String(x.text) })).slice(-24);
   return { payload: { sessionId, text: (m.text || '').trim(), cap: chatCap(), model: chatModel(), agent: chatAgent(), history }, spoken: false };
 };
-const resumeIfPending = async sid => {
+const resumeIfPending = async (sid, { reconstruct = false } = {}) => {
   let pend = pendingResume[sid];
-  if (!pend && sid === sessionId) pend = stalledTurnFromTx(); // reload case: rebuild the stalled turn from the transcript
+  // Rebuilding a "stalled" turn from the transcript is ONLY safe for reload/reconnect recovery (no live run).
+  // On a TOP-UP path the agent may still be RUNNING — its in-flight user message is the transcript tail, and
+  // reconstructing+retrying it would fire a second /chat that ABORTS the live run (the "topping up resets the
+  // task" bug). So topup/payment pass reconstruct=false: they resume ONLY an explicitly-exhausted turn
+  // (renderExhausted records pendingResume[sid]); a still-running turn is left completely untouched.
+  if (!pend && reconstruct && sid === sessionId) pend = stalledTurnFromTx();
   if (!pend) return false;
   if (sid !== sessionId) { pendingResume[sid] = pend; return false; } // not the chat in view — keep it for when it is
   delete pendingResume[sid];
@@ -645,7 +650,7 @@ const reattachRun = async sid => {
   if (last && last.who === 'agent' && INTERRUPT_RE.test(last.text || '')) { activeTx.pop(); saveTx(); renderTx(); }
   const rr = await fetchRunResult(sid);
   if (sid !== sessionId) return false;
-  if (!rr || rr.state === 'none') return resumeIfPending(sid);         // server has no record (it restarted) → re-run
+  if (!rr || rr.state === 'none') return resumeIfPending(sid, { reconstruct: true }); // server has no record (it restarted) → re-run
   if (rr.state === 'running') {
     reattaching = sid; busy = true; if (sendBtn) sendBtn.disabled = true;
     setStatus('🔎 still working on this on the server — watch it live; safe to leave, the answer will be here when you return');
@@ -658,13 +663,13 @@ const reattachRun = async sid => {
         if (sid !== sessionId) { try { pendantES && pendantES.close(); } catch {} pendantLive = false; return false; } // navigated away — stop the live trace; pick it up next time
         const cur = await fetchRunResult(sid);
         if (!cur || cur.state === 'running') continue;
-        if (cur.result) renderReattached(cur.result, sid); else { try { pendantEnd([]); } catch {} await resumeIfPending(sid); } // renderReattached calls pendantEnd → reconciles the full trace
+        if (cur.result) renderReattached(cur.result, sid); else { try { pendantEnd([]); } catch {} await resumeIfPending(sid, { reconstruct: true }); } // renderReattached calls pendantEnd → reconciles the full trace
         return true;
       }
     } finally { busy = false; if (sendBtn) sendBtn.disabled = false; setStatus(''); reattaching = ''; }
   }
   if (rr.result) { renderReattached(rr.result, sid); return true; }   // finished while the tab was gone
-  return resumeIfPending(sid);                                         // cancelled with no payload → re-run
+  return resumeIfPending(sid, { reconstruct: true });                  // cancelled with no payload → re-run
 };
 // deterministic exhaustion card — NO model produced this; the user tops up or abandons.
 // A provider error (429/overload/unreachable) → a TRANSIENT retry card. It is NOT pushed into the
@@ -937,7 +942,7 @@ const sendChat = async (text, { spoken = false, audio = null, attachments = [], 
         // transient status, and auto-retry shortly; reattachRun also re-runs it the next time the chat opens.
         setStatus('⚠️ interrupted (the server may have restarted) — resuming…'); try { pendantEnd([]); } catch {}
         const sidAtDrop = sessionId;
-        setTimeout(() => { if (!busy && sessionId === sidAtDrop) resumeIfPending(sidAtDrop).catch(() => {}); }, 2200);
+        setTimeout(() => { if (!busy && sessionId === sidAtDrop) resumeIfPending(sidAtDrop, { reconstruct: true }).catch(() => {}); }, 2200);
       } else {
         const msg = '⚠️ Something went wrong: ' + e.message;
         setStatus(''); try { renderAgentResponse({ answer: msg }); } catch {} pushTx('agent', msg, {}); try { pendantEnd([]); } catch {}
