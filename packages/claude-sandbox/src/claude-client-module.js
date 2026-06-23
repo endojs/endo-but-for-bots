@@ -60,6 +60,8 @@ import { makeError, q, X } from '@endo/errors';
 import { makeClaudeClient } from './claude-client.js';
 import { parseRootfs, rootfsLabel } from './parse-rootfs.js';
 
+/** @import { FarRef } from '@endo/eventual-send' */
+
 /**
  * Map a credential kind to the environment variable Claude Code reads
  * it from inside the slice. See `claude-sandbox-factory.js` for the
@@ -98,7 +100,7 @@ const cancellationPromiseOf = resolvedContext => {
 /**
  * Per-session ClaudeClient caplet entry point.
  *
- * @param {import('@endo/eventual-send').FarRef<object>} powers - The
+ * @param {FarRef<object>} powers - The
  *   `@agent` host authority. Tests pass a mock host agent exposing
  *   `lookup` and `provideMount`.
  * @param {Promise<object> | object | undefined} context - The daemon

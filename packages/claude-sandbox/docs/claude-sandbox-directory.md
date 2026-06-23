@@ -21,7 +21,7 @@ Below is each object and **what authority sharing it grants**.
   (often via `sudo`). **High authority over the host kernel — host TCB, never
   share off-host.**
 
-## Rule of thumb
+## Guiding principle
 
 Delegate only **`controller`**. Everything else is host trusted compute base.
 The credentials factory lives on the **peer**, not here (its own

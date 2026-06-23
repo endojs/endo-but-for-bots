@@ -635,3 +635,63 @@ naming them on the host first) would remove even that — the factory would endo
 the caps it was handed directly. That is the bring-your-own-caps boundary the
 package already targets; wiring `createSession(config, { filesystem, credentials })`
 through to the `evaluate` endowments is the natural next step.
+
+### 9. Credential exposure through the sandbox environment
+
+Where the secret goes, and what can read it.
+
+At spawn time `claude-client-module.js` materialises the credential and injects
+it as a process environment variable into the container:
+
+```
+kind = await E(credCap).kind()            // 'apiKey' | 'oauthToken'
+issued = await E(credCap).issue(sessionId)
+credentialEnv[ANTHROPIC_API_KEY|CLAUDE_CODE_OAUTH_TOKEN] = await E(issued).materialise()
+E(sandboxFactory).make({ env: credentialEnv, … })   // → container env
+```
+
+So inside the slice `claude` runs with the secret in its environment.
+The risk to reason about is **exfiltration by the very agent the sandbox is
+running**: `claude` executes model-directed work — Bash tool calls, MCP
+servers, hooks, subprocesses — and a child process **inherits the parent's
+environment by default**.
+A prompt-injected or adversarial turn can therefore attempt to read the secret
+(`echo $ANTHROPIC_API_KEY`, read `/proc/self/environ`, etc.) and ship it
+somewhere.
+
+**Do not rely on `claude` masking the variable from tool subprocesses.**
+We have *not* validated that Claude Code strips `ANTHROPIC_API_KEY` /
+`CLAUDE_CODE_OAUTH_TOKEN` from the environment of commands it runs through tool
+calls, and the security of this package **must not depend on it** (it is a
+defense-in-depth nicety at best, applied by code inside the sandbox — the thing
+we are confining).
+Treat the secret as **reachable by any code the agent runs**.
+*(Open item: confirm Claude Code's actual env-masking behaviour for tool
+subprocesses and record it here; until then assume "not masked".)*
+
+The containment therefore lives at the **sandbox boundary**, not in the agent:
+
+- **Network egress is the primary control.** A secret that can be *read* but
+  not *sent* is contained. The `network` profile decides this:
+  `none` / `private` give the container no route to the internet, so a leaked
+  key cannot leave; `host-loopback` / `host-lan` / `host-net` progressively
+  open egress and **weaken this guarantee** — use them only with a credential
+  you are willing to expose to anything reachable on that network. Default to
+  `none` or `private` for untrusted workloads.
+- **Short-lived, revocable secrets.** The credential cap mints a **per-session**
+  secret (`issue(sessionId)` → `materialise()`) and supports `revoke(sessionId)`;
+  the long-lived auth never leaves the **peer** (`setup-peer.js`), so the host
+  only ever holds a short-lived materialised token, and the client revokes the
+  grant on teardown / provisioning failure. Prefer `oauthToken` (short TTL,
+  revocable) over a raw `apiKey` where the account supports it.
+- **The secret is env-only, not workspace-persisted.** It is never written to
+  the 9P-mounted `Filesystem`, so it does not survive in the peer's workspace —
+  **unless the agent itself writes it there**. An agent that copies the key into
+  a workspace file persists it into the peer's `Filesystem` cap; nothing in the
+  sandbox prevents that, which is a further reason egress control + revocation,
+  not in-container masking, are the real boundary.
+
+Net: the credential is exposed to the agent's own execution by construction;
+the package's job is to make that exposure **cheap to contain** (no-egress
+network + short-lived revocable secret + peer-held long-lived auth), not to
+hide the secret from the code running inside the box.
