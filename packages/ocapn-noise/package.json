@@ -25,6 +25,10 @@
       "node": "./src/transports/tcp.js",
       "default": "./src/transports/tcp.js"
     },
+    "./transport/iroh": {
+      "node": "./src/transports/iroh.js",
+      "default": "./src/transports/iroh.js"
+    },
     "./transport/ws": {
       "node": "./src/transports/ws-node.js",
       "default": "./src/transports/ws-node.js"
@@ -74,6 +78,9 @@
     "tsd": "catalog:dev",
     "typescript": "catalog:dev",
     "ws": "^8.13.0"
+  },
+  "optionalDependencies": {
+    "@number0/iroh": "1.0.0"
   },
   "files": [
     "./*.d.ts",

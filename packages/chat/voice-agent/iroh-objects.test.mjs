@@ -1,8 +1,10 @@
-// iroh-objects.test.mjs — the `objects` power must handle endo-iroh / ocapn (dial-by-pubkey) references
-// gracefully. A non-HTTP invite has no HTTP origin; `new URL('iroh://…').origin` is the STRING "null", which
-// used to be stored and then dialed as fetch("null/rpc") → "Failed to parse URL from null/rpc". Now such a
-// ref is held but flagged not-callable, and callObject (incl. a legacy origin:"null" entry) fails legibly
-// instead of hitting a garbage URL or silently calling our own /rpc with a foreign swissnum.
+// iroh-objects.test.mjs — the `objects` power handles endo-iroh / ocapn (dial-by-pubkey) references.
+// An iroh ref is now CALLABLE: callObject() dials it over the iroh QUIC transport (no host:port) under
+// the unchanged CapTP/ocap layer (see iroh-objects.mjs / ocapn-noise/src/iroh-dialer.js; the round-trip
+// is proven in ocapn-noise/test/iroh-dialer.test.js against a live stand-in service). When the callee is
+// unreachable (a fake EndpointId, as here), the dial fails LEGIBLY ("couldn't reach … over iroh") — never
+// the old cryptic fetch("null/rpc") → "Failed to parse URL from null/rpc". A legacy origin:"null" entry
+// (the exact pre-fix Kumavis case on disk) also fails legibly rather than hitting a garbage URL.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -21,7 +23,7 @@ const mkAgent = objectsSeed => {
   return makeFieldAgent({ outDir, baseUrl: 'http://test.invalid' });
 };
 
-test('accepting an endo-iroh invite holds it but marks it not-callable; callObject fails legibly (not null/rpc)', async () => {
+test('accepting an endo-iroh invite holds it AND marks it callable; callObject dials it (legible failure if unreachable, never null/rpc)', async () => {
   const fa = mkAgent();
   const { toolbox } = fa.rootNode.toolbox();
   const p = await toolbox.proposeAcceptInvite.run({ link: `iroh://kumavisnode123/permissions#cap=${SWISS}`, name: 'Kumavis', description: 'permission mgmt' });
@@ -32,11 +34,14 @@ test('accepting an endo-iroh invite holds it but marks it not-callable; callObje
   const k = list.objects.find(o => o.name === 'Kumavis');
   assert.ok(k, 'Kumavis is in the inventory');
   assert.equal(k.transport, 'iroh', 'flagged as an iroh transport');
-  assert.equal(k.callable, false, 'marked NOT callable');
+  assert.equal(k.callable, true, 'now marked CALLABLE (the iroh transport is wired in)');
 
+  // The EndpointId here is a placeholder, so the dial cannot reach a real
+  // peer — but it must fail LEGIBLY (an iroh dial error), never the cryptic
+  // fetch("null/rpc") path, and never silently hit our own /rpc.
   const r = await toolbox.callObject.run({ name: 'Kumavis', method: 'hello', args: [] });
-  assert.equal(r.ok, false, 'callObject refuses');
-  assert.match(r.error, /iroh|dial-by-pubkey|not wired/i, 'with a legible reason');
+  assert.equal(r.ok, false, 'an unreachable iroh peer fails');
+  assert.match(r.error, /iroh/i, 'with a legible iroh reason');
   assert.doesNotMatch(r.error, /null\/rpc|Failed to parse URL/, 'NOT the cryptic null/rpc error');
 });
 

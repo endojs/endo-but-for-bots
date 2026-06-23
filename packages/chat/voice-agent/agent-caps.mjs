@@ -44,6 +44,7 @@ import { makeSelfImprover } from './self-improver.mjs';
 import { listBacklog, addBacklog, nextOpen, recordOutcome } from './improvement-backlog.mjs';
 import { runAgent } from '../../ocapn-noise/tool-bridge.mjs';
 import { runAgentCode } from '../../ocapn-noise/codemode.mjs';
+import { dialIrohObject } from './iroh-objects.mjs';
 // Sub-agents (scheduled, specialists, employed roles) run the composable-code harness (CEO-Bench: it
 // beats per-tool calls + specialized harnesses) by default. AGENT_CODEMODE=0 reverts to the classic loop.
 const AGENT_RUNNER = process.env.AGENT_CODEMODE === '0' ? runAgent : runAgentCode;
@@ -748,6 +749,9 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
   // An accepted object is HTTP-callable iff it has no non-HTTP transport AND its origin is same-instance ('')
   // or a real http(s) origin (NOT the legacy stored string "null"). iroh/ocapn refs are held but not callable.
   const isHttpCallable = o => (!o.transport || o.transport === 'http') && (!o.origin || o.origin === '(this instance)' || /^https?:\/\//.test(String(o.origin)));
+  // An iroh ref is dialable iff it carries an iroh transport AND a real iroh://… address. (A LEGACY
+  // origin:"null" record with no transport/address is NOT a real iroh ref — it stays not-callable.)
+  const isIrohCallable = o => o.transport === 'iroh' && /^iroh:\/\//i.test(String(o.address || ''));
   const specSlug = name => `spec-${String(name || 'x').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 32) || 'x'}`;
   const findSpecialist = ref => { const r = String(ref || ''); return specialists.find(s => s.id === r || s.id === specSlug(r) || s.name.toLowerCase() === r.toLowerCase()); };
   const specNodes = new Map(); // id → its agent-node (built lazily / at boot)
@@ -773,21 +777,37 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
         return propose({ type: 'accept-invite', power: 'objects', agent, title: `Accept invite → "${nm}"`, summary: `from ${whence}`,
           detail: { name: nm, origin: whence, description: String(description || '') }, // cap-hygiene: NO swissnum in the detail shown to the LLM/DOM
           commit: async () => {
-            const d = await rpcCall(parsed.origin, parsed.swissnum, 'describe', []); // (no-op for a non-HTTP ref — returns a legible error; methods stay [])
+            // Discover methods at accept-time. iroh refs dial over the iroh
+            // transport; HTTP refs use /rpc. (An iroh ref has origin:'' — it
+            // must NOT fall through to rpcCall, which would hit our OWN /rpc
+            // with a foreign swissnum.) Best-effort: methods stay [] if the
+            // peer is unreachable; the ref is still accepted and callable.
+            let d;
+            if (parsed.transport === 'iroh') {
+              const r = await dialIrohObject({ address: parsed.address, swissnum: parsed.swissnum, method: 'describe', args: [] });
+              d = r.ok ? r.value : { error: r.error };
+            } else {
+              d = await rpcCall(parsed.origin, parsed.swissnum, 'describe', []);
+            }
             const methods = (d && Array.isArray(d.methods)) ? d.methods : (Array.isArray(d) ? d : []);
             acceptedObjects = acceptedObjects.filter(x => x.name !== nm).concat([{ name: nm, origin: parsed.origin, transport: parsed.transport || '', address: parsed.address || '', swissnum: parsed.swissnum, description: String(description || ''), methods, addedAt: new Date().toISOString(), by: agent }]);
             saveAcceptedObjects();
             return { ok: true, name: nm, methods, transport: parsed.transport || 'http' };
           } });
       } },
-    listObjects: { reversible: false, args: {}, description: 'List the objects in your inventory (accepted Endo invites): name, where each is from, what it does, its methods, and its transport (http = callable now; iroh/ocapn = held but not yet callable). Call one with callObject.',
-      run: async () => ({ ok: true, objects: acceptedObjects.map(o => { const tp = isHttpCallable(o) ? 'http' : (o.transport || (o.origin && o.origin !== 'null' ? 'http' : 'iroh')); return { name: o.name, origin: o.origin && o.origin !== 'null' ? o.origin : '(this instance)', transport: tp, callable: tp === 'http', description: o.description || '', methods: o.methods || [] }; }) }) },
+    listObjects: { reversible: false, args: {}, description: 'List the objects in your inventory (accepted Endo invites): name, where each is from, what it does, its methods, and its transport (http and iroh are both callable; iroh = dial-by-pubkey over QUIC). Call one with callObject.',
+      run: async () => ({ ok: true, objects: acceptedObjects.map(o => { const tp = isHttpCallable(o) ? 'http' : (o.transport || (o.origin && o.origin !== 'null' ? 'http' : 'iroh')); return { name: o.name, origin: o.origin && o.origin !== 'null' ? o.origin : '(this instance)', transport: tp, callable: isHttpCallable(o) || isIrohCallable(o), description: o.description || '', methods: o.methods || [] }; }) }) },
     callObject: { reversible: false, args: { name: 'string — an object name from listObjects', method: 'string — the method to call (use "describe" to discover its methods)', args: 'array — arguments' },
-      description: 'Call a method on an object in your inventory (an accepted Endo capability). The held swissnum is used host-side; never shown. Note: iroh/ocapn (dial-by-pubkey) references are NOT callable yet — that transport is not wired in.',
+      description: 'Call a method on an object in your inventory (an accepted Endo capability). The held swissnum is used host-side; never shown. HTTP-origin objects are called over /rpc; endo-iroh (dial-by-pubkey) references are dialed over the iroh QUIC transport under the same CapTP/ocap layer.',
       run: async ({ name, method, args } = {}) => {
         const o = acceptedObjects.find(x => x.name === String(name || ''));
         if (!o) return { ok: false, error: `no object named "${name}" — see listObjects` };
-        if (!isHttpCallable(o)) return { ok: false, error: `"${o.name}" is an endo-${o.transport || 'iroh'} reference (dial-by-pubkey). It's in your inventory, but the objects power can only CALL HTTP-origin Endo objects via /rpc today — the ${o.transport || 'iroh'} transport isn't wired into this app yet, so I can't reach it. Once the Iroh transport lands it'll work (you may need to re-accept the invite so its dial address is captured).` };
+        // iroh (dial-by-pubkey) ref → dial over the iroh QUIC transport.
+        if (isIrohCallable(o)) {
+          const r = await dialIrohObject({ address: o.address, swissnum: o.swissnum, method: String(method || 'describe'), args: Array.isArray(args) ? args : (args == null ? [] : [args]) });
+          return r.ok ? { ok: true, value: r.value } : { ok: false, error: `couldn't reach "${o.name}" over iroh: ${r.error}` };
+        }
+        if (!isHttpCallable(o)) return { ok: false, error: `"${o.name}" is not callable: it has no HTTP origin and no dialable iroh:// address (transport=${o.transport || 'none'}). Re-accept the invite so its dial address is captured.` };
         return { ok: true, value: await rpcCall(o.origin, o.swissnum, method, args) };
       } },
     // ⚠️ self-improvement: implement on an isolated worktree → independently verify → (flag-gated) auto-merge.
