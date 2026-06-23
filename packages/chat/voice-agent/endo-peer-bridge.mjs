@@ -124,7 +124,15 @@ export const ensurePeerDaemon = async () => {
 export const acceptInvitation = async (locator, name) => {
   const { E } = await loadLib();
   const host = await ensureHost();
-  await withRetry(() => E(host).accept(String(locator), String(name)));
+  // Endo invitations are ONE-SHOT (the inviter cancels the formula on the first successful accept). So retry
+  // SPARINGLY — a couple of tries to ride a transient connection flake, but not so many that we keep hammering
+  // a peer/invite that's genuinely gone. On failure, give an ACTIONABLE message (the cryptic "iroh stream
+  // closed" alone reads as a bug; usually it's a spent invite or an offline peer).
+  try {
+    await withRetry(() => E(host).accept(String(locator), String(name)), 2);
+  } catch (e) {
+    throw new Error(`couldn't complete the redemption (${e.message}). Endo invitations are ONE-SHOT: if an earlier accept already went through, this invite is spent — ask the peer for a fresh invite. Otherwise the peer may be offline or unreachable right now.`);
+  }
   const info = await E(host).getPeerInfo().catch(() => ({}));
   return { ok: true, name: String(name), selfNode: info.node };
 };

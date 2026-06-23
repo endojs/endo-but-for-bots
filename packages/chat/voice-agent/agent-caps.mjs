@@ -787,6 +787,9 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
         // lifecycle is proven reliable — flip FIELD_AGENT_PEER_REDEMPTION=1 once the gated e2e is green. Until
         // then a type=invitation link reports cleanly (terminal, no daemon spawn, no loop) instead of flaking.
         if (/type=invitation/i.test(String(link)) && !peerRedemption) return { ok: false, terminal: true, error: `"${String(name || 'this').trim()}" is an Endo daemon invitation. Redeeming it over iroh+captp0 is implemented but not yet ENABLED on this instance (a final iroh-netlayer reliability fix is landing). I can't connect to this peer yet — I'll be able to shortly. This is FINAL: report it and stop, don't retry.` };
+        // Pre-WARM the peer-daemon sidecar while the owner reads the proposal, so the actual redemption on
+        // Confirm dials from an already-up (relay-connected) sidecar rather than cold. Fire-and-forget.
+        if (/type=invitation/i.test(String(link))) { try { peerBridge.ensurePeerDaemon().catch(() => {}); } catch { /* best-effort warm-up */ } }
         const nm = String(name || '').trim() || 'new object';
         const whence = parsed.origin || (parsed.transport ? `${parsed.transport} (${parsed.address})` : 'this instance');
         return propose({ type: 'accept-invite', power: 'objects', agent, title: `Accept invite → "${nm}"`, summary: `from ${whence}`,
@@ -798,8 +801,8 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
             // transport 'endo-peer' and called with send/inbox via callObject.
             if (/type=invitation/i.test(String(link))) {
               let acc;
-              try { acc = await peerBridge.acceptInvitation(link, nm); } catch (e) { throw new Error(`could not reach "${nm}" to redeem the invitation over iroh: ${e.message}`); }
-              if (!acc || !acc.ok) throw new Error(`could not reach "${nm}" to redeem the invitation over iroh`);
+              try { acc = await peerBridge.acceptInvitation(link, nm); } catch (e) { throw new Error(`couldn't redeem "${nm}": ${e.message}`); }
+              if (!acc || !acc.ok) throw new Error(`couldn't redeem "${nm}" — the peer-daemon did not confirm the accept`);
               acceptedObjects = acceptedObjects.filter(x => x.name !== nm).concat([{ name: nm, origin: '', transport: 'endo-peer', address: String(link), swissnum: parsed.swissnum, description: String(description || ''), methods: ['send', 'inbox', 'describe'], peer: true, addedAt: new Date().toISOString(), by: agent }]);
               saveAcceptedObjects();
               return { ok: true, name: nm, transport: 'endo-peer', peer: true, methods: ['send', 'inbox', 'describe'] };

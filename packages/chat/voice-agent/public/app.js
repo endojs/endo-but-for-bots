@@ -182,7 +182,7 @@ const renderProposal = p => {
       const rem = r.remembered ? " · won't ask again for this" : '';
       resolved = `✓ ${path === '/confirm' ? 'confirmed' : 'rejected'}${extra}${rem}`;
       if (path === '/confirm') speak('Done.');
-    } else { resolved = ''; setStatus('proposal: ' + (r.error || 'failed')); }
+    } else { resolved = `⚠ ${r.error || 'failed'}`; setStatus('proposal: ' + (r.error || 'failed')); } // show WHY in the card, don't silently re-flash the buttons
     draw();
   };
   draw(); window.scrollTo(0, document.body.scrollHeight);
@@ -1033,8 +1033,9 @@ const startMic = async () => {
     const src = audioCtx.createMediaStreamSource(mediaStream);
     analyser = audioCtx.createAnalyser(); analyser.fftSize = 1024; src.connect(analyser);
     on = true; setMic('listening'); document.body.classList.add('voice-live'); setStatus('🎤 voice on — just talk (you can talk over me). Tap the mic to stop.'); tick();
-    // show the trace octahedron AS the listening indicator (one continuous identity); feedOrb pulses it
-    ensurePendant().then(() => { if (pendantWrap) { pendantWrap.classList.remove('hide'); pendant.setVisible(true); } schedulePendantPosition(); }).catch(() => {});
+    // The 3D trace is reserved for ACTIVE WORK only (a running turn / permissioning) — NOT for idle listening.
+    // Pre-create it so a turn starts instantly, but leave it HIDDEN; pendantBegin reveals it when work starts.
+    ensurePendant().catch(() => {});
   } catch (e) { setStatus('mic error: ' + e.message); }
 };
 const stopMic = () => { on = false; capturing = false; turn += 1; try { rec?.state !== 'inactive' && rec.stop(); } catch {}; try { speechSynthesis.cancel(); } catch {}; mediaStream?.getTracks().forEach(t => t.stop()); audioCtx?.close(); setMic(''); document.body.classList.remove('voice-live'); setStatus(''); if (pendant) pendant.setListen(-1); schedulePendantPosition(); };
