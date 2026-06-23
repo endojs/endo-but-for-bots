@@ -559,3 +559,94 @@ test.serial(
     );
   },
 );
+
+// End-to-end peer flow through the factory: a remote peer sends a
+// session-request *package* (its Filesystem cap + a JSON config) to the host;
+// the factory's host-mailbox loop adopts the cap, formulates a session, and
+// replies with the ClaudeClient cap, which the peer adopts and drives. This is
+// the cross-peer path the send/adopt rewrite exists for — the peer never
+// passes a cap as a bare argument, and the host never resolves a peer name.
+test.serial(
+  'a remote peer creates a session by sending a workspace package to the factory',
+  async t => {
+    t.timeout(120_000);
+    const { host } = await prepareNetworkedHost(t, 'pkg-host');
+    const { host: peer } = await prepareNetworkedHost(t, 'pkg-peer');
+
+    await E(host).addPeerInfo(await E(peer).getPeerInfo());
+    await E(peer).addPeerInfo(await E(host).getPeerInfo());
+
+    // The workspace Filesystem lives on the peer.
+    const peerWorkspace = path.join(dirname, 'tmp', 'pkg-peer', 'workspace');
+    mkdirSync(peerWorkspace, { recursive: true });
+    await E(peer).makeUnconfined('@main', nodeFsModuleHref, {
+      resultName: 'project-fs',
+      env: harden({ ENDO_FS_ROOT: peerWorkspace }),
+    });
+
+    // Provision the factory on the host; its session-request loop watches the
+    // host mailbox.
+    await provisionFactory(host);
+    await provisionSandboxDeps(host);
+
+    // Mailbox relationship: the peer (sender) invites, the host (recipient)
+    // accepts. Now the peer can `send` packages to the host.
+    const invitation = await E(peer).invite('sandbox-host');
+    const invitationLocator = await E(invitation).locate();
+    await E(host).accept(invitationLocator, 'remote-peer');
+
+    // The peer sends its Filesystem cap + a JSON config as a package.
+    await E(peer).send(
+      'sandbox-host',
+      [
+        JSON.stringify({
+          name: 'pkg-1',
+          rootfs: 'oci:docker.io/library/alpine:3.19',
+          network: 'private',
+        }),
+      ],
+      ['filesystem'],
+      ['project-fs'],
+    );
+
+    // The factory replies with a package carrying the `client` edge. Poll the
+    // peer inbox for it.
+    const findReply = async () => {
+      const messages = /** @type {any[]} */ (await E(peer).listMessages());
+      return messages.find(
+        m => m.type === 'package' && (m.names || []).includes('client'),
+      );
+    };
+    let reply;
+    const deadline = Date.now() + 30_000;
+    while (Date.now() < deadline) {
+      // eslint-disable-next-line no-await-in-loop
+      reply = await findReply();
+      if (reply) break;
+      // eslint-disable-next-line no-await-in-loop
+      await new Promise(resolve => setTimeout(resolve, 250));
+    }
+    t.truthy(reply, 'factory replied with a client package');
+
+    // Adopt the client and drive it across the mesh.
+    await E(peer).adopt(reply.number, 'client', ['remote-client']);
+    const client = await E(peer).lookup(['remote-client']);
+    const status = await E(client).status();
+    t.regex(status.sessionId, /^pkg-1-/, 'session id derives from the name');
+    t.is(status.terminated, false);
+
+    // The session is host-rooted under the factory directory (the reply
+    // attaches by name), using a factory-minted leaf — not the peer's raw name.
+    const sessions = await E(host).list('claude-sandbox');
+    t.true(
+      sessions.some(n => n.startsWith('session-pkg-1-')),
+      `host-rooted session present under claude-sandbox/; saw: ${sessions.join(', ')}`,
+    );
+    // No per-session endowment residue (the adopted temp names were removed).
+    const hostRoot = await E(host).list();
+    t.false(
+      hostRoot.some(n => n.endsWith('-fscap') || n.endsWith('-powers')),
+      `no endowment residue at host root; saw: ${hostRoot.join(', ')}`,
+    );
+  },
+);
