@@ -2468,9 +2468,17 @@ const componentSelect = () => {
   addEventListener('keydown', e => { if ((e.key === 'Alt' || e.altKey) && isRoot) setAlt(true); });
   addEventListener('keyup', e => { if (e.key === 'Alt' || !e.altKey) setAlt(false); });
   addEventListener('blur', () => setAlt(false)); // alt-tab / focus loss → never leave iframes disabled
-  addEventListener('mousemove', e => { if (!altHeld) return; const el = tagOf(e.target); if (el !== hoverEl) { hoverEl = el; place(el); } else if (el) place(el); });
+  // Drive selection off EACH event's own altKey, not just a captured Alt keydown. The keydown frequently never
+  // reaches the window — focus sits inside a sandboxed component iframe, or the OS/browser swallows Alt — which
+  // is why holding Alt did nothing. mousemove/click both carry altKey regardless of focus, so any Alt-move
+  // engages select mode (which disables the iframes' pointer-events, letting the rest of the gesture land).
+  addEventListener('mousemove', e => {
+    if (!isRoot) return;
+    if (e.altKey) { if (!altHeld) setAlt(true); const el = tagOf(e.target); if (el !== hoverEl) { hoverEl = el; place(el); } else if (el) place(el); }
+    else if (altHeld) setAlt(false);
+  }, true);
   addEventListener('click', e => {
-    if (!altHeld) return; const el = tagOf(e.target); if (!el) return;
+    if (!isRoot || !e.altKey) return; const el = tagOf(e.target); if (!el) return;
     e.preventDefault(); e.stopPropagation();
     const id = el.getAttribute('data-component-id'); const name = el.getAttribute('data-component-name') || 'component'; const spec = el.__componentSpec;
     const r = el.getBoundingClientRect();
