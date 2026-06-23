@@ -1357,6 +1357,7 @@ const loadSeedChats = async () => {
     let seen; try { seen = new Set(JSON.parse(localStorage.getItem(SEEDED_KEY) || '[]')); } catch { seen = new Set(); }
     let added = false;
     for (const s of seeds.slice().reverse()) { // oldest first → newest ends up on top
+      if (s.source === 'scheduled') { seen.add(s.id); continue; } // ⏰ timer-agent runs stay out of the sidebar (kept in seedChats, viewable per-agent, GC'd after a week)
       if (seen.has(s.id) || chats.some(c => c.id === s.id)) { seen.add(s.id); continue; }
       chats.unshift({ id: s.id, title: s.title || 'voice note', ts: s.ts || Date.now() });
       try { localStorage.setItem(txKey(s.id), JSON.stringify(s.tx || [])); } catch {}
@@ -1761,10 +1762,15 @@ const renderChatList = () => {
 };
 // ONE recency-sorted list (voice memos are provenance, marked 🎙, not a category). Filtered by the
 // search box + paginated to chatShowN with a "show more" — so nothing is ever hidden permanently.
+const scheduledSeedIds = () => new Set(seedChats.filter(s => s.source === 'scheduled').map(s => s.id));
 const renderChatItems = () => {
   const box = $('chat-items'); if (!box) return;
+  // Scheduled-agent runs (⏰ timer chats) are kept OUT of the sidebar — too noisy. They live in seedChats,
+  // are openable via the project/feed deep-link, and GC server-side after a week. Filter both newly-arrived
+  // and any already-adopted ones (older clients folded them into `chats`).
+  const sched = scheduledSeedIds();
   const all = [
-    ...chats.map(c => ({ id: c.id, title: c.title || 'New chat', ts: c.ts || 0, voice: false, shared: !!(c.shared && c.shareToken), shareMode: c.shareMode })),
+    ...chats.filter(c => !sched.has(c.id)).map(c => ({ id: c.id, title: c.title || 'New chat', ts: c.ts || 0, voice: false, shared: !!(c.shared && c.shareToken), shareMode: c.shareMode })),
     ...memoRuns.map(r => ({ id: r.id, title: r.title || 'voice note', ts: Date.parse(r.date) || 0, voice: true })),
   ].sort((a, b) => b.ts - a.ts);
   const f = chatFilter.trim().toLowerCase();
@@ -1886,6 +1892,9 @@ $('scrim').onclick = closeDrawer;
 const startNewChat = () => { newChat(); const i = $('text'); if (i) i.focus(); };
 $('new-chat').onclick = startNewChat;
 $('new-chat-top').onclick = startNewChat;
+// 🗑️ throw away the CURRENT chat (deleteChat handles switching away + tombstoning so it won't re-adopt).
+const trashCurrentChat = () => { if (!sessionId) return; const c = curChatObj(); const name = (c && c.title && c.title !== 'New chat') ? `"${c.title}"` : 'this chat'; if (window.confirm(`Throw away ${name}? This can't be undone.`)) deleteChat(sessionId); };
+if ($('trash-chat-top')) $('trash-chat-top').onclick = trashCurrentChat;
 document.addEventListener('keydown', e => {
   if ((e.metaKey || e.ctrlKey) && e.shiftKey && (e.key === 'o' || e.key === 'O')) { e.preventDefault(); startNewChat(); }
 });

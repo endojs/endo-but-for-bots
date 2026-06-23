@@ -248,7 +248,10 @@ const enqueueReply = ({ doc = '', label = '', title = '', prompt = '' }) => {
   fs.writeFileSync(tmp, JSON.stringify(q, null, 2)); fs.renameSync(tmp, INPUT_QUEUE);
 };
 const SEED_CHATS_FILE = `${HOME}/.local/state/voice-agent/seed-chats.json`;
-const readSeedChats = async () => { try { return (JSON.parse(await fs.promises.readFile(SEED_CHATS_FILE, 'utf8')).chats) || []; } catch { return []; } };
+const SCHEDULED_SEED_TTL_MS = 7 * 24 * 60 * 60 * 1000; // ⏰ scheduled-agent runs are ephemeral — GC after a week
+// readSeedChats GC's expired scheduled runs from the RETURNED view; since writeSeedChats's caller does a
+// read→unshift→write, the next scheduled run also prunes them from the file. Non-scheduled seeds are kept.
+const readSeedChats = async () => { try { const all = (JSON.parse(await fs.promises.readFile(SEED_CHATS_FILE, 'utf8')).chats) || []; const cutoff = Date.now() - SCHEDULED_SEED_TTL_MS; return all.filter(c => !(c && c.source === 'scheduled' && (c.ts || 0) < cutoff)); } catch { return []; } };
 const writeSeedChats = async chats => { await fs.promises.mkdir(path.dirname(SEED_CHATS_FILE), { recursive: true }); await fs.promises.writeFile(SEED_CHATS_FILE, JSON.stringify({ chats: chats.slice(0, 80) }, null, 2)); };
 
 // the field agent's window onto the app's OWN stateful aspects (every conversation +
