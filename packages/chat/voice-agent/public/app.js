@@ -1679,14 +1679,39 @@ const pageFork = (uIx, delta) => {
   if (forkPage(activeTx, uIx, delta)) { saveTx(); renderTx(); }
 };
 // edit + retry: the edited prompt rides on a NEW fork (the base prompt + every fork stays recoverable).
-const editPrompt = uIx => { if (busy) { setStatus('finish the current turn first'); return; } const m = activeTx[uIx]; if (!m) return; const edited = window.prompt('Edit the message, then retry (forks the conversation from here):', m.text || ''); if (edited == null || !edited.trim()) return; runRetry(uIx, edited.trim()); };
+// Edit a prompt INLINE inside its bubble (no browser prompt()): the bubble becomes a textarea prefilled with
+// the message; Enter (or ✓) saves + retries from here (forks), Shift+Enter = newline, Esc (or ✕) cancels.
+// runRetry → renderTx rebuilds the transcript, so the editor is ephemeral; cancel just re-renders the bubble.
+const editPrompt = (uIx, bodyEl) => {
+  if (busy) { setStatus('finish the current turn first'); return; }
+  const m = activeTx[uIx]; if (!m) return;
+  const host = bodyEl || (log.querySelectorAll('.msg.user')[uIx]);
+  if (!host || host.querySelector('.msg-edit')) return; // no host, or already editing
+  const orig = m.text || '';
+  host.innerHTML = '';
+  const ta = document.createElement('textarea');
+  ta.className = 'msg-edit';
+  ta.value = orig;
+  ta.setAttribute('style', 'width:100%;box-sizing:border-box;font:inherit;color:inherit;background:rgba(0,0,0,.18);border:1px solid var(--acc,#7c5cff);border-radius:8px;padding:7px 9px;resize:none;overflow:hidden;line-height:1.4');
+  const bar = document.createElement('div');
+  bar.setAttribute('style', 'display:flex;gap:6px;justify-content:flex-end;margin-top:6px');
+  const mkb = (label, title, fn) => { const b = document.createElement('button'); b.className = 'mc-btn'; b.textContent = label; b.title = title; b.onclick = fn; return b; };
+  const grow = () => { ta.style.height = 'auto'; ta.style.height = `${Math.min(360, ta.scrollHeight)}px`; };
+  const cancel = () => renderTx(); // rebuild → restores the original bubble
+  const commit = () => { const v = ta.value.trim(); if (!v) { setStatus('empty — edit cancelled'); return cancel(); } runRetry(uIx, v); };
+  bar.append(mkb('✕ Cancel', 'Discard the edit (Esc)', cancel), mkb('✓ Save & retry', 'Retry with this edited prompt (Enter)', commit));
+  host.append(ta, bar);
+  ta.oninput = grow; grow();
+  ta.onkeydown = e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); commit(); } else if (e.key === 'Escape') { e.preventDefault(); cancel(); } };
+  ta.focus(); ta.setSelectionRange(orig.length, orig.length);
+};
 // the retry / edit / audio + fork-pager controls, rendered INSIDE the user prompt bubble they act on.
 const userBubbleControls = (uIx, m, bodyEl) => {
   const fc = forkCount(m), fi = forkIndex(m);
   const row = document.createElement('div'); row.className = 'msg-ctrl';
   const mk = (label, title, fn) => { const b = document.createElement('button'); b.className = 'mc-btn'; b.textContent = label; b.title = title; b.onclick = fn; return b; };
   row.appendChild(mk('↻', 'Retry this prompt — clears everything below + forks a new branch from here', () => runRetry(uIx, m.text || '')));
-  row.appendChild(mk('✎', 'Edit + retry this prompt (forks from here)', () => editPrompt(uIx)));
+  row.appendChild(mk('✎', 'Edit + retry this prompt (forks from here)', () => editPrompt(uIx, bodyEl)));
   if (m.audio) row.appendChild(mk('🔊', 'Play the original audio', () => { try { new Audio(m.audio).play(); } catch { /* */ } }));
   if (fc > 1) {
     const nav = document.createElement('span'); nav.className = 'mc-nav';
