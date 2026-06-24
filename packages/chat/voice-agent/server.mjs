@@ -1077,7 +1077,10 @@ const handler = async (req, res) => {
       // the turn's purse + a `charge` that paid connectors (Phase 4) debit market-rate+commission from.
       const purse = purseFor(cap, sid);
       const charge = uusd => { const amt = Math.max(0, Math.round(Number(uusd) || 0)); if (!amt) return true; if (!purse.canAfford(amt)) return false; purse.debit(amt); return true; };
-      let { toolbox, manifest } = runNode.toolbox({ chatId: sid, userText: t, emit: ev => emitStep(sid, ev), app: boundApp, homeSubkey: chatProject ? chatProject.homeSubkey : null, charge }); // chatId → deep-links; userText → delegates/specialists carry the originating request; emit → pendant stream; app → root state; homeSubkey → project folder; charge → paid-connector billing
+      // prepaid inference toll-bridge for THIS turn: ONE perProvider ledger, threaded into the
+      // toolbox ctx so the DELEGATED (Opus) path can be metered against the SAME chat purse as callLLM.
+      const perProvider = {};
+      let { toolbox, manifest } = runNode.toolbox({ chatId: sid, userText: t, emit: ev => emitStep(sid, ev), app: boundApp, homeSubkey: chatProject ? chatProject.homeSubkey : null, charge, purse, perProvider }); // chatId → deep-links; userText → delegates/specialists carry the originating request; emit → pendant stream; app → root state; homeSubkey → project folder; charge → paid-connector billing
       // ONE classifier pass (dan), TWO axes: scope (simple→can't delegate) + format (rich→prefer a widget).
       const cls = t ? await classifyTurn(t) : { simple: false, rich: false };
       // STRUCTURAL no-delegate-for-simple-reads guard: a simple turn can't delegate/spawn even at full power.
@@ -1104,7 +1107,7 @@ const handler = async (req, res) => {
       const steps = []; // ordered tool calls this turn; delegateTask nests its sub-agent's tools (sub-branch trees)
       log('chat:', JSON.stringify(t).slice(0, 80), '| powers:', [...runNode.powers].join(','), agent && agent !== 'field-agent' ? `| as:${agent}` : '', agentAttachments.length ? `| +${agentAttachments.length} attachment(s)` : '');
       // prepaid inference toll-bridge: meter THIS chat's purse; show the agent its budget in-context.
-      const perProvider = {};
+      // (perProvider was declared above so the delegate path and callLLM share one ledger.)
       const meteredLLM = makeMeteredLLM({ callLLM, purse, perProvider });
       const TURN_DEADLINE_MS = Number(process.env.TURN_DEADLINE_MS) || 360000; // hard per-turn limit → a LEGIBLE timeout, never a silent stall (the crowdsupply hang)
       let deadlineHit = false; let deadlineT = null;

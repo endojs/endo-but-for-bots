@@ -39,7 +39,7 @@ import { notify } from '../capture/notify.mjs';
 import { addTimer, cancelTimer, listTimers } from '../capture/timers.mjs';
 import { createProject, listProjects, addScheduledAgent, updateScheduledAgent, removeScheduledAgent, computeNextAt, projectForChat } from './projects.mjs';
 import { proposeSpawn } from '../capture/agent-spawn.mjs';
-import { runOpusDelegate } from './delegate.mjs';
+import { runOpusDelegate, makeMeteredOpusDelegate } from './delegate.mjs';
 import { makeSelfImprover } from './self-improver.mjs';
 import { listBacklog, addBacklog, nextOpen, recordOutcome, normalizeTestCmd, missingTargets } from './improvement-backlog.mjs';
 import { makeWandPolicy, DEFAULT_WAND_POLICY } from './wand-policy.mjs';
@@ -1368,7 +1368,11 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
           // Carry the ORIGINATING request into the delegate so its own record shows what led to it.
           const lead = ctx.userText ? `The user's original request that led to this delegation (context — keep it in mind):\n"${String(ctx.userText).slice(0, 1200)}"\n\nYour task:\n` : '';
           try {
-            const r = await runOpusDelegate({ prompt: lead + String(prompt || ''), toolbox: sub.toolbox, manifest: sub.manifest, grantedPowers: [...granted], signal: ac.signal });
+            // METERED Opus path: when the turn supplied a purse (ctx.purse), the delegated turn is
+            // billed against it EXACTLY like callLLM — refusing (throws INFERENCE_BUDGET_EXHAUSTED)
+            // before any paid Opus call when unfunded, and debiting the actual usage-priced cost after.
+            const runDelegate = makeMeteredOpusDelegate({ purse: ctx.purse, perProvider: ctx.perProvider });
+            const r = await runDelegate({ prompt: lead + String(prompt || ''), toolbox: sub.toolbox, manifest: sub.manifest, grantedPowers: [...granted], signal: ac.signal });
             // If the delegate BUILT + proposed any tools, RETURN them to the caller as data (not
             // injected into scope). They're pending dan's review; the caller learns one was made.
             const proposedTools = customToolsObj.pendingBy(subNode.id);
