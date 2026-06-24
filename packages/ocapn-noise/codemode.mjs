@@ -216,6 +216,11 @@ export const runAgentCode = async ({ toolbox, manifest, userText, history = [], 
       // means no forward progress → stop burning allowance, REPORT the last failure honestly.
       if (failStreak >= 4) { const answer = stallMessage(lastError); onStep({ kind: 'answer', text: answer }); return harden({ answer, toolsUsed: used, stalled: true }); }
     }
+    // TRAJECTORY CRITIC HOOK: after each program result, emit a lightweight non-control-flow event so
+    // observers can SCORE progress (e.g. detect a stalling trajectory) from the running counters —
+    // failStreak / repeatErr / lastError — WITHOUT altering the loop. Purely observational: ignore the
+    // return value; never let an onStep throw break the agent (the loop's own guards still decide control flow).
+    try { onStep({ kind: 'trajectory', failStreak, repeatErr, lastError }); } catch { /* observers must not break the loop */ }
     messages.push({ role: 'user', content: `OUTPUT:\n${parts.join('\n')}` });
   }
 };
