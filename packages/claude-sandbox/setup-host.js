@@ -13,7 +13,7 @@
 //   fs-mounter       — the `@endo/9p-server` mount caplet. `mount(2)` needs
 //                      `CAP_SYS_ADMIN`; pass `-E NINEP_SUDO=1` to route
 //                      mount/umount through `sudo` on an unprivileged daemon.
-//   controller       — the "Create Claude Sandbox" form/exo.
+//   service          — the factory caplet (mailbox/form loops; help() only).
 //   profile, handle  — the factory guest (agent + handle).
 //   readme           — describes the objects + sharing security
 //                      (`endo show claude-sandbox/readme`).
@@ -75,7 +75,7 @@ export const main = async hostAgent => {
     console.log(`Minted ${SANDBOX_DIR}/fs-mounter`);
   }
 
-  // 3. Claude sandbox factory (controller/profile/handle + readme). Pass
+  // 3. Claude sandbox factory (service/profile/handle + readme). Pass
   //    SANDBOX_DIR explicitly so setup and the factory agree on the dir name.
   await provisionSandboxFactory(hostAgent, SANDBOX_DIR);
 

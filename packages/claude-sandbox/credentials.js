@@ -12,12 +12,12 @@
 // The credentials factory normally runs on the *peer* machine (the one that
 // owns the Anthropic key), not the sandbox host — keeping the long-lived
 // secret on the peer. Its objects live under a directory so they don't
-// pollute the host root: `<dir>/controller`, `<dir>/profile`, `<dir>/handle`.
+// pollute the host root: `<dir>/service`, `<dir>/profile`, `<dir>/handle`.
 //
 // Defaults:
 //   <dirName>   claude-credentials
 //
-// Idempotent: re-running is a no-op once `<dir>/controller` exists.
+// Idempotent: re-running is a no-op once `<dir>/service` exists.
 
 import { readFileSync } from 'node:fs';
 
@@ -62,7 +62,7 @@ export const main = async (agent, dirName = DEFAULT_FACTORY_NAME) => {
   // sentinel — every step below is individually guarded so a re-run after a
   // partial failure reconciles rather than leaking the temp top-level names.
   if (
-    (await E(agent).has(dirName, 'controller')) &&
+    (await E(agent).has(dirName, 'service')) &&
     (await E(agent).has(dirName, 'profile'))
   ) {
     console.log(`${dirName}/ already provisioned — skipping`);
@@ -83,10 +83,10 @@ export const main = async (agent, dirName = DEFAULT_FACTORY_NAME) => {
     });
   }
 
-  if (!(await E(agent).has(dirName, 'controller'))) {
+  if (!(await E(agent).has(dirName, 'service'))) {
     await E(agent).makeUnconfined('@main', factoryCapletSpecifier, {
       powersName: agentTmp,
-      resultName: [dirName, 'controller'],
+      resultName: [dirName, 'service'],
     });
   }
 

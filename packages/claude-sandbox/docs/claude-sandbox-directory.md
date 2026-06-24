@@ -5,11 +5,10 @@ Below is each object and **what authority sharing it grants**.
 
 ## Objects
 
-- **`controller`** — the factory's `help`/discovery exo (it also presents the
-  "Create Claude Sandbox" form on `@host`). It exposes no session-creation
-  method — sessions are created over the **mailbox** (a session-request package
-  to `@host`, or the form), so holding `controller` grants nothing but
-  documentation. Low authority.
+- **`service`** — the factory caplet: it runs the mailbox/form loops that turn
+  a session request into a `claude-client`. Its exo surface is **only `help()`**
+  (sessions are created over the mailbox — a session-request package to `@host`,
+  or the form — never by a method call). Host-internal; nothing to share.
 - **`profile`** — the factory's guest **agent**. Holds `host-agent` = **full
   authority** over this host's Endo daemon. **Never share** — handing it out is
   equivalent to giving away the host.

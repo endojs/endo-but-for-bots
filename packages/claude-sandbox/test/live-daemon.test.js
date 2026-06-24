@@ -110,9 +110,9 @@ test.serial(
 
     await provisionFactory(host);
 
-    // The factory's objects (controller + guest agent/handle) landed inside
+    // The factory's objects (service + guest agent/handle) landed inside
     // the directory — proving the post-makeUnconfined `move`s ran.
-    for (const name of ['controller', 'profile', 'handle']) {
+    for (const name of ['service', 'profile', 'handle']) {
       // eslint-disable-next-line no-await-in-loop
       const present = await E(host).has('claude-sandbox', name);
       t.true(present, `claude-sandbox/${name} exists`);
@@ -145,15 +145,15 @@ test.serial(
     t.true(readmeSource.length > 0, 'the source markdown is not empty');
     t.is(readmeText, readmeSource, 'the blob is a copy of the source markdown');
 
-    // Idempotent: a second run is a no-op (no throw, same controller, no dup).
-    const c1 = await E(host).lookup(['claude-sandbox', 'controller']);
+    // Idempotent: a second run is a no-op (no throw, same service, no dup).
+    const c1 = await E(host).lookup(['claude-sandbox', 'service']);
     await t.notThrowsAsync(() => provisionFactory(host));
-    const c2 = await E(host).lookup(['claude-sandbox', 'controller']);
-    t.is(c1, c2, 'no duplicate controller on re-run');
+    const c2 = await E(host).lookup(['claude-sandbox', 'service']);
+    t.is(c1, c2, 'no duplicate service on re-run');
 
     // The credentials provisioner nests into its own directory the same way.
     await provisionCredentials(host);
-    for (const name of ['controller', 'profile', 'handle']) {
+    for (const name of ['service', 'profile', 'handle']) {
       // eslint-disable-next-line no-await-in-loop
       const present = await E(host).has('claude-credentials', name);
       t.true(present, `claude-credentials/${name} exists`);
@@ -203,7 +203,7 @@ test.serial(
     // Drive the form the way the operator does: the factory posts a "Create
     // Claude Sandbox" form into @host's inbox; submitting it formulates the
     // session under the chosen pet name. `runFactory` posts the form in the
-    // background after the controller resolves, so poll for it.
+    // background after the service caplet resolves, so poll for it.
     const findForm = async () => {
       const messages = await E(host).listMessages();
       return messages.find(

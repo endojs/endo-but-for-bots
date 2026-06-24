@@ -10,7 +10,7 @@
 // petstore.
 //
 // Everything lands under a host directory (`<dirName>/`) so the host root
-// stays clean: `<dirName>/{controller, profile, handle}` plus the infra
+// stays clean: `<dirName>/{service, profile, handle}` plus the infra
 // caplets `<dirName>/{sandbox-factory, fs-mounter}`.
 //
 // Prerequisites (mint them first, or use setup-host.js which does everything):
@@ -34,7 +34,7 @@
 // Defaults:
 //   <dirName>   claude-sandbox
 //
-// Idempotent: re-running is a no-op once `<dirName>/controller` exists.
+// Idempotent: re-running is a no-op once `<dirName>/service` exists.
 
 import { readFileSync } from 'node:fs';
 
@@ -55,9 +55,10 @@ const readmeUrl = new URL(
 );
 
 // The host-side directory this factory's objects live under, so they don't
-// pollute the host root: `<dir>/controller` (the form/exo), `<dir>/profile`
-// (the factory guest's agent), `<dir>/handle` (the guest), plus the infra
-// caplets `<dir>/sandbox-factory` and `<dir>/fs-mounter` (minted by setup-host.js).
+// pollute the host root: `<dir>/service` (the factory caplet — runs the
+// mailbox/form loops; exposes only help()), `<dir>/profile` (the factory
+// guest's agent), `<dir>/handle` (the guest), plus the infra caplets
+// `<dir>/sandbox-factory` and `<dir>/fs-mounter` (minted by setup-host.js).
 const DEFAULT_FACTORY_NAME = 'claude-sandbox';
 
 const CAPLET_ENV_KEYS = [
@@ -107,11 +108,11 @@ export const main = async (agent, dirName = DEFAULT_FACTORY_NAME) => {
   }
 
   // Fully provisioned? `<dir>/profile` is the *last* artifact created (after
-  // the controller and the handle move), so it is the completion sentinel —
-  // keying on `controller` would skip a re-run that still needs to finish the
+  // the service and the handle move), so it is the completion sentinel —
+  // keying on `service` would skip a re-run that still needs to finish the
   // moves, orphaning the temp top-level names.
   if (
-    (await E(agent).has(dirName, 'controller')) &&
+    (await E(agent).has(dirName, 'service')) &&
     (await E(agent).has(dirName, 'profile'))
   ) {
     console.log(`${dirName}/ already provisioned — skipping`);
@@ -135,10 +136,10 @@ export const main = async (agent, dirName = DEFAULT_FACTORY_NAME) => {
     });
   }
 
-  if (!(await E(agent).has(dirName, 'controller'))) {
+  if (!(await E(agent).has(dirName, 'service'))) {
     await E(agent).makeUnconfined('@main', factoryCapletSpecifier, {
       powersName: agentTmp,
-      resultName: [dirName, 'controller'],
+      resultName: [dirName, 'service'],
       // Tell the caplet where its infra caplets live so the per-session powers
       // endows `<dir>/sandbox-factory` and `<dir>/fs-mounter` by path.
       env: harden({ ...collectCapletEnv(), SANDBOX_NAMESPACE: dirName }),

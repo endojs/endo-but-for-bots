@@ -75,11 +75,11 @@ directories so the root inventory stays clean:
 
 - **`setup-host.js`** (run on the container host) mints, under
   `claude-sandbox/`: `sandbox-factory` (the `@endo/sandbox` plugin),
-  `fs-mounter` (the 9P mount caplet), `controller` (the "Create Claude
-  Sandbox" form/exo), `profile` + `handle` (the factory guest), and a
+  `fs-mounter` (the 9P mount caplet), `service` (the factory caplet — runs the
+  mailbox/form loops), `profile` + `handle` (the factory guest), and a
   `readme`.
 - **`setup-peer.js`** (run on the machine that owns the Anthropic account)
-  mints, under `claude-credentials/`: `controller`, `profile`, `handle`, and
+  mints, under `claude-credentials/`: `service`, `profile`, `handle`, and
   a `readme`. The long-lived key never leaves the peer.
 
 For a **single-machine** demo, run both on the same daemon. Each directory

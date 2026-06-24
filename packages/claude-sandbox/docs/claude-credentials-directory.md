@@ -6,9 +6,10 @@ peer. Below is each object and **what authority sharing it grants**.
 
 ## Objects
 
-- **`controller`** — the "Create Claude Credentials" form/exo. It mints a
-  `ClaudeCredentials` cap from a key you submit on its form. The sensitive
-  object is the **minted credential**, not this exo.
+- **`service`** — the factory caplet. It presents the "Create Claude
+  Credentials" form and mints a `ClaudeCredentials` cap from a key you submit;
+  its exo surface is only `help()`. The sensitive object is the **minted
+  credential**, not this caplet.
 - **`profile`** — the factory's guest **agent**. Holds `host-agent` = **full
   authority** over *this* (peer) machine. **Never share.**
 - **`handle`** — the guest's mailbox handle. Low authority; don't share

@@ -120,12 +120,12 @@ the security of sharing each.
 
 ```sh
 # HOST (container machine): mints claude-sandbox/{sandbox-factory, fs-mounter,
-# controller, profile, handle}.
+# service, profile, handle}.
 endo run --UNCONFINED packages/claude-sandbox/setup-host.js --powers @agent \
   -E NINEP_SUDO=1                      # if the daemon is unprivileged
 
 # PEER (credential holder; also run here for a single-box demo):
-# mints claude-credentials/{controller, profile, handle}.
+# mints claude-credentials/{service, profile, handle}.
 endo run --UNCONFINED packages/claude-sandbox/setup-peer.js --powers @agent
 
 # then submit the forms (see DEMO.md):

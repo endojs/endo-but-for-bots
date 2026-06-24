@@ -5,7 +5,7 @@
 // account (the credential holder), NOT the sandbox host. Idempotent. Mints,
 // nested under `claude-credentials/`:
 //
-//   controller       — the "Create Claude Credentials" form/exo.
+//   service          — the factory caplet (form loop; help() only).
 //   profile, handle  — the factory guest (agent + handle).
 //   readme           — describes the objects + sharing security
 //                      (`endo show claude-credentials/readme`).

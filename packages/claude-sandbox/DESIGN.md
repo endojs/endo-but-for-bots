@@ -356,8 +356,8 @@ LinuxKit kernel 6.12, aarch64) — see [DEMO.md](./DEMO.md).
 ### Phase 1 — provisioning, credentials, host 9P mount (root daemon)
 
 - `setup-host.js` mints `claude-sandbox/` (`sandbox-factory`, `fs-mounter`,
-  `controller`, `profile`, `handle`, `readme`) on the container host;
-  `setup-peer.js` mints `claude-credentials/` (`controller`, `profile`,
+  `service`, `profile`, `handle`, `readme`) on the container host;
+  `setup-peer.js` mints `claude-credentials/` (`service`, `profile`,
   `handle`, `readme`) on the credential holder's machine — so the host root
   stays uncluttered and each directory's `readme` documents its objects + the
   security of sharing each. Both forms land in `@host`'s inbox.
