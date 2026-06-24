@@ -13,6 +13,8 @@ import {
 } from '../src/keys/checkKey.js';
 import { matches } from '../src/patterns/patternMatchers.js';
 
+/** @import {Passable} from '@endo/pass-style' */
+
 const assertIsCopyMap = (t, m) => {
   t.is(passStyleOf(m), 'tagged');
   t.is(getTag(m), 'copyMap');
@@ -57,8 +59,8 @@ test('makeCopyMap', t => {
 });
 
 test('backwards-compatible static shape', t => {
-  // @ts-ignore Mixed-type values
-  const sortedEntries = new Map([
+  /** @type {[string, Passable][]} */
+  const entries = [
     ['z', undefined],
     ['g', 'baz'],
     ['f', 'bar'],
@@ -67,7 +69,8 @@ test('backwards-compatible static shape', t => {
     ['c', 4],
     ['b', true],
     ['a', null],
-  ]);
+  ];
+  const sortedEntries = new Map(entries);
   const manualMap = harden(
     Object.defineProperties(
       {},

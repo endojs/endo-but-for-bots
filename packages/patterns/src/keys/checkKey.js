@@ -85,21 +85,40 @@ export const confirmKey = (val, reject) => {
 harden(confirmKey);
 
 /**
- * @type {{
- *   (val: Passable): val is Key;
- *   (val: any): boolean;
- * }}
+ * Declared as a function declaration with `@overload` tags (not an arrow
+ * assigned to a typed variable) so the `val is Key` type predicate attaches
+ * to the function's own signature. tsgo's strict mode does not preserve a
+ * type predicate through assignment to a `const`.
+ *
+ * @overload
+ * @param {Passable} val
+ * @returns {val is Key}
  */
-export const isKey = val => confirmKey(val, false);
+/**
+ * @overload
+ * @param {any} val
+ * @returns {boolean}
+ */
+/**
+ * @param {any} val
+ * @returns {boolean}
+ */
+export function isKey(val) {
+  return confirmKey(val, false);
+}
 hideAndHardenFunction(isKey);
 
 /**
+ * Declared as a function declaration so the `asserts val is Key` assertion
+ * signature attaches to the function's own type; tsgo does not preserve it
+ * through assignment to a `const` (call sites would fail TS2775).
+ *
  * @param {Key} val
  * @returns {asserts val is Key}
  */
-export const assertKey = val => {
+export function assertKey(val) {
   confirmKey(val, Fail);
-};
+}
 hideAndHardenFunction(assertKey);
 
 // //////////////////////////// CopySet ////////////////////////////////////////
@@ -340,12 +359,19 @@ export const isCopyMap = m => confirmCopyMap(m, false);
 hideAndHardenFunction(isCopyMap);
 
 /**
+ * Declared as a function declaration (not an arrow assigned to a typed
+ * variable) so the `asserts m is ...` assertion signature attaches to the
+ * function's own type. tsgo's strict mode does not preserve an assertion
+ * signature through assignment to a `const`, which makes call sites fail
+ * TS2775 ("Assertions require every name in the call target to be declared
+ * with an explicit type annotation").
+ *
  * @param {Passable} m
  * @returns {asserts m is CopyMap<Key, Passable>}
  */
-export const assertCopyMap = m => {
+export function assertCopyMap(m) {
   confirmCopyMap(m, Fail);
-};
+}
 hideAndHardenFunction(assertCopyMap);
 
 /**

@@ -269,7 +269,9 @@ export const getInterfaceMethodKeys = interfaceGuard => {
   // @ts-ignore inference is too weak to see this is ok
   return harden([
     ...Reflect.ownKeys(methodGuards),
-    ...getCopyMapKeys(symbolMethodGuards),
+    ...getCopyMapKeys(
+      /** @type {import('../types.js').CopyMap} */ (symbolMethodGuards),
+    ),
   ]);
 };
 harden(getInterfaceMethodKeys);

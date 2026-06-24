@@ -63,6 +63,7 @@ const generateFullSortedEntries = (entries, rankCompare, fullCompare) => {
       for (let k = 1; k < sortedTies.length; k += 1) {
         // @ts-expect-error XXX Key types
         const [key0] = sortedTies[k - 1];
+        // @ts-expect-error XXX Key types
         const [key1] = sortedTies[k];
         Math.sign(fullCompare(key0, key1)) ||
           Fail`Duplicate entry key: ${key0}`;
@@ -83,11 +84,12 @@ harden(generateFullSortedEntries);
  *
  * @template [C=KeyCollection]
  * @template [V=unknown]
+ * @template [A=any]
  * @param {C} c1
  * @param {C} c2
  * @param {(collection: C) => Array<[Key, V]>} getEntries
- * @param {any} absentValue
- * @returns {IterableIterator<[Key, V | absentValue, V | absentValue]>}
+ * @param {A} absentValue
+ * @returns {IterableIterator<[Key, V | A, V | A]>}
  */
 export const generateCollectionPairEntries = (
   c1,
@@ -130,7 +132,7 @@ export const generateCollectionPairEntries = (
   nextY();
   return makeIterator(() => {
     let done = false;
-    /** @type {[Key, V | absentValue, V | absentValue]} */
+    /** @type {[Key, V | A, V | A]} */
     let value;
     if (xDone && yDone) {
       done = true;
