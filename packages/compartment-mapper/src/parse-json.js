@@ -24,7 +24,7 @@ export const parseJson = (bytes, _specifier, location, _packageLocation) => {
   const imports = freeze([]);
 
   /**
-   * @param {object} exports
+   * @param {Record<string, unknown>} exports
    */
   const execute = exports => {
     exports.default = parseLocatedJson(source, location);

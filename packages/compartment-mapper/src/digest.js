@@ -288,7 +288,14 @@ export const digestCompartmentMap = (
   } = compartmentMap;
 
   const renameCompartmentsFn = renameCompartments ?? defaultRenameCompartments;
-  const oldToNewCompartmentNames = renameCompartmentsFn(compartments);
+  // The default rename fn is parameterized on FileUrlString /
+  // PackageCompartmentDescriptorName, which are the defaults of
+  // OldCompartmentName / NewCompartmentName; the union arises only because the
+  // provided and default fns differ in their declared parameters.
+  const oldToNewCompartmentNames =
+    /** @type {Record<OldCompartmentName, NewCompartmentName>} */ (
+      renameCompartmentsFn(compartments)
+    );
   const digestCompartments = translateCompartmentMap(
     compartments,
     sources,

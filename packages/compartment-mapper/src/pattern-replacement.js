@@ -93,7 +93,9 @@ const classifyPatternEntry = (
 
   const prefix = pattern.slice(0, wildcardIndex);
   const suffix = pattern.slice(wildcardIndex + 1);
+  /** @type {string | null} */
   let replacementPrefix = null;
+  /** @type {string | null} */
   let replacementSuffix = null;
   if (replacement !== null) {
     const replacementWildcardIndex = replacement.indexOf('*');

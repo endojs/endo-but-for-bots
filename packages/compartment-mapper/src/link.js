@@ -53,8 +53,7 @@ const { apply } = Reflect;
 const { allSettled } = Promise;
 
 /**
- * @template T
- * @type {(iterable: Iterable<Promise<T>>) => Promise<Array<PromiseSettledResult<T>>>}
+ * @type {<T>(iterable: Iterable<Promise<T>>) => Promise<Array<PromiseSettledResult<T>>>}
  */
 const promiseAllSettled = allSettled.bind(Promise);
 

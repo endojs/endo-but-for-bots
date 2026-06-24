@@ -77,7 +77,7 @@ export const getModulePaths = (readPowers, location) => {
  * Creates shared export processing primitives to be used both Location and Archive usecases of cjs
  *
  * @param {object} in
- * @param {object} in.moduleEnvironmentRecord
+ * @param {Record<string, any>} in.moduleEnvironmentRecord
  * @param {Compartment} in.compartment
  * @param {Record<string, string>} in.resolvedImports
  * @param {string} in.location

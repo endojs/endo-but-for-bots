@@ -250,7 +250,6 @@ test('dynamic require fails without maybeReadNow in read powers', async t => {
 
   const { maybeReadNow: _, ...lessPower } = readPowers;
   await t.throwsAsync(
-    // @ts-expect-error bad type
     importLocation(lessPower, fixture, {
       importNowHook: defaultImportNowHook,
       policy: {
@@ -282,7 +281,6 @@ test('dynamic require fails without isAbsolute & fileURLToPath in read powers', 
   ).href;
   const { isAbsolute: _, fileURLToPath: ___, ...lessPower } = readPowers;
   await t.throwsAsync(
-    // @ts-expect-error bad types
     importLocation(lessPower, fixture, {
       importNowHook: defaultImportNowHook,
       policy: {
