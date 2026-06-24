@@ -1,5 +1,7 @@
 // @ts-check
 
+import { frozenBytes } from '@endo/pass-style/to-bytes.js';
+import { thawnBytes } from '@endo/pass-style/from-bytes.js';
 import {
   makeExactListCodec as exactList,
   makeExactSelectorCodec as exactSelector,
@@ -93,11 +95,14 @@ export const OcapnSignatureCodec = makeOcapnListComponentCodec(
   syrupReader => {
     const [scheme, [_rLabel, r], [_sLabel, s]] =
       OcapnSignatureEddsaCodec.read(syrupReader);
-    return { type: 'sig-val', scheme, r, s };
+    // Wrap the raw wire bytes in frozenBytes() so the decoded signature
+    // carries passable byteArray values (frozen Uint8Array wrappers) that
+    // match the type produced by makeOcapnKeyPairFromPrivateKey.
+    return { type: 'sig-val', scheme, r: frozenBytes(r), s: frozenBytes(s) };
   },
   (value, syrupWriter) => {
     return OcapnSignatureEddsaCodec.write(
-      [value.scheme, ['r', value.r], ['s', value.s]],
+      [value.scheme, ['r', thawnBytes(value.r)], ['s', thawnBytes(value.s)]],
       syrupWriter,
     );
   },
@@ -135,7 +140,10 @@ export const OcapnPublicKeyCodec = makeOcapnListComponentCodec(
   syrupReader => {
     const [scheme, [_curveLabel, curve], [_flagsLabel, flags], [_qLabel, q]] =
       OcapnPublicKeyEccCodec.read(syrupReader);
-    return { type: 'public-key', scheme, curve, flags, q };
+    // Wrap the raw wire bytes in frozenBytes() so the decoded public key
+    // carries a passable byteArray value (frozen Uint8Array wrapper) that
+    // matches the type produced by makeOcapnKeyPairFromPrivateKey.
+    return { type: 'public-key', scheme, curve, flags, q: frozenBytes(q) };
   },
   (value, syrupWriter) => {
     return OcapnPublicKeyEccCodec.write(
@@ -143,7 +151,7 @@ export const OcapnPublicKeyCodec = makeOcapnListComponentCodec(
         value.scheme,
         ['curve', value.curve],
         ['flags', value.flags],
-        ['q', value.q],
+        ['q', thawnBytes(value.q)],
       ],
       syrupWriter,
     );

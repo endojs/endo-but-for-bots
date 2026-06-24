@@ -7,7 +7,8 @@
 
 import harden from '@endo/harden';
 import { makeTagged } from '@endo/pass-style';
-import { toBytes } from '@endo/pass-style/to-bytes.js';
+import { frozenBytes } from '@endo/pass-style/to-bytes.js';
+import { thawnBytes } from '@endo/pass-style/from-bytes.js';
 import { makeSelector, getSelectorName } from '../selector.js';
 import {
   BooleanCodec,
@@ -63,15 +64,14 @@ const OcapnSelectorCodec = makeCodec('OcapnSelector', {
 
 // A byteArray passable is a frozen Uint8Array backed by an immutable
 // ArrayBuffer. On the wire it is a Syrup bytestring (plain mutable Uint8Array
-// from the decoder). Wrap in toBytes() on read to produce the passable form;
-// write the underlying mutable bytes by reading them back through fromBytes
+// from the decoder). Wrap in frozenBytes() on read to produce the passable form;
+// write the underlying mutable bytes by reading them back through thawnBytes
 // at the wire layer. BytestringCodec.write receives the frozen Uint8Array, but
 // the syrup encoder now requires plain mutable Uint8Arrays, so extract via
 // new Uint8Array() copy at write time.
 const PassableByteArrayCodec = makeCodec('PassableByteArray', {
-  read: syrupReader => toBytes(syrupReader.readBytestring()),
-  write: (value, syrupWriter) =>
-    syrupWriter.writeBytestring(new Uint8Array(value)),
+  read: syrupReader => frozenBytes(syrupReader.readBytestring()),
+  write: (value, syrupWriter) => syrupWriter.writeBytestring(thawnBytes(value)),
 });
 
 const AtomCodecs = {
@@ -172,8 +172,13 @@ export const makePassableCodecs = descCodecs => {
     {
       read(syrupReader) {
         const { type, value } = syrupReader.readTypeAndMaybeValue();
-        if (type === 'integer' || type === 'string' || type === 'bytestring') {
+        if (type === 'integer' || type === 'string') {
           return value;
+        }
+        if (type === 'bytestring') {
+          // The syrup reader returns a mutable Uint8Array; wrap it in
+          // frozenBytes() to produce the passable byteArray form.
+          return frozenBytes(value);
         }
         if (type === 'selector') {
           return makeSelector(value);

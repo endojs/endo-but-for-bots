@@ -11,7 +11,10 @@
  */
 
 import harden from '@endo/harden';
-import { toBytes } from '@endo/pass-style/to-bytes.js';
+import { frozenBytes } from '@endo/pass-style/to-bytes.js';
+import { thawnBytes } from '@endo/pass-style/from-bytes.js';
+
+import { swissnumFromBytes } from '../client/util.js';
 
 import { makeCodec, makeRecordUnionCodec } from '../syrup/codec.js';
 import {
@@ -313,8 +316,7 @@ export const makeDescCodecs = referenceKit => {
     'ocapn-sturdyref',
     syrupReader => {
       const node = OcapnPeerCodec.read(syrupReader);
-      const swissNum = syrupReader.readBytestring();
-      // @ts-expect-error - Branded type: SwissNum is Uint8Array at runtime
+      const swissNum = swissnumFromBytes(syrupReader.readBytestring());
       const value = referenceKit.makeSturdyRef(node, swissNum);
       return value;
     },
@@ -329,7 +331,7 @@ export const makeDescCodecs = referenceKit => {
       }
       const { location, swissNum } = details;
       OcapnPeerCodec.write(location, syrupWriter);
-      syrupWriter.writeBytestring(swissNum);
+      syrupWriter.writeBytestring(thawnBytes(swissNum));
     },
   );
 
@@ -414,7 +416,7 @@ export const makeHandoffGiveDescriptor = (
 export const serializeHandoffGive = handoffGive => {
   const syrupWriter = makeSyrupWriter();
   DescHandoffGiveCodec.write(handoffGive, syrupWriter);
-  return toBytes(syrupWriter.getBytes());
+  return frozenBytes(syrupWriter.getBytes());
 };
 
 /**
@@ -466,5 +468,5 @@ export const makeHandoffReceiveSigEnvelope = (handoffReceive, signature) => {
 export const serializeHandoffReceive = handoffReceive => {
   const syrupWriter = makeSyrupWriter();
   DescHandoffReceiveCodec.write(handoffReceive, syrupWriter);
-  return toBytes(syrupWriter.getBytes());
+  return frozenBytes(syrupWriter.getBytes());
 };
