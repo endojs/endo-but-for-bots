@@ -303,8 +303,16 @@ export const makeComparatorKit = (compareRemotables = (_x, _y) => NaN) => {
         const leftArray = /** @type {Uint8Array} */ (left);
         const rightArray = /** @type {Uint8Array} */ (right);
         for (let i = 0; i < leftLen; i += 1) {
-          const leftByte = leftArray[i];
-          const rightByte = rightArray[i];
+          // Read through `.at()` rather than bracket indexing. On the
+          // `@endo/immutable-arraybuffer` emulated path the wrapper has no
+          // own indexed properties, so `array[i]` is `undefined`; the
+          // `.at()` amplifier resolves the wrapper to its hidden genuine
+          // TypedArray and reads the underlying immutable buffer. On the
+          // native path `.at()` reads the integer-indexed exotic directly.
+          // `i < leftLen === byteLength`, so `.at(i)` is always in range
+          // and never returns `undefined`.
+          const leftByte = /** @type {number} */ (leftArray.at(i));
+          const rightByte = /** @type {number} */ (rightArray.at(i));
           if (leftByte < rightByte) {
             return -1;
           }

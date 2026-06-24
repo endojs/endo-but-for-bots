@@ -1,10 +1,16 @@
 import harden from '@endo/harden';
 import { makeTagged, passableSymbolForName } from '@endo/pass-style';
+import { frozenBytes } from '@endo/pass-style/to-bytes.js';
+import { decodeHex } from '@endo/hex';
 import {
   exampleAlice,
   exampleBob,
   exampleCarol,
 } from '@endo/pass-style/tools.js';
+
+// Build a `byteArray` (a plain frozen `Uint8Array` backed by an immutable
+// `ArrayBuffer`) from a hex string, for use as test data.
+const byteArrayFromHex = hex => frozenBytes(decodeHex(hex));
 
 /** @import { Passable } from '@endo/pass-style' */
 
@@ -129,6 +135,15 @@ export const roundTripPairs = harden([
   // Normal json reviver cannot make properties with undefined values
   [[undefined], [{ '@qclass': 'undefined' }]],
   [{ foo: undefined }, { foo: { '@qclass': 'undefined' } }],
+
+  // byteArray
+  [
+    byteArrayFromHex('0f'),
+    {
+      '@qclass': 'byteArray',
+      data: '0f',
+    },
+  ],
 
   // tagged
   [
@@ -259,6 +274,9 @@ export const jsonJustinPairs = harden([
   ['{"@qclass":"symbol","name":"foo"}', 'passableSymbolForName("foo")'],
   ['{"@qclass":"symbol","name":"@@@@foo"}', 'passableSymbolForName("@@@@foo")'],
 
+  // byteArray
+  ['{"@qclass":"byteArray","data":"0aff"}', 'frozenBytes(decodeHex("0aff"))'],
+
   // Arrays and objects
   ['[{"@qclass":"undefined"}]', '[undefined]'],
   ['{"foo":{"@qclass":"undefined"}}', '{foo:undefined}'],
@@ -335,6 +353,7 @@ export const unsortedSample = harden([
   undefined,
   -Infinity,
   [5],
+  byteArrayFromHex('0f'),
   exampleAlice,
   [],
   passableSymbolForName('foo'),
@@ -348,6 +367,7 @@ export const unsortedSample = harden([
   [exampleAlice, 'a'],
   [exampleBob, 'z'],
   -0,
+  byteArrayFromHex('aa'),
   {},
   [5, undefined],
   -3,
@@ -357,6 +377,7 @@ export const unsortedSample = harden([
   ]),
   true,
   'bar',
+  byteArrayFromHex('0a'),
   [5, null],
   new Promise(() => {}), // forever unresolved
   makeTagged('nonsense', [
@@ -429,6 +450,10 @@ export const sortedSample = harden([
   [exampleAlice, 'a'],
   [exampleCarol, 'm'],
   [exampleBob, 'z'],
+
+  byteArrayFromHex('0a'),
+  byteArrayFromHex('0f'),
+  byteArrayFromHex('aa'),
 
   false,
   true,

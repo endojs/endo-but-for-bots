@@ -8,6 +8,8 @@ import {
   makeTagged,
   passableSymbolForName,
 } from '@endo/pass-style';
+import { frozenBytes } from '@endo/pass-style/to-bytes.js';
+import { decodeHex } from '@endo/hex';
 import { makeMarshal } from '../src/marshal.js';
 import { decodeToJustin, qp } from '../src/marshal-justin.js';
 import { jsonJustinPairs } from '../tools/marshal-test-data.js';
@@ -42,6 +44,8 @@ const fakeJustinCompartment = () => {
   return new Compartment({
     slot,
     slotToVal,
+    frozenBytes,
+    decodeHex,
     makeTagged,
     passableSymbolForName,
   });

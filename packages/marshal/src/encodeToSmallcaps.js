@@ -18,6 +18,9 @@ import {
   nameForPassableSymbol,
   passableSymbolForName,
 } from '@endo/pass-style';
+import { frozenBytes } from '@endo/pass-style/to-bytes.js';
+import { thawnBytes } from '@endo/pass-style/from-bytes.js';
+import { encodeHex, decodeHex } from '@endo/hex';
 
 /** @import {Passable, RemotableObject} from '@endo/pass-style' */
 // FIXME define actual types
@@ -50,6 +53,7 @@ const DASH = '-'.charCodeAt(0);
  * Of these, smallcaps currently uses the following:
  *
  *  * `!` - escaped string
+ *  * `*` - byteArray, hex-encoded
  *  * `+` - non-negative bigint
  *  * `-` - negative bigint
  *  * `#` - manifest constant
@@ -57,7 +61,7 @@ const DASH = '-'.charCodeAt(0);
  *  * `$` - remotable
  *  * `&` - promise
  *
- * All other special characters (`"'()*,`) are reserved for future use.
+ * All other special characters (`"'(),`) are reserved for future use.
  *
  * The manifest constants that smallcaps currently uses for values:
  *  * `#undefined`
@@ -230,8 +234,7 @@ export const makeEncodeToSmallcaps = (encodeOptions = {}) => {
         return passable.map(encodeToSmallcapsRecur);
       }
       case 'byteArray': {
-        // TODO implement
-        throw Fail`marsal of byteArray not yet implemented: ${passable}`;
+        return `*${encodeHex(thawnBytes(passable))}`;
       }
       case 'tagged': {
         return {
@@ -407,6 +410,11 @@ export const makeDecodeFromSmallcaps = (decodeOptions = {}) => {
             }
             return result;
           }
+          case '*': {
+            return frozenBytes(
+              decodeHex(encoding.slice(1), 'smallcaps byteArray'),
+            );
+          }
           default: {
             throw Fail`Special char ${q(
               c,
@@ -472,3 +480,4 @@ export const makeDecodeFromSmallcaps = (decodeOptions = {}) => {
   };
   return harden(decodeFromSmallcaps);
 };
+harden(makeDecodeFromSmallcaps);
