@@ -80,6 +80,7 @@ import { runReviewPanel } from './review-panel.mjs';
 import { postInternal, listInternal } from './internal-messages.mjs';
 import { reviseToConverge } from './revise-loop.mjs';
 import { notify, topicForKey } from '../capture/notify.mjs';
+import { writeRating, ratingsDir } from './eval-ratings.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const HOME = '/home/dan';
@@ -970,6 +971,20 @@ const handler = async (req, res) => {
         }))).filter(Boolean).sort((a, b) => (a.at < b.at ? 1 : -1)).slice(0, 50);
         return json(res, 200, { meetings: items });
       } catch (e) { return json(res, 500, { error: e.message }); }
+    }
+
+    // ── eval rating: the OPERATOR records a verdict on a recorded chat/eval run. Owner-only — only the
+    //    ROOT cap may write eval ground-truth (an attenuated chat cap must not be able to forge its own
+    //    grade). The cap rides in the body; we gate on nodeFor(cap)?.isRoot and land the record 0600 at
+    //    eval/results/ratings/<chatId>.json via the shared eval-ratings helper. ──
+    if (req.method === 'POST' && u.pathname === '/eval/rate') {
+      const { cap, chatId, rating, comment, by } = await jsonBody(req);
+      if (!nodeFor(cap)) return json(res, 403, { error: 'no capability — open this app with your #cap= link' });
+      if (!nodeFor(cap)?.isRoot) return json(res, 403, { error: 'rating an eval run is the owner\'s call — root capability required' });
+      try {
+        const r = writeRating({ chatId, rating, comment, by: by || nodeFor(cap)?.name || '', dir: ratingsDir(HERE) });
+        return json(res, 200, { ok: true, chatId: r.rating.chatId, rating: r.rating.rating, at: r.rating.at });
+      } catch (e) { return json(res, 400, { error: String(e && e.message || e) }); }
     }
 
     // ── live step stream for the inline 3D pendant (SSE). Keyed by sessionId only;
