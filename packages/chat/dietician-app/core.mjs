@@ -14,6 +14,9 @@
 import { AUTO_SKIP, NAME_AUTO_SKIP, priorityOf } from './skiplists.mjs';
 import { QUERIES, SEED_CITIES, cityRecord, cityList } from './cities.mjs';
 import { buildKml } from './kml.mjs';
+import { cityOf } from './guides/shared.mjs';
+import { generateEatsGuide } from './guides/eats-guide.mjs';
+import { SORT_JS } from './guides/sort-js.mjs';
 
 // slugify — sweep.py slugify(): lowercase, non-alnum → '-', strip, cap 60, fallback 'place'.
 export const slugify = name => (String(name || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60)) || 'place';
@@ -242,7 +245,36 @@ export const makePipeline = ({
     return { ok: true, path: rel, total, viable, borderline, bytes: Buffer.byteLength(kml) };
   };
 
+  // gather merged VIABLE+BORDERLINE rows for a guide. eats = non-Disney; disney = slug contains 'disneyland'.
+  // city is derived from the address (matching the persona's gen_guide city_of), like the live guides.
+  const gatherGuideRows = async ({ disney = false } = {}) => {
+    const rows = [];
+    for (const slug of await store.listVerdicts()) {
+      const isDisney = slug.includes('disneyland');
+      if (disney ? !isDisney : isDisney) continue;
+      const ev = await store.getVerdict(slug);
+      if (!ev || !/^(VIABLE|BORDERLINE)$/.test(ev.verdict)) continue;
+      const place = await store.getPlace(slug);
+      const merged = { slug, ...(place || {}), ...ev };
+      merged.city = cityOf(merged.address || '');
+      rows.push(merged);
+    }
+    return rows;
+  };
+
+  // STAGE 5b — regenerate a browsing guide from the store + write it (site/index.html + site/sort.js).
+  // Returns counts; the outward PUBLISH (serving it) is a separate confirm-gated step (grunt, Slice 8/10).
+  const generateGuide = async (which = 'eats', { date } = {}) => {
+    if (which !== 'eats') return { ok: false, error: `unknown guide "${which}" (eats is implemented; disney is Slice 7)` };
+    const rows = await gatherGuideRows({ disney: false });
+    const html = generateEatsGuide(rows, { person, today: date || today() });
+    await store.writeArtifact('site/index.html', html);
+    await store.writeArtifact('site/sort.js', SORT_JS);
+    const viable = rows.filter(r => r.verdict === 'VIABLE').length;
+    return { ok: true, which: 'eats', cards: rows.length, viable, borderline: rows.length - viable, bytes: Buffer.byteLength(html), path: 'site/index.html' };
+  };
+
   const listCities = () => cityList(cities);
 
-  return { scan, evaluate, buildMap, listCities, slugify };
+  return { scan, evaluate, buildMap, generateGuide, gatherGuideRows, listCities, slugify };
 };

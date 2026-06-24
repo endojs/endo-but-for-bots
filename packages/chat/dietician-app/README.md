@@ -58,7 +58,11 @@ never logged, never on screen.
   + BORDERLINE folders only) + `core.buildMap`. *Proven: `node --test` (16/16) + `smoke/kml-smoke.mjs` built
   `safe-eats.kml` from dan's imported DB → 251 placemarks (75 VIABLE + 176 BORDERLINE), 524900 bytes —
   essentially byte-identical to the persona's live ~525KB file.*
-- [ ] **Slice 6** — `guides/shared.mjs` + `guides/eats-guide.mjs` (city-grouped guide).
+- [x] **Slice 6** — `guides/shared.mjs` (esc/cityOf/mapsUrl/dishHtml/card, shared by both guides) +
+  `guides/sort-js.mjs` (the client script) + `guides/eats-guide.mjs` (city-grouped dark-theme page) +
+  `core.generateGuide('eats')`. *Proven: `node --test` (20/20) + `yarn test:eats-guide` (headless over dan's
+  imported DB): 237 cards across 19 cities, city tabs filter, "safe bets only" hides all 171 borderline,
+  sort.js search works.*
 - [ ] **Slice 7** — `guides/disney-guide.mjs` (park-grouped + hotel section + 2 inline-SVG maps).
 - [ ] **Slice 8** — `grunt.mjs` cap layer: `DietConsole` + `guide`/`scanner`/`editor` facets + `/rpc` + SPA.
 - [ ] **Slice 9** — `DietProvisioner.newInstance` + `signup` (multi-tenant).
