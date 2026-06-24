@@ -3,36 +3,54 @@
 import harden from '@endo/harden';
 
 /**
- * Compare two mutable `Uint8Array` values lexicographically.
+ * Compare two `Uint8Array` values lexicographically, with optional
+ * start/end slicing.
  *
  * Returns a negative number when `left` sorts before `right`, `0` when
  * the two sequences are byte-for-byte equal, and a positive number when
- * `left` sorts after `right`.  When neither sequence is empty and the
- * shorter is a prefix of the longer, returns the length difference
- * (`leftLength - rightLength`).
+ * `left` sorts after `right`.
+ *
+ * When `leftStart`, `leftEnd`, `rightStart`, or `rightEnd` are provided,
+ * the comparison is restricted to those subranges — no extra allocations
+ * are needed for in-place subrange comparisons.
  *
  * @param {Uint8Array} left
  * @param {Uint8Array} right
+ * @param {number} [leftStart]
+ * @param {number} [leftEnd]
+ * @param {number} [rightStart]
+ * @param {number} [rightEnd]
  * @returns {number}
  */
-export const compareBytes = (left, right) => {
-  const lLen = left.length;
-  const rLen = right.length;
-  const minLen = lLen < rLen ? lLen : rLen;
-  for (let i = 0; i < minLen; i += 1) {
-    if (left[i] < right[i]) {
-      return -1;
+export const compareBytes = (
+  left,
+  right,
+  leftStart = 0,
+  leftEnd = left.length,
+  rightStart = 0,
+  rightEnd = right.length,
+) => {
+  const leftLength = leftEnd - leftStart;
+  const rightLength = rightEnd - rightStart;
+  let leftIndex = leftStart;
+  let rightIndex = rightStart;
+  for (;;) {
+    if (leftIndex >= leftEnd) {
+      // Left exhausted; equal if right is also exhausted, otherwise left < right.
+      return leftLength - rightLength;
     }
-    if (left[i] > right[i]) {
+    if (rightIndex >= rightEnd) {
+      // Right exhausted but left is not; left > right.
       return 1;
     }
+    if (left[leftIndex] < right[rightIndex]) {
+      return -1;
+    }
+    if (left[leftIndex] > right[rightIndex]) {
+      return 1;
+    }
+    leftIndex += 1;
+    rightIndex += 1;
   }
-  // When one sequence is a prefix of the other, return the length difference.
-  // left-prefix-of-right yields `leftLength - rightLength` (negative);
-  // right-prefix-of-left yields a positive number.
-  if (lLen !== rLen) {
-    return lLen - rLen;
-  }
-  return 0;
 };
 harden(compareBytes);

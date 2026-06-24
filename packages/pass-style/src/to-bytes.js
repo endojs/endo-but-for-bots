@@ -25,7 +25,7 @@ import harden from '@endo/harden';
  * @returns {Uint8Array} A hardened frozen `Uint8Array` backed by an
  *   immutable `ArrayBuffer`.
  */
-export const toBytes = view => {
+export const frozenBytes = view => {
   const buffer = /** @type {ArrayBuffer} */ (view.buffer);
   const immutable = buffer.sliceToImmutable(
     view.byteOffset,
@@ -33,4 +33,4 @@ export const toBytes = view => {
   );
   return harden(new Uint8Array(immutable));
 };
-harden(toBytes);
+harden(frozenBytes);

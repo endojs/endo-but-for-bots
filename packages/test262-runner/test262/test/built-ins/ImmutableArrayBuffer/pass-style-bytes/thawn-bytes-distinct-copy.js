@@ -1,14 +1,14 @@
 /*---
 description: >
-  fromBytes returns a distinct copy: the result shares no buffer with the
+  thawnBytes returns a distinct copy: the result shares no buffer with the
   immutable input.
   Validates XS+SES / Node.js+SES parity for @endo/pass-style/from-bytes.js.
 features: [ses-xs-parity,immutable-arraybuffer,pass-style-bytes]
 ---*/
 
 var original = new Uint8Array([10, 20, 30]);
-var immutable = toBytes(original);
-var mutable = fromBytes(immutable);
+var immutable = frozenBytes(original);
+var mutable = thawnBytes(immutable);
 
 // Not the same object.
 assert.notSameValue(mutable, original, 'mutable is a different object');

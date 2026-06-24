@@ -7,7 +7,7 @@ features: [ses-xs-parity,immutable-arraybuffer,pass-style-bytes]
 ---*/
 
 // 0xFF is not valid UTF-8 in any context.
-var invalid = toBytes(new Uint8Array([72, 101, 0xff, 108, 108, 111]));
+var invalid = frozenBytes(new Uint8Array([72, 101, 0xff, 108, 108, 111]));
 
 assert.throws(TypeError, function () {
   strictDecodeUtf8(invalid);

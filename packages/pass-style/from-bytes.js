@@ -1,3 +1,3 @@
 // @ts-check
 
-export { fromBytes } from './src/from-bytes.js';
+export { thawnBytes } from './src/from-bytes.js';

@@ -11,9 +11,16 @@ This package is the canonical home for the `Uint8Array` helpers that
 those realms share.
 
 This package deals exclusively with plain mutable `Uint8Array` values.
-Callers that work with passable byte arrays (frozen `Uint8Array` values
-backed by an immutable `ArrayBuffer`) should use `@endo/pass-style/to-bytes.js`,
-`@endo/pass-style/from-bytes.js`, and `@endo/pass-style/concat-bytes.js`.
+Passing a frozen `Uint8Array` backed by an immutable `ArrayBuffer`
+(the passable byteArray form) to any function in this package will
+throw: such inputs must first be thawed via `thawnBytes` from
+`@endo/pass-style/from-bytes.js`.
+This restriction will remain until the shim for immutable `ArrayBuffer`
+and frozen `Uint8Array` becomes unnecessary on account of sufficiently
+broad deployment of those pre-standard features.
+Callers that work with passable byte arrays should use
+`@endo/pass-style/frozenBytes`, `@endo/pass-style/thawnBytes`,
+and `@endo/pass-style/concat-bytes.js`.
 
 ## Install
 
@@ -35,8 +42,8 @@ bytesEqual(combined, new Uint8Array([1, 2, 3, 4, 5, 6])); // true
 compareBytes(a, b); // negative (a < b)
 ```
 
-For UTF-8 transcoding, use `@endo/utf8`.
-For ASCII transcoding, use `@endo/ascii`.
+For UTF-8 encoding and decoding, use `@endo/utf8`.
+For ASCII encoding and decoding, use `@endo/ascii`.
 For hex encoding and decoding, use `@endo/hex`.
 For base64 encoding and decoding, use `@endo/base64`.
 
@@ -56,20 +63,12 @@ Empty input yields an empty `Uint8Array`.
 Compares two `Uint8Array` values byte-for-byte.
 Returns `true` when the two arrays have equal length and equal contents.
 
-### `compareBytes(left, right) -> number`
+### `compareBytes(left, right, leftStart?, leftEnd?, rightStart?, rightEnd?) -> number`
 
-Compares two `Uint8Array` values lexicographically.
+Compares two `Uint8Array` values lexicographically, with optional start/end
+slicing to restrict the comparison to a subrange without extra allocations.
 Returns a negative number when `left` sorts before `right`, `0` when
 equal, and a positive number when `left` sorts after `right`.
-
-## Out of scope
-
-- UTF-8 transcoding: use `@endo/utf8`.
-- ASCII transcoding: use `@endo/ascii`.
-- Hex encoding and decoding: use `@endo/hex`.
-- Base64 encoding and decoding: use `@endo/base64`.
-- Passable byteArray wrapping and unwrapping: use
-  `@endo/pass-style/to-bytes.js` and `@endo/pass-style/from-bytes.js`.
 
 ## Hardened JavaScript
 

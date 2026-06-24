@@ -1,14 +1,14 @@
 /*---
 description: >
-  fromBytes copies a frozen Uint8Array backed by an immutable ArrayBuffer into
+  thawnBytes copies a frozen Uint8Array backed by an immutable ArrayBuffer into
   a fresh mutable Uint8Array.
   Validates XS+SES / Node.js+SES parity for @endo/pass-style/from-bytes.js.
 features: [ses-xs-parity,immutable-arraybuffer,pass-style-bytes]
 ---*/
 
 var source = new Uint8Array([0, 1, 2, 255, 128, 0, 42, 100]);
-var immutable = toBytes(source);
-var result = fromBytes(immutable);
+var immutable = frozenBytes(source);
+var result = thawnBytes(immutable);
 
 assert(result instanceof Uint8Array, 'result is a Uint8Array');
 assert.sameValue(result.length, source.length, 'length matches');

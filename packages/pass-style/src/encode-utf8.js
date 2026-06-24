@@ -3,14 +3,14 @@
 import harden from '@endo/harden';
 import { encodeUtf8 as encodeToMutableBytes } from '@endo/utf8/encode.js';
 
-import { toBytes } from './to-bytes.js';
+import { frozenBytes } from './to-bytes.js';
 
 /**
  * Encodes a string as a passable `byteArray` value: a hardened frozen
  * `Uint8Array` backed by an immutable `ArrayBuffer`.
  *
  * Delegates to `@endo/utf8/encode.js` for the UTF-8 encoding itself, then
- * wraps the resulting mutable `Uint8Array` via `toBytes` to produce the
+ * wraps the resulting mutable `Uint8Array` via `frozenBytes` to produce the
  * immutable passable form.
  *
  * This is the pass-style-aware counterpart to `@endo/utf8`'s `encodeUtf8`.
@@ -21,5 +21,5 @@ import { toBytes } from './to-bytes.js';
  * @returns {Uint8Array} A hardened frozen `Uint8Array` backed by an immutable
  *   `ArrayBuffer` (the byteArray passable form).
  */
-export const encodeUtf8 = s => toBytes(encodeToMutableBytes(s));
+export const encodeUtf8 = s => frozenBytes(encodeToMutableBytes(s));
 harden(encodeUtf8);

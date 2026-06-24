@@ -1,3 +1,3 @@
 // @ts-check
 
-export { toBytes } from './src/to-bytes.js';
+export { frozenBytes } from './src/to-bytes.js';

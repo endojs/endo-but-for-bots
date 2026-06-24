@@ -24,7 +24,6 @@
     ".": "./index.js",
     "./encode.js": "./encode.js",
     "./decode.js": "./decode.js",
-    "./strict-decode.js": "./strict-decode.js",
     "./package.json": "./package.json"
   },
   "scripts": {

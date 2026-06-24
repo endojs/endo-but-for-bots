@@ -7,10 +7,10 @@ features: [ses-xs-parity,immutable-arraybuffer,pass-style-bytes]
 ---*/
 
 var parts = [
-  toBytes(new Uint8Array([1, 2, 3])),
-  toBytes(new Uint8Array([])),
-  toBytes(new Uint8Array([4])),
-  toBytes(new Uint8Array([5, 6, 7, 8]))
+  frozenBytes(new Uint8Array([1, 2, 3])),
+  frozenBytes(new Uint8Array([])),
+  frozenBytes(new Uint8Array([4])),
+  frozenBytes(new Uint8Array([5, 6, 7, 8]))
 ];
 var result = concatBytes(parts);
 
@@ -19,7 +19,7 @@ assert.sameValue(result.byteLength, 8, 'total byte length');
 assert.sameValue(result.buffer.immutable, true, 'backing buffer is immutable');
 assert(Object.isFrozen(result), 'result is frozen');
 
-var mutable = fromBytes(result);
+var mutable = thawnBytes(result);
 assert.sameValue(mutable[0], 1, 'byte 0');
 assert.sameValue(mutable[1], 2, 'byte 1');
 assert.sameValue(mutable[2], 3, 'byte 2');

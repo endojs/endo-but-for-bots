@@ -2,6 +2,12 @@
 
 import harden from '@endo/harden';
 
+// Capture `Reflect.apply` once at module load; we prefer it to
+// `Function.prototype.call` even where `.call` is assumed to be
+// primordial, so a tampered `Function.prototype.call` cannot redirect
+// the dispatched native intrinsic invocation.
+const { apply } = Reflect;
+
 const hexAlphabet = '0123456789abcdef';
 
 /**
@@ -17,12 +23,14 @@ const hexAlphabet = '0123456789abcdef';
  * @returns {string}
  */
 export const jsEncodeHex = bytes => {
+  // Pre-allocate the output array to avoid quadratic-time string
+  // concatenation on large inputs.
   const chars = new Array(bytes.length * 2);
-  let j = 0;
-  for (const b of bytes) {
+  for (let i = 0; i < bytes.length; i += 1) {
+    const b = bytes[i];
+    const j = i * 2;
     chars[j] = hexAlphabet[b >>> 4];
     chars[j + 1] = hexAlphabet[b & 0x0f];
-    j += 2;
   }
   return chars.join('');
 };
@@ -37,20 +45,16 @@ const nativeToHex =
   typeof toHex === 'function' ? /** @type {() => string} */ (toHex) : undefined;
 
 /**
- * Encodes a `Uint8Array` as a lowercase hex string.
+ * Encodes a Uint8Array as a lowercase hex string.
  *
  * Dispatches to the native `Uint8Array.prototype.toHex` intrinsic when
- * available (stage-4 TC39 proposal-arraybuffer-base64), and falls
- * through to the pure-JavaScript polyfill otherwise.
+ * available (stage-4 TC39 proposal-arraybuffer-base64).  Otherwise
+ * falls through to the pure-JavaScript polyfill.
  *
- * @param {Uint8Array} bytes
- * @returns {string}
+ * @type {typeof jsEncodeHex}
  */
 export const encodeHex =
   nativeToHex !== undefined
-    ? bytes => {
-        const { apply } = Reflect;
-        return apply(nativeToHex, bytes, []);
-      }
+    ? bytes => apply(nativeToHex, bytes, [])
     : jsEncodeHex;
 harden(encodeHex);

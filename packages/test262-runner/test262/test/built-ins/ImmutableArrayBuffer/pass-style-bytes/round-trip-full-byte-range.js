@@ -1,7 +1,7 @@
 /*---
 description: >
-  toBytes + fromBytes round-trip preserves all 256 possible byte values.
-  Validates XS+SES / Node.js+SES parity for the toBytes/fromBytes pair.
+  frozenBytes + thawnBytes round-trip preserves all 256 possible byte values.
+  Validates XS+SES / Node.js+SES parity for the frozenBytes/thawnBytes pair.
 features: [ses-xs-parity,immutable-arraybuffer,pass-style-bytes]
 ---*/
 
@@ -10,7 +10,7 @@ for (var i = 0; i < 256; i++) {
   allBytes[i] = i;
 }
 
-var result = fromBytes(toBytes(allBytes));
+var result = thawnBytes(frozenBytes(allBytes));
 
 assert(result instanceof Uint8Array, 'result is Uint8Array');
 assert.sameValue(result.length, 256, 'all 256 bytes present');

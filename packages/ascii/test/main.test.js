@@ -2,7 +2,6 @@ import test from '@endo/ses-ava/test.js';
 
 import { encodeAscii } from '../src/encode.js';
 import { decodeAscii } from '../src/decode.js';
-import { strictDecodeAscii } from '../src/strict-decode.js';
 
 test('encodeAscii / decodeAscii: empty string round-trip', t => {
   const bytes = encodeAscii('');
@@ -28,16 +27,6 @@ test('encodeAscii: accepts full printable ASCII range', t => {
   const bytes = encodeAscii(chars);
   t.is(bytes.length, 128);
   t.is(decodeAscii(bytes), chars);
-});
-
-test('strictDecodeAscii: accepts valid ASCII bytes', t => {
-  const bytes = encodeAscii('Hello, world!');
-  t.is(strictDecodeAscii(bytes), 'Hello, world!');
-});
-
-test('strictDecodeAscii: rejects byte > 127', t => {
-  const invalid = new Uint8Array([0x80]);
-  t.throws(() => strictDecodeAscii(invalid), { instanceOf: RangeError });
 });
 
 test('decodeAscii: passes through byte > 127 without error', t => {

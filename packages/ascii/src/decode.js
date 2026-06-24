@@ -3,7 +3,7 @@ import harden from '@endo/harden';
 /**
  * Decodes ASCII bytes to a string.
  * Bytes outside the ASCII range (0-127) are passed through without
- * error; use `strictDecodeAscii` to reject them.
+ * error; use `encodeAscii` on the source string to ensure only valid ASCII bytes enter the pipeline.
  *
  * @param {Uint8Array} bytes
  * @returns {string}

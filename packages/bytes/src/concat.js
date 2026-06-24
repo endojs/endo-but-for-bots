@@ -6,17 +6,17 @@ import harden from '@endo/harden';
  *
  * Empty input yields an empty `Uint8Array`.
  *
- * @param {ReadonlyArray<Uint8Array>} inputs
+ * @param {ReadonlyArray<Uint8Array>} chunks
  * @returns {Uint8Array}
  */
-export const concatBytes = inputs => {
+export const concatBytes = chunks => {
   let totalLength = 0;
-  for (const chunk of inputs) {
+  for (const chunk of chunks) {
     totalLength += chunk.length;
   }
   const result = new Uint8Array(totalLength);
   let offset = 0;
-  for (const chunk of inputs) {
+  for (const chunk of chunks) {
     result.set(chunk, offset);
     offset += chunk.length;
   }
