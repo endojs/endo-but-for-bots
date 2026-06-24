@@ -115,7 +115,7 @@ const moveCellAfter = (cell, prev, next = prev.next) => {
  * @template K
  * @template V
  * @param {CacheMapCell<K, V>} cell
- * @param {K | UNKNOWN_KEY} oldKey
+ * @param {K | typeof UNKNOWN_KEY} oldKey
  * @param {() => SingleEntryMap<K, V>} [makeMap] required when the key is unknown
  */
 const resetCell = (cell, oldKey, makeMap) => {

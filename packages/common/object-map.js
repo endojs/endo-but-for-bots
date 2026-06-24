@@ -118,7 +118,16 @@ export const objectExtendEach = (original, extendFn) => {
   const newEntries = typedMap(
     typedEntries(original),
     /** @type {([k, v]: [string, object]) => [string, object]} */
-    ([k, v]) => [k, { ...v, ...extendFn(v, k) }],
+    ([k, v]) => [
+      k,
+      {
+        ...v,
+        ...extendFn(
+          /** @type {O[keyof O & string]} */ (v),
+          /** @type {string & keyof O} */ (k),
+        ),
+      },
+    ],
   );
   return /** @type {any} */ (harden(fromTypedEntries(newEntries)));
 };

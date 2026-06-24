@@ -9,9 +9,9 @@ let mutex = Promise.resolve(undefined);
  * @param {string} fileName
  * @param {{
  *   fs: {
- *     promises: Pick<import('fs/promises'),'readFile' | 'stat'>
+ *     promises: Pick<typeof import('fs/promises'),'readFile' | 'stat'>
  *   },
- *   path: Pick<import('path'), 'resolve' | 'relative' | 'normalize'>,
+ *   path: Pick<typeof import('path'), 'resolve' | 'relative' | 'normalize'>,
  * }} powers
  * @returns {FileReader}
  */
@@ -71,13 +71,13 @@ export const makeFileReader = (fileName, { fs, path }) => {
 /**
  * @param {string} fileName
  * @param {{
- *   fs: Pick<import('fs'), 'existsSync'> &
+ *   fs: Pick<typeof import('fs'), 'existsSync'> &
  *     { promises: Pick<
- *         import('fs/promises'),
+ *         typeof import('fs/promises'),
  *         'readFile' | 'stat' | 'writeFile' | 'mkdir' | 'rename' | 'rm'
  *       >,
  *     },
- *   path: Pick<import('path'), 'dirname' | 'resolve' | 'relative' | 'normalize'>,
+ *   path: Pick<typeof import('path'), 'dirname' | 'resolve' | 'relative' | 'normalize'>,
  * }} io
  * @param {(there: string) => FileWriter} make
  * @returns {FileWriter}
@@ -119,14 +119,14 @@ export const makeFileWriter = (
 /**
  * @param {string} fileName
  * @param {{
- *   fs: Pick<import('fs'), 'existsSync'> &
+ *   fs: Pick<typeof import('fs'), 'existsSync'> &
  *     { promises: Pick<
- *         import('fs/promises'),
+ *         typeof import('fs/promises'),
  *         'readFile' | 'stat' | 'writeFile' | 'mkdir' | 'rename' | 'rm'
  *       >,
  *     },
- *   path: Pick<import('path'), 'dirname' | 'resolve' | 'relative' | 'normalize'>,
- *   os: Pick<import('os'), 'platform'>,
+ *   path: Pick<typeof import('path'), 'dirname' | 'resolve' | 'relative' | 'normalize'>,
+ *   os: Pick<typeof import('os'), 'platform'>,
  * }} io
  * @param {number} [pid]
  * @param {number} [nonce]

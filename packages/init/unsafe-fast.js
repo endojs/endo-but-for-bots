@@ -2,6 +2,7 @@
 import { lockdown } from '@endo/lockdown';
 import './pre-remoting.js';
 
+/** @type {Parameters<typeof lockdown>[0]} */
 const options = {
   __hardenTaming__: 'unsafe',
 };

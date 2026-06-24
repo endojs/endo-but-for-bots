@@ -6,6 +6,7 @@
 
 /**
  * @import {TransformedResult, TransformedResultWithSourceMap} from './generate.js'
+ * @import {GenerateAstOptionsWithSourceMap} from './generate.js'
  */
 
 import { transformAst } from './transform-ast.js';
@@ -81,11 +82,13 @@ export const evadeCensorSync = (source, options) => {
   transformAst(ast, { elideComments, onlyComments, customVisitor });
 
   if (sourceUrl) {
-    return generate(ast, {
+    /** @type {GenerateAstOptionsWithSourceMap} */
+    const generateOptions = {
       source,
       sourceUrl,
       ...(sourceMap !== undefined && { sourceMap }),
-    });
+    };
+    return generate(ast, generateOptions);
   }
   return generate(ast, { source });
 };
