@@ -536,6 +536,13 @@ harden(POWERS);
 const VERB_TO_POWER = (() => { const m = {}; for (const [pw, def] of Object.entries(POWERS)) for (const v of (def.verbs || [])) m[v] = pw; return harden(m); })();
 export const resolvePower = name => { const n = String(name || ''); return POWERS[n] ? n : (VERB_TO_POWER[n] || n); };
 
+// ── designation by REFERENCE (the ocap-correct power model) ───────────────────
+// makeCapabilityBundle(refs) holds Far power refs by petname; attenuate(requested)
+// returns a structural SUBSET that cannot fabricate an absent ref. It lives in a
+// dependency-free sibling so the permission CORE is testable without the heavy
+// affordance imports above. POWERS / META_POWERS remain DISPLAY-ONLY metadata.
+export { makeCapabilityBundle } from './agent-caps-bundle.mjs';
+
 // ── build the agent. Returns the locator + a root node holding ALL powers. ────
 // makeFieldAgent({ outDir, baseUrl }) →
 //   { locator, register, rootNode, rootSwiss(set later), toolboxFor, manifestFor }
