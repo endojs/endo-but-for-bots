@@ -68,6 +68,25 @@ test that proves "broke → fixer patched → promise resolved with the repaired
    can't widen authority), prove non-mutable artifacts are skipped (no source → no heal, plain error).
 4. **One layer at a time.** Land a row of the ladder with its tests, dogfood it, then climb. Don't big-bang.
 
+## Generative healing — the magic wand (missing *referents*)
+
+Self-healing has a generative twin (vault: `magic wand.md`, from the ocap obstacle course): a *reference*
+to a name that **doesn't exist yet** — a tool / specialist / sub-agent / task — is not an error to bubble,
+it's a *signal of intent*. Hand it to a filler agent that **materializes the intended referent** (within the
+caller's bounds — the cap graph still bounds it), then resolve the call. Same shape as repair-healing, but the
+"fix" is *creation*, not patching. It keeps the caller's reasoning context clean instead of making it manage
+its own naming slip — and it's reconciled with the obstacle-course "babying" critique because it heals a
+*sub-agent's* clear intent **out-of-band + logged**, never widening authority.
+
+**Adopted: missing specialists.** `agent-caps.mjs` `fillMissingSpecialist({ name, request, caller })` —
+`askSpecialist("name-that-doesn't-exist")` no longer returns "no such specialist"; an injected `fillSpecialist`
+infers the intended `{domain, powers, instructions}`, the powers are **enforced ⊆ the caller** (`caller.powers`
+∩ requested − non-delegable — a greedy filler is clamped, never escalates), it's spawned (`spawnedFrom: wand:…`),
+and the call proceeds; the answer carries `autoCreated` for audit. Server wires an LLM filler; `SELF_HEAL=0`
+or no filler → today's graceful miss. Proven in `magic-wand.test.mjs` (materialize + clamp greedy filler ⊆
+caller + no-filler graceful + filler-declines). **Ladder next:** unknown custom-tool call → build it
+(the obstacle-course blacksmith); unknown role/task target → configure it.
+
 ## Adopted now
 
 - `self-heal.mjs` — the generic `makeSelfHealer({ fix }).heal(...)` seam above.

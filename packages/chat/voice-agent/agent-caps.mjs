@@ -538,7 +538,7 @@ export const resolvePower = name => { const n = String(name || ''); return POWER
 // ── build the agent. Returns the locator + a root node holding ALL powers. ────
 // makeFieldAgent({ outDir, baseUrl }) →
 //   { locator, register, rootNode, rootSwiss(set later), toolboxFor, manifestFor }
-export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFile, peerBridge = endoPeer, peerRedemption = process.env.FIELD_AGENT_PEER_REDEMPTION === '1' } = {}) => {
+export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFile, fillSpecialist, peerBridge = endoPeer, peerRedemption = process.env.FIELD_AGENT_PEER_REDEMPTION === '1' } = {}) => {
   const aff = makeAffordances({ outDir });
   // worktree manager for write-capable role sub-agents (runs on the UNCONFINED host shell).
   const worktrees = makeWorktrees({ host: aff.host });
@@ -1619,7 +1619,7 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
         return harden({ ok: !!r.ok, id: r.id, name: r.name, domain: String(domain || ''), powers: granted,
           note: `Spawned — confined to ${granted.length ? granted.join(', ') : 'no'} power(s), a subset of yours (no confirmation needed). ${dropped.length ? `Not granted: ${dropped.join(', ')} (outside your bounds or not delegable). ` : ''}Use it via askSpecialist("${r.name}", …).` });
       } });
-      toolbox.askSpecialist = harden(makeAskSpecialist(ctx.userText));
+      toolbox.askSpecialist = harden(makeAskSpecialist(ctx.userText, node)); // node = caller → the wand bounds an auto-created specialist to ⊆ this agent
       manifest.push(
         { name: 'listSpecialists', reversible: false, args: {}, description: 'List your specialist sub-agents (name, domain, powers, and what each may do autonomously).' },
         { name: 'spawnSpecialist', reversible: true, args: { name: 'string', domain: 'string — the kind of requests it handles', powers: 'array — a subset of YOUR powers to grant it', instructions: 'string — its standing instructions / persona' }, description: 'Spawn a persistent specialist sub-agent into your inventory. Spawns IMMEDIATELY, no confirmation — it is confined to a SUBSET of your own powers (the cap graph guarantees it can never exceed you), so creating one within your bounds is pre-approved; you may incur cost, capped by your budget. Powers you do not hold are silently not granted. Grant it `specialists` too if you want it to build its own sub-agents.' },
@@ -2199,12 +2199,32 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
   };
   // Run a specialist (gemma) with ITS confined bundle + ITS instructions. Its proposals
   // / auto-fires are scoped to its id and bubble up to the caller's turn (server merges).
-  const makeAskSpecialist = (origin = '') => {
+  // MAGIC WAND for specialists (vault: [[magic wand]] + designs/self-healing-errors.md): the agent named a
+  // specialist that doesn't exist. Rather than bubble a "no such specialist" error into the caller's context,
+  // MATERIALIZE the intended one — fillSpecialist (injected) infers its domain/powers/instructions from the
+  // name + request; we ENFORCE the powers to a SUBSET of the caller (the cap-graph bound — it can never
+  // escalate), spawn it, and hand it back (spawnedFrom records the wand). Returns the created spec, or null
+  // (no filler wired / inference failed) → the caller falls back to the plain "no such specialist".
+  const fillMissingSpecialist = async ({ name, request = '', origin = '', caller } = {}) => {
+    if (typeof fillSpecialist !== 'function' || !caller || !caller.powers) return null;
+    let cfg = null;
+    try { cfg = await fillSpecialist({ name: String(name || ''), request: String(request || ''), origin: String(origin || ''), availablePowers: [...caller.powers] }); } catch { cfg = null; }
+    if (!cfg) return null;
+    const granted = [...new Set((Array.isArray(cfg.powers) ? cfg.powers : []).filter(p => caller.powers.has(p) && !META_POWERS.has(p)))]; // ⊆ caller — the wand forges, never escalates
+    const made = spawnSpecialist({ name: String(name || 'specialist'), domain: cfg.domain || '', powers: granted, instructions: cfg.instructions || '', spawnedFromChatId: `wand:${String(name || '').slice(0, 40)}` });
+    return harden({ ...made, domain: cfg.domain || '', granted });
+  };
+  const makeAskSpecialist = (origin = '', caller = null) => {
     let active = null;
     return {
       run: async ({ name, request } = {}) => {
-        const spec = findSpecialist(name);
-        if (!spec) return { ok: false, error: `no specialist "${name}" — list them with listSpecialists` };
+        let spec = findSpecialist(name);
+        let autoCreated = null;
+        if (!spec) { // the named specialist doesn't exist → wave the wand: materialize it (⊆ caller), then proceed
+          const made = await fillMissingSpecialist({ name, request, origin, caller });
+          if (made && made.ok) { spec = findSpecialist(made.id) || findSpecialist(name); if (spec) autoCreated = { id: made.id, name: made.name, domain: made.domain, powers: made.granted }; }
+          if (!spec) return { ok: false, error: `no specialist "${name}" — list them with listSpecialists` };
+        }
         const sub = getSpecNode(spec).toolbox();
         const proposalIds = []; const autoFired = []; const toolsUsed = [];
         const ac = new AbortController(); active = ac;
@@ -2218,7 +2238,7 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
               if (s.result.autoConfirmed) autoFired.push({ title: s.result.title, type: s.result.type, ok: s.result.fired !== false });
               if (s.name) toolsUsed.push(s.name);
             } });
-          return harden({ ok: true, specialist: spec.name, answer: r.answer, proposalIds, autoFired, toolsUsed });
+          return harden({ ok: true, specialist: spec.name, answer: r.answer, proposalIds, autoFired, toolsUsed, ...(autoCreated ? { autoCreated } : {}) });
         } finally { if (active === ac) active = null; }
       },
       abort: () => { try { active?.abort(); } catch { /* best effort */ } },
@@ -2327,6 +2347,8 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
     rescopeCap, // re-grant/revoke a chat cap's powers in place (same swiss) — root-gated by the server
     locator,
     rootNode,
+    fillMissingSpecialist, // MAGIC WAND: materialize a named-but-missing specialist, confined ⊆ a caller node
+
     // register the root under its (persisted) swissnum
     registerRoot: swiss => { locator.set(swiss, { node: rootNode }); return swiss; },
     // look up the node for a swissnum (null if unknown/revoked)

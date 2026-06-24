@@ -385,7 +385,21 @@ const traceRun = async (node, transcript, persona, chatId) => {
 const log = (...a) => process.stderr.write(`[${new Date().toISOString()}] ${a.join(' ')}\n`);
 const newSwissRe = /^[0-9a-f]{32}$/;
 
-const { rootNode, registerRoot, nodeFor, getProposal, commitProposal, rejectProposal, buildHomeAssistant, buildAgents, buildContacts, buildKazputer, siteDir, downloadFor, getPersona, runScheduledAgent, mintScopedCap, rescopeCap, specialistFor, haResolveReadOnly, changelog } = makeFieldAgent({ outDir: OUT, baseUrl: BASE_URL });
+// MAGIC WAND filler (designs/self-healing-errors.md + vault [[magic wand]]): when an agent asks a specialist
+// that doesn't exist, infer its config so the system can materialize it (powers are re-bounded ⊆ the caller in
+// agent-caps — this only SUGGESTS). On by default; SELF_HEAL=0 disables (a miss → plain "no such specialist").
+const fillSpecialist = process.env.SELF_HEAL === '0' ? undefined : async ({ name, request, origin, availablePowers = [] }) => {
+  const sys = 'You configure a NEW confined specialist sub-agent that an agent just referenced by name but that does not exist yet. Infer what it should be from its NAME + the request it was handed. Reply with ONLY compact JSON {"domain":"<the kind of requests it handles>","powers":["<the FEWEST powers it needs, chosen ONLY from the available list>"],"instructions":"<its standing persona, 2-4 sentences>"}. No prose, no markdown fence.';
+  const usr = `Specialist name: ${name}\nRequest it was asked to handle: ${String(request || '').slice(0, 800)}\n${origin ? `Originating user request: ${String(origin).slice(0, 400)}\n` : ''}Available powers (choose a subset): ${(availablePowers || []).join(', ')}`;
+  let out;
+  try { out = await callLLM([{ role: 'system', content: sys }, { role: 'user', content: usr }], process.env.SELF_HEAL_MODEL || 'default', { maxTokens: 600 }); }
+  catch { return null; }
+  const m = /\{[\s\S]*\}/.exec(String((out && out.text) || ''));
+  if (!m) return null;
+  try { const j = JSON.parse(m[0]); return { domain: String(j.domain || ''), powers: Array.isArray(j.powers) ? j.powers : [], instructions: String(j.instructions || '') }; }
+  catch { return null; }
+};
+const { rootNode, registerRoot, nodeFor, getProposal, commitProposal, rejectProposal, buildHomeAssistant, buildAgents, buildContacts, buildKazputer, siteDir, downloadFor, getPersona, runScheduledAgent, mintScopedCap, rescopeCap, specialistFor, haResolveReadOnly, changelog } = makeFieldAgent({ outDir: OUT, baseUrl: BASE_URL, fillSpecialist });
 liveCells = makeLiveCells({ nodeFor }); // browser-subscribable live grains (cap-gated)
 // Least-authority cross-user share tokens for a broken-out component: subscribe-only to its frozen cells.
 const componentShares = makeComponentShares({ file: `${HOME}/.local/state/voice-agent/component-shares.json`, makePurse, purseStore });
