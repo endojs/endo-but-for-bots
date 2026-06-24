@@ -68,6 +68,7 @@ import { makeConnectors } from './connectors.mjs';
 import { makeCustomTools } from './custom-tools.mjs';
 import { makeToolShares } from './tool-shares.mjs';
 import { makeComponentGit } from './component-git.mjs';
+import { validateComponentSource } from './component-source.mjs';
 import { buildSystemMap } from './system-map.mjs';
 import { braveSearch } from './brave-search.mjs';
 import { runResearch } from './research.mjs';
