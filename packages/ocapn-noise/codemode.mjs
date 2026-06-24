@@ -151,6 +151,7 @@ export const runAgentCode = async ({ toolbox, manifest, userText, history = [], 
   // legitimate long tasks are never cut off by an arbitrary count; spend is the real budget.
   let lastError = '';
   let repeatErr = 0; // consecutive identical throws → the agent is wedged; break out and REPORT it
+  let failStreak = 0; // consecutive throws of ANY kind → catches alternating/non-identical errors repeatErr misses
   let emptyRetries = 0; // the model returned NOTHING (no program, no answer) → nudge it to act, then report honestly
   for (;;) {
     if (signal?.aborted) return cancelled();
@@ -191,7 +192,7 @@ export const runAgentCode = async ({ toolbox, manifest, userText, history = [], 
     if (signal?.aborted) return cancelled();
     const parts = [];
     if (r.logs.length) parts.push(`logs:\n${clip(r.logs.join('\n'), 8000)}`);
-    if (r.ok) { parts.push(`returned: ${clip(safeJson(r.value), 12000)}`); repeatErr = 0; lastError = ''; }
+    if (r.ok) { parts.push(`returned: ${clip(safeJson(r.value), 12000)}`); repeatErr = 0; failStreak = 0; lastError = ''; }
     else {
       // USEFUL ERROR when the agent INVENTS a tool: a bare "X is not defined" becomes a clear message —
       // what tools actually exist, and how to ask for a real capability you lack (requestAccess) — so the
@@ -208,8 +209,12 @@ export const runAgentCode = async ({ toolbox, manifest, userText, history = [], 
       }
       parts.push(`threw: ${err}`);
       repeatErr = err === lastError ? repeatErr + 1 : 0; lastError = err;
+      failStreak += 1;
       // Wedged: the same error 3× running and still no answer → stop burning allowance, REPORT the failure.
       if (repeatErr >= 2) { const answer = stallMessage(lastError); onStep({ kind: 'answer', text: answer }); return harden({ answer, toolsUsed: used, stalled: true }); }
+      // Also wedged when errors DIFFER each turn (so repeatErr never climbs): a run of 4 failures in a row
+      // means no forward progress → stop burning allowance, REPORT the last failure honestly.
+      if (failStreak >= 4) { const answer = stallMessage(lastError); onStep({ kind: 'answer', text: answer }); return harden({ answer, toolsUsed: used, stalled: true }); }
     }
     messages.push({ role: 'user', content: `OUTPUT:\n${parts.join('\n')}` });
   }
