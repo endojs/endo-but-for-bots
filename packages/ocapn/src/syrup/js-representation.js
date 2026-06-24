@@ -1,6 +1,8 @@
 // @ts-check
 
 import { passableSymbolForName } from '@endo/pass-style';
+import { thawnBytes } from '@endo/pass-style/from-bytes.js';
+import { compareBytes } from '@endo/bytes/compare.js';
 import {
   BooleanCodec,
   BytestringCodec,
@@ -12,7 +14,6 @@ import {
   makeTypeHintUnionCodec,
   StringCodec,
 } from './codec.js';
-import { compareUint8Arrays } from './compare.js';
 import { makeSyrupReader } from './decode.js';
 import { makeSyrupWriter } from './encode.js';
 
@@ -51,6 +52,19 @@ export const getSyrupSelectorName = selectorSymbol => {
     );
   }
   return description.slice(SYRUP_SELECTOR_PREFIX.length);
+};
+
+// A wrapper around BytestringCodec that thawns the value before writing.
+// Required for passable byteArray values (frozen Uint8Arrays backed by an
+// immutable ArrayBuffer), whose integer-indexed reads do not go through the
+// TypedArray exotic behaviour; TypedArray.prototype.set reads source values via
+// integer-indexed access, which returns undefined on the plain-object wrapper.
+// thawnBytes() extracts a genuine mutable Uint8Array copy that set() can read.
+/** @type {SyrupCodec} */
+const PassableAwareBytestringCodec = {
+  read: syrupReader => BytestringCodec.read(syrupReader),
+  write: (value, syrupWriter) =>
+    BytestringCodec.write(thawnBytes(value), syrupWriter),
 };
 
 /** @type {SyrupCodec} */
@@ -132,7 +146,7 @@ export const AnyCodec = makeTypeHintUnionCodec(
         // eslint-disable-next-line no-use-before-define
         return SetCodec;
       } else if (value instanceof Uint8Array) {
-        return BytestringCodec;
+        return PassableAwareBytestringCodec;
       } else if (typeof value === 'object' && value !== null) {
         if (value[Symbol.toStringTag] === 'Record') {
           // eslint-disable-next-line no-use-before-define
@@ -200,7 +214,7 @@ export const DictionaryCodec = freeze({
       DictionaryKeyCodec.write(key, scratchWriter);
       const newKeyBytes = scratchWriter.getBytes();
       if (priorKeyBytes !== undefined) {
-        const order = compareUint8Arrays(priorKeyBytes, newKeyBytes);
+        const order = compareBytes(priorKeyBytes, newKeyBytes);
         if (order === 0) {
           throw Error(
             `Syrup dictionary keys must be unique, got repeated ${quote(key)} at index ${start} of ${syrupReader.name}`,
@@ -239,7 +253,7 @@ export const DictionaryCodec = freeze({
       keyBytes.push(scratchWriter.getBytes().subarray(start, end));
       indexes.push(indexes.length);
     }
-    indexes.sort((i, j) => compareUint8Arrays(keyBytes[i], keyBytes[j]));
+    indexes.sort((i, j) => compareBytes(keyBytes[i], keyBytes[j]));
 
     syrupWriter.enterDictionary();
     for (const index of indexes) {

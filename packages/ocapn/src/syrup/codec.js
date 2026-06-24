@@ -13,14 +13,11 @@ import { ocapnPassStyleOf } from '../codecs/ocapn-pass-style.js';
 /**
  * Decode a bytestring label from the wire as a strict UTF-8 string.
  * Malformed sequences throw a `TypeError` rather than substituting U+FFFD.
- * Accepts the byteArray passable form (frozen Uint8Array over immutable
- * ArrayBuffer) directly, performing the mutable copy internally only when
- * `TextDecoder.decode` requires it.
  *
- * @param {Uint8Array} buffer
+ * @param {Uint8Array} bytes
  * @returns {string}
  */
-const decodeBytestringLabel = buffer => strictDecodeUtf8(buffer);
+const decodeBytestringLabel = bytes => strictDecodeUtf8(bytes);
 /**
  * @typedef {object} SyrupCodec
  * @property {function(SyrupReader): any} read
