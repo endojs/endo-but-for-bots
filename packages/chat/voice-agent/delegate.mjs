@@ -120,3 +120,24 @@ export const opusComplete = async ({ system = '', prompt = '', maxTokens = 900, 
   } catch { return null; }
 };
 harden(opusComplete);
+
+// ── makeMeteredOpusDelegate — the wired seam: an Opus delegate that bills the purse ──
+//
+// runOpusDelegate is the BARE delegate (it just reports cumulative `usage`). This is the
+// place that WIRES it into makeMeteredDelegate (meter.mjs) so a delegated (Opus) turn is
+// metered against the chat purse EXACTLY like callLLM is via makeMeteredLLM:
+//   • REFUSE before any paid Opus call when the purse can't cover the floor →
+//     throws INFERENCE_BUDGET_EXHAUSTED (deterministic; never routes exhaustion through
+//     the model), and
+//   • on success DEBIT the actual usage-priced cost, accumulating per-provider spend.
+//
+// makeMeteredOpusDelegate({ purse, perProvider, model }) → a delegate(args) with the SAME
+// signature/shape as runOpusDelegate, plus { cost, remaining }. Without a purse it is a
+// no-op pass-through to runOpusDelegate (free / unmetered contexts — tests, no-budget runs).
+import { makeMeteredDelegate } from './meter.mjs';
+
+export const makeMeteredOpusDelegate = ({ purse, perProvider = {}, model = MODEL } = {}) => {
+  if (!purse) return harden((args = {}) => runOpusDelegate(args)); // unmetered pass-through
+  return makeMeteredDelegate({ delegate: args => runOpusDelegate(args), purse, perProvider, model });
+};
+harden(makeMeteredOpusDelegate);
