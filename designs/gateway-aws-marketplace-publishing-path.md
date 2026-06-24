@@ -11,9 +11,7 @@
 
 The MVP is a turnkey Capability Bridge that operators deploy from cloud marketplaces (AWS, GCP, Azure).
 The project publishes the artifact; the operator runs it in their own cloud account.
-The maintainer's directive that scopes this design narrows the question to a concrete deliverable:
-
-> Please dispatch a designer to research and propose a path with concrete steps toward publishing an artifact for use in the Amazon Marketplace, based on the Endo Gateway.
+The concrete deliverable this design scopes is a path with concrete steps toward publishing an Endo Gateway artifact for use in the Amazon Marketplace.
 
 A working publishing path needs four kinds of things in one document:
 
@@ -23,14 +21,12 @@ A working publishing path needs four kinds of things in one document:
 4. A **cross-design coordination** layer that names which named design gaps are blockers and which are deferrable, plus the decisions the designer takes a stance on so the maintainer can ratify or veto each one in a single pass.
 
 This design is a sequencing-and-gaps document, not a packaging design.
-The OS substrate (`.deb` / `.rpm` / PKGBUILD / Dockerfile / Homebrew formula / systemd unit / launchd plist) lives in the existing gateway-packaging stack (PR #410, PR #412, PR #413).
-The AWS deployment topology (VPC, ALB, Auto Scaling Group, Terraform IaC) lives in the existing [gateway-aws-deployment](gateway-aws-deployment.md) design on the `design/gateway-packaging-aws-stack` branch (PR #356).
+The OS substrate (`.deb` / `.rpm` / PKGBUILD / Dockerfile / Homebrew formula / systemd unit / launchd plist) lives in the existing gateway-packaging work.
+The AWS deployment topology (VPC, ALB, Auto Scaling Group, Terraform IaC) lives in the existing [gateway-aws-deployment](gateway-aws-deployment.md) design.
 The MCP termination surface lives in [endo-gateway-mcp](endo-gateway-mcp.md).
 What this design adds is the **publishing path**: the calendar-aware sequence that composes those substrates into a marketplace listing, the irreversible commitments that listing pins, and the open questions the maintainer must close before the first submission.
 
 ## Background
-
-Five prior pieces of work frame the proposal.
 
 **Strategy.**
 The MVP shape is operator-deployed to the operator's own cloud account, with the project as publisher and the operator as the running party.
@@ -38,19 +34,18 @@ The self-custodial framing rules out the SaaS product type for O1; it ratifies t
 The demonstrative service adapters are Gmail, Slack, generic OAuth-2, and GitHub, with OAuth as the operator-identity bonding mechanism.
 The MCP+OAuth bridge is the brief opening before a platform vendor builds capability attenuation into MCP or a competitor claims the category.
 
-**Resequencing.**
-The O1 critical path, re-derived against the actual dependency graph, surfaces twelve design gaps that block O1.
+**Critical path.**
+The O1 critical path, derived against the dependency graph, surfaces twelve design gaps that block O1.
 Three of those gaps are decisive for marketplace publishing: **G-tls-firstboot** (the gateway refuses TLS by design, so a marketplace appliance must bundle a reverse proxy and obtain a certificate autonomously at first boot), **G-firstboot** (AWS forbids hardcoded secrets, so the operator's initial bearer must be generated at first boot and delivered out-of-band), and **G-resource-classes** (AWS MeterUsage dimension names are locked after publication, so the metering taxonomy must be authored and panel-reviewed before the first listing).
 
 **Gateway substrate.**
-PR #410 (`feat/endo-gateway-cli-systemd`) ships the CLI wrapper, per-platform state locations, the systemd unit (`endo-gateway.service`), the launchd plist, and `docs/system-service.md`.
-PR #412 (`feat/endo-gateway-distribution`) ships five OS packaging recipes (Debian, RPM, Arch PKGBUILD, Dockerfile, Homebrew formula) and `docs/packaging.md`.
-PR #413 (`design/gateway-package-phase-11`) wires the HTTP listener so `endo gateway start` binds a real server.
-These three PRs compose into "an operator can install and run the gateway as a system service on any Linux distribution"; the AMI is the next layer above.
+The gateway CLI wrapper, per-platform state locations, the systemd unit (`endo-gateway.service`), the launchd plist, and the system-service documentation are in place.
+Five OS packaging recipes (Debian, RPM, Arch PKGBUILD, Dockerfile, Homebrew formula) and the packaging documentation are in place.
+The HTTP listener is wired so `endo gateway start` binds a real server.
+Together these compose into "an operator can install and run the gateway as a system service on any Linux distribution"; the AMI is the next layer above.
 
 **AWS-stack design.**
-The `design/gateway-packaging-aws-stack` branch (PR #356) carries three Proposed designs: [gateway-packaging-ci](gateway-packaging-ci.md) (build + sign + host the OS packages from CI), [gateway-aws-deployment](gateway-aws-deployment.md) (the VPC + ALB + ASG topology for a multi-AZ HA deployment), and `gateway-aws-attuned` (AWS-native options for S3 CAS, Nitro Enclaves, DynamoDB state).
-These are stacked siblings of PR #343 (gateway-package); they cover the *deployment* layer one level above what the OS packages provide.
+Three Proposed designs cover the deployment layer one level above what the OS packages provide: [gateway-packaging-ci](gateway-packaging-ci.md) (build + sign + host the OS packages from CI), [gateway-aws-deployment](gateway-aws-deployment.md) (the VPC + ALB + ASG topology for a multi-AZ HA deployment), and `gateway-aws-attuned` (AWS-native options for S3 CAS, Nitro Enclaves, DynamoDB state).
 
 **Marketplace product shapes.**
 AWS Marketplace offers four product shapes (Single AMI, AMI+CFT, Container, SaaS).
@@ -62,15 +57,15 @@ AWS marketplace fees are 20% server fee on AMI/AMI+CFT revenue and 3% on SaaS re
 
 ```mermaid
 flowchart TB
-    subgraph SUBSTRATE["Gateway substrate (existing PRs)"]
-      gatewayPkg["@endo/gateway<br/>(PR #343 + phases 2-11)"]
-      cli["endo gateway CLI<br/>(PR #410)"]
-      systemd["systemd / launchd units<br/>(PR #410)"]
-      osPkgs[".deb / .rpm / PKGBUILD<br/>Dockerfile / brew formula<br/>(PR #412)"]
-      listener["HTTP listener wire-up<br/>(PR #413)"]
+    subgraph SUBSTRATE["Gateway substrate (existing work)"]
+      gatewayPkg["@endo/gateway<br/>(phases 2-11)"]
+      cli["endo gateway CLI"]
+      systemd["systemd / launchd units"]
+      osPkgs[".deb / .rpm / PKGBUILD<br/>Dockerfile / brew formula"]
+      listener["HTTP listener wire-up"]
     end
 
-    subgraph GAPS["Marketplace-gating design gaps (this PR scopes; siblings author)"]
+    subgraph GAPS["Marketplace-gating design gaps (this design scopes; siblings author)"]
       gFirstboot["G-firstboot<br/>(out-of-band bearer)"]
       gTls["G-tls-firstboot<br/>(bundled Caddy + ACME)"]
       gClasses["G-resource-classes<br/>(MeterUsage dimensions)"]
@@ -124,9 +119,9 @@ Steps within a phase parallelize where the dependency graph allows; the phase-le
 
 **Goal:** a buyer subscribes through AWS Marketplace, an AMI launches in their AWS account, and they receive a Capability Bridge that terminates MCP for at least one service adapter.
 
-**Built (named PRs and design slugs):**
+**Built (named work items and design slugs):**
 
-- PR #343 gateway-package: phases 2-11 merged to `master` (in flight as PRs #388-#397, #410, #412, #413).
+- gateway-package: phases 2-11 merged to `master`.
 - M6 P1: extract `@endo/agent-tools` from `packages/lal/agent.js`; bearer-token table + `publishAgent` on `Registration`; `/mcp` adapter + SSE; Chat-side "Add agent" button and "MCP" tab affordances.
   Per [endo-gateway-mcp](endo-gateway-mcp.md).
 - New design files (each its own designer dispatch):
@@ -136,7 +131,7 @@ Steps within a phase parallelize where the dependency graph allows; the phase-le
 - New builder PRs implementing the three gap designs.
 - `packages/payment-aws-mp/`: a `PaymentProcessor` adapter that calls `MeterUsage` once per hour per dimension per customer, conforming to the `verifyPaymentProof(tokens, proof)` contract that gateway-package Phase 8's ResourceLedger injects.
   Custom Metering is the AWS billing channel for the AMI; the Stripe adapter remains the self-host billing channel.
-- `packaging/aws-ami/`: a Packer build that starts from Amazon Linux 2023 ARM64 (`c7g.large` per [gateway-aws-deployment](gateway-aws-deployment.md)), installs the `.deb` produced by PR #412, enables the systemd service, bundles Caddy with the ACME first-boot script per G-tls-firstboot, writes the first-boot bearer-delivery script per G-firstboot, applies AMI hardening (no password auth, no pre-seeded SSH keys, no embedded credentials), and emits an AMI in `us-east-1`.
+- `packaging/aws-ami/`: a Packer build that starts from Amazon Linux 2023 ARM64 (`c7g.large` per [gateway-aws-deployment](gateway-aws-deployment.md)), installs the `.deb` produced by the packaging recipes, enables the systemd service, bundles Caddy with the ACME first-boot script per G-tls-firstboot, writes the first-boot bearer-delivery script per G-firstboot, applies AMI hardening (no password auth, no pre-seeded SSH keys, no embedded credentials), and emits an AMI in `us-east-1`.
 - One service adapter (recommend GitHub; see *Decision 3* below).
 
 **Reviewed:**
@@ -178,7 +173,7 @@ Steps within a phase parallelize where the dependency graph allows; the phase-le
 
 - `packages/payment-azure-mp/`: a `PaymentProcessor` adapter for the Azure Marketplace metering service (REST API; dimensions defined before publishing; available only on flat-rate billing model).
 - `packages/payment-gcp-mp/`: a `PaymentProcessor` adapter for GCP Service Control (gRPC; Google manages billing on the publisher's behalf via Cloud Commerce Partner Procurement API).
-- `packaging/azure-vhd/`: a Packer or `azure-image-builder` build emitting a VHD with the first 1 MB reserved for Azure metadata, managed-disk format, that installs the same `.deb` produced by PR #412 and wires the Azure metering adapter.
+- `packaging/azure-vhd/`: a Packer or `azure-image-builder` build emitting a VHD with the first 1 MB reserved for Azure metadata, managed-disk format, that installs the same `.deb` and wires the Azure metering adapter.
 - `packaging/gcp-gce/`: a Packer build emitting a GCE image with the Compute Engine license attachment, that installs the same `.deb` and wires the GCP Service Control adapter.
 - New design files:
   - `designs/gateway-state-custody.md` (G-state-custody).
@@ -234,7 +229,7 @@ The Hub is a federated, multi-tenant variant of the Gateway; the Bridge listings
 ## MVP Single-AMI Artifact Composition
 
 The first AMI is built by Packer from Amazon Linux 2023 ARM64 (the `c7g.large` baseline named in [gateway-aws-deployment](gateway-aws-deployment.md) § EC2 Auto Scaling Group).
-The Packer template lives at `packaging/aws-ami/template.pkr.hcl` in the monorepo, alongside the existing five packaging recipes from PR #412.
+The Packer template lives at `packaging/aws-ami/template.pkr.hcl` in the monorepo, alongside the existing five packaging recipes.
 
 ### Files the AMI must include
 
@@ -242,8 +237,8 @@ The AMI's filesystem composition, expressed as the layered changes Packer applie
 
 | Source | Path on AMI | Purpose |
 |--------|-------------|---------|
-| `.deb` from `packaging/debian/` (PR #412) | installed via `apt install` | `@endo/gateway` binary, `endo gateway` CLI |
-| systemd unit from `packages/gateway/systemd/endo-gateway.service` (PR #410) | `/lib/systemd/system/endo-gateway.service` | service supervision, `User=endo`, hardened directives |
+| `.deb` from `packaging/debian/` | installed via `apt install` | `@endo/gateway` binary, `endo gateway` CLI |
+| systemd unit from `packages/gateway/systemd/endo-gateway.service` | `/lib/systemd/system/endo-gateway.service` | service supervision, `User=endo`, hardened directives |
 | Caddy binary (vendored or apt-installed) | `/usr/bin/caddy` | TLS termination per G-tls-firstboot |
 | Caddyfile template | `/etc/caddy/Caddyfile.template` | `<node-id>.nodes.endo.example.com` virtual host, ACME DNS-01 challenge |
 | Caddy systemd unit | `/lib/systemd/system/caddy.service` | service supervision for the bundled proxy |
@@ -271,7 +266,7 @@ A future enhancement may let an operator pre-stage configuration via user-data (
 
 The four units shipped on the AMI:
 
-1. `endo-gateway.service`: the gateway daemon, `User=endo`, hardened directives per PR #410.
+1. `endo-gateway.service`: the gateway daemon, `User=endo`, hardened directives per the shipped systemd unit.
 2. `caddy.service`: the bundled TLS terminator, listens on `:443`, proxies plaintext HTTP to `127.0.0.1:3469` (the gateway's `c7g.large` bind port per [gateway-aws-deployment](gateway-aws-deployment.md)).
 3. `endo-firstboot.service`: the one-shot first-boot unit (described above).
 4. `endo-meterusage.timer` + `endo-meterusage.service`: the hourly meter-usage emission to AWS.
@@ -289,7 +284,7 @@ The recommended pattern is **vendor-delegated subdomain with pre-provisioned CNA
 5. The operator's marketplace listing page surfaces the `<node-id>.nodes.endo.example.com` URL post-launch.
 
 **The non-custodian-spirit contradiction**: vendor-delegated DNS requires the publisher to run a DNS provisioning service for every issued node for that node's lifetime, which contradicts the project's "we are not the custodian" posture.
-This design's stance is to **accept the contradiction** (see *Decision 5* below) because the alternative TOFU / bring-your-own-domain patterns degrade the "click deploy and get a running node" UX to a point that undermines the strategy's MVP positioning.
+This design's stance is to **accept the contradiction** (see *Decision 5* below) because the alternative TOFU / bring-your-own-domain patterns degrade the "click deploy and get a running node" UX to a point that undermines the MVP positioning.
 G-tls-firstboot's design dispatch should surface a bring-your-own-domain mode as an opt-in alternative for operators who want to avoid the vendor's DNS commitment; the maintainer's call is whether the opt-in alternative is required for first listing or a v1.1 fast-follow.
 
 ## AWS Marketplace Submission Checklist
@@ -342,7 +337,7 @@ A working sequence the publisher follows once the AMI is built and the gap PRs a
 
 ## Cross-design coordination
 
-The four named design gaps from PR #400 (the grooming pass that introduced them):
+The four named design gaps already on the books:
 
 | Gap | Blocker for AWS submission? | This design's stance |
 |-----|------------------------------|----------------------|
@@ -351,7 +346,7 @@ The four named design gaps from PR #400 (the grooming pass that introduced them)
 | `gateway-stripe-adapter` | **No (different billing channel).** | The AWS AMI bills via MeterUsage, not Stripe. Stripe is the self-host billing channel and is independent of the marketplace listing. The Stripe adapter can ship on any schedule that suits the self-host customer base. |
 | `gateway-resource-classes` | **Yes (irreversible decision).** | The MeterUsage dimension names are locked at publication. `gateway-resource-classes` must be authored, panel-reviewed, and merged to `llm` before the AWS submission. This design recommends the four-class starting set (`computrons`, `cogitrons`, `bytes_stored`, `bytes_network`); the gap design ratifies or revises. |
 
-The three additional gaps from the resequenced O1 critical path that are also marketplace blockers, added to the table above:
+The three additional gaps from the O1 critical path that are also marketplace blockers, added to the table above:
 
 | Gap | Blocker for AWS submission? | This design's stance |
 |-----|------------------------------|----------------------|
@@ -368,7 +363,7 @@ The five decisions this design takes a stance on; the maintainer ratifies or vet
 **Stance:** the first listing is a Single-AMI product (one EC2 instance per buyer subscription, no surrounding AWS resources).
 [gateway-aws-deployment](gateway-aws-deployment.md)'s ALB + ASG + Terraform topology pulls into the listing as an AMI+CFT graduation in O1.b or later, not at launch.
 
-**Reasoning:** the single-AMI shape is the simplest review pipeline, has the lowest buyer-side prerequisites, and maps directly onto the buyer experience the strategy targets: click "deploy" and receive a running Endo agent sandbox in their own cloud account.
+**Reasoning:** the single-AMI shape is the simplest review pipeline, has the lowest buyer-side prerequisites, and maps directly onto the targeted buyer experience: click "deploy" and receive a running Endo agent sandbox in their own cloud account.
 The AMI+CFT shape becomes attractive once the Bridge wants ALB / IAM / S3 / DynamoDB provisioned alongside, which is post-MVP scope.
 
 ### Decision 2: Custom Metering at launch, not Paid Hourly
@@ -376,13 +371,13 @@ The AMI+CFT shape becomes attractive once the Bridge wants ALB / IAM / S3 / Dyna
 **Stance:** ratify Custom Metering with the four resource-class dimensions named above.
 The publisher commits to the dimension-name lock at first publication.
 
-**Reasoning:** Paid Hourly is simpler and reversible but does not allow per-cogitron or per-byte-network billing, and the strategy's inference-aware billing posture treats those dimensions as first-class.
+**Reasoning:** Paid Hourly is simpler and reversible but does not allow per-cogitron or per-byte-network billing, and the project's inference-aware billing posture treats those dimensions as first-class.
 Shipping on Paid Hourly first and adding Custom Metering as a follow-up listing means publishing the product twice through the 2-4 week review pipeline; shipping Custom Metering from day one with conservative dimensions means one review pipeline and a billing model that matches the strategic posture.
 The 15-character alphanumeric dimension-name limit is the binding constraint; all four recommended dimensions fit (max 12 characters).
 `gateway-resource-classes` is the design that finalizes the names.
 
 **Considered and rejected:** Paid Hourly + Custom Metering as v1.1.
-Reason: doubles the listing-review calendar tax and ships a billing model out of step with the strategy on day one.
+Reason: doubles the listing-review calendar tax and ships a billing model out of step with the project's billing posture on day one.
 
 ### Decision 3: GitHub as the first service adapter
 
@@ -394,14 +389,14 @@ Gmail and Slack are more familiar to a general audience but require Google / Sla
 GitHub OAuth client registration is one form and one approval; Gmail and Slack ship as v1.1 second-and-third adapters.
 
 **Considered and rejected:** Gmail as first adapter.
-Reason: Google OAuth client registration is slower (verification + audit for sensitive scopes); the strategy-marketing alignment is also weaker because Gmail's permission scopes are already narrowable.
+Reason: Google OAuth client registration is slower (verification + audit for sensitive scopes); the marketing alignment is also weaker because Gmail's permission scopes are already narrowable.
 
 ### Decision 4: Commercial entity for the marketplace seller identity
 
 **Stance:** the publisher must register a commercial entity (LLC or equivalent) as the AWS Marketplace seller; the maintainer's personal identity is *not* the seller.
 This design surfaces the question as a hard blocker on submission; the maintainer's call is which entity and on what timeline.
 
-**Reasoning:** the "kriskowal credentials" model (per `journal/projects/endo/README.md` § Identity and credentials) routes upstream-project authority through the maintainer's personal identity, which is appropriate for code review and upstream PR authorship.
+**Reasoning:** the project's existing credentials model routes upstream-project authority through the maintainer's personal identity, which is appropriate for code review and upstream PR authorship.
 Marketplace seller registration is a tax-and-banking commitment with liability implications (the seller is the legal party in the AWS-buyer transaction).
 Conflating the personal and commercial identities for marketplace purposes exposes the maintainer to liabilities the project does not yet have a posture on (and which G-operator-liability is the survey-only design that should inform the eventual posture).
 
@@ -429,10 +424,10 @@ Reason: degrades the MVP positioning to operators who already own a domain and k
 
 ## Open Questions for the maintainer
 
-The open questions surveyed during drafting carry forward, with this design's recommended answers attached.
+The open questions carry forward, with this design's recommended answers attached.
 The maintainer's call on each is recorded under the question, or "defer to G-X" when the answer flows from a sibling design dispatch.
 
-1. **SaaS vs AMI as the MVP shape.** This design recommends AMI; the strategy and the resequenced O1 critical path both rule out SaaS for O1.
+1. **SaaS vs AMI as the MVP shape.** This design recommends AMI; the self-custodial MVP positioning and the O1 critical path both rule out SaaS for O1.
 2. **Single-AMI vs AMI+CFT at launch.** See *Decision 1* above; recommends single-AMI, with AMI+CFT as O1.b graduation.
 3. **MeterUsage dimensions: lock now or defer Custom Metering?** See *Decision 2* above; recommends Custom Metering with four conservative dimensions.
 4. **Vendor-delegated DNS for TLS first-boot: operational commitment.** See *Decision 5* above; recommends accept-the-contradiction with a future bring-your-own-domain opt-in.
@@ -462,8 +457,8 @@ The maintainer's call on each is recorded under the question, or "defer to G-X" 
 | Design | Relationship |
 |--------|--------------|
 | [endo-gateway-mcp](endo-gateway-mcp.md) | The MCP termination surface that is the first user-facing value proposition of the AMI. First priority on the O1 critical path. |
-| [gateway-aws-deployment](gateway-aws-deployment.md) | The deployment topology that graduates the single-AMI listing into AMI+CFT in O1.b or later. Lives on PR #356's branch; this design treats it as Proposed-on-branch and recommends merging to `llm` as a precondition for the graduation step. |
-| [gateway-packaging-ci](gateway-packaging-ci.md) | The CI workflow that builds the `.deb` the AMI installs. Lives on PR #356's branch; same merge-to-`llm` open decision. |
+| [gateway-aws-deployment](gateway-aws-deployment.md) | The deployment topology that graduates the single-AMI listing into AMI+CFT in O1.b or later. Not yet merged to `llm`; this design treats it as Proposed-on-branch and recommends merging to `llm` as a precondition for the graduation step. |
+| [gateway-packaging-ci](gateway-packaging-ci.md) | The CI workflow that builds the `.deb` the AMI installs. Not yet merged to `llm`; same merge-to-`llm` open decision. |
 | [gateway-bearer-token-auth](gateway-bearer-token-auth.md) | The bearer-token model the MVP ships on; OAuth bonding is a v1.1 follow-up. |
 | `gateway-first-boot-ceremony` (G-firstboot, to be authored) | The first-boot bearer-delivery design; a blocker for AWS submission. |
 | `gateway-bundled-tls` (G-tls-firstboot, to be authored) | The bundled-Caddy + ACME first-boot design; a blocker for AWS submission. |
