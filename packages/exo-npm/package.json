@@ -31,7 +31,7 @@
       "default": "./index.js"
     },
     "./errors.js": "./src/errors.js",
-    "./interfaces.js": "./src/interfaces.js",
+    "./type-guards.js": "./src/type-guards.js",
     "./reference-backend.js": "./src/reference-backend.js",
     "./mvs-resolver.js": "./src/mvs-resolver.js",
     "./snapshot-mapper.js": "./src/snapshot-mapper.js",

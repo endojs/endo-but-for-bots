@@ -9,7 +9,7 @@ export {
   registryErrorName,
 } from './src/errors.js';
 
-export { EndoRegistryInterface } from './src/interfaces.js';
+export { EndoRegistryInterface } from './src/type-guards.js';
 
 export {
   makeNpmReferenceRegistry,

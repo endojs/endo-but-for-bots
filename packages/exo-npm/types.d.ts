@@ -4,7 +4,7 @@
 // `designs/registry-capability.md` § Capability shape.
 //
 // This file is the source of truth for cross-package consumers; the
-// runtime module guards (in `src/interfaces.js`) and the npm-scoped
+// runtime module guards (in `src/type-guards.js`) and the npm-scoped
 // reference backend (in `src/reference-backend.js`) implement the
 // same shape.
 //

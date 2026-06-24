@@ -36,7 +36,7 @@
 
 import { makeExo } from '@endo/exo';
 import { makeError, X } from '@endo/errors';
-import { EndoRegistryInterface } from './interfaces.js';
+import { EndoRegistryInterface } from './type-guards.js';
 import { RegistryNetworkError } from './errors.js';
 
 /**
