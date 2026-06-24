@@ -208,8 +208,9 @@ treatment for the `URL` constructor and `URLSearchParams`),
 [sturdy-refs-finalization-registry](sturdy-refs-finalization-registry.md)
 (added 2026-06-22; one of a pair of competing designs addressing the
 PR #500 maintainer directive; first-classes a `'sturdyref'` pass-style
-category, registers SturdyRefs with `HandledPromise` for `E()` dispatch,
-accepts a SturdyRef anywhere the daemon accepts a pet-name-path, and
+category, treats SturdyRefs as inert data enlivened to a presence
+before `E()`, accepts a SturdyRef anywhere the daemon accepts a
+pet-name-path, and
 sources implicit-retention semantics from a daemon-side
 `FinalizationRegistry` over per-worker SturdyRef holders; sibling design
 on `design/sturdy-refs-via-endor-syscall` takes the ocap-kernel-leaning
