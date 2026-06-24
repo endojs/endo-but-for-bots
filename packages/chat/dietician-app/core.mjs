@@ -210,6 +210,10 @@ export const makePipeline = ({
     const lim = Math.max(1, Math.min(8, Number(limit) || 3));
     const spec = await store.readSpec();
     const cityName = city ? ((cityRecord(cities, city) || {}).name || city) : null;
+    // Match the city by SLUG, not exact string: scan persists place.city as the geocoded DISPLAY name
+    // ("Copenhagen") while evaluate may be called with the slug ("copenhagen") for a city that isn't
+    // pre-configured — an exact compare drops every candidate. slugify both sides so they agree.
+    const wantSlug = city ? slugify(city) : null;
 
     let todo = [];
     if (Array.isArray(slugs)) todo = slugs.slice();
@@ -218,7 +222,7 @@ export const makePipeline = ({
         if (await store.getVerdict(slug)) continue; // already judged → idempotent
         const place = await store.getPlace(slug);
         if (!place) continue;
-        if (cityName && String(place.city || '') !== cityName) continue;
+        if (wantSlug && slugify(place.city || '') !== wantSlug) continue;
         todo.push(slug);
       }
     }

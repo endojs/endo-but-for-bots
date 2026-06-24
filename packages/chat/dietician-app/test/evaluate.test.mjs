@@ -47,3 +47,15 @@ test('evaluate uses the injected web cap when there is no cached menu, and cache
   assert.equal((await store.getVerdict('web-spot')).verdict, 'BORDERLINE');
   assert.match((await store.getPlace('web-spot')).cached_menu, /Web Menu/, 'fetched menu cached for reuse');
 });
+
+test('evaluate matches candidates by city SLUG, not exact display name (Copenhagen↔copenhagen)', async () => {
+  const store = makeMemStore({
+    places: { kods: { name: 'KöD', place_id: 'p1', primary_type: 'steak_house', city: 'Copenhagen', cached_menu: '# Menu\ngrilled steak, plain' } },
+  });
+  const judge = makeJudge({ complete: async () => '{"verdict":"VIABLE","summary":"ok"}' });
+  const pipe = makePipeline({ store, judge, person: 'alexa' });
+  // called with the SLUG 'copenhagen' for a city not in SEED_CITIES — must still find the "Copenhagen" candidate
+  const r = await pipe.evaluate({ city: 'copenhagen', limit: 5 });
+  assert.equal(r.evaluated, 1, 'the Copenhagen candidate is found + evaluated (was 0 before the slug fix)');
+  assert.equal((await store.getVerdict('kods')).verdict, 'VIABLE');
+});
