@@ -8,7 +8,8 @@
 import harden from '@endo/harden';
 import { E } from '@endo/eventual-send';
 import { makeTagged } from '@endo/pass-style';
-import { decodeSwissnum } from './util.js';
+import { decodeAscii } from '@endo/ascii/decode.js';
+import { thawnBytes } from '@endo/pass-style/from-bytes.js';
 
 /**
  * @import { CopyTagged } from '@endo/pass-style'
@@ -66,7 +67,7 @@ export const enlivenSturdyRef = async (
 
   // Special case: if this is a self-location, return the object directly
   if (isSelfLocation(location)) {
-    const swissStr = decodeSwissnum(swissNum);
+    const swissStr = decodeAscii(thawnBytes(swissNum));
     const object = swissnumTable.get(swissStr);
     if (!object) {
       throw Error(`Local fetch: Unknown swissnum for sturdyref: ${swissStr}`);
@@ -111,7 +112,7 @@ export const makeSturdyRefTracker = swissnumTable => {
      * @returns {any | undefined}
      */
     lookup: swissNum => {
-      const swissStr = decodeSwissnum(swissNum);
+      const swissStr = decodeAscii(thawnBytes(swissNum));
       return swissnumTable.get(swissStr);
     },
     /**

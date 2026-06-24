@@ -9,6 +9,8 @@
 
 import harden from '@endo/harden';
 import { ONE_N, ZERO_N } from '@endo/nat';
+import { compareBytes } from '@endo/bytes/compare.js';
+import { thawnBytes } from '@endo/pass-style/from-bytes.js';
 import {
   readOcapnHandshakeMessage,
   writeOcapnHandshakeMessage,
@@ -18,7 +20,6 @@ import {
   makeSessionId,
   assertLocationSignatureValid,
 } from '../cryptography.js';
-import { compareUint8Arrays } from '../syrup/compare.js';
 import { makeSyrupReader } from '../syrup/decode.js';
 import { decodeSyrup } from '../syrup/js-representation.js';
 import { locationToLocationId } from './util.js';
@@ -58,7 +59,7 @@ const compareSessionKeysForCrossedHellos = (
     getSelfIdentityForConnection(outgoingConnection).keyPair.publicKey;
   const outgoingId = outgoingPublicKey.id;
   const incommingId = incommingPublicKey.id;
-  const result = compareUint8Arrays(outgoingId, incommingId);
+  const result = compareBytes(thawnBytes(outgoingId), thawnBytes(incommingId));
   const [preferredConnection, connectionToClose] =
     result > 0
       ? [outgoingConnection, incommingConnection]

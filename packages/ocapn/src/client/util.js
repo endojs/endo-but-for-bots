@@ -6,7 +6,7 @@
  */
 
 import { encodeAscii } from '@endo/ascii/encode.js';
-import { strictDecodeAscii } from '@endo/ascii/strict-decode.js';
+import { frozenBytes } from '@endo/pass-style/to-bytes.js';
 
 /**
  * We need a unique and deterministic way to identify a location as a string, for internal use.
@@ -40,18 +40,18 @@ export const locationToLocationId = location => {
 };
 
 /**
- * @param {Uint8Array} value
- * @returns {string}
- */
-export const decodeSwissnum = value => strictDecodeAscii(value);
-
-/**
+ * Encodes a printable ASCII string as a `SwissNum` (branded `Uint8Array`).
+ * Throws a `RangeError` if any character code exceeds 127.
+ *
+ * Callers that already have raw wire-format bytes and only need the branded
+ * type wrapping should use `swissnumFromBytes` instead.
+ *
  * @param {string} value
  * @returns {SwissNum}
  */
 export const encodeSwissnum = value => {
   // @ts-expect-error - Branded type: SwissNum is Uint8Array at runtime
-  return encodeAscii(value);
+  return frozenBytes(encodeAscii(value));
 };
 
 /**
@@ -64,16 +64,24 @@ export const encodeSwissnum = value => {
  * ASCII string (e.g. a hard-coded test name), use `encodeSwissnum`,
  * which validates the alphabet for you.
  *
+ * `SwissNum` is a branded `Uint8Array` — this cast is zero-copy.
+ * The function exists to make the branding explicit at call sites;
+ * callers that need to decode the bytes back to a string should call
+ * `decodeAscii` from `@endo/ascii/decode.js` on the result.
+ *
  * @param {Uint8Array} bytes
  * @returns {SwissNum}
  */
 export const swissnumFromBytes = bytes => {
   // @ts-expect-error - Branded type: SwissNum is Uint8Array at runtime
-  return bytes;
+  return frozenBytes(bytes);
 };
 
 /**
  * View the raw bytes of a swissnum.
+ *
+ * `SwissNum` is a branded `Uint8Array` — this cast is zero-copy.
+ * The function exists to make the branding explicit at call sites.
  *
  * @param {SwissNum} swissNum
  * @returns {Uint8Array}

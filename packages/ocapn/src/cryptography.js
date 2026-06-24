@@ -2,8 +2,8 @@
 import { randomBytes } from 'node:crypto';
 
 import harden from '@endo/harden';
-import { toBytes } from '@endo/pass-style/to-bytes.js';
-import { fromBytes } from '@endo/pass-style/from-bytes.js';
+import { frozenBytes } from '@endo/pass-style/to-bytes.js';
+import { thawnBytes } from '@endo/pass-style/from-bytes.js';
 import { concatBytes } from '@endo/bytes/concat.js';
 import { compareBytes } from '@endo/bytes/compare.js';
 import { ed25519 } from '@noble/curves/ed25519';
@@ -51,7 +51,7 @@ const sessionIdHashPrefixBytes = textEncoder.encode('prot0');
  * @returns {Uint8Array}
  */
 const ocapNSignatureToBytes = sig => {
-  return concatBytes([fromBytes(sig.r), fromBytes(sig.s)]);
+  return concatBytes([thawnBytes(sig.r), thawnBytes(sig.s)]);
 };
 
 /**
@@ -78,7 +78,7 @@ const makePublicKeyIdFromDescriptor = publicKeyDescriptor => {
   const hash1 = sha256(publicKeyDescriptorBytes);
   const hash2 = sha256(hash1);
   // @ts-expect-error - Branded type: PublicKeyId is Uint8Array at runtime
-  return toBytes(hash2);
+  return frozenBytes(hash2);
 };
 
 /**
@@ -99,8 +99,8 @@ export const makeOcapnPublicKey = publicKeyBytes => {
      */
     assertSignatureValid: (msgBytes, ocapnSig) => {
       const sigBytes = ocapNSignatureToBytes(ocapnSig);
-      const msgUint8 = fromBytes(msgBytes);
-      const pkUint8 = fromBytes(publicKeyBytes);
+      const msgUint8 = thawnBytes(msgBytes);
+      const pkUint8 = thawnBytes(publicKeyBytes);
       const isValid = ed25519.verify(sigBytes, msgUint8, pkUint8);
       if (!isValid) {
         throw new Error('Invalid signature');
@@ -115,17 +115,17 @@ export const makeOcapnPublicKey = publicKeyBytes => {
  */
 export const makeOcapnKeyPairFromPrivateKey = privateKeyBytes => {
   const publicKeyBytes = ed25519.getPublicKey(privateKeyBytes);
-  const publicKeyBuffer = toBytes(publicKeyBytes);
+  const publicKeyBuffer = frozenBytes(publicKeyBytes);
   return {
     publicKey: makeOcapnPublicKey(publicKeyBuffer),
     sign: msg => {
-      const msgBytes = fromBytes(msg);
+      const msgBytes = thawnBytes(msg);
       const sigBytes = ed25519.sign(msgBytes, privateKeyBytes);
       return {
         type: 'sig-val',
         scheme: 'eddsa',
-        r: toBytes(sigBytes.slice(0, 32)),
-        s: toBytes(sigBytes.slice(32)),
+        r: frozenBytes(sigBytes.slice(0, 32)),
+        s: frozenBytes(sigBytes.slice(32)),
       };
     },
   };
@@ -169,7 +169,8 @@ export const publicKeyDescriptorToPublicKey = publicKeyDescriptor => {
  */
 export const makeSessionId = (peerIdOne, peerIdTwo) => {
   // Sort both IDs based on their octets.
-  const result = compareBytes(peerIdOne, peerIdTwo);
+  // Thawn to mutable copies so compareBytes can read via integer-indexed access.
+  const result = compareBytes(thawnBytes(peerIdOne), thawnBytes(peerIdTwo));
   const peerIds = result < 0 ? [peerIdOne, peerIdTwo] : [peerIdTwo, peerIdOne];
   // Concatenate them in the sorted order, prepend the "prot0" protocol tag.
   // Extract mutable Uint8Arrays from the passable byteArray form before
@@ -177,13 +178,13 @@ export const makeSessionId = (peerIdOne, peerIdTwo) => {
   // Uint8Array.
   const sessionIdBytes = concatBytes([
     sessionIdHashPrefixBytes,
-    ...peerIds.map(fromBytes),
+    ...peerIds.map(thawnBytes),
   ]);
   // Double SHA256 hash the resulting string
   const hash1 = sha256(sessionIdBytes);
   const hash2 = sha256(hash1);
   // @ts-expect-error - Branded type: SessionId is Uint8Array at runtime
-  return toBytes(hash2);
+  return frozenBytes(hash2);
 };
 
 /**
@@ -307,7 +308,7 @@ export const assertHandoffReceiveSignatureValid = (
  * @returns {Uint8Array}
  */
 export const randomGiftId = () => {
-  return toBytes(randomBytes(16));
+  return frozenBytes(randomBytes(16));
 };
 
 /**

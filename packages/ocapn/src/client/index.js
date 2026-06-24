@@ -9,6 +9,7 @@
 
 import harden from '@endo/harden';
 import { encodeHex } from '@endo/hex';
+import { thawnBytes } from '@endo/pass-style/from-bytes.js';
 import { makePromiseKit } from '@endo/promise-kit';
 import { writeOcapnHandshakeMessage } from '../codecs/operations.js';
 import { makeOcapnKeyPair, signLocation } from '../cryptography.js';
@@ -113,7 +114,7 @@ const makeSessionManager = () => {
       activeSessions.set(locationId, session);
       connectionToSession.set(connection, session);
       sessionIdToPeerPublicKey.set(
-        encodeHex(session.id),
+        encodeHex(thawnBytes(session.id)),
         session.peer.publicKey,
       );
       const pendingSession = pendingSessions.get(locationId);
@@ -166,7 +167,7 @@ const makeSessionManager = () => {
       return pendingSession;
     },
     getPeerPublicKeyForSessionId: sessionId => {
-      return sessionIdToPeerPublicKey.get(encodeHex(sessionId));
+      return sessionIdToPeerPublicKey.get(encodeHex(thawnBytes(sessionId)));
     },
   });
 };
