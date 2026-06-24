@@ -29,6 +29,12 @@ const ROOT_R = 0.6;   // the head octahedron's radius (matches geoFor('root'))
 const TAIL_R = 0.42;  // the "now" octahedron at the live frontier — slightly smaller, so the body reads as a comet toward the present
 // the 6 canonical octahedron vertices at radius r (±x, ±y, ±z) — used to wire the head→"now" extrusion cage
 const OCTA_LOCAL = r => [new THREE.Vector3(r, 0, 0), new THREE.Vector3(-r, 0, 0), new THREE.Vector3(0, r, 0), new THREE.Vector3(0, -r, 0), new THREE.Vector3(0, 0, r), new THREE.Vector3(0, 0, -r)];
+// the octahedron's 12 edges as vertex-index pairs (OCTA_LOCAL order +x,-x,+y,-y,+z,-z; antipodes 0-1/2-3/4-5
+// are NOT edges). Used to SKIN the hyper-octahedron: head verts are 0..5, tail verts 6..11, and each edge (a,b)
+// spans a quad (headA, headB, tailB, tailA) bounded by the head edge, the tail edge, and two hyper-edges →
+// 24 triangles. Filling all 12 quads with the glow material reads as one solid translucent body.
+const OCTA_EDGES = [[0, 2], [0, 3], [0, 4], [0, 5], [1, 2], [1, 3], [1, 4], [1, 5], [2, 4], [2, 5], [3, 4], [3, 5]];
+const HYPER_OCTA_FACES = OCTA_EDGES.flatMap(([a, b]) => [a, b, 6 + b, a, 6 + b, 6 + a]);
 // the UNIQUE vertices of a geometry (its position buffer dedup'd). Used for the dodecahedron cage during the
 // permissioning phase: head & tail dodecahedra of the same topology → vertex i ↔ vertex i (20 matching edges).
 const uniqueVerts = geo => { const pos = geo.attributes.position, seen = new Set(), out = []; for (let i = 0; i < pos.count; i += 1) { const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i); const k = `${x.toFixed(2)},${y.toFixed(2)},${z.toFixed(2)}`; if (!seen.has(k)) { seen.add(k); out.push(new THREE.Vector3(x, y, z)); } } return out; };
@@ -136,11 +142,12 @@ export const makePendant = canvas => {
   const STRUT_UP = new THREE.Vector3(0, 1, 0);
   const makeStrut = color => {
     const col = new THREE.Color(color);
-    // CORE: a 1px THREE.Line with the SAME material as the normal tool lines (makeLine), so a hyper strut reads
-    // at exactly the normal line weight — screen-space 1px, distance-independent. A unit segment along Y; the
-    // group transform (position/quaternion/scale.y=len) stretches it between the two matching vertices.
+    // CORE: a 1px THREE.Line using the SAME material as the OCTAHEDRON edges (makeNodeRecord's wireMat —
+    // non-additive WIRE shader), so a hyper-edge reads at exactly the same colour + weight as the octahedron
+    // edges it joins (the additive blending it used before washed the hyper-edges brighter/whiter than the
+    // shape edges). A unit segment along Y; the group transform stretches it between the two matching vertices.
     const lineGeo = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, -0.5, 0), new THREE.Vector3(0, 0.5, 0)]);
-    const wireMat = new THREE.ShaderMaterial({ uniforms: { uColor: { value: col.clone() }, uIntensity: { value: 1 } }, vertexShader: WIRE_V, fragmentShader: WIRE_F, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false });
+    const wireMat = new THREE.ShaderMaterial({ uniforms: { uColor: { value: col.clone() }, uIntensity: { value: 1 } }, vertexShader: WIRE_V, fragmentShader: WIRE_F, transparent: true });
     const core = new THREE.Line(lineGeo, wireMat);
     // GLOW: a slim fresnel shell so the strut still glows/fills like the shapes — this is glow, not line weight,
     // so it doesn't make the strut read as "thicker" than the normal lines.
@@ -258,9 +265,11 @@ export const makePendant = canvas => {
       lf.thread.scale.y = hh; lf.thread.position.set(root.group.position.x, top - hh / 2, root.group.position.z);
       lf.thrMat.uniforms.uIntensity.value = 0.9 + inten * 0.5;
     }
+    const sp = lf.skin ? lf.skinGeo.attributes.position : null; // fill skin tracks the same world vertices as the struts
     for (let i = 0; i < lf.struts.length; i += 1) {
       octWorld(root.group, lf.topV[i], _wt);
       octWorld(tg, lf.botV[i], _wb);
+      if (sp) { sp.setXYZ(i, _wt.x, _wt.y, _wt.z); sp.setXYZ(6 + i, _wb.x, _wb.y, _wb.z); } // head verts 0..5, tail 6..11
       const st = lf.struts[i];
       _dir.copy(_wb).sub(_wt); const len = Math.max(0.001, _dir.length());
       st.g.position.copy(_wt).add(_wb).multiplyScalar(0.5);          // midpoint of the matching-vertex pair
@@ -268,6 +277,7 @@ export const makePendant = canvas => {
       st.g.scale.set(1, len, 1);                                     // stretch to the gap; radius stays thin
       st.wireMat.uniforms.uIntensity.value = st.glowMat.uniforms.uIntensity.value = inten; // glow with the head, like the shapes
     }
+    if (sp) { sp.needsUpdate = true; lf.skinGeo.computeVertexNormals(); lf.skinMat.uniforms.uIntensity.value = inten; } // fill glows with the body
   };
 
   const grow = nd => { if (buildInstant) { nd.group.scale.setScalar(1); return; } nd.group.scale.setScalar(0.001); tween(0.44, easeOutBack, e => nd.group.scale.setScalar(Math.max(0.001, e))); };
@@ -399,13 +409,25 @@ export const makePendant = canvas => {
     const botV = isDodeca ? uniqueVerts(new THREE.DodecahedronGeometry(tailR)) : OCTA_LOCAL(tailR);
     const struts = [];
     for (let i = 0; i < topV.length; i += 1) { const st = makeStrut(color); sceneGroup.add(st.g); struts.push(st); }
+    // FILL the hyper-octahedron: a translucent glow skin over the cage so the two octahedra + their hyper-edges
+    // read as one solid body (not an open wire cage). Same GLOW material as the octahedra → the contained area
+    // is coloured exactly like the shapes. Octahedron only; the dodecahedron permissioning body stays a cage.
+    let skin = null, skinGeo = null, skinMat = null;
+    if (!isDodeca) {
+      skinGeo = new THREE.BufferGeometry();
+      skinGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(12 * 3), 3));
+      skinGeo.setIndex(HYPER_OCTA_FACES);
+      skinMat = new THREE.ShaderMaterial({ uniforms: { uColor: { value: tcol.clone() }, uIntensity: { value: 0.9 } }, vertexShader: GLOW_V, fragmentShader: GLOW_F, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide });
+      skin = new THREE.Mesh(skinGeo, skinMat); skin.frustumCulled = false; // positions are rewritten in world space each frame
+      sceneGroup.add(skin);
+    }
     // the glowing THREAD down the centre of the extrusion — a DISTINCT colour from the body (cyan vs the
     // violet head) — the spine that every tool call's edges draw from. A thin additive cylinder = a luminous
     // fibre the body rotates around; tool OUT/BACK edges land on it at the time of the call/return.
     const thrMat = new THREE.ShaderMaterial({ uniforms: { uColor: { value: new THREE.Color(COL.thread) }, uIntensity: { value: 1.1 } }, vertexShader: WIRE_V, fragmentShader: WIRE_F, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false });
     const thread = new THREE.Mesh(new THREE.CylinderGeometry(0.028, 0.028, 1, 8, 1, true), thrMat);
     sceneGroup.add(thread);
-    root.lifeline = { tailGroup, tWireMat, tGlowMat, tGeo, struts, thread, thrMat, topV, botV };
+    root.lifeline = { tailGroup, tWireMat, tGlowMat, tGeo, struts, thread, thrMat, topV, botV, skin, skinGeo, skinMat };
     if (descend && !buildInstant) {
       root.group.position.set(0, ROOT_Y + 2.1, 0); const from = root.group.position.clone(), to = new THREE.Vector3(0, ROOT_Y, 0);
       tween(0.62, easeInOut, e => root.group.position.lerpVectors(from, to, e));

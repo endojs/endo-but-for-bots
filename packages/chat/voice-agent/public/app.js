@@ -566,7 +566,11 @@ const traceGeometry = steps => {
 };
 // test seam: exercise the REAL trace renderer headlessly (pure view fn — renders public trace data, holds no
 // authority). Off in production; only bound when the page is opened with ?tracetest=1 (see shape/trace tests).
-if (typeof location !== 'undefined' && /[?&]tracetest=1\b/.test(location.search)) window.__traceGeometry = traceGeometry;
+if (typeof location !== 'undefined' && /[?&]tracetest=1\b/.test(location.search)) {
+  window.__traceGeometry = traceGeometry;
+  // open the 3D pendant on synthetic steps (no LLM turn) so the hyper-octahedron body can be screenshotted.
+  window.__openPendant = async (steps, fs) => { try { const p = await ensurePendant(); if (pendantWrap) { pendantWrap.classList.remove('hide'); if (fs) pendantWrap.classList.add('fs'); } p.setVisible(true); if (fs && p.resize) p.resize(); p.showSteps(Array.isArray(steps) ? steps : []); return true; } catch (e) { return String((e && e.message) || e); } };
+}
 // clicking an agent MESSAGE grows its reasoning signature (without clobbering links/controls/text-selection).
 const wireMsgTrace = (b, trace) => {
   if (!b || !trace) return; b.style.cursor = 'pointer'; if (!b.title) b.title = 'Click to grow the reasoning signature';
