@@ -732,13 +732,44 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
       instructions: 'You are the Scheduler. Set reminders + recurring tasks: scheduleWakeup/repeatEvery for things a human must do (these ping dan), scheduleTask for recurring work an agent can do itself. List + cancel jobs on request, and confirm the cadence + what will fire.' },
     { id: 'image-studio', name: '🎨 Image studio', domain: 'image generation', powers: ['images', 'home', 'feed'],
       instructions: 'You are the Image Studio. Generate + restyle images on the GPU from a prompt. Offer a couple of variations, and save outputs to the home folder when asked.' },
+    // The meta-agent: it BUILDS other specialists. It is curated, so it may hold the `specialists` meta power
+    // (built-ins are owner-defined). It edits its OWN prompt via proposeSystemPrompt (routed per-agent below).
+    { id: 'specialist-builder', name: '🧩 Specialist Builder', domain: 'designing + spawning specialist agents', powers: ['specialists', 'selfPrompt', 'notes', 'jotNote', 'reference'],
+      instructions: [
+        'You are the Specialist Builder — you help dan design, spawn, and refine SPECIALIST sub-agents.',
+        '',
+        'WHAT A SPECIALIST IS: a persistent, confined sub-agent of Agent C with a short id + display name, a DOMAIN (the kind of requests it handles), a POWER RING (a subset of Agent C\'s powers — its least-authority tool bundle), and standing INSTRUCTIONS (its persona). It has its own invite link; its proposals + auto-confirm rules are scoped to its id; it runs on the local model by default. You consult one with askSpecialist, and the user can also pick it from the agent menu and chat with it directly.',
+        '',
+        'HOW TO DESIGN A GOOD ONE:',
+        '1. Scope it to ONE clear domain — a specialist that does one job well beats a vague generalist.',
+        '2. Grant the MINIMAL power ring (least authority): only the powers the job actually needs. Fewer powers = safer + more predictable. (Meta powers — delegate, subagent, specialists, roles, app, selfImprove — CANNOT be granted to a specialist; that is by design, to bound delegation one level deep.)',
+        '3. Write clear standing instructions: its role, what it does step by step, when to PROPOSE vs act, and any skepticism/safety rules for its domain. Destructive actions stay propose→confirm regardless.',
+        '4. Name it for what it does, with a fitting emoji.',
+        '',
+        'THE FLOW: talk through the need with dan → decide the domain + the minimal powers + the instructions → proposeSpawnSpecialist({ name, domain, powers, instructions }) (dan confirms the grant) → test it with askSpecialist → refine its instructions if needed. Use listSpecialists first; don\'t duplicate one that exists.',
+        '',
+        'EXAMPLES already in the menu (built-in domain agents): 🥗 Dietician, 🔎 Researcher, 🏠 Home, ⏰ Scheduler, 🎨 Image studio — study their shape (focused domain + a tight power ring + a clear persona).',
+        '',
+        'KEEP LEARNING: when you discover what makes a specialist work well (or badly), jot the lesson to notes, and refine your OWN prompt with proposeSystemPrompt (that edits YOUR instructions; dan confirms) so you get better at this over time. ocap discipline always: designate by reference, grant least authority, the cap is the boundary.',
+      ].join('\n') },
   ];
+  // built-ins are owner-curated, so their declared powers are honored as-is (META powers ALLOWED for them —
+  // e.g. the Specialist Builder holds `specialists`); only invalid power names are dropped.
   const builtinSpecs = BUILTIN_AGENTS.map(a => harden({
     id: a.id, name: a.name, domain: a.domain,
-    powers: [...new Set(a.powers.filter(p => ALL_POWERS.includes(p) && !META_POWERS.has(p)))],
+    powers: [...new Set(a.powers.filter(p => ALL_POWERS.includes(p)))],
     instructions: a.instructions, builtin: true, spawnedFrom: null,
   }));
   const builtinList = () => builtinSpecs.map(s => ({ id: s.id, name: s.name, domain: s.domain, powers: s.powers, autonomy: [], spawnedFrom: null, builtin: true }));
+
+  // per-built-in persona OVERRIDES — so a built-in agent (the Specialist Builder, …) can edit its OWN prompt at
+  // runtime. proposeSystemPrompt routes here by the acting node id; falls back to the code instructions.
+  const BUILTIN_PERSONAS_FILE = path.join(path.dirname(SPECIALISTS_FILE), 'builtin-personas.json');
+  let builtinPersonas = {};
+  try { builtinPersonas = JSON.parse(fs.readFileSync(BUILTIN_PERSONAS_FILE, 'utf8')) || {}; } catch { builtinPersonas = {}; }
+  const isBuiltinId = id => builtinSpecs.some(s => s.id === id);
+  const builtinPersona = id => builtinPersonas[id] || (builtinSpecs.find(s => s.id === id) || {}).instructions || '';
+  const setBuiltinPersona = (id, text) => { try { builtinPersonas[id] = String(text ?? ''); fs.mkdirSync(path.dirname(BUILTIN_PERSONAS_FILE), { recursive: true }); fs.writeFileSync(BUILTIN_PERSONAS_FILE, JSON.stringify(builtinPersonas, null, 2), { mode: 0o600 }); return harden({ ok: true, bytes: builtinPersonas[id].length }); } catch (e) { return harden({ ok: false, error: e.message }); } };
   // Per-chat scoped caps must SURVIVE RESTARTS (else a deployed/restarted server orphans every
   // confined chat — its cap 403s, the chat silently can't send). Persist {swiss, powers, label}
   // and re-register at boot, the same durability the root swiss already has.
@@ -1133,10 +1164,14 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
       description: 'Run a shell command on THIS host (archua) as the operator — the dev/dogfood harness. Immediate (the grant is the authorization). COARSE host-root authority: clone repos, run builds/tests/evals, edit files — equivalent to the operator\'s own shell. Returns stdout/stderr/exit code. You have this only if you hold the `host` power.',
       run: async ({ cmd, cwd }, agent, ctx = {}) => aff.host.exec(String(cmd || ''), { cwd, jail: (ctx && ctx.wtDir) || undefined }) },
     proposeSystemPrompt: { reversible: false, args: { prompt: 'string — the new instructions block (replaces your current editable system-prompt section)' },
-      description: 'PROPOSE a change to your OWN system prompt (the editable instructions block). Does NOT apply — the user confirms the diff first.',
-      run: async ({ prompt }, agent) => propose({ type: 'system-prompt', power: 'selfPrompt', agent, title: 'Modify system prompt', summary: 'edit the agent\'s own instructions',
-        detail: { path: '(system prompt)', mode: 'overwrite', oldContent: (persona || '(none yet)').slice(0, 12000), newContent: String(prompt || '').slice(0, 12000) },
-        commit: () => writePersona(prompt) }) },
+      description: 'PROPOSE a change to your OWN system prompt (the editable instructions block). Does NOT apply — the user confirms the diff first. A built-in agent (e.g. the Specialist Builder) edits ITS OWN prompt; Agent C edits the global one.',
+      run: async ({ prompt }, agent) => {
+        const builtin = isBuiltinId(agent);
+        const cur = builtin ? builtinPersona(agent) : (persona || '');
+        return propose({ type: 'system-prompt', power: 'selfPrompt', agent, title: builtin ? `Modify ${agent} prompt` : 'Modify system prompt', summary: builtin ? `edit the ${agent} agent's instructions` : "edit the agent's own instructions",
+          detail: { path: builtin ? `(${agent} prompt)` : '(system prompt)', mode: 'overwrite', oldContent: (cur || '(none yet)').slice(0, 12000), newContent: String(prompt || '').slice(0, 12000) },
+          commit: () => (builtin ? setBuiltinPersona(agent, prompt) : writePersona(prompt)) });
+      } },
     proposeGiveKazputer: { reversible: false, args: { name: 'string — whose Kazputer (a display name)', email: 'string — the recipient email; if the user named a person, contactsSearch them FIRST and ask which one if ambiguous' },
       description: 'PROPOSE giving someone a new Kazputer: on confirm it creates a fresh kid-phone instance and EMAILS them the invite link. Does NOT fire — the user confirms first.',
       run: async ({ name, email }, agent) => propose({ type: 'give-kazputer', power: 'kazputer', agent, title: `Give ${String(name || 'someone')} a Kazputer`, summary: `email → ${String(email || '(no email)')}`,
@@ -2086,7 +2121,7 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
   // Build a specialist's node: confined to its granted powers, its own id (so its
   // proposals + auto-confirm rules scope to it), inheriting the root HA/agent bindings.
   const registerSpecialist = spec => {
-    const node = makeAgentNode({ powers: spec.powers, labelOf: spec.id, haBinding: () => haTrie?.root || null, agBinding: () => agentRoster?.root || null });
+    const node = makeAgentNode({ powers: spec.powers, labelOf: spec.id, id: spec.id, haBinding: () => haTrie?.root || null, agBinding: () => agentRoster?.root || null });
     specNodes.set(spec.id, node);
     if (spec.swiss) locator.set(spec.swiss, { node }); // its own invite link — directly addressable
     return node;
@@ -2248,7 +2283,7 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
     nodeFor: swiss => locator.get(String(swiss || ''))?.node || null,
     // resolve a specialist by id/name → its CONFINED node + persona, so a chat can run AS it
     // (the entrypoint-agent picker). Returns null if there's no such specialist.
-    specialistFor: ref => { const spec = findSpecialist(ref); return spec ? harden({ id: spec.id, name: spec.name, node: getSpecNode(spec), persona: spec.instructions || '', powers: [...spec.powers] }) : null; },
+    specialistFor: ref => { const spec = findSpecialist(ref); return spec ? harden({ id: spec.id, name: spec.name, node: getSpecNode(spec), persona: spec.builtin ? builtinPersona(spec.id) : (spec.instructions || ''), powers: [...spec.powers] }) : null; },
     // resolve a published-site token → its directory (for the /sites/ host)
     siteDir: token => sites.get(String(token || '')) || null,
     downloadFor,

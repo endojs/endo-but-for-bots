@@ -20,7 +20,7 @@ let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log('  ok -', m); } else { fail++; console.error('  FAIL -', m); } };
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const cleanup = () => { try { srv && srv.kill('SIGKILL'); } catch {} try { fs.rmSync(tmp, { recursive: true, force: true }); } catch {} };
-const BUILTINS = ['dietician', 'researcher', 'home', 'scheduler', 'image-studio'];
+const BUILTINS = ['dietician', 'researcher', 'home', 'scheduler', 'image-studio', 'specialist-builder'];
 
 (async () => {
   srv = spawn('node', ['server.mjs'], {
@@ -41,6 +41,8 @@ const BUILTINS = ['dietician', 'researcher', 'home', 'scheduler', 'image-studio'
   const ls = await (await fetch(`${BASE}/rpc`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ swissnum: rootCap, method: 'listSpecialists' }) })).json();
   const ids = (ls.result || []).filter(s => s.builtin).map(s => s.id);
   ok(BUILTINS.every(b => ids.includes(b)), `listSpecialists carries the built-in agents (${ids.join(', ')})`);
+  const sb = (ls.result || []).find(s => s.id === 'specialist-builder');
+  ok(sb && sb.powers.includes('specialists') && sb.powers.includes('selfPrompt'), 'the Specialist Builder holds specialists (to build them) + selfPrompt (to edit its own prompt)');
 
   let chromium = null;
   try { ({ chromium } = require('/usr/lib/node_modules/@playwright/cli/node_modules/playwright-core')); } catch {}
