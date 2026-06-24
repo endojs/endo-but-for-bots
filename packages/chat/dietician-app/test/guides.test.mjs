@@ -61,8 +61,8 @@ test('core.generateGuide writes site/index.html + site/sort.js, excludes Disney 
   const r = await pipe.generateGuide('eats');
   assert.ok(r.ok);
   assert.equal(r.cards, 2, 'Disney excluded; SKIP excluded → 2 cards');
-  assert.ok(arts['site/index.html'] && arts['site/sort.js'], 'both artifacts written');
-  assert.ok(!arts['site/index.html'].includes('Disney Lounge'), 'Disney slug excluded from the eats guide');
-  assert.ok(!arts['site/index.html'].includes('>Skip<'), 'SKIP excluded');
-  assert.match(arts['site/sort.js'], /navigator\.geolocation/);
+  assert.ok(arts['site/eats/index.html'] && arts['site/eats/sort.js'], 'both artifacts written');
+  assert.ok(!arts['site/eats/index.html'].includes('Disney Lounge'), 'Disney slug excluded from the eats guide');
+  assert.ok(!arts['site/eats/index.html'].includes('>Skip<'), 'SKIP excluded');
+  assert.match(arts['site/eats/sort.js'], /navigator\.geolocation/);
 });

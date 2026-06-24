@@ -63,7 +63,12 @@ never logged, never on screen.
   `core.generateGuide('eats')`. *Proven: `node --test` (20/20) + `yarn test:eats-guide` (headless over dan's
   imported DB): 237 cards across 19 cities, city tabs filter, "safe bets only" hides all 171 borderline,
   sort.js search works.*
-- [ ] **Slice 7** — `guides/disney-guide.mjs` (park-grouped + hotel section + 2 inline-SVG maps).
+- [x] **Slice 7** — `guides/disney-guide.mjs`: the 685-line Disney generator ported — park-grouped sections,
+  the "Around the Hotel" section (haversine radius), TWO inline-SVG maps (resort land-cluster w/ centroid
+  fan-out + hotel-radius w/ per-axis px/mile rings), CSS-only zone/safe/breakfast filters; trip constants
+  parameterized via `trip`. *Proven: `node --test` (25/25) + `yarn test:disney-guide` (headless over dan's
+  DB): 14 park cards + 31 hotel rows, 45 map dot-anchors, zone filter, "safe bets only" hides 28 borderline
+  cards + dots, map-dot→card navigation.*
 - [ ] **Slice 8** — `grunt.mjs` cap layer: `DietConsole` + `guide`/`scanner`/`editor` facets + `/rpc` + SPA.
 - [ ] **Slice 9** — `DietProvisioner.newInstance` + `signup` (multi-tenant).
 - [ ] **Slice 10** — `dietician-app.service` + `GUIDE.md`; re-point the voice-agent `dietician` power at a

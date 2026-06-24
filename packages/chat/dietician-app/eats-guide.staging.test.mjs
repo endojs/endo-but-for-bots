@@ -25,8 +25,8 @@ const DEST = process.argv[2] || `${os.homedir()}/.local/state/dietician-app/inst
   const gen = makePipeline({ store: { ...store, writeArtifact: siteStore.writeArtifact }, person: 'alexa' });
   const r = await gen.generateGuide('eats');
   ok(r.ok && r.cards > 50, `generated eats guide from the imported DB (${r.cards} cards: ${r.viable} viable + ${r.borderline} borderline)`);
-  const indexPath = path.join(out, 'site', 'index.html');
-  ok(fs.existsSync(indexPath) && fs.existsSync(path.join(out, 'site', 'sort.js')), 'site/index.html + site/sort.js written');
+  const indexPath = path.join(out, 'site', 'eats', 'index.html');
+  ok(fs.existsSync(indexPath) && fs.existsSync(path.join(out, 'site', 'eats', 'sort.js')), 'site/eats/index.html + sort.js written');
 
   let chromium = null;
   try { ({ chromium } = require('/usr/lib/node_modules/@playwright/cli/node_modules/playwright-core')); } catch {}

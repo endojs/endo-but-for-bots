@@ -16,6 +16,7 @@ import { QUERIES, SEED_CITIES, cityRecord, cityList } from './cities.mjs';
 import { buildKml } from './kml.mjs';
 import { cityOf } from './guides/shared.mjs';
 import { generateEatsGuide } from './guides/eats-guide.mjs';
+import { generateDisneyGuide, haversineMi, DEFAULT_TRIP } from './guides/disney-guide.mjs';
 import { SORT_JS } from './guides/sort-js.mjs';
 
 // slugify — sweep.py slugify(): lowercase, non-alnum → '-', strip, cap 60, fallback 'place'.
@@ -264,14 +265,39 @@ export const makePipeline = ({
 
   // STAGE 5b — regenerate a browsing guide from the store + write it (site/index.html + site/sort.js).
   // Returns counts; the outward PUBLISH (serving it) is a separate confirm-gated step (grunt, Slice 8/10).
-  const generateGuide = async (which = 'eats', { date } = {}) => {
-    if (which !== 'eats') return { ok: false, error: `unknown guide "${which}" (eats is implemented; disney is Slice 7)` };
-    const rows = await gatherGuideRows({ disney: false });
-    const html = generateEatsGuide(rows, { person, today: date || today() });
-    await store.writeArtifact('site/index.html', html);
-    await store.writeArtifact('site/sort.js', SORT_JS);
-    const viable = rows.filter(r => r.verdict === 'VIABLE').length;
-    return { ok: true, which: 'eats', cards: rows.length, viable, borderline: rows.length - viable, bytes: Buffer.byteLength(html), path: 'site/index.html' };
+  const generateGuide = async (which = 'eats', { date, trip } = {}) => {
+    const day = date || today();
+    if (which === 'eats') {
+      const rows = await gatherGuideRows({ disney: false });
+      const html = generateEatsGuide(rows, { person, today: day });
+      await store.writeArtifact('site/eats/index.html', html);
+      await store.writeArtifact('site/eats/sort.js', SORT_JS);
+      const viable = rows.filter(r => r.verdict === 'VIABLE').length;
+      return { ok: true, which: 'eats', cards: rows.length, viable, borderline: rows.length - viable, bytes: Buffer.byteLength(html), path: 'site/eats/index.html' };
+    }
+    if (which === 'disney') {
+      const t = trip || DEFAULT_TRIP;
+      const parkRows = await gatherGuideRows({ disney: true });
+      const hotelRows = [];
+      for (const slug of await store.listVerdicts()) {
+        if (slug.includes('disneyland')) continue;
+        const ev = await store.getVerdict(slug);
+        if (!ev || !/^(VIABLE|BORDERLINE)$/.test(ev.verdict)) continue;
+        const place = await store.getPlace(slug);
+        if (!place || place.lat == null || place.lng == null) continue;
+        const d = haversineMi(t.hotel.lat, t.hotel.lng, place.lat, place.lng);
+        if (d > t.hotel.radiusMi) continue;
+        hotelRows.push({ slug, ...place, ...ev, dist_mi: Math.round(d * 100) / 100 });
+      }
+      const ord = { VIABLE: 0, BORDERLINE: 1 };
+      hotelRows.sort((a, b) => (ord[a.verdict] ?? 9) - (ord[b.verdict] ?? 9) || a.dist_mi - b.dist_mi);
+      const html = generateDisneyGuide(parkRows, hotelRows, { person, today: day, trip: t });
+      await store.writeArtifact('site/disney/index.html', html);
+      await store.writeArtifact('site/disney/sort.js', SORT_JS);
+      const viable = parkRows.filter(r => r.verdict === 'VIABLE').length;
+      return { ok: true, which: 'disney', cards: parkRows.length, viable, borderline: parkRows.length - viable, hotel: hotelRows.length, bytes: Buffer.byteLength(html), path: 'site/disney/index.html' };
+    }
+    return { ok: false, error: `unknown guide "${which}" (use 'eats' or 'disney')` };
   };
 
   const listCities = () => cityList(cities);

@@ -7,6 +7,7 @@
   "scripts": {
     "test": "node --test",
     "smoke": "node smoke/sweep-smoke.mjs",
-    "test:eats-guide": "node eats-guide.staging.test.mjs"
+    "test:eats-guide": "node eats-guide.staging.test.mjs",
+    "test:disney-guide": "node disney-guide.staging.test.mjs"
   }
 }
