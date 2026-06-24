@@ -48,7 +48,7 @@ const extractCode = reply => {
   return open ? open[1].trim() : null;
 };
 
-export const runAgentCode = async ({ toolbox, manifest, userText, history = [], onStep = () => {}, signal, persona = '', attachments = [], model = 'default', llm, budgetLine = '', resumeMessages = null, callLLM = defaultCallLLM, buildUserContent = defaultBuildUserContent } = {}) => {
+export const runAgentCode = async ({ toolbox, manifest, userText, history = [], onStep = () => {}, signal, persona = '', attachments = [], model = 'default', llm, budgetLine = '', resumeMessages = null, callLLM = defaultCallLLM, buildUserContent = defaultBuildUserContent, takeInterjections = () => [] } = {}) => {
   const invoke = llm || callLLM;
   const used = [];
   // Wrap every toolbox verb as an async fn the program can call: `await name(args)`. Each emits the
@@ -155,6 +155,13 @@ export const runAgentCode = async ({ toolbox, manifest, userText, history = [], 
   let emptyRetries = 0; // the model returned NOTHING (no program, no answer) → nudge it to act, then report honestly
   for (;;) {
     if (signal?.aborted) return cancelled();
+    // MID-TURN INTERJECTION: re-steer a long fan-out WITHOUT aborting it. Anything the user posted since the
+    // last round is folded into context HERE, at the step boundary, so the next program sees it. takeInterjections
+    // DRAINS (once-only); a turn with none injected is byte-identical to before (default is () => []).
+    try {
+      const inj = takeInterjections() || [];
+      if (inj.length) { messages.push({ role: 'user', content: `[the user interjected mid-turn — take this into account in what you do next]\n${inj.join('\n')}` }); onStep({ kind: 'interjection', text: inj.join('\n') }); }
+    } catch { /* an interjection source must never break the loop */ }
     const out = await invoke(messages, model);
     // Even out-of-allowance is legible: hand back a clear note (the server still flags `exhausted`).
     // Hand back the in-flight transcript (minus the system prompt) so a top-up can RESUME exactly here —

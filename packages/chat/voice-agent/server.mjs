@@ -29,6 +29,7 @@ import { readAsks, getAsk, answerAsk, setAskStatus, formatAnswers, getSecret, st
 import { makeConnectors } from './connectors.mjs';
 import { makeCustomTools, TOOL_AUTHORING_GUIDE } from './custom-tools.mjs';
 import { makeReviewedFixer } from './self-heal.mjs';
+import { makeInterjections } from './interjections.mjs';
 import { makeToolShares } from './tool-shares.mjs';
 import { makeComponentGit } from './component-git.mjs';
 import { makeIslandSource } from './island-source.mjs';
@@ -593,6 +594,7 @@ const runProjectAgent = async (project, agent) => {
 
 const sessions = new Map(); // sessionId → [{role,content}...]
 const runs = new Map();     // sessionId → AbortController (barge-in cancel)
+const interjections = makeInterjections(); // sessionId → queued mid-turn user messages (drained at each step boundary)
 // sessionId → { state:'running'|'done'|'timedOut'|'exhausted'|'cancelled', node, text, result?, startedAt, at }.
 // The agent run lives SERVER-SIDE, decoupled from the request: closing the tab drops the HTTP response but
 // NOT the run. We keep its outcome here so a reopened client can RE-ATTACH — render the finished answer, or
@@ -1054,6 +1056,17 @@ const handler = async (req, res) => {
       return undefined; // keep open
     }
 
+    // ── mid-turn INTERJECTION: re-steer a RUNNING turn without aborting it. Queued by sessionId (the turn
+    //    identity, like /chat/steps) and drained at the next step boundary. Only accepted while a turn is in
+    //    flight; folds into the agent's own context (grants no authority), so it rides the sessionId like the
+    //    step stream — no cap in the URL (cap hygiene). ──
+    if (req.method === 'POST' && u.pathname === '/chat/interject') {
+      const { sessionId, text } = await jsonBody(req);
+      const sid = String(sessionId || 'anon').slice(0, 64);
+      if (!runs.has(sid)) return json(res, 200, { ok: false, error: 'no turn is running for this chat' });
+      const ok = interjections.push(sid, text);
+      return json(res, 200, { ok, pending: interjections.pending(sid) });
+    }
     // ── voice/text turn: the cap decides the agent's reach. No cap → no powers. ──
     if (req.method === 'POST' && u.pathname === '/chat') {
       const { sessionId, text, cap, attachments, model, history: clientHistory, agent, resume } = await jsonBody(req);
@@ -1130,6 +1143,8 @@ const handler = async (req, res) => {
         AGENT_RUNNER({
         toolbox, manifest, userText: t, history, resumeMessages, attachments: agentAttachments, signal: ac.signal, persona: runPersona, model: String(model || 'default'),
         llm: meteredLLM, budgetLine: budgetLine(purse.balance(), String(model || 'default')),
+        takeInterjections: () => interjections.take(sid), // mid-turn re-steer: drained + folded into context at each step boundary
+
         onStep: s => {
           if (s.kind === 'tool-start') { emitStep(sid, { t: 'start', name: s.name, detail: detailFromArgs(s.args), call: safeText(s.args, 16000) }); return; } // the pendant grows a node (with its exact call) the instant a tool is invoked
           if (s.kind !== 'tool') return;
@@ -1172,6 +1187,7 @@ const handler = async (req, res) => {
       ]);
       emitStep(sid, { t: 'end' });
       if (runs.get(sid) === ac) runs.delete(sid);
+      interjections.drop(sid); // drop-on-turn-end: any un-drained interjection must not leak into the next turn
       stepBuffers.delete(sid); // run done → drop the live-trace buffer (a post-run reattach uses the persisted steps via /chat/result)
       addSpend(sid, Object.values(perProvider).reduce((a, b) => a + b, 0)); // tally this turn's USED allowance into the leaderboard (covers done/exhausted/timeout — perProvider accrues regardless)
       // WATCHDOG: the turn blew the deadline (or never returned). Surface a LEGIBLE summary instead of a

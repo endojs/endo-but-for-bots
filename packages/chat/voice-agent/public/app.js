@@ -1266,8 +1266,20 @@ const flushQueued = () => {
 };
 const doSend = async (modelOverride) => {
   const t = input.value; const atts = pendingAtt;
-  if (busy) { // a turn is running — queue instead of dropping, so the message isn't lost
+  if (busy) { // a turn is running
     if (!t.trim() && !atts.length) return;
+    // TEXT-only → INTERJECT into the running turn: the server folds it into the agent's context at its next
+    // step boundary, so you re-steer a long fan-out without aborting it. (Attachments can't be folded into a
+    // mid-turn program, so those still QUEUE for a fresh turn.) If no turn is actually running (a race), fall
+    // back to queuing so the message is never lost.
+    if (t.trim() && !atts.length) {
+      const sidAt = sessionId; input.value = '';
+      fetch('/chat/interject', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ sessionId: sidAt, text: t }) })
+        .then(r => (r.ok ? r.json() : null))
+        .then(r => { if (r && r.ok) setStatus('↪ interjected — the agent will fold it in at its next step'); else { queuedSend = { t, atts: [], model: modelOverride || null }; setStatus('⏳ queued — sending when the current turn finishes'); } })
+        .catch(() => { queuedSend = { t, atts: [], model: modelOverride || null }; });
+      return;
+    }
     queuedSend = { t, atts, model: modelOverride || null };
     pendingAtt = []; input.value = ''; renderAttachRow();
     setStatus('⏳ queued — sending when the current turn finishes');
