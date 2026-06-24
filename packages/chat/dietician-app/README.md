@@ -54,7 +54,10 @@ never logged, never on screen.
   now persists candidates so evaluate finds them). *Proven: `node --test` (13/13) + `smoke/evaluate-smoke.mjs`
   — real Opus re-judges dan's cached menus and reproduces the persona verdicts (decisive SKIPs match;
   disagreements are the fuzzy VIABLE↔BORDERLINE↔SKIP boundary).*
-- [ ] **Slice 5** — `kml.mjs`: ports `build_kml.py` (lng,lat,0; ABGR `ff00aa00`; CDATA+escape; 2 folders).
+- [x] **Slice 5** — `kml.mjs`: ports `build_kml.py` (lng,lat,0; ABGR `ff00aa00`; CDATA + `&<>` escape; VIABLE
+  + BORDERLINE folders only) + `core.buildMap`. *Proven: `node --test` (16/16) + `smoke/kml-smoke.mjs` built
+  `safe-eats.kml` from dan's imported DB → 251 placemarks (75 VIABLE + 176 BORDERLINE), 524900 bytes —
+  essentially byte-identical to the persona's live ~525KB file.*
 - [ ] **Slice 6** — `guides/shared.mjs` + `guides/eats-guide.mjs` (city-grouped guide).
 - [ ] **Slice 7** — `guides/disney-guide.mjs` (park-grouped + hotel section + 2 inline-SVG maps).
 - [ ] **Slice 8** — `grunt.mjs` cap layer: `DietConsole` + `guide`/`scanner`/`editor` facets + `/rpc` + SPA.

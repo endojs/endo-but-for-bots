@@ -13,6 +13,7 @@
 // evaluate / buildMap / generateGuide on the same injected store.
 import { AUTO_SKIP, NAME_AUTO_SKIP, priorityOf } from './skiplists.mjs';
 import { QUERIES, SEED_CITIES, cityRecord, cityList } from './cities.mjs';
+import { buildKml } from './kml.mjs';
 
 // slugify — sweep.py slugify(): lowercase, non-alnum → '-', strip, cap 60, fallback 'place'.
 export const slugify = name => (String(name || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60)) || 'place';
@@ -223,7 +224,25 @@ export const makePipeline = ({
     return { ok: true, city: cityName || undefined, evaluated: results.length, remaining: Math.max(0, todo.length - batch.length), tally, results };
   };
 
+  // STAGE 5a — rebuild the safe-eats KML from the store's VIABLE+BORDERLINE verdicts (build_kml.py port).
+  // Writes the artifact to the store and returns counts. SKIP/UNKNOWN stay in the DB but off the map.
+  const buildMap = async ({ rel = 'safe-eats.kml', title } = {}) => {
+    const items = [];
+    for (const slug of await store.listVerdicts()) {
+      const ev = await store.getVerdict(slug);
+      if (!ev || !/^(VIABLE|BORDERLINE)$/.test(ev.verdict)) continue;
+      const place = await store.getPlace(slug);
+      if (!place) continue;
+      const merged = { ...place, ...ev, slug };
+      if (merged.lat == null || merged.lng == null) continue;
+      items.push(merged);
+    }
+    const { kml, total, viable, borderline } = buildKml(items, { person, title });
+    await store.writeArtifact(rel, kml);
+    return { ok: true, path: rel, total, viable, borderline, bytes: Buffer.byteLength(kml) };
+  };
+
   const listCities = () => cityList(cities);
 
-  return { scan, evaluate, listCities, slugify };
+  return { scan, evaluate, buildMap, listCities, slugify };
 };

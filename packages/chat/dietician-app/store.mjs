@@ -57,6 +57,10 @@ export const makeDietStore = (folder, { person = 'alexa' } = {}) => {
       return c;
     },
 
+    // raw generated artifacts (safe-eats.kml, site/index.html, …) — not JSON.
+    writeArtifact: (rel, content) => folder.write(rel, content),
+    readArtifact: async rel => { const r = await folder.read(rel); return r && r.ok ? r.content : null; },
+
     // merged view a guide/KML consumes: place metadata + this person's verdict (verdict fields win).
     merged: async slug => {
       const place = await readJson(`places/${slug}.json`);
