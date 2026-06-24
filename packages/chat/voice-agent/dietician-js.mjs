@@ -55,19 +55,24 @@ const ssh = (cmd, timeoutMs = 120000) => new Promise(resolve =>
 const b64 = s => Buffer.from(String(s ?? ''), 'utf8').toString('base64');
 const sshWrite = (remotePath, content) => ssh(`mkdir -p "$(dirname ${remotePath})" && echo ${b64(content)} | base64 -d > ${remotePath}`, 30000);
 
-// ── SCAN — a known city, OR a NEW city geocoded on the fly (the "scan a new city" path) ──
-export const scanArea = async city => {
+// ── SCAN — a known city, OR a NEW place geocoded on the fly: a city, OR a hotel/landmark to sweep a few
+// miles around. `radiusMiles` (default ~5 mi ≈ whole-city) + `cap` (default 80) control the coverage. ──
+export const scanArea = async (city, opts = {}) => {
   const c = slugify(city);
-  if (!c) return harden({ ok: false, error: 'a city is required (e.g. "oakland", "berlin")' });
-  if (SEED_CITIES[c]) return harden(await basePipe.scan(c));
+  if (!c) return harden({ ok: false, error: 'a city is required (e.g. "oakland", "berlin", or a hotel name)' });
+  if (SEED_CITIES[c]) return harden(await basePipe.scan(c)); // a configured city/park → its tuned sweep
+  const miles = Number(opts.radiusMiles) > 0 ? Math.min(15, Number(opts.radiusMiles)) : 5; // ~whole-city by default
+  const cap = Number(opts.cap) > 0 ? Math.max(1, Math.min(120, Math.round(Number(opts.cap)))) : 80;
   const g = await places.geocode(city);
   if (!g.ok) return harden({ ok: false, error: `"${city}" isn't a configured city and I couldn't geocode it — ${g.error}` });
-  const r = await basePipe.scan({ slug: c, name: g.name, center: { latitude: g.lat, longitude: g.lng }, radius: 5000, cap: 20 });
-  return harden({ ...r, geocoded: { name: g.name, lat: g.lat, lng: g.lng }, note: `Auto-geocoded "${g.name}". ${r.note || ''}` });
+  const r = await basePipe.scan({ slug: c, name: g.name, center: { latitude: g.lat, longitude: g.lng }, radius: Math.round(miles * 1609), cap });
+  return harden({ ...r, geocoded: { name: g.name, lat: g.lat, lng: g.lng, miles, cap },
+    note: `Auto-geocoded "${g.name}" — swept ~${miles} mi around it, up to ${cap} candidates. ${r.note || ''}` });
 };
 
-// ── EVALUATE — cached_menu preferred; else the field agent's web caps (passed in as `tools`) ──
-export const evaluateArea = async ({ city, limit = 3, tools = {}, onStep = () => {}, signal } = {}) => {
+// ── EVALUATE — cached_menu preferred; else the field agent's web caps (passed in as `tools`). Each verdict
+// is written as produced (idempotent), so a big batch cut short by the turn limit still saves its progress. ──
+export const evaluateArea = async ({ city, limit = 10, tools = {}, onStep = () => {}, signal } = {}) => {
   const pipe = makePipeline({ store: specStore, places, judge, web: tools, person: PERSON });
   return harden(await pipe.evaluate({ city: slugify(city), limit, onStep, signal }));
 };

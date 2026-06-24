@@ -491,6 +491,7 @@ const makeAffordances = ({ outDir }) => {
 // ── power metadata: name → label + the toolbox verbs it contributes ───────────
 export const POWERS = harden({
   notes: { label: 'Read your personal notes', verbs: ['searchNotes', 'readNote'] },
+  'notes.dietician': { label: 'Read ONLY the Dietician notes folder (the family diet specs + dietician notes — scoped, no access to other personal notes)', verbs: ['searchDietNotes', 'readDietNote'] },
   jotNote: { label: 'Jot NEW notes straight into your private vault (non-destructive — only ever ADDS; never overwrites or deletes; no confirmation)', verbs: ['addNote'] },
   reference: { label: 'Consult your library + Wikipedia', verbs: ['consult'] },
   web: { label: 'Search the web (Brave) + fetch & summarize a page', verbs: ['fetchUrl', 'webSearch'] },
@@ -722,14 +723,14 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
   //    via askSpecialist) but are ALWAYS present and are NOT persisted into the user's specialists store. Each
   //    is a subset of ALL_POWERS minus the meta powers. Edit this list to curate the menu.
   const BUILTIN_AGENTS = [
-    { id: 'dietician', name: '🥗 Dietician', domain: 'restaurant + diet safety', powers: ['dietician', 'web', 'reference', 'notes', 'jotNote', 'contact', 'feed'],
+    { id: 'dietician', name: '🥗 Dietician', domain: 'restaurant + diet safety', powers: ['dietician', 'web', 'reference', 'notes.dietician', 'contact', 'feed'],
       instructions: [
         "You are the Dietician — the household's restaurant + diet-safety agent, powered by a built-in scanning PIPELINE. To find + judge restaurants for ANY place, use the pipeline tools — never manually web-search to compile a restaurant list:",
-        "1. dietScanArea(city) — sweeps an area's restaurants. Works for ANY city; a NEW one (e.g. Copenhagen) is auto-geocoded. Returns candidates. Call it ONCE, then move on. (If it returns NO candidates, say so + check the city name — never fall back to a hand-made list.)",
-        "2. dietEvaluateArea(city) — judges the scanned candidates against the person's diet (it READS the diet spec ITSELF — do NOT searchNotes/readNote to find it). It is SLOW: each restaurant needs a menu lookup + a judgment, so it does a SMALL BATCH per call and returns { evaluated, remaining, tally }. Call it ONCE per turn, then STOP and REPORT: how many you judged, how many REMAIN, and the verdicts. Tell the user to say \"continue\" for the next batch. NEVER loop it many times in one turn — you'll hit the 6-minute time limit.",
+        "1. dietScanArea(city, radiusMiles?) — sweeps an area's restaurants. Works for ANY place; a NEW one (e.g. Copenhagen, or a hotel name) is auto-geocoded. By default it sweeps ~5 mi (most of a city) up to ~80 candidates — to scan the WHOLE city leave radiusMiles off; for just a few miles around a hotel pass e.g. radiusMiles: 3 and use the hotel's name as the place. Call it ONCE, then move on. (If it returns NO candidates, say so + check the name — never fall back to a hand-made list.)",
+        "2. dietEvaluateArea(city, limit?) — judges the scanned candidates against the person's diet (it READS the diet spec ITSELF — do NOT search/read notes to find it). It is SLOW (a few seconds per restaurant). Each verdict is SAVED as it lands, so a batch cut short by the turn limit keeps its progress. Call it ONCE per turn with a sensible batch (e.g. limit 12-20), then STOP and REPORT { evaluated, remaining, verdicts } and tell the user to say \"continue\" for the next batch. NEVER loop it many times in one turn — that's what blows the 6-minute time limit. To cover a whole big city just keep saying continue; progress accumulates.",
         "3. When all candidates are judged (remaining = 0): dietBuildMap() rebuilds the safe-eats map; dietRefreshSite(site) refreshes a published guide (propose→confirm; NEVER publish without confirmation).",
-        "KEEP EVERY TURN SHORT + FOCUSED — one scan, OR one evaluate batch, OR one publish — then report. Do NOT chain many slow tools, loop a tool, or read notes in a single turn; that's what blows the time limit.",
-        "Diet specs live in the vault's Dietician folder ([[Alexa — Diet]], [[Dan — Diet]], index [[Diet Preferences]]) and are read by dietEvaluateArea automatically — only open them if the user asks about the diet itself. Be skeptical about menus; when unsure prefer SKIP / UNKNOWN. Carry the city + person across the conversation.",
+        "KEEP EVERY TURN SHORT + FOCUSED — one scan, OR one evaluate batch, OR one publish — then report. Do NOT chain many slow tools or loop a tool in a single turn; that's what blows the time limit.",
+        "You can read ONLY the vault's Dietician folder (searchDietNotes / readDietNote) — the family diet specs ([[Alexa — Diet]], [[Dan — Diet]], index [[Diet Preferences]]) + dietician notes; you cannot see any other personal notes. The diet specs are read by dietEvaluateArea automatically — only open them if the user asks about the diet itself. Be skeptical about menus; when unsure prefer SKIP / UNKNOWN. Carry the city + person across the conversation.",
       ].join('\n') },
     { id: 'researcher', name: '🔎 Researcher', domain: 'deep multi-source research', powers: ['research', 'web', 'reference', 'browser', 'notes', 'jotNote', 'feed'],
       instructions: 'You are the Researcher. For any question, plan, search the web + your library in parallel, read the best sources, and synthesize a concise, CITED answer. Prefer primary sources and flag uncertainty. Use the research tool for big questions; web/browser/reference for the rest; jot durable findings to notes.' },
@@ -989,6 +990,14 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
       run: async ({ id } = {}) => harden(await selfImprover.rollback({ id: String(id || ''), now: new Date().toISOString() })) },
     readNote: { reversible: false, args: { path: 'string — vault-relative path' }, description: 'Read one personal note by path.',
       run: async ({ path: rel }, agent, ctx = {}) => ({ ok: true, content: String(await (ctx.notes || aff.notes).read(String(rel || ''))).slice(0, 6000) }) },
+    // ── SCOPED notes (the `notes.dietician` power): read ONLY the vault's Dietician/ folder (the family diet
+    //    specs + the dietician's own notes). A least-authority view — cannot see any other personal note. ──
+    searchDietNotes: { reversible: false, args: { query: 'string' }, description: 'Search the Dietician notes folder (the family diet specs + dietician notes). Scoped — cannot see any other personal notes.',
+      run: async ({ query }) => harden(((await aff.notes.search(String(query || ''), { limit: 8 })) || []).filter(r => underPrefix(r.path, 'Dietician'))) },
+    readDietNote: { reversible: false, args: { path: 'string — a path under Dietician/' }, description: 'Read one note from the Dietician folder (diet specs / dietician notes).',
+      run: async ({ path: rel }) => (underPrefix(String(rel || ''), 'Dietician')
+        ? ({ ok: true, content: String(await aff.notes.read(String(rel || ''))).slice(0, 6000) })
+        : ({ ok: false, content: '', error: 'outside the Dietician folder — not readable by the Dietician' })) },
     // NON-DESTRUCTIVE note CREATION — fires directly, no proposal. Creating a new note (or appending to
     // one) only ever ADDS; it cannot overwrite or delete, so it needs no confirmation. This is the
     // self-hosted private notepad: the entry agent can record SENSITIVE things that never leave the
@@ -1206,11 +1215,11 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
     //    (auto-geocodes new cities) / evaluate / build mutate only the local instance DB (contained);
     //    PUBLISHING a guide is OUTWARD → dietRefreshSite only PROPOSES (you confirm; on confirm it writes the
     //    JS-generated HTML to the deploy lane so the live public guides keep updating). ──
-    dietScanArea: { reversible: false, args: { city: 'string — a city slug or name, e.g. "berlin", "oakland", "san-francisco". A city not yet configured is auto-geocoded so you can scan ANYWHERE.' },
-      description: "Scan an area's restaurants against the household diet (a Google Places sweep, in-process; dedupes against what's known; a NEW city is auto-geocoded first). Returns the new candidate restaurants. Then dietEvaluateArea to judge them.",
-      run: async ({ city }) => dietScan(city) },
-    dietEvaluateArea: { reversible: false, args: { city: 'string — the city you just scanned', limit: 'number — how many to evaluate this call (default 3, max 8)' },
-      description: "Evaluate scanned restaurants against Alexa's diet: finds each menu, judges VIABLE / BORDERLINE / SKIP / UNKNOWN with a strong model, and records the verdict. Idempotent (skips ones already done). Run dietScanArea(city) first. A batch can take a minute or two.",
+    dietScanArea: { reversible: false, args: { city: 'string — a city, OR a hotel/landmark name to sweep around (e.g. "berlin", "oakland", "Grand Californian Hotel"). Anything not yet configured is auto-geocoded so you can scan ANYWHERE.', radiusMiles: 'number — optional; how far around the point to sweep (default ~5 mi ≈ a whole city; use a smaller value like 2-3 to stay near a hotel)' },
+      description: "Scan an area's restaurants against the household diet (a Google Places sweep, in-process; dedupes against what's known; a NEW place is auto-geocoded first). For a NEW place it sweeps ~5 mi by default (most of a city) up to ~80 candidates — pass radiusMiles to widen/narrow (e.g. a few miles around a hotel). Returns the new candidates. Then dietEvaluateArea to judge them.",
+      run: async ({ city, radiusMiles }) => dietScan(city, { radiusMiles }) },
+    dietEvaluateArea: { reversible: false, args: { city: 'string — the city you just scanned', limit: 'number — how many to judge this call (default 10, max 60). Each verdict is saved as it lands, so a big batch cut short by the turn limit still keeps its progress — just call again to continue.' },
+      description: "Evaluate scanned restaurants against Alexa's diet: finds each menu, judges VIABLE / BORDERLINE / SKIP / UNKNOWN with a strong model, records the verdict. Idempotent (skips ones already done). Run dietScanArea(city) first. SLOW — a few seconds per restaurant; call ONCE per turn, report { evaluated, remaining }, then continue next turn.",
       run: async ({ city, limit }) => dietEval({ city, limit, tools: { webSearch: x => aff.web.search(x), fetchUrl: x => aff.web.get(x), browse: x => aff.browser.visit(x) } }) },
     dietBuildMap: { reversible: false, args: {}, description: 'Rebuild the safe-eats Google-Maps map (KML) from the evaluated restaurant database on the dietician persona.',
       run: async () => dietBuild() },

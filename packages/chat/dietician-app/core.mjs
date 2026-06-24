@@ -208,7 +208,9 @@ export const makePipeline = ({
   // verdict (+ any freshly-fetched cached_menu) to the store. A batch can take a minute or two (one LLM/place).
   const evaluate = async ({ city, slugs, limit = 3, onStep = () => {}, signal } = {}) => {
     if (!judge || typeof judge.evaluate !== 'function') return { ok: false, error: 'no judge injected (need an LLM evaluator)' };
-    const lim = Math.max(1, Math.min(8, Number(limit) || 3));
+    // each verdict is written as it's produced (idempotent), so a big batch interrupted by the turn limit
+    // still saves its progress — the next call picks up the remaining. Cap is generous (was 8).
+    const lim = Math.max(1, Math.min(60, Number(limit) || 3));
     const spec = await store.readSpec();
     const cityName = city ? ((cityRecord(cities, city) || {}).name || city) : null;
     // Match the city by SLUG, not exact string: scan persists place.city as the geocoded DISPLAY name

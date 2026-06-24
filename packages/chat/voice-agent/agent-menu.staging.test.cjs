@@ -43,6 +43,10 @@ const BUILTINS = ['dietician', 'researcher', 'home', 'scheduler', 'image-studio'
   ok(BUILTINS.every(b => ids.includes(b)), `listSpecialists carries the built-in agents (${ids.join(', ')})`);
   const sb = (ls.result || []).find(s => s.id === 'specialist-builder');
   ok(sb && sb.powers.includes('specialists') && sb.powers.includes('selfPrompt'), 'the Specialist Builder holds specialists (to build them) + selfPrompt (to edit its own prompt)');
+  // least authority: the Dietician reads ONLY the Dietician/ folder (notes.dietician), not all personal notes.
+  const diet = (ls.result || []).find(s => s.id === 'dietician');
+  ok(diet && diet.powers.includes('notes.dietician'), `the Dietician holds the scoped notes.dietician power (${(diet && diet.powers || []).join(', ')})`);
+  ok(diet && !diet.powers.includes('notes') && !diet.powers.includes('jotNote'), 'the Dietician does NOT hold full personal-notes read (notes) or vault write (jotNote)');
 
   let chromium = null;
   try { ({ chromium } = require('/usr/lib/node_modules/@playwright/cli/node_modules/playwright-core')); } catch {}
