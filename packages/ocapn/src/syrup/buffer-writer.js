@@ -106,7 +106,18 @@ export class BufferWriter {
   write(bytes) {
     const state = this.#state;
     this.ensureCanWrite(bytes.byteLength);
-    state.bytes.set(bytes, state.index);
+    // Use for-of to copy bytes via Symbol.iterator rather than TypedArray.set.
+    // TypedArray.prototype.set reads the source via integer-indexed access
+    // (the ArrayLike path), which silently returns undefined (coerced to 0) for
+    // plain-object wrappers such as the emulated-freezable Uint8Array wrappers
+    // produced by the @endo/immutable-arraybuffer shim when the underlying
+    // ArrayBuffer is immutable. for-of goes through Symbol.iterator, which the
+    // shim correctly implements to amplify the wrapper to the genuine TypedArray.
+    let i = state.index;
+    for (const byte of bytes) {
+      state.bytes[i] = byte;
+      i += 1;
+    }
     state.index += bytes.byteLength;
     state.length = Math.max(state.index, state.length);
   }
