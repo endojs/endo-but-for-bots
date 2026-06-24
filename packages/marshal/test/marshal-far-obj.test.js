@@ -231,7 +231,6 @@ test('transitional remotables', t => {
         throw Error(`unknown option ${opt}`);
       }
     }
-    // @ts-expect-error Don't yet understand typing, but want dynamic test anyway
     const o = create(objectPrototype, props);
     if (mark === 'far') {
       return Far('iface', o);

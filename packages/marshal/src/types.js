@@ -193,7 +193,7 @@ export {};
  */
 
 /**
- * @typedef {-1 | 0 | 1 | NaN} PartialComparison
+ * @typedef {-1 | 0 | 1 | typeof NaN} PartialComparison
  * The result of a `PartialCompare` function that defines a meaningful and
  * meaningfully precise partial order in which incomparable values are
  * represented by `NaN`. See `PartialCompare`.

@@ -334,7 +334,7 @@ export const makeComparatorKit = (compareRemotables = (_x, _y) => NaN) => {
   const outerComparator = (x, y) =>
     // When the inner comparator returns NaN to indicate incomparability,
     // replace that with 0 to indicate a tie.
-    /** @type {Exclude<PartialComparison, NaN>} */ (comparator(x, y) || 0);
+    /** @type {-1 | 0 | 1} */ (comparator(x, y) || 0);
 
   /** @type {RankCompare} */
   const antiComparator = (x, y) => outerComparator(y, x);
