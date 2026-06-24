@@ -21,6 +21,23 @@ const STORE = process.env.CUSTOM_TOOLS_STORE || `${HOME}/.config/field-agent/cus
 const STATE_DIR = process.env.CUSTOM_TOOLS_STATE || `${HOME}/.local/state/field-agent/tool-state`;
 const clip = (s, n) => { const t = String(s == null ? '' : s); return t.length > n ? `${t.slice(0, n)}…` : t; };
 
+// THE canonical tool-authoring contract — the same document the agent has when it writes a tool, so a fixer
+// repairs by the same rules. (Exported so the agent's proposeTool guidance + the self-heal fixer share ONE doc.)
+export const TOOL_AUTHORING_GUIDE = [
+  'A custom tool is CONFINED JavaScript. Single-file source is the BODY of `make(powers)`, which returns the',
+  'tool: either an async function `async (args) => …`, or an object of async methods `{ async foo(args){…} }`.',
+  'It is instantiated ONCE and kept alive (in-process state persists across calls).',
+  'POWERS (its ONLY authority — there is NO fs, network, process, import, fetch, timers, or ambient globals):',
+  '  • state — a durable kv: state.get(k) / state.set(k,v) / state.delete(k) / state.all(). Survives restarts.',
+  '  • grains — mergeable, subscribable data cells (PREFER these for data): const c = grains.cell("n",{merge:"sum"});',
+  '    c.addContent(1); c.read(). merges: lastWriteWins | max | min | sum | append | union. Kept SEPARATE from',
+  '    source, so data survives an edit/revert/fork.',
+  '  • console — console.log / console.error (no-ops in production; safe to leave in).',
+  'It runs under SES (strict mode), so: declare every variable (referencing an UNDEFINED global yields null, NOT',
+  'an error — a classic silent bug); return JSON-able values; keep methods async; never reach for anything not in',
+  'powers. Multi-file class tools are a {file: source} map whose entry exports `make` and may import siblings.',
+].join('\n');
+
 // `fix` (optional) is the SELF-HEAL fixer: fix({ source, error, label, ctx }) → { source, summary } | null.
 // When wired, a tool that THROWS is repaired in place (source rewritten → re-run) so the caller's promise
 // resolves with the fixed value instead of an error. See designs/self-healing-errors.md.
@@ -151,7 +168,9 @@ export const makeCustomTools = ({ fix } = {}) => {
       label: t.name,
       source: t.files ? t.files : t.code,
       attempt: runOnce,
-      ctx: { id: t.id, name: t.name, description: t.description, method, args, kind: t.kind || 'instance' },
+      // hand the fixer the SAME documents the tool's agent has: the authoring contract + THIS tool's own
+      // review history (the panel findings + the review→revise dialogue it was admitted with).
+      ctx: { id: t.id, name: t.name, description: t.description, method, args, kind: t.kind || 'instance', guide: TOOL_AUTHORING_GUIDE, review: t.review || null, reviseLog: t.reviseLog || null },
       apply: async patched => {
         setSource(t.id, (typeof patched === 'string') ? { 'tool.js': patched } : patched); // persists + drops the cached instance
         t = get(t.id) || t; // refresh so runOnce re-instantiates from the PATCHED source

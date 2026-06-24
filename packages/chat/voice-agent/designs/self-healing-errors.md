@@ -30,8 +30,15 @@ Invariants:
 - **Bounded.** A fixer gets N tries (default 2). No infinite repair loops.
 - **Confined.** `apply` swaps *behaviour* only; it cannot grant authority the code didn't already hold
   (SES + ocap). A self-heal can make a tool *work*, never make it *reach further*.
-- **Audited.** Every auto-patch is logged on the artifact (what broke, what changed) so a human can review
-  a repair after the fact — recovery first, review later, never review-blocks-recovery.
+- **Reviewed.** A patch is new agent-authored code, so it clears the **same adversarial review panel every
+  proposed tool faces** (`runReviewPanel`) before it's allowed to go live; a critically-flawed patch is
+  *refused* rather than applied (`makeReviewedFixer`). Self-heal doesn't get to bypass the gates.
+- **Well-informed.** The fixer is handed the **same documents the failing tool's agent had** — the canonical
+  authoring contract (`TOOL_AUTHORING_GUIDE`) + that tool's own admission review history — so it repairs by the
+  rules the author knew, not from a cold prompt.
+- **Audited.** Every auto-patch is logged on the artifact (what broke, what changed, the patch's review
+  verdict) so a human can review a repair after the fact — recovery first, review later, never
+  review-blocks-recovery.
 - **Idempotent-friendly.** A heal re-runs the attempt; attempts that already committed a side effect before
   throwing should be written to tolerate a retry (this is itself a mutability requirement we surface, not hide).
 
@@ -69,7 +76,10 @@ test that proves "broke → fixer patched → promise resolved with the repaired
   with the repaired result** — the agent/user never sees the error. Each repair is appended to the tool's
   `healLog`. Tools with no editable source (imported bundles) and tools with no fixer wired fall back to
   today's plain `{ok:false,error}`.
-- `server.mjs` wires an LLM-backed fixer (bounded, confined to a source rewrite).
+- `server.mjs` wires an LLM-backed fixer (bounded, confined to a source rewrite), primed with the agent's
+  documents (`TOOL_AUTHORING_GUIDE` + the tool's `review`/`reviseLog`, handed in via `ctx`), and wrapped in
+  `makeReviewedFixer` so each patch passes `runReviewPanel` (critical → refused) before it goes live.
+- `self-heal.mjs` `makeReviewedFixer({ fix, review, reject })` — composes any raw fixer with a review gate.
 
 ## Open questions (for the climb)
 

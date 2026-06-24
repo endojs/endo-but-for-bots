@@ -27,7 +27,8 @@ import { runAgentCode } from '../../ocapn-noise/codemode.mjs';
 const AGENT_RUNNER = process.env.AGENT_CODEMODE === '0' ? runAgent : runAgentCode;
 import { readAsks, getAsk, answerAsk, setAskStatus, formatAnswers, getSecret, storeNamedSecret } from './asks-store.mjs';
 import { makeConnectors } from './connectors.mjs';
-import { makeCustomTools } from './custom-tools.mjs';
+import { makeCustomTools, TOOL_AUTHORING_GUIDE } from './custom-tools.mjs';
+import { makeReviewedFixer } from './self-heal.mjs';
 import { makeToolShares } from './tool-shares.mjs';
 import { makeComponentGit } from './component-git.mjs';
 import { makeIslandSource } from './island-source.mjs';
@@ -35,22 +36,31 @@ import { reuseFirstPreamble } from './component-catalog.mjs';
 import { addBacklog } from './improvement-backlog.mjs';
 import { STARTER_RING } from './system-map.mjs';
 const connectors = makeConnectors({ getSecret }); // owner-side registry (same connectors.json the agent calls)
-// SELF-HEAL fixer (designs/self-healing-errors.md): when an admitted custom tool THROWS at runtime, rewrite its
-// source so the original call RESOLVES with the repaired value instead of bubbling an error. Single-file tools
-// only (the body of make(powers)); the repaired tool stays EXACTLY as confined (only state/grains/console — a
-// source rewrite cannot widen authority). Bounded by the healer (2 tries) + every patch logged on the tool.
-// On by default (we're adopting the strategy); SELF_HEAL=0 disables it (falls back to a plain {ok:false,error}).
-const selfHealFixer = async ({ source, error, label, ctx = {} }) => {
+// SELF-HEAL (designs/self-healing-errors.md): when an admitted custom tool THROWS at runtime, rewrite its source
+// so the original call RESOLVES with the repaired value instead of bubbling an error. Single-file tools (the body
+// of make(powers)); the repaired tool stays EXACTLY as confined (only state/grains/console — a source rewrite
+// can't widen authority). Bounded by the healer (2 tries); every patch logged on the tool.
+//   • the fixer is primed with the SAME documents the tool's agent has — the authoring contract + this tool's own
+//     review history (handed in via ctx from custom-tools.call), so it repairs by the same rules the author knew;
+//   • every PATCH then undergoes the SAME adversarial review panel a proposed tool faces (runReviewPanel); a
+//     critically-flawed patch is refused rather than auto-applied (makeReviewedFixer).
+// On by default (adopting the strategy); SELF_HEAL=0 disables it (falls back to a plain {ok:false,error}).
+const rawHealFix = async ({ source, error, label, ctx = {} }) => {
   if (typeof source !== 'string') return null; // multi-file / imported-bundle tools: skip for now → graceful
-  const sys = 'You repair a CONFINED agent-authored JS tool that just threw at runtime. The source you are given is the BODY of `make(powers)`, which returns the tool — either an async function, or an object of async methods. Its ONLY powers are `state` (a durable kv: get/set/delete/all), `grains`, and `console`; there is NO fs, network, process, or import. Rewrite the body to FIX the specific error while preserving the tool\'s intent and its method/return shape. Reply with ONLY the corrected body — no markdown fence, no prose, no explanation.';
+  const reviewDoc = ctx.review ? `\n\nThis tool's admission review (worst: ${ctx.review.worst}):\n${(ctx.review.findings || []).map(f => `- [${f.severity}] ${f.discipline}: ${String(f.report || '').slice(0, 180)}`).join('\n')}` : '';
+  const sys = `You repair a CONFINED agent-authored JS tool that threw at runtime. Fix the SPECIFIC error while preserving the tool's intent and its method/return shape. Reply with ONLY the corrected body — no markdown fence, no prose.\n\nThe authoring contract you must obey (the same one the tool's author had):\n${ctx.guide || ''}${reviewDoc}`;
   const usr = `Tool: ${ctx.name || label}\n${ctx.description ? `Purpose: ${ctx.description}\n` : ''}Invoked as: ${ctx.method ? `method "${ctx.method}"` : '(single function)'} with args ${JSON.stringify(ctx.args || {}).slice(0, 400)}\nIt threw: ${error}\n\n--- current body ---\n${source}\n--- end ---\n\nReturn the corrected body only.`;
   let out;
   try { out = await callLLM([{ role: 'system', content: sys }, { role: 'user', content: usr }], process.env.SELF_HEAL_MODEL || 'default', { maxTokens: 1500 }); }
   catch { return null; }
-  let fixed = String((out && out.text) || '').trim().replace(/^```[a-z]*\n?/i, '').replace(/\n?```$/i, '').trim();
+  const fixed = String((out && out.text) || '').trim().replace(/^```[a-z]*\n?/i, '').replace(/\n?```$/i, '').trim();
   if (!fixed || fixed === source) return null;
-  return { source: fixed, summary: `auto-repair after: ${String(error).slice(0, 80)}` };
+  return { source: fixed, summary: `auto-repair after: ${String(error).slice(0, 70)}` };
 };
+const selfHealFixer = makeReviewedFixer({
+  fix: rawHealFix,
+  review: async ({ source, ctx = {} }) => runReviewPanel({ name: ctx.name, description: ctx.description, code: source, kind: ctx.kind }, { callLLM, ranAt: new Date().toISOString() }),
+}); // a self-heal patch clears the same adversarial panel as any proposed tool; a critical patch is refused
 const customTools = makeCustomTools(process.env.SELF_HEAL === '0' ? {} : { fix: selfHealFixer }); // owner-side review/admit (same custom-tools.json the agent reads)
 import { makeAppStore } from './app-state.mjs';
 import { makePurse } from './purse.mjs';

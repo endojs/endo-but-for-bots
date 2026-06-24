@@ -39,3 +39,23 @@ export const makeSelfHealer = ({ fix, onHeal = () => {}, max = 2 } = {}) => {
   return harden({ heal });
 };
 harden(makeSelfHealer);
+
+// Wrap a raw fixer so its PATCH undergoes the same adversarial review every proposed tool faces before it's
+// allowed to go live — a self-heal patch is new agent-authored code and must clear the same bar. `review` is the
+// panel: ({ source, ctx }) → { worst, findings }. A patch whose worst severity is in `reject` (default the
+// top rung) is refused (→ null), so a critically-flawed auto-repair is never applied; the verdict is folded
+// into the patch summary for the audit log either way.
+export const makeReviewedFixer = ({ fix, review, reject = ['critical'] } = {}) => {
+  const rj = new Set(reject);
+  return async input => {
+    if (typeof fix !== 'function') return null;
+    const patched = await fix(input);
+    if (!patched || !patched.source) return null;
+    if (typeof review !== 'function') return patched; // no panel wired → behave as the raw fixer
+    let verdict = null;
+    try { verdict = await review({ source: patched.source, ...input }); } catch { verdict = null; }
+    if (verdict && rj.has(verdict.worst)) return null; // refuse to auto-apply a patch the panel flags this severely
+    return harden({ ...patched, review: verdict, summary: `${patched.summary || 'auto-repair'}${verdict ? ` [review: ${verdict.worst}]` : ''}` });
+  };
+};
+harden(makeReviewedFixer);

@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import os from 'node:os';
 import fs from 'node:fs';
 import path from 'node:path';
-import { makeSelfHealer } from './self-heal.mjs';
+import { makeSelfHealer, makeReviewedFixer } from './self-heal.mjs';
 
 // ─────────── the generic healer ───────────
 test('heal: a throwing attempt is repaired in place → the promise RESOLVES with the fixed value', async () => {
@@ -41,6 +41,22 @@ test('heal: a fixer that gives up (null) stops immediately; no fixer behaves lik
   assert.equal(none.ok, false); assert.equal(c2, 1, 'no fixer wired → one attempt, graceful');
 });
 
+// ─────────── reviewed fixer: a patch faces the same adversarial panel ───────────
+test('makeReviewedFixer: a patch undergoes review — CRITICAL is refused, non-critical passes with the verdict attached', async () => {
+  const fix = async () => ({ source: 'return async () => 1;', summary: 'patched' });
+  const crit = makeReviewedFixer({ fix, review: async () => ({ worst: 'critical', findings: [] }) });
+  assert.equal(await crit({ source: 'x', error: 'e' }), null, 'a critically-flawed patch is refused (never auto-applied)');
+  const okFixer = makeReviewedFixer({ fix, review: async () => ({ worst: 'low', findings: [] }) });
+  const r = await okFixer({ source: 'x', error: 'e' });
+  assert.equal(r.source, 'return async () => 1;', 'a non-critical patch is applied');
+  assert.equal(r.review.worst, 'low', 'the panel verdict is attached');
+  assert.match(r.summary, /review: low/, 'verdict folded into the audit summary');
+  const bare = makeReviewedFixer({ fix }); // no panel wired → behaves as the raw fixer
+  assert.ok((await bare({ source: 'x', error: 'e' })).source, 'no review fn → raw patch passes through');
+  const strict = makeReviewedFixer({ fix, review: async () => ({ worst: 'high', findings: [] }), reject: ['high', 'critical'] });
+  assert.equal(await strict({ source: 'x', error: 'e' }), null, 'the reject set is configurable (e.g. also refuse high)');
+});
+
 // ─────────── custom-tools end-to-end ───────────
 let _v = 0;
 const mkTools = async fix => {
@@ -64,6 +80,19 @@ test('custom tool that THROWS in its method self-heals: the call resolves with t
   assert.equal((tools.listAll().find(t => t.id === id).healLog || []).length, 1, 'the repair is audited on the tool');
   const r2 = await tools.call(id, { args: { x: 5 } }); // already fixed → no heal needed
   assert.equal(r2.ok, true); assert.equal(r2.value, 10); assert.ok(!r2.healed, 'a now-working tool heals zero times');
+});
+
+test("custom-tools hands the fixer the agent's DOCUMENTS: the authoring guide + the tool's review history", async () => {
+  let seen = null;
+  const fix = async input => { seen = input; return { source: 'return async () => 1;' }; };
+  const tools = await mkTools(fix);
+  const id = admit(tools, "return async () => { throw new Error('boom'); };");
+  tools.setReview(id, { worst: 'medium', findings: [{ severity: 'medium', discipline: 'ocapReviewer', report: 'watch the cap' }] });
+  await tools.call(id, { args: {} });
+  assert.ok(seen && seen.ctx, 'the fixer was invoked with ctx');
+  assert.match(seen.ctx.guide || '', /make\(powers\)/, 'ctx carries the canonical authoring guide the agent has');
+  assert.equal(seen.ctx.review && seen.ctx.review.worst, 'medium', "ctx carries THIS tool's admission review");
+  assert.match(seen.error, /boom/, 'and the actual runtime error');
 });
 
 test('custom tool that THROWS at instantiation self-heals too', async () => {
