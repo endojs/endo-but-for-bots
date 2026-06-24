@@ -3,7 +3,7 @@
 
 import harden from '@endo/harden';
 
-/** @typedef {import('@endo/ses-ava/prepare-endo.js').default} Test */
+/** @typedef {import('ava').ExecutionContext} Test */
 
 /**
  * @import { Client, ClientDebug, Connection, InternalSession, LocationId, Session } from '../src/client/types.js'
@@ -292,7 +292,7 @@ export const makeTestClientPair = async ({
  * and op:untag (to extract the payload) in sequence, enabling true pipelining tests.
  *
  * @param {InternalSession} senderSession - The session that will send the messages
- * @returns {object} Helper object with callAndUntag method
+ * @returns {{ callAndUntag: (target: unknown, method: string | symbol, args: unknown[], expectedTag: string) => Promise<unknown> }} Helper object with callAndUntag method
  */
 export const makeUntagTestHelper = senderSession => {
   const { ocapn } = senderSession;

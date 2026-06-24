@@ -62,7 +62,9 @@ export const waitForSentinelGc = async (timeoutMs = 5000) => {
   /** @type {object | null} */
   let sentinel = {};
   const collected = new Promise(resolve => {
-    sentinelRegistry.register(sentinel, () => resolve(undefined));
+    sentinelRegistry.register(/** @type {object} */ (sentinel), () =>
+      resolve(undefined),
+    );
   });
   // Make sentinel unreachable
   sentinel = null;

@@ -178,7 +178,8 @@ const table = [
   // Tagged objects containing references
   {
     name: 'tagged with reference (local object)',
-    makeValue: testKit => makeTagged('myTag', testKit.makeLocalObject(100n)),
+    makeValue: testKit =>
+      makeTagged('myTag', /** @type {any} */ (testKit.makeLocalObject(100n))),
     makeExpectedValue: testKit =>
       makeTagged(
         'myTag',
@@ -200,7 +201,10 @@ const table = [
   {
     name: 'tagged with reference in list',
     makeValue: testKit =>
-      makeTagged('listTag', harden([testKit.makeLocalObject(102n), 'hello'])),
+      makeTagged(
+        'listTag',
+        /** @type {any} */ (harden([testKit.makeLocalObject(102n), 'hello'])),
+      ),
     makeExpectedValue: testKit =>
       makeTagged(
         'listTag',

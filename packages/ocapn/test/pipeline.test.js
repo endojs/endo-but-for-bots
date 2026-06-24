@@ -14,7 +14,7 @@ import { encodeSwissnum } from '../src/client/util.js';
 /**
  * @typedef {object} TranscriptEntry
  * @property {string} from - Sender's debugLabel
- * @property {object} message
+ * @property {Record<string, any>} message
  */
 
 /**

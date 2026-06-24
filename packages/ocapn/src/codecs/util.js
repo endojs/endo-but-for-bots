@@ -41,8 +41,8 @@ export const makeOcapnRecordCodecFromDefinition = (
 /**
  * @param {string} codecName
  * @param {string} label
- * @param {function(SyrupReader): any} readBody
- * @param {function(any, SyrupWriter): void} writeBody
+ * @param {(syrupReader: SyrupReader) => any} readBody
+ * @param {(value: any, syrupWriter: SyrupWriter) => void} writeBody
  * @returns {SyrupRecordCodec}
  */
 export const makeOcapnRecordCodec = (codecName, label, readBody, writeBody) => {
@@ -53,16 +53,16 @@ export const makeOcapnRecordCodec = (codecName, label, readBody, writeBody) => {
 /**
  * @typedef {SyrupCodec & {
  *   label: string;
- *   readBody: (SyrupReader) => any;
- *   writeBody: (any, SyrupWriter) => void;
+ *   readBody: (syrupReader: SyrupReader) => any;
+ *   writeBody: (value: any, syrupWriter: SyrupWriter) => void;
  * }} OcapnListComponentCodec
  */
 
 /**
  * @param {string} codecName
  * @param {string} label
- * @param {function(SyrupReader): any} readBody
- * @param {function(any, SyrupWriter): void} writeBody
+ * @param {(syrupReader: SyrupReader) => any} readBody
+ * @param {(value: any, syrupWriter: SyrupWriter) => void} writeBody
  * @returns {OcapnListComponentCodec}
  */
 export const makeOcapnListComponentCodec = (

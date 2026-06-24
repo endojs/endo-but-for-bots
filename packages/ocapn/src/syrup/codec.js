@@ -25,8 +25,8 @@ const decodeBytestringLabel = buffer =>
   labelTextDecoder.decode(bytesFromImmutable(buffer));
 /**
  * @typedef {object} SyrupCodec
- * @property {function(SyrupReader): any} read
- * @property {function(any, SyrupWriter): void} write
+ * @property {(syrupReader: SyrupReader) => any} read
+ * @property {(value: any, syrupWriter: SyrupWriter) => void} write
  */
 
 const { freeze } = Object;
@@ -346,8 +346,8 @@ export const makeExactListCodec = (codecName, listDefinition) => {
 /**
  * @typedef {SyrupCodec & {
  *   label: string;
- *   readBody: (SyrupReader) => any;
- *   writeBody: (any, SyrupWriter) => void;
+ *   readBody: (syrupReader: SyrupReader) => any;
+ *   writeBody: (value: any, syrupWriter: SyrupWriter) => void;
  * }} SyrupRecordCodec
  */
 
@@ -360,8 +360,8 @@ export const makeExactListCodec = (codecName, listDefinition) => {
  * @param {string} codecName
  * @param {string} label
  * @param {SyrupRecordLabelType} labelType
- * @param {function(SyrupReader): any} readBody
- * @param {function(any, SyrupWriter): void} writeBody
+ * @param {(syrupReader: SyrupReader) => any} readBody
+ * @param {(value: any, syrupWriter: SyrupWriter) => void} writeBody
  * @returns {SyrupRecordCodec}
  */
 export const makeRecordCodec = (
@@ -474,8 +474,8 @@ export const makeRecordCodecFromDefinition = (
 
 /**
  * @param {string} codecName
- * @param {function(SyrupReader): SyrupCodec} selectCodecForRead
- * @param {function(any): SyrupCodec} selectCodecForWrite
+ * @param {(syrupReader: SyrupReader) => SyrupCodec} selectCodecForRead
+ * @param {(value: any) => SyrupCodec} selectCodecForWrite
  * @returns {SyrupCodec}
  */
 export const makeUnionCodec = (

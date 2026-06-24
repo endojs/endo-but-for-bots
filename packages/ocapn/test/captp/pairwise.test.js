@@ -12,9 +12,9 @@ import {
 
 // Test helper
 const makeTestTable = (
-  importHook = () => {},
-  exportHook = () => {},
-  onSlotCollected = () => {},
+  /** @type {(...args: any[]) => void} */ importHook = () => {},
+  /** @type {(...args: any[]) => void} */ exportHook = () => {},
+  /** @type {(...args: any[]) => void} */ onSlotCollected = () => {},
 ) => makePairwiseTable({ importHook, exportHook, onSlotCollected });
 
 // Test makeSlot function
