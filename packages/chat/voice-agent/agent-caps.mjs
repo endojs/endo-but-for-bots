@@ -41,7 +41,7 @@ import { createProject, listProjects, addScheduledAgent, updateScheduledAgent, r
 import { proposeSpawn } from '../capture/agent-spawn.mjs';
 import { runOpusDelegate } from './delegate.mjs';
 import { makeSelfImprover } from './self-improver.mjs';
-import { listBacklog, addBacklog, nextOpen, recordOutcome } from './improvement-backlog.mjs';
+import { listBacklog, addBacklog, nextOpen, recordOutcome, normalizeTestCmd } from './improvement-backlog.mjs';
 import { runAgent } from '../../ocapn-noise/tool-bridge.mjs';
 import { runAgentCode } from '../../ocapn-noise/codemode.mjs';
 import { dialIrohObject } from './iroh-objects.mjs';
@@ -549,15 +549,22 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
   // verification command: a worktree checkout has no node_modules (gitignored + yarn-workspace links), so
   // symlink the live repo's node_modules levels into the checkout, then run the FULL voice-agent suite
   // against the worktree's CODE. Override with SELF_IMPROVE_VERIFY or a per-call successCommand.
+  // PREAMBLE for ANY verification run in a worktree checkout (which has no node_modules — gitignored +
+  // yarn-workspace links): put yarn4/corepack on PATH (~/.local/bin; systemd --user omits it), `set -e` so a
+  // failed symlink is fatal (no silent run-without-deps), then symlink the live repo's node_modules levels in.
+  // EVERY per-item successCommand is run THROUGH this preamble too — without it a targeted test can't import deps.
+  const VERIFY_PREAMBLE = `export PATH="$HOME/.local/bin:$PATH"; set -e; for d in node_modules packages/chat/node_modules packages/chat/voice-agent/node_modules packages/ocapn-noise/node_modules; do if [ -d ${WORKTREE_REPO}/$d ]; then ln -sfn ${WORKTREE_REPO}/$d ./$d; fi; done`;
   const DEFAULT_VERIFY = process.env.SELF_IMPROVE_VERIFY
-    // `set -e` makes a failed symlink fatal (no silent run-without-deps); the test-file floor refuses a
-    // change that deleted/stripped the very tests that gate it (else `node --test <glob>` matches 0 → exit 0).
-    // BOOT SMOKE: `node --check` every top-level source .mjs (incl. server.mjs, which NO test imports) so a
-    // syntax/parse error a merge would introduce can NEVER be recorded as verified + then brick the next
-    // restart (the service is Restart=always — a broken boot = crash-loop that also kills the Revert UI).
-    // PATH: ~/.local/bin holds yarn 4 (corepack); the systemd --user default PATH omits it, so without this
-    // any yarn/corepack step in the implemented change (or a per-call successCommand) hits "command not found".
-    || `export PATH="$HOME/.local/bin:$PATH"; set -e; for d in node_modules packages/chat/node_modules packages/chat/voice-agent/node_modules packages/ocapn-noise/node_modules; do if [ -d ${WORKTREE_REPO}/$d ]; then ln -sfn ${WORKTREE_REPO}/$d ./$d; fi; done; n=$(ls packages/chat/voice-agent/*.test.mjs 2>/dev/null | wc -l); [ "$n" -ge 8 ] || { echo "self-improve verify: only $n test files — refusing (the suite must not be stripped)"; exit 1; }; for f in packages/chat/voice-agent/*.mjs packages/ocapn-noise/*.mjs; do node --check "$f" || { echo "self-improve verify: SYNTAX ERROR in $f — refusing to merge a change that won't load"; exit 1; }; done; node --test packages/chat/voice-agent/*.test.mjs`;
+    // the test-file floor refuses a change that deleted/stripped the very tests that gate it (else `node --test
+    // <glob>` matches 0 → exit 0). BOOT SMOKE: `node --check` every top-level source .mjs (incl. server.mjs,
+    // which NO test imports) so a syntax/parse error a merge would introduce can NEVER be recorded as verified +
+    // then brick the next restart (the service is Restart=always — a broken boot = crash-loop that also kills
+    // the Revert UI).
+    || `${VERIFY_PREAMBLE}; n=$(ls packages/chat/voice-agent/*.test.mjs 2>/dev/null | wc -l); [ "$n" -ge 8 ] || { echo "self-improve verify: only $n test files — refusing (the suite must not be stripped)"; exit 1; }; for f in packages/chat/voice-agent/*.mjs packages/ocapn-noise/*.mjs; do node --check "$f" || { echo "self-improve verify: SYNTAX ERROR in $f — refusing to merge a change that won't load"; exit 1; }; done; node --test packages/chat/voice-agent/*.test.mjs`;
+  // The verification command for a goal: a per-item successCommand is canonicalized (npm/yarn test → node --test)
+  // AND wrapped in the preamble (deps available); no command → the full default suite. This is what made every
+  // targeted item fail before: a bare `npm test <file>` ran root yarn-over-all-workspaces with no deps.
+  const buildVerify = sc => (sc ? `${VERIFY_PREAMBLE}; ${normalizeTestCmd(String(sc))}` : DEFAULT_VERIFY);
   const selfImprover = makeSelfImprover({ host: aff.host, repo: WORKTREE_REPO, baseBranch: process.env.FIELD_AGENT_BASE_BRANCH || 'field-preact', verifyDir: `${WORKTREE_DIR}/_verify`, ledgerFile: '/home/dan/.local/state/field-agent/auto-merge-ledger.json', defaultTest: DEFAULT_VERIFY, timeoutMs: 600000 });
   let selfImproveInFlight = false; // single-flight: at most one self-improvement at a time
   // SELF-CONTAINED executor runner (does NOT require the `roles` power): fork a worktree, run the confined
@@ -968,13 +975,14 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
         if (selfImproveInFlight) return harden({ ok: false, busy: true, error: 'a self-improvement is already in flight — one at a time' });
         selfImproveInFlight = true;
         try {
-          return harden(await selfImprover.improve({ goal: g, successCommand: successCommand ? String(successCommand) : undefined, employExecutor: ({ goal: gg }) => runWorktreeExecutor({ goal: gg, successCommand }), autoMerge: SELF_IMPROVE_AUTOMERGE, now: new Date().toISOString() }));
+          const vcmd = buildVerify(successCommand); // canonical runner + deps preamble — both the gate AND the executor's self-check use it
+          return harden(await selfImprover.improve({ goal: g, successCommand: vcmd, employExecutor: ({ goal: gg }) => runWorktreeExecutor({ goal: gg, successCommand: vcmd }), autoMerge: SELF_IMPROVE_AUTOMERGE, now: new Date().toISOString() }));
         } finally { selfImproveInFlight = false; }
       } },
     // ── FAPO-style backlog: research PROPOSES precise targets; the loop DRAINS the top one + records the outcome. ──
-    proposeImprovement: { reversible: false, args: { goal: 'string — what to improve + how the suite proves it. A PRECISE file-scoped change implements most reliably (e.g. "In packages/chat/ocapn-noise/codemode.mjs, add a single-retry around recoverable tool errors + a *.test.mjs asserting one retry"), but a LARGER ARCHITECTURAL change spanning several files is also fine now — the SUITE is the gate (it lands only if it stays green + re-verifies post-merge), so describe the change clearly + how to verify it.', successCommand: 'string — OPTIONAL: the command that proves it (defaults to the full suite)', rationale: 'string — OPTIONAL: the research that motivated it' },
-      description: 'Add an improvement TARGET to the backlog (the dataset the self-improvement loop drains). A target may be a precise file-scoped change OR a larger architectural change — both are allowed; the suite (independent verify + post-merge re-verify) is what gates it landing, not file-scoping. Describe the change + how it is verified. Use this to turn research into implementable targets.',
-      run: async ({ goal, successCommand, rationale }, agent) => harden(addBacklog({ goal, successCommand, rationale, by: agent || '' })) },
+    proposeImprovement: { reversible: false, args: { goal: 'string — what to improve + how the suite proves it. Use a REAL path that exists (verify with grep/ls first — e.g. codemode is packages/ocapn-noise/codemode.mjs, NOT packages/chat/ocapn-noise). A PRECISE file-scoped change implements most reliably (e.g. "In packages/ocapn-noise/codemode.mjs, add a single-retry around recoverable tool errors + a *.test.mjs asserting one retry"); a LARGER ARCHITECTURAL change is also fine — the SUITE is the gate.', successCommand: 'string — OPTIONAL: the command that proves it. Tests run with `node --test <file>` here (NOT `npm test`/`yarn test` — npm/yarn at the repo root run all workspaces). Defaults to the full suite.', rationale: 'string — OPTIONAL: the research that motivated it', priority: 'number — OPTIONAL: higher drains first (default 0). Use it to push an urgent fix (e.g. one unblocking the loop itself) ahead of features.' },
+      description: 'Add an improvement TARGET to the backlog (the dataset the self-improvement loop drains). A target may be a precise file-scoped change OR a larger architectural change — both are allowed; the suite (independent verify + post-merge re-verify) is what gates it landing. Set `priority` to force ordering. Describe the change + how it is verified.',
+      run: async ({ goal, successCommand, rationale, priority }, agent) => harden(addBacklog({ goal, successCommand, rationale, priority, by: agent || '' })) },
     listImprovements: { reversible: false, args: { status: 'string — OPTIONAL filter: open | staged | merged' },
       description: 'List the improvement backlog — the concrete targets + their recorded outcomes (so you see what is queued, staged for review, merged, or repeatedly failing).',
       run: async ({ status }) => harden({ ok: true, items: listBacklog({ status: status || undefined }) }) },
@@ -986,7 +994,8 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
         if (!item) return harden({ ok: true, empty: true, note: 'the improvement backlog has no open target — proposeImprovement some first (precise file-scoped or larger architectural; the suite gates them)' });
         selfImproveInFlight = true;
         try {
-          const r = await selfImprover.improve({ goal: item.goal, successCommand: item.successCommand || undefined, employExecutor: ({ goal: gg }) => runWorktreeExecutor({ goal: gg, successCommand: item.successCommand }), autoMerge: SELF_IMPROVE_AUTOMERGE, now: new Date().toISOString() });
+          const vcmd = buildVerify(item.successCommand); // canonicalize the item's stored command (npm/yarn test → node --test) + deps preamble
+          const r = await selfImprover.improve({ goal: item.goal, successCommand: vcmd, employExecutor: ({ goal: gg }) => runWorktreeExecutor({ goal: gg, successCommand: vcmd }), autoMerge: SELF_IMPROVE_AUTOMERGE, now: new Date().toISOString() });
           const status = r.merged ? 'merged' : r.readyToReview ? 'staged' : 'failed';
           recordOutcome(item.id, { status, branch: r.branch, reason: r.reason });
           return harden({ ok: true, target: item.goal, targetId: item.id, outcome: status, ...r });

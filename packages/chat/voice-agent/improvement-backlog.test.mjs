@@ -8,8 +8,17 @@ const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'backlog-test-'));
 process.env.IMPROVEMENT_BACKLOG = path.join(tmp, 'backlog.json');
 import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
-const { addBacklog, listBacklog, nextOpen, recordOutcome, clearResolved } = await import('./improvement-backlog.mjs');
+const { addBacklog, listBacklog, nextOpen, recordOutcome, clearResolved, normalizeTestCmd } = await import('./improvement-backlog.mjs');
 after(() => { try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* */ } });
+
+test('normalizeTestCmd rewrites the wrong runner (npm/yarn test → node --test) and leaves a correct one alone', () => {
+  assert.equal(normalizeTestCmd('npm test packages/ocapn-noise/codemode.test.mjs'), 'node --test packages/ocapn-noise/codemode.test.mjs');
+  assert.equal(normalizeTestCmd('yarn test foo.test.mjs'), 'node --test foo.test.mjs');
+  assert.equal(normalizeTestCmd('npm run test bar.test.mjs'), 'node --test bar.test.mjs');
+  assert.equal(normalizeTestCmd('node --test already.test.mjs'), 'node --test already.test.mjs', 'a correct command is untouched');
+  assert.equal(normalizeTestCmd('  npm test x'), 'node --test x', 'tolerates leading whitespace');
+  assert.equal(normalizeTestCmd(''), '', 'empty stays empty');
+});
 
 test('a precise target is added; a larger architectural goal is ALSO allowed (suite is the gate); only too-SHORT is refused', () => {
   const ok = addBacklog({ goal: 'In packages/chat/voice-agent/improvement-backlog.mjs, add an exported foo() returning 1, and a test asserting foo()===1.', priority: 5 });

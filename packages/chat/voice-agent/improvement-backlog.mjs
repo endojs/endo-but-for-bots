@@ -34,6 +34,12 @@ export const nextOpen = ({ maxAttempts = 2 } = {}) => load().items
   .filter(i => i.status === 'open' && (i.attempts || 0) < maxAttempts)
   .sort((a, b) => (b.priority - a.priority) || (a.addedAt < b.addedAt ? -1 : 1))[0] || null;
 
+// Canonicalize a verification command to the runner that actually works in THIS repo. The loop (an LLM) keeps
+// emitting `npm test <file>` — but root `npm test` is `yarn workspaces foreach --all run test` (slow, ignores
+// the file, and a worktree has no deps) — or `yarn test <file>`. Tests here run via `node --test <file>`. Rewrite
+// the leading runner accordingly; an already-correct `node --test …` (or anything else) is left untouched.
+export const normalizeTestCmd = cmd => String(cmd || '').replace(/^\s*(?:npm|yarn|pnpm)\s+(?:run\s+)?test\b/, 'node --test');
+
 // record the outcome of an attempt (FAPO attribution): 'merged' | 'staged' (verified, awaiting review) |
 // 'failed' (empty/red — keep the reason so the next attempt or the operator can learn).
 export const recordOutcome = (id, { status, branch, reason } = {}) => {
