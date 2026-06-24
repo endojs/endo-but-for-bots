@@ -193,10 +193,11 @@ export const makePipeline = ({
       const urls = (sr && sr.ok && Array.isArray(sr.results) ? sr.results : []).slice(0, 3).map(h => h.url).filter(Boolean);
       for (const u of urls) {
         let text = '';
-        try { const p = web.browse ? await web.browse(u) : null; text = p && (p.text || p.summary || p.content || ''); } catch { /* try plain fetch */ }
-        if (!text && web.fetchUrl) { try { const p = await web.fetchUrl(u); text = p && (p.text || p.summary || p.content || ''); } catch { /* skip */ } }
+        // plain fetch FIRST (fast) — only fall back to the headless browser (slow) if it yields nothing.
+        try { const p = web.fetchUrl ? await web.fetchUrl(u) : null; text = p && (p.text || p.summary || p.content || ''); } catch { /* try the browser */ }
+        if (!text && web.browse) { try { const p = await web.browse(u); text = p && (p.text || p.summary || p.content || ''); } catch { /* skip */ } }
         if (text) { out.menu += `\n\n[${u}]\n${String(text).slice(0, 3500)}`; out.sources.push(u); if (!out.menuUrl) out.menuUrl = u; }
-        if (out.menu.length > 4500) break;
+        if (out.menu.length > 3500) break; // enough menu to judge — stop fetching
       }
     } catch { /* menu unreachable → UNKNOWN (the safe verdict) */ }
     return out;
