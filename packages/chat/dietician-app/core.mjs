@@ -24,6 +24,14 @@ export const slugify = name => (String(name || '').toLowerCase().replace(/[^a-z0
 
 // the persona's "city name appears in the formatted address" in-city test (the only geo-filter the sweep has).
 const inCityOf = (cityName, address) => String(address || '').toLowerCase().includes(String(cityName || '').toLowerCase());
+// haversine distance in METRES — the language-agnostic in-area fallback (see scan()).
+const haversineM = (lat1, lng1, lat2, lng2) => {
+  const R = 6371000;
+  const p1 = (lat1 * Math.PI) / 180, p2 = (lat2 * Math.PI) / 180;
+  const dp = ((lat2 - lat1) * Math.PI) / 180, dl = ((lng2 - lng1) * Math.PI) / 180;
+  const a = Math.sin(dp / 2) ** 2 + Math.cos(p1) * Math.cos(p2) * Math.sin(dl / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(a));
+};
 
 export const makePipeline = ({
   places,
@@ -105,9 +113,20 @@ export const makePipeline = ({
     let droppedOutOfCity = 0;
     const cityShort = String(city.name).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
 
+    // In-area test. NORMALLY the city NAME must appear in the address (precise). But some cities' LOCAL
+    // address name differs from the geocoded English name (e.g. Copenhagen ↔ København) — Google returns the
+    // English name for the city but the LOCAL name in restaurant addresses, so a name-substring match drops
+    // EVERY place as "out of city". Detect that (the name appears in ZERO found addresses) and fall back to a
+    // distance-from-centre test — language-agnostic, and a no-op for cities whose name does match.
+    const nameHits = [...all.values()].filter(p => inCityOf(city.name, p.address)).length;
+    const useDistance = nameHits === 0 && all.size > 0 && city.center;
+    const inArea = p => (useDistance
+      ? (p.lat != null && p.lng != null && haversineM(city.center.latitude, city.center.longitude, p.lat, p.lng) <= (city.radius || 5000) * 1.3)
+      : inCityOf(city.name, p.address));
+
     for (const [pid, p] of all) {
       if (existing.has(pid)) { already.push(p.name); continue; }
-      const inCity = inCityOf(city.name, p.address);
+      const inCity = inArea(p);
       const ptype = p.primary_type || '';
       const name = p.name || '';
 
@@ -154,7 +173,7 @@ export const makePipeline = ({
       ok: true,
       city: city.name,
       slug: city.slug || (typeof cityArg === 'string' ? cityArg : undefined),
-      counts: { found: all.size, already: already.length, skipped: skipped.length, droppedOutOfCity, candidates: candidates.length, returned: top.length },
+      counts: { found: all.size, already: already.length, skipped: skipped.length, droppedOutOfCity, candidates: candidates.length, returned: top.length, matchMode: useDistance ? 'distance' : 'name' },
       candidates: top,
       skips: skipped,
       queryStats,
