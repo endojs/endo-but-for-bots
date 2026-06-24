@@ -33,17 +33,24 @@ assert(typeof getTypedArrayToStringTag === 'function');
 export const hasOwnPropertyOf = hasOwn;
 
 /**
- * @type {(val: unknown) => val is JSPrimitive}
+ * Declared as a function declaration (not an arrow assigned to a typed
+ * variable) so the `val is JSPrimitive` type predicate attaches to the
+ * function's own return type. tsgo's strict mode rejects the `@type` form on
+ * an arrow because the predicate is not provable through assignment alone.
+ *
+ * @param {unknown} val
+ * @returns {val is JSPrimitive}
  */
-export const isPrimitive = val =>
+export function isPrimitive(val) {
   // Safer would be `Object(val) !== val` but is too expensive on XS.
   // So instead we use this adhoc set of type tests. But this is not safe in
   // the face of possible evolution of the language, and already includes
   // special logic for accepting `null` and `undefined` but not
   // `document.all`. Beware!
-  val != null
+  return val != null
     ? typeof val !== 'object' && typeof val !== 'function'
     : val === null || val === undefined;
+}
 hideAndHardenFunction(isPrimitive);
 
 // NOTE: Do not make this type more precise because it breaks only clients

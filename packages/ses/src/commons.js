@@ -370,7 +370,13 @@ export const finalizationRegistryUnregister =
  * Layering constraints make this tricky, which is why we haven't yet figured
  * out how to do this.
  *
- * @type {(val: unknown) => val is (undefined
+ * Declared as a function declaration (not an arrow assigned to a typed
+ * variable) so the `val is ...` type predicate attaches to the function's
+ * own return type. tsgo's strict mode rejects the `@type` form on an arrow
+ * because the predicate is not provable through assignment alone.
+ *
+ * @param {unknown} val
+ * @returns {val is (undefined
  * | null
  * | boolean
  * | number
@@ -378,8 +384,9 @@ export const finalizationRegistryUnregister =
  * | string
  * | symbol)}
  */
-export const isPrimitive = val =>
-  !val || (typeof val !== 'object' && typeof val !== 'function');
+export function isPrimitive(val) {
+  return !val || (typeof val !== 'object' && typeof val !== 'function');
+}
 
 /**
  * isError tests whether an object inherits from the intrinsic

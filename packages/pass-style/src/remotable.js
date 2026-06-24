@@ -218,10 +218,8 @@ export const getInterfaceOf = val => {
     val[PASS_STYLE] !== 'remotable' ||
     !confirmRemotable(val, false)
   ) {
-    // @ts-expect-error narrowed
     return undefined;
   }
-  // @ts-expect-error narrowed
   return getTag(val);
 };
 harden(getInterfaceOf);

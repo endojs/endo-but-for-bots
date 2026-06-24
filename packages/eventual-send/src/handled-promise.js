@@ -210,6 +210,7 @@ export const makeHandledPromise = () => {
     let handledResolve;
     let handledReject;
     let resolved = false;
+    /** @type {any} */
     let resolvedTarget = null;
     /** @type {Promise<R>} */
     let handledP;

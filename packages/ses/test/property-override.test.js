@@ -75,6 +75,10 @@ test('packages in-the-wild', t => {
   );
 
   function testContent2() {
+    /**
+     * @this {{ message: string }}
+     * @param {string} message
+     */
     function IllegalArgumentError(message) {
       Error.call(this, message);
       this.message = message;

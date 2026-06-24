@@ -471,7 +471,6 @@ test('module map hook precedes import now hook', t => {
  * "Import now" hook for testing behavior when error aggregation is enabled or
  * disabled.
  * @param {string} specifier
- * @returns {ModuleSource}
  */
 const importNowHookForErrorAggregationTests = specifier => {
   if (specifier === './meaning.mjs') {

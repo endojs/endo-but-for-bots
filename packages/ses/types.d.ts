@@ -20,7 +20,12 @@ import '@endo/immutable-arraybuffer/shim.js';
 // In those cases, we recommend casting the result of Object.freeze to the
 // original thawn type, as if the signature of freeze were identical to this
 // version of harden.
-export type Harden = <T>(value: T) => T; // not Hardened<T>;
+export interface Harden {
+  <T>(value: T): T; // not Hardened<T>;
+  // Present and `true` only on the fake harden installed when hardening is
+  // tamed away (see tame-harden.js). Optional so callers must guard on it.
+  isFake?: boolean;
+}
 
 // TODO Somehow remove the redundancy between these type deinitions and the
 // inline casts on each call to `getenv` in `lockdown.js`. Hopefully we can

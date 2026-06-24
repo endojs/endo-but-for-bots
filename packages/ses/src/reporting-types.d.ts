@@ -2,7 +2,7 @@
 
 export type Reporter = {
   warn: (...message: Array<any>) => void;
-  error: (...message: Array<string>) => void;
+  error: (...message: Array<any>) => void;
 };
 
 export type GroupReporter = Reporter & {

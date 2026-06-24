@@ -15,7 +15,6 @@ export const tameHarden = (safeHarden, hardenTaming) => {
   Object.isSealed = () => true;
   Reflect.isExtensible = () => false;
 
-  // @ts-expect-error secret property
   if (safeHarden.isFake) {
     // The "safe" hardener is already a fake hardener.
     // Just use it.

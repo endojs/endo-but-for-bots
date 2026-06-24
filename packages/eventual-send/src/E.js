@@ -41,7 +41,7 @@ const baseFreezableProxyHandler = {
  *
  * @param {any} recipient Any value passed to E(x)
  * @param {HandledPromiseConstructor} HandledPromise
- * @returns {ProxyHandler<unknown>} the Proxy handler
+ * @returns {ProxyHandler<object>} the Proxy handler
  */
 const makeEProxyHandler = (recipient, HandledPromise) =>
   harden({
@@ -102,7 +102,7 @@ const makeEProxyHandler = (recipient, HandledPromise) =>
  *
  * @param {any} recipient Any value passed to E.sendOnly(x)
  * @param {HandledPromiseConstructor} HandledPromise
- * @returns {ProxyHandler<unknown>} the Proxy handler
+ * @returns {ProxyHandler<object>} the Proxy handler
  */
 const makeESendOnlyProxyHandler = (recipient, HandledPromise) =>
   harden({
@@ -159,7 +159,7 @@ const makeESendOnlyProxyHandler = (recipient, HandledPromise) =>
  *
  * @param {any} x Any value passed to E.get(x)
  * @param {HandledPromiseConstructor} HandledPromise
- * @returns {ProxyHandler<unknown>} the Proxy handler
+ * @returns {ProxyHandler<object>} the Proxy handler
  */
 const makeEGetProxyHandler = (x, HandledPromise) =>
   harden({
@@ -272,7 +272,7 @@ const makeE = HandledPromise => {
 
 export default makeE;
 
-/** @typedef {ReturnType<makeE>} EProxy */
+/** @typedef {ReturnType<typeof makeE>} EProxy */
 
 /**
  * Declare an object that is potentially a far reference of type Primary whose
