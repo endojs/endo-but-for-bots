@@ -186,7 +186,7 @@ LLM-agent stack).*
 | [retention-path-notation](retention-path-notation.md) | 2026-05-10 | 2026-05-19 | Reference |
 | [daemon-rename-to-manager](daemon-rename-to-manager.md) | 2026-05-04 | 2026-05-05 | Not Started |
 | [daemon-guest-eval-simplification](daemon-guest-eval-simplification.md) | 2026-03-21 | 2026-05-04 | **Implemented** |
-| [guest-agent-holder-reincarnation](guest-agent-holder-reincarnation.md) | 2026-06-22 | 2026-06-22 | Not Started |
+| [guest-agent-holder-reincarnation](guest-agent-holder-reincarnation.md) | 2026-06-22 | 2026-06-24 | Not Started |
 | [daemon-docker-selfhost](daemon-docker-selfhost.md) | 2026-03-02 | 2026-03-02 | Not Started |
 | [daemon-capability-bus](daemon-capability-bus.md) | 2026-02-25 | 2026-04-11 | In Progress |
 | [daemon-endo-rust-sqlite](daemon-endo-rust-sqlite.md) | 2026-04-14 | 2026-04-16 | **Complete** |
@@ -589,7 +589,7 @@ capabilities available to agents.
 | endoclaw-network-fetch | Not Started | **Strategic:** `HttpClient` with origin allowlist. Self-hosted agents need outbound HTTP; foundation for OAuth and all external integrations. Reference: [`trust-on-first-bind`](trust-on-first-bind.md) (TOFU-style prompt-and-pin for allowlist-bearing caps). |
 | ~~daemon-cross-peer-gc~~ | **Complete** | Replaced the proposed CRDT-of-pet-stores with a one-way retention-set sync per peer connection (`retention-accumulator.js`, `EndoGateway.followRetentionSet`, SQLite `retention` table). Solves the GC gap; bidirectional shared namespace deferred as YAGNI. |
 | ~~daemon-guest-eval-simplification~~ | **Implemented** | Eval-proposal handshake removed; guest eval delegates directly to `formulateEval`. Type-system cleanup and regression test in PR #92. |
-| guest-agent-holder-reincarnation | Not Started | Optional `agentHolder` field on `GuestFormula`; mailbox-store `deliver()` hook reincarnates the holder on the next message arrival when its controller is absent. Lets sub-guests survive daemon restart without parent-managed restart-recovery walks (compare `lal-fae-form-provisioning`). |
+| guest-agent-holder-reincarnation | Not Started | Optional `agentHolder` field on `GuestFormula`; mailbox-store `deliver()` fires an idempotent fire-and-forget `provide(holderId)` after publishing each message, reincarnating the holder lazily (the call is a no-op when the holder already runs, memoized on the daemon's `controllerForId`). Lets sub-guests survive daemon restart without parent-managed restart-recovery walks (compare `lal-fae-form-provisioning`). |
 
 **Exit criterion:** Someone can self-host a daemon with our Docker image
 and remote control it, by whatever means, using a local Familiar or a
@@ -1178,7 +1178,7 @@ have been remapped: 0 → 1, ½ → 2, 1 → 3, 2 → 4, 3 → 7, 4 → 9,
 | daemon-rename-to-manager | S | 1 day | 3 | Mechanical rename; design merged (PR #85); implementation TBD |
 | endoclaw-timer | S-M | 3 days | 3 | IntervalScheduler with tick delivery, durable formulas, host-controlled limits |
 | ~~daemon-guest-eval-simplification~~ | — | — | 3 | ✅ Implemented (PR #92, ~2 hours actual; well under 1-day estimate) |
-| guest-agent-holder-reincarnation | S | 1-2 days | 3 | One optional field on `GuestFormula`, one host method (`setAgentHolder`), one hook in `mail.js#deliver` inside the existing mailbox-store critical section, plus ~11 daemon-integration tests covering local-send / remote-receive / value-delivery / pairing-validation / failure-tolerance / cohort-destruction. No client-side change in this slice. |
+| guest-agent-holder-reincarnation | S | 1-2 days | 3 | One optional field on `GuestFormula`, one host method (`setAgentHolder`, an in-place guest-formula rewrite), one fire-and-forget `provide()` hook in `mail.js#deliver` after the publish, plus 12 daemon tests covering local-send / remote-receive / value-delivery / pairing-validation / failure-tolerance / cohort-destruction / in-place-rewrite. No client-side change in this slice. |
 | endoclaw-network-fetch | S-M | 3 days | 3 | HttpClient with origin allowlist, rate/size limits; references [`trust-on-first-bind`](trust-on-first-bind.md) for the TOFU policy adapter |
 | ~~ci-no-npm-lifecycle~~ | S | — | 2 | ✅ Complete (PR #126 merged 2026-05-15) |
 | ~~chat-playwright-smoke~~ | S | — | 2 | ✅ Complete (PRs #91 design, #94 impl, #95+#104 fix; ~16 hours total) |

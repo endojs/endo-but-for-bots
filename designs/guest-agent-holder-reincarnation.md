@@ -3,8 +3,18 @@
 | | |
 |---|---|
 | **Created** | 2026-06-22 |
+| **Updated** | 2026-06-24 |
 | **Author** | endolinbot (prompted) |
 | **Status** | Not Started |
+
+<!--
+Heading case: the convention-named sections (Alternatives Considered,
+Dependencies, Affected Packages, Test Plan, Design Decisions) keep the
+title-case spellings fixed by designs/CLAUDE.md. The free-choice
+headings (Background and existing model, Acceptance criteria, Open
+questions) are sentence-case and consistent with each other. The two
+styles coexist by design, not by oversight.
+-->
 
 ## What is the Problem Being Solved?
 
@@ -24,7 +34,7 @@ boot, which provides the holder if it does not already exist and
 restores it if it does (see `packages/lal/setup.js`, the
 `@lal` / `@fae` startup convention noted in
 [`familiar-bundled-agents`](familiar-bundled-agents.md), and the
-`ENDO_EXTRA` block at `daemon-node.js:205`).
+`ENDO_EXTRA` block in `daemon-node.js`).
 This is fine for two named, hard-coded, top-level agents.
 It does not scale to subagents that user prompts (or other guests)
 create on demand and that need to survive a daemon restart without
@@ -41,6 +51,12 @@ There is no daemon-level mechanism that says *"if mail arrives for
 guest G, make sure G's designated holder H is running before the mail
 is observable."*
 
+Throughout this design, to *reincarnate* a holder means to
+re-instantiate the in-memory JavaScript object for a holder formula
+that is still durable on disk: the formula JSON survives a restart, but
+its running object does not, so reincarnation rebuilds the object from
+the persisted formula.
+
 The motivation for adding such a mechanism is the survive-restart
 subagent: a guest paired with a holder formula at creation time, such
 that the next message into the guest's inbox lazily reincarnates the
@@ -52,12 +68,15 @@ itself the wake-up signal.
 
 The relevant primitives live in `packages/daemon/src/`:
 
-- A **guest formula** (`GuestFormula` in `src/types.d.ts`) names a
-  handle, a host-agent and host-handle, a pet store, a mailbox store,
-  a mail hub, a worker, and a networks directory.
+- A **guest formula** (`GuestFormula` in `src/types.d.ts`) names eight
+  fields: a handle, a host-agent and host-handle, a pet store, a
+  mailbox store, a mail hub, a worker, and a networks directory.
   Its construction is `makeGuest()` in `src/guest.js`.
-  Its dependency lifecycle (`thisDiesIfThatDies`) ties it to those
-  six dependencies but does not name a holder.
+  Its dependency lifecycle (`thisDiesIfThatDies` in `makeGuest`) ties
+  the guest to seven of those (host-handle, host-agent, pet store,
+  mailbox store, mail hub, worker, networks); the handle runs the
+  reverse direction (the handle dies if the guest dies), and none of
+  the seven names a holder.
 - A **make-unconfined formula** (`MakeUnconfinedFormula`) names a
   worker, a `powers` formula identifier, a module specifier, and an
   optional env.
@@ -78,9 +97,9 @@ The relevant primitives live in `packages/daemon/src/`:
   `formulaForId`, and `idForRef` in `src/daemon.js`.
   `provide()` is the function that, given a formula id, returns the
   live value, reincarnating it from disk if no controller is cached.
-  Disincarnation is `cancelValue(id, reason)` (`src/daemon.js`
-  near line 3335); the formula JSON stays on disk and the next
-  `provide()` call rehydrates the controller.
+  Disincarnation is `cancelValue(id, reason)` (in `src/daemon.js`);
+  the formula JSON stays on disk and the next `provide()` call
+  rehydrates the controller.
 - The convention noted in `packages/daemon/CLAUDE.md` is that
   formula JSON must be written to disk before the id is added to the
   in-memory graph, so that a failed instantiation can be retried by a
@@ -103,14 +122,39 @@ design fills: today nothing on the message-arrival path traverses it.
 
 ## Design
 
-Add an optional `agentHolder` field to the `GuestFormula`, and an
-optional `holderFor` field to the `MakeUnconfinedFormula` (or to the
-holder formula family more broadly; see *Open questions*).
-On guest construction, the daemon registers a hook on the guest's
-mailbox store so that every observable message arrival is preceded by
-a check: if `agentHolder` is set and no controller exists for the
-holder's id, the daemon calls `provide(holderId)` and waits for it to
-resolve before publishing the message to the `messagesTopic`.
+The relationship is named in one direction throughout this design: the
+guest points at its holder through an `agentHolder` field, read as "this
+guest's agent holder is H". That single field on the `GuestFormula` is
+the authoritative pointer. A reciprocal `holderFor` field on the holder
+formula (the reverse, "this holder is the holder for guest G") is
+discussed under *Open questions* but is **not** added by this design;
+the design commits to `agentHolder` (guest to holder) as the one
+direction of record.
+
+Add an optional `agentHolder` field to the `GuestFormula`.
+The guest's mailbox-store delivery path (`deliver()` in `src/mail.js`)
+gains a step: when `agentHolder` is set, the delivery path asks the
+daemon to reincarnate the holder through an idempotent `provide(holderId)`
+call (a no-op when the holder is already running; see § Reincarnation
+trigger for why no separate liveness check is needed).
+The hook lives inside `deliver()` (the mailbox factory already receives
+`provide`), not on the guest constructor; the wording "registers a hook"
+in earlier drafts overstated it, the change is one conditional inside
+the existing `deliver()` body.
+
+Correctness does not depend on the holder being alive at the instant
+the message publishes. `followMessages()` (`src/mail.js`) replays the
+persisted `messages` map (repopulated from disk by `loadMailboxState()`
+at mailbox construction) *before* it subscribes to the live
+`messagesTopic`, and `deliver()` persists the message *before* it
+publishes. A holder that comes up after the publish therefore still
+observes every persisted message when its `followMessages()` iterator
+opens. The reincarnation hook is a *latency* mechanism, not a
+*message-loss* guard: it brings the holder up promptly on the arriving
+message rather than leaving the guest dormant until some later trigger.
+Because correctness does not hinge on the ordering, the hook fires the
+reincarnation *after* the publish and does not await it; see
+§ Reincarnation trigger and § Back-pressure for why.
 
 ### Formula shape change
 
@@ -141,14 +185,14 @@ the mechanism to work; the guest holds the only authoritative pointer.
 A symmetric `holderFor` field on the holder formula is discussed under
 *Open questions*.
 
-The new edge participates in `extractLabeledDeps` (`src/daemon.js`
-near line 481) as a normal labelled dependency so it appears in the
-retention-graph snapshot and in `listRetentionPaths` output.
+The new edge participates in `extractLabeledDeps` (in `src/daemon.js`)
+as a normal labelled dependency so it appears in the retention-graph
+snapshot and in `listRetentionPaths` output.
 The label is `agentHolder`.
 
 ### Constructor signature change
 
-`formulateGuest()` (`src/daemon.js` near line 4107) and the underlying
+`formulateGuest()` (in `src/daemon.js`) and the underlying
 `formulateGuestDependencies` gain an optional `agentHolderId`
 parameter:
 
@@ -164,7 +208,7 @@ const formulateGuest = async (
 
 If `agentHolderId` is provided, it is recorded into the
 `GuestFormula.agentHolder` field at the
-`formulateNumberedGuest` step (`src/daemon.js` near line 4083).
+`formulateNumberedGuest` step (in `src/daemon.js`).
 The daemon does not validate at write time that the holder's `powers`
 field points back at this guest (it cannot, because the holder may
 not exist yet; see *Pairing order* below).
@@ -173,9 +217,15 @@ specific error (*Holder mismatch on reincarnation*, below) and the
 message arrival path falls through without invoking the holder.
 
 The high-level entry point `EndoHost.provideGuest(petName, opts)` and
-`EndoHost.makeGuest` (host.js near line 907) gain a corresponding
-optional `agentHolder` field on `MakeHostOrGuestOptions`.
-The host passes it through to `formulateGuest`.
+`EndoHost.makeGuest` gain a corresponding optional `agentHolder` field
+on `MakeHostOrGuestOptions`.
+To match the host surface, where the sibling methods (`provideMount`,
+`provideScratchMount`, `storeBlob`) take pet names or name paths and
+resolve them through the host's directory (`namePathFrom` /
+`assertPetNamePath` in `src/host.js`), the option is spelled as a pet
+name (or name path) naming the holder, not a raw formula id.
+The host resolves it to the holder's id before threading it into
+`formulateGuest` as `agentHolderId`.
 
 ### Pairing order
 
@@ -183,13 +233,15 @@ Two orderings are possible, and the design supports both:
 
 1. **Holder-after-guest** (the simpler path).
    The parent creates the guest first with `agentHolder` unset, then
-   creates the holder formula with `powers = guestId`, then issues
-   a separate call (a new
-   `EndoHost.setAgentHolder(guestId, holderId)` method) that rewrites
-   the guest's formula on disk to add the `agentHolder` field.
-   This is a one-time field on a guest's lifetime: once set, the
-   field is immutable.
-   Attempts to overwrite a non-empty `agentHolder` are rejected.
+   creates the holder formula with `powers = guestId`, then issues a
+   separate call (a new `EndoHost.setAgentHolder(guestName, holderName)`
+   method, taking pet names to match the host surface above and
+   resolving them to ids internally).
+   This rewrites the guest's formula JSON on disk to add the
+   `agentHolder` field.
+   The field is a one-time field on a guest's lifetime: once set, it is
+   immutable, and attempts to overwrite a non-empty `agentHolder` are
+   rejected.
 2. **Guest-after-holder** (matches lal/fae's existing shape).
    The parent first allocates a guest formula number (without
    incarnating it), then formulates the holder pointing at the
@@ -204,20 +256,54 @@ The first-class API is *holder-after-guest* (simplest for callers);
 the second is available for callers that want atomic pairing at
 formulation time.
 
+#### Rewriting the guest formula does not change its id
+
+The holder-after-guest path rewrites an already-persisted guest formula
+in place, which deserves a word against `packages/daemon/CLAUDE.md`
+§ "Disk before graph".
+That invariant governs **write ordering** (the JSON must reach disk
+before the id enters the in-memory graph, so a failed instantiation is
+retryable); it is not a write-once rule on the JSON.
+The daemon already rewrites a live formula in place elsewhere: the
+`git-remote` controller's `setPolicy` path calls
+`persistencePowers.writeFormula(formulaNumber, formulaNode, nextFormula)`
+with the *same* number and node and then `formulaForId.set(id,
+nextFormula)` to reconcile the in-memory cache. `setAgentHolder` follows
+that exact pattern.
+
+The id stays valid across the rewrite because guest formula ids are
+**not content-derived**.
+A guest's formula number is minted by `randomHex256()` in
+`formulateGuestDependencies`, and `formatId` composes the id from that
+random number plus the node number, never from a hash of the formula
+JSON (`deriveId` in `src/daemon.js` hashes a path and a root nonce, not
+formula content).
+Adding the `agentHolder` field therefore changes the JSON but not the
+number, the node, or the id, so every existing reference to the guest
+(pet-store entries, `powers` pointers, retention-graph edges) continues
+to resolve.
+Reconciliation is the `formulaForId.set(id, nextFormula)` write under
+`withFormulaGraphLock`, mirroring the `git-remote` precedent; the
+retention graph then re-derives the new `agentHolder` edge from the
+rewritten formula via `extractLabeledDeps`.
+
 ### Reincarnation trigger
 
-The check goes into the **mailbox store's deliver path**
-(`deliver()` in `src/mail.js` near line 694), not into
-`receive()`.
+The hook goes into the **mailbox store's deliver path**
+(`deliver()` in `src/mail.js`), not into `receive()`.
 `deliver()` is the single funnel through which every observable
 message arrival (local-send, remote-receive, locally injected via
 `deliverValueById`, and any future local-only delivery) passes.
-Hooking `receive()` would miss locally-originated messages; hooking
-the in-memory `messagesTopic` after publish would race against the
-holder's `followMessages()` subscription.
+Hooking `receive()` would miss locally-originated messages.
 
-The hook is a pre-publish step inside the `mailboxStoreJobs.enqueue`
-critical section, in this order:
+The hook fires `provide(holderId)` after the message is persisted and
+published, and does **not** await it inside the
+`mailboxStoreJobs.enqueue` critical section.
+The ordering relative to the publish is not load-bearing for delivery
+(§ Design establishes that `followMessages()` replays the persisted
+message regardless of holder-liveness at publish time); placing the
+kick-off after the publish keeps the critical-section body short and
+avoids the back-pressure problem discussed below:
 
 ```js
 const deliver = async envelope => {
@@ -226,47 +312,90 @@ const deliver = async envelope => {
     // 1. Persist the message first (current behavior).
     const messageNumber = nextMessageNumber;
     const date = new Date().toISOString();
-    const formula = makeMessageFormula(envelope, date);
+    const done =
+      /** @type {EnvelopedMessage & { done?: boolean }} */ (envelope).done ??
+      true;
+    const formula = makeMessageFormula(envelope, date, done);
     await persistMessage(messageNumber, formula);
     nextMessageNumber += 1n;
     await persistNextMessageNumber(nextMessageNumber);
 
-    // 2. NEW: if this guest has an agentHolder and the holder is not
-    //    currently incarnated, provide() it before publishing.
-    if (agentHolderId !== undefined && !controllerForId.has(agentHolderId)) {
-      try {
-        await provide(agentHolderId);
-      } catch (err) {
+    // ... existing dismissal + messages.set + messagesTopic.publisher.next ...
+
+    // 2. NEW: if this guest has an agentHolder, ask the daemon to bring
+    //    it up. provide() is idempotent (memoized on the daemon's
+    //    controllerForId table): a repeat call for an already-running
+    //    or already-in-flight holder returns the same controller, so no
+    //    "is it running?" guard is needed here. The call is NOT awaited
+    //    inside the critical section (see "Back-pressure" below).
+    if (agentHolderId !== undefined) {
+      void provide(agentHolderId).catch(err => {
         // Holder failed to reincarnate; see "Reincarnation failure" below.
         console.error('agent holder reincarnation failed', err);
-      }
+      });
     }
-
-    // 3. Publish to in-memory topic (current behavior).
-    /* ... existing dismissal + messagesTopic.publisher.next(message) ... */
   });
 };
 ```
 
+Only symbols in scope at the hook point appear in the sketch.
+The mailbox factory `makeMailboxMaker` already receives `provide` (it
+uses it throughout `src/mail.js` for promise and resolver lookups), so
+the hook references only `provide` and the new `agentHolderId` (read
+from the guest's formula and threaded into `makeMailbox` alongside the
+other mailbox parameters).
+The daemon's `controllerForId` table is **not** in `src/mail.js` scope:
+it lives in `src/daemon.js` and is not among the values passed to
+`makeMailboxMaker`.
+Earlier drafts wrote a `controllerForId.has(agentHolderId)` guard at
+this point; that symbol does not exist here.
+The "is the holder already running?" decision is therefore delegated to
+`provide()` itself, which is the right place for it: `provideController`
+in `src/daemon.js` consults `controllerForId` synchronously and returns
+the existing controller when one is present, so a `provide()` call for a
+live holder is a cheap no-op and a call for an in-flight reincarnation
+joins the same promise.
+This keeps the design's trigger free of any daemon-internal symbol.
+
 The trigger condition is therefore:
 
 - The guest's mailbox has just persisted a new message, AND
-- The guest's formula carries an `agentHolder`, AND
-- The daemon's `controllerForId` table has no entry for that holder.
+- The guest's formula carries an `agentHolder`.
 
-The hook is `controllerForId.has(...)`, not a `formulaForId.has(...)`
-check.
-`controllerForId` is the live-instantiation table; its absence is
-exactly the *holder is not running* state.
-`formulaForId` may carry the holder long before any incarnation has
-occurred (it caches the on-disk formula JSON), so it is the wrong
-table to test against.
+The liveness check that earlier drafts spelled as a
+`controllerForId.has(...)` test (as opposed to a `formulaForId.has(...)`
+test, since `formulaForId` caches the on-disk JSON long before any
+incarnation) is exactly the memoization that `provideController` already
+performs against `controllerForId`. The design relies on it rather than
+re-implementing it in the mailbox.
 
-The hook runs **inside** the mailbox-store critical section so that
-two messages arriving back-to-back race on a single
-`provide(holderId)` rather than two concurrent ones.
-`provide()` is internally memoized on `controllerForId`, so a second
-caller observing the in-flight controller awaits the same promise.
+### Back-pressure
+
+`provide(holderId)` can take unbounded time: it instantiates a worker,
+imports a module, and runs the holder's constructor, any of which can be
+slow or hang.
+If the hook awaited that promise **inside** the
+`mailboxStoreJobs.enqueue` critical section, every later `deliver()` for
+the same guest would queue behind the in-flight reincarnation, stalling
+the guest's whole mailbox on a single slow or wedged holder import.
+
+The design therefore does **not** hold the lock across `provide()`.
+The hook starts the reincarnation as a fire-and-forget continuation
+(`void provide(...).catch(...)`) after the message is published and lets
+the critical section return immediately.
+Delivery never waits on holder liveness (the message is already
+persisted and on the topic), so the holder's start latency does not
+back up the mailbox.
+
+Concurrency across back-to-back messages is handled by `provide()`'s own
+memoization rather than by holding the lock: the first message's
+fire-and-forget `provide(holderId)` installs the controller in
+`controllerForId` synchronously (`provideController` sets the entry
+before resolving the value promise), so a second message's
+`provide(holderId)` finds the in-flight controller and awaits the same
+promise instead of starting a parallel reincarnation.
+Two near-simultaneous deliveries thus still converge on one
+reincarnation without the critical section serializing on it.
 
 ### Sequence
 
@@ -280,35 +409,42 @@ sequenceDiagram
     Sender->>Mail: receive(envelope) or post(message)
     activate Mail
     Mail->>Mail: persistMessage(n, formula)
-    alt agentHolder set and not in controllerForId
-        Mail->>Daemon: provide(holderId)
-        Daemon->>Daemon: load formula, makeUnconfined<br/>(worker + powers=guest)
-        Daemon->>Holder: import(specifier)(powers)
-        Holder-->>Daemon: hardened root
-        Daemon-->>Mail: holder controller
-    else holder already running
-        Note over Mail,Daemon: no-op
-    end
     Mail->>Mail: messagesTopic.publisher.next(message)
-    Mail->>Holder: followMessages() yields message
+    opt agentHolder set
+        Mail-)Daemon: provide(holderId) (not awaited)
+    end
     deactivate Mail
+    Note over Daemon: provide() is a no-op if the<br/>holder is already running
+    Daemon->>Daemon: load formula, makeUnconfined<br/>(worker + powers=guest)
+    Daemon->>Holder: import(specifier)(powers)
+    Holder-->>Daemon: hardened root
+    Holder->>Holder: followMessages() replays<br/>persisted messages, then live topic
 ```
 
+The critical section returns after the publish; the reincarnation runs
+concurrently (the dashed arrow is the fire-and-forget `provide`).
 The holder's `followMessages()` iterator (held against the guest's
-mailbox from inside the holder loop, exactly as today) yields the
-just-published message; the loop runs as if the daemon had never
-been restarted.
+mailbox from inside the holder loop, exactly as today) first replays the
+persisted `messages` map and then drains the live topic, so it observes
+the just-arrived message whether the holder came up before or after the
+publish; the loop runs as if the daemon had never been restarted.
 
 ### Reincarnation failure
 
 If `provide(holderId)` rejects (the holder formula is missing, its
 worker fails to start, the holder module fails to import, the holder
 constructor throws), the design **does not block delivery**.
-The message has already been persisted in step 1; the topic publish
-in step 3 proceeds.
+The message was already persisted and published before the
+reincarnation was even kicked off (the `provide` call is the
+fire-and-forget continuation after the publish, never awaited inside the
+critical section), so a rejection cannot affect the delivery that
+triggered it.
 The error is logged via `console.error` and a structured lifecycle-log
 event (per `packages/daemon/CLAUDE.md` § Diagnostic Discipline).
-The next message arrival will retry `provide(holderId)`.
+A rejected reincarnation also clears the daemon's `controllerForId`
+entry (the controller's `value` promise rejects and `context.cancel`
+runs), so the next message arrival starts a fresh `provide(holderId)`
+attempt rather than re-observing the failed one.
 
 This matches the daemon's existing posture: a corrupted or absent
 formula returns through the usual error path and the system stays
@@ -355,8 +491,8 @@ the *formula* is durable.
 
 The reverse direction (holder retains guest) already exists via the
 `make-unconfined` `powers` field, as part of the holder formula's
-own dependencies (`makeUnconfined`'s
-`context.thisDiesIfThatDies(powersId)` near `src/daemon.js:1502`).
+own dependencies (the `make-unconfined` formula maker's
+`context.thisDiesIfThatDies(powersId)` in `src/daemon.js`).
 
 The combined effect: holder and guest form a two-node retention
 cohort once paired.
@@ -368,7 +504,7 @@ This is consistent with the existing
 ### Disincarnation interplay
 
 The holder can still be deliberately disincarnated via
-`cancelValue(holderId, reason)` (e.g., the existing
+`cancelValue(holderId, reason)` (for example, the existing
 [`daemon-retention-paths`](daemon-retention-paths.md) Disincarnate
 button, or a manual `endo cancel` invocation).
 After disincarnation, the next mail arrival reincarnates the holder
@@ -384,15 +520,16 @@ Disabling reincarnation, if needed, is done by clearing the guest's
 
 ### Reincarnation race with shutdown
 
-If the daemon receives a shutdown signal while a `provide(holderId)`
-call is in flight, the existing shutdown sequence (cancel topic,
-controller cancellation, persistence flush) tears down the partially
-reincarnated holder along with everything else.
-No special handling is required: the in-flight `provide` returns or
-rejects, the deliver path proceeds (publishing the persisted
-message), the topic is then cancelled, and the next daemon start sees
-the persisted message in the mailbox store with no live holder, ready
-for the next external event to re-trigger reincarnation.
+If the daemon receives a shutdown signal while a fire-and-forget
+`provide(holderId)` is in flight, the existing shutdown sequence
+(cancel topic, controller cancellation, persistence flush) tears down
+the partially reincarnated holder along with everything else.
+No special handling is required: the message was already persisted and
+published before the `provide` was kicked off, so nothing waits on it;
+the in-flight `provide` returns or rejects and its controller is
+cancelled with the rest, and the next daemon start sees the persisted
+message in the mailbox store with no live holder, ready for the next
+external event to re-trigger reincarnation.
 
 ## Acceptance criteria
 
@@ -442,9 +579,20 @@ A future implementation PR's tests must demonstrate, in
     `agentHolder` field) continues to work; lal and fae start on
     daemon boot exactly as today.
 11. **Concurrent message arrivals.**
-    Two `deliver()` calls enqueued back-to-back observe a single
-    in-flight `provide(holderId)`; the second awaits the first
-    without firing a parallel reincarnation.
+    Two `deliver()` calls enqueued back-to-back converge on a single
+    `provide(holderId)`: the second observes the controller the first
+    installed in `controllerForId` and does not start a parallel
+    reincarnation. Assert one holder startup across the two sends.
+12. **`setAgentHolder` rewrites a live guest formula in place.**
+    Formulate a guest G (holder unset) and store it under a pet name in
+    the parent, then formulate a second formula that references G by id
+    (a holder with `powers = G`, plus a plain pet-store entry pointing
+    at G). Call `setAgentHolder(guestName, holderName)`. Assert that
+    (a) `getFormulaForId(guestId)` reads back the *same* id with the
+    `agentHolder` field now present, (b) the holder's `powers` reference
+    and the parent's pet-name lookup of G both still resolve to the live
+    guest after the rewrite, and (c) a second `setAgentHolder` call is
+    rejected because the field is already set.
 
 ## Open questions
 
@@ -454,12 +602,9 @@ A future implementation PR's tests must demonstrate, in
   The design currently treats the field as immutable once set, which
   matches the simplest mental model but may be inconvenient if a
   parent wants to swap holders.
-  A future *unpair-and-rebind* API can be filed against
-  [`daemon-retention-paths`](daemon-retention-paths.md) once a
-  concrete use case appears.
-  To be filed against
-  [`daemon-retention-paths`](daemon-retention-paths.md) as a
-  follow-up if the maintainer wants the mutable-field shape.
+  A future *unpair-and-rebind* API is to be filed against
+  [`daemon-retention-paths`](daemon-retention-paths.md) if the
+  maintainer wants the mutable-field shape.
 - Should a corresponding `holderFor` field be added to the holder
   formula for symmetry?
   The current design omits it (the guest is the authoritative
@@ -472,16 +617,18 @@ A future implementation PR's tests must demonstrate, in
   on the holder side.
   Argument against: two fields can fall out of sync if one is edited
   by hand.
-- Should the trigger be *every* message, or only the *first* message
-  after a controller goes absent?
-  The design proposes every-message-checks-controllerForId, which is
-  cheap (one Map lookup) and self-correcting if the holder dies mid-
-  session.
-  An alternative is a one-shot flag that is set on first
-  reincarnation and cleared on
+- Should the trigger fire on *every* message, or only the *first*
+  message after a controller goes absent?
+  The design fires `provide(holderId)` on every message and leans on
+  `provide()`'s own memoization (a synchronous `controllerForId` lookup
+  inside `provideController`) to make the repeat calls cheap no-ops; this
+  is self-correcting if the holder dies mid-session.
+  An alternative is a one-shot flag in the mailbox that suppresses the
+  `provide()` call after the first reincarnation and is cleared on
   `cancelValue(holderId, ...)`.
-  The Map-lookup form is preferred for simplicity unless profiling
-  shows it adds measurable latency.
+  The fire-every-message form is preferred for simplicity (it adds no
+  mailbox-side state) unless profiling shows the redundant `provide()`
+  calls add measurable latency.
 - Should reincarnation failure block message delivery rather than
   proceed?
   The design proposes proceed-and-log.
@@ -518,14 +665,29 @@ subagent.
 The pairing is properly a property of the guest formula itself, not
 of an outer manager.
 
-Considered and rejected: hooking `messagesTopic` after publish rather
-than before.
-Reason: the holder's `followMessages()` subscription would race the
-`provide(holderId)` call; the holder would not be alive at the
-moment the iterator yields, so the first message would land in the
-subscription queue with no consumer.
-Hooking inside the `mailboxStoreJobs.enqueue` critical section, before
-publish, guarantees a live consumer at publish time.
+Considered and rejected: blocking the publish until the holder is
+alive (awaiting `provide(holderId)` *before* `messagesTopic.publisher
+.next` inside the critical section) so the live holder is guaranteed to
+observe the message on the topic rather than on replay.
+Reason: it is both unnecessary and harmful.
+Unnecessary because `followMessages()` replays the persisted `messages`
+map before draining the live topic, so a holder that comes up after the
+publish still observes the message; nothing is lost by publishing first.
+Harmful because awaiting `provide()` inside the critical section holds
+the mailbox lock across an unbounded worker spin and module import,
+stalling every later `deliver()` for that guest behind one slow or
+wedged holder (§ Back-pressure).
+The design instead persists and publishes first, then fires
+`provide(holderId)` as a fire-and-forget continuation outside the
+await path.
+
+Considered and rejected: hooking `receive()` instead of `deliver()`.
+Reason: `receive()` only sees messages arriving from peers;
+locally-originated sends (`post()`) and injected value deliveries
+(`deliverValueById`) reach the mailbox through `deliver()` without
+passing `receive()`, so a `receive()` hook would miss them.
+`deliver()` is the single funnel every observable arrival passes
+through.
 
 ## Dependencies
 
@@ -538,14 +700,16 @@ publish, guarantees a live consumer at publish time.
 
 ## Affected Packages
 
-- `packages/daemon` — `src/types.d.ts` (one optional field on
+- `packages/daemon`: `src/types.d.ts` (one optional field on
   `GuestFormula`), `src/daemon.js` (`formulateGuest` /
   `formulateGuestDependencies` / `formulateNumberedGuest` /
-  `extractLabeledDeps` / formula-makers dispatch / disk-write
-  ordering), `src/mail.js` (`deliver` pre-publish hook),
-  `src/host.js` (one optional field on
-  `MakeHostOrGuestOptions` for `provideGuest`).
-- `packages/daemon/test` — the eleven acceptance-criteria tests.
+  `extractLabeledDeps` / formula-makers dispatch / disk-write ordering /
+  the new `setAgentHolder` in-place formula rewrite), `src/mail.js`
+  (`deliver` post-publish reincarnation hook, plus threading
+  `agentHolderId` into `makeMailbox`), `src/host.js` (one optional
+  pet-name field on `MakeHostOrGuestOptions` for `provideGuest`, and the
+  new `setAgentHolder` host method).
+- `packages/daemon/test`: the twelve acceptance-criteria tests.
 - No client-side change in `packages/cli`, `packages/chat`, or
   `packages/familiar` for this slice.
   CLI / Chat surfaces for inspecting and clearing the pairing can be
@@ -553,8 +717,10 @@ publish, guarantees a live consumer at publish time.
 
 ## Test Plan
 
-- **Unit:** the field round-trip and the no-reincarnation-when-running
-  branch are unit-testable directly on the daemon core.
+- **Unit:** the field round-trip (criterion 1), the
+  no-reincarnation-when-running branch (criterion 5), and the
+  `setAgentHolder` in-place rewrite (criterion 12) are unit-testable
+  directly on the daemon core.
 - **Daemon integration (`test.serial`):** acceptance criteria 2-9 and
   11 spin up a full daemon, formulate a parent host, a guest, and a
   holder whose specifier is a one-shot test fixture that records its
@@ -577,27 +743,43 @@ A phased delivery is not warranted.
 
 ## Design Decisions
 
-1. **Hook in `deliver()`, not `receive()` or `messagesTopic`.**
+1. **Hook in `deliver()`, not `receive()`.**
    `deliver()` is the single funnel through which every observable
-   message arrival passes.
-   `receive()` misses locally-originated messages.
-   Hooking the topic after publish races the subscription.
-2. **Reincarnation does not block delivery on failure.**
-   The message has already been persisted before the holder is
-   asked for; the topic publish proceeds.
-   Errors are logged but not surfaced to the sender.
-3. **`agentHolder` is a single optional field on `GuestFormula`.**
+   message arrival passes; `receive()` misses locally-originated
+   messages (`post()`) and injected value deliveries
+   (`deliverValueById`).
+2. **The hook fires `provide()` after the publish, not before, and does
+   not await it inside the mailbox critical section.**
+   Delivery correctness does not depend on the holder being alive at
+   publish time, because `followMessages()` replays the persisted
+   `messages` map before draining the live topic; so the message is
+   never lost by publishing first. Awaiting `provide()` under the lock
+   would stall the mailbox on an unbounded holder import, so the call is
+   a fire-and-forget continuation (§ Back-pressure).
+3. **Reincarnation does not block delivery on failure.**
+   The message has already been persisted and published before the
+   holder is asked for; a holder-import rejection cannot affect the
+   triggering delivery. Errors are logged but not surfaced to the
+   sender.
+4. **`agentHolder` is a single optional field on `GuestFormula`.**
    The pairing's authoritative truth lives on the guest; no
    reciprocal field is added to the holder formula.
-4. **Reincarnation is checked on every message, not just the first.**
-   The cost is a single Map lookup; the benefit is self-correction
-   if the holder dies mid-session.
-5. **The hook does not eagerly incarnate at daemon start.**
+5. **Reincarnation is fired on every message, not just the first, and
+   relies on `provide()`'s own memoization.**
+   `provideController` consults `controllerForId` synchronously, so a
+   `provide()` call for a live or in-flight holder is a cheap no-op; the
+   mailbox keeps no liveness state of its own. The benefit is
+   self-correction if the holder dies mid-session.
+6. **The hook does not eagerly incarnate at daemon start.**
    Subagent holders stay dormant until the first message arrives.
-6. **The `agentHolder` field is immutable once set.**
-   A future mutable-field design can be filed if needed; deferring
-   it keeps this design's surface small and obvious.
-7. **Pairing-validation failure is logged and the slot is treated as
+7. **The `agentHolder` field is immutable once set, written by an
+   in-place formula rewrite.**
+   `setAgentHolder` rewrites the guest's formula JSON under the same
+   formula number and node (the id is not content-derived, so it does
+   not change) and reconciles `formulaForId`, following the `git-remote`
+   `setPolicy` precedent. Immutability keeps the surface small; a future
+   mutable-field design can be filed if needed.
+8. **Pairing-validation failure is logged and the slot is treated as
    inactive for the session.**
    A misconfigured holder pointer should not cause every subsequent
    message to attempt and fail reincarnation; an early hard-fail
