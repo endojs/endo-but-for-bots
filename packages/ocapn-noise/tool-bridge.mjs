@@ -84,6 +84,22 @@ const toAnthropicText = c => typeof c === 'string' ? c : (Array.isArray(c) ? c.m
 // maxTokens is the OUTPUT ceiling per call (NOT input) — it only ALLOWS longer replies, it does not
 // force them, so a higher default is safe for the short classifier calls and gives the main reasoning
 // loop room for sprawling programs/answers (the old 700 throttled long voice-note replies).
+// Some newer models (Anthropic's Opus 4.8 and kin) REJECT a `temperature` field with a 400 ("temperature is
+// deprecated for this model"). The native Anthropic path NEVER sends temperature — its newest models deprecate
+// it, matching delegate.mjs and the dietician judge. The OpenAI-style paths (OpenRouter / LiteLLM) send a low
+// temperature for determinism but SELF-HEAL: on a 400 that complains about `temperature` we remember the model
+// and retry once without it, so any temperature-deprecating model a proxy routes to keeps working.
+const NO_TEMP = new Set();
+const fetchChat = async (url, headers, makeBody, id, timeoutMs) => {
+  const post = extra => fetch(url, { method: 'POST', signal: AbortSignal.timeout(timeoutMs), headers, body: JSON.stringify(makeBody(extra)) });
+  let r = await post(NO_TEMP.has(id) ? {} : { temperature: 0.2 });
+  if (!r.ok && r.status === 400 && !NO_TEMP.has(id) && /temperature/i.test(await r.clone().text().catch(() => ''))) {
+    NO_TEMP.add(id);
+    r = await post({});
+  }
+  return r;
+};
+
 export const callLLM = async (messages, model = 'default', { maxTokens = 4096 } = {}) => {
   if (String(model).startsWith('anthropic:')) {
     const id = String(model).slice('anthropic:'.length);
@@ -94,7 +110,7 @@ export const callLLM = async (messages, model = 'default', { maxTokens = 4096 } 
     try {
       const r = await fetch(ANTHROPIC, { method: 'POST', signal: AbortSignal.timeout(120000),
         headers: { 'content-type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01' },
-        body: JSON.stringify({ model: id, max_tokens: maxTokens, temperature: 0.2, ...(system ? { system } : {}), messages: msgs }) });
+        body: JSON.stringify({ model: id, max_tokens: maxTokens, ...(system ? { system } : {}), messages: msgs }) }); // NO temperature — Opus 4.8 & kin 400 on it
       if (!r.ok) return harden({ text: '', usage: null, status: r.status, error: `${id} via Anthropic returned ${r.status}${r.status === 429 ? ' (rate-limited)' : ''}: ${(await r.text().catch(() => '')).slice(0, 160)}` });
       const j = await r.json();
       // Return the RAW Anthropic usage ({input_tokens, output_tokens, cache_*}) — costModel prices it natively.
@@ -106,17 +122,16 @@ export const callLLM = async (messages, model = 'default', { maxTokens = 4096 } 
     const key = openrouterKey();
     if (!key) return harden({ text: '', usage: null, error: `${slug}: no OpenRouter API key configured — add OPENROUTER_API_KEY to ~/.env (or the field-agent secret), then pick this model again.` });
     try {
-      const r = await fetch(OPENROUTER, { method: 'POST', signal: AbortSignal.timeout(90000),
-        headers: { 'content-type': 'application/json', authorization: `Bearer ${key}`, 'HTTP-Referer': 'https://archua.taildd002.ts.net', 'X-Title': 'field-agent' },
-        body: JSON.stringify({ model: slug, messages, max_tokens: maxTokens, temperature: 0.2, usage: { include: true } }) }); // usage.include → authoritative cost back
+      const r = await fetchChat(OPENROUTER, { 'content-type': 'application/json', authorization: `Bearer ${key}`, 'HTTP-Referer': 'https://archua.taildd002.ts.net', 'X-Title': 'field-agent' },
+        extra => ({ model: slug, messages, max_tokens: maxTokens, ...extra, usage: { include: true } }), slug, 90000); // usage.include → authoritative cost back
       if (!r.ok) return harden({ text: '', usage: null, status: r.status, error: `${slug} via OpenRouter returned ${r.status}${r.status === 429 ? ' (rate-limited upstream)' : ''}: ${(await r.text()).slice(0, 160)}` });
       const j = await r.json();
       return harden({ text: j.choices?.[0]?.message?.content || '', usage: j.usage || null });
     } catch (e) { return harden({ text: '', usage: null, error: `${slug} via OpenRouter unreachable: ${e.message}` }); }
   }
   let r;
-  try { r = await fetch(LLM, { method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ model: model || 'default', messages, max_tokens: maxTokens, temperature: 0.2 }) }); }
+  try { r = await fetchChat(LLM, { 'content-type': 'application/json' },
+    extra => ({ model: model || 'default', messages, max_tokens: maxTokens, ...extra }), model || 'default', 120000); }
   catch (e) { return harden({ text: '', usage: null, error: `model "${model || 'default'}" unreachable: ${e.message}` }); }
   if (!r.ok) return harden({ text: '', usage: null, status: r.status, error: `model "${model || 'default'}" returned ${r.status}: ${(await r.text().catch(() => '')).slice(0, 160)}` });
   const j = await r.json().catch(() => ({}));
