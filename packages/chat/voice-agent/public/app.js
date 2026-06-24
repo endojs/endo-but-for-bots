@@ -450,10 +450,13 @@ const traceStrip = steps => {
   draw();
   return wrap;
 };
-// A compact, per-message TRACE GEOMETRY: the reasoning trace as a neon node-constellation (the agent root
-// octahedron + each tool call radiating out, coloured by success; research children fan off their tool),
-// mirroring the live 3D pendant's structure in lightweight SVG (no per-message WebGL). Click → the full 3D
-// trace for THIS message. Shown under EVERY agent message, not just the live one at the bottom.
+// A compact, per-message TRACE GEOMETRY: the reasoning trace as a neon node-TREE (the agent root octahedron
+// + each tool call as a labeled node, coloured by success). A node with children (research, delegate, …) is
+// collapsed by default and FANS OUT VERTICALLY on hover: its constituent sub-steps slide in as their own
+// labeled, clickable rows, each itself hover-expandable + tap-to-inspect (recursive). Tap a node → its call &
+// result modal; tap an expandable node to fan it out (tap again to inspect); tap the core → the full 3D trace.
+// Lightweight SVG (no per-message WebGL); shown under EVERY agent message. Hover state is re-rendered via
+// event delegation on the stable <svg>, so it survives the per-hover relayout.
 const NS_SVG = 'http://www.w3.org/2000/svg';
 const svgEl = (tag, attrs) => { const e = document.createElementNS(NS_SVG, tag); for (const k in attrs) if (attrs[k] != null) e.setAttribute(k, attrs[k]); return e; };
 // REUSABLE tool-call content viz: name + the EXACT call (cyan) and result (amber) — the same two facets the 3D
@@ -473,48 +476,97 @@ const toolCallDetailHtml = s => {
 };
 const openToolModal = s => { try { showModal(toolCallDetailHtml(s)); } catch { /* */ } };
 const traceGeometry = steps => {
-  const arr = _arr(steps).slice(0, 18);
   const cv = (n, d) => (getComputedStyle(document.documentElement).getPropertyValue(n).trim() || d);
   const acc = cv('--acc', '#7c5cff'), ok = cv('--trace-ok', '#8fd0a8'), bad = cv('--trace-bad', '#ff9e9e'), edge = cv('--edge', '#30363d');
-  const W = 420, H = Math.max(64, Math.min(190, 26 + arr.length * 17));
-  const uid = 'tg' + Math.random().toString(36).slice(2, 8);
-  const svg = svgEl('svg', { viewBox: `0 0 ${W} ${H}`, class: 'trace-geo', preserveAspectRatio: 'xMidYMid meet', width: '100%' });
-  svg.style.maxHeight = `${H}px`;
-  const ttl = svgEl('title', {}); ttl.textContent = `Reasoning trace — ${arr.length} step(s). Tap a tool for its call & result; tap the core for the 3D trace.`; svg.appendChild(ttl);
+  const W = 460, uid = 'tg' + Math.random().toString(36).slice(2, 8);
+  const svg = svgEl('svg', { viewBox: '0 0 460 80', class: 'trace-geo', preserveAspectRatio: 'xMidYMin meet', width: '100%' });
+  svg.style.cssText = 'display:block;width:100%;height:auto';
   const defs = svgEl('defs', {}); const f = svgEl('filter', { id: uid, x: '-60%', y: '-60%', width: '220%', height: '220%' });
-  f.appendChild(svgEl('feGaussianBlur', { stdDeviation: '1.6', result: 'b' }));
+  f.appendChild(svgEl('feGaussianBlur', { stdDeviation: '1.5', result: 'b' }));
   const mg = svgEl('feMerge', {}); mg.appendChild(svgEl('feMergeNode', { in: 'b' })); mg.appendChild(svgEl('feMergeNode', { in: 'SourceGraphic' })); f.appendChild(mg);
   defs.appendChild(f); svg.appendChild(defs);
-  const diamond = (cx, cy, r, col, glow) => svgEl('polygon', { points: `${cx},${cy - r} ${cx + r},${cy} ${cx},${cy + r} ${cx - r},${cy}`, fill: 'none', stroke: col, 'stroke-width': glow ? 1.6 : 1.1, filter: glow ? `url(#${uid})` : null });
+  const content = svgEl('g', {}); svg.appendChild(content);
   const clip = (s, n) => { s = String(s || ''); return s.length > n ? `${s.slice(0, n - 1)}…` : s; };
-  const rx = 30, ry = H / 2, tx = 92; // tools sit near the root; the right ~75% is for their LABELS
-  arr.forEach((s, i) => {
-    const ty = arr.length === 1 ? ry : 13 + (H - 26) * (i / (arr.length - 1));
-    const kids = _arr(s.children);
-    const col = s.ok === false ? bad : (kids.length ? acc : ok);
-    // each tool is its OWN clickable group → a modal with THAT tool's call + result (not all-or-nothing into 3D)
-    const g = svgEl('g', { class: 'tg-tool', style: 'cursor:pointer' });
-    const gt = svgEl('title', {}); gt.textContent = `${s.name || 'tool'} — tap for its call & result`; g.appendChild(gt);
-    g.appendChild(svgEl('line', { x1: rx, y1: ry, x2: tx, y2: ty, stroke: edge, 'stroke-width': 0.9, opacity: 0.7 }));
-    // a wide, invisible hit-target along the row so the whole label line is comfortably tappable
-    g.appendChild(svgEl('rect', { x: tx - 7, y: ty - 8, width: W - tx, height: 16, fill: 'transparent' }));
-    g.appendChild(diamond(tx, ty, 5, col, true));
-    const tl = svgEl('text', { x: tx + 10, y: ty + 3.3, 'font-size': 10, fill: col, 'font-family': 'ui-monospace,Menlo,Consolas,monospace' });
-    tl.textContent = clip(s.name, 34); g.appendChild(tl); // LABEL the tool (the user asked for labeled tools)
-    // research/delegate children → small dots, right-aligned so they never collide with the label
-    kids.slice(0, 6).forEach((c, j) => { const n = Math.min(6, kids.length); const cxx = W - 8 - (n - 1 - j) * 9; g.appendChild(svgEl('circle', { cx: cxx, cy: ty, r: 2, fill: c.ok === false ? bad : ok, opacity: 0.9 })); });
-    g.addEventListener('click', e => { e.stopPropagation(); openToolModal(s); });
-    svg.appendChild(g);
+  const diamond = (cx, cy, r, col, glow) => svgEl('polygon', { points: `${cx},${cy - r} ${cx + r},${cy} ${cx},${cy + r} ${cx - r},${cy}`, fill: 'none', stroke: col, 'stroke-width': glow ? 1.5 : 1, filter: glow ? `url(#${uid})` : null });
+
+  // ── the trace as a TREE: each step + its (possibly nested) children, with stable index-path keys ──
+  const build = (list, prefix) => _arr(list).map((s, i) => { const key = prefix ? `${prefix}.${i}` : `${i}`; return { key, step: s, kids: build(s.children, key) }; });
+  const tree = build(steps, '');
+  const nodeByKey = {}; (function walk(ns) { ns.forEach(n => { nodeByKey[n.key] = n; walk(n.kids); }); })(tree);
+
+  // open = the path of keys currently REVEALED (the hovered node + its ancestors). Children fan out
+  // VERTICALLY only for nodes on this path → hovering research expands its searches, hovering a search
+  // expands its children, and so on. A single mouseleave collapses back to the top-level row.
+  const open = new Set();
+  let prevVisible = new Set(); // for the reveal animation (fade + slide in newly-shown rows)
+  const ancestorsOf = key => { const p = key.split('.'), out = []; for (let i = 1; i < p.length; i += 1) out.push(p.slice(0, i).join('.')); return out; };
+  const setHover = key => { open.clear(); if (key) { open.add(key); ancestorsOf(key).forEach(k => open.add(k)); } render(); };
+
+  const ROW = 18, rootX = 22, topPad = 15, nodeX = depth => 60 + depth * 22;
+  const layout = () => {
+    const rows = []; const rootPos = { x: rootX, y: 0 };
+    const add = (n, depth, parentPos) => { const pos = { x: nodeX(depth), y: 0 }; rows.push({ n, depth, pos, parentPos }); if (open.has(n.key)) n.kids.forEach(k => add(k, depth + 1, pos)); };
+    tree.forEach(n => add(n, 0, rootPos));
+    rows.forEach((r, i) => { r.pos.y = topPad + i * ROW; });
+    rootPos.y = rows.length ? (rows[0].pos.y + rows[rows.length - 1].pos.y) / 2 : topPad + 8;
+    return { rows, rootPos, H: Math.max(60, topPad * 2 + rows.length * ROW) };
+  };
+
+  function render() {
+    const { rows, rootPos, H } = layout();
+    svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+    content.replaceChildren();
+    const nowVisible = new Set(rows.map(r => r.n.key));
+    const firstPaint = prevVisible.size === 0;
+
+    // root octahedron — tapping the CORE opens the full 3D trace
+    const rootG = svgEl('g', { 'data-root': '1', style: 'cursor:pointer' });
+    const rt = svgEl('title', {}); rt.textContent = 'Open the full 3D trace'; rootG.appendChild(rt);
+    rootG.appendChild(diamond(rootPos.x, rootPos.y, 11, acc, true));
+    rootG.appendChild(diamond(rootPos.x, rootPos.y, 5, acc, false));
+    content.appendChild(rootG);
+
+    rows.forEach(r => {
+      const { n, depth } = r, { x, y } = r.pos, p = r.parentPos, s = n.step, hasKids = n.kids.length;
+      const col = s.ok === false ? bad : (hasKids ? acc : ok);
+      const g = svgEl('g', { 'data-nodekey': n.key, class: 'tg-node', style: 'cursor:pointer' });
+      const tt = svgEl('title', {}); tt.textContent = `${s.name || 'tool'}${s.ok === false ? ' (failed)' : ''}${hasKids ? ` — ${n.kids.length} sub-step(s); hover to fan out` : ' — tap for its call & result'}${s.detail ? '\n' + scrubCap(s.detail).slice(0, 160) : ''}`; g.appendChild(tt);
+      // connector from the parent (root or the parent node) — a smooth cubic so children "fan" off it
+      g.appendChild(svgEl('path', { d: `M ${p.x} ${p.y} C ${(p.x + x) / 2} ${p.y}, ${(p.x + x) / 2} ${y}, ${x} ${y}`, fill: 'none', stroke: edge, 'stroke-width': 0.9, opacity: 0.6 }));
+      // wide invisible hit target across the row → easy hover + tap
+      g.appendChild(svgEl('rect', { x: x - 9, y: y - 8.5, width: W - (x - 9) - 4, height: 17, fill: 'transparent' }));
+      g.appendChild(diamond(x, y, hasKids ? 5.2 : 4.3, col, true));
+      const lbl = svgEl('text', { x: x + 9, y: y + 3.3, 'font-size': 9.5, fill: col, 'font-family': 'ui-monospace,Menlo,Consolas,monospace' });
+      lbl.textContent = `${hasKids ? (open.has(n.key) ? '▾ ' : '▸ ') : ''}${STEP_ICON[s.name] || '⚙'} ${clip(s.name, 32)}${hasKids ? ` ·${n.kids.length}` : ''}`;
+      g.appendChild(lbl);
+      // reveal animation: a newly-shown row fades + slides in, staggered by sibling index → a fan-out
+      if (!firstPaint && !prevVisible.has(n.key)) {
+        g.style.opacity = '0'; g.style.transition = 'opacity .24s ease, transform .24s cubic-bezier(.2,.8,.2,1)'; g.style.transform = 'translateX(-7px)';
+        const sib = Number(n.key.split('.').pop()) || 0;
+        setTimeout(() => { g.style.opacity = '1'; g.style.transform = 'none'; }, 25 + sib * 42);
+      }
+      content.appendChild(g);
+    });
+    prevVisible = nowVisible;
+  }
+
+  // event delegation on the stable <svg> (survives every re-render): hover opens the node's path;
+  // tap an expandable node fans it out, tap again (or tap a leaf) inspects it; tap the core → 3D.
+  let lastHover = null;
+  svg.addEventListener('mouseover', e => { const g = e.target.closest('[data-nodekey]'); if (!g) return; const k = g.getAttribute('data-nodekey'); if (k === lastHover) return; lastHover = k; setHover(k); });
+  svg.addEventListener('mouseleave', () => { lastHover = null; setHover(null); });
+  svg.addEventListener('click', e => {
+    const gn = e.target.closest('[data-nodekey]');
+    if (gn) { e.stopPropagation(); const n = nodeByKey[gn.getAttribute('data-nodekey')]; if (!n) return; if (n.kids.length && !open.has(n.key)) setHover(n.key); else openToolModal(n.step); return; }
+    if (e.target.closest('[data-root]')) { e.stopPropagation(); ensurePendant().then(p => { try { pendantWrap.classList.remove('hide'); p.setVisible(true); p.showSteps(_arr(steps)); if (!pendantFs) togglePendantFs(); } catch { /* */ } }).catch(() => {}); }
   });
-  // the agent root (octahedron) — drawn on top; tapping the CORE opens the full 3D trace
-  const rootG = svgEl('g', { style: 'cursor:pointer' });
-  const rgt = svgEl('title', {}); rgt.textContent = 'Open the full 3D trace'; rootG.appendChild(rgt);
-  rootG.appendChild(diamond(rx, ry, 12, acc, true));
-  rootG.appendChild(diamond(rx, ry, 5.5, acc, false));
-  rootG.addEventListener('click', e => { e.stopPropagation(); ensurePendant().then(p => { try { pendantWrap.classList.remove('hide'); p.setVisible(true); p.showSteps(arr); if (!pendantFs) togglePendantFs(); } catch { /* */ } }).catch(() => {}); });
-  svg.appendChild(rootG);
+
+  render();
   return svg;
 };
+// test seam: exercise the REAL trace renderer headlessly (pure view fn — renders public trace data, holds no
+// authority). Off in production; only bound when the page is opened with ?tracetest=1 (see shape/trace tests).
+if (typeof location !== 'undefined' && /[?&]tracetest=1\b/.test(location.search)) window.__traceGeometry = traceGeometry;
 // clicking an agent MESSAGE grows its reasoning signature (without clobbering links/controls/text-selection).
 const wireMsgTrace = (b, trace) => {
   if (!b || !trace) return; b.style.cursor = 'pointer'; if (!b.title) b.title = 'Click to grow the reasoning signature';
