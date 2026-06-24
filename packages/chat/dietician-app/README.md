@@ -41,9 +41,12 @@ never logged, never on screen.
 - [x] **Slice 2** — `core.mjs` `scan`: ports `sweep.py` (two-tier skip-lists, in-city filter, slugify +
   collision/idempotency) + `rank.py` (PRIORITY/CAPS), in-memory (no `/tmp`). *Proven: `node --test` + a real
   `scan('oakland')` → 56 candidates, top-20 ranked.*
-- [ ] **Slice 3** — `store.mjs` over a home-folder cap + the importer that pulls dan's `~/eating-out` DB
+- [x] **Slice 3** — `store.mjs` (typed wrapper over a folder cap — the `makeFsFolder` shim now, the SES
+  home-folder cap in grunt later) + `import-db.mjs`, the importer that pulls dan's `~/eating-out` DB
   (1077 places + 947 evals) into one instance store, normalizing the 130 inline-verdict a-priori SKIPs into
-  `evaluations/`.
+  `evaluations/`. *Proven: `node --test` + `scripts/import-persona.mjs` → instance counts VIABLE/BORDERLINE/
+  UNKNOWN match the live persona DB exactly (COPY; the instance lives at `~/.local/state/dietician-app/
+  instances/<person>/`, outside the repo — `diet.md` is PHI).*
 - [ ] **Slice 4** — `prompt.mjs` + `core.evaluate`: the EVAL template + verdict taxonomy + schema (reuse
   `dietician.mjs` `EVAL_SYS`/`parseVerdict`) over injected judge + web; cached_menu-preferred.
 - [ ] **Slice 5** — `kml.mjs`: ports `build_kml.py` (lng,lat,0; ABGR `ff00aa00`; CDATA+escape; 2 folders).

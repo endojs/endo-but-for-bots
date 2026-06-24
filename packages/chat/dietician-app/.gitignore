@@ -1,0 +1,11 @@
+# Never commit per-instance data — it's personal/PHI (diet.md) and large (the restaurant DB).
+# Instances live at ~/.local/state/dietician-app/instances/<person>/ by default; these patterns are a
+# defense-in-depth backstop in case a store/import is ever pointed into the package tree.
+instances/
+_import-src/
+data/
+site/
+*.kml
+root.swiss
+instances.json
+node_modules/
