@@ -28,3 +28,60 @@ export const makeMeteredLLM = ({ callLLM, purse, perProvider = {} }) => {
   return harden(llm);
 };
 harden(makeMeteredLLM);
+
+// ── makeMeteredDelegate — the prepaid toll on a DELEGATED (Opus) turn ────────────
+//
+// Delegation (delegate.mjs: runOpusDelegate / opusComplete) breaks a task off to a
+// LARGER, PAID brain. Unlike makeMeteredLLM (which meters a single bare callLLM), a
+// delegate runs a whole tool-using LOOP and reports its CUMULATIVE token `usage` only
+// when it returns. So we cannot price-per-call; instead we:
+//   1. QUOTE A FLOOR before spending — the minimum credible cost of one Opus turn.
+//      If the purse cannot afford that floor it is UNFUNDED → we THROW
+//      `INFERENCE_BUDGET_EXHAUSTED` (an Error with .code) BEFORE any paid call. The
+//      delegation halts deterministically — never route exhaustion through the model.
+//   2. run the delegate, then DEBIT THE ACTUAL cost computed from the returned usage
+//      (the real delta), accumulating per-provider spend. A provider `error` is
+//      surfaced without charging.
+//
+// makeMeteredDelegate({ delegate, purse, perProvider, model, floorTokens }) → a
+//   metered(args) with the SAME shape as the wrapped delegate, plus { cost, remaining }.
+
+// A delegate turn that reports zero usage still cost at least one round-trip of Opus
+// thinking; this floor is the minimum µUSD we insist the purse can cover up-front.
+const FLOOR_INPUT_TOKENS = 200;   // a non-trivial system+prompt
+const FLOOR_OUTPUT_TOKENS = 100;  // at least a short answer
+
+// Construct the BUDGET-EXHAUSTED error (carries a stable .code for callers to catch).
+export const inferenceBudgetExhausted = (need, have) => {
+  const e = new Error(`INFERENCE_BUDGET_EXHAUSTED: delegated turn needs at least ${need} µUSD but purse has ${have} µUSD`);
+  e.code = 'INFERENCE_BUDGET_EXHAUSTED';
+  e.need = need; e.have = have;
+  return e;
+};
+harden(inferenceBudgetExhausted);
+
+export const makeMeteredDelegate = ({
+  delegate,                 // runOpusDelegate (or any { ...; usage } -> result, or { error })
+  purse,
+  perProvider = {},
+  model = 'claude-opus-4-8',
+  floorTokens = { input_tokens: FLOOR_INPUT_TOKENS, output_tokens: FLOOR_OUTPUT_TOKENS },
+} = {}) => {
+  const provider = providerOf(model);
+  const floor = Math.max(1, costOf(model, floorTokens)); // µUSD the purse MUST be able to cover
+  const metered = async (args = {}) => {
+    // 1. QUOTE THE FLOOR — refuse BEFORE any paid Opus call when unfunded.
+    if (!purse.canAfford(floor)) throw inferenceBudgetExhausted(floor, purse.balance());
+    // 2. run the (paid) delegate.
+    const out = await delegate(args);
+    // provider/transport error → surface it, DON'T charge.
+    if (out && out.error) return harden({ ...out, cost: 0, remaining: purse.balance() });
+    // 3. DEBIT THE ACTUAL cost from the returned cumulative usage.
+    const cost = costOf(model, out && out.usage);
+    purse.debit(cost);
+    perProvider[provider] = (perProvider[provider] || 0) + cost;
+    return harden({ ...out, cost, remaining: purse.balance() });
+  };
+  return harden(metered);
+};
+harden(makeMeteredDelegate);
