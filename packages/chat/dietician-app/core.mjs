@@ -119,7 +119,10 @@ export const makePipeline = ({
     // EVERY place as "out of city". Detect that (the name appears in ZERO found addresses) and fall back to a
     // distance-from-centre test — language-agnostic, and a no-op for cities whose name does match.
     const nameHits = [...all.values()].filter(p => inCityOf(city.name, p.address)).length;
-    const useDistance = nameHits === 0 && all.size > 0 && city.center;
+    // If the city NAME barely appears in the found addresses, its LOCAL address name differs (Copenhagen ↔
+    // København) → fall back to distance. Use a RATIO, not ==0, so ONE coincidental "Copenhagen Street" match
+    // doesn't defeat it (the live bug: 1 of 215 matched → name mode → all 214 dropped).
+    const useDistance = !!city.center && all.size > 0 && (nameHits / all.size) < 0.12;
     const inArea = p => (useDistance
       ? (p.lat != null && p.lng != null && haversineM(city.center.latitude, city.center.longitude, p.lat, p.lng) <= (city.radius || 5000) * 1.3)
       : inCityOf(city.name, p.address));

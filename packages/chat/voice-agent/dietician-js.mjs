@@ -8,6 +8,7 @@
 // power verbs are unchanged. (Google Places + Anthropic keys are read from the secret registry by the
 // providers, server-side, never reaching the agent.)
 import { execFile } from 'node:child_process';
+import fs from 'node:fs';
 
 import { makeFsFolder } from '../dietician-app/fs-folder.mjs';
 import { makeDietStore } from '../dietician-app/store.mjs';
@@ -24,7 +25,19 @@ const HOST = process.env.DIETICIAN_HOST || 'agent@10.89.0.8'; // used ONLY for t
 
 const store = makeDietStore(makeFsFolder(INSTANCE_ROOT), { person: PERSON });
 const judge = makeJudge({ complete: makeAnthropicComplete() });
-const basePipe = makePipeline({ store, places, judge, person: PERSON }); // scan/buildMap/generate/status (no web)
+
+// The family edits its diet rules in the Obsidian vault (Dietician/<Person> — Diet.md); make THAT the single
+// source of truth for evaluation. specStore overrides readSpec to read the vault note (frontmatter + blockquote
+// header stripped), falling back to the instance diet.md. So a change like "more gluten in Europe" takes effect
+// immediately, with no separate spec-edit verb.
+const VAULT = process.env.OBSIDIAN_VAULT || `${HOME}/obsidian/vault`;
+const PERSON_NAME = PERSON.charAt(0).toUpperCase() + PERSON.slice(1);
+const readVaultSpec = () => {
+  try { return fs.readFileSync(`${VAULT}/Dietician/${PERSON_NAME} — Diet.md`, 'utf8').replace(/^---\n[\s\S]*?\n---\n/, '').trim().replace(/^(> .*(\n|$))+/, '').trim(); }
+  catch { return ''; }
+};
+const specStore = { ...store, readSpec: async () => readVaultSpec() || (await store.readSpec()) };
+const basePipe = makePipeline({ store: specStore, places, judge, person: PERSON }); // scan/buildMap/generate/status
 
 const slugify = s => String(s || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
 
@@ -55,7 +68,7 @@ export const scanArea = async city => {
 
 // ── EVALUATE — cached_menu preferred; else the field agent's web caps (passed in as `tools`) ──
 export const evaluateArea = async ({ city, limit = 3, tools = {}, onStep = () => {}, signal } = {}) => {
-  const pipe = makePipeline({ store, places, judge, web: tools, person: PERSON });
+  const pipe = makePipeline({ store: specStore, places, judge, web: tools, person: PERSON });
   return harden(await pipe.evaluate({ city: slugify(city), limit, onStep, signal }));
 };
 

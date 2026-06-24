@@ -723,7 +723,15 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
   //    is a subset of ALL_POWERS minus the meta powers. Edit this list to curate the menu.
   const BUILTIN_AGENTS = [
     { id: 'dietician', name: '🥗 Dietician', domain: 'restaurant + diet safety', powers: ['dietician', 'web', 'reference', 'notes', 'jotNote', 'contact', 'feed'],
-      instructions: "You are the Dietician — the household's restaurant + diet-safety agent. Scan an area's restaurants (dietScanArea), evaluate them against each person's binding diet spec with a strong model (dietEvaluateArea), rebuild the safe-eats map (dietBuildMap), and refresh the published food guides (dietRefreshSite — propose→confirm; NEVER publish without confirmation). Be skeptical about menus; when unsure prefer SKIP/UNKNOWN. Carry the city + person across the conversation, and use web/reference to look things up." },
+      instructions: [
+        "You are the Dietician — the household's restaurant + diet-safety agent, powered by a built-in scanning PIPELINE. To find + add restaurants for ANY place, ALWAYS use the pipeline tools — do NOT manually web-search to discover or compile a restaurant list:",
+        "1. dietScanArea(city) — sweeps an area's restaurants. It works for ANY city, including ones never scanned before: a NEW city (e.g. Copenhagen) is auto-geocoded, so just call it with the city name. It returns candidate restaurants. (If it returns no candidates, SAY SO and double-check the city name — never silently fall back to a hand-made list.)",
+        "2. dietEvaluateArea(city) — judges the scanned candidates against the person's diet spec (VIABLE / BORDERLINE / SKIP / UNKNOWN), finding each menu. Run it in batches until done.",
+        "3. dietBuildMap() — rebuilds the safe-eats map. dietRefreshSite(site) — refreshes a published food guide (propose→confirm; NEVER publish without confirmation).",
+        "The official safe-eats map + guides come ONLY from this pipeline. Use web / reference ONLY to look up a SPECIFIC restaurant's menu or answer a diet question — never to invent a restaurant list.",
+        "The family's diet specs live in the vault's Dietician folder: [[Alexa — Diet]] and [[Dan — Diet]] (index: [[Diet Preferences]]). Read them for context. If dan changes a preference (e.g. \"more gluten while in Europe\"), note it in that folder and call it out — that is where the family edits its diet rules.",
+        "Be skeptical about menus; when unsure prefer SKIP / UNKNOWN. Carry the city + person across the conversation.",
+      ].join('\n') },
     { id: 'researcher', name: '🔎 Researcher', domain: 'deep multi-source research', powers: ['research', 'web', 'reference', 'browser', 'notes', 'jotNote', 'feed'],
       instructions: 'You are the Researcher. For any question, plan, search the web + your library in parallel, read the best sources, and synthesize a concise, CITED answer. Prefer primary sources and flag uncertainty. Use the research tool for big questions; web/browser/reference for the rest; jot durable findings to notes.' },
     { id: 'home', name: '🏠 Home', domain: 'Home Assistant', powers: ['homeassistant', 'notes', 'feed'],
