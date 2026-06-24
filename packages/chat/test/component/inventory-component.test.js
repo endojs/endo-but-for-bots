@@ -1,4 +1,5 @@
 // @ts-nocheck - Component test with happy-dom
+/* global globalThis */
 
 import '@endo/init/debug.js';
 
@@ -391,11 +392,16 @@ test.serial(
       $list.querySelector('.pet-item-row')
     );
 
-    // Capture console.error during the malformed-payload drop.
+    // Capture console.error during the malformed-payload drop. Under SES the
+    // tamed `console` is hardened, so its `error` method cannot be reassigned;
+    // swap the whole `globalThis.console` binding (which stays writable) for the
+    // duration of the drop instead.
     const captured = [];
-    const realConsoleError = console.error;
-    // eslint-disable-next-line no-global-assign
-    console.error = (...args) => captured.push(args.join(' '));
+    const realConsole = console;
+    globalThis.console = harden({
+      __proto__: realConsole,
+      error: (...args) => captured.push(args.join(' ')),
+    });
 
     try {
       const dropEvent = new testDocument.defaultView.Event('drop', {
@@ -412,8 +418,7 @@ test.serial(
       Object.defineProperty(dropEvent, 'clientY', { value: 100 });
       $row.dispatchEvent(dropEvent);
     } finally {
-      // eslint-disable-next-line no-global-assign
-      console.error = realConsoleError;
+      globalThis.console = realConsole;
     }
 
     t.true(captured.length >= 1, 'console.error was called');
