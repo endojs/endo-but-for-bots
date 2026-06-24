@@ -69,7 +69,13 @@ never logged, never on screen.
   parameterized via `trip`. *Proven: `node --test` (25/25) + `yarn test:disney-guide` (headless over dan's
   DB): 14 park cards + 31 hotel rows, 45 map dot-anchors, zone filter, "safe bets only" hides 28 borderline
   cards + dots, map-dot→card navigation.*
-- [ ] **Slice 8** — `grunt.mjs` cap layer: `DietConsole` + `guide`/`scanner`/`editor` facets + `/rpc` + SPA.
+- [x] **Slice 8** — `console.mjs` (`makeDietician` → `DietConsole` root + attenuated `guide`/`scanner`/`editor`
+  facets behind swissnums; rate/TTL gates; `share`/`listShares`/`revoke`) + `grunt.mjs` (`@endo/init` + the
+  HTTP/JSON `/rpc` adapter + static SPA + persisted `root.swiss` seed) + `public/` SPA (cap read from `#cap`,
+  stripped from the address bar; share links copy-only). *Proven: `yarn test:cap` (27/27 SES confinement — a
+  guide has no scan, a scanner is city-locked + rate/TTL-bounded, an editor can't publish, revoke drops the
+  swissnum) + a live HTTP smoke (`/rpc` describe/share/revoke; the guide facet has no `scan` even over the
+  wire; revoke → 404; no secret in the log).*
 - [ ] **Slice 9** — `DietProvisioner.newInstance` + `signup` (multi-tenant).
 - [ ] **Slice 10** — `dietician-app.service` + `GUIDE.md`; re-point the voice-agent `dietician` power at a
   held `DietConsole` cap (retire the SSH internals). *Needs dan's go for the public-guide publishing change.*
