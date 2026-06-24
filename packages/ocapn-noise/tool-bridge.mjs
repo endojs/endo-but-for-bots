@@ -8,7 +8,14 @@
 import '@endo/init';
 import fs from 'node:fs';
 import { Far } from '@endo/marshal';
-import { generate } from '/home/dan/gpu-img/gen.mjs';
+// Lazy GPU image generator: imported on FIRST use (inside generateImage.run) rather than at module load,
+// so importing this module on a host WITHOUT the GPU box (CI / tests) does not hard-fail. Path overridable.
+const GPU_GEN_MODULE = process.env.GPU_GEN_MODULE || '/home/dan/gpu-img/gen.mjs';
+let _generate = null;
+const generate = async (...a) => {
+  if (!_generate) { ({ generate: _generate } = await import(GPU_GEN_MODULE)); }
+  return _generate(...a);
+};
 
 const LLM = process.env.AGENT_LLM || 'http://192.168.50.226:8003/v1/chat/completions';
 
