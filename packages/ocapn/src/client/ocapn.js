@@ -587,7 +587,10 @@ const makeBootstrapObject = (
       }
       const peerIdFromSession = peerPublicKey.id;
       if (
-        compareBytes(thawnBytes(peerIdFromSession), peerIdFromHandoffReceive) !== 0
+        compareBytes(
+          thawnBytes(peerIdFromSession),
+          peerIdFromHandoffReceive,
+        ) !== 0
       ) {
         throw Error(
           `${label}: Bootstrap withdraw-gift: Receiver key mismatch for session ${encodeHex(thawnBytes(sessionId))}.\n  peerIdFromSession: ${encodeHex(thawnBytes(peerIdFromSession))}\n  peerIdFromHandoffReceive: ${encodeHex(peerIdFromHandoffReceive)}`,

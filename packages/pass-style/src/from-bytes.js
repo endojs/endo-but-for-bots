@@ -20,10 +20,7 @@ import harden from '@endo/harden';
  */
 export const thawnBytes = bytes => {
   return new Uint8Array(
-    bytes.buffer.slice(
-      bytes.byteOffset,
-      bytes.byteOffset + bytes.byteLength,
-    ),
+    bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength),
   );
 };
 harden(thawnBytes);
