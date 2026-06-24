@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | **Created** | 2026-05-06 |
-| **Updated** | 2026-05-21 |
+| **Updated** | 2026-06-24 |
 | **Author** | Kris Kowal (prompted) |
-| **Status** | Not Started |
+| **Status** | In Progress |
 | **Source** | Maintainer comment on PR endojs/endo-but-for-bots#70; tracks endojs/endo issue #1845. |
 
 ## What is the Problem Being Solved?
@@ -211,20 +211,19 @@ fires unchanged on an entry that lands in an unnamed `package.json`.
 This keeps a single public entry point (`mapNodeModules`) with its
 existing contract, and lets advanced adopters thread their own cache
 when they want to share it across calls.
-Alongside `mapNodeModules`, export a new sibling function (working
-name `mapNodeModulesWithAuxiliary`) that constructs the cache from
-the same `MaybeReadFn` the caller already supplies and then delegates
-to `mapNodeModules` with the constructed cache injected.
-Per the maintainer convention for upgrading a base function whose
-contract must stay stable: the base keeps its signature, the new
-sibling layers the upgraded behavior on top by injecting the default
-cache so casual callers get auxiliary handling without threading a
-new capability.
-The maintainer's review on this design records that no downstream
-consumer can depend on the current handling of auxiliary descriptors
-(see Design Decisions §4), so a subsequent release can promote the
-sibling's wiring into `mapNodeModules` itself and retire the explicit
-opt-in.
+Per the maintainer's review on PR 96 ("This entry function should not
+be necessary, provided that `mapNodeModules` constructs a cache on
+demand, if not provided one"), `mapNodeModules` constructs a default
+`PackageDescriptorCache` from its own `MaybeReadFn` whenever the caller
+does not supply one, rather than exposing a separate
+`mapNodeModulesWithAuxiliary` sibling.
+The auxiliary handling is therefore the default; the
+`packageDescriptorCache` option survives only so advanced callers can
+share one cache (and its read memoization) across multiple calls.
+The maintainer's review records that no downstream consumer can depend
+on the current handling of auxiliary descriptors (see Design Decisions
+§4), so promoting the cache to the default does not break a working
+caller.
 
 ### Resolving the entry
 
@@ -278,12 +277,25 @@ becomes a particular query on the cache.
 
 ### Hub-less / unknown-canonical case
 
-If the upward walk reaches a filesystem boundary without finding any
-named `package.json`, the entry's package itself is anonymous (not just
-its subtree).
+If the upward walk reaches a boundary without finding any named
+`package.json`, the entry's package itself is anonymous (not just its
+subtree).
 The cache-supplied path delegates to the PR 70 diagnostic in that case.
 The diagnostic is unchanged: it points at the topmost `package.json`
 encountered and reports a missing `name`.
+Two boundaries end the walk.
+The first is the filesystem root.
+The second is a `node_modules` directory, but only once the walk has
+already passed an *auxiliary* (unnamed) descriptor and is looking for
+the named ancestor that scopes it: the named ancestor must live within
+the same package subtree, and a `package.json` above `node_modules`
+describes a different package (matching Node.js's own
+`LOOKUP_PACKAGE_SCOPE`, which never ascends past `node_modules`).
+Before any descriptor is encountered — for example a bare module file
+dropped directly under `node_modules` with no `package.json` of its own
+— the walk climbs past `node_modules` to the nearest enclosing named
+package, exactly as the existing `search` does, so this case is
+unchanged.
 Callers who want auxiliary semantics for the *workspace root* (an
 unnamed `package.json` at the top of a yarn workspace, for example)
 must add a `name` there, exactly as PR 70 already requires.
@@ -416,16 +428,16 @@ path handles that case at least as well as the old.
    `compartmentMapForNodeModules_`.
    When omitted, behavior is unchanged.
 
-4. **Export a sibling that injects the cache by default.**
-   Alongside `mapNodeModules`, export `mapNodeModulesWithAuxiliary`
-   (or equivalent), which constructs a `PackageDescriptorCache` from
-   the caller's `MaybeReadFn` and delegates to `mapNodeModules` with
-   the cache pre-injected.
-   Casual callers reach the auxiliary behavior without threading a
-   new capability; advanced callers retain the threaded-cache path
-   for sharing a cache across calls.
-   This follows the maintainer's convention for upgrading a base
-   function whose contract must stay stable.
+4. **Construct the cache on demand inside `mapNodeModules`.**
+   Per the maintainer's review on PR 96, `mapNodeModules` constructs a
+   `PackageDescriptorCache` from its own `MaybeReadFn` whenever the
+   caller does not supply one, so the auxiliary behavior is the default
+   with no separate entry point.
+   Advanced callers retain the threaded-cache path for sharing a cache
+   across calls.
+   (An earlier draft of this phase exported a sibling
+   `mapNodeModulesWithAuxiliary`; the maintainer's review retired it in
+   favor of on-demand construction.)
 
 5. **Add fixtures and tests.**
    Add new fixtures for the nested-auxiliary and named-vs-unnamed
@@ -435,27 +447,39 @@ path handles that case at least as well as the old.
    Cover both the cache-supplied and cache-omitted code paths so
    the unchanged-default behavior is also load-bearing in tests.
 
-6. **Apply the same shape to `mapNodeModules`'s relatives.**
+6. **`mapNodeModules`'s relatives inherit the behavior.**
    `archive`, `bundle`, and `import` funnel through the same
-   `mapNodeModules` contract; each accepts the same
-   `packageDescriptorCache` option, and each gains a sibling
-   constructor that injects a default cache.
+   `mapNodeModules` contract, which now constructs the cache on demand
+   (Phase 4), so they reach the auxiliary handling with no per-relative
+   plumbing or sibling constructors. The earlier plan to add a
+   `WithAuxiliary` constructor to each relative is subsumed by on-demand
+   construction. Advanced callers that want to share one cache across a
+   relative's internal `mapNodeModules` call can still thread the
+   `packageDescriptorCache` option where the relative forwards its
+   options (today `bundle`'s pass-through does so).
    Exception: `importArchive` and any relative that consumes a
    fully described compartment map (every individual module's
    language is noted explicitly on the descriptor) does not need
    the cache and is unaffected; the auxiliary lookup has no work
    to do when the language is already pinned per module.
 
-7. **Promote the cache to the default in a later release.**
-   Once adopters have moved over and the auxiliary semantics are
-   confirmed in the field, fold the sibling's default-cache wiring
-   into `mapNodeModules` and remove the `packageDescriptorCache`
-   option.
-   At that point auxiliary handling is the only behavior; the
-   `parsers` field on the resulting compartment descriptor falls
-   back to the flat shape only when the entry has no auxiliary
-   ancestors. This phase is out of scope for this design but is
-   the intended endpoint.
+7. **Honor the layered overrides at parse time
+   (`languageForExtensionByPrefix`).**
+   The remaining functional phase. `collectLanguageOverrides` already
+   returns the layered descriptor list, but the parse pipeline does not
+   yet consult it: a `{"type": "module"}` auxiliary is collected and
+   ignored by `inferParsers`, so `.js` files in its subtree are not yet
+   reparsed as ECMAScript modules.
+   This requires extending the compartment descriptor schema with the
+   `languageForExtensionByPrefix` field (Design Decision §7) and
+   resolving the deepest matching prefix for a module's path at parse
+   time (`link.js` → `map-parser.js`).
+   Because the static graph builder does not traverse package subtrees
+   today (modules within a package are discovered lazily at import
+   time), this phase carries the layered overrides through to the lazy
+   language lookup rather than precomputing them per compartment. It is
+   the next phase of work; the on-demand cache and the entry-resolution
+   reclassification (Phases 1–6) land first.
 
 ## Design Decisions
 
@@ -525,13 +549,17 @@ path handles that case at least as well as the old.
    The unified shape suffices until a reproducer needs the finer
    split.
 
-8. **Default-cache wrapper alongside the threaded option.**
-   Per the maintainer's review on PR 96.
-   Export a sibling function that constructs the cache by default
-   and delegates to `mapNodeModules`, so casual callers reach the
-   auxiliary behavior without threading a new capability.
+8. **On-demand cache construction inside `mapNodeModules`.**
+   Per the maintainer's review on PR 96 ("This entry function should
+   not be necessary, provided that `mapNodeModules` constructs a cache
+   on demand, if not provided one").
+   `mapNodeModules` constructs a default cache when the caller supplies
+   none, so the auxiliary behavior is the default with no separate
+   public entry point.
    The threaded `packageDescriptorCache` option remains for advanced
    callers that share a cache across calls.
+   This supersedes an earlier draft that exported a
+   `mapNodeModulesWithAuxiliary` sibling.
    See Phased Implementation §4.
 
 9. **`mapNodeModules`'s relatives accept the same option, with one

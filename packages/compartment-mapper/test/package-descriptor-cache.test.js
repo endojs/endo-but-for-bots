@@ -59,9 +59,6 @@ test('collectLanguageOverrides returns the layered descriptor list shallowest-fi
   t.is(layered[1].type, 'module');
 });
 
-const escapeRegex = /** @param {string} s */ s =>
-  s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-
 test('mapNodeModules with packageDescriptorCache: entry inside auxiliary subtree resolves to enclosing named compartment', async t => {
   const cache = makePackageDescriptorCache(maybeRead);
   const entry = fixtureUrl('apackage/afolder/file.js');
@@ -79,16 +76,21 @@ test('mapNodeModules with packageDescriptorCache: entry inside auxiliary subtree
   t.is(entryCompartment.name, 'apackage');
 });
 
-test('mapNodeModules without packageDescriptorCache: entry inside auxiliary subtree still triggers the PR 70 diagnostic', async t => {
+test('mapNodeModules without an explicit cache: constructs one on demand, so an entry inside an auxiliary subtree resolves to the enclosing named compartment', async t => {
+  // `mapNodeModules` now constructs a `packageDescriptorCache` on demand
+  // when the caller does not supply one, so the auxiliary-`package.json`
+  // behavior is the default. An entry inside `apackage/afolder/` resolves
+  // to the named `apackage/` compartment rather than triggering the PR 70
+  // diagnostic.
   const entry = fixtureUrl('apackage/afolder/file.js');
-  const descriptorLocation = fixtureUrl('apackage/afolder/package.json');
-  await t.throwsAsync(mapNodeModules(readPowers, entry), {
-    message: new RegExp(
-      `package\\.json at "${escapeRegex(
-        descriptorLocation,
-      )}" must have a "name" field`,
-    ),
-  });
+  const compartmentMap = await mapNodeModules(readPowers, entry);
+
+  t.is(compartmentMap.entry.compartment, fixtureUrl('apackage/'));
+  t.is(compartmentMap.entry.module, './afolder/file.js');
+  const entryCompartment =
+    compartmentMap.compartments[compartmentMap.entry.compartment];
+  t.truthy(entryCompartment);
+  t.is(entryCompartment.name, 'apackage');
 });
 
 test('PackageDescriptorCache: no named ancestor at all throws the PR 70 diagnostic', async t => {

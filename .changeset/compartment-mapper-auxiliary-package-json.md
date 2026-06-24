@@ -8,25 +8,24 @@ Introduce a `package-descriptor-cache.js` module that distinguishes
 language-for-extension rules to a subdirectory of a parent named
 package).
 
-`mapNodeModules` now accepts an opt-in `packageDescriptorCache` option.
-When supplied, the entry resolution walks past intermediate auxiliary
-descriptors to the enclosing named compartment, so an entry under
+`mapNodeModules` now constructs a `packageDescriptorCache` on demand, so
+this auxiliary handling is the default: an entry under
 `apackage/afolder/` where `afolder/package.json` is auxiliary resolves
 to the `apackage/` compartment with `moduleSpecifier` relative to it,
 instead of triggering the
 [`endojs/endo-but-for-bots#70`](https://github.com/endojs/endo-but-for-bots/pull/70)
-diagnostic.
+diagnostic. Its relatives — `archive`, `bundle`, and `import` — inherit
+the behavior through `mapNodeModules`. Advanced callers that share a
+cache across multiple `mapNodeModules` calls still pass their own via
+the `packageDescriptorCache` option.
 
-A sibling `mapNodeModulesWithAuxiliary` constructor wires a default
-cache so casual callers reach the auxiliary handling without threading
-a new capability; advanced callers that share a cache across multiple
-`mapNodeModules` calls pass their own via the option.
-
-Behavior without the cache option is unchanged: the diagnostic from
-`#70` still fires when an entry lands directly inside an unnamed
-`package.json`.
+The `#70` diagnostic remains the floor: an entry whose enclosing package
+has no named ancestor — the walk reaches a `node_modules` boundary or
+the filesystem root after passing an unnamed `package.json` without
+finding a `name` — still fails loudly.
 
 See `designs/compartment-mapper-auxiliary-package-json.md` for the
-design this implements; subsequent work threads the cache through
-`archive`, `bundle`, and `import` and lands the per-file
-layered-language-override pipeline.
+design this implements; subsequent work lands the per-file
+layered-language-override pipeline (`languageForExtensionByPrefix`) so a
+`{"type": "module"}` auxiliary actually flips `.js` parsing within its
+subtree.

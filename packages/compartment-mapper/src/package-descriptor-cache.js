@@ -208,10 +208,28 @@ export const makePackageDescriptorCache = maybeRead => {
         });
       }
       const parent = resolveLocation('../', directory);
-      if (parent === directory) {
-        // Reached the filesystem boundary without finding a named ancestor.
-        // Surface the PR 70 diagnostic, blaming the topmost `package.json`
-        // we encountered (matches the behavior of the existing walk).
+      // Stop at the filesystem root. Also stop at a `node_modules`
+      // directory boundary, but only once we have already collected an
+      // auxiliary descriptor — i.e. the entry's own package has an unnamed
+      // `package.json` and we are looking for the named ancestor that
+      // scopes it. In that case the named ancestor must live within the
+      // same package subtree, below `node_modules`; a `package.json` above
+      // `node_modules` describes a different package (matching Node.js's
+      // `LOOKUP_PACKAGE_SCOPE`, which never ascends past `node_modules`),
+      // so reaching the boundary means the entry's package is genuinely
+      // anonymous and the PR 70 diagnostic must fire.
+      //
+      // When no descriptor has been encountered yet (the entry sits in a
+      // directory with no `package.json` of its own, such as a bare module
+      // dropped under `node_modules`), keep climbing past the boundary so
+      // behavior matches the existing `search`, which adopts the nearest
+      // enclosing named package regardless of `node_modules` boundaries.
+      const atNodeModulesBoundary =
+        parent.endsWith('/node_modules/') && auxiliariesDeepFirst.length > 0;
+      if (parent === directory || atNodeModulesBoundary) {
+        // Reached a boundary without finding a named ancestor. Surface the
+        // PR 70 diagnostic, blaming the topmost `package.json` we
+        // encountered (matches the behavior of the existing walk).
         throw Error(
           `package.json at ${q(topmostDescriptorLocation)} must have a "name" field; consider naming it after the parent directory`,
         );

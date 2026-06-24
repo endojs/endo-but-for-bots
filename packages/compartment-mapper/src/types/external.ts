@@ -267,13 +267,19 @@ type MapNodeModulesOptionsOmitPolicy = Partial<{
    */
   additionalLocations: Array<AdditionalLocation>;
   /**
-   * When supplied, `mapNodeModules` consults the cache to resolve auxiliary
-   * `package.json` files (descriptors without a `name`) as language-for-extension
-   * overrides on the enclosing named compartment, rather than treating them
-   * as compartment roots.
+   * `mapNodeModules` resolves auxiliary `package.json` files (descriptors
+   * without a `name`) as language-for-extension overrides on the enclosing
+   * named compartment, rather than treating them as compartment roots. It
+   * constructs a `PackageDescriptorCache` on demand for this, so the
+   * behavior is the default.
    *
-   * When omitted, behavior is unchanged: an entry that lands directly in an
-   * unnamed `package.json` triggers the diagnostic introduced in
+   * Supply a cache here only to share a single descriptor cache (and its
+   * read memoization) across multiple `mapNodeModules` calls. When omitted,
+   * a fresh cache is constructed for the call.
+   *
+   * In every case, an entry whose enclosing package has no named ancestor
+   * (the walk reaches a `node_modules` boundary or the filesystem root
+   * without finding a `name`) still triggers the diagnostic introduced in
    * `endojs/endo-but-for-bots#70`.
    *
    * See `designs/compartment-mapper-auxiliary-package-json.md` for the
