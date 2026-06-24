@@ -47,8 +47,13 @@ never logged, never on screen.
   `evaluations/`. *Proven: `node --test` + `scripts/import-persona.mjs` → instance counts VIABLE/BORDERLINE/
   UNKNOWN match the live persona DB exactly (COPY; the instance lives at `~/.local/state/dietician-app/
   instances/<person>/`, outside the repo — `diet.md` is PHI).*
-- [ ] **Slice 4** — `prompt.mjs` + `core.evaluate`: the EVAL template + verdict taxonomy + schema (reuse
-  `dietician.mjs` `EVAL_SYS`/`parseVerdict`) over injected judge + web; cached_menu-preferred.
+- [x] **Slice 4** — `prompt.mjs` (EVAL rubric + verdict taxonomy + exact schema + `parseVerdict`, ported from
+  `dietician.mjs`, parameterized by person), `providers/judge.mjs` (UNKNOWN-safe LLM evaluator),
+  `providers/anthropic.mjs` (the package's own plain-node model adapter — key from env/registry/`~/.env`),
+  and `core.evaluate` (cached_menu-preferred; web lookup only if a `web` cap is injected; idempotent; scan
+  now persists candidates so evaluate finds them). *Proven: `node --test` (13/13) + `smoke/evaluate-smoke.mjs`
+  — real Opus re-judges dan's cached menus and reproduces the persona verdicts (decisive SKIPs match;
+  disagreements are the fuzzy VIABLE↔BORDERLINE↔SKIP boundary).*
 - [ ] **Slice 5** — `kml.mjs`: ports `build_kml.py` (lng,lat,0; ABGR `ff00aa00`; CDATA+escape; 2 folders).
 - [ ] **Slice 6** — `guides/shared.mjs` + `guides/eats-guide.mjs` (city-grouped guide).
 - [ ] **Slice 7** — `guides/disney-guide.mjs` (park-grouped + hotel section + 2 inline-SVG maps).

@@ -19,8 +19,11 @@ export const makeMemStore = (seed = {}) => {
     hasPlace: async slug => places.has(slug),
     getPlace: async slug => places.get(slug) || null,
     putPlace: async (slug, rec) => { places.set(slug, rec); },
+    listPlaces: async () => [...places.keys()],
     putVerdict: async (slug, rec) => { evals.set(slug, rec); },
     getVerdict: async slug => evals.get(slug) || null,
+    listVerdicts: async () => [...evals.keys()],
+    readSpec: async () => seed.spec || '',
     // test introspection
     _places: places,
     _evals: evals,

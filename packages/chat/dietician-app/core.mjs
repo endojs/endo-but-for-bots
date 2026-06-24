@@ -28,7 +28,7 @@ export const makePipeline = ({
   clock = Date.now,      // injected for testable dates
   cities = SEED_CITIES,  // the instance's city table (Slice 3 reads it from the store)
   person = 'alexa',
-  aprioriEvaluatedFor = 'Alexa (MCAS+histamine+fructan)', // the label on a-priori SKIP verdicts (per-person)
+  evaluatedFor = 'Alexa (MCAS+histamine+fructan)', // the per-person "evaluated_for" label stamped on verdicts
 } = {}) => {
   const today = () => new Date(clock()).toISOString().slice(0, 10);
 
@@ -50,7 +50,7 @@ export const makePipeline = ({
       outdoor_seating: p.outdoor_seating ?? null, cached_menu: null, cached_menu_date: null, cached_menu_sources: [],
     });
     await store.putVerdict(s, {
-      place_id: p.place_id || '', name: p.name, verdict: 'SKIP', evaluated_for: aprioriEvaluatedFor,
+      place_id: p.place_id || '', name: p.name, verdict: 'SKIP', evaluated_for: evaluatedFor,
       evaluated_date: today(), summary: `A-priori SKIP — ${reason}`, promising_dishes: [], avoid_outright: [],
       kitchen_flexibility: 'N/A (cuisine type incompatible)',
     });
@@ -135,6 +135,16 @@ export const makePipeline = ({
       .map(x => x[0]);
     const top = ranked.slice(0, city.cap || 20);
 
+    // persist the capped candidates as place metadata (no verdict yet) so evaluate() picks them up and a
+    // re-scan dedups against them (idempotent). a-priori SKIPs were already written above.
+    for (const c of top) {
+      await store.putPlace(c.slug, {
+        name: c.name, address: c.address, place_id: c.place_id, lat: c.lat, lng: c.lng,
+        cuisine: String(c.primary_type || '').replace(/_/g, ' '), menu_url: null, primary_type: c.primary_type,
+        outdoor_seating: c.outdoor_seating ?? null, cached_menu: null, cached_menu_date: null, cached_menu_sources: [], city: c.city,
+      });
+    }
+
     return {
       ok: true,
       city: city.name,
@@ -146,7 +156,74 @@ export const makePipeline = ({
     };
   };
 
+  // gather a live menu via the injected web cap (discovery path; the reevaluate path uses cached_menu only).
+  // Mirrors the live bridge's menu lookup: webSearch → top 3 urls → browse/fetchUrl → concatenated text.
+  const gatherMenu = async place => {
+    const out = { menu: '', menuUrl: '', sources: [] };
+    if (!web || typeof web.webSearch !== 'function') return out;
+    try {
+      const sr = await web.webSearch(`${place.name} ${place.address || ''} menu`);
+      const urls = (sr && sr.ok && Array.isArray(sr.results) ? sr.results : []).slice(0, 3).map(h => h.url).filter(Boolean);
+      for (const u of urls) {
+        let text = '';
+        try { const p = web.browse ? await web.browse(u) : null; text = p && (p.text || p.summary || p.content || ''); } catch { /* try plain fetch */ }
+        if (!text && web.fetchUrl) { try { const p = await web.fetchUrl(u); text = p && (p.text || p.summary || p.content || ''); } catch { /* skip */ } }
+        if (text) { out.menu += `\n\n[${u}]\n${String(text).slice(0, 3500)}`; out.sources.push(u); if (!out.menuUrl) out.menuUrl = u; }
+        if (out.menu.length > 4500) break;
+      }
+    } catch { /* menu unreachable → UNKNOWN (the safe verdict) */ }
+    return out;
+  };
+
+  // STAGE 2b/4 — judge not-yet-evaluated places against the diet spec. cached_menu PREFERRED; else web lookup
+  // (only if a `web` cap was injected). Idempotent: skips places that already carry a verdict. Writes the
+  // verdict (+ any freshly-fetched cached_menu) to the store. A batch can take a minute or two (one LLM/place).
+  const evaluate = async ({ city, slugs, limit = 3, onStep = () => {}, signal } = {}) => {
+    if (!judge || typeof judge.evaluate !== 'function') return { ok: false, error: 'no judge injected (need an LLM evaluator)' };
+    const lim = Math.max(1, Math.min(8, Number(limit) || 3));
+    const spec = await store.readSpec();
+    const cityName = city ? ((cityRecord(cities, city) || {}).name || city) : null;
+
+    let todo = [];
+    if (Array.isArray(slugs)) todo = slugs.slice();
+    else {
+      for (const slug of await store.listPlaces()) {
+        if (await store.getVerdict(slug)) continue; // already judged → idempotent
+        const place = await store.getPlace(slug);
+        if (!place) continue;
+        if (cityName && String(place.city || '') !== cityName) continue;
+        todo.push(slug);
+      }
+    }
+    const batch = todo.slice(0, lim);
+    const results = [];
+    for (const slug of batch) {
+      if (signal && signal.aborted) break;
+      const place = await store.getPlace(slug);
+      if (!place) continue;
+      let menu = place.cached_menu || '';
+      if (menu) onStep({ kind: 'tool', name: 'cachedMenu', detail: place.name });
+      else {
+        onStep({ kind: 'tool', name: 'menuLookup', detail: place.name });
+        const got = await gatherMenu(place);
+        menu = got.menu;
+        if (menu) { place.cached_menu = menu.slice(0, 8000); place.cached_menu_date = today(); place.menu_url = got.menuUrl || place.menu_url; place.cached_menu_sources = got.sources; await store.putPlace(slug, place); }
+      }
+      onStep({ kind: 'tool', name: 'judge', detail: place.name });
+      const v = await judge.evaluate({ spec, person, place, menu, signal });
+      await store.putVerdict(slug, {
+        place_id: place.place_id || '', name: place.name, verdict: v.verdict, evaluated_for: evaluatedFor,
+        evaluated_date: today(), summary: v.summary, promising_dishes: v.promising_dishes, avoid_outright: v.avoid_outright, kitchen_flexibility: v.kitchen_flexibility,
+      });
+      if (v.cuisine && !place.cuisine) { place.cuisine = v.cuisine; await store.putPlace(slug, place); }
+      results.push({ slug, name: place.name, verdict: v.verdict, summary: v.summary });
+      onStep({ kind: 'tool', name: `verdict:${v.verdict}`, detail: place.name });
+    }
+    const tally = results.reduce((m, r) => ((m[r.verdict] = (m[r.verdict] || 0) + 1), m), {});
+    return { ok: true, city: cityName || undefined, evaluated: results.length, remaining: Math.max(0, todo.length - batch.length), tally, results };
+  };
+
   const listCities = () => cityList(cities);
 
-  return { scan, listCities, slugify };
+  return { scan, evaluate, listCities, slugify };
 };
