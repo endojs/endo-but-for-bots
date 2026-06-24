@@ -230,17 +230,15 @@ const amplifyArrayBuffer = arrayBuffer => {
  */
 export const immutableArrayBufferLibProperties = {
   __proto__: null,
-  /**
-   * @this {ArrayBuffer}
-   */
+  // A `this` parameter cannot be declared on an accessor (tsgo TS2784), so the
+  // accessor bodies narrow `this` to ArrayBuffer with an inline cast instead.
   get byteLength() {
-    return apply(arrayBufferByteLength, amplifyArrayBuffer(this), []);
+    const buf = /** @type {ArrayBuffer} */ (/** @type {unknown} */ (this));
+    return apply(arrayBufferByteLength, amplifyArrayBuffer(buf), []);
   },
-  /**
-   * @this {ArrayBuffer}
-   */
   get detached() {
-    if (isEmulatedImmutable(this)) {
+    const buf = /** @type {ArrayBuffer} */ (/** @type {unknown} */ (this));
+    if (isEmulatedImmutable(buf)) {
       return false;
     }
     // Genuine `ArrayBuffer.prototype.detached` is a stage-finished accessor
@@ -250,39 +248,34 @@ export const immutableArrayBufferLibProperties = {
     if (optArrayBufferDetached === undefined) {
       return false;
     }
-    return apply(optArrayBufferDetached, this, []);
+    return apply(optArrayBufferDetached, buf, []);
   },
-  /**
-   * @this {ArrayBuffer}
-   */
   get maxByteLength() {
-    if (isEmulatedImmutable(this)) {
+    const buf = /** @type {ArrayBuffer} */ (/** @type {unknown} */ (this));
+    if (isEmulatedImmutable(buf)) {
       // For an emulated immutable buffer, maxByteLength is byteLength: it
       // cannot grow.
-      return apply(arrayBufferByteLength, amplifyArrayBuffer(this), []);
+      return apply(arrayBufferByteLength, amplifyArrayBuffer(buf), []);
     }
     if (optArrayBufferMaxByteLength === undefined) {
-      return apply(arrayBufferByteLength, this, []);
+      return apply(arrayBufferByteLength, buf, []);
     }
-    return apply(optArrayBufferMaxByteLength, this, []);
+    return apply(optArrayBufferMaxByteLength, buf, []);
   },
-  /**
-   * @this {ArrayBuffer}
-   */
   get resizable() {
-    if (isEmulatedImmutable(this)) {
+    const buf = /** @type {ArrayBuffer} */ (/** @type {unknown} */ (this));
+    if (isEmulatedImmutable(buf)) {
       return false;
     }
     if (optArrayBufferResizable === undefined) {
       return false;
     }
-    return apply(optArrayBufferResizable, this, []);
+    return apply(optArrayBufferResizable, buf, []);
   },
-  /**
-   * @this {ArrayBuffer}
-   */
   get immutable() {
-    return isEmulatedImmutable(this);
+    return isEmulatedImmutable(
+      /** @type {ArrayBuffer} */ (/** @type {unknown} */ (this)),
+    );
   },
   /**
    * @this {ArrayBuffer}
