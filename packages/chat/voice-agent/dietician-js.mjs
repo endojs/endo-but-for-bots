@@ -1,0 +1,104 @@
+// dietician-js.mjs — the dietician power, CUT OVER from SSH-driving the agent-dietician persona to the
+// in-process JS port (packages/chat/dietician-app). All COMPUTE — scan (with on-the-fly geocoding of a NEW
+// city), evaluate (cached-menu preferred, else the field agent's web caps), buildMap, status — runs in JS over
+// dan's imported instance store (parity with the persona DB). PUBLISHING the two LIVE public guides still
+// rides the existing deploy lane: dietRefreshSite generates the guide HTML in JS, then (only on confirm) writes
+// it to the persona's git-deploy repos + pushes, so eats-guide.chu / disneyland-food-guide.chu keep working —
+// now JS-powered. The old SSH bridge (dietician.mjs) stays as a fallback. Exports mirror dietician.mjs so the
+// power verbs are unchanged. (Google Places + Anthropic keys are read from the secret registry by the
+// providers, server-side, never reaching the agent.)
+import { execFile } from 'node:child_process';
+
+import { makeFsFolder } from '../dietician-app/fs-folder.mjs';
+import { makeDietStore } from '../dietician-app/store.mjs';
+import { makePipeline } from '../dietician-app/core.mjs';
+import * as places from '../dietician-app/providers/places.mjs';
+import { makeJudge } from '../dietician-app/providers/judge.mjs';
+import { makeAnthropicComplete } from '../dietician-app/providers/anthropic.mjs';
+import { SEED_CITIES } from '../dietician-app/cities.mjs';
+
+const HOME = process.env.HOME || '/home/dan';
+const PERSON = process.env.DIET_PERSON || 'alexa';
+const INSTANCE_ROOT = process.env.DIET_ROOT_DIR || `${HOME}/.local/state/dietician-app/instances/${PERSON}`;
+const HOST = process.env.DIETICIAN_HOST || 'agent@10.89.0.8'; // used ONLY for the publish step (write HTML → git push)
+
+const store = makeDietStore(makeFsFolder(INSTANCE_ROOT), { person: PERSON });
+const judge = makeJudge({ complete: makeAnthropicComplete() });
+const basePipe = makePipeline({ store, places, judge, person: PERSON }); // scan/buildMap/generate/status (no web)
+
+const slugify = s => String(s || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+
+// the two published guides → { which guide, the persona git-deploy repo dir }
+const SITES = {
+  'eats-guide': { which: 'eats', dir: '~/eats-guide', title: 'Eats Guide' },
+  'disneyland-food-guide': { which: 'disney', dir: '~/disneyland-food-guide', title: 'Disneyland Food Guide' },
+};
+export const DIET_SITES = harden(Object.keys(SITES));
+
+const ssh = (cmd, timeoutMs = 120000) => new Promise(resolve =>
+  execFile('ssh', ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=8', HOST, '--', cmd],
+    { timeout: timeoutMs, maxBuffer: 32 * 1024 * 1024 },
+    (err, so, se) => resolve({ ok: !err, code: err?.code ?? 0, stdout: String(so || ''), stderr: String(se || '').slice(0, 4000) })));
+const b64 = s => Buffer.from(String(s ?? ''), 'utf8').toString('base64');
+const sshWrite = (remotePath, content) => ssh(`mkdir -p "$(dirname ${remotePath})" && echo ${b64(content)} | base64 -d > ${remotePath}`, 30000);
+
+// ── SCAN — a known city, OR a NEW city geocoded on the fly (the "scan a new city" path) ──
+export const scanArea = async city => {
+  const c = slugify(city);
+  if (!c) return harden({ ok: false, error: 'a city is required (e.g. "oakland", "berlin")' });
+  if (SEED_CITIES[c]) return harden(await basePipe.scan(c));
+  const g = await places.geocode(city);
+  if (!g.ok) return harden({ ok: false, error: `"${city}" isn't a configured city and I couldn't geocode it — ${g.error}` });
+  const r = await basePipe.scan({ slug: c, name: g.name, center: { latitude: g.lat, longitude: g.lng }, radius: 5000, cap: 20 });
+  return harden({ ...r, geocoded: { name: g.name, lat: g.lat, lng: g.lng }, note: `Auto-geocoded "${g.name}". ${r.note || ''}` });
+};
+
+// ── EVALUATE — cached_menu preferred; else the field agent's web caps (passed in as `tools`) ──
+export const evaluateArea = async ({ city, limit = 3, tools = {}, onStep = () => {}, signal } = {}) => {
+  const pipe = makePipeline({ store, places, judge, web: tools, person: PERSON });
+  return harden(await pipe.evaluate({ city: slugify(city), limit, onStep, signal }));
+};
+
+// ── BUILD MAP — rebuild safe-eats.kml from the evaluated DB ──
+export const buildMap = async () => {
+  const r = await basePipe.buildMap();
+  return harden({ ok: r.ok, total: r.total, viable: r.viable, borderline: r.borderline,
+    output: `safe-eats.kml rebuilt — ${r.viable} VIABLE + ${r.borderline} BORDERLINE (${r.bytes} bytes).`, error: r.ok ? '' : 'build failed' });
+};
+
+// ── STATUS — verdict counts + the published guides (read-only) ──
+export const status = async () => {
+  const counts = await store.counts();
+  const sites = {};
+  for (const [name, s] of Object.entries(SITES)) sites[name] = { title: s.title, which: s.which };
+  return harden({ ok: true, verdicts: { VIABLE: counts.VIABLE, BORDERLINE: counts.BORDERLINE, SKIP: counts.SKIP, UNKNOWN: counts.UNKNOWN },
+    total_evaluated: counts.total, sites, source: 'dietician-app (in-process JS port)' });
+};
+
+// ── REGEN (propose) — generate the guide HTML in JS + report what would publish ──
+export const regenSite = async site => {
+  const cfg = SITES[site];
+  if (!cfg) return harden({ ok: false, error: `unknown site "${site}". Known: ${Object.keys(SITES).join(', ')}` });
+  const r = await basePipe.generateGuide(cfg.which);
+  if (!r.ok) return harden({ ok: false, error: r.error || 'generate failed' });
+  return harden({ ok: true, site, changedFiles: ['site/index.html', 'site/sort.js'], willPublish: true,
+    regenOutput: `${cfg.title}: ${r.cards} cards (${r.viable} VIABLE + ${r.borderline} BORDERLINE${r.hotel != null ? `, +${r.hotel} near the hotel` : ''}).` });
+};
+
+// ── PUBLISH (commit) — write the JS-generated HTML into the persona's git-deploy repo + push ──
+export const publishSite = async (site, message) => {
+  const cfg = SITES[site];
+  if (!cfg) return harden({ ok: false, error: `unknown site "${site}"` });
+  await basePipe.generateGuide(cfg.which); // ensure fresh artifacts in the instance store
+  const html = await store.readArtifact(`site/${cfg.which}/index.html`);
+  const js = await store.readArtifact(`site/${cfg.which}/sort.js`);
+  if (!html) return harden({ ok: false, error: 'no generated guide to publish — regen first' });
+  const w = await sshWrite(`${cfg.dir}/site/index.html`, html);
+  if (!w.ok) return harden({ ok: false, error: `could not write to the deploy repo: ${(w.stderr || '').slice(0, 200)}` });
+  if (js) await sshWrite(`${cfg.dir}/site/sort.js`, js);
+  const msg = String(message || `refresh ${site}`).replace(/["`$\\]/g, '').slice(0, 100) || `refresh ${site}`;
+  const r = await ssh(`cd ${cfg.dir} && git add -A && (git diff --cached --quiet && echo "no changes" || (git commit -m "${msg}" && git push)) 2>&1`, 120000);
+  return harden({ ok: r.ok, site, output: (r.stdout + r.stderr).slice(-500), note: r.ok ? 'Published — archua-deploy will build + serve the JS-generated guide.' : 'publish failed' });
+};
+
+harden(scanArea); harden(evaluateArea); harden(buildMap); harden(status); harden(regenSite); harden(publishSite);

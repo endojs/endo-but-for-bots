@@ -71,7 +71,7 @@ import { buildSystemMap } from './system-map.mjs';
 import { braveSearch } from './brave-search.mjs';
 import { runResearch } from './research.mjs';
 import { getRole, roleList, localModelFor } from './agent-roles.mjs';
-import { scanArea as dietScan, evaluateArea as dietEval, buildMap as dietBuild, regenSite as dietRegen, publishSite as dietPublish, status as dietStat, DIET_SITES } from './dietician.mjs';
+import { scanArea as dietScan, evaluateArea as dietEval, buildMap as dietBuild, regenSite as dietRegen, publishSite as dietPublish, status as dietStat, DIET_SITES } from './dietician-js.mjs';
 import { makeHaTrie } from './homeassistant-trie.mjs';
 import { makeAgentRoster } from './agents-roster.mjs';
 import { makeHomeFolder } from './agent-home.mjs';
@@ -1158,12 +1158,14 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
       description: 'PROPOSE awarding or docking coins on your own Kazputer. Does NOT fire — you confirm first.',
       run: async ({ coins }, agent) => propose({ type: 'kazputer-coins', power: 'kazputer', agent, title: `Kazputer: ${Number(coins) >= 0 ? '+' : ''}${Number(coins) || 0} coins`, summary: 'adjust the coin balance',
         detail: { coins: Number(coins) || 0 }, commit: () => (kazAdmin ? kazAdmin.award(Number(coins) || 0) : { ok: false, error: 'no kazputer admin' }) }) },
-    // ── DIETICIAN pipeline — SSH-driven on the agent-dietician persona (the Google Places key + the
-    //    proven Python tools stay there; the field agent never holds the key). Scan/evaluate/build
-    //    mutate only the dietician's own DB (contained); PUBLISHING a site is OUTWARD → dietRefreshSite
-    //    only PROPOSES (you confirm before anything goes live). The MAIN bot is now the intake. ──
-    dietScanArea: { reversible: false, args: { city: 'string — a city slug, e.g. "berlin", "oakland", "san-francisco"' },
-      description: "Scan an area's restaurants for Alexa's diet (a Google Places sweep on the dietician persona; dedupes against what's known). Returns the new candidate restaurants. Then dietEvaluateArea to judge them.",
+    // ── DIETICIAN pipeline — CUT OVER from SSH-driving the persona to the dietician-app's
+    //    in-process JS port (packages/chat/dietician-app) over the host's instance store; the Places +
+    //    Anthropic keys are read from the secret registry server-side, never reaching the agent). Scan
+    //    (auto-geocodes new cities) / evaluate / build mutate only the local instance DB (contained);
+    //    PUBLISHING a guide is OUTWARD → dietRefreshSite only PROPOSES (you confirm; on confirm it writes the
+    //    JS-generated HTML to the deploy lane so the live public guides keep updating). ──
+    dietScanArea: { reversible: false, args: { city: 'string — a city slug or name, e.g. "berlin", "oakland", "san-francisco". A city not yet configured is auto-geocoded so you can scan ANYWHERE.' },
+      description: "Scan an area's restaurants against the household diet (a Google Places sweep, in-process; dedupes against what's known; a NEW city is auto-geocoded first). Returns the new candidate restaurants. Then dietEvaluateArea to judge them.",
       run: async ({ city }) => dietScan(city) },
     dietEvaluateArea: { reversible: false, args: { city: 'string — the city you just scanned', limit: 'number — how many to evaluate this call (default 3, max 8)' },
       description: "Evaluate scanned restaurants against Alexa's diet: finds each menu, judges VIABLE / BORDERLINE / SKIP / UNKNOWN with a strong model, and records the verdict. Idempotent (skips ones already done). Run dietScanArea(city) first. A batch can take a minute or two.",
