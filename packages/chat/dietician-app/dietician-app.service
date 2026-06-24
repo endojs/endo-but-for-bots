@@ -1,0 +1,30 @@
+# dietician-app.service — systemd --user unit for the portable dietician (Endo capability).
+# Install:  cp dietician-app.service ~/.config/systemd/user/  &&  systemctl --user daemon-reload
+#           systemctl --user enable --now dietician-app
+# Logs to a FILE (not the journal): tail ~/.local/state/dietician-app/svc.log
+# Bind is loopback by default; for tailnet access set DIET_BIND + DIET_BASE_URL to the tailnet IP.
+# PUBLIC chu-bind is an explicit, separate operator step (an ngrok --domain sidecar) — never a default.
+[Unit]
+Description=Dietician — portable restaurant-safety guide (Endo capability, JS port of agent-dietician)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/dan/endo-bfb-llm/packages/chat/dietician-app
+Environment=DIET_PERSON=alexa
+Environment=DIET_PORT=8782
+Environment=DIET_BIND=127.0.0.1
+# Environment=DIET_BIND=127.0.0.1,100.x.y.z          # add the tailnet IP for LAN/tailnet access
+# Environment=DIET_BASE_URL=http://100.x.y.z:8782    # so minted share links use the reachable base
+ExecStartPre=/usr/bin/mkdir -p /home/dan/.local/state/dietician-app
+ExecStart=/usr/bin/env node grunt.mjs
+Restart=on-failure
+RestartSec=3
+# KillMode=process so a restart doesn't reap any child the app spawned.
+KillMode=process
+StandardOutput=append:/home/dan/.local/state/dietician-app/svc.log
+StandardError=append:/home/dan/.local/state/dietician-app/svc.log
+
+[Install]
+WantedBy=default.target

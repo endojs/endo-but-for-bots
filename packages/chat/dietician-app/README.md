@@ -80,9 +80,13 @@ never logged, never on screen.
   locator + per-person seeds + `instances.json` persistence. Mints fully-ISOLATED instances (own store + diet),
   returns owner + guide `#cap=` urls, lists people (never swissnums), survives restart. *Proven: `yarn
   test:prov` (10/10) + a live HTTP `newInstance("bob")` → his own `diet.md` on disk, `list` leaks no swissnum.*
-- [ ] **Slice 10** — `dietician-app.service` + `GUIDE.md`; re-point the voice-agent `dietician` power at a
-  held `DietConsole` cap (retire the SSH internals). *Needs dan's go for the public-guide publishing change.*
-- [ ] **Slice 11** *(explicit)* — public chu-bind (ngrok `--domain` sidecar), per-instance operator step only.
+- [x] **Slice 10 (deployable artifacts)** — `dietician-app.service` (systemd --user; loopback by default,
+  tailnet via env) + `GUIDE.md` ("run your own dietician" + an `#agent-manifest` so an LLM holding a
+  guide/scanner link can drive + re-delegate it headlessly over `/rpc`). **The live cutover** — re-pointing the
+  voice-agent `dietician` power at a held `DietConsole` cap and retiring the persona's git-push publishing for
+  the two public guides — stays **dan-gated** (it changes how those public URLs are served).
+- [ ] **Slice 11** *(explicit operator step)* — public chu-bind (ngrok `--domain` sidecar); per dan's standing
+  policy that public exposure is never a default.
 
 ## Run
 
