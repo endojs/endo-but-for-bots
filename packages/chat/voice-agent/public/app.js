@@ -1066,6 +1066,12 @@ const sendChat = async (text, { spoken = false, audio = null, attachments = [], 
     if (attachments.length) payload.attachments = attachments.map(a => ({ kind: a.kind, name: a.name, mediaType: a.mediaType, url: a.dataUrl, text: a.text }));
     const cr = await fetch('/chat', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) });
     if (stale()) return true;        // superseded by a newer turn — composer already moved on
+    // A long turn (e.g. a big dietician evaluate) can outlive the PUBLIC PROXY's request timeout — /chat is a
+    // single blocking POST that sends nothing until the turn finishes, so ngrok times out the edge and returns
+    // its own HTML error page. Don't feed that to JSON.parse (the "Unexpected token '<', <!DOCTYPE…" bug): the
+    // turn is still running server-side, so treat a non-JSON/!ok response exactly like a dropped connection and
+    // let the resume machinery reattach + deliver the answer when it lands.
+    if (!cr.ok || !/application\/json/i.test(cr.headers.get('content-type') || '')) throw new Error('gateway-timeout: the proxy returned a non-JSON response (the turn is likely still running) — resuming');
     const r = await cr.json();
     if (stale() || r.cancelled) return true;
     // PROVIDER ERROR (429/overload/unreachable): a TRANSIENT retry card, NOT a persisted answer — so it
@@ -1089,7 +1095,7 @@ const sendChat = async (text, { spoken = false, audio = null, attachments = [], 
     // restarted. Render a PERSISTENT, legible bubble (not just a transient status) so the run never
     // stalls silently; the user's message is already saved, so a re-send retries it.
     if (!stale()) {
-      const dropped = /Failed to fetch|NetworkError|load failed|aborted/i.test(e.message || '');
+      const dropped = /Failed to fetch|NetworkError|load failed|aborted|gateway-timeout/i.test(e.message || '');
       if (dropped) {
         // The connection dropped mid-run (usually a server restart). Do NOT persist a dead agent turn —
         // that would bury the user turn and block auto-resume. Leave the user turn unanswered, show a
