@@ -1,7 +1,8 @@
-// magic-wand.test.mjs — the magic wand for specialists (vault [[magic wand]] + designs/self-healing-errors.md):
-// when an agent names a specialist that doesn't exist, MATERIALIZE it instead of erroring — confined to a
-// SUBSET of the caller (the cap-graph bound, so it can never escalate). Tested with an INJECTED filler (no
-// model in the loop): fillMissingSpecialist only infers + spawns, so the confinement is fully deterministic.
+// magic-wand.test.mjs — the POLICY-GATED magic wand for specialists (vault [[magic wand]] + Phase 5 of the
+// ocap-designate-by-reference plan). Auto-minting a named-but-missing specialist now requires a HELD wand
+// policy (caller.wandBinding) that ENUMERATES allowed specializations; the minted authority is the matched
+// entry's power ceiling ∩ the caller (never the LLM); an unlisted name or an unheld policy → graceful miss.
+// Tested with an injected policy (+ optional injected filler) so it's fully deterministic — no model in the loop.
 import '@endo/init';
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -10,43 +11,52 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { makeFieldAgent } from './agent-caps.mjs';
 
-const mk = fillSpecialist => {
+const mk = ({ wandPolicy, fillSpecialist } = {}) => {
   const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fa-wand-'));
-  return makeFieldAgent({ outDir, baseUrl: 'http://test.invalid', autoConfirmFile: path.join(outDir, 'auto.json'), specialistsFile: path.join(outDir, 'specialists.json'), fillSpecialist });
+  return makeFieldAgent({ outDir, baseUrl: 'http://test.invalid', autoConfirmFile: path.join(outDir, 'auto.json'), specialistsFile: path.join(outDir, 'specialists.json'), wandPolicy, fillSpecialist });
 };
 const spawn = (fa, name, powers) => fa.rootNode.toolbox({ chatId: 't' }).toolbox.spawnSpecialist.run({ name, domain: 'x', powers });
 
-test('magic wand: a missing specialist is MATERIALIZED, confined ⊆ the caller (a greedy filler is clamped)', async () => {
-  // the filler greedily requests powers the caller does NOT hold + a non-delegable one
-  const fa = mk(async () => ({ domain: 'research', powers: ['notes', 'web', 'home', 'subagent'], instructions: 'be helpful' }));
-  const child = await spawn(fa, 'Limited Caller', ['notes', 'web']); // caller holds only notes+web
+test('policy-gated wand: a name MATCHING the policy is materialized, ⊆ entry ceiling ∩ caller', async () => {
+  // entry ceiling is generous (incl. home + non-delegable subagent); the caller holds only notes+web
+  const fa = mk({ wandPolicy: [{ match: '*researcher*', powers: ['notes', 'web', 'home', 'subagent'], domain: 'research', instructions: 'research' }] });
+  const child = await spawn(fa, 'Limited Caller', ['notes', 'web']);
   const caller = fa.specialistFor(child.id).node;
-  const made = await fa.fillMissingSpecialist({ name: 'Doc Finder', request: 'find the spec', caller });
-  assert.ok(made && made.ok, 'the wand materialized the specialist');
+  const made = await fa.fillMissingSpecialist({ name: 'copenhagen-researcher', request: 'find spots', caller });
+  assert.ok(made && made.ok, 'matched the policy → materialized');
   const g = new Set(made.granted);
-  assert.ok(g.has('notes') && g.has('web'), 'keeps the powers the caller holds');
-  assert.ok(!g.has('home'), 'drops a power the caller does NOT hold — no escalation');
-  assert.ok(!g.has('subagent'), 'drops a non-delegable power even when requested');
-  const created = fa.specialistFor(made.id);
-  assert.ok(created, 'the new specialist is registered + reachable by name');
-  for (const p of created.node.powers) assert.ok(caller.powers.has(p), `power "${p}" is within the caller's bounds`);
+  assert.ok(g.has('notes') && g.has('web'), 'gets the entry powers the caller also holds');
+  assert.ok(!g.has('home'), 'entry allowed home but the CALLER lacks it → dropped (⊆ caller)');
+  assert.ok(!g.has('subagent'), 'non-delegable dropped even when the entry lists it');
+  assert.equal(made.viaPolicy, '*researcher*', 'records which policy entry authorized it');
 });
 
-test('magic wand: no filler wired → a missing specialist stays a graceful miss (today\'s behavior)', async () => {
-  const fa = mk(undefined);
-  assert.equal(await fa.fillMissingSpecialist({ name: 'X', caller: fa.rootNode }), null);
-});
-
-test('magic wand: the filler declines (null) → nothing is created', async () => {
-  const fa = mk(async () => null);
-  assert.equal(await fa.fillMissingSpecialist({ name: 'X', caller: fa.rootNode }), null);
-});
-
-test('magic wand: a caller with no delegable powers yields an empty-but-valid specialist (still ⊆ caller)', async () => {
-  const fa = mk(async () => ({ domain: 'x', powers: ['notes', 'web'], instructions: 'hi' }));
-  const child = await spawn(fa, 'Powerless', []); // caller holds nothing to grant
-  const caller = fa.specialistFor(child.id).node;
-  const made = await fa.fillMissingSpecialist({ name: 'Empty Helper', request: 'x', caller });
+test('policy-gated wand: the entry CEILING bounds even an all-powerful (root) caller', async () => {
+  const fa = mk({ wandPolicy: [{ match: '*planner*', powers: ['notes'], domain: 'plan', instructions: 'plan' }] });
+  const made = await fa.fillMissingSpecialist({ name: 'trip-planner', request: 'plan', caller: fa.rootNode });
   assert.ok(made && made.ok);
-  assert.deepEqual(made.granted, [], 'cannot grant powers the caller does not hold');
+  assert.deepEqual(made.granted, ['notes'], 'only the entry-ceiling power, not all of root\'s authority');
+});
+
+test('policy-gated wand: a name matching NO entry → graceful miss (nothing minted)', async () => {
+  const fa = mk({ wandPolicy: [{ match: '*researcher*', powers: ['notes'] }] });
+  assert.equal(await fa.fillMissingSpecialist({ name: 'exfiltrator', request: 'x', caller: fa.rootNode }), null);
+});
+
+test('policy-gated wand: a caller that does NOT hold a wand policy cannot mint', async () => {
+  const fa = mk({ wandPolicy: [{ match: '*researcher*', powers: ['notes'] }] });
+  // a caller object with powers but NO wandBinding (stands in for a node not granted the wand)
+  assert.equal(await fa.fillMissingSpecialist({ name: 'x-researcher', request: 'x', caller: { powers: new Set(['notes', 'web']) } }), null);
+});
+
+test('policy-gated wand: the LLM filler only flavours domain/instructions — never authority', async () => {
+  let shown = null;
+  const fa = mk({
+    wandPolicy: [{ match: '*helper*', powers: ['notes'] }], // entry has NO domain/instructions → filler fills those
+    fillSpecialist: async ({ availablePowers }) => { shown = availablePowers; return { domain: 'flavoured', powers: ['home', 'subagent'], instructions: 'flavoured persona' }; },
+  });
+  const made = await fa.fillMissingSpecialist({ name: 'doc-helper', request: 'x', caller: fa.rootNode });
+  assert.ok(made && made.ok);
+  assert.deepEqual(made.granted, ['notes'], 'powers come from the POLICY entry, NOT the filler\'s greedy request');
+  assert.deepEqual([...shown].sort(), ['notes'], 'the filler only ever sees the already-granted powers');
 });

@@ -78,14 +78,17 @@ caller's bounds — the cap graph still bounds it), then resolve the call. Same 
 its own naming slip — and it's reconciled with the obstacle-course "babying" critique because it heals a
 *sub-agent's* clear intent **out-of-band + logged**, never widening authority.
 
-**Adopted: missing specialists.** `agent-caps.mjs` `fillMissingSpecialist({ name, request, caller })` —
-`askSpecialist("name-that-doesn't-exist")` no longer returns "no such specialist"; an injected `fillSpecialist`
-infers the intended `{domain, powers, instructions}`, the powers are **enforced ⊆ the caller** (`caller.powers`
-∩ requested − non-delegable — a greedy filler is clamped, never escalates), it's spawned (`spawnedFrom: wand:…`),
-and the call proceeds; the answer carries `autoCreated` for audit. Server wires an LLM filler; `SELF_HEAL=0`
-or no filler → today's graceful miss. Proven in `magic-wand.test.mjs` (materialize + clamp greedy filler ⊆
-caller + no-filler graceful + filler-declines). **Ladder next:** unknown custom-tool call → build it
-(the obstacle-course blacksmith); unknown role/task target → configure it.
+**Adopted: missing specialists (POLICY-GATED).** `agent-caps.mjs` `fillMissingSpecialist({ name, request,
+caller })` — `askSpecialist("name-that-doesn't-exist")` no longer returns "no such specialist". But auto-minting
+is **gated by a held wand policy** (`caller.wandBinding`, `wand-policy.mjs`) that **enumerates** which
+specializations may be minted + each one's **power ceiling** — this is Phase 5 of the ocap-by-reference plan, so
+the wand isn't "any name → new authority". The minted authority is `entry.powers ∩ caller` (the policy ceiling
+*and* the caller bound; non-delegable dropped). The LLM filler, if wired, only **flavours** domain/instructions
+— never authority. No held policy / a name matching no entry → graceful miss; `SELF_HEAL=0` disables the filler
+flavour. Policy = `~/.config/field-agent/wand-policy.json` (or the conservative `DEFAULT_WAND_POLICY`). Proven
+in `magic-wand.test.mjs` (materialize ⊆ entry∩caller, entry-ceiling bounds even root, unlisted-name miss,
+unheld-policy can't mint, filler-flavours-not-authority). **Ladder next:** unknown custom-tool call → build it
+(the obstacle-course blacksmith, also policy-gated); unknown role/task target → configure it.
 
 ## Adopted now
 

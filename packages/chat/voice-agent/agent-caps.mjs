@@ -42,6 +42,7 @@ import { proposeSpawn } from '../capture/agent-spawn.mjs';
 import { runOpusDelegate } from './delegate.mjs';
 import { makeSelfImprover } from './self-improver.mjs';
 import { listBacklog, addBacklog, nextOpen, recordOutcome, normalizeTestCmd, missingTargets } from './improvement-backlog.mjs';
+import { makeWandPolicy, DEFAULT_WAND_POLICY } from './wand-policy.mjs';
 import { runAgent } from '../../ocapn-noise/tool-bridge.mjs';
 import { runAgentCode } from '../../ocapn-noise/codemode.mjs';
 import { dialIrohObject } from './iroh-objects.mjs';
@@ -538,7 +539,7 @@ export const resolvePower = name => { const n = String(name || ''); return POWER
 // ── build the agent. Returns the locator + a root node holding ALL powers. ────
 // makeFieldAgent({ outDir, baseUrl }) →
 //   { locator, register, rootNode, rootSwiss(set later), toolboxFor, manifestFor }
-export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFile, fillSpecialist, peerBridge = endoPeer, peerRedemption = process.env.FIELD_AGENT_PEER_REDEMPTION === '1' } = {}) => {
+export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFile, fillSpecialist, wandPolicy, peerBridge = endoPeer, peerRedemption = process.env.FIELD_AGENT_PEER_REDEMPTION === '1' } = {}) => {
   const aff = makeAffordances({ outDir });
   // worktree manager for write-capable role sub-agents (runs on the UNCONFINED host shell).
   const worktrees = makeWorktrees({ host: aff.host });
@@ -734,6 +735,11 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
   // refs; you can't name what you don't hold). Tracked as urgent maintenance: ~/TODO/ocap-designate-by-reference.md.
   // Until then: do NOT add new string-name capability designation.
   const META_POWERS = new Set(['subagent', 'app', 'selfImprove']);
+  // WAND POLICY (Phase 5): the held authority to auto-mint a specialist on a name-miss — option → ~/.config
+  // file → conservative default. A node only auto-mints if it HOLDS this (node.wandBinding) AND the name matches
+  // an enumerated entry; minted powers are entry.powers ∩ caller. Nodes that don't hold it → graceful miss.
+  const loadWandPolicyFile = () => { try { const j = JSON.parse(fs.readFileSync('/home/dan/.config/field-agent/wand-policy.json', 'utf8')); return Array.isArray(j) ? j : (j.entries || []); } catch { return null; } };
+  const wand = makeWandPolicy(wandPolicy || loadWandPolicyFile() || DEFAULT_WAND_POLICY);
   let specialists = [];
   try { specialists = JSON.parse(fs.readFileSync(SPECIALISTS_FILE, 'utf8')).specialists || []; } catch { specialists = []; }
   const saveSpecialists = () => { try { fs.mkdirSync(path.dirname(SPECIALISTS_FILE), { recursive: true }); fs.writeFileSync(SPECIALISTS_FILE, JSON.stringify({ specialists }, null, 2), { mode: 0o600 }); } catch (e) { /* best effort */ } };
@@ -1889,12 +1895,12 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
 
   // A node = a holder of a SUBSET of powers, with the right to use + re-share
   // them. The root holds ALL_POWERS. share() mints a child node (single power).
-  const makeAgentNode = ({ powers, labelOf = 'agent', name = '', isRoot = false, haBinding = null, agBinding = null, contactsBinding = null, homeBinding = null, timersBinding = null, notesBinding = null, cwdBinding = null, id = null }) => {
+  const makeAgentNode = ({ powers, labelOf = 'agent', name = '', isRoot = false, haBinding = null, agBinding = null, contactsBinding = null, homeBinding = null, timersBinding = null, notesBinding = null, cwdBinding = null, wandBinding = null, id = null }) => {
     const powerSet = new Set(powers);
     const shares = new Map(); // swiss → { power, label, createdAt, url, ha? }
     // homeBinding = () → this cap's home folder object (its own sub-dir).
     const home = homeBinding || (() => makeHome(isRoot ? 'root' : `cap-${labelOf}`.replace(/[^\w-]/g, '_').slice(0, 40)));
-    const node = { powers: powerSet, isRoot, haBinding, agBinding, contactsBinding, homeBinding: home, timersBinding, notesBinding, cwdBinding };
+    const node = { powers: powerSet, isRoot, haBinding, agBinding, contactsBinding, homeBinding: home, timersBinding, notesBinding, cwdBinding, wandBinding };
     // Stable agent identity for auto-confirm rules. Must be UNIQUE per cap — shares
     // pass their swissnum as `id` so two same-LABEL shares don't collide (and thus
     // can't leak one's "don't ask again" rule onto the other). Specialists pass no
@@ -2165,13 +2171,13 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
     return node;
   };
 
-  const rootNode = makeAgentNode({ powers: ALL_POWERS, labelOf: 'root', isRoot: true, haBinding: () => haTrie?.root || null, agBinding: () => agentRoster?.root || null, contactsBinding: () => contactsObj });
+  const rootNode = makeAgentNode({ powers: ALL_POWERS, labelOf: 'root', isRoot: true, haBinding: () => haTrie?.root || null, agBinding: () => agentRoster?.root || null, contactsBinding: () => contactsObj, wandBinding: () => wand });
 
   // ── specialist lifecycle (uses makeAgentNode + the locator) ─────────────────
   // Build a specialist's node: confined to its granted powers, its own id (so its
   // proposals + auto-confirm rules scope to it), inheriting the root HA/agent bindings.
   const registerSpecialist = spec => {
-    const node = makeAgentNode({ powers: spec.powers, labelOf: spec.id, id: spec.id, haBinding: () => haTrie?.root || null, agBinding: () => agentRoster?.root || null });
+    const node = makeAgentNode({ powers: spec.powers, labelOf: spec.id, id: spec.id, haBinding: () => haTrie?.root || null, agBinding: () => agentRoster?.root || null, wandBinding: () => wand }); // inherits the wand policy (still gated by entries + ⊆ this node)
     specNodes.set(spec.id, node);
     if (spec.swiss) locator.set(spec.swiss, { node }); // its own invite link — directly addressable
     return node;
@@ -2199,20 +2205,28 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
   };
   // Run a specialist (gemma) with ITS confined bundle + ITS instructions. Its proposals
   // / auto-fires are scoped to its id and bubble up to the caller's turn (server merges).
-  // MAGIC WAND for specialists (vault: [[magic wand]] + designs/self-healing-errors.md): the agent named a
-  // specialist that doesn't exist. Rather than bubble a "no such specialist" error into the caller's context,
-  // MATERIALIZE the intended one — fillSpecialist (injected) infers its domain/powers/instructions from the
-  // name + request; we ENFORCE the powers to a SUBSET of the caller (the cap-graph bound — it can never
-  // escalate), spawn it, and hand it back (spawnedFrom records the wand). Returns the created spec, or null
-  // (no filler wired / inference failed) → the caller falls back to the plain "no such specialist".
+  // MAGIC WAND for specialists (vault: [[magic wand]] + designs/self-healing-errors.md), POLICY-GATED (Phase 5
+  // of the ocap-by-reference plan): the agent named a specialist that doesn't exist. Rather than bubble a "no
+  // such specialist" error into the caller's context, MATERIALIZE it — BUT only if the caller HOLDS a wand
+  // policy (caller.wandBinding) AND the name matches an ENUMERATED specialization in it. The AUTHORITY of the
+  // minted specialist comes from the policy entry's power ceiling ∩ the caller (never from the LLM); the LLM
+  // filler, if wired, only enriches the domain/instructions (flavour). No held policy / unlisted name → null
+  // (→ the caller falls back to the plain "no such specialist"). So auto-minting is a held, enumerated, bounded
+  // authority — not "any name conjures new powers".
   const fillMissingSpecialist = async ({ name, request = '', origin = '', caller } = {}) => {
-    if (typeof fillSpecialist !== 'function' || !caller || !caller.powers) return null;
-    let cfg = null;
-    try { cfg = await fillSpecialist({ name: String(name || ''), request: String(request || ''), origin: String(origin || ''), availablePowers: [...caller.powers] }); } catch { cfg = null; }
-    if (!cfg) return null;
-    const granted = [...new Set((Array.isArray(cfg.powers) ? cfg.powers : []).filter(p => caller.powers.has(p) && !META_POWERS.has(p)))]; // ⊆ caller — the wand forges, never escalates
-    const made = spawnSpecialist({ name: String(name || 'specialist'), domain: cfg.domain || '', powers: granted, instructions: cfg.instructions || '', spawnedFromChatId: `wand:${String(name || '').slice(0, 40)}` });
-    return harden({ ...made, domain: cfg.domain || '', granted });
+    if (!caller || !caller.powers) return null;
+    const policy = caller.wandBinding && caller.wandBinding();
+    const entry = policy && policy.match(String(name || ''));
+    if (!entry) return null; // no held wand authority, or this name isn't an allowed specialization → graceful miss
+    const granted = [...new Set((entry.powers || []).filter(p => caller.powers.has(p) && !META_POWERS.has(p)))]; // entry ceiling ∩ caller — never escalates
+    let domain = entry.domain || '';
+    let instructions = entry.instructions || '';
+    if (typeof fillSpecialist === 'function' && (!domain || !instructions)) {
+      try { const cfg = await fillSpecialist({ name: String(name || ''), request: String(request || ''), origin: String(origin || ''), availablePowers: granted }); if (cfg) { domain = domain || String(cfg.domain || ''); instructions = instructions || String(cfg.instructions || ''); } }
+      catch { /* the LLM only flavours domain/instructions — never authority; ignore failure */ }
+    }
+    const made = spawnSpecialist({ name: String(name || 'specialist'), domain, powers: granted, instructions, spawnedFromChatId: `wand:${String(name || '').slice(0, 40)}` });
+    return harden({ ...made, domain, granted, viaPolicy: entry.match });
   };
   const makeAskSpecialist = (origin = '', caller = null) => {
     let active = null;
@@ -2307,7 +2321,7 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
   // (re)build + register the node for a persisted scoped cap. Bindings are lazy thunks, so this is
   // safe to call at boot before/after the HA/contacts tries are built.
   const registerScoped = ({ swiss, powers, label }) => {
-    const node = makeAgentNode({ powers, labelOf: `chat-${String(label || 'chat').replace(/[^\w-]/g, '_').slice(0, 32)}`, name: String(label || '').trim(), haBinding: () => haTrie?.root || null, agBinding: () => agentRoster?.root || null, contactsBinding: () => contactsObj, id: `scoped-${String(swiss).slice(0, 8)}` });
+    const node = makeAgentNode({ powers, labelOf: `chat-${String(label || 'chat').replace(/[^\w-]/g, '_').slice(0, 32)}`, name: String(label || '').trim(), haBinding: () => haTrie?.root || null, agBinding: () => agentRoster?.root || null, contactsBinding: () => contactsObj, wandBinding: () => wand, id: `scoped-${String(swiss).slice(0, 8)}` });
     locator.set(swiss, { node });
     return node;
   };
