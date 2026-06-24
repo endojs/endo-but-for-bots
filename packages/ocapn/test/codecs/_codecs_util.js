@@ -12,7 +12,7 @@
  */
 
 import harden from '@endo/harden';
-import { toBytes } from '@endo/pass-style/to-bytes.js';
+import { frozenBytes } from '@endo/pass-style/to-bytes.js';
 import { encodeHex } from '@endo/hex';
 import { Far } from '@endo/marshal';
 import { HandledPromise } from '@endo/eventual-send';
@@ -65,10 +65,10 @@ export const gifterLocation = harden({
   hints: { host: '127.0.0.1', port: '54824' },
 });
 
-export const exampleSigParamBytes = toBytes(
+export const exampleSigParamBytes = frozenBytes(
   Uint8Array.from({ length: 32 }, (_, i) => i),
 );
-export const examplePubKeyQBytes = toBytes(
+export const examplePubKeyQBytes = frozenBytes(
   Uint8Array.from({ length: 32 }, (_, i) => i * 2),
 );
 
@@ -92,19 +92,19 @@ export const receiverKeyForExporter = makeOcapnKeyPairFromPrivateKey(
 );
 
 export const exampleExporterSessionId = /** @type {SessionId} */ (
-  toBytes(Uint8Array.from({ length: 32 }, (_, i) => i * 7))
+  frozenBytes(Uint8Array.from({ length: 32 }, (_, i) => i * 7))
 );
 export const exampleGifterSideId = /** @type {PublicKeyId} */ (
-  toBytes(Uint8Array.from({ length: 32 }, (_, i) => i * 8))
+  frozenBytes(Uint8Array.from({ length: 32 }, (_, i) => i * 8))
 );
-export const exampleGiftId = toBytes(
+export const exampleGiftId = frozenBytes(
   Uint8Array.from({ length: 32 }, (_, i) => i * 9),
 );
 export const exampleReceiverSessionId = /** @type {SessionId} */ (
-  toBytes(Uint8Array.from({ length: 32 }, (_, i) => i * 10))
+  frozenBytes(Uint8Array.from({ length: 32 }, (_, i) => i * 10))
 );
 export const exampleReceiverSideId = /** @type {PublicKeyId} */ (
-  toBytes(Uint8Array.from({ length: 32 }, (_, i) => i * 11))
+  frozenBytes(Uint8Array.from({ length: 32 }, (_, i) => i * 11))
 );
 
 /**

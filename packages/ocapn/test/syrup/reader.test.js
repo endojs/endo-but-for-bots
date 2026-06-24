@@ -2,7 +2,7 @@
 import test from '@endo/ses-ava/test.js';
 import * as fs from 'fs';
 import path from 'path';
-import { fromBytes } from '@endo/pass-style/from-bytes.js';
+import { thawnBytes } from '@endo/pass-style/from-bytes.js';
 import { strictDecodeUtf8 } from '@endo/utf8/strict-decode.js';
 import { makeSyrupReader } from '../../src/syrup/decode.js';
 
@@ -18,7 +18,7 @@ const zooBin = Uint8Array.from(zooBinRaw);
  * @param {Uint8Array} bytes
  * @returns {string}
  */
-const toUtf8 = bytes => strictDecodeUtf8(fromBytes(bytes));
+const toUtf8 = bytes => strictDecodeUtf8(thawnBytes(bytes));
 
 test('exciting a dictionary without entering it', t => {
   const syrup = '}';

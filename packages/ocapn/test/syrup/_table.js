@@ -1,4 +1,3 @@
-import { toBytes } from '@endo/pass-style/to-bytes.js';
 import { encodeUtf8 } from '@endo/utf8/encode.js';
 
 import { SyrupSelectorFor } from '../../src/syrup/js-representation.js';
@@ -24,7 +23,7 @@ export const table = [
   { syrup: 'f', value: false },
   { syrup: '5"hello', value: 'hello' },
   { syrup: "5'hello", value: SyrupSelectorFor('hello') },
-  { syrup: '5:hello', value: toBytes(encodeUtf8('hello')) },
+  { syrup: '5:hello', value: encodeUtf8('hello') },
   { syrup: '[1+2+3+]', value: [1n, 2n, 3n] },
   { syrup: '[3"abc3"def]', value: ['abc', 'def'] },
   { syrup: '{1"a10+1"b20+}', value: { a: 10n, b: 20n } },

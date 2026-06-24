@@ -6,8 +6,8 @@
 
 import test from '@endo/ses-ava/test.js';
 import harden from '@endo/harden';
-import { fromBytes } from '@endo/pass-style/from-bytes.js';
-import { toBytes } from '@endo/pass-style/to-bytes.js';
+import { thawnBytes } from '@endo/pass-style/from-bytes.js';
+import { frozenBytes } from '@endo/pass-style/to-bytes.js';
 import { makeTagged } from '@endo/pass-style';
 
 import { makeSyrupReader } from '../../src/syrup/decode.js';
@@ -41,11 +41,11 @@ const table = [
   { name: 'string hello', value: 'hello' },
   {
     name: 'byte array hello',
-    value: toBytes(new Uint8Array([0x68, 0x65, 0x6c, 0x6c, 0x6f])),
+    value: frozenBytes(new Uint8Array([0x68, 0x65, 0x6c, 0x6c, 0x6f])),
   },
   {
     name: 'byte array',
-    value: toBytes(new Uint8Array([0x68, 0x65, 0x6c, 0x6c, 0x6f])),
+    value: frozenBytes(new Uint8Array([0x68, 0x65, 0x6c, 0x6c, 0x6f])),
   },
   {
     name: 'selector',
@@ -237,7 +237,7 @@ runTableTests(test, 'PassableCodec', table, testKit => testKit.PassableCodec);
 test('error on unknown record type in passable', t => {
   const codec = PassableCodec;
   const syrup = recordSyrup('unknown-record-type');
-  const syrupBytes = fromBytes(syrup);
+  const syrupBytes = thawnBytes(syrup);
   const syrupReader = makeSyrupReader(syrupBytes, {
     name: 'unknown record type',
   });

@@ -3,7 +3,7 @@
 import test from '@endo/ses-ava/test.js';
 import path from 'path';
 import fs from 'fs';
-import { fromBytes } from '@endo/pass-style/from-bytes.js';
+import { thawnBytes } from '@endo/pass-style/from-bytes.js';
 import { encodeUtf8 } from '@endo/utf8/encode.js';
 import { strictDecodeUtf8 } from '@endo/utf8/strict-decode.js';
 import { makeSyrupReader } from '../../src/syrup/decode.js';
@@ -96,7 +96,7 @@ test('zoo.bin', t => {
       syrupReader.enterSet();
       while (!syrupReader.peekSetEnd()) {
         result.eats.push(
-          strictDecodeUtf8(fromBytes(syrupReader.readBytestring())),
+          strictDecodeUtf8(thawnBytes(syrupReader.readBytestring())),
         );
       }
       syrupReader.exitSet();
@@ -108,7 +108,7 @@ test('zoo.bin', t => {
       result.weight = syrupReader.readFloat64();
       t.is(syrupReader.readSelectorAsString(), 'species');
       result.species = strictDecodeUtf8(
-        fromBytes(syrupReader.readBytestring()),
+        thawnBytes(syrupReader.readBytestring()),
       );
       syrupReader.exitDictionary();
       return result;
