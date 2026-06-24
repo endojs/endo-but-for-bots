@@ -76,7 +76,10 @@ never logged, never on screen.
   guide has no scan, a scanner is city-locked + rate/TTL-bounded, an editor can't publish, revoke drops the
   swissnum) + a live HTTP smoke (`/rpc` describe/share/revoke; the guide facet has no `scan` even over the
   wire; revoke → 404; no secret in the log).*
-- [ ] **Slice 9** — `DietProvisioner.newInstance` + `signup` (multi-tenant).
+- [x] **Slice 9** — `provisioner.mjs` (`DietProvisioner.newInstance`/`signup`) wired into grunt with a shared
+  locator + per-person seeds + `instances.json` persistence. Mints fully-ISOLATED instances (own store + diet),
+  returns owner + guide `#cap=` urls, lists people (never swissnums), survives restart. *Proven: `yarn
+  test:prov` (10/10) + a live HTTP `newInstance("bob")` → his own `diet.md` on disk, `list` leaks no swissnum.*
 - [ ] **Slice 10** — `dietician-app.service` + `GUIDE.md`; re-point the voice-agent `dietician` power at a
   held `DietConsole` cap (retire the SSH internals). *Needs dan's go for the public-guide publishing change.*
 - [ ] **Slice 11** *(explicit)* — public chu-bind (ngrok `--domain` sidecar), per-instance operator step only.

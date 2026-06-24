@@ -23,6 +23,7 @@ const places = await import('./providers/places.mjs');
 const { makeJudge } = await import('./providers/judge.mjs');
 const { makeAnthropicComplete } = await import('./providers/anthropic.mjs');
 const { makeDietician, newSwiss } = await import('./console.mjs');
+const { makeProvisioner } = await import('./provisioner.mjs');
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const HOME = os.homedir();
@@ -31,7 +32,10 @@ const PORT = Number(process.env.DIET_PORT || 8782);
 const BIND = (process.env.DIET_BIND || '127.0.0.1').split(',').map(s => s.trim()).filter(Boolean);
 const BASE_URL = process.env.DIET_BASE_URL || `http://127.0.0.1:${PORT}`;
 const ROOT_DIR = process.env.DIET_ROOT_DIR || path.join(HOME, '.local/state/dietician-app/instances', PERSON);
-const SEED_FILE = path.join(HOME, '.config/dietician-app', `${PERSON}.swiss`);
+const ROOT_BASE = path.dirname(ROOT_DIR); // per-person instance dirs live here
+const CONFIG_DIR = path.join(HOME, '.config/dietician-app');
+const INSTANCES_FILE = path.join(CONFIG_DIR, 'instances.json');
+const seedPath = person => path.join(CONFIG_DIR, `${person}.swiss`);
 
 const log = (...a) => process.stderr.write(`[${new Date().toISOString()}] ${a.join(' ')}\n`);
 
@@ -57,20 +61,42 @@ const serveFile = async (res, rel, type) => {
   } catch { res.writeHead(404, { 'content-type': 'text/plain' }); res.end('not found'); }
 };
 
-const main = async () => {
-  // stable root swissnum (so the owner's link survives restarts)
-  let rootSwiss = '';
-  try { rootSwiss = (await fsp.readFile(SEED_FILE, 'utf8')).trim(); } catch { /* mint */ }
-  if (!/^[0-9a-f]{32}$/.test(rootSwiss)) {
-    rootSwiss = newSwiss();
-    await fsp.mkdir(path.dirname(SEED_FILE), { recursive: true });
-    await fsp.writeFile(SEED_FILE, rootSwiss, { mode: 0o600 });
-  }
+// a stable per-person seed → the owner link survives restarts (mode 0600).
+const readSeed = async person => {
+  try { const s = (await fsp.readFile(seedPath(person), 'utf8')).trim(); if (/^[0-9a-f]{32}$/.test(s)) return s; } catch { /* mint */ }
+  const s = newSwiss();
+  await fsp.mkdir(CONFIG_DIR, { recursive: true });
+  await fsp.writeFile(seedPath(person), s, { mode: 0o600 });
+  return s;
+};
 
-  const store = makeDietStore(makeFsFolder(ROOT_DIR), { person: PERSON });
+const main = async () => {
   const judge = makeJudge({ complete: makeAnthropicComplete() });
-  const pipeline = makePipeline({ store, places, judge, person: PERSON, baseUrl: BASE_URL });
-  const { locator } = makeDietician({ pipeline, store, baseUrl: BASE_URL, person: PERSON, rootSwiss });
+  // ONE shared locator → a single /rpc resolves caps across the default instance, the provisioner, and any
+  // instances it mints. Build a person's store + pipeline + DietConsole, registered in the shared locator.
+  const sharedLocator = new Map();
+  const mkInstance = async (person, dietSpec, opts = {}) => {
+    const store = makeDietStore(makeFsFolder(path.join(ROOT_BASE, person)), { person });
+    if (dietSpec) await store.writeSpec(dietSpec);
+    const pipeline = makePipeline({ store, places, judge, person, baseUrl: BASE_URL });
+    const rootSwiss = opts.rootSwiss || (await readSeed(person));
+    const { root } = makeDietician({ pipeline, store, baseUrl: BASE_URL, person, rootSwiss, locator: sharedLocator });
+    return { rootSwiss, root };
+  };
+
+  // the default instance (the operator's own, DIET_PERSON)
+  const { rootSwiss } = await mkInstance(PERSON, '', {});
+
+  // the multi-tenant provisioner (its own stable seed) — restores its instances on boot
+  const provSwiss = await readSeed('_provisioner');
+  const provisioner = makeProvisioner({
+    baseUrl: BASE_URL,
+    mkInstance,
+    persist: async recs => { await fsp.mkdir(CONFIG_DIR, { recursive: true }); await fsp.writeFile(INSTANCES_FILE, JSON.stringify({ instances: recs }, null, 2), { mode: 0o600 }); },
+    restore: async () => { try { return (JSON.parse(await fsp.readFile(INSTANCES_FILE, 'utf8')).instances) || []; } catch { return []; } },
+  });
+  sharedLocator.set(provSwiss, { cap: provisioner, kind: 'provisioner', label: 'Dietician provisioner' });
+  const locator = sharedLocator;
 
   const handler = async (req, res) => {
     try {
@@ -100,9 +126,9 @@ const main = async () => {
     s.on('error', e => log(`bind ${ip} failed:`, e.message));
     s.listen(PORT, ip, () => log(`listening http://${ip}:${PORT}  (person=${PERSON}, dir=${ROOT_DIR})`));
   }
-  // The owner link is the root swissnum. Logged ONLY when explicitly asked (avoid leaking it to shared logs).
-  if (process.env.DIET_PRINT_ROOT === '1') log(`ROOT LINK: ${BASE_URL}/#cap=${rootSwiss}`);
-  else log(`root cap ready (fp ${rootSwiss.slice(0, 6)}…; set DIET_PRINT_ROOT=1 to print the full link)`);
+  // The owner + provisioner links ARE swissnums. Logged in full ONLY when explicitly asked (avoid leaking).
+  if (process.env.DIET_PRINT_ROOT === '1') { log(`ROOT LINK (${PERSON}): ${BASE_URL}/#cap=${rootSwiss}`); log(`PROVISIONER LINK: ${BASE_URL}/#cap=${provSwiss}`); }
+  else log(`caps ready (root fp ${rootSwiss.slice(0, 6)}…, provisioner fp ${provSwiss.slice(0, 6)}…; set DIET_PRINT_ROOT=1 to print full links)`);
 };
 
 main().catch(e => { log('FATAL', (e && e.stack) || e); process.exit(1); });

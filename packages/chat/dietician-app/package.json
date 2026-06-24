@@ -11,6 +11,7 @@
     "test:disney-guide": "node disney-guide.staging.mjs",
     "smoke": "node smoke/sweep-smoke.mjs",
     "smoke:eval": "node smoke/evaluate-smoke.mjs",
-    "smoke:kml": "node smoke/kml-smoke.mjs"
+    "smoke:kml": "node smoke/kml-smoke.mjs",
+    "test:prov": "node provisioner.proof.mjs"
   }
 }

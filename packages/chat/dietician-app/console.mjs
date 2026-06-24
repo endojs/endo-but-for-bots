@@ -28,8 +28,9 @@ const makeRateGate = ({ maxCalls = 40, windowMs = 3600000, ttlMs = 0, clock = Da
   };
 };
 
-export const makeDietician = ({ pipeline, store, baseUrl = 'http://127.0.0.1:8782', person = 'alexa', clock = Date.now, rootSwiss } = {}) => {
-  const locator = new Map();
+export const makeDietician = ({ pipeline, store, baseUrl = 'http://127.0.0.1:8782', person = 'alexa', clock = Date.now, rootSwiss, locator: sharedLocator } = {}) => {
+  // a shared locator lets ONE grunt /rpc resolve caps across MANY instances (the provisioner, Slice 9).
+  const locator = sharedLocator || new Map();
   const register = (swiss, cap, kind, label) => { locator.set(swiss, { cap, kind, label }); return swiss; };
   const urlFor = swiss => `${baseUrl}/#cap=${swiss}`;
   const siteRel = which => `site/${which === 'disney' ? 'disney' : 'eats'}/index.html`;
