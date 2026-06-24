@@ -667,7 +667,7 @@ export const defineCausalConsoleFromLogger = loggedErrorHandler => {
     baseConsole.groupEnd = defineName(
       'groupEnd',
       baseConsole.groupEnd
-        ? (...args) => {
+        ? (..._args) => {
             arrayPop(indents);
           }
         : () => {},

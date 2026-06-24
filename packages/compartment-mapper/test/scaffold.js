@@ -501,7 +501,7 @@ export function scaffold(
       };
 
       const sourceMaps = new Set();
-      const sourceMapHook = (sourceMap, { sha512 }) => {
+      const sourceMapHook = (_sourceMap, { sha512 }) => {
         sourceMaps.add(sha512);
         // t.log(sha512, sourceMap);
       };

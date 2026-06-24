@@ -27,12 +27,11 @@ dynamicConfig.overrides.push({
   parserOptions,
   rules,
 });
-// Downgrade restrict-plus-operands to a warning for test files
-// until we have time to clean them up.
+// restrict-plus-operands applies uniformly including test files.
 dynamicConfig.overrides.push({
   files: ['**/test/**/*.{js,ts}'],
   rules: {
-    '@typescript-eslint/restrict-plus-operands': 'warn',
+    '@typescript-eslint/restrict-plus-operands': 'error',
   },
 });
 

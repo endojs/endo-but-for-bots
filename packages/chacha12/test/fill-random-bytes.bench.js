@@ -41,22 +41,28 @@ const copyDuff8 = (out, i, block, offset, n) => {
   let oi = i;
   let bi = offset;
   const r = k % 8;
-  switch (r) {
-    case 7:
-      out[oi++] = block[bi++];
-    case 6:
-      out[oi++] = block[bi++];
-    case 5:
-      out[oi++] = block[bi++];
-    case 4:
-      out[oi++] = block[bi++];
-    case 3:
-      out[oi++] = block[bi++];
-    case 2:
-      out[oi++] = block[bi++];
-    case 1:
-      out[oi++] = block[bi++];
-    case 0:
+  // Duff's device: unrolled remainder loop; rewritten without switch fallthrough
+  // so TypeScript noFallthroughCasesInSwitch does not fire.
+  if (r >= 7) {
+    out[oi++] = block[bi++];
+  }
+  if (r >= 6) {
+    out[oi++] = block[bi++];
+  }
+  if (r >= 5) {
+    out[oi++] = block[bi++];
+  }
+  if (r >= 4) {
+    out[oi++] = block[bi++];
+  }
+  if (r >= 3) {
+    out[oi++] = block[bi++];
+  }
+  if (r >= 2) {
+    out[oi++] = block[bi++];
+  }
+  if (r >= 1) {
+    out[oi++] = block[bi++];
   }
   k -= r;
   while (k > 0) {

@@ -31,7 +31,7 @@ import { makeExo, defineExoClass, defineExoClassKit } from '../index.js';
   });
   // @ts-expect-error -- arg must be string, not number
   makeExo('Foo', FooI, {
-    bar(n: number) {
+    bar(_n: number) {
       return 0n;
     },
   });
@@ -144,7 +144,7 @@ import { makeExo, defineExoClass, defineExoClassKit } from '../index.js';
   });
   // @ts-expect-error -- arg must be string, not number
   defineExoClass('Foo', FooI, () => ({}), {
-    set(val: number) {},
+    set(_val: number) {},
   });
 }
 

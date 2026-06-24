@@ -52,7 +52,7 @@ const scopeProxyHandlerProperties = {
     throw ReferenceError(`${String(prop)} is not defined`);
   },
 
-  has(_shadow, prop) {
+  has(_shadow, _prop) {
     // we must at least return true for all properties on the realm globalThis
     return true;
   },

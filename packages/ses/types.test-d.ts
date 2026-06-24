@@ -46,7 +46,7 @@ const moduleMap = {
   internal: { d: 40 },
 };
 
-const resolveHook = (importSpecifier: string, referrerSpecifier: string) =>
+const resolveHook = (importSpecifier: string, _referrerSpecifier: string) =>
   importSpecifier;
 
 const d = new Compartment(globals, moduleMap, {
@@ -68,7 +68,7 @@ d.globalThis = {};
 
 d.load('x').then(() => {});
 
-d.import('x').then(exports => {});
+d.import('x').then(_exports => {});
 
 d.importNow('y');
 

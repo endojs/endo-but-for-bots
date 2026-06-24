@@ -63,7 +63,7 @@ const asyncGeneratorDestroyer = {
 
 export const hermesTransforms = {
   /** @type {any} */
-  mjs: (sourceBytes, specifier, location, _packageLocation, { sourceMap }) => {
+  mjs: (sourceBytes, _specifier, location, _packageLocation, { sourceMap }) => {
     const transforms = {
       ...asyncArrowEliminator,
       ...asyncGeneratorDestroyer,

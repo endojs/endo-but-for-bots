@@ -39,13 +39,13 @@ test('handlers are always async', async t => {
   /** @type {any} */
   let resolver2;
   const ep2 = new HandledPromise(resolve => (resolver2 = resolve), {
-    applyMethod(p, fn, args) {
+    applyMethod(_p, fn, args) {
       queue.push(['ep2', fn, args]);
       return 'un';
     },
   });
   const unfulfilledHandler = {
-    applyMethod(p, fn, args) {
+    applyMethod(_p, fn, args) {
       queue.push(['ep', fn, args]);
       return ep2;
     },
@@ -163,10 +163,10 @@ test('new HandledPromise expected errors', async t => {
     get(o, _key) {
       return o;
     },
-    applyFunction(o, args) {
+    applyFunction(_o, args) {
       return args.join(',');
     },
-    applyMethod(o, key, args) {
+    applyMethod(_o, key, args) {
       return [key, ...args].join(',');
     },
   };
@@ -276,10 +276,10 @@ test('new HandledPromise(executor, undefined)', async t => {
       };
 
       const resolvedRelay = {
-        get(p, key) {
+        get(_p, key) {
           return o[key];
         },
-        applyMethod(p, key, args) {
+        applyMethod(_p, key, args) {
           return o[key](...args);
         },
       };

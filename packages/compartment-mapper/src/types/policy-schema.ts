@@ -61,7 +61,6 @@ export type PropertyPolicy = Record<string, boolean>;
  * wildcard policy}, a property policy, `undefined`, or defined by an
  * attenuator
  *
- * @remarks
  * The void-vs-custom `T` branch was originally `[T] extends [void] ? … : …`, but
  * the type `any` also makes that test succeed, so `PolicyItem<any>` used to
  * reduce to the same as `void` and

@@ -89,7 +89,6 @@ export const searchDescriptor = async (
 const maybeReadDescriptorDefault = async (
   readPowers,
   packageDescriptorLocation,
-  // eslint-disable-next-line consistent-return
 ) => {
   const { maybeRead } = unpackReadPowers(readPowers);
   const packageDescriptorBytes = await maybeRead(packageDescriptorLocation);
@@ -97,6 +96,7 @@ const maybeReadDescriptorDefault = async (
     const packageDescriptorText = decoder.decode(packageDescriptorBytes);
     return packageDescriptorText;
   }
+  return undefined;
 };
 
 /**

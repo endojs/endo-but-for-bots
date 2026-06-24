@@ -15,8 +15,8 @@ module.exports = {
     ],
     'comma-dangle': ['error', 'always-multiline'],
 
-    'consistent-return': 'warn', // some bugs. TS covers.
-    'no-fallthrough': 'warn', // doesn't detect throws
+    'consistent-return': 'error', // TS covers the intent; enforce consistently
+    'no-fallthrough': 'error', // promote: intentional fallthrough should use // falls through comment
 
     'arrow-body-style': 0,
     'prefer-arrow-callback': 0,
@@ -34,7 +34,7 @@ module.exports = {
     'no-loop-func': 'off',
     'no-inner-declarations': 'off',
 
-    'jsdoc/no-multi-asterisks': ['warn', { allowWhitespace: true }],
+    'jsdoc/no-multi-asterisks': ['error', { allowWhitespace: true }],
     'jsdoc/no-undefined-types': 'off',
     'jsdoc/require-jsdoc': 'off',
     'jsdoc/require-property-description': 'off',

@@ -55,7 +55,7 @@ const assertPowersName = name => {
  */
 export const makeHostMaker = ({
   provide,
-  provideController,
+  provideController: _provideController,
   cancelValue,
   formulateWorker,
   formulateHost,

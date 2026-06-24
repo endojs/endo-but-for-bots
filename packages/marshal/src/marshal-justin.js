@@ -460,7 +460,7 @@ export const passableAsJustin = (passable, shouldIndent = true) => {
   // and the `slotCount` variable can be initialized to `0` rather than
   // `-1`.
   // eslint-disable-next-line no-plusplus
-  const convertValToSlot = val => `s${slotCount++}`;
+  const convertValToSlot = _val => `s${slotCount++}`;
   const { toCapData } = makeMarshal(convertValToSlot);
   const { body, slots } = toCapData(passable);
   const encoded = JSON.parse(body);

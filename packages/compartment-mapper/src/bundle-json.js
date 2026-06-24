@@ -4,7 +4,7 @@ const textDecoder = new TextDecoder();
 
 export default {
   runtime: '',
-  getBundlerKit({ index, indexedImports, bytes }) {
+  getBundlerKit({ index, indexedImports: _indexedImports, bytes }) {
     // Round-trip to revalidate JSON and squeeze out space.
     const json = JSON.stringify(JSON.parse(textDecoder.decode(bytes)));
     return {

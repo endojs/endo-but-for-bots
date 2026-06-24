@@ -21,7 +21,7 @@ test('panic first resort', async t => {
 
   let firstResortHappened = false;
   let catchHappened = false;
-  globalThis[PanicEndowmentSymbol] = err => {
+  globalThis[PanicEndowmentSymbol] = _err => {
     firstResortHappened = true;
     // The fact that this resumes execution violates `panic`'s assumption about
     // this endowment. But we take that to be a violation of the spec for this

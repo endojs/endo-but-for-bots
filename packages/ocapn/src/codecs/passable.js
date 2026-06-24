@@ -28,11 +28,11 @@ const UndefinedCodec = makeOcapnRecordCodec(
   'Undefined',
   'void',
   // readBody
-  syrupReader => {
+  _syrupReader => {
     return undefined;
   },
   // writeBody
-  (value, syrupWriter) => {
+  (_value, _syrupWriter) => {
     // body is empty
   },
 );
@@ -41,11 +41,11 @@ const NullCodec = makeOcapnRecordCodec(
   'Null',
   'null',
   // readBody
-  syrupReader => {
+  _syrupReader => {
     return null;
   },
   // writeBody
-  (value, syrupWriter) => {
+  (_value, _syrupWriter) => {
     // body is empty
   },
 );
