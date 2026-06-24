@@ -1,0 +1,11 @@
+{
+  "name": "@endo-bfb/dietician-app",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "Portable, Endo-native restaurant-safety guide: sweep a city's restaurants, judge them against a binding diet spec, build a map + a browsing guide — as a capability others can run themselves with their own Google Places key, diet spec, and data store. A from-scratch JS port of the agent-dietician persona pipeline (sweep.py/rank.py/gen_prompts.py/reevaluate.py/build_kml.py/gen_guide.py), with NO SSH-to-persona dependency.",
+  "scripts": {
+    "test": "node --test",
+    "smoke": "node smoke/sweep-smoke.mjs"
+  }
+}
