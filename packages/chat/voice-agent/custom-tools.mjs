@@ -14,13 +14,17 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { bundleMakeBody, bundleFiles, instantiateBundle } from './tool-bundle.mjs';
 import { makeGrainStore } from './grain-store.mjs';
+import { makeSelfHealer } from './self-heal.mjs';
 
 const HOME = process.env.HOME || '/home/dan';
 const STORE = process.env.CUSTOM_TOOLS_STORE || `${HOME}/.config/field-agent/custom-tools.json`;
 const STATE_DIR = process.env.CUSTOM_TOOLS_STATE || `${HOME}/.local/state/field-agent/tool-state`;
 const clip = (s, n) => { const t = String(s == null ? '' : s); return t.length > n ? `${t.slice(0, n)}…` : t; };
 
-export const makeCustomTools = () => {
+// `fix` (optional) is the SELF-HEAL fixer: fix({ source, error, label, ctx }) → { source, summary } | null.
+// When wired, a tool that THROWS is repaired in place (source rewritten → re-run) so the caller's promise
+// resolves with the fixed value instead of an error. See designs/self-healing-errors.md.
+export const makeCustomTools = ({ fix } = {}) => {
   const load = () => { try { return JSON.parse(fs.readFileSync(STORE, 'utf8')).tools || []; } catch { return []; } };
   const save = ts => { try { fs.mkdirSync(path.dirname(STORE), { recursive: true }); fs.writeFileSync(STORE, JSON.stringify({ tools: ts }, null, 2), { mode: 0o600 }); } catch { /* best effort */ } };
   const safeName = n => String(n || 'tool').replace(/[^\w.-]/g, '_').slice(0, 60) || 'tool';
@@ -95,7 +99,7 @@ export const makeCustomTools = () => {
   };
   const pendingBy = agentId => load().filter(t => t.status === 'pending' && t.proposedBy === String(agentId)).map(t => ({ id: t.id, name: t.name, description: t.description }));
   const get = idOrName => load().find(t => t.id === String(idOrName) || t.name === String(idOrName)) || null;
-  const listAll = () => load().map(t => ({ id: t.id, name: t.name, description: t.description, status: t.status, kind: t.kind || 'instance', proposedBy: t.proposedBy, proposedByName: t.proposedByName || '', code: t.code, files: t.files, entry: t.entry, hasBundle: !!t.bundle, review: t.review || null, reviseLog: t.reviseLog || null }));
+  const listAll = () => load().map(t => ({ id: t.id, name: t.name, description: t.description, status: t.status, kind: t.kind || 'instance', proposedBy: t.proposedBy, proposedByName: t.proposedByName || '', code: t.code, files: t.files, entry: t.entry, hasBundle: !!t.bundle, review: t.review || null, reviseLog: t.reviseLog || null, healLog: t.healLog || null }));
   // Persist the discipline-review panel's findings on a pending tool so the admission gate sees them.
   const setReview = (id, review) => { const ts = load(); const t = ts.find(x => x.id === String(id)); if (!t) return { ok: false, error: 'no such proposal' }; t.review = review; save(ts); return { ok: true }; };
   // Persist the review→revise dialogue (the developer's resolutions per round) so the human sees how the
@@ -117,19 +121,48 @@ export const makeCustomTools = () => {
   const admit = id => { const ts = load(); const t = ts.find(x => x.id === String(id)); if (!t) return { ok: false, error: 'no such proposal' }; t.status = 'admitted'; save(ts); instances.delete(t.id); built.delete(t.id); return { ok: true, id: t.id, name: t.name }; };
   const reject = id => { instances.delete(String(id)); built.delete(String(id)); save(load().filter(t => t.id !== String(id))); return { ok: true, id: String(id) }; };
 
+  // append a self-heal patch record to a tool — the audit trail for auto-repairs (recovery first, review later).
+  const logHeal = (id, entry) => { const ts = load(); const t = ts.find(x => x.id === String(id)); if (!t) return; t.healLog = (t.healLog || []).concat({ ...entry, at: new Date().toISOString() }).slice(-20); save(ts); };
+  const healer = makeSelfHealer({ fix });
+
   // Call an ADMITTED tool. A stateful tool exposes methods → pass {method, args}. A single-function tool
   // → pass {args}. The instance is kept alive, so its state persists across calls (+ durably via `state`).
+  // SELF-HEAL: if a fixer is wired AND the tool has editable source (single-file `code` or multi-file `files`,
+  // not an imported bundle), a THROW (at init or in the method) is handed to the fixer, which rewrites the
+  // source; we swap it live (setSource drops the cached instance) and re-run — so this call RESOLVES with the
+  // repaired value and the error never reaches the agent/user. Each patch is logged on the tool for review.
   const call = async (idOrName, { method, args = {} } = {}) => {
-    const t = get(idOrName);
+    let t = get(idOrName);
     if (!t) return { ok: false, error: 'no such tool' };
     if (t.status !== 'admitted') return { ok: false, error: `tool "${t.name}" is ${t.status} — not yet admitted by the owner` };
-    let inst; try { inst = await getInstance(t); } catch (e) { return { ok: false, error: `tool failed to initialize: ${(e && e.message) || e}` }; }
-    try {
-      if (method) { if (typeof inst?.[method] !== 'function') return { ok: false, error: `"${t.name}" has no method "${method}" (has: ${methodsOf(inst).join(', ')})` }; return harden({ ok: true, value: await inst[method](args) }); }
-      if (typeof inst === 'function') return harden({ ok: true, value: await inst(args) });
-      return { ok: false, error: `"${t.name}" is a stateful object — pass a method (one of: ${methodsOf(inst).join(', ')})` };
-    } catch (e) { return harden({ ok: false, error: (e && e.message) || String(e) }); }
+    const runOnce = async () => {
+      let inst;
+      try { inst = await getInstance(t); } catch (e) { throw new Error(`tool failed to initialize: ${(e && e.message) || e}`); }
+      if (method) { if (typeof inst?.[method] !== 'function') throw new Error(`"${t.name}" has no method "${method}" (has: ${methodsOf(inst).join(', ')})`); return await inst[method](args); }
+      if (typeof inst === 'function') return await inst(args);
+      throw new Error(`"${t.name}" is a stateful object — pass a method (one of: ${methodsOf(inst).join(', ')})`);
+    };
+    const editable = t.code != null || t.files != null;
+    if (typeof fix !== 'function' || !editable) { // no fixer wired, or no editable source → today's behaviour
+      try { return harden({ ok: true, value: await runOnce() }); }
+      catch (e) { return harden({ ok: false, error: (e && e.message) || String(e) }); }
+    }
+    const r = await healer.heal({
+      label: t.name,
+      source: t.files ? t.files : t.code,
+      attempt: runOnce,
+      ctx: { id: t.id, name: t.name, description: t.description, method, args, kind: t.kind || 'instance' },
+      apply: async patched => {
+        setSource(t.id, (typeof patched === 'string') ? { 'tool.js': patched } : patched); // persists + drops the cached instance
+        t = get(t.id) || t; // refresh so runOnce re-instantiates from the PATCHED source
+      },
+    });
+    if (r.ok) {
+      if (r.healed) r.patches.forEach(p => logHeal(t.id, p));
+      return harden({ ok: true, value: r.value, ...(r.healed ? { healed: r.patches.length } : {}) });
+    }
+    return harden({ ok: false, error: r.error });
   };
 
-  return { propose, pendingBy, get, list, listAll, setReview, setReviseLog, setSource, copyGrains, grainData, admit, reject, call, methodsOf, getInstance, exportClass, importClass };
+  return { propose, pendingBy, get, list, listAll, setReview, setReviseLog, setSource, copyGrains, grainData, admit, reject, call, methodsOf, getInstance, exportClass, importClass, logHeal };
 };

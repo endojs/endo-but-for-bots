@@ -35,7 +35,23 @@ import { reuseFirstPreamble } from './component-catalog.mjs';
 import { addBacklog } from './improvement-backlog.mjs';
 import { STARTER_RING } from './system-map.mjs';
 const connectors = makeConnectors({ getSecret }); // owner-side registry (same connectors.json the agent calls)
-const customTools = makeCustomTools(); // owner-side review/admit (same custom-tools.json the agent reads)
+// SELF-HEAL fixer (designs/self-healing-errors.md): when an admitted custom tool THROWS at runtime, rewrite its
+// source so the original call RESOLVES with the repaired value instead of bubbling an error. Single-file tools
+// only (the body of make(powers)); the repaired tool stays EXACTLY as confined (only state/grains/console — a
+// source rewrite cannot widen authority). Bounded by the healer (2 tries) + every patch logged on the tool.
+// On by default (we're adopting the strategy); SELF_HEAL=0 disables it (falls back to a plain {ok:false,error}).
+const selfHealFixer = async ({ source, error, label, ctx = {} }) => {
+  if (typeof source !== 'string') return null; // multi-file / imported-bundle tools: skip for now → graceful
+  const sys = 'You repair a CONFINED agent-authored JS tool that just threw at runtime. The source you are given is the BODY of `make(powers)`, which returns the tool — either an async function, or an object of async methods. Its ONLY powers are `state` (a durable kv: get/set/delete/all), `grains`, and `console`; there is NO fs, network, process, or import. Rewrite the body to FIX the specific error while preserving the tool\'s intent and its method/return shape. Reply with ONLY the corrected body — no markdown fence, no prose, no explanation.';
+  const usr = `Tool: ${ctx.name || label}\n${ctx.description ? `Purpose: ${ctx.description}\n` : ''}Invoked as: ${ctx.method ? `method "${ctx.method}"` : '(single function)'} with args ${JSON.stringify(ctx.args || {}).slice(0, 400)}\nIt threw: ${error}\n\n--- current body ---\n${source}\n--- end ---\n\nReturn the corrected body only.`;
+  let out;
+  try { out = await callLLM([{ role: 'system', content: sys }, { role: 'user', content: usr }], process.env.SELF_HEAL_MODEL || 'default', { maxTokens: 1500 }); }
+  catch { return null; }
+  let fixed = String((out && out.text) || '').trim().replace(/^```[a-z]*\n?/i, '').replace(/\n?```$/i, '').trim();
+  if (!fixed || fixed === source) return null;
+  return { source: fixed, summary: `auto-repair after: ${String(error).slice(0, 80)}` };
+};
+const customTools = makeCustomTools(process.env.SELF_HEAL === '0' ? {} : { fix: selfHealFixer }); // owner-side review/admit (same custom-tools.json the agent reads)
 import { makeAppStore } from './app-state.mjs';
 import { makePurse } from './purse.mjs';
 import { makePurseStore } from './purse-store.mjs';
