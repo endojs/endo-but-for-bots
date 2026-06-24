@@ -716,6 +716,29 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
   let specialists = [];
   try { specialists = JSON.parse(fs.readFileSync(SPECIALISTS_FILE, 'utf8')).specialists || []; } catch { specialists = []; }
   const saveSpecialists = () => { try { fs.mkdirSync(path.dirname(SPECIALISTS_FILE), { recursive: true }); fs.writeFileSync(SPECIALISTS_FILE, JSON.stringify({ specialists }, null, 2), { mode: 0o600 }); } catch (e) { /* best effort */ } };
+
+  // ── BUILT-IN AGENTS — curated, code-defined domain agents (the Dietician, …). They behave EXACTLY like
+  //    specialists (a confined power-ring + a persona you can "act as" from the header / Settings, or consult
+  //    via askSpecialist) but are ALWAYS present and are NOT persisted into the user's specialists store. Each
+  //    is a subset of ALL_POWERS minus the meta powers. Edit this list to curate the menu.
+  const BUILTIN_AGENTS = [
+    { id: 'dietician', name: '🥗 Dietician', domain: 'restaurant + diet safety', powers: ['dietician', 'web', 'reference', 'notes', 'jotNote', 'contact', 'feed'],
+      instructions: "You are the Dietician — the household's restaurant + diet-safety agent. Scan an area's restaurants (dietScanArea), evaluate them against each person's binding diet spec with a strong model (dietEvaluateArea), rebuild the safe-eats map (dietBuildMap), and refresh the published food guides (dietRefreshSite — propose→confirm; NEVER publish without confirmation). Be skeptical about menus; when unsure prefer SKIP/UNKNOWN. Carry the city + person across the conversation, and use web/reference to look things up." },
+    { id: 'researcher', name: '🔎 Researcher', domain: 'deep multi-source research', powers: ['research', 'web', 'reference', 'browser', 'notes', 'jotNote', 'feed'],
+      instructions: 'You are the Researcher. For any question, plan, search the web + your library in parallel, read the best sources, and synthesize a concise, CITED answer. Prefer primary sources and flag uncertainty. Use the research tool for big questions; web/browser/reference for the rest; jot durable findings to notes.' },
+    { id: 'home', name: '🏠 Home', domain: 'Home Assistant', powers: ['homeassistant', 'notes', 'feed'],
+      instructions: 'You are the Home agent for Home Assistant. Find devices/rooms, read their state, and propose device actions (every action is propose→confirm). Be precise about which entity you mean and confirm the room/device before acting.' },
+    { id: 'scheduler', name: '⏰ Scheduler', domain: 'reminders + recurring tasks', powers: ['timers', 'schedule', 'contact', 'feed', 'notes'],
+      instructions: 'You are the Scheduler. Set reminders + recurring tasks: scheduleWakeup/repeatEvery for things a human must do (these ping dan), scheduleTask for recurring work an agent can do itself. List + cancel jobs on request, and confirm the cadence + what will fire.' },
+    { id: 'image-studio', name: '🎨 Image studio', domain: 'image generation', powers: ['images', 'home', 'feed'],
+      instructions: 'You are the Image Studio. Generate + restyle images on the GPU from a prompt. Offer a couple of variations, and save outputs to the home folder when asked.' },
+  ];
+  const builtinSpecs = BUILTIN_AGENTS.map(a => harden({
+    id: a.id, name: a.name, domain: a.domain,
+    powers: [...new Set(a.powers.filter(p => ALL_POWERS.includes(p) && !META_POWERS.has(p)))],
+    instructions: a.instructions, builtin: true, spawnedFrom: null,
+  }));
+  const builtinList = () => builtinSpecs.map(s => ({ id: s.id, name: s.name, domain: s.domain, powers: s.powers, autonomy: [], spawnedFrom: null, builtin: true }));
   // Per-chat scoped caps must SURVIVE RESTARTS (else a deployed/restarted server orphans every
   // confined chat — its cap 403s, the chat silently can't send). Persist {swiss, powers, label}
   // and re-register at boot, the same durability the root swiss already has.
@@ -815,7 +838,7 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
     act: harden(async (a = {}) => { const n = nd.haReach(e.handle); if (!n || !n.act) return { ok: false, error: `"${e.name}" is not actuable / not in reach — haFind it again` }; try { return n.act(String((a && a.action) || ''), (a && a.data) || {}); } catch (err) { return { ok: false, error: err.message }; } }),
   });
   const specSlug = name => `spec-${String(name || 'x').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 32) || 'x'}`;
-  const findSpecialist = ref => { const r = String(ref || ''); return specialists.find(s => s.id === r || s.id === specSlug(r) || s.name.toLowerCase() === r.toLowerCase()); };
+  const findSpecialist = ref => { const r = String(ref || ''); return specialists.find(s => s.id === r || s.id === specSlug(r) || s.name.toLowerCase() === r.toLowerCase()) || builtinSpecs.find(s => s.id === r || s.name.toLowerCase() === r.toLowerCase()); };
   const specNodes = new Map(); // id → its agent-node (built lazily / at boot)
 
   // a run-context (ctx) is threaded into the verbs at toolbox-build time; the only
@@ -1502,7 +1525,7 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
       // so it PROPOSES (you confirm the grant). A specialist runs with its OWN confined
       // bundle + instructions + id; its actions still surface for confirmation unless
       // you granted it autonomy ("don't ask again", scoped to that specialist).
-      toolbox.listSpecialists = harden({ run: async () => ({ ok: true, specialists: specialists.map(s => ({ id: s.id, name: s.name, domain: s.domain, powers: s.powers, autonomy: listAutoRules(s.id).map(r => r.kind), spawnedFrom: s.spawnedFrom || null })) }) });
+      toolbox.listSpecialists = harden({ run: async () => ({ ok: true, specialists: [...builtinList(), ...specialists.map(s => ({ id: s.id, name: s.name, domain: s.domain, powers: s.powers, autonomy: listAutoRules(s.id).map(r => r.kind), spawnedFrom: s.spawnedFrom || null }))] }) });
       toolbox.proposeSpawnSpecialist = harden({ run: async ({ name, domain, powers: want = [], instructions } = {}) => {
         const granted = [...new Set((Array.isArray(want) ? want : []).filter(p => node.powers.has(p) && !META_POWERS.has(p)))];
         return np({ type: 'spawn-specialist', power: 'specialists', title: `Spawn specialist: ${String(name || 'specialist')}`, summary: `${String(domain || '')}${granted.length ? ' · ' + granted.join(', ') : ' · (no powers)'}`,
@@ -2046,7 +2069,7 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
       listAutoConfirm: () => harden(listAutoRules(node.id)),
       revokeAutoConfirm: kind => harden({ revoked: removeAutoRule(node.id, String(kind || '')), kind: String(kind || '') }),
       // the entry agent's specialist roster (inventory) — list + retire
-      listSpecialists: () => harden((node.isRoot || powerSet.has('specialists')) ? specialists.map(s => ({ id: s.id, name: s.name, domain: s.domain, powers: s.powers, autonomy: listAutoRules(s.id).map(r => r.kind), spawnedFrom: s.spawnedFrom || null })) : []),
+      listSpecialists: () => harden((node.isRoot || powerSet.has('specialists')) ? [...builtinList(), ...specialists.map(s => ({ id: s.id, name: s.name, domain: s.domain, powers: s.powers, autonomy: listAutoRules(s.id).map(r => r.kind), spawnedFrom: s.spawnedFrom || null }))] : []),
       removeSpecialist: ref => { if (!node.isRoot && !powerSet.has('specialists')) throw new Error("you don't hold specialists"); return harden(removeSpecialist(ref)); },
     });
 

@@ -1544,6 +1544,7 @@ const LOCAL_DEFAULT = { id: 'default', name: 'Gemma (local)', size: 'M', label: 
 const MODEL_LADDER = [LOCAL_DEFAULT, ...OPENROUTER_MODELS, ...ANTHROPIC_MODELS];
 let modelList = [LOCAL_DEFAULT, ...OPENROUTER_MODELS, ...ANTHROPIC_MODELS];
 let agentList = ['field-agent'];
+let agentMeta = {}; // id → { name, builtin } — drives the grouped agent menu + the Settings agent picker
 let projectList = []; // defined projects, surfaced in the agent menu so a project-scoped chat is one tap away
 const pendingProjectId = {}; // sessionId → projectId for an ephemeral chat not yet committed to a project
 let pendingScopePowers = null; // the powers approved in the consent gate, stashed until the chat commits
@@ -1565,14 +1566,24 @@ const chatBannerPowers = () => {
   return ag && ag !== 'field-agent' ? (specialistPowers[ag] || []) : [];
 };
 const chatModel = () => (curChatObj() || {}).model || rememberedModels()[chatAgent()] || 'default';
+// the agent menu's option groups: Agent C · the built-in domain agents (Dietician, …) · your spawned
+// specialists. Reused by the Settings shape picker. Built-ins carry builtin:true (from listSpecialists).
+const agentGroupsHtml = () => {
+  const builtin = agentList.filter(a => a !== 'field-agent' && agentMeta[a] && agentMeta[a].builtin);
+  const mine = agentList.filter(a => a !== 'field-agent' && !(agentMeta[a] && agentMeta[a].builtin));
+  const opt = a => `<option value="${esc(a)}">${esc((agentMeta[a] && agentMeta[a].name) || a)}</option>`;
+  let h = `<option value="field-agent">🗣️ Agent C</option>`;
+  if (builtin.length) h += `<optgroup label="Agents">${builtin.map(opt).join('')}</optgroup>`;
+  if (mine.length) h += `<optgroup label="Your specialists">${mine.map(opt).join('')}</optgroup>`;
+  return h;
+};
 const populateAgentSel = () => {
   const s = $('agent-sel'); if (!s) return;
-  const agents = agentList.map(a => `<option value="${esc(a)}">${esc(a === 'field-agent' ? '🗣️ Agent C' : a)}</option>`).join('');
   // every defined project gets an entry — picking one starts a fresh chat filed under that project
   const projs = projectList.length
     ? `<optgroup label="New chat in project…">${projectList.map(p => `<option value="project:${esc(p.id)}">📁 ${esc(p.name)}</option>`).join('')}</optgroup>`
     : '';
-  s.innerHTML = agents + projs;
+  s.innerHTML = agentGroupsHtml() + projs;
 };
 const populateModelSel = () => { const s = $('model-sel'); if (s) s.innerHTML = modelList.map(m => `<option value="${esc(m.id)}">${esc(m.label)}</option>`).join(''); };
 const syncSelectors = () => {
@@ -1583,8 +1594,8 @@ const syncSelectors = () => {
 };
 const loadModels = async () => { if (!cap) return; try { const r = await (await fetch('/models', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cap }) })).json(); const local = (r.models && r.models.length) ? r.models : [LOCAL_DEFAULT]; modelList = [...local, ...OPENROUTER_MODELS, ...ANTHROPIC_MODELS]; populateModelSel(); syncSelectors(); } catch {} };
 const loadAgentList = async () => {
-  agentList = ['field-agent']; specialistPowers = {}; specialistSpawnedFrom = {};
-  if (heldPowers.has('specialists')) { try { const specs = await rpc('listSpecialists'); for (const s of (specs || [])) if (s && s.id) { agentList.push(s.id); specialistPowers[s.id] = Array.isArray(s.powers) ? s.powers : []; if (s.spawnedFrom) specialistSpawnedFrom[s.id] = s.spawnedFrom; } } catch {} }
+  agentList = ['field-agent']; specialistPowers = {}; specialistSpawnedFrom = {}; agentMeta = {};
+  if (heldPowers.has('specialists')) { try { const specs = await rpc('listSpecialists'); for (const s of (specs || [])) if (s && s.id) { agentList.push(s.id); specialistPowers[s.id] = Array.isArray(s.powers) ? s.powers : []; if (s.spawnedFrom) specialistSpawnedFrom[s.id] = s.spawnedFrom; agentMeta[s.id] = { name: s.name || s.id, builtin: !!s.builtin }; } } catch {} }
   populateAgentSel(); syncSelectors();
 };
 // Defined projects feed the agent menu's "New chat in project…" group. /projects/list is
@@ -3224,12 +3235,11 @@ const openShapePendant = async steps => {
   } catch { /* enhancement-only */ }
 };
 let lastShape = {};
-const AGENT_LABEL = id => (id === 'field-agent' ? 'Agent C' : id);
+const AGENT_LABEL = id => (id === 'field-agent' ? 'Agent C' : ((agentMeta[id] && agentMeta[id].name) || id));
 const renderSettingsShape = async body => {
-  const opts = ['field-agent', ...Object.keys(specialistPowers || {})];
   body.innerHTML = `<div class="set-h">🕸️ Agent shape</div>
-    <div class="pmeta" style="margin-bottom:9px">The structural graph of what an agent <b>holds</b> — its powers (each fanning to the tools it can call), its specialist sub-agents, and the roles it could employ. What the agent <i>is</i> (distinct from the per-message trace, which is what it <i>did</i>).</div>
-    <div class="set-row" style="margin-bottom:9px;gap:8px">${opts.length > 1 ? `<select id="shape-agent" class="mini">${opts.map(o => `<option value="${esc(o)}">${esc(AGENT_LABEL(o))}</option>`).join('')}</select>` : ''}<button class="mini" id="shape-3d">🧊 Open 3D diagram</button></div>
+    <div class="pmeta" style="margin-bottom:9px">The structural graph of what an agent <b>holds</b> — its powers (each fanning to the tools it can call), its specialist sub-agents, and the roles it could employ. What the agent <i>is</i> (distinct from the per-message trace, which is what it <i>did</i>). Includes the built-in domain agents (Dietician, …) + your specialists.</div>
+    <div class="set-row" style="margin-bottom:9px;gap:8px"><select id="shape-agent" class="mini">${agentGroupsHtml()}</select><button class="mini" id="shape-3d">🧊 Open 3D diagram</button></div>
     <div id="shape-body" class="pmeta">loading…</div>`;
   const chips = arr => _arr(arr).map(x => `<span class="pill" style="margin:1px 3px 1px 0">${esc(String(x))}</span>`).join('');
   const load = async () => {
