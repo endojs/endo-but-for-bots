@@ -27,3 +27,44 @@ export const makePurse = (initial = 0, { granted: grantedInit, onChange } = {}) 
   });
 };
 harden(makePurse);
+
+// makeBoundedSubPurse({parent, cap}) — an ATTENUATED view of `parent` that may spend at most
+// `cap` µUSD in total, no matter how much the parent holds. It keeps its OWN local spent/cap
+// counter and, on each debit, ASSERTS the charge stays within its remaining allowance (and that
+// the parent can afford it) BEFORE charging the parent — assert-then-charge, so a refusal leaves
+// both ledgers untouched. Several sub-purses can be minted off one parent; because each only ever
+// charges the shared parent, the parent's balance is the conserved quantity and the SUM of all
+// children's spend can never exceed what the parent actually had.
+export const makeBoundedSubPurse = ({ parent, cap } = {}) => {
+  if (!parent || typeof parent.debit !== 'function') {
+    throw new Error('makeBoundedSubPurse requires a parent purse');
+  }
+  const limit = Math.max(0, Math.round(Number(cap) || 0));
+  let spent = 0;
+  const remaining = () => limit - spent;
+  return harden({
+    cap: () => limit,
+    spent: () => spent,
+    // remaining sub-purse allowance (never below 0)
+    balance: () => Math.max(0, remaining()),
+    // affordable iff within OUR remaining cap AND the parent can cover it
+    canAfford: (amt) => {
+      const a = Math.max(0, Math.round(Number(amt) || 0));
+      return a <= remaining() && parent.canAfford(a);
+    },
+    // assert-then-charge: refuse over-cap / over-parent spends WITHOUT mutating either ledger
+    debit: (amt) => {
+      const a = Math.max(0, Math.round(Number(amt) || 0));
+      if (a > remaining()) {
+        throw new Error(`sub-purse over cap: ${a} requested, ${remaining()} of ${limit} left`);
+      }
+      if (!parent.canAfford(a)) {
+        throw new Error(`parent cannot afford ${a} (balance ${parent.balance()})`);
+      }
+      spent += a;
+      parent.debit(a);
+      return remaining();
+    },
+  });
+};
+harden(makeBoundedSubPurse);
