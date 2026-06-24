@@ -40,6 +40,18 @@ export const nextOpen = ({ maxAttempts = 2 } = {}) => load().items
 // the leading runner accordingly; an already-correct `node --test …` (or anything else) is left untouched.
 export const normalizeTestCmd = cmd => String(cmd || '').replace(/^\s*(?:npm|yarn|pnpm)\s+(?:run\s+)?test\b/, 'node --test');
 
+// PRE-FLIGHT target guard: the slash-containing file paths a goal names (its targets). A goal that names files
+// but NONE exist is aimed at a phantom/wrong path (the #1 way the loop burned attempts — e.g. a non-existent
+// eval/improvement-executor.mjs, or packages/chat/ocapn-noise when it's packages/ocapn-noise). `exists(rel)` is
+// injected (caller resolves against the repo root). ok when the goal names no path, OR at least one path exists
+// (a real source it edits — a NEW test file alongside is fine).
+export const goalTargets = goal => [...new Set(String(goal || '').match(/\b[\w.-]+\/[\w./-]*\.\w+/g) || [])];
+export const missingTargets = (goal, exists) => {
+  const targets = goalTargets(goal);
+  const missing = targets.filter(p => { try { return !exists(p); } catch { return true; } });
+  return { ok: targets.length === 0 || missing.length < targets.length, targets, missing };
+};
+
 // record the outcome of an attempt (FAPO attribution): 'merged' | 'staged' (verified, awaiting review) |
 // 'failed' (empty/red — keep the reason so the next attempt or the operator can learn).
 export const recordOutcome = (id, { status, branch, reason } = {}) => {

@@ -8,8 +8,22 @@ const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'backlog-test-'));
 process.env.IMPROVEMENT_BACKLOG = path.join(tmp, 'backlog.json');
 import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
-const { addBacklog, listBacklog, nextOpen, recordOutcome, clearResolved, normalizeTestCmd } = await import('./improvement-backlog.mjs');
+const { addBacklog, listBacklog, nextOpen, recordOutcome, clearResolved, normalizeTestCmd, goalTargets, missingTargets } = await import('./improvement-backlog.mjs');
 after(() => { try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* */ } });
+
+test('pre-flight target guard: a goal whose named paths all 404 is rejected; a real path (or none) passes', () => {
+  const exists = p => new Set(['packages/ocapn-noise/codemode.mjs', 'packages/chat/voice-agent/agent-caps.mjs']).has(p);
+  // phantom file → not ok
+  let r = missingTargets('In packages/chat/voice-agent/eval/improvement-executor.mjs, replace yarn with npm', exists);
+  assert.equal(r.ok, false); assert.deepEqual(r.missing, ['packages/chat/voice-agent/eval/improvement-executor.mjs']);
+  // wrong path (real file is packages/ocapn-noise) → not ok
+  assert.equal(missingTargets('In packages/chat/ocapn-noise/codemode.mjs, add a retry', exists).ok, false);
+  // real source + a NEW test file alongside → ok (at least one path exists)
+  assert.equal(missingTargets('In packages/ocapn-noise/codemode.mjs add X and packages/ocapn-noise/codemode.test.mjs', exists).ok, true);
+  // a goal that names no file path at all → ok (not all targets are file-scoped)
+  assert.equal(missingTargets('Improve the agent persona to be more concise', exists).ok, true);
+  assert.deepEqual(goalTargets('touch packages/a/b.mjs and packages/a/b.mjs again'), ['packages/a/b.mjs'], 'dedupes path tokens');
+});
 
 test('normalizeTestCmd rewrites the wrong runner (npm/yarn test → node --test) and leaves a correct one alone', () => {
   assert.equal(normalizeTestCmd('npm test packages/ocapn-noise/codemode.test.mjs'), 'node --test packages/ocapn-noise/codemode.test.mjs');

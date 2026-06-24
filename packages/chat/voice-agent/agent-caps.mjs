@@ -41,7 +41,7 @@ import { createProject, listProjects, addScheduledAgent, updateScheduledAgent, r
 import { proposeSpawn } from '../capture/agent-spawn.mjs';
 import { runOpusDelegate } from './delegate.mjs';
 import { makeSelfImprover } from './self-improver.mjs';
-import { listBacklog, addBacklog, nextOpen, recordOutcome, normalizeTestCmd } from './improvement-backlog.mjs';
+import { listBacklog, addBacklog, nextOpen, recordOutcome, normalizeTestCmd, missingTargets } from './improvement-backlog.mjs';
 import { runAgent } from '../../ocapn-noise/tool-bridge.mjs';
 import { runAgentCode } from '../../ocapn-noise/codemode.mjs';
 import { dialIrohObject } from './iroh-objects.mjs';
@@ -565,6 +565,9 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
   // AND wrapped in the preamble (deps available); no command → the full default suite. This is what made every
   // targeted item fail before: a bare `npm test <file>` ran root yarn-over-all-workspaces with no deps.
   const buildVerify = sc => (sc ? `${VERIFY_PREAMBLE}; ${normalizeTestCmd(String(sc))}` : DEFAULT_VERIFY);
+  // PRE-FLIGHT: a goal must name at least one REAL path (resolved against the live repo) — stops phantom/
+  // wrong-path goals at the door instead of burning an Opus implementation cycle discovering the file is gone.
+  const checkTargets = goal => missingTargets(goal, rel => fs.existsSync(path.join(WORKTREE_REPO, rel)));
   const selfImprover = makeSelfImprover({ host: aff.host, repo: WORKTREE_REPO, baseBranch: process.env.FIELD_AGENT_BASE_BRANCH || 'field-preact', verifyDir: `${WORKTREE_DIR}/_verify`, ledgerFile: '/home/dan/.local/state/field-agent/auto-merge-ledger.json', defaultTest: DEFAULT_VERIFY, timeoutMs: 600000 });
   let selfImproveInFlight = false; // single-flight: at most one self-improvement at a time
   // SELF-CONTAINED executor runner (does NOT require the `roles` power): fork a worktree, run the confined
@@ -982,7 +985,11 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
     // ── FAPO-style backlog: research PROPOSES precise targets; the loop DRAINS the top one + records the outcome. ──
     proposeImprovement: { reversible: false, args: { goal: 'string — what to improve + how the suite proves it. Use a REAL path that exists (verify with grep/ls first — e.g. codemode is packages/ocapn-noise/codemode.mjs, NOT packages/chat/ocapn-noise). A PRECISE file-scoped change implements most reliably (e.g. "In packages/ocapn-noise/codemode.mjs, add a single-retry around recoverable tool errors + a *.test.mjs asserting one retry"); a LARGER ARCHITECTURAL change is also fine — the SUITE is the gate.', successCommand: 'string — OPTIONAL: the command that proves it. Tests run with `node --test <file>` here (NOT `npm test`/`yarn test` — npm/yarn at the repo root run all workspaces). Defaults to the full suite.', rationale: 'string — OPTIONAL: the research that motivated it', priority: 'number — OPTIONAL: higher drains first (default 0). Use it to push an urgent fix (e.g. one unblocking the loop itself) ahead of features.' },
       description: 'Add an improvement TARGET to the backlog (the dataset the self-improvement loop drains). A target may be a precise file-scoped change OR a larger architectural change — both are allowed; the suite (independent verify + post-merge re-verify) is what gates it landing. Set `priority` to force ordering. Describe the change + how it is verified.',
-      run: async ({ goal, successCommand, rationale, priority }, agent) => harden(addBacklog({ goal, successCommand, rationale, priority, by: agent || '' })) },
+      run: async ({ goal, successCommand, rationale, priority }, agent) => {
+        const chk = checkTargets(goal);
+        if (!chk.ok) return harden({ ok: false, error: `target path(s) do not exist: ${chk.missing.join(', ')} — reference a REAL path (grep/ls the repo first; e.g. codemode is packages/ocapn-noise/codemode.mjs, not packages/chat/ocapn-noise).` });
+        return harden(addBacklog({ goal, successCommand, rationale, priority, by: agent || '' }));
+      } },
     listImprovements: { reversible: false, args: { status: 'string — OPTIONAL filter: open | staged | merged' },
       description: 'List the improvement backlog — the concrete targets + their recorded outcomes (so you see what is queued, staged for review, merged, or repeatedly failing).',
       run: async ({ status }) => harden({ ok: true, items: listBacklog({ status: status || undefined }) }) },
@@ -992,6 +999,10 @@ export const makeFieldAgent = ({ outDir, baseUrl, autoConfirmFile, specialistsFi
         if (selfImproveInFlight) return harden({ ok: false, busy: true, error: 'a self-improvement is already in flight — one at a time' });
         const item = nextOpen();
         if (!item) return harden({ ok: true, empty: true, note: 'the improvement backlog has no open target — proposeImprovement some first (precise file-scoped or larger architectural; the suite gates them)' });
+        // PRE-FLIGHT: fail-fast a phantom/wrong-path target (records a bounded failure → skipped after maxAttempts)
+        // rather than spending an Opus worktree cycle to discover the file isn't there.
+        const pre = checkTargets(item.goal);
+        if (!pre.ok) { recordOutcome(item.id, { status: 'failed', reason: `pre-flight: target path(s) missing: ${pre.missing.join(', ')}` }); return harden({ ok: true, target: item.goal, targetId: item.id, outcome: 'failed', preflight: true, reason: `skipped — references only non-existent path(s): ${pre.missing.join(', ')}` }); }
         selfImproveInFlight = true;
         try {
           const vcmd = buildVerify(item.successCommand); // canonicalize the item's stored command (npm/yarn test → node --test) + deps preamble
