@@ -79,20 +79,27 @@ export const makeSocketPowers = ({ net, fsp: { access } }) => {
   /** @type {SocketPowers['connectPort']} */
   const connectPort = ({ port, host }) =>
     new Promise((resolve, reject) => {
-      const conn = net.connect(port, host, err => {
-        if (err) {
-          reject(err);
-          return;
-        }
-        const reader = makeNodeReader(conn);
-        const writer = makeNodeWriter(conn);
-        const closed = new Promise(close => conn.on('close', close));
-        resolve({
-          reader,
-          writer,
-          closed,
-        });
-      });
+      // The 'connect' callback receives no arguments; `err` is always undefined
+      // here (connection errors surface via the socket 'error' event). The
+      // param is optional so the callback satisfies the `() => void` type.
+      const conn = net.connect(
+        port,
+        host,
+        (/** @type {any} */ err = undefined) => {
+          if (err) {
+            reject(err);
+            return;
+          }
+          const reader = makeNodeReader(conn);
+          const writer = makeNodeWriter(conn);
+          const closed = new Promise(close => conn.on('close', close));
+          resolve({
+            reader,
+            writer,
+            closed,
+          });
+        },
+      );
     });
 
   /** @type {SocketPowers['servePath']} */
@@ -457,7 +464,7 @@ export const makeDaemonicPersistencePowers = (
 
 /**
  * @param {Config} config
- * @param {import('url').fileURLToPath} fileURLToPath
+ * @param {typeof import('url').fileURLToPath} fileURLToPath
  * @param {FilePowers} filePowers
  * @param {typeof import('fs')} fs
  * @param {typeof import('child_process')} popen

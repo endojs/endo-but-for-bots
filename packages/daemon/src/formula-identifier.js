@@ -23,32 +23,34 @@ export const assertValidNumber = allegedNumber => {
   }
 };
 
+// Function declarations (not arrow-const) so tsgo preserves the `asserts`
+// assertion signatures at call sites.
 /**
  * @param {string} allegedFormulaNumber
  * @returns {asserts allegedFormulaNumber is FormulaNumber}
  */
-export const assertFormulaNumber = allegedFormulaNumber => {
+export function assertFormulaNumber(allegedFormulaNumber) {
   if (!isValidNumber(allegedFormulaNumber)) {
     throw makeError(`Invalid formula number ${q(allegedFormulaNumber)}`);
   }
-};
+}
 
 /**
  * @param {string} allegedNodeNumber
  * @returns {asserts allegedNodeNumber is NodeNumber}
  */
-export const assertNodeNumber = allegedNodeNumber => {
+export function assertNodeNumber(allegedNodeNumber) {
   if (!isValidNumber(allegedNodeNumber)) {
     throw makeError(`Invalid node number ${q(allegedNodeNumber)}`);
   }
-};
+}
 
 /**
  * @param {string} id
  * @param {string} [petName]
  * @returns {asserts id is FormulaIdentifier}
  */
-export const assertValidId = (id, petName) => {
+export function assertValidId(id, petName) {
   if (typeof id !== 'string' || !idPattern.test(id)) {
     let message = `Invalid formula identifier ${q(id)}`;
     if (petName !== undefined) {
@@ -56,7 +58,7 @@ export const assertValidId = (id, petName) => {
     }
     throw new Error(message);
   }
-};
+}
 
 /**
  * @param {string} id

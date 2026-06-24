@@ -68,11 +68,25 @@ harden(makeChangePubSub);
  * @returns {Topic<TValue>}
  */
 export const makeChangeTopic = () => {
-  /** @type {ReturnType<makeChangePubSub<TValue>>} */
+  /** @type {ReturnType<typeof makeChangePubSub<TValue>>} */
   const { sink, makeSpring } = makeChangePubSub();
+  // The pubsub sink/spring store and yield whole IteratorResults, but their
+  // local JSDoc describes the unwrapped value; cast to the AsyncSink/AsyncSpring
+  // shapes makeStream wires through.
   return harden({
-    publisher: makeStream(nullIteratorQueue, sink),
-    subscribe: () => makeStream(makeSpring(), nullIteratorQueue),
+    publisher: makeStream(
+      nullIteratorQueue,
+      /** @type {import('@endo/stream').AsyncSink<IteratorResult<TValue, undefined>>} */ (
+        sink
+      ),
+    ),
+    subscribe: () =>
+      makeStream(
+        /** @type {import('@endo/stream').AsyncSpring<IteratorResult<TValue, undefined>>} */ (
+          makeSpring()
+        ),
+        nullIteratorQueue,
+      ),
   });
 };
 harden(makeChangeTopic);

@@ -555,7 +555,7 @@ const makeDaemonCore = async (
 
   /** @param {object} ref */
   const mustGetIdForRef = ref => {
-    const id = idForRef.get(ref);
+    const id = idForRef.get(/** @type {any} */ (ref));
     if (id === undefined) {
       throw makeError(X`No corresponding formula for ${ref}`);
     }
@@ -895,7 +895,7 @@ const makeDaemonCore = async (
       },
     }.followNameChanges;
 
-    const reverseLookup = presence => {
+    const reverseLookup = async presence => {
       const id = getIdForRef(presence);
       if (id === undefined) {
         return harden([]);
@@ -1170,7 +1170,7 @@ const makeDaemonCore = async (
       },
     }.followNameChanges;
 
-    const reverseLookup = presence => {
+    const reverseLookup = async presence => {
       const id = getIdForRef(presence);
       if (id === undefined) {
         return harden([]);

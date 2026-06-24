@@ -26,7 +26,7 @@ const removePath = async removalPath => {
   return fs.promises
     .rm(removalPath, { recursive: true, force: true })
     .catch(cause => {
-      /** @type {object} */
+      /** @type {Error & { code?: unknown }} */
       const error = new Error(cause.message, { cause });
       error.code = cause.code;
       throw error;

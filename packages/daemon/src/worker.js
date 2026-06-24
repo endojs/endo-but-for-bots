@@ -41,7 +41,7 @@ const normalizeFilePath = path => {
 };
 
 /**
- * @typedef {ReturnType<makeWorkerFacet>} WorkerBootstrap
+ * @typedef {ReturnType<typeof makeWorkerFacet>} WorkerBootstrap
  */
 
 /**
